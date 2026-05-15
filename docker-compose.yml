@@ -1,0 +1,33 @@
+services:
+  blueeye-server:
+    build: .
+    container_name: blueeye-server
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+      - "4000:4000"
+    volumes:
+      - blueeye-data:/data
+    environment:
+      - RCA_URL=http://blueeye-rca:5000
+      - RCA_ENABLED=true
+    networks:
+      - blueeye
+
+  blueeye-rca:
+    image: blueeye-rca:latest
+    container_name: blueeye-rca
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+    networks:
+      - blueeye
+
+volumes:
+  blueeye-data:
+
+networks:
+  blueeye:
+    driver: bridge

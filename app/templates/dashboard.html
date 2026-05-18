@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="refresh" content="15">
+  <title>BlueEye - Network Dashboard</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: system-ui, sans-serif; margin: 0; background: #0f172a; color: #e2e8f0; }
+    header { background: #1e293b; padding: 16px 24px; border-bottom: 1px solid #334155; }
+    header h1 { margin: 0; font-size: 20px; }
+    header .sub { color: #94a3b8; font-size: 13px; margin-top: 4px; }
+    .summary { display: flex; gap: 16px; padding: 16px 24px; flex-wrap: wrap; }
+    .card { background: #1e293b; border: 1px solid #334155; border-radius: 8px;
+            padding: 12px 18px; min-width: 120px; }
+    .card .n { font-size: 26px; font-weight: 700; }
+    .card .l { color: #94a3b8; font-size: 12px; text-transform: uppercase; }
+    .bad { color: #f87171; }
+    .good { color: #4ade80; }
+    main { padding: 0 24px 32px; }
+    .agent { background: #1e293b; border: 1px solid #334155; border-radius: 8px;
+             margin-top: 16px; overflow: hidden; }
+    .agent h2 { margin: 0; padding: 12px 16px; font-size: 15px; background: #273449; }
+    .agent .meta { color: #94a3b8; font-weight: 400; font-size: 13px; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { text-align: left; padding: 8px 16px; border-top: 1px solid #334155;
+             vertical-align: top; }
+    th { color: #94a3b8; font-weight: 600; }
+    tr.err td { background: #3f1d2b; }
+    .pill { padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 700; }
+    .pill.ok { background: #14532d; color: #4ade80; }
+    .pill.error { background: #7f1d1d; color: #fca5a5; }
+    code { background: #0f172a; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+    .empty { color: #94a3b8; padding: 16px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>BlueEye Network Dashboard</h1>
+    <div class="sub">Troubleshoot connectivity by location and connection &middot; auto-refresh 15s</div>
+  </header>
+
+  <section class="summary">
+    <div class="card"><div class="n">{{ agents|length }}</div><div class="l">Agents</div></div>
+    <div class="card"><div class="n">{{ total_results }}</div><div class="l">Recent results</div></div>
+    <div class="card">
+      <div class="n {{ 'bad' if error_count else 'good' }}">{{ error_count }}</div>
+      <div class="l">Errors</div>
+    </div>
+  </section>
+
+  <main>
+    {% if not agents %}
+      <p class="empty">No agents registered yet. Start an agent or run scripts/smoke_test.sh.</p>
+    {% endif %}
+
+    {% for agent in agents %}
+    <div class="agent">
+      <h2>
+        {{ agent.id }}
+        <span class="meta">
+          &mdash; {{ agent.location }} / {{ agent.connection }}
+          &middot; last seen {{ agent.last_seen.strftime('%Y-%m-%d %H:%M:%S') }}
+        </span>
+      </h2>
+      {% set rows = results_by_agent.get(agent.id, []) %}
+      {% if rows %}
+      <table>
+        <thead>
+          <tr><th>When</th><th>Check</th><th>Target</th><th>Status</th><th>Detail</th></tr>
+        </thead>
+        <tbody>
+          {% for r in rows %}
+          <tr class="{{ 'err' if r.status != 'ok' else '' }}">
+            <td>{{ r.created_at.strftime('%H:%M:%S') }}</td>
+            <td><code>{{ r.type }}</code></td>
+            <td>{{ r.target }}</td>
+            <td><span class="pill {{ 'ok' if r.status == 'ok' else 'error' }}">{{ r.status }}</span></td>
+            <td>
+              {% if r.status == 'ok' %}
+                {% for k, v in r.data.items() if k != 'raw' %}{{ k }}=<code>{{ v }}</code> {% endfor %}
+              {% else %}
+                <span class="bad">{{ r.error_message }}</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="empty">No results yet for this agent.</p>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </main>
+</body>
+</html>

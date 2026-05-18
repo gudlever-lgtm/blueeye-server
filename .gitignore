@@ -1,5 +1,10 @@
-node_modules/
-*.db
-*.db-journal
+__pycache__/
+*.pyc
+.venv/
+venv/
 .env
-data/
+certs/
+*.crt
+*.key
+*.csr
+*.srl

@@ -1,33 +1,57 @@
-services:
-  blueeye-server:
-    build: .
-    container_name: blueeye-server
-    restart: unless-stopped
-    ports:
-      - "3000:3000"
-      - "4000:4000"
-    volumes:
-      - blueeye-data:/data
-    environment:
-      - RCA_URL=http://blueeye-rca:5000
-      - RCA_ENABLED=true
-    networks:
-      - blueeye
+# Full BlueEye stack: PostgreSQL + server + one agent.
+#
+# The agent image is built from ../blueeye-agent, so clone both repositories
+# as siblings:
+#   parent/blueeye-server/   (this repo)
+#   parent/blueeye-agent/
+#
+# Generate certificates first:  ./scripts/gen_certs.sh
 
-  blueeye-rca:
-    image: blueeye-rca:latest
-    container_name: blueeye-rca
-    restart: unless-stopped
-    ports:
-      - "5000:5000"
+services:
+  db:
+    image: postgres:16-alpine
     environment:
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-    networks:
-      - blueeye
+      POSTGRES_USER: blueeye
+      POSTGRES_PASSWORD: blueeye
+      POSTGRES_DB: blueeye
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U blueeye"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    volumes:
+      - db-data:/var/lib/postgresql/data
+
+  server:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://blueeye:blueeye@db:5432/blueeye
+      CA_CERT_PATH: /certs/ca.crt
+      SERVER_CERT: /certs/server.crt
+      SERVER_KEY: /certs/server.key
+      PORT: 8443
+    ports:
+      - "8443:8443"
+    volumes:
+      - ./certs:/certs:ro
+
+  agent:
+    build: ../blueeye-agent
+    depends_on:
+      - server
+    environment:
+      BLUEEYE_SERVER_URL: https://server:8443
+      CLIENT_CERT: /certs/agent-001.crt
+      CLIENT_KEY: /certs/agent-001.key
+      CA_CERT: /certs/ca.crt
+      POLL_INTERVAL: 15
+      AGENT_LOCATION: HQ - Floor 1
+      AGENT_CONNECTION: core-uplink-1
+    volumes:
+      - ./certs:/certs:ro
 
 volumes:
-  blueeye-data:
-
-networks:
-  blueeye:
-    driver: bridge
+  db-data:

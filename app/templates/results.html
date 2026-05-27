@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Results — BlueEye{% endblock %}
+{% block content %}
+<h1>Results</h1>
+
+<form method="get" action="/results" class="filters">
+  <label>Agent
+    <select name="agent_id">
+      <option value="">All</option>
+      {% for a in agents %}
+        <option value="{{ a.id }}" {% if filter_agent_id == a.id %}selected{% endif %}>{{ a.name }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>Type
+    <select name="test_type">
+      <option value="">All</option>
+      {% for t in ("http", "ping", "dns") %}
+        <option value="{{ t }}" {% if filter_test_type == t %}selected{% endif %}>{{ t }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>Status
+    <select name="status">
+      <option value="">All</option>
+      {% for s in ("ok", "warn", "fail") %}
+        <option value="{{ s }}" {% if filter_status == s %}selected{% endif %}>{{ s }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <button type="submit">Filter</button>
+</form>
+
+{% if rows %}
+<table class="grid">
+  <thead><tr><th>When</th><th>Agent</th><th>Type</th><th>Target</th><th>Status</th><th>Latency</th></tr></thead>
+  <tbody>
+  {% for result, tc, agent in rows %}
+    <tr>
+      <td>{{ result.timestamp.isoformat() }}</td>
+      <td>{{ agent.name }}</td>
+      <td>{{ tc.test_type }}</td>
+      <td>{{ tc.target }}</td>
+      <td><span class="pill pill-{{ result.status }}">{{ result.status }}</span></td>
+      <td>{% if result.latency_ms is not none %}{{ "%.1f"|format(result.latency_ms) }} ms{% else %}—{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">No results match your filters.</p>
+{% endif %}
+{% endblock %}

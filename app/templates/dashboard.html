@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — BlueEye{% endblock %}
+{% block content %}
+<h1>Dashboard</h1>
+<p class="muted">Customer: <strong>{{ customer.name }}</strong> &middot; license: {{ customer.license_tier }}</p>
+
+<section>
+  <h2>Agents</h2>
+  {% if summary %}
+  <table class="grid">
+    <thead><tr><th>Name</th><th>Status</th><th>Last seen</th><th>Latest result</th><th></th></tr></thead>
+    <tbody>
+    {% for row in summary %}
+      <tr>
+        <td><a href="/tests/{{ row.agent.id }}">{{ row.agent.name }}</a></td>
+        <td>
+          {% if row.online %}<span class="pill pill-ok">online</span>
+          {% else %}<span class="pill pill-fail">offline</span>{% endif %}
+        </td>
+        <td>{{ row.agent.last_seen.isoformat() if row.agent.last_seen else "never" }}</td>
+        <td>
+          {% if row.latest %}
+            <span class="pill pill-{{ row.latest.status }}">{{ row.latest.status }}</span>
+            {% if row.latest.latency_ms is not none %}{{ "%.1f"|format(row.latest.latency_ms) }} ms{% endif %}
+          {% else %}—{% endif %}
+        </td>
+        <td><a href="/tests/{{ row.agent.id }}">Tests</a></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p>No agents yet. <a href="/agents/new">Create one</a>.</p>
+  {% endif %}
+</section>
+
+<section>
+  <h2>Recent failures</h2>
+  {% if recent_fails %}
+  <table class="grid">
+    <thead><tr><th>When</th><th>Agent</th><th>Type</th><th>Target</th></tr></thead>
+    <tbody>
+    {% for result, tc, agent in recent_fails %}
+      <tr>
+        <td>{{ result.timestamp.isoformat() }}</td>
+        <td>{{ agent.name }}</td>
+        <td>{{ tc.test_type }}</td>
+        <td>{{ tc.target }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">No failures recorded.</p>
+  {% endif %}
+</section>
+
+{% if not has_blackeye %}
+<section class="blackeye-gate">
+  <h2>BlackEye features</h2>
+  <p>Traceroute, BGP path monitoring, throughput tests, SLA PDF reports, AD authentication and more.</p>
+  <p><a class="btn" href="/billing/upgrade">Upgrade to BlackEye</a></p>
+  <div class="blur-preview">
+    <strong>Path quality</strong>
+    <div class="fake-chart"></div>
+  </div>
+</section>
+{% endif %}
+{% endblock %}

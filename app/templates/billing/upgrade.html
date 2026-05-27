@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Upgrade to BlackEye — BlueEye{% endblock %}
+{% block content %}
+<h1>BlackEye</h1>
+{% if has_blackeye %}
+  <p class="callout">
+    Your customer <strong>{{ customer.name }}</strong> already has an active BlackEye
+    license{% if customer.license_expiry %}, valid until {{ customer.license_expiry.isoformat() }}{% endif %}.
+  </p>
+{% else %}
+  <p>Unlock BGP monitoring, traceroute, throughput tests, SLA PDF reports, AD authentication and white-label.</p>
+  <p>Annual price: <strong>€{{ "%.2f"|format(price) }}</strong></p>
+  {% if error %}<div class="error">{{ error }}</div>{% endif %}
+  {% if user.role == "viewer" %}
+    <p class="muted">Only admins and superadmins can purchase a license.</p>
+  {% else %}
+    <form method="post" action="/billing/upgrade">
+      <button type="submit" class="btn">Pay with Mollie</button>
+    </form>
+  {% endif %}
+{% endif %}
+{% endblock %}

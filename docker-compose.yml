@@ -1,0 +1,55 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: blueeye
+      POSTGRES_PASSWORD: blueeye
+      POSTGRES_DB: blueeye
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U blueeye"]
+      interval: 5s
+      retries: 10
+
+  server:
+    build: .
+    environment:
+      DATABASE_URL: postgresql+asyncpg://blueeye:blueeye@postgres:5432/blueeye
+      SECRET_KEY: ${SECRET_KEY:-dev-secret-change-me}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8000}
+      DEFAULT_SUPERADMIN_EMAIL: ${DEFAULT_SUPERADMIN_EMAIL:-admin@blueeye.local}
+      DEFAULT_SUPERADMIN_PASSWORD: ${DEFAULT_SUPERADMIN_PASSWORD:-admin}
+      MOLLIE_API_KEY: ${MOLLIE_API_KEY:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: >
+      sh -c "alembic upgrade head &&
+             python -m scripts.seed &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000"
+
+  # Sample agent. After bringing the server up, create an agent in the UI
+  # (Agents -> Create), copy the token, export it as BLUEEYE_AGENT_TOKEN, then:
+  #   docker compose up agent
+  agent:
+    build:
+      context: ../blueeye-agent
+    environment:
+      BLUEEYE_SERVER_URL: http://server:8000
+      BLUEEYE_AGENT_TOKEN: ${BLUEEYE_AGENT_TOKEN:-}
+      BLUEEYE_POLL_INTERVAL: "60"
+    depends_on:
+      - server
+    profiles: ["agent"]
+
+volumes:
+  pgdata:

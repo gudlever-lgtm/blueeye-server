@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}{{ "Edit user" if target_user else "New user" }} — BlueEye{% endblock %}
+{% block content %}
+<h1>{{ "Edit user" if target_user else "New user" }}</h1>
+{% if error %}<div class="error">{{ error }}</div>{% endif %}
+<form method="post" action="{{ '/admin/users/' ~ target_user.id ~ '/edit' if target_user else '/admin/users/new' }}" class="form">
+  <label>Email <input type="email" name="email" value="{{ target_user.email if target_user else '' }}" required></label>
+  <label>Role
+    <select name="role" required>
+      {% for r in ("viewer", "admin", "superadmin") %}
+        {% if r != "superadmin" or user.role == "superadmin" %}
+        <option value="{{ r }}" {% if target_user and target_user.role == r %}selected{% endif %}>{{ r }}</option>
+        {% endif %}
+      {% endfor %}
+    </select>
+  </label>
+  {% if user.role == "superadmin" and not target_user %}
+  <label>Customer
+    <select name="customer_id" required>
+      {% for c in customers %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}
+    </select>
+  </label>
+  {% endif %}
+  <label>Password
+    <input type="password" name="password" minlength="8" {% if not target_user %}required{% endif %} placeholder="{{ 'leave blank to keep current' if target_user else '' }}">
+  </label>
+  {% if target_user %}
+  <label class="check">
+    <input type="checkbox" name="active" {% if target_user.active %}checked{% endif %}> Active
+  </label>
+  {% endif %}
+  <button type="submit">Save</button>
+  <a class="btn-secondary" href="/admin/users">Cancel</a>
+</form>
+{% endblock %}

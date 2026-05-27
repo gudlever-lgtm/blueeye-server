@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Customers — BlueEye{% endblock %}
+{% block content %}
+<h1>Customers</h1>
+<p><a class="btn" href="/admin/customers/new">New customer</a></p>
+<table class="grid">
+  <thead><tr><th>Name</th><th>Slug</th><th>License</th><th>Expiry</th><th>Active</th></tr></thead>
+  <tbody>
+  {% for c in customers %}
+    <tr>
+      <td>{{ c.name }}</td>
+      <td><code>{{ c.slug }}</code></td>
+      <td>{{ c.license_tier }}</td>
+      <td>{{ c.license_expiry.isoformat() if c.license_expiry else "—" }}</td>
+      <td>{{ "yes" if c.active else "no" }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

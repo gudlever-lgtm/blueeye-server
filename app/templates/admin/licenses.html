@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Licenses — BlueEye{% endblock %}
+{% block content %}
+<h1>Licenses</h1>
+
+{% if user.role == "superadmin" %}
+<section class="form">
+  <h2>Issue license</h2>
+  <form method="post" action="/admin/licenses/issue">
+    <label>Customer
+      <select name="customer_id" required>
+        {% for c in customers %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>Tier
+      <select name="tier"><option value="blackeye">BlackEye</option><option value="blueeye">BlueEye</option></select>
+    </label>
+    <label>Validity (days) <input type="number" name="days" value="365" min="1" max="3650"></label>
+    <button type="submit">Issue</button>
+  </form>
+</section>
+{% endif %}
+
+<table class="grid">
+  <thead><tr><th>Customer</th><th>Tier</th><th>Issued</th><th>Expires</th><th>Status</th><th>Mollie</th><th></th></tr></thead>
+  <tbody>
+  {% for lic, c in rows %}
+    <tr>
+      <td>{{ c.name }}</td>
+      <td>{{ lic.tier }}</td>
+      <td>{{ lic.issued_at.isoformat() }}</td>
+      <td>{{ lic.expires_at.isoformat() if lic.expires_at else "—" }}</td>
+      <td>{{ lic.status }}</td>
+      <td>{{ lic.mollie_payment_id or "—" }}</td>
+      <td>
+        {% if user.role == "superadmin" and lic.status == "active" %}
+        <form method="post" action="/admin/licenses/{{ lic.id }}/revoke" onsubmit="return confirm('Revoke this license?');">
+          <button type="submit" class="danger">Revoke</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

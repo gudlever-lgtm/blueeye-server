@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Users — BlueEye{% endblock %}
+{% block content %}
+<h1>Users</h1>
+<p><a class="btn" href="/admin/users/new">New user</a></p>
+<table class="grid">
+  <thead><tr><th>Email</th><th>Role</th><th>Customer</th><th>Active</th><th></th></tr></thead>
+  <tbody>
+  {% for u in users %}
+    <tr>
+      <td>{{ u.email }}</td>
+      <td>{{ u.role }}</td>
+      <td>{{ u.customer.name if u.customer else u.customer_id }}</td>
+      <td>{{ "yes" if u.active else "no" }}</td>
+      <td><a href="/admin/users/{{ u.id }}/edit">Edit</a></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}New agent — BlueEye{% endblock %}
+{% block content %}
+<h1>New agent</h1>
+<form method="post" action="/agents/new" class="form">
+  <label>Name <input type="text" name="name" required maxlength="255" autofocus></label>
+  <button type="submit">Create agent</button>
+  <a class="btn-secondary" href="/agents">Cancel</a>
+</form>
+<p class="muted">After creation, the agent token will be shown <strong>once</strong>. Copy it into the agent's <code>/etc/blueeye/agent.conf</code> file.</p>
+{% endblock %}

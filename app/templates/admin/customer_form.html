@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}New customer — BlueEye{% endblock %}
+{% block content %}
+<h1>New customer</h1>
+{% if error %}<div class="error">{{ error }}</div>{% endif %}
+<form method="post" action="/admin/customers/new" class="form">
+  <label>Name <input type="text" name="name" required maxlength="255"></label>
+  <label>Slug <input type="text" name="slug" required pattern="[a-z0-9-]+" maxlength="64"></label>
+  <label>License tier
+    <select name="license_tier">
+      <option value="blueeye">BlueEye</option>
+      <option value="blackeye">BlackEye</option>
+    </select>
+  </label>
+  <button type="submit">Create</button>
+  <a class="btn-secondary" href="/admin/customers">Cancel</a>
+</form>
+{% endblock %}

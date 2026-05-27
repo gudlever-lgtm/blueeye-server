@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Agents — BlueEye{% endblock %}
+{% block content %}
+<h1>Agents</h1>
+
+{% if new_token %}
+<div class="callout">
+  <p><strong>Save this agent token now.</strong> It is shown only once.</p>
+  <p>Agent ID: <code>{{ new_id }}</code></p>
+  <p>Token: <code>{{ new_token }}</code></p>
+  <p>Drop it into <code>/etc/blueeye/agent.conf</code> on the agent host, or pass it via the <code>BLUEEYE_AGENT_TOKEN</code> environment variable.</p>
+</div>
+{% endif %}
+
+{% if user.role != "viewer" %}
+<p><a class="btn" href="/agents/new">Create agent</a></p>
+{% endif %}
+
+{% if agents %}
+<table class="grid">
+  <thead><tr><th>Name</th><th>Status</th><th>Last seen</th><th>Created</th><th></th></tr></thead>
+  <tbody>
+  {% for a in agents %}
+    <tr>
+      <td><a href="/tests/{{ a.id }}">{{ a.name }}</a> {% if not a.active %}<span class="pill pill-fail">revoked</span>{% endif %}</td>
+      <td>{{ "active" if a.active else "revoked" }}</td>
+      <td>{{ a.last_seen.isoformat() if a.last_seen else "never" }}</td>
+      <td>{{ a.created_at.isoformat() }}</td>
+      <td>
+        {% if user.role != "viewer" and a.active %}
+        <form method="post" action="/agents/{{ a.id }}/revoke" onsubmit="return confirm('Revoke this agent? Its token will stop working.');">
+          <button type="submit" class="danger">Revoke</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>No agents yet.</p>
+{% endif %}
+{% endblock %}

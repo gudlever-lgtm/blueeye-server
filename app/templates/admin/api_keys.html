@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}API keys — BlueEye{% endblock %}
+{% block content %}
+<h1>API keys</h1>
+
+{% if new_key %}
+<div class="callout">
+  <p><strong>Save this API key now.</strong> It is shown only once.</p>
+  <p><code>{{ new_key }}</code></p>
+  <p>Use it as <code>Authorization: Bearer {{ new_key }}</code> on the customer REST API.</p>
+</div>
+{% endif %}
+
+<section class="form">
+  <h2>New API key</h2>
+  <form method="post" action="/admin/api-keys/new">
+    <label>Label <input type="text" name="label" required maxlength="255"></label>
+    <label>Scopes <input type="text" name="scopes" value="read" maxlength="255"></label>
+    <label>Expires in days (0 = never) <input type="number" name="expires_days" value="0" min="0"></label>
+    {% if user.role == "superadmin" %}
+    <label>Customer
+      <select name="customer_id">
+        <option value="">(use your customer)</option>
+        {% for c in customers %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}
+      </select>
+    </label>
+    {% endif %}
+    <button type="submit">Create key</button>
+  </form>
+</section>
+
+<table class="grid">
+  <thead><tr><th>Label</th><th>Customer</th><th>Scopes</th><th>Created</th><th>Expires</th><th></th></tr></thead>
+  <tbody>
+  {% for key, c in rows %}
+    <tr>
+      <td>{{ key.label }}</td>
+      <td>{{ c.name }}</td>
+      <td>{{ key.scopes }}</td>
+      <td>{{ key.created_at.isoformat() }}</td>
+      <td>{{ key.expires_at.isoformat() if key.expires_at else "never" }}</td>
+      <td>
+        <form method="post" action="/admin/api-keys/{{ key.id }}/revoke" onsubmit="return confirm('Revoke this API key?');">
+          <button type="submit" class="danger">Revoke</button>
+        </form>
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

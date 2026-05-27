@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Tests — {{ agent.name }}{% endblock %}
+{% block content %}
+<h1>{{ agent.name }} &mdash; tests</h1>
+<p><a href="/agents">&laquo; All agents</a></p>
+
+{% if user.role != "viewer" %}
+<section class="form">
+  <h2>Add test</h2>
+  <form method="post" action="/tests/{{ agent.id }}/new">
+    <label>Type
+      <select name="test_type" required>
+        <option value="http">HTTP</option>
+        <option value="ping">Ping</option>
+        <option value="dns">DNS</option>
+      </select>
+    </label>
+    <label>Target <input type="text" name="target" placeholder="example.com or https://example.com" required></label>
+    <label>Interval (seconds) <input type="number" name="interval_seconds" value="60" min="10" max="3600"></label>
+    <button type="submit">Add</button>
+  </form>
+</section>
+{% endif %}
+
+{% if tests %}
+<table class="grid">
+  <thead><tr><th>Type</th><th>Target</th><th>Interval</th><th>Enabled</th><th></th></tr></thead>
+  <tbody>
+  {% for tc in tests %}
+    <tr>
+      <td>{{ tc.test_type }}</td>
+      <td>{{ tc.target }}</td>
+      <td>{{ tc.interval_seconds }}s</td>
+      <td>{{ "yes" if tc.enabled else "no" }}</td>
+      <td>
+        {% if user.role != "viewer" %}
+        <form method="post" action="/tests/{{ agent.id }}/{{ tc.id }}/toggle" style="display:inline">
+          <button type="submit">{{ "Disable" if tc.enabled else "Enable" }}</button>
+        </form>
+        <form method="post" action="/tests/{{ agent.id }}/{{ tc.id }}/delete" style="display:inline"
+              onsubmit="return confirm('Delete this test?');">
+          <button type="submit" class="danger">Delete</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">No tests configured for this agent yet.</p>
+{% endif %}
+{% endblock %}

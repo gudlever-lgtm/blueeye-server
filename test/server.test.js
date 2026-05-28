@@ -1,3 +1,4 @@
+import '../setup-env.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { tmpdir } from 'node:os';
@@ -100,5 +101,151 @@ test('GET /health returns 500 on DB error', async () => {
   assert.equal(res.status, 500);
   const body = await res.json();
   assert.equal(body.status, 'error');
+  initDb(dbPath);
+});
+
+// ---- Locations (RBAC + CRUD) ----
+
+const KEYS = { viewer: 'viewer-key', operator: 'operator-key', admin: 'admin-key' };
+function authHeaders(role, extra = {}) {
+  return role ? { Authorization: `Bearer ${KEYS[role]}`, ...extra } : { ...extra };
+}
+const JSON_HEADERS = { 'Content-Type': 'application/json' };
+
+let createdLocationId;
+
+test('GET /locations without a key returns 401', async () => {
+  const res = await fetch(`${baseUrl}/locations`);
+  assert.equal(res.status, 401);
+});
+
+test('GET /locations with an unknown key returns 401', async () => {
+  const res = await fetch(`${baseUrl}/locations`, {
+    headers: { Authorization: 'Bearer not-a-real-key' },
+  });
+  assert.equal(res.status, 401);
+});
+
+test('GET /locations as viewer returns 200 with a list', async () => {
+  const res = await fetch(`${baseUrl}/locations`, { headers: authHeaders('viewer') });
+  assert.equal(res.status, 200);
+  assert.ok(Array.isArray(await res.json()));
+});
+
+test('POST /locations as viewer is forbidden (403)', async () => {
+  const res = await fetch(`${baseUrl}/locations`, {
+    method: 'POST',
+    headers: authHeaders('viewer', JSON_HEADERS),
+    body: JSON.stringify({ name: 'Aarhus – Hovedkontor' }),
+  });
+  assert.equal(res.status, 403);
+});
+
+test('POST /locations without a name returns 400', async () => {
+  const res = await fetch(`${baseUrl}/locations`, {
+    method: 'POST',
+    headers: authHeaders('operator', JSON_HEADERS),
+    body: JSON.stringify({ description: 'missing name' }),
+  });
+  assert.equal(res.status, 400);
+});
+
+test('POST /locations as operator returns 201 and the created row', async () => {
+  const res = await fetch(`${baseUrl}/locations`, {
+    method: 'POST',
+    headers: authHeaders('operator', JSON_HEADERS),
+    body: JSON.stringify({ name: 'Aarhus – Hovedkontor', description: 'Hovedkontor' }),
+  });
+  assert.equal(res.status, 201);
+  const body = await res.json();
+  assert.ok(body.id);
+  assert.equal(body.name, 'Aarhus – Hovedkontor');
+  assert.equal(body.description, 'Hovedkontor');
+  assert.equal(typeof body.createdAt, 'number');
+  assert.equal(body.createdAt, body.updatedAt);
+  createdLocationId = body.id;
+});
+
+test('PUT /locations/:id as operator returns 200 and updates fields', async () => {
+  const res = await fetch(`${baseUrl}/locations/${createdLocationId}`, {
+    method: 'PUT',
+    headers: authHeaders('operator', JSON_HEADERS),
+    body: JSON.stringify({ name: 'Aarhus – Filial', description: null }),
+  });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.name, 'Aarhus – Filial');
+  assert.equal(body.description, null);
+  assert.ok(body.updatedAt >= body.createdAt);
+});
+
+test('PUT /locations/:id without a name returns 400', async () => {
+  const res = await fetch(`${baseUrl}/locations/${createdLocationId}`, {
+    method: 'PUT',
+    headers: authHeaders('operator', JSON_HEADERS),
+    body: JSON.stringify({ description: 'still no name' }),
+  });
+  assert.equal(res.status, 400);
+});
+
+test('PUT /locations/:id for an unknown id returns 404', async () => {
+  const res = await fetch(`${baseUrl}/locations/99999999`, {
+    method: 'PUT',
+    headers: authHeaders('operator', JSON_HEADERS),
+    body: JSON.stringify({ name: 'Nowhere' }),
+  });
+  assert.equal(res.status, 404);
+});
+
+test('DELETE /locations/:id as operator is forbidden (403)', async () => {
+  const res = await fetch(`${baseUrl}/locations/${createdLocationId}`, {
+    method: 'DELETE',
+    headers: authHeaders('operator'),
+  });
+  assert.equal(res.status, 403);
+});
+
+test('DELETE /locations/:id for an unknown id returns 404', async () => {
+  const res = await fetch(`${baseUrl}/locations/99999999`, {
+    method: 'DELETE',
+    headers: authHeaders('admin'),
+  });
+  assert.equal(res.status, 404);
+});
+
+test('DELETE /locations/:id as admin returns 204', async () => {
+  const res = await fetch(`${baseUrl}/locations/${createdLocationId}`, {
+    method: 'DELETE',
+    headers: authHeaders('admin'),
+  });
+  assert.equal(res.status, 204);
+});
+
+test('locations endpoints return 500 on DB error', async () => {
+  closeDb();
+
+  const get = await fetch(`${baseUrl}/locations`, { headers: authHeaders('viewer') });
+  assert.equal(get.status, 500);
+
+  const post = await fetch(`${baseUrl}/locations`, {
+    method: 'POST',
+    headers: authHeaders('operator', JSON_HEADERS),
+    body: JSON.stringify({ name: 'Aarhus – Hovedkontor' }),
+  });
+  assert.equal(post.status, 500);
+
+  const put = await fetch(`${baseUrl}/locations/1`, {
+    method: 'PUT',
+    headers: authHeaders('operator', JSON_HEADERS),
+    body: JSON.stringify({ name: 'Aarhus – Hovedkontor' }),
+  });
+  assert.equal(put.status, 500);
+
+  const del = await fetch(`${baseUrl}/locations/1`, {
+    method: 'DELETE',
+    headers: authHeaders('admin'),
+  });
+  assert.equal(del.status, 500);
+
   initDb(dbPath);
 });

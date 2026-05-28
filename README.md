@@ -22,6 +22,7 @@ Environment variables (see `.env.example`):
 | `DB_PATH`     | `/data/blueeye.db`         | SQLite database file     |
 | `RCA_URL`     | `http://blueeye-rca:5000`  | BlueEye RCA base URL     |
 | `RCA_ENABLED` | `true`                     | Toggle RCA forwarding    |
+| `API_KEYS`    | _(empty)_                  | `apiKey:role` pairs for `/locations` RBAC |
 
 ## Running
 
@@ -50,6 +51,25 @@ docker compose up
 | GET    | `/tests/:id`          | Single test + its result                 |
 | GET    | `/results`            | All results (`?agentId=`,`?type=`,`?limit=100`) |
 | GET    | `/results/:agentId`   | All results for one agent                |
+| GET    | `/locations`          | All locations (role: viewer+)            |
+| POST   | `/locations`          | Create a location (role: operator/admin) |
+| PUT    | `/locations/:id`      | Update a location (role: operator/admin) |
+| DELETE | `/locations/:id`      | Delete a location (role: admin)          |
+
+### Locations & RBAC
+
+Locations are physical/organisational sites (e.g. `"Aarhus – Hovedkontor"`).
+The `/locations` endpoints are role-gated via the `API_KEYS` env var, which
+maps API keys to roles (`viewer` < `operator` < `admin`). Callers pass their key
+as `Authorization: Bearer <key>` or `X-API-Key: <key>`. Requests with no/unknown
+key get `401`; an authenticated key below the required role gets `403`.
+
+```json
+{ "name": "Aarhus – Hovedkontor", "description": "Hovedkontor og datacenter" }
+```
+
+`POST`/`PUT` require a non-empty `name` (`400` otherwise); `description` is
+optional. `PUT`/`DELETE` return `404` for an unknown id; `DELETE` returns `204`.
 
 ### POST /tests body
 

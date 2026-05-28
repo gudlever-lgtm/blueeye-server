@@ -2,6 +2,7 @@ import { Router } from 'express';
 import agentsRouter from './agents.js';
 import testsRouter from './tests.js';
 import resultsRouter from './results.js';
+import locationsRouter from './locations.js';
 import { ping, countAgents } from '../db/queries.js';
 
 const router = Router();
@@ -23,5 +24,6 @@ router.get('/health', (req, res) => {
 router.use(agentsRouter);
 router.use(testsRouter);
 router.use(resultsRouter);
+router.use(locationsRouter);
 
 export default router;

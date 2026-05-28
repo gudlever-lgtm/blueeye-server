@@ -128,6 +128,38 @@ export function recentResultsForAgent(agentId, limit = 10) {
     .all(agentId, limit);
 }
 
+export function listLocations() {
+  return getDb().prepare('SELECT * FROM locations ORDER BY name').all();
+}
+
+export function getLocation(id) {
+  return getDb().prepare('SELECT * FROM locations WHERE id = ?').get(id);
+}
+
+export function insertLocation({ name, description }) {
+  const now = Date.now();
+  const info = getDb()
+    .prepare(
+      `INSERT INTO locations (name, description, created_at, updated_at)
+       VALUES (?, ?, ?, ?)`
+    )
+    .run(name, description ?? null, now, now);
+  return getLocation(info.lastInsertRowid);
+}
+
+export function updateLocation(id, { name, description }) {
+  const info = getDb()
+    .prepare(
+      'UPDATE locations SET name = ?, description = ?, updated_at = ? WHERE id = ?'
+    )
+    .run(name, description ?? null, Date.now(), id);
+  return info.changes > 0 ? getLocation(id) : null;
+}
+
+export function deleteLocation(id) {
+  return getDb().prepare('DELETE FROM locations WHERE id = ?').run(id).changes > 0;
+}
+
 export function countAgents() {
   return getDb().prepare('SELECT COUNT(*) AS n FROM agents').get().n;
 }

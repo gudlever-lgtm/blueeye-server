@@ -38,7 +38,31 @@ CREATE TABLE IF NOT EXISTS results (
   created_at INTEGER,
   FOREIGN KEY (test_id) REFERENCES tests(id)
 );
+
+CREATE TABLE IF NOT EXISTS locations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  description TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
 `;
+
+function tableExists(db, name) {
+  return !!db
+    .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?")
+    .get(name);
+}
+
+// Rename a legacy `customers` table to `locations` when present, preserving its
+// rows. The CREATE TABLE IF NOT EXISTS in MIGRATIONS then covers the
+// fresh-install case (and is a harmless no-op after a rename).
+function renameCustomersToLocations(db) {
+  if (tableExists(db, 'customers') && !tableExists(db, 'locations')) {
+    db.exec('ALTER TABLE customers RENAME TO locations');
+    console.log('[db] Renamed table customers -> locations');
+  }
+}
 
 let db;
 
@@ -51,6 +75,7 @@ export function initDb(dbPath = config.dbPath) {
   db = new Database(dbPath);
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
+  renameCustomersToLocations(db);
   db.exec(MIGRATIONS);
   console.log(`[db] Migrations applied (${dbPath})`);
   return db;

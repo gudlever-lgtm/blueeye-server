@@ -4,6 +4,7 @@ import config from './config.js';
 import routes from './api/routes.js';
 import { initDb } from './db/database.js';
 import { startWsServer } from './ws/server.js';
+import { initLicense } from './license/manager.js';
 
 export function createApp() {
   const app = express();
@@ -28,6 +29,17 @@ export function createApp() {
 
 export function start() {
   initDb();
+
+  // Validate the license at startup, then on a periodic timer. The startup
+  // call is fire-and-forget: a cached validation (within grace) keeps the
+  // server operational while the network call is in flight or unavailable.
+  const license = initLicense();
+  license
+    .validateNow()
+    .then((s) => console.log(`[license] startup status: ${s.status}`))
+    .catch((err) => console.error(`[license] startup error: ${err.message}`));
+  license.startPeriodic();
+
   const app = createApp();
   app.listen(config.port, () => {
     console.log(`[api] REST API listening on ${config.port}`);

@@ -11,6 +11,10 @@ services:
     environment:
       - RCA_URL=http://blueeye-rca:5000
       - RCA_ENABLED=true
+      # License validation — set these to enable enforcement:
+      # - LICENSE_KEY=${LICENSE_KEY}
+      # - SERVER_ID=${SERVER_ID}
+      # - LICENSE_SERVER_URL=http://blueeye-licens:6000
     networks:
       - blueeye
 

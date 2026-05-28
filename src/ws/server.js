@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { WebSocketServer } from 'ws';
 import * as registry from './registry.js';
+import { getLicense } from '../license/manager.js';
 import { forwardToRca } from '../rca.js';
 import {
   upsertAgent,
@@ -18,6 +19,21 @@ function handleRegister(ws, msg) {
     console.error('[ws] register message missing agentId');
     return;
   }
+
+  // Enforce the license locally: refuse new agents when the license is not
+  // operational (invalid / grace expired) or the agent cap is reached.
+  const decision = getLicense().canRegisterAgent(agentId, registry.list());
+  if (!decision.ok) {
+    console.error(`[ws] register rejected for ${agentId}: ${decision.reason}`);
+    try {
+      ws.send(JSON.stringify({ type: 'license_error', reason: decision.reason }));
+    } catch {
+      // socket may already be gone
+    }
+    ws.close(decision.code, decision.reason);
+    return;
+  }
+
   ws.agentId = agentId;
   upsertAgent({
     id: agentId,

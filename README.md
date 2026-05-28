@@ -22,6 +22,7 @@ Environment variables (see `.env.example`):
 | `DB_PATH`     | `/data/blueeye.db`         | SQLite database file     |
 | `RCA_URL`     | `http://blueeye-rca:5000`  | BlueEye RCA base URL     |
 | `RCA_ENABLED` | `true`                     | Toggle RCA forwarding    |
+| `JWT_SECRET`  | `dev-insecure-secret-…`    | HS256 signing secret for auth tokens |
 
 ## Running
 
@@ -50,6 +51,38 @@ docker compose up
 | GET    | `/tests/:id`          | Single test + its result                 |
 | GET    | `/results`            | All results (`?agentId=`,`?type=`,`?limit=100`) |
 | GET    | `/results/:agentId`   | All results for one agent                |
+| GET    | `/users`              | List users (admin only)                  |
+| POST   | `/users`              | Create a user (admin only)               |
+| PUT    | `/users/:id`          | Update role / reset password (admin only)|
+| DELETE | `/users/:id`          | Delete a user (admin only)               |
+
+### Authentication
+
+Auth is stateless via HS256 JWTs (`src/auth/`). Protected routes expect an
+`Authorization: Bearer <token>` header; tokens carry a `role` claim of
+`admin`, `operator`, or `viewer`. All `/users` routes require an `admin`
+token. Passwords are hashed with `scrypt` (`src/auth/password.js`) and the
+hash is never returned by the API.
+
+#### POST /users body
+
+```json
+{ "email": "alice@blueeye", "password": "s3cret", "role": "operator" }
+```
+
+`role` defaults to `viewer`. Returns `201` with the created user (without the
+password hash), `400` on missing fields or an invalid role, and `409` if the
+email already exists.
+
+#### PUT /users/:id body
+
+```json
+{ "role": "viewer", "password": "new-password" }
+```
+
+Both fields are optional but at least one is required; `password` triggers a
+reset. Returns `404` for an unknown id and `409` when the change would remove
+the last `admin` (demotion or deletion).
 
 ### POST /tests body
 

@@ -135,3 +135,55 @@ export function countAgents() {
 export function ping() {
   return getDb().prepare('SELECT 1 AS ok').get().ok === 1;
 }
+
+export function createUser(user) {
+  getDb()
+    .prepare(
+      `INSERT INTO users (id, email, password_hash, role, created_at, updated_at)
+       VALUES (@id, @email, @password_hash, @role, @created_at, @updated_at)`
+    )
+    .run({
+      id: user.id,
+      email: user.email,
+      password_hash: user.passwordHash,
+      role: user.role ?? 'viewer',
+      created_at: user.createdAt ?? Date.now(),
+      updated_at: user.updatedAt ?? Date.now(),
+    });
+}
+
+export function listUsers() {
+  return getDb().prepare('SELECT * FROM users ORDER BY created_at DESC, email').all();
+}
+
+export function getUser(id) {
+  return getDb().prepare('SELECT * FROM users WHERE id = ?').get(id);
+}
+
+export function getUserByEmail(email) {
+  return getDb().prepare('SELECT * FROM users WHERE email = ?').get(email);
+}
+
+export function updateUser(id, { role, passwordHash, updatedAt = Date.now() } = {}) {
+  const sets = ['updated_at = @updated_at'];
+  const params = { id, updated_at: updatedAt };
+  if (role !== undefined) {
+    sets.push('role = @role');
+    params.role = role;
+  }
+  if (passwordHash !== undefined) {
+    sets.push('password_hash = @password_hash');
+    params.password_hash = passwordHash;
+  }
+  return getDb()
+    .prepare(`UPDATE users SET ${sets.join(', ')} WHERE id = @id`)
+    .run(params);
+}
+
+export function deleteUser(id) {
+  return getDb().prepare('DELETE FROM users WHERE id = ?').run(id);
+}
+
+export function countAdmins() {
+  return getDb().prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'admin'").get().n;
+}

@@ -4,6 +4,7 @@ const config = {
   dbPath: process.env.DB_PATH ?? '/data/blueeye.db',
   rcaUrl: process.env.RCA_URL ?? 'http://blueeye-rca:5000',
   rcaEnabled: (process.env.RCA_ENABLED ?? 'true') !== 'false',
+  jwtSecret: process.env.JWT_SECRET ?? 'dev-insecure-secret-change-me',
 };
 
 export default config;

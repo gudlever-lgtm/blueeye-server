@@ -38,6 +38,15 @@ CREATE TABLE IF NOT EXISTS results (
   created_at INTEGER,
   FOREIGN KEY (test_id) REFERENCES tests(id)
 );
+
+CREATE TABLE IF NOT EXISTS users (
+  id TEXT PRIMARY KEY,
+  email TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'viewer' CHECK (role IN ('admin', 'operator', 'viewer')),
+  created_at INTEGER,
+  updated_at INTEGER
+);
 `;
 
 let db;

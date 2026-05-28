@@ -4,6 +4,7 @@ import config from './config.js';
 import routes from './api/routes.js';
 import { initDb } from './db/database.js';
 import { startWsServer } from './ws/server.js';
+import licenseManager from './license/manager.js';
 
 export function createApp() {
   const app = express();
@@ -33,6 +34,7 @@ export function start() {
     console.log(`[api] REST API listening on ${config.port}`);
   });
   startWsServer(config.wsPort);
+  licenseManager.start();
 }
 
 const isMain = process.argv[1] === fileURLToPath(import.meta.url);

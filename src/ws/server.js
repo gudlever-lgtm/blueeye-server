@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { WebSocketServer } from 'ws';
 import * as registry from './registry.js';
 import { forwardToRca } from '../rca.js';
+import licenseManager from '../license/manager.js';
 import {
   upsertAgent,
   setAgentStatus,
@@ -17,6 +18,23 @@ function handleRegister(ws, msg) {
   if (!agentId) {
     console.error('[ws] register message missing agentId');
     return;
+  }
+  // License capacity gate: refuse NEW agents beyond max_agents. This is a
+  // licensing limit enforced from the cached validation — NOT authentication.
+  // Agent tokens are issued/validated locally (Flow 1) and never touched here.
+  // Re-registration of an already-connected agent is always allowed.
+  if (!registry.has(agentId)) {
+    const decision = licenseManager.canAcceptAgent(registry.count());
+    if (!decision.allowed) {
+      console.warn(`[ws] rejecting agent ${agentId}: ${decision.reason}`);
+      try {
+        ws.send(JSON.stringify({ type: 'license_error', reason: decision.reason }));
+      } catch {
+        // socket may already be closing
+      }
+      ws.close(4003, 'license limit');
+      return;
+    }
   }
   ws.agentId = agentId;
   upsertAgent({

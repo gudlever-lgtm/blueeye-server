@@ -20,6 +20,10 @@ export function list() {
   return [...agents.keys()];
 }
 
+export function count() {
+  return agents.size;
+}
+
 export function send(agentId, payload) {
   const ws = agents.get(agentId);
   if (!ws || ws.readyState !== ws.OPEN) {

@@ -10,6 +10,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth import has_blackeye, require_role
 from ..db import get_db
+from ..licensing import (
+    count_active_agents,
+    current_status as license_status,
+    server_fingerprint,
+    validate_now,
+)
 from ..models import ApiKey, Customer, License, User
 from ..security import generate_token, hash_password, sha256_hex
 
@@ -335,3 +341,32 @@ async def revoke_api_key(
     await db.delete(key)
     await db.commit()
     return RedirectResponse("/admin/api-keys", status_code=302)
+
+
+# ---- Platform license ----
+
+@router.get("/license", response_class=HTMLResponse)
+async def license_page(
+    request: Request,
+    user: User = Depends(require_role("superadmin", "admin")),
+    db: AsyncSession = Depends(get_db),
+):
+    customer = await db.get(Customer, user.customer_id)
+    status = license_status()
+    active_agents = await count_active_agents(db)
+    ctx = _ctx(
+        request, user, customer,
+        license_state=status,
+        active_agents=active_agents,
+        fingerprint=server_fingerprint(),
+    )
+    return templates.TemplateResponse("admin/license.html", ctx)
+
+
+@router.post("/license/revalidate")
+async def license_revalidate(
+    user: User = Depends(require_role("superadmin", "admin")),
+    db: AsyncSession = Depends(get_db),
+):
+    await validate_now(db)
+    return RedirectResponse("/admin/license", status_code=302)

@@ -1,0 +1,43 @@
+:root {
+  --fg: #1b1f23;
+  --fg-muted: #6a737d;
+  --bg: #f6f8fa;
+  --card: #ffffff;
+  --border: #d0d7de;
+  --accent: #0969da;
+  --ok: #1a7f37;
+  --warn: #bf8700;
+  --fail: #cf222e;
+}
+* { box-sizing: border-box; }
+body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--fg); }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+code { background: #eef1f4; padding: 0 .25em; border-radius: 3px; word-break: break-all; }
+
+.topbar { display: flex; align-items: center; gap: 1rem; background: var(--card); border-bottom: 1px solid var(--border); padding: .75rem 1.5rem; }
+.topbar .brand a { font-weight: 700; color: var(--fg); font-size: 1.1rem; }
+.topbar nav { display: flex; gap: 1rem; flex: 1; margin-left: 1.5rem; }
+.topbar .user { display: flex; align-items: center; gap: .75rem; color: var(--fg-muted); font-size: .9rem; }
+
+.container { max-width: 1100px; margin: 1.5rem auto; padding: 0 1.5rem; }
+.muted { color: var(--fg-muted); }
+
+table.grid { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--border); }
+table.grid th, table.grid td { padding: .5rem .75rem; border-bottom: 1px solid var(--border); text-align: left; font-size: .85rem; vertical-align: top; }
+table.grid th { background: #f0f3f6; font-weight: 600; }
+table.grid tr:last-child td { border-bottom: 0; }
+
+.pill { display: inline-block; padding: .1rem .55rem; border-radius: 999px; font-size: .75rem; font-weight: 600; color: white; }
+.pill-ok { background: var(--ok); } .pill-warn { background: var(--warn); } .pill-fail { background: var(--fail); }
+
+.auth-card { max-width: 360px; margin: 4rem auto; padding: 2rem; background: var(--card); border: 1px solid var(--border); border-radius: 8px; }
+.auth-card form, .form { display: flex; flex-direction: column; gap: .75rem; }
+.auth-card label, .form label { display: flex; flex-direction: column; gap: .25rem; font-size: .9rem; }
+input, select { padding: .5rem .65rem; border: 1px solid var(--border); border-radius: 6px; font: inherit; background: white; }
+button, .btn { display: inline-block; padding: .5rem 1rem; background: var(--accent); color: white; border: 0; border-radius: 6px; cursor: pointer; font: inherit; }
+button.danger { background: var(--fail); }
+.btn-secondary { display: inline-block; padding: .5rem 1rem; border: 1px solid var(--border); border-radius: 6px; color: var(--fg); }
+.error { background: #ffe9e9; color: var(--fail); padding: .5rem .75rem; border-radius: 6px; }
+.callout { background: #fff8c5; padding: 1rem 1.25rem; border-left: 4px solid var(--warn); border-radius: 4px; margin: 1rem 0; }
+form { display: inline; }

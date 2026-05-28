@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}BlueEye License Server{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+{% if admin %}
+<header class="topbar">
+  <div class="brand"><a href="/admin/licenses">BlueEye Licenses</a></div>
+  <nav>
+    <a href="/admin/licenses">Licenses</a>
+    <a href="/admin/licenses/new">New license</a>
+  </nav>
+  <div class="user">
+    <span>{{ admin.email }}</span>
+    <a href="/admin/logout">Logout</a>
+  </div>
+</header>
+{% endif %}
+<main class="container">
+  {% block content %}{% endblock %}
+</main>
+</body>
+</html>

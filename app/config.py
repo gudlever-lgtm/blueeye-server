@@ -25,6 +25,14 @@ class Settings(BaseSettings):
 
     SESSION_COOKIE_SECURE: bool = False
 
+    LICENSE_SERVER_URL: str = ""
+    LICENSE_KEY: str = ""
+    LICENSE_VALIDATE_INTERVAL_SECONDS: int = 86400
+    LICENSE_GRACE_PERIOD_SECONDS: int = 7 * 86400
+    LICENSE_HTTP_TIMEOUT_SECONDS: int = 10
+    LICENSE_FREE_TIER_MAX_AGENTS: int = 5
+    BLUEEYE_VERSION: str = "0.1.0"
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 

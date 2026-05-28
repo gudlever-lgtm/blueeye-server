@@ -108,3 +108,13 @@ class License(Base):
     issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="pending")
+
+
+class LicenseCache(Base):
+    """Singleton row (id=1) caching the last verified license JWT."""
+    __tablename__ = "license_cache"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    payload_json: Mapped[dict] = mapped_column(JSON)
+    signature: Mapped[str] = mapped_column(Text)
+    cached_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

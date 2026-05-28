@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Licenses — License Server{% endblock %}
+{% block content %}
+<h1>Licenses</h1>
+
+{% if new_key %}
+<div class="callout">
+  <p><strong>License key — copy now.</strong> This is the only time it will be shown.</p>
+  <p><code>{{ new_key }}</code></p>
+  <p>Paste it into the customer's BlueEye Server <code>.env</code> as <code>LICENSE_KEY</code>.</p>
+</div>
+{% endif %}
+
+<p><a class="btn" href="/admin/licenses/new">Create license</a></p>
+
+{% if rows %}
+<table class="grid">
+  <thead><tr>
+    <th>Customer</th><th>Tier</th><th>Quota</th><th>Features</th>
+    <th>Fingerprint</th><th>Activated</th><th>Last seen</th><th>Expires</th><th>Status</th><th></th>
+  </tr></thead>
+  <tbody>
+    {% for lic in rows %}
+    <tr>
+      <td>{{ lic.customer_name }}</td>
+      <td>{{ lic.tier }}</td>
+      <td>{{ lic.max_agents }}</td>
+      <td>{{ (lic.features_json or [])|join(", ") }}</td>
+      <td>{% if lic.fingerprint %}<code title="{{ lic.fingerprint }}">{{ lic.fingerprint[:12] }}…</code>{% else %}—{% endif %}</td>
+      <td>{{ lic.activated_at.isoformat() if lic.activated_at else "—" }}</td>
+      <td>{{ lic.last_seen.isoformat() if lic.last_seen else "—" }}</td>
+      <td>{{ lic.expires_at.isoformat() if lic.expires_at else "—" }}</td>
+      <td>{% if lic.active %}<span class="pill pill-ok">active</span>{% else %}<span class="pill pill-fail">inactive</span>{% endif %}</td>
+      <td>
+        {% if lic.active and lic.fingerprint %}
+        <form method="post" action="/admin/licenses/{{ lic.id }}/rebind"
+              onsubmit="return confirm('Unbind this license from its current server fingerprint?');">
+          <button type="submit">Rebind</button>
+        </form>
+        {% endif %}
+        {% if lic.active %}
+        <form method="post" action="/admin/licenses/{{ lic.id }}/deactivate"
+              onsubmit="return confirm('Deactivate this license? The bound BlueEye Server will degrade after the 7-day grace period.');">
+          <button type="submit" class="danger">Deactivate</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">No licenses issued yet.</p>
+{% endif %}
+{% endblock %}

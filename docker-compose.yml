@@ -7,6 +7,7 @@ services:
       POSTGRES_DB: blueeye
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./db-init:/docker-entrypoint-initdb.d:ro
     ports:
       - "5432:5432"
     healthcheck:
@@ -27,19 +28,48 @@ services:
       SMTP_PORT: ${SMTP_PORT:-587}
       SMTP_USER: ${SMTP_USER:-}
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      LICENSE_SERVER_URL: ${LICENSE_SERVER_URL:-http://license_server:8001}
+      LICENSE_KEY: ${LICENSE_KEY:-}
     ports:
       - "8000:8000"
     depends_on:
       postgres:
         condition: service_healthy
+      license_server:
+        condition: service_started
     command: >
       sh -c "alembic upgrade head &&
              python -m scripts.seed &&
              uvicorn app.main:app --host 0.0.0.0 --port 8000"
 
-  # Sample agent. After bringing the server up, create an agent in the UI
-  # (Agents -> Create), copy the token, export it as BLUEEYE_AGENT_TOKEN, then:
-  #   docker compose up agent
+  license_server:
+    build:
+      context: .
+      dockerfile: license_server/Dockerfile
+    environment:
+      DATABASE_URL: postgresql+asyncpg://blueeye:blueeye@postgres:5432/licenses
+      SECRET_KEY: ${LICENSE_SECRET_KEY:-license-dev-secret-change-me}
+      DEFAULT_ADMIN_EMAIL: ${LICENSE_ADMIN_EMAIL:-admin@license.local}
+      DEFAULT_ADMIN_PASSWORD: ${LICENSE_ADMIN_PASSWORD:-admin}
+      # DEV signing key. The matching public key is embedded in
+      # blueeye-server/app/licensing.py. ROTATE BEFORE PRODUCTION USE — see
+      # license_server/README.md.
+      LICENSE_PRIVATE_KEY_PEM: |
+        -----BEGIN PRIVATE KEY-----
+        MC4CAQAwBQYDK2VwBCIEIBCFosMAG0A1BxM91lIiif11adQrj77iQL6VB0I503kN
+        -----END PRIVATE KEY-----
+    ports:
+      - "8001:8001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: >
+      sh -c "alembic -c license_server/alembic.ini upgrade head &&
+             python -m license_server.scripts.seed &&
+             uvicorn license_server.app.main:app --host 0.0.0.0 --port 8001"
+
+  # Sample agent. Provision an agent in the BlueEye Server UI, copy the
+  # token, then: BLUEEYE_AGENT_TOKEN=<token> docker compose --profile agent up agent
   agent:
     build:
       context: ../blueeye-agent

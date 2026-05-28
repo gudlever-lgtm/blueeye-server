@@ -9,6 +9,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth import authenticated_agent
 from ..db import get_db
+from ..licensing import (
+    check_agent_quota,
+    count_active_agents,
+    filter_test_configs,
+)
 from ..models import Agent, TestConfig, TestResult
 
 router = APIRouter(prefix="/api/agent", tags=["agent"])
@@ -46,6 +51,7 @@ async def checkin(
     agent: Agent = Depends(authenticated_agent),
     db: AsyncSession = Depends(get_db),
 ):
+    check_agent_quota(await count_active_agents(db))
     agent.last_seen = datetime.now(timezone.utc)
     await db.commit()
     rows = await db.execute(
@@ -54,7 +60,7 @@ async def checkin(
             TestConfig.enabled.is_(True),
         )
     )
-    tests = rows.scalars().all()
+    tests = filter_test_configs(rows.scalars().all())
     return CheckinResponse(
         agent_id=agent.id,
         name=agent.name,

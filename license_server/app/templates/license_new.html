@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}New license — License Server{% endblock %}
+{% block content %}
+<h1>New license</h1>
+{% if error %}<div class="error">{{ error }}</div>{% endif %}
+<form method="post" action="/admin/licenses/new" class="form">
+  <label>Customer name <input type="text" name="customer_name" required maxlength="255" autofocus></label>
+  <label>Tier
+    <select name="tier">
+      <option value="blueeye">BlueEye</option>
+      <option value="blackeye">BlackEye</option>
+    </select>
+  </label>
+  <label>Max agents <input type="number" name="max_agents" value="10" min="1" max="100000"></label>
+  <label>Features (comma-separated) <input type="text" name="features" placeholder="bgp,traceroute,sla_reports"></label>
+  <label>Valid for (days) <input type="number" name="valid_days" value="365" min="1" max="3650"></label>
+  <button type="submit">Create license</button>
+  <a class="btn-secondary" href="/admin/licenses">Cancel</a>
+</form>
+<p class="muted">The plaintext license key is shown only once after creation.</p>
+{% endblock %}

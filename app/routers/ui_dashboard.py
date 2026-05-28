@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..auth import has_blackeye, require_user
 from ..config import settings
 from ..db import get_db
+from ..licensing import check_agent_quota, count_active_agents
 from ..models import Agent, Customer, TestConfig, TestResult, User
 from ..security import generate_token, sha256_hex
 
@@ -110,6 +111,7 @@ async def create_agent(
 ):
     if user.role == "viewer":
         raise HTTPException(403, "Forbidden")
+    check_agent_quota(await count_active_agents(db) + 1)
     token = generate_token(32)
     agent = Agent(
         customer_id=user.customer_id,

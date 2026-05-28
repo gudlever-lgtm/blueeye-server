@@ -8,6 +8,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from .config import settings
 from .db import init_db
+from .licensing import validate_now
 from .routers import (
     agent_api,
     customer_api,
@@ -28,6 +29,7 @@ log = logging.getLogger("blueeye.server")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    await validate_now()
     scheduler.start()
     schedule_tests()
     log.info("BlueEye server started")

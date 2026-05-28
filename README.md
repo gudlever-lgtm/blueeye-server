@@ -2,7 +2,8 @@
 
 FastAPI backend for the BlueEye network monitoring platform: agent control plane,
 customer-facing REST API, Jinja2 admin UI, multi-tenant data model, BlackEye
-license gating, and Mollie-driven self-service upgrade.
+license gating, Mollie-driven self-service upgrade, and a separate platform
+License Server (in `license_server/`).
 
 ## Stack
 
@@ -11,6 +12,7 @@ license gating, and Mollie-driven self-service upgrade.
 - Jinja2 server-side templates
 - APScheduler for background housekeeping
 - Mollie SDK for self-service billing
+- PyJWT (EdDSA / Ed25519) for License Server JWT verification
 
 ## Quick start (Docker)
 
@@ -90,6 +92,35 @@ Roles: `superadmin` (cross-tenant), `admin` (own customer), `viewer` (read-only)
 "Upgrade" placeholder when the customer is on the free tier; new BlackEye-only
 endpoints should call `require_blackeye(customer)` which returns HTTP 402.
 
+## Platform licensing
+
+The BlueEye Server installation itself is licensed by a separate **License
+Server** (see `license_server/README.md`). On startup and every 24h, the
+BlueEye Server posts its `LICENSE_KEY` plus a server fingerprint to
+`LICENSE_SERVER_URL/v1/license/validate` and receives a short-lived JWT
+signed with an Ed25519 keypair. The public key is embedded in
+`app/licensing.py::LICENSE_SERVER_PUBLIC_KEY_PEM`; the matching private key
+lives only on the License Server.
+
+The verified payload is cached in `license_cache`. If the License Server is
+unreachable, the cached payload is honoured for 7 days; after that the
+installation degrades to the free BlueEye tier (5-agent quota, no BlackEye
+features) until contact is restored.
+
+Enforcement points:
+
+- **`POST /api/agent/checkin`** — rejects with `402` if the count of active
+  agents exceeds the licensed `max_agents`. Also filters BlackEye-only test
+  types (`bgp`, `traceroute`, `throughput`) out of the returned config when
+  the platform license isn't BlackEye.
+- **`POST /agents/new`** — rejects with `402` if the new agent would push the
+  installation over `max_agents`.
+- **`GET /admin/license`** — shows tier, quota usage, fingerprint, features,
+  expiry, last-verified timestamp, and a "Revalidate now" button.
+
+Leaving `LICENSE_SERVER_URL` or `LICENSE_KEY` empty turns licensing off; the
+installation operates in default free-tier mode.
+
 ## Mollie flow
 
 `POST /billing/upgrade` creates a Mollie payment and inserts a `pending`
@@ -121,3 +152,17 @@ respond to `POST /api/agent/checkin` once an agent token has been minted.
 
 BGP / traceroute / throughput probes, SLA PDF reports, webhook alerting,
 end-to-end AD/LDAP login, white-label theming.
+
+## License Server
+
+A separate FastAPI service ships in `license_server/`. It owns the Ed25519
+private key, issues + tracks license keys, and serves the
+`/v1/license/{activate,validate}` API that BlueEye Server polls. See
+`license_server/README.md` for details, schema, and JWT payload shape.
+
+`docker compose up` starts it as the `license_server` service on
+http://localhost:8001 alongside BlueEye Server. The dev signing keypair is
+checked in for convenience — **rotate it (`python -m
+license_server.scripts.gen_keypair`) and update
+`app/licensing.py::LICENSE_SERVER_PUBLIC_KEY_PEM` before any real
+deployment.**

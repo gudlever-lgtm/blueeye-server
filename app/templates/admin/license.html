@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Platform license — BlueEye{% endblock %}
+{% block content %}
+<h1>Platform license</h1>
+<p class="muted">Issued by the License Server. The BlueEye Server validates
+this license on startup and every 24 hours.</p>
+
+<table class="grid">
+  <tbody>
+    <tr><th>Tier</th>
+        <td>
+          <span class="pill pill-{{ 'ok' if license_state.tier == 'blackeye' else 'warn' }}">{{ license_state.tier }}</span>
+          {% if license_state.source == "degraded" %}<span class="pill pill-fail">degraded</span>{% endif %}
+        </td></tr>
+    <tr><th>Customer (per license)</th><td>{{ license_state.customer_name or "—" }}</td></tr>
+    <tr><th>Agent quota</th>
+        <td>{{ active_agents }} / {{ license_state.max_agents }}
+          {% if active_agents > license_state.max_agents %}<span class="pill pill-fail">over quota</span>{% endif %}
+        </td></tr>
+    <tr><th>Features</th>
+        <td>{% if license_state.features %}{{ license_state.features|join(", ") }}{% else %}—{% endif %}</td></tr>
+    <tr><th>Expires</th><td>{{ license_state.expires_at.isoformat() if license_state.expires_at else "—" }}</td></tr>
+    <tr><th>Last verified</th>
+        <td>{{ license_state.last_verified_at.isoformat() if license_state.last_verified_at else "never" }}
+          (source: {{ license_state.source }})</td></tr>
+    <tr><th>Server fingerprint</th><td><code>{{ fingerprint }}</code></td></tr>
+  </tbody>
+</table>
+
+<form method="post" action="/admin/license/revalidate" style="margin-top:1rem">
+  <button type="submit">Revalidate now</button>
+</form>
+
+{% if license_state.source == "degraded" %}
+<div class="callout">
+  The license server has been unreachable for longer than the 7-day grace
+  period. The platform has degraded to the free BlueEye tier until contact
+  is restored.
+</div>
+{% endif %}
+{% endblock %}

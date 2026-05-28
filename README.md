@@ -50,6 +50,35 @@ docker compose up
 | GET    | `/tests/:id`          | Single test + its result                 |
 | GET    | `/results`            | All results (`?agentId=`,`?type=`,`?limit=100`) |
 | GET    | `/results/:agentId`   | All results for one agent                |
+| GET    | `/locations`          | All locations (role: viewer+)            |
+| GET    | `/locations/:id`      | Single location (role: viewer+)          |
+| POST   | `/locations`          | Create a location (role: operator/admin) |
+| PUT    | `/locations/:id`      | Update a location (role: operator/admin) |
+| DELETE | `/locations/:id`      | Delete a location (role: admin)          |
+
+### Locations & RBAC
+
+Locations replace the former "customers" concept. Each location has `id`,
+`name` (e.g. `"Aarhus – Hovedkontor"`), optional `description`, `createdAt`
+and `updatedAt`.
+
+Location endpoints are protected by role-based access control. The caller's
+role is supplied via the `X-Role` request header and roles are hierarchical:
+
+| Role       | Grants                          |
+|------------|---------------------------------|
+| `viewer`   | read (`GET`)                    |
+| `operator` | viewer + create/update          |
+| `admin`    | operator + delete               |
+
+A missing or unrecognised role returns `401`; a known-but-insufficient role
+returns `403`.
+
+```bash
+curl -H 'X-Role: operator' -H 'Content-Type: application/json' \
+  -d '{"name":"Aarhus – Hovedkontor","description":"HQ"}' \
+  http://localhost:3000/locations
+```
 
 ### POST /tests body
 

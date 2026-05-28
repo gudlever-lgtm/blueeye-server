@@ -11,6 +11,8 @@ services:
     environment:
       - RCA_URL=http://blueeye-rca:5000
       - RCA_ENABLED=true
+      - WS_AGENT_SECRET=${WS_AGENT_SECRET}
+      - API_KEYS=${API_KEYS}
     networks:
       - blueeye
 

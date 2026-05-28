@@ -2,6 +2,7 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import config from './config.js';
 import routes from './api/routes.js';
+import { authenticate } from './middleware.js';
 import { initDb } from './db/database.js';
 import { startWsServer } from './ws/server.js';
 
@@ -16,6 +17,7 @@ export function createApp() {
     next();
   });
 
+  app.use(authenticate);
   app.use(routes);
 
   app.use((err, req, res, next) => {

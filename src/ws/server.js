@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { WebSocketServer } from 'ws';
 import * as registry from './registry.js';
+import config from '../config.js';
+import { verifyAgentToken, extractAgentToken } from '../auth.js';
 import { forwardToRca } from '../rca.js';
 import {
   upsertAgent,
@@ -12,8 +14,22 @@ import {
 const PING_INTERVAL_MS = 30000;
 const PING_TIMEOUT_MS = 10000;
 
+// Close code for an authenticated socket that then tries to register as a
+// different agent than its token authorises.
+const WS_IDENTITY_MISMATCH = 4003;
+
 function handleRegister(ws, msg) {
-  const agentId = msg.agentId ?? msg.id;
+  const requestedId = msg.agentId ?? msg.id;
+  // The token's agentId is authoritative. Reject attempts to register under a
+  // different id than the one the token was signed for.
+  if (requestedId && ws.agentAuth?.agentId && requestedId !== ws.agentAuth.agentId) {
+    console.error(
+      `[ws] register identity mismatch: token=${ws.agentAuth.agentId} requested=${requestedId}`
+    );
+    ws.close(WS_IDENTITY_MISMATCH, 'identity mismatch');
+    return;
+  }
+  const agentId = ws.agentAuth?.agentId ?? requestedId;
   if (!agentId) {
     console.error('[ws] register message missing agentId');
     return;
@@ -55,11 +71,33 @@ function handleTestResult(msg) {
   );
 }
 
-export function startWsServer(port) {
-  const wss = new WebSocketServer({ port });
+export function startWsServer(port, { secret = config.wsAgentSecret } = {}) {
+  if (!secret) {
+    console.error('[ws] WS_AGENT_SECRET not set — all agent connections will be rejected');
+  }
+
+  const wss = new WebSocketServer({
+    port,
+    // Reject unauthenticated agents during the HTTP upgrade, before a
+    // WebSocket is established (the client receives a 401).
+    verifyClient: (info, cb) => {
+      const token = extractAgentToken(info.req);
+      const result = verifyAgentToken(token, secret);
+      if (!result.ok) {
+        console.error(`[ws] rejected connection: ${result.reason}`);
+        cb(false, 401, 'Unauthorized');
+        return;
+      }
+      // Stash the verified identity on the request so the `connection`
+      // handler (same req object) can read it.
+      info.req.agentAuth = { agentId: result.agentId, exp: result.exp };
+      cb(true);
+    },
+  });
   console.log(`[ws] WebSocket server listening on ${port}`);
 
-  wss.on('connection', (ws) => {
+  wss.on('connection', (ws, req) => {
+    ws.agentAuth = req.agentAuth;
     ws.isAlive = true;
     ws.on('pong', () => {
       ws.isAlive = true;

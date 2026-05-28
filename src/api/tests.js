@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { Router } from 'express';
 import * as registry from '../ws/registry.js';
+import { requireRole } from '../middleware.js';
 import {
   insertTest,
   listTests,
@@ -31,7 +32,7 @@ function shapeTest(row) {
   };
 }
 
-router.post('/tests', (req, res) => {
+router.post('/tests', requireRole('operator'), (req, res) => {
   const { agentId, type, target, options } = req.body ?? {};
   if (!agentId || !type) {
     return res.status(400).json({ error: 'agentId and type are required' });

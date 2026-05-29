@@ -114,6 +114,30 @@ allerede findes en. Email tages fra `SEED_ADMIN_EMAIL`. Er `SEED_ADMIN_PASSWORD`
 sat, bruges den; ellers genereres en stærk adgangskode, som printes **én gang**
 til konsollen — gem den med det samme.
 
+### `agents`
+
+Felterne er delt i to grupper: **agent-rapporterede** (skrives af agenten selv
+ved enrollment/heartbeat) og **server-styrede** (sættes af operatører/admins via
+API'et). `PUT /agents/:id` rører kun de server-styrede felter.
+
+| Kolonne         | Gruppe          | Type            | Noter                                   |
+| --------------- | --------------- | --------------- | --------------------------------------- |
+| `id`            | —               | INT UNSIGNED PK | Auto-increment                          |
+| `hostname`      | agent-rapport.  | VARCHAR(255)    | Påkrævet                                |
+| `platform`      | agent-rapport.  | VARCHAR(64)     | fx `linux`, `win32`                     |
+| `arch`          | agent-rapport.  | VARCHAR(32)     | fx `x64`, `arm64`                       |
+| `last_seen`     | agent-rapport.  | DATETIME        | Nullable                                |
+| `status`        | agent-rapport.  | ENUM            | `online` / `offline` (default `offline`)|
+| `location_id`   | server-styret   | INT UNSIGNED FK | → `locations(id)` `ON DELETE SET NULL`  |
+| `display_name`  | server-styret   | VARCHAR(255)    | Nullable                                |
+| `notes`         | server-styret   | TEXT            | Nullable                                |
+| `meta`          | server-styret   | JSON            | Nullable                                |
+| `created_at`    | —               | TIMESTAMP       | Sættes automatisk                       |
+| `updated_at`    | —               | TIMESTAMP       | Opdateres automatisk ved ændring        |
+
+Selve oprettelsen af agents sker via **enrollment** (kommer i et senere trin) —
+der er bevidst ingen manuel `POST /agents`.
+
 ## API
 
 Alle endpoints undtagen `/health` og `/auth/login` kræver et gyldigt JWT i
@@ -132,6 +156,10 @@ Alle endpoints undtagen `/health` og `/auth/login` kræver et gyldigt JWT i
 | POST   | `/users`         | Opret bruger (hasher password)    | admin              | `201` / `400` / `409`      |
 | PUT    | `/users/:id`     | Opdatér rolle (+ valgfri reset)   | admin              | `200` / `404` / `400` / `409` |
 | DELETE | `/users/:id`     | Slet bruger (ej sidste admin)     | admin              | `204` / `404` / `409`      |
+| GET    | `/agents`        | Hent alle agents (join location)  | viewer+            | `200` med array            |
+| GET    | `/agents/:id`    | Hent én agent                     | viewer+            | `200` / `404` / `400`      |
+| PUT    | `/agents/:id`    | Opdatér KUN server-styrede felter | operator+          | `200` / `404` / `400`      |
+| DELETE | `/agents/:id`    | Slet en agent                     | admin              | `204` / `404` / `400`      |
 
 ("viewer+" = viewer eller højere; "operator+" = operator eller admin.)
 
@@ -184,12 +212,15 @@ Login via `POST /auth/login` returnerer et JWT, der bæres i
 
 Tre roller med stigende rettigheder:
 
-| Handling                         | viewer | operator | admin |
-| -------------------------------- | :----: | :------: | :---: |
-| Læse locations (GET)             |   ✓    |    ✓     |   ✓   |
+| Handling                              | viewer | operator | admin |
+| ------------------------------------- | :----: | :------: | :---: |
+| Læse locations (GET)                  |   ✓    |    ✓     |   ✓   |
 | Oprette/redigere locations (POST/PUT) |   –    |    ✓     |   ✓   |
-| Slette locations (DELETE)        |   –    |    –     |   ✓   |
-| Brugeradministration (`/users`)  |   –    |    –     |   ✓   |
+| Slette locations (DELETE)             |   –    |    –     |   ✓   |
+| Læse agents (GET)                     |   ✓    |    ✓     |   ✓   |
+| Redigere agent-metadata (PUT)         |   –    |    ✓     |   ✓   |
+| Slette agents (DELETE)                |   –    |    –     |   ✓   |
+| Brugeradministration (`/users`)       |   –    |    –     |   ✓   |
 
 JWT signeres med HS256 og `JWT_SECRET`; algoritmen pinnes ved verificering for
 at undgå algorithm-confusion. Adgangskoder hashes med bcrypt og gemmes aldrig i
@@ -201,7 +232,8 @@ klartekst.
 blueeye-server/
 ├── migrations/                 # Nummererede SQL-migrationer
 │   ├── 001_create_locations.sql
-│   └── 002_create_users.sql
+│   ├── 002_create_users.sql
+│   └── 003_create_agents.sql
 ├── schema.sql                  # Fuldt schema-snapshot
 ├── src/
 │   ├── app.js                  # Express app-factory (uden listen)
@@ -212,8 +244,8 @@ blueeye-server/
 │   ├── logger.js               # Stille standard-logger til tests
 │   ├── auth/                   # password, jwt, middleware, roller
 │   ├── middleware/             # asyncHandler, fejlhåndtering, request-log
-│   ├── repositories/           # Dataadgang (locations, users)
-│   ├── routes/                 # health, auth, users, locations routers
+│   ├── repositories/           # Dataadgang (locations, users, agents)
+│   ├── routes/                 # health, auth, users, locations, agents
 │   └── validation/             # Input-validering
 ├── test/                       # Tests (node --test + supertest)
 └── test-support/               # Test-fakes (uden for test/)

@@ -52,6 +52,17 @@ function makeUsersRepo(overrides = {}) {
   };
 }
 
+// A fake agents repository.
+function makeAgentsRepo(overrides = {}) {
+  return {
+    findAll: overrides.findAll || (async () => []),
+    findById: overrides.findById || (async () => null),
+    updateManaged:
+      overrides.updateManaged || (async (id, patch) => ({ id, ...patch })),
+    remove: overrides.remove || (async () => false),
+  };
+}
+
 // A fake db with a ping() used by GET /health.
 function makeDb(overrides = {}) {
   return {
@@ -69,6 +80,7 @@ function makeApp(overrides = {}) {
     db: overrides.db || makeDb(),
     locationsRepo: overrides.locationsRepo || makeLocationsRepo(),
     usersRepo: overrides.usersRepo || makeUsersRepo(),
+    agentsRepo: overrides.agentsRepo || makeAgentsRepo(),
   });
 }
 
@@ -95,6 +107,7 @@ const throwingAsync = (message = 'simulated database failure') => async () => {
 module.exports = {
   makeLocationsRepo,
   makeUsersRepo,
+  makeAgentsRepo,
   makeDb,
   makeApp,
   tokenFor,

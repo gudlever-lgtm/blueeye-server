@@ -5,6 +5,7 @@ const { createDb } = require('./db');
 const { createApp } = require('./app');
 const { createLocationsRepository } = require('./repositories/locationsRepository');
 const { createUsersRepository } = require('./repositories/usersRepository');
+const { createAgentsRepository } = require('./repositories/agentsRepository');
 
 // Wires up real dependencies, starts the HTTP server and installs graceful
 // shutdown handlers.
@@ -20,7 +21,8 @@ function start() {
   const db = createDb(config);
   const locationsRepo = createLocationsRepository(db);
   const usersRepo = createUsersRepository(db);
-  const app = createApp({ db, locationsRepo, usersRepo, logger: console });
+  const agentsRepo = createAgentsRepository(db);
+  const app = createApp({ db, locationsRepo, usersRepo, agentsRepo, logger: console });
 
   const server = app.listen(config.port, () => {
     console.info(

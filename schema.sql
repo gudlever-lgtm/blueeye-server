@@ -42,3 +42,25 @@ CREATE TABLE IF NOT EXISTS users (
   PRIMARY KEY (id),
   UNIQUE KEY uq_users_email (email)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Managed endpoints/agents. Agent-reported fields (hostname, platform, arch,
+-- last_seen, status) are kept distinct from server-managed fields
+-- (location_id, display_name, notes, meta). Agents are created via enrollment.
+CREATE TABLE IF NOT EXISTS agents (
+  id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  hostname VARCHAR(255) NOT NULL,
+  platform VARCHAR(64) NOT NULL,
+  arch VARCHAR(32) NOT NULL,
+  last_seen DATETIME NULL DEFAULT NULL,
+  status ENUM('online', 'offline') NOT NULL DEFAULT 'offline',
+  location_id INT UNSIGNED NULL DEFAULT NULL,
+  display_name VARCHAR(255) NULL DEFAULT NULL,
+  notes TEXT NULL DEFAULT NULL,
+  meta JSON NULL DEFAULT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_agents_location_id (location_id),
+  CONSTRAINT fk_agents_location FOREIGN KEY (location_id)
+    REFERENCES locations (id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

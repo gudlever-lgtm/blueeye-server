@@ -1,0 +1,141 @@
+'use strict';
+
+process.env.NODE_ENV = 'test';
+process.env.JWT_SECRET = 'test-secret-do-not-use-in-prod';
+
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const request = require('supertest');
+
+const {
+  makeApp,
+  makeAgentTokensRepo,
+  makeAgentsRepo,
+  makeResultsRepo,
+  authHeader,
+  throwingAsync,
+} = require('../test-support/fakes');
+
+// A token record as returned by agent_tokens lookup (agent_id 9).
+const tokenRecord = { id: 1, agent_id: 9 };
+const validBody = { results: [{ test: 'ping', ok: true }, { test: 'disk', ok: false }] };
+
+// ----------------------------------------- POST /agents/results (agent token)
+test('POST /agents/results without a token returns 401', async () => {
+  const res = await request(makeApp()).post('/agents/results').send(validBody);
+  assert.equal(res.status, 401);
+  assert.equal(res.body.error, 'Agent authentication required');
+});
+
+test('POST /agents/results with an invalid token returns 401', async () => {
+  const agentTokensRepo = makeAgentTokensRepo({ findActiveByHash: async () => null });
+  const res = await request(makeApp({ agentTokensRepo }))
+    .post('/agents/results')
+    .set('Authorization', 'Bearer nope')
+    .send(validBody);
+  assert.equal(res.status, 401);
+  assert.equal(res.body.error, 'Invalid agent token');
+});
+
+test('POST /agents/results with a valid token stores results and returns 201', async () => {
+  let createArgs;
+  let touchedToken;
+  let touchedSeen;
+  const agentTokensRepo = makeAgentTokensRepo({
+    findActiveByHash: async () => tokenRecord,
+    touchLastUsed: async (id) => { touchedToken = id; },
+  });
+  const agentsRepo = makeAgentsRepo({ touchLastSeen: async (id) => { touchedSeen = id; } });
+  const resultsRepo = makeResultsRepo({
+    createMany: async (agentId, payloads) => {
+      createArgs = { agentId, payloads };
+      return payloads.length;
+    },
+  });
+
+  const res = await request(makeApp({ agentTokensRepo, agentsRepo, resultsRepo }))
+    .post('/agents/results')
+    .set('Authorization', 'Bearer good')
+    .send(validBody);
+
+  assert.equal(res.status, 201);
+  assert.equal(res.body.inserted, 2);
+  assert.equal(createArgs.agentId, 9); // agent_id comes from the token
+  assert.equal(createArgs.payloads.length, 2);
+  // Liveness bookkeeping happened.
+  assert.equal(touchedToken, 1);
+  assert.equal(touchedSeen, 9);
+});
+
+test('POST /agents/results with an invalid body returns 400', async () => {
+  const agentTokensRepo = makeAgentTokensRepo({ findActiveByHash: async () => tokenRecord });
+  const res = await request(makeApp({ agentTokensRepo }))
+    .post('/agents/results')
+    .set('Authorization', 'Bearer good')
+    .send({ results: 'not-an-array' });
+  assert.equal(res.status, 400);
+  assert.equal(res.body.error, 'Validation failed');
+});
+
+test('POST /agents/results returns 500 when the results repo throws', async () => {
+  const agentTokensRepo = makeAgentTokensRepo({ findActiveByHash: async () => tokenRecord });
+  const resultsRepo = makeResultsRepo({ createMany: throwingAsync() });
+  const res = await request(makeApp({ agentTokensRepo, resultsRepo }))
+    .post('/agents/results')
+    .set('Authorization', 'Bearer good')
+    .send(validBody);
+  assert.equal(res.status, 500);
+});
+
+test('POST /agents/results returns 500 when the token lookup throws', async () => {
+  const agentTokensRepo = makeAgentTokensRepo({ findActiveByHash: throwingAsync() });
+  const res = await request(makeApp({ agentTokensRepo }))
+    .post('/agents/results')
+    .set('Authorization', 'Bearer good')
+    .send(validBody);
+  assert.equal(res.status, 500);
+});
+
+// ----------------------------------- GET /agents/:id/results (user JWT, viewer+)
+test('GET /agents/:id/results returns 200 (viewer)', async () => {
+  const rows = [{ id: 1, agent_id: 9, payload: { ok: true }, created_at: 'x' }];
+  const agentsRepo = makeAgentsRepo({ findById: async () => ({ id: 9, hostname: 'h' }) });
+  const resultsRepo = makeResultsRepo({ findByAgentId: async () => rows });
+
+  const res = await request(makeApp({ agentsRepo, resultsRepo }))
+    .get('/agents/9/results')
+    .set('Authorization', authHeader('viewer'));
+
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body, rows);
+});
+
+test('GET /agents/:id/results returns 404 when the agent does not exist', async () => {
+  const agentsRepo = makeAgentsRepo({ findById: async () => null });
+  const res = await request(makeApp({ agentsRepo }))
+    .get('/agents/999/results')
+    .set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 404);
+  assert.equal(res.body.error, 'Agent not found');
+});
+
+test('GET /agents/:id/results returns 400 for an invalid id', async () => {
+  const res = await request(makeApp())
+    .get('/agents/abc/results')
+    .set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 400);
+});
+
+test('GET /agents/:id/results without a token returns 401', async () => {
+  const res = await request(makeApp()).get('/agents/9/results');
+  assert.equal(res.status, 401);
+});
+
+test('GET /agents/:id/results returns 500 when the repo throws', async () => {
+  const agentsRepo = makeAgentsRepo({ findById: async () => ({ id: 9 }) });
+  const resultsRepo = makeResultsRepo({ findByAgentId: throwingAsync() });
+  const res = await request(makeApp({ agentsRepo, resultsRepo }))
+    .get('/agents/9/results')
+    .set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 500);
+});

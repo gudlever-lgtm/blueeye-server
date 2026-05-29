@@ -11,6 +11,9 @@ const { createEnrollmentStore } = require('./services/enrollmentStore');
 const { createAgentTokensRepository } = require('./repositories/agentTokensRepository');
 const { createResultsRepository } = require('./repositories/resultsRepository');
 const { attachAgentWebSocket } = require('./ws/agentSocket');
+const { createLicenseManager } = require('./license/licenseManager');
+const { createFileCache } = require('./license/licenseCache');
+const { isConfigured } = require('./license/publicKey');
 
 // Wires up real dependencies, starts the HTTP server and installs graceful
 // shutdown handlers.
@@ -31,6 +34,19 @@ function start() {
   const enrollmentStore = createEnrollmentStore(db);
   const agentTokensRepo = createAgentTokensRepository(db);
   const resultsRepo = createResultsRepository(db);
+
+  // Client-side license validation against blueeye-licens. getAgentCount reads
+  // the live WebSocket connection count (agentWs is assigned just below; the
+  // closure is only invoked later, at validation time).
+  let agentWs = null;
+  const licenseManager = createLicenseManager({
+    config: config.license,
+    publicKey: config.license.publicKey,
+    cache: createFileCache(config.license.cachePath),
+    logger: console,
+    getAgentCount: () => (agentWs ? agentWs.connectionCount() : 0),
+  });
+
   const app = createApp({
     db,
     locationsRepo,
@@ -40,6 +56,7 @@ function start() {
     enrollmentStore,
     agentTokensRepo,
     resultsRepo,
+    licenseManager,
     logger: console,
   });
 
@@ -49,18 +66,29 @@ function start() {
     );
   });
 
-  // Live agent channel (WebSocket) attached to the same HTTP server.
-  const agentWs = attachAgentWebSocket({
+  // Live agent channel (WebSocket). New connections are gated by the license
+  // (capacity + validity) — this is separate from agent-token authentication.
+  agentWs = attachAgentWebSocket({
     server,
     agentTokensRepo,
     agentsRepo,
     logger: console,
     path: config.ws.path,
     heartbeatMs: config.ws.heartbeatIntervalMs,
+    licenseGuard: (count) => licenseManager.canAcceptNewConnection(count),
   });
+
+  if (!isConfigured(config.license.publicKey)) {
+    console.warn(
+      'License public key is not configured (placeholder) — proofs cannot be verified and agents will not be licensed. See src/license/publicKey.js.'
+    );
+  }
+  // Validate at startup, then periodically. Failures fall back to cache + grace.
+  licenseManager.start().catch((err) => console.error('License manager error:', err));
 
   function shutdown(signal) {
     console.info(`Received ${signal}, shutting down gracefully...`);
+    licenseManager.stop();
     agentWs.close();
     server.close(async () => {
       try {

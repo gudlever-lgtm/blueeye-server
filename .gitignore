@@ -5,6 +5,9 @@ node_modules/
 .env
 .env.local
 
+# Cached license validation
+.license-cache.json
+
 # Logs
 *.log
 logs/

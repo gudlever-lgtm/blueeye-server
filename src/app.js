@@ -18,6 +18,7 @@ function createApp({
   enrollmentStore,
   agentTokensRepo,
   resultsRepo,
+  licenseManager,
   logger = silentLogger,
 } = {}) {
   const app = express();
@@ -39,6 +40,7 @@ function createApp({
       enrollmentStore,
       agentTokensRepo,
       resultsRepo,
+      licenseManager,
     })
   );
 

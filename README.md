@@ -211,6 +211,7 @@ WebSocket-kanalen bruger et **agent-token** (ikke et JWT) — se
 | DELETE | `/enrollment-codes/:id` | Slet en kode               | admin              | `204` / `404` / `400`      |
 | POST   | `/agents/results` | Indsend testresultater           | **agent-token**    | `201` / `400` / `401`      |
 | GET    | `/agents/:id/results` | Hent en agents resultater    | viewer+            | `200` / `404` / `400`      |
+| GET    | `/license/status` | Lokal licensstatus               | viewer+            | `200`                      |
 | WS     | `/ws/agent`      | Live-kanal (status/kommandoer)    | **agent-token**    | upgrade / hård luk         |
 
 ("viewer+" = viewer eller højere; "operator+" = operator eller admin.
@@ -350,6 +351,47 @@ curl -X POST http://localhost:3000/agents/results \
   -d '{"results":[{"test":"ping","ok":true}]}'
 ```
 
+## Licens-validering (mod blueeye-licens)
+
+Serveren validerer sin egen licens mod den centrale `blueeye-licens`. Det
+signerede svar bruges **kun** som licensbevis — **aldrig** som adgangstoken.
+Agent-tokens udstedes og valideres udelukkende lokalt; licensserveren rører dem aldrig.
+
+**Konfiguration (sættes ved installation, ikke CRUD)** — via env (se
+[`.env.example`](.env.example)) eller `src/license/publicKey.js`:
+
+| Variabel | Beskrivelse |
+| --- | --- |
+| `LICENSE_KEY` | Licensnøgle udstedt af blueeye-licens |
+| `LICENSE_SERVER_ID` | Denne servers id (skal matche `payload.serverId`) |
+| `LICENSE_SERVER_URL` | blueeye-licens URL |
+| `LICENSE_PUBLIC_KEY` | Indlejret Ed25519 public key (overstyrer `src/license/publicKey.js`) |
+| `LICENSE_GRACE_DAYS` | Offline grace-periode (default 14) |
+| `LICENSE_VALIDATE_INTERVAL_HOURS` | Valideringsinterval (default 6) |
+
+Den indlejrede public key kommer fra `docs/public-key.md` i blueeye-licens.
+
+**Logik:**
+
+- Ved opstart + hver 6. time: `POST /validate` med `{ licenseKey, serverId, agentCount }`.
+- Svaret verificeres: kanonisk JSON af `payload` reproduceres med **samme
+  `canonicalize()`** som blueeye-licens (kopieret byte-for-byte ind i
+  [`src/lib/canonicalize.js`](src/lib/canonicalize.js)) og signaturen tjekkes mod
+  den indlejrede public key.
+- Svaret **afvises** hvis signaturen er ugyldig **eller** `payload.serverId` ≠ egen
+  `serverId` (falder tilbage på cache).
+- Sidste gyldige (verificerede) validering caches på disk (`LICENSE_CACHE_PATH`).
+- **Offline grace:** kan serveren ikke validere, bruges den cachede validering i op
+  til 14 dage; derefter **hård fejl** (ulicenseret).
+- **max_agents håndhæves lokalt:** nye agent-WebSocket-connects afvises (`403`),
+  når antallet ville overskride grænsen, eller når licensen ikke er gyldig.
+
+Status kan ses via `GET /license/status` (viewer+).
+
+> `blueeye-server` skal indlejre blueeye-licens' public key i
+> `src/license/publicKey.js` (eller `LICENSE_PUBLIC_KEY`). Indtil da fejler al
+> verifikation, og serveren er ulicenseret.
+
 ## Projektstruktur
 
 ```
@@ -369,10 +411,12 @@ blueeye-server/
 │   ├── db.js                   # MySQL connection pool + helpers
 │   ├── logger.js               # Stille standard-logger til tests
 │   ├── auth/                   # JWT + agent-token (to separate auth-systemer)
+│   ├── lib/                    # canonicalize (byte-identisk med blueeye-licens)
+│   ├── license/                # verify, publicKey, cache, licenseManager
 │   ├── middleware/             # asyncHandler, fejlhåndtering, request-log
 │   ├── repositories/           # Dataadgang (locations, users, agents, tokens, results …)
 │   ├── services/               # enrollmentStore (atomisk claim-and-enroll)
-│   ├── routes/                 # health, auth, users, locations, agents, enrollment, results
+│   ├── routes/                 # health, auth, users, locations, agents, enrollment, license …
 │   ├── validation/             # Input-validering
 │   └── ws/                     # agentSocket (WebSocket live-kanal)
 ├── test/                       # Tests (node --test + supertest + ws)
@@ -390,4 +434,7 @@ kørende database**. Dækningen omfatter login (gyldig/forkert → `401`), besky
 endpoints uden token (`401`), for lav rolle (`403`), `400`/`404`/`409`/`500` for
 alle endpoints, enrollment (`401`/`410`), POST results med/uden agent-token
 (`401`), samt WebSocket-connect med gyldigt/ugyldigt token (en rigtig
-HTTP+WebSocket-server startes i testen).
+HTTP+WebSocket-server startes i testen). For licens-validering: gyldig validering,
+ugyldig signatur, forkert serverId, offline med gyldig cache, offline efter grace
+udløbet, agent over grænse, samt at `canonicalize()` matcher blueeye-licens
+byte-for-byte.

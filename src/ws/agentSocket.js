@@ -44,6 +44,9 @@ function attachAgentWebSocket({
   logger = silentLogger,
   path = '/ws/agent',
   heartbeatMs = 30000,
+  // Capacity/licence gate. Receives the current connection count and returns
+  // whether a new agent connection may be accepted. Defaults to always-allow.
+  licenseGuard = () => true,
 }) {
   const authenticator = createAgentAuthenticator({ agentTokensRepo });
   const wss = new WebSocketServer({ noServer: true });
@@ -60,6 +63,13 @@ function attachAgentWebSocket({
         if (!agent) {
           socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
           socket.destroy();
+          return;
+        }
+        // License/capacity gate (token is valid; this is a separate concern).
+        if (!licenseGuard(wss.clients.size)) {
+          socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
+          socket.destroy();
+          logger.warn('Rejected agent connection: license invalid or agent limit reached.');
           return;
         }
         wss.handleUpgrade(req, socket, head, (ws) => {
@@ -143,7 +153,12 @@ function attachAgentWebSocket({
     wss.close();
   }
 
-  return { wss, sendCommand, close };
+  // Current number of connected agents (used for license reporting/enforcement).
+  function connectionCount() {
+    return wss.clients.size;
+  }
+
+  return { wss, sendCommand, close, connectionCount };
 }
 
 module.exports = { attachAgentWebSocket };

@@ -4,6 +4,8 @@
 // development). Keeping all env access in one place makes the rest of the
 // codebase easy to test and reason about.
 require('dotenv').config();
+const path = require('path');
+const { resolvePublicKey } = require('./license/publicKey');
 
 function toInt(value, fallback) {
   const parsed = Number.parseInt(value, 10);
@@ -42,6 +44,16 @@ const config = {
     // Agent live channel.
     path: process.env.WS_AGENT_PATH || '/ws/agent',
     heartbeatIntervalMs: toInt(process.env.WS_HEARTBEAT_MS, 30000),
+  },
+  // Client-side licensing against blueeye-licens. Set at installation (not CRUD).
+  license: {
+    key: process.env.LICENSE_KEY || '',
+    serverId: process.env.LICENSE_SERVER_ID || '',
+    serverUrl: process.env.LICENSE_SERVER_URL || '',
+    publicKey: resolvePublicKey(),
+    cachePath: process.env.LICENSE_CACHE_PATH || path.join(process.cwd(), '.license-cache.json'),
+    graceDays: toInt(process.env.LICENSE_GRACE_DAYS, 14),
+    intervalHours: toInt(process.env.LICENSE_VALIDATE_INTERVAL_HOURS, 6),
   },
 };
 

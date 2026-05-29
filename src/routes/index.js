@@ -9,6 +9,7 @@ const { createAgentsRouter } = require('./agents');
 const { createAgentEnrollRouter } = require('./agentEnroll');
 const { createAgentReportsRouter } = require('./agentReports');
 const { createEnrollmentCodesRouter } = require('./enrollmentCodes');
+const { createLicenseRouter } = require('./license');
 const {
   createAgentAuthenticator,
   createAgentTokenMiddleware,
@@ -25,6 +26,7 @@ function createApiRouter({
   enrollmentStore,
   agentTokensRepo,
   resultsRepo,
+  licenseManager,
 }) {
   const router = express.Router();
 
@@ -40,6 +42,7 @@ function createApiRouter({
   router.use('/auth', createAuthRouter({ usersRepo }));
   router.use('/users', createUsersRouter({ usersRepo }));
   router.use('/locations', createLocationsRouter({ locationsRepo }));
+  router.use('/license', createLicenseRouter({ licenseManager }));
   router.use('/enrollment-codes', createEnrollmentCodesRouter({ enrollmentCodesRepo, locationsRepo }));
 
   // Three routers share the /agents prefix, each with its own auth model:

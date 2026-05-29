@@ -117,6 +117,18 @@ function makeDb(overrides = {}) {
   };
 }
 
+// A fake license manager (defaults to a healthy, generous license).
+function makeLicenseManager(overrides = {}) {
+  return {
+    isLicensed: overrides.isLicensed || (() => true),
+    getMaxAgents: overrides.getMaxAgents || (() => 1000),
+    canAcceptNewConnection: overrides.canAcceptNewConnection || (() => true),
+    getStatus:
+      overrides.getStatus ||
+      (() => ({ status: 'valid', licensed: true, maxAgents: 1000, serverId: 'test-server' })),
+  };
+}
+
 // ---- App + auth helpers ---------------------------------------------------
 
 // Builds an app wired with fakes; pass overrides to swap any dependency.
@@ -130,6 +142,7 @@ function makeApp(overrides = {}) {
     enrollmentStore: overrides.enrollmentStore || makeEnrollmentStore(),
     agentTokensRepo: overrides.agentTokensRepo || makeAgentTokensRepo(),
     resultsRepo: overrides.resultsRepo || makeResultsRepo(),
+    licenseManager: overrides.licenseManager || makeLicenseManager(),
   });
 }
 
@@ -161,6 +174,7 @@ module.exports = {
   makeResultsRepo,
   makeEnrollmentCodesRepo,
   makeEnrollmentStore,
+  makeLicenseManager,
   makeDb,
   makeApp,
   tokenFor,

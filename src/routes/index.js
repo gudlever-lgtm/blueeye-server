@@ -7,7 +7,12 @@ const { createUsersRouter } = require('./users');
 const { createLocationsRouter } = require('./locations');
 const { createAgentsRouter } = require('./agents');
 const { createAgentEnrollRouter } = require('./agentEnroll');
+const { createAgentReportsRouter } = require('./agentReports');
 const { createEnrollmentCodesRouter } = require('./enrollmentCodes');
+const {
+  createAgentAuthenticator,
+  createAgentTokenMiddleware,
+} = require('../auth/agentAuth');
 
 // Aggregates the feature routers into a single API router. New resources are
 // mounted here, keeping the app factory (src/app.js) small.
@@ -18,17 +23,32 @@ function createApiRouter({
   agentsRepo,
   enrollmentCodesRepo,
   enrollmentStore,
+  agentTokensRepo,
+  resultsRepo,
 }) {
   const router = express.Router();
+
+  // Agent-token middleware — kept entirely separate from the user JWT auth.
+  const agentAuthenticator = createAgentAuthenticator({ agentTokensRepo });
+  const agentAuth = createAgentTokenMiddleware({
+    authenticator: agentAuthenticator,
+    agentTokensRepo,
+    agentsRepo,
+  });
 
   router.use('/health', createHealthRouter({ db }));
   router.use('/auth', createAuthRouter({ usersRepo }));
   router.use('/users', createUsersRouter({ usersRepo }));
   router.use('/locations', createLocationsRouter({ locationsRepo }));
   router.use('/enrollment-codes', createEnrollmentCodesRouter({ enrollmentCodesRepo, locationsRepo }));
-  router.use('/agents', createAgentsRouter({ agentsRepo, locationsRepo }));
-  // Unauthenticated agent self-enrollment, also under /agents. Mounted after
-  // the (authenticated) agents router; POST /agents/enroll falls through to it.
+
+  // Three routers share the /agents prefix, each with its own auth model:
+  //   - CRUD + results listing — user JWT (RBAC)
+  //   - POST /results          — agent token
+  //   - POST /enroll           — unauthenticated
+  // Requests fall through routers that have no matching route.
+  router.use('/agents', createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo }));
+  router.use('/agents', createAgentReportsRouter({ agentAuth, resultsRepo }));
   router.use('/agents', createAgentEnrollRouter({ enrollmentStore }));
 
   return router;

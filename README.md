@@ -14,6 +14,7 @@ Kun open source-komponenter med tilladende licenser (MIT/BSD):
 | mysql2        | MIT    | MySQL-driver (pool, promises)  |
 | jsonwebtoken  | MIT    | Udsted/verificér JWT           |
 | bcryptjs      | MIT    | Password-hashing (ren JS)      |
+| ws            | MIT    | WebSocket (agent live-kanal)   |
 | dotenv        | BSD-2  | Indlæsning af `.env`           |
 | supertest     | MIT    | HTTP-tests (kun `devDeps`)     |
 
@@ -73,6 +74,8 @@ Al konfiguration sker via miljøvariabler (se [`.env.example`](.env.example)):
 | `SEED_ADMIN_EMAIL`    | admin@blueeye.local | Email på den seedede admin |
 | `SEED_ADMIN_PASSWORD` | (tom)       | Adgangskode; genereres hvis tom   |
 | `ENROLLMENT_CODE_TTL_MINUTES` | 60  | Standard-levetid for enrollment-koder |
+| `WS_AGENT_PATH`       | /ws/agent   | Sti for agent-WebSocket           |
+| `WS_HEARTBEAT_MS`     | 30000       | Heartbeat-interval (ping) i ms    |
 
 > I produktion (`NODE_ENV=production`) nægter serveren at starte, hvis
 > `JWT_SECRET` ikke er ændret fra dev-standardværdien.
@@ -167,11 +170,24 @@ Opaque agent-tokens. **Kun SHA-256-hashen gemmes** — aldrig selve tokenet.
 | `last_used_at` | DATETIME        | Nullable                                |
 | `revoked_at`   | DATETIME        | Nullable                                |
 
+### `results`
+
+Testresultater rapporteret af agents (via REST, agent-token-autentificeret).
+
+| Kolonne      | Type            | Noter                                   |
+| ------------ | --------------- | --------------------------------------- |
+| `id`         | INT UNSIGNED PK | Auto-increment                          |
+| `agent_id`   | INT UNSIGNED FK | → `agents(id)` `ON DELETE CASCADE`      |
+| `payload`    | JSON            | Selve resultatet                        |
+| `created_at` | TIMESTAMP       | Sættes automatisk                       |
+
 ## API
 
-Alle endpoints undtagen `/health` og `/auth/login` kræver et gyldigt JWT i
-`Authorization: Bearer <token>`-headeren. Adgang afgøres af brugerens rolle
-(se [Autorisation](#autorisation-rbac)).
+De fleste endpoints kræver et bruger-JWT i `Authorization: Bearer <token>` og
+adgang afgøres af rollen (se [Autorisation](#autorisation-rbac)). Undtagelser:
+`/health`, `/auth/login` og `/agents/enroll` er åbne, mens `/agents/results` og
+WebSocket-kanalen bruger et **agent-token** (ikke et JWT) — se
+[Agent-kommunikation](#agent-kommunikation).
 
 | Metode | Sti              | Beskrivelse                       | Rolle              | Svar                       |
 | ------ | ---------------- | --------------------------------- | ------------------ | -------------------------- |
@@ -193,8 +209,12 @@ Alle endpoints undtagen `/health` og `/auth/login` kræver et gyldigt JWT i
 | POST   | `/enrollment-codes` | Generér engangskode            | operator+          | `201` (kode én gang) / `400` |
 | GET    | `/enrollment-codes` | Liste m. status (uden kode)    | operator+          | `200` med array            |
 | DELETE | `/enrollment-codes/:id` | Slet en kode               | admin              | `204` / `404` / `400`      |
+| POST   | `/agents/results` | Indsend testresultater           | **agent-token**    | `201` / `400` / `401`      |
+| GET    | `/agents/:id/results` | Hent en agents resultater    | viewer+            | `200` / `404` / `400`      |
+| WS     | `/ws/agent`      | Live-kanal (status/kommandoer)    | **agent-token**    | upgrade / hård luk         |
 
-("viewer+" = viewer eller højere; "operator+" = operator eller admin.)
+("viewer+" = viewer eller højere; "operator+" = operator eller admin.
+"agent-token" = opaque agent-token, ikke bruger-JWT.)
 
 ### Eksempler
 
@@ -295,6 +315,41 @@ curl -s -X POST http://localhost:3000/agents/enroll \
 # -> { "agentId":7, "token":"<opaque-token>" }
 ```
 
+## Agent-kommunikation
+
+Agents bruger deres **opaque token** (fra enrollment) — ikke et bruger-JWT.
+Token-auth og bruger-JWT-auth er holdt i to separate middlewares
+([`src/auth/agentAuth.js`](src/auth/agentAuth.js) hhv.
+[`src/auth/middleware.js`](src/auth/middleware.js)). Indkommende agent-tokens
+hashes (SHA-256) og slås op i `agent_tokens`; ukendte eller tilbagekaldte tokens
+afvises. Ved gyldig auth opdateres `last_used_at` og `agents.last_seen`.
+
+**WebSocket — `/ws/agent`** (live status + kommandoer):
+
+- Agenten sender sit token i `Authorization: Bearer <token>` **eller** som
+  `?token=<token>` i URL'en ved connect.
+- Uden gyldigt token afvises handshaket **hårdt** (HTTP `401` under upgrade — der
+  oprettes aldrig en WebSocket).
+- Ved connect sættes `status = online`; ved disconnect `status = offline`.
+- Server-ping (heartbeat) holder `last_seen` frisk; forbindelser uden svar lukkes.
+- Server→agent: serveren kan pushe kommandoer (fx `run test`) til en agents
+  aktive forbindelser.
+
+**REST** (agent-token):
+
+- `POST /agents/results { results: [ {...} ] }` — gemmer hvert element som en
+  `results`-række knyttet til `agent_id` fra tokenet.
+
+Resultater læses tilbage af brugere via `GET /agents/:id/results` (bruger-JWT,
+viewer+).
+
+```bash
+# Agenten indsender resultater med sit opaque token
+curl -X POST http://localhost:3000/agents/results \
+  -H "Authorization: Bearer <agent-token>" -H 'Content-Type: application/json' \
+  -d '{"results":[{"test":"ping","ok":true}]}'
+```
+
 ## Projektstruktur
 
 ```
@@ -303,22 +358,24 @@ blueeye-server/
 │   ├── 001_create_locations.sql
 │   ├── 002_create_users.sql
 │   ├── 003_create_agents.sql
-│   └── 004_create_enrollment.sql
+│   ├── 004_create_enrollment.sql
+│   └── 005_create_results.sql
 ├── schema.sql                  # Fuldt schema-snapshot
 ├── src/
 │   ├── app.js                  # Express app-factory (uden listen)
-│   ├── server.js               # Entrypoint: wiring + listen + shutdown
+│   ├── server.js               # Entrypoint: wiring + listen + WS + shutdown
 │   ├── migrate.js              # Migrationskørsel + admin-seed
 │   ├── config.js               # Env-baseret konfiguration
 │   ├── db.js                   # MySQL connection pool + helpers
 │   ├── logger.js               # Stille standard-logger til tests
-│   ├── auth/                   # password, jwt, tokens, middleware, roller
+│   ├── auth/                   # JWT + agent-token (to separate auth-systemer)
 │   ├── middleware/             # asyncHandler, fejlhåndtering, request-log
-│   ├── repositories/           # Dataadgang (locations, users, agents, koder)
+│   ├── repositories/           # Dataadgang (locations, users, agents, tokens, results …)
 │   ├── services/               # enrollmentStore (atomisk claim-and-enroll)
-│   ├── routes/                 # health, auth, users, locations, agents, enrollment
-│   └── validation/             # Input-validering
-├── test/                       # Tests (node --test + supertest)
+│   ├── routes/                 # health, auth, users, locations, agents, enrollment, results
+│   ├── validation/             # Input-validering
+│   └── ws/                     # agentSocket (WebSocket live-kanal)
+├── test/                       # Tests (node --test + supertest + ws)
 └── test-support/               # Test-fakes (uden for test/)
 ```
 
@@ -330,5 +387,7 @@ npm test
 
 Testene kører mod app-factory'en med injicerede fakes — der kræves **ingen
 kørende database**. Dækningen omfatter login (gyldig/forkert → `401`), beskyttede
-endpoints uden token (`401`), for lav rolle (`403`) samt `400`/`404`/`409`/`500`
-for alle endpoints.
+endpoints uden token (`401`), for lav rolle (`403`), `400`/`404`/`409`/`500` for
+alle endpoints, enrollment (`401`/`410`), POST results med/uden agent-token
+(`401`), samt WebSocket-connect med gyldigt/ugyldigt token (en rigtig
+HTTP+WebSocket-server startes i testen).

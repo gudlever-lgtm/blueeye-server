@@ -73,7 +73,20 @@ function createAgentsRepository(db) {
     return result.affectedRows > 0;
   }
 
-  return { findAll, findById, updateManaged, remove };
+  // Sets the agent-reported status (online/offline) and refreshes last_seen.
+  async function setStatus(id, status) {
+    await pool.query(
+      'UPDATE agents SET status = ?, last_seen = NOW() WHERE id = ?',
+      [status, id]
+    );
+  }
+
+  // Bumps last_seen without changing status (heartbeats / REST traffic).
+  async function touchLastSeen(id) {
+    await pool.query('UPDATE agents SET last_seen = NOW() WHERE id = ?', [id]);
+  }
+
+  return { findAll, findById, updateManaged, remove, setStatus, touchLastSeen };
 }
 
 module.exports = { createAgentsRepository };

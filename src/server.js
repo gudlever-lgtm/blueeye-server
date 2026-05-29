@@ -8,6 +8,9 @@ const { createUsersRepository } = require('./repositories/usersRepository');
 const { createAgentsRepository } = require('./repositories/agentsRepository');
 const { createEnrollmentCodesRepository } = require('./repositories/enrollmentCodesRepository');
 const { createEnrollmentStore } = require('./services/enrollmentStore');
+const { createAgentTokensRepository } = require('./repositories/agentTokensRepository');
+const { createResultsRepository } = require('./repositories/resultsRepository');
+const { attachAgentWebSocket } = require('./ws/agentSocket');
 
 // Wires up real dependencies, starts the HTTP server and installs graceful
 // shutdown handlers.
@@ -26,6 +29,8 @@ function start() {
   const agentsRepo = createAgentsRepository(db);
   const enrollmentCodesRepo = createEnrollmentCodesRepository(db);
   const enrollmentStore = createEnrollmentStore(db);
+  const agentTokensRepo = createAgentTokensRepository(db);
+  const resultsRepo = createResultsRepository(db);
   const app = createApp({
     db,
     locationsRepo,
@@ -33,6 +38,8 @@ function start() {
     agentsRepo,
     enrollmentCodesRepo,
     enrollmentStore,
+    agentTokensRepo,
+    resultsRepo,
     logger: console,
   });
 
@@ -42,8 +49,19 @@ function start() {
     );
   });
 
+  // Live agent channel (WebSocket) attached to the same HTTP server.
+  const agentWs = attachAgentWebSocket({
+    server,
+    agentTokensRepo,
+    agentsRepo,
+    logger: console,
+    path: config.ws.path,
+    heartbeatMs: config.ws.heartbeatIntervalMs,
+  });
+
   function shutdown(signal) {
     console.info(`Received ${signal}, shutting down gracefully...`);
+    agentWs.close();
     server.close(async () => {
       try {
         await db.close();

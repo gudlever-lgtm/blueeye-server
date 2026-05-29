@@ -38,6 +38,11 @@ const config = {
     // Default lifetime of a new enrollment code, in minutes.
     defaultTtlMinutes: toInt(process.env.ENROLLMENT_CODE_TTL_MINUTES, 60),
   },
+  ws: {
+    // Agent live channel.
+    path: process.env.WS_AGENT_PATH || '/ws/agent',
+    heartbeatIntervalMs: toInt(process.env.WS_HEARTBEAT_MS, 30000),
+  },
 };
 
 // The default JWT secret must never be used outside development.

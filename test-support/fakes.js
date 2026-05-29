@@ -60,6 +60,24 @@ function makeAgentsRepo(overrides = {}) {
     updateManaged:
       overrides.updateManaged || (async (id, patch) => ({ id, ...patch })),
     remove: overrides.remove || (async () => false),
+    setStatus: overrides.setStatus || (async () => {}),
+    touchLastSeen: overrides.touchLastSeen || (async () => {}),
+  };
+}
+
+// A fake agent-tokens repository.
+function makeAgentTokensRepo(overrides = {}) {
+  return {
+    findActiveByHash: overrides.findActiveByHash || (async () => null),
+    touchLastUsed: overrides.touchLastUsed || (async () => {}),
+  };
+}
+
+// A fake results repository.
+function makeResultsRepo(overrides = {}) {
+  return {
+    createMany: overrides.createMany || (async () => 0),
+    findByAgentId: overrides.findByAgentId || (async () => []),
   };
 }
 
@@ -110,6 +128,8 @@ function makeApp(overrides = {}) {
     agentsRepo: overrides.agentsRepo || makeAgentsRepo(),
     enrollmentCodesRepo: overrides.enrollmentCodesRepo || makeEnrollmentCodesRepo(),
     enrollmentStore: overrides.enrollmentStore || makeEnrollmentStore(),
+    agentTokensRepo: overrides.agentTokensRepo || makeAgentTokensRepo(),
+    resultsRepo: overrides.resultsRepo || makeResultsRepo(),
   });
 }
 
@@ -137,6 +157,8 @@ module.exports = {
   makeLocationsRepo,
   makeUsersRepo,
   makeAgentsRepo,
+  makeAgentTokensRepo,
+  makeResultsRepo,
   makeEnrollmentCodesRepo,
   makeEnrollmentStore,
   makeDb,

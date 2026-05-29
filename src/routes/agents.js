@@ -14,7 +14,7 @@ const { parseId } = require('../validation/locationValidation');
 //
 // Agents are created via enrollment (prompt 4) — there is intentionally no
 // manual POST /agents here.
-function createAgentsRouter({ agentsRepo, locationsRepo }) {
+function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo }) {
   const router = express.Router();
 
   // GET /agents — list, with the joined location name.
@@ -42,6 +42,24 @@ function createAgentsRouter({ agentsRepo, locationsRepo }) {
         return res.status(404).json({ error: 'Agent not found' });
       }
       res.json(agent);
+    })
+  );
+
+  // GET /agents/:id/results — results reported by the agent. viewer+ (user RBAC).
+  router.get(
+    '/:id/results',
+    requireAuth,
+    requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN),
+    asyncHandler(async (req, res) => {
+      const id = parseId(req.params.id);
+      if (id === null) {
+        return res.status(400).json({ error: 'Invalid id' });
+      }
+      const agent = await agentsRepo.findById(id);
+      if (!agent) {
+        return res.status(404).json({ error: 'Agent not found' });
+      }
+      res.json(await resultsRepo.findByAgentId(id));
     })
   );
 

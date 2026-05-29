@@ -16,6 +16,8 @@ function createApp({
   agentsRepo,
   enrollmentCodesRepo,
   enrollmentStore,
+  agentTokensRepo,
+  resultsRepo,
   logger = silentLogger,
 } = {}) {
   const app = express();
@@ -24,8 +26,8 @@ function createApp({
   app.use(express.json({ limit: '1mb' }));
   app.use(requestLogger(logger));
 
-  // Application routes. Authentication/RBAC is enforced inside the individual
-  // routers (see src/auth/middleware.js and src/routes/*).
+  // Application routes. User-JWT RBAC and agent-token auth are enforced inside
+  // the individual routers (see src/auth/* and src/routes/*).
   app.use(
     '/',
     createApiRouter({
@@ -35,6 +37,8 @@ function createApp({
       agentsRepo,
       enrollmentCodesRepo,
       enrollmentStore,
+      agentTokensRepo,
+      resultsRepo,
     })
   );
 

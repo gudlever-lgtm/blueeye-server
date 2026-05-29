@@ -9,16 +9,16 @@ const { silentLogger } = require('./logger');
 // Builds the Express application. Dependencies (db + repositories + logger) are
 // injected so the same factory powers both the real server and the test suite.
 // It deliberately does NOT call listen() — that belongs to src/server.js.
-function createApp({ db, locationsRepo, logger = silentLogger } = {}) {
+function createApp({ db, locationsRepo, usersRepo, logger = silentLogger } = {}) {
   const app = express();
 
   app.disable('x-powered-by');
   app.use(express.json({ limit: '1mb' }));
   app.use(requestLogger(logger));
 
-  // Application routes. Global authentication/RBAC middleware (prompt 2) can be
-  // applied right here, before the API router — e.g. app.use(authenticate).
-  app.use('/', createApiRouter({ db, locationsRepo }));
+  // Application routes. Authentication/RBAC is enforced inside the individual
+  // routers (see src/auth/middleware.js and src/routes/*).
+  app.use('/', createApiRouter({ db, locationsRepo, usersRepo }));
 
   // 404 + centralised error handling, always mounted last.
   app.use(notFoundHandler);

@@ -8,12 +8,19 @@ ekstern SaaS, ingen telemetri.
 
 Kun open source-komponenter med tilladende licenser (MIT/BSD):
 
-| Pakke      | Licens | Rolle                          |
-| ---------- | ------ | ------------------------------ |
-| express    | MIT    | HTTP-framework / routing       |
-| mysql2     | MIT    | MySQL-driver (pool, promises)  |
-| dotenv     | BSD-2  | Indlæsning af `.env`           |
-| supertest  | MIT    | HTTP-tests (kun `devDeps`)     |
+| Pakke         | Licens | Rolle                          |
+| ------------- | ------ | ------------------------------ |
+| express       | MIT    | HTTP-framework / routing       |
+| mysql2        | MIT    | MySQL-driver (pool, promises)  |
+| jsonwebtoken  | MIT    | Udsted/verificér JWT           |
+| bcryptjs      | MIT    | Password-hashing (ren JS)      |
+| dotenv        | BSD-2  | Indlæsning af `.env`           |
+| supertest     | MIT    | HTTP-tests (kun `devDeps`)     |
+
+`bcryptjs` er valgt frem for native `bcrypt`/`argon2`, fordi den er ren
+JavaScript og dermed ikke kræver et build-trin — nemt at deploye on-prem på
+tværs af hosts. Hashing er isoleret i [`src/auth/password.js`](src/auth/password.js),
+så algoritmen kan udskiftes uden at røre kaldere.
 
 Testkørsel bruger Node's indbyggede test runner (`node --test`) — ingen ekstra
 test-framework nødvendig.
@@ -59,6 +66,15 @@ Al konfiguration sker via miljøvariabler (se [`.env.example`](.env.example)):
 | `DB_PASSWORD`         | (tom)       | DB-adgangskode                    |
 | `DB_NAME`             | blueeye     | Databasenavn                      |
 | `DB_CONNECTION_LIMIT` | 10          | Maks. antal forbindelser i pool   |
+| `JWT_SECRET`          | (dev-værdi) | Nøgle til at signere JWT          |
+| `JWT_EXPIRES_IN`      | 12h         | JWT-levetid                       |
+| `JWT_ISSUER`          | blueeye-server | `iss`-claim på tokens          |
+| `BCRYPT_ROUNDS`       | 12          | bcrypt cost-faktor                |
+| `SEED_ADMIN_EMAIL`    | admin@blueeye.local | Email på den seedede admin |
+| `SEED_ADMIN_PASSWORD` | (tom)       | Adgangskode; genereres hvis tom   |
+
+> I produktion (`NODE_ENV=production`) nægter serveren at starte, hvis
+> `JWT_SECRET` ikke er ændret fra dev-standardværdien.
 
 ## Database
 
@@ -69,7 +85,8 @@ Al konfiguration sker via miljøvariabler (se [`.env.example`](.env.example)):
 - [`src/migrate.js`](src/migrate.js) — simpel migrationskørsel. Holder styr på
   allerede kørte migrationer i tabellen `schema_migrations`, så `npm run migrate`
   er sikker at køre gentagne gange. Tilføj en ny migration ved at lægge en fil
-  `NNN_beskrivelse.sql` i `migrations/`.
+  `NNN_beskrivelse.sql` i `migrations/`. Efter migrationerne **seedes en
+  admin-bruger**, hvis ingen admin findes (se nedenfor).
 
 ### `locations`
 
@@ -81,37 +98,66 @@ Al konfiguration sker via miljøvariabler (se [`.env.example`](.env.example)):
 | `created_at`  | TIMESTAMP       | Sættes automatisk                      |
 | `updated_at`  | TIMESTAMP       | Opdateres automatisk ved ændring       |
 
+### `users`
+
+| Kolonne         | Type            | Noter                                   |
+| --------------- | --------------- | --------------------------------------- |
+| `id`            | INT UNSIGNED PK | Auto-increment                          |
+| `email`         | VARCHAR(255)    | Unik                                    |
+| `password_hash` | VARCHAR(255)    | bcrypt-hash (aldrig klartekst)          |
+| `role`          | ENUM            | `admin` / `operator` / `viewer`         |
+| `created_at`    | TIMESTAMP       | Sættes automatisk                       |
+| `updated_at`    | TIMESTAMP       | Opdateres automatisk ved ændring        |
+
+**Seed af admin:** Ved migrationskørsel oprettes én admin-bruger, hvis der ikke
+allerede findes en. Email tages fra `SEED_ADMIN_EMAIL`. Er `SEED_ADMIN_PASSWORD`
+sat, bruges den; ellers genereres en stærk adgangskode, som printes **én gang**
+til konsollen — gem den med det samme.
+
 ## API
 
-| Metode | Sti              | Beskrivelse                       | Svar                         |
-| ------ | ---------------- | --------------------------------- | ---------------------------- |
-| GET    | `/health`        | Liveness — tjekker DB-forbindelse | `200` (DB oppe) / `503`      |
-| GET    | `/locations`     | Hent alle locations               | `200` med array              |
-| POST   | `/locations`     | Opret en location                 | `201` med oprettet objekt    |
-| PUT    | `/locations/:id` | Opdatér en location               | `200` / `404` / `400`        |
-| DELETE | `/locations/:id` | Slet en location                  | `204` / `404` / `400`        |
+Alle endpoints undtagen `/health` og `/auth/login` kræver et gyldigt JWT i
+`Authorization: Bearer <token>`-headeren. Adgang afgøres af brugerens rolle
+(se [Autorisation](#autorisation-rbac)).
+
+| Metode | Sti              | Beskrivelse                       | Rolle              | Svar                       |
+| ------ | ---------------- | --------------------------------- | ------------------ | -------------------------- |
+| GET    | `/health`        | Liveness — tjekker DB-forbindelse | (åben)             | `200` (DB oppe) / `503`    |
+| POST   | `/auth/login`    | Log ind, få et JWT                | (åben)             | `200` + token / `401`      |
+| GET    | `/locations`     | Hent alle locations               | viewer+            | `200` med array            |
+| POST   | `/locations`     | Opret en location                 | operator+          | `201` / `400`              |
+| PUT    | `/locations/:id` | Opdatér en location               | operator+          | `200` / `404` / `400`      |
+| DELETE | `/locations/:id` | Slet en location                  | admin              | `204` / `404` / `400`      |
+| GET    | `/users`         | Hent alle brugere                 | admin              | `200` med array            |
+| POST   | `/users`         | Opret bruger (hasher password)    | admin              | `201` / `400` / `409`      |
+| PUT    | `/users/:id`     | Opdatér rolle (+ valgfri reset)   | admin              | `200` / `404` / `400` / `409` |
+| DELETE | `/users/:id`     | Slet bruger (ej sidste admin)     | admin              | `204` / `404` / `409`      |
+
+("viewer+" = viewer eller højere; "operator+" = operator eller admin.)
 
 ### Eksempler
 
 ```bash
-# Sundhedstjek
-curl http://localhost:3000/health
-
-# Opret
-curl -X POST http://localhost:3000/locations \
+# Log ind og gem token
+TOKEN=$(curl -s -X POST http://localhost:3000/auth/login \
   -H 'Content-Type: application/json' \
+  -d '{"email":"admin@blueeye.local","password":"<password>"}' | jq -r .token)
+
+# Hent alle locations (kræver mindst viewer)
+curl http://localhost:3000/locations -H "Authorization: Bearer $TOKEN"
+
+# Opret en location (kræver operator+)
+curl -X POST http://localhost:3000/locations \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d '{"name":"Aarhus – Hovedkontor","description":"Hovedsæde"}'
 
-# Hent alle
-curl http://localhost:3000/locations
+# Slet en location (kræver admin)
+curl -X DELETE http://localhost:3000/locations/1 -H "Authorization: Bearer $TOKEN"
 
-# Opdatér
-curl -X PUT http://localhost:3000/locations/1 \
-  -H 'Content-Type: application/json' \
-  -d '{"name":"Aarhus – Hovedkontor","description":"Opdateret"}'
-
-# Slet
-curl -X DELETE http://localhost:3000/locations/1
+# Opret en bruger (kræver admin)
+curl -X POST http://localhost:3000/users \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"email":"ops@blueeye.local","password":"et-langt-password","role":"operator"}'
 ```
 
 ### Fejlsvar
@@ -119,35 +165,55 @@ curl -X DELETE http://localhost:3000/locations/1
 Fejl returneres som JSON. Statuskoder:
 
 - `400` — valideringsfejl eller ugyldigt `:id`
-- `404` — ukendt sti eller location findes ikke
+- `401` — manglende/ugyldigt/udløbet token, eller forkerte login-oplysninger
+- `403` — gyldigt token, men rollen har ikke adgang
+- `404` — ukendt sti eller ressource findes ikke
+- `409` — konflikt (fx dublet-email, eller forsøg på at slette sidste admin)
 - `500` — uventet serverfejl (fx databasen er nede under en forespørgsel)
 - `503` — `/health` når databasen ikke svarer
 
 ## Autorisation (RBAC)
 
-Endpoints er **åbne indtil videre**. Koden er struktureret, så RBAC let kan
-sættes på i et senere trin: authentication/authorization-middleware kan mountes
-globalt i [`src/app.js`](src/app.js) eller pr. router/route i
-[`src/routes/locations.js`](src/routes/locations.js) — uden at ændre selve
-handler-logikken.
+Login via `POST /auth/login` returnerer et JWT, der bæres i
+`Authorization: Bearer <token>`. To middleware håndhæver adgang
+([`src/auth/middleware.js`](src/auth/middleware.js)):
+
+- `requireAuth` — kræver et gyldigt JWT, ellers `401`.
+- `requireRole(...roller)` — kræver at brugerens rolle er blandt de angivne,
+  ellers `403`.
+
+Tre roller med stigende rettigheder:
+
+| Handling                         | viewer | operator | admin |
+| -------------------------------- | :----: | :------: | :---: |
+| Læse locations (GET)             |   ✓    |    ✓     |   ✓   |
+| Oprette/redigere locations (POST/PUT) |   –    |    ✓     |   ✓   |
+| Slette locations (DELETE)        |   –    |    –     |   ✓   |
+| Brugeradministration (`/users`)  |   –    |    –     |   ✓   |
+
+JWT signeres med HS256 og `JWT_SECRET`; algoritmen pinnes ved verificering for
+at undgå algorithm-confusion. Adgangskoder hashes med bcrypt og gemmes aldrig i
+klartekst.
 
 ## Projektstruktur
 
 ```
 blueeye-server/
 ├── migrations/                 # Nummererede SQL-migrationer
-│   └── 001_create_locations.sql
+│   ├── 001_create_locations.sql
+│   └── 002_create_users.sql
 ├── schema.sql                  # Fuldt schema-snapshot
 ├── src/
 │   ├── app.js                  # Express app-factory (uden listen)
 │   ├── server.js               # Entrypoint: wiring + listen + shutdown
-│   ├── migrate.js              # Migrationskørsel
+│   ├── migrate.js              # Migrationskørsel + admin-seed
 │   ├── config.js               # Env-baseret konfiguration
 │   ├── db.js                   # MySQL connection pool + helpers
 │   ├── logger.js               # Stille standard-logger til tests
+│   ├── auth/                   # password, jwt, middleware, roller
 │   ├── middleware/             # asyncHandler, fejlhåndtering, request-log
-│   ├── repositories/           # Dataadgang (locations)
-│   ├── routes/                 # health + locations routers
+│   ├── repositories/           # Dataadgang (locations, users)
+│   ├── routes/                 # health, auth, users, locations routers
 │   └── validation/             # Input-validering
 ├── test/                       # Tests (node --test + supertest)
 └── test-support/               # Test-fakes (uden for test/)
@@ -160,5 +226,6 @@ npm test
 ```
 
 Testene kører mod app-factory'en med injicerede fakes — der kræves **ingen
-kørende database**. Alle endpoints dækkes for både `404`- og `500`-stier samt
-de øvrige statuskoder.
+kørende database**. Dækningen omfatter login (gyldig/forkert → `401`), beskyttede
+endpoints uden token (`401`), for lav rolle (`403`) samt `400`/`404`/`409`/`500`
+for alle endpoints.

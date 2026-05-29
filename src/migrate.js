@@ -2,8 +2,11 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const mysql = require('mysql2/promise');
 const { config } = require('./config');
+const { hashPassword } = require('./auth/password');
+const { ROLES } = require('./auth/roles');
 
 const MIGRATIONS_DIR = path.join(__dirname, '..', 'migrations');
 
@@ -51,29 +54,60 @@ async function run() {
 
     if (pending.length === 0) {
       console.info('No pending migrations.');
-      return;
-    }
-
-    for (const file of pending) {
-      const sql = fs.readFileSync(path.join(MIGRATIONS_DIR, file), 'utf8');
-      console.info(`Applying migration: ${file}`);
-      await conn.beginTransaction();
-      try {
-        await conn.query(sql);
-        await conn.query(
-          'INSERT INTO schema_migrations (filename) VALUES (?)',
-          [file]
-        );
-        await conn.commit();
-      } catch (err) {
-        await conn.rollback();
-        throw new Error(`Migration ${file} failed: ${err.message}`);
+    } else {
+      for (const file of pending) {
+        const sql = fs.readFileSync(path.join(MIGRATIONS_DIR, file), 'utf8');
+        console.info(`Applying migration: ${file}`);
+        await conn.beginTransaction();
+        try {
+          await conn.query(sql);
+          await conn.query(
+            'INSERT INTO schema_migrations (filename) VALUES (?)',
+            [file]
+          );
+          await conn.commit();
+        } catch (err) {
+          await conn.rollback();
+          throw new Error(`Migration ${file} failed: ${err.message}`);
+        }
       }
+      console.info(`Applied ${pending.length} migration(s).`);
     }
 
-    console.info(`Applied ${pending.length} migration(s).`);
+    await seedAdminIfNeeded(conn);
   } finally {
     await conn.end();
+  }
+}
+
+// Creates an initial admin user when none exists yet. Credentials come from
+// the environment (SEED_ADMIN_EMAIL/SEED_ADMIN_PASSWORD); if no password is
+// configured, a strong one is generated and printed exactly once.
+async function seedAdminIfNeeded(conn) {
+  const [rows] = await conn.query(
+    'SELECT COUNT(*) AS count FROM users WHERE role = ?',
+    [ROLES.ADMIN]
+  );
+  if (Number(rows[0].count) > 0) {
+    return; // an admin already exists — nothing to do
+  }
+
+  const email = config.seedAdmin.email.trim().toLowerCase();
+  let password = config.seedAdmin.password;
+  const generated = !password;
+  if (generated) {
+    password = crypto.randomBytes(12).toString('base64url');
+  }
+
+  const passwordHash = await hashPassword(password);
+  await conn.query(
+    'INSERT INTO users (email, password_hash, role) VALUES (?, ?, ?)',
+    [email, passwordHash, ROLES.ADMIN]
+  );
+
+  console.info(`Seeded initial admin user: ${email}`);
+  if (generated) {
+    console.info(`Generated admin password (shown once, store it now): ${password}`);
   }
 }
 

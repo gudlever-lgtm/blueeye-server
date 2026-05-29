@@ -2,29 +2,36 @@
 
 const express = require('express');
 const { asyncHandler } = require('../middleware/asyncHandler');
+const { requireAuth, requireRole } = require('../auth/middleware');
+const { ROLES } = require('../auth/roles');
 const { validateLocationInput, parseId } = require('../validation/locationValidation');
 
-// Locations CRUD router.
+// Locations CRUD router with role-based access control:
+//   - viewer   may read           (GET)
+//   - operator may create/edit     (POST, PUT)  — and read
+//   - admin    may delete          (DELETE)     — and everything above
 //
-// RBAC arrives in prompt 2. The endpoints are intentionally open for now, but
-// authorization can be slotted in without touching the handlers — either
-// per-router (router.use(authenticate)) or per-route, e.g.:
-//     router.post('/', authorize('admin'), asyncHandler(...))
+// Authorization is applied per route (rather than router-wide) so that a
+// request to an unknown sub-path still falls through to the 404 handler.
 function createLocationsRouter({ locationsRepo }) {
   const router = express.Router();
 
-  // GET /locations
+  // GET /locations — any authenticated role.
   router.get(
     '/',
+    requireAuth,
+    requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN),
     asyncHandler(async (req, res) => {
       const locations = await locationsRepo.findAll();
       res.json(locations);
     })
   );
 
-  // POST /locations
+  // POST /locations — operator or admin.
   router.post(
     '/',
+    requireAuth,
+    requireRole(ROLES.OPERATOR, ROLES.ADMIN),
     asyncHandler(async (req, res) => {
       const { value, errors } = validateLocationInput(req.body);
       if (errors) {
@@ -35,9 +42,11 @@ function createLocationsRouter({ locationsRepo }) {
     })
   );
 
-  // PUT /locations/:id
+  // PUT /locations/:id — operator or admin.
   router.put(
     '/:id',
+    requireAuth,
+    requireRole(ROLES.OPERATOR, ROLES.ADMIN),
     asyncHandler(async (req, res) => {
       const id = parseId(req.params.id);
       if (id === null) {
@@ -55,9 +64,11 @@ function createLocationsRouter({ locationsRepo }) {
     })
   );
 
-  // DELETE /locations/:id
+  // DELETE /locations/:id — admin only.
   router.delete(
     '/:id',
+    requireAuth,
+    requireRole(ROLES.ADMIN),
     asyncHandler(async (req, res) => {
       const id = parseId(req.params.id);
       if (id === null) {

@@ -21,6 +21,23 @@ const config = {
     database: process.env.DB_NAME || 'blueeye',
     connectionLimit: toInt(process.env.DB_CONNECTION_LIMIT, 10),
   },
+  auth: {
+    // NOTE: the default secret is for development only. server.js refuses to
+    // start in production unless JWT_SECRET is set to something else.
+    jwtSecret: process.env.JWT_SECRET || 'dev-insecure-secret-change-me',
+    jwtExpiresIn: process.env.JWT_EXPIRES_IN || '12h',
+    jwtIssuer: process.env.JWT_ISSUER || 'blueeye-server',
+    bcryptRounds: toInt(process.env.BCRYPT_ROUNDS, 12),
+  },
+  // Initial admin, seeded by the migration runner if no admin exists yet.
+  seedAdmin: {
+    email: process.env.SEED_ADMIN_EMAIL || 'admin@blueeye.local',
+    password: process.env.SEED_ADMIN_PASSWORD || '',
+  },
 };
+
+// The default JWT secret must never be used outside development.
+const DEFAULT_JWT_SECRET = 'dev-insecure-secret-change-me';
+config.auth.usingDefaultSecret = config.auth.jwtSecret === DEFAULT_JWT_SECRET;
 
 module.exports = { config };

@@ -4,13 +4,23 @@ const { config } = require('./config');
 const { createDb } = require('./db');
 const { createApp } = require('./app');
 const { createLocationsRepository } = require('./repositories/locationsRepository');
+const { createUsersRepository } = require('./repositories/usersRepository');
 
 // Wires up real dependencies, starts the HTTP server and installs graceful
 // shutdown handlers.
 function start() {
+  // Never run in production with the built-in development JWT secret.
+  if (config.env === 'production' && config.auth.usingDefaultSecret) {
+    console.error(
+      'Refusing to start: JWT_SECRET must be set to a strong value in production.'
+    );
+    process.exit(1);
+  }
+
   const db = createDb(config);
   const locationsRepo = createLocationsRepository(db);
-  const app = createApp({ db, locationsRepo, logger: console });
+  const usersRepo = createUsersRepository(db);
+  const app = createApp({ db, locationsRepo, usersRepo, logger: console });
 
   const server = app.listen(config.port, () => {
     console.info(

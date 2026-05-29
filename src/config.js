@@ -34,6 +34,10 @@ const config = {
     email: process.env.SEED_ADMIN_EMAIL || 'admin@blueeye.local',
     password: process.env.SEED_ADMIN_PASSWORD || '',
   },
+  enrollment: {
+    // Default lifetime of a new enrollment code, in minutes.
+    defaultTtlMinutes: toInt(process.env.ENROLLMENT_CODE_TTL_MINUTES, 60),
+  },
 };
 
 // The default JWT secret must never be used outside development.

@@ -72,6 +72,7 @@ Al konfiguration sker via miljøvariabler (se [`.env.example`](.env.example)):
 | `BCRYPT_ROUNDS`       | 12          | bcrypt cost-faktor                |
 | `SEED_ADMIN_EMAIL`    | admin@blueeye.local | Email på den seedede admin |
 | `SEED_ADMIN_PASSWORD` | (tom)       | Adgangskode; genereres hvis tom   |
+| `ENROLLMENT_CODE_TTL_MINUTES` | 60  | Standard-levetid for enrollment-koder |
 
 > I produktion (`NODE_ENV=production`) nægter serveren at starte, hvis
 > `JWT_SECRET` ikke er ændret fra dev-standardværdien.
@@ -135,8 +136,36 @@ API'et). `PUT /agents/:id` rører kun de server-styrede felter.
 | `created_at`    | —               | TIMESTAMP       | Sættes automatisk                       |
 | `updated_at`    | —               | TIMESTAMP       | Opdateres automatisk ved ændring        |
 
-Selve oprettelsen af agents sker via **enrollment** (kommer i et senere trin) —
-der er bevidst ingen manuel `POST /agents`.
+Selve oprettelsen af agents sker via **enrollment** (se [Enrollment](#enrollment))
+— der er bevidst ingen manuel `POST /agents`.
+
+### `enrollment_codes`
+
+Engangskoder til at enrolle nye agents. Selve `code` er tilfældig og unik og
+returneres kun til operatøren **én gang** ved oprettelse — listen viser den aldrig.
+
+| Kolonne       | Type            | Noter                                   |
+| ------------- | --------------- | --------------------------------------- |
+| `id`          | INT UNSIGNED PK | Auto-increment                          |
+| `code`        | VARCHAR(64)     | Unik, tilfældig                         |
+| `location_id` | INT UNSIGNED FK | Nullable → `locations(id)` `SET NULL`   |
+| `created_by`  | INT UNSIGNED FK | → `users(id)`                           |
+| `expires_at`  | DATETIME        | Udløbstidspunkt                         |
+| `used_at`     | DATETIME        | Nullable; sættes når koden bruges       |
+| `created_at`  | TIMESTAMP       | Sættes automatisk                       |
+
+### `agent_tokens`
+
+Opaque agent-tokens. **Kun SHA-256-hashen gemmes** — aldrig selve tokenet.
+
+| Kolonne        | Type            | Noter                                   |
+| -------------- | --------------- | --------------------------------------- |
+| `id`           | INT UNSIGNED PK | Auto-increment                          |
+| `agent_id`     | INT UNSIGNED FK | Nullable → `agents(id)` `ON DELETE CASCADE` |
+| `token_hash`   | VARCHAR(64)     | Unik (SHA-256 hex)                      |
+| `created_at`   | TIMESTAMP       | Sættes automatisk                       |
+| `last_used_at` | DATETIME        | Nullable                                |
+| `revoked_at`   | DATETIME        | Nullable                                |
 
 ## API
 
@@ -160,6 +189,10 @@ Alle endpoints undtagen `/health` og `/auth/login` kræver et gyldigt JWT i
 | GET    | `/agents/:id`    | Hent én agent                     | viewer+            | `200` / `404` / `400`      |
 | PUT    | `/agents/:id`    | Opdatér KUN server-styrede felter | operator+          | `200` / `404` / `400`      |
 | DELETE | `/agents/:id`    | Slet en agent                     | admin              | `204` / `404` / `400`      |
+| POST   | `/agents/enroll` | Enroll agent med kode             | (åben)             | `201` / `400` / `401` / `410` |
+| POST   | `/enrollment-codes` | Generér engangskode            | operator+          | `201` (kode én gang) / `400` |
+| GET    | `/enrollment-codes` | Liste m. status (uden kode)    | operator+          | `200` med array            |
+| DELETE | `/enrollment-codes/:id` | Slet en kode               | admin              | `204` / `404` / `400`      |
 
 ("viewer+" = viewer eller højere; "operator+" = operator eller admin.)
 
@@ -221,10 +254,46 @@ Tre roller med stigende rettigheder:
 | Redigere agent-metadata (PUT)         |   –    |    ✓     |   ✓   |
 | Slette agents (DELETE)                |   –    |    –     |   ✓   |
 | Brugeradministration (`/users`)       |   –    |    –     |   ✓   |
+| Oprette/liste enrollment-koder        |   –    |    ✓     |   ✓   |
+| Slette enrollment-koder               |   –    |    –     |   ✓   |
 
 JWT signeres med HS256 og `JWT_SECRET`; algoritmen pinnes ved verificering for
 at undgå algorithm-confusion. Adgangskoder hashes med bcrypt og gemmes aldrig i
 klartekst.
+
+## Enrollment
+
+Nye agents oprettes via enrollment — ikke manuelt. Flowet:
+
+1. **Operatør/admin genererer en kode:** `POST /enrollment-codes` (valgfri
+   `location_id`, valgfri `expiresInMinutes`, default 1 time). Koden returneres
+   i klartekst **én gang** — gem den til agenten.
+2. **Agenten enroller sig selv:** `POST /agents/enroll { code, hostname,
+   platform, arch }` — **uden** auth (agenten har endnu intet token). Serveren:
+   - validerer koden (findes → ellers `401`; brugt/udløbet → `410`),
+   - opretter en agent-række med agent-rapporterede felter + `location_id` fra koden,
+   - genererer et **opaque token** (ikke et JWT), gemmer dets SHA-256-hash og
+     markerer koden som brugt — alt i én transaktion med rækken låst, så en kode
+     aldrig kan bruges to gange,
+   - returnerer `{ agentId, token }` i klartekst **én gang**.
+
+Agent-tokens er opaque tilfældige strenge. De gemmes kun som hash; mister man
+tokenet, må agenten enrolles på ny. Hele claim-and-enroll er atomisk
+([`src/services/enrollmentStore.js`](src/services/enrollmentStore.js)).
+
+```bash
+# 1) Operatør genererer en kode (med et operator/admin-token)
+curl -s -X POST http://localhost:3000/enrollment-codes \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"location_id":1}'
+# -> { "id":1, "code":"<engangskode>", "expires_at":"...", ... }
+
+# 2) Agenten enroller sig selv (ingen auth)
+curl -s -X POST http://localhost:3000/agents/enroll \
+  -H 'Content-Type: application/json' \
+  -d '{"code":"<engangskode>","hostname":"node-01","platform":"linux","arch":"x64"}'
+# -> { "agentId":7, "token":"<opaque-token>" }
+```
 
 ## Projektstruktur
 
@@ -233,7 +302,8 @@ blueeye-server/
 ├── migrations/                 # Nummererede SQL-migrationer
 │   ├── 001_create_locations.sql
 │   ├── 002_create_users.sql
-│   └── 003_create_agents.sql
+│   ├── 003_create_agents.sql
+│   └── 004_create_enrollment.sql
 ├── schema.sql                  # Fuldt schema-snapshot
 ├── src/
 │   ├── app.js                  # Express app-factory (uden listen)
@@ -242,10 +312,11 @@ blueeye-server/
 │   ├── config.js               # Env-baseret konfiguration
 │   ├── db.js                   # MySQL connection pool + helpers
 │   ├── logger.js               # Stille standard-logger til tests
-│   ├── auth/                   # password, jwt, middleware, roller
+│   ├── auth/                   # password, jwt, tokens, middleware, roller
 │   ├── middleware/             # asyncHandler, fejlhåndtering, request-log
-│   ├── repositories/           # Dataadgang (locations, users, agents)
-│   ├── routes/                 # health, auth, users, locations, agents
+│   ├── repositories/           # Dataadgang (locations, users, agents, koder)
+│   ├── services/               # enrollmentStore (atomisk claim-and-enroll)
+│   ├── routes/                 # health, auth, users, locations, agents, enrollment
 │   └── validation/             # Input-validering
 ├── test/                       # Tests (node --test + supertest)
 └── test-support/               # Test-fakes (uden for test/)

@@ -63,6 +63,33 @@ function makeAgentsRepo(overrides = {}) {
   };
 }
 
+// A fake enrollment-codes repository.
+function makeEnrollmentCodesRepo(overrides = {}) {
+  return {
+    create:
+      overrides.create ||
+      (async ({ code, location_id, created_by }) => ({
+        id: 1,
+        code,
+        location_id: location_id ?? null,
+        created_by,
+        expires_at: '2026-01-01T01:00:00.000Z',
+        used_at: null,
+        created_at: '2026-01-01T00:00:00.000Z',
+      })),
+    findAll: overrides.findAll || (async () => []),
+    remove: overrides.remove || (async () => false),
+  };
+}
+
+// A fake enrollment store (the atomic claim-and-enroll operation).
+function makeEnrollmentStore(overrides = {}) {
+  return {
+    claimAndEnroll:
+      overrides.claimAndEnroll || (async () => ({ status: 'ok', agentId: 1 })),
+  };
+}
+
 // A fake db with a ping() used by GET /health.
 function makeDb(overrides = {}) {
   return {
@@ -81,6 +108,8 @@ function makeApp(overrides = {}) {
     locationsRepo: overrides.locationsRepo || makeLocationsRepo(),
     usersRepo: overrides.usersRepo || makeUsersRepo(),
     agentsRepo: overrides.agentsRepo || makeAgentsRepo(),
+    enrollmentCodesRepo: overrides.enrollmentCodesRepo || makeEnrollmentCodesRepo(),
+    enrollmentStore: overrides.enrollmentStore || makeEnrollmentStore(),
   });
 }
 
@@ -108,6 +137,8 @@ module.exports = {
   makeLocationsRepo,
   makeUsersRepo,
   makeAgentsRepo,
+  makeEnrollmentCodesRepo,
+  makeEnrollmentStore,
   makeDb,
   makeApp,
   tokenFor,

@@ -9,7 +9,15 @@ const { silentLogger } = require('./logger');
 // Builds the Express application. Dependencies (db + repositories + logger) are
 // injected so the same factory powers both the real server and the test suite.
 // It deliberately does NOT call listen() — that belongs to src/server.js.
-function createApp({ db, locationsRepo, usersRepo, agentsRepo, logger = silentLogger } = {}) {
+function createApp({
+  db,
+  locationsRepo,
+  usersRepo,
+  agentsRepo,
+  enrollmentCodesRepo,
+  enrollmentStore,
+  logger = silentLogger,
+} = {}) {
   const app = express();
 
   app.disable('x-powered-by');
@@ -18,7 +26,17 @@ function createApp({ db, locationsRepo, usersRepo, agentsRepo, logger = silentLo
 
   // Application routes. Authentication/RBAC is enforced inside the individual
   // routers (see src/auth/middleware.js and src/routes/*).
-  app.use('/', createApiRouter({ db, locationsRepo, usersRepo, agentsRepo }));
+  app.use(
+    '/',
+    createApiRouter({
+      db,
+      locationsRepo,
+      usersRepo,
+      agentsRepo,
+      enrollmentCodesRepo,
+      enrollmentStore,
+    })
+  );
 
   // 404 + centralised error handling, always mounted last.
   app.use(notFoundHandler);

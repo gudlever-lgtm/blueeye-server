@@ -3,6 +3,7 @@
 // BlueEye server dashboard — dependency-free vanilla JS over the JSON API.
 const TOKEN_KEY = 'blueeye.server.token';
 const ROLE_KEY = 'blueeye.server.role';
+const EMAIL_KEY = 'blueeye.server.email';
 
 const $ = (sel) => document.querySelector(sel);
 const el = (tag, attrs = {}, ...kids) => {
@@ -23,6 +24,7 @@ const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<
 
 let token = localStorage.getItem(TOKEN_KEY);
 let role = localStorage.getItem(ROLE_KEY) || 'viewer';
+let email = localStorage.getItem(EMAIL_KEY) || '';
 const canWrite = () => role === 'operator' || role === 'admin';
 const canDelete = () => role === 'admin';
 
@@ -89,17 +91,21 @@ function fmtBytes(n) {
 const fmtDate = (s) => (s ? new Date(s).toLocaleString('da-DK') : '–');
 
 // ---- Auth -----------------------------------------------------------------
-async function login(email, password) {
-  const data = await api('/auth/login', { method: 'POST', body: { email, password } });
+async function login(emailInput, password) {
+  const data = await api('/auth/login', { method: 'POST', body: { email: emailInput, password } });
   token = data.token;
   role = data.user.role;
+  email = data.user.email;
   localStorage.setItem(TOKEN_KEY, token);
   localStorage.setItem(ROLE_KEY, role);
+  localStorage.setItem(EMAIL_KEY, email);
 }
 function logout() {
   token = null;
+  email = '';
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(ROLE_KEY);
+  localStorage.removeItem(EMAIL_KEY);
   render();
 }
 
@@ -144,6 +150,14 @@ function closeModal() { $('#modal').classList.add('hidden'); }
 // Each view starts with a short hero line and a "Mere info" button that slides
 // in a panel from the right with a fuller explanation.
 const PAGE_INFO = {
+  overview: {
+    hero: 'Samlet trafik-billede. Vælg de serier du vil se via checkboksene.',
+    title: 'Trafik — overblik',
+    body: () => [
+      el('p', {}, 'Et bredt, levende grafbillede af trafikken. Til/fravælg serier i panelet til højre — totaler og pr. agent (RX/TX) — så du selv sammensætter visningen.'),
+      el('p', { class: 'muted' }, 'Grafen opdateres hvert 3. sekund og viser de seneste ~3 minutter.'),
+    ],
+  },
   agents: {
     hero: 'Overvåg de agenter, der rapporterer trafik ind til denne server.',
     title: 'Agenter',
@@ -447,6 +461,146 @@ function trafficChart(series) {
       el('span', {}, el('span', { class: 'dot rx' }), `RX (maks ${fmtBytes(max)}/s)`),
       el('span', {}, el('span', { class: 'dot tx' }), `TX (maks ${fmtBytes(max)}/s)`)));
 }
+
+// Distinct colours for many simultaneous series.
+const SERIES_COLORS = ['#38bdf8', '#22c55e', '#f59e0b', '#ef4444', '#a78bfa', '#ec4899',
+  '#14b8a6', '#eab308', '#fb923c', '#60a5fa', '#34d399', '#f472b6'];
+
+// A large, full-width multi-series line chart. `series` is an array of
+// { id, label, color, points:[{x,y}] }. Time (x) is shared; y auto-scales.
+function multiChart(seriesList, { height = 320 } = {}) {
+  const W = 1000;
+  const H = height;
+  const pad = { l: 60, r: 12, t: 14, b: 22 };
+  const ns = 'http://www.w3.org/2000/svg';
+  const mk = (tag, attrs) => {
+    const e = document.createElementNS(ns, tag);
+    for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+    return e;
+  };
+  const all = seriesList.flatMap((s) => s.points.map((p) => p.y));
+  const max = Math.max(1, ...all);
+  const maxLen = Math.max(2, ...seriesList.map((s) => s.points.length));
+  const x = (i, n) => pad.l + (i * (W - pad.l - pad.r)) / Math.max(1, (n - 1));
+  const y = (v) => H - pad.b - (v / max) * (H - pad.t - pad.b);
+
+  const svg = mk('svg', { viewBox: `0 0 ${W} ${H}`, class: 'big-chart-svg', preserveAspectRatio: 'none' });
+  // y gridlines + labels (0, 50%, 100%).
+  for (const frac of [0, 0.5, 1]) {
+    const yy = y(max * frac);
+    svg.append(mk('line', { class: 'grid', x1: pad.l, y1: yy, x2: W - pad.r, y2: yy }));
+    const label = mk('text', { x: 6, y: yy + 4, class: 'axis' });
+    label.textContent = `${fmtBytes(max * frac)}/s`;
+    svg.append(label);
+  }
+  for (const s of seriesList) {
+    if (!s.points.length) continue;
+    const n = s.points.length;
+    const d = s.points.map((p, i) => `${i ? 'L' : 'M'}${x(i, n).toFixed(1)},${y(p.y).toFixed(1)}`).join(' ');
+    svg.append(mk('path', { d, fill: 'none', stroke: s.color, 'stroke-width': 2 }));
+  }
+  return el('div', { class: 'big-chart' }, svg);
+}
+
+// Full-width traffic overview: pick which series to show via checkboxes and
+// watch them live. Polls every 3s while open.
+views.overview = async () => {
+  const root = el('div', { class: 'overview' });
+  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Trafik — overblik'),
+    el('span', { class: 'muted' }, 'Vælg serier i panelet · auto hvert 3. sek.')));
+
+  const chartHost = el('div', { class: 'overview-chart' });
+  const controls = el('div', { class: 'overview-controls' });
+  root.append(el('div', { class: 'overview-grid' }, chartHost, controls));
+
+  // history[seriesId] = [{ y }]; selection is a Set of seriesId.
+  const history = new Map();
+  const selection = ovState.selection;
+  const MAX = 60;
+  let agentsMeta = [];
+
+  function pushPoint(id, label, y) {
+    if (!history.has(id)) history.set(id, { label, points: [] });
+    const h = history.get(id);
+    h.label = label;
+    h.points.push({ y });
+    if (h.points.length > MAX) h.points.shift();
+  }
+
+  async function tick() {
+    let agents;
+    try { agents = await api('/agents'); } catch (err) { chartHost.replaceChildren(el('p', { class: 'error' }, err.message)); return; }
+    agentsMeta = agents;
+    // Fetch each agent's latest result (rate) in parallel.
+    const latest = await Promise.all(agents.map(async (a) => {
+      try {
+        const rows = await api(`/agents/${a.id}/results?limit=1`);
+        const t = rows[0] && rows[0].payload && rows[0].payload.traffic && rows[0].payload.traffic.totals;
+        return { a, rx: t ? Number(t.rxBytesPerSec) || 0 : 0, tx: t ? Number(t.txBytesPerSec) || 0 : 0 };
+      } catch { return { a, rx: 0, tx: 0 }; }
+    }));
+    let totalRx = 0;
+    let totalTx = 0;
+    for (const { a, rx, tx } of latest) {
+      const name = a.display_name || a.hostname;
+      pushPoint(`rx:${a.id}`, `${name} RX`, rx);
+      pushPoint(`tx:${a.id}`, `${name} TX`, tx);
+      totalRx += rx; totalTx += tx;
+    }
+    pushPoint('total:rx', 'Total RX', totalRx);
+    pushPoint('total:tx', 'Total TX', totalTx);
+
+    // Default selection on first load: the two totals.
+    if (!selection.size) { selection.add('total:rx'); selection.add('total:tx'); }
+
+    renderChart();
+    renderControls();
+  }
+
+  function renderChart() {
+    const chosen = [...selection].filter((id) => history.has(id));
+    const seriesList = chosen.map((id, idx) => ({
+      id, label: history.get(id).label, color: SERIES_COLORS[idx % SERIES_COLORS.length],
+      points: history.get(id).points,
+    }));
+    const legend = el('div', { class: 'legend' }, ...seriesList.map((s) =>
+      el('span', {}, el('span', { class: 'dot', style: `background:${s.color}` }), s.label)));
+    chartHost.replaceChildren(
+      seriesList.length ? multiChart(seriesList) : el('div', { class: 'empty' }, 'Vælg en eller flere serier →'),
+      legend);
+  }
+
+  function checkbox(id, label) {
+    const cb = el('input', { type: 'checkbox' });
+    cb.checked = selection.has(id);
+    cb.addEventListener('change', () => { if (cb.checked) selection.add(id); else selection.delete(id); renderChart(); });
+    return el('label', { class: 'check' }, cb, label);
+  }
+
+  function renderControls() {
+    const groups = [
+      el('div', { class: 'ctrl-group' }, el('h4', {}, 'Total'),
+        checkbox('total:rx', 'Total RX'), checkbox('total:tx', 'Total TX')),
+    ];
+    const perAgent = el('div', { class: 'ctrl-group' }, el('h4', {}, 'Pr. agent'));
+    for (const a of agentsMeta) {
+      const name = a.display_name || a.hostname;
+      perAgent.append(checkbox(`rx:${a.id}`, `${name} · RX`), checkbox(`tx:${a.id}`, `${name} · TX`));
+    }
+    groups.push(perAgent);
+    controls.replaceChildren(...groups);
+  }
+
+  // Lifecycle: poll while this view is mounted; stop when leaving.
+  stopOverview();
+  ovState.timer = setInterval(() => { if (!modalOpen()) tick(); }, 3000);
+  tick();
+  return root;
+};
+
+// Overview polling state, so switching tabs stops it.
+const ovState = { timer: null, selection: new Set() };
+function stopOverview() { if (ovState.timer) { clearInterval(ovState.timer); ovState.timer = null; } }
 
 // Cell showing the selected traffic source + what the agent reports it can do.
 function agentSourceCell(a) {
@@ -814,20 +968,26 @@ function stat(k, v) {
 }
 
 // ---- Render ---------------------------------------------------------------
-let currentView = 'agents';
+let currentView = 'overview';
 const modalOpen = () => !$('#modal').classList.contains('hidden');
 
 async function render({ silent = false } = {}) {
   if (!token) { $('#login').classList.remove('hidden'); $('#app').classList.add('hidden'); return; }
   $('#login').classList.add('hidden');
   $('#app').classList.remove('hidden');
-  $('#whoami').textContent = role;
+  // Show who is logged in: email + role.
+  $('#whoami').replaceChildren(
+    el('span', { class: 'who-email' }, email || '—'),
+    el('span', { class: `badge role-${role}` }, role));
+
+  // Stop the overview poller when leaving that view (it restarts itself when shown).
+  if (currentView !== 'overview') stopOverview();
 
   // Admin-only tabs (e.g. Brugere); send non-admins back to agents if needed.
   for (const b of document.querySelectorAll('.tabs button[data-admin]')) {
     b.classList.toggle('hidden', role !== 'admin');
   }
-  if (currentView === 'users' && role !== 'admin') currentView = 'agents';
+  if (currentView === 'users' && role !== 'admin') currentView = 'overview';
   for (const b of document.querySelectorAll('.tabs button')) b.classList.toggle('active', b.dataset.view === currentView);
 
   const view = $('#view');
@@ -860,7 +1020,7 @@ $('#login-form').addEventListener('submit', async (e) => {
   try { await login($('#email').value, $('#password').value); render(); }
   catch (err) { $('#login-error').textContent = err.message; }
 });
-$('#logout').addEventListener('click', () => { setAutoRefresh(false); $('#autorefresh').checked = false; logout(); });
+$('#logout').addEventListener('click', () => { setAutoRefresh(false); stopOverview(); $('#autorefresh').checked = false; logout(); });
 $('#refresh').addEventListener('click', () => render());
 $('#autorefresh').addEventListener('change', (e) => setAutoRefresh(e.target.checked));
 for (const b of document.querySelectorAll('.tabs button')) {

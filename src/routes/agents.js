@@ -133,6 +133,7 @@ function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentComma
       const rows = await resultsRepo.findByAgentId(id, range);
       const byPort = new Map();
       const byProtocol = new Map();
+      const byTalker = new Map();
       const series = [];
 
       const bump = (map, key, e) => {
@@ -145,7 +146,7 @@ function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentComma
 
       for (const row of rows) {
         const t = row.payload && row.payload.traffic;
-        if (!t || (!t.byPort && !t.byProtocol)) continue;
+        if (!t || (!t.byPort && !t.byProtocol && !t.topTalkers)) continue;
         let matchBytes = 0;
         for (const e of t.byPort || []) {
           if (port !== null && e.port !== port) continue;
@@ -157,6 +158,7 @@ function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentComma
           bump(byProtocol, e.protocol, e);
           if (protocol && port === null) matchBytes += Number(e.bytes) || 0;
         }
+        for (const e of t.topTalkers || []) bump(byTalker, e.pair, e);
         const at = row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at;
         if (port !== null || protocol) series.push({ at, bytes: matchBytes });
       }
@@ -174,6 +176,7 @@ function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentComma
         measurements: rows.length,
         byPort: sortMap(byPort, 'port'),
         byProtocol: sortMap(byProtocol, 'protocol'),
+        topTalkers: sortMap(byTalker, 'pair').slice(0, 50),
         series: series.reverse(), // oldest first
       });
     })

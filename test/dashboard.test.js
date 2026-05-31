@@ -52,4 +52,9 @@ test('dashboard exposes users tab, auto-refresh and traffic chart', async () => 
   assert.match(js, /traffic\/history/); // calls the history endpoint
   assert.match(js, /showAgentFlows/); // NetFlow port/protocol search
   assert.match(js, /\/flows\?/); // calls the flows endpoint
+  assert.match(js, /views\.overview/); // full-width traffic overview
+  assert.match(js, /function multiChart/); // multi-series chart
+  assert.match(html, /data-view="overview"/); // overview tab
+  assert.match(js, /who-email/); // shows logged-in email + role
+  assert.match(js, /data\.user\.email/); // captures email on login
 });

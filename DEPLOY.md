@@ -34,6 +34,24 @@ server to verify proofs offline) — a real, matching pair.
 docker compose up --build
 ```
 
+### Updating later (deploy script)
+
+To pull the latest code on all three repos and rebuild/restart the stack, use
+the deploy script (run it from the `blueeye-server` repo):
+
+```bash
+./scripts/deploy.sh
+# or target another branch:
+BLUEEYE_BRANCH=main ./scripts/deploy.sh
+```
+
+It updates `blueeye-server`, `blueeye-licens` and `blueeye-agent` (sibling
+repos) on the branch, then runs `docker compose up --build -d` and waits for the
+`/health` endpoints. It is safe: it refuses to run if a repo has uncommitted
+local changes, retries `git pull` on transient network errors, and works with
+either `docker compose` or `docker-compose`. Host ports for the health check
+honour `SERVER_HOST_PORT` / `LICENS_HOST_PORT`.
+
 Startup order is enforced via health checks:
 
 1. **db** (MySQL) — `mysql-init.sql` creates `blueeye` + `blueeye_licens`.

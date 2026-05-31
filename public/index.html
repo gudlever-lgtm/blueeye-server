@@ -4,6 +4,12 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>BlueEye — Server</title>
+    <!-- Leaflet (open source, BSD) for the locations map. Loaded from the
+         official CDN; if it is unavailable (offline/CSP) the map view falls
+         back to a location list. Point these at a self-hosted copy for a fully
+         on-prem deployment. -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
@@ -24,6 +30,7 @@
         <strong>BlueEye <span class="muted">server</span></strong>
         <nav class="tabs">
           <button data-view="overview" class="active">Trafik</button>
+          <button data-view="map">Kort</button>
           <button data-view="agents">Agenter</button>
           <button data-view="locations">Lokationer</button>
           <button data-view="enrollment">Enrollment</button>

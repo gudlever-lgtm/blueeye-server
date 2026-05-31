@@ -33,7 +33,34 @@ function validateLocationInput(body) {
     value.description = input.description;
   }
 
+  // address — optional string.
+  if (input.address === undefined || input.address === null || input.address === '') {
+    value.address = null;
+  } else if (typeof input.address !== 'string' || input.address.length > 512) {
+    errors.address = 'address must be a string up to 512 characters';
+  } else {
+    value.address = input.address.trim();
+  }
+
+  // latitude/longitude — optional, but if one is given both must be valid.
+  value.latitude = parseCoord(input.latitude, -90, 90, 'latitude', errors);
+  value.longitude = parseCoord(input.longitude, -180, 180, 'longitude', errors);
+  if ((value.latitude === null) !== (value.longitude === null) && !errors.latitude && !errors.longitude) {
+    errors.latitude = 'latitude and longitude must be provided together';
+  }
+
   return Object.keys(errors).length > 0 ? { errors } : { value };
+}
+
+// Parses an optional coordinate within [min,max]; '' / null / undefined -> null.
+function parseCoord(raw, min, max, field, errors) {
+  if (raw === undefined || raw === null || raw === '') return null;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < min || n > max) {
+    errors[field] = `${field} must be a number between ${min} and ${max}`;
+    return null;
+  }
+  return n;
 }
 
 // Parses a route :id param into a positive integer, or null if invalid.

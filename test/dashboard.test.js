@@ -57,4 +57,8 @@ test('dashboard exposes users tab, auto-refresh and traffic chart', async () => 
   assert.match(html, /data-view="overview"/); // overview tab
   assert.match(js, /who-email/); // shows logged-in email + role
   assert.match(js, /data\.user\.email/); // captures email on login
+  assert.match(js, /views\.map/); // locations map view
+  assert.match(html, /data-view="map"/); // map tab
+  assert.match(html, /leaflet/i); // Leaflet assets included
+  assert.match(js, /payload\.system/); // shows host CPU/memory metrics
 });

@@ -89,6 +89,14 @@ function fmtBytes(n) {
   return `${v.toFixed(i ? 1 : 0)} ${u[i]}`;
 }
 const fmtDate = (s) => (s ? new Date(s).toLocaleString('da-DK') : '–');
+function fmtDuration(sec) {
+  const d = Math.floor(sec / 86400);
+  const h = Math.floor((sec % 86400) / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  if (d > 0) return `${d}d ${h}t`;
+  if (h > 0) return `${h}t ${m}m`;
+  return `${m}m`;
+}
 
 // ---- Auth -----------------------------------------------------------------
 async function login(emailInput, password) {
@@ -156,6 +164,14 @@ const PAGE_INFO = {
     body: () => [
       el('p', {}, 'Et bredt, levende grafbillede af trafikken. Til/fravælg serier i panelet til højre — totaler og pr. agent (RX/TX) — så du selv sammensætter visningen.'),
       el('p', { class: 'muted' }, 'Grafen opdateres hvert 3. sekund og viser de seneste ~3 minutter.'),
+    ],
+  },
+  map: {
+    hero: 'Geografisk overblik over lokationer og deres agenter.',
+    title: 'Kort',
+    body: () => [
+      el('p', {}, 'Lokationer med koordinater (latitude/longitude) vises som markører. Klik en markør for at se antal agenter og hvor mange der er online.'),
+      el('p', { class: 'muted' }, 'Tilføj koordinater pr. lokation under fanen Lokationer (Rediger). Mangler kortet, kan biblioteket ikke nås — så vises en liste i stedet.'),
     ],
   },
   agents: {
@@ -344,6 +360,24 @@ async function showResults(a) {
       const latest = results[0];
       const t = latest.payload && latest.payload.traffic;
       body.push(el('p', { class: 'muted' }, `Seneste: ${fmtDate(latest.created_at)} · ${results.length} målinger`));
+
+      // Host performance (CPU/memory/load/uptime), when reported.
+      const sys = latest.payload && latest.payload.system;
+      if (sys) {
+        body.push(el('div', { class: 'cards' },
+          stat('CPU', `${sys.cpuPercent ?? '–'} %`),
+          stat('Memory', sys.memUsedPercent != null ? `${sys.memUsedPercent} % (${fmtBytes(sys.memUsedBytes)} / ${fmtBytes(sys.memTotalBytes)})` : '–'),
+          stat('Load (1m)', sys.loadavg ? Number(sys.loadavg[0]).toFixed(2) : '–'),
+          stat('Uptime', sys.uptimeSec != null ? fmtDuration(sys.uptimeSec) : '–')));
+        // CPU% / memory% over time.
+        const sysSeries = results.slice().reverse()
+          .filter((r) => r.payload && r.payload.system)
+          .map((r) => ({ rx: r.payload.system.cpuPercent || 0, tx: r.payload.system.memUsedPercent || 0 }));
+        if (sysSeries.length >= 2) {
+          body.push(el('p', { class: 'muted' }, 'CPU % (blå) og memory % (grøn) over tid:'));
+          body.push(trafficChart(sysSeries));
+        }
+      }
 
       // Traffic over time: oldest -> newest, rate per measurement.
       const series = results
@@ -602,6 +636,68 @@ views.overview = async () => {
 const ovState = { timer: null, selection: new Set() };
 function stopOverview() { if (ovState.timer) { clearInterval(ovState.timer); ovState.timer = null; } }
 
+// Map of locations with their agents. Uses Leaflet if available; otherwise falls
+// back to a list. Each located location gets a marker with agent count/status.
+views.map = async () => {
+  const [locations, agents] = await Promise.all([api('/locations'), api('/agents')]);
+  // Count agents (and how many online) per location.
+  const byLoc = new Map();
+  for (const a of agents) {
+    if (a.location_id == null) continue;
+    const e = byLoc.get(a.location_id) || { total: 0, online: 0 };
+    e.total += 1;
+    if (a.status === 'online') e.online += 1;
+    byLoc.set(a.location_id, e);
+  }
+  const located = locations.filter((l) => l.latitude != null && l.longitude != null);
+
+  const root = el('div');
+  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Kort'),
+    el('span', { class: 'muted' }, `${located.length} af ${locations.length} lokationer har koordinater`)));
+
+  if (typeof L === 'undefined') {
+    root.append(el('div', { class: 'empty' }, 'Kortbiblioteket kunne ikke indlæses (offline?). Viser liste i stedet.'));
+    root.append(locationList(locations, byLoc));
+    return root;
+  }
+  if (!located.length) {
+    root.append(el('div', { class: 'empty' }, 'Ingen lokationer med koordinater endnu. Tilføj latitude/longitude under fanen Lokationer.'));
+    return root;
+  }
+
+  const mapEl = el('div', { class: 'map' });
+  root.append(mapEl);
+  // Leaflet needs the element in the DOM with a size before init — defer a tick.
+  setTimeout(() => {
+    const map = L.map(mapEl).setView([located[0].latitude, located[0].longitude], 6);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19, attribution: '© OpenStreetMap',
+    }).addTo(map);
+    const group = [];
+    for (const l of located) {
+      const c = byLoc.get(l.id) || { total: 0, online: 0 };
+      const m = L.marker([l.latitude, l.longitude]).addTo(map);
+      m.bindPopup(`<b>${esc(l.name)}</b><br>${c.online}/${c.total} agenter online${l.address ? `<br>${esc(l.address)}` : ''}`);
+      group.push([l.latitude, l.longitude]);
+    }
+    if (group.length > 1) map.fitBounds(group, { padding: [40, 40] });
+  }, 0);
+  return root;
+};
+
+function locationList(locations, byLoc) {
+  return el('table', {},
+    el('thead', {}, el('tr', {}, ...['Lokation', 'Adresse', 'Koordinater', 'Agenter'].map((h) => el('th', {}, h)))),
+    el('tbody', {}, ...locations.map((l) => {
+      const c = byLoc.get(l.id) || { total: 0, online: 0 };
+      return el('tr', {},
+        el('td', {}, l.name),
+        el('td', { class: 'muted' }, l.address || '–'),
+        el('td', { class: 'muted' }, l.latitude != null ? `${l.latitude}, ${l.longitude}` : '–'),
+        el('td', {}, `${c.online}/${c.total} online`));
+    })));
+}
+
 // Cell showing the selected traffic source + what the agent reports it can do.
 function agentSourceCell(a) {
   const mc = a.monitor_config || {};
@@ -825,8 +921,17 @@ function editLocation(l) {
   openModal(l ? `Rediger lokation ${l.id}` : 'Ny lokation', [
     { name: 'name', label: 'Navn', value: l ? l.name : '' },
     { name: 'description', label: 'Beskrivelse', type: 'textarea', value: l ? l.description || '' : '' },
+    { name: 'address', label: 'Adresse (valgfri)', value: l ? l.address || '' : '' },
+    { name: 'latitude', label: 'Breddegrad / latitude (valgfri, -90..90)', value: l && l.latitude != null ? String(l.latitude) : '' },
+    { name: 'longitude', label: 'Længdegrad / longitude (valgfri, -180..180)', value: l && l.longitude != null ? String(l.longitude) : '' },
   ], async (v) => {
-    const body = { name: v.name, description: v.description || null };
+    const body = {
+      name: v.name,
+      description: v.description || null,
+      address: v.address || null,
+      latitude: v.latitude.trim() === '' ? null : Number(v.latitude),
+      longitude: v.longitude.trim() === '' ? null : Number(v.longitude),
+    };
     if (l) await api(`/locations/${l.id}`, { method: 'PUT', body });
     else await api('/locations', { method: 'POST', body });
     closeModal(); toast('Gemt'); render();

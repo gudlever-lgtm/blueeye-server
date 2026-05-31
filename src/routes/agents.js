@@ -98,6 +98,87 @@ function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentComma
     })
   );
 
+  // GET /agents/:id/flows?port=&protocol=&from=&to= — search NetFlow data the
+  // agent reported (only present when its source is 'netflow'). Aggregates the
+  // byPort / byProtocol entries across the matching measurements in the range,
+  // optionally filtered by a specific port and/or protocol. viewer+.
+  router.get(
+    '/:id/flows',
+    requireAuth,
+    requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN),
+    asyncHandler(async (req, res) => {
+      const id = parseId(req.params.id);
+      if (id === null) {
+        return res.status(400).json({ error: 'Invalid id' });
+      }
+      const { value: range, errors } = validateTimeRange(req.query);
+      if (errors) {
+        return res.status(400).json({ error: 'Validation failed', details: errors });
+      }
+      // Optional filters.
+      let port = null;
+      if (req.query.port !== undefined && req.query.port !== '') {
+        if (!/^\d+$/.test(String(req.query.port))) {
+          return res.status(400).json({ error: 'Validation failed', details: { port: 'port must be an integer' } });
+        }
+        port = Number(req.query.port);
+      }
+      const protocol = req.query.protocol ? String(req.query.protocol).toLowerCase() : null;
+
+      const agent = await agentsRepo.findById(id);
+      if (!agent) {
+        return res.status(404).json({ error: 'Agent not found' });
+      }
+
+      const rows = await resultsRepo.findByAgentId(id, range);
+      const byPort = new Map();
+      const byProtocol = new Map();
+      const series = [];
+
+      const bump = (map, key, e) => {
+        const cur = map.get(key) || { bytes: 0, packets: 0, flows: 0 };
+        cur.bytes += Number(e.bytes) || 0;
+        cur.packets += Number(e.packets) || 0;
+        cur.flows += Number(e.flows) || 0;
+        map.set(key, cur);
+      };
+
+      for (const row of rows) {
+        const t = row.payload && row.payload.traffic;
+        if (!t || (!t.byPort && !t.byProtocol)) continue;
+        let matchBytes = 0;
+        for (const e of t.byPort || []) {
+          if (port !== null && e.port !== port) continue;
+          bump(byPort, e.port, e);
+          if (port !== null) matchBytes += Number(e.bytes) || 0;
+        }
+        for (const e of t.byProtocol || []) {
+          if (protocol && String(e.protocol).toLowerCase() !== protocol) continue;
+          bump(byProtocol, e.protocol, e);
+          if (protocol && port === null) matchBytes += Number(e.bytes) || 0;
+        }
+        const at = row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at;
+        if (port !== null || protocol) series.push({ at, bytes: matchBytes });
+      }
+
+      const sortMap = (map, key) =>
+        Array.from(map.entries())
+          .map(([k, v]) => ({ [key]: k, ...v }))
+          .sort((a, b) => b.bytes - a.bytes);
+
+      res.json({
+        agentId: id,
+        filter: { port, protocol },
+        from: range.from ? range.from.toISOString() : null,
+        to: range.to ? range.to.toISOString() : null,
+        measurements: rows.length,
+        byPort: sortMap(byPort, 'port'),
+        byProtocol: sortMap(byProtocol, 'protocol'),
+        series: series.reverse(), // oldest first
+      });
+    })
+  );
+
   // PUT /agents/:id — updates ONLY the server-managed fields
   // (display_name, location_id, notes, meta). operator or admin.
   router.put(

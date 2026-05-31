@@ -51,6 +51,30 @@ test('PUT /agents/:id accepts source proc', async () => {
   assert.equal(patch.monitor_config.source, 'proc');
 });
 
+test('PUT /agents/:id accepts source netflow with an optional port', async () => {
+  let patch;
+  const agentsRepo = makeAgentsRepo({
+    findById: async () => ({ id: 1 }),
+    updateManaged: async (id, p) => { patch = p; return { id, ...p }; },
+  });
+  const res = await request(makeApp({ agentsRepo }))
+    .put('/agents/1')
+    .set('Authorization', operator())
+    .send({ monitor_config: { source: 'netflow', netflow: { port: 2055 } } });
+  assert.equal(res.status, 200);
+  assert.equal(patch.monitor_config.source, 'netflow');
+  assert.equal(patch.monitor_config.netflow.port, 2055);
+});
+
+test('PUT /agents/:id rejects a bad netflow port (400)', async () => {
+  const agentsRepo = makeAgentsRepo({ findById: async () => ({ id: 1 }) });
+  const res = await request(makeApp({ agentsRepo }))
+    .put('/agents/1')
+    .set('Authorization', operator())
+    .send({ monitor_config: { source: 'netflow', netflow: { port: 70000 } } });
+  assert.equal(res.status, 400);
+});
+
 test('PUT /agents/:id rejects an invalid monitor_config source (400)', async () => {
   const agentsRepo = makeAgentsRepo({ findById: async () => ({ id: 1 }) });
   const res = await request(makeApp({ agentsRepo }))

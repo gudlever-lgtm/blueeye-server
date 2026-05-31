@@ -50,4 +50,6 @@ test('dashboard exposes users tab, auto-refresh and traffic chart', async () => 
   assert.match(js, /\/license\/refresh/); // calls the refresh endpoint
   assert.match(js, /showLocationHistory/); // historical traffic between dates
   assert.match(js, /traffic\/history/); // calls the history endpoint
+  assert.match(js, /showAgentFlows/); // NetFlow port/protocol search
+  assert.match(js, /\/flows\?/); // calls the flows endpoint
 });

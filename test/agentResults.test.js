@@ -163,3 +163,80 @@ test('GET /agents/:id/results returns 500 when the repo throws', async () => {
     .set('Authorization', authHeader('viewer'));
   assert.equal(res.status, 500);
 });
+
+// ------------------------------------------- GET /agents/:id/flows (netflow) ---
+const flowRows = [
+  { id: 2, agent_id: 9, created_at: '2026-05-31T10:01:00.000Z', payload: { traffic: {
+    byPort: [{ port: 443, bytes: 2000, packets: 20, flows: 4 }, { port: 53, bytes: 300, packets: 3, flows: 2 }],
+    byProtocol: [{ protocol: 'tcp', bytes: 2000, packets: 20, flows: 4 }, { protocol: 'udp', bytes: 300, packets: 3, flows: 2 }],
+  } } },
+  { id: 1, agent_id: 9, created_at: '2026-05-31T10:00:00.000Z', payload: { traffic: {
+    byPort: [{ port: 443, bytes: 1000, packets: 10, flows: 2 }],
+    byProtocol: [{ protocol: 'tcp', bytes: 1000, packets: 10, flows: 2 }],
+  } } },
+];
+
+test('GET /agents/:id/flows aggregates byPort/byProtocol across measurements', async () => {
+  const agentsRepo = makeAgentsRepo({ findById: async () => ({ id: 9, hostname: 'h' }) });
+  const resultsRepo = makeResultsRepo({ findByAgentId: async () => flowRows });
+  const res = await request(makeApp({ agentsRepo, resultsRepo }))
+    .get('/agents/9/flows')
+    .set('Authorization', authHeader('viewer'));
+
+  assert.equal(res.status, 200);
+  const p443 = res.body.byPort.find((p) => p.port === 443);
+  assert.equal(p443.bytes, 3000); // 2000 + 1000
+  assert.equal(res.body.byPort[0].port, 443); // sorted by bytes desc
+  const tcp = res.body.byProtocol.find((p) => p.protocol === 'tcp');
+  assert.equal(tcp.bytes, 3000);
+});
+
+test('GET /agents/:id/flows?port=443 filters to one port with a time series', async () => {
+  const agentsRepo = makeAgentsRepo({ findById: async () => ({ id: 9 }) });
+  const resultsRepo = makeResultsRepo({ findByAgentId: async () => flowRows });
+  const res = await request(makeApp({ agentsRepo, resultsRepo }))
+    .get('/agents/9/flows?port=443')
+    .set('Authorization', authHeader('viewer'));
+
+  assert.equal(res.status, 200);
+  assert.equal(res.body.filter.port, 443);
+  assert.equal(res.body.byPort.length, 1);
+  assert.equal(res.body.byPort[0].bytes, 3000);
+  // Series has one point per measurement (oldest first).
+  assert.equal(res.body.series.length, 2);
+  assert.equal(res.body.series[0].bytes, 1000);
+  assert.equal(res.body.series[1].bytes, 2000);
+});
+
+test('GET /agents/:id/flows?protocol=udp filters by protocol', async () => {
+  const agentsRepo = makeAgentsRepo({ findById: async () => ({ id: 9 }) });
+  const resultsRepo = makeResultsRepo({ findByAgentId: async () => flowRows });
+  const res = await request(makeApp({ agentsRepo, resultsRepo }))
+    .get('/agents/9/flows?protocol=udp')
+    .set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 200);
+  assert.equal(res.body.byProtocol.length, 1);
+  assert.equal(res.body.byProtocol[0].protocol, 'udp');
+  assert.equal(res.body.byProtocol[0].bytes, 300);
+});
+
+test('GET /agents/:id/flows returns 400 for a non-numeric port', async () => {
+  const agentsRepo = makeAgentsRepo({ findById: async () => ({ id: 9 }) });
+  const res = await request(makeApp({ agentsRepo }))
+    .get('/agents/9/flows?port=https')
+    .set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 400);
+});
+
+test('GET /agents/:id/flows returns 404 when the agent is missing', async () => {
+  const agentsRepo = makeAgentsRepo({ findById: async () => null });
+  const res = await request(makeApp({ agentsRepo }))
+    .get('/agents/999/flows')
+    .set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 404);
+});
+
+test('GET /agents/:id/flows without a token returns 401', async () => {
+  const res = await request(makeApp()).get('/agents/9/flows');
+  assert.equal(res.status, 401);
+});

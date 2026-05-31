@@ -3,7 +3,7 @@
 const DISPLAY_NAME_MAX = 255;
 const NOTES_MAX = 2000;
 const META_MAX_BYTES = 65535;
-const MONITOR_SOURCES = ['proc', 'snmp'];
+const MONITOR_SOURCES = ['proc', 'snmp', 'netflow'];
 const SNMP_VERSIONS = ['1', '2c'];
 const MAX_INTERVAL_MS = 24 * 60 * 60 * 1000; // 1 day
 
@@ -60,6 +60,25 @@ function validateMonitorConfig(raw, errors) {
       snmp.port = s.port;
     }
     value.snmp = snmp;
+  }
+
+  if (raw.source === 'netflow') {
+    const n = raw.netflow;
+    const netflow = {};
+    if (n !== undefined && n !== null) {
+      if (typeof n !== 'object' || Array.isArray(n)) {
+        errors.monitor_config = 'monitor_config.netflow must be an object';
+        return undefined;
+      }
+      if (n.port !== undefined && n.port !== null) {
+        if (!Number.isInteger(n.port) || n.port < 1 || n.port > 65535) {
+          errors.monitor_config = 'monitor_config.netflow.port must be an integer 1-65535';
+          return undefined;
+        }
+        netflow.port = n.port;
+      }
+    }
+    value.netflow = netflow; // {} is fine — the agent defaults the port to 2055
   }
 
   return value;

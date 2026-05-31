@@ -262,6 +262,9 @@ views.agents = async () => {
     el('td', { class: 'muted' }, fmtDate(a.last_report_at)),
     el('td', {}, el('div', { class: 'row-actions' },
       el('button', { class: 'small ghost', onclick: () => showResults(a) }, 'Trafik'),
+      (a.monitor_config && a.monitor_config.source === 'netflow')
+        ? el('button', { class: 'small ghost', onclick: () => showAgentFlows(a) }, 'Flows')
+        : null,
       canWrite() ? el('button', { class: 'small', onclick: () => runTest(a) }, 'Kør test') : null,
       canWrite() ? el('button', { class: 'small ghost', onclick: () => editAgent(a) }, 'Rediger') : null,
       canDelete() ? el('button', { class: 'small danger', onclick: () => deleteAgent(a) }, 'Slet') : null,
@@ -359,6 +362,59 @@ async function showResults(a) {
   } catch (err) { toast(err.message, true); }
 }
 
+// NetFlow search for an agent: filter by port and/or protocol over a time range,
+// see top ports/protocols and (when filtered) a bytes-over-time series.
+function showAgentFlows(a) {
+  const card = $('#modal-card');
+  const portInput = el('input', { type: 'number', placeholder: 'fx 443', min: '1', max: '65535' });
+  const protoInput = el('input', { type: 'text', placeholder: 'fx tcp / udp' });
+  const result = el('div', {});
+
+  async function search() {
+    result.replaceChildren(el('div', { class: 'empty' }, 'Søger…'));
+    const qs = new URLSearchParams();
+    if (portInput.value.trim()) qs.set('port', portInput.value.trim());
+    if (protoInput.value.trim()) qs.set('protocol', protoInput.value.trim());
+    let data;
+    try {
+      data = await api(`/agents/${a.id}/flows?${qs.toString()}`);
+    } catch (err) {
+      result.replaceChildren(el('p', { class: 'error' }, err.message));
+      return;
+    }
+    const portRows = data.byPort.slice(0, 20).map((p) => el('tr', {},
+      el('td', {}, String(p.port)), el('td', {}, fmtBytes(p.bytes)), el('td', {}, String(p.flows))));
+    const protoRows = data.byProtocol.slice(0, 20).map((p) => el('tr', {},
+      el('td', {}, p.protocol), el('td', {}, fmtBytes(p.bytes)), el('td', {}, String(p.flows))));
+    const kids = [el('p', { class: 'muted' }, `${data.measurements} målinger`)];
+    if (data.series && data.series.length >= 2) {
+      kids.push(trafficChart(data.series.map((s) => ({ rx: s.bytes, tx: 0 }))));
+    }
+    kids.push(
+      el('h4', {}, 'Top porte'),
+      data.byPort.length
+        ? el('table', {}, el('thead', {}, el('tr', {}, ...['Port', 'Bytes', 'Flows'].map((h) => el('th', {}, h)))), el('tbody', {}, ...portRows))
+        : el('div', { class: 'empty' }, 'Ingen flow-data. Er NetFlow-eksport slået til på enheden mod denne agent?'),
+      el('h4', {}, 'Top protokoller'),
+      data.byProtocol.length
+        ? el('table', {}, el('thead', {}, el('tr', {}, ...['Protokol', 'Bytes', 'Flows'].map((h) => el('th', {}, h)))), el('tbody', {}, ...protoRows))
+        : el('div', { class: 'empty' }, '–'));
+    result.replaceChildren(...kids);
+  }
+
+  card.replaceChildren(
+    el('h3', {}, `Flows — ${esc(a.display_name || a.hostname)}`),
+    el('div', { class: 'form-grid' },
+      el('label', {}, 'Port (valgfri)', portInput),
+      el('label', {}, 'Protokol (valgfri)', protoInput),
+      el('div', { class: 'form-actions' },
+        el('button', { onclick: search }, 'Søg'),
+        el('button', { class: 'ghost', onclick: closeModal }, 'Luk'))),
+    result);
+  $('#modal').classList.remove('hidden');
+  search();
+}
+
 // Inline SVG line chart of RX/TX rate over a series of measurements.
 function trafficChart(series) {
   const W = 460;
@@ -420,6 +476,8 @@ function editAgent(a) {
     { name: 'snmp_version', label: 'SNMP version', type: 'select', value: snmp.version || '2c',
       options: ['1', '2c'].map((s) => ({ value: s, label: s })) },
     { name: 'snmp_port', label: 'SNMP port', type: 'number', value: String(snmp.port || 161) },
+    { name: 'netflow_port', label: 'NetFlow UDP-port (kun ved netflow)', type: 'number',
+      value: String((mc.netflow && mc.netflow.port) || 2055) },
   ], async (v) => {
     let monitor_config = null;
     if (v.source === 'snmp') {
@@ -433,6 +491,8 @@ function editAgent(a) {
           port: Number(v.snmp_port) || 161,
         },
       };
+    } else if (v.source === 'netflow') {
+      monitor_config = { source: 'netflow', netflow: { port: Number(v.netflow_port) || 2055 } };
     } else if (v.source === 'proc') {
       monitor_config = { source: 'proc' };
     }

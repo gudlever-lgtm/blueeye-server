@@ -117,6 +117,14 @@ function makeDb(overrides = {}) {
   };
 }
 
+// A fake agent commander (push commands to agents over the WS). Defaults to
+// "delivered to 1 connection".
+function makeAgentCommander(overrides = {}) {
+  return {
+    sendCommand: overrides.sendCommand || (() => 1),
+  };
+}
+
 // A fake license manager (defaults to a healthy, generous license).
 function makeLicenseManager(overrides = {}) {
   return {
@@ -143,6 +151,7 @@ function makeApp(overrides = {}) {
     agentTokensRepo: overrides.agentTokensRepo || makeAgentTokensRepo(),
     resultsRepo: overrides.resultsRepo || makeResultsRepo(),
     licenseManager: overrides.licenseManager || makeLicenseManager(),
+    agentCommander: overrides.agentCommander || makeAgentCommander(),
   });
 }
 
@@ -175,6 +184,7 @@ module.exports = {
   makeEnrollmentCodesRepo,
   makeEnrollmentStore,
   makeLicenseManager,
+  makeAgentCommander,
   makeDb,
   makeApp,
   tokenFor,

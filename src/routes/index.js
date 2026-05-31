@@ -27,6 +27,7 @@ function createApiRouter({
   agentTokensRepo,
   resultsRepo,
   licenseManager,
+  agentCommander,
 }) {
   const router = express.Router();
 
@@ -50,7 +51,7 @@ function createApiRouter({
   //   - POST /results          — agent token
   //   - POST /enroll           — unauthenticated
   // Requests fall through routers that have no matching route.
-  router.use('/agents', createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo }));
+  router.use('/agents', createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentCommander }));
   router.use('/agents', createAgentReportsRouter({ agentAuth, resultsRepo }));
   router.use('/agents', createAgentEnrollRouter({ enrollmentStore }));
 

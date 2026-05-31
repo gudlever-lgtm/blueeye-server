@@ -1,0 +1,11 @@
+node_modules
+.git
+.gitignore
+.env
+.license-cache.json
+*.log
+test
+test-support
+Dockerfile
+.dockerignore
+docker-compose.yml

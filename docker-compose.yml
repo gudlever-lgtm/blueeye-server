@@ -1,0 +1,111 @@
+# BlueEye full-stack demo. Run from this directory with the three repos cloned
+# as siblings (blueeye-server, blueeye-agent, blueeye-licens):
+#
+#   node scripts/dev-bootstrap.js      # once: generates .env with keys + demo defaults
+#   docker compose up --build
+#
+# Ports: licens :4000, server :3000, MySQL :3306 (for admin/config access).
+name: blueeye
+
+services:
+  db:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-rootpw}
+      MYSQL_USER: ${DB_USER:-blueeye}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-blueeye-pw}
+    volumes:
+      - db-data:/var/lib/mysql
+      - ./docker/mysql-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "3306:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-p${MYSQL_ROOT_PASSWORD:-rootpw}"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  licens:
+    build: ../blueeye-licens
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      DB_HOST: db
+      DB_USER: ${DB_USER:-blueeye}
+      DB_PASSWORD: ${DB_PASSWORD:-blueeye-pw}
+      DB_NAME: blueeye_licens
+      JWT_SECRET: ${LICENS_JWT_SECRET:-change-me-licens}
+      SEED_ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@blueeye.local}
+      SEED_ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin-pw}
+      LICENSE_SIGNING_KEY: ${LICENSE_SIGNING_KEY}
+      SEED_DEMO: ${SEED_DEMO:-1}
+      SEED_DEMO_LICENSE_KEY: ${SEED_DEMO_LICENSE_KEY:-DEMO-DEMO-DEMO-DEMO-DEMO}
+      SEED_DEMO_MAX_AGENTS: ${SEED_DEMO_MAX_AGENTS:-100}
+    command: sh -c "node src/migrate.js && node scripts/seed-demo.js && node src/server.js"
+    ports:
+      - "4000:4000"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:4000/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+
+  server:
+    build: .
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DB_HOST: db
+      DB_USER: ${DB_USER:-blueeye}
+      DB_PASSWORD: ${DB_PASSWORD:-blueeye-pw}
+      DB_NAME: blueeye
+      JWT_SECRET: ${SERVER_JWT_SECRET:-change-me-server}
+      SEED_ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@blueeye.local}
+      SEED_ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin-pw}
+      LICENSE_KEY: ${LICENSE_KEY:-DEMO-DEMO-DEMO-DEMO-DEMO}
+      LICENSE_SERVER_ID: ${LICENSE_SERVER_ID:-gnf-server-1}
+      LICENSE_SERVER_URL: http://licens:4000
+      LICENSE_PUBLIC_KEY: ${LICENSE_PUBLIC_KEY}
+      LICENSE_CACHE_PATH: /data/license-cache.json
+      SEED_DEMO: ${SEED_DEMO:-1}
+      SEED_DEMO_ENROLLMENT_CODE: ${SEED_DEMO_ENROLLMENT_CODE:-DEMO-ENROLL-CODE}
+    command: sh -c "node src/migrate.js && node scripts/seed-demo.js && node src/server.js"
+    volumes:
+      - server-data:/data
+    ports:
+      - "3000:3000"
+    depends_on:
+      db:
+        condition: service_healthy
+      licens:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+
+  agent:
+    build: ../blueeye-agent
+    environment:
+      BLUEEYE_SERVER_URL: http://server:3000
+      BLUEEYE_ENROLLMENT_CODE: ${AGENT_ENROLLMENT_CODE:-DEMO-ENROLL-CODE}
+      BLUEEYE_TOKEN_PATH: /data/agent-token
+      BLUEEYE_AGENT_CONFIG: /data/agent-config.json
+      BLUEEYE_LOG_LEVEL: info
+    volumes:
+      - agent-data:/data
+    depends_on:
+      server:
+        condition: service_healthy
+    restart: on-failure
+
+volumes:
+  db-data:
+  server-data:
+  agent-data:

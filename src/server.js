@@ -47,6 +47,11 @@ function start() {
     getAgentCount: () => (agentWs ? agentWs.connectionCount() : 0),
   });
 
+  // Lets HTTP routes push commands to connected agents over the WebSocket.
+  const agentCommander = {
+    sendCommand: (agentId, command) => (agentWs ? agentWs.sendCommand(agentId, command) : 0),
+  };
+
   const app = createApp({
     db,
     locationsRepo,
@@ -56,6 +61,7 @@ function start() {
     enrollmentStore,
     agentTokensRepo,
     resultsRepo,
+    agentCommander,
     licenseManager,
     logger: console,
   });

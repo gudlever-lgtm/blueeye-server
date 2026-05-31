@@ -14,8 +14,37 @@ const { parseId } = require('../validation/locationValidation');
 //
 // Agents are created via enrollment (prompt 4) — there is intentionally no
 // manual POST /agents here.
-function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo }) {
+function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentCommander }) {
   const router = express.Router();
+
+  // POST /agents/:id/run-test — push a "run test" command to a connected agent
+  // over the live WebSocket. operator/admin. Returns 202 with how many
+  // connections received it, 409 if the agent isn't currently connected.
+  router.post(
+    '/:id/run-test',
+    requireAuth,
+    requireRole(ROLES.OPERATOR, ROLES.ADMIN),
+    asyncHandler(async (req, res) => {
+      const id = parseId(req.params.id);
+      if (id === null) {
+        return res.status(400).json({ error: 'Invalid id' });
+      }
+      const agent = await agentsRepo.findById(id);
+      if (!agent) {
+        return res.status(404).json({ error: 'Agent not found' });
+      }
+
+      const body = req.body && typeof req.body === 'object' ? req.body : {};
+      const command = { name: 'run-test' };
+      if (Number.isInteger(body.intervalMs)) command.intervalMs = body.intervalMs;
+
+      const delivered = agentCommander ? agentCommander.sendCommand(id, command) : 0;
+      if (delivered === 0) {
+        return res.status(409).json({ error: 'Agent not connected', delivered: 0 });
+      }
+      res.status(202).json({ delivered, agentId: id });
+    })
+  );
 
   // GET /agents — list, with the joined location name.
   router.get(

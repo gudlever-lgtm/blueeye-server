@@ -1,5 +1,6 @@
 'use strict';
 
+const path = require('path');
 const express = require('express');
 const { createApiRouter } = require('./routes');
 const { requestLogger } = require('./middleware/requestLogger');
@@ -27,6 +28,10 @@ function createApp({
   app.disable('x-powered-by');
   app.use(express.json({ limit: '1mb' }));
   app.use(requestLogger(logger));
+
+  // Static admin dashboard (vanilla HTML/JS). Served before the API router;
+  // requests that don't match a file fall through to the JSON API.
+  app.use(express.static(path.join(__dirname, '..', 'public')));
 
   // Application routes. User-JWT RBAC and agent-token auth are enforced inside
   // the individual routers (see src/auth/* and src/routes/*).

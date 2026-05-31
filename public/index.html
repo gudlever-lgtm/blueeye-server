@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="da">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>BlueEye — Server</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <!-- Login -->
+    <main id="login" class="login hidden">
+      <form id="login-form" class="card">
+        <h1>BlueEye <span class="muted">server</span></h1>
+        <label>Email <input type="email" id="email" value="admin@blueeye.local" required /></label>
+        <label>Adgangskode <input type="password" id="password" required /></label>
+        <button type="submit">Log ind</button>
+        <p id="login-error" class="error"></p>
+      </form>
+    </main>
+
+    <!-- App -->
+    <div id="app" class="hidden">
+      <header class="topbar">
+        <strong>BlueEye <span class="muted">server</span></strong>
+        <nav class="tabs">
+          <button data-view="agents" class="active">Agenter</button>
+          <button data-view="locations">Lokationer</button>
+          <button data-view="enrollment">Enrollment</button>
+          <button data-view="license">Licens</button>
+        </nav>
+        <span class="spacer"></span>
+        <span id="whoami" class="muted"></span>
+        <button id="refresh" class="ghost" title="Opdatér">⟳</button>
+        <button id="logout" class="ghost">Log ud</button>
+      </header>
+      <main id="view"></main>
+    </div>
+
+    <div id="toast" class="toast hidden"></div>
+    <div id="modal" class="modal hidden"><div class="modal-card" id="modal-card"></div></div>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

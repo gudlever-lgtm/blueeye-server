@@ -36,12 +36,14 @@ async function api(path, { method = 'GET', body } = {}) {
     },
     body: body ? JSON.stringify(body) : undefined,
   });
-  if (res.status === 401) {
+  let data = null;
+  try { data = await res.json(); } catch { /* no body (e.g. 204) */ }
+  // A 401 on an authenticated call means the session expired; on the login call
+  // itself it just means wrong credentials — surface the server's message.
+  if (res.status === 401 && path !== '/auth/login') {
     logout();
     throw new Error('Session udløbet — log ind igen.');
   }
-  let data = null;
-  try { data = await res.json(); } catch { /* no body (e.g. 204) */ }
   if (!res.ok) {
     const msg = (data && (data.error || data.message)) || `HTTP ${res.status}`;
     const err = new Error(msg);

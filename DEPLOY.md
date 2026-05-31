@@ -49,7 +49,7 @@ Startup order is enforced via health checks:
 | --- | --- | --- |
 | Server API | `http://<host>:3000` | Agents, locations, users, enrollment, `GET /license/status` |
 | License server API | `http://<host>:4000` | Customers, licenses, `POST /validate` |
-| MySQL | `<host>:3306` | user `blueeye`, password from `.env` (`DB_PASSWORD`); databases `blueeye`, `blueeye_licens` |
+| MySQL | `<host>:3307` | Host port 3307 by default (3306 is usually taken by a system MySQL); override with `DB_HOST_PORT`. User `blueeye`, password from `.env` (`DB_PASSWORD`); databases `blueeye`, `blueeye_licens` |
 | Agent | (no port) | Outbound client; configure via env / `docker compose exec agent sh` |
 
 Staff login (both server and licens), default admin from `.env`:

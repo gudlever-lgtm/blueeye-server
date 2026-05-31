@@ -44,4 +44,6 @@ test('dashboard exposes users tab, auto-refresh and traffic chart', async () => 
   assert.match(js, /\/traffic/); // calls the location traffic endpoint
   assert.match(js, /agentHealthCell/); // agent health derived from last report
   assert.match(js, /newAgent/); // operator "+ Ny agent" (enrollment code)
+  assert.match(js, /function openDrawer/); // slide-in info drawer
+  assert.match(js, /PAGE_INFO/); // per-page hero/info content
 });

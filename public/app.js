@@ -129,7 +129,9 @@ function openModal(title, fields, onSubmit) {
     e.preventDefault();
     const values = {};
     for (const [k, node] of Object.entries(inputs)) values[k] = node.value;
-    try { await onSubmit(values); closeModal(); }
+    // onSubmit decides whether to close (some flows re-render the modal, e.g.
+    // to show a one-time code), so don't auto-close here.
+    try { await onSubmit(values); }
     catch (err) { errP.textContent = err.message; }
   });
   card.replaceChildren(el('h3', {}, title), form);
@@ -138,6 +140,104 @@ function openModal(title, fields, onSubmit) {
 function closeModal() { $('#modal').classList.add('hidden'); }
 
 // ---- Views ----------------------------------------------------------------
+// ---- Per-page explanation (hero + slide-in info drawer) -------------------
+// Each view starts with a short hero line and a "Mere info" button that slides
+// in a panel from the right with a fuller explanation.
+const PAGE_INFO = {
+  agents: {
+    hero: 'Overvåg de agenter, der rapporterer trafik ind til denne server.',
+    title: 'Agenter',
+    body: () => [
+      el('p', {}, 'Agenter installeres på kundens maskiner og rapporterer netværkstrafik ind til serveren.'),
+      el('h4', {}, 'Status & health'),
+      el('ul', {},
+        el('li', {}, 'Status: online/offline ud fra WebSocket-forbindelsen.'),
+        el('li', {}, 'Health: "sund" = online og har rapporteret inden for 5 min., "forsinket" = online men gammel rapport, "nede" = offline.'),
+        el('li', {}, 'Senest rapporteret: tidspunktet for agentens seneste trafik-måling.')),
+      el('h4', {}, 'Handlinger'),
+      el('ul', {},
+        el('li', {}, '"+ Ny agent" giver en engangskode til installation (operator+).'),
+        el('li', {}, '"Kør test" beder agenten måle med det samme; "Trafik" viser målingerne.'),
+        el('li', {}, '"Rediger" sætter navn, lokation, noter og trafik-kilde (proc/SNMP).')),
+    ],
+  },
+  locations: {
+    hero: 'Grupper agenter i lokationer og se korreleret live-trafik pr. lokation.',
+    title: 'Lokationer',
+    body: () => [
+      el('p', {}, 'En lokation samler flere agenter (fx et kontor eller en lokation).'),
+      el('h4', {}, 'Live-trafik'),
+      el('p', {}, '"Trafik" åbner et live-panel der summerer alle agenters trafik i lokationen og opdaterer hvert 3. sekund — godt til at se samlet belastning og finde fejl.'),
+    ],
+  },
+  enrollment: {
+    hero: 'Opret engangskoder, som nye agenter bruger til at melde sig ind første gang.',
+    title: 'Enrollment',
+    body: () => [
+      el('p', {}, 'En enrollment-kode er engangsbrug. Agenten bruger den ved første opstart til at få et fast token.'),
+      el('ul', {},
+        el('li', {}, 'Sæt koden som BLUEEYE_ENROLLMENT_CODE på agent-maskinen.'),
+        el('li', {}, 'Koden vises kun én gang ved oprettelse.'),
+        el('li', {}, 'Status: active (kan bruges), used (brugt), expired (udløbet).')),
+    ],
+  },
+  users: {
+    hero: 'Administrér personale-brugere og deres roller (kun admin).',
+    title: 'Brugere',
+    body: () => [
+      el('h4', {}, 'Roller'),
+      el('ul', {},
+        el('li', {}, 'admin: alt, inkl. brugeradministration.'),
+        el('li', {}, 'operator: opret/redigér agenter, lokationer og enrollment-koder.'),
+        el('li', {}, 'viewer: kun læseadgang.')),
+      el('p', {}, 'Den sidste admin kan ikke slettes eller degraderes.'),
+    ],
+  },
+  license: {
+    hero: 'Se denne servers licensstatus, valideret mod den centrale licensserver.',
+    title: 'Licens',
+    body: () => [
+      el('p', {}, 'Serveren henter et signeret bevis fra licensserveren og verificerer det offline med en indlejret nøgle.'),
+      el('ul', {},
+        el('li', {}, 'valid: frisk og gyldig.'),
+        el('li', {}, 'grace: kan ikke nå licensserveren, men cachet bevis < 14 dage.'),
+        el('li', {}, 'unlicensed: ingen gyldig licens — nye agent-forbindelser afvises.')),
+    ],
+  },
+};
+
+function hero(viewKey) {
+  const info = PAGE_INFO[viewKey];
+  if (!info) return null;
+  return el('div', { class: 'hero' },
+    el('div', { class: 'hero-text' }, info.hero),
+    el('button', { class: 'ghost small', onclick: () => openDrawer(info.title, info.body) }, 'Mere info'));
+}
+
+let drawerEls = null;
+function openDrawer(title, bodyFn) {
+  closeDrawer();
+  const backdrop = el('div', { class: 'drawer-backdrop', onclick: closeDrawer });
+  const panel = el('div', { class: 'drawer' },
+    el('button', { class: 'ghost small close-x', onclick: closeDrawer }, '✕'),
+    el('h3', {}, title),
+    ...bodyFn());
+  document.body.append(backdrop, panel);
+  drawerEls = { backdrop, panel };
+  // Trigger the slide-in transition on the next frame.
+  requestAnimationFrame(() => { backdrop.classList.add('open'); panel.classList.add('open'); });
+  document.addEventListener('keydown', onDrawerKey);
+}
+function closeDrawer() {
+  document.removeEventListener('keydown', onDrawerKey);
+  if (!drawerEls) return;
+  const { backdrop, panel } = drawerEls;
+  drawerEls = null;
+  backdrop.classList.remove('open'); panel.classList.remove('open');
+  setTimeout(() => { backdrop.remove(); panel.remove(); }, 250);
+}
+function onDrawerKey(e) { if (e.key === 'Escape') closeDrawer(); }
+
 const views = {};
 let locationCache = [];
 
@@ -343,7 +443,7 @@ function editAgent(a) {
       meta: a.meta || null,
       monitor_config,
     } });
-    toast('Agent opdateret'); render();
+    closeModal(); toast('Agent opdateret'); render();
   });
 }
 
@@ -434,7 +534,7 @@ function editLocation(l) {
     const body = { name: v.name, description: v.description || null };
     if (l) await api(`/locations/${l.id}`, { method: 'PUT', body });
     else await api('/locations', { method: 'POST', body });
-    toast('Gemt'); render();
+    closeModal(); toast('Gemt'); render();
   });
 }
 async function deleteLocation(l) {
@@ -582,7 +682,8 @@ async function render({ silent = false } = {}) {
   if (!silent) view.replaceChildren(el('div', { class: 'empty' }, 'Indlæser…'));
   try {
     const node = await views[currentView]();
-    view.replaceChildren(node);
+    const h = hero(currentView);
+    view.replaceChildren(...(h ? [h, node] : [node]));
   } catch (err) {
     if (!silent) view.replaceChildren(el('div', { class: 'empty error' }, err.message));
   }
@@ -611,7 +712,7 @@ $('#logout').addEventListener('click', () => { setAutoRefresh(false); $('#autore
 $('#refresh').addEventListener('click', () => render());
 $('#autorefresh').addEventListener('change', (e) => setAutoRefresh(e.target.checked));
 for (const b of document.querySelectorAll('.tabs button')) {
-  b.addEventListener('click', () => { currentView = b.dataset.view; render(); });
+  b.addEventListener('click', () => { closeDrawer(); currentView = b.dataset.view; render(); });
 }
 $('#modal').addEventListener('click', (e) => { if (e.target.id === 'modal') closeModal(); });
 

@@ -61,6 +61,12 @@ function createUsersRouter({ usersRepo }) {
         return res.status(404).json({ error: 'User not found' });
       }
 
+      // A protected (super-admin) user cannot be demoted — only a password
+      // reset is allowed. It stays admin regardless of the requested role.
+      if (existing.protected && value.role !== ROLES.ADMIN) {
+        return res.status(409).json({ error: 'Cannot change the role of a protected super-admin' });
+      }
+
       // Don't let the last admin be demoted out of the admin role.
       if (existing.role === ROLES.ADMIN && value.role !== ROLES.ADMIN) {
         const admins = await usersRepo.countByRole(ROLES.ADMIN);
@@ -69,7 +75,7 @@ function createUsersRouter({ usersRepo }) {
         }
       }
 
-      const patch = { role: value.role };
+      const patch = { role: existing.protected ? ROLES.ADMIN : value.role };
       if (value.password !== undefined) {
         patch.passwordHash = await hashPassword(value.password);
       }
@@ -89,6 +95,11 @@ function createUsersRouter({ usersRepo }) {
       const existing = await usersRepo.findById(id);
       if (!existing) {
         return res.status(404).json({ error: 'User not found' });
+      }
+
+      // A protected (super-admin) user can never be deleted.
+      if (existing.protected) {
+        return res.status(409).json({ error: 'Cannot delete a protected super-admin' });
       }
 
       if (existing.role === ROLES.ADMIN) {

@@ -897,11 +897,12 @@ views.users = async () => {
     el('tbody', {}, ...users.map((u) => el('tr', {},
       el('td', {}, String(u.id)),
       el('td', {}, u.email),
-      el('td', {}, el('span', { class: 'badge' }, u.role)),
+      el('td', {}, el('span', { class: 'badge' }, u.role),
+        u.protected ? el('span', { class: 'badge', title: 'Superadmin — kan ikke ændres/slettes, kun password', style: 'margin-left:6px' }, 'superadmin') : null),
       el('td', { class: 'muted' }, fmtDate(u.created_at)),
       el('td', {}, el('div', { class: 'row-actions' },
-        el('button', { class: 'small ghost', onclick: () => editUser(u) }, 'Rediger'),
-        el('button', { class: 'small danger', onclick: () => deleteUser(u) }, 'Slet'))),
+        el('button', { class: 'small ghost', onclick: () => editUser(u) }, u.protected ? 'Skift password' : 'Rediger'),
+        u.protected ? null : el('button', { class: 'small danger', onclick: () => deleteUser(u) }, 'Slet'))),
     )))));
   return root;
 };
@@ -909,7 +910,16 @@ views.users = async () => {
 const ROLE_OPTIONS = ['viewer', 'operator', 'admin'].map((r) => ({ value: r, label: r }));
 
 function editUser(u) {
-  if (u) {
+  if (u && u.protected) {
+    // Super-admin: only a password reset is allowed.
+    openModal(`Skift password — ${u.email}`, [
+      { name: 'password', label: 'Ny adgangskode (min. 8 tegn)', type: 'password', value: '' },
+    ], async (v) => {
+      if (!v.password) throw new Error('Indtast en ny adgangskode');
+      await api(`/users/${u.id}`, { method: 'PUT', body: { role: 'admin', password: v.password } });
+      closeModal(); toast('Adgangskode skiftet'); render();
+    });
+  } else if (u) {
     // Update: role + optional password reset (email is immutable here).
     openModal(`Rediger ${u.email}`, [
       { name: 'role', label: 'Rolle', type: 'select', value: u.role, options: ROLE_OPTIONS },

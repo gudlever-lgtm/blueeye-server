@@ -1,7 +1,12 @@
 'use strict';
 
 // Columns safe to return to API clients — never includes password_hash.
-const PUBLIC_COLUMNS = 'id, email, role, created_at, updated_at';
+const PUBLIC_COLUMNS = 'id, email, role, protected, created_at, updated_at';
+
+function mapRow(row) {
+  if (!row) return null;
+  return { ...row, protected: row.protected === 1 || row.protected === true };
+}
 
 // Data-access layer for the `users` table.
 function createUsersRepository(db) {
@@ -11,7 +16,7 @@ function createUsersRepository(db) {
     const [rows] = await pool.query(
       `SELECT ${PUBLIC_COLUMNS} FROM users ORDER BY id`
     );
-    return rows;
+    return rows.map(mapRow);
   }
 
   async function findById(id) {
@@ -19,7 +24,7 @@ function createUsersRepository(db) {
       `SELECT ${PUBLIC_COLUMNS} FROM users WHERE id = ?`,
       [id]
     );
-    return rows[0] ?? null;
+    return mapRow(rows[0]) ?? null;
   }
 
   async function findByEmail(email) {
@@ -27,7 +32,7 @@ function createUsersRepository(db) {
       `SELECT ${PUBLIC_COLUMNS} FROM users WHERE email = ?`,
       [email]
     );
-    return rows[0] ?? null;
+    return mapRow(rows[0]) ?? null;
   }
 
   // Includes the password hash — used only by the login flow.
@@ -39,10 +44,10 @@ function createUsersRepository(db) {
     return rows[0] ?? null;
   }
 
-  async function create({ email, passwordHash, role }) {
+  async function create({ email, passwordHash, role, protected: isProtected = false }) {
     const [result] = await pool.query(
-      'INSERT INTO users (email, password_hash, role) VALUES (?, ?, ?)',
-      [email, passwordHash, role]
+      'INSERT INTO users (email, password_hash, role, protected) VALUES (?, ?, ?, ?)',
+      [email, passwordHash, role, isProtected ? 1 : 0]
     );
     return findById(result.insertId);
   }

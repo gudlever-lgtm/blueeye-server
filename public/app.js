@@ -262,7 +262,7 @@ views.agents = async () => {
     el('td', { class: 'muted' }, fmtDate(a.last_report_at)),
     el('td', {}, el('div', { class: 'row-actions' },
       el('button', { class: 'small ghost', onclick: () => showResults(a) }, 'Trafik'),
-      (a.monitor_config && a.monitor_config.source === 'netflow')
+      (a.monitor_config && (a.monitor_config.source === 'netflow' || a.monitor_config.source === 'sflow'))
         ? el('button', { class: 'small ghost', onclick: () => showAgentFlows(a) }, 'Flows')
         : null,
       canWrite() ? el('button', { class: 'small', onclick: () => runTest(a) }, 'Kør test') : null,
@@ -478,6 +478,8 @@ function editAgent(a) {
     { name: 'snmp_port', label: 'SNMP port', type: 'number', value: String(snmp.port || 161) },
     { name: 'netflow_port', label: 'NetFlow UDP-port (kun ved netflow)', type: 'number',
       value: String((mc.netflow && mc.netflow.port) || 2055) },
+    { name: 'sflow_port', label: 'sFlow UDP-port (kun ved sflow)', type: 'number',
+      value: String((mc.sflow && mc.sflow.port) || 6343) },
   ], async (v) => {
     let monitor_config = null;
     if (v.source === 'snmp') {
@@ -493,6 +495,8 @@ function editAgent(a) {
       };
     } else if (v.source === 'netflow') {
       monitor_config = { source: 'netflow', netflow: { port: Number(v.netflow_port) || 2055 } };
+    } else if (v.source === 'sflow') {
+      monitor_config = { source: 'sflow', sflow: { port: Number(v.sflow_port) || 6343 } };
     } else if (v.source === 'proc') {
       monitor_config = { source: 'proc' };
     }

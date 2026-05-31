@@ -42,4 +42,6 @@ test('dashboard exposes users tab, auto-refresh and traffic chart', async () => 
   assert.match(js, /monitor_config/); // source selection sent to the API
   assert.match(js, /showLocationTraffic/); // live per-location correlated traffic
   assert.match(js, /\/traffic/); // calls the location traffic endpoint
+  assert.match(js, /agentHealthCell/); // agent health derived from last report
+  assert.match(js, /newAgent/); // operator "+ Ny agent" (enrollment code)
 });

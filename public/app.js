@@ -61,6 +61,23 @@ function toast(message, bad = false) {
   setTimeout(() => t.classList.add('hidden'), 3200);
 }
 
+function copyText(text) {
+  const done = () => toast('Kopieret');
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(done).catch(() => fallbackCopy(text, done));
+  } else {
+    fallbackCopy(text, done);
+  }
+}
+function fallbackCopy(text, done) {
+  const ta = el('textarea', { style: 'position:fixed;opacity:0' });
+  ta.value = text;
+  document.body.append(ta);
+  ta.select();
+  try { document.execCommand('copy'); done(); } catch { toast('Kunne ikke kopiere', true); }
+  ta.remove();
+}
+
 function fmtBytes(n) {
   if (!Number.isFinite(n)) return '–';
   const u = ['B', 'KB', 'MB', 'GB', 'TB'];
@@ -128,17 +145,21 @@ views.agents = async () => {
   const [agents, locations] = await Promise.all([api('/agents'), api('/locations')]);
   locationCache = locations;
   const root = el('div');
-  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Agenter'), el('span', { class: 'muted' }, `${agents.length} stk.`)));
-  if (!agents.length) { root.append(el('div', { class: 'empty' }, 'Ingen agenter endnu. Opret en enrollment-kode under fanen Enrollment.')); return root; }
+  root.append(el('div', { class: 'section-head' },
+    el('h2', {}, 'Agenter'),
+    el('span', { class: 'muted' }, `${agents.length} stk.`),
+    canWrite() ? el('button', { class: 'small', onclick: () => newAgent() }, '+ Ny agent') : null));
+  if (!agents.length) { root.append(el('div', { class: 'empty' }, 'Ingen agenter endnu. Tryk "+ Ny agent" for at få en enrollment-kode til installation.')); return root; }
 
   const rows = agents.map((a) => el('tr', {},
     el('td', {}, String(a.id)),
     el('td', {}, el('div', {}, a.display_name || a.hostname), a.display_name ? el('div', { class: 'muted' }, a.hostname) : null),
     el('td', {}, `${a.platform} / ${a.arch}`),
     el('td', {}, el('span', { class: `badge ${a.status}` }, a.status)),
+    el('td', {}, agentHealthCell(a)),
     el('td', {}, a.location_name || '–'),
     el('td', {}, agentSourceCell(a)),
-    el('td', { class: 'muted' }, fmtDate(a.last_seen)),
+    el('td', { class: 'muted' }, fmtDate(a.last_report_at)),
     el('td', {}, el('div', { class: 'row-actions' },
       el('button', { class: 'small ghost', onclick: () => showResults(a) }, 'Trafik'),
       canWrite() ? el('button', { class: 'small', onclick: () => runTest(a) }, 'Kør test') : null,
@@ -147,10 +168,45 @@ views.agents = async () => {
     )),
   ));
   root.append(el('table', {},
-    el('thead', {}, el('tr', {}, ...['ID', 'Navn / hostname', 'Platform', 'Status', 'Lokation', 'Kilde', 'Sidst set', ''].map((h) => el('th', {}, h)))),
+    el('thead', {}, el('tr', {}, ...['ID', 'Navn / hostname', 'Platform', 'Status', 'Health', 'Lokation', 'Kilde', 'Senest rapporteret', ''].map((h) => el('th', {}, h)))),
     el('tbody', {}, ...rows)));
   return root;
 };
+
+// Health derived from how recently the agent last reported in. online + a fresh
+// report = healthy; online but stale (or never reported) = degraded; offline = down.
+function agentHealthCell(a) {
+  const last = a.last_report_at ? new Date(a.last_report_at).getTime() : 0;
+  const ageMs = last ? Date.now() - last : Infinity;
+  const FRESH = 5 * 60 * 1000; // 5 min
+  let cls;
+  let label;
+  if (a.status !== 'online') { cls = 'offline'; label = 'nede'; }
+  else if (ageMs <= FRESH) { cls = 'online'; label = 'sund'; }
+  else { cls = 'grace'; label = last ? 'forsinket' : 'ingen data'; }
+  const title = last ? `Senest rapporteret ${fmtDate(a.last_report_at)}` : 'Har ikke rapporteret endnu';
+  return el('span', { class: `badge ${cls}`, title }, label);
+}
+
+// Operator "create agent" = mint an enrollment code + show install instructions.
+// Agents are created when they enroll themselves (they report hostname/etc.).
+async function newAgent() {
+  try {
+    const created = await api('/enrollment-codes', { method: 'POST', body: {} });
+    const card = $('#modal-card');
+    const base = location.origin;
+    card.replaceChildren(
+      el('h3', {}, 'Ny agent — enrollment-kode'),
+      el('p', { class: 'muted' }, 'Installér agenten på maskinen og giv den denne engangskode. Den dukker op i listen, når den enroller. Koden vises kun nu:'),
+      el('pre', {}, esc(created.code)),
+      el('p', { class: 'muted' }, 'Eksempel (env på agent-maskinen):'),
+      el('pre', {}, `BLUEEYE_SERVER_URL=${esc(base)}\nBLUEEYE_ENROLLMENT_CODE=${esc(created.code)}`),
+      el('div', { class: 'form-actions' },
+        el('button', { class: 'ghost', onclick: () => copyText(created.code) }, 'Kopiér kode'),
+        el('button', { onclick: () => { closeModal(); render(); } }, 'Luk')));
+    $('#modal').classList.remove('hidden');
+  } catch (err) { toast(err.message, true); }
+}
 
 async function runTest(a) {
   try {

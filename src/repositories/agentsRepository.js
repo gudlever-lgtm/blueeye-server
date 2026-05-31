@@ -5,7 +5,8 @@
 const SELECT_AGENT = `
   SELECT a.id, a.hostname, a.platform, a.arch, a.last_seen, a.status, a.capabilities,
          a.location_id, l.name AS location_name,
-         a.display_name, a.notes, a.meta, a.monitor_config, a.created_at, a.updated_at
+         a.display_name, a.notes, a.meta, a.monitor_config, a.created_at, a.updated_at,
+         (SELECT MAX(r.created_at) FROM results r WHERE r.agent_id = a.id) AS last_report_at
   FROM agents a
   LEFT JOIN locations l ON l.id = a.location_id`;
 
@@ -30,6 +31,7 @@ function mapRow(row) {
     platform: row.platform,
     arch: row.arch,
     last_seen: row.last_seen,
+    last_report_at: row.last_report_at ?? null,
     status: row.status,
     capabilities: parseJson(row.capabilities),
     location_id: row.location_id,

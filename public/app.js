@@ -167,7 +167,19 @@ async function showResults(a) {
     } else {
       const latest = results[0];
       const t = latest.payload && latest.payload.traffic;
-      body.push(el('p', { class: 'muted' }, `Seneste: ${fmtDate(latest.created_at)}`));
+      body.push(el('p', { class: 'muted' }, `Seneste: ${fmtDate(latest.created_at)} · ${results.length} målinger`));
+
+      // Traffic over time: oldest -> newest, rate per measurement.
+      const series = results
+        .slice()
+        .reverse()
+        .map((r) => ({
+          at: r.created_at,
+          rx: r.payload && r.payload.traffic && r.payload.traffic.totals ? r.payload.traffic.totals.rxBytesPerSec : 0,
+          tx: r.payload && r.payload.traffic && r.payload.traffic.totals ? r.payload.traffic.totals.txBytesPerSec : 0,
+        }));
+      if (series.length >= 2) body.push(trafficChart(series));
+
       if (t && t.interfaces && t.interfaces.length) {
         body.push(el('table', {},
           el('thead', {}, el('tr', {}, ...['Interface', 'RX', 'TX', 'RX/s', 'TX/s'].map((h) => el('th', {}, h)))),
@@ -186,6 +198,39 @@ async function showResults(a) {
     card.replaceChildren(...body);
     $('#modal').classList.remove('hidden');
   } catch (err) { toast(err.message, true); }
+}
+
+// Inline SVG line chart of RX/TX rate over a series of measurements.
+function trafficChart(series) {
+  const W = 460;
+  const H = 140;
+  const pad = { l: 8, r: 8, t: 10, b: 10 };
+  const max = Math.max(1, ...series.map((p) => Math.max(p.rx, p.tx)));
+  const n = series.length;
+  const x = (i) => pad.l + (i * (W - pad.l - pad.r)) / (n - 1);
+  const y = (v) => H - pad.b - (v / max) * (H - pad.t - pad.b);
+  const path = (key) => series.map((p, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(p[key]).toFixed(1)}`).join(' ');
+
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  svg.setAttribute('preserveAspectRatio', 'none');
+  const mk = (tag, attrs) => {
+    const e = document.createElementNS(ns, tag);
+    for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+    return e;
+  };
+  // baseline + max gridline
+  svg.append(mk('line', { class: 'grid', x1: pad.l, y1: y(0), x2: W - pad.r, y2: y(0) }));
+  svg.append(mk('line', { class: 'grid', x1: pad.l, y1: y(max), x2: W - pad.r, y2: y(max) }));
+  svg.append(mk('path', { class: 'rx', d: path('rx') }));
+  svg.append(mk('path', { class: 'tx', d: path('tx') }));
+
+  return el('div', { class: 'chart' },
+    svg,
+    el('div', { class: 'legend' },
+      el('span', {}, el('span', { class: 'dot rx' }), `RX (maks ${fmtBytes(max)}/s)`),
+      el('span', {}, el('span', { class: 'dot tx' }), `TX (maks ${fmtBytes(max)}/s)`)));
 }
 
 function editAgent(a) {
@@ -295,6 +340,57 @@ async function deleteCode(c) {
   catch (err) { toast(err.message, true); }
 }
 
+views.users = async () => {
+  const users = await api('/users');
+  const root = el('div');
+  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Brugere'),
+    el('button', { class: 'small', onclick: () => editUser() }, '+ Ny bruger')));
+  root.append(el('p', { class: 'muted' }, 'Roller: viewer (læs), operator (opret/redigér), admin (alt). Kun admins ser denne fane.'));
+  root.append(el('table', {},
+    el('thead', {}, el('tr', {}, ...['ID', 'Email', 'Rolle', 'Oprettet', ''].map((h) => el('th', {}, h)))),
+    el('tbody', {}, ...users.map((u) => el('tr', {},
+      el('td', {}, String(u.id)),
+      el('td', {}, u.email),
+      el('td', {}, el('span', { class: 'badge' }, u.role)),
+      el('td', { class: 'muted' }, fmtDate(u.created_at)),
+      el('td', {}, el('div', { class: 'row-actions' },
+        el('button', { class: 'small ghost', onclick: () => editUser(u) }, 'Rediger'),
+        el('button', { class: 'small danger', onclick: () => deleteUser(u) }, 'Slet'))),
+    )))));
+  return root;
+};
+
+const ROLE_OPTIONS = ['viewer', 'operator', 'admin'].map((r) => ({ value: r, label: r }));
+
+function editUser(u) {
+  if (u) {
+    // Update: role + optional password reset (email is immutable here).
+    openModal(`Rediger ${u.email}`, [
+      { name: 'role', label: 'Rolle', type: 'select', value: u.role, options: ROLE_OPTIONS },
+      { name: 'password', label: 'Ny adgangskode (valgfri)', type: 'password', value: '' },
+    ], async (v) => {
+      const body = { role: v.role };
+      if (v.password) body.password = v.password;
+      await api(`/users/${u.id}`, { method: 'PUT', body });
+      closeModal(); toast('Bruger opdateret'); render();
+    });
+  } else {
+    openModal('Ny bruger', [
+      { name: 'email', label: 'Email', type: 'email', value: '' },
+      { name: 'password', label: 'Adgangskode (min. 8 tegn)', type: 'password', value: '' },
+      { name: 'role', label: 'Rolle', type: 'select', value: 'viewer', options: ROLE_OPTIONS },
+    ], async (v) => {
+      await api('/users', { method: 'POST', body: { email: v.email, password: v.password, role: v.role } });
+      closeModal(); toast('Bruger oprettet'); render();
+    });
+  }
+}
+async function deleteUser(u) {
+  if (!confirm(`Slet bruger ${u.email}?`)) return;
+  try { await api(`/users/${u.id}`, { method: 'DELETE' }); toast('Slettet'); render(); }
+  catch (err) { toast(err.message, true); }
+}
+
 views.license = async () => {
   const s = await api('/license/status');
   const root = el('div');
@@ -316,19 +412,40 @@ function stat(k, v) {
 
 // ---- Render ---------------------------------------------------------------
 let currentView = 'agents';
-async function render() {
+const modalOpen = () => !$('#modal').classList.contains('hidden');
+
+async function render({ silent = false } = {}) {
   if (!token) { $('#login').classList.remove('hidden'); $('#app').classList.add('hidden'); return; }
   $('#login').classList.add('hidden');
   $('#app').classList.remove('hidden');
   $('#whoami').textContent = role;
+
+  // Admin-only tabs (e.g. Brugere); send non-admins back to agents if needed.
+  for (const b of document.querySelectorAll('.tabs button[data-admin]')) {
+    b.classList.toggle('hidden', role !== 'admin');
+  }
+  if (currentView === 'users' && role !== 'admin') currentView = 'agents';
   for (const b of document.querySelectorAll('.tabs button')) b.classList.toggle('active', b.dataset.view === currentView);
+
   const view = $('#view');
-  view.replaceChildren(el('div', { class: 'empty' }, 'Indlæser…'));
+  if (!silent) view.replaceChildren(el('div', { class: 'empty' }, 'Indlæser…'));
   try {
     const node = await views[currentView]();
     view.replaceChildren(node);
   } catch (err) {
-    view.replaceChildren(el('div', { class: 'empty error' }, err.message));
+    if (!silent) view.replaceChildren(el('div', { class: 'empty error' }, err.message));
+  }
+}
+
+// ---- Auto-refresh ---------------------------------------------------------
+let autoTimer = null;
+function setAutoRefresh(on) {
+  if (autoTimer) { clearInterval(autoTimer); autoTimer = null; }
+  if (on) {
+    autoTimer = setInterval(() => {
+      // Don't disrupt an open editing modal; refresh quietly otherwise.
+      if (token && !modalOpen()) render({ silent: true });
+    }, 5000);
   }
 }
 
@@ -339,8 +456,9 @@ $('#login-form').addEventListener('submit', async (e) => {
   try { await login($('#email').value, $('#password').value); render(); }
   catch (err) { $('#login-error').textContent = err.message; }
 });
-$('#logout').addEventListener('click', logout);
-$('#refresh').addEventListener('click', render);
+$('#logout').addEventListener('click', () => { setAutoRefresh(false); $('#autorefresh').checked = false; logout(); });
+$('#refresh').addEventListener('click', () => render());
+$('#autorefresh').addEventListener('change', (e) => setAutoRefresh(e.target.checked));
 for (const b of document.querySelectorAll('.tabs button')) {
   b.addEventListener('click', () => { currentView = b.dataset.view; render(); });
 }

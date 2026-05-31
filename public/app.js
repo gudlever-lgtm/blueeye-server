@@ -478,6 +478,10 @@ views.locations = async () => {
 function showLocationTraffic(l) {
   const card = $('#modal-card');
   let timer = null;
+  // Rolling time series of the location's summed rate, built while the panel is
+  // open (max 60 points = 3 min at the 3s poll interval).
+  const history = [];
+  const MAX_POINTS = 60;
   const stop = () => { if (timer) { clearInterval(timer); timer = null; } };
   const close = () => { stop(); closeModal(); };
 
@@ -493,6 +497,9 @@ function showLocationTraffic(l) {
       stop();
       return;
     }
+    history.push({ rx: data.totals.rxBytesPerSec || 0, tx: data.totals.txBytesPerSec || 0 });
+    if (history.length > MAX_POINTS) history.shift();
+
     const rows = data.agents.map((a) => el('tr', {},
       el('td', {}, a.displayName || a.hostname),
       el('td', {}, el('span', { class: `badge ${a.status}` }, a.status)),
@@ -507,12 +514,15 @@ function showLocationTraffic(l) {
         stat('Rapporterer', String(data.reportingCount)),
         stat('RX i alt', `${fmtBytes(data.totals.rxBytesPerSec)}/s`),
         stat('TX i alt', `${fmtBytes(data.totals.txBytesPerSec)}/s`)),
+      history.length >= 2
+        ? trafficChart(history)
+        : el('p', { class: 'muted' }, 'Samler datapunkter til grafen…'),
       data.agents.length
         ? el('table', {},
             el('thead', {}, el('tr', {}, ...['Agent', 'Status', 'RX/s', 'TX/s', 'Sidst'].map((h) => el('th', {}, h)))),
             el('tbody', {}, ...rows))
         : el('div', { class: 'empty' }, 'Ingen agenter i denne lokation.'),
-      el('p', { class: 'muted' }, `Opdateret ${fmtDate(data.at)} · auto hvert 3. sek.`),
+      el('p', { class: 'muted' }, `Opdateret ${fmtDate(data.at)} · auto hvert 3. sek. · graf: seneste ${history.length} målinger`),
       el('div', { class: 'form-actions' }, el('button', { class: 'ghost', onclick: close }, 'Luk')));
   }
 

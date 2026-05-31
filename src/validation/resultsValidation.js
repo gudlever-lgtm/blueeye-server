@@ -37,4 +37,40 @@ function validateResults(body) {
   return { value: { results: input.results } };
 }
 
-module.exports = { validateResults };
+const MAX_RANGE_LIMIT = 5000;
+
+// Validates the time-range query for history lookups: ?from=&to=&limit=.
+// from/to are ISO date strings (optional); limit is a positive integer capped
+// at MAX_RANGE_LIMIT. Returns { value: { from, to, limit } } or { errors }.
+function validateTimeRange(query) {
+  const q = query && typeof query === 'object' ? query : {};
+  const errors = {};
+  const value = { from: null, to: null, limit: 1000 };
+
+  for (const key of ['from', 'to']) {
+    if (q[key] === undefined || q[key] === null || q[key] === '') continue;
+    const d = new Date(q[key]);
+    if (Number.isNaN(d.getTime())) {
+      errors[key] = `${key} must be a valid date`;
+    } else {
+      value[key] = d;
+    }
+  }
+
+  if (value.from && value.to && value.from.getTime() > value.to.getTime()) {
+    errors.range = 'from must be before to';
+  }
+
+  if (q.limit !== undefined && q.limit !== null && q.limit !== '') {
+    const n = Number(q.limit);
+    if (!Number.isInteger(n) || n <= 0 || n > MAX_RANGE_LIMIT) {
+      errors.limit = `limit must be an integer between 1 and ${MAX_RANGE_LIMIT}`;
+    } else {
+      value.limit = n;
+    }
+  }
+
+  return Object.keys(errors).length > 0 ? { errors } : { value };
+}
+
+module.exports = { validateResults, validateTimeRange };

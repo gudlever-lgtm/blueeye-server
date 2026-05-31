@@ -48,4 +48,6 @@ test('dashboard exposes users tab, auto-refresh and traffic chart', async () => 
   assert.match(js, /PAGE_INFO/); // per-page hero/info content
   assert.match(js, /refreshLicense/); // "Genvalidér nu" on the license page
   assert.match(js, /\/license\/refresh/); // calls the refresh endpoint
+  assert.match(js, /showLocationHistory/); // historical traffic between dates
+  assert.match(js, /traffic\/history/); // calls the history endpoint
 });

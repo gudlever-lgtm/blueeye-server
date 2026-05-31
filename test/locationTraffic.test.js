@@ -84,3 +84,63 @@ test('GET /locations (list) still works alongside the traffic route', async () =
   assert.equal(res.status, 200);
   assert.deepEqual(res.body, [{ id: 1, name: 'X' }]);
 });
+
+// ------------------------------- GET /locations/:id/traffic/history (range) ---
+const historyRows = [
+  { agent_id: 1, hostname: 'a1', display_name: null, created_at: '2026-05-31T10:00:00.000Z',
+    payload: { traffic: { totals: { rxBytesPerSec: 10, txBytesPerSec: 20 } } } },
+  { agent_id: 2, hostname: 'a2', display_name: null, created_at: '2026-05-31T10:00:00.000Z',
+    payload: { traffic: { totals: { rxBytesPerSec: 5, txBytesPerSec: 7 } } } },
+  { agent_id: 1, hostname: 'a1', display_name: null, created_at: '2026-05-31T10:01:00.000Z',
+    payload: { traffic: { totals: { rxBytesPerSec: 30, txBytesPerSec: 40 } } } },
+];
+
+test('GET /locations/:id/traffic/history returns a summed series over the range', async () => {
+  let receivedRange;
+  const app = makeApp({
+    locationsRepo: makeLocationsRepo({ findById: async () => ({ id: 2, name: 'Aarhus' }) }),
+    resultsRepo: makeResultsRepo({
+      rangeByLocation: async (id, range) => { receivedRange = range; return historyRows; },
+    }),
+  });
+  const res = await request(app)
+    .get('/locations/2/traffic/history?from=2026-05-31T10:00:00Z&to=2026-05-31T11:00:00Z')
+    .set('Authorization', viewer());
+
+  assert.equal(res.status, 200);
+  assert.equal(res.body.count, 3);
+  // Two distinct timestamps -> two buckets; the first sums both agents.
+  assert.equal(res.body.series.length, 2);
+  assert.equal(res.body.series[0].rxBytesPerSec, 15); // 10 + 5
+  assert.equal(res.body.series[0].txBytesPerSec, 27); // 20 + 7
+  assert.equal(res.body.series[1].rxBytesPerSec, 30);
+  // The parsed range was passed to the repo.
+  assert.ok(receivedRange.from instanceof Date && receivedRange.to instanceof Date);
+});
+
+test('GET /locations/:id/traffic/history returns 400 for an invalid date', async () => {
+  const app = makeApp({ locationsRepo: makeLocationsRepo({ findById: async () => ({ id: 2, name: 'A' }) }) });
+  const res = await request(app)
+    .get('/locations/2/traffic/history?from=not-a-date')
+    .set('Authorization', viewer());
+  assert.equal(res.status, 400);
+});
+
+test('GET /locations/:id/traffic/history returns 400 when from is after to', async () => {
+  const app = makeApp({ locationsRepo: makeLocationsRepo({ findById: async () => ({ id: 2, name: 'A' }) }) });
+  const res = await request(app)
+    .get('/locations/2/traffic/history?from=2026-05-31T11:00:00Z&to=2026-05-31T10:00:00Z')
+    .set('Authorization', viewer());
+  assert.equal(res.status, 400);
+});
+
+test('GET /locations/:id/traffic/history returns 404 when the location is missing', async () => {
+  const app = makeApp({ locationsRepo: makeLocationsRepo({ findById: async () => null }) });
+  const res = await request(app).get('/locations/9/traffic/history').set('Authorization', viewer());
+  assert.equal(res.status, 404);
+});
+
+test('GET /locations/:id/traffic/history without a token returns 401', async () => {
+  const res = await request(makeApp()).get('/locations/2/traffic/history');
+  assert.equal(res.status, 401);
+});

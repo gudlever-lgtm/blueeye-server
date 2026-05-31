@@ -110,6 +110,30 @@ test('GET /agents/:id/results returns 200 (viewer)', async () => {
   assert.deepEqual(res.body, rows);
 });
 
+test('GET /agents/:id/results passes a parsed time range to the repo', async () => {
+  let received;
+  const agentsRepo = makeAgentsRepo({ findById: async () => ({ id: 9, hostname: 'h' }) });
+  const resultsRepo = makeResultsRepo({
+    findByAgentId: async (id, range) => { received = { id, range }; return []; },
+  });
+  const res = await request(makeApp({ agentsRepo, resultsRepo }))
+    .get('/agents/9/results?from=2026-05-01T00:00:00Z&to=2026-05-31T00:00:00Z&limit=50')
+    .set('Authorization', authHeader('viewer'));
+
+  assert.equal(res.status, 200);
+  assert.equal(received.id, 9);
+  assert.ok(received.range.from instanceof Date && received.range.to instanceof Date);
+  assert.equal(received.range.limit, 50);
+});
+
+test('GET /agents/:id/results returns 400 for an invalid date range', async () => {
+  const agentsRepo = makeAgentsRepo({ findById: async () => ({ id: 9 }) });
+  const res = await request(makeApp({ agentsRepo }))
+    .get('/agents/9/results?from=garbage')
+    .set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 400);
+});
+
 test('GET /agents/:id/results returns 404 when the agent does not exist', async () => {
   const agentsRepo = makeAgentsRepo({ findById: async () => null });
   const res = await request(makeApp({ agentsRepo }))

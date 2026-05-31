@@ -5,6 +5,7 @@ const { asyncHandler } = require('../middleware/asyncHandler');
 const { requireAuth, requireRole } = require('../auth/middleware');
 const { ROLES } = require('../auth/roles');
 const { validateAgentManagedInput } = require('../validation/agentValidation');
+const { validateTimeRange } = require('../validation/resultsValidation');
 const { parseId } = require('../validation/locationValidation');
 
 // Agents router with role-based access control:
@@ -75,6 +76,7 @@ function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentComma
   );
 
   // GET /agents/:id/results — results reported by the agent. viewer+ (user RBAC).
+  // Optional time range: ?from=&to=&limit= (ISO dates; newest first).
   router.get(
     '/:id/results',
     requireAuth,
@@ -84,11 +86,15 @@ function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentComma
       if (id === null) {
         return res.status(400).json({ error: 'Invalid id' });
       }
+      const { value: range, errors } = validateTimeRange(req.query);
+      if (errors) {
+        return res.status(400).json({ error: 'Validation failed', details: errors });
+      }
       const agent = await agentsRepo.findById(id);
       if (!agent) {
         return res.status(404).json({ error: 'Agent not found' });
       }
-      res.json(await resultsRepo.findByAgentId(id));
+      res.json(await resultsRepo.findByAgentId(id, range));
     })
   );
 

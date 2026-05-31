@@ -27,10 +27,41 @@ function createResultsRepository(db) {
     return result.affectedRows;
   }
 
-  async function findByAgentId(agentId) {
+  // Results for one agent, optionally filtered by a created_at time range.
+  // range = { from, to, limit } (from/to are Date or null). Newest first.
+  async function findByAgentId(agentId, range = {}) {
+    const where = ['agent_id = ?'];
+    const params = [agentId];
+    if (range.from) { where.push('created_at >= ?'); params.push(range.from); }
+    if (range.to) { where.push('created_at <= ?'); params.push(range.to); }
+    const limit = Number.isInteger(range.limit) ? range.limit : 1000;
+    params.push(limit);
     const [rows] = await pool.query(
-      'SELECT id, agent_id, payload, created_at FROM results WHERE agent_id = ? ORDER BY id DESC',
-      [agentId]
+      `SELECT id, agent_id, payload, created_at FROM results
+       WHERE ${where.join(' AND ')} ORDER BY id DESC LIMIT ?`,
+      params
+    );
+    return rows.map((row) => ({ ...row, payload: parsePayload(row.payload) }));
+  }
+
+  // All results for the agents in a location within a time range (oldest first,
+  // so the caller can build a chronological series). Joins the agent so each row
+  // knows which agent it belongs to.
+  async function rangeByLocation(locationId, range = {}) {
+    const where = ['a.location_id = ?'];
+    const params = [locationId];
+    if (range.from) { where.push('r.created_at >= ?'); params.push(range.from); }
+    if (range.to) { where.push('r.created_at <= ?'); params.push(range.to); }
+    const limit = Number.isInteger(range.limit) ? range.limit : 5000;
+    params.push(limit);
+    const [rows] = await pool.query(
+      `SELECT r.id, r.agent_id, a.hostname, a.display_name, r.payload, r.created_at
+       FROM results r
+       JOIN agents a ON a.id = r.agent_id
+       WHERE ${where.join(' AND ')}
+       ORDER BY r.created_at ASC, r.id ASC
+       LIMIT ?`,
+      params
     );
     return rows.map((row) => ({ ...row, payload: parsePayload(row.payload) }));
   }
@@ -56,7 +87,7 @@ function createResultsRepository(db) {
     return rows.map((row) => ({ ...row, payload: parsePayload(row.payload) }));
   }
 
-  return { createMany, findByAgentId, latestByLocation };
+  return { createMany, findByAgentId, latestByLocation, rangeByLocation };
 }
 
 module.exports = { createResultsRepository };

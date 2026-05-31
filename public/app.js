@@ -467,6 +467,7 @@ views.locations = async () => {
       el('td', { class: 'muted' }, l.description || '–'),
       el('td', {}, el('div', { class: 'row-actions' },
         el('button', { class: 'small ghost', onclick: () => showLocationTraffic(l) }, 'Trafik'),
+        el('button', { class: 'small ghost', onclick: () => showLocationHistory(l) }, 'Historik'),
         canWrite() ? el('button', { class: 'small ghost', onclick: () => editLocation(l) }, 'Rediger') : null,
         canDelete() ? el('button', { class: 'small danger', onclick: () => deleteLocation(l) }, 'Slet') : null)),
     )))));
@@ -534,6 +535,72 @@ function showLocationTraffic(l) {
   modal.addEventListener('click', onModalClick);
   tick();
   timer = setInterval(tick, 3000);
+}
+
+// Historical traffic for a location between two dates/times: pick from/to, see a
+// summed RX/TX graph + a per-measurement table for the range.
+function showLocationHistory(l) {
+  const card = $('#modal-card');
+  // Default range: last 24h.
+  const now = new Date();
+  const from = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+  const fromInput = el('input', { type: 'datetime-local', value: toLocalInput(from) });
+  const toInput = el('input', { type: 'datetime-local', value: toLocalInput(now) });
+  const result = el('div', {});
+
+  async function load() {
+    result.replaceChildren(el('div', { class: 'empty' }, 'Henter…'));
+    const qs = new URLSearchParams();
+    const f = fromLocalInput(fromInput.value);
+    const t = fromLocalInput(toInput.value);
+    if (f) qs.set('from', f);
+    if (t) qs.set('to', t);
+    let data;
+    try {
+      data = await api(`/locations/${l.id}/traffic/history?${qs.toString()}`);
+    } catch (err) {
+      result.replaceChildren(el('p', { class: 'error' }, err.message));
+      return;
+    }
+    const series = data.series.map((p) => ({ rx: p.rxBytesPerSec, tx: p.txBytesPerSec }));
+    const rows = data.points.slice(0, 200).map((p) => el('tr', {},
+      el('td', { class: 'muted' }, fmtDate(p.at)),
+      el('td', {}, p.hostname),
+      el('td', {}, `${fmtBytes(p.rxBytesPerSec)}/s`),
+      el('td', {}, `${fmtBytes(p.txBytesPerSec)}/s`),
+    ));
+    result.replaceChildren(
+      el('p', { class: 'muted' }, `${data.count} målinger · ${data.series.length} tidspunkter`),
+      series.length >= 2 ? trafficChart(series) : el('p', { class: 'muted' }, 'For få datapunkter til en graf i dette interval.'),
+      data.points.length
+        ? el('table', {},
+            el('thead', {}, el('tr', {}, ...['Tidspunkt', 'Agent', 'RX/s', 'TX/s'].map((h) => el('th', {}, h)))),
+            el('tbody', {}, ...rows))
+        : el('div', { class: 'empty' }, 'Ingen data i intervallet.'));
+  }
+
+  card.replaceChildren(
+    el('h3', {}, `Historik — ${esc(l.name)}`),
+    el('div', { class: 'form-grid' },
+      el('label', {}, 'Fra', fromInput),
+      el('label', {}, 'Til', toInput),
+      el('div', { class: 'form-actions' },
+        el('button', { onclick: load }, 'Søg'),
+        el('button', { class: 'ghost', onclick: closeModal }, 'Luk'))),
+    result);
+  $('#modal').classList.remove('hidden');
+  load();
+}
+
+// datetime-local helpers (local time <-> ISO).
+function toLocalInput(d) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+function fromLocalInput(v) {
+  if (!v || !v.trim()) return null;
+  const d = new Date(v);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
 }
 
 function editLocation(l) {

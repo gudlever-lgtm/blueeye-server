@@ -22,6 +22,23 @@ function createLicenseRouter({ licenseManager }) {
     })
   );
 
+  // POST /license/refresh — force an immediate re-validation against the license
+  // server (operator/admin), e.g. right after the licence was renewed there, so
+  // staff don't have to wait for the periodic 6-hour check. Returns the fresh
+  // status. Never throws out — validateOnce() handles its own errors.
+  router.post(
+    '/refresh',
+    requireAuth,
+    requireRole(ROLES.OPERATOR, ROLES.ADMIN),
+    asyncHandler(async (req, res) => {
+      if (!licenseManager) {
+        return res.status(503).json({ error: 'License manager not available' });
+      }
+      const status = await licenseManager.validateOnce();
+      res.json(status);
+    })
+  );
+
   return router;
 }
 

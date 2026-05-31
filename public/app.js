@@ -645,7 +645,9 @@ async function deleteUser(u) {
 views.license = async () => {
   const s = await api('/license/status');
   const root = el('div');
-  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Licensstatus')));
+  root.append(el('div', { class: 'section-head' },
+    el('h2', {}, 'Licensstatus'),
+    canWrite() ? el('button', { class: 'small', onclick: refreshLicense }, 'Genvalidér nu') : null));
   root.append(el('div', { class: 'cards' },
     stat('Status', el('span', { class: `badge ${s.status}` }, s.status)),
     stat('Licenseret', s.licensed ? 'Ja' : 'Nej'),
@@ -655,8 +657,17 @@ views.license = async () => {
     stat('Grace udløber', fmtDate(s.graceUntil)),
   ));
   if (s.reason) root.append(el('p', { class: 'muted' }, `Note: ${s.reason}`));
+  root.append(el('p', { class: 'muted' }, 'Fornyelse af licensen sker hos udbyderen. Når den er forlænget, tryk "Genvalidér nu" for at hente den opdaterede status med det samme (ellers tjekkes der automatisk hver 6. time).'));
   return root;
 };
+
+async function refreshLicense() {
+  try {
+    const s = await api('/license/refresh', { method: 'POST' });
+    toast(`Genvalideret: ${s.status}`);
+    render();
+  } catch (err) { toast(err.message, true); }
+}
 function stat(k, v) {
   return el('div', { class: 'stat' }, el('div', { class: 'k' }, k), el('div', { class: 'v' }, v));
 }

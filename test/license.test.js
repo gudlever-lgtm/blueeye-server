@@ -26,3 +26,29 @@ test('GET /license/status without a token returns 401', async () => {
   const res = await request(makeApp()).get('/license/status');
   assert.equal(res.status, 401);
 });
+
+test('POST /license/refresh re-validates and returns fresh status (operator)', async () => {
+  let called = 0;
+  const licenseManager = makeLicenseManager({
+    validateOnce: async () => { called += 1; return { status: 'valid', licensed: true, maxAgents: 50, serverId: 'srv-1' }; },
+  });
+  const res = await request(makeApp({ licenseManager }))
+    .post('/license/refresh')
+    .set('Authorization', authHeader('operator'));
+
+  assert.equal(res.status, 200);
+  assert.equal(called, 1); // forced an immediate re-validation
+  assert.equal(res.body.maxAgents, 50);
+});
+
+test('POST /license/refresh is forbidden for a viewer (403)', async () => {
+  const res = await request(makeApp())
+    .post('/license/refresh')
+    .set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 403);
+});
+
+test('POST /license/refresh without a token returns 401', async () => {
+  const res = await request(makeApp()).post('/license/refresh');
+  assert.equal(res.status, 401);
+});

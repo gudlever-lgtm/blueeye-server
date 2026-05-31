@@ -130,13 +130,13 @@ function makeAgentCommander(overrides = {}) {
 
 // A fake license manager (defaults to a healthy, generous license).
 function makeLicenseManager(overrides = {}) {
+  const status = () => ({ status: 'valid', licensed: true, maxAgents: 1000, serverId: 'test-server' });
   return {
     isLicensed: overrides.isLicensed || (() => true),
     getMaxAgents: overrides.getMaxAgents || (() => 1000),
     canAcceptNewConnection: overrides.canAcceptNewConnection || (() => true),
-    getStatus:
-      overrides.getStatus ||
-      (() => ({ status: 'valid', licensed: true, maxAgents: 1000, serverId: 'test-server' })),
+    getStatus: overrides.getStatus || status,
+    validateOnce: overrides.validateOnce || (async () => (overrides.getStatus || status)()),
   };
 }
 

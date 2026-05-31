@@ -136,8 +136,12 @@ host/VM — it does **not** have to run on the network device.
   and IPFIX** — so you get **per-port / per-protocol** traffic and can search it.
   Vendor-neutral: NetFlow v5/v9 (Cisco), IPFIX (Juniper/Huawei, the IETF
   standard); the collector auto-detects the version (v9/IPFIX templates are
-  learned from the exporter). sFlow (Arista/HPE) can be added behind the same
-  source later.
+  learned from the exporter). Default UDP port 2055.
+- **`sflow`** — a built-in UDP collector for **sFlow v5** sampled exports
+  (Arista, HPE, and many switches). sFlow samples 1-in-N packets; the agent
+  decodes each sampled header and scales by the sampling rate, producing the
+  same per-port/per-protocol data you can search. Default UDP port 6343. Set a
+  representative sampling rate on the device for good accuracy.
 
 #### Enabling NetFlow
 

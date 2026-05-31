@@ -42,7 +42,7 @@ function createApiRouter({
   router.use('/health', createHealthRouter({ db }));
   router.use('/auth', createAuthRouter({ usersRepo }));
   router.use('/users', createUsersRouter({ usersRepo }));
-  router.use('/locations', createLocationsRouter({ locationsRepo }));
+  router.use('/locations', createLocationsRouter({ locationsRepo, resultsRepo }));
   router.use('/license', createLicenseRouter({ licenseManager }));
   router.use('/enrollment-codes', createEnrollmentCodesRouter({ enrollmentCodesRepo, locationsRepo }));
 

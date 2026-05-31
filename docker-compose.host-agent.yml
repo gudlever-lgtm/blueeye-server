@@ -1,0 +1,21 @@
+# Host-network agent override — makes the agent measure the HOST's traffic.
+#
+# By default the agent container has its own network namespace, so /proc/net/dev
+# only shows the container's interfaces (almost no traffic). With host networking
+# the agent shares the host's namespace and sees the real interfaces (eth0/ens..).
+#
+# Usage (Linux hosts only — host networking is a no-op on Docker Desktop):
+#   docker compose -f docker-compose.yml -f docker-compose.host-agent.yml up -d
+#
+# Or copy it to the auto-loaded override file:
+#   cp docker-compose.host-agent.yml docker-compose.override.yml
+#   docker compose up -d
+#
+# Note: with host networking the agent leaves the compose network, so it can no
+# longer reach the server as `http://server:3000` — it uses the published port on
+# localhost instead. Adjust the port if you changed SERVER_HOST_PORT.
+services:
+  agent:
+    network_mode: host
+    environment:
+      BLUEEYE_SERVER_URL: http://localhost:3000

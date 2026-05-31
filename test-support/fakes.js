@@ -80,6 +80,7 @@ function makeResultsRepo(overrides = {}) {
   return {
     createMany: overrides.createMany || (async () => 0),
     findByAgentId: overrides.findByAgentId || (async () => []),
+    latestByLocation: overrides.latestByLocation || (async () => []),
   };
 }
 

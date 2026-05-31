@@ -310,11 +310,65 @@ views.locations = async () => {
       el('td', {}, l.name),
       el('td', { class: 'muted' }, l.description || '–'),
       el('td', {}, el('div', { class: 'row-actions' },
+        el('button', { class: 'small ghost', onclick: () => showLocationTraffic(l) }, 'Trafik'),
         canWrite() ? el('button', { class: 'small ghost', onclick: () => editLocation(l) }, 'Rediger') : null,
         canDelete() ? el('button', { class: 'small danger', onclick: () => deleteLocation(l) }, 'Slet') : null)),
     )))));
   return root;
 };
+
+// Live, correlated traffic for all agents in a location. Polls every 3s while
+// the panel is open; stops cleanly on close.
+function showLocationTraffic(l) {
+  const card = $('#modal-card');
+  let timer = null;
+  const stop = () => { if (timer) { clearInterval(timer); timer = null; } };
+  const close = () => { stop(); closeModal(); };
+
+  async function tick() {
+    let data;
+    try {
+      data = await api(`/locations/${l.id}/traffic`);
+    } catch (err) {
+      card.replaceChildren(
+        el('h3', {}, `Trafik — ${esc(l.name)}`),
+        el('p', { class: 'error' }, err.message),
+        el('div', { class: 'form-actions' }, el('button', { class: 'ghost', onclick: close }, 'Luk')));
+      stop();
+      return;
+    }
+    const rows = data.agents.map((a) => el('tr', {},
+      el('td', {}, a.displayName || a.hostname),
+      el('td', {}, el('span', { class: `badge ${a.status}` }, a.status)),
+      el('td', {}, a.rxBytesPerSec == null ? '–' : `${fmtBytes(a.rxBytesPerSec)}/s`),
+      el('td', {}, a.txBytesPerSec == null ? '–' : `${fmtBytes(a.txBytesPerSec)}/s`),
+      el('td', { class: 'muted' }, a.at ? fmtDate(a.at) : '–'),
+    ));
+    card.replaceChildren(
+      el('h3', {}, `Trafik — ${esc(l.name)}`),
+      el('div', { class: 'cards' },
+        stat('Agenter', String(data.agentCount)),
+        stat('Rapporterer', String(data.reportingCount)),
+        stat('RX i alt', `${fmtBytes(data.totals.rxBytesPerSec)}/s`),
+        stat('TX i alt', `${fmtBytes(data.totals.txBytesPerSec)}/s`)),
+      data.agents.length
+        ? el('table', {},
+            el('thead', {}, el('tr', {}, ...['Agent', 'Status', 'RX/s', 'TX/s', 'Sidst'].map((h) => el('th', {}, h)))),
+            el('tbody', {}, ...rows))
+        : el('div', { class: 'empty' }, 'Ingen agenter i denne lokation.'),
+      el('p', { class: 'muted' }, `Opdateret ${fmtDate(data.at)} · auto hvert 3. sek.`),
+      el('div', { class: 'form-actions' }, el('button', { class: 'ghost', onclick: close }, 'Luk')));
+  }
+
+  card.replaceChildren(el('h3', {}, `Trafik — ${esc(l.name)}`), el('div', { class: 'empty' }, 'Indlæser…'));
+  $('#modal').classList.remove('hidden');
+  // Stop polling if the modal is dismissed by backdrop click / Escape path.
+  const modal = $('#modal');
+  const onModalClick = (e) => { if (e.target.id === 'modal') { stop(); modal.removeEventListener('click', onModalClick); } };
+  modal.addEventListener('click', onModalClick);
+  tick();
+  timer = setInterval(tick, 3000);
+}
 
 function editLocation(l) {
   openModal(l ? `Rediger lokation ${l.id}` : 'Ny lokation', [

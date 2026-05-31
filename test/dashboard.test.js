@@ -40,4 +40,6 @@ test('dashboard exposes users tab, auto-refresh and traffic chart', async () => 
   assert.match(js, /setAutoRefresh/); // auto-refresh logic
   assert.match(js, /agentSourceCell/); // per-agent traffic source
   assert.match(js, /monitor_config/); // source selection sent to the API
+  assert.match(js, /showLocationTraffic/); // live per-location correlated traffic
+  assert.match(js, /\/traffic/); // calls the location traffic endpoint
 });

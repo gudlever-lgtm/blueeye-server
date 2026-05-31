@@ -35,7 +35,28 @@ function createResultsRepository(db) {
     return rows.map((row) => ({ ...row, payload: parsePayload(row.payload) }));
   }
 
-  return { createMany, findByAgentId };
+  // Returns the LATEST result per agent for every agent in the given location
+  // (agents with no results yet are included with payload = null), so the
+  // caller can correlate current traffic across a location.
+  async function latestByLocation(locationId) {
+    const [rows] = await pool.query(
+      `SELECT a.id AS agent_id, a.hostname, a.display_name, a.status,
+              r.id AS result_id, r.payload, r.created_at
+       FROM agents a
+       LEFT JOIN (
+         SELECT t.agent_id, t.id, t.payload, t.created_at
+         FROM results t
+         JOIN (SELECT agent_id, MAX(id) AS max_id FROM results GROUP BY agent_id) m
+           ON m.max_id = t.id
+       ) r ON r.agent_id = a.id
+       WHERE a.location_id = ?
+       ORDER BY a.id`,
+      [locationId]
+    );
+    return rows.map((row) => ({ ...row, payload: parsePayload(row.payload) }));
+  }
+
+  return { createMany, findByAgentId, latestByLocation };
 }
 
 module.exports = { createResultsRepository };

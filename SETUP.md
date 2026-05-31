@@ -119,15 +119,43 @@ stores an opaque token (0600), and clears the code. It then opens a WebSocket an
 reports traffic on the interval. It appears under **Agenter** with status/health
 and "senest rapporteret".
 
-### Where the agent runs (traffic source)
+### Traffic sources (vendor-neutral)
 
-- **On a Linux host / VM:** measures the host's interfaces from `/proc/net/dev`.
-  In Docker, run with host networking to see the host's traffic — see
-  [docker-compose.host-agent.yml](docker-compose.host-agent.yml).
-- **On a Cisco device (or any host without `/proc`):** use the **SNMP** source.
-  In the dashboard → **Agenter** → **Rediger**, set the traffic source to `snmp`
-  with the device host/community. The agent reports its capabilities
-  (`proc`/`snmp`), and the server assigns the source per agent.
+The agent reports which sources it supports; you assign one per agent in the
+dashboard (**Agenter → Rediger → Trafik-kilde**). The agent runs on a Linux
+host/VM — it does **not** have to run on the network device.
+
+- **`proc`** — local interface bytes from `/proc/net/dev`. For the *host's* own
+  traffic. In Docker, use host networking
+  ([docker-compose.host-agent.yml](docker-compose.host-agent.yml)).
+- **`snmp`** — polls a device's interface counters over SNMP. Works against
+  almost any vendor (Cisco, Juniper, Arista, HPE, MikroTik, Fortinet, …). Set
+  the device host/community in the edit form. Interface-level totals only (no
+  per-port).
+- **`netflow`** — a built-in UDP collector for **NetFlow v5** flow exports, so
+  you get **per-port / per-protocol** traffic and can search it. Vendor-neutral:
+  NetFlow (Cisco), and the same source is the path for v9/IPFIX (Juniper/Huawei)
+  and sFlow (Arista/HPE) later.
+
+#### Enabling NetFlow
+
+1. In the dashboard, set the agent's source to `netflow` (optionally a UDP port;
+   default 2055).
+2. On the **network device**, enable flow export to the agent's IP and that
+   port. Example (Cisco IOS, classic NetFlow v5):
+   ```
+   ip flow-export version 5
+   ip flow-export destination <agent-ip> 2055
+   interface GigabitEthernet0/0
+     ip flow ingress
+     ip flow egress
+   ```
+   (Juniper/Arista/etc. have equivalent flow/sFlow export config.)
+3. The agent must be able to receive UDP on that port (host networking or an
+   exposed UDP port if containerised).
+4. Search in the dashboard: **Agenter → Flows** → filter by port (e.g. `443`)
+   and/or protocol (`tcp`/`udp`) over a time range. You can also query
+   `GET /agents/:id/flows?port=443&protocol=tcp&from=&to=` directly.
 
 ---
 

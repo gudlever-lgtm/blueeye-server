@@ -59,6 +59,8 @@ function makeAgentsRepo(overrides = {}) {
     findById: overrides.findById || (async () => null),
     updateManaged:
       overrides.updateManaged || (async (id, patch) => ({ id, ...patch })),
+    setCapabilities:
+      overrides.setCapabilities || (async (id, capabilities) => ({ id, capabilities })),
     remove: overrides.remove || (async () => false),
     setStatus: overrides.setStatus || (async () => {}),
     touchLastSeen: overrides.touchLastSeen || (async () => {}),

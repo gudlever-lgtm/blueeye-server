@@ -137,6 +137,7 @@ views.agents = async () => {
     el('td', {}, `${a.platform} / ${a.arch}`),
     el('td', {}, el('span', { class: `badge ${a.status}` }, a.status)),
     el('td', {}, a.location_name || '–'),
+    el('td', {}, agentSourceCell(a)),
     el('td', { class: 'muted' }, fmtDate(a.last_seen)),
     el('td', {}, el('div', { class: 'row-actions' },
       el('button', { class: 'small ghost', onclick: () => showResults(a) }, 'Trafik'),
@@ -146,7 +147,7 @@ views.agents = async () => {
     )),
   ));
   root.append(el('table', {},
-    el('thead', {}, el('tr', {}, ...['ID', 'Navn / hostname', 'Platform', 'Status', 'Lokation', 'Sidst set', ''].map((h) => el('th', {}, h)))),
+    el('thead', {}, el('tr', {}, ...['ID', 'Navn / hostname', 'Platform', 'Status', 'Lokation', 'Kilde', 'Sidst set', ''].map((h) => el('th', {}, h)))),
     el('tbody', {}, ...rows)));
   return root;
 };
@@ -235,18 +236,56 @@ function trafficChart(series) {
       el('span', {}, el('span', { class: 'dot tx' }), `TX (maks ${fmtBytes(max)}/s)`)));
 }
 
+// Cell showing the selected traffic source + what the agent reports it can do.
+function agentSourceCell(a) {
+  const mc = a.monitor_config || {};
+  const source = mc.source || 'proc';
+  const caps = a.capabilities && Array.isArray(a.capabilities.sources) ? a.capabilities.sources : null;
+  const detail = source === 'snmp' && mc.snmp ? ` (${mc.snmp.host})` : '';
+  return el('div', {},
+    el('span', { class: 'badge' }, source + detail),
+    caps ? el('div', { class: 'muted', title: 'Agentens muligheder' }, `kan: ${caps.join(', ')}`) : null);
+}
+
 function editAgent(a) {
+  const mc = a.monitor_config || {};
+  const snmp = mc.snmp || {};
+  const caps = a.capabilities && Array.isArray(a.capabilities.sources) ? a.capabilities.sources : [];
+  // Only offer sources the agent says it supports (fall back to both if unknown).
+  const sourceOptions = (caps.length ? caps : ['proc', 'snmp']).map((s) => ({ value: s, label: s }));
   openModal(`Rediger agent ${a.id}`, [
     { name: 'display_name', label: 'Visningsnavn', value: a.display_name || '' },
     { name: 'location_id', label: 'Lokation', type: 'select', value: a.location_id ? String(a.location_id) : '',
       options: [{ value: '', label: '(ingen)' }, ...locationCache.map((l) => ({ value: String(l.id), label: l.name }))] },
     { name: 'notes', label: 'Noter', type: 'textarea', value: a.notes || '' },
+    { name: 'source', label: 'Trafik-kilde', type: 'select', value: mc.source || 'proc', options: sourceOptions },
+    { name: 'snmp_host', label: 'SNMP host (kun ved snmp)', value: snmp.host || '' },
+    { name: 'snmp_community', label: 'SNMP community', value: snmp.community || 'public' },
+    { name: 'snmp_version', label: 'SNMP version', type: 'select', value: snmp.version || '2c',
+      options: ['1', '2c'].map((s) => ({ value: s, label: s })) },
+    { name: 'snmp_port', label: 'SNMP port', type: 'number', value: String(snmp.port || 161) },
   ], async (v) => {
+    let monitor_config = null;
+    if (v.source === 'snmp') {
+      if (!v.snmp_host.trim()) throw new Error('SNMP host er påkrævet ved kilde "snmp"');
+      monitor_config = {
+        source: 'snmp',
+        snmp: {
+          host: v.snmp_host.trim(),
+          community: v.snmp_community || 'public',
+          version: v.snmp_version,
+          port: Number(v.snmp_port) || 161,
+        },
+      };
+    } else if (v.source === 'proc') {
+      monitor_config = { source: 'proc' };
+    }
     await api(`/agents/${a.id}`, { method: 'PUT', body: {
       display_name: v.display_name || null,
       location_id: v.location_id ? Number(v.location_id) : null,
       notes: v.notes || null,
       meta: a.meta || null,
+      monitor_config,
     } });
     toast('Agent opdateret'); render();
   });

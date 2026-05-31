@@ -38,4 +38,6 @@ test('dashboard exposes users tab, auto-refresh and traffic chart', async () => 
   assert.match(js, /views\.users/); // user-admin view
   assert.match(js, /trafficChart/); // traffic-over-time chart
   assert.match(js, /setAutoRefresh/); // auto-refresh logic
+  assert.match(js, /agentSourceCell/); // per-agent traffic source
+  assert.match(js, /monitor_config/); // source selection sent to the API
 });

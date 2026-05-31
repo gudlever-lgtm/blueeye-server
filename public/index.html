@@ -26,9 +26,13 @@
           <button data-view="agents" class="active">Agenter</button>
           <button data-view="locations">Lokationer</button>
           <button data-view="enrollment">Enrollment</button>
+          <button data-view="users" data-admin="1">Brugere</button>
           <button data-view="license">Licens</button>
         </nav>
         <span class="spacer"></span>
+        <label class="autorefresh muted" title="Auto-opdatér hvert 5. sekund">
+          <input type="checkbox" id="autorefresh" /> Auto
+        </label>
         <span id="whoami" class="muted"></span>
         <button id="refresh" class="ghost" title="Opdatér">⟳</button>
         <button id="logout" class="ghost">Log ud</button>

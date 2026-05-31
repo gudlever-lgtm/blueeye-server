@@ -132,25 +132,30 @@ host/VM — it does **not** have to run on the network device.
   almost any vendor (Cisco, Juniper, Arista, HPE, MikroTik, Fortinet, …). Set
   the device host/community in the edit form. Interface-level totals only (no
   per-port).
-- **`netflow`** — a built-in UDP collector for **NetFlow v5** flow exports, so
-  you get **per-port / per-protocol** traffic and can search it. Vendor-neutral:
-  NetFlow (Cisco), and the same source is the path for v9/IPFIX (Juniper/Huawei)
-  and sFlow (Arista/HPE) later.
+- **`netflow`** — a built-in UDP collector for flow exports — **NetFlow v5, v9
+  and IPFIX** — so you get **per-port / per-protocol** traffic and can search it.
+  Vendor-neutral: NetFlow v5/v9 (Cisco), IPFIX (Juniper/Huawei, the IETF
+  standard); the collector auto-detects the version (v9/IPFIX templates are
+  learned from the exporter). sFlow (Arista/HPE) can be added behind the same
+  source later.
 
 #### Enabling NetFlow
 
 1. In the dashboard, set the agent's source to `netflow` (optionally a UDP port;
    default 2055).
 2. On the **network device**, enable flow export to the agent's IP and that
-   port. Example (Cisco IOS, classic NetFlow v5):
+   port. The collector auto-detects v5 / v9 / IPFIX. Example (Cisco IOS, classic
+   NetFlow):
    ```
-   ip flow-export version 5
+   ip flow-export version 9          ! or 5
    ip flow-export destination <agent-ip> 2055
    interface GigabitEthernet0/0
      ip flow ingress
      ip flow egress
    ```
-   (Juniper/Arista/etc. have equivalent flow/sFlow export config.)
+   IPFIX (e.g. Cisco Flexible NetFlow / Juniper) exports work too. For v9/IPFIX
+   the device periodically resends templates; flow data is decoded once a
+   template has been seen.
 3. The agent must be able to receive UDP on that port (host networking or an
    exposed UDP port if containerised).
 4. Search in the dashboard: **Agenter → Flows** → filter by port (e.g. `443`)

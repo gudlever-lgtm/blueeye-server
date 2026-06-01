@@ -72,7 +72,22 @@ function createSystemInfo({ db, diskPath = '/data', statfs = fs.statfs } = {}) {
     };
   }
 
-  // Both, with the database part being resilient (errors surface as { error }).
+  // Recent ingest: rows + stored payload bytes in the last `minutes` — i.e. how
+  // much the measurements/traffic just written are growing storage. Used to
+  // estimate space consumption + time-to-full.
+  async function getIngest(minutes = 3) {
+    const [rows] = await db.pool.query(
+      'SELECT COUNT(*) AS c, COALESCE(SUM(LENGTH(payload)), 0) AS bytes FROM results WHERE created_at >= (NOW() - INTERVAL ? MINUTE)',
+      [minutes]
+    );
+    const r = rows[0] || {};
+    const bytes = Number(r.bytes) || 0;
+    const mins = minutes > 0 ? minutes : 1;
+    return { minutes, rows: Number(r.c) || 0, bytes, bytesPerDay: Math.round((bytes / mins) * 1440) };
+  }
+
+  // Both, with the database + ingest parts being resilient (errors don't break
+  // the disk reading).
   async function getStorage() {
     const disk = await getDisk();
     let database;
@@ -81,10 +96,16 @@ function createSystemInfo({ db, diskPath = '/data', statfs = fs.statfs } = {}) {
     } catch (err) {
       database = { available: false, error: err.message };
     }
-    return { at: new Date().toISOString(), disk, database };
+    let ingest = null;
+    try {
+      ingest = await getIngest(3);
+    } catch {
+      ingest = null;
+    }
+    return { at: new Date().toISOString(), disk, database, ingest };
   }
 
-  return { getDisk, getDatabase, getStorage };
+  return { getDisk, getDatabase, getIngest, getStorage };
 }
 
 module.exports = { createSystemInfo };

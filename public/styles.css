@@ -29,11 +29,21 @@
 * { box-sizing: border-box; }
 body {
   margin: 0;
-  font: 14px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  /* Prefer Inter / Hanken Grotesk if present locally, else a clean system sans.
+     No external webfont (keeps it offline + EU-friendly). */
+  font: 14px/1.55 'Inter', 'Hanken Grotesk', system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   background: var(--bg);
   color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 .hidden { display: none !important; }
+
+/* Typography hierarchy (NOC): tighter headings, aligned numerals. */
+h1, h2, h3 { letter-spacing: -0.01em; }
+h4 { letter-spacing: 0.02em; }
+.kpi-v, .stat .v, .storage-row .v, td.num, .ta-bw, .big-chart .axis, .legend,
+.kv td, .assistant-meta { font-variant-numeric: tabular-nums; font-feature-settings: 'tnum' 1; }
 .muted { color: var(--muted); font-weight: 400; }
 .error { color: var(--bad); min-height: 1em; }
 a { color: var(--accent); }
@@ -114,11 +124,48 @@ main#view:has(.overview) { max-width: 1600px; }
 .overview-controls.below { max-height: none; overflow: visible; display: flex; flex-wrap: wrap; gap: 22px; }
 .overview-controls.below .ctrl-group { margin-bottom: 0; }
 .marked-panel { max-height: none; }
+.marked-panel .drill { margin-top: 10px; }
 .series-head { margin-top: 16px; }
+
+/* NOC: KPI grid, alert banner, top agents */
+.kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 0 0 16px; }
+@media (max-width: 720px) { .kpi-grid { grid-template-columns: repeat(2, 1fr); } }
+.kpi { background: var(--panel); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 10px; padding: 12px; }
+.kpi.rx { border-left-color: #06b6d4; }
+.kpi.tx { border-left-color: #10b981; }
+.kpi.ag { border-left-color: var(--warn); }
+.kpi.loc { border-left-color: var(--accent); }
+.kpi .kpi-k { color: var(--muted); font-size: 12px; }
+.kpi .kpi-v { font-size: 24px; font-weight: 700; margin-top: 4px; }
+.kpi .kpi-sub { font-size: 12px; margin-top: 6px; }
+.alert-banner { display: flex; align-items: center; gap: 10px; border-radius: 10px; padding: 10px 14px; margin: 0 0 14px;
+  background: rgba(220, 38, 38, .10); border: 1px solid var(--bad); }
+.alert-banner.sev-WARN { background: rgba(217, 119, 6, .10); border-color: var(--warn); }
+.alert-banner .alert-ic { font-size: 18px; }
+.top-agents { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px; margin-top: 16px; }
+.ta-row { display: flex; align-items: center; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--border); }
+.ta-row:last-child { border-bottom: 0; }
+.ta-name { flex: 1; }
+.ta-bw { white-space: nowrap; font-size: 13px; }
+
+/* Mobile: the top tab bar becomes a fixed, scrollable bottom navbar. */
+@media (max-width: 720px) {
+  .topbar { flex-wrap: wrap; }
+  .tabs { position: fixed; left: 0; right: 0; bottom: 0; z-index: 40; background: var(--panel);
+    border-top: 1px solid var(--border); padding: 6px 8px; gap: 6px; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .tabs button { white-space: nowrap; }
+  main#view { padding-bottom: 64px; }
+}
 
 /* Server storage cards + usage bar. */
 .storage { margin: 0 0 16px; }
 .storage-h { margin: 0 0 8px; font-size: 14px; color: var(--muted); }
+.storage-card { max-width: 560px; }
+.storage-row { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.storage-row .k { color: var(--muted); font-size: 12px; }
+.storage-row .v { font-size: 18px; font-weight: 700; }
+.storage-card .small { font-size: 12px; margin-top: 4px; }
+.storage-sep { border: 0; border-top: 1px solid var(--border); margin: 12px 0; }
 .usagebar { height: 8px; border-radius: 5px; background: var(--bg); border: 1px solid var(--border); overflow: hidden; margin-top: 8px; }
 .usagebar .fill { height: 100%; }
 .usagebar .fill.ok { background: var(--ok); }

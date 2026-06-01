@@ -54,6 +54,26 @@ test('getDatabase sums table sizes from information_schema (fake pool)', async (
   assert.equal(out.tables[0].bytes, 2000);
 });
 
+test('getIngest reports recent rows/bytes and getStorage includes the estimate', async () => {
+  const db = {
+    pool: {
+      query: async (sql) => {
+        if (/FROM results WHERE created_at/.test(sql)) return [[{ c: 6, bytes: 1200 }]];
+        if (/SUM\(data_length \+ index_length\)/.test(sql) && /AS bytes/.test(sql)) return [[{ bytes: 3000, dataBytes: 2500, indexBytes: 500, tables: 2 }]];
+        return [[]];
+      },
+    },
+  };
+  const statfs = (path, cb) => cb(null, { bsize: 1, blocks: 100, bfree: 60, bavail: 60 });
+  const si = createSystemInfo({ db, statfs });
+  const ing = await si.getIngest(3);
+  assert.equal(ing.rows, 6);
+  assert.equal(ing.bytes, 1200);
+  assert.equal(ing.bytesPerDay, Math.round((1200 / 3) * 1440));
+  const out = await si.getStorage();
+  assert.ok(out.ingest && out.ingest.bytes === 1200);
+});
+
 test('getStorage stays resilient when the DB query throws', async () => {
   const statfs = (path, cb) => cb(null, { bsize: 1, blocks: 10, bfree: 5, bavail: 5 });
   const db = { pool: { query: async () => { throw new Error('db down'); } } };

@@ -178,6 +178,21 @@ function makeAnalysisPipeline(overrides = {}) {
   };
 }
 
+// A fake AI assistant. Disabled by default (explain rejects with FeatureDisabled)
+// so the endpoint answers 403 unless a test opts in with its own explain.
+function makeAssistant(overrides = {}) {
+  return {
+    isEnabled: overrides.isEnabled || (() => Boolean(overrides.explain)),
+    explain:
+      overrides.explain ||
+      (async () => {
+        const e = new Error('AI-assistenten er slået fra');
+        e.name = 'FeatureDisabled';
+        throw e;
+      }),
+  };
+}
+
 // ---- App + auth helpers ---------------------------------------------------
 
 // Builds an app wired with fakes; pass overrides to swap any dependency.
@@ -196,6 +211,7 @@ function makeApp(overrides = {}) {
     systemInfo: overrides.systemInfo || makeSystemInfo(),
     findingStore: overrides.findingStore || makeFindingStore(),
     analysisPipeline: overrides.analysisPipeline || makeAnalysisPipeline(),
+    assistant: overrides.assistant || makeAssistant(),
   });
 }
 
@@ -232,6 +248,7 @@ module.exports = {
   makeSystemInfo,
   makeFindingStore,
   makeAnalysisPipeline,
+  makeAssistant,
   makeDb,
   makeApp,
   tokenFor,

@@ -24,6 +24,7 @@ function createApp({
   systemInfo,
   findingStore,
   analysisPipeline,
+  assistant,
   logger = silentLogger,
 } = {}) {
   const app = express();
@@ -54,6 +55,7 @@ function createApp({
       systemInfo,
       findingStore,
       analysisPipeline,
+      assistant,
     })
   );
 

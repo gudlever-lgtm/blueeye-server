@@ -20,6 +20,7 @@ const { createBaselineStore } = require('./analysis/baselines');
 const { createDetector } = require('./analysis/detector');
 const { createAnalysisPipeline } = require('./analysis/pipeline');
 const { createCorrelator } = require('./analysis/correlator');
+const { createAssistant } = require('./analysis/assistant');
 const { loadConfig: loadAnalysisConfig } = require('./analysis/config');
 
 // Wires up real dependencies, starts the HTTP server and installs graceful
@@ -79,6 +80,9 @@ function start() {
     publishFinding: (hostId, message) => (agentWs ? agentWs.broadcast(hostId, message) : 0),
     logger: console,
   });
+  // Opt-in LLM assistant (off unless ANALYSIS_ASSISTANT_ENABLED=true). Reads the
+  // same findings store for its compact context.
+  const assistant = createAssistant({ config: analysisConfig, findingStore, logger: console });
 
   const app = createApp({
     db,
@@ -94,6 +98,7 @@ function start() {
     licenseManager,
     findingStore,
     analysisPipeline,
+    assistant,
     logger: console,
   });
 

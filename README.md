@@ -222,11 +222,17 @@ WebSocket-kanalen bruger et **agent-token** (ikke et JWT) — se
 | GET    | `/api/alerting/config` | Aktive alarm-kanaler + regler   | viewer+            | `200`                      |
 | POST   | `/api/alerting/test` | Send test-finding til en kanal    | operator+          | `200` / `400` / `404`      |
 | GET    | `/license/features` | Hvilke moduler licensen tillader | viewer+            | `200`                      |
+| GET    | `/api/export/:resource` | CSV/JSON-eksport (`?format=csv\|json`) | viewer+      | `200` / `400` / `403` / `404` |
 | WS     | `/ws/agent`      | Live-kanal (status/kommandoer)    | **agent-token**    | upgrade / hård luk         |
 | WS     | `/ws/dashboard`  | Live findings til dashboardet     | viewer+ (JWT)      | upgrade / hård luk         |
 
 ("viewer+" = viewer eller højere; "operator+" = operator eller admin.
 "agent-token" = opaque agent-token, ikke bruger-JWT.)
+
+CSV/JSON-eksport: `GET /api/export/<resource>?format=csv|json` for `findings`,
+`geo` (licens-gated), `agents`, `locations` og `traffic` (kræver `agentId`).
+Findings/geo respekterer samme `hostId`/`since`-filtre som deres API'er.
+Dashboardet har "Eksport: CSV / JSON"-knapper på Analyse- og Geo-fanerne.
 
 Analyse-modulet (lokal anomali-detektion, korrelator og opt-in AI-assistent) er
 beskrevet i [`docs/analysis.md`](docs/analysis.md). Geo-laget (flow-records,

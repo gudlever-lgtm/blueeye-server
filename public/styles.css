@@ -156,6 +156,8 @@ tr:last-child td { border-bottom: 0; }
 label.inline { flex-direction: row; align-items: center; gap: 6px; }
 label.inline select { padding: 4px 8px; }
 tr.acked td { opacity: .55; }
+.export-btns { display: inline-flex; align-items: center; gap: 6px; }
+.export-btns .muted { font-size: 12px; }
 .assistant { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px; margin: 0 0 16px; }
 .assistant .assistant-row { display: flex; gap: 8px; }
 .assistant .assistant-row input { flex: 1; }

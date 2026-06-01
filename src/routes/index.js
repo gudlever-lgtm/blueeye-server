@@ -15,6 +15,7 @@ const { createFindingsRouter } = require('./findings');
 const { createAssistantRouter } = require('./assistant');
 const { createGeoRouter } = require('./geo');
 const { createAlertingRouter } = require('./alerting');
+const { createExportRouter } = require('./export');
 const {
   createAgentAuthenticator,
   createAgentTokenMiddleware,
@@ -63,6 +64,7 @@ function createApiRouter({
   if (assistant) router.use('/api/assistant', createAssistantRouter({ assistant, featureGate }));
   if (flowsRepo) router.use('/api/geo', createGeoRouter({ flowsRepo, agentsRepo, findingStore, tileConfig: geoTileConfig, featureGate }));
   if (dispatcher) router.use('/api/alerting', createAlertingRouter({ dispatcher }));
+  router.use('/api/export', createExportRouter({ findingStore, flowsRepo, agentsRepo, locationsRepo, resultsRepo, featureGate }));
   router.use('/enrollment-codes', createEnrollmentCodesRouter({ enrollmentCodesRepo, locationsRepo }));
 
   // Three routers share the /agents prefix, each with its own auth model:

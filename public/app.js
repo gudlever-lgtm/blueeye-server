@@ -637,6 +637,29 @@ function usageBar(percent) {
 // hostId of a finding is the agent id (the analysis pipeline keys on it).
 const findingsState = { hostId: '', tbody: null, agentName: null };
 
+// Authenticated download of a server export (CSV/JSON) → triggers a file save.
+async function downloadExport(resource, format, params = {}) {
+  const qs = new URLSearchParams({ format, ...params }).toString();
+  try {
+    const res = await fetch(`/api/export/${resource}?${qs}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+    if (!res.ok) {
+      let msg; try { msg = (await res.json()).error; } catch { /* non-JSON */ }
+      throw new Error(msg || `HTTP ${res.status}`);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = el('a', { href: url, download: `blueeye-${resource}.${format}` });
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (err) { toast(err.message, true); }
+}
+function exportButtons(resource, getParams) {
+  return el('span', { class: 'export-btns' },
+    el('span', { class: 'muted' }, 'Eksport:'),
+    el('button', { class: 'small ghost', onclick: () => downloadExport(resource, 'csv', getParams ? getParams() : {}) }, 'CSV'),
+    el('button', { class: 'small ghost', onclick: () => downloadExport(resource, 'json', getParams ? getParams() : {}) }, 'JSON'));
+}
+
 views.findings = async () => {
   const root = el('div');
   const agents = await api('/agents').catch(() => []);
@@ -657,6 +680,7 @@ views.findings = async () => {
     el('h2', {}, 'Analyse — fejl & anomalier'),
     el('span', { class: 'muted' }, 'lokalt beregnet'),
     el('span', { class: 'spacer' }),
+    exportButtons('findings', () => (findingsState.hostId ? { hostId: findingsState.hostId } : {})),
     el('label', { class: 'muted inline' }, 'Host ', hostSelect)));
 
   root.append(assistantBox(() => findingsState.hostId));
@@ -968,6 +992,7 @@ views.geo = async () => {
   root.append(el('div', { class: 'section-head' },
     el('h2', {}, 'Geo-kort'),
     el('span', { class: 'spacer' }),
+    exportButtons('geo', () => (geoState.sinceIso ? { since: geoState.sinceIso } : {})),
     el('label', { class: 'muted inline' }, 'Periode ', periodSel),
     regionBtn, clearBtn));
 

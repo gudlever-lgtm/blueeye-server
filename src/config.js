@@ -43,6 +43,8 @@ const config = {
   ws: {
     // Agent live channel.
     path: process.env.WS_AGENT_PATH || '/ws/agent',
+    // Browser live channel (analysis findings pushed to the dashboard).
+    dashboardPath: process.env.WS_DASHBOARD_PATH || '/ws/dashboard',
     heartbeatIntervalMs: toInt(process.env.WS_HEARTBEAT_MS, 30000),
   },
   // Client-side licensing against blueeye-licens. Set at installation (not CRUD).

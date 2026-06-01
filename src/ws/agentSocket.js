@@ -52,10 +52,10 @@ function attachAgentWebSocket({
   const wss = new WebSocketServer({ noServer: true });
 
   server.on('upgrade', (req, socket, head) => {
-    if (pathnameOf(req) !== path) {
-      socket.destroy();
-      return;
-    }
+    // Cooperative: only claim our path and ignore the rest, so sibling WS
+    // servers on the same HTTP server (e.g. the dashboard socket) can handle
+    // theirs. Truly unknown paths are rejected by a fallback in server.js.
+    if (pathnameOf(req) !== path) return;
 
     authenticator
       .verifyToken(extractToken(req))

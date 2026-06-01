@@ -109,6 +109,7 @@ async function login(emailInput, password) {
   localStorage.setItem(EMAIL_KEY, email);
 }
 function logout() {
+  disconnectLive();
   token = null;
   email = '';
   localStorage.removeItem(TOKEN_KEY);
@@ -189,6 +190,23 @@ const PAGE_INFO = {
         el('li', {}, '"+ Ny agent" giver en engangskode til installation (operator+).'),
         el('li', {}, '"Kør test" beder agenten måle med det samme; "Trafik" viser målingerne.'),
         el('li', {}, '"Rediger" sætter navn, lokation, noter og trafik-kilde (proc/SNMP).')),
+    ],
+  },
+  findings: {
+    hero: 'Lokalt beregnede fejl & anomalier — med forklaring, dokumentation og root-cause-hint.',
+    title: 'Analyse — fejl & anomalier',
+    body: () => [
+      el('p', {}, 'Serveren analyserer agenternes målinger lokalt (ingen cloud, intet ML-bibliotek) og rejser en "finding", når en metrik afviger markant fra sin egen baseline, fladliner (sensor/agent-stop) eller hænger sammen med andre fejl.'),
+      el('h4', {}, 'Severity'),
+      el('ul', {},
+        el('li', {}, 'CRIT: stor afvigelse (≥ 4σ fra baseline).'),
+        el('li', {}, 'WARN: mærkbar afvigelse (≥ 3σ) eller flatline.'),
+        el('li', {}, 'INFO: lavere alvorlighed.')),
+      el('h4', {}, 'Kvittering'),
+      el('p', {}, 'Operatører og administratorer kan kvittere for en finding, når den er set/håndteret.'),
+      el('h4', {}, 'AI-assistent'),
+      el('p', {}, 'Hvis aktiveret (opt-in) kan du spørge i naturligt sprog — assistenten svarer ud fra de seneste findings, ikke rå data.'),
+      el('p', { class: 'muted' }, 'Nye findings vises live via WebSocket og kan også hentes via REST.'),
     ],
   },
   locations: {
@@ -577,6 +595,133 @@ function usageBar(percent) {
   const p = Math.max(0, Math.min(100, Number(percent) || 0));
   const cls = p >= 90 ? 'bad' : p >= 75 ? 'warn' : 'ok';
   return el('div', { class: 'usagebar' }, el('div', { class: `fill ${cls}`, style: `width:${p}%` }));
+}
+
+// ---- Analyse (findings + AI assistant) ------------------------------------
+// hostId of a finding is the agent id (the analysis pipeline keys on it).
+const findingsState = { hostId: '', tbody: null, agentName: null };
+
+views.findings = async () => {
+  const root = el('div');
+  const agents = await api('/agents').catch(() => []);
+  const agentName = (id) => {
+    const a = agents.find((x) => String(x.id) === String(id));
+    return a ? (a.display_name || a.hostname) : `host ${id}`;
+  };
+  findingsState.agentName = agentName;
+
+  const hostSelect = el('select', {},
+    el('option', { value: '' }, 'Alle hosts'),
+    ...agents.map((a) => el('option',
+      { value: String(a.id), ...(String(a.id) === findingsState.hostId ? { selected: 'selected' } : {}) },
+      a.display_name || a.hostname)));
+  hostSelect.addEventListener('change', () => { findingsState.hostId = hostSelect.value; loadList(); });
+
+  root.append(el('div', { class: 'section-head' },
+    el('h2', {}, 'Analyse — fejl & anomalier'),
+    el('span', { class: 'muted' }, 'lokalt beregnet'),
+    el('span', { class: 'spacer' }),
+    el('label', { class: 'muted inline' }, 'Host ', hostSelect)));
+
+  root.append(assistantBox(() => findingsState.hostId));
+
+  const listHost = el('div', {});
+  root.append(listHost);
+
+  async function loadList() {
+    listHost.replaceChildren(el('div', { class: 'empty' }, 'Indlæser…'));
+    let findings;
+    try {
+      const qs = findingsState.hostId ? `?hostId=${encodeURIComponent(findingsState.hostId)}` : '';
+      findings = await api(`/api/findings${qs}`);
+    } catch (err) {
+      findingsState.tbody = null;
+      listHost.replaceChildren(el('div', { class: 'empty error' }, err.message));
+      return;
+    }
+    if (!findings.length) {
+      findingsState.tbody = null;
+      listHost.replaceChildren(el('div', { class: 'empty' }, 'Ingen findings endnu. Når en agent rapporterer unormale målinger, dukker de op her.'));
+      return;
+    }
+    const tbody = el('tbody', {}, ...findings.map((f) => findingRow(agentName, f)));
+    findingsState.tbody = tbody;
+    listHost.replaceChildren(el('table', { class: 'findings' },
+      el('thead', {}, el('tr', {}, ...['Tid', 'Host', 'Metric', 'Severity', 'Afvigelse', 'Forklaring', ''].map((h) => el('th', {}, h)))),
+      tbody));
+  }
+
+  loadList();
+  return root;
+};
+
+function findingRow(agentName, f) {
+  const dev = typeof f.deviation === 'number' ? `${f.deviation.toFixed(1)}σ` : '–';
+  const corr = Array.isArray(f.correlatedWith) && f.correlatedWith.length
+    ? el('div', { class: 'muted' }, `korreleret med ${f.correlatedWith.length} anden(e)`)
+    : null;
+  const action = f.acked
+    ? el('span', { class: 'muted' }, 'kvitteret')
+    : (canWrite() ? el('button', { class: 'small ghost', onclick: (e) => ackFinding(f, e.target) }, 'Kvittér') : null);
+  const tr = el('tr', { class: f.acked ? 'acked' : '' },
+    el('td', { class: 'muted' }, fmtDate(f.createdAt)),
+    el('td', {}, agentName(f.hostId)),
+    el('td', {}, f.metric),
+    el('td', {}, el('span', { class: `badge ${esc(f.severity || 'INFO')}` }, f.severity || 'INFO'),
+      f.kind === 'FLATLINE' ? el('span', { class: 'muted' }, ' flatline') : null),
+    el('td', {}, dev),
+    el('td', {}, el('div', {}, f.explanation || '–'), corr),
+    el('td', {}, action));
+  tr.dataset.findingId = f.id;
+  return tr;
+}
+
+async function ackFinding(f, btn) {
+  if (btn) btn.disabled = true;
+  try {
+    await api(`/api/findings/${encodeURIComponent(f.id)}/ack`, { method: 'POST' });
+    f.acked = true;
+    toast('Kvitteret');
+    const tr = btn && btn.closest('tr');
+    if (tr) { tr.classList.add('acked'); btn.replaceWith(el('span', { class: 'muted' }, 'kvitteret')); }
+  } catch (err) {
+    if (btn) btn.disabled = false;
+    toast(err.message, true);
+  }
+}
+
+// AI-assistant box. Posts to /api/assistant/explain; degrades gracefully when
+// the feature is disabled (403) so it never looks broken.
+function assistantBox(getHostId) {
+  const input = el('input', { type: 'text', placeholder: 'Spørg fx: hvorfor er CPU høj på denne host?' });
+  const btn = el('button', { class: 'small' }, 'Spørg assistenten');
+  const out = el('div', { class: 'assistant-out muted' }, 'Stil et spørgsmål om en host ud fra de seneste findings.');
+  async function ask() {
+    const question = input.value.trim();
+    if (!question) { input.focus(); return; }
+    btn.disabled = true;
+    out.className = 'assistant-out muted';
+    out.textContent = 'Tænker…';
+    try {
+      const res = await api('/api/assistant/explain', { method: 'POST', body: { question, hostId: getHostId() || undefined } });
+      out.className = 'assistant-out';
+      out.replaceChildren(
+        el('div', {}, res.answer || '(tomt svar)'),
+        el('div', { class: 'assistant-meta muted' }, `${esc(res.model || '')} · ${res.usedFindings ?? 0} findings i kontekst`));
+    } catch (err) {
+      out.className = 'assistant-out muted';
+      out.textContent = err.status === 403
+        ? 'AI-assistenten er slået fra. Sæt ANALYSIS_ASSISTANT_ENABLED=true (og en API-nøgle) i serverens .env for at bruge den.'
+        : err.message;
+    } finally {
+      btn.disabled = false;
+    }
+  }
+  btn.addEventListener('click', ask);
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') ask(); });
+  return el('div', { class: 'assistant' },
+    el('div', { class: 'assistant-row' }, input, btn),
+    out);
 }
 
 views.overview = async () => {
@@ -1129,6 +1274,47 @@ function stat(k, v) {
 }
 
 // ---- Render ---------------------------------------------------------------
+// ---- Live findings (WebSocket) --------------------------------------------
+// Subscribes to the server's dashboard channel and surfaces findings as they
+// happen. Idempotent connect; auto-reconnects while logged in.
+let liveWs = null;
+let liveReconnect = null;
+function connectLive() {
+  if (!token) return;
+  if (liveWs && (liveWs.readyState === WebSocket.OPEN || liveWs.readyState === WebSocket.CONNECTING)) return;
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  let sock;
+  try { sock = new WebSocket(`${proto}://${location.host}/ws/dashboard?token=${encodeURIComponent(token)}`); }
+  catch { return; }
+  liveWs = sock;
+  sock.addEventListener('message', (ev) => {
+    let msg; try { msg = JSON.parse(ev.data); } catch { return; }
+    if (msg && msg.type === 'finding') onLiveFinding(msg.payload);
+  });
+  sock.addEventListener('close', () => {
+    liveWs = null;
+    if (token && !liveReconnect) liveReconnect = setTimeout(() => { liveReconnect = null; connectLive(); }, 4000);
+  });
+  sock.addEventListener('error', () => { try { sock.close(); } catch { /* ignore */ } });
+}
+function disconnectLive() {
+  if (liveReconnect) { clearTimeout(liveReconnect); liveReconnect = null; }
+  if (liveWs) { try { liveWs.close(); } catch { /* ignore */ } liveWs = null; }
+}
+function onLiveFinding(f) {
+  if (!f) return;
+  const sev = f.severity || 'INFO';
+  toast(`Ny finding: ${f.metric} ${sev}`, sev === 'CRIT' || sev === 'WARN');
+  // Live-prepend only when the findings table is actually on screen and the
+  // active host filter matches; otherwise the REST list will show it next time.
+  if (currentView === 'findings' && findingsState.tbody && findingsState.tbody.isConnected) {
+    if (!findingsState.hostId || String(f.hostId) === String(findingsState.hostId)) {
+      const name = findingsState.agentName || ((id) => `host ${id}`);
+      findingsState.tbody.prepend(findingRow(name, f));
+    }
+  }
+}
+
 let currentView = 'overview';
 const modalOpen = () => !$('#modal').classList.contains('hidden');
 
@@ -1136,6 +1322,7 @@ async function render({ silent = false } = {}) {
   if (!token) { $('#login').classList.remove('hidden'); $('#app').classList.add('hidden'); return; }
   $('#login').classList.add('hidden');
   $('#app').classList.remove('hidden');
+  connectLive(); // live findings channel (idempotent)
   // Show who is logged in: email + role.
   $('#whoami').replaceChildren(
     el('span', { class: 'who-email' }, email || '—'),

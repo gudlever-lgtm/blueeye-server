@@ -11,6 +11,8 @@ const { createEnrollmentStore } = require('./services/enrollmentStore');
 const { createAgentTokensRepository } = require('./repositories/agentTokensRepository');
 const { createResultsRepository } = require('./repositories/resultsRepository');
 const { attachAgentWebSocket } = require('./ws/agentSocket');
+const { attachDashboardWebSocket } = require('./ws/dashboardSocket');
+const { verifyToken } = require('./auth/jwt');
 const { createLicenseManager } = require('./license/licenseManager');
 const { createFileCache } = require('./license/licenseCache');
 const { isConfigured } = require('./license/publicKey');
@@ -47,6 +49,7 @@ function start() {
   // the live WebSocket connection count (agentWs is assigned just below; the
   // closure is only invoked later, at validation time).
   let agentWs = null;
+  let dashboardWs = null;
   const licenseManager = createLicenseManager({
     config: config.license,
     publicKey: config.license.publicKey,
@@ -77,7 +80,8 @@ function start() {
     findingStore,
     config: analysisConfig,
     correlator,
-    publishFinding: (hostId, message) => (agentWs ? agentWs.broadcast(hostId, message) : 0),
+    // Push findings to connected dashboards (browsers), not to agents.
+    publishFinding: (hostId, message) => (dashboardWs ? dashboardWs.broadcast(message) : 0),
     logger: console,
   });
   // Opt-in LLM assistant (off unless ANALYSIS_ASSISTANT_ENABLED=true). Reads the
@@ -120,6 +124,28 @@ function start() {
     licenseGuard: (count) => licenseManager.canAcceptNewConnection(count),
   });
 
+  // Browser live channel (analysis findings -> dashboard), gated by the user JWT.
+  dashboardWs = attachDashboardWebSocket({
+    server,
+    verifyToken,
+    logger: console,
+    path: config.ws.dashboardPath,
+    heartbeatMs: config.ws.heartbeatIntervalMs,
+  });
+
+  // Both WebSocket servers are cooperative (they ignore paths that aren't
+  // theirs). Reject any upgrade to an unknown path so stray sockets don't hang.
+  const knownWsPaths = new Set([config.ws.path, config.ws.dashboardPath]);
+  server.on('upgrade', (req, socket) => {
+    let pathname;
+    try {
+      pathname = new URL(req.url, 'http://localhost').pathname;
+    } catch {
+      pathname = req.url;
+    }
+    if (!knownWsPaths.has(pathname)) socket.destroy();
+  });
+
   if (!isConfigured(config.license.publicKey)) {
     console.warn(
       'License public key is not configured (placeholder) — proofs cannot be verified and agents will not be licensed. See src/license/publicKey.js.'
@@ -132,6 +158,7 @@ function start() {
     console.info(`Received ${signal}, shutting down gracefully...`);
     licenseManager.stop();
     agentWs.close();
+    dashboardWs.close();
     server.close(async () => {
       try {
         await db.close();

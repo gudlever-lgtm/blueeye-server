@@ -212,10 +212,17 @@ WebSocket-kanalen bruger et **agent-token** (ikke et JWT) — se
 | POST   | `/agents/results` | Indsend testresultater           | **agent-token**    | `201` / `400` / `401`      |
 | GET    | `/agents/:id/results` | Hent en agents resultater    | viewer+            | `200` / `404` / `400`      |
 | GET    | `/license/status` | Lokal licensstatus               | viewer+            | `200`                      |
+| GET    | `/api/findings`  | Listér analyse-findings           | viewer+            | `200` / `400` (ugyldig since) |
+| POST   | `/api/findings/:id/ack` | Kvittér en finding         | operator+          | `200` / `404`              |
+| POST   | `/api/assistant/explain` | Spørg AI-assistenten (opt-in) | viewer+        | `200` / `400` / `403` / `500` |
 | WS     | `/ws/agent`      | Live-kanal (status/kommandoer)    | **agent-token**    | upgrade / hård luk         |
+| WS     | `/ws/dashboard`  | Live findings til dashboardet     | viewer+ (JWT)      | upgrade / hård luk         |
 
 ("viewer+" = viewer eller højere; "operator+" = operator eller admin.
 "agent-token" = opaque agent-token, ikke bruger-JWT.)
+
+Analyse-modulet (lokal anomali-detektion, korrelator og opt-in AI-assistent) er
+beskrevet i [`docs/analysis.md`](docs/analysis.md).
 
 ### Eksempler
 

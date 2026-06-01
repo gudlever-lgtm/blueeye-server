@@ -34,6 +34,7 @@ function createApiRouter({
   systemInfo,
   findingStore,
   analysisPipeline,
+  flowPipeline,
   assistant,
 }) {
   const router = express.Router();
@@ -62,7 +63,7 @@ function createApiRouter({
   //   - POST /enroll           — unauthenticated
   // Requests fall through routers that have no matching route.
   router.use('/agents', createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentCommander }));
-  router.use('/agents', createAgentReportsRouter({ agentAuth, resultsRepo, agentsRepo, analysisPipeline }));
+  router.use('/agents', createAgentReportsRouter({ agentAuth, resultsRepo, agentsRepo, analysisPipeline, flowPipeline }));
   router.use('/agents', createAgentEnrollRouter({ enrollmentStore }));
 
   return router;

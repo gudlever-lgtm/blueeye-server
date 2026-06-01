@@ -178,6 +178,24 @@ function makeAnalysisPipeline(overrides = {}) {
   };
 }
 
+// A fake flows repository (records inserted rows).
+function makeFlowsRepo(overrides = {}) {
+  const rows = [];
+  return {
+    rows,
+    insertMany: overrides.insertMany || (async (records) => { for (const r of records) rows.push(r); return records.length; }),
+  };
+}
+
+// A fake flow pipeline (records calls; stores nothing by default).
+function makeFlowPipeline(overrides = {}) {
+  const calls = [];
+  return {
+    calls,
+    processResults: overrides.processResults || (async (agentId, payloads) => { calls.push({ agentId, payloads }); return 0; }),
+  };
+}
+
 // A fake AI assistant. Disabled by default (explain rejects with FeatureDisabled)
 // so the endpoint answers 403 unless a test opts in with its own explain.
 function makeAssistant(overrides = {}) {
@@ -211,6 +229,7 @@ function makeApp(overrides = {}) {
     systemInfo: overrides.systemInfo || makeSystemInfo(),
     findingStore: overrides.findingStore || makeFindingStore(),
     analysisPipeline: overrides.analysisPipeline || makeAnalysisPipeline(),
+    flowPipeline: overrides.flowPipeline || makeFlowPipeline(),
     assistant: overrides.assistant || makeAssistant(),
   });
 }
@@ -248,6 +267,8 @@ module.exports = {
   makeSystemInfo,
   makeFindingStore,
   makeAnalysisPipeline,
+  makeFlowsRepo,
+  makeFlowPipeline,
   makeAssistant,
   makeDb,
   makeApp,

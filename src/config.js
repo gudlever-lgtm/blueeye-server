@@ -67,6 +67,13 @@ const config = {
   analysis: {
     baselineCachePath: process.env.ANALYSIS_BASELINE_CACHE_PATH || path.join(process.cwd(), '.analysis-baselines.json'),
   },
+  // Geo enrichment of flow records. dbPath points at an offline, EU-sourced
+  // GeoIP/ASN range CSV (e.g. DB-IP Lite, CC-BY) — see docs/geo.md. When unset
+  // or unreadable, flows are still stored but without country/ASN.
+  geo: {
+    enabled: process.env.GEO_ENABLED !== 'false',
+    dbPath: process.env.GEOIP_DB_PATH || '',
+  },
 };
 
 // The default JWT secret must never be used outside development.

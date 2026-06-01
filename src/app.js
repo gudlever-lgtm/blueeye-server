@@ -24,6 +24,7 @@ function createApp({
   systemInfo,
   findingStore,
   analysisPipeline,
+  flowPipeline,
   assistant,
   logger = silentLogger,
 } = {}) {
@@ -55,6 +56,7 @@ function createApp({
       systemInfo,
       findingStore,
       analysisPipeline,
+      flowPipeline,
       assistant,
     })
   );

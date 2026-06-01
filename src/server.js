@@ -24,6 +24,11 @@ const { createAnalysisPipeline } = require('./analysis/pipeline');
 const { createCorrelator } = require('./analysis/correlator');
 const { createAssistant } = require('./analysis/assistant');
 const { loadConfig: loadAnalysisConfig } = require('./analysis/config');
+const { createFlowsRepository } = require('./repositories/flowsRepository');
+const { createGeoProvider } = require('./geo/provider');
+const { createCentroids } = require('./geo/centroids');
+const { createGeoEnricher } = require('./geo/enricher');
+const { createFlowPipeline } = require('./geo/flowPipeline');
 
 // Wires up real dependencies, starts the HTTP server and installs graceful
 // shutdown handlers.
@@ -88,6 +93,19 @@ function start() {
   // same findings store for its compact context.
   const assistant = createAssistant({ config: analysisConfig, findingStore, logger: console });
 
+  // Geo layer: enrich + store flow records. The GeoIP provider reads an offline,
+  // EU-sourced range DB (config.geo.dbPath); without it, flows store without
+  // country/ASN. RFC1918/private endpoints are never geolocated.
+  const flowsRepo = createFlowsRepository(db);
+  const geoProvider = createGeoProvider({ dbPath: config.geo.dbPath, logger: console });
+  const geoEnricher = createGeoEnricher({ provider: geoProvider, centroids: createCentroids() });
+  const flowPipeline = createFlowPipeline({
+    flowsRepo,
+    enricher: geoEnricher,
+    config: { geoEnabled: config.geo.enabled },
+    logger: console,
+  });
+
   const app = createApp({
     db,
     locationsRepo,
@@ -102,6 +120,7 @@ function start() {
     licenseManager,
     findingStore,
     analysisPipeline,
+    flowPipeline,
     assistant,
     logger: console,
   });

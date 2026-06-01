@@ -12,7 +12,7 @@ const { validateCapabilities } = require('../validation/agentValidation');
 //
 // Paths use the `/me/...` prefix so they don't collide with the user-JWT agents
 // router's `/:id` routes mounted under the same /agents path.
-function createAgentReportsRouter({ agentAuth, resultsRepo, agentsRepo, analysisPipeline = null }) {
+function createAgentReportsRouter({ agentAuth, resultsRepo, agentsRepo, analysisPipeline = null, flowPipeline = null }) {
   const router = express.Router();
 
   // POST /agents/results { results: [...] } — stores results for the agent
@@ -34,6 +34,15 @@ function createAgentReportsRouter({ agentAuth, resultsRepo, agentsRepo, analysis
           await analysisPipeline.processResults(req.agent.agentId, value.results);
         } catch {
           /* analysis is best-effort; ingestion already succeeded */
+        }
+      }
+
+      // Likewise, geo-enrich + store flow records (behind the geo flag).
+      if (flowPipeline) {
+        try {
+          await flowPipeline.processResults(req.agent.agentId, value.results);
+        } catch {
+          /* flow enrichment is best-effort; ingestion already succeeded */
         }
       }
 

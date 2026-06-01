@@ -109,23 +109,15 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 #whoami .badge.role-viewer { background: rgba(148,163,184,.15); color: var(--muted); }
 
 main#view { padding: 18px; max-width: 1100px; margin: 0 auto; }
-/* The traffic overview is allowed to use (almost) the full screen width. */
-main#view:has(.overview) { max-width: 1600px; }
+/* The lean traffic overview reads best at a comfortable single-column width. */
+main#view:has(.overview) { max-width: 1180px; }
 .section-head { display: flex; align-items: center; gap: 12px; margin: 0 0 14px; }
 
-/* Traffic overview: big chart + a checkbox panel to inject series. */
-.overview-grid { display: grid; grid-template-columns: 1fr 320px; gap: 16px; align-items: start; }
-@media (max-width: 900px) { .overview-grid { grid-template-columns: 1fr; } }
+/* Traffic overview: the big live chart (history view reuses .overview-chart). */
 .overview-chart { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
+.chart-card .overview-chart { background: transparent; border: 0; border-radius: 0; padding: 0; }
 .big-chart svg.big-chart-svg { display: block; width: 100%; height: auto; }
 .big-chart .axis { fill: var(--muted); font-size: 11px; }
-.overview-controls { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px; max-height: 70vh; overflow: auto; }
-/* Series controls shown below the chart span full width and lay out in columns. */
-.overview-controls.below { max-height: none; overflow: visible; display: flex; flex-wrap: wrap; gap: 22px; }
-.overview-controls.below .ctrl-group { margin-bottom: 0; }
-.marked-panel { max-height: none; }
-.marked-panel .drill { margin-top: 10px; }
-.series-head { margin-top: 16px; }
 
 /* NOC: KPI grid, alert banner, top agents */
 .kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 0 0 16px; }
@@ -148,22 +140,85 @@ main#view:has(.overview) { max-width: 1600px; }
 .ta-name { flex: 1; }
 .ta-bw { white-space: nowrap; font-size: 13px; }
 
-/* Compact/lean Trafik: slimmer KPI cards + collapsible secondary sections. */
-.overview .kpi-grid { gap: 10px; margin-bottom: 12px; }
-.overview .kpi { padding: 9px 11px; }
-.overview .kpi .kpi-v { font-size: 19px; margin-top: 2px; }
-.overview .kpi .kpi-sub { margin-top: 5px; }
-.overview .storage { margin: 12px 0; }
-details.sec { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; margin-top: 12px; }
+/* ===== Compact/lean Trafik ===== */
+/* Slim alert line inside the overview. */
+.overview .alert-banner { padding: 7px 12px; font-size: 13px; margin-bottom: 10px; }
+
+/* 1) KPI strip — one slim row instead of four tall cards. */
+.kpis { display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 9px 12px; margin: 0 0 10px; }
+.kpis .kpi { display: flex; align-items: baseline; gap: 7px; padding: 2px 14px; border: 0; border-left: 3px solid var(--border); border-radius: 0; background: transparent; }
+.kpis .kpi:first-child { border-left: 0; padding-left: 2px; }
+.kpis .kpi.rx { border-left-color: #06b6d4; }
+.kpis .kpi.tx { border-left-color: #10b981; }
+.kpis .kpi.ag { border-left-color: var(--warn); }
+.kpis .kpi.loc { border-left-color: var(--accent); }
+.kpis .kpi .k { color: var(--muted); font-size: 12px; }
+.kpis .kpi .v { font-size: 18px; font-weight: 700; }
+.kpis .kpi-mini { display: inline-flex; align-items: center; width: 54px; }
+.kpis .kpi-mini .usagebar { width: 100%; height: 6px; margin: 0; }
+.kpis .kpi-mini:empty { display: none; }
+
+/* 2) Hero chart card + compact chip toolbar. */
+.chart-card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
+.chart-card .bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.chart-card .bar h3 { margin: 0; font-size: 15px; letter-spacing: -.01em; }
+.chip { font: inherit; font-size: 12px; line-height: 1.45; border: 1px solid var(--border); border-radius: 999px;
+  padding: 3px 11px; background: var(--panel); color: var(--muted); cursor: pointer; }
+.chip:hover { border-color: var(--accent); }
+.chip.on { background: var(--panel-2); color: var(--text); border-color: var(--accent); }
+.chip.rx.on { border-color: #06b6d4; color: #06b6d4; }
+.chip.tx.on { border-color: #10b981; color: #10b981; }
+.chip-det { position: relative; }
+.chip-det > summary { list-style: none; display: inline-block; }
+.chip-det > summary::-webkit-details-marker { display: none; }
+.chip-det > summary::after { content: '▾'; margin-left: 3px; }
+.chip-det[open] > summary { background: var(--panel-2); color: var(--text); border-color: var(--accent); }
+.chip-det[open] > summary::after { content: '▴'; }
+.chip-det .cnt { font-size: 11px; }
+.chip-det .peragent-list { position: absolute; right: 0; top: 30px; z-index: 30; min-width: 230px; max-height: 280px; overflow: auto;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px;
+  display: flex; flex-direction: column; gap: 5px; box-shadow: 0 10px 28px rgba(15, 23, 42, .14); }
+.chip-det .peragent-list .check { flex-direction: row; align-items: center; gap: 7px; color: var(--text); }
+
+/* 3) Inline marked strip under the chart (replaces the side panel). */
+.marked-strip { display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  margin-top: 10px; padding: 8px 11px; border: 1px dashed var(--border); border-radius: 8px; font-size: 13px; }
+.marked-strip.hidden { display: none; }
+.marked-strip .ms-label { font-weight: 600; }
+.marked-strip .ms-stat { display: inline-flex; gap: 6px; align-items: baseline; }
+.marked-strip .ms-name { color: var(--muted); }
+
+/* 4) Slim storage line; the full breakdown folds open below. */
+.storage-fold { margin-top: 10px; }
+.storage-fold > summary.storage-line { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 9px 12px; font-size: 13px; }
+.storage-fold > summary.storage-line::-webkit-details-marker { display: none; }
+.storage-line .usagebar { flex: 1; min-width: 140px; max-width: 340px; height: 8px; margin: 0; }
+.storage-line .fold-cta { white-space: nowrap; }
+.storage-line .fold-cta::after { content: ' ▾'; }
+.storage-fold[open] .fold-cta::after { content: ' ▴'; }
+.storage-detail-body { padding: 10px 2px 2px; }
+.storage-detail-body .storage { margin: 0; }
+
+/* 5) Foldable secondary sections (top agenter, historik). */
+details.sec { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; margin-top: 10px; }
 details.sec > summary { cursor: pointer; padding: 10px 12px; font-weight: 600; font-size: 14px; list-style: none; }
 details.sec > summary::-webkit-details-marker { display: none; }
 details.sec > summary::before { content: '▸'; color: var(--muted); margin-right: 8px; display: inline-block; transition: transform .15s; }
 details.sec[open] > summary::before { transform: rotate(90deg); }
 details.sec[open] > summary { border-bottom: 1px solid var(--border); }
 /* Children of a disclosure are flush (the <details> is the card). */
-details.sec .overview-controls, details.sec .top-agents, details.sec .history { background: transparent; border: 0; border-radius: 0; margin: 0; padding: 10px 12px; }
+details.sec .top-agents, details.sec .history { background: transparent; border: 0; border-radius: 0; margin: 0; padding: 10px 12px; }
 details.sec .history { padding-top: 4px; }
 details.sec .ta-row { padding: 7px 12px; }
+
+/* Mobile: stack the chip toolbar and let the per-agent menu span the width. */
+@media (max-width: 720px) {
+  .chart-card .bar { gap: 6px; }
+  .chip-det .peragent-list { right: auto; left: 0; min-width: 200px; }
+  .kpis .kpi { padding: 2px 10px; }
+}
 
 /* Mobile: the top tab bar becomes a fixed, scrollable bottom navbar. */
 @media (max-width: 720px) {

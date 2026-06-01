@@ -138,7 +138,7 @@ test('PUT /agents/:id touches ONLY server-managed fields', async () => {
 
   assert.deepEqual(
     Object.keys(receivedPatch).sort(),
-    ['display_name', 'location_id', 'meta', 'notes']
+    ['display_name', 'location_id', 'meta', 'monitor_config', 'notes']
   );
 });
 

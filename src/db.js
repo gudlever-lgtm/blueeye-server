@@ -31,7 +31,7 @@ function createDb(config) {
     await pool.end();
   }
 
-  return { pool, ping, close };
+  return { pool, ping, close, databaseName: config.db.database };
 }
 
 module.exports = { createDb };

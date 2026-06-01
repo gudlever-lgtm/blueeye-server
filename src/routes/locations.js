@@ -5,6 +5,7 @@ const { asyncHandler } = require('../middleware/asyncHandler');
 const { requireAuth, requireRole } = require('../auth/middleware');
 const { ROLES } = require('../auth/roles');
 const { validateLocationInput, parseId } = require('../validation/locationValidation');
+const { validateTimeRange } = require('../validation/resultsValidation');
 
 // Locations CRUD router with role-based access control:
 //   - viewer   may read           (GET)
@@ -13,7 +14,7 @@ const { validateLocationInput, parseId } = require('../validation/locationValida
 //
 // Authorization is applied per route (rather than router-wide) so that a
 // request to an unknown sub-path still falls through to the 404 handler.
-function createLocationsRouter({ locationsRepo }) {
+function createLocationsRouter({ locationsRepo, resultsRepo }) {
   const router = express.Router();
 
   // GET /locations — any authenticated role.
@@ -24,6 +25,111 @@ function createLocationsRouter({ locationsRepo }) {
     asyncHandler(async (req, res) => {
       const locations = await locationsRepo.findAll();
       res.json(locations);
+    })
+  );
+
+  // GET /locations/:id/traffic — correlated (aggregated) live traffic for all
+  // agents in the location: per-agent latest measurement + summed totals.
+  // viewer+. Declared before /:id so it isn't shadowed by other routes.
+  router.get(
+    '/:id/traffic',
+    requireAuth,
+    requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN),
+    asyncHandler(async (req, res) => {
+      const id = parseId(req.params.id);
+      if (id === null) {
+        return res.status(400).json({ error: 'Invalid id' });
+      }
+      const location = await locationsRepo.findById(id);
+      if (!location) {
+        return res.status(404).json({ error: 'Location not found' });
+      }
+
+      const rows = await resultsRepo.latestByLocation(id);
+      const totals = { rxBytes: 0, txBytes: 0, rxBytesPerSec: 0, txBytesPerSec: 0 };
+      let reporting = 0;
+
+      const agents = rows.map((row) => {
+        const t = row.payload && row.payload.traffic && row.payload.traffic.totals;
+        if (t) {
+          reporting += 1;
+          totals.rxBytes += Number(t.rxBytes) || 0;
+          totals.txBytes += Number(t.txBytes) || 0;
+          totals.rxBytesPerSec += Number(t.rxBytesPerSec) || 0;
+          totals.txBytesPerSec += Number(t.txBytesPerSec) || 0;
+        }
+        return {
+          agentId: row.agent_id,
+          hostname: row.hostname,
+          displayName: row.display_name,
+          status: row.status,
+          at: row.created_at,
+          rxBytesPerSec: t ? Number(t.rxBytesPerSec) || 0 : null,
+          txBytesPerSec: t ? Number(t.txBytesPerSec) || 0 : null,
+        };
+      });
+
+      res.json({
+        locationId: location.id,
+        locationName: location.name,
+        agentCount: agents.length,
+        reportingCount: reporting,
+        at: new Date().toISOString(),
+        totals,
+        agents,
+      });
+    })
+  );
+
+  // GET /locations/:id/traffic/history?from=&to= — historical traffic for the
+  // location over a time range, as a chronological summed-rate series plus the
+  // raw per-agent points. viewer+. Declared before /:id so it isn't shadowed.
+  router.get(
+    '/:id/traffic/history',
+    requireAuth,
+    requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN),
+    asyncHandler(async (req, res) => {
+      const id = parseId(req.params.id);
+      if (id === null) {
+        return res.status(400).json({ error: 'Invalid id' });
+      }
+      const { value: range, errors } = validateTimeRange(req.query);
+      if (errors) {
+        return res.status(400).json({ error: 'Validation failed', details: errors });
+      }
+      const location = await locationsRepo.findById(id);
+      if (!location) {
+        return res.status(404).json({ error: 'Location not found' });
+      }
+
+      const rows = await resultsRepo.rangeByLocation(id, range);
+      // Bucket by measurement timestamp; sum the location's rate at each instant.
+      const buckets = new Map();
+      const points = [];
+      for (const row of rows) {
+        const t = row.payload && row.payload.traffic && row.payload.traffic.totals;
+        const rx = t ? Number(t.rxBytesPerSec) || 0 : 0;
+        const tx = t ? Number(t.txBytesPerSec) || 0 : 0;
+        const at = row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at;
+        points.push({ agentId: row.agent_id, hostname: row.hostname, at, rxBytesPerSec: rx, txBytesPerSec: tx });
+        const key = at;
+        const b = buckets.get(key) || { at, rxBytesPerSec: 0, txBytesPerSec: 0, count: 0 };
+        b.rxBytesPerSec += rx;
+        b.txBytesPerSec += tx;
+        b.count += 1;
+        buckets.set(key, b);
+      }
+      const series = Array.from(buckets.values()).sort((a, b) => new Date(a.at) - new Date(b.at));
+
+      res.json({
+        locationId: location.id,
+        locationName: location.name,
+        from: range.from ? range.from.toISOString() : null,
+        to: range.to ? range.to.toISOString() : null,
+        count: points.length,
+        series,
+        points,
+      });
     })
   );
 

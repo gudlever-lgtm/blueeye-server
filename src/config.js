@@ -43,6 +43,8 @@ const config = {
   ws: {
     // Agent live channel.
     path: process.env.WS_AGENT_PATH || '/ws/agent',
+    // Browser live channel (analysis findings pushed to the dashboard).
+    dashboardPath: process.env.WS_DASHBOARD_PATH || '/ws/dashboard',
     heartbeatIntervalMs: toInt(process.env.WS_HEARTBEAT_MS, 30000),
   },
   // Client-side licensing against blueeye-licens. Set at installation (not CRUD).
@@ -54,6 +56,32 @@ const config = {
     cachePath: process.env.LICENSE_CACHE_PATH || path.join(process.cwd(), '.license-cache.json'),
     graceDays: toInt(process.env.LICENSE_GRACE_DAYS, 14),
     intervalHours: toInt(process.env.LICENSE_VALIDATE_INTERVAL_HOURS, 6),
+  },
+  // Storage monitoring: the path to statfs for disk usage. Default the server's
+  // data dir; point it at the drive holding the DB/Docker volume if different.
+  storage: {
+    diskPath: process.env.STORAGE_DISK_PATH || (process.env.LICENSE_CACHE_PATH ? path.dirname(process.env.LICENSE_CACHE_PATH) : process.cwd()),
+  },
+  // Analysis module: where warmed-up baselines are persisted so they survive a
+  // restart. The detector's tuning lives in src/analysis/config.js.
+  analysis: {
+    baselineCachePath: process.env.ANALYSIS_BASELINE_CACHE_PATH || path.join(process.cwd(), '.analysis-baselines.json'),
+  },
+  // Geo enrichment of flow records. dbPath points at an offline, EU-sourced
+  // GeoIP/ASN range CSV (e.g. DB-IP Lite, CC-BY) — see docs/geo.md. When unset
+  // or unreadable, flows are still stored but without country/ASN.
+  geo: {
+    enabled: process.env.GEO_ENABLED !== 'false',
+    dbPath: process.env.GEOIP_DB_PATH || '',
+    // Map tiles. Served to the frontend via /api/geo/config so the URL is never
+    // hardcoded. Default is OpenStreetMap (OSMF, EU); for production point this
+    // at self-hosted or another EU tile source — never a US tile server.
+    tileUrl: process.env.MAP_TILE_URL || 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+    tileAttribution: process.env.MAP_TILE_ATTRIBUTION || '© OpenStreetMap contributors',
+    tileMaxZoom: toInt(process.env.MAP_TILE_MAX_ZOOM, 19),
+    // Geocoder for the location address search/picker. Default OpenStreetMap
+    // Nominatim (OSMF, EU); point at a self-hosted/EU instance for production.
+    geocodeUrl: process.env.MAP_GEOCODE_URL || 'https://nominatim.openstreetmap.org',
   },
 };
 

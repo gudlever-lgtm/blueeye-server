@@ -7,7 +7,7 @@ const { ROLES } = require('../auth/roles');
 
 // Read-only view of the local license state (staff, viewer+). The signed proof
 // itself is never exposed as a token — this only reports status.
-function createLicenseRouter({ licenseManager }) {
+function createLicenseRouter({ licenseManager, featureGate }) {
   const router = express.Router();
 
   router.get(
@@ -19,6 +19,34 @@ function createLicenseRouter({ licenseManager }) {
         return res.status(503).json({ error: 'License manager not available' });
       }
       res.json(licenseManager.getStatus());
+    })
+  );
+
+  // GET /license/features — which modules the license entitles the customer to,
+  // so the UI can hide/grey-out modules they aren't licensed for (viewer+).
+  router.get(
+    '/features',
+    requireAuth,
+    requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN),
+    (req, res) => {
+      res.json(featureGate ? featureGate.summary() : { analysis: false, assistant: false, alerting: false, geo: false });
+    }
+  );
+
+  // POST /license/refresh — force an immediate re-validation against the license
+  // server (operator/admin), e.g. right after the licence was renewed there, so
+  // staff don't have to wait for the periodic 6-hour check. Returns the fresh
+  // status. Never throws out — validateOnce() handles its own errors.
+  router.post(
+    '/refresh',
+    requireAuth,
+    requireRole(ROLES.OPERATOR, ROLES.ADMIN),
+    asyncHandler(async (req, res) => {
+      if (!licenseManager) {
+        return res.status(503).json({ error: 'License manager not available' });
+      }
+      const status = await licenseManager.validateOnce();
+      res.json(status);
     })
   );
 

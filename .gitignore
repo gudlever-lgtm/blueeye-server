@@ -8,6 +8,12 @@ node_modules/
 # Cached license validation
 .license-cache.json
 
+# Persisted analysis baselines
+.analysis-baselines.json
+
+# Local compose overrides (e.g. host port tweaks)
+docker-compose.override.yml
+
 # Logs
 *.log
 logs/

@@ -1,0 +1,9 @@
+{
+  "_comment": "Causal dependency graph used by the correlator. An edge \"A\": [\"B\"] means metric A is UPSTREAM of B (a problem in A can cause a problem in B). Keys are causes, values are the effects they propagate to. Configurable — edit this file, the correlator logic never hardcodes relationships. Keys starting with _ are ignored.",
+  "disk": ["io.await"],
+  "io.await": ["cpu"],
+  "mem": ["cpu", "load1"],
+  "rx.bytesPerSec": ["cpu"],
+  "tx.bytesPerSec": ["cpu"],
+  "cpu": ["load1"]
+}

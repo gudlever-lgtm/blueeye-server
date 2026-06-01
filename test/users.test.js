@@ -217,3 +217,44 @@ test('POST /users with a non-admin token returns 403', async () => {
 
   assert.equal(res.status, 403);
 });
+
+// ---------------------------------------------- protected (super-admin) ------
+test('PUT /users/:id cannot demote a protected super-admin (409)', async () => {
+  const usersRepo = makeUsersRepo({
+    findById: async () => ({ id: 1, email: 'admin@blueeye.local', role: 'admin', protected: true }),
+  });
+  const res = await request(makeApp({ usersRepo }))
+    .put('/users/1')
+    .set('Authorization', admin())
+    .send({ role: 'viewer' });
+  assert.equal(res.status, 409);
+  assert.match(res.body.error, /protected/i);
+});
+
+test('PUT /users/:id can still reset a protected super-admin password', async () => {
+  let patch;
+  const usersRepo = makeUsersRepo({
+    findById: async () => ({ id: 1, email: 'admin@blueeye.local', role: 'admin', protected: true }),
+    update: async (id, p) => { patch = p; return { id, email: 'admin@blueeye.local', role: 'admin', protected: true }; },
+  });
+  const res = await request(makeApp({ usersRepo }))
+    .put('/users/1')
+    .set('Authorization', admin())
+    .send({ role: 'admin', password: 'a-new-password' });
+  assert.equal(res.status, 200);
+  assert.ok(patch.passwordHash); // password was reset
+  assert.equal(patch.role, 'admin'); // stays admin
+});
+
+test('DELETE /users/:id cannot delete a protected super-admin (409)', async () => {
+  let removed = false;
+  const usersRepo = makeUsersRepo({
+    findById: async () => ({ id: 1, email: 'admin@blueeye.local', role: 'admin', protected: true }),
+    remove: async () => { removed = true; return true; },
+  });
+  const res = await request(makeApp({ usersRepo }))
+    .delete('/users/1')
+    .set('Authorization', admin());
+  assert.equal(res.status, 409);
+  assert.equal(removed, false); // never reached the delete
+});

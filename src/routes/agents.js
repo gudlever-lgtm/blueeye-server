@@ -5,6 +5,7 @@ const { asyncHandler } = require('../middleware/asyncHandler');
 const { requireAuth, requireRole } = require('../auth/middleware');
 const { ROLES } = require('../auth/roles');
 const { validateAgentManagedInput } = require('../validation/agentValidation');
+const { validateTimeRange } = require('../validation/resultsValidation');
 const { parseId } = require('../validation/locationValidation');
 
 // Agents router with role-based access control:
@@ -14,8 +15,37 @@ const { parseId } = require('../validation/locationValidation');
 //
 // Agents are created via enrollment (prompt 4) — there is intentionally no
 // manual POST /agents here.
-function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo }) {
+function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentCommander }) {
   const router = express.Router();
+
+  // POST /agents/:id/run-test — push a "run test" command to a connected agent
+  // over the live WebSocket. operator/admin. Returns 202 with how many
+  // connections received it, 409 if the agent isn't currently connected.
+  router.post(
+    '/:id/run-test',
+    requireAuth,
+    requireRole(ROLES.OPERATOR, ROLES.ADMIN),
+    asyncHandler(async (req, res) => {
+      const id = parseId(req.params.id);
+      if (id === null) {
+        return res.status(400).json({ error: 'Invalid id' });
+      }
+      const agent = await agentsRepo.findById(id);
+      if (!agent) {
+        return res.status(404).json({ error: 'Agent not found' });
+      }
+
+      const body = req.body && typeof req.body === 'object' ? req.body : {};
+      const command = { name: 'run-test' };
+      if (Number.isInteger(body.intervalMs)) command.intervalMs = body.intervalMs;
+
+      const delivered = agentCommander ? agentCommander.sendCommand(id, command) : 0;
+      if (delivered === 0) {
+        return res.status(409).json({ error: 'Agent not connected', delivered: 0 });
+      }
+      res.status(202).json({ delivered, agentId: id });
+    })
+  );
 
   // GET /agents — list, with the joined location name.
   router.get(
@@ -46,6 +76,7 @@ function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo }) {
   );
 
   // GET /agents/:id/results — results reported by the agent. viewer+ (user RBAC).
+  // Optional time range: ?from=&to=&limit= (ISO dates; newest first).
   router.get(
     '/:id/results',
     requireAuth,
@@ -55,11 +86,99 @@ function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo }) {
       if (id === null) {
         return res.status(400).json({ error: 'Invalid id' });
       }
+      const { value: range, errors } = validateTimeRange(req.query);
+      if (errors) {
+        return res.status(400).json({ error: 'Validation failed', details: errors });
+      }
       const agent = await agentsRepo.findById(id);
       if (!agent) {
         return res.status(404).json({ error: 'Agent not found' });
       }
-      res.json(await resultsRepo.findByAgentId(id));
+      res.json(await resultsRepo.findByAgentId(id, range));
+    })
+  );
+
+  // GET /agents/:id/flows?port=&protocol=&from=&to= — search NetFlow data the
+  // agent reported (only present when its source is 'netflow'). Aggregates the
+  // byPort / byProtocol entries across the matching measurements in the range,
+  // optionally filtered by a specific port and/or protocol. viewer+.
+  router.get(
+    '/:id/flows',
+    requireAuth,
+    requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN),
+    asyncHandler(async (req, res) => {
+      const id = parseId(req.params.id);
+      if (id === null) {
+        return res.status(400).json({ error: 'Invalid id' });
+      }
+      const { value: range, errors } = validateTimeRange(req.query);
+      if (errors) {
+        return res.status(400).json({ error: 'Validation failed', details: errors });
+      }
+      // Optional filters.
+      let port = null;
+      if (req.query.port !== undefined && req.query.port !== '') {
+        if (!/^\d+$/.test(String(req.query.port))) {
+          return res.status(400).json({ error: 'Validation failed', details: { port: 'port must be an integer' } });
+        }
+        port = Number(req.query.port);
+      }
+      const protocol = req.query.protocol ? String(req.query.protocol).toLowerCase() : null;
+
+      const agent = await agentsRepo.findById(id);
+      if (!agent) {
+        return res.status(404).json({ error: 'Agent not found' });
+      }
+
+      const rows = await resultsRepo.findByAgentId(id, range);
+      const byPort = new Map();
+      const byProtocol = new Map();
+      const byTalker = new Map();
+      const series = [];
+
+      const bump = (map, key, e) => {
+        const cur = map.get(key) || { bytes: 0, packets: 0, flows: 0 };
+        cur.bytes += Number(e.bytes) || 0;
+        cur.packets += Number(e.packets) || 0;
+        cur.flows += Number(e.flows) || 0;
+        map.set(key, cur);
+      };
+
+      for (const row of rows) {
+        const t = row.payload && row.payload.traffic;
+        if (!t || (!t.byPort && !t.byProtocol && !t.topTalkers)) continue;
+        let matchBytes = 0;
+        for (const e of t.byPort || []) {
+          if (port !== null && e.port !== port) continue;
+          bump(byPort, e.port, e);
+          if (port !== null) matchBytes += Number(e.bytes) || 0;
+        }
+        for (const e of t.byProtocol || []) {
+          if (protocol && String(e.protocol).toLowerCase() !== protocol) continue;
+          bump(byProtocol, e.protocol, e);
+          if (protocol && port === null) matchBytes += Number(e.bytes) || 0;
+        }
+        for (const e of t.topTalkers || []) bump(byTalker, e.pair, e);
+        const at = row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at;
+        if (port !== null || protocol) series.push({ at, bytes: matchBytes });
+      }
+
+      const sortMap = (map, key) =>
+        Array.from(map.entries())
+          .map(([k, v]) => ({ [key]: k, ...v }))
+          .sort((a, b) => b.bytes - a.bytes);
+
+      res.json({
+        agentId: id,
+        filter: { port, protocol },
+        from: range.from ? range.from.toISOString() : null,
+        to: range.to ? range.to.toISOString() : null,
+        measurements: rows.length,
+        byPort: sortMap(byPort, 'port'),
+        byProtocol: sortMap(byProtocol, 'protocol'),
+        topTalkers: sortMap(byTalker, 'pair').slice(0, 50),
+        series: series.reverse(), // oldest first
+      });
     })
   );
 

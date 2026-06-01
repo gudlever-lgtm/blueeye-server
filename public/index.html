@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="da" data-theme="light">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>BlueEye — Server</title>
+    <!-- Leaflet (open source, BSD) for the locations map. Loaded from the
+         official CDN; if it is unavailable (offline/CSP) the map view falls
+         back to a location list. Point these at a self-hosted copy for a fully
+         on-prem deployment. -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <!-- Optional marker clustering (degrades gracefully if unavailable). -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
+    <script defer src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <!-- Login -->
+    <main id="login" class="login hidden">
+      <form id="login-form" class="card">
+        <h1>BlueEye <span class="muted">server</span></h1>
+        <label>Email <input type="email" id="email" value="admin@blueeye.local" required /></label>
+        <label>Adgangskode <input type="password" id="password" required /></label>
+        <button type="submit">Log ind</button>
+        <p id="login-error" class="error"></p>
+      </form>
+    </main>
+
+    <!-- App -->
+    <div id="app" class="hidden">
+      <header class="topbar">
+        <strong>BlueEye <span class="muted">server</span></strong>
+        <nav class="tabs">
+          <button data-view="overview" class="active">Trafik</button>
+          <button data-view="map">Kort</button>
+          <button data-view="geo" data-feature="geo">Geo</button>
+          <button data-view="agents">Agenter</button>
+          <button data-view="findings" data-feature="analysis">Analyse</button>
+          <button data-view="locations">Lokationer</button>
+          <button data-view="enrollment">Enrollment</button>
+          <button data-view="settings">Indstillinger</button>
+        </nav>
+        <span class="spacer"></span>
+        <label class="autorefresh muted" title="Auto-opdatér hvert 5. sekund">
+          <input type="checkbox" id="autorefresh" /> Auto
+        </label>
+        <span id="whoami" class="muted"></span>
+        <button id="theme" class="ghost" title="Skift lyst/mørkt tema">🌙</button>
+        <button id="refresh" class="ghost" title="Opdatér">⟳</button>
+        <button id="logout" class="ghost">Log ud</button>
+      </header>
+      <main id="view"></main>
+    </div>
+
+    <div id="toast" class="toast hidden"></div>
+    <div id="modal" class="modal hidden"><div class="modal-card" id="modal-card"></div></div>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

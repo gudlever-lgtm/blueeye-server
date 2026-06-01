@@ -212,10 +212,37 @@ WebSocket-kanalen bruger et **agent-token** (ikke et JWT) — se
 | POST   | `/agents/results` | Indsend testresultater           | **agent-token**    | `201` / `400` / `401`      |
 | GET    | `/agents/:id/results` | Hent en agents resultater    | viewer+            | `200` / `404` / `400`      |
 | GET    | `/license/status` | Lokal licensstatus               | viewer+            | `200`                      |
+| GET    | `/api/findings`  | Listér analyse-findings           | viewer+            | `200` / `400` (ugyldig since) |
+| POST   | `/api/findings/:id/ack` | Kvittér en finding         | operator+          | `200` / `404`              |
+| POST   | `/api/assistant/explain` | Spørg AI-assistenten (opt-in) | viewer+        | `200` / `400` / `403` / `500` |
+| GET    | `/api/geo/config` | Kort-tile-kilde til frontend     | viewer+            | `200`                      |
+| GET    | `/api/geo/overview` | Interne hosts + eksterne destinationer | viewer+      | `200` / `400`              |
+| GET    | `/api/geo/select/findings` | Findings for valgt land/ASN | viewer+          | `200` / `400` / `404`      |
+| GET    | `/api/geo/select/flows` | Flow-detaljer for valgt land/ASN | viewer+        | `200` / `400` / `404`      |
+| GET    | `/api/alerting/config` | Aktive alarm-kanaler + regler   | viewer+            | `200`                      |
+| POST   | `/api/alerting/test` | Send test-finding til en kanal    | operator+          | `200` / `400` / `404`      |
+| GET    | `/license/features` | Hvilke moduler licensen tillader | viewer+            | `200`                      |
+| GET    | `/api/export/:resource` | CSV/JSON-eksport (`?format=csv\|json`) | viewer+      | `200` / `400` / `403` / `404` |
 | WS     | `/ws/agent`      | Live-kanal (status/kommandoer)    | **agent-token**    | upgrade / hård luk         |
+| WS     | `/ws/dashboard`  | Live findings til dashboardet     | viewer+ (JWT)      | upgrade / hård luk         |
 
 ("viewer+" = viewer eller højere; "operator+" = operator eller admin.
 "agent-token" = opaque agent-token, ikke bruger-JWT.)
+
+CSV/JSON-eksport: `GET /api/export/<resource>?format=csv|json` for `findings`,
+`geo` (licens-gated), `agents`, `locations` og `traffic` (kræver `agentId`).
+Findings/geo respekterer samme `hostId`/`since`-filtre som deres API'er.
+Dashboardet har "Eksport: CSV / JSON"-knapper på Analyse- og Geo-fanerne.
+
+Analyse-modulet (lokal anomali-detektion, korrelator og opt-in AI-assistent) er
+beskrevet i [`docs/analysis.md`](docs/analysis.md). Geo-laget (flow-records,
+GeoIP/ASN-berigelse og kort-API) er beskrevet i [`docs/geo.md`](docs/geo.md).
+Alerting (findings → email/webhook/syslog) er beskrevet i
+[`docs/alerting.md`](docs/alerting.md). Retention + rollup (down-sampling,
+purge, cross-læsning af rå + aggregeret data) er beskrevet i
+[`docs/retention.md`](docs/retention.md). Licens-styring af modulerne
+(features i den signerede licens) er beskrevet i
+[`docs/license-features.md`](docs/license-features.md).
 
 ### Eksempler
 

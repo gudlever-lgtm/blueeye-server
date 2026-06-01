@@ -10,6 +10,14 @@ const { createAgentEnrollRouter } = require('./agentEnroll');
 const { createAgentReportsRouter } = require('./agentReports');
 const { createEnrollmentCodesRouter } = require('./enrollmentCodes');
 const { createLicenseRouter } = require('./license');
+const { createSystemRouter } = require('./system');
+const { createFindingsRouter } = require('./findings');
+const { createAssistantRouter } = require('./assistant');
+const { createGeoRouter } = require('./geo');
+const { createAlertingRouter } = require('./alerting');
+const { createExportRouter } = require('./export');
+const { createSettingsRouter } = require('./settings');
+const { createMapRouter } = require('./map');
 const {
   createAgentAuthenticator,
   createAgentTokenMiddleware,
@@ -27,8 +35,26 @@ function createApiRouter({
   agentTokensRepo,
   resultsRepo,
   licenseManager,
+  agentCommander,
+  systemInfo,
+  findingStore,
+  analysisPipeline,
+  flowPipeline,
+  flowsRepo,
+  geoTileConfig,
+  assistant,
+  dispatcher,
+  featureGate,
+  settingsService,
+  analysisConfig,
+  retentionConfig,
 }) {
   const router = express.Router();
+  // Effective (admin-editable) map config, used by both the geo view and the
+  // ungated location-picker map. Falls back to the static tile config.
+  const getMapConfig = settingsService
+    ? () => settingsService.getMap()
+    : () => Promise.resolve({ tileUrl: geoTileConfig && geoTileConfig.tileUrl, attribution: geoTileConfig && geoTileConfig.tileAttribution, maxZoom: geoTileConfig && geoTileConfig.tileMaxZoom });
 
   // Agent-token middleware — kept entirely separate from the user JWT auth.
   const agentAuthenticator = createAgentAuthenticator({ agentTokensRepo });
@@ -41,8 +67,16 @@ function createApiRouter({
   router.use('/health', createHealthRouter({ db }));
   router.use('/auth', createAuthRouter({ usersRepo }));
   router.use('/users', createUsersRouter({ usersRepo }));
-  router.use('/locations', createLocationsRouter({ locationsRepo }));
-  router.use('/license', createLicenseRouter({ licenseManager }));
+  router.use('/locations', createLocationsRouter({ locationsRepo, resultsRepo }));
+  router.use('/license', createLicenseRouter({ licenseManager, featureGate }));
+  router.use('/system', createSystemRouter({ systemInfo }));
+  if (findingStore) router.use('/api/findings', createFindingsRouter({ findingStore }));
+  if (assistant) router.use('/api/assistant', createAssistantRouter({ assistant, featureGate }));
+  if (flowsRepo) router.use('/api/geo', createGeoRouter({ flowsRepo, agentsRepo, findingStore, tileConfig: geoTileConfig, getMapConfig, featureGate }));
+  if (dispatcher) router.use('/api/alerting', createAlertingRouter({ dispatcher }));
+  router.use('/api/map', createMapRouter({ getMapConfig }));
+  if (settingsService) router.use('/api/settings', createSettingsRouter({ settingsService, featureGate, dispatcher, analysisConfig, retentionConfig }));
+  router.use('/api/export', createExportRouter({ findingStore, flowsRepo, agentsRepo, locationsRepo, resultsRepo, featureGate }));
   router.use('/enrollment-codes', createEnrollmentCodesRouter({ enrollmentCodesRepo, locationsRepo }));
 
   // Three routers share the /agents prefix, each with its own auth model:
@@ -50,8 +84,8 @@ function createApiRouter({
   //   - POST /results          — agent token
   //   - POST /enroll           — unauthenticated
   // Requests fall through routers that have no matching route.
-  router.use('/agents', createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo }));
-  router.use('/agents', createAgentReportsRouter({ agentAuth, resultsRepo }));
+  router.use('/agents', createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentCommander }));
+  router.use('/agents', createAgentReportsRouter({ agentAuth, resultsRepo, agentsRepo, analysisPipeline, flowPipeline }));
   router.use('/agents', createAgentEnrollRouter({ enrollmentStore }));
 
   return router;

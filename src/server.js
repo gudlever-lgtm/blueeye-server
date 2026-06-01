@@ -11,9 +11,37 @@ const { createEnrollmentStore } = require('./services/enrollmentStore');
 const { createAgentTokensRepository } = require('./repositories/agentTokensRepository');
 const { createResultsRepository } = require('./repositories/resultsRepository');
 const { attachAgentWebSocket } = require('./ws/agentSocket');
+const { attachDashboardWebSocket } = require('./ws/dashboardSocket');
+const { verifyToken } = require('./auth/jwt');
 const { createLicenseManager } = require('./license/licenseManager');
+const { createFeatureGate } = require('./license/features');
 const { createFileCache } = require('./license/licenseCache');
 const { isConfigured } = require('./license/publicKey');
+const { createSystemInfo } = require('./services/systemInfo');
+const { FindingStore } = require('./analysis/findings');
+const { createBaselineStore } = require('./analysis/baselines');
+const { createDetector } = require('./analysis/detector');
+const { createAnalysisPipeline } = require('./analysis/pipeline');
+const { createCorrelator } = require('./analysis/correlator');
+const { createAssistant } = require('./analysis/assistant');
+const { loadConfig: loadAnalysisConfig } = require('./analysis/config');
+const { createFlowsRepository } = require('./repositories/flowsRepository');
+const { createGeoProvider } = require('./geo/provider');
+const { createCentroids } = require('./geo/centroids');
+const { createGeoEnricher } = require('./geo/enricher');
+const { createFlowPipeline } = require('./geo/flowPipeline');
+const { loadAlertingConfig } = require('./analysis/alerting/config');
+const { createDispatcher } = require('./analysis/alerting/dispatcher');
+const { createEmailChannel, createSmtpTransport } = require('./analysis/alerting/channels/email');
+const { createWebhookChannel } = require('./analysis/alerting/channels/webhook');
+const { createSyslogChannel } = require('./analysis/alerting/channels/syslog');
+const { loadRetentionConfig } = require('./analysis/retention/config');
+const { createRetentionRepo } = require('./analysis/retention/repo');
+const { createRollup } = require('./analysis/retention/rollup');
+const { createPurge } = require('./analysis/retention/purge');
+const { createRetentionScheduler } = require('./analysis/retention/scheduler');
+const { createSettingsRepository } = require('./repositories/settingsRepository');
+const { createSettingsService } = require('./services/settings');
 
 // Wires up real dependencies, starts the HTTP server and installs graceful
 // shutdown handlers.
@@ -39,12 +67,94 @@ function start() {
   // the live WebSocket connection count (agentWs is assigned just below; the
   // closure is only invoked later, at validation time).
   let agentWs = null;
+  let dashboardWs = null;
   const licenseManager = createLicenseManager({
     config: config.license,
     publicKey: config.license.publicKey,
     cache: createFileCache(config.license.cachePath),
     logger: console,
     getAgentCount: () => (agentWs ? agentWs.connectionCount() : 0),
+  });
+
+  // Feature gate: reads signature-verified license entitlements (fail-closed).
+  const featureGate = createFeatureGate({ licenseManager });
+
+  // Lets HTTP routes push commands to connected agents over the WebSocket.
+  const agentCommander = {
+    sendCommand: (agentId, command) => (agentWs ? agentWs.sendCommand(agentId, command) : 0),
+  };
+
+  // Storage info (disk free/used + database size).
+  const systemInfo = createSystemInfo({ db, diskPath: config.storage.diskPath });
+
+  // Analysis module: findings store + detector pipeline hung off ingest. The
+  // detector pushes findings to the UI over the SAME WebSocket (agentWs is
+  // assigned just below; the closure runs later, at ingest time).
+  const analysisConfig = loadAnalysisConfig();
+  const findingStore = new FindingStore({ db });
+  const baselineCache = createFileCache(config.analysis.baselineCachePath);
+  const baselines = createBaselineStore({ store: baselineCache, minSamples: analysisConfig.minSamples });
+  const detector = createDetector({ baselines, config: analysisConfig });
+  const correlator = createCorrelator(); // uses src/analysis/dependency-graph.json
+
+  // Alerting: route findings to channels (email/webhook/syslog). Channels are
+  // built unconditionally so the test endpoint works; rules/enable live in
+  // config. Outgoing sends use Node's fetch / dgram / (lazy) nodemailer.
+  const alertingConfig = loadAlertingConfig();
+  const dispatcher = createDispatcher({
+    config: alertingConfig,
+    channels: {
+      email: createEmailChannel({ config: alertingConfig.channels.email, transport: createSmtpTransport(alertingConfig.channels.email.smtp, console), logger: console }),
+      webhook: createWebhookChannel({ config: alertingConfig.channels.webhook, logger: console }),
+      syslog: createSyslogChannel({ config: alertingConfig.channels.syslog, logger: console }),
+    },
+    // Alerting only dispatches if the license includes it.
+    licensed: () => featureGate.isFeatureEnabled('alerting'),
+    logger: console,
+  });
+
+  const analysisPipeline = createAnalysisPipeline({
+    detector,
+    findingStore,
+    config: analysisConfig,
+    correlator,
+    dispatcher,
+    alertingEnabled: alertingConfig.enabled,
+    // Detector runs only if the license includes analysis (AND config enables it).
+    licensed: () => featureGate.isFeatureEnabled('analysis'),
+    // Push findings to connected dashboards (browsers), not to agents.
+    publishFinding: (hostId, message) => (dashboardWs ? dashboardWs.broadcast(message) : 0),
+    logger: console,
+  });
+  // Opt-in LLM assistant (off unless ANALYSIS_ASSISTANT_ENABLED=true). Reads the
+  // same findings store for its compact context.
+  const assistant = createAssistant({ config: analysisConfig, findingStore, logger: console });
+
+  // Geo layer: enrich + store flow records. The GeoIP provider reads an offline,
+  // EU-sourced range DB (config.geo.dbPath); without it, flows store without
+  // country/ASN. RFC1918/private endpoints are never geolocated.
+  const flowsRepo = createFlowsRepository(db);
+  const geoProvider = createGeoProvider({ dbPath: config.geo.dbPath, logger: console });
+  const geoEnricher = createGeoEnricher({ provider: geoProvider, centroids: createCentroids() });
+  const flowPipeline = createFlowPipeline({
+    flowsRepo,
+    enricher: geoEnricher,
+    config: { geoEnabled: config.geo.enabled },
+    logger: console,
+  });
+
+  // Retention: nightly rollup (down-sample raw -> rollup tables) + purge of
+  // expired data. DB hygiene; on by default. Started after the server is up.
+  const retentionConfig = loadRetentionConfig();
+  const retentionRepo = createRetentionRepo(db);
+
+  // Runtime-editable settings (currently the map tile/geocoder source).
+  const settingsService = createSettingsService({ settingsRepo: createSettingsRepository(db), config });
+  const retentionScheduler = createRetentionScheduler({
+    rollup: createRollup({ repo: retentionRepo, config: retentionConfig, logger: console }),
+    purge: createPurge({ repo: retentionRepo, config: retentionConfig }),
+    config: retentionConfig,
+    logger: console,
   });
 
   const app = createApp({
@@ -56,7 +166,20 @@ function start() {
     enrollmentStore,
     agentTokensRepo,
     resultsRepo,
+    agentCommander,
+    systemInfo,
     licenseManager,
+    findingStore,
+    analysisPipeline,
+    flowPipeline,
+    flowsRepo,
+    geoTileConfig: config.geo,
+    assistant,
+    dispatcher,
+    featureGate,
+    settingsService,
+    analysisConfig,
+    retentionConfig,
     logger: console,
   });
 
@@ -78,6 +201,28 @@ function start() {
     licenseGuard: (count) => licenseManager.canAcceptNewConnection(count),
   });
 
+  // Browser live channel (analysis findings -> dashboard), gated by the user JWT.
+  dashboardWs = attachDashboardWebSocket({
+    server,
+    verifyToken,
+    logger: console,
+    path: config.ws.dashboardPath,
+    heartbeatMs: config.ws.heartbeatIntervalMs,
+  });
+
+  // Both WebSocket servers are cooperative (they ignore paths that aren't
+  // theirs). Reject any upgrade to an unknown path so stray sockets don't hang.
+  const knownWsPaths = new Set([config.ws.path, config.ws.dashboardPath]);
+  server.on('upgrade', (req, socket) => {
+    let pathname;
+    try {
+      pathname = new URL(req.url, 'http://localhost').pathname;
+    } catch {
+      pathname = req.url;
+    }
+    if (!knownWsPaths.has(pathname)) socket.destroy();
+  });
+
   if (!isConfigured(config.license.publicKey)) {
     console.warn(
       'License public key is not configured (placeholder) — proofs cannot be verified and agents will not be licensed. See src/license/publicKey.js.'
@@ -86,10 +231,15 @@ function start() {
   // Validate at startup, then periodically. Failures fall back to cache + grace.
   licenseManager.start().catch((err) => console.error('License manager error:', err));
 
+  // Periodic retention rollup + purge (behind RETENTION_ENABLED, default on).
+  retentionScheduler.start();
+
   function shutdown(signal) {
     console.info(`Received ${signal}, shutting down gracefully...`);
     licenseManager.stop();
+    retentionScheduler.stop();
     agentWs.close();
+    dashboardWs.close();
     server.close(async () => {
       try {
         await db.close();

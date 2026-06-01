@@ -55,6 +55,14 @@ test('GET /api/export/agents?format=csv exports the agent inventory', async () =
   assert.match(res.text, /1,h1,HQ,linux,x64,online,Office,/);
 });
 
+test('a formula-laden agent hostname is neutralised in the CSV export', async () => {
+  const agentsRepo = makeAgentsRepo({ findAll: async () => [{ id: 1, hostname: '=cmd|\'/c calc\'!A1', display_name: 'x', platform: 'linux', arch: 'x64', status: 'online', location_name: null, last_report_at: null }] });
+  const res = await request(makeApp({ agentsRepo })).get('/api/export/agents?format=csv').set('Authorization', viewer());
+  assert.equal(res.status, 200);
+  assert.ok(!/,=cmd/.test(res.text), 'a raw leading = must not reach the CSV');
+  assert.match(res.text, /'=cmd/); // neutralised with a leading apostrophe
+});
+
 test('GET /api/export/locations returns JSON', async () => {
   const locationsRepo = makeLocationsRepo({ findAll: async () => [{ id: 2, name: 'DC', address: 'A', latitude: 55.6, longitude: 12.5 }] });
   const res = await request(makeApp({ locationsRepo })).get('/api/export/locations').set('Authorization', viewer());

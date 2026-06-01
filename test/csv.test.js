@@ -16,6 +16,20 @@ test('cell stringifies, joins arrays, ISO-formats dates, and quotes when needed'
   assert.equal(cell('line1\nline2'), '"line1\nline2"');
 });
 
+test('cell neutralises leading formula characters (CSV injection)', () => {
+  assert.equal(cell('=1+1'), "'=1+1");
+  assert.equal(cell('@SUM(1)'), "'@SUM(1)");
+  assert.equal(cell('+1+1'), "'+1+1");
+  assert.equal(cell('-2+3'), "'-2+3");
+  assert.equal(cell('\t=cmd'), "'\t=cmd");
+  // A value that is BOTH a formula and needs quoting: quote-wrapped with the
+  // neutralising apostrophe kept inside.
+  assert.equal(cell('=cmd|"/c calc",x'), '"\'=cmd|""/c calc"",x"');
+  // Ordinary values are untouched.
+  assert.equal(cell('cpu'), 'cpu');
+  assert.equal(cell('a=b'), 'a=b'); // '=' not leading
+});
+
 test('toCsv emits a header and one line per row, in column order', () => {
   const out = toCsv(['a', 'b'], [{ a: 1, b: 'x' }, { a: 2, b: 'y,z' }]);
   assert.equal(out, 'a,b\n1,x\n2,"y,z"\n');

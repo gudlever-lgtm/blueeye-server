@@ -156,6 +156,27 @@ function makeLicenseManager(overrides = {}) {
   };
 }
 
+// A fake analysis finding store (in-memory). Mirrors FindingStore's surface.
+function makeFindingStore(overrides = {}) {
+  const rows = [];
+  return {
+    rows,
+    save: overrides.save || (async (f) => { const saved = { ...f, id: f.id || `f${rows.length + 1}`, acked: false }; rows.push(saved); return saved; }),
+    list: overrides.list || (async (hostId, since) => rows.filter((f) => (!hostId || f.hostId === hostId) && (!since || new Date(f.createdAt || 0) >= new Date(since)))),
+    get: overrides.get || (async (id) => rows.find((f) => f.id === id) || null),
+    ack: overrides.ack || (async (id) => { const f = rows.find((x) => x.id === id); if (!f) return false; f.acked = true; return true; }),
+  };
+}
+
+// A fake analysis pipeline (records calls; produces nothing by default).
+function makeAnalysisPipeline(overrides = {}) {
+  const calls = [];
+  return {
+    calls,
+    processResults: overrides.processResults || (async (hostId, payloads) => { calls.push({ hostId, payloads }); return []; }),
+  };
+}
+
 // ---- App + auth helpers ---------------------------------------------------
 
 // Builds an app wired with fakes; pass overrides to swap any dependency.
@@ -172,6 +193,8 @@ function makeApp(overrides = {}) {
     licenseManager: overrides.licenseManager || makeLicenseManager(),
     agentCommander: overrides.agentCommander || makeAgentCommander(),
     systemInfo: overrides.systemInfo || makeSystemInfo(),
+    findingStore: overrides.findingStore || makeFindingStore(),
+    analysisPipeline: overrides.analysisPipeline || makeAnalysisPipeline(),
   });
 }
 
@@ -206,6 +229,8 @@ module.exports = {
   makeLicenseManager,
   makeAgentCommander,
   makeSystemInfo,
+  makeFindingStore,
+  makeAnalysisPipeline,
   makeDb,
   makeApp,
   tokenFor,

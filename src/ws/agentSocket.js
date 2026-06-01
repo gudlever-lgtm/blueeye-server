@@ -158,7 +158,23 @@ function attachAgentWebSocket({
     return wss.clients.size;
   }
 
-  return { wss, sendCommand, close, connectionCount };
+  // Pushes a message to the connections of one host (e.g. an analysis 'finding'
+  // event). Uses the SAME WebSocket server — not a new channel. Returns how many
+  // sockets received it. (UI clients that connect for a host receive these; the
+  // dashboard also reads findings over REST.)
+  function broadcast(hostId, message) {
+    let sent = 0;
+    const target = String(hostId);
+    for (const ws of wss.clients) {
+      if (String(ws.agentId) === target && ws.readyState === ws.OPEN) {
+        safeSend(ws, message);
+        sent += 1;
+      }
+    }
+    return sent;
+  }
+
+  return { wss, sendCommand, broadcast, close, connectionCount };
 }
 
 module.exports = { attachAgentWebSocket };

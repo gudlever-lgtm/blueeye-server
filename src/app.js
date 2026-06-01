@@ -22,6 +22,8 @@ function createApp({
   licenseManager,
   agentCommander,
   systemInfo,
+  findingStore,
+  analysisPipeline,
   logger = silentLogger,
 } = {}) {
   const app = express();
@@ -50,6 +52,8 @@ function createApp({
       licenseManager,
       agentCommander,
       systemInfo,
+      findingStore,
+      analysisPipeline,
     })
   );
 

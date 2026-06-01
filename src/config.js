@@ -60,6 +60,11 @@ const config = {
   storage: {
     diskPath: process.env.STORAGE_DISK_PATH || (process.env.LICENSE_CACHE_PATH ? path.dirname(process.env.LICENSE_CACHE_PATH) : process.cwd()),
   },
+  // Analysis module: where warmed-up baselines are persisted so they survive a
+  // restart. The detector's tuning lives in src/analysis/config.js.
+  analysis: {
+    baselineCachePath: process.env.ANALYSIS_BASELINE_CACHE_PATH || path.join(process.cwd(), '.analysis-baselines.json'),
+  },
 };
 
 // The default JWT secret must never be used outside development.

@@ -12,7 +12,7 @@ const { validateCapabilities } = require('../validation/agentValidation');
 //
 // Paths use the `/me/...` prefix so they don't collide with the user-JWT agents
 // router's `/:id` routes mounted under the same /agents path.
-function createAgentReportsRouter({ agentAuth, resultsRepo, agentsRepo }) {
+function createAgentReportsRouter({ agentAuth, resultsRepo, agentsRepo, analysisPipeline = null }) {
   const router = express.Router();
 
   // POST /agents/results { results: [...] } — stores results for the agent
@@ -26,6 +26,17 @@ function createAgentReportsRouter({ agentAuth, resultsRepo, agentsRepo }) {
         return res.status(400).json({ error: 'Validation failed', details: errors });
       }
       const inserted = await resultsRepo.createMany(req.agent.agentId, value.results);
+
+      // After persistence, run analysis (behind its own feature flag). It is
+      // resilient and must never break ingestion, so failures are swallowed.
+      if (analysisPipeline) {
+        try {
+          await analysisPipeline.processResults(req.agent.agentId, value.results);
+        } catch {
+          /* analysis is best-effort; ingestion already succeeded */
+        }
+      }
+
       res.status(201).json({ inserted });
     })
   );

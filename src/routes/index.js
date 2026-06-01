@@ -11,6 +11,7 @@ const { createAgentReportsRouter } = require('./agentReports');
 const { createEnrollmentCodesRouter } = require('./enrollmentCodes');
 const { createLicenseRouter } = require('./license');
 const { createSystemRouter } = require('./system');
+const { createFindingsRouter } = require('./findings');
 const {
   createAgentAuthenticator,
   createAgentTokenMiddleware,
@@ -30,6 +31,8 @@ function createApiRouter({
   licenseManager,
   agentCommander,
   systemInfo,
+  findingStore,
+  analysisPipeline,
 }) {
   const router = express.Router();
 
@@ -47,6 +50,7 @@ function createApiRouter({
   router.use('/locations', createLocationsRouter({ locationsRepo, resultsRepo }));
   router.use('/license', createLicenseRouter({ licenseManager }));
   router.use('/system', createSystemRouter({ systemInfo }));
+  if (findingStore) router.use('/api/findings', createFindingsRouter({ findingStore }));
   router.use('/enrollment-codes', createEnrollmentCodesRouter({ enrollmentCodesRepo, locationsRepo }));
 
   // Three routers share the /agents prefix, each with its own auth model:
@@ -55,7 +59,7 @@ function createApiRouter({
   //   - POST /enroll           — unauthenticated
   // Requests fall through routers that have no matching route.
   router.use('/agents', createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentCommander }));
-  router.use('/agents', createAgentReportsRouter({ agentAuth, resultsRepo, agentsRepo }));
+  router.use('/agents', createAgentReportsRouter({ agentAuth, resultsRepo, agentsRepo, analysisPipeline }));
   router.use('/agents', createAgentEnrollRouter({ enrollmentStore }));
 
   return router;

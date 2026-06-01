@@ -15,6 +15,11 @@ const { createLicenseManager } = require('./license/licenseManager');
 const { createFileCache } = require('./license/licenseCache');
 const { isConfigured } = require('./license/publicKey');
 const { createSystemInfo } = require('./services/systemInfo');
+const { FindingStore } = require('./analysis/findings');
+const { createBaselineStore } = require('./analysis/baselines');
+const { createDetector } = require('./analysis/detector');
+const { createAnalysisPipeline } = require('./analysis/pipeline');
+const { loadConfig: loadAnalysisConfig } = require('./analysis/config');
 
 // Wires up real dependencies, starts the HTTP server and installs graceful
 // shutdown handlers.
@@ -56,6 +61,22 @@ function start() {
   // Storage info (disk free/used + database size).
   const systemInfo = createSystemInfo({ db, diskPath: config.storage.diskPath });
 
+  // Analysis module: findings store + detector pipeline hung off ingest. The
+  // detector pushes findings to the UI over the SAME WebSocket (agentWs is
+  // assigned just below; the closure runs later, at ingest time).
+  const analysisConfig = loadAnalysisConfig();
+  const findingStore = new FindingStore({ db });
+  const baselineCache = createFileCache(config.analysis.baselineCachePath);
+  const baselines = createBaselineStore({ store: baselineCache, minSamples: analysisConfig.minSamples });
+  const detector = createDetector({ baselines, config: analysisConfig });
+  const analysisPipeline = createAnalysisPipeline({
+    detector,
+    findingStore,
+    config: analysisConfig,
+    publishFinding: (hostId, message) => (agentWs ? agentWs.broadcast(hostId, message) : 0),
+    logger: console,
+  });
+
   const app = createApp({
     db,
     locationsRepo,
@@ -68,6 +89,8 @@ function start() {
     agentCommander,
     systemInfo,
     licenseManager,
+    findingStore,
+    analysisPipeline,
     logger: console,
   });
 

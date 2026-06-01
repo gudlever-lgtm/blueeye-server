@@ -675,11 +675,7 @@ const METRIC_DEFS = [
 ];
 const histState = { agentId: '', metrics: new Set(['rx', 'tx']) };
 
-// ms -> 'YYYY-MM-DDTHH:mm' in local time (for <input type=datetime-local>).
-function toLocalInput(ms) {
-  const d = new Date(ms - new Date(ms).getTimezoneOffset() * 60000);
-  return d.toISOString().slice(0, 16);
-}
+// (toLocalInput(Date) lives with the other datetime-local helpers below.)
 function fmtNum(v) { return v >= 1024 ? fmtBytes(v) : String(Math.round(v * 10) / 10); }
 function fmtTimeShort(ms) {
   return new Date(ms).toLocaleString('da-DK', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
@@ -734,8 +730,8 @@ function trafficHistorySection() {
   const fromI = el('input', { type: 'datetime-local' });
   const toI = el('input', { type: 'datetime-local' });
   const now = Date.now();
-  toI.value = toLocalInput(now);
-  fromI.value = toLocalInput(now - 3600000);
+  toI.value = toLocalInput(new Date(now));
+  fromI.value = toLocalInput(new Date(now - 3600000));
 
   const metricBoxes = METRIC_DEFS.map(([key, label]) => {
     const cb = el('input', { type: 'checkbox' });
@@ -793,7 +789,7 @@ function trafficHistorySection() {
     if (!chosen.length) { chartHost.replaceChildren(el('div', { class: 'empty' }, 'Vælg mindst én type.')); return; }
     const seriesList = chosen.map(([k, label], idx) => ({ id: k, label, color: SERIES_COLORS[idx % SERIES_COLORS.length], points: points.map((p) => ({ t: p.t, y: p[k] })) }));
     const legend = el('div', { class: 'legend' }, ...seriesList.map((s) => el('span', {}, el('span', { class: 'dot', style: `background:${s.color}` }), s.label)));
-    chartHost.replaceChildren(historyChart(seriesList, { fromMs, toMs, onBrush: (f, t) => { fromI.value = toLocalInput(f); toI.value = toLocalInput(t); load(); } }), legend);
+    chartHost.replaceChildren(historyChart(seriesList, { fromMs, toMs, onBrush: (f, t) => { fromI.value = toLocalInput(new Date(f)); toI.value = toLocalInput(new Date(t)); load(); } }), legend);
   }
 
   return wrap;

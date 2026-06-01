@@ -1107,10 +1107,9 @@ views.overview = async () => {
   const controls = el('div', { class: 'overview-controls below' });
   const markedPanel = el('div', { class: 'geo-panel marked-panel' });
   root.append(el('div', { class: 'overview-grid' }, chartHost, markedPanel));
-  root.append(el('div', { class: 'section-head series-head' }, el('h4', {}, 'Serier'), el('span', { class: 'muted' }, 'Total + pr. agent')));
-  root.append(controls);
   clearMarked(); // seed the marked-data panel with its hint
-  root.append(topAgents);
+  root.append(el('details', { class: 'sec series-det' }, el('summary', {}, 'Serier ', el('span', { class: 'muted' }, '· total + pr. agent')), controls));
+  root.append(el('details', { class: 'sec' }, el('summary', {}, 'Top agenter ', el('span', { class: 'muted' }, '· efter aktuel båndbredde')), topAgents));
 
   // history[seriesId] = [{ y }]; selection is a Set of seriesId.
   const history = new Map();
@@ -1160,7 +1159,6 @@ views.overview = async () => {
     // Top agents by current bandwidth.
     const top = latest.slice().sort((a, b) => (b.rx + b.tx) - (a.rx + a.tx)).slice(0, 5);
     topAgents.replaceChildren(
-      el('div', { class: 'section-head' }, el('h4', {}, 'Top agenter'), el('span', { class: 'muted' }, 'efter aktuel båndbredde')),
       ...(top.length ? top.map(({ a, rx, tx }) => el('div', { class: 'ta-row' },
         el('span', { class: `badge ${a.status}` }, a.status === 'online' ? '●' : '○'),
         el('span', { class: 'ta-name' }, esc(a.display_name || a.hostname)),
@@ -1226,7 +1224,7 @@ views.overview = async () => {
     ];
     // Drill into the ACTUAL stored data for the marked window (per agent).
     if (tFrom && tTo) {
-      children.push(el('button', { class: 'small drill', onclick: () => histSection.focus(tFrom, tTo) }, 'Vis gemt data for vinduet →'));
+      children.push(el('button', { class: 'small drill', onclick: () => { histDetails.open = true; histSection.focus(tFrom, tTo); } }, 'Vis gemt data for vinduet →'));
     }
     markedPanel.replaceChildren(...children);
   }
@@ -1254,7 +1252,8 @@ views.overview = async () => {
 
   // Historical traffic explorer (date range, types, time axis, brush-to-zoom).
   const histSection = trafficHistorySection();
-  root.append(histSection.node);
+  const histDetails = el('details', { class: 'sec' }, el('summary', {}, 'Historik — undersøg tidsrum ', el('span', { class: 'muted' }, '· vælg agent + periode')), histSection.node);
+  root.append(histDetails);
 
   // Lifecycle: poll while this view is mounted; stop when leaving.
   stopOverview();

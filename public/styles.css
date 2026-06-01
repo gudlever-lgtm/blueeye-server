@@ -148,6 +148,23 @@ main#view:has(.overview) { max-width: 1600px; }
 .ta-name { flex: 1; }
 .ta-bw { white-space: nowrap; font-size: 13px; }
 
+/* Compact/lean Trafik: slimmer KPI cards + collapsible secondary sections. */
+.overview .kpi-grid { gap: 10px; margin-bottom: 12px; }
+.overview .kpi { padding: 9px 11px; }
+.overview .kpi .kpi-v { font-size: 19px; margin-top: 2px; }
+.overview .kpi .kpi-sub { margin-top: 5px; }
+.overview .storage { margin: 12px 0; }
+details.sec { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; margin-top: 12px; }
+details.sec > summary { cursor: pointer; padding: 10px 12px; font-weight: 600; font-size: 14px; list-style: none; }
+details.sec > summary::-webkit-details-marker { display: none; }
+details.sec > summary::before { content: '▸'; color: var(--muted); margin-right: 8px; display: inline-block; transition: transform .15s; }
+details.sec[open] > summary::before { transform: rotate(90deg); }
+details.sec[open] > summary { border-bottom: 1px solid var(--border); }
+/* Children of a disclosure are flush (the <details> is the card). */
+details.sec .overview-controls, details.sec .top-agents, details.sec .history { background: transparent; border: 0; border-radius: 0; margin: 0; padding: 10px 12px; }
+details.sec .history { padding-top: 4px; }
+details.sec .ta-row { padding: 7px 12px; }
+
 /* Mobile: the top tab bar becomes a fixed, scrollable bottom navbar. */
 @media (max-width: 720px) {
   .topbar { flex-wrap: wrap; }

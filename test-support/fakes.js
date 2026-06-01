@@ -201,6 +201,18 @@ function makeFlowPipeline(overrides = {}) {
   };
 }
 
+// A fake alerting dispatcher (records dispatch calls; knows three channels).
+function makeDispatcher(overrides = {}) {
+  const calls = [];
+  return {
+    calls,
+    dispatch: overrides.dispatch || (async (finding, group) => { calls.push({ finding, group }); return { dispatched: true, results: [] }; }),
+    describe: overrides.describe || (() => ({ enabled: false, cooldownMs: 0, channels: {} })),
+    channelNames: overrides.channelNames || (() => ['email', 'webhook', 'syslog']),
+    test: overrides.test || (async (channel) => ({ channel, ok: true, detail: 'test' })),
+  };
+}
+
 // A fake AI assistant. Disabled by default (explain rejects with FeatureDisabled)
 // so the endpoint answers 403 unless a test opts in with its own explain.
 function makeAssistant(overrides = {}) {
@@ -238,6 +250,7 @@ function makeApp(overrides = {}) {
     flowsRepo: overrides.flowsRepo || makeFlowsRepo(),
     geoTileConfig: overrides.geoTileConfig || { tileUrl: 'https://tiles.example/{z}/{x}/{y}.png', tileAttribution: 'test', tileMaxZoom: 19 },
     assistant: overrides.assistant || makeAssistant(),
+    dispatcher: overrides.dispatcher || makeDispatcher(),
   });
 }
 
@@ -277,6 +290,7 @@ module.exports = {
   makeFlowsRepo,
   makeFlowPipeline,
   makeAssistant,
+  makeDispatcher,
   makeDb,
   makeApp,
   tokenFor,

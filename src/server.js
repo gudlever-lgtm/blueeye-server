@@ -29,6 +29,11 @@ const { createGeoProvider } = require('./geo/provider');
 const { createCentroids } = require('./geo/centroids');
 const { createGeoEnricher } = require('./geo/enricher');
 const { createFlowPipeline } = require('./geo/flowPipeline');
+const { loadAlertingConfig } = require('./analysis/alerting/config');
+const { createDispatcher } = require('./analysis/alerting/dispatcher');
+const { createEmailChannel, createSmtpTransport } = require('./analysis/alerting/channels/email');
+const { createWebhookChannel } = require('./analysis/alerting/channels/webhook');
+const { createSyslogChannel } = require('./analysis/alerting/channels/syslog');
 
 // Wires up real dependencies, starts the HTTP server and installs graceful
 // shutdown handlers.
@@ -80,11 +85,28 @@ function start() {
   const baselines = createBaselineStore({ store: baselineCache, minSamples: analysisConfig.minSamples });
   const detector = createDetector({ baselines, config: analysisConfig });
   const correlator = createCorrelator(); // uses src/analysis/dependency-graph.json
+
+  // Alerting: route findings to channels (email/webhook/syslog). Channels are
+  // built unconditionally so the test endpoint works; rules/enable live in
+  // config. Outgoing sends use Node's fetch / dgram / (lazy) nodemailer.
+  const alertingConfig = loadAlertingConfig();
+  const dispatcher = createDispatcher({
+    config: alertingConfig,
+    channels: {
+      email: createEmailChannel({ config: alertingConfig.channels.email, transport: createSmtpTransport(alertingConfig.channels.email.smtp, console), logger: console }),
+      webhook: createWebhookChannel({ config: alertingConfig.channels.webhook, logger: console }),
+      syslog: createSyslogChannel({ config: alertingConfig.channels.syslog, logger: console }),
+    },
+    logger: console,
+  });
+
   const analysisPipeline = createAnalysisPipeline({
     detector,
     findingStore,
     config: analysisConfig,
     correlator,
+    dispatcher,
+    alertingEnabled: alertingConfig.enabled,
     // Push findings to connected dashboards (browsers), not to agents.
     publishFinding: (hostId, message) => (dashboardWs ? dashboardWs.broadcast(message) : 0),
     logger: console,
@@ -124,6 +146,7 @@ function start() {
     flowsRepo,
     geoTileConfig: config.geo,
     assistant,
+    dispatcher,
     logger: console,
   });
 

@@ -219,6 +219,8 @@ WebSocket-kanalen bruger et **agent-token** (ikke et JWT) — se
 | GET    | `/api/geo/overview` | Interne hosts + eksterne destinationer | viewer+      | `200` / `400`              |
 | GET    | `/api/geo/select/findings` | Findings for valgt land/ASN | viewer+          | `200` / `400` / `404`      |
 | GET    | `/api/geo/select/flows` | Flow-detaljer for valgt land/ASN | viewer+        | `200` / `400` / `404`      |
+| GET    | `/api/alerting/config` | Aktive alarm-kanaler + regler   | viewer+            | `200`                      |
+| POST   | `/api/alerting/test` | Send test-finding til en kanal    | operator+          | `200` / `400` / `404`      |
 | WS     | `/ws/agent`      | Live-kanal (status/kommandoer)    | **agent-token**    | upgrade / hård luk         |
 | WS     | `/ws/dashboard`  | Live findings til dashboardet     | viewer+ (JWT)      | upgrade / hård luk         |
 
@@ -228,6 +230,8 @@ WebSocket-kanalen bruger et **agent-token** (ikke et JWT) — se
 Analyse-modulet (lokal anomali-detektion, korrelator og opt-in AI-assistent) er
 beskrevet i [`docs/analysis.md`](docs/analysis.md). Geo-laget (flow-records,
 GeoIP/ASN-berigelse og kort-API) er beskrevet i [`docs/geo.md`](docs/geo.md).
+Alerting (findings → email/webhook/syslog) er beskrevet i
+[`docs/alerting.md`](docs/alerting.md).
 
 ### Eksempler
 

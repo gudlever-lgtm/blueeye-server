@@ -28,6 +28,7 @@ function createApp({
   flowsRepo,
   geoTileConfig,
   assistant,
+  dispatcher,
   logger = silentLogger,
 } = {}) {
   const app = express();
@@ -62,6 +63,7 @@ function createApp({
       flowsRepo,
       geoTileConfig,
       assistant,
+      dispatcher,
     })
   );
 

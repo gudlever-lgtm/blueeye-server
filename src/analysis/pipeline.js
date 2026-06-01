@@ -19,6 +19,8 @@ function createAnalysisPipeline({
   extract = extractSamples,
   correlator = null,
   correlationWindowMs = 60000,
+  dispatcher = null,
+  alertingEnabled = false,
   logger = silentLogger,
 }) {
   // Correlates the freshly produced findings together with recently stored ones
@@ -50,6 +52,24 @@ function createAnalysisPipeline({
         } catch (err) {
           logger.warn(`analysis: could not persist correlation for ${f.id} (${err.message})`);
         }
+      }
+    }
+    return groups;
+  }
+
+  // Sends produced findings to the alerting channels (behind the feature flag).
+  // Each finding is dispatched with the correlation group it belongs to, if any.
+  // Best-effort: a dispatch failure never affects ingestion.
+  async function dispatchAlerts(produced, groups) {
+    const groupOf = new Map();
+    for (const g of groups || []) {
+      for (const f of g.findings || []) groupOf.set(f.id, g);
+    }
+    for (const finding of produced) {
+      try {
+        await dispatcher.dispatch(finding, groupOf.get(finding.id) || null);
+      } catch (err) {
+        logger.warn(`alerting: dispatch failed for ${finding.id} (${err.message})`);
       }
     }
   }
@@ -94,11 +114,20 @@ function createAnalysisPipeline({
       }
     }
     // Root-cause correlation across the batch (+ recent findings). Best-effort.
+    let groups = [];
     if (correlator && produced.length > 0) {
       try {
-        await correlateAndPersist(produced);
+        groups = await correlateAndPersist(produced) || [];
       } catch (err) {
         logger.warn(`analysis: correlation step failed (${err.message})`);
+      }
+    }
+    // Alerting: route findings to channels (behind the alerting feature flag).
+    if (dispatcher && alertingEnabled && produced.length > 0) {
+      try {
+        await dispatchAlerts(produced, groups);
+      } catch (err) {
+        logger.warn(`alerting: dispatch step failed (${err.message})`);
       }
     }
     return produced;

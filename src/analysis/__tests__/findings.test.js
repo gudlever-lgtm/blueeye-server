@@ -38,6 +38,12 @@ function makeFakePool() {
         r.acked = 1;
         return [{ affectedRows: 1 }];
       }
+      if (/^UPDATE findings SET correlated_with = \? WHERE id = \?/i.test(sql)) {
+        const r = rows.find((x) => x.id === params[1]);
+        if (!r) return [{ affectedRows: 0 }];
+        r.correlated_with = params[0];
+        return [{ affectedRows: 1 }];
+      }
       throw new Error(`unexpected SQL in fake pool: ${sql}`);
     },
   };
@@ -107,6 +113,24 @@ test('ack sets acked=true (and returns false for unknown id)', async () => {
   const got = await store.get(saved.id);
   assert.equal(got.acked, true);
   assert.equal(await store.ack('no-such-id'), false);
+});
+
+test('setCorrelations persists the linked ids (and returns false for unknown id)', async () => {
+  const store = new FindingStore({ db: { pool: makeFakePool() } });
+  const a = await store.save(finding());
+  const b = await store.save(finding());
+  assert.equal(await store.setCorrelations(a.id, [b.id]), true);
+  const got = await store.get(a.id);
+  assert.deepEqual(got.correlatedWith, [b.id]);
+  assert.equal(await store.setCorrelations('no-such-id', [b.id]), false);
+});
+
+test('setCorrelations coerces a non-array argument to an empty list', async () => {
+  const store = new FindingStore({ db: { pool: makeFakePool() } });
+  const a = await store.save(finding());
+  assert.equal(await store.setCorrelations(a.id, null), true);
+  const got = await store.get(a.id);
+  assert.deepEqual(got.correlatedWith, []);
 });
 
 test('constructor requires the db pool handle', () => {

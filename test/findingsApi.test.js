@@ -10,6 +10,7 @@ const request = require('supertest');
 const { makeApp, makeFindingStore, makeAnalysisPipeline, makeAgentTokensRepo, authHeader } = require('../test-support/fakes');
 const { createAnalysisPipeline } = require('../src/analysis/pipeline');
 const { createDetector } = require('../src/analysis/detector');
+const { createCorrelator } = require('../src/analysis/correlator');
 const { createBaselineStore, MAD_TO_SIGMA } = require('../src/analysis/baselines');
 const { loadConfig } = require('../src/analysis/config');
 
@@ -110,6 +111,64 @@ test('ingest with analysis enabled saves + publishes a finding on an anomaly', a
   const cpuFindings = findingStore.rows.filter((f) => f.metric === 'cpu');
   assert.ok(cpuFindings.length >= 1, 'expected a cpu finding');
   assert.ok(published.some((p) => p.msg.type === 'finding'), 'expected a published finding event');
+});
+
+test('pipeline correlates findings produced in a batch and persists the links', async () => {
+  const findingStore = makeFindingStore();
+  // Stub detector: flags every sample with a stable, metric-derived id.
+  const detector = {
+    evaluate: (s) => ({
+      id: `id-${s.metric}`,
+      hostId: s.hostId,
+      metric: s.metric,
+      severity: 'WARN',
+      kind: 'ANOMALY',
+      explanation: `${s.metric} anomaly`,
+      evidence: [s],
+      correlatedWith: [],
+      createdAt: new Date(),
+    }),
+  };
+  // mem is upstream of cpu in the shipped dependency graph -> they correlate.
+  const extract = () => [
+    { hostId: '9', metric: 'mem', value: 1, ts: new Date() },
+    { hostId: '9', metric: 'cpu', value: 1, ts: new Date() },
+  ];
+  const pipeline = createAnalysisPipeline({
+    detector, findingStore, extract,
+    config: { ...loadConfig({}), analysisEnabled: true },
+    correlator: createCorrelator(),
+  });
+
+  const produced = await pipeline.processResults('9', [{ name: 'm' }]);
+  assert.equal(produced.length, 2);
+
+  const mem = findingStore.rows.find((r) => r.metric === 'mem');
+  const cpu = findingStore.rows.find((r) => r.metric === 'cpu');
+  assert.deepEqual(mem.correlatedWith, ['id-cpu']);
+  assert.deepEqual(cpu.correlatedWith, ['id-mem']);
+});
+
+test('pipeline correlation never breaks ingest when the store cannot persist links', async () => {
+  // setCorrelations throwing must not make processResults reject.
+  const findingStore = makeFindingStore({ setCorrelations: async () => { throw new Error('db down'); } });
+  const detector = {
+    evaluate: (s) => ({
+      id: `id-${s.metric}`, hostId: s.hostId, metric: s.metric, severity: 'WARN', kind: 'ANOMALY',
+      explanation: `${s.metric} anomaly`, evidence: [s], correlatedWith: [], createdAt: new Date(),
+    }),
+  };
+  const extract = () => [
+    { hostId: '9', metric: 'mem', value: 1, ts: new Date() },
+    { hostId: '9', metric: 'cpu', value: 1, ts: new Date() },
+  ];
+  const pipeline = createAnalysisPipeline({
+    detector, findingStore, extract,
+    config: { ...loadConfig({}), analysisEnabled: true },
+    correlator: createCorrelator(),
+  });
+  const produced = await pipeline.processResults('9', [{ name: 'm' }]);
+  assert.equal(produced.length, 2); // findings still produced; persistence failure swallowed
 });
 
 test('ingest still succeeds (no 500) when the analysis pipeline throws', async () => {

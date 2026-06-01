@@ -135,6 +135,18 @@ class FindingStore {
     const [result] = await this.pool.query('UPDATE findings SET acked = 1 WHERE id = ?', [id]);
     return result.affectedRows > 0;
   }
+
+  // Persists the correlation links for a finding (the ids of the other findings
+  // the correlator grouped it with). Stored as JSON. Returns true if a row was
+  // updated, false if no finding has that id.
+  async setCorrelations(id, correlatedIds) {
+    const ids = Array.isArray(correlatedIds) ? correlatedIds : [];
+    const [result] = await this.pool.query(
+      'UPDATE findings SET correlated_with = ? WHERE id = ?',
+      [JSON.stringify(ids), id]
+    );
+    return result.affectedRows > 0;
+  }
 }
 
 module.exports = { FindingStore };

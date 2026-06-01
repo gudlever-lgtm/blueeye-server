@@ -19,6 +19,7 @@ const { FindingStore } = require('./analysis/findings');
 const { createBaselineStore } = require('./analysis/baselines');
 const { createDetector } = require('./analysis/detector');
 const { createAnalysisPipeline } = require('./analysis/pipeline');
+const { createCorrelator } = require('./analysis/correlator');
 const { loadConfig: loadAnalysisConfig } = require('./analysis/config');
 
 // Wires up real dependencies, starts the HTTP server and installs graceful
@@ -69,10 +70,12 @@ function start() {
   const baselineCache = createFileCache(config.analysis.baselineCachePath);
   const baselines = createBaselineStore({ store: baselineCache, minSamples: analysisConfig.minSamples });
   const detector = createDetector({ baselines, config: analysisConfig });
+  const correlator = createCorrelator(); // uses src/analysis/dependency-graph.json
   const analysisPipeline = createAnalysisPipeline({
     detector,
     findingStore,
     config: analysisConfig,
+    correlator,
     publishFinding: (hostId, message) => (agentWs ? agentWs.broadcast(hostId, message) : 0),
     logger: console,
   });

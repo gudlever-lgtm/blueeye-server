@@ -17,8 +17,43 @@ function createAnalysisPipeline({
   config,
   publishFinding = () => {},
   extract = extractSamples,
+  correlator = null,
+  correlationWindowMs = 60000,
   logger = silentLogger,
 }) {
+  // Correlates the freshly produced findings together with recently stored ones
+  // for the same hosts, then persists the resulting links. Best-effort: any
+  // failure here is logged and swallowed so it never affects ingestion. Runs
+  // after each batch (the existing per-batch scheduling point).
+  async function correlateAndPersist(produced) {
+    const hostIds = [...new Set(produced.map((f) => f.hostId))];
+    const since = new Date(Date.now() - correlationWindowMs);
+    const pool = produced.slice();
+    for (const hostId of hostIds) {
+      let recent = [];
+      try {
+        recent = await findingStore.list(hostId, since);
+      } catch (err) {
+        logger.warn(`analysis: could not load recent findings for correlation (${err.message})`);
+        recent = [];
+      }
+      for (const r of recent) {
+        if (!pool.some((f) => f.id === r.id)) pool.push(r);
+      }
+    }
+    const groups = correlator.correlate(pool, correlationWindowMs);
+    for (const group of groups) {
+      if (!group.findings || group.findings.length < 2) continue;
+      for (const f of group.findings) {
+        try {
+          await findingStore.setCorrelations(f.id, f.correlatedWith || []);
+        } catch (err) {
+          logger.warn(`analysis: could not persist correlation for ${f.id} (${err.message})`);
+        }
+      }
+    }
+  }
+
   // Evaluates every metric sample in a batch of result payloads; saves and
   // publishes any findings. Resilient: a failure on one finding doesn't abort
   // the rest, and analysis errors never break ingestion (the caller persists
@@ -56,6 +91,14 @@ function createAnalysisPipeline({
         } catch (err) {
           logger.error(`analysis: could not save finding (${err.message})`);
         }
+      }
+    }
+    // Root-cause correlation across the batch (+ recent findings). Best-effort.
+    if (correlator && produced.length > 0) {
+      try {
+        await correlateAndPersist(produced);
+      } catch (err) {
+        logger.warn(`analysis: correlation step failed (${err.message})`);
       }
     }
     return produced;

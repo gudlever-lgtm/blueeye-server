@@ -1121,20 +1121,25 @@ views.overview = async () => {
   // Top agents by current bandwidth (updated each tick).
   const topAgents = el('div', { class: 'top-agents' });
 
-  // Hero chart with a compact chip toolbar (Total RX/TX + a per-agent menu) and
-  // an inline "marked" strip that appears when you drag-select a window.
+  // Hero chart: the chart fills the card's full width; a "marked" side panel
+  // claims the right edge only while a window is selected. A size toggle widens
+  // the whole card to (almost) the viewport and makes the chart taller.
   const chartHost = el('div', { class: 'overview-chart' });
   const controls = el('div', { class: 'peragent-list' });
-  const markedStrip = el('div', { class: 'marked-strip hidden' });
+  const markedStrip = el('div', { class: 'marked-side hidden' });
   const chipRx = el('button', { class: 'chip rx', onclick: () => toggleSeries('total:rx') }, 'Total RX');
   const chipTx = el('button', { class: 'chip tx', onclick: () => toggleSeries('total:tx') }, 'Total TX');
   const perAgentCnt = el('span', { class: 'cnt muted' });
   const perAgent = el('details', { class: 'chip-det' },
     el('summary', { class: 'chip' }, 'Pr. agent ', perAgentCnt), controls);
-  root.append(el('div', { class: 'card chart-card' },
-    el('div', { class: 'bar' }, el('h3', {}, 'Live trafik'), el('span', { class: 'spacer' }), chipRx, chipTx, perAgent),
-    chartHost, markedStrip));
-  clearMarked(); // strip stays hidden until a brush selection
+  const sizeBtn = el('button', { class: 'chip size-toggle', onclick: () => toggleSize() });
+  let bigView = false;
+  try { bigView = localStorage.getItem('blueeye.server.trafikBig') === '1'; } catch { /* storage off */ }
+  const chartCard = el('div', { class: 'card chart-card' },
+    el('div', { class: 'bar' }, el('h3', {}, 'Live trafik'), el('span', { class: 'spacer' }), chipRx, chipTx, perAgent, sizeBtn),
+    el('div', { class: 'chart-row' }, chartHost, markedStrip));
+  root.append(chartCard);
+  clearMarked(); // side panel stays hidden until a brush selection
 
   // Slim storage line; the full disk/DB/forbrug breakdown folds open below it.
   const storageSummary = el('summary', { class: 'storage-line' }, el('span', { class: 'muted' }, 'Lager …'));
@@ -1225,13 +1230,13 @@ views.overview = async () => {
     const legend = el('div', { class: 'legend' }, ...seriesList.map((s) =>
       el('span', {}, el('span', { class: 'dot', style: `background:${s.color}` }), s.label)));
     chartHost.replaceChildren(
-      seriesList.length ? multiChart(seriesList, { area: true, xLabels: ['~3 min siden', '', 'nu'], onBrush: (f0, f1) => { if (f0 === null) clearMarked(); else renderMarked(f0, f1); } }) : el('div', { class: 'empty' }, 'Vælg serier i værktøjslinjen ↑'),
+      seriesList.length ? multiChart(seriesList, { height: bigView ? 560 : 300, area: true, xLabels: ['~3 min siden', '', 'nu'], onBrush: (f0, f1) => { if (f0 === null) clearMarked(); else renderMarked(f0, f1); } }) : el('div', { class: 'empty' }, 'Vælg serier i værktøjslinjen ↑'),
       legend);
     syncChips();
   }
 
   function clearMarked() {
-    markedStrip.className = 'marked-strip hidden';
+    markedStrip.className = 'marked-side hidden';
     markedStrip.replaceChildren();
   }
   function renderMarked(f0, f1) {
@@ -1253,22 +1258,20 @@ views.overview = async () => {
     const lastIdx = Math.min(i1, ref.length - 1);
     const tTo = ref[lastIdx] && ref[lastIdx].t;
     const children = [
-      el('span', { class: 'ms-label' }, 'Markeret'),
-      el('span', { class: 'muted' }, (tFrom && tTo) ? `${fmtTimeShort(tFrom)} – ${fmtTimeShort(tTo)} · ${i1 - i0 + 1} pkt.` : `${i1 - i0 + 1} pkt.`),
+      el('div', { class: 'ms-head' }, el('strong', {}, 'Markeret'), el('span', { class: 'spacer' }), el('button', { class: 'small ghost', onclick: clearMarked }, 'Ryd')),
+      el('div', { class: 'muted ms-range' }, (tFrom && tTo) ? `${fmtTimeShort(tFrom)} – ${fmtTimeShort(tTo)} · ${i1 - i0 + 1} pkt.` : `${i1 - i0 + 1} pkt.`),
     ];
     for (const r of rows) {
-      children.push(el('span', { class: 'ms-stat' },
+      children.push(el('div', { class: 'ms-stat' },
         el('span', { class: 'ms-name' }, r.label),
         el('span', { class: 'num' }, `ø ${fmtBytes(r.avg)}/s`),
-        el('span', { class: 'num muted' }, `(${fmtBytes(r.min)}–${fmtBytes(r.max)})`)));
+        el('span', { class: 'num muted' }, `${fmtBytes(r.min)}–${fmtBytes(r.max)}`)));
     }
-    children.push(el('span', { class: 'spacer' }));
     // Drill into the ACTUAL stored data for the marked window (per agent).
     if (tFrom && tTo) {
       children.push(el('button', { class: 'small drill', onclick: () => { histDetails.open = true; histSection.focus(tFrom, tTo); } }, 'Vis gemt data →'));
     }
-    children.push(el('button', { class: 'small ghost', onclick: clearMarked }, 'Ryd'));
-    markedStrip.className = 'marked-strip';
+    markedStrip.className = 'marked-side';
     markedStrip.replaceChildren(...children);
   }
 
@@ -1303,10 +1306,27 @@ views.overview = async () => {
     perAgentCnt.textContent = n ? `(${n})` : '';
   }
 
+  // Widen the live-traffic card to (almost) the full viewport + taller chart,
+  // and back. Persisted so it survives reloads and tab switches.
+  function applySize() {
+    chartCard.classList.toggle('big', bigView);
+    sizeBtn.textContent = bigView ? '↔ Formindsk' : '↔ Forstør';
+    sizeBtn.title = bigView ? 'Formindsk grafen til normal bredde' : 'Forstør grafen til fuld bredde';
+    renderChart();
+  }
+  function toggleSize() {
+    bigView = !bigView;
+    try { localStorage.setItem('blueeye.server.trafikBig', bigView ? '1' : '0'); } catch { /* storage off */ }
+    applySize();
+  }
+
   // Historical traffic explorer (date range, types, time axis, brush-to-zoom).
   const histSection = trafficHistorySection();
   const histDetails = el('details', { class: 'sec' }, el('summary', {}, 'Historik — undersøg tidsrum ', el('span', { class: 'muted' }, '· vælg agent + periode')), histSection.node);
   root.append(histDetails);
+
+  // Reflect the persisted size + set the toggle label (renders the chart once).
+  applySize();
 
   // Lifecycle: poll while this view is mounted; stop when leaving.
   stopOverview();

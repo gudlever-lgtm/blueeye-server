@@ -756,6 +756,7 @@ function trafficHistorySection() {
   wrap.append(el('div', { class: 'history-metrics' }, ...metricBoxes));
   wrap.append(chartHost, status);
 
+  agentSel.addEventListener('change', () => { histState.agentId = agentSel.value; });
   api('/agents').then((agents) => {
     for (const a of agents) agentSel.append(el('option', { value: String(a.id) }, a.display_name || a.hostname));
     if (histState.agentId) agentSel.value = histState.agentId;
@@ -792,7 +793,23 @@ function trafficHistorySection() {
     chartHost.replaceChildren(historyChart(seriesList, { fromMs, toMs, onBrush: (f, t) => { fromI.value = toLocalInput(new Date(f)); toI.value = toLocalInput(new Date(t)); load(); } }), legend);
   }
 
-  return wrap;
+  // Called from the live graph's brush: load the actual stored data for the
+  // marked window (per agent). Pre-fills the period and runs the query.
+  function focus(fromMs, toMs) {
+    baseFrom = toLocalInput(new Date(fromMs));
+    baseTo = toLocalInput(new Date(toMs));
+    fromI.value = baseFrom;
+    toI.value = baseTo;
+    wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    if (agentSel.value) {
+      load();
+    } else {
+      status.className = 'muted';
+      status.textContent = 'Vælg en agent for at se de gemte data for det markerede vindue.';
+    }
+  }
+
+  return { node: wrap, focus };
 }
 
 // Full-width traffic overview: pick which series to show via checkboxes and
@@ -1088,13 +1105,19 @@ views.overview = async () => {
     const tFrom = ref[i0] && ref[i0].t;
     const lastIdx = Math.min(i1, ref.length - 1);
     const tTo = ref[lastIdx] && ref[lastIdx].t;
-    markedPanel.replaceChildren(
+    const children = [
       el('div', { class: 'section-head' }, el('h3', {}, 'Markeret'), el('span', { class: 'spacer' }), el('button', { class: 'small ghost', onclick: clearMarked }, 'Ryd')),
       el('p', { class: 'muted' }, (tFrom && tTo) ? `${fmtTimeShort(tFrom)} – ${fmtTimeShort(tTo)} · ${i1 - i0 + 1} pkt.` : `${i1 - i0 + 1} punkter`),
       el('table', { class: 'kv' }, el('tbody', {}, ...rows.map((r) => el('tr', {},
         el('td', {}, r.label),
         el('td', { class: 'num' }, `ø ${fmtBytes(r.avg)}/s`),
-        el('td', { class: 'num muted' }, `${fmtBytes(r.min)}–${fmtBytes(r.max)}`))))));
+        el('td', { class: 'num muted' }, `${fmtBytes(r.min)}–${fmtBytes(r.max)}`))))),
+    ];
+    // Drill into the ACTUAL stored data for the marked window (per agent).
+    if (tFrom && tTo) {
+      children.push(el('button', { class: 'small drill', onclick: () => histSection.focus(tFrom, tTo) }, 'Vis gemt data for vinduet →'));
+    }
+    markedPanel.replaceChildren(...children);
   }
 
   function checkbox(id, label) {
@@ -1119,7 +1142,8 @@ views.overview = async () => {
   }
 
   // Historical traffic explorer (date range, types, time axis, brush-to-zoom).
-  root.append(trafficHistorySection());
+  const histSection = trafficHistorySection();
+  root.append(histSection.node);
 
   // Lifecycle: poll while this view is mounted; stop when leaving.
   stopOverview();

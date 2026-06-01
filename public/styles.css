@@ -114,6 +114,7 @@ main#view:has(.overview) { max-width: 1600px; }
 .overview-controls.below { max-height: none; overflow: visible; display: flex; flex-wrap: wrap; gap: 22px; }
 .overview-controls.below .ctrl-group { margin-bottom: 0; }
 .marked-panel { max-height: none; }
+.marked-panel .drill { margin-top: 10px; }
 .series-head { margin-top: 16px; }
 
 /* Server storage cards + usage bar. */

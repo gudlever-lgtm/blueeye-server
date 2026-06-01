@@ -29,6 +29,7 @@ function createApp({
   geoTileConfig,
   assistant,
   dispatcher,
+  featureGate,
   logger = silentLogger,
 } = {}) {
   const app = express();
@@ -64,6 +65,7 @@ function createApp({
       geoTileConfig,
       assistant,
       dispatcher,
+      featureGate,
     })
   );
 

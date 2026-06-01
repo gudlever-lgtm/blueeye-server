@@ -4,15 +4,19 @@ const express = require('express');
 const { asyncHandler } = require('../middleware/asyncHandler');
 const { requireAuth, requireRole } = require('../auth/middleware');
 const { ROLES } = require('../auth/roles');
+const { requireFeature } = require('../license/features');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-// Geo / map API. All endpoints are viewer+ behind the user JWT. Aggregation is
-// done server-side — raw flow records never leave the server, and RFC1918/
-// private endpoints are excluded at the data layer (internal = 0).
-function createGeoRouter({ flowsRepo, agentsRepo, findingStore, tileConfig = {} }) {
+// Geo / map API. All endpoints are viewer+ behind the user JWT and gated by the
+// 'geo' license feature. Aggregation is done server-side — raw flow records
+// never leave the server, and RFC1918/private endpoints are excluded at the
+// data layer (internal = 0).
+function createGeoRouter({ flowsRepo, agentsRepo, findingStore, tileConfig = {}, featureGate }) {
   const router = express.Router();
-  const staff = [requireAuth, requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN)];
+  // License gate for the whole module (403 when not included in the license).
+  router.use(requireAuth, requireFeature(featureGate, 'geo'));
+  const staff = [requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN)];
 
   // Resolves the [since, until] window from ?since=. until is "now". Returns
   // { since, until } or { error } for an invalid date.

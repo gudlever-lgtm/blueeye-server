@@ -21,6 +21,7 @@ function createAnalysisPipeline({
   correlationWindowMs = 60000,
   dispatcher = null,
   alertingEnabled = false,
+  licensed = () => true,
   logger = silentLogger,
 }) {
   // Correlates the freshly produced findings together with recently stored ones
@@ -79,7 +80,9 @@ function createAnalysisPipeline({
   // the rest, and analysis errors never break ingestion (the caller persists
   // first). Returns the findings produced.
   async function processResults(hostId, payloads) {
-    if (!config || !config.analysisEnabled) return [];
+    // Gated by BOTH the license (may the customer use it) and the config flag
+    // (has the customer switched it on).
+    if (!config || !config.analysisEnabled || !licensed()) return [];
     const produced = [];
     const batch = Array.isArray(payloads) ? payloads : [];
     for (const payload of batch) {

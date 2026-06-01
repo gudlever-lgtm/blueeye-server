@@ -152,6 +152,14 @@ function createLicenseManager({
     return 0;
   }
 
+  // The signature-verified `features` map from the current valid/grace license,
+  // or {} when there is no usable license. Read by the feature gate (fail-closed).
+  function getFeatures() {
+    if (!isLicensed()) return {};
+    const f = state.payload && state.payload.features;
+    return f && typeof f === 'object' ? f : {};
+  }
+
   // Whether a new agent connection is allowed given the current connection count.
   function canAcceptNewConnection(currentConnectionCount) {
     if (!isLicensed()) return false;
@@ -197,6 +205,7 @@ function createLicenseManager({
     stop,
     isLicensed,
     getMaxAgents,
+    getFeatures,
     canAcceptNewConnection,
     getStatus,
   };

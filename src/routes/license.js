@@ -7,7 +7,7 @@ const { ROLES } = require('../auth/roles');
 
 // Read-only view of the local license state (staff, viewer+). The signed proof
 // itself is never exposed as a token — this only reports status.
-function createLicenseRouter({ licenseManager }) {
+function createLicenseRouter({ licenseManager, featureGate }) {
   const router = express.Router();
 
   router.get(
@@ -20,6 +20,17 @@ function createLicenseRouter({ licenseManager }) {
       }
       res.json(licenseManager.getStatus());
     })
+  );
+
+  // GET /license/features — which modules the license entitles the customer to,
+  // so the UI can hide/grey-out modules they aren't licensed for (viewer+).
+  router.get(
+    '/features',
+    requireAuth,
+    requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN),
+    (req, res) => {
+      res.json(featureGate ? featureGate.summary() : { analysis: false, assistant: false, alerting: false, geo: false });
+    }
   );
 
   // POST /license/refresh — force an immediate re-validation against the license

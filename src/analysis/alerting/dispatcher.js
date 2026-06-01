@@ -11,12 +11,13 @@ const silentLogger = { info() {}, warn() {}, error() {} };
 //
 //   const dispatcher = createDispatcher({ config, channels: { email, webhook, syslog } });
 //   await dispatcher.dispatch(finding, group);
-function createDispatcher({ config, channels = {}, logger = silentLogger, now = () => Date.now() }) {
+function createDispatcher({ config, channels = {}, licensed = () => true, logger = silentLogger, now = () => Date.now() }) {
   const lastSent = new Map(); // `${hostId}|${metric}|${kind}` -> timestamp
 
   const throttleKey = (f) => `${f.hostId}|${f.metric}|${f.kind}`;
 
   async function dispatch(finding, group) {
+    if (!licensed()) return { dispatched: false, reason: 'unlicensed', results: [] };
     if (!config || !config.enabled) return { dispatched: false, reason: 'disabled', results: [] };
     if (!finding) return { dispatched: false, reason: 'no-finding', results: [] };
 

@@ -8,7 +8,7 @@ const { ROLES } = require('../auth/roles');
 // AI assistant API (opt-in; staff, user-JWT). Mounted at /api/assistant. The
 // endpoint always exists when an assistant is wired, but answers 403 while the
 // feature is disabled — so the UI can tell "off" apart from "missing".
-function createAssistantRouter({ assistant }) {
+function createAssistantRouter({ assistant, featureGate }) {
   const router = express.Router();
 
   // POST /api/assistant/explain  { question, hostId? } — ask about a host
@@ -18,6 +18,10 @@ function createAssistantRouter({ assistant }) {
     requireAuth,
     requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN),
     asyncHandler(async (req, res) => {
+      // License gate first — distinct from "switched off in config" below.
+      if (featureGate && !featureGate.isFeatureEnabled('assistant')) {
+        return res.status(403).json({ error: 'Funktionen er ikke inkluderet i jeres licens', feature: 'assistant', reason: 'license' });
+      }
       const body = req.body || {};
       const question = typeof body.question === 'string' ? body.question : '';
       const hostId = body.hostId != null && body.hostId !== '' ? String(body.hostId) : undefined;

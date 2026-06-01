@@ -108,8 +108,27 @@ async function login(emailInput, password) {
   localStorage.setItem(ROLE_KEY, role);
   localStorage.setItem(EMAIL_KEY, email);
 }
+// License features (which modules the customer is entitled to). Fetched once
+// after login so the UI can hide modules not included in the licence.
+let licenseFeatures = null;
+async function loadFeatures() {
+  if (licenseFeatures) return licenseFeatures;
+  try { licenseFeatures = await api('/license/features'); }
+  catch { licenseFeatures = {}; }
+  return licenseFeatures;
+}
+function applyFeatureVisibility() {
+  const feats = licenseFeatures || {};
+  for (const b of document.querySelectorAll('.tabs button[data-feature]')) {
+    const allowed = feats[b.dataset.feature] !== false; // show until we know it's off
+    b.classList.toggle('hidden', !allowed);
+    if (!allowed && currentView === b.dataset.view) currentView = 'overview';
+  }
+}
+
 function logout() {
   disconnectLive();
+  licenseFeatures = null;
   token = null;
   email = '';
   localStorage.removeItem(TOKEN_KEY);
@@ -1602,6 +1621,8 @@ async function render({ silent = false } = {}) {
   $('#login').classList.add('hidden');
   $('#app').classList.remove('hidden');
   connectLive(); // live findings channel (idempotent)
+  await loadFeatures();
+  applyFeatureVisibility(); // hide modules not included in the licence
   // Show who is logged in: email + role.
   $('#whoami').replaceChildren(
     el('span', { class: 'who-email' }, email || '—'),

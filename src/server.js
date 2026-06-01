@@ -14,6 +14,7 @@ const { attachAgentWebSocket } = require('./ws/agentSocket');
 const { attachDashboardWebSocket } = require('./ws/dashboardSocket');
 const { verifyToken } = require('./auth/jwt');
 const { createLicenseManager } = require('./license/licenseManager');
+const { createFeatureGate } = require('./license/features');
 const { createFileCache } = require('./license/licenseCache');
 const { isConfigured } = require('./license/publicKey');
 const { createSystemInfo } = require('./services/systemInfo');
@@ -73,6 +74,9 @@ function start() {
     getAgentCount: () => (agentWs ? agentWs.connectionCount() : 0),
   });
 
+  // Feature gate: reads signature-verified license entitlements (fail-closed).
+  const featureGate = createFeatureGate({ licenseManager });
+
   // Lets HTTP routes push commands to connected agents over the WebSocket.
   const agentCommander = {
     sendCommand: (agentId, command) => (agentWs ? agentWs.sendCommand(agentId, command) : 0),
@@ -102,6 +106,8 @@ function start() {
       webhook: createWebhookChannel({ config: alertingConfig.channels.webhook, logger: console }),
       syslog: createSyslogChannel({ config: alertingConfig.channels.syslog, logger: console }),
     },
+    // Alerting only dispatches if the license includes it.
+    licensed: () => featureGate.isFeatureEnabled('alerting'),
     logger: console,
   });
 
@@ -112,6 +118,8 @@ function start() {
     correlator,
     dispatcher,
     alertingEnabled: alertingConfig.enabled,
+    // Detector runs only if the license includes analysis (AND config enables it).
+    licensed: () => featureGate.isFeatureEnabled('analysis'),
     // Push findings to connected dashboards (browsers), not to agents.
     publishFinding: (hostId, message) => (dashboardWs ? dashboardWs.broadcast(message) : 0),
     logger: console,
@@ -163,6 +171,7 @@ function start() {
     geoTileConfig: config.geo,
     assistant,
     dispatcher,
+    featureGate,
     logger: console,
   });
 

@@ -41,6 +41,7 @@ function createApiRouter({
   geoTileConfig,
   assistant,
   dispatcher,
+  featureGate,
 }) {
   const router = express.Router();
 
@@ -56,11 +57,11 @@ function createApiRouter({
   router.use('/auth', createAuthRouter({ usersRepo }));
   router.use('/users', createUsersRouter({ usersRepo }));
   router.use('/locations', createLocationsRouter({ locationsRepo, resultsRepo }));
-  router.use('/license', createLicenseRouter({ licenseManager }));
+  router.use('/license', createLicenseRouter({ licenseManager, featureGate }));
   router.use('/system', createSystemRouter({ systemInfo }));
   if (findingStore) router.use('/api/findings', createFindingsRouter({ findingStore }));
-  if (assistant) router.use('/api/assistant', createAssistantRouter({ assistant }));
-  if (flowsRepo) router.use('/api/geo', createGeoRouter({ flowsRepo, agentsRepo, findingStore, tileConfig: geoTileConfig }));
+  if (assistant) router.use('/api/assistant', createAssistantRouter({ assistant, featureGate }));
+  if (flowsRepo) router.use('/api/geo', createGeoRouter({ flowsRepo, agentsRepo, findingStore, tileConfig: geoTileConfig, featureGate }));
   if (dispatcher) router.use('/api/alerting', createAlertingRouter({ dispatcher }));
   router.use('/enrollment-codes', createEnrollmentCodesRouter({ enrollmentCodesRepo, locationsRepo }));
 

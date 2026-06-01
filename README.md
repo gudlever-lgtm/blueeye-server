@@ -221,6 +221,7 @@ WebSocket-kanalen bruger et **agent-token** (ikke et JWT) — se
 | GET    | `/api/geo/select/flows` | Flow-detaljer for valgt land/ASN | viewer+        | `200` / `400` / `404`      |
 | GET    | `/api/alerting/config` | Aktive alarm-kanaler + regler   | viewer+            | `200`                      |
 | POST   | `/api/alerting/test` | Send test-finding til en kanal    | operator+          | `200` / `400` / `404`      |
+| GET    | `/license/features` | Hvilke moduler licensen tillader | viewer+            | `200`                      |
 | WS     | `/ws/agent`      | Live-kanal (status/kommandoer)    | **agent-token**    | upgrade / hård luk         |
 | WS     | `/ws/dashboard`  | Live findings til dashboardet     | viewer+ (JWT)      | upgrade / hård luk         |
 
@@ -233,7 +234,9 @@ GeoIP/ASN-berigelse og kort-API) er beskrevet i [`docs/geo.md`](docs/geo.md).
 Alerting (findings → email/webhook/syslog) er beskrevet i
 [`docs/alerting.md`](docs/alerting.md). Retention + rollup (down-sampling,
 purge, cross-læsning af rå + aggregeret data) er beskrevet i
-[`docs/retention.md`](docs/retention.md).
+[`docs/retention.md`](docs/retention.md). Licens-styring af modulerne
+(features i den signerede licens) er beskrevet i
+[`docs/license-features.md`](docs/license-features.md).
 
 ### Eksempler
 

@@ -153,7 +153,19 @@ function makeLicenseManager(overrides = {}) {
     getMaxAgents: overrides.getMaxAgents || (() => 1000),
     canAcceptNewConnection: overrides.canAcceptNewConnection || (() => true),
     getStatus: overrides.getStatus || status,
+    getFeatures: overrides.getFeatures || (() => ({ analysis: true, assistant: true, alerting: true, geo: true })),
     validateOnce: overrides.validateOnce || (async () => (overrides.getStatus || status)()),
+  };
+}
+
+// A fake feature gate. Allow-all by default so module tests are unaffected; pass
+// { features: { geo: false, ... } } (or a custom isFeatureEnabled) to simulate a
+// license that doesn't include a feature.
+function makeFeatureGate(overrides = {}) {
+  const enabled = overrides.features || { analysis: true, assistant: true, alerting: true, geo: true };
+  return {
+    isFeatureEnabled: overrides.isFeatureEnabled || ((f) => enabled[f] === true),
+    summary: overrides.summary || (() => ({ analysis: !!enabled.analysis, assistant: !!enabled.assistant, alerting: !!enabled.alerting, geo: !!enabled.geo })),
   };
 }
 
@@ -251,6 +263,7 @@ function makeApp(overrides = {}) {
     geoTileConfig: overrides.geoTileConfig || { tileUrl: 'https://tiles.example/{z}/{x}/{y}.png', tileAttribution: 'test', tileMaxZoom: 19 },
     assistant: overrides.assistant || makeAssistant(),
     dispatcher: overrides.dispatcher || makeDispatcher(),
+    featureGate: overrides.featureGate || makeFeatureGate(),
   });
 }
 
@@ -291,6 +304,7 @@ module.exports = {
   makeFlowPipeline,
   makeAssistant,
   makeDispatcher,
+  makeFeatureGate,
   makeDb,
   makeApp,
   tokenFor,

@@ -620,7 +620,7 @@ function attachBrush(svg, { W, padL, padR, padT, padB, H, onSelect, onClear }) {
 // A large, full-width multi-series line chart. `series` is an array of
 // { id, label, color, points:[{x,y}] }. Time (x) is shared; y auto-scales.
 // Pass onBrush(f0,f1) (fractions) to enable drag-to-mark; right-click clears it.
-function multiChart(seriesList, { height = 320, xLabels = null, onBrush = null } = {}) {
+function multiChart(seriesList, { height = 320, xLabels = null, onBrush = null, area = false } = {}) {
   const W = 1000;
   const H = height;
   const pad = { l: 60, r: 12, t: 14, b: 22 };
@@ -644,6 +644,16 @@ function multiChart(seriesList, { height = 320, xLabels = null, onBrush = null }
     const label = mk('text', { x: 6, y: yy + 4, class: 'axis' });
     label.textContent = `${fmtBytes(max * frac)}/s`;
     svg.append(label);
+  }
+  // Optional area fill under each line (drawn first, so lines sit on top).
+  if (area) {
+    for (const s of seriesList) {
+      if (!s.points.length) continue;
+      const n = s.points.length;
+      const top = s.points.map((p, i) => `${i ? 'L' : 'M'}${x(i, n).toFixed(1)},${y(p.y).toFixed(1)}`).join(' ');
+      const d = `${top} L${x(n - 1, n).toFixed(1)},${y(0).toFixed(1)} L${x(0, n).toFixed(1)},${y(0).toFixed(1)} Z`;
+      svg.append(mk('path', { d, fill: s.color, 'fill-opacity': '0.12', stroke: 'none' }));
+    }
   }
   for (const s of seriesList) {
     if (!s.points.length) continue;
@@ -1036,10 +1046,50 @@ views.overview = async () => {
   root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Trafik — overblik'),
     el('span', { class: 'muted' }, 'Vælg serier i panelet · auto hvert 3. sek.')));
 
-  // Server storage: disk free/used + database size.
+  // NOC: alert banner (latest unacked CRIT/WARN finding) + KPI grid.
+  const alertBanner = el('div', { class: 'alert-banner hidden' });
+  root.append(alertBanner);
+
+  const kpiCard = (cls, label) => {
+    const value = el('div', { class: 'kpi-v' }, '–');
+    const sub = el('div', { class: 'kpi-sub muted' }, '');
+    return { node: el('div', { class: `kpi ${cls}` }, el('div', { class: 'kpi-k' }, label), value, sub), value, sub };
+  };
+  const kRx = kpiCard('rx', '↓ Total RX');
+  const kTx = kpiCard('tx', '↑ Total TX');
+  const kAg = kpiCard('ag', 'Aktive agenter');
+  const kLoc = kpiCard('loc', 'Lokationer');
+  root.append(el('div', { class: 'kpi-grid' }, kRx.node, kTx.node, kAg.node, kLoc.node));
+
+  async function refreshAlert() {
+    try {
+      const fs = await api(`/api/findings?since=${new Date(Date.now() - 3600000).toISOString()}`);
+      const hit = fs.find((f) => (f.severity === 'CRIT' || f.severity === 'WARN') && !f.acked);
+      if (hit) {
+        alertBanner.className = `alert-banner sev-${hit.severity}`;
+        alertBanner.replaceChildren(
+          el('span', { class: 'alert-ic' }, '⚠'),
+          el('span', {}, `${hit.severity}: ${esc(hit.metric || '')} — ${esc(hit.explanation || '')}`),
+          el('span', { class: 'spacer' }),
+          el('span', { class: 'muted small' }, fmtDate(hit.createdAt)),
+          el('button', { class: 'small ghost', onclick: () => { currentView = 'findings'; render(); } }, 'Detaljer'));
+      } else { alertBanner.className = 'alert-banner hidden'; alertBanner.replaceChildren(); }
+    } catch { alertBanner.className = 'alert-banner hidden'; }
+  }
+  refreshAlert();
+  api('/locations').then((locs) => {
+    kLoc.value.textContent = String(locs.length);
+    kLoc.sub.textContent = `${locs.filter((l) => l.latitude != null).length} med koordinater`;
+  }).catch(() => {});
+
+  // Server storage: combined disk + database + consumption estimate.
   const storageHost = el('div', {});
   root.append(storageHost);
-  api('/system/storage').then((s) => storageHost.replaceChildren(storageCards(s))).catch(() => {});
+  function refreshStorage() { api('/system/storage').then((s) => storageHost.replaceChildren(storageCards(s))).catch(() => {}); }
+  refreshStorage();
+
+  // Top agents by current bandwidth (updated each tick).
+  const topAgents = el('div', { class: 'top-agents' });
 
   const chartHost = el('div', { class: 'overview-chart' });
   const controls = el('div', { class: 'overview-controls below' });
@@ -1048,12 +1098,14 @@ views.overview = async () => {
   root.append(el('div', { class: 'section-head series-head' }, el('h4', {}, 'Serier'), el('span', { class: 'muted' }, 'Total + pr. agent')));
   root.append(controls);
   clearMarked(); // seed the marked-data panel with its hint
+  root.append(topAgents);
 
   // history[seriesId] = [{ y }]; selection is a Set of seriesId.
   const history = new Map();
   const selection = ovState.selection;
   const MAX = 60;
   let agentsMeta = [];
+  let tickN = 0;
 
   function pushPoint(id, label, y) {
     if (!history.has(id)) history.set(id, { label, points: [] });
@@ -1086,23 +1138,45 @@ views.overview = async () => {
     pushPoint('total:rx', 'Total RX', totalRx);
     pushPoint('total:tx', 'Total TX', totalTx);
 
+    // KPI cards.
+    kRx.value.textContent = `${fmtBytes(totalRx)}/s`;
+    kTx.value.textContent = `${fmtBytes(totalTx)}/s`;
+    const online = agents.filter((a) => a.status === 'online').length;
+    kAg.value.textContent = `${online} / ${agents.length}`;
+    kAg.sub.replaceChildren(usageBar(agents.length ? Math.round((online / agents.length) * 100) : 0));
+
+    // Top agents by current bandwidth.
+    const top = latest.slice().sort((a, b) => (b.rx + b.tx) - (a.rx + a.tx)).slice(0, 5);
+    topAgents.replaceChildren(
+      el('div', { class: 'section-head' }, el('h4', {}, 'Top agenter'), el('span', { class: 'muted' }, 'efter aktuel båndbredde')),
+      ...(top.length ? top.map(({ a, rx, tx }) => el('div', { class: 'ta-row' },
+        el('span', { class: `badge ${a.status}` }, a.status === 'online' ? '●' : '○'),
+        el('span', { class: 'ta-name' }, esc(a.display_name || a.hostname)),
+        el('span', { class: 'ta-bw muted' }, `↓ ${fmtBytes(rx)}/s · ↑ ${fmtBytes(tx)}/s`))) : [el('div', { class: 'muted' }, 'Ingen agenter.')]));
+
     // Default selection on first load: the two totals.
     if (!selection.size) { selection.add('total:rx'); selection.add('total:tx'); }
 
     renderChart();
     renderControls();
+
+    // Periodically refresh the alert banner + storage (not every 3s tick).
+    tickN += 1;
+    if (tickN % 10 === 0) { refreshAlert(); refreshStorage(); }
   }
 
   function renderChart() {
+    // Cyan for RX, emerald for TX (NOC palette); palette colours for the rest.
+    const colorFor = (id, idx) => (id.includes('rx') ? '#06b6d4' : id.includes('tx') ? '#10b981' : SERIES_COLORS[idx % SERIES_COLORS.length]);
     const chosen = [...selection].filter((id) => history.has(id));
     const seriesList = chosen.map((id, idx) => ({
-      id, label: history.get(id).label, color: SERIES_COLORS[idx % SERIES_COLORS.length],
+      id, label: history.get(id).label, color: colorFor(id, idx),
       points: history.get(id).points,
     }));
     const legend = el('div', { class: 'legend' }, ...seriesList.map((s) =>
       el('span', {}, el('span', { class: 'dot', style: `background:${s.color}` }), s.label)));
     chartHost.replaceChildren(
-      seriesList.length ? multiChart(seriesList, { xLabels: ['~3 min siden', '', 'nu'], onBrush: (f0, f1) => { if (f0 === null) clearMarked(); else renderMarked(f0, f1); } }) : el('div', { class: 'empty' }, 'Vælg en eller flere serier →'),
+      seriesList.length ? multiChart(seriesList, { area: true, xLabels: ['~3 min siden', '', 'nu'], onBrush: (f0, f1) => { if (f0 === null) clearMarked(); else renderMarked(f0, f1); } }) : el('div', { class: 'empty' }, 'Vælg en eller flere serier →'),
       legend);
   }
 

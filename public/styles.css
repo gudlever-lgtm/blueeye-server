@@ -29,11 +29,21 @@
 * { box-sizing: border-box; }
 body {
   margin: 0;
-  font: 14px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  /* Prefer Inter / Hanken Grotesk if present locally, else a clean system sans.
+     No external webfont (keeps it offline + EU-friendly). */
+  font: 14px/1.55 'Inter', 'Hanken Grotesk', system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   background: var(--bg);
   color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 .hidden { display: none !important; }
+
+/* Typography hierarchy (NOC): tighter headings, aligned numerals. */
+h1, h2, h3 { letter-spacing: -0.01em; }
+h4 { letter-spacing: 0.02em; }
+.kpi-v, .stat .v, .storage-row .v, td.num, .ta-bw, .big-chart .axis, .legend,
+.kv td, .assistant-meta { font-variant-numeric: tabular-nums; font-feature-settings: 'tnum' 1; }
 .muted { color: var(--muted); font-weight: 400; }
 .error { color: var(--bad); min-height: 1em; }
 a { color: var(--accent); }

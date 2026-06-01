@@ -108,13 +108,18 @@ async function login(emailInput, password) {
   localStorage.setItem(ROLE_KEY, role);
   localStorage.setItem(EMAIL_KEY, email);
 }
-// License features (which modules the customer is entitled to). Fetched once
-// after login so the UI can hide modules not included in the licence.
+// License features (which modules the customer is entitled to). Cached with a
+// short TTL so module visibility self-heals after a licence renewal without
+// re-fetching on every render. Call invalidateFeatures() to force a refresh
+// (e.g. right after "Genvalidér nu").
 let licenseFeatures = null;
+let featuresLoadedAt = 0;
+const FEATURES_TTL_MS = 60000;
+function invalidateFeatures() { licenseFeatures = null; featuresLoadedAt = 0; }
 async function loadFeatures() {
-  if (licenseFeatures) return licenseFeatures;
-  try { licenseFeatures = await api('/license/features'); }
-  catch { licenseFeatures = {}; }
+  if (licenseFeatures && Date.now() - featuresLoadedAt < FEATURES_TTL_MS) return licenseFeatures;
+  try { licenseFeatures = await api('/license/features'); featuresLoadedAt = Date.now(); }
+  catch { if (!licenseFeatures) licenseFeatures = {}; }
   return licenseFeatures;
 }
 function applyFeatureVisibility() {
@@ -128,7 +133,7 @@ function applyFeatureVisibility() {
 
 function logout() {
   disconnectLive();
-  licenseFeatures = null;
+  invalidateFeatures();
   token = null;
   email = '';
   localStorage.removeItem(TOKEN_KEY);
@@ -1588,6 +1593,7 @@ views.license = async () => {
 async function refreshLicense() {
   try {
     const s = await api('/license/refresh', { method: 'POST' });
+    invalidateFeatures(); // entitlements may have changed — refresh module visibility now
     toast(`Genvalideret: ${s.status}`);
     render();
   } catch (err) { toast(err.message, true); }

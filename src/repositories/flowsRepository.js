@@ -169,8 +169,11 @@ function createFlowsRepository(db) {
       q(`SELECT SUM(bytes) AS bytes, SUM(flow_count) AS flowCount FROM flow_rollup WHERE ${roll.clause}`, roll.params),
     ]);
 
-    const byAsn = mergeBy(rAsn, kAsn, 'asn')
-      .map((r) => ({ asn: normAsn(r.asn), asnName: r.asnName ?? null, bytes: r.bytes, flowCount: r.flowCount }))
+    // Normalise asn BEFORE merging so "unknown ASN" (NULL in raw, 0 in rollup)
+    // collapses to a single row instead of two.
+    const normAsnRow = (r) => ({ ...r, asn: normAsn(r.asn) });
+    const byAsn = mergeBy(rAsn.map(normAsnRow), kAsn.map(normAsnRow), 'asn')
+      .map((r) => ({ asn: r.asn, asnName: r.asnName ?? null, bytes: r.bytes, flowCount: r.flowCount }))
       .sort((a, b) => b.bytes - a.bytes).slice(0, 20);
     const byDirection = mergeBy(rDir, kDir, 'direction').map((r) => ({ direction: r.direction, bytes: r.bytes, flowCount: r.flowCount }));
     const series = mergeBy(rSeries, kSeries, 'bucket')

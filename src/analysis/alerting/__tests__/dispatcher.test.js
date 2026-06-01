@@ -48,6 +48,21 @@ test('throttles repeated findings within the cooldown', async () => {
   assert.equal(syslog.calls.length, 2);
 });
 
+test('a CRIT escalation is not throttled by a prior WARN (severity is in the key)', async () => {
+  const syslog = chan(); // minSeverity INFO -> fires on WARN and CRIT
+  let t = 0;
+  const d = createDispatcher({ config: baseConfig(), channels: { syslog }, now: () => t });
+  await d.dispatch(finding({ severity: 'WARN' })); // sent
+  t = 500; // within the 1000ms cooldown
+  const crit = await d.dispatch(finding({ severity: 'CRIT' }));
+  assert.notEqual(crit.reason, 'throttled'); // escalation must get through
+  assert.equal(syslog.calls.length, 2);
+  t = 600;
+  const warn2 = await d.dispatch(finding({ severity: 'WARN' }));
+  assert.equal(warn2.reason, 'throttled'); // same severity still de-duped
+  assert.equal(syslog.calls.length, 2);
+});
+
 test('one failing channel does not stop the others', async () => {
   const bad = { send: async () => { throw new Error('boom'); } };
   const good = chan();

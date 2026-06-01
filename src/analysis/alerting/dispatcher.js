@@ -12,9 +12,12 @@ const silentLogger = { info() {}, warn() {}, error() {} };
 //   const dispatcher = createDispatcher({ config, channels: { email, webhook, syslog } });
 //   await dispatcher.dispatch(finding, group);
 function createDispatcher({ config, channels = {}, licensed = () => true, logger = silentLogger, now = () => Date.now() }) {
-  const lastSent = new Map(); // `${hostId}|${metric}|${kind}` -> timestamp
+  const lastSent = new Map(); // `${hostId}|${metric}|${kind}|${severity}` -> timestamp
 
-  const throttleKey = (f) => `${f.hostId}|${f.metric}|${f.kind}`;
+  // Severity is part of the key so a cooldown started by a WARN never suppresses
+  // a later CRIT escalation for the same metric — each severity throttles on its
+  // own. (Repeated same-severity findings are still de-duped within the window.)
+  const throttleKey = (f) => `${f.hostId}|${f.metric}|${f.kind}|${f.severity}`;
 
   async function dispatch(finding, group) {
     if (!licensed()) return { dispatched: false, reason: 'unlicensed', results: [] };

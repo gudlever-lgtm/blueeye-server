@@ -573,7 +573,7 @@ const SERIES_COLORS = ['#38bdf8', '#22c55e', '#f59e0b', '#ef4444', '#a78bfa', '#
 
 // A large, full-width multi-series line chart. `series` is an array of
 // { id, label, color, points:[{x,y}] }. Time (x) is shared; y auto-scales.
-function multiChart(seriesList, { height = 320 } = {}) {
+function multiChart(seriesList, { height = 320, xLabels = null } = {}) {
   const W = 1000;
   const H = height;
   const pad = { l: 60, r: 12, t: 14, b: 22 };
@@ -604,7 +604,165 @@ function multiChart(seriesList, { height = 320 } = {}) {
     const d = s.points.map((p, i) => `${i ? 'L' : 'M'}${x(i, n).toFixed(1)},${y(p.y).toFixed(1)}`).join(' ');
     svg.append(mk('path', { d, fill: 'none', stroke: s.color, 'stroke-width': 2 }));
   }
+  // Optional x-axis time hints (start / mid / end).
+  if (Array.isArray(xLabels)) {
+    xLabels.forEach((text, i) => {
+      if (!text) return;
+      const frac = xLabels.length === 1 ? 0 : i / (xLabels.length - 1);
+      const xx = pad.l + frac * (W - pad.l - pad.r);
+      const t = mk('text', { x: xx, y: H - 6, class: 'axis', 'text-anchor': frac === 0 ? 'start' : frac === 1 ? 'end' : 'middle' });
+      t.textContent = text;
+      svg.append(t);
+    });
+  }
   return el('div', { class: 'big-chart' }, svg);
+}
+
+// Metric/traffic types selectable in the history view.
+const METRIC_DEFS = [
+  ['rx', 'RX (bytes/s)'], ['tx', 'TX (bytes/s)'],
+  ['cpu', 'CPU %'], ['mem', 'Mem %'], ['load1', 'Load1'],
+];
+const histState = { agentId: '', metrics: new Set(['rx', 'tx']) };
+
+// ms -> 'YYYY-MM-DDTHH:mm' in local time (for <input type=datetime-local>).
+function toLocalInput(ms) {
+  const d = new Date(ms - new Date(ms).getTimezoneOffset() * 60000);
+  return d.toISOString().slice(0, 16);
+}
+function fmtNum(v) { return v >= 1024 ? fmtBytes(v) : String(Math.round(v * 10) / 10); }
+function fmtTimeShort(ms) {
+  return new Date(ms).toLocaleString('da-DK', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+}
+
+// Time-axis line chart with a drag-to-zoom brush. `series`: [{id,label,color,
+// points:[{t(ms),y}]}]. onBrush(fromMs,toMs) fires when the user marks an area.
+function historyChart(seriesList, { fromMs, toMs, onBrush, height = 300 }) {
+  const W = 1000;
+  const H = height;
+  const pad = { l: 64, r: 12, t: 14, b: 28 };
+  const ns = 'http://www.w3.org/2000/svg';
+  const mk = (tag, attrs) => { const e = document.createElementNS(ns, tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v); return e; };
+  const all = seriesList.flatMap((s) => s.points.map((p) => p.y));
+  const max = Math.max(1, ...all);
+  const span = Math.max(1, toMs - fromMs);
+  const xOf = (t) => pad.l + ((t - fromMs) / span) * (W - pad.l - pad.r);
+  const yOf = (v) => H - pad.b - (v / max) * (H - pad.t - pad.b);
+  const svg = mk('svg', { viewBox: `0 0 ${W} ${H}`, class: 'big-chart-svg', preserveAspectRatio: 'none' });
+
+  for (const frac of [0, 0.5, 1]) {
+    const yy = yOf(max * frac);
+    svg.append(mk('line', { class: 'grid', x1: pad.l, y1: yy, x2: W - pad.r, y2: yy }));
+    const lbl = mk('text', { x: 6, y: yy + 4, class: 'axis' }); lbl.textContent = fmtNum(max * frac); svg.append(lbl);
+  }
+  for (const frac of [0, 0.5, 1]) {
+    const t = fromMs + frac * span; const xx = xOf(t);
+    svg.append(mk('line', { class: 'grid', x1: xx, y1: pad.t, x2: xx, y2: H - pad.b }));
+    const lbl = mk('text', { x: xx, y: H - 8, class: 'axis', 'text-anchor': frac === 0 ? 'start' : frac === 1 ? 'end' : 'middle' });
+    lbl.textContent = fmtTimeShort(t); svg.append(lbl);
+  }
+  for (const s of seriesList) {
+    if (!s.points.length) continue;
+    const d = s.points.map((p, i) => `${i ? 'L' : 'M'}${xOf(p.t).toFixed(1)},${yOf(p.y).toFixed(1)}`).join(' ');
+    svg.append(mk('path', { d, fill: 'none', stroke: s.color, 'stroke-width': 2 }));
+  }
+
+  const brush = mk('rect', { class: 'brush', x: 0, y: pad.t, width: 0, height: H - pad.t - pad.b, fill: 'rgba(56,189,248,.15)', stroke: '#38bdf8', 'stroke-width': 1, visibility: 'hidden' });
+  svg.append(brush);
+  let startX = null;
+  const toViewX = (clientX, rect) => Math.max(pad.l, Math.min(W - pad.r, ((clientX - rect.left) / rect.width) * W));
+  svg.addEventListener('mousedown', (e) => { const r = svg.getBoundingClientRect(); startX = toViewX(e.clientX, r); brush.setAttribute('x', startX); brush.setAttribute('width', 0); brush.setAttribute('visibility', 'visible'); });
+  svg.addEventListener('mousemove', (e) => { if (startX === null) return; const r = svg.getBoundingClientRect(); const cx = toViewX(e.clientX, r); brush.setAttribute('x', Math.min(startX, cx)); brush.setAttribute('width', Math.abs(cx - startX)); });
+  function finish(e) {
+    if (startX === null) return;
+    const r = svg.getBoundingClientRect(); const cx = toViewX(e.clientX, r);
+    const x0 = Math.min(startX, cx); const x1 = Math.max(startX, cx);
+    startX = null; brush.setAttribute('visibility', 'hidden');
+    if (x1 - x0 < 6) return; // ignore clicks / tiny drags
+    const denom = W - pad.l - pad.r;
+    const tFrom = fromMs + ((x0 - pad.l) / denom) * span;
+    const tTo = fromMs + ((x1 - pad.l) / denom) * span;
+    if (onBrush) onBrush(Math.round(tFrom), Math.round(tTo));
+  }
+  svg.addEventListener('mouseup', finish);
+  svg.addEventListener('mouseleave', () => { startX = null; brush.setAttribute('visibility', 'hidden'); });
+  return el('div', { class: 'big-chart' }, svg);
+}
+
+// Historical traffic for one agent over a date range, with selectable metric
+// types and a drag-to-zoom brush to investigate a specific timeframe.
+function trafficHistorySection() {
+  const wrap = el('div', { class: 'history' });
+  wrap.append(el('div', { class: 'section-head' }, el('h3', {}, 'Historik — undersøg tidsrum'),
+    el('span', { class: 'muted' }, 'Vælg agent, periode og typer; træk i grafen for at zoome ind')));
+
+  const agentSel = el('select', {}, el('option', { value: '' }, 'Vælg agent…'));
+  const fromI = el('input', { type: 'datetime-local' });
+  const toI = el('input', { type: 'datetime-local' });
+  const now = Date.now();
+  toI.value = toLocalInput(now);
+  fromI.value = toLocalInput(now - 3600000);
+
+  const metricBoxes = METRIC_DEFS.map(([key, label]) => {
+    const cb = el('input', { type: 'checkbox' });
+    cb.checked = histState.metrics.has(key);
+    cb.addEventListener('change', () => { if (cb.checked) histState.metrics.add(key); else histState.metrics.delete(key); });
+    return el('label', { class: 'check' }, cb, label);
+  });
+
+  const chartHost = el('div', { class: 'overview-chart' });
+  const status = el('div', { class: 'muted' });
+  let baseFrom = null;
+  let baseTo = null;
+
+  const fetchBtn = el('button', { class: 'small', onclick: () => { baseFrom = fromI.value; baseTo = toI.value; load(); } }, 'Hent');
+  const resetBtn = el('button', { class: 'small ghost', onclick: () => { if (baseFrom) { fromI.value = baseFrom; toI.value = baseTo; load(); } } }, 'Nulstil zoom');
+
+  wrap.append(el('div', { class: 'history-controls' },
+    el('label', { class: 'inline muted' }, 'Agent ', agentSel),
+    el('label', { class: 'inline muted' }, 'Fra ', fromI),
+    el('label', { class: 'inline muted' }, 'Til ', toI),
+    fetchBtn, resetBtn));
+  wrap.append(el('div', { class: 'history-metrics' }, ...metricBoxes));
+  wrap.append(chartHost, status);
+
+  api('/agents').then((agents) => {
+    for (const a of agents) agentSel.append(el('option', { value: String(a.id) }, a.display_name || a.hostname));
+    if (histState.agentId) agentSel.value = histState.agentId;
+  }).catch(() => {});
+
+  async function load() {
+    const agentId = agentSel.value;
+    histState.agentId = agentId;
+    if (!agentId) { status.textContent = 'Vælg en agent.'; return; }
+    const fromMs = fromI.value ? new Date(fromI.value).getTime() : NaN;
+    const toMs = toI.value ? new Date(toI.value).getTime() : NaN;
+    if (Number.isNaN(fromMs) || Number.isNaN(toMs) || fromMs >= toMs) { status.textContent = 'Ugyldig periode.'; return; }
+    status.textContent = 'Henter…';
+    chartHost.replaceChildren();
+    let rows;
+    try {
+      rows = await api(`/agents/${agentId}/results?from=${new Date(fromMs).toISOString()}&to=${new Date(toMs).toISOString()}&limit=5000`);
+    } catch (err) { status.textContent = err.message; return; }
+    const points = rows.map((r) => {
+      const p = r.payload || {}; const sys = p.system || {}; const tot = (p.traffic && p.traffic.totals) || {};
+      return {
+        t: new Date(r.created_at).getTime(),
+        rx: Number(tot.rxBytesPerSec) || 0, tx: Number(tot.txBytesPerSec) || 0,
+        cpu: Number(sys.cpuPercent) || 0, mem: Number(sys.memUsedPercent) || 0,
+        load1: Array.isArray(sys.loadavg) ? Number(sys.loadavg[0]) || 0 : 0,
+      };
+    }).sort((a, b) => a.t - b.t);
+    if (!points.length) { status.textContent = 'Ingen data i perioden.'; return; }
+    status.textContent = `${points.length} målinger`;
+    const chosen = METRIC_DEFS.filter(([k]) => histState.metrics.has(k));
+    if (!chosen.length) { chartHost.replaceChildren(el('div', { class: 'empty' }, 'Vælg mindst én type.')); return; }
+    const seriesList = chosen.map(([k, label], idx) => ({ id: k, label, color: SERIES_COLORS[idx % SERIES_COLORS.length], points: points.map((p) => ({ t: p.t, y: p[k] })) }));
+    const legend = el('div', { class: 'legend' }, ...seriesList.map((s) => el('span', {}, el('span', { class: 'dot', style: `background:${s.color}` }), s.label)));
+    chartHost.replaceChildren(historyChart(seriesList, { fromMs, toMs, onBrush: (f, t) => { fromI.value = toLocalInput(f); toI.value = toLocalInput(t); load(); } }), legend);
+  }
+
+  return wrap;
 }
 
 // Full-width traffic overview: pick which series to show via checkboxes and
@@ -868,7 +1026,7 @@ views.overview = async () => {
     const legend = el('div', { class: 'legend' }, ...seriesList.map((s) =>
       el('span', {}, el('span', { class: 'dot', style: `background:${s.color}` }), s.label)));
     chartHost.replaceChildren(
-      seriesList.length ? multiChart(seriesList) : el('div', { class: 'empty' }, 'Vælg en eller flere serier →'),
+      seriesList.length ? multiChart(seriesList, { xLabels: ['~3 min siden', '', 'nu'] }) : el('div', { class: 'empty' }, 'Vælg en eller flere serier →'),
       legend);
   }
 
@@ -892,6 +1050,9 @@ views.overview = async () => {
     groups.push(perAgent);
     controls.replaceChildren(...groups);
   }
+
+  // Historical traffic explorer (date range, types, time axis, brush-to-zoom).
+  root.append(trafficHistorySection());
 
   // Lifecycle: poll while this view is mounted; stop when leaving.
   stopOverview();

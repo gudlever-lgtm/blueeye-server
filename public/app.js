@@ -1448,25 +1448,109 @@ function fromLocalInput(v) {
   return Number.isNaN(d.getTime()) ? null : d.toISOString();
 }
 
-function editLocation(l) {
-  openModal(l ? `Rediger lokation ${l.id}` : 'Ny lokation', [
-    { name: 'name', label: 'Navn', value: l ? l.name : '' },
-    { name: 'description', label: 'Beskrivelse', type: 'textarea', value: l ? l.description || '' : '' },
-    { name: 'address', label: 'Adresse (valgfri)', value: l ? l.address || '' : '' },
-    { name: 'latitude', label: 'Breddegrad / latitude (valgfri, -90..90)', value: l && l.latitude != null ? String(l.latitude) : '' },
-    { name: 'longitude', label: 'Længdegrad / longitude (valgfri, -180..180)', value: l && l.longitude != null ? String(l.longitude) : '' },
-  ], async (v) => {
+// Location editor with an interactive map picker + address search. Click the
+// map to set coordinates (and reverse-geocode the address), or search an address
+// (forward-geocode) and pick a hit to fill coordinates + address. Tiles and the
+// geocoder come from /api/map/config (configurable / EU-sourced).
+async function editLocation(l) {
+  let mapCfg = {};
+  try { mapCfg = await api('/api/map/config'); } catch { mapCfg = {}; }
+
+  const name = el('input', { type: 'text', value: l ? l.name : '' });
+  const desc = el('textarea', { rows: 2 }, l ? l.description || '' : '');
+  const address = el('input', { type: 'text', value: l ? l.address || '' : '' });
+  const lat = el('input', { type: 'number', step: 'any', value: l && l.latitude != null ? String(l.latitude) : '' });
+  const lng = el('input', { type: 'number', step: 'any', value: l && l.longitude != null ? String(l.longitude) : '' });
+  const search = el('input', { type: 'text', placeholder: 'Søg adresse…' });
+  const results = el('div', { class: 'geocode-results' });
+  const mapEl = el('div', { class: 'map picker-map' });
+  const err = el('p', { class: 'error' });
+
+  let map = null;
+  let marker = null;
+  function setPoint(la, lo, recenter) {
+    lat.value = Number(la).toFixed(6);
+    lng.value = Number(lo).toFixed(6);
+    if (map) {
+      if (marker) marker.setLatLng([la, lo]); else marker = L.marker([la, lo]).addTo(map);
+      if (recenter) map.setView([la, lo], Math.max(map.getZoom(), 13));
+    }
+  }
+  async function reverseGeocode(la, lo) {
+    if (!mapCfg.geocodeUrl) return;
+    try {
+      const res = await fetch(`${mapCfg.geocodeUrl}/reverse?format=jsonv2&lat=${la}&lon=${lo}`, { headers: { Accept: 'application/json' } });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data && data.display_name) address.value = data.display_name;
+    } catch { /* geocoder optional */ }
+  }
+  async function doSearch() {
+    const q = search.value.trim();
+    results.replaceChildren();
+    if (!q) return;
+    if (!mapCfg.geocodeUrl) { results.append(el('p', { class: 'muted' }, 'Ingen geocoder konfigureret (Indstillinger → Kort).')); return; }
+    results.append(el('p', { class: 'muted' }, 'Søger…'));
+    try {
+      const res = await fetch(`${mapCfg.geocodeUrl}/search?format=jsonv2&limit=5&q=${encodeURIComponent(q)}`, { headers: { Accept: 'application/json' } });
+      const list = res.ok ? await res.json() : [];
+      results.replaceChildren(...(list.length ? list.map((r) => el('button', {
+        type: 'button', class: 'geocode-hit', onclick: () => {
+          setPoint(Number(r.lat), Number(r.lon), true);
+          if (r.display_name) { address.value = r.display_name; search.value = r.display_name; }
+          results.replaceChildren();
+        },
+      }, r.display_name)) : [el('p', { class: 'muted' }, 'Ingen resultater.')]));
+    } catch { results.replaceChildren(el('p', { class: 'error' }, 'Geocoder-fejl.')); }
+  }
+  search.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); doSearch(); } });
+
+  async function save() {
+    err.textContent = '';
     const body = {
-      name: v.name,
-      description: v.description || null,
-      address: v.address || null,
-      latitude: v.latitude.trim() === '' ? null : Number(v.latitude),
-      longitude: v.longitude.trim() === '' ? null : Number(v.longitude),
+      name: name.value.trim(),
+      description: desc.value.trim() || null,
+      address: address.value.trim() || null,
+      latitude: lat.value.trim() === '' ? null : Number(lat.value),
+      longitude: lng.value.trim() === '' ? null : Number(lng.value),
     };
-    if (l) await api(`/locations/${l.id}`, { method: 'PUT', body });
-    else await api('/locations', { method: 'POST', body });
-    closeModal(); toast('Gemt'); render();
-  });
+    if (!body.name) { err.textContent = 'Navn er påkrævet'; return; }
+    try {
+      if (l) await api(`/locations/${l.id}`, { method: 'PUT', body });
+      else await api('/locations', { method: 'POST', body });
+      closeModal(); toast('Gemt'); render();
+    } catch (e2) { err.textContent = e2.message; }
+  }
+
+  const form = el('div', { class: 'form-grid' },
+    el('label', {}, 'Navn', name),
+    el('label', {}, 'Beskrivelse', desc),
+    el('label', {}, 'Adresse', address),
+    el('label', {}, 'Søg adresse', el('div', { class: 'geocode-row' }, search, el('button', { type: 'button', class: 'small', onclick: doSearch }, 'Søg'))),
+    results,
+    mapEl,
+    el('div', { class: 'coord-row' }, el('label', {}, 'Latitude', lat), el('label', {}, 'Longitude', lng)),
+    el('p', { class: 'muted' }, 'Klik på kortet for at sætte koordinater (og hente adressen).'),
+    err,
+    el('div', { class: 'form-actions' },
+      el('button', { type: 'button', class: 'ghost', onclick: closeModal }, 'Annullér'),
+      el('button', { type: 'button', onclick: save }, 'Gem')));
+
+  $('#modal-card').replaceChildren(el('h3', {}, l ? `Rediger lokation ${l.id}` : 'Ny lokation'), form);
+  $('#modal').classList.remove('hidden');
+
+  if (typeof L !== 'undefined' && mapCfg.tileUrl) {
+    setTimeout(() => {
+      const has = l && l.latitude != null && l.longitude != null;
+      map = L.map(mapEl).setView(has ? [l.latitude, l.longitude] : [20, 0], has ? 13 : 2);
+      L.tileLayer(mapCfg.tileUrl, { maxZoom: mapCfg.maxZoom || 19, attribution: mapCfg.attribution || '' }).addTo(map);
+      if (has) marker = L.marker([l.latitude, l.longitude]).addTo(map);
+      map.on('click', (e) => { setPoint(e.latlng.lat, e.latlng.lng, false); reverseGeocode(e.latlng.lat, e.latlng.lng); });
+      map.invalidateSize();
+    }, 50);
+  } else {
+    mapEl.replaceChildren(el('p', { class: 'muted' }, 'Kort utilgængeligt (offline eller ingen tile-URL).'));
+  }
 }
 async function deleteLocation(l) {
   if (!confirm(`Slet lokation "${l.name}"?`)) return;

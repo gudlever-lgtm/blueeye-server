@@ -169,6 +169,16 @@ tr.acked td { opacity: .55; }
 .settings-card table.kv td { padding: 4px 8px; border-bottom: 1px solid var(--border); }
 .settings-card .badges { display: flex; flex-wrap: wrap; gap: 6px; }
 .settings-grid:has(.form-grid) .settings-card:has(.form-grid) { grid-column: 1 / -1; }
+
+/* Location map picker (in the edit-location modal) */
+.picker-map { height: 260px; min-height: 260px; }
+.geocode-row { display: flex; gap: 8px; }
+.geocode-row input { flex: 1; }
+.geocode-results { display: flex; flex-direction: column; gap: 4px; max-height: 140px; overflow: auto; }
+.geocode-hit { text-align: left; background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font: inherit; font-size: 12px; cursor: pointer; }
+.geocode-hit:hover { border-color: var(--accent); }
+.coord-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
 .assistant { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px; margin: 0 0 16px; }
 .assistant .assistant-row { display: flex; gap: 8px; }
 .assistant .assistant-row input { flex: 1; }

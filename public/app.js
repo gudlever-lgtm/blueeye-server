@@ -4,8 +4,29 @@
 const TOKEN_KEY = 'blueeye.server.token';
 const ROLE_KEY = 'blueeye.server.role';
 const EMAIL_KEY = 'blueeye.server.email';
+const THEME_KEY = 'blueeye.server.theme';
 
 const $ = (sel) => document.querySelector(sel);
+
+// Theme (light default, dark opt-in), persisted across sessions.
+function applyTheme(theme) {
+  const t = theme === 'dark' ? 'dark' : 'light';
+  document.documentElement.dataset.theme = t;
+  const btn = document.querySelector('#theme');
+  if (btn) { btn.textContent = t === 'dark' ? '☀️' : '🌙'; }
+}
+function initTheme() {
+  applyTheme(localStorage.getItem(THEME_KEY) || 'light');
+  const btn = document.querySelector('#theme');
+  if (btn) {
+    btn.addEventListener('click', () => {
+      const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+      localStorage.setItem(THEME_KEY, next);
+      applyTheme(next);
+    });
+  }
+}
+initTheme();
 const el = (tag, attrs = {}, ...kids) => {
   const node = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {

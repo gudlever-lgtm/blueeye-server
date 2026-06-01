@@ -1,4 +1,19 @@
+/* Light theme is the default; dark is opt-in via [data-theme="dark"] (toggle in
+   the topbar, persisted in localStorage). */
 :root {
+  --bg: #f1f5f9;
+  --panel: #ffffff;
+  --panel-2: #eef2f7;
+  --text: #0f172a;
+  --muted: #64748b;
+  --accent: #0284c7;
+  --ok: #16a34a;
+  --warn: #d97706;
+  --bad: #dc2626;
+  --border: #dbe3ec;
+  --btn-fg: #ffffff;
+}
+[data-theme="dark"] {
   --bg: #0f172a;
   --panel: #1e293b;
   --panel-2: #273449;
@@ -9,6 +24,7 @@
   --warn: #f59e0b;
   --bad: #ef4444;
   --border: #334155;
+  --btn-fg: #04263a;
 }
 * { box-sizing: border-box; }
 body {
@@ -46,7 +62,7 @@ input, select, textarea {
 }
 button {
   background: var(--accent);
-  color: #04263a;
+  color: var(--btn-fg);
   border: 0;
   border-radius: 8px;
   padding: 8px 12px;

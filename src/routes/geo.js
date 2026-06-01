@@ -12,7 +12,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 // 'geo' license feature. Aggregation is done server-side — raw flow records
 // never leave the server, and RFC1918/private endpoints are excluded at the
 // data layer (internal = 0).
-function createGeoRouter({ flowsRepo, agentsRepo, findingStore, tileConfig = {}, featureGate }) {
+function createGeoRouter({ flowsRepo, agentsRepo, findingStore, tileConfig = {}, getMapConfig = null, featureGate }) {
   const router = express.Router();
   // License gate for the whole module (403 when not included in the license).
   router.use(requireAuth, requireFeature(featureGate, 'geo'));
@@ -45,13 +45,15 @@ function createGeoRouter({ flowsRepo, agentsRepo, findingStore, tileConfig = {},
   }
 
   // GET /api/geo/config — map tile source (so the frontend never hardcodes it).
-  router.get('/config', ...staff, (req, res) => {
+  // Uses the effective (admin-editable) config when available.
+  router.get('/config', ...staff, asyncHandler(async (req, res) => {
+    if (getMapConfig) return res.json(await getMapConfig());
     res.json({
       tileUrl: tileConfig.tileUrl || '',
       attribution: tileConfig.tileAttribution || '',
       maxZoom: tileConfig.tileMaxZoom || 19,
     });
-  });
+  }));
 
   // GET /api/geo/overview?since=&hostId= — internal hosts (site metadata) +
   // external destinations (GeoIP-aggregated, no private addresses).

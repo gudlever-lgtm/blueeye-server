@@ -28,14 +28,15 @@ test('unknown API path still returns JSON 404 (falls through static)', async () 
   assert.equal(res.body.error, 'Not Found');
 });
 
-test('dashboard exposes users tab, auto-refresh and traffic chart', async () => {
+test('dashboard exposes settings (users+licens) tab, auto-refresh and traffic chart', async () => {
   const app = makeApp();
   const html = (await request(app).get('/')).text;
-  assert.match(html, /data-view="users"/); // user-admin tab
+  assert.match(html, /data-view="settings"/); // settings tab (user admin + licens live under it)
   assert.match(html, /id="autorefresh"/); // auto-refresh toggle
 
   const js = (await request(app).get('/app.js')).text;
-  assert.match(js, /views\.users/); // user-admin view
+  assert.match(js, /views\.settings/); // settings overview view
+  assert.match(js, /views\.users/); // user-admin view (now reused inside settings)
   assert.match(js, /trafficChart/); // traffic-over-time chart
   assert.match(js, /setAutoRefresh/); // auto-refresh logic
   assert.match(js, /agentSourceCell/); // per-agent traffic source

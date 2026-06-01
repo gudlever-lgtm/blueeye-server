@@ -293,6 +293,18 @@ const PAGE_INFO = {
         el('li', {}, 'unlicensed: ingen gyldig licens — nye agent-forbindelser afvises.')),
     ],
   },
+  settings: {
+    hero: 'Administration: brugere, licens og serverens effektive konfiguration.',
+    title: 'Indstillinger',
+    body: () => [
+      el('p', {}, 'Samlet administrationsside. Brugere og licens er flyttet hertil.'),
+      el('ul', {},
+        el('li', {}, 'Oversigt: effektiv konfiguration (licens-funktioner, analyse, alerting, retention) — læsbar; styres via serverens .env og kræver genstart.'),
+        el('li', {}, 'Kort: tile- og geocoder-kilde kan ændres her (gemmes i databasen, virker uden genstart).'),
+        el('li', {}, 'Brugere: opret/redigér personale og roller (kun admin).'),
+        el('li', {}, 'Licens: status + "Genvalidér nu".')),
+    ],
+  },
 };
 
 function hero(viewKey) {
@@ -1508,6 +1520,90 @@ async function deleteCode(c) {
   if (!confirm('Slet kode?')) return;
   try { await api(`/enrollment-codes/${c.id}`, { method: 'DELETE' }); toast('Slettet'); render(); }
   catch (err) { toast(err.message, true); }
+}
+
+// ---- Indstillinger (settings overview: brugere + licens + config) ---------
+let settingsTab = null;
+views.settings = async () => {
+  const root = el('div');
+  const isAdmin = role === 'admin';
+  const subtabs = [];
+  if (isAdmin) subtabs.push(['system', 'Oversigt'], ['users', 'Brugere']);
+  subtabs.push(['license', 'Licens']);
+  if (!settingsTab || !subtabs.some(([k]) => k === settingsTab)) settingsTab = subtabs[0][0];
+
+  const nav = el('div', { class: 'subtabs' }, ...subtabs.map(([k, label]) =>
+    el('button', { class: `small ghost${k === settingsTab ? ' active' : ''}`, onclick: () => { settingsTab = k; render(); } }, label)));
+  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Indstillinger'), el('span', { class: 'spacer' }), nav));
+
+  let content;
+  try {
+    if (settingsTab === 'users') content = await views.users();
+    else if (settingsTab === 'license') content = await views.license();
+    else content = await settingsSystemView();
+  } catch (err) {
+    content = el('div', { class: 'empty error' }, err.message);
+  }
+  root.append(content);
+  return root;
+};
+
+async function settingsSystemView() {
+  const data = await api('/api/settings');
+  const root = el('div', { class: 'settings-grid' });
+  root.append(settingsCard('Licens-funktioner', featureBadges(data.license)));
+  root.append(settingsCard('Analyse', kvList(data.analysis, { analysisEnabled: 'Analyse slået til', assistantEnabled: 'AI-assistent', critSigma: 'CRIT σ', warnSigma: 'WARN σ', baselineDays: 'Baseline-dage', minSamples: 'Min. samples' })));
+  root.append(settingsCard('Alerting', alertingSummary(data.alerting)));
+  root.append(settingsCard('Retention', kvList(data.retention, { enabled: 'Slået til', rawRetentionDays: 'Rå data (dage)', rollupRetentionDays: 'Aggregeret (dage)', findingRetentionDays: 'Findings (dage)', rollupIntervalMinutes: 'Bucket (min)' })));
+  root.append(mapSettingsCard(data.map));
+  root.append(el('p', { class: 'muted' }, 'Læsbare værdier styres via serverens .env og kræver genstart. Kun kort-indstillingerne kan ændres her.'));
+  return root;
+}
+function settingsCard(title, ...body) { return el('div', { class: 'settings-card' }, el('h3', {}, title), ...body); }
+function boolText(v) { return v === true ? 'ja' : v === false ? 'nej' : String(v ?? '–'); }
+function kvList(obj, labels) {
+  if (!obj) return el('p', { class: 'muted' }, '–');
+  const rows = Object.entries(labels).map(([k, label]) => el('tr', {}, el('td', { class: 'muted' }, label), el('td', {}, boolText(obj[k]))));
+  return el('table', { class: 'kv' }, el('tbody', {}, ...rows));
+}
+function featureBadges(features) {
+  if (!features) return el('p', { class: 'muted' }, '–');
+  return el('div', { class: 'badges' }, ...['analysis', 'assistant', 'alerting', 'geo'].map((f) =>
+    el('span', { class: `badge ${features[f] ? 'active' : 'offline'}` }, `${f}: ${features[f] ? 'ja' : 'nej'}`)));
+}
+function alertingSummary(a) {
+  if (!a) return el('p', { class: 'muted' }, '–');
+  const rows = [el('tr', {}, el('td', { class: 'muted' }, 'Slået til'), el('td', {}, boolText(a.enabled)))];
+  for (const [name, c] of Object.entries(a.channels || {})) {
+    rows.push(el('tr', {}, el('td', { class: 'muted' }, name), el('td', {}, `${boolText(c.enabled)} · min ${c.minSeverity || '–'}`)));
+  }
+  return el('table', { class: 'kv' }, el('tbody', {}, ...rows));
+}
+function mapSettingsCard(map) {
+  const m = map || {};
+  const url = el('input', { type: 'text', value: m.tileUrl || '' });
+  const attr = el('input', { type: 'text', value: m.attribution || '' });
+  const zoom = el('input', { type: 'number', value: String(m.maxZoom ?? 19), min: '1', max: '22' });
+  const geo = el('input', { type: 'text', value: m.geocodeUrl || '' });
+  const err = el('p', { class: 'error' });
+  const btn = el('button', { class: 'small' }, 'Gem kort-indstillinger');
+  async function save() {
+    err.textContent = ''; btn.disabled = true;
+    try {
+      await api('/api/settings/map', { method: 'PUT', body: { tileUrl: url.value.trim(), attribution: attr.value.trim(), maxZoom: Number(zoom.value), geocodeUrl: geo.value.trim() } });
+      toast('Kort-indstillinger gemt');
+    } catch (e2) {
+      err.textContent = e2.data && e2.data.details ? Object.values(e2.data.details).join(' · ') : e2.message;
+    } finally { btn.disabled = false; }
+  }
+  btn.addEventListener('click', save);
+  return el('div', { class: 'settings-card' }, el('h3', {}, 'Kort (tiles + geocoder)'),
+    el('div', { class: 'form-grid' },
+      el('label', {}, 'Tile-URL ({z}/{x}/{y})', url),
+      el('label', {}, 'Attribution', attr),
+      el('label', {}, 'Max zoom', zoom),
+      el('label', {}, 'Geocoder-URL (adressesøgning)', geo),
+      err, el('div', { class: 'form-actions' }, btn)));
 }
 
 views.users = async () => {

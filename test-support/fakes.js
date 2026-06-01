@@ -8,6 +8,7 @@ process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-secret-do-not-use-in-pr
 
 const { createApp } = require('../src/app');
 const { issueToken } = require('../src/auth/jwt');
+const { createSettingsService } = require('../src/services/settings');
 
 // ---- Repositories ---------------------------------------------------------
 
@@ -225,6 +226,18 @@ function makeDispatcher(overrides = {}) {
   };
 }
 
+// A real settings service backed by an in-memory store, so PUT validation and
+// the effective-map overlay behave exactly as in production.
+function makeSettingsService(overrides = {}) {
+  const store = new Map(overrides.initial ? Object.entries(overrides.initial) : []);
+  const settingsRepo = {
+    get: async (k) => (store.has(k) ? store.get(k) : null),
+    set: async (k, v) => { store.set(k, v); return v; },
+  };
+  const config = { geo: { tileUrl: 'https://tiles.example/{z}/{x}/{y}.png', tileAttribution: 'test', tileMaxZoom: 19, geocodeUrl: 'https://nominatim.example' } };
+  return createSettingsService({ settingsRepo, config });
+}
+
 // A fake AI assistant. Disabled by default (explain rejects with FeatureDisabled)
 // so the endpoint answers 403 unless a test opts in with its own explain.
 function makeAssistant(overrides = {}) {
@@ -264,6 +277,9 @@ function makeApp(overrides = {}) {
     assistant: overrides.assistant || makeAssistant(),
     dispatcher: overrides.dispatcher || makeDispatcher(),
     featureGate: overrides.featureGate || makeFeatureGate(),
+    settingsService: overrides.settingsService || makeSettingsService(),
+    analysisConfig: overrides.analysisConfig || { analysisEnabled: true, assistantEnabled: false, critSigma: 4, warnSigma: 3, baselineDays: 7, minSamples: 200 },
+    retentionConfig: overrides.retentionConfig || { enabled: true, rawRetentionDays: 7, rollupRetentionDays: 90, findingRetentionDays: 365, rollupIntervalMinutes: 60 },
   });
 }
 
@@ -305,6 +321,7 @@ module.exports = {
   makeAssistant,
   makeDispatcher,
   makeFeatureGate,
+  makeSettingsService,
   makeDb,
   makeApp,
   tokenFor,

@@ -79,6 +79,9 @@ const config = {
     tileUrl: process.env.MAP_TILE_URL || 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
     tileAttribution: process.env.MAP_TILE_ATTRIBUTION || '© OpenStreetMap contributors',
     tileMaxZoom: toInt(process.env.MAP_TILE_MAX_ZOOM, 19),
+    // Geocoder for the location address search/picker. Default OpenStreetMap
+    // Nominatim (OSMF, EU); point at a self-hosted/EU instance for production.
+    geocodeUrl: process.env.MAP_GEOCODE_URL || 'https://nominatim.openstreetmap.org',
   },
 };
 

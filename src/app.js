@@ -30,6 +30,9 @@ function createApp({
   assistant,
   dispatcher,
   featureGate,
+  settingsService,
+  analysisConfig,
+  retentionConfig,
   logger = silentLogger,
 } = {}) {
   const app = express();
@@ -66,6 +69,9 @@ function createApp({
       assistant,
       dispatcher,
       featureGate,
+      settingsService,
+      analysisConfig,
+      retentionConfig,
     })
   );
 

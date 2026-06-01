@@ -40,6 +40,8 @@ const { createRetentionRepo } = require('./analysis/retention/repo');
 const { createRollup } = require('./analysis/retention/rollup');
 const { createPurge } = require('./analysis/retention/purge');
 const { createRetentionScheduler } = require('./analysis/retention/scheduler');
+const { createSettingsRepository } = require('./repositories/settingsRepository');
+const { createSettingsService } = require('./services/settings');
 
 // Wires up real dependencies, starts the HTTP server and installs graceful
 // shutdown handlers.
@@ -145,6 +147,9 @@ function start() {
   // expired data. DB hygiene; on by default. Started after the server is up.
   const retentionConfig = loadRetentionConfig();
   const retentionRepo = createRetentionRepo(db);
+
+  // Runtime-editable settings (currently the map tile/geocoder source).
+  const settingsService = createSettingsService({ settingsRepo: createSettingsRepository(db), config });
   const retentionScheduler = createRetentionScheduler({
     rollup: createRollup({ repo: retentionRepo, config: retentionConfig, logger: console }),
     purge: createPurge({ repo: retentionRepo, config: retentionConfig }),
@@ -172,6 +177,9 @@ function start() {
     assistant,
     dispatcher,
     featureGate,
+    settingsService,
+    analysisConfig,
+    retentionConfig,
     logger: console,
   });
 

@@ -16,6 +16,8 @@ const { createAssistantRouter } = require('./assistant');
 const { createGeoRouter } = require('./geo');
 const { createAlertingRouter } = require('./alerting');
 const { createExportRouter } = require('./export');
+const { createSettingsRouter } = require('./settings');
+const { createMapRouter } = require('./map');
 const {
   createAgentAuthenticator,
   createAgentTokenMiddleware,
@@ -43,8 +45,16 @@ function createApiRouter({
   assistant,
   dispatcher,
   featureGate,
+  settingsService,
+  analysisConfig,
+  retentionConfig,
 }) {
   const router = express.Router();
+  // Effective (admin-editable) map config, used by both the geo view and the
+  // ungated location-picker map. Falls back to the static tile config.
+  const getMapConfig = settingsService
+    ? () => settingsService.getMap()
+    : () => Promise.resolve({ tileUrl: geoTileConfig && geoTileConfig.tileUrl, attribution: geoTileConfig && geoTileConfig.tileAttribution, maxZoom: geoTileConfig && geoTileConfig.tileMaxZoom });
 
   // Agent-token middleware — kept entirely separate from the user JWT auth.
   const agentAuthenticator = createAgentAuthenticator({ agentTokensRepo });
@@ -62,8 +72,10 @@ function createApiRouter({
   router.use('/system', createSystemRouter({ systemInfo }));
   if (findingStore) router.use('/api/findings', createFindingsRouter({ findingStore }));
   if (assistant) router.use('/api/assistant', createAssistantRouter({ assistant, featureGate }));
-  if (flowsRepo) router.use('/api/geo', createGeoRouter({ flowsRepo, agentsRepo, findingStore, tileConfig: geoTileConfig, featureGate }));
+  if (flowsRepo) router.use('/api/geo', createGeoRouter({ flowsRepo, agentsRepo, findingStore, tileConfig: geoTileConfig, getMapConfig, featureGate }));
   if (dispatcher) router.use('/api/alerting', createAlertingRouter({ dispatcher }));
+  router.use('/api/map', createMapRouter({ getMapConfig }));
+  if (settingsService) router.use('/api/settings', createSettingsRouter({ settingsService, featureGate, dispatcher, analysisConfig, retentionConfig }));
   router.use('/api/export', createExportRouter({ findingStore, flowsRepo, agentsRepo, locationsRepo, resultsRepo, featureGate }));
   router.use('/enrollment-codes', createEnrollmentCodesRouter({ enrollmentCodesRepo, locationsRepo }));
 

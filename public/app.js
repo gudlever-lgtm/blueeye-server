@@ -592,9 +592,35 @@ function trafficChart(series) {
 const SERIES_COLORS = ['#38bdf8', '#22c55e', '#f59e0b', '#ef4444', '#a78bfa', '#ec4899',
   '#14b8a6', '#eab308', '#fb923c', '#60a5fa', '#34d399', '#f472b6'];
 
+// Attaches a drag-to-select brush to a chart SVG. onSelect receives the start
+// and end as fractions (0..1) of the plot area; right-click triggers onClear.
+// Shared by the live overview chart and the history chart.
+function attachBrush(svg, { W, padL, padR, padT, padB, H, onSelect, onClear }) {
+  const ns = 'http://www.w3.org/2000/svg';
+  const rect = document.createElementNS(ns, 'rect');
+  const attrs = { class: 'brush', x: 0, y: padT, width: 0, height: H - padT - padB, fill: 'rgba(56,189,248,.15)', stroke: '#38bdf8', 'stroke-width': 1, visibility: 'hidden' };
+  for (const [k, v] of Object.entries(attrs)) rect.setAttribute(k, v);
+  svg.append(rect);
+  let startX = null;
+  const toViewX = (clientX) => { const r = svg.getBoundingClientRect(); return Math.max(padL, Math.min(W - padR, ((clientX - r.left) / r.width) * W)); };
+  svg.addEventListener('mousedown', (e) => { startX = toViewX(e.clientX); rect.setAttribute('x', startX); rect.setAttribute('width', 0); rect.setAttribute('visibility', 'visible'); });
+  svg.addEventListener('mousemove', (e) => { if (startX === null) return; const cx = toViewX(e.clientX); rect.setAttribute('x', Math.min(startX, cx)); rect.setAttribute('width', Math.abs(cx - startX)); });
+  svg.addEventListener('mouseup', (e) => {
+    if (startX === null) return;
+    const cx = toViewX(e.clientX); const x0 = Math.min(startX, cx); const x1 = Math.max(startX, cx);
+    startX = null; rect.setAttribute('visibility', 'hidden');
+    if (x1 - x0 < 6) return;
+    const denom = W - padL - padR;
+    onSelect((x0 - padL) / denom, (x1 - padL) / denom);
+  });
+  svg.addEventListener('mouseleave', () => { startX = null; rect.setAttribute('visibility', 'hidden'); });
+  if (onClear) svg.addEventListener('contextmenu', (e) => { e.preventDefault(); onClear(); });
+}
+
 // A large, full-width multi-series line chart. `series` is an array of
 // { id, label, color, points:[{x,y}] }. Time (x) is shared; y auto-scales.
-function multiChart(seriesList, { height = 320, xLabels = null } = {}) {
+// Pass onBrush(f0,f1) (fractions) to enable drag-to-mark; right-click clears it.
+function multiChart(seriesList, { height = 320, xLabels = null, onBrush = null } = {}) {
   const W = 1000;
   const H = height;
   const pad = { l: 60, r: 12, t: 14, b: 22 };
@@ -635,6 +661,9 @@ function multiChart(seriesList, { height = 320, xLabels = null } = {}) {
       t.textContent = text;
       svg.append(t);
     });
+  }
+  if (onBrush) {
+    attachBrush(svg, { W, padL: pad.l, padR: pad.r, padT: pad.t, padB: pad.b, H, onSelect: (f0, f1) => onBrush(f0, f1), onClear: () => onBrush(null, null) });
   }
   return el('div', { class: 'big-chart' }, svg);
 }
@@ -688,25 +717,9 @@ function historyChart(seriesList, { fromMs, toMs, onBrush, height = 300 }) {
     svg.append(mk('path', { d, fill: 'none', stroke: s.color, 'stroke-width': 2 }));
   }
 
-  const brush = mk('rect', { class: 'brush', x: 0, y: pad.t, width: 0, height: H - pad.t - pad.b, fill: 'rgba(56,189,248,.15)', stroke: '#38bdf8', 'stroke-width': 1, visibility: 'hidden' });
-  svg.append(brush);
-  let startX = null;
-  const toViewX = (clientX, rect) => Math.max(pad.l, Math.min(W - pad.r, ((clientX - rect.left) / rect.width) * W));
-  svg.addEventListener('mousedown', (e) => { const r = svg.getBoundingClientRect(); startX = toViewX(e.clientX, r); brush.setAttribute('x', startX); brush.setAttribute('width', 0); brush.setAttribute('visibility', 'visible'); });
-  svg.addEventListener('mousemove', (e) => { if (startX === null) return; const r = svg.getBoundingClientRect(); const cx = toViewX(e.clientX, r); brush.setAttribute('x', Math.min(startX, cx)); brush.setAttribute('width', Math.abs(cx - startX)); });
-  function finish(e) {
-    if (startX === null) return;
-    const r = svg.getBoundingClientRect(); const cx = toViewX(e.clientX, r);
-    const x0 = Math.min(startX, cx); const x1 = Math.max(startX, cx);
-    startX = null; brush.setAttribute('visibility', 'hidden');
-    if (x1 - x0 < 6) return; // ignore clicks / tiny drags
-    const denom = W - pad.l - pad.r;
-    const tFrom = fromMs + ((x0 - pad.l) / denom) * span;
-    const tTo = fromMs + ((x1 - pad.l) / denom) * span;
-    if (onBrush) onBrush(Math.round(tFrom), Math.round(tTo));
+  if (onBrush) {
+    attachBrush(svg, { W, padL: pad.l, padR: pad.r, padT: pad.t, padB: pad.b, H, onSelect: (f0, f1) => onBrush(Math.round(fromMs + f0 * span), Math.round(fromMs + f1 * span)) });
   }
-  svg.addEventListener('mouseup', finish);
-  svg.addEventListener('mouseleave', () => { startX = null; brush.setAttribute('visibility', 'hidden'); });
   return el('div', { class: 'big-chart' }, svg);
 }
 
@@ -991,8 +1004,12 @@ views.overview = async () => {
   api('/system/storage').then((s) => storageHost.replaceChildren(storageCards(s))).catch(() => {});
 
   const chartHost = el('div', { class: 'overview-chart' });
-  const controls = el('div', { class: 'overview-controls' });
-  root.append(el('div', { class: 'overview-grid' }, chartHost, controls));
+  const controls = el('div', { class: 'overview-controls below' });
+  const markedPanel = el('div', { class: 'geo-panel marked-panel' });
+  root.append(el('div', { class: 'overview-grid' }, chartHost, markedPanel));
+  root.append(el('div', { class: 'section-head series-head' }, el('h4', {}, 'Serier'), el('span', { class: 'muted' }, 'Total + pr. agent')));
+  root.append(controls);
+  clearMarked(); // seed the marked-data panel with its hint
 
   // history[seriesId] = [{ y }]; selection is a Set of seriesId.
   const history = new Map();
@@ -1004,7 +1021,7 @@ views.overview = async () => {
     if (!history.has(id)) history.set(id, { label, points: [] });
     const h = history.get(id);
     h.label = label;
-    h.points.push({ y });
+    h.points.push({ y, t: Date.now() });
     if (h.points.length > MAX) h.points.shift();
   }
 
@@ -1047,8 +1064,41 @@ views.overview = async () => {
     const legend = el('div', { class: 'legend' }, ...seriesList.map((s) =>
       el('span', {}, el('span', { class: 'dot', style: `background:${s.color}` }), s.label)));
     chartHost.replaceChildren(
-      seriesList.length ? multiChart(seriesList, { xLabels: ['~3 min siden', '', 'nu'] }) : el('div', { class: 'empty' }, 'Vælg en eller flere serier →'),
+      seriesList.length ? multiChart(seriesList, { xLabels: ['~3 min siden', '', 'nu'], onBrush: (f0, f1) => { if (f0 === null) clearMarked(); else renderMarked(f0, f1); } }) : el('div', { class: 'empty' }, 'Vælg en eller flere serier →'),
       legend);
+  }
+
+  function markedHint() {
+    return el('p', { class: 'muted' }, 'Markér et område i grafen (træk) for at se gennemsnit/min/max for det tidsrum. Højreklik rydder.');
+  }
+  function clearMarked() {
+    markedPanel.replaceChildren(el('div', { class: 'section-head' }, el('h3', {}, 'Markeret')), markedHint());
+  }
+  function renderMarked(f0, f1) {
+    const chosen = [...selection].filter((id) => history.has(id));
+    if (!chosen.length) return;
+    const maxLen = Math.max(1, ...chosen.map((id) => history.get(id).points.length));
+    let i0 = Math.round(f0 * (maxLen - 1));
+    let i1 = Math.round(f1 * (maxLen - 1));
+    if (i1 < i0) { const tmp = i0; i0 = i1; i1 = tmp; }
+    const rows = [];
+    for (const id of chosen) {
+      const slice = history.get(id).points.slice(i0, i1 + 1);
+      if (!slice.length) continue;
+      const ys = slice.map((p) => p.y);
+      rows.push({ label: history.get(id).label, avg: ys.reduce((s, v) => s + v, 0) / ys.length, min: Math.min(...ys), max: Math.max(...ys) });
+    }
+    const ref = history.get(chosen[0]).points;
+    const tFrom = ref[i0] && ref[i0].t;
+    const lastIdx = Math.min(i1, ref.length - 1);
+    const tTo = ref[lastIdx] && ref[lastIdx].t;
+    markedPanel.replaceChildren(
+      el('div', { class: 'section-head' }, el('h3', {}, 'Markeret'), el('span', { class: 'spacer' }), el('button', { class: 'small ghost', onclick: clearMarked }, 'Ryd')),
+      el('p', { class: 'muted' }, (tFrom && tTo) ? `${fmtTimeShort(tFrom)} – ${fmtTimeShort(tTo)} · ${i1 - i0 + 1} pkt.` : `${i1 - i0 + 1} punkter`),
+      el('table', { class: 'kv' }, el('tbody', {}, ...rows.map((r) => el('tr', {},
+        el('td', {}, r.label),
+        el('td', { class: 'num' }, `ø ${fmtBytes(r.avg)}/s`),
+        el('td', { class: 'num muted' }, `${fmtBytes(r.min)}–${fmtBytes(r.max)}`))))));
   }
 
   function checkbox(id, label) {

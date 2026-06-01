@@ -104,12 +104,17 @@ main#view:has(.overview) { max-width: 1600px; }
 .section-head { display: flex; align-items: center; gap: 12px; margin: 0 0 14px; }
 
 /* Traffic overview: big chart + a checkbox panel to inject series. */
-.overview-grid { display: grid; grid-template-columns: 1fr 280px; gap: 16px; align-items: start; }
+.overview-grid { display: grid; grid-template-columns: 1fr 320px; gap: 16px; align-items: start; }
 @media (max-width: 900px) { .overview-grid { grid-template-columns: 1fr; } }
 .overview-chart { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
 .big-chart svg.big-chart-svg { display: block; width: 100%; height: auto; }
 .big-chart .axis { fill: var(--muted); font-size: 11px; }
 .overview-controls { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px; max-height: 70vh; overflow: auto; }
+/* Series controls shown below the chart span full width and lay out in columns. */
+.overview-controls.below { max-height: none; overflow: visible; display: flex; flex-wrap: wrap; gap: 22px; }
+.overview-controls.below .ctrl-group { margin-bottom: 0; }
+.marked-panel { max-height: none; }
+.series-head { margin-top: 16px; }
 
 /* Server storage cards + usage bar. */
 .storage { margin: 0 0 16px; }

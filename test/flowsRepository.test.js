@@ -68,11 +68,16 @@ test('PRIVACY: aggregateExternalDestinations filters internal + null country in 
   const win = { since: new Date('2026-01-01T00:00:00Z'), until: new Date('2026-01-02T00:00:00Z') };
   const out = await repo.aggregateExternalDestinations(win);
   assert.deepEqual(out, []); // empty fake result
-  assert.ok(pool.queries.length >= 1);
-  for (const q of pool.queries) {
-    assert.match(q.sql, /internal = 0/);
-    assert.match(q.sql, /country IS NOT NULL/);
+  // Every read of the RAW table must exclude internal + null-country rows; the
+  // rollup table only ever stored external destinations.
+  const rawQueries = pool.queries.filter((x) => /flow_records/.test(x.sql));
+  assert.ok(rawQueries.length >= 1);
+  for (const x of rawQueries) {
+    assert.match(x.sql, /internal = 0/);
+    assert.match(x.sql, /country IS NOT NULL/);
   }
+  // It also reads the rollup table so windows past raw-retention stay complete.
+  assert.ok(pool.queries.some((x) => /flow_rollup/.test(x.sql)));
 });
 
 test('selection read methods issue queries without throwing', async () => {

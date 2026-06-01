@@ -231,7 +231,9 @@ Analyse-modulet (lokal anomali-detektion, korrelator og opt-in AI-assistent) er
 beskrevet i [`docs/analysis.md`](docs/analysis.md). Geo-laget (flow-records,
 GeoIP/ASN-berigelse og kort-API) er beskrevet i [`docs/geo.md`](docs/geo.md).
 Alerting (findings → email/webhook/syslog) er beskrevet i
-[`docs/alerting.md`](docs/alerting.md).
+[`docs/alerting.md`](docs/alerting.md). Retention + rollup (down-sampling,
+purge, cross-læsning af rå + aggregeret data) er beskrevet i
+[`docs/retention.md`](docs/retention.md).
 
 ### Eksempler
 

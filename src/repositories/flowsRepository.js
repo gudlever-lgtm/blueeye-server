@@ -44,19 +44,41 @@ function createFlowsRepository(db) {
     return result.affectedRows;
   }
 
-  // Bytes/flows per external destination (country, asn) in [from, to). Only
-  // public destinations (internal = 0 AND country IS NOT NULL) — private/RFC1918
-  // endpoints are structurally excluded here.
+  const q = (sql, params) => pool.query(sql, params).then(([r]) => r);
+  const numOf = (v) => Number(v) || 0;
+  const normAsn = (v) => (v ? Number(v) : null);
+
+  // Bytes/flows per external destination (country, asn) in [from, to), read
+  // across BOTH raw flow_records and the flow_rollup table — so a window that
+  // reaches past the raw-retention horizon still returns complete totals. Only
+  // public destinations (internal = 0 / country present) are included;
+  // private/RFC1918 endpoints are structurally excluded.
   async function sumByDest({ agentId, from, to }) {
-    const where = ['internal = 0', 'country IS NOT NULL', 'ts >= ?', 'ts < ?'];
-    const params = [from, to];
-    if (agentId) { where.push('agent_id = ?'); params.push(agentId); }
-    const [rows] = await pool.query(
-      `SELECT country, asn, MAX(asn_name) AS asnName, SUM(bytes) AS bytes, SUM(flows) AS flowCount
-       FROM flow_records WHERE ${where.join(' AND ')} GROUP BY country, asn`,
-      params
-    );
-    return rows;
+    const rawWhere = ['internal = 0', 'country IS NOT NULL', 'ts >= ?', 'ts < ?'];
+    const rawParams = [from, to];
+    if (agentId) { rawWhere.push('agent_id = ?'); rawParams.push(agentId); }
+    const rollWhere = ["country <> ''", 'bucket >= ?', 'bucket < ?'];
+    const rollParams = [from, to];
+    if (agentId) { rollWhere.push('agent_id = ?'); rollParams.push(agentId); }
+
+    const [raw, roll] = await Promise.all([
+      q(`SELECT country, asn, MAX(asn_name) AS asnName, SUM(bytes) AS bytes, SUM(flows) AS flowCount
+         FROM flow_records WHERE ${rawWhere.join(' AND ')} GROUP BY country, asn`, rawParams),
+      q(`SELECT country, asn, MAX(asn_name) AS asnName, SUM(bytes) AS bytes, SUM(flow_count) AS flowCount
+         FROM flow_rollup WHERE ${rollWhere.join(' AND ')} GROUP BY country, asn`, rollParams),
+    ]);
+
+    const merged = new Map();
+    for (const r of [...raw, ...roll]) {
+      const asn = normAsn(r.asn);
+      const key = `${r.country}|${asn ?? ''}`;
+      const cur = merged.get(key) || { country: r.country, asn, asnName: r.asnName ?? null, bytes: 0, flowCount: 0 };
+      cur.bytes += numOf(r.bytes);
+      cur.flowCount += numOf(r.flowCount);
+      if (!cur.asnName && r.asnName) cur.asnName = r.asnName;
+      merged.set(key, cur);
+    }
+    return [...merged.values()];
   }
 
   // Aggregated external destinations with a deviation = relative change vs the
@@ -77,48 +99,90 @@ function createFlowsRepository(db) {
     });
   }
 
-  function destFilter({ country, asn, since, until }) {
+  // WHERE clause for the raw table and the rollup table for a given selection.
+  function rawDestFilter({ country, asn, since, until }) {
     const where = ['internal = 0', 'ts >= ?', 'ts < ?'];
     const params = [since, until];
     if (country) { where.push('country = ?'); params.push(country); }
     if (asn !== null && asn !== undefined && asn !== '') { where.push('asn = ?'); params.push(Number(asn)); }
     return { clause: where.join(' AND '), params };
   }
+  function rollDestFilter({ country, asn, since, until }) {
+    const where = ["country <> ''", 'bucket >= ?', 'bucket < ?'];
+    const params = [since, until];
+    if (country) { where.push('country = ?'); params.push(country); }
+    if (asn !== null && asn !== undefined && asn !== '') { where.push('asn = ?'); params.push(Number(asn)); }
+    return { clause: where.join(' AND '), params };
+  }
 
-  // True if any public flow exists for the selected country/asn in the window.
+  // True if any public flow exists (raw OR rollup) for the selection.
   async function destinationExists({ country = null, asn = null, since, until }) {
-    const { clause, params } = destFilter({ country, asn, since, until });
-    const [rows] = await pool.query(`SELECT 1 FROM flow_records WHERE ${clause} LIMIT 1`, params);
-    return rows.length > 0;
-  }
-
-  // Distinct agent ids that talked to the selected destination in the window.
-  async function agentIdsForDestination({ country = null, asn = null, since, until }) {
-    const { clause, params } = destFilter({ country, asn, since, until });
-    const [rows] = await pool.query(`SELECT DISTINCT agent_id FROM flow_records WHERE ${clause}`, params);
-    return rows.map((r) => r.agent_id);
-  }
-
-  // Aggregated detail for a selected destination: peers by ASN, by direction,
-  // by protocol, and a byte time-series (hourly).
-  async function selectFlows({ country = null, asn = null, since, until }) {
-    const { clause, params } = destFilter({ country, asn, since, until });
-    const run = (sql) => pool.query(sql, params).then(([r]) => r);
-    const [byAsn, byDirection, byProto, series, totalsRows] = await Promise.all([
-      run(`SELECT asn, MAX(asn_name) AS asnName, SUM(bytes) AS bytes, SUM(flows) AS flowCount FROM flow_records WHERE ${clause} GROUP BY asn ORDER BY bytes DESC LIMIT 20`),
-      run(`SELECT direction, SUM(bytes) AS bytes, SUM(flows) AS flowCount FROM flow_records WHERE ${clause} GROUP BY direction`),
-      run(`SELECT proto, SUM(bytes) AS bytes, SUM(flows) AS flowCount FROM flow_records WHERE ${clause} GROUP BY proto ORDER BY bytes DESC LIMIT 20`),
-      run(`SELECT DATE_FORMAT(ts, '%Y-%m-%d %H:00:00') AS bucket, SUM(bytes) AS bytes, SUM(flows) AS flowCount FROM flow_records WHERE ${clause} GROUP BY bucket ORDER BY bucket ASC`),
-      run(`SELECT SUM(bytes) AS bytes, SUM(flows) AS flowCount, COUNT(*) AS records FROM flow_records WHERE ${clause}`),
+    const raw = rawDestFilter({ country, asn, since, until });
+    const roll = rollDestFilter({ country, asn, since, until });
+    const [a, b] = await Promise.all([
+      q(`SELECT 1 FROM flow_records WHERE ${raw.clause} LIMIT 1`, raw.params),
+      q(`SELECT 1 FROM flow_rollup WHERE ${roll.clause} LIMIT 1`, roll.params),
     ]);
-    const t = totalsRows[0] || {};
-    const num = (v) => Number(v) || 0;
+    return a.length > 0 || b.length > 0;
+  }
+
+  // Distinct agent ids that talked to the selection (raw + rollup).
+  async function agentIdsForDestination({ country = null, asn = null, since, until }) {
+    const raw = rawDestFilter({ country, asn, since, until });
+    const roll = rollDestFilter({ country, asn, since, until });
+    const [a, b] = await Promise.all([
+      q(`SELECT DISTINCT agent_id FROM flow_records WHERE ${raw.clause}`, raw.params),
+      q(`SELECT DISTINCT agent_id FROM flow_rollup WHERE ${roll.clause}`, roll.params),
+    ]);
+    return [...new Set([...a, ...b].map((r) => r.agent_id))];
+  }
+
+  // Merges two keyed aggregate row sets summing bytes/flowCount.
+  function mergeBy(rowsA, rowsB, keyField) {
+    const m = new Map();
+    for (const r of [...rowsA, ...rowsB]) {
+      const k = r[keyField];
+      const cur = m.get(k) || { [keyField]: k, asnName: r.asnName ?? null, bytes: 0, flowCount: 0 };
+      cur.bytes += numOf(r.bytes);
+      cur.flowCount += numOf(r.flowCount);
+      if (!cur.asnName && r.asnName) cur.asnName = r.asnName;
+      m.set(k, cur);
+    }
+    return [...m.values()];
+  }
+
+  // Aggregated detail for a selected destination, read across raw + rollup:
+  // peers by ASN, by direction, a byte time-series; protocol breakdown is
+  // raw-only (rollups don't retain per-protocol detail).
+  async function selectFlows({ country = null, asn = null, since, until }) {
+    const raw = rawDestFilter({ country, asn, since, until });
+    const roll = rollDestFilter({ country, asn, since, until });
+    const [rAsn, rDir, byProtoRaw, rSeries, rawTot, kAsn, kDir, kSeries, rollTot] = await Promise.all([
+      q(`SELECT asn, MAX(asn_name) AS asnName, SUM(bytes) AS bytes, SUM(flows) AS flowCount FROM flow_records WHERE ${raw.clause} GROUP BY asn`, raw.params),
+      q(`SELECT direction, SUM(bytes) AS bytes, SUM(flows) AS flowCount FROM flow_records WHERE ${raw.clause} GROUP BY direction`, raw.params),
+      q(`SELECT proto, SUM(bytes) AS bytes, SUM(flows) AS flowCount FROM flow_records WHERE ${raw.clause} GROUP BY proto ORDER BY bytes DESC LIMIT 20`, raw.params),
+      q(`SELECT DATE_FORMAT(ts, '%Y-%m-%d %H:00:00') AS bucket, SUM(bytes) AS bytes, SUM(flows) AS flowCount FROM flow_records WHERE ${raw.clause} GROUP BY bucket`, raw.params),
+      q(`SELECT SUM(bytes) AS bytes, SUM(flows) AS flowCount FROM flow_records WHERE ${raw.clause}`, raw.params),
+      q(`SELECT asn, MAX(asn_name) AS asnName, SUM(bytes) AS bytes, SUM(flow_count) AS flowCount FROM flow_rollup WHERE ${roll.clause} GROUP BY asn`, roll.params),
+      q(`SELECT direction, SUM(bytes) AS bytes, SUM(flow_count) AS flowCount FROM flow_rollup WHERE ${roll.clause} GROUP BY direction`, roll.params),
+      q(`SELECT DATE_FORMAT(bucket, '%Y-%m-%d %H:00:00') AS bucket, SUM(bytes) AS bytes, SUM(flow_count) AS flowCount FROM flow_rollup WHERE ${roll.clause} GROUP BY bucket`, roll.params),
+      q(`SELECT SUM(bytes) AS bytes, SUM(flow_count) AS flowCount FROM flow_rollup WHERE ${roll.clause}`, roll.params),
+    ]);
+
+    const byAsn = mergeBy(rAsn, kAsn, 'asn')
+      .map((r) => ({ asn: normAsn(r.asn), asnName: r.asnName ?? null, bytes: r.bytes, flowCount: r.flowCount }))
+      .sort((a, b) => b.bytes - a.bytes).slice(0, 20);
+    const byDirection = mergeBy(rDir, kDir, 'direction').map((r) => ({ direction: r.direction, bytes: r.bytes, flowCount: r.flowCount }));
+    const series = mergeBy(rSeries, kSeries, 'bucket')
+      .map((r) => ({ at: r.bucket, bytes: r.bytes, flowCount: r.flowCount }))
+      .sort((a, b) => (a.at < b.at ? -1 : 1));
+    const rt = rawTot[0] || {}; const kt = rollTot[0] || {};
     return {
-      byAsn: byAsn.map((r) => ({ asn: r.asn ?? null, asnName: r.asnName ?? null, bytes: num(r.bytes), flowCount: num(r.flowCount) })),
-      byDirection: byDirection.map((r) => ({ direction: r.direction, bytes: num(r.bytes), flowCount: num(r.flowCount) })),
-      byProto: byProto.map((r) => ({ proto: r.proto, bytes: num(r.bytes), flowCount: num(r.flowCount) })),
-      series: series.map((r) => ({ at: r.bucket, bytes: num(r.bytes), flowCount: num(r.flowCount) })),
-      totals: { bytes: num(t.bytes), flowCount: num(t.flowCount), records: num(t.records) },
+      byAsn,
+      byDirection,
+      byProto: byProtoRaw.map((r) => ({ proto: r.proto, bytes: numOf(r.bytes), flowCount: numOf(r.flowCount) })),
+      series,
+      totals: { bytes: numOf(rt.bytes) + numOf(kt.bytes), flowCount: numOf(rt.flowCount) + numOf(kt.flowCount) },
     };
   }
 

@@ -34,6 +34,11 @@ const { createDispatcher } = require('./analysis/alerting/dispatcher');
 const { createEmailChannel, createSmtpTransport } = require('./analysis/alerting/channels/email');
 const { createWebhookChannel } = require('./analysis/alerting/channels/webhook');
 const { createSyslogChannel } = require('./analysis/alerting/channels/syslog');
+const { loadRetentionConfig } = require('./analysis/retention/config');
+const { createRetentionRepo } = require('./analysis/retention/repo');
+const { createRollup } = require('./analysis/retention/rollup');
+const { createPurge } = require('./analysis/retention/purge');
+const { createRetentionScheduler } = require('./analysis/retention/scheduler');
 
 // Wires up real dependencies, starts the HTTP server and installs graceful
 // shutdown handlers.
@@ -128,6 +133,17 @@ function start() {
     logger: console,
   });
 
+  // Retention: nightly rollup (down-sample raw -> rollup tables) + purge of
+  // expired data. DB hygiene; on by default. Started after the server is up.
+  const retentionConfig = loadRetentionConfig();
+  const retentionRepo = createRetentionRepo(db);
+  const retentionScheduler = createRetentionScheduler({
+    rollup: createRollup({ repo: retentionRepo, config: retentionConfig, logger: console }),
+    purge: createPurge({ repo: retentionRepo, config: retentionConfig }),
+    config: retentionConfig,
+    logger: console,
+  });
+
   const app = createApp({
     db,
     locationsRepo,
@@ -198,9 +214,13 @@ function start() {
   // Validate at startup, then periodically. Failures fall back to cache + grace.
   licenseManager.start().catch((err) => console.error('License manager error:', err));
 
+  // Periodic retention rollup + purge (behind RETENTION_ENABLED, default on).
+  retentionScheduler.start();
+
   function shutdown(signal) {
     console.info(`Received ${signal}, shutting down gracefully...`);
     licenseManager.stop();
+    retentionScheduler.stop();
     agentWs.close();
     dashboardWs.close();
     server.close(async () => {

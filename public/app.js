@@ -733,9 +733,6 @@ function historyChart(seriesList, { fromMs, toMs, onBrush, height = 300 }) {
 // types and a drag-to-zoom brush to investigate a specific timeframe.
 function trafficHistorySection() {
   const wrap = el('div', { class: 'history' });
-  wrap.append(el('div', { class: 'section-head' }, el('h3', {}, 'Historik — undersøg tidsrum'),
-    el('span', { class: 'muted' }, 'Vælg agent, periode og typer; træk i grafen for at zoome ind')));
-
   const agentSel = el('select', {}, el('option', { value: '' }, 'Vælg agent…'));
   const fromI = el('input', { type: 'datetime-local' });
   const toI = el('input', { type: 'datetime-local' });
@@ -843,6 +840,32 @@ function fmtTimeToFull(days) {
   if (days >= 60) return `~${Math.round(days / 30)} mdr`;
   if (days >= 1) return `~${Math.round(days)} dage`;
   return '< 1 dag';
+}
+
+// Slim one-line storage summary (the parts of a <summary> row): disk usage bar +
+// a terse "· DB … · ~…/dag · disk fuld …". The full breakdown folds open below.
+function storageLineParts(s) {
+  const d = s.disk || {};
+  const db = s.database || {};
+  const ing = s.ingest || null;
+  const parts = [el('span', { class: 'muted' }, 'Lager')];
+  if (d.available) {
+    parts.push(usageBar(d.usedPercent));
+    parts.push(el('span', { class: 'num' }, `${fmtBytes(d.usedBytes)} / ${fmtBytes(d.totalBytes)} (${d.usedPercent}%)`));
+  } else {
+    parts.push(el('span', { class: 'muted' }, 'drev utilgængeligt'));
+  }
+  const extra = [];
+  if (!db.error && db.totalBytes != null) extra.push(`DB ${fmtBytes(db.totalBytes)}`);
+  if (ing) {
+    const perSec = ing.minutes > 0 ? ing.bytes / (ing.minutes * 60) : 0;
+    extra.push(`~${fmtBytes(ing.bytesPerDay)}/dag`);
+    if (d.available && perSec > 0 && d.freeBytes > 0) extra.push(`disk fuld ${fmtTimeToFull(d.freeBytes / (perSec * 86400))}`);
+  }
+  if (extra.length) parts.push(el('span', { class: 'muted num' }, `· ${extra.join(' · ')}`));
+  parts.push(el('span', { class: 'spacer' }));
+  parts.push(el('span', { class: 'fold-cta muted' }, 'Detaljer'));
+  return parts;
 }
 
 // One combined storage card: disk + database + a consumption estimate derived
@@ -1055,23 +1078,24 @@ function assistantBox(getHostId) {
 
 views.overview = async () => {
   const root = el('div', { class: 'overview' });
-  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Trafik — overblik'),
-    el('span', { class: 'muted' }, 'Vælg serier i panelet · auto hvert 3. sek.')));
+  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Trafik'),
+    el('span', { class: 'muted' }, 'auto-opdaterer hvert 3. sek.')));
 
   // NOC: alert banner (latest unacked CRIT/WARN finding) + KPI grid.
   const alertBanner = el('div', { class: 'alert-banner hidden' });
   root.append(alertBanner);
 
-  const kpiCard = (cls, label) => {
-    const value = el('div', { class: 'kpi-v' }, '–');
-    const sub = el('div', { class: 'kpi-sub muted' }, '');
-    return { node: el('div', { class: `kpi ${cls}` }, el('div', { class: 'kpi-k' }, label), value, sub), value, sub };
+  // Compact KPI strip: one slim row instead of four tall cards.
+  const kpiStat = (cls, label) => {
+    const value = el('span', { class: 'v num' }, '–');
+    const sub = el('span', { class: 'kpi-mini' });
+    return { node: el('div', { class: `kpi ${cls}` }, el('span', { class: 'k' }, label), value, sub), value, sub };
   };
-  const kRx = kpiCard('rx', '↓ Total RX');
-  const kTx = kpiCard('tx', '↑ Total TX');
-  const kAg = kpiCard('ag', 'Aktive agenter');
-  const kLoc = kpiCard('loc', 'Lokationer');
-  root.append(el('div', { class: 'kpi-grid' }, kRx.node, kTx.node, kAg.node, kLoc.node));
+  const kRx = kpiStat('rx', '↓ RX');
+  const kTx = kpiStat('tx', '↑ TX');
+  const kAg = kpiStat('ag', 'Agenter');
+  const kLoc = kpiStat('loc', 'Lokationer');
+  root.append(el('div', { class: 'kpis' }, kRx.node, kTx.node, kAg.node, kLoc.node));
 
   async function refreshAlert() {
     try {
@@ -1091,24 +1115,39 @@ views.overview = async () => {
   refreshAlert();
   api('/locations').then((locs) => {
     kLoc.value.textContent = String(locs.length);
-    kLoc.sub.textContent = `${locs.filter((l) => l.latitude != null).length} med koordinater`;
+    kLoc.node.title = `${locs.filter((l) => l.latitude != null).length} med koordinater`;
   }).catch(() => {});
-
-  // Server storage: combined disk + database + consumption estimate.
-  const storageHost = el('div', {});
-  root.append(storageHost);
-  function refreshStorage() { api('/system/storage').then((s) => storageHost.replaceChildren(storageCards(s))).catch(() => {}); }
-  refreshStorage();
 
   // Top agents by current bandwidth (updated each tick).
   const topAgents = el('div', { class: 'top-agents' });
 
+  // Hero chart with a compact chip toolbar (Total RX/TX + a per-agent menu) and
+  // an inline "marked" strip that appears when you drag-select a window.
   const chartHost = el('div', { class: 'overview-chart' });
-  const controls = el('div', { class: 'overview-controls below' });
-  const markedPanel = el('div', { class: 'geo-panel marked-panel' });
-  root.append(el('div', { class: 'overview-grid' }, chartHost, markedPanel));
-  clearMarked(); // seed the marked-data panel with its hint
-  root.append(el('details', { class: 'sec series-det' }, el('summary', {}, 'Serier ', el('span', { class: 'muted' }, '· total + pr. agent')), controls));
+  const controls = el('div', { class: 'peragent-list' });
+  const markedStrip = el('div', { class: 'marked-strip hidden' });
+  const chipRx = el('button', { class: 'chip rx', onclick: () => toggleSeries('total:rx') }, 'Total RX');
+  const chipTx = el('button', { class: 'chip tx', onclick: () => toggleSeries('total:tx') }, 'Total TX');
+  const perAgentCnt = el('span', { class: 'cnt muted' });
+  const perAgent = el('details', { class: 'chip-det' },
+    el('summary', { class: 'chip' }, 'Pr. agent ', perAgentCnt), controls);
+  root.append(el('div', { class: 'card chart-card' },
+    el('div', { class: 'bar' }, el('h3', {}, 'Live trafik'), el('span', { class: 'spacer' }), chipRx, chipTx, perAgent),
+    chartHost, markedStrip));
+  clearMarked(); // strip stays hidden until a brush selection
+
+  // Slim storage line; the full disk/DB/forbrug breakdown folds open below it.
+  const storageSummary = el('summary', { class: 'storage-line' }, el('span', { class: 'muted' }, 'Lager …'));
+  const storageBody = el('div', { class: 'storage-detail-body' });
+  root.append(el('details', { class: 'storage-fold' }, storageSummary, storageBody));
+  function refreshStorage() {
+    api('/system/storage').then((s) => {
+      storageSummary.replaceChildren(...storageLineParts(s));
+      storageBody.replaceChildren(storageCards(s));
+    }).catch(() => {});
+  }
+  refreshStorage();
+
   root.append(el('details', { class: 'sec' }, el('summary', {}, 'Top agenter ', el('span', { class: 'muted' }, '· efter aktuel båndbredde')), topAgents));
 
   // history[seriesId] = [{ y }]; selection is a Set of seriesId.
@@ -1186,19 +1225,18 @@ views.overview = async () => {
     const legend = el('div', { class: 'legend' }, ...seriesList.map((s) =>
       el('span', {}, el('span', { class: 'dot', style: `background:${s.color}` }), s.label)));
     chartHost.replaceChildren(
-      seriesList.length ? multiChart(seriesList, { area: true, xLabels: ['~3 min siden', '', 'nu'], onBrush: (f0, f1) => { if (f0 === null) clearMarked(); else renderMarked(f0, f1); } }) : el('div', { class: 'empty' }, 'Vælg en eller flere serier →'),
+      seriesList.length ? multiChart(seriesList, { area: true, xLabels: ['~3 min siden', '', 'nu'], onBrush: (f0, f1) => { if (f0 === null) clearMarked(); else renderMarked(f0, f1); } }) : el('div', { class: 'empty' }, 'Vælg serier i værktøjslinjen ↑'),
       legend);
+    syncChips();
   }
 
-  function markedHint() {
-    return el('p', { class: 'muted' }, 'Markér et område i grafen (træk) for at se gennemsnit/min/max for det tidsrum. Højreklik rydder.');
-  }
   function clearMarked() {
-    markedPanel.replaceChildren(el('div', { class: 'section-head' }, el('h3', {}, 'Markeret')), markedHint());
+    markedStrip.className = 'marked-strip hidden';
+    markedStrip.replaceChildren();
   }
   function renderMarked(f0, f1) {
     const chosen = [...selection].filter((id) => history.has(id));
-    if (!chosen.length) return;
+    if (!chosen.length) { clearMarked(); return; }
     const maxLen = Math.max(1, ...chosen.map((id) => history.get(id).points.length));
     let i0 = Math.round(f0 * (maxLen - 1));
     let i1 = Math.round(f1 * (maxLen - 1));
@@ -1215,18 +1253,23 @@ views.overview = async () => {
     const lastIdx = Math.min(i1, ref.length - 1);
     const tTo = ref[lastIdx] && ref[lastIdx].t;
     const children = [
-      el('div', { class: 'section-head' }, el('h3', {}, 'Markeret'), el('span', { class: 'spacer' }), el('button', { class: 'small ghost', onclick: clearMarked }, 'Ryd')),
-      el('p', { class: 'muted' }, (tFrom && tTo) ? `${fmtTimeShort(tFrom)} – ${fmtTimeShort(tTo)} · ${i1 - i0 + 1} pkt.` : `${i1 - i0 + 1} punkter`),
-      el('table', { class: 'kv' }, el('tbody', {}, ...rows.map((r) => el('tr', {},
-        el('td', {}, r.label),
-        el('td', { class: 'num' }, `ø ${fmtBytes(r.avg)}/s`),
-        el('td', { class: 'num muted' }, `${fmtBytes(r.min)}–${fmtBytes(r.max)}`))))),
+      el('span', { class: 'ms-label' }, 'Markeret'),
+      el('span', { class: 'muted' }, (tFrom && tTo) ? `${fmtTimeShort(tFrom)} – ${fmtTimeShort(tTo)} · ${i1 - i0 + 1} pkt.` : `${i1 - i0 + 1} pkt.`),
     ];
+    for (const r of rows) {
+      children.push(el('span', { class: 'ms-stat' },
+        el('span', { class: 'ms-name' }, r.label),
+        el('span', { class: 'num' }, `ø ${fmtBytes(r.avg)}/s`),
+        el('span', { class: 'num muted' }, `(${fmtBytes(r.min)}–${fmtBytes(r.max)})`)));
+    }
+    children.push(el('span', { class: 'spacer' }));
     // Drill into the ACTUAL stored data for the marked window (per agent).
     if (tFrom && tTo) {
-      children.push(el('button', { class: 'small drill', onclick: () => { histDetails.open = true; histSection.focus(tFrom, tTo); } }, 'Vis gemt data for vinduet →'));
+      children.push(el('button', { class: 'small drill', onclick: () => { histDetails.open = true; histSection.focus(tFrom, tTo); } }, 'Vis gemt data →'));
     }
-    markedPanel.replaceChildren(...children);
+    children.push(el('button', { class: 'small ghost', onclick: clearMarked }, 'Ryd'));
+    markedStrip.className = 'marked-strip';
+    markedStrip.replaceChildren(...children);
   }
 
   function checkbox(id, label) {
@@ -1236,18 +1279,28 @@ views.overview = async () => {
     return el('label', { class: 'check' }, cb, label);
   }
 
+  // Per-agent series live in the "Pr. agent" chip menu; totals are the chips.
   function renderControls() {
-    const groups = [
-      el('div', { class: 'ctrl-group' }, el('h4', {}, 'Total'),
-        checkbox('total:rx', 'Total RX'), checkbox('total:tx', 'Total TX')),
-    ];
-    const perAgent = el('div', { class: 'ctrl-group' }, el('h4', {}, 'Pr. agent'));
+    const items = [];
     for (const a of agentsMeta) {
       const name = a.display_name || a.hostname;
-      perAgent.append(checkbox(`rx:${a.id}`, `${name} · RX`), checkbox(`tx:${a.id}`, `${name} · TX`));
+      items.push(checkbox(`rx:${a.id}`, `${name} · RX`), checkbox(`tx:${a.id}`, `${name} · TX`));
     }
-    groups.push(perAgent);
-    controls.replaceChildren(...groups);
+    controls.replaceChildren(...(items.length ? items : [el('div', { class: 'muted' }, 'Ingen agenter.')]));
+    syncChips();
+  }
+
+  // Toolbar chips toggle the two totals and reflect the live selection.
+  function toggleSeries(id) {
+    if (selection.has(id)) selection.delete(id); else selection.add(id);
+    renderChart();
+  }
+  function syncChips() {
+    chipRx.classList.toggle('on', selection.has('total:rx'));
+    chipTx.classList.toggle('on', selection.has('total:tx'));
+    let n = 0;
+    for (const id of selection) if (id.startsWith('rx:') || id.startsWith('tx:')) n += 1;
+    perAgentCnt.textContent = n ? `(${n})` : '';
   }
 
   // Historical traffic explorer (date range, types, time axis, brush-to-zoom).

@@ -59,6 +59,29 @@ function createAgentsRepository(db) {
     return rows[0] ? mapRow(rows[0]) : null;
   }
 
+  // Agents as internal map hosts: { hostId, siteName, lat, lng, status }. Site
+  // coordinates come from the joined location (manually set; nullable). This is
+  // host/site metadata — never GeoIP. Optionally filtered to one host.
+  async function findForGeo(hostId = null) {
+    const where = [];
+    const params = [];
+    if (hostId) { where.push('a.id = ?'); params.push(hostId); }
+    const clause = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const [rows] = await pool.query(
+      `SELECT a.id AS hostId, a.status, l.name AS siteName, l.latitude AS lat, l.longitude AS lng
+       FROM agents a LEFT JOIN locations l ON l.id = a.location_id
+       ${clause} ORDER BY a.id`,
+      params
+    );
+    return rows.map((r) => ({
+      hostId: r.hostId,
+      siteName: r.siteName ?? null,
+      lat: r.lat != null ? Number(r.lat) : null,
+      lng: r.lng != null ? Number(r.lng) : null,
+      status: r.status,
+    }));
+  }
+
   // Updates ONLY the server-managed fields. Agent-reported fields (hostname,
   // platform, arch, last_seen, status, capabilities) are never touched here.
   // Returns the refreshed row.
@@ -112,6 +135,7 @@ function createAgentsRepository(db) {
   return {
     findAll,
     findById,
+    findForGeo,
     updateManaged,
     setCapabilities,
     remove,

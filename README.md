@@ -215,6 +215,10 @@ WebSocket-kanalen bruger et **agent-token** (ikke et JWT) — se
 | GET    | `/api/findings`  | Listér analyse-findings           | viewer+            | `200` / `400` (ugyldig since) |
 | POST   | `/api/findings/:id/ack` | Kvittér en finding         | operator+          | `200` / `404`              |
 | POST   | `/api/assistant/explain` | Spørg AI-assistenten (opt-in) | viewer+        | `200` / `400` / `403` / `500` |
+| GET    | `/api/geo/config` | Kort-tile-kilde til frontend     | viewer+            | `200`                      |
+| GET    | `/api/geo/overview` | Interne hosts + eksterne destinationer | viewer+      | `200` / `400`              |
+| GET    | `/api/geo/select/findings` | Findings for valgt land/ASN | viewer+          | `200` / `400` / `404`      |
+| GET    | `/api/geo/select/flows` | Flow-detaljer for valgt land/ASN | viewer+        | `200` / `400` / `404`      |
 | WS     | `/ws/agent`      | Live-kanal (status/kommandoer)    | **agent-token**    | upgrade / hård luk         |
 | WS     | `/ws/dashboard`  | Live findings til dashboardet     | viewer+ (JWT)      | upgrade / hård luk         |
 
@@ -222,7 +226,8 @@ WebSocket-kanalen bruger et **agent-token** (ikke et JWT) — se
 "agent-token" = opaque agent-token, ikke bruger-JWT.)
 
 Analyse-modulet (lokal anomali-detektion, korrelator og opt-in AI-assistent) er
-beskrevet i [`docs/analysis.md`](docs/analysis.md).
+beskrevet i [`docs/analysis.md`](docs/analysis.md). Geo-laget (flow-records,
+GeoIP/ASN-berigelse og kort-API) er beskrevet i [`docs/geo.md`](docs/geo.md).
 
 ### Eksempler
 

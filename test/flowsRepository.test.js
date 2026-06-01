@@ -15,6 +15,9 @@ function makeFakePool() {
         const rows = params[0];
         return [{ affectedRows: rows.length }];
       }
+      if (/^SELECT/i.test(sql)) {
+        return [[]]; // empty result set
+      }
       throw new Error(`unexpected SQL: ${sql}`);
     },
   };
@@ -57,4 +60,28 @@ test('insertMany on an empty/invalid list is a no-op', async () => {
   assert.equal(await repo.insertMany([]), 0);
   assert.equal(await repo.insertMany(null), 0);
   assert.equal(pool.queries.length, 0);
+});
+
+test('PRIVACY: aggregateExternalDestinations filters internal + null country in SQL', async () => {
+  const pool = makeFakePool();
+  const repo = createFlowsRepository({ pool });
+  const win = { since: new Date('2026-01-01T00:00:00Z'), until: new Date('2026-01-02T00:00:00Z') };
+  const out = await repo.aggregateExternalDestinations(win);
+  assert.deepEqual(out, []); // empty fake result
+  assert.ok(pool.queries.length >= 1);
+  for (const q of pool.queries) {
+    assert.match(q.sql, /internal = 0/);
+    assert.match(q.sql, /country IS NOT NULL/);
+  }
+});
+
+test('selection read methods issue queries without throwing', async () => {
+  const pool = makeFakePool();
+  const repo = createFlowsRepository({ pool });
+  const win = { country: 'DE', since: new Date('2026-01-01T00:00:00Z'), until: new Date('2026-01-02T00:00:00Z') };
+  assert.equal(await repo.destinationExists(win), false);
+  assert.deepEqual(await repo.agentIdsForDestination(win), []);
+  const detail = await repo.selectFlows(win);
+  assert.deepEqual(detail.byAsn, []);
+  assert.equal(detail.totals.bytes, 0);
 });

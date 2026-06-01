@@ -121,6 +121,8 @@ function start() {
     findingStore,
     analysisPipeline,
     flowPipeline,
+    flowsRepo,
+    geoTileConfig: config.geo,
     assistant,
     logger: console,
   });

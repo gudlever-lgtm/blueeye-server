@@ -82,12 +82,41 @@ US-hosted geo SDK or tile/API service — the constraint is EU/self-hosted data.
 When `GEOIP_DB_PATH` is unset or the file is unreadable, flows are still stored
 but with `country`/`asn` NULL (no geolocation); a warning is logged at startup.
 
+## Map API (Phase 8)
+
+All endpoints are viewer+ behind the user JWT. Aggregation is server-side — raw
+flow records never leave the server.
+
+| Method | Path | Description |
+| --- | --- | --- |
+| `GET` | `/api/geo/config` | Map tile source `{ tileUrl, attribution, maxZoom }` (so the frontend never hardcodes it). |
+| `GET` | `/api/geo/overview?since=&hostId=` | `internalHosts` (site metadata) + `externalDestinations` (country/ASN aggregates with a deviation vs. the previous window). |
+| `GET` | `/api/geo/select/findings?country=&asn=&since=` | Findings for the hosts that talked to the selected destination. `404` if unknown. |
+| `GET` | `/api/geo/select/flows?country=&asn=&since=` | Aggregated flow detail (peers by ASN, by direction, by protocol, byte time-series). `404` if unknown. |
+
+`externalDestinations` are **aggregates only** — they carry `country`, `asn`,
+`asnName`, `bytes`, `flowCount`, `deviation` and a country-centroid `lat`/`lng`;
+never a raw or private IP. `internalHosts` come from site metadata, never GeoIP.
+
+### Dashboard
+
+The **Geo** tab renders a Leaflet map (tiles from `/api/geo/config`): internal
+sites as pins, external destinations as circles sized by traffic and coloured by
+deviation (neutral → yellow → red), with clustering when the plugin is present.
+Clicking a destination calls both `select/*` endpoints and shows findings + flow
+detail in a side panel; clicking a site shows its status + findings; "Vælg
+område" drags a box to aggregate every destination inside it. Loading and error
+states are shown rather than a blank screen.
+
 ## Configuration
 
 | Variable | Default | Description |
 | --- | --- | --- |
 | `GEO_ENABLED` | `true` | Enrich + store flow records. |
 | `GEOIP_DB_PATH` | – | Path to the offline GeoIP/ASN range CSV. |
+| `MAP_TILE_URL` | OpenStreetMap (EU) | Tile URL served to the frontend. Point at self-hosted/EU tiles in production. |
+| `MAP_TILE_ATTRIBUTION` | `© OpenStreetMap contributors` | Tile attribution. |
+| `MAP_TILE_MAX_ZOOM` | `19` | Max zoom. |
 
 ## Country centroids
 

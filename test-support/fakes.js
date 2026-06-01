@@ -57,6 +57,7 @@ function makeAgentsRepo(overrides = {}) {
   return {
     findAll: overrides.findAll || (async () => []),
     findById: overrides.findById || (async () => null),
+    findForGeo: overrides.findForGeo || (async () => []),
     updateManaged:
       overrides.updateManaged || (async (id, patch) => ({ id, ...patch })),
     setCapabilities:
@@ -178,12 +179,16 @@ function makeAnalysisPipeline(overrides = {}) {
   };
 }
 
-// A fake flows repository (records inserted rows).
+// A fake flows repository (records inserted rows; benign empty reads).
 function makeFlowsRepo(overrides = {}) {
   const rows = [];
   return {
     rows,
     insertMany: overrides.insertMany || (async (records) => { for (const r of records) rows.push(r); return records.length; }),
+    aggregateExternalDestinations: overrides.aggregateExternalDestinations || (async () => []),
+    destinationExists: overrides.destinationExists || (async () => false),
+    agentIdsForDestination: overrides.agentIdsForDestination || (async () => []),
+    selectFlows: overrides.selectFlows || (async () => ({ byAsn: [], byDirection: [], byProto: [], series: [], totals: { bytes: 0, flowCount: 0, records: 0 } })),
   };
 }
 
@@ -230,6 +235,8 @@ function makeApp(overrides = {}) {
     findingStore: overrides.findingStore || makeFindingStore(),
     analysisPipeline: overrides.analysisPipeline || makeAnalysisPipeline(),
     flowPipeline: overrides.flowPipeline || makeFlowPipeline(),
+    flowsRepo: overrides.flowsRepo || makeFlowsRepo(),
+    geoTileConfig: overrides.geoTileConfig || { tileUrl: 'https://tiles.example/{z}/{x}/{y}.png', tileAttribution: 'test', tileMaxZoom: 19 },
     assistant: overrides.assistant || makeAssistant(),
   });
 }

@@ -73,6 +73,12 @@ const config = {
   geo: {
     enabled: process.env.GEO_ENABLED !== 'false',
     dbPath: process.env.GEOIP_DB_PATH || '',
+    // Map tiles. Served to the frontend via /api/geo/config so the URL is never
+    // hardcoded. Default is OpenStreetMap (OSMF, EU); for production point this
+    // at self-hosted or another EU tile source — never a US tile server.
+    tileUrl: process.env.MAP_TILE_URL || 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+    tileAttribution: process.env.MAP_TILE_ATTRIBUTION || '© OpenStreetMap contributors',
+    tileMaxZoom: toInt(process.env.MAP_TILE_MAX_ZOOM, 19),
   },
 };
 

@@ -25,6 +25,8 @@ function createApp({
   findingStore,
   analysisPipeline,
   flowPipeline,
+  flowsRepo,
+  geoTileConfig,
   assistant,
   logger = silentLogger,
 } = {}) {
@@ -57,6 +59,8 @@ function createApp({
       findingStore,
       analysisPipeline,
       flowPipeline,
+      flowsRepo,
+      geoTileConfig,
       assistant,
     })
   );

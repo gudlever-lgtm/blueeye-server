@@ -192,6 +192,23 @@ const PAGE_INFO = {
         el('li', {}, '"Rediger" sætter navn, lokation, noter og trafik-kilde (proc/SNMP).')),
     ],
   },
+  geo: {
+    hero: 'Geografisk overblik: interne sites og eksterne trafik-destinationer (land/ASN).',
+    title: 'Geo-kort',
+    body: () => [
+      el('p', {}, 'Interne hosts vises ud fra deres site-koordinater (sat pr. lokation) — aldrig via GeoIP. Eksterne destinationer er aggregeret pr. land/ASN fra GeoIP-berigede flows; private/RFC1918-adresser vises aldrig som geo-punkt.'),
+      el('h4', {}, 'Markører'),
+      el('ul', {},
+        el('li', {}, 'Pins = interne sites (klik for status + findings).'),
+        el('li', {}, 'Cirkler = eksterne destinationer; størrelse efter trafik, farve efter afvigelse (neutral → gul → rød).')),
+      el('h4', {}, 'Valg'),
+      el('ul', {},
+        el('li', {}, 'Klik en destination: se findings + flow-detaljer (peers, retning, protokol, tidsserie).'),
+        el('li', {}, '"Vælg område" og træk en kasse for at aggregere alle destinationer i området.'),
+        el('li', {}, '"Ryd valg" vender tilbage til overblikket.')),
+      el('p', { class: 'muted' }, 'Kort-tiles hentes fra serverens config (EU/selv-hostet), ikke en hardkodet US-kilde.'),
+    ],
+  },
   findings: {
     hero: 'Lokalt beregnede fejl & anomalier — med forklaring, dokumentation og root-cause-hint.',
     title: 'Analyse — fejl & anomalier',
@@ -876,6 +893,268 @@ views.map = async () => {
   return root;
 };
 
+// ---- Geo map (internal sites + external destinations + selection) ---------
+const geoState = { map: null, ext: null, hosts: null, rect: null, dests: [], sinceIso: '', panel: null, selecting: false, rectStart: null };
+
+function stopGeo() {
+  if (geoState.map) { try { geoState.map.remove(); } catch { /* ignore */ } }
+  geoState.map = null; geoState.ext = null; geoState.hosts = null; geoState.rect = null;
+  geoState.dests = []; geoState.selecting = false; geoState.rectStart = null;
+}
+
+function devColor(dev) {
+  const d = Number(dev) || 0;
+  if (d >= 0.75) return '#ef4444';
+  if (d >= 0.2) return '#f59e0b';
+  return '#38bdf8';
+}
+function devLabel(dev) { const d = Number(dev) || 0; return `${d > 0 ? '+' : ''}${Math.round(d * 100)}%`; }
+function radiusForBytes(b) { return Math.max(6, Math.min(28, 6 + Math.log10((Number(b) || 0) + 1) * 3)); }
+function destTitle(d) { return `${d.country || '??'}${d.asn ? ` · AS${d.asn}` : ''}${d.asnName ? ` ${d.asnName}` : ''}`; }
+function destQuery(d) {
+  const qs = new URLSearchParams();
+  if (d.country) qs.set('country', d.country);
+  if (d.asn != null && d.asn !== '') qs.set('asn', d.asn);
+  if (geoState.sinceIso) qs.set('since', geoState.sinceIso);
+  return qs.toString();
+}
+
+function geoSpinner(text) { return el('div', { class: 'geo-loading' }, el('span', { class: 'spinner' }), text || 'Indlæser…'); }
+
+function miniTable(title, rows) {
+  if (!rows || !rows.length) return null;
+  return el('div', { class: 'mini' }, el('h4', {}, title),
+    el('table', {}, el('tbody', {}, ...rows.map((r) => el('tr', {}, el('td', {}, r[0]), el('td', { class: 'num' }, r[1]))))));
+}
+function findingMini(f) {
+  return el('div', { class: 'finding-mini' },
+    el('span', { class: `badge ${esc(f.severity || 'INFO')}` }, f.severity || 'INFO'),
+    el('span', {}, ` ${esc(f.metric || '')} `),
+    el('span', { class: 'muted' }, esc(f.explanation || '')));
+}
+
+views.geo = async () => {
+  if (typeof L === 'undefined') {
+    return el('div', { class: 'empty' }, 'Kortbiblioteket (Leaflet) kunne ikke indlæses — geo-kortet er ikke tilgængeligt offline.');
+  }
+  const [config, overview] = await Promise.all([api('/api/geo/config'), api('/api/geo/overview')]);
+
+  const root = el('div', { class: 'geo' });
+  const periodSel = el('select', {},
+    el('option', { value: '24h' }, 'Seneste 24t'),
+    el('option', { value: '7d' }, 'Seneste 7 dage'),
+    el('option', { value: '30d' }, 'Seneste 30 dage'));
+  const regionBtn = el('button', { class: 'small ghost' }, 'Vælg område');
+  const clearBtn = el('button', { class: 'small ghost' }, 'Ryd valg');
+  root.append(el('div', { class: 'section-head' },
+    el('h2', {}, 'Geo-kort'),
+    el('span', { class: 'spacer' }),
+    el('label', { class: 'muted inline' }, 'Periode ', periodSel),
+    regionBtn, clearBtn));
+
+  const mapEl = el('div', { class: 'map' });
+  const panel = el('div', { class: 'geo-panel' });
+  geoState.panel = panel;
+  geoState.mapEl = mapEl;
+  root.append(el('div', { class: 'geo-grid' }, mapEl, panel));
+  root.append(el('div', { class: 'legend geo-legend' },
+    el('span', {}, el('span', { class: 'pin-dot' }), ' intern site'),
+    el('span', {}, el('span', { class: 'dot', style: 'background:#38bdf8' }), ' normal'),
+    el('span', {}, el('span', { class: 'dot', style: 'background:#f59e0b' }), ' forhøjet'),
+    el('span', {}, el('span', { class: 'dot', style: 'background:#ef4444' }), ' kraftig afvigelse'),
+    el('span', { class: 'muted' }, '· cirkelstørrelse = trafikmængde')));
+
+  periodSel.addEventListener('change', () => {
+    const v = periodSel.value;
+    const ms = v === '7d' ? 7 * 864e5 : v === '30d' ? 30 * 864e5 : 864e5;
+    geoState.sinceIso = new Date(Date.now() - ms).toISOString();
+    reloadOverview();
+  });
+  regionBtn.addEventListener('click', () => beginRegionSelect(regionBtn));
+  clearBtn.addEventListener('click', () => { clearRegion(); showOverviewSummary(); });
+
+  setTimeout(() => initGeoMap(config, overview), 0);
+  return root;
+};
+
+function initGeoMap(config, overview) {
+  if (!geoState.mapEl || !geoState.mapEl.isConnected) return; // view was left already
+  const center = pickGeoCenter(overview);
+  const map = L.map(geoState.mapEl).setView(center, 3);
+  geoState.map = map;
+  L.tileLayer(config.tileUrl || 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: config.maxZoom || 19,
+    attribution: config.attribution || '© OpenStreetMap',
+  }).addTo(map);
+
+  geoState.ext = (typeof L.markerClusterGroup === 'function') ? L.markerClusterGroup({ maxClusterRadius: 50 }) : L.layerGroup();
+  geoState.hosts = L.layerGroup();
+  geoState.ext.addTo(map); geoState.hosts.addTo(map);
+
+  // Region drawing handlers (active only while selecting).
+  map.on('mousedown', (e) => { if (geoState.selecting) { geoState.rectStart = e.latlng; } });
+  map.on('mousemove', (e) => {
+    if (!geoState.selecting || !geoState.rectStart) return;
+    const b = L.latLngBounds(geoState.rectStart, e.latlng);
+    if (geoState.rect) geoState.rect.setBounds(b);
+    else geoState.rect = L.rectangle(b, { color: '#38bdf8', weight: 1, fillOpacity: 0.08 }).addTo(map);
+  });
+  map.on('mouseup', (e) => {
+    if (!geoState.selecting || !geoState.rectStart) return;
+    const b = L.latLngBounds(geoState.rectStart, e.latlng);
+    geoState.rectStart = null; geoState.selecting = false;
+    map.dragging.enable(); map.boxZoom.enable();
+    aggregateRegion(b);
+  });
+
+  drawOverview(overview);
+  showOverviewSummary();
+}
+
+function pickGeoCenter(overview) {
+  const h = (overview.internalHosts || []).find((x) => x.lat != null && x.lng != null);
+  if (h) return [h.lat, h.lng];
+  const d = (overview.externalDestinations || []).find((x) => x.lat != null && x.lng != null);
+  return d ? [d.lat, d.lng] : [20, 0];
+}
+
+function drawOverview(overview) {
+  geoState.dests = (overview.externalDestinations || []).filter((d) => d.lat != null && d.lng != null);
+  geoState.ext.clearLayers(); geoState.hosts.clearLayers();
+
+  for (const h of overview.internalHosts || []) {
+    if (h.lat == null || h.lng == null) continue;
+    const m = L.marker([h.lat, h.lng]);
+    m.bindTooltip(`${esc(h.siteName || `host ${h.hostId}`)} (${esc(h.status || '?')})`);
+    m.on('click', () => selectHost(h));
+    geoState.hosts.addLayer(m);
+  }
+  for (const d of geoState.dests) {
+    const c = L.circleMarker([d.lat, d.lng], {
+      radius: radiusForBytes(d.bytes), color: devColor(d.deviation),
+      fillColor: devColor(d.deviation), fillOpacity: 0.5, weight: 1,
+    });
+    c.bindTooltip(`${esc(destTitle(d))} — ${fmtBytes(d.bytes)} (${devLabel(d.deviation)})`);
+    c.on('click', () => selectDestination(d));
+    geoState.ext.addLayer(c);
+  }
+}
+
+async function reloadOverview() {
+  if (!geoState.map) return;
+  const panel = geoState.panel;
+  panel.replaceChildren(geoSpinner('Opdaterer…'));
+  try {
+    const qs = geoState.sinceIso ? `?since=${encodeURIComponent(geoState.sinceIso)}` : '';
+    const overview = await api(`/api/geo/overview${qs}`);
+    drawOverview(overview);
+    showOverviewSummary();
+  } catch (err) {
+    panel.replaceChildren(el('div', { class: 'empty error' }, err.message));
+  }
+}
+
+function showOverviewSummary() {
+  const panel = geoState.panel;
+  if (!panel) return;
+  const dests = geoState.dests;
+  const totBytes = dests.reduce((s, d) => s + (Number(d.bytes) || 0), 0);
+  panel.replaceChildren(
+    el('div', { class: 'section-head' }, el('h3', {}, 'Overblik')),
+    el('p', { class: 'muted' }, `${dests.length} eksterne destinationer · ${fmtBytes(totBytes)} i perioden`),
+    el('p', { class: 'muted' }, 'Klik en cirkel (destination) eller en pin (intern site) for detaljer, eller vælg et område.'));
+}
+
+async function selectDestination(d) {
+  const panel = geoState.panel;
+  panel.replaceChildren(geoSpinner('Henter destination…'));
+  const qs = destQuery(d);
+  try {
+    const flows = await api(`/api/geo/select/flows?${qs}`).catch((e) => { if (e.status === 404) return null; throw e; });
+    if (!flows) { panel.replaceChildren(el('div', { class: 'empty' }, 'Ingen data for destinationen i perioden.')); return; }
+    const findings = await api(`/api/geo/select/findings?${qs}`).catch((e) => { if (e.status === 404) return { findings: [] }; throw e; });
+    renderDestPanel(d, flows, findings);
+  } catch (err) {
+    panel.replaceChildren(el('div', { class: 'empty error' }, err.message));
+  }
+}
+
+function renderDestPanel(d, flows, findingsRes) {
+  const fs = (findingsRes && findingsRes.findings) || [];
+  geoState.panel.replaceChildren(
+    el('div', { class: 'section-head' }, el('h3', {}, destTitle(d)),
+      el('span', { class: 'spacer' }), el('button', { class: 'small ghost', onclick: () => { clearRegion(); showOverviewSummary(); } }, 'Ryd valg')),
+    el('p', { class: 'muted' }, `${fmtBytes(flows.totals.bytes)} · ${flows.totals.flowCount} flows · afvigelse ${devLabel(d.deviation)}`),
+    miniTable('Retning', flows.byDirection.map((x) => [x.direction === 'in' ? 'indgående' : 'udgående', fmtBytes(x.bytes)])),
+    miniTable('Protokol', flows.byProto.map((x) => [esc(x.proto || '–'), fmtBytes(x.bytes)])),
+    miniTable('ASN', flows.byAsn.map((x) => [esc(x.asnName || (x.asn ? `AS${x.asn}` : '–')), fmtBytes(x.bytes)])),
+    el('h4', {}, `Findings (${fs.length})`),
+    fs.length ? el('div', {}, ...fs.slice(0, 50).map(findingMini)) : el('div', { class: 'muted' }, 'Ingen findings for de hosts der taler med destinationen.'));
+}
+
+async function selectHost(h) {
+  const panel = geoState.panel;
+  panel.replaceChildren(geoSpinner('Henter host…'));
+  try {
+    const findings = await api(`/api/findings?hostId=${encodeURIComponent(h.hostId)}`);
+    panel.replaceChildren(
+      el('div', { class: 'section-head' }, el('h3', {}, esc(h.siteName || `host ${h.hostId}`)),
+        el('span', { class: 'spacer' }), el('button', { class: 'small ghost', onclick: showOverviewSummary }, 'Ryd valg')),
+      el('p', {}, el('span', { class: `badge ${h.status === 'online' ? 'online' : 'offline'}` }, h.status || '?'), ` host ${h.hostId}`),
+      el('h4', {}, `Findings (${findings.length})`),
+      findings.length ? el('div', {}, ...findings.slice(0, 50).map(findingMini)) : el('div', { class: 'muted' }, 'Ingen findings for denne host.'));
+  } catch (err) {
+    panel.replaceChildren(el('div', { class: 'empty error' }, err.message));
+  }
+}
+
+function beginRegionSelect(btn) {
+  if (!geoState.map) return;
+  geoState.selecting = true;
+  geoState.map.dragging.disable();
+  geoState.map.boxZoom.disable();
+  toast('Træk en kasse på kortet for at vælge et område');
+  if (btn) { btn.classList.add('active-btn'); setTimeout(() => btn.classList.remove('active-btn'), 1500); }
+}
+
+function clearRegion() {
+  if (geoState.rect && geoState.map) { geoState.map.removeLayer(geoState.rect); }
+  geoState.rect = null;
+}
+
+async function aggregateRegion(bounds) {
+  const panel = geoState.panel;
+  const inBox = geoState.dests.filter((d) => bounds.contains([d.lat, d.lng]));
+  if (!inBox.length) { panel.replaceChildren(el('div', { class: 'empty' }, 'Ingen destinationer i det valgte område.')); return; }
+  const totBytes = inBox.reduce((s, d) => s + (Number(d.bytes) || 0), 0);
+  const totFlows = inBox.reduce((s, d) => s + (Number(d.flowCount) || 0), 0);
+  panel.replaceChildren(
+    el('div', { class: 'section-head' }, el('h3', {}, 'Område'),
+      el('span', { class: 'spacer' }), el('button', { class: 'small ghost', onclick: () => { clearRegion(); showOverviewSummary(); } }, 'Ryd valg')),
+    el('p', { class: 'muted' }, `${inBox.length} destinationer · ${fmtBytes(totBytes)} · ${totFlows} flows`),
+    miniTable('Destinationer', inBox.slice().sort((a, b) => b.bytes - a.bytes).slice(0, 30).map((d) => [esc(destTitle(d)), fmtBytes(d.bytes)])),
+    el('div', { class: 'geo-region-findings' }, geoSpinner('Henter findings for området…')));
+
+  // Aggregate findings across the distinct countries in the box (bounded).
+  const countries = [...new Set(inBox.map((d) => d.country).filter(Boolean))].slice(0, 8);
+  const seen = new Set();
+  const findings = [];
+  try {
+    for (const country of countries) {
+      const qs = new URLSearchParams({ country });
+      if (geoState.sinceIso) qs.set('since', geoState.sinceIso);
+      // eslint-disable-next-line no-await-in-loop
+      const res = await api(`/api/geo/select/findings?${qs}`).catch((e) => (e.status === 404 ? { findings: [] } : Promise.reject(e)));
+      for (const f of res.findings || []) { if (!seen.has(f.id)) { seen.add(f.id); findings.push(f); } }
+    }
+  } catch { /* best-effort */ }
+  const slot = panel.querySelector('.geo-region-findings');
+  if (slot) {
+    slot.replaceChildren(el('h4', {}, `Findings (${findings.length})`),
+      findings.length ? el('div', {}, ...findings.slice(0, 50).map(findingMini)) : el('div', { class: 'muted' }, 'Ingen findings i området.'));
+  }
+}
+
 function locationList(locations, byLoc) {
   return el('table', {},
     el('thead', {}, el('tr', {}, ...['Lokation', 'Adresse', 'Koordinater', 'Agenter'].map((h) => el('th', {}, h)))),
@@ -1330,6 +1609,8 @@ async function render({ silent = false } = {}) {
 
   // Stop the overview poller when leaving that view (it restarts itself when shown).
   if (currentView !== 'overview') stopOverview();
+  // Tear down the Leaflet map when leaving the geo view (it rebuilds on entry).
+  if (currentView !== 'geo') stopGeo();
 
   // Admin-only tabs (e.g. Brugere); send non-admins back to agents if needed.
   for (const b of document.querySelectorAll('.tabs button[data-admin]')) {

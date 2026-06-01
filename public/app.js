@@ -815,37 +815,62 @@ function trafficHistorySection() {
 // Full-width traffic overview: pick which series to show via checkboxes and
 // watch them live. Polls every 3s while open.
 // Server storage cards: disk usage (where Docker/DB lives) + database size.
+function fmtTimeToFull(days) {
+  if (!Number.isFinite(days) || days <= 0) return '–';
+  if (days >= 730) return `~${Math.round(days / 365)} år`;
+  if (days >= 60) return `~${Math.round(days / 30)} mdr`;
+  if (days >= 1) return `~${Math.round(days)} dage`;
+  return '< 1 dag';
+}
+
+// One combined storage card: disk + database + a consumption estimate derived
+// from how much was actually stored in the last few minutes.
 function storageCards(s) {
   const wrap = el('div', { class: 'storage' });
   wrap.append(el('h3', { class: 'storage-h' }, 'Lagerplads (server)'));
-  const cards = el('div', { class: 'cards' });
-
+  const card = el('div', { class: 'stat storage-card' });
   const d = s.disk || {};
+  const db = s.database || {};
+  const ing = s.ingest || null;
+
+  // Disk
   if (d.available) {
-    cards.append(el('div', { class: 'stat' },
-      el('div', { class: 'k' }, `Drev ${esc(d.path || '')}`),
-      el('div', { class: 'v' }, `${fmtBytes(d.freeBytes)} fri`),
+    card.append(
+      el('div', { class: 'storage-row' }, el('span', { class: 'k' }, `Drev ${esc(d.path || '')}`), el('span', { class: 'v' }, `${fmtBytes(d.freeBytes)} fri`)),
       usageBar(d.usedPercent),
-      el('div', { class: 'muted', style: 'font-size:12px;margin-top:4px' },
-        `${fmtBytes(d.usedBytes)} brugt af ${fmtBytes(d.totalBytes)} (${d.usedPercent}%)`)));
+      el('div', { class: 'small muted' }, `${fmtBytes(d.usedBytes)} brugt af ${fmtBytes(d.totalBytes)} (${d.usedPercent}%)`));
   } else {
-    cards.append(el('div', { class: 'stat' }, el('div', { class: 'k' }, 'Drev'),
-      el('div', { class: 'v muted' }, 'utilgængelig')));
+    card.append(el('div', { class: 'storage-row' }, el('span', { class: 'k' }, 'Drev'), el('span', { class: 'v muted' }, 'utilgængelig')));
   }
 
-  const db = s.database || {};
+  card.append(el('hr', { class: 'storage-sep' }));
+
+  // Database
   if (db.error) {
-    cards.append(el('div', { class: 'stat' }, el('div', { class: 'k' }, 'Database'),
-      el('div', { class: 'v muted' }, 'utilgængelig')));
+    card.append(el('div', { class: 'storage-row' }, el('span', { class: 'k' }, 'Database'), el('span', { class: 'v muted' }, 'utilgængelig')));
   } else {
     const biggest = (db.tables && db.tables[0]) || null;
-    cards.append(el('div', { class: 'stat' },
-      el('div', { class: 'k' }, `Database ${esc(db.name || '')}`),
-      el('div', { class: 'v' }, fmtBytes(db.totalBytes)),
-      el('div', { class: 'muted', style: 'font-size:12px;margin-top:4px' },
-        `${db.tableCount} tabeller${biggest ? ` · størst: ${esc(biggest.name)} (${fmtBytes(biggest.bytes)})` : ''}`)));
+    card.append(
+      el('div', { class: 'storage-row' }, el('span', { class: 'k' }, `Database ${esc(db.name || '')}`), el('span', { class: 'v' }, fmtBytes(db.totalBytes))),
+      el('div', { class: 'small muted' }, `${db.tableCount} tabeller${biggest ? ` · størst: ${esc(biggest.name)} (${fmtBytes(biggest.bytes)})` : ''}`));
   }
-  wrap.append(cards);
+
+  // Consumption estimate from the last few minutes of stored measurements.
+  if (ing) {
+    card.append(el('hr', { class: 'storage-sep' }));
+    const perSec = ing.minutes > 0 ? ing.bytes / (ing.minutes * 60) : 0;
+    const detail = [`${fmtBytes(ing.bytes)} gemt seneste ${ing.minutes} min (${ing.rows} målinger)`];
+    if (d.available && perSec > 0 && d.freeBytes > 0) {
+      detail.push(`disk fuld om ${fmtTimeToFull(d.freeBytes / (perSec * 86400))}`);
+    } else if (perSec === 0) {
+      detail.push('ingen ny ingest at estimere ud fra');
+    }
+    card.append(
+      el('div', { class: 'storage-row' }, el('span', { class: 'k' }, 'Estimeret forbrug'), el('span', { class: 'v' }, `≈ ${fmtBytes(ing.bytesPerDay)}/dag`)),
+      el('div', { class: 'small muted' }, detail.join(' · ')));
+  }
+
+  wrap.append(card);
   return wrap;
 }
 

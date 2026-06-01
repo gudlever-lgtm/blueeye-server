@@ -120,6 +120,12 @@ main#view:has(.overview) { max-width: 1600px; }
 /* Server storage cards + usage bar. */
 .storage { margin: 0 0 16px; }
 .storage-h { margin: 0 0 8px; font-size: 14px; color: var(--muted); }
+.storage-card { max-width: 560px; }
+.storage-row { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.storage-row .k { color: var(--muted); font-size: 12px; }
+.storage-row .v { font-size: 18px; font-weight: 700; }
+.storage-card .small { font-size: 12px; margin-top: 4px; }
+.storage-sep { border: 0; border-top: 1px solid var(--border); margin: 12px 0; }
 .usagebar { height: 8px; border-radius: 5px; background: var(--bg); border: 1px solid var(--border); overflow: hidden; margin-top: 8px; }
 .usagebar .fill { height: 100%; }
 .usagebar .fill.ok { background: var(--ok); }

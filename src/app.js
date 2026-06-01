@@ -21,6 +21,7 @@ function createApp({
   resultsRepo,
   licenseManager,
   agentCommander,
+  systemInfo,
   logger = silentLogger,
 } = {}) {
   const app = express();
@@ -48,6 +49,7 @@ function createApp({
       resultsRepo,
       licenseManager,
       agentCommander,
+      systemInfo,
     })
   );
 

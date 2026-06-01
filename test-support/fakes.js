@@ -129,6 +129,21 @@ function makeAgentCommander(overrides = {}) {
   };
 }
 
+// A fake system-info service (storage/disk + database size).
+function makeSystemInfo(overrides = {}) {
+  return {
+    getStorage:
+      overrides.getStorage ||
+      (async () => ({
+        at: '2026-01-01T00:00:00.000Z',
+        disk: { path: '/data', available: true, totalBytes: 100, usedBytes: 40, freeBytes: 60, usedPercent: 40 },
+        database: { name: 'blueeye', totalBytes: 10, dataBytes: 8, indexBytes: 2, tableCount: 3, tables: [] },
+      })),
+    getDisk: overrides.getDisk || (async () => ({ path: '/data', available: true })),
+    getDatabase: overrides.getDatabase || (async () => ({ name: 'blueeye', totalBytes: 0, tables: [] })),
+  };
+}
+
 // A fake license manager (defaults to a healthy, generous license).
 function makeLicenseManager(overrides = {}) {
   const status = () => ({ status: 'valid', licensed: true, maxAgents: 1000, serverId: 'test-server' });
@@ -156,6 +171,7 @@ function makeApp(overrides = {}) {
     resultsRepo: overrides.resultsRepo || makeResultsRepo(),
     licenseManager: overrides.licenseManager || makeLicenseManager(),
     agentCommander: overrides.agentCommander || makeAgentCommander(),
+    systemInfo: overrides.systemInfo || makeSystemInfo(),
   });
 }
 
@@ -189,6 +205,7 @@ module.exports = {
   makeEnrollmentStore,
   makeLicenseManager,
   makeAgentCommander,
+  makeSystemInfo,
   makeDb,
   makeApp,
   tokenFor,

@@ -61,4 +61,6 @@ test('dashboard exposes users tab, auto-refresh and traffic chart', async () => 
   assert.match(html, /data-view="map"/); // map tab
   assert.match(html, /leaflet/i); // Leaflet assets included
   assert.match(js, /payload\.system/); // shows host CPU/memory metrics
+  assert.match(js, /storageCards/); // server disk + database storage cards
+  assert.match(js, /\/system\/storage/); // calls the storage endpoint
 });

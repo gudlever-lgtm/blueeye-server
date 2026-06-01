@@ -538,10 +538,56 @@ function multiChart(seriesList, { height = 320 } = {}) {
 
 // Full-width traffic overview: pick which series to show via checkboxes and
 // watch them live. Polls every 3s while open.
+// Server storage cards: disk usage (where Docker/DB lives) + database size.
+function storageCards(s) {
+  const wrap = el('div', { class: 'storage' });
+  wrap.append(el('h3', { class: 'storage-h' }, 'Lagerplads (server)'));
+  const cards = el('div', { class: 'cards' });
+
+  const d = s.disk || {};
+  if (d.available) {
+    cards.append(el('div', { class: 'stat' },
+      el('div', { class: 'k' }, `Drev ${esc(d.path || '')}`),
+      el('div', { class: 'v' }, `${fmtBytes(d.freeBytes)} fri`),
+      usageBar(d.usedPercent),
+      el('div', { class: 'muted', style: 'font-size:12px;margin-top:4px' },
+        `${fmtBytes(d.usedBytes)} brugt af ${fmtBytes(d.totalBytes)} (${d.usedPercent}%)`)));
+  } else {
+    cards.append(el('div', { class: 'stat' }, el('div', { class: 'k' }, 'Drev'),
+      el('div', { class: 'v muted' }, 'utilgængelig')));
+  }
+
+  const db = s.database || {};
+  if (db.error) {
+    cards.append(el('div', { class: 'stat' }, el('div', { class: 'k' }, 'Database'),
+      el('div', { class: 'v muted' }, 'utilgængelig')));
+  } else {
+    const biggest = (db.tables && db.tables[0]) || null;
+    cards.append(el('div', { class: 'stat' },
+      el('div', { class: 'k' }, `Database ${esc(db.name || '')}`),
+      el('div', { class: 'v' }, fmtBytes(db.totalBytes)),
+      el('div', { class: 'muted', style: 'font-size:12px;margin-top:4px' },
+        `${db.tableCount} tabeller${biggest ? ` · størst: ${esc(biggest.name)} (${fmtBytes(biggest.bytes)})` : ''}`)));
+  }
+  wrap.append(cards);
+  return wrap;
+}
+
+function usageBar(percent) {
+  const p = Math.max(0, Math.min(100, Number(percent) || 0));
+  const cls = p >= 90 ? 'bad' : p >= 75 ? 'warn' : 'ok';
+  return el('div', { class: 'usagebar' }, el('div', { class: `fill ${cls}`, style: `width:${p}%` }));
+}
+
 views.overview = async () => {
   const root = el('div', { class: 'overview' });
   root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Trafik — overblik'),
     el('span', { class: 'muted' }, 'Vælg serier i panelet · auto hvert 3. sek.')));
+
+  // Server storage: disk free/used + database size.
+  const storageHost = el('div', {});
+  root.append(storageHost);
+  api('/system/storage').then((s) => storageHost.replaceChildren(storageCards(s))).catch(() => {});
 
   const chartHost = el('div', { class: 'overview-chart' });
   const controls = el('div', { class: 'overview-controls' });

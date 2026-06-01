@@ -55,6 +55,11 @@ const config = {
     graceDays: toInt(process.env.LICENSE_GRACE_DAYS, 14),
     intervalHours: toInt(process.env.LICENSE_VALIDATE_INTERVAL_HOURS, 6),
   },
+  // Storage monitoring: the path to statfs for disk usage. Default the server's
+  // data dir; point it at the drive holding the DB/Docker volume if different.
+  storage: {
+    diskPath: process.env.STORAGE_DISK_PATH || (process.env.LICENSE_CACHE_PATH ? path.dirname(process.env.LICENSE_CACHE_PATH) : process.cwd()),
+  },
 };
 
 // The default JWT secret must never be used outside development.

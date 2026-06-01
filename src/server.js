@@ -14,6 +14,7 @@ const { attachAgentWebSocket } = require('./ws/agentSocket');
 const { createLicenseManager } = require('./license/licenseManager');
 const { createFileCache } = require('./license/licenseCache');
 const { isConfigured } = require('./license/publicKey');
+const { createSystemInfo } = require('./services/systemInfo');
 
 // Wires up real dependencies, starts the HTTP server and installs graceful
 // shutdown handlers.
@@ -52,6 +53,9 @@ function start() {
     sendCommand: (agentId, command) => (agentWs ? agentWs.sendCommand(agentId, command) : 0),
   };
 
+  // Storage info (disk free/used + database size).
+  const systemInfo = createSystemInfo({ db, diskPath: config.storage.diskPath });
+
   const app = createApp({
     db,
     locationsRepo,
@@ -62,6 +66,7 @@ function start() {
     agentTokensRepo,
     resultsRepo,
     agentCommander,
+    systemInfo,
     licenseManager,
     logger: console,
   });

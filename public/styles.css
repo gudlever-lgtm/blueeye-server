@@ -95,6 +95,15 @@ main#view:has(.overview) { max-width: 1600px; }
 .big-chart .axis { fill: var(--muted); font-size: 11px; }
 .overview-controls { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px; max-height: 70vh; overflow: auto; }
 
+/* Server storage cards + usage bar. */
+.storage { margin: 0 0 16px; }
+.storage-h { margin: 0 0 8px; font-size: 14px; color: var(--muted); }
+.usagebar { height: 8px; border-radius: 5px; background: var(--bg); border: 1px solid var(--border); overflow: hidden; margin-top: 8px; }
+.usagebar .fill { height: 100%; }
+.usagebar .fill.ok { background: var(--ok); }
+.usagebar .fill.warn { background: var(--warn); }
+.usagebar .fill.bad { background: var(--bad); }
+
 /* Locations map (Leaflet). */
 .map { height: 70vh; min-height: 420px; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
 .leaflet-popup-content { color: #111; }

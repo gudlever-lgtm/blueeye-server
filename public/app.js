@@ -772,13 +772,19 @@ function trafficHistorySection() {
     if (histState.agentId) agentSel.value = histState.agentId;
   }).catch(() => {});
 
-  async function load() {
+  // Pass an explicit { fromMs, toMs } to bypass the minute-granular inputs — a
+  // brush/drill-in keeps sub-minute precision (otherwise from===to → invalid).
+  async function load(range) {
     const agentId = agentSel.value;
     histState.agentId = agentId;
     if (!agentId) { status.textContent = 'Vælg en agent.'; return; }
-    const fromMs = fromI.value ? new Date(fromI.value).getTime() : NaN;
-    const toMs = toI.value ? new Date(toI.value).getTime() : NaN;
-    if (Number.isNaN(fromMs) || Number.isNaN(toMs) || fromMs >= toMs) { status.textContent = 'Ugyldig periode.'; return; }
+    let fromMs = range ? range.fromMs : (fromI.value ? new Date(fromI.value).getTime() : NaN);
+    let toMs = range ? range.toMs : (toI.value ? new Date(toI.value).getTime() : NaN);
+    if (Number.isNaN(fromMs) || Number.isNaN(toMs)) { status.textContent = 'Ugyldig periode.'; return; }
+    if (toMs < fromMs) { const tmp = fromMs; fromMs = toMs; toMs = tmp; }
+    // Guarantee a usable window even for a tiny brush (agents report ~every 60s).
+    const MIN_MS = 60 * 1000;
+    if (toMs - fromMs < MIN_MS) { const mid = (fromMs + toMs) / 2; fromMs = Math.round(mid - MIN_MS / 2); toMs = Math.round(mid + MIN_MS / 2); }
     status.textContent = 'Henter…';
     chartHost.replaceChildren();
     let rows;
@@ -800,19 +806,25 @@ function trafficHistorySection() {
     if (!chosen.length) { chartHost.replaceChildren(el('div', { class: 'empty' }, 'Vælg mindst én type.')); return; }
     const seriesList = chosen.map(([k, label], idx) => ({ id: k, label, color: SERIES_COLORS[idx % SERIES_COLORS.length], points: points.map((p) => ({ t: p.t, y: p[k] })) }));
     const legend = el('div', { class: 'legend' }, ...seriesList.map((s) => el('span', {}, el('span', { class: 'dot', style: `background:${s.color}` }), s.label)));
-    chartHost.replaceChildren(historyChart(seriesList, { fromMs, toMs, onBrush: (f, t) => { fromI.value = toLocalInput(new Date(f)); toI.value = toLocalInput(new Date(t)); load(); } }), legend);
+    chartHost.replaceChildren(historyChart(seriesList, { fromMs, toMs, onBrush: (f, t) => { fromI.value = toLocalInput(new Date(f)); toI.value = toLocalInput(new Date(t)); load({ fromMs: f, toMs: t }); } }), legend);
   }
 
   // Called from the live graph's brush: load the actual stored data for the
   // marked window (per agent). Pre-fills the period and runs the query.
   function focus(fromMs, toMs) {
-    baseFrom = toLocalInput(new Date(fromMs));
-    baseTo = toLocalInput(new Date(toMs));
+    // The live-marked window can be only seconds wide; pad it so there are
+    // actually stored measurements to show (report interval ~60s).
+    let a = fromMs;
+    let b = toMs;
+    const MIN = 10 * 60 * 1000;
+    if (b - a < MIN) { const mid = (a + b) / 2; a = Math.round(mid - MIN / 2); b = Math.round(mid + MIN / 2); }
+    baseFrom = toLocalInput(new Date(a));
+    baseTo = toLocalInput(new Date(b));
     fromI.value = baseFrom;
     toI.value = baseTo;
     wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
     if (agentSel.value) {
-      load();
+      load({ fromMs: a, toMs: b });
     } else {
       status.className = 'muted';
       status.textContent = 'Vælg en agent for at se de gemte data for det markerede vindue.';

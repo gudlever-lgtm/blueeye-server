@@ -23,7 +23,7 @@ function uniqInts(arr, min, max, cap) {
 // the env defaults. The map tile source and the traffic-type categories are
 // editable from the UI; everything else stays env-driven. Validation lives here
 // so the route stays thin.
-function createSettingsService({ settingsRepo, config }) {
+function createSettingsService({ settingsRepo, config, liveAnalysis = null, liveRetention = null }) {
   function mapDefaults() {
     return {
       tileUrl: config.geo.tileUrl,
@@ -143,7 +143,111 @@ function createSettingsService({ settingsRepo, config }) {
     return listCategories(DEFAULT_CATEGORIES);
   }
 
-  return { getMap, setMap, validateMap, getFlowCategories, setFlowCategories, resetFlowCategories, validateFlowCategories };
+  // ---- Analysis thresholds (Indstillinger → Analyse) ----------------------
+  // Editable subset of the analysis config; the AI assistant + secrets stay
+  // env-only. Defaults mirror src/analysis/config.js.
+  const ANALYSIS_DEFAULTS = { analysisEnabled: true, assistantEnabled: false, critSigma: 4.0, warnSigma: 3.0, baselineDays: 7, minSamples: 200 };
+
+  function num(patch, key, min, max, isInt, errors, value) {
+    if (patch[key] === undefined) return;
+    const n = Number(patch[key]);
+    const ok = (isInt ? Number.isInteger(n) : Number.isFinite(n)) && n >= min && n <= max;
+    if (!ok) errors[key] = `${key} must be ${isInt ? 'an integer' : 'a number'} between ${min} and ${max}`;
+    else value[key] = n;
+  }
+  function bool(patch, key, value) {
+    if (patch[key] === undefined) return;
+    value[key] = patch[key] === true || patch[key] === 'true';
+  }
+
+  function validateAnalysis(patch) {
+    const p = patch && typeof patch === 'object' ? patch : {};
+    const errors = {};
+    const value = {};
+    bool(p, 'analysisEnabled', value);
+    num(p, 'critSigma', 0.5, 20, false, errors, value);
+    num(p, 'warnSigma', 0.5, 20, false, errors, value);
+    num(p, 'baselineDays', 1, 90, true, errors, value);
+    num(p, 'minSamples', 10, 100000, true, errors, value);
+    return { errors: Object.keys(errors).length ? errors : null, value };
+  }
+
+  async function getAnalysis() {
+    let override = null;
+    try { override = await settingsRepo.get('analysis'); } catch { override = null; }
+    const o = override && typeof override === 'object' ? override : {};
+    const base = { ...ANALYSIS_DEFAULTS, ...(liveAnalysis || {}), ...o };
+    return {
+      analysisEnabled: !!base.analysisEnabled, assistantEnabled: !!base.assistantEnabled,
+      critSigma: base.critSigma, warnSigma: base.warnSigma, baselineDays: base.baselineDays, minSamples: base.minSamples,
+    };
+  }
+
+  async function setAnalysis(patch) {
+    const { errors, value } = validateAnalysis(patch || {});
+    if (errors) { const err = new Error('invalid analysis settings'); err.statusCode = 400; err.details = errors; throw err; }
+    const current = await getAnalysis();
+    const merged = { ...current, ...value };
+    await settingsRepo.set('analysis', { analysisEnabled: merged.analysisEnabled, critSigma: merged.critSigma, warnSigma: merged.warnSigma, baselineDays: merged.baselineDays, minSamples: merged.minSamples });
+    if (liveAnalysis) Object.assign(liveAnalysis, value); // live-apply (consumers read lazily)
+    return merged;
+  }
+
+  // ---- Retention windows (Indstillinger → Retention) ----------------------
+  const RETENTION_DEFAULTS = { enabled: true, rawRetentionDays: 7, rollupRetentionDays: 90, findingRetentionDays: 365, rollupIntervalMinutes: 60 };
+
+  function validateRetention(patch) {
+    const p = patch && typeof patch === 'object' ? patch : {};
+    const errors = {};
+    const value = {};
+    bool(p, 'enabled', value);
+    num(p, 'rawRetentionDays', 1, 3650, true, errors, value);
+    num(p, 'rollupRetentionDays', 1, 3650, true, errors, value);
+    num(p, 'findingRetentionDays', 1, 3650, true, errors, value);
+    return { errors: Object.keys(errors).length ? errors : null, value };
+  }
+
+  async function getRetention() {
+    let override = null;
+    try { override = await settingsRepo.get('retention'); } catch { override = null; }
+    const o = override && typeof override === 'object' ? override : {};
+    const base = { ...RETENTION_DEFAULTS, ...(liveRetention || {}), ...o };
+    return {
+      enabled: !!base.enabled, rawRetentionDays: base.rawRetentionDays, rollupRetentionDays: base.rollupRetentionDays,
+      findingRetentionDays: base.findingRetentionDays, rollupIntervalMinutes: base.rollupIntervalMinutes,
+    };
+  }
+
+  async function setRetention(patch) {
+    const { errors, value } = validateRetention(patch || {});
+    if (errors) { const err = new Error('invalid retention settings'); err.statusCode = 400; err.details = errors; throw err; }
+    const current = await getRetention();
+    const merged = { ...current, ...value };
+    await settingsRepo.set('retention', { enabled: merged.enabled, rawRetentionDays: merged.rawRetentionDays, rollupRetentionDays: merged.rollupRetentionDays, findingRetentionDays: merged.findingRetentionDays });
+    if (liveRetention) Object.assign(liveRetention, value);
+    return merged;
+  }
+
+  // Re-applies persisted analysis/retention overrides onto the live config
+  // objects at boot, so admin edits survive a restart. Best-effort.
+  async function applyStoredOverrides() {
+    try {
+      const a = await settingsRepo.get('analysis');
+      if (a && liveAnalysis) Object.assign(liveAnalysis, validateAnalysis(a).value);
+    } catch { /* ignore */ }
+    try {
+      const r = await settingsRepo.get('retention');
+      if (r && liveRetention) Object.assign(liveRetention, validateRetention(r).value);
+    } catch { /* ignore */ }
+  }
+
+  return {
+    getMap, setMap, validateMap,
+    getFlowCategories, setFlowCategories, resetFlowCategories, validateFlowCategories,
+    getAnalysis, setAnalysis, validateAnalysis,
+    getRetention, setRetention, validateRetention,
+    applyStoredOverrides,
+  };
 }
 
 module.exports = { createSettingsService };

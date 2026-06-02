@@ -2138,7 +2138,7 @@ views.settings = async () => {
   const root = el('div');
   const isAdmin = role === 'admin';
   const subtabs = [];
-  if (isAdmin) subtabs.push(['system', 'System'], ['types', 'Trafiktyper'], ['map', 'Kort'], ['users', 'Brugere']);
+  if (isAdmin) subtabs.push(['analyse', 'Analyse'], ['alerting', 'Alerting'], ['retention', 'Retention'], ['types', 'Trafiktyper'], ['map', 'Kort'], ['users', 'Brugere']);
   subtabs.push(['license', 'Licens']);
   if (!settingsTab || !subtabs.some(([k]) => k === settingsTab)) settingsTab = subtabs[0][0];
 
@@ -2146,13 +2146,18 @@ views.settings = async () => {
     el('button', { class: `small ghost${k === settingsTab ? ' active' : ''}`, onclick: () => { settingsTab = k; render(); } }, label)));
   root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Indstillinger'), el('span', { class: 'spacer' }), nav));
 
+  const views2 = {
+    users: () => views.users(),
+    license: () => views.license(),
+    map: settingsMapView,
+    types: settingsTypesView,
+    analyse: settingsAnalyseView,
+    alerting: settingsAlertingView,
+    retention: settingsRetentionView,
+  };
   let content;
   try {
-    if (settingsTab === 'users') content = await views.users();
-    else if (settingsTab === 'license') content = await views.license();
-    else if (settingsTab === 'map') content = await settingsMapView();
-    else if (settingsTab === 'types') content = await settingsTypesView();
-    else content = await settingsSystemView();
+    content = await (views2[settingsTab] || settingsAnalyseView)();
   } catch (err) {
     content = el('div', { class: 'empty error' }, err.message);
   }
@@ -2160,17 +2165,107 @@ views.settings = async () => {
   return root;
 };
 
-async function settingsSystemView() {
+// A small "Licens: <feature> ja/nej" badge so each feature tab shows whether the
+// licence covers it.
+function licenseBadge(license, feature) {
+  const ok = license && license[feature] === true;
+  return el('span', { class: `badge ${ok ? 'active' : 'offline'}` }, `Licens: ${feature} ${ok ? 'ja' : 'nej'}`);
+}
+
+async function settingsAnalyseView() {
   const data = await api('/api/settings');
   const root = el('div');
-  root.append(el('p', { class: 'muted settings-intro' }, 'Effektiv konfiguration (læsbar) — styres via serverens .env og kræver genstart. Det du kan ændre her har egne faner: ', el('b', {}, 'Trafiktyper'), ' og ', el('b', {}, 'Kort'), '.'));
-  const grid = el('div', { class: 'settings-grid' });
-  grid.append(settingsCard('Licens-funktioner', featureBadges(data.license)));
-  grid.append(settingsCard('Analyse', kvList(data.analysis, { analysisEnabled: 'Analyse slået til', assistantEnabled: 'AI-assistent', critSigma: 'CRIT σ', warnSigma: 'WARN σ', baselineDays: 'Baseline-dage', minSamples: 'Min. samples' })));
-  grid.append(settingsCard('Alerting', alertingSummary(data.alerting)));
-  grid.append(settingsCard('Retention', kvList(data.retention, { enabled: 'Slået til', rawRetentionDays: 'Rå data (dage)', rollupRetentionDays: 'Aggregeret (dage)', findingRetentionDays: 'Findings (dage)', rollupIntervalMinutes: 'Bucket (min)' })));
-  root.append(grid);
+  root.append(el('p', { class: 'muted settings-intro' }, 'Anomali-detektion: hvornår en måling regnes som afvigende (σ fra baseline). Ændringer slår igennem uden genstart. ', licenseBadge(data.license, 'analysis')));
+  root.append(el('div', { class: 'settings-grid' }, analyseSettingsCard(data.analysis)));
   return root;
+}
+
+async function settingsAlertingView() {
+  const data = await api('/api/settings');
+  const root = el('div');
+  root.append(el('p', { class: 'muted settings-intro' }, 'Alarm-kanaler (e-mail/webhook/syslog). ', licenseBadge(data.license, 'alerting')));
+  const card = settingsCard('Alerting', alertingSummary(data.alerting));
+  card.append(el('p', { class: 'muted small' }, 'Kanaler konfigureres via serverens .env, fordi de indeholder hemmeligheder (SMTP-kodeord, webhook-HMAC). Ændringer kræver genstart. Env: ALERTING_*, SMTP_*, WEBHOOK_*.'));
+  root.append(el('div', { class: 'settings-grid' }, card));
+  return root;
+}
+
+async function settingsRetentionView() {
+  const data = await api('/api/settings');
+  const root = el('div');
+  root.append(el('p', { class: 'muted settings-intro' }, 'Hvor længe data gemmes, før det aggregeres/slettes. Ændringer slår igennem på næste oprydning (uden genstart).'));
+  root.append(el('div', { class: 'settings-grid' }, retentionSettingsCard(data.retention)));
+  return root;
+}
+
+// Generic "edit a few fields + Gem" card. fields: { key, label, type:
+// 'number'|'checkbox', min, max, step, readonly, hint }. Read-only fields are
+// shown (greyed) but never sent; the server validates the rest.
+function settingsFormCard({ title, fields, values, endpoint }) {
+  const v = values || {};
+  const inputs = {};
+  const rowEls = [];
+  for (const f of fields) {
+    let input;
+    if (f.type === 'checkbox') {
+      input = el('input', { type: 'checkbox' });
+      input.checked = v[f.key] === true;
+    } else {
+      input = el('input', { type: 'number', value: String(v[f.key] ?? ''), min: f.min ?? null, max: f.max ?? null, step: f.step ?? null });
+    }
+    if (f.readonly) input.disabled = true;
+    inputs[f.key] = input;
+    rowEls.push(el('label', { class: 'set-field' },
+      el('span', {}, f.label, f.readonly ? el('span', { class: 'muted small' }, ' · env / genstart') : null),
+      input, f.hint ? el('span', { class: 'muted small' }, f.hint) : null));
+  }
+  const err = el('p', { class: 'error' });
+  const btn = el('button', { class: 'small' }, 'Gem');
+  async function save() {
+    err.textContent = ''; btn.disabled = true;
+    const body = {};
+    for (const f of fields) {
+      if (f.readonly) continue;
+      body[f.key] = f.type === 'checkbox' ? inputs[f.key].checked : Number(inputs[f.key].value);
+    }
+    try { await api(endpoint, { method: 'PUT', body }); toast(`${title} gemt`); }
+    catch (e2) { err.textContent = e2.data && e2.data.details ? Object.values(e2.data.details).join(' · ') : e2.message; }
+    finally { btn.disabled = false; }
+  }
+  btn.addEventListener('click', save);
+  return el('div', { class: 'settings-card' }, el('h3', {}, title),
+    el('div', { class: 'form-grid' }, ...rowEls, err, el('div', { class: 'form-actions' }, btn)));
+}
+
+function analyseSettingsCard(a) {
+  return settingsFormCard({
+    title: 'Analyse',
+    values: a,
+    endpoint: '/api/settings/analysis',
+    fields: [
+      { key: 'analysisEnabled', label: 'Analyse slået til', type: 'checkbox' },
+      { key: 'critSigma', label: 'CRIT-tærskel (σ fra baseline)', type: 'number', min: 0.5, max: 20, step: 0.1 },
+      { key: 'warnSigma', label: 'WARN-tærskel (σ fra baseline)', type: 'number', min: 0.5, max: 20, step: 0.1 },
+      { key: 'baselineDays', label: 'Baseline-vindue (dage)', type: 'number', min: 1, max: 90, step: 1 },
+      { key: 'minSamples', label: 'Min. samples før varsling', type: 'number', min: 10, max: 100000, step: 1 },
+      { key: 'assistantEnabled', label: 'AI-assistent', type: 'checkbox', readonly: true },
+    ],
+  });
+}
+
+function retentionSettingsCard(r) {
+  return settingsFormCard({
+    title: 'Retention',
+    values: r,
+    endpoint: '/api/settings/retention',
+    fields: [
+      { key: 'enabled', label: 'Oprydning slået til', type: 'checkbox' },
+      { key: 'rawRetentionDays', label: 'Rå data (dage)', type: 'number', min: 1, max: 3650, step: 1 },
+      { key: 'rollupRetentionDays', label: 'Aggregeret data (dage)', type: 'number', min: 1, max: 3650, step: 1 },
+      { key: 'findingRetentionDays', label: 'Findings (dage)', type: 'number', min: 1, max: 3650, step: 1 },
+      { key: 'rollupIntervalMinutes', label: 'Bucket-størrelse (min)', type: 'number', readonly: true },
+    ],
+  });
 }
 
 async function settingsMapView() {

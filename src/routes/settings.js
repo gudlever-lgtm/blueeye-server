@@ -17,15 +17,35 @@ function createSettingsRouter({ settingsService, featureGate, dispatcher, analys
     const a = analysisConfig || {};
     res.json({
       license: featureGate ? featureGate.summary() : null,
-      analysis: {
+      analysis: settingsService ? await settingsService.getAnalysis() : {
         analysisEnabled: a.analysisEnabled, assistantEnabled: a.assistantEnabled,
         critSigma: a.critSigma, warnSigma: a.warnSigma, baselineDays: a.baselineDays, minSamples: a.minSamples,
       },
       alerting: dispatcher ? dispatcher.describe() : null,
-      retention: retentionConfig || null,
+      retention: settingsService ? await settingsService.getRetention() : (retentionConfig || null),
       map: settingsService ? await settingsService.getMap() : null,
       flowCategories: settingsService ? await settingsService.getFlowCategories() : null,
     });
+  }));
+
+  // PUT /api/settings/analysis — anomaly-detection thresholds (admin).
+  router.put('/analysis', ...admin, asyncHandler(async (req, res) => {
+    try {
+      res.json({ analysis: await settingsService.setAnalysis(req.body || {}) });
+    } catch (err) {
+      if (err.statusCode === 400) return res.status(400).json({ error: 'Validation failed', details: err.details || {} });
+      throw err;
+    }
+  }));
+
+  // PUT /api/settings/retention — data-retention windows (admin).
+  router.put('/retention', ...admin, asyncHandler(async (req, res) => {
+    try {
+      res.json({ retention: await settingsService.setRetention(req.body || {}) });
+    } catch (err) {
+      if (err.statusCode === 400) return res.status(400).json({ error: 'Validation failed', details: err.details || {} });
+      throw err;
+    }
   }));
 
   // PUT /api/settings/flow-categories — replace the traffic-type category list

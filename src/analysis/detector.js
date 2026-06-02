@@ -16,9 +16,10 @@ const DEFAULT_INTERVAL_MS = 60000; // window width when none is supplied
 function createDetector({ baselines, config = loadConfig(), intervalMs = DEFAULT_INTERVAL_MS } = {}) {
   if (!baselines) throw new Error('createDetector requires a baseline store');
 
-  const { critSigma, warnSigma, baselineDays, minSamples } = config;
-
   function evaluate(sample) {
+    // Thresholds are read per-call so runtime edits (Indstillinger → Analyse)
+    // take effect without a restart.
+    const { critSigma, warnSigma, baselineDays, minSamples } = config;
     // Defensive: ignore anything that isn't a usable numeric sample.
     if (!sample || typeof sample.value !== 'number' || Number.isNaN(sample.value)) {
       return null;

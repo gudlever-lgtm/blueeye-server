@@ -19,6 +19,15 @@ function uniqInts(arr, min, max, cap) {
   return out.length ? out : null;
 }
 
+// Builds a 400 error carrying a field -> message map; the settings routes turn
+// it into a "Validation failed" response. Thrown by the set* methods.
+function badRequest(message, details) {
+  const err = new Error(message);
+  err.statusCode = 400;
+  err.details = details;
+  return err;
+}
+
 // Runtime-editable settings, backed by the app_settings store and overlaid on
 // the env defaults. The map tile source and the traffic-type categories are
 // editable from the UI; everything else stays env-driven. Validation lives here
@@ -33,10 +42,18 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
     };
   }
 
+  // Loads a stored settings override; a read error is treated as "no override".
+  async function loadOverride(key) {
+    try {
+      return await settingsRepo.get(key);
+    } catch {
+      return null;
+    }
+  }
+
   // Effective map config: stored override merged over the env defaults.
   async function getMap() {
-    let override = null;
-    try { override = await settingsRepo.get('map'); } catch { override = null; }
+    const override = await loadOverride('map');
     const o = override && typeof override === 'object' ? override : {};
     return { ...mapDefaults(), ...o };
   }
@@ -73,12 +90,7 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
   // Validates + persists a (partial) map config; returns the new effective map.
   async function setMap(patch) {
     const { errors, value } = validateMap(patch || {});
-    if (errors) {
-      const err = new Error('invalid map settings');
-      err.statusCode = 400;
-      err.details = errors;
-      throw err;
-    }
+    if (errors) throw badRequest('invalid map settings', errors);
     const current = await getMap();
     const merged = { tileUrl: current.tileUrl, attribution: current.attribution, maxZoom: current.maxZoom, geocodeUrl: current.geocodeUrl, ...value };
     await settingsRepo.set('map', merged);
@@ -89,8 +101,7 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
   // Effective list: a stored override replaces the built-in defaults wholesale
   // (so a removed default stays removed). Empty/absent override -> defaults.
   async function getFlowCategories() {
-    let override = null;
-    try { override = await settingsRepo.get('flowCategories'); } catch { override = null; }
+    const override = await loadOverride('flowCategories');
     return Array.isArray(override) && override.length ? override.map((c) => ({ ...c })) : listCategories();
   }
 
@@ -127,12 +138,7 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
   // Validates + persists the full category list; returns the stored list.
   async function setFlowCategories(list) {
     const { errors, value } = validateFlowCategories(list);
-    if (errors) {
-      const err = new Error('invalid flow categories');
-      err.statusCode = 400;
-      err.details = errors;
-      throw err;
-    }
+    if (errors) throw badRequest('invalid flow categories', errors);
     await settingsRepo.set('flowCategories', value);
     return value;
   }
@@ -173,8 +179,7 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
   }
 
   async function getAnalysis() {
-    let override = null;
-    try { override = await settingsRepo.get('analysis'); } catch { override = null; }
+    const override = await loadOverride('analysis');
     const o = override && typeof override === 'object' ? override : {};
     const base = { ...ANALYSIS_DEFAULTS, ...(liveAnalysis || {}), ...o };
     return {
@@ -185,7 +190,7 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
 
   async function setAnalysis(patch) {
     const { errors, value } = validateAnalysis(patch || {});
-    if (errors) { const err = new Error('invalid analysis settings'); err.statusCode = 400; err.details = errors; throw err; }
+    if (errors) throw badRequest('invalid analysis settings', errors);
     const current = await getAnalysis();
     const merged = { ...current, ...value };
     await settingsRepo.set('analysis', { analysisEnabled: merged.analysisEnabled, critSigma: merged.critSigma, warnSigma: merged.warnSigma, baselineDays: merged.baselineDays, minSamples: merged.minSamples });
@@ -208,8 +213,7 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
   }
 
   async function getRetention() {
-    let override = null;
-    try { override = await settingsRepo.get('retention'); } catch { override = null; }
+    const override = await loadOverride('retention');
     const o = override && typeof override === 'object' ? override : {};
     const base = { ...RETENTION_DEFAULTS, ...(liveRetention || {}), ...o };
     return {
@@ -220,7 +224,7 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
 
   async function setRetention(patch) {
     const { errors, value } = validateRetention(patch || {});
-    if (errors) { const err = new Error('invalid retention settings'); err.statusCode = 400; err.details = errors; throw err; }
+    if (errors) throw badRequest('invalid retention settings', errors);
     const current = await getRetention();
     const merged = { ...current, ...value };
     await settingsRepo.set('retention', { enabled: merged.enabled, rawRetentionDays: merged.rawRetentionDays, rollupRetentionDays: merged.rollupRetentionDays, findingRetentionDays: merged.findingRetentionDays });

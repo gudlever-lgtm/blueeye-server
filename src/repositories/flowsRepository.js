@@ -274,7 +274,27 @@ function createFlowsRepository(db) {
     };
   }
 
-  return { insertMany, aggregateExternalDestinations, destinationExists, agentIdsForDestination, selectFlows, exploreFlows, asnSeries };
+  // Global-search helpers: which agents have recently seen a given IP / port?
+  // Raw flow_records only (the rollup keeps no per-IP/port detail), windowed.
+  async function agentIdsForIp({ ip, since, until }) {
+    const rows = await q(
+      `SELECT DISTINCT agent_id FROM flow_records
+       WHERE (src_ip = ? OR dst_ip = ? OR ext_ip = ?) AND ts >= ? AND ts < ? LIMIT 200`,
+      [ip, ip, ip, since, until]
+    );
+    return [...new Set(rows.map((r) => r.agent_id))];
+  }
+
+  async function agentIdsForPort({ port, since, until }) {
+    const rows = await q(
+      `SELECT DISTINCT agent_id FROM flow_records
+       WHERE (src_port = ? OR dst_port = ?) AND ts >= ? AND ts < ? LIMIT 200`,
+      [port, port, since, until]
+    );
+    return [...new Set(rows.map((r) => r.agent_id))];
+  }
+
+  return { insertMany, aggregateExternalDestinations, destinationExists, agentIdsForDestination, selectFlows, exploreFlows, agentIdsForIp, agentIdsForPort, asnSeries };
 }
 
 module.exports = { createFlowsRepository, toRow };

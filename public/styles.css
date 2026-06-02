@@ -251,6 +251,16 @@ main#view:has(.overview) { max-width: 1180px; }
 .agent-health .ah-quality { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13px; }
 .dq-flag { color: var(--warn); cursor: help; }
 
+/* Topbar global search + results modal. */
+.topbar-search { width: 200px; max-width: 36vw; padding: 5px 10px; border: 1px solid var(--border); border-radius: 999px;
+  background: var(--bg); color: var(--text); font: inherit; font-size: 13px; }
+.topbar-search:focus { outline: none; border-color: var(--accent); }
+.search-list { display: flex; flex-direction: column; gap: 4px; margin: 2px 0 10px; }
+.search-item { display: flex; align-items: center; gap: 10px; justify-content: flex-start; text-align: left;
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; cursor: pointer; color: var(--text); }
+.search-item:hover { border-color: var(--accent); }
+.search-item .badge { margin-left: auto; }
+
 /* 4) Slim storage line; the full breakdown folds open below. */
 .storage-fold { margin-top: 10px; }
 .storage-fold > summary.storage-line { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 12px; flex-wrap: wrap;

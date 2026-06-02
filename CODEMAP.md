@@ -90,6 +90,7 @@ Mounted in `src/routes/index.js`. User endpoints use JWT + roles
 | `/api/probes` | probes.js | viewer+ | **active-probe** results (ping/tcp/dns/traceroute) |
 | `/api/fleet` | fleet.js | viewer+ | **fleet health** rollup (`/health`) + per-agent verdict (`/agent/:id`) |
 | `/api/interfaces` | interfaces.js | viewer+ | **interface health** (util/errors/discards/link) |
+| `/api/search` | search.js | viewer+ | **global search** (agents/hosts/locations + IP/port → agents) |
 
 ## Data model (MySQL)
 

@@ -1741,6 +1741,54 @@ views.probes = async () => {
 let selectedAgentId = null;
 function openAgent(id) { selectedAgentId = id; currentView = 'agent'; render(); }
 
+// Deep-link into the flow explorer for an agent, optionally pre-filling a
+// peer/port (used by global search). views.flows consumes + clears the prefill.
+let flowsPrefill = null;
+function openFlows(agentId, prefill) { selectedAgentId = agentId; flowsPrefill = Object.assign({ agentId }, prefill || {}); currentView = 'flows'; render(); }
+
+// Global search (topbar): agents/hosts/locations + which agents recently saw an
+// IP/port. Results open in a modal; each is a shortcut into the agent/flow views.
+async function globalSearch(q) {
+  q = String(q || '').trim();
+  if (!q) return;
+  const card = $('#modal-card');
+  card.replaceChildren(el('h3', {}, `Søgning: ${esc(q)}`), el('div', { class: 'muted' }, 'Søger…'));
+  $('#modal').classList.remove('hidden');
+  let data;
+  try { data = await api(`/api/search?q=${encodeURIComponent(q)}`); }
+  catch (e) { card.replaceChildren(el('h3', {}, 'Søgning'), el('p', { class: 'error' }, e.message), el('div', { class: 'form-actions' }, el('button', { class: 'ghost', onclick: closeModal }, 'Luk'))); return; }
+  const item = (label, sub, onclick) => el('button', { class: 'search-item', onclick }, el('span', {}, label), sub || null);
+  const kids = [el('h3', {}, `Søgning: ${esc(q)}`)];
+  let any = false;
+  if (data.agents.length) {
+    any = true;
+    kids.push(el('h4', {}, 'Agenter'));
+    kids.push(el('div', { class: 'search-list' }, ...data.agents.map((a) => item(
+      esc(a.name), el('span', { class: `badge ${a.status === 'online' ? 'online' : 'offline'}` }, a.status || '?'),
+      () => { closeModal(); openAgent(a.id); }))));
+  }
+  if (data.flows && data.flows.ip && data.flows.ip.agents.length) {
+    any = true;
+    kids.push(el('h4', {}, `IP ${esc(data.flows.ip.ip)} `, el('span', { class: 'muted' }, '· set af')));
+    kids.push(el('div', { class: 'search-list' }, ...data.flows.ip.agents.map((a) => item(
+      esc(a.name), el('span', { class: 'muted' }, '→ flows'), () => { closeModal(); openFlows(a.id, { peer: data.flows.ip.ip }); }))));
+  }
+  if (data.flows && data.flows.port && data.flows.port.agents.length) {
+    any = true;
+    kids.push(el('h4', {}, `Port ${data.flows.port.port} `, el('span', { class: 'muted' }, '· set af')));
+    kids.push(el('div', { class: 'search-list' }, ...data.flows.port.agents.map((a) => item(
+      esc(a.name), el('span', { class: 'muted' }, '→ flows'), () => { closeModal(); openFlows(a.id, { port: data.flows.port.port }); }))));
+  }
+  if (data.locations.length) {
+    any = true;
+    kids.push(el('h4', {}, 'Lokationer'));
+    kids.push(el('div', { class: 'search-list' }, ...data.locations.map((l) => item(esc(l.name), null, () => { closeModal(); currentView = 'map'; render(); }))));
+  }
+  if (!any) kids.push(el('div', { class: 'empty' }, 'Ingen resultater.'));
+  kids.push(el('div', { class: 'form-actions' }, el('button', { class: 'ghost', onclick: closeModal }, 'Luk')));
+  card.replaceChildren(...kids);
+}
+
 const fleetState = { timer: null };
 function stopFleet() { if (fleetState.timer) { clearInterval(fleetState.timer); fleetState.timer = null; } }
 const agentState = { timer: null };
@@ -1985,6 +2033,14 @@ views.flows = async () => {
   winSel.value = '6';
   const runBtn = el('button', { class: 'small' }, 'Vis');
   const status = el('span', { class: 'muted' });
+
+  // Prefill from a deep link (global search → "→ flows").
+  if (flowsPrefill) {
+    if (flowsPrefill.agentId != null && agents.some((a) => String(a.id) === String(flowsPrefill.agentId))) agentSel.value = String(flowsPrefill.agentId);
+    if (flowsPrefill.peer) peerInput.value = flowsPrefill.peer;
+    if (flowsPrefill.port) portInput.value = String(flowsPrefill.port);
+    flowsPrefill = null;
+  }
 
   root.append(el('div', { class: 'history-controls' },
     el('label', { class: 'inline muted' }, 'Agent ', agentSel),
@@ -3312,6 +3368,10 @@ $('#refresh').addEventListener('click', () => render());
 $('#autorefresh').addEventListener('change', (e) => setAutoRefresh(e.target.checked));
 for (const b of document.querySelectorAll('.tabs button')) {
   b.addEventListener('click', () => { closeDrawer(); currentView = b.dataset.view; render(); });
+}
+{
+  const sq = $('#search-q');
+  if (sq) sq.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); globalSearch(sq.value); sq.blur(); } });
 }
 $('#modal').addEventListener('click', (e) => { if (e.target.id === 'modal') closeModal(); });
 

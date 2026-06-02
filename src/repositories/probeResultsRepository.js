@@ -75,6 +75,31 @@ function createProbeResultsRepository(db) {
     return rows.map(fromRow).reverse();
   }
 
+  // Recent probe rows across the WHOLE fleet, newest-first, within a time window
+  // and capped — for the fleet-health overview, which groups them by agent and
+  // derives a verdict in JS (median+MAD baseline). One query, not N. Only the
+  // columns the health computation needs.
+  async function fleetHealth({ windowMs = 6 * 3600 * 1000, limit = 20000 } = {}) {
+    const win = Number.isFinite(windowMs) && windowMs > 0 ? windowMs : 6 * 3600 * 1000;
+    const lim = Number.isInteger(limit) && limit > 0 && limit <= 50000 ? limit : 20000;
+    const since = new Date(Date.now() - win);
+    const [rows] = await pool.query(
+      `SELECT agent_id, ts, type, target, ok, rtt_ms, jitter_ms, loss_pct
+       FROM probe_results WHERE ts >= ? ORDER BY ts DESC LIMIT ?`,
+      [since, lim]
+    );
+    return rows.map((row) => ({
+      agentId: row.agent_id,
+      ts: row.ts instanceof Date ? row.ts.toISOString() : row.ts,
+      type: row.type,
+      target: row.target,
+      ok: !!row.ok,
+      rttMs: row.rtt_ms,
+      jitterMs: row.jitter_ms,
+      lossPct: row.loss_pct,
+    }));
+  }
+
   // The most recent result per (type, target) for an agent — the "current state".
   async function latestByAgent(agentId, limit = 50) {
     const lim = Number.isInteger(limit) && limit > 0 && limit <= 500 ? limit : 50;
@@ -88,7 +113,7 @@ function createProbeResultsRepository(db) {
     return rows.map(fromRow);
   }
 
-  return { createMany, findByAgent, latestByAgent };
+  return { createMany, findByAgent, latestByAgent, fleetHealth };
 }
 
 module.exports = { createProbeResultsRepository, toRow, fromRow };

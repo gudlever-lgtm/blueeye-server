@@ -88,6 +88,7 @@ Mounted in `src/routes/index.js`. User endpoints use JWT + roles
 | `/api/export` | export.js | viewer+ | CSV/JSON export |
 | `/api/flows` | flows.js | viewer+ | **traffic-type categories** time series |
 | `/api/probes` | probes.js | viewer+ | **active-probe** results (ping/tcp/dns/traceroute) |
+| `/api/fleet` | fleet.js | viewer+ | **fleet health** rollup (`/health`) + per-agent verdict (`/agent/:id`) |
 | `/api/interfaces` | interfaces.js | viewer+ | **interface health** (util/errors/discards/link) |
 
 ## Data model (MySQL)
@@ -103,18 +104,24 @@ Later migrations add:
 | 011 / 012 | `flow_rollup` / `metric_rollup` | retention down-sampling |
 | 013 | `app_settings` | runtime-editable settings (key/JSON) |
 | 014 | `probe_results` | active probes |
+| 015 | (index only) | `idx_probe_ts` for the fleet-wide probe scan |
 
-Interface health and traffic-type categories add **no** tables — they derive from the
-existing `results.payload.traffic` (and `flow_records.asn` for org categories).
+Interface health, traffic-type categories and **fleet health** add **no** tables — they
+derive from the existing `results.payload.traffic` (and `flow_records.asn` for org
+categories); fleet health is computed in `src/health/probeHealth.js` from `probe_results`.
 
 ## Dashboard (`public/app.js`)
 
 A single vanilla-JS SPA. Key building blocks:
 - `el(tag, attrs, ...kids)` — DOM helper. `api(path, opts)` — fetch + bearer + 401 handling.
-- `views.<tab>` — async function per tab returning a node (`overview`, `map`, `geo`,
-  `agents`, `interfaces`, `probes`, `findings`, `locations`, `enrollment`, `settings`).
+- `views.<tab>` — async function per tab returning a node (`fleet` (landing),
+  `overview`, `map`, `geo`, `agents`, `interfaces`, `probes`, `findings`, `locations`,
+  `enrollment`, `settings`) plus `agent` (the combined per-agent drill-down page, no tab —
+  reached via `openAgent(id)`).
 - `render()` — mounts the current view + its `hero()`; stops per-view pollers
-  (`stopOverview`/`stopProbes`/`stopIfaces`/`stopGeo`) when leaving.
+  (`stopOverview`/`stopProbes`/`stopIfaces`/`stopFleet`/`stopAgent`/`stopGeo`) when leaving.
+- Shared renderers `interfaceTable()` / `probeLatestTable()` / `probeDetail()` back both
+  the standalone tabs and the combined agent page.
 - `PAGE_INFO` — per-page hero line + "Mere info" drawer text.
 - Charts are hand-rolled SVG: `multiChart` (live, area + time ticks + brush) and
   `historyChart` (time-axis). `usageBar()` for utilisation bars.
@@ -132,6 +139,7 @@ A single vanilla-JS SPA. Key building blocks:
 | Geo/ASN enrichment | `src/geo/enricher.js`, `provider.js`; flows in `flowsRepository.js` |
 | Traffic-type categories | `src/flows/categories.js` (editable via Indstillinger→Trafiktyper) |
 | Active probes (server) | `src/routes/probes.js`, `probeResultsRepository.js`, `validation/probeValidation.js` |
+| Fleet health (overview + verdicts) | `src/health/probeHealth.js` (`computeAgentHealth`/`computeFleet`, median+MAD), `src/routes/fleet.js`; UI `views.fleet`/`views.agent` |
 | Interface health | `src/routes/interfaces.js` (`computeInterfaceHealth`) — agent side in blueeye-agent |
 | A dashboard tab/view | `public/index.html` (button) + `views.<x>` in `public/app.js` + `PAGE_INFO` |
 | License / feature gating | `src/license/*` (`features.js` = fail-closed gate) |

@@ -87,7 +87,20 @@ function createResultsRepository(db) {
     return rows.map((row) => ({ ...row, payload: parsePayload(row.payload) }));
   }
 
-  return { createMany, findByAgentId, latestByLocation, rangeByLocation };
+  // The LATEST result per agent across the WHOLE fleet (agents with no results
+  // yet are omitted) — one query, for the fleet-health rollup which folds each
+  // agent's interface health into its verdict.
+  async function latestPerAgent() {
+    const [rows] = await pool.query(
+      `SELECT t.agent_id, t.payload, t.created_at
+       FROM results t
+       JOIN (SELECT agent_id, MAX(id) AS max_id FROM results GROUP BY agent_id) m
+         ON m.max_id = t.id`
+    );
+    return rows.map((row) => ({ ...row, payload: parsePayload(row.payload) }));
+  }
+
+  return { createMany, findByAgentId, latestByLocation, latestPerAgent, rangeByLocation };
 }
 
 module.exports = { createResultsRepository };

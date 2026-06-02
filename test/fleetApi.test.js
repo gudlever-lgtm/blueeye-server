@@ -7,8 +7,14 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const request = require('supertest');
 
-const { makeApp, makeAgentsRepo, makeProbeResultsRepo, authHeader, throwingAsync } = require('../test-support/fakes');
-const { computeAgentHealth, computeFleet, robustStats } = require('../src/health/probeHealth');
+const { makeApp, makeAgentsRepo, makeProbeResultsRepo, makeResultsRepo, authHeader, throwingAsync } = require('../test-support/fakes');
+const { computeAgentHealth, computeFleet, mergeHealth, robustStats } = require('../src/health/probeHealth');
+const { interfaceHealthSummary } = require('../src/health/interfaceHealth');
+
+// A traffic payload with a single interface, overridable per test.
+function trafficWithIface(over = {}) {
+  return { elapsedSec: 5, interfaces: [{ iface: 'eth0', rxBytesPerSec: 0, txBytesPerSec: 0, ...over }] };
+}
 
 const NOW = Date.parse('2026-06-02T12:00:00Z');
 const ago = (ms) => new Date(NOW - ms).toISOString();
@@ -90,6 +96,44 @@ test('computeFleet sorts worst-first and counts a summary', () => {
   assert.equal(summary.ok, 1);
 });
 
+// ---- interface folding -----------------------------------------------------
+
+test('interfaceHealthSummary reduces to the worst interface (null when no data)', () => {
+  assert.equal(interfaceHealthSummary({ interfaces: [] }), null);
+  assert.equal(interfaceHealthSummary(null), null);
+  const bad = interfaceHealthSummary(trafficWithIface({ rxErrors: 5 }));
+  assert.equal(bad.status, 'bad');
+  assert.equal(bad.worst.iface, 'eth0');
+  assert.equal(interfaceHealthSummary(trafficWithIface({ rxDrop: 5 })).status, 'warn');
+  assert.equal(interfaceHealthSummary(trafficWithIface({ operStatus: 'down' })).status, 'down');
+});
+
+test('mergeHealth folds the interface signal into the probe verdict', () => {
+  const probeOk = computeAgentHealth(samples('1.1.1.1', [10, 10, 10]), { now: NOW });
+  const probeUnknown = computeAgentHealth([], { now: NOW });
+  const probeLoss = computeAgentHealth(samples('8.8.8.8', [20, 20], { lossPct: 30 }), { now: NOW });
+  const ifaceBad = interfaceHealthSummary(trafficWithIface({ rxErrors: 5 }));
+  const ifaceWarn = interfaceHealthSummary(trafficWithIface({ rxDrop: 5 }));
+  const ifaceOk = interfaceHealthSummary(trafficWithIface({}));
+
+  // ok probe + bad interface ⇒ bad, and the interface is the headline.
+  const a = mergeHealth(probeOk, ifaceBad);
+  assert.equal(a.status, 'bad');
+  assert.equal(a.evidence[0].metric, 'interface');
+  assert.equal(a.metrics.ifaceStatus, 'bad');
+
+  // no probes at all but interface warns ⇒ warn (not 'unknown').
+  assert.equal(mergeHealth(probeUnknown, ifaceWarn).status, 'warn');
+
+  // a worse probe signal stays the headline; the interface is kept as evidence.
+  const c = mergeHealth(probeLoss, ifaceOk);
+  assert.equal(c.status, 'bad');
+  assert.equal(c.evidence[0].metric, 'loss');
+
+  // no interface data ⇒ the probe verdict is returned unchanged.
+  assert.equal(mergeHealth(probeOk, null), probeOk);
+});
+
 // ---- route: GET /api/fleet/health -----------------------------------------
 
 test('GET /api/fleet/health returns a worst-first rollup (200)', async () => {
@@ -102,6 +146,16 @@ test('GET /api/fleet/health returns a worst-first rollup (200)', async () => {
   assert.equal(a9.health.status, 'bad');
   const a10 = res.body.agents.find((a) => a.agentId === 10);
   assert.equal(a10.health.status, 'unknown'); // no probe rows
+});
+
+test('GET /api/fleet/health folds interface health in — no probes + iface errors ⇒ bad', async () => {
+  const agentsRepo = makeAgentsRepo({ findAll: async () => [{ id: 5, hostname: 'a5', status: 'online' }] });
+  const resultsRepo = makeResultsRepo({ latestPerAgent: async () => [{ agent_id: 5, payload: { traffic: trafficWithIface({ rxErrors: 5 }) }, created_at: new Date(NOW) }] });
+  const res = await request(makeApp({ agentsRepo, resultsRepo })).get('/api/fleet/health').set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 200);
+  const a5 = res.body.agents.find((a) => a.agentId === 5);
+  assert.equal(a5.health.status, 'bad'); // would be 'unknown' without the interface fold
+  assert.equal(a5.health.metrics.ifaceStatus, 'bad');
 });
 
 test('GET /api/fleet/health requires auth (401) and surfaces a repo failure (500)', async () => {

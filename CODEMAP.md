@@ -139,8 +139,8 @@ A single vanilla-JS SPA. Key building blocks:
 | Geo/ASN enrichment | `src/geo/enricher.js`, `provider.js`; flows in `flowsRepository.js` |
 | Traffic-type categories | `src/flows/categories.js` (editable via Indstillinger→Trafiktyper) |
 | Active probes (server) | `src/routes/probes.js`, `probeResultsRepository.js`, `validation/probeValidation.js` |
-| Fleet health (overview + verdicts) | `src/health/probeHealth.js` (`computeAgentHealth`/`computeFleet`, median+MAD), `src/routes/fleet.js`; UI `views.fleet`/`views.agent` |
-| Interface health | `src/routes/interfaces.js` (`computeInterfaceHealth`) — agent side in blueeye-agent |
+| Fleet health (overview + verdicts) | `src/health/probeHealth.js` (`computeAgentHealth`/`mergeHealth`/`computeFleet`, median+MAD — folds in interface health), `src/routes/fleet.js`; UI `views.fleet`/`views.agent` |
+| Interface health | `src/health/interfaceHealth.js` (`computeInterfaceHealth`/`interfaceHealthSummary`); HTTP in `src/routes/interfaces.js` — agent side in blueeye-agent |
 | A dashboard tab/view | `public/index.html` (button) + `views.<x>` in `public/app.js` + `PAGE_INFO` |
 | License / feature gating | `src/license/*` (`features.js` = fail-closed gate) |
 

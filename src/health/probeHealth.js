@@ -159,12 +159,57 @@ function reasonFor(status, m, evidence, stale) {
   return 'Sund.';
 }
 
-// Build the fleet rollup: each agent's identity + probe-health verdict, plus a
-// summary count per status. `rowsByAgentId` maps agentId ⇒ that agent's recent
-// rows (newest-first). Sorted worst-first so problems surface at the top.
-function computeFleet(agents, rowsByAgentId, { now = Date.now() } = {}) {
+// Worst of two statuses, but a real signal always beats 'unknown' (we DO have
+// data, just from the other source).
+function combineStatus(a, b) {
+  if (a === 'unknown') return b;
+  if (b === 'unknown') return a;
+  return TIER[a] <= TIER[b] ? a : b;
+}
+
+// Fold an agent's interface signal into its probe verdict. `iface` is an
+// interfaceHealthSummary ({ status, worst, count, issues }) or null. A single
+// link being down is 'bad' at the agent level (one unused port ≠ unreachable),
+// not 'down'. Returns a new verdict; the probe verdict is returned unchanged
+// when there is no interface data.
+function mergeHealth(probe, iface) {
+  if (!iface || !iface.status) return probe;
+  const ifaceTier = iface.status === 'down' ? 'bad' : iface.status; // ok|warn|bad
+  const status = combineStatus(probe.status, ifaceTier);
+  const w = iface.worst || {};
+  // The interface is the headline only when it is the (strictly) dominant signal,
+  // or when probes told us nothing.
+  const ifaceDrives = probe.status === 'unknown' || TIER[ifaceTier] < TIER[probe.status];
+  const evidence = ifaceDrives
+    ? [{ metric: 'interface', iface: w.iface, status: iface.status, errPerSec: w.errPerSec, dropPerSec: w.dropPerSec, operStatus: w.operStatus, utilPct: w.utilPct }, ...probe.evidence]
+    : [...probe.evidence, { metric: 'interface', iface: w.iface, status: iface.status, errPerSec: w.errPerSec, dropPerSec: w.dropPerSec }];
+  const reason = ifaceDrives ? interfaceReason(iface) : probe.reason;
+  return {
+    status,
+    reason,
+    evidence,
+    metrics: { ...probe.metrics, ifaceStatus: iface.status, ifaceCount: iface.count, ifaceIssues: iface.issues, worstIface: w.iface || null },
+  };
+}
+
+function interfaceReason(iface) {
+  const w = iface.worst || {};
+  const where = w.iface ? ` (${w.iface})` : '';
+  if (iface.status === 'down') return `Link nede${where}.`;
+  if (iface.status === 'bad') return w.errPerSec > 0 ? `Interface-fejl ${w.errPerSec}/s${where}.` : `Interface næsten mættet${where}.`;
+  if (iface.status === 'warn') return w.dropPerSec > 0 ? `Interface-discards ${w.dropPerSec}/s${where}.` : `Høj interface-udnyttelse${where}.`;
+  return 'Interfaces sunde.';
+}
+
+// Build the fleet rollup: each agent's identity + health verdict (probe verdict
+// merged with its interface signal), plus a summary count per status.
+// `rowsByAgentId` maps agentId ⇒ recent probe rows (newest-first); optional
+// `ifaceByAgentId` maps agentId ⇒ interfaceHealthSummary. Sorted worst-first.
+function computeFleet(agents, rowsByAgentId, { now = Date.now(), ifaceByAgentId = {} } = {}) {
   const list = (agents || []).map((a) => {
-    const health = computeAgentHealth(rowsByAgentId[a.id] || rowsByAgentId[String(a.id)] || [], { now });
+    const probe = computeAgentHealth(rowsByAgentId[a.id] || rowsByAgentId[String(a.id)] || [], { now });
+    const iface = ifaceByAgentId[a.id] || ifaceByAgentId[String(a.id)] || null;
+    const health = mergeHealth(probe, iface);
     return {
       agentId: a.id,
       hostname: a.hostname,
@@ -187,6 +232,7 @@ function computeFleet(agents, rowsByAgentId, { now = Date.now() } = {}) {
 module.exports = {
   computeAgentHealth,
   computeFleet,
+  mergeHealth,
   robustStats,
   // exported for tests / tuning visibility
   THRESHOLDS: { LOSS_WARN, LOSS_BAD, JITTER_WARN, JITTER_BAD, Z_WARN, Z_BAD, MIN_BASELINE, STALE_MS },

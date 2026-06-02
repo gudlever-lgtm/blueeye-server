@@ -1827,7 +1827,8 @@ views.agent = async () => {
         kv('Tab', m.lossPct != null ? `${m.lossPct}%` : '–', m.lossPct >= 2 ? 'warn-text' : ''),
         kv('Latency', latencyText(m)),
         kv('Baseline', m.baselineMs != null ? `~${m.baselineMs} ms` : '–'),
-        kv('Jitter', m.jitterMs != null ? `${m.jitterMs} ms` : '–', m.jitterMs >= 30 ? 'warn-text' : '')));
+        kv('Jitter', m.jitterMs != null ? `${m.jitterMs} ms` : '–', m.jitterMs >= 30 ? 'warn-text' : ''),
+        m.ifaceStatus ? kv('Interface', `${String(m.ifaceStatus).toUpperCase()}${m.worstIface ? ' · ' + m.worstIface : ''}`, m.ifaceStatus === 'ok' ? '' : (m.ifaceStatus === 'warn' ? 'warn-text' : 'bad-text')) : null));
   }
 
   // ---- Probes (this agent) ----

@@ -116,21 +116,18 @@ function createFlowsRepository(db) {
     });
   }
 
-  // WHERE clause for the raw table and the rollup table for a given selection.
-  function rawDestFilter({ country, asn, since, until }) {
-    const where = ['internal = 0', 'ts >= ?', 'ts < ?'];
+  // WHERE clause + params for the public flows matching a destination selection.
+  // The raw and rollup tables differ only in how "public" is expressed
+  // (internal=0 vs a non-empty country) and in their timestamp column.
+  function destFilter({ publicPredicate, tsCol }, { country, asn, since, until }) {
+    const where = [publicPredicate, `${tsCol} >= ?`, `${tsCol} < ?`];
     const params = [since, until];
     if (country) { where.push('country = ?'); params.push(country); }
     if (asn !== null && asn !== undefined && asn !== '') { where.push('asn = ?'); params.push(Number(asn)); }
     return { clause: where.join(' AND '), params };
   }
-  function rollDestFilter({ country, asn, since, until }) {
-    const where = ["country <> ''", 'bucket >= ?', 'bucket < ?'];
-    const params = [since, until];
-    if (country) { where.push('country = ?'); params.push(country); }
-    if (asn !== null && asn !== undefined && asn !== '') { where.push('asn = ?'); params.push(Number(asn)); }
-    return { clause: where.join(' AND '), params };
-  }
+  const rawDestFilter = (sel) => destFilter({ publicPredicate: 'internal = 0', tsCol: 'ts' }, sel);
+  const rollDestFilter = (sel) => destFilter({ publicPredicate: "country <> ''", tsCol: 'bucket' }, sel);
 
   // True if any public flow exists (raw OR rollup) for the selection.
   async function destinationExists({ country = null, asn = null, since, until }) {

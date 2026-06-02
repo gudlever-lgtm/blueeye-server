@@ -56,8 +56,10 @@ function createProbeResultsRepository(db) {
     return res.affectedRows;
   }
 
-  // Probe results for one agent in [from, to], optionally a single type. Oldest
-  // first (so the UI can draw a left-to-right time series).
+  // Probe results for one agent in [from, to], optionally a single type. Selects
+  // the most-recent N (so the window isn't frozen on ancient rows once the table
+  // grows past the limit), then returns them oldest-first for a left-to-right
+  // time series.
   async function findByAgent({ agentId, from = null, to = null, type = null, limit = 2000 }) {
     const where = ['agent_id = ?'];
     const params = [agentId];
@@ -67,10 +69,10 @@ function createProbeResultsRepository(db) {
     const lim = Number.isInteger(limit) && limit > 0 && limit <= 5000 ? limit : 2000;
     params.push(lim);
     const [rows] = await pool.query(
-      `SELECT * FROM probe_results WHERE ${where.join(' AND ')} ORDER BY ts ASC LIMIT ?`,
+      `SELECT * FROM probe_results WHERE ${where.join(' AND ')} ORDER BY ts DESC LIMIT ?`,
       params
     );
-    return rows.map(fromRow);
+    return rows.map(fromRow).reverse();
   }
 
   // The most recent result per (type, target) for an agent — the "current state".

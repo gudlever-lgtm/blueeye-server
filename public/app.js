@@ -1560,7 +1560,10 @@ views.interfaces = async () => {
 
   refresh();
   stopIfaces();
-  ifaceState.timer = setInterval(() => { if (!modalOpen()) refresh(); }, 5000);
+  ifaceState.timer = setInterval(() => {
+    if (currentView !== 'interfaces') { stopIfaces(); return; }
+    if (!modalOpen()) refresh();
+  }, 5000);
   return root;
 };
 
@@ -1659,7 +1662,12 @@ views.probes = async () => {
 
   refreshLatest();
   stopProbes();
-  probeState.timer = setInterval(() => { if (!modalOpen()) refreshLatest(); }, 5000);
+  // Guard against the async TOCTOU: if a tab switch happened during the awaits
+  // above, render() already cleared the timer — self-clear instead of leaking.
+  probeState.timer = setInterval(() => {
+    if (currentView !== 'probes') { stopProbes(); return; }
+    if (!modalOpen()) refreshLatest();
+  }, 5000);
   return root;
 };
 

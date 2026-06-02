@@ -2,37 +2,9 @@
 
 const { WebSocketServer } = require('ws');
 const { createAgentAuthenticator } = require('../auth/agentAuth');
+const { extractToken, pathnameOf, safeSend, startHeartbeat } = require('./wsCommon');
 
 const silentLogger = { info() {}, warn() {}, error() {} };
-
-// The agent presents its token either in the Authorization header or as a
-// ?token= query parameter on the WebSocket URL.
-function extractToken(req) {
-  const header = req.headers.authorization || '';
-  const [scheme, token] = header.split(' ');
-  if (scheme === 'Bearer' && token) return token;
-  try {
-    return new URL(req.url, 'http://localhost').searchParams.get('token');
-  } catch {
-    return null;
-  }
-}
-
-function pathnameOf(req) {
-  try {
-    return new URL(req.url, 'http://localhost').pathname;
-  } catch {
-    return req.url;
-  }
-}
-
-function safeSend(ws, obj) {
-  try {
-    ws.send(JSON.stringify(obj));
-  } catch {
-    /* ignore send failures */
-  }
-}
 
 // Attaches the agent WebSocket endpoint to an existing HTTP server. Agent-token
 // auth is enforced during the upgrade handshake — a connection without a valid
@@ -118,21 +90,7 @@ function attachAgentWebSocket({
   });
 
   // Heartbeat: ping every client; drop any that didn't answer the last ping.
-  const interval = setInterval(() => {
-    for (const ws of wss.clients) {
-      if (ws.isAlive === false) {
-        ws.terminate();
-        continue;
-      }
-      ws.isAlive = false;
-      try {
-        ws.ping();
-      } catch {
-        /* ignore */
-      }
-    }
-  }, heartbeatMs);
-  interval.unref();
+  const interval = startHeartbeat(wss, heartbeatMs);
 
   // server -> agent: send a command to every live connection of an agent.
   // Returns how many sockets received it.

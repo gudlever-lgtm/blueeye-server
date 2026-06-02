@@ -5,6 +5,9 @@ const { asyncHandler } = require('../middleware/asyncHandler');
 const { requireAuth, requireRole } = require('../auth/middleware');
 const { ROLES } = require('../auth/roles');
 const { toCsv } = require('../lib/csv');
+const { computeAgentHealth, mergeHealth } = require('../health/probeHealth');
+const { interfaceHealthSummary, computeInterfaceHealth } = require('../health/interfaceHealth');
+const { computeDataQuality } = require('../health/dataQuality');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -30,8 +33,59 @@ function parseIntParam(value, field) {
 // Simple CSV/JSON export. GET /api/export/:resource?format=csv|json (+ filters).
 // Read-only (viewer+). Each resource yields { columns, rows }; geo is gated by
 // the geo license feature (so this isn't a way around /api/geo's 403).
-function createExportRouter({ findingStore, flowsRepo, agentsRepo, locationsRepo, resultsRepo, featureGate }) {
+function createExportRouter({ findingStore, flowsRepo, agentsRepo, locationsRepo, resultsRepo, probeResultsRepo, featureGate }) {
   const router = express.Router();
+  const safe = (p, d) => Promise.resolve(p).then((x) => x).catch(() => d);
+
+  // GET /api/export/investigation?agentId=&from=&to=&format=json|csv — a single
+  // archivable artifact for one agent: its health + data-quality verdict,
+  // interface health, latest probes, recent findings and top flow talkers/scans.
+  // JSON = the rich bundle; CSV = a flattened finding+probe event log. viewer+.
+  // Registered before /:resource so it isn't swallowed by the generic handler.
+  router.get('/investigation', requireAuth, requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN), asyncHandler(async (req, res) => {
+    const agentId = parseIntParam(req.query.agentId, 'agentId');
+    if (agentId === undefined) throw badRequest('agentId is required');
+    const agent = await agentsRepo.findById(agentId);
+    if (!agent) return res.status(404).json({ error: 'Agent not found' });
+    const to = parseDate(req.query.to, 'to') || new Date();
+    const from = parseDate(req.query.from, 'from') || new Date(to.getTime() - DAY_MS);
+
+    const probeRows = probeResultsRepo ? await safe(probeResultsRepo.findByAgent({ agentId, from, to, limit: 2000 }), []) : [];
+    const latestProbes = probeResultsRepo ? await safe(probeResultsRepo.latestByAgent(agentId), []) : [];
+    const latestResults = await safe(resultsRepo.findByAgentId(agentId, { limit: 1 }), []);
+    const latest = latestResults && latestResults[0];
+    const traffic = latest && latest.payload && latest.payload.traffic;
+    const interfaces = computeInterfaceHealth(traffic);
+    const health = mergeHealth(computeAgentHealth((probeRows || []).slice().reverse()), interfaceHealthSummary(traffic));
+    const quality = computeDataQuality({ capabilities: agent.capabilities || null, latest: latest ? { payload: latest.payload, created_at: latest.created_at } : null });
+    const findings = findingStore ? await safe(findingStore.list(String(agentId), from), []) : [];
+    let flows = { topTalkers: [], scans: [] };
+    if (flowsRepo && typeof flowsRepo.exploreFlows === 'function') {
+      const f = await safe(flowsRepo.exploreFlows({ agentId, from, to, bucketSec: 3600 }), null);
+      if (f) flows = { topTalkers: (f.topTalkers || []).slice(0, 20), scans: f.scans || [] };
+    }
+
+    const base = `blueeye-investigation-${agentId}`;
+    const format = String(req.query.format || 'json').toLowerCase();
+    if (format === 'csv') {
+      const events = [];
+      for (const f of findings || []) events.push({ ts: f.createdAt, source: 'finding', kind: f.severity, subject: f.metric, detail: f.explanation });
+      for (const p of latestProbes || []) events.push({ ts: p.ts, source: `probe:${p.type}`, kind: p.ok ? 'ok' : 'fail', subject: p.target, detail: [p.rttMs != null ? `${p.rttMs}ms` : null, p.lossPct != null ? `loss ${p.lossPct}%` : null].filter(Boolean).join(' ') });
+      events.sort((a, b) => String(a.ts || '').localeCompare(String(b.ts || '')));
+      res.set('Content-Type', 'text/csv; charset=utf-8');
+      res.set('Content-Disposition', `attachment; filename="${base}.csv"`);
+      return res.send(toCsv(['ts', 'source', 'kind', 'subject', 'detail'], events));
+    }
+    if (format !== 'json') return res.status(400).json({ error: 'format must be csv or json' });
+    res.set('Content-Type', 'application/json; charset=utf-8');
+    res.set('Content-Disposition', `attachment; filename="${base}.json"`);
+    return res.json({
+      generatedAt: new Date().toISOString(),
+      window: { from: from.toISOString(), to: to.toISOString() },
+      agent: { id: agent.id, hostname: agent.hostname, displayName: agent.display_name || agent.hostname, locationName: agent.location_name || null, status: agent.status, version: quality.version },
+      health, quality, interfaces, latestProbes, findings, flows,
+    });
+  }));
 
   const resources = {
     findings: {

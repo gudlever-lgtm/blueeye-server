@@ -1746,6 +1746,62 @@ function openAgent(id) { selectedAgentId = id; currentView = 'agent'; render(); 
 let flowsPrefill = null;
 function openFlows(agentId, prefill) { selectedAgentId = agentId; flowsPrefill = Object.assign({ agentId }, prefill || {}); currentView = 'flows'; render(); }
 
+// Downloads an authenticated endpoint as a file (Bearer token; the dashboard's
+// api() parses JSON, so blob downloads go through here instead).
+async function downloadAuthed(path, filename) {
+  try {
+    const res = await fetch(path, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = el('a', { href: url, download: filename });
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  } catch (e) { toast(`Eksport fejlede: ${e.message}`, true); }
+}
+
+// Opens a print-friendly investigation summary in a new window and triggers the
+// browser's print dialog (→ "Save as PDF"). No server-side PDF dependency.
+async function printInvestigation(id) {
+  let b;
+  try { b = await api(`/api/export/investigation?agentId=${encodeURIComponent(id)}`); } catch (e) { toast(e.message, true); return; }
+  const e2 = (s) => String(s == null ? '' : s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  const rows = (arr, cols, cspan) => ((arr && arr.length) ? arr.map((r) => `<tr>${cols.map((c) => `<td>${e2(typeof c === 'function' ? c(r) : r[c])}</td>`).join('')}</tr>`).join('') : `<tr><td colspan="${cspan}" class="muted">Ingen.</td></tr>`);
+  const q = b.quality || {}; const h = b.health || { status: '', reason: '' };
+  const html = `<!doctype html><html lang="da"><head><meta charset="utf-8"><title>BlueEye undersøgelse — ${e2(b.agent.displayName)}</title>
+<style>body{font:13px/1.5 system-ui,-apple-system,sans-serif;margin:24px;color:#0f172a}h1{font-size:20px;margin:0 0 4px}h2{font-size:15px;margin:22px 0 6px;border-bottom:1px solid #cbd5e1;padding-bottom:4px}table{border-collapse:collapse;width:100%;margin:6px 0}th,td{border:1px solid #e2e8f0;padding:4px 8px;text-align:left;font-size:12px}.muted{color:#64748b}.badge{padding:1px 7px;border-radius:4px;background:#e2e8f0;font-weight:600}</style>
+</head><body>
+<h1>Undersøgelse — ${e2(b.agent.displayName)}</h1>
+<p class="muted">${e2(b.agent.hostname)}${b.agent.locationName ? ' · ' + e2(b.agent.locationName) : ''} · genereret ${e2(b.generatedAt)}<br>vindue ${e2(b.window.from)} – ${e2(b.window.to)}</p>
+<h2>Sundhed</h2><p><span class="badge">${e2(String(h.status).toUpperCase())}</span> ${e2(h.reason)}</p>
+<p class="muted">Datakvalitet: ${e2(q.status)} — ${e2(q.reason)}${q.version ? ' · agent v' + e2(q.version) : ''}</p>
+<h2>Seneste probes</h2><table><thead><tr><th>Type</th><th>Mål</th><th>Status</th><th>RTT</th><th>Tab</th><th>Jitter</th></tr></thead><tbody>${rows(b.latestProbes, ['type', 'target', (r) => (r.ok ? 'ok' : 'fejl'), (r) => (r.rttMs != null ? r.rttMs + ' ms' : '–'), (r) => (r.lossPct != null ? r.lossPct + '%' : '–'), (r) => (r.jitterMs != null ? r.jitterMs + ' ms' : '–')], 6)}</tbody></table>
+<h2>Interfaces</h2><table><thead><tr><th>Interface</th><th>Status</th><th>Udnyttelse</th><th>Fejl/s</th><th>Discards/s</th></tr></thead><tbody>${rows(b.interfaces, ['iface', 'status', (r) => (r.utilPct != null ? r.utilPct + '%' : '–'), 'errPerSec', 'dropPerSec'], 5)}</tbody></table>
+<h2>Findings</h2><table><thead><tr><th>Tid</th><th>Severity</th><th>Metrik</th><th>Forklaring</th></tr></thead><tbody>${rows(b.findings, [(r) => r.createdAt, 'severity', 'metric', 'explanation'], 4)}</tbody></table>
+<h2>Top talkers</h2><table><thead><tr><th>Kilde</th><th>Destination</th><th>Org/Land</th><th>Bytes</th></tr></thead><tbody>${rows(b.flows && b.flows.topTalkers, ['srcIp', (r) => (r.dstIp || r.extIp || '–'), (r) => (r.internal ? 'intern' : [r.asnName, r.country].filter(Boolean).join(' ')), 'bytes'], 4)}</tbody></table>
+${(b.flows && b.flows.scans && b.flows.scans.length) ? `<h2>Scans / fan-out</h2><table><thead><tr><th>Kilde</th><th>Type</th><th>Porte</th><th>Hosts</th></tr></thead><tbody>${rows(b.flows.scans, ['srcIp', 'kind', 'distinctPorts', 'distinctHosts'], 4)}</tbody></table>` : ''}
+<script>window.onload=function(){setTimeout(function(){window.print();},300);};</script>
+</body></html>`;
+  const w = window.open('', '_blank');
+  if (!w) { toast('Tillad pop-ups for at udskrive', true); return; }
+  w.document.write(html);
+  w.document.close();
+}
+
+// Small modal offering the investigation export formats for one agent.
+function exportInvestigationMenu(id, name) {
+  const card = $('#modal-card');
+  card.replaceChildren(
+    el('h3', {}, `Eksportér undersøgelse — ${esc(name)}`),
+    el('p', { class: 'muted' }, 'Et øjebliksbillede af de seneste 24 timer: sundhed, datakvalitet, interfaces, seneste probes, findings og top-talkers.'),
+    el('div', { class: 'form-actions' },
+      el('button', { onclick: () => downloadAuthed(`/api/export/investigation?agentId=${encodeURIComponent(id)}&format=json`, `undersoegelse-${id}.json`) }, 'JSON'),
+      el('button', { class: 'ghost', onclick: () => downloadAuthed(`/api/export/investigation?agentId=${encodeURIComponent(id)}&format=csv`, `undersoegelse-${id}.csv`) }, 'CSV'),
+      el('button', { class: 'ghost', onclick: () => { closeModal(); printInvestigation(id); } }, 'Udskriv / PDF'),
+      el('button', { class: 'ghost', onclick: closeModal }, 'Luk')));
+  $('#modal').classList.remove('hidden');
+}
+
 // Global search (topbar): agents/hosts/locations + which agents recently saw an
 // IP/port. Results open in a modal; each is a shortcut into the agent/flow views.
 async function globalSearch(q) {
@@ -1891,6 +1947,7 @@ views.agent = async () => {
     el('span', { class: `badge ${agent.status}` }, agent.status),
     agent.location_name ? el('span', { class: 'muted' }, esc(agent.location_name)) : null,
     el('button', { class: 'small ghost', onclick: () => { currentView = 'flows'; render(); } }, 'Flows →'),
+    el('button', { class: 'small ghost', onclick: () => exportInvestigationMenu(id, agent.display_name || agent.hostname) }, 'Eksportér'),
     canWrite() ? el('button', { class: 'small ghost', onclick: () => runTest(agent) }, 'Kør test') : null));
 
   // Health résumé (the headline + the metrics that drove it).

@@ -85,7 +85,7 @@ Mounted in `src/routes/index.js`. User endpoints use JWT + roles
 | `/api/alerting` | alerting.js | admin | channel config + test |
 | `/api/map` | map.js | viewer+ | effective tile/geocoder config |
 | `/api/settings` | settings.js | admin | editable map / **analysis** / **retention** / **flow-categories** |
-| `/api/export` | export.js | viewer+ | CSV/JSON export |
+| `/api/export` | export.js | viewer+ | CSV/JSON export + **investigation bundle** (`/investigation`: per-agent health+probes+interfaces+findings+flows, JSON or event-log CSV; print→PDF client-side) |
 | `/api/flows` | flows.js | viewer+ | **traffic-type categories** (`/categories`) + **conversation explorer** (`/explore`: talkers/ports/protos/series + scan/fan-out) |
 | `/api/probes` | probes.js | viewer+ | **active-probe** results (ping/tcp/dns/traceroute) |
 | `/api/fleet` | fleet.js | viewer+ | **fleet health** rollup (`/health`) + per-agent verdict (`/agent/:id`) |

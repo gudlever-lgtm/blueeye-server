@@ -90,7 +90,7 @@ function createApiRouter({
   router.use('/api/interfaces', createInterfacesRouter({ resultsRepo, agentsRepo }));
   router.use('/api/search', createSearchRouter({ agentsRepo, locationsRepo, flowsRepo }));
   if (settingsService) router.use('/api/settings', createSettingsRouter({ settingsService, featureGate, dispatcher, analysisConfig, retentionConfig }));
-  router.use('/api/export', createExportRouter({ findingStore, flowsRepo, agentsRepo, locationsRepo, resultsRepo, featureGate }));
+  router.use('/api/export', createExportRouter({ findingStore, flowsRepo, agentsRepo, locationsRepo, resultsRepo, probeResultsRepo, featureGate }));
   router.use('/enrollment-codes', createEnrollmentCodesRouter({ enrollmentCodesRepo, locationsRepo }));
 
   // Three routers share the /agents prefix, each with its own auth model:

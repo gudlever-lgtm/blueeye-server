@@ -11,8 +11,9 @@ const silentLogger = { info() {}, warn() {}, error() {} };
 //
 //   const dispatcher = createDispatcher({ config, channels: { email, webhook, syslog } });
 //   await dispatcher.dispatch(finding, group);
-function createDispatcher({ config, channels = {}, licensed = () => true, logger = silentLogger, now = () => Date.now() }) {
+function createDispatcher({ config, channels = {}, licensed = () => true, logger = silentLogger, now = () => Date.now(), silencer = null }) {
   const lastSent = new Map(); // `${hostId}|${metric}|${kind}|${severity}` -> timestamp
+  let silencedBy = typeof silencer === 'function' ? silencer : null;
 
   // Severity is part of the key so a cooldown started by a WARN never suppresses
   // a later CRIT escalation for the same metric — each severity throttles on its
@@ -23,6 +24,17 @@ function createDispatcher({ config, channels = {}, licensed = () => true, logger
     if (!licensed()) return { dispatched: false, reason: 'unlicensed', results: [] };
     if (!config || !config.enabled) return { dispatched: false, reason: 'disabled', results: [] };
     if (!finding) return { dispatched: false, reason: 'no-finding', results: [] };
+
+    // Maintenance/silencing: the finding is still recorded; we just don't notify.
+    // Checked before the throttle so a silenced finding doesn't consume cooldown.
+    if (silencedBy) {
+      let win = null;
+      try { win = await silencedBy(finding); } catch { win = null; }
+      if (win) {
+        logger.info(`alerting: ${finding.metric} ${finding.severity} suppressed by maintenance window ${win.id || win.name || ''}`);
+        return { dispatched: false, reason: 'maintenance', window: win.id || win.name || true, results: [] };
+      }
+    }
 
     const key = throttleKey(finding);
     const last = lastSent.get(key);
@@ -90,7 +102,10 @@ function createDispatcher({ config, channels = {}, licensed = () => true, logger
     }
   }
 
-  return { dispatch, describe, channelNames, test };
+  // Late-bind the silencer (server.js builds it after settingsService exists).
+  function setSilencer(fn) { silencedBy = typeof fn === 'function' ? fn : null; }
+
+  return { dispatch, describe, channelNames, test, setSilencer };
 }
 
 module.exports = { createDispatcher };

@@ -206,7 +206,95 @@ function createFlowsRepository(db) {
     };
   }
 
-  return { insertMany, aggregateExternalDestinations, destinationExists, agentIdsForDestination, selectFlows, asnSeries };
+  // Conversation/flow explorer for ONE agent: top talkers (src↔dst), top
+  // destination ports + protocols, a byte time-series, and port-scan / fan-out
+  // candidates (a source touching many distinct dst ports or hosts). Raw
+  // flow_records only (5-tuple metadata, never payload). Unlike the geo queries
+  // this INCLUDES internal (RFC1918↔RFC1918) conversations — a LAN
+  // troubleshooting tool must see them; they are simply never geolocated. All
+  // user-supplied filters are bound parameters (no interpolation).
+  async function exploreFlows({
+    agentId, from, to, proto = null, port = null, peer = null, direction = null,
+    internal = null, bucketSec = 300, limit = 50, scanPortThreshold = 50, scanHostThreshold = 50,
+  }) {
+    const win = (extra = []) => {
+      const where = ['agent_id = ?', 'ts >= ?', 'ts < ?'];
+      const params = [agentId, from, to];
+      if (proto) { where.push('proto = ?'); params.push(String(proto).toLowerCase()); }
+      if (direction === 'in' || direction === 'out') { where.push('direction = ?'); params.push(direction); }
+      if (internal === true) where.push('internal = 1');
+      else if (internal === false) where.push('internal = 0');
+      for (const e of extra) { where.push(e.clause); params.push(...e.params); }
+      return { clause: where.join(' AND '), params };
+    };
+    // Main filter (talkers/ports/protos/series/totals) adds the conversation
+    // narrowing (port/peer); scan detection deliberately omits those.
+    const extra = [];
+    if (port != null) extra.push({ clause: '(src_port = ? OR dst_port = ?)', params: [port, port] });
+    if (peer) extra.push({ clause: '(src_ip = ? OR dst_ip = ? OR ext_ip = ?)', params: [peer, peer, peer] });
+    const m = win(extra);
+    const s = win(); // scan window: agent+time(+proto/dir/internal) only
+    const lim = Number.isInteger(limit) && limit > 0 && limit <= 200 ? limit : 50;
+    const bsec = Number.isInteger(bucketSec) && bucketSec > 0 ? bucketSec : 300;
+
+    const [talkers, byPort, byProto, series, totals, scans] = await Promise.all([
+      q(`SELECT src_ip, dst_ip, ext_ip, MAX(asn_name) AS asnName, MAX(country) AS country, MAX(internal) AS internal,
+                SUM(bytes) AS bytes, SUM(packets) AS packets, SUM(flows) AS flowCount
+         FROM flow_records WHERE ${m.clause} GROUP BY src_ip, dst_ip, ext_ip ORDER BY bytes DESC LIMIT ?`, [...m.params, lim]),
+      q(`SELECT dst_port AS port, proto, SUM(bytes) AS bytes, SUM(flows) AS flowCount
+         FROM flow_records WHERE ${m.clause} AND dst_port IS NOT NULL GROUP BY dst_port, proto ORDER BY bytes DESC LIMIT 20`, m.params),
+      q(`SELECT proto, SUM(bytes) AS bytes, SUM(flows) AS flowCount
+         FROM flow_records WHERE ${m.clause} GROUP BY proto ORDER BY bytes DESC LIMIT 20`, m.params),
+      q(`SELECT FLOOR(UNIX_TIMESTAMP(ts) / ?) AS b, SUM(bytes) AS bytes, SUM(flows) AS flowCount
+         FROM flow_records WHERE ${m.clause} GROUP BY b ORDER BY b ASC`, [bsec, ...m.params]),
+      q(`SELECT SUM(bytes) AS bytes, SUM(packets) AS packets, SUM(flows) AS flowCount, COUNT(*) AS records
+         FROM flow_records WHERE ${m.clause}`, m.params),
+      q(`SELECT src_ip, COUNT(DISTINCT dst_port) AS ports, COUNT(DISTINCT dst_ip) AS hosts,
+                SUM(bytes) AS bytes, SUM(flows) AS flowCount
+         FROM flow_records WHERE ${s.clause} AND src_ip IS NOT NULL
+         GROUP BY src_ip HAVING ports >= ? OR hosts >= ? ORDER BY ports DESC, hosts DESC LIMIT 20`,
+      [...s.params, scanPortThreshold, scanHostThreshold]),
+    ]);
+
+    const t = totals[0] || {};
+    return {
+      topTalkers: talkers.map((r) => ({
+        srcIp: r.src_ip, dstIp: r.dst_ip, extIp: r.ext_ip, asnName: r.asnName ?? null, country: r.country ?? null,
+        internal: !!r.internal, bytes: numOf(r.bytes), packets: numOf(r.packets), flowCount: numOf(r.flowCount),
+      })),
+      byPort: byPort.map((r) => ({ port: r.port, proto: r.proto, bytes: numOf(r.bytes), flowCount: numOf(r.flowCount) })),
+      byProto: byProto.map((r) => ({ proto: r.proto, bytes: numOf(r.bytes), flowCount: numOf(r.flowCount) })),
+      series: series.map((r) => ({ at: new Date(numOf(r.b) * bsec * 1000).toISOString(), bytes: numOf(r.bytes), flowCount: numOf(r.flowCount) })),
+      scans: scans.map((r) => ({
+        srcIp: r.src_ip, distinctPorts: numOf(r.ports), distinctHosts: numOf(r.hosts),
+        bytes: numOf(r.bytes), flowCount: numOf(r.flowCount),
+        kind: numOf(r.ports) >= scanPortThreshold ? 'port-scan' : 'fan-out',
+      })),
+      totals: { bytes: numOf(t.bytes), packets: numOf(t.packets), flowCount: numOf(t.flowCount), records: numOf(t.records) },
+    };
+  }
+
+  // Global-search helpers: which agents have recently seen a given IP / port?
+  // Raw flow_records only (the rollup keeps no per-IP/port detail), windowed.
+  async function agentIdsForIp({ ip, since, until }) {
+    const rows = await q(
+      `SELECT DISTINCT agent_id FROM flow_records
+       WHERE (src_ip = ? OR dst_ip = ? OR ext_ip = ?) AND ts >= ? AND ts < ? LIMIT 200`,
+      [ip, ip, ip, since, until]
+    );
+    return [...new Set(rows.map((r) => r.agent_id))];
+  }
+
+  async function agentIdsForPort({ port, since, until }) {
+    const rows = await q(
+      `SELECT DISTINCT agent_id FROM flow_records
+       WHERE (src_port = ? OR dst_port = ?) AND ts >= ? AND ts < ? LIMIT 200`,
+      [port, port, since, until]
+    );
+    return [...new Set(rows.map((r) => r.agent_id))];
+  }
+
+  return { insertMany, aggregateExternalDestinations, destinationExists, agentIdsForDestination, selectFlows, exploreFlows, agentIdsForIp, agentIdsForPort, asnSeries };
 }
 
 module.exports = { createFlowsRepository, toRow };

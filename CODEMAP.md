@@ -85,10 +85,12 @@ Mounted in `src/routes/index.js`. User endpoints use JWT + roles
 | `/api/alerting` | alerting.js | admin | channel config + test |
 | `/api/map` | map.js | viewer+ | effective tile/geocoder config |
 | `/api/settings` | settings.js | admin | editable map / **analysis** / **retention** / **flow-categories** |
-| `/api/export` | export.js | viewer+ | CSV/JSON export |
-| `/api/flows` | flows.js | viewer+ | **traffic-type categories** time series |
+| `/api/export` | export.js | viewer+ | CSV/JSON export + **investigation bundle** (`/investigation`: per-agent health+probes+interfaces+findings+flows, JSON or event-log CSV; print→PDF client-side) |
+| `/api/flows` | flows.js | viewer+ | **traffic-type categories** (`/categories`) + **conversation explorer** (`/explore`: talkers/ports/protos/series + scan/fan-out) |
 | `/api/probes` | probes.js | viewer+ | **active-probe** results (ping/tcp/dns/traceroute) |
+| `/api/fleet` | fleet.js | viewer+ | **fleet health** rollup (`/health`) + per-agent verdict (`/agent/:id`) |
 | `/api/interfaces` | interfaces.js | viewer+ | **interface health** (util/errors/discards/link) |
+| `/api/search` | search.js | viewer+ | **global search** (agents/hosts/locations + IP/port → agents) |
 
 ## Data model (MySQL)
 
@@ -103,18 +105,24 @@ Later migrations add:
 | 011 / 012 | `flow_rollup` / `metric_rollup` | retention down-sampling |
 | 013 | `app_settings` | runtime-editable settings (key/JSON) |
 | 014 | `probe_results` | active probes |
+| 015 | (index only) | `idx_probe_ts` for the fleet-wide probe scan |
 
-Interface health and traffic-type categories add **no** tables — they derive from the
-existing `results.payload.traffic` (and `flow_records.asn` for org categories).
+Interface health, traffic-type categories and **fleet health** add **no** tables — they
+derive from the existing `results.payload.traffic` (and `flow_records.asn` for org
+categories); fleet health is computed in `src/health/probeHealth.js` from `probe_results`.
 
 ## Dashboard (`public/app.js`)
 
 A single vanilla-JS SPA. Key building blocks:
 - `el(tag, attrs, ...kids)` — DOM helper. `api(path, opts)` — fetch + bearer + 401 handling.
-- `views.<tab>` — async function per tab returning a node (`overview`, `map`, `geo`,
-  `agents`, `interfaces`, `probes`, `findings`, `locations`, `enrollment`, `settings`).
+- `views.<tab>` — async function per tab returning a node (`fleet` (landing),
+  `overview`, `map`, `geo`, `agents`, `interfaces`, `probes`, `flows`, `findings`,
+  `locations`, `enrollment`, `settings`) plus `agent` (the combined per-agent drill-down
+  page, no tab — reached via `openAgent(id)`).
 - `render()` — mounts the current view + its `hero()`; stops per-view pollers
-  (`stopOverview`/`stopProbes`/`stopIfaces`/`stopGeo`) when leaving.
+  (`stopOverview`/`stopProbes`/`stopIfaces`/`stopFleet`/`stopAgent`/`stopGeo`) when leaving.
+- Shared renderers `interfaceTable()` / `probeLatestTable()` / `probeDetail()` back both
+  the standalone tabs and the combined agent page.
 - `PAGE_INFO` — per-page hero line + "Mere info" drawer text.
 - Charts are hand-rolled SVG: `multiChart` (live, area + time ticks + brush) and
   `historyChart` (time-axis). `usageBar()` for utilisation bars.
@@ -128,11 +136,15 @@ A single vanilla-JS SPA. Key building blocks:
 | A DB table/column | new `migrations/NNN_*.sql` + repository in `src/repositories/` |
 | Anomaly thresholds / detection | `src/analysis/detector.js`, `config.js` (editable via Indstillinger→Analyse) |
 | Alert channels | `src/analysis/alerting/channels/*` + `dispatcher.js` |
+| Maintenance windows / silencing | `src/analysis/alerting/maintenance.js` (`createSilencer`) + dispatcher hook; windows in `settingsService` (`maintenance` key), route `/api/settings/maintenance` |
 | Data retention | `src/analysis/retention/*` (editable via Indstillinger→Retention) |
 | Geo/ASN enrichment | `src/geo/enricher.js`, `provider.js`; flows in `flowsRepository.js` |
 | Traffic-type categories | `src/flows/categories.js` (editable via Indstillinger→Trafiktyper) |
+| Flow/conversation explorer | `flowsRepository.exploreFlows` + `src/routes/flows.js` (`/explore`); UI `views.flows` |
 | Active probes (server) | `src/routes/probes.js`, `probeResultsRepository.js`, `validation/probeValidation.js` |
-| Interface health | `src/routes/interfaces.js` (`computeInterfaceHealth`) — agent side in blueeye-agent |
+| Fleet health (overview + verdicts) | `src/health/probeHealth.js` (`computeAgentHealth`/`mergeHealth`/`computeFleet`, median+MAD — folds in interface health), `src/routes/fleet.js`; UI `views.fleet`/`views.agent` |
+| Interface health | `src/health/interfaceHealth.js` (`computeInterfaceHealth`/`interfaceHealthSummary`); HTTP in `src/routes/interfaces.js` — agent side in blueeye-agent |
+| Agent data-quality (drops/skew/version) | `src/health/dataQuality.js` (`computeDataQuality`); surfaced via `/api/fleet/health` + `/api/fleet/agent/:id` — all signals already sent by the agent |
 | A dashboard tab/view | `public/index.html` (button) + `views.<x>` in `public/app.js` + `PAGE_INFO` |
 | License / feature gating | `src/license/*` (`features.js` = fail-closed gate) |
 

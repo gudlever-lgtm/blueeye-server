@@ -33,6 +33,7 @@ const { createGeoEnricher } = require('./geo/enricher');
 const { createFlowPipeline } = require('./geo/flowPipeline');
 const { loadAlertingConfig } = require('./analysis/alerting/config');
 const { createDispatcher } = require('./analysis/alerting/dispatcher');
+const { createSilencer } = require('./analysis/alerting/maintenance');
 const { createEmailChannel, createSmtpTransport } = require('./analysis/alerting/channels/email');
 const { createWebhookChannel } = require('./analysis/alerting/channels/webhook');
 const { createSyslogChannel } = require('./analysis/alerting/channels/syslog');
@@ -114,6 +115,9 @@ function start() {
     licensed: () => featureGate.isFeatureEnabled('alerting'),
     logger: console,
   });
+  // Maintenance windows suppress notifications (findings still record). The
+  // silencer reads windows from settingsService, which is built further down, so
+  // it's bound after that. (createSilencer is in alerting/maintenance.js.)
 
   const analysisPipeline = createAnalysisPipeline({
     detector,
@@ -159,6 +163,11 @@ function start() {
   // Re-apply persisted analysis/retention edits onto the live config so they
   // survive restarts. Best-effort + fire-and-forget (consumers read lazily).
   settingsService.applyStoredOverrides().catch((err) => console.warn(`settings: could not apply stored overrides (${err.message})`));
+  // Now that settingsService exists, give the dispatcher its maintenance silencer.
+  dispatcher.setSilencer(createSilencer({
+    getWindows: async () => (await settingsService.getMaintenance()).windows,
+    getAgentLocationId: async (agentId) => { const a = await agentsRepo.findById(agentId); return a ? a.location_id : null; },
+  }));
   const retentionScheduler = createRetentionScheduler({
     rollup: createRollup({ repo: retentionRepo, config: retentionConfig, logger: console }),
     purge: createPurge({ repo: retentionRepo, config: retentionConfig }),

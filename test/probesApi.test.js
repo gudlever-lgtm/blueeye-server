@@ -1,0 +1,130 @@
+'use strict';
+
+process.env.NODE_ENV = 'test';
+process.env.JWT_SECRET = 'test-secret-do-not-use-in-prod';
+
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const request = require('supertest');
+
+const {
+  makeApp, makeAgentTokensRepo, makeAgentsRepo, makeProbeResultsRepo, makeAgentCommander, authHeader, throwingAsync,
+} = require('../test-support/fakes');
+const { validateProbeSpec, validateProbeResults } = require('../src/validation/probeValidation');
+const { toRow } = require('../src/repositories/probeResultsRepository');
+
+const agentToken = () => makeAgentTokensRepo({ findActiveByHash: async () => ({ id: 1, agent_id: 9 }) });
+const withAgent = (overrides = {}) => makeApp({ agentsRepo: makeAgentsRepo({ findById: async (id) => ({ id, hostname: 'h1' }) }), ...overrides });
+
+// ---- ingest: POST /agents/probe-results (agent token) ---------------------
+
+test('POST /agents/probe-results without a token is 401', async () => {
+  const res = await request(makeApp()).post('/agents/probe-results').send({ results: [{ type: 'ping', target: 'x', ok: true }] });
+  assert.equal(res.status, 401);
+});
+
+test('POST /agents/probe-results stores results (201)', async () => {
+  let captured;
+  const probeResultsRepo = makeProbeResultsRepo({ createMany: async (agentId, results) => { captured = { agentId, results }; return results.length; } });
+  const res = await request(makeApp({ agentTokensRepo: agentToken(), probeResultsRepo }))
+    .post('/agents/probe-results').set('Authorization', 'Bearer t')
+    .send({ results: [{ type: 'ping', target: '1.1.1.1', ok: true, rttMs: 12.3, lossPct: 0 }] });
+  assert.equal(res.status, 201);
+  assert.equal(res.body.inserted, 1);
+  assert.equal(captured.agentId, 9);
+  assert.equal(captured.results[0].type, 'ping');
+});
+
+test('POST /agents/probe-results rejects an invalid type (400)', async () => {
+  const res = await request(makeApp({ agentTokensRepo: agentToken() }))
+    .post('/agents/probe-results').set('Authorization', 'Bearer t')
+    .send({ results: [{ type: 'bogus', target: 'x' }] });
+  assert.equal(res.status, 400);
+});
+
+// ---- trigger: POST /agents/:id/probe (operator) ---------------------------
+
+test('POST /agents/:id/probe delivers a run-probe command (202)', async () => {
+  let sent;
+  const agentCommander = makeAgentCommander({ sendCommand: (id, cmd) => { sent = { id, cmd }; return 1; } });
+  const res = await request(withAgent({ agentCommander }))
+    .post('/agents/9/probe').set('Authorization', authHeader('operator'))
+    .send({ type: 'tcp', host: 'example.com', port: 443 });
+  assert.equal(res.status, 202);
+  assert.equal(sent.cmd.name, 'run-probe');
+  assert.equal(sent.cmd.probe.type, 'tcp');
+  assert.equal(sent.cmd.probe.port, 443);
+});
+
+test('POST /agents/:id/probe is 409 when the agent is not connected', async () => {
+  const agentCommander = makeAgentCommander({ sendCommand: () => 0 });
+  const res = await request(withAgent({ agentCommander }))
+    .post('/agents/9/probe').set('Authorization', authHeader('operator'))
+    .send({ type: 'ping', host: '1.1.1.1' });
+  assert.equal(res.status, 409);
+});
+
+test('POST /agents/:id/probe validates the spec (400) and is operator+ (403 viewer)', async () => {
+  // tcp without a port.
+  const bad = await request(withAgent()).post('/agents/9/probe').set('Authorization', authHeader('operator')).send({ type: 'tcp', host: 'x' });
+  assert.equal(bad.status, 400);
+  const forbidden = await request(withAgent()).post('/agents/9/probe').set('Authorization', authHeader('viewer')).send({ type: 'ping', host: 'x' });
+  assert.equal(forbidden.status, 403);
+});
+
+test('POST /agents/:id/probe is 404 for an unknown agent', async () => {
+  const res = await request(makeApp()).post('/agents/9/probe').set('Authorization', authHeader('operator')).send({ type: 'ping', host: '1.1.1.1' });
+  assert.equal(res.status, 404);
+});
+
+// ---- query: GET /api/probes ------------------------------------------------
+
+test('GET /api/probes returns the agent time series (200)', async () => {
+  const probeResultsRepo = makeProbeResultsRepo({ findByAgent: async ({ agentId }) => [{ id: 1, agentId, type: 'ping', target: '1.1.1.1', ok: true, rttMs: 10 }] });
+  const res = await request(withAgent({ probeResultsRepo })).get('/api/probes?agentId=9&type=ping').set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 200);
+  assert.equal(res.body.results.length, 1);
+  assert.equal(res.body.results[0].type, 'ping');
+});
+
+test('GET /api/probes requires agentId (400) and a real agent (404)', async () => {
+  assert.equal((await request(withAgent()).get('/api/probes').set('Authorization', authHeader('viewer'))).status, 400);
+  assert.equal((await request(makeApp()).get('/api/probes?agentId=9').set('Authorization', authHeader('viewer'))).status, 404);
+});
+
+test('GET /api/probes/latest returns the latest per target (200)', async () => {
+  const probeResultsRepo = makeProbeResultsRepo({ latestByAgent: async () => [{ id: 2, type: 'tcp', target: 'x:443', ok: true }] });
+  const res = await request(withAgent({ probeResultsRepo })).get('/api/probes/latest?agentId=9').set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 200);
+  assert.equal(res.body.results[0].target, 'x:443');
+});
+
+test('GET /api/probes surfaces a repo failure as 500', async () => {
+  const probeResultsRepo = makeProbeResultsRepo({ findByAgent: throwingAsync('db down') });
+  const res = await request(withAgent({ probeResultsRepo })).get('/api/probes?agentId=9').set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 500);
+});
+
+// ---- validation + repo units ----------------------------------------------
+
+test('validateProbeSpec requires a port for tcp and rejects flag-like hosts', () => {
+  assert.ok(validateProbeSpec({ type: 'tcp', host: 'x' }).errors);
+  assert.ok(validateProbeSpec({ type: 'ping', host: '-rf' }).errors); // option-injection guard
+  assert.deepEqual(validateProbeSpec({ type: 'ping', host: '1.1.1.1' }).value, { type: 'ping', host: '1.1.1.1' });
+});
+
+test('validateProbeResults caps and normalises rows', () => {
+  const { value, errors } = validateProbeResults({ results: [{ type: 'PING', target: '1.1.1.1', ok: true, rttMs: '12.5', hops: [{ hop: 1, ip: '10.0.0.1', rttMs: 1 }] }] });
+  assert.equal(errors, undefined);
+  assert.equal(value.results[0].type, 'ping');
+  assert.equal(value.results[0].rttMs, 12.5);
+  assert.equal(value.results[0].hops[0].ip, '10.0.0.1');
+});
+
+test('toRow serialises hops to JSON and maps fields positionally', () => {
+  const row = toRow(9, { ts: new Date('2026-06-01T00:00:00Z'), type: 'traceroute', target: 'x', ok: true, rttMs: 5, hops: [{ hop: 1 }] });
+  assert.equal(row[0], 9);
+  assert.equal(row[2], 'traceroute');
+  assert.equal(row[4], 1); // ok -> 1
+  assert.equal(typeof row[10], 'string'); // hops JSON
+});

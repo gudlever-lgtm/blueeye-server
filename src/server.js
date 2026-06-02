@@ -10,6 +10,7 @@ const { createEnrollmentCodesRepository } = require('./repositories/enrollmentCo
 const { createEnrollmentStore } = require('./services/enrollmentStore');
 const { createAgentTokensRepository } = require('./repositories/agentTokensRepository');
 const { createResultsRepository } = require('./repositories/resultsRepository');
+const { createProbeResultsRepository } = require('./repositories/probeResultsRepository');
 const { attachAgentWebSocket } = require('./ws/agentSocket');
 const { attachDashboardWebSocket } = require('./ws/dashboardSocket');
 const { verifyToken } = require('./auth/jwt');
@@ -62,6 +63,7 @@ function start() {
   const enrollmentStore = createEnrollmentStore(db);
   const agentTokensRepo = createAgentTokensRepository(db);
   const resultsRepo = createResultsRepository(db);
+  const probeResultsRepo = createProbeResultsRepository(db);
 
   // Client-side license validation against blueeye-licens. getAgentCount reads
   // the live WebSocket connection count (agentWs is assigned just below; the
@@ -173,6 +175,7 @@ function start() {
     enrollmentStore,
     agentTokensRepo,
     resultsRepo,
+    probeResultsRepo,
     agentCommander,
     systemInfo,
     licenseManager,

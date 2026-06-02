@@ -4,6 +4,7 @@ const express = require('express');
 const { asyncHandler } = require('../middleware/asyncHandler');
 const { validateResults } = require('../validation/resultsValidation');
 const { validateCapabilities } = require('../validation/agentValidation');
+const { validateProbeResults } = require('../validation/probeValidation');
 
 // Endpoints agents call themselves, authenticated with their opaque token
 // (NOT a user JWT). `agentAuth` is the agent-token middleware. The agent id is
@@ -12,8 +13,24 @@ const { validateCapabilities } = require('../validation/agentValidation');
 //
 // Paths use the `/me/...` prefix so they don't collide with the user-JWT agents
 // router's `/:id` routes mounted under the same /agents path.
-function createAgentReportsRouter({ agentAuth, resultsRepo, agentsRepo, analysisPipeline = null, flowPipeline = null }) {
+function createAgentReportsRouter({ agentAuth, resultsRepo, agentsRepo, analysisPipeline = null, flowPipeline = null, probeResultsRepo = null }) {
   const router = express.Router();
+
+  // POST /agents/probe-results { results: [...] } — stores active-probe results
+  // (ping/tcp/dns/traceroute) for the agent identified by the token.
+  router.post(
+    '/probe-results',
+    agentAuth,
+    asyncHandler(async (req, res) => {
+      if (!probeResultsRepo) return res.status(404).json({ error: 'Probes not enabled' });
+      const { value, errors } = validateProbeResults(req.body);
+      if (errors) {
+        return res.status(400).json({ error: 'Validation failed', details: errors });
+      }
+      const inserted = await probeResultsRepo.createMany(req.agent.agentId, value.results);
+      res.status(201).json({ inserted });
+    })
+  );
 
   // POST /agents/results { results: [...] } — stores results for the agent
   // identified by the token.

@@ -645,6 +645,15 @@ function multiChart(seriesList, { height = 320, xLabels = null, onBrush = null, 
     label.textContent = `${fmtBytes(max * frac)}/s`;
     svg.append(label);
   }
+  // Optional x (time) gridlines at each non-empty tick — drawn under the data.
+  if (Array.isArray(xLabels) && xLabels.length > 1) {
+    xLabels.forEach((text, i) => {
+      if (!text) return;
+      const frac = i / (xLabels.length - 1);
+      const xx = pad.l + frac * (W - pad.l - pad.r);
+      svg.append(mk('line', { class: 'grid', x1: xx, y1: pad.t, x2: xx, y2: H - pad.b }));
+    });
+  }
   // Optional area fill under each line (drawn first, so lines sit on top).
   if (area) {
     for (const s of seriesList) {
@@ -689,6 +698,10 @@ const histState = { agentId: '', metrics: new Set(['rx', 'tx']) };
 function fmtNum(v) { return v >= 1024 ? fmtBytes(v) : String(Math.round(v * 10) / 10); }
 function fmtTimeShort(ms) {
   return new Date(ms).toLocaleString('da-DK', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+}
+// Clock with seconds — for the live overview's running time ticks.
+function fmtClock(ms) {
+  return new Date(ms).toLocaleTimeString('da-DK', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
 
 // Time-axis line chart with a drag-to-zoom brush. `series`: [{id,label,color,
@@ -1316,8 +1329,18 @@ views.overview = async () => {
     }));
     const legend = el('div', { class: 'legend' }, ...seriesList.map((s) =>
       el('span', {}, el('span', { class: 'dot', style: `background:${s.color}` }), s.label)));
+    // Running clock ticks (HH:MM:SS) from the actual point timestamps, so the
+    // x-axis shows the live timeframe rather than a static "~3 min siden / nu".
+    const ref = seriesList.find((s) => s.points.length >= 2);
+    const TICKS = 5;
+    let xLabels = ['~3 min siden', '', 'nu'];
+    if (ref) {
+      const pts = ref.points;
+      xLabels = Array.from({ length: TICKS }, (_, i) =>
+        fmtClock(pts[Math.round((i / (TICKS - 1)) * (pts.length - 1))].t));
+    }
     chartHost.replaceChildren(
-      seriesList.length ? multiChart(seriesList, { height: bigView ? 560 : 300, area: true, xLabels: ['~3 min siden', '', 'nu'], onBrush: (f0, f1) => { if (f0 === null) clearMarked(); else renderMarked(f0, f1); } }) : el('div', { class: 'empty' }, 'Vælg serier i værktøjslinjen ↑'),
+      seriesList.length ? multiChart(seriesList, { height: bigView ? 560 : 300, area: true, xLabels, onBrush: (f0, f1) => { if (f0 === null) clearMarked(); else renderMarked(f0, f1); } }) : el('div', { class: 'empty' }, 'Vælg serier i værktøjslinjen ↑'),
       legend);
     syncChips();
   }

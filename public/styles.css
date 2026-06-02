@@ -236,6 +236,12 @@ main#view:has(.overview) { max-width: 1180px; }
 .agent-health .ah-k { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .03em; }
 .agent-health .ah-v { font-weight: 600; }
 
+/* Flow explorer: ports/protocols side by side + a highlighted scan panel. */
+.flows-tables { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 720px) { .flows-tables { grid-template-columns: 1fr; } }
+.flows-explorer .scan-sec { border-color: var(--bad); }
+.flows-explorer .scan-sec > summary { color: var(--bad); font-weight: 600; }
+
 /* 4) Slim storage line; the full breakdown folds open below. */
 .storage-fold { margin-top: 10px; }
 .storage-fold > summary.storage-line { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 12px; flex-wrap: wrap;

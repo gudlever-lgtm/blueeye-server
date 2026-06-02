@@ -86,7 +86,7 @@ Mounted in `src/routes/index.js`. User endpoints use JWT + roles
 | `/api/map` | map.js | viewer+ | effective tile/geocoder config |
 | `/api/settings` | settings.js | admin | editable map / **analysis** / **retention** / **flow-categories** |
 | `/api/export` | export.js | viewer+ | CSV/JSON export |
-| `/api/flows` | flows.js | viewer+ | **traffic-type categories** time series |
+| `/api/flows` | flows.js | viewer+ | **traffic-type categories** (`/categories`) + **conversation explorer** (`/explore`: talkers/ports/protos/series + scan/fan-out) |
 | `/api/probes` | probes.js | viewer+ | **active-probe** results (ping/tcp/dns/traceroute) |
 | `/api/fleet` | fleet.js | viewer+ | **fleet health** rollup (`/health`) + per-agent verdict (`/agent/:id`) |
 | `/api/interfaces` | interfaces.js | viewer+ | **interface health** (util/errors/discards/link) |
@@ -115,9 +115,9 @@ categories); fleet health is computed in `src/health/probeHealth.js` from `probe
 A single vanilla-JS SPA. Key building blocks:
 - `el(tag, attrs, ...kids)` — DOM helper. `api(path, opts)` — fetch + bearer + 401 handling.
 - `views.<tab>` — async function per tab returning a node (`fleet` (landing),
-  `overview`, `map`, `geo`, `agents`, `interfaces`, `probes`, `findings`, `locations`,
-  `enrollment`, `settings`) plus `agent` (the combined per-agent drill-down page, no tab —
-  reached via `openAgent(id)`).
+  `overview`, `map`, `geo`, `agents`, `interfaces`, `probes`, `flows`, `findings`,
+  `locations`, `enrollment`, `settings`) plus `agent` (the combined per-agent drill-down
+  page, no tab — reached via `openAgent(id)`).
 - `render()` — mounts the current view + its `hero()`; stops per-view pollers
   (`stopOverview`/`stopProbes`/`stopIfaces`/`stopFleet`/`stopAgent`/`stopGeo`) when leaving.
 - Shared renderers `interfaceTable()` / `probeLatestTable()` / `probeDetail()` back both
@@ -138,6 +138,7 @@ A single vanilla-JS SPA. Key building blocks:
 | Data retention | `src/analysis/retention/*` (editable via Indstillinger→Retention) |
 | Geo/ASN enrichment | `src/geo/enricher.js`, `provider.js`; flows in `flowsRepository.js` |
 | Traffic-type categories | `src/flows/categories.js` (editable via Indstillinger→Trafiktyper) |
+| Flow/conversation explorer | `flowsRepository.exploreFlows` + `src/routes/flows.js` (`/explore`); UI `views.flows` |
 | Active probes (server) | `src/routes/probes.js`, `probeResultsRepository.js`, `validation/probeValidation.js` |
 | Fleet health (overview + verdicts) | `src/health/probeHealth.js` (`computeAgentHealth`/`mergeHealth`/`computeFleet`, median+MAD — folds in interface health), `src/routes/fleet.js`; UI `views.fleet`/`views.agent` |
 | Interface health | `src/health/interfaceHealth.js` (`computeInterfaceHealth`/`interfaceHealthSummary`); HTTP in `src/routes/interfaces.js` — agent side in blueeye-agent |

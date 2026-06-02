@@ -217,6 +217,7 @@ function makeFlowsRepo(overrides = {}) {
     destinationExists: overrides.destinationExists || (async () => false),
     agentIdsForDestination: overrides.agentIdsForDestination || (async () => []),
     selectFlows: overrides.selectFlows || (async () => ({ byAsn: [], byDirection: [], byProto: [], series: [], totals: { bytes: 0, flowCount: 0, records: 0 } })),
+    exploreFlows: overrides.exploreFlows || (async () => ({ topTalkers: [], byPort: [], byProto: [], series: [], scans: [], totals: { bytes: 0, packets: 0, flowCount: 0, records: 0 } })),
     asnSeries: overrides.asnSeries || (async () => []),
   };
 }

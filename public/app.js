@@ -306,6 +306,24 @@ const PAGE_INFO = {
       el('p', { class: 'muted' }, 'Kun metadata: mål og timings — aldrig pakke-indhold.'),
     ],
   },
+  flows: {
+    hero: 'Undersøg konkrete samtaler (flows): hvem taler med hvem, på hvilke porte — og hvem scanner.',
+    title: 'Flows — samtaler',
+    body: () => [
+      el('p', {}, 'Hvor Trafik viser mængder og Geo viser destinationer på kort, lader Flows dig grave ned i de enkelte samtaler (5-tuple-metadata fra NetFlow/sFlow) for én agent.'),
+      el('h4', {}, 'Filtre'),
+      el('ul', {},
+        el('li', {}, 'Peer: vis kun samtaler, hvor en bestemt IP er kilde eller destination (klik en talker for at sætte den).'),
+        el('li', {}, 'Port / Proto: indsnævr til fx 443 eller tcp/udp.'),
+        el('li', {}, 'Retning + omfang: ind/ud, og intern (LAN↔LAN) vs. ekstern.')),
+      el('h4', {}, 'Hvad du ser'),
+      el('ul', {},
+        el('li', {}, 'Top talkers: de største samtaler (kilde→destination) efter bytes.'),
+        el('li', {}, 'Top porte / protokoller + en bytes-over-tid-graf for vinduet.'),
+        el('li', {}, 'Scans / fan-out: kilder, der rammer mange forskellige porte (port-scan) eller mange hosts (fan-out) — et hurtigt fingerpeg om scanning eller en løbsk klient.')),
+      el('p', { class: 'muted' }, 'Kun metadata (5-tuple + bytes/flows), aldrig pakke-indhold. Interne RFC1918-adresser vises (de geolokaliseres aldrig). Kræver NetFlow/sFlow-kilde + at geo-pipelinen er aktiv.'),
+    ],
+  },
   geo: {
     hero: 'Geografisk overblik: interne sites og eksterne trafik-destinationer (land/ASN).',
     title: 'Geo-kort',
@@ -1812,6 +1830,7 @@ views.agent = async () => {
     el('h2', {}, esc(agent.display_name || agent.hostname)),
     el('span', { class: `badge ${agent.status}` }, agent.status),
     agent.location_name ? el('span', { class: 'muted' }, esc(agent.location_name)) : null,
+    el('button', { class: 'small ghost', onclick: () => { currentView = 'flows'; render(); } }, 'Flows →'),
     canWrite() ? el('button', { class: 'small ghost', onclick: () => runTest(agent) }, 'Kør test') : null));
 
   // Health résumé (the headline + the metrics that drove it).
@@ -1915,6 +1934,108 @@ views.agent = async () => {
     if (currentView !== 'agent') { stopAgent(); return; }
     if (!modalOpen()) refreshAll();
   }, 7000);
+  return root;
+};
+
+// Flow / conversation explorer: query NetFlow/sFlow conversations for an agent
+// with filters, see top talkers + ports/protocols + a byte series, and surface
+// port-scan / fan-out sources. Metadata only; internal (LAN) conversations are
+// shown — they are simply never geolocated.
+views.flows = async () => {
+  const root = el('div', { class: 'flows-explorer' });
+  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Flows'),
+    el('span', { class: 'muted' }, 'Samtaler · top talkers · porte · scan / fan-out')));
+
+  const agents = await api('/agents').catch(() => []);
+  if (!agents.length) { root.append(el('div', { class: 'empty' }, 'Ingen agenter endnu.')); return root; }
+
+  const agentSel = el('select', {}, ...agents.map((a) => el('option', { value: String(a.id) }, a.display_name || a.hostname)));
+  if (selectedAgentId != null && agents.some((a) => String(a.id) === String(selectedAgentId))) agentSel.value = String(selectedAgentId);
+  const peerInput = el('input', { type: 'text', placeholder: 'IP (src/dst)' });
+  const portInput = el('input', { type: 'number', min: '1', max: '65535', placeholder: 'port' });
+  const protoInput = el('input', { type: 'text', placeholder: 'tcp/udp' });
+  const dirSel = el('select', {}, el('option', { value: '' }, 'Alle retninger'), el('option', { value: 'out' }, 'Udgående'), el('option', { value: 'in' }, 'Indgående'));
+  const scopeSel = el('select', {}, el('option', { value: '' }, 'Intern + ekstern'), el('option', { value: 'external' }, 'Kun ekstern'), el('option', { value: 'internal' }, 'Kun intern'));
+  const winSel = el('select', {}, el('option', { value: '1' }, 'Sidste 1 t'), el('option', { value: '6' }, 'Sidste 6 t'), el('option', { value: '24' }, 'Sidste 24 t'));
+  winSel.value = '6';
+  const runBtn = el('button', { class: 'small' }, 'Vis');
+  const status = el('span', { class: 'muted' });
+
+  root.append(el('div', { class: 'history-controls' },
+    el('label', { class: 'inline muted' }, 'Agent ', agentSel),
+    el('label', { class: 'inline muted' }, 'Peer ', peerInput),
+    el('label', { class: 'inline muted' }, 'Port ', portInput),
+    el('label', { class: 'inline muted' }, 'Proto ', protoInput),
+    dirSel, scopeSel, winSel, runBtn, status));
+
+  const host = el('div', {});
+  root.append(host);
+
+  function qs() {
+    const p = new URLSearchParams();
+    p.set('agentId', agentSel.value);
+    const hours = Number(winSel.value) || 6;
+    p.set('from', new Date(Date.now() - hours * 3600000).toISOString());
+    if (peerInput.value.trim()) p.set('peer', peerInput.value.trim());
+    if (portInput.value.trim()) p.set('port', portInput.value.trim());
+    if (protoInput.value.trim()) p.set('proto', protoInput.value.trim());
+    if (dirSel.value) p.set('direction', dirSel.value);
+    if (scopeSel.value) p.set('internal', scopeSel.value);
+    return p.toString();
+  }
+  const talkerPeer = (t) => (t.internal ? t.dstIp : (t.extIp || t.dstIp));
+
+  async function refresh() {
+    status.textContent = 'Henter…';
+    let data;
+    try { data = await api(`/api/flows/explore?${qs()}`); } catch (e) { host.replaceChildren(el('div', { class: 'error' }, e.message)); status.textContent = ''; return; }
+    status.textContent = `${fmtBytes(data.totals.bytes)} · ${data.totals.flowCount} flows · ${data.totals.records} poster`;
+    const kids = [];
+
+    // Scans/fan-out first — it's the security-relevant signal.
+    if (data.scans && data.scans.length) {
+      kids.push(el('details', { class: 'sec scan-sec', open: true }, el('summary', {}, '⚠ Mulige scans / fan-out ', el('span', { class: 'muted' }, '· én kilde mod mange porte/hosts')),
+        el('table', {}, el('thead', {}, el('tr', {}, ...['Kilde', 'Type', 'Porte', 'Hosts', 'Bytes', 'Flows'].map((h) => el('th', {}, h)))),
+          el('tbody', {}, ...data.scans.map((s) => el('tr', {},
+            el('td', {}, esc(s.srcIp)),
+            el('td', {}, el('span', { class: `badge ${s.kind === 'port-scan' ? 'offline' : 'warn'}` }, s.kind === 'port-scan' ? 'PORT-SCAN' : 'FAN-OUT')),
+            el('td', { class: 'num bad-text' }, String(s.distinctPorts)),
+            el('td', { class: 'num' }, String(s.distinctHosts)),
+            el('td', { class: 'num' }, fmtBytes(s.bytes)),
+            el('td', { class: 'num muted' }, String(s.flowCount))))))));
+    }
+
+    if (data.series && data.series.length >= 2) {
+      const pts = data.series.map((s) => ({ t: new Date(s.at).getTime(), y: s.bytes }));
+      kids.push(el('div', { class: 'overview-chart' }, historyChart([{ id: 'b', label: 'Bytes', color: '#06b6d4', points: pts }], { fromMs: pts[0].t, toMs: pts[pts.length - 1].t })));
+    }
+
+    kids.push(el('h4', {}, 'Top talkers'));
+    if (!data.topTalkers.length) kids.push(el('div', { class: 'empty' }, 'Ingen flows i vinduet — kræver NetFlow/sFlow + geo-pipeline.'));
+    else kids.push(el('table', {},
+      el('thead', {}, el('tr', {}, ...['Kilde', 'Destination', 'Org/Land', 'Bytes', 'Pakker', 'Flows'].map((h) => el('th', {}, h)))),
+      el('tbody', {}, ...data.topTalkers.map((t) => el('tr', { class: 'fleet-row', onclick: () => { peerInput.value = talkerPeer(t) || ''; refresh(); } },
+        el('td', {}, esc(t.srcIp || '–')),
+        el('td', {}, esc(t.dstIp || t.extIp || '–')),
+        el('td', {}, t.internal ? el('span', { class: 'badge grace' }, 'intern') : el('span', { class: 'muted' }, [t.asnName, t.country].filter(Boolean).join(' · ') || '–')),
+        el('td', { class: 'num' }, fmtBytes(t.bytes)),
+        el('td', { class: 'num muted' }, String(t.packets)),
+        el('td', { class: 'num muted' }, String(t.flowCount)))))));
+
+    const portTable = el('table', {}, el('thead', {}, el('tr', {}, ...['Port', 'Proto', 'Bytes', 'Flows'].map((h) => el('th', {}, h)))),
+      el('tbody', {}, ...(data.byPort.length ? data.byPort.map((p) => el('tr', {}, el('td', {}, String(p.port)), el('td', { class: 'muted' }, p.proto || '–'), el('td', { class: 'num' }, fmtBytes(p.bytes)), el('td', { class: 'num muted' }, String(p.flowCount)))) : [el('tr', {}, el('td', { class: 'muted' }, '–'))])));
+    const protoTable = el('table', {}, el('thead', {}, el('tr', {}, ...['Protokol', 'Bytes', 'Flows'].map((h) => el('th', {}, h)))),
+      el('tbody', {}, ...(data.byProto.length ? data.byProto.map((p) => el('tr', {}, el('td', {}, p.proto || '–'), el('td', { class: 'num' }, fmtBytes(p.bytes)), el('td', { class: 'num muted' }, String(p.flowCount)))) : [el('tr', {}, el('td', { class: 'muted' }, '–'))])));
+    kids.push(el('div', { class: 'flows-tables' },
+      el('div', {}, el('h4', {}, 'Top porte'), portTable),
+      el('div', {}, el('h4', {}, 'Protokoller'), protoTable)));
+
+    host.replaceChildren(...kids);
+  }
+
+  runBtn.addEventListener('click', refresh);
+  agentSel.addEventListener('change', refresh);
+  await refresh();
   return root;
 };
 

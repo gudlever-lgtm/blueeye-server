@@ -19,6 +19,11 @@ const { parseId } = require('../validation/locationValidation');
 function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentCommander }) {
   const router = express.Router();
 
+  // Response helpers for the error shapes repeated across this router.
+  const invalidId = (res) => res.status(400).json({ error: 'Invalid id' });
+  const notFound = (res) => res.status(404).json({ error: 'Agent not found' });
+  const validationError = (res, details) => res.status(400).json({ error: 'Validation failed', details });
+
   // POST /agents/:id/run-test — push a "run test" command to a connected agent
   // over the live WebSocket. operator/admin. Returns 202 with how many
   // connections received it, 409 if the agent isn't currently connected.
@@ -28,13 +33,9 @@ function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentComma
     requireRole(ROLES.OPERATOR, ROLES.ADMIN),
     asyncHandler(async (req, res) => {
       const id = parseId(req.params.id);
-      if (id === null) {
-        return res.status(400).json({ error: 'Invalid id' });
-      }
+      if (id === null) return invalidId(res);
       const agent = await agentsRepo.findById(id);
-      if (!agent) {
-        return res.status(404).json({ error: 'Agent not found' });
-      }
+      if (!agent) return notFound(res);
 
       const body = req.body && typeof req.body === 'object' ? req.body : {};
       const command = { name: 'run-test' };
@@ -57,17 +58,11 @@ function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentComma
     requireRole(ROLES.OPERATOR, ROLES.ADMIN),
     asyncHandler(async (req, res) => {
       const id = parseId(req.params.id);
-      if (id === null) {
-        return res.status(400).json({ error: 'Invalid id' });
-      }
+      if (id === null) return invalidId(res);
       const { value: probe, errors } = validateProbeSpec(req.body);
-      if (errors) {
-        return res.status(400).json({ error: 'Validation failed', details: errors });
-      }
+      if (errors) return validationError(res, errors);
       const agent = await agentsRepo.findById(id);
-      if (!agent) {
-        return res.status(404).json({ error: 'Agent not found' });
-      }
+      if (!agent) return notFound(res);
       const delivered = agentCommander ? agentCommander.sendCommand(id, { name: 'run-probe', probe }) : 0;
       if (delivered === 0) {
         return res.status(409).json({ error: 'Agent not connected', delivered: 0 });
@@ -93,13 +88,9 @@ function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentComma
     requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN),
     asyncHandler(async (req, res) => {
       const id = parseId(req.params.id);
-      if (id === null) {
-        return res.status(400).json({ error: 'Invalid id' });
-      }
+      if (id === null) return invalidId(res);
       const agent = await agentsRepo.findById(id);
-      if (!agent) {
-        return res.status(404).json({ error: 'Agent not found' });
-      }
+      if (!agent) return notFound(res);
       res.json(agent);
     })
   );
@@ -112,17 +103,11 @@ function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentComma
     requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN),
     asyncHandler(async (req, res) => {
       const id = parseId(req.params.id);
-      if (id === null) {
-        return res.status(400).json({ error: 'Invalid id' });
-      }
+      if (id === null) return invalidId(res);
       const { value: range, errors } = validateTimeRange(req.query);
-      if (errors) {
-        return res.status(400).json({ error: 'Validation failed', details: errors });
-      }
+      if (errors) return validationError(res, errors);
       const agent = await agentsRepo.findById(id);
-      if (!agent) {
-        return res.status(404).json({ error: 'Agent not found' });
-      }
+      if (!agent) return notFound(res);
       res.json(await resultsRepo.findByAgentId(id, range));
     })
   );
@@ -137,27 +122,21 @@ function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentComma
     requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN),
     asyncHandler(async (req, res) => {
       const id = parseId(req.params.id);
-      if (id === null) {
-        return res.status(400).json({ error: 'Invalid id' });
-      }
+      if (id === null) return invalidId(res);
       const { value: range, errors } = validateTimeRange(req.query);
-      if (errors) {
-        return res.status(400).json({ error: 'Validation failed', details: errors });
-      }
+      if (errors) return validationError(res, errors);
       // Optional filters.
       let port = null;
       if (req.query.port !== undefined && req.query.port !== '') {
         if (!/^\d+$/.test(String(req.query.port))) {
-          return res.status(400).json({ error: 'Validation failed', details: { port: 'port must be an integer' } });
+          return validationError(res, { port: 'port must be an integer' });
         }
         port = Number(req.query.port);
       }
       const protocol = req.query.protocol ? String(req.query.protocol).toLowerCase() : null;
 
       const agent = await agentsRepo.findById(id);
-      if (!agent) {
-        return res.status(404).json({ error: 'Agent not found' });
-      }
+      if (!agent) return notFound(res);
 
       const rows = await resultsRepo.findByAgentId(id, range);
       const byPort = new Map();
@@ -219,27 +198,18 @@ function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentComma
     requireRole(ROLES.OPERATOR, ROLES.ADMIN),
     asyncHandler(async (req, res) => {
       const id = parseId(req.params.id);
-      if (id === null) {
-        return res.status(400).json({ error: 'Invalid id' });
-      }
+      if (id === null) return invalidId(res);
 
       const { value, errors } = validateAgentManagedInput(req.body);
-      if (errors) {
-        return res.status(400).json({ error: 'Validation failed', details: errors });
-      }
+      if (errors) return validationError(res, errors);
 
       const existing = await agentsRepo.findById(id);
-      if (!existing) {
-        return res.status(404).json({ error: 'Agent not found' });
-      }
+      if (!existing) return notFound(res);
 
       // Reject a location_id that doesn't reference an existing location, so
       // the client gets a 400 rather than a foreign-key 500.
       if (value.location_id !== null && !(await locationsRepo.findById(value.location_id))) {
-        return res.status(400).json({
-          error: 'Validation failed',
-          details: { location_id: 'location_id does not reference an existing location' },
-        });
+        return validationError(res, { location_id: 'location_id does not reference an existing location' });
       }
 
       const updated = await agentsRepo.updateManaged(id, value);
@@ -254,13 +224,9 @@ function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentComma
     requireRole(ROLES.ADMIN),
     asyncHandler(async (req, res) => {
       const id = parseId(req.params.id);
-      if (id === null) {
-        return res.status(400).json({ error: 'Invalid id' });
-      }
+      if (id === null) return invalidId(res);
       const removed = await agentsRepo.remove(id);
-      if (!removed) {
-        return res.status(404).json({ error: 'Agent not found' });
-      }
+      if (!removed) return notFound(res);
       res.status(204).end();
     })
   );

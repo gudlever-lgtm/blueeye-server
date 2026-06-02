@@ -21,21 +21,34 @@ function createRollup({ repo, config, extract = extractSamples, logger = silentL
   const intervalMs = (config.rollupIntervalMinutes || 60) * 60000;
   const batchSize = config.batchSize || 5000;
 
+  // Scans rows in keyset-paginated batches (ascending id), calling onRow for
+  // each; returns the number of rows scanned. Stops on a short/empty batch.
+  async function scanInBatches(getBatch, onRow) {
+    let afterId = 0;
+    let scanned = 0;
+    for (;;) {
+      // eslint-disable-next-line no-await-in-loop
+      const rows = await getBatch(afterId);
+      if (!rows.length) break;
+      for (const r of rows) {
+        afterId = Math.max(afterId, r.id);
+        scanned += 1;
+        onRow(r);
+      }
+      if (rows.length < batchSize) break;
+    }
+    return scanned;
+  }
+
   async function rollupFlows(beforeTs) {
     // Floor to a bucket boundary so only WHOLE buckets are aggregated and
     // deleted — a bucket is never split across two runs, which keeps the median
     // exact (no cross-run merge) and the rollup idempotent.
     const cutoff = bucketStart(beforeTs, intervalMs);
     const acc = new Map();
-    let afterId = 0;
-    let scanned = 0;
-    for (;;) {
-      // eslint-disable-next-line no-await-in-loop
-      const rows = await repo.getRawExternalFlowsBatch(cutoff, afterId, batchSize);
-      if (!rows.length) break;
-      for (const r of rows) {
-        afterId = Math.max(afterId, r.id);
-        scanned += 1;
+    const scanned = await scanInBatches(
+      (afterId) => repo.getRawExternalFlowsBatch(cutoff, afterId, batchSize),
+      (r) => {
         const bucket = bucketStart(r.ts, intervalMs);
         const direction = r.direction === 'in' ? 'in' : 'out';
         const country = r.country || '';
@@ -49,9 +62,8 @@ function createRollup({ repo, config, extract = extractSamples, logger = silentL
         if (b < a.min) a.min = b;
         if (b > a.max) a.max = b;
         if (r.asn_name && !a.asnName) a.asnName = r.asn_name;
-      }
-      if (rows.length < batchSize) break;
-    }
+      },
+    );
     if (acc.size === 0) return { buckets: 0, rawDeleted: 0 };
     const rollupRows = [...acc.values()].map((a) => [
       a.bucket, a.agentId, a.direction, a.country, a.asn, a.asnName,
@@ -67,15 +79,9 @@ function createRollup({ repo, config, extract = extractSamples, logger = silentL
   async function rollupMetrics(beforeTs) {
     const cutoff = bucketStart(beforeTs, intervalMs); // whole-bucket aggregation (see rollupFlows)
     const acc = new Map();
-    let afterId = 0;
-    let scanned = 0;
-    for (;;) {
-      // eslint-disable-next-line no-await-in-loop
-      const rows = await repo.getRawResultsBatch(cutoff, afterId, batchSize);
-      if (!rows.length) break;
-      for (const r of rows) {
-        afterId = Math.max(afterId, r.id);
-        scanned += 1;
+    const scanned = await scanInBatches(
+      (afterId) => repo.getRawResultsBatch(cutoff, afterId, batchSize),
+      (r) => {
         let payload = r.payload;
         if (typeof payload === 'string') { try { payload = JSON.parse(payload); } catch { payload = null; } }
         const samples = extract(r.agent_id, payload, () => r.created_at) || [];
@@ -89,9 +95,8 @@ function createRollup({ repo, config, extract = extractSamples, logger = silentL
           if (s.value < a.min) a.min = s.value;
           if (s.value > a.max) a.max = s.value;
         }
-      }
-      if (rows.length < batchSize) break;
-    }
+      },
+    );
     if (acc.size === 0) {
       // Scanned raw results but extracted no numeric samples (payloads with
       // neither system metrics nor traffic.totals). They're still past the

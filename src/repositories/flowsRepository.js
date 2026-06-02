@@ -85,17 +85,13 @@ function createFlowsRepository(db) {
          FROM flow_rollup WHERE ${rollWhere.join(' AND ')} GROUP BY country, asn`, rollParams),
     ]);
 
-    const merged = new Map();
-    for (const r of [...raw, ...roll]) {
-      const asn = normAsn(r.asn);
-      const key = `${r.country}|${asn ?? ''}`;
-      const cur = merged.get(key) || { country: r.country, asn, asnName: r.asnName ?? null, bytes: 0, flowCount: 0 };
-      cur.bytes += numOf(r.bytes);
-      cur.flowCount += numOf(r.flowCount);
-      if (!cur.asnName && r.asnName) cur.asnName = r.asnName;
-      merged.set(key, cur);
-    }
-    return [...merged.values()];
+    // Normalise asn (NULL in raw, 0 in rollup) before keying so "unknown ASN"
+    // collapses to a single row per country.
+    return mergeRows(
+      [...raw, ...roll].map((r) => ({ ...r, asn: normAsn(r.asn) })),
+      (r) => `${r.country}|${r.asn ?? ''}`,
+      (r) => ({ country: r.country, asn: r.asn }),
+    );
   }
 
   // Aggregated external destinations with a deviation = relative change vs the
@@ -116,21 +112,18 @@ function createFlowsRepository(db) {
     });
   }
 
-  // WHERE clause for the raw table and the rollup table for a given selection.
-  function rawDestFilter({ country, asn, since, until }) {
-    const where = ['internal = 0', 'ts >= ?', 'ts < ?'];
+  // WHERE clause + params for the public flows matching a destination selection.
+  // The raw and rollup tables differ only in how "public" is expressed
+  // (internal=0 vs a non-empty country) and in their timestamp column.
+  function destFilter({ publicPredicate, tsCol }, { country, asn, since, until }) {
+    const where = [publicPredicate, `${tsCol} >= ?`, `${tsCol} < ?`];
     const params = [since, until];
     if (country) { where.push('country = ?'); params.push(country); }
     if (asn !== null && asn !== undefined && asn !== '') { where.push('asn = ?'); params.push(Number(asn)); }
     return { clause: where.join(' AND '), params };
   }
-  function rollDestFilter({ country, asn, since, until }) {
-    const where = ["country <> ''", 'bucket >= ?', 'bucket < ?'];
-    const params = [since, until];
-    if (country) { where.push('country = ?'); params.push(country); }
-    if (asn !== null && asn !== undefined && asn !== '') { where.push('asn = ?'); params.push(Number(asn)); }
-    return { clause: where.join(' AND '), params };
-  }
+  const rawDestFilter = (sel) => destFilter({ publicPredicate: 'internal = 0', tsCol: 'ts' }, sel);
+  const rollDestFilter = (sel) => destFilter({ publicPredicate: "country <> ''", tsCol: 'bucket' }, sel);
 
   // True if any public flow exists (raw OR rollup) for the selection.
   async function destinationExists({ country = null, asn = null, since, until }) {
@@ -154,12 +147,14 @@ function createFlowsRepository(db) {
     return [...new Set([...a, ...b].map((r) => r.agent_id))];
   }
 
-  // Merges two keyed aggregate row sets summing bytes/flowCount.
-  function mergeBy(rowsA, rowsB, keyField) {
+  // Merges aggregate rows sharing a key, summing bytes/flowCount and keeping the
+  // first non-empty asnName. keyOf(row) is the merge key; idOf(row) is the set
+  // of identity fields carried onto the merged row.
+  function mergeRows(rows, keyOf, idOf) {
     const m = new Map();
-    for (const r of [...rowsA, ...rowsB]) {
-      const k = r[keyField];
-      const cur = m.get(k) || { [keyField]: k, asnName: r.asnName ?? null, bytes: 0, flowCount: 0 };
+    for (const r of rows) {
+      const k = keyOf(r);
+      const cur = m.get(k) || { ...idOf(r), asnName: r.asnName ?? null, bytes: 0, flowCount: 0 };
       cur.bytes += numOf(r.bytes);
       cur.flowCount += numOf(r.flowCount);
       if (!cur.asnName && r.asnName) cur.asnName = r.asnName;
@@ -168,22 +163,35 @@ function createFlowsRepository(db) {
     return [...m.values()];
   }
 
+  // Merges two row sets keyed by a single column (asn / direction / bucket).
+  function mergeBy(rowsA, rowsB, keyField) {
+    return mergeRows([...rowsA, ...rowsB], (r) => r[keyField], (r) => ({ [keyField]: r[keyField] }));
+  }
+
   // Aggregated detail for a selected destination, read across raw + rollup:
   // peers by ASN, by direction, a byte time-series; protocol breakdown is
   // raw-only (rollups don't retain per-protocol detail).
   async function selectFlows({ country = null, asn = null, since, until }) {
     const raw = rawDestFilter({ country, asn, since, until });
     const roll = rollDestFilter({ country, asn, since, until });
-    const [rAsn, rDir, byProtoRaw, rSeries, rawTot, kAsn, kDir, kSeries, rollTot] = await Promise.all([
-      q(`SELECT asn, MAX(asn_name) AS asnName, SUM(bytes) AS bytes, SUM(flows) AS flowCount FROM flow_records WHERE ${raw.clause} GROUP BY asn`, raw.params),
-      q(`SELECT direction, SUM(bytes) AS bytes, SUM(flows) AS flowCount FROM flow_records WHERE ${raw.clause} GROUP BY direction`, raw.params),
-      q(`SELECT proto, SUM(bytes) AS bytes, SUM(flows) AS flowCount FROM flow_records WHERE ${raw.clause} GROUP BY proto ORDER BY bytes DESC LIMIT 20`, raw.params),
-      q(`SELECT DATE_FORMAT(ts, '%Y-%m-%d %H:00:00') AS bucket, SUM(bytes) AS bytes, SUM(flows) AS flowCount FROM flow_records WHERE ${raw.clause} GROUP BY bucket`, raw.params),
-      q(`SELECT SUM(bytes) AS bytes, SUM(flows) AS flowCount FROM flow_records WHERE ${raw.clause}`, raw.params),
-      q(`SELECT asn, MAX(asn_name) AS asnName, SUM(bytes) AS bytes, SUM(flow_count) AS flowCount FROM flow_rollup WHERE ${roll.clause} GROUP BY asn`, roll.params),
-      q(`SELECT direction, SUM(bytes) AS bytes, SUM(flow_count) AS flowCount FROM flow_rollup WHERE ${roll.clause} GROUP BY direction`, roll.params),
-      q(`SELECT DATE_FORMAT(bucket, '%Y-%m-%d %H:00:00') AS bucket, SUM(bytes) AS bytes, SUM(flow_count) AS flowCount FROM flow_rollup WHERE ${roll.clause} GROUP BY bucket`, roll.params),
-      q(`SELECT SUM(bytes) AS bytes, SUM(flow_count) AS flowCount FROM flow_rollup WHERE ${roll.clause}`, roll.params),
+    // Raw and rollup share four aggregate shapes; only the table, the flow-count
+    // column (flows vs flow_count) and the series timestamp column (ts vs bucket)
+    // differ. All come from fixed constants — no user input is interpolated.
+    const aggregates = ({ table, flowCol, tsCol }, where) => ({
+      byAsn: q(`SELECT asn, MAX(asn_name) AS asnName, SUM(bytes) AS bytes, SUM(${flowCol}) AS flowCount FROM ${table} WHERE ${where.clause} GROUP BY asn`, where.params),
+      byDir: q(`SELECT direction, SUM(bytes) AS bytes, SUM(${flowCol}) AS flowCount FROM ${table} WHERE ${where.clause} GROUP BY direction`, where.params),
+      series: q(`SELECT DATE_FORMAT(${tsCol}, '%Y-%m-%d %H:00:00') AS bucket, SUM(bytes) AS bytes, SUM(${flowCol}) AS flowCount FROM ${table} WHERE ${where.clause} GROUP BY bucket`, where.params),
+      totals: q(`SELECT SUM(bytes) AS bytes, SUM(${flowCol}) AS flowCount FROM ${table} WHERE ${where.clause}`, where.params),
+    });
+    const rawAgg = aggregates({ table: 'flow_records', flowCol: 'flows', tsCol: 'ts' }, raw);
+    const rollAgg = aggregates({ table: 'flow_rollup', flowCol: 'flow_count', tsCol: 'bucket' }, roll);
+    // Protocol breakdown is raw-only (rollups don't retain per-protocol detail).
+    const byProtoQ = q(`SELECT proto, SUM(bytes) AS bytes, SUM(flows) AS flowCount FROM flow_records WHERE ${raw.clause} GROUP BY proto ORDER BY bytes DESC LIMIT 20`, raw.params);
+
+    const [rAsn, rDir, rSeries, rawTot, kAsn, kDir, kSeries, rollTot, byProtoRaw] = await Promise.all([
+      rawAgg.byAsn, rawAgg.byDir, rawAgg.series, rawAgg.totals,
+      rollAgg.byAsn, rollAgg.byDir, rollAgg.series, rollAgg.totals,
+      byProtoQ,
     ]);
 
     // Normalise asn BEFORE merging so "unknown ASN" (NULL in raw, 0 in rollup)

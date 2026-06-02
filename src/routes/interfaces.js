@@ -4,13 +4,8 @@ const express = require('express');
 const { asyncHandler } = require('../middleware/asyncHandler');
 const { requireAuth, requireRole } = require('../auth/middleware');
 const { ROLES } = require('../auth/roles');
+const { parseId } = require('../validation/locationValidation');
 const { computeInterfaceHealth } = require('../health/interfaceHealth');
-
-function parseId(v) {
-  if (!/^\d+$/.test(String(v))) return null;
-  const n = Number(v);
-  return Number.isInteger(n) && n > 0 ? n : null;
-}
 
 // Interface health for one agent, derived from its most recent measurement.
 // viewer+. (No new storage — reads the latest row from `results`.)

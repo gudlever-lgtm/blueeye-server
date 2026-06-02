@@ -11,13 +11,34 @@ function bucketStart(ts, intervalMs) {
   return new Date(Math.floor(t / intervalMs) * intervalMs);
 }
 
-// Down-samples raw data older than `beforeTs` into rollup tables, then deletes
-// the raw rows it summarised. Idempotent: because the raw rows are deleted once
-// aggregated, a repeated run finds nothing to aggregate and double-counts
-// nothing. Aggregation is done in JS so true min/max/median are available.
+// Down-samples raw data older than `beforeTs` into the rollup tables, then
+// deletes the raw rows before that cutoff. This is the ONLY place raw
+// results/flows are purged (purge.js trims only the rollup tables), so rows
+// past the cutoff are deleted whether or not each one yielded a rollup sample.
+// Idempotent: aggregated rows are gone by the next run, so nothing is
+// double-counted. Aggregation runs in JS so true min/max/median are available.
 function createRollup({ repo, config, extract = extractSamples, logger = silentLogger }) {
   const intervalMs = (config.rollupIntervalMinutes || 60) * 60000;
   const batchSize = config.batchSize || 5000;
+
+  // Scans rows in keyset-paginated batches (ascending id), calling onRow for
+  // each; returns the number of rows scanned. Stops on a short/empty batch.
+  async function scanInBatches(getBatch, onRow) {
+    let afterId = 0;
+    let scanned = 0;
+    for (;;) {
+      // eslint-disable-next-line no-await-in-loop
+      const rows = await getBatch(afterId);
+      if (!rows.length) break;
+      for (const r of rows) {
+        afterId = Math.max(afterId, r.id);
+        scanned += 1;
+        onRow(r);
+      }
+      if (rows.length < batchSize) break;
+    }
+    return scanned;
+  }
 
   async function rollupFlows(beforeTs) {
     // Floor to a bucket boundary so only WHOLE buckets are aggregated and
@@ -25,15 +46,9 @@ function createRollup({ repo, config, extract = extractSamples, logger = silentL
     // exact (no cross-run merge) and the rollup idempotent.
     const cutoff = bucketStart(beforeTs, intervalMs);
     const acc = new Map();
-    let afterId = 0;
-    let scanned = 0;
-    for (;;) {
-      // eslint-disable-next-line no-await-in-loop
-      const rows = await repo.getRawExternalFlowsBatch(cutoff, afterId, batchSize);
-      if (!rows.length) break;
-      for (const r of rows) {
-        afterId = Math.max(afterId, r.id);
-        scanned += 1;
+    const scanned = await scanInBatches(
+      (afterId) => repo.getRawExternalFlowsBatch(cutoff, afterId, batchSize),
+      (r) => {
         const bucket = bucketStart(r.ts, intervalMs);
         const direction = r.direction === 'in' ? 'in' : 'out';
         const country = r.country || '';
@@ -47,9 +62,8 @@ function createRollup({ repo, config, extract = extractSamples, logger = silentL
         if (b < a.min) a.min = b;
         if (b > a.max) a.max = b;
         if (r.asn_name && !a.asnName) a.asnName = r.asn_name;
-      }
-      if (rows.length < batchSize) break;
-    }
+      },
+    );
     if (acc.size === 0) return { buckets: 0, rawDeleted: 0 };
     const rollupRows = [...acc.values()].map((a) => [
       a.bucket, a.agentId, a.direction, a.country, a.asn, a.asnName,
@@ -65,15 +79,9 @@ function createRollup({ repo, config, extract = extractSamples, logger = silentL
   async function rollupMetrics(beforeTs) {
     const cutoff = bucketStart(beforeTs, intervalMs); // whole-bucket aggregation (see rollupFlows)
     const acc = new Map();
-    let afterId = 0;
-    let scanned = 0;
-    for (;;) {
-      // eslint-disable-next-line no-await-in-loop
-      const rows = await repo.getRawResultsBatch(cutoff, afterId, batchSize);
-      if (!rows.length) break;
-      for (const r of rows) {
-        afterId = Math.max(afterId, r.id);
-        scanned += 1;
+    const scanned = await scanInBatches(
+      (afterId) => repo.getRawResultsBatch(cutoff, afterId, batchSize),
+      (r) => {
         let payload = r.payload;
         if (typeof payload === 'string') { try { payload = JSON.parse(payload); } catch { payload = null; } }
         const samples = extract(r.agent_id, payload, () => r.created_at) || [];
@@ -87,12 +95,20 @@ function createRollup({ repo, config, extract = extractSamples, logger = silentL
           if (s.value < a.min) a.min = s.value;
           if (s.value > a.max) a.max = s.value;
         }
-      }
-      if (rows.length < batchSize) break;
-    }
+      },
+    );
     if (acc.size === 0) {
-      const rawDeleted = scanned > 0 ? await repo.deleteRawResultsBefore(cutoff) : 0;
-      return { buckets: 0, rawDeleted };
+      // Scanned raw results but extracted no numeric samples (payloads with
+      // neither system metrics nor traffic.totals). They're still past the
+      // cutoff and rollup is the only raw-results purge, so delete them per the
+      // retention policy — but warn, since a NEW unhandled payload type would
+      // otherwise be dropped here silently.
+      if (scanned > 0) {
+        logger.warn(`retention: ${scanned} raw results before cutoff produced no rollup samples — deleting per raw retention`);
+        const rawDeleted = await repo.deleteRawResultsBefore(cutoff);
+        return { buckets: 0, rawDeleted };
+      }
+      return { buckets: 0, rawDeleted: 0 };
     }
     const rollupRows = [...acc.values()].map((a) => [
       a.bucket, a.agentId, a.metric, a.vals.length, a.min, a.max, median(a.vals),

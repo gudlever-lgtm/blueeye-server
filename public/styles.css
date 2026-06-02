@@ -211,6 +211,56 @@ main#view:has(.overview) { max-width: 1180px; }
 .iface-table .util .usagebar { flex: 1; min-width: 80px; max-width: 160px; margin: 0; }
 .probe-hops td { padding: 4px 10px; }
 
+/* Fleet overview: summary chips + clickable agent table. */
+.fleet-summary { display: flex; flex-wrap: wrap; gap: 10px; margin: 0 0 14px; }
+.fs-chip { display: flex; align-items: baseline; gap: 8px; background: var(--panel); border: 1px solid var(--border);
+  border-left: 3px solid var(--border); border-radius: 10px; padding: 8px 14px; }
+.fs-chip .fs-n { font-size: 20px; font-weight: 700; }
+.fs-chip .fs-l { color: var(--muted); font-size: 12px; }
+.fs-chip.ok { border-left-color: var(--ok); }
+.fs-chip.warn { border-left-color: var(--warn); }
+.fs-chip.bad { border-left-color: var(--bad); }
+.fs-chip.stale, .fs-chip.unknown { border-left-color: var(--muted); }
+.fs-chip.zero { opacity: .5; }
+.fleet-table { width: 100%; }
+.fleet-row { cursor: pointer; }
+.fleet-row:hover { background: var(--panel-2); }
+.fleet-row:focus { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* Combined agent page: health résumé header. */
+.agent-health { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px; margin: 0 0 12px; }
+.agent-health .ah-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+.agent-health .ah-reason { color: var(--text); font-weight: 500; }
+.agent-health .ah-grid { display: flex; flex-wrap: wrap; gap: 8px 22px; }
+.agent-health .ah-kv { display: flex; flex-direction: column; gap: 1px; }
+.agent-health .ah-k { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .03em; }
+.agent-health .ah-v { font-weight: 600; }
+
+/* Flow explorer: ports/protocols side by side + a highlighted scan panel. */
+.flows-tables { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 720px) { .flows-tables { grid-template-columns: 1fr; } }
+.flows-explorer .scan-sec { border-color: var(--bad); }
+.flows-explorer .scan-sec > summary { color: var(--bad); font-weight: 600; }
+
+/* Maintenance: fleet banner + the add-window form in settings. */
+.mw-banner { background: rgba(217, 119, 6, .12); border: 1px solid var(--warn); border-radius: 10px; padding: 9px 12px; margin: 0 0 14px; font-size: 14px; }
+.mw-form { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: end; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+.mw-form .set-field { min-width: 150px; }
+
+/* Agent data-quality line + the fleet flag. */
+.agent-health .ah-quality { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13px; }
+.dq-flag { color: var(--warn); cursor: help; }
+
+/* Topbar global search + results modal. */
+.topbar-search { width: 200px; max-width: 36vw; padding: 5px 10px; border: 1px solid var(--border); border-radius: 999px;
+  background: var(--bg); color: var(--text); font: inherit; font-size: 13px; }
+.topbar-search:focus { outline: none; border-color: var(--accent); }
+.search-list { display: flex; flex-direction: column; gap: 4px; margin: 2px 0 10px; }
+.search-item { display: flex; align-items: center; gap: 10px; justify-content: flex-start; text-align: left;
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; cursor: pointer; color: var(--text); }
+.search-item:hover { border-color: var(--accent); }
+.search-item .badge { margin-left: auto; }
+
 /* 4) Slim storage line; the full breakdown folds open below. */
 .storage-fold { margin-top: 10px; }
 .storage-fold > summary.storage-line { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 12px; flex-wrap: wrap;

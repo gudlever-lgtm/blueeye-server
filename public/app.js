@@ -210,6 +210,36 @@ function closeModal() { $('#modal').classList.add('hidden'); }
 // Each view starts with a short hero line and a "Mere info" button that slides
 // in a panel from the right with a fuller explanation.
 const PAGE_INFO = {
+  fleet: {
+    hero: 'Alle agenter på ét bræt — med en sundheds-vurdering ud fra aktiv reachability, tab, latency og jitter.',
+    title: 'Oversigt — flåde-sundhed',
+    body: () => [
+      el('p', {}, 'Forsiden samler alle agenter med ét health-stempel, så du straks ser hvor noget er galt. Rækkerne er sorteret værst-først og opdateres løbende. Klik en agent for at dykke ned i dens målinger.'),
+      el('h4', {}, 'Sådan beregnes health'),
+      el('ul', {},
+        el('li', {}, el('strong', {}, 'Reachability: '), 'svarer agentens probe-mål? Et mål uden svar trækker straks ned.'),
+        el('li', {}, el('strong', {}, 'Tab: '), 'pakketab i % (≥2% = advarsel, ≥20% = kritisk).'),
+        el('li', {}, el('strong', {}, 'Latency: '), 'seneste RTT holdt op mod målets EGEN baseline (robust median + MAD) — “langsom” er relativt til hvad der er normalt for netop det mål, ikke en fast grænse.'),
+        el('li', {}, el('strong', {}, 'Jitter: '), 'udsving i RTT (≥30 ms = advarsel, ≥100 ms = kritisk).')),
+      el('h4', {}, 'Status-stempler'),
+      el('ul', {},
+        el('li', {}, 'SUND: alle mål nås, lav latency/tab. ADVARSEL / KRITISK: ét eller flere signaler over grænsen (hold musen over for forklaringen).'),
+        el('li', {}, 'NEDE: ingen mål svarer. FORÆLDET: ingen friske målinger (> 15 min). UKENDT: agenten har ikke kørt nogen probe endnu.')),
+      el('p', { class: 'muted' }, 'Health bygger på aktive probes — kør et par probes pr. agent (på agent-siden) for at få et fuldt billede. Kun metadata: mål og timings, aldrig pakke-indhold.'),
+    ],
+  },
+  agent: {
+    hero: 'Alt for én agent samlet: health-resumé, probes (latency/tab/jitter), interface-sundhed og trafik.',
+    title: 'Agent — detaljer',
+    body: () => [
+      el('p', {}, 'Den samlede troubleshooting-side for én agent. Øverst et resumé af health med de tal, der driver vurderingen; nedenunder kan du folde de enkelte datakilder ud.'),
+      el('ul', {},
+        el('li', {}, el('strong', {}, 'Probes: '), 'kør ping/TCP/DNS/traceroute mod et mål og se RTT/tab/jitter — klik “Historik” for RTT over tid eller “Sti” for traceroute-hops.'),
+        el('li', {}, el('strong', {}, 'Interfaces: '), 'pr. interface udnyttelse, fejl, discards og link-status fra seneste måling.'),
+        el('li', {}, el('strong', {}, 'Trafik: '), 'den aktuelle båndbredde — mest interessant netop her, når du er inde og fejlsøger den enkelte agent.')),
+      el('p', { class: 'muted' }, 'Tilbage til flåde-overblikket med “← Oversigt”.'),
+    ],
+  },
   overview: {
     hero: 'Samlet, levende trafik-billede for alle agenter — vælg serier, undersøg et tidsrum og se forbrug.',
     title: 'Trafik — overblik',
@@ -280,6 +310,24 @@ const PAGE_INFO = {
         el('li', {}, 'Traceroute: stien (hops) mod målet med RTT pr. hop.')),
       el('p', {}, 'Vælg agent + type + mål og tryk “Kør probe”. Agenten skal være forbundet; resultatet kommer tilbage et øjeblik efter og lægges i historikken, så du kan se RTT/tab over tid.'),
       el('p', { class: 'muted' }, 'Kun metadata: mål og timings — aldrig pakke-indhold.'),
+    ],
+  },
+  flows: {
+    hero: 'Undersøg konkrete samtaler (flows): hvem taler med hvem, på hvilke porte — og hvem scanner.',
+    title: 'Flows — samtaler',
+    body: () => [
+      el('p', {}, 'Hvor Trafik viser mængder og Geo viser destinationer på kort, lader Flows dig grave ned i de enkelte samtaler (5-tuple-metadata fra NetFlow/sFlow) for én agent.'),
+      el('h4', {}, 'Filtre'),
+      el('ul', {},
+        el('li', {}, 'Peer: vis kun samtaler, hvor en bestemt IP er kilde eller destination (klik en talker for at sætte den).'),
+        el('li', {}, 'Port / Proto: indsnævr til fx 443 eller tcp/udp.'),
+        el('li', {}, 'Retning + omfang: ind/ud, og intern (LAN↔LAN) vs. ekstern.')),
+      el('h4', {}, 'Hvad du ser'),
+      el('ul', {},
+        el('li', {}, 'Top talkers: de største samtaler (kilde→destination) efter bytes.'),
+        el('li', {}, 'Top porte / protokoller + en bytes-over-tid-graf for vinduet.'),
+        el('li', {}, 'Scans / fan-out: kilder, der rammer mange forskellige porte (port-scan) eller mange hosts (fan-out) — et hurtigt fingerpeg om scanning eller en løbsk klient.')),
+      el('p', { class: 'muted' }, 'Kun metadata (5-tuple + bytes/flows), aldrig pakke-indhold. Interne RFC1918-adresser vises (de geolokaliseres aldrig). Kræver NetFlow/sFlow-kilde + at geo-pipelinen er aktiv.'),
     ],
   },
   geo: {
@@ -1517,6 +1565,74 @@ function stopProbes() { if (probeState.timer) { clearInterval(probeState.timer);
 const ifaceState = { timer: null };
 function stopIfaces() { if (ifaceState.timer) { clearInterval(ifaceState.timer); ifaceState.timer = null; } }
 
+// ---- Shared probe + interface renderers -----------------------------------
+// Used by the per-agent tabs (Interfaces, Probes) AND the combined agent page,
+// so there is one source of truth for each table.
+
+const IFACE_RANK = { down: 0, bad: 1, warn: 2, ok: 3 };
+function ifaceStatusBadge(s) {
+  const map = { ok: ['online', 'OK'], warn: ['warn', 'WARN'], bad: ['offline', 'FEJL'], down: ['offline', 'NEDE'] };
+  const [cls, label] = map[s] || ['offline', s];
+  return el('span', { class: `badge ${cls}` }, label);
+}
+function ifaceLinkText(i) {
+  if (!i.speedMbps && !i.operStatus) return '–';
+  const sp = i.speedMbps ? (i.speedMbps >= 1000 ? `${i.speedMbps / 1000} Gb/s` : `${i.speedMbps} Mb/s`) : '';
+  return [sp, i.operStatus].filter(Boolean).join(' · ');
+}
+// Interface health table (worst first). Empty-state when there is no data.
+function interfaceTable(interfaces) {
+  const ifs = (interfaces || []).slice().sort((a, b) => (IFACE_RANK[a.status] - IFACE_RANK[b.status]) || ((b.rxBytesPerSec + b.txBytesPerSec) - (a.rxBytesPerSec + a.txBytesPerSec)));
+  if (!ifs.length) return el('div', { class: 'empty' }, 'Ingen interface-data endnu — kræver en agent-måling (opdatér agenten for fejl/discards/link).');
+  return el('table', { class: 'iface-table' },
+    el('thead', {}, el('tr', {}, ...['Interface', 'Status', 'Link', 'Udnyttelse', '↓ RX', '↑ TX', 'Fejl/s', 'Discards/s'].map((h) => el('th', {}, h)))),
+    el('tbody', {}, ...ifs.map((i) => el('tr', {},
+      el('td', {}, esc(i.iface)),
+      el('td', {}, ifaceStatusBadge(i.status)),
+      el('td', { class: 'muted' }, ifaceLinkText(i)),
+      el('td', {}, i.utilPct != null ? el('div', { class: 'util' }, usageBar(i.utilPct), el('span', { class: 'muted num' }, `${i.utilPct}%`)) : el('span', { class: 'muted' }, '–')),
+      el('td', { class: 'num' }, `${fmtBytes(i.rxBytesPerSec)}/s`),
+      el('td', { class: 'num' }, `${fmtBytes(i.txBytesPerSec)}/s`),
+      el('td', { class: `num${i.errPerSec > 0 ? ' bad-text' : ''}` }, String(i.errPerSec)),
+      el('td', { class: `num${i.dropPerSec > 0 ? ' warn-text' : ''}` }, String(i.dropPerSec))))));
+}
+
+// Latest probe results (newest per target). onDetail(r) fires from each row.
+function probeLatestTable(rows, onDetail) {
+  if (!rows.length) return el('div', { class: 'muted' }, 'Ingen probe-resultater endnu — kør en ovenfor.');
+  return el('table', {},
+    el('thead', {}, el('tr', {}, ...['Type', 'Mål', 'Status', 'RTT', 'Tab', 'Jitter', 'Tid', ''].map((h) => el('th', {}, h)))),
+    el('tbody', {}, ...rows.map((r) => el('tr', {},
+      el('td', {}, r.type),
+      el('td', {}, esc(r.target)),
+      el('td', {}, el('span', { class: `badge ${r.ok ? 'online' : 'offline'}` }, r.ok ? 'ok' : 'fejl')),
+      el('td', { class: 'num' }, r.rttMs != null ? `${r.rttMs} ms` : '–'),
+      el('td', { class: 'num' }, r.lossPct != null ? `${r.lossPct}%` : '–'),
+      el('td', { class: 'num' }, r.jitterMs != null ? `${r.jitterMs} ms` : '–'),
+      el('td', { class: 'muted' }, r.ts ? fmtTimeShort(new Date(r.ts).getTime()) : '–'),
+      el('td', {}, el('button', { class: 'small ghost', onclick: () => onDetail(r) }, r.type === 'traceroute' ? 'Sti' : 'Historik'))))));
+}
+
+// Detail node for one probe result: traceroute path (sync) or RTT history
+// (fetches the per-agent time series).
+async function probeDetail(r, agentId) {
+  if (r.type === 'traceroute') {
+    const hops = r.hops || [];
+    return el('details', { class: 'sec', open: true }, el('summary', {}, `Sti til ${esc(r.target)}`),
+      el('table', { class: 'probe-hops' }, el('tbody', {}, ...(hops.length ? hops.map((h) => el('tr', {},
+        el('td', { class: 'muted' }, `#${h.hop}`),
+        el('td', {}, h.ip || '* * *'),
+        el('td', { class: 'num' }, h.rttMs != null ? `${h.rttMs} ms` : '–'))) : [el('tr', {}, el('td', { class: 'muted' }, 'Ingen hops.'))]))));
+  }
+  let data;
+  try { data = await api(`/api/probes?agentId=${encodeURIComponent(agentId)}&type=${r.type}`); } catch (e) { return el('div', { class: 'error' }, e.message); }
+  const pts = (data.results || []).filter((x) => x.target === r.target && x.rttMs != null).map((x) => ({ t: new Date(x.ts).getTime(), y: x.rttMs }));
+  const fromMs = pts.length ? pts[0].t : Date.now() - 3600000;
+  const toMs = pts.length ? pts[pts.length - 1].t : Date.now();
+  return el('details', { class: 'sec', open: true }, el('summary', {}, `RTT-historik — ${r.type} → ${esc(r.target)}`),
+    el('div', { class: 'overview-chart' }, pts.length ? historyChart([{ id: 'rtt', label: 'RTT (ms)', color: '#06b6d4', points: pts }], { fromMs, toMs }) : el('div', { class: 'empty' }, 'Ingen historik endnu — kør et par målinger.')));
+}
+
 // Interface health per agent (utilisation, errors, discards, link state/speed)
 // derived from the agent's latest measurement. Worst interfaces first.
 views.interfaces = async () => {
@@ -1536,36 +1652,12 @@ views.interfaces = async () => {
   const host = el('div', {});
   root.append(host);
 
-  const RANK = { down: 0, bad: 1, warn: 2, ok: 3 };
-  const ifBadge = (s) => {
-    const map = { ok: ['online', 'OK'], warn: ['warn', 'WARN'], bad: ['offline', 'FEJL'], down: ['offline', 'NEDE'] };
-    const [cls, label] = map[s] || ['offline', s];
-    return el('span', { class: `badge ${cls}` }, label);
-  };
-  const linkText = (i) => {
-    if (!i.speedMbps && !i.operStatus) return '–';
-    const sp = i.speedMbps ? (i.speedMbps >= 1000 ? `${i.speedMbps / 1000} Gb/s` : `${i.speedMbps} Mb/s`) : '';
-    return [sp, i.operStatus].filter(Boolean).join(' · ');
-  };
-
   async function refresh() {
     const id = agentSel.value;
     let data;
     try { data = await api(`/api/interfaces?agentId=${encodeURIComponent(id)}`); } catch (e) { host.replaceChildren(el('div', { class: 'error' }, e.message)); return; }
     status.textContent = data.ts ? `kilde: ${data.source} · målt ${fmtTimeShort(new Date(data.ts).getTime())}` : 'ingen målinger endnu';
-    const ifs = (data.interfaces || []).slice().sort((a, b) => (RANK[a.status] - RANK[b.status]) || ((b.rxBytesPerSec + b.txBytesPerSec) - (a.rxBytesPerSec + a.txBytesPerSec)));
-    if (!ifs.length) { host.replaceChildren(el('div', { class: 'empty' }, 'Ingen interface-data endnu — kræver en agent-måling (opdatér agenten for fejl/discards/link).')); return; }
-    host.replaceChildren(el('table', { class: 'iface-table' },
-      el('thead', {}, el('tr', {}, ...['Interface', 'Status', 'Link', 'Udnyttelse', '↓ RX', '↑ TX', 'Fejl/s', 'Discards/s'].map((h) => el('th', {}, h)))),
-      el('tbody', {}, ...ifs.map((i) => el('tr', {},
-        el('td', {}, esc(i.iface)),
-        el('td', {}, ifBadge(i.status)),
-        el('td', { class: 'muted' }, linkText(i)),
-        el('td', {}, i.utilPct != null ? el('div', { class: 'util' }, usageBar(i.utilPct), el('span', { class: 'muted num' }, `${i.utilPct}%`)) : el('span', { class: 'muted' }, '–')),
-        el('td', { class: 'num' }, `${fmtBytes(i.rxBytesPerSec)}/s`),
-        el('td', { class: 'num' }, `${fmtBytes(i.txBytesPerSec)}/s`),
-        el('td', { class: `num${i.errPerSec > 0 ? ' bad-text' : ''}` }, String(i.errPerSec)),
-        el('td', { class: `num${i.dropPerSec > 0 ? ' warn-text' : ''}` }, String(i.dropPerSec)))))));
+    host.replaceChildren(interfaceTable(data.interfaces));
   }
 
   refresh();
@@ -1636,38 +1728,11 @@ views.probes = async () => {
     let data;
     try { data = await api(`/api/probes/latest?agentId=${encodeURIComponent(id)}`); } catch { return; }
     const rows = data.results || [];
-    if (!rows.length) { latestHost.replaceChildren(el('div', { class: 'muted' }, 'Ingen probe-resultater endnu — kør en ovenfor.')); return; }
-    latestHost.replaceChildren(el('table', {},
-      el('thead', {}, el('tr', {}, ...['Type', 'Mål', 'Status', 'RTT', 'Tab', 'Jitter', 'Tid', ''].map((h) => el('th', {}, h)))),
-      el('tbody', {}, ...rows.map((r) => el('tr', {},
-        el('td', {}, r.type),
-        el('td', {}, esc(r.target)),
-        el('td', {}, el('span', { class: `badge ${r.ok ? 'online' : 'offline'}` }, r.ok ? 'ok' : 'fejl')),
-        el('td', { class: 'num' }, r.rttMs != null ? `${r.rttMs} ms` : '–'),
-        el('td', { class: 'num' }, r.lossPct != null ? `${r.lossPct}%` : '–'),
-        el('td', { class: 'num' }, r.jitterMs != null ? `${r.jitterMs} ms` : '–'),
-        el('td', { class: 'muted' }, r.ts ? fmtTimeShort(new Date(r.ts).getTime()) : '–'),
-        el('td', {}, el('button', { class: 'small ghost', onclick: () => showDetail(r) }, r.type === 'traceroute' ? 'Sti' : 'Historik')))))));
+    latestHost.replaceChildren(probeLatestTable(rows, showDetail));
   }
 
   async function showDetail(r) {
-    const id = agentSel.value;
-    if (r.type === 'traceroute') {
-      const hops = r.hops || [];
-      detailHost.replaceChildren(el('details', { class: 'sec', open: true }, el('summary', {}, `Sti til ${esc(r.target)}`),
-        el('table', { class: 'probe-hops' }, el('tbody', {}, ...(hops.length ? hops.map((h) => el('tr', {},
-          el('td', { class: 'muted' }, `#${h.hop}`),
-          el('td', {}, h.ip || '* * *'),
-          el('td', { class: 'num' }, h.rttMs != null ? `${h.rttMs} ms` : '–'))) : [el('tr', {}, el('td', { class: 'muted' }, 'Ingen hops.'))])))));
-      return;
-    }
-    let data;
-    try { data = await api(`/api/probes?agentId=${encodeURIComponent(id)}&type=${r.type}`); } catch (e) { detailHost.replaceChildren(el('div', { class: 'error' }, e.message)); return; }
-    const pts = (data.results || []).filter((x) => x.target === r.target && x.rttMs != null).map((x) => ({ t: new Date(x.ts).getTime(), y: x.rttMs }));
-    const fromMs = pts.length ? pts[0].t : Date.now() - 3600000;
-    const toMs = pts.length ? pts[pts.length - 1].t : Date.now();
-    detailHost.replaceChildren(el('details', { class: 'sec', open: true }, el('summary', {}, `RTT-historik — ${r.type} → ${esc(r.target)}`),
-      el('div', { class: 'overview-chart' }, pts.length ? historyChart([{ id: 'rtt', label: 'RTT (ms)', color: '#06b6d4', points: pts }], { fromMs, toMs }) : el('div', { class: 'empty' }, 'Ingen historik endnu — kør et par målinger.'))));
+    detailHost.replaceChildren(await probeDetail(r, agentSel.value));
   }
 
   refreshLatest();
@@ -1678,6 +1743,447 @@ views.probes = async () => {
     if (currentView !== 'probes') { stopProbes(); return; }
     if (!modalOpen()) refreshLatest();
   }, 5000);
+  return root;
+};
+
+// ---- Fleet overview + combined agent page ---------------------------------
+
+let selectedAgentId = null;
+function openAgent(id) { selectedAgentId = id; currentView = 'agent'; render(); }
+
+// Deep-link into the flow explorer for an agent, optionally pre-filling a
+// peer/port (used by global search). views.flows consumes + clears the prefill.
+let flowsPrefill = null;
+function openFlows(agentId, prefill) { selectedAgentId = agentId; flowsPrefill = Object.assign({ agentId }, prefill || {}); currentView = 'flows'; render(); }
+
+// Downloads an authenticated endpoint as a file (Bearer token; the dashboard's
+// api() parses JSON, so blob downloads go through here instead).
+async function downloadAuthed(path, filename) {
+  try {
+    const res = await fetch(path, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = el('a', { href: url, download: filename });
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  } catch (e) { toast(`Eksport fejlede: ${e.message}`, true); }
+}
+
+// Opens a print-friendly investigation summary in a new window and triggers the
+// browser's print dialog (→ "Save as PDF"). No server-side PDF dependency.
+async function printInvestigation(id) {
+  let b;
+  try { b = await api(`/api/export/investigation?agentId=${encodeURIComponent(id)}`); } catch (e) { toast(e.message, true); return; }
+  const e2 = (s) => String(s == null ? '' : s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  const rows = (arr, cols, cspan) => ((arr && arr.length) ? arr.map((r) => `<tr>${cols.map((c) => `<td>${e2(typeof c === 'function' ? c(r) : r[c])}</td>`).join('')}</tr>`).join('') : `<tr><td colspan="${cspan}" class="muted">Ingen.</td></tr>`);
+  const q = b.quality || {}; const h = b.health || { status: '', reason: '' };
+  const html = `<!doctype html><html lang="da"><head><meta charset="utf-8"><title>BlueEye undersøgelse — ${e2(b.agent.displayName)}</title>
+<style>body{font:13px/1.5 system-ui,-apple-system,sans-serif;margin:24px;color:#0f172a}h1{font-size:20px;margin:0 0 4px}h2{font-size:15px;margin:22px 0 6px;border-bottom:1px solid #cbd5e1;padding-bottom:4px}table{border-collapse:collapse;width:100%;margin:6px 0}th,td{border:1px solid #e2e8f0;padding:4px 8px;text-align:left;font-size:12px}.muted{color:#64748b}.badge{padding:1px 7px;border-radius:4px;background:#e2e8f0;font-weight:600}</style>
+</head><body>
+<h1>Undersøgelse — ${e2(b.agent.displayName)}</h1>
+<p class="muted">${e2(b.agent.hostname)}${b.agent.locationName ? ' · ' + e2(b.agent.locationName) : ''} · genereret ${e2(b.generatedAt)}<br>vindue ${e2(b.window.from)} – ${e2(b.window.to)}</p>
+<h2>Sundhed</h2><p><span class="badge">${e2(String(h.status).toUpperCase())}</span> ${e2(h.reason)}</p>
+<p class="muted">Datakvalitet: ${e2(q.status)} — ${e2(q.reason)}${q.version ? ' · agent v' + e2(q.version) : ''}</p>
+<h2>Seneste probes</h2><table><thead><tr><th>Type</th><th>Mål</th><th>Status</th><th>RTT</th><th>Tab</th><th>Jitter</th></tr></thead><tbody>${rows(b.latestProbes, ['type', 'target', (r) => (r.ok ? 'ok' : 'fejl'), (r) => (r.rttMs != null ? r.rttMs + ' ms' : '–'), (r) => (r.lossPct != null ? r.lossPct + '%' : '–'), (r) => (r.jitterMs != null ? r.jitterMs + ' ms' : '–')], 6)}</tbody></table>
+<h2>Interfaces</h2><table><thead><tr><th>Interface</th><th>Status</th><th>Udnyttelse</th><th>Fejl/s</th><th>Discards/s</th></tr></thead><tbody>${rows(b.interfaces, ['iface', 'status', (r) => (r.utilPct != null ? r.utilPct + '%' : '–'), 'errPerSec', 'dropPerSec'], 5)}</tbody></table>
+<h2>Findings</h2><table><thead><tr><th>Tid</th><th>Severity</th><th>Metrik</th><th>Forklaring</th></tr></thead><tbody>${rows(b.findings, [(r) => r.createdAt, 'severity', 'metric', 'explanation'], 4)}</tbody></table>
+<h2>Top talkers</h2><table><thead><tr><th>Kilde</th><th>Destination</th><th>Org/Land</th><th>Bytes</th></tr></thead><tbody>${rows(b.flows && b.flows.topTalkers, ['srcIp', (r) => (r.dstIp || r.extIp || '–'), (r) => (r.internal ? 'intern' : [r.asnName, r.country].filter(Boolean).join(' ')), 'bytes'], 4)}</tbody></table>
+${(b.flows && b.flows.scans && b.flows.scans.length) ? `<h2>Scans / fan-out</h2><table><thead><tr><th>Kilde</th><th>Type</th><th>Porte</th><th>Hosts</th></tr></thead><tbody>${rows(b.flows.scans, ['srcIp', 'kind', 'distinctPorts', 'distinctHosts'], 4)}</tbody></table>` : ''}
+<script>window.onload=function(){setTimeout(function(){window.print();},300);};</script>
+</body></html>`;
+  const w = window.open('', '_blank');
+  if (!w) { toast('Tillad pop-ups for at udskrive', true); return; }
+  w.document.write(html);
+  w.document.close();
+}
+
+// Small modal offering the investigation export formats for one agent.
+function exportInvestigationMenu(id, name) {
+  const card = $('#modal-card');
+  card.replaceChildren(
+    el('h3', {}, `Eksportér undersøgelse — ${esc(name)}`),
+    el('p', { class: 'muted' }, 'Et øjebliksbillede af de seneste 24 timer: sundhed, datakvalitet, interfaces, seneste probes, findings og top-talkers.'),
+    el('div', { class: 'form-actions' },
+      el('button', { onclick: () => downloadAuthed(`/api/export/investigation?agentId=${encodeURIComponent(id)}&format=json`, `undersoegelse-${id}.json`) }, 'JSON'),
+      el('button', { class: 'ghost', onclick: () => downloadAuthed(`/api/export/investigation?agentId=${encodeURIComponent(id)}&format=csv`, `undersoegelse-${id}.csv`) }, 'CSV'),
+      el('button', { class: 'ghost', onclick: () => { closeModal(); printInvestigation(id); } }, 'Udskriv / PDF'),
+      el('button', { class: 'ghost', onclick: closeModal }, 'Luk')));
+  $('#modal').classList.remove('hidden');
+}
+
+// Global search (topbar): agents/hosts/locations + which agents recently saw an
+// IP/port. Results open in a modal; each is a shortcut into the agent/flow views.
+async function globalSearch(q) {
+  q = String(q || '').trim();
+  if (!q) return;
+  const card = $('#modal-card');
+  card.replaceChildren(el('h3', {}, `Søgning: ${esc(q)}`), el('div', { class: 'muted' }, 'Søger…'));
+  $('#modal').classList.remove('hidden');
+  let data;
+  try { data = await api(`/api/search?q=${encodeURIComponent(q)}`); }
+  catch (e) { card.replaceChildren(el('h3', {}, 'Søgning'), el('p', { class: 'error' }, e.message), el('div', { class: 'form-actions' }, el('button', { class: 'ghost', onclick: closeModal }, 'Luk'))); return; }
+  const item = (label, sub, onclick) => el('button', { class: 'search-item', onclick }, el('span', {}, label), sub || null);
+  const kids = [el('h3', {}, `Søgning: ${esc(q)}`)];
+  let any = false;
+  if (data.agents.length) {
+    any = true;
+    kids.push(el('h4', {}, 'Agenter'));
+    kids.push(el('div', { class: 'search-list' }, ...data.agents.map((a) => item(
+      esc(a.name), el('span', { class: `badge ${a.status === 'online' ? 'online' : 'offline'}` }, a.status || '?'),
+      () => { closeModal(); openAgent(a.id); }))));
+  }
+  if (data.flows && data.flows.ip && data.flows.ip.agents.length) {
+    any = true;
+    kids.push(el('h4', {}, `IP ${esc(data.flows.ip.ip)} `, el('span', { class: 'muted' }, '· set af')));
+    kids.push(el('div', { class: 'search-list' }, ...data.flows.ip.agents.map((a) => item(
+      esc(a.name), el('span', { class: 'muted' }, '→ flows'), () => { closeModal(); openFlows(a.id, { peer: data.flows.ip.ip }); }))));
+  }
+  if (data.flows && data.flows.port && data.flows.port.agents.length) {
+    any = true;
+    kids.push(el('h4', {}, `Port ${data.flows.port.port} `, el('span', { class: 'muted' }, '· set af')));
+    kids.push(el('div', { class: 'search-list' }, ...data.flows.port.agents.map((a) => item(
+      esc(a.name), el('span', { class: 'muted' }, '→ flows'), () => { closeModal(); openFlows(a.id, { port: data.flows.port.port }); }))));
+  }
+  if (data.locations.length) {
+    any = true;
+    kids.push(el('h4', {}, 'Lokationer'));
+    kids.push(el('div', { class: 'search-list' }, ...data.locations.map((l) => item(esc(l.name), null, () => { closeModal(); currentView = 'map'; render(); }))));
+  }
+  if (!any) kids.push(el('div', { class: 'empty' }, 'Ingen resultater.'));
+  kids.push(el('div', { class: 'form-actions' }, el('button', { class: 'ghost', onclick: closeModal }, 'Luk')));
+  card.replaceChildren(...kids);
+}
+
+const fleetState = { timer: null };
+function stopFleet() { if (fleetState.timer) { clearInterval(fleetState.timer); fleetState.timer = null; } }
+const agentState = { timer: null };
+function stopAgent() { if (agentState.timer) { clearInterval(agentState.timer); agentState.timer = null; } }
+
+// Health verdict → badge (reuses the existing badge palette). title = reason.
+const HEALTH_BADGE = {
+  ok: ['online', 'SUND'], warn: ['warn', 'ADVARSEL'], bad: ['offline', 'KRITISK'],
+  down: ['offline', 'NEDE'], stale: ['grace', 'FORÆLDET'], unknown: ['grace', 'UKENDT'],
+};
+function healthBadge(h) {
+  const [cls, label] = HEALTH_BADGE[h.status] || ['grace', h.status];
+  return el('span', { class: `badge ${cls}`, title: h.reason || '' }, label);
+}
+// Latency cell: highlights + shows the baseline when the latest is elevated.
+function latencyText(m) {
+  if (!m || m.rttMs == null) return '–';
+  if (m.baselineMs && m.latencyZ >= 3) return el('span', { class: 'warn-text' }, `${m.rttMs} ms `, el('span', { class: 'muted' }, `/ ~${m.baselineMs}`));
+  return `${m.rttMs} ms`;
+}
+
+// The landing view: all agents with a probe-derived health verdict, worst-first.
+// Click a row to pivot into that agent's combined detail page.
+views.fleet = async () => {
+  const root = el('div', { class: 'fleet' });
+  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Oversigt'),
+    el('span', { class: 'muted' }, 'Alle agenter · sundhed ud fra reachability · tab · latency · jitter')));
+  const bannerHost = el('div', {});
+  const summaryHost = el('div', { class: 'fleet-summary' });
+  const tableHost = el('div', {});
+  root.append(bannerHost, summaryHost, tableHost);
+
+  // Maintenance banner (viewer-readable) — shown while a window is active now.
+  api('/api/settings/maintenance').then((m) => {
+    const now = Date.now();
+    const active = (m.windows || []).filter((w) => Date.parse(w.from) <= now && now <= Date.parse(w.to));
+    if (active.length) bannerHost.replaceChildren(el('div', { class: 'mw-banner' }, '🛠 Vedligehold aktivt: ', esc(active.map((w) => w.name).join(', ')), el('span', { class: 'muted' }, ' — alarm-notifikationer undertrykt')));
+    else bannerHost.replaceChildren();
+  }).catch(() => {});
+
+  function renderSummary(s) {
+    const chip = (cls, label, n) => el('div', { class: `fs-chip ${cls}${n ? '' : ' zero'}` }, el('span', { class: 'fs-n' }, String(n)), el('span', { class: 'fs-l' }, label));
+    summaryHost.replaceChildren(
+      chip('ok', 'Sunde', s.ok),
+      chip('warn', 'Advarsler', s.warn),
+      chip('bad', 'Kritiske', s.bad + s.down),
+      chip('stale', 'Forældet', s.stale),
+      chip('unknown', 'Ukendt', s.unknown));
+  }
+  function fleetRow(a) {
+    const m = a.health.metrics;
+    const dq = a.quality && a.quality.status && a.quality.status !== 'ok' && a.quality.status !== 'unknown'
+      ? el('span', { class: 'dq-flag', title: `Datakvalitet: ${a.quality.reason || a.quality.status}` }, ' ⚠')
+      : null;
+    return el('tr', { class: 'fleet-row', tabindex: '0', onclick: () => openAgent(a.agentId), onkeydown: (e) => { if (e.key === 'Enter') openAgent(a.agentId); } },
+      el('td', {}, el('div', {}, esc(a.displayName), dq), a.displayName !== a.hostname ? el('div', { class: 'muted' }, esc(a.hostname)) : null),
+      el('td', {}, el('span', { class: `badge ${a.online ? 'online' : 'offline'}` }, a.online ? 'online' : 'offline')),
+      el('td', {}, healthBadge(a.health)),
+      el('td', { class: 'num' }, m.lossPct != null ? `${m.lossPct}%` : '–'),
+      el('td', { class: 'num' }, latencyText(m)),
+      el('td', { class: 'num' }, m.jitterMs != null ? `${m.jitterMs} ms` : '–'),
+      el('td', { class: 'num muted' }, m.targets ? `${m.reachable}/${m.targets}` : '–'),
+      el('td', { class: 'muted' }, a.locationName || '–'),
+      el('td', { class: 'muted' }, m.lastTs ? fmtTimeShort(new Date(m.lastTs).getTime()) : '–'));
+  }
+  function renderTable(agents) {
+    if (!agents.length) { tableHost.replaceChildren(el('div', { class: 'empty' }, 'Ingen agenter endnu — gå til Agenter for at enrolle en.')); return; }
+    tableHost.replaceChildren(el('table', { class: 'fleet-table' },
+      el('thead', {}, el('tr', {}, ...['Agent', 'Status', 'Health', 'Tab', 'Latency', 'Jitter', 'Mål', 'Lokation', 'Senest'].map((h) => el('th', {}, h)))),
+      el('tbody', {}, ...agents.map(fleetRow))));
+  }
+  async function refresh() {
+    let data;
+    try { data = await api('/api/fleet/health'); } catch (e) { tableHost.replaceChildren(el('div', { class: 'error' }, e.message)); return; }
+    renderSummary(data.summary);
+    renderTable(data.agents);
+  }
+
+  await refresh();
+  stopFleet();
+  fleetState.timer = setInterval(() => {
+    if (currentView !== 'fleet') { stopFleet(); return; }
+    if (!modalOpen()) refresh();
+  }, 10000);
+  return root;
+};
+
+// Combined per-agent page: health résumé + probes (latency/loss/jitter) +
+// interface health + recent traffic — the troubleshooting surface for one agent.
+views.agent = async () => {
+  const id = selectedAgentId;
+  const root = el('div', { class: 'agent-detail' });
+  if (id == null) { root.append(el('div', { class: 'empty' }, 'Vælg en agent i oversigten.')); return root; }
+  let agent;
+  try { agent = await api(`/agents/${id}`); } catch (e) { root.append(el('div', { class: 'error' }, e.message)); return root; }
+
+  root.append(el('div', { class: 'section-head' },
+    el('button', { class: 'small ghost', onclick: () => { currentView = 'fleet'; render(); } }, '← Oversigt'),
+    el('h2', {}, esc(agent.display_name || agent.hostname)),
+    el('span', { class: `badge ${agent.status}` }, agent.status),
+    agent.location_name ? el('span', { class: 'muted' }, esc(agent.location_name)) : null,
+    el('button', { class: 'small ghost', onclick: () => { currentView = 'flows'; render(); } }, 'Flows →'),
+    el('button', { class: 'small ghost', onclick: () => exportInvestigationMenu(id, agent.display_name || agent.hostname) }, 'Eksportér'),
+    canWrite() ? el('button', { class: 'small ghost', onclick: () => runTest(agent) }, 'Kør test') : null));
+
+  // Health résumé (the headline + the metrics that drove it).
+  const healthHost = el('div', { class: 'agent-health' });
+  root.append(healthHost);
+  function renderHealth(h, q) {
+    const m = h.metrics;
+    const kv = (k, v, cls) => el('div', { class: 'ah-kv' }, el('span', { class: 'ah-k' }, k), el('span', { class: `ah-v${cls ? ' ' + cls : ''}` }, v));
+    const children = [
+      el('div', { class: 'ah-head' }, healthBadge(h), el('span', { class: 'ah-reason' }, h.reason || '')),
+      el('div', { class: 'ah-grid' },
+        kv('Mål nået', m.targets ? `${m.reachable}/${m.targets}` : '–'),
+        kv('Tab', m.lossPct != null ? `${m.lossPct}%` : '–', m.lossPct >= 2 ? 'warn-text' : ''),
+        kv('Latency', latencyText(m)),
+        kv('Baseline', m.baselineMs != null ? `~${m.baselineMs} ms` : '–'),
+        kv('Jitter', m.jitterMs != null ? `${m.jitterMs} ms` : '–', m.jitterMs >= 30 ? 'warn-text' : ''),
+        m.ifaceStatus ? kv('Interface', `${String(m.ifaceStatus).toUpperCase()}${m.worstIface ? ' · ' + m.worstIface : ''}`, m.ifaceStatus === 'ok' ? '' : (m.ifaceStatus === 'warn' ? 'warn-text' : 'bad-text')) : null),
+    ];
+    if (q && q.status && q.status !== 'unknown') {
+      const cls = q.status === 'ok' ? 'online' : (q.status === 'warn' ? 'warn' : 'offline');
+      children.push(el('div', { class: 'ah-quality' },
+        el('span', { class: `badge ${cls}` }, `Datakvalitet: ${q.status.toUpperCase()}`),
+        el('span', { class: 'muted' }, q.reason || ''),
+        q.version ? el('span', { class: 'muted' }, `· agent v${q.version}`) : null,
+        q.dropPct != null ? el('span', { class: 'muted' }, `· tab ${q.dropPct}%`) : null,
+        q.clockSkewMs != null ? el('span', { class: 'muted' }, `· ur ${Math.round(q.clockSkewMs / 1000)} s`) : null));
+    } else if (q && q.version) {
+      children.push(el('div', { class: 'ah-quality muted' }, `agent v${q.version}`));
+    }
+    healthHost.replaceChildren(...children);
+  }
+
+  // ---- Probes (this agent) ----
+  const typeSel = el('select', {}, ...[['ping', 'Ping (ICMP)'], ['tcp', 'TCP-connect'], ['dns', 'DNS'], ['traceroute', 'Traceroute']].map(([v, l]) => el('option', { value: v }, l)));
+  const target = el('input', { type: 'text', placeholder: 'fx 1.1.1.1 eller example.com' });
+  const portInput = el('input', { type: 'number', min: '1', max: '65535', value: '443' });
+  const portWrap = el('label', { class: 'inline muted' }, 'Port ', portInput);
+  const countInput = el('input', { type: 'number', min: '1', max: '20', value: '4' });
+  const runBtn = el('button', { class: 'small' }, 'Kør probe');
+  const probeStatus = el('span', { class: 'muted' });
+  const syncPort = () => { portWrap.style.display = typeSel.value === 'tcp' ? '' : 'none'; };
+  typeSel.addEventListener('change', syncPort); syncPort();
+  const probeForm = el('div', { class: 'history-controls' },
+    el('label', { class: 'inline muted' }, 'Type ', typeSel),
+    el('label', { class: 'inline muted' }, 'Mål ', target),
+    portWrap,
+    el('label', { class: 'inline muted' }, 'Antal ', countInput),
+    runBtn, probeStatus);
+  const probeLatestHost = el('div', { class: 'probe-latest' });
+  const probeDetailHost = el('div', {});
+
+  async function runProbe() {
+    const host = target.value.trim();
+    if (!host) { probeStatus.className = 'error'; probeStatus.textContent = 'Angiv et mål.'; return; }
+    const body = { type: typeSel.value, host };
+    if (typeSel.value === 'tcp') body.port = Number(portInput.value);
+    if (countInput.value) body.count = Number(countInput.value);
+    probeStatus.className = 'muted'; probeStatus.textContent = 'Sender…'; runBtn.disabled = true;
+    try {
+      await api(`/agents/${id}/probe`, { method: 'POST', body });
+      probeStatus.textContent = 'Sendt — resultatet kommer om et øjeblik.';
+      setTimeout(refreshProbes, 2500); setTimeout(refreshProbes, 6000);
+    } catch (e) {
+      probeStatus.className = 'error';
+      probeStatus.textContent = e.status === 409 ? 'Agenten er ikke forbundet lige nu.' : (e.data && e.data.details ? Object.values(e.data.details).join(' · ') : e.message);
+    } finally { runBtn.disabled = false; }
+  }
+  runBtn.addEventListener('click', runProbe);
+  async function refreshProbes() {
+    let data;
+    try { data = await api(`/api/probes/latest?agentId=${encodeURIComponent(id)}`); } catch { return; }
+    probeLatestHost.replaceChildren(probeLatestTable(data.results || [], async (r) => { probeDetailHost.replaceChildren(await probeDetail(r, id)); }));
+  }
+
+  // ---- Interfaces ----
+  const ifaceStatus = el('span', { class: 'muted' });
+  const ifaceHost = el('div', {});
+  async function refreshIfaces() {
+    let data;
+    try { data = await api(`/api/interfaces?agentId=${encodeURIComponent(id)}`); } catch (e) { ifaceHost.replaceChildren(el('div', { class: 'error' }, e.message)); return; }
+    ifaceStatus.textContent = data.ts ? `kilde: ${data.source} · målt ${fmtTimeShort(new Date(data.ts).getTime())}` : 'ingen målinger endnu';
+    ifaceHost.replaceChildren(interfaceTable(data.interfaces));
+  }
+
+  // ---- Recent traffic (bandwidth over the last measurements) ----
+  const trafficHost = el('div', { class: 'overview-chart' });
+  async function refreshTraffic() {
+    let rows;
+    try { rows = await api(`/agents/${id}/results?limit=60`); } catch (e) { trafficHost.replaceChildren(el('div', { class: 'error' }, e.message)); return; }
+    const series = (rows || []).slice().reverse().map((r) => {
+      const t = r.payload && r.payload.traffic && r.payload.traffic.totals;
+      return { t: new Date(r.created_at).getTime(), rx: t ? Number(t.rxBytesPerSec) || 0 : 0, tx: t ? Number(t.txBytesPerSec) || 0 : 0 };
+    });
+    if (series.length < 2) { trafficHost.replaceChildren(el('div', { class: 'empty' }, 'Ingen trafikmålinger endnu — tryk "Kør test".')); return; }
+    trafficHost.replaceChildren(historyChart([
+      { id: 'rx', label: '↓ RX', color: '#06b6d4', points: series.map((s) => ({ t: s.t, y: s.rx })) },
+      { id: 'tx', label: '↑ TX', color: '#10b981', points: series.map((s) => ({ t: s.t, y: s.tx })) },
+    ], { fromMs: series[0].t, toMs: series[series.length - 1].t }));
+  }
+
+  async function refreshHealth() {
+    try { const d = await api(`/api/fleet/agent/${id}`); renderHealth(d.health, d.quality); } catch { /* keep last verdict */ }
+  }
+
+  root.append(
+    el('details', { class: 'sec', open: true }, el('summary', {}, 'Probes ', el('span', { class: 'muted' }, '· ping · TCP · DNS · traceroute')), probeForm, probeLatestHost, probeDetailHost),
+    el('details', { class: 'sec', open: true }, el('summary', {}, 'Interfaces ', ifaceStatus), ifaceHost),
+    el('details', { class: 'sec' }, el('summary', {}, 'Trafik ', el('span', { class: 'muted' }, '· seneste båndbredde')), trafficHost));
+
+  async function refreshAll() { await Promise.all([refreshHealth(), refreshProbes(), refreshIfaces(), refreshTraffic()]); }
+  await refreshAll();
+  stopAgent();
+  agentState.timer = setInterval(() => {
+    if (currentView !== 'agent') { stopAgent(); return; }
+    if (!modalOpen()) refreshAll();
+  }, 7000);
+  return root;
+};
+
+// Flow / conversation explorer: query NetFlow/sFlow conversations for an agent
+// with filters, see top talkers + ports/protocols + a byte series, and surface
+// port-scan / fan-out sources. Metadata only; internal (LAN) conversations are
+// shown — they are simply never geolocated.
+views.flows = async () => {
+  const root = el('div', { class: 'flows-explorer' });
+  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Flows'),
+    el('span', { class: 'muted' }, 'Samtaler · top talkers · porte · scan / fan-out')));
+
+  const agents = await api('/agents').catch(() => []);
+  if (!agents.length) { root.append(el('div', { class: 'empty' }, 'Ingen agenter endnu.')); return root; }
+
+  const agentSel = el('select', {}, ...agents.map((a) => el('option', { value: String(a.id) }, a.display_name || a.hostname)));
+  if (selectedAgentId != null && agents.some((a) => String(a.id) === String(selectedAgentId))) agentSel.value = String(selectedAgentId);
+  const peerInput = el('input', { type: 'text', placeholder: 'IP (src/dst)' });
+  const portInput = el('input', { type: 'number', min: '1', max: '65535', placeholder: 'port' });
+  const protoInput = el('input', { type: 'text', placeholder: 'tcp/udp' });
+  const dirSel = el('select', {}, el('option', { value: '' }, 'Alle retninger'), el('option', { value: 'out' }, 'Udgående'), el('option', { value: 'in' }, 'Indgående'));
+  const scopeSel = el('select', {}, el('option', { value: '' }, 'Intern + ekstern'), el('option', { value: 'external' }, 'Kun ekstern'), el('option', { value: 'internal' }, 'Kun intern'));
+  const winSel = el('select', {}, el('option', { value: '1' }, 'Sidste 1 t'), el('option', { value: '6' }, 'Sidste 6 t'), el('option', { value: '24' }, 'Sidste 24 t'));
+  winSel.value = '6';
+  const runBtn = el('button', { class: 'small' }, 'Vis');
+  const status = el('span', { class: 'muted' });
+
+  // Prefill from a deep link (global search → "→ flows").
+  if (flowsPrefill) {
+    if (flowsPrefill.agentId != null && agents.some((a) => String(a.id) === String(flowsPrefill.agentId))) agentSel.value = String(flowsPrefill.agentId);
+    if (flowsPrefill.peer) peerInput.value = flowsPrefill.peer;
+    if (flowsPrefill.port) portInput.value = String(flowsPrefill.port);
+    flowsPrefill = null;
+  }
+
+  root.append(el('div', { class: 'history-controls' },
+    el('label', { class: 'inline muted' }, 'Agent ', agentSel),
+    el('label', { class: 'inline muted' }, 'Peer ', peerInput),
+    el('label', { class: 'inline muted' }, 'Port ', portInput),
+    el('label', { class: 'inline muted' }, 'Proto ', protoInput),
+    dirSel, scopeSel, winSel, runBtn, status));
+
+  const host = el('div', {});
+  root.append(host);
+
+  function qs() {
+    const p = new URLSearchParams();
+    p.set('agentId', agentSel.value);
+    const hours = Number(winSel.value) || 6;
+    p.set('from', new Date(Date.now() - hours * 3600000).toISOString());
+    if (peerInput.value.trim()) p.set('peer', peerInput.value.trim());
+    if (portInput.value.trim()) p.set('port', portInput.value.trim());
+    if (protoInput.value.trim()) p.set('proto', protoInput.value.trim());
+    if (dirSel.value) p.set('direction', dirSel.value);
+    if (scopeSel.value) p.set('internal', scopeSel.value);
+    return p.toString();
+  }
+  const talkerPeer = (t) => (t.internal ? t.dstIp : (t.extIp || t.dstIp));
+
+  async function refresh() {
+    status.textContent = 'Henter…';
+    let data;
+    try { data = await api(`/api/flows/explore?${qs()}`); } catch (e) { host.replaceChildren(el('div', { class: 'error' }, e.message)); status.textContent = ''; return; }
+    status.textContent = `${fmtBytes(data.totals.bytes)} · ${data.totals.flowCount} flows · ${data.totals.records} poster`;
+    const kids = [];
+
+    // Scans/fan-out first — it's the security-relevant signal.
+    if (data.scans && data.scans.length) {
+      kids.push(el('details', { class: 'sec scan-sec', open: true }, el('summary', {}, '⚠ Mulige scans / fan-out ', el('span', { class: 'muted' }, '· én kilde mod mange porte/hosts')),
+        el('table', {}, el('thead', {}, el('tr', {}, ...['Kilde', 'Type', 'Porte', 'Hosts', 'Bytes', 'Flows'].map((h) => el('th', {}, h)))),
+          el('tbody', {}, ...data.scans.map((s) => el('tr', {},
+            el('td', {}, esc(s.srcIp)),
+            el('td', {}, el('span', { class: `badge ${s.kind === 'port-scan' ? 'offline' : 'warn'}` }, s.kind === 'port-scan' ? 'PORT-SCAN' : 'FAN-OUT')),
+            el('td', { class: 'num bad-text' }, String(s.distinctPorts)),
+            el('td', { class: 'num' }, String(s.distinctHosts)),
+            el('td', { class: 'num' }, fmtBytes(s.bytes)),
+            el('td', { class: 'num muted' }, String(s.flowCount))))))));
+    }
+
+    if (data.series && data.series.length >= 2) {
+      const pts = data.series.map((s) => ({ t: new Date(s.at).getTime(), y: s.bytes }));
+      kids.push(el('div', { class: 'overview-chart' }, historyChart([{ id: 'b', label: 'Bytes', color: '#06b6d4', points: pts }], { fromMs: pts[0].t, toMs: pts[pts.length - 1].t })));
+    }
+
+    kids.push(el('h4', {}, 'Top talkers'));
+    if (!data.topTalkers.length) kids.push(el('div', { class: 'empty' }, 'Ingen flows i vinduet — kræver NetFlow/sFlow + geo-pipeline.'));
+    else kids.push(el('table', {},
+      el('thead', {}, el('tr', {}, ...['Kilde', 'Destination', 'Org/Land', 'Bytes', 'Pakker', 'Flows'].map((h) => el('th', {}, h)))),
+      el('tbody', {}, ...data.topTalkers.map((t) => el('tr', { class: 'fleet-row', onclick: () => { peerInput.value = talkerPeer(t) || ''; refresh(); } },
+        el('td', {}, esc(t.srcIp || '–')),
+        el('td', {}, esc(t.dstIp || t.extIp || '–')),
+        el('td', {}, t.internal ? el('span', { class: 'badge grace' }, 'intern') : el('span', { class: 'muted' }, [t.asnName, t.country].filter(Boolean).join(' · ') || '–')),
+        el('td', { class: 'num' }, fmtBytes(t.bytes)),
+        el('td', { class: 'num muted' }, String(t.packets)),
+        el('td', { class: 'num muted' }, String(t.flowCount)))))));
+
+    const portTable = el('table', {}, el('thead', {}, el('tr', {}, ...['Port', 'Proto', 'Bytes', 'Flows'].map((h) => el('th', {}, h)))),
+      el('tbody', {}, ...(data.byPort.length ? data.byPort.map((p) => el('tr', {}, el('td', {}, String(p.port)), el('td', { class: 'muted' }, p.proto || '–'), el('td', { class: 'num' }, fmtBytes(p.bytes)), el('td', { class: 'num muted' }, String(p.flowCount)))) : [el('tr', {}, el('td', { class: 'muted' }, '–'))])));
+    const protoTable = el('table', {}, el('thead', {}, el('tr', {}, ...['Protokol', 'Bytes', 'Flows'].map((h) => el('th', {}, h)))),
+      el('tbody', {}, ...(data.byProto.length ? data.byProto.map((p) => el('tr', {}, el('td', {}, p.proto || '–'), el('td', { class: 'num' }, fmtBytes(p.bytes)), el('td', { class: 'num muted' }, String(p.flowCount)))) : [el('tr', {}, el('td', { class: 'muted' }, '–'))])));
+    kids.push(el('div', { class: 'flows-tables' },
+      el('div', {}, el('h4', {}, 'Top porte'), portTable),
+      el('div', {}, el('h4', {}, 'Protokoller'), protoTable)));
+
+    host.replaceChildren(...kids);
+  }
+
+  runBtn.addEventListener('click', refresh);
+  agentSel.addEventListener('change', refresh);
+  await refresh();
   return root;
 };
 
@@ -2389,7 +2895,7 @@ views.settings = async () => {
   const root = el('div');
   const isAdmin = role === 'admin';
   const subtabs = [];
-  if (isAdmin) subtabs.push(['analyse', 'Analyse'], ['alerting', 'Alerting'], ['retention', 'Retention'], ['types', 'Trafiktyper'], ['map', 'Kort'], ['users', 'Brugere']);
+  if (isAdmin) subtabs.push(['analyse', 'Analyse'], ['alerting', 'Alerting'], ['maintenance', 'Vedligehold'], ['retention', 'Retention'], ['types', 'Trafiktyper'], ['map', 'Kort'], ['users', 'Brugere']);
   subtabs.push(['license', 'Licens']);
   if (!settingsTab || !subtabs.some(([k]) => k === settingsTab)) settingsTab = subtabs[0][0];
 
@@ -2404,6 +2910,7 @@ views.settings = async () => {
     types: settingsTypesView,
     analyse: settingsAnalyseView,
     alerting: settingsAlertingView,
+    maintenance: settingsMaintenanceView,
     retention: settingsRetentionView,
   };
   let content;
@@ -2438,6 +2945,76 @@ async function settingsAlertingView() {
   const card = settingsCard('Alerting', alertingSummary(data.alerting));
   card.append(el('p', { class: 'muted small' }, 'Kanaler konfigureres via serverens .env, fordi de indeholder hemmeligheder (SMTP-kodeord, webhook-HMAC). Ændringer kræver genstart. Env: ALERTING_*, SMTP_*, WEBHOOK_*.'));
   root.append(el('div', { class: 'settings-grid' }, card));
+  return root;
+}
+
+// Maintenance windows: during an active window, alert notifications are
+// suppressed (findings are still recorded + shown). Global, per-location or
+// per-agent. Admin only.
+async function settingsMaintenanceView() {
+  const [data, agents, locations] = await Promise.all([api('/api/settings'), api('/agents').catch(() => []), api('/locations').catch(() => [])]);
+  const root = el('div');
+  root.append(el('p', { class: 'muted settings-intro' }, 'Under et vedligeholdelsesvindue undertrykkes alarm-notifikationer (e-mail/webhook/syslog) — findings registreres og vises stadig. Brug det ved planlagt arbejde, så ingen bliver paget unødigt.'));
+  let windows = (data.maintenance && Array.isArray(data.maintenance.windows)) ? data.maintenance.windows.slice() : [];
+  const listHost = el('div', {});
+  const err = el('p', { class: 'error' });
+
+  const agentName = (id) => { const a = agents.find((x) => String(x.id) === String(id)); return a ? (a.display_name || a.hostname) : `#${id}`; };
+  const locName = (id) => { const l = locations.find((x) => String(x.id) === String(id)); return l ? l.name : `#${id}`; };
+  const scopeText = (w) => (w.scope === 'global' ? 'Alle agenter' : w.scope === 'agent' ? `Agent: ${agentName(w.targetId)}` : `Lokation: ${locName(w.targetId)}`);
+  const isActive = (w) => { const n = Date.now(); return Date.parse(w.from) <= n && n <= Date.parse(w.to); };
+
+  async function persist() {
+    err.textContent = '';
+    try { const res = await api('/api/settings/maintenance', { method: 'PUT', body: { windows } }); windows = res.windows; renderList(); }
+    catch (e) { err.textContent = e.data && e.data.details ? Object.values(e.data.details).join(' · ') : e.message; }
+  }
+  function renderList() {
+    if (!windows.length) { listHost.replaceChildren(el('div', { class: 'empty' }, 'Ingen vinduer. Tilføj ét nedenfor.')); return; }
+    listHost.replaceChildren(el('table', {},
+      el('thead', {}, el('tr', {}, ...['Navn', 'Omfang', 'Fra', 'Til', '', ''].map((h) => el('th', {}, h)))),
+      el('tbody', {}, ...windows.map((w) => el('tr', {},
+        el('td', {}, esc(w.name)),
+        el('td', { class: 'muted' }, scopeText(w)),
+        el('td', { class: 'muted' }, fmtDate(w.from)),
+        el('td', { class: 'muted' }, fmtDate(w.to)),
+        el('td', {}, isActive(w) ? el('span', { class: 'badge warn' }, 'aktiv') : el('span', { class: 'muted' }, 'planlagt')),
+        el('td', {}, el('button', { class: 'small danger', onclick: () => { windows = windows.filter((x) => x.id !== w.id); persist(); } }, 'Slet')))))));
+  }
+  renderList();
+
+  // Add form.
+  const nameI = el('input', { type: 'text', placeholder: 'fx Firmware-opgradering' });
+  const scopeSel = el('select', {}, el('option', { value: 'global' }, 'Alle agenter'), el('option', { value: 'agent' }, 'Én agent'), el('option', { value: 'location' }, 'Én lokation'));
+  const targetSel = el('select', {});
+  const fromI = el('input', { type: 'datetime-local' });
+  const toI = el('input', { type: 'datetime-local' });
+  const syncTarget = () => {
+    targetSel.style.display = scopeSel.value === 'global' ? 'none' : '';
+    const opts = scopeSel.value === 'agent' ? agents.map((a) => [a.id, a.display_name || a.hostname]) : scopeSel.value === 'location' ? locations.map((l) => [l.id, l.name]) : [];
+    targetSel.replaceChildren(...opts.map(([v, l]) => el('option', { value: String(v) }, l)));
+  };
+  scopeSel.addEventListener('change', syncTarget); syncTarget();
+  const addBtn = el('button', { class: 'small' }, '+ Tilføj vindue');
+  addBtn.addEventListener('click', () => {
+    err.textContent = '';
+    if (!nameI.value.trim() || !fromI.value || !toI.value) { err.textContent = 'Navn, fra og til er påkrævet.'; return; }
+    const w = { name: nameI.value.trim(), scope: scopeSel.value, from: new Date(fromI.value).toISOString(), to: new Date(toI.value).toISOString() };
+    if (scopeSel.value !== 'global') w.targetId = Number(targetSel.value);
+    windows = windows.concat([w]);
+    nameI.value = '';
+    persist();
+  });
+
+  root.append(el('div', { class: 'settings-grid' }, settingsCard('Vedligeholdelsesvinduer', el('div', {}, listHost,
+    el('div', { class: 'mw-form' },
+      el('label', { class: 'set-field' }, el('span', {}, 'Navn'), nameI),
+      el('label', { class: 'set-field' }, el('span', {}, 'Omfang'), scopeSel),
+      el('label', { class: 'set-field' }, el('span', {}, 'Mål'), targetSel),
+      el('label', { class: 'set-field' }, el('span', {}, 'Fra'), fromI),
+      el('label', { class: 'set-field' }, el('span', {}, 'Til'), toI),
+      addBtn),
+    err))));
   return root;
 }
 
@@ -2792,7 +3369,7 @@ function onLiveFinding(f) {
   }
 }
 
-let currentView = 'overview';
+let currentView = 'fleet';
 const modalOpen = () => !$('#modal').classList.contains('hidden');
 
 async function render({ silent = false } = {}) {
@@ -2811,6 +3388,8 @@ async function render({ silent = false } = {}) {
   if (currentView !== 'overview') stopOverview();
   if (currentView !== 'probes') stopProbes();
   if (currentView !== 'interfaces') stopIfaces();
+  if (currentView !== 'fleet') stopFleet();
+  if (currentView !== 'agent') stopAgent();
   // Tear down the Leaflet map when leaving the geo view (it rebuilds on entry).
   if (currentView !== 'geo') stopGeo();
 
@@ -2851,11 +3430,15 @@ $('#login-form').addEventListener('submit', async (e) => {
   try { await login($('#email').value, $('#password').value); render(); }
   catch (err) { $('#login-error').textContent = err.message; }
 });
-$('#logout').addEventListener('click', () => { setAutoRefresh(false); stopOverview(); $('#autorefresh').checked = false; logout(); });
+$('#logout').addEventListener('click', () => { setAutoRefresh(false); stopOverview(); stopFleet(); stopAgent(); stopProbes(); stopIfaces(); $('#autorefresh').checked = false; logout(); });
 $('#refresh').addEventListener('click', () => render());
 $('#autorefresh').addEventListener('change', (e) => setAutoRefresh(e.target.checked));
 for (const b of document.querySelectorAll('.tabs button')) {
   b.addEventListener('click', () => { closeDrawer(); currentView = b.dataset.view; render(); });
+}
+{
+  const sq = $('#search-q');
+  if (sq) sq.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); globalSearch(sq.value); sq.blur(); } });
 }
 $('#modal').addEventListener('click', (e) => { if (e.target.id === 'modal') closeModal(); });
 

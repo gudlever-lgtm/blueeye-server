@@ -33,18 +33,21 @@
       <header class="topbar">
         <strong>BlueEye <span class="muted">server</span></strong>
         <nav class="tabs">
-          <button data-view="overview" class="active">Trafik</button>
+          <button data-view="fleet" class="active">Oversigt</button>
+          <button data-view="overview">Trafik</button>
           <button data-view="map">Kort</button>
           <button data-view="geo" data-feature="geo">Geo</button>
           <button data-view="agents">Agenter</button>
           <button data-view="interfaces">Interfaces</button>
           <button data-view="probes">Probes</button>
+          <button data-view="flows">Flows</button>
           <button data-view="findings" data-feature="analysis">Analyse</button>
           <button data-view="locations">Lokationer</button>
           <button data-view="enrollment">Enrollment</button>
           <button data-view="settings">Indstillinger</button>
         </nav>
         <span class="spacer"></span>
+        <input id="search-q" class="topbar-search" type="search" placeholder="Søg agent / IP / port…" autocomplete="off" />
         <label class="autorefresh muted" title="Auto-opdatér hvert 5. sekund">
           <input type="checkbox" id="autorefresh" /> Auto
         </label>

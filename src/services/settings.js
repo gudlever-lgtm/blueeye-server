@@ -149,6 +149,62 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
     return listCategories(DEFAULT_CATEGORIES);
   }
 
+  // ---- Maintenance windows / alert silencing ------------------------------
+  // Stored as { windows: [{ id, name, scope, targetId?, from, to }] }. During an
+  // active window the dispatcher suppresses notifications (findings still record).
+  const SCOPES = ['global', 'agent', 'location'];
+
+  async function getMaintenance() {
+    let override = null;
+    try { override = await settingsRepo.get('maintenance'); } catch { override = null; }
+    const windows = override && Array.isArray(override.windows) ? override.windows : [];
+    return { windows };
+  }
+
+  function validateMaintenance(patch) {
+    const p = patch && typeof patch === 'object' ? patch : {};
+    const list = Array.isArray(p.windows) ? p.windows : null;
+    if (!list) return { errors: { windows: 'windows must be an array' } };
+    if (list.length > 50) return { errors: { windows: 'too many windows (max 50)' } };
+    const errors = {};
+    const value = [];
+    const seen = new Set();
+    list.forEach((w, i) => {
+      const at = `#${i + 1}`;
+      if (!w || typeof w !== 'object') { errors[at] = 'must be an object'; return; }
+      let id = String(w.id || '').trim();
+      if (id && !/^[a-z0-9][a-z0-9-]{0,39}$/i.test(id)) { errors[at] = 'id must be 1-40 chars of [a-z0-9-]'; return; }
+      if (!id) id = `mw-${Date.now().toString(36)}-${i}`;
+      if (seen.has(id)) { errors[at] = `duplicate id "${id}"`; return; }
+      seen.add(id);
+      const name = String(w.name || '').trim();
+      if (!name || name.length > 100) { errors[at] = 'name is required (max 100 chars)'; return; }
+      const scope = SCOPES.includes(w.scope) ? w.scope : null;
+      if (!scope) { errors[at] = `scope must be one of ${SCOPES.join(', ')}`; return; }
+      const out = { id, name, scope };
+      if (scope !== 'global') {
+        const tid = Number(w.targetId);
+        if (!Number.isInteger(tid) || tid <= 0) { errors[at] = 'targetId (positive integer) is required for agent/location scope'; return; }
+        out.targetId = tid;
+      }
+      const from = new Date(w.from);
+      const to = new Date(w.to);
+      if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) { errors[at] = 'from/to must be valid dates'; return; }
+      if (from.getTime() >= to.getTime()) { errors[at] = 'from must be before to'; return; }
+      out.from = from.toISOString();
+      out.to = to.toISOString();
+      value.push(out);
+    });
+    return Object.keys(errors).length ? { errors } : { value };
+  }
+
+  async function setMaintenance(patch) {
+    const { errors, value } = validateMaintenance(patch || {});
+    if (errors) { const err = new Error('invalid maintenance windows'); err.statusCode = 400; err.details = errors; throw err; }
+    await settingsRepo.set('maintenance', { windows: value });
+    return { windows: value };
+  }
+
   // ---- Analysis thresholds (Indstillinger → Analyse) ----------------------
   // Editable subset of the analysis config; the AI assistant + secrets stay
   // env-only. Defaults mirror src/analysis/config.js.
@@ -247,6 +303,7 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
 
   return {
     getMap, setMap, validateMap,
+    getMaintenance, setMaintenance, validateMaintenance,
     getFlowCategories, setFlowCategories, resetFlowCategories, validateFlowCategories,
     getAnalysis, setAnalysis, validateAnalysis,
     getRetention, setRetention, validateRetention,

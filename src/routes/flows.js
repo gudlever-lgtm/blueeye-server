@@ -8,6 +8,23 @@ const { validateTimeRange } = require('../validation/resultsValidation');
 const { listCategories, buildIndex, classifyPort, classifyAsn } = require('../flows/categories');
 const { parseId } = require('../validation/locationValidation');
 
+// Filter sanitisers for the conversation explorer. Everything is bound as a
+// query parameter regardless; these just reject obviously-bad input early.
+function parsePort(v) {
+  if (v === undefined || v === '') return { ok: true, value: null };
+  if (!/^\d+$/.test(String(v))) return { ok: false };
+  const n = Number(v);
+  return Number.isInteger(n) && n >= 1 && n <= 65535 ? { ok: true, value: n } : { ok: false };
+}
+function cleanProto(v) {
+  const s = String(v || '').trim().toLowerCase();
+  return /^[a-z0-9]{1,16}$/.test(s) ? s : null;
+}
+function cleanPeer(v) {
+  const s = String(v || '').trim();
+  return /^[0-9a-fA-F.:]{1,45}$/.test(s) ? s : null; // IPv4/IPv6 literal characters only
+}
+
 const TARGET_BUCKETS = 60;
 const MIN_BUCKET_MS = 60 * 1000;
 const DEFAULT_SPAN_MS = 6 * 60 * 60 * 1000; // last 6h when no range is given
@@ -127,6 +144,45 @@ function createFlowsRouter({ resultsRepo, agentsRepo, flowsRepo, getCategories }
       bucketMs,
       buckets,
       categories: out,
+    });
+  }));
+
+  // GET /api/flows/explore?agentId=&from=&to=&port=&proto=&peer=&direction=&internal=
+  // Conversation explorer: top talkers (src↔dst), top ports/protocols, a byte
+  // series, and port-scan / fan-out candidates for ONE agent. Metadata only;
+  // includes internal (RFC1918) conversations (never geolocated). viewer+.
+  router.get('/explore', requireAuth, reader, asyncHandler(async (req, res) => {
+    const agentId = parseId(req.query.agentId);
+    if (agentId === null) return res.status(400).json({ error: 'agentId is required (positive integer)' });
+    const { value: range, errors } = validateTimeRange(req.query);
+    if (errors) return res.status(400).json({ error: 'Validation failed', details: errors });
+    const portParsed = parsePort(req.query.port);
+    if (!portParsed.ok) return res.status(400).json({ error: 'port must be an integer 1–65535' });
+
+    const agent = await agentsRepo.findById(agentId);
+    if (!agent) return res.status(404).json({ error: 'Agent not found' });
+
+    const proto = req.query.proto ? cleanProto(req.query.proto) : null;
+    const peer = req.query.peer ? cleanPeer(req.query.peer) : null;
+    const direction = (req.query.direction === 'in' || req.query.direction === 'out') ? req.query.direction : null;
+    const internal = req.query.internal === 'internal' ? true : (req.query.internal === 'external' ? false : null);
+
+    const toMs = range.to ? range.to.getTime() : Date.now();
+    const fromMs = range.from ? range.from.getTime() : toMs - DEFAULT_SPAN_MS;
+    // ~60 buckets, at least a minute each.
+    const bucketSec = Math.max(60, Math.round((toMs - fromMs) / 1000 / TARGET_BUCKETS));
+
+    const empty = { topTalkers: [], byPort: [], byProto: [], series: [], scans: [], totals: { bytes: 0, packets: 0, flowCount: 0, records: 0 } };
+    const data = (flowsRepo && typeof flowsRepo.exploreFlows === 'function')
+      ? await flowsRepo.exploreFlows({ agentId, from: new Date(fromMs), to: new Date(toMs), proto, port: portParsed.value, peer, direction, internal, bucketSec })
+      : empty;
+
+    res.json({
+      agentId,
+      from: new Date(fromMs).toISOString(),
+      to: new Date(toMs).toISOString(),
+      filter: { port: portParsed.value, proto, peer, direction, internal: req.query.internal || null },
+      ...data,
     });
   }));
 

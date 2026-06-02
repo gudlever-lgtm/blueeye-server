@@ -17,6 +17,36 @@ function findingStoreWith(rows) {
   return fs;
 }
 
+// ---- investigation bundle --------------------------------------------------
+test('GET /api/export/investigation returns a JSON bundle for an agent (200)', async () => {
+  const agentsRepo = makeAgentsRepo({ findById: async (id) => ({ id, hostname: 'h9', display_name: 'H9', status: 'online', capabilities: { agentVersion: '0.2.0' } }) });
+  const findingStore = findingStoreWith([{ id: 'f1', createdAt: new Date('2026-06-02T00:00:00Z'), hostId: '9', metric: 'cpu', severity: 'WARN', kind: 'ANOMALY', explanation: 'cpu', evidence: [{}] }]);
+  const res = await request(makeApp({ agentsRepo, findingStore })).get('/api/export/investigation?agentId=9').set('Authorization', viewer());
+  assert.equal(res.status, 200);
+  assert.match(res.headers['content-disposition'], /blueeye-investigation-9\.json/);
+  assert.equal(res.body.agent.id, 9);
+  assert.equal(res.body.agent.version, '0.2.0');
+  assert.ok(res.body.health && res.body.quality);
+  assert.equal(res.body.findings.length, 1);
+});
+
+test('GET /api/export/investigation?format=csv returns an event log', async () => {
+  const agentsRepo = makeAgentsRepo({ findById: async (id) => ({ id, hostname: 'h9' }) });
+  const probeResultsRepo = require('../test-support/fakes').makeProbeResultsRepo({ latestByAgent: async () => [{ type: 'ping', target: '1.1.1.1', ok: true, rttMs: 10, lossPct: 0, ts: '2026-06-02T11:00:00Z' }] });
+  const findingStore = findingStoreWith([{ id: 'f1', createdAt: new Date('2026-06-02T00:00:00Z'), hostId: '9', metric: 'cpu', severity: 'WARN', kind: 'ANOMALY', explanation: 'cpu', evidence: [{}] }]);
+  const res = await request(makeApp({ agentsRepo, probeResultsRepo, findingStore })).get('/api/export/investigation?agentId=9&format=csv').set('Authorization', viewer());
+  assert.equal(res.status, 200);
+  assert.match(res.headers['content-type'], /text\/csv/);
+  const lines = res.text.trim().split('\n');
+  assert.equal(lines[0], 'ts,source,kind,subject,detail');
+  assert.ok(lines.some((l) => l.includes('finding')) && lines.some((l) => l.includes('probe:ping')));
+});
+
+test('GET /api/export/investigation requires agentId (400) and a real agent (404)', async () => {
+  assert.equal((await request(makeApp()).get('/api/export/investigation').set('Authorization', viewer())).status, 400);
+  assert.equal((await request(makeApp()).get('/api/export/investigation?agentId=9').set('Authorization', viewer())).status, 404);
+});
+
 // ---- findings --------------------------------------------------------------
 test('GET /api/export/findings?format=csv returns CSV with a header + rows', async () => {
   const findingStore = findingStoreWith([

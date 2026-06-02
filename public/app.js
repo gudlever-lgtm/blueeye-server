@@ -77,6 +77,12 @@ async function api(path, { method = 'GET', body } = {}) {
   return data;
 }
 
+// Human-readable text from an api() error: prefer the field-level validation
+// details (joined), else the thrown message.
+function errText(e) {
+  return e.data && e.data.details ? Object.values(e.data.details).join(' · ') : e.message;
+}
+
 function toast(message, bad = false) {
   const t = $('#toast');
   t.textContent = message;
@@ -1616,7 +1622,7 @@ views.probes = async () => {
       setTimeout(refreshLatest, 2500); setTimeout(refreshLatest, 6000);
     } catch (e) {
       status.className = 'error';
-      status.textContent = e.status === 409 ? 'Agenten er ikke forbundet lige nu.' : (e.data && e.data.details ? Object.values(e.data.details).join(' · ') : e.message);
+      status.textContent = e.status === 409 ? 'Agenten er ikke forbundet lige nu.' : errText(e);
     } finally { runBtn.disabled = false; }
   }
   runBtn.addEventListener('click', run);
@@ -2470,7 +2476,7 @@ function settingsFormCard({ title, fields, values, endpoint }) {
       body[f.key] = f.type === 'checkbox' ? inputs[f.key].checked : Number(inputs[f.key].value);
     }
     try { await api(endpoint, { method: 'PUT', body }); toast(`${title} gemt`); }
-    catch (e2) { err.textContent = e2.data && e2.data.details ? Object.values(e2.data.details).join(' · ') : e2.message; }
+    catch (e2) { err.textContent = errText(e2); }
     finally { btn.disabled = false; }
   }
   btn.addEventListener('click', save);
@@ -2587,7 +2593,7 @@ function flowCategoriesCard(categories) {
       toast('Trafiktyper gemt');
       render();
     } catch (e2) {
-      err.textContent = e2.data && e2.data.details ? Object.values(e2.data.details).join(' · ') : e2.message;
+      err.textContent = errText(e2);
     } finally { saveBtn.disabled = false; }
   }
   async function reset() {
@@ -2635,7 +2641,7 @@ function mapSettingsCard(map) {
       await api('/api/settings/map', { method: 'PUT', body: { tileUrl: url.value.trim(), attribution: attr.value.trim(), maxZoom: Number(zoom.value), geocodeUrl: geo.value.trim() } });
       toast('Kort-indstillinger gemt');
     } catch (e2) {
-      err.textContent = e2.data && e2.data.details ? Object.values(e2.data.details).join(' · ') : e2.message;
+      err.textContent = errText(e2);
     } finally { btn.disabled = false; }
   }
   btn.addEventListener('click', save);

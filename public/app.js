@@ -1792,8 +1792,11 @@ views.fleet = async () => {
   }
   function fleetRow(a) {
     const m = a.health.metrics;
+    const dq = a.quality && a.quality.status && a.quality.status !== 'ok' && a.quality.status !== 'unknown'
+      ? el('span', { class: 'dq-flag', title: `Datakvalitet: ${a.quality.reason || a.quality.status}` }, ' ⚠')
+      : null;
     return el('tr', { class: 'fleet-row', tabindex: '0', onclick: () => openAgent(a.agentId), onkeydown: (e) => { if (e.key === 'Enter') openAgent(a.agentId); } },
-      el('td', {}, el('div', {}, esc(a.displayName)), a.displayName !== a.hostname ? el('div', { class: 'muted' }, esc(a.hostname)) : null),
+      el('td', {}, el('div', {}, esc(a.displayName), dq), a.displayName !== a.hostname ? el('div', { class: 'muted' }, esc(a.hostname)) : null),
       el('td', {}, el('span', { class: `badge ${a.online ? 'online' : 'offline'}` }, a.online ? 'online' : 'offline')),
       el('td', {}, healthBadge(a.health)),
       el('td', { class: 'num' }, m.lossPct != null ? `${m.lossPct}%` : '–'),
@@ -1845,10 +1848,10 @@ views.agent = async () => {
   // Health résumé (the headline + the metrics that drove it).
   const healthHost = el('div', { class: 'agent-health' });
   root.append(healthHost);
-  function renderHealth(h) {
+  function renderHealth(h, q) {
     const m = h.metrics;
     const kv = (k, v, cls) => el('div', { class: 'ah-kv' }, el('span', { class: 'ah-k' }, k), el('span', { class: `ah-v${cls ? ' ' + cls : ''}` }, v));
-    healthHost.replaceChildren(
+    const children = [
       el('div', { class: 'ah-head' }, healthBadge(h), el('span', { class: 'ah-reason' }, h.reason || '')),
       el('div', { class: 'ah-grid' },
         kv('Mål nået', m.targets ? `${m.reachable}/${m.targets}` : '–'),
@@ -1856,7 +1859,20 @@ views.agent = async () => {
         kv('Latency', latencyText(m)),
         kv('Baseline', m.baselineMs != null ? `~${m.baselineMs} ms` : '–'),
         kv('Jitter', m.jitterMs != null ? `${m.jitterMs} ms` : '–', m.jitterMs >= 30 ? 'warn-text' : ''),
-        m.ifaceStatus ? kv('Interface', `${String(m.ifaceStatus).toUpperCase()}${m.worstIface ? ' · ' + m.worstIface : ''}`, m.ifaceStatus === 'ok' ? '' : (m.ifaceStatus === 'warn' ? 'warn-text' : 'bad-text')) : null));
+        m.ifaceStatus ? kv('Interface', `${String(m.ifaceStatus).toUpperCase()}${m.worstIface ? ' · ' + m.worstIface : ''}`, m.ifaceStatus === 'ok' ? '' : (m.ifaceStatus === 'warn' ? 'warn-text' : 'bad-text')) : null),
+    ];
+    if (q && q.status && q.status !== 'unknown') {
+      const cls = q.status === 'ok' ? 'online' : (q.status === 'warn' ? 'warn' : 'offline');
+      children.push(el('div', { class: 'ah-quality' },
+        el('span', { class: `badge ${cls}` }, `Datakvalitet: ${q.status.toUpperCase()}`),
+        el('span', { class: 'muted' }, q.reason || ''),
+        q.version ? el('span', { class: 'muted' }, `· agent v${q.version}`) : null,
+        q.dropPct != null ? el('span', { class: 'muted' }, `· tab ${q.dropPct}%`) : null,
+        q.clockSkewMs != null ? el('span', { class: 'muted' }, `· ur ${Math.round(q.clockSkewMs / 1000)} s`) : null));
+    } else if (q && q.version) {
+      children.push(el('div', { class: 'ah-quality muted' }, `agent v${q.version}`));
+    }
+    healthHost.replaceChildren(...children);
   }
 
   // ---- Probes (this agent) ----
@@ -1928,7 +1944,7 @@ views.agent = async () => {
   }
 
   async function refreshHealth() {
-    try { const d = await api(`/api/fleet/agent/${id}`); renderHealth(d.health); } catch { /* keep last verdict */ }
+    try { const d = await api(`/api/fleet/agent/${id}`); renderHealth(d.health, d.quality); } catch { /* keep last verdict */ }
   }
 
   root.append(

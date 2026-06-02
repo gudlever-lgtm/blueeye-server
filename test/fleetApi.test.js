@@ -158,6 +158,25 @@ test('GET /api/fleet/health folds interface health in — no probes + iface erro
   assert.equal(a5.health.metrics.ifaceStatus, 'bad');
 });
 
+test('GET /api/fleet/health attaches per-agent data-quality (netflow drops ⇒ flagged)', async () => {
+  const agentsRepo = makeAgentsRepo({ findAll: async () => [{ id: 7, hostname: 'a7', status: 'online', capabilities: { agentVersion: '0.2.0' } }] });
+  const resultsRepo = makeResultsRepo({ latestPerAgent: async () => [{ agent_id: 7, created_at: new Date(), payload: { finishedAt: new Date().toISOString(), traffic: { source: 'netflow', packets: 90, droppedPackets: 10 } } }] });
+  const res = await request(makeApp({ agentsRepo, resultsRepo })).get('/api/fleet/health').set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 200);
+  const a7 = res.body.agents.find((a) => a.agentId === 7);
+  assert.equal(a7.quality.status, 'bad'); // 10% drop
+  assert.equal(a7.quality.version, '0.2.0');
+});
+
+test('GET /api/fleet/agent/:id includes a data-quality verdict', async () => {
+  const agentsRepo = makeAgentsRepo({ findById: async (id) => ({ id, hostname: 'h', capabilities: { agentVersion: '0.2.0' } }) });
+  const resultsRepo = makeResultsRepo({ findByAgentId: async () => [{ created_at: new Date(), payload: { finishedAt: new Date().toISOString(), traffic: { source: 'proc', interfaces: [] } } }] });
+  const res = await request(makeApp({ agentsRepo, resultsRepo })).get('/api/fleet/agent/9').set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 200);
+  assert.equal(res.body.quality.version, '0.2.0');
+  assert.equal(res.body.quality.status, 'ok');
+});
+
 test('GET /api/fleet/health requires auth (401) and surfaces a repo failure (500)', async () => {
   assert.equal((await request(makeApp()).get('/api/fleet/health')).status, 401);
   const probeResultsRepo = makeProbeResultsRepo({ fleetHealth: throwingAsync('db down') });

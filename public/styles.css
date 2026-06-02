@@ -247,6 +247,10 @@ main#view:has(.overview) { max-width: 1180px; }
 .mw-form { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: end; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
 .mw-form .set-field { min-width: 150px; }
 
+/* Agent data-quality line + the fleet flag. */
+.agent-health .ah-quality { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13px; }
+.dq-flag { color: var(--warn); cursor: help; }
+
 /* 4) Slim storage line; the full breakdown folds open below. */
 .storage-fold { margin-top: 10px; }
 .storage-fold > summary.storage-line { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 12px; flex-wrap: wrap;

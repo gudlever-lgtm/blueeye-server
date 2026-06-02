@@ -11,10 +11,12 @@ function bucketStart(ts, intervalMs) {
   return new Date(Math.floor(t / intervalMs) * intervalMs);
 }
 
-// Down-samples raw data older than `beforeTs` into rollup tables, then deletes
-// the raw rows it summarised. Idempotent: because the raw rows are deleted once
-// aggregated, a repeated run finds nothing to aggregate and double-counts
-// nothing. Aggregation is done in JS so true min/max/median are available.
+// Down-samples raw data older than `beforeTs` into the rollup tables, then
+// deletes the raw rows before that cutoff. This is the ONLY place raw
+// results/flows are purged (purge.js trims only the rollup tables), so rows
+// past the cutoff are deleted whether or not each one yielded a rollup sample.
+// Idempotent: aggregated rows are gone by the next run, so nothing is
+// double-counted. Aggregation runs in JS so true min/max/median are available.
 function createRollup({ repo, config, extract = extractSamples, logger = silentLogger }) {
   const intervalMs = (config.rollupIntervalMinutes || 60) * 60000;
   const batchSize = config.batchSize || 5000;
@@ -91,8 +93,17 @@ function createRollup({ repo, config, extract = extractSamples, logger = silentL
       if (rows.length < batchSize) break;
     }
     if (acc.size === 0) {
-      const rawDeleted = scanned > 0 ? await repo.deleteRawResultsBefore(cutoff) : 0;
-      return { buckets: 0, rawDeleted };
+      // Scanned raw results but extracted no numeric samples (payloads with
+      // neither system metrics nor traffic.totals). They're still past the
+      // cutoff and rollup is the only raw-results purge, so delete them per the
+      // retention policy — but warn, since a NEW unhandled payload type would
+      // otherwise be dropped here silently.
+      if (scanned > 0) {
+        logger.warn(`retention: ${scanned} raw results before cutoff produced no rollup samples — deleting per raw retention`);
+        const rawDeleted = await repo.deleteRawResultsBefore(cutoff);
+        return { buckets: 0, rawDeleted };
+      }
+      return { buckets: 0, rawDeleted: 0 };
     }
     const rollupRows = [...acc.values()].map((a) => [
       a.bucket, a.agentId, a.metric, a.vals.length, a.min, a.max, median(a.vals),

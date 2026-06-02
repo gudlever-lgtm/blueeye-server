@@ -36,7 +36,7 @@ function validateProbeResults(body) {
     let hops = null;
     if (r.hops != null) {
       if (!Array.isArray(r.hops) || r.hops.length > 64) return { errors: { [`results[${i}].hops`]: 'hops must be an array (<=64)' } };
-      hops = r.hops.map((h) => ({ hop: Number(h && h.hop) || null, ip: h && h.ip ? String(h.ip).slice(0, 45) : null, rttMs: numOrNull(h && h.rttMs) }));
+      hops = r.hops.map((h) => ({ hop: numOrNull(h && h.hop), ip: h && h.ip ? String(h.ip).slice(0, 45) : null, rttMs: numOrNull(h && h.rttMs) }));
     }
     out.push({
       ts, type, target, ok: r.ok === true,
@@ -61,8 +61,16 @@ function validateProbeSpec(body) {
     if (!Number.isInteger(port) || port < 1 || port > 65535) return { errors: { port: 'port (1-65535) is required for a tcp probe' } };
     spec.port = port;
   }
-  if (b.count !== undefined) { const c = Number(b.count); if (Number.isInteger(c) && c >= 1 && c <= 20) spec.count = c; }
-  if (type === 'traceroute' && b.maxHops !== undefined) { const m = Number(b.maxHops); if (Number.isInteger(m) && m >= 1 && m <= 40) spec.maxHops = m; }
+  if (b.count !== undefined) {
+    const c = Number(b.count);
+    if (!Number.isInteger(c) || c < 1 || c > 20) return { errors: { count: 'count must be an integer between 1 and 20' } };
+    spec.count = c;
+  }
+  if (type === 'traceroute' && b.maxHops !== undefined) {
+    const m = Number(b.maxHops);
+    if (!Number.isInteger(m) || m < 1 || m > 40) return { errors: { maxHops: 'maxHops must be an integer between 1 and 40' } };
+    spec.maxHops = m;
+  }
   return { value: spec };
 }
 

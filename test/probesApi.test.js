@@ -113,6 +113,33 @@ test('validateProbeSpec requires a port for tcp and rejects flag-like hosts', ()
   assert.deepEqual(validateProbeSpec({ type: 'ping', host: '1.1.1.1' }).value, { type: 'ping', host: '1.1.1.1' });
 });
 
+test('validateProbeSpec rejects a present-but-invalid count/maxHops (no silent drop)', () => {
+  assert.ok(validateProbeSpec({ type: 'ping', host: '1.1.1.1', count: 200 }).errors);
+  assert.ok(validateProbeSpec({ type: 'ping', host: '1.1.1.1', count: 'abc' }).errors);
+  assert.ok(validateProbeSpec({ type: 'traceroute', host: '1.1.1.1', maxHops: 99 }).errors);
+  assert.equal(validateProbeSpec({ type: 'ping', host: '1.1.1.1', count: 5 }).value.count, 5);
+});
+
+test('findByAgent selects the most-recent N (DESC) and returns them oldest-first', async () => {
+  const { createProbeResultsRepository } = require('../src/repositories/probeResultsRepository');
+  let capturedSql;
+  const pool = {
+    async query(sql) {
+      capturedSql = sql;
+      // pool returns DESC (newest first); repo should reverse to ascending.
+      return [[
+        { id: 3, agent_id: 9, ts: new Date('2026-06-02T00:03:00Z'), type: 'ping', target: 'x', ok: 1 },
+        { id: 2, agent_id: 9, ts: new Date('2026-06-02T00:02:00Z'), type: 'ping', target: 'x', ok: 1 },
+        { id: 1, agent_id: 9, ts: new Date('2026-06-02T00:01:00Z'), type: 'ping', target: 'x', ok: 1 },
+      ]];
+    },
+  };
+  const repo = createProbeResultsRepository({ pool });
+  const rows = await repo.findByAgent({ agentId: 9, type: 'ping', limit: 3 });
+  assert.match(capturedSql, /ORDER BY ts DESC LIMIT/);
+  assert.deepEqual(rows.map((r) => r.id), [1, 2, 3]); // reversed to ascending
+});
+
 test('validateProbeResults caps and normalises rows', () => {
   const { value, errors } = validateProbeResults({ results: [{ type: 'PING', target: '1.1.1.1', ok: true, rttMs: '12.5', hops: [{ hop: 1, ip: '10.0.0.1', rttMs: 1 }] }] });
   assert.equal(errors, undefined);

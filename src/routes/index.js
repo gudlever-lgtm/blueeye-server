@@ -20,6 +20,7 @@ const { createSettingsRouter } = require('./settings');
 const { createMapRouter } = require('./map');
 const { createFlowsRouter } = require('./flows');
 const { createProbesRouter } = require('./probes');
+const { createInterfacesRouter } = require('./interfaces');
 const {
   createAgentAuthenticator,
   createAgentTokenMiddleware,
@@ -83,6 +84,7 @@ function createApiRouter({
     getCategories: settingsService ? () => settingsService.getFlowCategories() : undefined,
   }));
   if (probeResultsRepo) router.use('/api/probes', createProbesRouter({ probeResultsRepo, agentsRepo }));
+  router.use('/api/interfaces', createInterfacesRouter({ resultsRepo, agentsRepo }));
   if (settingsService) router.use('/api/settings', createSettingsRouter({ settingsService, featureGate, dispatcher, analysisConfig, retentionConfig }));
   router.use('/api/export', createExportRouter({ findingStore, flowsRepo, agentsRepo, locationsRepo, resultsRepo, featureGate }));
   router.use('/enrollment-codes', createEnrollmentCodesRouter({ enrollmentCodesRepo, locationsRepo }));

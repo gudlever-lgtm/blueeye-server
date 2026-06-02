@@ -85,17 +85,13 @@ function createFlowsRepository(db) {
          FROM flow_rollup WHERE ${rollWhere.join(' AND ')} GROUP BY country, asn`, rollParams),
     ]);
 
-    const merged = new Map();
-    for (const r of [...raw, ...roll]) {
-      const asn = normAsn(r.asn);
-      const key = `${r.country}|${asn ?? ''}`;
-      const cur = merged.get(key) || { country: r.country, asn, asnName: r.asnName ?? null, bytes: 0, flowCount: 0 };
-      cur.bytes += numOf(r.bytes);
-      cur.flowCount += numOf(r.flowCount);
-      if (!cur.asnName && r.asnName) cur.asnName = r.asnName;
-      merged.set(key, cur);
-    }
-    return [...merged.values()];
+    // Normalise asn (NULL in raw, 0 in rollup) before keying so "unknown ASN"
+    // collapses to a single row per country.
+    return mergeRows(
+      [...raw, ...roll].map((r) => ({ ...r, asn: normAsn(r.asn) })),
+      (r) => `${r.country}|${r.asn ?? ''}`,
+      (r) => ({ country: r.country, asn: r.asn }),
+    );
   }
 
   // Aggregated external destinations with a deviation = relative change vs the
@@ -151,18 +147,25 @@ function createFlowsRepository(db) {
     return [...new Set([...a, ...b].map((r) => r.agent_id))];
   }
 
-  // Merges two keyed aggregate row sets summing bytes/flowCount.
-  function mergeBy(rowsA, rowsB, keyField) {
+  // Merges aggregate rows sharing a key, summing bytes/flowCount and keeping the
+  // first non-empty asnName. keyOf(row) is the merge key; idOf(row) is the set
+  // of identity fields carried onto the merged row.
+  function mergeRows(rows, keyOf, idOf) {
     const m = new Map();
-    for (const r of [...rowsA, ...rowsB]) {
-      const k = r[keyField];
-      const cur = m.get(k) || { [keyField]: k, asnName: r.asnName ?? null, bytes: 0, flowCount: 0 };
+    for (const r of rows) {
+      const k = keyOf(r);
+      const cur = m.get(k) || { ...idOf(r), asnName: r.asnName ?? null, bytes: 0, flowCount: 0 };
       cur.bytes += numOf(r.bytes);
       cur.flowCount += numOf(r.flowCount);
       if (!cur.asnName && r.asnName) cur.asnName = r.asnName;
       m.set(k, cur);
     }
     return [...m.values()];
+  }
+
+  // Merges two row sets keyed by a single column (asn / direction / bucket).
+  function mergeBy(rowsA, rowsB, keyField) {
+    return mergeRows([...rowsA, ...rowsB], (r) => r[keyField], (r) => ({ [keyField]: r[keyField] }));
   }
 
   // Aggregated detail for a selected destination, read across raw + rollup:

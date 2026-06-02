@@ -199,6 +199,10 @@ main#view:has(.overview) { max-width: 1180px; }
 .size-toggle { white-space: nowrap; }
 .chart-card.big { position: relative; left: 50%; transform: translateX(-50%); width: 98vw; max-width: 1800px; }
 
+/* Traffic-type breakdown: a row of toggle chips above the per-type chart. */
+.tt-chips { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 8px 0 10px; }
+.traffic-type .overview-chart { margin-top: 4px; }
+
 /* 4) Slim storage line; the full breakdown folds open below. */
 .storage-fold { margin-top: 10px; }
 .storage-fold > summary.storage-line { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 12px; flex-wrap: wrap;

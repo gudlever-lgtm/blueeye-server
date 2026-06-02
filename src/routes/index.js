@@ -18,6 +18,7 @@ const { createAlertingRouter } = require('./alerting');
 const { createExportRouter } = require('./export');
 const { createSettingsRouter } = require('./settings');
 const { createMapRouter } = require('./map');
+const { createFlowsRouter } = require('./flows');
 const {
   createAgentAuthenticator,
   createAgentTokenMiddleware,
@@ -75,6 +76,7 @@ function createApiRouter({
   if (flowsRepo) router.use('/api/geo', createGeoRouter({ flowsRepo, agentsRepo, findingStore, tileConfig: geoTileConfig, getMapConfig, featureGate }));
   if (dispatcher) router.use('/api/alerting', createAlertingRouter({ dispatcher }));
   router.use('/api/map', createMapRouter({ getMapConfig }));
+  router.use('/api/flows', createFlowsRouter({ resultsRepo, agentsRepo, flowsRepo }));
   if (settingsService) router.use('/api/settings', createSettingsRouter({ settingsService, featureGate, dispatcher, analysisConfig, retentionConfig }));
   router.use('/api/export', createExportRouter({ findingStore, flowsRepo, agentsRepo, locationsRepo, resultsRepo, featureGate }));
   router.use('/enrollment-codes', createEnrollmentCodesRouter({ enrollmentCodesRepo, locationsRepo }));

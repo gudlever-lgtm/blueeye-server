@@ -831,6 +831,93 @@ function trafficHistorySection() {
   return { node: wrap, focus };
 }
 
+// Traffic-type breakdown for one agent over a period: bytes per category
+// (DNS, Web, Facebook, ...) from flow metadata — toggle each type on/off.
+// Separate from the live RX/TX chart; opt-in (the section is collapsed).
+function trafficTypeSection() {
+  const wrap = el('div', { class: 'history traffic-type' });
+  const agentSel = el('select', {}, el('option', { value: '' }, 'Vælg agent…'));
+  const fromI = el('input', { type: 'datetime-local' });
+  const toI = el('input', { type: 'datetime-local' });
+  const now = Date.now();
+  toI.value = toLocalInput(new Date(now));
+  fromI.value = toLocalInput(new Date(now - 6 * 3600000));
+  const status = el('div', { class: 'muted' });
+  const chips = el('div', { class: 'bar tt-chips' });
+  const chartHost = el('div', { class: 'overview-chart' });
+  const selection = new Set();
+  let last = null; // last /api/flows/categories response
+
+  const fetchBtn = el('button', { class: 'small', onclick: () => load() }, 'Hent');
+  wrap.append(el('div', { class: 'history-controls' },
+    el('label', { class: 'inline muted' }, 'Agent ', agentSel),
+    el('label', { class: 'inline muted' }, 'Fra ', fromI),
+    el('label', { class: 'inline muted' }, 'Til ', toI),
+    fetchBtn));
+  wrap.append(chips, chartHost, status);
+
+  api('/agents').then((agents) => {
+    for (const a of agents) agentSel.append(el('option', { value: String(a.id) }, a.display_name || a.hostname));
+  }).catch(() => {});
+
+  const colorAt = (i) => SERIES_COLORS[i % SERIES_COLORS.length];
+
+  function renderChips() {
+    if (!last || !last.categories.length) { chips.replaceChildren(); return; }
+    chips.replaceChildren(el('span', { class: 'muted' }, 'Typer:'), ...last.categories.map((c, i) => {
+      const on = selection.has(c.id);
+      return el('button', {
+        class: `chip${on ? ' on' : ''}`,
+        style: on ? `border-color:${colorAt(i)};color:${colorAt(i)}` : '',
+        onclick: () => { if (selection.has(c.id)) selection.delete(c.id); else selection.add(c.id); renderChips(); renderChart(); },
+      }, `${c.label} · ${fmtBytes(c.total)}`);
+    }));
+  }
+
+  function renderChart() {
+    if (!last || !last.categories.length) {
+      chartHost.replaceChildren(el('div', { class: 'empty' }, 'Ingen trafiktype-data i perioden.'));
+      return;
+    }
+    const fromMs = Date.parse(last.from);
+    const toMs = Date.parse(last.to);
+    const chosen = last.categories.filter((c) => selection.has(c.id));
+    const seriesList = chosen.map((c) => ({
+      id: c.id, label: c.label, color: colorAt(last.categories.indexOf(c)),
+      points: last.buckets.map((iso, k) => ({ t: Date.parse(iso), y: Number(c.points[k]) || 0 })),
+    }));
+    const legend = el('div', { class: 'legend' }, ...seriesList.map((s) =>
+      el('span', {}, el('span', { class: 'dot', style: `background:${s.color}` }), s.label)));
+    chartHost.replaceChildren(
+      seriesList.length ? historyChart(seriesList, { fromMs, toMs }) : el('div', { class: 'empty' }, 'Vælg en eller flere typer ovenfor.'),
+      legend);
+  }
+
+  async function load() {
+    const agentId = agentSel.value;
+    if (!agentId) { status.className = 'muted'; status.textContent = 'Vælg en agent.'; return; }
+    const fromMs = fromI.value ? new Date(fromI.value).getTime() : NaN;
+    const toMs = toI.value ? new Date(toI.value).getTime() : NaN;
+    if (Number.isNaN(fromMs) || Number.isNaN(toMs)) { status.textContent = 'Ugyldig periode.'; return; }
+    status.className = 'muted'; status.textContent = 'Henter…';
+    chartHost.replaceChildren(); chips.replaceChildren();
+    let data;
+    try {
+      data = await api(`/api/flows/categories?agentId=${encodeURIComponent(agentId)}&from=${new Date(fromMs).toISOString()}&to=${new Date(toMs).toISOString()}`);
+    } catch (err) { status.textContent = err.message; return; }
+    last = data;
+    selection.clear();
+    for (const c of data.categories.slice(0, 6)) selection.add(c.id); // default: top types on
+    status.textContent = data.categories.length
+      ? `${data.categories.length} trafiktyper i perioden`
+      : 'Ingen trafiktyper i perioden — kræver en NetFlow/sFlow-kilde (port-typer) eller geo-data (organisationer).';
+    renderChips();
+    renderChart();
+  }
+
+  return { node: wrap };
+}
+
 // Full-width traffic overview: pick which series to show via checkboxes and
 // watch them live. Polls every 3s while open.
 // Server storage cards: disk usage (where Docker/DB lives) + database size.
@@ -1324,6 +1411,10 @@ views.overview = async () => {
   const histSection = trafficHistorySection();
   const histDetails = el('details', { class: 'sec' }, el('summary', {}, 'Historik — undersøg tidsrum ', el('span', { class: 'muted' }, '· vælg agent + periode')), histSection.node);
   root.append(histDetails);
+
+  // Traffic-type breakdown (DNS, Web, Facebook, …) — opt-in, collapsed.
+  const typeSection = trafficTypeSection();
+  root.append(el('details', { class: 'sec' }, el('summary', {}, 'Trafiktype ', el('span', { class: 'muted' }, '· pr. agent · DNS, Facebook, …')), typeSection.node));
 
   // Reflect the persisted size + set the toggle label (renders the chart once).
   applySize();

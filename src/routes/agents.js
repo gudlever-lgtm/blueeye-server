@@ -4,7 +4,7 @@ const express = require('express');
 const { asyncHandler } = require('../middleware/asyncHandler');
 const { requireAuth, requireRole } = require('../auth/middleware');
 const { ROLES } = require('../auth/roles');
-const { validateAgentManagedInput } = require('../validation/agentValidation');
+const { validateAgentManagedInput, MAX_INTERVAL_MS } = require('../validation/agentValidation');
 const { validateTimeRange } = require('../validation/resultsValidation');
 const { validateProbeSpec } = require('../validation/probeValidation');
 const { parseId } = require('../validation/locationValidation');
@@ -89,7 +89,11 @@ function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentComma
 
       const body = req.body && typeof req.body === 'object' ? req.body : {};
       const command = { name: 'run-test' };
-      if (Number.isInteger(body.intervalMs)) command.intervalMs = body.intervalMs;
+      // Optional repeat interval; ignore values outside (0, 1 day] rather than
+      // forwarding an unbounded number across the server -> agent boundary.
+      if (Number.isInteger(body.intervalMs) && body.intervalMs > 0 && body.intervalMs <= MAX_INTERVAL_MS) {
+        command.intervalMs = body.intervalMs;
+      }
 
       const delivered = agentCommander ? agentCommander.sendCommand(id, command) : 0;
       if (delivered === 0) {

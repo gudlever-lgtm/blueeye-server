@@ -242,6 +242,11 @@ main#view:has(.overview) { max-width: 1180px; }
 .flows-explorer .scan-sec { border-color: var(--bad); }
 .flows-explorer .scan-sec > summary { color: var(--bad); font-weight: 600; }
 
+/* Maintenance: fleet banner + the add-window form in settings. */
+.mw-banner { background: rgba(217, 119, 6, .12); border: 1px solid var(--warn); border-radius: 10px; padding: 9px 12px; margin: 0 0 14px; font-size: 14px; }
+.mw-form { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: end; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+.mw-form .set-field { min-width: 150px; }
+
 /* 4) Slim storage line; the full breakdown folds open below. */
 .storage-fold { margin-top: 10px; }
 .storage-fold > summary.storage-line { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 12px; flex-wrap: wrap;

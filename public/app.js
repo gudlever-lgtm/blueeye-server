@@ -1768,9 +1768,18 @@ views.fleet = async () => {
   const root = el('div', { class: 'fleet' });
   root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Oversigt'),
     el('span', { class: 'muted' }, 'Alle agenter · sundhed ud fra reachability · tab · latency · jitter')));
+  const bannerHost = el('div', {});
   const summaryHost = el('div', { class: 'fleet-summary' });
   const tableHost = el('div', {});
-  root.append(summaryHost, tableHost);
+  root.append(bannerHost, summaryHost, tableHost);
+
+  // Maintenance banner (viewer-readable) — shown while a window is active now.
+  api('/api/settings/maintenance').then((m) => {
+    const now = Date.now();
+    const active = (m.windows || []).filter((w) => Date.parse(w.from) <= now && now <= Date.parse(w.to));
+    if (active.length) bannerHost.replaceChildren(el('div', { class: 'mw-banner' }, '🛠 Vedligehold aktivt: ', esc(active.map((w) => w.name).join(', ')), el('span', { class: 'muted' }, ' — alarm-notifikationer undertrykt')));
+    else bannerHost.replaceChildren();
+  }).catch(() => {});
 
   function renderSummary(s) {
     const chip = (cls, label, n) => el('div', { class: `fs-chip ${cls}${n ? '' : ' zero'}` }, el('span', { class: 'fs-n' }, String(n)), el('span', { class: 'fs-l' }, label));
@@ -2747,7 +2756,7 @@ views.settings = async () => {
   const root = el('div');
   const isAdmin = role === 'admin';
   const subtabs = [];
-  if (isAdmin) subtabs.push(['analyse', 'Analyse'], ['alerting', 'Alerting'], ['retention', 'Retention'], ['types', 'Trafiktyper'], ['map', 'Kort'], ['users', 'Brugere']);
+  if (isAdmin) subtabs.push(['analyse', 'Analyse'], ['alerting', 'Alerting'], ['maintenance', 'Vedligehold'], ['retention', 'Retention'], ['types', 'Trafiktyper'], ['map', 'Kort'], ['users', 'Brugere']);
   subtabs.push(['license', 'Licens']);
   if (!settingsTab || !subtabs.some(([k]) => k === settingsTab)) settingsTab = subtabs[0][0];
 
@@ -2762,6 +2771,7 @@ views.settings = async () => {
     types: settingsTypesView,
     analyse: settingsAnalyseView,
     alerting: settingsAlertingView,
+    maintenance: settingsMaintenanceView,
     retention: settingsRetentionView,
   };
   let content;
@@ -2796,6 +2806,76 @@ async function settingsAlertingView() {
   const card = settingsCard('Alerting', alertingSummary(data.alerting));
   card.append(el('p', { class: 'muted small' }, 'Kanaler konfigureres via serverens .env, fordi de indeholder hemmeligheder (SMTP-kodeord, webhook-HMAC). Ændringer kræver genstart. Env: ALERTING_*, SMTP_*, WEBHOOK_*.'));
   root.append(el('div', { class: 'settings-grid' }, card));
+  return root;
+}
+
+// Maintenance windows: during an active window, alert notifications are
+// suppressed (findings are still recorded + shown). Global, per-location or
+// per-agent. Admin only.
+async function settingsMaintenanceView() {
+  const [data, agents, locations] = await Promise.all([api('/api/settings'), api('/agents').catch(() => []), api('/locations').catch(() => [])]);
+  const root = el('div');
+  root.append(el('p', { class: 'muted settings-intro' }, 'Under et vedligeholdelsesvindue undertrykkes alarm-notifikationer (e-mail/webhook/syslog) — findings registreres og vises stadig. Brug det ved planlagt arbejde, så ingen bliver paget unødigt.'));
+  let windows = (data.maintenance && Array.isArray(data.maintenance.windows)) ? data.maintenance.windows.slice() : [];
+  const listHost = el('div', {});
+  const err = el('p', { class: 'error' });
+
+  const agentName = (id) => { const a = agents.find((x) => String(x.id) === String(id)); return a ? (a.display_name || a.hostname) : `#${id}`; };
+  const locName = (id) => { const l = locations.find((x) => String(x.id) === String(id)); return l ? l.name : `#${id}`; };
+  const scopeText = (w) => (w.scope === 'global' ? 'Alle agenter' : w.scope === 'agent' ? `Agent: ${agentName(w.targetId)}` : `Lokation: ${locName(w.targetId)}`);
+  const isActive = (w) => { const n = Date.now(); return Date.parse(w.from) <= n && n <= Date.parse(w.to); };
+
+  async function persist() {
+    err.textContent = '';
+    try { const res = await api('/api/settings/maintenance', { method: 'PUT', body: { windows } }); windows = res.windows; renderList(); }
+    catch (e) { err.textContent = e.data && e.data.details ? Object.values(e.data.details).join(' · ') : e.message; }
+  }
+  function renderList() {
+    if (!windows.length) { listHost.replaceChildren(el('div', { class: 'empty' }, 'Ingen vinduer. Tilføj ét nedenfor.')); return; }
+    listHost.replaceChildren(el('table', {},
+      el('thead', {}, el('tr', {}, ...['Navn', 'Omfang', 'Fra', 'Til', '', ''].map((h) => el('th', {}, h)))),
+      el('tbody', {}, ...windows.map((w) => el('tr', {},
+        el('td', {}, esc(w.name)),
+        el('td', { class: 'muted' }, scopeText(w)),
+        el('td', { class: 'muted' }, fmtDate(w.from)),
+        el('td', { class: 'muted' }, fmtDate(w.to)),
+        el('td', {}, isActive(w) ? el('span', { class: 'badge warn' }, 'aktiv') : el('span', { class: 'muted' }, 'planlagt')),
+        el('td', {}, el('button', { class: 'small danger', onclick: () => { windows = windows.filter((x) => x.id !== w.id); persist(); } }, 'Slet')))))));
+  }
+  renderList();
+
+  // Add form.
+  const nameI = el('input', { type: 'text', placeholder: 'fx Firmware-opgradering' });
+  const scopeSel = el('select', {}, el('option', { value: 'global' }, 'Alle agenter'), el('option', { value: 'agent' }, 'Én agent'), el('option', { value: 'location' }, 'Én lokation'));
+  const targetSel = el('select', {});
+  const fromI = el('input', { type: 'datetime-local' });
+  const toI = el('input', { type: 'datetime-local' });
+  const syncTarget = () => {
+    targetSel.style.display = scopeSel.value === 'global' ? 'none' : '';
+    const opts = scopeSel.value === 'agent' ? agents.map((a) => [a.id, a.display_name || a.hostname]) : scopeSel.value === 'location' ? locations.map((l) => [l.id, l.name]) : [];
+    targetSel.replaceChildren(...opts.map(([v, l]) => el('option', { value: String(v) }, l)));
+  };
+  scopeSel.addEventListener('change', syncTarget); syncTarget();
+  const addBtn = el('button', { class: 'small' }, '+ Tilføj vindue');
+  addBtn.addEventListener('click', () => {
+    err.textContent = '';
+    if (!nameI.value.trim() || !fromI.value || !toI.value) { err.textContent = 'Navn, fra og til er påkrævet.'; return; }
+    const w = { name: nameI.value.trim(), scope: scopeSel.value, from: new Date(fromI.value).toISOString(), to: new Date(toI.value).toISOString() };
+    if (scopeSel.value !== 'global') w.targetId = Number(targetSel.value);
+    windows = windows.concat([w]);
+    nameI.value = '';
+    persist();
+  });
+
+  root.append(el('div', { class: 'settings-grid' }, settingsCard('Vedligeholdelsesvinduer', el('div', {}, listHost,
+    el('div', { class: 'mw-form' },
+      el('label', { class: 'set-field' }, el('span', {}, 'Navn'), nameI),
+      el('label', { class: 'set-field' }, el('span', {}, 'Omfang'), scopeSel),
+      el('label', { class: 'set-field' }, el('span', {}, 'Mål'), targetSel),
+      el('label', { class: 'set-field' }, el('span', {}, 'Fra'), fromI),
+      el('label', { class: 'set-field' }, el('span', {}, 'Til'), toI),
+      addBtn),
+    err))));
   return root;
 }
 

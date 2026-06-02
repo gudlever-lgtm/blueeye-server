@@ -12,6 +12,7 @@ const { ROLES } = require('../auth/roles');
 function createSettingsRouter({ settingsService, featureGate, dispatcher, analysisConfig, retentionConfig }) {
   const router = express.Router();
   const admin = [requireAuth, requireRole(ROLES.ADMIN)];
+  const reader = [requireAuth, requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN)];
 
   router.get('/', ...admin, asyncHandler(async (req, res) => {
     const a = analysisConfig || {};
@@ -25,7 +26,24 @@ function createSettingsRouter({ settingsService, featureGate, dispatcher, analys
       retention: settingsService ? await settingsService.getRetention() : (retentionConfig || null),
       map: settingsService ? await settingsService.getMap() : null,
       flowCategories: settingsService ? await settingsService.getFlowCategories() : null,
+      maintenance: settingsService ? await settingsService.getMaintenance() : null,
     });
+  }));
+
+  // GET /api/settings/maintenance — current windows. viewer+ (benign, no secrets)
+  // so the dashboard can show a "maintenance active" indicator to everyone.
+  router.get('/maintenance', ...reader, asyncHandler(async (req, res) => {
+    res.json(settingsService ? await settingsService.getMaintenance() : { windows: [] });
+  }));
+
+  // PUT /api/settings/maintenance { windows: [...] } — replace the window list (admin).
+  router.put('/maintenance', ...admin, asyncHandler(async (req, res) => {
+    try {
+      res.json(await settingsService.setMaintenance(req.body || {}));
+    } catch (err) {
+      if (err.statusCode === 400) return res.status(400).json({ error: 'Validation failed', details: err.details || {} });
+      throw err;
+    }
   }));
 
   // PUT /api/settings/analysis — anomaly-detection thresholds (admin).

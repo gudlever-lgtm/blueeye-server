@@ -135,6 +135,7 @@ A single vanilla-JS SPA. Key building blocks:
 | A DB table/column | new `migrations/NNN_*.sql` + repository in `src/repositories/` |
 | Anomaly thresholds / detection | `src/analysis/detector.js`, `config.js` (editable via Indstillinger→Analyse) |
 | Alert channels | `src/analysis/alerting/channels/*` + `dispatcher.js` |
+| Maintenance windows / silencing | `src/analysis/alerting/maintenance.js` (`createSilencer`) + dispatcher hook; windows in `settingsService` (`maintenance` key), route `/api/settings/maintenance` |
 | Data retention | `src/analysis/retention/*` (editable via Indstillinger→Retention) |
 | Geo/ASN enrichment | `src/geo/enricher.js`, `provider.js`; flows in `flowsRepository.js` |
 | Traffic-type categories | `src/flows/categories.js` (editable via Indstillinger→Trafiktyper) |

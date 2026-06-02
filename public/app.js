@@ -1222,7 +1222,7 @@ views.overview = async () => {
   const sizeBtn = el('button', { class: 'chip size-toggle', onclick: () => toggleSize() });
   let bigView = false;
   try { bigView = localStorage.getItem('blueeye.server.trafikBig') === '1'; } catch { /* storage off */ }
-  const chartCard = el('div', { class: 'card chart-card' },
+  const chartCard = el('div', { class: 'chart-card' },
     el('div', { class: 'bar' }, el('h3', {}, 'Live trafik'), el('span', { class: 'spacer' }), chipRx, chipTx, perAgent, sizeBtn),
     el('div', { class: 'chart-row' }, chartHost, markedStrip));
   root.append(chartCard);

@@ -205,11 +205,22 @@ function closeModal() { $('#modal').classList.add('hidden'); }
 // in a panel from the right with a fuller explanation.
 const PAGE_INFO = {
   overview: {
-    hero: 'Samlet trafik-billede. Vælg de serier du vil se via checkboksene.',
+    hero: 'Samlet, levende trafik-billede for alle agenter — vælg serier, undersøg et tidsrum og se forbrug.',
     title: 'Trafik — overblik',
     body: () => [
-      el('p', {}, 'Et bredt, levende grafbillede af trafikken. Til/fravælg serier i panelet til højre — totaler og pr. agent (RX/TX) — så du selv sammensætter visningen.'),
-      el('p', { class: 'muted' }, 'Grafen opdateres hvert 3. sekund og viser de seneste ~3 minutter.'),
+      el('p', {}, 'Et bredt, levende grafbillede af trafikken på tværs af agenterne. Det opdateres hvert 3. sekund og viser de seneste ~3 minutter med klokkeslæt (HH:MM:SS) langs x-aksen.'),
+      el('h4', {}, 'Vælg hvad der vises'),
+      el('ul', {},
+        el('li', {}, 'Chips i grafens værktøjslinje slår Total RX og Total TX til/fra.'),
+        el('li', {}, '“Pr. agent ▾” åbner en menu, hvor du kan tilføje RX/TX for hver enkelt agent.'),
+        el('li', {}, '“↔ Forstør” strækker grafen ud i fuld bredde og højde; klik igen for normal størrelse.')),
+      el('h4', {}, 'Undersøg et tidsrum'),
+      el('p', {}, 'Træk hen over grafen for at markere et vindue — panelet til højre viser gennemsnit/min/max for de markerede serier. “Vis gemt data →” henter de faktiske gemte målinger for vinduet (i Historik). Højreklik rydder markeringen.'),
+      el('h4', {}, 'Resten af siden'),
+      el('ul', {},
+        el('li', {}, 'KPI-stribe øverst: aktuel RX/TX, online agenter og antal lokationer.'),
+        el('li', {}, 'Lager-linjen viser diskforbrug + estimeret forbrug pr. dag (“Detaljer” folder DB/disk ud).'),
+        el('li', {}, 'Nederst kan du folde Top agenter, Historik (vælg agent + periode) og Trafiktype (DNS, Facebook m.fl.) ud.')),
     ],
   },
   map: {
@@ -234,7 +245,7 @@ const PAGE_INFO = {
       el('ul', {},
         el('li', {}, '"+ Ny agent" giver en engangskode til installation (operator+).'),
         el('li', {}, '"Kør test" beder agenten måle med det samme; "Trafik" viser målingerne.'),
-        el('li', {}, '"Rediger" sætter navn, lokation, noter og trafik-kilde (proc/SNMP).')),
+        el('li', {}, '"Rediger" sætter navn, lokation, noter og trafik-kilde (proc, SNMP, NetFlow eller sFlow).')),
     ],
   },
   geo: {
@@ -261,8 +272,8 @@ const PAGE_INFO = {
       el('p', {}, 'Serveren analyserer agenternes målinger lokalt (ingen cloud, intet ML-bibliotek) og rejser en "finding", når en metrik afviger markant fra sin egen baseline, fladliner (sensor/agent-stop) eller hænger sammen med andre fejl.'),
       el('h4', {}, 'Severity'),
       el('ul', {},
-        el('li', {}, 'CRIT: stor afvigelse (≥ 4σ fra baseline).'),
-        el('li', {}, 'WARN: mærkbar afvigelse (≥ 3σ) eller flatline.'),
+        el('li', {}, 'CRIT: stor afvigelse (standard ≥ 4σ — kan justeres i Indstillinger → Analyse).'),
+        el('li', {}, 'WARN: mærkbar afvigelse (standard ≥ 3σ) eller flatline.'),
         el('li', {}, 'INFO: lavere alvorlighed.')),
       el('h4', {}, 'Kvittering'),
       el('p', {}, 'Operatører og administratorer kan kvittere for en finding, når den er set/håndteret.'),
@@ -315,15 +326,22 @@ const PAGE_INFO = {
     ],
   },
   settings: {
-    hero: 'Administration: brugere, licens og serverens effektive konfiguration.',
+    hero: 'Opsætning og administration — én fane pr. emne.',
     title: 'Indstillinger',
     body: () => [
-      el('p', {}, 'Samlet administrationsside. Brugere og licens er flyttet hertil.'),
+      el('p', {}, 'Hver fane dækker ét emne. Det meste kan redigeres direkte her og slår igennem uden genstart; et par ting er læsbare og styres via serverens .env, fordi de indeholder hemmeligheder.'),
+      el('h4', {}, 'Redigeres her (gemmes i databasen)'),
       el('ul', {},
-        el('li', {}, 'Oversigt: effektiv konfiguration (licens-funktioner, analyse, alerting, retention) — læsbar; styres via serverens .env og kræver genstart.'),
-        el('li', {}, 'Kort: tile- og geocoder-kilde kan ændres her (gemmes i databasen, virker uden genstart).'),
+        el('li', {}, 'Analyse: tærskler for anomali-detektion — CRIT/WARN i σ, baseline-vindue og hvor mange målinger der kræves, før der varsles.'),
+        el('li', {}, 'Retention: hvor længe rå/aggregerede data og findings gemmes, før der ryddes op.'),
+        el('li', {}, 'Trafiktyper: definér kategorierne (DNS, Facebook …) ud fra service-porte og destinations-ASN. Vises på Trafik → Trafiktype.'),
+        el('li', {}, 'Kort: tile- og geocoder-kilde til kortene (brug en EU/selv-hostet kilde i produktion).')),
+      el('h4', {}, 'Læsbart (sættes i .env / kræver genstart)'),
+      el('ul', {},
+        el('li', {}, 'Alerting: kanaler (e-mail/webhook/syslog) — bærer hemmeligheder (SMTP-kodeord, webhook-HMAC), så de holdes i .env.'),
         el('li', {}, 'Brugere: opret/redigér personale og roller (kun admin).'),
-        el('li', {}, 'Licens: status + "Genvalidér nu".')),
+        el('li', {}, 'Licens: status + “Genvalidér nu”.')),
+      el('p', { class: 'muted' }, 'Redigerbare ændringer gemmes i app_settings og genanvendes ved opstart, så de overlever en genstart.'),
     ],
   },
 };
@@ -2198,7 +2216,7 @@ function licenseBadge(license, feature) {
 async function settingsAnalyseView() {
   const data = await api('/api/settings');
   const root = el('div');
-  root.append(el('p', { class: 'muted settings-intro' }, 'Anomali-detektion: hvornår en måling regnes som afvigende (σ fra baseline). Ændringer slår igennem uden genstart. ', licenseBadge(data.license, 'analysis')));
+  root.append(el('p', { class: 'muted settings-intro' }, 'Serveren lærer en normal “baseline” for hver metrik og rejser en finding, når en måling afviger nok fra den. Her sætter du, hvor følsom detektionen er — ændringer slår igennem med det samme, uden genstart. ', licenseBadge(data.license, 'analysis')));
   root.append(el('div', { class: 'settings-grid' }, analyseSettingsCard(data.analysis)));
   return root;
 }
@@ -2206,7 +2224,7 @@ async function settingsAnalyseView() {
 async function settingsAlertingView() {
   const data = await api('/api/settings');
   const root = el('div');
-  root.append(el('p', { class: 'muted settings-intro' }, 'Alarm-kanaler (e-mail/webhook/syslog). ', licenseBadge(data.license, 'alerting')));
+  root.append(el('p', { class: 'muted settings-intro' }, 'Når en finding rejses, kan den sendes ud på e-mail, webhook eller syslog. Oversigten nedenfor viser hvilke kanaler der er slået til og deres mindste alvorlighed. ', licenseBadge(data.license, 'alerting')));
   const card = settingsCard('Alerting', alertingSummary(data.alerting));
   card.append(el('p', { class: 'muted small' }, 'Kanaler konfigureres via serverens .env, fordi de indeholder hemmeligheder (SMTP-kodeord, webhook-HMAC). Ændringer kræver genstart. Env: ALERTING_*, SMTP_*, WEBHOOK_*.'));
   root.append(el('div', { class: 'settings-grid' }, card));
@@ -2216,7 +2234,7 @@ async function settingsAlertingView() {
 async function settingsRetentionView() {
   const data = await api('/api/settings');
   const root = el('div');
-  root.append(el('p', { class: 'muted settings-intro' }, 'Hvor længe data gemmes, før det aggregeres/slettes. Ændringer slår igennem på næste oprydning (uden genstart).'));
+  root.append(el('p', { class: 'muted settings-intro' }, 'For at holde databasen sund aggregeres rå målinger til kompakte buckets efter et stykke tid, og gammelt data ryddes. Her styrer du vinduerne — ændringer slår igennem ved næste oprydning, uden genstart. Ukvitterede CRIT-findings slettes aldrig.'));
   root.append(el('div', { class: 'settings-grid' }, retentionSettingsCard(data.retention)));
   return root;
 }
@@ -2266,12 +2284,12 @@ function analyseSettingsCard(a) {
     values: a,
     endpoint: '/api/settings/analysis',
     fields: [
-      { key: 'analysisEnabled', label: 'Analyse slået til', type: 'checkbox' },
-      { key: 'critSigma', label: 'CRIT-tærskel (σ fra baseline)', type: 'number', min: 0.5, max: 20, step: 0.1 },
-      { key: 'warnSigma', label: 'WARN-tærskel (σ fra baseline)', type: 'number', min: 0.5, max: 20, step: 0.1 },
-      { key: 'baselineDays', label: 'Baseline-vindue (dage)', type: 'number', min: 1, max: 90, step: 1 },
-      { key: 'minSamples', label: 'Min. samples før varsling', type: 'number', min: 10, max: 100000, step: 1 },
-      { key: 'assistantEnabled', label: 'AI-assistent', type: 'checkbox', readonly: true },
+      { key: 'analysisEnabled', label: 'Analyse slået til', type: 'checkbox', hint: 'Slår hele anomali-detektionen til/fra.' },
+      { key: 'critSigma', label: 'CRIT-tærskel (σ fra baseline)', type: 'number', min: 0.5, max: 20, step: 0.1, hint: 'Hvor mange standardafvigelser (σ) fra normalen før en CRIT-finding. Højere = kun store udsving. Typisk 4.' },
+      { key: 'warnSigma', label: 'WARN-tærskel (σ fra baseline)', type: 'number', min: 0.5, max: 20, step: 0.1, hint: 'Tærskel for WARN — bør være lavere end CRIT. Typisk 3.' },
+      { key: 'baselineDays', label: 'Baseline-vindue (dage)', type: 'number', min: 1, max: 90, step: 1, hint: 'Hvor mange dages historik “normalen” beregnes ud fra.' },
+      { key: 'minSamples', label: 'Min. samples før varsling', type: 'number', min: 10, max: 100000, step: 1, hint: 'Antal målinger før en metrik overvåges — undgår falske alarmer lige efter opstart.' },
+      { key: 'assistantEnabled', label: 'AI-assistent', type: 'checkbox', readonly: true, hint: 'Opt-in naturligt-sprog-assistent. Sættes via .env (nøgle er en hemmelighed).' },
     ],
   });
 }
@@ -2282,11 +2300,11 @@ function retentionSettingsCard(r) {
     values: r,
     endpoint: '/api/settings/retention',
     fields: [
-      { key: 'enabled', label: 'Oprydning slået til', type: 'checkbox' },
-      { key: 'rawRetentionDays', label: 'Rå data (dage)', type: 'number', min: 1, max: 3650, step: 1 },
-      { key: 'rollupRetentionDays', label: 'Aggregeret data (dage)', type: 'number', min: 1, max: 3650, step: 1 },
-      { key: 'findingRetentionDays', label: 'Findings (dage)', type: 'number', min: 1, max: 3650, step: 1 },
-      { key: 'rollupIntervalMinutes', label: 'Bucket-størrelse (min)', type: 'number', readonly: true },
+      { key: 'enabled', label: 'Oprydning slået til', type: 'checkbox', hint: 'Slår automatisk aggregering + sletning til/fra.' },
+      { key: 'rawRetentionDays', label: 'Rå data (dage)', type: 'number', min: 1, max: 3650, step: 1, hint: 'Rå målinger ældre end dette aggregeres til kompakte buckets.' },
+      { key: 'rollupRetentionDays', label: 'Aggregeret data (dage)', type: 'number', min: 1, max: 3650, step: 1, hint: 'Aggregerede buckets ældre end dette slettes.' },
+      { key: 'findingRetentionDays', label: 'Findings (dage)', type: 'number', min: 1, max: 3650, step: 1, hint: 'Kvitterede findings ældre end dette slettes (ukvitterede CRIT bevares altid).' },
+      { key: 'rollupIntervalMinutes', label: 'Bucket-størrelse (min)', type: 'number', readonly: true, hint: 'Hvor brede aggregerings-buckets er. Sættes via .env (cachet ved opstart).' },
     ],
   });
 }
@@ -2294,7 +2312,7 @@ function retentionSettingsCard(r) {
 async function settingsMapView() {
   const data = await api('/api/settings');
   const root = el('div');
-  root.append(el('p', { class: 'muted settings-intro' }, 'Kortbaggrund (tiles) og adressesøgning (geocoder). Brug en EU/selv-hostet kilde i produktion.'));
+  root.append(el('p', { class: 'muted settings-intro' }, 'Kortene (fanen Kort, Geo og lokations-vælgeren) henter baggrunds-fliser fra Tile-URL’en, og adressesøgning bruger geocoder-URL’en. Brug en EU/selv-hostet kilde i produktion — ingen hardkodet US-tjeneste. Gemmes i databasen og virker uden genstart.'));
   root.append(el('div', { class: 'settings-grid' }, mapSettingsCard(data.map)));
   return root;
 }
@@ -2302,7 +2320,7 @@ async function settingsMapView() {
 async function settingsTypesView() {
   const data = await api('/api/settings');
   const root = el('div');
-  root.append(el('p', { class: 'muted settings-intro' }, 'Grupper trafik efter ', el('b', {}, 'port'), ' (fx DNS = 53) eller destinations-', el('b', {}, 'ASN'), ' (fx Facebook/Meta = 32934). Typerne vises som slå-til/fra-serier på Trafik-siden under “Trafiktype”.'));
+  root.append(el('p', { class: 'muted settings-intro' }, 'Grupper trafik efter ', el('b', {}, 'port'), ' (fx DNS = 53) eller destinations-', el('b', {}, 'ASN'), ' (fx Facebook/Meta = 32934). Typerne vises som slå-til/fra-serier på Trafik-siden under “Trafiktype”. Port-typer er præcise; ASN-typer er omtrentlige (CDN/cloud kan sløre). Kræver en NetFlow/sFlow-kilde (porte) eller geo-data (ASN).'));
   root.append(el('div', { class: 'settings-grid' }, flowCategoriesCard(data.flowCategories || [])));
   return root;
 }

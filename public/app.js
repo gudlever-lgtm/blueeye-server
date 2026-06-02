@@ -800,17 +800,48 @@ function fmtClock(ms) {
 
 // Time-axis line chart with a drag-to-zoom brush. `series`: [{id,label,color,
 // points:[{t(ms),y}]}]. onBrush(fromMs,toMs) fires when the user marks an area.
-function historyChart(seriesList, { fromMs, toMs, onBrush, height = 300 }) {
+// Linear-interpolated percentile of a sorted ascending array.
+function pctl(sorted, p) {
+  if (!sorted.length) return 0;
+  if (sorted.length === 1) return sorted[0];
+  const i = (sorted.length - 1) * p; const lo = Math.floor(i); const hi = Math.ceil(i);
+  return lo === hi ? sorted[lo] : sorted[lo] + (sorted[hi] - sorted[lo]) * (i - lo);
+}
+// A robust "normal range" for a single series: median ± k·MAD (≈σ), so an outlier
+// stands out against what's typical for the shown window. Local + explainable —
+// same median/MAD basis the server analysis uses. null when too few points.
+function robustBand(points, k = 3) {
+  const ys = (points || []).map((p) => p.y).filter(Number.isFinite).sort((a, b) => a - b);
+  if (ys.length < 4) return null;
+  const med = pctl(ys, 0.5);
+  const dev = ys.map((v) => Math.abs(v - med)).sort((a, b) => a - b);
+  const spread = (pctl(dev, 0.5) * 1.4826 * k) || (med * 0.1) || 1;
+  return { mid: med, lo: Math.max(0, med - spread), hi: med + spread };
+}
+// Findings → chart markers (vertical event lines).
+function findingMarkers(findings) {
+  return (findings || []).filter((f) => f && f.createdAt).map((f) => ({
+    t: new Date(f.createdAt).getTime(),
+    kind: f.severity || 'INFO',
+    label: `${f.severity || ''} · ${f.metric || ''}${f.explanation ? ': ' + f.explanation : ''}`.slice(0, 140),
+  }));
+}
+
+// Time-axis chart. Optional `band` ({lo,hi,mid}) shades a normal range (#6);
+// optional `markers` ([{t,kind,label}]) draws event lines (#7).
+function historyChart(seriesList, { fromMs, toMs, onBrush, height = 300, band = null, markers = null }) {
   const W = 1000;
   const H = height;
   const pad = { l: 64, r: 12, t: 14, b: 28 };
   const ns = 'http://www.w3.org/2000/svg';
   const mk = (tag, attrs) => { const e = document.createElementNS(ns, tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v); return e; };
   const all = seriesList.flatMap((s) => s.points.map((p) => p.y));
+  if (band) all.push(band.hi);
   const max = Math.max(1, ...all);
   const span = Math.max(1, toMs - fromMs);
   const xOf = (t) => pad.l + ((t - fromMs) / span) * (W - pad.l - pad.r);
   const yOf = (v) => H - pad.b - (v / max) * (H - pad.t - pad.b);
+  const yClamp = (v) => Math.max(pad.t, Math.min(H - pad.b, yOf(v)));
   const svg = mk('svg', { viewBox: `0 0 ${W} ${H}`, class: 'big-chart-svg', preserveAspectRatio: 'none' });
 
   for (const frac of [0, 0.5, 1]) {
@@ -824,10 +855,28 @@ function historyChart(seriesList, { fromMs, toMs, onBrush, height = 300 }) {
     const lbl = mk('text', { x: xx, y: H - 8, class: 'axis', 'text-anchor': frac === 0 ? 'start' : frac === 1 ? 'end' : 'middle' });
     lbl.textContent = fmtTimeShort(t); svg.append(lbl);
   }
+  // Normal-range band (drawn under the data lines).
+  if (band && band.hi != null && band.lo != null) {
+    const yHi = yClamp(band.hi); const yLo = yClamp(band.lo);
+    svg.append(mk('rect', { x: pad.l, y: Math.min(yHi, yLo), width: W - pad.l - pad.r, height: Math.max(1, Math.abs(yLo - yHi)), fill: '#38bdf8', 'fill-opacity': '0.10' }));
+    if (band.mid != null) svg.append(mk('line', { x1: pad.l, y1: yClamp(band.mid), x2: W - pad.r, y2: yClamp(band.mid), stroke: '#38bdf8', 'stroke-opacity': '0.5', 'stroke-dasharray': '4 4', 'stroke-width': 1 }));
+  }
   for (const s of seriesList) {
     if (!s.points.length) continue;
     const d = s.points.map((p, i) => `${i ? 'L' : 'M'}${xOf(p.t).toFixed(1)},${yOf(p.y).toFixed(1)}`).join(' ');
     svg.append(mk('path', { d, fill: 'none', stroke: s.color, 'stroke-width': 2 }));
+  }
+  // Event markers (drawn on top).
+  if (Array.isArray(markers)) {
+    const colOf = (k) => (k === 'CRIT' ? '#dc2626' : k === 'WARN' ? '#d97706' : k === 'probe' ? '#dc2626' : '#64748b');
+    for (const m of markers) {
+      if (!Number.isFinite(m.t) || m.t < fromMs || m.t > toMs) continue;
+      const xx = xOf(m.t); const col = colOf(m.kind);
+      svg.append(mk('line', { x1: xx, y1: pad.t, x2: xx, y2: H - pad.b, stroke: col, 'stroke-opacity': '0.55', 'stroke-dasharray': '3 3', 'stroke-width': 1 }));
+      const tri = mk('path', { d: `M${xx - 4},${H - pad.b} L${xx + 4},${H - pad.b} L${xx},${H - pad.b - 7} Z`, fill: col });
+      const title = mk('title', {}); title.textContent = m.label || ''; tri.append(title);
+      svg.append(tri);
+    }
   }
 
   if (onBrush) {
@@ -910,7 +959,12 @@ function trafficHistorySection() {
     if (!chosen.length) { chartHost.replaceChildren(el('div', { class: 'empty' }, 'Vælg mindst én type.')); return; }
     const seriesList = chosen.map(([k, label], idx) => ({ id: k, label, color: SERIES_COLORS[idx % SERIES_COLORS.length], points: points.map((p) => ({ t: p.t, y: p[k] })) }));
     const legend = el('div', { class: 'legend' }, ...seriesList.map((s) => el('span', {}, el('span', { class: 'dot', style: `background:${s.color}` }), s.label)));
-    chartHost.replaceChildren(historyChart(seriesList, { fromMs, toMs, onBrush: (f, t) => { fromI.value = toLocalInput(new Date(f)); toI.value = toLocalInput(new Date(t)); load({ fromMs: f, toMs: t }); } }), legend);
+    // #7 event timeline: findings for this agent in the window as markers. Band
+    // (#6) only when a single metric is shown (otherwise scales clash).
+    let markers = [];
+    try { const fs = await api(`/api/findings?hostId=${encodeURIComponent(agentId)}&since=${new Date(fromMs).toISOString()}`); markers = findingMarkers(fs); } catch { markers = []; }
+    const band = seriesList.length === 1 ? robustBand(seriesList[0].points) : null;
+    chartHost.replaceChildren(historyChart(seriesList, { fromMs, toMs, band, markers, onBrush: (f, t) => { fromI.value = toLocalInput(new Date(f)); toI.value = toLocalInput(new Date(t)); load({ fromMs: f, toMs: t }); } }), legend);
   }
 
   // Called from the live graph's brush: load the actual stored data for the
@@ -1619,8 +1673,16 @@ async function probeDetail(r, agentId) {
   const pts = (data.results || []).filter((x) => x.target === r.target && x.rttMs != null).map((x) => ({ t: new Date(x.ts).getTime(), y: x.rttMs }));
   const fromMs = pts.length ? pts[0].t : Date.now() - 3600000;
   const toMs = pts.length ? pts[pts.length - 1].t : Date.now();
-  return el('details', { class: 'sec', open: true }, el('summary', {}, `RTT-historik — ${r.type} → ${esc(r.target)}`),
-    el('div', { class: 'overview-chart' }, pts.length ? historyChart([{ id: 'rtt', label: 'RTT (ms)', color: '#06b6d4', points: pts }], { fromMs, toMs }) : el('div', { class: 'empty' }, 'Ingen historik endnu — kør et par målinger.')));
+  // #6 normal-range band (RTT vs. its own median±MAD) + #7 markers: probe
+  // failures (ok→fail flips) and recent findings for this agent.
+  const band = robustBand(pts);
+  const markers = [];
+  for (const x of (data.results || []).filter((x) => x.target === r.target)) {
+    if (x.ok === false && x.ts) markers.push({ t: new Date(x.ts).getTime(), kind: 'probe', label: `Probe-fejl${x.detail ? ': ' + x.detail : ''}` });
+  }
+  try { const fs = await api(`/api/findings?hostId=${encodeURIComponent(agentId)}&since=${new Date(fromMs).toISOString()}`); markers.push(...findingMarkers(fs)); } catch { /* findings optional */ }
+  return el('details', { class: 'sec', open: true }, el('summary', {}, `RTT-historik — ${r.type} → ${esc(r.target)} `, el('span', { class: 'muted' }, '· bånd = normalt (median±MAD)')),
+    el('div', { class: 'overview-chart' }, pts.length ? historyChart([{ id: 'rtt', label: 'RTT (ms)', color: '#06b6d4', points: pts }], { fromMs, toMs, band, markers }) : el('div', { class: 'empty' }, 'Ingen historik endnu — kør et par målinger.')));
 }
 
 // Interface health per agent (utilisation, errors, discards, link state/speed)
@@ -2042,10 +2104,13 @@ views.agent = async () => {
       return { t: new Date(r.created_at).getTime(), rx: t ? Number(t.rxBytesPerSec) || 0 : 0, tx: t ? Number(t.txBytesPerSec) || 0 : 0 };
     });
     if (series.length < 2) { trafficHost.replaceChildren(el('div', { class: 'empty' }, 'Ingen trafikmålinger endnu — tryk "Kør test".')); return; }
+    // #7 event timeline: overlay this agent's findings as markers on the axis.
+    let markers = [];
+    try { const fs = await api(`/api/findings?hostId=${encodeURIComponent(id)}&since=${new Date(series[0].t).toISOString()}`); markers = findingMarkers(fs); } catch { markers = []; }
     trafficHost.replaceChildren(historyChart([
       { id: 'rx', label: '↓ RX', color: '#06b6d4', points: series.map((s) => ({ t: s.t, y: s.rx })) },
       { id: 'tx', label: '↑ TX', color: '#10b981', points: series.map((s) => ({ t: s.t, y: s.tx })) },
-    ], { fromMs: series[0].t, toMs: series[series.length - 1].t }));
+    ], { fromMs: series[0].t, toMs: series[series.length - 1].t, markers }));
   }
 
   async function refreshHealth() {
@@ -2145,7 +2210,7 @@ views.flows = async () => {
 
     if (data.series && data.series.length >= 2) {
       const pts = data.series.map((s) => ({ t: new Date(s.at).getTime(), y: s.bytes }));
-      kids.push(el('div', { class: 'overview-chart' }, historyChart([{ id: 'b', label: 'Bytes', color: '#06b6d4', points: pts }], { fromMs: pts[0].t, toMs: pts[pts.length - 1].t })));
+      kids.push(el('div', { class: 'overview-chart' }, historyChart([{ id: 'b', label: 'Bytes', color: '#06b6d4', points: pts }], { fromMs: pts[0].t, toMs: pts[pts.length - 1].t, band: robustBand(pts) })));
     }
 
     kids.push(el('h4', {}, 'Top talkers'));

@@ -125,7 +125,8 @@ A single vanilla-JS SPA. Key building blocks:
   the standalone tabs and the combined agent page.
 - `PAGE_INFO` — per-page hero line + "Mere info" drawer text.
 - Charts are hand-rolled SVG: `multiChart` (live, area + time ticks + brush) and
-  `historyChart` (time-axis). `usageBar()` for utilisation bars.
+  `historyChart` (time-axis; optional `band` = robust normal-range shading via
+  `robustBand`, `markers` = event lines via `findingMarkers`). `usageBar()` for utilisation bars.
 - Theme: light default + dark toggle (localStorage). Mobile: tab bar → bottom nav.
 
 ## Where do I change…?

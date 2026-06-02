@@ -2138,7 +2138,7 @@ views.settings = async () => {
   const root = el('div');
   const isAdmin = role === 'admin';
   const subtabs = [];
-  if (isAdmin) subtabs.push(['system', 'Oversigt'], ['users', 'Brugere']);
+  if (isAdmin) subtabs.push(['system', 'System'], ['types', 'Trafiktyper'], ['map', 'Kort'], ['users', 'Brugere']);
   subtabs.push(['license', 'Licens']);
   if (!settingsTab || !subtabs.some(([k]) => k === settingsTab)) settingsTab = subtabs[0][0];
 
@@ -2150,6 +2150,8 @@ views.settings = async () => {
   try {
     if (settingsTab === 'users') content = await views.users();
     else if (settingsTab === 'license') content = await views.license();
+    else if (settingsTab === 'map') content = await settingsMapView();
+    else if (settingsTab === 'types') content = await settingsTypesView();
     else content = await settingsSystemView();
   } catch (err) {
     content = el('div', { class: 'empty error' }, err.message);
@@ -2160,14 +2162,108 @@ views.settings = async () => {
 
 async function settingsSystemView() {
   const data = await api('/api/settings');
-  const root = el('div', { class: 'settings-grid' });
-  root.append(settingsCard('Licens-funktioner', featureBadges(data.license)));
-  root.append(settingsCard('Analyse', kvList(data.analysis, { analysisEnabled: 'Analyse slået til', assistantEnabled: 'AI-assistent', critSigma: 'CRIT σ', warnSigma: 'WARN σ', baselineDays: 'Baseline-dage', minSamples: 'Min. samples' })));
-  root.append(settingsCard('Alerting', alertingSummary(data.alerting)));
-  root.append(settingsCard('Retention', kvList(data.retention, { enabled: 'Slået til', rawRetentionDays: 'Rå data (dage)', rollupRetentionDays: 'Aggregeret (dage)', findingRetentionDays: 'Findings (dage)', rollupIntervalMinutes: 'Bucket (min)' })));
-  root.append(mapSettingsCard(data.map));
-  root.append(el('p', { class: 'muted' }, 'Læsbare værdier styres via serverens .env og kræver genstart. Kun kort-indstillingerne kan ændres her.'));
+  const root = el('div');
+  root.append(el('p', { class: 'muted settings-intro' }, 'Effektiv konfiguration (læsbar) — styres via serverens .env og kræver genstart. Det du kan ændre her har egne faner: ', el('b', {}, 'Trafiktyper'), ' og ', el('b', {}, 'Kort'), '.'));
+  const grid = el('div', { class: 'settings-grid' });
+  grid.append(settingsCard('Licens-funktioner', featureBadges(data.license)));
+  grid.append(settingsCard('Analyse', kvList(data.analysis, { analysisEnabled: 'Analyse slået til', assistantEnabled: 'AI-assistent', critSigma: 'CRIT σ', warnSigma: 'WARN σ', baselineDays: 'Baseline-dage', minSamples: 'Min. samples' })));
+  grid.append(settingsCard('Alerting', alertingSummary(data.alerting)));
+  grid.append(settingsCard('Retention', kvList(data.retention, { enabled: 'Slået til', rawRetentionDays: 'Rå data (dage)', rollupRetentionDays: 'Aggregeret (dage)', findingRetentionDays: 'Findings (dage)', rollupIntervalMinutes: 'Bucket (min)' })));
+  root.append(grid);
   return root;
+}
+
+async function settingsMapView() {
+  const data = await api('/api/settings');
+  const root = el('div');
+  root.append(el('p', { class: 'muted settings-intro' }, 'Kortbaggrund (tiles) og adressesøgning (geocoder). Brug en EU/selv-hostet kilde i produktion.'));
+  root.append(el('div', { class: 'settings-grid' }, mapSettingsCard(data.map)));
+  return root;
+}
+
+async function settingsTypesView() {
+  const data = await api('/api/settings');
+  const root = el('div');
+  root.append(el('p', { class: 'muted settings-intro' }, 'Grupper trafik efter ', el('b', {}, 'port'), ' (fx DNS = 53) eller destinations-', el('b', {}, 'ASN'), ' (fx Facebook/Meta = 32934). Typerne vises som slå-til/fra-serier på Trafik-siden under “Trafiktype”.'));
+  root.append(el('div', { class: 'settings-grid' }, flowCategoriesCard(data.flowCategories || [])));
+  return root;
+}
+
+function slugify(s) {
+  return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32);
+}
+
+// Editor for the traffic-type categories. Each row is a name + a kind (port or
+// ASN) + a free-text list of numbers; the server validates on save.
+function flowCategoriesCard(categories) {
+  const card = el('div', { class: 'settings-card wide' }, el('h3', {}, 'Trafiktyper'));
+  card.append(el('p', { class: 'muted small' }, 'Port-typer er præcise (port 53 = DNS). ASN-typer er omtrentlige — CDN/cloud kan sløre, og ét ASN dækker flere tjenester. Ændringer slår igennem uden genstart.'));
+  const head = el('div', { class: 'tc-row tc-head muted' }, el('span', {}, 'Navn'), el('span', {}, 'Slags'), el('span', {}, 'Porte / ASN-numre (komma-adskilt)'), el('span', {}));
+  const listEl = el('div', { class: 'tc-list' });
+  const err = el('p', { class: 'error' });
+  const rows = [];
+
+  function makeRow(cat = {}) {
+    const id = cat.id || '';
+    const label = el('input', { type: 'text', value: cat.label || '', placeholder: 'fx DNS' });
+    const kind = el('select', {}, el('option', { value: 'port' }, 'Port'), el('option', { value: 'asn' }, 'Organisation (ASN)'));
+    kind.value = cat.kind === 'asn' ? 'asn' : 'port';
+    const nums = el('input', { type: 'text', value: ((cat.kind === 'asn' ? cat.asns : cat.ports) || []).join(', ') });
+    const setPh = () => { nums.placeholder = kind.value === 'asn' ? 'fx 32934, 54115' : 'fx 53, 853'; };
+    setPh();
+    kind.addEventListener('change', setPh);
+    const ctrl = { id, label, kind, nums };
+    const del = el('button', { class: 'small ghost danger', title: 'Fjern', onclick: () => { const i = rows.indexOf(ctrl); if (i >= 0) rows.splice(i, 1); node.remove(); } }, '×');
+    const node = el('div', { class: 'tc-row' }, label, kind, nums, del);
+    ctrl.node = node;
+    rows.push(ctrl);
+    listEl.append(node);
+    return ctrl;
+  }
+
+  for (const c of categories) makeRow(c);
+  if (!categories.length) makeRow();
+
+  const addBtn = el('button', { class: 'small ghost', onclick: () => makeRow() }, '+ Tilføj type');
+  const resetBtn = el('button', { class: 'small ghost' }, 'Nulstil til standard');
+  const saveBtn = el('button', { class: 'small' }, 'Gem trafiktyper');
+
+  async function save() {
+    err.textContent = '';
+    const seen = new Set();
+    const out = [];
+    for (const ctrl of rows) {
+      const lbl = ctrl.label.value.trim();
+      const list = ctrl.nums.value.split(/[\s,]+/).filter(Boolean).map(Number);
+      if (!lbl && !list.length) continue; // skip empty rows
+      let cid = ctrl.id || slugify(lbl) || 'type';
+      let n = 2;
+      const base = cid;
+      while (seen.has(cid)) cid = `${base}-${n++}`;
+      seen.add(cid);
+      const item = { id: cid, label: lbl, kind: ctrl.kind.value };
+      if (ctrl.kind.value === 'asn') item.asns = list; else item.ports = list;
+      out.push(item);
+    }
+    saveBtn.disabled = true;
+    try {
+      await api('/api/settings/flow-categories', { method: 'PUT', body: { categories: out } });
+      toast('Trafiktyper gemt');
+      render();
+    } catch (e2) {
+      err.textContent = e2.data && e2.data.details ? Object.values(e2.data.details).join(' · ') : e2.message;
+    } finally { saveBtn.disabled = false; }
+  }
+  async function reset() {
+    if (!confirm('Nulstil trafiktyper til standardlisten?')) return;
+    try { await api('/api/settings/flow-categories', { method: 'PUT', body: { reset: true } }); toast('Nulstillet til standard'); render(); }
+    catch (e2) { err.textContent = e2.message; }
+  }
+  saveBtn.addEventListener('click', save);
+  resetBtn.addEventListener('click', reset);
+
+  card.append(head, listEl, el('div', { class: 'form-actions' }, addBtn, el('span', { class: 'spacer' }), resetBtn, saveBtn), err);
+  return card;
 }
 function settingsCard(title, ...body) { return el('div', { class: 'settings-card' }, el('h3', {}, title), ...body); }
 function boolText(v) { return v === true ? 'ja' : v === false ? 'nej' : String(v ?? '–'); }

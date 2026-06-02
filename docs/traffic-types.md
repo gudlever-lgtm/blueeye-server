@@ -17,10 +17,12 @@ Facebook / …" without inspecting any packet payload.
 | `port` | the agent's `byPort` summary (in stored result payloads) | DNS, Web, SSH, NTP, VoIP, VPN | **Exact** (port 53 *is* DNS) |
 | `asn`  | destination ASN of geo-enriched `flow_records` | Facebook/Meta, Google, Netflix, Microsoft, Amazon, Apple, Cloudflare, Akamai | **Approximate** — CDNs/cloud blur it; one ASN can host many services |
 
-The category list lives in [`src/flows/categories.js`](../src/flows/categories.js)
-(`DEFAULT_CATEGORIES`). It is intentionally small and explainable; extend it by
-editing that file (an admin-editable override is a planned follow-up — see
-`listCategories(overrides)`).
+The built-in list lives in [`src/flows/categories.js`](../src/flows/categories.js)
+(`DEFAULT_CATEGORIES`) — intentionally small and explainable. Admins can **edit
+the list at runtime** under **Indstillinger → Trafiktyper** (add/remove
+categories, change the ports/ASNs per type, or reset to defaults). The edited
+list is stored in `app_settings` (`flowCategories`) and replaces the defaults
+wholesale; it takes effect on the next request, no restart.
 
 ## Requirements
 
@@ -65,6 +67,24 @@ window are returned, biggest first; `points` align index-for-index with
 `GET /api/flows/categories/defs` (viewer+) lists the category catalogue
 (`{ id, label, kind }`) so the UI can build toggles.
 
+### Editing the categories (admin)
+
+The effective list is included in `GET /api/settings` as `flowCategories`
+(full, with `ports`/`asns`). To change it:
+
+`PUT /api/settings/flow-categories` (admin)
+
+```jsonc
+{ "categories": [ { "id": "gaming", "label": "Gaming", "kind": "port", "ports": [3074, 27015] } ] }
+// or reset to the built-in defaults:
+{ "reset": true }
+```
+
+Validation (in [`src/services/settings.js`](../src/services/settings.js)):
+`id` 1-32 chars of `[a-z0-9_-]` and unique, `label` ≤ 60 chars, `kind` is
+`port` or `asn`, and 1-200 ports (1..65535) / 1-500 ASNs. `400` with per-row
+details on invalid input.
+
 ## Implementation
 
 - Router: [`src/routes/flows.js`](../src/routes/flows.js) (mounted at
@@ -85,3 +105,6 @@ window are returned, biggest first; `points` align index-for-index with
   — the classifier.
 - `asnSeries` is covered in
   [`test/flowsRepository.test.js`](../test/flowsRepository.test.js).
+- [`test/flowCategoriesSettings.test.js`](../test/flowCategoriesSettings.test.js)
+  — editing categories (service validation, the settings route, and the flows
+  route honouring an edited list).

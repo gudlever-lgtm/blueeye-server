@@ -24,7 +24,26 @@ function createSettingsRouter({ settingsService, featureGate, dispatcher, analys
       alerting: dispatcher ? dispatcher.describe() : null,
       retention: retentionConfig || null,
       map: settingsService ? await settingsService.getMap() : null,
+      flowCategories: settingsService ? await settingsService.getFlowCategories() : null,
     });
+  }));
+
+  // PUT /api/settings/flow-categories — replace the traffic-type category list
+  // ({ categories: [...] }) or reset to the built-in defaults ({ reset: true }).
+  router.put('/flow-categories', ...admin, asyncHandler(async (req, res) => {
+    const body = req.body || {};
+    if (body.reset === true) {
+      return res.json({ flowCategories: await settingsService.resetFlowCategories() });
+    }
+    try {
+      const flowCategories = await settingsService.setFlowCategories(body.categories);
+      res.json({ flowCategories });
+    } catch (err) {
+      if (err.statusCode === 400) {
+        return res.status(400).json({ error: 'Validation failed', details: err.details || {} });
+      }
+      throw err;
+    }
   }));
 
   // PUT /api/settings/map { tileUrl?, attribution?, maxZoom? } — update the map

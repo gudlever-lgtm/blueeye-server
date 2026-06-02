@@ -358,7 +358,17 @@ pre { padding: 10px; overflow: auto; }
 .modal-card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 20px; width: min(520px, 92vw); max-height: 86vh; overflow: auto; }
 .modal-card h3 { margin-top: 0; }
 .form-grid { display: flex; flex-direction: column; gap: 12px; }
-.form-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px; }
+.form-actions { display: flex; gap: 8px; align-items: center; justify-content: flex-end; margin-top: 8px; }
+
+/* Settings: focused-tab intro line + traffic-type category editor. */
+.settings-intro { margin: 0 0 14px; }
+.settings-card.wide { grid-column: 1 / -1; }
+.tc-list { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.tc-row { display: grid; grid-template-columns: 1fr 170px 2fr 34px; gap: 8px; align-items: center; }
+.tc-row input, .tc-row select { width: 100%; }
+.tc-head { font-size: 12px; padding-bottom: 2px; }
+button.ghost.danger { color: var(--bad); border-color: var(--border); font-weight: 700; line-height: 1; }
+@media (max-width: 640px) { .tc-row { grid-template-columns: 1fr 1fr; } .tc-head { display: none; } }
 
 /* Auto-refresh toggle */
 .autorefresh { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; }

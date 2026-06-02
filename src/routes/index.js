@@ -76,7 +76,10 @@ function createApiRouter({
   if (flowsRepo) router.use('/api/geo', createGeoRouter({ flowsRepo, agentsRepo, findingStore, tileConfig: geoTileConfig, getMapConfig, featureGate }));
   if (dispatcher) router.use('/api/alerting', createAlertingRouter({ dispatcher }));
   router.use('/api/map', createMapRouter({ getMapConfig }));
-  router.use('/api/flows', createFlowsRouter({ resultsRepo, agentsRepo, flowsRepo }));
+  router.use('/api/flows', createFlowsRouter({
+    resultsRepo, agentsRepo, flowsRepo,
+    getCategories: settingsService ? () => settingsService.getFlowCategories() : undefined,
+  }));
   if (settingsService) router.use('/api/settings', createSettingsRouter({ settingsService, featureGate, dispatcher, analysisConfig, retentionConfig }));
   router.use('/api/export', createExportRouter({ findingStore, flowsRepo, agentsRepo, locationsRepo, resultsRepo, featureGate }));
   router.use('/enrollment-codes', createEnrollmentCodesRouter({ enrollmentCodesRepo, locationsRepo }));

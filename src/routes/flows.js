@@ -21,18 +21,19 @@ const DEFAULT_SPAN_MS = 6 * 60 * 60 * 1000; // last 6h when no range is given
 // ...) come from the agent's `byPort` summary (stored result payloads);
 // organisation categories (Facebook, Google, ...) come from the destination ASN
 // of geo-enriched flows. Both are metadata only — no payload/DPI. viewer+.
-function createFlowsRouter({ resultsRepo, agentsRepo, flowsRepo }) {
+function createFlowsRouter({ resultsRepo, agentsRepo, flowsRepo, getCategories }) {
   const router = express.Router();
-  const categories = listCategories();
-  const index = buildIndex(categories);
-  const byId = new Map(categories.map((c) => [c.id, c]));
+  // Categories are loaded per request so admin edits (via settings) take effect
+  // without a restart. Falls back to the built-in defaults.
+  const loadCategories = typeof getCategories === 'function' ? getCategories : async () => listCategories();
   const reader = requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN);
 
   // Catalogue of categories (so the UI can build toggles before/independently of
   // a data fetch).
-  router.get('/categories/defs', requireAuth, reader, (_req, res) => {
+  router.get('/categories/defs', requireAuth, reader, asyncHandler(async (_req, res) => {
+    const categories = await loadCategories();
     res.json({ categories: categories.map(({ id, label, kind }) => ({ id, label, kind })) });
-  });
+  }));
 
   // GET /api/flows/categories?agentId=&from=&to= — time-bucketed bytes per
   // traffic-type category. Only categories with traffic in the window are
@@ -51,6 +52,10 @@ function createFlowsRouter({ resultsRepo, agentsRepo, flowsRepo }) {
     if (!agent) {
       return res.status(404).json({ error: 'Agent not found' });
     }
+
+    const categories = await loadCategories();
+    const index = buildIndex(categories);
+    const byId = new Map(categories.map((c) => [c.id, c]));
 
     // Resolve the window and a bucket size aligned to the epoch grid, so the
     // SQL bucket index (FLOOR(ts/bucketSec)) and the JS one line up exactly.

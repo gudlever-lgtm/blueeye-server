@@ -756,6 +756,12 @@ function fmtClock(ms) {
   return new Date(ms).toLocaleTimeString('da-DK', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
 
+// Legend row for a chart: a coloured dot + label per series.
+function legendFor(seriesList) {
+  return el('div', { class: 'legend' }, ...seriesList.map((s) =>
+    el('span', {}, el('span', { class: 'dot', style: `background:${s.color}` }), s.label)));
+}
+
 // Time-axis line chart with a drag-to-zoom brush. `series`: [{id,label,color,
 // points:[{t(ms),y}]}]. onBrush(fromMs,toMs) fires when the user marks an area.
 function historyChart(seriesList, { fromMs, toMs, onBrush, height = 300 }) {
@@ -867,7 +873,7 @@ function trafficHistorySection() {
     const chosen = METRIC_DEFS.filter(([k]) => histState.metrics.has(k));
     if (!chosen.length) { chartHost.replaceChildren(el('div', { class: 'empty' }, 'Vælg mindst én type.')); return; }
     const seriesList = chosen.map(([k, label], idx) => ({ id: k, label, color: SERIES_COLORS[idx % SERIES_COLORS.length], points: points.map((p) => ({ t: p.t, y: p[k] })) }));
-    const legend = el('div', { class: 'legend' }, ...seriesList.map((s) => el('span', {}, el('span', { class: 'dot', style: `background:${s.color}` }), s.label)));
+    const legend = legendFor(seriesList);
     chartHost.replaceChildren(historyChart(seriesList, { fromMs, toMs, onBrush: (f, t) => { fromI.value = toLocalInput(new Date(f)); toI.value = toLocalInput(new Date(t)); load({ fromMs: f, toMs: t }); } }), legend);
   }
 
@@ -951,8 +957,7 @@ function trafficTypeSection() {
       id: c.id, label: c.label, color: colorAt(last.categories.indexOf(c)),
       points: last.buckets.map((iso, k) => ({ t: Date.parse(iso), y: Number(c.points[k]) || 0 })),
     }));
-    const legend = el('div', { class: 'legend' }, ...seriesList.map((s) =>
-      el('span', {}, el('span', { class: 'dot', style: `background:${s.color}` }), s.label)));
+    const legend = legendFor(seriesList);
     chartHost.replaceChildren(
       seriesList.length ? historyChart(seriesList, { fromMs, toMs }) : el('div', { class: 'empty' }, 'Vælg en eller flere typer ovenfor.'),
       legend);
@@ -1379,8 +1384,7 @@ views.overview = async () => {
       id, label: history.get(id).label, color: colorFor(id, idx),
       points: history.get(id).points,
     }));
-    const legend = el('div', { class: 'legend' }, ...seriesList.map((s) =>
-      el('span', {}, el('span', { class: 'dot', style: `background:${s.color}` }), s.label)));
+    const legend = legendFor(seriesList);
     // Running clock ticks (HH:MM:SS) from the actual point timestamps, so the
     // x-axis shows the live timeframe rather than a static "~3 min siden / nu".
     const ref = seriesList.find((s) => s.points.length >= 2);

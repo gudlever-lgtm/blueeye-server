@@ -87,6 +87,17 @@ function makeResultsRepo(overrides = {}) {
   };
 }
 
+// A fake probe-results repository (records inserted rows; benign empty reads).
+function makeProbeResultsRepo(overrides = {}) {
+  const rows = [];
+  return {
+    rows,
+    createMany: overrides.createMany || (async (agentId, results) => { for (const r of results) rows.push({ agentId, ...r }); return results.length; }),
+    findByAgent: overrides.findByAgent || (async () => []),
+    latestByAgent: overrides.latestByAgent || (async () => []),
+  };
+}
+
 // A fake enrollment-codes repository.
 function makeEnrollmentCodesRepo(overrides = {}) {
   return {
@@ -269,6 +280,7 @@ function makeApp(overrides = {}) {
     enrollmentStore: overrides.enrollmentStore || makeEnrollmentStore(),
     agentTokensRepo: overrides.agentTokensRepo || makeAgentTokensRepo(),
     resultsRepo: overrides.resultsRepo || makeResultsRepo(),
+    probeResultsRepo: overrides.probeResultsRepo || makeProbeResultsRepo(),
     licenseManager: overrides.licenseManager || makeLicenseManager(),
     agentCommander: overrides.agentCommander || makeAgentCommander(),
     systemInfo: overrides.systemInfo || makeSystemInfo(),
@@ -312,6 +324,7 @@ module.exports = {
   makeAgentsRepo,
   makeAgentTokensRepo,
   makeResultsRepo,
+  makeProbeResultsRepo,
   makeEnrollmentCodesRepo,
   makeEnrollmentStore,
   makeLicenseManager,

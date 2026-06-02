@@ -6,6 +6,7 @@ const { requireAuth, requireRole } = require('../auth/middleware');
 const { ROLES } = require('../auth/roles');
 const { validateAgentManagedInput } = require('../validation/agentValidation');
 const { validateTimeRange } = require('../validation/resultsValidation');
+const { validateProbeSpec } = require('../validation/probeValidation');
 const { parseId } = require('../validation/locationValidation');
 
 // Agents router with role-based access control:
@@ -44,6 +45,34 @@ function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentComma
         return res.status(409).json({ error: 'Agent not connected', delivered: 0 });
       }
       res.status(202).json({ delivered, agentId: id });
+    })
+  );
+
+  // POST /agents/:id/probe — push an active probe (ping/tcp/dns/traceroute) to a
+  // connected agent. operator/admin. The agent runs it and reports back via
+  // POST /agents/probe-results. 409 if the agent isn't connected.
+  router.post(
+    '/:id/probe',
+    requireAuth,
+    requireRole(ROLES.OPERATOR, ROLES.ADMIN),
+    asyncHandler(async (req, res) => {
+      const id = parseId(req.params.id);
+      if (id === null) {
+        return res.status(400).json({ error: 'Invalid id' });
+      }
+      const { value: probe, errors } = validateProbeSpec(req.body);
+      if (errors) {
+        return res.status(400).json({ error: 'Validation failed', details: errors });
+      }
+      const agent = await agentsRepo.findById(id);
+      if (!agent) {
+        return res.status(404).json({ error: 'Agent not found' });
+      }
+      const delivered = agentCommander ? agentCommander.sendCommand(id, { name: 'run-probe', probe }) : 0;
+      if (delivered === 0) {
+        return res.status(409).json({ error: 'Agent not connected', delivered: 0 });
+      }
+      res.status(202).json({ delivered, agentId: id, probe });
     })
   );
 

@@ -19,6 +19,7 @@ const { createExportRouter } = require('./export');
 const { createSettingsRouter } = require('./settings');
 const { createMapRouter } = require('./map');
 const { createFlowsRouter } = require('./flows');
+const { createProbesRouter } = require('./probes');
 const {
   createAgentAuthenticator,
   createAgentTokenMiddleware,
@@ -35,6 +36,7 @@ function createApiRouter({
   enrollmentStore,
   agentTokensRepo,
   resultsRepo,
+  probeResultsRepo,
   licenseManager,
   agentCommander,
   systemInfo,
@@ -80,6 +82,7 @@ function createApiRouter({
     resultsRepo, agentsRepo, flowsRepo,
     getCategories: settingsService ? () => settingsService.getFlowCategories() : undefined,
   }));
+  if (probeResultsRepo) router.use('/api/probes', createProbesRouter({ probeResultsRepo, agentsRepo }));
   if (settingsService) router.use('/api/settings', createSettingsRouter({ settingsService, featureGate, dispatcher, analysisConfig, retentionConfig }));
   router.use('/api/export', createExportRouter({ findingStore, flowsRepo, agentsRepo, locationsRepo, resultsRepo, featureGate }));
   router.use('/enrollment-codes', createEnrollmentCodesRouter({ enrollmentCodesRepo, locationsRepo }));
@@ -90,7 +93,7 @@ function createApiRouter({
   //   - POST /enroll           — unauthenticated
   // Requests fall through routers that have no matching route.
   router.use('/agents', createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentCommander }));
-  router.use('/agents', createAgentReportsRouter({ agentAuth, resultsRepo, agentsRepo, analysisPipeline, flowPipeline }));
+  router.use('/agents', createAgentReportsRouter({ agentAuth, resultsRepo, agentsRepo, analysisPipeline, flowPipeline, probeResultsRepo }));
   router.use('/agents', createAgentEnrollRouter({ enrollmentStore }));
 
   return router;

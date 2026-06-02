@@ -248,6 +248,21 @@ const PAGE_INFO = {
         el('li', {}, '"Rediger" sætter navn, lokation, noter og trafik-kilde (proc, SNMP, NetFlow eller sFlow).')),
     ],
   },
+  probes: {
+    hero: 'Aktiv reachability fra en agent: ping, TCP-connect, DNS og traceroute — med RTT, tab og sti.',
+    title: 'Probes',
+    body: () => [
+      el('p', {}, 'Hvor de øvrige sider måler trafik passivt, kører probes en aktiv test fra en valgt agent mod et mål, så du kan svare på “kan site A nå host B — og hvor hurtigt?”.'),
+      el('h4', {}, 'Typer'),
+      el('ul', {},
+        el('li', {}, 'Ping (ICMP): RTT min/avg/max + pakketab + jitter.'),
+        el('li', {}, 'TCP-connect: åbner host:port og måler forbindelsestid (ingen payload sendes).'),
+        el('li', {}, 'DNS: tid for at slå et navn op (og hvilken adresse der kom retur).'),
+        el('li', {}, 'Traceroute: stien (hops) mod målet med RTT pr. hop.')),
+      el('p', {}, 'Vælg agent + type + mål og tryk “Kør probe”. Agenten skal være forbundet; resultatet kommer tilbage et øjeblik efter og lægges i historikken, så du kan se RTT/tab over tid.'),
+      el('p', { class: 'muted' }, 'Kun metadata: mål og timings — aldrig pakke-indhold.'),
+    ],
+  },
   geo: {
     hero: 'Geografisk overblik: interne sites og eksterne trafik-destinationer (land/ASN).',
     title: 'Geo-kort',
@@ -1471,6 +1486,109 @@ views.overview = async () => {
 const ovState = { timer: null, selection: new Set() };
 function stopOverview() { if (ovState.timer) { clearInterval(ovState.timer); ovState.timer = null; } }
 
+// Probes polling state (the "Probes" view auto-refreshes its latest results).
+const probeState = { timer: null };
+function stopProbes() { if (probeState.timer) { clearInterval(probeState.timer); probeState.timer = null; } }
+
+// Active probes: trigger ping/tcp/dns/traceroute from an agent and watch the
+// results (RTT/loss over time + traceroute path). The agent runs the probe and
+// reports back, so results land a moment after triggering.
+views.probes = async () => {
+  const root = el('div', { class: 'probes' });
+  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Probes'),
+    el('span', { class: 'muted' }, 'Aktiv reachability · ping · TCP · DNS · traceroute')));
+
+  const agents = await api('/agents').catch(() => []);
+  if (!agents.length) { root.append(el('div', { class: 'empty' }, 'Ingen agenter endnu — enroll en agent først.')); return root; }
+
+  const agentSel = el('select', {}, ...agents.map((a) => el('option', { value: String(a.id) }, a.display_name || a.hostname)));
+  const typeSel = el('select', {}, ...[['ping', 'Ping (ICMP)'], ['tcp', 'TCP-connect'], ['dns', 'DNS'], ['traceroute', 'Traceroute']].map(([v, l]) => el('option', { value: v }, l)));
+  const target = el('input', { type: 'text', placeholder: 'fx 1.1.1.1 eller example.com' });
+  const portInput = el('input', { type: 'number', min: '1', max: '65535', value: '443' });
+  const portWrap = el('label', { class: 'inline muted' }, 'Port ', portInput);
+  const countInput = el('input', { type: 'number', min: '1', max: '20', value: '4' });
+  const runBtn = el('button', { class: 'small' }, 'Kør probe');
+  const status = el('div', { class: 'muted' });
+  const syncPort = () => { portWrap.style.display = typeSel.value === 'tcp' ? '' : 'none'; };
+  typeSel.addEventListener('change', syncPort); syncPort();
+
+  root.append(el('div', { class: 'history-controls' },
+    el('label', { class: 'inline muted' }, 'Agent ', agentSel),
+    el('label', { class: 'inline muted' }, 'Type ', typeSel),
+    el('label', { class: 'inline muted' }, 'Mål ', target),
+    portWrap,
+    el('label', { class: 'inline muted' }, 'Antal ', countInput),
+    runBtn, status));
+
+  const latestHost = el('div', { class: 'probe-latest' });
+  const detailHost = el('div', {});
+  root.append(el('details', { class: 'sec', open: true }, el('summary', {}, 'Seneste resultater ', el('span', { class: 'muted' }, '· nyeste pr. mål')), latestHost));
+  root.append(detailHost);
+
+  async function run() {
+    const id = agentSel.value;
+    const host = target.value.trim();
+    if (!host) { status.className = 'error'; status.textContent = 'Angiv et mål.'; return; }
+    const body = { type: typeSel.value, host };
+    if (typeSel.value === 'tcp') body.port = Number(portInput.value);
+    if (countInput.value) body.count = Number(countInput.value);
+    status.className = 'muted'; status.textContent = 'Sender…'; runBtn.disabled = true;
+    try {
+      await api(`/agents/${id}/probe`, { method: 'POST', body });
+      status.textContent = 'Sendt — agenten kører den nu; resultatet kommer om et øjeblik.';
+      setTimeout(refreshLatest, 2500); setTimeout(refreshLatest, 6000);
+    } catch (e) {
+      status.className = 'error';
+      status.textContent = e.status === 409 ? 'Agenten er ikke forbundet lige nu.' : (e.data && e.data.details ? Object.values(e.data.details).join(' · ') : e.message);
+    } finally { runBtn.disabled = false; }
+  }
+  runBtn.addEventListener('click', run);
+
+  async function refreshLatest() {
+    const id = agentSel.value;
+    let data;
+    try { data = await api(`/api/probes/latest?agentId=${encodeURIComponent(id)}`); } catch { return; }
+    const rows = data.results || [];
+    if (!rows.length) { latestHost.replaceChildren(el('div', { class: 'muted' }, 'Ingen probe-resultater endnu — kør en ovenfor.')); return; }
+    latestHost.replaceChildren(el('table', {},
+      el('thead', {}, el('tr', {}, ...['Type', 'Mål', 'Status', 'RTT', 'Tab', 'Jitter', 'Tid', ''].map((h) => el('th', {}, h)))),
+      el('tbody', {}, ...rows.map((r) => el('tr', {},
+        el('td', {}, r.type),
+        el('td', {}, esc(r.target)),
+        el('td', {}, el('span', { class: `badge ${r.ok ? 'online' : 'offline'}` }, r.ok ? 'ok' : 'fejl')),
+        el('td', { class: 'num' }, r.rttMs != null ? `${r.rttMs} ms` : '–'),
+        el('td', { class: 'num' }, r.lossPct != null ? `${r.lossPct}%` : '–'),
+        el('td', { class: 'num' }, r.jitterMs != null ? `${r.jitterMs} ms` : '–'),
+        el('td', { class: 'muted' }, r.ts ? fmtTimeShort(new Date(r.ts).getTime()) : '–'),
+        el('td', {}, el('button', { class: 'small ghost', onclick: () => showDetail(r) }, r.type === 'traceroute' ? 'Sti' : 'Historik')))))));
+  }
+
+  async function showDetail(r) {
+    const id = agentSel.value;
+    if (r.type === 'traceroute') {
+      const hops = r.hops || [];
+      detailHost.replaceChildren(el('details', { class: 'sec', open: true }, el('summary', {}, `Sti til ${esc(r.target)}`),
+        el('table', { class: 'probe-hops' }, el('tbody', {}, ...(hops.length ? hops.map((h) => el('tr', {},
+          el('td', { class: 'muted' }, `#${h.hop}`),
+          el('td', {}, h.ip || '* * *'),
+          el('td', { class: 'num' }, h.rttMs != null ? `${h.rttMs} ms` : '–'))) : [el('tr', {}, el('td', { class: 'muted' }, 'Ingen hops.'))])))));
+      return;
+    }
+    let data;
+    try { data = await api(`/api/probes?agentId=${encodeURIComponent(id)}&type=${r.type}`); } catch (e) { detailHost.replaceChildren(el('div', { class: 'error' }, e.message)); return; }
+    const pts = (data.results || []).filter((x) => x.target === r.target && x.rttMs != null).map((x) => ({ t: new Date(x.ts).getTime(), y: x.rttMs }));
+    const fromMs = pts.length ? pts[0].t : Date.now() - 3600000;
+    const toMs = pts.length ? pts[pts.length - 1].t : Date.now();
+    detailHost.replaceChildren(el('details', { class: 'sec', open: true }, el('summary', {}, `RTT-historik — ${r.type} → ${esc(r.target)}`),
+      el('div', { class: 'overview-chart' }, pts.length ? historyChart([{ id: 'rtt', label: 'RTT (ms)', color: '#06b6d4', points: pts }], { fromMs, toMs }) : el('div', { class: 'empty' }, 'Ingen historik endnu — kør et par målinger.'))));
+  }
+
+  refreshLatest();
+  stopProbes();
+  probeState.timer = setInterval(() => { if (!modalOpen()) refreshLatest(); }, 5000);
+  return root;
+};
+
 // Map of locations with their agents. Uses Leaflet if available; otherwise falls
 // back to a list. Each located location gets a marker with agent count/status.
 views.map = async () => {
@@ -2599,6 +2717,7 @@ async function render({ silent = false } = {}) {
 
   // Stop the overview poller when leaving that view (it restarts itself when shown).
   if (currentView !== 'overview') stopOverview();
+  if (currentView !== 'probes') stopProbes();
   // Tear down the Leaflet map when leaving the geo view (it rebuilds on entry).
   if (currentView !== 'geo') stopGeo();
 

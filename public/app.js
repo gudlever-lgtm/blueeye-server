@@ -77,6 +77,12 @@ async function api(path, { method = 'GET', body } = {}) {
   return data;
 }
 
+// Human-readable text from an api() error: prefer the field-level validation
+// details (joined), else the thrown message.
+function errText(e) {
+  return e.data && e.data.details ? Object.values(e.data.details).join(' · ') : e.message;
+}
+
 function toast(message, bad = false) {
   const t = $('#toast');
   t.textContent = message;
@@ -798,6 +804,12 @@ function fmtClock(ms) {
   return new Date(ms).toLocaleTimeString('da-DK', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
 
+// Legend row for a chart: a coloured dot + label per series.
+function legendFor(seriesList) {
+  return el('div', { class: 'legend' }, ...seriesList.map((s) =>
+    el('span', {}, el('span', { class: 'dot', style: `background:${s.color}` }), s.label)));
+}
+
 // Time-axis line chart with a drag-to-zoom brush. `series`: [{id,label,color,
 // points:[{t(ms),y}]}]. onBrush(fromMs,toMs) fires when the user marks an area.
 // Linear-interpolated percentile of a sorted ascending array.
@@ -958,7 +970,7 @@ function trafficHistorySection() {
     const chosen = METRIC_DEFS.filter(([k]) => histState.metrics.has(k));
     if (!chosen.length) { chartHost.replaceChildren(el('div', { class: 'empty' }, 'Vælg mindst én type.')); return; }
     const seriesList = chosen.map(([k, label], idx) => ({ id: k, label, color: SERIES_COLORS[idx % SERIES_COLORS.length], points: points.map((p) => ({ t: p.t, y: p[k] })) }));
-    const legend = el('div', { class: 'legend' }, ...seriesList.map((s) => el('span', {}, el('span', { class: 'dot', style: `background:${s.color}` }), s.label)));
+    const legend = legendFor(seriesList);
     // #7 event timeline: findings for this agent in the window as markers. Band
     // (#6) only when a single metric is shown (otherwise scales clash).
     let markers = [];
@@ -1047,8 +1059,7 @@ function trafficTypeSection() {
       id: c.id, label: c.label, color: colorAt(last.categories.indexOf(c)),
       points: last.buckets.map((iso, k) => ({ t: Date.parse(iso), y: Number(c.points[k]) || 0 })),
     }));
-    const legend = el('div', { class: 'legend' }, ...seriesList.map((s) =>
-      el('span', {}, el('span', { class: 'dot', style: `background:${s.color}` }), s.label)));
+    const legend = legendFor(seriesList);
     chartHost.replaceChildren(
       seriesList.length ? historyChart(seriesList, { fromMs, toMs }) : el('div', { class: 'empty' }, 'Vælg en eller flere typer ovenfor.'),
       legend);
@@ -1475,8 +1486,7 @@ views.overview = async () => {
       id, label: history.get(id).label, color: colorFor(id, idx),
       points: history.get(id).points,
     }));
-    const legend = el('div', { class: 'legend' }, ...seriesList.map((s) =>
-      el('span', {}, el('span', { class: 'dot', style: `background:${s.color}` }), s.label)));
+    const legend = legendFor(seriesList);
     // Running clock ticks (HH:MM:SS) from the actual point timestamps, so the
     // x-axis shows the live timeframe rather than a static "~3 min siden / nu".
     const ref = seriesList.find((s) => s.points.length >= 2);
@@ -1770,7 +1780,7 @@ views.probes = async () => {
       setTimeout(refreshLatest, 2500); setTimeout(refreshLatest, 6000);
     } catch (e) {
       status.className = 'error';
-      status.textContent = e.status === 409 ? 'Agenten er ikke forbundet lige nu.' : (e.data && e.data.details ? Object.values(e.data.details).join(' · ') : e.message);
+      status.textContent = e.status === 409 ? 'Agenten er ikke forbundet lige nu.' : errText(e);
     } finally { runBtn.disabled = false; }
   }
   runBtn.addEventListener('click', run);
@@ -3112,7 +3122,7 @@ function settingsFormCard({ title, fields, values, endpoint }) {
       body[f.key] = f.type === 'checkbox' ? inputs[f.key].checked : Number(inputs[f.key].value);
     }
     try { await api(endpoint, { method: 'PUT', body }); toast(`${title} gemt`); }
-    catch (e2) { err.textContent = e2.data && e2.data.details ? Object.values(e2.data.details).join(' · ') : e2.message; }
+    catch (e2) { err.textContent = errText(e2); }
     finally { btn.disabled = false; }
   }
   btn.addEventListener('click', save);
@@ -3229,7 +3239,7 @@ function flowCategoriesCard(categories) {
       toast('Trafiktyper gemt');
       render();
     } catch (e2) {
-      err.textContent = e2.data && e2.data.details ? Object.values(e2.data.details).join(' · ') : e2.message;
+      err.textContent = errText(e2);
     } finally { saveBtn.disabled = false; }
   }
   async function reset() {
@@ -3277,7 +3287,7 @@ function mapSettingsCard(map) {
       await api('/api/settings/map', { method: 'PUT', body: { tileUrl: url.value.trim(), attribution: attr.value.trim(), maxZoom: Number(zoom.value), geocodeUrl: geo.value.trim() } });
       toast('Kort-indstillinger gemt');
     } catch (e2) {
-      err.textContent = e2.data && e2.data.details ? Object.values(e2.data.details).join(' · ') : e2.message;
+      err.textContent = errText(e2);
     } finally { btn.disabled = false; }
   }
   btn.addEventListener('click', save);

@@ -1,38 +1,9 @@
 'use strict';
 
 const { WebSocketServer } = require('ws');
+const { extractToken, pathnameOf, safeSend, startHeartbeat } = require('./wsCommon');
 
 const silentLogger = { info() {}, warn() {}, error() {} };
-
-// The browser presents the user JWT either in the Authorization header or as a
-// ?token= query parameter on the WebSocket URL (browsers can't set headers on a
-// WebSocket, so the dashboard uses the query parameter).
-function extractToken(req) {
-  const header = req.headers.authorization || '';
-  const [scheme, token] = header.split(' ');
-  if (scheme === 'Bearer' && token) return token;
-  try {
-    return new URL(req.url, 'http://localhost').searchParams.get('token');
-  } catch {
-    return null;
-  }
-}
-
-function pathnameOf(req) {
-  try {
-    return new URL(req.url, 'http://localhost').pathname;
-  } catch {
-    return req.url;
-  }
-}
-
-function safeSend(ws, obj) {
-  try {
-    ws.send(JSON.stringify(obj));
-  } catch {
-    /* ignore send failures */
-  }
-}
 
 // Browser-facing live channel for analysis findings. Authenticated with the same
 // user JWT the dashboard uses for the REST API (verified during the upgrade
@@ -83,21 +54,7 @@ function attachDashboardWebSocket({
   });
 
   // Heartbeat: drop clients that stopped answering pings.
-  const interval = setInterval(() => {
-    for (const ws of wss.clients) {
-      if (ws.isAlive === false) {
-        ws.terminate();
-        continue;
-      }
-      ws.isAlive = false;
-      try {
-        ws.ping();
-      } catch {
-        /* ignore */
-      }
-    }
-  }, heartbeatMs);
-  interval.unref();
+  const interval = startHeartbeat(wss, heartbeatMs);
 
   // Pushes a message to every connected dashboard. Returns how many received it.
   function broadcast(message) {

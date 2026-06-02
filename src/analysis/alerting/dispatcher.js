@@ -66,7 +66,9 @@ function createDispatcher({ config, channels = {}, licensed = () => true, logger
 
     // Only start the cooldown once a channel actually matched and was attempted.
     if (attempted) lastSent.set(key, ts);
-    logger.info(`alerting: ${finding.metric} ${finding.severity} -> ${results.map((r) => `${r.channel}:${r.ok ? 'ok' : (r.skipped ? 'skip' : 'fail')}`).join(', ') || 'no channel'}`);
+    const outcome = (r) => (r.ok ? 'ok' : r.skipped ? 'skip' : 'fail');
+    const summary = results.map((r) => `${r.channel}:${outcome(r)}`).join(', ') || 'no channel';
+    logger.info(`alerting: ${finding.metric} ${finding.severity} -> ${summary}`);
     return { dispatched: attempted, results };
   }
 

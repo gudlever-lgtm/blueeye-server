@@ -156,8 +156,13 @@ function createExportRouter({ findingStore, flowsRepo, agentsRepo, locationsRepo
         return res.status(403).json({ error: 'Funktionen er ikke inkluderet i jeres licens', feature: resource.feature, reason: 'license' });
       }
 
-      const rows = await resource.fetch(req); // may throw a 400 for bad params
+      // Validate format before the (potentially expensive) fetch.
       const format = String(req.query.format || 'json').toLowerCase();
+      if (format !== 'csv' && format !== 'json') {
+        return res.status(400).json({ error: 'format must be csv or json' });
+      }
+
+      const rows = await resource.fetch(req); // may throw a 400 for bad params
       const filename = `blueeye-${req.params.resource}`;
 
       if (format === 'csv') {
@@ -165,7 +170,6 @@ function createExportRouter({ findingStore, flowsRepo, agentsRepo, locationsRepo
         res.set('Content-Disposition', `attachment; filename="${filename}.csv"`);
         return res.send(toCsv(resource.columns, rows));
       }
-      if (format !== 'json') return res.status(400).json({ error: 'format must be csv or json' });
       res.set('Content-Type', 'application/json; charset=utf-8');
       res.set('Content-Disposition', `attachment; filename="${filename}.json"`);
       return res.json(rows);

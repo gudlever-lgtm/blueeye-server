@@ -6,12 +6,7 @@ const { requireAuth, requireRole } = require('../auth/middleware');
 const { ROLES } = require('../auth/roles');
 const { validateTimeRange } = require('../validation/resultsValidation');
 const { listCategories, buildIndex, classifyPort, classifyAsn } = require('../flows/categories');
-
-function parseId(v) {
-  if (!/^\d+$/.test(String(v))) return null;
-  const n = Number(v);
-  return Number.isInteger(n) && n > 0 ? n : null;
-}
+const { parseId } = require('../validation/locationValidation');
 
 const TARGET_BUCKETS = 60;
 const MIN_BUCKET_MS = 60 * 1000;

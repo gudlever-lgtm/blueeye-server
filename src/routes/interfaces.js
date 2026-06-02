@@ -4,12 +4,7 @@ const express = require('express');
 const { asyncHandler } = require('../middleware/asyncHandler');
 const { requireAuth, requireRole } = require('../auth/middleware');
 const { ROLES } = require('../auth/roles');
-
-function parseId(v) {
-  if (!/^\d+$/.test(String(v))) return null;
-  const n = Number(v);
-  return Number.isInteger(n) && n > 0 ? n : null;
-}
+const { parseId } = require('../validation/locationValidation');
 
 const round1 = (n) => Math.round(n * 10) / 10;
 const round2 = (n) => Math.round(n * 100) / 100;

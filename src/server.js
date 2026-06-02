@@ -148,8 +148,15 @@ function start() {
   const retentionConfig = loadRetentionConfig();
   const retentionRepo = createRetentionRepo(db);
 
-  // Runtime-editable settings (currently the map tile/geocoder source).
-  const settingsService = createSettingsService({ settingsRepo: createSettingsRepository(db), config });
+  // Runtime-editable settings (map tile/geocoder, traffic-type categories, and
+  // the analysis/retention knobs — which it mutates on the live config objects).
+  const settingsService = createSettingsService({
+    settingsRepo: createSettingsRepository(db), config,
+    liveAnalysis: analysisConfig, liveRetention: retentionConfig,
+  });
+  // Re-apply persisted analysis/retention edits onto the live config so they
+  // survive restarts. Best-effort + fire-and-forget (consumers read lazily).
+  settingsService.applyStoredOverrides().catch((err) => console.warn(`settings: could not apply stored overrides (${err.message})`));
   const retentionScheduler = createRetentionScheduler({
     rollup: createRollup({ repo: retentionRepo, config: retentionConfig, logger: console }),
     purge: createPurge({ repo: retentionRepo, config: retentionConfig }),

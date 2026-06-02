@@ -48,6 +48,23 @@ function createFlowsRepository(db) {
   const numOf = (v) => Number(v) || 0;
   const normAsn = (v) => (v ? Number(v) : null);
 
+  // Per-ASN byte time-series for one agent over [from, to], bucketed into
+  // `bucketSec`-wide windows on the epoch grid (so bucket * bucketSec is the
+  // window start in seconds). Raw flow_records only — used to attribute traffic
+  // to organisations (Facebook, Google, ...) in the traffic-type breakdown.
+  async function asnSeries({ agentId, from, to, bucketSec }) {
+    const sec = Math.max(1, Math.floor(Number(bucketSec) || 60));
+    const where = ['asn IS NOT NULL', 'ts >= ?', 'ts <= ?'];
+    const params = [sec, from, to];
+    if (agentId) { where.push('agent_id = ?'); params.push(agentId); }
+    const rows = await q(
+      `SELECT FLOOR(UNIX_TIMESTAMP(ts) / ?) AS b, asn, SUM(bytes) AS bytes
+       FROM flow_records WHERE ${where.join(' AND ')} GROUP BY b, asn`,
+      params
+    );
+    return rows.map((r) => ({ bucket: numOf(r.b), asn: normAsn(r.asn), bytes: numOf(r.bytes) }));
+  }
+
   // Bytes/flows per external destination (country, asn) in [from, to), read
   // across BOTH raw flow_records and the flow_rollup table — so a window that
   // reaches past the raw-retention horizon still returns complete totals. Only
@@ -189,7 +206,7 @@ function createFlowsRepository(db) {
     };
   }
 
-  return { insertMany, aggregateExternalDestinations, destinationExists, agentIdsForDestination, selectFlows };
+  return { insertMany, aggregateExternalDestinations, destinationExists, agentIdsForDestination, selectFlows, asnSeries };
 }
 
 module.exports = { createFlowsRepository, toRow };

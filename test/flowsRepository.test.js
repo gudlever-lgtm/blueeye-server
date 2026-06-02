@@ -90,3 +90,26 @@ test('selection read methods issue queries without throwing', async () => {
   assert.deepEqual(detail.byAsn, []);
   assert.equal(detail.totals.bytes, 0);
 });
+
+test('asnSeries buckets bytes per ASN and passes the bucket size as the first param', () => {
+  const pool = {
+    async query(sql, params) {
+      assert.match(sql, /FLOOR\(UNIX_TIMESTAMP\(ts\) \/ \?\)/);
+      assert.match(sql, /GROUP BY b, asn/);
+      assert.equal(params[0], 300); // bucketSec first
+      assert.equal(params[params.length - 1], 7); // agentId last
+      return [[
+        { b: 1000, asn: 32934, bytes: '4096' },
+        { b: 1001, asn: 15169, bytes: 2048 },
+      ]];
+    },
+  };
+  const repo = createFlowsRepository({ pool });
+  return repo.asnSeries({ agentId: 7, from: new Date('2026-06-01T00:00:00Z'), to: new Date('2026-06-01T01:00:00Z'), bucketSec: 300 })
+    .then((rows) => {
+      assert.deepEqual(rows, [
+        { bucket: 1000, asn: 32934, bytes: 4096 },
+        { bucket: 1001, asn: 15169, bytes: 2048 },
+      ]);
+    });
+});

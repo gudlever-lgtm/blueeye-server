@@ -831,6 +831,93 @@ function trafficHistorySection() {
   return { node: wrap, focus };
 }
 
+// Traffic-type breakdown for one agent over a period: bytes per category
+// (DNS, Web, Facebook, ...) from flow metadata — toggle each type on/off.
+// Separate from the live RX/TX chart; opt-in (the section is collapsed).
+function trafficTypeSection() {
+  const wrap = el('div', { class: 'history traffic-type' });
+  const agentSel = el('select', {}, el('option', { value: '' }, 'Vælg agent…'));
+  const fromI = el('input', { type: 'datetime-local' });
+  const toI = el('input', { type: 'datetime-local' });
+  const now = Date.now();
+  toI.value = toLocalInput(new Date(now));
+  fromI.value = toLocalInput(new Date(now - 6 * 3600000));
+  const status = el('div', { class: 'muted' });
+  const chips = el('div', { class: 'bar tt-chips' });
+  const chartHost = el('div', { class: 'overview-chart' });
+  const selection = new Set();
+  let last = null; // last /api/flows/categories response
+
+  const fetchBtn = el('button', { class: 'small', onclick: () => load() }, 'Hent');
+  wrap.append(el('div', { class: 'history-controls' },
+    el('label', { class: 'inline muted' }, 'Agent ', agentSel),
+    el('label', { class: 'inline muted' }, 'Fra ', fromI),
+    el('label', { class: 'inline muted' }, 'Til ', toI),
+    fetchBtn));
+  wrap.append(chips, chartHost, status);
+
+  api('/agents').then((agents) => {
+    for (const a of agents) agentSel.append(el('option', { value: String(a.id) }, a.display_name || a.hostname));
+  }).catch(() => {});
+
+  const colorAt = (i) => SERIES_COLORS[i % SERIES_COLORS.length];
+
+  function renderChips() {
+    if (!last || !last.categories.length) { chips.replaceChildren(); return; }
+    chips.replaceChildren(el('span', { class: 'muted' }, 'Typer:'), ...last.categories.map((c, i) => {
+      const on = selection.has(c.id);
+      return el('button', {
+        class: `chip${on ? ' on' : ''}`,
+        style: on ? `border-color:${colorAt(i)};color:${colorAt(i)}` : '',
+        onclick: () => { if (selection.has(c.id)) selection.delete(c.id); else selection.add(c.id); renderChips(); renderChart(); },
+      }, `${c.label} · ${fmtBytes(c.total)}`);
+    }));
+  }
+
+  function renderChart() {
+    if (!last || !last.categories.length) {
+      chartHost.replaceChildren(el('div', { class: 'empty' }, 'Ingen trafiktype-data i perioden.'));
+      return;
+    }
+    const fromMs = Date.parse(last.from);
+    const toMs = Date.parse(last.to);
+    const chosen = last.categories.filter((c) => selection.has(c.id));
+    const seriesList = chosen.map((c) => ({
+      id: c.id, label: c.label, color: colorAt(last.categories.indexOf(c)),
+      points: last.buckets.map((iso, k) => ({ t: Date.parse(iso), y: Number(c.points[k]) || 0 })),
+    }));
+    const legend = el('div', { class: 'legend' }, ...seriesList.map((s) =>
+      el('span', {}, el('span', { class: 'dot', style: `background:${s.color}` }), s.label)));
+    chartHost.replaceChildren(
+      seriesList.length ? historyChart(seriesList, { fromMs, toMs }) : el('div', { class: 'empty' }, 'Vælg en eller flere typer ovenfor.'),
+      legend);
+  }
+
+  async function load() {
+    const agentId = agentSel.value;
+    if (!agentId) { status.className = 'muted'; status.textContent = 'Vælg en agent.'; return; }
+    const fromMs = fromI.value ? new Date(fromI.value).getTime() : NaN;
+    const toMs = toI.value ? new Date(toI.value).getTime() : NaN;
+    if (Number.isNaN(fromMs) || Number.isNaN(toMs)) { status.textContent = 'Ugyldig periode.'; return; }
+    status.className = 'muted'; status.textContent = 'Henter…';
+    chartHost.replaceChildren(); chips.replaceChildren();
+    let data;
+    try {
+      data = await api(`/api/flows/categories?agentId=${encodeURIComponent(agentId)}&from=${new Date(fromMs).toISOString()}&to=${new Date(toMs).toISOString()}`);
+    } catch (err) { status.textContent = err.message; return; }
+    last = data;
+    selection.clear();
+    for (const c of data.categories.slice(0, 6)) selection.add(c.id); // default: top types on
+    status.textContent = data.categories.length
+      ? `${data.categories.length} trafiktyper i perioden`
+      : 'Ingen trafiktyper i perioden — kræver en NetFlow/sFlow-kilde (port-typer) eller geo-data (organisationer).';
+    renderChips();
+    renderChart();
+  }
+
+  return { node: wrap };
+}
+
 // Full-width traffic overview: pick which series to show via checkboxes and
 // watch them live. Polls every 3s while open.
 // Server storage cards: disk usage (where Docker/DB lives) + database size.
@@ -1121,20 +1208,25 @@ views.overview = async () => {
   // Top agents by current bandwidth (updated each tick).
   const topAgents = el('div', { class: 'top-agents' });
 
-  // Hero chart with a compact chip toolbar (Total RX/TX + a per-agent menu) and
-  // an inline "marked" strip that appears when you drag-select a window.
+  // Hero chart: the chart fills the card's full width; a "marked" side panel
+  // claims the right edge only while a window is selected. A size toggle widens
+  // the whole card to (almost) the viewport and makes the chart taller.
   const chartHost = el('div', { class: 'overview-chart' });
   const controls = el('div', { class: 'peragent-list' });
-  const markedStrip = el('div', { class: 'marked-strip hidden' });
+  const markedStrip = el('div', { class: 'marked-side hidden' });
   const chipRx = el('button', { class: 'chip rx', onclick: () => toggleSeries('total:rx') }, 'Total RX');
   const chipTx = el('button', { class: 'chip tx', onclick: () => toggleSeries('total:tx') }, 'Total TX');
   const perAgentCnt = el('span', { class: 'cnt muted' });
   const perAgent = el('details', { class: 'chip-det' },
     el('summary', { class: 'chip' }, 'Pr. agent ', perAgentCnt), controls);
-  root.append(el('div', { class: 'card chart-card' },
-    el('div', { class: 'bar' }, el('h3', {}, 'Live trafik'), el('span', { class: 'spacer' }), chipRx, chipTx, perAgent),
-    chartHost, markedStrip));
-  clearMarked(); // strip stays hidden until a brush selection
+  const sizeBtn = el('button', { class: 'chip size-toggle', onclick: () => toggleSize() });
+  let bigView = false;
+  try { bigView = localStorage.getItem('blueeye.server.trafikBig') === '1'; } catch { /* storage off */ }
+  const chartCard = el('div', { class: 'card chart-card' },
+    el('div', { class: 'bar' }, el('h3', {}, 'Live trafik'), el('span', { class: 'spacer' }), chipRx, chipTx, perAgent, sizeBtn),
+    el('div', { class: 'chart-row' }, chartHost, markedStrip));
+  root.append(chartCard);
+  clearMarked(); // side panel stays hidden until a brush selection
 
   // Slim storage line; the full disk/DB/forbrug breakdown folds open below it.
   const storageSummary = el('summary', { class: 'storage-line' }, el('span', { class: 'muted' }, 'Lager …'));
@@ -1225,13 +1317,13 @@ views.overview = async () => {
     const legend = el('div', { class: 'legend' }, ...seriesList.map((s) =>
       el('span', {}, el('span', { class: 'dot', style: `background:${s.color}` }), s.label)));
     chartHost.replaceChildren(
-      seriesList.length ? multiChart(seriesList, { area: true, xLabels: ['~3 min siden', '', 'nu'], onBrush: (f0, f1) => { if (f0 === null) clearMarked(); else renderMarked(f0, f1); } }) : el('div', { class: 'empty' }, 'Vælg serier i værktøjslinjen ↑'),
+      seriesList.length ? multiChart(seriesList, { height: bigView ? 560 : 300, area: true, xLabels: ['~3 min siden', '', 'nu'], onBrush: (f0, f1) => { if (f0 === null) clearMarked(); else renderMarked(f0, f1); } }) : el('div', { class: 'empty' }, 'Vælg serier i værktøjslinjen ↑'),
       legend);
     syncChips();
   }
 
   function clearMarked() {
-    markedStrip.className = 'marked-strip hidden';
+    markedStrip.className = 'marked-side hidden';
     markedStrip.replaceChildren();
   }
   function renderMarked(f0, f1) {
@@ -1253,22 +1345,20 @@ views.overview = async () => {
     const lastIdx = Math.min(i1, ref.length - 1);
     const tTo = ref[lastIdx] && ref[lastIdx].t;
     const children = [
-      el('span', { class: 'ms-label' }, 'Markeret'),
-      el('span', { class: 'muted' }, (tFrom && tTo) ? `${fmtTimeShort(tFrom)} – ${fmtTimeShort(tTo)} · ${i1 - i0 + 1} pkt.` : `${i1 - i0 + 1} pkt.`),
+      el('div', { class: 'ms-head' }, el('strong', {}, 'Markeret'), el('span', { class: 'spacer' }), el('button', { class: 'small ghost', onclick: clearMarked }, 'Ryd')),
+      el('div', { class: 'muted ms-range' }, (tFrom && tTo) ? `${fmtTimeShort(tFrom)} – ${fmtTimeShort(tTo)} · ${i1 - i0 + 1} pkt.` : `${i1 - i0 + 1} pkt.`),
     ];
     for (const r of rows) {
-      children.push(el('span', { class: 'ms-stat' },
+      children.push(el('div', { class: 'ms-stat' },
         el('span', { class: 'ms-name' }, r.label),
         el('span', { class: 'num' }, `ø ${fmtBytes(r.avg)}/s`),
-        el('span', { class: 'num muted' }, `(${fmtBytes(r.min)}–${fmtBytes(r.max)})`)));
+        el('span', { class: 'num muted' }, `${fmtBytes(r.min)}–${fmtBytes(r.max)}`)));
     }
-    children.push(el('span', { class: 'spacer' }));
     // Drill into the ACTUAL stored data for the marked window (per agent).
     if (tFrom && tTo) {
       children.push(el('button', { class: 'small drill', onclick: () => { histDetails.open = true; histSection.focus(tFrom, tTo); } }, 'Vis gemt data →'));
     }
-    children.push(el('button', { class: 'small ghost', onclick: clearMarked }, 'Ryd'));
-    markedStrip.className = 'marked-strip';
+    markedStrip.className = 'marked-side';
     markedStrip.replaceChildren(...children);
   }
 
@@ -1303,10 +1393,31 @@ views.overview = async () => {
     perAgentCnt.textContent = n ? `(${n})` : '';
   }
 
+  // Widen the live-traffic card to (almost) the full viewport + taller chart,
+  // and back. Persisted so it survives reloads and tab switches.
+  function applySize() {
+    chartCard.classList.toggle('big', bigView);
+    sizeBtn.textContent = bigView ? '↔ Formindsk' : '↔ Forstør';
+    sizeBtn.title = bigView ? 'Formindsk grafen til normal bredde' : 'Forstør grafen til fuld bredde';
+    renderChart();
+  }
+  function toggleSize() {
+    bigView = !bigView;
+    try { localStorage.setItem('blueeye.server.trafikBig', bigView ? '1' : '0'); } catch { /* storage off */ }
+    applySize();
+  }
+
   // Historical traffic explorer (date range, types, time axis, brush-to-zoom).
   const histSection = trafficHistorySection();
   const histDetails = el('details', { class: 'sec' }, el('summary', {}, 'Historik — undersøg tidsrum ', el('span', { class: 'muted' }, '· vælg agent + periode')), histSection.node);
   root.append(histDetails);
+
+  // Traffic-type breakdown (DNS, Web, Facebook, …) — opt-in, collapsed.
+  const typeSection = trafficTypeSection();
+  root.append(el('details', { class: 'sec' }, el('summary', {}, 'Trafiktype ', el('span', { class: 'muted' }, '· pr. agent · DNS, Facebook, …')), typeSection.node));
+
+  // Reflect the persisted size + set the toggle label (renders the chart once).
+  applySize();
 
   // Lifecycle: poll while this view is mounted; stop when leaving.
   stopOverview();
@@ -2027,7 +2138,7 @@ views.settings = async () => {
   const root = el('div');
   const isAdmin = role === 'admin';
   const subtabs = [];
-  if (isAdmin) subtabs.push(['system', 'Oversigt'], ['users', 'Brugere']);
+  if (isAdmin) subtabs.push(['analyse', 'Analyse'], ['alerting', 'Alerting'], ['retention', 'Retention'], ['types', 'Trafiktyper'], ['map', 'Kort'], ['users', 'Brugere']);
   subtabs.push(['license', 'Licens']);
   if (!settingsTab || !subtabs.some(([k]) => k === settingsTab)) settingsTab = subtabs[0][0];
 
@@ -2035,11 +2146,18 @@ views.settings = async () => {
     el('button', { class: `small ghost${k === settingsTab ? ' active' : ''}`, onclick: () => { settingsTab = k; render(); } }, label)));
   root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Indstillinger'), el('span', { class: 'spacer' }), nav));
 
+  const views2 = {
+    users: () => views.users(),
+    license: () => views.license(),
+    map: settingsMapView,
+    types: settingsTypesView,
+    analyse: settingsAnalyseView,
+    alerting: settingsAlertingView,
+    retention: settingsRetentionView,
+  };
   let content;
   try {
-    if (settingsTab === 'users') content = await views.users();
-    else if (settingsTab === 'license') content = await views.license();
-    else content = await settingsSystemView();
+    content = await (views2[settingsTab] || settingsAnalyseView)();
   } catch (err) {
     content = el('div', { class: 'empty error' }, err.message);
   }
@@ -2047,16 +2165,200 @@ views.settings = async () => {
   return root;
 };
 
-async function settingsSystemView() {
+// A small "Licens: <feature> ja/nej" badge so each feature tab shows whether the
+// licence covers it.
+function licenseBadge(license, feature) {
+  const ok = license && license[feature] === true;
+  return el('span', { class: `badge ${ok ? 'active' : 'offline'}` }, `Licens: ${feature} ${ok ? 'ja' : 'nej'}`);
+}
+
+async function settingsAnalyseView() {
   const data = await api('/api/settings');
-  const root = el('div', { class: 'settings-grid' });
-  root.append(settingsCard('Licens-funktioner', featureBadges(data.license)));
-  root.append(settingsCard('Analyse', kvList(data.analysis, { analysisEnabled: 'Analyse slået til', assistantEnabled: 'AI-assistent', critSigma: 'CRIT σ', warnSigma: 'WARN σ', baselineDays: 'Baseline-dage', minSamples: 'Min. samples' })));
-  root.append(settingsCard('Alerting', alertingSummary(data.alerting)));
-  root.append(settingsCard('Retention', kvList(data.retention, { enabled: 'Slået til', rawRetentionDays: 'Rå data (dage)', rollupRetentionDays: 'Aggregeret (dage)', findingRetentionDays: 'Findings (dage)', rollupIntervalMinutes: 'Bucket (min)' })));
-  root.append(mapSettingsCard(data.map));
-  root.append(el('p', { class: 'muted' }, 'Læsbare værdier styres via serverens .env og kræver genstart. Kun kort-indstillingerne kan ændres her.'));
+  const root = el('div');
+  root.append(el('p', { class: 'muted settings-intro' }, 'Anomali-detektion: hvornår en måling regnes som afvigende (σ fra baseline). Ændringer slår igennem uden genstart. ', licenseBadge(data.license, 'analysis')));
+  root.append(el('div', { class: 'settings-grid' }, analyseSettingsCard(data.analysis)));
   return root;
+}
+
+async function settingsAlertingView() {
+  const data = await api('/api/settings');
+  const root = el('div');
+  root.append(el('p', { class: 'muted settings-intro' }, 'Alarm-kanaler (e-mail/webhook/syslog). ', licenseBadge(data.license, 'alerting')));
+  const card = settingsCard('Alerting', alertingSummary(data.alerting));
+  card.append(el('p', { class: 'muted small' }, 'Kanaler konfigureres via serverens .env, fordi de indeholder hemmeligheder (SMTP-kodeord, webhook-HMAC). Ændringer kræver genstart. Env: ALERTING_*, SMTP_*, WEBHOOK_*.'));
+  root.append(el('div', { class: 'settings-grid' }, card));
+  return root;
+}
+
+async function settingsRetentionView() {
+  const data = await api('/api/settings');
+  const root = el('div');
+  root.append(el('p', { class: 'muted settings-intro' }, 'Hvor længe data gemmes, før det aggregeres/slettes. Ændringer slår igennem på næste oprydning (uden genstart).'));
+  root.append(el('div', { class: 'settings-grid' }, retentionSettingsCard(data.retention)));
+  return root;
+}
+
+// Generic "edit a few fields + Gem" card. fields: { key, label, type:
+// 'number'|'checkbox', min, max, step, readonly, hint }. Read-only fields are
+// shown (greyed) but never sent; the server validates the rest.
+function settingsFormCard({ title, fields, values, endpoint }) {
+  const v = values || {};
+  const inputs = {};
+  const rowEls = [];
+  for (const f of fields) {
+    let input;
+    if (f.type === 'checkbox') {
+      input = el('input', { type: 'checkbox' });
+      input.checked = v[f.key] === true;
+    } else {
+      input = el('input', { type: 'number', value: String(v[f.key] ?? ''), min: f.min ?? null, max: f.max ?? null, step: f.step ?? null });
+    }
+    if (f.readonly) input.disabled = true;
+    inputs[f.key] = input;
+    rowEls.push(el('label', { class: 'set-field' },
+      el('span', {}, f.label, f.readonly ? el('span', { class: 'muted small' }, ' · env / genstart') : null),
+      input, f.hint ? el('span', { class: 'muted small' }, f.hint) : null));
+  }
+  const err = el('p', { class: 'error' });
+  const btn = el('button', { class: 'small' }, 'Gem');
+  async function save() {
+    err.textContent = ''; btn.disabled = true;
+    const body = {};
+    for (const f of fields) {
+      if (f.readonly) continue;
+      body[f.key] = f.type === 'checkbox' ? inputs[f.key].checked : Number(inputs[f.key].value);
+    }
+    try { await api(endpoint, { method: 'PUT', body }); toast(`${title} gemt`); }
+    catch (e2) { err.textContent = e2.data && e2.data.details ? Object.values(e2.data.details).join(' · ') : e2.message; }
+    finally { btn.disabled = false; }
+  }
+  btn.addEventListener('click', save);
+  return el('div', { class: 'settings-card' }, el('h3', {}, title),
+    el('div', { class: 'form-grid' }, ...rowEls, err, el('div', { class: 'form-actions' }, btn)));
+}
+
+function analyseSettingsCard(a) {
+  return settingsFormCard({
+    title: 'Analyse',
+    values: a,
+    endpoint: '/api/settings/analysis',
+    fields: [
+      { key: 'analysisEnabled', label: 'Analyse slået til', type: 'checkbox' },
+      { key: 'critSigma', label: 'CRIT-tærskel (σ fra baseline)', type: 'number', min: 0.5, max: 20, step: 0.1 },
+      { key: 'warnSigma', label: 'WARN-tærskel (σ fra baseline)', type: 'number', min: 0.5, max: 20, step: 0.1 },
+      { key: 'baselineDays', label: 'Baseline-vindue (dage)', type: 'number', min: 1, max: 90, step: 1 },
+      { key: 'minSamples', label: 'Min. samples før varsling', type: 'number', min: 10, max: 100000, step: 1 },
+      { key: 'assistantEnabled', label: 'AI-assistent', type: 'checkbox', readonly: true },
+    ],
+  });
+}
+
+function retentionSettingsCard(r) {
+  return settingsFormCard({
+    title: 'Retention',
+    values: r,
+    endpoint: '/api/settings/retention',
+    fields: [
+      { key: 'enabled', label: 'Oprydning slået til', type: 'checkbox' },
+      { key: 'rawRetentionDays', label: 'Rå data (dage)', type: 'number', min: 1, max: 3650, step: 1 },
+      { key: 'rollupRetentionDays', label: 'Aggregeret data (dage)', type: 'number', min: 1, max: 3650, step: 1 },
+      { key: 'findingRetentionDays', label: 'Findings (dage)', type: 'number', min: 1, max: 3650, step: 1 },
+      { key: 'rollupIntervalMinutes', label: 'Bucket-størrelse (min)', type: 'number', readonly: true },
+    ],
+  });
+}
+
+async function settingsMapView() {
+  const data = await api('/api/settings');
+  const root = el('div');
+  root.append(el('p', { class: 'muted settings-intro' }, 'Kortbaggrund (tiles) og adressesøgning (geocoder). Brug en EU/selv-hostet kilde i produktion.'));
+  root.append(el('div', { class: 'settings-grid' }, mapSettingsCard(data.map)));
+  return root;
+}
+
+async function settingsTypesView() {
+  const data = await api('/api/settings');
+  const root = el('div');
+  root.append(el('p', { class: 'muted settings-intro' }, 'Grupper trafik efter ', el('b', {}, 'port'), ' (fx DNS = 53) eller destinations-', el('b', {}, 'ASN'), ' (fx Facebook/Meta = 32934). Typerne vises som slå-til/fra-serier på Trafik-siden under “Trafiktype”.'));
+  root.append(el('div', { class: 'settings-grid' }, flowCategoriesCard(data.flowCategories || [])));
+  return root;
+}
+
+function slugify(s) {
+  return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32);
+}
+
+// Editor for the traffic-type categories. Each row is a name + a kind (port or
+// ASN) + a free-text list of numbers; the server validates on save.
+function flowCategoriesCard(categories) {
+  const card = el('div', { class: 'settings-card wide' }, el('h3', {}, 'Trafiktyper'));
+  card.append(el('p', { class: 'muted small' }, 'Port-typer er præcise (port 53 = DNS). ASN-typer er omtrentlige — CDN/cloud kan sløre, og ét ASN dækker flere tjenester. Ændringer slår igennem uden genstart.'));
+  const head = el('div', { class: 'tc-row tc-head muted' }, el('span', {}, 'Navn'), el('span', {}, 'Slags'), el('span', {}, 'Porte / ASN-numre (komma-adskilt)'), el('span', {}));
+  const listEl = el('div', { class: 'tc-list' });
+  const err = el('p', { class: 'error' });
+  const rows = [];
+
+  function makeRow(cat = {}) {
+    const id = cat.id || '';
+    const label = el('input', { type: 'text', value: cat.label || '', placeholder: 'fx DNS' });
+    const kind = el('select', {}, el('option', { value: 'port' }, 'Port'), el('option', { value: 'asn' }, 'Organisation (ASN)'));
+    kind.value = cat.kind === 'asn' ? 'asn' : 'port';
+    const nums = el('input', { type: 'text', value: ((cat.kind === 'asn' ? cat.asns : cat.ports) || []).join(', ') });
+    const setPh = () => { nums.placeholder = kind.value === 'asn' ? 'fx 32934, 54115' : 'fx 53, 853'; };
+    setPh();
+    kind.addEventListener('change', setPh);
+    const ctrl = { id, label, kind, nums };
+    const del = el('button', { class: 'small ghost danger', title: 'Fjern', onclick: () => { const i = rows.indexOf(ctrl); if (i >= 0) rows.splice(i, 1); node.remove(); } }, '×');
+    const node = el('div', { class: 'tc-row' }, label, kind, nums, del);
+    ctrl.node = node;
+    rows.push(ctrl);
+    listEl.append(node);
+    return ctrl;
+  }
+
+  for (const c of categories) makeRow(c);
+  if (!categories.length) makeRow();
+
+  const addBtn = el('button', { class: 'small ghost', onclick: () => makeRow() }, '+ Tilføj type');
+  const resetBtn = el('button', { class: 'small ghost' }, 'Nulstil til standard');
+  const saveBtn = el('button', { class: 'small' }, 'Gem trafiktyper');
+
+  async function save() {
+    err.textContent = '';
+    const seen = new Set();
+    const out = [];
+    for (const ctrl of rows) {
+      const lbl = ctrl.label.value.trim();
+      const list = ctrl.nums.value.split(/[\s,]+/).filter(Boolean).map(Number);
+      if (!lbl && !list.length) continue; // skip empty rows
+      let cid = ctrl.id || slugify(lbl) || 'type';
+      let n = 2;
+      const base = cid;
+      while (seen.has(cid)) cid = `${base}-${n++}`;
+      seen.add(cid);
+      const item = { id: cid, label: lbl, kind: ctrl.kind.value };
+      if (ctrl.kind.value === 'asn') item.asns = list; else item.ports = list;
+      out.push(item);
+    }
+    saveBtn.disabled = true;
+    try {
+      await api('/api/settings/flow-categories', { method: 'PUT', body: { categories: out } });
+      toast('Trafiktyper gemt');
+      render();
+    } catch (e2) {
+      err.textContent = e2.data && e2.data.details ? Object.values(e2.data.details).join(' · ') : e2.message;
+    } finally { saveBtn.disabled = false; }
+  }
+  async function reset() {
+    if (!confirm('Nulstil trafiktyper til standardlisten?')) return;
+    try { await api('/api/settings/flow-categories', { method: 'PUT', body: { reset: true } }); toast('Nulstillet til standard'); render(); }
+    catch (e2) { err.textContent = e2.message; }
+  }
+  saveBtn.addEventListener('click', save);
+  resetBtn.addEventListener('click', reset);
+
+  card.append(head, listEl, el('div', { class: 'form-actions' }, addBtn, el('span', { class: 'spacer' }), resetBtn, saveBtn), err);
+  return card;
 }
 function settingsCard(title, ...body) { return el('div', { class: 'settings-card' }, el('h3', {}, title), ...body); }
 function boolText(v) { return v === true ? 'ja' : v === false ? 'nej' : String(v ?? '–'); }

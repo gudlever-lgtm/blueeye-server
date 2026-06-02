@@ -125,6 +125,14 @@ dukker op live via WebSocket og kan også hentes via REST.
 | `ANALYSIS_ASSISTANT_MAX_FINDINGS` | `20` | Max findings i konteksten. |
 | `ANALYSIS_ASSISTANT_TIMEOUT_MS` | `20000` | Timeout på provider-kaldet. |
 
+> **Runtime-redigerbart:** `ANALYSIS_ENABLED`, `ANALYSIS_CRIT_SIGMA`,
+> `ANALYSIS_WARN_SIGMA`, `ANALYSIS_BASELINE_DAYS` og `ANALYSIS_MIN_SAMPLES` kan
+> ændres af en admin under **Indstillinger → Analyse**
+> (`PUT /api/settings/analysis`). Overrides gemmes i `app_settings`, lægges oven
+> på env-defaults og genanvendes ved opstart; detektoren læser tærsklerne **pr.
+> evaluering**, så ændringer slår igennem uden genstart. AI-assistenten +
+> secrets forbliver env-styret.
+
 ## Test
 
 `node --test` (Node's indbyggede runner). Modulets tests ligger i

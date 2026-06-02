@@ -174,16 +174,24 @@ function createFlowsRepository(db) {
   async function selectFlows({ country = null, asn = null, since, until }) {
     const raw = rawDestFilter({ country, asn, since, until });
     const roll = rollDestFilter({ country, asn, since, until });
-    const [rAsn, rDir, byProtoRaw, rSeries, rawTot, kAsn, kDir, kSeries, rollTot] = await Promise.all([
-      q(`SELECT asn, MAX(asn_name) AS asnName, SUM(bytes) AS bytes, SUM(flows) AS flowCount FROM flow_records WHERE ${raw.clause} GROUP BY asn`, raw.params),
-      q(`SELECT direction, SUM(bytes) AS bytes, SUM(flows) AS flowCount FROM flow_records WHERE ${raw.clause} GROUP BY direction`, raw.params),
-      q(`SELECT proto, SUM(bytes) AS bytes, SUM(flows) AS flowCount FROM flow_records WHERE ${raw.clause} GROUP BY proto ORDER BY bytes DESC LIMIT 20`, raw.params),
-      q(`SELECT DATE_FORMAT(ts, '%Y-%m-%d %H:00:00') AS bucket, SUM(bytes) AS bytes, SUM(flows) AS flowCount FROM flow_records WHERE ${raw.clause} GROUP BY bucket`, raw.params),
-      q(`SELECT SUM(bytes) AS bytes, SUM(flows) AS flowCount FROM flow_records WHERE ${raw.clause}`, raw.params),
-      q(`SELECT asn, MAX(asn_name) AS asnName, SUM(bytes) AS bytes, SUM(flow_count) AS flowCount FROM flow_rollup WHERE ${roll.clause} GROUP BY asn`, roll.params),
-      q(`SELECT direction, SUM(bytes) AS bytes, SUM(flow_count) AS flowCount FROM flow_rollup WHERE ${roll.clause} GROUP BY direction`, roll.params),
-      q(`SELECT DATE_FORMAT(bucket, '%Y-%m-%d %H:00:00') AS bucket, SUM(bytes) AS bytes, SUM(flow_count) AS flowCount FROM flow_rollup WHERE ${roll.clause} GROUP BY bucket`, roll.params),
-      q(`SELECT SUM(bytes) AS bytes, SUM(flow_count) AS flowCount FROM flow_rollup WHERE ${roll.clause}`, roll.params),
+    // Raw and rollup share four aggregate shapes; only the table, the flow-count
+    // column (flows vs flow_count) and the series timestamp column (ts vs bucket)
+    // differ. All come from fixed constants — no user input is interpolated.
+    const aggregates = ({ table, flowCol, tsCol }, where) => ({
+      byAsn: q(`SELECT asn, MAX(asn_name) AS asnName, SUM(bytes) AS bytes, SUM(${flowCol}) AS flowCount FROM ${table} WHERE ${where.clause} GROUP BY asn`, where.params),
+      byDir: q(`SELECT direction, SUM(bytes) AS bytes, SUM(${flowCol}) AS flowCount FROM ${table} WHERE ${where.clause} GROUP BY direction`, where.params),
+      series: q(`SELECT DATE_FORMAT(${tsCol}, '%Y-%m-%d %H:00:00') AS bucket, SUM(bytes) AS bytes, SUM(${flowCol}) AS flowCount FROM ${table} WHERE ${where.clause} GROUP BY bucket`, where.params),
+      totals: q(`SELECT SUM(bytes) AS bytes, SUM(${flowCol}) AS flowCount FROM ${table} WHERE ${where.clause}`, where.params),
+    });
+    const rawAgg = aggregates({ table: 'flow_records', flowCol: 'flows', tsCol: 'ts' }, raw);
+    const rollAgg = aggregates({ table: 'flow_rollup', flowCol: 'flow_count', tsCol: 'bucket' }, roll);
+    // Protocol breakdown is raw-only (rollups don't retain per-protocol detail).
+    const byProtoQ = q(`SELECT proto, SUM(bytes) AS bytes, SUM(flows) AS flowCount FROM flow_records WHERE ${raw.clause} GROUP BY proto ORDER BY bytes DESC LIMIT 20`, raw.params);
+
+    const [rAsn, rDir, rSeries, rawTot, kAsn, kDir, kSeries, rollTot, byProtoRaw] = await Promise.all([
+      rawAgg.byAsn, rawAgg.byDir, rawAgg.series, rawAgg.totals,
+      rollAgg.byAsn, rollAgg.byDir, rollAgg.series, rollAgg.totals,
+      byProtoQ,
     ]);
 
     // Normalise asn BEFORE merging so "unknown ASN" (NULL in raw, 0 in rollup)

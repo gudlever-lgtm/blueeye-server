@@ -248,6 +248,19 @@ const PAGE_INFO = {
         el('li', {}, '"Rediger" sætter navn, lokation, noter og trafik-kilde (proc, SNMP, NetFlow eller sFlow).')),
     ],
   },
+  interfaces: {
+    hero: 'Interface-sundhed pr. agent: udnyttelse, fejl, discards, link-status og hastighed.',
+    title: 'Interfaces',
+    body: () => [
+      el('p', {}, 'Viser hver agents netværks-interfaces ud fra den seneste måling — det netværks-/firewall-teknikere kigger på, når noget er galt fysisk eller på et link.'),
+      el('h4', {}, 'Kolonner'),
+      el('ul', {},
+        el('li', {}, 'Status: NEDE (link nede), FEJL (input/output-fejl eller ≥90% udnyttet), WARN (discards eller ≥75% udnyttet), OK.'),
+        el('li', {}, 'Udnyttelse: rate mod link-hastigheden (kun når hastigheden kendes).'),
+        el('li', {}, 'Fejl/s og Discards/s: CRC/input-fejl hhv. forkastede pakker (congestion).')),
+      el('p', { class: 'muted' }, 'Data kommer fra agentens trafik-kilde: /proc/net/dev (host) eller SNMP IF-MIB (enhed). Fejl/discards/link-status kræver en opdateret agent.'),
+    ],
+  },
   probes: {
     hero: 'Aktiv reachability fra en agent: ping, TCP-connect, DNS og traceroute — med RTT, tab og sti.',
     title: 'Probes',
@@ -1490,6 +1503,67 @@ function stopOverview() { if (ovState.timer) { clearInterval(ovState.timer); ovS
 const probeState = { timer: null };
 function stopProbes() { if (probeState.timer) { clearInterval(probeState.timer); probeState.timer = null; } }
 
+// Interfaces polling state.
+const ifaceState = { timer: null };
+function stopIfaces() { if (ifaceState.timer) { clearInterval(ifaceState.timer); ifaceState.timer = null; } }
+
+// Interface health per agent (utilisation, errors, discards, link state/speed)
+// derived from the agent's latest measurement. Worst interfaces first.
+views.interfaces = async () => {
+  const root = el('div', { class: 'interfaces' });
+  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Interfaces'),
+    el('span', { class: 'muted' }, 'Sundhed pr. interface · udnyttelse · fejl · discards · link')));
+
+  const agents = await api('/agents').catch(() => []);
+  if (!agents.length) { root.append(el('div', { class: 'empty' }, 'Ingen agenter endnu.')); return root; }
+
+  const agentSel = el('select', {}, ...agents.map((a) => el('option', { value: String(a.id) }, a.display_name || a.hostname)));
+  const status = el('span', { class: 'muted' });
+  agentSel.addEventListener('change', () => refresh());
+  root.append(el('div', { class: 'history-controls' },
+    el('label', { class: 'inline muted' }, 'Agent ', agentSel),
+    el('button', { class: 'small ghost', onclick: () => refresh() }, 'Opdatér'), status));
+  const host = el('div', {});
+  root.append(host);
+
+  const RANK = { down: 0, bad: 1, warn: 2, ok: 3 };
+  const ifBadge = (s) => {
+    const map = { ok: ['online', 'OK'], warn: ['warn', 'WARN'], bad: ['offline', 'FEJL'], down: ['offline', 'NEDE'] };
+    const [cls, label] = map[s] || ['offline', s];
+    return el('span', { class: `badge ${cls}` }, label);
+  };
+  const linkText = (i) => {
+    if (!i.speedMbps && !i.operStatus) return '–';
+    const sp = i.speedMbps ? (i.speedMbps >= 1000 ? `${i.speedMbps / 1000} Gb/s` : `${i.speedMbps} Mb/s`) : '';
+    return [sp, i.operStatus].filter(Boolean).join(' · ');
+  };
+
+  async function refresh() {
+    const id = agentSel.value;
+    let data;
+    try { data = await api(`/api/interfaces?agentId=${encodeURIComponent(id)}`); } catch (e) { host.replaceChildren(el('div', { class: 'error' }, e.message)); return; }
+    status.textContent = data.ts ? `kilde: ${data.source} · målt ${fmtTimeShort(new Date(data.ts).getTime())}` : 'ingen målinger endnu';
+    const ifs = (data.interfaces || []).slice().sort((a, b) => (RANK[a.status] - RANK[b.status]) || ((b.rxBytesPerSec + b.txBytesPerSec) - (a.rxBytesPerSec + a.txBytesPerSec)));
+    if (!ifs.length) { host.replaceChildren(el('div', { class: 'empty' }, 'Ingen interface-data endnu — kræver en agent-måling (opdatér agenten for fejl/discards/link).')); return; }
+    host.replaceChildren(el('table', { class: 'iface-table' },
+      el('thead', {}, el('tr', {}, ...['Interface', 'Status', 'Link', 'Udnyttelse', '↓ RX', '↑ TX', 'Fejl/s', 'Discards/s'].map((h) => el('th', {}, h)))),
+      el('tbody', {}, ...ifs.map((i) => el('tr', {},
+        el('td', {}, esc(i.iface)),
+        el('td', {}, ifBadge(i.status)),
+        el('td', { class: 'muted' }, linkText(i)),
+        el('td', {}, i.utilPct != null ? el('div', { class: 'util' }, usageBar(i.utilPct), el('span', { class: 'muted num' }, `${i.utilPct}%`)) : el('span', { class: 'muted' }, '–')),
+        el('td', { class: 'num' }, `${fmtBytes(i.rxBytesPerSec)}/s`),
+        el('td', { class: 'num' }, `${fmtBytes(i.txBytesPerSec)}/s`),
+        el('td', { class: `num${i.errPerSec > 0 ? ' bad-text' : ''}` }, String(i.errPerSec)),
+        el('td', { class: `num${i.dropPerSec > 0 ? ' warn-text' : ''}` }, String(i.dropPerSec)))))));
+  }
+
+  refresh();
+  stopIfaces();
+  ifaceState.timer = setInterval(() => { if (!modalOpen()) refresh(); }, 5000);
+  return root;
+};
+
 // Active probes: trigger ping/tcp/dns/traceroute from an agent and watch the
 // results (RTT/loss over time + traceroute path). The agent runs the probe and
 // reports back, so results land a moment after triggering.
@@ -2718,6 +2792,7 @@ async function render({ silent = false } = {}) {
   // Stop the overview poller when leaving that view (it restarts itself when shown).
   if (currentView !== 'overview') stopOverview();
   if (currentView !== 'probes') stopProbes();
+  if (currentView !== 'interfaces') stopIfaces();
   // Tear down the Leaflet map when leaving the geo view (it rebuilds on entry).
   if (currentView !== 'geo') stopGeo();
 

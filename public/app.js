@@ -374,14 +374,22 @@ const PAGE_INFO = {
     ],
   },
   enrollment: {
-    hero: 'Opret engangskoder, som nye agenter bruger til at melde sig ind første gang.',
+    hero: 'Tilføj en agent med én kommando — koden, server-adressen og checksum er allerede sat.',
     title: 'Enrollment',
     body: () => [
-      el('p', {}, 'En enrollment-kode er engangsbrug. Agenten bruger den ved første opstart til at få et fast token.'),
+      el('p', {}, '"Tilføj agent" genererer en kode og en færdig install-kommando. Kør one-lineren på maskinen — den henter agent-binæren fra denne server, tjekker SHA-256, veksler koden til et fast token og starter en service. Du indtaster aldrig selv server-adressen.'),
+      el('h4', {}, 'Tre varianter'),
       el('ul', {},
-        el('li', {}, 'Sæt koden som BLUEEYE_ENROLLMENT_CODE på agent-maskinen.'),
-        el('li', {}, 'Koden vises kun én gang ved oprettelse.'),
-        el('li', {}, 'Status: active (kan bruges), used (brugt), expired (udløbet).')),
+        el('li', {}, 'One-liner: curl … | sh — hurtigst.'),
+        el('li', {}, 'Manuel: download-URL + checksum + kommando — til inspektion før kørsel.'),
+        el('li', {}, 'Ansible: samme one-liner, udrullet til mange maskiner.')),
+      el('h4', {}, 'Sikkerhed'),
+      el('ul', {},
+        el('li', {}, 'Koder er kortlivede (standard 1 time) og kan være bulk (N maskiner).'),
+        el('li', {}, 'Binæren verificeres altid mod checksum før kørsel.'),
+        el('li', {}, 'Cert-fingerprint pinnes på agenten (når serveren kører bag TLS).')),
+      el('p', { class: 'muted' }, 'Virker også i luftgappede net: binæren serves fra BlueEye-serveren selv — ingen internetadgang nødvendig, så længe maskinen kan nå serveren.'),
+      el('p', { class: 'muted' }, 'Status: active (kan bruges), used (opbrugt), expired (udløbet).'),
     ],
   },
   users: {
@@ -513,24 +521,11 @@ function agentHealthCell(a) {
   return el('span', { class: `badge ${cls}`, title }, label);
 }
 
-// Operator "create agent" = mint an enrollment code + show install instructions.
-// Agents are created when they enroll themselves (they report hostname/etc.).
+// "+ Ny agent" jumps to the Enrollment screen, where the wizard generates a code
+// and a ready-to-run install command (with live "connected" feedback).
 async function newAgent() {
-  try {
-    const created = await api('/enrollment-codes', { method: 'POST', body: {} });
-    const card = $('#modal-card');
-    const base = location.origin;
-    card.replaceChildren(
-      el('h3', {}, 'Ny agent — enrollment-kode'),
-      el('p', { class: 'muted' }, 'Installér agenten på maskinen og giv den denne engangskode. Den dukker op i listen, når den enroller. Koden vises kun nu:'),
-      el('pre', {}, esc(created.code)),
-      el('p', { class: 'muted' }, 'Eksempel (env på agent-maskinen):'),
-      el('pre', {}, `BLUEEYE_SERVER_URL=${esc(base)}\nBLUEEYE_ENROLLMENT_CODE=${esc(created.code)}`),
-      el('div', { class: 'form-actions' },
-        el('button', { class: 'ghost', onclick: () => copyText(created.code) }, 'Kopiér kode'),
-        el('button', { onclick: () => { closeModal(); render(); } }, 'Luk')));
-    $('#modal').classList.remove('hidden');
-  } catch (err) { toast(err.message, true); }
+  currentView = 'enrollment';
+  await render();
 }
 
 async function runTest(a) {
@@ -2906,19 +2901,44 @@ async function deleteLocation(l) {
   catch (err) { toast(err.message, true); }
 }
 
+// Platforms offered in the wizard. The command response says which are actually
+// published (and the checksum); unpublished ones still produce a code + manual
+// instructions, just without a verified binary yet.
+const ENROLL_PLATFORMS = [
+  ['linux-amd64', 'Linux (x86-64)'],
+  ['linux-arm64', 'Linux (ARM64)'],
+  ['linux-armv7', 'Linux (ARMv7)'],
+  ['windows-amd64', 'Windows (x86-64)'],
+  ['darwin-amd64', 'macOS (Intel)'],
+  ['darwin-arm64', 'macOS (Apple Silicon)'],
+];
+
+// Set while a freshly generated code is on screen: the live WS handler calls it
+// when any agent enrolls/comes online, flipping "Venter på agent…" to connected.
+let enrollWatch = null;
+
 views.enrollment = async () => {
-  const [codes, locations] = await Promise.all([api('/enrollment-codes'), api('/locations')]);
+  const [codes, locations, cfg] = await Promise.all([
+    api('/enrollment-codes'),
+    api('/locations').catch(() => []),
+    api('/enroll/config').catch(() => ({ serverUrl: location.origin, certFingerprint: null })),
+  ]);
   locationCache = locations;
+  enrollWatch = null;
   const root = el('div');
-  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Enrollment-koder'),
-    canWrite() ? el('button', { class: 'small', onclick: () => createCode() }, '+ Ny kode') : null));
-  root.append(el('p', { class: 'muted' }, 'En kode er engangsbrug. Giv koden til agenten ved første opstart (BLUEEYE_ENROLLMENT_CODE).'));
-  if (!codes.length) { root.append(el('div', { class: 'empty' }, 'Ingen koder.')); return root; }
+  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Enrollment')));
+
+  if (canWrite()) root.append(enrollWizard(cfg));
+
+  root.append(el('div', { class: 'section-head' }, el('h3', {}, 'Aktive koder'),
+    canWrite() ? el('button', { class: 'small ghost', onclick: () => createCode() }, '+ Ny kode (avanceret)') : null));
+  if (!codes.length) { root.append(el('div', { class: 'empty' }, 'Ingen koder endnu — brug "Tilføj agent" ovenfor.')); return root; }
   root.append(el('table', {},
-    el('thead', {}, el('tr', {}, ...['ID', 'Status', 'Lokation', 'Udløber', 'Oprettet', ''].map((h) => el('th', {}, h)))),
+    el('thead', {}, el('tr', {}, ...['ID', 'Status', 'Brug', 'Lokation', 'Udløber', 'Oprettet', ''].map((h) => el('th', {}, h)))),
     el('tbody', {}, ...codes.map((c) => el('tr', {},
       el('td', {}, String(c.id)),
       el('td', {}, el('span', { class: `badge ${c.status}` }, c.status)),
+      el('td', {}, c.max_uses > 1 ? `${c.uses_remaining}/${c.max_uses}` : (c.uses_remaining === 0 ? 'brugt' : '1')),
       el('td', {}, c.location_name || '–'),
       el('td', { class: 'muted' }, fmtDate(c.expires_at)),
       el('td', { class: 'muted' }, fmtDate(c.created_at)),
@@ -2927,15 +2947,120 @@ views.enrollment = async () => {
   return root;
 };
 
+function enrollField(label, control) {
+  return el('label', { class: 'enroll-field' }, el('span', {}, label), control);
+}
+
+function enrollWizard(cfg) {
+  const card = el('div', { class: 'enroll-card' });
+  const platformSel = el('select', {}, ...ENROLL_PLATFORMS.map(([v, l]) => el('option', { value: v }, l)));
+  const countInp = el('input', { type: 'number', min: '1', max: '1000', value: '1', class: 'enroll-num' });
+  const ttlInp = el('input', { type: 'number', min: '1', value: '60', class: 'enroll-num' });
+  const locSel = el('select', {}, el('option', { value: '' }, '(ingen lokation)'),
+    ...locationCache.map((l) => el('option', { value: String(l.id) }, l.name)));
+  const result = el('div', { class: 'enroll-result hidden' });
+  const genBtn = el('button', { onclick: () => generate() }, 'Generér kode & kommando');
+
+  card.append(
+    el('h3', {}, 'Tilføj agent'),
+    el('p', { class: 'muted' }, 'Vælg platform, generér en kode og kopiér kommandoen til agent-maskinen. Den melder sig selv online, så snart den kører — du indtaster aldrig server-adressen.'),
+    el('div', { class: 'enroll-form' },
+      enrollField('Platform', platformSel),
+      enrollField('Antal maskiner', countInp),
+      enrollField('Levetid (min)', ttlInp),
+      enrollField('Lokation', locSel)),
+    el('div', { class: 'form-actions' }, genBtn),
+    result);
+
+  async function generate() {
+    genBtn.disabled = true;
+    try {
+      const n = Math.max(1, Number(countInp.value) || 1);
+      const ttl = Math.max(1, Number(ttlInp.value) || 60);
+      const q = new URLSearchParams({ platform: platformSel.value, maxUses: String(n), ttlMinutes: String(ttl) });
+      if (locSel.value) q.set('locationId', locSel.value);
+      const data = await api(`/api/enroll/command?${q.toString()}`);
+      renderEnrollResult(result, data, cfg, generate);
+    } catch (err) { toast(errText(err), true); }
+    finally { genBtn.disabled = false; }
+  }
+  return card;
+}
+
+function enrollKv(k, v) {
+  return el('div', { class: 'enroll-kv' }, el('span', { class: 'k' }, k), v);
+}
+
+function renderEnrollResult(host, data, cfg, regen) {
+  host.classList.remove('hidden');
+  const oneLiner = data.oneLiner;
+
+  // Live status: correlate the next enrollment/online event with this code.
+  const live = el('div', { class: 'enroll-live waiting' },
+    el('span', { class: 'dot' }), el('span', { class: 'txt' }, 'Venter på agent…'));
+  enrollWatch = (kind, payload) => {
+    if (kind === 'enrolled' || kind === 'online') {
+      live.className = 'enroll-live ok';
+      live.querySelector('.txt').textContent = `Tilsluttet ✓${payload && payload.hostname ? ' — ' + payload.hostname : ''}`;
+    }
+  };
+
+  const cmdPre = el('pre', { class: 'enroll-cmd' }, oneLiner);
+  const copyBtn = el('button', { class: 'small', onclick: () => copyText(oneLiner) }, 'Kopiér kommando');
+
+  // Manual download + checksum, hidden by default for security-minded users.
+  const manual = el('div', { class: 'enroll-manual hidden' },
+    el('p', { class: 'muted small' }, 'Manuel installation — inspicér før kørsel:'),
+    enrollKv('Download', el('code', {}, data.manual.downloadUrl)),
+    enrollKv('SHA-256', el('code', {}, data.manual.checksum || '(binær ikke publiceret for platformen endnu)')),
+    enrollKv('Kommando', el('code', {}, data.manual.command)),
+    (cfg && cfg.certFingerprint) ? enrollKv('Cert-fingerprint', el('code', {}, cfg.certFingerprint)) : null);
+  const manualToggle = el('button', { class: 'small ghost', onclick: () => manual.classList.toggle('hidden') }, 'Vis manuel / checksum');
+  const regenBtn = el('button', { class: 'small ghost', onclick: regen }, 'Generér ny kode');
+
+  const usesText = data.maxUses > 1 ? ` · bulk: ${data.usesRemaining}/${data.maxUses} maskiner` : '';
+  const meta = el('p', { class: 'muted small' }, `Kode ${data.code} · udløber ${fmtDate(data.expiresAt)}${usesText}`);
+
+  host.replaceChildren(
+    live,
+    el('div', { class: 'enroll-cmd-row' }, cmdPre, copyBtn),
+    el('div', { class: 'form-actions' }, manualToggle, regenBtn),
+    manual,
+    meta,
+    enrollAnsibleBlock(oneLiner));
+}
+
+// Copy-paste Ansible task running the same one-liner. `creates:` makes it
+// idempotent (skips hosts where the agent is already installed).
+function enrollAnsibleBlock(oneLiner) {
+  const yaml = [
+    '- hosts: all',
+    '  become: true',
+    '  tasks:',
+    '    - name: Install BlueEye agent',
+    `      ansible.builtin.shell: "${oneLiner}"`,
+    '      args:',
+    '        creates: /opt/blueeye-agent/blueeye-agent',
+  ].join('\n');
+  return el('details', { class: 'enroll-ansible' },
+    el('summary', {}, 'Ansible / config-management (copy-paste)'),
+    el('p', { class: 'muted small' }, 'Samme one-liner, udrullet til mange maskiner. "creates" gør den idempotent.'),
+    el('div', { class: 'enroll-cmd-row' },
+      el('pre', { class: 'enroll-cmd' }, yaml),
+      el('button', { class: 'small', onclick: () => copyText(yaml) }, 'Kopiér')));
+}
+
 function createCode() {
-  openModal('Ny enrollment-kode', [
+  openModal('Ny enrollment-kode (avanceret)', [
     { name: 'location_id', label: 'Lokation (valgfri)', type: 'select', value: '',
       options: [{ value: '', label: '(ingen)' }, ...locationCache.map((l) => ({ value: String(l.id), label: l.name }))] },
     { name: 'expiresInMinutes', label: 'Levetid (minutter)', type: 'number', value: '60' },
+    { name: 'maxUses', label: 'Antal maskiner (bulk)', type: 'number', value: '1' },
   ], async (v) => {
     const body = {};
     if (v.location_id) body.location_id = Number(v.location_id);
     if (v.expiresInMinutes) body.expiresInMinutes = Number(v.expiresInMinutes);
+    if (v.maxUses) body.maxUses = Number(v.maxUses);
     const created = await api('/enrollment-codes', { method: 'POST', body });
     closeModal();
     const card = $('#modal-card');
@@ -2943,6 +3068,7 @@ function createCode() {
       el('h3', {}, 'Kode oprettet'),
       el('p', { class: 'muted' }, 'Kopiér koden nu — den vises kun denne ene gang:'),
       el('pre', {}, esc(created.code)),
+      created.max_uses > 1 ? el('p', { class: 'muted small' }, `Bulk-kode: kan bruges ${created.max_uses} gange.`) : null,
       el('div', { class: 'form-actions' }, el('button', {}, 'Luk')));
     card.querySelector('button').addEventListener('click', () => { closeModal(); render(); });
     $('#modal').classList.remove('hidden');
@@ -3408,7 +3534,10 @@ function connectLive() {
   liveWs = sock;
   sock.addEventListener('message', (ev) => {
     let msg; try { msg = JSON.parse(ev.data); } catch { return; }
-    if (msg && msg.type === 'finding') onLiveFinding(msg.payload);
+    if (!msg) return;
+    if (msg.type === 'finding') onLiveFinding(msg.payload);
+    else if (msg.type === 'agent-enrolled') onAgentEvent('enrolled', msg.payload);
+    else if (msg.type === 'agent-status') onAgentEvent(msg.payload && msg.payload.status, msg.payload);
   });
   sock.addEventListener('close', () => {
     liveWs = null;
@@ -3420,6 +3549,13 @@ function disconnectLive() {
   if (liveReconnect) { clearTimeout(liveReconnect); liveReconnect = null; }
   if (liveWs) { try { liveWs.close(); } catch { /* ignore */ } liveWs = null; }
 }
+// Live agent enrollment / online-status events. Surfaces a toast, and (when the
+// enrollment wizard is showing a fresh code) flips its "Venter på agent…" panel.
+function onAgentEvent(kind, payload) {
+  if (kind === 'enrolled') toast(`Ny agent tilsluttet${payload && payload.hostname ? ': ' + payload.hostname : ''}`);
+  if (currentView === 'enrollment' && typeof enrollWatch === 'function') enrollWatch(kind, payload);
+}
+
 function onLiveFinding(f) {
   if (!f) return;
   const sev = f.severity || 'INFO';

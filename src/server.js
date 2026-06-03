@@ -11,6 +11,7 @@ const { createEnrollmentStore } = require('./services/enrollmentStore');
 const { createAgentTokensRepository } = require('./repositories/agentTokensRepository');
 const { createResultsRepository } = require('./repositories/resultsRepository');
 const { createProbeResultsRepository } = require('./repositories/probeResultsRepository');
+const { createArtifactStore } = require('./enroll/artifactStore');
 const { attachAgentWebSocket } = require('./ws/agentSocket');
 const { attachDashboardWebSocket } = require('./ws/dashboardSocket');
 const { verifyToken } = require('./auth/jwt');
@@ -66,6 +67,10 @@ function start() {
   const resultsRepo = createResultsRepository(db);
   const probeResultsRepo = createProbeResultsRepository(db);
 
+  // Agent binaries served from a local dir for frictionless enrollment. SHA-256
+  // is computed + cached now (at startup), so nothing is hashed per request.
+  const artifactStore = createArtifactStore({ dir: config.enroll.artifactsDir, logger: console });
+
   // Client-side license validation against blueeye-licens. getAgentCount reads
   // the live WebSocket connection count (agentWs is assigned just below; the
   // closure is only invoked later, at validation time).
@@ -86,6 +91,10 @@ function start() {
   const agentCommander = {
     sendCommand: (agentId, command) => (agentWs ? agentWs.sendCommand(agentId, command) : 0),
   };
+
+  // Pushes a live event to every connected dashboard (assigned below; the
+  // closure runs later). Used for enrollment/agent-status feedback in the UI.
+  const notifyDashboard = (message) => (dashboardWs ? dashboardWs.broadcast(message) : 0);
 
   // Storage info (disk free/used + database size).
   const systemInfo = createSystemInfo({ db, diskPath: config.storage.diskPath });
@@ -199,6 +208,9 @@ function start() {
     settingsService,
     analysisConfig,
     retentionConfig,
+    artifactStore,
+    enrollConfig: { publicUrl: config.publicUrl, certFingerprint: config.enroll.certFingerprint },
+    notifyDashboard,
     logger: console,
   });
 
@@ -218,6 +230,8 @@ function start() {
     path: config.ws.path,
     heartbeatMs: config.ws.heartbeatIntervalMs,
     licenseGuard: (count) => licenseManager.canAcceptNewConnection(count),
+    // Push live online/offline transitions to the dashboard.
+    notifyDashboard,
   });
 
   // Browser live channel (analysis findings -> dashboard), gated by the user JWT.

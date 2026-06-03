@@ -5,6 +5,8 @@ const PLATFORM_MAX = 64;
 const ARCH_MAX = 32;
 // Upper bound on a code's lifetime: 30 days.
 const MAX_TTL_MINUTES = 30 * 24 * 60;
+// Upper bound on how many times a bulk code may be redeemed.
+const MAX_USES = 1000;
 
 // Validates the body of POST /enrollment-codes. location_id and
 // expiresInMinutes are optional; expiresInMinutes is left undefined when
@@ -32,6 +34,16 @@ function validateCreateCode(body) {
     errors.expiresInMinutes = `expiresInMinutes must be an integer between 1 and ${MAX_TTL_MINUTES}`;
   } else {
     value.expiresInMinutes = input.expiresInMinutes;
+  }
+
+  // Bulk codes: redeemable up to maxUses times within the TTL window. Omitted
+  // (or null) means single-use (1). Always bound — never an unlimited code.
+  if (input.maxUses === undefined || input.maxUses === null) {
+    value.maxUses = 1;
+  } else if (!Number.isInteger(input.maxUses) || input.maxUses < 1 || input.maxUses > MAX_USES) {
+    errors.maxUses = `maxUses must be an integer between 1 and ${MAX_USES}`;
+  } else {
+    value.maxUses = input.maxUses;
   }
 
   return Object.keys(errors).length > 0 ? { errors } : { value };

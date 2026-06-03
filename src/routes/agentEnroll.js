@@ -7,7 +7,9 @@ const { validateEnroll } = require('../validation/enrollmentValidation');
 
 // Agent self-enrollment. This endpoint is intentionally UNAUTHENTICATED — the
 // agent has no token yet; the one-time enrollment code is its credential.
-function createAgentEnrollRouter({ enrollmentStore }) {
+// `notifyDashboard` (optional) pushes a live "agent enrolled" event to the UI so
+// the enrollment screen flips to "connected" within seconds.
+function createAgentEnrollRouter({ enrollmentStore, notifyDashboard }) {
   const router = express.Router();
 
   // POST /agents/enroll { code, hostname, platform, arch }
@@ -37,6 +39,15 @@ function createAgentEnrollRouter({ enrollmentStore }) {
         case 'expired':
           return res.status(410).json({ error: 'Enrollment code has expired' });
         case 'ok':
+          // Live feedback for the operator watching the enrollment screen.
+          if (typeof notifyDashboard === 'function') {
+            try {
+              notifyDashboard({
+                type: 'agent-enrolled',
+                payload: { agentId: outcome.agentId, hostname: value.hostname, platform: value.platform, arch: value.arch },
+              });
+            } catch { /* best-effort; never fail enrollment over a broadcast */ }
+          }
           // The plaintext token is returned ONCE, here.
           return res.status(201).json({ agentId: outcome.agentId, token });
         default:

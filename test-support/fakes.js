@@ -105,7 +105,7 @@ function makeEnrollmentCodesRepo(overrides = {}) {
   return {
     create:
       overrides.create ||
-      (async ({ code, location_id, created_by }) => ({
+      (async ({ code, location_id, created_by, maxUses = 1 }) => ({
         id: 1,
         code,
         location_id: location_id ?? null,
@@ -113,17 +113,46 @@ function makeEnrollmentCodesRepo(overrides = {}) {
         expires_at: '2026-01-01T01:00:00.000Z',
         used_at: null,
         created_at: '2026-01-01T00:00:00.000Z',
+        max_uses: maxUses,
+        uses_remaining: maxUses,
       })),
     findAll: overrides.findAll || (async () => []),
+    findById: overrides.findById || (async () => null),
+    findByCode: overrides.findByCode || (async () => null),
     remove: overrides.remove || (async () => false),
   };
 }
 
-// A fake enrollment store (the atomic claim-and-enroll operation).
+// A fake enrollment store (the atomic claim-and-enroll operation). The default
+// honours bulk codes statefully so route-level N/N+1 tests work: seed remaining
+// uses via overrides.remaining (default 1).
 function makeEnrollmentStore(overrides = {}) {
+  let remaining = overrides.remaining ?? 1;
+  let nextId = 1;
   return {
     claimAndEnroll:
-      overrides.claimAndEnroll || (async () => ({ status: 'ok', agentId: 1 })),
+      overrides.claimAndEnroll ||
+      (async () => {
+        if (remaining <= 0) return { status: 'used' };
+        remaining -= 1;
+        return { status: 'ok', agentId: nextId++ };
+      }),
+  };
+}
+
+// A fake artifact store (one published linux-amd64 binary by default). Pass
+// overrides to simulate an empty store or a throwing get() for 500 paths.
+function makeArtifactStore(overrides = {}) {
+  const entries = overrides.entries || {
+    'linux-amd64': { platform: 'linux-amd64', filename: 'blueeye-agent-linux-amd64', path: '/dev/null', size: 3, sha256: 'a'.repeat(64), contentType: 'application/octet-stream' },
+  };
+  return {
+    reload: overrides.reload || (() => {}),
+    list: overrides.list || (() => Object.values(entries).map(({ path: _p, ...rest }) => rest)),
+    get: overrides.get || ((p) => entries[String(p || '')] || null),
+    has: overrides.has || ((p) => Boolean(entries[String(p || '')])),
+    checksums: overrides.checksums || (() => { const o = {}; for (const k of Object.keys(entries)) o[k] = entries[k].sha256; return o; }),
+    get size() { return Object.keys(entries).length; },
   };
 }
 
@@ -300,6 +329,9 @@ function makeApp(overrides = {}) {
     settingsService: overrides.settingsService || makeSettingsService(),
     analysisConfig: overrides.analysisConfig || { analysisEnabled: true, assistantEnabled: false, critSigma: 4, warnSigma: 3, baselineDays: 7, minSamples: 200 },
     retentionConfig: overrides.retentionConfig || { enabled: true, rawRetentionDays: 7, rollupRetentionDays: 90, findingRetentionDays: 365, rollupIntervalMinutes: 60 },
+    artifactStore: overrides.artifactStore || makeArtifactStore(),
+    enrollConfig: overrides.enrollConfig || { publicUrl: '', certFingerprint: '' },
+    notifyDashboard: overrides.notifyDashboard || (() => 0),
   });
 }
 
@@ -332,6 +364,7 @@ module.exports = {
   makeProbeResultsRepo,
   makeEnrollmentCodesRepo,
   makeEnrollmentStore,
+  makeArtifactStore,
   makeLicenseManager,
   makeAgentCommander,
   makeSystemInfo,

@@ -6,6 +6,7 @@
 require('dotenv').config();
 const path = require('path');
 const { resolvePublicKey } = require('./license/publicKey');
+const { normalizeFingerprint } = require('./enroll/fingerprint');
 
 function toInt(value, fallback) {
   const parsed = Number.parseInt(value, 10);
@@ -15,6 +16,10 @@ function toInt(value, fallback) {
 const config = {
   env: process.env.NODE_ENV || 'development',
   port: toInt(process.env.PORT, 3000),
+  // Canonical URL clients use to reach this server (e.g. https://blueeye.acme.dk).
+  // Recommended when running behind a reverse proxy; when unset the enrollment
+  // endpoints derive it from the incoming request. No trailing slash.
+  publicUrl: (process.env.BLUEEYE_PUBLIC_URL || process.env.PUBLIC_URL || '').replace(/\/+$/, ''),
   db: {
     host: process.env.DB_HOST || '127.0.0.1',
     port: toInt(process.env.DB_PORT, 3306),
@@ -39,6 +44,16 @@ const config = {
   enrollment: {
     // Default lifetime of a new enrollment code, in minutes.
     defaultTtlMinutes: toInt(process.env.ENROLLMENT_CODE_TTL_MINUTES, 60),
+  },
+  // Frictionless agent enrollment (download + install-script generation).
+  enroll: {
+    // Local directory holding the agent binaries served at /enroll/agent/:platform.
+    // Files are named blueeye-agent-<platform>[.exe], e.g. blueeye-agent-linux-amd64.
+    artifactsDir: process.env.AGENT_ARTIFACTS_DIR || path.join(process.cwd(), 'artifacts'),
+    // SHA-256 fingerprint of the server's TLS leaf cert (or the terminating
+    // reverse proxy's). Embedded into install scripts so the agent can pin it.
+    // Leave unset for plain HTTP / development (no pinning).
+    certFingerprint: normalizeFingerprint(process.env.AGENT_CERT_FINGERPRINT || process.env.TLS_CERT_FINGERPRINT || ''),
   },
   ws: {
     // Agent live channel.

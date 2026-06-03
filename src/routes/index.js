@@ -23,6 +23,8 @@ const { createProbesRouter } = require('./probes');
 const { createInterfacesRouter } = require('./interfaces');
 const { createFleetRouter } = require('./fleet');
 const { createSearchRouter } = require('./search');
+const { createEnrollRouter } = require('./enroll');
+const { createEnrollCommandRouter } = require('./enrollCommand');
 const {
   createAgentAuthenticator,
   createAgentTokenMiddleware,
@@ -54,6 +56,9 @@ function createApiRouter({
   settingsService,
   analysisConfig,
   retentionConfig,
+  artifactStore,
+  enrollConfig = {},
+  notifyDashboard,
 }) {
   const router = express.Router();
   // Effective (admin-editable) map config, used by both the geo view and the
@@ -93,6 +98,13 @@ function createApiRouter({
   router.use('/api/export', createExportRouter({ findingStore, flowsRepo, agentsRepo, locationsRepo, resultsRepo, probeResultsRepo, featureGate }));
   router.use('/enrollment-codes', createEnrollmentCodesRouter({ enrollmentCodesRepo, locationsRepo }));
 
+  // Frictionless enrollment. Public (unauthenticated) download + install-script
+  // endpoints under /enroll; the authenticated command generator under /api.
+  if (artifactStore) {
+    router.use('/enroll', createEnrollRouter({ artifactStore, enrollmentCodesRepo, enrollConfig }));
+    router.use('/api/enroll', createEnrollCommandRouter({ enrollmentCodesRepo, artifactStore, enrollConfig }));
+  }
+
   // Three routers share the /agents prefix, each with its own auth model:
   //   - CRUD + results listing — user JWT (RBAC)
   //   - POST /results          — agent token
@@ -100,7 +112,7 @@ function createApiRouter({
   // Requests fall through routers that have no matching route.
   router.use('/agents', createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentCommander }));
   router.use('/agents', createAgentReportsRouter({ agentAuth, resultsRepo, agentsRepo, analysisPipeline, flowPipeline, probeResultsRepo }));
-  router.use('/agents', createAgentEnrollRouter({ enrollmentStore }));
+  router.use('/agents', createAgentEnrollRouter({ enrollmentStore, notifyDashboard }));
 
   return router;
 }

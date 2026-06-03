@@ -3,6 +3,7 @@
 const path = require('path');
 const express = require('express');
 const { createApiRouter } = require('./routes');
+const { PT } = require('./data');
 const { requestLogger } = require('./middleware/requestLogger');
 const { notFoundHandler, errorHandler } = require('./middleware/errorHandler');
 const { silentLogger } = require('./logger');
@@ -47,6 +48,13 @@ function createApp({
   app.set('trust proxy', true);
   app.use(express.json({ limit: '1mb' }));
   app.use(requestLogger(logger));
+
+  // UI string catalogue (src/data.js) exposed to the dependency-free dashboard
+  // as a `window.PT` global. Served as a tiny script (loaded before /app.js in
+  // index.html) so the client can read it synchronously without a fetch.
+  app.get('/data.js', (_req, res) => {
+    res.type('application/javascript').send(`window.PT=${JSON.stringify(PT)};`);
+  });
 
   // Static admin dashboard (vanilla HTML/JS). Served before the API router;
   // requests that don't match a file fall through to the JSON API.

@@ -56,6 +56,10 @@ test('dashboard exposes settings (users+licens) tab, auto-refresh and traffic ch
   assert.match(js, /views\.overview/); // full-width traffic overview
   assert.match(js, /function multiChart/); // multi-series chart
   assert.match(html, /data-view="overview"/); // overview tab
+  assert.match(js, /trafficTypesCard/); // Trafiktyper aggregate card
+  assert.match(js, /hist-row/); // Historik + Trafiktyper laid out side by side
+  assert.match(js, /ttEmpty/); // card pulls localised strings from window.PT
+  assert.match(html, /\/data\.js/); // localised UI strings loaded before app.js
   assert.match(js, /who-email/); // shows logged-in email + role
   assert.match(js, /data\.user\.email/); // captures email on login
   assert.match(js, /views\.map/); // locations map view

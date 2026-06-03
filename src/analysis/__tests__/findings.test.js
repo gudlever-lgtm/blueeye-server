@@ -63,7 +63,7 @@ function finding(over = {}) {
     baseline: 10,
     deviation: 8,
     window: [new Date('2026-01-01T00:00:00Z'), new Date('2026-01-01T00:01:00Z')],
-    explanation: 'cpu på 99 afveg 8.0σ fra baseline (10)',
+    explanation: 'cpu at 99 deviated 8.0σ from baseline (10)',
     evidence: [sample()],
     correlatedWith: [],
     ...over,

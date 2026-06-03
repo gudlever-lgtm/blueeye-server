@@ -18,7 +18,7 @@ const worse = (a, b) => (TIER[a] <= TIER[b] ? a : b);
 
 function computeDataQuality({ capabilities = null, latest = null, now = Date.now() } = {}) {
   const version = capabilities && capabilities.agentVersion ? String(capabilities.agentVersion) : null;
-  const out = { version, source: null, clockSkewMs: null, dropPct: null, status: 'unknown', reason: 'Ingen målinger endnu.', evidence: [] };
+  const out = { version, source: null, clockSkewMs: null, dropPct: null, status: 'unknown', reason: 'No measurements yet.', evidence: [] };
   if (!latest || !latest.payload) return out;
 
   const payload = latest.payload;
@@ -61,9 +61,9 @@ function computeDataQuality({ capabilities = null, latest = null, now = Date.now
 
 function reasonFor(q, evidence) {
   const top = evidence[0];
-  if (!top) return `Data ser sundt ud${q.version ? ` (agent v${q.version})` : ''}.`;
-  if (top.metric === 'drop') return `Collector taber ${top.dropPct}% af ${q.source}-pakker.`;
-  if (top.metric === 'clock') return `Agent-uret er ${Math.round(Math.abs(top.skewMs) / 1000)} s ude af sync med serveren.`;
+  if (!top) return `Data looks healthy${q.version ? ` (agent v${q.version})` : ''}.`;
+  if (top.metric === 'drop') return `Collector is dropping ${top.dropPct}% of ${q.source} packets.`;
+  if (top.metric === 'clock') return `Agent clock is ${Math.round(Math.abs(top.skewMs) / 1000)} s out of sync with the server.`;
   return 'OK.';
 }
 

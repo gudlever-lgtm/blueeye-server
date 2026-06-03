@@ -4,7 +4,7 @@
 // same host into a single "incident", and uses a CONFIGURABLE dependency graph
 // (src/analysis/dependency-graph.json — never hardcoded here) to pick the most
 // likely upstream cause among them. Everything stays local and explainable: no
-// ML, just time clustering + a directed graph walk, with a Danish hint.
+// ML, just time clustering + a directed graph walk, with a plain-English hint.
 //
 //   const correlator = createCorrelator();                 // ships the default graph
 //   const correlator = createCorrelator({ graph });        // inject your own (tests)
@@ -93,31 +93,31 @@ function createCorrelator({ graph } = {}) {
     return pool.reduce((best, f) => (toTime(f) < toTime(best) ? f : best), pool[0]);
   }
 
-  // Danish, explainable hint that always names the real metrics involved.
+  // Explainable hint that always names the real metrics involved.
   function buildHint(cluster, likely) {
     const others = [...new Set(cluster.filter((f) => f !== likely).map((f) => f.metric))];
 
     if (others.length === 0) {
       return (
-        `Enkeltstående ${likely.severity || ''}-finding på ${likely.metric} ` +
-        'uden korrelerede findings inden for vinduet.'
+        `Isolated ${likely.severity || ''}-finding on ${likely.metric} ` +
+        'with no correlated findings within the window.'
       ).replace(/\s+/g, ' ').trim();
     }
 
     const downstream = others.filter((m) => idx.isAncestor(likely.metric, m));
     if (downstream.length) {
       return (
-        `Sandsynlig rodårsag: ${likely.metric} (${likely.severity}). ` +
-        `Korrelerede følgefejl: ${others.join(', ')}. ` +
-        `${likely.metric} ligger opstrøms for ${downstream.join(', ')} i ` +
-        `afhængighedsgrafen — undersøg ${likely.metric} først.`
+        `Likely root cause: ${likely.metric} (${likely.severity}). ` +
+        `Correlated downstream faults: ${others.join(', ')}. ` +
+        `${likely.metric} is upstream of ${downstream.join(', ')} in ` +
+        `the dependency graph — investigate ${likely.metric} first.`
       );
     }
 
     return (
-      `${cluster.length} samtidige findings på host ${likely.hostId}: ` +
+      `${cluster.length} concurrent findings on host ${likely.hostId}: ` +
       `${[likely.metric, ...others].join(', ')}. ` +
-      `Tidligst observeret: ${likely.metric} — start undersøgelsen der.`
+      `Earliest observed: ${likely.metric} — start the investigation there.`
     );
   }
 

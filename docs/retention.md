@@ -8,7 +8,7 @@ ON by default (`RETENTION_ENABLED`) — DB hygiene is a safe default.
 
 > **Runtime-editable:** an admin can change `enabled` and the retention windows
 > (`rawRetentionDays`, `rollupRetentionDays`, `findingRetentionDays`) under
-> **Indstillinger → Retention** (`PUT /api/settings/retention`). Overrides are
+> **Settings → Retention** (`PUT /api/settings/retention`). Overrides are
 > stored in `app_settings`, applied to the live config, and re-applied at boot;
 > the scheduler/purge read them on each run, so changes take effect on the next
 > cleanup without a restart. The rollup **cadence** (`rollupIntervalMinutes`,

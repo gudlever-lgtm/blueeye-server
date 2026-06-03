@@ -30,7 +30,7 @@ const findings = (rows = []) => ({ list: async () => rows });
 
 test('explain throws FeatureDisabled when the assistant is off', async () => {
   const a = createAssistant({ config: { assistantEnabled: false }, findingStore: findings() });
-  await assert.rejects(() => a.explain('hej', 'h1'), (e) => e.name === 'FeatureDisabled');
+  await assert.rejects(() => a.explain('hello', 'h1'), (e) => e.name === 'FeatureDisabled');
   assert.equal(a.isEnabled(), false);
 });
 
@@ -46,18 +46,18 @@ test('explain rejects an empty/missing question (when enabled)', async () => {
 
 test('explain throws AssistantMisconfigured when enabled without an API key', async () => {
   const a = createAssistant({ config: { ...ENABLED, assistantApiKey: '' }, findingStore: findings(), fetchImpl: okFetch({}) });
-  await assert.rejects(() => a.explain('hvad sker der?', 'h1'), (e) => e.name === 'AssistantMisconfigured');
+  await assert.rejects(() => a.explain('what is happening?', 'h1'), (e) => e.name === 'AssistantMisconfigured');
 });
 
 test('explain returns the trimmed answer and the context it used', async () => {
   const rows = [
     { metric: 'cpu', severity: 'CRIT', kind: 'ANOMALY', observed: 99, baseline: 10, deviation: 8, explanation: 'cpu-spike-evidence', correlatedWith: [], createdAt: new Date('2026-01-01T00:00:00Z') },
   ];
-  const fetchImpl = okFetch({ choices: [{ message: { content: '  CPU er overbelastet.  ' } }] });
+  const fetchImpl = okFetch({ choices: [{ message: { content: '  CPU is overloaded.  ' } }] });
   const a = createAssistant({ config: ENABLED, findingStore: findings(rows), fetchImpl });
 
-  const out = await a.explain('hvorfor er cpu høj?', 'h7');
-  assert.equal(out.answer, 'CPU er overbelastet.');
+  const out = await a.explain('why is cpu high?', 'h7');
+  assert.equal(out.answer, 'CPU is overloaded.');
   assert.equal(out.model, 'mistral-small-latest');
   assert.equal(out.usedFindings, 1);
 
@@ -70,7 +70,7 @@ test('explain returns the trimmed answer and the context it used', async () => {
   const sent = JSON.parse(opts.body);
   assert.equal(sent.model, 'mistral-small-latest');
   const userMsg = sent.messages.find((m) => m.role === 'user');
-  assert.ok(userMsg.content.includes('hvorfor er cpu høj?')); // the question
+  assert.ok(userMsg.content.includes('why is cpu high?')); // the question
   assert.ok(userMsg.content.includes('cpu-spike-evidence')); // the finding context
 });
 

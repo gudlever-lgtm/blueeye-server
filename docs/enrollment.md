@@ -13,13 +13,13 @@ replace it):
 
 ## The flow
 
-1. Operator opens **Enrollment → Tilføj agent**, picks a platform and clicks
-   *Generér kode & kommando*. The UI calls `GET /api/enroll/command`.
+1. Operator opens **Enrollment → Add agent**, picks a platform and clicks
+   *Generate code & command*. The UI calls `GET /api/enroll/command`.
 2. The operator copies the one-liner and runs it on the target machine.
 3. The script downloads the agent **from this server**, verifies its SHA-256,
    runs `blueeye-agent enroll --code …`, and installs a systemd service.
-4. The agent connects; the enrollment screen flips **“Venter på agent…” →
-   “Tilsluttet ✓”** live (over the dashboard WebSocket).
+4. The agent connects; the enrollment screen flips **”Waiting for agent…” →
+   “Connected ✓”** live (over the dashboard WebSocket).
 
 ## Endpoints
 

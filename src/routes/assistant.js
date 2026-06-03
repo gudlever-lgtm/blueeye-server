@@ -20,7 +20,7 @@ function createAssistantRouter({ assistant, featureGate }) {
     asyncHandler(async (req, res) => {
       // License gate first — distinct from "switched off in config" below.
       if (featureGate && !featureGate.isFeatureEnabled('assistant')) {
-        return res.status(403).json({ error: 'Funktionen er ikke inkluderet i jeres licens', feature: 'assistant', reason: 'license' });
+        return res.status(403).json({ error: 'This feature is not included in your license', feature: 'assistant', reason: 'license' });
       }
       const body = req.body || {};
       const question = typeof body.question === 'string' ? body.question : '';

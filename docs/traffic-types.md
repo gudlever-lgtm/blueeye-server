@@ -2,7 +2,7 @@
 
 A per-agent breakdown of traffic into **categories** like *DNS*, *Web*,
 *Facebook/Meta* or *Google*, shown as toggleable series in the dashboard
-(Trafik → **Trafiktype**). It answers "how much of this agent's traffic is DNS /
+(Traffic → **Traffic types**). It answers "how much of this agent's traffic is DNS /
 Facebook / …" without inspecting any packet payload.
 
 > **Metadata only — no DPI.** Categories are derived from flow *metadata*: the
@@ -19,7 +19,7 @@ Facebook / …" without inspecting any packet payload.
 
 The built-in list lives in [`src/flows/categories.js`](../src/flows/categories.js)
 (`DEFAULT_CATEGORIES`) — intentionally small and explainable. Admins can **edit
-the list at runtime** under **Indstillinger → Trafiktyper** (add/remove
+the list at runtime** under **Settings → Traffic types** (add/remove
 categories, change the ports/ASNs per type, or reset to defaults). The edited
 list is stored in `app_settings` (`flowCategories`) and replaces the defaults
 wholesale; it takes effect on the next request, no restart.

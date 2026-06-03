@@ -41,7 +41,7 @@ function requireFeature(featureGate, feature) {
   return (req, res, next) => {
     if (featureGate && featureGate.isFeatureEnabled(feature)) return next();
     return res.status(403).json({
-      error: 'Funktionen er ikke inkluderet i jeres licens',
+      error: 'This feature is not included in your license',
       feature,
       reason: 'license',
     });

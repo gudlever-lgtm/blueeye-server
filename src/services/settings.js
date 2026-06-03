@@ -205,7 +205,7 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
     return { windows: value };
   }
 
-  // ---- Analysis thresholds (Indstillinger → Analyse) ----------------------
+  // ---- Analysis thresholds (Settings → Analysis) ----------------------
   // Editable subset of the analysis config; the AI assistant + secrets stay
   // env-only. Defaults mirror src/analysis/config.js.
   const ANALYSIS_DEFAULTS = { analysisEnabled: true, assistantEnabled: false, critSigma: 4.0, warnSigma: 3.0, baselineDays: 7, minSamples: 200 };
@@ -254,7 +254,7 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
     return merged;
   }
 
-  // ---- Retention windows (Indstillinger → Retention) ----------------------
+  // ---- Retention windows (Settings → Retention) ----------------------
   const RETENTION_DEFAULTS = { enabled: true, rawRetentionDays: 7, rollupRetentionDays: 90, findingRetentionDays: 365, rollupIntervalMinutes: 60 };
 
   function validateRetention(patch) {

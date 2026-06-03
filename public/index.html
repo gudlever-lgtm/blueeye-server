@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="da" data-theme="light">
+<html lang="en" data-theme="light">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -22,8 +22,8 @@
       <form id="login-form" class="card">
         <h1>BlueEye <span class="muted">server</span></h1>
         <label>Email <input type="email" id="email" value="admin@blueeye.local" required /></label>
-        <label>Adgangskode <input type="password" id="password" required /></label>
-        <button type="submit">Log ind</button>
+        <label>Password <input type="password" id="password" required /></label>
+        <button type="submit">Log in</button>
         <p id="login-error" class="error"></p>
       </form>
     </main>
@@ -33,28 +33,28 @@
       <header class="topbar">
         <strong>BlueEye <span class="muted">server</span></strong>
         <nav class="tabs">
-          <button data-view="fleet" class="active">Oversigt</button>
-          <button data-view="overview">Trafik</button>
-          <button data-view="map">Kort</button>
+          <button data-view="fleet" class="active">Overview</button>
+          <button data-view="overview">Traffic</button>
+          <button data-view="map">Map</button>
           <button data-view="geo" data-feature="geo">Geo</button>
-          <button data-view="agents">Agenter</button>
+          <button data-view="agents">Agents</button>
           <button data-view="interfaces">Interfaces</button>
           <button data-view="probes">Probes</button>
           <button data-view="flows">Flows</button>
-          <button data-view="findings" data-feature="analysis">Analyse</button>
-          <button data-view="locations">Lokationer</button>
+          <button data-view="findings" data-feature="analysis">Analysis</button>
+          <button data-view="locations">Locations</button>
           <button data-view="enrollment">Enrollment</button>
-          <button data-view="settings">Indstillinger</button>
+          <button data-view="settings">Settings</button>
         </nav>
         <span class="spacer"></span>
-        <input id="search-q" class="topbar-search" type="search" placeholder="Søg agent / IP / port…" autocomplete="off" />
-        <label class="autorefresh muted" title="Auto-opdatér hvert 5. sekund">
+        <input id="search-q" class="topbar-search" type="search" placeholder="Search agent / IP / port…" autocomplete="off" />
+        <label class="autorefresh muted" title="Auto-refresh every 5 seconds">
           <input type="checkbox" id="autorefresh" /> Auto
         </label>
         <span id="whoami" class="muted"></span>
-        <button id="theme" class="ghost" title="Skift lyst/mørkt tema">🌙</button>
-        <button id="refresh" class="ghost" title="Opdatér">⟳</button>
-        <button id="logout" class="ghost">Log ud</button>
+        <button id="theme" class="ghost" title="Toggle light/dark theme">🌙</button>
+        <button id="refresh" class="ghost" title="Refresh">⟳</button>
+        <button id="logout" class="ghost">Log out</button>
       </header>
       <main id="view"></main>
     </div>

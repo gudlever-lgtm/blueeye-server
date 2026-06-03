@@ -140,7 +140,7 @@ main#view:has(.overview) { max-width: 1180px; }
 .ta-name { flex: 1; }
 .ta-bw { white-space: nowrap; font-size: 13px; }
 
-/* ===== Compact/lean Trafik ===== */
+/* ===== Compact/lean Traffic ===== */
 /* Slim alert line inside the overview. */
 .overview .alert-banner { padding: 7px 12px; font-size: 13px; margin-bottom: 10px; }
 
@@ -273,7 +273,7 @@ main#view:has(.overview) { max-width: 1180px; }
 .storage-detail-body { padding: 10px 2px 2px; }
 .storage-detail-body .storage { margin: 0; }
 
-/* 5) Foldable secondary sections (top agenter, historik). */
+/* 5) Foldable secondary sections (top agents, history). */
 details.sec { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; margin-top: 10px; }
 details.sec > summary { cursor: pointer; padding: 10px 12px; font-weight: 600; font-size: 14px; list-style: none; }
 details.sec > summary::-webkit-details-marker { display: none; }

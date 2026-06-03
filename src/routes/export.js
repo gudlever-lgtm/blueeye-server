@@ -153,7 +153,7 @@ function createExportRouter({ findingStore, flowsRepo, agentsRepo, locationsRepo
       if (!resource) return res.status(404).json({ error: 'Unknown export resource' });
 
       if (resource.feature && featureGate && !featureGate.isFeatureEnabled(resource.feature)) {
-        return res.status(403).json({ error: 'Funktionen er ikke inkluderet i jeres licens', feature: resource.feature, reason: 'license' });
+        return res.status(403).json({ error: 'This feature is not included in your license', feature: resource.feature, reason: 'license' });
       }
 
       // Validate format before the (potentially expensive) fetch.

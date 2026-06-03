@@ -80,7 +80,7 @@ function summarizeTarget(samples) {
 function computeAgentHealth(rows, { now = Date.now() } = {}) {
   const empty = {
     status: 'unknown',
-    reason: 'Ingen probe-data endnu — kør en probe fra agenten.',
+    reason: 'No probe data yet — run a probe from the agent.',
     evidence: [],
     metrics: { targets: 0, reachable: 0, unreachable: 0, lossPct: null, rttMs: null, baselineMs: null, latencyZ: null, jitterMs: null, lastTs: null },
   };
@@ -144,19 +144,19 @@ function computeAgentHealth(rows, { now = Date.now() } = {}) {
   return { status, reason: reasonFor(status, metrics, evidence, stale), evidence, metrics };
 }
 
-// A one-line Danish explanation of the verdict (the headline in the UI/title).
+// A one-line explanation of the verdict (the headline in the UI/title).
 function reasonFor(status, m, evidence, stale) {
-  if (status === 'unknown') return 'Ingen probe-data endnu — kør en probe fra agenten.';
+  if (status === 'unknown') return 'No probe data yet — run a probe from the agent.';
   const top = evidence[0];
-  const staleNote = stale && status !== 'stale' ? ' (data er forældet)' : '';
-  if (status === 'stale') return `Ingen friske målinger — seneste probe er > 15 min. gammel.`;
-  if (status === 'down') return `Alle ${m.targets} mål svarer ikke.`;
-  if (!top) return `Alle ${m.reachable} mål er sunde — lav latency, intet tab.`;
-  if (top.metric === 'reachability') return `${m.unreachable}/${m.targets} mål svarer ikke (fx ${top.target}).${staleNote}`;
-  if (top.metric === 'loss') return `Pakketab ${top.lossPct}% mod ${top.target}.${staleNote}`;
-  if (top.metric === 'latency') return `Latency ${top.rttMs} ms mod ${top.target} — ~${top.baselineMs} ms normalt (z=${top.z}).${staleNote}`;
-  if (top.metric === 'jitter') return `Jitter ${top.jitterMs} ms mod ${top.target}.${staleNote}`;
-  return 'Sund.';
+  const staleNote = stale && status !== 'stale' ? ' (data is stale)' : '';
+  if (status === 'stale') return `No fresh measurements — latest probe is > 15 min. old.`;
+  if (status === 'down') return `All ${m.targets} targets are not responding.`;
+  if (!top) return `All ${m.reachable} targets are healthy — low latency, no loss.`;
+  if (top.metric === 'reachability') return `${m.unreachable}/${m.targets} targets not responding (e.g. ${top.target}).${staleNote}`;
+  if (top.metric === 'loss') return `Packet loss ${top.lossPct}% to ${top.target}.${staleNote}`;
+  if (top.metric === 'latency') return `Latency ${top.rttMs} ms to ${top.target} — ~${top.baselineMs} ms normal (z=${top.z}).${staleNote}`;
+  if (top.metric === 'jitter') return `Jitter ${top.jitterMs} ms to ${top.target}.${staleNote}`;
+  return 'Healthy.';
 }
 
 // Worst of two statuses, but a real signal always beats 'unknown' (we DO have
@@ -195,10 +195,10 @@ function mergeHealth(probe, iface) {
 function interfaceReason(iface) {
   const w = iface.worst || {};
   const where = w.iface ? ` (${w.iface})` : '';
-  if (iface.status === 'down') return `Link nede${where}.`;
-  if (iface.status === 'bad') return w.errPerSec > 0 ? `Interface-fejl ${w.errPerSec}/s${where}.` : `Interface næsten mættet${where}.`;
-  if (iface.status === 'warn') return w.dropPerSec > 0 ? `Interface-discards ${w.dropPerSec}/s${where}.` : `Høj interface-udnyttelse${where}.`;
-  return 'Interfaces sunde.';
+  if (iface.status === 'down') return `Link down${where}.`;
+  if (iface.status === 'bad') return w.errPerSec > 0 ? `Interface errors ${w.errPerSec}/s${where}.` : `Interface nearly saturated${where}.`;
+  if (iface.status === 'warn') return w.dropPerSec > 0 ? `Interface discards ${w.dropPerSec}/s${where}.` : `High interface utilisation${where}.`;
+  return 'Interfaces healthy.';
 }
 
 // Build the fleet rollup: each agent's identity + health verdict (probe verdict

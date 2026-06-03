@@ -139,12 +139,12 @@ A single vanilla-JS SPA. Key building blocks:
 | --- | --- |
 | A new HTTP endpoint | `src/routes/<x>.js` + mount in `routes/index.js` + a fake in `test-support/fakes.js` |
 | A DB table/column | new `migrations/NNN_*.sql` + repository in `src/repositories/` |
-| Anomaly thresholds / detection | `src/analysis/detector.js`, `config.js` (editable via Indstillinger→Analyse) |
+| Anomaly thresholds / detection | `src/analysis/detector.js`, `config.js` (editable via Settings→Analysis) |
 | Alert channels | `src/analysis/alerting/channels/*` + `dispatcher.js` |
 | Maintenance windows / silencing | `src/analysis/alerting/maintenance.js` (`createSilencer`) + dispatcher hook; windows in `settingsService` (`maintenance` key), route `/api/settings/maintenance` |
-| Data retention | `src/analysis/retention/*` (editable via Indstillinger→Retention) |
+| Data retention | `src/analysis/retention/*` (editable via Settings→Retention) |
 | Geo/ASN enrichment | `src/geo/enricher.js`, `provider.js`; flows in `flowsRepository.js` |
-| Traffic-type categories | `src/flows/categories.js` (editable via Indstillinger→Trafiktyper) |
+| Traffic-type categories | `src/flows/categories.js` (editable via Settings→Traffic types) |
 | Flow/conversation explorer | `flowsRepository.exploreFlows` + `src/routes/flows.js` (`/explore`); UI `views.flows` |
 | Active probes (server) | `src/routes/probes.js`, `probeResultsRepository.js`, `validation/probeValidation.js` |
 | Fleet health (overview + verdicts) | `src/health/probeHealth.js` (`computeAgentHealth`/`mergeHealth`/`computeFleet`, median+MAD — folds in interface health), `src/routes/fleet.js`; UI `views.fleet`/`views.agent` |

@@ -15,7 +15,7 @@ test('POST /api/assistant/explain returns 403 while the feature is disabled', as
   // The default fake assistant is disabled -> the endpoint exists but answers 403.
   const res = await request(makeApp())
     .post('/api/assistant/explain').set('Authorization', viewer())
-    .send({ question: 'hvad sker der?' });
+    .send({ question: 'what is happening?' });
   assert.equal(res.status, 403);
 });
 
@@ -34,19 +34,19 @@ test('POST /api/assistant/explain returns 400 when the question is missing', asy
 });
 
 test('POST /api/assistant/explain without a token returns 401', async () => {
-  const res = await request(makeApp()).post('/api/assistant/explain').send({ question: 'hej' });
+  const res = await request(makeApp()).post('/api/assistant/explain').send({ question: 'hello' });
   assert.equal(res.status, 401);
 });
 
 test('POST /api/assistant/explain returns 200 with the answer when enabled', async () => {
   const assistant = makeAssistant({
-    explain: async (q, hostId) => ({ answer: `svar til ${q} (${hostId})`, model: 'mistral-small-latest', usedFindings: 2 }),
+    explain: async (q, hostId) => ({ answer: `answer to ${q} (${hostId})`, model: 'mistral-small-latest', usedFindings: 2 }),
   });
   const res = await request(makeApp({ assistant }))
     .post('/api/assistant/explain').set('Authorization', viewer())
-    .send({ question: 'hvorfor er cpu høj?', hostId: '7' });
+    .send({ question: 'why is cpu high?', hostId: '7' });
   assert.equal(res.status, 200);
-  assert.match(res.body.answer, /hvorfor er cpu høj/);
+  assert.match(res.body.answer, /why is cpu high/);
   assert.match(res.body.answer, /\(7\)/); // hostId threaded through
   assert.equal(res.body.usedFindings, 2);
 });

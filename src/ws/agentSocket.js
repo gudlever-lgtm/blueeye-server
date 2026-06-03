@@ -19,6 +19,8 @@ function attachAgentWebSocket({
   // Capacity/licence gate. Receives the current connection count and returns
   // whether a new agent connection may be accepted. Defaults to always-allow.
   licenseGuard = () => true,
+  // Optional: pushes live agent online/offline events to the dashboard channel.
+  notifyDashboard = null,
 }) {
   const authenticator = createAgentAuthenticator({ agentTokensRepo });
   const wss = new WebSocketServer({ noServer: true });
@@ -66,6 +68,9 @@ function attachAgentWebSocket({
     agentsRepo
       .setStatus(agent.agentId, 'online')
       .catch((err) => logger.error('Failed to mark agent online:', err));
+    if (typeof notifyDashboard === 'function') {
+      try { notifyDashboard({ type: 'agent-status', payload: { agentId: agent.agentId, status: 'online' } }); } catch { /* best-effort */ }
+    }
 
     // Initial server -> agent message (also demonstrates the push channel).
     safeSend(ws, { type: 'connected', agentId: agent.agentId });
@@ -84,6 +89,9 @@ function attachAgentWebSocket({
       agentsRepo
         .setStatus(agent.agentId, 'offline')
         .catch((err) => logger.error('Failed to mark agent offline:', err));
+      if (typeof notifyDashboard === 'function') {
+        try { notifyDashboard({ type: 'agent-status', payload: { agentId: agent.agentId, status: 'offline' } }); } catch { /* best-effort */ }
+      }
     });
 
     ws.on('error', (err) => logger.error('Agent WS connection error:', err));

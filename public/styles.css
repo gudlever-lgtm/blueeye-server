@@ -471,3 +471,27 @@ button.active-btn { outline: 2px solid var(--accent); }
 .legend .dot { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: middle; }
 .legend .dot.rx { background: var(--accent); }
 .legend .dot.tx { background: var(--ok); }
+
+/* ---- Enrollment wizard ---------------------------------------------------- */
+.enroll-card { border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin: 0 0 20px; background: var(--card, transparent); }
+.enroll-card h3 { margin: 0 0 6px; }
+.enroll-form { display: flex; flex-wrap: wrap; gap: 14px; margin: 12px 0; }
+.enroll-field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+.enroll-field select, .enroll-field input { min-width: 160px; }
+.enroll-num { width: 120px; }
+.enroll-result { margin-top: 14px; border-top: 1px dashed var(--border); padding-top: 14px; }
+.enroll-cmd-row { display: flex; align-items: flex-start; gap: 8px; }
+.enroll-cmd { flex: 1; margin: 0; white-space: pre-wrap; word-break: break-all; }
+.enroll-manual { margin: 10px 0; padding: 10px; border: 1px solid var(--border); border-radius: 8px; }
+.enroll-kv { display: flex; gap: 8px; margin: 3px 0; font-size: 13px; }
+.enroll-kv .k { min-width: 130px; color: var(--muted); }
+.enroll-kv code { word-break: break-all; }
+.enroll-ansible { margin-top: 12px; }
+.enroll-ansible summary { cursor: pointer; color: var(--accent); font-size: 13px; }
+.enroll-live { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px; font-size: 13px; margin-bottom: 12px; }
+.enroll-live .dot { width: 10px; height: 10px; border-radius: 50%; }
+.enroll-live.waiting { background: rgba(234,179,8,.15); color: var(--warn, #a16207); }
+.enroll-live.waiting .dot { background: var(--warn, #eab308); animation: enroll-pulse 1.2s ease-in-out infinite; }
+.enroll-live.ok { background: rgba(34,197,94,.15); color: var(--ok); }
+.enroll-live.ok .dot { background: var(--ok); }
+@keyframes enroll-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }

@@ -34,11 +34,17 @@ function createApp({
   settingsService,
   analysisConfig,
   retentionConfig,
+  artifactStore,
+  enrollConfig,
+  notifyDashboard,
   logger = silentLogger,
 } = {}) {
   const app = express();
 
   app.disable('x-powered-by');
+  // Behind a reverse proxy: trust X-Forwarded-* so req.protocol/host reflect the
+  // public origin (used to build enrollment URLs).
+  app.set('trust proxy', true);
   app.use(express.json({ limit: '1mb' }));
   app.use(requestLogger(logger));
 
@@ -74,6 +80,9 @@ function createApp({
       settingsService,
       analysisConfig,
       retentionConfig,
+      artifactStore,
+      enrollConfig,
+      notifyDashboard,
     })
   );
 

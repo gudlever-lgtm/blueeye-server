@@ -38,6 +38,7 @@ function createEnrollmentCodesRouter({ enrollmentCodesRepo, locationsRepo }) {
         location_id: value.location_id,
         created_by: req.user.id,
         expiresInMinutes,
+        maxUses: value.maxUses,
       });
 
       // The plaintext code is returned ONCE, here.
@@ -47,6 +48,8 @@ function createEnrollmentCodesRouter({ enrollmentCodesRepo, locationsRepo }) {
         location_id: created.location_id,
         expires_at: created.expires_at,
         created_at: created.created_at,
+        max_uses: created.max_uses,
+        uses_remaining: created.uses_remaining,
       });
     })
   );

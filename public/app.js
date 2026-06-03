@@ -522,7 +522,7 @@ function agentHealthCell(a) {
   return el('span', { class: `badge ${cls}`, title }, label);
 }
 
-// "+ Ny agent" jumps to the Enrollment screen, where the wizard generates a code
+// "+ New agent" jumps to the Enrollment screen, where the wizard generates a code
 // and a ready-to-run install command (with live "connected" feedback).
 async function newAgent() {
   currentView = 'enrollment';
@@ -895,7 +895,7 @@ function historyChart(seriesList, { fromMs, toMs, onBrush, height = 300, band = 
 
 // Historical traffic for one agent over a date range, with selectable metric
 // types and a drag-to-zoom brush to investigate a specific timeframe.
-function trafficHistorySection() {
+function trafficHistorySection({ onData = () => {} } = {}) {
   const wrap = el('div', { class: 'history' });
   const agentSel = el('select', {}, el('option', { value: '' }, 'Select agent…'));
   const fromI = el('input', { type: 'datetime-local' });
@@ -938,10 +938,10 @@ function trafficHistorySection() {
   async function load(range) {
     const agentId = agentSel.value;
     histState.agentId = agentId;
-    if (!agentId) { status.textContent = 'Select an agent.'; return; }
+    if (!agentId) { onData({ state: 'prompt' }); status.textContent = 'Select an agent.'; return; }
     let fromMs = range ? range.fromMs : (fromI.value ? new Date(fromI.value).getTime() : NaN);
     let toMs = range ? range.toMs : (toI.value ? new Date(toI.value).getTime() : NaN);
-    if (Number.isNaN(fromMs) || Number.isNaN(toMs)) { status.textContent = 'Invalid period.'; return; }
+    if (Number.isNaN(fromMs) || Number.isNaN(toMs)) { onData({ state: 'prompt' }); status.textContent = 'Invalid period.'; return; }
     if (toMs < fromMs) { const tmp = fromMs; fromMs = toMs; toMs = tmp; }
     // Guarantee a usable window even for a tiny brush (agents report ~every 60s).
     const MIN_MS = 60 * 1000;
@@ -961,8 +961,10 @@ function trafficHistorySection() {
         load1: Array.isArray(sys.loadavg) ? Number(sys.loadavg[0]) || 0 : 0,
       };
     }).sort((a, b) => a.t - b.t);
-    if (!points.length) { status.textContent = 'No data in this period.'; return; }
+    if (!points.length) { onData({ state: 'empty', agentId, fromMs, toMs }); status.textContent = 'No data in this period.'; return; }
     status.textContent = `${points.length} measurements`;
+    // Feed the companion Traffic types card the same samples (no extra fetch).
+    onData({ state: 'data', agentId, fromMs, toMs, points });
     const chosen = METRIC_DEFS.filter(([k]) => histState.metrics.has(k));
     if (!chosen.length) { chartHost.replaceChildren(el('div', { class: 'empty' }, 'Select at least one type.')); return; }
     const seriesList = chosen.map(([k, label], idx) => ({ id: k, label, color: SERIES_COLORS[idx % SERIES_COLORS.length], points: points.map((p) => ({ t: p.t, y: p[k] })) }));
@@ -998,6 +1000,106 @@ function trafficHistorySection() {
   }
 
   return { node: wrap, focus };
+}
+
+// Compact aggregate companion shown beside the History panel. It derives total
+// / peak / split RX·TX from the SAME samples the history chart already fetched
+// (no extra API call) and, best-effort, lists the top traffic-type categories
+// from /api/flows/categories. Driven by the history section via update() — see
+// trafficHistorySection({ onData }).
+function trafficTypesCard() {
+  const body = el('div', { class: 'tt-body' });
+  const card = el('details', { class: 'sec tt-card', open: '' },
+    el('summary', {}, 'Traffic types ', el('span', { class: 'muted' }, '· aggregated for selected period')),
+    body);
+  let reqToken = 0; // guards against out-of-order /categories responses
+
+  const statNode = (label, value, sub) => el('div', { class: 'tt-stat' },
+    el('div', { class: 'l' }, label),
+    el('div', { class: 'v' }, value),
+    sub ? el('div', { class: 's' }, sub) : null);
+
+  // Representative sample interval (seconds): robust median of the gaps between
+  // consecutive samples (agents report ~every 60s). Used to turn bytes/s
+  // samples into a byte total for the window (Σ samples × interval).
+  function intervalSec(points) {
+    if (points.length < 2) return 60;
+    const gaps = [];
+    for (let i = 1; i < points.length; i += 1) {
+      const d = (points[i].t - points[i - 1].t) / 1000;
+      if (d > 0) gaps.push(d);
+    }
+    if (!gaps.length) return 60;
+    gaps.sort((a, b) => a - b);
+    return gaps[Math.floor(gaps.length / 2)];
+  }
+
+  // Best-effort top traffic types. Server-side classification exists
+  // (/api/flows/categories: port + ASN categories); if it is empty or fails we
+  // note that a protocol breakdown is not yet available.
+  function renderTypes(payload) {
+    const host = el('div', { class: 'tt-types' }, el('h4', {}, 'Top types'), el('div', { class: 'muted' }, 'Loading…'));
+    body.append(host);
+    const myToken = (reqToken += 1);
+    const unavailable = () => host.replaceChildren(el('h4', {}, 'Top types'), el('div', { class: 'muted' }, 'Protocol breakdown is not yet available'));
+    api(`/api/flows/categories?agentId=${encodeURIComponent(payload.agentId)}&from=${new Date(payload.fromMs).toISOString()}&to=${new Date(payload.toMs).toISOString()}`)
+      .then((data) => {
+        if (myToken !== reqToken) return; // superseded by a newer load
+        const cats = (data && data.categories) || [];
+        if (!cats.length) { unavailable(); return; }
+        const top = cats.slice(0, 5);
+        const max = Math.max(1, ...top.map((c) => c.total));
+        host.replaceChildren(el('h4', {}, 'Top types'), el('ul', {}, ...top.map((c, i) => el('li', {},
+          el('span', { class: 'sw', style: `background:${SERIES_COLORS[i % SERIES_COLORS.length]}` }),
+          el('span', { class: 'nm' }, c.label),
+          el('span', { class: 'tt-mini' }, el('span', { class: 'tt-mini-fill', style: `width:${Math.round((c.total / max) * 100)}%` })),
+          el('span', { class: 'by' }, fmtBytes(c.total))))));
+      })
+      .catch(() => { if (myToken === reqToken) unavailable(); });
+  }
+
+  // Called by the history section after every load() (Fetch / brush / focus).
+  function update(payload) {
+    reqToken += 1; // cancel any in-flight categories request
+    const state = payload && payload.state;
+    if (state !== 'data') {
+      body.replaceChildren(el('div', { class: 'empty' }, state === 'prompt' ? 'Select an agent and load data' : 'No traffic data in the selected period'));
+      return;
+    }
+    const points = payload.points || [];
+    const sec = intervalSec(points);
+    let totalRx = 0;
+    let totalTx = 0;
+    let peakRx = { y: -1, t: 0 };
+    let peakTx = { y: -1, t: 0 };
+    for (const p of points) {
+      totalRx += p.rx * sec;
+      totalTx += p.tx * sec;
+      if (p.rx > peakRx.y) peakRx = { y: p.rx, t: p.t };
+      if (p.tx > peakTx.y) peakTx = { y: p.tx, t: p.t };
+    }
+    const sum = totalRx + totalTx;
+    const rxPct = sum > 0 ? Math.round((totalRx / sum) * 100) : 0;
+    const txPct = sum > 0 ? 100 - rxPct : 0;
+
+    body.replaceChildren(
+      el('div', { class: 'tt-totals' },
+        statNode('Total RX', fmtBytes(totalRx)),
+        statNode('Total TX', fmtBytes(totalTx))),
+      el('div', { class: 'tt-split' },
+        el('div', { class: 'l' }, 'RX/TX split'),
+        el('div', { class: 'split-bar' },
+          el('span', { class: 'rx', style: `width:${rxPct}%` }),
+          el('span', { class: 'tx', style: `width:${txPct}%` })),
+        el('div', { class: 'split-legend' }, `RX ${rxPct}% · TX ${txPct}%`)),
+      el('div', { class: 'tt-peaks' },
+        statNode('Peak RX', peakRx.y >= 0 ? `${fmtBytes(peakRx.y)}/s` : '–', peakRx.y > 0 ? fmtTimeShort(peakRx.t) : null),
+        statNode('Peak TX', peakTx.y >= 0 ? `${fmtBytes(peakTx.y)}/s` : '–', peakTx.y > 0 ? fmtTimeShort(peakTx.t) : null)));
+    renderTypes(payload);
+  }
+
+  update({ state: 'prompt' });
+  return { node: card, update };
 }
 
 // Traffic-type breakdown for one agent over a period: bytes per category
@@ -1584,10 +1686,13 @@ views.overview = async () => {
     applySize();
   }
 
-  // Historical traffic explorer (date range, types, time axis, brush-to-zoom).
-  const histSection = trafficHistorySection();
-  const histDetails = el('details', { class: 'sec' }, el('summary', {}, 'History — inspect time window ', el('span', { class: 'muted' }, '· select agent + period')), histSection.node);
-  root.append(histDetails);
+  // Historical traffic explorer (date range, types, time axis, brush-to-zoom),
+  // with the Traffic types aggregate card beside it (side by side; stacks on
+  // narrow viewports). The card derives its figures from the history samples.
+  const typesCard = trafficTypesCard();
+  const histSection = trafficHistorySection({ onData: (d) => typesCard.update(d) });
+  const histDetails = el('details', { class: 'sec hist-main' }, el('summary', {}, 'History — inspect time window ', el('span', { class: 'muted' }, '· select agent + period')), histSection.node);
+  root.append(el('div', { class: 'hist-row' }, histDetails, typesCard.node));
 
   // Traffic-type breakdown (DNS, Web, Facebook, …) — opt-in, collapsed.
   const typeSection = trafficTypeSection();

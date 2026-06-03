@@ -1,140 +1,141 @@
-# Analyse-modulet
+# Analysis module
 
-Lokal, forklarlig anomali-detektion for BlueEye-serveren. Modulet kigger på de
-målinger agenterne allerede rapporterer ind, og rejser **findings** når noget
-ser unormalt ud — uden cloud, uden ML-bibliotek, kun robust statistik der kan
-forklares i klartekst.
+Local, explainable anomaly detection for the BlueEye server. The module looks at
+the measurements agents already report, and raises **findings** when something
+looks abnormal — no cloud, no ML library, only robust statistics that can be
+explained in plain text.
 
-> Designprincipper: **lokalt** (ingen data forlader serveren), **forklarligt**
-> (hver finding har en `explanation` i klartekst + `evidence`), og **kan ikke
-> vælte ingest** (analysen kører best-effort efter at målingerne er gemt).
+> Design principles: **local** (no data leaves the server), **explainable**
+> (every finding has a plain-text `explanation` + `evidence`), and **cannot
+> break ingest** (analysis runs best-effort after measurements are stored).
 
-All koden ligger under `src/analysis/` (plus en route under `src/routes/` og en
+All code lives under `src/analysis/` (plus a route under `src/routes/` and a
 WebSocket under `src/ws/`).
 
-## Dataflow
+## Data flow
 
 ```
-agent → POST /agents/results → resultsRepo.createMany (gemt)
+agent → POST /agents/results → resultsRepo.createMany (stored)
                                   └─ analysisPipeline.processResults (best-effort)
                                        ├─ extractSamples()      payload → MetricSample[]
                                        ├─ detector.evaluate()   sample → Finding | null
-                                       ├─ findingStore.save()   persistér finding
-                                       ├─ correlator.correlate()  gruppér + root-cause
+                                       ├─ findingStore.save()   persist finding
+                                       ├─ correlator.correlate()  group + root-cause
                                        │    └─ findingStore.setCorrelations()
                                        └─ publishFinding()      → dashboard-WebSocket
-findings ses i UI via:  REST  GET /api/findings   (historik)
-                        WS    /ws/dashboard         (live push)
+findings visible in UI via:  REST  GET /api/findings   (history)
+                             WS    /ws/dashboard         (live push)
 ```
 
-## Komponenter
+## Components
 
-| Fil | Ansvar |
+| File | Responsibility |
 | --- | --- |
-| `constants.js` | `Severity` (INFO/WARN/CRIT) og `FindingKind` (ANOMALY/THRESHOLD/FLATLINE/CORRELATED). |
-| `types.js` | JSDoc-typedefs for `MetricSample` og `Finding`. |
-| `baselines.js` | Rullende vinduer pr. `host\|metric\|UTC-time` med **median** + **MAD**. |
-| `detector.js` | Robust z-score mod baseline; anomali, flatline og tærskel. |
-| `ingest.js` | Mapper et resultat-payload til `MetricSample[]`. |
-| `pipeline.js` | Limer det hele sammen bag feature-flaget; kører efter hver batch. |
-| `findings.js` | `FindingStore` — persistering (genbruger serverens DB-pool). |
-| `correlator.js` | Tids-klyngning + afhængighedsgraf → likely cause + dansk hint. |
-| `config.js` | Læser `ANALYSIS_*`-miljøvariabler. |
-| `assistant.js` | Opt-in LLM-assistent (Mistral), slået fra som standard. |
-| `dependency-graph.json` | Konfigurerbar årsags→effekt-graf til korrelatoren. |
+| `constants.js` | `Severity` (INFO/WARN/CRIT) and `FindingKind` (ANOMALY/THRESHOLD/FLATLINE/CORRELATED). |
+| `types.js` | JSDoc typedefs for `MetricSample` and `Finding`. |
+| `baselines.js` | Rolling windows per `host\|metric\|UTC-hour` with **median** + **MAD**. |
+| `detector.js` | Robust z-score against baseline; anomaly, flatline and threshold. |
+| `ingest.js` | Maps a result payload to `MetricSample[]`. |
+| `pipeline.js` | Glues everything together behind the feature flag; runs after each batch. |
+| `findings.js` | `FindingStore` — persistence (reuses the server's DB pool). |
+| `correlator.js` | Time-clustering + dependency graph → likely cause + hint. |
+| `config.js` | Reads `ANALYSIS_*` environment variables. |
+| `assistant.js` | Opt-in LLM assistant (Mistral), off by default. |
+| `dependency-graph.json` | Configurable cause→effect graph for the correlator. |
 
 ### Baselines (median + MAD)
 
-For hver `${hostId}|${metric}|${bucket}` (bucket = UTC-time 0–23, så
-dag/nat-rytmer ikke blandes) holdes et rullende vindue af de seneste N værdier.
-Centrum er **medianen** og spredningen er **MAD** (Median Absolute Deviation).
-MAD ganges med `1.4826` for at svare til et standardafvig på normalfordelte
-data. Robuste mål vælges, fordi enkelte spikes ikke skal forurene baseline.
+For each `${hostId}|${metric}|${bucket}` (bucket = UTC hour 0–23, so day/night
+rhythms are not mixed) a rolling window of the most recent N values is
+maintained. The centre is the **median** and the spread is **MAD** (Median
+Absolute Deviation). MAD is multiplied by `1.4826` to correspond to one standard
+deviation on normally distributed data. Robust measures are used because
+individual spikes should not contaminate the baseline.
 
-En baseline bruges først når den har mindst `minSamples` punkter (warm-up).
-Vinduerne persisteres (fil-cache) så de overlever en genstart.
+A baseline is only used once it has at least `minSamples` points (warm-up).
+Windows are persisted (file cache) so they survive a restart.
 
-### Detektor
+### Detector
 
-`detector.evaluate(sample)` returnerer en `Finding` eller `null` og kaster
-aldrig på normale data:
+`detector.evaluate(sample)` returns a `Finding` or `null` and never throws on
+normal data:
 
-- **Warm-up:** ingen/for lille baseline → lær og returnér `null`.
-- **Flatline:** samme værdi 10 intervaller i træk → `FLATLINE` (WARN) — muligt
-  sensor-/agentstop.
-- **Anomali:** robust z-score `dev = (værdi − median) / (MAD·1.4826)`;
+- **Warm-up:** no/too-small baseline → learn and return `null`.
+- **Flatline:** same value for 10 consecutive intervals → `FLATLINE` (WARN) —
+  possible sensor/agent stop.
+- **Anomaly:** robust z-score `dev = (value − median) / (MAD·1.4826)`;
   `|dev| ≥ critSigma` → `CRIT`, `≥ warnSigma` → `WARN`.
 
-Forklaringen indeholder de faktiske tal, fx:
-`cpu på 92 afveg 5.3σ fra 7-dages baseline (41)`.
+The explanation contains the actual numbers, e.g.:
+`cpu at 92 deviated 5.3σ from 7-day baseline (41)`.
 
-### Korrelator (root-cause-hint)
+### Correlator (root-cause hint)
 
-`correlate(findings, windowMs)` klynger findings **pr. host** inden for et
-tidsvindue og udpeger en sandsynlig årsag ud fra en **konfigurerbar
-afhængighedsgraf** (`dependency-graph.json`). En kant `"A": ["B"]` betyder at A
-ligger opstrøms for B (A kan forårsage B). Den mest opstrøms-metrik i klyngen
-vælges som `likelyCause` (tidligst observeret som tie-break). Hver korreleret
-finding markeres med `correlatedWith` (id'er) og linket persisteres.
+`correlate(findings, windowMs)` clusters findings **per host** within a time
+window and identifies a likely cause from a **configurable dependency graph**
+(`dependency-graph.json`). An edge `"A": ["B"]` means A is upstream of B (A can
+cause B). The most upstream metric in the cluster is chosen as `likelyCause`
+(earliest observed as a tie-break). Each correlated finding is marked with
+`correlatedWith` (IDs) and the link is persisted.
 
-Rediger `dependency-graph.json` for at tilpasse afhængighederne — logikken
-hardcoder ingen metrik-relationer.
+Edit `dependency-graph.json` to customise the dependencies — the logic
+hard-codes no metric relationships.
 
-### AI-assistent (opt-in)
+### AI assistant (opt-in)
 
-Slået **fra** som standard. Når den er aktiveret (`ANALYSIS_ASSISTANT_ENABLED=true`
-+ API-nøgle) kan man stille et spørgsmål om en host; assistenten bygger en lille
-kontekst ud af de seneste findings (kun summary-felter — ingen rå data eller
-hemmeligheder) og spørger Mistral. Slået fra svarer endpointet `403`.
+**Off** by default. When enabled (`ANALYSIS_ASSISTANT_ENABLED=true` + API key)
+you can ask a question about a host; the assistant builds a small context from
+the most recent findings (summary fields only — no raw data or secrets) and
+queries Mistral. When disabled the endpoint returns `403`.
 
-## REST-API
+## REST API
 
-| Metode | Sti | Rolle | Beskrivelse |
+| Method | Path | Role | Description |
 | --- | --- | --- | --- |
-| `GET` | `/api/findings?hostId=&since=` | viewer+ | Listér findings (nyeste først). `400` på ugyldig `since`. |
-| `POST` | `/api/findings/:id/ack` | operator+ | Kvittér en finding. `404` hvis id er ukendt. |
-| `POST` | `/api/assistant/explain` | viewer+ | Spørg assistenten. `400` tom question, `403` slået fra, `500` provider-fejl. |
+| `GET` | `/api/findings?hostId=&since=` | viewer+ | List findings (newest first). `400` on invalid `since`. |
+| `POST` | `/api/findings/:id/ack` | operator+ | Acknowledge a finding. `404` if the ID is unknown. |
+| `POST` | `/api/assistant/explain` | viewer+ | Ask the assistant. `400` empty question, `403` disabled, `500` provider error. |
 
 ## WebSocket
 
-`/ws/dashboard` — browser-kanal til live findings, gated af bruger-JWT (token i
-`Authorization`-header eller `?token=`). Serveren pusher `{type:'finding',
-payload}` til alle forbundne dashboards. Agent-kanalen (`/ws/agent`) er adskilt
-og token-gated for agenter.
+`/ws/dashboard` — browser channel for live findings, gated by user JWT (token in
+`Authorization` header or `?token=`). The server pushes `{type:'finding',
+payload}` to all connected dashboards. The agent channel (`/ws/agent`) is
+separate and token-gated for agents.
 
 ## Dashboard
 
-Fanen **Analyse** viser findings (severity, afvigelse, forklaring, korrelation),
-lader operatører kvittere, og indeholder AI-assistent-boksen. Nye findings
-dukker op live via WebSocket og kan også hentes via REST.
+The **Analysis** tab shows findings (severity, deviation, explanation,
+correlation), lets operators acknowledge them, and contains the AI assistant
+panel. New findings appear live via WebSocket and can also be retrieved via REST.
 
-## Konfiguration
+## Configuration
 
-| Variabel | Standard | Beskrivelse |
+| Variable | Default | Description |
 | --- | --- | --- |
-| `ANALYSIS_ENABLED` | `true` | Slå hele analysen til/fra. |
-| `ANALYSIS_CRIT_SIGMA` | `4.0` | Tærskel for CRIT (sigma). |
-| `ANALYSIS_WARN_SIGMA` | `3.0` | Tærskel for WARN (sigma). |
-| `ANALYSIS_BASELINE_DAYS` | `7` | Hvor mange dage baseline dækker (vises i forklaringen). |
-| `ANALYSIS_MIN_SAMPLES` | `200` | Punkter før en baseline bruges. |
-| `ANALYSIS_BASELINE_CACHE_PATH` | `./.analysis-baselines.json` | Hvor baselines persisteres. |
-| `ANALYSIS_ASSISTANT_ENABLED` | `false` | Slå AI-assistenten til (opt-in). |
-| `ANALYSIS_ASSISTANT_API_KEY` | – | Nøgle (fallback: `MISTRAL_API_KEY`). |
+| `ANALYSIS_ENABLED` | `true` | Enable/disable the entire analysis module. |
+| `ANALYSIS_CRIT_SIGMA` | `4.0` | Threshold for CRIT (sigma). |
+| `ANALYSIS_WARN_SIGMA` | `3.0` | Threshold for WARN (sigma). |
+| `ANALYSIS_BASELINE_DAYS` | `7` | How many days the baseline covers (shown in the explanation). |
+| `ANALYSIS_MIN_SAMPLES` | `200` | Points before a baseline is used. |
+| `ANALYSIS_BASELINE_CACHE_PATH` | `./.analysis-baselines.json` | Where baselines are persisted. |
+| `ANALYSIS_ASSISTANT_ENABLED` | `false` | Enable the AI assistant (opt-in). |
+| `ANALYSIS_ASSISTANT_API_KEY` | – | Key (fallback: `MISTRAL_API_KEY`). |
 | `ANALYSIS_ASSISTANT_MODEL` | `mistral-small-latest` | Model. |
-| `ANALYSIS_ASSISTANT_URL` | Mistral chat-completions | Provider-endpoint. |
-| `ANALYSIS_ASSISTANT_MAX_FINDINGS` | `20` | Max findings i konteksten. |
-| `ANALYSIS_ASSISTANT_TIMEOUT_MS` | `20000` | Timeout på provider-kaldet. |
+| `ANALYSIS_ASSISTANT_URL` | Mistral chat-completions | Provider endpoint. |
+| `ANALYSIS_ASSISTANT_MAX_FINDINGS` | `20` | Max findings in context. |
+| `ANALYSIS_ASSISTANT_TIMEOUT_MS` | `20000` | Timeout for the provider call. |
 
-> **Runtime-redigerbart:** `ANALYSIS_ENABLED`, `ANALYSIS_CRIT_SIGMA`,
-> `ANALYSIS_WARN_SIGMA`, `ANALYSIS_BASELINE_DAYS` og `ANALYSIS_MIN_SAMPLES` kan
-> ændres af en admin under **Indstillinger → Analyse**
-> (`PUT /api/settings/analysis`). Overrides gemmes i `app_settings`, lægges oven
-> på env-defaults og genanvendes ved opstart; detektoren læser tærsklerne **pr.
-> evaluering**, så ændringer slår igennem uden genstart. AI-assistenten +
-> secrets forbliver env-styret.
+> **Runtime-editable:** `ANALYSIS_ENABLED`, `ANALYSIS_CRIT_SIGMA`,
+> `ANALYSIS_WARN_SIGMA`, `ANALYSIS_BASELINE_DAYS` and `ANALYSIS_MIN_SAMPLES` can
+> be changed by an admin under **Settings → Analysis**
+> (`PUT /api/settings/analysis`). Overrides are stored in `app_settings`, layered
+> on top of env defaults and re-applied at startup; the detector reads thresholds
+> **per evaluation**, so changes take effect without a restart. The AI assistant +
+> secrets remain env-controlled.
 
-## Test
+## Tests
 
-`node --test` (Node's indbyggede runner). Modulets tests ligger i
-`src/analysis/__tests__/` og `test/` (HTTP + WebSocket). Fejl-paths testes
-eksplicit (tomme/ugyldige input, 400/403/404/500, provider-fejl).
+`node --test` (Node's built-in runner). The module's tests live in
+`src/analysis/__tests__/` and `test/` (HTTP + WebSocket). Error paths are tested
+explicitly (empty/invalid input, 400/403/404/500, provider errors).

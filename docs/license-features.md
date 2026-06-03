@@ -33,15 +33,15 @@ Two independent gates, with **distinct** messages so operators can tell them apa
 | Module | Gate |
 | --- | --- |
 | analysis detector | runs only if `isFeatureEnabled('analysis')` **and** `ANALYSIS_ENABLED` |
-| assistant endpoint | `403` *"Funktionen er ikke inkluderet i jeres licens"* when unlicensed (checked **before** the config "slået fra" `403`) |
+| assistant endpoint | `403` *"This feature is not included in your license"* when unlicensed (checked **before** the config "disabled" `403`) |
 | alerting dispatcher | skipped (`reason: 'unlicensed'`) when alerting isn't licensed |
-| geo endpoints | `403` *"…ikke inkluderet i jeres licens"* when geo isn't licensed |
+| geo endpoints | `403` *"…not included in your license"* when geo isn't licensed |
 
 ## API
 
 `GET /license/features` → `{ analysis, assistant, alerting, geo }` booleans, so
 the dashboard can hide/grey-out modules the customer isn't licensed for (the Geo
-and Analyse tabs are hidden when their feature is off).
+and Analysis tabs are hidden when their feature is off).
 
 ## Tests
 

@@ -33,7 +33,7 @@ function createEmailChannel({ config = {}, transport = null, logger = silentLogg
     }
     if (!config.to) return { ok: false, detail: 'no recipient configured' };
 
-    const subject = `[BlueEye ${finding.severity || 'INFO'}] ${finding.metric || 'finding'} på host ${finding.hostId}`;
+    const subject = `[BlueEye ${finding.severity || 'INFO'}] ${finding.metric || 'finding'} on host ${finding.hostId}`;
     const text = [
       finding.explanation || '',
       '',
@@ -41,7 +41,7 @@ function createEmailChannel({ config = {}, transport = null, logger = silentLogg
       `Metric: ${finding.metric}`,
       `Severity: ${finding.severity}`,
       `Kind: ${finding.kind}`,
-      finding.deviation != null ? `Afvigelse: ${finding.deviation}` : null,
+      finding.deviation != null ? `Deviation: ${finding.deviation}` : null,
       group && group.hint ? `\nRoot-cause: ${group.hint}` : null,
     ].filter((x) => x != null).join('\n');
 

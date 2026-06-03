@@ -26,20 +26,20 @@ test('GET /license/features reflects the license entitlements', async () => {
 // ---- assistant: license vs config -----------------------------------------
 test('assistant returns 403 (license) when the feature is not licensed — independent of config', async () => {
   // A fully working assistant, but the license does not include it.
-  const assistant = makeAssistant({ explain: async () => ({ answer: 'hej', model: 'm', usedFindings: 0 }) });
+  const assistant = makeAssistant({ explain: async () => ({ answer: 'hello', model: 'm', usedFindings: 0 }) });
   const app = makeApp({ assistant, featureGate: gateMissing('assistant') });
-  const res = await request(app).post('/api/assistant/explain').set('Authorization', viewer()).send({ question: 'hvad sker der?' });
+  const res = await request(app).post('/api/assistant/explain').set('Authorization', viewer()).send({ question: 'what is happening?' });
   assert.equal(res.status, 403);
   assert.equal(res.body.reason, 'license');
-  assert.match(res.body.error, /licens/i);
+  assert.match(res.body.error, /license/i);
 });
 
 test('assistant licensed but switched off in config -> 403 with the "off" message, not a license error', async () => {
   // Default featureGate = allow-all (licensed); default assistant = disabled in config.
-  const res = await request(makeApp()).post('/api/assistant/explain').set('Authorization', viewer()).send({ question: 'hvad sker der?' });
+  const res = await request(makeApp()).post('/api/assistant/explain').set('Authorization', viewer()).send({ question: 'what is happening?' });
   assert.equal(res.status, 403);
   assert.notEqual(res.body.reason, 'license');
-  assert.match(res.body.error, /slået fra/i);
+  assert.match(res.body.error, /disabled/i);
 });
 
 // ---- geo --------------------------------------------------------------------

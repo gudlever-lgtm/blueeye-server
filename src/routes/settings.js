@@ -6,7 +6,7 @@ const { requireAuth, requireRole } = require('../auth/middleware');
 const { ROLES } = require('../auth/roles');
 
 // Settings overview API (admin). Aggregates the effective configuration for the
-// dashboard's Indstillinger page. Most of it is read-only (env-driven); only the
+// dashboard's Settings page. Most of it is read-only (env-driven); only the
 // map tile source is editable at runtime. Secrets (API keys, passwords, webhook
 // secrets) are never included.
 function createSettingsRouter({ settingsService, featureGate, dispatcher, analysisConfig, retentionConfig }) {

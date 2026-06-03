@@ -74,7 +74,7 @@ test('a flatline yields a FLATLINE finding (WARN)', () => {
   assert.ok(f);
   assert.equal(f.kind, FindingKind.FLATLINE);
   assert.equal(f.severity, Severity.WARN);
-  assert.match(f.explanation, /sensor- eller agentstop/);
+  assert.match(f.explanation, /sensor or agent stop/);
 });
 
 test('explanation contains the actual numbers, not placeholders', () => {

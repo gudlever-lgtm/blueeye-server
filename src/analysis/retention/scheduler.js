@@ -12,7 +12,7 @@ function createRetentionScheduler({ rollup, purge, config, logger = silentLogger
   const everyMs = intervalMs || (config.intervalHours || 24) * 60 * 60 * 1000;
 
   async function runOnce() {
-    if (!config.enabled) return null; // honour a runtime disable (Indstillinger → Retention)
+    if (!config.enabled) return null; // honour a runtime disable (Settings → Retention)
     if (running) { logger.warn('retention: previous run still in progress — skipping'); return null; }
     running = true;
     try {

@@ -1,467 +1,470 @@
 # blueeye-server
 
-On-prem, single-tenant API-server til BlueEye. Bygget på **Node.js + Express**
-med **MySQL** som datalager. Kører fuldt ud på egen infrastruktur — ingen
-ekstern SaaS, ingen telemetri.
+On-prem, single-tenant API server for BlueEye. Built on **Node.js + Express**
+with **MySQL** as the data store. Runs entirely on your own infrastructure —
+no external SaaS, no telemetry.
 
-## Afhængigheder
+## Dependencies
 
-Kun open source-komponenter med tilladende licenser (MIT/BSD):
+Open source components with permissive licences (MIT/BSD) only:
 
-| Pakke         | Licens | Rolle                          |
-| ------------- | ------ | ------------------------------ |
-| express       | MIT    | HTTP-framework / routing       |
-| mysql2        | MIT    | MySQL-driver (pool, promises)  |
-| jsonwebtoken  | MIT    | Udsted/verificér JWT           |
-| bcryptjs      | MIT    | Password-hashing (ren JS)      |
-| ws            | MIT    | WebSocket (agent live-kanal)   |
-| dotenv        | BSD-2  | Indlæsning af `.env`           |
-| supertest     | MIT    | HTTP-tests (kun `devDeps`)     |
+| Package       | Licence | Role                           |
+| ------------- | ------- | ------------------------------ |
+| express       | MIT     | HTTP framework / routing       |
+| mysql2        | MIT     | MySQL driver (pool, promises)  |
+| jsonwebtoken  | MIT     | Issue/verify JWT               |
+| bcryptjs      | MIT     | Password hashing (pure JS)     |
+| ws            | MIT     | WebSocket (agent live channel) |
+| dotenv        | BSD-2   | Load `.env`                    |
+| supertest     | MIT     | HTTP tests (`devDeps` only)    |
 
-`bcryptjs` er valgt frem for native `bcrypt`/`argon2`, fordi den er ren
-JavaScript og dermed ikke kræver et build-trin — nemt at deploye on-prem på
-tværs af hosts. Hashing er isoleret i [`src/auth/password.js`](src/auth/password.js),
-så algoritmen kan udskiftes uden at røre kaldere.
+`bcryptjs` is chosen over native `bcrypt`/`argon2` because it is pure
+JavaScript and therefore requires no build step — easy to deploy on-prem across
+hosts. Hashing is isolated in [`src/auth/password.js`](src/auth/password.js)
+so the algorithm can be swapped without touching callers.
 
-Testkørsel bruger Node's indbyggede test runner (`node --test`) — ingen ekstra
-test-framework nødvendig.
+Tests use Node's built-in test runner (`node --test`) — no extra test framework
+needed.
 
-## Krav
+## Requirements
 
-- Node.js >= 20 (udviklet og testet på Node 22)
-- En MySQL-server (8.x anbefales)
+- Node.js >= 20 (developed and tested on Node 22)
+- A MySQL server (8.x recommended)
 
-## Kom i gang
+## Getting started
 
 ```bash
-# 1) Installér afhængigheder
+# 1) Install dependencies
 npm install
 
-# 2) Opret konfiguration og ret værdierne til
+# 2) Create the configuration and fill in the values
 cp .env.example .env
 
-# 3) Opret databasen i MySQL (engangsopgave)
+# 3) Create the database in MySQL (one-time task)
 #    CREATE DATABASE blueeye CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
-# 4) Kør migrationer (opretter tabeller)
+# 4) Run migrations (creates tables)
 npm run migrate
 
-# 5) Start serveren
-npm start          # produktion
-npm run dev        # udvikling, genstarter ved filændringer
+# 5) Start the server
+npm start          # production
+npm run dev        # development, restarts on file changes
 ```
 
-Serveren lytter som standard på port `3000` (kan ændres med `PORT`).
+The server listens on port `3000` by default (can be changed with `PORT`).
 
-## Konfiguration
+## Configuration
 
-Al konfiguration sker via miljøvariabler (se [`.env.example`](.env.example)):
+All configuration is done via environment variables (see [`.env.example`](.env.example)):
 
-| Variabel              | Standard    | Beskrivelse                       |
-| --------------------- | ----------- | --------------------------------- |
-| `NODE_ENV`            | development | Kørselsmiljø                      |
-| `PORT`                | 3000        | HTTP-port                         |
-| `DB_HOST`             | 127.0.0.1   | MySQL-host                        |
-| `DB_PORT`             | 3306        | MySQL-port                        |
-| `DB_USER`             | blueeye     | DB-bruger                         |
-| `DB_PASSWORD`         | (tom)       | DB-adgangskode                    |
-| `DB_NAME`             | blueeye     | Databasenavn                      |
-| `DB_CONNECTION_LIMIT` | 10          | Maks. antal forbindelser i pool   |
-| `JWT_SECRET`          | (dev-værdi) | Nøgle til at signere JWT          |
-| `JWT_EXPIRES_IN`      | 12h         | JWT-levetid                       |
-| `JWT_ISSUER`          | blueeye-server | `iss`-claim på tokens          |
-| `BCRYPT_ROUNDS`       | 12          | bcrypt cost-faktor                |
-| `SEED_ADMIN_EMAIL`    | admin@blueeye.local | Email på den seedede admin |
-| `SEED_ADMIN_PASSWORD` | (tom)       | Adgangskode; genereres hvis tom   |
-| `ENROLLMENT_CODE_TTL_MINUTES` | 60  | Standard-levetid for enrollment-koder |
-| `WS_AGENT_PATH`       | /ws/agent   | Sti for agent-WebSocket           |
-| `WS_HEARTBEAT_MS`     | 30000       | Heartbeat-interval (ping) i ms    |
+| Variable              | Default     | Description                            |
+| --------------------- | ----------- | -------------------------------------- |
+| `NODE_ENV`            | development | Runtime environment                    |
+| `PORT`                | 3000        | HTTP port                              |
+| `DB_HOST`             | 127.0.0.1   | MySQL host                             |
+| `DB_PORT`             | 3306        | MySQL port                             |
+| `DB_USER`             | blueeye     | DB user                                |
+| `DB_PASSWORD`         | (empty)     | DB password                            |
+| `DB_NAME`             | blueeye     | Database name                          |
+| `DB_CONNECTION_LIMIT` | 10          | Max connections in pool                |
+| `JWT_SECRET`          | (dev value) | Key for signing JWTs                   |
+| `JWT_EXPIRES_IN`      | 12h         | JWT lifetime                           |
+| `JWT_ISSUER`          | blueeye-server | `iss` claim on tokens              |
+| `BCRYPT_ROUNDS`       | 12          | bcrypt cost factor                     |
+| `SEED_ADMIN_EMAIL`    | admin@blueeye.local | Email of the seeded admin    |
+| `SEED_ADMIN_PASSWORD` | (empty)     | Password; generated if empty           |
+| `ENROLLMENT_CODE_TTL_MINUTES` | 60  | Default lifetime for enrollment codes |
+| `WS_AGENT_PATH`       | /ws/agent   | Path for the agent WebSocket           |
+| `WS_HEARTBEAT_MS`     | 30000       | Heartbeat interval (ping) in ms        |
 
-> I produktion (`NODE_ENV=production`) nægter serveren at starte, hvis
-> `JWT_SECRET` ikke er ændret fra dev-standardværdien.
+> In production (`NODE_ENV=production`) the server refuses to start if
+> `JWT_SECRET` has not been changed from the dev default.
 
 ## Database
 
-- [`schema.sql`](schema.sql) — komplet schema-snapshot. Kan indlæses direkte i
-  en frisk database: `mysql -u <bruger> -p <db> < schema.sql`.
-- [`migrations/`](migrations) — nummererede SQL-migrationer, der køres i
-  rækkefølge. `migrations/` er kilden til sandhed for inkrementelle ændringer.
-- [`src/migrate.js`](src/migrate.js) — simpel migrationskørsel. Holder styr på
-  allerede kørte migrationer i tabellen `schema_migrations`, så `npm run migrate`
-  er sikker at køre gentagne gange. Tilføj en ny migration ved at lægge en fil
-  `NNN_beskrivelse.sql` i `migrations/`. Efter migrationerne **seedes en
-  admin-bruger**, hvis ingen admin findes (se nedenfor).
+- [`schema.sql`](schema.sql) — complete schema snapshot. Can be loaded directly
+  into a fresh database: `mysql -u <user> -p <db> < schema.sql`.
+- [`migrations/`](migrations) — numbered SQL migrations, run in order.
+  `migrations/` is the source of truth for incremental changes.
+- [`src/migrate.js`](src/migrate.js) — simple migration runner. Tracks already-run
+  migrations in the `schema_migrations` table, so `npm run migrate` is safe to run
+  repeatedly. Add a new migration by placing a file `NNN_description.sql` in
+  `migrations/`. After the migrations an **admin user is seeded** if none exists
+  (see below).
 
 ### `locations`
 
-| Kolonne       | Type            | Noter                                  |
+| Column        | Type            | Notes                                  |
 | ------------- | --------------- | -------------------------------------- |
 | `id`          | INT UNSIGNED PK | Auto-increment                         |
-| `name`        | VARCHAR(255)    | Påkrævet, fx `"Aarhus – Hovedkontor"`  |
-| `description` | TEXT            | Valgfri (nullable)                     |
-| `created_at`  | TIMESTAMP       | Sættes automatisk                      |
-| `updated_at`  | TIMESTAMP       | Opdateres automatisk ved ændring       |
+| `name`        | VARCHAR(255)    | Required, e.g. `"Aarhus – Head Office"` |
+| `description` | TEXT            | Optional (nullable)                    |
+| `created_at`  | TIMESTAMP       | Set automatically                      |
+| `updated_at`  | TIMESTAMP       | Updated automatically on change        |
 
 ### `users`
 
-| Kolonne         | Type            | Noter                                   |
+| Column          | Type            | Notes                                   |
 | --------------- | --------------- | --------------------------------------- |
 | `id`            | INT UNSIGNED PK | Auto-increment                          |
-| `email`         | VARCHAR(255)    | Unik                                    |
-| `password_hash` | VARCHAR(255)    | bcrypt-hash (aldrig klartekst)          |
+| `email`         | VARCHAR(255)    | Unique                                  |
+| `password_hash` | VARCHAR(255)    | bcrypt hash (never plaintext)           |
 | `role`          | ENUM            | `admin` / `operator` / `viewer`         |
-| `created_at`    | TIMESTAMP       | Sættes automatisk                       |
-| `updated_at`    | TIMESTAMP       | Opdateres automatisk ved ændring        |
+| `created_at`    | TIMESTAMP       | Set automatically                       |
+| `updated_at`    | TIMESTAMP       | Updated automatically on change         |
 
-**Seed af admin:** Ved migrationskørsel oprettes én admin-bruger, hvis der ikke
-allerede findes en. Email tages fra `SEED_ADMIN_EMAIL`. Er `SEED_ADMIN_PASSWORD`
-sat, bruges den; ellers genereres en stærk adgangskode, som printes **én gang**
-til konsollen — gem den med det samme.
+**Admin seed:** When migrations run, one admin user is created if none exists.
+Email is taken from `SEED_ADMIN_EMAIL`. If `SEED_ADMIN_PASSWORD` is set it is
+used; otherwise a strong password is generated and printed **once** to the
+console — save it immediately.
 
 ### `agents`
 
-Felterne er delt i to grupper: **agent-rapporterede** (skrives af agenten selv
-ved enrollment/heartbeat) og **server-styrede** (sættes af operatører/admins via
-API'et). `PUT /agents/:id` rører kun de server-styrede felter.
+Fields are split into two groups: **agent-reported** (written by the agent
+itself at enrollment/heartbeat) and **server-managed** (set by operators/admins
+via the API). `PUT /agents/:id` only touches the server-managed fields.
 
-| Kolonne         | Gruppe          | Type            | Noter                                   |
+| Column          | Group           | Type            | Notes                                   |
 | --------------- | --------------- | --------------- | --------------------------------------- |
 | `id`            | —               | INT UNSIGNED PK | Auto-increment                          |
-| `hostname`      | agent-rapport.  | VARCHAR(255)    | Påkrævet                                |
-| `platform`      | agent-rapport.  | VARCHAR(64)     | fx `linux`, `win32`                     |
-| `arch`          | agent-rapport.  | VARCHAR(32)     | fx `x64`, `arm64`                       |
-| `last_seen`     | agent-rapport.  | DATETIME        | Nullable                                |
-| `status`        | agent-rapport.  | ENUM            | `online` / `offline` (default `offline`)|
-| `location_id`   | server-styret   | INT UNSIGNED FK | → `locations(id)` `ON DELETE SET NULL`  |
-| `display_name`  | server-styret   | VARCHAR(255)    | Nullable                                |
-| `notes`         | server-styret   | TEXT            | Nullable                                |
-| `meta`          | server-styret   | JSON            | Nullable                                |
-| `created_at`    | —               | TIMESTAMP       | Sættes automatisk                       |
-| `updated_at`    | —               | TIMESTAMP       | Opdateres automatisk ved ændring        |
+| `hostname`      | agent-reported  | VARCHAR(255)    | Required                                |
+| `platform`      | agent-reported  | VARCHAR(64)     | e.g. `linux`, `win32`                   |
+| `arch`          | agent-reported  | VARCHAR(32)     | e.g. `x64`, `arm64`                     |
+| `last_seen`     | agent-reported  | DATETIME        | Nullable                                |
+| `status`        | agent-reported  | ENUM            | `online` / `offline` (default `offline`)|
+| `location_id`   | server-managed  | INT UNSIGNED FK | → `locations(id)` `ON DELETE SET NULL`  |
+| `display_name`  | server-managed  | VARCHAR(255)    | Nullable                                |
+| `notes`         | server-managed  | TEXT            | Nullable                                |
+| `meta`          | server-managed  | JSON            | Nullable                                |
+| `created_at`    | —               | TIMESTAMP       | Set automatically                       |
+| `updated_at`    | —               | TIMESTAMP       | Updated automatically on change         |
 
-Selve oprettelsen af agents sker via **enrollment** (se [Enrollment](#enrollment))
-— der er bevidst ingen manuel `POST /agents`.
+Agents are created exclusively via **enrollment** (see [Enrollment](#enrollment))
+— there is deliberately no manual `POST /agents`.
 
 ### `enrollment_codes`
 
-Engangskoder til at enrolle nye agents. Selve `code` er tilfældig og unik og
-returneres kun til operatøren **én gang** ved oprettelse — listen viser den aldrig.
+One-time codes for enrolling new agents. The `code` itself is random and unique
+and is returned to the operator **once** at creation — the list never shows it.
 
-| Kolonne       | Type            | Noter                                   |
+| Column        | Type            | Notes                                   |
 | ------------- | --------------- | --------------------------------------- |
 | `id`          | INT UNSIGNED PK | Auto-increment                          |
-| `code`        | VARCHAR(64)     | Unik, tilfældig                         |
+| `code`        | VARCHAR(64)     | Unique, random                          |
 | `location_id` | INT UNSIGNED FK | Nullable → `locations(id)` `SET NULL`   |
 | `created_by`  | INT UNSIGNED FK | → `users(id)`                           |
-| `expires_at`  | DATETIME        | Udløbstidspunkt                         |
-| `used_at`     | DATETIME        | Nullable; sættes når koden bruges       |
-| `created_at`  | TIMESTAMP       | Sættes automatisk                       |
+| `expires_at`  | DATETIME        | Expiry timestamp                        |
+| `used_at`     | DATETIME        | Nullable; set when the code is redeemed |
+| `created_at`  | TIMESTAMP       | Set automatically                       |
 
 ### `agent_tokens`
 
-Opaque agent-tokens. **Kun SHA-256-hashen gemmes** — aldrig selve tokenet.
+Opaque agent tokens. **Only the SHA-256 hash is stored** — never the token itself.
 
-| Kolonne        | Type            | Noter                                   |
-| -------------- | --------------- | --------------------------------------- |
-| `id`           | INT UNSIGNED PK | Auto-increment                          |
+| Column         | Type            | Notes                                       |
+| -------------- | --------------- | ------------------------------------------- |
+| `id`           | INT UNSIGNED PK | Auto-increment                              |
 | `agent_id`     | INT UNSIGNED FK | Nullable → `agents(id)` `ON DELETE CASCADE` |
-| `token_hash`   | VARCHAR(64)     | Unik (SHA-256 hex)                      |
-| `created_at`   | TIMESTAMP       | Sættes automatisk                       |
-| `last_used_at` | DATETIME        | Nullable                                |
-| `revoked_at`   | DATETIME        | Nullable                                |
+| `token_hash`   | VARCHAR(64)     | Unique (SHA-256 hex)                        |
+| `created_at`   | TIMESTAMP       | Set automatically                           |
+| `last_used_at` | DATETIME        | Nullable                                    |
+| `revoked_at`   | DATETIME        | Nullable                                    |
 
 ### `results`
 
-Testresultater rapporteret af agents (via REST, agent-token-autentificeret).
+Test results reported by agents (via REST, agent-token-authenticated).
 
-| Kolonne      | Type            | Noter                                   |
+| Column       | Type            | Notes                                   |
 | ------------ | --------------- | --------------------------------------- |
 | `id`         | INT UNSIGNED PK | Auto-increment                          |
 | `agent_id`   | INT UNSIGNED FK | → `agents(id)` `ON DELETE CASCADE`      |
-| `payload`    | JSON            | Selve resultatet                        |
-| `created_at` | TIMESTAMP       | Sættes automatisk                       |
+| `payload`    | JSON            | The result itself                       |
+| `created_at` | TIMESTAMP       | Set automatically                       |
 
 ## API
 
-De fleste endpoints kræver et bruger-JWT i `Authorization: Bearer <token>` og
-adgang afgøres af rollen (se [Autorisation](#autorisation-rbac)). Undtagelser:
-`/health`, `/auth/login` og `/agents/enroll` er åbne, mens `/agents/results` og
-WebSocket-kanalen bruger et **agent-token** (ikke et JWT) — se
-[Agent-kommunikation](#agent-kommunikation).
+Most endpoints require a user JWT in `Authorization: Bearer <token>` and
+access is determined by role (see [Authorisation](#authorisation-rbac)).
+Exceptions: `/health`, `/auth/login` and `/agents/enroll` are open, while
+`/agents/results` and the WebSocket channel use an **agent token** (not a JWT)
+— see [Agent communication](#agent-communication).
 
-| Metode | Sti              | Beskrivelse                       | Rolle              | Svar                       |
+| Method | Path             | Description                       | Role               | Response                   |
 | ------ | ---------------- | --------------------------------- | ------------------ | -------------------------- |
-| GET    | `/health`        | Liveness — tjekker DB-forbindelse | (åben)             | `200` (DB oppe) / `503`    |
-| POST   | `/auth/login`    | Log ind, få et JWT                | (åben)             | `200` + token / `401`      |
-| GET    | `/locations`     | Hent alle locations               | viewer+            | `200` med array            |
-| POST   | `/locations`     | Opret en location                 | operator+          | `201` / `400`              |
-| PUT    | `/locations/:id` | Opdatér en location               | operator+          | `200` / `404` / `400`      |
-| DELETE | `/locations/:id` | Slet en location                  | admin              | `204` / `404` / `400`      |
-| GET    | `/users`         | Hent alle brugere                 | admin              | `200` med array            |
-| POST   | `/users`         | Opret bruger (hasher password)    | admin              | `201` / `400` / `409`      |
-| PUT    | `/users/:id`     | Opdatér rolle (+ valgfri reset)   | admin              | `200` / `404` / `400` / `409` |
-| DELETE | `/users/:id`     | Slet bruger (ej sidste admin)     | admin              | `204` / `404` / `409`      |
-| GET    | `/agents`        | Hent alle agents (join location)  | viewer+            | `200` med array            |
-| GET    | `/agents/:id`    | Hent én agent                     | viewer+            | `200` / `404` / `400`      |
-| PUT    | `/agents/:id`    | Opdatér KUN server-styrede felter | operator+          | `200` / `404` / `400`      |
-| DELETE | `/agents/:id`    | Slet en agent                     | admin              | `204` / `404` / `400`      |
-| POST   | `/agents/enroll` | Enroll agent med kode             | (åben)             | `201` / `400` / `401` / `410` |
-| POST   | `/enrollment-codes` | Generér engangskode            | operator+          | `201` (kode én gang) / `400` |
-| GET    | `/enrollment-codes` | Liste m. status (uden kode)    | operator+          | `200` med array            |
-| DELETE | `/enrollment-codes/:id` | Slet en kode               | admin              | `204` / `404` / `400`      |
-| POST   | `/agents/results` | Indsend testresultater           | **agent-token**    | `201` / `400` / `401`      |
-| GET    | `/agents/:id/results` | Hent en agents resultater    | viewer+            | `200` / `404` / `400`      |
-| GET    | `/license/status` | Lokal licensstatus               | viewer+            | `200`                      |
-| GET    | `/api/findings`  | Listér analyse-findings           | viewer+            | `200` / `400` (ugyldig since) |
-| POST   | `/api/findings/:id/ack` | Kvittér en finding         | operator+          | `200` / `404`              |
-| POST   | `/api/assistant/explain` | Spørg AI-assistenten (opt-in) | viewer+        | `200` / `400` / `403` / `500` |
-| GET    | `/api/geo/config` | Kort-tile-kilde til frontend     | viewer+            | `200`                      |
-| GET    | `/api/geo/overview` | Interne hosts + eksterne destinationer | viewer+      | `200` / `400`              |
-| GET    | `/api/geo/select/findings` | Findings for valgt land/ASN | viewer+          | `200` / `400` / `404`      |
-| GET    | `/api/geo/select/flows` | Flow-detaljer for valgt land/ASN | viewer+        | `200` / `400` / `404`      |
-| GET    | `/api/alerting/config` | Aktive alarm-kanaler + regler   | viewer+            | `200`                      |
-| POST   | `/api/alerting/test` | Send test-finding til en kanal    | operator+          | `200` / `400` / `404`      |
-| GET    | `/license/features` | Hvilke moduler licensen tillader | viewer+            | `200`                      |
-| GET    | `/api/export/:resource` | CSV/JSON-eksport (`?format=csv\|json`) | viewer+      | `200` / `400` / `403` / `404` |
-| WS     | `/ws/agent`      | Live-kanal (status/kommandoer)    | **agent-token**    | upgrade / hård luk         |
-| WS     | `/ws/dashboard`  | Live findings til dashboardet     | viewer+ (JWT)      | upgrade / hård luk         |
+| GET    | `/health`        | Liveness — checks DB connection   | (open)             | `200` (DB up) / `503`      |
+| POST   | `/auth/login`    | Log in, receive a JWT             | (open)             | `200` + token / `401`      |
+| GET    | `/locations`     | Get all locations                 | viewer+            | `200` with array           |
+| POST   | `/locations`     | Create a location                 | operator+          | `201` / `400`              |
+| PUT    | `/locations/:id` | Update a location                 | operator+          | `200` / `404` / `400`      |
+| DELETE | `/locations/:id` | Delete a location                 | admin              | `204` / `404` / `400`      |
+| GET    | `/users`         | Get all users                     | admin              | `200` with array           |
+| POST   | `/users`         | Create user (hashes password)     | admin              | `201` / `400` / `409`      |
+| PUT    | `/users/:id`     | Update role (+ optional reset)    | admin              | `200` / `404` / `400` / `409` |
+| DELETE | `/users/:id`     | Delete user (not last admin)      | admin              | `204` / `404` / `409`      |
+| GET    | `/agents`        | Get all agents (join location)    | viewer+            | `200` with array           |
+| GET    | `/agents/:id`    | Get one agent                     | viewer+            | `200` / `404` / `400`      |
+| PUT    | `/agents/:id`    | Update ONLY server-managed fields | operator+          | `200` / `404` / `400`      |
+| DELETE | `/agents/:id`    | Delete an agent                   | admin              | `204` / `404` / `400`      |
+| POST   | `/agents/enroll` | Enroll agent with code            | (open)             | `201` / `400` / `401` / `410` |
+| POST   | `/enrollment-codes` | Generate a one-time code      | operator+          | `201` (code once) / `400`  |
+| GET    | `/enrollment-codes` | List with status (no code)    | operator+          | `200` with array           |
+| DELETE | `/enrollment-codes/:id` | Delete a code             | admin              | `204` / `404` / `400`      |
+| POST   | `/agents/results` | Submit test results             | **agent-token**    | `201` / `400` / `401`      |
+| GET    | `/agents/:id/results` | Get an agent's results      | viewer+            | `200` / `404` / `400`      |
+| GET    | `/license/status` | Local license status            | viewer+            | `200`                      |
+| GET    | `/api/findings`  | List analysis findings            | viewer+            | `200` / `400` (invalid since) |
+| POST   | `/api/findings/:id/ack` | Acknowledge a finding    | operator+          | `200` / `404`              |
+| POST   | `/api/assistant/explain` | Ask the AI assistant (opt-in) | viewer+       | `200` / `400` / `403` / `500` |
+| GET    | `/api/geo/config` | Map tile source for frontend    | viewer+            | `200`                      |
+| GET    | `/api/geo/overview` | Internal hosts + external destinations | viewer+    | `200` / `400`              |
+| GET    | `/api/geo/select/findings` | Findings for selected country/ASN | viewer+     | `200` / `400` / `404`      |
+| GET    | `/api/geo/select/flows` | Flow details for selected country/ASN | viewer+   | `200` / `400` / `404`      |
+| GET    | `/api/alerting/config` | Active alert channels + rules | viewer+            | `200`                      |
+| POST   | `/api/alerting/test` | Send a test finding to a channel | operator+         | `200` / `400` / `404`      |
+| GET    | `/license/features` | Which modules the license permits | viewer+           | `200`                      |
+| GET    | `/api/export/:resource` | CSV/JSON export (`?format=csv\|json`) | viewer+    | `200` / `400` / `403` / `404` |
+| WS     | `/ws/agent`      | Live channel (status/commands)    | **agent-token**    | upgrade / hard close       |
+| WS     | `/ws/dashboard`  | Live findings for the dashboard   | viewer+ (JWT)      | upgrade / hard close       |
 
-("viewer+" = viewer eller højere; "operator+" = operator eller admin.
-"agent-token" = opaque agent-token, ikke bruger-JWT.)
+("viewer+" = viewer or higher; "operator+" = operator or admin.
+"agent-token" = opaque agent token, not a user JWT.)
 
-CSV/JSON-eksport: `GET /api/export/<resource>?format=csv|json` for `findings`,
-`geo` (licens-gated), `agents`, `locations` og `traffic` (kræver `agentId`).
-Findings/geo respekterer samme `hostId`/`since`-filtre som deres API'er.
-Dashboardet har "Eksport: CSV / JSON"-knapper på Analyse- og Geo-fanerne.
+CSV/JSON export: `GET /api/export/<resource>?format=csv|json` for `findings`,
+`geo` (license-gated), `agents`, `locations` and `traffic` (requires `agentId`).
+Findings/geo respect the same `hostId`/`since` filters as their APIs.
+The dashboard has "Export: CSV / JSON" buttons on the Analysis and Geo tabs.
 
-Analyse-modulet (lokal anomali-detektion, korrelator og opt-in AI-assistent) er
-beskrevet i [`docs/analysis.md`](docs/analysis.md). Geo-laget (flow-records,
-GeoIP/ASN-berigelse og kort-API) er beskrevet i [`docs/geo.md`](docs/geo.md).
-Alerting (findings → email/webhook/syslog) er beskrevet i
-[`docs/alerting.md`](docs/alerting.md). Retention + rollup (down-sampling,
-purge, cross-læsning af rå + aggregeret data) er beskrevet i
-[`docs/retention.md`](docs/retention.md). Licens-styring af modulerne
-(features i den signerede licens) er beskrevet i
+The analysis module (local anomaly detection, correlator and opt-in AI assistant)
+is described in [`docs/analysis.md`](docs/analysis.md). The geo layer (flow
+records, GeoIP/ASN enrichment and map API) is described in
+[`docs/geo.md`](docs/geo.md). Alerting (findings → email/webhook/syslog) is
+described in [`docs/alerting.md`](docs/alerting.md). Retention + rollup
+(down-sampling, purge, cross-reading of raw + aggregated data) is described in
+[`docs/retention.md`](docs/retention.md). License-controlled feature gating
+(features in the signed license) is described in
 [`docs/license-features.md`](docs/license-features.md).
 
-### Eksempler
+### Examples
 
 ```bash
-# Log ind og gem token
+# Log in and save token
 TOKEN=$(curl -s -X POST http://localhost:3000/auth/login \
   -H 'Content-Type: application/json' \
   -d '{"email":"admin@blueeye.local","password":"<password>"}' | jq -r .token)
 
-# Hent alle locations (kræver mindst viewer)
+# Get all locations (requires at least viewer)
 curl http://localhost:3000/locations -H "Authorization: Bearer $TOKEN"
 
-# Opret en location (kræver operator+)
+# Create a location (requires operator+)
 curl -X POST http://localhost:3000/locations \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"name":"Aarhus – Hovedkontor","description":"Hovedsæde"}'
+  -d '{"name":"Aarhus – Head Office","description":"Headquarters"}'
 
-# Slet en location (kræver admin)
+# Delete a location (requires admin)
 curl -X DELETE http://localhost:3000/locations/1 -H "Authorization: Bearer $TOKEN"
 
-# Opret en bruger (kræver admin)
+# Create a user (requires admin)
 curl -X POST http://localhost:3000/users \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"email":"ops@blueeye.local","password":"et-langt-password","role":"operator"}'
+  -d '{"email":"ops@blueeye.local","password":"a-long-password","role":"operator"}'
 ```
 
-### Fejlsvar
+### Error responses
 
-Fejl returneres som JSON. Statuskoder:
+Errors are returned as JSON. Status codes:
 
-- `400` — valideringsfejl eller ugyldigt `:id`
-- `401` — manglende/ugyldigt/udløbet token, eller forkerte login-oplysninger
-- `403` — gyldigt token, men rollen har ikke adgang
-- `404` — ukendt sti eller ressource findes ikke
-- `409` — konflikt (fx dublet-email, eller forsøg på at slette sidste admin)
-- `500` — uventet serverfejl (fx databasen er nede under en forespørgsel)
-- `503` — `/health` når databasen ikke svarer
+- `400` — validation error or invalid `:id`
+- `401` — missing/invalid/expired token, or wrong login credentials
+- `403` — valid token, but the role does not have access
+- `404` — unknown path or resource not found
+- `409` — conflict (e.g. duplicate email, or attempt to delete the last admin)
+- `500` — unexpected server error (e.g. database is down during a request)
+- `503` — `/health` when the database is not responding
 
-## Autorisation (RBAC)
+## Authorisation (RBAC)
 
-Login via `POST /auth/login` returnerer et JWT, der bæres i
-`Authorization: Bearer <token>`. To middleware håndhæver adgang
+Login via `POST /auth/login` returns a JWT, carried in
+`Authorization: Bearer <token>`. Two middleware functions enforce access
 ([`src/auth/middleware.js`](src/auth/middleware.js)):
 
-- `requireAuth` — kræver et gyldigt JWT, ellers `401`.
-- `requireRole(...roller)` — kræver at brugerens rolle er blandt de angivne,
-  ellers `403`.
+- `requireAuth` — requires a valid JWT, otherwise `401`.
+- `requireRole(...roles)` — requires the user's role to be among those listed,
+  otherwise `403`.
 
-Tre roller med stigende rettigheder:
+Three roles with increasing permissions:
 
-| Handling                              | viewer | operator | admin |
-| ------------------------------------- | :----: | :------: | :---: |
-| Læse locations (GET)                  |   ✓    |    ✓     |   ✓   |
-| Oprette/redigere locations (POST/PUT) |   –    |    ✓     |   ✓   |
-| Slette locations (DELETE)             |   –    |    –     |   ✓   |
-| Læse agents (GET)                     |   ✓    |    ✓     |   ✓   |
-| Redigere agent-metadata (PUT)         |   –    |    ✓     |   ✓   |
-| Slette agents (DELETE)                |   –    |    –     |   ✓   |
-| Brugeradministration (`/users`)       |   –    |    –     |   ✓   |
-| Oprette/liste enrollment-koder        |   –    |    ✓     |   ✓   |
-| Slette enrollment-koder               |   –    |    –     |   ✓   |
+| Action                                  | viewer | operator | admin |
+| --------------------------------------- | :----: | :------: | :---: |
+| Read locations (GET)                    |   ✓    |    ✓     |   ✓   |
+| Create/edit locations (POST/PUT)        |   –    |    ✓     |   ✓   |
+| Delete locations (DELETE)               |   –    |    –     |   ✓   |
+| Read agents (GET)                       |   ✓    |    ✓     |   ✓   |
+| Edit agent metadata (PUT)               |   –    |    ✓     |   ✓   |
+| Delete agents (DELETE)                  |   –    |    –     |   ✓   |
+| User administration (`/users`)          |   –    |    –     |   ✓   |
+| Create/list enrollment codes            |   –    |    ✓     |   ✓   |
+| Delete enrollment codes                 |   –    |    –     |   ✓   |
 
-JWT signeres med HS256 og `JWT_SECRET`; algoritmen pinnes ved verificering for
-at undgå algorithm-confusion. Adgangskoder hashes med bcrypt og gemmes aldrig i
-klartekst.
+JWTs are signed with HS256 and `JWT_SECRET`; the algorithm is pinned during
+verification to prevent algorithm-confusion attacks. Passwords are hashed with
+bcrypt and never stored in plaintext.
 
 ## Enrollment
 
-Nye agents oprettes via enrollment — ikke manuelt. Flowet:
+New agents are created via enrollment — not manually. The flow:
 
-1. **Operatør/admin genererer en kode:** `POST /enrollment-codes` (valgfri
-   `location_id`, valgfri `expiresInMinutes`, default 1 time). Koden returneres
-   i klartekst **én gang** — gem den til agenten.
-2. **Agenten enroller sig selv:** `POST /agents/enroll { code, hostname,
-   platform, arch }` — **uden** auth (agenten har endnu intet token). Serveren:
-   - validerer koden (findes → ellers `401`; brugt/udløbet → `410`),
-   - opretter en agent-række med agent-rapporterede felter + `location_id` fra koden,
-   - genererer et **opaque token** (ikke et JWT), gemmer dets SHA-256-hash og
-     markerer koden som brugt — alt i én transaktion med rækken låst, så en kode
-     aldrig kan bruges to gange,
-   - returnerer `{ agentId, token }` i klartekst **én gang**.
+1. **Operator/admin generates a code:** `POST /enrollment-codes` (optional
+   `location_id`, optional `expiresInMinutes`, default 1 hour). The code is
+   returned in plaintext **once** — store it for the agent.
+2. **The agent enrolls itself:** `POST /agents/enroll { code, hostname,
+   platform, arch }` — **without** auth (the agent has no token yet). The server:
+   - validates the code (found → else `401`; used/expired → `410`),
+   - creates an agent row with agent-reported fields + `location_id` from the code,
+   - generates an **opaque token** (not a JWT), stores its SHA-256 hash and
+     marks the code as used — all in one transaction with the row locked, so a
+     code can never be used twice,
+   - returns `{ agentId, token }` in plaintext **once**.
 
-Agent-tokens er opaque tilfældige strenge. De gemmes kun som hash; mister man
-tokenet, må agenten enrolles på ny. Hele claim-and-enroll er atomisk
+Agent tokens are opaque random strings. They are stored only as a hash; if the
+token is lost the agent must re-enroll. The entire claim-and-enroll is atomic
 ([`src/services/enrollmentStore.js`](src/services/enrollmentStore.js)).
 
 ```bash
-# 1) Operatør genererer en kode (med et operator/admin-token)
+# 1) Operator generates a code (with an operator/admin token)
 curl -s -X POST http://localhost:3000/enrollment-codes \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d '{"location_id":1}'
-# -> { "id":1, "code":"<engangskode>", "expires_at":"...", ... }
+# -> { "id":1, "code":"<one-time-code>", "expires_at":"...", ... }
 
-# 2) Agenten enroller sig selv (ingen auth)
+# 2) The agent enrolls itself (no auth)
 curl -s -X POST http://localhost:3000/agents/enroll \
   -H 'Content-Type: application/json' \
-  -d '{"code":"<engangskode>","hostname":"node-01","platform":"linux","arch":"x64"}'
+  -d '{"code":"<one-time-code>","hostname":"node-01","platform":"linux","arch":"x64"}'
 # -> { "agentId":7, "token":"<opaque-token>" }
 ```
 
-## Agent-kommunikation
+## Agent communication
 
-Agents bruger deres **opaque token** (fra enrollment) — ikke et bruger-JWT.
-Token-auth og bruger-JWT-auth er holdt i to separate middlewares
-([`src/auth/agentAuth.js`](src/auth/agentAuth.js) hhv.
-[`src/auth/middleware.js`](src/auth/middleware.js)). Indkommende agent-tokens
-hashes (SHA-256) og slås op i `agent_tokens`; ukendte eller tilbagekaldte tokens
-afvises. Ved gyldig auth opdateres `last_used_at` og `agents.last_seen`.
+Agents use their **opaque token** (from enrollment) — not a user JWT.
+Token auth and user JWT auth are kept in two separate middlewares
+([`src/auth/agentAuth.js`](src/auth/agentAuth.js) and
+[`src/auth/middleware.js`](src/auth/middleware.js) respectively). Incoming agent
+tokens are hashed (SHA-256) and looked up in `agent_tokens`; unknown or revoked
+tokens are rejected. On valid auth, `last_used_at` and `agents.last_seen` are
+updated.
 
-**WebSocket — `/ws/agent`** (live status + kommandoer):
+**WebSocket — `/ws/agent`** (live status + commands):
 
-- Agenten sender sit token i `Authorization: Bearer <token>` **eller** som
-  `?token=<token>` i URL'en ved connect.
-- Uden gyldigt token afvises handshaket **hårdt** (HTTP `401` under upgrade — der
-  oprettes aldrig en WebSocket).
-- Ved connect sættes `status = online`; ved disconnect `status = offline`.
-- Server-ping (heartbeat) holder `last_seen` frisk; forbindelser uden svar lukkes.
-- Server→agent: serveren kan pushe kommandoer (fx `run test`) til en agents
-  aktive forbindelser.
+- The agent sends its token in `Authorization: Bearer <token>` **or** as
+  `?token=<token>` in the URL at connect time.
+- Without a valid token the handshake is rejected **hard** (HTTP `401` during
+  upgrade — a WebSocket is never created).
+- On connect `status = online` is set; on disconnect `status = offline`.
+- Server ping (heartbeat) keeps `last_seen` fresh; connections without a response
+  are closed.
+- Server→agent: the server can push commands (e.g. `run test`) to an agent's
+  active connections.
 
-**REST** (agent-token):
+**REST** (agent token):
 
-- `POST /agents/results { results: [ {...} ] }` — gemmer hvert element som en
-  `results`-række knyttet til `agent_id` fra tokenet.
+- `POST /agents/results { results: [ {...} ] }` — stores each element as a
+  `results` row tied to the `agent_id` from the token.
 
-Resultater læses tilbage af brugere via `GET /agents/:id/results` (bruger-JWT,
+Results are read back by users via `GET /agents/:id/results` (user JWT,
 viewer+).
 
 ```bash
-# Agenten indsender resultater med sit opaque token
+# Agent submits results with its opaque token
 curl -X POST http://localhost:3000/agents/results \
   -H "Authorization: Bearer <agent-token>" -H 'Content-Type: application/json' \
   -d '{"results":[{"test":"ping","ok":true}]}'
 ```
 
-## Licens-validering (mod blueeye-licens)
+## License validation (against blueeye-licens)
 
-Serveren validerer sin egen licens mod den centrale `blueeye-licens`. Det
-signerede svar bruges **kun** som licensbevis — **aldrig** som adgangstoken.
-Agent-tokens udstedes og valideres udelukkende lokalt; licensserveren rører dem aldrig.
+The server validates its own license against the central `blueeye-licens`. The
+signed response is used **only** as a license proof — **never** as an access
+token. Agent tokens are issued and validated exclusively locally; the license
+server never touches them.
 
-**Konfiguration (sættes ved installation, ikke CRUD)** — via env (se
-[`.env.example`](.env.example)) eller `src/license/publicKey.js`:
+**Configuration (set at installation, not via CRUD)** — via env (see
+[`.env.example`](.env.example)) or `src/license/publicKey.js`:
 
-| Variabel | Beskrivelse |
+| Variable | Description |
 | --- | --- |
-| `LICENSE_KEY` | Licensnøgle udstedt af blueeye-licens |
-| `LICENSE_SERVER_ID` | Denne servers id (skal matche `payload.serverId`) |
+| `LICENSE_KEY` | License key issued by blueeye-licens |
+| `LICENSE_SERVER_ID` | This server's ID (must match `payload.serverId`) |
 | `LICENSE_SERVER_URL` | blueeye-licens URL |
-| `LICENSE_PUBLIC_KEY` | Indlejret Ed25519 public key (overstyrer `src/license/publicKey.js`) |
-| `LICENSE_GRACE_DAYS` | Offline grace-periode (default 14) |
-| `LICENSE_VALIDATE_INTERVAL_HOURS` | Valideringsinterval (default 6) |
+| `LICENSE_PUBLIC_KEY` | Embedded Ed25519 public key (overrides `src/license/publicKey.js`) |
+| `LICENSE_GRACE_DAYS` | Offline grace period (default 14) |
+| `LICENSE_VALIDATE_INTERVAL_HOURS` | Validation interval (default 6) |
 
-Den indlejrede public key kommer fra `docs/public-key.md` i blueeye-licens.
+The embedded public key comes from `docs/public-key.md` in blueeye-licens.
 
-**Logik:**
+**Logic:**
 
-- Ved opstart + hver 6. time: `POST /validate` med `{ licenseKey, serverId, agentCount }`.
-- Svaret verificeres: kanonisk JSON af `payload` reproduceres med **samme
-  `canonicalize()`** som blueeye-licens (kopieret byte-for-byte ind i
-  [`src/lib/canonicalize.js`](src/lib/canonicalize.js)) og signaturen tjekkes mod
-  den indlejrede public key.
-- Svaret **afvises** hvis signaturen er ugyldig **eller** `payload.serverId` ≠ egen
-  `serverId` (falder tilbage på cache).
-- Sidste gyldige (verificerede) validering caches på disk (`LICENSE_CACHE_PATH`).
-- **Offline grace:** kan serveren ikke validere, bruges den cachede validering i op
-  til 14 dage; derefter **hård fejl** (ulicenseret).
-- **max_agents håndhæves lokalt:** nye agent-WebSocket-connects afvises (`403`),
-  når antallet ville overskride grænsen, eller når licensen ikke er gyldig.
+- At startup + every 6 hours: `POST /validate` with `{ licenseKey, serverId, agentCount }`.
+- The response is verified: canonical JSON of `payload` is reproduced with the
+  **same `canonicalize()`** as blueeye-licens (copied byte-for-byte into
+  [`src/lib/canonicalize.js`](src/lib/canonicalize.js)) and the signature is
+  checked against the embedded public key.
+- The response is **rejected** if the signature is invalid **or** `payload.serverId`
+  ≠ own `serverId` (falls back to cache).
+- The last valid (verified) validation is cached on disk (`LICENSE_CACHE_PATH`).
+- **Offline grace:** if the server cannot validate, the cached validation is used
+  for up to 14 days; after that **hard failure** (unlicensed).
+- **max_agents enforced locally:** new agent WebSocket connections are rejected
+  (`403`) when the count would exceed the limit, or when the license is not valid.
 
-Status kan ses via `GET /license/status` (viewer+).
+Status can be viewed via `GET /license/status` (viewer+).
 
-> `blueeye-server` skal indlejre blueeye-licens' public key i
-> `src/license/publicKey.js` (eller `LICENSE_PUBLIC_KEY`). Indtil da fejler al
-> verifikation, og serveren er ulicenseret.
+> `blueeye-server` must embed blueeye-licens' public key in
+> `src/license/publicKey.js` (or `LICENSE_PUBLIC_KEY`). Until then all
+> verification fails and the server is unlicensed.
 
-## Projektstruktur
+## Project structure
 
 ```
 blueeye-server/
-├── migrations/                 # Nummererede SQL-migrationer
+├── migrations/                 # Numbered SQL migrations
 │   ├── 001_create_locations.sql
 │   ├── 002_create_users.sql
 │   ├── 003_create_agents.sql
 │   ├── 004_create_enrollment.sql
 │   └── 005_create_results.sql
-├── schema.sql                  # Fuldt schema-snapshot
+├── schema.sql                  # Full schema snapshot
 ├── src/
-│   ├── app.js                  # Express app-factory (uden listen)
+│   ├── app.js                  # Express app factory (without listen)
 │   ├── server.js               # Entrypoint: wiring + listen + WS + shutdown
-│   ├── migrate.js              # Migrationskørsel + admin-seed
-│   ├── config.js               # Env-baseret konfiguration
+│   ├── migrate.js              # Migration runner + admin seed
+│   ├── config.js               # Env-based configuration
 │   ├── db.js                   # MySQL connection pool + helpers
-│   ├── logger.js               # Stille standard-logger til tests
-│   ├── auth/                   # JWT + agent-token (to separate auth-systemer)
-│   ├── lib/                    # canonicalize (byte-identisk med blueeye-licens)
+│   ├── logger.js               # Quiet default logger for tests
+│   ├── auth/                   # JWT + agent token (two separate auth systems)
+│   ├── lib/                    # canonicalize (byte-identical with blueeye-licens)
 │   ├── license/                # verify, publicKey, cache, licenseManager
-│   ├── middleware/             # asyncHandler, fejlhåndtering, request-log
-│   ├── repositories/           # Dataadgang (locations, users, agents, tokens, results …)
-│   ├── services/               # enrollmentStore (atomisk claim-and-enroll)
+│   ├── middleware/             # asyncHandler, error handling, request log
+│   ├── repositories/           # Data access (locations, users, agents, tokens, results …)
+│   ├── services/               # enrollmentStore (atomic claim-and-enroll)
 │   ├── routes/                 # health, auth, users, locations, agents, enrollment, license …
-│   ├── validation/             # Input-validering
-│   └── ws/                     # agentSocket (WebSocket live-kanal)
+│   ├── validation/             # Input validation
+│   └── ws/                     # agentSocket (WebSocket live channel)
 ├── test/                       # Tests (node --test + supertest + ws)
-└── test-support/               # Test-fakes (uden for test/)
+└── test-support/               # Test fakes (outside test/)
 ```
 
-## Test
+## Tests
 
 ```bash
 npm test
 ```
 
-Testene kører mod app-factory'en med injicerede fakes — der kræves **ingen
-kørende database**. Dækningen omfatter login (gyldig/forkert → `401`), beskyttede
-endpoints uden token (`401`), for lav rolle (`403`), `400`/`404`/`409`/`500` for
-alle endpoints, enrollment (`401`/`410`), POST results med/uden agent-token
-(`401`), samt WebSocket-connect med gyldigt/ugyldigt token (en rigtig
-HTTP+WebSocket-server startes i testen). For licens-validering: gyldig validering,
-ugyldig signatur, forkert serverId, offline med gyldig cache, offline efter grace
-udløbet, agent over grænse, samt at `canonicalize()` matcher blueeye-licens
-byte-for-byte.
+Tests run against the app factory with injected fakes — **no running database
+required**. Coverage includes login (valid/wrong → `401`), protected endpoints
+without a token (`401`), insufficient role (`403`), `400`/`404`/`409`/`500` for
+all endpoints, enrollment (`401`/`410`), POST results with/without an agent token
+(`401`), and WebSocket connect with a valid/invalid token (a real
+HTTP+WebSocket server is started in the test). For license validation: valid
+validation, invalid signature, wrong serverId, offline with valid cache, offline
+after grace period expired, agent over limit, and that `canonicalize()` matches
+blueeye-licens byte-for-byte.

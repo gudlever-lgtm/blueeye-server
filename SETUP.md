@@ -89,12 +89,12 @@ npm start                     # serves on :3000
 On startup the server validates its licence against blueeye-licens and verifies
 the signature offline. Check the **License** page in the dashboard
 (`http://<server-host>:3000`) — it should read `valid`. If you renew the licence
-later on the licens server, click **"Genvalidér nu"** to pick it up immediately
+later on the licens server, click **"Re-validate now"** to pick it up immediately
 (otherwise it re-checks every 6 hours; a 14-day offline grace applies).
 
 ## 3. Agent (per customer machine / device)
 
-In the **server dashboard** → **Agenter** → **"+ Ny agent"** (operator/admin):
+In the **server dashboard** → **Agents** → **"+ New agent"** (operator/admin):
 this mints a one-time **enrollment code** and shows a ready-to-paste env snippet.
 
 On the customer machine:
@@ -116,13 +116,13 @@ npm start
 
 First start: the agent collects hostname/platform/arch, enrolls with the code,
 stores an opaque token (0600), and clears the code. It then opens a WebSocket and
-reports traffic on the interval. It appears under **Agenter** with status/health
-and "senest rapporteret".
+reports traffic on the interval. It appears under **Agents** with status/health
+and "last reported".
 
 ### Traffic sources (vendor-neutral)
 
 The agent reports which sources it supports; you assign one per agent in the
-dashboard (**Agenter → Rediger → Trafik-kilde**). The agent runs on a Linux
+dashboard (**Agents → Edit → Traffic source**). The agent runs on a Linux
 host/VM — it does **not** have to run on the network device.
 
 - **`proc`** — local interface bytes from `/proc/net/dev`. For the *host's* own
@@ -162,7 +162,7 @@ host/VM — it does **not** have to run on the network device.
    template has been seen.
 3. The agent must be able to receive UDP on that port (host networking or an
    exposed UDP port if containerised).
-4. Search in the dashboard: **Agenter → Flows** → filter by port (e.g. `443`)
+4. Search in the dashboard: **Agents → Flows** → filter by port (e.g. `443`)
    and/or protocol (`tcp`/`udp`) over a time range. You can also query
    `GET /agents/:id/flows?port=443&protocol=tcp&from=&to=` directly.
 

@@ -17,7 +17,7 @@ function createDetector({ baselines, config = loadConfig(), intervalMs = DEFAULT
   if (!baselines) throw new Error('createDetector requires a baseline store');
 
   function evaluate(sample) {
-    // Thresholds are read per-call so runtime edits (Indstillinger → Analyse)
+    // Thresholds are read per-call so runtime edits (Settings → Analysis)
     // take effect without a restart.
     const { critSigma, warnSigma, baselineDays, minSamples } = config;
     // Defensive: ignore anything that isn't a usable numeric sample.
@@ -62,7 +62,7 @@ function createDetector({ baselines, config = loadConfig(), intervalMs = DEFAULT
         kind: FindingKind.FLATLINE,
         deviation: 0,
         explanation:
-          'Metric uændret i 10 på hinanden følgende intervaller — muligt sensor- eller agentstop',
+          'Metric unchanged across 10 consecutive intervals — possible sensor or agent stop',
       };
     }
 
@@ -77,7 +77,7 @@ function createDetector({ baselines, config = loadConfig(), intervalMs = DEFAULT
       return null;
     }
 
-    // 5) Build the anomaly finding with a concrete Danish explanation (real
+    // 5) Build the anomaly finding with a concrete explanation (real
     //    numbers, no placeholders), then 6) always update the baseline.
     const finding = {
       ...base,
@@ -85,8 +85,8 @@ function createDetector({ baselines, config = loadConfig(), intervalMs = DEFAULT
       kind: FindingKind.ANOMALY,
       deviation: dev,
       explanation:
-        `${sample.metric} på ${sample.value} afveg ${dev.toFixed(1)}σ ` +
-        `fra ${baselineDays}-dages baseline (${baseline.median})`,
+        `${sample.metric} at ${sample.value} deviated ${dev.toFixed(1)}σ ` +
+        `from ${baselineDays}-day baseline (${baseline.median})`,
     };
     baselines.update(sample);
     return finding;

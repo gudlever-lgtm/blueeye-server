@@ -9,6 +9,7 @@ const THEME_KEY = 'blueeye.server.theme';
 const $ = (sel) => document.querySelector(sel);
 
 // Theme (light default, dark opt-in), persisted across sessions.
+
 function applyTheme(theme) {
   const t = theme === 'dark' ? 'dark' : 'light';
   document.documentElement.dataset.theme = t;
@@ -65,7 +66,7 @@ async function api(path, { method = 'GET', body } = {}) {
   // itself it just means wrong credentials — surface the server's message.
   if (res.status === 401 && path !== '/auth/login') {
     logout();
-    throw new Error('Session udløbet — log ind igen.');
+    throw new Error('Session expired — please log in again.');
   }
   if (!res.ok) {
     const msg = (data && (data.error || data.message)) || `HTTP ${res.status}`;
@@ -91,7 +92,7 @@ function toast(message, bad = false) {
 }
 
 function copyText(text) {
-  const done = () => toast('Kopieret');
+  const done = () => toast('Copied');
   if (navigator.clipboard && navigator.clipboard.writeText) {
     navigator.clipboard.writeText(text).then(done).catch(() => fallbackCopy(text, done));
   } else {
@@ -103,7 +104,7 @@ function fallbackCopy(text, done) {
   ta.value = text;
   document.body.append(ta);
   ta.select();
-  try { document.execCommand('copy'); done(); } catch { toast('Kunne ikke kopiere', true); }
+  try { document.execCommand('copy'); done(); } catch { toast('Could not copy', true); }
   ta.remove();
 }
 
@@ -115,13 +116,13 @@ function fmtBytes(n) {
   while (v >= 1024 && i < u.length - 1) { v /= 1024; i += 1; }
   return `${v.toFixed(i ? 1 : 0)} ${u[i]}`;
 }
-const fmtDate = (s) => (s ? new Date(s).toLocaleString('da-DK') : '–');
+const fmtDate = (s) => (s ? new Date(s).toLocaleString('en-GB') : '–');
 function fmtDuration(sec) {
   const d = Math.floor(sec / 86400);
   const h = Math.floor((sec % 86400) / 3600);
   const m = Math.floor((sec % 3600) / 60);
-  if (d > 0) return `${d}d ${h}t`;
-  if (h > 0) return `${h}t ${m}m`;
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h ${m}m`;
   return `${m}m`;
 }
 
@@ -138,7 +139,7 @@ async function login(emailInput, password) {
 // License features (which modules the customer is entitled to). Cached with a
 // short TTL so module visibility self-heals after a licence renewal without
 // re-fetching on every render. Call invalidateFeatures() to force a refresh
-// (e.g. right after "Genvalidér nu").
+// (e.g. right after "Revalidate now").
 let licenseFeatures = null;
 let featuresLoadedAt = 0;
 const FEATURES_TTL_MS = 60000;
@@ -189,8 +190,8 @@ function openModal(title, fields, onSubmit) {
   const errP = el('p', { class: 'error' });
   form.append(errP);
   form.append(el('div', { class: 'form-actions' },
-    el('button', { type: 'button', class: 'ghost', onclick: closeModal }, 'Annullér'),
-    el('button', { type: 'submit' }, 'Gem')));
+    el('button', { type: 'button', class: 'ghost', onclick: closeModal }, 'Cancel'),
+    el('button', { type: 'submit' }, 'Save')));
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const values = {};
@@ -207,231 +208,231 @@ function closeModal() { $('#modal').classList.add('hidden'); }
 
 // ---- Views ----------------------------------------------------------------
 // ---- Per-page explanation (hero + slide-in info drawer) -------------------
-// Each view starts with a short hero line and a "Mere info" button that slides
+// Each view starts with a short hero line and a “More info” button that slides
 // in a panel from the right with a fuller explanation.
 const PAGE_INFO = {
   fleet: {
-    hero: 'Alle agenter på ét bræt — med en sundheds-vurdering ud fra aktiv reachability, tab, latency og jitter.',
-    title: 'Oversigt — flåde-sundhed',
+    hero: 'All agents in one view — with a health assessment based on active reachability, packet loss, latency and jitter.',
+    title: 'Overview — fleet health',
     body: () => [
-      el('p', {}, 'Forsiden samler alle agenter med ét health-stempel, så du straks ser hvor noget er galt. Rækkerne er sorteret værst-først og opdateres løbende. Klik en agent for at dykke ned i dens målinger.'),
-      el('h4', {}, 'Sådan beregnes health'),
+      el('p', {}, 'The landing page collects all agents with a single health stamp, so you immediately see where something is wrong. Rows are sorted worst-first and refresh continuously. Click an agent to drill into its measurements.'),
+      el('h4', {}, 'How health is calculated'),
       el('ul', {},
-        el('li', {}, el('strong', {}, 'Reachability: '), 'svarer agentens probe-mål? Et mål uden svar trækker straks ned.'),
-        el('li', {}, el('strong', {}, 'Tab: '), 'pakketab i % (≥2% = advarsel, ≥20% = kritisk).'),
-        el('li', {}, el('strong', {}, 'Latency: '), 'seneste RTT holdt op mod målets EGEN baseline (robust median + MAD) — “langsom” er relativt til hvad der er normalt for netop det mål, ikke en fast grænse.'),
-        el('li', {}, el('strong', {}, 'Jitter: '), 'udsving i RTT (≥30 ms = advarsel, ≥100 ms = kritisk).')),
-      el('h4', {}, 'Status-stempler'),
+        el('li', {}, el('strong', {}, 'Reachability: '), 'does the agent\'s probe target respond? A target with no reply pulls health down immediately.'),
+        el('li', {}, el('strong', {}, 'Packet loss: '), 'loss in % (≥2% = warning, ≥20% = critical).'),
+        el('li', {}, el('strong', {}, 'Latency: '), 'latest RTT compared against the target\'s OWN baseline (robust median + MAD) — “slow” is relative to what is normal for that specific target, not a fixed threshold.'),
+        el('li', {}, el('strong', {}, 'Jitter: '), 'variation in RTT (≥30 ms = warning, ≥100 ms = critical).')),
+      el('h4', {}, 'Status stamps'),
       el('ul', {},
-        el('li', {}, 'SUND: alle mål nås, lav latency/tab. ADVARSEL / KRITISK: ét eller flere signaler over grænsen (hold musen over for forklaringen).'),
-        el('li', {}, 'NEDE: ingen mål svarer. FORÆLDET: ingen friske målinger (> 15 min). UKENDT: agenten har ikke kørt nogen probe endnu.')),
-      el('p', { class: 'muted' }, 'Health bygger på aktive probes — kør et par probes pr. agent (på agent-siden) for at få et fuldt billede. Kun metadata: mål og timings, aldrig pakke-indhold.'),
+        el('li', {}, 'HEALTHY: all targets reachable, low latency/loss. WARNING / CRITICAL: one or more signals above threshold (hover for explanation).'),
+        el('li', {}, 'DOWN: no targets respond. STALE: no fresh measurements (> 15 min). UNKNOWN: agent has not run any probe yet.')),
+      el('p', { class: 'muted' }, 'Health is based on active probes — run a few probes per agent (on the agent page) for a complete picture. Metadata only: targets and timings, never packet contents.'),
     ],
   },
   agent: {
-    hero: 'Alt for én agent samlet: health-resumé, probes (latency/tab/jitter), interface-sundhed og trafik.',
-    title: 'Agent — detaljer',
+    hero: 'Everything for one agent in one place: health summary, probes (latency/loss/jitter), interface health and traffic.',
+    title: 'Agent — details',
     body: () => [
-      el('p', {}, 'Den samlede troubleshooting-side for én agent. Øverst et resumé af health med de tal, der driver vurderingen; nedenunder kan du folde de enkelte datakilder ud.'),
+      el('p', {}, 'The combined troubleshooting page for one agent. At the top a health summary with the numbers driving the assessment; below you can expand the individual data sources.'),
       el('ul', {},
-        el('li', {}, el('strong', {}, 'Probes: '), 'kør ping/TCP/DNS/traceroute mod et mål og se RTT/tab/jitter — klik “Historik” for RTT over tid eller “Sti” for traceroute-hops.'),
-        el('li', {}, el('strong', {}, 'Interfaces: '), 'pr. interface udnyttelse, fejl, discards og link-status fra seneste måling.'),
-        el('li', {}, el('strong', {}, 'Trafik: '), 'den aktuelle båndbredde — mest interessant netop her, når du er inde og fejlsøger den enkelte agent.')),
-      el('p', { class: 'muted' }, 'Tilbage til flåde-overblikket med “← Oversigt”.'),
+        el('li', {}, el('strong', {}, 'Probes: '), 'run ping/TCP/DNS/traceroute against a target and see RTT/loss/jitter — click “History” for RTT over time or “Path” for traceroute hops.'),
+        el('li', {}, el('strong', {}, 'Interfaces: '), 'per-interface utilization, errors, discards and link status from the latest measurement.'),
+        el('li', {}, el('strong', {}, 'Traffic: '), 'current bandwidth — most useful here when you are already investigating a specific agent.')),
+      el('p', { class: 'muted' }, 'Return to the fleet overview with “← Overview”.'),
     ],
   },
   overview: {
-    hero: 'Samlet, levende trafik-billede for alle agenter — vælg serier, undersøg et tidsrum og se forbrug.',
-    title: 'Trafik — overblik',
+    hero: 'Aggregated live traffic picture for all agents — select series, inspect a time window and review consumption.',
+    title: 'Traffic — overview',
     body: () => [
-      el('p', {}, 'Et bredt, levende grafbillede af trafikken på tværs af agenterne. Det opdateres hvert 3. sekund og viser de seneste ~3 minutter med klokkeslæt (HH:MM:SS) langs x-aksen.'),
-      el('h4', {}, 'Vælg hvad der vises'),
+      el('p', {}, 'A wide live chart of traffic across all agents. It updates every 3 seconds and shows the last ~3 minutes with timestamps (HH:MM:SS) along the x-axis.'),
+      el('h4', {}, 'Select what is shown'),
       el('ul', {},
-        el('li', {}, 'Chips i grafens værktøjslinje slår Total RX og Total TX til/fra.'),
-        el('li', {}, '“Pr. agent ▾” åbner en menu, hvor du kan tilføje RX/TX for hver enkelt agent.'),
-        el('li', {}, '“↔ Forstør” strækker grafen ud i fuld bredde og højde; klik igen for normal størrelse.')),
-      el('h4', {}, 'Undersøg et tidsrum'),
-      el('p', {}, 'Træk hen over grafen for at markere et vindue — panelet til højre viser gennemsnit/min/max for de markerede serier. “Vis gemt data →” henter de faktiske gemte målinger for vinduet (i Historik). Højreklik rydder markeringen.'),
-      el('h4', {}, 'Resten af siden'),
+        el('li', {}, 'Chips in the chart toolbar toggle Total RX and Total TX on/off.'),
+        el('li', {}, '”Per agent ▾” opens a menu where you can add RX/TX for each individual agent.'),
+        el('li', {}, '”↔ Expand” stretches the chart to full width and height; click again for normal size.')),
+      el('h4', {}, 'Inspect a time window'),
+      el('p', {}, 'Drag across the chart to mark a window — the panel on the right shows average/min/max for the marked series. “Show stored data →” fetches the actual stored measurements for the window (in History). Right-click clears the selection.'),
+      el('h4', {}, 'Rest of the page'),
       el('ul', {},
-        el('li', {}, 'KPI-stribe øverst: aktuel RX/TX, online agenter og antal lokationer.'),
-        el('li', {}, 'Lager-linjen viser diskforbrug + estimeret forbrug pr. dag (“Detaljer” folder DB/disk ud).'),
-        el('li', {}, 'Nederst kan du folde Top agenter, Historik (vælg agent + periode) og Trafiktype (DNS, Facebook m.fl.) ud.')),
+        el('li', {}, 'KPI strip at the top: current RX/TX, online agents and number of locations.'),
+        el('li', {}, 'The storage line shows disk usage + estimated consumption per day (“Details” expands the DB/disk breakdown).'),
+        el('li', {}, 'At the bottom you can expand Top agents, History (select agent + period) and Traffic type (DNS, Facebook etc.).')),
     ],
   },
   map: {
-    hero: 'Geografisk overblik over lokationer og deres agenter.',
-    title: 'Kort',
+    hero: 'Geographic overview of locations and their agents.',
+    title: 'Map',
     body: () => [
-      el('p', {}, 'Lokationer med koordinater (latitude/longitude) vises som markører. Klik en markør for at se antal agenter og hvor mange der er online.'),
-      el('p', { class: 'muted' }, 'Tilføj koordinater pr. lokation under fanen Lokationer (Rediger). Mangler kortet, kan biblioteket ikke nås — så vises en liste i stedet.'),
+      el('p', {}, 'Locations with coordinates (latitude/longitude) are shown as markers. Click a marker to see the number of agents and how many are online.'),
+      el('p', { class: 'muted' }, 'Add coordinates per location under the Locations tab (Edit). If the map is missing, the library could not be reached — a list is shown instead.'),
     ],
   },
   agents: {
-    hero: 'Overvåg de agenter, der rapporterer trafik ind til denne server.',
-    title: 'Agenter',
+    hero: 'Monitor the agents that report traffic to this server.',
+    title: 'Agents',
     body: () => [
-      el('p', {}, 'Agenter installeres på kundens maskiner og rapporterer netværkstrafik ind til serveren.'),
+      el('p', {}, 'Agents are installed on customer machines and report network traffic to the server.'),
       el('h4', {}, 'Status & health'),
       el('ul', {},
-        el('li', {}, 'Status: online/offline ud fra WebSocket-forbindelsen.'),
-        el('li', {}, 'Health: "sund" = online og har rapporteret inden for 5 min., "forsinket" = online men gammel rapport, "nede" = offline.'),
-        el('li', {}, 'Senest rapporteret: tidspunktet for agentens seneste trafik-måling.')),
-      el('h4', {}, 'Handlinger'),
+        el('li', {}, 'Status: online/offline based on the WebSocket connection.'),
+        el('li', {}, 'Health: “healthy” = online and reported within 5 min., “delayed” = online but stale report, “down” = offline.'),
+        el('li', {}, 'Last reported: the time of the agent\'s most recent traffic measurement.')),
+      el('h4', {}, 'Actions'),
       el('ul', {},
-        el('li', {}, '"+ Ny agent" giver en engangskode til installation (operator+).'),
-        el('li', {}, '"Kør test" beder agenten måle med det samme; "Trafik" viser målingerne.'),
-        el('li', {}, '"Rediger" sætter navn, lokation, noter og trafik-kilde (proc, SNMP, NetFlow eller sFlow).')),
+        el('li', {}, '”+ New agent” issues a one-time code for installation (operator+).'),
+        el('li', {}, '”Run test” asks the agent to measure immediately; “Traffic” shows the measurements.'),
+        el('li', {}, '”Edit” sets name, location, notes and traffic source (proc, SNMP, NetFlow or sFlow).')),
     ],
   },
   interfaces: {
-    hero: 'Interface-sundhed pr. agent: udnyttelse, fejl, discards, link-status og hastighed.',
+    hero: 'Interface health per agent: utilization, errors, discards, link status and speed.',
     title: 'Interfaces',
     body: () => [
-      el('p', {}, 'Viser hver agents netværks-interfaces ud fra den seneste måling — det netværks-/firewall-teknikere kigger på, når noget er galt fysisk eller på et link.'),
-      el('h4', {}, 'Kolonner'),
+      el('p', {}, 'Shows each agent\'s network interfaces based on the latest measurement — what network/firewall engineers look at when something is wrong physically or on a link.'),
+      el('h4', {}, 'Columns'),
       el('ul', {},
-        el('li', {}, 'Status: NEDE (link nede), FEJL (input/output-fejl eller ≥90% udnyttet), WARN (discards eller ≥75% udnyttet), OK.'),
-        el('li', {}, 'Udnyttelse: rate mod link-hastigheden (kun når hastigheden kendes).'),
-        el('li', {}, 'Fejl/s og Discards/s: CRC/input-fejl hhv. forkastede pakker (congestion).')),
-      el('p', { class: 'muted' }, 'Data kommer fra agentens trafik-kilde: /proc/net/dev (host) eller SNMP IF-MIB (enhed). Fejl/discards/link-status kræver en opdateret agent.'),
+        el('li', {}, 'Status: DOWN (link down), ERR (input/output errors or ≥90% utilized), WARN (discards or ≥75% utilized), OK.'),
+        el('li', {}, 'Utilization: rate against link speed (only when speed is known).'),
+        el('li', {}, 'Errors/s and Discards/s: CRC/input errors and dropped packets (congestion) respectively.')),
+      el('p', { class: 'muted' }, 'Data comes from the agent\'s traffic source: /proc/net/dev (host) or SNMP IF-MIB (device). Errors/discards/link status require an updated agent.'),
     ],
   },
   probes: {
-    hero: 'Aktiv reachability fra en agent: ping, TCP-connect, DNS og traceroute — med RTT, tab og sti.',
+    hero: 'Active reachability from an agent: ping, TCP-connect, DNS and traceroute — with RTT, loss and path.',
     title: 'Probes',
     body: () => [
-      el('p', {}, 'Hvor de øvrige sider måler trafik passivt, kører probes en aktiv test fra en valgt agent mod et mål, så du kan svare på “kan site A nå host B — og hvor hurtigt?”.'),
-      el('h4', {}, 'Typer'),
+      el('p', {}, 'While the other pages measure traffic passively, probes run an active test from a selected agent against a target, so you can answer “can site A reach host B — and how quickly?”.'),
+      el('h4', {}, 'Types'),
       el('ul', {},
-        el('li', {}, 'Ping (ICMP): RTT min/avg/max + pakketab + jitter.'),
-        el('li', {}, 'TCP-connect: åbner host:port og måler forbindelsestid (ingen payload sendes).'),
-        el('li', {}, 'DNS: tid for at slå et navn op (og hvilken adresse der kom retur).'),
-        el('li', {}, 'Traceroute: stien (hops) mod målet med RTT pr. hop.')),
-      el('p', {}, 'Vælg agent + type + mål og tryk “Kør probe”. Agenten skal være forbundet; resultatet kommer tilbage et øjeblik efter og lægges i historikken, så du kan se RTT/tab over tid.'),
-      el('p', { class: 'muted' }, 'Kun metadata: mål og timings — aldrig pakke-indhold.'),
+        el('li', {}, 'Ping (ICMP): RTT min/avg/max + packet loss + jitter.'),
+        el('li', {}, 'TCP-connect: opens host:port and measures connection time (no payload sent).'),
+        el('li', {}, 'DNS: time to resolve a name (and which address was returned).'),
+        el('li', {}, 'Traceroute: the path (hops) to the target with RTT per hop.')),
+      el('p', {}, 'Select agent + type + target and click “Run probe”. The agent must be connected; the result comes back a moment later and is added to the history so you can see RTT/loss over time.'),
+      el('p', { class: 'muted' }, 'Metadata only: targets and timings — never packet contents.'),
     ],
   },
   flows: {
-    hero: 'Undersøg konkrete samtaler (flows): hvem taler med hvem, på hvilke porte — og hvem scanner.',
-    title: 'Flows — samtaler',
+    hero: 'Inspect specific conversations (flows): who talks to whom, on which ports — and who is scanning.',
+    title: 'Flows — conversations',
     body: () => [
-      el('p', {}, 'Hvor Trafik viser mængder og Geo viser destinationer på kort, lader Flows dig grave ned i de enkelte samtaler (5-tuple-metadata fra NetFlow/sFlow) for én agent.'),
-      el('h4', {}, 'Filtre'),
+      el('p', {}, 'While Traffic shows volumes and Geo shows destinations on a map, Flows lets you drill into individual conversations (5-tuple metadata from NetFlow/sFlow) for one agent.'),
+      el('h4', {}, 'Filters'),
       el('ul', {},
-        el('li', {}, 'Peer: vis kun samtaler, hvor en bestemt IP er kilde eller destination (klik en talker for at sætte den).'),
-        el('li', {}, 'Port / Proto: indsnævr til fx 443 eller tcp/udp.'),
-        el('li', {}, 'Retning + omfang: ind/ud, og intern (LAN↔LAN) vs. ekstern.')),
-      el('h4', {}, 'Hvad du ser'),
+        el('li', {}, 'Peer: show only conversations where a specific IP is source or destination (click a talker to set it).'),
+        el('li', {}, 'Port / Proto: narrow down to e.g. 443 or tcp/udp.'),
+        el('li', {}, 'Direction + scope: in/out, and internal (LAN↔LAN) vs. external.')),
+      el('h4', {}, 'What you see'),
       el('ul', {},
-        el('li', {}, 'Top talkers: de største samtaler (kilde→destination) efter bytes.'),
-        el('li', {}, 'Top porte / protokoller + en bytes-over-tid-graf for vinduet.'),
-        el('li', {}, 'Scans / fan-out: kilder, der rammer mange forskellige porte (port-scan) eller mange hosts (fan-out) — et hurtigt fingerpeg om scanning eller en løbsk klient.')),
-      el('p', { class: 'muted' }, 'Kun metadata (5-tuple + bytes/flows), aldrig pakke-indhold. Interne RFC1918-adresser vises (de geolokaliseres aldrig). Kræver NetFlow/sFlow-kilde + at geo-pipelinen er aktiv.'),
+        el('li', {}, 'Top talkers: the largest conversations (source→destination) by bytes.'),
+        el('li', {}, 'Top ports / protocols + a bytes-over-time chart for the window.'),
+        el('li', {}, 'Scans / fan-out: sources hitting many different ports (port scan) or many hosts (fan-out) — a quick indicator of scanning or a runaway client.')),
+      el('p', { class: 'muted' }, 'Metadata only (5-tuple + bytes/flows), never packet contents. Internal RFC1918 addresses are shown (they are never geolocated). Requires a NetFlow/sFlow source + the geo pipeline being active.'),
     ],
   },
   geo: {
-    hero: 'Geografisk overblik: interne sites og eksterne trafik-destinationer (land/ASN).',
-    title: 'Geo-kort',
+    hero: 'Geographic overview: internal sites and external traffic destinations (country/ASN).',
+    title: 'Geo map',
     body: () => [
-      el('p', {}, 'Interne hosts vises ud fra deres site-koordinater (sat pr. lokation) — aldrig via GeoIP. Eksterne destinationer er aggregeret pr. land/ASN fra GeoIP-berigede flows; private/RFC1918-adresser vises aldrig som geo-punkt.'),
-      el('h4', {}, 'Markører'),
+      el('p', {}, 'Internal hosts are shown based on their site coordinates (set per location) — never via GeoIP. External destinations are aggregated per country/ASN from GeoIP-enriched flows; private/RFC1918 addresses are never shown as geo points.'),
+      el('h4', {}, 'Markers'),
       el('ul', {},
-        el('li', {}, 'Pins = interne sites (klik for status + findings).'),
-        el('li', {}, 'Cirkler = eksterne destinationer; størrelse efter trafik, farve efter afvigelse (neutral → gul → rød).')),
-      el('h4', {}, 'Valg'),
+        el('li', {}, 'Pins = internal sites (click for status + findings).'),
+        el('li', {}, 'Circles = external destinations; size by traffic volume, colour by deviation (neutral → yellow → red).')),
+      el('h4', {}, 'Selection'),
       el('ul', {},
-        el('li', {}, 'Klik en destination: se findings + flow-detaljer (peers, retning, protokol, tidsserie).'),
-        el('li', {}, '"Vælg område" og træk en kasse for at aggregere alle destinationer i området.'),
-        el('li', {}, '"Ryd valg" vender tilbage til overblikket.')),
-      el('p', { class: 'muted' }, 'Kort-tiles hentes fra serverens config (EU/selv-hostet), ikke en hardkodet US-kilde.'),
+        el('li', {}, 'Click a destination: see findings + flow details (peers, direction, protocol, time series).'),
+        el('li', {}, '”Select area” and drag a box to aggregate all destinations in the area.'),
+        el('li', {}, '”Clear selection” returns to the overview.')),
+      el('p', { class: 'muted' }, 'Map tiles are fetched from the server\'s config (EU/self-hosted), not a hardcoded US source.'),
     ],
   },
   findings: {
-    hero: 'Lokalt beregnede fejl & anomalier — med forklaring, dokumentation og root-cause-hint.',
-    title: 'Analyse — fejl & anomalier',
+    hero: 'Locally computed errors & anomalies — with explanation, documentation and root-cause hints.',
+    title: 'Analysis — errors & anomalies',
     body: () => [
-      el('p', {}, 'Serveren analyserer agenternes målinger lokalt (ingen cloud, intet ML-bibliotek) og rejser en "finding", når en metrik afviger markant fra sin egen baseline, fladliner (sensor/agent-stop) eller hænger sammen med andre fejl.'),
+      el('p', {}, 'The server analyses agent measurements locally (no cloud, no ML library) and raises a finding when a metric deviates significantly from its own baseline, flatlines (sensor/agent stop) or correlates with other errors.'),
       el('h4', {}, 'Severity'),
       el('ul', {},
-        el('li', {}, 'CRIT: stor afvigelse (standard ≥ 4σ — kan justeres i Indstillinger → Analyse).'),
-        el('li', {}, 'WARN: mærkbar afvigelse (standard ≥ 3σ) eller flatline.'),
-        el('li', {}, 'INFO: lavere alvorlighed.')),
-      el('h4', {}, 'Kvittering'),
-      el('p', {}, 'Operatører og administratorer kan kvittere for en finding, når den er set/håndteret.'),
-      el('h4', {}, 'AI-assistent'),
-      el('p', {}, 'Hvis aktiveret (opt-in) kan du spørge i naturligt sprog — assistenten svarer ud fra de seneste findings, ikke rå data.'),
-      el('p', { class: 'muted' }, 'Nye findings vises live via WebSocket og kan også hentes via REST.'),
+        el('li', {}, 'CRIT: large deviation (default ≥ 4σ — adjustable in Settings → Analysis).'),
+        el('li', {}, 'WARN: notable deviation (default ≥ 3σ) or flatline.'),
+        el('li', {}, 'INFO: lower severity.')),
+      el('h4', {}, 'Acknowledgement'),
+      el('p', {}, 'Operators and administrators can acknowledge a finding once it has been seen/handled.'),
+      el('h4', {}, 'AI assistant'),
+      el('p', {}, 'If enabled (opt-in) you can ask in natural language — the assistant replies based on the latest findings, not raw data.'),
+      el('p', { class: 'muted' }, 'New findings appear live via WebSocket and can also be fetched via REST.'),
     ],
   },
   locations: {
-    hero: 'Grupper agenter i lokationer og se korreleret live-trafik pr. lokation.',
-    title: 'Lokationer',
+    hero: 'Group agents into locations and see correlated live traffic per location.',
+    title: 'Locations',
     body: () => [
-      el('p', {}, 'En lokation samler flere agenter (fx et kontor eller en lokation).'),
-      el('h4', {}, 'Live-trafik'),
-      el('p', {}, '"Trafik" åbner et live-panel der summerer alle agenters trafik i lokationen og opdaterer hvert 3. sekund — godt til at se samlet belastning og finde fejl.'),
+      el('p', {}, 'A location groups multiple agents (e.g. an office or a site).'),
+      el('h4', {}, 'Live traffic'),
+      el('p', {}, '”Traffic” opens a live panel that sums all agent traffic in the location and updates every 3 seconds — useful for seeing overall load and spotting problems.'),
     ],
   },
   enrollment: {
-    hero: 'Tilføj en agent med én kommando — koden, server-adressen og checksum er allerede sat.',
+    hero: 'Add an agent with a single command — the code, server address and checksum are already set.',
     title: 'Enrollment',
     body: () => [
-      el('p', {}, '"Tilføj agent" genererer en kode og en færdig install-kommando. Kør one-lineren på maskinen — den henter agent-binæren fra denne server, tjekker SHA-256, veksler koden til et fast token og starter en service. Du indtaster aldrig selv server-adressen.'),
-      el('h4', {}, 'Tre varianter'),
+      el('p', {}, '”Add agent” generates a code and a ready-to-run install command. Run the one-liner on the machine — it downloads the agent binary from this server, verifies the SHA-256, exchanges the code for a permanent token and starts a service. You never need to enter the server address yourself.'),
+      el('h4', {}, 'Three variants'),
       el('ul', {},
-        el('li', {}, 'One-liner: curl … | sh — hurtigst.'),
-        el('li', {}, 'Manuel: download-URL + checksum + kommando — til inspektion før kørsel.'),
-        el('li', {}, 'Ansible: samme one-liner, udrullet til mange maskiner.')),
-      el('h4', {}, 'Sikkerhed'),
+        el('li', {}, 'One-liner: curl … | sh — fastest.'),
+        el('li', {}, 'Manual: download URL + checksum + command — for inspection before running.'),
+        el('li', {}, 'Ansible: same one-liner, rolled out to many machines.')),
+      el('h4', {}, 'Security'),
       el('ul', {},
-        el('li', {}, 'Koder er kortlivede (standard 1 time) og kan være bulk (N maskiner).'),
-        el('li', {}, 'Binæren verificeres altid mod checksum før kørsel.'),
-        el('li', {}, 'Cert-fingerprint pinnes på agenten (når serveren kører bag TLS).')),
-      el('p', { class: 'muted' }, 'Virker også i luftgappede net: binæren serves fra BlueEye-serveren selv — ingen internetadgang nødvendig, så længe maskinen kan nå serveren.'),
-      el('p', { class: 'muted' }, 'Status: active (kan bruges), used (opbrugt), expired (udløbet).'),
+        el('li', {}, 'Codes are short-lived (default 1 hour) and can be bulk (N machines).'),
+        el('li', {}, 'The binary is always verified against the checksum before running.'),
+        el('li', {}, 'The cert fingerprint is pinned on the agent (when the server runs behind TLS).')),
+      el('p', { class: 'muted' }, 'Also works on air-gapped networks: the binary is served from the BlueEye server itself — no internet access required as long as the machine can reach the server.'),
+      el('p', { class: 'muted' }, 'Status: active (usable), used (used up), expired (expired).'),
     ],
   },
   users: {
-    hero: 'Administrér personale-brugere og deres roller (kun admin).',
-    title: 'Brugere',
+    hero: 'Manage staff users and their roles (admin only).',
+    title: 'Users',
     body: () => [
-      el('h4', {}, 'Roller'),
+      el('h4', {}, 'Roles'),
       el('ul', {},
-        el('li', {}, 'admin: alt, inkl. brugeradministration.'),
-        el('li', {}, 'operator: opret/redigér agenter, lokationer og enrollment-koder.'),
-        el('li', {}, 'viewer: kun læseadgang.')),
-      el('p', {}, 'Den sidste admin kan ikke slettes eller degraderes.'),
+        el('li', {}, 'admin: everything, including user management.'),
+        el('li', {}, 'operator: create/edit agents, locations and enrollment codes.'),
+        el('li', {}, 'viewer: read-only access.')),
+      el('p', {}, 'The last admin cannot be deleted or demoted.'),
     ],
   },
   license: {
-    hero: 'Se denne servers licensstatus, valideret mod den centrale licensserver.',
-    title: 'Licens',
+    hero: 'View this server\'s licence status, validated against the central licence server.',
+    title: 'License',
     body: () => [
-      el('p', {}, 'Serveren henter et signeret bevis fra licensserveren og verificerer det offline med en indlejret nøgle.'),
+      el('p', {}, 'The server fetches a signed proof from the licence server and verifies it offline using an embedded key.'),
       el('ul', {},
-        el('li', {}, 'valid: frisk og gyldig.'),
-        el('li', {}, 'grace: kan ikke nå licensserveren, men cachet bevis < 14 dage.'),
-        el('li', {}, 'unlicensed: ingen gyldig licens — nye agent-forbindelser afvises.')),
+        el('li', {}, 'valid: fresh and valid.'),
+        el('li', {}, 'grace: cannot reach the licence server, but cached proof < 14 days old.'),
+        el('li', {}, 'unlicensed: no valid licence — new agent connections are rejected.')),
     ],
   },
   settings: {
-    hero: 'Opsætning og administration — én fane pr. emne.',
-    title: 'Indstillinger',
+    hero: 'Configuration and administration — one tab per topic.',
+    title: 'Settings',
     body: () => [
-      el('p', {}, 'Hver fane dækker ét emne. Det meste kan redigeres direkte her og slår igennem uden genstart; et par ting er læsbare og styres via serverens .env, fordi de indeholder hemmeligheder.'),
-      el('h4', {}, 'Redigeres her (gemmes i databasen)'),
+      el('p', {}, 'Each tab covers one topic. Most settings can be edited here and take effect immediately without a restart; a few are read-only and controlled via the server\'s .env because they contain secrets.'),
+      el('h4', {}, 'Editable here (stored in the database)'),
       el('ul', {},
-        el('li', {}, 'Analyse: tærskler for anomali-detektion — CRIT/WARN i σ, baseline-vindue og hvor mange målinger der kræves, før der varsles.'),
-        el('li', {}, 'Retention: hvor længe rå/aggregerede data og findings gemmes, før der ryddes op.'),
-        el('li', {}, 'Trafiktyper: definér kategorierne (DNS, Facebook …) ud fra service-porte og destinations-ASN. Vises på Trafik → Trafiktype.'),
-        el('li', {}, 'Kort: tile- og geocoder-kilde til kortene (brug en EU/selv-hostet kilde i produktion).')),
-      el('h4', {}, 'Læsbart (sættes i .env / kræver genstart)'),
+        el('li', {}, 'Analysis: thresholds for anomaly detection — CRIT/WARN in σ, baseline window and how many measurements are required before alerting.'),
+        el('li', {}, 'Retention: how long raw/aggregated data and findings are kept before being cleaned up.'),
+        el('li', {}, 'Traffic types: define the categories (DNS, Facebook …) from service ports and destination ASN. Shown on Traffic → Traffic type.'),
+        el('li', {}, 'Map: tile and geocoder source for the maps (use an EU/self-hosted source in production).')),
+      el('h4', {}, 'Read-only (set in .env / requires restart)'),
       el('ul', {},
-        el('li', {}, 'Alerting: kanaler (e-mail/webhook/syslog) — bærer hemmeligheder (SMTP-kodeord, webhook-HMAC), så de holdes i .env.'),
-        el('li', {}, 'Brugere: opret/redigér personale og roller (kun admin).'),
-        el('li', {}, 'Licens: status + “Genvalidér nu”.')),
-      el('p', { class: 'muted' }, 'Redigerbare ændringer gemmes i app_settings og genanvendes ved opstart, så de overlever en genstart.'),
+        el('li', {}, 'Alerting: channels (e-mail/webhook/syslog) — carries secrets (SMTP password, webhook HMAC), so they are kept in .env.'),
+        el('li', {}, 'Users: create/edit staff and roles (admin only).'),
+        el('li', {}, 'License: status + “Revalidate now”.')),
+      el('p', { class: 'muted' }, 'Editable changes are stored in app_settings and are reloaded on startup, so they survive a restart.'),
     ],
   },
 };
@@ -441,7 +442,7 @@ function hero(viewKey) {
   if (!info) return null;
   return el('div', { class: 'hero' },
     el('div', { class: 'hero-text' }, info.hero),
-    el('button', { class: 'ghost small', onclick: () => openDrawer(info.title, info.body) }, 'Mere info'));
+    el('button', { class: 'ghost small', onclick: () => openDrawer(info.title, info.body) }, 'More info'));
 }
 
 let drawerEls = null;
@@ -476,10 +477,10 @@ views.agents = async () => {
   locationCache = locations;
   const root = el('div');
   root.append(el('div', { class: 'section-head' },
-    el('h2', {}, 'Agenter'),
-    el('span', { class: 'muted' }, `${agents.length} stk.`),
-    canWrite() ? el('button', { class: 'small', onclick: () => newAgent() }, '+ Ny agent') : null));
-  if (!agents.length) { root.append(el('div', { class: 'empty' }, 'Ingen agenter endnu. Tryk "+ Ny agent" for at få en enrollment-kode til installation.')); return root; }
+    el('h2', {}, 'Agents'),
+    el('span', { class: 'muted' }, `${agents.length} total`),
+    canWrite() ? el('button', { class: 'small', onclick: () => newAgent() }, '+ New agent') : null));
+  if (!agents.length) { root.append(el('div', { class: 'empty' }, 'No agents yet. Click "+ New agent" to get an enrollment code for installation.')); return root; }
 
   const rows = agents.map((a) => el('tr', {},
     el('td', {}, String(a.id)),
@@ -491,17 +492,17 @@ views.agents = async () => {
     el('td', {}, agentSourceCell(a)),
     el('td', { class: 'muted' }, fmtDate(a.last_report_at)),
     el('td', {}, el('div', { class: 'row-actions' },
-      el('button', { class: 'small ghost', onclick: () => showResults(a) }, 'Trafik'),
+      el('button', { class: 'small ghost', onclick: () => showResults(a) }, 'Traffic'),
       (a.monitor_config && (a.monitor_config.source === 'netflow' || a.monitor_config.source === 'sflow'))
         ? el('button', { class: 'small ghost', onclick: () => showAgentFlows(a) }, 'Flows')
         : null,
-      canWrite() ? el('button', { class: 'small', onclick: () => runTest(a) }, 'Kør test') : null,
-      canWrite() ? el('button', { class: 'small ghost', onclick: () => editAgent(a) }, 'Rediger') : null,
-      canDelete() ? el('button', { class: 'small danger', onclick: () => deleteAgent(a) }, 'Slet') : null,
+      canWrite() ? el('button', { class: 'small', onclick: () => runTest(a) }, 'Run test') : null,
+      canWrite() ? el('button', { class: 'small ghost', onclick: () => editAgent(a) }, 'Edit') : null,
+      canDelete() ? el('button', { class: 'small danger', onclick: () => deleteAgent(a) }, 'Delete') : null,
     )),
   ));
   root.append(el('table', {},
-    el('thead', {}, el('tr', {}, ...['ID', 'Navn / hostname', 'Platform', 'Status', 'Health', 'Lokation', 'Kilde', 'Senest rapporteret', ''].map((h) => el('th', {}, h)))),
+    el('thead', {}, el('tr', {}, ...['ID', 'Name / hostname', 'Platform', 'Status', 'Health', 'Location', 'Source', 'Last reported', ''].map((h) => el('th', {}, h)))),
     el('tbody', {}, ...rows)));
   return root;
 };
@@ -514,14 +515,14 @@ function agentHealthCell(a) {
   const FRESH = 5 * 60 * 1000; // 5 min
   let cls;
   let label;
-  if (a.status !== 'online') { cls = 'offline'; label = 'nede'; }
-  else if (ageMs <= FRESH) { cls = 'online'; label = 'sund'; }
-  else { cls = 'grace'; label = last ? 'forsinket' : 'ingen data'; }
-  const title = last ? `Senest rapporteret ${fmtDate(a.last_report_at)}` : 'Har ikke rapporteret endnu';
+  if (a.status !== 'online') { cls = 'offline'; label = 'down'; }
+  else if (ageMs <= FRESH) { cls = 'online'; label = 'healthy'; }
+  else { cls = 'grace'; label = last ? 'delayed' : 'no data'; }
+  const title = last ? `Last reported ${fmtDate(a.last_report_at)}` : 'Has not reported yet';
   return el('span', { class: `badge ${cls}`, title }, label);
 }
 
-// "+ Ny agent" jumps to the Enrollment screen, where the wizard generates a code
+// "+ New agent" jumps to the Enrollment screen, where the wizard generates a code
 // and a ready-to-run install command (with live "connected" feedback).
 async function newAgent() {
   currentView = 'enrollment';
@@ -531,7 +532,7 @@ async function newAgent() {
 async function runTest(a) {
   try {
     const res = await api(`/agents/${a.id}/run-test`, { method: 'POST', body: { intervalMs: 1000 } });
-    toast(`Test sendt til ${a.hostname} (leveret: ${res.delivered}). Henter resultat…`);
+    toast(`Test sent to ${a.hostname} (delivered: ${res.delivered}). Fetching result…`);
     setTimeout(() => showResults(a), 2000);
   } catch (err) { toast(err.message, true); }
 }
@@ -540,13 +541,13 @@ async function showResults(a) {
   try {
     const results = await api(`/agents/${a.id}/results`);
     const card = $('#modal-card');
-    const body = [el('h3', {}, `Trafik — ${esc(a.display_name || a.hostname)}`)];
+    const body = [el('h3', {}, `Traffic — ${esc(a.display_name || a.hostname)}`)];
     if (!results.length) {
-      body.push(el('p', { class: 'muted' }, 'Ingen resultater endnu. Tryk "Kør test".'));
+      body.push(el('p', { class: 'muted' }, 'No results yet. Click "Run test".'));
     } else {
       const latest = results[0];
       const t = latest.payload && latest.payload.traffic;
-      body.push(el('p', { class: 'muted' }, `Seneste: ${fmtDate(latest.created_at)} · ${results.length} målinger`));
+      body.push(el('p', { class: 'muted' }, `Latest: ${fmtDate(latest.created_at)} · ${results.length} measurements`));
 
       // Host performance (CPU/memory/load/uptime), when reported.
       const sys = latest.payload && latest.payload.system;
@@ -561,7 +562,7 @@ async function showResults(a) {
           .filter((r) => r.payload && r.payload.system)
           .map((r) => ({ rx: r.payload.system.cpuPercent || 0, tx: r.payload.system.memUsedPercent || 0 }));
         if (sysSeries.length >= 2) {
-          body.push(el('p', { class: 'muted' }, 'CPU % (blå) og memory % (grøn) over tid:'));
+          body.push(el('p', { class: 'muted' }, 'CPU % (blue) and memory % (green) over time:'));
           body.push(trafficChart(sysSeries));
         }
       }
@@ -591,7 +592,7 @@ async function showResults(a) {
         body.push(el('pre', {}, esc(JSON.stringify(latest.payload, null, 2))));
       }
     }
-    body.push(el('div', { class: 'form-actions' }, el('button', { class: 'ghost', onclick: closeModal }, 'Luk')));
+    body.push(el('div', { class: 'form-actions' }, el('button', { class: 'ghost', onclick: closeModal }, 'Close')));
     card.replaceChildren(...body);
     $('#modal').classList.remove('hidden');
   } catch (err) { toast(err.message, true); }
@@ -601,12 +602,12 @@ async function showResults(a) {
 // see top ports/protocols and (when filtered) a bytes-over-time series.
 function showAgentFlows(a) {
   const card = $('#modal-card');
-  const portInput = el('input', { type: 'number', placeholder: 'fx 443', min: '1', max: '65535' });
-  const protoInput = el('input', { type: 'text', placeholder: 'fx tcp / udp' });
+  const portInput = el('input', { type: 'number', placeholder: 'e.g. 443', min: '1', max: '65535' });
+  const protoInput = el('input', { type: 'text', placeholder: 'e.g. tcp / udp' });
   const result = el('div', {});
 
   async function search() {
-    result.replaceChildren(el('div', { class: 'empty' }, 'Søger…'));
+    result.replaceChildren(el('div', { class: 'empty' }, 'Searching…'));
     const qs = new URLSearchParams();
     if (portInput.value.trim()) qs.set('port', portInput.value.trim());
     if (protoInput.value.trim()) qs.set('protocol', protoInput.value.trim());
@@ -621,18 +622,18 @@ function showAgentFlows(a) {
       el('td', {}, String(p.port)), el('td', {}, fmtBytes(p.bytes)), el('td', {}, String(p.flows))));
     const protoRows = data.byProtocol.slice(0, 20).map((p) => el('tr', {},
       el('td', {}, p.protocol), el('td', {}, fmtBytes(p.bytes)), el('td', {}, String(p.flows))));
-    const kids = [el('p', { class: 'muted' }, `${data.measurements} målinger`)];
+    const kids = [el('p', { class: 'muted' }, `${data.measurements} measurements`)];
     if (data.series && data.series.length >= 2) {
       kids.push(trafficChart(data.series.map((s) => ({ rx: s.bytes, tx: 0 }))));
     }
     kids.push(
-      el('h4', {}, 'Top porte'),
+      el('h4', {}, 'Top ports'),
       data.byPort.length
         ? el('table', {}, el('thead', {}, el('tr', {}, ...['Port', 'Bytes', 'Flows'].map((h) => el('th', {}, h)))), el('tbody', {}, ...portRows))
-        : el('div', { class: 'empty' }, 'Ingen flow-data. Er NetFlow-eksport slået til på enheden mod denne agent?'),
-      el('h4', {}, 'Top protokoller'),
+        : el('div', { class: 'empty' }, 'No flow data. Is NetFlow export enabled on the device pointing to this agent?'),
+      el('h4', {}, 'Top protocols'),
       data.byProtocol.length
-        ? el('table', {}, el('thead', {}, el('tr', {}, ...['Protokol', 'Bytes', 'Flows'].map((h) => el('th', {}, h)))), el('tbody', {}, ...protoRows))
+        ? el('table', {}, el('thead', {}, el('tr', {}, ...['Protocol', 'Bytes', 'Flows'].map((h) => el('th', {}, h)))), el('tbody', {}, ...protoRows))
         : el('div', { class: 'empty' }, '–'));
     result.replaceChildren(...kids);
   }
@@ -640,11 +641,11 @@ function showAgentFlows(a) {
   card.replaceChildren(
     el('h3', {}, `Flows — ${esc(a.display_name || a.hostname)}`),
     el('div', { class: 'form-grid' },
-      el('label', {}, 'Port (valgfri)', portInput),
-      el('label', {}, 'Protokol (valgfri)', protoInput),
+      el('label', {}, 'Port (optional)', portInput),
+      el('label', {}, 'Protocol (optional)', protoInput),
       el('div', { class: 'form-actions' },
-        el('button', { onclick: search }, 'Søg'),
-        el('button', { class: 'ghost', onclick: closeModal }, 'Luk'))),
+        el('button', { onclick: search }, 'Search'),
+        el('button', { class: 'ghost', onclick: closeModal }, 'Close'))),
     result);
   $('#modal').classList.remove('hidden');
   search();
@@ -679,8 +680,8 @@ function trafficChart(series) {
   return el('div', { class: 'chart' },
     svg,
     el('div', { class: 'legend' },
-      el('span', {}, el('span', { class: 'dot rx' }), `RX (maks ${fmtBytes(max)}/s)`),
-      el('span', {}, el('span', { class: 'dot tx' }), `TX (maks ${fmtBytes(max)}/s)`)));
+      el('span', {}, el('span', { class: 'dot rx' }), `RX (max ${fmtBytes(max)}/s)`),
+      el('span', {}, el('span', { class: 'dot tx' }), `TX (max ${fmtBytes(max)}/s)`)));
 }
 
 // Distinct colours for many simultaneous series.
@@ -792,11 +793,11 @@ const histState = { agentId: '', metrics: new Set(['rx', 'tx']) };
 // (toLocalInput(Date) lives with the other datetime-local helpers below.)
 function fmtNum(v) { return v >= 1024 ? fmtBytes(v) : String(Math.round(v * 10) / 10); }
 function fmtTimeShort(ms) {
-  return new Date(ms).toLocaleString('da-DK', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+  return new Date(ms).toLocaleString('en-GB', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
 }
 // Clock with seconds — for the live overview's running time ticks.
 function fmtClock(ms) {
-  return new Date(ms).toLocaleTimeString('da-DK', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  return new Date(ms).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
 
 // Legend row for a chart: a coloured dot + label per series.
@@ -894,9 +895,9 @@ function historyChart(seriesList, { fromMs, toMs, onBrush, height = 300, band = 
 
 // Historical traffic for one agent over a date range, with selectable metric
 // types and a drag-to-zoom brush to investigate a specific timeframe.
-function trafficHistorySection() {
+function trafficHistorySection({ onData = () => {} } = {}) {
   const wrap = el('div', { class: 'history' });
-  const agentSel = el('select', {}, el('option', { value: '' }, 'Vælg agent…'));
+  const agentSel = el('select', {}, el('option', { value: '' }, 'Select agent…'));
   const fromI = el('input', { type: 'datetime-local' });
   const toI = el('input', { type: 'datetime-local' });
   const now = Date.now();
@@ -915,13 +916,13 @@ function trafficHistorySection() {
   let baseFrom = null;
   let baseTo = null;
 
-  const fetchBtn = el('button', { class: 'small', onclick: () => { baseFrom = fromI.value; baseTo = toI.value; load(); } }, 'Hent');
-  const resetBtn = el('button', { class: 'small ghost', onclick: () => { if (baseFrom) { fromI.value = baseFrom; toI.value = baseTo; load(); } } }, 'Nulstil zoom');
+  const fetchBtn = el('button', { class: 'small', onclick: () => { baseFrom = fromI.value; baseTo = toI.value; load(); } }, 'Fetch');
+  const resetBtn = el('button', { class: 'small ghost', onclick: () => { if (baseFrom) { fromI.value = baseFrom; toI.value = baseTo; load(); } } }, 'Reset zoom');
 
   wrap.append(el('div', { class: 'history-controls' },
     el('label', { class: 'inline muted' }, 'Agent ', agentSel),
-    el('label', { class: 'inline muted' }, 'Fra ', fromI),
-    el('label', { class: 'inline muted' }, 'Til ', toI),
+    el('label', { class: 'inline muted' }, 'From ', fromI),
+    el('label', { class: 'inline muted' }, 'To ', toI),
     fetchBtn, resetBtn));
   wrap.append(el('div', { class: 'history-metrics' }, ...metricBoxes));
   wrap.append(chartHost, status);
@@ -937,15 +938,15 @@ function trafficHistorySection() {
   async function load(range) {
     const agentId = agentSel.value;
     histState.agentId = agentId;
-    if (!agentId) { status.textContent = 'Vælg en agent.'; return; }
+    if (!agentId) { onData({ state: 'prompt' }); status.textContent = 'Select an agent.'; return; }
     let fromMs = range ? range.fromMs : (fromI.value ? new Date(fromI.value).getTime() : NaN);
     let toMs = range ? range.toMs : (toI.value ? new Date(toI.value).getTime() : NaN);
-    if (Number.isNaN(fromMs) || Number.isNaN(toMs)) { status.textContent = 'Ugyldig periode.'; return; }
+    if (Number.isNaN(fromMs) || Number.isNaN(toMs)) { onData({ state: 'prompt' }); status.textContent = 'Invalid period.'; return; }
     if (toMs < fromMs) { const tmp = fromMs; fromMs = toMs; toMs = tmp; }
     // Guarantee a usable window even for a tiny brush (agents report ~every 60s).
     const MIN_MS = 60 * 1000;
     if (toMs - fromMs < MIN_MS) { const mid = (fromMs + toMs) / 2; fromMs = Math.round(mid - MIN_MS / 2); toMs = Math.round(mid + MIN_MS / 2); }
-    status.textContent = 'Henter…';
+    status.textContent = 'Fetching…';
     chartHost.replaceChildren();
     let rows;
     try {
@@ -960,10 +961,12 @@ function trafficHistorySection() {
         load1: Array.isArray(sys.loadavg) ? Number(sys.loadavg[0]) || 0 : 0,
       };
     }).sort((a, b) => a.t - b.t);
-    if (!points.length) { status.textContent = 'Ingen data i perioden.'; return; }
-    status.textContent = `${points.length} målinger`;
+    if (!points.length) { onData({ state: 'empty', agentId, fromMs, toMs }); status.textContent = 'No data in this period.'; return; }
+    status.textContent = `${points.length} measurements`;
+    // Feed the companion Traffic types card the same samples (no extra fetch).
+    onData({ state: 'data', agentId, fromMs, toMs, points });
     const chosen = METRIC_DEFS.filter(([k]) => histState.metrics.has(k));
-    if (!chosen.length) { chartHost.replaceChildren(el('div', { class: 'empty' }, 'Vælg mindst én type.')); return; }
+    if (!chosen.length) { chartHost.replaceChildren(el('div', { class: 'empty' }, 'Select at least one type.')); return; }
     const seriesList = chosen.map(([k, label], idx) => ({ id: k, label, color: SERIES_COLORS[idx % SERIES_COLORS.length], points: points.map((p) => ({ t: p.t, y: p[k] })) }));
     const legend = legendFor(seriesList);
     // #7 event timeline: findings for this agent in the window as markers. Band
@@ -992,11 +995,111 @@ function trafficHistorySection() {
       load({ fromMs: a, toMs: b });
     } else {
       status.className = 'muted';
-      status.textContent = 'Vælg en agent for at se de gemte data for det markerede vindue.';
+      status.textContent = 'Select an agent to see the stored data for the marked window.';
     }
   }
 
   return { node: wrap, focus };
+}
+
+// Compact aggregate companion shown beside the History panel. It derives total
+// / peak / split RX·TX from the SAME samples the history chart already fetched
+// (no extra API call) and, best-effort, lists the top traffic-type categories
+// from /api/flows/categories. Driven by the history section via update() — see
+// trafficHistorySection({ onData }).
+function trafficTypesCard() {
+  const body = el('div', { class: 'tt-body' });
+  const card = el('details', { class: 'sec tt-card', open: '' },
+    el('summary', {}, 'Traffic types ', el('span', { class: 'muted' }, '· aggregated for selected period')),
+    body);
+  let reqToken = 0; // guards against out-of-order /categories responses
+
+  const statNode = (label, value, sub) => el('div', { class: 'tt-stat' },
+    el('div', { class: 'l' }, label),
+    el('div', { class: 'v' }, value),
+    sub ? el('div', { class: 's' }, sub) : null);
+
+  // Representative sample interval (seconds): robust median of the gaps between
+  // consecutive samples (agents report ~every 60s). Used to turn bytes/s
+  // samples into a byte total for the window (Σ samples × interval).
+  function intervalSec(points) {
+    if (points.length < 2) return 60;
+    const gaps = [];
+    for (let i = 1; i < points.length; i += 1) {
+      const d = (points[i].t - points[i - 1].t) / 1000;
+      if (d > 0) gaps.push(d);
+    }
+    if (!gaps.length) return 60;
+    gaps.sort((a, b) => a - b);
+    return gaps[Math.floor(gaps.length / 2)];
+  }
+
+  // Best-effort top traffic types. Server-side classification exists
+  // (/api/flows/categories: port + ASN categories); if it is empty or fails we
+  // note that a protocol breakdown is not yet available.
+  function renderTypes(payload) {
+    const host = el('div', { class: 'tt-types' }, el('h4', {}, 'Top types'), el('div', { class: 'muted' }, 'Loading…'));
+    body.append(host);
+    const myToken = (reqToken += 1);
+    const unavailable = () => host.replaceChildren(el('h4', {}, 'Top types'), el('div', { class: 'muted' }, 'Protocol breakdown is not yet available'));
+    api(`/api/flows/categories?agentId=${encodeURIComponent(payload.agentId)}&from=${new Date(payload.fromMs).toISOString()}&to=${new Date(payload.toMs).toISOString()}`)
+      .then((data) => {
+        if (myToken !== reqToken) return; // superseded by a newer load
+        const cats = (data && data.categories) || [];
+        if (!cats.length) { unavailable(); return; }
+        const top = cats.slice(0, 5);
+        const max = Math.max(1, ...top.map((c) => c.total));
+        host.replaceChildren(el('h4', {}, 'Top types'), el('ul', {}, ...top.map((c, i) => el('li', {},
+          el('span', { class: 'sw', style: `background:${SERIES_COLORS[i % SERIES_COLORS.length]}` }),
+          el('span', { class: 'nm' }, c.label),
+          el('span', { class: 'tt-mini' }, el('span', { class: 'tt-mini-fill', style: `width:${Math.round((c.total / max) * 100)}%` })),
+          el('span', { class: 'by' }, fmtBytes(c.total))))));
+      })
+      .catch(() => { if (myToken === reqToken) unavailable(); });
+  }
+
+  // Called by the history section after every load() (Fetch / brush / focus).
+  function update(payload) {
+    reqToken += 1; // cancel any in-flight categories request
+    const state = payload && payload.state;
+    if (state !== 'data') {
+      body.replaceChildren(el('div', { class: 'empty' }, state === 'prompt' ? 'Select an agent and load data' : 'No traffic data in the selected period'));
+      return;
+    }
+    const points = payload.points || [];
+    const sec = intervalSec(points);
+    let totalRx = 0;
+    let totalTx = 0;
+    let peakRx = { y: -1, t: 0 };
+    let peakTx = { y: -1, t: 0 };
+    for (const p of points) {
+      totalRx += p.rx * sec;
+      totalTx += p.tx * sec;
+      if (p.rx > peakRx.y) peakRx = { y: p.rx, t: p.t };
+      if (p.tx > peakTx.y) peakTx = { y: p.tx, t: p.t };
+    }
+    const sum = totalRx + totalTx;
+    const rxPct = sum > 0 ? Math.round((totalRx / sum) * 100) : 0;
+    const txPct = sum > 0 ? 100 - rxPct : 0;
+
+    body.replaceChildren(
+      el('div', { class: 'tt-totals' },
+        statNode('Total RX', fmtBytes(totalRx)),
+        statNode('Total TX', fmtBytes(totalTx))),
+      el('div', { class: 'tt-split' },
+        el('div', { class: 'l' }, 'RX/TX split'),
+        el('div', { class: 'split-bar' },
+          el('span', { class: 'rx', style: `width:${rxPct}%` }),
+          el('span', { class: 'tx', style: `width:${txPct}%` })),
+        el('div', { class: 'split-legend' }, `RX ${rxPct}% · TX ${txPct}%`)),
+      el('div', { class: 'tt-peaks' },
+        statNode('Peak RX', peakRx.y >= 0 ? `${fmtBytes(peakRx.y)}/s` : '–', peakRx.y > 0 ? fmtTimeShort(peakRx.t) : null),
+        statNode('Peak TX', peakTx.y >= 0 ? `${fmtBytes(peakTx.y)}/s` : '–', peakTx.y > 0 ? fmtTimeShort(peakTx.t) : null)));
+    renderTypes(payload);
+  }
+
+  update({ state: 'prompt' });
+  return { node: card, update };
 }
 
 // Traffic-type breakdown for one agent over a period: bytes per category
@@ -1004,7 +1107,7 @@ function trafficHistorySection() {
 // Separate from the live RX/TX chart; opt-in (the section is collapsed).
 function trafficTypeSection() {
   const wrap = el('div', { class: 'history traffic-type' });
-  const agentSel = el('select', {}, el('option', { value: '' }, 'Vælg agent…'));
+  const agentSel = el('select', {}, el('option', { value: '' }, 'Select agent…'));
   const fromI = el('input', { type: 'datetime-local' });
   const toI = el('input', { type: 'datetime-local' });
   const now = Date.now();
@@ -1016,11 +1119,11 @@ function trafficTypeSection() {
   const selection = new Set();
   let last = null; // last /api/flows/categories response
 
-  const fetchBtn = el('button', { class: 'small', onclick: () => load() }, 'Hent');
+  const fetchBtn = el('button', { class: 'small', onclick: () => load() }, 'Fetch');
   wrap.append(el('div', { class: 'history-controls' },
     el('label', { class: 'inline muted' }, 'Agent ', agentSel),
-    el('label', { class: 'inline muted' }, 'Fra ', fromI),
-    el('label', { class: 'inline muted' }, 'Til ', toI),
+    el('label', { class: 'inline muted' }, 'From ', fromI),
+    el('label', { class: 'inline muted' }, 'To ', toI),
     fetchBtn));
   wrap.append(chips, chartHost, status);
 
@@ -1032,7 +1135,7 @@ function trafficTypeSection() {
 
   function renderChips() {
     if (!last || !last.categories.length) { chips.replaceChildren(); return; }
-    chips.replaceChildren(el('span', { class: 'muted' }, 'Typer:'), ...last.categories.map((c, i) => {
+    chips.replaceChildren(el('span', { class: 'muted' }, 'Types:'), ...last.categories.map((c, i) => {
       const on = selection.has(c.id);
       return el('button', {
         class: `chip${on ? ' on' : ''}`,
@@ -1044,7 +1147,7 @@ function trafficTypeSection() {
 
   function renderChart() {
     if (!last || !last.categories.length) {
-      chartHost.replaceChildren(el('div', { class: 'empty' }, 'Ingen trafiktype-data i perioden.'));
+      chartHost.replaceChildren(el('div', { class: 'empty' }, 'No traffic type data in this period.'));
       return;
     }
     const fromMs = Date.parse(last.from);
@@ -1056,17 +1159,17 @@ function trafficTypeSection() {
     }));
     const legend = legendFor(seriesList);
     chartHost.replaceChildren(
-      seriesList.length ? historyChart(seriesList, { fromMs, toMs }) : el('div', { class: 'empty' }, 'Vælg en eller flere typer ovenfor.'),
+      seriesList.length ? historyChart(seriesList, { fromMs, toMs }) : el('div', { class: 'empty' }, 'Select one or more types above.'),
       legend);
   }
 
   async function load() {
     const agentId = agentSel.value;
-    if (!agentId) { status.className = 'muted'; status.textContent = 'Vælg en agent.'; return; }
+    if (!agentId) { status.className = 'muted'; status.textContent = 'Select an agent.'; return; }
     const fromMs = fromI.value ? new Date(fromI.value).getTime() : NaN;
     const toMs = toI.value ? new Date(toI.value).getTime() : NaN;
-    if (Number.isNaN(fromMs) || Number.isNaN(toMs)) { status.textContent = 'Ugyldig periode.'; return; }
-    status.className = 'muted'; status.textContent = 'Henter…';
+    if (Number.isNaN(fromMs) || Number.isNaN(toMs)) { status.textContent = 'Invalid period.'; return; }
+    status.className = 'muted'; status.textContent = 'Fetching…';
     chartHost.replaceChildren(); chips.replaceChildren();
     let data;
     try {
@@ -1076,8 +1179,8 @@ function trafficTypeSection() {
     selection.clear();
     for (const c of data.categories.slice(0, 6)) selection.add(c.id); // default: top types on
     status.textContent = data.categories.length
-      ? `${data.categories.length} trafiktyper i perioden`
-      : 'Ingen trafiktyper i perioden — kræver en NetFlow/sFlow-kilde (port-typer) eller geo-data (organisationer).';
+      ? `${data.categories.length} traffic types in this period`
+      : 'No traffic types in this period — requires a NetFlow/sFlow source (port types) or geo data (organisations).';
     renderChips();
     renderChart();
   }
@@ -1090,10 +1193,10 @@ function trafficTypeSection() {
 // Server storage cards: disk usage (where Docker/DB lives) + database size.
 function fmtTimeToFull(days) {
   if (!Number.isFinite(days) || days <= 0) return '–';
-  if (days >= 730) return `~${Math.round(days / 365)} år`;
-  if (days >= 60) return `~${Math.round(days / 30)} mdr`;
-  if (days >= 1) return `~${Math.round(days)} dage`;
-  return '< 1 dag';
+  if (days >= 730) return `~${Math.round(days / 365)} yr`;
+  if (days >= 60) return `~${Math.round(days / 30)} mo`;
+  if (days >= 1) return `~${Math.round(days)} days`;
+  return '< 1 day';
 }
 
 // Slim one-line storage summary (the parts of a <summary> row): disk usage bar +
@@ -1102,23 +1205,23 @@ function storageLineParts(s) {
   const d = s.disk || {};
   const db = s.database || {};
   const ing = s.ingest || null;
-  const parts = [el('span', { class: 'muted' }, 'Lager')];
+  const parts = [el('span', { class: 'muted' }, 'Storage')];
   if (d.available) {
     parts.push(usageBar(d.usedPercent));
     parts.push(el('span', { class: 'num' }, `${fmtBytes(d.usedBytes)} / ${fmtBytes(d.totalBytes)} (${d.usedPercent}%)`));
   } else {
-    parts.push(el('span', { class: 'muted' }, 'drev utilgængeligt'));
+    parts.push(el('span', { class: 'muted' }, 'drive unavailable'));
   }
   const extra = [];
   if (!db.error && db.totalBytes != null) extra.push(`DB ${fmtBytes(db.totalBytes)}`);
   if (ing) {
     const perSec = ing.minutes > 0 ? ing.bytes / (ing.minutes * 60) : 0;
-    extra.push(`~${fmtBytes(ing.bytesPerDay)}/dag`);
-    if (d.available && perSec > 0 && d.freeBytes > 0) extra.push(`disk fuld ${fmtTimeToFull(d.freeBytes / (perSec * 86400))}`);
+    extra.push(`~${fmtBytes(ing.bytesPerDay)}/day`);
+    if (d.available && perSec > 0 && d.freeBytes > 0) extra.push(`disk full ${fmtTimeToFull(d.freeBytes / (perSec * 86400))}`);
   }
   if (extra.length) parts.push(el('span', { class: 'muted num' }, `· ${extra.join(' · ')}`));
   parts.push(el('span', { class: 'spacer' }));
-  parts.push(el('span', { class: 'fold-cta muted' }, 'Detaljer'));
+  parts.push(el('span', { class: 'fold-cta muted' }, 'Details'));
   return parts;
 }
 
@@ -1126,7 +1229,7 @@ function storageLineParts(s) {
 // from how much was actually stored in the last few minutes.
 function storageCards(s) {
   const wrap = el('div', { class: 'storage' });
-  wrap.append(el('h3', { class: 'storage-h' }, 'Lagerplads (server)'));
+  wrap.append(el('h3', { class: 'storage-h' }, 'Server storage'));
   const card = el('div', { class: 'stat storage-card' });
   const d = s.disk || {};
   const db = s.database || {};
@@ -1135,37 +1238,37 @@ function storageCards(s) {
   // Disk
   if (d.available) {
     card.append(
-      el('div', { class: 'storage-row' }, el('span', { class: 'k' }, `Drev ${esc(d.path || '')}`), el('span', { class: 'v' }, `${fmtBytes(d.freeBytes)} fri`)),
+      el('div', { class: 'storage-row' }, el('span', { class: 'k' }, `Drive ${esc(d.path || '')}`), el('span', { class: 'v' }, `${fmtBytes(d.freeBytes)} free`)),
       usageBar(d.usedPercent),
-      el('div', { class: 'small muted' }, `${fmtBytes(d.usedBytes)} brugt af ${fmtBytes(d.totalBytes)} (${d.usedPercent}%)`));
+      el('div', { class: 'small muted' }, `${fmtBytes(d.usedBytes)} used of ${fmtBytes(d.totalBytes)} (${d.usedPercent}%)`));
   } else {
-    card.append(el('div', { class: 'storage-row' }, el('span', { class: 'k' }, 'Drev'), el('span', { class: 'v muted' }, 'utilgængelig')));
+    card.append(el('div', { class: 'storage-row' }, el('span', { class: 'k' }, 'Drive'), el('span', { class: 'v muted' }, 'unavailable')));
   }
 
   card.append(el('hr', { class: 'storage-sep' }));
 
   // Database
   if (db.error) {
-    card.append(el('div', { class: 'storage-row' }, el('span', { class: 'k' }, 'Database'), el('span', { class: 'v muted' }, 'utilgængelig')));
+    card.append(el('div', { class: 'storage-row' }, el('span', { class: 'k' }, 'Database'), el('span', { class: 'v muted' }, 'unavailable')));
   } else {
     const biggest = (db.tables && db.tables[0]) || null;
     card.append(
       el('div', { class: 'storage-row' }, el('span', { class: 'k' }, `Database ${esc(db.name || '')}`), el('span', { class: 'v' }, fmtBytes(db.totalBytes))),
-      el('div', { class: 'small muted' }, `${db.tableCount} tabeller${biggest ? ` · størst: ${esc(biggest.name)} (${fmtBytes(biggest.bytes)})` : ''}`));
+      el('div', { class: 'small muted' }, `${db.tableCount} tables${biggest ? ` · largest: ${esc(biggest.name)} (${fmtBytes(biggest.bytes)})` : ''}`));
   }
 
   // Consumption estimate from the last few minutes of stored measurements.
   if (ing) {
     card.append(el('hr', { class: 'storage-sep' }));
     const perSec = ing.minutes > 0 ? ing.bytes / (ing.minutes * 60) : 0;
-    const detail = [`${fmtBytes(ing.bytes)} gemt seneste ${ing.minutes} min (${ing.rows} målinger)`];
+    const detail = [`${fmtBytes(ing.bytes)} stored in the last ${ing.minutes} min (${ing.rows} measurements)`];
     if (d.available && perSec > 0 && d.freeBytes > 0) {
-      detail.push(`disk fuld om ${fmtTimeToFull(d.freeBytes / (perSec * 86400))}`);
+      detail.push(`disk full in ${fmtTimeToFull(d.freeBytes / (perSec * 86400))}`);
     } else if (perSec === 0) {
-      detail.push('ingen ny ingest at estimere ud fra');
+      detail.push('no new ingest to estimate from');
     }
     card.append(
-      el('div', { class: 'storage-row' }, el('span', { class: 'k' }, 'Estimeret forbrug'), el('span', { class: 'v' }, `≈ ${fmtBytes(ing.bytesPerDay)}/dag`)),
+      el('div', { class: 'storage-row' }, el('span', { class: 'k' }, 'Estimated consumption'), el('span', { class: 'v' }, `≈ ${fmtBytes(ing.bytesPerDay)}/day`)),
       el('div', { class: 'small muted' }, detail.join(' · ')));
   }
 
@@ -1179,7 +1282,7 @@ function usageBar(percent) {
   return el('div', { class: 'usagebar' }, el('div', { class: `fill ${cls}`, style: `width:${p}%` }));
 }
 
-// ---- Analyse (findings + AI assistant) ------------------------------------
+// ---- Analysis (findings + AI assistant) ----------------------------------
 // hostId of a finding is the agent id (the analysis pipeline keys on it).
 const findingsState = { hostId: '', tbody: null, agentName: null };
 
@@ -1201,7 +1304,7 @@ async function downloadExport(resource, format, params = {}) {
 }
 function exportButtons(resource, getParams) {
   return el('span', { class: 'export-btns' },
-    el('span', { class: 'muted' }, 'Eksport:'),
+    el('span', { class: 'muted' }, 'Export:'),
     el('button', { class: 'small ghost', onclick: () => downloadExport(resource, 'csv', getParams ? getParams() : {}) }, 'CSV'),
     el('button', { class: 'small ghost', onclick: () => downloadExport(resource, 'json', getParams ? getParams() : {}) }, 'JSON'));
 }
@@ -1216,15 +1319,15 @@ views.findings = async () => {
   findingsState.agentName = agentName;
 
   const hostSelect = el('select', {},
-    el('option', { value: '' }, 'Alle hosts'),
+    el('option', { value: '' }, 'All hosts'),
     ...agents.map((a) => el('option',
       { value: String(a.id), ...(String(a.id) === findingsState.hostId ? { selected: 'selected' } : {}) },
       a.display_name || a.hostname)));
   hostSelect.addEventListener('change', () => { findingsState.hostId = hostSelect.value; loadList(); });
 
   root.append(el('div', { class: 'section-head' },
-    el('h2', {}, 'Analyse — fejl & anomalier'),
-    el('span', { class: 'muted' }, 'lokalt beregnet'),
+    el('h2', {}, 'Analysis — errors & anomalies'),
+    el('span', { class: 'muted' }, 'computed locally'),
     el('span', { class: 'spacer' }),
     exportButtons('findings', () => (findingsState.hostId ? { hostId: findingsState.hostId } : {})),
     el('label', { class: 'muted inline' }, 'Host ', hostSelect)));
@@ -1235,7 +1338,7 @@ views.findings = async () => {
   root.append(listHost);
 
   async function loadList() {
-    listHost.replaceChildren(el('div', { class: 'empty' }, 'Indlæser…'));
+    listHost.replaceChildren(el('div', { class: 'empty' }, 'Loading…'));
     let findings;
     try {
       const qs = findingsState.hostId ? `?hostId=${encodeURIComponent(findingsState.hostId)}` : '';
@@ -1247,13 +1350,13 @@ views.findings = async () => {
     }
     if (!findings.length) {
       findingsState.tbody = null;
-      listHost.replaceChildren(el('div', { class: 'empty' }, 'Ingen findings endnu. Når en agent rapporterer unormale målinger, dukker de op her.'));
+      listHost.replaceChildren(el('div', { class: 'empty' }, 'No findings yet. When an agent reports abnormal measurements they will appear here.'));
       return;
     }
     const tbody = el('tbody', {}, ...findings.map((f) => findingRow(agentName, f)));
     findingsState.tbody = tbody;
     listHost.replaceChildren(el('table', { class: 'findings' },
-      el('thead', {}, el('tr', {}, ...['Tid', 'Host', 'Metric', 'Severity', 'Afvigelse', 'Forklaring', ''].map((h) => el('th', {}, h)))),
+      el('thead', {}, el('tr', {}, ...['Time', 'Host', 'Metric', 'Severity', 'Deviation', 'Explanation', ''].map((h) => el('th', {}, h)))),
       tbody));
   }
 
@@ -1264,11 +1367,11 @@ views.findings = async () => {
 function findingRow(agentName, f) {
   const dev = typeof f.deviation === 'number' ? `${f.deviation.toFixed(1)}σ` : '–';
   const corr = Array.isArray(f.correlatedWith) && f.correlatedWith.length
-    ? el('div', { class: 'muted' }, `korreleret med ${f.correlatedWith.length} anden(e)`)
+    ? el('div', { class: 'muted' }, `correlated with ${f.correlatedWith.length} other(s)`)
     : null;
   const action = f.acked
-    ? el('span', { class: 'muted' }, 'kvitteret')
-    : (canWrite() ? el('button', { class: 'small ghost', onclick: (e) => ackFinding(f, e.target) }, 'Kvittér') : null);
+    ? el('span', { class: 'muted' }, 'acknowledged')
+    : (canWrite() ? el('button', { class: 'small ghost', onclick: (e) => ackFinding(f, e.target) }, 'Acknowledge') : null);
   const tr = el('tr', { class: f.acked ? 'acked' : '' },
     el('td', { class: 'muted' }, fmtDate(f.createdAt)),
     el('td', {}, agentName(f.hostId)),
@@ -1287,9 +1390,9 @@ async function ackFinding(f, btn) {
   try {
     await api(`/api/findings/${encodeURIComponent(f.id)}/ack`, { method: 'POST' });
     f.acked = true;
-    toast('Kvitteret');
+    toast('Acknowledged');
     const tr = btn && btn.closest('tr');
-    if (tr) { tr.classList.add('acked'); btn.replaceWith(el('span', { class: 'muted' }, 'kvitteret')); }
+    if (tr) { tr.classList.add('acked'); btn.replaceWith(el('span', { class: 'muted' }, 'acknowledged')); }
   } catch (err) {
     if (btn) btn.disabled = false;
     toast(err.message, true);
@@ -1299,25 +1402,25 @@ async function ackFinding(f, btn) {
 // AI-assistant box. Posts to /api/assistant/explain; degrades gracefully when
 // the feature is disabled (403) so it never looks broken.
 function assistantBox(getHostId) {
-  const input = el('input', { type: 'text', placeholder: 'Spørg fx: hvorfor er CPU høj på denne host?' });
-  const btn = el('button', { class: 'small' }, 'Spørg assistenten');
-  const out = el('div', { class: 'assistant-out muted' }, 'Stil et spørgsmål om en host ud fra de seneste findings.');
+  const input = el('input', { type: 'text', placeholder: 'Ask e.g.: why is CPU high on this host?' });
+  const btn = el('button', { class: 'small' }, 'Ask assistant');
+  const out = el('div', { class: 'assistant-out muted' }, 'Ask a question about a host based on the latest findings.');
   async function ask() {
     const question = input.value.trim();
     if (!question) { input.focus(); return; }
     btn.disabled = true;
     out.className = 'assistant-out muted';
-    out.textContent = 'Tænker…';
+    out.textContent = 'Thinking…';
     try {
       const res = await api('/api/assistant/explain', { method: 'POST', body: { question, hostId: getHostId() || undefined } });
       out.className = 'assistant-out';
       out.replaceChildren(
-        el('div', {}, res.answer || '(tomt svar)'),
-        el('div', { class: 'assistant-meta muted' }, `${esc(res.model || '')} · ${res.usedFindings ?? 0} findings i kontekst`));
+        el('div', {}, res.answer || '(empty response)'),
+        el('div', { class: 'assistant-meta muted' }, `${esc(res.model || '')} · ${res.usedFindings ?? 0} findings in context`));
     } catch (err) {
       out.className = 'assistant-out muted';
       out.textContent = err.status === 403
-        ? 'AI-assistenten er slået fra. Sæt ANALYSIS_ASSISTANT_ENABLED=true (og en API-nøgle) i serverens .env for at bruge den.'
+        ? 'The AI assistant is disabled. Set ANALYSIS_ASSISTANT_ENABLED=true (and an API key) in the server\'s .env to use it.'
         : err.message;
     } finally {
       btn.disabled = false;
@@ -1332,8 +1435,8 @@ function assistantBox(getHostId) {
 
 views.overview = async () => {
   const root = el('div', { class: 'overview' });
-  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Trafik'),
-    el('span', { class: 'muted' }, 'auto-opdaterer hvert 3. sek.')));
+  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Traffic'),
+    el('span', { class: 'muted' }, 'auto-updates every 3 sec.')));
 
   // NOC: alert banner (latest unacked CRIT/WARN finding) + KPI grid.
   const alertBanner = el('div', { class: 'alert-banner hidden' });
@@ -1347,8 +1450,8 @@ views.overview = async () => {
   };
   const kRx = kpiStat('rx', '↓ RX');
   const kTx = kpiStat('tx', '↑ TX');
-  const kAg = kpiStat('ag', 'Agenter');
-  const kLoc = kpiStat('loc', 'Lokationer');
+  const kAg = kpiStat('ag', 'Agents');
+  const kLoc = kpiStat('loc', 'Locations');
   root.append(el('div', { class: 'kpis' }, kRx.node, kTx.node, kAg.node, kLoc.node));
 
   async function refreshAlert() {
@@ -1362,14 +1465,14 @@ views.overview = async () => {
           el('span', {}, `${hit.severity}: ${esc(hit.metric || '')} — ${esc(hit.explanation || '')}`),
           el('span', { class: 'spacer' }),
           el('span', { class: 'muted small' }, fmtDate(hit.createdAt)),
-          el('button', { class: 'small ghost', onclick: () => { currentView = 'findings'; render(); } }, 'Detaljer'));
+          el('button', { class: 'small ghost', onclick: () => { currentView = 'findings'; render(); } }, 'Details'));
       } else { alertBanner.className = 'alert-banner hidden'; alertBanner.replaceChildren(); }
     } catch { alertBanner.className = 'alert-banner hidden'; }
   }
   refreshAlert();
   api('/locations').then((locs) => {
     kLoc.value.textContent = String(locs.length);
-    kLoc.node.title = `${locs.filter((l) => l.latitude != null).length} med koordinater`;
+    kLoc.node.title = `${locs.filter((l) => l.latitude != null).length} with coordinates`;
   }).catch(() => {});
 
   // Top agents by current bandwidth (updated each tick).
@@ -1390,13 +1493,13 @@ views.overview = async () => {
   let bigView = false;
   try { bigView = localStorage.getItem('blueeye.server.trafikBig') === '1'; } catch { /* storage off */ }
   const chartCard = el('div', { class: 'chart-card' },
-    el('div', { class: 'bar' }, el('h3', {}, 'Live trafik'), el('span', { class: 'spacer' }), chipRx, chipTx, perAgent, sizeBtn),
+    el('div', { class: 'bar' }, el('h3', {}, 'Live traffic'), el('span', { class: 'spacer' }), chipRx, chipTx, perAgent, sizeBtn),
     el('div', { class: 'chart-row' }, chartHost, markedStrip));
   root.append(chartCard);
   clearMarked(); // side panel stays hidden until a brush selection
 
   // Slim storage line; the full disk/DB/forbrug breakdown folds open below it.
-  const storageSummary = el('summary', { class: 'storage-line' }, el('span', { class: 'muted' }, 'Lager …'));
+  const storageSummary = el('summary', { class: 'storage-line' }, el('span', { class: 'muted' }, 'Storage …'));
   const storageBody = el('div', { class: 'storage-detail-body' });
   root.append(el('details', { class: 'storage-fold' }, storageSummary, storageBody));
   function refreshStorage() {
@@ -1407,7 +1510,7 @@ views.overview = async () => {
   }
   refreshStorage();
 
-  root.append(el('details', { class: 'sec' }, el('summary', {}, 'Top agenter ', el('span', { class: 'muted' }, '· efter aktuel båndbredde')), topAgents));
+  root.append(el('details', { class: 'sec' }, el('summary', {}, 'Top agents ', el('span', { class: 'muted' }, '· by current bandwidth')), topAgents));
 
   // history[seriesId] = [{ y }]; selection is a Set of seriesId.
   const history = new Map();
@@ -1460,7 +1563,7 @@ views.overview = async () => {
       ...(top.length ? top.map(({ a, rx, tx }) => el('div', { class: 'ta-row' },
         el('span', { class: `badge ${a.status}` }, a.status === 'online' ? '●' : '○'),
         el('span', { class: 'ta-name' }, esc(a.display_name || a.hostname)),
-        el('span', { class: 'ta-bw muted' }, `↓ ${fmtBytes(rx)}/s · ↑ ${fmtBytes(tx)}/s`))) : [el('div', { class: 'muted' }, 'Ingen agenter.')]));
+        el('span', { class: 'ta-bw muted' }, `↓ ${fmtBytes(rx)}/s · ↑ ${fmtBytes(tx)}/s`))) : [el('div', { class: 'muted' }, 'No agents.')]));
 
     // Default selection on first load: the two totals.
     if (!selection.size) { selection.add('total:rx'); selection.add('total:tx'); }
@@ -1486,14 +1589,14 @@ views.overview = async () => {
     // x-axis shows the live timeframe rather than a static "~3 min siden / nu".
     const ref = seriesList.find((s) => s.points.length >= 2);
     const TICKS = 5;
-    let xLabels = ['~3 min siden', '', 'nu'];
+    let xLabels = ['~3 min ago', '', 'now'];
     if (ref) {
       const pts = ref.points;
       xLabels = Array.from({ length: TICKS }, (_, i) =>
         fmtClock(pts[Math.round((i / (TICKS - 1)) * (pts.length - 1))].t));
     }
     chartHost.replaceChildren(
-      seriesList.length ? multiChart(seriesList, { height: bigView ? 560 : 300, area: true, xLabels, onBrush: (f0, f1) => { if (f0 === null) clearMarked(); else renderMarked(f0, f1); } }) : el('div', { class: 'empty' }, 'Vælg serier i værktøjslinjen ↑'),
+      seriesList.length ? multiChart(seriesList, { height: bigView ? 560 : 300, area: true, xLabels, onBrush: (f0, f1) => { if (f0 === null) clearMarked(); else renderMarked(f0, f1); } }) : el('div', { class: 'empty' }, 'Select series in the toolbar ↑'),
       legend);
     syncChips();
   }
@@ -1521,18 +1624,18 @@ views.overview = async () => {
     const lastIdx = Math.min(i1, ref.length - 1);
     const tTo = ref[lastIdx] && ref[lastIdx].t;
     const children = [
-      el('div', { class: 'ms-head' }, el('strong', {}, 'Markeret'), el('span', { class: 'spacer' }), el('button', { class: 'small ghost', onclick: clearMarked }, 'Ryd')),
+      el('div', { class: 'ms-head' }, el('strong', {}, 'Marked'), el('span', { class: 'spacer' }), el('button', { class: 'small ghost', onclick: clearMarked }, 'Clear')),
       el('div', { class: 'muted ms-range' }, (tFrom && tTo) ? `${fmtTimeShort(tFrom)} – ${fmtTimeShort(tTo)} · ${i1 - i0 + 1} pkt.` : `${i1 - i0 + 1} pkt.`),
     ];
     for (const r of rows) {
       children.push(el('div', { class: 'ms-stat' },
         el('span', { class: 'ms-name' }, r.label),
-        el('span', { class: 'num' }, `ø ${fmtBytes(r.avg)}/s`),
+        el('span', { class: 'num' }, `avg ${fmtBytes(r.avg)}/s`),
         el('span', { class: 'num muted' }, `${fmtBytes(r.min)}–${fmtBytes(r.max)}`)));
     }
     // Drill into the ACTUAL stored data for the marked window (per agent).
     if (tFrom && tTo) {
-      children.push(el('button', { class: 'small drill', onclick: () => { histDetails.open = true; histSection.focus(tFrom, tTo); } }, 'Vis gemt data →'));
+      children.push(el('button', { class: 'small drill', onclick: () => { histDetails.open = true; histSection.focus(tFrom, tTo); } }, 'View stored data →'));
     }
     markedStrip.className = 'marked-side';
     markedStrip.replaceChildren(...children);
@@ -1552,7 +1655,7 @@ views.overview = async () => {
       const name = a.display_name || a.hostname;
       items.push(checkbox(`rx:${a.id}`, `${name} · RX`), checkbox(`tx:${a.id}`, `${name} · TX`));
     }
-    controls.replaceChildren(...(items.length ? items : [el('div', { class: 'muted' }, 'Ingen agenter.')]));
+    controls.replaceChildren(...(items.length ? items : [el('div', { class: 'muted' }, 'No agents.')]));
     syncChips();
   }
 
@@ -1573,8 +1676,8 @@ views.overview = async () => {
   // and back. Persisted so it survives reloads and tab switches.
   function applySize() {
     chartCard.classList.toggle('big', bigView);
-    sizeBtn.textContent = bigView ? '↔ Formindsk' : '↔ Forstør';
-    sizeBtn.title = bigView ? 'Formindsk grafen til normal bredde' : 'Forstør grafen til fuld bredde';
+    sizeBtn.textContent = bigView ? '↔ Shrink' : '↔ Expand';
+    sizeBtn.title = bigView ? 'Shrink the chart to normal width' : 'Expand the chart to full width';
     renderChart();
   }
   function toggleSize() {
@@ -1583,14 +1686,17 @@ views.overview = async () => {
     applySize();
   }
 
-  // Historical traffic explorer (date range, types, time axis, brush-to-zoom).
-  const histSection = trafficHistorySection();
-  const histDetails = el('details', { class: 'sec' }, el('summary', {}, 'Historik — undersøg tidsrum ', el('span', { class: 'muted' }, '· vælg agent + periode')), histSection.node);
-  root.append(histDetails);
+  // Historical traffic explorer (date range, types, time axis, brush-to-zoom),
+  // with the Traffic types aggregate card beside it (side by side; stacks on
+  // narrow viewports). The card derives its figures from the history samples.
+  const typesCard = trafficTypesCard();
+  const histSection = trafficHistorySection({ onData: (d) => typesCard.update(d) });
+  const histDetails = el('details', { class: 'sec hist-main' }, el('summary', {}, 'History — inspect time window ', el('span', { class: 'muted' }, '· select agent + period')), histSection.node);
+  root.append(el('div', { class: 'hist-row' }, histDetails, typesCard.node));
 
   // Traffic-type breakdown (DNS, Web, Facebook, …) — opt-in, collapsed.
   const typeSection = trafficTypeSection();
-  root.append(el('details', { class: 'sec' }, el('summary', {}, 'Trafiktype ', el('span', { class: 'muted' }, '· pr. agent · DNS, Facebook, …')), typeSection.node));
+  root.append(el('details', { class: 'sec' }, el('summary', {}, 'Traffic type ', el('span', { class: 'muted' }, '· per agent · DNS, Facebook, …')), typeSection.node));
 
   // Reflect the persisted size + set the toggle label (renders the chart once).
   applySize();
@@ -1620,7 +1726,7 @@ function stopIfaces() { if (ifaceState.timer) { clearInterval(ifaceState.timer);
 
 const IFACE_RANK = { down: 0, bad: 1, warn: 2, ok: 3 };
 function ifaceStatusBadge(s) {
-  const map = { ok: ['online', 'OK'], warn: ['warn', 'WARN'], bad: ['offline', 'FEJL'], down: ['offline', 'NEDE'] };
+  const map = { ok: ['online', 'OK'], warn: ['warn', 'WARN'], bad: ['offline', 'ERR'], down: ['offline', 'DOWN'] };
   const [cls, label] = map[s] || ['offline', s];
   return el('span', { class: `badge ${cls}` }, label);
 }
@@ -1632,9 +1738,9 @@ function ifaceLinkText(i) {
 // Interface health table (worst first). Empty-state when there is no data.
 function interfaceTable(interfaces) {
   const ifs = (interfaces || []).slice().sort((a, b) => (IFACE_RANK[a.status] - IFACE_RANK[b.status]) || ((b.rxBytesPerSec + b.txBytesPerSec) - (a.rxBytesPerSec + a.txBytesPerSec)));
-  if (!ifs.length) return el('div', { class: 'empty' }, 'Ingen interface-data endnu — kræver en agent-måling (opdatér agenten for fejl/discards/link).');
+  if (!ifs.length) return el('div', { class: 'empty' }, 'No interface data yet — requires an agent measurement (update the agent for errors/discards/link).');
   return el('table', { class: 'iface-table' },
-    el('thead', {}, el('tr', {}, ...['Interface', 'Status', 'Link', 'Udnyttelse', '↓ RX', '↑ TX', 'Fejl/s', 'Discards/s'].map((h) => el('th', {}, h)))),
+    el('thead', {}, el('tr', {}, ...['Interface', 'Status', 'Link', 'Utilization', '↓ RX', '↑ TX', 'Errors/s', 'Discards/s'].map((h) => el('th', {}, h)))),
     el('tbody', {}, ...ifs.map((i) => el('tr', {},
       el('td', {}, esc(i.iface)),
       el('td', {}, ifaceStatusBadge(i.status)),
@@ -1648,18 +1754,18 @@ function interfaceTable(interfaces) {
 
 // Latest probe results (newest per target). onDetail(r) fires from each row.
 function probeLatestTable(rows, onDetail) {
-  if (!rows.length) return el('div', { class: 'muted' }, 'Ingen probe-resultater endnu — kør en ovenfor.');
+  if (!rows.length) return el('div', { class: 'muted' }, 'No probe results yet — run one above.');
   return el('table', {},
-    el('thead', {}, el('tr', {}, ...['Type', 'Mål', 'Status', 'RTT', 'Tab', 'Jitter', 'Tid', ''].map((h) => el('th', {}, h)))),
+    el('thead', {}, el('tr', {}, ...['Type', 'Target', 'Status', 'RTT', 'Loss', 'Jitter', 'Time', ''].map((h) => el('th', {}, h)))),
     el('tbody', {}, ...rows.map((r) => el('tr', {},
       el('td', {}, r.type),
       el('td', {}, esc(r.target)),
-      el('td', {}, el('span', { class: `badge ${r.ok ? 'online' : 'offline'}` }, r.ok ? 'ok' : 'fejl')),
+      el('td', {}, el('span', { class: `badge ${r.ok ? 'online' : 'offline'}` }, r.ok ? 'ok' : 'error')),
       el('td', { class: 'num' }, r.rttMs != null ? `${r.rttMs} ms` : '–'),
       el('td', { class: 'num' }, r.lossPct != null ? `${r.lossPct}%` : '–'),
       el('td', { class: 'num' }, r.jitterMs != null ? `${r.jitterMs} ms` : '–'),
       el('td', { class: 'muted' }, r.ts ? fmtTimeShort(new Date(r.ts).getTime()) : '–'),
-      el('td', {}, el('button', { class: 'small ghost', onclick: () => onDetail(r) }, r.type === 'traceroute' ? 'Sti' : 'Historik'))))));
+      el('td', {}, el('button', { class: 'small ghost', onclick: () => onDetail(r) }, r.type === 'traceroute' ? 'Path' : 'History'))))));
 }
 
 // Detail node for one probe result: traceroute path (sync) or RTT history
@@ -1667,11 +1773,11 @@ function probeLatestTable(rows, onDetail) {
 async function probeDetail(r, agentId) {
   if (r.type === 'traceroute') {
     const hops = r.hops || [];
-    return el('details', { class: 'sec', open: true }, el('summary', {}, `Sti til ${esc(r.target)}`),
+    return el('details', { class: 'sec', open: true }, el('summary', {}, `Path to ${esc(r.target)}`),
       el('table', { class: 'probe-hops' }, el('tbody', {}, ...(hops.length ? hops.map((h) => el('tr', {},
         el('td', { class: 'muted' }, `#${h.hop}`),
         el('td', {}, h.ip || '* * *'),
-        el('td', { class: 'num' }, h.rttMs != null ? `${h.rttMs} ms` : '–'))) : [el('tr', {}, el('td', { class: 'muted' }, 'Ingen hops.'))]))));
+        el('td', { class: 'num' }, h.rttMs != null ? `${h.rttMs} ms` : '–'))) : [el('tr', {}, el('td', { class: 'muted' }, 'No hops.'))]))));
   }
   let data;
   try { data = await api(`/api/probes?agentId=${encodeURIComponent(agentId)}&type=${r.type}`); } catch (e) { return el('div', { class: 'error' }, e.message); }
@@ -1683,11 +1789,11 @@ async function probeDetail(r, agentId) {
   const band = robustBand(pts);
   const markers = [];
   for (const x of (data.results || []).filter((x) => x.target === r.target)) {
-    if (x.ok === false && x.ts) markers.push({ t: new Date(x.ts).getTime(), kind: 'probe', label: `Probe-fejl${x.detail ? ': ' + x.detail : ''}` });
+    if (x.ok === false && x.ts) markers.push({ t: new Date(x.ts).getTime(), kind: 'probe', label: `Probe error${x.detail ? ': ' + x.detail : ''}` });
   }
   try { const fs = await api(`/api/findings?hostId=${encodeURIComponent(agentId)}&since=${new Date(fromMs).toISOString()}`); markers.push(...findingMarkers(fs)); } catch { /* findings optional */ }
-  return el('details', { class: 'sec', open: true }, el('summary', {}, `RTT-historik — ${r.type} → ${esc(r.target)} `, el('span', { class: 'muted' }, '· bånd = normalt (median±MAD)')),
-    el('div', { class: 'overview-chart' }, pts.length ? historyChart([{ id: 'rtt', label: 'RTT (ms)', color: '#06b6d4', points: pts }], { fromMs, toMs, band, markers }) : el('div', { class: 'empty' }, 'Ingen historik endnu — kør et par målinger.')));
+  return el('details', { class: 'sec', open: true }, el('summary', {}, `RTT history — ${r.type} → ${esc(r.target)} `, el('span', { class: 'muted' }, '· band = normal range (median±MAD)')),
+    el('div', { class: 'overview-chart' }, pts.length ? historyChart([{ id: 'rtt', label: 'RTT (ms)', color: '#06b6d4', points: pts }], { fromMs, toMs, band, markers }) : el('div', { class: 'empty' }, 'No history yet — run a few measurements.')));
 }
 
 // Interface health per agent (utilisation, errors, discards, link state/speed)
@@ -1695,17 +1801,17 @@ async function probeDetail(r, agentId) {
 views.interfaces = async () => {
   const root = el('div', { class: 'interfaces' });
   root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Interfaces'),
-    el('span', { class: 'muted' }, 'Sundhed pr. interface · udnyttelse · fejl · discards · link')));
+    el('span', { class: 'muted' }, 'Health per interface · utilisation · errors · discards · link')));
 
   const agents = await api('/agents').catch(() => []);
-  if (!agents.length) { root.append(el('div', { class: 'empty' }, 'Ingen agenter endnu.')); return root; }
+  if (!agents.length) { root.append(el('div', { class: 'empty' }, 'No agents yet.')); return root; }
 
   const agentSel = el('select', {}, ...agents.map((a) => el('option', { value: String(a.id) }, a.display_name || a.hostname)));
   const status = el('span', { class: 'muted' });
   agentSel.addEventListener('change', () => refresh());
   root.append(el('div', { class: 'history-controls' },
     el('label', { class: 'inline muted' }, 'Agent ', agentSel),
-    el('button', { class: 'small ghost', onclick: () => refresh() }, 'Opdatér'), status));
+    el('button', { class: 'small ghost', onclick: () => refresh() }, 'Refresh'), status));
   const host = el('div', {});
   root.append(host);
 
@@ -1713,7 +1819,7 @@ views.interfaces = async () => {
     const id = agentSel.value;
     let data;
     try { data = await api(`/api/interfaces?agentId=${encodeURIComponent(id)}`); } catch (e) { host.replaceChildren(el('div', { class: 'error' }, e.message)); return; }
-    status.textContent = data.ts ? `kilde: ${data.source} · målt ${fmtTimeShort(new Date(data.ts).getTime())}` : 'ingen målinger endnu';
+    status.textContent = data.ts ? `source: ${data.source} · measured ${fmtTimeShort(new Date(data.ts).getTime())}` : 'no measurements yet';
     host.replaceChildren(interfaceTable(data.interfaces));
   }
 
@@ -1732,18 +1838,18 @@ views.interfaces = async () => {
 views.probes = async () => {
   const root = el('div', { class: 'probes' });
   root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Probes'),
-    el('span', { class: 'muted' }, 'Aktiv reachability · ping · TCP · DNS · traceroute')));
+    el('span', { class: 'muted' }, 'Active reachability · ping · TCP · DNS · traceroute')));
 
   const agents = await api('/agents').catch(() => []);
-  if (!agents.length) { root.append(el('div', { class: 'empty' }, 'Ingen agenter endnu — enroll en agent først.')); return root; }
+  if (!agents.length) { root.append(el('div', { class: 'empty' }, 'No agents yet — enrol an agent first.')); return root; }
 
   const agentSel = el('select', {}, ...agents.map((a) => el('option', { value: String(a.id) }, a.display_name || a.hostname)));
   const typeSel = el('select', {}, ...[['ping', 'Ping (ICMP)'], ['tcp', 'TCP-connect'], ['dns', 'DNS'], ['traceroute', 'Traceroute']].map(([v, l]) => el('option', { value: v }, l)));
-  const target = el('input', { type: 'text', placeholder: 'fx 1.1.1.1 eller example.com' });
+  const target = el('input', { type: 'text', placeholder: 'e.g. 1.1.1.1 or example.com' });
   const portInput = el('input', { type: 'number', min: '1', max: '65535', value: '443' });
   const portWrap = el('label', { class: 'inline muted' }, 'Port ', portInput);
   const countInput = el('input', { type: 'number', min: '1', max: '20', value: '4' });
-  const runBtn = el('button', { class: 'small' }, 'Kør probe');
+  const runBtn = el('button', { class: 'small' }, 'Run probe');
   const status = el('div', { class: 'muted' });
   const syncPort = () => { portWrap.style.display = typeSel.value === 'tcp' ? '' : 'none'; };
   typeSel.addEventListener('change', syncPort); syncPort();
@@ -1751,31 +1857,31 @@ views.probes = async () => {
   root.append(el('div', { class: 'history-controls' },
     el('label', { class: 'inline muted' }, 'Agent ', agentSel),
     el('label', { class: 'inline muted' }, 'Type ', typeSel),
-    el('label', { class: 'inline muted' }, 'Mål ', target),
+    el('label', { class: 'inline muted' }, 'Target ', target),
     portWrap,
-    el('label', { class: 'inline muted' }, 'Antal ', countInput),
+    el('label', { class: 'inline muted' }, 'Count ', countInput),
     runBtn, status));
 
   const latestHost = el('div', { class: 'probe-latest' });
   const detailHost = el('div', {});
-  root.append(el('details', { class: 'sec', open: true }, el('summary', {}, 'Seneste resultater ', el('span', { class: 'muted' }, '· nyeste pr. mål')), latestHost));
+  root.append(el('details', { class: 'sec', open: true }, el('summary', {}, 'Latest results ', el('span', { class: 'muted' }, '· most recent per target')), latestHost));
   root.append(detailHost);
 
   async function run() {
     const id = agentSel.value;
     const host = target.value.trim();
-    if (!host) { status.className = 'error'; status.textContent = 'Angiv et mål.'; return; }
+    if (!host) { status.className = 'error'; status.textContent = 'Enter a target.'; return; }
     const body = { type: typeSel.value, host };
     if (typeSel.value === 'tcp') body.port = Number(portInput.value);
     if (countInput.value) body.count = Number(countInput.value);
-    status.className = 'muted'; status.textContent = 'Sender…'; runBtn.disabled = true;
+    status.className = 'muted'; status.textContent = 'Sending…'; runBtn.disabled = true;
     try {
       await api(`/agents/${id}/probe`, { method: 'POST', body });
-      status.textContent = 'Sendt — agenten kører den nu; resultatet kommer om et øjeblik.';
+      status.textContent = 'Sent — the agent is running it now; results will arrive in a moment.';
       setTimeout(refreshLatest, 2500); setTimeout(refreshLatest, 6000);
     } catch (e) {
       status.className = 'error';
-      status.textContent = e.status === 409 ? 'Agenten er ikke forbundet lige nu.' : errText(e);
+      status.textContent = e.status === 409 ? 'The agent is not connected right now.' : errText(e);
     } finally { runBtn.disabled = false; }
   }
   runBtn.addEventListener('click', run);
@@ -1824,7 +1930,7 @@ async function downloadAuthed(path, filename) {
     const a = el('a', { href: url, download: filename });
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 2000);
-  } catch (e) { toast(`Eksport fejlede: ${e.message}`, true); }
+  } catch (e) { toast(`Export failed: ${e.message}`, true); }
 }
 
 // Opens a print-friendly investigation summary in a new window and triggers the
@@ -1833,24 +1939,24 @@ async function printInvestigation(id) {
   let b;
   try { b = await api(`/api/export/investigation?agentId=${encodeURIComponent(id)}`); } catch (e) { toast(e.message, true); return; }
   const e2 = (s) => String(s == null ? '' : s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
-  const rows = (arr, cols, cspan) => ((arr && arr.length) ? arr.map((r) => `<tr>${cols.map((c) => `<td>${e2(typeof c === 'function' ? c(r) : r[c])}</td>`).join('')}</tr>`).join('') : `<tr><td colspan="${cspan}" class="muted">Ingen.</td></tr>`);
+  const rows = (arr, cols, cspan) => ((arr && arr.length) ? arr.map((r) => `<tr>${cols.map((c) => `<td>${e2(typeof c === 'function' ? c(r) : r[c])}</td>`).join('')}</tr>`).join('') : `<tr><td colspan="${cspan}" class="muted">None.</td></tr>`);
   const q = b.quality || {}; const h = b.health || { status: '', reason: '' };
-  const html = `<!doctype html><html lang="da"><head><meta charset="utf-8"><title>BlueEye undersøgelse — ${e2(b.agent.displayName)}</title>
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>BlueEye investigation — ${e2(b.agent.displayName)}</title>
 <style>body{font:13px/1.5 system-ui,-apple-system,sans-serif;margin:24px;color:#0f172a}h1{font-size:20px;margin:0 0 4px}h2{font-size:15px;margin:22px 0 6px;border-bottom:1px solid #cbd5e1;padding-bottom:4px}table{border-collapse:collapse;width:100%;margin:6px 0}th,td{border:1px solid #e2e8f0;padding:4px 8px;text-align:left;font-size:12px}.muted{color:#64748b}.badge{padding:1px 7px;border-radius:4px;background:#e2e8f0;font-weight:600}</style>
 </head><body>
-<h1>Undersøgelse — ${e2(b.agent.displayName)}</h1>
-<p class="muted">${e2(b.agent.hostname)}${b.agent.locationName ? ' · ' + e2(b.agent.locationName) : ''} · genereret ${e2(b.generatedAt)}<br>vindue ${e2(b.window.from)} – ${e2(b.window.to)}</p>
-<h2>Sundhed</h2><p><span class="badge">${e2(String(h.status).toUpperCase())}</span> ${e2(h.reason)}</p>
-<p class="muted">Datakvalitet: ${e2(q.status)} — ${e2(q.reason)}${q.version ? ' · agent v' + e2(q.version) : ''}</p>
-<h2>Seneste probes</h2><table><thead><tr><th>Type</th><th>Mål</th><th>Status</th><th>RTT</th><th>Tab</th><th>Jitter</th></tr></thead><tbody>${rows(b.latestProbes, ['type', 'target', (r) => (r.ok ? 'ok' : 'fejl'), (r) => (r.rttMs != null ? r.rttMs + ' ms' : '–'), (r) => (r.lossPct != null ? r.lossPct + '%' : '–'), (r) => (r.jitterMs != null ? r.jitterMs + ' ms' : '–')], 6)}</tbody></table>
-<h2>Interfaces</h2><table><thead><tr><th>Interface</th><th>Status</th><th>Udnyttelse</th><th>Fejl/s</th><th>Discards/s</th></tr></thead><tbody>${rows(b.interfaces, ['iface', 'status', (r) => (r.utilPct != null ? r.utilPct + '%' : '–'), 'errPerSec', 'dropPerSec'], 5)}</tbody></table>
-<h2>Findings</h2><table><thead><tr><th>Tid</th><th>Severity</th><th>Metrik</th><th>Forklaring</th></tr></thead><tbody>${rows(b.findings, [(r) => r.createdAt, 'severity', 'metric', 'explanation'], 4)}</tbody></table>
-<h2>Top talkers</h2><table><thead><tr><th>Kilde</th><th>Destination</th><th>Org/Land</th><th>Bytes</th></tr></thead><tbody>${rows(b.flows && b.flows.topTalkers, ['srcIp', (r) => (r.dstIp || r.extIp || '–'), (r) => (r.internal ? 'intern' : [r.asnName, r.country].filter(Boolean).join(' ')), 'bytes'], 4)}</tbody></table>
-${(b.flows && b.flows.scans && b.flows.scans.length) ? `<h2>Scans / fan-out</h2><table><thead><tr><th>Kilde</th><th>Type</th><th>Porte</th><th>Hosts</th></tr></thead><tbody>${rows(b.flows.scans, ['srcIp', 'kind', 'distinctPorts', 'distinctHosts'], 4)}</tbody></table>` : ''}
+<h1>Investigation — ${e2(b.agent.displayName)}</h1>
+<p class="muted">${e2(b.agent.hostname)}${b.agent.locationName ? ' · ' + e2(b.agent.locationName) : ''} · generated ${e2(b.generatedAt)}<br>window ${e2(b.window.from)} – ${e2(b.window.to)}</p>
+<h2>Health</h2><p><span class="badge">${e2(String(h.status).toUpperCase())}</span> ${e2(h.reason)}</p>
+<p class="muted">Data quality: ${e2(q.status)} — ${e2(q.reason)}${q.version ? ' · agent v' + e2(q.version) : ''}</p>
+<h2>Latest probes</h2><table><thead><tr><th>Type</th><th>Target</th><th>Status</th><th>RTT</th><th>Loss</th><th>Jitter</th></tr></thead><tbody>${rows(b.latestProbes, ['type', 'target', (r) => (r.ok ? 'ok' : 'error'), (r) => (r.rttMs != null ? r.rttMs + ' ms' : '–'), (r) => (r.lossPct != null ? r.lossPct + '%' : '–'), (r) => (r.jitterMs != null ? r.jitterMs + ' ms' : '–')], 6)}</tbody></table>
+<h2>Interfaces</h2><table><thead><tr><th>Interface</th><th>Status</th><th>Utilisation</th><th>Errors/s</th><th>Discards/s</th></tr></thead><tbody>${rows(b.interfaces, ['iface', 'status', (r) => (r.utilPct != null ? r.utilPct + '%' : '–'), 'errPerSec', 'dropPerSec'], 5)}</tbody></table>
+<h2>Findings</h2><table><thead><tr><th>Time</th><th>Severity</th><th>Metric</th><th>Explanation</th></tr></thead><tbody>${rows(b.findings, [(r) => r.createdAt, 'severity', 'metric', 'explanation'], 4)}</tbody></table>
+<h2>Top talkers</h2><table><thead><tr><th>Source</th><th>Destination</th><th>Org/Country</th><th>Bytes</th></tr></thead><tbody>${rows(b.flows && b.flows.topTalkers, ['srcIp', (r) => (r.dstIp || r.extIp || '–'), (r) => (r.internal ? 'internal' : [r.asnName, r.country].filter(Boolean).join(' ')), 'bytes'], 4)}</tbody></table>
+${(b.flows && b.flows.scans && b.flows.scans.length) ? `<h2>Scans / fan-out</h2><table><thead><tr><th>Source</th><th>Type</th><th>Ports</th><th>Hosts</th></tr></thead><tbody>${rows(b.flows.scans, ['srcIp', 'kind', 'distinctPorts', 'distinctHosts'], 4)}</tbody></table>` : ''}
 <script>window.onload=function(){setTimeout(function(){window.print();},300);};</script>
 </body></html>`;
   const w = window.open('', '_blank');
-  if (!w) { toast('Tillad pop-ups for at udskrive', true); return; }
+  if (!w) { toast('Allow pop-ups to print', true); return; }
   w.document.write(html);
   w.document.close();
 }
@@ -1859,13 +1965,13 @@ ${(b.flows && b.flows.scans && b.flows.scans.length) ? `<h2>Scans / fan-out</h2>
 function exportInvestigationMenu(id, name) {
   const card = $('#modal-card');
   card.replaceChildren(
-    el('h3', {}, `Eksportér undersøgelse — ${esc(name)}`),
-    el('p', { class: 'muted' }, 'Et øjebliksbillede af de seneste 24 timer: sundhed, datakvalitet, interfaces, seneste probes, findings og top-talkers.'),
+    el('h3', {}, `Export investigation — ${esc(name)}`),
+    el('p', { class: 'muted' }, 'A snapshot of the last 24 hours: health, data quality, interfaces, latest probes, findings and top talkers.'),
     el('div', { class: 'form-actions' },
-      el('button', { onclick: () => downloadAuthed(`/api/export/investigation?agentId=${encodeURIComponent(id)}&format=json`, `undersoegelse-${id}.json`) }, 'JSON'),
-      el('button', { class: 'ghost', onclick: () => downloadAuthed(`/api/export/investigation?agentId=${encodeURIComponent(id)}&format=csv`, `undersoegelse-${id}.csv`) }, 'CSV'),
-      el('button', { class: 'ghost', onclick: () => { closeModal(); printInvestigation(id); } }, 'Udskriv / PDF'),
-      el('button', { class: 'ghost', onclick: closeModal }, 'Luk')));
+      el('button', { onclick: () => downloadAuthed(`/api/export/investigation?agentId=${encodeURIComponent(id)}&format=json`, `investigation-${id}.json`) }, 'JSON'),
+      el('button', { class: 'ghost', onclick: () => downloadAuthed(`/api/export/investigation?agentId=${encodeURIComponent(id)}&format=csv`, `investigation-${id}.csv`) }, 'CSV'),
+      el('button', { class: 'ghost', onclick: () => { closeModal(); printInvestigation(id); } }, 'Print / PDF'),
+      el('button', { class: 'ghost', onclick: closeModal }, 'Close')));
   $('#modal').classList.remove('hidden');
 }
 
@@ -1875,17 +1981,17 @@ async function globalSearch(q) {
   q = String(q || '').trim();
   if (!q) return;
   const card = $('#modal-card');
-  card.replaceChildren(el('h3', {}, `Søgning: ${esc(q)}`), el('div', { class: 'muted' }, 'Søger…'));
+  card.replaceChildren(el('h3', {}, `Search: ${esc(q)}`), el('div', { class: 'muted' }, 'Searching…'));
   $('#modal').classList.remove('hidden');
   let data;
   try { data = await api(`/api/search?q=${encodeURIComponent(q)}`); }
-  catch (e) { card.replaceChildren(el('h3', {}, 'Søgning'), el('p', { class: 'error' }, e.message), el('div', { class: 'form-actions' }, el('button', { class: 'ghost', onclick: closeModal }, 'Luk'))); return; }
+  catch (e) { card.replaceChildren(el('h3', {}, 'Search'), el('p', { class: 'error' }, e.message), el('div', { class: 'form-actions' }, el('button', { class: 'ghost', onclick: closeModal }, 'Close'))); return; }
   const item = (label, sub, onclick) => el('button', { class: 'search-item', onclick }, el('span', {}, label), sub || null);
-  const kids = [el('h3', {}, `Søgning: ${esc(q)}`)];
+  const kids = [el('h3', {}, `Search: ${esc(q)}`)];
   let any = false;
   if (data.agents.length) {
     any = true;
-    kids.push(el('h4', {}, 'Agenter'));
+    kids.push(el('h4', {}, 'Agents'));
     kids.push(el('div', { class: 'search-list' }, ...data.agents.map((a) => item(
       esc(a.name), el('span', { class: `badge ${a.status === 'online' ? 'online' : 'offline'}` }, a.status || '?'),
       () => { closeModal(); openAgent(a.id); }))));
@@ -1904,11 +2010,11 @@ async function globalSearch(q) {
   }
   if (data.locations.length) {
     any = true;
-    kids.push(el('h4', {}, 'Lokationer'));
+    kids.push(el('h4', {}, 'Locations'));
     kids.push(el('div', { class: 'search-list' }, ...data.locations.map((l) => item(esc(l.name), null, () => { closeModal(); currentView = 'map'; render(); }))));
   }
-  if (!any) kids.push(el('div', { class: 'empty' }, 'Ingen resultater.'));
-  kids.push(el('div', { class: 'form-actions' }, el('button', { class: 'ghost', onclick: closeModal }, 'Luk')));
+  if (!any) kids.push(el('div', { class: 'empty' }, 'No results.'));
+  kids.push(el('div', { class: 'form-actions' }, el('button', { class: 'ghost', onclick: closeModal }, 'Close')));
   card.replaceChildren(...kids);
 }
 
@@ -1919,8 +2025,8 @@ function stopAgent() { if (agentState.timer) { clearInterval(agentState.timer); 
 
 // Health verdict → badge (reuses the existing badge palette). title = reason.
 const HEALTH_BADGE = {
-  ok: ['online', 'SUND'], warn: ['warn', 'ADVARSEL'], bad: ['offline', 'KRITISK'],
-  down: ['offline', 'NEDE'], stale: ['grace', 'FORÆLDET'], unknown: ['grace', 'UKENDT'],
+  ok: ['online', 'HEALTHY'], warn: ['warn', 'WARNING'], bad: ['offline', 'CRITICAL'],
+  down: ['offline', 'DOWN'], stale: ['grace', 'STALE'], unknown: ['grace', 'UNKNOWN'],
 };
 function healthBadge(h) {
   const [cls, label] = HEALTH_BADGE[h.status] || ['grace', h.status];
@@ -1937,8 +2043,8 @@ function latencyText(m) {
 // Click a row to pivot into that agent's combined detail page.
 views.fleet = async () => {
   const root = el('div', { class: 'fleet' });
-  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Oversigt'),
-    el('span', { class: 'muted' }, 'Alle agenter · sundhed ud fra reachability · tab · latency · jitter')));
+  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Overview'),
+    el('span', { class: 'muted' }, 'All agents · health from reachability · loss · latency · jitter')));
   const bannerHost = el('div', {});
   const summaryHost = el('div', { class: 'fleet-summary' });
   const tableHost = el('div', {});
@@ -1948,23 +2054,23 @@ views.fleet = async () => {
   api('/api/settings/maintenance').then((m) => {
     const now = Date.now();
     const active = (m.windows || []).filter((w) => Date.parse(w.from) <= now && now <= Date.parse(w.to));
-    if (active.length) bannerHost.replaceChildren(el('div', { class: 'mw-banner' }, '🛠 Vedligehold aktivt: ', esc(active.map((w) => w.name).join(', ')), el('span', { class: 'muted' }, ' — alarm-notifikationer undertrykt')));
+    if (active.length) bannerHost.replaceChildren(el('div', { class: 'mw-banner' }, '🛠 Maintenance active: ', esc(active.map((w) => w.name).join(', ')), el('span', { class: 'muted' }, ' — alert notifications suppressed')));
     else bannerHost.replaceChildren();
   }).catch(() => {});
 
   function renderSummary(s) {
     const chip = (cls, label, n) => el('div', { class: `fs-chip ${cls}${n ? '' : ' zero'}` }, el('span', { class: 'fs-n' }, String(n)), el('span', { class: 'fs-l' }, label));
     summaryHost.replaceChildren(
-      chip('ok', 'Sunde', s.ok),
-      chip('warn', 'Advarsler', s.warn),
-      chip('bad', 'Kritiske', s.bad + s.down),
-      chip('stale', 'Forældet', s.stale),
-      chip('unknown', 'Ukendt', s.unknown));
+      chip('ok', 'Healthy', s.ok),
+      chip('warn', 'Warnings', s.warn),
+      chip('bad', 'Critical', s.bad + s.down),
+      chip('stale', 'Stale', s.stale),
+      chip('unknown', 'Unknown', s.unknown));
   }
   function fleetRow(a) {
     const m = a.health.metrics;
     const dq = a.quality && a.quality.status && a.quality.status !== 'ok' && a.quality.status !== 'unknown'
-      ? el('span', { class: 'dq-flag', title: `Datakvalitet: ${a.quality.reason || a.quality.status}` }, ' ⚠')
+      ? el('span', { class: 'dq-flag', title: `Data quality: ${a.quality.reason || a.quality.status}` }, ' ⚠')
       : null;
     return el('tr', { class: 'fleet-row', tabindex: '0', onclick: () => openAgent(a.agentId), onkeydown: (e) => { if (e.key === 'Enter') openAgent(a.agentId); } },
       el('td', {}, el('div', {}, esc(a.displayName), dq), a.displayName !== a.hostname ? el('div', { class: 'muted' }, esc(a.hostname)) : null),
@@ -1978,9 +2084,9 @@ views.fleet = async () => {
       el('td', { class: 'muted' }, m.lastTs ? fmtTimeShort(new Date(m.lastTs).getTime()) : '–'));
   }
   function renderTable(agents) {
-    if (!agents.length) { tableHost.replaceChildren(el('div', { class: 'empty' }, 'Ingen agenter endnu — gå til Agenter for at enrolle en.')); return; }
+    if (!agents.length) { tableHost.replaceChildren(el('div', { class: 'empty' }, 'No agents yet — go to Agents to enrol one.')); return; }
     tableHost.replaceChildren(el('table', { class: 'fleet-table' },
-      el('thead', {}, el('tr', {}, ...['Agent', 'Status', 'Health', 'Tab', 'Latency', 'Jitter', 'Mål', 'Lokation', 'Senest'].map((h) => el('th', {}, h)))),
+      el('thead', {}, el('tr', {}, ...['Agent', 'Status', 'Health', 'Loss', 'Latency', 'Jitter', 'Targets', 'Location', 'Last seen'].map((h) => el('th', {}, h)))),
       el('tbody', {}, ...agents.map(fleetRow))));
   }
   async function refresh() {
@@ -2004,18 +2110,18 @@ views.fleet = async () => {
 views.agent = async () => {
   const id = selectedAgentId;
   const root = el('div', { class: 'agent-detail' });
-  if (id == null) { root.append(el('div', { class: 'empty' }, 'Vælg en agent i oversigten.')); return root; }
+  if (id == null) { root.append(el('div', { class: 'empty' }, 'Select an agent in the overview.')); return root; }
   let agent;
   try { agent = await api(`/agents/${id}`); } catch (e) { root.append(el('div', { class: 'error' }, e.message)); return root; }
 
   root.append(el('div', { class: 'section-head' },
-    el('button', { class: 'small ghost', onclick: () => { currentView = 'fleet'; render(); } }, '← Oversigt'),
+    el('button', { class: 'small ghost', onclick: () => { currentView = 'fleet'; render(); } }, '← Overview'),
     el('h2', {}, esc(agent.display_name || agent.hostname)),
     el('span', { class: `badge ${agent.status}` }, agent.status),
     agent.location_name ? el('span', { class: 'muted' }, esc(agent.location_name)) : null,
     el('button', { class: 'small ghost', onclick: () => { currentView = 'flows'; render(); } }, 'Flows →'),
-    el('button', { class: 'small ghost', onclick: () => exportInvestigationMenu(id, agent.display_name || agent.hostname) }, 'Eksportér'),
-    canWrite() ? el('button', { class: 'small ghost', onclick: () => runTest(agent) }, 'Kør test') : null));
+    el('button', { class: 'small ghost', onclick: () => exportInvestigationMenu(id, agent.display_name || agent.hostname) }, 'Export'),
+    canWrite() ? el('button', { class: 'small ghost', onclick: () => runTest(agent) }, 'Run test') : null));
 
   // Health résumé (the headline + the metrics that drove it).
   const healthHost = el('div', { class: 'agent-health' });
@@ -2026,8 +2132,8 @@ views.agent = async () => {
     const children = [
       el('div', { class: 'ah-head' }, healthBadge(h), el('span', { class: 'ah-reason' }, h.reason || '')),
       el('div', { class: 'ah-grid' },
-        kv('Mål nået', m.targets ? `${m.reachable}/${m.targets}` : '–'),
-        kv('Tab', m.lossPct != null ? `${m.lossPct}%` : '–', m.lossPct >= 2 ? 'warn-text' : ''),
+        kv('Targets reached', m.targets ? `${m.reachable}/${m.targets}` : '–'),
+        kv('Loss', m.lossPct != null ? `${m.lossPct}%` : '–', m.lossPct >= 2 ? 'warn-text' : ''),
         kv('Latency', latencyText(m)),
         kv('Baseline', m.baselineMs != null ? `~${m.baselineMs} ms` : '–'),
         kv('Jitter', m.jitterMs != null ? `${m.jitterMs} ms` : '–', m.jitterMs >= 30 ? 'warn-text' : ''),
@@ -2036,11 +2142,11 @@ views.agent = async () => {
     if (q && q.status && q.status !== 'unknown') {
       const cls = q.status === 'ok' ? 'online' : (q.status === 'warn' ? 'warn' : 'offline');
       children.push(el('div', { class: 'ah-quality' },
-        el('span', { class: `badge ${cls}` }, `Datakvalitet: ${q.status.toUpperCase()}`),
+        el('span', { class: `badge ${cls}` }, `Data quality: ${q.status.toUpperCase()}`),
         el('span', { class: 'muted' }, q.reason || ''),
         q.version ? el('span', { class: 'muted' }, `· agent v${q.version}`) : null,
-        q.dropPct != null ? el('span', { class: 'muted' }, `· tab ${q.dropPct}%`) : null,
-        q.clockSkewMs != null ? el('span', { class: 'muted' }, `· ur ${Math.round(q.clockSkewMs / 1000)} s`) : null));
+        q.dropPct != null ? el('span', { class: 'muted' }, `· loss ${q.dropPct}%`) : null,
+        q.clockSkewMs != null ? el('span', { class: 'muted' }, `· clock ${Math.round(q.clockSkewMs / 1000)} s`) : null));
     } else if (q && q.version) {
       children.push(el('div', { class: 'ah-quality muted' }, `agent v${q.version}`));
     }
@@ -2049,37 +2155,37 @@ views.agent = async () => {
 
   // ---- Probes (this agent) ----
   const typeSel = el('select', {}, ...[['ping', 'Ping (ICMP)'], ['tcp', 'TCP-connect'], ['dns', 'DNS'], ['traceroute', 'Traceroute']].map(([v, l]) => el('option', { value: v }, l)));
-  const target = el('input', { type: 'text', placeholder: 'fx 1.1.1.1 eller example.com' });
+  const target = el('input', { type: 'text', placeholder: 'e.g. 1.1.1.1 or example.com' });
   const portInput = el('input', { type: 'number', min: '1', max: '65535', value: '443' });
   const portWrap = el('label', { class: 'inline muted' }, 'Port ', portInput);
   const countInput = el('input', { type: 'number', min: '1', max: '20', value: '4' });
-  const runBtn = el('button', { class: 'small' }, 'Kør probe');
+  const runBtn = el('button', { class: 'small' }, 'Run probe');
   const probeStatus = el('span', { class: 'muted' });
   const syncPort = () => { portWrap.style.display = typeSel.value === 'tcp' ? '' : 'none'; };
   typeSel.addEventListener('change', syncPort); syncPort();
   const probeForm = el('div', { class: 'history-controls' },
     el('label', { class: 'inline muted' }, 'Type ', typeSel),
-    el('label', { class: 'inline muted' }, 'Mål ', target),
+    el('label', { class: 'inline muted' }, 'Target ', target),
     portWrap,
-    el('label', { class: 'inline muted' }, 'Antal ', countInput),
+    el('label', { class: 'inline muted' }, 'Count ', countInput),
     runBtn, probeStatus);
   const probeLatestHost = el('div', { class: 'probe-latest' });
   const probeDetailHost = el('div', {});
 
   async function runProbe() {
     const host = target.value.trim();
-    if (!host) { probeStatus.className = 'error'; probeStatus.textContent = 'Angiv et mål.'; return; }
+    if (!host) { probeStatus.className = 'error'; probeStatus.textContent = 'Enter a target.'; return; }
     const body = { type: typeSel.value, host };
     if (typeSel.value === 'tcp') body.port = Number(portInput.value);
     if (countInput.value) body.count = Number(countInput.value);
-    probeStatus.className = 'muted'; probeStatus.textContent = 'Sender…'; runBtn.disabled = true;
+    probeStatus.className = 'muted'; probeStatus.textContent = 'Sending…'; runBtn.disabled = true;
     try {
       await api(`/agents/${id}/probe`, { method: 'POST', body });
-      probeStatus.textContent = 'Sendt — resultatet kommer om et øjeblik.';
+      probeStatus.textContent = 'Sent — results will arrive in a moment.';
       setTimeout(refreshProbes, 2500); setTimeout(refreshProbes, 6000);
     } catch (e) {
       probeStatus.className = 'error';
-      probeStatus.textContent = e.status === 409 ? 'Agenten er ikke forbundet lige nu.' : (e.data && e.data.details ? Object.values(e.data.details).join(' · ') : e.message);
+      probeStatus.textContent = e.status === 409 ? 'The agent is not connected right now.' : (e.data && e.data.details ? Object.values(e.data.details).join(' · ') : e.message);
     } finally { runBtn.disabled = false; }
   }
   runBtn.addEventListener('click', runProbe);
@@ -2095,7 +2201,7 @@ views.agent = async () => {
   async function refreshIfaces() {
     let data;
     try { data = await api(`/api/interfaces?agentId=${encodeURIComponent(id)}`); } catch (e) { ifaceHost.replaceChildren(el('div', { class: 'error' }, e.message)); return; }
-    ifaceStatus.textContent = data.ts ? `kilde: ${data.source} · målt ${fmtTimeShort(new Date(data.ts).getTime())}` : 'ingen målinger endnu';
+    ifaceStatus.textContent = data.ts ? `source: ${data.source} · measured ${fmtTimeShort(new Date(data.ts).getTime())}` : 'no measurements yet';
     ifaceHost.replaceChildren(interfaceTable(data.interfaces));
   }
 
@@ -2108,7 +2214,7 @@ views.agent = async () => {
       const t = r.payload && r.payload.traffic && r.payload.traffic.totals;
       return { t: new Date(r.created_at).getTime(), rx: t ? Number(t.rxBytesPerSec) || 0 : 0, tx: t ? Number(t.txBytesPerSec) || 0 : 0 };
     });
-    if (series.length < 2) { trafficHost.replaceChildren(el('div', { class: 'empty' }, 'Ingen trafikmålinger endnu — tryk "Kør test".')); return; }
+    if (series.length < 2) { trafficHost.replaceChildren(el('div', { class: 'empty' }, 'No traffic measurements yet — press "Run test".')); return; }
     // #7 event timeline: overlay this agent's findings as markers on the axis.
     let markers = [];
     try { const fs = await api(`/api/findings?hostId=${encodeURIComponent(id)}&since=${new Date(series[0].t).toISOString()}`); markers = findingMarkers(fs); } catch { markers = []; }
@@ -2125,7 +2231,7 @@ views.agent = async () => {
   root.append(
     el('details', { class: 'sec', open: true }, el('summary', {}, 'Probes ', el('span', { class: 'muted' }, '· ping · TCP · DNS · traceroute')), probeForm, probeLatestHost, probeDetailHost),
     el('details', { class: 'sec', open: true }, el('summary', {}, 'Interfaces ', ifaceStatus), ifaceHost),
-    el('details', { class: 'sec' }, el('summary', {}, 'Trafik ', el('span', { class: 'muted' }, '· seneste båndbredde')), trafficHost));
+    el('details', { class: 'sec' }, el('summary', {}, 'Traffic ', el('span', { class: 'muted' }, '· recent bandwidth')), trafficHost));
 
   async function refreshAll() { await Promise.all([refreshHealth(), refreshProbes(), refreshIfaces(), refreshTraffic()]); }
   await refreshAll();
@@ -2144,21 +2250,21 @@ views.agent = async () => {
 views.flows = async () => {
   const root = el('div', { class: 'flows-explorer' });
   root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Flows'),
-    el('span', { class: 'muted' }, 'Samtaler · top talkers · porte · scan / fan-out')));
+    el('span', { class: 'muted' }, 'Conversations · top talkers · ports · scan / fan-out')));
 
   const agents = await api('/agents').catch(() => []);
-  if (!agents.length) { root.append(el('div', { class: 'empty' }, 'Ingen agenter endnu.')); return root; }
+  if (!agents.length) { root.append(el('div', { class: 'empty' }, 'No agents yet.')); return root; }
 
   const agentSel = el('select', {}, ...agents.map((a) => el('option', { value: String(a.id) }, a.display_name || a.hostname)));
   if (selectedAgentId != null && agents.some((a) => String(a.id) === String(selectedAgentId))) agentSel.value = String(selectedAgentId);
   const peerInput = el('input', { type: 'text', placeholder: 'IP (src/dst)' });
   const portInput = el('input', { type: 'number', min: '1', max: '65535', placeholder: 'port' });
   const protoInput = el('input', { type: 'text', placeholder: 'tcp/udp' });
-  const dirSel = el('select', {}, el('option', { value: '' }, 'Alle retninger'), el('option', { value: 'out' }, 'Udgående'), el('option', { value: 'in' }, 'Indgående'));
-  const scopeSel = el('select', {}, el('option', { value: '' }, 'Intern + ekstern'), el('option', { value: 'external' }, 'Kun ekstern'), el('option', { value: 'internal' }, 'Kun intern'));
-  const winSel = el('select', {}, el('option', { value: '1' }, 'Sidste 1 t'), el('option', { value: '6' }, 'Sidste 6 t'), el('option', { value: '24' }, 'Sidste 24 t'));
+  const dirSel = el('select', {}, el('option', { value: '' }, 'All directions'), el('option', { value: 'out' }, 'Outbound'), el('option', { value: 'in' }, 'Inbound'));
+  const scopeSel = el('select', {}, el('option', { value: '' }, 'Internal + external'), el('option', { value: 'external' }, 'External only'), el('option', { value: 'internal' }, 'Internal only'));
+  const winSel = el('select', {}, el('option', { value: '1' }, 'Last 1 h'), el('option', { value: '6' }, 'Last 6 h'), el('option', { value: '24' }, 'Last 24 h'));
   winSel.value = '6';
-  const runBtn = el('button', { class: 'small' }, 'Vis');
+  const runBtn = el('button', { class: 'small' }, 'Show');
   const status = el('span', { class: 'muted' });
 
   // Prefill from a deep link (global search → "→ flows").
@@ -2194,16 +2300,16 @@ views.flows = async () => {
   const talkerPeer = (t) => (t.internal ? t.dstIp : (t.extIp || t.dstIp));
 
   async function refresh() {
-    status.textContent = 'Henter…';
+    status.textContent = 'Loading…';
     let data;
     try { data = await api(`/api/flows/explore?${qs()}`); } catch (e) { host.replaceChildren(el('div', { class: 'error' }, e.message)); status.textContent = ''; return; }
-    status.textContent = `${fmtBytes(data.totals.bytes)} · ${data.totals.flowCount} flows · ${data.totals.records} poster`;
+    status.textContent = `${fmtBytes(data.totals.bytes)} · ${data.totals.flowCount} flows · ${data.totals.records} records`;
     const kids = [];
 
     // Scans/fan-out first — it's the security-relevant signal.
     if (data.scans && data.scans.length) {
       kids.push(el('details', { class: 'sec scan-sec', open: true }, el('summary', {}, '⚠ Mulige scans / fan-out ', el('span', { class: 'muted' }, '· én kilde mod mange porte/hosts')),
-        el('table', {}, el('thead', {}, el('tr', {}, ...['Kilde', 'Type', 'Porte', 'Hosts', 'Bytes', 'Flows'].map((h) => el('th', {}, h)))),
+        el('table', {}, el('thead', {}, el('tr', {}, ...['Source', 'Type', 'Ports', 'Hosts', 'Bytes', 'Flows'].map((h) => el('th', {}, h)))),
           el('tbody', {}, ...data.scans.map((s) => el('tr', {},
             el('td', {}, esc(s.srcIp)),
             el('td', {}, el('span', { class: `badge ${s.kind === 'port-scan' ? 'offline' : 'warn'}` }, s.kind === 'port-scan' ? 'PORT-SCAN' : 'FAN-OUT')),
@@ -2219,24 +2325,24 @@ views.flows = async () => {
     }
 
     kids.push(el('h4', {}, 'Top talkers'));
-    if (!data.topTalkers.length) kids.push(el('div', { class: 'empty' }, 'Ingen flows i vinduet — kræver NetFlow/sFlow + geo-pipeline.'));
+    if (!data.topTalkers.length) kids.push(el('div', { class: 'empty' }, 'No flows in the window — requires NetFlow/sFlow + geo-pipeline.'));
     else kids.push(el('table', {},
-      el('thead', {}, el('tr', {}, ...['Kilde', 'Destination', 'Org/Land', 'Bytes', 'Pakker', 'Flows'].map((h) => el('th', {}, h)))),
+      el('thead', {}, el('tr', {}, ...['Source', 'Destination', 'Org/Country', 'Bytes', 'Packets', 'Flows'].map((h) => el('th', {}, h)))),
       el('tbody', {}, ...data.topTalkers.map((t) => el('tr', { class: 'fleet-row', onclick: () => { peerInput.value = talkerPeer(t) || ''; refresh(); } },
         el('td', {}, esc(t.srcIp || '–')),
         el('td', {}, esc(t.dstIp || t.extIp || '–')),
-        el('td', {}, t.internal ? el('span', { class: 'badge grace' }, 'intern') : el('span', { class: 'muted' }, [t.asnName, t.country].filter(Boolean).join(' · ') || '–')),
+        el('td', {}, t.internal ? el('span', { class: 'badge grace' }, 'internal') : el('span', { class: 'muted' }, [t.asnName, t.country].filter(Boolean).join(' · ') || '–')),
         el('td', { class: 'num' }, fmtBytes(t.bytes)),
         el('td', { class: 'num muted' }, String(t.packets)),
         el('td', { class: 'num muted' }, String(t.flowCount)))))));
 
     const portTable = el('table', {}, el('thead', {}, el('tr', {}, ...['Port', 'Proto', 'Bytes', 'Flows'].map((h) => el('th', {}, h)))),
       el('tbody', {}, ...(data.byPort.length ? data.byPort.map((p) => el('tr', {}, el('td', {}, String(p.port)), el('td', { class: 'muted' }, p.proto || '–'), el('td', { class: 'num' }, fmtBytes(p.bytes)), el('td', { class: 'num muted' }, String(p.flowCount)))) : [el('tr', {}, el('td', { class: 'muted' }, '–'))])));
-    const protoTable = el('table', {}, el('thead', {}, el('tr', {}, ...['Protokol', 'Bytes', 'Flows'].map((h) => el('th', {}, h)))),
+    const protoTable = el('table', {}, el('thead', {}, el('tr', {}, ...['Protocol', 'Bytes', 'Flows'].map((h) => el('th', {}, h)))),
       el('tbody', {}, ...(data.byProto.length ? data.byProto.map((p) => el('tr', {}, el('td', {}, p.proto || '–'), el('td', { class: 'num' }, fmtBytes(p.bytes)), el('td', { class: 'num muted' }, String(p.flowCount)))) : [el('tr', {}, el('td', { class: 'muted' }, '–'))])));
     kids.push(el('div', { class: 'flows-tables' },
-      el('div', {}, el('h4', {}, 'Top porte'), portTable),
-      el('div', {}, el('h4', {}, 'Protokoller'), protoTable)));
+      el('div', {}, el('h4', {}, 'Top ports'), portTable),
+      el('div', {}, el('h4', {}, 'Protocols'), protoTable)));
 
     host.replaceChildren(...kids);
   }
@@ -2263,16 +2369,16 @@ views.map = async () => {
   const located = locations.filter((l) => l.latitude != null && l.longitude != null);
 
   const root = el('div');
-  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Kort'),
-    el('span', { class: 'muted' }, `${located.length} af ${locations.length} lokationer har koordinater`)));
+  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Map'),
+    el('span', { class: 'muted' }, `${located.length} of ${locations.length} locations have coordinates`)));
 
   if (typeof L === 'undefined') {
-    root.append(el('div', { class: 'empty' }, 'Kortbiblioteket kunne ikke indlæses (offline?). Viser liste i stedet.'));
+    root.append(el('div', { class: 'empty' }, 'Map library could not be loaded (offline?). Showing list instead.'));
     root.append(locationList(locations, byLoc));
     return root;
   }
   if (!located.length) {
-    root.append(el('div', { class: 'empty' }, 'Ingen lokationer med koordinater endnu. Tilføj latitude/longitude under fanen Lokationer.'));
+    root.append(el('div', { class: 'empty' }, 'No locations with coordinates yet. Add latitude/longitude in the Locations tab.'));
     return root;
   }
 
@@ -2288,7 +2394,7 @@ views.map = async () => {
     for (const l of located) {
       const c = byLoc.get(l.id) || { total: 0, online: 0 };
       const m = L.marker([l.latitude, l.longitude]).addTo(map);
-      m.bindPopup(`<b>${esc(l.name)}</b><br>${c.online}/${c.total} agenter online${l.address ? `<br>${esc(l.address)}` : ''}`);
+      m.bindPopup(`<b>${esc(l.name)}</b><br>${c.online}/${c.total} agents online${l.address ? `<br>${esc(l.address)}` : ''}`);
       group.push([l.latitude, l.longitude]);
     }
     if (group.length > 1) map.fitBounds(group, { padding: [40, 40] });
@@ -2322,7 +2428,7 @@ function destQuery(d) {
   return qs.toString();
 }
 
-function geoSpinner(text) { return el('div', { class: 'geo-loading' }, el('span', { class: 'spinner' }), text || 'Indlæser…'); }
+function geoSpinner(text) { return el('div', { class: 'geo-loading' }, el('span', { class: 'spinner' }), text || 'Loading…'); }
 
 function miniTable(title, rows) {
   if (!rows || !rows.length) return null;
@@ -2338,17 +2444,17 @@ function findingMini(f) {
 
 views.geo = async () => {
   if (typeof L === 'undefined') {
-    return el('div', { class: 'empty' }, 'Kortbiblioteket (Leaflet) kunne ikke indlæses — geo-kortet er ikke tilgængeligt offline.');
+    return el('div', { class: 'empty' }, 'Map library (Leaflet) could not be loaded — geo map is unavailable offline.');
   }
   const [config, overview] = await Promise.all([api('/api/geo/config'), api('/api/geo/overview')]);
 
   const root = el('div', { class: 'geo' });
   const periodSel = el('select', {},
-    el('option', { value: '24h' }, 'Seneste 24t'),
-    el('option', { value: '7d' }, 'Seneste 7 dage'),
-    el('option', { value: '30d' }, 'Seneste 30 dage'));
-  const regionBtn = el('button', { class: 'small ghost' }, 'Vælg område');
-  const clearBtn = el('button', { class: 'small ghost' }, 'Ryd valg');
+    el('option', { value: '24h' }, 'Last 24 h'),
+    el('option', { value: '7d' }, 'Last 7 days'),
+    el('option', { value: '30d' }, 'Last 30 days'));
+  const regionBtn = el('button', { class: 'small ghost' }, 'Select region');
+  const clearBtn = el('button', { class: 'small ghost' }, 'Clear selection');
   root.append(el('div', { class: 'section-head' },
     el('h2', {}, 'Geo-kort'),
     el('span', { class: 'spacer' }),
@@ -2362,11 +2468,11 @@ views.geo = async () => {
   geoState.mapEl = mapEl;
   root.append(el('div', { class: 'geo-grid' }, mapEl, panel));
   root.append(el('div', { class: 'legend geo-legend' },
-    el('span', {}, el('span', { class: 'pin-dot' }), ' intern site'),
+    el('span', {}, el('span', { class: 'pin-dot' }), ' internal site'),
     el('span', {}, el('span', { class: 'dot', style: 'background:#38bdf8' }), ' normal'),
-    el('span', {}, el('span', { class: 'dot', style: 'background:#f59e0b' }), ' forhøjet'),
-    el('span', {}, el('span', { class: 'dot', style: 'background:#ef4444' }), ' kraftig afvigelse'),
-    el('span', { class: 'muted' }, '· cirkelstørrelse = trafikmængde')));
+    el('span', {}, el('span', { class: 'dot', style: 'background:#f59e0b' }), ' elevated'),
+    el('span', {}, el('span', { class: 'dot', style: 'background:#ef4444' }), ' strong deviation'),
+    el('span', { class: 'muted' }, '· circle size = traffic volume')));
 
   periodSel.addEventListener('change', () => {
     const v = periodSel.value;
@@ -2447,7 +2553,7 @@ function drawOverview(overview) {
 async function reloadOverview() {
   if (!geoState.map) return;
   const panel = geoState.panel;
-  panel.replaceChildren(geoSpinner('Opdaterer…'));
+  panel.replaceChildren(geoSpinner('Updating…'));
   try {
     const qs = geoState.sinceIso ? `?since=${encodeURIComponent(geoState.sinceIso)}` : '';
     const overview = await api(`/api/geo/overview${qs}`);
@@ -2464,18 +2570,18 @@ function showOverviewSummary() {
   const dests = geoState.dests;
   const totBytes = dests.reduce((s, d) => s + (Number(d.bytes) || 0), 0);
   panel.replaceChildren(
-    el('div', { class: 'section-head' }, el('h3', {}, 'Overblik')),
-    el('p', { class: 'muted' }, `${dests.length} eksterne destinationer · ${fmtBytes(totBytes)} i perioden`),
-    el('p', { class: 'muted' }, 'Klik en cirkel (destination) eller en pin (intern site) for detaljer, eller vælg et område.'));
+    el('div', { class: 'section-head' }, el('h3', {}, 'Overview')),
+    el('p', { class: 'muted' }, `${dests.length} external destinations · ${fmtBytes(totBytes)} in the period`),
+    el('p', { class: 'muted' }, 'Click a circle (destination) or a pin (internal site) for details, or select a region.'));
 }
 
 async function selectDestination(d) {
   const panel = geoState.panel;
-  panel.replaceChildren(geoSpinner('Henter destination…'));
+  panel.replaceChildren(geoSpinner('Loading destination…'));
   const qs = destQuery(d);
   try {
     const flows = await api(`/api/geo/select/flows?${qs}`).catch((e) => { if (e.status === 404) return null; throw e; });
-    if (!flows) { panel.replaceChildren(el('div', { class: 'empty' }, 'Ingen data for destinationen i perioden.')); return; }
+    if (!flows) { panel.replaceChildren(el('div', { class: 'empty' }, 'No data for this destination in the period.')); return; }
     const findings = await api(`/api/geo/select/findings?${qs}`).catch((e) => { if (e.status === 404) return { findings: [] }; throw e; });
     renderDestPanel(d, flows, findings);
   } catch (err) {
@@ -2487,26 +2593,26 @@ function renderDestPanel(d, flows, findingsRes) {
   const fs = (findingsRes && findingsRes.findings) || [];
   geoState.panel.replaceChildren(
     el('div', { class: 'section-head' }, el('h3', {}, destTitle(d)),
-      el('span', { class: 'spacer' }), el('button', { class: 'small ghost', onclick: () => { clearRegion(); showOverviewSummary(); } }, 'Ryd valg')),
-    el('p', { class: 'muted' }, `${fmtBytes(flows.totals.bytes)} · ${flows.totals.flowCount} flows · afvigelse ${devLabel(d.deviation)}`),
-    miniTable('Retning', flows.byDirection.map((x) => [x.direction === 'in' ? 'indgående' : 'udgående', fmtBytes(x.bytes)])),
-    miniTable('Protokol', flows.byProto.map((x) => [esc(x.proto || '–'), fmtBytes(x.bytes)])),
+      el('span', { class: 'spacer' }), el('button', { class: 'small ghost', onclick: () => { clearRegion(); showOverviewSummary(); } }, 'Clear selection')),
+    el('p', { class: 'muted' }, `${fmtBytes(flows.totals.bytes)} · ${flows.totals.flowCount} flows · deviation ${devLabel(d.deviation)}`),
+    miniTable('Direction', flows.byDirection.map((x) => [x.direction === 'in' ? 'inbound' : 'outbound', fmtBytes(x.bytes)])),
+    miniTable('Protocol', flows.byProto.map((x) => [esc(x.proto || '–'), fmtBytes(x.bytes)])),
     miniTable('ASN', flows.byAsn.map((x) => [esc(x.asnName || (x.asn ? `AS${x.asn}` : '–')), fmtBytes(x.bytes)])),
     el('h4', {}, `Findings (${fs.length})`),
-    fs.length ? el('div', {}, ...fs.slice(0, 50).map(findingMini)) : el('div', { class: 'muted' }, 'Ingen findings for de hosts der taler med destinationen.'));
+    fs.length ? el('div', {}, ...fs.slice(0, 50).map(findingMini)) : el('div', { class: 'muted' }, 'No findings for the hosts communicating with this destination.'));
 }
 
 async function selectHost(h) {
   const panel = geoState.panel;
-  panel.replaceChildren(geoSpinner('Henter host…'));
+  panel.replaceChildren(geoSpinner('Loading host…'));
   try {
     const findings = await api(`/api/findings?hostId=${encodeURIComponent(h.hostId)}`);
     panel.replaceChildren(
       el('div', { class: 'section-head' }, el('h3', {}, esc(h.siteName || `host ${h.hostId}`)),
-        el('span', { class: 'spacer' }), el('button', { class: 'small ghost', onclick: showOverviewSummary }, 'Ryd valg')),
+        el('span', { class: 'spacer' }), el('button', { class: 'small ghost', onclick: showOverviewSummary }, 'Clear selection')),
       el('p', {}, el('span', { class: `badge ${h.status === 'online' ? 'online' : 'offline'}` }, h.status || '?'), ` host ${h.hostId}`),
       el('h4', {}, `Findings (${findings.length})`),
-      findings.length ? el('div', {}, ...findings.slice(0, 50).map(findingMini)) : el('div', { class: 'muted' }, 'Ingen findings for denne host.'));
+      findings.length ? el('div', {}, ...findings.slice(0, 50).map(findingMini)) : el('div', { class: 'muted' }, 'No findings for this host.'));
   } catch (err) {
     panel.replaceChildren(el('div', { class: 'empty error' }, err.message));
   }
@@ -2517,7 +2623,7 @@ function beginRegionSelect(btn) {
   geoState.selecting = true;
   geoState.map.dragging.disable();
   geoState.map.boxZoom.disable();
-  toast('Træk en kasse på kortet for at vælge et område');
+  toast('Draw a box on the map to select a region');
   if (btn) { btn.classList.add('active-btn'); setTimeout(() => btn.classList.remove('active-btn'), 1500); }
 }
 
@@ -2529,15 +2635,15 @@ function clearRegion() {
 async function aggregateRegion(bounds) {
   const panel = geoState.panel;
   const inBox = geoState.dests.filter((d) => bounds.contains([d.lat, d.lng]));
-  if (!inBox.length) { panel.replaceChildren(el('div', { class: 'empty' }, 'Ingen destinationer i det valgte område.')); return; }
+  if (!inBox.length) { panel.replaceChildren(el('div', { class: 'empty' }, 'No destinations in the selected region.')); return; }
   const totBytes = inBox.reduce((s, d) => s + (Number(d.bytes) || 0), 0);
   const totFlows = inBox.reduce((s, d) => s + (Number(d.flowCount) || 0), 0);
   panel.replaceChildren(
-    el('div', { class: 'section-head' }, el('h3', {}, 'Område'),
-      el('span', { class: 'spacer' }), el('button', { class: 'small ghost', onclick: () => { clearRegion(); showOverviewSummary(); } }, 'Ryd valg')),
-    el('p', { class: 'muted' }, `${inBox.length} destinationer · ${fmtBytes(totBytes)} · ${totFlows} flows`),
-    miniTable('Destinationer', inBox.slice().sort((a, b) => b.bytes - a.bytes).slice(0, 30).map((d) => [esc(destTitle(d)), fmtBytes(d.bytes)])),
-    el('div', { class: 'geo-region-findings' }, geoSpinner('Henter findings for området…')));
+    el('div', { class: 'section-head' }, el('h3', {}, 'Region'),
+      el('span', { class: 'spacer' }), el('button', { class: 'small ghost', onclick: () => { clearRegion(); showOverviewSummary(); } }, 'Clear selection')),
+    el('p', { class: 'muted' }, `${inBox.length} destinations · ${fmtBytes(totBytes)} · ${totFlows} flows`),
+    miniTable('Destinations', inBox.slice().sort((a, b) => b.bytes - a.bytes).slice(0, 30).map((d) => [esc(destTitle(d)), fmtBytes(d.bytes)])),
+    el('div', { class: 'geo-region-findings' }, geoSpinner('Loading findings for the region…')));
 
   // Aggregate findings across the distinct countries in the box (bounded).
   const countries = [...new Set(inBox.map((d) => d.country).filter(Boolean))].slice(0, 8);
@@ -2555,13 +2661,13 @@ async function aggregateRegion(bounds) {
   const slot = panel.querySelector('.geo-region-findings');
   if (slot) {
     slot.replaceChildren(el('h4', {}, `Findings (${findings.length})`),
-      findings.length ? el('div', {}, ...findings.slice(0, 50).map(findingMini)) : el('div', { class: 'muted' }, 'Ingen findings i området.'));
+      findings.length ? el('div', {}, ...findings.slice(0, 50).map(findingMini)) : el('div', { class: 'muted' }, 'No findings in the region.'));
   }
 }
 
 function locationList(locations, byLoc) {
   return el('table', {},
-    el('thead', {}, el('tr', {}, ...['Lokation', 'Adresse', 'Koordinater', 'Agenter'].map((h) => el('th', {}, h)))),
+    el('thead', {}, el('tr', {}, ...['Location', 'Address', 'Coordinates', 'Agents'].map((h) => el('th', {}, h)))),
     el('tbody', {}, ...locations.map((l) => {
       const c = byLoc.get(l.id) || { total: 0, online: 0 };
       return el('tr', {},
@@ -2580,7 +2686,7 @@ function agentSourceCell(a) {
   const detail = source === 'snmp' && mc.snmp ? ` (${mc.snmp.host})` : '';
   return el('div', {},
     el('span', { class: 'badge' }, source + detail),
-    caps ? el('div', { class: 'muted', title: 'Agentens muligheder' }, `kan: ${caps.join(', ')}`) : null);
+    caps ? el('div', { class: 'muted', title: 'Agent capabilities' }, `can: ${caps.join(', ')}`) : null);
 }
 
 function editAgent(a) {
@@ -2589,25 +2695,25 @@ function editAgent(a) {
   const caps = a.capabilities && Array.isArray(a.capabilities.sources) ? a.capabilities.sources : [];
   // Only offer sources the agent says it supports (fall back to both if unknown).
   const sourceOptions = (caps.length ? caps : ['proc', 'snmp']).map((s) => ({ value: s, label: s }));
-  openModal(`Rediger agent ${a.id}`, [
-    { name: 'display_name', label: 'Visningsnavn', value: a.display_name || '' },
-    { name: 'location_id', label: 'Lokation', type: 'select', value: a.location_id ? String(a.location_id) : '',
-      options: [{ value: '', label: '(ingen)' }, ...locationCache.map((l) => ({ value: String(l.id), label: l.name }))] },
-    { name: 'notes', label: 'Noter', type: 'textarea', value: a.notes || '' },
-    { name: 'source', label: 'Trafik-kilde', type: 'select', value: mc.source || 'proc', options: sourceOptions },
-    { name: 'snmp_host', label: 'SNMP host (kun ved snmp)', value: snmp.host || '' },
+  openModal(`Edit agent ${a.id}`, [
+    { name: 'display_name', label: 'Display name', value: a.display_name || '' },
+    { name: 'location_id', label: 'Location', type: 'select', value: a.location_id ? String(a.location_id) : '',
+      options: [{ value: '', label: '(none)' }, ...locationCache.map((l) => ({ value: String(l.id), label: l.name }))] },
+    { name: 'notes', label: 'Notes', type: 'textarea', value: a.notes || '' },
+    { name: 'source', label: 'Traffic source', type: 'select', value: mc.source || 'proc', options: sourceOptions },
+    { name: 'snmp_host', label: 'SNMP host (only for snmp)', value: snmp.host || '' },
     { name: 'snmp_community', label: 'SNMP community', value: snmp.community || 'public' },
     { name: 'snmp_version', label: 'SNMP version', type: 'select', value: snmp.version || '2c',
       options: ['1', '2c'].map((s) => ({ value: s, label: s })) },
     { name: 'snmp_port', label: 'SNMP port', type: 'number', value: String(snmp.port || 161) },
-    { name: 'netflow_port', label: 'NetFlow UDP-port (kun ved netflow)', type: 'number',
+    { name: 'netflow_port', label: 'NetFlow UDP port (only for netflow)', type: 'number',
       value: String((mc.netflow && mc.netflow.port) || 2055) },
-    { name: 'sflow_port', label: 'sFlow UDP-port (kun ved sflow)', type: 'number',
+    { name: 'sflow_port', label: 'sFlow UDP port (only for sflow)', type: 'number',
       value: String((mc.sflow && mc.sflow.port) || 6343) },
   ], async (v) => {
     let monitor_config = null;
     if (v.source === 'snmp') {
-      if (!v.snmp_host.trim()) throw new Error('SNMP host er påkrævet ved kilde "snmp"');
+      if (!v.snmp_host.trim()) throw new Error('SNMP host is required for source "snmp"');
       monitor_config = {
         source: 'snmp',
         snmp: {
@@ -2631,33 +2737,33 @@ function editAgent(a) {
       meta: a.meta || null,
       monitor_config,
     } });
-    closeModal(); toast('Agent opdateret'); render();
+    closeModal(); toast('Agent updated'); render();
   });
 }
 
 async function deleteAgent(a) {
-  if (!confirm(`Slet agent ${a.hostname}?`)) return;
-  try { await api(`/agents/${a.id}`, { method: 'DELETE' }); toast('Agent slettet'); render(); }
+  if (!confirm(`Delete agent ${a.hostname}?`)) return;
+  try { await api(`/agents/${a.id}`, { method: 'DELETE' }); toast('Agent deleted'); render(); }
   catch (err) { toast(err.message, true); }
 }
 
 views.locations = async () => {
   const locations = await api('/locations');
   const root = el('div');
-  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Lokationer'),
-    canWrite() ? el('button', { class: 'small', onclick: () => editLocation() }, '+ Ny lokation') : null));
-  if (!locations.length) { root.append(el('div', { class: 'empty' }, 'Ingen lokationer.')); return root; }
+  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Locations'),
+    canWrite() ? el('button', { class: 'small', onclick: () => editLocation() }, '+ New location') : null));
+  if (!locations.length) { root.append(el('div', { class: 'empty' }, 'No locations.')); return root; }
   root.append(el('table', {},
-    el('thead', {}, el('tr', {}, ...['ID', 'Navn', 'Beskrivelse', ''].map((h) => el('th', {}, h)))),
+    el('thead', {}, el('tr', {}, ...['ID', 'Name', 'Description', ''].map((h) => el('th', {}, h)))),
     el('tbody', {}, ...locations.map((l) => el('tr', {},
       el('td', {}, String(l.id)),
       el('td', {}, l.name),
       el('td', { class: 'muted' }, l.description || '–'),
       el('td', {}, el('div', { class: 'row-actions' },
-        el('button', { class: 'small ghost', onclick: () => showLocationTraffic(l) }, 'Trafik'),
-        el('button', { class: 'small ghost', onclick: () => showLocationHistory(l) }, 'Historik'),
-        canWrite() ? el('button', { class: 'small ghost', onclick: () => editLocation(l) }, 'Rediger') : null,
-        canDelete() ? el('button', { class: 'small danger', onclick: () => deleteLocation(l) }, 'Slet') : null)),
+        el('button', { class: 'small ghost', onclick: () => showLocationTraffic(l) }, 'Traffic'),
+        el('button', { class: 'small ghost', onclick: () => showLocationHistory(l) }, 'History'),
+        canWrite() ? el('button', { class: 'small ghost', onclick: () => editLocation(l) }, 'Edit') : null,
+        canDelete() ? el('button', { class: 'small danger', onclick: () => deleteLocation(l) }, 'Delete') : null)),
     )))));
   return root;
 };
@@ -2680,9 +2786,9 @@ function showLocationTraffic(l) {
       data = await api(`/locations/${l.id}/traffic`);
     } catch (err) {
       card.replaceChildren(
-        el('h3', {}, `Trafik — ${esc(l.name)}`),
+        el('h3', {}, `Traffic — ${esc(l.name)}`),
         el('p', { class: 'error' }, err.message),
-        el('div', { class: 'form-actions' }, el('button', { class: 'ghost', onclick: close }, 'Luk')));
+        el('div', { class: 'form-actions' }, el('button', { class: 'ghost', onclick: close }, 'Close')));
       stop();
       return;
     }
@@ -2697,25 +2803,25 @@ function showLocationTraffic(l) {
       el('td', { class: 'muted' }, a.at ? fmtDate(a.at) : '–'),
     ));
     card.replaceChildren(
-      el('h3', {}, `Trafik — ${esc(l.name)}`),
+      el('h3', {}, `Traffic — ${esc(l.name)}`),
       el('div', { class: 'cards' },
-        stat('Agenter', String(data.agentCount)),
-        stat('Rapporterer', String(data.reportingCount)),
-        stat('RX i alt', `${fmtBytes(data.totals.rxBytesPerSec)}/s`),
-        stat('TX i alt', `${fmtBytes(data.totals.txBytesPerSec)}/s`)),
+        stat('Agents', String(data.agentCount)),
+        stat('Reporting', String(data.reportingCount)),
+        stat('RX total', `${fmtBytes(data.totals.rxBytesPerSec)}/s`),
+        stat('TX total', `${fmtBytes(data.totals.txBytesPerSec)}/s`)),
       history.length >= 2
         ? trafficChart(history)
-        : el('p', { class: 'muted' }, 'Samler datapunkter til grafen…'),
+        : el('p', { class: 'muted' }, 'Collecting data points for the chart…'),
       data.agents.length
         ? el('table', {},
-            el('thead', {}, el('tr', {}, ...['Agent', 'Status', 'RX/s', 'TX/s', 'Sidst'].map((h) => el('th', {}, h)))),
+            el('thead', {}, el('tr', {}, ...['Agent', 'Status', 'RX/s', 'TX/s', 'Last'].map((h) => el('th', {}, h)))),
             el('tbody', {}, ...rows))
-        : el('div', { class: 'empty' }, 'Ingen agenter i denne lokation.'),
-      el('p', { class: 'muted' }, `Opdateret ${fmtDate(data.at)} · auto hvert 3. sek. · graf: seneste ${history.length} målinger`),
-      el('div', { class: 'form-actions' }, el('button', { class: 'ghost', onclick: close }, 'Luk')));
+        : el('div', { class: 'empty' }, 'No agents in this location.'),
+      el('p', { class: 'muted' }, `Updated ${fmtDate(data.at)} · auto every 3 s · chart: last ${history.length} measurements`),
+      el('div', { class: 'form-actions' }, el('button', { class: 'ghost', onclick: close }, 'Close')));
   }
 
-  card.replaceChildren(el('h3', {}, `Trafik — ${esc(l.name)}`), el('div', { class: 'empty' }, 'Indlæser…'));
+  card.replaceChildren(el('h3', {}, `Traffic — ${esc(l.name)}`), el('div', { class: 'empty' }, 'Loading…'));
   $('#modal').classList.remove('hidden');
   // Stop polling if the modal is dismissed by backdrop click / Escape path.
   const modal = $('#modal');
@@ -2737,7 +2843,7 @@ function showLocationHistory(l) {
   const result = el('div', {});
 
   async function load() {
-    result.replaceChildren(el('div', { class: 'empty' }, 'Henter…'));
+    result.replaceChildren(el('div', { class: 'empty' }, 'Loading…'));
     const qs = new URLSearchParams();
     const f = fromLocalInput(fromInput.value);
     const t = fromLocalInput(toInput.value);
@@ -2758,23 +2864,23 @@ function showLocationHistory(l) {
       el('td', {}, `${fmtBytes(p.txBytesPerSec)}/s`),
     ));
     result.replaceChildren(
-      el('p', { class: 'muted' }, `${data.count} målinger · ${data.series.length} tidspunkter`),
-      series.length >= 2 ? trafficChart(series) : el('p', { class: 'muted' }, 'For få datapunkter til en graf i dette interval.'),
+      el('p', { class: 'muted' }, `${data.count} measurements · ${data.series.length} time points`),
+      series.length >= 2 ? trafficChart(series) : el('p', { class: 'muted' }, 'Too few data points for a chart in this interval.'),
       data.points.length
         ? el('table', {},
-            el('thead', {}, el('tr', {}, ...['Tidspunkt', 'Agent', 'RX/s', 'TX/s'].map((h) => el('th', {}, h)))),
+            el('thead', {}, el('tr', {}, ...['Timestamp', 'Agent', 'RX/s', 'TX/s'].map((h) => el('th', {}, h)))),
             el('tbody', {}, ...rows))
-        : el('div', { class: 'empty' }, 'Ingen data i intervallet.'));
+        : el('div', { class: 'empty' }, 'No data in the interval.'));
   }
 
   card.replaceChildren(
-    el('h3', {}, `Historik — ${esc(l.name)}`),
+    el('h3', {}, `History — ${esc(l.name)}`),
     el('div', { class: 'form-grid' },
-      el('label', {}, 'Fra', fromInput),
-      el('label', {}, 'Til', toInput),
+      el('label', {}, 'From', fromInput),
+      el('label', {}, 'To', toInput),
       el('div', { class: 'form-actions' },
-        el('button', { onclick: load }, 'Søg'),
-        el('button', { class: 'ghost', onclick: closeModal }, 'Luk'))),
+        el('button', { onclick: load }, 'Search'),
+        el('button', { class: 'ghost', onclick: closeModal }, 'Close'))),
     result);
   $('#modal').classList.remove('hidden');
   load();
@@ -2804,7 +2910,7 @@ async function editLocation(l) {
   const address = el('input', { type: 'text', value: l ? l.address || '' : '' });
   const lat = el('input', { type: 'number', step: 'any', value: l && l.latitude != null ? String(l.latitude) : '' });
   const lng = el('input', { type: 'number', step: 'any', value: l && l.longitude != null ? String(l.longitude) : '' });
-  const search = el('input', { type: 'text', placeholder: 'Søg adresse…' });
+  const search = el('input', { type: 'text', placeholder: 'Search address…' });
   const results = el('div', { class: 'geocode-results' });
   const mapEl = el('div', { class: 'map picker-map' });
   const err = el('p', { class: 'error' });
@@ -2832,8 +2938,8 @@ async function editLocation(l) {
     const q = search.value.trim();
     results.replaceChildren();
     if (!q) return;
-    if (!mapCfg.geocodeUrl) { results.append(el('p', { class: 'muted' }, 'Ingen geocoder konfigureret (Indstillinger → Kort).')); return; }
-    results.append(el('p', { class: 'muted' }, 'Søger…'));
+    if (!mapCfg.geocodeUrl) { results.append(el('p', { class: 'muted' }, 'No geocoder configured (Settings → Map).')); return; }
+    results.append(el('p', { class: 'muted' }, 'Searching…'));
     try {
       const res = await fetch(`${mapCfg.geocodeUrl}/search?format=jsonv2&limit=5&q=${encodeURIComponent(q)}`, { headers: { Accept: 'application/json' } });
       const list = res.ok ? await res.json() : [];
@@ -2843,8 +2949,8 @@ async function editLocation(l) {
           if (r.display_name) { address.value = r.display_name; search.value = r.display_name; }
           results.replaceChildren();
         },
-      }, r.display_name)) : [el('p', { class: 'muted' }, 'Ingen resultater.')]));
-    } catch { results.replaceChildren(el('p', { class: 'error' }, 'Geocoder-fejl.')); }
+      }, r.display_name)) : [el('p', { class: 'muted' }, 'No results.')]));
+    } catch { results.replaceChildren(el('p', { class: 'error' }, 'Geocoder error.')); }
   }
   search.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); doSearch(); } });
 
@@ -2857,29 +2963,29 @@ async function editLocation(l) {
       latitude: lat.value.trim() === '' ? null : Number(lat.value),
       longitude: lng.value.trim() === '' ? null : Number(lng.value),
     };
-    if (!body.name) { err.textContent = 'Navn er påkrævet'; return; }
+    if (!body.name) { err.textContent = 'Name is required'; return; }
     try {
       if (l) await api(`/locations/${l.id}`, { method: 'PUT', body });
       else await api('/locations', { method: 'POST', body });
-      closeModal(); toast('Gemt'); render();
+      closeModal(); toast('Saved'); render();
     } catch (e2) { err.textContent = e2.message; }
   }
 
   const form = el('div', { class: 'form-grid' },
-    el('label', {}, 'Navn', name),
-    el('label', {}, 'Beskrivelse', desc),
-    el('label', {}, 'Adresse', address),
-    el('label', {}, 'Søg adresse', el('div', { class: 'geocode-row' }, search, el('button', { type: 'button', class: 'small', onclick: doSearch }, 'Søg'))),
+    el('label', {}, 'Name', name),
+    el('label', {}, 'Description', desc),
+    el('label', {}, 'Address', address),
+    el('label', {}, 'Search address', el('div', { class: 'geocode-row' }, search, el('button', { type: 'button', class: 'small', onclick: doSearch }, 'Search'))),
     results,
     mapEl,
     el('div', { class: 'coord-row' }, el('label', {}, 'Latitude', lat), el('label', {}, 'Longitude', lng)),
-    el('p', { class: 'muted' }, 'Klik på kortet for at sætte koordinater (og hente adressen).'),
+    el('p', { class: 'muted' }, 'Click on the map to set coordinates (and fetch the address).'),
     err,
     el('div', { class: 'form-actions' },
-      el('button', { type: 'button', class: 'ghost', onclick: closeModal }, 'Annullér'),
-      el('button', { type: 'button', onclick: save }, 'Gem')));
+      el('button', { type: 'button', class: 'ghost', onclick: closeModal }, 'Cancel'),
+      el('button', { type: 'button', onclick: save }, 'Save')));
 
-  $('#modal-card').replaceChildren(el('h3', {}, l ? `Rediger lokation ${l.id}` : 'Ny lokation'), form);
+  $('#modal-card').replaceChildren(el('h3', {}, l ? `Edit location ${l.id}` : 'New location'), form);
   $('#modal').classList.remove('hidden');
 
   if (typeof L !== 'undefined' && mapCfg.tileUrl) {
@@ -2892,12 +2998,12 @@ async function editLocation(l) {
       map.invalidateSize();
     }, 50);
   } else {
-    mapEl.replaceChildren(el('p', { class: 'muted' }, 'Kort utilgængeligt (offline eller ingen tile-URL).'));
+    mapEl.replaceChildren(el('p', { class: 'muted' }, 'Map unavailable (offline or no tile URL).'));
   }
 }
 async function deleteLocation(l) {
-  if (!confirm(`Slet lokation "${l.name}"?`)) return;
-  try { await api(`/locations/${l.id}`, { method: 'DELETE' }); toast('Slettet'); render(); }
+  if (!confirm(`Delete location "${l.name}"?`)) return;
+  try { await api(`/locations/${l.id}`, { method: 'DELETE' }); toast('Deleted'); render(); }
   catch (err) { toast(err.message, true); }
 }
 
@@ -2914,7 +3020,7 @@ const ENROLL_PLATFORMS = [
 ];
 
 // Set while a freshly generated code is on screen: the live WS handler calls it
-// when any agent enrolls/comes online, flipping "Venter på agent…" to connected.
+// when any agent enrolls/comes online, flipping "Waiting for agent…" to connected.
 let enrollWatch = null;
 
 views.enrollment = async () => {
@@ -2930,19 +3036,19 @@ views.enrollment = async () => {
 
   if (canWrite()) root.append(enrollWizard(cfg));
 
-  root.append(el('div', { class: 'section-head' }, el('h3', {}, 'Aktive koder'),
-    canWrite() ? el('button', { class: 'small ghost', onclick: () => createCode() }, '+ Ny kode (avanceret)') : null));
-  if (!codes.length) { root.append(el('div', { class: 'empty' }, 'Ingen koder endnu — brug "Tilføj agent" ovenfor.')); return root; }
+  root.append(el('div', { class: 'section-head' }, el('h3', {}, 'Active codes'),
+    canWrite() ? el('button', { class: 'small ghost', onclick: () => createCode() }, '+ New code (advanced)') : null));
+  if (!codes.length) { root.append(el('div', { class: 'empty' }, 'No codes yet — use "Add agent" above.')); return root; }
   root.append(el('table', {},
-    el('thead', {}, el('tr', {}, ...['ID', 'Status', 'Brug', 'Lokation', 'Udløber', 'Oprettet', ''].map((h) => el('th', {}, h)))),
+    el('thead', {}, el('tr', {}, ...['ID', 'Status', 'Uses', 'Location', 'Expires', 'Created', ''].map((h) => el('th', {}, h)))),
     el('tbody', {}, ...codes.map((c) => el('tr', {},
       el('td', {}, String(c.id)),
       el('td', {}, el('span', { class: `badge ${c.status}` }, c.status)),
-      el('td', {}, c.max_uses > 1 ? `${c.uses_remaining}/${c.max_uses}` : (c.uses_remaining === 0 ? 'brugt' : '1')),
+      el('td', {}, c.max_uses > 1 ? `${c.uses_remaining}/${c.max_uses}` : (c.uses_remaining === 0 ? 'used' : '1')),
       el('td', {}, c.location_name || '–'),
       el('td', { class: 'muted' }, fmtDate(c.expires_at)),
       el('td', { class: 'muted' }, fmtDate(c.created_at)),
-      el('td', {}, canDelete() ? el('button', { class: 'small danger', onclick: () => deleteCode(c) }, 'Slet') : null),
+      el('td', {}, canDelete() ? el('button', { class: 'small danger', onclick: () => deleteCode(c) }, 'Delete') : null),
     )))));
   return root;
 };
@@ -2956,19 +3062,19 @@ function enrollWizard(cfg) {
   const platformSel = el('select', {}, ...ENROLL_PLATFORMS.map(([v, l]) => el('option', { value: v }, l)));
   const countInp = el('input', { type: 'number', min: '1', max: '1000', value: '1', class: 'enroll-num' });
   const ttlInp = el('input', { type: 'number', min: '1', value: '60', class: 'enroll-num' });
-  const locSel = el('select', {}, el('option', { value: '' }, '(ingen lokation)'),
+  const locSel = el('select', {}, el('option', { value: '' }, '(no location)'),
     ...locationCache.map((l) => el('option', { value: String(l.id) }, l.name)));
   const result = el('div', { class: 'enroll-result hidden' });
-  const genBtn = el('button', { onclick: () => generate() }, 'Generér kode & kommando');
+  const genBtn = el('button', { onclick: () => generate() }, 'Generate code & command');
 
   card.append(
-    el('h3', {}, 'Tilføj agent'),
-    el('p', { class: 'muted' }, 'Vælg platform, generér en kode og kopiér kommandoen til agent-maskinen. Den melder sig selv online, så snart den kører — du indtaster aldrig server-adressen.'),
+    el('h3', {}, 'Add agent'),
+    el('p', { class: 'muted' }, 'Choose a platform, generate a code and copy the command to the agent machine. It registers itself online as soon as it runs — you never type the server address.'),
     el('div', { class: 'enroll-form' },
       enrollField('Platform', platformSel),
-      enrollField('Antal maskiner', countInp),
-      enrollField('Levetid (min)', ttlInp),
-      enrollField('Lokation', locSel)),
+      enrollField('Number of machines', countInp),
+      enrollField('Lifetime (min)', ttlInp),
+      enrollField('Location', locSel)),
     el('div', { class: 'form-actions' }, genBtn),
     result);
 
@@ -2997,29 +3103,29 @@ function renderEnrollResult(host, data, cfg, regen) {
 
   // Live status: correlate the next enrollment/online event with this code.
   const live = el('div', { class: 'enroll-live waiting' },
-    el('span', { class: 'dot' }), el('span', { class: 'txt' }, 'Venter på agent…'));
+    el('span', { class: 'dot' }), el('span', { class: 'txt' }, 'Waiting for agent…'));
   enrollWatch = (kind, payload) => {
     if (kind === 'enrolled' || kind === 'online') {
       live.className = 'enroll-live ok';
-      live.querySelector('.txt').textContent = `Tilsluttet ✓${payload && payload.hostname ? ' — ' + payload.hostname : ''}`;
+      live.querySelector('.txt').textContent = `Connected ✓${payload && payload.hostname ? ' — ' + payload.hostname : ''}`;
     }
   };
 
   const cmdPre = el('pre', { class: 'enroll-cmd' }, oneLiner);
-  const copyBtn = el('button', { class: 'small', onclick: () => copyText(oneLiner) }, 'Kopiér kommando');
+  const copyBtn = el('button', { class: 'small', onclick: () => copyText(oneLiner) }, 'Copy command');
 
   // Manual download + checksum, hidden by default for security-minded users.
   const manual = el('div', { class: 'enroll-manual hidden' },
-    el('p', { class: 'muted small' }, 'Manuel installation — inspicér før kørsel:'),
+    el('p', { class: 'muted small' }, 'Manual installation — inspect before running:'),
     enrollKv('Download', el('code', {}, data.manual.downloadUrl)),
-    enrollKv('SHA-256', el('code', {}, data.manual.checksum || '(binær ikke publiceret for platformen endnu)')),
+    enrollKv('SHA-256', el('code', {}, data.manual.checksum || '(binary not yet published for this platform)')),
     enrollKv('Kommando', el('code', {}, data.manual.command)),
     (cfg && cfg.certFingerprint) ? enrollKv('Cert-fingerprint', el('code', {}, cfg.certFingerprint)) : null);
-  const manualToggle = el('button', { class: 'small ghost', onclick: () => manual.classList.toggle('hidden') }, 'Vis manuel / checksum');
-  const regenBtn = el('button', { class: 'small ghost', onclick: regen }, 'Generér ny kode');
+  const manualToggle = el('button', { class: 'small ghost', onclick: () => manual.classList.toggle('hidden') }, 'Show manual / checksum');
+  const regenBtn = el('button', { class: 'small ghost', onclick: regen }, 'Generate new code');
 
-  const usesText = data.maxUses > 1 ? ` · bulk: ${data.usesRemaining}/${data.maxUses} maskiner` : '';
-  const meta = el('p', { class: 'muted small' }, `Kode ${data.code} · udløber ${fmtDate(data.expiresAt)}${usesText}`);
+  const usesText = data.maxUses > 1 ? ` · bulk: ${data.usesRemaining}/${data.maxUses} machines` : '';
+  const meta = el('p', { class: 'muted small' }, `Code ${data.code} · expires ${fmtDate(data.expiresAt)}${usesText}`);
 
   host.replaceChildren(
     live,
@@ -3044,18 +3150,18 @@ function enrollAnsibleBlock(oneLiner) {
   ].join('\n');
   return el('details', { class: 'enroll-ansible' },
     el('summary', {}, 'Ansible / config-management (copy-paste)'),
-    el('p', { class: 'muted small' }, 'Samme one-liner, udrullet til mange maskiner. "creates" gør den idempotent.'),
+    el('p', { class: 'muted small' }, 'Same one-liner, deployed to many machines. "creates" makes it idempotent.'),
     el('div', { class: 'enroll-cmd-row' },
       el('pre', { class: 'enroll-cmd' }, yaml),
-      el('button', { class: 'small', onclick: () => copyText(yaml) }, 'Kopiér')));
+      el('button', { class: 'small', onclick: () => copyText(yaml) }, 'Copy')));
 }
 
 function createCode() {
-  openModal('Ny enrollment-kode (avanceret)', [
-    { name: 'location_id', label: 'Lokation (valgfri)', type: 'select', value: '',
-      options: [{ value: '', label: '(ingen)' }, ...locationCache.map((l) => ({ value: String(l.id), label: l.name }))] },
-    { name: 'expiresInMinutes', label: 'Levetid (minutter)', type: 'number', value: '60' },
-    { name: 'maxUses', label: 'Antal maskiner (bulk)', type: 'number', value: '1' },
+  openModal('New enrollment code (advanced)', [
+    { name: 'location_id', label: 'Location (optional)', type: 'select', value: '',
+      options: [{ value: '', label: '(none)' }, ...locationCache.map((l) => ({ value: String(l.id), label: l.name }))] },
+    { name: 'expiresInMinutes', label: 'Lifetime (minutes)', type: 'number', value: '60' },
+    { name: 'maxUses', label: 'Number of machines (bulk)', type: 'number', value: '1' },
   ], async (v) => {
     const body = {};
     if (v.location_id) body.location_id = Number(v.location_id);
@@ -3065,34 +3171,34 @@ function createCode() {
     closeModal();
     const card = $('#modal-card');
     card.replaceChildren(
-      el('h3', {}, 'Kode oprettet'),
-      el('p', { class: 'muted' }, 'Kopiér koden nu — den vises kun denne ene gang:'),
+      el('h3', {}, 'Code created'),
+      el('p', { class: 'muted' }, 'Copy the code now — it is only shown this once:'),
       el('pre', {}, esc(created.code)),
-      created.max_uses > 1 ? el('p', { class: 'muted small' }, `Bulk-kode: kan bruges ${created.max_uses} gange.`) : null,
-      el('div', { class: 'form-actions' }, el('button', {}, 'Luk')));
+      created.max_uses > 1 ? el('p', { class: 'muted small' }, `Bulk code: can be used ${created.max_uses} times.`) : null,
+      el('div', { class: 'form-actions' }, el('button', {}, 'Close')));
     card.querySelector('button').addEventListener('click', () => { closeModal(); render(); });
     $('#modal').classList.remove('hidden');
   });
 }
 async function deleteCode(c) {
-  if (!confirm('Slet kode?')) return;
-  try { await api(`/enrollment-codes/${c.id}`, { method: 'DELETE' }); toast('Slettet'); render(); }
+  if (!confirm('Delete code?')) return;
+  try { await api(`/enrollment-codes/${c.id}`, { method: 'DELETE' }); toast('Deleted'); render(); }
   catch (err) { toast(err.message, true); }
 }
 
-// ---- Indstillinger (settings overview: brugere + licens + config) ---------
+// ---- Settings (settings overview: users + license + config) ---------
 let settingsTab = null;
 views.settings = async () => {
   const root = el('div');
   const isAdmin = role === 'admin';
   const subtabs = [];
-  if (isAdmin) subtabs.push(['analyse', 'Analyse'], ['alerting', 'Alerting'], ['maintenance', 'Vedligehold'], ['retention', 'Retention'], ['types', 'Trafiktyper'], ['map', 'Kort'], ['users', 'Brugere']);
-  subtabs.push(['license', 'Licens']);
+  if (isAdmin) subtabs.push(['analyse', 'Analysis'], ['alerting', 'Alerting'], ['maintenance', 'Maintenance'], ['retention', 'Retention'], ['types', 'Traffic types'], ['map', 'Map'], ['users', 'Users']);
+  subtabs.push(['license', 'License']);
   if (!settingsTab || !subtabs.some(([k]) => k === settingsTab)) settingsTab = subtabs[0][0];
 
   const nav = el('div', { class: 'subtabs' }, ...subtabs.map(([k, label]) =>
     el('button', { class: `small ghost${k === settingsTab ? ' active' : ''}`, onclick: () => { settingsTab = k; render(); } }, label)));
-  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Indstillinger'), el('span', { class: 'spacer' }), nav));
+  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Settings'), el('span', { class: 'spacer' }), nav));
 
   const views2 = {
     users: () => views.users(),
@@ -3114,17 +3220,17 @@ views.settings = async () => {
   return root;
 };
 
-// A small "Licens: <feature> ja/nej" badge so each feature tab shows whether the
+// A small "Licence: <feature> yes/no" badge so each feature tab shows whether the
 // licence covers it.
 function licenseBadge(license, feature) {
   const ok = license && license[feature] === true;
-  return el('span', { class: `badge ${ok ? 'active' : 'offline'}` }, `Licens: ${feature} ${ok ? 'ja' : 'nej'}`);
+  return el('span', { class: `badge ${ok ? 'active' : 'offline'}` }, `Licence: ${feature} ${ok ? 'yes' : 'no'}`);
 }
 
 async function settingsAnalyseView() {
   const data = await api('/api/settings');
   const root = el('div');
-  root.append(el('p', { class: 'muted settings-intro' }, 'Serveren lærer en normal “baseline” for hver metrik og rejser en finding, når en måling afviger nok fra den. Her sætter du, hvor følsom detektionen er — ændringer slår igennem med det samme, uden genstart. ', licenseBadge(data.license, 'analysis')));
+  root.append(el('p', { class: 'muted settings-intro' }, 'The server learns a normal baseline for each metric and raises a finding when a measurement deviates enough from it. Here you set how sensitive detection is — changes take effect immediately, without restart. ', licenseBadge(data.license, 'analysis')));
   root.append(el('div', { class: 'settings-grid' }, analyseSettingsCard(data.analysis)));
   return root;
 }
@@ -3132,9 +3238,9 @@ async function settingsAnalyseView() {
 async function settingsAlertingView() {
   const data = await api('/api/settings');
   const root = el('div');
-  root.append(el('p', { class: 'muted settings-intro' }, 'Når en finding rejses, kan den sendes ud på e-mail, webhook eller syslog. Oversigten nedenfor viser hvilke kanaler der er slået til og deres mindste alvorlighed. ', licenseBadge(data.license, 'alerting')));
+  root.append(el('p', { class: 'muted settings-intro' }, 'When a finding is raised it can be dispatched via e-mail, webhook, or syslog. The overview below shows which channels are enabled and their minimum severity. ', licenseBadge(data.license, 'alerting')));
   const card = settingsCard('Alerting', alertingSummary(data.alerting));
-  card.append(el('p', { class: 'muted small' }, 'Kanaler konfigureres via serverens .env, fordi de indeholder hemmeligheder (SMTP-kodeord, webhook-HMAC). Ændringer kræver genstart. Env: ALERTING_*, SMTP_*, WEBHOOK_*.'));
+  card.append(el('p', { class: 'muted small' }, 'Channels are configured via the server .env because they contain secrets (SMTP password, webhook HMAC). Changes require a restart. Env: ALERTING_*, SMTP_*, WEBHOOK_*.'));
   root.append(el('div', { class: 'settings-grid' }, card));
   return root;
 }
@@ -3145,14 +3251,14 @@ async function settingsAlertingView() {
 async function settingsMaintenanceView() {
   const [data, agents, locations] = await Promise.all([api('/api/settings'), api('/agents').catch(() => []), api('/locations').catch(() => [])]);
   const root = el('div');
-  root.append(el('p', { class: 'muted settings-intro' }, 'Under et vedligeholdelsesvindue undertrykkes alarm-notifikationer (e-mail/webhook/syslog) — findings registreres og vises stadig. Brug det ved planlagt arbejde, så ingen bliver paget unødigt.'));
+  root.append(el('p', { class: 'muted settings-intro' }, 'During a maintenance window alert notifications (e-mail/webhook/syslog) are suppressed — findings are still recorded and shown. Use it during planned work so nobody gets paged unnecessarily.'));
   let windows = (data.maintenance && Array.isArray(data.maintenance.windows)) ? data.maintenance.windows.slice() : [];
   const listHost = el('div', {});
   const err = el('p', { class: 'error' });
 
   const agentName = (id) => { const a = agents.find((x) => String(x.id) === String(id)); return a ? (a.display_name || a.hostname) : `#${id}`; };
   const locName = (id) => { const l = locations.find((x) => String(x.id) === String(id)); return l ? l.name : `#${id}`; };
-  const scopeText = (w) => (w.scope === 'global' ? 'Alle agenter' : w.scope === 'agent' ? `Agent: ${agentName(w.targetId)}` : `Lokation: ${locName(w.targetId)}`);
+  const scopeText = (w) => (w.scope === 'global' ? 'All agents' : w.scope === 'agent' ? `Agent: ${agentName(w.targetId)}` : `Location: ${locName(w.targetId)}`);
   const isActive = (w) => { const n = Date.now(); return Date.parse(w.from) <= n && n <= Date.parse(w.to); };
 
   async function persist() {
@@ -3161,22 +3267,22 @@ async function settingsMaintenanceView() {
     catch (e) { err.textContent = e.data && e.data.details ? Object.values(e.data.details).join(' · ') : e.message; }
   }
   function renderList() {
-    if (!windows.length) { listHost.replaceChildren(el('div', { class: 'empty' }, 'Ingen vinduer. Tilføj ét nedenfor.')); return; }
+    if (!windows.length) { listHost.replaceChildren(el('div', { class: 'empty' }, 'No windows. Add one below.')); return; }
     listHost.replaceChildren(el('table', {},
-      el('thead', {}, el('tr', {}, ...['Navn', 'Omfang', 'Fra', 'Til', '', ''].map((h) => el('th', {}, h)))),
+      el('thead', {}, el('tr', {}, ...['Name', 'Scope', 'From', 'To', '', ''].map((h) => el('th', {}, h)))),
       el('tbody', {}, ...windows.map((w) => el('tr', {},
         el('td', {}, esc(w.name)),
         el('td', { class: 'muted' }, scopeText(w)),
         el('td', { class: 'muted' }, fmtDate(w.from)),
         el('td', { class: 'muted' }, fmtDate(w.to)),
-        el('td', {}, isActive(w) ? el('span', { class: 'badge warn' }, 'aktiv') : el('span', { class: 'muted' }, 'planlagt')),
-        el('td', {}, el('button', { class: 'small danger', onclick: () => { windows = windows.filter((x) => x.id !== w.id); persist(); } }, 'Slet')))))));
+        el('td', {}, isActive(w) ? el('span', { class: 'badge warn' }, 'active') : el('span', { class: 'muted' }, 'scheduled')),
+        el('td', {}, el('button', { class: 'small danger', onclick: () => { windows = windows.filter((x) => x.id !== w.id); persist(); } }, 'Delete')))))));
   }
   renderList();
 
   // Add form.
-  const nameI = el('input', { type: 'text', placeholder: 'fx Firmware-opgradering' });
-  const scopeSel = el('select', {}, el('option', { value: 'global' }, 'Alle agenter'), el('option', { value: 'agent' }, 'Én agent'), el('option', { value: 'location' }, 'Én lokation'));
+  const nameI = el('input', { type: 'text', placeholder: 'e.g. Firmware upgrade' });
+  const scopeSel = el('select', {}, el('option', { value: 'global' }, 'All agents'), el('option', { value: 'agent' }, 'One agent'), el('option', { value: 'location' }, 'One location'));
   const targetSel = el('select', {});
   const fromI = el('input', { type: 'datetime-local' });
   const toI = el('input', { type: 'datetime-local' });
@@ -3186,10 +3292,10 @@ async function settingsMaintenanceView() {
     targetSel.replaceChildren(...opts.map(([v, l]) => el('option', { value: String(v) }, l)));
   };
   scopeSel.addEventListener('change', syncTarget); syncTarget();
-  const addBtn = el('button', { class: 'small' }, '+ Tilføj vindue');
+  const addBtn = el('button', { class: 'small' }, '+ Add window');
   addBtn.addEventListener('click', () => {
     err.textContent = '';
-    if (!nameI.value.trim() || !fromI.value || !toI.value) { err.textContent = 'Navn, fra og til er påkrævet.'; return; }
+    if (!nameI.value.trim() || !fromI.value || !toI.value) { err.textContent = 'Name, from and to are required.'; return; }
     const w = { name: nameI.value.trim(), scope: scopeSel.value, from: new Date(fromI.value).toISOString(), to: new Date(toI.value).toISOString() };
     if (scopeSel.value !== 'global') w.targetId = Number(targetSel.value);
     windows = windows.concat([w]);
@@ -3197,13 +3303,13 @@ async function settingsMaintenanceView() {
     persist();
   });
 
-  root.append(el('div', { class: 'settings-grid' }, settingsCard('Vedligeholdelsesvinduer', el('div', {}, listHost,
+  root.append(el('div', { class: 'settings-grid' }, settingsCard('Maintenance windows', el('div', {}, listHost,
     el('div', { class: 'mw-form' },
-      el('label', { class: 'set-field' }, el('span', {}, 'Navn'), nameI),
-      el('label', { class: 'set-field' }, el('span', {}, 'Omfang'), scopeSel),
-      el('label', { class: 'set-field' }, el('span', {}, 'Mål'), targetSel),
-      el('label', { class: 'set-field' }, el('span', {}, 'Fra'), fromI),
-      el('label', { class: 'set-field' }, el('span', {}, 'Til'), toI),
+      el('label', { class: 'set-field' }, el('span', {}, 'Name'), nameI),
+      el('label', { class: 'set-field' }, el('span', {}, 'Scope'), scopeSel),
+      el('label', { class: 'set-field' }, el('span', {}, 'Target'), targetSel),
+      el('label', { class: 'set-field' }, el('span', {}, 'From'), fromI),
+      el('label', { class: 'set-field' }, el('span', {}, 'To'), toI),
       addBtn),
     err))));
   return root;
@@ -3212,12 +3318,12 @@ async function settingsMaintenanceView() {
 async function settingsRetentionView() {
   const data = await api('/api/settings');
   const root = el('div');
-  root.append(el('p', { class: 'muted settings-intro' }, 'For at holde databasen sund aggregeres rå målinger til kompakte buckets efter et stykke tid, og gammelt data ryddes. Her styrer du vinduerne — ændringer slår igennem ved næste oprydning, uden genstart. Ukvitterede CRIT-findings slettes aldrig.'));
+  root.append(el('p', { class: 'muted settings-intro' }, 'To keep the database healthy, raw measurements are aggregated into compact buckets after a while and old data is purged. Here you control the windows — changes take effect at the next cleanup, without restart. Unacknowledged CRIT findings are never deleted.'));
   root.append(el('div', { class: 'settings-grid' }, retentionSettingsCard(data.retention)));
   return root;
 }
 
-// Generic "edit a few fields + Gem" card. fields: { key, label, type:
+// Generic "edit a few fields + Save" card. fields: { key, label, type:
 // 'number'|'checkbox', min, max, step, readonly, hint }. Read-only fields are
 // shown (greyed) but never sent; the server validates the rest.
 function settingsFormCard({ title, fields, values, endpoint }) {
@@ -3235,11 +3341,11 @@ function settingsFormCard({ title, fields, values, endpoint }) {
     if (f.readonly) input.disabled = true;
     inputs[f.key] = input;
     rowEls.push(el('label', { class: 'set-field' },
-      el('span', {}, f.label, f.readonly ? el('span', { class: 'muted small' }, ' · env / genstart') : null),
+      el('span', {}, f.label, f.readonly ? el('span', { class: 'muted small' }, ' · env / restart') : null),
       input, f.hint ? el('span', { class: 'muted small' }, f.hint) : null));
   }
   const err = el('p', { class: 'error' });
-  const btn = el('button', { class: 'small' }, 'Gem');
+  const btn = el('button', { class: 'small' }, 'Save');
   async function save() {
     err.textContent = ''; btn.disabled = true;
     const body = {};
@@ -3247,7 +3353,7 @@ function settingsFormCard({ title, fields, values, endpoint }) {
       if (f.readonly) continue;
       body[f.key] = f.type === 'checkbox' ? inputs[f.key].checked : Number(inputs[f.key].value);
     }
-    try { await api(endpoint, { method: 'PUT', body }); toast(`${title} gemt`); }
+    try { await api(endpoint, { method: 'PUT', body }); toast(`${title} saved`); }
     catch (e2) { err.textContent = errText(e2); }
     finally { btn.disabled = false; }
   }
@@ -3258,16 +3364,16 @@ function settingsFormCard({ title, fields, values, endpoint }) {
 
 function analyseSettingsCard(a) {
   return settingsFormCard({
-    title: 'Analyse',
+    title: 'Analysis',
     values: a,
     endpoint: '/api/settings/analysis',
     fields: [
-      { key: 'analysisEnabled', label: 'Analyse slået til', type: 'checkbox', hint: 'Slår hele anomali-detektionen til/fra.' },
-      { key: 'critSigma', label: 'CRIT-tærskel (σ fra baseline)', type: 'number', min: 0.5, max: 20, step: 0.1, hint: 'Hvor mange standardafvigelser (σ) fra normalen før en CRIT-finding. Højere = kun store udsving. Typisk 4.' },
-      { key: 'warnSigma', label: 'WARN-tærskel (σ fra baseline)', type: 'number', min: 0.5, max: 20, step: 0.1, hint: 'Tærskel for WARN — bør være lavere end CRIT. Typisk 3.' },
-      { key: 'baselineDays', label: 'Baseline-vindue (dage)', type: 'number', min: 1, max: 90, step: 1, hint: 'Hvor mange dages historik “normalen” beregnes ud fra.' },
-      { key: 'minSamples', label: 'Min. samples før varsling', type: 'number', min: 10, max: 100000, step: 1, hint: 'Antal målinger før en metrik overvåges — undgår falske alarmer lige efter opstart.' },
-      { key: 'assistantEnabled', label: 'AI-assistent', type: 'checkbox', readonly: true, hint: 'Opt-in naturligt-sprog-assistent. Sættes via .env (nøgle er en hemmelighed).' },
+      { key: 'analysisEnabled', label: 'Analysis enabled', type: 'checkbox', hint: 'Turns the entire anomaly detection on/off.' },
+      { key: 'critSigma', label: 'CRIT threshold (σ from baseline)', type: 'number', min: 0.5, max: 20, step: 0.1, hint: 'How many standard deviations (σ) from normal before a CRIT finding. Higher = only large swings. Typically 4.' },
+      { key: 'warnSigma', label: 'WARN threshold (σ from baseline)', type: 'number', min: 0.5, max: 20, step: 0.1, hint: 'Threshold for WARN — should be lower than CRIT. Typically 3.' },
+      { key: 'baselineDays', label: 'Baseline window (days)', type: 'number', min: 1, max: 90, step: 1, hint: 'How many days of history the normal is calculated from.' },
+      { key: 'minSamples', label: 'Min. samples before alerting', type: 'number', min: 10, max: 100000, step: 1, hint: 'Number of measurements before a metric is monitored — avoids false alarms right after startup.' },
+      { key: 'assistantEnabled', label: 'AI assistant', type: 'checkbox', readonly: true, hint: 'Opt-in natural-language assistant. Set via .env (key is a secret).' },
     ],
   });
 }
@@ -3278,11 +3384,11 @@ function retentionSettingsCard(r) {
     values: r,
     endpoint: '/api/settings/retention',
     fields: [
-      { key: 'enabled', label: 'Oprydning slået til', type: 'checkbox', hint: 'Slår automatisk aggregering + sletning til/fra.' },
-      { key: 'rawRetentionDays', label: 'Rå data (dage)', type: 'number', min: 1, max: 3650, step: 1, hint: 'Rå målinger ældre end dette aggregeres til kompakte buckets.' },
-      { key: 'rollupRetentionDays', label: 'Aggregeret data (dage)', type: 'number', min: 1, max: 3650, step: 1, hint: 'Aggregerede buckets ældre end dette slettes.' },
-      { key: 'findingRetentionDays', label: 'Findings (dage)', type: 'number', min: 1, max: 3650, step: 1, hint: 'Kvitterede findings ældre end dette slettes (ukvitterede CRIT bevares altid).' },
-      { key: 'rollupIntervalMinutes', label: 'Bucket-størrelse (min)', type: 'number', readonly: true, hint: 'Hvor brede aggregerings-buckets er. Sættes via .env (cachet ved opstart).' },
+      { key: 'enabled', label: 'Cleanup enabled', type: 'checkbox', hint: 'Turns automatic aggregation + deletion on/off.' },
+      { key: 'rawRetentionDays', label: 'Raw data (days)', type: 'number', min: 1, max: 3650, step: 1, hint: 'Raw measurements older than this are aggregated into compact buckets.' },
+      { key: 'rollupRetentionDays', label: 'Aggregated data (days)', type: 'number', min: 1, max: 3650, step: 1, hint: 'Aggregated buckets older than this are deleted.' },
+      { key: 'findingRetentionDays', label: 'Findings (days)', type: 'number', min: 1, max: 3650, step: 1, hint: 'Acknowledged findings older than this are deleted (unacknowledged CRIT are always kept).' },
+      { key: 'rollupIntervalMinutes', label: 'Bucket size (min)', type: 'number', readonly: true, hint: 'How wide aggregation buckets are. Set via .env (cached at startup).' },
     ],
   });
 }
@@ -3290,7 +3396,7 @@ function retentionSettingsCard(r) {
 async function settingsMapView() {
   const data = await api('/api/settings');
   const root = el('div');
-  root.append(el('p', { class: 'muted settings-intro' }, 'Kortene (fanen Kort, Geo og lokations-vælgeren) henter baggrunds-fliser fra Tile-URL’en, og adressesøgning bruger geocoder-URL’en. Brug en EU/selv-hostet kilde i produktion — ingen hardkodet US-tjeneste. Gemmes i databasen og virker uden genstart.'));
+  root.append(el('p', { class: 'muted settings-intro' }, 'The maps (Map tab, Geo and the location picker) fetch background tiles from the tile URL, and address search uses the geocoder URL. Use an EU/self-hosted source in production — no hardcoded US service. Stored in the database and works without restart.'));
   root.append(el('div', { class: 'settings-grid' }, mapSettingsCard(data.map)));
   return root;
 }
@@ -3298,7 +3404,7 @@ async function settingsMapView() {
 async function settingsTypesView() {
   const data = await api('/api/settings');
   const root = el('div');
-  root.append(el('p', { class: 'muted settings-intro' }, 'Grupper trafik efter ', el('b', {}, 'port'), ' (fx DNS = 53) eller destinations-', el('b', {}, 'ASN'), ' (fx Facebook/Meta = 32934). Typerne vises som slå-til/fra-serier på Trafik-siden under “Trafiktype”. Port-typer er præcise; ASN-typer er omtrentlige (CDN/cloud kan sløre). Kræver en NetFlow/sFlow-kilde (porte) eller geo-data (ASN).'));
+  root.append(el('p', { class: 'muted settings-intro' }, 'Group traffic by ', el('b', {}, 'port'), ' (e.g. DNS = 53) or destination ', el('b', {}, 'ASN'), ' (e.g. Facebook/Meta = 32934). Types appear as toggle-on/off series on the Traffic page under “Traffic type”. Port types are precise; ASN types are approximate (CDN/cloud can blur). Requires a NetFlow/sFlow source (ports) or geo data (ASN).'));
   root.append(el('div', { class: 'settings-grid' }, flowCategoriesCard(data.flowCategories || [])));
   return root;
 }
@@ -3310,16 +3416,16 @@ function slugify(s) {
 // Editor for the traffic-type categories. Each row is a name + a kind (port or
 // ASN) + a free-text list of numbers; the server validates on save.
 function flowCategoriesCard(categories) {
-  const card = el('div', { class: 'settings-card wide' }, el('h3', {}, 'Trafiktyper'));
-  card.append(el('p', { class: 'muted small' }, 'Port-typer er præcise (port 53 = DNS). ASN-typer er omtrentlige — CDN/cloud kan sløre, og ét ASN dækker flere tjenester. Ændringer slår igennem uden genstart.'));
-  const head = el('div', { class: 'tc-row tc-head muted' }, el('span', {}, 'Navn'), el('span', {}, 'Slags'), el('span', {}, 'Porte / ASN-numre (komma-adskilt)'), el('span', {}));
+  const card = el('div', { class: 'settings-card wide' }, el('h3', {}, 'Traffic types'));
+  card.append(el('p', { class: 'muted small' }, 'Port types are precise (port 53 = DNS). ASN types are approximate — CDN/cloud can blur, and one ASN covers several services. Changes take effect without restart.'));
+  const head = el('div', { class: 'tc-row tc-head muted' }, el('span', {}, 'Name'), el('span', {}, 'Kind'), el('span', {}, 'Ports / ASN numbers (comma-separated)'), el('span', {}));
   const listEl = el('div', { class: 'tc-list' });
   const err = el('p', { class: 'error' });
   const rows = [];
 
   function makeRow(cat = {}) {
     const id = cat.id || '';
-    const label = el('input', { type: 'text', value: cat.label || '', placeholder: 'fx DNS' });
+    const label = el('input', { type: 'text', value: cat.label || '', placeholder: 'e.g. DNS' });
     const kind = el('select', {}, el('option', { value: 'port' }, 'Port'), el('option', { value: 'asn' }, 'Organisation (ASN)'));
     kind.value = cat.kind === 'asn' ? 'asn' : 'port';
     const nums = el('input', { type: 'text', value: ((cat.kind === 'asn' ? cat.asns : cat.ports) || []).join(', ') });
@@ -3327,7 +3433,7 @@ function flowCategoriesCard(categories) {
     setPh();
     kind.addEventListener('change', setPh);
     const ctrl = { id, label, kind, nums };
-    const del = el('button', { class: 'small ghost danger', title: 'Fjern', onclick: () => { const i = rows.indexOf(ctrl); if (i >= 0) rows.splice(i, 1); node.remove(); } }, '×');
+    const del = el('button', { class: 'small ghost danger', title: 'Remove', onclick: () => { const i = rows.indexOf(ctrl); if (i >= 0) rows.splice(i, 1); node.remove(); } }, '×');
     const node = el('div', { class: 'tc-row' }, label, kind, nums, del);
     ctrl.node = node;
     rows.push(ctrl);
@@ -3338,9 +3444,9 @@ function flowCategoriesCard(categories) {
   for (const c of categories) makeRow(c);
   if (!categories.length) makeRow();
 
-  const addBtn = el('button', { class: 'small ghost', onclick: () => makeRow() }, '+ Tilføj type');
-  const resetBtn = el('button', { class: 'small ghost' }, 'Nulstil til standard');
-  const saveBtn = el('button', { class: 'small' }, 'Gem trafiktyper');
+  const addBtn = el('button', { class: 'small ghost', onclick: () => makeRow() }, '+ Add type');
+  const resetBtn = el('button', { class: 'small ghost' }, 'Reset to defaults');
+  const saveBtn = el('button', { class: 'small' }, 'Save traffic types');
 
   async function save() {
     err.textContent = '';
@@ -3362,15 +3468,15 @@ function flowCategoriesCard(categories) {
     saveBtn.disabled = true;
     try {
       await api('/api/settings/flow-categories', { method: 'PUT', body: { categories: out } });
-      toast('Trafiktyper gemt');
+      toast('Traffic types saved');
       render();
     } catch (e2) {
       err.textContent = errText(e2);
     } finally { saveBtn.disabled = false; }
   }
   async function reset() {
-    if (!confirm('Nulstil trafiktyper til standardlisten?')) return;
-    try { await api('/api/settings/flow-categories', { method: 'PUT', body: { reset: true } }); toast('Nulstillet til standard'); render(); }
+    if (!confirm('Reset traffic types to the default list?')) return;
+    try { await api('/api/settings/flow-categories', { method: 'PUT', body: { reset: true } }); toast('Reset to defaults'); render(); }
     catch (e2) { err.textContent = e2.message; }
   }
   saveBtn.addEventListener('click', save);
@@ -3380,7 +3486,7 @@ function flowCategoriesCard(categories) {
   return card;
 }
 function settingsCard(title, ...body) { return el('div', { class: 'settings-card' }, el('h3', {}, title), ...body); }
-function boolText(v) { return v === true ? 'ja' : v === false ? 'nej' : String(v ?? '–'); }
+function boolText(v) { return v === true ? 'yes' : v === false ? 'no' : String(v ?? '–'); }
 function kvList(obj, labels) {
   if (!obj) return el('p', { class: 'muted' }, '–');
   const rows = Object.entries(labels).map(([k, label]) => el('tr', {}, el('td', { class: 'muted' }, label), el('td', {}, boolText(obj[k]))));
@@ -3389,11 +3495,11 @@ function kvList(obj, labels) {
 function featureBadges(features) {
   if (!features) return el('p', { class: 'muted' }, '–');
   return el('div', { class: 'badges' }, ...['analysis', 'assistant', 'alerting', 'geo'].map((f) =>
-    el('span', { class: `badge ${features[f] ? 'active' : 'offline'}` }, `${f}: ${features[f] ? 'ja' : 'nej'}`)));
+    el('span', { class: `badge ${features[f] ? 'active' : 'offline'}` }, `${f}: ${features[f] ? 'yes' : 'no'}`)));
 }
 function alertingSummary(a) {
   if (!a) return el('p', { class: 'muted' }, '–');
-  const rows = [el('tr', {}, el('td', { class: 'muted' }, 'Slået til'), el('td', {}, boolText(a.enabled)))];
+  const rows = [el('tr', {}, el('td', { class: 'muted' }, 'Enabled'), el('td', {}, boolText(a.enabled)))];
   for (const [name, c] of Object.entries(a.channels || {})) {
     rows.push(el('tr', {}, el('td', { class: 'muted' }, name), el('td', {}, `${boolText(c.enabled)} · min ${c.minSeverity || '–'}`)));
   }
@@ -3406,43 +3512,43 @@ function mapSettingsCard(map) {
   const zoom = el('input', { type: 'number', value: String(m.maxZoom ?? 19), min: '1', max: '22' });
   const geo = el('input', { type: 'text', value: m.geocodeUrl || '' });
   const err = el('p', { class: 'error' });
-  const btn = el('button', { class: 'small' }, 'Gem kort-indstillinger');
+  const btn = el('button', { class: 'small' }, 'Save map settings');
   async function save() {
     err.textContent = ''; btn.disabled = true;
     try {
       await api('/api/settings/map', { method: 'PUT', body: { tileUrl: url.value.trim(), attribution: attr.value.trim(), maxZoom: Number(zoom.value), geocodeUrl: geo.value.trim() } });
-      toast('Kort-indstillinger gemt');
+      toast('Map settings saved');
     } catch (e2) {
       err.textContent = errText(e2);
     } finally { btn.disabled = false; }
   }
   btn.addEventListener('click', save);
-  return el('div', { class: 'settings-card' }, el('h3', {}, 'Kort (tiles + geocoder)'),
+  return el('div', { class: 'settings-card' }, el('h3', {}, 'Map (tiles + geocoder)'),
     el('div', { class: 'form-grid' },
       el('label', {}, 'Tile-URL ({z}/{x}/{y})', url),
       el('label', {}, 'Attribution', attr),
       el('label', {}, 'Max zoom', zoom),
-      el('label', {}, 'Geocoder-URL (adressesøgning)', geo),
+      el('label', {}, 'Geocoder URL (address search)', geo),
       err, el('div', { class: 'form-actions' }, btn)));
 }
 
 views.users = async () => {
   const users = await api('/users');
   const root = el('div');
-  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Brugere'),
-    el('button', { class: 'small', onclick: () => editUser() }, '+ Ny bruger')));
-  root.append(el('p', { class: 'muted' }, 'Roller: viewer (læs), operator (opret/redigér), admin (alt). Kun admins ser denne fane.'));
+  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Users'),
+    el('button', { class: 'small', onclick: () => editUser() }, '+ New user')));
+  root.append(el('p', { class: 'muted' }, 'Roles: viewer (read), operator (create/edit), admin (all). Only admins see this tab.'));
   root.append(el('table', {},
-    el('thead', {}, el('tr', {}, ...['ID', 'Email', 'Rolle', 'Oprettet', ''].map((h) => el('th', {}, h)))),
+    el('thead', {}, el('tr', {}, ...['ID', 'Email', 'Role', 'Created', ''].map((h) => el('th', {}, h)))),
     el('tbody', {}, ...users.map((u) => el('tr', {},
       el('td', {}, String(u.id)),
       el('td', {}, u.email),
       el('td', {}, el('span', { class: 'badge' }, u.role),
-        u.protected ? el('span', { class: 'badge', title: 'Superadmin — kan ikke ændres/slettes, kun password', style: 'margin-left:6px' }, 'superadmin') : null),
+        u.protected ? el('span', { class: 'badge', title: 'Superadmin — cannot be changed/deleted, password only', style: 'margin-left:6px' }, 'superadmin') : null),
       el('td', { class: 'muted' }, fmtDate(u.created_at)),
       el('td', {}, el('div', { class: 'row-actions' },
-        el('button', { class: 'small ghost', onclick: () => editUser(u) }, u.protected ? 'Skift password' : 'Rediger'),
-        u.protected ? null : el('button', { class: 'small danger', onclick: () => deleteUser(u) }, 'Slet'))),
+        el('button', { class: 'small ghost', onclick: () => editUser(u) }, u.protected ? 'Change password' : 'Edit'),
+        u.protected ? null : el('button', { class: 'small danger', onclick: () => deleteUser(u) }, 'Delete'))),
     )))));
   return root;
 };
@@ -3452,38 +3558,38 @@ const ROLE_OPTIONS = ['viewer', 'operator', 'admin'].map((r) => ({ value: r, lab
 function editUser(u) {
   if (u && u.protected) {
     // Super-admin: only a password reset is allowed.
-    openModal(`Skift password — ${u.email}`, [
-      { name: 'password', label: 'Ny adgangskode (min. 8 tegn)', type: 'password', value: '' },
+    openModal(`Change password — ${u.email}`, [
+      { name: 'password', label: 'New password (min. 8 characters)', type: 'password', value: '' },
     ], async (v) => {
-      if (!v.password) throw new Error('Indtast en ny adgangskode');
+      if (!v.password) throw new Error('Enter a new password');
       await api(`/users/${u.id}`, { method: 'PUT', body: { role: 'admin', password: v.password } });
-      closeModal(); toast('Adgangskode skiftet'); render();
+      closeModal(); toast('Password changed'); render();
     });
   } else if (u) {
     // Update: role + optional password reset (email is immutable here).
-    openModal(`Rediger ${u.email}`, [
-      { name: 'role', label: 'Rolle', type: 'select', value: u.role, options: ROLE_OPTIONS },
-      { name: 'password', label: 'Ny adgangskode (valgfri)', type: 'password', value: '' },
+    openModal(`Edit ${u.email}`, [
+      { name: 'role', label: 'Role', type: 'select', value: u.role, options: ROLE_OPTIONS },
+      { name: 'password', label: 'New password (optional)', type: 'password', value: '' },
     ], async (v) => {
       const body = { role: v.role };
       if (v.password) body.password = v.password;
       await api(`/users/${u.id}`, { method: 'PUT', body });
-      closeModal(); toast('Bruger opdateret'); render();
+      closeModal(); toast('User updated'); render();
     });
   } else {
-    openModal('Ny bruger', [
+    openModal('New user', [
       { name: 'email', label: 'Email', type: 'email', value: '' },
-      { name: 'password', label: 'Adgangskode (min. 8 tegn)', type: 'password', value: '' },
-      { name: 'role', label: 'Rolle', type: 'select', value: 'viewer', options: ROLE_OPTIONS },
+      { name: 'password', label: 'Password (min. 8 characters)', type: 'password', value: '' },
+      { name: 'role', label: 'Role', type: 'select', value: 'viewer', options: ROLE_OPTIONS },
     ], async (v) => {
       await api('/users', { method: 'POST', body: { email: v.email, password: v.password, role: v.role } });
-      closeModal(); toast('Bruger oprettet'); render();
+      closeModal(); toast('User created'); render();
     });
   }
 }
 async function deleteUser(u) {
-  if (!confirm(`Slet bruger ${u.email}?`)) return;
-  try { await api(`/users/${u.id}`, { method: 'DELETE' }); toast('Slettet'); render(); }
+  if (!confirm(`Delete user ${u.email}?`)) return;
+  try { await api(`/users/${u.id}`, { method: 'DELETE' }); toast('Deleted'); render(); }
   catch (err) { toast(err.message, true); }
 }
 
@@ -3491,18 +3597,18 @@ views.license = async () => {
   const s = await api('/license/status');
   const root = el('div');
   root.append(el('div', { class: 'section-head' },
-    el('h2', {}, 'Licensstatus'),
-    canWrite() ? el('button', { class: 'small', onclick: refreshLicense }, 'Genvalidér nu') : null));
+    el('h2', {}, 'License status'),
+    canWrite() ? el('button', { class: 'small', onclick: refreshLicense }, 'Re-validate now') : null));
   root.append(el('div', { class: 'cards' },
     stat('Status', el('span', { class: `badge ${s.status}` }, s.status)),
-    stat('Licenseret', s.licensed ? 'Ja' : 'Nej'),
-    stat('Maks. agenter', String(s.maxAgents)),
-    stat('Server-ID', s.serverId || '–'),
-    stat('Sidst valideret', fmtDate(s.verifiedAt)),
-    stat('Grace udløber', fmtDate(s.graceUntil)),
+    stat('Licensed', s.licensed ? 'Yes' : 'No'),
+    stat('Max. agents', String(s.maxAgents)),
+    stat('Server ID', s.serverId || '–'),
+    stat('Last validated', fmtDate(s.verifiedAt)),
+    stat('Grace expires', fmtDate(s.graceUntil)),
   ));
   if (s.reason) root.append(el('p', { class: 'muted' }, `Note: ${s.reason}`));
-  root.append(el('p', { class: 'muted' }, 'Fornyelse af licensen sker hos udbyderen. Når den er forlænget, tryk "Genvalidér nu" for at hente den opdaterede status med det samme (ellers tjekkes der automatisk hver 6. time).'));
+  root.append(el('p', { class: 'muted' }, 'License renewal is done with the provider. Once renewed, press "Re-validate now" to fetch the updated status immediately (otherwise it is checked automatically every 6 hours).'));
   return root;
 };
 
@@ -3510,7 +3616,7 @@ async function refreshLicense() {
   try {
     const s = await api('/license/refresh', { method: 'POST' });
     invalidateFeatures(); // entitlements may have changed — refresh module visibility now
-    toast(`Genvalideret: ${s.status}`);
+    toast(`Re-validated: ${s.status}`);
     render();
   } catch (err) { toast(err.message, true); }
 }
@@ -3550,16 +3656,16 @@ function disconnectLive() {
   if (liveWs) { try { liveWs.close(); } catch { /* ignore */ } liveWs = null; }
 }
 // Live agent enrollment / online-status events. Surfaces a toast, and (when the
-// enrollment wizard is showing a fresh code) flips its "Venter på agent…" panel.
+// enrollment wizard is showing a fresh code) flips its "Waiting for agent…" panel.
 function onAgentEvent(kind, payload) {
-  if (kind === 'enrolled') toast(`Ny agent tilsluttet${payload && payload.hostname ? ': ' + payload.hostname : ''}`);
+  if (kind === 'enrolled') toast(`New agent connected${payload && payload.hostname ? ': ' + payload.hostname : ''}`);
   if (currentView === 'enrollment' && typeof enrollWatch === 'function') enrollWatch(kind, payload);
 }
 
 function onLiveFinding(f) {
   if (!f) return;
   const sev = f.severity || 'INFO';
-  toast(`Ny finding: ${f.metric} ${sev}`, sev === 'CRIT' || sev === 'WARN');
+  toast(`New finding: ${f.metric} ${sev}`, sev === 'CRIT' || sev === 'WARN');
   // Live-prepend only when the findings table is actually on screen and the
   // active host filter matches; otherwise the REST list will show it next time.
   if (currentView === 'findings' && findingsState.tbody && findingsState.tbody.isConnected) {
@@ -3594,7 +3700,7 @@ async function render({ silent = false } = {}) {
   // Tear down the Leaflet map when leaving the geo view (it rebuilds on entry).
   if (currentView !== 'geo') stopGeo();
 
-  // Admin-only tabs (e.g. Brugere); send non-admins back to agents if needed.
+  // Admin-only tabs (e.g. Users); send non-admins back to agents if needed.
   for (const b of document.querySelectorAll('.tabs button[data-admin]')) {
     b.classList.toggle('hidden', role !== 'admin');
   }
@@ -3602,7 +3708,7 @@ async function render({ silent = false } = {}) {
   for (const b of document.querySelectorAll('.tabs button')) b.classList.toggle('active', b.dataset.view === currentView);
 
   const view = $('#view');
-  if (!silent) view.replaceChildren(el('div', { class: 'empty' }, 'Indlæser…'));
+  if (!silent) view.replaceChildren(el('div', { class: 'empty' }, 'Loading…'));
   try {
     const node = await views[currentView]();
     const h = hero(currentView);

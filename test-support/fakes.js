@@ -294,7 +294,7 @@ function makeAssistant(overrides = {}) {
     explain:
       overrides.explain ||
       (async () => {
-        const e = new Error('AI-assistenten er slået fra');
+        const e = new Error('The AI assistant is disabled');
         e.name = 'FeatureDisabled';
         throw e;
       }),

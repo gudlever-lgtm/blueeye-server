@@ -104,8 +104,8 @@ The **Geo** tab renders a Leaflet map (tiles from `/api/geo/config`): internal
 sites as pins, external destinations as circles sized by traffic and coloured by
 deviation (neutral → yellow → red), with clustering when the plugin is present.
 Clicking a destination calls both `select/*` endpoints and shows findings + flow
-detail in a side panel; clicking a site shows its status + findings; "Vælg
-område" drags a box to aggregate every destination inside it. Loading and error
+detail in a side panel; clicking a site shows its status + findings; "Select
+area" drags a box to aggregate every destination inside it. Loading and error
 states are shown rather than a blank screen.
 
 ## Configuration

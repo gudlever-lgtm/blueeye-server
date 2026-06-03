@@ -9,12 +9,12 @@
 // injected (fetchImpl) so tests run fully offline.
 //
 //   const assistant = createAssistant({ config, findingStore });
-//   const { answer } = await assistant.explain('hvorfor er cpu høj?', hostId);
+//   const { answer } = await assistant.explain('why is cpu high?', hostId);
 
 // Thrown by explain() when the feature is disabled. The route maps the name
 // 'FeatureDisabled' to HTTP 403.
 class FeatureDisabledError extends Error {
-  constructor(message = 'AI-assistenten er slået fra (sæt ANALYSIS_ASSISTANT_ENABLED=true for at aktivere)') {
+  constructor(message = 'The AI assistant is disabled (set ANALYSIS_ASSISTANT_ENABLED=true to enable)') {
     super(message);
     this.name = 'FeatureDisabled';
   }
@@ -88,9 +88,9 @@ function createAssistant({
 
     const findings = await buildContext(hostId);
     const system =
-      'Du er en hjælpsom netværks- og driftsassistent for BlueEye. Svar kort og ' +
-      'konkret på dansk. Brug KUN den medsendte kontekst (findings) — gæt ikke, og ' +
-      'hvis konteksten ikke rækker, så sig det.';
+      'You are a helpful network and operations assistant for BlueEye. Answer briefly and ' +
+      'concretely in English. Use ONLY the provided context (findings) — do not guess, and ' +
+      'if the context is insufficient, say so.';
     const user = JSON.stringify({ question: question.trim(), hostId: hostId ?? null, findings });
 
     const controller = new AbortController();

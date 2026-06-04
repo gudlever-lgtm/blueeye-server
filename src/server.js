@@ -12,6 +12,7 @@ const { createAgentTokensRepository } = require('./repositories/agentTokensRepos
 const { createResultsRepository } = require('./repositories/resultsRepository');
 const { createProbeResultsRepository } = require('./repositories/probeResultsRepository');
 const { createArtifactStore } = require('./enroll/artifactStore');
+const { createAgentSourceStore } = require('./enroll/agentSourceStore');
 const { attachAgentWebSocket } = require('./ws/agentSocket');
 const { attachDashboardWebSocket } = require('./ws/dashboardSocket');
 const { verifyToken } = require('./auth/jwt');
@@ -69,7 +70,12 @@ function start() {
 
   // Agent binaries served from a local dir for frictionless enrollment. SHA-256
   // is computed + cached now (at startup), so nothing is hashed per request.
+  // (Legacy — the default install flow serves the source bundle below instead.)
   const artifactStore = createArtifactStore({ dir: config.enroll.artifactsDir, logger: console });
+
+  // Agent source bundle served at /enroll/agent-source.tgz — packaged +
+  // checksummed at startup so the one-liner installs with no published binaries.
+  const agentSourceStore = createAgentSourceStore({ dir: config.enroll.agentSourceDir, logger: console });
 
   // Client-side license validation against blueeye-licens. getAgentCount reads
   // the live WebSocket connection count (agentWs is assigned just below; the
@@ -209,6 +215,7 @@ function start() {
     analysisConfig,
     retentionConfig,
     artifactStore,
+    agentSourceStore,
     enrollConfig: { publicUrl: config.publicUrl, certFingerprint: config.enroll.certFingerprint },
     notifyDashboard,
     logger: console,

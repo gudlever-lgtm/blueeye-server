@@ -7,7 +7,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const request = require('supertest');
 
-const { makeApp, makeArtifactStore, makeEnrollmentCodesRepo, authHeader } = require('../test-support/fakes');
+const { makeApp, makeSourceStore, makeEnrollmentCodesRepo, authHeader } = require('../test-support/fakes');
 
 const operator = () => authHeader('operator');
 
@@ -28,9 +28,9 @@ test('GET /api/enroll/command mints a code and returns all three variants (200)'
   assert.ok(createdWith, 'a new code was created via the existing flow');
   assert.equal(res.body.code, 'NEWCODE');
   assert.match(res.body.oneLiner, /curl -sSL .*\/enroll\/NEWCODE\/install\.sh \| sh/);
-  assert.match(res.body.manual.downloadUrl, /\/enroll\/agent\/linux-amd64$/);
-  assert.equal(res.body.manual.checksum, 'a'.repeat(64)); // from the default fake artifact store
-  assert.match(res.body.manual.command, /blueeye-agent enroll --code NEWCODE/);
+  assert.match(res.body.manual.downloadUrl, /\/enroll\/agent-source\.tgz$/);
+  assert.equal(res.body.manual.checksum, 'c'.repeat(64)); // from the default fake source store
+  assert.match(res.body.manual.command, /curl -sSL .*\/enroll\/NEWCODE\/install\.sh \| sh/);
   assert.equal(res.body.expiresAt, '2099-01-01T00:00:00.000Z');
   assert.ok(Array.isArray(res.body.platforms));
 });
@@ -72,11 +72,11 @@ test('GET /api/enroll/command?codeId 404s for missing, 410 for expired/exhausted
   assert.equal((await request(makeApp({ enrollmentCodesRepo: exhausted })).get('/api/enroll/command?codeId=9').set('Authorization', operator())).status, 410);
 });
 
-// ---- checksum null when the platform has no published binary ---------------
-test('GET /api/enroll/command returns checksum:null for an unpublished platform', async () => {
-  const store = makeArtifactStore({ entries: {} }); // nothing published
+// ---- checksum null when no source bundle is published ----------------------
+test('GET /api/enroll/command returns checksum:null when no source is published', async () => {
+  const source = makeSourceStore({ present: false });
   const repo = makeEnrollmentCodesRepo({ create: async () => ({ id: 1, code: 'C', expires_at: '2099-01-01T00:00:00.000Z', max_uses: 1, uses_remaining: 1 }) });
-  const res = await request(makeApp({ artifactStore: store, enrollmentCodesRepo: repo })).get('/api/enroll/command?platform=linux-amd64').set('Authorization', operator());
+  const res = await request(makeApp({ agentSourceStore: source, enrollmentCodesRepo: repo })).get('/api/enroll/command?platform=linux-amd64').set('Authorization', operator());
   assert.equal(res.status, 200);
   assert.equal(res.body.manual.checksum, null);
 });

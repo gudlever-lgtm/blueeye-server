@@ -11,7 +11,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const request = require('supertest');
 
-const { makeApp, makeArtifactStore, makeEnrollmentCodesRepo } = require('../test-support/fakes');
+const { makeApp, makeArtifactStore, makeSourceStore, makeEnrollmentCodesRepo } = require('../test-support/fakes');
 const { createArtifactStore } = require('../src/enroll/artifactStore');
 
 // A real artifact store over a temp dir with one published binary.
@@ -62,16 +62,41 @@ test('GET /enroll/agent/:platform 500s when the store throws', async () => {
   assert.equal(res.status, 500);
 });
 
+// ---- GET /enroll/agent-source.tgz ------------------------------------------
+test('GET /enroll/agent-source.tgz serves the source bundle with a SHA-256 header (200)', async () => {
+  const buf = Buffer.from('a-fake-agent-source-tarball');
+  const store = makeSourceStore({ sha256: 'd'.repeat(64), buf });
+  const res = await request(makeApp({ agentSourceStore: store })).get('/enroll/agent-source.tgz')
+    .buffer(true).parse((r, cb) => { const chunks = []; r.on('data', (c) => chunks.push(c)); r.on('end', () => cb(null, Buffer.concat(chunks))); });
+  assert.equal(res.status, 200);
+  assert.equal(res.headers['x-content-sha256'], 'd'.repeat(64));
+  assert.match(res.headers['content-type'], /application\/gzip/);
+  assert.match(res.headers['content-disposition'], /blueeye-agent-source\.tgz/);
+  assert.equal(Buffer.compare(res.body, buf), 0);
+});
+
+test('GET /enroll/agent-source.tgz 404s when no source is published', async () => {
+  const res = await request(makeApp({ agentSourceStore: makeSourceStore({ present: false }) })).get('/enroll/agent-source.tgz');
+  assert.equal(res.status, 404);
+});
+
+test('GET /enroll/agent-source.tgz 500s when the store throws', async () => {
+  const store = makeSourceStore({ meta: () => { throw new Error('disk gone'); } });
+  const res = await request(makeApp({ agentSourceStore: store })).get('/enroll/agent-source.tgz');
+  assert.equal(res.status, 500);
+});
+
 // ---- GET /enroll/:code/install.sh ------------------------------------------
 test('GET /enroll/:code/install.sh returns a script for an active code (200)', async () => {
-  const { store, sha } = realStore();
-  const app = makeApp({ artifactStore: store, enrollmentCodesRepo: activeCode(), enrollConfig: { publicUrl: 'https://blueeye.acme.dk', certFingerprint: '' } });
+  const store = makeSourceStore({ sha256: 's'.repeat(64) });
+  const app = makeApp({ agentSourceStore: store, enrollmentCodesRepo: activeCode(), enrollConfig: { publicUrl: 'https://blueeye.acme.dk', certFingerprint: '' } });
   const res = await request(app).get('/enroll/GOOD/install.sh');
   assert.equal(res.status, 200);
   assert.match(res.headers['content-type'], /text\/x-shellscript/);
   assert.match(res.text, /ENROLL_CODE="GOOD"/);
   assert.match(res.text, /SERVER_URL="https:\/\/blueeye\.acme\.dk"/);
-  assert.ok(res.text.includes(sha), 'embeds the real binary checksum');
+  assert.match(res.text, /agent-source\.tgz/);
+  assert.ok(res.text.includes('s'.repeat(64)), 'embeds the agent source checksum');
 });
 
 test('GET /enroll/:code/install.sh 404s for an unknown/expired code', async () => {

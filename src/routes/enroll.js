@@ -23,10 +23,11 @@ function resolveServerUrl(req, enrollConfig) {
 
 // PUBLIC (unauthenticated) enrollment helpers, mounted at /enroll. A new agent
 // has no token yet, so these must be reachable without auth:
-//   GET /enroll/config            -> { serverUrl, certFingerprint }
-//   GET /enroll/agent/:platform   -> the agent binary (served from the server)
-//   GET /enroll/:code/install.sh  -> the one-line installer for that code
-function createEnrollRouter({ artifactStore, enrollmentCodesRepo, enrollConfig = {} }) {
+//   GET /enroll/config              -> { serverUrl, certFingerprint }
+//   GET /enroll/agent-source.tgz    -> the agent source bundle (built + run on the target)
+//   GET /enroll/agent/:platform     -> a pre-built agent binary (legacy; only if published)
+//   GET /enroll/:code/install.sh    -> the one-line installer for that code
+function createEnrollRouter({ artifactStore, sourceStore, enrollmentCodesRepo, enrollConfig = {} }) {
   const router = express.Router();
   const certFingerprint = enrollConfig.certFingerprint || '';
 
@@ -39,10 +40,30 @@ function createEnrollRouter({ artifactStore, enrollmentCodesRepo, enrollConfig =
     });
   });
 
-  // Serve the agent binary for a platform from the local artifacts dir. 404 for
-  // an unknown/unpublished platform. The cached SHA-256 is exposed as a header
-  // so a client can verify out-of-band.
+  // Serve the agent SOURCE bundle (a gzipped tarball), packaged + checksummed at
+  // startup. This is what the one-line installer downloads and then builds + runs
+  // with Docker/Node — so no pre-built binaries are needed. 404 when no source is
+  // configured (AGENT_SOURCE_DIR). The cached SHA-256 is exposed as a header.
+  router.get('/agent-source.tgz', asyncHandler(async (req, res) => {
+    const meta = sourceStore && sourceStore.meta();
+    const buffer = sourceStore && sourceStore.buffer();
+    if (!meta || !buffer) {
+      return res.status(404).json({ error: 'No agent source published on this server' });
+    }
+    res.setHeader('Content-Type', meta.contentType);
+    res.setHeader('Content-Length', meta.size);
+    res.setHeader('X-Content-SHA256', meta.sha256);
+    res.setHeader('Content-Disposition', `attachment; filename="${meta.filename}"`);
+    res.status(200).send(buffer);
+  }));
+
+  // Serve a pre-built agent binary for a platform from the local artifacts dir.
+  // LEGACY/optional: the default install flow uses the source bundle above, so
+  // this only responds when an operator has dropped a binary in. 404 otherwise.
   router.get('/agent/:platform', asyncHandler(async (req, res) => {
+    if (!artifactStore) {
+      return res.status(404).json({ error: 'No agent binary for that platform', platform: req.params.platform });
+    }
     const entry = artifactStore.get(req.params.platform);
     if (!entry) {
       return res.status(404).json({ error: 'No agent binary for that platform', platform: req.params.platform });
@@ -71,7 +92,7 @@ function createEnrollRouter({ artifactStore, enrollmentCodesRepo, enrollConfig =
       serverUrl: resolveServerUrl(req, enrollConfig),
       code: req.params.code,
       certFingerprint,
-      checksums: artifactStore.checksums(),
+      sourceSha: sourceStore ? sourceStore.sha256 : '',
     });
     res.status(200).type('text/x-shellscript; charset=utf-8').send(script);
   }));

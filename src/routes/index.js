@@ -57,6 +57,7 @@ function createApiRouter({
   analysisConfig,
   retentionConfig,
   artifactStore,
+  agentSourceStore,
   enrollConfig = {},
   notifyDashboard,
 }) {
@@ -98,11 +99,11 @@ function createApiRouter({
   router.use('/api/export', createExportRouter({ findingStore, flowsRepo, agentsRepo, locationsRepo, resultsRepo, probeResultsRepo, featureGate }));
   router.use('/enrollment-codes', createEnrollmentCodesRouter({ enrollmentCodesRepo, locationsRepo }));
 
-  // Frictionless enrollment. Public (unauthenticated) download + install-script
+  // Frictionless enrollment. Public (unauthenticated) source + install-script
   // endpoints under /enroll; the authenticated command generator under /api.
-  if (artifactStore) {
-    router.use('/enroll', createEnrollRouter({ artifactStore, enrollmentCodesRepo, enrollConfig }));
-    router.use('/api/enroll', createEnrollCommandRouter({ enrollmentCodesRepo, artifactStore, enrollConfig }));
+  if (artifactStore || agentSourceStore) {
+    router.use('/enroll', createEnrollRouter({ artifactStore, sourceStore: agentSourceStore, enrollmentCodesRepo, enrollConfig }));
+    router.use('/api/enroll', createEnrollCommandRouter({ enrollmentCodesRepo, artifactStore, sourceStore: agentSourceStore, enrollConfig }));
   }
 
   // Three routers share the /agents prefix, each with its own auth model:

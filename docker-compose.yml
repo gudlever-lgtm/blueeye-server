@@ -74,14 +74,16 @@ services:
       LICENSE_CACHE_PATH: /data/license-cache.json
       SEED_DEMO: ${SEED_DEMO:-1}
       SEED_DEMO_ENROLLMENT_CODE: ${SEED_DEMO_ENROLLMENT_CODE:-DEMO-ENROLL-CODE}
+      # Where the agent source bundle is packaged from (see the bind mount below).
+      AGENT_SOURCE_DIR: /agent-src
     command: sh -c "node src/migrate.js && node scripts/seed-demo.js && node src/server.js"
     volumes:
       - server-data:/data
-      # Agent binaries served at /enroll/agent/:platform. Bind-mounting the host
-      # ./artifacts means you can publish binaries (scripts/fetch-agent-binaries.sh)
-      # and just restart the server — no image rebuild. Read-only: the server only
-      # reads them. AGENT_ARTIFACTS_DIR defaults to /app/artifacts (WORKDIR=/app).
-      - ./artifacts:/app/artifacts:ro
+      # The agent source tree (the sibling checkout), packaged + served at
+      # /enroll/agent-source.tgz so the one-line installer can build + run it
+      # (Docker/Node) with NO published binaries. Read-only — the server only
+      # reads it. Matches AGENT_SOURCE_DIR below.
+      - ../blueeye-agent:/agent-src:ro
     ports:
       - "${SERVER_HOST_PORT:-3000}:3000"
     depends_on:

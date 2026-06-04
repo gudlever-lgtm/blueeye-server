@@ -45,8 +45,9 @@ src/
 │   ├── extractFlows.js enricher.js provider.js privateIp.js flowPipeline.js
 │   └── centroids.js countryCentroids.json
 ├── flows/             # traffic-type categories (DNS/Facebook…) — categories.js
-├── enroll/            # frictionless enrollment: artifactStore.js (local binaries +
-│                      # cached SHA-256), installScript.js, fingerprint.js (cert pin)
+├── enroll/            # frictionless enrollment: agentSourceStore.js (source bundle
+│                      # + cached SHA-256), installScript.js (Docker/Node installer),
+│                      # artifactStore.js (legacy binaries), fingerprint.js (cert pin)
 ├── license/           # Ed25519 license-proof verify + feature gate
 │   ├── verify.js publicKey.js licenseManager.js licenseCache.js features.js
 ├── ws/                # WebSocket servers: agentSocket.js, dashboardSocket.js
@@ -79,7 +80,7 @@ Mounted in `src/routes/index.js`. User endpoints use JWT + roles
 | `/locations` | locations.js | viewer+/op/admin | sites + per-location live traffic |
 | `/agents` (3 routers) | agents.js · agentReports.js · agentEnroll.js | JWT / agent-token / none | CRUD + run-test + **run-probe**; agent self-report (`/results`, `/probe-results`, `/me/config`, `/me/capabilities`); enroll |
 | `/enrollment-codes` | enrollmentCodes.js | operator+ | enrollment codes (single-use or **bulk / multi-use**) |
-| `/enroll` (3 routes) | enroll.js | none | **frictionless enrollment**: `/config`, `/agent/:platform` (binary + SHA-256, served locally — air-gap-friendly), `/:code/install.sh` (self-contained, checksum-verifying installer) |
+| `/enroll` (4 routes) | enroll.js | none | **frictionless enrollment**: `/config`, `/agent-source.tgz` (agent source bundle + SHA-256, served locally — air-gap-friendly), `/agent/:platform` (legacy pre-built binary), `/:code/install.sh` (self-contained installer: verifies the source, then builds + runs via Docker/Node) |
 | `/api/enroll` | enrollCommand.js | operator+ | **install-command generator** (`/command`: one-liner + manual/checksum; mints or reuses a code) |
 | `/license` | license.js | viewer+ | license status + features |
 | `/system` | system.js | viewer+ | storage/disk/db + ingest estimate |

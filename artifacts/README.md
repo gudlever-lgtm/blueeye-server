@@ -23,11 +23,37 @@ the `/enroll/agent/:platform` URL use, so keep them consistent
 
 ## Producing a binary
 
-The agent (`blueeye-agent`) is plain Node.js with no build step. Package it for a
-target with your tool of choice (e.g. a single-file build, a `pkg`/`node-sea`
-binary, or a self-extracting tarball with a shim) in CI, then copy the result
-here under the name above. Re-run the server (or call the store's `reload()`)
-after publishing new binaries.
+The agent (`blueeye-agent`) is plain Node.js. It's packaged into self-contained
+**Node SEA** (Single Executable Application) binaries — one file per platform,
+no Node/npm needed on the target — by the agent repo:
 
-Override the location with `AGENT_ARTIFACTS_DIR`. This directory is otherwise
-empty in git (see `.gitkeep`); binaries are deployment artifacts, not source.
+```bash
+# in a blueeye-agent checkout
+npm ci
+npm run build:sea            # -> dist/blueeye-agent-linux-amd64, -linux-arm64
+```
+
+In CI this is automated: pushing a tag `v*` builds the binaries and attaches them
+to a GitHub Release (`blueeye-agent/.github/workflows/release-agent.yml`).
+
+## Publishing here
+
+Don't copy files by hand — use the helper, which downloads a release (or copies
+from a local dir for air-gapped installs), verifies SHA-256, and drops the
+binaries in:
+
+```bash
+# in the blueeye-server checkout, on the server host
+scripts/fetch-agent-binaries.sh                 # latest release
+scripts/fetch-agent-binaries.sh --tag v0.1.0
+scripts/fetch-agent-binaries.sh --from /mnt/usb/blueeye-binaries   # air-gapped
+```
+
+Then re-run the server (binaries are scanned + checksummed at startup; or call
+the store's `reload()`). Override the location with `AGENT_ARTIFACTS_DIR`.
+
+> SEA binaries target **glibc** Linux (most distros). For musl/Alpine hosts, use
+> the agent's Docker install path instead.
+
+This directory is otherwise empty in git (see `.gitkeep`); binaries are
+deployment artifacts, not source.

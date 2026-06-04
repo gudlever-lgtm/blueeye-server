@@ -49,9 +49,27 @@ derived from the request; `checksum` always comes from the server's cached hash.
 
 ## Publishing binaries
 
-Drop built binaries into the artifacts dir (`AGENT_ARTIFACTS_DIR`, default
-`./artifacts`) named `blueeye-agent-<platform>[.exe]`. SHA-256 is computed and
-cached at startup. See [`../artifacts/README.md`](../artifacts/README.md).
+Binaries live in the artifacts dir (`AGENT_ARTIFACTS_DIR`, default `./artifacts`)
+named `blueeye-agent-<platform>[.exe]`; SHA-256 is computed and cached at startup.
+A platform with no binary 404s, and its install script aborts with
+*"no agent binary published for platform '<platform>'"* — so an **empty artifacts
+dir is the usual reason the one-liner fails**.
+
+The binaries are built and released by the **blueeye-agent** repo as
+self-contained Node SEA executables (`npm run build:sea` /
+`.github/workflows/release-agent.yml`). To publish a release onto this server,
+run on the server host:
+
+```bash
+scripts/fetch-agent-binaries.sh                 # latest release -> artifacts dir
+scripts/fetch-agent-binaries.sh --tag v0.1.0    # a specific release
+# air-gapped: copy the release assets in, then
+scripts/fetch-agent-binaries.sh --from /mnt/usb/blueeye-binaries
+```
+
+Then **restart the server** (binaries are scanned at startup). See
+[`../artifacts/README.md`](../artifacts/README.md) for the naming rules and the
+build details.
 
 ## Air-gapped networks
 

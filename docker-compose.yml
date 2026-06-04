@@ -77,6 +77,11 @@ services:
     command: sh -c "node src/migrate.js && node scripts/seed-demo.js && node src/server.js"
     volumes:
       - server-data:/data
+      # Agent binaries served at /enroll/agent/:platform. Bind-mounting the host
+      # ./artifacts means you can publish binaries (scripts/fetch-agent-binaries.sh)
+      # and just restart the server — no image rebuild. Read-only: the server only
+      # reads them. AGENT_ARTIFACTS_DIR defaults to /app/artifacts (WORKDIR=/app).
+      - ./artifacts:/app/artifacts:ro
     ports:
       - "${SERVER_HOST_PORT:-3000}:3000"
     depends_on:

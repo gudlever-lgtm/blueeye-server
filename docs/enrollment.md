@@ -71,6 +71,18 @@ Then **restart the server** (binaries are scanned at startup). See
 [`../artifacts/README.md`](../artifacts/README.md) for the naming rules and the
 build details.
 
+**Docker Compose:** the `server` service bind-mounts the host `./artifacts` at
+`/app/artifacts` (read-only), so publishing is drop-in:
+
+```bash
+git pull                                       # get the fetch helper + the mount
+scripts/fetch-agent-binaries.sh --tag v0.1.0   # binaries -> ./artifacts on the host
+docker compose up -d server                     # applies the mount + rescans at startup
+```
+
+(The first time, use `up -d` rather than `restart` so the new bind mount is
+applied; afterwards a `restart` is enough to pick up newly published binaries.)
+
 ## Air-gapped networks
 
 `curl … | sh` only needs to reach **this** server, and the binary is served by

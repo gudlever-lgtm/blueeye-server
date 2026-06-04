@@ -108,6 +108,18 @@ test('interfaceHealthSummary reduces to the worst interface (null when no data)'
   assert.equal(interfaceHealthSummary(trafficWithIface({ operStatus: 'down' })).status, 'down');
 });
 
+test('a down virtual/idle interface does not escalate the agent verdict (was CRITICAL on docker0)', () => {
+  const probeOk = computeAgentHealth(samples('1.1.1.1', [10, 10, 10]), { now: NOW });
+  // An agent whose only "down" interface is the idle docker0 bridge.
+  const summary = interfaceHealthSummary({ elapsedSec: 5, interfaces: [
+    { iface: 'docker0', operStatus: 'down', rxBytesPerSec: 0, txBytesPerSec: 0 },
+    { iface: 'eth0', operStatus: 'up', rxBytesPerSec: 0, txBytesPerSec: 0 },
+  ] });
+  assert.equal(summary.status, 'ok'); // worst interface is ok — docker0 idle doesn't count
+  const merged = mergeHealth(probeOk, summary);
+  assert.equal(merged.status, 'ok'); // agent stays HEALTHY, not CRITICAL
+});
+
 test('mergeHealth folds the interface signal into the probe verdict', () => {
   const probeOk = computeAgentHealth(samples('1.1.1.1', [10, 10, 10]), { now: NOW });
   const probeUnknown = computeAgentHealth([], { now: NOW });

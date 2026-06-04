@@ -9,6 +9,7 @@ const request = require('supertest');
 
 const { makeApp, makeAgentsRepo, makeResultsRepo, authHeader, throwingAsync } = require('../test-support/fakes');
 const { computeInterfaceHealth } = require('../src/routes/interfaces');
+const { isVirtual } = require('../src/health/interfaceHealth');
 
 const withAgent = (overrides = {}) => makeApp({ agentsRepo: makeAgentsRepo({ findById: async (id) => ({ id, hostname: 'h1' }) }), ...overrides });
 
@@ -32,6 +33,40 @@ test('computeInterfaceHealth flags down / errors / utilisation', () => {
   assert.equal(out[0].utilPct, round1(100 * 8 / 1e9 * 100));
 });
 function round1(n) { return Math.round(n * 10) / 10; }
+
+test('isVirtual recognises container/VM/VPN ports but not real NICs or appliance bridges', () => {
+  for (const n of ['lo', 'docker0', 'veth9f2a1b', 'br-1a2b3c4d5e6f', 'virbr0', 'vnet3', 'tun0', 'wg0', 'tailscale0', 'zt5a8b9c0d1e']) {
+    assert.equal(isVirtual(n), true, `expected ${n} virtual`);
+  }
+  for (const n of ['eth0', 'eno1', 'ens18', 'enp3s0', 'wlan0', 'bond0', 'br-lan', 'br0', 'eth0.100']) {
+    assert.equal(isVirtual(n), false, `expected ${n} physical`);
+  }
+});
+
+test('computeInterfaceHealth does not escalate a down virtual/idle interface', () => {
+  const out = computeInterfaceHealth({
+    elapsedSec: 1,
+    interfaces: [
+      { iface: 'docker0', operStatus: 'down', rxBytesPerSec: 0, txBytesPerSec: 0 },
+      { iface: 'veth9f2a1b', operStatus: 'down' },
+      { iface: 'lo', operStatus: 'unknown' },
+      { iface: 'eth0', operStatus: 'down' }, // a real NIC down is still DOWN
+    ],
+  });
+  const by = Object.fromEntries(out.map((i) => [i.iface, i]));
+  assert.equal(by.docker0.status, 'ok');     // idle bridge ⇒ not a fault
+  assert.equal(by.docker0.virtual, true);
+  assert.equal(by.docker0.linkDown, true);   // still truthfully "down"
+  assert.equal(by.veth9f2a1b.status, 'ok');
+  assert.equal(by.eth0.status, 'down');       // physical link-down unchanged
+  assert.equal(by.eth0.virtual, false);
+});
+
+test('computeInterfaceHealth still flags errors/util on a virtual interface that is up', () => {
+  const [d] = computeInterfaceHealth({ elapsedSec: 1, interfaces: [{ iface: 'docker0', operStatus: 'up', rxErrors: 4 }] });
+  assert.equal(d.virtual, true);
+  assert.equal(d.status, 'bad'); // errors are real even on a virtual port
+});
 
 // ---- route ----------------------------------------------------------------
 

@@ -42,11 +42,17 @@ function applyTheme(theme) {
 function cachedTheme() {
   try { return localStorage.getItem(THEME_KEY) || 'light'; } catch { return 'light'; }
 }
+// Set once the user explicitly picks a theme (topbar toggle or Settings →
+// Appearance). It makes that choice win over loadProfile()'s one-time server
+// reconcile, which would otherwise override a fresh toggle with the previously
+// saved value if /me is still in flight when the user clicks.
+let themeUserChoice = false;
 // Apply + cache a theme locally, and persist it to the signed-in user's account
 // (so it follows them to any browser). Returns the save promise for callers that
 // want to surface success/failure; the local apply always happens immediately.
 function setTheme(theme, { persist = true } = {}) {
   const t = THEME_KEYS.includes(theme) ? theme : 'light';
+  if (persist) themeUserChoice = true;
   applyTheme(t);
   try { localStorage.setItem(THEME_KEY, t); } catch { /* storage off */ }
   if (persist && token) {
@@ -61,7 +67,9 @@ function initTheme() {
     // Quick light/dark toggle; the full palette lives in Settings → Appearance.
     btn.addEventListener('click', () => {
       const next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
-      setTheme(next).catch(() => { /* keep the local change even if the save fails */ });
+      // The local change already applied; surface a failed save (don't revert it)
+      // so a silently-failing persist no longer looks like "it didn't stick".
+      setTheme(next).catch((e) => toast(errText(e) || 'Could not save theme', true));
     });
   }
 }
@@ -207,7 +215,9 @@ async function loadProfile() {
   try {
     const me = await api('/me');
     const theme = me && me.preferences && me.preferences.theme;
-    if (theme && THEME_KEYS.includes(theme)) {
+    // Skip if the user already chose a theme this session (e.g. toggled while
+    // this request was in flight) — their deliberate choice must win.
+    if (!themeUserChoice && theme && THEME_KEYS.includes(theme)) {
       applyTheme(theme);
       try { localStorage.setItem(THEME_KEY, theme); } catch { /* storage off */ }
     }

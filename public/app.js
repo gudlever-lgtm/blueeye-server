@@ -27,11 +27,33 @@ const THEMES = [
 const THEME_KEYS = THEMES.map((t) => t.key);
 const themeMeta = (key) => THEMES.find((t) => t.key === key) || THEMES[0];
 
+// The topbar 🌙/☀️ button is a quick light/dark toggle. Remember the most recent
+// theme chosen in each family so toggling away from a colour theme and back
+// returns to *that* theme — not the basic light/dark pair.
+const FAMILY_KEY = 'blueeye.server.themeByFamily';
+function loadFamilyThemes() {
+  const picks = { light: 'light', dark: 'dark' };
+  try {
+    const saved = JSON.parse(localStorage.getItem(FAMILY_KEY) || '{}');
+    for (const fam of ['light', 'dark']) {
+      if (THEME_KEYS.includes(saved[fam]) && themeMeta(saved[fam]).family === fam) picks[fam] = saved[fam];
+    }
+  } catch { /* storage off / bad JSON — use defaults */ }
+  return picks;
+}
+let themeByFamily = loadFamilyThemes();
+function rememberFamily(theme) {
+  if (!THEME_KEYS.includes(theme)) return;
+  themeByFamily[themeMeta(theme).family] = theme;
+  try { localStorage.setItem(FAMILY_KEY, JSON.stringify(themeByFamily)); } catch { /* storage off */ }
+}
+
 // The theme is applied instantly from a local cache (no flash on load), then
 // reconciled with the per-user value saved on the server (see loadProfile).
 function applyTheme(theme) {
   const t = THEME_KEYS.includes(theme) ? theme : 'light';
   document.documentElement.dataset.theme = t;
+  rememberFamily(t); // keep the per-family memory in step with what's showing
   const btn = document.querySelector('#theme');
   if (btn) {
     const isDark = themeMeta(t).family === 'dark';
@@ -59,9 +81,12 @@ function initTheme() {
   const btn = document.querySelector('#theme');
   if (btn) {
     // Quick light/dark toggle; the full palette lives in Settings → Appearance.
+    // Flip to the other family's remembered theme so a chosen colour theme is
+    // preserved across toggles instead of reverting to the basic light/dark pair.
     btn.addEventListener('click', () => {
-      const next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
-      setTheme(next).catch(() => { /* keep the local change even if the save fails */ });
+      const family = themeMeta(document.documentElement.dataset.theme).family;
+      setTheme(themeByFamily[family === 'light' ? 'dark' : 'light'])
+        .catch(() => { /* keep the local change even if the save fails */ });
     });
   }
 }

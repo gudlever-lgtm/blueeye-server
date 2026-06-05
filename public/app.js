@@ -283,7 +283,7 @@ function closeModal() { $('#modal').classList.add('hidden'); $('#modal-card').cl
 // Labels mirror the top nav. A link whose target tab is hidden (licence/role)
 // degrades to plain text, so the help never offers a dead end.
 const VIEW_LABELS = {
-  fleet: 'Overview', overview: 'Traffic', map: 'Map', geo: 'Geo', agents: 'Agents',
+  fleet: 'Overview', overview: 'Traffic', map: 'Sites', geo: 'Destinations', agents: 'Agents',
   interfaces: 'Interfaces', probes: 'Probes', tests: 'Tests', flows: 'Flows',
   findings: 'Analysis', locations: 'Locations', enrollment: 'Enrollment', settings: 'Settings',
 };
@@ -382,11 +382,12 @@ const PAGE_INFO = {
     ],
   },
   map: {
-    hero: 'Geographic overview of locations and their agents.',
-    title: 'Map',
+    hero: 'Your sites on a map — each marker coloured by the worst agent health at that site.',
+    title: 'Sites',
     body: () => [
-      el('p', {}, 'Locations with coordinates (latitude/longitude) are shown as markers. Click a marker to see the number of agents and how many are online.'),
-      el('p', { class: 'muted' }, 'Add coordinates per location under ', viewLink('locations'), ' (Edit). If the map is missing, the library could not be reached — a list is shown instead.'),
+      el('p', {}, 'Each location with coordinates is a marker, coloured by the worst health verdict among its agents (green = healthy, amber = warning, red = critical, grey = unknown/offline) — the same verdict as ', viewLink('fleet', 'Overview'), '. The page refreshes itself so the colours stay live.'),
+      el('p', {}, 'Click a marker for the site\'s agents and how many are online; click an agent in the popup to open it.'),
+      el('p', { class: 'muted' }, 'Add coordinates per location under ', viewLink('locations'), ' (Edit). Map tiles come from the server\'s configured (EU/self-hosted) source. If the map is missing, the library could not be reached — a list is shown instead.'),
     ],
   },
   agents: {
@@ -439,7 +440,7 @@ const PAGE_INFO = {
     hero: 'Inspect specific conversations (flows): who talks to whom, on which ports — and who is scanning.',
     title: 'Flows — conversations',
     body: () => [
-      el('p', {}, 'While ', viewLink('overview', 'Traffic'), ' shows volumes and ', viewLink('geo', 'Geo'), ' shows destinations on a map, Flows lets you drill into individual conversations (5-tuple metadata from NetFlow/sFlow) for one agent.'),
+      el('p', {}, 'While ', viewLink('overview', 'Traffic'), ' shows volumes and the ', viewLink('geo', 'Destinations'), ' map shows where it goes, Flows lets you drill into individual conversations (5-tuple metadata from NetFlow/sFlow) for one agent.'),
       el('h4', {}, 'Filters'),
       el('ul', {},
         el('li', {}, 'Peer: show only conversations where a specific IP is source or destination (click a talker to set it).'),
@@ -454,13 +455,14 @@ const PAGE_INFO = {
     ],
   },
   geo: {
-    hero: 'Geographic overview: internal sites and external traffic destinations (country/ASN).',
-    title: 'Geo map',
+    hero: 'Where your traffic goes: internal sites and external destinations (country/ASN) on a map.',
+    title: 'Destinations',
     body: () => [
       el('p', {}, 'Internal hosts are shown based on their site coordinates (set per location) — never via GeoIP. External destinations are aggregated per country/ASN from GeoIP-enriched flows; private/RFC1918 addresses are never shown as geo points.'),
+      el('p', { class: 'muted' }, 'This is the traffic-destination map. For just your sites and their health, see the ', el('strong', {}, 'Sites'), ' tab.'),
       el('h4', {}, 'Markers'),
       el('ul', {},
-        el('li', {}, 'Pins = internal sites (click for status + findings).'),
+        el('li', {}, 'Ringed dots = internal sites, coloured by agent health (green/amber/red); click for status + findings.'),
         el('li', {}, 'Circles = external destinations; size by traffic volume, colour by deviation (neutral → yellow → red).')),
       el('h4', {}, 'Get an external destination'),
       el('ol', {},
@@ -498,7 +500,7 @@ const PAGE_INFO = {
       el('p', {}, 'A location groups multiple agents (e.g. an office or a site).'),
       el('h4', {}, 'Live traffic'),
       el('p', {}, '”Traffic” opens a live panel that sums all agent traffic in the location and updates every 3 seconds — useful for seeing overall load and spotting problems.'),
-      el('p', { class: 'muted' }, 'Give a location coordinates here to place it on the ', viewLink('map'), '; the fleet-wide live picture is on ', viewLink('overview', 'Traffic'), '.'),
+      el('p', { class: 'muted' }, 'Give a location coordinates here to place it on the ', viewLink('map', 'Sites map'), '; the fleet-wide live picture is on ', viewLink('overview', 'Traffic'), '.'),
     ],
   },
   enrollment: {
@@ -2593,6 +2595,17 @@ function healthBadge(h) {
   const [cls, label] = HEALTH_BADGE[h.status] || ['grace', h.status];
   return el('span', { class: `badge ${cls}`, title: h.reason || '' }, label);
 }
+// Health verdict → map-marker colour (same palette as the badges / Overview) and
+// a severity rank so a site marker can take the colour of its worst agent.
+const HEALTH_COLOR = { ok: '#22c55e', warn: '#f59e0b', bad: '#ef4444', down: '#ef4444', stale: '#94a3b8', unknown: '#94a3b8' };
+const HEALTH_RANK = { bad: 0, down: 0, warn: 1, stale: 2, unknown: 3, ok: 4 };
+function healthColor(status) { return HEALTH_COLOR[status] || '#94a3b8'; }
+function worstHealthStatus(statuses) {
+  let worst = null;
+  let rank = Infinity;
+  for (const s of statuses) { const r = HEALTH_RANK[s] ?? 3; if (r < rank) { rank = r; worst = s; } }
+  return worst;
+}
 // Latency cell: highlights + shows the baseline when the latest is elevated.
 function latencyText(m) {
   if (!m || m.rttMs == null) return '–';
@@ -2966,26 +2979,72 @@ views.flows = async () => {
 
 // Map of locations with their agents. Uses Leaflet if available; otherwise falls
 // back to a list. Each located location gets a marker with agent count/status.
-views.map = async () => {
-  const [locations, agents] = await Promise.all([api('/locations'), api('/agents')]);
-  // Count agents (and how many online) per location.
-  const byLoc = new Map();
-  for (const a of agents) {
-    if (a.location_id == null) continue;
-    const e = byLoc.get(a.location_id) || { total: 0, online: 0 };
-    e.total += 1;
-    if (a.status === 'online') e.online += 1;
-    byLoc.set(a.location_id, e);
-  }
-  const located = locations.filter((l) => l.latitude != null && l.longitude != null);
+// Creates a Leaflet map with the server-configured tiles (EU / self-hosted —
+// never a hardcoded source). Shared by the Sites map and the Destinations (geo)
+// map so the admin's Settings → Map tile choice is honoured everywhere. Returns
+// the map, or null if Leaflet is unavailable. `config` = /api/map|geo/config.
+function createLeafletMap(host, config, { center = [20, 0], zoom = 3 } = {}) {
+  if (typeof L === 'undefined' || !host) return null;
+  const cfg = config || {};
+  const map = L.map(host).setView(center, zoom);
+  L.tileLayer(cfg.tileUrl || 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: cfg.maxZoom || 19,
+    attribution: cfg.attribution || '© OpenStreetMap',
+  }).addTo(map);
+  return map;
+}
 
+// Sites-map polling state (mirrors stopOverview/stopGeo). Re-drawn on a timer so
+// agent health/online counts stay live; torn down when leaving the view.
+const mapState = { map: null, timer: null, layer: null, fitted: false, popupOpen: false };
+function stopMap() {
+  if (mapState.timer) { clearInterval(mapState.timer); mapState.timer = null; }
+  if (mapState.map) { try { mapState.map.remove(); } catch { /* ignore */ } }
+  mapState.map = null; mapState.layer = null; mapState.fitted = false; mapState.popupOpen = false;
+}
+
+// The "Sites" map: your locations on a map, each marker coloured by the WORST
+// agent health at that site (reusing the Overview verdict), clustered, live, and
+// click-through to the agents there.
+views.map = async () => {
   const root = el('div');
-  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Map'),
-    el('span', { class: 'muted' }, `${located.length} of ${locations.length} locations have coordinates`)));
+  const sub = el('span', { class: 'muted' });
+  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Sites'), sub));
+
+  let locations; let agents; let mapCfg; let fleet;
+  try {
+    [locations, agents, mapCfg, fleet] = await Promise.all([
+      api('/locations'), api('/agents'),
+      api('/api/map/config').catch(() => ({})),
+      api('/api/fleet/health').catch(() => ({ agents: [] })),
+    ]);
+  } catch (e) { root.append(el('div', { class: 'error' }, e.message)); return root; }
+
+  // agentId → health verdict; refreshed on each poll.
+  const healthByAgent = new Map((fleet.agents || []).map((a) => [a.agentId, a.health && a.health.status]));
+
+  // Per-location rollup: counts + the agents (with health) + the worst status.
+  function rollup() {
+    const byLoc = new Map();
+    for (const a of agents) {
+      if (a.location_id == null) continue;
+      const e = byLoc.get(a.location_id) || { total: 0, online: 0, agents: [] };
+      e.total += 1;
+      if (a.status === 'online') e.online += 1;
+      const status = healthByAgent.get(a.id) || (a.status === 'online' ? 'unknown' : 'down');
+      e.agents.push({ id: a.id, name: a.display_name || a.hostname, status });
+      byLoc.set(a.location_id, e);
+    }
+    for (const e of byLoc.values()) e.worst = worstHealthStatus(e.agents.map((x) => x.status));
+    return byLoc;
+  }
+
+  const located = locations.filter((l) => l.latitude != null && l.longitude != null);
+  sub.textContent = `${located.length} of ${locations.length} locations have coordinates`;
 
   if (typeof L === 'undefined') {
     root.append(el('div', { class: 'empty' }, 'Map library could not be loaded (offline?). Showing list instead.'));
-    root.append(locationList(locations, byLoc));
+    root.append(locationList(locations, rollup()));
     return root;
   }
   if (!located.length) {
@@ -2995,31 +3054,76 @@ views.map = async () => {
 
   const mapEl = el('div', { class: 'map' });
   root.append(mapEl);
-  // Leaflet needs the element in the DOM with a size before init — defer a tick.
-  setTimeout(() => {
-    const map = L.map(mapEl).setView([located[0].latitude, located[0].longitude], 6);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 19, attribution: '© OpenStreetMap',
-    }).addTo(map);
-    const group = [];
+  root.append(el('div', { class: 'legend geo-legend' },
+    el('span', {}, el('span', { class: 'dot ring', style: `background:${HEALTH_COLOR.ok}` }), ' healthy'),
+    el('span', {}, el('span', { class: 'dot ring', style: `background:${HEALTH_COLOR.warn}` }), ' warning'),
+    el('span', {}, el('span', { class: 'dot ring', style: `background:${HEALTH_COLOR.bad}` }), ' critical'),
+    el('span', {}, el('span', { class: 'dot ring', style: `background:${HEALTH_COLOR.unknown}` }), ' unknown / offline'),
+    el('span', { class: 'muted' }, '· colour = worst agent health at the site')));
+
+  function popupFor(l, c) {
+    return el('div', { class: 'map-pop' },
+      el('strong', {}, esc(l.name)),
+      el('div', { class: 'muted' }, `${c.online}/${c.total} agents online`),
+      l.address ? el('div', { class: 'muted' }, esc(l.address)) : null,
+      el('div', { class: 'map-pop-agents' }, ...c.agents.slice(0, 12).map((ag) => el('button', {
+        class: 'map-pop-agent', title: 'Open agent', onclick: () => openAgent(ag.id),
+      }, el('span', { class: 'dot', style: `background:${healthColor(ag.status)}` }), esc(ag.name)))));
+  }
+
+  function draw(byLoc) {
+    if (!mapState.layer) return;
+    mapState.layer.clearLayers();
+    const pts = [];
     for (const l of located) {
-      const c = byLoc.get(l.id) || { total: 0, online: 0 };
-      const m = L.marker([l.latitude, l.longitude]).addTo(map);
-      m.bindPopup(`<b>${esc(l.name)}</b><br>${c.online}/${c.total} agents online${l.address ? `<br>${esc(l.address)}` : ''}`);
-      group.push([l.latitude, l.longitude]);
+      const c = byLoc.get(l.id) || { total: 0, online: 0, agents: [], worst: null };
+      const m = L.circleMarker([l.latitude, l.longitude], {
+        radius: 9, color: '#fff', weight: 2, fillColor: c.worst ? healthColor(c.worst) : '#94a3b8', fillOpacity: 0.95,
+      });
+      m.bindPopup(popupFor(l, c));
+      mapState.layer.addLayer(m);
+      pts.push([l.latitude, l.longitude]);
     }
-    if (group.length > 1) map.fitBounds(group, { padding: [40, 40] });
+    if (!mapState.fitted && pts.length) {
+      if (pts.length > 1) mapState.map.fitBounds(pts, { padding: [40, 40] });
+      mapState.fitted = true;
+    }
+  }
+
+  stopMap();
+  setTimeout(() => {
+    if (!mapEl.isConnected) return; // view was left before the deferred init ran
+    const map = createLeafletMap(mapEl, mapCfg, { center: [located[0].latitude, located[0].longitude], zoom: 6 });
+    if (!map) return;
+    mapState.map = map;
+    map.on('popupopen', () => { mapState.popupOpen = true; });
+    map.on('popupclose', () => { mapState.popupOpen = false; });
+    mapState.layer = (typeof L.markerClusterGroup === 'function') ? L.markerClusterGroup({ maxClusterRadius: 50 }) : L.layerGroup();
+    mapState.layer.addTo(map);
+    draw(rollup());
   }, 0);
+
+  mapState.timer = setInterval(async () => {
+    if (currentView !== 'map') { stopMap(); return; }
+    if (modalOpen() || mapState.popupOpen || !mapState.map) return;
+    try {
+      const [a, f] = await Promise.all([api('/agents'), api('/api/fleet/health').catch(() => null)]);
+      agents = a;
+      if (f) { healthByAgent.clear(); for (const x of f.agents || []) healthByAgent.set(x.agentId, x.health && x.health.status); }
+      draw(rollup());
+    } catch { /* keep the last good render */ }
+  }, 10000);
+
   return root;
 };
 
-// ---- Geo map (internal sites + external destinations + selection) ---------
-const geoState = { map: null, ext: null, hosts: null, rect: null, dests: [], sinceIso: '', panel: null, selecting: false, rectStart: null };
+// ---- Destinations map (internal sites + external destinations + selection) ----
+const geoState = { map: null, ext: null, hosts: null, rect: null, dests: [], sinceIso: '', panel: null, selecting: false, rectStart: null, healthByHost: null };
 
 function stopGeo() {
   if (geoState.map) { try { geoState.map.remove(); } catch { /* ignore */ } }
   geoState.map = null; geoState.ext = null; geoState.hosts = null; geoState.rect = null;
-  geoState.dests = []; geoState.selecting = false; geoState.rectStart = null;
+  geoState.dests = []; geoState.selecting = false; geoState.rectStart = null; geoState.healthByHost = null;
 }
 
 function devColor(dev) {
@@ -3057,7 +3161,12 @@ views.geo = async () => {
   if (typeof L === 'undefined') {
     return el('div', { class: 'empty' }, 'Map library (Leaflet) could not be loaded — geo map is unavailable offline.');
   }
-  const [config, overview] = await Promise.all([api('/api/geo/config'), api('/api/geo/overview')]);
+  const [config, overview, fleet] = await Promise.all([
+    api('/api/geo/config'), api('/api/geo/overview'),
+    api('/api/fleet/health').catch(() => ({ agents: [] })),
+  ]);
+  // hostId → health verdict, so internal site pins can be coloured by health.
+  geoState.healthByHost = new Map((fleet.agents || []).map((a) => [a.agentId, a.health && a.health.status]));
 
   const root = el('div', { class: 'geo' });
   const periodSel = el('select', {},
@@ -3067,10 +3176,10 @@ views.geo = async () => {
   const regionBtn = el('button', { class: 'small ghost' }, 'Select region');
   const clearBtn = el('button', { class: 'small ghost' }, 'Clear selection');
   root.append(el('div', { class: 'section-head' },
-    el('h2', {}, 'Geo-kort'),
+    el('h2', {}, 'Destinations'),
     el('span', { class: 'spacer' }),
     exportButtons('geo', () => (geoState.sinceIso ? { since: geoState.sinceIso } : {})),
-    el('label', { class: 'muted inline' }, 'Periode ', periodSel),
+    el('label', { class: 'muted inline' }, 'Period ', periodSel),
     regionBtn, clearBtn));
 
   const mapEl = el('div', { class: 'map' });
@@ -3078,12 +3187,18 @@ views.geo = async () => {
   geoState.panel = panel;
   geoState.mapEl = mapEl;
   root.append(el('div', { class: 'geo-grid' }, mapEl, panel));
+  // Two colour scales: internal SITES are ringed dots coloured by agent health;
+  // external DESTINATIONS are circles coloured by traffic deviation (size = volume).
   root.append(el('div', { class: 'legend geo-legend' },
-    el('span', {}, el('span', { class: 'pin-dot' }), ' internal site'),
+    el('span', { class: 'muted' }, 'Sites:'),
+    el('span', {}, el('span', { class: 'dot ring', style: `background:${HEALTH_COLOR.ok}` }), ' healthy'),
+    el('span', {}, el('span', { class: 'dot ring', style: `background:${HEALTH_COLOR.warn}` }), ' warning'),
+    el('span', {}, el('span', { class: 'dot ring', style: `background:${HEALTH_COLOR.bad}` }), ' critical'),
+    el('span', { class: 'muted' }, '· Destinations:'),
     el('span', {}, el('span', { class: 'dot', style: 'background:#38bdf8' }), ' normal'),
     el('span', {}, el('span', { class: 'dot', style: 'background:#f59e0b' }), ' elevated'),
     el('span', {}, el('span', { class: 'dot', style: 'background:#ef4444' }), ' strong deviation'),
-    el('span', { class: 'muted' }, '· circle size = traffic volume')));
+    el('span', { class: 'muted' }, '· size = volume')));
 
   periodSel.addEventListener('change', () => {
     const v = periodSel.value;
@@ -3101,12 +3216,9 @@ views.geo = async () => {
 function initGeoMap(config, overview) {
   if (!geoState.mapEl || !geoState.mapEl.isConnected) return; // view was left already
   const center = pickGeoCenter(overview);
-  const map = L.map(geoState.mapEl).setView(center, 3);
+  const map = createLeafletMap(geoState.mapEl, config, { center, zoom: 3 });
+  if (!map) return;
   geoState.map = map;
-  L.tileLayer(config.tileUrl || 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: config.maxZoom || 19,
-    attribution: config.attribution || '© OpenStreetMap',
-  }).addTo(map);
 
   geoState.ext = (typeof L.markerClusterGroup === 'function') ? L.markerClusterGroup({ maxClusterRadius: 50 }) : L.layerGroup();
   geoState.hosts = L.layerGroup();
@@ -3145,7 +3257,8 @@ function drawOverview(overview) {
 
   for (const h of overview.internalHosts || []) {
     if (h.lat == null || h.lng == null) continue;
-    const m = L.marker([h.lat, h.lng]);
+    const status = (geoState.healthByHost && geoState.healthByHost.get(h.hostId)) || (h.status === 'online' ? 'unknown' : 'down');
+    const m = L.circleMarker([h.lat, h.lng], { radius: 8, color: '#fff', weight: 2, fillColor: healthColor(status), fillOpacity: 0.95 });
     m.bindTooltip(`${esc(h.siteName || `host ${h.hostId}`)} (${esc(h.status || '?')})`);
     m.on('click', () => selectHost(h));
     geoState.hosts.addLayer(m);
@@ -3180,10 +3293,23 @@ function showOverviewSummary() {
   if (!panel) return;
   const dests = geoState.dests;
   const totBytes = dests.reduce((s, d) => s + (Number(d.bytes) || 0), 0);
+  const top = dests.slice().sort((a, b) => (Number(b.bytes) || 0) - (Number(a.bytes) || 0)).slice(0, 12);
+  const topTable = top.length
+    ? el('table', { class: 'geo-top' }, el('tbody', {}, ...top.map((d) => el('tr', {
+      class: 'geo-top-row', tabindex: '0', title: 'Show destination details',
+      onclick: () => selectDestination(d),
+      onkeydown: (e) => { if (e.key === 'Enter') selectDestination(d); },
+    },
+    el('td', {}, el('span', { class: 'dot', style: `background:${devColor(d.deviation)}` }), ' ', esc(destTitle(d))),
+    el('td', { class: 'num' }, fmtBytes(d.bytes)),
+    el('td', { class: 'num muted' }, devLabel(d.deviation))))))
+    : el('div', { class: 'muted' }, 'No external destinations in this period.');
   panel.replaceChildren(
     el('div', { class: 'section-head' }, el('h3', {}, 'Overview')),
     el('p', { class: 'muted' }, `${dests.length} external destinations · ${fmtBytes(totBytes)} in the period`),
-    el('p', { class: 'muted' }, 'Click a circle (destination) or a pin (internal site) for details, or select a region.'));
+    el('h4', {}, 'Top destinations'),
+    topTable,
+    el('p', { class: 'muted small' }, 'Click a row, a circle (destination) or a site pin for details, or select a region.'));
 }
 
 async function selectDestination(d) {
@@ -4199,7 +4325,7 @@ function retentionSettingsCard(r) {
 async function settingsMapView() {
   const data = await api('/api/settings');
   const root = el('div');
-  root.append(el('p', { class: 'muted settings-intro' }, 'The maps (Map tab, Geo and the location picker) fetch background tiles from the tile URL, and address search uses the geocoder URL. Use an EU/self-hosted source in production — no hardcoded US service. Stored in the database and works without restart.'));
+  root.append(el('p', { class: 'muted settings-intro' }, 'The maps (Sites, Destinations and the location picker) fetch background tiles from the tile URL, and address search uses the geocoder URL. Use an EU/self-hosted source in production — no hardcoded US service. Stored in the database and works without restart.'));
   root.append(el('div', { class: 'settings-grid' }, mapSettingsCard(data.map)));
   return root;
 }
@@ -4501,8 +4627,9 @@ async function render({ silent = false } = {}) {
   if (currentView !== 'interfaces') stopIfaces();
   if (currentView !== 'fleet') stopFleet();
   if (currentView !== 'agent') stopAgent();
-  // Tear down the Leaflet map when leaving the geo view (it rebuilds on entry).
+  // Tear down the Leaflet maps when leaving their views (they rebuild on entry).
   if (currentView !== 'geo') stopGeo();
+  if (currentView !== 'map') stopMap();
 
   // Admin-only tabs (e.g. Users); send non-admins back to agents if needed.
   for (const b of document.querySelectorAll('.tabs button[data-admin]')) {
@@ -4541,7 +4668,7 @@ $('#login-form').addEventListener('submit', async (e) => {
   try { await login($('#email').value, $('#password').value); render(); }
   catch (err) { $('#login-error').textContent = err.message; }
 });
-$('#logout').addEventListener('click', () => { setAutoRefresh(false); stopOverview(); stopFleet(); stopAgent(); stopProbes(); stopIfaces(); $('#autorefresh').checked = false; logout(); });
+$('#logout').addEventListener('click', () => { setAutoRefresh(false); stopOverview(); stopFleet(); stopAgent(); stopProbes(); stopIfaces(); stopMap(); stopGeo(); $('#autorefresh').checked = false; logout(); });
 $('#refresh').addEventListener('click', () => render());
 $('#autorefresh').addEventListener('change', (e) => setAutoRefresh(e.target.checked));
 for (const b of document.querySelectorAll('.tabs button')) {

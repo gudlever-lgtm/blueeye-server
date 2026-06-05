@@ -393,8 +393,10 @@ th.sortable.sorted { color: var(--accent); }
 
 .badge { padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; }
 .badge.online, .badge.active, .badge.valid { background: rgba(34,197,94,.15); color: var(--ok); }
-.badge.offline, .badge.suspended, .badge.grace { background: rgba(245,158,11,.15); color: var(--warn); }
+.badge.offline, .badge.suspended, .badge.grace, .badge.expired { background: rgba(245,158,11,.15); color: var(--warn); }
 .badge.revoked, .badge.unlicensed, .badge.invalid { background: rgba(239,68,68,.15); color: var(--bad); }
+/* Enrollment code "used" = consumed; neutral grey rather than alarming. */
+.badge.used { background: rgba(148,163,184,.18); color: var(--muted); }
 /* Finding severities. */
 .badge.CRIT { background: rgba(239,68,68,.15); color: var(--bad); }
 .badge.WARN { background: rgba(245,158,11,.15); color: var(--warn); }

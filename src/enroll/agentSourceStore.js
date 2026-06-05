@@ -19,9 +19,15 @@ const { spawnSync } = require('child_process');
 //
 // DI-friendly: pass a fake `exec`/`fsImpl` in tests, or point `dir` at a fixture.
 
-// Directories never worth shipping (and node_modules is reinstalled on the
-// target anyway — the Dockerfile runs `npm ci`).
-const EXCLUDES = ['./node_modules', './.git', './dist', './test', './test-support', './.github'];
+// Directories/files never worth shipping. node_modules is reinstalled on the
+// target anyway (the Dockerfile runs `npm ci`); the rest could leak local
+// secrets/config from the checkout, so they're excluded from the bundle that
+// goes to every enrolled host.
+const EXCLUDES = [
+  './node_modules', './.git', './dist', './test', './test-support', './.github',
+  './.env', './.env.local', './.blueeye-agent', './blueeye-agent.config.json',
+  '*.token', '*.log',
+];
 
 function createAgentSourceStore({ dir, exec = spawnSync, fsImpl = fs, logger = console } = {}) {
   let cache = null; // { buffer, sha256, size }

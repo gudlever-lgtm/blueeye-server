@@ -21,6 +21,8 @@ function fixture() {
   // Should be excluded from the bundle:
   fs.mkdirSync(path.join(dir, 'node_modules'));
   fs.writeFileSync(path.join(dir, 'node_modules', 'junk.js'), 'x');
+  fs.writeFileSync(path.join(dir, '.env'), 'SECRET=do-not-ship');
+  fs.writeFileSync(path.join(dir, 'agent.token'), 'super-secret-token');
   return dir;
 }
 
@@ -48,6 +50,8 @@ test('packages the source dir into a checksummed gzip, excluding node_modules', 
   assert.ok(fs.existsSync(path.join(out, 'package.json')));
   assert.ok(fs.existsSync(path.join(out, 'src', 'index.js')));
   assert.equal(fs.existsSync(path.join(out, 'node_modules')), false, 'node_modules excluded');
+  assert.equal(fs.existsSync(path.join(out, '.env')), false, 'secrets excluded');
+  assert.equal(fs.existsSync(path.join(out, 'agent.token')), false, 'tokens excluded');
 });
 
 test('tolerates a missing dir (unavailable, no throw)', () => {

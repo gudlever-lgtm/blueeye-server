@@ -1805,8 +1805,8 @@ function stopIfaces() { if (ifaceState.timer) { clearInterval(ifaceState.timer);
 
 const IFACE_RANK = { down: 0, bad: 1, warn: 2, ok: 3 };
 function ifaceStatusBadge(s) {
-  const map = { ok: ['online', 'OK'], warn: ['warn', 'WARN'], bad: ['offline', 'ERR'], down: ['offline', 'DOWN'] };
-  const [cls, label] = map[s] || ['offline', s];
+  const map = { ok: ['online', 'OK'], warn: ['warn', 'WARN'], bad: ['error', 'ERR'], down: ['down', 'DOWN'] };
+  const [cls, label] = map[s] || ['grace', s];
   return el('span', { class: `badge ${cls}` }, label);
 }
 function ifaceLinkText(i) {
@@ -2104,8 +2104,8 @@ function stopAgent() { if (agentState.timer) { clearInterval(agentState.timer); 
 
 // Health verdict → badge (reuses the existing badge palette). title = reason.
 const HEALTH_BADGE = {
-  ok: ['online', 'HEALTHY'], warn: ['warn', 'WARNING'], bad: ['offline', 'CRITICAL'],
-  down: ['offline', 'DOWN'], stale: ['grace', 'STALE'], unknown: ['grace', 'UNKNOWN'],
+  ok: ['online', 'HEALTHY'], warn: ['warn', 'WARNING'], bad: ['crit', 'CRITICAL'],
+  down: ['down', 'DOWN'], stale: ['stale', 'STALE'], unknown: ['grace', 'UNKNOWN'],
 };
 function healthBadge(h) {
   const [cls, label] = HEALTH_BADGE[h.status] || ['grace', h.status];

@@ -276,12 +276,36 @@ function closeModal() { $('#modal').classList.add('hidden'); $('#modal-card').cl
 // ---- Per-page explanation (hero + slide-in info drawer) -------------------
 // Each view starts with a short hero line and a “More info” button that slides
 // in a panel from the right with a fuller explanation.
+
+// Cross-links used inside the info drawers. A help entry can point at the page
+// that actually owns a feature it mentions: the link closes the drawer and
+// switches to that view (or Settings sub-tab), exactly like clicking the tab.
+// Labels mirror the top nav. A link whose target tab is hidden (licence/role)
+// degrades to plain text, so the help never offers a dead end.
+const VIEW_LABELS = {
+  fleet: 'Overview', overview: 'Traffic', map: 'Sites', geo: 'Destinations', agents: 'Agents',
+  interfaces: 'Interfaces', probes: 'Probes', tests: 'Tests', flows: 'Flows',
+  findings: 'Analysis', locations: 'Locations', enrollment: 'Enrollment', settings: 'Settings',
+};
+function gotoView(viewKey) { closeDrawer(); currentView = viewKey; render(); }
+function viewLink(viewKey, label) {
+  const text = label || VIEW_LABELS[viewKey] || viewKey;
+  const tab = document.querySelector(`.tabs button[data-view="${viewKey}"]`);
+  if (tab && tab.classList.contains('hidden')) return document.createTextNode(text);
+  return el('a', { href: '#', class: 'drawer-link', onclick: (e) => { e.preventDefault(); gotoView(viewKey); } }, text);
+}
+// Deep-link into a specific Settings sub-tab (Analysis, Retention, Traffic types…).
+function settingsLink(tab, label) {
+  return el('a', { href: '#', class: 'drawer-link',
+    onclick: (e) => { e.preventDefault(); closeDrawer(); settingsTab = tab; currentView = 'settings'; render(); } }, label);
+}
+
 const PAGE_INFO = {
   tests: {
     hero: 'Reusable test packages — sets of probe/traffic tests the server pushes to chosen agents to run, on a schedule or on demand.',
     title: 'Tests — packages pushed to agents',
     body: () => [
-      el('p', {}, 'A test package is a named set of tests (ping / TCP / DNS / traceroute / throughput) with a target selector and an optional schedule. The server pushes the tests to the selected, connected agents; each agent runs them and reports back — results appear on the Probes and Traffic pages as usual.'),
+      el('p', {}, 'A test package is a named set of tests (ping / TCP / DNS / traceroute / throughput) with a target selector and an optional schedule. The server pushes the tests to the selected, connected agents; each agent runs them and reports back — results appear on the ', viewLink('probes'), ' and ', viewLink('overview', 'Traffic'), ' pages as usual.'),
       el('h4', {}, 'Targets'),
       el('ul', {},
         el('li', {}, el('strong', {}, 'All agents '), '— every enrolled agent.'),
@@ -317,7 +341,7 @@ const PAGE_INFO = {
         el('li', {}, el('strong', {}, 'DOWN: '), 'no probe targets respond at all.'),
         el('li', {}, el('strong', {}, 'STALE: '), 'no fresh measurements (> 15 min).'),
         el('li', {}, el('strong', {}, 'UNKNOWN: '), 'agent has not run any probe yet.')),
-      el('p', { class: 'muted' }, 'Health is based on active probes — run a few probes per agent (on the agent page) for a complete picture. Metadata only: targets and timings, never packet contents.'),
+      el('p', { class: 'muted' }, 'Health is based on active probes — run a few per agent on ', viewLink('probes'), ' (or schedule them fleet-wide via ', viewLink('tests'), ') for a complete picture; the interface signal comes from ', viewLink('interfaces'), '. Metadata only: targets and timings, never packet contents.'),
     ],
   },
   agent: {
@@ -334,7 +358,7 @@ const PAGE_INFO = {
         el('li', {}, el('strong', {}, 'Probes: '), 'run ping/TCP/DNS/traceroute against a target and see RTT/loss/jitter — click “History” for RTT over time or “Path” for traceroute hops.'),
         el('li', {}, el('strong', {}, 'Interfaces: '), 'per-interface utilization, errors, discards and link status from the latest measurement. A virtual/idle port that is simply down (docker0, veth…, tunnels) shows a neutral IDLE — only a real link down reads DOWN.'),
         el('li', {}, el('strong', {}, 'Traffic: '), 'current bandwidth — most useful here when you are already investigating a specific agent.')),
-      el('p', { class: 'muted' }, 'Return to the fleet overview with “← Overview”.'),
+      el('p', { class: 'muted' }, 'Return to the fleet overview with “← Overview”. Fleet-wide views of the same data sources: ', viewLink('probes'), ' · ', viewLink('interfaces'), ' · ', viewLink('overview', 'Traffic'), '.'),
     ],
   },
   overview: {
@@ -353,16 +377,17 @@ const PAGE_INFO = {
       el('ul', {},
         el('li', {}, 'KPI strip at the top: current RX/TX, online agents and number of locations.'),
         el('li', {}, 'The storage line shows disk usage + estimated consumption per day (“Details” expands the DB/disk breakdown).'),
-        el('li', {}, 'At the bottom you can expand Top agents, History (select agent + period) and Traffic type (DNS, Facebook etc.).')),
+        el('li', {}, 'At the bottom you can expand Top agents, History (select agent + period) and Traffic type (DNS, Facebook etc.) — those categories are defined under ', settingsLink('types', 'Settings → Traffic types'), '.')),
+      el('p', { class: 'muted' }, 'Related views: ', viewLink('geo'), ' (where the traffic goes on a map) and ', viewLink('flows'), ' (individual conversations).'),
     ],
   },
   map: {
     hero: 'Your sites on a map — each marker coloured by the worst agent health at that site.',
     title: 'Sites',
     body: () => [
-      el('p', {}, 'Each location with coordinates is a marker, coloured by the worst health verdict among its agents (green = healthy, amber = warning, red = critical, grey = unknown/offline) — the same verdict as the Overview. The page refreshes itself so the colours stay live.'),
+      el('p', {}, 'Each location with coordinates is a marker, coloured by the worst health verdict among its agents (green = healthy, amber = warning, red = critical, grey = unknown/offline) — the same verdict as ', viewLink('fleet', 'Overview'), '. The page refreshes itself so the colours stay live.'),
       el('p', {}, 'Click a marker for the site\'s agents and how many are online; click an agent in the popup to open it.'),
-      el('p', { class: 'muted' }, 'Add coordinates per location under the Locations tab (Edit). Map tiles come from the server\'s configured (EU/self-hosted) source. If the map is missing, the library could not be reached — a list is shown instead.'),
+      el('p', { class: 'muted' }, 'Add coordinates per location under ', viewLink('locations'), ' (Edit). Map tiles come from the server\'s configured (EU/self-hosted) source. If the map is missing, the library could not be reached — a list is shown instead.'),
     ],
   },
   agents: {
@@ -377,9 +402,10 @@ const PAGE_INFO = {
         el('li', {}, 'Last reported: the time of the agent\'s most recent traffic measurement.')),
       el('h4', {}, 'Actions'),
       el('ul', {},
-        el('li', {}, '”+ New agent” issues a one-time code for installation (operator+).'),
+        el('li', {}, '”+ New agent” issues a one-time code for installation (operator+) — or use ', viewLink('enrollment'), ' for a ready-to-run one-liner.'),
         el('li', {}, '”Run test” asks the agent to measure immediately; “Traffic” shows the measurements.'),
         el('li', {}, '”Edit” sets name, location, notes and traffic source (proc, SNMP, NetFlow or sFlow).')),
+      el('p', { class: 'muted' }, 'Group agents by site under ', viewLink('locations'), '; see them all with a single health verdict on ', viewLink('fleet', 'Overview'), '.'),
     ],
   },
   interfaces: {
@@ -392,7 +418,7 @@ const PAGE_INFO = {
         el('li', {}, el('strong', {}, 'Status: '), 'DOWN (a real link is down), ERR (input/output errors or ≥90% utilized), WARN (discards or ≥75% utilized), IDLE (a virtual/idle port — docker0, veth…, VPN tunnels — that is down only because nothing is using it, which is normal), OK.'),
         el('li', {}, el('strong', {}, 'Utilization: '), 'rate against link speed (only when speed is known).'),
         el('li', {}, el('strong', {}, 'Errors/s and Discards/s: '), 'CRC/input errors and dropped packets (congestion) respectively.')),
-      el('p', { class: 'muted' }, 'Data comes from the agent\'s traffic source: /proc/net/dev (host) or SNMP IF-MIB (device). Errors/discards/link status require an updated agent. An IDLE virtual interface never escalates an agent to CRITICAL — only a real link going down does.'),
+      el('p', { class: 'muted' }, 'Data comes from the agent\'s traffic source: /proc/net/dev (host) or SNMP IF-MIB (device). Errors/discards/link status require an updated agent. An IDLE virtual interface never escalates an agent to CRITICAL — only a real link going down does. Interface state also feeds the health verdict on ', viewLink('fleet', 'Overview'), '.'),
     ],
   },
   probes: {
@@ -407,14 +433,14 @@ const PAGE_INFO = {
         el('li', {}, 'DNS: time to resolve a name (and which address was returned).'),
         el('li', {}, 'Traceroute: the path (hops) to the target with RTT per hop.')),
       el('p', {}, 'Select agent + type + target and click “Run probe”. The agent must be connected; the result comes back a moment later and is added to the history so you can see RTT/loss over time.'),
-      el('p', { class: 'muted' }, 'Metadata only: targets and timings — never packet contents.'),
+      el('p', { class: 'muted' }, 'To run the same probes on a schedule across many agents, use ', viewLink('tests'), '; probe results also drive the health verdict on ', viewLink('fleet', 'Overview'), '. Metadata only: targets and timings — never packet contents.'),
     ],
   },
   flows: {
     hero: 'Inspect specific conversations (flows): who talks to whom, on which ports — and who is scanning.',
     title: 'Flows — conversations',
     body: () => [
-      el('p', {}, 'While Traffic shows volumes and the Destinations map shows where it goes, Flows lets you drill into individual conversations (5-tuple metadata from NetFlow/sFlow) for one agent.'),
+      el('p', {}, 'While ', viewLink('overview', 'Traffic'), ' shows volumes and the ', viewLink('geo', 'Destinations'), ' map shows where it goes, Flows lets you drill into individual conversations (5-tuple metadata from NetFlow/sFlow) for one agent.'),
       el('h4', {}, 'Filters'),
       el('ul', {},
         el('li', {}, 'Peer: show only conversations where a specific IP is source or destination (click a talker to set it).'),
@@ -438,12 +464,16 @@ const PAGE_INFO = {
       el('ul', {},
         el('li', {}, 'Ringed dots = internal sites, coloured by agent health (green/amber/red); click for status + findings.'),
         el('li', {}, 'Circles = external destinations; size by traffic volume, colour by deviation (neutral → yellow → red).')),
-      el('h4', {}, 'Selection'),
+      el('h4', {}, 'Get an external destination'),
+      el('ol', {},
+        el('li', {}, 'Click a circle on the map — or press ', el('strong', {}, '“Select region”'), ' and drag a box to aggregate every destination in an area.'),
+        el('li', {}, 'The side panel then shows that destination\'s breakdown: bytes/flows, direction (in/out), protocol and ASN, plus any related findings.'),
+        el('li', {}, 'To see the individual conversations behind it (per-peer 5-tuple, ports, scans/fan-out), open ', viewLink('flows'), '.')),
+      el('h4', {}, 'Selection buttons'),
       el('ul', {},
-        el('li', {}, 'Click a destination: see findings + flow details (peers, direction, protocol, time series).'),
-        el('li', {}, '”Select area” and drag a box to aggregate all destinations in the area.'),
-        el('li', {}, '”Clear selection” returns to the overview.')),
-      el('p', { class: 'muted' }, 'Map tiles are fetched from the server\'s config (EU/self-hosted), not a hardcoded US source.'),
+        el('li', {}, el('strong', {}, '“Select region” '), '— drag a box to aggregate all destinations inside it (with combined findings).'),
+        el('li', {}, el('strong', {}, '“Clear selection” '), '— return to the overview summary.')),
+      el('p', { class: 'muted' }, 'Map tiles are fetched from the server\'s config (EU/self-hosted), not a hardcoded US source. Destinations come from the same NetFlow/sFlow flows you drill into on ', viewLink('flows'), '; volumes by type are on ', viewLink('overview', 'Traffic'), '.'),
     ],
   },
   findings: {
@@ -453,13 +483,13 @@ const PAGE_INFO = {
       el('p', {}, 'The server analyses agent measurements locally (no cloud, no ML library) and raises a finding when a metric deviates significantly from its own baseline, flatlines (sensor/agent stop) or correlates with other errors.'),
       el('h4', {}, 'Severity'),
       el('ul', {},
-        el('li', {}, 'CRIT: large deviation (default ≥ 4σ — adjustable in Settings → Analysis).'),
+        el('li', {}, 'CRIT: large deviation (default ≥ 4σ — adjustable in ', settingsLink('analyse', 'Settings → Analysis'), ').'),
         el('li', {}, 'WARN: notable deviation (default ≥ 3σ) or flatline.'),
         el('li', {}, 'INFO: lower severity.')),
       el('h4', {}, 'Acknowledgement'),
       el('p', {}, 'Operators and administrators can acknowledge a finding once it has been seen/handled.'),
       el('h4', {}, 'AI assistant'),
-      el('p', {}, 'If enabled (opt-in) you can ask in natural language — the assistant replies based on the latest findings, not raw data.'),
+      el('p', {}, 'If enabled (opt-in) you can ask in natural language — the assistant replies based on the latest findings, not raw data. Turn it on and pick the model under ', settingsLink('analyse', 'Settings → Analysis'), '.'),
       el('p', { class: 'muted' }, 'New findings appear live via WebSocket and can also be fetched via REST.'),
     ],
   },
@@ -470,6 +500,7 @@ const PAGE_INFO = {
       el('p', {}, 'A location groups multiple agents (e.g. an office or a site).'),
       el('h4', {}, 'Live traffic'),
       el('p', {}, '”Traffic” opens a live panel that sums all agent traffic in the location and updates every 3 seconds — useful for seeing overall load and spotting problems.'),
+      el('p', { class: 'muted' }, 'Give a location coordinates here to place it on the ', viewLink('map', 'Sites map'), '; the fleet-wide live picture is on ', viewLink('overview', 'Traffic'), '.'),
     ],
   },
   enrollment: {
@@ -494,6 +525,7 @@ const PAGE_INFO = {
         el('li', {}, el('strong', {}, 'used: '), 'fully redeemed — an agent enrolled with it. Shown for a consumed code even after its time runs out.'),
         el('li', {}, el('strong', {}, 'expired: '), 'ran out of time WITHOUT being used up.')),
       el('p', { class: 'muted' }, 'The code only opens the install window. Each agent it enrols gets its own permanent token that stays valid until the agent is deleted (or its token revoked) — so an agent stays online regardless of whether its code later reads "used" or "expired". The Agents column shows each enrolled agent’s live online/offline state; click one to open it.'),
+      el('p', { class: 'muted' }, 'Once enrolled, agents appear under ', viewLink('agents'), ' and on ', viewLink('fleet', 'Overview'), '.'),
     ],
   },
   users: {
@@ -506,6 +538,7 @@ const PAGE_INFO = {
         el('li', {}, 'operator: create/edit agents, locations and enrollment codes.'),
         el('li', {}, 'viewer: read-only access.')),
       el('p', {}, 'The last admin cannot be deleted or demoted.'),
+      el('p', { class: 'muted' }, 'Operators manage those resources under ', viewLink('agents'), ', ', viewLink('locations'), ' and ', viewLink('enrollment'), '.'),
     ],
   },
   license: {
@@ -526,15 +559,15 @@ const PAGE_INFO = {
       el('p', {}, 'Each tab covers one topic. Most settings can be edited here and take effect immediately without a restart; a few are read-only and controlled via the server\'s .env because they contain secrets.'),
       el('h4', {}, 'Editable here (stored in the database)'),
       el('ul', {},
-        el('li', {}, 'Analysis: thresholds for anomaly detection — CRIT/WARN in σ, baseline window and how many measurements are required before alerting.'),
-        el('li', {}, 'Retention: how long raw/aggregated data and findings are kept before being cleaned up.'),
-        el('li', {}, 'Traffic types: define the categories (DNS, Facebook …) from service ports and destination ASN. Shown on Traffic → Traffic type.'),
-        el('li', {}, 'Map: tile and geocoder source for the maps (use an EU/self-hosted source in production).')),
+        el('li', {}, settingsLink('analyse', 'Analysis'), ': thresholds for anomaly detection — CRIT/WARN in σ, baseline window and how many measurements are required before alerting.'),
+        el('li', {}, settingsLink('retention', 'Retention'), ': how long raw/aggregated data and findings are kept before being cleaned up.'),
+        el('li', {}, settingsLink('types', 'Traffic types'), ': define the categories (DNS, Facebook …) from service ports and destination ASN. Shown on ', viewLink('overview', 'Traffic'), ' → Traffic type.'),
+        el('li', {}, settingsLink('map', 'Map'), ': tile and geocoder source for the maps (use an EU/self-hosted source in production).')),
       el('h4', {}, 'Read-only (set in .env / requires restart)'),
       el('ul', {},
-        el('li', {}, 'Alerting: channels (e-mail/webhook/syslog) — carries secrets (SMTP password, webhook HMAC), so they are kept in .env.'),
-        el('li', {}, 'Users: create/edit staff and roles (admin only).'),
-        el('li', {}, 'License: status + “Revalidate now”.')),
+        el('li', {}, settingsLink('alerting', 'Alerting'), ': channels (e-mail/webhook/syslog) — carries secrets (SMTP password, webhook HMAC), so they are kept in .env.'),
+        el('li', {}, settingsLink('users', 'Users'), ': create/edit staff and roles (admin only).'),
+        el('li', {}, settingsLink('license', 'License'), ': status + “Revalidate now”.')),
       el('p', { class: 'muted' }, 'Editable changes are stored in app_settings and are reloaded on startup, so they survive a restart.'),
     ],
   },

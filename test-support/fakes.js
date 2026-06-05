@@ -50,6 +50,8 @@ function makeUsersRepo(overrides = {}) {
     update: overrides.update || (async () => null),
     remove: overrides.remove || (async () => false),
     countByRole: overrides.countByRole || (async () => 1),
+    getPreferences: overrides.getPreferences || (async () => ({})),
+    updatePreferences: overrides.updatePreferences || (async (id, patch) => ({ ...patch })),
   };
 }
 

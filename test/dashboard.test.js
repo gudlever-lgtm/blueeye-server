@@ -67,3 +67,17 @@ test('dashboard exposes settings (users+license) tab, auto-refresh and traffic c
   assert.match(js, /storageCards/); // server disk + database storage cards
   assert.match(js, /\/system\/storage/); // calls the storage endpoint
 });
+
+test('dashboard offers selectable colour themes saved per user', async () => {
+  const app = makeApp();
+  const js = (await request(app).get('/app.js')).text;
+  assert.match(js, /const THEMES =/); // colour-theme catalogue (beyond light/dark)
+  assert.match(js, /settingsAppearanceView/); // Settings → Appearance theme picker
+  assert.match(js, /\/me\/preferences/); // persists the chosen theme per user
+  assert.match(js, /loadProfile/); // applies the saved theme on session start
+
+  const css = (await request(app).get('/styles.css')).text;
+  assert.match(css, /\[data-theme="nord"\]/); // a new colour theme is defined
+  assert.match(css, /\[data-theme="solarized-dark"\]/);
+  assert.match(css, /\.theme-grid/); // picker styling
+});

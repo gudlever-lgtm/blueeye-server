@@ -216,16 +216,24 @@ const PAGE_INFO = {
     title: 'Overview — fleet health',
     body: () => [
       el('p', {}, 'The landing page collects all agents with a single health stamp, so you immediately see where something is wrong. Rows are sorted worst-first and refresh continuously. Click an agent to drill into its measurements.'),
+      el('h4', {}, 'Two independent verdicts'),
+      el('ul', {},
+        el('li', {}, el('strong', {}, 'Health '), '— is the monitored network OK right now? Driven by active reachability, loss, latency, jitter and interface/link state.'),
+        el('li', {}, el('strong', {}, 'Data quality '), '— can we trust the numbers this agent sends? A separate check of collector packet drops, agent⇄server clock skew and agent version. ', el('em', {}, 'It never looks at link state'), ' — so an agent can read CRITICAL (a link is down) while data quality stays OK (the reading itself is reliable). The two are not in conflict; they answer different questions.')),
       el('h4', {}, 'How health is calculated'),
       el('ul', {},
         el('li', {}, el('strong', {}, 'Reachability: '), 'does the agent\'s probe target respond? A target with no reply pulls health down immediately.'),
         el('li', {}, el('strong', {}, 'Packet loss: '), 'loss in % (≥2% = warning, ≥20% = critical).'),
         el('li', {}, el('strong', {}, 'Latency: '), 'latest RTT compared against the target\'s OWN baseline (robust median + MAD) — “slow” is relative to what is normal for that specific target, not a fixed threshold.'),
-        el('li', {}, el('strong', {}, 'Jitter: '), 'variation in RTT (≥30 ms = warning, ≥100 ms = critical).')),
+        el('li', {}, el('strong', {}, 'Jitter: '), 'variation in RTT (≥30 ms = warning, ≥100 ms = critical).'),
+        el('li', {}, el('strong', {}, 'Interfaces: '), 'a physical link reported down, interface errors or saturation also pull health down. A down virtual/idle port (docker0, veth…, VPN tunnels) is expected and does ', el('em', {}, 'not'), ' count.')),
       el('h4', {}, 'Status stamps'),
       el('ul', {},
-        el('li', {}, 'HEALTHY: all targets reachable, low latency/loss. WARNING / CRITICAL: one or more signals above threshold (hover for explanation).'),
-        el('li', {}, 'DOWN: no targets respond. STALE: no fresh measurements (> 15 min). UNKNOWN: agent has not run any probe yet.')),
+        el('li', {}, el('strong', {}, 'HEALTHY: '), 'all targets reachable, low latency/loss, links OK.'),
+        el('li', {}, el('strong', {}, 'WARNING / CRITICAL: '), 'one or more signals above threshold — heavy loss, a latency spike, or a real link down/errored. Hover the stamp for the exact reason.'),
+        el('li', {}, el('strong', {}, 'DOWN: '), 'no probe targets respond at all.'),
+        el('li', {}, el('strong', {}, 'STALE: '), 'no fresh measurements (> 15 min).'),
+        el('li', {}, el('strong', {}, 'UNKNOWN: '), 'agent has not run any probe yet.')),
       el('p', { class: 'muted' }, 'Health is based on active probes — run a few probes per agent (on the agent page) for a complete picture. Metadata only: targets and timings, never packet contents.'),
     ],
   },
@@ -234,9 +242,14 @@ const PAGE_INFO = {
     title: 'Agent — details',
     body: () => [
       el('p', {}, 'The combined troubleshooting page for one agent. At the top a health summary with the numbers driving the assessment; below you can expand the individual data sources.'),
+      el('h4', {}, 'Reading the top summary'),
+      el('ul', {},
+        el('li', {}, el('strong', {}, 'Health stamp '), '(HEALTHY / WARNING / CRITICAL / DOWN / STALE) — the worst of reachability, loss, latency, jitter and interface/link state. The line beside it is the single reason that drove it (e.g. “Link down (eth0)”).'),
+        el('li', {}, el('strong', {}, 'Data quality '), '(OK / WARN / BAD) — a separate verdict on whether the agent\'s readings can be trusted: collector packet drops, clock skew vs. the server, and agent version. This is why you can see CRITICAL up top and “Data quality: OK” just below — the first judges the network, the second judges the measurement.')),
+      el('h4', {}, 'Data sources'),
       el('ul', {},
         el('li', {}, el('strong', {}, 'Probes: '), 'run ping/TCP/DNS/traceroute against a target and see RTT/loss/jitter — click “History” for RTT over time or “Path” for traceroute hops.'),
-        el('li', {}, el('strong', {}, 'Interfaces: '), 'per-interface utilization, errors, discards and link status from the latest measurement.'),
+        el('li', {}, el('strong', {}, 'Interfaces: '), 'per-interface utilization, errors, discards and link status from the latest measurement. A virtual/idle port that is simply down (docker0, veth…, tunnels) shows a neutral IDLE — only a real link down reads DOWN.'),
         el('li', {}, el('strong', {}, 'Traffic: '), 'current bandwidth — most useful here when you are already investigating a specific agent.')),
       el('p', { class: 'muted' }, 'Return to the fleet overview with “← Overview”.'),
     ],
@@ -292,10 +305,10 @@ const PAGE_INFO = {
       el('p', {}, 'Shows each agent\'s network interfaces based on the latest measurement — what network/firewall engineers look at when something is wrong physically or on a link.'),
       el('h4', {}, 'Columns'),
       el('ul', {},
-        el('li', {}, 'Status: DOWN (link down), ERR (input/output errors or ≥90% utilized), WARN (discards or ≥75% utilized), OK.'),
-        el('li', {}, 'Utilization: rate against link speed (only when speed is known).'),
-        el('li', {}, 'Errors/s and Discards/s: CRC/input errors and dropped packets (congestion) respectively.')),
-      el('p', { class: 'muted' }, 'Data comes from the agent\'s traffic source: /proc/net/dev (host) or SNMP IF-MIB (device). Errors/discards/link status require an updated agent.'),
+        el('li', {}, el('strong', {}, 'Status: '), 'DOWN (a real link is down), ERR (input/output errors or ≥90% utilized), WARN (discards or ≥75% utilized), IDLE (a virtual/idle port — docker0, veth…, VPN tunnels — that is down only because nothing is using it, which is normal), OK.'),
+        el('li', {}, el('strong', {}, 'Utilization: '), 'rate against link speed (only when speed is known).'),
+        el('li', {}, el('strong', {}, 'Errors/s and Discards/s: '), 'CRC/input errors and dropped packets (congestion) respectively.')),
+      el('p', { class: 'muted' }, 'Data comes from the agent\'s traffic source: /proc/net/dev (host) or SNMP IF-MIB (device). Errors/discards/link status require an updated agent. An IDLE virtual interface never escalates an agent to CRITICAL — only a real link going down does.'),
     ],
   },
   probes: {
@@ -1804,7 +1817,16 @@ function stopIfaces() { if (ifaceState.timer) { clearInterval(ifaceState.timer);
 // so there is one source of truth for each table.
 
 const IFACE_RANK = { down: 0, bad: 1, warn: 2, ok: 3 };
-function ifaceStatusBadge(s) {
+function ifaceStatusBadge(i) {
+  // Accepts an interface object (preferred) or a bare status string.
+  const iface = i && typeof i === 'object' ? i : null;
+  const s = iface ? iface.status : i;
+  // A virtual/idle port that is merely down (docker0, veth…, VPN tunnels) is not
+  // a fault — show a neutral IDLE chip rather than a red DOWN.
+  if (iface && iface.virtual && iface.linkDown) {
+    return el('span', { class: 'badge grace', title: 'Virtual/idle interface — link down is expected, not a fault' }, 'IDLE');
+  }
+  // Severity palette: bad/down read red (consistent with the rest of the UI).
   const map = { ok: ['online', 'OK'], warn: ['warn', 'WARN'], bad: ['error', 'ERR'], down: ['down', 'DOWN'] };
   const [cls, label] = map[s] || ['grace', s];
   return el('span', { class: `badge ${cls}` }, label);
@@ -1822,7 +1844,7 @@ function interfaceTable(interfaces) {
     el('thead', {}, el('tr', {}, ...['Interface', 'Status', 'Link', 'Utilization', '↓ RX', '↑ TX', 'Errors/s', 'Discards/s'].map((h) => el('th', {}, h)))),
     el('tbody', {}, ...ifs.map((i) => el('tr', {},
       el('td', {}, esc(i.iface)),
-      el('td', {}, ifaceStatusBadge(i.status)),
+      el('td', {}, ifaceStatusBadge(i)),
       el('td', { class: 'muted' }, ifaceLinkText(i)),
       el('td', {}, i.utilPct != null ? el('div', { class: 'util' }, usageBar(i.utilPct), el('span', { class: 'muted num' }, `${i.utilPct}%`)) : el('span', { class: 'muted' }, '–')),
       el('td', { class: 'num' }, `${fmtBytes(i.rxBytesPerSec)}/s`),

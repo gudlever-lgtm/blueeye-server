@@ -3875,9 +3875,27 @@ async function settingsUpdatesView() {
     stat('Server', ver.server ? `v${ver.server}` : '–'),
     stat('Agent (served)', ver.agent ? `v${ver.agent}` : '–')));
 
+  // Re-read the agent source from disk so a freshly-pulled version is served
+  // without restarting the server. admin only.
+  if (canDelete()) {
+    root.append(el('div', { class: 'row-actions' },
+      el('button', {
+        class: 'small',
+        title: 'Re-read the agent source from disk so a freshly-pulled version is served — no server restart needed',
+        onclick: async () => {
+          try {
+            const r = await api('/system/agent-source/reload', { method: 'POST' });
+            toast(r && r.version ? `Agent source reloaded — now serving v${r.version}.` : 'Agent source reloaded.');
+            render();
+          } catch (err) { toast(err.message, true); }
+        },
+      }, 'Reload agent source')));
+    root.append(el('p', { class: 'muted' }, 'After pulling a new agent version on the server host, reload to publish it without restarting the server.'));
+  }
+
   const cur = ver.agent || null;
   const withVer = agents.filter((a) => a.capabilities && a.capabilities.agentVersion);
-  const behind = cur ? withVer.filter((a) => a.capabilities.agentVersion !== cur) : [];
+  const behind = withVer.filter((a) => agentIsBehind(a, cur));
 
   root.append(el('div', { class: 'cards' },
     stat('Agents reporting', `${withVer.length} / ${agents.length}`),

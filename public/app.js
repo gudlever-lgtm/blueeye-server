@@ -476,7 +476,12 @@ const PAGE_INFO = {
         el('li', {}, 'The source bundle is always verified against the checksum before building or running.'),
         el('li', {}, 'The cert fingerprint is pinned on the agent (when the server runs behind TLS).')),
       el('p', { class: 'muted' }, 'The agent is built + run on the target (Docker or Node) — no pre-built binaries. Also works on air-gapped networks: the source is served from the BlueEye server itself.'),
-      el('p', { class: 'muted' }, 'Status: active (usable), used (used up), expired (expired).'),
+      el('h4', {}, 'Code status vs. the agent'),
+      el('ul', {},
+        el('li', {}, el('strong', {}, 'active: '), 'still usable — has uses left and has not expired.'),
+        el('li', {}, el('strong', {}, 'used: '), 'fully redeemed — an agent enrolled with it. Shown for a consumed code even after its time runs out.'),
+        el('li', {}, el('strong', {}, 'expired: '), 'ran out of time WITHOUT being used up.')),
+      el('p', { class: 'muted' }, 'The code only opens the install window. Each agent it enrols gets its own permanent token that stays valid until the agent is deleted (or its token revoked) — so an agent stays online regardless of whether its code later reads "used" or "expired". The Agents column shows each enrolled agent’s live online/offline state; click one to open it.'),
     ],
   },
   users: {
@@ -3630,12 +3635,24 @@ views.enrollment = async () => {
   root.append(el('div', { class: 'section-head' }, el('h3', {}, 'Active codes'),
     canWrite() ? el('button', { class: 'small ghost', onclick: () => createCode() }, '+ New code (advanced)') : null));
   if (!codes.length) { root.append(el('div', { class: 'empty' }, 'No codes yet — use "Add agent" above.')); return root; }
+  // Codes are one-time install tickets; the agent's real credential is separate.
+  root.append(el('p', { class: 'muted enroll-note' }, 'Codes are one-time install tickets. Once an agent enrols it stays connected on its own permanent token — independent of the code’s status — so a "used" or "expired" code never disconnects the agent shown beside it.'));
+  // The agent(s) a code enrolled, each a clickable live online/offline badge.
+  const agentsCell = (agents) => ((agents && agents.length)
+    ? el('div', { class: 'code-agents' }, ...agents.map((a) => el('span', {
+      class: 'code-agent', role: 'button', tabindex: '0',
+      title: `${a.online ? 'Online' : 'Offline'} — open agent`,
+      onclick: () => openAgent(a.id),
+      onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openAgent(a.id); } },
+    }, el('span', { class: `badge ${a.online ? 'online' : 'offline'}` }, a.online ? 'online' : 'offline'), esc(a.name))))
+    : el('span', { class: 'muted' }, '–'));
   root.append(el('table', {},
-    el('thead', {}, el('tr', {}, ...['ID', 'Status', 'Uses', 'Location', 'Expires', 'Created', ''].map((h) => el('th', {}, h)))),
+    el('thead', {}, el('tr', {}, ...['ID', 'Status', 'Uses', 'Agents', 'Location', 'Expires', 'Created', ''].map((h) => el('th', {}, h)))),
     el('tbody', {}, ...codes.map((c) => el('tr', {},
       el('td', {}, String(c.id)),
       el('td', {}, el('span', { class: `badge ${c.status}` }, c.status)),
       el('td', {}, c.max_uses > 1 ? `${c.uses_remaining}/${c.max_uses}` : (c.uses_remaining === 0 ? 'used' : '1')),
+      el('td', {}, agentsCell(c.agents)),
       el('td', {}, c.location_name || '–'),
       el('td', { class: 'muted' }, fmtDate(c.expires_at)),
       el('td', { class: 'muted' }, fmtDate(c.created_at)),

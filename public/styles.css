@@ -664,3 +664,9 @@ button.active-btn { outline: 2px solid var(--accent); }
 .enroll-live.ok { background: rgba(34,197,94,.15); color: var(--ok); }
 .enroll-live.ok .dot { background: var(--ok); }
 @keyframes enroll-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+.enroll-note { margin: 0 0 12px; }
+/* The agent(s) an enrollment code enrolled, with their live status (Agents col). */
+.code-agents { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
+.code-agent { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.code-agent:hover { text-decoration: underline; }
+.code-agent:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }

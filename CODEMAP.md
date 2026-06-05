@@ -115,6 +115,7 @@ Later migrations add:
 | 015 | (index only) | `idx_probe_ts` for the fleet-wide probe scan |
 | 019 | `probe_results.status` / `.cert_expiry_days` | http probe (status + TLS cert expiry) |
 | 020 | (column) | per-user UI preferences — `users.preferences` JSON (colour theme) |
+| 021 | (column) | `agents.enrollment_code_id` → links an agent to the code it enrolled with (Enrollment page shows each code's agents + live status); `ON DELETE SET NULL` |
 
 Interface health, traffic-type categories and **fleet health** add **no** tables — they
 derive from the existing `results.payload.traffic` (and `flow_records.asn` for org

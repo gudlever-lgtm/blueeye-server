@@ -1,22 +1,28 @@
 #!/usr/bin/env bash
 #
-# Deploys the BlueEye stack on this host:
-#   1) updates the three repos (blueeye-server, blueeye-licens, blueeye-agent)
-#      on the deploy branch, and
-#   2) rebuilds + (re)starts the docker compose stack.
+# Deploys the customer BlueEye stack on this host:
+#   1) updates blueeye-server + blueeye-agent (the agent is served as source) on
+#      the deploy branch, and
+#   2) rebuilds + (re)starts the server (and demo agent) in the compose stack.
+#
+# The license server (blueeye-licens) is NOT deployed here — it is vendor-managed.
+# Use scripts/deploy-licens.sh for that. (If a licens container is already running
+# it's left running as the server's dependency; this script never rebuilds it.)
 #
 # Usage:
 #   ./scripts/deploy.sh                          # deploys 'main' (the default)
 #   BLUEEYE_BRANCH=some-branch ./scripts/deploy.sh   # deploy another branch
 #
-# Expects the three repos cloned as siblings, e.g.:
-#   /var/www/blueeye.gnf.dk/{blueeye-server,blueeye-licens,blueeye-agent}
+# Expects the repos cloned as siblings, e.g.:
+#   /var/www/blueeye.gnf.dk/{blueeye-server,blueeye-agent}
 set -euo pipefail
 
 # --- Config ----------------------------------------------------------------
 # Deploy from main by default; override per-run with BLUEEYE_BRANCH.
 BRANCH="${BLUEEYE_BRANCH:-main}"
-REPOS=(blueeye-server blueeye-licens blueeye-agent)
+REPOS=(blueeye-server blueeye-agent)
+# Compose services this script (re)builds. licens is intentionally excluded.
+SERVICES=(server agent)
 
 # Resolve paths from the script's own location so it works from any cwd.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -78,15 +84,14 @@ if [ ! -f .env ]; then
   warn "For the demo run: node scripts/dev-bootstrap.js   (generates keys + .env)"
 fi
 
-log "Building and starting the stack"
-"${DC[@]}" up --build -d
+log "Building and starting: ${SERVICES[*]} (licens is left to deploy-licens.sh)"
+"${DC[@]}" up -d --build "${SERVICES[@]}"
 
 log "Stack status"
 "${DC[@]}" ps
 
 # --- Health check (non-fatal) ---------------------------------------------
 SERVER_PORT="${SERVER_HOST_PORT:-3000}"
-LICENS_PORT="${LICENS_HOST_PORT:-4000}"
 
 http_ok() {
   # $1=url — returns 0 if it answers HTTP 200 within the timeout.
@@ -111,8 +116,7 @@ wait_health() {
   return 1
 }
 
-log "Waiting for services to become healthy"
-wait_health licens "http://localhost:${LICENS_PORT}/health" || true
+log "Waiting for the server to become healthy"
 wait_health server "http://localhost:${SERVER_PORT}/health" || true
 
 log "Done."

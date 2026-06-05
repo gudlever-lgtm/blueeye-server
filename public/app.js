@@ -486,7 +486,8 @@ const views = {};
 let locationCache = [];
 
 views.agents = async () => {
-  const [agents, locations] = await Promise.all([api('/agents'), api('/locations')]);
+  const [agents, locations, ver] = await Promise.all([api('/agents'), api('/locations'), api('/system/version').catch(() => null)]);
+  const currentAgentVersion = ver && ver.agent ? ver.agent : null;
   locationCache = locations;
   const root = el('div');
   const countLabel = el('span', { class: 'muted' }, `${agents.length} total`);
@@ -537,7 +538,8 @@ views.agents = async () => {
   function matchesFilter(a) {
     if (!filter) return true;
     return [a.id, a.display_name, a.hostname, a.platform, a.arch, a.status,
-      a.location_name, a.monitor_config && a.monitor_config.source]
+      a.location_name, a.monitor_config && a.monitor_config.source,
+      a.capabilities && a.capabilities.agentVersion]
       .filter((v) => v != null).join(' ').toLowerCase().includes(filter);
   }
   function update() {
@@ -551,7 +553,7 @@ views.agents = async () => {
       return sortDir === 'asc' ? r : -r;
     });
     tbody.replaceChildren(...(list.length
-      ? list.map(agentRow)
+      ? list.map((a) => agentRow(a, currentAgentVersion))
       : [el('tr', {}, el('td', { colspan: String(columns.length), class: 'muted' }, 'No agents match your filter.'))]));
     columns.forEach((c, i) => {
       if (!c.key) return;
@@ -567,11 +569,11 @@ views.agents = async () => {
 };
 
 // One agent table row (extracted so the agents view can re-render on filter/sort).
-function agentRow(a) {
+function agentRow(a, currentAgentVersion) {
   return el('tr', {},
     el('td', {}, String(a.id)),
     el('td', {}, el('div', {}, a.display_name || a.hostname), a.display_name ? el('div', { class: 'muted' }, a.hostname) : null),
-    el('td', {}, `${a.platform} / ${a.arch}`),
+    el('td', {}, `${a.platform} / ${a.arch}`, agentVersionLine(a, currentAgentVersion)),
     el('td', {}, el('span', { class: `badge ${a.status}` }, a.status)),
     el('td', {}, agentHealthCell(a)),
     el('td', {}, a.location_name || '–'),
@@ -597,6 +599,18 @@ function agentHealthRank(a) {
   if (a.status !== 'online') return 2;
   if (ageMs <= 5 * 60 * 1000) return 0;
   return 1;
+}
+
+// Small "v<x>" line under the platform, with an "update" badge when the agent is
+// behind the version the server currently serves. Version comes from the agent's
+// reported capabilities (capabilities.agentVersion).
+function agentVersionLine(a, current) {
+  const v = a.capabilities && a.capabilities.agentVersion;
+  if (!v) return null;
+  const behind = current && v !== current;
+  return el('div', { class: 'muted' },
+    `v${v}${behind ? ' ' : ''}`,
+    behind ? el('span', { class: 'badge warn', title: `Current agent version is ${current}` }, 'update') : null);
 }
 
 // Health derived from how recently the agent last reported in. online + a fresh
@@ -3293,7 +3307,7 @@ views.settings = async () => {
   const root = el('div');
   const isAdmin = role === 'admin';
   const subtabs = [];
-  if (isAdmin) subtabs.push(['analyse', 'Analysis'], ['alerting', 'Alerting'], ['maintenance', 'Maintenance'], ['retention', 'Retention'], ['types', 'Traffic types'], ['map', 'Map'], ['users', 'Users']);
+  if (isAdmin) subtabs.push(['analyse', 'Analysis'], ['alerting', 'Alerting'], ['maintenance', 'Maintenance'], ['updates', 'Updates'], ['retention', 'Retention'], ['types', 'Traffic types'], ['map', 'Map'], ['users', 'Users']);
   subtabs.push(['license', 'License']);
   if (!settingsTab || !subtabs.some(([k]) => k === settingsTab)) settingsTab = subtabs[0][0];
 
@@ -3309,6 +3323,7 @@ views.settings = async () => {
     analyse: settingsAnalyseView,
     alerting: settingsAlertingView,
     maintenance: settingsMaintenanceView,
+    updates: settingsUpdatesView,
     retention: settingsRetentionView,
   };
   let content;
@@ -3326,6 +3341,47 @@ views.settings = async () => {
 function licenseBadge(license, feature) {
   const ok = license && license[feature] === true;
   return el('span', { class: `badge ${ok ? 'active' : 'offline'}` }, `Licence: ${feature} ${ok ? 'yes' : 'no'}`);
+}
+
+// Settings -> Updates: the server's version and the agent version it serves, plus
+// which enrolled agents are behind. Informational only (no external calls, no
+// auto-execution) — Phase 1 of the update feature.
+async function settingsUpdatesView() {
+  const [ver, agents] = await Promise.all([api('/system/version'), api('/agents')]);
+  const root = el('div');
+  root.append(el('p', { class: 'muted settings-intro' }, 'Version of this server and the agent it ships, plus which enrolled agents are out of date. Checks are local — no external calls.'));
+
+  root.append(el('div', { class: 'cards' },
+    stat('Server', ver.server ? `v${ver.server}` : '–'),
+    stat('Agent (served)', ver.agent ? `v${ver.agent}` : '–')));
+
+  const cur = ver.agent || null;
+  const withVer = agents.filter((a) => a.capabilities && a.capabilities.agentVersion);
+  const behind = cur ? withVer.filter((a) => a.capabilities.agentVersion !== cur) : [];
+
+  root.append(el('div', { class: 'cards' },
+    stat('Agents reporting', `${withVer.length} / ${agents.length}`),
+    stat('Up to date', cur ? String(withVer.length - behind.length) : '–'),
+    stat('Behind', cur ? String(behind.length) : '–')));
+
+  if (behind.length) {
+    root.append(el('h4', {}, 'Agents needing an update'));
+    root.append(el('table', {},
+      el('thead', {}, el('tr', {}, ...['Agent', 'Installed', 'Current'].map((h) => el('th', {}, h)))),
+      el('tbody', {}, ...behind.map((a) => el('tr', {},
+        el('td', {}, a.display_name || a.hostname),
+        el('td', {}, el('span', { class: 'badge warn' }, `v${a.capabilities.agentVersion}`)),
+        el('td', {}, el('span', { class: 'badge active' }, `v${cur}`)),
+      )))));
+  } else if (cur && withVer.length) {
+    root.append(el('p', { class: 'muted' }, 'All reporting agents are on the current version.'));
+  }
+
+  root.append(el('h4', {}, 'How to update'));
+  root.append(el('ul', {},
+    el('li', {}, el('strong', {}, 'Server: '), 'on the server host run ', el('code', {}, './scripts/deploy.sh'), ' (git pull + rebuild).'),
+    el('li', {}, el('strong', {}, 'Agents: '), 're-run the install one-liner from ', el('strong', {}, 'Enrollment'), ' on each host — it rebuilds from the latest source. (One-click push-update from here is planned.)')));
+  return root;
 }
 
 async function settingsAnalyseView() {

@@ -102,3 +102,16 @@ test('GET /system/storage returns 500 when the service throws', async () => {
   const res = await request(makeApp({ systemInfo })).get('/system/storage').set('Authorization', authHeader('viewer'));
   assert.equal(res.status, 500);
 });
+
+// ---- GET /system/version ---------------------------------------------------
+test('GET /system/version returns server + served agent versions (viewer+)', async () => {
+  const res = await request(makeApp()).get('/system/version').set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 200);
+  assert.equal(typeof res.body.server, 'string');
+  assert.equal(res.body.agent, '0.1.0'); // from the default fake source store
+});
+
+test('GET /system/version without a token returns 401', async () => {
+  const res = await request(makeApp()).get('/system/version');
+  assert.equal(res.status, 401);
+});

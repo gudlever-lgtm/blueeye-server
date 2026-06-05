@@ -20,6 +20,13 @@ full HTTP route table, the data model, the dashboard structure, and a
   libraries, no cloud. Every finding/result carries an explanation + evidence.
 - **Dependency injection everywhere** — `createX(deps)` factories; `src/server.js` wires
   the real MySQL pool, tests wire fakes from `test-support/fakes.js`.
+- **Version every change** — bump `package.json` `version` on each update (patch = fix,
+  minor = feature, major = breaking), and bump the agent in lockstep when its code
+  changes. The dashboard's **Settings → Updates** panel and the per‑agent "update" badge
+  read these versions, so the bump is what makes "update available" appear. Use
+  `npm version <patch|minor> --no-git-tag-version` (don't hand‑edit; it keeps
+  `package-lock.json` in sync). Tags aren't pushed from CI here — the version field is
+  the source of truth.
 
 ## Working in this repo
 

@@ -126,9 +126,12 @@ categories); fleet health is computed in `src/health/probeHealth.js` from `probe
 A single vanilla-JS SPA. Key building blocks:
 - `el(tag, attrs, ...kids)` — DOM helper. `api(path, opts)` — fetch + bearer + 401 handling.
 - `views.<tab>` — async function per tab returning a node (`fleet` (landing),
-  `overview`, `map`, `geo`, `agents`, `interfaces`, `probes`, `flows`, `findings`,
-  `locations`, `enrollment`, `settings`) plus `agent` (the combined per-agent drill-down
-  page, no tab — reached via `openAgent(id)`).
+  `overview`, `map` (UI label **“Sites”** — locations coloured by agent health),
+  `geo` (UI label **“Destinations”** — external traffic by country/ASN),
+  `agents`, `interfaces`, `probes`, `flows`, `findings`, `locations`, `enrollment`,
+  `settings`) plus `agent` (the combined per-agent drill-down page, no tab —
+  reached via `openAgent(id)`). Both maps init via the shared `createLeafletMap`
+  (server-configured EU/self-hosted tiles).
 - `render()` — mounts the current view + its `hero()`; stops per-view pollers
   (`stopOverview`/`stopProbes`/`stopIfaces`/`stopFleet`/`stopAgent`/`stopGeo`) when leaving.
 - Shared renderers `interfaceTable()` / `probeLatestTable()` / `probeDetail()` back both

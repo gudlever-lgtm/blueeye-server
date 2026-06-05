@@ -196,3 +196,68 @@ test('server can push a command to a connected agent', async () => {
     }
   });
 });
+
+test('sendCommandAndWait resolves when the agent acks with the command id', async () => {
+  const tracker = makeStatusTracker();
+  const agentsRepo = makeAgentsRepo({ setStatus: tracker.setStatus });
+
+  await withWsServer({ agentTokensRepo: validRepo(), agentsRepo }, async ({ port, handle }) => {
+    const client = new WebSocket(`ws://127.0.0.1:${port}/ws/agent`, {
+      headers: { Authorization: 'Bearer good' },
+    });
+    try {
+      await withTimeout(waitOpen(client), 4000, 'did not open');
+      await withTimeout(tracker.waitFor('online'), 4000, 'online not set');
+      // Agent side: echo the command id back in an ack frame.
+      client.on('message', (data) => {
+        const msg = JSON.parse(data.toString());
+        if (msg.type === 'command') {
+          client.send(JSON.stringify({ type: 'ack', id: msg.command.id, ok: true, agentVersion: '9.9.9' }));
+        }
+      });
+      const out = await withTimeout(
+        handle.sendCommandAndWait(9, { name: 'ping' }, { timeoutMs: 4000 }),
+        4000,
+        'no ack'
+      );
+      assert.equal(out.delivered, 1);
+      assert.equal(out.acked, true);
+      assert.equal(out.reply.agentVersion, '9.9.9');
+    } finally {
+      client.close();
+    }
+  });
+});
+
+test('sendCommandAndWait reports delivered:0 when the agent is not connected', async () => {
+  await withWsServer({ agentTokensRepo: validRepo(), agentsRepo: makeAgentsRepo() }, async ({ handle }) => {
+    const out = await handle.sendCommandAndWait(12345, { name: 'ping' }, { timeoutMs: 200 });
+    assert.equal(out.delivered, 0);
+    assert.equal(out.acked, false);
+  });
+});
+
+test('sendCommandAndWait times out when the agent never replies', async () => {
+  const tracker = makeStatusTracker();
+  const agentsRepo = makeAgentsRepo({ setStatus: tracker.setStatus });
+
+  await withWsServer({ agentTokensRepo: validRepo(), agentsRepo }, async ({ port, handle }) => {
+    const client = new WebSocket(`ws://127.0.0.1:${port}/ws/agent`, {
+      headers: { Authorization: 'Bearer good' },
+    });
+    try {
+      await withTimeout(waitOpen(client), 4000, 'did not open');
+      await withTimeout(tracker.waitFor('online'), 4000, 'online not set');
+      const out = await withTimeout(
+        handle.sendCommandAndWait(9, { name: 'ping' }, { timeoutMs: 150 }),
+        4000,
+        'did not resolve'
+      );
+      assert.equal(out.delivered, 1);
+      assert.equal(out.acked, false);
+      assert.equal(out.timedOut, true);
+    } finally {
+      client.close();
+    }
+  });
+});

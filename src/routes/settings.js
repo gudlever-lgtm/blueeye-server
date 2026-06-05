@@ -24,6 +24,7 @@ function createSettingsRouter({ settingsService, featureGate, dispatcher, analys
       },
       alerting: dispatcher ? dispatcher.describe() : null,
       retention: settingsService ? await settingsService.getRetention() : (retentionConfig || null),
+      throughput: settingsService ? await settingsService.getThroughput() : null,
       map: settingsService ? await settingsService.getMap() : null,
       flowCategories: settingsService ? await settingsService.getFlowCategories() : null,
       maintenance: settingsService ? await settingsService.getMaintenance() : null,
@@ -60,6 +61,16 @@ function createSettingsRouter({ settingsService, featureGate, dispatcher, analys
   router.put('/retention', ...admin, asyncHandler(async (req, res) => {
     try {
       res.json({ retention: await settingsService.setRetention(req.body || {}) });
+    } catch (err) {
+      if (err.statusCode === 400) return res.status(400).json({ error: 'Validation failed', details: err.details || {} });
+      throw err;
+    }
+  }));
+
+  // PUT /api/settings/throughput — speed-test health thresholds (admin).
+  router.put('/throughput', ...admin, asyncHandler(async (req, res) => {
+    try {
+      res.json({ throughput: await settingsService.setThroughput(req.body || {}) });
     } catch (err) {
       if (err.statusCode === 400) return res.status(400).json({ error: 'Validation failed', details: err.details || {} });
       throw err;

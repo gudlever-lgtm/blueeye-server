@@ -468,8 +468,17 @@ pre { padding: 10px; overflow: auto; }
 .set-field span:first-child { color: var(--text); }
 .settings-card .form-grid input[type="number"] { max-width: 240px; }
 .settings-card .form-grid input[type="checkbox"] { width: auto; align-self: flex-start; }
-button.ghost.danger { color: var(--bad); border-color: var(--border); font-weight: 700; line-height: 1; }
+button.ghost.danger { background: transparent; color: var(--bad); border-color: var(--border); font-weight: 700; line-height: 1; }
 @media (max-width: 640px) { .tc-row { grid-template-columns: 1fr 1fr; } .tc-head { display: none; } }
+
+/* Tests — test-package editor (wider modal, target checklists, item rows). */
+.modal-card.wide { width: min(720px, 94vw); }
+.check-list { display: flex; flex-direction: column; gap: 2px; max-height: 168px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; }
+.check-row { display: flex; align-items: center; gap: 6px; font-weight: 400; }
+.check-row input { width: auto; }
+.test-item-row { display: grid; grid-template-columns: 120px 1fr 88px 78px 34px; gap: 8px; align-items: center; }
+.test-item-row input, .test-item-row select { width: 100%; }
+@media (max-width: 640px) { .test-item-row { grid-template-columns: 1fr 1fr; } }
 
 /* Auto-refresh toggle */
 .autorefresh { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; }

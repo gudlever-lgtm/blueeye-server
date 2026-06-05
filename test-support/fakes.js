@@ -185,10 +185,17 @@ function makeDb(overrides = {}) {
 }
 
 // A fake agent commander (push commands to agents over the WS). Defaults to
-// "delivered to 1 connection".
+// "delivered to 1 connection"; sendCommandAndWait resolves with a benign ack.
 function makeAgentCommander(overrides = {}) {
   return {
     sendCommand: overrides.sendCommand || (() => 1),
+    sendCommandAndWait:
+      overrides.sendCommandAndWait ||
+      (async () => ({
+        delivered: 1,
+        acked: true,
+        reply: { agentVersion: '0.1.0', sources: ['proc'], managed: 'systemd', accepted: true, runtime: 'systemd' },
+      })),
   };
 }
 
@@ -320,6 +327,38 @@ function makeAssistant(overrides = {}) {
   };
 }
 
+// A fake test-packages repository (in-memory list; benign defaults).
+function makeTestPackagesRepo(overrides = {}) {
+  return {
+    findAll: overrides.findAll || (async () => []),
+    findById: overrides.findById || (async () => null),
+    findEnabledScheduled: overrides.findEnabledScheduled || (async () => []),
+    create: overrides.create || (async (p) => ({ id: 1, last_run_at: null, last_run_summary: null, ...p })),
+    update: overrides.update || (async (id, p) => ({ id, ...p })),
+    remove: overrides.remove || (async () => false),
+    setLastRun: overrides.setLastRun || (async () => {}),
+  };
+}
+
+// A fake speed-test results repository (records inserts; benign empty reads).
+function makeSpeedtestResultsRepo(overrides = {}) {
+  const rows = [];
+  return {
+    rows,
+    create: overrides.create || (async (agentId, r) => { rows.push({ agentId, ...r }); return rows.length; }),
+    findByAgent: overrides.findByAgent || (async () => []),
+    latestPerAgent: overrides.latestPerAgent || (async () => []),
+  };
+}
+
+// A fake test-package runner; defaults to a benign run summary.
+function makeTestPackageRunner(overrides = {}) {
+  return {
+    run: overrides.run || (async () => ({ at: '2026-01-01T00:00:00.000Z', targeted: 0, reached: 0, delivered: 0, items: 0 })),
+    resolveTargetIds: overrides.resolveTargetIds || (() => []),
+  };
+}
+
 // ---- App + auth helpers ---------------------------------------------------
 
 // Builds an app wired with fakes; pass overrides to swap any dependency.
@@ -350,6 +389,9 @@ function makeApp(overrides = {}) {
     retentionConfig: overrides.retentionConfig || { enabled: true, rawRetentionDays: 7, rollupRetentionDays: 90, findingRetentionDays: 365, rollupIntervalMinutes: 60 },
     artifactStore: overrides.artifactStore || makeArtifactStore(),
     agentSourceStore: overrides.agentSourceStore || makeSourceStore(),
+    testPackagesRepo: overrides.testPackagesRepo || makeTestPackagesRepo(),
+    testPackageRunner: overrides.testPackageRunner || makeTestPackageRunner(),
+    speedtestResultsRepo: overrides.speedtestResultsRepo || makeSpeedtestResultsRepo(),
     enrollConfig: overrides.enrollConfig || { publicUrl: '', certFingerprint: '' },
     notifyDashboard: overrides.notifyDashboard || (() => 0),
   });
@@ -386,6 +428,9 @@ module.exports = {
   makeEnrollmentStore,
   makeArtifactStore,
   makeSourceStore,
+  makeTestPackagesRepo,
+  makeTestPackageRunner,
+  makeSpeedtestResultsRepo,
   makeLicenseManager,
   makeAgentCommander,
   makeSystemInfo,

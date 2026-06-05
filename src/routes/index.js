@@ -25,6 +25,8 @@ const { createFleetRouter } = require('./fleet');
 const { createSearchRouter } = require('./search');
 const { createEnrollRouter } = require('./enroll');
 const { createEnrollCommandRouter } = require('./enrollCommand');
+const { createTestPackagesRouter } = require('./testPackages');
+const { createSpeedtestRouter, createSpeedtestReadRouter } = require('./speedtest');
 const {
   createAgentAuthenticator,
   createAgentTokenMiddleware,
@@ -58,6 +60,9 @@ function createApiRouter({
   retentionConfig,
   artifactStore,
   agentSourceStore,
+  testPackagesRepo,
+  testPackageRunner,
+  speedtestResultsRepo,
   enrollConfig = {},
   notifyDashboard,
 }) {
@@ -92,10 +97,15 @@ function createApiRouter({
     getCategories: settingsService ? () => settingsService.getFlowCategories() : undefined,
   }));
   if (probeResultsRepo) router.use('/api/probes', createProbesRouter({ probeResultsRepo, agentsRepo }));
-  if (probeResultsRepo) router.use('/api/fleet', createFleetRouter({ agentsRepo, probeResultsRepo, resultsRepo }));
+  if (probeResultsRepo) router.use('/api/fleet', createFleetRouter({ agentsRepo, probeResultsRepo, resultsRepo, speedtestResultsRepo, settingsService }));
   router.use('/api/interfaces', createInterfacesRouter({ resultsRepo, agentsRepo }));
   router.use('/api/search', createSearchRouter({ agentsRepo, locationsRepo, flowsRepo }));
   if (settingsService) router.use('/api/settings', createSettingsRouter({ settingsService, featureGate, dispatcher, analysisConfig, retentionConfig }));
+  if (testPackagesRepo) router.use('/api/test-packages', createTestPackagesRouter({ repo: testPackagesRepo, runner: testPackageRunner }));
+  if (speedtestResultsRepo) {
+    router.use('/speedtest', createSpeedtestRouter({ agentAuth, speedtestResultsRepo }));
+    router.use('/api/speedtest', createSpeedtestReadRouter({ speedtestResultsRepo, agentsRepo }));
+  }
   router.use('/api/export', createExportRouter({ findingStore, flowsRepo, agentsRepo, locationsRepo, resultsRepo, probeResultsRepo, featureGate }));
   router.use('/enrollment-codes', createEnrollmentCodesRouter({ enrollmentCodesRepo, locationsRepo }));
 
@@ -111,7 +121,7 @@ function createApiRouter({
   //   - POST /results          — agent token
   //   - POST /enroll           — unauthenticated
   // Requests fall through routers that have no matching route.
-  router.use('/agents', createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentCommander }));
+  router.use('/agents', createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentCommander, agentSourceStore }));
   router.use('/agents', createAgentReportsRouter({ agentAuth, resultsRepo, agentsRepo, analysisPipeline, flowPipeline, probeResultsRepo }));
   router.use('/agents', createAgentEnrollRouter({ enrollmentStore, notifyDashboard }));
 

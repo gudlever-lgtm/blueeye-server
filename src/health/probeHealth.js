@@ -1,5 +1,7 @@
 'use strict';
 
+const { throughputHealthSummary } = require('./throughputHealth');
+
 // Fleet probe-health: turns an agent's recent active-probe results (ping / TCP /
 // DNS / traceroute) into a single, explainable health verdict driven by the
 // three signals a network/firewall tech reasons about — reachability, loss,
@@ -201,15 +203,37 @@ function interfaceReason(iface) {
   return 'Interfaces healthy.';
 }
 
+// Fold an agent's active-throughput signal into its verdict. `thr` is a
+// throughputHealthSummary ({ status: ok|warn|bad, downMbps, upMbps, reason }) or
+// null (disabled / no measurement → verdict unchanged). Mirrors mergeHealth: the
+// throughput becomes the headline only when it is the dominant signal.
+function mergeThroughput(health, thr) {
+  if (!thr || !thr.status) return health;
+  const status = combineStatus(health.status, thr.status);
+  const drives = health.status === 'unknown' || TIER[thr.status] < TIER[health.status];
+  const ev = { metric: 'throughput', downMbps: thr.downMbps, upMbps: thr.upMbps, status: thr.status };
+  const evidence = drives ? [ev, ...health.evidence] : [...health.evidence, ev];
+  const reason = drives ? thr.reason : health.reason;
+  return {
+    status,
+    reason,
+    evidence,
+    metrics: { ...health.metrics, downMbps: thr.downMbps, upMbps: thr.upMbps, throughputStatus: thr.status },
+  };
+}
+
 // Build the fleet rollup: each agent's identity + health verdict (probe verdict
 // merged with its interface signal), plus a summary count per status.
 // `rowsByAgentId` maps agentId ⇒ recent probe rows (newest-first); optional
 // `ifaceByAgentId` maps agentId ⇒ interfaceHealthSummary. Sorted worst-first.
-function computeFleet(agents, rowsByAgentId, { now = Date.now(), ifaceByAgentId = {} } = {}) {
+function computeFleet(agents, rowsByAgentId, { now = Date.now(), ifaceByAgentId = {}, throughputByAgentId = {}, throughputThresholds = null } = {}) {
   const list = (agents || []).map((a) => {
     const probe = computeAgentHealth(rowsByAgentId[a.id] || rowsByAgentId[String(a.id)] || [], { now });
     const iface = ifaceByAgentId[a.id] || ifaceByAgentId[String(a.id)] || null;
-    const health = mergeHealth(probe, iface);
+    let health = mergeHealth(probe, iface);
+    const latestThr = throughputByAgentId[a.id] || throughputByAgentId[String(a.id)] || null;
+    const thr = throughputHealthSummary(latestThr, throughputThresholds || {});
+    if (thr) health = mergeThroughput(health, thr);
     return {
       agentId: a.id,
       hostname: a.hostname,
@@ -219,6 +243,11 @@ function computeFleet(agents, rowsByAgentId, { now = Date.now(), ifaceByAgentId 
       status: a.status,
       lastReportAt: a.last_report_at || null,
       health,
+      // Latest speed test (surfaced even when thresholds are off, so the overview
+      // can show throughput). null when the agent has never run one.
+      throughput: latestThr
+        ? { downMbps: round1(latestThr.down_mbps), upMbps: round1(latestThr.up_mbps), ts: latestThr.ts || null, ok: latestThr.ok === 1 || latestThr.ok === true }
+        : null,
     };
   });
   list.sort((x, y) => (TIER[x.health.status] - TIER[y.health.status])
@@ -233,6 +262,7 @@ module.exports = {
   computeAgentHealth,
   computeFleet,
   mergeHealth,
+  mergeThroughput,
   robustStats,
   // exported for tests / tuning visibility
   THRESHOLDS: { LOSS_WARN, LOSS_BAD, JITTER_WARN, JITTER_BAD, Z_WARN, Z_BAD, MIN_BASELINE, STALE_MS },

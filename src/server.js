@@ -25,6 +25,7 @@ const { FindingStore } = require('./analysis/findings');
 const { createBaselineStore } = require('./analysis/baselines');
 const { createDetector } = require('./analysis/detector');
 const { createAnalysisPipeline } = require('./analysis/pipeline');
+const { createProbePipeline } = require('./analysis/probePipeline');
 const { createCorrelator } = require('./analysis/correlator');
 const { createAssistant } = require('./analysis/assistant');
 const { loadConfig: loadAnalysisConfig } = require('./analysis/config');
@@ -165,9 +166,26 @@ function start() {
     publishFinding: (hostId, message) => (dashboardWs ? dashboardWs.broadcast(message) : 0),
     logger: console,
   });
+  // Active-probe analysis: derive findings (reachability/loss/latency/jitter/cert)
+  // from probe-results on ingest, alongside the traffic detector above. Shares the
+  // analysis license+flag and the same alerting dispatcher + dashboard publish.
+  const probePipeline = createProbePipeline({
+    probeResultsRepo,
+    findingStore,
+    config: analysisConfig,
+    dispatcher,
+    alertingEnabled: alertingConfig.enabled,
+    licensed: () => featureGate.isFeatureEnabled('analysis'),
+    publishFinding: (hostId, message) => (dashboardWs ? dashboardWs.broadcast(message) : 0),
+    logger: console,
+  });
+
   // Opt-in LLM assistant (off unless ANALYSIS_ASSISTANT_ENABLED=true). Reads the
-  // same findings store for its compact context.
-  const assistant = createAssistant({ config: analysisConfig, findingStore, logger: console });
+  // findings store for its compact context, plus agents/locations/probe health
+  // for the per-location "what's going on here?" summary.
+  const assistant = createAssistant({
+    config: analysisConfig, findingStore, agentsRepo, locationsRepo, probeResultsRepo, logger: console,
+  });
 
   // Geo layer: enrich + store flow records. The GeoIP provider reads an offline,
   // EU-sourced range DB (config.geo.dbPath); without it, flows store without
@@ -223,6 +241,7 @@ function start() {
     licenseManager,
     findingStore,
     analysisPipeline,
+    probePipeline,
     flowPipeline,
     flowsRepo,
     geoTileConfig: config.geo,

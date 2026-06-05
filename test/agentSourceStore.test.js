@@ -16,7 +16,7 @@ const quiet = { info() {}, warn() {} };
 function fixture() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'blueeye-src-'));
   fs.mkdirSync(path.join(dir, 'src'));
-  fs.writeFileSync(path.join(dir, 'package.json'), '{"name":"blueeye-agent"}');
+  fs.writeFileSync(path.join(dir, 'package.json'), '{"name":"blueeye-agent","version":"9.9.9"}');
   fs.writeFileSync(path.join(dir, 'src', 'index.js'), 'console.log(1)');
   // Should be excluded from the bundle:
   fs.mkdirSync(path.join(dir, 'node_modules'));
@@ -56,6 +56,8 @@ test('packages the source dir into a checksummed gzip, excluding node_modules', 
 
   // The uninstall helper is exposed for the /enroll/uninstall.sh one-liner.
   assert.match(store.uninstallScript(), /echo bye/);
+  // The served agent version is exposed for update checks.
+  assert.equal(store.sourceVersion(), '9.9.9');
 });
 
 test('tolerates a missing dir (unavailable, no throw)', () => {
@@ -66,6 +68,7 @@ test('tolerates a missing dir (unavailable, no throw)', () => {
   assert.equal(store.meta(), null);
   assert.equal(store.size, 0);
   assert.equal(store.uninstallScript(), null);
+  assert.equal(store.sourceVersion(), null);
 });
 
 test('unavailable (no throw) when no dir is configured', () => {

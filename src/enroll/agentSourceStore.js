@@ -33,6 +33,7 @@ const EXCLUDES = [
 function createAgentSourceStore({ dir, exec = spawnSync, fsImpl = fs, logger = console } = {}) {
   let cache = null; // { buffer, sha256, size }
   let uninstall = null; // raw uninstall.sh content, served at /enroll/uninstall.sh
+  let srcVersion = null; // agent package.json version (for "is this agent up to date?")
 
   function warn(msg) {
     if (logger && typeof logger.warn === 'function') logger.warn(msg);
@@ -41,6 +42,7 @@ function createAgentSourceStore({ dir, exec = spawnSync, fsImpl = fs, logger = c
   function build() {
     cache = null;
     uninstall = null;
+    srcVersion = null;
     if (!dir) {
       warn('enroll: AGENT_SOURCE_DIR not set — agent source unavailable (install.sh will explain).');
       return;
@@ -63,6 +65,14 @@ function createAgentSourceStore({ dir, exec = spawnSync, fsImpl = fs, logger = c
       uninstall = fsImpl.readFileSync(path.join(dir, 'uninstall.sh'), 'utf8');
     } catch {
       uninstall = null;
+    }
+
+    // The version of the agent we serve — used to flag out-of-date agents.
+    try {
+      const pkg = JSON.parse(fsImpl.readFileSync(path.join(dir, 'package.json'), 'utf8'));
+      srcVersion = (pkg && pkg.version) || null;
+    } catch {
+      srcVersion = null;
     }
 
     const args = ['-czf', '-', '-C', dir, ...EXCLUDES.map((e) => `--exclude=${e}`), '.'];
@@ -91,6 +101,10 @@ function createAgentSourceStore({ dir, exec = spawnSync, fsImpl = fs, logger = c
     // Raw uninstall.sh (served at /enroll/uninstall.sh), or null when absent.
     uninstallScript() {
       return uninstall;
+    },
+    // The version of the agent source we serve (its package.json version), or null.
+    sourceVersion() {
+      return srcVersion;
     },
     buffer() {
       return cache ? cache.buffer : null;

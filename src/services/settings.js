@@ -326,8 +326,77 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
     return merged;
   }
 
-  // Re-applies persisted analysis/retention overrides onto the live config
-  // objects at boot, so admin edits survive a restart. Best-effort.
+  // ---- AI assistant (Settings → AI assistant) -----------------------------
+  // The opt-in LLM assistant's enable flag, API key and model — editable at
+  // runtime (admin) instead of env-only. Defaults come from the env-loaded
+  // analysis config (liveAnalysis), so existing .env deployments keep working.
+  // The API key is a secret: stored in app_settings but NEVER returned by the
+  // API — reads expose only whether a key is set, plus a short masked hint.
+  function assistantDefaults() {
+    const a = liveAnalysis || {};
+    return { enabled: !!a.assistantEnabled, apiKey: a.assistantApiKey || '', model: a.assistantModel || 'mistral-small-latest' };
+  }
+
+  // Effective assistant config INCLUDING the raw key — server-internal only
+  // (used to live-apply onto the running assistant; never sent to a client).
+  async function getAssistant() {
+    const override = await loadOverride('assistant');
+    const o = override && typeof override === 'object' ? override : {};
+    const base = { ...assistantDefaults(), ...o };
+    return { enabled: !!base.enabled, apiKey: base.apiKey || '', model: base.model || 'mistral-small-latest' };
+  }
+
+  // The client-safe view: only whether a key is set + a masked hint, never the key.
+  function redactAssistant(a) {
+    const key = a.apiKey || '';
+    return { enabled: !!a.enabled, model: a.model || 'mistral-small-latest', apiKeySet: key !== '', apiKeyHint: key ? `••••${key.slice(-4)}` : '' };
+  }
+  async function getAssistantSafe() {
+    return redactAssistant(await getAssistant());
+  }
+
+  function validateAssistant(patch) {
+    const p = patch && typeof patch === 'object' ? patch : {};
+    const errors = {};
+    const value = {};
+    bool(p, 'enabled', value);
+    if (p.model !== undefined) {
+      const m = String(p.model).trim();
+      if (m === '' || m.length > 100 || !/^[\w.:-]+$/.test(m)) errors.model = 'model must be 1-100 chars of letters, digits and . _ - :';
+      else value.model = m;
+    }
+    // apiKey is write-only. clearApiKey removes it; an empty apiKey is ignored,
+    // so saving the form without retyping the key never wipes it by accident.
+    if (p.clearApiKey === true || p.clearApiKey === 'true') {
+      value.apiKey = '';
+    } else if (p.apiKey !== undefined) {
+      const k = String(p.apiKey).trim();
+      if (k === '') { /* leave the stored key unchanged */ }
+      else if (k.length > 300) errors.apiKey = 'apiKey must be at most 300 characters';
+      else value.apiKey = k;
+    }
+    return { errors: Object.keys(errors).length ? errors : null, value };
+  }
+
+  // Validates + persists the assistant config and live-applies it onto the
+  // running analysis config so the assistant picks it up without a restart.
+  // Returns the redacted (key-free) view.
+  async function setAssistant(patch) {
+    const { errors, value } = validateAssistant(patch || {});
+    if (errors) throw badRequest('invalid assistant settings', errors);
+    const current = await getAssistant();
+    const merged = { ...current, ...value };
+    await settingsRepo.set('assistant', { enabled: merged.enabled, apiKey: merged.apiKey, model: merged.model });
+    if (liveAnalysis) {
+      liveAnalysis.assistantEnabled = merged.enabled;
+      liveAnalysis.assistantApiKey = merged.apiKey;
+      liveAnalysis.assistantModel = merged.model;
+    }
+    return redactAssistant(merged);
+  }
+
+  // Re-applies persisted analysis/retention/assistant overrides onto the live
+  // config objects at boot, so admin edits survive a restart. Best-effort.
   async function applyStoredOverrides() {
     try {
       const a = await settingsRepo.get('analysis');
@@ -336,6 +405,14 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
     try {
       const r = await settingsRepo.get('retention');
       if (r && liveRetention) Object.assign(liveRetention, validateRetention(r).value);
+    } catch { /* ignore */ }
+    try {
+      const a = await settingsRepo.get('assistant');
+      if (a && liveAnalysis) {
+        if (a.enabled !== undefined) liveAnalysis.assistantEnabled = !!a.enabled;
+        if (a.apiKey !== undefined) liveAnalysis.assistantApiKey = a.apiKey || '';
+        if (a.model) liveAnalysis.assistantModel = a.model;
+      }
     } catch { /* ignore */ }
   }
 
@@ -346,6 +423,7 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
     getAnalysis, setAnalysis, validateAnalysis,
     getRetention, setRetention, validateRetention,
     getThroughput, setThroughput, validateThroughput,
+    getAssistant, getAssistantSafe, setAssistant, validateAssistant,
     applyStoredOverrides,
   };
 }

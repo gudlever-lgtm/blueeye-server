@@ -47,11 +47,17 @@ function applyTheme(theme) {
 function cachedTheme() {
   try { return localStorage.getItem(THEME_KEY) || 'light'; } catch { return 'light'; }
 }
+// Set once the user explicitly picks a theme (topbar toggle or Settings →
+// Appearance). It makes that choice win over loadProfile()'s one-time server
+// reconcile, which would otherwise override a fresh toggle with the previously
+// saved value if /me is still in flight when the user clicks.
+let themeUserChoice = false;
 // Apply + cache a theme locally, and persist it to the signed-in user's account
 // (so it follows them to any browser). Returns the save promise for callers that
 // want to surface success/failure; the local apply always happens immediately.
 function setTheme(theme, { persist = true } = {}) {
   const t = THEME_KEYS.includes(theme) ? theme : 'light';
+  if (persist) themeUserChoice = true;
   applyTheme(t);
   try { localStorage.setItem(THEME_KEY, t); } catch { /* storage off */ }
   if (persist && token) {
@@ -213,7 +219,9 @@ async function loadProfile() {
   try {
     const me = await api('/me');
     const theme = me && me.preferences && me.preferences.theme;
-    if (theme && THEME_KEYS.includes(theme)) {
+    // Skip if the user already chose a theme this session (e.g. toggled while
+    // this request was in flight) — their deliberate choice must win.
+    if (!themeUserChoice && theme && THEME_KEYS.includes(theme)) {
       applyTheme(theme);
       try { localStorage.setItem(THEME_KEY, theme); } catch { /* storage off */ }
     }
@@ -272,12 +280,36 @@ function closeModal() { $('#modal').classList.add('hidden'); $('#modal-card').cl
 // ---- Per-page explanation (hero + slide-in info drawer) -------------------
 // Each view starts with a short hero line and a “More info” button that slides
 // in a panel from the right with a fuller explanation.
+
+// Cross-links used inside the info drawers. A help entry can point at the page
+// that actually owns a feature it mentions: the link closes the drawer and
+// switches to that view (or Settings sub-tab), exactly like clicking the tab.
+// Labels mirror the top nav. A link whose target tab is hidden (licence/role)
+// degrades to plain text, so the help never offers a dead end.
+const VIEW_LABELS = {
+  fleet: 'Overview', overview: 'Traffic', map: 'Sites', geo: 'Destinations', agents: 'Agents',
+  interfaces: 'Interfaces', probes: 'Probes', tests: 'Tests', flows: 'Flows',
+  findings: 'Analysis', locations: 'Locations', enrollment: 'Enrollment', settings: 'Settings',
+};
+function gotoView(viewKey) { closeDrawer(); currentView = viewKey; render(); }
+function viewLink(viewKey, label) {
+  const text = label || VIEW_LABELS[viewKey] || viewKey;
+  const tab = document.querySelector(`.tabs button[data-view="${viewKey}"]`);
+  if (tab && tab.classList.contains('hidden')) return document.createTextNode(text);
+  return el('a', { href: '#', class: 'drawer-link', onclick: (e) => { e.preventDefault(); gotoView(viewKey); } }, text);
+}
+// Deep-link into a specific Settings sub-tab (Analysis, Retention, Traffic types…).
+function settingsLink(tab, label) {
+  return el('a', { href: '#', class: 'drawer-link',
+    onclick: (e) => { e.preventDefault(); closeDrawer(); settingsTab = tab; currentView = 'settings'; render(); } }, label);
+}
+
 const PAGE_INFO = {
   tests: {
     hero: 'Reusable test packages — sets of probe/traffic tests the server pushes to chosen agents to run, on a schedule or on demand.',
     title: 'Tests — packages pushed to agents',
     body: () => [
-      el('p', {}, 'A test package is a named set of tests (ping / TCP / DNS / traceroute / throughput) with a target selector and an optional schedule. The server pushes the tests to the selected, connected agents; each agent runs them and reports back — results appear on the Probes and Traffic pages as usual.'),
+      el('p', {}, 'A test package is a named set of tests (ping / TCP / DNS / traceroute / throughput) with a target selector and an optional schedule. The server pushes the tests to the selected, connected agents; each agent runs them and reports back — results appear on the ', viewLink('probes'), ' and ', viewLink('overview', 'Traffic'), ' pages as usual.'),
       el('h4', {}, 'Targets'),
       el('ul', {},
         el('li', {}, el('strong', {}, 'All agents '), '— every enrolled agent.'),
@@ -294,7 +326,7 @@ const PAGE_INFO = {
     hero: 'All agents in one view — with a health assessment based on active reachability, packet loss, latency and jitter.',
     title: 'Overview — fleet health',
     body: () => [
-      el('p', {}, 'The landing page collects all agents with a single health stamp, so you immediately see where something is wrong. Rows are sorted worst-first and refresh continuously. Click an agent to drill into its measurements.'),
+      el('p', {}, 'The landing page collects all agents with a single health stamp, so you immediately see where something is wrong. Rows are sorted worst-first and refresh continuously. Click an agent to drill into its measurements, or click a count chip (Healthy, Critical, …) to filter the list to just those agents.'),
       el('h4', {}, 'Two independent verdicts'),
       el('ul', {},
         el('li', {}, el('strong', {}, 'Health '), '— is the monitored network OK right now? Driven by active reachability, loss, latency, jitter and interface/link state.'),
@@ -313,7 +345,7 @@ const PAGE_INFO = {
         el('li', {}, el('strong', {}, 'DOWN: '), 'no probe targets respond at all.'),
         el('li', {}, el('strong', {}, 'STALE: '), 'no fresh measurements (> 15 min).'),
         el('li', {}, el('strong', {}, 'UNKNOWN: '), 'agent has not run any probe yet.')),
-      el('p', { class: 'muted' }, 'Health is based on active probes — run a few probes per agent (on the agent page) for a complete picture. Metadata only: targets and timings, never packet contents.'),
+      el('p', { class: 'muted' }, 'Health is based on active probes — run a few per agent on ', viewLink('probes'), ' (or schedule them fleet-wide via ', viewLink('tests'), ') for a complete picture; the interface signal comes from ', viewLink('interfaces'), '. Metadata only: targets and timings, never packet contents.'),
     ],
   },
   agent: {
@@ -330,7 +362,7 @@ const PAGE_INFO = {
         el('li', {}, el('strong', {}, 'Probes: '), 'run ping/TCP/DNS/traceroute against a target and see RTT/loss/jitter — click “History” for RTT over time or “Path” for traceroute hops.'),
         el('li', {}, el('strong', {}, 'Interfaces: '), 'per-interface utilization, errors, discards and link status from the latest measurement. A virtual/idle port that is simply down (docker0, veth…, tunnels) shows a neutral IDLE — only a real link down reads DOWN.'),
         el('li', {}, el('strong', {}, 'Traffic: '), 'current bandwidth — most useful here when you are already investigating a specific agent.')),
-      el('p', { class: 'muted' }, 'Return to the fleet overview with “← Overview”.'),
+      el('p', { class: 'muted' }, 'Return to the fleet overview with “← Overview”. Fleet-wide views of the same data sources: ', viewLink('probes'), ' · ', viewLink('interfaces'), ' · ', viewLink('overview', 'Traffic'), '.'),
     ],
   },
   overview: {
@@ -349,15 +381,17 @@ const PAGE_INFO = {
       el('ul', {},
         el('li', {}, 'KPI strip at the top: current RX/TX, online agents and number of locations.'),
         el('li', {}, 'The storage line shows disk usage + estimated consumption per day (“Details” expands the DB/disk breakdown).'),
-        el('li', {}, 'At the bottom you can expand Top agents, History (select agent + period) and Traffic type (DNS, Facebook etc.).')),
+        el('li', {}, 'At the bottom you can expand Top agents, History (select agent + period) and Traffic type (DNS, Facebook etc.) — those categories are defined under ', settingsLink('types', 'Settings → Traffic types'), '.')),
+      el('p', { class: 'muted' }, 'Related views: ', viewLink('geo'), ' (where the traffic goes on a map) and ', viewLink('flows'), ' (individual conversations).'),
     ],
   },
   map: {
-    hero: 'Geographic overview of locations and their agents.',
-    title: 'Map',
+    hero: 'Your sites on a map — each marker coloured by the worst agent health at that site.',
+    title: 'Sites',
     body: () => [
-      el('p', {}, 'Locations with coordinates (latitude/longitude) are shown as markers. Click a marker to see the number of agents and how many are online.'),
-      el('p', { class: 'muted' }, 'Add coordinates per location under the Locations tab (Edit). If the map is missing, the library could not be reached — a list is shown instead.'),
+      el('p', {}, 'Each location with coordinates is a marker, coloured by the worst health verdict among its agents (green = healthy, amber = warning, red = critical, grey = unknown/offline) — the same verdict as ', viewLink('fleet', 'Overview'), '. The page refreshes itself so the colours stay live.'),
+      el('p', {}, 'Click a marker for the site\'s agents and how many are online; click an agent in the popup to open it.'),
+      el('p', { class: 'muted' }, 'Add coordinates per location under ', viewLink('locations'), ' (Edit). Map tiles come from the server\'s configured (EU/self-hosted) source. If the map is missing, the library could not be reached — a list is shown instead.'),
     ],
   },
   agents: {
@@ -372,9 +406,10 @@ const PAGE_INFO = {
         el('li', {}, 'Last reported: the time of the agent\'s most recent traffic measurement.')),
       el('h4', {}, 'Actions'),
       el('ul', {},
-        el('li', {}, '”+ New agent” issues a one-time code for installation (operator+).'),
+        el('li', {}, '”+ New agent” issues a one-time code for installation (operator+) — or use ', viewLink('enrollment'), ' for a ready-to-run one-liner.'),
         el('li', {}, '”Run test” asks the agent to measure immediately; “Traffic” shows the measurements.'),
         el('li', {}, '”Edit” sets name, location, notes and traffic source (proc, SNMP, NetFlow or sFlow).')),
+      el('p', { class: 'muted' }, 'Group agents by site under ', viewLink('locations'), '; see them all with a single health verdict on ', viewLink('fleet', 'Overview'), '.'),
     ],
   },
   interfaces: {
@@ -387,7 +422,7 @@ const PAGE_INFO = {
         el('li', {}, el('strong', {}, 'Status: '), 'DOWN (a real link is down), ERR (input/output errors or ≥90% utilized), WARN (discards or ≥75% utilized), IDLE (a virtual/idle port — docker0, veth…, VPN tunnels — that is down only because nothing is using it, which is normal), OK.'),
         el('li', {}, el('strong', {}, 'Utilization: '), 'rate against link speed (only when speed is known).'),
         el('li', {}, el('strong', {}, 'Errors/s and Discards/s: '), 'CRC/input errors and dropped packets (congestion) respectively.')),
-      el('p', { class: 'muted' }, 'Data comes from the agent\'s traffic source: /proc/net/dev (host) or SNMP IF-MIB (device). Errors/discards/link status require an updated agent. An IDLE virtual interface never escalates an agent to CRITICAL — only a real link going down does.'),
+      el('p', { class: 'muted' }, 'Data comes from the agent\'s traffic source: /proc/net/dev (host) or SNMP IF-MIB (device). Errors/discards/link status require an updated agent. An IDLE virtual interface never escalates an agent to CRITICAL — only a real link going down does. Interface state also feeds the health verdict on ', viewLink('fleet', 'Overview'), '.'),
     ],
   },
   probes: {
@@ -402,14 +437,14 @@ const PAGE_INFO = {
         el('li', {}, 'DNS: time to resolve a name (and which address was returned).'),
         el('li', {}, 'Traceroute: the path (hops) to the target with RTT per hop.')),
       el('p', {}, 'Select agent + type + target and click “Run probe”. The agent must be connected; the result comes back a moment later and is added to the history so you can see RTT/loss over time.'),
-      el('p', { class: 'muted' }, 'Metadata only: targets and timings — never packet contents.'),
+      el('p', { class: 'muted' }, 'To run the same probes on a schedule across many agents, use ', viewLink('tests'), '; probe results also drive the health verdict on ', viewLink('fleet', 'Overview'), '. Metadata only: targets and timings — never packet contents.'),
     ],
   },
   flows: {
     hero: 'Inspect specific conversations (flows): who talks to whom, on which ports — and who is scanning.',
     title: 'Flows — conversations',
     body: () => [
-      el('p', {}, 'While Traffic shows volumes and Geo shows destinations on a map, Flows lets you drill into individual conversations (5-tuple metadata from NetFlow/sFlow) for one agent.'),
+      el('p', {}, 'While ', viewLink('overview', 'Traffic'), ' shows volumes and the ', viewLink('geo', 'Destinations'), ' map shows where it goes, Flows lets you drill into individual conversations (5-tuple metadata from NetFlow/sFlow) for one agent.'),
       el('h4', {}, 'Filters'),
       el('ul', {},
         el('li', {}, 'Peer: show only conversations where a specific IP is source or destination (click a talker to set it).'),
@@ -424,20 +459,25 @@ const PAGE_INFO = {
     ],
   },
   geo: {
-    hero: 'Geographic overview: internal sites and external traffic destinations (country/ASN).',
-    title: 'Geo map',
+    hero: 'Where your traffic goes: internal sites and external destinations (country/ASN) on a map.',
+    title: 'Destinations',
     body: () => [
       el('p', {}, 'Internal hosts are shown based on their site coordinates (set per location) — never via GeoIP. External destinations are aggregated per country/ASN from GeoIP-enriched flows; private/RFC1918 addresses are never shown as geo points.'),
+      el('p', { class: 'muted' }, 'This is the traffic-destination map. For just your sites and their health, see the ', el('strong', {}, 'Sites'), ' tab.'),
       el('h4', {}, 'Markers'),
       el('ul', {},
-        el('li', {}, 'Pins = internal sites (click for status + findings).'),
+        el('li', {}, 'Ringed dots = internal sites, coloured by agent health (green/amber/red); click for status + findings.'),
         el('li', {}, 'Circles = external destinations; size by traffic volume, colour by deviation (neutral → yellow → red).')),
-      el('h4', {}, 'Selection'),
+      el('h4', {}, 'Get an external destination'),
+      el('ol', {},
+        el('li', {}, 'Click a circle on the map — or press ', el('strong', {}, '“Select region”'), ' and drag a box to aggregate every destination in an area.'),
+        el('li', {}, 'The side panel then shows that destination\'s breakdown: bytes/flows, direction (in/out), protocol and ASN, plus any related findings.'),
+        el('li', {}, 'To see the individual conversations behind it (per-peer 5-tuple, ports, scans/fan-out), open ', viewLink('flows'), '.')),
+      el('h4', {}, 'Selection buttons'),
       el('ul', {},
-        el('li', {}, 'Click a destination: see findings + flow details (peers, direction, protocol, time series).'),
-        el('li', {}, '”Select area” and drag a box to aggregate all destinations in the area.'),
-        el('li', {}, '”Clear selection” returns to the overview.')),
-      el('p', { class: 'muted' }, 'Map tiles are fetched from the server\'s config (EU/self-hosted), not a hardcoded US source.'),
+        el('li', {}, el('strong', {}, '“Select region” '), '— drag a box to aggregate all destinations inside it (with combined findings).'),
+        el('li', {}, el('strong', {}, '“Clear selection” '), '— return to the overview summary.')),
+      el('p', { class: 'muted' }, 'Map tiles are fetched from the server\'s config (EU/self-hosted), not a hardcoded US source. Destinations come from the same NetFlow/sFlow flows you drill into on ', viewLink('flows'), '; volumes by type are on ', viewLink('overview', 'Traffic'), '.'),
     ],
   },
   findings: {
@@ -447,13 +487,13 @@ const PAGE_INFO = {
       el('p', {}, 'The server analyses agent measurements locally (no cloud, no ML library) and raises a finding when a metric deviates significantly from its own baseline, flatlines (sensor/agent stop) or correlates with other errors.'),
       el('h4', {}, 'Severity'),
       el('ul', {},
-        el('li', {}, 'CRIT: large deviation (default ≥ 4σ — adjustable in Settings → Analysis).'),
+        el('li', {}, 'CRIT: large deviation (default ≥ 4σ — adjustable in ', settingsLink('analyse', 'Settings → Analysis'), ').'),
         el('li', {}, 'WARN: notable deviation (default ≥ 3σ) or flatline.'),
         el('li', {}, 'INFO: lower severity.')),
       el('h4', {}, 'Acknowledgement'),
       el('p', {}, 'Operators and administrators can acknowledge a finding once it has been seen/handled.'),
       el('h4', {}, 'AI assistant'),
-      el('p', {}, 'If enabled (opt-in) you can ask in natural language — the assistant replies based on the latest findings, not raw data.'),
+      el('p', {}, 'If enabled (opt-in) you can ask in natural language — the assistant replies based on the latest findings, not raw data. Turn it on and pick the model under ', settingsLink('analyse', 'Settings → Analysis'), '.'),
       el('p', { class: 'muted' }, 'New findings appear live via WebSocket and can also be fetched via REST.'),
     ],
   },
@@ -464,6 +504,7 @@ const PAGE_INFO = {
       el('p', {}, 'A location groups multiple agents (e.g. an office or a site).'),
       el('h4', {}, 'Live traffic'),
       el('p', {}, '”Traffic” opens a live panel that sums all agent traffic in the location and updates every 3 seconds — useful for seeing overall load and spotting problems.'),
+      el('p', { class: 'muted' }, 'Give a location coordinates here to place it on the ', viewLink('map', 'Sites map'), '; the fleet-wide live picture is on ', viewLink('overview', 'Traffic'), '.'),
     ],
   },
   enrollment: {
@@ -482,7 +523,13 @@ const PAGE_INFO = {
         el('li', {}, 'The source bundle is always verified against the checksum before building or running.'),
         el('li', {}, 'The cert fingerprint is pinned on the agent (when the server runs behind TLS).')),
       el('p', { class: 'muted' }, 'The agent is built + run on the target (Docker or Node) — no pre-built binaries. Also works on air-gapped networks: the source is served from the BlueEye server itself.'),
-      el('p', { class: 'muted' }, 'Status: active (usable), used (used up), expired (expired).'),
+      el('h4', {}, 'Code status vs. the agent'),
+      el('ul', {},
+        el('li', {}, el('strong', {}, 'active: '), 'still usable — has uses left and has not expired.'),
+        el('li', {}, el('strong', {}, 'used: '), 'fully redeemed — an agent enrolled with it. Shown for a consumed code even after its time runs out.'),
+        el('li', {}, el('strong', {}, 'expired: '), 'ran out of time WITHOUT being used up.')),
+      el('p', { class: 'muted' }, 'The code only opens the install window. Each agent it enrols gets its own permanent token that stays valid until the agent is deleted (or its token revoked) — so an agent stays online regardless of whether its code later reads "used" or "expired". The Agents column shows each enrolled agent’s live online/offline state; click one to open it.'),
+      el('p', { class: 'muted' }, 'Once enrolled, agents appear under ', viewLink('agents'), ' and on ', viewLink('fleet', 'Overview'), '.'),
     ],
   },
   users: {
@@ -495,6 +542,7 @@ const PAGE_INFO = {
         el('li', {}, 'operator: create/edit agents, locations and enrollment codes.'),
         el('li', {}, 'viewer: read-only access.')),
       el('p', {}, 'The last admin cannot be deleted or demoted.'),
+      el('p', { class: 'muted' }, 'Operators manage those resources under ', viewLink('agents'), ', ', viewLink('locations'), ' and ', viewLink('enrollment'), '.'),
     ],
   },
   license: {
@@ -515,15 +563,15 @@ const PAGE_INFO = {
       el('p', {}, 'Each tab covers one topic. Most settings can be edited here and take effect immediately without a restart; a few are read-only and controlled via the server\'s .env because they contain secrets.'),
       el('h4', {}, 'Editable here (stored in the database)'),
       el('ul', {},
-        el('li', {}, 'Analysis: thresholds for anomaly detection — CRIT/WARN in σ, baseline window and how many measurements are required before alerting.'),
-        el('li', {}, 'Retention: how long raw/aggregated data and findings are kept before being cleaned up.'),
-        el('li', {}, 'Traffic types: define the categories (DNS, Facebook …) from service ports and destination ASN. Shown on Traffic → Traffic type.'),
-        el('li', {}, 'Map: tile and geocoder source for the maps (use an EU/self-hosted source in production).')),
+        el('li', {}, settingsLink('analyse', 'Analysis'), ': thresholds for anomaly detection — CRIT/WARN in σ, baseline window and how many measurements are required before alerting.'),
+        el('li', {}, settingsLink('retention', 'Retention'), ': how long raw/aggregated data and findings are kept before being cleaned up.'),
+        el('li', {}, settingsLink('types', 'Traffic types'), ': define the categories (DNS, Facebook …) from service ports and destination ASN. Shown on ', viewLink('overview', 'Traffic'), ' → Traffic type.'),
+        el('li', {}, settingsLink('map', 'Map'), ': tile and geocoder source for the maps (use an EU/self-hosted source in production).')),
       el('h4', {}, 'Read-only (set in .env / requires restart)'),
       el('ul', {},
-        el('li', {}, 'Alerting: channels (e-mail/webhook/syslog) — carries secrets (SMTP password, webhook HMAC), so they are kept in .env.'),
-        el('li', {}, 'Users: create/edit staff and roles (admin only).'),
-        el('li', {}, 'License: status + “Revalidate now”.')),
+        el('li', {}, settingsLink('alerting', 'Alerting'), ': channels (e-mail/webhook/syslog) — carries secrets (SMTP password, webhook HMAC), so they are kept in .env.'),
+        el('li', {}, settingsLink('users', 'Users'), ': create/edit staff and roles (admin only).'),
+        el('li', {}, settingsLink('license', 'License'), ': status + “Revalidate now”.')),
       el('p', { class: 'muted' }, 'Editable changes are stored in app_settings and are reloaded on startup, so they survive a restart.'),
     ],
   },
@@ -1930,7 +1978,7 @@ function assistantBox(getHostId) {
     } catch (err) {
       out.className = 'assistant-out muted';
       out.textContent = err.status === 403
-        ? 'The AI assistant is disabled. Set ANALYSIS_ASSISTANT_ENABLED=true (and an API key) in the server\'s .env to use it.'
+        ? 'The AI assistant is disabled. An administrator can enable it under Settings → Analysis → AI assistant.'
         : err.message;
     } finally {
       btn.disabled = false;
@@ -2551,6 +2599,17 @@ function healthBadge(h) {
   const [cls, label] = HEALTH_BADGE[h.status] || ['grace', h.status];
   return el('span', { class: `badge ${cls}`, title: h.reason || '' }, label);
 }
+// Health verdict → map-marker colour (same palette as the badges / Overview) and
+// a severity rank so a site marker can take the colour of its worst agent.
+const HEALTH_COLOR = { ok: '#22c55e', warn: '#f59e0b', bad: '#ef4444', down: '#ef4444', stale: '#94a3b8', unknown: '#94a3b8' };
+const HEALTH_RANK = { bad: 0, down: 0, warn: 1, stale: 2, unknown: 3, ok: 4 };
+function healthColor(status) { return HEALTH_COLOR[status] || '#94a3b8'; }
+function worstHealthStatus(statuses) {
+  let worst = null;
+  let rank = Infinity;
+  for (const s of statuses) { const r = HEALTH_RANK[s] ?? 3; if (r < rank) { rank = r; worst = s; } }
+  return worst;
+}
 // Latency cell: highlights + shows the baseline when the latest is elevated.
 function latencyText(m) {
   if (!m || m.rttMs == null) return '–';
@@ -2586,8 +2645,36 @@ views.fleet = async () => {
     else bannerHost.replaceChildren();
   }).catch(() => {});
 
+  // Click a summary chip ("3 Healthy", "1 Critical", …) to filter the table to
+  // just those agents; click it again — or "Show all" — to clear. null = no
+  // filter. Kept in the closure so it survives the 10 s poll; the latest fetch
+  // is cached so a toggle re-renders instantly without refetching.
+  let activeFilter = null;
+  let lastData = null;
+  // Chip ⇒ which health verdicts it covers. "Critical" folds in 'down' to match
+  // its count (bad + down); the rest map one-to-one.
+  const FILTER_MATCH = {
+    ok: (s) => s === 'ok', warn: (s) => s === 'warn',
+    bad: (s) => s === 'bad' || s === 'down',
+    stale: (s) => s === 'stale', unknown: (s) => s === 'unknown',
+  };
+  const FILTER_LABEL = { ok: 'healthy', warn: 'warning', bad: 'critical', stale: 'stale', unknown: 'unknown' };
+  function setFilter(cls) {
+    activeFilter = activeFilter === cls ? null : cls;
+    if (lastData) { renderSummary(lastData.summary); renderTable(lastData.agents); }
+  }
+
   function renderSummary(s) {
-    const chip = (cls, label, n) => el('div', { class: `fs-chip ${cls}${n ? '' : ' zero'}` }, el('span', { class: 'fs-n' }, String(n)), el('span', { class: 'fs-l' }, label));
+    const chip = (cls, label, n) => {
+      const on = activeFilter === cls;
+      return el('div', {
+        class: `fs-chip ${cls}${n ? '' : ' zero'}${on ? ' active' : ''}`,
+        role: 'button', tabindex: '0', 'aria-pressed': on ? 'true' : 'false',
+        title: on ? 'Show all agents' : `Show only ${label.toLowerCase()} agents`,
+        onclick: () => setFilter(cls),
+        onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setFilter(cls); } },
+      }, el('span', { class: 'fs-n' }, String(n)), el('span', { class: 'fs-l' }, label));
+    };
     summaryHost.replaceChildren(
       chip('ok', 'Healthy', s.ok),
       chip('warn', 'Warnings', s.warn),
@@ -2614,13 +2701,23 @@ views.fleet = async () => {
   }
   function renderTable(agents) {
     if (!agents.length) { tableHost.replaceChildren(el('div', { class: 'empty' }, 'No agents yet — go to Agents to enrol one.')); return; }
-    tableHost.replaceChildren(el('table', { class: 'fleet-table' },
-      el('thead', {}, el('tr', {}, ...['Agent', 'Status', 'Health', 'Loss', 'Latency', 'Jitter', 'Targets', 'Speed', 'Location', 'Last seen'].map((h) => el('th', {}, h)))),
-      el('tbody', {}, ...agents.map(fleetRow))));
+    const shown = activeFilter ? agents.filter((a) => FILTER_MATCH[activeFilter](a.health.status)) : agents;
+    const bar = activeFilter
+      ? el('div', { class: 'fleet-filter' },
+        el('span', { class: 'muted' }, `Showing ${shown.length} of ${agents.length} — ${FILTER_LABEL[activeFilter]}`),
+        el('button', { class: 'small ghost', onclick: () => setFilter(activeFilter) }, 'Show all'))
+      : null;
+    const body = shown.length
+      ? el('table', { class: 'fleet-table' },
+        el('thead', {}, el('tr', {}, ...['Agent', 'Status', 'Health', 'Loss', 'Latency', 'Jitter', 'Targets', 'Speed', 'Location', 'Last seen'].map((h) => el('th', {}, h)))),
+        el('tbody', {}, ...shown.map(fleetRow)))
+      : el('div', { class: 'empty' }, `No ${FILTER_LABEL[activeFilter]} agents.`);
+    tableHost.replaceChildren(...(bar ? [bar, body] : [body]));
   }
   async function refresh() {
     let data;
     try { data = await api('/api/fleet/health'); } catch (e) { tableHost.replaceChildren(el('div', { class: 'error' }, e.message)); return; }
+    lastData = data;
     renderSummary(data.summary);
     renderTable(data.agents);
   }
@@ -2886,26 +2983,72 @@ views.flows = async () => {
 
 // Map of locations with their agents. Uses Leaflet if available; otherwise falls
 // back to a list. Each located location gets a marker with agent count/status.
-views.map = async () => {
-  const [locations, agents] = await Promise.all([api('/locations'), api('/agents')]);
-  // Count agents (and how many online) per location.
-  const byLoc = new Map();
-  for (const a of agents) {
-    if (a.location_id == null) continue;
-    const e = byLoc.get(a.location_id) || { total: 0, online: 0 };
-    e.total += 1;
-    if (a.status === 'online') e.online += 1;
-    byLoc.set(a.location_id, e);
-  }
-  const located = locations.filter((l) => l.latitude != null && l.longitude != null);
+// Creates a Leaflet map with the server-configured tiles (EU / self-hosted —
+// never a hardcoded source). Shared by the Sites map and the Destinations (geo)
+// map so the admin's Settings → Map tile choice is honoured everywhere. Returns
+// the map, or null if Leaflet is unavailable. `config` = /api/map|geo/config.
+function createLeafletMap(host, config, { center = [20, 0], zoom = 3 } = {}) {
+  if (typeof L === 'undefined' || !host) return null;
+  const cfg = config || {};
+  const map = L.map(host).setView(center, zoom);
+  L.tileLayer(cfg.tileUrl || 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: cfg.maxZoom || 19,
+    attribution: cfg.attribution || '© OpenStreetMap',
+  }).addTo(map);
+  return map;
+}
 
+// Sites-map polling state (mirrors stopOverview/stopGeo). Re-drawn on a timer so
+// agent health/online counts stay live; torn down when leaving the view.
+const mapState = { map: null, timer: null, layer: null, fitted: false, popupOpen: false };
+function stopMap() {
+  if (mapState.timer) { clearInterval(mapState.timer); mapState.timer = null; }
+  if (mapState.map) { try { mapState.map.remove(); } catch { /* ignore */ } }
+  mapState.map = null; mapState.layer = null; mapState.fitted = false; mapState.popupOpen = false;
+}
+
+// The "Sites" map: your locations on a map, each marker coloured by the WORST
+// agent health at that site (reusing the Overview verdict), clustered, live, and
+// click-through to the agents there.
+views.map = async () => {
   const root = el('div');
-  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Map'),
-    el('span', { class: 'muted' }, `${located.length} of ${locations.length} locations have coordinates`)));
+  const sub = el('span', { class: 'muted' });
+  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Sites'), sub));
+
+  let locations; let agents; let mapCfg; let fleet;
+  try {
+    [locations, agents, mapCfg, fleet] = await Promise.all([
+      api('/locations'), api('/agents'),
+      api('/api/map/config').catch(() => ({})),
+      api('/api/fleet/health').catch(() => ({ agents: [] })),
+    ]);
+  } catch (e) { root.append(el('div', { class: 'error' }, e.message)); return root; }
+
+  // agentId → health verdict; refreshed on each poll.
+  const healthByAgent = new Map((fleet.agents || []).map((a) => [a.agentId, a.health && a.health.status]));
+
+  // Per-location rollup: counts + the agents (with health) + the worst status.
+  function rollup() {
+    const byLoc = new Map();
+    for (const a of agents) {
+      if (a.location_id == null) continue;
+      const e = byLoc.get(a.location_id) || { total: 0, online: 0, agents: [] };
+      e.total += 1;
+      if (a.status === 'online') e.online += 1;
+      const status = healthByAgent.get(a.id) || (a.status === 'online' ? 'unknown' : 'down');
+      e.agents.push({ id: a.id, name: a.display_name || a.hostname, status });
+      byLoc.set(a.location_id, e);
+    }
+    for (const e of byLoc.values()) e.worst = worstHealthStatus(e.agents.map((x) => x.status));
+    return byLoc;
+  }
+
+  const located = locations.filter((l) => l.latitude != null && l.longitude != null);
+  sub.textContent = `${located.length} of ${locations.length} locations have coordinates`;
 
   if (typeof L === 'undefined') {
     root.append(el('div', { class: 'empty' }, 'Map library could not be loaded (offline?). Showing list instead.'));
-    root.append(locationList(locations, byLoc));
+    root.append(locationList(locations, rollup()));
     return root;
   }
   if (!located.length) {
@@ -2915,31 +3058,76 @@ views.map = async () => {
 
   const mapEl = el('div', { class: 'map' });
   root.append(mapEl);
-  // Leaflet needs the element in the DOM with a size before init — defer a tick.
-  setTimeout(() => {
-    const map = L.map(mapEl).setView([located[0].latitude, located[0].longitude], 6);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 19, attribution: '© OpenStreetMap',
-    }).addTo(map);
-    const group = [];
+  root.append(el('div', { class: 'legend geo-legend' },
+    el('span', {}, el('span', { class: 'dot ring', style: `background:${HEALTH_COLOR.ok}` }), ' healthy'),
+    el('span', {}, el('span', { class: 'dot ring', style: `background:${HEALTH_COLOR.warn}` }), ' warning'),
+    el('span', {}, el('span', { class: 'dot ring', style: `background:${HEALTH_COLOR.bad}` }), ' critical'),
+    el('span', {}, el('span', { class: 'dot ring', style: `background:${HEALTH_COLOR.unknown}` }), ' unknown / offline'),
+    el('span', { class: 'muted' }, '· colour = worst agent health at the site')));
+
+  function popupFor(l, c) {
+    return el('div', { class: 'map-pop' },
+      el('strong', {}, esc(l.name)),
+      el('div', { class: 'muted' }, `${c.online}/${c.total} agents online`),
+      l.address ? el('div', { class: 'muted' }, esc(l.address)) : null,
+      el('div', { class: 'map-pop-agents' }, ...c.agents.slice(0, 12).map((ag) => el('button', {
+        class: 'map-pop-agent', title: 'Open agent', onclick: () => openAgent(ag.id),
+      }, el('span', { class: 'dot', style: `background:${healthColor(ag.status)}` }), esc(ag.name)))));
+  }
+
+  function draw(byLoc) {
+    if (!mapState.layer) return;
+    mapState.layer.clearLayers();
+    const pts = [];
     for (const l of located) {
-      const c = byLoc.get(l.id) || { total: 0, online: 0 };
-      const m = L.marker([l.latitude, l.longitude]).addTo(map);
-      m.bindPopup(`<b>${esc(l.name)}</b><br>${c.online}/${c.total} agents online${l.address ? `<br>${esc(l.address)}` : ''}`);
-      group.push([l.latitude, l.longitude]);
+      const c = byLoc.get(l.id) || { total: 0, online: 0, agents: [], worst: null };
+      const m = L.circleMarker([l.latitude, l.longitude], {
+        radius: 9, color: '#fff', weight: 2, fillColor: c.worst ? healthColor(c.worst) : '#94a3b8', fillOpacity: 0.95,
+      });
+      m.bindPopup(popupFor(l, c));
+      mapState.layer.addLayer(m);
+      pts.push([l.latitude, l.longitude]);
     }
-    if (group.length > 1) map.fitBounds(group, { padding: [40, 40] });
+    if (!mapState.fitted && pts.length) {
+      if (pts.length > 1) mapState.map.fitBounds(pts, { padding: [40, 40] });
+      mapState.fitted = true;
+    }
+  }
+
+  stopMap();
+  setTimeout(() => {
+    if (!mapEl.isConnected) return; // view was left before the deferred init ran
+    const map = createLeafletMap(mapEl, mapCfg, { center: [located[0].latitude, located[0].longitude], zoom: 6 });
+    if (!map) return;
+    mapState.map = map;
+    map.on('popupopen', () => { mapState.popupOpen = true; });
+    map.on('popupclose', () => { mapState.popupOpen = false; });
+    mapState.layer = (typeof L.markerClusterGroup === 'function') ? L.markerClusterGroup({ maxClusterRadius: 50 }) : L.layerGroup();
+    mapState.layer.addTo(map);
+    draw(rollup());
   }, 0);
+
+  mapState.timer = setInterval(async () => {
+    if (currentView !== 'map') { stopMap(); return; }
+    if (modalOpen() || mapState.popupOpen || !mapState.map) return;
+    try {
+      const [a, f] = await Promise.all([api('/agents'), api('/api/fleet/health').catch(() => null)]);
+      agents = a;
+      if (f) { healthByAgent.clear(); for (const x of f.agents || []) healthByAgent.set(x.agentId, x.health && x.health.status); }
+      draw(rollup());
+    } catch { /* keep the last good render */ }
+  }, 10000);
+
   return root;
 };
 
-// ---- Geo map (internal sites + external destinations + selection) ---------
-const geoState = { map: null, ext: null, hosts: null, rect: null, dests: [], sinceIso: '', panel: null, selecting: false, rectStart: null };
+// ---- Destinations map (internal sites + external destinations + selection) ----
+const geoState = { map: null, ext: null, hosts: null, rect: null, dests: [], sinceIso: '', panel: null, selecting: false, rectStart: null, healthByHost: null };
 
 function stopGeo() {
   if (geoState.map) { try { geoState.map.remove(); } catch { /* ignore */ } }
   geoState.map = null; geoState.ext = null; geoState.hosts = null; geoState.rect = null;
-  geoState.dests = []; geoState.selecting = false; geoState.rectStart = null;
+  geoState.dests = []; geoState.selecting = false; geoState.rectStart = null; geoState.healthByHost = null;
 }
 
 function devColor(dev) {
@@ -2977,7 +3165,12 @@ views.geo = async () => {
   if (typeof L === 'undefined') {
     return el('div', { class: 'empty' }, 'Map library (Leaflet) could not be loaded — geo map is unavailable offline.');
   }
-  const [config, overview] = await Promise.all([api('/api/geo/config'), api('/api/geo/overview')]);
+  const [config, overview, fleet] = await Promise.all([
+    api('/api/geo/config'), api('/api/geo/overview'),
+    api('/api/fleet/health').catch(() => ({ agents: [] })),
+  ]);
+  // hostId → health verdict, so internal site pins can be coloured by health.
+  geoState.healthByHost = new Map((fleet.agents || []).map((a) => [a.agentId, a.health && a.health.status]));
 
   const root = el('div', { class: 'geo' });
   const periodSel = el('select', {},
@@ -2987,10 +3180,10 @@ views.geo = async () => {
   const regionBtn = el('button', { class: 'small ghost' }, 'Select region');
   const clearBtn = el('button', { class: 'small ghost' }, 'Clear selection');
   root.append(el('div', { class: 'section-head' },
-    el('h2', {}, 'Geo-kort'),
+    el('h2', {}, 'Destinations'),
     el('span', { class: 'spacer' }),
     exportButtons('geo', () => (geoState.sinceIso ? { since: geoState.sinceIso } : {})),
-    el('label', { class: 'muted inline' }, 'Periode ', periodSel),
+    el('label', { class: 'muted inline' }, 'Period ', periodSel),
     regionBtn, clearBtn));
 
   const mapEl = el('div', { class: 'map' });
@@ -2998,12 +3191,18 @@ views.geo = async () => {
   geoState.panel = panel;
   geoState.mapEl = mapEl;
   root.append(el('div', { class: 'geo-grid' }, mapEl, panel));
+  // Two colour scales: internal SITES are ringed dots coloured by agent health;
+  // external DESTINATIONS are circles coloured by traffic deviation (size = volume).
   root.append(el('div', { class: 'legend geo-legend' },
-    el('span', {}, el('span', { class: 'pin-dot' }), ' internal site'),
+    el('span', { class: 'muted' }, 'Sites:'),
+    el('span', {}, el('span', { class: 'dot ring', style: `background:${HEALTH_COLOR.ok}` }), ' healthy'),
+    el('span', {}, el('span', { class: 'dot ring', style: `background:${HEALTH_COLOR.warn}` }), ' warning'),
+    el('span', {}, el('span', { class: 'dot ring', style: `background:${HEALTH_COLOR.bad}` }), ' critical'),
+    el('span', { class: 'muted' }, '· Destinations:'),
     el('span', {}, el('span', { class: 'dot', style: 'background:#38bdf8' }), ' normal'),
     el('span', {}, el('span', { class: 'dot', style: 'background:#f59e0b' }), ' elevated'),
     el('span', {}, el('span', { class: 'dot', style: 'background:#ef4444' }), ' strong deviation'),
-    el('span', { class: 'muted' }, '· circle size = traffic volume')));
+    el('span', { class: 'muted' }, '· size = volume')));
 
   periodSel.addEventListener('change', () => {
     const v = periodSel.value;
@@ -3021,12 +3220,9 @@ views.geo = async () => {
 function initGeoMap(config, overview) {
   if (!geoState.mapEl || !geoState.mapEl.isConnected) return; // view was left already
   const center = pickGeoCenter(overview);
-  const map = L.map(geoState.mapEl).setView(center, 3);
+  const map = createLeafletMap(geoState.mapEl, config, { center, zoom: 3 });
+  if (!map) return;
   geoState.map = map;
-  L.tileLayer(config.tileUrl || 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: config.maxZoom || 19,
-    attribution: config.attribution || '© OpenStreetMap',
-  }).addTo(map);
 
   geoState.ext = (typeof L.markerClusterGroup === 'function') ? L.markerClusterGroup({ maxClusterRadius: 50 }) : L.layerGroup();
   geoState.hosts = L.layerGroup();
@@ -3065,7 +3261,8 @@ function drawOverview(overview) {
 
   for (const h of overview.internalHosts || []) {
     if (h.lat == null || h.lng == null) continue;
-    const m = L.marker([h.lat, h.lng]);
+    const status = (geoState.healthByHost && geoState.healthByHost.get(h.hostId)) || (h.status === 'online' ? 'unknown' : 'down');
+    const m = L.circleMarker([h.lat, h.lng], { radius: 8, color: '#fff', weight: 2, fillColor: healthColor(status), fillOpacity: 0.95 });
     m.bindTooltip(`${esc(h.siteName || `host ${h.hostId}`)} (${esc(h.status || '?')})`);
     m.on('click', () => selectHost(h));
     geoState.hosts.addLayer(m);
@@ -3100,10 +3297,23 @@ function showOverviewSummary() {
   if (!panel) return;
   const dests = geoState.dests;
   const totBytes = dests.reduce((s, d) => s + (Number(d.bytes) || 0), 0);
+  const top = dests.slice().sort((a, b) => (Number(b.bytes) || 0) - (Number(a.bytes) || 0)).slice(0, 12);
+  const topTable = top.length
+    ? el('table', { class: 'geo-top' }, el('tbody', {}, ...top.map((d) => el('tr', {
+      class: 'geo-top-row', tabindex: '0', title: 'Show destination details',
+      onclick: () => selectDestination(d),
+      onkeydown: (e) => { if (e.key === 'Enter') selectDestination(d); },
+    },
+    el('td', {}, el('span', { class: 'dot', style: `background:${devColor(d.deviation)}` }), ' ', esc(destTitle(d))),
+    el('td', { class: 'num' }, fmtBytes(d.bytes)),
+    el('td', { class: 'num muted' }, devLabel(d.deviation))))))
+    : el('div', { class: 'muted' }, 'No external destinations in this period.');
   panel.replaceChildren(
     el('div', { class: 'section-head' }, el('h3', {}, 'Overview')),
     el('p', { class: 'muted' }, `${dests.length} external destinations · ${fmtBytes(totBytes)} in the period`),
-    el('p', { class: 'muted' }, 'Click a circle (destination) or a pin (internal site) for details, or select a region.'));
+    el('h4', {}, 'Top destinations'),
+    topTable,
+    el('p', { class: 'muted small' }, 'Click a row, a circle (destination) or a site pin for details, or select a region.'));
 }
 
 async function selectDestination(d) {
@@ -3598,12 +3808,24 @@ views.enrollment = async () => {
   root.append(el('div', { class: 'section-head' }, el('h3', {}, 'Active codes'),
     canWrite() ? el('button', { class: 'small ghost', onclick: () => createCode() }, '+ New code (advanced)') : null));
   if (!codes.length) { root.append(el('div', { class: 'empty' }, 'No codes yet — use "Add agent" above.')); return root; }
+  // Codes are one-time install tickets; the agent's real credential is separate.
+  root.append(el('p', { class: 'muted enroll-note' }, 'Codes are one-time install tickets. Once an agent enrols it stays connected on its own permanent token — independent of the code’s status — so a "used" or "expired" code never disconnects the agent shown beside it.'));
+  // The agent(s) a code enrolled, each a clickable live online/offline badge.
+  const agentsCell = (agents) => ((agents && agents.length)
+    ? el('div', { class: 'code-agents' }, ...agents.map((a) => el('span', {
+      class: 'code-agent', role: 'button', tabindex: '0',
+      title: `${a.online ? 'Online' : 'Offline'} — open agent`,
+      onclick: () => openAgent(a.id),
+      onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openAgent(a.id); } },
+    }, el('span', { class: `badge ${a.online ? 'online' : 'offline'}` }, a.online ? 'online' : 'offline'), esc(a.name))))
+    : el('span', { class: 'muted' }, '–'));
   root.append(el('table', {},
-    el('thead', {}, el('tr', {}, ...['ID', 'Status', 'Uses', 'Location', 'Expires', 'Created', ''].map((h) => el('th', {}, h)))),
+    el('thead', {}, el('tr', {}, ...['ID', 'Status', 'Uses', 'Agents', 'Location', 'Expires', 'Created', ''].map((h) => el('th', {}, h)))),
     el('tbody', {}, ...codes.map((c) => el('tr', {},
       el('td', {}, String(c.id)),
       el('td', {}, el('span', { class: `badge ${c.status}` }, c.status)),
       el('td', {}, c.max_uses > 1 ? `${c.uses_remaining}/${c.max_uses}` : (c.uses_remaining === 0 ? 'used' : '1')),
+      el('td', {}, agentsCell(c.agents)),
       el('td', {}, c.location_name || '–'),
       el('td', { class: 'muted' }, fmtDate(c.expires_at)),
       el('td', { class: 'muted' }, fmtDate(c.created_at)),
@@ -3876,8 +4098,8 @@ async function settingsUpdatesView() {
 async function settingsAnalyseView() {
   const data = await api('/api/settings');
   const root = el('div');
-  root.append(el('p', { class: 'muted settings-intro' }, 'The server learns a normal baseline for each metric and raises a finding when a measurement deviates enough from it. Here you set how sensitive detection is — changes take effect immediately, without restart. ', licenseBadge(data.license, 'analysis')));
-  root.append(el('div', { class: 'settings-grid' }, analyseSettingsCard(data.analysis), throughputSettingsCard(data.throughput)));
+  root.append(el('p', { class: 'muted settings-intro' }, 'The server learns a normal baseline for each metric and raises a finding when a measurement deviates enough from it. Here you set how sensitive detection is — changes take effect immediately, without restart. The opt-in AI assistant (its on/off switch and API key) is configured here too. ', licenseBadge(data.license, 'analysis')));
+  root.append(el('div', { class: 'settings-grid' }, analyseSettingsCard(data.analysis), throughputSettingsCard(data.throughput), assistantSettingsCard(data.assistant)));
   return root;
 }
 
@@ -4037,9 +4259,62 @@ function analyseSettingsCard(a) {
       { key: 'warnSigma', label: 'WARN threshold (σ from baseline)', type: 'number', min: 0.5, max: 20, step: 0.1, hint: 'Threshold for WARN — should be lower than CRIT. Typically 3.' },
       { key: 'baselineDays', label: 'Baseline window (days)', type: 'number', min: 1, max: 90, step: 1, hint: 'How many days of history the normal is calculated from.' },
       { key: 'minSamples', label: 'Min. samples before alerting', type: 'number', min: 10, max: 100000, step: 1, hint: 'Number of measurements before a metric is monitored — avoids false alarms right after startup.' },
-      { key: 'assistantEnabled', label: 'AI assistant', type: 'checkbox', readonly: true, hint: 'Opt-in natural-language assistant. Set via .env (key is a secret).' },
     ],
   });
+}
+
+// AI assistant (opt-in): admin-editable enable flag, API key and model — instead
+// of env-only. The key is write-only: the API only reports whether one is set
+// (apiKeySet + a masked hint), so the field stays blank and a typed value
+// replaces the stored key. The assistant calls Mistral (EU).
+function assistantSettingsCard(a) {
+  const v = a || { enabled: false, model: '', apiKeySet: false, apiKeyHint: '' };
+  const enabledI = el('input', { type: 'checkbox' });
+  const modelI = el('input', { type: 'text', placeholder: 'mistral-small-latest' });
+  const keyI = el('input', { type: 'password', autocomplete: 'new-password', spellcheck: 'false' });
+  const clearI = el('input', { type: 'checkbox' });
+  const clearRow = el('label', { class: 'inline muted small' }, clearI, el('span', {}, 'Remove the stored key'));
+  const note = el('p', { class: 'muted small' });
+  const err = el('p', { class: 'error' });
+  const btn = el('button', { class: 'small' }, 'Save');
+
+  function applyState(s) {
+    enabledI.checked = !!s.enabled;
+    modelI.value = s.model || '';
+    keyI.value = '';
+    keyI.placeholder = s.apiKeySet ? `Key set (${s.apiKeyHint}) — type to replace` : 'Paste an API key to enable';
+    clearRow.classList.toggle('hidden', !s.apiKeySet);
+    clearI.checked = false;
+    note.textContent = (s.enabled && !s.apiKeySet)
+      ? '⚠ Enabled but no API key set — add one above, or the assistant returns an error.'
+      : 'Calls Mistral (EU). The key is stored in the server database and is never shown again.';
+  }
+  applyState(v);
+
+  async function save() {
+    err.textContent = ''; btn.disabled = true;
+    const body = { enabled: enabledI.checked, model: modelI.value.trim() || 'mistral-small-latest' };
+    if (clearI.checked) body.clearApiKey = true;
+    else if (keyI.value.trim() !== '') body.apiKey = keyI.value.trim();
+    try {
+      const res = await api('/api/settings/assistant', { method: 'PUT', body });
+      applyState(res.assistant || res);
+      toast('AI assistant saved');
+    } catch (e2) { err.textContent = errText(e2); }
+    finally { btn.disabled = false; }
+  }
+  btn.addEventListener('click', save);
+
+  return el('div', { class: 'settings-card' }, el('h3', {}, 'AI assistant'),
+    el('div', { class: 'form-grid' },
+      el('label', { class: 'set-field' }, el('span', {}, 'Assistant enabled'), enabledI,
+        el('span', { class: 'muted small' }, 'Opt-in natural-language assistant: host Q&A + per-location summaries.')),
+      el('label', { class: 'set-field' }, el('span', {}, 'API key'), keyI,
+        el('span', { class: 'muted small' }, 'Mistral API key. Write-only — stored on the server, never displayed again.')),
+      clearRow,
+      el('label', { class: 'set-field' }, el('span', {}, 'Model'), modelI,
+        el('span', { class: 'muted small' }, 'Provider model id. Default mistral-small-latest.')),
+      note, err, el('div', { class: 'form-actions' }, btn)));
 }
 
 function retentionSettingsCard(r) {
@@ -4060,7 +4335,7 @@ function retentionSettingsCard(r) {
 async function settingsMapView() {
   const data = await api('/api/settings');
   const root = el('div');
-  root.append(el('p', { class: 'muted settings-intro' }, 'The maps (Map tab, Geo and the location picker) fetch background tiles from the tile URL, and address search uses the geocoder URL. Use an EU/self-hosted source in production — no hardcoded US service. Stored in the database and works without restart.'));
+  root.append(el('p', { class: 'muted settings-intro' }, 'The maps (Sites, Destinations and the location picker) fetch background tiles from the tile URL, and address search uses the geocoder URL. Use an EU/self-hosted source in production — no hardcoded US service. Stored in the database and works without restart.'));
   root.append(el('div', { class: 'settings-grid' }, mapSettingsCard(data.map)));
   return root;
 }
@@ -4362,8 +4637,9 @@ async function render({ silent = false } = {}) {
   if (currentView !== 'interfaces') stopIfaces();
   if (currentView !== 'fleet') stopFleet();
   if (currentView !== 'agent') stopAgent();
-  // Tear down the Leaflet map when leaving the geo view (it rebuilds on entry).
+  // Tear down the Leaflet maps when leaving their views (they rebuild on entry).
   if (currentView !== 'geo') stopGeo();
+  if (currentView !== 'map') stopMap();
 
   // Admin-only tabs (e.g. Users); send non-admins back to agents if needed.
   for (const b of document.querySelectorAll('.tabs button[data-admin]')) {
@@ -4402,7 +4678,7 @@ $('#login-form').addEventListener('submit', async (e) => {
   try { await login($('#email').value, $('#password').value); render(); }
   catch (err) { $('#login-error').textContent = err.message; }
 });
-$('#logout').addEventListener('click', () => { setAutoRefresh(false); stopOverview(); stopFleet(); stopAgent(); stopProbes(); stopIfaces(); $('#autorefresh').checked = false; logout(); });
+$('#logout').addEventListener('click', () => { setAutoRefresh(false); stopOverview(); stopFleet(); stopAgent(); stopProbes(); stopIfaces(); stopMap(); stopGeo(); $('#autorefresh').checked = false; logout(); });
 $('#refresh').addEventListener('click', () => render());
 $('#autorefresh').addEventListener('change', (e) => setAutoRefresh(e.target.checked));
 for (const b of document.querySelectorAll('.tabs button')) {

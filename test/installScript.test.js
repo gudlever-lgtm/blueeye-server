@@ -42,6 +42,8 @@ test('renderInstallScript wires both runtimes: Docker (preferred) and Node', () 
   // finds the token the enroll step wrote (the agent default is cwd-relative).
   assert.match(script, /BLUEEYE_TOKEN_PATH="\$INSTALL_DIR\/token"/);
   assert.match(script, /Environment=BLUEEYE_TOKEN_PATH=\$INSTALL_DIR\/token/);
+  // Points the operator at the shipped uninstaller.
+  assert.match(script, /uninstall\.sh/);
   // Graceful "ask" when neither runtime is present.
   assert.match(script, /neither Docker nor Node/);
 });

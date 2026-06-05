@@ -10,7 +10,8 @@ const $ = (sel) => document.querySelector(sel);
 
 // Colour themes. Each `key` matches a [data-theme="…"] block in styles.css and
 // is whitelisted server-side (src/validation/preferencesValidation.js). `family`
-// (light|dark) drives the topbar quick-toggle icon; `swatch` is a few
+// (light|dark) drives the topbar quick-toggle icon; `dual` (optional) is the
+// theme's opposite-mode counterpart the toggle switches to; `swatch` is a few
 // representative colours [bg, panel, accent, text] for the picker preview.
 // Keep this list in sync with both of those.
 const THEMES = [
@@ -20,8 +21,8 @@ const THEMES = [
   { key: 'nord', label: 'Nord', family: 'dark', swatch: ['#2e3440', '#3b4252', '#88c0d0', '#eceff4'] },
   { key: 'forest', label: 'Forest', family: 'dark', swatch: ['#0c1410', '#14201a', '#34d399', '#d7e6dc'] },
   { key: 'sunset', label: 'Sunset', family: 'dark', swatch: ['#1a1320', '#251a2e', '#f472b6', '#f1e7f2'] },
-  { key: 'solarized-light', label: 'Solarized Light', family: 'light', swatch: ['#eee8d5', '#fdf6e3', '#268bd2', '#586e75'] },
-  { key: 'solarized-dark', label: 'Solarized Dark', family: 'dark', swatch: ['#002b36', '#073642', '#268bd2', '#93a1a1'] },
+  { key: 'solarized-light', label: 'Solarized Light', family: 'light', dual: 'solarized-dark', swatch: ['#eee8d5', '#fdf6e3', '#268bd2', '#586e75'] },
+  { key: 'solarized-dark', label: 'Solarized Dark', family: 'dark', dual: 'solarized-light', swatch: ['#002b36', '#073642', '#268bd2', '#93a1a1'] },
   { key: 'contrast', label: 'High contrast', family: 'dark', swatch: ['#000000', '#0a0a0a', '#ffd400', '#ffffff'] },
 ];
 const THEME_KEYS = THEMES.map((t) => t.key);
@@ -81,12 +82,13 @@ function initTheme() {
   const btn = document.querySelector('#theme');
   if (btn) {
     // Quick light/dark toggle; the full palette lives in Settings → Appearance.
-    // Flip to the other family's remembered theme so a chosen colour theme is
-    // preserved across toggles instead of reverting to the basic light/dark pair.
+    // Prefer a theme's explicit counterpart (e.g. Solarized light↔dark); else
+    // flip to the other family's most-recently-used theme — so a chosen colour
+    // theme is preserved across toggles instead of reverting to basic light/dark.
     btn.addEventListener('click', () => {
-      const family = themeMeta(document.documentElement.dataset.theme).family;
-      setTheme(themeByFamily[family === 'light' ? 'dark' : 'light'])
-        .catch(() => { /* keep the local change even if the save fails */ });
+      const meta = themeMeta(document.documentElement.dataset.theme);
+      const target = meta.dual || themeByFamily[meta.family === 'light' ? 'dark' : 'light'];
+      setTheme(target).catch(() => { /* keep the local change even if the save fails */ });
     });
   }
 }

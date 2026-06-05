@@ -76,6 +76,7 @@ test('dashboard offers selectable colour themes saved per user', async () => {
   assert.match(js, /\/me\/preferences/); // persists the chosen theme per user
   assert.match(js, /loadProfile/); // applies the saved theme on session start
   assert.match(js, /themeByFamily/); // topbar toggle preserves the chosen colour theme
+  assert.match(js, /meta\.dual/); // toggle uses a theme's light/dark counterpart (e.g. solarized)
 
   const css = (await request(app).get('/styles.css')).text;
   assert.match(css, /\[data-theme="nord"\]/); // a new colour theme is defined

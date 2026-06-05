@@ -16,11 +16,12 @@ instantly on load with no flash.
   + persists.
 - **The picker** is **Settings → Appearance** (`settingsAppearanceView`),
   available to every role — it's a personal preference, not admin config. The
-  topbar 🌙/☀️ button stays a quick light/dark toggle: it flips to the most
-  recently used theme of the *other* family (remembered per family in
-  `localStorage` under `blueeye.server.themeByFamily`), so toggling away from a
-  chosen colour theme and back returns to that theme rather than the basic
-  light/dark pair.
+  topbar 🌙/☀️ button stays a quick light/dark toggle. It prefers a theme's
+  explicit counterpart (`dual` — e.g. Solarized Light ↔ Solarized Dark); failing
+  that it flips to the most recently used theme of the *other* family (remembered
+  per family in `localStorage` under `blueeye.server.themeByFamily`). Either way,
+  toggling away from a chosen colour theme and back returns to that theme rather
+  than the basic light/dark pair.
 - **Persistence** is `GET /me` + `PUT /me/preferences` (`src/routes/me.js`, any
   authenticated role). Preferences are a JSON blob on `users.preferences`
   (migration `020`), read/merge-written by `usersRepository.getPreferences` /

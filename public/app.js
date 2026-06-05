@@ -623,22 +623,50 @@ function agentHealthRank(a) {
   return 1;
 }
 
+// Parse a dotted version like "0.2.1" (optional leading "v"; any -prerelease or
+// +build suffix is ignored) into numeric segments, or null if it isn't dotted.
+function parseVersion(s) {
+  if (typeof s !== 'string') return null;
+  const core = s.trim().replace(/^v/i, '').split(/[-+]/)[0];
+  const parts = core.split('.');
+  if (!parts.length || parts.some((p) => !/^\d+$/.test(p))) return null;
+  return parts.map(Number);
+}
+
+// Compare two versions: -1 if a<b, 0 if equal, 1 if a>b; null when either is
+// unparseable (the caller decides the fallback).
+function compareVersions(a, b) {
+  const pa = parseVersion(a);
+  const pb = parseVersion(b);
+  if (!pa || !pb) return null;
+  for (let i = 0; i < Math.max(pa.length, pb.length); i += 1) {
+    const d = (pa[i] || 0) - (pb[i] || 0);
+    if (d !== 0) return d < 0 ? -1 : 1;
+  }
+  return 0;
+}
+
+// True when the agent reports a version strictly OLDER than the one the server
+// serves — so an agent NEWER than served is never flagged as needing an update.
+// Falls back to a plain "differs" check when a version can't be parsed, so a
+// real update is never hidden.
+function agentIsBehind(a, current) {
+  const v = a.capabilities && a.capabilities.agentVersion;
+  if (!v || !current) return false;
+  const cmp = compareVersions(v, current);
+  return cmp === null ? v !== current : cmp < 0;
+}
+
 // Small "v<x>" line under the platform, with an "update" badge when the agent is
 // behind the version the server currently serves. Version comes from the agent's
 // reported capabilities (capabilities.agentVersion).
 function agentVersionLine(a, current) {
   const v = a.capabilities && a.capabilities.agentVersion;
   if (!v) return null;
-  const behind = current && v !== current;
+  const behind = agentIsBehind(a, current);
   return el('div', { class: 'muted' },
     `v${v}${behind ? ' ' : ''}`,
     behind ? el('span', { class: 'badge warn', title: `Current agent version is ${current}` }, 'update') : null);
-}
-
-// True when the agent reports a version older than the one the server serves.
-function agentIsBehind(a, current) {
-  const v = a.capabilities && a.capabilities.agentVersion;
-  return !!(v && current && v !== current);
 }
 
 // Health derived from how recently the agent last reported in. online + a fresh
@@ -3739,7 +3767,7 @@ async function settingsUpdatesView() {
 
   const cur = ver.agent || null;
   const withVer = agents.filter((a) => a.capabilities && a.capabilities.agentVersion);
-  const behind = cur ? withVer.filter((a) => a.capabilities.agentVersion !== cur) : [];
+  const behind = cur ? withVer.filter((a) => agentIsBehind(a, cur)) : [];
 
   root.append(el('div', { class: 'cards' },
     stat('Agents reporting', `${withVer.length} / ${agents.length}`),

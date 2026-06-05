@@ -222,6 +222,12 @@ main#view:has(.overview) { max-width: 1180px; }
 .fs-chip.bad { border-left-color: var(--bad); }
 .fs-chip.stale, .fs-chip.unknown { border-left-color: var(--muted); }
 .fs-chip.zero { opacity: .5; }
+/* Chips act as toggle filters for the table below. */
+.fs-chip { cursor: pointer; user-select: none; transition: background .12s, box-shadow .12s; }
+.fs-chip:hover { background: var(--panel-2, var(--panel)); }
+.fs-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.fs-chip.active { background: var(--panel-2, var(--panel)); box-shadow: inset 0 0 0 1px var(--accent); border-color: var(--accent); }
+.fs-chip.active .fs-l { color: var(--text); }
 .fleet-table { width: 100%; }
 .fleet-row { cursor: pointer; }
 .fleet-row:hover { background: var(--panel-2); }

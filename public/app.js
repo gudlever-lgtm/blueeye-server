@@ -2524,14 +2524,37 @@ views.fleet = async () => {
     else bannerHost.replaceChildren();
   }).catch(() => {});
 
+  // Click a summary chip to filter the table to that health category; click it
+  // again to clear. The filter persists across the 10s auto-refresh.
+  const CAT_STATUSES = { ok: ['ok'], warn: ['warn'], crit: ['bad', 'down'], stale: ['stale'], unknown: ['unknown'] };
+  let filterCat = null;
+  let lastAgents = [];
+  let lastSummary = null;
+
+  function chipClick(cat) {
+    filterCat = filterCat === cat ? null : cat;
+    if (lastSummary) renderSummary(lastSummary);
+    applyFilter();
+  }
   function renderSummary(s) {
-    const chip = (cls, label, n) => el('div', { class: `fs-chip ${cls}${n ? '' : ' zero'}` }, el('span', { class: 'fs-n' }, String(n)), el('span', { class: 'fs-l' }, label));
+    lastSummary = s;
+    const chip = (cat, cls, label, n) => el('div', {
+      class: `fs-chip ${cls}${n ? '' : ' zero'}${filterCat === cat ? ' active' : ''}`,
+      role: 'button', tabindex: '0',
+      title: filterCat === cat ? 'Clear filter' : `Show only ${label}`,
+      onclick: () => chipClick(cat),
+      onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); chipClick(cat); } },
+    }, el('span', { class: 'fs-n' }, String(n)), el('span', { class: 'fs-l' }, label));
     summaryHost.replaceChildren(
-      chip('ok', 'Healthy', s.ok),
-      chip('warn', 'Warnings', s.warn),
-      chip('bad', 'Critical', s.bad + s.down),
-      chip('stale', 'Stale', s.stale),
-      chip('unknown', 'Unknown', s.unknown));
+      chip('ok', 'ok', 'Healthy', s.ok),
+      chip('warn', 'warn', 'Warnings', s.warn),
+      chip('crit', 'bad', 'Critical', s.bad + s.down),
+      chip('stale', 'stale', 'Stale', s.stale),
+      chip('unknown', 'unknown', 'Unknown', s.unknown));
+  }
+  function applyFilter() {
+    const list = filterCat ? lastAgents.filter((a) => CAT_STATUSES[filterCat].includes(a.health.status)) : lastAgents;
+    renderTable(list, !!filterCat);
   }
   function fleetRow(a) {
     const m = a.health.metrics;
@@ -2550,8 +2573,8 @@ views.fleet = async () => {
       el('td', { class: 'muted' }, a.locationName || '–'),
       el('td', { class: 'muted' }, m.lastTs ? fmtTimeShort(new Date(m.lastTs).getTime()) : '–'));
   }
-  function renderTable(agents) {
-    if (!agents.length) { tableHost.replaceChildren(el('div', { class: 'empty' }, 'No agents yet — go to Agents to enrol one.')); return; }
+  function renderTable(agents, filtered) {
+    if (!agents.length) { tableHost.replaceChildren(el('div', { class: 'empty' }, filtered ? 'No agents with this status.' : 'No agents yet — go to Agents to enrol one.')); return; }
     tableHost.replaceChildren(el('table', { class: 'fleet-table' },
       el('thead', {}, el('tr', {}, ...['Agent', 'Status', 'Health', 'Loss', 'Latency', 'Jitter', 'Targets', 'Speed', 'Location', 'Last seen'].map((h) => el('th', {}, h)))),
       el('tbody', {}, ...agents.map(fleetRow))));
@@ -2559,8 +2582,9 @@ views.fleet = async () => {
   async function refresh() {
     let data;
     try { data = await api('/api/fleet/health'); } catch (e) { tableHost.replaceChildren(el('div', { class: 'error' }, e.message)); return; }
+    lastAgents = data.agents;
     renderSummary(data.summary);
-    renderTable(data.agents);
+    applyFilter();
   }
 
   await refresh();

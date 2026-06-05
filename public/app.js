@@ -584,8 +584,12 @@ function agentRow(a, currentAgentVersion) {
       (a.monitor_config && (a.monitor_config.source === 'netflow' || a.monitor_config.source === 'sflow'))
         ? el('button', { class: 'small ghost', onclick: () => showAgentFlows(a) }, 'Flows')
         : null,
+      el('button', { class: 'small ghost', onclick: () => pingAgent(a), title: 'Confirm the live connection to this agent' }, 'Ping'),
       canWrite() ? el('button', { class: 'small', onclick: () => runTest(a) }, 'Run test') : null,
       canWrite() ? el('button', { class: 'small ghost', onclick: () => editAgent(a) }, 'Edit') : null,
+      (canDelete() && agentIsBehind(a, currentAgentVersion))
+        ? el('button', { class: 'small', onclick: () => updateAgent(a, currentAgentVersion), title: 'Rebuild this agent from the server source and restart it' }, 'Update')
+        : null,
       canDelete() ? el('button', { class: 'small danger', onclick: () => deleteAgent(a) }, 'Delete') : null,
     )),
   );
@@ -611,6 +615,12 @@ function agentVersionLine(a, current) {
   return el('div', { class: 'muted' },
     `v${v}${behind ? ' ' : ''}`,
     behind ? el('span', { class: 'badge warn', title: `Current agent version is ${current}` }, 'update') : null);
+}
+
+// True when the agent reports a version older than the one the server serves.
+function agentIsBehind(a, current) {
+  const v = a.capabilities && a.capabilities.agentVersion;
+  return !!(v && current && v !== current);
 }
 
 // Health derived from how recently the agent last reported in. online + a fresh
@@ -641,6 +651,37 @@ async function runTest(a) {
     toast(`Test sent to ${a.hostname} (delivered: ${res.delivered}). Fetching result…`);
     setTimeout(() => showResults(a), 2000);
   } catch (err) { toast(err.message, true); }
+}
+
+// Liveness check: round-trips a "ping" to the agent over the live WebSocket and
+// reports the result (latency + reported version/sources). Distinct from "Run
+// test" (which measures traffic): this just confirms the agent is reachable now.
+async function pingAgent(a) {
+  const name = a.display_name || a.hostname;
+  try {
+    const r = await api(`/agents/${a.id}/ping`, { method: 'POST' });
+    if (!r.connected) { toast(`${name}: not connected`, true); return; }
+    if (r.timedOut) { toast(`${name}: connected but did not reply (timed out)`, true); return; }
+    const bits = [`responded in ${r.latencyMs} ms`];
+    if (r.agentVersion) bits.push(`v${r.agentVersion}`);
+    if (r.sources && r.sources.length) bits.push(r.sources.join('/'));
+    if (r.managed) bits.push(r.managed);
+    toast(`${name}: ${bits.join(' · ')}`);
+  } catch (err) { toast(`${name}: ${err.message}`, true); }
+}
+
+// Asks a systemd-managed agent to rebuild from the server's source and restart.
+// Docker/unmanaged agents decline (their host rebuilds them) — surface why.
+async function updateAgent(a, target) {
+  const name = a.display_name || a.hostname;
+  if (!confirm(`Update ${name} to v${target || '?'}?\n\nThe agent will rebuild from the server's source bundle and restart, briefly interrupting monitoring on that host.`)) return;
+  try {
+    const r = await api(`/agents/${a.id}/update`, { method: 'POST' });
+    if (r.accepted) { toast(`${name}: update sent — rebuilding and restarting.`); return; }
+    if (r.reason === 'docker-managed') { toast(`${name} runs under Docker — update it by re-running the host installer.`, true); return; }
+    if (r.reason === 'unmanaged') { toast(`${name} isn't service-managed — update it manually (re-run the installer).`, true); return; }
+    toast(`${name}: the agent did not accept the update.`, true);
+  } catch (err) { toast(`${name}: ${err.message}`, true); }
 }
 
 async function showResults(a) {
@@ -3344,8 +3385,8 @@ function licenseBadge(license, feature) {
 }
 
 // Settings -> Updates: the server's version and the agent version it serves, plus
-// which enrolled agents are behind. Informational only (no external calls, no
-// auto-execution) — Phase 1 of the update feature.
+// which enrolled agents are behind. Admins can push a one-click update to
+// systemd-managed agents from here; checks themselves make no external calls.
 async function settingsUpdatesView() {
   const [ver, agents] = await Promise.all([api('/system/version'), api('/agents')]);
   const root = el('div');
@@ -3366,12 +3407,15 @@ async function settingsUpdatesView() {
 
   if (behind.length) {
     root.append(el('h4', {}, 'Agents needing an update'));
+    const cols = canDelete() ? ['Agent', 'Installed', 'Current', ''] : ['Agent', 'Installed', 'Current'];
     root.append(el('table', {},
-      el('thead', {}, el('tr', {}, ...['Agent', 'Installed', 'Current'].map((h) => el('th', {}, h)))),
+      el('thead', {}, el('tr', {}, ...cols.map((h) => el('th', {}, h)))),
       el('tbody', {}, ...behind.map((a) => el('tr', {},
         el('td', {}, a.display_name || a.hostname),
         el('td', {}, el('span', { class: 'badge warn' }, `v${a.capabilities.agentVersion}`)),
         el('td', {}, el('span', { class: 'badge active' }, `v${cur}`)),
+        canDelete() ? el('td', {}, el('div', { class: 'row-actions' },
+          el('button', { class: 'small', onclick: () => updateAgent(a, cur) }, 'Update'))) : null,
       )))));
   } else if (cur && withVer.length) {
     root.append(el('p', { class: 'muted' }, 'All reporting agents are on the current version.'));
@@ -3380,7 +3424,8 @@ async function settingsUpdatesView() {
   root.append(el('h4', {}, 'How to update'));
   root.append(el('ul', {},
     el('li', {}, el('strong', {}, 'Server: '), 'on the server host run ', el('code', {}, './scripts/deploy.sh'), ' (git pull + rebuild).'),
-    el('li', {}, el('strong', {}, 'Agents: '), 're-run the install one-liner from ', el('strong', {}, 'Enrollment'), ' on each host — it rebuilds from the latest source. (One-click push-update from here is planned.)')));
+    el('li', {}, el('strong', {}, 'Agents (systemd): '), 'click ', el('strong', {}, 'Update'), ' above (or on the Agents tab) — the server tells the agent to rebuild from the published source and restart.'),
+    el('li', {}, el('strong', {}, 'Agents (Docker): '), 're-run the install one-liner from ', el('strong', {}, 'Enrollment'), ' on that host (a container rebuilds on the host, not from here).')));
   return root;
 }
 

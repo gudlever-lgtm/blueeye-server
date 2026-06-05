@@ -185,10 +185,17 @@ function makeDb(overrides = {}) {
 }
 
 // A fake agent commander (push commands to agents over the WS). Defaults to
-// "delivered to 1 connection".
+// "delivered to 1 connection"; sendCommandAndWait resolves with a benign ack.
 function makeAgentCommander(overrides = {}) {
   return {
     sendCommand: overrides.sendCommand || (() => 1),
+    sendCommandAndWait:
+      overrides.sendCommandAndWait ||
+      (async () => ({
+        delivered: 1,
+        acked: true,
+        reply: { agentVersion: '0.1.0', sources: ['proc'], managed: 'systemd', accepted: true, runtime: 'systemd' },
+      })),
   };
 }
 

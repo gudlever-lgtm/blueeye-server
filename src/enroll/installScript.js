@@ -127,6 +127,7 @@ install_docker() {
     -e "BLUEEYE_SERVER_URL=$SERVER_URL" \\
     -e "BLUEEYE_ENROLLMENT_CODE=$ENROLL_CODE" \\
     -e "BLUEEYE_TOKEN_PATH=/data/token" \\
+    -e "BLUEEYE_RUNTIME=docker" \\
     $FP_ENV \\
     -v "$TOKEN_VOLUME:/data" \\
     "$IMAGE" >/dev/null || fail "docker run failed"
@@ -176,6 +177,8 @@ WorkingDirectory=$INSTALL_DIR
 Environment=BLUEEYE_SERVER_URL=$SERVER_URL
 Environment=BLUEEYE_SERVER_CERT_FINGERPRINT=$CERT_FINGERPRINT
 Environment=BLUEEYE_TOKEN_PATH=$INSTALL_DIR/token
+Environment=BLUEEYE_RUNTIME=systemd
+Environment=BLUEEYE_SERVICE_NAME=$SERVICE_NAME
 ExecStart=$NODE_BIN $INSTALL_DIR/src/index.js
 Restart=on-failure
 RestartSec=5

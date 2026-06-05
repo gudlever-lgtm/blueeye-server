@@ -94,8 +94,13 @@ function start() {
   const featureGate = createFeatureGate({ licenseManager });
 
   // Lets HTTP routes push commands to connected agents over the WebSocket.
+  // sendCommandAndWait also awaits the agent's correlated reply (Ping/Update).
   const agentCommander = {
     sendCommand: (agentId, command) => (agentWs ? agentWs.sendCommand(agentId, command) : 0),
+    sendCommandAndWait: (agentId, command, opts) =>
+      (agentWs
+        ? agentWs.sendCommandAndWait(agentId, command, opts)
+        : Promise.resolve({ delivered: 0, acked: false, reply: null })),
   };
 
   // Pushes a live event to every connected dashboard (assigned below; the

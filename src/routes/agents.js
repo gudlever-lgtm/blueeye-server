@@ -66,13 +66,87 @@ function aggregateFlows(rows, { port = null, protocol = null } = {}) {
 //
 // Agents are created via enrollment (prompt 4) — there is intentionally no
 // manual POST /agents here.
-function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentCommander }) {
+function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentCommander, agentSourceStore }) {
   const router = express.Router();
 
   // Response helpers for the error shapes repeated across this router.
   const invalidId = (res) => res.status(400).json({ error: 'Invalid id' });
   const notFound = (res) => res.status(404).json({ error: 'Agent not found' });
   const validationError = (res, details) => res.status(400).json({ error: 'Validation failed', details });
+
+  // POST /agents/:id/ping — liveness check: asks the connected agent to reply
+  // over the WebSocket and reports the round-trip time + the agent's live
+  // version/sources. viewer+ (no side effects). 409 if the agent isn't connected.
+  router.post(
+    '/:id/ping',
+    requireAuth,
+    requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN),
+    asyncHandler(async (req, res) => {
+      const id = parseId(req.params.id);
+      if (id === null) return invalidId(res);
+      const agent = await agentsRepo.findById(id);
+      if (!agent) return notFound(res);
+      if (!agentCommander || typeof agentCommander.sendCommandAndWait !== 'function') {
+        return res.status(503).json({ error: 'Agent channel not available' });
+      }
+      const startedAt = Date.now();
+      const out = await agentCommander.sendCommandAndWait(id, { name: 'ping' }, { timeoutMs: 5000 });
+      if (out.delivered === 0) {
+        return res.status(409).json({ error: 'Agent not connected', connected: false });
+      }
+      const reply = out.reply || {};
+      res.json({
+        connected: true,
+        acked: !!out.acked,
+        timedOut: !!out.timedOut,
+        latencyMs: Date.now() - startedAt,
+        agentVersion: reply.agentVersion || null,
+        sources: Array.isArray(reply.sources) ? reply.sources : null,
+        managed: reply.managed || null,
+      });
+    })
+  );
+
+  // POST /agents/:id/update — ask a connected, systemd-managed agent to rebuild
+  // from the server's source bundle and restart onto the new code. admin only.
+  // The expected SHA-256 of the bundle is sent so the agent verifies what it
+  // downloads. Docker/unmanaged agents decline (the host rebuilds those).
+  router.post(
+    '/:id/update',
+    requireAuth,
+    requireRole(ROLES.ADMIN),
+    asyncHandler(async (req, res) => {
+      const id = parseId(req.params.id);
+      if (id === null) return invalidId(res);
+      const agent = await agentsRepo.findById(id);
+      if (!agent) return notFound(res);
+      if (!agentSourceStore || typeof agentSourceStore.available !== 'function' || !agentSourceStore.available()) {
+        return res.status(503).json({ error: 'No agent source is published on the server' });
+      }
+      if (!agentCommander || typeof agentCommander.sendCommandAndWait !== 'function') {
+        return res.status(503).json({ error: 'Agent channel not available' });
+      }
+      const sha256 = agentSourceStore.sha256;
+      const targetVersion = typeof agentSourceStore.sourceVersion === 'function' ? agentSourceStore.sourceVersion() : null;
+      const out = await agentCommander.sendCommandAndWait(
+        id,
+        { name: 'update', sha256, version: targetVersion },
+        { timeoutMs: 8000 }
+      );
+      if (out.delivered === 0) {
+        return res.status(409).json({ error: 'Agent not connected', connected: false });
+      }
+      const reply = out.reply || {};
+      res.status(202).json({
+        connected: true,
+        acked: !!out.acked,
+        accepted: !!reply.accepted,
+        runtime: reply.runtime || null,
+        reason: reply.reason || null,
+        targetVersion,
+      });
+    })
+  );
 
   // POST /agents/:id/run-test — push a "run test" command to a connected agent
   // over the live WebSocket. operator/admin. Returns 202 with how many

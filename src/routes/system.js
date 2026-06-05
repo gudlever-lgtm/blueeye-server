@@ -24,6 +24,25 @@ function createSystemRouter({ systemInfo, agentSourceStore } = {}) {
     }
   );
 
+  // Re-package the agent source bundle from disk (AGENT_SOURCE_DIR) without
+  // restarting the server, so a freshly-pulled agent version is served right
+  // away and out-of-date agents get flagged/updated. admin only.
+  router.post(
+    '/agent-source/reload',
+    requireAuth,
+    requireRole(ROLES.ADMIN),
+    (req, res) => {
+      if (!agentSourceStore || typeof agentSourceStore.reload !== 'function') {
+        return res.status(503).json({ error: 'Agent source not configured on this server' });
+      }
+      agentSourceStore.reload();
+      res.json({
+        version: typeof agentSourceStore.sourceVersion === 'function' ? agentSourceStore.sourceVersion() : null,
+        available: typeof agentSourceStore.available === 'function' ? agentSourceStore.available() : false,
+      });
+    }
+  );
+
   router.get(
     '/storage',
     requireAuth,

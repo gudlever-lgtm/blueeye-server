@@ -616,12 +616,16 @@ views.agents = async () => {
   const [agents, locations, ver] = await Promise.all([api('/agents'), api('/locations'), api('/system/version').catch(() => null)]);
   const currentAgentVersion = ver && ver.agent ? ver.agent : null;
   locationCache = locations;
+  const outdated = agents.filter((a) => agentIsBehind(a, currentAgentVersion));
   const root = el('div');
   const countLabel = el('span', { class: 'muted' }, `${agents.length} total`);
   root.append(el('div', { class: 'section-head' },
     el('h2', {}, 'Agents'),
     countLabel,
-    canWrite() ? el('button', { class: 'small', onclick: () => newAgent() }, '+ New agent') : null));
+    canWrite() ? el('button', { class: 'small', onclick: () => newAgent() }, '+ New agent') : null,
+    (canDelete() && outdated.length)
+      ? el('button', { class: 'small', onclick: () => bulkUpdateAgents(outdated, currentAgentVersion), title: 'Rebuild every outdated agent from the server source, one at a time' }, `Update outdated (${outdated.length})`)
+      : null));
   if (!agents.length) { root.append(el('div', { class: 'empty' }, 'No agents yet. Click "+ New agent" to get an enrollment code for installation.')); return root; }
 
   // Client-side filter + sort over the already-loaded agents (no refetch).
@@ -739,16 +743,31 @@ function agentHealthRank(a) {
 function agentVersionLine(a, current) {
   const v = a.capabilities && a.capabilities.agentVersion;
   if (!v) return null;
-  const behind = current && v !== current;
+  const behind = agentIsBehind(a, current);
   return el('div', { class: 'muted' },
     `v${v}${behind ? ' ' : ''}`,
     behind ? el('span', { class: 'badge warn', title: `Current agent version is ${current}` }, 'update') : null);
 }
 
-// True when the agent reports a version older than the one the server serves.
+// Compare dotted versions: <0 if a<b, 0 if equal, >0 if a>b. Ignores any
+// pre-release/build suffix; non-numeric segments count as 0.
+function compareVersions(a, b) {
+  const parse = (s) => String(s).split(/[-+]/)[0].split('.').map((n) => parseInt(n, 10) || 0);
+  const pa = parse(a);
+  const pb = parse(b);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] || 0) - (pb[i] || 0);
+    if (d !== 0) return d < 0 ? -1 : 1;
+  }
+  return 0;
+}
+
+// True only when the agent reports a version STRICTLY OLDER than the one the
+// server serves. An agent that's ahead of the server (e.g. hand-rebuilt before
+// the server's source was refreshed) is NOT "behind" — don't offer it a update.
 function agentIsBehind(a, current) {
   const v = a.capabilities && a.capabilities.agentVersion;
-  return !!(v && current && v !== current);
+  return !!(v && current && compareVersions(v, current) < 0);
 }
 
 // Health derived from how recently the agent last reported in. online + a fresh
@@ -810,6 +829,34 @@ async function updateAgent(a, target) {
     if (r.reason === 'unmanaged') { toast(`${name} isn't service-managed — update it manually (re-run the installer).`, true); return; }
     toast(`${name}: the agent did not accept the update.`, true);
   } catch (err) { toast(`${name}: ${err.message}`, true); }
+}
+
+// Bulk "update all outdated": rebuild every behind agent from the server's
+// source. STAGGERED — we wait between agents so they don't all pull the new
+// source bundle from the server at the same instant (thundering herd). Each
+// agent's managed-state is still honoured (Docker/unmanaged decline on their
+// own). Versions refresh on the next agent report, so no forced re-render here.
+const BULK_UPDATE_STAGGER_MS = 5000;
+async function bulkUpdateAgents(list, target) {
+  if (!list || !list.length) return;
+  const n = list.length;
+  if (!confirm(`Update ${n} outdated agent${n > 1 ? 's' : ''} to v${target || '?'}?\n\nThey're updated one at a time, ${BULK_UPDATE_STAGGER_MS / 1000}s apart, so they don't all download the new build at once. Each rebuilds and restarts, briefly interrupting monitoring on that host.`)) return;
+  let sent = 0;
+  let declined = 0;
+  let failed = 0;
+  for (let i = 0; i < list.length; i += 1) {
+    try {
+      const r = await api(`/agents/${list[i].id}/update`, { method: 'POST' });
+      if (r.accepted) sent += 1;
+      else declined += 1;
+    } catch { failed += 1; }
+    // Space out the rest so their downloads don't land on the server together.
+    if (i < list.length - 1) await new Promise((resolve) => setTimeout(resolve, BULK_UPDATE_STAGGER_MS));
+  }
+  const bits = [`${sent} updating`];
+  if (declined) bits.push(`${declined} declined (Docker/unmanaged)`);
+  if (failed) bits.push(`${failed} failed`);
+  toast(`Bulk update — ${bits.join(' · ')}.`, declined > 0 || failed > 0);
 }
 
 // ---- Tests (server-defined test packages pushed to agents to run) ---------
@@ -4062,9 +4109,27 @@ async function settingsUpdatesView() {
     stat('Server', ver.server ? `v${ver.server}` : '–'),
     stat('Agent (served)', ver.agent ? `v${ver.agent}` : '–')));
 
+  // Re-read the agent source from disk so a freshly-pulled version is served
+  // without restarting the server. admin only.
+  if (canDelete()) {
+    root.append(el('div', { class: 'row-actions' },
+      el('button', {
+        class: 'small',
+        title: 'Re-read the agent source from disk so a freshly-pulled version is served — no server restart needed',
+        onclick: async () => {
+          try {
+            const r = await api('/system/agent-source/reload', { method: 'POST' });
+            toast(r && r.version ? `Agent source reloaded — now serving v${r.version}.` : 'Agent source reloaded.');
+            render();
+          } catch (err) { toast(err.message, true); }
+        },
+      }, 'Reload agent source')));
+    root.append(el('p', { class: 'muted' }, 'After pulling a new agent version on the server host, reload to publish it without restarting the server.'));
+  }
+
   const cur = ver.agent || null;
   const withVer = agents.filter((a) => a.capabilities && a.capabilities.agentVersion);
-  const behind = cur ? withVer.filter((a) => a.capabilities.agentVersion !== cur) : [];
+  const behind = withVer.filter((a) => agentIsBehind(a, cur));
 
   root.append(el('div', { class: 'cards' },
     stat('Agents reporting', `${withVer.length} / ${agents.length}`),

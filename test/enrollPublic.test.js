@@ -86,6 +86,22 @@ test('GET /enroll/agent-source.tgz 500s when the store throws', async () => {
   assert.equal(res.status, 500);
 });
 
+// ---- GET /enroll/uninstall.sh ----------------------------------------------
+test('GET /enroll/uninstall.sh serves the uninstall script (200)', async () => {
+  const store = makeSourceStore({ uninstallScript: () => '#!/bin/sh\necho remove-me\n' });
+  const res = await request(makeApp({ agentSourceStore: store })).get('/enroll/uninstall.sh');
+  assert.equal(res.status, 200);
+  assert.match(res.headers['content-type'], /text\/x-shellscript/);
+  assert.match(res.text, /echo remove-me/);
+});
+
+test('GET /enroll/uninstall.sh 404s when no uninstall script is available', async () => {
+  const store = makeSourceStore({ uninstallScript: () => null });
+  const res = await request(makeApp({ agentSourceStore: store })).get('/enroll/uninstall.sh');
+  assert.equal(res.status, 404);
+  assert.match(res.headers['content-type'], /text\/plain/);
+});
+
 // ---- GET /enroll/:code/install.sh ------------------------------------------
 test('GET /enroll/:code/install.sh returns a script for an active code (200)', async () => {
   const store = makeSourceStore({ sha256: 's'.repeat(64) });

@@ -109,7 +109,7 @@ then:  curl -sSL $SERVER_URL/enroll/$ENROLL_CODE/install.sh | sh"
   tar -xzf "$TARBALL" -C "$INSTALL_DIR" || fail "could not extract the agent source"
 
   if [ "$RUNTIME" = "docker" ]; then install_docker; else install_node; fi
-  log "to remove the agent later: sudo sh $INSTALL_DIR/uninstall.sh  (warns first; --purge also drops the docker image/volume)"
+  log "to remove the agent later: curl -sSL $SERVER_URL/enroll/uninstall.sh | sudo sh   (or: sudo sh $INSTALL_DIR/uninstall.sh; warns first)"
 }
 
 install_docker() {

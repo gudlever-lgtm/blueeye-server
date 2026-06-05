@@ -476,13 +476,86 @@ views.agents = async () => {
   const [agents, locations] = await Promise.all([api('/agents'), api('/locations')]);
   locationCache = locations;
   const root = el('div');
+  const countLabel = el('span', { class: 'muted' }, `${agents.length} total`);
   root.append(el('div', { class: 'section-head' },
     el('h2', {}, 'Agents'),
-    el('span', { class: 'muted' }, `${agents.length} total`),
+    countLabel,
     canWrite() ? el('button', { class: 'small', onclick: () => newAgent() }, '+ New agent') : null));
   if (!agents.length) { root.append(el('div', { class: 'empty' }, 'No agents yet. Click "+ New agent" to get an enrollment code for installation.')); return root; }
 
-  const rows = agents.map((a) => el('tr', {},
+  // Client-side filter + sort over the already-loaded agents (no refetch).
+  let filter = '';
+  let sortKey = 'id';
+  let sortDir = 'asc';
+
+  // Columns: { label, key, get }. key:null = not sortable (Source, actions).
+  const columns = [
+    { label: 'ID', key: 'id', get: (a) => a.id },
+    { label: 'Name / hostname', key: 'name', get: (a) => (a.display_name || a.hostname || '').toLowerCase() },
+    { label: 'Platform', key: 'platform', get: (a) => `${a.platform}/${a.arch}`.toLowerCase() },
+    { label: 'Status', key: 'status', get: (a) => a.status || '' },
+    { label: 'Health', key: 'health', get: agentHealthRank },
+    { label: 'Location', key: 'location', get: (a) => (a.location_name || '').toLowerCase() },
+    { label: 'Source', key: null },
+    { label: 'Last reported', key: 'last', get: (a) => (a.last_report_at ? new Date(a.last_report_at).getTime() : 0) },
+    { label: '', key: null },
+  ];
+
+  const search = el('input', {
+    type: 'search', class: 'table-filter',
+    placeholder: 'Filter agents — name, IP, platform, location, source…',
+    oninput: (e) => { filter = e.target.value.trim().toLowerCase(); update(); },
+  });
+  root.append(el('div', { class: 'table-toolbar' }, search));
+
+  const headerEls = columns.map((c) => (c.key
+    ? el('th', { class: 'sortable', onclick: () => sortBy(c.key) })
+    : el('th', {}, c.label)));
+  const tbody = el('tbody');
+  root.append(el('table', { class: 'agents-table' },
+    el('thead', {}, el('tr', {}, ...headerEls)),
+    tbody));
+
+  function sortBy(key) {
+    if (sortKey === key) sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+    else { sortKey = key; sortDir = 'asc'; }
+    update();
+  }
+  function matchesFilter(a) {
+    if (!filter) return true;
+    return [a.id, a.display_name, a.hostname, a.platform, a.arch, a.status,
+      a.location_name, a.monitor_config && a.monitor_config.source]
+      .filter((v) => v != null).join(' ').toLowerCase().includes(filter);
+  }
+  function update() {
+    const col = columns.find((c) => c.key === sortKey) || columns[0];
+    const list = agents.filter(matchesFilter).sort((x, y) => {
+      const vx = col.get(x);
+      const vy = col.get(y);
+      const r = (typeof vx === 'number' && typeof vy === 'number')
+        ? vx - vy
+        : String(vx).localeCompare(String(vy));
+      return sortDir === 'asc' ? r : -r;
+    });
+    tbody.replaceChildren(...(list.length
+      ? list.map(agentRow)
+      : [el('tr', {}, el('td', { colspan: String(columns.length), class: 'muted' }, 'No agents match your filter.'))]));
+    columns.forEach((c, i) => {
+      if (!c.key) return;
+      const on = sortKey === c.key;
+      headerEls[i].textContent = c.label + (on ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '');
+      headerEls[i].classList.toggle('sorted', on);
+    });
+    countLabel.textContent = filter ? `${list.length} of ${agents.length}` : `${agents.length} total`;
+  }
+
+  update();
+  return root;
+};
+
+// One agent table row (extracted so the agents view can re-render on filter/sort).
+function agentRow(a) {
+  return el('tr', {},
     el('td', {}, String(a.id)),
     el('td', {}, el('div', {}, a.display_name || a.hostname), a.display_name ? el('div', { class: 'muted' }, a.hostname) : null),
     el('td', {}, `${a.platform} / ${a.arch}`),
@@ -500,12 +573,18 @@ views.agents = async () => {
       canWrite() ? el('button', { class: 'small ghost', onclick: () => editAgent(a) }, 'Edit') : null,
       canDelete() ? el('button', { class: 'small danger', onclick: () => deleteAgent(a) }, 'Delete') : null,
     )),
-  ));
-  root.append(el('table', {},
-    el('thead', {}, el('tr', {}, ...['ID', 'Name / hostname', 'Platform', 'Status', 'Health', 'Location', 'Source', 'Last reported', ''].map((h) => el('th', {}, h)))),
-    el('tbody', {}, ...rows)));
-  return root;
-};
+  );
+}
+
+// Health ordering for sorting: healthy(0) < delayed / no-data(1) < down(2).
+// Mirrors agentHealthCell so the column sorts the way it reads.
+function agentHealthRank(a) {
+  const last = a.last_report_at ? new Date(a.last_report_at).getTime() : 0;
+  const ageMs = last ? Date.now() - last : Infinity;
+  if (a.status !== 'online') return 2;
+  if (ageMs <= 5 * 60 * 1000) return 0;
+  return 1;
+}
 
 // Health derived from how recently the agent last reported in. online + a fresh
 // report = healthy; online but stale (or never reported) = degraded; offline = down.

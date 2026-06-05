@@ -3433,6 +3433,8 @@ function agentSourceCell(a) {
 function editAgent(a) {
   const mc = a.monitor_config || {};
   const snmp = mc.snmp || {};
+  const sflowHs = (mc.sflow && mc.sflow.hsflowd) || null;
+  const hsObj = sflowHs && typeof sflowHs === 'object' ? sflowHs : {};
   const caps = a.capabilities && Array.isArray(a.capabilities.sources) ? a.capabilities.sources : [];
   // Only offer sources the agent says it supports (fall back to both if unknown).
   const sourceOptions = (caps.length ? caps : ['proc', 'snmp']).map((s) => ({ value: s, label: s }));
@@ -3451,6 +3453,11 @@ function editAgent(a) {
       value: String((mc.netflow && mc.netflow.port) || 2055) },
     { name: 'sflow_port', label: 'sFlow UDP port (only for sflow)', type: 'number',
       value: String((mc.sflow && mc.sflow.port) || 6343) },
+    { name: 'sflow_hsflowd', label: 'Local hsflowd exporter (sflow; native installs — Docker uses the sidecar)', type: 'select',
+      value: sflowHs ? 'on' : 'off',
+      options: [{ value: 'off', label: 'Off (receives sFlow from a switch)' }, { value: 'on', label: 'On (sample this host)' }] },
+    { name: 'sflow_sampling', label: 'hsflowd sampling (1-in-N packets)', type: 'number', value: String(hsObj.samplingRate || 256) },
+    { name: 'sflow_device', label: 'hsflowd interface', value: hsObj.device || 'eth0' },
   ], async (v) => {
     let monitor_config = null;
     if (v.source === 'snmp') {
@@ -3467,7 +3474,15 @@ function editAgent(a) {
     } else if (v.source === 'netflow') {
       monitor_config = { source: 'netflow', netflow: { port: Number(v.netflow_port) || 2055 } };
     } else if (v.source === 'sflow') {
-      monitor_config = { source: 'sflow', sflow: { port: Number(v.sflow_port) || 6343 } };
+      const sflow = { port: Number(v.sflow_port) || 6343 };
+      if (v.sflow_hsflowd === 'on') {
+        const hs = {};
+        const rate = Number(v.sflow_sampling);
+        if (Number.isInteger(rate) && rate > 0) hs.samplingRate = rate;
+        if (v.sflow_device && v.sflow_device.trim()) hs.device = v.sflow_device.trim();
+        sflow.hsflowd = Object.keys(hs).length ? hs : true;
+      }
+      monitor_config = { source: 'sflow', sflow };
     } else if (v.source === 'proc') {
       monitor_config = { source: 'proc' };
     }

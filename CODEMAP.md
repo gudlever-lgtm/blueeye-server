@@ -112,7 +112,7 @@ Later migrations add:
 | 013 | `app_settings` | runtime-editable settings (key/JSON) |
 | 014 | `probe_results` | active probes |
 | 015 | (index only) | `idx_probe_ts` for the fleet-wide probe scan |
-| 017 | `probe_results.status` / `.cert_expiry_days` | http probe (status + TLS cert expiry) |
+| 019 | `probe_results.status` / `.cert_expiry_days` | http probe (status + TLS cert expiry) |
 
 Interface health, traffic-type categories and **fleet health** add **no** tables — they
 derive from the existing `results.payload.traffic` (and `flow_records.asn` for org

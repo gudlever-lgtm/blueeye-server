@@ -204,13 +204,30 @@ function openModal(title, fields, onSubmit) {
   card.replaceChildren(el('h3', {}, title), form);
   $('#modal').classList.remove('hidden');
 }
-function closeModal() { $('#modal').classList.add('hidden'); }
+function closeModal() { $('#modal').classList.add('hidden'); $('#modal-card').classList.remove('wide'); }
 
 // ---- Views ----------------------------------------------------------------
 // ---- Per-page explanation (hero + slide-in info drawer) -------------------
 // Each view starts with a short hero line and a “More info” button that slides
 // in a panel from the right with a fuller explanation.
 const PAGE_INFO = {
+  tests: {
+    hero: 'Reusable test packages — sets of probe/traffic tests the server pushes to chosen agents to run, on a schedule or on demand.',
+    title: 'Tests — packages pushed to agents',
+    body: () => [
+      el('p', {}, 'A test package is a named set of tests (ping / TCP / DNS / traceroute / throughput) with a target selector and an optional schedule. The server pushes the tests to the selected, connected agents; each agent runs them and reports back — results appear on the Probes and Traffic pages as usual.'),
+      el('h4', {}, 'Targets'),
+      el('ul', {},
+        el('li', {}, el('strong', {}, 'All agents '), '— every enrolled agent.'),
+        el('li', {}, el('strong', {}, 'Specific agents '), '— pick individual agents.'),
+        el('li', {}, el('strong', {}, 'By location '), '— every agent at the chosen sites.')),
+      el('h4', {}, 'Schedule'),
+      el('p', {}, 'Choose Manual (run on demand with “Run now”) or an interval from 1 minute up to 24 hours. The schedule applies to every target agent in the package; for different cadences, create separate packages.'),
+      el('h4', {}, 'Predefined tests'),
+      el('p', {}, 'Use “Add a predefined test” for common checks (internet latency, DNS, web reachability, path trace, throughput snapshot), or build a custom one. Metadata only: targets and timings, never payload.'),
+      el('p', { class: 'muted' }, 'A run only reaches agents connected at that moment; offline agents pick up the next scheduled run when they reconnect.'),
+    ],
+  },
   fleet: {
     hero: 'All agents in one view — with a health assessment based on active reachability, packet loss, latency and jitter.',
     title: 'Overview — fleet health',
@@ -584,8 +601,13 @@ function agentRow(a, currentAgentVersion) {
       (a.monitor_config && (a.monitor_config.source === 'netflow' || a.monitor_config.source === 'sflow'))
         ? el('button', { class: 'small ghost', onclick: () => showAgentFlows(a) }, 'Flows')
         : null,
+      el('button', { class: 'small ghost', onclick: () => pingAgent(a), title: 'Confirm the live connection to this agent' }, 'Ping'),
+      el('button', { class: 'small ghost', onclick: () => showSpeedtest(a), title: 'Active download/upload speed test to the server' }, 'Speed'),
       canWrite() ? el('button', { class: 'small', onclick: () => runTest(a) }, 'Run test') : null,
       canWrite() ? el('button', { class: 'small ghost', onclick: () => editAgent(a) }, 'Edit') : null,
+      (canDelete() && agentIsBehind(a, currentAgentVersion))
+        ? el('button', { class: 'small', onclick: () => updateAgent(a, currentAgentVersion), title: 'Rebuild this agent from the server source and restart it' }, 'Update')
+        : null,
       canDelete() ? el('button', { class: 'small danger', onclick: () => deleteAgent(a) }, 'Delete') : null,
     )),
   );
@@ -611,6 +633,12 @@ function agentVersionLine(a, current) {
   return el('div', { class: 'muted' },
     `v${v}${behind ? ' ' : ''}`,
     behind ? el('span', { class: 'badge warn', title: `Current agent version is ${current}` }, 'update') : null);
+}
+
+// True when the agent reports a version older than the one the server serves.
+function agentIsBehind(a, current) {
+  const v = a.capabilities && a.capabilities.agentVersion;
+  return !!(v && current && v !== current);
 }
 
 // Health derived from how recently the agent last reported in. online + a fresh
@@ -641,6 +669,320 @@ async function runTest(a) {
     toast(`Test sent to ${a.hostname} (delivered: ${res.delivered}). Fetching result…`);
     setTimeout(() => showResults(a), 2000);
   } catch (err) { toast(err.message, true); }
+}
+
+// Liveness check: round-trips a "ping" to the agent over the live WebSocket and
+// reports the result (latency + reported version/sources). Distinct from "Run
+// test" (which measures traffic): this just confirms the agent is reachable now.
+async function pingAgent(a) {
+  const name = a.display_name || a.hostname;
+  try {
+    const r = await api(`/agents/${a.id}/ping`, { method: 'POST' });
+    if (!r.connected) { toast(`${name}: not connected`, true); return; }
+    if (r.timedOut) { toast(`${name}: connected but did not reply (timed out)`, true); return; }
+    const bits = [`responded in ${r.latencyMs} ms`];
+    if (r.agentVersion) bits.push(`v${r.agentVersion}`);
+    if (r.sources && r.sources.length) bits.push(r.sources.join('/'));
+    if (r.managed) bits.push(r.managed);
+    toast(`${name}: ${bits.join(' · ')}`);
+  } catch (err) { toast(`${name}: ${err.message}`, true); }
+}
+
+// Asks a systemd-managed agent to rebuild from the server's source and restart.
+// Docker/unmanaged agents decline (their host rebuilds them) — surface why.
+async function updateAgent(a, target) {
+  const name = a.display_name || a.hostname;
+  if (!confirm(`Update ${name} to v${target || '?'}?\n\nThe agent will rebuild from the server's source bundle and restart, briefly interrupting monitoring on that host.`)) return;
+  try {
+    const r = await api(`/agents/${a.id}/update`, { method: 'POST' });
+    if (r.accepted) { toast(`${name}: update sent — rebuilding and restarting.`); return; }
+    if (r.reason === 'docker-managed') { toast(`${name} runs under Docker — update it by re-running the host installer.`, true); return; }
+    if (r.reason === 'unmanaged') { toast(`${name} isn't service-managed — update it manually (re-run the installer).`, true); return; }
+    toast(`${name}: the agent did not accept the update.`, true);
+  } catch (err) { toast(`${name}: ${err.message}`, true); }
+}
+
+// ---- Tests (server-defined test packages pushed to agents to run) ---------
+// A "test package" is a named set of probe/traffic tests + a target selector
+// (all / specific agents / by location) + an optional schedule. The server
+// pushes the items to the chosen, connected agents; results land in the usual
+// Probes/Traffic views. Read for everyone; operator+ may create/edit/run.
+
+// One-click predefined tests for the editor. They produce ordinary items, so
+// the server validates them like any hand-built test. 9.9.9.9 = Quad9 (EU).
+const TEST_TEMPLATES = [
+  { key: 'latency', label: 'Internet latency — ping 9.9.9.9', item: { type: 'probe', probe: { type: 'ping', host: '9.9.9.9', count: 5 } } },
+  { key: 'dns', label: 'DNS resolution — example.com', item: { type: 'probe', probe: { type: 'dns', host: 'example.com' } } },
+  { key: 'web', label: 'Web reachability — TCP 443 example.com', item: { type: 'probe', probe: { type: 'tcp', host: 'example.com', port: 443, count: 3 } } },
+  { key: 'path', label: 'Path trace — traceroute 9.9.9.9', item: { type: 'probe', probe: { type: 'traceroute', host: '9.9.9.9' } } },
+  { key: 'throughput', label: 'Throughput snapshot — current bandwidth', item: { type: 'run-test', intervalMs: 1000 } },
+  { key: 'speed', label: 'Speed test — download/upload to server (Mbps)', item: { type: 'speedtest' } },
+];
+
+const SCHEDULE_PRESETS = [
+  ['0', 'Manual only'],
+  ['60000', 'Every 1 minute'],
+  ['300000', 'Every 5 minutes'],
+  ['900000', 'Every 15 minutes'],
+  ['3600000', 'Every hour'],
+  ['21600000', 'Every 6 hours'],
+  ['86400000', 'Every 24 hours'],
+];
+
+views.tests = async () => {
+  const [packages, agents, locations] = await Promise.all([
+    api('/api/test-packages'),
+    api('/agents').catch(() => []),
+    api('/locations').catch(() => []),
+  ]);
+  const root = el('div');
+  root.append(el('div', { class: 'section-head' },
+    el('h2', {}, 'Tests'),
+    el('span', { class: 'muted' }, `${packages.length} package${packages.length === 1 ? '' : 's'}`),
+    canWrite() ? el('button', { class: 'small', onclick: () => editTestPackage(null, agents, locations) }, '+ New test package') : null));
+
+  if (!packages.length) {
+    root.append(el('div', { class: 'empty' }, 'No test packages yet. A test package is a set of probe/traffic tests the server sends to chosen agents to run — on a schedule or on demand.'));
+    return root;
+  }
+
+  const tbody = el('tbody');
+  root.append(el('table', { class: 'tests-table' },
+    el('thead', {}, el('tr', {}, ...['Name', 'Tests', 'Targets', 'Schedule', 'Status', 'Last run', ''].map((h) => el('th', {}, h)))),
+    tbody));
+  tbody.append(...packages.map((p) => testPackageRow(p, agents, locations)));
+  return root;
+};
+
+function testPackageRow(p, agents, locations) {
+  return el('tr', {},
+    el('td', {}, el('div', {}, p.name), p.created_by ? el('div', { class: 'muted' }, `by ${esc(String(p.created_by))}`) : null),
+    el('td', {}, testItemsSummary(p.items)),
+    el('td', {}, testTargetsSummary(p.targets, agents, locations)),
+    el('td', {}, testScheduleLabel(p.schedule_ms)),
+    el('td', {}, el('span', { class: `badge ${p.enabled ? 'active' : 'neutral'}` }, p.enabled ? 'enabled' : 'disabled')),
+    el('td', { class: 'muted' }, testLastRun(p)),
+    el('td', {}, el('div', { class: 'row-actions' },
+      canWrite() ? el('button', { class: 'small', onclick: () => runTestPackage(p) }, 'Run now') : null,
+      canWrite() ? el('button', { class: 'small ghost', onclick: () => editTestPackage(p, agents, locations) }, 'Edit') : null,
+      canWrite() ? el('button', { class: 'small danger', onclick: () => deleteTestPackage(p) }, 'Delete') : null,
+    )),
+  );
+}
+
+function testItemsSummary(items) {
+  if (!items || !items.length) return el('span', { class: 'muted' }, '–');
+  const labels = items.map((it) => {
+    if (it.type === 'run-test') return 'throughput';
+    if (it.type === 'speedtest') return 'speed test';
+    return `${it.probe.type} ${it.probe.host}${it.probe.port ? ':' + it.probe.port : ''}`;
+  });
+  return el('span', { class: 'muted small' }, labels.join(', '));
+}
+
+function testTargetsSummary(t, agents, locations) {
+  if (!t) return '–';
+  if (t.mode === 'all') return `All agents (${agents.length})`;
+  if (t.mode === 'agents') return `${(t.agentIds || []).length} agent${(t.agentIds || []).length === 1 ? '' : 's'}`;
+  if (t.mode === 'location') {
+    const names = (t.locationIds || []).map((id) => { const l = locations.find((x) => x.id === id); return l ? l.name : `#${id}`; });
+    return `Locations: ${names.join(', ') || '–'}`;
+  }
+  return '–';
+}
+
+function testScheduleLabel(ms) {
+  const found = SCHEDULE_PRESETS.find(([v]) => Number(v) === Number(ms || 0));
+  if (found) return found[1];
+  return ms ? `Every ${Math.round(ms / 1000)}s` : 'Manual only';
+}
+
+function testLastRun(p) {
+  if (!p.last_run_at) return 'never';
+  const s = p.last_run_summary;
+  const when = fmtDate(p.last_run_at);
+  return s ? `${when} · ${s.reached}/${s.targeted} reached` : when;
+}
+
+async function runTestPackage(p) {
+  try {
+    const s = await api(`/api/test-packages/${p.id}/run`, { method: 'POST' });
+    if (!s.targeted) { toast(`"${p.name}": no matching agents to run on.`, true); return; }
+    toast(`"${p.name}": ${s.reached}/${s.targeted} agents reached, ${s.delivered} test(s) sent.`);
+    setTimeout(() => { if (currentView === 'tests') render(); }, 1500);
+  } catch (err) { toast(errText(err), true); }
+}
+
+async function deleteTestPackage(p) {
+  if (!confirm(`Delete test package "${p.name}"?`)) return;
+  try { await api(`/api/test-packages/${p.id}`, { method: 'DELETE' }); toast('Deleted'); render(); }
+  catch (err) { toast(err.message, true); }
+}
+
+// Create/edit modal. Builds the form by hand (it's richer than openModal's
+// flat field list): targets selector + an items builder with predefined tests.
+function editTestPackage(pkg, agents, locations) {
+  const card = $('#modal-card');
+  const isEdit = !!pkg;
+  const data = pkg || { name: '', enabled: true, schedule_ms: 0, targets: { mode: 'all', agentIds: [], locationIds: [] }, items: [] };
+
+  const nameInput = el('input', { type: 'text', value: data.name, placeholder: 'e.g. Daily reachability' });
+  const enabledInput = el('input', { type: 'checkbox', ...(data.enabled ? { checked: 'checked' } : {}) });
+  const scheduleSel = el('select', {}, ...SCHEDULE_PRESETS.map(([v, l]) => el('option', { value: v, ...(Number(v) === Number(data.schedule_ms || 0) ? { selected: 'selected' } : {}) }, l)));
+
+  const modeSel = el('select', {}, ...[['all', 'All agents'], ['agents', 'Specific agents'], ['location', 'By location']]
+    .map(([v, l]) => el('option', { value: v, ...(data.targets.mode === v ? { selected: 'selected' } : {}) }, l)));
+  const agentsBox = el('div', { class: 'check-list' }, ...agents.map((a) => checkRow(a.id, a.display_name || a.hostname, (data.targets.agentIds || []).includes(a.id))));
+  const locsBox = el('div', { class: 'check-list' }, ...locations.map((l) => checkRow(l.id, l.name, (data.targets.locationIds || []).includes(l.id))));
+  const agentsWrap = el('label', {}, 'Agents', agentsBox);
+  const locsWrap = el('label', {}, 'Locations', locations.length ? locsBox : el('span', { class: 'muted small' }, 'No locations defined yet.'));
+  const syncMode = () => { agentsWrap.style.display = modeSel.value === 'agents' ? '' : 'none'; locsWrap.style.display = modeSel.value === 'location' ? '' : 'none'; };
+  modeSel.addEventListener('change', syncMode);
+
+  const itemsBox = el('div', { class: 'tc-list' });
+  const itemRows = [];
+  function addItemRow(item) {
+    const typeSel = el('select', {}, ...[['ping', 'Ping'], ['tcp', 'TCP'], ['dns', 'DNS'], ['traceroute', 'Traceroute'], ['run-test', 'Throughput'], ['speedtest', 'Speed test']].map(([v, l]) => el('option', { value: v }, l)));
+    const host = el('input', { type: 'text', placeholder: 'host / target' });
+    const port = el('input', { type: 'number', min: '1', max: '65535', placeholder: 'port' });
+    const count = el('input', { type: 'number', min: '1', max: '20', placeholder: 'count' });
+    if (item) {
+      if (item.type === 'run-test' || item.type === 'speedtest') { typeSel.value = item.type; }
+      else { typeSel.value = item.probe.type; host.value = item.probe.host || ''; if (item.probe.port) port.value = item.probe.port; if (item.probe.count) count.value = item.probe.count; }
+    }
+    const ctrl = { typeSel, host, port, count };
+    const del = el('button', { type: 'button', class: 'small ghost danger', title: 'Remove', onclick: () => { const i = itemRows.indexOf(ctrl); if (i >= 0) itemRows.splice(i, 1); node.remove(); } }, '×');
+    const node = el('div', { class: 'test-item-row' }, typeSel, host, port, count, del);
+    const sync = () => {
+      const t = typeSel.value;
+      const noTarget = t === 'run-test' || t === 'speedtest';
+      host.style.visibility = noTarget ? 'hidden' : 'visible';
+      port.style.visibility = t === 'tcp' ? 'visible' : 'hidden';
+      count.style.visibility = (t === 'ping' || t === 'tcp') ? 'visible' : 'hidden';
+    };
+    typeSel.addEventListener('change', sync); sync();
+    itemRows.push(ctrl);
+    itemsBox.append(node);
+    return ctrl;
+  }
+  (data.items || []).forEach(addItemRow);
+
+  const tplSel = el('select', {}, el('option', { value: '' }, '+ Add a predefined test…'),
+    ...TEST_TEMPLATES.map((t) => el('option', { value: t.key }, t.label)));
+  tplSel.addEventListener('change', () => { const t = TEST_TEMPLATES.find((x) => x.key === tplSel.value); if (t) addItemRow(JSON.parse(JSON.stringify(t.item))); tplSel.value = ''; });
+  const addCustomBtn = el('button', { type: 'button', class: 'small ghost', onclick: () => addItemRow(null) }, '+ Custom test');
+
+  const err = el('p', { class: 'error' });
+  const saveBtn = el('button', { type: 'button', class: 'small' }, isEdit ? 'Save changes' : 'Create');
+
+  function collect() {
+    const targets = { mode: modeSel.value, agentIds: [], locationIds: [] };
+    if (modeSel.value === 'agents') targets.agentIds = checkedValues(agentsBox);
+    if (modeSel.value === 'location') targets.locationIds = checkedValues(locsBox);
+    const items = itemRows.map((c) => {
+      const t = c.typeSel.value;
+      if (t === 'run-test') return { type: 'run-test' };
+      if (t === 'speedtest') return { type: 'speedtest' };
+      const probe = { type: t, host: c.host.value.trim() };
+      if (t === 'tcp' && c.port.value) probe.port = Number(c.port.value);
+      if ((t === 'ping' || t === 'tcp') && c.count.value) probe.count = Number(c.count.value);
+      return { type: 'probe', probe };
+    });
+    return { name: nameInput.value.trim(), enabled: enabledInput.checked, schedule_ms: Number(scheduleSel.value), targets, items };
+  }
+
+  saveBtn.addEventListener('click', async () => {
+    err.textContent = '';
+    const body = collect();
+    if (!body.name) { err.textContent = 'Name is required.'; return; }
+    if (!body.items.length) { err.textContent = 'Add at least one test.'; return; }
+    if (body.targets.mode === 'agents' && !body.targets.agentIds.length) { err.textContent = 'Select at least one agent.'; return; }
+    if (body.targets.mode === 'location' && !body.targets.locationIds.length) { err.textContent = 'Select at least one location.'; return; }
+    saveBtn.disabled = true;
+    try {
+      if (isEdit) await api(`/api/test-packages/${pkg.id}`, { method: 'PUT', body });
+      else await api('/api/test-packages', { method: 'POST', body });
+      toast('Test package saved');
+      closeModal();
+      render();
+    } catch (e2) { err.textContent = errText(e2); saveBtn.disabled = false; }
+  });
+
+  const form = el('div', { class: 'form-grid test-form' },
+    el('label', {}, 'Name', nameInput),
+    el('label', { class: 'inline' }, enabledInput, ' Enabled'),
+    el('label', {}, 'Schedule', scheduleSel),
+    el('label', {}, 'Targets', modeSel),
+    agentsWrap, locsWrap,
+    el('div', { class: 'test-items' },
+      el('div', { class: 'muted small' }, 'Tests in this package'),
+      itemsBox,
+      el('div', { class: 'form-actions' }, tplSel, addCustomBtn)),
+    err,
+    el('div', { class: 'form-actions' },
+      el('button', { type: 'button', class: 'ghost', onclick: closeModal }, 'Cancel'),
+      saveBtn));
+  syncMode();
+  card.replaceChildren(el('h3', {}, isEdit ? 'Edit test package' : 'New test package'), form);
+  card.classList.add('wide');
+  $('#modal').classList.remove('hidden');
+}
+
+function checkRow(id, label, checked) {
+  const cb = el('input', { type: 'checkbox', value: String(id), ...(checked ? { checked: 'checked' } : {}) });
+  return el('label', { class: 'check-row' }, cb, ' ', label);
+}
+function checkedValues(box) {
+  return [...box.querySelectorAll('input[type=checkbox]')].filter((c) => c.checked).map((c) => Number(c.value));
+}
+
+// Per-agent speed-test modal: latest download/upload Mbps + recent history, with
+// a "Run speed test now" button (operator+). Results come from /api/speedtest.
+async function showSpeedtest(a) {
+  const card = $('#modal-card');
+  const title = `Speed test — ${esc(a.display_name || a.hostname)}`;
+  const host = el('div', {}, el('p', { class: 'muted' }, 'Loading…'));
+  card.replaceChildren(el('h3', {}, title), host);
+  $('#modal').classList.remove('hidden');
+
+  async function load() {
+    let data;
+    try { data = await api(`/api/speedtest?agentId=${a.id}&limit=20`); }
+    catch (err) { host.replaceChildren(el('p', { class: 'error' }, err.message)); return; }
+    const rows = data.results || [];
+    const kids = [];
+    if (canWrite()) {
+      const runBtn = el('button', { class: 'small' }, 'Run speed test now');
+      runBtn.addEventListener('click', async () => {
+        runBtn.disabled = true; runBtn.textContent = 'Running…';
+        try {
+          const r = await api(`/agents/${a.id}/run-speedtest`, { method: 'POST' });
+          toast(`Speed test sent to ${a.hostname} (delivered: ${r.delivered}). Result in a few seconds…`);
+          setTimeout(load, 6000);
+        } catch (err) { toast(err.message, true); runBtn.disabled = false; runBtn.textContent = 'Run speed test now'; }
+      });
+      kids.push(el('div', { class: 'form-actions' }, runBtn));
+    }
+    if (!rows.length) {
+      kids.push(el('p', { class: 'muted' }, 'No speed-test results yet. Run one now, or add a "Speed test" item to a package on the Tests tab.'));
+    } else {
+      const latest = rows[0];
+      kids.push(el('div', { class: 'cards' },
+        stat('Download', latest.down_mbps != null ? `${latest.down_mbps} Mbps` : '–'),
+        stat('Upload', latest.up_mbps != null ? `${latest.up_mbps} Mbps` : '–'),
+        stat('Measured', fmtDate(latest.ts))));
+      kids.push(el('table', {},
+        el('thead', {}, el('tr', {}, ...['When', 'Download', 'Upload', 'Status'].map((h) => el('th', {}, h)))),
+        el('tbody', {}, ...rows.map((r) => el('tr', {},
+          el('td', { class: 'muted' }, fmtDate(r.ts)),
+          el('td', {}, r.down_mbps != null ? `${r.down_mbps} Mbps` : '–'),
+          el('td', {}, r.up_mbps != null ? `${r.up_mbps} Mbps` : '–'),
+          el('td', {}, el('span', { class: `badge ${r.ok ? 'ok' : 'bad'}` }, r.ok ? 'ok' : 'failed')))))));
+    }
+    kids.push(el('div', { class: 'form-actions' }, el('button', { class: 'ghost', onclick: closeModal }, 'Close')));
+    host.replaceChildren(...kids);
+  }
+  load();
 }
 
 async function showResults(a) {
@@ -2153,6 +2495,15 @@ function latencyText(m) {
   if (m.baselineMs && m.latencyZ >= 3) return el('span', { class: 'warn-text' }, `${m.rttMs} ms `, el('span', { class: 'muted' }, `/ ~${m.baselineMs}`));
   return `${m.rttMs} ms`;
 }
+// Throughput cell: latest speed test as ↓down / ↑up Mbps (from the agent's last
+// run). A failed test reads "failed"; no test yet reads "–".
+function throughputText(t) {
+  if (!t) return '–';
+  if (!t.ok) return el('span', { class: 'muted', title: t.ts ? fmtDate(t.ts) : '' }, 'failed');
+  const d = t.downMbps != null ? t.downMbps : '?';
+  const u = t.upMbps != null ? t.upMbps : '?';
+  return el('span', { title: t.ts ? fmtDate(t.ts) : '' }, `↓${d} / ↑${u}`);
+}
 
 // The landing view: all agents with a probe-derived health verdict, worst-first.
 // Click a row to pivot into that agent's combined detail page.
@@ -2195,13 +2546,14 @@ views.fleet = async () => {
       el('td', { class: 'num' }, latencyText(m)),
       el('td', { class: 'num' }, m.jitterMs != null ? `${m.jitterMs} ms` : '–'),
       el('td', { class: 'num muted' }, m.targets ? `${m.reachable}/${m.targets}` : '–'),
+      el('td', { class: 'num' }, throughputText(a.throughput)),
       el('td', { class: 'muted' }, a.locationName || '–'),
       el('td', { class: 'muted' }, m.lastTs ? fmtTimeShort(new Date(m.lastTs).getTime()) : '–'));
   }
   function renderTable(agents) {
     if (!agents.length) { tableHost.replaceChildren(el('div', { class: 'empty' }, 'No agents yet — go to Agents to enrol one.')); return; }
     tableHost.replaceChildren(el('table', { class: 'fleet-table' },
-      el('thead', {}, el('tr', {}, ...['Agent', 'Status', 'Health', 'Loss', 'Latency', 'Jitter', 'Targets', 'Location', 'Last seen'].map((h) => el('th', {}, h)))),
+      el('thead', {}, el('tr', {}, ...['Agent', 'Status', 'Health', 'Loss', 'Latency', 'Jitter', 'Targets', 'Speed', 'Location', 'Last seen'].map((h) => el('th', {}, h)))),
       el('tbody', {}, ...agents.map(fleetRow))));
   }
   async function refresh() {
@@ -2241,9 +2593,10 @@ views.agent = async () => {
   // Health résumé (the headline + the metrics that drove it).
   const healthHost = el('div', { class: 'agent-health' });
   root.append(healthHost);
-  function renderHealth(h, q) {
+  function renderHealth(h, q, thr) {
     const m = h.metrics;
     const kv = (k, v, cls) => el('div', { class: 'ah-kv' }, el('span', { class: 'ah-k' }, k), el('span', { class: `ah-v${cls ? ' ' + cls : ''}` }, v));
+    const thrCls = m.throughputStatus === 'warn' ? 'warn-text' : (m.throughputStatus === 'bad' ? 'bad-text' : '');
     const children = [
       el('div', { class: 'ah-head' }, healthBadge(h), el('span', { class: 'ah-reason' }, h.reason || '')),
       el('div', { class: 'ah-grid' },
@@ -2252,7 +2605,8 @@ views.agent = async () => {
         kv('Latency', latencyText(m)),
         kv('Baseline', m.baselineMs != null ? `~${m.baselineMs} ms` : '–'),
         kv('Jitter', m.jitterMs != null ? `${m.jitterMs} ms` : '–', m.jitterMs >= 30 ? 'warn-text' : ''),
-        m.ifaceStatus ? kv('Interface', `${String(m.ifaceStatus).toUpperCase()}${m.worstIface ? ' · ' + m.worstIface : ''}`, m.ifaceStatus === 'ok' ? '' : (m.ifaceStatus === 'warn' ? 'warn-text' : 'bad-text')) : null),
+        m.ifaceStatus ? kv('Interface', `${String(m.ifaceStatus).toUpperCase()}${m.worstIface ? ' · ' + m.worstIface : ''}`, m.ifaceStatus === 'ok' ? '' : (m.ifaceStatus === 'warn' ? 'warn-text' : 'bad-text')) : null,
+        thr ? kv('Throughput', thr.ok ? `↓${thr.downMbps ?? '?'} / ↑${thr.upMbps ?? '?'} Mbps` : 'failed', thr.ok ? thrCls : 'bad-text') : null),
     ];
     if (q && q.status && q.status !== 'unknown') {
       const cls = q.status === 'ok' ? 'online' : (q.status === 'warn' ? 'warn' : 'offline');
@@ -2340,7 +2694,7 @@ views.agent = async () => {
   }
 
   async function refreshHealth() {
-    try { const d = await api(`/api/fleet/agent/${id}`); renderHealth(d.health, d.quality); } catch { /* keep last verdict */ }
+    try { const d = await api(`/api/fleet/agent/${id}`); renderHealth(d.health, d.quality, d.throughput); } catch { /* keep last verdict */ }
   }
 
   root.append(
@@ -3372,8 +3726,8 @@ function licenseBadge(license, feature) {
 }
 
 // Settings -> Updates: the server's version and the agent version it serves, plus
-// which enrolled agents are behind. Informational only (no external calls, no
-// auto-execution) — Phase 1 of the update feature.
+// which enrolled agents are behind. Admins can push a one-click update to
+// systemd-managed agents from here; checks themselves make no external calls.
 async function settingsUpdatesView() {
   const [ver, agents] = await Promise.all([api('/system/version'), api('/agents')]);
   const root = el('div');
@@ -3394,12 +3748,15 @@ async function settingsUpdatesView() {
 
   if (behind.length) {
     root.append(el('h4', {}, 'Agents needing an update'));
+    const cols = canDelete() ? ['Agent', 'Installed', 'Current', ''] : ['Agent', 'Installed', 'Current'];
     root.append(el('table', {},
-      el('thead', {}, el('tr', {}, ...['Agent', 'Installed', 'Current'].map((h) => el('th', {}, h)))),
+      el('thead', {}, el('tr', {}, ...cols.map((h) => el('th', {}, h)))),
       el('tbody', {}, ...behind.map((a) => el('tr', {},
         el('td', {}, a.display_name || a.hostname),
         el('td', {}, el('span', { class: 'badge warn' }, `v${a.capabilities.agentVersion}`)),
         el('td', {}, el('span', { class: 'badge active' }, `v${cur}`)),
+        canDelete() ? el('td', {}, el('div', { class: 'row-actions' },
+          el('button', { class: 'small', onclick: () => updateAgent(a, cur) }, 'Update'))) : null,
       )))));
   } else if (cur && withVer.length) {
     root.append(el('p', { class: 'muted' }, 'All reporting agents are on the current version.'));
@@ -3408,7 +3765,8 @@ async function settingsUpdatesView() {
   root.append(el('h4', {}, 'How to update'));
   root.append(el('ul', {},
     el('li', {}, el('strong', {}, 'Server: '), 'on the server host run ', el('code', {}, './scripts/deploy.sh'), ' (git pull + rebuild).'),
-    el('li', {}, el('strong', {}, 'Agents: '), 're-run the install one-liner from ', el('strong', {}, 'Enrollment'), ' on each host — it rebuilds from the latest source. (One-click push-update from here is planned.)')));
+    el('li', {}, el('strong', {}, 'Agents (systemd): '), 'click ', el('strong', {}, 'Update'), ' above (or on the Agents tab) — the server tells the agent to rebuild from the published source and restart.'),
+    el('li', {}, el('strong', {}, 'Agents (Docker): '), 're-run the install one-liner from ', el('strong', {}, 'Enrollment'), ' on that host (a container rebuilds on the host, not from here).')));
   return root;
 }
 
@@ -3416,8 +3774,26 @@ async function settingsAnalyseView() {
   const data = await api('/api/settings');
   const root = el('div');
   root.append(el('p', { class: 'muted settings-intro' }, 'The server learns a normal baseline for each metric and raises a finding when a measurement deviates enough from it. Here you set how sensitive detection is — changes take effect immediately, without restart. ', licenseBadge(data.license, 'analysis')));
-  root.append(el('div', { class: 'settings-grid' }, analyseSettingsCard(data.analysis)));
+  root.append(el('div', { class: 'settings-grid' }, analyseSettingsCard(data.analysis), throughputSettingsCard(data.throughput)));
   return root;
+}
+
+// Speed-test health thresholds: flag agents on the Overview when their latest
+// download/upload falls below a floor (0 = that floor is off). Folded into the
+// agent's health verdict like loss/latency. Admin, runtime-editable.
+function throughputSettingsCard(t) {
+  return settingsFormCard({
+    title: 'Throughput (speed-test) health',
+    values: t || { enabled: false },
+    endpoint: '/api/settings/throughput',
+    fields: [
+      { key: 'enabled', label: 'Flag low throughput', type: 'checkbox', hint: 'When on, an agent whose latest speed test is below a floor is flagged on the Overview and folded into its health. Off = Mbps is shown but never flagged.' },
+      { key: 'downWarnMbps', label: 'Download WARN below (Mbps)', type: 'number', min: 0, max: 1000000, step: 1, hint: '0 = no download warning floor.' },
+      { key: 'downBadMbps', label: 'Download CRITICAL below (Mbps)', type: 'number', min: 0, max: 1000000, step: 1, hint: '0 = no download critical floor.' },
+      { key: 'upWarnMbps', label: 'Upload WARN below (Mbps)', type: 'number', min: 0, max: 1000000, step: 1, hint: '0 = no upload warning floor.' },
+      { key: 'upBadMbps', label: 'Upload CRITICAL below (Mbps)', type: 'number', min: 0, max: 1000000, step: 1, hint: '0 = no upload critical floor.' },
+    ],
+  });
 }
 
 async function settingsAlertingView() {

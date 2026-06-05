@@ -25,6 +25,12 @@ function attachAgentWebSocket({
   const authenticator = createAgentAuthenticator({ agentTokensRepo });
   const wss = new WebSocketServer({ noServer: true });
 
+  // Correlated server -> agent requests: sendCommandAndWait() stores a waiter
+  // keyed by a command id; the agent echoes that id back in an 'ack' frame and
+  // we resolve it. Powers the dashboard "Ping" (liveness) and "Update" buttons.
+  const pending = new Map(); // id -> { resolve, timer, delivered }
+  let seq = 0;
+
   server.on('upgrade', (req, socket, head) => {
     // Cooperative: only claim our path and ignore the rest, so sibling WS
     // servers on the same HTTP server (e.g. the dashboard socket) can handle
@@ -80,9 +86,23 @@ function attachAgentWebSocket({
       agentsRepo.touchLastSeen(agent.agentId).catch(() => {});
     });
 
-    ws.on('message', () => {
+    ws.on('message', (data) => {
       // Any inbound frame counts as a sign of life.
       agentsRepo.touchLastSeen(agent.agentId).catch(() => {});
+      // Resolve a correlated request: the agent echoes the command id in an
+      // 'ack' (or 'command-result') frame. Heartbeats and other frames are
+      // ignored here. Parsing is defensive — a bad frame must not crash the hub.
+      let msg = null;
+      try { msg = JSON.parse(data.toString()); } catch { return; }
+      if (!msg || typeof msg !== 'object') return;
+      if ((msg.type === 'ack' || msg.type === 'command-result') && msg.id != null) {
+        const waiter = pending.get(msg.id);
+        if (waiter) {
+          pending.delete(msg.id);
+          clearTimeout(waiter.timer);
+          waiter.resolve({ delivered: waiter.delivered, acked: true, reply: msg });
+        }
+      }
     });
 
     ws.on('close', () => {
@@ -113,8 +133,31 @@ function attachAgentWebSocket({
     return sent;
   }
 
+  // server -> agent request/response: sends a command carrying a correlation id
+  // and resolves when the agent echoes it back (or on timeout / if the agent is
+  // not connected). Resolves with { delivered, acked, reply, timedOut? } — never
+  // rejects, so callers can branch on the shape.
+  function sendCommandAndWait(agentId, command, { timeoutMs = 5000 } = {}) {
+    return new Promise((resolve) => {
+      const id = `s${Date.now().toString(36)}-${(seq += 1)}`;
+      const delivered = sendCommand(agentId, { ...command, id });
+      if (delivered === 0) {
+        resolve({ delivered: 0, acked: false, reply: null });
+        return;
+      }
+      const timer = setTimeout(() => {
+        pending.delete(id);
+        resolve({ delivered, acked: false, reply: null, timedOut: true });
+      }, timeoutMs);
+      if (timer.unref) timer.unref();
+      pending.set(id, { resolve, timer, delivered });
+    });
+  }
+
   function close() {
     clearInterval(interval);
+    for (const { timer } of pending.values()) clearTimeout(timer);
+    pending.clear();
     for (const ws of wss.clients) ws.terminate();
     wss.close();
   }
@@ -140,7 +183,7 @@ function attachAgentWebSocket({
     return sent;
   }
 
-  return { wss, sendCommand, broadcast, close, connectionCount };
+  return { wss, sendCommand, sendCommandAndWait, broadcast, close, connectionCount };
 }
 
 module.exports = { attachAgentWebSocket };

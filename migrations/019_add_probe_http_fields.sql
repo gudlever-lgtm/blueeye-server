@@ -1,4 +1,4 @@
--- 017 — HTTP/TLS probe fields. The agent's http(s) synthetic probe reports the
+-- 019 — HTTP/TLS probe fields. The agent's http(s) synthetic probe reports the
 -- final HTTP status code and, for https targets, the TLS certificate's
 -- days-to-expiry — so reachability checks and certificate-expiry alerting work
 -- off the same probe_results table. Nullable + backward-compatible: existing

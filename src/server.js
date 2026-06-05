@@ -47,6 +47,10 @@ const { createPurge } = require('./analysis/retention/purge');
 const { createRetentionScheduler } = require('./analysis/retention/scheduler');
 const { createSettingsRepository } = require('./repositories/settingsRepository');
 const { createSettingsService } = require('./services/settings');
+const { createTestPackagesRepository } = require('./repositories/testPackagesRepository');
+const { createTestPackageRunner } = require('./services/testPackageRunner');
+const { createTestPackageScheduler } = require('./services/testPackageScheduler');
+const { createSpeedtestResultsRepository } = require('./repositories/speedtestResultsRepository');
 
 // Wires up real dependencies, starts the HTTP server and installs graceful
 // shutdown handlers.
@@ -95,9 +99,23 @@ function start() {
   const featureGate = createFeatureGate({ licenseManager });
 
   // Lets HTTP routes push commands to connected agents over the WebSocket.
+  // sendCommandAndWait also awaits the agent's correlated reply (Ping/Update).
   const agentCommander = {
     sendCommand: (agentId, command) => (agentWs ? agentWs.sendCommand(agentId, command) : 0),
+    sendCommandAndWait: (agentId, command, opts) =>
+      (agentWs
+        ? agentWs.sendCommandAndWait(agentId, command, opts)
+        : Promise.resolve({ delivered: 0, acked: false, reply: null })),
   };
+
+  // Test packages: server-defined probe/traffic test sets pushed to agents to
+  // run, on a schedule or on demand. The runner reuses agentCommander to deliver
+  // the items as run-probe/run-test commands.
+  const testPackagesRepo = createTestPackagesRepository(db);
+  const testPackageRunner = createTestPackageRunner({ agentsRepo, agentCommander, repo: testPackagesRepo, logger: console });
+  const testPackageScheduler = createTestPackageScheduler({ repo: testPackagesRepo, runner: testPackageRunner, logger: console });
+  // Active throughput ("speed test") results reported by agents.
+  const speedtestResultsRepo = createSpeedtestResultsRepository(db);
 
   // Pushes a live event to every connected dashboard (assigned below; the
   // closure runs later). Used for enrollment/agent-status feedback in the UI.
@@ -235,6 +253,9 @@ function start() {
     retentionConfig,
     artifactStore,
     agentSourceStore,
+    testPackagesRepo,
+    testPackageRunner,
+    speedtestResultsRepo,
     enrollConfig: { publicUrl: config.publicUrl, certFingerprint: config.enroll.certFingerprint },
     notifyDashboard,
     logger: console,
@@ -293,10 +314,14 @@ function start() {
   // Periodic retention rollup + purge (behind RETENTION_ENABLED, default on).
   retentionScheduler.start();
 
+  // Periodic test-package scheduler: runs enabled, scheduled packages when due.
+  testPackageScheduler.start();
+
   function shutdown(signal) {
     console.info(`Received ${signal}, shutting down gracefully...`);
     licenseManager.stop();
     retentionScheduler.stop();
+    testPackageScheduler.stop();
     agentWs.close();
     dashboardWs.close();
     server.close(async () => {

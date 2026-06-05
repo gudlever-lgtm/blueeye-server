@@ -68,3 +68,30 @@ test('GET /api/map/config is available to viewers and includes the geocoder URL'
 test('GET /api/map/config without a token returns 401', async () => {
   assert.equal((await request(makeApp()).get('/api/map/config')).status, 401);
 });
+
+// ---- PUT /api/settings/throughput (speed-test health thresholds) -----------
+test('PUT /api/settings/throughput saves thresholds and GET reflects them (admin)', async () => {
+  const app = makeApp();
+  const put = await request(app).put('/api/settings/throughput').set('Authorization', admin()).send({ enabled: true, downBadMbps: 50, downWarnMbps: 100 });
+  assert.equal(put.status, 200);
+  assert.equal(put.body.throughput.enabled, true);
+  assert.equal(put.body.throughput.downBadMbps, 50);
+  const get = await request(app).get('/api/settings').set('Authorization', admin());
+  assert.equal(get.body.throughput.enabled, true);
+  assert.equal(get.body.throughput.downBadMbps, 50);
+});
+
+test('PUT /api/settings/throughput rejects a negative threshold (400)', async () => {
+  const res = await request(makeApp()).put('/api/settings/throughput').set('Authorization', admin()).send({ downBadMbps: -5 });
+  assert.equal(res.status, 400);
+});
+
+test('PUT /api/settings/throughput is admin-only (viewer 403)', async () => {
+  const res = await request(makeApp()).put('/api/settings/throughput').set('Authorization', viewer()).send({ enabled: true });
+  assert.equal(res.status, 403);
+});
+
+test('GET /api/settings includes throughput defaults (disabled)', async () => {
+  const res = await request(makeApp()).get('/api/settings').set('Authorization', admin());
+  assert.ok(res.body.throughput && res.body.throughput.enabled === false);
+});

@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('fs');
+const path = require('path');
 const crypto = require('crypto');
 const { spawnSync } = require('child_process');
 
@@ -31,6 +32,7 @@ const EXCLUDES = [
 
 function createAgentSourceStore({ dir, exec = spawnSync, fsImpl = fs, logger = console } = {}) {
   let cache = null; // { buffer, sha256, size }
+  let uninstall = null; // raw uninstall.sh content, served at /enroll/uninstall.sh
 
   function warn(msg) {
     if (logger && typeof logger.warn === 'function') logger.warn(msg);
@@ -38,6 +40,7 @@ function createAgentSourceStore({ dir, exec = spawnSync, fsImpl = fs, logger = c
 
   function build() {
     cache = null;
+    uninstall = null;
     if (!dir) {
       warn('enroll: AGENT_SOURCE_DIR not set — agent source unavailable (install.sh will explain).');
       return;
@@ -52,6 +55,14 @@ function createAgentSourceStore({ dir, exec = spawnSync, fsImpl = fs, logger = c
     if (!stat.isDirectory()) {
       warn(`enroll: agent source path is not a directory (${dir}).`);
       return;
+    }
+
+    // Cache the uninstall helper so it can be served as a one-liner. Independent
+    // of the tarball — uninstalling doesn't need the source bundle.
+    try {
+      uninstall = fsImpl.readFileSync(path.join(dir, 'uninstall.sh'), 'utf8');
+    } catch {
+      uninstall = null;
     }
 
     const args = ['-czf', '-', '-C', dir, ...EXCLUDES.map((e) => `--exclude=${e}`), '.'];
@@ -76,6 +87,10 @@ function createAgentSourceStore({ dir, exec = spawnSync, fsImpl = fs, logger = c
     reload: build,
     available() {
       return cache != null;
+    },
+    // Raw uninstall.sh (served at /enroll/uninstall.sh), or null when absent.
+    uninstallScript() {
+      return uninstall;
     },
     buffer() {
       return cache ? cache.buffer : null;

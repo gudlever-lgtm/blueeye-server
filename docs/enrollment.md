@@ -38,6 +38,7 @@ the installer ships its *source* and builds/runs it on the target.
 | `GET /enroll/agent-source.tgz` | none | the agent **source bundle** (+ `X-Content-SHA256`); 404 if `AGENT_SOURCE_DIR` is unset/empty |
 | `GET /enroll/agent/:platform` | none | *legacy/optional* pre-built binary, only if one was dropped in the artifacts dir; 404 otherwise |
 | `GET /enroll/:code/install.sh` | none | the self-contained installer for that code; 404 if unknown/expired/exhausted |
+| `GET /enroll/uninstall.sh` | none | the agent uninstaller — `curl … \| sudo sh` removes the agent from a host (warns + confirms first); 404 if no agent source is configured |
 | `GET /api/enroll/command` | operator+ | builds the one-liner + manual/checksum variants (mints or reuses a code) |
 
 `GET /api/enroll/command` query params: `codeId` (reuse an existing active code),

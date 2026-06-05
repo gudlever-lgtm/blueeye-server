@@ -23,6 +23,7 @@ function fixture() {
   fs.writeFileSync(path.join(dir, 'node_modules', 'junk.js'), 'x');
   fs.writeFileSync(path.join(dir, '.env'), 'SECRET=do-not-ship');
   fs.writeFileSync(path.join(dir, 'agent.token'), 'super-secret-token');
+  fs.writeFileSync(path.join(dir, 'uninstall.sh'), '#!/bin/sh\necho bye\n');
   return dir;
 }
 
@@ -52,6 +53,9 @@ test('packages the source dir into a checksummed gzip, excluding node_modules', 
   assert.equal(fs.existsSync(path.join(out, 'node_modules')), false, 'node_modules excluded');
   assert.equal(fs.existsSync(path.join(out, '.env')), false, 'secrets excluded');
   assert.equal(fs.existsSync(path.join(out, 'agent.token')), false, 'tokens excluded');
+
+  // The uninstall helper is exposed for the /enroll/uninstall.sh one-liner.
+  assert.match(store.uninstallScript(), /echo bye/);
 });
 
 test('tolerates a missing dir (unavailable, no throw)', () => {
@@ -61,6 +65,7 @@ test('tolerates a missing dir (unavailable, no throw)', () => {
   assert.equal(store.buffer(), null);
   assert.equal(store.meta(), null);
   assert.equal(store.size, 0);
+  assert.equal(store.uninstallScript(), null);
 });
 
 test('unavailable (no throw) when no dir is configured', () => {

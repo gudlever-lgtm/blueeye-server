@@ -168,6 +168,7 @@ function makeSourceStore(overrides = {}) {
     available: overrides.available || (() => has),
     buffer: overrides.buffer || (() => (has ? buf : null)),
     meta: overrides.meta || (() => (has ? { filename: 'blueeye-agent-source.tgz', contentType: 'application/gzip', size: buf.length, sha256: sha } : null)),
+    uninstallScript: overrides.uninstallScript || (() => (has ? '#!/bin/sh\n# fake uninstall\n' : null)),
     get sha256() { return has ? sha : null; },
     get size() { return has ? buf.length : 0; },
   };

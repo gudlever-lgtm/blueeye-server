@@ -57,6 +57,19 @@ function createEnrollRouter({ artifactStore, sourceStore, enrollmentCodesRepo, e
     res.status(200).send(buffer);
   }));
 
+  // The uninstall one-liner: serve the agent's uninstall.sh so an operator can run
+  //   curl -sSL <server>/enroll/uninstall.sh | sudo sh
+  // to remove the agent from a host. No code needed (uninstalling isn't gated by
+  // enrollment); the script itself warns + asks for confirmation before acting.
+  router.get('/uninstall.sh', asyncHandler(async (req, res) => {
+    const script = sourceStore && sourceStore.uninstallScript();
+    if (!script) {
+      res.status(404).type('text/plain; charset=utf-8');
+      return res.send('# No uninstall script available on this server.\n');
+    }
+    res.status(200).type('text/x-shellscript; charset=utf-8').send(script);
+  }));
+
   // Serve a pre-built agent binary for a platform from the local artifacts dir.
   // LEGACY/optional: the default install flow uses the source bundle above, so
   // this only responds when an operator has dropped a binary in. 404 otherwise.

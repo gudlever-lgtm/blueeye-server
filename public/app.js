@@ -204,13 +204,30 @@ function openModal(title, fields, onSubmit) {
   card.replaceChildren(el('h3', {}, title), form);
   $('#modal').classList.remove('hidden');
 }
-function closeModal() { $('#modal').classList.add('hidden'); }
+function closeModal() { $('#modal').classList.add('hidden'); $('#modal-card').classList.remove('wide'); }
 
 // ---- Views ----------------------------------------------------------------
 // ---- Per-page explanation (hero + slide-in info drawer) -------------------
 // Each view starts with a short hero line and a “More info” button that slides
 // in a panel from the right with a fuller explanation.
 const PAGE_INFO = {
+  tests: {
+    hero: 'Reusable test packages — sets of probe/traffic tests the server pushes to chosen agents to run, on a schedule or on demand.',
+    title: 'Tests — packages pushed to agents',
+    body: () => [
+      el('p', {}, 'A test package is a named set of tests (ping / TCP / DNS / traceroute / throughput) with a target selector and an optional schedule. The server pushes the tests to the selected, connected agents; each agent runs them and reports back — results appear on the Probes and Traffic pages as usual.'),
+      el('h4', {}, 'Targets'),
+      el('ul', {},
+        el('li', {}, el('strong', {}, 'All agents '), '— every enrolled agent.'),
+        el('li', {}, el('strong', {}, 'Specific agents '), '— pick individual agents.'),
+        el('li', {}, el('strong', {}, 'By location '), '— every agent at the chosen sites.')),
+      el('h4', {}, 'Schedule'),
+      el('p', {}, 'Choose Manual (run on demand with “Run now”) or an interval from 1 minute up to 24 hours. The schedule applies to every target agent in the package; for different cadences, create separate packages.'),
+      el('h4', {}, 'Predefined tests'),
+      el('p', {}, 'Use “Add a predefined test” for common checks (internet latency, DNS, web reachability, path trace, throughput snapshot), or build a custom one. Metadata only: targets and timings, never payload.'),
+      el('p', { class: 'muted' }, 'A run only reaches agents connected at that moment; offline agents pick up the next scheduled run when they reconnect.'),
+    ],
+  },
   fleet: {
     hero: 'All agents in one view — with a health assessment based on active reachability, packet loss, latency and jitter.',
     title: 'Overview — fleet health',
@@ -682,6 +699,235 @@ async function updateAgent(a, target) {
     if (r.reason === 'unmanaged') { toast(`${name} isn't service-managed — update it manually (re-run the installer).`, true); return; }
     toast(`${name}: the agent did not accept the update.`, true);
   } catch (err) { toast(`${name}: ${err.message}`, true); }
+}
+
+// ---- Tests (server-defined test packages pushed to agents to run) ---------
+// A "test package" is a named set of probe/traffic tests + a target selector
+// (all / specific agents / by location) + an optional schedule. The server
+// pushes the items to the chosen, connected agents; results land in the usual
+// Probes/Traffic views. Read for everyone; operator+ may create/edit/run.
+
+// One-click predefined tests for the editor. They produce ordinary items, so
+// the server validates them like any hand-built test. 9.9.9.9 = Quad9 (EU).
+const TEST_TEMPLATES = [
+  { key: 'latency', label: 'Internet latency — ping 9.9.9.9', item: { type: 'probe', probe: { type: 'ping', host: '9.9.9.9', count: 5 } } },
+  { key: 'dns', label: 'DNS resolution — example.com', item: { type: 'probe', probe: { type: 'dns', host: 'example.com' } } },
+  { key: 'web', label: 'Web reachability — TCP 443 example.com', item: { type: 'probe', probe: { type: 'tcp', host: 'example.com', port: 443, count: 3 } } },
+  { key: 'path', label: 'Path trace — traceroute 9.9.9.9', item: { type: 'probe', probe: { type: 'traceroute', host: '9.9.9.9' } } },
+  { key: 'throughput', label: 'Throughput snapshot — current bandwidth', item: { type: 'run-test', intervalMs: 1000 } },
+];
+
+const SCHEDULE_PRESETS = [
+  ['0', 'Manual only'],
+  ['60000', 'Every 1 minute'],
+  ['300000', 'Every 5 minutes'],
+  ['900000', 'Every 15 minutes'],
+  ['3600000', 'Every hour'],
+  ['21600000', 'Every 6 hours'],
+  ['86400000', 'Every 24 hours'],
+];
+
+views.tests = async () => {
+  const [packages, agents, locations] = await Promise.all([
+    api('/api/test-packages'),
+    api('/agents').catch(() => []),
+    api('/locations').catch(() => []),
+  ]);
+  const root = el('div');
+  root.append(el('div', { class: 'section-head' },
+    el('h2', {}, 'Tests'),
+    el('span', { class: 'muted' }, `${packages.length} package${packages.length === 1 ? '' : 's'}`),
+    canWrite() ? el('button', { class: 'small', onclick: () => editTestPackage(null, agents, locations) }, '+ New test package') : null));
+
+  if (!packages.length) {
+    root.append(el('div', { class: 'empty' }, 'No test packages yet. A test package is a set of probe/traffic tests the server sends to chosen agents to run — on a schedule or on demand.'));
+    return root;
+  }
+
+  const tbody = el('tbody');
+  root.append(el('table', { class: 'tests-table' },
+    el('thead', {}, el('tr', {}, ...['Name', 'Tests', 'Targets', 'Schedule', 'Status', 'Last run', ''].map((h) => el('th', {}, h)))),
+    tbody));
+  tbody.append(...packages.map((p) => testPackageRow(p, agents, locations)));
+  return root;
+};
+
+function testPackageRow(p, agents, locations) {
+  return el('tr', {},
+    el('td', {}, el('div', {}, p.name), p.created_by ? el('div', { class: 'muted' }, `by ${esc(String(p.created_by))}`) : null),
+    el('td', {}, testItemsSummary(p.items)),
+    el('td', {}, testTargetsSummary(p.targets, agents, locations)),
+    el('td', {}, testScheduleLabel(p.schedule_ms)),
+    el('td', {}, el('span', { class: `badge ${p.enabled ? 'active' : 'neutral'}` }, p.enabled ? 'enabled' : 'disabled')),
+    el('td', { class: 'muted' }, testLastRun(p)),
+    el('td', {}, el('div', { class: 'row-actions' },
+      canWrite() ? el('button', { class: 'small', onclick: () => runTestPackage(p) }, 'Run now') : null,
+      canWrite() ? el('button', { class: 'small ghost', onclick: () => editTestPackage(p, agents, locations) }, 'Edit') : null,
+      canWrite() ? el('button', { class: 'small danger', onclick: () => deleteTestPackage(p) }, 'Delete') : null,
+    )),
+  );
+}
+
+function testItemsSummary(items) {
+  if (!items || !items.length) return el('span', { class: 'muted' }, '–');
+  const labels = items.map((it) => (it.type === 'run-test'
+    ? 'throughput'
+    : `${it.probe.type} ${it.probe.host}${it.probe.port ? ':' + it.probe.port : ''}`));
+  return el('span', { class: 'muted small' }, labels.join(', '));
+}
+
+function testTargetsSummary(t, agents, locations) {
+  if (!t) return '–';
+  if (t.mode === 'all') return `All agents (${agents.length})`;
+  if (t.mode === 'agents') return `${(t.agentIds || []).length} agent${(t.agentIds || []).length === 1 ? '' : 's'}`;
+  if (t.mode === 'location') {
+    const names = (t.locationIds || []).map((id) => { const l = locations.find((x) => x.id === id); return l ? l.name : `#${id}`; });
+    return `Locations: ${names.join(', ') || '–'}`;
+  }
+  return '–';
+}
+
+function testScheduleLabel(ms) {
+  const found = SCHEDULE_PRESETS.find(([v]) => Number(v) === Number(ms || 0));
+  if (found) return found[1];
+  return ms ? `Every ${Math.round(ms / 1000)}s` : 'Manual only';
+}
+
+function testLastRun(p) {
+  if (!p.last_run_at) return 'never';
+  const s = p.last_run_summary;
+  const when = fmtDate(p.last_run_at);
+  return s ? `${when} · ${s.reached}/${s.targeted} reached` : when;
+}
+
+async function runTestPackage(p) {
+  try {
+    const s = await api(`/api/test-packages/${p.id}/run`, { method: 'POST' });
+    if (!s.targeted) { toast(`"${p.name}": no matching agents to run on.`, true); return; }
+    toast(`"${p.name}": ${s.reached}/${s.targeted} agents reached, ${s.delivered} test(s) sent.`);
+    setTimeout(() => { if (currentView === 'tests') render(); }, 1500);
+  } catch (err) { toast(errText(err), true); }
+}
+
+async function deleteTestPackage(p) {
+  if (!confirm(`Delete test package "${p.name}"?`)) return;
+  try { await api(`/api/test-packages/${p.id}`, { method: 'DELETE' }); toast('Deleted'); render(); }
+  catch (err) { toast(err.message, true); }
+}
+
+// Create/edit modal. Builds the form by hand (it's richer than openModal's
+// flat field list): targets selector + an items builder with predefined tests.
+function editTestPackage(pkg, agents, locations) {
+  const card = $('#modal-card');
+  const isEdit = !!pkg;
+  const data = pkg || { name: '', enabled: true, schedule_ms: 0, targets: { mode: 'all', agentIds: [], locationIds: [] }, items: [] };
+
+  const nameInput = el('input', { type: 'text', value: data.name, placeholder: 'e.g. Daily reachability' });
+  const enabledInput = el('input', { type: 'checkbox', ...(data.enabled ? { checked: 'checked' } : {}) });
+  const scheduleSel = el('select', {}, ...SCHEDULE_PRESETS.map(([v, l]) => el('option', { value: v, ...(Number(v) === Number(data.schedule_ms || 0) ? { selected: 'selected' } : {}) }, l)));
+
+  const modeSel = el('select', {}, ...[['all', 'All agents'], ['agents', 'Specific agents'], ['location', 'By location']]
+    .map(([v, l]) => el('option', { value: v, ...(data.targets.mode === v ? { selected: 'selected' } : {}) }, l)));
+  const agentsBox = el('div', { class: 'check-list' }, ...agents.map((a) => checkRow(a.id, a.display_name || a.hostname, (data.targets.agentIds || []).includes(a.id))));
+  const locsBox = el('div', { class: 'check-list' }, ...locations.map((l) => checkRow(l.id, l.name, (data.targets.locationIds || []).includes(l.id))));
+  const agentsWrap = el('label', {}, 'Agents', agentsBox);
+  const locsWrap = el('label', {}, 'Locations', locations.length ? locsBox : el('span', { class: 'muted small' }, 'No locations defined yet.'));
+  const syncMode = () => { agentsWrap.style.display = modeSel.value === 'agents' ? '' : 'none'; locsWrap.style.display = modeSel.value === 'location' ? '' : 'none'; };
+  modeSel.addEventListener('change', syncMode);
+
+  const itemsBox = el('div', { class: 'tc-list' });
+  const itemRows = [];
+  function addItemRow(item) {
+    const typeSel = el('select', {}, ...[['ping', 'Ping'], ['tcp', 'TCP'], ['dns', 'DNS'], ['traceroute', 'Traceroute'], ['run-test', 'Throughput']].map(([v, l]) => el('option', { value: v }, l)));
+    const host = el('input', { type: 'text', placeholder: 'host / target' });
+    const port = el('input', { type: 'number', min: '1', max: '65535', placeholder: 'port' });
+    const count = el('input', { type: 'number', min: '1', max: '20', placeholder: 'count' });
+    if (item) {
+      if (item.type === 'run-test') { typeSel.value = 'run-test'; }
+      else { typeSel.value = item.probe.type; host.value = item.probe.host || ''; if (item.probe.port) port.value = item.probe.port; if (item.probe.count) count.value = item.probe.count; }
+    }
+    const ctrl = { typeSel, host, port, count };
+    const del = el('button', { type: 'button', class: 'small ghost danger', title: 'Remove', onclick: () => { const i = itemRows.indexOf(ctrl); if (i >= 0) itemRows.splice(i, 1); node.remove(); } }, '×');
+    const node = el('div', { class: 'test-item-row' }, typeSel, host, port, count, del);
+    const sync = () => {
+      const t = typeSel.value;
+      host.style.visibility = t === 'run-test' ? 'hidden' : 'visible';
+      port.style.visibility = t === 'tcp' ? 'visible' : 'hidden';
+      count.style.visibility = (t === 'ping' || t === 'tcp') ? 'visible' : 'hidden';
+    };
+    typeSel.addEventListener('change', sync); sync();
+    itemRows.push(ctrl);
+    itemsBox.append(node);
+    return ctrl;
+  }
+  (data.items || []).forEach(addItemRow);
+
+  const tplSel = el('select', {}, el('option', { value: '' }, '+ Add a predefined test…'),
+    ...TEST_TEMPLATES.map((t) => el('option', { value: t.key }, t.label)));
+  tplSel.addEventListener('change', () => { const t = TEST_TEMPLATES.find((x) => x.key === tplSel.value); if (t) addItemRow(JSON.parse(JSON.stringify(t.item))); tplSel.value = ''; });
+  const addCustomBtn = el('button', { type: 'button', class: 'small ghost', onclick: () => addItemRow(null) }, '+ Custom test');
+
+  const err = el('p', { class: 'error' });
+  const saveBtn = el('button', { type: 'button', class: 'small' }, isEdit ? 'Save changes' : 'Create');
+
+  function collect() {
+    const targets = { mode: modeSel.value, agentIds: [], locationIds: [] };
+    if (modeSel.value === 'agents') targets.agentIds = checkedValues(agentsBox);
+    if (modeSel.value === 'location') targets.locationIds = checkedValues(locsBox);
+    const items = itemRows.map((c) => {
+      const t = c.typeSel.value;
+      if (t === 'run-test') return { type: 'run-test' };
+      const probe = { type: t, host: c.host.value.trim() };
+      if (t === 'tcp' && c.port.value) probe.port = Number(c.port.value);
+      if ((t === 'ping' || t === 'tcp') && c.count.value) probe.count = Number(c.count.value);
+      return { type: 'probe', probe };
+    });
+    return { name: nameInput.value.trim(), enabled: enabledInput.checked, schedule_ms: Number(scheduleSel.value), targets, items };
+  }
+
+  saveBtn.addEventListener('click', async () => {
+    err.textContent = '';
+    const body = collect();
+    if (!body.name) { err.textContent = 'Name is required.'; return; }
+    if (!body.items.length) { err.textContent = 'Add at least one test.'; return; }
+    if (body.targets.mode === 'agents' && !body.targets.agentIds.length) { err.textContent = 'Select at least one agent.'; return; }
+    if (body.targets.mode === 'location' && !body.targets.locationIds.length) { err.textContent = 'Select at least one location.'; return; }
+    saveBtn.disabled = true;
+    try {
+      if (isEdit) await api(`/api/test-packages/${pkg.id}`, { method: 'PUT', body });
+      else await api('/api/test-packages', { method: 'POST', body });
+      toast('Test package saved');
+      closeModal();
+      render();
+    } catch (e2) { err.textContent = errText(e2); saveBtn.disabled = false; }
+  });
+
+  const form = el('div', { class: 'form-grid test-form' },
+    el('label', {}, 'Name', nameInput),
+    el('label', { class: 'inline' }, enabledInput, ' Enabled'),
+    el('label', {}, 'Schedule', scheduleSel),
+    el('label', {}, 'Targets', modeSel),
+    agentsWrap, locsWrap,
+    el('div', { class: 'test-items' },
+      el('div', { class: 'muted small' }, 'Tests in this package'),
+      itemsBox,
+      el('div', { class: 'form-actions' }, tplSel, addCustomBtn)),
+    err,
+    el('div', { class: 'form-actions' },
+      el('button', { type: 'button', class: 'ghost', onclick: closeModal }, 'Cancel'),
+      saveBtn));
+  syncMode();
+  card.replaceChildren(el('h3', {}, isEdit ? 'Edit test package' : 'New test package'), form);
+  card.classList.add('wide');
+  $('#modal').classList.remove('hidden');
+}
+
+function checkRow(id, label, checked) {
+  const cb = el('input', { type: 'checkbox', value: String(id), ...(checked ? { checked: 'checked' } : {}) });
+  return el('label', { class: 'check-row' }, cb, ' ', label);
+}
+function checkedValues(box) {
+  return [...box.querySelectorAll('input[type=checkbox]')].filter((c) => c.checked).map((c) => Number(c.value));
 }
 
 async function showResults(a) {

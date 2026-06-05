@@ -25,6 +25,7 @@ const { createFleetRouter } = require('./fleet');
 const { createSearchRouter } = require('./search');
 const { createEnrollRouter } = require('./enroll');
 const { createEnrollCommandRouter } = require('./enrollCommand');
+const { createTestPackagesRouter } = require('./testPackages');
 const {
   createAgentAuthenticator,
   createAgentTokenMiddleware,
@@ -58,6 +59,8 @@ function createApiRouter({
   retentionConfig,
   artifactStore,
   agentSourceStore,
+  testPackagesRepo,
+  testPackageRunner,
   enrollConfig = {},
   notifyDashboard,
 }) {
@@ -96,6 +99,7 @@ function createApiRouter({
   router.use('/api/interfaces', createInterfacesRouter({ resultsRepo, agentsRepo }));
   router.use('/api/search', createSearchRouter({ agentsRepo, locationsRepo, flowsRepo }));
   if (settingsService) router.use('/api/settings', createSettingsRouter({ settingsService, featureGate, dispatcher, analysisConfig, retentionConfig }));
+  if (testPackagesRepo) router.use('/api/test-packages', createTestPackagesRouter({ repo: testPackagesRepo, runner: testPackageRunner }));
   router.use('/api/export', createExportRouter({ findingStore, flowsRepo, agentsRepo, locationsRepo, resultsRepo, probeResultsRepo, featureGate }));
   router.use('/enrollment-codes', createEnrollmentCodesRouter({ enrollmentCodesRepo, locationsRepo }));
 

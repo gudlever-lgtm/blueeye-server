@@ -46,6 +46,9 @@ const { createPurge } = require('./analysis/retention/purge');
 const { createRetentionScheduler } = require('./analysis/retention/scheduler');
 const { createSettingsRepository } = require('./repositories/settingsRepository');
 const { createSettingsService } = require('./services/settings');
+const { createTestPackagesRepository } = require('./repositories/testPackagesRepository');
+const { createTestPackageRunner } = require('./services/testPackageRunner');
+const { createTestPackageScheduler } = require('./services/testPackageScheduler');
 
 // Wires up real dependencies, starts the HTTP server and installs graceful
 // shutdown handlers.
@@ -102,6 +105,13 @@ function start() {
         ? agentWs.sendCommandAndWait(agentId, command, opts)
         : Promise.resolve({ delivered: 0, acked: false, reply: null })),
   };
+
+  // Test packages: server-defined probe/traffic test sets pushed to agents to
+  // run, on a schedule or on demand. The runner reuses agentCommander to deliver
+  // the items as run-probe/run-test commands.
+  const testPackagesRepo = createTestPackagesRepository(db);
+  const testPackageRunner = createTestPackageRunner({ agentsRepo, agentCommander, repo: testPackagesRepo, logger: console });
+  const testPackageScheduler = createTestPackageScheduler({ repo: testPackagesRepo, runner: testPackageRunner, logger: console });
 
   // Pushes a live event to every connected dashboard (assigned below; the
   // closure runs later). Used for enrollment/agent-status feedback in the UI.
@@ -221,6 +231,8 @@ function start() {
     retentionConfig,
     artifactStore,
     agentSourceStore,
+    testPackagesRepo,
+    testPackageRunner,
     enrollConfig: { publicUrl: config.publicUrl, certFingerprint: config.enroll.certFingerprint },
     notifyDashboard,
     logger: console,
@@ -279,10 +291,14 @@ function start() {
   // Periodic retention rollup + purge (behind RETENTION_ENABLED, default on).
   retentionScheduler.start();
 
+  // Periodic test-package scheduler: runs enabled, scheduled packages when due.
+  testPackageScheduler.start();
+
   function shutdown(signal) {
     console.info(`Received ${signal}, shutting down gracefully...`);
     licenseManager.stop();
     retentionScheduler.stop();
+    testPackageScheduler.stop();
     agentWs.close();
     dashboardWs.close();
     server.close(async () => {

@@ -36,6 +36,8 @@ function createApp({
   retentionConfig,
   artifactStore,
   agentSourceStore,
+  testPackagesRepo,
+  testPackageRunner,
   enrollConfig,
   notifyDashboard,
   logger = silentLogger,
@@ -83,6 +85,8 @@ function createApp({
       retentionConfig,
       artifactStore,
       agentSourceStore,
+      testPackagesRepo,
+      testPackageRunner,
       enrollConfig,
       notifyDashboard,
     })

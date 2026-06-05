@@ -327,6 +327,27 @@ function makeAssistant(overrides = {}) {
   };
 }
 
+// A fake test-packages repository (in-memory list; benign defaults).
+function makeTestPackagesRepo(overrides = {}) {
+  return {
+    findAll: overrides.findAll || (async () => []),
+    findById: overrides.findById || (async () => null),
+    findEnabledScheduled: overrides.findEnabledScheduled || (async () => []),
+    create: overrides.create || (async (p) => ({ id: 1, last_run_at: null, last_run_summary: null, ...p })),
+    update: overrides.update || (async (id, p) => ({ id, ...p })),
+    remove: overrides.remove || (async () => false),
+    setLastRun: overrides.setLastRun || (async () => {}),
+  };
+}
+
+// A fake test-package runner; defaults to a benign run summary.
+function makeTestPackageRunner(overrides = {}) {
+  return {
+    run: overrides.run || (async () => ({ at: '2026-01-01T00:00:00.000Z', targeted: 0, reached: 0, delivered: 0, items: 0 })),
+    resolveTargetIds: overrides.resolveTargetIds || (() => []),
+  };
+}
+
 // ---- App + auth helpers ---------------------------------------------------
 
 // Builds an app wired with fakes; pass overrides to swap any dependency.
@@ -357,6 +378,8 @@ function makeApp(overrides = {}) {
     retentionConfig: overrides.retentionConfig || { enabled: true, rawRetentionDays: 7, rollupRetentionDays: 90, findingRetentionDays: 365, rollupIntervalMinutes: 60 },
     artifactStore: overrides.artifactStore || makeArtifactStore(),
     agentSourceStore: overrides.agentSourceStore || makeSourceStore(),
+    testPackagesRepo: overrides.testPackagesRepo || makeTestPackagesRepo(),
+    testPackageRunner: overrides.testPackageRunner || makeTestPackageRunner(),
     enrollConfig: overrides.enrollConfig || { publicUrl: '', certFingerprint: '' },
     notifyDashboard: overrides.notifyDashboard || (() => 0),
   });
@@ -393,6 +416,8 @@ module.exports = {
   makeEnrollmentStore,
   makeArtifactStore,
   makeSourceStore,
+  makeTestPackagesRepo,
+  makeTestPackageRunner,
   makeLicenseManager,
   makeAgentCommander,
   makeSystemInfo,

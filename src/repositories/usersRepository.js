@@ -8,6 +8,16 @@ function mapRow(row) {
   return { ...row, protected: row.protected === 1 || row.protected === true };
 }
 
+// `preferences` is a JSON column. mysql2 usually returns it already parsed, but
+// tolerate a string (or bad JSON) and always hand callers a plain object.
+function parsePreferences(value) {
+  if (value === null || value === undefined) return {};
+  if (typeof value === 'string') {
+    try { return JSON.parse(value) || {}; } catch { return {}; }
+  }
+  return typeof value === 'object' ? value : {};
+}
+
 // Data-access layer for the `users` table.
 function createUsersRepository(db) {
   const { pool } = db;
@@ -89,6 +99,22 @@ function createUsersRepository(db) {
     return Number(rows[0].count);
   }
 
+  // Per-user UI preferences (e.g. the dashboard colour theme). Returns a plain
+  // object, {} when none are stored or the user no longer exists.
+  async function getPreferences(id) {
+    const [rows] = await pool.query('SELECT preferences FROM users WHERE id = ?', [id]);
+    return rows[0] ? parsePreferences(rows[0].preferences) : {};
+  }
+
+  // Merge-update: only the supplied keys change, so a partial PUT never clobbers
+  // other preferences. Returns the full, updated preferences object.
+  async function updatePreferences(id, patch) {
+    const current = await getPreferences(id);
+    const next = { ...current, ...patch };
+    await pool.query('UPDATE users SET preferences = ? WHERE id = ?', [JSON.stringify(next), id]);
+    return next;
+  }
+
   return {
     findAll,
     findById,
@@ -98,6 +124,8 @@ function createUsersRepository(db) {
     update,
     remove,
     countByRole,
+    getPreferences,
+    updatePreferences,
   };
 }
 

@@ -59,7 +59,7 @@ src/
 public/                # dependency-free dashboard SPA
 ├── index.html         # shell + top tab bar (data-view buttons)
 ├── app.js             # the whole SPA: views.*, render(), el() DOM helper, api()
-└── styles.css         # light default + [data-theme=dark]; hand-written CSS vars
+└── styles.css         # light default + [data-theme=…] palettes (dark, nord, …); hand-written CSS vars
 
 migrations/NNN_*.sql   # numbered, tracked in schema_migrations (schema.sql = full snapshot)
 docs/                  # per-feature docs (analysis, geo, alerting, retention, ...)
@@ -77,6 +77,7 @@ Mounted in `src/routes/index.js`. User endpoints use JWT + roles
 | `/health` | health.js | none | liveness + db ping |
 | `/auth` | auth.js | none | login → JWT |
 | `/users` | users.js | admin | user CRUD (last-admin protected) |
+| `/me` | me.js | viewer+ | current user: profile + **personal UI preferences** (colour theme) |
 | `/locations` | locations.js | viewer+/op/admin | sites + per-location live traffic |
 | `/agents` (3 routers) | agents.js · agentReports.js · agentEnroll.js | JWT / agent-token / none | CRUD + run-test + **run-probe**; agent self-report (`/results`, `/probe-results`, `/me/config`, `/me/capabilities`); enroll |
 | `/enrollment-codes` | enrollmentCodes.js | operator+ | enrollment codes (single-use or **bulk / multi-use**) |
@@ -111,6 +112,7 @@ Later migrations add:
 | 013 | `app_settings` | runtime-editable settings (key/JSON) |
 | 014 | `probe_results` | active probes |
 | 015 | (index only) | `idx_probe_ts` for the fleet-wide probe scan |
+| 019 | (column) | per-user UI preferences — `users.preferences` JSON (colour theme) |
 
 Interface health, traffic-type categories and **fleet health** add **no** tables — they
 derive from the existing `results.payload.traffic` (and `flow_records.asn` for org
@@ -132,7 +134,10 @@ A single vanilla-JS SPA. Key building blocks:
 - Charts are hand-rolled SVG: `multiChart` (live, area + time ticks + brush) and
   `historyChart` (time-axis; optional `band` = robust normal-range shading via
   `robustBand`, `markers` = event lines via `findingMarkers`). `usageBar()` for utilisation bars.
-- Theme: light default + dark toggle (localStorage). Mobile: tab bar → bottom nav.
+- Theme: a catalogue of colour themes (`THEMES`: light/dark/midnight/nord/forest/sunset/
+  solarized/contrast), chosen in **Settings → Appearance** and **saved per user**
+  (`/me/preferences`), cached in localStorage for instant apply; the topbar keeps a quick
+  light/dark toggle. Mobile: tab bar → bottom nav.
 
 ## Where do I change…?
 
@@ -152,6 +157,7 @@ A single vanilla-JS SPA. Key building blocks:
 | Interface health | `src/health/interfaceHealth.js` (`computeInterfaceHealth`/`interfaceHealthSummary`); HTTP in `src/routes/interfaces.js` — agent side in blueeye-agent |
 | Agent data-quality (drops/skew/version) | `src/health/dataQuality.js` (`computeDataQuality`); surfaced via `/api/fleet/health` + `/api/fleet/agent/:id` — all signals already sent by the agent |
 | A dashboard tab/view | `public/index.html` (button) + `views.<x>` in `public/app.js` + `PAGE_INFO` |
+| A dashboard colour theme | `THEMES` + `[data-theme=…]` in `public/styles.css`; picker `settingsAppearanceView` in `public/app.js`; per-user persistence via `/me` (`src/routes/me.js`, `usersRepository.get/updatePreferences`) + key whitelist in `src/validation/preferencesValidation.js` |
 | License / feature gating | `src/license/*` (`features.js` = fail-closed gate) |
 
 ## Conventions

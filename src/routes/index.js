@@ -4,6 +4,7 @@ const express = require('express');
 const { createHealthRouter } = require('./health');
 const { createAuthRouter } = require('./auth');
 const { createUsersRouter } = require('./users');
+const { createMeRouter } = require('./me');
 const { createLocationsRouter } = require('./locations');
 const { createAgentsRouter } = require('./agents');
 const { createAgentEnrollRouter } = require('./agentEnroll');
@@ -84,6 +85,7 @@ function createApiRouter({
   router.use('/health', createHealthRouter({ db }));
   router.use('/auth', createAuthRouter({ usersRepo }));
   router.use('/users', createUsersRouter({ usersRepo }));
+  router.use('/me', createMeRouter({ usersRepo }));
   router.use('/locations', createLocationsRouter({ locationsRepo, resultsRepo }));
   router.use('/license', createLicenseRouter({ licenseManager, featureGate }));
   router.use('/system', createSystemRouter({ systemInfo, agentSourceStore }));

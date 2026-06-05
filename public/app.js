@@ -8,22 +8,60 @@ const THEME_KEY = 'blueeye.server.theme';
 
 const $ = (sel) => document.querySelector(sel);
 
-// Theme (light default, dark opt-in), persisted across sessions.
+// Colour themes. Each `key` matches a [data-theme="…"] block in styles.css and
+// is whitelisted server-side (src/validation/preferencesValidation.js). `family`
+// (light|dark) drives the topbar quick-toggle icon; `swatch` is a few
+// representative colours [bg, panel, accent, text] for the picker preview.
+// Keep this list in sync with both of those.
+const THEMES = [
+  { key: 'light', label: 'Light', family: 'light', swatch: ['#f1f5f9', '#ffffff', '#0284c7', '#0f172a'] },
+  { key: 'dark', label: 'Dark', family: 'dark', swatch: ['#0f172a', '#1e293b', '#38bdf8', '#e2e8f0'] },
+  { key: 'midnight', label: 'Midnight', family: 'dark', swatch: ['#0a0a12', '#14141f', '#818cf8', '#e6e6f2'] },
+  { key: 'nord', label: 'Nord', family: 'dark', swatch: ['#2e3440', '#3b4252', '#88c0d0', '#eceff4'] },
+  { key: 'forest', label: 'Forest', family: 'dark', swatch: ['#0c1410', '#14201a', '#34d399', '#d7e6dc'] },
+  { key: 'sunset', label: 'Sunset', family: 'dark', swatch: ['#1a1320', '#251a2e', '#f472b6', '#f1e7f2'] },
+  { key: 'solarized-light', label: 'Solarized Light', family: 'light', swatch: ['#eee8d5', '#fdf6e3', '#268bd2', '#586e75'] },
+  { key: 'solarized-dark', label: 'Solarized Dark', family: 'dark', swatch: ['#002b36', '#073642', '#268bd2', '#93a1a1'] },
+  { key: 'contrast', label: 'High contrast', family: 'dark', swatch: ['#000000', '#0a0a0a', '#ffd400', '#ffffff'] },
+];
+const THEME_KEYS = THEMES.map((t) => t.key);
+const themeMeta = (key) => THEMES.find((t) => t.key === key) || THEMES[0];
 
+// The theme is applied instantly from a local cache (no flash on load), then
+// reconciled with the per-user value saved on the server (see loadProfile).
 function applyTheme(theme) {
-  const t = theme === 'dark' ? 'dark' : 'light';
+  const t = THEME_KEYS.includes(theme) ? theme : 'light';
   document.documentElement.dataset.theme = t;
   const btn = document.querySelector('#theme');
-  if (btn) { btn.textContent = t === 'dark' ? '☀️' : '🌙'; }
+  if (btn) {
+    const isDark = themeMeta(t).family === 'dark';
+    btn.textContent = isDark ? '☀️' : '🌙';
+    btn.title = isDark ? 'Switch to light theme' : 'Switch to dark theme';
+  }
+}
+function cachedTheme() {
+  try { return localStorage.getItem(THEME_KEY) || 'light'; } catch { return 'light'; }
+}
+// Apply + cache a theme locally, and persist it to the signed-in user's account
+// (so it follows them to any browser). Returns the save promise for callers that
+// want to surface success/failure; the local apply always happens immediately.
+function setTheme(theme, { persist = true } = {}) {
+  const t = THEME_KEYS.includes(theme) ? theme : 'light';
+  applyTheme(t);
+  try { localStorage.setItem(THEME_KEY, t); } catch { /* storage off */ }
+  if (persist && token) {
+    return api('/me/preferences', { method: 'PUT', body: { theme: t } });
+  }
+  return Promise.resolve();
 }
 function initTheme() {
-  applyTheme(localStorage.getItem(THEME_KEY) || 'light');
+  applyTheme(cachedTheme());
   const btn = document.querySelector('#theme');
   if (btn) {
+    // Quick light/dark toggle; the full palette lives in Settings → Appearance.
     btn.addEventListener('click', () => {
-      const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
-      localStorage.setItem(THEME_KEY, next);
-      applyTheme(next);
+      const next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
+      setTheme(next).catch(() => { /* keep the local change even if the save fails */ });
     });
   }
 }
@@ -159,9 +197,27 @@ function applyFeatureVisibility() {
   }
 }
 
+// The user's saved preferences (currently just the colour theme). Loaded once
+// per session; the server value wins over the local cache so the chosen theme
+// follows the user across browsers. Best-effort — a failure keeps the cache.
+let profileLoaded = false;
+async function loadProfile() {
+  if (profileLoaded) return;
+  profileLoaded = true;
+  try {
+    const me = await api('/me');
+    const theme = me && me.preferences && me.preferences.theme;
+    if (theme && THEME_KEYS.includes(theme)) {
+      applyTheme(theme);
+      try { localStorage.setItem(THEME_KEY, theme); } catch { /* storage off */ }
+    }
+  } catch { /* keep the cached theme */ }
+}
+
 function logout() {
   disconnectLive();
   invalidateFeatures();
+  profileLoaded = false;
   token = null;
   email = '';
   localStorage.removeItem(TOKEN_KEY);
@@ -3662,7 +3718,8 @@ views.settings = async () => {
   const isAdmin = role === 'admin';
   const subtabs = [];
   if (isAdmin) subtabs.push(['analyse', 'Analysis'], ['alerting', 'Alerting'], ['maintenance', 'Maintenance'], ['updates', 'Updates'], ['retention', 'Retention'], ['types', 'Traffic types'], ['map', 'Map'], ['users', 'Users']);
-  subtabs.push(['license', 'License']);
+  // Appearance + License are personal/read-only — available to every role.
+  subtabs.push(['appearance', 'Appearance'], ['license', 'License']);
   if (!settingsTab || !subtabs.some(([k]) => k === settingsTab)) settingsTab = subtabs[0][0];
 
   const nav = el('div', { class: 'subtabs' }, ...subtabs.map(([k, label]) =>
@@ -3672,6 +3729,7 @@ views.settings = async () => {
   const views2 = {
     users: () => views.users(),
     license: () => views.license(),
+    appearance: settingsAppearanceView,
     map: settingsMapView,
     types: settingsTypesView,
     analyse: settingsAnalyseView,
@@ -3695,6 +3753,39 @@ views.settings = async () => {
 function licenseBadge(license, feature) {
   const ok = license && license[feature] === true;
   return el('span', { class: `badge ${ok ? 'active' : 'offline'}` }, `Licence: ${feature} ${ok ? 'yes' : 'no'}`);
+}
+
+// Settings → Appearance: pick a dashboard colour theme. The choice is saved to
+// the signed-in user's account (so it follows them across browsers) and cached
+// locally for instant apply. Available to every role — it's a personal setting.
+function settingsAppearanceView() {
+  const root = el('div');
+  root.append(el('p', { class: 'muted settings-intro' },
+    'Choose a colour theme for the dashboard. Your choice is saved to your account, so it follows you to any browser you sign in from.'));
+
+  const grid = el('div', { class: 'theme-grid' });
+  const currentKey = () => document.documentElement.dataset.theme || 'light';
+
+  function paint() {
+    grid.replaceChildren(...THEMES.map((t) => el('button', {
+      class: `theme-card${t.key === currentKey() ? ' active' : ''}`,
+      type: 'button',
+      'aria-pressed': t.key === currentKey() ? 'true' : 'false',
+      onclick: async () => {
+        try { await setTheme(t.key); toast(`Theme saved: ${t.label}`); }
+        catch (e) { toast(errText(e) || 'Could not save theme', true); }
+        paint();
+      },
+    },
+      el('span', { class: 'theme-swatch' }, ...t.swatch.map((c) => el('span', { style: `background:${c}` }))),
+      el('span', { class: 'theme-meta' },
+        el('span', { class: 'theme-name' }, t.label),
+        el('span', { class: 'theme-fam muted' }, t.family === 'dark' ? 'Dark' : 'Light')),
+    )));
+  }
+  paint();
+  root.append(grid);
+  return root;
 }
 
 // Settings -> Updates: the server's version and the agent version it serves, plus
@@ -4217,6 +4308,7 @@ async function render({ silent = false } = {}) {
   $('#login').classList.add('hidden');
   $('#app').classList.remove('hidden');
   connectLive(); // live findings channel (idempotent)
+  await loadProfile(); // apply the user's saved colour theme (once per session)
   await loadFeatures();
   applyFeatureVisibility(); // hide modules not included in the licence
   // Show who is logged in: email + role.

@@ -13,11 +13,11 @@ const { validateProbeResults } = require('../validation/probeValidation');
 //
 // Paths use the `/me/...` prefix so they don't collide with the user-JWT agents
 // router's `/:id` routes mounted under the same /agents path.
-function createAgentReportsRouter({ agentAuth, resultsRepo, agentsRepo, analysisPipeline = null, flowPipeline = null, probeResultsRepo = null }) {
+function createAgentReportsRouter({ agentAuth, resultsRepo, agentsRepo, analysisPipeline = null, flowPipeline = null, probeResultsRepo = null, probePipeline = null }) {
   const router = express.Router();
 
   // POST /agents/probe-results { results: [...] } — stores active-probe results
-  // (ping/tcp/dns/traceroute) for the agent identified by the token.
+  // (ping/tcp/dns/traceroute/http) for the agent identified by the token.
   router.post(
     '/probe-results',
     agentAuth,
@@ -28,6 +28,17 @@ function createAgentReportsRouter({ agentAuth, resultsRepo, agentsRepo, analysis
         return res.status(400).json({ error: 'Validation failed', details: errors });
       }
       const inserted = await probeResultsRepo.createMany(req.agent.agentId, value.results);
+
+      // After persistence, derive probe-based findings (reachability/loss/latency/
+      // jitter/cert) and alert. Resilient: must never break ingestion.
+      if (probePipeline) {
+        try {
+          await probePipeline.processAgent(req.agent.agentId);
+        } catch {
+          /* probe analysis is best-effort; ingestion already succeeded */
+        }
+      }
+
       res.status(201).json({ inserted });
     })
   );

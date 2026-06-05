@@ -50,6 +50,7 @@ function createApiRouter({
   systemInfo,
   findingStore,
   analysisPipeline,
+  probePipeline,
   flowPipeline,
   flowsRepo,
   geoTileConfig,
@@ -124,7 +125,7 @@ function createApiRouter({
   //   - POST /enroll           — unauthenticated
   // Requests fall through routers that have no matching route.
   router.use('/agents', createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentCommander, agentSourceStore }));
-  router.use('/agents', createAgentReportsRouter({ agentAuth, resultsRepo, agentsRepo, analysisPipeline, flowPipeline, probeResultsRepo }));
+  router.use('/agents', createAgentReportsRouter({ agentAuth, resultsRepo, agentsRepo, analysisPipeline, flowPipeline, probeResultsRepo, probePipeline }));
   router.use('/agents', createAgentEnrollRouter({ enrollmentStore, notifyDashboard }));
 
   return router;

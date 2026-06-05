@@ -67,3 +67,47 @@ test('an unknown assistant sub-path returns 404', async () => {
     .send({ question: 'q' });
   assert.equal(res.status, 404);
 });
+
+// ---- POST /api/assistant/location-summary ---------------------------------
+
+test('POST /api/assistant/location-summary returns 403 while the feature is disabled', async () => {
+  const res = await request(makeApp())
+    .post('/api/assistant/location-summary').set('Authorization', viewer())
+    .send({ locationId: 1 });
+  assert.equal(res.status, 403);
+});
+
+test('POST /api/assistant/location-summary returns 400 without a locationId', async () => {
+  const assistant = makeAssistant({ summarizeLocation: async () => ({ answer: 'x' }) });
+  const res = await request(makeApp({ assistant }))
+    .post('/api/assistant/location-summary').set('Authorization', viewer())
+    .send({});
+  assert.equal(res.status, 400);
+});
+
+test('POST /api/assistant/location-summary returns 200 with a summary when enabled', async () => {
+  const assistant = makeAssistant({
+    summarizeLocation: async (id) => ({ answer: `summary for ${id}`, model: 'mistral-small-latest', location: 'HQ', agents: 3, findings: 2 }),
+  });
+  const res = await request(makeApp({ assistant }))
+    .post('/api/assistant/location-summary').set('Authorization', viewer())
+    .send({ locationId: 5 });
+  assert.equal(res.status, 200);
+  assert.match(res.body.answer, /summary for 5/);
+  assert.equal(res.body.agents, 3);
+});
+
+test('POST /api/assistant/location-summary returns 404 for an unknown location', async () => {
+  const assistant = makeAssistant({
+    summarizeLocation: async () => { const e = new Error('nope'); e.name = 'LocationNotFound'; throw e; },
+  });
+  const res = await request(makeApp({ assistant }))
+    .post('/api/assistant/location-summary').set('Authorization', viewer())
+    .send({ locationId: 9 });
+  assert.equal(res.status, 404);
+});
+
+test('POST /api/assistant/location-summary without a token returns 401', async () => {
+  const res = await request(makeApp()).post('/api/assistant/location-summary').send({ locationId: 1 });
+  assert.equal(res.status, 401);
+});

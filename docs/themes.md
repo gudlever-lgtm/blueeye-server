@@ -19,7 +19,7 @@ instantly on load with no flash.
   topbar 🌙/☀️ button stays a quick light/dark toggle.
 - **Persistence** is `GET /me` + `PUT /me/preferences` (`src/routes/me.js`, any
   authenticated role). Preferences are a JSON blob on `users.preferences`
-  (migration `019`), read/merge-written by `usersRepository.getPreferences` /
+  (migration `020`), read/merge-written by `usersRepository.getPreferences` /
   `updatePreferences`. `loadProfile()` fetches the saved theme once per session
   and applies it (server wins over the local cache).
 - **Validation** whitelists the allowed theme keys in

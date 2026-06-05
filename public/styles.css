@@ -476,8 +476,12 @@ label.check input { width: auto; }
 .drawer h3 { margin-top: 0; }
 .drawer h4 { margin: 18px 0 6px; font-size: 13px; color: var(--accent); }
 .drawer p, .drawer li { color: var(--muted); }
-.drawer ul { padding-left: 18px; margin: 6px 0; }
+.drawer ul, .drawer ol { padding-left: 18px; margin: 6px 0; }
+.drawer li { margin: 3px 0; }
 .drawer .close-x { position: absolute; top: 14px; right: 16px; }
+/* In-drawer cross-links to the page that owns a feature. */
+.drawer-link { color: var(--accent); text-decoration: underline; cursor: pointer; font-weight: 500; }
+.drawer-link:hover { text-decoration: none; }
 
 /* Table */
 table { width: 100%; border-collapse: collapse; background: var(--panel); border-radius: 10px; overflow: hidden; }

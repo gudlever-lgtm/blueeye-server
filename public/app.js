@@ -1939,7 +1939,7 @@ function assistantBox(getHostId) {
     } catch (err) {
       out.className = 'assistant-out muted';
       out.textContent = err.status === 403
-        ? 'The AI assistant is disabled. Set ANALYSIS_ASSISTANT_ENABLED=true (and an API key) in the server\'s .env to use it.'
+        ? 'The AI assistant is disabled. An administrator can enable it under Settings → Analysis → AI assistant.'
         : err.message;
     } finally {
       btn.disabled = false;
@@ -3929,8 +3929,8 @@ async function settingsUpdatesView() {
 async function settingsAnalyseView() {
   const data = await api('/api/settings');
   const root = el('div');
-  root.append(el('p', { class: 'muted settings-intro' }, 'The server learns a normal baseline for each metric and raises a finding when a measurement deviates enough from it. Here you set how sensitive detection is — changes take effect immediately, without restart. ', licenseBadge(data.license, 'analysis')));
-  root.append(el('div', { class: 'settings-grid' }, analyseSettingsCard(data.analysis), throughputSettingsCard(data.throughput)));
+  root.append(el('p', { class: 'muted settings-intro' }, 'The server learns a normal baseline for each metric and raises a finding when a measurement deviates enough from it. Here you set how sensitive detection is — changes take effect immediately, without restart. The opt-in AI assistant (its on/off switch and API key) is configured here too. ', licenseBadge(data.license, 'analysis')));
+  root.append(el('div', { class: 'settings-grid' }, analyseSettingsCard(data.analysis), throughputSettingsCard(data.throughput), assistantSettingsCard(data.assistant)));
   return root;
 }
 
@@ -4090,9 +4090,62 @@ function analyseSettingsCard(a) {
       { key: 'warnSigma', label: 'WARN threshold (σ from baseline)', type: 'number', min: 0.5, max: 20, step: 0.1, hint: 'Threshold for WARN — should be lower than CRIT. Typically 3.' },
       { key: 'baselineDays', label: 'Baseline window (days)', type: 'number', min: 1, max: 90, step: 1, hint: 'How many days of history the normal is calculated from.' },
       { key: 'minSamples', label: 'Min. samples before alerting', type: 'number', min: 10, max: 100000, step: 1, hint: 'Number of measurements before a metric is monitored — avoids false alarms right after startup.' },
-      { key: 'assistantEnabled', label: 'AI assistant', type: 'checkbox', readonly: true, hint: 'Opt-in natural-language assistant. Set via .env (key is a secret).' },
     ],
   });
+}
+
+// AI assistant (opt-in): admin-editable enable flag, API key and model — instead
+// of env-only. The key is write-only: the API only reports whether one is set
+// (apiKeySet + a masked hint), so the field stays blank and a typed value
+// replaces the stored key. The assistant calls Mistral (EU).
+function assistantSettingsCard(a) {
+  const v = a || { enabled: false, model: '', apiKeySet: false, apiKeyHint: '' };
+  const enabledI = el('input', { type: 'checkbox' });
+  const modelI = el('input', { type: 'text', placeholder: 'mistral-small-latest' });
+  const keyI = el('input', { type: 'password', autocomplete: 'new-password', spellcheck: 'false' });
+  const clearI = el('input', { type: 'checkbox' });
+  const clearRow = el('label', { class: 'inline muted small' }, clearI, el('span', {}, 'Remove the stored key'));
+  const note = el('p', { class: 'muted small' });
+  const err = el('p', { class: 'error' });
+  const btn = el('button', { class: 'small' }, 'Save');
+
+  function applyState(s) {
+    enabledI.checked = !!s.enabled;
+    modelI.value = s.model || '';
+    keyI.value = '';
+    keyI.placeholder = s.apiKeySet ? `Key set (${s.apiKeyHint}) — type to replace` : 'Paste an API key to enable';
+    clearRow.classList.toggle('hidden', !s.apiKeySet);
+    clearI.checked = false;
+    note.textContent = (s.enabled && !s.apiKeySet)
+      ? '⚠ Enabled but no API key set — add one above, or the assistant returns an error.'
+      : 'Calls Mistral (EU). The key is stored in the server database and is never shown again.';
+  }
+  applyState(v);
+
+  async function save() {
+    err.textContent = ''; btn.disabled = true;
+    const body = { enabled: enabledI.checked, model: modelI.value.trim() || 'mistral-small-latest' };
+    if (clearI.checked) body.clearApiKey = true;
+    else if (keyI.value.trim() !== '') body.apiKey = keyI.value.trim();
+    try {
+      const res = await api('/api/settings/assistant', { method: 'PUT', body });
+      applyState(res.assistant || res);
+      toast('AI assistant saved');
+    } catch (e2) { err.textContent = errText(e2); }
+    finally { btn.disabled = false; }
+  }
+  btn.addEventListener('click', save);
+
+  return el('div', { class: 'settings-card' }, el('h3', {}, 'AI assistant'),
+    el('div', { class: 'form-grid' },
+      el('label', { class: 'set-field' }, el('span', {}, 'Assistant enabled'), enabledI,
+        el('span', { class: 'muted small' }, 'Opt-in natural-language assistant: host Q&A + per-location summaries.')),
+      el('label', { class: 'set-field' }, el('span', {}, 'API key'), keyI,
+        el('span', { class: 'muted small' }, 'Mistral API key. Write-only — stored on the server, never displayed again.')),
+      clearRow,
+      el('label', { class: 'set-field' }, el('span', {}, 'Model'), modelI,
+        el('span', { class: 'muted small' }, 'Provider model id. Default mistral-small-latest.')),
+      note, err, el('div', { class: 'form-actions' }, btn)));
 }
 
 function retentionSettingsCard(r) {

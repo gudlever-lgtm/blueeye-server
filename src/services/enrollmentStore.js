@@ -51,9 +51,9 @@ function createEnrollmentStore(db) {
       }
 
       const [agentResult] = await conn.query(
-        `INSERT INTO agents (hostname, platform, arch, location_id)
-         VALUES (?, ?, ?, ?)`,
-        [hostname, platform, arch, row.location_id]
+        `INSERT INTO agents (hostname, platform, arch, location_id, enrollment_code_id)
+         VALUES (?, ?, ?, ?, ?)`,
+        [hostname, platform, arch, row.location_id, row.id]
       );
       const agentId = agentResult.insertId;
 

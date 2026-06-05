@@ -2,7 +2,8 @@
 
 const { computeAgentHealth } = require('../health/probeHealth');
 
-// Optional, opt-in LLM assistant. OFF by default (ANALYSIS_ASSISTANT_ENABLED).
+// Optional, opt-in LLM assistant. OFF by default; an admin enables it and sets
+// its API key in Settings → AI assistant (env defaults still apply at boot).
 // When enabled it answers questions / summarizes a location using ONLY a small,
 // local context the analysis module already produced — recent findings (each
 // already carrying a plain-language explanation) plus, for a location summary,
@@ -17,7 +18,7 @@ const { computeAgentHealth } = require('../health/probeHealth');
 // Thrown by explain()/summarizeLocation() when the feature is disabled. The route
 // maps the name 'FeatureDisabled' to HTTP 403.
 class FeatureDisabledError extends Error {
-  constructor(message = 'The AI assistant is disabled (set ANALYSIS_ASSISTANT_ENABLED=true to enable)') {
+  constructor(message = 'The AI assistant is disabled (enable it in Settings → AI assistant)') {
     super(message);
     this.name = 'FeatureDisabled';
   }
@@ -36,15 +37,20 @@ function createAssistant({
   now = () => new Date(),
   logger = { info() {}, warn() {}, error() {} },
 } = {}) {
-  const enabled = Boolean(config.assistantEnabled);
-  const apiKey = config.assistantApiKey || '';
-  const model = config.assistantModel || 'mistral-small-latest';
   const baseUrl = config.assistantBaseUrl || 'https://api.mistral.ai/v1/chat/completions';
   const maxFindings = Number.isFinite(config.assistantMaxFindings) ? config.assistantMaxFindings : 20;
   const timeoutMs = Number.isFinite(config.assistantTimeoutMs) ? config.assistantTimeoutMs : 20000;
 
+  // enabled / apiKey / model are read live from `config` on every call. The
+  // server passes its analysis-config object, which Settings → AI assistant
+  // mutates, so an admin can enable the assistant or set its key at runtime with
+  // no restart. baseUrl + limits stay env-driven (captured once above).
+  const currentEnabled = () => Boolean(config.assistantEnabled);
+  const currentApiKey = () => config.assistantApiKey || '';
+  const currentModel = () => config.assistantModel || 'mistral-small-latest';
+
   function isEnabled() {
-    return enabled;
+    return currentEnabled();
   }
 
   // Compact, explainable per-host context: only the fields the model needs,
@@ -136,8 +142,10 @@ function createAssistant({
   // AssistantMisconfigured (enabled but not configured) and AssistantUpstreamError
   // (provider call failed). Returns the answer string.
   async function chat(system, user) {
+    const apiKey = currentApiKey();
+    const model = currentModel();
     if (!apiKey) {
-      const e = new Error('assistant is enabled but no API key is configured (ANALYSIS_ASSISTANT_API_KEY)');
+      const e = new Error('assistant is enabled but no API key is configured (set one in Settings → AI assistant)');
       e.name = 'AssistantMisconfigured';
       throw e;
     }
@@ -197,7 +205,7 @@ function createAssistant({
   // InvalidQuestion on an empty question, AssistantMisconfigured when enabled but
   // not configured, and AssistantUpstreamError when the provider call fails.
   async function explain(question, hostId) {
-    if (!enabled) throw new FeatureDisabledError();
+    if (!currentEnabled()) throw new FeatureDisabledError();
     if (typeof question !== 'string' || question.trim() === '') {
       const e = new Error('question must be a non-empty string');
       e.name = 'InvalidQuestion';
@@ -211,7 +219,7 @@ function createAssistant({
       'if the context is insufficient, say so.';
     const user = JSON.stringify({ question: question.trim(), hostId: hostId ?? null, findings });
     const answer = await chat(system, user);
-    return { answer, model, usedFindings: findings.length };
+    return { answer, model: currentModel(), usedFindings: findings.length };
   }
 
   // Produces a brief "what's going on at this location?" summary from the
@@ -220,7 +228,7 @@ function createAssistant({
   // LocationNotFound for an unknown id, and AssistantUpstreamError on provider
   // failure.
   async function summarizeLocation(locationId) {
-    if (!enabled) throw new FeatureDisabledError();
+    if (!currentEnabled()) throw new FeatureDisabledError();
     if (!agentsRepo || !locationsRepo) {
       const e = new Error('location summary requires agents and locations repositories');
       e.name = 'AssistantMisconfigured';
@@ -237,7 +245,7 @@ function createAssistant({
       'specifics or hostnames that are not in the context.';
     const user = JSON.stringify(context);
     const answer = await chat(system, user);
-    return { answer, model, location: location.name, agents: agentCount, findings: findingCount };
+    return { answer, model: currentModel(), location: location.name, agents: agentCount, findings: findingCount };
   }
 
   return { isEnabled, explain, summarizeLocation, buildContext, buildLocationContext };

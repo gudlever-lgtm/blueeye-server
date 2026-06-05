@@ -42,11 +42,17 @@ function applyTheme(theme) {
 function cachedTheme() {
   try { return localStorage.getItem(THEME_KEY) || 'light'; } catch { return 'light'; }
 }
+// Set once the user explicitly picks a theme (topbar toggle or Settings →
+// Appearance). It makes that choice win over loadProfile()'s one-time server
+// reconcile, which would otherwise override a fresh toggle with the previously
+// saved value if /me is still in flight when the user clicks.
+let themeUserChoice = false;
 // Apply + cache a theme locally, and persist it to the signed-in user's account
 // (so it follows them to any browser). Returns the save promise for callers that
 // want to surface success/failure; the local apply always happens immediately.
 function setTheme(theme, { persist = true } = {}) {
   const t = THEME_KEYS.includes(theme) ? theme : 'light';
+  if (persist) themeUserChoice = true;
   applyTheme(t);
   try { localStorage.setItem(THEME_KEY, t); } catch { /* storage off */ }
   if (persist && token) {
@@ -61,7 +67,9 @@ function initTheme() {
     // Quick light/dark toggle; the full palette lives in Settings → Appearance.
     btn.addEventListener('click', () => {
       const next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
-      setTheme(next).catch(() => { /* keep the local change even if the save fails */ });
+      // The local change already applied; surface a failed save (don't revert it)
+      // so a silently-failing persist no longer looks like "it didn't stick".
+      setTheme(next).catch((e) => toast(errText(e) || 'Could not save theme', true));
     });
   }
 }
@@ -207,7 +215,9 @@ async function loadProfile() {
   try {
     const me = await api('/me');
     const theme = me && me.preferences && me.preferences.theme;
-    if (theme && THEME_KEYS.includes(theme)) {
+    // Skip if the user already chose a theme this session (e.g. toggled while
+    // this request was in flight) — their deliberate choice must win.
+    if (!themeUserChoice && theme && THEME_KEYS.includes(theme)) {
       applyTheme(theme);
       try { localStorage.setItem(THEME_KEY, theme); } catch { /* storage off */ }
     }
@@ -288,7 +298,7 @@ const PAGE_INFO = {
     hero: 'All agents in one view — with a health assessment based on active reachability, packet loss, latency and jitter.',
     title: 'Overview — fleet health',
     body: () => [
-      el('p', {}, 'The landing page collects all agents with a single health stamp, so you immediately see where something is wrong. Rows are sorted worst-first and refresh continuously. Click an agent to drill into its measurements.'),
+      el('p', {}, 'The landing page collects all agents with a single health stamp, so you immediately see where something is wrong. Rows are sorted worst-first and refresh continuously. Click an agent to drill into its measurements, or click a count chip (Healthy, Critical, …) to filter the list to just those agents.'),
       el('h4', {}, 'Two independent verdicts'),
       el('ul', {},
         el('li', {}, el('strong', {}, 'Health '), '— is the monitored network OK right now? Driven by active reachability, loss, latency, jitter and interface/link state.'),
@@ -476,7 +486,12 @@ const PAGE_INFO = {
         el('li', {}, 'The source bundle is always verified against the checksum before building or running.'),
         el('li', {}, 'The cert fingerprint is pinned on the agent (when the server runs behind TLS).')),
       el('p', { class: 'muted' }, 'The agent is built + run on the target (Docker or Node) — no pre-built binaries. Also works on air-gapped networks: the source is served from the BlueEye server itself.'),
-      el('p', { class: 'muted' }, 'Status: active (usable), used (used up), expired (expired).'),
+      el('h4', {}, 'Code status vs. the agent'),
+      el('ul', {},
+        el('li', {}, el('strong', {}, 'active: '), 'still usable — has uses left and has not expired.'),
+        el('li', {}, el('strong', {}, 'used: '), 'fully redeemed — an agent enrolled with it. Shown for a consumed code even after its time runs out.'),
+        el('li', {}, el('strong', {}, 'expired: '), 'ran out of time WITHOUT being used up.')),
+      el('p', { class: 'muted' }, 'The code only opens the install window. Each agent it enrols gets its own permanent token that stays valid until the agent is deleted (or its token revoked) — so an agent stays online regardless of whether its code later reads "used" or "expired". The Agents column shows each enrolled agent’s live online/offline state; click one to open it.'),
     ],
   },
   users: {
@@ -1924,7 +1939,7 @@ function assistantBox(getHostId) {
     } catch (err) {
       out.className = 'assistant-out muted';
       out.textContent = err.status === 403
-        ? 'The AI assistant is disabled. Set ANALYSIS_ASSISTANT_ENABLED=true (and an API key) in the server\'s .env to use it.'
+        ? 'The AI assistant is disabled. An administrator can enable it under Settings → Analysis → AI assistant.'
         : err.message;
     } finally {
       btn.disabled = false;
@@ -2580,8 +2595,36 @@ views.fleet = async () => {
     else bannerHost.replaceChildren();
   }).catch(() => {});
 
+  // Click a summary chip ("3 Healthy", "1 Critical", …) to filter the table to
+  // just those agents; click it again — or "Show all" — to clear. null = no
+  // filter. Kept in the closure so it survives the 10 s poll; the latest fetch
+  // is cached so a toggle re-renders instantly without refetching.
+  let activeFilter = null;
+  let lastData = null;
+  // Chip ⇒ which health verdicts it covers. "Critical" folds in 'down' to match
+  // its count (bad + down); the rest map one-to-one.
+  const FILTER_MATCH = {
+    ok: (s) => s === 'ok', warn: (s) => s === 'warn',
+    bad: (s) => s === 'bad' || s === 'down',
+    stale: (s) => s === 'stale', unknown: (s) => s === 'unknown',
+  };
+  const FILTER_LABEL = { ok: 'healthy', warn: 'warning', bad: 'critical', stale: 'stale', unknown: 'unknown' };
+  function setFilter(cls) {
+    activeFilter = activeFilter === cls ? null : cls;
+    if (lastData) { renderSummary(lastData.summary); renderTable(lastData.agents); }
+  }
+
   function renderSummary(s) {
-    const chip = (cls, label, n) => el('div', { class: `fs-chip ${cls}${n ? '' : ' zero'}` }, el('span', { class: 'fs-n' }, String(n)), el('span', { class: 'fs-l' }, label));
+    const chip = (cls, label, n) => {
+      const on = activeFilter === cls;
+      return el('div', {
+        class: `fs-chip ${cls}${n ? '' : ' zero'}${on ? ' active' : ''}`,
+        role: 'button', tabindex: '0', 'aria-pressed': on ? 'true' : 'false',
+        title: on ? 'Show all agents' : `Show only ${label.toLowerCase()} agents`,
+        onclick: () => setFilter(cls),
+        onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setFilter(cls); } },
+      }, el('span', { class: 'fs-n' }, String(n)), el('span', { class: 'fs-l' }, label));
+    };
     summaryHost.replaceChildren(
       chip('ok', 'Healthy', s.ok),
       chip('warn', 'Warnings', s.warn),
@@ -2608,13 +2651,23 @@ views.fleet = async () => {
   }
   function renderTable(agents) {
     if (!agents.length) { tableHost.replaceChildren(el('div', { class: 'empty' }, 'No agents yet — go to Agents to enrol one.')); return; }
-    tableHost.replaceChildren(el('table', { class: 'fleet-table' },
-      el('thead', {}, el('tr', {}, ...['Agent', 'Status', 'Health', 'Loss', 'Latency', 'Jitter', 'Targets', 'Speed', 'Location', 'Last seen'].map((h) => el('th', {}, h)))),
-      el('tbody', {}, ...agents.map(fleetRow))));
+    const shown = activeFilter ? agents.filter((a) => FILTER_MATCH[activeFilter](a.health.status)) : agents;
+    const bar = activeFilter
+      ? el('div', { class: 'fleet-filter' },
+        el('span', { class: 'muted' }, `Showing ${shown.length} of ${agents.length} — ${FILTER_LABEL[activeFilter]}`),
+        el('button', { class: 'small ghost', onclick: () => setFilter(activeFilter) }, 'Show all'))
+      : null;
+    const body = shown.length
+      ? el('table', { class: 'fleet-table' },
+        el('thead', {}, el('tr', {}, ...['Agent', 'Status', 'Health', 'Loss', 'Latency', 'Jitter', 'Targets', 'Speed', 'Location', 'Last seen'].map((h) => el('th', {}, h)))),
+        el('tbody', {}, ...shown.map(fleetRow)))
+      : el('div', { class: 'empty' }, `No ${FILTER_LABEL[activeFilter]} agents.`);
+    tableHost.replaceChildren(...(bar ? [bar, body] : [body]));
   }
   async function refresh() {
     let data;
     try { data = await api('/api/fleet/health'); } catch (e) { tableHost.replaceChildren(el('div', { class: 'error' }, e.message)); return; }
+    lastData = data;
     renderSummary(data.summary);
     renderTable(data.agents);
   }
@@ -3592,12 +3645,24 @@ views.enrollment = async () => {
   root.append(el('div', { class: 'section-head' }, el('h3', {}, 'Active codes'),
     canWrite() ? el('button', { class: 'small ghost', onclick: () => createCode() }, '+ New code (advanced)') : null));
   if (!codes.length) { root.append(el('div', { class: 'empty' }, 'No codes yet — use "Add agent" above.')); return root; }
+  // Codes are one-time install tickets; the agent's real credential is separate.
+  root.append(el('p', { class: 'muted enroll-note' }, 'Codes are one-time install tickets. Once an agent enrols it stays connected on its own permanent token — independent of the code’s status — so a "used" or "expired" code never disconnects the agent shown beside it.'));
+  // The agent(s) a code enrolled, each a clickable live online/offline badge.
+  const agentsCell = (agents) => ((agents && agents.length)
+    ? el('div', { class: 'code-agents' }, ...agents.map((a) => el('span', {
+      class: 'code-agent', role: 'button', tabindex: '0',
+      title: `${a.online ? 'Online' : 'Offline'} — open agent`,
+      onclick: () => openAgent(a.id),
+      onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openAgent(a.id); } },
+    }, el('span', { class: `badge ${a.online ? 'online' : 'offline'}` }, a.online ? 'online' : 'offline'), esc(a.name))))
+    : el('span', { class: 'muted' }, '–'));
   root.append(el('table', {},
-    el('thead', {}, el('tr', {}, ...['ID', 'Status', 'Uses', 'Location', 'Expires', 'Created', ''].map((h) => el('th', {}, h)))),
+    el('thead', {}, el('tr', {}, ...['ID', 'Status', 'Uses', 'Agents', 'Location', 'Expires', 'Created', ''].map((h) => el('th', {}, h)))),
     el('tbody', {}, ...codes.map((c) => el('tr', {},
       el('td', {}, String(c.id)),
       el('td', {}, el('span', { class: `badge ${c.status}` }, c.status)),
       el('td', {}, c.max_uses > 1 ? `${c.uses_remaining}/${c.max_uses}` : (c.uses_remaining === 0 ? 'used' : '1')),
+      el('td', {}, agentsCell(c.agents)),
       el('td', {}, c.location_name || '–'),
       el('td', { class: 'muted' }, fmtDate(c.expires_at)),
       el('td', { class: 'muted' }, fmtDate(c.created_at)),
@@ -3864,8 +3929,8 @@ async function settingsUpdatesView() {
 async function settingsAnalyseView() {
   const data = await api('/api/settings');
   const root = el('div');
-  root.append(el('p', { class: 'muted settings-intro' }, 'The server learns a normal baseline for each metric and raises a finding when a measurement deviates enough from it. Here you set how sensitive detection is — changes take effect immediately, without restart. ', licenseBadge(data.license, 'analysis')));
-  root.append(el('div', { class: 'settings-grid' }, analyseSettingsCard(data.analysis), throughputSettingsCard(data.throughput)));
+  root.append(el('p', { class: 'muted settings-intro' }, 'The server learns a normal baseline for each metric and raises a finding when a measurement deviates enough from it. Here you set how sensitive detection is — changes take effect immediately, without restart. The opt-in AI assistant (its on/off switch and API key) is configured here too. ', licenseBadge(data.license, 'analysis')));
+  root.append(el('div', { class: 'settings-grid' }, analyseSettingsCard(data.analysis), throughputSettingsCard(data.throughput), assistantSettingsCard(data.assistant)));
   return root;
 }
 
@@ -4025,9 +4090,62 @@ function analyseSettingsCard(a) {
       { key: 'warnSigma', label: 'WARN threshold (σ from baseline)', type: 'number', min: 0.5, max: 20, step: 0.1, hint: 'Threshold for WARN — should be lower than CRIT. Typically 3.' },
       { key: 'baselineDays', label: 'Baseline window (days)', type: 'number', min: 1, max: 90, step: 1, hint: 'How many days of history the normal is calculated from.' },
       { key: 'minSamples', label: 'Min. samples before alerting', type: 'number', min: 10, max: 100000, step: 1, hint: 'Number of measurements before a metric is monitored — avoids false alarms right after startup.' },
-      { key: 'assistantEnabled', label: 'AI assistant', type: 'checkbox', readonly: true, hint: 'Opt-in natural-language assistant. Set via .env (key is a secret).' },
     ],
   });
+}
+
+// AI assistant (opt-in): admin-editable enable flag, API key and model — instead
+// of env-only. The key is write-only: the API only reports whether one is set
+// (apiKeySet + a masked hint), so the field stays blank and a typed value
+// replaces the stored key. The assistant calls Mistral (EU).
+function assistantSettingsCard(a) {
+  const v = a || { enabled: false, model: '', apiKeySet: false, apiKeyHint: '' };
+  const enabledI = el('input', { type: 'checkbox' });
+  const modelI = el('input', { type: 'text', placeholder: 'mistral-small-latest' });
+  const keyI = el('input', { type: 'password', autocomplete: 'new-password', spellcheck: 'false' });
+  const clearI = el('input', { type: 'checkbox' });
+  const clearRow = el('label', { class: 'inline muted small' }, clearI, el('span', {}, 'Remove the stored key'));
+  const note = el('p', { class: 'muted small' });
+  const err = el('p', { class: 'error' });
+  const btn = el('button', { class: 'small' }, 'Save');
+
+  function applyState(s) {
+    enabledI.checked = !!s.enabled;
+    modelI.value = s.model || '';
+    keyI.value = '';
+    keyI.placeholder = s.apiKeySet ? `Key set (${s.apiKeyHint}) — type to replace` : 'Paste an API key to enable';
+    clearRow.classList.toggle('hidden', !s.apiKeySet);
+    clearI.checked = false;
+    note.textContent = (s.enabled && !s.apiKeySet)
+      ? '⚠ Enabled but no API key set — add one above, or the assistant returns an error.'
+      : 'Calls Mistral (EU). The key is stored in the server database and is never shown again.';
+  }
+  applyState(v);
+
+  async function save() {
+    err.textContent = ''; btn.disabled = true;
+    const body = { enabled: enabledI.checked, model: modelI.value.trim() || 'mistral-small-latest' };
+    if (clearI.checked) body.clearApiKey = true;
+    else if (keyI.value.trim() !== '') body.apiKey = keyI.value.trim();
+    try {
+      const res = await api('/api/settings/assistant', { method: 'PUT', body });
+      applyState(res.assistant || res);
+      toast('AI assistant saved');
+    } catch (e2) { err.textContent = errText(e2); }
+    finally { btn.disabled = false; }
+  }
+  btn.addEventListener('click', save);
+
+  return el('div', { class: 'settings-card' }, el('h3', {}, 'AI assistant'),
+    el('div', { class: 'form-grid' },
+      el('label', { class: 'set-field' }, el('span', {}, 'Assistant enabled'), enabledI,
+        el('span', { class: 'muted small' }, 'Opt-in natural-language assistant: host Q&A + per-location summaries.')),
+      el('label', { class: 'set-field' }, el('span', {}, 'API key'), keyI,
+        el('span', { class: 'muted small' }, 'Mistral API key. Write-only — stored on the server, never displayed again.')),
+      clearRow,
+      el('label', { class: 'set-field' }, el('span', {}, 'Model'), modelI,
+        el('span', { class: 'muted small' }, 'Provider model id. Default mistral-small-latest.')),
+      note, err, el('div', { class: 'form-actions' }, btn)));
 }
 
 function retentionSettingsCard(r) {

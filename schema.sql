@@ -60,6 +60,7 @@ CREATE TABLE IF NOT EXISTS agents (
   status ENUM('online', 'offline') NOT NULL DEFAULT 'offline',
   capabilities JSON NULL DEFAULT NULL,
   location_id INT UNSIGNED NULL DEFAULT NULL,
+  enrollment_code_id INT UNSIGNED NULL DEFAULT NULL,
   display_name VARCHAR(255) NULL DEFAULT NULL,
   notes TEXT NULL DEFAULT NULL,
   meta JSON NULL DEFAULT NULL,
@@ -68,6 +69,7 @@ CREATE TABLE IF NOT EXISTS agents (
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   KEY idx_agents_location_id (location_id),
+  KEY idx_agents_enrollment_code_id (enrollment_code_id),
   CONSTRAINT fk_agents_location FOREIGN KEY (location_id)
     REFERENCES locations (id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -90,6 +92,13 @@ CREATE TABLE IF NOT EXISTS enrollment_codes (
   CONSTRAINT fk_enrollment_codes_created_by FOREIGN KEY (created_by)
     REFERENCES users (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- agents.enrollment_code_id links an agent to the code it enrolled with. Added
+-- here (after enrollment_codes exists) because agents is created first above.
+-- ON DELETE SET NULL so deleting a spent code never breaks a running agent.
+ALTER TABLE agents
+  ADD CONSTRAINT fk_agents_enrollment_code FOREIGN KEY (enrollment_code_id)
+    REFERENCES enrollment_codes (id) ON DELETE SET NULL;
 
 -- Opaque agent tokens; only the SHA-256 hash is stored, never the token.
 CREATE TABLE IF NOT EXISTS agent_tokens (

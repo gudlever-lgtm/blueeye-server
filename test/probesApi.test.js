@@ -153,5 +153,34 @@ test('toRow serialises hops to JSON and maps fields positionally', () => {
   assert.equal(row[0], 9);
   assert.equal(row[2], 'traceroute');
   assert.equal(row[4], 1); // ok -> 1
-  assert.equal(typeof row[10], 'string'); // hops JSON
+  assert.equal(row[10], null); // status (not an http probe)
+  assert.equal(row[11], null); // cert_expiry_days
+  assert.equal(typeof row[12], 'string'); // hops JSON
+});
+
+test('toRow carries http status + cert expiry through to the row', () => {
+  const row = toRow(9, { ts: new Date('2026-06-01T00:00:00Z'), type: 'http', target: 'https://x/', ok: true, rttMs: 5, status: 200, certExpiryDays: 30 });
+  assert.equal(row[2], 'http');
+  assert.equal(row[10], 200); // status
+  assert.equal(row[11], 30); // cert_expiry_days
+});
+
+test('validateProbeSpec accepts an http URL target', () => {
+  const { value, errors } = validateProbeSpec({ type: 'http', target: 'https://example.com/health' });
+  assert.equal(errors, undefined);
+  assert.equal(value.type, 'http');
+  assert.equal(value.host, 'https://example.com/health');
+});
+
+test('validateProbeSpec defaults a bare http host to https and rejects bad input', () => {
+  assert.equal(validateProbeSpec({ type: 'http', target: 'example.com' }).value.host, 'https://example.com/');
+  assert.ok(validateProbeSpec({ type: 'http', target: 'ftp://example.com' }).errors); // wrong scheme
+  assert.ok(validateProbeSpec({ type: 'http' }).errors); // missing target
+});
+
+test('validateProbeResults accepts http status + certExpiryDays', () => {
+  const { value, errors } = validateProbeResults({ results: [{ type: 'http', target: 'https://x/', ok: true, status: 200, certExpiryDays: 30 }] });
+  assert.equal(errors, undefined);
+  assert.equal(value.results[0].status, 200);
+  assert.equal(value.results[0].certExpiryDays, 30);
 });

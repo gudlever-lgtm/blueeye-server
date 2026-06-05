@@ -255,6 +255,15 @@ function makeAnalysisPipeline(overrides = {}) {
   };
 }
 
+// A fake probe-analysis pipeline (records calls; produces nothing by default).
+function makeProbePipeline(overrides = {}) {
+  const calls = [];
+  return {
+    calls,
+    processAgent: overrides.processAgent || (async (agentId) => { calls.push({ agentId }); return []; }),
+  };
+}
+
 // A fake flows repository (records inserted rows; benign empty reads).
 function makeFlowsRepo(overrides = {}) {
   const rows = [];
@@ -308,15 +317,11 @@ function makeSettingsService(overrides = {}) {
 // A fake AI assistant. Disabled by default (explain rejects with FeatureDisabled)
 // so the endpoint answers 403 unless a test opts in with its own explain.
 function makeAssistant(overrides = {}) {
+  const disabled = () => { const e = new Error('The AI assistant is disabled'); e.name = 'FeatureDisabled'; throw e; };
   return {
-    isEnabled: overrides.isEnabled || (() => Boolean(overrides.explain)),
-    explain:
-      overrides.explain ||
-      (async () => {
-        const e = new Error('The AI assistant is disabled');
-        e.name = 'FeatureDisabled';
-        throw e;
-      }),
+    isEnabled: overrides.isEnabled || (() => Boolean(overrides.explain || overrides.summarizeLocation)),
+    explain: overrides.explain || (async () => disabled()),
+    summarizeLocation: overrides.summarizeLocation || (async () => disabled()),
   };
 }
 
@@ -339,6 +344,7 @@ function makeApp(overrides = {}) {
     systemInfo: overrides.systemInfo || makeSystemInfo(),
     findingStore: overrides.findingStore || makeFindingStore(),
     analysisPipeline: overrides.analysisPipeline || makeAnalysisPipeline(),
+    probePipeline: overrides.probePipeline || makeProbePipeline(),
     flowPipeline: overrides.flowPipeline || makeFlowPipeline(),
     flowsRepo: overrides.flowsRepo || makeFlowsRepo(),
     geoTileConfig: overrides.geoTileConfig || { tileUrl: 'https://tiles.example/{z}/{x}/{y}.png', tileAttribution: 'test', tileMaxZoom: 19 },
@@ -391,6 +397,7 @@ module.exports = {
   makeSystemInfo,
   makeFindingStore,
   makeAnalysisPipeline,
+  makeProbePipeline,
   makeFlowsRepo,
   makeFlowPipeline,
   makeAssistant,

@@ -134,8 +134,39 @@ panel. New findings appear live via WebSocket and can also be retrieved via REST
 > **per evaluation**, so changes take effect without a restart. The AI assistant +
 > secrets remain env-controlled.
 
+## Probe-based findings
+
+Active-probe results feed the same findings pipeline as traffic metrics. After an
+agent posts to `POST /agents/probe-results`, `analysis/probePipeline.js` runs
+`analysis/probeFindings.js` over that agent's recent rows. It reuses the **same
+median+MAD verdict** the fleet-health view shows (`health/probeHealth.js`), so a
+finding never claims anything the dashboard verdict doesn't:
+
+- `probe.reachability` (CRIT) — targets not responding;
+- `probe.loss` (WARN ≥2 % / CRIT ≥20 %);
+- `probe.latency` (ANOMALY, z-score vs. the target's own baseline);
+- `probe.jitter` (WARN ≥30 ms / CRIT ≥100 ms);
+- `probe.cert` (WARN ≤14 d / CRIT ≤3 d) — TLS certificate expiry from the **http**
+  probe, judged independently of reachability.
+
+Findings are de-duplicated within a 30-min cooldown (per metric+target) so
+frequent probes don't spam the list or the alert channels. Gated by the analysis
+license+flag; alerts go through the existing dispatcher (alerting flag).
+
+## AI: per-location summary
+
+Besides per-host `/explain`, the opt-in assistant exposes
+`POST /api/assistant/location-summary { locationId }` — a brief, plain-language
+"what's going on at this location?" status. The context is built locally from the
+location's agents: each agent's status, its probe-health verdict, and recent
+findings (each already carrying an explanation). As with `/explain`, **only** that
+compact, human-readable slice is sent to the provider — never raw metrics or
+payload. In the dashboard it's the **Locations → "AI status"** button.
+
 ## Tests
 
 `node --test` (Node's built-in runner). The module's tests live in
 `src/analysis/__tests__/` and `test/` (HTTP + WebSocket). Error paths are tested
-explicitly (empty/invalid input, 400/403/404/500, provider errors).
+explicitly (empty/invalid input, 400/403/404/500, provider errors). Probe
+findings: `test/probeFindings.test.js` + `test/probePipeline.test.js`; the
+location summary: `test/assistantLocation.test.js` + `test/assistantApi.test.js`.

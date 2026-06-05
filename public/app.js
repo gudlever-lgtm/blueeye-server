@@ -2877,11 +2877,39 @@ views.locations = async () => {
       el('td', {}, el('div', { class: 'row-actions' },
         el('button', { class: 'small ghost', onclick: () => showLocationTraffic(l) }, 'Traffic'),
         el('button', { class: 'small ghost', onclick: () => showLocationHistory(l) }, 'History'),
+        el('button', { class: 'small ghost', onclick: () => showLocationSummary(l) }, 'AI status'),
         canWrite() ? el('button', { class: 'small ghost', onclick: () => editLocation(l) }, 'Edit') : null,
         canDelete() ? el('button', { class: 'small danger', onclick: () => deleteLocation(l) }, 'Delete') : null)),
     )))));
   return root;
 };
+
+// AI status: a brief, plain-language "what's going on at this location?" summary
+// from the opt-in assistant (per-agent health verdicts + recent findings). One
+// click, no question to type. Degrades gracefully when the feature is off (403).
+async function showLocationSummary(l) {
+  const card = $('#modal-card');
+  const out = el('div', { class: 'assistant-out muted' }, 'Thinking…');
+  const close = el('button', { class: 'ghost', onclick: closeModal }, 'Close');
+  card.replaceChildren(
+    el('h3', {}, `AI status — ${esc(l.name)}`),
+    el('p', { class: 'muted' }, 'Based on the latest probe-health verdicts and findings for this location.'),
+    out,
+    el('div', { class: 'form-actions' }, close));
+  $('#modal').classList.remove('hidden');
+  try {
+    const res = await api('/api/assistant/location-summary', { method: 'POST', body: { locationId: l.id } });
+    out.className = 'assistant-out';
+    out.replaceChildren(
+      el('div', {}, res.answer || '(empty response)'),
+      el('div', { class: 'assistant-meta muted' }, `${esc(res.model || '')} · ${res.agents ?? 0} agent(s) · ${res.findings ?? 0} finding(s) in context`));
+  } catch (err) {
+    out.className = 'assistant-out muted';
+    out.textContent = err.status === 403
+      ? 'The AI assistant is disabled. Set ANALYSIS_ASSISTANT_ENABLED=true (and an API key) in the server\'s .env to use it.'
+      : (err.status === 404 ? 'Location not found.' : err.message);
+  }
+}
 
 // Live, correlated traffic for all agents in a location. Polls every 3s while
 // the panel is open; stops cleanly on close.

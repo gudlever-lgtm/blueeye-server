@@ -468,7 +468,7 @@ pre { padding: 10px; overflow: auto; }
 .set-field span:first-child { color: var(--text); }
 .settings-card .form-grid input[type="number"] { max-width: 240px; }
 .settings-card .form-grid input[type="checkbox"] { width: auto; align-self: flex-start; }
-button.ghost.danger { color: var(--bad); border-color: var(--border); font-weight: 700; line-height: 1; }
+button.ghost.danger { background: transparent; color: var(--bad); border-color: var(--border); font-weight: 700; line-height: 1; }
 @media (max-width: 640px) { .tc-row { grid-template-columns: 1fr 1fr; } .tc-head { display: none; } }
 
 /* Auto-refresh toggle */

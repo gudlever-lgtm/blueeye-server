@@ -140,10 +140,10 @@ A single vanilla-JS SPA. Key building blocks:
 - Charts are hand-rolled SVG: `multiChart` (live, area + time ticks + brush) and
   `historyChart` (time-axis; optional `band` = robust normal-range shading via
   `robustBand`, `markers` = event lines via `findingMarkers`). `usageBar()` for utilisation bars.
-- Theme: a catalogue of colour themes (`THEMES`: light/dark/midnight/nord/forest/sunset/
-  solarized/contrast), chosen in **Settings → Appearance** and **saved per user**
-  (`/me/preferences`), cached in localStorage for instant apply; the topbar keeps a quick
-  light/dark toggle. Mobile: tab bar → bottom nav.
+- Theme: a catalogue of colour palettes (`PALETTES`: default/midnight/nord/forest/sunset/
+  solarized/contrast), each in a **light + dark** variant. Pick a palette in **Settings →
+  Appearance**; the topbar 🌙/☀️ button flips brightness within it (`dual`). **Saved per
+  user** (`/me/preferences`), cached in localStorage for instant apply. Mobile: tab bar → bottom nav.
 
 ## Where do I change…?
 
@@ -165,7 +165,7 @@ A single vanilla-JS SPA. Key building blocks:
 | Interface health | `src/health/interfaceHealth.js` (`computeInterfaceHealth`/`interfaceHealthSummary`); HTTP in `src/routes/interfaces.js` — agent side in blueeye-agent |
 | Agent data-quality (drops/skew/version) | `src/health/dataQuality.js` (`computeDataQuality`); surfaced via `/api/fleet/health` + `/api/fleet/agent/:id` — all signals already sent by the agent |
 | A dashboard tab/view | `public/index.html` (button) + `views.<x>` in `public/app.js` + `PAGE_INFO` |
-| A dashboard colour theme | `THEMES` + `[data-theme=…]` in `public/styles.css`; picker `settingsAppearanceView` in `public/app.js`; per-user persistence via `/me` (`src/routes/me.js`, `usersRepository.get/updatePreferences`) + key whitelist in `src/validation/preferencesValidation.js` |
+| A dashboard colour palette (light+dark) | `PALETTES` + paired `[data-theme=…]` blocks in `public/styles.css`; picker `settingsAppearanceView` in `public/app.js`; per-user persistence via `/me` (`src/routes/me.js`, `usersRepository.get/updatePreferences`) + key whitelist in `src/validation/preferencesValidation.js` |
 | License / feature gating | `src/license/*` (`features.js` = fail-closed gate) |
 
 ## Conventions

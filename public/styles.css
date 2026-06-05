@@ -127,6 +127,73 @@
   --border: #767676;
   --btn-fg: #000000;
 }
+/* Light variants of the colour palettes — paired with the dark blocks above so
+   the topbar 🌙/☀️ button switches brightness while keeping the palette. */
+[data-theme="midnight-light"] {
+  --bg: #eef0fb;
+  --panel: #ffffff;
+  --panel-2: #e4e7f7;
+  --text: #181a2e;
+  --muted: #5b5f7a;
+  --accent: #5b5bd6;
+  --ok: #1f9d57;
+  --warn: #b07d1a;
+  --bad: #d14343;
+  --border: #dcdff2;
+  --btn-fg: #ffffff;
+}
+[data-theme="nord-light"] {
+  --bg: #e5e9f0;
+  --panel: #eceff4;
+  --panel-2: #d8dee9;
+  --text: #2e3440;
+  --muted: #4c566a;
+  --accent: #5e81ac;
+  --ok: #4f7d3f;
+  --warn: #9a7d10;
+  --bad: #bf616a;
+  --border: #d2d8e3;
+  --btn-fg: #eceff4;
+}
+[data-theme="forest-light"] {
+  --bg: #eef4ee;
+  --panel: #ffffff;
+  --panel-2: #e2ece4;
+  --text: #14241a;
+  --muted: #5a7563;
+  --accent: #1f9d57;
+  --ok: #1f9d57;
+  --warn: #b07d1a;
+  --bad: #c2412f;
+  --border: #d3e2d6;
+  --btn-fg: #ffffff;
+}
+[data-theme="sunset-light"] {
+  --bg: #fbeef4;
+  --panel: #fffafc;
+  --panel-2: #f6e2ec;
+  --text: #2a1320;
+  --muted: #8a6175;
+  --accent: #d6438a;
+  --ok: #2f9e6b;
+  --warn: #b9821f;
+  --bad: #d6436a;
+  --border: #f0d6e2;
+  --btn-fg: #ffffff;
+}
+[data-theme="contrast-light"] {
+  --bg: #ffffff;
+  --panel: #ffffff;
+  --panel-2: #f0f0f0;
+  --text: #000000;
+  --muted: #2a2a2a;
+  --accent: #0040d0;
+  --ok: #007a1f;
+  --warn: #9a5b00;
+  --bad: #c20000;
+  --border: #1a1a1a;
+  --btn-fg: #ffffff;
+}
 * { box-sizing: border-box; }
 body {
   margin: 0;
@@ -542,6 +609,8 @@ tr.acked td { opacity: .55; }
 .theme-card.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
 .theme-swatch { display: flex; height: 44px; border-radius: 8px; overflow: hidden; border: 1px solid var(--border); }
 .theme-swatch span { flex: 1; }
+.theme-duo { display: flex; flex-direction: column; gap: 5px; }
+.theme-duo .theme-swatch { height: 26px; }
 .theme-meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .theme-name { font-weight: 700; }
 .theme-fam { font-size: 12px; }

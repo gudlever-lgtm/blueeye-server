@@ -21,7 +21,9 @@ A package (`test_packages`, migration 017) has:
 - **items** — an array of:
   - `{ type: 'probe', probe: { type, host, port?, count?, maxHops? } }` — validated
     by `validateProbeSpec` (ping / tcp / dns / traceroute), or
-  - `{ type: 'run-test', intervalMs? }` — a traffic/throughput snapshot.
+  - `{ type: 'run-test', intervalMs? }` — a passive traffic/throughput snapshot.
+  - `{ type: 'speedtest', bytes? }` — an active download+upload speed test against
+    the server (see below).
 
 ## Running
 
@@ -51,8 +53,24 @@ All under `/api/test-packages` (user JWT; viewer reads, operator/admin writes):
 | DELETE | `/:id`      | operator+   | delete                           |
 | POST   | `/:id/run`  | operator+   | run now (returns the run summary)|
 
+## Speed test (active throughput)
+
+A self-contained download/upload test between the agent and **this** server — no
+external speed-test service, so it works on air-gapped networks.
+
+- `GET /speedtest/download?bytes=N` and `POST /speedtest/upload` (agent token)
+  transfer synthetic zero-filled bytes (capped at 200 MB); the agent times each
+  to compute Mbps.
+- The agent posts the result to `POST /speedtest/results`; read it back via
+  `GET /api/speedtest?agentId=&limit=` (viewer+). Stored in `speedtest_results`
+  (migration 018).
+- Trigger on demand with `POST /agents/:id/run-speedtest` (operator+) or add a
+  `speedtest` item to a package. The dashboard shows results in the **Speed**
+  modal on each agent row.
+
 ## Privacy
 
-Metadata only: probe targets and timings, traffic byte/packet counts — never
-payload, consistent with the rest of BlueEye. Predefined templates use neutral
-targets (e.g. Quad9 `9.9.9.9`, `example.com`).
+Metadata only: probe targets and timings, traffic byte/packet counts, speed-test
+byte counts and rates — never payload, consistent with the rest of BlueEye.
+Predefined templates use neutral targets (e.g. Quad9 `9.9.9.9`, `example.com`);
+the speed test talks only to the BlueEye server itself.

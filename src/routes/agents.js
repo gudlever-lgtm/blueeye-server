@@ -199,6 +199,29 @@ function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentComma
     })
   );
 
+  // POST /agents/:id/run-speedtest — push an active speed test to a connected
+  // agent. operator/admin. The agent measures download/upload Mbps against the
+  // server and reports via POST /speedtest/results. 409 if not connected.
+  router.post(
+    '/:id/run-speedtest',
+    requireAuth,
+    requireRole(ROLES.OPERATOR, ROLES.ADMIN),
+    asyncHandler(async (req, res) => {
+      const id = parseId(req.params.id);
+      if (id === null) return invalidId(res);
+      const agent = await agentsRepo.findById(id);
+      if (!agent) return notFound(res);
+      const body = req.body && typeof req.body === 'object' ? req.body : {};
+      const command = { name: 'speedtest' };
+      if (Number.isInteger(body.bytes) && body.bytes > 0) command.bytes = body.bytes;
+      const delivered = agentCommander ? agentCommander.sendCommand(id, command) : 0;
+      if (delivered === 0) {
+        return res.status(409).json({ error: 'Agent not connected', delivered: 0 });
+      }
+      res.status(202).json({ delivered, agentId: id });
+    })
+  );
+
   // GET /agents — list, with the joined location name.
   router.get(
     '/',

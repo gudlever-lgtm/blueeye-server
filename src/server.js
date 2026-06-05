@@ -49,6 +49,7 @@ const { createSettingsService } = require('./services/settings');
 const { createTestPackagesRepository } = require('./repositories/testPackagesRepository');
 const { createTestPackageRunner } = require('./services/testPackageRunner');
 const { createTestPackageScheduler } = require('./services/testPackageScheduler');
+const { createSpeedtestResultsRepository } = require('./repositories/speedtestResultsRepository');
 
 // Wires up real dependencies, starts the HTTP server and installs graceful
 // shutdown handlers.
@@ -112,6 +113,8 @@ function start() {
   const testPackagesRepo = createTestPackagesRepository(db);
   const testPackageRunner = createTestPackageRunner({ agentsRepo, agentCommander, repo: testPackagesRepo, logger: console });
   const testPackageScheduler = createTestPackageScheduler({ repo: testPackagesRepo, runner: testPackageRunner, logger: console });
+  // Active throughput ("speed test") results reported by agents.
+  const speedtestResultsRepo = createSpeedtestResultsRepository(db);
 
   // Pushes a live event to every connected dashboard (assigned below; the
   // closure runs later). Used for enrollment/agent-status feedback in the UI.
@@ -233,6 +236,7 @@ function start() {
     agentSourceStore,
     testPackagesRepo,
     testPackageRunner,
+    speedtestResultsRepo,
     enrollConfig: { publicUrl: config.publicUrl, certFingerprint: config.enroll.certFingerprint },
     notifyDashboard,
     logger: console,

@@ -340,6 +340,16 @@ function makeTestPackagesRepo(overrides = {}) {
   };
 }
 
+// A fake speed-test results repository (records inserts; benign empty reads).
+function makeSpeedtestResultsRepo(overrides = {}) {
+  const rows = [];
+  return {
+    rows,
+    create: overrides.create || (async (agentId, r) => { rows.push({ agentId, ...r }); return rows.length; }),
+    findByAgent: overrides.findByAgent || (async () => []),
+  };
+}
+
 // A fake test-package runner; defaults to a benign run summary.
 function makeTestPackageRunner(overrides = {}) {
   return {
@@ -380,6 +390,7 @@ function makeApp(overrides = {}) {
     agentSourceStore: overrides.agentSourceStore || makeSourceStore(),
     testPackagesRepo: overrides.testPackagesRepo || makeTestPackagesRepo(),
     testPackageRunner: overrides.testPackageRunner || makeTestPackageRunner(),
+    speedtestResultsRepo: overrides.speedtestResultsRepo || makeSpeedtestResultsRepo(),
     enrollConfig: overrides.enrollConfig || { publicUrl: '', certFingerprint: '' },
     notifyDashboard: overrides.notifyDashboard || (() => 0),
   });
@@ -418,6 +429,7 @@ module.exports = {
   makeSourceStore,
   makeTestPackagesRepo,
   makeTestPackageRunner,
+  makeSpeedtestResultsRepo,
   makeLicenseManager,
   makeAgentCommander,
   makeSystemInfo,

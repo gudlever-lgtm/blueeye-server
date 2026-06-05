@@ -38,6 +38,7 @@ function createApp({
   agentSourceStore,
   testPackagesRepo,
   testPackageRunner,
+  speedtestResultsRepo,
   enrollConfig,
   notifyDashboard,
   logger = silentLogger,
@@ -87,6 +88,7 @@ function createApp({
       agentSourceStore,
       testPackagesRepo,
       testPackageRunner,
+      speedtestResultsRepo,
       enrollConfig,
       notifyDashboard,
     })

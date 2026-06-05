@@ -25,6 +25,11 @@ function resolveTargetIds(pkg, agents) {
 // Turns a package item into a server -> agent command.
 function itemToCommand(item) {
   if (item && item.type === 'probe') return { name: 'run-probe', probe: item.probe };
+  if (item && item.type === 'speedtest') {
+    const cmd = { name: 'speedtest' };
+    if (item.bytes) cmd.bytes = item.bytes;
+    return cmd;
+  }
   const cmd = { name: 'run-test' };
   if (item && item.intervalMs) cmd.intervalMs = item.intervalMs;
   return cmd;

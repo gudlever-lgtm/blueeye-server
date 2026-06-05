@@ -602,6 +602,7 @@ function agentRow(a, currentAgentVersion) {
         ? el('button', { class: 'small ghost', onclick: () => showAgentFlows(a) }, 'Flows')
         : null,
       el('button', { class: 'small ghost', onclick: () => pingAgent(a), title: 'Confirm the live connection to this agent' }, 'Ping'),
+      el('button', { class: 'small ghost', onclick: () => showSpeedtest(a), title: 'Active download/upload speed test to the server' }, 'Speed'),
       canWrite() ? el('button', { class: 'small', onclick: () => runTest(a) }, 'Run test') : null,
       canWrite() ? el('button', { class: 'small ghost', onclick: () => editAgent(a) }, 'Edit') : null,
       (canDelete() && agentIsBehind(a, currentAgentVersion))
@@ -715,6 +716,7 @@ const TEST_TEMPLATES = [
   { key: 'web', label: 'Web reachability — TCP 443 example.com', item: { type: 'probe', probe: { type: 'tcp', host: 'example.com', port: 443, count: 3 } } },
   { key: 'path', label: 'Path trace — traceroute 9.9.9.9', item: { type: 'probe', probe: { type: 'traceroute', host: '9.9.9.9' } } },
   { key: 'throughput', label: 'Throughput snapshot — current bandwidth', item: { type: 'run-test', intervalMs: 1000 } },
+  { key: 'speed', label: 'Speed test — download/upload to server (Mbps)', item: { type: 'speedtest' } },
 ];
 
 const SCHEDULE_PRESETS = [
@@ -770,9 +772,11 @@ function testPackageRow(p, agents, locations) {
 
 function testItemsSummary(items) {
   if (!items || !items.length) return el('span', { class: 'muted' }, '–');
-  const labels = items.map((it) => (it.type === 'run-test'
-    ? 'throughput'
-    : `${it.probe.type} ${it.probe.host}${it.probe.port ? ':' + it.probe.port : ''}`));
+  const labels = items.map((it) => {
+    if (it.type === 'run-test') return 'throughput';
+    if (it.type === 'speedtest') return 'speed test';
+    return `${it.probe.type} ${it.probe.host}${it.probe.port ? ':' + it.probe.port : ''}`;
+  });
   return el('span', { class: 'muted small' }, labels.join(', '));
 }
 
@@ -838,12 +842,12 @@ function editTestPackage(pkg, agents, locations) {
   const itemsBox = el('div', { class: 'tc-list' });
   const itemRows = [];
   function addItemRow(item) {
-    const typeSel = el('select', {}, ...[['ping', 'Ping'], ['tcp', 'TCP'], ['dns', 'DNS'], ['traceroute', 'Traceroute'], ['run-test', 'Throughput']].map(([v, l]) => el('option', { value: v }, l)));
+    const typeSel = el('select', {}, ...[['ping', 'Ping'], ['tcp', 'TCP'], ['dns', 'DNS'], ['traceroute', 'Traceroute'], ['run-test', 'Throughput'], ['speedtest', 'Speed test']].map(([v, l]) => el('option', { value: v }, l)));
     const host = el('input', { type: 'text', placeholder: 'host / target' });
     const port = el('input', { type: 'number', min: '1', max: '65535', placeholder: 'port' });
     const count = el('input', { type: 'number', min: '1', max: '20', placeholder: 'count' });
     if (item) {
-      if (item.type === 'run-test') { typeSel.value = 'run-test'; }
+      if (item.type === 'run-test' || item.type === 'speedtest') { typeSel.value = item.type; }
       else { typeSel.value = item.probe.type; host.value = item.probe.host || ''; if (item.probe.port) port.value = item.probe.port; if (item.probe.count) count.value = item.probe.count; }
     }
     const ctrl = { typeSel, host, port, count };
@@ -851,7 +855,8 @@ function editTestPackage(pkg, agents, locations) {
     const node = el('div', { class: 'test-item-row' }, typeSel, host, port, count, del);
     const sync = () => {
       const t = typeSel.value;
-      host.style.visibility = t === 'run-test' ? 'hidden' : 'visible';
+      const noTarget = t === 'run-test' || t === 'speedtest';
+      host.style.visibility = noTarget ? 'hidden' : 'visible';
       port.style.visibility = t === 'tcp' ? 'visible' : 'hidden';
       count.style.visibility = (t === 'ping' || t === 'tcp') ? 'visible' : 'hidden';
     };
@@ -877,6 +882,7 @@ function editTestPackage(pkg, agents, locations) {
     const items = itemRows.map((c) => {
       const t = c.typeSel.value;
       if (t === 'run-test') return { type: 'run-test' };
+      if (t === 'speedtest') return { type: 'speedtest' };
       const probe = { type: t, host: c.host.value.trim() };
       if (t === 'tcp' && c.port.value) probe.port = Number(c.port.value);
       if ((t === 'ping' || t === 'tcp') && c.count.value) probe.count = Number(c.count.value);
@@ -928,6 +934,55 @@ function checkRow(id, label, checked) {
 }
 function checkedValues(box) {
   return [...box.querySelectorAll('input[type=checkbox]')].filter((c) => c.checked).map((c) => Number(c.value));
+}
+
+// Per-agent speed-test modal: latest download/upload Mbps + recent history, with
+// a "Run speed test now" button (operator+). Results come from /api/speedtest.
+async function showSpeedtest(a) {
+  const card = $('#modal-card');
+  const title = `Speed test — ${esc(a.display_name || a.hostname)}`;
+  const host = el('div', {}, el('p', { class: 'muted' }, 'Loading…'));
+  card.replaceChildren(el('h3', {}, title), host);
+  $('#modal').classList.remove('hidden');
+
+  async function load() {
+    let data;
+    try { data = await api(`/api/speedtest?agentId=${a.id}&limit=20`); }
+    catch (err) { host.replaceChildren(el('p', { class: 'error' }, err.message)); return; }
+    const rows = data.results || [];
+    const kids = [];
+    if (canWrite()) {
+      const runBtn = el('button', { class: 'small' }, 'Run speed test now');
+      runBtn.addEventListener('click', async () => {
+        runBtn.disabled = true; runBtn.textContent = 'Running…';
+        try {
+          const r = await api(`/agents/${a.id}/run-speedtest`, { method: 'POST' });
+          toast(`Speed test sent to ${a.hostname} (delivered: ${r.delivered}). Result in a few seconds…`);
+          setTimeout(load, 6000);
+        } catch (err) { toast(err.message, true); runBtn.disabled = false; runBtn.textContent = 'Run speed test now'; }
+      });
+      kids.push(el('div', { class: 'form-actions' }, runBtn));
+    }
+    if (!rows.length) {
+      kids.push(el('p', { class: 'muted' }, 'No speed-test results yet. Run one now, or add a "Speed test" item to a package on the Tests tab.'));
+    } else {
+      const latest = rows[0];
+      kids.push(el('div', { class: 'cards' },
+        stat('Download', latest.down_mbps != null ? `${latest.down_mbps} Mbps` : '–'),
+        stat('Upload', latest.up_mbps != null ? `${latest.up_mbps} Mbps` : '–'),
+        stat('Measured', fmtDate(latest.ts))));
+      kids.push(el('table', {},
+        el('thead', {}, el('tr', {}, ...['When', 'Download', 'Upload', 'Status'].map((h) => el('th', {}, h)))),
+        el('tbody', {}, ...rows.map((r) => el('tr', {},
+          el('td', { class: 'muted' }, fmtDate(r.ts)),
+          el('td', {}, r.down_mbps != null ? `${r.down_mbps} Mbps` : '–'),
+          el('td', {}, r.up_mbps != null ? `${r.up_mbps} Mbps` : '–'),
+          el('td', {}, el('span', { class: `badge ${r.ok ? 'ok' : 'bad'}` }, r.ok ? 'ok' : 'failed')))))));
+    }
+    kids.push(el('div', { class: 'form-actions' }, el('button', { class: 'ghost', onclick: closeModal }, 'Close')));
+    host.replaceChildren(...kids);
+  }
+  load();
 }
 
 async function showResults(a) {

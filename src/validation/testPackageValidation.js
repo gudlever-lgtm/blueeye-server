@@ -68,12 +68,20 @@ function validateItems(raw, errors) {
         item.intervalMs = n;
       }
       out.push(item);
+    } else if (type === 'speedtest') {
+      const item = { type: 'speedtest' };
+      if (it.bytes !== undefined && it.bytes !== null) {
+        const n = Number(it.bytes);
+        if (!Number.isInteger(n) || n < 1024 || n > 200 * 1024 * 1024) { errors.items = `items[${i}].bytes must be between 1024 and ${200 * 1024 * 1024}`; return undefined; }
+        item.bytes = n;
+      }
+      out.push(item);
     } else if (type === 'probe') {
       const { value, errors: pe } = validateProbeSpec(it.probe);
       if (pe) { errors.items = `items[${i}].probe: ${Object.values(pe).join('; ')}`; return undefined; }
       out.push({ type: 'probe', probe: value });
     } else {
-      errors.items = `items[${i}].type must be 'probe' or 'run-test'`;
+      errors.items = `items[${i}].type must be 'probe', 'run-test' or 'speedtest'`;
       return undefined;
     }
   }

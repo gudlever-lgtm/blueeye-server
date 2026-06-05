@@ -26,6 +26,7 @@ const { createSearchRouter } = require('./search');
 const { createEnrollRouter } = require('./enroll');
 const { createEnrollCommandRouter } = require('./enrollCommand');
 const { createTestPackagesRouter } = require('./testPackages');
+const { createSpeedtestRouter, createSpeedtestReadRouter } = require('./speedtest');
 const {
   createAgentAuthenticator,
   createAgentTokenMiddleware,
@@ -61,6 +62,7 @@ function createApiRouter({
   agentSourceStore,
   testPackagesRepo,
   testPackageRunner,
+  speedtestResultsRepo,
   enrollConfig = {},
   notifyDashboard,
 }) {
@@ -100,6 +102,10 @@ function createApiRouter({
   router.use('/api/search', createSearchRouter({ agentsRepo, locationsRepo, flowsRepo }));
   if (settingsService) router.use('/api/settings', createSettingsRouter({ settingsService, featureGate, dispatcher, analysisConfig, retentionConfig }));
   if (testPackagesRepo) router.use('/api/test-packages', createTestPackagesRouter({ repo: testPackagesRepo, runner: testPackageRunner }));
+  if (speedtestResultsRepo) {
+    router.use('/speedtest', createSpeedtestRouter({ agentAuth, speedtestResultsRepo }));
+    router.use('/api/speedtest', createSpeedtestReadRouter({ speedtestResultsRepo, agentsRepo }));
+  }
   router.use('/api/export', createExportRouter({ findingStore, flowsRepo, agentsRepo, locationsRepo, resultsRepo, probeResultsRepo, featureGate }));
   router.use('/enrollment-codes', createEnrollmentCodesRouter({ enrollmentCodesRepo, locationsRepo }));
 

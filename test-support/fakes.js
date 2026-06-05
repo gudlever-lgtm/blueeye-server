@@ -156,6 +156,23 @@ function makeArtifactStore(overrides = {}) {
   };
 }
 
+// A fake agent-source store (one published source bundle by default). Pass
+// { present: false } to simulate a server with no source configured, or a
+// throwing meta()/buffer() to drive a 500.
+function makeSourceStore(overrides = {}) {
+  const has = overrides.present !== false;
+  const sha = overrides.sha256 || 'c'.repeat(64);
+  const buf = overrides.buf || Buffer.from('fake-agent-source-tarball');
+  return {
+    reload: overrides.reload || (() => {}),
+    available: overrides.available || (() => has),
+    buffer: overrides.buffer || (() => (has ? buf : null)),
+    meta: overrides.meta || (() => (has ? { filename: 'blueeye-agent-source.tgz', contentType: 'application/gzip', size: buf.length, sha256: sha } : null)),
+    get sha256() { return has ? sha : null; },
+    get size() { return has ? buf.length : 0; },
+  };
+}
+
 // A fake db with a ping() used by GET /health.
 function makeDb(overrides = {}) {
   return {
@@ -330,6 +347,7 @@ function makeApp(overrides = {}) {
     analysisConfig: overrides.analysisConfig || { analysisEnabled: true, assistantEnabled: false, critSigma: 4, warnSigma: 3, baselineDays: 7, minSamples: 200 },
     retentionConfig: overrides.retentionConfig || { enabled: true, rawRetentionDays: 7, rollupRetentionDays: 90, findingRetentionDays: 365, rollupIntervalMinutes: 60 },
     artifactStore: overrides.artifactStore || makeArtifactStore(),
+    agentSourceStore: overrides.agentSourceStore || makeSourceStore(),
     enrollConfig: overrides.enrollConfig || { publicUrl: '', certFingerprint: '' },
     notifyDashboard: overrides.notifyDashboard || (() => 0),
   });
@@ -365,6 +383,7 @@ module.exports = {
   makeEnrollmentCodesRepo,
   makeEnrollmentStore,
   makeArtifactStore,
+  makeSourceStore,
   makeLicenseManager,
   makeAgentCommander,
   makeSystemInfo,

@@ -400,9 +400,9 @@ const PAGE_INFO = {
       el('h4', {}, 'Security'),
       el('ul', {},
         el('li', {}, 'Codes are short-lived (default 1 hour) and can be bulk (N machines).'),
-        el('li', {}, 'The binary is always verified against the checksum before running.'),
+        el('li', {}, 'The source bundle is always verified against the checksum before building or running.'),
         el('li', {}, 'The cert fingerprint is pinned on the agent (when the server runs behind TLS).')),
-      el('p', { class: 'muted' }, 'Also works on air-gapped networks: the binary is served from the BlueEye server itself — no internet access required as long as the machine can reach the server.'),
+      el('p', { class: 'muted' }, 'The agent is built + run on the target (Docker or Node) — no pre-built binaries. Also works on air-gapped networks: the source is served from the BlueEye server itself.'),
       el('p', { class: 'muted' }, 'Status: active (usable), used (used up), expired (expired).'),
     ],
   },
@@ -3139,7 +3139,7 @@ function renderEnrollResult(host, data, cfg, regen) {
   const manual = el('div', { class: 'enroll-manual hidden' },
     el('p', { class: 'muted small' }, 'Manual installation — inspect before running:'),
     enrollKv('Download', el('code', {}, data.manual.downloadUrl)),
-    enrollKv('SHA-256', el('code', {}, data.manual.checksum || '(binary not yet published for this platform)')),
+    enrollKv('SHA-256', el('code', {}, data.manual.checksum || '(no agent source published on the server)')),
     enrollKv('Kommando', el('code', {}, data.manual.command)),
     (cfg && cfg.certFingerprint) ? enrollKv('Cert-fingerprint', el('code', {}, cfg.certFingerprint)) : null);
   const manualToggle = el('button', { class: 'small ghost', onclick: () => manual.classList.toggle('hidden') }, 'Show manual / checksum');

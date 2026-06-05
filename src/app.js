@@ -35,6 +35,7 @@ function createApp({
   analysisConfig,
   retentionConfig,
   artifactStore,
+  agentSourceStore,
   enrollConfig,
   notifyDashboard,
   logger = silentLogger,
@@ -81,6 +82,7 @@ function createApp({
       analysisConfig,
       retentionConfig,
       artifactStore,
+      agentSourceStore,
       enrollConfig,
       notifyDashboard,
     })

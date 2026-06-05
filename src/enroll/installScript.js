@@ -2,15 +2,17 @@
 
 // Renders the one-line installer served at GET /enroll/:code/install.sh.
 //
-// The script is fully self-contained: server URL, certificate fingerprint, the
-// enrollment code and a per-platform SHA-256 checksum table are baked in. It
-//   1. detects the platform (uname),
-//   2. downloads the matching binary from the BlueEye server itself,
-//   3. verifies SHA-256 against the embedded checksum (ABORTS on mismatch),
-//   4. installs the binary and runs `blueeye-agent enroll --code …`,
-//   5. installs + starts a systemd service.
-// It is idempotent (re-running won't double-install) and exposes a few env
-// hooks (BLUEEYE_CURL, BLUEEYE_SHA256, BLUEEYE_PLATFORM, BLUEEYE_DRY_RUN) so the
+// No pre-built binaries are involved. The script is self-contained (server URL,
+// certificate fingerprint, enrollment code and the SHA-256 of the agent SOURCE
+// bundle are baked in). It:
+//   1. downloads the agent source from the BlueEye server itself,
+//   2. verifies SHA-256 against the embedded checksum (ABORTS on mismatch),
+//   3. auto-detects a runtime: Docker (build + run a container) is preferred,
+//      else Node (npm install + a systemd service); if neither is present it
+//      prints clear instructions and stops — it never dead-ends,
+//   4. enrolls with the embedded one-time code (pinning the cert fingerprint).
+// It is idempotent (re-running reuses the stored token) and exposes a few env
+// hooks (BLUEEYE_CURL, BLUEEYE_SHA256, BLUEEYE_RUNTIME, BLUEEYE_DRY_RUN) so the
 // verification path can be exercised in tests without touching the system.
 
 const { normalizeFingerprint } = require('./fingerprint');
@@ -22,20 +24,11 @@ function shDq(value) {
   return String(value == null ? '' : value).replace(/(["\\$`])/g, '\\$1');
 }
 
-function checksumCase(checksums) {
-  const arms = Object.keys(checksums)
-    .sort()
-    .map((slug) => `    ${slug}) printf '%s' "${shDq(checksums[slug])}" ;;`);
-  arms.push("    *) printf '' ;;");
-  return arms.join('\n');
-}
-
 function renderInstallScript({
   serverUrl,
   code,
   certFingerprint = '',
-  checksums = {},
-  binName = 'blueeye-agent',
+  sourceSha = '',
   serviceName = 'blueeye-agent',
 } = {}) {
   const fp = normalizeFingerprint(certFingerprint);
@@ -44,48 +37,29 @@ function renderInstallScript({
 #
 # Everything needed is embedded below: the server URL, the certificate
 # fingerprint to pin, your one-time enrollment code and the expected SHA-256 of
-# the agent binary. The binary is downloaded from the BlueEye server itself, so
-# this also works on networks without Internet access (air-gapped), as long as
-# the machine can reach the server.
+# the agent SOURCE bundle. The agent is downloaded from the BlueEye server itself
+# (no GitHub, no registry — works on air-gapped networks, as long as the machine
+# can reach the server) and then run here with Docker (preferred) or Node. No
+# pre-built binaries are involved.
 set -eu
 
 SERVER_URL="${shDq(serverUrl)}"
 ENROLL_CODE="${shDq(code)}"
 CERT_FINGERPRINT="${shDq(fp)}"
-BIN_NAME="${shDq(binName)}"
+SOURCE_SHA256="${shDq(sourceSha)}"
 SERVICE_NAME="${shDq(serviceName)}"
 INSTALL_DIR="\${BLUEEYE_INSTALL_DIR:-/opt/blueeye-agent}"
+IMAGE="\${BLUEEYE_IMAGE:-blueeye-agent}"
+CONTAINER="\${BLUEEYE_CONTAINER:-blueeye-agent}"
+TOKEN_VOLUME="\${BLUEEYE_TOKEN_VOLUME:-blueeye-agent-data}"
 
 # Test/override hooks (unset in normal use).
 CURL="\${BLUEEYE_CURL:-curl}"
 SHA256="\${BLUEEYE_SHA256:-}"
+RUNTIME="\${BLUEEYE_RUNTIME:-}"   # force docker|node|none (auto-detected if empty)
 
 log()  { printf '[blueeye] %s\\n' "$*"; }
 fail() { printf '[blueeye] ERROR: %s\\n' "$*" >&2; exit 1; }
-
-detect_platform() {
-  if [ -n "\${BLUEEYE_PLATFORM:-}" ]; then printf '%s' "$BLUEEYE_PLATFORM"; return; fi
-  os=$(uname -s 2>/dev/null || echo unknown)
-  arch=$(uname -m 2>/dev/null || echo unknown)
-  case "$os" in
-    Linux)  os=linux ;;
-    Darwin) os=darwin ;;
-    *)      os=$(printf '%s' "$os" | tr '[:upper:]' '[:lower:]') ;;
-  esac
-  case "$arch" in
-    x86_64|amd64)   arch=amd64 ;;
-    aarch64|arm64)  arch=arm64 ;;
-    armv7l|armv7)   arch=armv7 ;;
-  esac
-  printf '%s-%s' "$os" "$arch"
-}
-
-# Embedded per-platform SHA-256 table (computed by the server at startup).
-checksum_for() {
-  case "$1" in
-${checksumCase(checksums)}
-  esac
-}
 
 pick_sha_tool() {
   [ -n "$SHA256" ] && return 0
@@ -95,50 +69,96 @@ pick_sha_tool() {
 }
 
 main() {
-  PLATFORM=$(detect_platform)
-  log "platform: $PLATFORM"
-  EXPECTED=$(checksum_for "$PLATFORM")
-  [ -n "$EXPECTED" ] || fail "no agent binary published for platform '$PLATFORM'"
+  [ -n "$SOURCE_SHA256" ] || fail "the BlueEye server has no agent source published — set AGENT_SOURCE_DIR on the server (see docs/enrollment.md), then retry"
+
+  TMP=$(mktemp -d)
+  trap 'rm -rf "$TMP"' EXIT
+  TARBALL="$TMP/agent-source.tgz"
+
+  log "downloading agent source from $SERVER_URL/enroll/agent-source.tgz"
+  $CURL -fsSL "$SERVER_URL/enroll/agent-source.tgz" -o "$TARBALL" || fail "download failed"
+
   pick_sha_tool
-
-  TMP=$(mktemp)
-  trap 'rm -f "$TMP"' EXIT
-  log "downloading agent from $SERVER_URL/enroll/agent/$PLATFORM"
-  $CURL -fsSL "$SERVER_URL/enroll/agent/$PLATFORM" -o "$TMP" || fail "download failed"
-
-  ACTUAL=$($SHA256 "$TMP" | awk '{print $1}')
-  if [ "$ACTUAL" != "$EXPECTED" ]; then
-    fail "checksum mismatch (expected $EXPECTED, got $ACTUAL) — refusing to install"
+  ACTUAL=$($SHA256 "$TARBALL" | awk '{print $1}')
+  if [ "$ACTUAL" != "$SOURCE_SHA256" ]; then
+    fail "checksum mismatch (expected $SOURCE_SHA256, got $ACTUAL) — refusing to install"
   fi
-  log "checksum OK ($EXPECTED)"
+  log "checksum OK ($SOURCE_SHA256)"
 
   # Stop here in test/inspection mode — nothing has been written to the system.
   if [ -n "\${BLUEEYE_DRY_RUN:-}" ]; then log "dry-run: verified, stopping before install"; exit 0; fi
 
+  # Pick a runtime: Docker preferred, then Node; otherwise explain and stop.
+  if [ -z "$RUNTIME" ]; then
+    if command -v docker >/dev/null 2>&1; then RUNTIME=docker;
+    elif command -v node >/dev/null 2>&1; then RUNTIME=node;
+    else RUNTIME=none; fi
+  fi
+  if [ "$RUNTIME" = "none" ]; then
+    fail "neither Docker nor Node was found on this host. Install one and re-run:
+  - Docker (recommended): https://docs.docker.com/engine/install/
+  - or Node.js 18+:       https://nodejs.org/
+then:  curl -sSL $SERVER_URL/enroll/$ENROLL_CODE/install.sh | sh"
+  fi
+  log "runtime: $RUNTIME"
+
   [ "$(id -u)" = "0" ] || fail "installation needs root — re-run with sudo, e.g.  curl -sSL <url> | sudo sh"
 
-  # Install the binary (idempotent: overwrites in place).
   mkdir -p "$INSTALL_DIR"
-  install -m 0755 "$TMP" "$INSTALL_DIR/$BIN_NAME"
-  log "installed $INSTALL_DIR/$BIN_NAME"
+  log "extracting agent source to $INSTALL_DIR"
+  tar -xzf "$TARBALL" -C "$INSTALL_DIR" || fail "could not extract the agent source"
 
-  # Exchange the code for a token (idempotent: the agent skips enrollment when a
-  # token already exists). The fingerprint is pinned for this first contact.
+  if [ "$RUNTIME" = "docker" ]; then install_docker; else install_node; fi
+}
+
+install_docker() {
+  log "building image $IMAGE (this can take a minute) ..."
+  docker build -t "$IMAGE" "$INSTALL_DIR" >/dev/null || fail "docker build failed"
+  docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+  docker volume create "$TOKEN_VOLUME" >/dev/null
+  FP_ENV=""
+  [ -n "$CERT_FINGERPRINT" ] && FP_ENV="-e BLUEEYE_SERVER_CERT_FINGERPRINT=$CERT_FINGERPRINT"
+  # Host networking so the agent sees the host's real interfaces. The agent
+  # enrolls itself on first start from BLUEEYE_ENROLLMENT_CODE; the token lives on
+  # the named volume, so re-runs are idempotent (the code is then ignored).
+  # shellcheck disable=SC2086
+  docker run -d --name "$CONTAINER" --restart unless-stopped --network host \\
+    -e "BLUEEYE_SERVER_URL=$SERVER_URL" \\
+    -e "BLUEEYE_ENROLLMENT_CODE=$ENROLL_CODE" \\
+    -e "BLUEEYE_TOKEN_PATH=/data/token" \\
+    $FP_ENV \\
+    -v "$TOKEN_VOLUME:/data" \\
+    "$IMAGE" >/dev/null || fail "docker run failed"
+  log "done — agent running as docker container '$CONTAINER'  (docker logs -f $CONTAINER)"
+}
+
+install_node() {
+  command -v node >/dev/null 2>&1 || fail "Node not found"
+  if [ ! -d "$INSTALL_DIR/node_modules" ]; then
+    command -v npm >/dev/null 2>&1 || fail "npm is required to install the agent's dependencies (or install Docker instead)"
+    log "installing dependencies (npm) ..."
+    ( cd "$INSTALL_DIR" && { npm ci --omit=dev >/dev/null 2>&1 || npm install --omit=dev >/dev/null 2>&1; } ) || fail "dependency install failed"
+  fi
+
+  # Enroll once (idempotent: the agent skips enrollment when a token exists). The
+  # fingerprint is pinned for this first contact.
   FP_ARG=""
   [ -n "$CERT_FINGERPRINT" ] && FP_ARG="--fingerprint $CERT_FINGERPRINT"
+  # shellcheck disable=SC2086
   BLUEEYE_SERVER_CERT_FINGERPRINT="$CERT_FINGERPRINT" \\
-    "$INSTALL_DIR/$BIN_NAME" enroll --code "$ENROLL_CODE" --server "$SERVER_URL" $FP_ARG \\
+    node "$INSTALL_DIR/src/index.js" enroll --code "$ENROLL_CODE" --server "$SERVER_URL" $FP_ARG \\
     || fail "enrollment failed"
 
   install_service
-  log "done — agent enrolled and running"
+  log "done — agent enrolled and running (node service)"
 }
 
 install_service() {
   if ! command -v systemctl >/dev/null 2>&1; then
-    log "systemd not found — start the agent manually: $INSTALL_DIR/$BIN_NAME"
+    log "systemd not found — start the agent manually: node $INSTALL_DIR/src/index.js"
     return 0
   fi
+  NODE_BIN=$(command -v node)
   UNIT="/etc/systemd/system/$SERVICE_NAME.service"
   # Idempotent: the unit content is stable, so rewriting on re-run is a no-op.
   cat > "$UNIT" <<UNIT_EOF
@@ -149,9 +169,10 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+WorkingDirectory=$INSTALL_DIR
 Environment=BLUEEYE_SERVER_URL=$SERVER_URL
 Environment=BLUEEYE_SERVER_CERT_FINGERPRINT=$CERT_FINGERPRINT
-ExecStart=$INSTALL_DIR/$BIN_NAME
+ExecStart=$NODE_BIN $INSTALL_DIR/src/index.js
 Restart=on-failure
 RestartSec=5
 

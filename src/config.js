@@ -49,7 +49,13 @@ const config = {
   enroll: {
     // Local directory holding the agent binaries served at /enroll/agent/:platform.
     // Files are named blueeye-agent-<platform>[.exe], e.g. blueeye-agent-linux-amd64.
+    // LEGACY/optional — the default install flow serves the source bundle instead.
     artifactsDir: process.env.AGENT_ARTIFACTS_DIR || path.join(process.cwd(), 'artifacts'),
+    // The agent source tree, packaged + served at /enroll/agent-source.tgz so the
+    // one-line installer can build + run it (Docker/Node) without any published
+    // binary. Defaults to the sibling checkout (standard deploy layout); the
+    // compose file bind-mounts ../blueeye-agent to /agent-src.
+    agentSourceDir: process.env.AGENT_SOURCE_DIR || path.join(process.cwd(), '..', 'blueeye-agent'),
     // SHA-256 fingerprint of the server's TLS leaf cert (or the terminating
     // reverse proxy's). Embedded into install scripts so the agent can pin it.
     // Leave unset for plain HTTP / development (no pinning).

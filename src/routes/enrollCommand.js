@@ -29,7 +29,7 @@ function isExpired(row) {
 //   - codeId given  -> reuse that (active) code.
 //   - codeId absent -> mint a new code via the existing code flow (bulk-capable
 //     via maxUses + ttlMinutes).
-function createEnrollCommandRouter({ enrollmentCodesRepo, artifactStore, enrollConfig = {} }) {
+function createEnrollCommandRouter({ enrollmentCodesRepo, artifactStore, sourceStore, enrollConfig = {} }) {
   const router = express.Router();
   const certFingerprint = enrollConfig.certFingerprint || '';
 
@@ -44,7 +44,7 @@ function createEnrollCommandRouter({ enrollmentCodesRepo, artifactStore, enrollC
       if (platform && !PLATFORM_RE.test(platform)) {
         return res.status(400).json({ error: 'platform must look like linux-amd64' });
       }
-      const available = artifactStore.list().map((a) => a.platform);
+      const available = artifactStore ? artifactStore.list().map((a) => a.platform) : [];
       if (!platform) platform = available[0] || FALLBACK_PLATFORM;
 
       let code;
@@ -102,15 +102,18 @@ function createEnrollCommandRouter({ enrollmentCodesRepo, artifactStore, enrollC
       }
 
       const serverUrl = resolveServerUrl(req, enrollConfig);
-      const entry = artifactStore.get(platform);
-      const checksum = entry ? entry.sha256 : null;
+      const oneLiner = `curl -sSL ${serverUrl}/enroll/${code}/install.sh | sh`;
+      // The installer downloads + verifies the agent SOURCE bundle, then builds +
+      // runs it (Docker/Node) — no pre-built binary. The manual block lets a
+      // cautious operator inspect the bundle + its checksum before running.
+      const checksum = sourceStore ? sourceStore.sha256 : null;
 
       res.json({
-        oneLiner: `curl -sSL ${serverUrl}/enroll/${code}/install.sh | sh`,
+        oneLiner,
         manual: {
-          downloadUrl: `${serverUrl}/enroll/agent/${platform}`,
+          downloadUrl: `${serverUrl}/enroll/agent-source.tgz`,
           checksum,
-          command: `blueeye-agent enroll --code ${code} --server ${serverUrl}`,
+          command: oneLiner,
         },
         code,
         platform,

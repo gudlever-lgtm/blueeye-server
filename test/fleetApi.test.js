@@ -7,7 +7,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const request = require('supertest');
 
-const { makeApp, makeAgentsRepo, makeProbeResultsRepo, makeResultsRepo, authHeader, throwingAsync } = require('../test-support/fakes');
+const { makeApp, makeAgentsRepo, makeProbeResultsRepo, makeResultsRepo, makeSpeedtestResultsRepo, makeSettingsService, authHeader, throwingAsync } = require('../test-support/fakes');
 const { computeAgentHealth, computeFleet, mergeHealth, robustStats } = require('../src/health/probeHealth');
 const { interfaceHealthSummary } = require('../src/health/interfaceHealth');
 
@@ -187,6 +187,37 @@ test('GET /api/fleet/agent/:id includes a data-quality verdict', async () => {
   assert.equal(res.status, 200);
   assert.equal(res.body.quality.version, '0.2.0');
   assert.equal(res.body.quality.status, 'ok');
+});
+
+test('GET /api/fleet/health folds throughput when enabled and flags a slow agent', async () => {
+  const agentsRepo = makeAgentsRepo({ findAll: async () => [{ id: 8, hostname: 'a8', status: 'online' }] });
+  const speedtestResultsRepo = makeSpeedtestResultsRepo({ latestPerAgent: async () => [{ agent_id: 8, ts: new Date(NOW), ok: 1, down_mbps: 10, up_mbps: 5 }] });
+  const settingsService = makeSettingsService({ initial: { throughput: { enabled: true, downBadMbps: 50, downWarnMbps: 100 } } });
+  const res = await request(makeApp({ agentsRepo, speedtestResultsRepo, settingsService })).get('/api/fleet/health').set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 200);
+  const a8 = res.body.agents.find((a) => a.agentId === 8);
+  assert.equal(a8.health.status, 'bad'); // 10 Mbps < downBad 50
+  assert.equal(a8.health.metrics.throughputStatus, 'bad');
+  assert.equal(a8.throughput.downMbps, 10);
+});
+
+test('GET /api/fleet/health surfaces throughput but does not flag when thresholds are off', async () => {
+  const agentsRepo = makeAgentsRepo({ findAll: async () => [{ id: 8, hostname: 'a8', status: 'online' }] });
+  const speedtestResultsRepo = makeSpeedtestResultsRepo({ latestPerAgent: async () => [{ agent_id: 8, ts: new Date(NOW), ok: 1, down_mbps: 10, up_mbps: 5 }] });
+  const res = await request(makeApp({ agentsRepo, speedtestResultsRepo })).get('/api/fleet/health').set('Authorization', authHeader('viewer'));
+  const a8 = res.body.agents.find((a) => a.agentId === 8);
+  assert.equal(a8.throughput.downMbps, 10); // shown
+  assert.equal(a8.health.status, 'unknown'); // not flagged (throughput disabled by default)
+});
+
+test('GET /api/fleet/agent/:id includes throughput and folds it when enabled', async () => {
+  const agentsRepo = makeAgentsRepo({ findById: async (id) => ({ id, hostname: 'h' }) });
+  const speedtestResultsRepo = makeSpeedtestResultsRepo({ findByAgent: async () => [{ ts: new Date(NOW), ok: 1, down_mbps: 5, up_mbps: 1 }] });
+  const settingsService = makeSettingsService({ initial: { throughput: { enabled: true, downBadMbps: 50 } } });
+  const res = await request(makeApp({ agentsRepo, speedtestResultsRepo, settingsService })).get('/api/fleet/agent/9').set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 200);
+  assert.equal(res.body.throughput.downMbps, 5);
+  assert.equal(res.body.health.status, 'bad');
 });
 
 test('GET /api/fleet/health requires auth (401) and surfaces a repo failure (500)', async () => {

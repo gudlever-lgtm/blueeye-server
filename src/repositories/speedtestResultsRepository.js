@@ -35,7 +35,18 @@ function createSpeedtestResultsRepository(db) {
     return rows;
   }
 
-  return { create, findByAgent };
+  // The most recent result per agent (for the fleet overview throughput signal).
+  async function latestPerAgent() {
+    const [rows] = await pool.query(
+      `SELECT s.agent_id, s.ts, s.ok, s.down_mbps, s.up_mbps
+       FROM speedtest_results s
+       JOIN (SELECT agent_id, MAX(ts) AS mts FROM speedtest_results GROUP BY agent_id) m
+         ON m.agent_id = s.agent_id AND m.mts = s.ts`
+    );
+    return rows;
+  }
+
+  return { create, findByAgent, latestPerAgent };
 }
 
 module.exports = { createSpeedtestResultsRepository };

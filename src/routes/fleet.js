@@ -4,8 +4,9 @@ const express = require('express');
 const { asyncHandler } = require('../middleware/asyncHandler');
 const { requireAuth, requireRole } = require('../auth/middleware');
 const { ROLES } = require('../auth/roles');
-const { computeFleet, computeAgentHealth, mergeHealth } = require('../health/probeHealth');
+const { computeFleet, computeAgentHealth, mergeHealth, mergeThroughput } = require('../health/probeHealth');
 const { interfaceHealthSummary } = require('../health/interfaceHealth');
+const { throughputHealthSummary } = require('../health/throughputHealth');
 const { computeDataQuality } = require('../health/dataQuality');
 
 const DEFAULT_WINDOW_MS = 6 * 3600 * 1000;
@@ -29,7 +30,7 @@ function parseWindow(v) {
 // with its interface signal (link/errors/discards/util) — worst-first. viewer+.
 // Reads all agents + one windowed probe query + the latest result per agent; no
 // new storage.
-function createFleetRouter({ agentsRepo, probeResultsRepo, resultsRepo }) {
+function createFleetRouter({ agentsRepo, probeResultsRepo, resultsRepo, speedtestResultsRepo = null, settingsService = null }) {
   const router = express.Router();
 
   // Latest result row per agent, keyed by agent id. Best-effort: a results read
@@ -43,12 +44,30 @@ function createFleetRouter({ agentsRepo, probeResultsRepo, resultsRepo }) {
     return out;
   }
 
+  // Latest speed test per agent + the (opt-in) throughput thresholds. Best-effort:
+  // any failure just drops the throughput dimension from the verdict.
+  async function throughputContext() {
+    let throughputByAgentId = {};
+    let throughputThresholds = null;
+    if (speedtestResultsRepo && speedtestResultsRepo.latestPerAgent) {
+      try {
+        const rows = await speedtestResultsRepo.latestPerAgent();
+        for (const r of rows || []) throughputByAgentId[r.agent_id] = r;
+      } catch { throughputByAgentId = {}; }
+    }
+    if (settingsService && settingsService.getThroughput) {
+      try { throughputThresholds = await settingsService.getThroughput(); } catch { throughputThresholds = null; }
+    }
+    return { throughputByAgentId, throughputThresholds };
+  }
+
   router.get('/health', requireAuth, requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN), asyncHandler(async (req, res) => {
     const windowMs = parseWindow(req.query.windowMin);
-    const [agents, rows, latestMap] = await Promise.all([
+    const [agents, rows, latestMap, thrCtx] = await Promise.all([
       agentsRepo.findAll(),
       probeResultsRepo.fleetHealth({ windowMs }),
       latestPerAgentMap(),
+      throughputContext(),
     ]);
     const byAgent = {};
     for (const r of rows) {
@@ -60,7 +79,11 @@ function createFleetRouter({ agentsRepo, probeResultsRepo, resultsRepo }) {
       const summ = interfaceHealthSummary(row.payload && row.payload.traffic);
       if (summ) ifaceByAgentId[aid] = summ;
     }
-    const { agents: fleet, summary } = computeFleet(agents, byAgent, { ifaceByAgentId });
+    const { agents: fleet, summary } = computeFleet(agents, byAgent, {
+      ifaceByAgentId,
+      throughputByAgentId: thrCtx.throughputByAgentId,
+      throughputThresholds: thrCtx.throughputThresholds,
+    });
     // Per-agent data-quality (agent version from capabilities + latest payload).
     const capsById = {};
     for (const a of agents) capsById[a.id] = a.capabilities || null;
@@ -80,18 +103,26 @@ function createFleetRouter({ agentsRepo, probeResultsRepo, resultsRepo }) {
     const agent = await agentsRepo.findById(agentId);
     if (!agent) return res.status(404).json({ error: 'Agent not found' });
     const windowMs = parseWindow(req.query.windowMin);
-    const [rows, latest] = await Promise.all([
+    const [rows, latest, speed, thresholds] = await Promise.all([
       probeResultsRepo.findByAgent({ agentId, from: new Date(Date.now() - windowMs), limit: 2000 }),
       resultsRepo && resultsRepo.findByAgentId ? resultsRepo.findByAgentId(agentId, { limit: 1 }) : Promise.resolve([]),
+      speedtestResultsRepo && speedtestResultsRepo.findByAgent ? speedtestResultsRepo.findByAgent(agentId, 1).catch(() => []) : Promise.resolve([]),
+      settingsService && settingsService.getThroughput ? settingsService.getThroughput().catch(() => null) : Promise.resolve(null),
     ]);
     const probe = computeAgentHealth(rows.slice().reverse());
     const iface = interfaceHealthSummary(latest && latest[0] && latest[0].payload && latest[0].payload.traffic);
-    const health = mergeHealth(probe, iface);
+    let health = mergeHealth(probe, iface);
+    const latestSpeed = speed && speed[0] ? speed[0] : null;
+    const thr = throughputHealthSummary(latestSpeed, thresholds || {});
+    if (thr) health = mergeThroughput(health, thr);
     const quality = computeDataQuality({
       capabilities: agent.capabilities || null,
       latest: latest && latest[0] ? { payload: latest[0].payload, created_at: latest[0].created_at } : null,
     });
-    res.json({ agentId, displayName: agent.display_name || agent.hostname, health, quality });
+    const throughput = latestSpeed
+      ? { downMbps: latestSpeed.down_mbps != null ? Number(latestSpeed.down_mbps) : null, upMbps: latestSpeed.up_mbps != null ? Number(latestSpeed.up_mbps) : null, ts: latestSpeed.ts || null, ok: latestSpeed.ok === 1 || latestSpeed.ok === true }
+      : null;
+    res.json({ agentId, displayName: agent.display_name || agent.hostname, health, quality, throughput });
   }));
 
   return router;

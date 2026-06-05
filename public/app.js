@@ -2495,6 +2495,15 @@ function latencyText(m) {
   if (m.baselineMs && m.latencyZ >= 3) return el('span', { class: 'warn-text' }, `${m.rttMs} ms `, el('span', { class: 'muted' }, `/ ~${m.baselineMs}`));
   return `${m.rttMs} ms`;
 }
+// Throughput cell: latest speed test as ↓down / ↑up Mbps (from the agent's last
+// run). A failed test reads "failed"; no test yet reads "–".
+function throughputText(t) {
+  if (!t) return '–';
+  if (!t.ok) return el('span', { class: 'muted', title: t.ts ? fmtDate(t.ts) : '' }, 'failed');
+  const d = t.downMbps != null ? t.downMbps : '?';
+  const u = t.upMbps != null ? t.upMbps : '?';
+  return el('span', { title: t.ts ? fmtDate(t.ts) : '' }, `↓${d} / ↑${u}`);
+}
 
 // The landing view: all agents with a probe-derived health verdict, worst-first.
 // Click a row to pivot into that agent's combined detail page.
@@ -2537,13 +2546,14 @@ views.fleet = async () => {
       el('td', { class: 'num' }, latencyText(m)),
       el('td', { class: 'num' }, m.jitterMs != null ? `${m.jitterMs} ms` : '–'),
       el('td', { class: 'num muted' }, m.targets ? `${m.reachable}/${m.targets}` : '–'),
+      el('td', { class: 'num' }, throughputText(a.throughput)),
       el('td', { class: 'muted' }, a.locationName || '–'),
       el('td', { class: 'muted' }, m.lastTs ? fmtTimeShort(new Date(m.lastTs).getTime()) : '–'));
   }
   function renderTable(agents) {
     if (!agents.length) { tableHost.replaceChildren(el('div', { class: 'empty' }, 'No agents yet — go to Agents to enrol one.')); return; }
     tableHost.replaceChildren(el('table', { class: 'fleet-table' },
-      el('thead', {}, el('tr', {}, ...['Agent', 'Status', 'Health', 'Loss', 'Latency', 'Jitter', 'Targets', 'Location', 'Last seen'].map((h) => el('th', {}, h)))),
+      el('thead', {}, el('tr', {}, ...['Agent', 'Status', 'Health', 'Loss', 'Latency', 'Jitter', 'Targets', 'Speed', 'Location', 'Last seen'].map((h) => el('th', {}, h)))),
       el('tbody', {}, ...agents.map(fleetRow))));
   }
   async function refresh() {
@@ -2583,9 +2593,10 @@ views.agent = async () => {
   // Health résumé (the headline + the metrics that drove it).
   const healthHost = el('div', { class: 'agent-health' });
   root.append(healthHost);
-  function renderHealth(h, q) {
+  function renderHealth(h, q, thr) {
     const m = h.metrics;
     const kv = (k, v, cls) => el('div', { class: 'ah-kv' }, el('span', { class: 'ah-k' }, k), el('span', { class: `ah-v${cls ? ' ' + cls : ''}` }, v));
+    const thrCls = m.throughputStatus === 'warn' ? 'warn-text' : (m.throughputStatus === 'bad' ? 'bad-text' : '');
     const children = [
       el('div', { class: 'ah-head' }, healthBadge(h), el('span', { class: 'ah-reason' }, h.reason || '')),
       el('div', { class: 'ah-grid' },
@@ -2594,7 +2605,8 @@ views.agent = async () => {
         kv('Latency', latencyText(m)),
         kv('Baseline', m.baselineMs != null ? `~${m.baselineMs} ms` : '–'),
         kv('Jitter', m.jitterMs != null ? `${m.jitterMs} ms` : '–', m.jitterMs >= 30 ? 'warn-text' : ''),
-        m.ifaceStatus ? kv('Interface', `${String(m.ifaceStatus).toUpperCase()}${m.worstIface ? ' · ' + m.worstIface : ''}`, m.ifaceStatus === 'ok' ? '' : (m.ifaceStatus === 'warn' ? 'warn-text' : 'bad-text')) : null),
+        m.ifaceStatus ? kv('Interface', `${String(m.ifaceStatus).toUpperCase()}${m.worstIface ? ' · ' + m.worstIface : ''}`, m.ifaceStatus === 'ok' ? '' : (m.ifaceStatus === 'warn' ? 'warn-text' : 'bad-text')) : null,
+        thr ? kv('Throughput', thr.ok ? `↓${thr.downMbps ?? '?'} / ↑${thr.upMbps ?? '?'} Mbps` : 'failed', thr.ok ? thrCls : 'bad-text') : null),
     ];
     if (q && q.status && q.status !== 'unknown') {
       const cls = q.status === 'ok' ? 'online' : (q.status === 'warn' ? 'warn' : 'offline');
@@ -2682,7 +2694,7 @@ views.agent = async () => {
   }
 
   async function refreshHealth() {
-    try { const d = await api(`/api/fleet/agent/${id}`); renderHealth(d.health, d.quality); } catch { /* keep last verdict */ }
+    try { const d = await api(`/api/fleet/agent/${id}`); renderHealth(d.health, d.quality, d.throughput); } catch { /* keep last verdict */ }
   }
 
   root.append(
@@ -3734,8 +3746,26 @@ async function settingsAnalyseView() {
   const data = await api('/api/settings');
   const root = el('div');
   root.append(el('p', { class: 'muted settings-intro' }, 'The server learns a normal baseline for each metric and raises a finding when a measurement deviates enough from it. Here you set how sensitive detection is — changes take effect immediately, without restart. ', licenseBadge(data.license, 'analysis')));
-  root.append(el('div', { class: 'settings-grid' }, analyseSettingsCard(data.analysis)));
+  root.append(el('div', { class: 'settings-grid' }, analyseSettingsCard(data.analysis), throughputSettingsCard(data.throughput)));
   return root;
+}
+
+// Speed-test health thresholds: flag agents on the Overview when their latest
+// download/upload falls below a floor (0 = that floor is off). Folded into the
+// agent's health verdict like loss/latency. Admin, runtime-editable.
+function throughputSettingsCard(t) {
+  return settingsFormCard({
+    title: 'Throughput (speed-test) health',
+    values: t || { enabled: false },
+    endpoint: '/api/settings/throughput',
+    fields: [
+      { key: 'enabled', label: 'Flag low throughput', type: 'checkbox', hint: 'When on, an agent whose latest speed test is below a floor is flagged on the Overview and folded into its health. Off = Mbps is shown but never flagged.' },
+      { key: 'downWarnMbps', label: 'Download WARN below (Mbps)', type: 'number', min: 0, max: 1000000, step: 1, hint: '0 = no download warning floor.' },
+      { key: 'downBadMbps', label: 'Download CRITICAL below (Mbps)', type: 'number', min: 0, max: 1000000, step: 1, hint: '0 = no download critical floor.' },
+      { key: 'upWarnMbps', label: 'Upload WARN below (Mbps)', type: 'number', min: 0, max: 1000000, step: 1, hint: '0 = no upload warning floor.' },
+      { key: 'upBadMbps', label: 'Upload CRITICAL below (Mbps)', type: 'number', min: 0, max: 1000000, step: 1, hint: '0 = no upload critical floor.' },
+    ],
+  });
 }
 
 async function settingsAlertingView() {

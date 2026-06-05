@@ -288,6 +288,44 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
     return merged;
   }
 
+  // ---- Throughput health thresholds (Settings → Analysis) -----------------
+  // Flags an agent on the Overview when its latest speed test falls below these
+  // Mbps floors. Disabled by default — "too slow" depends on the link, so
+  // nothing is flagged until an admin sets a floor.
+  const THROUGHPUT_DEFAULTS = { enabled: false, downWarnMbps: 0, downBadMbps: 0, upWarnMbps: 0, upBadMbps: 0 };
+
+  function validateThroughput(patch) {
+    const p = patch && typeof patch === 'object' ? patch : {};
+    const errors = {};
+    const value = {};
+    bool(p, 'enabled', value);
+    num(p, 'downWarnMbps', 0, 1000000, false, errors, value);
+    num(p, 'downBadMbps', 0, 1000000, false, errors, value);
+    num(p, 'upWarnMbps', 0, 1000000, false, errors, value);
+    num(p, 'upBadMbps', 0, 1000000, false, errors, value);
+    return { errors: Object.keys(errors).length ? errors : null, value };
+  }
+
+  async function getThroughput() {
+    const override = await loadOverride('throughput');
+    const o = override && typeof override === 'object' ? override : {};
+    const base = { ...THROUGHPUT_DEFAULTS, ...o };
+    return {
+      enabled: !!base.enabled,
+      downWarnMbps: base.downWarnMbps, downBadMbps: base.downBadMbps,
+      upWarnMbps: base.upWarnMbps, upBadMbps: base.upBadMbps,
+    };
+  }
+
+  async function setThroughput(patch) {
+    const { errors, value } = validateThroughput(patch || {});
+    if (errors) throw badRequest('invalid throughput settings', errors);
+    const current = await getThroughput();
+    const merged = { ...current, ...value };
+    await settingsRepo.set('throughput', merged);
+    return merged;
+  }
+
   // Re-applies persisted analysis/retention overrides onto the live config
   // objects at boot, so admin edits survive a restart. Best-effort.
   async function applyStoredOverrides() {
@@ -307,6 +345,7 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
     getFlowCategories, setFlowCategories, resetFlowCategories, validateFlowCategories,
     getAnalysis, setAnalysis, validateAnalysis,
     getRetention, setRetention, validateRetention,
+    getThroughput, setThroughput, validateThroughput,
     applyStoredOverrides,
   };
 }

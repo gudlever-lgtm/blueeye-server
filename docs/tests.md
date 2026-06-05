@@ -68,6 +68,18 @@ external speed-test service, so it works on air-gapped networks.
   `speedtest` item to a package. The dashboard shows results in the **Speed**
   modal on each agent row.
 
+### Throughput in the health verdict
+
+The latest speed test is surfaced on the **Overview** (a Speed column) and the
+agent page. It is also folded into the agent's health verdict — like loss /
+latency / interface — when an admin sets a floor under **Settings → Analysis →
+Throughput (speed-test) health** (`down/up WARN/CRITICAL Mbps`; `0` = that floor
+is off). Thresholds are opt-in and persisted via `app_settings` (key
+`throughput`); the fleet route reads the latest speed test per agent
+(`speedtest_results.latestPerAgent`) and `settingsService.getThroughput()`.
+Below a floor (or a failed test) the agent reads WARNING/CRITICAL with a reason
+like "Download 12 Mbps (below 50)."
+
 ## Privacy
 
 Metadata only: probe targets and timings, traffic byte/packet counts, speed-test

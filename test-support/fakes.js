@@ -347,6 +347,7 @@ function makeSpeedtestResultsRepo(overrides = {}) {
     rows,
     create: overrides.create || (async (agentId, r) => { rows.push({ agentId, ...r }); return rows.length; }),
     findByAgent: overrides.findByAgent || (async () => []),
+    latestPerAgent: overrides.latestPerAgent || (async () => []),
   };
 }
 

@@ -6,15 +6,16 @@
 #   2) rebuilds + (re)starts the docker compose stack.
 #
 # Usage:
-#   ./scripts/deploy.sh                 # uses the default branch below
-#   BLUEEYE_BRANCH=main ./scripts/deploy.sh
+#   ./scripts/deploy.sh                          # deploys 'main' (the default)
+#   BLUEEYE_BRANCH=some-branch ./scripts/deploy.sh   # deploy another branch
 #
 # Expects the three repos cloned as siblings, e.g.:
 #   /var/www/blueeye.gnf.dk/{blueeye-server,blueeye-licens,blueeye-agent}
 set -euo pipefail
 
 # --- Config ----------------------------------------------------------------
-BRANCH="${BLUEEYE_BRANCH:-claude/busy-cannon-Y2Eln}"
+# Deploy from main by default; override per-run with BLUEEYE_BRANCH.
+BRANCH="${BLUEEYE_BRANCH:-main}"
 REPOS=(blueeye-server blueeye-licens blueeye-agent)
 
 # Resolve paths from the script's own location so it works from any cwd.

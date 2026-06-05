@@ -61,11 +61,16 @@ function createEnrollmentStore(db) {
         'INSERT INTO agent_tokens (agent_id, token_hash) VALUES (?, ?)',
         [agentId, tokenHash]
       );
-      // Decrement the remaining uses; stamp used_at once the code is exhausted.
+      // Decrement remaining uses; stamp used_at once the code is exhausted.
+      // NOTE: uses_remaining is INT UNSIGNED, so never evaluate `uses_remaining
+      // - 1` unguarded — when it is 0 MySQL underflows ("BIGINT UNSIGNED value
+      // is out of range") instead of clamping. Subtract only when > 0, and base
+      // used_at on the pre-decrement value (uses_remaining <= 1 ⇒ this claim
+      // exhausts it). used_at is assigned first so it sees the original value.
       await conn.query(
         `UPDATE enrollment_codes
-         SET uses_remaining = GREATEST(uses_remaining - 1, 0),
-             used_at = CASE WHEN uses_remaining - 1 <= 0 THEN NOW() ELSE used_at END
+         SET used_at = CASE WHEN uses_remaining <= 1 THEN NOW() ELSE used_at END,
+             uses_remaining = CASE WHEN uses_remaining > 0 THEN uses_remaining - 1 ELSE 0 END
          WHERE id = ?`,
         [row.id]
       );

@@ -41,8 +41,16 @@ test('rejects a non-object body', () => {
   assert.ok(validatePreferences(7).errors.preferences);
 });
 
-test('the catalogue includes light, dark and the new colour themes', () => {
-  for (const k of ['light', 'dark', 'midnight', 'nord', 'solarized-light', 'solarized-dark', 'contrast']) {
+test('every colour palette has both a light and a dark variant', () => {
+  for (const k of [
+    'light', 'dark',
+    'midnight', 'midnight-light',
+    'nord', 'nord-light',
+    'forest', 'forest-light',
+    'sunset', 'sunset-light',
+    'solarized-light', 'solarized-dark',
+    'contrast', 'contrast-light',
+  ]) {
     assert.ok(THEMES.includes(k), `expected theme ${k}`);
   }
 });

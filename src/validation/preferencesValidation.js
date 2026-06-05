@@ -9,12 +9,17 @@ const THEMES = [
   'light',
   'dark',
   'midnight',
+  'midnight-light',
   'nord',
+  'nord-light',
   'forest',
+  'forest-light',
   'sunset',
+  'sunset-light',
   'solarized-light',
   'solarized-dark',
   'contrast',
+  'contrast-light',
 ];
 
 // Validates a preferences patch. Unknown keys are ignored (forward-compatible),

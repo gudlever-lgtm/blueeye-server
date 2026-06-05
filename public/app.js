@@ -8,58 +8,40 @@ const THEME_KEY = 'blueeye.server.theme';
 
 const $ = (sel) => document.querySelector(sel);
 
-// Colour themes. Each `key` matches a [data-theme="…"] block in styles.css and
-// is whitelisted server-side (src/validation/preferencesValidation.js). `family`
-// (light|dark) drives the topbar quick-toggle icon; `dual` (optional) is the
-// theme's opposite-mode counterpart the toggle switches to; `swatch` is a few
-// representative colours [bg, panel, accent, text] for the picker preview.
-// Keep this list in sync with both of those.
-const THEMES = [
-  { key: 'light', label: 'Light', family: 'light', swatch: ['#f1f5f9', '#ffffff', '#0284c7', '#0f172a'] },
-  { key: 'dark', label: 'Dark', family: 'dark', swatch: ['#0f172a', '#1e293b', '#38bdf8', '#e2e8f0'] },
-  { key: 'midnight', label: 'Midnight', family: 'dark', swatch: ['#0a0a12', '#14141f', '#818cf8', '#e6e6f2'] },
-  { key: 'nord', label: 'Nord', family: 'dark', swatch: ['#2e3440', '#3b4252', '#88c0d0', '#eceff4'] },
-  { key: 'forest', label: 'Forest', family: 'dark', swatch: ['#0c1410', '#14201a', '#34d399', '#d7e6dc'] },
-  { key: 'sunset', label: 'Sunset', family: 'dark', swatch: ['#1a1320', '#251a2e', '#f472b6', '#f1e7f2'] },
-  { key: 'solarized-light', label: 'Solarized Light', family: 'light', dual: 'solarized-dark', swatch: ['#eee8d5', '#fdf6e3', '#268bd2', '#586e75'] },
-  { key: 'solarized-dark', label: 'Solarized Dark', family: 'dark', dual: 'solarized-light', swatch: ['#002b36', '#073642', '#268bd2', '#93a1a1'] },
-  { key: 'contrast', label: 'High contrast', family: 'dark', swatch: ['#000000', '#0a0a0a', '#ffd400', '#ffffff'] },
+// Colour palettes — each comes in a light and a dark variant. The picker
+// (Settings → Appearance) selects a palette; the topbar 🌙/☀️ button switches
+// brightness within it. Each variant's `key` matches a [data-theme="…"] block in
+// styles.css and is whitelisted server-side (preferencesValidation.js); `swatch`
+// is [bg, panel, accent, text] for the preview. Keep all three in sync.
+const PALETTES = [
+  { key: 'default', label: 'Default', light: { key: 'light', swatch: ['#f1f5f9', '#ffffff', '#0284c7', '#0f172a'] }, dark: { key: 'dark', swatch: ['#0f172a', '#1e293b', '#38bdf8', '#e2e8f0'] } },
+  { key: 'midnight', label: 'Midnight', light: { key: 'midnight-light', swatch: ['#eef0fb', '#ffffff', '#5b5bd6', '#181a2e'] }, dark: { key: 'midnight', swatch: ['#0a0a12', '#14141f', '#818cf8', '#e6e6f2'] } },
+  { key: 'nord', label: 'Nord', light: { key: 'nord-light', swatch: ['#e5e9f0', '#eceff4', '#5e81ac', '#2e3440'] }, dark: { key: 'nord', swatch: ['#2e3440', '#3b4252', '#88c0d0', '#eceff4'] } },
+  { key: 'forest', label: 'Forest', light: { key: 'forest-light', swatch: ['#eef4ee', '#ffffff', '#1f9d57', '#14241a'] }, dark: { key: 'forest', swatch: ['#0c1410', '#14201a', '#34d399', '#d7e6dc'] } },
+  { key: 'sunset', label: 'Sunset', light: { key: 'sunset-light', swatch: ['#fbeef4', '#fffafc', '#d6438a', '#2a1320'] }, dark: { key: 'sunset', swatch: ['#1a1320', '#251a2e', '#f472b6', '#f1e7f2'] } },
+  { key: 'solarized', label: 'Solarized', light: { key: 'solarized-light', swatch: ['#eee8d5', '#fdf6e3', '#268bd2', '#586e75'] }, dark: { key: 'solarized-dark', swatch: ['#002b36', '#073642', '#268bd2', '#93a1a1'] } },
+  { key: 'contrast', label: 'High contrast', light: { key: 'contrast-light', swatch: ['#ffffff', '#ffffff', '#0040d0', '#000000'] }, dark: { key: 'contrast', swatch: ['#000000', '#0a0a0a', '#ffd400', '#ffffff'] } },
 ];
+// Flatten to per-variant metadata keyed by the data-theme value. Each variant
+// knows its family, its palette, and its opposite-brightness counterpart (dual).
+const THEMES = PALETTES.flatMap((p) => [
+  { key: p.light.key, family: 'light', dual: p.dark.key, palette: p.key, label: `${p.label} light`, swatch: p.light.swatch },
+  { key: p.dark.key, family: 'dark', dual: p.light.key, palette: p.key, label: `${p.label} dark`, swatch: p.dark.swatch },
+]);
 const THEME_KEYS = THEMES.map((t) => t.key);
 const themeMeta = (key) => THEMES.find((t) => t.key === key) || THEMES[0];
-
-// The topbar 🌙/☀️ button is a quick light/dark toggle. Remember the most recent
-// theme chosen in each family so toggling away from a colour theme and back
-// returns to *that* theme — not the basic light/dark pair.
-const FAMILY_KEY = 'blueeye.server.themeByFamily';
-function loadFamilyThemes() {
-  const picks = { light: 'light', dark: 'dark' };
-  try {
-    const saved = JSON.parse(localStorage.getItem(FAMILY_KEY) || '{}');
-    for (const fam of ['light', 'dark']) {
-      if (THEME_KEYS.includes(saved[fam]) && themeMeta(saved[fam]).family === fam) picks[fam] = saved[fam];
-    }
-  } catch { /* storage off / bad JSON — use defaults */ }
-  return picks;
-}
-let themeByFamily = loadFamilyThemes();
-function rememberFamily(theme) {
-  if (!THEME_KEYS.includes(theme)) return;
-  themeByFamily[themeMeta(theme).family] = theme;
-  try { localStorage.setItem(FAMILY_KEY, JSON.stringify(themeByFamily)); } catch { /* storage off */ }
-}
+const paletteOf = (key) => themeMeta(key).palette;
 
 // The theme is applied instantly from a local cache (no flash on load), then
 // reconciled with the per-user value saved on the server (see loadProfile).
 function applyTheme(theme) {
   const t = THEME_KEYS.includes(theme) ? theme : 'light';
   document.documentElement.dataset.theme = t;
-  rememberFamily(t); // keep the per-family memory in step with what's showing
   const btn = document.querySelector('#theme');
   if (btn) {
     const isDark = themeMeta(t).family === 'dark';
     btn.textContent = isDark ? '☀️' : '🌙';
-    btn.title = isDark ? 'Switch to light theme' : 'Switch to dark theme';
+    btn.title = isDark ? 'Switch to light mode' : 'Switch to dark mode';
   }
 }
 function cachedTheme() {
@@ -81,14 +63,11 @@ function initTheme() {
   applyTheme(cachedTheme());
   const btn = document.querySelector('#theme');
   if (btn) {
-    // Quick light/dark toggle; the full palette lives in Settings → Appearance.
-    // Prefer a theme's explicit counterpart (e.g. Solarized light↔dark); else
-    // flip to the other family's most-recently-used theme — so a chosen colour
-    // theme is preserved across toggles instead of reverting to basic light/dark.
+    // Light/dark toggle: flip to the same palette's opposite-brightness variant,
+    // so brightness changes while your chosen colour palette is preserved.
     btn.addEventListener('click', () => {
-      const meta = themeMeta(document.documentElement.dataset.theme);
-      const target = meta.dual || themeByFamily[meta.family === 'light' ? 'dark' : 'light'];
-      setTheme(target).catch(() => { /* keep the local change even if the save fails */ });
+      setTheme(themeMeta(document.documentElement.dataset.theme).dual)
+        .catch(() => { /* keep the local change even if the save fails */ });
     });
   }
 }
@@ -3816,27 +3795,33 @@ function licenseBadge(license, feature) {
 function settingsAppearanceView() {
   const root = el('div');
   root.append(el('p', { class: 'muted settings-intro' },
-    'Choose a colour theme for the dashboard. Your choice is saved to your account, so it follows you to any browser you sign in from.'));
+    'Choose a colour theme. Each comes in light and dark — the 🌙/☀️ button in the top bar switches brightness while keeping your palette. Your choice is saved to your account, so it follows you to any browser you sign in from.'));
 
   const grid = el('div', { class: 'theme-grid' });
-  const currentKey = () => document.documentElement.dataset.theme || 'light';
+  const currentTheme = () => document.documentElement.dataset.theme || 'light';
+  const swatchStrip = (variant) => el('span', { class: 'theme-swatch' }, ...variant.swatch.map((c) => el('span', { style: `background:${c}` })));
 
   function paint() {
-    grid.replaceChildren(...THEMES.map((t) => el('button', {
-      class: `theme-card${t.key === currentKey() ? ' active' : ''}`,
-      type: 'button',
-      'aria-pressed': t.key === currentKey() ? 'true' : 'false',
-      onclick: async () => {
-        try { await setTheme(t.key); toast(`Theme saved: ${t.label}`); }
-        catch (e) { toast(errText(e) || 'Could not save theme', true); }
-        paint();
+    grid.replaceChildren(...PALETTES.map((p) => {
+      const selected = p.key === paletteOf(currentTheme());
+      return el('button', {
+        class: `theme-card${selected ? ' active' : ''}`,
+        type: 'button',
+        'aria-pressed': selected ? 'true' : 'false',
+        onclick: async () => {
+          // Keep the current brightness; the topbar toggle is what changes it.
+          const target = themeMeta(currentTheme()).family === 'light' ? p.light.key : p.dark.key;
+          try { await setTheme(target); toast(`Theme: ${p.label}`); }
+          catch (e) { toast(errText(e) || 'Could not save theme', true); }
+          paint();
+        },
       },
-    },
-      el('span', { class: 'theme-swatch' }, ...t.swatch.map((c) => el('span', { style: `background:${c}` }))),
-      el('span', { class: 'theme-meta' },
-        el('span', { class: 'theme-name' }, t.label),
-        el('span', { class: 'theme-fam muted' }, t.family === 'dark' ? 'Dark' : 'Light')),
-    )));
+        el('span', { class: 'theme-duo' }, swatchStrip(p.light), swatchStrip(p.dark)),
+        el('span', { class: 'theme-meta' },
+          el('span', { class: 'theme-name' }, p.label),
+          el('span', { class: 'theme-fam muted' }, 'Light + dark')),
+      );
+    }));
   }
   paint();
   root.append(grid);

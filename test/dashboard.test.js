@@ -71,15 +71,16 @@ test('dashboard exposes settings (users+license) tab, auto-refresh and traffic c
 test('dashboard offers selectable colour themes saved per user', async () => {
   const app = makeApp();
   const js = (await request(app).get('/app.js')).text;
-  assert.match(js, /const THEMES =/); // colour-theme catalogue (beyond light/dark)
+  assert.match(js, /const PALETTES =/); // palette catalogue (each with light + dark)
   assert.match(js, /settingsAppearanceView/); // Settings → Appearance theme picker
   assert.match(js, /\/me\/preferences/); // persists the chosen theme per user
   assert.match(js, /loadProfile/); // applies the saved theme on session start
-  assert.match(js, /themeByFamily/); // topbar toggle preserves the chosen colour theme
-  assert.match(js, /meta\.dual/); // toggle uses a theme's light/dark counterpart (e.g. solarized)
+  assert.match(js, /dual: p\.dark\.key/); // every variant knows its opposite-brightness pair
+  assert.match(js, /themeMeta\(document\.documentElement\.dataset\.theme\)\.dual/); // toggle flips brightness within the palette
 
   const css = (await request(app).get('/styles.css')).text;
-  assert.match(css, /\[data-theme="nord"\]/); // a new colour theme is defined
+  assert.match(css, /\[data-theme="nord"\]/); // a dark colour palette is defined
+  assert.match(css, /\[data-theme="nord-light"\]/); // …paired with a light variant
   assert.match(css, /\[data-theme="solarized-dark"\]/);
   assert.match(css, /\.theme-grid/); // picker styling
 });

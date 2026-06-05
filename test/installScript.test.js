@@ -38,6 +38,12 @@ test('renderInstallScript wires both runtimes: Docker (preferred) and Node', () 
   // Node branch + systemd service
   assert.match(script, /node "\$INSTALL_DIR\/src\/index\.js" enroll --code "\$ENROLL_CODE"/);
   assert.match(script, /systemctl/);
+  // Token path is pinned the same way for enroll and the service, so the service
+  // finds the token the enroll step wrote (the agent default is cwd-relative).
+  assert.match(script, /BLUEEYE_TOKEN_PATH="\$INSTALL_DIR\/token"/);
+  assert.match(script, /Environment=BLUEEYE_TOKEN_PATH=\$INSTALL_DIR\/token/);
+  // Points the operator at the shipped uninstaller.
+  assert.match(script, /uninstall\.sh/);
   // Graceful "ask" when neither runtime is present.
   assert.match(script, /neither Docker nor Node/);
 });

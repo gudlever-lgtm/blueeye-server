@@ -109,6 +109,7 @@ then:  curl -sSL $SERVER_URL/enroll/$ENROLL_CODE/install.sh | sh"
   tar -xzf "$TARBALL" -C "$INSTALL_DIR" || fail "could not extract the agent source"
 
   if [ "$RUNTIME" = "docker" ]; then install_docker; else install_node; fi
+  log "to remove the agent later: sudo sh $INSTALL_DIR/uninstall.sh  (warns first; --purge also drops the docker image/volume)"
 }
 
 install_docker() {
@@ -141,11 +142,13 @@ install_node() {
   fi
 
   # Enroll once (idempotent: the agent skips enrollment when a token exists). The
-  # fingerprint is pinned for this first contact.
+  # fingerprint is pinned for this first contact. Pin an explicit token path so
+  # the systemd service (which runs from $INSTALL_DIR) finds the SAME token the
+  # agent's default is relative to the working directory.
   FP_ARG=""
   [ -n "$CERT_FINGERPRINT" ] && FP_ARG="--fingerprint $CERT_FINGERPRINT"
   # shellcheck disable=SC2086
-  BLUEEYE_SERVER_CERT_FINGERPRINT="$CERT_FINGERPRINT" \\
+  BLUEEYE_TOKEN_PATH="$INSTALL_DIR/token" BLUEEYE_SERVER_CERT_FINGERPRINT="$CERT_FINGERPRINT" \\
     node "$INSTALL_DIR/src/index.js" enroll --code "$ENROLL_CODE" --server "$SERVER_URL" $FP_ARG \\
     || fail "enrollment failed"
 
@@ -155,7 +158,7 @@ install_node() {
 
 install_service() {
   if ! command -v systemctl >/dev/null 2>&1; then
-    log "systemd not found — start the agent manually: node $INSTALL_DIR/src/index.js"
+    log "systemd not found — start the agent manually: BLUEEYE_TOKEN_PATH=$INSTALL_DIR/token BLUEEYE_SERVER_URL=$SERVER_URL node $INSTALL_DIR/src/index.js"
     return 0
   fi
   NODE_BIN=$(command -v node)
@@ -172,6 +175,7 @@ Type=simple
 WorkingDirectory=$INSTALL_DIR
 Environment=BLUEEYE_SERVER_URL=$SERVER_URL
 Environment=BLUEEYE_SERVER_CERT_FINGERPRINT=$CERT_FINGERPRINT
+Environment=BLUEEYE_TOKEN_PATH=$INSTALL_DIR/token
 ExecStart=$NODE_BIN $INSTALL_DIR/src/index.js
 Restart=on-failure
 RestartSec=5

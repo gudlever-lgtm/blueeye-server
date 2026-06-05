@@ -1,10 +1,18 @@
-# BlueEye full-stack demo. Run from this directory with the three repos cloned
-# as siblings (blueeye-server, blueeye-agent, blueeye-licens):
+# BlueEye stack. Run from this directory with the repos cloned as siblings.
 #
-#   node scripts/dev-bootstrap.js      # once: generates .env with keys + demo defaults
+#   node scripts/dev-bootstrap.js                  # once: generates .env (keys + demo defaults)
+#
+# Customer stack (server + agent + db; the license server is NOT run here):
 #   docker compose up --build
+#   -> set LICENSE_SERVER_URL in .env to the vendor's hosted licens.
 #
-# Ports: licens :4000, server :3000, MySQL :3306 (for admin/config access).
+# Full / vendor stack (also runs the license server):
+#   COMPOSE_PROFILES=licens docker compose up --build   # or: docker compose --profile licens up --build
+#
+# blueeye-licens sits behind the "licens" profile so it only runs for the vendor;
+# customers validate against LICENSE_SERVER_URL. scripts/deploy.sh deploys the
+# customer stack; scripts/deploy-licens.sh deploys the licens service.
+# Ports: server :3000, licens :4000 (vendor only), MySQL :3306.
 name: blueeye
 
 services:
@@ -27,6 +35,11 @@ services:
       retries: 30
 
   licens:
+    # Vendor-only: the central license server. Customers do NOT run this — their
+    # blueeye-server validates against the vendor's hosted licens via
+    # LICENSE_SERVER_URL. Started only with the "licens" profile (deploy-licens.sh);
+    # a plain `docker compose up` (deploy.sh) skips it.
+    profiles: ["licens"]
     build: ../blueeye-licens
     environment:
       NODE_ENV: production
@@ -69,7 +82,10 @@ services:
       SEED_ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin-pw}
       LICENSE_KEY: ${LICENSE_KEY:-DEMO-DEMO-DEMO-DEMO-DEMO}
       LICENSE_SERVER_ID: ${LICENSE_SERVER_ID:-gnf-server-1}
-      LICENSE_SERVER_URL: http://licens:4000
+      # Where this server validates its license. Customers set this to the vendor's
+      # hosted licens URL. Default keeps the vendor's on-host licens (run with the
+      # "licens" profile). The server tolerates outages up to LICENSE_GRACE_DAYS.
+      LICENSE_SERVER_URL: ${LICENSE_SERVER_URL:-http://licens:4000}
       LICENSE_PUBLIC_KEY: ${LICENSE_PUBLIC_KEY}
       LICENSE_CACHE_PATH: /data/license-cache.json
       SEED_DEMO: ${SEED_DEMO:-1}
@@ -88,8 +104,6 @@ services:
       - "${SERVER_HOST_PORT:-3000}:3000"
     depends_on:
       db:
-        condition: service_healthy
-      licens:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]

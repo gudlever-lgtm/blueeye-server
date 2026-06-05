@@ -50,9 +50,11 @@ for attempt in 1 2 3 4 5; do
 done
 
 # --- Rebuild + restart only the licens service -----------------------------
+# licens is a profiled service ("licens"), so it's only ever started here — a
+# plain `docker compose up` (deploy.sh) never touches it.
 cd "$SERVER_DIR"
-log "Building and restarting the licens service"
-"${DC[@]}" up -d --build licens
+log "Building and restarting the licens service (vendor profile)"
+"${DC[@]}" --profile licens up -d --build licens
 
 log "Stack status"
 "${DC[@]}" ps

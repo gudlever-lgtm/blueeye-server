@@ -408,7 +408,8 @@ const PAGE_INFO = {
       el('ul', {},
         el('li', {}, '”+ New agent” issues a one-time code for installation (operator+) — or use ', viewLink('enrollment'), ' for a ready-to-run one-liner.'),
         el('li', {}, '”Run test” asks the agent to measure immediately; “Traffic” shows the measurements.'),
-        el('li', {}, '”Edit” sets name, location, notes and traffic source (proc, SNMP, NetFlow or sFlow).')),
+        el('li', {}, '”Edit” sets name, location, notes and traffic source (proc, SNMP, NetFlow or sFlow).'),
+        el('li', {}, '”Upgrade” (admin) rebuilds a systemd-managed agent from the server\'s published source and restarts it — always available for a manual re-deploy; it shows as a highlighted “Update” when the agent is behind. Docker/unmanaged agents decline (re-run the host installer).')),
       el('p', { class: 'muted' }, 'Group agents by site under ', viewLink('locations'), '; see them all with a single health verdict on ', viewLink('fleet', 'Overview'), '.'),
     ],
   },
@@ -697,6 +698,7 @@ views.agents = async () => {
 
 // One agent table row (extracted so the agents view can re-render on filter/sort).
 function agentRow(a, currentAgentVersion) {
+  const behind = agentIsBehind(a, currentAgentVersion);
   return el('tr', {},
     el('td', {}, String(a.id)),
     el('td', {}, el('div', {}, a.display_name || a.hostname), a.display_name ? el('div', { class: 'muted' }, a.hostname) : null),
@@ -715,8 +717,17 @@ function agentRow(a, currentAgentVersion) {
       el('button', { class: 'small ghost', onclick: () => showSpeedtest(a), title: 'Active download/upload speed test to the server' }, 'Speed'),
       canWrite() ? el('button', { class: 'small', onclick: () => runTest(a) }, 'Run test') : null,
       canWrite() ? el('button', { class: 'small ghost', onclick: () => editAgent(a) }, 'Edit') : null,
-      (canDelete() && agentIsBehind(a, currentAgentVersion))
-        ? el('button', { class: 'small', onclick: () => updateAgent(a, currentAgentVersion), title: 'Rebuild this agent from the server source and restart it' }, 'Update')
+      canDelete()
+        ? el('button', {
+            // Always available to admins as a manual upgrade link; emphasised
+            // (solid) when the agent is behind the published version, otherwise a
+            // subtle ghost link that re-deploys the current server source.
+            class: behind ? 'small' : 'small ghost',
+            onclick: () => updateAgent(a, currentAgentVersion),
+            title: behind
+              ? `Update this agent to v${currentAgentVersion} — rebuild from the server source and restart`
+              : 'Manually rebuild this agent from the server source and restart it',
+          }, behind ? 'Update' : 'Upgrade')
         : null,
       canDelete() ? el('button', { class: 'small danger', onclick: () => deleteAgent(a) }, 'Delete') : null,
     )),
@@ -802,7 +813,8 @@ async function pingAgent(a) {
 // Docker/unmanaged agents decline (their host rebuilds them) — surface why.
 async function updateAgent(a, target) {
   const name = a.display_name || a.hostname;
-  if (!confirm(`Update ${name} to v${target || '?'}?\n\nThe agent will rebuild from the server's source bundle and restart, briefly interrupting monitoring on that host.`)) return;
+  const verText = target ? `to v${target}` : 'from the server source';
+  if (!confirm(`Update ${name} ${verText}?\n\nThe agent will rebuild from the server's source bundle and restart, briefly interrupting monitoring on that host.`)) return;
   try {
     const r = await api(`/agents/${a.id}/update`, { method: 'POST' });
     if (r.accepted) { toast(`${name}: update sent — rebuilding and restarting.`); return; }

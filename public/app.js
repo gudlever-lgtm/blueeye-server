@@ -714,6 +714,7 @@ function agentRow(a, currentAgentVersion) {
         ? el('button', { class: 'small ghost', onclick: () => showAgentFlows(a) }, 'Flows')
         : null,
       el('button', { class: 'small ghost', onclick: () => pingAgent(a), title: 'Confirm the live connection to this agent' }, 'Ping'),
+      el('button', { class: 'small ghost', onclick: () => diagnoseAgent(a), title: 'Flow-pipeline self-check: source, collector counters, exporter state' }, 'Diagnose'),
       el('button', { class: 'small ghost', onclick: () => showSpeedtest(a), title: 'Active download/upload speed test to the server' }, 'Speed'),
       canWrite() ? el('button', { class: 'small', onclick: () => runTest(a) }, 'Run test') : null,
       canWrite() ? el('button', { class: 'small ghost', onclick: () => editAgent(a) }, 'Edit') : null,
@@ -807,6 +808,66 @@ async function pingAgent(a) {
     if (r.managed) bits.push(r.managed);
     toast(`${name}: ${bits.join(' · ')}`);
   } catch (err) { toast(`${name}: ${err.message}`, true); }
+}
+
+// Round-trips a "diagnose" to the agent and shows where its flow pipeline stands
+// — source, collector receive/decode counters, local exporter state — with a
+// plain verdict on why flows might be missing. Read-only (no agent side effects).
+async function diagnoseAgent(a) {
+  const name = a.display_name || a.hostname;
+  try {
+    const r = await api(`/agents/${a.id}/diagnose`, { method: 'POST' });
+    showDiagnostic(a, r.diagnostic);
+  } catch (err) { toast(`${name}: ${err.message}`, true); }
+}
+
+// One-line "where do flows stop?" verdict from a diagnostic snapshot.
+function diagnoseVerdict(d) {
+  const c = d.collector;
+  if (!c) return { ok: true, text: `Source is "${d.source}" — not a flow source, so there are no conversation flows by design. Set the source to sflow/netflow (with an exporter) to collect flows.` };
+  if (!c.listening) return { ok: false, text: 'The flow collector is not listening — the agent did not open its sFlow/NetFlow port.' };
+  const hs = d.hsflowd ? ` Local hsflowd: ${d.hsflowd.state}.` : '';
+  if (!c.datagrams) return { ok: false, text: `The collector is up but has received 0 datagrams — nothing is exporting ${d.source} to it. Enable the Local hsflowd exporter for this agent (Edit), or point a switch/host at the agent's collector.${hs}` };
+  if (!c.decodedFlows) return { ok: false, text: `Datagrams are arriving (${c.datagrams}) but no flow samples were decoded — the exporter is sending, but not flow samples (check the sampling rate / that hsflowd was built with FEATURES=PCAP).${hs}` };
+  return { ok: true, text: `Flow pipeline healthy — decoded ${c.decodedFlows} flow records from ${c.datagrams} datagrams.${hs}` };
+}
+
+// Modal: the agent's flow-pipeline snapshot + verdict (from POST /diagnose).
+function showDiagnostic(a, d) {
+  const card = $('#modal-card');
+  const body = [el('h3', {}, `Diagnose — ${esc(a.display_name || a.hostname)}`)];
+  if (!d) {
+    body.push(el('p', { class: 'muted' }, 'The agent did not return a diagnostic.'));
+  } else {
+    const v = diagnoseVerdict(d);
+    body.push(el('p', {}, el('span', { class: v.ok ? 'badge active' : 'badge offline' }, v.ok ? 'OK' : 'ATTENTION'), ' ', v.text));
+    body.push(el('div', { class: 'cards' },
+      stat('Source', d.source || '–'),
+      stat('Version', d.agentVersion ? `v${d.agentVersion}` : '–'),
+      stat('Managed', d.managed || '–'),
+      stat('Last report', d.lastReportAt ? fmtDate(d.lastReportAt) : 'never')));
+
+    const c = d.collector;
+    if (c) {
+      const num = (n) => Number(n || 0).toLocaleString();
+      body.push(el('p', { class: 'muted' }, `Collector — ${c.kind || d.source}`));
+      body.push(el('div', { class: 'cards' },
+        stat('Listening', c.listening ? 'yes' : 'no'),
+        stat('Datagrams', num(c.datagrams)),
+        stat('Flows decoded', num(c.decodedFlows)),
+        stat('Buffered', num(c.bufferedFlows)),
+        stat('Last datagram', c.lastDatagramAt ? fmtDate(c.lastDatagramAt) : 'never')));
+    }
+    if (d.hsflowd) {
+      body.push(el('p', { class: 'muted' }, 'Local hsflowd exporter: ',
+        el('span', { class: hsflowdBadgeClass(d.hsflowd.state) }, d.hsflowd.state || 'unknown')));
+      if (d.hsflowd.detail) body.push(el('p', { class: 'muted' }, d.hsflowd.detail));
+    }
+    body.push(el('details', {}, el('summary', { class: 'muted' }, 'Raw JSON'), el('pre', {}, JSON.stringify(d, null, 2))));
+  }
+  body.push(el('div', { class: 'form-actions' }, el('button', { class: 'ghost', onclick: closeModal }, 'Close')));
+  card.replaceChildren(...body);
+  $('#modal').classList.remove('hidden');
 }
 
 // Asks a systemd-managed agent to rebuild from the server's source and restart.
@@ -1158,8 +1219,52 @@ async function showResults(a) {
             el('td', {}, `${fmtBytes(i.rxBytesPerSec)}/s`),
             el('td', {}, `${fmtBytes(i.txBytesPerSec)}/s`),
           )))));
+      } else if (t && (t.totals || t.source)) {
+        // Flow source (sflow/netflow): no per-interface counters, so summarise the
+        // flow aggregate — totals + top breakdowns — instead of dumping raw JSON.
+        const tot = t.totals || {};
+        const num = (n) => Number(n || 0).toLocaleString();
+        const cards = [
+          stat('Source', t.source || '–'),
+          stat('Flows', num(tot.flows)),
+          stat('Packets', num(tot.packets)),
+          stat('Bytes', fmtBytes(tot.bytes || 0)),
+        ];
+        if (t.datagrams != null) cards.push(stat('Datagrams', num(t.datagrams)));
+        if (t.droppedDatagrams) cards.push(stat('Dropped', num(t.droppedDatagrams)));
+        body.push(el('div', { class: 'cards' }, ...cards));
+
+        // Empty window is the common confusing case — say why, in words.
+        if (!tot.flows) {
+          body.push(el('p', { class: 'muted' }, t.datagrams
+            ? 'Datagrams are arriving but no flow samples were decoded in this window.'
+            : `No ${t.source || 'flow'} data sampled yet — confirm the exporter is sending to the agent's collector (try Diagnose).`));
+        }
+
+        const flowTable = (title, rows, keyLabel, keyName, fmtKey) => {
+          if (!rows || !rows.length) return;
+          body.push(el('p', { class: 'muted' }, title));
+          body.push(el('table', {},
+            el('thead', {}, el('tr', {}, ...[keyLabel, 'Bytes', 'Packets', 'Flows'].map((h) => el('th', {}, h)))),
+            el('tbody', {}, ...rows.slice(0, 10).map((r) => el('tr', {},
+              el('td', {}, fmtKey ? fmtKey(r[keyName]) : String(r[keyName])),
+              el('td', {}, fmtBytes(r.bytes || 0)),
+              el('td', {}, num(r.packets)),
+              el('td', {}, num(r.flows)),
+            )))));
+        };
+        flowTable('Top talkers', t.topTalkers, 'Source → destination', 'pair', (p) => String(p).replace('->', ' → '));
+        flowTable('By port', t.byPort, 'Port', 'port');
+        flowTable('By protocol', t.byProtocol, 'Protocol', 'protocol');
+
+        // Full payload still available, collapsed. NB: el() appends children as
+        // text nodes (already XSS-safe), so it must NOT be esc()'d — doing so is
+        // what rendered literal &quot; in the old raw dump.
+        body.push(el('details', {},
+          el('summary', { class: 'muted' }, 'Raw JSON'),
+          el('pre', {}, JSON.stringify(latest.payload, null, 2))));
       } else {
-        body.push(el('pre', {}, esc(JSON.stringify(latest.payload, null, 2))));
+        body.push(el('pre', {}, JSON.stringify(latest.payload, null, 2)));
       }
     }
     body.push(el('div', { class: 'form-actions' }, el('button', { class: 'ghost', onclick: closeModal }, 'Close')));

@@ -84,6 +84,61 @@ test('POST /agents/:id/ping without a token returns 401', async () => {
   assert.equal(res.status, 401);
 });
 
+// ---- POST /agents/:id/diagnose (flow-pipeline self-check) -------------------
+
+test('POST /agents/:id/diagnose round-trips and returns the agent diagnostic (viewer+)', async () => {
+  let asked;
+  const agentsRepo = makeAgentsRepo({ findById: async () => ({ id: 7, hostname: 'node-7' }) });
+  const diagnostic = { source: 'sflow', collector: { kind: 'sflow', listening: true, datagrams: 0, decodedFlows: 0 } };
+  const agentCommander = makeAgentCommander({
+    sendCommandAndWait: async (id, command) => {
+      asked = { id, command };
+      return { delivered: 1, acked: true, reply: { type: 'command-result', ok: true, diagnostic } };
+    },
+  });
+
+  const res = await request(makeApp({ agentsRepo, agentCommander }))
+    .post('/agents/7/diagnose')
+    .set('Authorization', viewer());
+
+  assert.equal(res.status, 200);
+  assert.equal(res.body.connected, true);
+  assert.deepEqual(res.body.diagnostic, diagnostic);
+  assert.equal(asked.id, 7);
+  assert.equal(asked.command.name, 'diagnose');
+});
+
+test('POST /agents/:id/diagnose returns 409 when the agent is not connected', async () => {
+  const agentsRepo = makeAgentsRepo({ findById: async () => ({ id: 7 }) });
+  const agentCommander = makeAgentCommander({ sendCommandAndWait: async () => ({ delivered: 0, acked: false, reply: null }) });
+  const res = await request(makeApp({ agentsRepo, agentCommander }))
+    .post('/agents/7/diagnose')
+    .set('Authorization', viewer());
+  assert.equal(res.status, 409);
+  assert.equal(res.body.connected, false);
+});
+
+test('POST /agents/:id/diagnose returns 504 when the agent does not reply', async () => {
+  const agentsRepo = makeAgentsRepo({ findById: async () => ({ id: 7 }) });
+  const agentCommander = makeAgentCommander({ sendCommandAndWait: async () => ({ delivered: 1, acked: false, reply: null, timedOut: true }) });
+  const res = await request(makeApp({ agentsRepo, agentCommander }))
+    .post('/agents/7/diagnose')
+    .set('Authorization', viewer());
+  assert.equal(res.status, 504);
+  assert.equal(res.body.timedOut, true);
+});
+
+test('POST /agents/:id/diagnose returns 404 for an unknown agent', async () => {
+  const agentsRepo = makeAgentsRepo({ findById: async () => null });
+  const res = await request(makeApp({ agentsRepo })).post('/agents/999/diagnose').set('Authorization', viewer());
+  assert.equal(res.status, 404);
+});
+
+test('POST /agents/:id/diagnose without a token returns 401', async () => {
+  const res = await request(makeApp()).post('/agents/7/diagnose');
+  assert.equal(res.status, 401);
+});
+
 // ---- POST /agents/:id/update (push self-update) -----------------------------
 
 test('POST /agents/:id/update sends the bundle SHA and reports acceptance (admin)', async () => {

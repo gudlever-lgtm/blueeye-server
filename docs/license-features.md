@@ -34,8 +34,13 @@ Two independent gates, with **distinct** messages so operators can tell them apa
 | --- | --- |
 | analysis detector | runs only if `isFeatureEnabled('analysis')` **and** `ANALYSIS_ENABLED` |
 | assistant endpoint | `403` *"This feature is not included in your license"* when unlicensed (checked **before** the config "disabled" `403`) |
+| assistant config (`PUT /api/settings/assistant`) | `403` *"…not included in your license"* when unlicensed — an admin cannot enable or key a module the server would refuse to run |
 | alerting dispatcher | skipped (`reason: 'unlicensed'`) when alerting isn't licensed |
 | geo endpoints | `403` *"…not included in your license"* when geo isn't licensed |
+
+The assistant is gated end-to-end: not just the two API endpoints, but also its
+runtime config and every dashboard affordance — so an unlicensed customer can
+neither use it, configure it, nor see controls for it.
 
 ## API
 
@@ -43,9 +48,16 @@ Two independent gates, with **distinct** messages so operators can tell them apa
 the dashboard can hide/grey-out modules the customer isn't licensed for (the Geo
 and Analysis tabs are hidden when their feature is off).
 
+The assistant has no tab of its own, so the dashboard reads the same map (via the
+synchronous `featureEnabled()` helper) to hide its **in-page** affordances when
+unlicensed — the findings *Ask assistant* box and the per-location *AI status*
+button — and replaces the editable **Settings → AI assistant** card with a
+read-only placeholder explaining it isn't included.
+
 ## Tests
 
 `test/licenseFeatures.test.js` (fail-closed gate logic) and
-`test/licenseGating.test.js` (assistant license-vs-config `403`, geo `403`,
-analysis pipeline + alerting dispatcher gating, `/license/features`). The
-signed-payload tamper test lives in blueeye-licens' `validate.test.js`.
+`test/licenseGating.test.js` (assistant license-vs-config `403` for both the
+endpoint and `PUT /api/settings/assistant`, geo `403`, analysis pipeline +
+alerting dispatcher gating, `/license/features`). The signed-payload tamper test
+lives in blueeye-licens' `validate.test.js`.

@@ -43,10 +43,10 @@ function withTimeout(promise, ms, message) {
 
 // Boots an HTTP server with the agent WebSocket attached, runs fn, then cleans
 // up regardless of outcome.
-async function withWsServer({ agentTokensRepo, agentsRepo }, fn) {
+async function withWsServer({ agentTokensRepo, agentsRepo, auditRepo, notifyDashboard }, fn) {
   const app = makeApp({ agentTokensRepo, agentsRepo });
   const server = http.createServer(app);
-  const handle = attachAgentWebSocket({ server, agentTokensRepo, agentsRepo });
+  const handle = attachAgentWebSocket({ server, agentTokensRepo, agentsRepo, auditRepo, notifyDashboard });
   await new Promise((resolve) => server.listen(0, resolve));
   const port = server.address().port;
   try {
@@ -106,6 +106,52 @@ test('WS connect succeeds with a valid token via query parameter', async () => {
     try {
       await withTimeout(waitOpen(client), 4000, 'did not open');
       await withTimeout(tracker.waitFor('online'), 4000, 'online not set');
+    } finally {
+      client.close();
+    }
+  });
+});
+
+test('an upgrade action-result completes the audit row', async () => {
+  const tracker = makeStatusTracker();
+  const agentsRepo = makeAgentsRepo({ setStatus: tracker.setStatus });
+  let resolveDone;
+  const done = new Promise((r) => { resolveDone = r; });
+  const completed = [];
+  const auditRepo = { complete: async (id, opts) => { completed.push({ id, ...opts }); resolveDone(); return true; } };
+
+  await withWsServer({ agentTokensRepo: validRepo(), agentsRepo, auditRepo }, async ({ port }) => {
+    const client = new WebSocket(`ws://127.0.0.1:${port}/ws/agent`, { headers: { Authorization: 'Bearer good' } });
+    try {
+      await withTimeout(waitOpen(client), 4000, 'did not open');
+      client.send(JSON.stringify({ type: 'action-result', auditId: 88, action: 'upgrade', ok: true, version: '0.3.0' }));
+      await withTimeout(done, 4000, 'audit not completed');
+      assert.equal(completed[0].id, 88);
+      assert.equal(completed[0].state, 'completed');
+      assert.equal(completed[0].resultDetail, 'version 0.3.0');
+    } finally {
+      client.close();
+    }
+  });
+});
+
+test('a delete action-result completes the audit and removes the agent (tokens cascade)', async () => {
+  const tracker = makeStatusTracker();
+  let removedId = null;
+  let resolveRemoved;
+  const removed = new Promise((r) => { resolveRemoved = r; });
+  const agentsRepo = makeAgentsRepo({ setStatus: tracker.setStatus, remove: async (id) => { removedId = id; resolveRemoved(); return true; } });
+  const completed = [];
+  const auditRepo = { complete: async (id, opts) => { completed.push({ id, ...opts }); return true; } };
+
+  await withWsServer({ agentTokensRepo: validRepo(), agentsRepo, auditRepo }, async ({ port }) => {
+    const client = new WebSocket(`ws://127.0.0.1:${port}/ws/agent`, { headers: { Authorization: 'Bearer good' } });
+    try {
+      await withTimeout(waitOpen(client), 4000, 'did not open');
+      client.send(JSON.stringify({ type: 'action-result', auditId: 5, action: 'delete', ok: true }));
+      await withTimeout(removed, 4000, 'agent not removed');
+      assert.equal(removedId, 9); // the connected agent's id
+      assert.equal(completed[0].state, 'completed');
     } finally {
       client.close();
     }

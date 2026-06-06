@@ -16,6 +16,9 @@ function attachAgentWebSocket({
   server,
   agentTokensRepo,
   agentsRepo,
+  // Optional: completes the audit row for a server-initiated action when the
+  // agent reports its result (upgrade/delete).
+  auditRepo = null,
   logger = silentLogger,
   path = '/ws/agent',
   heartbeatMs = 30000,
@@ -118,6 +121,27 @@ function attachAgentWebSocket({
         sflowStatus.set(ws.agentId, { state, detail, at: new Date().toISOString() });
         if (typeof notifyDashboard === 'function') {
           try { notifyDashboard({ type: 'sflow-status', payload: { agentId: ws.agentId, state, detail } }); } catch { /* best-effort */ }
+        }
+      }
+      // agent -> server: result of a server-initiated action (upgrade/delete).
+      // Completes the audit row, and on a CONFIRMED self-delete drops the agent
+      // record (its tokens cascade) so the fleet list reflects reality.
+      if (msg.type === 'action-result' && msg.auditId != null) {
+        const ok = !!msg.ok;
+        const detail = typeof msg.detail === 'string' ? msg.detail.slice(0, 300)
+          : (msg.version ? `version ${msg.version}` : null);
+        if (auditRepo && typeof auditRepo.complete === 'function') {
+          auditRepo.complete(msg.auditId, { state: ok ? 'completed' : 'failed', resultDetail: detail })
+            .catch((err) => logger.error('Failed to complete audit row:', err));
+        }
+        if (msg.action === 'delete' && ok && agentsRepo && typeof agentsRepo.remove === 'function') {
+          agentsRepo.remove(ws.agentId)
+            .then(() => {
+              if (typeof notifyDashboard === 'function') {
+                try { notifyDashboard({ type: 'agent-status', payload: { agentId: ws.agentId, status: 'deleted' } }); } catch { /* best-effort */ }
+              }
+            })
+            .catch((err) => logger.error('Failed to remove self-deleted agent:', err));
         }
       }
     });

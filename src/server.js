@@ -288,6 +288,7 @@ function start() {
     server,
     agentTokensRepo,
     agentsRepo,
+    auditRepo,
     logger: console,
     path: config.ws.path,
     heartbeatMs: config.ws.heartbeatIntervalMs,

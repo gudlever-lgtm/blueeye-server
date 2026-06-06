@@ -7,7 +7,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const request = require('supertest');
 
-const { makeApp, makeFeatureGate, makeAssistant, makeDispatcher, makeFindingStore, authHeader } = require('../test-support/fakes');
+const { makeApp, makeFeatureGate, makeAssistant, makeDispatcher, makeFindingStore, makeSettingsService, authHeader } = require('../test-support/fakes');
 const { createAnalysisPipeline } = require('../src/analysis/pipeline');
 const { createDispatcher } = require('../src/analysis/alerting/dispatcher');
 const { loadConfig } = require('../src/analysis/config');
@@ -40,6 +40,27 @@ test('assistant licensed but switched off in config -> 403 with the "off" messag
   assert.equal(res.status, 403);
   assert.notEqual(res.body.reason, 'license');
   assert.match(res.body.error, /disabled/i);
+});
+
+// Configuring the assistant (Settings → AI assistant) is gated by the same
+// entitlement, so an admin cannot enable / key a module the server will refuse
+// to run when the licence does not include it.
+test('settings: PUT /api/settings/assistant is refused (403 license) when assistant is not licensed', async () => {
+  const app = makeApp({ featureGate: gateMissing('assistant'), settingsService: makeSettingsService() });
+  const res = await request(app).put('/api/settings/assistant').set('Authorization', authHeader('admin'))
+    .send({ enabled: true, apiKey: 'sk-should-not-save' });
+  assert.equal(res.status, 403);
+  assert.equal(res.body.reason, 'license');
+  assert.equal(res.body.feature, 'assistant');
+});
+
+test('settings: PUT /api/settings/assistant succeeds for an admin when assistant IS licensed', async () => {
+  // Default featureGate = allow-all, so the only gate left is the admin role.
+  const app = makeApp({ settingsService: makeSettingsService() });
+  const res = await request(app).put('/api/settings/assistant').set('Authorization', authHeader('admin'))
+    .send({ enabled: true, apiKey: 'sk-ok-1234', model: 'mistral-small-latest' });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.assistant.enabled, true);
 });
 
 // ---- geo --------------------------------------------------------------------

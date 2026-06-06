@@ -177,6 +177,41 @@ function makeSourceStore(overrides = {}) {
   };
 }
 
+// A fake signed-release store. Records add() calls so a test can assert what was
+// stored after a verified upload. latest()/get() default to "no releases".
+function makeReleaseStore(overrides = {}) {
+  const added = [];
+  return {
+    added,
+    add: overrides.add || ((r) => { const meta = { ...r, createdAt: new Date().toISOString() }; added.push(meta); return meta; }),
+    has: overrides.has || ((v) => added.some((r) => r.version === v)),
+    list: overrides.list || (() => added.slice()),
+    latest: overrides.latest || (() => (added.length ? added[added.length - 1] : null)),
+    get: overrides.get || ((v) => added.find((r) => r.version === v) || null),
+    reload: overrides.reload || (() => {}),
+  };
+}
+
+// A fake agent-action audit repo (in-memory). Records 'requested' rows and lets
+// complete() flip them terminal, so route tests can assert what was audited.
+function makeAuditRepo(overrides = {}) {
+  const rows = [];
+  let seq = 0;
+  return {
+    rows,
+    record: overrides.record || (async (r) => { const id = (seq += 1); rows.push({ id, state: 'requested', requested_at: new Date().toISOString(), completed_at: null, result_detail: null, ...r }); return id; }),
+    complete: overrides.complete || (async (id, { state, resultDetail = null }) => {
+      const row = rows.find((x) => x.id === id && x.state === 'requested');
+      if (!row) return false;
+      row.state = state; row.result_detail = resultDetail; row.completed_at = new Date().toISOString();
+      return true;
+    }),
+    findByAgent: overrides.findByAgent || (async (agentId) => rows.filter((x) => x.agentId === agentId).slice().reverse()),
+    findByActor: overrides.findByActor || (async (userId) => rows.filter((x) => x.actorUserId === userId).slice().reverse()),
+    findAll: overrides.findAll || (async () => rows.slice().reverse()),
+  };
+}
+
 // A fake db with a ping() used by GET /health.
 function makeDb(overrides = {}) {
   return {
@@ -400,6 +435,9 @@ function makeApp(overrides = {}) {
     testPackagesRepo: overrides.testPackagesRepo || makeTestPackagesRepo(),
     testPackageRunner: overrides.testPackageRunner || makeTestPackageRunner(),
     speedtestResultsRepo: overrides.speedtestResultsRepo || makeSpeedtestResultsRepo(),
+    releaseStore: overrides.releaseStore || makeReleaseStore(),
+    releasePublicKey: overrides.releasePublicKey || '',
+    auditRepo: overrides.auditRepo || makeAuditRepo(),
     enrollConfig: overrides.enrollConfig || { publicUrl: '', certFingerprint: '' },
     notifyDashboard: overrides.notifyDashboard || (() => 0),
   });
@@ -436,6 +474,8 @@ module.exports = {
   makeEnrollmentStore,
   makeArtifactStore,
   makeSourceStore,
+  makeReleaseStore,
+  makeAuditRepo,
   makeTestPackagesRepo,
   makeTestPackageRunner,
   makeSpeedtestResultsRepo,

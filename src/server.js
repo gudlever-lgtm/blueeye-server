@@ -6,6 +6,7 @@ const { createApp } = require('./app');
 const { createLocationsRepository } = require('./repositories/locationsRepository');
 const { createUsersRepository } = require('./repositories/usersRepository');
 const { createAgentsRepository } = require('./repositories/agentsRepository');
+const { createAgentActionAuditRepository } = require('./repositories/agentActionAuditRepository');
 const { createEnrollmentCodesRepository } = require('./repositories/enrollmentCodesRepository');
 const { createEnrollmentStore } = require('./services/enrollmentStore');
 const { createAgentTokensRepository } = require('./repositories/agentTokensRepository');
@@ -13,6 +14,8 @@ const { createResultsRepository } = require('./repositories/resultsRepository');
 const { createProbeResultsRepository } = require('./repositories/probeResultsRepository');
 const { createArtifactStore } = require('./enroll/artifactStore');
 const { createAgentSourceStore } = require('./enroll/agentSourceStore');
+const { createAgentReleaseStore } = require('./enroll/agentReleaseStore');
+const { resolveReleasePublicKey } = require('./license/releaseKey');
 const { attachAgentWebSocket } = require('./ws/agentSocket');
 const { attachDashboardWebSocket } = require('./ws/dashboardSocket');
 const { verifyToken } = require('./auth/jwt');
@@ -67,6 +70,7 @@ function start() {
   const locationsRepo = createLocationsRepository(db);
   const usersRepo = createUsersRepository(db);
   const agentsRepo = createAgentsRepository(db);
+  const auditRepo = createAgentActionAuditRepository(db);
   const enrollmentCodesRepo = createEnrollmentCodesRepository(db);
   const enrollmentStore = createEnrollmentStore(db);
   const agentTokensRepo = createAgentTokensRepository(db);
@@ -81,6 +85,13 @@ function start() {
   // Agent source bundle served at /enroll/agent-source.tgz — packaged +
   // checksummed at startup so the one-liner installs with no published binaries.
   const agentSourceStore = createAgentSourceStore({ dir: config.enroll.agentSourceDir, logger: console });
+
+  // Signed agent releases: built + Ed25519-signed off-server, uploaded via
+  // POST /agents/releases (verified on upload), kept under AGENT_RELEASE_DIR and
+  // pushed to agents. The release public key is a SEPARATE trust anchor from the
+  // license key (see src/license/releaseKey.js).
+  const agentReleaseStore = createAgentReleaseStore({ dir: process.env.AGENT_RELEASE_DIR || '', logger: console });
+  const releasePublicKey = resolveReleasePublicKey(process.env);
 
   // Client-side license validation against blueeye-licens. getAgentCount reads
   // the live WebSocket connection count (agentWs is assigned just below; the
@@ -232,6 +243,7 @@ function start() {
     locationsRepo,
     usersRepo,
     agentsRepo,
+    auditRepo,
     enrollmentCodesRepo,
     enrollmentStore,
     agentTokensRepo,
@@ -254,6 +266,8 @@ function start() {
     retentionConfig,
     artifactStore,
     agentSourceStore,
+    releaseStore: agentReleaseStore,
+    releasePublicKey,
     testPackagesRepo,
     testPackageRunner,
     speedtestResultsRepo,
@@ -274,6 +288,7 @@ function start() {
     server,
     agentTokensRepo,
     agentsRepo,
+    auditRepo,
     logger: console,
     path: config.ws.path,
     heartbeatMs: config.ws.heartbeatIntervalMs,

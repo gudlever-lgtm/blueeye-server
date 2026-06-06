@@ -12,6 +12,7 @@ const { createAgentReportsRouter } = require('./agentReports');
 const { createEnrollmentCodesRouter } = require('./enrollmentCodes');
 const { createLicenseRouter } = require('./license');
 const { createSystemRouter } = require('./system');
+const { createAuditRouter } = require('./audit');
 const { createFindingsRouter } = require('./findings');
 const { createAssistantRouter } = require('./assistant');
 const { createGeoRouter } = require('./geo');
@@ -40,6 +41,7 @@ function createApiRouter({
   locationsRepo,
   usersRepo,
   agentsRepo,
+  auditRepo,
   enrollmentCodesRepo,
   enrollmentStore,
   agentTokensRepo,
@@ -62,6 +64,8 @@ function createApiRouter({
   retentionConfig,
   artifactStore,
   agentSourceStore,
+  releaseStore,
+  releasePublicKey,
   testPackagesRepo,
   testPackageRunner,
   speedtestResultsRepo,
@@ -89,7 +93,7 @@ function createApiRouter({
   router.use('/me', createMeRouter({ usersRepo }));
   router.use('/locations', createLocationsRouter({ locationsRepo, resultsRepo }));
   router.use('/license', createLicenseRouter({ licenseManager, featureGate }));
-  router.use('/system', createSystemRouter({ systemInfo, agentSourceStore }));
+  router.use('/system', createSystemRouter({ systemInfo, agentSourceStore, releaseStore }));
   if (findingStore) router.use('/api/findings', createFindingsRouter({ findingStore }));
   if (assistant) router.use('/api/assistant', createAssistantRouter({ assistant, featureGate }));
   if (flowsRepo) router.use('/api/geo', createGeoRouter({ flowsRepo, agentsRepo, findingStore, tileConfig: geoTileConfig, getMapConfig, featureGate }));
@@ -114,8 +118,8 @@ function createApiRouter({
 
   // Frictionless enrollment. Public (unauthenticated) source + install-script
   // endpoints under /enroll; the authenticated command generator under /api.
-  if (artifactStore || agentSourceStore) {
-    router.use('/enroll', createEnrollRouter({ artifactStore, sourceStore: agentSourceStore, enrollmentCodesRepo, enrollConfig }));
+  if (artifactStore || agentSourceStore || releaseStore) {
+    router.use('/enroll', createEnrollRouter({ artifactStore, sourceStore: agentSourceStore, releaseStore, enrollmentCodesRepo, enrollConfig }));
     router.use('/api/enroll', createEnrollCommandRouter({ enrollmentCodesRepo, artifactStore, sourceStore: agentSourceStore, enrollConfig }));
   }
 
@@ -124,7 +128,8 @@ function createApiRouter({
   //   - POST /results          — agent token
   //   - POST /enroll           — unauthenticated
   // Requests fall through routers that have no matching route.
-  router.use('/agents', createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentCommander, agentSourceStore }));
+  router.use('/agents', createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentCommander, agentSourceStore, releaseStore, releasePublicKey, auditRepo }));
+  router.use('/audit', createAuditRouter({ auditRepo }));
   router.use('/agents', createAgentReportsRouter({ agentAuth, resultsRepo, agentsRepo, analysisPipeline, flowPipeline, probeResultsRepo, probePipeline }));
   router.use('/agents', createAgentEnrollRouter({ enrollmentStore, notifyDashboard }));
 

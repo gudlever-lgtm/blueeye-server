@@ -68,13 +68,39 @@ function aggregateFlows(rows, { port = null, protocol = null } = {}) {
 //
 // Agents are created via enrollment (prompt 4) — there is intentionally no
 // manual POST /agents here.
-function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentCommander, agentSourceStore, releaseStore = null, releasePublicKey = '' }) {
+function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentCommander, agentSourceStore, releaseStore = null, releasePublicKey = '', auditRepo = null }) {
   const router = express.Router();
 
   // Response helpers for the error shapes repeated across this router.
   const invalidId = (res) => res.status(400).json({ error: 'Invalid id' });
   const notFound = (res) => res.status(404).json({ error: 'Agent not found' });
   const validationError = (res, details) => res.status(400).json({ error: 'Validation failed', details });
+
+  // Audit helpers for server-initiated actions (upgrade/delete). Best-effort:
+  // auditing must never fail or block the action it records. record() returns the
+  // new row id (so the command can carry it for the agent to echo on completion);
+  // markFailed() flips it terminal when we already know it won't proceed.
+  async function recordRequested(action, agent, req, targetVersion = null) {
+    if (!auditRepo || typeof auditRepo.record !== 'function') return null;
+    try {
+      return await auditRepo.record({
+        agentId: agent.id,
+        agentHostname: agent.hostname || null,
+        locationId: agent.location_id ?? null,
+        actorUserId: (req.user && req.user.id) || null,
+        actorEmail: (req.user && req.user.email) || null,
+        actorRole: (req.user && req.user.role) || null,
+        action,
+        targetVersion,
+      });
+    } catch {
+      return null;
+    }
+  }
+  async function markFailed(auditId, resultDetail) {
+    if (!auditId || !auditRepo || typeof auditRepo.complete !== 'function') return;
+    try { await auditRepo.complete(auditId, { state: 'failed', resultDetail }); } catch { /* best-effort */ }
+  }
 
   // POST /agents/releases — upload a SIGNED agent release tarball (admin). The
   // server VERIFIES the Ed25519 signature over the release manifest AND that the
@@ -196,11 +222,18 @@ function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentComma
         ? { name: 'update', version: release.version, sha256: release.sha256, signature: release.signature }
         : { name: 'update', sha256: agentSourceStore.sha256, version: (typeof agentSourceStore.sourceVersion === 'function' ? agentSourceStore.sourceVersion() : null) };
       const targetVersion = command.version;
+      // Audit 'requested' first so the command can carry the audit id; the agent
+      // echoes it back on completion (handled where the agent reports its result).
+      const auditId = await recordRequested('upgrade', agent, req, targetVersion);
+      if (auditId) command.auditId = auditId;
       const out = await agentCommander.sendCommandAndWait(id, command, { timeoutMs: 8000 });
       if (out.delivered === 0) {
+        await markFailed(auditId, 'agent not connected');
         return res.status(409).json({ error: 'Agent not connected', connected: false });
       }
       const reply = out.reply || {};
+      // A runtime that declines (docker/unmanaged) is a terminal outcome we know now.
+      if (reply.accepted === false) await markFailed(auditId, reply.reason || 'declined');
       res.status(202).json({
         connected: true,
         acked: !!out.acked,
@@ -209,6 +242,45 @@ function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentComma
         reason: reply.reason || null,
         targetVersion,
         signed: !!release,
+        auditId: auditId || null,
+      });
+    })
+  );
+
+  // POST /agents/:id/delete — ask a connected agent to STOP its service, remove
+  // its own files and securely wipe its token, then report back. admin only. The
+  // action is audited (requested -> completed/failed). The server agent row is
+  // removed only once the agent CONFIRMS the self-delete (handled where the agent
+  // reports its result), so a declined/failed delete never orphans a live agent.
+  // To force-remove the server-side record regardless, use DELETE /agents/:id.
+  router.post(
+    '/:id/delete',
+    requireAuth,
+    requireRole(ROLES.ADMIN),
+    asyncHandler(async (req, res) => {
+      const id = parseId(req.params.id);
+      if (id === null) return invalidId(res);
+      const agent = await agentsRepo.findById(id);
+      if (!agent) return notFound(res);
+      if (!agentCommander || typeof agentCommander.sendCommandAndWait !== 'function') {
+        return res.status(503).json({ error: 'Agent channel not available' });
+      }
+      const auditId = await recordRequested('delete', agent, req, null);
+      const command = { name: 'delete' };
+      if (auditId) command.auditId = auditId;
+      const out = await agentCommander.sendCommandAndWait(id, command, { timeoutMs: 8000 });
+      if (out.delivered === 0) {
+        await markFailed(auditId, 'agent not connected');
+        return res.status(409).json({ error: 'Agent not connected', connected: false });
+      }
+      const reply = out.reply || {};
+      if (reply.accepted === false) await markFailed(auditId, reply.reason || 'declined');
+      res.status(202).json({
+        connected: true,
+        acked: !!out.acked,
+        accepted: !!reply.accepted,
+        reason: reply.reason || null,
+        auditId: auditId || null,
       });
     })
   );
@@ -318,6 +390,24 @@ function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentComma
       const agent = await agentsRepo.findById(id);
       if (!agent) return notFound(res);
       res.json(agent);
+    })
+  );
+
+  // GET /agents/:id/audit — the upgrade/delete action trail for one agent
+  // (requested -> completed/failed), newest first. admin only.
+  router.get(
+    '/:id/audit',
+    requireAuth,
+    requireRole(ROLES.ADMIN),
+    asyncHandler(async (req, res) => {
+      const id = parseId(req.params.id);
+      if (id === null) return invalidId(res);
+      if (!auditRepo || typeof auditRepo.findByAgent !== 'function') {
+        return res.status(503).json({ error: 'Audit log not available' });
+      }
+      const agent = await agentsRepo.findById(id);
+      if (!agent) return notFound(res);
+      res.json(await auditRepo.findByAgent(id, { limit: 100 }));
     })
   );
 

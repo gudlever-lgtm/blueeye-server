@@ -50,9 +50,13 @@ straight into the agent's collector.
     "sflow": { "port": 6343, "hsflowd": { "samplingRate": 256, "device": "eth0" } } }
   ```
 
-  The agent installs the package, writes `/etc/hsflowd.conf`, starts the service,
-  and reports the actual state (`active` / `install_failed` / `permission_denied`
-  / …).
+  hsflowd isn't in the Debian/Ubuntu archives, so the agent **builds it from
+  source** (build deps `git build-essential clang libpcap-dev` → clone
+  `sflow/host-sflow` → `make FEATURES="PCAP"` → `… install` → `… schedule`),
+  writes `/etc/hsflowd.conf`, starts the service, and reports the actual state
+  (`active` / `install_failed` / `permission_denied` / …). `PCAP` is the
+  packet-sampling module — the only one needed; `HOST` would pull in
+  KVM/OVS/libvirt.
 
 - **Docker agents** can't install hsflowd onto the host, so they run the
   **hsflowd sidecar** instead (see the agent repo:

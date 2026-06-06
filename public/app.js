@@ -3478,15 +3478,27 @@ function locationList(locations, byLoc) {
     })));
 }
 
-// Cell showing the selected traffic source + what the agent reports it can do.
+// Maps an hsflowd exporter state to a badge colour class.
+function hsflowdBadgeClass(state) {
+  if (state === 'active') return 'badge active';
+  if (state === 'failed' || state === 'install_failed' || state === 'permission_denied') return 'badge offline';
+  return 'badge'; // inactive / not_installed / unknown
+}
+
+// Cell showing the selected traffic source + what the agent reports it can do,
+// plus the live hsflowd exporter state when the agent has reported one (the
+// result of enabling/disabling "Local hsflowd exporter").
 function agentSourceCell(a) {
   const mc = a.monitor_config || {};
   const source = mc.source || 'proc';
   const caps = a.capabilities && Array.isArray(a.capabilities.sources) ? a.capabilities.sources : null;
   const detail = source === 'snmp' && mc.snmp ? ` (${mc.snmp.host})` : '';
+  const hs = a.hsflowd && a.hsflowd.state ? a.hsflowd : null;
   return el('div', {},
     el('span', { class: 'badge' }, source + detail),
-    caps ? el('div', { class: 'muted', title: 'Agent capabilities' }, `can: ${caps.join(', ')}`) : null);
+    caps ? el('div', { class: 'muted', title: 'Agent capabilities' }, `can: ${caps.join(', ')}`) : null,
+    hs ? el('div', { class: 'muted', title: hs.detail || (hs.at ? `reported ${hs.at}` : '') },
+      'hsflowd: ', el('span', { class: hsflowdBadgeClass(hs.state) }, hs.state)) : null);
 }
 
 function editAgent(a) {

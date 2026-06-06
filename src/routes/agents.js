@@ -193,6 +193,34 @@ function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentComma
     })
   );
 
+  // POST /agents/:id/diagnose — ask the connected agent to introspect its flow
+  // pipeline (monitor source, collector receive/decode counters, local exporter
+  // state, last report) and report a snapshot, so an operator can see exactly
+  // where flows stop. Read-only on the agent — viewer+. 409 if not connected,
+  // 504 if it doesn't reply in time, 503 if the agent channel is unavailable.
+  router.post(
+    '/:id/diagnose',
+    requireAuth,
+    requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN),
+    asyncHandler(async (req, res) => {
+      const id = parseId(req.params.id);
+      if (id === null) return invalidId(res);
+      const agent = await agentsRepo.findById(id);
+      if (!agent) return notFound(res);
+      if (!agentCommander || typeof agentCommander.sendCommandAndWait !== 'function') {
+        return res.status(503).json({ error: 'Agent channel not available' });
+      }
+      const out = await agentCommander.sendCommandAndWait(id, { name: 'diagnose' }, { timeoutMs: 5000 });
+      if (out.delivered === 0) {
+        return res.status(409).json({ error: 'Agent not connected', connected: false });
+      }
+      if (out.timedOut || !out.reply) {
+        return res.status(504).json({ error: 'Agent did not reply', connected: true, timedOut: true });
+      }
+      res.json({ connected: true, diagnostic: out.reply.diagnostic || null });
+    })
+  );
+
   // POST /agents/:id/update — ask a connected, systemd-managed agent to rebuild
   // and restart onto the new code. admin only. A signed release (uploaded via
   // POST /agents/releases) is pushed in preference to the startup-packaged source

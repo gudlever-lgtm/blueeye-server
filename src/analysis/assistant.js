@@ -248,7 +248,52 @@ function createAssistant({
     return { answer, model: currentModel(), location: location.name, agents: agentCount, findings: findingCount };
   }
 
-  return { isEnabled, explain, summarizeLocation, buildContext, buildLocationContext };
+  // Explains a flow-pipeline diagnostic snapshot (from POST /agents/:id/diagnose)
+  // in plain language, correlating with the host's recent findings + probe-health
+  // verdict when an id is given. Bounded context: only the KNOWN diagnostic fields
+  // are forwarded (never arbitrary client input). Same error taxonomy as explain().
+  async function explainDiagnostic(diagnostic, hostId) {
+    if (!currentEnabled()) throw new FeatureDisabledError();
+    if (!diagnostic || typeof diagnostic !== 'object' || Array.isArray(diagnostic)) {
+      const e = new Error('a diagnostic snapshot is required');
+      e.name = 'InvalidQuestion';
+      throw e;
+    }
+    // Sanitise to a known shape so the prompt context stays small and trusted.
+    const c = diagnostic.collector && typeof diagnostic.collector === 'object' ? diagnostic.collector : null;
+    const snapshot = {
+      source: diagnostic.source ?? null,
+      sources: Array.isArray(diagnostic.sources) ? diagnostic.sources : null,
+      managed: diagnostic.managed ?? null,
+      agentVersion: diagnostic.agentVersion ?? null,
+      lastReportAt: diagnostic.lastReportAt ?? null,
+      collector: c ? {
+        kind: c.kind ?? null,
+        listening: !!c.listening,
+        datagrams: Number(c.datagrams) || 0,
+        decodedFlows: Number(c.decodedFlows) || 0,
+        bufferedFlows: Number(c.bufferedFlows) || 0,
+        lastDatagramAt: c.lastDatagramAt ?? null,
+      } : null,
+      hsflowd: diagnostic.hsflowd && typeof diagnostic.hsflowd === 'object'
+        ? { state: diagnostic.hsflowd.state ?? null, detail: diagnostic.hsflowd.detail ?? null }
+        : null,
+    };
+    const findings = hostId != null ? await buildContext(hostId) : [];
+    const probeHealth = hostId != null ? await probeVerdict(hostId) : null;
+    const system =
+      'You are a network operations assistant for BlueEye. In 2-4 sentences, explain what this ' +
+      "agent's flow-pipeline diagnostic means — the most likely reason flows are or are not " +
+      'arriving — then the single most useful next step. The collector receives sFlow/NetFlow ' +
+      'datagrams and decodes flow records: 0 datagrams means no exporter is sending to it; ' +
+      'datagrams but 0 decoded means the samples are not being parsed. Use ONLY the provided ' +
+      'context and do not invent specifics that are not present in it.';
+    const user = JSON.stringify({ diagnostic: snapshot, hostId: hostId ?? null, findings, probeHealth });
+    const answer = await chat(system, user);
+    return { answer, model: currentModel(), usedFindings: findings.length };
+  }
+
+  return { isEnabled, explain, explainDiagnostic, summarizeLocation, buildContext, buildLocationContext };
 }
 
 module.exports = { createAssistant, FeatureDisabledError };

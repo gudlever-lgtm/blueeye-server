@@ -363,8 +363,9 @@ function makeSettingsService(overrides = {}) {
 function makeAssistant(overrides = {}) {
   const disabled = () => { const e = new Error('The AI assistant is disabled'); e.name = 'FeatureDisabled'; throw e; };
   return {
-    isEnabled: overrides.isEnabled || (() => Boolean(overrides.explain || overrides.summarizeLocation)),
+    isEnabled: overrides.isEnabled || (() => Boolean(overrides.explain || overrides.summarizeLocation || overrides.explainDiagnostic)),
     explain: overrides.explain || (async () => disabled()),
+    explainDiagnostic: overrides.explainDiagnostic || (async () => disabled()),
     summarizeLocation: overrides.summarizeLocation || (async () => disabled()),
   };
 }

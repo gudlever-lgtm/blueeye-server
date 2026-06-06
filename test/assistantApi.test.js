@@ -68,6 +68,41 @@ test('an unknown assistant sub-path returns 404', async () => {
   assert.equal(res.status, 404);
 });
 
+// ---- POST /api/assistant/diagnose-explain ---------------------------------
+
+test('POST /api/assistant/diagnose-explain returns 403 while the feature is disabled', async () => {
+  const res = await request(makeApp())
+    .post('/api/assistant/diagnose-explain').set('Authorization', viewer())
+    .send({ diagnostic: { source: 'sflow', collector: { datagrams: 0 } } });
+  assert.equal(res.status, 403);
+});
+
+test('POST /api/assistant/diagnose-explain returns 400 without a diagnostic', async () => {
+  const assistant = makeAssistant({ explainDiagnostic: async () => ({ answer: 'x' }) });
+  const res = await request(makeApp({ assistant }))
+    .post('/api/assistant/diagnose-explain').set('Authorization', viewer())
+    .send({});
+  assert.equal(res.status, 400);
+});
+
+test('POST /api/assistant/diagnose-explain returns 200 with the explanation when enabled', async () => {
+  const assistant = makeAssistant({
+    explainDiagnostic: async (d, hostId) => ({ answer: `re ${d.source} on ${hostId}`, model: 'mistral-small-latest', usedFindings: 1 }),
+  });
+  const res = await request(makeApp({ assistant }))
+    .post('/api/assistant/diagnose-explain').set('Authorization', viewer())
+    .send({ diagnostic: { source: 'sflow', collector: { datagrams: 0 } }, hostId: '7' });
+  assert.equal(res.status, 200);
+  assert.match(res.body.answer, /sflow/);
+  assert.match(res.body.answer, /\b7\b/); // hostId threaded through
+  assert.equal(res.body.usedFindings, 1);
+});
+
+test('POST /api/assistant/diagnose-explain without a token returns 401', async () => {
+  const res = await request(makeApp()).post('/api/assistant/diagnose-explain').send({ diagnostic: {} });
+  assert.equal(res.status, 401);
+});
+
 // ---- POST /api/assistant/location-summary ---------------------------------
 
 test('POST /api/assistant/location-summary returns 403 while the feature is disabled', async () => {

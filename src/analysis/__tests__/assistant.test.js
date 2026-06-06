@@ -86,6 +86,30 @@ test('explain raises AssistantUpstreamError when the network call rejects', asyn
   await assert.rejects(() => a.explain('q', 'h1'), (e) => e.name === 'AssistantUpstreamError');
 });
 
+test('explainDiagnostic is gated when off, and forwards only a bounded snapshot when on', async () => {
+  const off = createAssistant({ config: { assistantEnabled: false }, findingStore: findings() });
+  await assert.rejects(() => off.explainDiagnostic({ source: 'sflow' }, 'h1'), (e) => e.name === 'FeatureDisabled');
+  await assert.rejects(() => off.explainDiagnostic({ source: 'sflow' }, 'h1'), (e) => e.name === 'FeatureDisabled');
+
+  const fetchImpl = okFetch({ choices: [{ message: { content: 'No exporter is sending to the collector.' } }] });
+  const a = createAssistant({ config: ENABLED, findingStore: findings([]), fetchImpl });
+  const diagnostic = {
+    source: 'sflow',
+    collector: { kind: 'sflow', listening: true, datagrams: 0, decodedFlows: 0, bufferedFlows: 0 },
+    hsflowd: { state: 'inactive', detail: 'not enabled' },
+    secret: 'should-not-be-forwarded',
+  };
+  const out = await a.explainDiagnostic(diagnostic, 'h7');
+  assert.equal(out.answer, 'No exporter is sending to the collector.');
+  assert.equal(out.model, 'mistral-small-latest');
+
+  const sent = JSON.parse(fetchImpl.calls[0].opts.body);
+  const userMsg = sent.messages.find((m) => m.role === 'user');
+  assert.ok(userMsg.content.includes('sflow')); // the snapshot source
+  assert.ok(userMsg.content.includes('datagrams')); // collector counters forwarded
+  assert.ok(!userMsg.content.includes('should-not-be-forwarded')); // bounded: unknown fields dropped
+});
+
 test('buildContext caps to maxFindings, keeps only summary fields, survives store failure', async () => {
   const many = Array.from({ length: 50 }, (_, i) => ({ metric: `m${i}`, explanation: 'x', evidence: [{ secret: 1 }], createdAt: new Date() }));
   const a = createAssistant({ config: { ...ENABLED, assistantMaxFindings: 5 }, findingStore: findings(many), fetchImpl: okFetch({}) });

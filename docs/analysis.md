@@ -89,9 +89,12 @@ runtime in the dashboard (**Settings → Analysis → AI assistant**, admin) —
 stored setting overrides the env defaults and applies without a restart. Once
 enabled you can ask a question about a host; the assistant builds a small context
 from the most recent findings (summary fields only — no raw data or secrets) and
-queries Mistral. When disabled the endpoint returns `403`. The API key is stored
-in `app_settings` but never returned by the API (reads expose only whether a key
-is set, plus a masked hint).
+queries Mistral. When disabled the endpoint returns `403`. The same assistant also
+powers the **Explain with AI** button on an agent's **Diagnose** result — turning
+the (bounded) flow-pipeline snapshot, plus the host's recent findings/probe-health,
+into a plain-language read-out and next step. The API key is stored in
+`app_settings` but never returned by the API (reads expose only whether a key is
+set, plus a masked hint).
 
 ## REST API
 
@@ -100,6 +103,7 @@ is set, plus a masked hint).
 | `GET` | `/api/findings?hostId=&since=` | viewer+ | List findings (newest first). `400` on invalid `since`. |
 | `POST` | `/api/findings/:id/ack` | operator+ | Acknowledge a finding. `404` if the ID is unknown. |
 | `POST` | `/api/assistant/explain` | viewer+ | Ask the assistant. `400` empty question, `403` disabled, `500` provider error. |
+| `POST` | `/api/assistant/diagnose-explain` | viewer+ | Explain a flow-pipeline diagnostic snapshot. `400` missing diagnostic, `403` disabled, `500` provider error. |
 
 ## WebSocket
 

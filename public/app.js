@@ -864,6 +864,31 @@ function showDiagnostic(a, d) {
       if (d.hsflowd.detail) body.push(el('p', { class: 'muted' }, d.hsflowd.detail));
     }
     body.push(el('details', {}, el('summary', { class: 'muted' }, 'Raw JSON'), el('pre', {}, JSON.stringify(d, null, 2))));
+
+    // Opt-in AI explanation of this snapshot. Reuses the assistant (Mistral, EU);
+    // degrades to a hint on 403 so it never looks broken when the feature is off.
+    const aiOut = el('div', { class: 'assistant-out muted' }, 'Optional: explain this diagnostic in plain language with the AI assistant (if enabled).');
+    const aiBtn = el('button', { class: 'small' }, 'Explain with AI');
+    aiBtn.addEventListener('click', async () => {
+      aiBtn.disabled = true;
+      aiOut.className = 'assistant-out muted';
+      aiOut.textContent = 'Thinking…';
+      try {
+        const res = await api('/api/assistant/diagnose-explain', { method: 'POST', body: { diagnostic: d, hostId: a.id } });
+        aiOut.className = 'assistant-out';
+        aiOut.replaceChildren(
+          el('div', {}, res.answer || '(empty response)'),
+          el('div', { class: 'assistant-meta muted' }, `${esc(res.model || '')} · ${res.usedFindings ?? 0} findings in context`));
+      } catch (err) {
+        aiOut.className = 'assistant-out muted';
+        aiOut.textContent = err.status === 403
+          ? 'The AI assistant is disabled. An administrator can enable it under Settings → Analysis → AI assistant.'
+          : err.message;
+      } finally {
+        aiBtn.disabled = false;
+      }
+    });
+    body.push(el('div', { class: 'assistant' }, el('div', { class: 'assistant-row' }, aiBtn), aiOut));
   }
   body.push(el('div', { class: 'form-actions' }, el('button', { class: 'ghost', onclick: closeModal }, 'Close')));
   card.replaceChildren(...body);

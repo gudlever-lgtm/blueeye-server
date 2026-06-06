@@ -222,13 +222,23 @@ function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentComma
     })
   );
 
-  // GET /agents — list, with the joined location name.
+  // GET /agents — list, with the joined location name. Each agent carries the
+  // latest hsflowd exporter status it reported (or null), for the dashboard.
   router.get(
     '/',
     requireAuth,
     requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN),
     asyncHandler(async (req, res) => {
-      res.json(await agentsRepo.findAll());
+      const agents = await agentsRepo.findAll();
+      const getStatus = agentCommander && typeof agentCommander.getSflowStatus === 'function'
+        ? agentCommander.getSflowStatus
+        : () => null;
+      // Only attach hsflowd when the agent has actually reported a status, so
+      // the response shape is unchanged for the common (non-sflow) case.
+      res.json(agents.map((a) => {
+        const hs = getStatus(a.id);
+        return hs ? { ...a, hsflowd: hs } : a;
+      }));
     })
   );
 

@@ -106,6 +106,7 @@ function start() {
       (agentWs
         ? agentWs.sendCommandAndWait(agentId, command, opts)
         : Promise.resolve({ delivered: 0, acked: false, reply: null })),
+    getSflowStatus: (agentId) => (agentWs ? agentWs.getSflowStatus(agentId) : null),
   };
 
   // Test packages: server-defined probe/traffic test sets pushed to agents to

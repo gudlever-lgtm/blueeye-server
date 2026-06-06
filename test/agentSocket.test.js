@@ -261,3 +261,57 @@ test('sendCommandAndWait times out when the agent never replies', async () => {
     }
   });
 });
+
+test('records an agent-reported hsflowd status, exposed via getSflowStatus', async () => {
+  const tracker = makeStatusTracker();
+  const agentsRepo = makeAgentsRepo({ setStatus: tracker.setStatus });
+
+  await withWsServer({ agentTokensRepo: validRepo(), agentsRepo }, async ({ port, handle }) => {
+    const client = new WebSocket(`ws://127.0.0.1:${port}/ws/agent?token=good`);
+    try {
+      await withTimeout(waitOpen(client), 4000, 'did not open');
+      await withTimeout(tracker.waitFor('online'), 4000, 'online not set');
+      assert.equal(handle.getSflowStatus(9), null); // nothing reported yet
+
+      client.send(JSON.stringify({ type: 'sflow.status', state: 'active', detail: 'ok' }));
+      const status = await withTimeout((async () => {
+        for (;;) {
+          const s = handle.getSflowStatus(9);
+          if (s) return s;
+          await new Promise((r) => setTimeout(r, 20));
+        }
+      })(), 4000, 'status not recorded');
+
+      assert.equal(status.state, 'active');
+      assert.equal(status.detail, 'ok');
+      assert.ok(status.at);
+    } finally {
+      client.close();
+    }
+  });
+});
+
+test('coerces an out-of-vocabulary hsflowd state to "unknown"', async () => {
+  const tracker = makeStatusTracker();
+  const agentsRepo = makeAgentsRepo({ setStatus: tracker.setStatus });
+
+  await withWsServer({ agentTokensRepo: validRepo(), agentsRepo }, async ({ port, handle }) => {
+    const client = new WebSocket(`ws://127.0.0.1:${port}/ws/agent?token=good`);
+    try {
+      await withTimeout(waitOpen(client), 4000, 'did not open');
+      await withTimeout(tracker.waitFor('online'), 4000, 'online not set');
+      client.send(JSON.stringify({ type: 'sflow.status', state: 'bogus', detail: 123 }));
+      const status = await withTimeout((async () => {
+        for (;;) {
+          const s = handle.getSflowStatus(9);
+          if (s) return s;
+          await new Promise((r) => setTimeout(r, 20));
+        }
+      })(), 4000, 'status not recorded');
+      assert.equal(status.state, 'unknown');
+      assert.equal(status.detail, null);
+    } finally {
+      client.close();
+    }
+  });
+});

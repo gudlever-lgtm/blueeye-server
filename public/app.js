@@ -1222,8 +1222,20 @@ async function showResults(a) {
       } else if (t && (t.totals || t.source)) {
         // Flow source (sflow/netflow): no per-interface counters, so summarise the
         // flow aggregate — totals + top breakdowns — instead of dumping raw JSON.
-        const tot = t.totals || {};
         const num = (n) => Number(n || 0).toLocaleString();
+        // Totals are authoritative when present; otherwise reconstruct them from a
+        // breakdown (the shape /flows reads). topTalkers/byPort/byProtocol each
+        // partition all flows, so summing one recovers the totals — a capped list
+        // can undercount, but never collapse real flow data to a misleading "0".
+        const sumRows = (rows) => (rows || []).reduce((a, r) => ({
+          bytes: a.bytes + (Number(r.bytes) || 0),
+          packets: a.packets + (Number(r.packets) || 0),
+          flows: a.flows + (Number(r.flows) || 0),
+        }), { bytes: 0, packets: 0, flows: 0 });
+        const tot = t.totals || sumRows(
+          (t.topTalkers && t.topTalkers.length) ? t.topTalkers
+            : ((t.byPort && t.byPort.length) ? t.byPort : t.byProtocol));
+        const hasFlows = (Number(tot.flows) || 0) > 0 || (Number(tot.bytes) || 0) > 0;
         const cards = [
           stat('Source', t.source || '–'),
           stat('Flows', num(tot.flows)),
@@ -1234,8 +1246,10 @@ async function showResults(a) {
         if (t.droppedDatagrams) cards.push(stat('Dropped', num(t.droppedDatagrams)));
         body.push(el('div', { class: 'cards' }, ...cards));
 
-        // Empty window is the common confusing case — say why, in words.
-        if (!tot.flows) {
+        // Empty window is the common confusing case — say why, in words. Only when
+        // there's genuinely no flow data (no totals AND no breakdown rows), so a
+        // payload with breakdowns but no totals isn't mislabelled "no data".
+        if (!hasFlows) {
           body.push(el('p', { class: 'muted' }, t.datagrams
             ? 'Datagrams are arriving but no flow samples were decoded in this window.'
             : `No ${t.source || 'flow'} data sampled yet — confirm the exporter is sending to the agent's collector (try Diagnose).`));

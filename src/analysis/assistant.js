@@ -272,6 +272,7 @@ function createAssistant({
         listening: !!c.listening,
         datagrams: Number(c.datagrams) || 0,
         decodedFlows: Number(c.decodedFlows) || 0,
+        counterSamples: Number(c.counterSamples) || 0,
         bufferedFlows: Number(c.bufferedFlows) || 0,
         lastDatagramAt: c.lastDatagramAt ?? null,
       } : null,

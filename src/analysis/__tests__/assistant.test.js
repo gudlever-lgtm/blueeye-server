@@ -95,7 +95,7 @@ test('explainDiagnostic is gated when off, and forwards only a bounded snapshot 
   const a = createAssistant({ config: ENABLED, findingStore: findings([]), fetchImpl });
   const diagnostic = {
     source: 'sflow',
-    collector: { kind: 'sflow', listening: true, datagrams: 0, decodedFlows: 0, bufferedFlows: 0 },
+    collector: { kind: 'sflow', listening: true, datagrams: 12, decodedFlows: 0, counterSamples: 7, bufferedFlows: 0 },
     hsflowd: { state: 'inactive', detail: 'not enabled' },
     secret: 'should-not-be-forwarded',
   };
@@ -107,6 +107,7 @@ test('explainDiagnostic is gated when off, and forwards only a bounded snapshot 
   const userMsg = sent.messages.find((m) => m.role === 'user');
   assert.ok(userMsg.content.includes('sflow')); // the snapshot source
   assert.ok(userMsg.content.includes('datagrams')); // collector counters forwarded
+  assert.ok(userMsg.content.includes('"counterSamples":7')); // counter-only signal forwarded
   assert.ok(!userMsg.content.includes('should-not-be-forwarded')); // bounded: unknown fields dropped
 });
 

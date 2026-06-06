@@ -828,7 +828,10 @@ function diagnoseVerdict(d) {
   if (!c.listening) return { ok: false, text: 'The flow collector is not listening — the agent did not open its sFlow/NetFlow port.' };
   const hs = d.hsflowd ? ` Local hsflowd: ${d.hsflowd.state}.` : '';
   if (!c.datagrams) return { ok: false, text: `The collector is up but has received 0 datagrams — nothing is exporting ${d.source} to it. Enable the Local hsflowd exporter for this agent (Edit), or point a switch/host at the agent's collector.${hs}` };
-  if (!c.decodedFlows) return { ok: false, text: `Datagrams are arriving (${c.datagrams}) but no flow samples were decoded — the exporter is sending, but not flow samples (check the sampling rate / that hsflowd was built with FEATURES=PCAP).${hs}` };
+  if (!c.decodedFlows) {
+    const onlyCounters = c.counterSamples ? ` They are counter samples only (${c.counterSamples}) — interface counters, not packet/flow samples.` : '';
+    return { ok: false, text: `Datagrams are arriving (${c.datagrams}) but no flow samples were decoded.${onlyCounters} The exporter is polling counters but not sampling packets — check the sampled interface (hsflowd's NIC) and that hsflowd was built with FEATURES=PCAP.${hs}` };
+  }
   return { ok: true, text: `Flow pipeline healthy — decoded ${c.decodedFlows} flow records from ${c.datagrams} datagrams.${hs}` };
 }
 
@@ -855,6 +858,7 @@ function showDiagnostic(a, d) {
         stat('Listening', c.listening ? 'yes' : 'no'),
         stat('Datagrams', num(c.datagrams)),
         stat('Flows decoded', num(c.decodedFlows)),
+        c.counterSamples != null ? stat('Counter samples', num(c.counterSamples)) : null,
         stat('Buffered', num(c.bufferedFlows)),
         stat('Last datagram', c.lastDatagramAt ? fmtDate(c.lastDatagramAt) : 'never')));
     }

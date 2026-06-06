@@ -91,7 +91,7 @@ function createApiRouter({
   router.use('/me', createMeRouter({ usersRepo }));
   router.use('/locations', createLocationsRouter({ locationsRepo, resultsRepo }));
   router.use('/license', createLicenseRouter({ licenseManager, featureGate }));
-  router.use('/system', createSystemRouter({ systemInfo, agentSourceStore }));
+  router.use('/system', createSystemRouter({ systemInfo, agentSourceStore, releaseStore }));
   if (findingStore) router.use('/api/findings', createFindingsRouter({ findingStore }));
   if (assistant) router.use('/api/assistant', createAssistantRouter({ assistant, featureGate }));
   if (flowsRepo) router.use('/api/geo', createGeoRouter({ flowsRepo, agentsRepo, findingStore, tileConfig: geoTileConfig, getMapConfig, featureGate }));
@@ -116,8 +116,8 @@ function createApiRouter({
 
   // Frictionless enrollment. Public (unauthenticated) source + install-script
   // endpoints under /enroll; the authenticated command generator under /api.
-  if (artifactStore || agentSourceStore) {
-    router.use('/enroll', createEnrollRouter({ artifactStore, sourceStore: agentSourceStore, enrollmentCodesRepo, enrollConfig }));
+  if (artifactStore || agentSourceStore || releaseStore) {
+    router.use('/enroll', createEnrollRouter({ artifactStore, sourceStore: agentSourceStore, releaseStore, enrollmentCodesRepo, enrollConfig }));
     router.use('/api/enroll', createEnrollCommandRouter({ enrollmentCodesRepo, artifactStore, sourceStore: agentSourceStore, enrollConfig }));
   }
 

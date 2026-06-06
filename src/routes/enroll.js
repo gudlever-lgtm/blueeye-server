@@ -27,7 +27,7 @@ function resolveServerUrl(req, enrollConfig) {
 //   GET /enroll/agent-source.tgz    -> the agent source bundle (built + run on the target)
 //   GET /enroll/agent/:platform     -> a pre-built agent binary (legacy; only if published)
 //   GET /enroll/:code/install.sh    -> the one-line installer for that code
-function createEnrollRouter({ artifactStore, sourceStore, enrollmentCodesRepo, enrollConfig = {} }) {
+function createEnrollRouter({ artifactStore, sourceStore, releaseStore, enrollmentCodesRepo, enrollConfig = {} }) {
   const router = express.Router();
   const certFingerprint = enrollConfig.certFingerprint || '';
 
@@ -55,6 +55,36 @@ function createEnrollRouter({ artifactStore, sourceStore, enrollmentCodesRepo, e
     res.setHeader('X-Content-SHA256', meta.sha256);
     res.setHeader('Content-Disposition', `attachment; filename="${meta.filename}"`);
     res.status(200).send(buffer);
+  }));
+
+  // Latest SIGNED agent release — metadata only (JSON), so an agent can learn the
+  // version/sha256/signature to verify against. 404 when no release is published.
+  router.get('/agent-release', asyncHandler(async (req, res) => {
+    const rel = releaseStore && typeof releaseStore.latest === 'function' ? releaseStore.latest() : null;
+    if (!rel) {
+      return res.status(404).json({ error: 'No signed agent release published on this server' });
+    }
+    res.json({ version: rel.version, sha256: rel.sha256, size: rel.size, signature: rel.signature, manifest: rel.manifest });
+  }));
+
+  // Latest SIGNED agent release — the tarball bytes plus verification headers
+  // (version, sha256, Ed25519 signature, base64 manifest). The agent downloads
+  // this and verifies the signature + sha256 BEFORE extracting, so integrity
+  // rests on the signature — hence served unauthenticated, like the source bundle.
+  router.get('/agent-release.tgz', asyncHandler(async (req, res) => {
+    const rel = releaseStore && typeof releaseStore.latest === 'function' ? releaseStore.latest() : null;
+    const full = rel && typeof releaseStore.get === 'function' ? releaseStore.get(rel.version) : null;
+    if (!full || !full.buffer) {
+      return res.status(404).json({ error: 'No signed agent release published on this server' });
+    }
+    res.setHeader('Content-Type', 'application/gzip');
+    res.setHeader('Content-Length', full.size);
+    res.setHeader('X-Content-SHA256', full.sha256);
+    res.setHeader('X-Release-Version', full.version);
+    res.setHeader('X-Release-Signature', full.signature);
+    res.setHeader('X-Release-Manifest', Buffer.from(JSON.stringify(full.manifest)).toString('base64'));
+    res.setHeader('Content-Disposition', `attachment; filename="blueeye-agent-${full.version}.tgz"`);
+    res.status(200).send(full.buffer);
   }));
 
   // The uninstall one-liner: serve the agent's uninstall.sh so an operator can run

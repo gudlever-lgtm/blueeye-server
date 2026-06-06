@@ -168,9 +168,12 @@ function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentComma
   );
 
   // POST /agents/:id/update — ask a connected, systemd-managed agent to rebuild
-  // from the server's source bundle and restart onto the new code. admin only.
-  // The expected SHA-256 of the bundle is sent so the agent verifies what it
-  // downloads. Docker/unmanaged agents decline (the host rebuilds those).
+  // and restart onto the new code. admin only. A signed release (uploaded via
+  // POST /agents/releases) is pushed in preference to the startup-packaged source
+  // bundle: the command then carries the release version + sha256 + Ed25519
+  // signature, which the agent verifies before extracting. Falls back to the
+  // source bundle (sha256 only) when no signed release exists, so existing
+  // deployments keep working. Docker/unmanaged agents decline (host rebuilds).
   router.post(
     '/:id/update',
     requireAuth,
@@ -180,19 +183,20 @@ function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentComma
       if (id === null) return invalidId(res);
       const agent = await agentsRepo.findById(id);
       if (!agent) return notFound(res);
-      if (!agentSourceStore || typeof agentSourceStore.available !== 'function' || !agentSourceStore.available()) {
+
+      const release = releaseStore && typeof releaseStore.latest === 'function' ? releaseStore.latest() : null;
+      const haveSource = agentSourceStore && typeof agentSourceStore.available === 'function' && agentSourceStore.available();
+      if (!release && !haveSource) {
         return res.status(503).json({ error: 'No agent source is published on the server' });
       }
       if (!agentCommander || typeof agentCommander.sendCommandAndWait !== 'function') {
         return res.status(503).json({ error: 'Agent channel not available' });
       }
-      const sha256 = agentSourceStore.sha256;
-      const targetVersion = typeof agentSourceStore.sourceVersion === 'function' ? agentSourceStore.sourceVersion() : null;
-      const out = await agentCommander.sendCommandAndWait(
-        id,
-        { name: 'update', sha256, version: targetVersion },
-        { timeoutMs: 8000 }
-      );
+      const command = release
+        ? { name: 'update', version: release.version, sha256: release.sha256, signature: release.signature }
+        : { name: 'update', sha256: agentSourceStore.sha256, version: (typeof agentSourceStore.sourceVersion === 'function' ? agentSourceStore.sourceVersion() : null) };
+      const targetVersion = command.version;
+      const out = await agentCommander.sendCommandAndWait(id, command, { timeoutMs: 8000 });
       if (out.delivered === 0) {
         return res.status(409).json({ error: 'Agent not connected', connected: false });
       }
@@ -204,6 +208,7 @@ function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentComma
         runtime: reply.runtime || null,
         reason: reply.reason || null,
         targetVersion,
+        signed: !!release,
       });
     })
   );

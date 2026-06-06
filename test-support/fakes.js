@@ -187,7 +187,7 @@ function makeReleaseStore(overrides = {}) {
     has: overrides.has || ((v) => added.some((r) => r.version === v)),
     list: overrides.list || (() => added.slice()),
     latest: overrides.latest || (() => (added.length ? added[added.length - 1] : null)),
-    get: overrides.get || (() => null),
+    get: overrides.get || ((v) => added.find((r) => r.version === v) || null),
     reload: overrides.reload || (() => {}),
   };
 }

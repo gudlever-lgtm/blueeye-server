@@ -408,7 +408,8 @@ const PAGE_INFO = {
       el('ul', {},
         el('li', {}, '”+ New agent” issues a one-time code for installation (operator+) — or use ', viewLink('enrollment'), ' for a ready-to-run one-liner.'),
         el('li', {}, '”Run test” asks the agent to measure immediately; “Traffic” shows the measurements.'),
-        el('li', {}, '”Edit” sets name, location, notes and traffic source (proc, SNMP, NetFlow or sFlow).')),
+        el('li', {}, '”Edit” sets name, location, notes and traffic source (proc, SNMP, NetFlow or sFlow).'),
+        el('li', {}, '”Upgrade” (admin) rebuilds a systemd-managed agent from the server\'s published source and restarts it — always available for a manual re-deploy; it shows as a highlighted “Update” when the agent is behind. Docker/unmanaged agents decline (re-run the host installer).')),
       el('p', { class: 'muted' }, 'Group agents by site under ', viewLink('locations'), '; see them all with a single health verdict on ', viewLink('fleet', 'Overview'), '.'),
     ],
   },
@@ -701,6 +702,7 @@ views.agents = async () => {
 
 // One agent table row (extracted so the agents view can re-render on filter/sort).
 function agentRow(a, currentAgentVersion) {
+  const behind = agentIsBehind(a, currentAgentVersion);
   return el('tr', {},
     el('td', {}, String(a.id)),
     el('td', {}, el('div', {}, a.display_name || a.hostname), a.display_name ? el('div', { class: 'muted' }, a.hostname) : null),
@@ -719,8 +721,17 @@ function agentRow(a, currentAgentVersion) {
       el('button', { class: 'small ghost', onclick: () => showSpeedtest(a), title: 'Active download/upload speed test to the server' }, 'Speed'),
       canWrite() ? el('button', { class: 'small', onclick: () => runTest(a) }, 'Run test') : null,
       canWrite() ? el('button', { class: 'small ghost', onclick: () => editAgent(a) }, 'Edit') : null,
-      (canDelete() && agentIsBehind(a, currentAgentVersion))
-        ? el('button', { class: 'small', onclick: () => updateAgent(a, currentAgentVersion), title: 'Rebuild this agent from the server source and restart it' }, 'Update')
+      canDelete()
+        ? el('button', {
+            // Always available to admins as a manual upgrade link; emphasised
+            // (solid) when the agent is behind the published version, otherwise a
+            // subtle ghost link that re-deploys the current server source.
+            class: behind ? 'small' : 'small ghost',
+            onclick: () => updateAgent(a, currentAgentVersion),
+            title: behind
+              ? `Update this agent to v${currentAgentVersion} — rebuild from the server source and restart`
+              : 'Manually rebuild this agent from the server source and restart it',
+          }, behind ? 'Update' : 'Upgrade')
         : null,
       canDelete() ? el('button', { class: 'small danger', onclick: () => deleteAgent(a) }, 'Delete') : null,
     )),
@@ -821,7 +832,8 @@ async function pingAgent(a) {
 // Docker/unmanaged agents decline (their host rebuilds them) — surface why.
 async function updateAgent(a, target) {
   const name = a.display_name || a.hostname;
-  if (!confirm(`Update ${name} to v${target || '?'}?\n\nThe agent will rebuild from the server's source bundle and restart, briefly interrupting monitoring on that host.`)) return;
+  const verText = target ? `to v${target}` : 'from the server source';
+  if (!confirm(`Update ${name} ${verText}?\n\nThe agent will rebuild from the server's source bundle and restart, briefly interrupting monitoring on that host.`)) return;
   try {
     const r = await api(`/agents/${a.id}/update`, { method: 'POST' });
     if (r.accepted) { toast(`${name}: update sent — rebuilding and restarting.`); return; }
@@ -3480,6 +3492,8 @@ function agentSourceCell(a) {
 function editAgent(a) {
   const mc = a.monitor_config || {};
   const snmp = mc.snmp || {};
+  const sflowHs = (mc.sflow && mc.sflow.hsflowd) || null;
+  const hsObj = sflowHs && typeof sflowHs === 'object' ? sflowHs : {};
   const caps = a.capabilities && Array.isArray(a.capabilities.sources) ? a.capabilities.sources : [];
   // Only offer sources the agent says it supports (fall back to both if unknown).
   const sourceOptions = (caps.length ? caps : ['proc', 'snmp']).map((s) => ({ value: s, label: s }));
@@ -3498,6 +3512,11 @@ function editAgent(a) {
       value: String((mc.netflow && mc.netflow.port) || 2055) },
     { name: 'sflow_port', label: 'sFlow UDP port (only for sflow)', type: 'number',
       value: String((mc.sflow && mc.sflow.port) || 6343) },
+    { name: 'sflow_hsflowd', label: 'Local hsflowd exporter (sflow; native installs — Docker uses the sidecar)', type: 'select',
+      value: sflowHs ? 'on' : 'off',
+      options: [{ value: 'off', label: 'Off (receives sFlow from a switch)' }, { value: 'on', label: 'On (sample this host)' }] },
+    { name: 'sflow_sampling', label: 'hsflowd sampling (1-in-N packets)', type: 'number', value: String(hsObj.samplingRate || 256) },
+    { name: 'sflow_device', label: 'hsflowd interface', value: hsObj.device || 'eth0' },
   ], async (v) => {
     let monitor_config = null;
     if (v.source === 'snmp') {
@@ -3514,7 +3533,15 @@ function editAgent(a) {
     } else if (v.source === 'netflow') {
       monitor_config = { source: 'netflow', netflow: { port: Number(v.netflow_port) || 2055 } };
     } else if (v.source === 'sflow') {
-      monitor_config = { source: 'sflow', sflow: { port: Number(v.sflow_port) || 6343 } };
+      const sflow = { port: Number(v.sflow_port) || 6343 };
+      if (v.sflow_hsflowd === 'on') {
+        const hs = {};
+        const rate = Number(v.sflow_sampling);
+        if (Number.isInteger(rate) && rate > 0) hs.samplingRate = rate;
+        if (v.sflow_device && v.sflow_device.trim()) hs.device = v.sflow_device.trim();
+        sflow.hsflowd = Object.keys(hs).length ? hs : true;
+      }
+      monitor_config = { source: 'sflow', sflow };
     } else if (v.source === 'proc') {
       monitor_config = { source: 'proc' };
     }

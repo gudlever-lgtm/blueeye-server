@@ -79,6 +79,39 @@ function validateMonitorConfig(raw, errors) {
         }
         out.port = n.port;
       }
+      // sflow only: an optional hsflowd block tells the agent to self-provision a
+      // local Host sFlow exporter (apt install + /etc/hsflowd.conf + systemctl),
+      // for hosts with no switch exporting sFlow. `true` (defaults) or options.
+      if (src === 'sflow' && n.hsflowd !== undefined && n.hsflowd !== null && n.hsflowd !== false) {
+        const h = n.hsflowd === true ? {} : n.hsflowd;
+        if (typeof h !== 'object' || Array.isArray(h)) {
+          errors.monitor_config = 'monitor_config.sflow.hsflowd must be a boolean or an object';
+          return undefined;
+        }
+        const hs = {};
+        if (h.samplingRate !== undefined && h.samplingRate !== null) {
+          if (!Number.isInteger(h.samplingRate) || h.samplingRate < 1 || h.samplingRate > 16777216) {
+            errors.monitor_config = 'monitor_config.sflow.hsflowd.samplingRate must be an integer 1-16777216';
+            return undefined;
+          }
+          hs.samplingRate = h.samplingRate;
+        }
+        if (h.pollingSecs !== undefined && h.pollingSecs !== null) {
+          if (!Number.isInteger(h.pollingSecs) || h.pollingSecs < 1 || h.pollingSecs > 86400) {
+            errors.monitor_config = 'monitor_config.sflow.hsflowd.pollingSecs must be an integer 1-86400';
+            return undefined;
+          }
+          hs.pollingSecs = h.pollingSecs;
+        }
+        if (h.device !== undefined && h.device !== null) {
+          if (typeof h.device !== 'string' || !/^[A-Za-z0-9._:-]{1,32}$/.test(h.device)) {
+            errors.monitor_config = 'monitor_config.sflow.hsflowd.device must be a short interface name';
+            return undefined;
+          }
+          hs.device = h.device;
+        }
+        out.hsflowd = Object.keys(hs).length ? hs : true;
+      }
     }
     value[src] = out; // {} is fine — the agent defaults the port (2055 / 6343)
   }

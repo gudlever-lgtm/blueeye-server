@@ -61,8 +61,13 @@ function createSettingsRouter({ settingsService, featureGate, dispatcher, analys
 
   // PUT /api/settings/assistant — AI-assistant enable flag, API key + model
   // (admin). The key is write-only: the response only reports apiKeySet + a
-  // masked hint, never the key itself.
+  // masked hint, never the key itself. License-gated with the same 'assistant'
+  // entitlement as the /api/assistant API, so an admin cannot enable or key a
+  // module the server will refuse to run. Same fail-open-when-unwired shape.
   router.put('/assistant', ...admin, asyncHandler(async (req, res) => {
+    if (featureGate && !featureGate.isFeatureEnabled('assistant')) {
+      return res.status(403).json({ error: 'This feature is not included in your license', feature: 'assistant', reason: 'license' });
+    }
     try {
       res.json({ assistant: await settingsService.setAssistant(req.body || {}) });
     } catch (err) {

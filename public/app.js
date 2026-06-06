@@ -208,6 +208,14 @@ function applyFeatureVisibility() {
     if (!allowed && currentView === b.dataset.view) currentView = 'overview';
   }
 }
+// Synchronous entitlement check against the cached licence features. render()
+// awaits loadFeatures() before any view runs, so the cache is warm. Mirrors
+// applyFeatureVisibility's "allow until we know it's off" rule, so an in-view
+// affordance (e.g. the AI assistant box) is hidden only when the licence
+// explicitly excludes its module — never merely because the cache is cold.
+function featureEnabled(name) {
+  return (licenseFeatures || {})[name] !== false;
+}
 
 // The user's saved preferences (currently just the colour theme). Loaded once
 // per session; the server value wins over the local cache so the chosen theme
@@ -2068,7 +2076,7 @@ views.findings = async () => {
     exportButtons('findings', () => (findingsState.hostId ? { hostId: findingsState.hostId } : {})),
     el('label', { class: 'muted inline' }, 'Host ', hostSelect)));
 
-  root.append(assistantBox(() => findingsState.hostId));
+  if (featureEnabled('assistant')) root.append(assistantBox(() => findingsState.hostId));
 
   const listHost = el('div', {});
   root.append(listHost);
@@ -3708,7 +3716,7 @@ views.locations = async () => {
       el('td', {}, el('div', { class: 'row-actions' },
         el('button', { class: 'small ghost', onclick: () => showLocationTraffic(l) }, 'Traffic'),
         el('button', { class: 'small ghost', onclick: () => showLocationHistory(l) }, 'History'),
-        el('button', { class: 'small ghost', onclick: () => showLocationSummary(l) }, 'AI status'),
+        featureEnabled('assistant') ? el('button', { class: 'small ghost', onclick: () => showLocationSummary(l) }, 'AI status') : null,
         canWrite() ? el('button', { class: 'small ghost', onclick: () => editLocation(l) }, 'Edit') : null,
         canDelete() ? el('button', { class: 'small danger', onclick: () => deleteLocation(l) }, 'Delete') : null)),
     )))));
@@ -4321,8 +4329,13 @@ async function settingsUpdatesView() {
 async function settingsAnalyseView() {
   const data = await api('/api/settings');
   const root = el('div');
+  // The assistant is configurable only when the licence includes it (the PUT is
+  // refused server-side otherwise). An unknown licence (null) keeps the card, in
+  // line with the "allow until we know it's off" rule used elsewhere.
+  const assistantLicensed = !data.license || data.license.assistant !== false;
   root.append(el('p', { class: 'muted settings-intro' }, 'The server learns a normal baseline for each metric and raises a finding when a measurement deviates enough from it. Here you set how sensitive detection is — changes take effect immediately, without restart. The opt-in AI assistant (its on/off switch and API key) is configured here too. ', licenseBadge(data.license, 'analysis')));
-  root.append(el('div', { class: 'settings-grid' }, analyseSettingsCard(data.analysis), throughputSettingsCard(data.throughput), assistantSettingsCard(data.assistant)));
+  root.append(el('div', { class: 'settings-grid' }, analyseSettingsCard(data.analysis), throughputSettingsCard(data.throughput),
+    assistantLicensed ? assistantSettingsCard(data.assistant) : assistantUnlicensedCard(data.license)));
   return root;
 }
 
@@ -4538,6 +4551,15 @@ function assistantSettingsCard(a) {
       el('label', { class: 'set-field' }, el('span', {}, 'Model'), modelI,
         el('span', { class: 'muted small' }, 'Provider model id. Default mistral-small-latest.')),
       note, err, el('div', { class: 'form-actions' }, btn)));
+}
+
+// Read-only placeholder shown instead of the editable AI-assistant card when the
+// licence does not include the assistant feature. The PUT is refused server-side
+// too — this just explains why the controls are gone rather than looking broken.
+function assistantUnlicensedCard(license) {
+  return el('div', { class: 'settings-card' }, el('h3', {}, 'AI assistant'),
+    el('p', { class: 'muted' }, 'The AI assistant is not included in your licence, so it cannot be enabled here. Contact your provider to add it to your licence.'),
+    licenseBadge(license, 'assistant'));
 }
 
 function retentionSettingsCard(r) {

@@ -177,6 +177,21 @@ function makeSourceStore(overrides = {}) {
   };
 }
 
+// A fake signed-release store. Records add() calls so a test can assert what was
+// stored after a verified upload. latest()/get() default to "no releases".
+function makeReleaseStore(overrides = {}) {
+  const added = [];
+  return {
+    added,
+    add: overrides.add || ((r) => { const meta = { ...r, createdAt: new Date().toISOString() }; added.push(meta); return meta; }),
+    has: overrides.has || ((v) => added.some((r) => r.version === v)),
+    list: overrides.list || (() => added.slice()),
+    latest: overrides.latest || (() => (added.length ? added[added.length - 1] : null)),
+    get: overrides.get || (() => null),
+    reload: overrides.reload || (() => {}),
+  };
+}
+
 // A fake db with a ping() used by GET /health.
 function makeDb(overrides = {}) {
   return {
@@ -400,6 +415,8 @@ function makeApp(overrides = {}) {
     testPackagesRepo: overrides.testPackagesRepo || makeTestPackagesRepo(),
     testPackageRunner: overrides.testPackageRunner || makeTestPackageRunner(),
     speedtestResultsRepo: overrides.speedtestResultsRepo || makeSpeedtestResultsRepo(),
+    releaseStore: overrides.releaseStore || makeReleaseStore(),
+    releasePublicKey: overrides.releasePublicKey || '',
     enrollConfig: overrides.enrollConfig || { publicUrl: '', certFingerprint: '' },
     notifyDashboard: overrides.notifyDashboard || (() => 0),
   });
@@ -436,6 +453,7 @@ module.exports = {
   makeEnrollmentStore,
   makeArtifactStore,
   makeSourceStore,
+  makeReleaseStore,
   makeTestPackagesRepo,
   makeTestPackageRunner,
   makeSpeedtestResultsRepo,

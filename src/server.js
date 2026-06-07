@@ -20,7 +20,11 @@ const { attachAgentWebSocket } = require('./ws/agentSocket');
 const { attachDashboardWebSocket } = require('./ws/dashboardSocket');
 const { verifyToken } = require('./auth/jwt');
 const { createLicenseManager } = require('./license/licenseManager');
+const { createLicenseVerifier } = require('./license/licenseVerifier');
+const { createOfflineLicenseManager } = require('./license/offlineLicenseManager');
 const { createFeatureGate } = require('./license/features');
+const { createPlanService } = require('./license/planService');
+const { createUsageService } = require('./services/usageService');
 const { createFileCache } = require('./license/licenseCache');
 const { isConfigured } = require('./license/publicKey');
 const { createSystemInfo } = require('./services/systemInfo');
@@ -93,21 +97,46 @@ function start() {
   const agentReleaseStore = createAgentReleaseStore({ dir: process.env.AGENT_RELEASE_DIR || '', logger: console });
   const releasePublicKey = resolveReleasePublicKey(process.env);
 
-  // Client-side license validation against blueeye-licens. getAgentCount reads
-  // the live WebSocket connection count (agentWs is assigned just below; the
-  // closure is only invoked later, at validation time).
+  // License validation. Two interchangeable backends with the SAME surface:
+  //   - ONLINE  (default): validates a signed proof against blueeye-licens.
+  //   - OFFLINE (LICENSE_FILE set): validates a local signed license file
+  //     entirely on-box — no external server. Invalid/expired → restricted mode.
+  // getAgentCount reads the live WebSocket connection count (agentWs is assigned
+  // just below; the closure is only invoked later, at validation time).
   let agentWs = null;
   let dashboardWs = null;
-  const licenseManager = createLicenseManager({
-    config: config.license,
-    publicKey: config.license.publicKey,
-    cache: createFileCache(config.license.cachePath),
-    logger: console,
-    getAgentCount: () => (agentWs ? agentWs.connectionCount() : 0),
-  });
+  let licenseManager;
+  if (config.license.mode === 'offline') {
+    const verifier = createLicenseVerifier({
+      publicKey: config.license.publicKey,
+      serverId: config.license.serverId,
+    });
+    licenseManager = createOfflineLicenseManager({
+      verifier,
+      filePath: config.license.file,
+      serverId: config.license.serverId,
+      recheckHours: config.license.recheckHours,
+      logger: console,
+    });
+    console.log(`License mode: offline (file=${config.license.file || 'unset'}).`);
+  } else {
+    licenseManager = createLicenseManager({
+      config: config.license,
+      publicKey: config.license.publicKey,
+      cache: createFileCache(config.license.cachePath),
+      logger: console,
+      getAgentCount: () => (agentWs ? agentWs.connectionCount() : 0),
+    });
+  }
 
-  // Feature gate: reads signature-verified license entitlements (fail-closed).
-  const featureGate = createFeatureGate({ licenseManager });
+  // Plan service: resolves the active package (Pilot/Starter/Professional/
+  // Enterprise/MSP) from the signed proof's plan field (or LICENSE_PLAN), and
+  // exposes its limits + packaged feature flags. Additive to the license manager.
+  const planService = createPlanService({ licenseManager, configPlan: config.license.plan });
+
+  // Feature gate: signature-verified module entitlements (fail-closed), now also
+  // OR-ing in the active plan's packaged features (rbac/reports_pdf/api_access…).
+  const featureGate = createFeatureGate({ licenseManager, planService });
 
   // Lets HTTP routes push commands to connected agents over the WebSocket.
   // sendCommandAndWait also awaits the agent's correlated reply (Ping/Update).
@@ -132,6 +161,15 @@ function start() {
   // Pushes a live event to every connected dashboard (assigned below; the
   // closure runs later). Used for enrollment/agent-status feedback in the UI.
   const notifyDashboard = (message) => (dashboardWs ? dashboardWs.broadcast(message) : 0);
+
+  // Usage service: counts agents / active test paths for plan-limit enforcement
+  // and the admin "Usage overview" panel. Wired after its repositories exist.
+  const usageService = createUsageService({
+    agentsRepo,
+    testPackagesRepo,
+    planService,
+    licenseManager,
+  });
 
   // Storage info (disk free/used + database size).
   const systemInfo = createSystemInfo({ db, diskPath: config.storage.diskPath });
@@ -261,6 +299,8 @@ function start() {
     assistant,
     dispatcher,
     featureGate,
+    planService,
+    usageService,
     settingsService,
     analysisConfig,
     retentionConfig,

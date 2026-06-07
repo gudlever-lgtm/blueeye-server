@@ -560,6 +560,12 @@ tr:last-child td { border-bottom: 0; }
 .row-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; align-items: center; }
 .row-actions button.small { min-width: 74px; text-align: center; }
 
+/* License feature matrix: highlight the customer's active plan column; tick
+   marks centre under each plan. .tablewrap lets wide grids scroll on mobile. */
+.tablewrap { overflow-x: auto; }
+table.matrix td:not(:first-child), table.matrix th:not(:first-child) { text-align: center; }
+table.matrix .active { background: var(--accent-weak, rgba(80, 140, 255, .12)); font-weight: 600; }
+
 /* Table filter toolbar (e.g. Agents tab) + sortable column headers. */
 .table-toolbar { display: flex; justify-content: flex-end; margin: 0 0 12px; }
 .table-filter { min-width: 260px; max-width: 360px; }

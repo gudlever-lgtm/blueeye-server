@@ -6,9 +6,10 @@ const { requireAuth, requireRole } = require('../auth/middleware');
 const { ROLES } = require('../auth/roles');
 
 // Settings overview API (admin). Aggregates the effective configuration for the
-// dashboard's Settings page. Most of it is read-only (env-driven); only the
-// map tile source is editable at runtime. Secrets (API keys, passwords, webhook
-// secrets) are never included.
+// dashboard's Settings page. Some of it is read-only (env-driven). Secrets
+// (passwords, webhook secrets) are never included; the AI assistant's API key is
+// editable here but only ever reported as "set or not" + a masked hint, never
+// echoed back in full.
 function createSettingsRouter({ settingsService, featureGate, dispatcher, analysisConfig, retentionConfig }) {
   const router = express.Router();
   const admin = [requireAuth, requireRole(ROLES.ADMIN)];
@@ -22,9 +23,10 @@ function createSettingsRouter({ settingsService, featureGate, dispatcher, analys
         analysisEnabled: a.analysisEnabled, assistantEnabled: a.assistantEnabled,
         critSigma: a.critSigma, warnSigma: a.warnSigma, baselineDays: a.baselineDays, minSamples: a.minSamples,
       },
-      alerting: dispatcher ? dispatcher.describe() : null,
+      alerting: settingsService ? await settingsService.getAlertingSafe() : (dispatcher ? dispatcher.describe() : null),
       retention: settingsService ? await settingsService.getRetention() : (retentionConfig || null),
       throughput: settingsService ? await settingsService.getThroughput() : null,
+      assistant: settingsService ? await settingsService.getAssistantSafe() : null,
       map: settingsService ? await settingsService.getMap() : null,
       flowCategories: settingsService ? await settingsService.getFlowCategories() : null,
       maintenance: settingsService ? await settingsService.getMaintenance() : null,
@@ -51,6 +53,41 @@ function createSettingsRouter({ settingsService, featureGate, dispatcher, analys
   router.put('/analysis', ...admin, asyncHandler(async (req, res) => {
     try {
       res.json({ analysis: await settingsService.setAnalysis(req.body || {}) });
+    } catch (err) {
+      if (err.statusCode === 400) return res.status(400).json({ error: 'Validation failed', details: err.details || {} });
+      throw err;
+    }
+  }));
+
+  // PUT /api/settings/assistant — AI-assistant enable flag, API key + model
+  // (admin). The key is write-only: the response only reports apiKeySet + a
+  // masked hint, never the key itself. License-gated with the same 'assistant'
+  // entitlement as the /api/assistant API, so an admin cannot enable or key a
+  // module the server will refuse to run. Same fail-open-when-unwired shape.
+  router.put('/assistant', ...admin, asyncHandler(async (req, res) => {
+    if (featureGate && !featureGate.isFeatureEnabled('assistant')) {
+      return res.status(403).json({ error: 'This feature is not included in your license', feature: 'assistant', reason: 'license' });
+    }
+    try {
+      res.json({ assistant: await settingsService.setAssistant(req.body || {}) });
+    } catch (err) {
+      if (err.statusCode === 400) return res.status(400).json({ error: 'Validation failed', details: err.details || {} });
+      throw err;
+    }
+  }));
+
+  // PUT /api/settings/alerting — alert channel config (admin). Enable flags,
+  // per-channel minimum severity, recipients/URLs/hosts and the two secrets
+  // (SMTP password + webhook HMAC). The secrets are write-only: the response only
+  // reports *Set + a masked hint, never the value. License-gated with the same
+  // 'alerting' entitlement as the dispatcher, so an admin cannot configure a
+  // channel the server will refuse to dispatch through. Fail-open when unwired.
+  router.put('/alerting', ...admin, asyncHandler(async (req, res) => {
+    if (featureGate && !featureGate.isFeatureEnabled('alerting')) {
+      return res.status(403).json({ error: 'This feature is not included in your license', feature: 'alerting', reason: 'license' });
+    }
+    try {
+      res.json({ alerting: await settingsService.setAlerting(req.body || {}) });
     } catch (err) {
       if (err.statusCode === 400) return res.status(400).json({ error: 'Validation failed', details: err.details || {} });
       throw err;

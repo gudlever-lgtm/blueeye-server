@@ -79,6 +79,39 @@ function validateMonitorConfig(raw, errors) {
         }
         out.port = n.port;
       }
+      // sflow only: an optional hsflowd block tells the agent to self-provision a
+      // local Host sFlow exporter (apt install + /etc/hsflowd.conf + systemctl),
+      // for hosts with no switch exporting sFlow. `true` (defaults) or options.
+      if (src === 'sflow' && n.hsflowd !== undefined && n.hsflowd !== null && n.hsflowd !== false) {
+        const h = n.hsflowd === true ? {} : n.hsflowd;
+        if (typeof h !== 'object' || Array.isArray(h)) {
+          errors.monitor_config = 'monitor_config.sflow.hsflowd must be a boolean or an object';
+          return undefined;
+        }
+        const hs = {};
+        if (h.samplingRate !== undefined && h.samplingRate !== null) {
+          if (!Number.isInteger(h.samplingRate) || h.samplingRate < 1 || h.samplingRate > 16777216) {
+            errors.monitor_config = 'monitor_config.sflow.hsflowd.samplingRate must be an integer 1-16777216';
+            return undefined;
+          }
+          hs.samplingRate = h.samplingRate;
+        }
+        if (h.pollingSecs !== undefined && h.pollingSecs !== null) {
+          if (!Number.isInteger(h.pollingSecs) || h.pollingSecs < 1 || h.pollingSecs > 86400) {
+            errors.monitor_config = 'monitor_config.sflow.hsflowd.pollingSecs must be an integer 1-86400';
+            return undefined;
+          }
+          hs.pollingSecs = h.pollingSecs;
+        }
+        if (h.device !== undefined && h.device !== null) {
+          if (typeof h.device !== 'string' || !/^[A-Za-z0-9._:-]{1,32}$/.test(h.device)) {
+            errors.monitor_config = 'monitor_config.sflow.hsflowd.device must be a short interface name';
+            return undefined;
+          }
+          hs.device = h.device;
+        }
+        out.hsflowd = Object.keys(hs).length ? hs : true;
+      }
     }
     value[src] = out; // {} is fine — the agent defaults the port (2055 / 6343)
   }
@@ -86,8 +119,32 @@ function validateMonitorConfig(raw, errors) {
   return value;
 }
 
+const NIC_MAX = 64; // most hosts have a handful; cap so a bad agent can't bloat it
+const NIC_FIELD_MAX = 256;
+const NIC_FIELDS = ['iface', 'driver', 'driverVersion', 'firmwareVersion', 'busInfo', 'pciId'];
+
+// Normalises the agent-reported NIC inventory (capabilities.nic): a bounded
+// array of objects with short string fields. Anything malformed is dropped
+// rather than rejected, so a single odd entry can't fail the whole report.
+function normalizeNic(list) {
+  const out = [];
+  for (const item of list) {
+    if (out.length >= NIC_MAX) break;
+    if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+    const nic = {};
+    for (const field of NIC_FIELDS) {
+      const v = item[field];
+      if (typeof v === 'string' && v.trim() !== '') nic[field] = v.trim().slice(0, NIC_FIELD_MAX);
+    }
+    if (Object.keys(nic).length > 0) out.push(nic);
+  }
+  return out;
+}
+
 // Validates agent-reported capabilities (lenient: an object with a string
-// `sources` array). Returns the value or undefined (records errors.capabilities).
+// `sources` array). The optional `nic` array (per-interface driver/firmware
+// inventory) is normalised + bounded. Returns the value or undefined (records
+// errors.capabilities).
 function validateCapabilities(raw, errors) {
   if (raw === undefined || raw === null) {
     errors.capabilities = 'capabilities is required';
@@ -101,9 +158,14 @@ function validateCapabilities(raw, errors) {
     errors.capabilities = 'capabilities.sources must be an array of strings';
     return undefined;
   }
+  if (raw.nic !== undefined && raw.nic !== null && !Array.isArray(raw.nic)) {
+    errors.capabilities = 'capabilities.nic must be an array';
+    return undefined;
+  }
+  const value = Array.isArray(raw.nic) ? { ...raw, nic: normalizeNic(raw.nic) } : raw;
   let serialized;
   try {
-    serialized = JSON.stringify(raw);
+    serialized = JSON.stringify(value);
   } catch {
     serialized = undefined;
   }
@@ -111,7 +173,7 @@ function validateCapabilities(raw, errors) {
     errors.capabilities = 'capabilities is not serialisable or is too large';
     return undefined;
   }
-  return raw;
+  return value;
 }
 
 // Validates the server-managed fields of an agent. Only these four fields are

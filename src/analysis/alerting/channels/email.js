@@ -25,10 +25,26 @@ function createSmtpTransport(smtp, logger = silentLogger) {
 }
 
 // Email channel. `transport` is anything with sendMail(message) → Promise (a
-// nodemailer transport in production, a mock in tests).
-function createEmailChannel({ config = {}, transport = null, logger = silentLogger }) {
+// nodemailer transport in production, a mock in tests). Alternatively pass a
+// `createTransport(smtp)` factory: the transport is then built lazily from
+// config.smtp and rebuilt whenever those SMTP settings change, so an admin
+// editing SMTP at runtime takes effect without a restart. An injected
+// `transport` always wins and is never rebuilt (keeps tests deterministic).
+function createEmailChannel({ config = {}, transport = null, createTransport = null, logger = silentLogger }) {
+  let built = null;
+  let builtKey = null;
+  const smtpKey = (s) => (s ? `${s.host}|${s.port}|${s.user}|${s.pass}|${s.secure ? 1 : 0}` : '');
+  function currentTransport() {
+    if (transport) return transport;
+    if (typeof createTransport !== 'function') return null;
+    const key = smtpKey(config.smtp);
+    if (key !== builtKey) { built = createTransport(config.smtp); builtKey = key; }
+    return built;
+  }
+
   async function send(finding, group) {
-    if (!transport || typeof transport.sendMail !== 'function') {
+    const tx = currentTransport();
+    if (!tx || typeof tx.sendMail !== 'function') {
       return { ok: false, detail: 'no mail transport configured' };
     }
     if (!config.to) return { ok: false, detail: 'no recipient configured' };
@@ -46,7 +62,7 @@ function createEmailChannel({ config = {}, transport = null, logger = silentLogg
     ].filter((x) => x != null).join('\n');
 
     try {
-      await transport.sendMail({ from: config.from, to: config.to, subject, text });
+      await tx.sendMail({ from: config.from, to: config.to, subject, text });
     } catch (err) {
       logger.warn(`alerting: email send failed (${err.message})`);
       return { ok: false, detail: `send failed: ${err.message}` };

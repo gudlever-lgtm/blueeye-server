@@ -10,7 +10,10 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 // Status values:
 //   'valid'       — a fresh, signature-verified validation said valid:true
 //   'grace'       — cannot validate now, but a cached valid proof is within grace
-//   'invalid'     — a signature-verified proof said valid:false (e.g. revoked)
+//   'expired'     — a signature-verified proof said valid:false because the
+//                   licence's own validity window lapsed (reason 'expired')
+//   'invalid'     — a signature-verified proof said valid:false for another
+//                   reason (e.g. revoked / suspended / server mismatch)
 //   'unlicensed'  — no usable proof (never validated, or grace expired)
 //   'unknown'     — not validated yet (initial)
 //
@@ -133,10 +136,15 @@ function createLicenseManager({
       cache.write({ payload, signature, verifiedAt: state.verifiedAt });
       logger.info(`License valid (max_agents=${getMaxAgents()}).`);
     } else {
-      // A trusted negative (e.g. suspended/revoked) — deny, do not cache as valid.
-      state.lastError = `invalid:${payload.reason || 'unknown'}`;
-      state.status = 'invalid';
-      logger.error(`License is NOT valid (${payload.reason}); denying agent operations.`);
+      // A trusted negative — deny, do not cache as valid. Distinguish an EXPIRED
+      // licence (its validity window lapsed) from other hard denials (suspended /
+      // revoked / server mismatch / agent-limit) so the dashboard can say
+      // "expired" instead of the catch-all "invalid" — mirroring the offline
+      // manager's status vocabulary.
+      const reason = payload.reason || 'unknown';
+      state.lastError = reason;
+      state.status = reason === 'expired' ? 'expired' : 'invalid';
+      logger.error(`License is NOT valid (${reason}); denying agent operations.`);
     }
     return getStatus();
   }
@@ -160,6 +168,15 @@ function createLicenseManager({
     return f && typeof f === 'object' ? f : {};
   }
 
+  // The packaged plan key carried by the current valid/grace proof (e.g.
+  // 'professional'), or '' when the proof predates the plan model / there is no
+  // usable license. Resolved further by the plan service; never an access token.
+  function getPlan() {
+    if (!isLicensed()) return '';
+    const p = state.payload && state.payload.plan;
+    return typeof p === 'string' ? p : '';
+  }
+
   // Whether a new agent connection is allowed given the current connection count.
   function canAcceptNewConnection(currentConnectionCount) {
     if (!isLicensed()) return false;
@@ -171,9 +188,13 @@ function createLicenseManager({
       status: state.status,
       licensed: isLicensed(),
       maxAgents: getMaxAgents(),
+      plan: getPlan(),
       serverId: config.serverId,
       reason: state.lastError,
       withinGrace: withinGrace(),
+      // The license's own expiry (from the signed proof), distinct from the
+      // offline-grace window below. null = perpetual / no expiry in the proof.
+      validUntil: state.payload && state.payload.expiry ? state.payload.expiry : null,
       verifiedAt: state.verifiedAt ? new Date(state.verifiedAt).toISOString() : null,
       graceUntil: state.verifiedAt ? new Date(state.verifiedAt + graceMs).toISOString() : null,
       lastCheckAt: state.lastCheckAt ? new Date(state.lastCheckAt).toISOString() : null,
@@ -205,6 +226,7 @@ function createLicenseManager({
     stop,
     isLicensed,
     getMaxAgents,
+    getPlan,
     getFeatures,
     canAcceptNewConnection,
     getStatus,

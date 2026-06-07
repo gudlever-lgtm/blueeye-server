@@ -35,9 +35,15 @@ src/
 ├── repositories/      # data access (one per table-ish); pool in, plain objects out
 ├── auth/              # user JWT (roles) + separate agent-token auth
 │   ├── jwt.js password.js roles.js middleware.js   # user side (requireAuth/requireRole)
+│   ├── ldap.js                                      # external LDAP/AD auth (supplements local login)
 │   └── tokens.js agentAuth.js                       # agent opaque-token side
+├── integrations/      # outbound API integrations (ITSM/IPAM connectors)
+│   ├── dispatcher.js  # trigger layer: events → enabled targets (debounce/retry/audit)
+│   ├── httpClient.js  # shared outbound HTTP (injected fetch + timeout)
+│   └── connectors/    # serviceNow.js, nautobot.js, webhook.js + index.js (registry)
 ├── analysis/          # local, explainable anomaly detection (NO ML, NO cloud)
 │   ├── baselines.js detector.js findings.js correlator.js pipeline.js ingest.js
+│   ├── probeFindings.js probePipeline.js  # probe results → findings + alerts
 │   ├── assistant.js  config.js constants.js dependency-graph.json types.js
 │   ├── alerting/      # email/webhook/syslog channels + dispatcher (config.js)
 │   └── retention/     # rollup + purge + nightly scheduler (config.js, repo.js)
@@ -53,13 +59,13 @@ src/
 ├── ws/                # WebSocket servers: agentSocket.js, dashboardSocket.js
 ├── services/          # settings.js, systemInfo.js, enrollmentStore.js
 ├── validation/        # per-resource input validation (pure, { value | errors })
-├── lib/               # csv.js (RFC4180 + injection guard), canonicalize.js
+├── lib/               # csv.js (RFC4180 + injection guard), canonicalize.js, secretBox.js (AES-256-GCM secrets at rest)
 └── middleware/        # asyncHandler.js, errorHandler.js, requestLogger.js
 
 public/                # dependency-free dashboard SPA
 ├── index.html         # shell + top tab bar (data-view buttons)
 ├── app.js             # the whole SPA: views.*, render(), el() DOM helper, api()
-└── styles.css         # light default + [data-theme=dark]; hand-written CSS vars
+└── styles.css         # light default + [data-theme=…] palettes (dark, nord, …); hand-written CSS vars
 
 migrations/NNN_*.sql   # numbered, tracked in schema_migrations (schema.sql = full snapshot)
 docs/                  # per-feature docs (analysis, geo, alerting, retention, ...)
@@ -75,8 +81,9 @@ Mounted in `src/routes/index.js`. User endpoints use JWT + roles
 | Mount | File | Auth | Purpose |
 | --- | --- | --- | --- |
 | `/health` | health.js | none | liveness + db ping |
-| `/auth` | auth.js | none | login → JWT |
+| `/auth` | auth.js | none | login → JWT (tries **LDAP/AD** first when enabled, else local) |
 | `/users` | users.js | admin | user CRUD (last-admin protected) |
+| `/me` | me.js | viewer+ | current user: profile + **personal UI preferences** (colour theme) |
 | `/locations` | locations.js | viewer+/op/admin | sites + per-location live traffic |
 | `/agents` (3 routers) | agents.js · agentReports.js · agentEnroll.js | JWT / agent-token / none | CRUD + run-test + **run-probe**; agent self-report (`/results`, `/probe-results`, `/me/config`, `/me/capabilities`); enroll |
 | `/enrollment-codes` | enrollmentCodes.js | operator+ | enrollment codes (single-use or **bulk / multi-use**) |
@@ -85,17 +92,21 @@ Mounted in `src/routes/index.js`. User endpoints use JWT + roles
 | `/license` | license.js | viewer+ | license status + features |
 | `/system` | system.js | viewer+ | storage/disk/db + ingest estimate |
 | `/api/findings` | findings.js | viewer+ | analysis findings + ack |
-| `/api/assistant` | assistant.js | viewer+ (gated) | opt-in AI explain |
+| `/api/assistant` | assistant.js | viewer+ (gated) | opt-in AI: `/explain` (per-host Q&A) + **`/location-summary`** (per-location "what's going on?") |
 | `/api/geo` | geo.js | gated | geo overview + flow selection |
 | `/api/alerting` | alerting.js | admin | channel config + test |
 | `/api/map` | map.js | viewer+ | effective tile/geocoder config |
-| `/api/settings` | settings.js | admin | editable map / **analysis** / **retention** / **flow-categories** |
+| `/api/settings` | settings.js | admin | editable map / **analysis** / **retention** / **flow-categories** / **AI assistant** (enable + API key + model) / **alerting** (channels + secrets, write-only) |
 | `/api/export` | export.js | viewer+ | CSV/JSON export + **investigation bundle** (`/investigation`: per-agent health+probes+interfaces+findings+flows, JSON or event-log CSV; print→PDF client-side) |
 | `/api/flows` | flows.js | viewer+ | **traffic-type categories** (`/categories`) + **conversation explorer** (`/explore`: talkers/ports/protos/series + scan/fan-out) |
-| `/api/probes` | probes.js | viewer+ | **active-probe** results (ping/tcp/dns/traceroute) |
-| `/api/fleet` | fleet.js | viewer+ | **fleet health** rollup (`/health`) + per-agent verdict (`/agent/:id`) |
+| `/api/probes` | probes.js | viewer+ | **active-probe** results (ping/tcp/dns/traceroute/**http**) |
+| `/api/reports` | reports.js | viewer+ / operator+ | **availability** (uptime % from probes) + **incidents** list (viewer+); **NIS2 draft** (`/nis2-draft/:id`, operator+) |
+| `/api/thresholds` | thresholds.js | viewer+ read / admin write | **incident thresholds** — global defaults + per-location overrides |
+| `/api/fleet` | fleet.js | viewer+ | **fleet health** rollup (`/health`) + per-agent verdict (`/agent/:id`) + **NIC firmware inventory / drift** (`/nics`) |
 | `/api/interfaces` | interfaces.js | viewer+ | **interface health** (util/errors/discards/link) |
 | `/api/search` | search.js | viewer+ | **global search** (agents/hosts/locations + IP/port → agents) |
+| `/api/integrations` | integrations.js | admin | **outbound API integrations** (ITSM/IPAM connectors): CRUD + manual test-fire; credentials encrypted at rest |
+| `/api/ldap` | ldap.js | admin | **LDAP/AD auth** config + group→role map + connectivity test |
 
 ## Data model (MySQL)
 
@@ -111,6 +122,14 @@ Later migrations add:
 | 013 | `app_settings` | runtime-editable settings (key/JSON) |
 | 014 | `probe_results` | active probes |
 | 015 | (index only) | `idx_probe_ts` for the fleet-wide probe scan |
+| 019 | `probe_results.status` / `.cert_expiry_days` | http probe (status + TLS cert expiry) |
+| 020 | (column) | per-user UI preferences — `users.preferences` JSON (colour theme) |
+| 021 | (column) | `agents.enrollment_code_id` → links an agent to the code it enrolled with (Enrollment page shows each code's agents + live status); `ON DELETE SET NULL` |
+| 022 | `agent_action_audit` | server-initiated agent actions (upgrade/delete) |
+| 024 | `incident_thresholds` | incident derivation — per-metric warn/crit + debounce; global default (`location_id` NULL) + per-location override; seeded |
+| 025 | `incidents` | incident derivation — one row per (agent, metric, target) outage; `started_at`/`resolved_at`/`duration_seconds` |
+| 026 / 027 | `integrations` / `integration_audit` | outbound API integrations + per-fire audit (credentials encrypted at rest) |
+| 028 / 029 | `ldap_config` + `ldap_role_map` / `ldap_login_audit` | LDAP/AD auth config + group→role map + login audit (bind password encrypted at rest) |
 
 Interface health, traffic-type categories and **fleet health** add **no** tables — they
 derive from the existing `results.payload.traffic` (and `flow_records.asn` for org
@@ -121,9 +140,12 @@ categories); fleet health is computed in `src/health/probeHealth.js` from `probe
 A single vanilla-JS SPA. Key building blocks:
 - `el(tag, attrs, ...kids)` — DOM helper. `api(path, opts)` — fetch + bearer + 401 handling.
 - `views.<tab>` — async function per tab returning a node (`fleet` (landing),
-  `overview`, `map`, `geo`, `agents`, `interfaces`, `probes`, `flows`, `findings`,
-  `locations`, `enrollment`, `settings`) plus `agent` (the combined per-agent drill-down
-  page, no tab — reached via `openAgent(id)`).
+  `overview`, `map` (UI label **“Sites”** — locations coloured by agent health),
+  `geo` (UI label **“Destinations”** — external traffic by country/ASN),
+  `agents`, `interfaces`, `nics` (NIC firmware inventory + drift), `probes`, `flows`, `findings`, `locations`, `enrollment`,
+  `settings`) plus `agent` (the combined per-agent drill-down page, no tab —
+  reached via `openAgent(id)`). Both maps init via the shared `createLeafletMap`
+  (server-configured EU/self-hosted tiles).
 - `render()` — mounts the current view + its `hero()`; stops per-view pollers
   (`stopOverview`/`stopProbes`/`stopIfaces`/`stopFleet`/`stopAgent`/`stopGeo`) when leaving.
 - Shared renderers `interfaceTable()` / `probeLatestTable()` / `probeDetail()` back both
@@ -132,7 +154,10 @@ A single vanilla-JS SPA. Key building blocks:
 - Charts are hand-rolled SVG: `multiChart` (live, area + time ticks + brush) and
   `historyChart` (time-axis; optional `band` = robust normal-range shading via
   `robustBand`, `markers` = event lines via `findingMarkers`). `usageBar()` for utilisation bars.
-- Theme: light default + dark toggle (localStorage). Mobile: tab bar → bottom nav.
+- Theme: a catalogue of colour palettes (`PALETTES`: default/midnight/nord/forest/sunset/
+  solarized/contrast), each in a **light + dark** variant. Pick a palette in **Settings →
+  Appearance**; the topbar 🌙/☀️ button flips brightness within it (`dual`). **Saved per
+  user** (`/me/preferences`), cached in localStorage for instant apply. Mobile: tab bar → bottom nav.
 
 ## Where do I change…?
 
@@ -141,18 +166,29 @@ A single vanilla-JS SPA. Key building blocks:
 | A new HTTP endpoint | `src/routes/<x>.js` + mount in `routes/index.js` + a fake in `test-support/fakes.js` |
 | A DB table/column | new `migrations/NNN_*.sql` + repository in `src/repositories/` |
 | Anomaly thresholds / detection | `src/analysis/detector.js`, `config.js` (editable via Settings→Analysis) |
-| Alert channels | `src/analysis/alerting/channels/*` + `dispatcher.js` |
+| Alert channels | `src/analysis/alerting/channels/*` + `dispatcher.js`; runtime-editable via Settings→Alerting (`settingsService.getAlerting/setAlerting`, `PUT /api/settings/alerting`, UI `settingsAlertingView` in `public/app.js`) — live-applied onto the running `alertingConfig`, secrets write-only |
 | Maintenance windows / silencing | `src/analysis/alerting/maintenance.js` (`createSilencer`) + dispatcher hook; windows in `settingsService` (`maintenance` key), route `/api/settings/maintenance` |
 | Data retention | `src/analysis/retention/*` (editable via Settings→Retention) |
 | Geo/ASN enrichment | `src/geo/enricher.js`, `provider.js`; flows in `flowsRepository.js` |
 | Traffic-type categories | `src/flows/categories.js` (editable via Settings→Traffic types) |
 | Flow/conversation explorer | `flowsRepository.exploreFlows` + `src/routes/flows.js` (`/explore`); UI `views.flows` |
-| Active probes (server) | `src/routes/probes.js`, `probeResultsRepository.js`, `validation/probeValidation.js` |
+| Active probes (server) | `src/routes/probes.js`, `probeResultsRepository.js`, `validation/probeValidation.js` (probe types incl. `http`) — agent side in blueeye-agent `src/probes/` |
+| Incident derivation (open/resolve) | `src/incidents/detection.js` (pure: threshold + debounce + first-failure/recovery rules), `src/incidents/incidentService.js` (reconciles vs. stored incidents, run on probe-results ingest in `routes/agentReports.js`); `incidentsRepository.js` + `incidentThresholdsRepository.js`. See `docs/incidents.md` |
+| Incident reports / NIS2 draft | `src/routes/reports.js` (availability + incidents + `/nis2-draft/:id`), `src/incidents/nis2.js` (English CFCS template); availability query in `probeResultsRepository.availability` |
+| Incident thresholds | `src/routes/thresholds.js` + `incidentThresholdsRepository.js` (global default vs. per-location override); validation in `validation/incidentValidation.js` |
+| Probe findings + alerting | `src/analysis/probeFindings.js` (verdict→findings, reuses `health/probeHealth.js`) + `probePipeline.js` (runs on probe-results ingest in `routes/agentReports.js`) |
+| AI assistant (explain + location summary) | `src/analysis/assistant.js` (Mistral/EU, opt-in; reads enable/key/model live from the analysis config) + `src/routes/assistant.js`; per-location summary UI = `showLocationSummary` in `public/app.js`. Runtime config (enable + API key + model): `settingsService.getAssistant/setAssistant` (`src/services/settings.js`), `PUT /api/settings/assistant`, UI `assistantSettingsCard` in Settings → Analysis |
 | Fleet health (overview + verdicts) | `src/health/probeHealth.js` (`computeAgentHealth`/`mergeHealth`/`computeFleet`, median+MAD — folds in interface health), `src/routes/fleet.js`; UI `views.fleet`/`views.agent` |
+| NIC firmware inventory / drift | `src/health/nicInventory.js` (`computeNicInventory`, groups by driver+PCI id, flags firmware outliers) from agent-reported `capabilities.nic`; HTTP `GET /api/fleet/nics` in `src/routes/fleet.js`; UI `views.nics` + per-agent NIC card in `views.agent`. Agent side in blueeye-agent `src/nicInfo.js` (`ethtool -i`) |
 | Interface health | `src/health/interfaceHealth.js` (`computeInterfaceHealth`/`interfaceHealthSummary`); HTTP in `src/routes/interfaces.js` — agent side in blueeye-agent |
 | Agent data-quality (drops/skew/version) | `src/health/dataQuality.js` (`computeDataQuality`); surfaced via `/api/fleet/health` + `/api/fleet/agent/:id` — all signals already sent by the agent |
 | A dashboard tab/view | `public/index.html` (button) + `views.<x>` in `public/app.js` + `PAGE_INFO` |
-| License / feature gating | `src/license/*` (`features.js` = fail-closed gate) |
+| A dashboard colour palette (light+dark) | `PALETTES` + paired `[data-theme=…]` blocks in `public/styles.css`; picker `settingsAppearanceView` in `public/app.js`; per-user persistence via `/me` (`src/routes/me.js`, `usersRepository.get/updatePreferences`) + key whitelist in `src/validation/preferencesValidation.js` |
+| License / feature gating | `src/license/*` (`features.js` = fail-closed gate; `plans.js` = plan/feature catalogue; `planService.js` = active-plan resolution + limits) + `src/services/usageService.js` (limit enforcement). Read-only API: `/license/plan`, `/license/usage`, `/license/matrix`. See `docs/licensing.md`. |
+| Offline (no-server) licensing | `src/license/licenseVerifier.js` (verifies a local signed file, Ed25519) + `offlineLicenseManager.js` (same surface as the online manager; restricted mode when invalid/expired). Selected by `LICENSE_MODE=offline`/`LICENSE_FILE` in `src/server.js`. Issue files with `scripts/sign-offline-license.js`. |
+| Outbound integrations (ITSM/IPAM) | connectors in `src/integrations/connectors/*` (+ `index.js` registry); trigger/debounce/retry/audit in `src/integrations/dispatcher.js`; HTTP in `src/routes/integrations.js`; validation in `src/validation/integrationValidation.js`; tables `integrations`/`integration_audit` (migrations 026/027). Events wired in `analysis/pipeline.js` + `probePipeline.js` (findings) and the enroll/agent-delete routes. See docs/integrations.md |
+| LDAP/AD authentication | `src/auth/ldap.js` (bind + group→role); login flow in `src/routes/auth.js`; config CRUD in `src/routes/ldap.js`; validation in `src/validation/ldapValidation.js`; tables `ldap_config`/`ldap_role_map`/`ldap_login_audit` (migrations 028/029); gate `LDAP_AUTH_ENABLED`. See docs/ldap-auth.md |
+| Encrypting a secret at rest | `src/lib/secretBox.js` (AES-256-GCM, keyed by `SECRET_ENCRYPTION_KEY`→`JWT_SECRET`); store the token in a `*_encrypted` column, decrypt only at use |
 
 ## Conventions
 

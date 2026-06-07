@@ -8,22 +8,73 @@ const THEME_KEY = 'blueeye.server.theme';
 
 const $ = (sel) => document.querySelector(sel);
 
-// Theme (light default, dark opt-in), persisted across sessions.
+// Colour palettes — each comes in a light and a dark variant. The picker
+// (Settings → Appearance) selects a palette; the topbar 🌙/☀️ button switches
+// brightness within it. Each variant's `key` matches a [data-theme="…"] block in
+// styles.css and is whitelisted server-side (preferencesValidation.js); `swatch`
+// is [bg, panel, accent, text] for the preview. Keep all three in sync.
+const PALETTES = [
+  { key: 'default', label: 'Default', light: { key: 'light', swatch: ['#f1f5f9', '#ffffff', '#0284c7', '#0f172a'] }, dark: { key: 'dark', swatch: ['#0f172a', '#1e293b', '#38bdf8', '#e2e8f0'] } },
+  { key: 'midnight', label: 'Midnight', light: { key: 'midnight-light', swatch: ['#eef0fb', '#ffffff', '#5b5bd6', '#181a2e'] }, dark: { key: 'midnight', swatch: ['#0a0a12', '#14141f', '#818cf8', '#e6e6f2'] } },
+  { key: 'nord', label: 'Nord', light: { key: 'nord-light', swatch: ['#e5e9f0', '#eceff4', '#5e81ac', '#2e3440'] }, dark: { key: 'nord', swatch: ['#2e3440', '#3b4252', '#88c0d0', '#eceff4'] } },
+  { key: 'forest', label: 'Forest', light: { key: 'forest-light', swatch: ['#eef4ee', '#ffffff', '#1f9d57', '#14241a'] }, dark: { key: 'forest', swatch: ['#0c1410', '#14201a', '#34d399', '#d7e6dc'] } },
+  { key: 'sunset', label: 'Sunset', light: { key: 'sunset-light', swatch: ['#fbeef4', '#fffafc', '#d6438a', '#2a1320'] }, dark: { key: 'sunset', swatch: ['#1a1320', '#251a2e', '#f472b6', '#f1e7f2'] } },
+  { key: 'solarized', label: 'Solarized', light: { key: 'solarized-light', swatch: ['#eee8d5', '#fdf6e3', '#268bd2', '#586e75'] }, dark: { key: 'solarized-dark', swatch: ['#002b36', '#073642', '#268bd2', '#93a1a1'] } },
+  { key: 'contrast', label: 'High contrast', light: { key: 'contrast-light', swatch: ['#ffffff', '#ffffff', '#0040d0', '#000000'] }, dark: { key: 'contrast', swatch: ['#000000', '#0a0a0a', '#ffd400', '#ffffff'] } },
+];
+// Flatten to per-variant metadata keyed by the data-theme value. Each variant
+// knows its family, its palette, and its opposite-brightness counterpart (dual).
+const THEMES = PALETTES.flatMap((p) => [
+  { key: p.light.key, family: 'light', dual: p.dark.key, palette: p.key, label: `${p.label} light`, swatch: p.light.swatch },
+  { key: p.dark.key, family: 'dark', dual: p.light.key, palette: p.key, label: `${p.label} dark`, swatch: p.dark.swatch },
+]);
+const THEME_KEYS = THEMES.map((t) => t.key);
+const themeMeta = (key) => THEMES.find((t) => t.key === key) || THEMES[0];
+const paletteOf = (key) => themeMeta(key).palette;
 
+// The theme is applied instantly from a local cache (no flash on load), then
+// reconciled with the per-user value saved on the server (see loadProfile).
 function applyTheme(theme) {
-  const t = theme === 'dark' ? 'dark' : 'light';
+  const t = THEME_KEYS.includes(theme) ? theme : 'dark';
   document.documentElement.dataset.theme = t;
   const btn = document.querySelector('#theme');
-  if (btn) { btn.textContent = t === 'dark' ? '☀️' : '🌙'; }
+  if (btn) {
+    const isDark = themeMeta(t).family === 'dark';
+    btn.textContent = isDark ? '☀️' : '🌙';
+    btn.title = isDark ? 'Switch to light mode' : 'Switch to dark mode';
+  }
+}
+function cachedTheme() {
+  // Default to the dark enterprise palette; a user's saved/cached choice wins.
+  try { return localStorage.getItem(THEME_KEY) || 'dark'; } catch { return 'dark'; }
+}
+// Set once the user explicitly picks a theme (topbar toggle or Settings →
+// Appearance). It makes that choice win over loadProfile()'s one-time server
+// reconcile, which would otherwise override a fresh toggle with the previously
+// saved value if /me is still in flight when the user clicks.
+let themeUserChoice = false;
+// Apply + cache a theme locally, and persist it to the signed-in user's account
+// (so it follows them to any browser). Returns the save promise for callers that
+// want to surface success/failure; the local apply always happens immediately.
+function setTheme(theme, { persist = true } = {}) {
+  const t = THEME_KEYS.includes(theme) ? theme : 'dark';
+  if (persist) themeUserChoice = true;
+  applyTheme(t);
+  try { localStorage.setItem(THEME_KEY, t); } catch { /* storage off */ }
+  if (persist && token) {
+    return api('/me/preferences', { method: 'PUT', body: { theme: t } });
+  }
+  return Promise.resolve();
 }
 function initTheme() {
-  applyTheme(localStorage.getItem(THEME_KEY) || 'light');
+  applyTheme(cachedTheme());
   const btn = document.querySelector('#theme');
   if (btn) {
+    // Light/dark toggle: flip to the same palette's opposite-brightness variant,
+    // so brightness changes while your chosen colour palette is preserved.
     btn.addEventListener('click', () => {
-      const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
-      localStorage.setItem(THEME_KEY, next);
-      applyTheme(next);
+      setTheme(themeMeta(document.documentElement.dataset.theme).dual)
+        .catch(() => { /* keep the local change even if the save fails */ });
     });
   }
 }
@@ -158,10 +209,38 @@ function applyFeatureVisibility() {
     if (!allowed && currentView === b.dataset.view) currentView = 'overview';
   }
 }
+// Synchronous entitlement check against the cached licence features. render()
+// awaits loadFeatures() before any view runs, so the cache is warm. Mirrors
+// applyFeatureVisibility's "allow until we know it's off" rule, so an in-view
+// affordance (e.g. the AI assistant box) is hidden only when the licence
+// explicitly excludes its module — never merely because the cache is cold.
+function featureEnabled(name) {
+  return (licenseFeatures || {})[name] !== false;
+}
+
+// The user's saved preferences (currently just the colour theme). Loaded once
+// per session; the server value wins over the local cache so the chosen theme
+// follows the user across browsers. Best-effort — a failure keeps the cache.
+let profileLoaded = false;
+async function loadProfile() {
+  if (profileLoaded) return;
+  profileLoaded = true;
+  try {
+    const me = await api('/me');
+    const theme = me && me.preferences && me.preferences.theme;
+    // Skip if the user already chose a theme this session (e.g. toggled while
+    // this request was in flight) — their deliberate choice must win.
+    if (!themeUserChoice && theme && THEME_KEYS.includes(theme)) {
+      applyTheme(theme);
+      try { localStorage.setItem(THEME_KEY, theme); } catch { /* storage off */ }
+    }
+  } catch { /* keep the cached theme */ }
+}
 
 function logout() {
   disconnectLive();
   invalidateFeatures();
+  profileLoaded = false;
   token = null;
   email = '';
   localStorage.removeItem(TOKEN_KEY);
@@ -210,12 +289,36 @@ function closeModal() { $('#modal').classList.add('hidden'); $('#modal-card').cl
 // ---- Per-page explanation (hero + slide-in info drawer) -------------------
 // Each view starts with a short hero line and a “More info” button that slides
 // in a panel from the right with a fuller explanation.
+
+// Cross-links used inside the info drawers. A help entry can point at the page
+// that actually owns a feature it mentions: the link closes the drawer and
+// switches to that view (or Settings sub-tab), exactly like clicking the tab.
+// Labels mirror the top nav. A link whose target tab is hidden (licence/role)
+// degrades to plain text, so the help never offers a dead end.
+const VIEW_LABELS = {
+  fleet: 'Overview', overview: 'Traffic', map: 'Sites', geo: 'Destinations', agents: 'Agents',
+  interfaces: 'Interfaces', probes: 'Probes', tests: 'Tests', flows: 'Flows',
+  findings: 'Analysis', locations: 'Locations', enrollment: 'Enrollment', settings: 'Settings',
+};
+function gotoView(viewKey) { closeDrawer(); currentView = viewKey; render(); }
+function viewLink(viewKey, label) {
+  const text = label || VIEW_LABELS[viewKey] || viewKey;
+  const tab = document.querySelector(`.tabs button[data-view="${viewKey}"]`);
+  if (tab && tab.classList.contains('hidden')) return document.createTextNode(text);
+  return el('a', { href: '#', class: 'drawer-link', onclick: (e) => { e.preventDefault(); gotoView(viewKey); } }, text);
+}
+// Deep-link into a specific Settings sub-tab (Analysis, Retention, Traffic types…).
+function settingsLink(tab, label) {
+  return el('a', { href: '#', class: 'drawer-link',
+    onclick: (e) => { e.preventDefault(); closeDrawer(); settingsTab = tab; currentView = 'settings'; render(); } }, label);
+}
+
 const PAGE_INFO = {
   tests: {
     hero: 'Reusable test packages — sets of probe/traffic tests the server pushes to chosen agents to run, on a schedule or on demand.',
     title: 'Tests — packages pushed to agents',
     body: () => [
-      el('p', {}, 'A test package is a named set of tests (ping / TCP / DNS / traceroute / throughput) with a target selector and an optional schedule. The server pushes the tests to the selected, connected agents; each agent runs them and reports back — results appear on the Probes and Traffic pages as usual.'),
+      el('p', {}, 'A test package is a named set of tests (ping / TCP / DNS / traceroute / throughput) with a target selector and an optional schedule. The server pushes the tests to the selected, connected agents; each agent runs them and reports back — results appear on the ', viewLink('probes'), ' and ', viewLink('overview', 'Traffic'), ' pages as usual.'),
       el('h4', {}, 'Targets'),
       el('ul', {},
         el('li', {}, el('strong', {}, 'All agents '), '— every enrolled agent.'),
@@ -232,7 +335,7 @@ const PAGE_INFO = {
     hero: 'All agents in one view — with a health assessment based on active reachability, packet loss, latency and jitter.',
     title: 'Overview — fleet health',
     body: () => [
-      el('p', {}, 'The landing page collects all agents with a single health stamp, so you immediately see where something is wrong. Rows are sorted worst-first and refresh continuously. Click an agent to drill into its measurements.'),
+      el('p', {}, 'The landing page collects all agents with a single health stamp, so you immediately see where something is wrong. Rows are sorted worst-first and refresh continuously. Click an agent to drill into its measurements, or click a count chip (Healthy, Critical, …) to filter the list to just those agents.'),
       el('h4', {}, 'Two independent verdicts'),
       el('ul', {},
         el('li', {}, el('strong', {}, 'Health '), '— is the monitored network OK right now? Driven by active reachability, loss, latency, jitter and interface/link state.'),
@@ -251,7 +354,9 @@ const PAGE_INFO = {
         el('li', {}, el('strong', {}, 'DOWN: '), 'no probe targets respond at all.'),
         el('li', {}, el('strong', {}, 'STALE: '), 'no fresh measurements (> 15 min).'),
         el('li', {}, el('strong', {}, 'UNKNOWN: '), 'agent has not run any probe yet.')),
-      el('p', { class: 'muted' }, 'Health is based on active probes — run a few probes per agent (on the agent page) for a complete picture. Metadata only: targets and timings, never packet contents.'),
+      el('h4', {}, 'KPI strip & network path'),
+      el('p', {}, 'Above the list, a strip of live KPIs (latency, loss, jitter, active agents, monitored paths, alerts) and a network-path diagram (HQ → ISP → Cloud → SaaS, with a branch feeding the uplink) summarise the fleet at a glance. The diagram\'s topology is illustrative, but each segment\'s colour and the loss/latency figures are live — a hop turns amber when loss, jitter or a critical agent says so. Both summarise ', el('strong', {}, 'all'), ' agents by default; use the ', el('strong', {}, 'Location'), ' selector to scope the KPIs and the path to a single site.'),
+      el('p', { class: 'muted' }, 'Health is based on active probes — run a few per agent on ', viewLink('probes'), ' (or schedule them fleet-wide via ', viewLink('tests'), ') for a complete picture; the interface signal comes from ', viewLink('interfaces'), '. Metadata only: targets and timings, never packet contents.'),
     ],
   },
   agent: {
@@ -268,7 +373,7 @@ const PAGE_INFO = {
         el('li', {}, el('strong', {}, 'Probes: '), 'run ping/TCP/DNS/traceroute against a target and see RTT/loss/jitter — click “History” for RTT over time or “Path” for traceroute hops.'),
         el('li', {}, el('strong', {}, 'Interfaces: '), 'per-interface utilization, errors, discards and link status from the latest measurement. A virtual/idle port that is simply down (docker0, veth…, tunnels) shows a neutral IDLE — only a real link down reads DOWN.'),
         el('li', {}, el('strong', {}, 'Traffic: '), 'current bandwidth — most useful here when you are already investigating a specific agent.')),
-      el('p', { class: 'muted' }, 'Return to the fleet overview with “← Overview”.'),
+      el('p', { class: 'muted' }, 'Return to the fleet overview with “← Overview”. Fleet-wide views of the same data sources: ', viewLink('probes'), ' · ', viewLink('interfaces'), ' · ', viewLink('overview', 'Traffic'), '.'),
     ],
   },
   overview: {
@@ -287,15 +392,17 @@ const PAGE_INFO = {
       el('ul', {},
         el('li', {}, 'KPI strip at the top: current RX/TX, online agents and number of locations.'),
         el('li', {}, 'The storage line shows disk usage + estimated consumption per day (“Details” expands the DB/disk breakdown).'),
-        el('li', {}, 'At the bottom you can expand Top agents, History (select agent + period) and Traffic type (DNS, Facebook etc.).')),
+        el('li', {}, 'At the bottom you can expand Top agents, History (select agent + period) and Traffic type (DNS, Facebook etc.) — those categories are defined under ', settingsLink('types', 'Settings → Traffic types'), '.')),
+      el('p', { class: 'muted' }, 'Related views: ', viewLink('geo'), ' (where the traffic goes on a map) and ', viewLink('flows'), ' (individual conversations).'),
     ],
   },
   map: {
-    hero: 'Geographic overview of locations and their agents.',
-    title: 'Map',
+    hero: 'Your sites on a map — each marker coloured by the worst agent health at that site.',
+    title: 'Sites',
     body: () => [
-      el('p', {}, 'Locations with coordinates (latitude/longitude) are shown as markers. Click a marker to see the number of agents and how many are online.'),
-      el('p', { class: 'muted' }, 'Add coordinates per location under the Locations tab (Edit). If the map is missing, the library could not be reached — a list is shown instead.'),
+      el('p', {}, 'Each location with coordinates is a marker, coloured by the worst health verdict among its agents (green = healthy, amber = warning, red = critical, grey = unknown/offline) — the same verdict as ', viewLink('fleet', 'Overview'), '. The page refreshes itself so the colours stay live.'),
+      el('p', {}, 'Click a marker for the site\'s agents and how many are online; click an agent in the popup to open it.'),
+      el('p', { class: 'muted' }, 'Add coordinates per location under ', viewLink('locations'), ' (Edit). Map tiles come from the server\'s configured (EU/self-hosted) source. If the map is missing, the library could not be reached — a list is shown instead.'),
     ],
   },
   agents: {
@@ -310,9 +417,11 @@ const PAGE_INFO = {
         el('li', {}, 'Last reported: the time of the agent\'s most recent traffic measurement.')),
       el('h4', {}, 'Actions'),
       el('ul', {},
-        el('li', {}, '”+ New agent” issues a one-time code for installation (operator+).'),
+        el('li', {}, '”+ New agent” issues a one-time code for installation (operator+) — or use ', viewLink('enrollment'), ' for a ready-to-run one-liner.'),
         el('li', {}, '”Run test” asks the agent to measure immediately; “Traffic” shows the measurements.'),
-        el('li', {}, '”Edit” sets name, location, notes and traffic source (proc, SNMP, NetFlow or sFlow).')),
+        el('li', {}, '”Edit” sets name, location, notes and traffic source (proc, SNMP, NetFlow or sFlow).'),
+        el('li', {}, '”Upgrade” (admin) rebuilds a systemd-managed agent from the server\'s published source and restarts it — always available for a manual re-deploy; it shows as a highlighted “Update” when the agent is behind. Docker/unmanaged agents decline (re-run the host installer).')),
+      el('p', { class: 'muted' }, 'Group agents by site under ', viewLink('locations'), '; see them all with a single health verdict on ', viewLink('fleet', 'Overview'), '.'),
     ],
   },
   interfaces: {
@@ -325,7 +434,23 @@ const PAGE_INFO = {
         el('li', {}, el('strong', {}, 'Status: '), 'DOWN (a real link is down), ERR (input/output errors or ≥90% utilized), WARN (discards or ≥75% utilized), IDLE (a virtual/idle port — docker0, veth…, VPN tunnels — that is down only because nothing is using it, which is normal), OK.'),
         el('li', {}, el('strong', {}, 'Utilization: '), 'rate against link speed (only when speed is known).'),
         el('li', {}, el('strong', {}, 'Errors/s and Discards/s: '), 'CRC/input errors and dropped packets (congestion) respectively.')),
-      el('p', { class: 'muted' }, 'Data comes from the agent\'s traffic source: /proc/net/dev (host) or SNMP IF-MIB (device). Errors/discards/link status require an updated agent. An IDLE virtual interface never escalates an agent to CRITICAL — only a real link going down does.'),
+      el('p', { class: 'muted' }, 'Data comes from the agent\'s traffic source: /proc/net/dev (host) or SNMP IF-MIB (device). Errors/discards/link status require an updated agent. An IDLE virtual interface never escalates an agent to CRITICAL — only a real link going down does. Interface state also feeds the health verdict on ', viewLink('fleet', 'Overview'), '.'),
+    ],
+  },
+  nics: {
+    hero: 'NIC driver & firmware inventory across the fleet — with automatic firmware-drift detection.',
+    title: 'NICs — firmware drift',
+    body: () => [
+      el('p', {}, 'Each Linux agent reports its physical network cards (driver, driver version, firmware version, bus) using ', el('code', {}, 'ethtool -i'), '. This page groups identical NIC models across all agents and highlights when units that should be identical are running ', el('strong', {}, 'different firmware'), ' — the classic “out of 50 access points, 3 are on an odd firmware and only those misbehave” situation.'),
+      el('h4', {}, 'Firmware drift'),
+      el('ul', {},
+        el('li', {}, el('strong', {}, 'Majority '), '— the firmware most units of a model run; treated as the baseline.'),
+        el('li', {}, el('strong', {}, 'Outlier '), '— any unit on a different firmware than the majority of the same model. Click a unit to open its agent page.')),
+      el('h4', {}, 'Group by'),
+      el('ul', {},
+        el('li', {}, el('strong', {}, 'Models '), '— aggregate identical NICs across the fleet, drift first. Best for spotting firmware mismatches.'),
+        el('li', {}, el('strong', {}, 'Agents '), '— list every agent reporting NIC data with its per-interface specs (driver, driver version, firmware, bus).')),
+      el('p', { class: 'muted' }, 'Models are keyed by driver + PCI/USB id, so a Wi-Fi card is never compared against an Ethernet NIC. Metadata only — driver/firmware strings and hardware ids, never MAC or payload. Needs an agent new enough to collect NIC info on a Linux host; older agents simply show nothing here. Per-agent details are also on the ', viewLink('agents', 'agent'), ' page.'),
     ],
   },
   probes: {
@@ -340,14 +465,14 @@ const PAGE_INFO = {
         el('li', {}, 'DNS: time to resolve a name (and which address was returned).'),
         el('li', {}, 'Traceroute: the path (hops) to the target with RTT per hop.')),
       el('p', {}, 'Select agent + type + target and click “Run probe”. The agent must be connected; the result comes back a moment later and is added to the history so you can see RTT/loss over time.'),
-      el('p', { class: 'muted' }, 'Metadata only: targets and timings — never packet contents.'),
+      el('p', { class: 'muted' }, 'To run the same probes on a schedule across many agents, use ', viewLink('tests'), '; probe results also drive the health verdict on ', viewLink('fleet', 'Overview'), '. Metadata only: targets and timings — never packet contents.'),
     ],
   },
   flows: {
     hero: 'Inspect specific conversations (flows): who talks to whom, on which ports — and who is scanning.',
     title: 'Flows — conversations',
     body: () => [
-      el('p', {}, 'While Traffic shows volumes and Geo shows destinations on a map, Flows lets you drill into individual conversations (5-tuple metadata from NetFlow/sFlow) for one agent.'),
+      el('p', {}, 'While ', viewLink('overview', 'Traffic'), ' shows volumes and the ', viewLink('geo', 'Destinations'), ' map shows where it goes, Flows lets you drill into individual conversations (5-tuple metadata from NetFlow/sFlow) for one agent.'),
       el('h4', {}, 'Filters'),
       el('ul', {},
         el('li', {}, 'Peer: show only conversations where a specific IP is source or destination (click a talker to set it).'),
@@ -362,20 +487,25 @@ const PAGE_INFO = {
     ],
   },
   geo: {
-    hero: 'Geographic overview: internal sites and external traffic destinations (country/ASN).',
-    title: 'Geo map',
+    hero: 'Where your traffic goes: internal sites and external destinations (country/ASN) on a map.',
+    title: 'Destinations',
     body: () => [
       el('p', {}, 'Internal hosts are shown based on their site coordinates (set per location) — never via GeoIP. External destinations are aggregated per country/ASN from GeoIP-enriched flows; private/RFC1918 addresses are never shown as geo points.'),
+      el('p', { class: 'muted' }, 'This is the traffic-destination map. For just your sites and their health, see the ', el('strong', {}, 'Sites'), ' tab.'),
       el('h4', {}, 'Markers'),
       el('ul', {},
-        el('li', {}, 'Pins = internal sites (click for status + findings).'),
+        el('li', {}, 'Ringed dots = internal sites, coloured by agent health (green/amber/red); click for status + findings.'),
         el('li', {}, 'Circles = external destinations; size by traffic volume, colour by deviation (neutral → yellow → red).')),
-      el('h4', {}, 'Selection'),
+      el('h4', {}, 'Get an external destination'),
+      el('ol', {},
+        el('li', {}, 'Click a circle on the map — or press ', el('strong', {}, '“Select region”'), ' and drag a box to aggregate every destination in an area.'),
+        el('li', {}, 'The side panel then shows that destination\'s breakdown: bytes/flows, direction (in/out), protocol and ASN, plus any related findings.'),
+        el('li', {}, 'To see the individual conversations behind it (per-peer 5-tuple, ports, scans/fan-out), open ', viewLink('flows'), '.')),
+      el('h4', {}, 'Selection buttons'),
       el('ul', {},
-        el('li', {}, 'Click a destination: see findings + flow details (peers, direction, protocol, time series).'),
-        el('li', {}, '”Select area” and drag a box to aggregate all destinations in the area.'),
-        el('li', {}, '”Clear selection” returns to the overview.')),
-      el('p', { class: 'muted' }, 'Map tiles are fetched from the server\'s config (EU/self-hosted), not a hardcoded US source.'),
+        el('li', {}, el('strong', {}, '“Select region” '), '— drag a box to aggregate all destinations inside it (with combined findings).'),
+        el('li', {}, el('strong', {}, '“Clear selection” '), '— return to the overview summary.')),
+      el('p', { class: 'muted' }, 'Map tiles are fetched from the server\'s config (EU/self-hosted), not a hardcoded US source. Destinations come from the same NetFlow/sFlow flows you drill into on ', viewLink('flows'), '; volumes by type are on ', viewLink('overview', 'Traffic'), '.'),
     ],
   },
   findings: {
@@ -385,13 +515,13 @@ const PAGE_INFO = {
       el('p', {}, 'The server analyses agent measurements locally (no cloud, no ML library) and raises a finding when a metric deviates significantly from its own baseline, flatlines (sensor/agent stop) or correlates with other errors.'),
       el('h4', {}, 'Severity'),
       el('ul', {},
-        el('li', {}, 'CRIT: large deviation (default ≥ 4σ — adjustable in Settings → Analysis).'),
+        el('li', {}, 'CRIT: large deviation (default ≥ 4σ — adjustable in ', settingsLink('analyse', 'Settings → Analysis'), ').'),
         el('li', {}, 'WARN: notable deviation (default ≥ 3σ) or flatline.'),
         el('li', {}, 'INFO: lower severity.')),
       el('h4', {}, 'Acknowledgement'),
       el('p', {}, 'Operators and administrators can acknowledge a finding once it has been seen/handled.'),
       el('h4', {}, 'AI assistant'),
-      el('p', {}, 'If enabled (opt-in) you can ask in natural language — the assistant replies based on the latest findings, not raw data.'),
+      el('p', {}, 'If enabled (opt-in) you can ask in natural language — the assistant replies based on the latest findings, not raw data. Turn it on and pick the model under ', settingsLink('analyse', 'Settings → Analysis'), '.'),
       el('p', { class: 'muted' }, 'New findings appear live via WebSocket and can also be fetched via REST.'),
     ],
   },
@@ -402,6 +532,7 @@ const PAGE_INFO = {
       el('p', {}, 'A location groups multiple agents (e.g. an office or a site).'),
       el('h4', {}, 'Live traffic'),
       el('p', {}, '”Traffic” opens a live panel that sums all agent traffic in the location and updates every 3 seconds — useful for seeing overall load and spotting problems.'),
+      el('p', { class: 'muted' }, 'Give a location coordinates here to place it on the ', viewLink('map', 'Sites map'), '; the fleet-wide live picture is on ', viewLink('overview', 'Traffic'), '.'),
     ],
   },
   enrollment: {
@@ -420,7 +551,13 @@ const PAGE_INFO = {
         el('li', {}, 'The source bundle is always verified against the checksum before building or running.'),
         el('li', {}, 'The cert fingerprint is pinned on the agent (when the server runs behind TLS).')),
       el('p', { class: 'muted' }, 'The agent is built + run on the target (Docker or Node) — no pre-built binaries. Also works on air-gapped networks: the source is served from the BlueEye server itself.'),
-      el('p', { class: 'muted' }, 'Status: active (usable), used (used up), expired (expired).'),
+      el('h4', {}, 'Code status vs. the agent'),
+      el('ul', {},
+        el('li', {}, el('strong', {}, 'active: '), 'still usable — has uses left and has not expired.'),
+        el('li', {}, el('strong', {}, 'used: '), 'fully redeemed — an agent enrolled with it. Shown for a consumed code even after its time runs out.'),
+        el('li', {}, el('strong', {}, 'expired: '), 'ran out of time WITHOUT being used up.')),
+      el('p', { class: 'muted' }, 'The code only opens the install window. Each agent it enrols gets its own permanent token that stays valid until the agent is deleted (or its token revoked) — so an agent stays online regardless of whether its code later reads "used" or "expired". The Agents column shows each enrolled agent’s live online/offline state; click one to open it.'),
+      el('p', { class: 'muted' }, 'Once enrolled, agents appear under ', viewLink('agents'), ' and on ', viewLink('fleet', 'Overview'), '.'),
     ],
   },
   users: {
@@ -433,6 +570,7 @@ const PAGE_INFO = {
         el('li', {}, 'operator: create/edit agents, locations and enrollment codes.'),
         el('li', {}, 'viewer: read-only access.')),
       el('p', {}, 'The last admin cannot be deleted or demoted.'),
+      el('p', { class: 'muted' }, 'Operators manage those resources under ', viewLink('agents'), ', ', viewLink('locations'), ' and ', viewLink('enrollment'), '.'),
     ],
   },
   license: {
@@ -453,15 +591,15 @@ const PAGE_INFO = {
       el('p', {}, 'Each tab covers one topic. Most settings can be edited here and take effect immediately without a restart; a few are read-only and controlled via the server\'s .env because they contain secrets.'),
       el('h4', {}, 'Editable here (stored in the database)'),
       el('ul', {},
-        el('li', {}, 'Analysis: thresholds for anomaly detection — CRIT/WARN in σ, baseline window and how many measurements are required before alerting.'),
-        el('li', {}, 'Retention: how long raw/aggregated data and findings are kept before being cleaned up.'),
-        el('li', {}, 'Traffic types: define the categories (DNS, Facebook …) from service ports and destination ASN. Shown on Traffic → Traffic type.'),
-        el('li', {}, 'Map: tile and geocoder source for the maps (use an EU/self-hosted source in production).')),
+        el('li', {}, settingsLink('analyse', 'Analysis'), ': thresholds for anomaly detection — CRIT/WARN in σ, baseline window and how many measurements are required before alerting.'),
+        el('li', {}, settingsLink('alerting', 'Alerting'), ': channels (e-mail/webhook/syslog) — enable, set a minimum severity, and fill in the connection details. Secrets (SMTP password, webhook HMAC) are write-only: stored on the server, never shown again.'),
+        el('li', {}, settingsLink('retention', 'Retention'), ': how long raw/aggregated data and findings are kept before being cleaned up.'),
+        el('li', {}, settingsLink('types', 'Traffic types'), ': define the categories (DNS, Facebook …) from service ports and destination ASN. Shown on ', viewLink('overview', 'Traffic'), ' → Traffic type.'),
+        el('li', {}, settingsLink('map', 'Map'), ': tile and geocoder source for the maps (use an EU/self-hosted source in production).')),
       el('h4', {}, 'Read-only (set in .env / requires restart)'),
       el('ul', {},
-        el('li', {}, 'Alerting: channels (e-mail/webhook/syslog) — carries secrets (SMTP password, webhook HMAC), so they are kept in .env.'),
-        el('li', {}, 'Users: create/edit staff and roles (admin only).'),
-        el('li', {}, 'License: status + “Revalidate now”.')),
+        el('li', {}, settingsLink('users', 'Users'), ': create/edit staff and roles (admin only).'),
+        el('li', {}, settingsLink('license', 'License'), ': status + “Revalidate now”.')),
       el('p', { class: 'muted' }, 'Editable changes are stored in app_settings and are reloaded on startup, so they survive a restart.'),
     ],
   },
@@ -506,12 +644,16 @@ views.agents = async () => {
   const [agents, locations, ver] = await Promise.all([api('/agents'), api('/locations'), api('/system/version').catch(() => null)]);
   const currentAgentVersion = ver && ver.agent ? ver.agent : null;
   locationCache = locations;
+  const outdated = agents.filter((a) => agentIsBehind(a, currentAgentVersion));
   const root = el('div');
   const countLabel = el('span', { class: 'muted' }, `${agents.length} total`);
   root.append(el('div', { class: 'section-head' },
     el('h2', {}, 'Agents'),
     countLabel,
-    canWrite() ? el('button', { class: 'small', onclick: () => newAgent() }, '+ New agent') : null));
+    canWrite() ? el('button', { class: 'small', onclick: () => newAgent() }, '+ New agent') : null,
+    (canDelete() && outdated.length)
+      ? el('button', { class: 'small', onclick: () => bulkUpdateAgents(outdated, currentAgentVersion), title: 'Rebuild every outdated agent from the server source, one at a time' }, `Update outdated (${outdated.length})`)
+      : null));
   if (!agents.length) { root.append(el('div', { class: 'empty' }, 'No agents yet. Click "+ New agent" to get an enrollment code for installation.')); return root; }
 
   // Client-side filter + sort over the already-loaded agents (no refetch).
@@ -587,6 +729,7 @@ views.agents = async () => {
 
 // One agent table row (extracted so the agents view can re-render on filter/sort).
 function agentRow(a, currentAgentVersion) {
+  const behind = agentIsBehind(a, currentAgentVersion);
   return el('tr', {},
     el('td', {}, String(a.id)),
     el('td', {}, el('div', {}, a.display_name || a.hostname), a.display_name ? el('div', { class: 'muted' }, a.hostname) : null),
@@ -602,11 +745,21 @@ function agentRow(a, currentAgentVersion) {
         ? el('button', { class: 'small ghost', onclick: () => showAgentFlows(a) }, 'Flows')
         : null,
       el('button', { class: 'small ghost', onclick: () => pingAgent(a), title: 'Confirm the live connection to this agent' }, 'Ping'),
+      el('button', { class: 'small ghost', onclick: () => diagnoseAgent(a), title: 'Flow-pipeline self-check: source, collector counters, exporter state' }, 'Diagnose'),
       el('button', { class: 'small ghost', onclick: () => showSpeedtest(a), title: 'Active download/upload speed test to the server' }, 'Speed'),
       canWrite() ? el('button', { class: 'small', onclick: () => runTest(a) }, 'Run test') : null,
       canWrite() ? el('button', { class: 'small ghost', onclick: () => editAgent(a) }, 'Edit') : null,
-      (canDelete() && agentIsBehind(a, currentAgentVersion))
-        ? el('button', { class: 'small', onclick: () => updateAgent(a, currentAgentVersion), title: 'Rebuild this agent from the server source and restart it' }, 'Update')
+      canDelete()
+        ? el('button', {
+            // Always available to admins as a manual upgrade link; emphasised
+            // (solid) when the agent is behind the published version, otherwise a
+            // subtle ghost link that re-deploys the current server source.
+            class: behind ? 'small' : 'small ghost',
+            onclick: () => updateAgent(a, currentAgentVersion),
+            title: behind
+              ? `Update this agent to v${currentAgentVersion} — rebuild from the server source and restart`
+              : 'Manually rebuild this agent from the server source and restart it',
+          }, behind ? 'Update' : 'Upgrade')
         : null,
       canDelete() ? el('button', { class: 'small danger', onclick: () => deleteAgent(a) }, 'Delete') : null,
     )),
@@ -629,16 +782,31 @@ function agentHealthRank(a) {
 function agentVersionLine(a, current) {
   const v = a.capabilities && a.capabilities.agentVersion;
   if (!v) return null;
-  const behind = current && v !== current;
+  const behind = agentIsBehind(a, current);
   return el('div', { class: 'muted' },
     `v${v}${behind ? ' ' : ''}`,
     behind ? el('span', { class: 'badge warn', title: `Current agent version is ${current}` }, 'update') : null);
 }
 
-// True when the agent reports a version older than the one the server serves.
+// Compare dotted versions: <0 if a<b, 0 if equal, >0 if a>b. Ignores any
+// pre-release/build suffix; non-numeric segments count as 0.
+function compareVersions(a, b) {
+  const parse = (s) => String(s).split(/[-+]/)[0].split('.').map((n) => parseInt(n, 10) || 0);
+  const pa = parse(a);
+  const pb = parse(b);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] || 0) - (pb[i] || 0);
+    if (d !== 0) return d < 0 ? -1 : 1;
+  }
+  return 0;
+}
+
+// True only when the agent reports a version STRICTLY OLDER than the one the
+// server serves. An agent that's ahead of the server (e.g. hand-rebuilt before
+// the server's source was refreshed) is NOT "behind" — don't offer it a update.
 function agentIsBehind(a, current) {
   const v = a.capabilities && a.capabilities.agentVersion;
-  return !!(v && current && v !== current);
+  return !!(v && current && compareVersions(v, current) < 0);
 }
 
 // Health derived from how recently the agent last reported in. online + a fresh
@@ -688,11 +856,97 @@ async function pingAgent(a) {
   } catch (err) { toast(`${name}: ${err.message}`, true); }
 }
 
+// Round-trips a "diagnose" to the agent and shows where its flow pipeline stands
+// — source, collector receive/decode counters, local exporter state — with a
+// plain verdict on why flows might be missing. Read-only (no agent side effects).
+async function diagnoseAgent(a) {
+  const name = a.display_name || a.hostname;
+  try {
+    const r = await api(`/agents/${a.id}/diagnose`, { method: 'POST' });
+    showDiagnostic(a, r.diagnostic);
+  } catch (err) { toast(`${name}: ${err.message}`, true); }
+}
+
+// One-line "where do flows stop?" verdict from a diagnostic snapshot.
+function diagnoseVerdict(d) {
+  const c = d.collector;
+  if (!c) return { ok: true, text: `Source is "${d.source}" — not a flow source, so there are no conversation flows by design. Set the source to sflow/netflow (with an exporter) to collect flows.` };
+  if (!c.listening) return { ok: false, text: 'The flow collector is not listening — the agent did not open its sFlow/NetFlow port.' };
+  const hs = d.hsflowd ? ` Local hsflowd: ${d.hsflowd.state}.` : '';
+  if (!c.datagrams) return { ok: false, text: `The collector is up but has received 0 datagrams — nothing is exporting ${d.source} to it. Enable the Local hsflowd exporter for this agent (Edit), or point a switch/host at the agent's collector.${hs}` };
+  if (!c.decodedFlows) return { ok: false, text: `Datagrams are arriving (${c.datagrams}) but no flow samples were decoded — the exporter is sending, but not flow samples (check the sampling rate / that hsflowd was built with FEATURES=PCAP).${hs}` };
+  return { ok: true, text: `Flow pipeline healthy — decoded ${c.decodedFlows} flow records from ${c.datagrams} datagrams.${hs}` };
+}
+
+// Modal: the agent's flow-pipeline snapshot + verdict (from POST /diagnose).
+function showDiagnostic(a, d) {
+  const card = $('#modal-card');
+  const body = [el('h3', {}, `Diagnose — ${esc(a.display_name || a.hostname)}`)];
+  if (!d) {
+    body.push(el('p', { class: 'muted' }, 'The agent did not return a diagnostic.'));
+  } else {
+    const v = diagnoseVerdict(d);
+    body.push(el('p', {}, el('span', { class: v.ok ? 'badge active' : 'badge offline' }, v.ok ? 'OK' : 'ATTENTION'), ' ', v.text));
+    body.push(el('div', { class: 'cards' },
+      stat('Source', d.source || '–'),
+      stat('Version', d.agentVersion ? `v${d.agentVersion}` : '–'),
+      stat('Managed', d.managed || '–'),
+      stat('Last report', d.lastReportAt ? fmtDate(d.lastReportAt) : 'never')));
+
+    const c = d.collector;
+    if (c) {
+      const num = (n) => Number(n || 0).toLocaleString();
+      body.push(el('p', { class: 'muted' }, `Collector — ${c.kind || d.source}`));
+      body.push(el('div', { class: 'cards' },
+        stat('Listening', c.listening ? 'yes' : 'no'),
+        stat('Datagrams', num(c.datagrams)),
+        stat('Flows decoded', num(c.decodedFlows)),
+        stat('Buffered', num(c.bufferedFlows)),
+        stat('Last datagram', c.lastDatagramAt ? fmtDate(c.lastDatagramAt) : 'never')));
+    }
+    if (d.hsflowd) {
+      body.push(el('p', { class: 'muted' }, 'Local hsflowd exporter: ',
+        el('span', { class: hsflowdBadgeClass(d.hsflowd.state) }, d.hsflowd.state || 'unknown')));
+      if (d.hsflowd.detail) body.push(el('p', { class: 'muted' }, d.hsflowd.detail));
+    }
+    body.push(el('details', {}, el('summary', { class: 'muted' }, 'Raw JSON'), el('pre', {}, JSON.stringify(d, null, 2))));
+
+    // Opt-in AI explanation of this snapshot. Reuses the assistant (Mistral, EU);
+    // degrades to a hint on 403 so it never looks broken when the feature is off.
+    const aiOut = el('div', { class: 'assistant-out muted' }, 'Optional: explain this diagnostic in plain language with the AI assistant (if enabled).');
+    const aiBtn = el('button', { class: 'small' }, 'Explain with AI');
+    aiBtn.addEventListener('click', async () => {
+      aiBtn.disabled = true;
+      aiOut.className = 'assistant-out muted';
+      aiOut.textContent = 'Thinking…';
+      try {
+        const res = await api('/api/assistant/diagnose-explain', { method: 'POST', body: { diagnostic: d, hostId: a.id } });
+        aiOut.className = 'assistant-out';
+        aiOut.replaceChildren(
+          el('div', {}, res.answer || '(empty response)'),
+          el('div', { class: 'assistant-meta muted' }, `${esc(res.model || '')} · ${res.usedFindings ?? 0} findings in context`));
+      } catch (err) {
+        aiOut.className = 'assistant-out muted';
+        aiOut.textContent = err.status === 403
+          ? 'The AI assistant is disabled. An administrator can enable it under Settings → Analysis → AI assistant.'
+          : err.message;
+      } finally {
+        aiBtn.disabled = false;
+      }
+    });
+    body.push(el('div', { class: 'assistant' }, el('div', { class: 'assistant-row' }, aiBtn), aiOut));
+  }
+  body.push(el('div', { class: 'form-actions' }, el('button', { class: 'ghost', onclick: closeModal }, 'Close')));
+  card.replaceChildren(...body);
+  $('#modal').classList.remove('hidden');
+}
+
 // Asks a systemd-managed agent to rebuild from the server's source and restart.
 // Docker/unmanaged agents decline (their host rebuilds them) — surface why.
 async function updateAgent(a, target) {
   const name = a.display_name || a.hostname;
-  if (!confirm(`Update ${name} to v${target || '?'}?\n\nThe agent will rebuild from the server's source bundle and restart, briefly interrupting monitoring on that host.`)) return;
+  const verText = target ? `to v${target}` : 'from the server source';
+  if (!confirm(`Update ${name} ${verText}?\n\nThe agent will rebuild from the server's source bundle and restart, briefly interrupting monitoring on that host.`)) return;
   try {
     const r = await api(`/agents/${a.id}/update`, { method: 'POST' });
     if (r.accepted) { toast(`${name}: update sent — rebuilding and restarting.`); return; }
@@ -700,6 +954,34 @@ async function updateAgent(a, target) {
     if (r.reason === 'unmanaged') { toast(`${name} isn't service-managed — update it manually (re-run the installer).`, true); return; }
     toast(`${name}: the agent did not accept the update.`, true);
   } catch (err) { toast(`${name}: ${err.message}`, true); }
+}
+
+// Bulk "update all outdated": rebuild every behind agent from the server's
+// source. STAGGERED — we wait between agents so they don't all pull the new
+// source bundle from the server at the same instant (thundering herd). Each
+// agent's managed-state is still honoured (Docker/unmanaged decline on their
+// own). Versions refresh on the next agent report, so no forced re-render here.
+const BULK_UPDATE_STAGGER_MS = 5000;
+async function bulkUpdateAgents(list, target) {
+  if (!list || !list.length) return;
+  const n = list.length;
+  if (!confirm(`Update ${n} outdated agent${n > 1 ? 's' : ''} to v${target || '?'}?\n\nThey're updated one at a time, ${BULK_UPDATE_STAGGER_MS / 1000}s apart, so they don't all download the new build at once. Each rebuilds and restarts, briefly interrupting monitoring on that host.`)) return;
+  let sent = 0;
+  let declined = 0;
+  let failed = 0;
+  for (let i = 0; i < list.length; i += 1) {
+    try {
+      const r = await api(`/agents/${list[i].id}/update`, { method: 'POST' });
+      if (r.accepted) sent += 1;
+      else declined += 1;
+    } catch { failed += 1; }
+    // Space out the rest so their downloads don't land on the server together.
+    if (i < list.length - 1) await new Promise((resolve) => setTimeout(resolve, BULK_UPDATE_STAGGER_MS));
+  }
+  const bits = [`${sent} updating`];
+  if (declined) bits.push(`${declined} declined (Docker/unmanaged)`);
+  if (failed) bits.push(`${failed} failed`);
+  toast(`Bulk update — ${bits.join(' · ')}.`, declined > 0 || failed > 0);
 }
 
 // ---- Tests (server-defined test packages pushed to agents to run) ---------
@@ -997,6 +1279,20 @@ async function showResults(a) {
       const t = latest.payload && latest.payload.traffic;
       body.push(el('p', { class: 'muted' }, `Latest: ${fmtDate(latest.created_at)} · ${results.length} measurements`));
 
+      // Flow sources (netflow/sflow) are push-based: a device must export to the
+      // agent's UDP collector. When nothing arrives every number is zero, which
+      // looks like broken data — call it out explicitly, with how to fix it.
+      if (t && (t.source === 'sflow' || t.source === 'netflow')) {
+        const received = t.source === 'sflow' ? (t.datagrams || 0) : (t.packets || 0);
+        const unit = t.source === 'sflow' ? 'datagrams' : 'packets';
+        const port = t.source === 'sflow' ? 6343 : 2055;
+        body.push(received === 0
+          ? el('div', { class: 'empty' },
+            `No ${t.source} ${unit} received — is a device exporting ${t.source} to this agent (UDP ${port})? `
+            + `To measure this host's own traffic instead, set the agent's source to "proc" via Edit.`)
+          : el('p', { class: 'muted' }, `${t.source}: ${received} ${unit} received · ${fmtBytes(t.totals ? t.totals.bytes : 0)} total.`));
+      }
+
       // Host performance (CPU/memory/load/uptime), when reported.
       const sys = latest.payload && latest.payload.system;
       if (sys) {
@@ -1015,16 +1311,23 @@ async function showResults(a) {
         }
       }
 
-      // Traffic over time: oldest -> newest, rate per measurement.
-      const series = results
-        .slice()
-        .reverse()
-        .map((r) => ({
-          at: r.created_at,
-          rx: r.payload && r.payload.traffic && r.payload.traffic.totals ? r.payload.traffic.totals.rxBytesPerSec : 0,
-          tx: r.payload && r.payload.traffic && r.payload.traffic.totals ? r.payload.traffic.totals.txBytesPerSec : 0,
-        }));
-      if (series.length >= 2) body.push(trafficChart(series));
+      // Traffic over time: oldest -> newest, rate per measurement. Only byte-rate
+      // sources (proc/snmp) carry per-measurement RX/TX rates; flow sources
+      // (sflow/netflow) report flow aggregates (flows/packets/bytes) with no
+      // rx/txBytesPerSec, so this chart would render empty (a NaN axis / "max –")
+      // for them — skip it and let the flow breakdown below stand in.
+      const flowSource = t && (t.source === 'sflow' || t.source === 'netflow');
+      if (!flowSource) {
+        const series = results
+          .slice()
+          .reverse()
+          .map((r) => ({
+            at: r.created_at,
+            rx: Number(r.payload && r.payload.traffic && r.payload.traffic.totals && r.payload.traffic.totals.rxBytesPerSec) || 0,
+            tx: Number(r.payload && r.payload.traffic && r.payload.traffic.totals && r.payload.traffic.totals.txBytesPerSec) || 0,
+          }));
+        if (series.length >= 2) body.push(trafficChart(series));
+      }
 
       if (t && t.interfaces && t.interfaces.length) {
         body.push(el('table', {},
@@ -1036,8 +1339,66 @@ async function showResults(a) {
             el('td', {}, `${fmtBytes(i.rxBytesPerSec)}/s`),
             el('td', {}, `${fmtBytes(i.txBytesPerSec)}/s`),
           )))));
+      } else if (t && (t.totals || t.source)) {
+        // Flow source (sflow/netflow): no per-interface counters, so summarise the
+        // flow aggregate — totals + top breakdowns — instead of dumping raw JSON.
+        const num = (n) => Number(n || 0).toLocaleString();
+        // Totals are authoritative when present; otherwise reconstruct them from a
+        // breakdown (the shape /flows reads). topTalkers/byPort/byProtocol each
+        // partition all flows, so summing one recovers the totals — a capped list
+        // can undercount, but never collapse real flow data to a misleading "0".
+        const sumRows = (rows) => (rows || []).reduce((a, r) => ({
+          bytes: a.bytes + (Number(r.bytes) || 0),
+          packets: a.packets + (Number(r.packets) || 0),
+          flows: a.flows + (Number(r.flows) || 0),
+        }), { bytes: 0, packets: 0, flows: 0 });
+        const tot = t.totals || sumRows(
+          (t.topTalkers && t.topTalkers.length) ? t.topTalkers
+            : ((t.byPort && t.byPort.length) ? t.byPort : t.byProtocol));
+        const hasFlows = (Number(tot.flows) || 0) > 0 || (Number(tot.bytes) || 0) > 0;
+        const cards = [
+          stat('Source', t.source || '–'),
+          stat('Flows', num(tot.flows)),
+          stat('Packets', num(tot.packets)),
+          stat('Bytes', fmtBytes(tot.bytes || 0)),
+        ];
+        if (t.datagrams != null) cards.push(stat('Datagrams', num(t.datagrams)));
+        if (t.droppedDatagrams) cards.push(stat('Dropped', num(t.droppedDatagrams)));
+        body.push(el('div', { class: 'cards' }, ...cards));
+
+        // Empty window is the common confusing case — say why, in words. Only when
+        // there's genuinely no flow data (no totals AND no breakdown rows), so a
+        // payload with breakdowns but no totals isn't mislabelled "no data".
+        if (!hasFlows) {
+          body.push(el('p', { class: 'muted' }, t.datagrams
+            ? 'Datagrams are arriving but no flow samples were decoded in this window.'
+            : `No ${t.source || 'flow'} data sampled yet — confirm the exporter is sending to the agent's collector (try Diagnose).`));
+        }
+
+        const flowTable = (title, rows, keyLabel, keyName, fmtKey) => {
+          if (!rows || !rows.length) return;
+          body.push(el('p', { class: 'muted' }, title));
+          body.push(el('table', {},
+            el('thead', {}, el('tr', {}, ...[keyLabel, 'Bytes', 'Packets', 'Flows'].map((h) => el('th', {}, h)))),
+            el('tbody', {}, ...rows.slice(0, 10).map((r) => el('tr', {},
+              el('td', {}, fmtKey ? fmtKey(r[keyName]) : String(r[keyName])),
+              el('td', {}, fmtBytes(r.bytes || 0)),
+              el('td', {}, num(r.packets)),
+              el('td', {}, num(r.flows)),
+            )))));
+        };
+        flowTable('Top talkers', t.topTalkers, 'Source → destination', 'pair', (p) => String(p).replace('->', ' → '));
+        flowTable('By port', t.byPort, 'Port', 'port');
+        flowTable('By protocol', t.byProtocol, 'Protocol', 'protocol');
+
+        // Full payload still available, collapsed. NB: el() appends children as
+        // text nodes (already XSS-safe), so it must NOT be esc()'d — doing so is
+        // what rendered literal &quot; in the old raw dump.
+        body.push(el('details', {},
+          el('summary', { class: 'muted' }, 'Raw JSON'),
+          el('pre', {}, JSON.stringify(latest.payload, null, 2))));
       } else {
-        body.push(el('pre', {}, esc(JSON.stringify(latest.payload, null, 2))));
+        body.push(el('pre', {}, JSON.stringify(latest.payload, null, 2)));
       }
     }
     body.push(el('div', { class: 'form-actions' }, el('button', { class: 'ghost', onclick: closeModal }, 'Close')));
@@ -1780,7 +2141,7 @@ views.findings = async () => {
     exportButtons('findings', () => (findingsState.hostId ? { hostId: findingsState.hostId } : {})),
     el('label', { class: 'muted inline' }, 'Host ', hostSelect)));
 
-  root.append(assistantBox(() => findingsState.hostId));
+  if (featureEnabled('assistant')) root.append(assistantBox(() => findingsState.hostId));
 
   const listHost = el('div', {});
   root.append(listHost);
@@ -1868,7 +2229,7 @@ function assistantBox(getHostId) {
     } catch (err) {
       out.className = 'assistant-out muted';
       out.textContent = err.status === 403
-        ? 'The AI assistant is disabled. Set ANALYSIS_ASSISTANT_ENABLED=true (and an API key) in the server\'s .env to use it.'
+        ? 'The AI assistant is disabled. An administrator can enable it under Settings → Analysis → AI assistant.'
         : err.message;
     } finally {
       btn.disabled = false;
@@ -2192,10 +2553,28 @@ function ifaceLinkText(i) {
   const sp = i.speedMbps ? (i.speedMbps >= 1000 ? `${i.speedMbps / 1000} Gb/s` : `${i.speedMbps} Mb/s`) : '';
   return [sp, i.operStatus].filter(Boolean).join(' · ');
 }
-// Interface health table (worst first). Empty-state when there is no data.
-function interfaceTable(interfaces) {
+// Interface health table (worst first). Empty-state when there is no data;
+// `source` (the agent's traffic source) tailors that message.
+function interfaceTable(interfaces, source = null) {
   const ifs = (interfaces || []).slice().sort((a, b) => (IFACE_RANK[a.status] - IFACE_RANK[b.status]) || ((b.rxBytesPerSec + b.txBytesPerSec) - (a.rxBytesPerSec + a.txBytesPerSec)));
-  if (!ifs.length) return el('div', { class: 'empty' }, 'No interface data yet — requires an agent measurement (update the agent for errors/discards/link).');
+  if (!ifs.length) {
+    // Flow sources (sflow/netflow) report sampled flow records (5-tuple
+    // conversations), not per-interface byte-rates/errors/discards — so this
+    // table is ALWAYS empty for them, however healthy the flow pipeline looks
+    // on Diagnose. Say so plainly instead of implying an agent update would
+    // help (it won't), and point to the source switch + the views that do use
+    // the flow data this agent reports.
+    if (source === 'sflow' || source === 'netflow') {
+      return el('div', { class: 'empty' },
+        `This agent's traffic source is “${source}”, which reports sampled flow records (conversations) — not per-interface counters, so there is nothing to show here even when the flow pipeline is healthy. `,
+        'Per-interface health (utilisation / errors / discards / link) needs a ',
+        el('b', {}, 'proc'), ' or ', el('b', {}, 'snmp'),
+        ' source — switch it under ', el('b', {}, 'Agents → Edit → Traffic source'),
+        '. The flow data this agent does report appears on the ',
+        viewLink('overview', 'Traffic'), ', ', viewLink('flows'), ' and ', viewLink('geo', 'Destinations'), ' pages.');
+    }
+    return el('div', { class: 'empty' }, 'No interface data yet — requires an agent measurement (update the agent for errors/discards/link).');
+  }
   return el('table', { class: 'iface-table' },
     el('thead', {}, el('tr', {}, ...['Interface', 'Status', 'Link', 'Utilization', '↓ RX', '↑ TX', 'Errors/s', 'Discards/s'].map((h) => el('th', {}, h)))),
     el('tbody', {}, ...ifs.map((i) => el('tr', {},
@@ -2277,7 +2656,7 @@ views.interfaces = async () => {
     let data;
     try { data = await api(`/api/interfaces?agentId=${encodeURIComponent(id)}`); } catch (e) { host.replaceChildren(el('div', { class: 'error' }, e.message)); return; }
     status.textContent = data.ts ? `source: ${data.source} · measured ${fmtTimeShort(new Date(data.ts).getTime())}` : 'no measurements yet';
-    host.replaceChildren(interfaceTable(data.interfaces));
+    host.replaceChildren(interfaceTable(data.interfaces, data.source));
   }
 
   refresh();
@@ -2489,6 +2868,17 @@ function healthBadge(h) {
   const [cls, label] = HEALTH_BADGE[h.status] || ['grace', h.status];
   return el('span', { class: `badge ${cls}`, title: h.reason || '' }, label);
 }
+// Health verdict → map-marker colour (same palette as the badges / Overview) and
+// a severity rank so a site marker can take the colour of its worst agent.
+const HEALTH_COLOR = { ok: '#22c55e', warn: '#f59e0b', bad: '#ef4444', down: '#ef4444', stale: '#94a3b8', unknown: '#94a3b8' };
+const HEALTH_RANK = { bad: 0, down: 0, warn: 1, stale: 2, unknown: 3, ok: 4 };
+function healthColor(status) { return HEALTH_COLOR[status] || '#94a3b8'; }
+function worstHealthStatus(statuses) {
+  let worst = null;
+  let rank = Infinity;
+  for (const s of statuses) { const r = HEALTH_RANK[s] ?? 3; if (r < rank) { rank = r; worst = s; } }
+  return worst;
+}
 // Latency cell: highlights + shows the baseline when the latest is elevated.
 function latencyText(m) {
   if (!m || m.rttMs == null) return '–';
@@ -2505,6 +2895,122 @@ function throughputText(t) {
   return el('span', { title: t.ts ? fmtDate(t.ts) : '' }, `↓${d} / ↑${u}`);
 }
 
+// ---- Overview NOC dashboard (KPI cards + live network path) ----------------
+// Both are derived from the same /api/fleet/health payload the Overview already
+// polls, so they refresh live with the table. KPI thresholds mirror the health
+// model documented in PAGE_INFO.fleet (loss ≥2/20 %, jitter ≥30/100 ms).
+function fleetKpis(data) {
+  const agents = (data && data.agents) || [];
+  const s = (data && data.summary) || {};
+  const vals = (pick) => agents
+    .map((a) => (a.health && a.health.metrics ? a.health.metrics[pick] : null))
+    .filter((v) => v != null && Number.isFinite(v));
+  const median = (arr) => {
+    if (!arr.length) return null;
+    const x = [...arr].sort((a, b) => a - b);
+    const m = x.length >> 1;
+    return x.length % 2 ? x[m] : Math.round((x[m - 1] + x[m]) / 2);
+  };
+  const loss = vals('lossPct');
+  const crit = (s.bad || 0) + (s.down || 0);
+  return {
+    latency: median(vals('rttMs')),
+    loss: loss.length ? Math.max(...loss) : null,
+    jitter: median(vals('jitterMs')),
+    online: agents.filter((a) => a.online).length,
+    total: agents.length,
+    paths: vals('targets').reduce((a, b) => a + b, 0),
+    crit,
+    warn: s.warn || 0,
+    alerts: crit + (s.warn || 0),
+  };
+}
+function kpiCard(label, value, sub, status) {
+  const vCls = status === 'warn' ? ' v-warn' : status === 'bad' ? ' v-bad' : status === 'ok' ? ' v-ok' : '';
+  return el('div', { class: `kpi st-${status}` },
+    el('div', { class: 'kpi-k' }, label),
+    el('div', { class: `kpi-v${vCls}` }, value),
+    el('div', { class: 'kpi-sub muted' }, sub));
+}
+// The conceptual path a branch/HQ user's traffic takes to a SaaS app, drawn as
+// an SVG: HQ → ISP → Cloud → SaaS, with a Branch feeding into the ISP uplink.
+// A hop is "degraded" (warning token) when the fleet's loss/jitter/health say
+// so; otherwise it stays on the primary/accent token. The topology is fixed,
+// but the degraded states + the loss/latency figures are live — driven by `k`
+// (and `data.summary`), which the caller can narrow to a single location;
+// `scopeName` is that location's name (null = whole fleet), shown as a chip.
+function networkPath(data, k, scopeName = null) {
+  const s = (data && data.summary) || {};
+  const wanDegraded = (k.loss != null && k.loss >= 2) || (k.jitter != null && k.jitter >= 30) || k.crit > 0;
+  const branchDegraded = (s.down || 0) + (s.stale || 0) > 0;
+  const saasDegraded = k.crit > 0;
+  const ns = 'http://www.w3.org/2000/svg';
+  const mk = (tag, attrs = {}, ...kids) => {
+    const e = document.createElementNS(ns, tag);
+    for (const [a, v] of Object.entries(attrs)) if (v != null) e.setAttribute(a, v);
+    for (const kid of kids) if (kid != null) e.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
+    return e;
+  };
+  const NW = 120, NH = 58, top = 28, cy = top + NH / 2;
+  const X = { HQ: 20, ISP: 220, CL: 420, SA: 620 };
+  const node = (x, title, sub, edge) => mk('g', { class: `np-node${edge ? ' edge' : ''}` },
+    mk('rect', { x, y: top, width: NW, height: NH, rx: 10 }),
+    mk('circle', { cx: x + 16, cy: top + 18, r: 4, class: 'np-ico' }),
+    mk('text', { x: x + 30, y: top + 23, class: 'np-t' }, title),
+    mk('text', { x: x + 12, y: top + 42, class: 'np-s' }, sub));
+  const link = (x1, y1, x2, y2, degraded, label) => {
+    const g = mk('g', {},
+      mk('line', { x1, y1, x2, y2, class: `np-link${degraded ? ' degraded' : ''}`, 'stroke-linecap': 'round' }),
+      mk('line', { x1, y1, x2, y2, class: `np-flow${degraded ? ' degraded' : ''}`, 'stroke-linecap': 'round' }));
+    if (label) g.append(mk('text', { x: (x1 + x2) / 2, y: Math.min(y1, y2) - 7, 'text-anchor': 'middle', class: `np-lab${degraded ? ' degraded' : ''}` }, label));
+    return g;
+  };
+  const Bx = 320, By = 150, BNH = 50;
+  const ariaLabel = 'Network path from HQ and Branch through ISP and Cloud to SaaS'
+    + (scopeName ? ` — ${scopeName}` : '');
+  const svg = mk('svg', { viewBox: '0 0 820 214', role: 'img', 'aria-label': ariaLabel },
+    link(X.HQ + NW, cy, X.ISP, cy, false, k.loss != null ? `${k.loss}% loss` : null),
+    link(X.ISP + NW, cy, X.CL, cy, wanDegraded, k.latency != null ? `${k.latency} ms` : null),
+    link(X.CL + NW, cy, X.SA, cy, saasDegraded, null),
+    link(Bx + NW / 2, By, X.ISP + NW / 2, top + NH, branchDegraded, null),
+    node(X.HQ, 'HQ', 'Core network', true),
+    node(X.ISP, 'ISP', 'WAN uplink', false),
+    node(X.CL, 'Cloud', 'Egress / IXP', false),
+    node(X.SA, 'SaaS', 'Applications', false),
+    mk('g', { class: 'np-node edge' },
+      mk('rect', { x: Bx, y: By, width: NW, height: BNH, rx: 10 }),
+      mk('circle', { cx: Bx + 16, cy: By + 16, r: 4, class: 'np-ico' }),
+      mk('text', { x: Bx + 30, y: By + 21, class: 'np-t' }, 'Branch'),
+      mk('text', { x: Bx + 12, y: By + 38, class: 'np-s' }, 'Remote site')));
+  const degraded = wanDegraded || branchDegraded || saasDegraded;
+  return el('div', { class: 'netpath' },
+    el('div', { class: 'netpath-head' },
+      el('h3', {}, 'Network path'),
+      scopeName ? el('span', { class: 'netpath-scope' }, scopeName) : null,
+      el('span', { class: degraded ? 'warn-text' : 'muted' }, degraded ? 'Degraded segment detected' : 'All segments nominal'),
+      el('div', { class: 'netpath-legend' },
+        el('span', { class: 'lg' }, el('span', { class: 'ln normal' }), 'Normal path'),
+        el('span', { class: 'lg' }, el('span', { class: 'ln degraded' }), 'Degraded segment'))),
+    svg);
+}
+function nocDashboard(data, { controls = null, scopeName = null } = {}) {
+  const k = fleetKpis(data);
+  const lossStatus = k.loss == null ? 'accent' : k.loss >= 20 ? 'bad' : k.loss >= 2 ? 'warn' : 'ok';
+  const jitStatus = k.jitter == null ? 'accent' : k.jitter >= 100 ? 'bad' : k.jitter >= 30 ? 'warn' : 'ok';
+  const agStatus = k.total && k.online === 0 ? 'bad' : k.online < k.total ? 'warn' : 'ok';
+  const alStatus = k.crit ? 'bad' : k.alerts ? 'warn' : 'ok';
+  return el('div', { class: 'noc' },
+    controls ? el('div', { class: 'noc-head' }, controls) : null,
+    el('div', { class: 'noc-kpis' },
+      kpiCard('Latency', k.latency == null ? '–' : `${k.latency} ms`, 'median RTT', 'accent'),
+      kpiCard('Packet loss', k.loss == null ? '–' : `${k.loss}%`, 'worst agent', lossStatus),
+      kpiCard('Jitter', k.jitter == null ? '–' : `${k.jitter} ms`, 'median', jitStatus),
+      kpiCard('Active agents', `${k.online}`, `of ${k.total} total`, agStatus),
+      kpiCard('Test paths', `${k.paths}`, 'monitored targets', 'accent'),
+      kpiCard('Alerts', `${k.alerts}`, k.crit ? `${k.crit} critical` : (k.warn ? `${k.warn} warning` : 'all clear'), alStatus)),
+    networkPath(data, k, scopeName));
+}
+
 // The landing view: all agents with a probe-derived health verdict, worst-first.
 // Click a row to pivot into that agent's combined detail page.
 views.fleet = async () => {
@@ -2512,9 +3018,10 @@ views.fleet = async () => {
   root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Overview'),
     el('span', { class: 'muted' }, 'All agents · health from reachability · loss · latency · jitter')));
   const bannerHost = el('div', {});
+  const nocHost = el('div', {});
   const summaryHost = el('div', { class: 'fleet-summary' });
   const tableHost = el('div', {});
-  root.append(bannerHost, summaryHost, tableHost);
+  root.append(bannerHost, nocHost, summaryHost, tableHost);
 
   // Maintenance banner (viewer-readable) — shown while a window is active now.
   api('/api/settings/maintenance').then((m) => {
@@ -2524,37 +3031,81 @@ views.fleet = async () => {
     else bannerHost.replaceChildren();
   }).catch(() => {});
 
-  // Click a summary chip to filter the table to that health category; click it
-  // again to clear. The filter persists across the 10s auto-refresh.
-  const CAT_STATUSES = { ok: ['ok'], warn: ['warn'], crit: ['bad', 'down'], stale: ['stale'], unknown: ['unknown'] };
-  let filterCat = null;
-  let lastAgents = [];
-  let lastSummary = null;
+  // Click a summary chip ("3 Healthy", "1 Critical", …) to filter the table to
+  // just those agents; click it again — or "Show all" — to clear. null = no
+  // filter. Kept in the closure so it survives the 10 s poll; the latest fetch
+  // is cached so a toggle re-renders instantly without refetching.
+  let activeFilter = null;
+  let lastData = null;
+  // Independent of the chip filter above: the NOC header (KPI cards + live
+  // network path) can be narrowed to a single location. null = whole fleet.
+  let locationScope = null;
+  // Chip ⇒ which health verdicts it covers. "Critical" folds in 'down' to match
+  // its count (bad + down); the rest map one-to-one.
+  const FILTER_MATCH = {
+    ok: (s) => s === 'ok', warn: (s) => s === 'warn',
+    bad: (s) => s === 'bad' || s === 'down',
+    stale: (s) => s === 'stale', unknown: (s) => s === 'unknown',
+  };
+  const FILTER_LABEL = { ok: 'healthy', warn: 'warning', bad: 'critical', stale: 'stale', unknown: 'unknown' };
+  function setFilter(cls) {
+    activeFilter = activeFilter === cls ? null : cls;
+    if (lastData) { renderSummary(lastData.summary); renderTable(lastData.agents); }
+  }
 
-  function chipClick(cat) {
-    filterCat = filterCat === cat ? null : cat;
-    if (lastSummary) renderSummary(lastSummary);
-    applyFilter();
+  // Distinct locations present in the latest poll (only sites that actually have
+  // an agent are offered as scope options), name-sorted.
+  function nocLocations(agents) {
+    const seen = new Map();
+    for (const a of agents || []) {
+      if (a.locationId != null && !seen.has(a.locationId)) seen.set(a.locationId, a.locationName || `#${a.locationId}`);
+    }
+    return [...seen].map(([id, name]) => ({ id, name })).sort((x, y) => x.name.localeCompare(y.name));
   }
+  // Narrow the fleet rollup to one location, recomputing the status summary so
+  // the KPI cards + the network path reflect just that site. null ⇒ whole fleet.
+  function scopeData(data, locId) {
+    if (locId == null) return data;
+    const agents = (data.agents || []).filter((a) => a.locationId === locId);
+    const summary = { ok: 0, warn: 0, bad: 0, down: 0, stale: 0, unknown: 0, total: agents.length };
+    for (const a of agents) summary[a.health.status] = (summary[a.health.status] || 0) + 1;
+    return { ...data, agents, summary };
+  }
+  // (Re)render the NOC header for the current scope. The <select> is rebuilt on
+  // every poll with the active scope preselected, so the choice survives the
+  // 10 s refresh; picking a location just re-runs this (no refetch).
+  function renderNoc() {
+    if (!lastData) return;
+    const locs = nocLocations(lastData.agents);
+    // Forget a scope whose location dropped out of the latest poll.
+    if (locationScope != null && !locs.some((l) => l.id === locationScope)) locationScope = null;
+    const scopeName = locationScope != null ? (locs.find((l) => l.id === locationScope) || {}).name : null;
+    const controls = locs.length
+      ? el('label', { class: 'inline muted' }, 'Location ',
+        el('select', { onchange: (e) => { locationScope = e.target.value ? Number(e.target.value) : null; renderNoc(); } },
+          el('option', { value: '' }, 'All locations'),
+          ...locs.map((l) => el('option', { value: String(l.id), selected: l.id === locationScope ? '' : null }, l.name))))
+      : null;
+    nocHost.replaceChildren(nocDashboard(scopeData(lastData, locationScope), { controls, scopeName }));
+  }
+
   function renderSummary(s) {
-    lastSummary = s;
-    const chip = (cat, cls, label, n) => el('div', {
-      class: `fs-chip ${cls}${n ? '' : ' zero'}${filterCat === cat ? ' active' : ''}`,
-      role: 'button', tabindex: '0',
-      title: filterCat === cat ? 'Clear filter' : `Show only ${label}`,
-      onclick: () => chipClick(cat),
-      onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); chipClick(cat); } },
-    }, el('span', { class: 'fs-n' }, String(n)), el('span', { class: 'fs-l' }, label));
+    const chip = (cls, label, n) => {
+      const on = activeFilter === cls;
+      return el('div', {
+        class: `fs-chip ${cls}${n ? '' : ' zero'}${on ? ' active' : ''}`,
+        role: 'button', tabindex: '0', 'aria-pressed': on ? 'true' : 'false',
+        title: on ? 'Show all agents' : `Show only ${label.toLowerCase()} agents`,
+        onclick: () => setFilter(cls),
+        onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setFilter(cls); } },
+      }, el('span', { class: 'fs-n' }, String(n)), el('span', { class: 'fs-l' }, label));
+    };
     summaryHost.replaceChildren(
-      chip('ok', 'ok', 'Healthy', s.ok),
-      chip('warn', 'warn', 'Warnings', s.warn),
-      chip('crit', 'bad', 'Critical', s.bad + s.down),
-      chip('stale', 'stale', 'Stale', s.stale),
-      chip('unknown', 'unknown', 'Unknown', s.unknown));
-  }
-  function applyFilter() {
-    const list = filterCat ? lastAgents.filter((a) => CAT_STATUSES[filterCat].includes(a.health.status)) : lastAgents;
-    renderTable(list, !!filterCat);
+      chip('ok', 'Healthy', s.ok),
+      chip('warn', 'Warnings', s.warn),
+      chip('bad', 'Critical', s.bad + s.down),
+      chip('stale', 'Stale', s.stale),
+      chip('unknown', 'Unknown', s.unknown));
   }
   function fleetRow(a) {
     const m = a.health.metrics;
@@ -2573,18 +3124,28 @@ views.fleet = async () => {
       el('td', { class: 'muted' }, a.locationName || '–'),
       el('td', { class: 'muted' }, m.lastTs ? fmtTimeShort(new Date(m.lastTs).getTime()) : '–'));
   }
-  function renderTable(agents, filtered) {
-    if (!agents.length) { tableHost.replaceChildren(el('div', { class: 'empty' }, filtered ? 'No agents with this status.' : 'No agents yet — go to Agents to enrol one.')); return; }
-    tableHost.replaceChildren(el('table', { class: 'fleet-table' },
-      el('thead', {}, el('tr', {}, ...['Agent', 'Status', 'Health', 'Loss', 'Latency', 'Jitter', 'Targets', 'Speed', 'Location', 'Last seen'].map((h) => el('th', {}, h)))),
-      el('tbody', {}, ...agents.map(fleetRow))));
+  function renderTable(agents) {
+    if (!agents.length) { tableHost.replaceChildren(el('div', { class: 'empty' }, 'No agents yet — go to Agents to enrol one.')); return; }
+    const shown = activeFilter ? agents.filter((a) => FILTER_MATCH[activeFilter](a.health.status)) : agents;
+    const bar = activeFilter
+      ? el('div', { class: 'fleet-filter' },
+        el('span', { class: 'muted' }, `Showing ${shown.length} of ${agents.length} — ${FILTER_LABEL[activeFilter]}`),
+        el('button', { class: 'small ghost', onclick: () => setFilter(activeFilter) }, 'Show all'))
+      : null;
+    const body = shown.length
+      ? el('table', { class: 'fleet-table' },
+        el('thead', {}, el('tr', {}, ...['Agent', 'Status', 'Health', 'Loss', 'Latency', 'Jitter', 'Targets', 'Speed', 'Location', 'Last seen'].map((h) => el('th', {}, h)))),
+        el('tbody', {}, ...shown.map(fleetRow)))
+      : el('div', { class: 'empty' }, `No ${FILTER_LABEL[activeFilter]} agents.`);
+    tableHost.replaceChildren(...(bar ? [bar, body] : [body]));
   }
   async function refresh() {
     let data;
     try { data = await api('/api/fleet/health'); } catch (e) { tableHost.replaceChildren(el('div', { class: 'error' }, e.message)); return; }
-    lastAgents = data.agents;
+    lastData = data;
+    renderNoc();
     renderSummary(data.summary);
-    applyFilter();
+    renderTable(data.agents);
   }
 
   await refresh();
@@ -2695,7 +3256,7 @@ views.agent = async () => {
     let data;
     try { data = await api(`/api/interfaces?agentId=${encodeURIComponent(id)}`); } catch (e) { ifaceHost.replaceChildren(el('div', { class: 'error' }, e.message)); return; }
     ifaceStatus.textContent = data.ts ? `source: ${data.source} · measured ${fmtTimeShort(new Date(data.ts).getTime())}` : 'no measurements yet';
-    ifaceHost.replaceChildren(interfaceTable(data.interfaces));
+    ifaceHost.replaceChildren(interfaceTable(data.interfaces, data.source));
   }
 
   // ---- Recent traffic (bandwidth over the last measurements) ----
@@ -2721,9 +3282,14 @@ views.agent = async () => {
     try { const d = await api(`/api/fleet/agent/${id}`); renderHealth(d.health, d.quality, d.throughput); } catch { /* keep last verdict */ }
   }
 
+  // ---- NIC firmware (driver/firmware inventory the agent reported) ----
+  const nics = agent.capabilities && Array.isArray(agent.capabilities.nic) ? agent.capabilities.nic : [];
+  const nicSummary = el('span', { class: 'muted' }, nics.length ? `· ${nics.length} interface(s)` : '· none reported');
+
   root.append(
     el('details', { class: 'sec', open: true }, el('summary', {}, 'Probes ', el('span', { class: 'muted' }, '· ping · TCP · DNS · traceroute')), probeForm, probeLatestHost, probeDetailHost),
     el('details', { class: 'sec', open: true }, el('summary', {}, 'Interfaces ', ifaceStatus), ifaceHost),
+    el('details', { class: 'sec' }, el('summary', {}, 'NIC firmware ', nicSummary), nicTable(nics)),
     el('details', { class: 'sec' }, el('summary', {}, 'Traffic ', el('span', { class: 'muted' }, '· recent bandwidth')), trafficHost));
 
   async function refreshAll() { await Promise.all([refreshHealth(), refreshProbes(), refreshIfaces(), refreshTraffic()]); }
@@ -2733,6 +3299,109 @@ views.agent = async () => {
     if (currentView !== 'agent') { stopAgent(); return; }
     if (!modalOpen()) refreshAll();
   }, 7000);
+  return root;
+};
+
+// Renders one agent's reported NIC inventory (capabilities.nic): per-interface
+// driver / driver version / firmware / bus. Used on the agent page.
+function nicTable(nics) {
+  if (!Array.isArray(nics) || !nics.length) return el('div', { class: 'empty' }, 'No NIC inventory reported yet (needs an agent that runs ethtool on Linux).');
+  const head = el('tr', {}, ...['Interface', 'Driver', 'Driver ver.', 'Firmware', 'Bus'].map((h) => el('th', {}, h)));
+  const rows = nics.map((n) => el('tr', {},
+    el('td', {}, esc(n.iface || '—')),
+    el('td', {}, esc(n.driver || '—')),
+    el('td', { class: 'muted' }, esc(n.driverVersion || '—')),
+    el('td', {}, esc(n.firmwareVersion || '—')),
+    el('td', { class: 'muted' }, esc(n.busInfo || n.pciId || '—'))));
+  return el('table', { class: 'iface-table' }, el('thead', {}, head), el('tbody', {}, ...rows));
+}
+
+// Fleet NIC inventory + firmware-drift detection. Groups identical NIC models
+// across all agents and surfaces firmware-version outliers — the "47 units on
+// firmware X, 3 on Y" case — so a Wi-Fi issue traced to a firmware mismatch is
+// obvious. Reads capabilities.nic; no probes, no new storage.
+views.nics = async () => {
+  const root = el('div', { class: 'nics-view' });
+  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'NICs'),
+    el('span', { class: 'muted' }, 'Driver & firmware inventory · firmware-drift detection')));
+
+  let inv;
+  try { inv = await api('/api/fleet/nics'); } catch (e) { root.append(el('div', { class: 'error' }, e.message)); return root; }
+
+  root.append(el('div', { class: 'nics-summary muted' },
+    `${inv.agents} agent(s) reporting NIC data · ${inv.totalNics} NIC(s) · `,
+    el('span', { class: inv.drift.length ? 'bad-text' : '' }, `${inv.drift.length} model(s) with firmware drift`)));
+
+  if (!inv.agents) {
+    root.append(el('div', { class: 'empty' },
+      'No NIC inventory yet. Agents collect driver/firmware via ', el('code', {}, 'ethtool -i'),
+      ' on Linux and report it with their capabilities — redeploy/upgrade agents to populate this.'));
+    return root;
+  }
+
+  // A chip per agent on a given firmware; click to open that agent.
+  const agentChips = (agents) => el('div', { class: 'nic-chips' }, ...agents.map((a) =>
+    el('button', { class: 'chip ghost small', title: a.location ? `${a.name} · ${a.location}` : a.name, onclick: () => openAgent(a.id) },
+      esc(a.name), a.iface ? el('span', { class: 'muted' }, ` (${esc(a.iface)})`) : null)));
+
+  // Group-by toggle: aggregate by NIC model (drift-first) or list every agent
+  // with its NIC specs. Defaults to models — the firmware-drift lens.
+  const body = el('div', { class: 'nics-body' });
+  const seg = el('div', { class: 'seg' });
+  const setMode = (mode) => {
+    for (const b of seg.children) b.classList.toggle('on', b.dataset.mode === mode);
+    body.replaceChildren(mode === 'agents' ? renderByAgent() : renderByModel());
+  };
+  for (const [mode, label] of [['models', 'Models'], ['agents', 'Agents']]) {
+    seg.append(el('button', { class: 'seg-btn', 'data-mode': mode, onclick: () => setMode(mode) }, label));
+  }
+  root.append(el('div', { class: 'nics-controls' }, el('span', { class: 'muted' }, 'Group by'), seg), body);
+
+  // ---- Models view: firmware drift first, then the full model inventory. ----
+  function renderByModel() {
+    const wrap = el('div', {});
+    if (inv.drift.length) {
+      const driftCard = el('div', { class: 'nic-card drift-card' }, el('h3', {}, '⚠ Firmware drift'));
+      for (const model of inv.drift) {
+        const block = el('div', { class: 'drift-model' },
+          el('div', { class: 'drift-head' }, el('strong', {}, esc(model.label)), el('span', { class: 'muted' }, ` · ${model.count} unit(s)`)));
+        for (const f of model.firmwares) {
+          block.append(el('div', { class: `fw-row${f.isOutlier ? ' fw-outlier' : ''}` },
+            el('span', { class: `badge ${f.isOutlier ? 'warn' : 'online'}` }, f.isOutlier ? 'outlier' : 'majority'),
+            el('span', { class: 'fw-ver' }, esc(f.firmwareVersion)),
+            el('span', { class: 'muted' }, ` — ${f.count} unit(s)`),
+            agentChips(f.agents)));
+        }
+        driftCard.append(block);
+      }
+      wrap.append(driftCard);
+    }
+    const invCard = el('div', { class: 'nic-card' }, el('h3', {}, 'All NIC models'));
+    for (const model of inv.drivers) {
+      const fwSummary = model.firmwares.map((f) => `${f.firmwareVersion} ×${f.count}`).join(' · ');
+      invCard.append(el('div', { class: 'nic-model-row' },
+        el('div', {}, el('strong', {}, esc(model.label)), model.hasDrift ? el('span', { class: 'badge warn', style: 'margin-left:.4rem' }, 'drift') : null),
+        el('div', { class: 'muted' }, `${model.count} unit(s) · ${esc(fwSummary)}`)));
+    }
+    wrap.append(invCard);
+    return wrap;
+  }
+
+  // ---- Agents view: each agent that reports NIC data + its NIC specs. ----
+  function renderByAgent() {
+    const card = el('div', { class: 'nic-card' }, el('h3', {}, `Agents reporting NIC data (${inv.byAgent.length})`));
+    for (const a of inv.byAgent) {
+      card.append(el('div', { class: 'nic-agent-row' },
+        el('div', { class: 'nic-agent-head' },
+          el('button', { class: 'linklike', onclick: () => openAgent(a.id) }, esc(a.name)),
+          a.location ? el('span', { class: 'muted' }, ` · ${esc(a.location)}`) : null,
+          el('span', { class: 'muted' }, ` · ${a.nics.length} interface(s)`)),
+        nicTable(a.nics)));
+    }
+    return card;
+  }
+
+  setMode('models');
   return root;
 };
 
@@ -2848,26 +3517,72 @@ views.flows = async () => {
 
 // Map of locations with their agents. Uses Leaflet if available; otherwise falls
 // back to a list. Each located location gets a marker with agent count/status.
-views.map = async () => {
-  const [locations, agents] = await Promise.all([api('/locations'), api('/agents')]);
-  // Count agents (and how many online) per location.
-  const byLoc = new Map();
-  for (const a of agents) {
-    if (a.location_id == null) continue;
-    const e = byLoc.get(a.location_id) || { total: 0, online: 0 };
-    e.total += 1;
-    if (a.status === 'online') e.online += 1;
-    byLoc.set(a.location_id, e);
-  }
-  const located = locations.filter((l) => l.latitude != null && l.longitude != null);
+// Creates a Leaflet map with the server-configured tiles (EU / self-hosted —
+// never a hardcoded source). Shared by the Sites map and the Destinations (geo)
+// map so the admin's Settings → Map tile choice is honoured everywhere. Returns
+// the map, or null if Leaflet is unavailable. `config` = /api/map|geo/config.
+function createLeafletMap(host, config, { center = [20, 0], zoom = 3 } = {}) {
+  if (typeof L === 'undefined' || !host) return null;
+  const cfg = config || {};
+  const map = L.map(host).setView(center, zoom);
+  L.tileLayer(cfg.tileUrl || 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: cfg.maxZoom || 19,
+    attribution: cfg.attribution || '© OpenStreetMap',
+  }).addTo(map);
+  return map;
+}
 
+// Sites-map polling state (mirrors stopOverview/stopGeo). Re-drawn on a timer so
+// agent health/online counts stay live; torn down when leaving the view.
+const mapState = { map: null, timer: null, layer: null, fitted: false, popupOpen: false };
+function stopMap() {
+  if (mapState.timer) { clearInterval(mapState.timer); mapState.timer = null; }
+  if (mapState.map) { try { mapState.map.remove(); } catch { /* ignore */ } }
+  mapState.map = null; mapState.layer = null; mapState.fitted = false; mapState.popupOpen = false;
+}
+
+// The "Sites" map: your locations on a map, each marker coloured by the WORST
+// agent health at that site (reusing the Overview verdict), clustered, live, and
+// click-through to the agents there.
+views.map = async () => {
   const root = el('div');
-  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Map'),
-    el('span', { class: 'muted' }, `${located.length} of ${locations.length} locations have coordinates`)));
+  const sub = el('span', { class: 'muted' });
+  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Sites'), sub));
+
+  let locations; let agents; let mapCfg; let fleet;
+  try {
+    [locations, agents, mapCfg, fleet] = await Promise.all([
+      api('/locations'), api('/agents'),
+      api('/api/map/config').catch(() => ({})),
+      api('/api/fleet/health').catch(() => ({ agents: [] })),
+    ]);
+  } catch (e) { root.append(el('div', { class: 'error' }, e.message)); return root; }
+
+  // agentId → health verdict; refreshed on each poll.
+  const healthByAgent = new Map((fleet.agents || []).map((a) => [a.agentId, a.health && a.health.status]));
+
+  // Per-location rollup: counts + the agents (with health) + the worst status.
+  function rollup() {
+    const byLoc = new Map();
+    for (const a of agents) {
+      if (a.location_id == null) continue;
+      const e = byLoc.get(a.location_id) || { total: 0, online: 0, agents: [] };
+      e.total += 1;
+      if (a.status === 'online') e.online += 1;
+      const status = healthByAgent.get(a.id) || (a.status === 'online' ? 'unknown' : 'down');
+      e.agents.push({ id: a.id, name: a.display_name || a.hostname, status });
+      byLoc.set(a.location_id, e);
+    }
+    for (const e of byLoc.values()) e.worst = worstHealthStatus(e.agents.map((x) => x.status));
+    return byLoc;
+  }
+
+  const located = locations.filter((l) => l.latitude != null && l.longitude != null);
+  sub.textContent = `${located.length} of ${locations.length} locations have coordinates`;
 
   if (typeof L === 'undefined') {
     root.append(el('div', { class: 'empty' }, 'Map library could not be loaded (offline?). Showing list instead.'));
-    root.append(locationList(locations, byLoc));
+    root.append(locationList(locations, rollup()));
     return root;
   }
   if (!located.length) {
@@ -2877,31 +3592,76 @@ views.map = async () => {
 
   const mapEl = el('div', { class: 'map' });
   root.append(mapEl);
-  // Leaflet needs the element in the DOM with a size before init — defer a tick.
-  setTimeout(() => {
-    const map = L.map(mapEl).setView([located[0].latitude, located[0].longitude], 6);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 19, attribution: '© OpenStreetMap',
-    }).addTo(map);
-    const group = [];
+  root.append(el('div', { class: 'legend geo-legend' },
+    el('span', {}, el('span', { class: 'dot ring', style: `background:${HEALTH_COLOR.ok}` }), ' healthy'),
+    el('span', {}, el('span', { class: 'dot ring', style: `background:${HEALTH_COLOR.warn}` }), ' warning'),
+    el('span', {}, el('span', { class: 'dot ring', style: `background:${HEALTH_COLOR.bad}` }), ' critical'),
+    el('span', {}, el('span', { class: 'dot ring', style: `background:${HEALTH_COLOR.unknown}` }), ' unknown / offline'),
+    el('span', { class: 'muted' }, '· colour = worst agent health at the site')));
+
+  function popupFor(l, c) {
+    return el('div', { class: 'map-pop' },
+      el('strong', {}, esc(l.name)),
+      el('div', { class: 'muted' }, `${c.online}/${c.total} agents online`),
+      l.address ? el('div', { class: 'muted' }, esc(l.address)) : null,
+      el('div', { class: 'map-pop-agents' }, ...c.agents.slice(0, 12).map((ag) => el('button', {
+        class: 'map-pop-agent', title: 'Open agent', onclick: () => openAgent(ag.id),
+      }, el('span', { class: 'dot', style: `background:${healthColor(ag.status)}` }), esc(ag.name)))));
+  }
+
+  function draw(byLoc) {
+    if (!mapState.layer) return;
+    mapState.layer.clearLayers();
+    const pts = [];
     for (const l of located) {
-      const c = byLoc.get(l.id) || { total: 0, online: 0 };
-      const m = L.marker([l.latitude, l.longitude]).addTo(map);
-      m.bindPopup(`<b>${esc(l.name)}</b><br>${c.online}/${c.total} agents online${l.address ? `<br>${esc(l.address)}` : ''}`);
-      group.push([l.latitude, l.longitude]);
+      const c = byLoc.get(l.id) || { total: 0, online: 0, agents: [], worst: null };
+      const m = L.circleMarker([l.latitude, l.longitude], {
+        radius: 9, color: '#fff', weight: 2, fillColor: c.worst ? healthColor(c.worst) : '#94a3b8', fillOpacity: 0.95,
+      });
+      m.bindPopup(popupFor(l, c));
+      mapState.layer.addLayer(m);
+      pts.push([l.latitude, l.longitude]);
     }
-    if (group.length > 1) map.fitBounds(group, { padding: [40, 40] });
+    if (!mapState.fitted && pts.length) {
+      if (pts.length > 1) mapState.map.fitBounds(pts, { padding: [40, 40] });
+      mapState.fitted = true;
+    }
+  }
+
+  stopMap();
+  setTimeout(() => {
+    if (!mapEl.isConnected) return; // view was left before the deferred init ran
+    const map = createLeafletMap(mapEl, mapCfg, { center: [located[0].latitude, located[0].longitude], zoom: 6 });
+    if (!map) return;
+    mapState.map = map;
+    map.on('popupopen', () => { mapState.popupOpen = true; });
+    map.on('popupclose', () => { mapState.popupOpen = false; });
+    mapState.layer = (typeof L.markerClusterGroup === 'function') ? L.markerClusterGroup({ maxClusterRadius: 50 }) : L.layerGroup();
+    mapState.layer.addTo(map);
+    draw(rollup());
   }, 0);
+
+  mapState.timer = setInterval(async () => {
+    if (currentView !== 'map') { stopMap(); return; }
+    if (modalOpen() || mapState.popupOpen || !mapState.map) return;
+    try {
+      const [a, f] = await Promise.all([api('/agents'), api('/api/fleet/health').catch(() => null)]);
+      agents = a;
+      if (f) { healthByAgent.clear(); for (const x of f.agents || []) healthByAgent.set(x.agentId, x.health && x.health.status); }
+      draw(rollup());
+    } catch { /* keep the last good render */ }
+  }, 10000);
+
   return root;
 };
 
-// ---- Geo map (internal sites + external destinations + selection) ---------
-const geoState = { map: null, ext: null, hosts: null, rect: null, dests: [], sinceIso: '', panel: null, selecting: false, rectStart: null };
+// ---- Destinations map (internal sites + external destinations + selection) ----
+const geoState = { map: null, ext: null, hosts: null, rect: null, dests: [], sinceIso: '', panel: null, selecting: false, rectStart: null, healthByHost: null };
 
 function stopGeo() {
   if (geoState.map) { try { geoState.map.remove(); } catch { /* ignore */ } }
   geoState.map = null; geoState.ext = null; geoState.hosts = null; geoState.rect = null;
-  geoState.dests = []; geoState.selecting = false; geoState.rectStart = null;
+  geoState.dests = []; geoState.selecting = false; geoState.rectStart = null; geoState.healthByHost = null;
 }
 
 function devColor(dev) {
@@ -2939,7 +3699,12 @@ views.geo = async () => {
   if (typeof L === 'undefined') {
     return el('div', { class: 'empty' }, 'Map library (Leaflet) could not be loaded — geo map is unavailable offline.');
   }
-  const [config, overview] = await Promise.all([api('/api/geo/config'), api('/api/geo/overview')]);
+  const [config, overview, fleet] = await Promise.all([
+    api('/api/geo/config'), api('/api/geo/overview'),
+    api('/api/fleet/health').catch(() => ({ agents: [] })),
+  ]);
+  // hostId → health verdict, so internal site pins can be coloured by health.
+  geoState.healthByHost = new Map((fleet.agents || []).map((a) => [a.agentId, a.health && a.health.status]));
 
   const root = el('div', { class: 'geo' });
   const periodSel = el('select', {},
@@ -2949,10 +3714,10 @@ views.geo = async () => {
   const regionBtn = el('button', { class: 'small ghost' }, 'Select region');
   const clearBtn = el('button', { class: 'small ghost' }, 'Clear selection');
   root.append(el('div', { class: 'section-head' },
-    el('h2', {}, 'Geo-kort'),
+    el('h2', {}, 'Destinations'),
     el('span', { class: 'spacer' }),
     exportButtons('geo', () => (geoState.sinceIso ? { since: geoState.sinceIso } : {})),
-    el('label', { class: 'muted inline' }, 'Periode ', periodSel),
+    el('label', { class: 'muted inline' }, 'Period ', periodSel),
     regionBtn, clearBtn));
 
   const mapEl = el('div', { class: 'map' });
@@ -2960,12 +3725,18 @@ views.geo = async () => {
   geoState.panel = panel;
   geoState.mapEl = mapEl;
   root.append(el('div', { class: 'geo-grid' }, mapEl, panel));
+  // Two colour scales: internal SITES are ringed dots coloured by agent health;
+  // external DESTINATIONS are circles coloured by traffic deviation (size = volume).
   root.append(el('div', { class: 'legend geo-legend' },
-    el('span', {}, el('span', { class: 'pin-dot' }), ' internal site'),
+    el('span', { class: 'muted' }, 'Sites:'),
+    el('span', {}, el('span', { class: 'dot ring', style: `background:${HEALTH_COLOR.ok}` }), ' healthy'),
+    el('span', {}, el('span', { class: 'dot ring', style: `background:${HEALTH_COLOR.warn}` }), ' warning'),
+    el('span', {}, el('span', { class: 'dot ring', style: `background:${HEALTH_COLOR.bad}` }), ' critical'),
+    el('span', { class: 'muted' }, '· Destinations:'),
     el('span', {}, el('span', { class: 'dot', style: 'background:#38bdf8' }), ' normal'),
     el('span', {}, el('span', { class: 'dot', style: 'background:#f59e0b' }), ' elevated'),
     el('span', {}, el('span', { class: 'dot', style: 'background:#ef4444' }), ' strong deviation'),
-    el('span', { class: 'muted' }, '· circle size = traffic volume')));
+    el('span', { class: 'muted' }, '· size = volume')));
 
   periodSel.addEventListener('change', () => {
     const v = periodSel.value;
@@ -2983,12 +3754,9 @@ views.geo = async () => {
 function initGeoMap(config, overview) {
   if (!geoState.mapEl || !geoState.mapEl.isConnected) return; // view was left already
   const center = pickGeoCenter(overview);
-  const map = L.map(geoState.mapEl).setView(center, 3);
+  const map = createLeafletMap(geoState.mapEl, config, { center, zoom: 3 });
+  if (!map) return;
   geoState.map = map;
-  L.tileLayer(config.tileUrl || 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: config.maxZoom || 19,
-    attribution: config.attribution || '© OpenStreetMap',
-  }).addTo(map);
 
   geoState.ext = (typeof L.markerClusterGroup === 'function') ? L.markerClusterGroup({ maxClusterRadius: 50 }) : L.layerGroup();
   geoState.hosts = L.layerGroup();
@@ -3027,7 +3795,8 @@ function drawOverview(overview) {
 
   for (const h of overview.internalHosts || []) {
     if (h.lat == null || h.lng == null) continue;
-    const m = L.marker([h.lat, h.lng]);
+    const status = (geoState.healthByHost && geoState.healthByHost.get(h.hostId)) || (h.status === 'online' ? 'unknown' : 'down');
+    const m = L.circleMarker([h.lat, h.lng], { radius: 8, color: '#fff', weight: 2, fillColor: healthColor(status), fillOpacity: 0.95 });
     m.bindTooltip(`${esc(h.siteName || `host ${h.hostId}`)} (${esc(h.status || '?')})`);
     m.on('click', () => selectHost(h));
     geoState.hosts.addLayer(m);
@@ -3062,10 +3831,23 @@ function showOverviewSummary() {
   if (!panel) return;
   const dests = geoState.dests;
   const totBytes = dests.reduce((s, d) => s + (Number(d.bytes) || 0), 0);
+  const top = dests.slice().sort((a, b) => (Number(b.bytes) || 0) - (Number(a.bytes) || 0)).slice(0, 12);
+  const topTable = top.length
+    ? el('table', { class: 'geo-top' }, el('tbody', {}, ...top.map((d) => el('tr', {
+      class: 'geo-top-row', tabindex: '0', title: 'Show destination details',
+      onclick: () => selectDestination(d),
+      onkeydown: (e) => { if (e.key === 'Enter') selectDestination(d); },
+    },
+    el('td', {}, el('span', { class: 'dot', style: `background:${devColor(d.deviation)}` }), ' ', esc(destTitle(d))),
+    el('td', { class: 'num' }, fmtBytes(d.bytes)),
+    el('td', { class: 'num muted' }, devLabel(d.deviation))))))
+    : el('div', { class: 'muted' }, 'No external destinations in this period.');
   panel.replaceChildren(
     el('div', { class: 'section-head' }, el('h3', {}, 'Overview')),
     el('p', { class: 'muted' }, `${dests.length} external destinations · ${fmtBytes(totBytes)} in the period`),
-    el('p', { class: 'muted' }, 'Click a circle (destination) or a pin (internal site) for details, or select a region.'));
+    el('h4', {}, 'Top destinations'),
+    topTable,
+    el('p', { class: 'muted small' }, 'Click a row, a circle (destination) or a site pin for details, or select a region.'));
 }
 
 async function selectDestination(d) {
@@ -3171,20 +3953,34 @@ function locationList(locations, byLoc) {
     })));
 }
 
-// Cell showing the selected traffic source + what the agent reports it can do.
+// Maps an hsflowd exporter state to a badge colour class.
+function hsflowdBadgeClass(state) {
+  if (state === 'active') return 'badge active';
+  if (state === 'failed' || state === 'install_failed' || state === 'permission_denied') return 'badge offline';
+  return 'badge'; // inactive / not_installed / unknown
+}
+
+// Cell showing the selected traffic source + what the agent reports it can do,
+// plus the live hsflowd exporter state when the agent has reported one (the
+// result of enabling/disabling "Local hsflowd exporter").
 function agentSourceCell(a) {
   const mc = a.monitor_config || {};
   const source = mc.source || 'proc';
   const caps = a.capabilities && Array.isArray(a.capabilities.sources) ? a.capabilities.sources : null;
   const detail = source === 'snmp' && mc.snmp ? ` (${mc.snmp.host})` : '';
+  const hs = a.hsflowd && a.hsflowd.state ? a.hsflowd : null;
   return el('div', {},
     el('span', { class: 'badge' }, source + detail),
-    caps ? el('div', { class: 'muted', title: 'Agent capabilities' }, `can: ${caps.join(', ')}`) : null);
+    caps ? el('div', { class: 'muted', title: 'Agent capabilities' }, `can: ${caps.join(', ')}`) : null,
+    hs ? el('div', { class: 'muted', title: hs.detail || (hs.at ? `reported ${hs.at}` : '') },
+      'hsflowd: ', el('span', { class: hsflowdBadgeClass(hs.state) }, hs.state)) : null);
 }
 
 function editAgent(a) {
   const mc = a.monitor_config || {};
   const snmp = mc.snmp || {};
+  const sflowHs = (mc.sflow && mc.sflow.hsflowd) || null;
+  const hsObj = sflowHs && typeof sflowHs === 'object' ? sflowHs : {};
   const caps = a.capabilities && Array.isArray(a.capabilities.sources) ? a.capabilities.sources : [];
   // Only offer sources the agent says it supports (fall back to both if unknown).
   const sourceOptions = (caps.length ? caps : ['proc', 'snmp']).map((s) => ({ value: s, label: s }));
@@ -3203,6 +3999,11 @@ function editAgent(a) {
       value: String((mc.netflow && mc.netflow.port) || 2055) },
     { name: 'sflow_port', label: 'sFlow UDP port (only for sflow)', type: 'number',
       value: String((mc.sflow && mc.sflow.port) || 6343) },
+    { name: 'sflow_hsflowd', label: 'Local hsflowd exporter (sflow; native installs — Docker uses the sidecar)', type: 'select',
+      value: sflowHs ? 'on' : 'off',
+      options: [{ value: 'off', label: 'Off (receives sFlow from a switch)' }, { value: 'on', label: 'On (sample this host)' }] },
+    { name: 'sflow_sampling', label: 'hsflowd sampling (1-in-N packets)', type: 'number', value: String(hsObj.samplingRate || 256) },
+    { name: 'sflow_device', label: 'hsflowd interface', value: hsObj.device || 'eth0' },
   ], async (v) => {
     let monitor_config = null;
     if (v.source === 'snmp') {
@@ -3219,7 +4020,15 @@ function editAgent(a) {
     } else if (v.source === 'netflow') {
       monitor_config = { source: 'netflow', netflow: { port: Number(v.netflow_port) || 2055 } };
     } else if (v.source === 'sflow') {
-      monitor_config = { source: 'sflow', sflow: { port: Number(v.sflow_port) || 6343 } };
+      const sflow = { port: Number(v.sflow_port) || 6343 };
+      if (v.sflow_hsflowd === 'on') {
+        const hs = {};
+        const rate = Number(v.sflow_sampling);
+        if (Number.isInteger(rate) && rate > 0) hs.samplingRate = rate;
+        if (v.sflow_device && v.sflow_device.trim()) hs.device = v.sflow_device.trim();
+        sflow.hsflowd = Object.keys(hs).length ? hs : true;
+      }
+      monitor_config = { source: 'sflow', sflow };
     } else if (v.source === 'proc') {
       monitor_config = { source: 'proc' };
     }
@@ -3255,11 +4064,39 @@ views.locations = async () => {
       el('td', {}, el('div', { class: 'row-actions' },
         el('button', { class: 'small ghost', onclick: () => showLocationTraffic(l) }, 'Traffic'),
         el('button', { class: 'small ghost', onclick: () => showLocationHistory(l) }, 'History'),
+        featureEnabled('assistant') ? el('button', { class: 'small ghost', onclick: () => showLocationSummary(l) }, 'AI status') : null,
         canWrite() ? el('button', { class: 'small ghost', onclick: () => editLocation(l) }, 'Edit') : null,
         canDelete() ? el('button', { class: 'small danger', onclick: () => deleteLocation(l) }, 'Delete') : null)),
     )))));
   return root;
 };
+
+// AI status: a brief, plain-language "what's going on at this location?" summary
+// from the opt-in assistant (per-agent health verdicts + recent findings). One
+// click, no question to type. Degrades gracefully when the feature is off (403).
+async function showLocationSummary(l) {
+  const card = $('#modal-card');
+  const out = el('div', { class: 'assistant-out muted' }, 'Thinking…');
+  const close = el('button', { class: 'ghost', onclick: closeModal }, 'Close');
+  card.replaceChildren(
+    el('h3', {}, `AI status — ${esc(l.name)}`),
+    el('p', { class: 'muted' }, 'Based on the latest probe-health verdicts and findings for this location.'),
+    out,
+    el('div', { class: 'form-actions' }, close));
+  $('#modal').classList.remove('hidden');
+  try {
+    const res = await api('/api/assistant/location-summary', { method: 'POST', body: { locationId: l.id } });
+    out.className = 'assistant-out';
+    out.replaceChildren(
+      el('div', {}, res.answer || '(empty response)'),
+      el('div', { class: 'assistant-meta muted' }, `${esc(res.model || '')} · ${res.agents ?? 0} agent(s) · ${res.findings ?? 0} finding(s) in context`));
+  } catch (err) {
+    out.className = 'assistant-out muted';
+    out.textContent = err.status === 403
+      ? 'The AI assistant is disabled. Set ANALYSIS_ASSISTANT_ENABLED=true (and an API key) in the server\'s .env to use it.'
+      : (err.status === 404 ? 'Location not found.' : err.message);
+  }
+}
 
 // Live, correlated traffic for all agents in a location. Polls every 3s while
 // the panel is open; stops cleanly on close.
@@ -3532,12 +4369,24 @@ views.enrollment = async () => {
   root.append(el('div', { class: 'section-head' }, el('h3', {}, 'Active codes'),
     canWrite() ? el('button', { class: 'small ghost', onclick: () => createCode() }, '+ New code (advanced)') : null));
   if (!codes.length) { root.append(el('div', { class: 'empty' }, 'No codes yet — use "Add agent" above.')); return root; }
+  // Codes are one-time install tickets; the agent's real credential is separate.
+  root.append(el('p', { class: 'muted enroll-note' }, 'Codes are one-time install tickets. Once an agent enrols it stays connected on its own permanent token — independent of the code’s status — so a "used" or "expired" code never disconnects the agent shown beside it.'));
+  // The agent(s) a code enrolled, each a clickable live online/offline badge.
+  const agentsCell = (agents) => ((agents && agents.length)
+    ? el('div', { class: 'code-agents' }, ...agents.map((a) => el('span', {
+      class: 'code-agent', role: 'button', tabindex: '0',
+      title: `${a.online ? 'Online' : 'Offline'} — open agent`,
+      onclick: () => openAgent(a.id),
+      onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openAgent(a.id); } },
+    }, el('span', { class: `badge ${a.online ? 'online' : 'offline'}` }, a.online ? 'online' : 'offline'), esc(a.name))))
+    : el('span', { class: 'muted' }, '–'));
   root.append(el('table', {},
-    el('thead', {}, el('tr', {}, ...['ID', 'Status', 'Uses', 'Location', 'Expires', 'Created', ''].map((h) => el('th', {}, h)))),
+    el('thead', {}, el('tr', {}, ...['ID', 'Status', 'Uses', 'Agents', 'Location', 'Expires', 'Created', ''].map((h) => el('th', {}, h)))),
     el('tbody', {}, ...codes.map((c) => el('tr', {},
       el('td', {}, String(c.id)),
       el('td', {}, el('span', { class: `badge ${c.status}` }, c.status)),
       el('td', {}, c.max_uses > 1 ? `${c.uses_remaining}/${c.max_uses}` : (c.uses_remaining === 0 ? 'used' : '1')),
+      el('td', {}, agentsCell(c.agents)),
       el('td', {}, c.location_name || '–'),
       el('td', { class: 'muted' }, fmtDate(c.expires_at)),
       el('td', { class: 'muted' }, fmtDate(c.created_at)),
@@ -3686,7 +4535,8 @@ views.settings = async () => {
   const isAdmin = role === 'admin';
   const subtabs = [];
   if (isAdmin) subtabs.push(['analyse', 'Analysis'], ['alerting', 'Alerting'], ['maintenance', 'Maintenance'], ['updates', 'Updates'], ['retention', 'Retention'], ['types', 'Traffic types'], ['map', 'Map'], ['users', 'Users']);
-  subtabs.push(['license', 'License']);
+  // Appearance + License are personal/read-only — available to every role.
+  subtabs.push(['appearance', 'Appearance'], ['license', 'License']);
   if (!settingsTab || !subtabs.some(([k]) => k === settingsTab)) settingsTab = subtabs[0][0];
 
   const nav = el('div', { class: 'subtabs' }, ...subtabs.map(([k, label]) =>
@@ -3696,6 +4546,7 @@ views.settings = async () => {
   const views2 = {
     users: () => views.users(),
     license: () => views.license(),
+    appearance: settingsAppearanceView,
     map: settingsMapView,
     types: settingsTypesView,
     analyse: settingsAnalyseView,
@@ -3721,6 +4572,45 @@ function licenseBadge(license, feature) {
   return el('span', { class: `badge ${ok ? 'active' : 'offline'}` }, `Licence: ${feature} ${ok ? 'yes' : 'no'}`);
 }
 
+// Settings → Appearance: pick a dashboard colour theme. The choice is saved to
+// the signed-in user's account (so it follows them across browsers) and cached
+// locally for instant apply. Available to every role — it's a personal setting.
+function settingsAppearanceView() {
+  const root = el('div');
+  root.append(el('p', { class: 'muted settings-intro' },
+    'Choose a colour theme. Each comes in light and dark — the 🌙/☀️ button in the top bar switches brightness while keeping your palette. Your choice is saved to your account, so it follows you to any browser you sign in from.'));
+
+  const grid = el('div', { class: 'theme-grid' });
+  const currentTheme = () => document.documentElement.dataset.theme || 'light';
+  const swatchStrip = (variant) => el('span', { class: 'theme-swatch' }, ...variant.swatch.map((c) => el('span', { style: `background:${c}` })));
+
+  function paint() {
+    grid.replaceChildren(...PALETTES.map((p) => {
+      const selected = p.key === paletteOf(currentTheme());
+      return el('button', {
+        class: `theme-card${selected ? ' active' : ''}`,
+        type: 'button',
+        'aria-pressed': selected ? 'true' : 'false',
+        onclick: async () => {
+          // Keep the current brightness; the topbar toggle is what changes it.
+          const target = themeMeta(currentTheme()).family === 'light' ? p.light.key : p.dark.key;
+          try { await setTheme(target); toast(`Theme: ${p.label}`); }
+          catch (e) { toast(errText(e) || 'Could not save theme', true); }
+          paint();
+        },
+      },
+        el('span', { class: 'theme-duo' }, swatchStrip(p.light), swatchStrip(p.dark)),
+        el('span', { class: 'theme-meta' },
+          el('span', { class: 'theme-name' }, p.label),
+          el('span', { class: 'theme-fam muted' }, 'Light + dark')),
+      );
+    }));
+  }
+  paint();
+  root.append(grid);
+  return root;
+}
+
 // Settings -> Updates: the server's version and the agent version it serves, plus
 // which enrolled agents are behind. Admins can push a one-click update to
 // systemd-managed agents from here; checks themselves make no external calls.
@@ -3733,9 +4623,27 @@ async function settingsUpdatesView() {
     stat('Server', ver.server ? `v${ver.server}` : '–'),
     stat('Agent (served)', ver.agent ? `v${ver.agent}` : '–')));
 
+  // Re-read the agent source from disk so a freshly-pulled version is served
+  // without restarting the server. admin only.
+  if (canDelete()) {
+    root.append(el('div', { class: 'row-actions' },
+      el('button', {
+        class: 'small',
+        title: 'Re-read the agent source from disk so a freshly-pulled version is served — no server restart needed',
+        onclick: async () => {
+          try {
+            const r = await api('/system/agent-source/reload', { method: 'POST' });
+            toast(r && r.version ? `Agent source reloaded — now serving v${r.version}.` : 'Agent source reloaded.');
+            render();
+          } catch (err) { toast(err.message, true); }
+        },
+      }, 'Reload agent source')));
+    root.append(el('p', { class: 'muted' }, 'After pulling a new agent version on the server host, reload to publish it without restarting the server.'));
+  }
+
   const cur = ver.agent || null;
   const withVer = agents.filter((a) => a.capabilities && a.capabilities.agentVersion);
-  const behind = cur ? withVer.filter((a) => a.capabilities.agentVersion !== cur) : [];
+  const behind = withVer.filter((a) => agentIsBehind(a, cur));
 
   root.append(el('div', { class: 'cards' },
     stat('Agents reporting', `${withVer.length} / ${agents.length}`),
@@ -3769,8 +4677,13 @@ async function settingsUpdatesView() {
 async function settingsAnalyseView() {
   const data = await api('/api/settings');
   const root = el('div');
-  root.append(el('p', { class: 'muted settings-intro' }, 'The server learns a normal baseline for each metric and raises a finding when a measurement deviates enough from it. Here you set how sensitive detection is — changes take effect immediately, without restart. ', licenseBadge(data.license, 'analysis')));
-  root.append(el('div', { class: 'settings-grid' }, analyseSettingsCard(data.analysis), throughputSettingsCard(data.throughput)));
+  // The assistant is configurable only when the licence includes it (the PUT is
+  // refused server-side otherwise). An unknown licence (null) keeps the card, in
+  // line with the "allow until we know it's off" rule used elsewhere.
+  const assistantLicensed = !data.license || data.license.assistant !== false;
+  root.append(el('p', { class: 'muted settings-intro' }, 'The server learns a normal baseline for each metric and raises a finding when a measurement deviates enough from it. Here you set how sensitive detection is — changes take effect immediately, without restart. The opt-in AI assistant (its on/off switch and API key) is configured here too. ', licenseBadge(data.license, 'analysis')));
+  root.append(el('div', { class: 'settings-grid' }, analyseSettingsCard(data.analysis), throughputSettingsCard(data.throughput),
+    assistantLicensed ? assistantSettingsCard(data.assistant) : assistantUnlicensedCard(data.license)));
   return root;
 }
 
@@ -3794,12 +4707,207 @@ function throughputSettingsCard(t) {
 
 async function settingsAlertingView() {
   const data = await api('/api/settings');
+  const a = data.alerting || {};
+  const ch = a.channels || {};
   const root = el('div');
-  root.append(el('p', { class: 'muted settings-intro' }, 'When a finding is raised it can be dispatched via e-mail, webhook, or syslog. The overview below shows which channels are enabled and their minimum severity. ', licenseBadge(data.license, 'alerting')));
-  const card = settingsCard('Alerting', alertingSummary(data.alerting));
-  card.append(el('p', { class: 'muted small' }, 'Channels are configured via the server .env because they contain secrets (SMTP password, webhook HMAC). Changes require a restart. Env: ALERTING_*, SMTP_*, WEBHOOK_*.'));
-  root.append(el('div', { class: 'settings-grid' }, card));
+  // Editable only when the licence includes alerting (the PUT is refused server-side
+  // otherwise). An unknown licence (null) keeps the editor, per the "allow until we
+  // know it's off" rule used for the assistant.
+  const alertingLicensed = !data.license || data.license.alerting !== false;
+  root.append(el('p', { class: 'muted settings-intro' },
+    'When a finding is raised it can be dispatched by e-mail, webhook or syslog. Turn alerting on, then enable the channels you want and set a minimum severity for each. Settings are stored in the database and take effect immediately — no restart. ',
+    licenseBadge(data.license, 'alerting')));
+  if (!alertingLicensed) {
+    root.append(el('div', { class: 'settings-grid' }, alertingUnlicensedCard(data.license)));
+    return root;
+  }
+  root.append(el('div', { class: 'settings-grid' },
+    alertingGeneralCard(a),
+    alertingEmailCard(ch.email),
+    alertingWebhookCard(ch.webhook),
+    alertingSyslogCard(ch.syslog)));
   return root;
+}
+
+// Read-only placeholder shown instead of the editable alerting cards when the
+// licence does not include alerting. The PUT is refused server-side too — this
+// just explains why the controls are gone rather than looking broken.
+function alertingUnlicensedCard(license) {
+  return el('div', { class: 'settings-card' }, el('h3', {}, 'Alerting'),
+    el('p', { class: 'muted' }, 'Alerting is not included in your licence, so channels cannot be configured here. Contact your provider to add it to your licence.'),
+    licenseBadge(license, 'alerting'));
+}
+
+// Master switch + cooldown. Saves just { enabled, cooldownMs }; the server merges
+// it onto the stored config, leaving the per-channel settings untouched.
+function alertingGeneralCard(a) {
+  const enabledI = el('input', { type: 'checkbox' }); enabledI.checked = !!a.enabled;
+  const coolI = el('input', { type: 'number', min: '0', max: '1440', step: '1', value: String(Math.round((a.cooldownMs ?? 900000) / 60000)) });
+  const err = el('p', { class: 'error' });
+  const btn = el('button', { class: 'small' }, 'Save');
+  async function save() {
+    err.textContent = '';
+    // Don't silently coerce a blank/invalid cooldown to 0 — that would disable
+    // throttling and let repeated findings spam every channel. An explicit 0 is
+    // still allowed (a deliberate "send every finding, no cooldown").
+    const raw = coolI.value.trim();
+    const mins = Number(raw);
+    if (raw === '' || !Number.isFinite(mins) || mins < 0 || mins > 1440) {
+      err.textContent = 'Cooldown must be a number between 0 and 1440 minutes.';
+      return;
+    }
+    btn.disabled = true;
+    try { await api('/api/settings/alerting', { method: 'PUT', body: { enabled: enabledI.checked, cooldownMs: Math.round(mins * 60000) } }); toast('Alerting saved'); }
+    catch (e2) { err.textContent = errText(e2); }
+    finally { btn.disabled = false; }
+  }
+  btn.addEventListener('click', save);
+  return el('div', { class: 'settings-card' }, el('h3', {}, 'Alerting'),
+    el('div', { class: 'form-grid' },
+      el('label', { class: 'set-field' }, el('span', {}, 'Alerting enabled'), enabledI,
+        el('span', { class: 'muted small' }, 'Master switch. When off, findings are still recorded but never dispatched.')),
+      el('label', { class: 'set-field' }, el('span', {}, 'Cooldown (minutes)'), coolI,
+        el('span', { class: 'muted small' }, 'Minimum time between repeated alerts for the same condition on the same host. 0 = no throttling (every finding is sent).')),
+      err, el('div', { class: 'form-actions' }, btn)));
+}
+
+function alertSevSelect(value) {
+  const sel = el('select', {}, ...['INFO', 'WARN', 'CRIT'].map((s) => el('option', { value: s }, s)));
+  sel.value = ['INFO', 'WARN', 'CRIT'].includes(value) ? value : 'WARN';
+  return sel;
+}
+
+// A write-only secret field (SMTP password / webhook secret): blank by default,
+// the placeholder shows whether one is stored + a masked hint, and a "Remove"
+// checkbox (only when set) clears it. reset() refreshes it after a save.
+function alertSecretField(label, hint, isSet, hintMask) {
+  const input = el('input', { type: 'password', autocomplete: 'new-password', spellcheck: 'false' });
+  const clear = el('input', { type: 'checkbox' });
+  const clearRow = el('label', { class: 'inline muted small' }, clear, el('span', {}, `Remove the stored ${label.toLowerCase()}`));
+  function reset(set, mask) {
+    input.value = '';
+    input.placeholder = set ? `Set (${mask}) — type to replace` : 'Not set';
+    clear.checked = false;
+    clearRow.classList.toggle('hidden', !set);
+  }
+  reset(isSet, hintMask);
+  const field = el('label', { class: 'set-field' }, el('span', {}, label), input, el('span', { class: 'muted small' }, hint));
+  return { rows: [field, clearRow], input, clear, reset };
+}
+
+function alertField(label, input, hint) {
+  return el('label', { class: 'set-field' }, el('span', {}, label), input, hint ? el('span', { class: 'muted small' }, hint) : null);
+}
+
+// One channel card. The shell renders Enabled + Minimum severity, then the
+// channel-specific bodyRows, and wires Save (PUT { [name]: slice }) + Send test
+// (POST /api/alerting/test). gather() returns the channel-specific slice;
+// onSaved(alerting) lets a channel refresh its secret field after saving.
+function alertingChannelCard({ name, title, blurb, channel, bodyRows, gather, onSaved }) {
+  const c = channel || {};
+  const enabledI = el('input', { type: 'checkbox' }); enabledI.checked = !!c.enabled;
+  const sevI = alertSevSelect(c.minSeverity);
+  const err = el('p', { class: 'error' });
+  const saveBtn = el('button', { class: 'small' }, 'Save');
+  const testBtn = el('button', { class: 'small ghost' }, 'Send test');
+  async function save() {
+    err.textContent = ''; saveBtn.disabled = true;
+    const slice = gather();
+    slice.enabled = enabledI.checked;
+    slice.minSeverity = sevI.value;
+    try {
+      const res = await api('/api/settings/alerting', { method: 'PUT', body: { [name]: slice } });
+      toast(`${title} saved`);
+      if (onSaved) onSaved(res.alerting || {});
+    } catch (e2) { err.textContent = errText(e2); }
+    finally { saveBtn.disabled = false; }
+  }
+  async function sendTest() {
+    err.textContent = ''; testBtn.disabled = true;
+    try {
+      const res = await api('/api/alerting/test', { method: 'POST', body: { channel: name } });
+      const r = res.result || {};
+      if (r.ok) toast(`${title}: test sent`);
+      else err.textContent = `Test failed: ${r.detail || 'unknown error'}`;
+    } catch (e2) { err.textContent = errText(e2); }
+    finally { testBtn.disabled = false; }
+  }
+  saveBtn.addEventListener('click', save);
+  testBtn.addEventListener('click', sendTest);
+  return el('div', { class: 'settings-card' }, el('h3', {}, title),
+    el('div', { class: 'form-grid' },
+      alertField('Enabled', enabledI, blurb),
+      alertField('Minimum severity', sevI, 'Only findings at or above this level go to this channel.'),
+      ...bodyRows,
+      err,
+      el('div', { class: 'form-actions' }, saveBtn, testBtn,
+        el('span', { class: 'muted small' }, 'Save before testing — the test uses the saved settings.'))));
+}
+
+function alertingEmailCard(channel) {
+  const e = channel || {}; const smtp = e.smtp || {};
+  const toI = el('input', { type: 'text', value: e.to || '', placeholder: 'ops@example.eu, oncall@example.eu' });
+  const fromI = el('input', { type: 'text', value: e.from || '', placeholder: 'blueeye@example.eu' });
+  const hostI = el('input', { type: 'text', value: smtp.host || '', placeholder: 'smtp.example.eu' });
+  const portI = el('input', { type: 'number', min: '1', max: '65535', step: '1', value: String(smtp.port ?? 587) });
+  const userI = el('input', { type: 'text', value: smtp.user || '' });
+  const secureI = el('input', { type: 'checkbox' }); secureI.checked = !!smtp.secure;
+  const pass = alertSecretField('SMTP password', 'Write-only — stored on the server, never displayed again.', !!e.smtpPassSet, e.smtpPassHint || '');
+  return alertingChannelCard({
+    name: 'email', title: 'E-mail', blurb: 'Send alerts by e-mail over SMTP.', channel: e,
+    bodyRows: [
+      alertField('To', toI, 'Recipient(s), comma-separated.'),
+      alertField('From', fromI, 'Sender address.'),
+      alertField('SMTP host', hostI, 'Use an EU/self-hosted mail server.'),
+      alertField('SMTP port', portI),
+      alertField('SMTP username', userI, 'Leave blank for an unauthenticated relay.'),
+      ...pass.rows,
+      alertField('Use TLS (secure)', secureI, 'On for implicit TLS (port 465); off uses STARTTLS.'),
+    ],
+    gather: () => {
+      const slice = { to: toI.value.trim(), from: fromI.value.trim(), smtp: { host: hostI.value.trim(), port: Number(portI.value), user: userI.value.trim(), secure: secureI.checked } };
+      if (pass.clear.checked) slice.clearSmtpPass = true;
+      else if (pass.input.value.trim() !== '') slice.smtp.pass = pass.input.value.trim();
+      return slice;
+    },
+    onSaved: (al) => { const ne = (al.channels && al.channels.email) || {}; pass.reset(!!ne.smtpPassSet, ne.smtpPassHint || ''); },
+  });
+}
+
+function alertingWebhookCard(channel) {
+  const w = channel || {};
+  const urlI = el('input', { type: 'text', value: w.url || '', placeholder: 'https://hooks.example.eu/blueeye' });
+  const secret = alertSecretField('Signing secret', 'HMAC-SHA256 secret — the POST is signed as X-BlueEye-Signature. Write-only.', !!w.secretSet, w.secretHint || '');
+  return alertingChannelCard({
+    name: 'webhook', title: 'Webhook', blurb: 'POST each finding as JSON to a URL.', channel: w,
+    bodyRows: [alertField('URL', urlI, 'Endpoint that receives the JSON POST.'), ...secret.rows],
+    gather: () => {
+      const slice = { url: urlI.value.trim() };
+      if (secret.clear.checked) slice.clearSecret = true;
+      else if (secret.input.value.trim() !== '') slice.secret = secret.input.value.trim();
+      return slice;
+    },
+    onSaved: (al) => { const nw = (al.channels && al.channels.webhook) || {}; secret.reset(!!nw.secretSet, nw.secretHint || ''); },
+  });
+}
+
+function alertingSyslogCard(channel) {
+  const s = channel || {};
+  const hostI = el('input', { type: 'text', value: s.host || '', placeholder: 'siem.example.eu' });
+  const portI = el('input', { type: 'number', min: '1', max: '65535', step: '1', value: String(s.port ?? 514) });
+  const protoI = el('select', {}, el('option', { value: 'udp' }, 'UDP'), el('option', { value: 'tcp' }, 'TCP'));
+  protoI.value = s.proto === 'tcp' ? 'tcp' : 'udp';
+  const appI = el('input', { type: 'text', value: s.appName || 'blueeye' });
+  return alertingChannelCard({
+    name: 'syslog', title: 'Syslog', blurb: 'Send findings as RFC5424 syslog lines.', channel: s,
+    bodyRows: [
+      alertField('Host', hostI, 'Syslog collector / SIEM host.'),
+      alertField('Port', portI),
+      alertField('Protocol', protoI),
+      alertField('App name', appI, 'APP-NAME field in the syslog line.'),
+    ],
+    gather: () => ({ host: hostI.value.trim(), port: Number(portI.value), proto: protoI.value, appName: appI.value.trim() }),
+  });
 }
 
 // Maintenance windows: during an active window, alert notifications are
@@ -3930,9 +5038,71 @@ function analyseSettingsCard(a) {
       { key: 'warnSigma', label: 'WARN threshold (σ from baseline)', type: 'number', min: 0.5, max: 20, step: 0.1, hint: 'Threshold for WARN — should be lower than CRIT. Typically 3.' },
       { key: 'baselineDays', label: 'Baseline window (days)', type: 'number', min: 1, max: 90, step: 1, hint: 'How many days of history the normal is calculated from.' },
       { key: 'minSamples', label: 'Min. samples before alerting', type: 'number', min: 10, max: 100000, step: 1, hint: 'Number of measurements before a metric is monitored — avoids false alarms right after startup.' },
-      { key: 'assistantEnabled', label: 'AI assistant', type: 'checkbox', readonly: true, hint: 'Opt-in natural-language assistant. Set via .env (key is a secret).' },
     ],
   });
+}
+
+// AI assistant (opt-in): admin-editable enable flag, API key and model — instead
+// of env-only. The key is write-only: the API only reports whether one is set
+// (apiKeySet + a masked hint), so the field stays blank and a typed value
+// replaces the stored key. The assistant calls Mistral (EU).
+function assistantSettingsCard(a) {
+  const v = a || { enabled: false, model: '', apiKeySet: false, apiKeyHint: '' };
+  const enabledI = el('input', { type: 'checkbox' });
+  const modelI = el('input', { type: 'text', placeholder: 'mistral-small-latest' });
+  const keyI = el('input', { type: 'password', autocomplete: 'new-password', spellcheck: 'false' });
+  const clearI = el('input', { type: 'checkbox' });
+  const clearRow = el('label', { class: 'inline muted small' }, clearI, el('span', {}, 'Remove the stored key'));
+  const note = el('p', { class: 'muted small' });
+  const err = el('p', { class: 'error' });
+  const btn = el('button', { class: 'small' }, 'Save');
+
+  function applyState(s) {
+    enabledI.checked = !!s.enabled;
+    modelI.value = s.model || '';
+    keyI.value = '';
+    keyI.placeholder = s.apiKeySet ? `Key set (${s.apiKeyHint}) — type to replace` : 'Paste an API key to enable';
+    clearRow.classList.toggle('hidden', !s.apiKeySet);
+    clearI.checked = false;
+    note.textContent = (s.enabled && !s.apiKeySet)
+      ? '⚠ Enabled but no API key set — add one above, or the assistant returns an error.'
+      : 'Calls Mistral (EU). The key is stored in the server database and is never shown again.';
+  }
+  applyState(v);
+
+  async function save() {
+    err.textContent = ''; btn.disabled = true;
+    const body = { enabled: enabledI.checked, model: modelI.value.trim() || 'mistral-small-latest' };
+    if (clearI.checked) body.clearApiKey = true;
+    else if (keyI.value.trim() !== '') body.apiKey = keyI.value.trim();
+    try {
+      const res = await api('/api/settings/assistant', { method: 'PUT', body });
+      applyState(res.assistant || res);
+      toast('AI assistant saved');
+    } catch (e2) { err.textContent = errText(e2); }
+    finally { btn.disabled = false; }
+  }
+  btn.addEventListener('click', save);
+
+  return el('div', { class: 'settings-card' }, el('h3', {}, 'AI assistant'),
+    el('div', { class: 'form-grid' },
+      el('label', { class: 'set-field' }, el('span', {}, 'Assistant enabled'), enabledI,
+        el('span', { class: 'muted small' }, 'Opt-in natural-language assistant: host Q&A + per-location summaries.')),
+      el('label', { class: 'set-field' }, el('span', {}, 'API key'), keyI,
+        el('span', { class: 'muted small' }, 'Mistral API key. Write-only — stored on the server, never displayed again.')),
+      clearRow,
+      el('label', { class: 'set-field' }, el('span', {}, 'Model'), modelI,
+        el('span', { class: 'muted small' }, 'Provider model id. Default mistral-small-latest.')),
+      note, err, el('div', { class: 'form-actions' }, btn)));
+}
+
+// Read-only placeholder shown instead of the editable AI-assistant card when the
+// licence does not include the assistant feature. The PUT is refused server-side
+// too — this just explains why the controls are gone rather than looking broken.
+function assistantUnlicensedCard(license) {
+  return el('div', { class: 'settings-card' }, el('h3', {}, 'AI assistant'),
+    el('p', { class: 'muted' }, 'The AI assistant is not included in your licence, so it cannot be enabled here. Contact your provider to add it to your licence.'),
+    licenseBadge(license, 'assistant'));
 }
 
 function retentionSettingsCard(r) {
@@ -3953,7 +5123,7 @@ function retentionSettingsCard(r) {
 async function settingsMapView() {
   const data = await api('/api/settings');
   const root = el('div');
-  root.append(el('p', { class: 'muted settings-intro' }, 'The maps (Map tab, Geo and the location picker) fetch background tiles from the tile URL, and address search uses the geocoder URL. Use an EU/self-hosted source in production — no hardcoded US service. Stored in the database and works without restart.'));
+  root.append(el('p', { class: 'muted settings-intro' }, 'The maps (Sites, Destinations and the location picker) fetch background tiles from the tile URL, and address search uses the geocoder URL. Use an EU/self-hosted source in production — no hardcoded US service. Stored in the database and works without restart.'));
   root.append(el('div', { class: 'settings-grid' }, mapSettingsCard(data.map)));
   return root;
 }
@@ -4054,14 +5224,6 @@ function featureBadges(features) {
   return el('div', { class: 'badges' }, ...['analysis', 'assistant', 'alerting', 'geo'].map((f) =>
     el('span', { class: `badge ${features[f] ? 'active' : 'offline'}` }, `${f}: ${features[f] ? 'yes' : 'no'}`)));
 }
-function alertingSummary(a) {
-  if (!a) return el('p', { class: 'muted' }, '–');
-  const rows = [el('tr', {}, el('td', { class: 'muted' }, 'Enabled'), el('td', {}, boolText(a.enabled)))];
-  for (const [name, c] of Object.entries(a.channels || {})) {
-    rows.push(el('tr', {}, el('td', { class: 'muted' }, name), el('td', {}, `${boolText(c.enabled)} · min ${c.minSeverity || '–'}`)));
-  }
-  return el('table', { class: 'kv' }, el('tbody', {}, ...rows));
-}
 function mapSettingsCard(map) {
   const m = map || {};
   const url = el('input', { type: 'text', value: m.tileUrl || '' });
@@ -4150,21 +5312,107 @@ async function deleteUser(u) {
   catch (err) { toast(err.message, true); }
 }
 
+// Formats a plan limit for display: null/undefined means "unlimited".
+const fmtLimit = (v) => (v === null || v === undefined ? 'Unlimited' : String(v));
+// "used / max (pct%)" plus a usage bar; unlimited limits show just the count.
+function limitStat(label, used, max) {
+  if (max === null || max === undefined) return stat(label, `${used} / ∞`);
+  const pct = max > 0 ? Math.round((used / max) * 100) : 0;
+  return stat(label, el('div', {}, el('div', {}, `${used} / ${max} (${pct}%)`), usageBar(pct)));
+}
+
+// Human labels for the licence status badge (the raw status still drives the
+// badge colour via its CSS class). 'expired' reads as a clear, distinct state
+// rather than the catch-all 'invalid'.
+const LICENSE_STATUS_LABELS = {
+  valid: 'Valid',
+  grace: 'Valid (grace)',
+  expired: 'License expired',
+  not_yet_valid: 'Not yet valid',
+  invalid: 'Invalid',
+  unlicensed: 'Unlicensed',
+  unknown: 'Unknown',
+};
+const licenseStatusLabel = (status) => LICENSE_STATUS_LABELS[status] || status;
+
 views.license = async () => {
   const s = await api('/license/status');
+  // Plan / usage / matrix are best-effort — a server without the plan layer (or
+  // a 503) must still render the classic status block.
+  let plan = null;
+  let usage = null;
+  let matrix = null;
+  try { plan = await api('/license/plan'); } catch { /* optional */ }
+  try { usage = await api('/license/usage'); } catch { /* optional */ }
+  try { matrix = await api('/license/matrix'); } catch { /* optional */ }
+
   const root = el('div');
   root.append(el('div', { class: 'section-head' },
     el('h2', {}, 'License status'),
     canWrite() ? el('button', { class: 'small', onclick: refreshLicense }, 'Re-validate now') : null));
+  // Offline mode reports a different evidence trail (a local signed file with a
+  // validity window) instead of the online grace window.
+  const offline = s.mode === 'offline';
+  // The licence's own expiry, shown for both modes. null = perpetual / none.
+  const expiryText = s.validUntil ? fmtDate(s.validUntil) : (s.licensed ? 'No expiry' : '–');
   root.append(el('div', { class: 'cards' },
-    stat('Status', el('span', { class: `badge ${s.status}` }, s.status)),
+    stat('Status', el('span', { class: `badge ${s.status}` }, licenseStatusLabel(s.status))),
     stat('Licensed', s.licensed ? 'Yes' : 'No'),
-    stat('Max. agents', String(s.maxAgents)),
-    stat('Server ID', s.serverId || '–'),
+    plan ? stat('Plan', `BlueEye ${plan.plan_name}`) : stat('Max. agents', String(s.maxAgents)),
+    offline ? stat('Validation', 'Offline (local file)') : stat('Server ID', s.serverId || '–'),
     stat('Last validated', fmtDate(s.verifiedAt)),
-    stat('Grace expires', fmtDate(s.graceUntil)),
+    stat('License expires', expiryText),
+    // Grace is an online-only concept (running on a cached proof while offline).
+    offline ? null : stat('Grace expires', fmtDate(s.graceUntil)),
   ));
+  if (offline && s.organizationId) root.append(el('p', { class: 'muted' }, `Organization: ${s.organizationId}`));
+  if (offline && !s.licensed) root.append(el('p', { class: 'muted' }, 'Restricted mode — the local licence is missing, expired or invalid. Install a valid licence file and press "Re-validate now".'));
   if (s.reason) root.append(el('p', { class: 'muted' }, `Note: ${s.reason}`));
+
+  // ---- License overview (active plan limits + support) --------------------
+  if (plan) {
+    root.append(el('h3', {}, 'Plan overview'));
+    root.append(el('div', { class: 'cards' },
+      stat('Plan', `BlueEye ${plan.plan_name}${plan.is_trial ? ' (trial)' : ''}`),
+      stat('Support level', plan.support_level),
+      stat('Max. agents', fmtLimit(plan.limits.max_agents)),
+      stat('Max. active test paths', fmtLimit(plan.limits.max_test_paths)),
+      stat('History retention', plan.limits.history_days === null ? 'Unlimited' : `${plan.limits.history_days} days`),
+    ));
+  }
+
+  // ---- Usage overview -----------------------------------------------------
+  if (usage) {
+    root.append(el('h3', {}, 'Usage'));
+    root.append(el('div', { class: 'cards' },
+      limitStat('Agents', usage.agents.used, usage.agents.max),
+      limitStat('Active test paths', usage.test_paths.used, usage.test_paths.max),
+      stat('History limit', usage.history_days === null ? 'Unlimited' : `${usage.history_days} days`),
+      stat('Last validation', fmtDate(usage.lastValidation)),
+    ));
+  }
+
+  // ---- Feature matrix (active plan + upgrade hints) -----------------------
+  if (matrix) {
+    root.append(el('h3', {}, 'Feature matrix'));
+    const active = matrix.activePlan;
+    const head = el('tr', {}, el('th', {}, 'Feature'),
+      ...matrix.plans.map((p) => el('th', { class: p.plan_key === active ? 'active' : '' }, p.plan_name)));
+    const body = matrix.features.map((f) => {
+      const cells = matrix.plans.map((p) => {
+        const on = p.features[f.key];
+        return el('td', { class: p.plan_key === active ? 'active' : '' }, on ? '✓' : '–');
+      });
+      const activePlan = matrix.plans.find((p) => p.plan_key === active);
+      const entitled = activePlan && activePlan.features[f.key];
+      return el('tr', { class: entitled ? '' : 'muted' },
+        el('td', {}, f.label), ...cells);
+    });
+    root.append(el('div', { class: 'tablewrap' },
+      el('table', { class: 'matrix' }, el('thead', {}, head), el('tbody', {}, ...body))));
+    root.append(el('p', { class: 'muted' }, 'Features not included in your plan are greyed out — contact your administrator or upgrade the licence to enable them.'));
+  }
+
   root.append(el('p', { class: 'muted' }, 'License renewal is done with the provider. Once renewed, press "Re-validate now" to fetch the updated status immediately (otherwise it is checked automatically every 6 hours).'));
   return root;
 };
@@ -4241,6 +5489,7 @@ async function render({ silent = false } = {}) {
   $('#login').classList.add('hidden');
   $('#app').classList.remove('hidden');
   connectLive(); // live findings channel (idempotent)
+  await loadProfile(); // apply the user's saved colour theme (once per session)
   await loadFeatures();
   applyFeatureVisibility(); // hide modules not included in the licence
   // Show who is logged in: email + role.
@@ -4254,8 +5503,9 @@ async function render({ silent = false } = {}) {
   if (currentView !== 'interfaces') stopIfaces();
   if (currentView !== 'fleet') stopFleet();
   if (currentView !== 'agent') stopAgent();
-  // Tear down the Leaflet map when leaving the geo view (it rebuilds on entry).
+  // Tear down the Leaflet maps when leaving their views (they rebuild on entry).
   if (currentView !== 'geo') stopGeo();
+  if (currentView !== 'map') stopMap();
 
   // Admin-only tabs (e.g. Users); send non-admins back to agents if needed.
   for (const b of document.querySelectorAll('.tabs button[data-admin]')) {
@@ -4294,11 +5544,21 @@ $('#login-form').addEventListener('submit', async (e) => {
   try { await login($('#email').value, $('#password').value); render(); }
   catch (err) { $('#login-error').textContent = err.message; }
 });
-$('#logout').addEventListener('click', () => { setAutoRefresh(false); stopOverview(); stopFleet(); stopAgent(); stopProbes(); stopIfaces(); $('#autorefresh').checked = false; logout(); });
+$('#logout').addEventListener('click', () => { setAutoRefresh(false); stopOverview(); stopFleet(); stopAgent(); stopProbes(); stopIfaces(); stopMap(); stopGeo(); $('#autorefresh').checked = false; logout(); });
 $('#refresh').addEventListener('click', () => render());
 $('#autorefresh').addEventListener('change', (e) => setAutoRefresh(e.target.checked));
+function closeNav() { $('#app').classList.remove('nav-open'); }
 for (const b of document.querySelectorAll('.tabs button')) {
-  b.addEventListener('click', () => { closeDrawer(); currentView = b.dataset.view; render(); });
+  b.addEventListener('click', () => { closeDrawer(); closeNav(); currentView = b.dataset.view; render(); });
+}
+// Off-canvas sidebar (mobile/tablet): the ☰ button opens it; tapping the dimmed
+// backdrop or anything outside the sidebar closes it again.
+{
+  const navToggle = $('#nav-toggle');
+  if (navToggle) navToggle.addEventListener('click', (e) => { e.stopPropagation(); $('#app').classList.toggle('nav-open'); });
+  $('#app').addEventListener('click', (e) => {
+    if ($('#app').classList.contains('nav-open') && !e.target.closest('.sidebar') && !e.target.closest('#nav-toggle')) closeNav();
+  });
 }
 {
   const sq = $('#search-q');

@@ -9,7 +9,7 @@ const { validateEnroll } = require('../validation/enrollmentValidation');
 // agent has no token yet; the one-time enrollment code is its credential.
 // `notifyDashboard` (optional) pushes a live "agent enrolled" event to the UI so
 // the enrollment screen flips to "connected" within seconds.
-function createAgentEnrollRouter({ enrollmentStore, notifyDashboard }) {
+function createAgentEnrollRouter({ enrollmentStore, notifyDashboard, integrationTrigger = null }) {
   const router = express.Router();
 
   // POST /agents/enroll { code, hostname, platform, arch }
@@ -47,6 +47,13 @@ function createAgentEnrollRouter({ enrollmentStore, notifyDashboard }) {
                 payload: { agentId: outcome.agentId, hostname: value.hostname, platform: value.platform, arch: value.arch },
               });
             } catch { /* best-effort; never fail enrollment over a broadcast */ }
+          }
+          // Outbound integrations: sync the new agent to IPAM (e.g. Nautobot).
+          // Fire-and-forget so a slow/failing target never blocks enrollment.
+          if (integrationTrigger && typeof integrationTrigger.emitAgentEvent === 'function') {
+            try {
+              integrationTrigger.emitAgentEvent('enroll', { id: outcome.agentId, hostname: value.hostname }).catch(() => {});
+            } catch { /* never fail enrollment over an integration */ }
           }
           // The plaintext token is returned ONCE, here.
           return res.status(201).json({ agentId: outcome.agentId, token });

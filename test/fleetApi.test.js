@@ -96,6 +96,20 @@ test('computeFleet sorts worst-first and counts a summary', () => {
   assert.equal(summary.ok, 1);
 });
 
+test('computeFleet surfaces each agent location (id + name) for per-location scoping', () => {
+  const agents = [
+    { id: 1, hostname: 'hq', status: 'online', location_id: 4, location_name: 'Copenhagen HQ' },
+    { id: 2, hostname: 'unassigned', status: 'online' },
+  ];
+  const { agents: fleet } = computeFleet(agents, {}, { now: NOW });
+  const a1 = fleet.find((a) => a.agentId === 1);
+  assert.equal(a1.locationId, 4);
+  assert.equal(a1.locationName, 'Copenhagen HQ');
+  const a2 = fleet.find((a) => a.agentId === 2);
+  assert.equal(a2.locationId, null); // null-safe when an agent has no location
+  assert.equal(a2.locationName, null);
+});
+
 // ---- interface folding -----------------------------------------------------
 
 test('interfaceHealthSummary reduces to the worst interface (null when no data)', () => {

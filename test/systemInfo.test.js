@@ -8,7 +8,7 @@ const assert = require('node:assert/strict');
 const request = require('supertest');
 
 const { createSystemInfo } = require('../src/services/systemInfo');
-const { makeApp, makeSystemInfo, authHeader } = require('../test-support/fakes');
+const { makeApp, makeSystemInfo, makeSourceStore, authHeader } = require('../test-support/fakes');
 
 // ---- service unit tests ----------------------------------------------------
 test('getDisk computes total/used/free from statfs', async () => {
@@ -113,5 +113,34 @@ test('GET /system/version returns server + served agent versions (viewer+)', asy
 
 test('GET /system/version without a token returns 401', async () => {
   const res = await request(makeApp()).get('/system/version');
+  assert.equal(res.status, 401);
+});
+
+// ---- POST /system/agent-source/reload --------------------------------------
+test('POST /system/agent-source/reload re-packages and returns the served version (admin)', async () => {
+  let reloaded = 0;
+  let version = '0.1.0';
+  const agentSourceStore = makeSourceStore({
+    reload: () => { reloaded += 1; version = '0.2.0'; },
+    sourceVersion: () => version,
+  });
+  const res = await request(makeApp({ agentSourceStore }))
+    .post('/system/agent-source/reload')
+    .set('Authorization', authHeader('admin'));
+  assert.equal(res.status, 200);
+  assert.equal(reloaded, 1);
+  assert.equal(res.body.version, '0.2.0');
+  assert.equal(res.body.available, true);
+});
+
+test('POST /system/agent-source/reload is admin-only (403 for viewer)', async () => {
+  const res = await request(makeApp())
+    .post('/system/agent-source/reload')
+    .set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 403);
+});
+
+test('POST /system/agent-source/reload without a token returns 401', async () => {
+  const res = await request(makeApp()).post('/system/agent-source/reload');
   assert.equal(res.status, 401);
 });

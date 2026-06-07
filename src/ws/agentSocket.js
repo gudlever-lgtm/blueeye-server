@@ -6,6 +6,9 @@ const { extractToken, pathnameOf, safeSend, startHeartbeat } = require('./wsComm
 
 const silentLogger = { info() {}, warn() {}, error() {} };
 
+// The hsflowd exporter states an agent may report (mirrors the agent's vocabulary).
+const HSFLOWD_STATES = ['active', 'inactive', 'failed', 'not_installed', 'install_failed', 'permission_denied', 'unknown'];
+
 // Attaches the agent WebSocket endpoint to an existing HTTP server. Agent-token
 // auth is enforced during the upgrade handshake — a connection without a valid
 // token is rejected hard (no WebSocket is ever established).
@@ -13,6 +16,9 @@ function attachAgentWebSocket({
   server,
   agentTokensRepo,
   agentsRepo,
+  // Optional: completes the audit row for a server-initiated action when the
+  // agent reports its result (upgrade/delete).
+  auditRepo = null,
   logger = silentLogger,
   path = '/ws/agent',
   heartbeatMs = 30000,
@@ -30,6 +36,11 @@ function attachAgentWebSocket({
   // we resolve it. Powers the dashboard "Ping" (liveness) and "Update" buttons.
   const pending = new Map(); // id -> { resolve, timer, delivered }
   let seq = 0;
+
+  // Latest hsflowd exporter state each agent has reported. In-memory: agents
+  // re-report on every reconnect (their reconcile runs on WS open), so this
+  // repopulates after a server restart without needing a DB column.
+  const sflowStatus = new Map(); // agentId -> { state, detail, at }
 
   server.on('upgrade', (req, socket, head) => {
     // Cooperative: only claim our path and ignore the rest, so sibling WS
@@ -101,6 +112,36 @@ function attachAgentWebSocket({
           pending.delete(msg.id);
           clearTimeout(waiter.timer);
           waiter.resolve({ delivered: waiter.delivered, acked: true, reply: msg });
+        }
+      }
+      // agent -> server: hsflowd exporter status (the enable/disable feedback loop).
+      if (msg.type === 'sflow.status') {
+        const state = HSFLOWD_STATES.includes(msg.state) ? msg.state : 'unknown';
+        const detail = typeof msg.detail === 'string' ? msg.detail.slice(0, 300) : null;
+        sflowStatus.set(ws.agentId, { state, detail, at: new Date().toISOString() });
+        if (typeof notifyDashboard === 'function') {
+          try { notifyDashboard({ type: 'sflow-status', payload: { agentId: ws.agentId, state, detail } }); } catch { /* best-effort */ }
+        }
+      }
+      // agent -> server: result of a server-initiated action (upgrade/delete).
+      // Completes the audit row, and on a CONFIRMED self-delete drops the agent
+      // record (its tokens cascade) so the fleet list reflects reality.
+      if (msg.type === 'action-result' && msg.auditId != null) {
+        const ok = !!msg.ok;
+        const detail = typeof msg.detail === 'string' ? msg.detail.slice(0, 300)
+          : (msg.version ? `version ${msg.version}` : null);
+        if (auditRepo && typeof auditRepo.complete === 'function') {
+          auditRepo.complete(msg.auditId, { state: ok ? 'completed' : 'failed', resultDetail: detail })
+            .catch((err) => logger.error('Failed to complete audit row:', err));
+        }
+        if (msg.action === 'delete' && ok && agentsRepo && typeof agentsRepo.remove === 'function') {
+          agentsRepo.remove(ws.agentId)
+            .then(() => {
+              if (typeof notifyDashboard === 'function') {
+                try { notifyDashboard({ type: 'agent-status', payload: { agentId: ws.agentId, status: 'deleted' } }); } catch { /* best-effort */ }
+              }
+            })
+            .catch((err) => logger.error('Failed to remove self-deleted agent:', err));
         }
       }
     });
@@ -183,7 +224,13 @@ function attachAgentWebSocket({
     return sent;
   }
 
-  return { wss, sendCommand, sendCommandAndWait, broadcast, close, connectionCount };
+  // Latest hsflowd exporter status an agent reported, or null. Read by the
+  // agents list so the dashboard can show the result of an enable/disable.
+  function getSflowStatus(agentId) {
+    return sflowStatus.get(agentId) || null;
+  }
+
+  return { wss, sendCommand, sendCommandAndWait, broadcast, close, connectionCount, getSflowStatus };
 }
 
 module.exports = { attachAgentWebSocket };

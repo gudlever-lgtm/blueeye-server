@@ -83,10 +83,18 @@ hard-codes no metric relationships.
 
 ### AI assistant (opt-in)
 
-**Off** by default. When enabled (`ANALYSIS_ASSISTANT_ENABLED=true` + API key)
-you can ask a question about a host; the assistant builds a small context from
-the most recent findings (summary fields only — no raw data or secrets) and
-queries Mistral. When disabled the endpoint returns `403`.
+**Off** by default. Enable it and set the API key **either** via env
+(`ANALYSIS_ASSISTANT_ENABLED=true` + `ANALYSIS_ASSISTANT_API_KEY`) **or** at
+runtime in the dashboard (**Settings → Analysis → AI assistant**, admin) — the
+stored setting overrides the env defaults and applies without a restart. Once
+enabled you can ask a question about a host; the assistant builds a small context
+from the most recent findings (summary fields only — no raw data or secrets) and
+queries Mistral. When disabled the endpoint returns `403`. The same assistant also
+powers the **Explain with AI** button on an agent's **Diagnose** result — turning
+the (bounded) flow-pipeline snapshot, plus the host's recent findings/probe-health,
+into a plain-language read-out and next step. The API key is stored in
+`app_settings` but never returned by the API (reads expose only whether a key is
+set, plus a masked hint).
 
 ## REST API
 
@@ -95,6 +103,7 @@ queries Mistral. When disabled the endpoint returns `403`.
 | `GET` | `/api/findings?hostId=&since=` | viewer+ | List findings (newest first). `400` on invalid `since`. |
 | `POST` | `/api/findings/:id/ack` | operator+ | Acknowledge a finding. `404` if the ID is unknown. |
 | `POST` | `/api/assistant/explain` | viewer+ | Ask the assistant. `400` empty question, `403` disabled, `500` provider error. |
+| `POST` | `/api/assistant/diagnose-explain` | viewer+ | Explain a flow-pipeline diagnostic snapshot. `400` missing diagnostic, `403` disabled, `500` provider error. |
 
 ## WebSocket
 
@@ -131,11 +140,43 @@ panel. New findings appear live via WebSocket and can also be retrieved via REST
 > be changed by an admin under **Settings → Analysis**
 > (`PUT /api/settings/analysis`). Overrides are stored in `app_settings`, layered
 > on top of env defaults and re-applied at startup; the detector reads thresholds
-> **per evaluation**, so changes take effect without a restart. The AI assistant +
-> secrets remain env-controlled.
+> **per evaluation**, so changes take effect without a restart. The AI assistant's
+> enable flag, API key and model are runtime-editable the same way
+> (`PUT /api/settings/assistant`); other secrets remain env-controlled.
+
+## Probe-based findings
+
+Active-probe results feed the same findings pipeline as traffic metrics. After an
+agent posts to `POST /agents/probe-results`, `analysis/probePipeline.js` runs
+`analysis/probeFindings.js` over that agent's recent rows. It reuses the **same
+median+MAD verdict** the fleet-health view shows (`health/probeHealth.js`), so a
+finding never claims anything the dashboard verdict doesn't:
+
+- `probe.reachability` (CRIT) — targets not responding;
+- `probe.loss` (WARN ≥2 % / CRIT ≥20 %);
+- `probe.latency` (ANOMALY, z-score vs. the target's own baseline);
+- `probe.jitter` (WARN ≥30 ms / CRIT ≥100 ms);
+- `probe.cert` (WARN ≤14 d / CRIT ≤3 d) — TLS certificate expiry from the **http**
+  probe, judged independently of reachability.
+
+Findings are de-duplicated within a 30-min cooldown (per metric+target) so
+frequent probes don't spam the list or the alert channels. Gated by the analysis
+license+flag; alerts go through the existing dispatcher (alerting flag).
+
+## AI: per-location summary
+
+Besides per-host `/explain`, the opt-in assistant exposes
+`POST /api/assistant/location-summary { locationId }` — a brief, plain-language
+"what's going on at this location?" status. The context is built locally from the
+location's agents: each agent's status, its probe-health verdict, and recent
+findings (each already carrying an explanation). As with `/explain`, **only** that
+compact, human-readable slice is sent to the provider — never raw metrics or
+payload. In the dashboard it's the **Locations → "AI status"** button.
 
 ## Tests
 
 `node --test` (Node's built-in runner). The module's tests live in
 `src/analysis/__tests__/` and `test/` (HTTP + WebSocket). Error paths are tested
-explicitly (empty/invalid input, 400/403/404/500, provider errors).
+explicitly (empty/invalid input, 400/403/404/500, provider errors). Probe
+findings: `test/probeFindings.test.js` + `test/probePipeline.test.js`; the
+location summary: `test/assistantLocation.test.js` + `test/assistantApi.test.js`.

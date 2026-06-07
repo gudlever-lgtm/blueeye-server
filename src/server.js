@@ -6,18 +6,28 @@ const { createApp } = require('./app');
 const { createLocationsRepository } = require('./repositories/locationsRepository');
 const { createUsersRepository } = require('./repositories/usersRepository');
 const { createAgentsRepository } = require('./repositories/agentsRepository');
+const { createAgentActionAuditRepository } = require('./repositories/agentActionAuditRepository');
 const { createEnrollmentCodesRepository } = require('./repositories/enrollmentCodesRepository');
 const { createEnrollmentStore } = require('./services/enrollmentStore');
 const { createAgentTokensRepository } = require('./repositories/agentTokensRepository');
 const { createResultsRepository } = require('./repositories/resultsRepository');
 const { createProbeResultsRepository } = require('./repositories/probeResultsRepository');
+const { createIncidentsRepository } = require('./repositories/incidentsRepository');
+const { createIncidentThresholdsRepository } = require('./repositories/incidentThresholdsRepository');
+const { createIncidentService } = require('./incidents/incidentService');
 const { createArtifactStore } = require('./enroll/artifactStore');
 const { createAgentSourceStore } = require('./enroll/agentSourceStore');
+const { createAgentReleaseStore } = require('./enroll/agentReleaseStore');
+const { resolveReleasePublicKey } = require('./license/releaseKey');
 const { attachAgentWebSocket } = require('./ws/agentSocket');
 const { attachDashboardWebSocket } = require('./ws/dashboardSocket');
 const { verifyToken } = require('./auth/jwt');
 const { createLicenseManager } = require('./license/licenseManager');
+const { createLicenseVerifier } = require('./license/licenseVerifier');
+const { createOfflineLicenseManager } = require('./license/offlineLicenseManager');
 const { createFeatureGate } = require('./license/features');
+const { createPlanService } = require('./license/planService');
+const { createUsageService } = require('./services/usageService');
 const { createFileCache } = require('./license/licenseCache');
 const { isConfigured } = require('./license/publicKey');
 const { createSystemInfo } = require('./services/systemInfo');
@@ -25,6 +35,7 @@ const { FindingStore } = require('./analysis/findings');
 const { createBaselineStore } = require('./analysis/baselines');
 const { createDetector } = require('./analysis/detector');
 const { createAnalysisPipeline } = require('./analysis/pipeline');
+const { createProbePipeline } = require('./analysis/probePipeline');
 const { createCorrelator } = require('./analysis/correlator');
 const { createAssistant } = require('./analysis/assistant');
 const { loadConfig: loadAnalysisConfig } = require('./analysis/config');
@@ -50,6 +61,15 @@ const { createTestPackagesRepository } = require('./repositories/testPackagesRep
 const { createTestPackageRunner } = require('./services/testPackageRunner');
 const { createTestPackageScheduler } = require('./services/testPackageScheduler');
 const { createSpeedtestResultsRepository } = require('./repositories/speedtestResultsRepository');
+const { createSecretBox } = require('./lib/secretBox');
+const { createIntegrationsRepository } = require('./repositories/integrationsRepository');
+const { createIntegrationAuditRepository } = require('./repositories/integrationAuditRepository');
+const { createConnectorRegistry } = require('./integrations/connectors');
+const { createIntegrationsDispatcher } = require('./integrations/dispatcher');
+const { createLdapConfigRepository } = require('./repositories/ldapConfigRepository');
+const { createLdapRoleMapRepository } = require('./repositories/ldapRoleMapRepository');
+const { createLdapLoginAuditRepository } = require('./repositories/ldapLoginAuditRepository');
+const { createLdapAuth } = require('./auth/ldap');
 
 // Wires up real dependencies, starts the HTTP server and installs graceful
 // shutdown handlers.
@@ -66,11 +86,19 @@ function start() {
   const locationsRepo = createLocationsRepository(db);
   const usersRepo = createUsersRepository(db);
   const agentsRepo = createAgentsRepository(db);
+  const auditRepo = createAgentActionAuditRepository(db);
   const enrollmentCodesRepo = createEnrollmentCodesRepository(db);
   const enrollmentStore = createEnrollmentStore(db);
   const agentTokensRepo = createAgentTokensRepository(db);
   const resultsRepo = createResultsRepository(db);
   const probeResultsRepo = createProbeResultsRepository(db);
+  const incidentsRepo = createIncidentsRepository(db);
+  const thresholdsRepo = createIncidentThresholdsRepository(db);
+  // Derives incidents from active-probe results on ingest (open/resolve), using
+  // per-location thresholds with a global fallback. Best-effort + resilient.
+  const incidentService = createIncidentService({
+    incidentsRepo, thresholdsRepo, agentsRepo, probeResultsRepo, logger: console,
+  });
 
   // Agent binaries served from a local dir for frictionless enrollment. SHA-256
   // is computed + cached now (at startup), so nothing is hashed per request.
@@ -81,21 +109,53 @@ function start() {
   // checksummed at startup so the one-liner installs with no published binaries.
   const agentSourceStore = createAgentSourceStore({ dir: config.enroll.agentSourceDir, logger: console });
 
-  // Client-side license validation against blueeye-licens. getAgentCount reads
-  // the live WebSocket connection count (agentWs is assigned just below; the
-  // closure is only invoked later, at validation time).
+  // Signed agent releases: built + Ed25519-signed off-server, uploaded via
+  // POST /agents/releases (verified on upload), kept under AGENT_RELEASE_DIR and
+  // pushed to agents. The release public key is a SEPARATE trust anchor from the
+  // license key (see src/license/releaseKey.js).
+  const agentReleaseStore = createAgentReleaseStore({ dir: process.env.AGENT_RELEASE_DIR || '', logger: console });
+  const releasePublicKey = resolveReleasePublicKey(process.env);
+
+  // License validation. Two interchangeable backends with the SAME surface:
+  //   - ONLINE  (default): validates a signed proof against blueeye-licens.
+  //   - OFFLINE (LICENSE_FILE set): validates a local signed license file
+  //     entirely on-box — no external server. Invalid/expired → restricted mode.
+  // getAgentCount reads the live WebSocket connection count (agentWs is assigned
+  // just below; the closure is only invoked later, at validation time).
   let agentWs = null;
   let dashboardWs = null;
-  const licenseManager = createLicenseManager({
-    config: config.license,
-    publicKey: config.license.publicKey,
-    cache: createFileCache(config.license.cachePath),
-    logger: console,
-    getAgentCount: () => (agentWs ? agentWs.connectionCount() : 0),
-  });
+  let licenseManager;
+  if (config.license.mode === 'offline') {
+    const verifier = createLicenseVerifier({
+      publicKey: config.license.publicKey,
+      serverId: config.license.serverId,
+    });
+    licenseManager = createOfflineLicenseManager({
+      verifier,
+      filePath: config.license.file,
+      serverId: config.license.serverId,
+      recheckHours: config.license.recheckHours,
+      logger: console,
+    });
+    console.log(`License mode: offline (file=${config.license.file || 'unset'}).`);
+  } else {
+    licenseManager = createLicenseManager({
+      config: config.license,
+      publicKey: config.license.publicKey,
+      cache: createFileCache(config.license.cachePath),
+      logger: console,
+      getAgentCount: () => (agentWs ? agentWs.connectionCount() : 0),
+    });
+  }
 
-  // Feature gate: reads signature-verified license entitlements (fail-closed).
-  const featureGate = createFeatureGate({ licenseManager });
+  // Plan service: resolves the active package (Pilot/Starter/Professional/
+  // Enterprise/MSP) from the signed proof's plan field (or LICENSE_PLAN), and
+  // exposes its limits + packaged feature flags. Additive to the license manager.
+  const planService = createPlanService({ licenseManager, configPlan: config.license.plan });
+
+  // Feature gate: signature-verified module entitlements (fail-closed), now also
+  // OR-ing in the active plan's packaged features (rbac/reports_pdf/api_access…).
+  const featureGate = createFeatureGate({ licenseManager, planService });
 
   // Lets HTTP routes push commands to connected agents over the WebSocket.
   // sendCommandAndWait also awaits the agent's correlated reply (Ping/Update).
@@ -105,6 +165,7 @@ function start() {
       (agentWs
         ? agentWs.sendCommandAndWait(agentId, command, opts)
         : Promise.resolve({ delivered: 0, acked: false, reply: null })),
+    getSflowStatus: (agentId) => (agentWs ? agentWs.getSflowStatus(agentId) : null),
   };
 
   // Test packages: server-defined probe/traffic test sets pushed to agents to
@@ -116,9 +177,40 @@ function start() {
   // Active throughput ("speed test") results reported by agents.
   const speedtestResultsRepo = createSpeedtestResultsRepository(db);
 
+  // Secret box: AES-256-GCM encryption for secrets stored at rest (integration
+  // credentials, the LDAP bind password). See src/lib/secretBox.js.
+  const secretBox = createSecretBox({ key: config.security.secretKey });
+
+  // Outbound API integrations (ITSM/IPAM connectors). The dispatcher fans domain
+  // events (incidents/anomalies, agent enroll/delete) out to enabled targets with
+  // debounce + retry/backoff, decrypting credentials only at fire time, and audits
+  // every call. fetch is Node's global (mocked in tests).
+  const integrationsRepo = createIntegrationsRepository(db);
+  const integrationAuditRepo = createIntegrationAuditRepository(db);
+  const connectorRegistry = createConnectorRegistry({ fetchImpl: globalThis.fetch, logger: console });
+  const integrationsDispatcher = createIntegrationsDispatcher({
+    integrationsRepo, auditRepo: integrationAuditRepo, secretBox, registry: connectorRegistry, logger: console,
+  });
+
+  // External auth (LDAP/AD). OFF unless LDAP_AUTH_ENABLED=true AND an admin has
+  // stored + enabled a config row. Local JWT login always remains as the fallback.
+  const ldapConfigRepo = createLdapConfigRepository(db);
+  const ldapRoleMapRepo = createLdapRoleMapRepository(db);
+  const ldapLoginAuditRepo = createLdapLoginAuditRepository(db);
+  const ldapAuth = createLdapAuth({ config: config.ldap, ldapConfigRepo, ldapRoleMapRepo, secretBox, logger: console });
+
   // Pushes a live event to every connected dashboard (assigned below; the
   // closure runs later). Used for enrollment/agent-status feedback in the UI.
   const notifyDashboard = (message) => (dashboardWs ? dashboardWs.broadcast(message) : 0);
+
+  // Usage service: counts agents / active test paths for plan-limit enforcement
+  // and the admin "Usage overview" panel. Wired after its repositories exist.
+  const usageService = createUsageService({
+    agentsRepo,
+    testPackagesRepo,
+    planService,
+    licenseManager,
+  });
 
   // Storage info (disk free/used + database size).
   const systemInfo = createSystemInfo({ db, diskPath: config.storage.diskPath });
@@ -140,7 +232,9 @@ function start() {
   const dispatcher = createDispatcher({
     config: alertingConfig,
     channels: {
-      email: createEmailChannel({ config: alertingConfig.channels.email, transport: createSmtpTransport(alertingConfig.channels.email.smtp, console), logger: console }),
+      // createTransport (not an eager transport) so a runtime SMTP edit (Settings
+      // → Alerting) rebuilds the mailer without a restart.
+      email: createEmailChannel({ config: alertingConfig.channels.email, createTransport: (smtp) => createSmtpTransport(smtp, console), logger: console }),
       webhook: createWebhookChannel({ config: alertingConfig.channels.webhook, logger: console }),
       syslog: createSyslogChannel({ config: alertingConfig.channels.syslog, logger: console }),
     },
@@ -158,16 +252,37 @@ function start() {
     config: analysisConfig,
     correlator,
     dispatcher,
-    alertingEnabled: alertingConfig.enabled,
+    // Live getter (not a snapshot) so a runtime enable in Settings → Alerting applies.
+    alertingEnabled: () => alertingConfig.enabled,
+    // Outbound integrations fire on findings independently of local alerting.
+    integrationTrigger: integrationsDispatcher,
     // Detector runs only if the license includes analysis (AND config enables it).
     licensed: () => featureGate.isFeatureEnabled('analysis'),
     // Push findings to connected dashboards (browsers), not to agents.
     publishFinding: (hostId, message) => (dashboardWs ? dashboardWs.broadcast(message) : 0),
     logger: console,
   });
+  // Active-probe analysis: derive findings (reachability/loss/latency/jitter/cert)
+  // from probe-results on ingest, alongside the traffic detector above. Shares the
+  // analysis license+flag and the same alerting dispatcher + dashboard publish.
+  const probePipeline = createProbePipeline({
+    probeResultsRepo,
+    findingStore,
+    config: analysisConfig,
+    dispatcher,
+    alertingEnabled: () => alertingConfig.enabled,
+    integrationTrigger: integrationsDispatcher,
+    licensed: () => featureGate.isFeatureEnabled('analysis'),
+    publishFinding: (hostId, message) => (dashboardWs ? dashboardWs.broadcast(message) : 0),
+    logger: console,
+  });
+
   // Opt-in LLM assistant (off unless ANALYSIS_ASSISTANT_ENABLED=true). Reads the
-  // same findings store for its compact context.
-  const assistant = createAssistant({ config: analysisConfig, findingStore, logger: console });
+  // findings store for its compact context, plus agents/locations/probe health
+  // for the per-location "what's going on here?" summary.
+  const assistant = createAssistant({
+    config: analysisConfig, findingStore, agentsRepo, locationsRepo, probeResultsRepo, logger: console,
+  });
 
   // Geo layer: enrich + store flow records. The GeoIP provider reads an offline,
   // EU-sourced range DB (config.geo.dbPath); without it, flows store without
@@ -191,7 +306,7 @@ function start() {
   // the analysis/retention knobs — which it mutates on the live config objects).
   const settingsService = createSettingsService({
     settingsRepo: createSettingsRepository(db), config,
-    liveAnalysis: analysisConfig, liveRetention: retentionConfig,
+    liveAnalysis: analysisConfig, liveRetention: retentionConfig, liveAlerting: alertingConfig,
   });
   // Re-apply persisted analysis/retention edits onto the live config so they
   // survive restarts. Best-effort + fire-and-forget (consumers read lazily).
@@ -213,30 +328,49 @@ function start() {
     locationsRepo,
     usersRepo,
     agentsRepo,
+    auditRepo,
     enrollmentCodesRepo,
     enrollmentStore,
     agentTokensRepo,
     resultsRepo,
     probeResultsRepo,
+    incidentsRepo,
+    thresholdsRepo,
+    incidentService,
     agentCommander,
     systemInfo,
     licenseManager,
     findingStore,
     analysisPipeline,
+    probePipeline,
     flowPipeline,
     flowsRepo,
     geoTileConfig: config.geo,
     assistant,
     dispatcher,
     featureGate,
+    planService,
+    usageService,
     settingsService,
     analysisConfig,
     retentionConfig,
     artifactStore,
     agentSourceStore,
+    releaseStore: agentReleaseStore,
+    releasePublicKey,
     testPackagesRepo,
     testPackageRunner,
     speedtestResultsRepo,
+    integrationsRepo,
+    integrationAuditRepo,
+    integrationsDispatcher,
+    connectorRegistry,
+    secretBox,
+    ldapConfigRepo,
+    ldapRoleMapRepo,
+    ldapLoginAuditRepo,
+    ldapAuth,
+    ldapAuthEnabledFlag: config.ldap.authEnabled,
     enrollConfig: { publicUrl: config.publicUrl, certFingerprint: config.enroll.certFingerprint },
     notifyDashboard,
     logger: console,
@@ -254,6 +388,7 @@ function start() {
     server,
     agentTokensRepo,
     agentsRepo,
+    auditRepo,
     logger: console,
     path: config.ws.path,
     heartbeatMs: config.ws.heartbeatIntervalMs,

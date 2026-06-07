@@ -67,3 +67,32 @@ test('dashboard exposes settings (users+license) tab, auto-refresh and traffic c
   assert.match(js, /storageCards/); // server disk + database storage cards
   assert.match(js, /\/system\/storage/); // calls the storage endpoint
 });
+
+test('interface + traffic views are flow-source aware (sflow/netflow have no per-interface data)', async () => {
+  const js = (await request(makeApp()).get('/app.js')).text;
+  // interfaceTable takes the agent's source so it can explain WHY a flow-source
+  // agent has no per-interface rows, instead of the misleading generic message.
+  assert.match(js, /function interfaceTable\(interfaces, source/);
+  assert.match(js, /interfaceTable\(data\.interfaces, data\.source\)/); // callers pass the source through
+  assert.match(js, /reports sampled flow records/); // the source-aware empty state
+  assert.match(js, /Traffic source/); // points the user at the source switch
+  // The RX/TX bandwidth chart is skipped for flow sources (no rx/txBytesPerSec).
+  assert.match(js, /const flowSource = t && \(t\.source === 'sflow' \|\| t\.source === 'netflow'\)/);
+});
+
+test('dashboard offers selectable colour themes saved per user', async () => {
+  const app = makeApp();
+  const js = (await request(app).get('/app.js')).text;
+  assert.match(js, /const PALETTES =/); // palette catalogue (each with light + dark)
+  assert.match(js, /settingsAppearanceView/); // Settings → Appearance theme picker
+  assert.match(js, /\/me\/preferences/); // persists the chosen theme per user
+  assert.match(js, /loadProfile/); // applies the saved theme on session start
+  assert.match(js, /dual: p\.dark\.key/); // every variant knows its opposite-brightness pair
+  assert.match(js, /themeMeta\(document\.documentElement\.dataset\.theme\)\.dual/); // toggle flips brightness within the palette
+
+  const css = (await request(app).get('/styles.css')).text;
+  assert.match(css, /\[data-theme="nord"\]/); // a dark colour palette is defined
+  assert.match(css, /\[data-theme="nord-light"\]/); // …paired with a light variant
+  assert.match(css, /\[data-theme="solarized-dark"\]/);
+  assert.match(css, /\.theme-grid/); // picker styling
+});

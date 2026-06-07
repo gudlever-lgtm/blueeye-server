@@ -1,6 +1,6 @@
 'use strict';
 
-const PROBE_TYPES = ['ping', 'tcp', 'dns', 'traceroute'];
+const PROBE_TYPES = ['ping', 'tcp', 'dns', 'traceroute', 'http'];
 const MAX_RESULTS = 200;
 // Host/IP/hostname must start alphanumeric (so it can never be read as a CLI
 // flag like "-rf") and contain only host-safe characters.
@@ -10,6 +10,30 @@ function numOrNull(v) {
   if (v === null || v === undefined) return null;
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
+}
+
+function intOrNull(v) {
+  if (v === null || v === undefined) return null;
+  const n = Number(v);
+  return Number.isInteger(n) ? n : null;
+}
+
+// Normalizes an http-probe target to a canonical http(s) URL string (defaulting
+// a bare host to https), or null when it isn't a valid http(s) URL. The URL is
+// passed to the agent's `fetch`, never a shell, so the HOST_RE CLI-flag guard
+// (which would reject the "://") doesn't apply here.
+function normalizeHttpTarget(raw) {
+  let s = String(raw || '').trim();
+  if (!s) return null;
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(s)) {
+    if (!/^https?:\/\//i.test(s)) return null;
+  } else {
+    s = `https://${s}`;
+  }
+  let u;
+  try { u = new URL(s); } catch { return null; }
+  if ((u.protocol !== 'http:' && u.protocol !== 'https:') || !u.hostname) return null;
+  return u.href.length <= 255 ? u.href : null;
 }
 
 // Validates the agent -> server probe-results payload:
@@ -42,34 +66,44 @@ function validateProbeResults(body) {
       ts, type, target, ok: r.ok === true,
       rttMs: numOrNull(r.rttMs), minMs: numOrNull(r.minMs), maxMs: numOrNull(r.maxMs),
       jitterMs: numOrNull(r.jitterMs), lossPct: numOrNull(r.lossPct), hops,
+      status: intOrNull(r.status), certExpiryDays: numOrNull(r.certExpiryDays),
       detail: r.detail != null ? String(r.detail).slice(0, 255) : (r.error != null ? String(r.error).slice(0, 255) : null),
     });
   }
   return { value: { results: out } };
 }
 
-// Validates the operator trigger spec: { type, host|target, port?, count?, maxHops? }.
+// Validates the operator trigger spec: { type, host|target|url, port?, count?, maxHops? }.
 function validateProbeSpec(body) {
   const b = body && typeof body === 'object' ? body : {};
   const type = String(b.type || '').toLowerCase();
   if (!PROBE_TYPES.includes(type)) return { errors: { type: `type must be one of ${PROBE_TYPES.join(', ')}` } };
-  const host = String(b.host || b.target || '').trim();
-  if (!HOST_RE.test(host)) return { errors: { host: 'host/target is required and must be a valid hostname or IP' } };
-  const spec = { type, host };
-  if (type === 'tcp') {
-    const port = Number(b.port);
-    if (!Number.isInteger(port) || port < 1 || port > 65535) return { errors: { port: 'port (1-65535) is required for a tcp probe' } };
-    spec.port = port;
+
+  const spec = { type };
+  if (type === 'http') {
+    // http takes a URL (the agent reads spec.host as the target).
+    const url = normalizeHttpTarget(b.url || b.target || b.host);
+    if (!url) return { errors: { target: 'a valid http(s) URL is required for an http probe' } };
+    spec.host = url;
+  } else {
+    const host = String(b.host || b.target || '').trim();
+    if (!HOST_RE.test(host)) return { errors: { host: 'host/target is required and must be a valid hostname or IP' } };
+    spec.host = host;
+    if (type === 'tcp') {
+      const port = Number(b.port);
+      if (!Number.isInteger(port) || port < 1 || port > 65535) return { errors: { port: 'port (1-65535) is required for a tcp probe' } };
+      spec.port = port;
+    }
+    if (type === 'traceroute' && b.maxHops !== undefined) {
+      const m = Number(b.maxHops);
+      if (!Number.isInteger(m) || m < 1 || m > 40) return { errors: { maxHops: 'maxHops must be an integer between 1 and 40' } };
+      spec.maxHops = m;
+    }
   }
   if (b.count !== undefined) {
     const c = Number(b.count);
     if (!Number.isInteger(c) || c < 1 || c > 20) return { errors: { count: 'count must be an integer between 1 and 20' } };
     spec.count = c;
-  }
-  if (type === 'traceroute' && b.maxHops !== undefined) {
-    const m = Number(b.maxHops);
-    if (!Number.isInteger(m) || m < 1 || m > 40) return { errors: { maxHops: 'maxHops must be an integer between 1 and 40' } };
-    spec.maxHops = m;
   }
   return { value: spec };
 }

@@ -1,20 +1,24 @@
 'use strict';
 
-// Optional, opt-in LLM assistant. OFF by default (ANALYSIS_ASSISTANT_ENABLED).
-// When enabled it answers a natural-language question about a host using ONLY a
-// small, local context — the recent findings the analysis module already
-// produced (each already carries a plain-language explanation). It never ships
-// raw metric history, credentials, or anything beyond that compact slice to the
-// provider. Uses Mistral's chat-completions API over fetch; the network call is
-// injected (fetchImpl) so tests run fully offline.
-//
-//   const assistant = createAssistant({ config, findingStore });
-//   const { answer } = await assistant.explain('why is cpu high?', hostId);
+const { computeAgentHealth } = require('../health/probeHealth');
 
-// Thrown by explain() when the feature is disabled. The route maps the name
-// 'FeatureDisabled' to HTTP 403.
+// Optional, opt-in LLM assistant. OFF by default; an admin enables it and sets
+// its API key in Settings → AI assistant (env defaults still apply at boot).
+// When enabled it answers questions / summarizes a location using ONLY a small,
+// local context the analysis module already produced — recent findings (each
+// already carrying a plain-language explanation) plus, for a location summary,
+// each agent's status + probe-health verdict. It never ships raw metric history,
+// credentials, or payload to the provider. Uses Mistral's (EU) chat-completions
+// API over fetch; the network call is injected (fetchImpl) so tests run offline.
+//
+//   const assistant = createAssistant({ config, findingStore, agentsRepo, locationsRepo, probeResultsRepo });
+//   const { answer } = await assistant.explain('why is cpu high?', hostId);
+//   const { answer } = await assistant.summarizeLocation(locationId);
+
+// Thrown by explain()/summarizeLocation() when the feature is disabled. The route
+// maps the name 'FeatureDisabled' to HTTP 403.
 class FeatureDisabledError extends Error {
-  constructor(message = 'The AI assistant is disabled (set ANALYSIS_ASSISTANT_ENABLED=true to enable)') {
+  constructor(message = 'The AI assistant is disabled (enable it in Settings → AI assistant)') {
     super(message);
     this.name = 'FeatureDisabled';
   }
@@ -25,23 +29,32 @@ const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 function createAssistant({
   config = {},
   findingStore,
+  agentsRepo = null,
+  locationsRepo = null,
+  probeResultsRepo = null,
+  agentHealth = computeAgentHealth,
   fetchImpl = (typeof globalThis.fetch === 'function' ? globalThis.fetch.bind(globalThis) : null),
   now = () => new Date(),
   logger = { info() {}, warn() {}, error() {} },
 } = {}) {
-  const enabled = Boolean(config.assistantEnabled);
-  const apiKey = config.assistantApiKey || '';
-  const model = config.assistantModel || 'mistral-small-latest';
   const baseUrl = config.assistantBaseUrl || 'https://api.mistral.ai/v1/chat/completions';
   const maxFindings = Number.isFinite(config.assistantMaxFindings) ? config.assistantMaxFindings : 20;
   const timeoutMs = Number.isFinite(config.assistantTimeoutMs) ? config.assistantTimeoutMs : 20000;
 
+  // enabled / apiKey / model are read live from `config` on every call. The
+  // server passes its analysis-config object, which Settings → AI assistant
+  // mutates, so an admin can enable the assistant or set its key at runtime with
+  // no restart. baseUrl + limits stay env-driven (captured once above).
+  const currentEnabled = () => Boolean(config.assistantEnabled);
+  const currentApiKey = () => config.assistantApiKey || '';
+  const currentModel = () => config.assistantModel || 'mistral-small-latest';
+
   function isEnabled() {
-    return enabled;
+    return currentEnabled();
   }
 
-  // Compact, explainable context: only the fields the model needs, capped. No
-  // raw samples or evidence payloads — just the human-readable summary.
+  // Compact, explainable per-host context: only the fields the model needs,
+  // capped. No raw samples or evidence payloads — just the human-readable summary.
   async function buildContext(hostId) {
     const since = new Date(now().getTime() - ONE_DAY_MS); // last 24h
     let findings = [];
@@ -64,19 +77,75 @@ function createAssistant({
     }));
   }
 
-  // Answers a question about a host. Throws FeatureDisabled when off,
-  // InvalidQuestion on an empty question, AssistantMisconfigured when enabled but
-  // not configured, and AssistantUpstreamError when the provider call fails.
-  async function explain(question, hostId) {
-    if (!enabled) throw new FeatureDisabledError();
+  // The agent's recent probe-health verdict ({ status, reason }) or null when
+  // there is no probe data / no repo wired. Cheap + explainable (median+MAD).
+  async function probeVerdict(agentId) {
+    if (!probeResultsRepo || typeof probeResultsRepo.findByAgent !== 'function') return null;
+    try {
+      const since = new Date(now().getTime() - ONE_DAY_MS);
+      const asc = await probeResultsRepo.findByAgent({ agentId, from: since, limit: 500 });
+      const rows = Array.isArray(asc) ? asc.slice().reverse() : []; // newest-first
+      if (!rows.length) return null;
+      const h = agentHealth(rows, { now: now().getTime() });
+      return { status: h.status, reason: h.reason };
+    } catch (err) {
+      logger.warn(`assistant: could not load probe health for ${agentId} (${err.message})`);
+      return null;
+    }
+  }
 
-    if (typeof question !== 'string' || question.trim() === '') {
-      const e = new Error('question must be a non-empty string');
-      e.name = 'InvalidQuestion';
+  // Compact per-location context: the location, each of its agents (status +
+  // probe-health verdict + recent findings), and roll-up counts. Throws
+  // LocationNotFound (route -> 404) for an unknown location.
+  async function buildLocationContext(locationId) {
+    const location = await locationsRepo.findById(locationId);
+    if (!location) {
+      const e = new Error('location not found');
+      e.name = 'LocationNotFound';
       throw e;
     }
+    const all = await agentsRepo.findAll();
+    const agents = (Array.isArray(all) ? all : []).filter((a) => String(a.location_id) === String(locationId));
+    const since = new Date(now().getTime() - ONE_DAY_MS);
+
+    const agentCtx = [];
+    let online = 0;
+    let withFindings = 0;
+    let findingTotal = 0;
+    for (const a of agents) {
+      if (a.status === 'online') online += 1;
+      let findings = [];
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        findings = await findingStore.list(String(a.id), since);
+      } catch {
+        findings = [];
+      }
+      const compact = (Array.isArray(findings) ? findings : []).slice(0, maxFindings).map((f) => ({
+        metric: f.metric, severity: f.severity, explanation: f.explanation, at: f.createdAt,
+      }));
+      if (compact.length) { withFindings += 1; findingTotal += compact.length; }
+      // eslint-disable-next-line no-await-in-loop
+      const health = await probeVerdict(a.id);
+      agentCtx.push({ name: a.display_name || a.hostname, status: a.status, health, findings: compact });
+    }
+
+    const context = {
+      location: { id: location.id, name: location.name },
+      agents: agentCtx,
+      counts: { agents: agents.length, online, withFindings },
+    };
+    return { context, location, agentCount: agents.length, findingCount: findingTotal };
+  }
+
+  // Single chat-completion call shared by explain()/summarizeLocation(). Throws
+  // AssistantMisconfigured (enabled but not configured) and AssistantUpstreamError
+  // (provider call failed). Returns the answer string.
+  async function chat(system, user) {
+    const apiKey = currentApiKey();
+    const model = currentModel();
     if (!apiKey) {
-      const e = new Error('assistant is enabled but no API key is configured (ANALYSIS_ASSISTANT_API_KEY)');
+      const e = new Error('assistant is enabled but no API key is configured (set one in Settings → AI assistant)');
       e.name = 'AssistantMisconfigured';
       throw e;
     }
@@ -86,24 +155,13 @@ function createAssistant({
       throw e;
     }
 
-    const findings = await buildContext(hostId);
-    const system =
-      'You are a helpful network and operations assistant for BlueEye. Answer briefly and ' +
-      'concretely in English. Use ONLY the provided context (findings) — do not guess, and ' +
-      'if the context is insufficient, say so.';
-    const user = JSON.stringify({ question: question.trim(), hostId: hostId ?? null, findings });
-
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
-
     let res;
     try {
       res = await fetchImpl(baseUrl, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${apiKey}`,
-        },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
         body: JSON.stringify({
           model,
           messages: [
@@ -140,14 +198,102 @@ function createAssistant({
 
     const choice = data && Array.isArray(data.choices) ? data.choices[0] : null;
     const content = choice && choice.message ? choice.message.content : '';
-    return {
-      answer: typeof content === 'string' ? content.trim() : '',
-      model,
-      usedFindings: findings.length,
-    };
+    return typeof content === 'string' ? content.trim() : '';
   }
 
-  return { isEnabled, explain, buildContext };
+  // Answers a question about a host. Throws FeatureDisabled when off,
+  // InvalidQuestion on an empty question, AssistantMisconfigured when enabled but
+  // not configured, and AssistantUpstreamError when the provider call fails.
+  async function explain(question, hostId) {
+    if (!currentEnabled()) throw new FeatureDisabledError();
+    if (typeof question !== 'string' || question.trim() === '') {
+      const e = new Error('question must be a non-empty string');
+      e.name = 'InvalidQuestion';
+      throw e;
+    }
+
+    const findings = await buildContext(hostId);
+    const system =
+      'You are a helpful network and operations assistant for BlueEye. Answer briefly and ' +
+      'concretely in English. Use ONLY the provided context (findings) — do not guess, and ' +
+      'if the context is insufficient, say so.';
+    const user = JSON.stringify({ question: question.trim(), hostId: hostId ?? null, findings });
+    const answer = await chat(system, user);
+    return { answer, model: currentModel(), usedFindings: findings.length };
+  }
+
+  // Produces a brief "what's going on at this location?" summary from the
+  // location's agents, their probe-health verdicts and recent findings. Throws
+  // FeatureDisabled when off, AssistantMisconfigured when the repos aren't wired,
+  // LocationNotFound for an unknown id, and AssistantUpstreamError on provider
+  // failure.
+  async function summarizeLocation(locationId) {
+    if (!currentEnabled()) throw new FeatureDisabledError();
+    if (!agentsRepo || !locationsRepo) {
+      const e = new Error('location summary requires agents and locations repositories');
+      e.name = 'AssistantMisconfigured';
+      throw e;
+    }
+
+    const { context, location, agentCount, findingCount } = await buildLocationContext(locationId);
+    const system =
+      'You are a network operations assistant for BlueEye. In 2-4 sentences, give a brief, ' +
+      'concrete status of THIS location: what looks healthy, what is wrong, and the most likely ' +
+      'cause. Use ONLY the provided context (per-agent status, probe-health verdicts and recent ' +
+      'findings, each already explained in plain language). If there are no agents or no findings, ' +
+      'say there is not enough data yet. If everything looks healthy, say so plainly. Do not invent ' +
+      'specifics or hostnames that are not in the context.';
+    const user = JSON.stringify(context);
+    const answer = await chat(system, user);
+    return { answer, model: currentModel(), location: location.name, agents: agentCount, findings: findingCount };
+  }
+
+  // Explains a flow-pipeline diagnostic snapshot (from POST /agents/:id/diagnose)
+  // in plain language, correlating with the host's recent findings + probe-health
+  // verdict when an id is given. Bounded context: only the KNOWN diagnostic fields
+  // are forwarded (never arbitrary client input). Same error taxonomy as explain().
+  async function explainDiagnostic(diagnostic, hostId) {
+    if (!currentEnabled()) throw new FeatureDisabledError();
+    if (!diagnostic || typeof diagnostic !== 'object' || Array.isArray(diagnostic)) {
+      const e = new Error('a diagnostic snapshot is required');
+      e.name = 'InvalidQuestion';
+      throw e;
+    }
+    // Sanitise to a known shape so the prompt context stays small and trusted.
+    const c = diagnostic.collector && typeof diagnostic.collector === 'object' ? diagnostic.collector : null;
+    const snapshot = {
+      source: diagnostic.source ?? null,
+      sources: Array.isArray(diagnostic.sources) ? diagnostic.sources : null,
+      managed: diagnostic.managed ?? null,
+      agentVersion: diagnostic.agentVersion ?? null,
+      lastReportAt: diagnostic.lastReportAt ?? null,
+      collector: c ? {
+        kind: c.kind ?? null,
+        listening: !!c.listening,
+        datagrams: Number(c.datagrams) || 0,
+        decodedFlows: Number(c.decodedFlows) || 0,
+        bufferedFlows: Number(c.bufferedFlows) || 0,
+        lastDatagramAt: c.lastDatagramAt ?? null,
+      } : null,
+      hsflowd: diagnostic.hsflowd && typeof diagnostic.hsflowd === 'object'
+        ? { state: diagnostic.hsflowd.state ?? null, detail: diagnostic.hsflowd.detail ?? null }
+        : null,
+    };
+    const findings = hostId != null ? await buildContext(hostId) : [];
+    const probeHealth = hostId != null ? await probeVerdict(hostId) : null;
+    const system =
+      'You are a network operations assistant for BlueEye. In 2-4 sentences, explain what this ' +
+      "agent's flow-pipeline diagnostic means — the most likely reason flows are or are not " +
+      'arriving — then the single most useful next step. The collector receives sFlow/NetFlow ' +
+      'datagrams and decodes flow records: 0 datagrams means no exporter is sending to it; ' +
+      'datagrams but 0 decoded means the samples are not being parsed. Use ONLY the provided ' +
+      'context and do not invent specifics that are not present in it.';
+    const user = JSON.stringify({ diagnostic: snapshot, hostId: hostId ?? null, findings, probeHealth });
+    const answer = await chat(system, user);
+    return { answer, model: currentModel(), usedFindings: findings.length };
+  }
+
+  return { isEnabled, explain, explainDiagnostic, summarizeLocation, buildContext, buildLocationContext };
 }
 
 module.exports = { createAssistant, FeatureDisabledError };

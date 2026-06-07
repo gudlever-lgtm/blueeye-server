@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS users (
   password_hash VARCHAR(255) NOT NULL,
   role ENUM('admin', 'operator', 'viewer') NOT NULL DEFAULT 'viewer',
   protected TINYINT(1) NOT NULL DEFAULT 0,
+  preferences JSON DEFAULT NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
@@ -59,6 +60,7 @@ CREATE TABLE IF NOT EXISTS agents (
   status ENUM('online', 'offline') NOT NULL DEFAULT 'offline',
   capabilities JSON NULL DEFAULT NULL,
   location_id INT UNSIGNED NULL DEFAULT NULL,
+  enrollment_code_id INT UNSIGNED NULL DEFAULT NULL,
   display_name VARCHAR(255) NULL DEFAULT NULL,
   notes TEXT NULL DEFAULT NULL,
   meta JSON NULL DEFAULT NULL,
@@ -67,6 +69,7 @@ CREATE TABLE IF NOT EXISTS agents (
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   KEY idx_agents_location_id (location_id),
+  KEY idx_agents_enrollment_code_id (enrollment_code_id),
   CONSTRAINT fk_agents_location FOREIGN KEY (location_id)
     REFERENCES locations (id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -89,6 +92,13 @@ CREATE TABLE IF NOT EXISTS enrollment_codes (
   CONSTRAINT fk_enrollment_codes_created_by FOREIGN KEY (created_by)
     REFERENCES users (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- agents.enrollment_code_id links an agent to the code it enrolled with. Added
+-- here (after enrollment_codes exists) because agents is created first above.
+-- ON DELETE SET NULL so deleting a spent code never breaks a running agent.
+ALTER TABLE agents
+  ADD CONSTRAINT fk_agents_enrollment_code FOREIGN KEY (enrollment_code_id)
+    REFERENCES enrollment_codes (id) ON DELETE SET NULL;
 
 -- Opaque agent tokens; only the SHA-256 hash is stored, never the token.
 CREATE TABLE IF NOT EXISTS agent_tokens (
@@ -115,4 +125,46 @@ CREATE TABLE IF NOT EXISTS results (
   KEY idx_results_agent_id (agent_id),
   CONSTRAINT fk_results_agent FOREIGN KEY (agent_id)
     REFERENCES agents (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Per-metric thresholds used to derive incidents from active-probe results.
+-- location_id IS NULL = global default; a concrete location_id overrides it.
+-- See migration 023 for the per-metric interpretation of the value columns.
+CREATE TABLE IF NOT EXISTS incident_thresholds (
+  id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  location_id INT UNSIGNED NULL DEFAULT NULL,
+  metric ENUM('reachability', 'latency', 'packet_loss') NOT NULL,
+  warning_value DOUBLE NULL DEFAULT NULL,
+  critical_value DOUBLE NULL DEFAULT NULL,
+  debounce_count INT UNSIGNED NOT NULL DEFAULT 3,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_incident_thresholds_location_metric (location_id, metric),
+  CONSTRAINT fk_incident_thresholds_location FOREIGN KEY (location_id)
+    REFERENCES locations (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Incidents derived from probe_results (one per (agent, metric, target) outage).
+-- started_at = first failing result in the breaching sequence; resolved_at NULL
+-- while active. At most one active incident per (agent, metric, target).
+CREATE TABLE IF NOT EXISTS incidents (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  location_id INT UNSIGNED NULL DEFAULT NULL,
+  agent_id INT UNSIGNED NOT NULL,
+  metric ENUM('reachability', 'latency', 'packet_loss') NOT NULL,
+  severity ENUM('warning', 'critical') NOT NULL,
+  started_at DATETIME NOT NULL,
+  resolved_at DATETIME NULL DEFAULT NULL,
+  duration_seconds INT UNSIGNED NULL DEFAULT NULL,
+  affected_target VARCHAR(255) NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_incidents_location_started (location_id, started_at),
+  KEY idx_incidents_resolved (resolved_at),
+  KEY idx_incidents_active (agent_id, metric, affected_target, resolved_at),
+  CONSTRAINT fk_incidents_agent FOREIGN KEY (agent_id)
+    REFERENCES agents (id) ON DELETE CASCADE,
+  CONSTRAINT fk_incidents_location FOREIGN KEY (location_id)
+    REFERENCES locations (id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

@@ -1,6 +1,6 @@
 'use strict';
 
-const COLUMNS = ['agent_id', 'ts', 'type', 'target', 'ok', 'rtt_ms', 'min_ms', 'max_ms', 'jitter_ms', 'loss_pct', 'hops', 'detail'];
+const COLUMNS = ['agent_id', 'ts', 'type', 'target', 'ok', 'rtt_ms', 'min_ms', 'max_ms', 'jitter_ms', 'loss_pct', 'status', 'cert_expiry_days', 'hops', 'detail'];
 
 function toRow(agentId, r) {
   const ts = r.ts instanceof Date ? r.ts : (r.ts ? new Date(r.ts) : new Date());
@@ -15,6 +15,8 @@ function toRow(agentId, r) {
     r.maxMs ?? null,
     r.jitterMs ?? null,
     r.lossPct ?? null,
+    r.status ?? null,
+    r.certExpiryDays ?? null,
     Array.isArray(r.hops) ? JSON.stringify(r.hops) : null,
     r.detail != null ? String(r.detail).slice(0, 255) : null,
   ];
@@ -40,6 +42,8 @@ function fromRow(row) {
     maxMs: row.max_ms,
     jitterMs: row.jitter_ms,
     lossPct: row.loss_pct,
+    status: row.status ?? null,
+    certExpiryDays: row.cert_expiry_days ?? null,
     hops: parseHops(row.hops),
     detail: row.detail,
   };
@@ -100,6 +104,42 @@ function createProbeResultsRepository(db) {
     }));
   }
 
+  // Availability (uptime %) per agent over [from, to], computed from the
+  // reachability of every probe in the window (ok / total). Grouped by agent and
+  // carrying its location, optionally filtered to one location. Agents with no
+  // probes in the window are omitted (no data ⇒ no uptime to report).
+  async function availability({ from, to, locationId = null }) {
+    const where = ['pr.ts >= ?', 'pr.ts <= ?'];
+    const params = [from, to];
+    if (locationId != null) { where.push('a.location_id = ?'); params.push(locationId); }
+    const [rows] = await pool.query(
+      `SELECT a.location_id, l.name AS location_name, a.id AS agent_id,
+              COALESCE(a.display_name, a.hostname) AS agent_name,
+              COUNT(*) AS total, SUM(pr.ok = 1) AS up
+       FROM probe_results pr
+       JOIN agents a ON a.id = pr.agent_id
+       LEFT JOIN locations l ON l.id = a.location_id
+       WHERE ${where.join(' AND ')}
+       GROUP BY a.id, a.location_id, l.name, agent_name
+       ORDER BY a.location_id IS NULL, a.location_id, a.id`,
+      params
+    );
+    return rows.map((row) => {
+      const total = Number(row.total);
+      const up = Number(row.up);
+      return {
+        locationId: row.location_id == null ? null : Number(row.location_id),
+        locationName: row.location_name ?? null,
+        agentId: Number(row.agent_id),
+        agentName: row.agent_name ?? null,
+        total,
+        up,
+        down: total - up,
+        uptimePct: total > 0 ? Math.round((up / total) * 10000) / 100 : null,
+      };
+    });
+  }
+
   // The most recent result per (type, target) for an agent — the "current state".
   async function latestByAgent(agentId, limit = 50) {
     const lim = Number.isInteger(limit) && limit > 0 && limit <= 500 ? limit : 50;
@@ -113,7 +153,7 @@ function createProbeResultsRepository(db) {
     return rows.map(fromRow);
   }
 
-  return { createMany, findByAgent, latestByAgent, fleetHealth };
+  return { createMany, findByAgent, latestByAgent, fleetHealth, availability };
 }
 
 module.exports = { createProbeResultsRepository, toRow, fromRow };

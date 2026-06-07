@@ -160,6 +160,15 @@ function createLicenseManager({
     return f && typeof f === 'object' ? f : {};
   }
 
+  // The packaged plan key carried by the current valid/grace proof (e.g.
+  // 'professional'), or '' when the proof predates the plan model / there is no
+  // usable license. Resolved further by the plan service; never an access token.
+  function getPlan() {
+    if (!isLicensed()) return '';
+    const p = state.payload && state.payload.plan;
+    return typeof p === 'string' ? p : '';
+  }
+
   // Whether a new agent connection is allowed given the current connection count.
   function canAcceptNewConnection(currentConnectionCount) {
     if (!isLicensed()) return false;
@@ -171,9 +180,13 @@ function createLicenseManager({
       status: state.status,
       licensed: isLicensed(),
       maxAgents: getMaxAgents(),
+      plan: getPlan(),
       serverId: config.serverId,
       reason: state.lastError,
       withinGrace: withinGrace(),
+      // The license's own expiry (from the signed proof), distinct from the
+      // offline-grace window below. null = perpetual / no expiry in the proof.
+      validUntil: state.payload && state.payload.expiry ? state.payload.expiry : null,
       verifiedAt: state.verifiedAt ? new Date(state.verifiedAt).toISOString() : null,
       graceUntil: state.verifiedAt ? new Date(state.verifiedAt + graceMs).toISOString() : null,
       lastCheckAt: state.lastCheckAt ? new Date(state.lastCheckAt).toISOString() : null,
@@ -205,6 +218,7 @@ function createLicenseManager({
     stop,
     isLicensed,
     getMaxAgents,
+    getPlan,
     getFeatures,
     canAcceptNewConnection,
     getStatus,

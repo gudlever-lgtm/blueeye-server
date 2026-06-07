@@ -1,4 +1,4 @@
--- 024 — audit trail for outbound integration calls. One row per fire (an event
+-- 027 — audit trail for outbound integration calls. One row per fire (an event
 -- trigger or a manual test), capturing the outcome (ok/fail), the target's HTTP
 -- status code, the number of attempts (retry/backoff), and WHO triggered a manual
 -- test (system-triggered events have no actor). The integration name + type are

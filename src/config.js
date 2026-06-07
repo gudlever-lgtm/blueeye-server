@@ -93,6 +93,20 @@ const config = {
     cachePath: process.env.LICENSE_CACHE_PATH || path.join(process.cwd(), '.license-cache.json'),
     graceDays: toInt(process.env.LICENSE_GRACE_DAYS, 14),
     intervalHours: toInt(process.env.LICENSE_VALIDATE_INTERVAL_HOURS, 6),
+    // Locally-configured plan for on-prem installs that set the package without a
+    // full signed proof (e.g. pilot evaluations). The signed proof's `plan` field
+    // always wins when present. Blank → resolved by the plan service (legacy/
+    // unlicensed fallback). See src/license/plans.js for the valid keys.
+    plan: process.env.LICENSE_PLAN || '',
+    // OFFLINE licensing: path to a local signed license file. When set, the
+    // server validates this file on-box (Ed25519, no external license server)
+    // and runs in restricted mode if it is missing/expired/invalid. Takes
+    // precedence over the online validator. See docs/licensing.md.
+    file: process.env.LICENSE_FILE || '',
+    // 'online' (default) or 'offline'. Auto-selects 'offline' when LICENSE_FILE
+    // is set; set explicitly to force a mode.
+    mode: process.env.LICENSE_MODE || (process.env.LICENSE_FILE ? 'offline' : 'online'),
+    recheckHours: toInt(process.env.LICENSE_VALIDATE_INTERVAL_HOURS, 6),
   },
   // Storage monitoring: the path to statfs for disk usage. Default the server's
   // data dir; point it at the drive holding the DB/Docker volume if different.

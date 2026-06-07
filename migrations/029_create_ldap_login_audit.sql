@@ -1,4 +1,4 @@
--- 026 — audit trail for LDAP/AD login attempts (success + failure). Records the
+-- 029 — audit trail for LDAP/AD login attempts (success + failure). Records the
 -- username, the outcome + reason, how many groups matched a role, the granted
 -- role, and the source IP. Holds NO secrets — passwords are never written here.
 -- Local JWT logins are unchanged; this only covers the external-auth path.

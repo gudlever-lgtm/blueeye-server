@@ -22,6 +22,8 @@ const { createSettingsRouter } = require('./settings');
 const { createMapRouter } = require('./map');
 const { createFlowsRouter } = require('./flows');
 const { createProbesRouter } = require('./probes');
+const { createReportsRouter } = require('./reports');
+const { createThresholdsRouter } = require('./thresholds');
 const { createInterfacesRouter } = require('./interfaces');
 const { createFleetRouter } = require('./fleet');
 const { createSearchRouter } = require('./search');
@@ -49,6 +51,9 @@ function createApiRouter({
   agentTokensRepo,
   resultsRepo,
   probeResultsRepo,
+  incidentsRepo,
+  thresholdsRepo,
+  incidentService,
   licenseManager,
   agentCommander,
   systemInfo,
@@ -61,6 +66,8 @@ function createApiRouter({
   assistant,
   dispatcher,
   featureGate,
+  planService,
+  usageService,
   settingsService,
   analysisConfig,
   retentionConfig,
@@ -104,7 +111,7 @@ function createApiRouter({
   router.use('/users', createUsersRouter({ usersRepo }));
   router.use('/me', createMeRouter({ usersRepo }));
   router.use('/locations', createLocationsRouter({ locationsRepo, resultsRepo }));
-  router.use('/license', createLicenseRouter({ licenseManager, featureGate }));
+  router.use('/license', createLicenseRouter({ licenseManager, featureGate, planService, usageService }));
   router.use('/system', createSystemRouter({ systemInfo, agentSourceStore, releaseStore }));
   if (findingStore) router.use('/api/findings', createFindingsRouter({ findingStore }));
   if (assistant) router.use('/api/assistant', createAssistantRouter({ assistant, featureGate }));
@@ -117,6 +124,8 @@ function createApiRouter({
   }));
   if (probeResultsRepo) router.use('/api/probes', createProbesRouter({ probeResultsRepo, agentsRepo }));
   if (probeResultsRepo) router.use('/api/fleet', createFleetRouter({ agentsRepo, probeResultsRepo, resultsRepo, speedtestResultsRepo, settingsService }));
+  if (incidentsRepo && probeResultsRepo) router.use('/api/reports', createReportsRouter({ probeResultsRepo, incidentsRepo, locationsRepo }));
+  if (thresholdsRepo) router.use('/api/thresholds', createThresholdsRouter({ thresholdsRepo, locationsRepo }));
   router.use('/api/interfaces', createInterfacesRouter({ resultsRepo, agentsRepo }));
   router.use('/api/search', createSearchRouter({ agentsRepo, locationsRepo, flowsRepo }));
   if (settingsService) router.use('/api/settings', createSettingsRouter({ settingsService, featureGate, dispatcher, analysisConfig, retentionConfig }));
@@ -132,7 +141,7 @@ function createApiRouter({
       ldapConfigRepo, ldapRoleMapRepo, ldapAuth, secretBox, authEnabledFlag: ldapAuthEnabledFlag,
     }));
   }
-  if (testPackagesRepo) router.use('/api/test-packages', createTestPackagesRouter({ repo: testPackagesRepo, runner: testPackageRunner }));
+  if (testPackagesRepo) router.use('/api/test-packages', createTestPackagesRouter({ repo: testPackagesRepo, runner: testPackageRunner, usageService }));
   if (speedtestResultsRepo) {
     router.use('/speedtest', createSpeedtestRouter({ agentAuth, speedtestResultsRepo }));
     router.use('/api/speedtest', createSpeedtestReadRouter({ speedtestResultsRepo, agentsRepo }));
@@ -154,7 +163,7 @@ function createApiRouter({
   // Requests fall through routers that have no matching route.
   router.use('/agents', createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentCommander, agentSourceStore, releaseStore, releasePublicKey, auditRepo, integrationTrigger: integrationsDispatcher }));
   router.use('/audit', createAuditRouter({ auditRepo }));
-  router.use('/agents', createAgentReportsRouter({ agentAuth, resultsRepo, agentsRepo, analysisPipeline, flowPipeline, probeResultsRepo, probePipeline }));
+  router.use('/agents', createAgentReportsRouter({ agentAuth, resultsRepo, agentsRepo, analysisPipeline, flowPipeline, probeResultsRepo, probePipeline, incidentService }));
   router.use('/agents', createAgentEnrollRouter({ enrollmentStore, notifyDashboard, integrationTrigger: integrationsDispatcher }));
 
   return router;

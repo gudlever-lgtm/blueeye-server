@@ -9,9 +9,9 @@ rest of the system sees no difference.
 
 | Table | Migration | Purpose |
 | --- | --- | --- |
-| `ldap_config` | 025 | single-row connection config (`host`, `port`, `use_tls`, `bind_dn`, `bind_pw_encrypted`, `base_dn`, `user_filter`, `group_filter`, `enabled`). |
-| `ldap_role_map` | 025 | maps an LDAP group DN → a BlueEye role. |
-| `ldap_login_audit` | 026 | one row per login attempt (username, ok, reason, granted role, groups matched, source IP). |
+| `ldap_config` | 028 | single-row connection config (`host`, `port`, `use_tls`, `bind_dn`, `bind_pw_encrypted`, `base_dn`, `user_filter`, `group_filter`, `enabled`). |
+| `ldap_role_map` | 028 | maps an LDAP group DN → a BlueEye role. |
+| `ldap_login_audit` | 029 | one row per login attempt (username, ok, reason, granted role, groups matched, source IP). |
 
 The bind password is encrypted with **AES-256-GCM** (`src/lib/secretBox.js`) — never
 stored or returned in plaintext (mirrors the integration-credentials pattern).

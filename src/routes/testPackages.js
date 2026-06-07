@@ -10,8 +10,20 @@ const { validateTestPackageInput } = require('../validation/testPackageValidatio
 // Test packages: viewer+ may read; operator/admin may create/edit/delete and
 // trigger a run. A run pushes the package's items to the resolved, connected
 // agents (the runner) — agents execute and report back as usual.
-function createTestPackagesRouter({ repo, runner }) {
+function createTestPackagesRouter({ repo, runner, usageService = null }) {
   const router = express.Router();
+
+  // Plan-limit guard: an ENABLED test package counts as one "active test path".
+  // Returns true when the request may proceed; otherwise it has already sent a
+  // graceful 403 (the documented plan_limit_reached contract). A disabled
+  // package never counts, so it is always allowed. No-op without a usageService.
+  async function withinTestPathLimit(res, willBeEnabled) {
+    if (!usageService || !willBeEnabled) return true;
+    const check = await usageService.assertWithinLimit('test_paths');
+    if (check.ok) return true;
+    res.status(403).json(check.body);
+    return false;
+  }
 
   const invalidId = (res) => res.status(400).json({ error: 'Invalid id' });
   const notFound = (res) => res.status(404).json({ error: 'Test package not found' });
@@ -46,6 +58,8 @@ function createTestPackagesRouter({ repo, runner }) {
     asyncHandler(async (req, res) => {
       const { value, errors } = validateTestPackageInput(req.body);
       if (errors) return validationError(res, errors);
+      // A new ENABLED package consumes an active-test-path slot — enforce the plan.
+      if (!(await withinTestPathLimit(res, value.enabled !== false))) return;
       const created = await repo.create({ ...value, created_by: req.user ? req.user.id : null });
       res.status(201).json(created);
     })
@@ -62,6 +76,11 @@ function createTestPackagesRouter({ repo, runner }) {
       if (errors) return validationError(res, errors);
       const existing = await repo.findById(id);
       if (!existing) return notFound(res);
+      // Enabling a previously-disabled package activates a test path — enforce
+      // the plan limit only on that transition (re-saving an already-enabled
+      // package, or disabling one, is always allowed).
+      const activating = value.enabled !== false && !existing.enabled;
+      if (!(await withinTestPathLimit(res, activating))) return;
       res.json(await repo.update(id, value));
     })
   );

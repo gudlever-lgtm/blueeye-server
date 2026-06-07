@@ -1,4 +1,4 @@
--- 023 — outbound API integrations (ITSM/IPAM connectors). One row per configured
+-- 026 — outbound API integrations (ITSM/IPAM connectors). One row per configured
 -- target system: ServiceNow (incidents), Nautobot (device/site sync), a generic
 -- webhook, and future connectors. Credentials are ENCRYPTED at rest (AES-256-GCM
 -- via src/lib/secretBox.js) in credentials_encrypted — NEVER plaintext, and never

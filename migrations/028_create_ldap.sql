@@ -1,4 +1,4 @@
--- 025 — external auth via LDAP/AD (supplements local JWT login). A single-row
+-- 028 — external auth via LDAP/AD (supplements local JWT login). A single-row
 -- connection config (ldap_config) + a group-to-role map (ldap_role_map). The same
 -- code path serves Microsoft AD and OpenLDAP; the difference is just the filters.
 -- The bind password is ENCRYPTED at rest (AES-256-GCM via src/lib/secretBox.js) in

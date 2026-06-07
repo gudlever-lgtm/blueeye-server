@@ -10,8 +10,8 @@ connector is explicitly told it may.
 
 | Table | Migration | Purpose |
 | --- | --- | --- |
-| `integrations` | 023 | one row per target (`type`, `name`, `base_url`, `auth_type`, `credentials_encrypted`, `enabled`, `config_json`). |
-| `integration_audit` | 024 | one row per fire (event, correlation id, ok, HTTP status, attempts, actor for manual tests). |
+| `integrations` | 026 | one row per target (`type`, `name`, `base_url`, `auth_type`, `credentials_encrypted`, `enabled`, `config_json`). |
+| `integration_audit` | 027 | one row per fire (event, correlation id, ok, HTTP status, attempts, actor for manual tests). |
 
 Credentials are encrypted with **AES-256-GCM** (`src/lib/secretBox.js`, keyed by
 `SECRET_ENCRYPTION_KEY` → defaults to `JWT_SECRET`) — **never** stored or returned

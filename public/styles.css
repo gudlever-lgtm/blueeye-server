@@ -861,6 +861,8 @@ button.active-btn { outline: 2px solid var(--accent); }
    Both sit at the top of the Overview landing and are driven by the same
    /api/fleet/health payload the page already polls, so they refresh live. */
 .noc { margin: 0; }
+/* Location scope selector — narrows the KPI cards + network path to one site. */
+.noc-head { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; }
 .noc-kpis { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; margin: 0 0 16px; }
 @media (max-width: 1180px) { .noc-kpis { grid-template-columns: repeat(3, 1fr); } }
 @media (max-width: 560px) { .noc-kpis { grid-template-columns: repeat(2, 1fr); } }
@@ -881,6 +883,8 @@ button.active-btn { outline: 2px solid var(--accent); }
   padding: 14px 16px 8px; margin: 0 0 16px; box-shadow: var(--shadow); }
 .netpath-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 4px; }
 .netpath-head h3 { margin: 0; font-size: 15px; }
+.netpath-scope { font-size: 12px; font-weight: 600; color: var(--accent);
+  background: var(--accent-weak); border-radius: 999px; padding: 1px 9px; }
 .netpath-legend { display: flex; gap: 16px; margin-left: auto; font-size: 12px; color: var(--muted); }
 .netpath-legend .lg { display: inline-flex; align-items: center; gap: 7px; }
 .netpath-legend .ln { width: 20px; height: 3px; border-radius: 2px; }

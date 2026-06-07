@@ -238,6 +238,7 @@ function computeFleet(agents, rowsByAgentId, { now = Date.now(), ifaceByAgentId 
       agentId: a.id,
       hostname: a.hostname,
       displayName: a.display_name || a.hostname,
+      locationId: a.location_id ?? null,
       locationName: a.location_name || null,
       online: a.status === 'online',
       status: a.status,

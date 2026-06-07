@@ -160,6 +160,19 @@ test('a signed valid:false proof -> invalid, not licensed, not cached', async ()
   assert.equal(cache.read(), null);
 });
 
+test('a signed valid:false/expired proof -> expired (distinct from invalid)', async () => {
+  const cache = createMemoryCache();
+  const m = manager({ fetchImpl: okFetch(proof({ valid: false, reason: 'expired' })), cache });
+
+  await m.validateOnce();
+
+  const status = m.getStatus();
+  assert.equal(status.status, 'expired'); // not the catch-all 'invalid'
+  assert.equal(status.reason, 'expired'); // surfaced cleanly, no 'invalid:' prefix
+  assert.equal(m.isLicensed(), false); // expired is still not licensed
+  assert.equal(cache.read(), null); // not cached as valid
+});
+
 test('a non-200 response falls back to cache + grace (does not hard-reject)', async () => {
   const { payload, signature } = proof();
   const cache = createMemoryCache({ payload, signature, verifiedAt: NOW });

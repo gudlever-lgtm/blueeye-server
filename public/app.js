@@ -5077,6 +5077,20 @@ function limitStat(label, used, max) {
   return stat(label, el('div', {}, el('div', {}, `${used} / ${max} (${pct}%)`), usageBar(pct)));
 }
 
+// Human labels for the licence status badge (the raw status still drives the
+// badge colour via its CSS class). 'expired' reads as a clear, distinct state
+// rather than the catch-all 'invalid'.
+const LICENSE_STATUS_LABELS = {
+  valid: 'Valid',
+  grace: 'Valid (grace)',
+  expired: 'License expired',
+  not_yet_valid: 'Not yet valid',
+  invalid: 'Invalid',
+  unlicensed: 'Unlicensed',
+  unknown: 'Unknown',
+};
+const licenseStatusLabel = (status) => LICENSE_STATUS_LABELS[status] || status;
+
 views.license = async () => {
   const s = await api('/license/status');
   // Plan / usage / matrix are best-effort — a server without the plan layer (or
@@ -5098,7 +5112,7 @@ views.license = async () => {
   // The licence's own expiry, shown for both modes. null = perpetual / none.
   const expiryText = s.validUntil ? fmtDate(s.validUntil) : (s.licensed ? 'No expiry' : '–');
   root.append(el('div', { class: 'cards' },
-    stat('Status', el('span', { class: `badge ${s.status}` }, s.status)),
+    stat('Status', el('span', { class: `badge ${s.status}` }, licenseStatusLabel(s.status))),
     stat('Licensed', s.licensed ? 'Yes' : 'No'),
     plan ? stat('Plan', `BlueEye ${plan.plan_name}`) : stat('Max. agents', String(s.maxAgents)),
     offline ? stat('Validation', 'Offline (local file)') : stat('Server ID', s.serverId || '–'),

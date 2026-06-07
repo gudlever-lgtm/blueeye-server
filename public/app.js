@@ -4918,13 +4918,17 @@ views.license = async () => {
   // Offline mode reports a different evidence trail (a local signed file with a
   // validity window) instead of the online grace window.
   const offline = s.mode === 'offline';
+  // The licence's own expiry, shown for both modes. null = perpetual / none.
+  const expiryText = s.validUntil ? fmtDate(s.validUntil) : (s.licensed ? 'No expiry' : '–');
   root.append(el('div', { class: 'cards' },
     stat('Status', el('span', { class: `badge ${s.status}` }, s.status)),
     stat('Licensed', s.licensed ? 'Yes' : 'No'),
     plan ? stat('Plan', `BlueEye ${plan.plan_name}`) : stat('Max. agents', String(s.maxAgents)),
     offline ? stat('Validation', 'Offline (local file)') : stat('Server ID', s.serverId || '–'),
     stat('Last validated', fmtDate(s.verifiedAt)),
-    offline ? stat('Valid until', fmtDate(s.validUntil)) : stat('Grace expires', fmtDate(s.graceUntil)),
+    stat('License expires', expiryText),
+    // Grace is an online-only concept (running on a cached proof while offline).
+    offline ? null : stat('Grace expires', fmtDate(s.graceUntil)),
   ));
   if (offline && s.organizationId) root.append(el('p', { class: 'muted' }, `Organization: ${s.organizationId}`));
   if (offline && !s.licensed) root.append(el('p', { class: 'muted' }, 'Restricted mode — the local licence is missing, expired or invalid. Install a valid licence file and press "Re-validate now".'));

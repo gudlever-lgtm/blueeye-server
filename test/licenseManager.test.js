@@ -54,6 +54,16 @@ function manager({ fetchImpl, cache = createMemoryCache(), now = () => NOW, getA
   });
 }
 
+test('status surfaces the proof expiry as validUntil (null when perpetual)', async () => {
+  const noExpiry = manager({ fetchImpl: okFetch(proof()) });
+  await noExpiry.validateOnce();
+  assert.equal(noExpiry.getStatus().validUntil, null);
+
+  const withExpiry = manager({ fetchImpl: okFetch(proof({ expiry: '2027-01-01T00:00:00.000Z' })) });
+  await withExpiry.validateOnce();
+  assert.equal(withExpiry.getStatus().validUntil, '2027-01-01T00:00:00.000Z');
+});
+
 test('valid validation -> status valid, licensed, cached', async () => {
   const cache = createMemoryCache();
   const m = manager({ fetchImpl: okFetch(proof()), cache });

@@ -153,20 +153,76 @@ and the `LICENSE_PUBLIC_KEY`, then the manager validates every 6 hours (or press
 - The catalogue itself (limits, features, prices) is edited in
   `src/license/plans.js`; re-running migration `023` re-seeds `license_plans`.
 
-## Offline license (future)
+## Offline license (implemented)
 
-The system is structured for offline, cryptographically-signed licenses:
+The server can validate a **local signed license file** entirely on-box, with no
+contact to any external license server. Set `LICENSE_FILE` (which implies
+`LICENSE_MODE=offline`) and point it at a signed license:
 
-- `licenses.signed_payload` + `licenses.signature` (migration 023) hold the
-  signed license file.
-- `src/license/verify.js` already verifies an Ed25519 signature over the
-  canonical payload using the embedded/`LICENSE_PUBLIC_KEY` public key — the
-  same primitive used for online proofs.
-- To add full offline validation: import a signed license file into `licenses`,
-  verify it with `verifyProof`, and have `licenseManager` read the verified
-  payload (plan/limits/features) from disk instead of (or in addition to) the
-  online endpoint. No call site changes — the plan service and feature gate
-  already read through the manager.
+```
+LICENSE_FILE=/etc/blueeye/license.json
+LICENSE_PUBLIC_KEY=...        # the blueeye-licens PUBLIC key (PEM or base64)
+LICENSE_SERVER_ID=<server id> # optional binding; a bound licence must match
+```
+
+The license file is a signed proof — the canonical payload plus an Ed25519
+signature over it (same primitive and canonical bytes as the online proof):
+
+```json
+{
+  "payload": {
+    "organization_id": "org-42",
+    "plan_key": "professional",
+    "serverId": "<LICENSE_SERVER_ID>",
+    "valid_from": "2026-01-01T00:00:00Z",
+    "valid_until": "2027-01-01T00:00:00Z",
+    "max_agents_override": 50,
+    "max_test_paths_override": 300,
+    "enabled_features_override": ["rbac", "sso_oidc"]
+  },
+  "signature": "<base64 Ed25519 signature over canonicalize(payload)>"
+}
+```
+
+How it works:
+
+- `src/license/licenseVerifier.js` (**LicenseVerifier**) reads the file, verifies
+  the signature with the public key (`verifyProof` / `src/license/verify.js`),
+  checks the optional server binding and the `valid_from`/`valid_until` window,
+  and maps the payload to `{ plan, limits, features }`.
+- `src/license/offlineLicenseManager.js` wraps the verifier behind the **same
+  interface** as the online manager (`isLicensed` / `getMaxAgents` /
+  `getMaxTestPaths` / `getPlan` / `getFeatures` / `canAcceptNewConnection` /
+  `getStatus` / `start` / `stop` / `validateOnce`). `src/server.js` selects it
+  when `LICENSE_MODE=offline`, so the plan service, feature gate, WS connection
+  guard and routes are all unchanged.
+- It re-reads the file periodically (`LICENSE_VALIDATE_INTERVAL_HOURS`) to catch
+  `valid_until` crossing, and **Re-validate now** re-reads it immediately — both
+  without any network.
+
+**Restricted mode:** if the file is missing, malformed, not yet valid, expired
+or its signature does not verify, the manager reports *not licensed*. The plan
+service then falls back to the locked-down `unlicensed` plan (zero limits, no
+features) and new agent connections are refused — the server still boots and
+runs, just restricted. `GET /license/status` reports `mode: "offline"` with the
+reason and `validUntil`.
+
+### Issuing an offline license
+
+Signing uses the **private** key (kept in blueeye-licens, never on this server).
+The operator helper produces a signed file:
+
+```
+node scripts/sign-offline-license.js \
+  --key ./license-signing-private.pem --out ./license.json \
+  --org org-42 --plan professional --server <LICENSE_SERVER_ID> \
+  --from 2026-01-01 --until 2027-01-01 \
+  --max-agents 50 --max-test-paths 300 \
+  --feature rbac --feature sso_oidc
+```
+
+The optional `licenses` table (migration 023) mirrors `signed_payload` +
+`signature` for installs that prefer to store the license in the database.
 
 The signed payload is **only ever evidence of license status — never an access
 token.** Agent tokens stay entirely local to the server.

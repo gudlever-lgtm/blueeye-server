@@ -4826,14 +4826,19 @@ views.license = async () => {
   root.append(el('div', { class: 'section-head' },
     el('h2', {}, 'License status'),
     canWrite() ? el('button', { class: 'small', onclick: refreshLicense }, 'Re-validate now') : null));
+  // Offline mode reports a different evidence trail (a local signed file with a
+  // validity window) instead of the online grace window.
+  const offline = s.mode === 'offline';
   root.append(el('div', { class: 'cards' },
     stat('Status', el('span', { class: `badge ${s.status}` }, s.status)),
     stat('Licensed', s.licensed ? 'Yes' : 'No'),
     plan ? stat('Plan', `BlueEye ${plan.plan_name}`) : stat('Max. agents', String(s.maxAgents)),
-    stat('Server ID', s.serverId || '–'),
+    offline ? stat('Validation', 'Offline (local file)') : stat('Server ID', s.serverId || '–'),
     stat('Last validated', fmtDate(s.verifiedAt)),
-    stat('Grace expires', fmtDate(s.graceUntil)),
+    offline ? stat('Valid until', fmtDate(s.validUntil)) : stat('Grace expires', fmtDate(s.graceUntil)),
   ));
+  if (offline && s.organizationId) root.append(el('p', { class: 'muted' }, `Organization: ${s.organizationId}`));
+  if (offline && !s.licensed) root.append(el('p', { class: 'muted' }, 'Restricted mode — the local licence is missing, expired or invalid. Install a valid licence file and press "Re-validate now".'));
   if (s.reason) root.append(el('p', { class: 'muted' }, `Note: ${s.reason}`));
 
   // ---- License overview (active plan limits + support) --------------------

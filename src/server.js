@@ -20,6 +20,8 @@ const { attachAgentWebSocket } = require('./ws/agentSocket');
 const { attachDashboardWebSocket } = require('./ws/dashboardSocket');
 const { verifyToken } = require('./auth/jwt');
 const { createLicenseManager } = require('./license/licenseManager');
+const { createLicenseVerifier } = require('./license/licenseVerifier');
+const { createOfflineLicenseManager } = require('./license/offlineLicenseManager');
 const { createFeatureGate } = require('./license/features');
 const { createPlanService } = require('./license/planService');
 const { createUsageService } = require('./services/usageService');
@@ -95,18 +97,37 @@ function start() {
   const agentReleaseStore = createAgentReleaseStore({ dir: process.env.AGENT_RELEASE_DIR || '', logger: console });
   const releasePublicKey = resolveReleasePublicKey(process.env);
 
-  // Client-side license validation against blueeye-licens. getAgentCount reads
-  // the live WebSocket connection count (agentWs is assigned just below; the
-  // closure is only invoked later, at validation time).
+  // License validation. Two interchangeable backends with the SAME surface:
+  //   - ONLINE  (default): validates a signed proof against blueeye-licens.
+  //   - OFFLINE (LICENSE_FILE set): validates a local signed license file
+  //     entirely on-box — no external server. Invalid/expired → restricted mode.
+  // getAgentCount reads the live WebSocket connection count (agentWs is assigned
+  // just below; the closure is only invoked later, at validation time).
   let agentWs = null;
   let dashboardWs = null;
-  const licenseManager = createLicenseManager({
-    config: config.license,
-    publicKey: config.license.publicKey,
-    cache: createFileCache(config.license.cachePath),
-    logger: console,
-    getAgentCount: () => (agentWs ? agentWs.connectionCount() : 0),
-  });
+  let licenseManager;
+  if (config.license.mode === 'offline') {
+    const verifier = createLicenseVerifier({
+      publicKey: config.license.publicKey,
+      serverId: config.license.serverId,
+    });
+    licenseManager = createOfflineLicenseManager({
+      verifier,
+      filePath: config.license.file,
+      serverId: config.license.serverId,
+      recheckHours: config.license.recheckHours,
+      logger: console,
+    });
+    console.log(`License mode: offline (file=${config.license.file || 'unset'}).`);
+  } else {
+    licenseManager = createLicenseManager({
+      config: config.license,
+      publicKey: config.license.publicKey,
+      cache: createFileCache(config.license.cachePath),
+      logger: console,
+      getAgentCount: () => (agentWs ? agentWs.connectionCount() : 0),
+    });
+  }
 
   // Plan service: resolves the active package (Pilot/Starter/Professional/
   // Enterprise/MSP) from the signed proof's plan field (or LICENSE_PLAN), and

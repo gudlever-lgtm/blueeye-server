@@ -62,7 +62,16 @@ function createPlanService({ licenseManager = null, configPlan = '' } = {}) {
       if (Number.isInteger(proofMax) && proofMax > 0) return proofMax;
       return plan.max_agents; // may be null (unlimited)
     }
-    if (limitKey === 'max_test_paths') return plan.max_test_paths;
+    if (limitKey === 'max_test_paths') {
+      // An offline license may carry a per-license test-path override; the online
+      // manager has no such field, so this is backward-compatible.
+      const proofMax =
+        licenseManager && typeof licenseManager.getMaxTestPaths === 'function'
+          ? licenseManager.getMaxTestPaths()
+          : 0;
+      if (Number.isInteger(proofMax) && proofMax > 0) return proofMax;
+      return plan.max_test_paths;
+    }
     if (limitKey === 'history_days') return plan.history_days;
     return undefined;
   }

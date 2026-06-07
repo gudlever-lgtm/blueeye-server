@@ -8,6 +8,7 @@ const { computeFleet, computeAgentHealth, mergeHealth, mergeThroughput } = requi
 const { interfaceHealthSummary } = require('../health/interfaceHealth');
 const { throughputHealthSummary } = require('../health/throughputHealth');
 const { computeDataQuality } = require('../health/dataQuality');
+const { computeNicInventory } = require('../health/nicInventory');
 
 const DEFAULT_WINDOW_MS = 6 * 3600 * 1000;
 const MAX_WINDOW_MS = 7 * 24 * 3600 * 1000;
@@ -92,6 +93,15 @@ function createFleetRouter({ agentsRepo, probeResultsRepo, resultsRepo, speedtes
       a.quality = computeDataQuality({ capabilities: capsById[a.agentId], latest: latest ? { payload: latest.payload, created_at: latest.created_at } : null });
     }
     res.json({ windowMin: Math.round(windowMs / 60000), summary, agents: fleet });
+  }));
+
+  // Fleet-wide NIC inventory + firmware-drift detection: groups identical NIC
+  // models across all agents and flags firmware-version outliers (the "3 of 50
+  // units on a different firmware" case). Reads each agent's reported
+  // capabilities.nic — no probes, no new storage. viewer+.
+  router.get('/nics', requireAuth, requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN), asyncHandler(async (req, res) => {
+    const agents = await agentsRepo.findAll();
+    res.json(computeNicInventory(agents));
   }));
 
   // One agent's health verdict — for the combined agent page. Reuses the

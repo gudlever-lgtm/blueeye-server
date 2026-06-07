@@ -95,6 +95,8 @@ Mounted in `src/routes/index.js`. User endpoints use JWT + roles
 | `/api/export` | export.js | viewer+ | CSV/JSON export + **investigation bundle** (`/investigation`: per-agent health+probes+interfaces+findings+flows, JSON or event-log CSV; print→PDF client-side) |
 | `/api/flows` | flows.js | viewer+ | **traffic-type categories** (`/categories`) + **conversation explorer** (`/explore`: talkers/ports/protos/series + scan/fan-out) |
 | `/api/probes` | probes.js | viewer+ | **active-probe** results (ping/tcp/dns/traceroute/**http**) |
+| `/api/reports` | reports.js | viewer+ / operator+ | **availability** (uptime % from probes) + **incidents** list (viewer+); **NIS2 draft** (`/nis2-draft/:id`, operator+) |
+| `/api/thresholds` | thresholds.js | viewer+ read / admin write | **incident thresholds** — global defaults + per-location overrides |
 | `/api/fleet` | fleet.js | viewer+ | **fleet health** rollup (`/health`) + per-agent verdict (`/agent/:id`) + **NIC firmware inventory / drift** (`/nics`) |
 | `/api/interfaces` | interfaces.js | viewer+ | **interface health** (util/errors/discards/link) |
 | `/api/search` | search.js | viewer+ | **global search** (agents/hosts/locations + IP/port → agents) |
@@ -116,6 +118,8 @@ Later migrations add:
 | 019 | `probe_results.status` / `.cert_expiry_days` | http probe (status + TLS cert expiry) |
 | 020 | (column) | per-user UI preferences — `users.preferences` JSON (colour theme) |
 | 021 | (column) | `agents.enrollment_code_id` → links an agent to the code it enrolled with (Enrollment page shows each code's agents + live status); `ON DELETE SET NULL` |
+| 024 | `incident_thresholds` | incident derivation — per-metric warn/crit + debounce; global default (`location_id` NULL) + per-location override; seeded |
+| 025 | `incidents` | incident derivation — one row per (agent, metric, target) outage; `started_at`/`resolved_at`/`duration_seconds` |
 
 Interface health, traffic-type categories and **fleet health** add **no** tables — they
 derive from the existing `results.payload.traffic` (and `flow_records.asn` for org
@@ -159,6 +163,9 @@ A single vanilla-JS SPA. Key building blocks:
 | Traffic-type categories | `src/flows/categories.js` (editable via Settings→Traffic types) |
 | Flow/conversation explorer | `flowsRepository.exploreFlows` + `src/routes/flows.js` (`/explore`); UI `views.flows` |
 | Active probes (server) | `src/routes/probes.js`, `probeResultsRepository.js`, `validation/probeValidation.js` (probe types incl. `http`) — agent side in blueeye-agent `src/probes/` |
+| Incident derivation (open/resolve) | `src/incidents/detection.js` (pure: threshold + debounce + first-failure/recovery rules), `src/incidents/incidentService.js` (reconciles vs. stored incidents, run on probe-results ingest in `routes/agentReports.js`); `incidentsRepository.js` + `incidentThresholdsRepository.js`. See `docs/incidents.md` |
+| Incident reports / NIS2 draft | `src/routes/reports.js` (availability + incidents + `/nis2-draft/:id`), `src/incidents/nis2.js` (English CFCS template); availability query in `probeResultsRepository.availability` |
+| Incident thresholds | `src/routes/thresholds.js` + `incidentThresholdsRepository.js` (global default vs. per-location override); validation in `validation/incidentValidation.js` |
 | Probe findings + alerting | `src/analysis/probeFindings.js` (verdict→findings, reuses `health/probeHealth.js`) + `probePipeline.js` (runs on probe-results ingest in `routes/agentReports.js`) |
 | AI assistant (explain + location summary) | `src/analysis/assistant.js` (Mistral/EU, opt-in; reads enable/key/model live from the analysis config) + `src/routes/assistant.js`; per-location summary UI = `showLocationSummary` in `public/app.js`. Runtime config (enable + API key + model): `settingsService.getAssistant/setAssistant` (`src/services/settings.js`), `PUT /api/settings/assistant`, UI `assistantSettingsCard` in Settings → Analysis |
 | Fleet health (overview + verdicts) | `src/health/probeHealth.js` (`computeAgentHealth`/`mergeHealth`/`computeFleet`, median+MAD — folds in interface health), `src/routes/fleet.js`; UI `views.fleet`/`views.agent` |

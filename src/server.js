@@ -12,6 +12,9 @@ const { createEnrollmentStore } = require('./services/enrollmentStore');
 const { createAgentTokensRepository } = require('./repositories/agentTokensRepository');
 const { createResultsRepository } = require('./repositories/resultsRepository');
 const { createProbeResultsRepository } = require('./repositories/probeResultsRepository');
+const { createIncidentsRepository } = require('./repositories/incidentsRepository');
+const { createIncidentThresholdsRepository } = require('./repositories/incidentThresholdsRepository');
+const { createIncidentService } = require('./incidents/incidentService');
 const { createArtifactStore } = require('./enroll/artifactStore');
 const { createAgentSourceStore } = require('./enroll/agentSourceStore');
 const { createAgentReleaseStore } = require('./enroll/agentReleaseStore');
@@ -80,6 +83,13 @@ function start() {
   const agentTokensRepo = createAgentTokensRepository(db);
   const resultsRepo = createResultsRepository(db);
   const probeResultsRepo = createProbeResultsRepository(db);
+  const incidentsRepo = createIncidentsRepository(db);
+  const thresholdsRepo = createIncidentThresholdsRepository(db);
+  // Derives incidents from active-probe results on ingest (open/resolve), using
+  // per-location thresholds with a global fallback. Best-effort + resilient.
+  const incidentService = createIncidentService({
+    incidentsRepo, thresholdsRepo, agentsRepo, probeResultsRepo, logger: console,
+  });
 
   // Agent binaries served from a local dir for frictionless enrollment. SHA-256
   // is computed + cached now (at startup), so nothing is hashed per request.
@@ -287,6 +297,9 @@ function start() {
     agentTokensRepo,
     resultsRepo,
     probeResultsRepo,
+    incidentsRepo,
+    thresholdsRepo,
+    incidentService,
     agentCommander,
     systemInfo,
     licenseManager,

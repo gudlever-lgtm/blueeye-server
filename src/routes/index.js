@@ -22,6 +22,8 @@ const { createSettingsRouter } = require('./settings');
 const { createMapRouter } = require('./map');
 const { createFlowsRouter } = require('./flows');
 const { createProbesRouter } = require('./probes');
+const { createReportsRouter } = require('./reports');
+const { createThresholdsRouter } = require('./thresholds');
 const { createInterfacesRouter } = require('./interfaces');
 const { createFleetRouter } = require('./fleet');
 const { createSearchRouter } = require('./search');
@@ -47,6 +49,9 @@ function createApiRouter({
   agentTokensRepo,
   resultsRepo,
   probeResultsRepo,
+  incidentsRepo,
+  thresholdsRepo,
+  incidentService,
   licenseManager,
   agentCommander,
   systemInfo,
@@ -107,6 +112,8 @@ function createApiRouter({
   }));
   if (probeResultsRepo) router.use('/api/probes', createProbesRouter({ probeResultsRepo, agentsRepo }));
   if (probeResultsRepo) router.use('/api/fleet', createFleetRouter({ agentsRepo, probeResultsRepo, resultsRepo, speedtestResultsRepo, settingsService }));
+  if (incidentsRepo && probeResultsRepo) router.use('/api/reports', createReportsRouter({ probeResultsRepo, incidentsRepo, locationsRepo }));
+  if (thresholdsRepo) router.use('/api/thresholds', createThresholdsRouter({ thresholdsRepo, locationsRepo }));
   router.use('/api/interfaces', createInterfacesRouter({ resultsRepo, agentsRepo }));
   router.use('/api/search', createSearchRouter({ agentsRepo, locationsRepo, flowsRepo }));
   if (settingsService) router.use('/api/settings', createSettingsRouter({ settingsService, featureGate, dispatcher, analysisConfig, retentionConfig }));
@@ -132,7 +139,7 @@ function createApiRouter({
   // Requests fall through routers that have no matching route.
   router.use('/agents', createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentCommander, agentSourceStore, releaseStore, releasePublicKey, auditRepo }));
   router.use('/audit', createAuditRouter({ auditRepo }));
-  router.use('/agents', createAgentReportsRouter({ agentAuth, resultsRepo, agentsRepo, analysisPipeline, flowPipeline, probeResultsRepo, probePipeline }));
+  router.use('/agents', createAgentReportsRouter({ agentAuth, resultsRepo, agentsRepo, analysisPipeline, flowPipeline, probeResultsRepo, probePipeline, incidentService }));
   router.use('/agents', createAgentEnrollRouter({ enrollmentStore, notifyDashboard }));
 
   return router;

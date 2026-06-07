@@ -127,7 +127,9 @@ function createAnalysisPipeline({
       }
     }
     // Alerting: route findings to channels (behind the alerting feature flag).
-    if (dispatcher && alertingEnabled && produced.length > 0) {
+    // alertingEnabled may be a live getter so a runtime enable/disable applies.
+    const alertOn = typeof alertingEnabled === 'function' ? alertingEnabled() : alertingEnabled;
+    if (dispatcher && alertOn && produced.length > 0) {
       try {
         await dispatchAlerts(produced, groups);
       } catch (err) {

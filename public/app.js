@@ -183,6 +183,7 @@ async function login(emailInput, password) {
   token = data.token;
   role = data.user.role;
   email = data.user.email;
+  signingKeyPromptDone = false; // re-check the signing key for this freshly-logged-in user
   localStorage.setItem(TOKEN_KEY, token);
   localStorage.setItem(ROLE_KEY, role);
   localStorage.setItem(EMAIL_KEY, email);
@@ -284,6 +285,48 @@ function openModal(title, fields, onSubmit) {
   $('#modal').classList.remove('hidden');
 }
 function closeModal() { $('#modal').classList.add('hidden'); $('#modal-card').classList.remove('wide'); }
+
+// ---- First-run prompt: the agent signing key ------------------------------
+// On an admin's first authenticated render, if no agent signing key exists yet, pop
+// a prompt to generate it — it's required before any agent can be onboarded. Shown
+// at most once per session (dismiss with "Later"); the Enrollment banner and
+// Settings → Agent key remain as the other entry points. Reset on each login.
+let signingKeyPromptDone = false;
+async function maybePromptSigningKey() {
+  if (signingKeyPromptDone) return;
+  if (role !== 'admin') { signingKeyPromptDone = true; return; }
+  if (modalOpen()) return; // don't clobber another modal — retry on the next render
+  let status;
+  try { status = await api('/api/settings/agent-release-key'); }
+  catch { return; } // transient (e.g. session still settling) — retry next render
+  signingKeyPromptDone = true;
+  if (!status || status.configured) return;
+  if (!modalOpen()) showSigningKeySetupPrompt();
+}
+
+function showSigningKeySetupPrompt() {
+  const card = $('#modal-card');
+  const genBtn = el('button', { type: 'button', onclick: () => generate() }, 'Generate signing key');
+  card.replaceChildren(
+    el('h3', {}, 'Set up the agent signing key'),
+    el('div', { class: 'setup-prompt' },
+      el('p', {}, 'Before you can add agents, this server needs an ', el('strong', {}, 'agent signing key'), '.'),
+      el('p', { class: 'muted' }, 'It is generated here, on the server, and is the trust anchor for secure agent management — the server signs agent updates with it and the agents verify them. The private key never leaves the server and is never shown. You can delete it later, but agents cannot be added or upgraded from the server until a key exists.'),
+      el('div', { class: 'form-actions' },
+        el('button', { type: 'button', class: 'ghost', onclick: closeModal }, 'Later'),
+        genBtn)));
+  $('#modal').classList.remove('hidden');
+
+  async function generate() {
+    genBtn.disabled = true;
+    try {
+      await api('/api/settings/agent-release-key', { method: 'POST' });
+      toast('Signing key generated — you can now add agents.');
+      closeModal();
+      render();
+    } catch (err) { toast(errText(err), true); genBtn.disabled = false; }
+  }
+}
 
 // ---- Views ----------------------------------------------------------------
 // ---- Per-page explanation (hero + slide-in info drawer) -------------------
@@ -5570,6 +5613,8 @@ async function render({ silent = false } = {}) {
   $('#whoami').replaceChildren(
     el('span', { class: 'who-email' }, email || '—'),
     el('span', { class: `badge role-${role}` }, role));
+  // Admin-only, once per session: nudge to set the agent signing key if it's missing.
+  maybePromptSigningKey();
 
   // Stop the overview poller when leaving that view (it restarts itself when shown).
   if (currentView !== 'overview') stopOverview();

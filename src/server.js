@@ -201,7 +201,9 @@ function start() {
   const dispatcher = createDispatcher({
     config: alertingConfig,
     channels: {
-      email: createEmailChannel({ config: alertingConfig.channels.email, transport: createSmtpTransport(alertingConfig.channels.email.smtp, console), logger: console }),
+      // createTransport (not an eager transport) so a runtime SMTP edit (Settings
+      // → Alerting) rebuilds the mailer without a restart.
+      email: createEmailChannel({ config: alertingConfig.channels.email, createTransport: (smtp) => createSmtpTransport(smtp, console), logger: console }),
       webhook: createWebhookChannel({ config: alertingConfig.channels.webhook, logger: console }),
       syslog: createSyslogChannel({ config: alertingConfig.channels.syslog, logger: console }),
     },
@@ -219,7 +221,8 @@ function start() {
     config: analysisConfig,
     correlator,
     dispatcher,
-    alertingEnabled: alertingConfig.enabled,
+    // Live getter (not a snapshot) so a runtime enable in Settings → Alerting applies.
+    alertingEnabled: () => alertingConfig.enabled,
     // Detector runs only if the license includes analysis (AND config enables it).
     licensed: () => featureGate.isFeatureEnabled('analysis'),
     // Push findings to connected dashboards (browsers), not to agents.
@@ -234,7 +237,7 @@ function start() {
     findingStore,
     config: analysisConfig,
     dispatcher,
-    alertingEnabled: alertingConfig.enabled,
+    alertingEnabled: () => alertingConfig.enabled,
     licensed: () => featureGate.isFeatureEnabled('analysis'),
     publishFinding: (hostId, message) => (dashboardWs ? dashboardWs.broadcast(message) : 0),
     logger: console,
@@ -269,7 +272,7 @@ function start() {
   // the analysis/retention knobs — which it mutates on the live config objects).
   const settingsService = createSettingsService({
     settingsRepo: createSettingsRepository(db), config,
-    liveAnalysis: analysisConfig, liveRetention: retentionConfig,
+    liveAnalysis: analysisConfig, liveRetention: retentionConfig, liveAlerting: alertingConfig,
   });
   // Re-apply persisted analysis/retention edits onto the live config so they
   // survive restarts. Best-effort + fire-and-forget (consumers read lazily).

@@ -23,7 +23,7 @@ function createSettingsRouter({ settingsService, featureGate, dispatcher, analys
         analysisEnabled: a.analysisEnabled, assistantEnabled: a.assistantEnabled,
         critSigma: a.critSigma, warnSigma: a.warnSigma, baselineDays: a.baselineDays, minSamples: a.minSamples,
       },
-      alerting: dispatcher ? dispatcher.describe() : null,
+      alerting: settingsService ? await settingsService.getAlertingSafe() : (dispatcher ? dispatcher.describe() : null),
       retention: settingsService ? await settingsService.getRetention() : (retentionConfig || null),
       throughput: settingsService ? await settingsService.getThroughput() : null,
       assistant: settingsService ? await settingsService.getAssistantSafe() : null,
@@ -70,6 +70,24 @@ function createSettingsRouter({ settingsService, featureGate, dispatcher, analys
     }
     try {
       res.json({ assistant: await settingsService.setAssistant(req.body || {}) });
+    } catch (err) {
+      if (err.statusCode === 400) return res.status(400).json({ error: 'Validation failed', details: err.details || {} });
+      throw err;
+    }
+  }));
+
+  // PUT /api/settings/alerting — alert channel config (admin). Enable flags,
+  // per-channel minimum severity, recipients/URLs/hosts and the two secrets
+  // (SMTP password + webhook HMAC). The secrets are write-only: the response only
+  // reports *Set + a masked hint, never the value. License-gated with the same
+  // 'alerting' entitlement as the dispatcher, so an admin cannot configure a
+  // channel the server will refuse to dispatch through. Fail-open when unwired.
+  router.put('/alerting', ...admin, asyncHandler(async (req, res) => {
+    if (featureGate && !featureGate.isFeatureEnabled('alerting')) {
+      return res.status(403).json({ error: 'This feature is not included in your license', feature: 'alerting', reason: 'license' });
+    }
+    try {
+      res.json({ alerting: await settingsService.setAlerting(req.body || {}) });
     } catch (err) {
       if (err.statusCode === 400) return res.status(400).json({ error: 'Validation failed', details: err.details || {} });
       throw err;

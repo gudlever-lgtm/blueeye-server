@@ -32,7 +32,7 @@ function badRequest(message, details) {
 // the env defaults. The map tile source and the traffic-type categories are
 // editable from the UI; everything else stays env-driven. Validation lives here
 // so the route stays thin.
-function createSettingsService({ settingsRepo, config, liveAnalysis = null, liveRetention = null }) {
+function createSettingsService({ settingsRepo, config, liveAnalysis = null, liveRetention = null, liveAlerting = null }) {
   function mapDefaults() {
     return {
       tileUrl: config.geo.tileUrl,
@@ -395,8 +395,247 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
     return redactAssistant(merged);
   }
 
-  // Re-applies persisted analysis/retention/assistant overrides onto the live
-  // config objects at boot, so admin edits survive a restart. Best-effort.
+  // ---- Alerting channels (Settings → Alerting) ----------------------------
+  // Email/webhook/syslog channel config — enable flags, per-channel minimum
+  // severity, recipients/URLs/hosts, and the two secrets (SMTP password + webhook
+  // HMAC). Editable at runtime (admin) instead of env-only, and live-applied onto
+  // the running alerting config (liveAlerting) so the dispatcher + channels pick
+  // edits up without a restart. Defaults come from the env-loaded alerting config,
+  // so existing .env deployments keep working. The two secrets are write-only:
+  // stored in app_settings but NEVER returned — reads expose only whether each is
+  // set, plus a short masked hint.
+  const SEVERITIES = ['INFO', 'WARN', 'CRIT'];
+  const SYSLOG_PROTOS = ['udp', 'tcp'];
+  const DEFAULT_COOLDOWN_MS = 15 * 60 * 1000;
+  const MAX_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+  const sevOrDefault = (v, d) => { const s = String(v || '').toUpperCase(); return SEVERITIES.includes(s) ? s : d; };
+  const asStr = (v, d = '') => (v == null ? d : String(v));
+  const asPort = (v, d) => { const n = Number.parseInt(v, 10); return Number.isInteger(n) && n >= 1 && n <= 65535 ? n : d; };
+
+  // Normalises any config-ish object into the full effective shape (with secrets).
+  // Used both for the env defaults (liveAlerting) and for a stored override, so a
+  // value missing from either falls back to a sensible built-in default.
+  function normAlerting(src) {
+    const a = src && typeof src === 'object' ? src : {};
+    const ch = a.channels || {};
+    const e = ch.email || {}; const es = e.smtp || {};
+    const w = ch.webhook || {};
+    const s = ch.syslog || {};
+    return {
+      enabled: !!a.enabled,
+      cooldownMs: Number.isFinite(a.cooldownMs) ? a.cooldownMs : DEFAULT_COOLDOWN_MS,
+      channels: {
+        email: {
+          enabled: !!e.enabled, minSeverity: sevOrDefault(e.minSeverity, 'WARN'),
+          to: asStr(e.to), from: asStr(e.from) || 'blueeye@localhost',
+          smtp: { host: asStr(es.host), port: asPort(es.port, 587), user: asStr(es.user), pass: asStr(es.pass), secure: !!es.secure },
+        },
+        webhook: { enabled: !!w.enabled, minSeverity: sevOrDefault(w.minSeverity, 'CRIT'), url: asStr(w.url), secret: asStr(w.secret) },
+        syslog: {
+          enabled: !!s.enabled, minSeverity: sevOrDefault(s.minSeverity, 'INFO'),
+          host: asStr(s.host), port: asPort(s.port, 514), proto: SYSLOG_PROTOS.includes(s.proto) ? s.proto : 'udp', appName: asStr(s.appName) || 'blueeye',
+        },
+      },
+    };
+  }
+
+  // Effective alerting config INCLUDING the raw secrets — server-internal only
+  // (used to persist + to live-apply onto the running config; never sent to a
+  // client). A stored override replaces the env defaults wholesale.
+  async function getAlerting() {
+    const override = await loadOverride('alerting');
+    return normAlerting(override || liveAlerting || {});
+  }
+
+  // The client-safe view: every editable field EXCEPT the two secrets, which are
+  // reported only as "set or not" + a masked hint, never echoed.
+  function redactAlerting(cfg) {
+    const e = cfg.channels.email; const w = cfg.channels.webhook;
+    const mask = (k) => (k ? `••••${k.slice(-4)}` : '');
+    return {
+      enabled: cfg.enabled, cooldownMs: cfg.cooldownMs,
+      channels: {
+        email: {
+          enabled: e.enabled, minSeverity: e.minSeverity, to: e.to, from: e.from,
+          smtp: { host: e.smtp.host, port: e.smtp.port, user: e.smtp.user, secure: e.smtp.secure },
+          smtpPassSet: e.smtp.pass !== '', smtpPassHint: mask(e.smtp.pass),
+        },
+        webhook: {
+          enabled: w.enabled, minSeverity: w.minSeverity, url: w.url,
+          secretSet: w.secret !== '', secretHint: mask(w.secret),
+        },
+        syslog: { ...cfg.channels.syslog },
+      },
+    };
+  }
+  async function getAlertingSafe() {
+    return redactAlerting(await getAlerting());
+  }
+
+  function validateAlerting(patch) {
+    const p = patch && typeof patch === 'object' ? patch : {};
+    const errors = {};
+    const value = {};
+
+    if (p.enabled !== undefined) value.enabled = p.enabled === true || p.enabled === 'true';
+    if (p.cooldownMs !== undefined) {
+      const n = Number(p.cooldownMs);
+      if (!Number.isInteger(n) || n < 0 || n > MAX_COOLDOWN_MS) errors.cooldownMs = `cooldownMs must be an integer between 0 and ${MAX_COOLDOWN_MS}`;
+      else value.cooldownMs = n;
+    }
+
+    const chkBool = (obj, target, key) => { if (obj[key] !== undefined) target[key] = obj[key] === true || obj[key] === 'true'; };
+    const chkSev = (obj, target, path) => {
+      if (obj.minSeverity === undefined) return;
+      const s = String(obj.minSeverity).toUpperCase();
+      if (!SEVERITIES.includes(s)) errors[`${path}.minSeverity`] = 'minSeverity must be INFO, WARN or CRIT';
+      else target.minSeverity = s;
+    };
+    const chkStr = (obj, target, key, max, path) => {
+      if (obj[key] === undefined) return;
+      const v = String(obj[key]).trim();
+      if (v.length > max) errors[`${path}.${key}`] = `${key} must be at most ${max} characters`;
+      else target[key] = v;
+    };
+    const chkPort = (obj, target, path) => {
+      if (obj.port === undefined) return;
+      const n = Number(obj.port);
+      if (!Number.isInteger(n) || n < 1 || n > 65535) errors[`${path}.port`] = 'port must be an integer between 1 and 65535';
+      else target.port = n;
+    };
+    // Permissive single-address check (allows local domains like blueeye@localhost).
+    const emailish = (s) => /^[^\s@,]+@[^\s@,]+$/.test(s);
+
+    // email
+    if (p.email && typeof p.email === 'object') {
+      const e = p.email; const ev = {};
+      chkBool(e, ev, 'enabled'); chkSev(e, ev, 'email');
+      if (e.to !== undefined) {
+        const to = String(e.to).trim();
+        const parts = to.split(',').map((x) => x.trim()).filter(Boolean);
+        if (to.length > 500) errors['email.to'] = 'to must be at most 500 characters';
+        else if (to !== '' && !parts.every(emailish)) errors['email.to'] = 'to must be a comma-separated list of e-mail addresses';
+        else ev.to = to;
+      }
+      if (e.from !== undefined) {
+        const from = String(e.from).trim();
+        if (from.length > 200) errors['email.from'] = 'from must be at most 200 characters';
+        else if (from !== '' && !emailish(from)) errors['email.from'] = 'from must be an e-mail address';
+        else ev.from = from || 'blueeye@localhost';
+      }
+      const smtpIn = e.smtp && typeof e.smtp === 'object' ? e.smtp : {};
+      const sv = {};
+      chkStr(smtpIn, sv, 'host', 255, 'email.smtp');
+      chkPort(smtpIn, sv, 'email.smtp');
+      chkStr(smtpIn, sv, 'user', 255, 'email.smtp');
+      chkBool(smtpIn, sv, 'secure');
+      // pass is write-only: clear flag wipes it; a blank value is ignored so
+      // saving the form without retyping the password never wipes it by accident.
+      if (e.clearSmtpPass === true || e.clearSmtpPass === 'true') sv.pass = '';
+      else if (smtpIn.pass !== undefined) {
+        const k = String(smtpIn.pass);
+        if (k.trim() === '') { /* keep the stored password */ }
+        else if (k.length > 300) errors['email.smtp.pass'] = 'password must be at most 300 characters';
+        else sv.pass = k;
+      }
+      if (Object.keys(sv).length) ev.smtp = sv;
+      if (Object.keys(ev).length) value.email = ev;
+    }
+
+    // webhook
+    if (p.webhook && typeof p.webhook === 'object') {
+      const w = p.webhook; const wv = {};
+      chkBool(w, wv, 'enabled'); chkSev(w, wv, 'webhook');
+      if (w.url !== undefined) {
+        const u = String(w.url).trim();
+        if (u !== '' && (!/^https?:\/\//i.test(u) || u.length > 500)) errors['webhook.url'] = 'url must be an http(s) URL (max 500 chars)';
+        else wv.url = u;
+      }
+      if (w.clearSecret === true || w.clearSecret === 'true') wv.secret = '';
+      else if (w.secret !== undefined) {
+        const k = String(w.secret);
+        if (k.trim() === '') { /* keep the stored secret */ }
+        else if (k.length > 300) errors['webhook.secret'] = 'secret must be at most 300 characters';
+        else wv.secret = k;
+      }
+      if (Object.keys(wv).length) value.webhook = wv;
+    }
+
+    // syslog
+    if (p.syslog && typeof p.syslog === 'object') {
+      const s = p.syslog; const sv = {};
+      chkBool(s, sv, 'enabled'); chkSev(s, sv, 'syslog');
+      chkStr(s, sv, 'host', 255, 'syslog');
+      chkPort(s, sv, 'syslog');
+      if (s.proto !== undefined) {
+        const pr = String(s.proto).toLowerCase();
+        if (!SYSLOG_PROTOS.includes(pr)) errors['syslog.proto'] = 'proto must be udp or tcp';
+        else sv.proto = pr;
+      }
+      if (s.appName !== undefined) {
+        const an = String(s.appName).trim();
+        if (an === '' || an.length > 48 || !/^[\w.-]+$/.test(an)) errors['syslog.appName'] = 'appName must be 1-48 chars of letters, digits, . _ -';
+        else sv.appName = an;
+      }
+      if (Object.keys(sv).length) value.syslog = sv;
+    }
+
+    return { errors: Object.keys(errors).length ? errors : null, value };
+  }
+
+  // Deep-merges the validated partial `value` onto the current full config.
+  function mergeAlertingPatch(cur, value) {
+    const out = JSON.parse(JSON.stringify(cur));
+    if (value.enabled !== undefined) out.enabled = value.enabled;
+    if (value.cooldownMs !== undefined) out.cooldownMs = value.cooldownMs;
+    for (const name of ['email', 'webhook', 'syslog']) {
+      const v = value[name];
+      if (!v) continue;
+      for (const k of Object.keys(v)) {
+        if (k === 'smtp') Object.assign(out.channels.email.smtp, v.smtp);
+        else out.channels[name][k] = v[k];
+      }
+    }
+    return out;
+  }
+
+  // Live-applies the merged config onto the running alerting config IN PLACE, so
+  // the dispatcher (holds liveAlerting) and the channels (each hold a reference to
+  // their channel sub-object, incl. email.smtp) all observe the change at once.
+  function applyAlertingToLive(m) {
+    const live = liveAlerting;
+    if (!live) return;
+    live.enabled = m.enabled;
+    live.cooldownMs = m.cooldownMs;
+    live.channels = live.channels || {};
+    for (const name of ['email', 'webhook', 'syslog']) {
+      live.channels[name] = live.channels[name] || {};
+      const src = m.channels[name];
+      for (const k of Object.keys(src)) {
+        if (k === 'smtp') {
+          live.channels.email.smtp = live.channels.email.smtp || {};
+          Object.assign(live.channels.email.smtp, src.smtp);
+        } else {
+          live.channels[name][k] = src[k];
+        }
+      }
+    }
+  }
+
+  // Validates + persists the (partial) alerting config and live-applies it onto
+  // the running config. Returns the redacted (secret-free) view.
+  async function setAlerting(patch) {
+    const { errors, value } = validateAlerting(patch || {});
+    if (errors) throw badRequest('invalid alerting settings', errors);
+    const current = await getAlerting();
+    const merged = mergeAlertingPatch(current, value);
+    await settingsRepo.set('alerting', merged);
+    applyAlertingToLive(merged);
+    return redactAlerting(merged);
+  }
+
+  // Re-applies persisted analysis/retention/assistant/alerting overrides onto the
+  // live config objects at boot, so admin edits survive a restart. Best-effort.
   async function applyStoredOverrides() {
     try {
       const a = await settingsRepo.get('analysis');
@@ -414,6 +653,10 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
         if (a.model) liveAnalysis.assistantModel = a.model;
       }
     } catch { /* ignore */ }
+    try {
+      const al = await settingsRepo.get('alerting');
+      if (al && liveAlerting) applyAlertingToLive(normAlerting(al));
+    } catch { /* ignore */ }
   }
 
   return {
@@ -424,6 +667,7 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
     getRetention, setRetention, validateRetention,
     getThroughput, setThroughput, validateThroughput,
     getAssistant, getAssistantSafe, setAssistant, validateAssistant,
+    getAlerting, getAlertingSafe, setAlerting, validateAlerting,
     applyStoredOverrides,
   };
 }

@@ -91,7 +91,7 @@ Mounted in `src/routes/index.js`. User endpoints use JWT + roles
 | `/api/geo` | geo.js | gated | geo overview + flow selection |
 | `/api/alerting` | alerting.js | admin | channel config + test |
 | `/api/map` | map.js | viewer+ | effective tile/geocoder config |
-| `/api/settings` | settings.js | admin | editable map / **analysis** / **retention** / **flow-categories** / **AI assistant** (enable + API key + model) |
+| `/api/settings` | settings.js | admin | editable map / **analysis** / **retention** / **flow-categories** / **AI assistant** (enable + API key + model) / **alerting** (channels + secrets, write-only) |
 | `/api/export` | export.js | viewer+ | CSV/JSON export + **investigation bundle** (`/investigation`: per-agent health+probes+interfaces+findings+flows, JSON or event-log CSV; print→PDF client-side) |
 | `/api/flows` | flows.js | viewer+ | **traffic-type categories** (`/categories`) + **conversation explorer** (`/explore`: talkers/ports/protos/series + scan/fan-out) |
 | `/api/probes` | probes.js | viewer+ | **active-probe** results (ping/tcp/dns/traceroute/**http**) |
@@ -156,7 +156,7 @@ A single vanilla-JS SPA. Key building blocks:
 | A new HTTP endpoint | `src/routes/<x>.js` + mount in `routes/index.js` + a fake in `test-support/fakes.js` |
 | A DB table/column | new `migrations/NNN_*.sql` + repository in `src/repositories/` |
 | Anomaly thresholds / detection | `src/analysis/detector.js`, `config.js` (editable via Settings→Analysis) |
-| Alert channels | `src/analysis/alerting/channels/*` + `dispatcher.js` |
+| Alert channels | `src/analysis/alerting/channels/*` + `dispatcher.js`; runtime-editable via Settings→Alerting (`settingsService.getAlerting/setAlerting`, `PUT /api/settings/alerting`, UI `settingsAlertingView` in `public/app.js`) — live-applied onto the running `alertingConfig`, secrets write-only |
 | Maintenance windows / silencing | `src/analysis/alerting/maintenance.js` (`createSilencer`) + dispatcher hook; windows in `settingsService` (`maintenance` key), route `/api/settings/maintenance` |
 | Data retention | `src/analysis/retention/*` (editable via Settings→Retention) |
 | Geo/ASN enrichment | `src/geo/enricher.js`, `provider.js`; flows in `flowsRepository.js` |

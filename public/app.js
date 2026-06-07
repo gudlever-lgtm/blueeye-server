@@ -585,12 +585,12 @@ const PAGE_INFO = {
       el('h4', {}, 'Editable here (stored in the database)'),
       el('ul', {},
         el('li', {}, settingsLink('analyse', 'Analysis'), ': thresholds for anomaly detection — CRIT/WARN in σ, baseline window and how many measurements are required before alerting.'),
+        el('li', {}, settingsLink('alerting', 'Alerting'), ': channels (e-mail/webhook/syslog) — enable, set a minimum severity, and fill in the connection details. Secrets (SMTP password, webhook HMAC) are write-only: stored on the server, never shown again.'),
         el('li', {}, settingsLink('retention', 'Retention'), ': how long raw/aggregated data and findings are kept before being cleaned up.'),
         el('li', {}, settingsLink('types', 'Traffic types'), ': define the categories (DNS, Facebook …) from service ports and destination ASN. Shown on ', viewLink('overview', 'Traffic'), ' → Traffic type.'),
         el('li', {}, settingsLink('map', 'Map'), ': tile and geocoder source for the maps (use an EU/self-hosted source in production).')),
       el('h4', {}, 'Read-only (set in .env / requires restart)'),
       el('ul', {},
-        el('li', {}, settingsLink('alerting', 'Alerting'), ': channels (e-mail/webhook/syslog) — carries secrets (SMTP password, webhook HMAC), so they are kept in .env.'),
         el('li', {}, settingsLink('users', 'Users'), ': create/edit staff and roles (admin only).'),
         el('li', {}, settingsLink('license', 'License'), ': status + “Revalidate now”.')),
       el('p', { class: 'muted' }, 'Editable changes are stored in app_settings and are reloaded on startup, so they survive a restart.'),
@@ -4473,12 +4473,197 @@ function throughputSettingsCard(t) {
 
 async function settingsAlertingView() {
   const data = await api('/api/settings');
+  const a = data.alerting || {};
+  const ch = a.channels || {};
   const root = el('div');
-  root.append(el('p', { class: 'muted settings-intro' }, 'When a finding is raised it can be dispatched via e-mail, webhook, or syslog. The overview below shows which channels are enabled and their minimum severity. ', licenseBadge(data.license, 'alerting')));
-  const card = settingsCard('Alerting', alertingSummary(data.alerting));
-  card.append(el('p', { class: 'muted small' }, 'Channels are configured via the server .env because they contain secrets (SMTP password, webhook HMAC). Changes require a restart. Env: ALERTING_*, SMTP_*, WEBHOOK_*.'));
-  root.append(el('div', { class: 'settings-grid' }, card));
+  // Editable only when the licence includes alerting (the PUT is refused server-side
+  // otherwise). An unknown licence (null) keeps the editor, per the "allow until we
+  // know it's off" rule used for the assistant.
+  const alertingLicensed = !data.license || data.license.alerting !== false;
+  root.append(el('p', { class: 'muted settings-intro' },
+    'When a finding is raised it can be dispatched by e-mail, webhook or syslog. Turn alerting on, then enable the channels you want and set a minimum severity for each. Settings are stored in the database and take effect immediately — no restart. ',
+    licenseBadge(data.license, 'alerting')));
+  if (!alertingLicensed) {
+    root.append(el('div', { class: 'settings-grid' }, alertingUnlicensedCard(data.license)));
+    return root;
+  }
+  root.append(el('div', { class: 'settings-grid' },
+    alertingGeneralCard(a),
+    alertingEmailCard(ch.email),
+    alertingWebhookCard(ch.webhook),
+    alertingSyslogCard(ch.syslog)));
   return root;
+}
+
+// Read-only placeholder shown instead of the editable alerting cards when the
+// licence does not include alerting. The PUT is refused server-side too — this
+// just explains why the controls are gone rather than looking broken.
+function alertingUnlicensedCard(license) {
+  return el('div', { class: 'settings-card' }, el('h3', {}, 'Alerting'),
+    el('p', { class: 'muted' }, 'Alerting is not included in your licence, so channels cannot be configured here. Contact your provider to add it to your licence.'),
+    licenseBadge(license, 'alerting'));
+}
+
+// Master switch + cooldown. Saves just { enabled, cooldownMs }; the server merges
+// it onto the stored config, leaving the per-channel settings untouched.
+function alertingGeneralCard(a) {
+  const enabledI = el('input', { type: 'checkbox' }); enabledI.checked = !!a.enabled;
+  const coolI = el('input', { type: 'number', min: '0', max: '1440', step: '1', value: String(Math.round((a.cooldownMs ?? 900000) / 60000)) });
+  const err = el('p', { class: 'error' });
+  const btn = el('button', { class: 'small' }, 'Save');
+  async function save() {
+    err.textContent = ''; btn.disabled = true;
+    try { await api('/api/settings/alerting', { method: 'PUT', body: { enabled: enabledI.checked, cooldownMs: Math.round(Number(coolI.value) * 60000) } }); toast('Alerting saved'); }
+    catch (e2) { err.textContent = errText(e2); }
+    finally { btn.disabled = false; }
+  }
+  btn.addEventListener('click', save);
+  return el('div', { class: 'settings-card' }, el('h3', {}, 'Alerting'),
+    el('div', { class: 'form-grid' },
+      el('label', { class: 'set-field' }, el('span', {}, 'Alerting enabled'), enabledI,
+        el('span', { class: 'muted small' }, 'Master switch. When off, findings are still recorded but never dispatched.')),
+      el('label', { class: 'set-field' }, el('span', {}, 'Cooldown (minutes)'), coolI,
+        el('span', { class: 'muted small' }, 'Minimum time between repeated alerts for the same condition on the same host.')),
+      err, el('div', { class: 'form-actions' }, btn)));
+}
+
+function alertSevSelect(value) {
+  const sel = el('select', {}, ...['INFO', 'WARN', 'CRIT'].map((s) => el('option', { value: s }, s)));
+  sel.value = ['INFO', 'WARN', 'CRIT'].includes(value) ? value : 'WARN';
+  return sel;
+}
+
+// A write-only secret field (SMTP password / webhook secret): blank by default,
+// the placeholder shows whether one is stored + a masked hint, and a "Remove"
+// checkbox (only when set) clears it. reset() refreshes it after a save.
+function alertSecretField(label, hint, isSet, hintMask) {
+  const input = el('input', { type: 'password', autocomplete: 'new-password', spellcheck: 'false' });
+  const clear = el('input', { type: 'checkbox' });
+  const clearRow = el('label', { class: 'inline muted small' }, clear, el('span', {}, `Remove the stored ${label.toLowerCase()}`));
+  function reset(set, mask) {
+    input.value = '';
+    input.placeholder = set ? `Set (${mask}) — type to replace` : 'Not set';
+    clear.checked = false;
+    clearRow.classList.toggle('hidden', !set);
+  }
+  reset(isSet, hintMask);
+  const field = el('label', { class: 'set-field' }, el('span', {}, label), input, el('span', { class: 'muted small' }, hint));
+  return { rows: [field, clearRow], input, clear, reset };
+}
+
+function alertField(label, input, hint) {
+  return el('label', { class: 'set-field' }, el('span', {}, label), input, hint ? el('span', { class: 'muted small' }, hint) : null);
+}
+
+// One channel card. The shell renders Enabled + Minimum severity, then the
+// channel-specific bodyRows, and wires Save (PUT { [name]: slice }) + Send test
+// (POST /api/alerting/test). gather() returns the channel-specific slice;
+// onSaved(alerting) lets a channel refresh its secret field after saving.
+function alertingChannelCard({ name, title, blurb, channel, bodyRows, gather, onSaved }) {
+  const c = channel || {};
+  const enabledI = el('input', { type: 'checkbox' }); enabledI.checked = !!c.enabled;
+  const sevI = alertSevSelect(c.minSeverity);
+  const err = el('p', { class: 'error' });
+  const saveBtn = el('button', { class: 'small' }, 'Save');
+  const testBtn = el('button', { class: 'small ghost' }, 'Send test');
+  async function save() {
+    err.textContent = ''; saveBtn.disabled = true;
+    const slice = gather();
+    slice.enabled = enabledI.checked;
+    slice.minSeverity = sevI.value;
+    try {
+      const res = await api('/api/settings/alerting', { method: 'PUT', body: { [name]: slice } });
+      toast(`${title} saved`);
+      if (onSaved) onSaved(res.alerting || {});
+    } catch (e2) { err.textContent = errText(e2); }
+    finally { saveBtn.disabled = false; }
+  }
+  async function sendTest() {
+    err.textContent = ''; testBtn.disabled = true;
+    try {
+      const res = await api('/api/alerting/test', { method: 'POST', body: { channel: name } });
+      const r = res.result || {};
+      if (r.ok) toast(`${title}: test sent`);
+      else err.textContent = `Test failed: ${r.detail || 'unknown error'}`;
+    } catch (e2) { err.textContent = errText(e2); }
+    finally { testBtn.disabled = false; }
+  }
+  saveBtn.addEventListener('click', save);
+  testBtn.addEventListener('click', sendTest);
+  return el('div', { class: 'settings-card' }, el('h3', {}, title),
+    el('div', { class: 'form-grid' },
+      alertField('Enabled', enabledI, blurb),
+      alertField('Minimum severity', sevI, 'Only findings at or above this level go to this channel.'),
+      ...bodyRows,
+      err,
+      el('div', { class: 'form-actions' }, saveBtn, testBtn,
+        el('span', { class: 'muted small' }, 'Save before testing — the test uses the saved settings.'))));
+}
+
+function alertingEmailCard(channel) {
+  const e = channel || {}; const smtp = e.smtp || {};
+  const toI = el('input', { type: 'text', value: e.to || '', placeholder: 'ops@example.eu, oncall@example.eu' });
+  const fromI = el('input', { type: 'text', value: e.from || '', placeholder: 'blueeye@example.eu' });
+  const hostI = el('input', { type: 'text', value: smtp.host || '', placeholder: 'smtp.example.eu' });
+  const portI = el('input', { type: 'number', min: '1', max: '65535', step: '1', value: String(smtp.port ?? 587) });
+  const userI = el('input', { type: 'text', value: smtp.user || '' });
+  const secureI = el('input', { type: 'checkbox' }); secureI.checked = !!smtp.secure;
+  const pass = alertSecretField('SMTP password', 'Write-only — stored on the server, never displayed again.', !!e.smtpPassSet, e.smtpPassHint || '');
+  return alertingChannelCard({
+    name: 'email', title: 'E-mail', blurb: 'Send alerts by e-mail over SMTP.', channel: e,
+    bodyRows: [
+      alertField('To', toI, 'Recipient(s), comma-separated.'),
+      alertField('From', fromI, 'Sender address.'),
+      alertField('SMTP host', hostI, 'Use an EU/self-hosted mail server.'),
+      alertField('SMTP port', portI),
+      alertField('SMTP username', userI, 'Leave blank for an unauthenticated relay.'),
+      ...pass.rows,
+      alertField('Use TLS (secure)', secureI, 'On for implicit TLS (port 465); off uses STARTTLS.'),
+    ],
+    gather: () => {
+      const slice = { to: toI.value.trim(), from: fromI.value.trim(), smtp: { host: hostI.value.trim(), port: Number(portI.value), user: userI.value.trim(), secure: secureI.checked } };
+      if (pass.clear.checked) slice.clearSmtpPass = true;
+      else if (pass.input.value.trim() !== '') slice.smtp.pass = pass.input.value.trim();
+      return slice;
+    },
+    onSaved: (al) => { const ne = (al.channels && al.channels.email) || {}; pass.reset(!!ne.smtpPassSet, ne.smtpPassHint || ''); },
+  });
+}
+
+function alertingWebhookCard(channel) {
+  const w = channel || {};
+  const urlI = el('input', { type: 'text', value: w.url || '', placeholder: 'https://hooks.example.eu/blueeye' });
+  const secret = alertSecretField('Signing secret', 'HMAC-SHA256 secret — the POST is signed as X-BlueEye-Signature. Write-only.', !!w.secretSet, w.secretHint || '');
+  return alertingChannelCard({
+    name: 'webhook', title: 'Webhook', blurb: 'POST each finding as JSON to a URL.', channel: w,
+    bodyRows: [alertField('URL', urlI, 'Endpoint that receives the JSON POST.'), ...secret.rows],
+    gather: () => {
+      const slice = { url: urlI.value.trim() };
+      if (secret.clear.checked) slice.clearSecret = true;
+      else if (secret.input.value.trim() !== '') slice.secret = secret.input.value.trim();
+      return slice;
+    },
+    onSaved: (al) => { const nw = (al.channels && al.channels.webhook) || {}; secret.reset(!!nw.secretSet, nw.secretHint || ''); },
+  });
+}
+
+function alertingSyslogCard(channel) {
+  const s = channel || {};
+  const hostI = el('input', { type: 'text', value: s.host || '', placeholder: 'siem.example.eu' });
+  const portI = el('input', { type: 'number', min: '1', max: '65535', step: '1', value: String(s.port ?? 514) });
+  const protoI = el('select', {}, el('option', { value: 'udp' }, 'UDP'), el('option', { value: 'tcp' }, 'TCP'));
+  protoI.value = s.proto === 'tcp' ? 'tcp' : 'udp';
+  const appI = el('input', { type: 'text', value: s.appName || 'blueeye' });
+  return alertingChannelCard({
+    name: 'syslog', title: 'Syslog', blurb: 'Send findings as RFC5424 syslog lines.', channel: s,
+    bodyRows: [
+      alertField('Host', hostI, 'Syslog collector / SIEM host.'),
+      alertField('Port', portI),
+      alertField('Protocol', protoI),
+      alertField('App name', appI, 'APP-NAME field in the syslog line.'),
+    ],
+    gather: () => ({ host: hostI.value.trim(), port: Number(portI.value), proto: protoI.value, appName: appI.value.trim() }),
+  });
 }
 
 // Maintenance windows: during an active window, alert notifications are
@@ -4794,14 +4979,6 @@ function featureBadges(features) {
   if (!features) return el('p', { class: 'muted' }, '–');
   return el('div', { class: 'badges' }, ...['analysis', 'assistant', 'alerting', 'geo'].map((f) =>
     el('span', { class: `badge ${features[f] ? 'active' : 'offline'}` }, `${f}: ${features[f] ? 'yes' : 'no'}`)));
-}
-function alertingSummary(a) {
-  if (!a) return el('p', { class: 'muted' }, '–');
-  const rows = [el('tr', {}, el('td', { class: 'muted' }, 'Enabled'), el('td', {}, boolText(a.enabled)))];
-  for (const [name, c] of Object.entries(a.channels || {})) {
-    rows.push(el('tr', {}, el('td', { class: 'muted' }, name), el('td', {}, `${boolText(c.enabled)} · min ${c.minSeverity || '–'}`)));
-  }
-  return el('table', { class: 'kv' }, el('tbody', {}, ...rows));
 }
 function mapSettingsCard(map) {
   const m = map || {};

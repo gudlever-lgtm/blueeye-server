@@ -4512,8 +4512,18 @@ function alertingGeneralCard(a) {
   const err = el('p', { class: 'error' });
   const btn = el('button', { class: 'small' }, 'Save');
   async function save() {
-    err.textContent = ''; btn.disabled = true;
-    try { await api('/api/settings/alerting', { method: 'PUT', body: { enabled: enabledI.checked, cooldownMs: Math.round(Number(coolI.value) * 60000) } }); toast('Alerting saved'); }
+    err.textContent = '';
+    // Don't silently coerce a blank/invalid cooldown to 0 — that would disable
+    // throttling and let repeated findings spam every channel. An explicit 0 is
+    // still allowed (a deliberate "send every finding, no cooldown").
+    const raw = coolI.value.trim();
+    const mins = Number(raw);
+    if (raw === '' || !Number.isFinite(mins) || mins < 0 || mins > 1440) {
+      err.textContent = 'Cooldown must be a number between 0 and 1440 minutes.';
+      return;
+    }
+    btn.disabled = true;
+    try { await api('/api/settings/alerting', { method: 'PUT', body: { enabled: enabledI.checked, cooldownMs: Math.round(mins * 60000) } }); toast('Alerting saved'); }
     catch (e2) { err.textContent = errText(e2); }
     finally { btn.disabled = false; }
   }
@@ -4523,7 +4533,7 @@ function alertingGeneralCard(a) {
       el('label', { class: 'set-field' }, el('span', {}, 'Alerting enabled'), enabledI,
         el('span', { class: 'muted small' }, 'Master switch. When off, findings are still recorded but never dispatched.')),
       el('label', { class: 'set-field' }, el('span', {}, 'Cooldown (minutes)'), coolI,
-        el('span', { class: 'muted small' }, 'Minimum time between repeated alerts for the same condition on the same host.')),
+        el('span', { class: 'muted small' }, 'Minimum time between repeated alerts for the same condition on the same host. 0 = no throttling (every finding is sent).')),
       err, el('div', { class: 'form-actions' }, btn)));
 }
 

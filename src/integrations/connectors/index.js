@@ -26,8 +26,11 @@ function createConnectorRegistry({ fetchImpl = globalThis.fetch, logger } = {}) 
     // form too.
     eventsFor: (integration, connector) => {
       const cfg = (integration && (integration.config_json || integration.config)) || null;
-      const override = cfg && Array.isArray(cfg.events) ? cfg.events.filter((e) => typeof e === 'string') : null;
-      return override && override.length ? override : (connector.defaultEvents || []);
+      // A PRESENT array (even empty) is an explicit override: `events: []` means
+      // "subscribe to nothing" (fire only on manual test). Only a missing/invalid
+      // override falls back to the connector defaults.
+      if (cfg && Array.isArray(cfg.events)) return cfg.events.filter((e) => typeof e === 'string');
+      return connector.defaultEvents || [];
     },
   };
 }

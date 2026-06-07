@@ -29,15 +29,17 @@ function validateLdapConfig(body) {
     value.host = input.host.trim();
   }
 
+  value.useTls = input.useTls === undefined ? true : (input.useTls === true || input.useTls === 'true');
+
   if (input.port === undefined) {
-    value.port = 389;
+    // Default to the standard port for the chosen scheme (LDAPS 636 / LDAP 389),
+    // so a TLS config saved without an explicit port targets 636, not 389.
+    value.port = value.useTls ? 636 : 389;
   } else {
     const p = Number(input.port);
     if (!Number.isInteger(p) || p < 1 || p > 65535) errors.port = 'port must be an integer between 1 and 65535';
     else value.port = p;
   }
-
-  value.useTls = input.useTls === undefined ? true : (input.useTls === true || input.useTls === 'true');
 
   if (input.bindDn === undefined || input.bindDn === null || input.bindDn === '') {
     value.bindDn = null;

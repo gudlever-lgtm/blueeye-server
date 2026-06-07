@@ -32,8 +32,15 @@ test('eventsFor honours a config.events override on the RAW DB row shape (config
   assert.deepEqual(reg.eventsFor({ config: { events: ['incident'] } }, sn), ['incident']);
 });
 
-test('eventsFor ignores a non-array / empty override', () => {
+test('eventsFor falls back to defaults only for a missing/invalid override', () => {
   const sn = reg.get('servicenow');
-  assert.deepEqual(reg.eventsFor({ config_json: { events: 'incident' } }, sn), sn.defaultEvents);
-  assert.deepEqual(reg.eventsFor({ config_json: { events: [] } }, sn), sn.defaultEvents);
+  assert.deepEqual(reg.eventsFor({ config_json: { events: 'incident' } }, sn), sn.defaultEvents); // non-array: invalid
+  assert.deepEqual(reg.eventsFor({ config_json: {} }, sn), sn.defaultEvents); // absent
+});
+
+test('eventsFor honours an explicit empty override (events:[] = subscribe to nothing)', () => {
+  const sn = reg.get('servicenow');
+  // Regression: an enabled integration configured for NO events must not fall
+  // back to the connector defaults and fire unexpectedly.
+  assert.deepEqual(reg.eventsFor({ config_json: { events: [] } }, sn), []);
 });

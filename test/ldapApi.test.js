@@ -45,6 +45,20 @@ test('PUT /api/ldap/config saves; the bind password is encrypted at rest and nev
   assert.equal(secretBox.decrypt(stored.bind_pw_encrypted), 's3cret');
 });
 
+test('PUT /api/ldap/config defaults the port to 636 for LDAPS, 389 for plaintext', async () => {
+  const app = makeApp();
+  // useTls defaults true + no port -> LDAPS standard port 636 (not 389).
+  const tls = await request(app).put('/api/ldap/config').set('Authorization', admin())
+    .send({ host: 'ad.acme.dk', baseDn: 'dc=x' });
+  assert.equal(tls.status, 200);
+  assert.equal(tls.body.config.port, 636);
+  // Plaintext on localhost + no port -> 389.
+  const plain = await request(app).put('/api/ldap/config').set('Authorization', admin())
+    .send({ host: 'localhost', baseDn: 'dc=x', useTls: false });
+  assert.equal(plain.status, 200);
+  assert.equal(plain.body.config.port, 389);
+});
+
 test('PUT /api/ldap/config with missing host/baseDn -> 400', async () => {
   const res = await request(makeApp()).put('/api/ldap/config').set('Authorization', admin()).send({ port: 636 });
   assert.equal(res.status, 400);

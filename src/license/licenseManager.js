@@ -10,7 +10,10 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 // Status values:
 //   'valid'       — a fresh, signature-verified validation said valid:true
 //   'grace'       — cannot validate now, but a cached valid proof is within grace
-//   'invalid'     — a signature-verified proof said valid:false (e.g. revoked)
+//   'expired'     — a signature-verified proof said valid:false because the
+//                   licence's own validity window lapsed (reason 'expired')
+//   'invalid'     — a signature-verified proof said valid:false for another
+//                   reason (e.g. revoked / suspended / server mismatch)
 //   'unlicensed'  — no usable proof (never validated, or grace expired)
 //   'unknown'     — not validated yet (initial)
 //
@@ -133,10 +136,15 @@ function createLicenseManager({
       cache.write({ payload, signature, verifiedAt: state.verifiedAt });
       logger.info(`License valid (max_agents=${getMaxAgents()}).`);
     } else {
-      // A trusted negative (e.g. suspended/revoked) — deny, do not cache as valid.
-      state.lastError = `invalid:${payload.reason || 'unknown'}`;
-      state.status = 'invalid';
-      logger.error(`License is NOT valid (${payload.reason}); denying agent operations.`);
+      // A trusted negative — deny, do not cache as valid. Distinguish an EXPIRED
+      // licence (its validity window lapsed) from other hard denials (suspended /
+      // revoked / server mismatch / agent-limit) so the dashboard can say
+      // "expired" instead of the catch-all "invalid" — mirroring the offline
+      // manager's status vocabulary.
+      const reason = payload.reason || 'unknown';
+      state.lastError = reason;
+      state.status = reason === 'expired' ? 'expired' : 'invalid';
+      logger.error(`License is NOT valid (${reason}); denying agent operations.`);
     }
     return getStatus();
   }

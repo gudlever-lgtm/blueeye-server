@@ -354,6 +354,8 @@ const PAGE_INFO = {
         el('li', {}, el('strong', {}, 'DOWN: '), 'no probe targets respond at all.'),
         el('li', {}, el('strong', {}, 'STALE: '), 'no fresh measurements (> 15 min).'),
         el('li', {}, el('strong', {}, 'UNKNOWN: '), 'agent has not run any probe yet.')),
+      el('h4', {}, 'KPI strip & network path'),
+      el('p', {}, 'Above the list, a strip of live KPIs (latency, loss, jitter, active agents, monitored paths, alerts) and a network-path diagram (HQ → ISP → Cloud → SaaS, with a branch feeding the uplink) summarise the fleet at a glance. The diagram\'s topology is illustrative, but each segment\'s colour and the loss/latency figures are live — a hop turns amber when loss, jitter or a critical agent says so. Both summarise ', el('strong', {}, 'all'), ' agents by default; use the ', el('strong', {}, 'Location'), ' selector to scope the KPIs and the path to a single site.'),
       el('p', { class: 'muted' }, 'Health is based on active probes — run a few per agent on ', viewLink('probes'), ' (or schedule them fleet-wide via ', viewLink('tests'), ') for a complete picture; the interface signal comes from ', viewLink('interfaces'), '. Metadata only: targets and timings, never packet contents.'),
     ],
   },
@@ -2904,8 +2906,11 @@ function kpiCard(label, value, sub, status) {
 // The conceptual path a branch/HQ user's traffic takes to a SaaS app, drawn as
 // an SVG: HQ → ISP → Cloud → SaaS, with a Branch feeding into the ISP uplink.
 // A hop is "degraded" (warning token) when the fleet's loss/jitter/health say
-// so; otherwise it stays on the primary/accent token.
-function networkPath(data, k) {
+// so; otherwise it stays on the primary/accent token. The topology is fixed,
+// but the degraded states + the loss/latency figures are live — driven by `k`
+// (and `data.summary`), which the caller can narrow to a single location;
+// `scopeName` is that location's name (null = whole fleet), shown as a chip.
+function networkPath(data, k, scopeName = null) {
   const s = (data && data.summary) || {};
   const wanDegraded = (k.loss != null && k.loss >= 2) || (k.jitter != null && k.jitter >= 30) || k.crit > 0;
   const branchDegraded = (s.down || 0) + (s.stale || 0) > 0;
@@ -2932,7 +2937,9 @@ function networkPath(data, k) {
     return g;
   };
   const Bx = 320, By = 150, BNH = 50;
-  const svg = mk('svg', { viewBox: '0 0 820 214', role: 'img', 'aria-label': 'Network path from HQ and Branch through ISP and Cloud to SaaS' },
+  const ariaLabel = 'Network path from HQ and Branch through ISP and Cloud to SaaS'
+    + (scopeName ? ` — ${scopeName}` : '');
+  const svg = mk('svg', { viewBox: '0 0 820 214', role: 'img', 'aria-label': ariaLabel },
     link(X.HQ + NW, cy, X.ISP, cy, false, k.loss != null ? `${k.loss}% loss` : null),
     link(X.ISP + NW, cy, X.CL, cy, wanDegraded, k.latency != null ? `${k.latency} ms` : null),
     link(X.CL + NW, cy, X.SA, cy, saasDegraded, null),
@@ -2950,19 +2957,21 @@ function networkPath(data, k) {
   return el('div', { class: 'netpath' },
     el('div', { class: 'netpath-head' },
       el('h3', {}, 'Network path'),
+      scopeName ? el('span', { class: 'netpath-scope' }, scopeName) : null,
       el('span', { class: degraded ? 'warn-text' : 'muted' }, degraded ? 'Degraded segment detected' : 'All segments nominal'),
       el('div', { class: 'netpath-legend' },
         el('span', { class: 'lg' }, el('span', { class: 'ln normal' }), 'Normal path'),
         el('span', { class: 'lg' }, el('span', { class: 'ln degraded' }), 'Degraded segment'))),
     svg);
 }
-function nocDashboard(data) {
+function nocDashboard(data, { controls = null, scopeName = null } = {}) {
   const k = fleetKpis(data);
   const lossStatus = k.loss == null ? 'accent' : k.loss >= 20 ? 'bad' : k.loss >= 2 ? 'warn' : 'ok';
   const jitStatus = k.jitter == null ? 'accent' : k.jitter >= 100 ? 'bad' : k.jitter >= 30 ? 'warn' : 'ok';
   const agStatus = k.total && k.online === 0 ? 'bad' : k.online < k.total ? 'warn' : 'ok';
   const alStatus = k.crit ? 'bad' : k.alerts ? 'warn' : 'ok';
   return el('div', { class: 'noc' },
+    controls ? el('div', { class: 'noc-head' }, controls) : null,
     el('div', { class: 'noc-kpis' },
       kpiCard('Latency', k.latency == null ? '–' : `${k.latency} ms`, 'median RTT', 'accent'),
       kpiCard('Packet loss', k.loss == null ? '–' : `${k.loss}%`, 'worst agent', lossStatus),
@@ -2970,7 +2979,7 @@ function nocDashboard(data) {
       kpiCard('Active agents', `${k.online}`, `of ${k.total} total`, agStatus),
       kpiCard('Test paths', `${k.paths}`, 'monitored targets', 'accent'),
       kpiCard('Alerts', `${k.alerts}`, k.crit ? `${k.crit} critical` : (k.warn ? `${k.warn} warning` : 'all clear'), alStatus)),
-    networkPath(data, k));
+    networkPath(data, k, scopeName));
 }
 
 // The landing view: all agents with a probe-derived health verdict, worst-first.
@@ -2999,6 +3008,9 @@ views.fleet = async () => {
   // is cached so a toggle re-renders instantly without refetching.
   let activeFilter = null;
   let lastData = null;
+  // Independent of the chip filter above: the NOC header (KPI cards + live
+  // network path) can be narrowed to a single location. null = whole fleet.
+  let locationScope = null;
   // Chip ⇒ which health verdicts it covers. "Critical" folds in 'down' to match
   // its count (bad + down); the rest map one-to-one.
   const FILTER_MATCH = {
@@ -3010,6 +3022,42 @@ views.fleet = async () => {
   function setFilter(cls) {
     activeFilter = activeFilter === cls ? null : cls;
     if (lastData) { renderSummary(lastData.summary); renderTable(lastData.agents); }
+  }
+
+  // Distinct locations present in the latest poll (only sites that actually have
+  // an agent are offered as scope options), name-sorted.
+  function nocLocations(agents) {
+    const seen = new Map();
+    for (const a of agents || []) {
+      if (a.locationId != null && !seen.has(a.locationId)) seen.set(a.locationId, a.locationName || `#${a.locationId}`);
+    }
+    return [...seen].map(([id, name]) => ({ id, name })).sort((x, y) => x.name.localeCompare(y.name));
+  }
+  // Narrow the fleet rollup to one location, recomputing the status summary so
+  // the KPI cards + the network path reflect just that site. null ⇒ whole fleet.
+  function scopeData(data, locId) {
+    if (locId == null) return data;
+    const agents = (data.agents || []).filter((a) => a.locationId === locId);
+    const summary = { ok: 0, warn: 0, bad: 0, down: 0, stale: 0, unknown: 0, total: agents.length };
+    for (const a of agents) summary[a.health.status] = (summary[a.health.status] || 0) + 1;
+    return { ...data, agents, summary };
+  }
+  // (Re)render the NOC header for the current scope. The <select> is rebuilt on
+  // every poll with the active scope preselected, so the choice survives the
+  // 10 s refresh; picking a location just re-runs this (no refetch).
+  function renderNoc() {
+    if (!lastData) return;
+    const locs = nocLocations(lastData.agents);
+    // Forget a scope whose location dropped out of the latest poll.
+    if (locationScope != null && !locs.some((l) => l.id === locationScope)) locationScope = null;
+    const scopeName = locationScope != null ? (locs.find((l) => l.id === locationScope) || {}).name : null;
+    const controls = locs.length
+      ? el('label', { class: 'inline muted' }, 'Location ',
+        el('select', { onchange: (e) => { locationScope = e.target.value ? Number(e.target.value) : null; renderNoc(); } },
+          el('option', { value: '' }, 'All locations'),
+          ...locs.map((l) => el('option', { value: String(l.id), selected: l.id === locationScope ? '' : null }, l.name))))
+      : null;
+    nocHost.replaceChildren(nocDashboard(scopeData(lastData, locationScope), { controls, scopeName }));
   }
 
   function renderSummary(s) {
@@ -3066,7 +3114,7 @@ views.fleet = async () => {
     let data;
     try { data = await api('/api/fleet/health'); } catch (e) { tableHost.replaceChildren(el('div', { class: 'error' }, e.message)); return; }
     lastData = data;
-    nocHost.replaceChildren(nocDashboard(data));
+    renderNoc();
     renderSummary(data.summary);
     renderTable(data.agents);
   }

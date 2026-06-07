@@ -68,6 +68,18 @@ test('dashboard exposes settings (users+license) tab, auto-refresh and traffic c
   assert.match(js, /\/system\/storage/); // calls the storage endpoint
 });
 
+test('interface + traffic views are flow-source aware (sflow/netflow have no per-interface data)', async () => {
+  const js = (await request(makeApp()).get('/app.js')).text;
+  // interfaceTable takes the agent's source so it can explain WHY a flow-source
+  // agent has no per-interface rows, instead of the misleading generic message.
+  assert.match(js, /function interfaceTable\(interfaces, source/);
+  assert.match(js, /interfaceTable\(data\.interfaces, data\.source\)/); // callers pass the source through
+  assert.match(js, /reports sampled flow records/); // the source-aware empty state
+  assert.match(js, /Traffic source/); // points the user at the source switch
+  // The RX/TX bandwidth chart is skipped for flow sources (no rx/txBytesPerSec).
+  assert.match(js, /const flowSource = t && \(t\.source === 'sflow' \|\| t\.source === 'netflow'\)/);
+});
+
 test('dashboard offers selectable colour themes saved per user', async () => {
   const app = makeApp();
   const js = (await request(app).get('/app.js')).text;

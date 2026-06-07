@@ -100,6 +100,14 @@ test('skipped rows do not count toward debounce nor resolve', () => {
   assert.equal(s.startedAt.toISOString(), new Date(base).toISOString());
 });
 
+test('a healthy-only window reports firstHealthyAt (fallback recovery time)', () => {
+  const rows = [row(0, { ok: true }), row(1, { ok: true })];
+  const s = deriveSequenceState(rows, 'reachability', REACH);
+  assert.equal(s.open, false);
+  assert.equal(s.lastRecoveryAt, null); // no fail→pass transition was seen
+  assert.equal(s.firstHealthyAt.toISOString(), new Date(base).toISOString());
+});
+
 // ---- groupRows -------------------------------------------------------------
 
 test('groupRows splits by metric+target and only emits latency/loss where present', () => {

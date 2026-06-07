@@ -124,6 +124,57 @@ test('a location override threshold wins over the global default', async () => {
   assert.equal(incidentsRepo.rows[0].severity, 'critical'); // 200 >= override crit 100
 });
 
+test('escalates an active warning incident to critical within the same run', async () => {
+  const incidentsRepo = makeIncidentsRepo();
+  // First pass opens a latency WARNING (200ms, between warn 150 / crit 300).
+  let rows = [
+    { ts: at(0), target: 'A', ok: true, rttMs: 200 },
+    { ts: at(1), target: 'A', ok: true, rttMs: 200 },
+    { ts: at(2), target: 'A', ok: true, rttMs: 200 },
+  ];
+  await build(rows, { incidentsRepo }).svc.processAgent(9);
+  assert.equal(incidentsRepo.rows[0].severity, 'warning');
+
+  // Next samples cross critical (>=300) — same ongoing run, no recovery between.
+  rows = rows.concat([{ ts: at(3), target: 'A', ok: true, rttMs: 350 }]);
+  await build(rows, { incidentsRepo }).svc.processAgent(9);
+  assert.equal(incidentsRepo.rows.length, 1); // still no duplicate
+  assert.equal(incidentsRepo.rows[0].severity, 'critical'); // escalated
+});
+
+test('does not downgrade an active critical incident', async () => {
+  const incidentsRepo = makeIncidentsRepo();
+  let rows = [
+    { ts: at(0), target: 'A', ok: true, rttMs: 350 },
+    { ts: at(1), target: 'A', ok: true, rttMs: 350 },
+    { ts: at(2), target: 'A', ok: true, rttMs: 350 },
+  ];
+  await build(rows, { incidentsRepo }).svc.processAgent(9);
+  assert.equal(incidentsRepo.rows[0].severity, 'critical');
+  // A later still-failing-but-only-warning sample must not downgrade it.
+  rows = rows.concat([{ ts: at(3), target: 'A', ok: true, rttMs: 200 }]);
+  await build(rows, { incidentsRepo }).svc.processAgent(9);
+  assert.equal(incidentsRepo.rows[0].severity, 'critical');
+});
+
+test('resolves an active incident when the failing run has scrolled out of the window', async () => {
+  const incidentsRepo = makeIncidentsRepo();
+  // Seed an active incident whose outage predates the lookback window entirely.
+  await incidentsRepo.open({
+    location_id: 7, agent_id: 9, metric: 'reachability', severity: 'critical',
+    started_at: at(-100), affected_target: 'gone',
+  });
+  // The window now only contains healthy samples for that target (no fail→pass
+  // transition is replayed), so lastRecoveryAt is null — firstHealthyAt resolves it.
+  const rows = [
+    { ts: at(0), target: 'gone', ok: true },
+    { ts: at(1), target: 'gone', ok: true },
+  ];
+  const res = await build(rows, { incidentsRepo }).svc.processAgent(9);
+  assert.equal(res.resolved, 1);
+  assert.equal(new Date(incidentsRepo.rows[0].resolved_at).toISOString(), at(0).toISOString());
+});
+
 test('unknown agent is a no-op', async () => {
   const incidentsRepo = makeIncidentsRepo();
   const thresholdsRepo = makeIncidentThresholdsRepo();

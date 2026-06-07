@@ -54,6 +54,17 @@ function createIncidentsRepository(db) {
     return Number(res.insertId);
   }
 
+  // Raises the severity of an active incident (e.g. warning → critical when a
+  // run escalates). Only ever increases — guarded to active rows. Returns true
+  // if a row changed.
+  async function updateSeverity(id, severity) {
+    const [res] = await pool.query(
+      `UPDATE incidents SET severity = ? WHERE id = ? AND resolved_at IS NULL`,
+      [severity, id]
+    );
+    return res.affectedRows > 0;
+  }
+
   // Resolves an active incident, stamping resolved_at + duration_seconds. The
   // duration is computed in SQL from the stored started_at so it is consistent
   // regardless of the caller's clock. No-op (returns false) if already resolved.
@@ -105,7 +116,7 @@ function createIncidentsRepository(db) {
     return rows.map(mapRow);
   }
 
-  return { findActive, open, resolve, findById, list };
+  return { findActive, open, resolve, updateSeverity, findById, list };
 }
 
 module.exports = { createIncidentsRepository, mapRow };

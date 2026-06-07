@@ -4,6 +4,9 @@ const { groupRows, deriveSequenceState, METRICS } = require('./detection');
 
 const silentLogger = { info() {}, warn() {}, error() {}, debug() {} };
 
+// True when severity `a` is strictly more severe than `b` (critical > warning).
+const isWorse = (a, b) => a === 'critical' && b === 'warning';
+
 // Derives incidents from active-probe results. Runs AFTER probe-results ingest
 // (the active-probe twin of the analysis pipeline) — it does not persist probe
 // rows itself; it reads the agent's recent rows, computes the DESIRED incident
@@ -97,11 +100,22 @@ function createIncidentService({
               affected_target: group.target,
             });
             opened += 1;
+          } else if (isWorse(desired.severity, active.severity)) {
+            // No duplicate — but escalate the existing incident when the run has
+            // crossed into a higher severity (e.g. warning → critical), so the
+            // reports/NIS2 draft don't keep showing the stale severity.
+            await incidentsRepo.updateSeverity(active.id, desired.severity);
           }
-          // An active incident already covers this tuple — no duplicate.
-        } else if (active && desired.lastRecoveryAt) {
-          const ok = await incidentsRepo.resolve(active.id, desired.lastRecoveryAt);
-          if (ok) resolved += 1;
+        } else if (active) {
+          // The service is healthy again. Prefer the recovery transition the
+          // window actually saw; fall back to the first healthy sample for the
+          // case where the failing run scrolled out of the lookback (so the
+          // incident still resolves instead of lingering active forever).
+          const recoveryAt = desired.lastRecoveryAt || desired.firstHealthyAt;
+          if (recoveryAt) {
+            const ok = await incidentsRepo.resolve(active.id, recoveryAt);
+            if (ok) resolved += 1;
+          }
         }
       } catch (err) {
         logger.error(`incidents: reconcile failed for ${group.metric}/${group.target} (${err.message})`);

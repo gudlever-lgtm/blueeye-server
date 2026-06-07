@@ -143,6 +143,12 @@ function makeIncidentsRepo(overrides = {}) {
       r.duration_seconds = Math.max(0, Math.round((new Date(resolvedAt).getTime() - new Date(r.started_at).getTime()) / 1000));
       return true;
     }),
+    updateSeverity: overrides.updateSeverity || (async (id, severity) => {
+      const r = rows.find((x) => x.id === id && x.resolved_at == null);
+      if (!r) return false;
+      r.severity = severity;
+      return true;
+    }),
     findById: overrides.findById || (async (id) => { const r = rows.find((x) => x.id === id); return r ? mapOut(r) : null; }),
     list: overrides.list || (async () => rows.map(mapOut)),
   };

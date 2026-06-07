@@ -64,6 +64,16 @@ test('incidents.resolve issues a guarded UPDATE computing duration in SQL', asyn
   assert.equal(await repo.resolve(3, new Date('2026-06-01T09:00:00Z')), true);
 });
 
+test('incidents.updateSeverity issues a guarded UPDATE on active rows', async () => {
+  const pool = fakePool((sql) => {
+    assert.match(sql, /UPDATE incidents SET severity/);
+    assert.match(sql, /resolved_at IS NULL/);
+    return [{ affectedRows: 1 }];
+  });
+  const repo = createIncidentsRepository({ pool });
+  assert.equal(await repo.updateSeverity(3, 'critical'), true);
+});
+
 // ---- incidentThresholdsRepository -----------------------------------------
 
 test('thresholds.getEffective prefers a location row over the global (ORDER BY)', async () => {

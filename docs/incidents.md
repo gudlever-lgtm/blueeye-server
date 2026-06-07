@@ -52,8 +52,15 @@ probe row's location is its agent's `location_id`.
 (`POST /agents/probe-results`, alongside the probe-findings pipeline,
 best-effort — it never breaks ingestion). For each `(metric, target)` group of
 the agent's recent rows it loads the effective threshold, derives the desired
-state, and reconciles against stored incidents: opens a new one when none is
-active, resolves an active one on recovery, and never creates a duplicate.
+state, and reconciles against stored incidents:
+
+- **open** a new incident when the run breaches debounce and none is active;
+- **escalate** an active incident's severity when the run crosses into a higher
+  tier (e.g. warning → critical) — never a duplicate, never a downgrade;
+- **resolve** an active incident on recovery. The recovery timestamp is the
+  fail→recover transition the window saw, or — when the failing run has scrolled
+  out of the lookback and only healthy rows remain — the first healthy sample, so
+  an incident never lingers active after the outage ages out of the window.
 
 ## Endpoints
 

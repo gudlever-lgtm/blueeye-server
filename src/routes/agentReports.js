@@ -13,7 +13,7 @@ const { validateProbeResults } = require('../validation/probeValidation');
 //
 // Paths use the `/me/...` prefix so they don't collide with the user-JWT agents
 // router's `/:id` routes mounted under the same /agents path.
-function createAgentReportsRouter({ agentAuth, resultsRepo, agentsRepo, analysisPipeline = null, flowPipeline = null, probeResultsRepo = null, probePipeline = null }) {
+function createAgentReportsRouter({ agentAuth, resultsRepo, agentsRepo, analysisPipeline = null, flowPipeline = null, probeResultsRepo = null, probePipeline = null, incidentService = null }) {
   const router = express.Router();
 
   // POST /agents/probe-results { results: [...] } — stores active-probe results
@@ -36,6 +36,16 @@ function createAgentReportsRouter({ agentAuth, resultsRepo, agentsRepo, analysis
           await probePipeline.processAgent(req.agent.agentId);
         } catch {
           /* probe analysis is best-effort; ingestion already succeeded */
+        }
+      }
+
+      // Derive incidents (open/resolve) from the agent's recent probe results.
+      // Best-effort: must never break ingestion.
+      if (incidentService) {
+        try {
+          await incidentService.processAgent(req.agent.agentId);
+        } catch {
+          /* incident derivation is best-effort; ingestion already succeeded */
         }
       }
 

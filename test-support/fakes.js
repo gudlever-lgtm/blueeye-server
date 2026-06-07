@@ -99,6 +99,90 @@ function makeProbeResultsRepo(overrides = {}) {
     findByAgent: overrides.findByAgent || (async () => []),
     latestByAgent: overrides.latestByAgent || (async () => []),
     fleetHealth: overrides.fleetHealth || (async () => []),
+    availability: overrides.availability || (async () => []),
+  };
+}
+
+// A fake incidents repository (in-memory, stateful) — supports the derivation
+// service (findActive/open/resolve) AND the report routes (list/findById). Rows
+// are kept snake_case internally; list/findById return the camelCase API shape.
+function makeIncidentsRepo(overrides = {}) {
+  const rows = [];
+  let seq = 0;
+  const iso = (v) => (v == null ? null : (v instanceof Date ? v.toISOString() : new Date(v).toISOString()));
+  const mapOut = (r) => ({
+    id: r.id,
+    locationId: r.location_id ?? null,
+    locationName: r.location_name ?? null,
+    agentId: r.agent_id,
+    agentName: r.agent_name ?? null,
+    metric: r.metric,
+    severity: r.severity,
+    startedAt: iso(r.started_at),
+    resolvedAt: iso(r.resolved_at),
+    durationSeconds: r.duration_seconds ?? null,
+    affectedTarget: r.affected_target,
+    status: r.resolved_at == null ? 'active' : 'resolved',
+    createdAt: iso(r.created_at || r.started_at),
+  });
+  return {
+    rows,
+    findActive: overrides.findActive || (async (agentId, metric, target) => {
+      const r = rows.find((x) => x.agent_id === agentId && x.metric === metric && x.affected_target === target && x.resolved_at == null);
+      return r ? { id: r.id, startedAt: iso(r.started_at), severity: r.severity } : null;
+    }),
+    open: overrides.open || (async (inc) => {
+      const id = (seq += 1);
+      rows.push({ id, location_id: null, resolved_at: null, duration_seconds: null, created_at: new Date(), ...inc });
+      return id;
+    }),
+    resolve: overrides.resolve || (async (id, resolvedAt) => {
+      const r = rows.find((x) => x.id === id && x.resolved_at == null);
+      if (!r) return false;
+      r.resolved_at = resolvedAt;
+      r.duration_seconds = Math.max(0, Math.round((new Date(resolvedAt).getTime() - new Date(r.started_at).getTime()) / 1000));
+      return true;
+    }),
+    findById: overrides.findById || (async (id) => { const r = rows.find((x) => x.id === id); return r ? mapOut(r) : null; }),
+    list: overrides.list || (async () => rows.map(mapOut)),
+  };
+}
+
+// A fake incident-thresholds repository (in-memory) seeded with the same global
+// defaults as migration 023, so the derivation service behaves as in production.
+function makeIncidentThresholdsRepo(overrides = {}) {
+  const rows = overrides.rows || [
+    { id: 1, location_id: null, metric: 'reachability', warning_value: null, critical_value: null, debounce_count: 3 },
+    { id: 2, location_id: null, metric: 'latency', warning_value: 150, critical_value: 300, debounce_count: 3 },
+    { id: 3, location_id: null, metric: 'packet_loss', warning_value: 2, critical_value: 5, debounce_count: 3 },
+  ];
+  let seq = rows.length;
+  return {
+    rows,
+    getEffective: overrides.getEffective || (async (locationId, metric) => {
+      const loc = rows.find((r) => r.location_id === locationId && r.metric === metric);
+      if (loc) return loc;
+      return rows.find((r) => r.location_id == null && r.metric === metric) || null;
+    }),
+    listGlobal: overrides.listGlobal || (async () => rows.filter((r) => r.location_id == null)),
+    listByLocation: overrides.listByLocation || (async (id) => rows.filter((r) => r.location_id === id)),
+    findById: overrides.findById || (async (id) => rows.find((r) => r.id === id) || null),
+    upsert: overrides.upsert || (async ({ location_id = null, metric, warning_value = null, critical_value = null, debounce_count = 3 }) => {
+      let r = rows.find((x) => x.location_id === location_id && x.metric === metric);
+      if (r) { Object.assign(r, { warning_value, critical_value, debounce_count }); return r; }
+      r = { id: (seq += 1), location_id, metric, warning_value, critical_value, debounce_count };
+      rows.push(r);
+      return r;
+    }),
+  };
+}
+
+// A fake incident-derivation service (records calls; derives nothing by default).
+function makeIncidentService(overrides = {}) {
+  const calls = [];
+  return {
+    calls,
+    processAgent: overrides.processAgent || (async (agentId) => { calls.push({ agentId }); return { opened: 0, resolved: 0 }; }),
   };
 }
 
@@ -416,6 +500,9 @@ function makeApp(overrides = {}) {
     agentTokensRepo: overrides.agentTokensRepo || makeAgentTokensRepo(),
     resultsRepo: overrides.resultsRepo || makeResultsRepo(),
     probeResultsRepo: overrides.probeResultsRepo || makeProbeResultsRepo(),
+    incidentsRepo: overrides.incidentsRepo || makeIncidentsRepo(),
+    thresholdsRepo: overrides.thresholdsRepo || makeIncidentThresholdsRepo(),
+    incidentService: overrides.incidentService || makeIncidentService(),
     licenseManager: overrides.licenseManager || makeLicenseManager(),
     agentCommander: overrides.agentCommander || makeAgentCommander(),
     systemInfo: overrides.systemInfo || makeSystemInfo(),
@@ -471,6 +558,9 @@ module.exports = {
   makeAgentTokensRepo,
   makeResultsRepo,
   makeProbeResultsRepo,
+  makeIncidentsRepo,
+  makeIncidentThresholdsRepo,
+  makeIncidentService,
   makeEnrollmentCodesRepo,
   makeEnrollmentStore,
   makeArtifactStore,

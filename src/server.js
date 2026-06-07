@@ -21,6 +21,8 @@ const { attachDashboardWebSocket } = require('./ws/dashboardSocket');
 const { verifyToken } = require('./auth/jwt');
 const { createLicenseManager } = require('./license/licenseManager');
 const { createFeatureGate } = require('./license/features');
+const { createPlanService } = require('./license/planService');
+const { createUsageService } = require('./services/usageService');
 const { createFileCache } = require('./license/licenseCache');
 const { isConfigured } = require('./license/publicKey');
 const { createSystemInfo } = require('./services/systemInfo');
@@ -106,8 +108,14 @@ function start() {
     getAgentCount: () => (agentWs ? agentWs.connectionCount() : 0),
   });
 
-  // Feature gate: reads signature-verified license entitlements (fail-closed).
-  const featureGate = createFeatureGate({ licenseManager });
+  // Plan service: resolves the active package (Pilot/Starter/Professional/
+  // Enterprise/MSP) from the signed proof's plan field (or LICENSE_PLAN), and
+  // exposes its limits + packaged feature flags. Additive to the license manager.
+  const planService = createPlanService({ licenseManager, configPlan: config.license.plan });
+
+  // Feature gate: signature-verified module entitlements (fail-closed), now also
+  // OR-ing in the active plan's packaged features (rbac/reports_pdf/api_access…).
+  const featureGate = createFeatureGate({ licenseManager, planService });
 
   // Lets HTTP routes push commands to connected agents over the WebSocket.
   // sendCommandAndWait also awaits the agent's correlated reply (Ping/Update).
@@ -132,6 +140,15 @@ function start() {
   // Pushes a live event to every connected dashboard (assigned below; the
   // closure runs later). Used for enrollment/agent-status feedback in the UI.
   const notifyDashboard = (message) => (dashboardWs ? dashboardWs.broadcast(message) : 0);
+
+  // Usage service: counts agents / active test paths for plan-limit enforcement
+  // and the admin "Usage overview" panel. Wired after its repositories exist.
+  const usageService = createUsageService({
+    agentsRepo,
+    testPackagesRepo,
+    planService,
+    licenseManager,
+  });
 
   // Storage info (disk free/used + database size).
   const systemInfo = createSystemInfo({ db, diskPath: config.storage.diskPath });
@@ -261,6 +278,8 @@ function start() {
     assistant,
     dispatcher,
     featureGate,
+    planService,
+    usageService,
     settingsService,
     analysisConfig,
     retentionConfig,

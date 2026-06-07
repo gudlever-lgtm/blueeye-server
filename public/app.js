@@ -4802,8 +4802,26 @@ async function deleteUser(u) {
   catch (err) { toast(err.message, true); }
 }
 
+// Formats a plan limit for display: null/undefined means "unlimited".
+const fmtLimit = (v) => (v === null || v === undefined ? 'Unlimited' : String(v));
+// "used / max (pct%)" plus a usage bar; unlimited limits show just the count.
+function limitStat(label, used, max) {
+  if (max === null || max === undefined) return stat(label, `${used} / ∞`);
+  const pct = max > 0 ? Math.round((used / max) * 100) : 0;
+  return stat(label, el('div', {}, el('div', {}, `${used} / ${max} (${pct}%)`), usageBar(pct)));
+}
+
 views.license = async () => {
   const s = await api('/license/status');
+  // Plan / usage / matrix are best-effort — a server without the plan layer (or
+  // a 503) must still render the classic status block.
+  let plan = null;
+  let usage = null;
+  let matrix = null;
+  try { plan = await api('/license/plan'); } catch { /* optional */ }
+  try { usage = await api('/license/usage'); } catch { /* optional */ }
+  try { matrix = await api('/license/matrix'); } catch { /* optional */ }
+
   const root = el('div');
   root.append(el('div', { class: 'section-head' },
     el('h2', {}, 'License status'),
@@ -4811,12 +4829,57 @@ views.license = async () => {
   root.append(el('div', { class: 'cards' },
     stat('Status', el('span', { class: `badge ${s.status}` }, s.status)),
     stat('Licensed', s.licensed ? 'Yes' : 'No'),
-    stat('Max. agents', String(s.maxAgents)),
+    plan ? stat('Plan', `BlueEye ${plan.plan_name}`) : stat('Max. agents', String(s.maxAgents)),
     stat('Server ID', s.serverId || '–'),
     stat('Last validated', fmtDate(s.verifiedAt)),
     stat('Grace expires', fmtDate(s.graceUntil)),
   ));
   if (s.reason) root.append(el('p', { class: 'muted' }, `Note: ${s.reason}`));
+
+  // ---- License overview (active plan limits + support) --------------------
+  if (plan) {
+    root.append(el('h3', {}, 'Plan overview'));
+    root.append(el('div', { class: 'cards' },
+      stat('Plan', `BlueEye ${plan.plan_name}${plan.is_trial ? ' (trial)' : ''}`),
+      stat('Support level', plan.support_level),
+      stat('Max. agents', fmtLimit(plan.limits.max_agents)),
+      stat('Max. active test paths', fmtLimit(plan.limits.max_test_paths)),
+      stat('History retention', plan.limits.history_days === null ? 'Unlimited' : `${plan.limits.history_days} days`),
+    ));
+  }
+
+  // ---- Usage overview -----------------------------------------------------
+  if (usage) {
+    root.append(el('h3', {}, 'Usage'));
+    root.append(el('div', { class: 'cards' },
+      limitStat('Agents', usage.agents.used, usage.agents.max),
+      limitStat('Active test paths', usage.test_paths.used, usage.test_paths.max),
+      stat('History limit', usage.history_days === null ? 'Unlimited' : `${usage.history_days} days`),
+      stat('Last validation', fmtDate(usage.lastValidation)),
+    ));
+  }
+
+  // ---- Feature matrix (active plan + upgrade hints) -----------------------
+  if (matrix) {
+    root.append(el('h3', {}, 'Feature matrix'));
+    const active = matrix.activePlan;
+    const head = el('tr', {}, el('th', {}, 'Feature'),
+      ...matrix.plans.map((p) => el('th', { class: p.plan_key === active ? 'active' : '' }, p.plan_name)));
+    const body = matrix.features.map((f) => {
+      const cells = matrix.plans.map((p) => {
+        const on = p.features[f.key];
+        return el('td', { class: p.plan_key === active ? 'active' : '' }, on ? '✓' : '–');
+      });
+      const activePlan = matrix.plans.find((p) => p.plan_key === active);
+      const entitled = activePlan && activePlan.features[f.key];
+      return el('tr', { class: entitled ? '' : 'muted' },
+        el('td', {}, f.label), ...cells);
+    });
+    root.append(el('div', { class: 'tablewrap' },
+      el('table', { class: 'matrix' }, el('thead', {}, head), el('tbody', {}, ...body))));
+    root.append(el('p', { class: 'muted' }, 'Features not included in your plan are greyed out — contact your administrator or upgrade the licence to enable them.'));
+  }
+
   root.append(el('p', { class: 'muted' }, 'License renewal is done with the provider. Once renewed, press "Re-validate now" to fetch the updated status immediately (otherwise it is checked automatically every 6 hours).'));
   return root;
 };

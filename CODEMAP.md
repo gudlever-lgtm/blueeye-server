@@ -166,7 +166,7 @@ A single vanilla-JS SPA. Key building blocks:
 | Agent data-quality (drops/skew/version) | `src/health/dataQuality.js` (`computeDataQuality`); surfaced via `/api/fleet/health` + `/api/fleet/agent/:id` — all signals already sent by the agent |
 | A dashboard tab/view | `public/index.html` (button) + `views.<x>` in `public/app.js` + `PAGE_INFO` |
 | A dashboard colour palette (light+dark) | `PALETTES` + paired `[data-theme=…]` blocks in `public/styles.css`; picker `settingsAppearanceView` in `public/app.js`; per-user persistence via `/me` (`src/routes/me.js`, `usersRepository.get/updatePreferences`) + key whitelist in `src/validation/preferencesValidation.js` |
-| License / feature gating | `src/license/*` (`features.js` = fail-closed gate) |
+| License / feature gating | `src/license/*` (`features.js` = fail-closed gate; `plans.js` = plan/feature catalogue; `planService.js` = active-plan resolution + limits) + `src/services/usageService.js` (limit enforcement). Read-only API: `/license/plan`, `/license/usage`, `/license/matrix`. See `docs/licensing.md`. |
 
 ## Conventions
 

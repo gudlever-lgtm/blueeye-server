@@ -77,6 +77,11 @@ const config = {
     cachePath: process.env.LICENSE_CACHE_PATH || path.join(process.cwd(), '.license-cache.json'),
     graceDays: toInt(process.env.LICENSE_GRACE_DAYS, 14),
     intervalHours: toInt(process.env.LICENSE_VALIDATE_INTERVAL_HOURS, 6),
+    // Locally-configured plan for on-prem installs that set the package without a
+    // full signed proof (e.g. pilot evaluations). The signed proof's `plan` field
+    // always wins when present. Blank → resolved by the plan service (legacy/
+    // unlicensed fallback). See src/license/plans.js for the valid keys.
+    plan: process.env.LICENSE_PLAN || '',
   },
   // Storage monitoring: the path to statfs for disk usage. Default the server's
   // data dir; point it at the drive holding the DB/Docker volume if different.

@@ -59,6 +59,13 @@ function createAgentsRepository(db) {
     return rows[0] ? mapRow(rows[0]) : null;
   }
 
+  // Total registered agents — used by the usage service for plan-limit checks
+  // (cheaper than findAll() when all we need is the count).
+  async function count() {
+    const [rows] = await pool.query('SELECT COUNT(*) AS n FROM agents');
+    return Number(rows[0] && rows[0].n) || 0;
+  }
+
   // Agents as internal map hosts: { hostId, siteName, lat, lng, status }. Site
   // coordinates come from the joined location (manually set; nullable). This is
   // host/site metadata — never GeoIP. Optionally filtered to one host.
@@ -135,6 +142,7 @@ function createAgentsRepository(db) {
   return {
     findAll,
     findById,
+    count,
     findForGeo,
     updateManaged,
     setCapabilities,

@@ -9,6 +9,8 @@ process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-secret-do-not-use-in-pr
 const { createApp } = require('../src/app');
 const { issueToken } = require('../src/auth/jwt');
 const { createSettingsService } = require('../src/services/settings');
+const { createPlanService } = require('../src/license/planService');
+const { createUsageService } = require('../src/services/usageService');
 
 // ---- Repositories ---------------------------------------------------------
 
@@ -255,10 +257,11 @@ function makeSystemInfo(overrides = {}) {
 
 // A fake license manager (defaults to a healthy, generous license).
 function makeLicenseManager(overrides = {}) {
-  const status = () => ({ status: 'valid', licensed: true, maxAgents: 1000, serverId: 'test-server' });
+  const status = () => ({ status: 'valid', licensed: true, maxAgents: 1000, plan: overrides.plan || '', serverId: 'test-server' });
   return {
     isLicensed: overrides.isLicensed || (() => true),
     getMaxAgents: overrides.getMaxAgents || (() => 1000),
+    getPlan: overrides.getPlan || (() => overrides.plan || ''),
     canAcceptNewConnection: overrides.canAcceptNewConnection || (() => true),
     getStatus: overrides.getStatus || status,
     getFeatures: overrides.getFeatures || (() => ({ analysis: true, assistant: true, alerting: true, geo: true })),
@@ -406,17 +409,29 @@ function makeTestPackageRunner(overrides = {}) {
 
 // Builds an app wired with fakes; pass overrides to swap any dependency.
 function makeApp(overrides = {}) {
+  // Resolve the deps the plan/usage services build on, so the (real) services
+  // can wrap them. Default plan resolution lands on the internal 'licensed'
+  // plan → unlimited limits, so existing tests are unaffected; pass `plan:` to
+  // makeLicenseManager (or your own planService/usageService) to exercise limits.
+  const agentsRepo = overrides.agentsRepo || makeAgentsRepo();
+  const testPackagesRepo = overrides.testPackagesRepo || makeTestPackagesRepo();
+  const licenseManager = overrides.licenseManager || makeLicenseManager();
+  const planService = overrides.planService || createPlanService({ licenseManager });
+  const usageService =
+    overrides.usageService || createUsageService({ agentsRepo, testPackagesRepo, planService, licenseManager });
   return createApp({
     db: overrides.db || makeDb(),
     locationsRepo: overrides.locationsRepo || makeLocationsRepo(),
     usersRepo: overrides.usersRepo || makeUsersRepo(),
-    agentsRepo: overrides.agentsRepo || makeAgentsRepo(),
+    agentsRepo,
     enrollmentCodesRepo: overrides.enrollmentCodesRepo || makeEnrollmentCodesRepo(),
     enrollmentStore: overrides.enrollmentStore || makeEnrollmentStore(),
     agentTokensRepo: overrides.agentTokensRepo || makeAgentTokensRepo(),
     resultsRepo: overrides.resultsRepo || makeResultsRepo(),
     probeResultsRepo: overrides.probeResultsRepo || makeProbeResultsRepo(),
-    licenseManager: overrides.licenseManager || makeLicenseManager(),
+    licenseManager,
+    planService,
+    usageService,
     agentCommander: overrides.agentCommander || makeAgentCommander(),
     systemInfo: overrides.systemInfo || makeSystemInfo(),
     findingStore: overrides.findingStore || makeFindingStore(),
@@ -433,7 +448,7 @@ function makeApp(overrides = {}) {
     retentionConfig: overrides.retentionConfig || { enabled: true, rawRetentionDays: 7, rollupRetentionDays: 90, findingRetentionDays: 365, rollupIntervalMinutes: 60 },
     artifactStore: overrides.artifactStore || makeArtifactStore(),
     agentSourceStore: overrides.agentSourceStore || makeSourceStore(),
-    testPackagesRepo: overrides.testPackagesRepo || makeTestPackagesRepo(),
+    testPackagesRepo,
     testPackageRunner: overrides.testPackageRunner || makeTestPackageRunner(),
     speedtestResultsRepo: overrides.speedtestResultsRepo || makeSpeedtestResultsRepo(),
     releaseStore: overrides.releaseStore || makeReleaseStore(),

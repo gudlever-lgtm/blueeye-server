@@ -21,6 +21,7 @@ function createAnalysisPipeline({
   correlationWindowMs = 60000,
   dispatcher = null,
   alertingEnabled = false,
+  integrationTrigger = null,
   licensed = () => true,
   logger = silentLogger,
 }) {
@@ -131,6 +132,15 @@ function createAnalysisPipeline({
         await dispatchAlerts(produced, groups);
       } catch (err) {
         logger.warn(`alerting: dispatch step failed (${err.message})`);
+      }
+    }
+    // Outbound integrations: push each finding to configured ITSM/IPAM targets
+    // (ServiceNow incident, etc.). Fire-and-forget so the dispatcher's own
+    // retry/backoff never slows or breaks ingestion; it is independent of the
+    // alerting flag (a customer may push to ServiceNow without local alerting).
+    if (integrationTrigger && typeof integrationTrigger.emitFinding === 'function') {
+      for (const finding of produced) {
+        try { integrationTrigger.emitFinding(finding).catch(() => {}); } catch { /* never affects ingestion */ }
       }
     }
     return produced;

@@ -54,6 +54,15 @@ const { createTestPackagesRepository } = require('./repositories/testPackagesRep
 const { createTestPackageRunner } = require('./services/testPackageRunner');
 const { createTestPackageScheduler } = require('./services/testPackageScheduler');
 const { createSpeedtestResultsRepository } = require('./repositories/speedtestResultsRepository');
+const { createSecretBox } = require('./lib/secretBox');
+const { createIntegrationsRepository } = require('./repositories/integrationsRepository');
+const { createIntegrationAuditRepository } = require('./repositories/integrationAuditRepository');
+const { createConnectorRegistry } = require('./integrations/connectors');
+const { createIntegrationsDispatcher } = require('./integrations/dispatcher');
+const { createLdapConfigRepository } = require('./repositories/ldapConfigRepository');
+const { createLdapRoleMapRepository } = require('./repositories/ldapRoleMapRepository');
+const { createLdapLoginAuditRepository } = require('./repositories/ldapLoginAuditRepository');
+const { createLdapAuth } = require('./auth/ldap');
 
 // Wires up real dependencies, starts the HTTP server and installs graceful
 // shutdown handlers.
@@ -129,6 +138,28 @@ function start() {
   // Active throughput ("speed test") results reported by agents.
   const speedtestResultsRepo = createSpeedtestResultsRepository(db);
 
+  // Secret box: AES-256-GCM encryption for secrets stored at rest (integration
+  // credentials, the LDAP bind password). See src/lib/secretBox.js.
+  const secretBox = createSecretBox({ key: config.security.secretKey });
+
+  // Outbound API integrations (ITSM/IPAM connectors). The dispatcher fans domain
+  // events (incidents/anomalies, agent enroll/delete) out to enabled targets with
+  // debounce + retry/backoff, decrypting credentials only at fire time, and audits
+  // every call. fetch is Node's global (mocked in tests).
+  const integrationsRepo = createIntegrationsRepository(db);
+  const integrationAuditRepo = createIntegrationAuditRepository(db);
+  const connectorRegistry = createConnectorRegistry({ fetchImpl: globalThis.fetch, logger: console });
+  const integrationsDispatcher = createIntegrationsDispatcher({
+    integrationsRepo, auditRepo: integrationAuditRepo, secretBox, registry: connectorRegistry, logger: console,
+  });
+
+  // External auth (LDAP/AD). OFF unless LDAP_AUTH_ENABLED=true AND an admin has
+  // stored + enabled a config row. Local JWT login always remains as the fallback.
+  const ldapConfigRepo = createLdapConfigRepository(db);
+  const ldapRoleMapRepo = createLdapRoleMapRepository(db);
+  const ldapLoginAuditRepo = createLdapLoginAuditRepository(db);
+  const ldapAuth = createLdapAuth({ config: config.ldap, ldapConfigRepo, ldapRoleMapRepo, secretBox, logger: console });
+
   // Pushes a live event to every connected dashboard (assigned below; the
   // closure runs later). Used for enrollment/agent-status feedback in the UI.
   const notifyDashboard = (message) => (dashboardWs ? dashboardWs.broadcast(message) : 0);
@@ -172,6 +203,8 @@ function start() {
     correlator,
     dispatcher,
     alertingEnabled: alertingConfig.enabled,
+    // Outbound integrations fire on findings independently of local alerting.
+    integrationTrigger: integrationsDispatcher,
     // Detector runs only if the license includes analysis (AND config enables it).
     licensed: () => featureGate.isFeatureEnabled('analysis'),
     // Push findings to connected dashboards (browsers), not to agents.
@@ -187,6 +220,7 @@ function start() {
     config: analysisConfig,
     dispatcher,
     alertingEnabled: alertingConfig.enabled,
+    integrationTrigger: integrationsDispatcher,
     licensed: () => featureGate.isFeatureEnabled('analysis'),
     publishFinding: (hostId, message) => (dashboardWs ? dashboardWs.broadcast(message) : 0),
     logger: console,
@@ -271,6 +305,16 @@ function start() {
     testPackagesRepo,
     testPackageRunner,
     speedtestResultsRepo,
+    integrationsRepo,
+    integrationAuditRepo,
+    integrationsDispatcher,
+    connectorRegistry,
+    secretBox,
+    ldapConfigRepo,
+    ldapRoleMapRepo,
+    ldapLoginAuditRepo,
+    ldapAuth,
+    ldapAuthEnabledFlag: config.ldap.authEnabled,
     enrollConfig: { publicUrl: config.publicUrl, certFingerprint: config.enroll.certFingerprint },
     notifyDashboard,
     logger: console,

@@ -21,6 +21,7 @@ function createProbePipeline({
   publishFinding = () => {},
   dispatcher = null,
   alertingEnabled = false,
+  integrationTrigger = null,
   licensed = () => true,
   windowMs = 6 * 3600 * 1000, // how far back to look for the verdict
   cooldownMs = 30 * 60 * 1000, // don't re-raise the same (metric,target) within this
@@ -93,6 +94,12 @@ function createProbePipeline({
         } catch (err) {
           logger.warn(`probe-analysis: dispatch failed for ${finding.id} (${err.message})`);
         }
+      }
+    }
+    // Outbound integrations (ITSM/IPAM). Fire-and-forget; independent of alerting.
+    if (integrationTrigger && typeof integrationTrigger.emitFinding === 'function') {
+      for (const finding of produced) {
+        try { integrationTrigger.emitFinding(finding).catch(() => {}); } catch { /* never affects ingestion */ }
       }
     }
     return produced;

@@ -35,16 +35,36 @@ behind `ALERTING_ENABLED`. Dispatch is best-effort and never breaks ingestion.
 | --- | --- | --- |
 | `GET` | `/api/alerting/config` | Active channels + rules, **without secrets** (viewer+). |
 | `POST` | `/api/alerting/test` | `{ channel }` — send a test finding to one channel. `404` unknown channel, `400` missing, `200` + result (operator+). |
+| `GET` | `/api/settings` | Includes `alerting` — the full editable config, **secret-safe** (admin). |
+| `PUT` | `/api/settings/alerting` | Update channel config (admin, licence-gated). Partial patches merge; secrets are write-only. |
 
 ## Configuration
 
-`ALERTING_ENABLED`, `ALERT_COOLDOWN_MS`, and per channel `ALERT_*_ENABLED` /
-`ALERT_*_MIN_SEVERITY` plus channel specifics (`SMTP_*`, `ALERT_WEBHOOK_URL` /
-`ALERT_WEBHOOK_SECRET`, `SYSLOG_*`). See `.env.example`.
+Two layers, DB-over-env (same pattern as the AI assistant key):
+
+- **Env defaults** — `ALERTING_ENABLED`, `ALERT_COOLDOWN_MS`, and per channel
+  `ALERT_*_ENABLED` / `ALERT_*_MIN_SEVERITY` plus channel specifics (`SMTP_*`,
+  `ALERT_WEBHOOK_URL` / `ALERT_WEBHOOK_SECRET`, `SYSLOG_*`). See `.env.example`.
+- **Runtime overrides (Settings → Alerting)** — an admin can edit every field
+  from the dashboard. Stored in `app_settings` under the `alerting` key and
+  **live-applied onto the running config** (`settingsService` mutates the
+  `alertingConfig` object the dispatcher + channels hold, in place), so changes
+  take effect **without a restart** — including SMTP changes, which rebuild the
+  mailer lazily via the `createTransport` factory. Persisted edits are re-applied
+  at boot by `settingsService.applyStoredOverrides()`, so they survive restarts.
+
+The two secrets — SMTP password and webhook HMAC — are **write-only**: stored in
+`app_settings` but never returned by the API. Reads (`getAlertingSafe`) expose
+only whether each is set, plus a short masked hint (`••••1234`); a blank value
+on save keeps the stored secret, and a `clearSmtpPass` / `clearSecret` flag wipes
+it. `setAlerting` is licence-gated with the same `alerting` entitlement as the
+dispatcher, so an admin cannot configure a channel the server would refuse to
+dispatch through.
 
 ## Tests
 
 `src/analysis/alerting/__tests__/` (dispatcher rules, throttling, isolation,
-channel HMAC/syslog format/email) and `test/alertingApi.test.js` +
-`test/alertingPipeline.test.js`. All outgoing calls are mocked — no real
-emails/webhooks/syslog in tests.
+channel HMAC/syslog format/email + transport rebuild) and `test/alertingApi.test.js`,
+`test/alertingPipeline.test.js` + `test/alertingSettings.test.js` (runtime config:
+secret-safe reads, live-apply to the dispatcher/channels, licence gate). All
+outgoing calls are mocked — no real emails/webhooks/syslog in tests.

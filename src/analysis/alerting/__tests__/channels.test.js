@@ -63,3 +63,18 @@ test('email without a transport or recipient fails cleanly', async () => {
   assert.equal((await createEmailChannel({ config: { to: 'x' } }).send({})).ok, false);
   assert.equal((await createEmailChannel({ config: {}, transport: { sendMail: async () => {} } }).send({})).ok, false);
 });
+
+test('email builds its transport lazily from createTransport and rebuilds when SMTP changes', async () => {
+  const config = { to: 'ops@b', from: 'a@b', smtp: { host: 'mail1', port: 587, user: '', pass: '', secure: false } };
+  const builds = []; const sent = [];
+  const ch = createEmailChannel({ config, createTransport: (smtp) => { builds.push({ ...smtp }); return smtp && smtp.host ? { sendMail: async (m) => { sent.push(m); } } : null; } });
+
+  assert.equal((await ch.send({ hostId: '9', metric: 'cpu', severity: 'CRIT' })).ok, true);
+  assert.equal(builds.length, 1); // built once
+  await ch.send({ hostId: '9', metric: 'cpu', severity: 'CRIT' });
+  assert.equal(builds.length, 1); // same SMTP -> cached, no rebuild
+  config.smtp = { host: 'mail2', port: 587, user: '', pass: '', secure: false }; // changed
+  await ch.send({ hostId: '9', metric: 'cpu', severity: 'CRIT' });
+  assert.equal(builds.length, 2); // rebuilt
+  assert.equal(sent.length, 3);
+});

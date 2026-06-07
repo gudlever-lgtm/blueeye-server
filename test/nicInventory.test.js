@@ -55,10 +55,28 @@ test('computeNicInventory never compares different models against each other', (
   assert.equal(inv.drift.length, 0);
 });
 
+test('computeNicInventory lists each agent with its NIC specs (byAgent)', () => {
+  const eth = { iface: 'eth0', driver: 'e1000e', pciId: '8086:15bc', firmwareVersion: '0.13', busInfo: '0000:00:1f.6' };
+  const inv = computeNicInventory([
+    agent(2, [WIFI('A')], { display_name: 'Zeta', location_name: 'Bergen' }),
+    agent(1, [WIFI('A'), eth], { display_name: 'Alpha' }),
+  ]);
+  // Sorted by name: Alpha before Zeta.
+  assert.deepEqual(inv.byAgent.map((a) => a.name), ['Alpha', 'Zeta']);
+  const alpha = inv.byAgent[0];
+  assert.equal(alpha.id, 1);
+  assert.equal(alpha.nics.length, 2);
+  const eth0 = alpha.nics.find((n) => n.iface === 'eth0');
+  assert.equal(eth0.firmwareVersion, '0.13');
+  assert.equal(eth0.busInfo, '0000:00:1f.6');
+  assert.equal(inv.byAgent[1].location, 'Bergen');
+});
+
 test('computeNicInventory ignores agents without NIC data', () => {
   const inv = computeNicInventory([agent(1, [WIFI('A')]), { id: 2, hostname: 'h2', capabilities: { sources: ['proc'] } }, { id: 3, hostname: 'h3', capabilities: null }]);
   assert.equal(inv.agents, 1);
   assert.equal(inv.totalNics, 1);
+  assert.deepEqual(inv.byAgent.map((a) => a.id), [1]);
 });
 
 test('computeNicInventory uses display_name and location for outlier agents', () => {

@@ -393,6 +393,16 @@ main#view:has(.overview) { max-width: 1180px; }
 .nic-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-left: 4px; }
 .nic-model-row { display: flex; justify-content: space-between; gap: 16px; padding: 7px 0; border-top: 1px solid var(--border); }
 .nic-model-row:first-of-type { border-top: none; }
+.nics-controls { display: flex; align-items: center; gap: 10px; margin: 0 0 14px; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.seg-btn { font: inherit; font-size: 13px; padding: 4px 12px; border: none; background: var(--panel); color: var(--muted); cursor: pointer; }
+.seg-btn + .seg-btn { border-left: 1px solid var(--border); }
+.seg-btn.on { background: var(--panel-2); color: var(--text); }
+.nic-agent-row { padding: 12px 0; border-top: 1px solid var(--border); }
+.nic-agent-row:first-of-type { border-top: none; }
+.nic-agent-head { margin-bottom: 6px; }
+.linklike { font: inherit; background: none; border: none; padding: 0; color: var(--accent); cursor: pointer; }
+.linklike:hover { text-decoration: underline; }
 
 /* Fleet overview: summary chips + clickable agent table. */
 .fleet-summary { display: flex; flex-wrap: wrap; gap: 10px; margin: 0 0 14px; }

@@ -443,6 +443,10 @@ const PAGE_INFO = {
       el('ul', {},
         el('li', {}, el('strong', {}, 'Majority '), '— the firmware most units of a model run; treated as the baseline.'),
         el('li', {}, el('strong', {}, 'Outlier '), '— any unit on a different firmware than the majority of the same model. Click a unit to open its agent page.')),
+      el('h4', {}, 'Group by'),
+      el('ul', {},
+        el('li', {}, el('strong', {}, 'Models '), '— aggregate identical NICs across the fleet, drift first. Best for spotting firmware mismatches.'),
+        el('li', {}, el('strong', {}, 'Agents '), '— list every agent reporting NIC data with its per-interface specs (driver, driver version, firmware, bus).')),
       el('p', { class: 'muted' }, 'Models are keyed by driver + PCI/USB id, so a Wi-Fi card is never compared against an Ethernet NIC. Metadata only — driver/firmware strings and hardware ids, never MAC or payload. Needs an agent new enough to collect NIC info on a Linux host; older agents simply show nothing here. Per-agent details are also on the ', viewLink('agents', 'agent'), ' page.'),
     ],
   },
@@ -3141,33 +3145,64 @@ views.nics = async () => {
     el('button', { class: 'chip ghost small', title: a.location ? `${a.name} · ${a.location}` : a.name, onclick: () => openAgent(a.id) },
       esc(a.name), a.iface ? el('span', { class: 'muted' }, ` (${esc(a.iface)})`) : null)));
 
-  // Firmware-drift section first — the actionable part.
-  if (inv.drift.length) {
-    const driftCard = el('div', { class: 'nic-card drift-card' }, el('h3', {}, '⚠ Firmware drift'));
-    for (const model of inv.drift) {
-      const block = el('div', { class: 'drift-model' },
-        el('div', { class: 'drift-head' }, el('strong', {}, esc(model.label)), el('span', { class: 'muted' }, ` · ${model.count} unit(s)`)));
-      for (const f of model.firmwares) {
-        block.append(el('div', { class: `fw-row${f.isOutlier ? ' fw-outlier' : ''}` },
-          el('span', { class: `badge ${f.isOutlier ? 'warn' : 'online'}` }, f.isOutlier ? 'outlier' : 'majority'),
-          el('span', { class: 'fw-ver' }, esc(f.firmwareVersion)),
-          el('span', { class: 'muted' }, ` — ${f.count} unit(s)`),
-          agentChips(f.agents)));
+  // Group-by toggle: aggregate by NIC model (drift-first) or list every agent
+  // with its NIC specs. Defaults to models — the firmware-drift lens.
+  const body = el('div', { class: 'nics-body' });
+  const seg = el('div', { class: 'seg' });
+  const setMode = (mode) => {
+    for (const b of seg.children) b.classList.toggle('on', b.dataset.mode === mode);
+    body.replaceChildren(mode === 'agents' ? renderByAgent() : renderByModel());
+  };
+  for (const [mode, label] of [['models', 'Models'], ['agents', 'Agents']]) {
+    seg.append(el('button', { class: 'seg-btn', 'data-mode': mode, onclick: () => setMode(mode) }, label));
+  }
+  root.append(el('div', { class: 'nics-controls' }, el('span', { class: 'muted' }, 'Group by'), seg), body);
+
+  // ---- Models view: firmware drift first, then the full model inventory. ----
+  function renderByModel() {
+    const wrap = el('div', {});
+    if (inv.drift.length) {
+      const driftCard = el('div', { class: 'nic-card drift-card' }, el('h3', {}, '⚠ Firmware drift'));
+      for (const model of inv.drift) {
+        const block = el('div', { class: 'drift-model' },
+          el('div', { class: 'drift-head' }, el('strong', {}, esc(model.label)), el('span', { class: 'muted' }, ` · ${model.count} unit(s)`)));
+        for (const f of model.firmwares) {
+          block.append(el('div', { class: `fw-row${f.isOutlier ? ' fw-outlier' : ''}` },
+            el('span', { class: `badge ${f.isOutlier ? 'warn' : 'online'}` }, f.isOutlier ? 'outlier' : 'majority'),
+            el('span', { class: 'fw-ver' }, esc(f.firmwareVersion)),
+            el('span', { class: 'muted' }, ` — ${f.count} unit(s)`),
+            agentChips(f.agents)));
+        }
+        driftCard.append(block);
       }
-      driftCard.append(block);
+      wrap.append(driftCard);
     }
-    root.append(driftCard);
+    const invCard = el('div', { class: 'nic-card' }, el('h3', {}, 'All NIC models'));
+    for (const model of inv.drivers) {
+      const fwSummary = model.firmwares.map((f) => `${f.firmwareVersion} ×${f.count}`).join(' · ');
+      invCard.append(el('div', { class: 'nic-model-row' },
+        el('div', {}, el('strong', {}, esc(model.label)), model.hasDrift ? el('span', { class: 'badge warn', style: 'margin-left:.4rem' }, 'drift') : null),
+        el('div', { class: 'muted' }, `${model.count} unit(s) · ${esc(fwSummary)}`)));
+    }
+    wrap.append(invCard);
+    return wrap;
   }
 
-  // Full inventory: every model and its firmware breakdown.
-  const invCard = el('div', { class: 'nic-card' }, el('h3', {}, 'All NIC models'));
-  for (const model of inv.drivers) {
-    const fwSummary = model.firmwares.map((f) => `${f.firmwareVersion} ×${f.count}`).join(' · ');
-    invCard.append(el('div', { class: 'nic-model-row' },
-      el('div', {}, el('strong', {}, esc(model.label)), model.hasDrift ? el('span', { class: 'badge warn', style: 'margin-left:.4rem' }, 'drift') : null),
-      el('div', { class: 'muted' }, `${model.count} unit(s) · ${esc(fwSummary)}`)));
+  // ---- Agents view: each agent that reports NIC data + its NIC specs. ----
+  function renderByAgent() {
+    const card = el('div', { class: 'nic-card' }, el('h3', {}, `Agents reporting NIC data (${inv.byAgent.length})`));
+    for (const a of inv.byAgent) {
+      card.append(el('div', { class: 'nic-agent-row' },
+        el('div', { class: 'nic-agent-head' },
+          el('button', { class: 'linklike', onclick: () => openAgent(a.id) }, esc(a.name)),
+          a.location ? el('span', { class: 'muted' }, ` · ${esc(a.location)}`) : null,
+          el('span', { class: 'muted' }, ` · ${a.nics.length} interface(s)`)),
+        nicTable(a.nics)));
+    }
+    return card;
   }
-  root.append(invCard);
+
+  setMode('models');
   return root;
 };
 

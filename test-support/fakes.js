@@ -697,6 +697,7 @@ function makeApp(overrides = {}) {
     speedtestResultsRepo: overrides.speedtestResultsRepo || makeSpeedtestResultsRepo(),
     releaseStore: overrides.releaseStore || makeReleaseStore(),
     releasePublicKey: overrides.releasePublicKey || '',
+    releaseKeyService: overrides.releaseKeyService || makeReleaseKeyService(),
     auditRepo: overrides.auditRepo || makeAuditRepo(),
     integrationsRepo: overrides.integrationsRepo || makeIntegrationsRepo(),
     integrationAuditRepo: overrides.integrationAuditRepo || makeIntegrationAuditRepo(),
@@ -711,6 +712,25 @@ function makeApp(overrides = {}) {
     enrollConfig: overrides.enrollConfig || { publicUrl: '', certFingerprint: '' },
     notifyDashboard: overrides.notifyDashboard || (() => 0),
   });
+}
+
+// Fake agent-release signing key service. Configured by default so existing tests
+// (which onboard agents / read settings) aren't gated; pass { configured: false } to
+// exercise the "no key" gate, or override individual methods.
+function makeReleaseKeyService(overrides = {}) {
+  const configured = overrides.configured !== undefined ? overrides.configured : true;
+  const okStatus = { configured: true, source: 'managed', createdAt: '2026-01-01T00:00:00.000Z', createdBy: 1, fingerprint: 'f'.repeat(64), canSign: true };
+  const noStatus = { configured: false, source: null, createdAt: null, createdBy: null, fingerprint: null, canSign: false };
+  return {
+    load: overrides.load || (async () => {}),
+    getPublicKey: overrides.getPublicKey || (() => (configured ? '-----BEGIN PUBLIC KEY-----\nFAKE\n-----END PUBLIC KEY-----' : '')),
+    isConfigured: overrides.isConfigured || (() => configured),
+    canSign: overrides.canSign || (() => configured),
+    status: overrides.status || (() => (configured ? okStatus : noStatus)),
+    generate: overrides.generate || (async () => okStatus),
+    remove: overrides.remove || (async () => noStatus),
+    sign: overrides.sign || (() => 'ZmFrZS1zaWc='),
+  };
 }
 
 // Mints a real JWT for the given role (signed with the test secret).
@@ -748,6 +768,7 @@ module.exports = {
   makeArtifactStore,
   makeSourceStore,
   makeReleaseStore,
+  makeReleaseKeyService,
   makeAuditRepo,
   makeTestPackagesRepo,
   makeTestPackageRunner,

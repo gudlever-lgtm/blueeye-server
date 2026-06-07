@@ -31,6 +31,9 @@ function resolveServerUrl(req, enrollConfig) {
 function createEnrollRouter({ artifactStore, sourceStore, releaseStore, enrollmentCodesRepo, enrollConfig = {}, releasePublicKey = '' }) {
   const router = express.Router();
   const certFingerprint = enrollConfig.certFingerprint || '';
+  // releasePublicKey may be a live resolver (it can change at runtime when an admin
+  // generates/deletes the key) or a plain string (tests). Resolve per request.
+  const pubKey = () => (typeof releasePublicKey === 'function' ? releasePublicKey() : releasePublicKey) || '';
 
   // Companion config so the binary can learn the server URL + fingerprint to pin
   // when they weren't embedded at install time.
@@ -38,7 +41,7 @@ function createEnrollRouter({ artifactStore, sourceStore, releaseStore, enrollme
     res.json({
       serverUrl: resolveServerUrl(req, enrollConfig),
       certFingerprint: certFingerprint || null,
-      releasePublicKey: releasePublicKey || null,
+      releasePublicKey: pubKey() || null,
     });
   });
 
@@ -47,11 +50,12 @@ function createEnrollRouter({ artifactStore, sourceStore, releaseStore, enrollme
   // installer can fetch + bake it in with no key handling. 404 when unconfigured
   // (in which case the server publishes no signed releases either).
   router.get('/agent-release-key', (req, res) => {
-    if (!releasePublicKey) {
+    const key = pubKey();
+    if (!key) {
       res.status(404).type('text/plain; charset=utf-8');
       return res.send('# No agent release public key configured on this server.\n');
     }
-    const pem = releasePublicKey.endsWith('\n') ? releasePublicKey : `${releasePublicKey}\n`;
+    const pem = key.endsWith('\n') ? key : `${key}\n`;
     res.status(200).type('text/plain; charset=utf-8').send(pem);
   });
 

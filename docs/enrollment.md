@@ -39,6 +39,32 @@ the **same versioned `releases/<v>` + `current` layout** as
 `scripts/install-systemd.sh`, so install / upgrade / uninstall behave identically
 however the agent was installed.
 
+## Agent signing key (set this first)
+
+The server signs agent releases with an Ed25519 **signing key** that an admin
+generates once under **Settings → Agent key**. It is the trust anchor for secure
+agent management:
+
+- It is generated **on the server**; the private key **never leaves it** (encrypted
+  at rest via `secretBox`) and is **never shown or downloadable** — the page reports
+  only that a key exists (+ a non-secret fingerprint). The server signs the agent
+  source bundle into a signed release automatically (`publishSignedReleaseFromSource`),
+  and agents verify that signature before installing — no external build host needed.
+- **You cannot add agents until it is set**: `GET /api/enroll/command` returns `409
+  NO_RELEASE_KEY`, and the Enrollment page shows a banner pointing to Settings. So on
+  a new server an admin generates the key first.
+- It is **write-once** (a second `POST` returns `409 EXISTS`) and **deletable** with a
+  confirmation. After deletion no new agents can be onboarded and existing agents can
+  no longer be upgraded from the server until a new key is generated — agents already
+  enrolled keep running (and can still be pinged/deleted).
+- The public key is published at `GET /enroll/agent-release-key`; the installers fetch
+  + pin it so signed self-updates verify with no manual provisioning. When no managed
+  key exists the server falls back to the env key (`AGENT_RELEASE_PUBLIC_KEY`), so
+  existing deployments keep working.
+
+Routes (admin): `GET/POST/DELETE /api/settings/agent-release-key` — status / generate
+/ delete. The status is also included in `GET /api/settings` as `agentReleaseKey`.
+
 ## Endpoints
 
 | Method & path | Auth | Purpose |

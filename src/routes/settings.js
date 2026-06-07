@@ -10,7 +10,7 @@ const { ROLES } = require('../auth/roles');
 // (passwords, webhook secrets) are never included; the AI assistant's API key is
 // editable here but only ever reported as "set or not" + a masked hint, never
 // echoed back in full.
-function createSettingsRouter({ settingsService, featureGate, dispatcher, analysisConfig, retentionConfig }) {
+function createSettingsRouter({ settingsService, featureGate, dispatcher, analysisConfig, retentionConfig, releaseKeyService = null, publishRelease = null }) {
   const router = express.Router();
   const admin = [requireAuth, requireRole(ROLES.ADMIN)];
   const reader = [requireAuth, requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN)];
@@ -30,7 +30,45 @@ function createSettingsRouter({ settingsService, featureGate, dispatcher, analys
       map: settingsService ? await settingsService.getMap() : null,
       flowCategories: settingsService ? await settingsService.getFlowCategories() : null,
       maintenance: settingsService ? await settingsService.getMaintenance() : null,
+      agentReleaseKey: releaseKeyService ? releaseKeyService.status() : { configured: false },
     });
+  }));
+
+  // --- Agent signing key (admin) -----------------------------------------------
+  // The Ed25519 release-signing key, generated ON the server — the trust anchor for
+  // secure agent management: the server signs agent releases with it and agents
+  // verify those signatures. WRITE-ONCE and never viewable: the API only reports
+  // that it exists (+ a non-secret fingerprint), never any key material.
+
+  // GET status: { configured, source, createdAt, fingerprint, canSign }.
+  router.get('/agent-release-key', ...admin, asyncHandler(async (req, res) => {
+    res.json(releaseKeyService ? releaseKeyService.status() : { configured: false, source: null });
+  }));
+
+  // POST generate — create the key (write-once). 409 if one already exists. Returns
+  // status only. Immediately publishes a signed release so upgrades are ready.
+  router.post('/agent-release-key', ...admin, asyncHandler(async (req, res) => {
+    if (!releaseKeyService) return res.status(503).json({ error: 'Key management is not available on this server' });
+    try {
+      const userId = (req.user && (req.user.id || req.user.sub)) || null;
+      const status = await releaseKeyService.generate({ userId });
+      if (publishRelease) { try { await publishRelease(); } catch { /* best-effort: a release can also be published later */ } }
+      return res.status(201).json(status);
+    } catch (err) {
+      if (err.code === 'EXISTS') {
+        return res.status(409).json({ error: 'A signing key already exists and cannot be changed. Delete it first if you must rotate it (existing agents would then need re-enrolling).', code: 'EXISTS' });
+      }
+      throw err;
+    }
+  }));
+
+  // DELETE — remove the key. After this no new agents can be onboarded and no signed
+  // upgrades can be issued until a key is generated again. The "are you sure" confirm
+  // lives in the dashboard.
+  router.delete('/agent-release-key', ...admin, asyncHandler(async (req, res) => {
+    if (!releaseKeyService) return res.status(503).json({ error: 'Key management is not available on this server' });
+    const status = await releaseKeyService.remove();
+    return res.json(status);
   }));
 
   // GET /api/settings/maintenance — current windows. viewer+ (benign, no secrets)

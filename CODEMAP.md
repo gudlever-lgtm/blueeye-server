@@ -97,7 +97,7 @@ Mounted in `src/routes/index.js`. User endpoints use JWT + roles
 | `/api/probes` | probes.js | viewer+ | **active-probe** results (ping/tcp/dns/traceroute/**http**) |
 | `/api/reports` | reports.js | viewer+ / operator+ | **availability** (uptime % from probes) + **incidents** list (viewer+); **NIS2 draft** (`/nis2-draft/:id`, operator+) |
 | `/api/thresholds` | thresholds.js | viewer+ read / admin write | **incident thresholds** — global defaults + per-location overrides |
-| `/api/fleet` | fleet.js | viewer+ | **fleet health** rollup (`/health`) + per-agent verdict (`/agent/:id`) |
+| `/api/fleet` | fleet.js | viewer+ | **fleet health** rollup (`/health`) + per-agent verdict (`/agent/:id`) + **NIC firmware inventory / drift** (`/nics`) |
 | `/api/interfaces` | interfaces.js | viewer+ | **interface health** (util/errors/discards/link) |
 | `/api/search` | search.js | viewer+ | **global search** (agents/hosts/locations + IP/port → agents) |
 
@@ -118,8 +118,8 @@ Later migrations add:
 | 019 | `probe_results.status` / `.cert_expiry_days` | http probe (status + TLS cert expiry) |
 | 020 | (column) | per-user UI preferences — `users.preferences` JSON (colour theme) |
 | 021 | (column) | `agents.enrollment_code_id` → links an agent to the code it enrolled with (Enrollment page shows each code's agents + live status); `ON DELETE SET NULL` |
-| 023 | `incident_thresholds` | incident derivation — per-metric warn/crit + debounce; global default (`location_id` NULL) + per-location override; seeded |
-| 024 | `incidents` | incident derivation — one row per (agent, metric, target) outage; `started_at`/`resolved_at`/`duration_seconds` |
+| 024 | `incident_thresholds` | incident derivation — per-metric warn/crit + debounce; global default (`location_id` NULL) + per-location override; seeded |
+| 025 | `incidents` | incident derivation — one row per (agent, metric, target) outage; `started_at`/`resolved_at`/`duration_seconds` |
 
 Interface health, traffic-type categories and **fleet health** add **no** tables — they
 derive from the existing `results.payload.traffic` (and `flow_records.asn` for org
@@ -132,7 +132,7 @@ A single vanilla-JS SPA. Key building blocks:
 - `views.<tab>` — async function per tab returning a node (`fleet` (landing),
   `overview`, `map` (UI label **“Sites”** — locations coloured by agent health),
   `geo` (UI label **“Destinations”** — external traffic by country/ASN),
-  `agents`, `interfaces`, `probes`, `flows`, `findings`, `locations`, `enrollment`,
+  `agents`, `interfaces`, `nics` (NIC firmware inventory + drift), `probes`, `flows`, `findings`, `locations`, `enrollment`,
   `settings`) plus `agent` (the combined per-agent drill-down page, no tab —
   reached via `openAgent(id)`). Both maps init via the shared `createLeafletMap`
   (server-configured EU/self-hosted tiles).
@@ -169,11 +169,13 @@ A single vanilla-JS SPA. Key building blocks:
 | Probe findings + alerting | `src/analysis/probeFindings.js` (verdict→findings, reuses `health/probeHealth.js`) + `probePipeline.js` (runs on probe-results ingest in `routes/agentReports.js`) |
 | AI assistant (explain + location summary) | `src/analysis/assistant.js` (Mistral/EU, opt-in; reads enable/key/model live from the analysis config) + `src/routes/assistant.js`; per-location summary UI = `showLocationSummary` in `public/app.js`. Runtime config (enable + API key + model): `settingsService.getAssistant/setAssistant` (`src/services/settings.js`), `PUT /api/settings/assistant`, UI `assistantSettingsCard` in Settings → Analysis |
 | Fleet health (overview + verdicts) | `src/health/probeHealth.js` (`computeAgentHealth`/`mergeHealth`/`computeFleet`, median+MAD — folds in interface health), `src/routes/fleet.js`; UI `views.fleet`/`views.agent` |
+| NIC firmware inventory / drift | `src/health/nicInventory.js` (`computeNicInventory`, groups by driver+PCI id, flags firmware outliers) from agent-reported `capabilities.nic`; HTTP `GET /api/fleet/nics` in `src/routes/fleet.js`; UI `views.nics` + per-agent NIC card in `views.agent`. Agent side in blueeye-agent `src/nicInfo.js` (`ethtool -i`) |
 | Interface health | `src/health/interfaceHealth.js` (`computeInterfaceHealth`/`interfaceHealthSummary`); HTTP in `src/routes/interfaces.js` — agent side in blueeye-agent |
 | Agent data-quality (drops/skew/version) | `src/health/dataQuality.js` (`computeDataQuality`); surfaced via `/api/fleet/health` + `/api/fleet/agent/:id` — all signals already sent by the agent |
 | A dashboard tab/view | `public/index.html` (button) + `views.<x>` in `public/app.js` + `PAGE_INFO` |
 | A dashboard colour palette (light+dark) | `PALETTES` + paired `[data-theme=…]` blocks in `public/styles.css`; picker `settingsAppearanceView` in `public/app.js`; per-user persistence via `/me` (`src/routes/me.js`, `usersRepository.get/updatePreferences`) + key whitelist in `src/validation/preferencesValidation.js` |
-| License / feature gating | `src/license/*` (`features.js` = fail-closed gate) |
+| License / feature gating | `src/license/*` (`features.js` = fail-closed gate; `plans.js` = plan/feature catalogue; `planService.js` = active-plan resolution + limits) + `src/services/usageService.js` (limit enforcement). Read-only API: `/license/plan`, `/license/usage`, `/license/matrix`. See `docs/licensing.md`. |
+| Offline (no-server) licensing | `src/license/licenseVerifier.js` (verifies a local signed file, Ed25519) + `offlineLicenseManager.js` (same surface as the online manager; restricted mode when invalid/expired). Selected by `LICENSE_MODE=offline`/`LICENSE_FILE` in `src/server.js`. Issue files with `scripts/sign-offline-license.js`. |
 
 ## Conventions
 

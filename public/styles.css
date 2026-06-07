@@ -379,6 +379,21 @@ main#view:has(.overview) { max-width: 1180px; }
 .iface-table .util .usagebar { flex: 1; min-width: 80px; max-width: 160px; margin: 0; }
 .probe-hops td { padding: 4px 10px; }
 
+/* NICs view: firmware-drift card + inventory list. */
+.nics-summary { margin: 0 0 14px; }
+.nic-card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; margin: 0 0 16px; }
+.nic-card h3 { margin: 0 0 10px; font-size: 15px; }
+.drift-card { border-color: var(--warn, #d97706); }
+.drift-model { padding: 10px 0; border-top: 1px solid var(--border); }
+.drift-model:first-of-type { border-top: none; }
+.drift-head { margin-bottom: 6px; }
+.fw-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 5px 0; }
+.fw-row .fw-ver { font-family: var(--mono, monospace); font-size: 13px; }
+.fw-outlier { background: var(--panel-2); border-radius: 8px; padding: 6px 8px; }
+.nic-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-left: 4px; }
+.nic-model-row { display: flex; justify-content: space-between; gap: 16px; padding: 7px 0; border-top: 1px solid var(--border); }
+.nic-model-row:first-of-type { border-top: none; }
+
 /* Fleet overview: summary chips + clickable agent table. */
 .fleet-summary { display: flex; flex-wrap: wrap; gap: 10px; margin: 0 0 14px; }
 .fs-chip { display: flex; align-items: baseline; gap: 8px; background: var(--panel); border: 1px solid var(--border);
@@ -559,6 +574,12 @@ tr:last-child td { border-bottom: 0; }
    across rows (and wrap as a tidy block instead of one button dropping off). */
 .row-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; align-items: center; }
 .row-actions button.small { min-width: 74px; text-align: center; }
+
+/* License feature matrix: highlight the customer's active plan column; tick
+   marks centre under each plan. .tablewrap lets wide grids scroll on mobile. */
+.tablewrap { overflow-x: auto; }
+table.matrix td:not(:first-child), table.matrix th:not(:first-child) { text-align: center; }
+table.matrix .active { background: var(--accent-weak, rgba(80, 140, 255, .12)); font-weight: 600; }
 
 /* Table filter toolbar (e.g. Agents tab) + sortable column headers. */
 .table-toolbar { display: flex; justify-content: flex-end; margin: 0 0 12px; }

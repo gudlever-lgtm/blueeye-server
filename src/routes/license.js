@@ -7,7 +7,7 @@ const { ROLES } = require('../auth/roles');
 
 // Read-only view of the local license state (staff, viewer+). The signed proof
 // itself is never exposed as a token — this only reports status.
-function createLicenseRouter({ licenseManager, featureGate }) {
+function createLicenseRouter({ licenseManager, featureGate, planService, usageService }) {
   const router = express.Router();
 
   router.get(
@@ -30,6 +30,43 @@ function createLicenseRouter({ licenseManager, featureGate }) {
     requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN),
     (req, res) => {
       res.json(featureGate ? featureGate.summary() : { analysis: false, assistant: false, alerting: false, geo: false });
+    }
+  );
+
+  // GET /license/plan — the active package (Pilot/Starter/Professional/Enterprise/
+  // MSP): name, support level, limits and the packaged feature flags. Powers the
+  // admin "License overview" panel (viewer+).
+  router.get(
+    '/plan',
+    requireAuth,
+    requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN),
+    (req, res) => {
+      if (!planService) return res.status(503).json({ error: 'Plan service not available' });
+      res.json(planService.summary());
+    }
+  );
+
+  // GET /license/usage — current usage against plan limits (agents / active test
+  // paths / history) for the admin "Usage overview" panel (viewer+).
+  router.get(
+    '/usage',
+    requireAuth,
+    requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN),
+    asyncHandler(async (req, res) => {
+      if (!usageService) return res.status(503).json({ error: 'Usage service not available' });
+      res.json(await usageService.getUsage());
+    })
+  );
+
+  // GET /license/matrix — the full plan × feature grid + the active plan, so the
+  // UI can render the feature matrix and upgrade hints (viewer+).
+  router.get(
+    '/matrix',
+    requireAuth,
+    requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN),
+    (req, res) => {
+      if (!planService) return res.status(503).json({ error: 'Plan service not available' });
+      res.json(planService.featureMatrix());
     }
   );
 

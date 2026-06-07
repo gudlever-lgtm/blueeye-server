@@ -184,6 +184,9 @@ function createLicenseManager({
       serverId: config.serverId,
       reason: state.lastError,
       withinGrace: withinGrace(),
+      // The license's own expiry (from the signed proof), distinct from the
+      // offline-grace window below. null = perpetual / no expiry in the proof.
+      validUntil: state.payload && state.payload.expiry ? state.payload.expiry : null,
       verifiedAt: state.verifiedAt ? new Date(state.verifiedAt).toISOString() : null,
       graceUntil: state.verifiedAt ? new Date(state.verifiedAt + graceMs).toISOString() : null,
       lastCheckAt: state.lastCheckAt ? new Date(state.lastCheckAt).toISOString() : null,

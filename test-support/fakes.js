@@ -257,7 +257,7 @@ function makeSystemInfo(overrides = {}) {
 
 // A fake license manager (defaults to a healthy, generous license).
 function makeLicenseManager(overrides = {}) {
-  const status = () => ({ status: 'valid', licensed: true, maxAgents: 1000, plan: overrides.plan || '', serverId: 'test-server' });
+  const status = () => ({ status: 'valid', licensed: true, maxAgents: 1000, plan: overrides.plan || '', validUntil: overrides.validUntil || null, serverId: 'test-server' });
   return {
     isLicensed: overrides.isLicensed || (() => true),
     getMaxAgents: overrides.getMaxAgents || (() => 1000),

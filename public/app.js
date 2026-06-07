@@ -434,6 +434,18 @@ const PAGE_INFO = {
       el('p', { class: 'muted' }, 'Data comes from the agent\'s traffic source: /proc/net/dev (host) or SNMP IF-MIB (device). Errors/discards/link status require an updated agent. An IDLE virtual interface never escalates an agent to CRITICAL — only a real link going down does. Interface state also feeds the health verdict on ', viewLink('fleet', 'Overview'), '.'),
     ],
   },
+  nics: {
+    hero: 'NIC driver & firmware inventory across the fleet — with automatic firmware-drift detection.',
+    title: 'NICs — firmware drift',
+    body: () => [
+      el('p', {}, 'Each Linux agent reports its physical network cards (driver, driver version, firmware version, bus) using ', el('code', {}, 'ethtool -i'), '. This page groups identical NIC models across all agents and highlights when units that should be identical are running ', el('strong', {}, 'different firmware'), ' — the classic “out of 50 access points, 3 are on an odd firmware and only those misbehave” situation.'),
+      el('h4', {}, 'Firmware drift'),
+      el('ul', {},
+        el('li', {}, el('strong', {}, 'Majority '), '— the firmware most units of a model run; treated as the baseline.'),
+        el('li', {}, el('strong', {}, 'Outlier '), '— any unit on a different firmware than the majority of the same model. Click a unit to open its agent page.')),
+      el('p', { class: 'muted' }, 'Models are keyed by driver + PCI/USB id, so a Wi-Fi card is never compared against an Ethernet NIC. Metadata only — driver/firmware strings and hardware ids, never MAC or payload. Needs an agent new enough to collect NIC info on a Linux host; older agents simply show nothing here. Per-agent details are also on the ', viewLink('agents', 'agent'), ' page.'),
+    ],
+  },
   probes: {
     hero: 'Active reachability from an agent: ping, TCP-connect, DNS and traceroute — with RTT, loss and path.',
     title: 'Probes',
@@ -3067,9 +3079,14 @@ views.agent = async () => {
     try { const d = await api(`/api/fleet/agent/${id}`); renderHealth(d.health, d.quality, d.throughput); } catch { /* keep last verdict */ }
   }
 
+  // ---- NIC firmware (driver/firmware inventory the agent reported) ----
+  const nics = agent.capabilities && Array.isArray(agent.capabilities.nic) ? agent.capabilities.nic : [];
+  const nicSummary = el('span', { class: 'muted' }, nics.length ? `· ${nics.length} interface(s)` : '· none reported');
+
   root.append(
     el('details', { class: 'sec', open: true }, el('summary', {}, 'Probes ', el('span', { class: 'muted' }, '· ping · TCP · DNS · traceroute')), probeForm, probeLatestHost, probeDetailHost),
     el('details', { class: 'sec', open: true }, el('summary', {}, 'Interfaces ', ifaceStatus), ifaceHost),
+    el('details', { class: 'sec' }, el('summary', {}, 'NIC firmware ', nicSummary), nicTable(nics)),
     el('details', { class: 'sec' }, el('summary', {}, 'Traffic ', el('span', { class: 'muted' }, '· recent bandwidth')), trafficHost));
 
   async function refreshAll() { await Promise.all([refreshHealth(), refreshProbes(), refreshIfaces(), refreshTraffic()]); }
@@ -3079,6 +3096,78 @@ views.agent = async () => {
     if (currentView !== 'agent') { stopAgent(); return; }
     if (!modalOpen()) refreshAll();
   }, 7000);
+  return root;
+};
+
+// Renders one agent's reported NIC inventory (capabilities.nic): per-interface
+// driver / driver version / firmware / bus. Used on the agent page.
+function nicTable(nics) {
+  if (!Array.isArray(nics) || !nics.length) return el('div', { class: 'empty' }, 'No NIC inventory reported yet (needs an agent that runs ethtool on Linux).');
+  const head = el('tr', {}, ...['Interface', 'Driver', 'Driver ver.', 'Firmware', 'Bus'].map((h) => el('th', {}, h)));
+  const rows = nics.map((n) => el('tr', {},
+    el('td', {}, esc(n.iface || '—')),
+    el('td', {}, esc(n.driver || '—')),
+    el('td', { class: 'muted' }, esc(n.driverVersion || '—')),
+    el('td', {}, esc(n.firmwareVersion || '—')),
+    el('td', { class: 'muted' }, esc(n.busInfo || n.pciId || '—'))));
+  return el('table', { class: 'iface-table' }, el('thead', {}, head), el('tbody', {}, ...rows));
+}
+
+// Fleet NIC inventory + firmware-drift detection. Groups identical NIC models
+// across all agents and surfaces firmware-version outliers — the "47 units on
+// firmware X, 3 on Y" case — so a Wi-Fi issue traced to a firmware mismatch is
+// obvious. Reads capabilities.nic; no probes, no new storage.
+views.nics = async () => {
+  const root = el('div', { class: 'nics-view' });
+  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'NICs'),
+    el('span', { class: 'muted' }, 'Driver & firmware inventory · firmware-drift detection')));
+
+  let inv;
+  try { inv = await api('/api/fleet/nics'); } catch (e) { root.append(el('div', { class: 'error' }, e.message)); return root; }
+
+  root.append(el('div', { class: 'nics-summary muted' },
+    `${inv.agents} agent(s) reporting NIC data · ${inv.totalNics} NIC(s) · `,
+    el('span', { class: inv.drift.length ? 'bad-text' : '' }, `${inv.drift.length} model(s) with firmware drift`)));
+
+  if (!inv.agents) {
+    root.append(el('div', { class: 'empty' },
+      'No NIC inventory yet. Agents collect driver/firmware via ', el('code', {}, 'ethtool -i'),
+      ' on Linux and report it with their capabilities — redeploy/upgrade agents to populate this.'));
+    return root;
+  }
+
+  // A chip per agent on a given firmware; click to open that agent.
+  const agentChips = (agents) => el('div', { class: 'nic-chips' }, ...agents.map((a) =>
+    el('button', { class: 'chip ghost small', title: a.location ? `${a.name} · ${a.location}` : a.name, onclick: () => openAgent(a.id) },
+      esc(a.name), a.iface ? el('span', { class: 'muted' }, ` (${esc(a.iface)})`) : null)));
+
+  // Firmware-drift section first — the actionable part.
+  if (inv.drift.length) {
+    const driftCard = el('div', { class: 'nic-card drift-card' }, el('h3', {}, '⚠ Firmware drift'));
+    for (const model of inv.drift) {
+      const block = el('div', { class: 'drift-model' },
+        el('div', { class: 'drift-head' }, el('strong', {}, esc(model.label)), el('span', { class: 'muted' }, ` · ${model.count} unit(s)`)));
+      for (const f of model.firmwares) {
+        block.append(el('div', { class: `fw-row${f.isOutlier ? ' fw-outlier' : ''}` },
+          el('span', { class: `badge ${f.isOutlier ? 'warn' : 'online'}` }, f.isOutlier ? 'outlier' : 'majority'),
+          el('span', { class: 'fw-ver' }, esc(f.firmwareVersion)),
+          el('span', { class: 'muted' }, ` — ${f.count} unit(s)`),
+          agentChips(f.agents)));
+      }
+      driftCard.append(block);
+    }
+    root.append(driftCard);
+  }
+
+  // Full inventory: every model and its firmware breakdown.
+  const invCard = el('div', { class: 'nic-card' }, el('h3', {}, 'All NIC models'));
+  for (const model of inv.drivers) {
+    const fwSummary = model.firmwares.map((f) => `${f.firmwareVersion} ×${f.count}`).join(' · ');
+    invCard.append(el('div', { class: 'nic-model-row' },
+      el('div', {}, el('strong', {}, esc(model.label)), model.hasDrift ? el('span', { class: 'badge warn', style: 'margin-left:.4rem' }, 'drift') : null),
+      el('div', { class: 'muted' }, `${model.count} unit(s) · ${esc(fwSummary)}`)));
+  }
+  root.append(invCard);
   return root;
 };
 

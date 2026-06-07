@@ -216,11 +216,36 @@ test('POST /agents/me/capabilities stores capabilities for the token agent', asy
   assert.deepEqual(stored.caps.sources, ['proc', 'snmp']);
 });
 
+test('POST /agents/me/capabilities normalises a NIC inventory and drops junk fields', async () => {
+  let stored;
+  const agentsRepo = makeAgentsRepo({
+    setCapabilities: async (id, caps) => { stored = caps; return { id, capabilities: caps }; },
+  });
+  const res = await request(makeApp({ agentsRepo, agentTokensRepo: agentToken() }))
+    .post('/agents/me/capabilities')
+    .set('Authorization', 'Bearer agent-tok')
+    .send({ capabilities: { sources: ['proc'], nic: [
+      { iface: 'wlan0', driver: 'iwlwifi', firmwareVersion: '83.A', secret: 'drop-me', port: 1234 },
+      'garbage',
+    ] } });
+  assert.equal(res.status, 200);
+  assert.equal(stored.nic.length, 1);
+  assert.deepEqual(stored.nic[0], { iface: 'wlan0', driver: 'iwlwifi', firmwareVersion: '83.A' });
+});
+
 test('POST /agents/me/capabilities rejects a bad shape (400)', async () => {
   const res = await request(makeApp({ agentTokensRepo: agentToken() }))
     .post('/agents/me/capabilities')
     .set('Authorization', 'Bearer agent-tok')
     .send({ capabilities: { sources: 'not-an-array' } });
+  assert.equal(res.status, 400);
+});
+
+test('POST /agents/me/capabilities rejects a non-array nic (400)', async () => {
+  const res = await request(makeApp({ agentTokensRepo: agentToken() }))
+    .post('/agents/me/capabilities')
+    .set('Authorization', 'Bearer agent-tok')
+    .send({ capabilities: { sources: ['proc'], nic: 'eth0' } });
   assert.equal(res.status, 400);
 });
 

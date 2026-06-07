@@ -1100,6 +1100,20 @@ async function showResults(a) {
       const t = latest.payload && latest.payload.traffic;
       body.push(el('p', { class: 'muted' }, `Latest: ${fmtDate(latest.created_at)} · ${results.length} measurements`));
 
+      // Flow sources (netflow/sflow) are push-based: a device must export to the
+      // agent's UDP collector. When nothing arrives every number is zero, which
+      // looks like broken data — call it out explicitly, with how to fix it.
+      if (t && (t.source === 'sflow' || t.source === 'netflow')) {
+        const received = t.source === 'sflow' ? (t.datagrams || 0) : (t.packets || 0);
+        const unit = t.source === 'sflow' ? 'datagrams' : 'packets';
+        const port = t.source === 'sflow' ? 6343 : 2055;
+        body.push(received === 0
+          ? el('div', { class: 'empty' },
+            `No ${t.source} ${unit} received — is a device exporting ${t.source} to this agent (UDP ${port})? `
+            + `To measure this host's own traffic instead, set the agent's source to "proc" via Edit.`)
+          : el('p', { class: 'muted' }, `${t.source}: ${received} ${unit} received · ${fmtBytes(t.totals ? t.totals.bytes : 0)} total.`));
+      }
+
       // Host performance (CPU/memory/load/uptime), when reported.
       const sys = latest.payload && latest.payload.system;
       if (sys) {

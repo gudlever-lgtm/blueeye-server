@@ -35,7 +35,7 @@ const paletteOf = (key) => themeMeta(key).palette;
 // The theme is applied instantly from a local cache (no flash on load), then
 // reconciled with the per-user value saved on the server (see loadProfile).
 function applyTheme(theme) {
-  const t = THEME_KEYS.includes(theme) ? theme : 'light';
+  const t = THEME_KEYS.includes(theme) ? theme : 'dark';
   document.documentElement.dataset.theme = t;
   const btn = document.querySelector('#theme');
   if (btn) {
@@ -45,7 +45,8 @@ function applyTheme(theme) {
   }
 }
 function cachedTheme() {
-  try { return localStorage.getItem(THEME_KEY) || 'light'; } catch { return 'light'; }
+  // Default to the dark enterprise palette; a user's saved/cached choice wins.
+  try { return localStorage.getItem(THEME_KEY) || 'dark'; } catch { return 'dark'; }
 }
 // Set once the user explicitly picks a theme (topbar toggle or Settings →
 // Appearance). It makes that choice win over loadProfile()'s one-time server
@@ -56,7 +57,7 @@ let themeUserChoice = false;
 // (so it follows them to any browser). Returns the save promise for callers that
 // want to surface success/failure; the local apply always happens immediately.
 function setTheme(theme, { persist = true } = {}) {
-  const t = THEME_KEYS.includes(theme) ? theme : 'light';
+  const t = THEME_KEYS.includes(theme) ? theme : 'dark';
   if (persist) themeUserChoice = true;
   applyTheme(t);
   try { localStorage.setItem(THEME_KEY, t); } catch { /* storage off */ }
@@ -2863,6 +2864,115 @@ function throughputText(t) {
   return el('span', { title: t.ts ? fmtDate(t.ts) : '' }, `↓${d} / ↑${u}`);
 }
 
+// ---- Overview NOC dashboard (KPI cards + live network path) ----------------
+// Both are derived from the same /api/fleet/health payload the Overview already
+// polls, so they refresh live with the table. KPI thresholds mirror the health
+// model documented in PAGE_INFO.fleet (loss ≥2/20 %, jitter ≥30/100 ms).
+function fleetKpis(data) {
+  const agents = (data && data.agents) || [];
+  const s = (data && data.summary) || {};
+  const vals = (pick) => agents
+    .map((a) => (a.health && a.health.metrics ? a.health.metrics[pick] : null))
+    .filter((v) => v != null && Number.isFinite(v));
+  const median = (arr) => {
+    if (!arr.length) return null;
+    const x = [...arr].sort((a, b) => a - b);
+    const m = x.length >> 1;
+    return x.length % 2 ? x[m] : Math.round((x[m - 1] + x[m]) / 2);
+  };
+  const loss = vals('lossPct');
+  const crit = (s.bad || 0) + (s.down || 0);
+  return {
+    latency: median(vals('rttMs')),
+    loss: loss.length ? Math.max(...loss) : null,
+    jitter: median(vals('jitterMs')),
+    online: agents.filter((a) => a.online).length,
+    total: agents.length,
+    paths: vals('targets').reduce((a, b) => a + b, 0),
+    crit,
+    warn: s.warn || 0,
+    alerts: crit + (s.warn || 0),
+  };
+}
+function kpiCard(label, value, sub, status) {
+  const vCls = status === 'warn' ? ' v-warn' : status === 'bad' ? ' v-bad' : status === 'ok' ? ' v-ok' : '';
+  return el('div', { class: `kpi st-${status}` },
+    el('div', { class: 'kpi-k' }, label),
+    el('div', { class: `kpi-v${vCls}` }, value),
+    el('div', { class: 'kpi-sub muted' }, sub));
+}
+// The conceptual path a branch/HQ user's traffic takes to a SaaS app, drawn as
+// an SVG: HQ → ISP → Cloud → SaaS, with a Branch feeding into the ISP uplink.
+// A hop is "degraded" (warning token) when the fleet's loss/jitter/health say
+// so; otherwise it stays on the primary/accent token.
+function networkPath(data, k) {
+  const s = (data && data.summary) || {};
+  const wanDegraded = (k.loss != null && k.loss >= 2) || (k.jitter != null && k.jitter >= 30) || k.crit > 0;
+  const branchDegraded = (s.down || 0) + (s.stale || 0) > 0;
+  const saasDegraded = k.crit > 0;
+  const ns = 'http://www.w3.org/2000/svg';
+  const mk = (tag, attrs = {}, ...kids) => {
+    const e = document.createElementNS(ns, tag);
+    for (const [a, v] of Object.entries(attrs)) if (v != null) e.setAttribute(a, v);
+    for (const kid of kids) if (kid != null) e.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
+    return e;
+  };
+  const NW = 120, NH = 58, top = 28, cy = top + NH / 2;
+  const X = { HQ: 20, ISP: 220, CL: 420, SA: 620 };
+  const node = (x, title, sub, edge) => mk('g', { class: `np-node${edge ? ' edge' : ''}` },
+    mk('rect', { x, y: top, width: NW, height: NH, rx: 10 }),
+    mk('circle', { cx: x + 16, cy: top + 18, r: 4, class: 'np-ico' }),
+    mk('text', { x: x + 30, y: top + 23, class: 'np-t' }, title),
+    mk('text', { x: x + 12, y: top + 42, class: 'np-s' }, sub));
+  const link = (x1, y1, x2, y2, degraded, label) => {
+    const g = mk('g', {},
+      mk('line', { x1, y1, x2, y2, class: `np-link${degraded ? ' degraded' : ''}`, 'stroke-linecap': 'round' }),
+      mk('line', { x1, y1, x2, y2, class: `np-flow${degraded ? ' degraded' : ''}`, 'stroke-linecap': 'round' }));
+    if (label) g.append(mk('text', { x: (x1 + x2) / 2, y: Math.min(y1, y2) - 7, 'text-anchor': 'middle', class: `np-lab${degraded ? ' degraded' : ''}` }, label));
+    return g;
+  };
+  const Bx = 320, By = 150, BNH = 50;
+  const svg = mk('svg', { viewBox: '0 0 820 214', role: 'img', 'aria-label': 'Network path from HQ and Branch through ISP and Cloud to SaaS' },
+    link(X.HQ + NW, cy, X.ISP, cy, false, k.loss != null ? `${k.loss}% loss` : null),
+    link(X.ISP + NW, cy, X.CL, cy, wanDegraded, k.latency != null ? `${k.latency} ms` : null),
+    link(X.CL + NW, cy, X.SA, cy, saasDegraded, null),
+    link(Bx + NW / 2, By, X.ISP + NW / 2, top + NH, branchDegraded, null),
+    node(X.HQ, 'HQ', 'Core network', true),
+    node(X.ISP, 'ISP', 'WAN uplink', false),
+    node(X.CL, 'Cloud', 'Egress / IXP', false),
+    node(X.SA, 'SaaS', 'Applications', false),
+    mk('g', { class: 'np-node edge' },
+      mk('rect', { x: Bx, y: By, width: NW, height: BNH, rx: 10 }),
+      mk('circle', { cx: Bx + 16, cy: By + 16, r: 4, class: 'np-ico' }),
+      mk('text', { x: Bx + 30, y: By + 21, class: 'np-t' }, 'Branch'),
+      mk('text', { x: Bx + 12, y: By + 38, class: 'np-s' }, 'Remote site')));
+  const degraded = wanDegraded || branchDegraded || saasDegraded;
+  return el('div', { class: 'netpath' },
+    el('div', { class: 'netpath-head' },
+      el('h3', {}, 'Network path'),
+      el('span', { class: degraded ? 'warn-text' : 'muted' }, degraded ? 'Degraded segment detected' : 'All segments nominal'),
+      el('div', { class: 'netpath-legend' },
+        el('span', { class: 'lg' }, el('span', { class: 'ln normal' }), 'Normal path'),
+        el('span', { class: 'lg' }, el('span', { class: 'ln degraded' }), 'Degraded segment'))),
+    svg);
+}
+function nocDashboard(data) {
+  const k = fleetKpis(data);
+  const lossStatus = k.loss == null ? 'accent' : k.loss >= 20 ? 'bad' : k.loss >= 2 ? 'warn' : 'ok';
+  const jitStatus = k.jitter == null ? 'accent' : k.jitter >= 100 ? 'bad' : k.jitter >= 30 ? 'warn' : 'ok';
+  const agStatus = k.total && k.online === 0 ? 'bad' : k.online < k.total ? 'warn' : 'ok';
+  const alStatus = k.crit ? 'bad' : k.alerts ? 'warn' : 'ok';
+  return el('div', { class: 'noc' },
+    el('div', { class: 'noc-kpis' },
+      kpiCard('Latency', k.latency == null ? '–' : `${k.latency} ms`, 'median RTT', 'accent'),
+      kpiCard('Packet loss', k.loss == null ? '–' : `${k.loss}%`, 'worst agent', lossStatus),
+      kpiCard('Jitter', k.jitter == null ? '–' : `${k.jitter} ms`, 'median', jitStatus),
+      kpiCard('Active agents', `${k.online}`, `of ${k.total} total`, agStatus),
+      kpiCard('Test paths', `${k.paths}`, 'monitored targets', 'accent'),
+      kpiCard('Alerts', `${k.alerts}`, k.crit ? `${k.crit} critical` : (k.warn ? `${k.warn} warning` : 'all clear'), alStatus)),
+    networkPath(data, k));
+}
+
 // The landing view: all agents with a probe-derived health verdict, worst-first.
 // Click a row to pivot into that agent's combined detail page.
 views.fleet = async () => {
@@ -2870,9 +2980,10 @@ views.fleet = async () => {
   root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Overview'),
     el('span', { class: 'muted' }, 'All agents · health from reachability · loss · latency · jitter')));
   const bannerHost = el('div', {});
+  const nocHost = el('div', {});
   const summaryHost = el('div', { class: 'fleet-summary' });
   const tableHost = el('div', {});
-  root.append(bannerHost, summaryHost, tableHost);
+  root.append(bannerHost, nocHost, summaryHost, tableHost);
 
   // Maintenance banner (viewer-readable) — shown while a window is active now.
   api('/api/settings/maintenance').then((m) => {
@@ -2955,6 +3066,7 @@ views.fleet = async () => {
     let data;
     try { data = await api('/api/fleet/health'); } catch (e) { tableHost.replaceChildren(el('div', { class: 'error' }, e.message)); return; }
     lastData = data;
+    nocHost.replaceChildren(nocDashboard(data));
     renderSummary(data.summary);
     renderTable(data.agents);
   }
@@ -5303,8 +5415,18 @@ $('#login-form').addEventListener('submit', async (e) => {
 $('#logout').addEventListener('click', () => { setAutoRefresh(false); stopOverview(); stopFleet(); stopAgent(); stopProbes(); stopIfaces(); stopMap(); stopGeo(); $('#autorefresh').checked = false; logout(); });
 $('#refresh').addEventListener('click', () => render());
 $('#autorefresh').addEventListener('change', (e) => setAutoRefresh(e.target.checked));
+function closeNav() { $('#app').classList.remove('nav-open'); }
 for (const b of document.querySelectorAll('.tabs button')) {
-  b.addEventListener('click', () => { closeDrawer(); currentView = b.dataset.view; render(); });
+  b.addEventListener('click', () => { closeDrawer(); closeNav(); currentView = b.dataset.view; render(); });
+}
+// Off-canvas sidebar (mobile/tablet): the ☰ button opens it; tapping the dimmed
+// backdrop or anything outside the sidebar closes it again.
+{
+  const navToggle = $('#nav-toggle');
+  if (navToggle) navToggle.addEventListener('click', (e) => { e.stopPropagation(); $('#app').classList.toggle('nav-open'); });
+  $('#app').addEventListener('click', (e) => {
+    if ($('#app').classList.contains('nav-open') && !e.target.closest('.sidebar') && !e.target.closest('#nav-toggle')) closeNav();
+  });
 }
 {
   const sq = $('#search-q');

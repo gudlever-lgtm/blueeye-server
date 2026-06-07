@@ -39,6 +39,28 @@ test('GET /enroll/config prefers a configured public URL + fingerprint', async (
   assert.equal(res.body.certFingerprint, 'AB:CD');
 });
 
+// ---- GET /enroll/agent-release-key -----------------------------------------
+test('GET /enroll/agent-release-key serves the PEM when configured (200)', async () => {
+  const pem = '-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA\n-----END PUBLIC KEY-----';
+  const res = await request(makeApp({ releasePublicKey: pem })).get('/enroll/agent-release-key');
+  assert.equal(res.status, 200);
+  assert.match(res.headers['content-type'], /text\/plain/);
+  assert.match(res.text, /BEGIN PUBLIC KEY/);
+});
+
+test('GET /enroll/agent-release-key 404s when no release key is configured', async () => {
+  const res = await request(makeApp()).get('/enroll/agent-release-key');
+  assert.equal(res.status, 404);
+  assert.match(res.headers['content-type'], /text\/plain/);
+});
+
+test('GET /enroll/config includes the release public key when configured', async () => {
+  const pem = '-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA\n-----END PUBLIC KEY-----';
+  const res = await request(makeApp({ releasePublicKey: pem })).get('/enroll/config');
+  assert.equal(res.status, 200);
+  assert.match(res.body.releasePublicKey, /BEGIN PUBLIC KEY/);
+});
+
 // ---- GET /enroll/agent/:platform -------------------------------------------
 test('GET /enroll/agent/:platform serves the binary with a SHA-256 header (200)', async () => {
   const { store, sha, bytes } = realStore();

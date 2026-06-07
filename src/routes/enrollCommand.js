@@ -29,7 +29,7 @@ function isExpired(row) {
 //   - codeId given  -> reuse that (active) code.
 //   - codeId absent -> mint a new code via the existing code flow (bulk-capable
 //     via maxUses + ttlMinutes).
-function createEnrollCommandRouter({ enrollmentCodesRepo, artifactStore, sourceStore, enrollConfig = {} }) {
+function createEnrollCommandRouter({ enrollmentCodesRepo, artifactStore, sourceStore, enrollConfig = {}, releaseKeyService = null }) {
   const router = express.Router();
   const certFingerprint = enrollConfig.certFingerprint || '';
 
@@ -38,6 +38,16 @@ function createEnrollCommandRouter({ enrollmentCodesRepo, artifactStore, sourceS
     requireAuth,
     requireRole(ROLES.OPERATOR, ROLES.ADMIN),
     asyncHandler(async (req, res) => {
+      // Gate: a new agent can't be onboarded until the agent signing key exists — it
+      // is the trust anchor for secure agent management (signed self-updates). The
+      // admin generates it under Settings → Agent signing key first.
+      if (releaseKeyService && !releaseKeyService.isConfigured()) {
+        return res.status(409).json({
+          error: 'No agent signing key is set. Generate it under Settings → Agent signing key before adding agents.',
+          code: 'NO_RELEASE_KEY',
+        });
+      }
+
       // Platform: validate the slug; fall back to a published one (or the
       // conventional default) so the UI always has something to show.
       let platform = req.query.platform ? String(req.query.platform) : '';

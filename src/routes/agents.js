@@ -120,7 +120,10 @@ function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentComma
       if (!releaseStore || typeof releaseStore.add !== 'function') {
         return res.status(503).json({ error: 'Release store not available' });
       }
-      if (!releasePublicKey) {
+      // releasePublicKey may be a live resolver (managed key, changeable at runtime)
+      // or a plain string (tests / env key).
+      const releaseKey = (typeof releasePublicKey === 'function' ? releasePublicKey() : releasePublicKey) || '';
+      if (!releaseKey) {
         return res.status(503).json({ error: 'Agent release public key not configured' });
       }
       const tarball = Buffer.isBuffer(req.body) ? req.body : null;
@@ -143,7 +146,7 @@ function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentComma
       }
       // 1) Authenticity: Ed25519 signature over the canonical manifest (reuses the
       //    exact license-proof verifier — a different, release-only public key).
-      if (!verifyProof(manifest, signature, releasePublicKey)) {
+      if (!verifyProof(manifest, signature, releaseKey)) {
         return res.status(422).json({ error: 'Release signature did not verify' });
       }
       // 2) Integrity: the uploaded bytes must match the sha256 the signed manifest binds.

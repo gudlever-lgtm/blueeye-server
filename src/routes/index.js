@@ -28,6 +28,7 @@ const { createInterfacesRouter } = require('./interfaces');
 const { createFleetRouter } = require('./fleet');
 const { createSearchRouter } = require('./search');
 const { createEnrollRouter } = require('./enroll');
+const { publishSignedReleaseFromSource } = require('../enroll/publishSignedRelease');
 const { createEnrollCommandRouter } = require('./enrollCommand');
 const { createTestPackagesRouter } = require('./testPackages');
 const { createSpeedtestRouter, createSpeedtestReadRouter } = require('./speedtest');
@@ -75,6 +76,7 @@ function createApiRouter({
   agentSourceStore,
   releaseStore,
   releasePublicKey,
+  releaseKeyService,
   testPackagesRepo,
   testPackageRunner,
   speedtestResultsRepo,
@@ -128,7 +130,7 @@ function createApiRouter({
   if (thresholdsRepo) router.use('/api/thresholds', createThresholdsRouter({ thresholdsRepo, locationsRepo }));
   router.use('/api/interfaces', createInterfacesRouter({ resultsRepo, agentsRepo }));
   router.use('/api/search', createSearchRouter({ agentsRepo, locationsRepo, flowsRepo }));
-  if (settingsService) router.use('/api/settings', createSettingsRouter({ settingsService, featureGate, dispatcher, analysisConfig, retentionConfig }));
+  if (settingsService) router.use('/api/settings', createSettingsRouter({ settingsService, featureGate, dispatcher, analysisConfig, retentionConfig, releaseKeyService, publishRelease: () => publishSignedReleaseFromSource({ sourceStore: agentSourceStore, releaseStore, releaseKeyService }) }));
   // Outbound API integrations (ITSM/IPAM connectors) — admin CRUD + test-fire.
   if (integrationsRepo && connectorRegistry && secretBox) {
     router.use('/api/integrations', createIntegrationsRouter({
@@ -152,8 +154,8 @@ function createApiRouter({
   // Frictionless enrollment. Public (unauthenticated) source + install-script
   // endpoints under /enroll; the authenticated command generator under /api.
   if (artifactStore || agentSourceStore || releaseStore) {
-    router.use('/enroll', createEnrollRouter({ artifactStore, sourceStore: agentSourceStore, releaseStore, enrollmentCodesRepo, enrollConfig }));
-    router.use('/api/enroll', createEnrollCommandRouter({ enrollmentCodesRepo, artifactStore, sourceStore: agentSourceStore, enrollConfig }));
+    router.use('/enroll', createEnrollRouter({ artifactStore, sourceStore: agentSourceStore, releaseStore, releasePublicKey, enrollmentCodesRepo, enrollConfig }));
+    router.use('/api/enroll', createEnrollCommandRouter({ enrollmentCodesRepo, artifactStore, sourceStore: agentSourceStore, enrollConfig, releaseKeyService }));
   }
 
   // Three routers share the /agents prefix, each with its own auth model:

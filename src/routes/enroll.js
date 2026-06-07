@@ -23,13 +23,17 @@ function resolveServerUrl(req, enrollConfig) {
 
 // PUBLIC (unauthenticated) enrollment helpers, mounted at /enroll. A new agent
 // has no token yet, so these must be reachable without auth:
-//   GET /enroll/config              -> { serverUrl, certFingerprint }
+//   GET /enroll/config              -> { serverUrl, certFingerprint, releasePublicKey }
 //   GET /enroll/agent-source.tgz    -> the agent source bundle (built + run on the target)
+//   GET /enroll/agent-release-key   -> the release trust anchor (PEM) the agent pins
 //   GET /enroll/agent/:platform     -> a pre-built agent binary (legacy; only if published)
 //   GET /enroll/:code/install.sh    -> the one-line installer for that code
-function createEnrollRouter({ artifactStore, sourceStore, releaseStore, enrollmentCodesRepo, enrollConfig = {} }) {
+function createEnrollRouter({ artifactStore, sourceStore, releaseStore, enrollmentCodesRepo, enrollConfig = {}, releasePublicKey = '' }) {
   const router = express.Router();
   const certFingerprint = enrollConfig.certFingerprint || '';
+  // releasePublicKey may be a live resolver (it can change at runtime when an admin
+  // generates/deletes the key) or a plain string (tests). Resolve per request.
+  const pubKey = () => (typeof releasePublicKey === 'function' ? releasePublicKey() : releasePublicKey) || '';
 
   // Companion config so the binary can learn the server URL + fingerprint to pin
   // when they weren't embedded at install time.
@@ -37,7 +41,22 @@ function createEnrollRouter({ artifactStore, sourceStore, releaseStore, enrollme
     res.json({
       serverUrl: resolveServerUrl(req, enrollConfig),
       certFingerprint: certFingerprint || null,
+      releasePublicKey: pubKey() || null,
     });
+  });
+
+  // The release trust anchor (Ed25519 PUBLIC key) the agent pins to verify SIGNED
+  // self-updates. Public, not secret — served unauthenticated as raw PEM so the
+  // installer can fetch + bake it in with no key handling. 404 when unconfigured
+  // (in which case the server publishes no signed releases either).
+  router.get('/agent-release-key', (req, res) => {
+    const key = pubKey();
+    if (!key) {
+      res.status(404).type('text/plain; charset=utf-8');
+      return res.send('# No agent release public key configured on this server.\n');
+    }
+    const pem = key.endsWith('\n') ? key : `${key}\n`;
+    res.status(200).type('text/plain; charset=utf-8').send(pem);
   });
 
   // Serve the agent SOURCE bundle (a gzipped tarball), packaged + checksummed at

@@ -18,7 +18,9 @@ const { createIncidentService } = require('./incidents/incidentService');
 const { createArtifactStore } = require('./enroll/artifactStore');
 const { createAgentSourceStore } = require('./enroll/agentSourceStore');
 const { createAgentReleaseStore } = require('./enroll/agentReleaseStore');
-const { resolveReleasePublicKey } = require('./license/releaseKey');
+const { createAgentReleaseKeyRepository } = require('./repositories/agentReleaseKeyRepository');
+const { createReleaseKeyService } = require('./enroll/releaseKeyService');
+const { publishSignedReleaseFromSource } = require('./enroll/publishSignedRelease');
 const { attachAgentWebSocket } = require('./ws/agentSocket');
 const { attachDashboardWebSocket } = require('./ws/dashboardSocket');
 const { verifyToken } = require('./auth/jwt');
@@ -114,7 +116,6 @@ function start() {
   // pushed to agents. The release public key is a SEPARATE trust anchor from the
   // license key (see src/license/releaseKey.js).
   const agentReleaseStore = createAgentReleaseStore({ dir: process.env.AGENT_RELEASE_DIR || '', logger: console });
-  const releasePublicKey = resolveReleasePublicKey(process.env);
 
   // License validation. Two interchangeable backends with the SAME surface:
   //   - ONLINE  (default): validates a signed proof against blueeye-licens.
@@ -180,6 +181,14 @@ function start() {
   // Secret box: AES-256-GCM encryption for secrets stored at rest (integration
   // credentials, the LDAP bind password). See src/lib/secretBox.js.
   const secretBox = createSecretBox({ key: config.security.secretKey });
+
+  // Agent-release signing key — generated + managed from Settings (write-once; the
+  // private key is encrypted at rest via secretBox). It is the trust anchor for
+  // secure agent management: the server signs agent releases with it and agents
+  // verify those signatures. When no managed key is stored it falls back to the
+  // env/embedded key, so deployments that set AGENT_RELEASE_PUBLIC_KEY keep working.
+  const agentReleaseKeyRepo = createAgentReleaseKeyRepository(db);
+  const releaseKeyService = createReleaseKeyService({ repo: agentReleaseKeyRepo, secretBox, logger: console });
 
   // Outbound API integrations (ITSM/IPAM connectors). The dispatcher fans domain
   // events (incidents/anomalies, agent enroll/delete) out to enabled targets with
@@ -357,7 +366,10 @@ function start() {
     artifactStore,
     agentSourceStore,
     releaseStore: agentReleaseStore,
-    releasePublicKey,
+    // A live resolver (not a static value): generating/deleting the key in Settings
+    // takes effect without a restart.
+    releasePublicKey: () => releaseKeyService.getPublicKey(),
+    releaseKeyService,
     testPackagesRepo,
     testPackageRunner,
     speedtestResultsRepo,
@@ -381,6 +393,13 @@ function start() {
       `blueeye-server listening on port ${config.port} (env: ${config.env})`
     );
   });
+
+  // Load the managed signing key into memory, then publish a signed release from the
+  // current agent source so upgrades are ready with no extra steps. Best-effort — a
+  // missing key just means unsigned source installs until one is generated.
+  releaseKeyService.load()
+    .then(() => publishSignedReleaseFromSource({ sourceStore: agentSourceStore, releaseStore: agentReleaseStore, releaseKeyService, logger: console }))
+    .catch((err) => console.warn(`agent release key: startup load/publish failed: ${err.message}`));
 
   // Live agent channel (WebSocket). New connections are gated by the license
   // (capacity + validity) — this is separate from agent-token authentication.

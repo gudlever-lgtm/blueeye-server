@@ -540,6 +540,7 @@ const PAGE_INFO = {
     title: 'Enrollment',
     body: () => [
       el('p', {}, '”Add agent” generates a code and a ready-to-run install command. Run the one-liner on the machine — it downloads the agent binary from this server, verifies the SHA-256, exchanges the code for a permanent token and starts a service. You never need to enter the server address yourself.'),
+      el('p', {}, 'Prerequisite: an ', settingsLink('agentkey', 'agent signing key'), ' must be set (Settings → Agent key) — it is the trust anchor for secure agent management, so without it you cannot add agents.'),
       el('h4', {}, 'Three variants'),
       el('ul', {},
         el('li', {}, 'One-liner: curl … | sh — fastest.'),
@@ -550,7 +551,7 @@ const PAGE_INFO = {
         el('li', {}, 'Codes are short-lived (default 1 hour) and can be bulk (N machines).'),
         el('li', {}, 'The source bundle is always verified against the checksum before building or running.'),
         el('li', {}, 'The cert fingerprint is pinned on the agent (when the server runs behind TLS).')),
-      el('p', { class: 'muted' }, 'The agent is built + run on the target (Docker or Node) — no pre-built binaries. Also works on air-gapped networks: the source is served from the BlueEye server itself.'),
+      el('p', { class: 'muted' }, 'The agent runs natively on the target (Node + systemd by default; Docker optional) — no pre-built binaries. Also works on air-gapped networks: the source is served from the BlueEye server itself.'),
       el('h4', {}, 'Code status vs. the agent'),
       el('ul', {},
         el('li', {}, el('strong', {}, 'active: '), 'still usable — has uses left and has not expired.'),
@@ -4364,7 +4365,20 @@ views.enrollment = async () => {
   const root = el('div');
   root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Enrollment')));
 
-  if (canWrite()) root.append(enrollWizard(cfg));
+  // Adding agents requires the agent signing key (the trust anchor for secure agent
+  // management). Without it the server refuses to mint codes, so guide the user to
+  // set it first instead of showing a wizard that would only error.
+  if (canWrite()) {
+    if (cfg.releasePublicKey) {
+      root.append(enrollWizard(cfg));
+    } else {
+      const where = role === 'admin' ? settingsLink('agentkey', 'Settings → Agent key') : el('strong', {}, 'Settings → Agent key');
+      root.append(el('div', { class: 'empty error' },
+        'No agent signing key is set — you cannot add agents yet. ',
+        role === 'admin' ? 'Generate it in ' : 'An administrator must generate it in ',
+        where, ' first.'));
+    }
+  }
 
   root.append(el('div', { class: 'section-head' }, el('h3', {}, 'Active codes'),
     canWrite() ? el('button', { class: 'small ghost', onclick: () => createCode() }, '+ New code (advanced)') : null));
@@ -4534,7 +4548,7 @@ views.settings = async () => {
   const root = el('div');
   const isAdmin = role === 'admin';
   const subtabs = [];
-  if (isAdmin) subtabs.push(['analyse', 'Analysis'], ['alerting', 'Alerting'], ['maintenance', 'Maintenance'], ['updates', 'Updates'], ['retention', 'Retention'], ['types', 'Traffic types'], ['map', 'Map'], ['users', 'Users']);
+  if (isAdmin) subtabs.push(['analyse', 'Analysis'], ['alerting', 'Alerting'], ['maintenance', 'Maintenance'], ['updates', 'Updates'], ['agentkey', 'Agent key'], ['retention', 'Retention'], ['types', 'Traffic types'], ['map', 'Map'], ['users', 'Users']);
   // Appearance + License are personal/read-only — available to every role.
   subtabs.push(['appearance', 'Appearance'], ['license', 'License']);
   if (!settingsTab || !subtabs.some(([k]) => k === settingsTab)) settingsTab = subtabs[0][0];
@@ -4553,6 +4567,7 @@ views.settings = async () => {
     alerting: settingsAlertingView,
     maintenance: settingsMaintenanceView,
     updates: settingsUpdatesView,
+    agentkey: settingsAgentKeyView,
     retention: settingsRetentionView,
   };
   let content;
@@ -4570,6 +4585,65 @@ views.settings = async () => {
 function licenseBadge(license, feature) {
   const ok = license && license[feature] === true;
   return el('span', { class: `badge ${ok ? 'active' : 'offline'}` }, `Licence: ${feature} ${ok ? 'yes' : 'no'}`);
+}
+
+// Settings → Agent key: generate / show / delete the agent-release SIGNING key.
+// Generated on the server; the private key is never shown or downloadable — the page
+// only reports that a key exists (+ a non-secret fingerprint). It's the trust anchor
+// for secure agent management: without it no agents can be added and none can be
+// upgraded from the server. Admin-only.
+async function settingsAgentKeyView() {
+  const root = el('div');
+  root.append(el('p', { class: 'muted settings-intro' },
+    'The agent signing key is generated here, on the server, and underlies secure agent communication. '
+    + 'For security it is created once and never shown again — only whether it exists. You can delete it, but then no new agents can be added and existing agents can no longer be upgraded from the server until a new key is generated.'));
+
+  let status;
+  try {
+    status = await api('/api/settings/agent-release-key');
+  } catch (err) {
+    root.append(el('div', { class: 'empty error' }, errText(err)));
+    return root;
+  }
+
+  if (status.configured) {
+    root.append(el('div', { class: 'section-head' }, el('h3', {}, 'Agent signing key'), el('span', { class: 'badge active' }, 'Created ✓')));
+    root.append(el('p', {}, 'A signing key is set and underlies secure agent management.'));
+    const bits = [el('li', {}, el('strong', {}, 'Source: '), status.source === 'managed' ? 'generated on this server' : 'server environment')];
+    if (status.createdAt) bits.push(el('li', {}, el('strong', {}, 'Created: '), fmtDate(status.createdAt)));
+    if (status.fingerprint) bits.push(el('li', {}, el('strong', {}, 'Fingerprint: '), el('code', {}, `${String(status.fingerprint).slice(0, 32)}…`)));
+    bits.push(el('li', {}, el('strong', {}, 'Can sign releases: '), status.canSign ? 'yes' : 'no (verify-only)'));
+    root.append(el('ul', {}, ...bits));
+    if (status.source === 'managed') {
+      root.append(el('div', { class: 'form-actions' }, el('button', { class: 'danger', onclick: () => removeKey() }, 'Delete signing key')));
+    } else {
+      root.append(el('p', { class: 'muted' }, 'This key comes from the server environment — manage it there.'));
+    }
+  } else {
+    root.append(el('div', { class: 'section-head' }, el('h3', {}, 'Agent signing key'), el('span', { class: 'badge offline' }, 'Not set')));
+    root.append(el('div', { class: 'empty error' }, 'No signing key is set — you cannot add agents until you generate it.'));
+    root.append(el('p', { class: 'muted' }, 'Generating creates the key on the server. It cannot be viewed or changed afterwards — only deleted.'));
+    root.append(el('div', { class: 'form-actions' }, el('button', { onclick: () => genKey() }, 'Generate signing key')));
+  }
+
+  async function genKey() {
+    try {
+      await api('/api/settings/agent-release-key', { method: 'POST' });
+      toast('Signing key generated — you can now add agents.');
+      render();
+    } catch (err) { toast(errText(err), true); }
+  }
+
+  async function removeKey() {
+    if (!confirm('Delete the agent signing key?\n\nThis CANNOT be undone. Afterwards you will NOT be able to add new agents, and existing agents can no longer be upgraded from the server, until you generate a new key. (Agents already enrolled keep running.)')) return;
+    try {
+      await api('/api/settings/agent-release-key', { method: 'DELETE' });
+      toast('Signing key deleted — agent management is disabled until a new key is generated.');
+      render();
+    } catch (err) { toast(errText(err), true); }
+  }
+
+  return root;
 }
 
 // Settings → Appearance: pick a dashboard colour theme. The choice is saved to

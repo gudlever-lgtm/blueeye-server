@@ -29,23 +29,34 @@ test('renderInstallScript embeds server URL, code, fingerprint and the source ch
   assert.match(script, /checksum mismatch/);
 });
 
-test('renderInstallScript wires both runtimes: Docker (preferred) and Node', () => {
+test('renderInstallScript wires both runtimes: Node (default) and Docker (opt-in)', () => {
   const script = renderInstallScript({ serverUrl: 'http://x', code: 'C', sourceSha: SHA });
-  // Docker branch
+  // Native Node + systemd is the DEFAULT; Docker is opt-in (BLUEEYE_RUNTIME=docker),
+  // so a host that merely has Docker installed isn't silently containerised.
+  assert.match(script, /if command -v node >\/dev\/null 2>&1; then RUNTIME=node; else RUNTIME=none; fi/);
+  // Docker branch (opt-in)
   assert.match(script, /docker build -t "\$IMAGE"/);
   assert.match(script, /docker run -d --name "\$CONTAINER" --restart unless-stopped --network host/);
   assert.match(script, /BLUEEYE_ENROLLMENT_CODE=\$ENROLL_CODE/);
-  // Node branch + systemd service
-  assert.match(script, /node "\$INSTALL_DIR\/src\/index\.js" enroll --code "\$ENROLL_CODE"/);
+  // Node branch: versioned releases/<v> + `current` symlink, a systemd service
+  // running from `current` so signed updates can swap releases atomically.
+  assert.match(script, /RELEASES="\$INSTALL_DIR\/releases"/);
+  assert.match(script, /mv -T "\$CURRENT\.next" "\$CURRENT"/);
+  assert.match(script, /node "\$CURRENT\/src\/index\.js" enroll --code "\$ENROLL_CODE"/);
   assert.match(script, /systemctl/);
-  // Token path is pinned the same way for enroll and the service, so the service
-  // finds the token the enroll step wrote (the agent default is cwd-relative).
-  assert.match(script, /BLUEEYE_TOKEN_PATH="\$INSTALL_DIR\/token"/);
-  assert.match(script, /Environment=BLUEEYE_TOKEN_PATH=\$INSTALL_DIR\/token/);
+  assert.match(script, /Environment=BLUEEYE_RELEASES_DIR=\$RELEASES/);
+  assert.match(script, /Environment=BLUEEYE_CURRENT_LINK=\$CURRENT/);
+  // Token lives in the shared state dir (survives release swaps), pinned for both
+  // the enroll step and the service.
+  assert.match(script, /TOKEN_PATH="\$STATE_DIR\/token"/);
+  assert.match(script, /Environment=BLUEEYE_TOKEN_PATH=\$TOKEN_PATH/);
+  // Signed self-updates: fetch + pin the release public key from the server.
+  assert.match(script, /enroll\/agent-release-key/);
+  assert.match(script, /BLUEEYE_RELEASE_PUBLIC_KEY=/);
   // Points the operator at the shipped uninstaller.
   assert.match(script, /uninstall\.sh/);
-  // Graceful "ask" when neither runtime is present.
-  assert.match(script, /neither Docker nor Node/);
+  // Graceful "ask" when no runtime is available.
+  assert.match(script, /Node\.js was not found/);
 });
 
 // Build a fake `curl` that writes fixed bytes to the -o target, so the script's
@@ -134,6 +145,6 @@ test('install script asks the user to install a runtime when neither is present'
     stderr = String(err.stderr || '');
   }
   assert.equal(threw, true);
-  assert.match(stderr, /neither Docker nor Node/);
+  assert.match(stderr, /Node\.js was not found/);
   assert.match(stderr, /docker\.com|nodejs\.org/);
 });

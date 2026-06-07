@@ -17,25 +17,35 @@ replace it):
    The UI calls `GET /api/enroll/command`.
 2. The operator copies the one-liner and runs it on the target machine.
 3. The script downloads the agent **source bundle from this server**, verifies its
-   SHA-256, then **auto-detects a runtime**:
-   - **Docker** (preferred): `docker build` + `docker run` (host networking); the
-     container enrolls itself from the embedded code and persists its token on a
-     named volume.
-   - else **Node ≥18**: installs deps, runs `blueeye-agent enroll --code …`, and
-     installs a systemd service.
-   - else it prints how to install Docker or Node and stops — it never dead-ends.
+   SHA-256, then installs it — **native Node + systemd by default**, Docker opt-in:
+   - **Node ≥18** (default): lays the agent out under `/opt/blueeye-agent/releases/<v>`
+     with a `current` symlink (state in `/var/lib/blueeye-agent`, logs in
+     `/var/log/blueeye-agent`), fetches + pins the release public key, runs
+     `blueeye-agent enroll --code …`, and installs a systemd service running from
+     `current`. Enrollment runs *before* the service starts, so a bad/expired code
+     fails the install cleanly instead of leaving a crash-looping service.
+   - **Docker** (opt-in, `BLUEEYE_RUNTIME=docker`): `docker build` + `docker run`
+     (host networking); the container enrolls itself from the embedded code and
+     persists its token on a named volume. (Docker agents don't self-update — the
+     host rebuilds them.)
+   - else (no Node, and Docker not requested) it prints how to install a runtime
+     and stops — it never dead-ends.
 4. The agent connects; the enrollment screen flips **”Waiting for agent…” →
    “Connected ✓”** live (over the dashboard WebSocket).
 
 **No pre-built binaries are published or required.** The agent is plain Node, so
-the installer ships its *source* and builds/runs it on the target.
+the installer ships its *source* and runs it on the target. The Node path produces
+the **same versioned `releases/<v>` + `current` layout** as
+`scripts/install-systemd.sh`, so install / upgrade / uninstall behave identically
+however the agent was installed.
 
 ## Endpoints
 
 | Method & path | Auth | Purpose |
 | --- | --- | --- |
-| `GET /enroll/config` | none | `{ serverUrl, certFingerprint }` for the agent to self-configure |
+| `GET /enroll/config` | none | `{ serverUrl, certFingerprint, releasePublicKey }` for the agent to self-configure |
 | `GET /enroll/agent-source.tgz` | none | the agent **source bundle** (+ `X-Content-SHA256`); 404 if `AGENT_SOURCE_DIR` is unset/empty |
+| `GET /enroll/agent-release-key` | none | the release trust anchor (PEM) the agent pins to verify **signed self-updates**; 404 if no key is configured |
 | `GET /enroll/agent/:platform` | none | *legacy/optional* pre-built binary, only if one was dropped in the artifacts dir; 404 otherwise |
 | `GET /enroll/:code/install.sh` | none | the self-contained installer for that code; 404 if unknown/expired/exhausted |
 | `GET /enroll/uninstall.sh` | none | the agent uninstaller — `curl … \| sudo sh` removes the agent from a host (warns + confirms first); 404 if no agent source is configured |
@@ -101,7 +111,7 @@ code, e.g. with Ansible:
     - name: Install BlueEye agent
       ansible.builtin.shell: "curl -sSL https://blueeye.example.dk/enroll/<CODE>/install.sh | sh"
       args:
-        creates: /opt/blueeye-agent/src/index.js   # idempotent
+        creates: /opt/blueeye-agent/current/src/index.js   # idempotent
 ```
 
 ## Security

@@ -550,7 +550,7 @@ const PAGE_INFO = {
         el('li', {}, 'Codes are short-lived (default 1 hour) and can be bulk (N machines).'),
         el('li', {}, 'The source bundle is always verified against the checksum before building or running.'),
         el('li', {}, 'The cert fingerprint is pinned on the agent (when the server runs behind TLS).')),
-      el('p', { class: 'muted' }, 'The agent is built + run on the target (Docker or Node) — no pre-built binaries. Also works on air-gapped networks: the source is served from the BlueEye server itself.'),
+      el('p', { class: 'muted' }, 'The agent runs natively on the target (Node + systemd by default; Docker optional) — no pre-built binaries. Also works on air-gapped networks: the source is served from the BlueEye server itself.'),
       el('h4', {}, 'Code status vs. the agent'),
       el('ul', {},
         el('li', {}, el('strong', {}, 'active: '), 'still usable — has uses left and has not expired.'),

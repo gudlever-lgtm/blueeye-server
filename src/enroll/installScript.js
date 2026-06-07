@@ -7,10 +7,15 @@
 // bundle are baked in). It:
 //   1. downloads the agent source from the BlueEye server itself,
 //   2. verifies SHA-256 against the embedded checksum (ABORTS on mismatch),
-//   3. auto-detects a runtime: Docker (build + run a container) is preferred,
-//      else Node (npm install + a systemd service); if neither is present it
-//      prints clear instructions and stops — it never dead-ends,
-//   4. enrolls with the embedded one-time code (pinning the cert fingerprint).
+//   3. picks a runtime — native Node + systemd by DEFAULT, or Docker when asked
+//      for via BLUEEYE_RUNTIME=docker; if no runtime is available it prints clear
+//      instructions and stops — it never dead-ends,
+//   4. lays the agent out in the versioned releases/<v> + `current` symlink layout
+//      (state in /var/lib, logs in /var/log) so signed self-updates can swap
+//      releases atomically with rollback,
+//   5. fetches the release public key from the server and pins it, so SIGNED
+//      self-updates verify with no manual key provisioning,
+//   6. enrolls with the embedded one-time code (pinning the cert fingerprint).
 // It is idempotent (re-running reuses the stored token) and exposes a few env
 // hooks (BLUEEYE_CURL, BLUEEYE_SHA256, BLUEEYE_RUNTIME, BLUEEYE_DRY_RUN) so the
 // verification path can be exercised in tests without touching the system.
@@ -39,7 +44,8 @@ function renderInstallScript({
 # fingerprint to pin, your one-time enrollment code and the expected SHA-256 of
 # the agent SOURCE bundle. The agent is downloaded from the BlueEye server itself
 # (no GitHub, no registry — works on air-gapped networks, as long as the machine
-# can reach the server) and then run here with Docker (preferred) or Node. No
+# can reach the server) and then installed here natively with Node + systemd
+# (default), or with Docker when you ask for it (BLUEEYE_RUNTIME=docker). No
 # pre-built binaries are involved.
 set -eu
 
@@ -49,6 +55,8 @@ CERT_FINGERPRINT="${shDq(fp)}"
 SOURCE_SHA256="${shDq(sourceSha)}"
 SERVICE_NAME="${shDq(serviceName)}"
 INSTALL_DIR="\${BLUEEYE_INSTALL_DIR:-/opt/blueeye-agent}"
+STATE_DIR="\${BLUEEYE_STATE_DIR:-/var/lib/blueeye-agent}"
+LOG_DIR="\${BLUEEYE_LOG_DIR:-/var/log/blueeye-agent}"
 IMAGE="\${BLUEEYE_IMAGE:-blueeye-agent}"
 CONTAINER="\${BLUEEYE_CONTAINER:-blueeye-agent}"
 TOKEN_VOLUME="\${BLUEEYE_TOKEN_VOLUME:-blueeye-agent-data}"
@@ -56,7 +64,7 @@ TOKEN_VOLUME="\${BLUEEYE_TOKEN_VOLUME:-blueeye-agent-data}"
 # Test/override hooks (unset in normal use).
 CURL="\${BLUEEYE_CURL:-curl}"
 SHA256="\${BLUEEYE_SHA256:-}"
-RUNTIME="\${BLUEEYE_RUNTIME:-}"   # force docker|node|none (auto-detected if empty)
+RUNTIME="\${BLUEEYE_RUNTIME:-}"   # force docker|node|none (default: native node)
 
 log()  { printf '[blueeye] %s\\n' "$*"; }
 fail() { printf '[blueeye] ERROR: %s\\n' "$*" >&2; exit 1; }
@@ -88,31 +96,37 @@ main() {
   # Stop here in test/inspection mode — nothing has been written to the system.
   if [ -n "\${BLUEEYE_DRY_RUN:-}" ]; then log "dry-run: verified, stopping before install"; exit 0; fi
 
-  # Pick a runtime: Docker preferred, then Node; otherwise explain and stop.
+  # Pick a runtime. The agent installs NATIVELY (Node + systemd) by default; Docker
+  # is opt-in via BLUEEYE_RUNTIME=docker, so a host that merely has Docker installed
+  # isn't silently containerised. (Docker agents can't self-update — the host
+  # rebuilds them — so native is also what makes signed auto-updates work.)
   if [ -z "$RUNTIME" ]; then
-    if command -v docker >/dev/null 2>&1; then RUNTIME=docker;
-    elif command -v node >/dev/null 2>&1; then RUNTIME=node;
-    else RUNTIME=none; fi
+    if command -v node >/dev/null 2>&1; then RUNTIME=node; else RUNTIME=none; fi
+  fi
+  if [ "$RUNTIME" = "docker" ] && ! command -v docker >/dev/null 2>&1; then
+    fail "BLUEEYE_RUNTIME=docker was requested but Docker is not installed on this host.
+  - install Docker:  https://docs.docker.com/engine/install/
+  - or drop the override to install natively with Node.js 18+:  https://nodejs.org/"
   fi
   if [ "$RUNTIME" = "none" ]; then
-    fail "neither Docker nor Node was found on this host. Install one and re-run:
-  - Docker (recommended): https://docs.docker.com/engine/install/
-  - or Node.js 18+:       https://nodejs.org/
+    fail "Node.js was not found on this host. The agent installs natively by default;
+install Node.js 18+ and re-run, or opt into Docker explicitly:
+  - Node.js 18+ (default):  https://nodejs.org/
+  - Docker (opt-in):        https://docs.docker.com/engine/install/  then re-run with BLUEEYE_RUNTIME=docker
 then:  curl -sSL $SERVER_URL/enroll/$ENROLL_CODE/install.sh | sh"
   fi
   log "runtime: $RUNTIME"
 
   [ "$(id -u)" = "0" ] || fail "installation needs root — re-run with sudo, e.g.  curl -sSL <url> | sudo sh"
 
-  mkdir -p "$INSTALL_DIR"
-  log "extracting agent source to $INSTALL_DIR"
-  tar -xzf "$TARBALL" -C "$INSTALL_DIR" || fail "could not extract the agent source"
-
   if [ "$RUNTIME" = "docker" ]; then install_docker; else install_node; fi
-  log "to remove the agent later: curl -sSL $SERVER_URL/enroll/uninstall.sh | sudo sh   (or: sudo sh $INSTALL_DIR/uninstall.sh; warns first)"
+  log "to remove the agent later: curl -sSL $SERVER_URL/enroll/uninstall.sh | sudo sh"
 }
 
 install_docker() {
+  mkdir -p "$INSTALL_DIR"
+  log "extracting agent source to $INSTALL_DIR"
+  tar -xzf "$TARBALL" -C "$INSTALL_DIR" || fail "could not extract the agent source"
   log "building image $IMAGE (this can take a minute) ..."
   docker build -t "$IMAGE" "$INSTALL_DIR" >/dev/null || fail "docker build failed"
   docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
@@ -136,56 +150,106 @@ install_docker() {
 
 install_node() {
   command -v node >/dev/null 2>&1 || fail "Node not found"
-  if [ ! -d "$INSTALL_DIR/node_modules" ]; then
-    command -v npm >/dev/null 2>&1 || fail "npm is required to install the agent's dependencies (or install Docker instead)"
-    log "installing dependencies (npm) ..."
-    ( cd "$INSTALL_DIR" && { npm ci --omit=dev >/dev/null 2>&1 || npm install --omit=dev >/dev/null 2>&1; } ) || fail "dependency install failed"
-  fi
+  command -v npm  >/dev/null 2>&1 || fail "npm is required to install the agent's dependencies (or use Docker: BLUEEYE_RUNTIME=docker)"
 
-  # Enroll once (idempotent: the agent skips enrollment when a token exists). The
-  # fingerprint is pinned for this first contact. Pin an explicit token path so
-  # the systemd service (which runs from $INSTALL_DIR) finds the SAME token the
-  # agent's default is relative to the working directory.
+  RELEASES="$INSTALL_DIR/releases"
+  CURRENT="$INSTALL_DIR/current"
+  TOKEN_PATH="$STATE_DIR/token"
+  CONFIG_PATH="$STATE_DIR/config.json"
+  mkdir -p "$RELEASES" "$STATE_DIR" "$LOG_DIR"
+
+  # Stage the verified bundle INSIDE releases/ (same filesystem, so the final
+  # rename is atomic), read its version, then place it as releases/<version>.
+  STAGE="$RELEASES/.stage.$$"
+  rm -rf "$STAGE"; mkdir -p "$STAGE"
+  tar -xzf "$TARBALL" -C "$STAGE" || { rm -rf "$STAGE"; fail "could not extract the agent source"; }
+  VERSION=$(node -p "require('$STAGE/package.json').version" 2>/dev/null || true)
+  [ -n "$VERSION" ] || VERSION="source-$(date +%Y%m%d%H%M%S)"
+  DEST="$RELEASES/$VERSION"
+  rm -rf "$DEST"; mv "$STAGE" "$DEST"
+
+  log "installing dependencies (npm) for v$VERSION ..."
+  ( cd "$DEST" && { npm ci --omit=dev >/dev/null 2>&1 || npm install --omit=dev >/dev/null 2>&1; } ) || fail "dependency install failed"
+
+  # Atomic blue/green: point \`current\` at the new release (rename over a symlink
+  # is atomic on POSIX), so a later signed update swaps releases the same way.
+  ln -sfn "$DEST" "$CURRENT.next" && mv -T "$CURRENT.next" "$CURRENT" || fail "could not point current -> $DEST"
+
+  # Fetch the release trust anchor (Ed25519 public key) from the server so SIGNED
+  # self-updates verify automatically — no manual key provisioning. Not secret;
+  # optional (older server / unconfigured key -> 404 -> empty, unsigned-only).
+  RELEASE_KEY=$($CURL -fsSL "$SERVER_URL/enroll/agent-release-key" 2>/dev/null || true)
+
+  # Enroll once (idempotent: skipped when a token already exists), writing the
+  # token to the SHARED state dir so a release swap never loses it.
   FP_ARG=""
   [ -n "$CERT_FINGERPRINT" ] && FP_ARG="--fingerprint $CERT_FINGERPRINT"
   # shellcheck disable=SC2086
-  BLUEEYE_TOKEN_PATH="$INSTALL_DIR/token" BLUEEYE_SERVER_CERT_FINGERPRINT="$CERT_FINGERPRINT" \\
-    node "$INSTALL_DIR/src/index.js" enroll --code "$ENROLL_CODE" --server "$SERVER_URL" $FP_ARG \\
+  BLUEEYE_TOKEN_PATH="$TOKEN_PATH" BLUEEYE_AGENT_CONFIG="$CONFIG_PATH" BLUEEYE_SERVER_CERT_FINGERPRINT="$CERT_FINGERPRINT" \\
+    node "$CURRENT/src/index.js" enroll --code "$ENROLL_CODE" --server "$SERVER_URL" $FP_ARG \\
     || fail "enrollment failed"
 
   install_service
-  log "done — agent enrolled and running (node service)"
+  log "done — agent v$VERSION enrolled and running (node + systemd)"
 }
 
 install_service() {
   if ! command -v systemctl >/dev/null 2>&1; then
-    log "systemd not found — start the agent manually: BLUEEYE_TOKEN_PATH=$INSTALL_DIR/token BLUEEYE_SERVER_URL=$SERVER_URL node $INSTALL_DIR/src/index.js"
+    log "systemd not found — start the agent manually:"
+    log "  BLUEEYE_TOKEN_PATH=$TOKEN_PATH BLUEEYE_SERVER_URL=$SERVER_URL node $CURRENT/src/index.js"
     return 0
   fi
   NODE_BIN=$(command -v node)
   UNIT="/etc/systemd/system/$SERVICE_NAME.service"
-  # Idempotent: the unit content is stable, so rewriting on re-run is a no-op.
+  # Runs from the \`current\` symlink so a signed update can swap the release dir
+  # underneath atomically. Token/config/log live OUTSIDE the swappable release dir
+  # so updates never touch them.
   cat > "$UNIT" <<UNIT_EOF
 [Unit]
 Description=BlueEye monitoring agent
+Documentation=https://github.com/gudlever-lgtm/blueeye-agent
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=120
+StartLimitBurst=5
 
 [Service]
 Type=simple
-WorkingDirectory=$INSTALL_DIR
-Environment=BLUEEYE_SERVER_URL=$SERVER_URL
-Environment=BLUEEYE_SERVER_CERT_FINGERPRINT=$CERT_FINGERPRINT
-Environment=BLUEEYE_TOKEN_PATH=$INSTALL_DIR/token
-Environment=BLUEEYE_RUNTIME=systemd
-Environment=BLUEEYE_SERVICE_NAME=$SERVICE_NAME
-ExecStart=$NODE_BIN $INSTALL_DIR/src/index.js
+WorkingDirectory=$CURRENT
+ExecStart=$NODE_BIN $CURRENT/src/index.js
 Restart=on-failure
 RestartSec=5
+Environment=BLUEEYE_SERVER_URL=$SERVER_URL
+Environment=BLUEEYE_SERVER_CERT_FINGERPRINT=$CERT_FINGERPRINT
+Environment=BLUEEYE_TOKEN_PATH=$TOKEN_PATH
+Environment=BLUEEYE_AGENT_CONFIG=$CONFIG_PATH
+Environment=BLUEEYE_ACTION_LOG=$LOG_DIR/actions.log
+Environment=BLUEEYE_RELEASES_DIR=$RELEASES
+Environment=BLUEEYE_CURRENT_LINK=$CURRENT
+Environment=BLUEEYE_RUNTIME=systemd
+Environment=BLUEEYE_SERVICE_NAME=$SERVICE_NAME
 
 [Install]
 WantedBy=multi-user.target
 UNIT_EOF
+
+  # Release trust anchor as a drop-in (base64 keeps the multi-line PEM on a single
+  # Environment= line; the agent decodes base64-of-PEM). Only when the server gave
+  # us a key — otherwise signed self-updates need BLUEEYE_RELEASE_PUBLIC_KEY set by hand.
+  if [ -n "$RELEASE_KEY" ] && command -v base64 >/dev/null 2>&1; then
+    mkdir -p "$UNIT.d"
+    KEY_B64=$(printf '%s' "$RELEASE_KEY" | base64 | tr -d '\\n')
+    {
+      echo "[Service]"
+      printf 'Environment=BLUEEYE_RELEASE_PUBLIC_KEY=%s\\n' "$KEY_B64"
+    } > "$UNIT.d/10-release-key.conf"
+    log "signed self-updates enabled (release key pinned)"
+  elif [ -n "$RELEASE_KEY" ]; then
+    log "note: 'base64' missing — set BLUEEYE_RELEASE_PUBLIC_KEY manually for signed self-updates"
+  else
+    log "note: server published no release key — signed self-updates need BLUEEYE_RELEASE_PUBLIC_KEY set manually"
+  fi
+
   systemctl daemon-reload
   systemctl enable "$SERVICE_NAME" >/dev/null 2>&1 || true
   systemctl restart "$SERVICE_NAME"

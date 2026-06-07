@@ -152,7 +152,7 @@ function createApiRouter({
   // Frictionless enrollment. Public (unauthenticated) source + install-script
   // endpoints under /enroll; the authenticated command generator under /api.
   if (artifactStore || agentSourceStore || releaseStore) {
-    router.use('/enroll', createEnrollRouter({ artifactStore, sourceStore: agentSourceStore, releaseStore, enrollmentCodesRepo, enrollConfig }));
+    router.use('/enroll', createEnrollRouter({ artifactStore, sourceStore: agentSourceStore, releaseStore, releasePublicKey, enrollmentCodesRepo, enrollConfig }));
     router.use('/api/enroll', createEnrollCommandRouter({ enrollmentCodesRepo, artifactStore, sourceStore: agentSourceStore, enrollConfig }));
   }
 

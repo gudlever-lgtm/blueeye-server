@@ -31,6 +31,8 @@ const { createEnrollRouter } = require('./enroll');
 const { createEnrollCommandRouter } = require('./enrollCommand');
 const { createTestPackagesRouter } = require('./testPackages');
 const { createSpeedtestRouter, createSpeedtestReadRouter } = require('./speedtest');
+const { createIntegrationsRouter } = require('./integrations');
+const { createLdapRouter } = require('./ldap');
 const {
   createAgentAuthenticator,
   createAgentTokenMiddleware,
@@ -76,6 +78,16 @@ function createApiRouter({
   testPackagesRepo,
   testPackageRunner,
   speedtestResultsRepo,
+  integrationsRepo,
+  integrationAuditRepo,
+  integrationsDispatcher,
+  connectorRegistry,
+  secretBox,
+  ldapConfigRepo,
+  ldapRoleMapRepo,
+  ldapLoginAuditRepo,
+  ldapAuth,
+  ldapAuthEnabledFlag = false,
   enrollConfig = {},
   notifyDashboard,
 }) {
@@ -95,7 +107,7 @@ function createApiRouter({
   });
 
   router.use('/health', createHealthRouter({ db }));
-  router.use('/auth', createAuthRouter({ usersRepo }));
+  router.use('/auth', createAuthRouter({ usersRepo, ldapAuth, ldapLoginAuditRepo }));
   router.use('/users', createUsersRouter({ usersRepo }));
   router.use('/me', createMeRouter({ usersRepo }));
   router.use('/locations', createLocationsRouter({ locationsRepo, resultsRepo }));
@@ -117,6 +129,18 @@ function createApiRouter({
   router.use('/api/interfaces', createInterfacesRouter({ resultsRepo, agentsRepo }));
   router.use('/api/search', createSearchRouter({ agentsRepo, locationsRepo, flowsRepo }));
   if (settingsService) router.use('/api/settings', createSettingsRouter({ settingsService, featureGate, dispatcher, analysisConfig, retentionConfig }));
+  // Outbound API integrations (ITSM/IPAM connectors) — admin CRUD + test-fire.
+  if (integrationsRepo && connectorRegistry && secretBox) {
+    router.use('/api/integrations', createIntegrationsRouter({
+      integrationsRepo, integrationAuditRepo, dispatcher: integrationsDispatcher, registry: connectorRegistry, secretBox,
+    }));
+  }
+  // External auth (LDAP/AD) config — admin CRUD + connectivity test.
+  if (ldapConfigRepo && ldapRoleMapRepo && secretBox) {
+    router.use('/api/ldap', createLdapRouter({
+      ldapConfigRepo, ldapRoleMapRepo, ldapAuth, secretBox, authEnabledFlag: ldapAuthEnabledFlag,
+    }));
+  }
   if (testPackagesRepo) router.use('/api/test-packages', createTestPackagesRouter({ repo: testPackagesRepo, runner: testPackageRunner, usageService }));
   if (speedtestResultsRepo) {
     router.use('/speedtest', createSpeedtestRouter({ agentAuth, speedtestResultsRepo }));
@@ -137,10 +161,10 @@ function createApiRouter({
   //   - POST /results          — agent token
   //   - POST /enroll           — unauthenticated
   // Requests fall through routers that have no matching route.
-  router.use('/agents', createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentCommander, agentSourceStore, releaseStore, releasePublicKey, auditRepo }));
+  router.use('/agents', createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentCommander, agentSourceStore, releaseStore, releasePublicKey, auditRepo, integrationTrigger: integrationsDispatcher }));
   router.use('/audit', createAuditRouter({ auditRepo }));
   router.use('/agents', createAgentReportsRouter({ agentAuth, resultsRepo, agentsRepo, analysisPipeline, flowPipeline, probeResultsRepo, probePipeline, incidentService }));
-  router.use('/agents', createAgentEnrollRouter({ enrollmentStore, notifyDashboard }));
+  router.use('/agents', createAgentEnrollRouter({ enrollmentStore, notifyDashboard, integrationTrigger: integrationsDispatcher }));
 
   return router;
 }

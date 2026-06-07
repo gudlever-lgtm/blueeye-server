@@ -9,6 +9,8 @@ process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-secret-do-not-use-in-pr
 const { createApp } = require('../src/app');
 const { issueToken } = require('../src/auth/jwt');
 const { createSettingsService } = require('../src/services/settings');
+const { createSecretBox } = require('../src/lib/secretBox');
+const { createConnectorRegistry } = require('../src/integrations/connectors');
 const { createPlanService } = require('../src/license/planService');
 const { createUsageService } = require('../src/services/usageService');
 
@@ -495,6 +497,155 @@ function makeTestPackageRunner(overrides = {}) {
   };
 }
 
+// A real secret box with a fixed test key, so route encryption + dispatcher
+// decryption round-trip exactly as in production.
+function makeSecretBox(overrides = {}) {
+  return createSecretBox({ key: overrides.key || 'test-secret-box-key-do-not-use-in-prod' });
+}
+
+// A real connector registry with an injected fetch (default: a benign 200), so
+// the integrations route exercises the actual per-type config validation.
+function makeConnectorRegistry(overrides = {}) {
+  const fetchImpl = overrides.fetchImpl || (async () => ({ ok: true, status: 200, json: async () => ({}) }));
+  return createConnectorRegistry({ fetchImpl });
+}
+
+// A fake integrations repository (stateful, in-memory). Mirrors the real safe-row
+// vs. with-secret split so the CRUD route behaves end-to-end.
+function makeIntegrationsRepo(overrides = {}) {
+  const rows = [];
+  let seq = 0;
+  const safe = (r) => (r ? {
+    id: r.id, type: r.type, name: r.name, base_url: r.base_url, auth_type: r.auth_type,
+    enabled: r.enabled, config_json: r.config_json, created_at: r.created_at, updated_at: r.updated_at,
+  } : null);
+  return {
+    rows,
+    findAll: overrides.findAll || (async () => rows.map(safe)),
+    findEnabled: overrides.findEnabled || (async () => rows.filter((r) => r.enabled).map(safe)),
+    findById: overrides.findById || (async (id) => safe(rows.find((r) => r.id === id)) || null),
+    findByIdWithSecret: overrides.findByIdWithSecret || (async (id) => { const r = rows.find((x) => x.id === id); return r ? { ...r } : null; }),
+    findEnabledWithSecret: overrides.findEnabledWithSecret || (async () => rows.filter((r) => r.enabled).map((r) => ({ ...r }))),
+    findByName: overrides.findByName || (async (name) => safe(rows.find((r) => r.name === name)) || null),
+    create: overrides.create || (async (input) => {
+      const id = (seq += 1);
+      const row = {
+        id, type: input.type, name: input.name, base_url: input.baseUrl, auth_type: input.authType,
+        credentials_encrypted: input.credentialsEncrypted ?? null, enabled: input.enabled !== false,
+        config_json: input.config || {}, created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z',
+      };
+      rows.push(row);
+      return safe(row);
+    }),
+    update: overrides.update || (async (id, patch) => {
+      const row = rows.find((r) => r.id === id);
+      if (!row) return null;
+      if (patch.name !== undefined) row.name = patch.name;
+      if (patch.baseUrl !== undefined) row.base_url = patch.baseUrl;
+      if (patch.authType !== undefined) row.auth_type = patch.authType;
+      if (patch.enabled !== undefined) row.enabled = patch.enabled;
+      if (patch.config !== undefined) row.config_json = patch.config;
+      if (patch.credentialsEncrypted !== undefined) row.credentials_encrypted = patch.credentialsEncrypted;
+      return safe(row);
+    }),
+    remove: overrides.remove || (async (id) => { const i = rows.findIndex((r) => r.id === id); if (i < 0) return false; rows.splice(i, 1); return true; }),
+  };
+}
+
+// A fake integration-audit repository (in-memory). Records dispatcher fires.
+function makeIntegrationAuditRepo(overrides = {}) {
+  const rows = [];
+  let seq = 0;
+  return {
+    rows,
+    record: overrides.record || (async (r) => { const id = (seq += 1); rows.push({ id, created_at: new Date().toISOString(), ...r }); return id; }),
+    findByIntegration: overrides.findByIntegration || (async (iid) => rows.filter((r) => r.integrationId === iid).slice().reverse()),
+    findAll: overrides.findAll || (async () => rows.slice().reverse()),
+  };
+}
+
+// A fake integrations dispatcher (records emits; benign test-fire). emitFinding /
+// emitAgentEvent push synchronously so route tests can assert the wiring even
+// though the routes fire-and-forget.
+function makeIntegrationsDispatcher(overrides = {}) {
+  const calls = [];
+  return {
+    calls,
+    emit: overrides.emit || (async (event) => { calls.push(event); return { dispatched: 0, results: [] }; }),
+    emitFinding: overrides.emitFinding || (async (finding) => { calls.push({ kind: 'finding', finding }); return { dispatched: 0, results: [] }; }),
+    emitAgentEvent: overrides.emitAgentEvent || (async (kind, agent) => { calls.push({ kind: `agent.${kind}`, agent }); return { dispatched: 0, results: [] }; }),
+    testFire: overrides.testFire || (async () => ({ ok: true, status: 201, detail: 'created (201)' })),
+  };
+}
+
+// A fake LDAP config repository (stateful, in-memory). Mirrors the safe vs.
+// with-secret split + the upsert merge semantics of the real repo.
+function makeLdapConfigRepo(overrides = {}) {
+  let row = overrides.row || null; // a full (with-secret) row or null
+  const safe = (r) => (r ? {
+    id: r.id, host: r.host, port: r.port, use_tls: r.use_tls, bind_dn: r.bind_dn, base_dn: r.base_dn,
+    user_filter: r.user_filter, group_filter: r.group_filter, enabled: r.enabled,
+    created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z',
+  } : null);
+  return {
+    get: overrides.get || (async () => safe(row)),
+    getWithSecret: overrides.getWithSecret || (async () => (row ? { ...row, ...safe(row) } : null)),
+    upsert: overrides.upsert || (async (patch) => {
+      const prev = row || { id: 1, bind_pw_encrypted: null };
+      row = {
+        id: prev.id || 1,
+        host: patch.host !== undefined ? patch.host : prev.host,
+        port: patch.port !== undefined ? patch.port : (prev.port ?? 389),
+        use_tls: patch.useTls !== undefined ? !!patch.useTls : !!prev.use_tls,
+        bind_dn: patch.bindDn !== undefined ? patch.bindDn : (prev.bind_dn ?? null),
+        bind_pw_encrypted: patch.bindPwEncrypted !== undefined ? patch.bindPwEncrypted : (prev.bind_pw_encrypted ?? null),
+        base_dn: patch.baseDn !== undefined ? patch.baseDn : prev.base_dn,
+        user_filter: patch.userFilter !== undefined ? patch.userFilter : (prev.user_filter ?? '(sAMAccountName={{username}})'),
+        group_filter: patch.groupFilter !== undefined ? patch.groupFilter : (prev.group_filter ?? null),
+        enabled: patch.enabled !== undefined ? !!patch.enabled : !!prev.enabled,
+      };
+      return safe(row);
+    }),
+  };
+}
+
+// A fake LDAP role-map repository (stateful, in-memory).
+function makeLdapRoleMapRepo(overrides = {}) {
+  const rows = [];
+  let seq = 0;
+  return {
+    rows,
+    findAll: overrides.findAll || (async () => rows.slice()),
+    findById: overrides.findById || (async (id) => rows.find((r) => r.id === id) || null),
+    findByGroup: overrides.findByGroup || (async (dn) => rows.find((r) => r.ldap_group_dn === dn) || null),
+    create: overrides.create || (async ({ groupDn, role }) => { const r = { id: (seq += 1), ldap_group_dn: groupDn, blueeye_role: role, created_at: '2026-01-01T00:00:00.000Z' }; rows.push(r); return r; }),
+    update: overrides.update || (async (id, { groupDn, role }) => { const r = rows.find((x) => x.id === id); if (!r) return null; if (groupDn !== undefined) r.ldap_group_dn = groupDn; if (role !== undefined) r.blueeye_role = role; return r; }),
+    remove: overrides.remove || (async (id) => { const i = rows.findIndex((r) => r.id === id); if (i < 0) return false; rows.splice(i, 1); return true; }),
+  };
+}
+
+// A fake LDAP login-audit repository (in-memory).
+function makeLdapLoginAuditRepo(overrides = {}) {
+  const rows = [];
+  let seq = 0;
+  return {
+    rows,
+    record: overrides.record || (async (r) => { const id = (seq += 1); rows.push({ id, created_at: new Date().toISOString(), ...r }); return id; }),
+    findAll: overrides.findAll || (async () => rows.slice().reverse()),
+  };
+}
+
+// A fake LDAP auth service. DISABLED by default so existing local-login tests are
+// unaffected; opt in via overrides (isEnabled/authenticate).
+function makeLdapAuth(overrides = {}) {
+  return {
+    isEnabled: overrides.isEnabled || (async () => false),
+    authenticate: overrides.authenticate || (async () => ({ enabled: false })),
+    testConnection: overrides.testConnection || (async () => ({ ok: true, detail: 'bound' })),
+    resolveRole: overrides.resolveRole || (async () => ({ role: null, matched: 0 })),
+  };
+}
+
 // ---- App + auth helpers ---------------------------------------------------
 
 // Builds an app wired with fakes; pass overrides to swap any dependency.
@@ -547,6 +698,16 @@ function makeApp(overrides = {}) {
     releaseStore: overrides.releaseStore || makeReleaseStore(),
     releasePublicKey: overrides.releasePublicKey || '',
     auditRepo: overrides.auditRepo || makeAuditRepo(),
+    integrationsRepo: overrides.integrationsRepo || makeIntegrationsRepo(),
+    integrationAuditRepo: overrides.integrationAuditRepo || makeIntegrationAuditRepo(),
+    integrationsDispatcher: overrides.integrationsDispatcher || makeIntegrationsDispatcher(),
+    connectorRegistry: overrides.connectorRegistry || makeConnectorRegistry(),
+    secretBox: overrides.secretBox || makeSecretBox(),
+    ldapConfigRepo: overrides.ldapConfigRepo || makeLdapConfigRepo(),
+    ldapRoleMapRepo: overrides.ldapRoleMapRepo || makeLdapRoleMapRepo(),
+    ldapLoginAuditRepo: overrides.ldapLoginAuditRepo || makeLdapLoginAuditRepo(),
+    ldapAuth: overrides.ldapAuth || makeLdapAuth(),
+    ldapAuthEnabledFlag: overrides.ldapAuthEnabledFlag || false,
     enrollConfig: overrides.enrollConfig || { publicUrl: '', certFingerprint: '' },
     notifyDashboard: overrides.notifyDashboard || (() => 0),
   });
@@ -603,6 +764,15 @@ module.exports = {
   makeDispatcher,
   makeFeatureGate,
   makeSettingsService,
+  makeSecretBox,
+  makeConnectorRegistry,
+  makeIntegrationsRepo,
+  makeIntegrationAuditRepo,
+  makeIntegrationsDispatcher,
+  makeLdapConfigRepo,
+  makeLdapRoleMapRepo,
+  makeLdapLoginAuditRepo,
+  makeLdapAuth,
   makeDb,
   makeApp,
   tokenFor,

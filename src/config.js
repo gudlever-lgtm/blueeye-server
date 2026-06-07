@@ -36,6 +36,22 @@ const config = {
     jwtIssuer: process.env.JWT_ISSUER || 'blueeye-server',
     bcryptRounds: toInt(process.env.BCRYPT_ROUNDS, 12),
   },
+  // Symmetric key for encrypting secrets at rest (integration credentials, the
+  // LDAP bind password) via src/lib/secretBox.js. Defaults to JWT_SECRET so
+  // existing deployments need no new variable — the production guard on
+  // JWT_SECRET (server.js) already refuses to boot with the insecure default,
+  // which covers this fallback too. Set SECRET_ENCRYPTION_KEY to rotate it
+  // independently of the JWT secret.
+  security: {
+    secretKey: process.env.SECRET_ENCRYPTION_KEY || process.env.JWT_SECRET || 'dev-insecure-secret-change-me',
+  },
+  // External authentication via LDAP/AD (supplements local JWT login). This env
+  // flag is the hard gate (default OFF); even when on, login only tries LDAP once
+  // an admin has stored and enabled an ldap_config row. Local JWT login always
+  // remains as the fallback. See src/auth/ldap.js + docs/ldap-auth.md.
+  ldap: {
+    authEnabled: /^(1|true|yes|on)$/i.test(String(process.env.LDAP_AUTH_ENABLED || '').trim()),
+  },
   // Initial admin, seeded by the migration runner if no admin exists yet.
   seedAdmin: {
     email: process.env.SEED_ADMIN_EMAIL || 'admin@blueeye.local',

@@ -35,7 +35,12 @@ src/
 ├── repositories/      # data access (one per table-ish); pool in, plain objects out
 ├── auth/              # user JWT (roles) + separate agent-token auth
 │   ├── jwt.js password.js roles.js middleware.js   # user side (requireAuth/requireRole)
+│   ├── ldap.js                                      # external LDAP/AD auth (supplements local login)
 │   └── tokens.js agentAuth.js                       # agent opaque-token side
+├── integrations/      # outbound API integrations (ITSM/IPAM connectors)
+│   ├── dispatcher.js  # trigger layer: events → enabled targets (debounce/retry/audit)
+│   ├── httpClient.js  # shared outbound HTTP (injected fetch + timeout)
+│   └── connectors/    # serviceNow.js, nautobot.js, webhook.js + index.js (registry)
 ├── analysis/          # local, explainable anomaly detection (NO ML, NO cloud)
 │   ├── baselines.js detector.js findings.js correlator.js pipeline.js ingest.js
 │   ├── probeFindings.js probePipeline.js  # probe results → findings + alerts
@@ -54,7 +59,7 @@ src/
 ├── ws/                # WebSocket servers: agentSocket.js, dashboardSocket.js
 ├── services/          # settings.js, systemInfo.js, enrollmentStore.js
 ├── validation/        # per-resource input validation (pure, { value | errors })
-├── lib/               # csv.js (RFC4180 + injection guard), canonicalize.js
+├── lib/               # csv.js (RFC4180 + injection guard), canonicalize.js, secretBox.js (AES-256-GCM secrets at rest)
 └── middleware/        # asyncHandler.js, errorHandler.js, requestLogger.js
 
 public/                # dependency-free dashboard SPA
@@ -76,7 +81,7 @@ Mounted in `src/routes/index.js`. User endpoints use JWT + roles
 | Mount | File | Auth | Purpose |
 | --- | --- | --- | --- |
 | `/health` | health.js | none | liveness + db ping |
-| `/auth` | auth.js | none | login → JWT |
+| `/auth` | auth.js | none | login → JWT (tries **LDAP/AD** first when enabled, else local) |
 | `/users` | users.js | admin | user CRUD (last-admin protected) |
 | `/me` | me.js | viewer+ | current user: profile + **personal UI preferences** (colour theme) |
 | `/locations` | locations.js | viewer+/op/admin | sites + per-location live traffic |
@@ -100,6 +105,8 @@ Mounted in `src/routes/index.js`. User endpoints use JWT + roles
 | `/api/fleet` | fleet.js | viewer+ | **fleet health** rollup (`/health`) + per-agent verdict (`/agent/:id`) + **NIC firmware inventory / drift** (`/nics`) |
 | `/api/interfaces` | interfaces.js | viewer+ | **interface health** (util/errors/discards/link) |
 | `/api/search` | search.js | viewer+ | **global search** (agents/hosts/locations + IP/port → agents) |
+| `/api/integrations` | integrations.js | admin | **outbound API integrations** (ITSM/IPAM connectors): CRUD + manual test-fire; credentials encrypted at rest |
+| `/api/ldap` | ldap.js | admin | **LDAP/AD auth** config + group→role map + connectivity test |
 
 ## Data model (MySQL)
 
@@ -118,8 +125,11 @@ Later migrations add:
 | 019 | `probe_results.status` / `.cert_expiry_days` | http probe (status + TLS cert expiry) |
 | 020 | (column) | per-user UI preferences — `users.preferences` JSON (colour theme) |
 | 021 | (column) | `agents.enrollment_code_id` → links an agent to the code it enrolled with (Enrollment page shows each code's agents + live status); `ON DELETE SET NULL` |
+| 022 | `agent_action_audit` | server-initiated agent actions (upgrade/delete) |
 | 024 | `incident_thresholds` | incident derivation — per-metric warn/crit + debounce; global default (`location_id` NULL) + per-location override; seeded |
 | 025 | `incidents` | incident derivation — one row per (agent, metric, target) outage; `started_at`/`resolved_at`/`duration_seconds` |
+| 026 / 027 | `integrations` / `integration_audit` | outbound API integrations + per-fire audit (credentials encrypted at rest) |
+| 028 / 029 | `ldap_config` + `ldap_role_map` / `ldap_login_audit` | LDAP/AD auth config + group→role map + login audit (bind password encrypted at rest) |
 
 Interface health, traffic-type categories and **fleet health** add **no** tables — they
 derive from the existing `results.payload.traffic` (and `flow_records.asn` for org
@@ -176,6 +186,9 @@ A single vanilla-JS SPA. Key building blocks:
 | A dashboard colour palette (light+dark) | `PALETTES` + paired `[data-theme=…]` blocks in `public/styles.css`; picker `settingsAppearanceView` in `public/app.js`; per-user persistence via `/me` (`src/routes/me.js`, `usersRepository.get/updatePreferences`) + key whitelist in `src/validation/preferencesValidation.js` |
 | License / feature gating | `src/license/*` (`features.js` = fail-closed gate; `plans.js` = plan/feature catalogue; `planService.js` = active-plan resolution + limits) + `src/services/usageService.js` (limit enforcement). Read-only API: `/license/plan`, `/license/usage`, `/license/matrix`. See `docs/licensing.md`. |
 | Offline (no-server) licensing | `src/license/licenseVerifier.js` (verifies a local signed file, Ed25519) + `offlineLicenseManager.js` (same surface as the online manager; restricted mode when invalid/expired). Selected by `LICENSE_MODE=offline`/`LICENSE_FILE` in `src/server.js`. Issue files with `scripts/sign-offline-license.js`. |
+| Outbound integrations (ITSM/IPAM) | connectors in `src/integrations/connectors/*` (+ `index.js` registry); trigger/debounce/retry/audit in `src/integrations/dispatcher.js`; HTTP in `src/routes/integrations.js`; validation in `src/validation/integrationValidation.js`; tables `integrations`/`integration_audit` (migrations 026/027). Events wired in `analysis/pipeline.js` + `probePipeline.js` (findings) and the enroll/agent-delete routes. See docs/integrations.md |
+| LDAP/AD authentication | `src/auth/ldap.js` (bind + group→role); login flow in `src/routes/auth.js`; config CRUD in `src/routes/ldap.js`; validation in `src/validation/ldapValidation.js`; tables `ldap_config`/`ldap_role_map`/`ldap_login_audit` (migrations 028/029); gate `LDAP_AUTH_ENABLED`. See docs/ldap-auth.md |
+| Encrypting a secret at rest | `src/lib/secretBox.js` (AES-256-GCM, keyed by `SECRET_ENCRYPTION_KEY`→`JWT_SECRET`); store the token in a `*_encrypted` column, decrypt only at use |
 
 ## Conventions
 

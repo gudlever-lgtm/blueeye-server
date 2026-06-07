@@ -68,7 +68,7 @@ function aggregateFlows(rows, { port = null, protocol = null } = {}) {
 //
 // Agents are created via enrollment (prompt 4) — there is intentionally no
 // manual POST /agents here.
-function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentCommander, agentSourceStore, releaseStore = null, releasePublicKey = '', auditRepo = null }) {
+function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentCommander, agentSourceStore, releaseStore = null, releasePublicKey = '', auditRepo = null, integrationTrigger = null }) {
   const router = express.Router();
 
   // Response helpers for the error shapes repeated across this router.
@@ -529,8 +529,17 @@ function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentComma
     asyncHandler(async (req, res) => {
       const id = parseId(req.params.id);
       if (id === null) return invalidId(res);
+      // Snapshot the agent before removal so the integration event carries its
+      // hostname/location (for IPAM device removal when allowDelete is set).
+      const agent = await agentsRepo.findById(id);
       const removed = await agentsRepo.remove(id);
       if (!removed) return notFound(res);
+      // Outbound integrations: notify IPAM the agent is gone. Fire-and-forget; an
+      // integration NEVER blocks or fails the delete (deletion is one-way and
+      // gated by the connector's own allow-delete flag).
+      if (agent && integrationTrigger && typeof integrationTrigger.emitAgentEvent === 'function') {
+        try { integrationTrigger.emitAgentEvent('delete', agent).catch(() => {}); } catch { /* best-effort */ }
+      }
       res.status(204).end();
     })
   );

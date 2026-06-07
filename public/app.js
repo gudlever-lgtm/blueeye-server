@@ -1309,16 +1309,23 @@ async function showResults(a) {
         }
       }
 
-      // Traffic over time: oldest -> newest, rate per measurement.
-      const series = results
-        .slice()
-        .reverse()
-        .map((r) => ({
-          at: r.created_at,
-          rx: r.payload && r.payload.traffic && r.payload.traffic.totals ? r.payload.traffic.totals.rxBytesPerSec : 0,
-          tx: r.payload && r.payload.traffic && r.payload.traffic.totals ? r.payload.traffic.totals.txBytesPerSec : 0,
-        }));
-      if (series.length >= 2) body.push(trafficChart(series));
+      // Traffic over time: oldest -> newest, rate per measurement. Only byte-rate
+      // sources (proc/snmp) carry per-measurement RX/TX rates; flow sources
+      // (sflow/netflow) report flow aggregates (flows/packets/bytes) with no
+      // rx/txBytesPerSec, so this chart would render empty (a NaN axis / "max –")
+      // for them — skip it and let the flow breakdown below stand in.
+      const flowSource = t && (t.source === 'sflow' || t.source === 'netflow');
+      if (!flowSource) {
+        const series = results
+          .slice()
+          .reverse()
+          .map((r) => ({
+            at: r.created_at,
+            rx: Number(r.payload && r.payload.traffic && r.payload.traffic.totals && r.payload.traffic.totals.rxBytesPerSec) || 0,
+            tx: Number(r.payload && r.payload.traffic && r.payload.traffic.totals && r.payload.traffic.totals.txBytesPerSec) || 0,
+          }));
+        if (series.length >= 2) body.push(trafficChart(series));
+      }
 
       if (t && t.interfaces && t.interfaces.length) {
         body.push(el('table', {},
@@ -2544,10 +2551,28 @@ function ifaceLinkText(i) {
   const sp = i.speedMbps ? (i.speedMbps >= 1000 ? `${i.speedMbps / 1000} Gb/s` : `${i.speedMbps} Mb/s`) : '';
   return [sp, i.operStatus].filter(Boolean).join(' · ');
 }
-// Interface health table (worst first). Empty-state when there is no data.
-function interfaceTable(interfaces) {
+// Interface health table (worst first). Empty-state when there is no data;
+// `source` (the agent's traffic source) tailors that message.
+function interfaceTable(interfaces, source = null) {
   const ifs = (interfaces || []).slice().sort((a, b) => (IFACE_RANK[a.status] - IFACE_RANK[b.status]) || ((b.rxBytesPerSec + b.txBytesPerSec) - (a.rxBytesPerSec + a.txBytesPerSec)));
-  if (!ifs.length) return el('div', { class: 'empty' }, 'No interface data yet — requires an agent measurement (update the agent for errors/discards/link).');
+  if (!ifs.length) {
+    // Flow sources (sflow/netflow) report sampled flow records (5-tuple
+    // conversations), not per-interface byte-rates/errors/discards — so this
+    // table is ALWAYS empty for them, however healthy the flow pipeline looks
+    // on Diagnose. Say so plainly instead of implying an agent update would
+    // help (it won't), and point to the source switch + the views that do use
+    // the flow data this agent reports.
+    if (source === 'sflow' || source === 'netflow') {
+      return el('div', { class: 'empty' },
+        `This agent's traffic source is “${source}”, which reports sampled flow records (conversations) — not per-interface counters, so there is nothing to show here even when the flow pipeline is healthy. `,
+        'Per-interface health (utilisation / errors / discards / link) needs a ',
+        el('b', {}, 'proc'), ' or ', el('b', {}, 'snmp'),
+        ' source — switch it under ', el('b', {}, 'Agents → Edit → Traffic source'),
+        '. The flow data this agent does report appears on the ',
+        viewLink('overview', 'Traffic'), ', ', viewLink('flows'), ' and ', viewLink('geo', 'Destinations'), ' pages.');
+    }
+    return el('div', { class: 'empty' }, 'No interface data yet — requires an agent measurement (update the agent for errors/discards/link).');
+  }
   return el('table', { class: 'iface-table' },
     el('thead', {}, el('tr', {}, ...['Interface', 'Status', 'Link', 'Utilization', '↓ RX', '↑ TX', 'Errors/s', 'Discards/s'].map((h) => el('th', {}, h)))),
     el('tbody', {}, ...ifs.map((i) => el('tr', {},
@@ -2629,7 +2654,7 @@ views.interfaces = async () => {
     let data;
     try { data = await api(`/api/interfaces?agentId=${encodeURIComponent(id)}`); } catch (e) { host.replaceChildren(el('div', { class: 'error' }, e.message)); return; }
     status.textContent = data.ts ? `source: ${data.source} · measured ${fmtTimeShort(new Date(data.ts).getTime())}` : 'no measurements yet';
-    host.replaceChildren(interfaceTable(data.interfaces));
+    host.replaceChildren(interfaceTable(data.interfaces, data.source));
   }
 
   refresh();
@@ -3183,7 +3208,7 @@ views.agent = async () => {
     let data;
     try { data = await api(`/api/interfaces?agentId=${encodeURIComponent(id)}`); } catch (e) { ifaceHost.replaceChildren(el('div', { class: 'error' }, e.message)); return; }
     ifaceStatus.textContent = data.ts ? `source: ${data.source} · measured ${fmtTimeShort(new Date(data.ts).getTime())}` : 'no measurements yet';
-    ifaceHost.replaceChildren(interfaceTable(data.interfaces));
+    ifaceHost.replaceChildren(interfaceTable(data.interfaces, data.source));
   }
 
   // ---- Recent traffic (bandwidth over the last measurements) ----

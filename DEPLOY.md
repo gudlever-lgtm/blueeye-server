@@ -113,3 +113,8 @@ This compose is a **demo**. For production:
 - Set strong `JWT_SECRET`s and admin passwords; the server refuses to start in
   production with the default JWT secret.
 - The agent normally runs on customer machines (not in this compose).
+- **Serve it over HTTPS on :443.** The app speaks plain HTTP on `:3000`; put a
+  TLS-terminating reverse proxy in front (e.g. lighttpd on `blueeye.gnf.dk` →
+  app on `:3000`). See [docs/reverse-proxy.md](docs/reverse-proxy.md) for a ready
+  lighttpd config — including the WebSocket `Upgrade` pass-through the agents and
+  live dashboard need.

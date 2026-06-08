@@ -72,6 +72,12 @@ const { createLdapConfigRepository } = require('./repositories/ldapConfigReposit
 const { createLdapRoleMapRepository } = require('./repositories/ldapRoleMapRepository');
 const { createLdapLoginAuditRepository } = require('./repositories/ldapLoginAuditRepository');
 const { createLdapAuth } = require('./auth/ldap');
+const { createNis2RisksRepository } = require('./repositories/nis2RisksRepository');
+const { createNis2ControlsRepository } = require('./repositories/nis2ControlsRepository');
+const { createNis2IncidentsRepository } = require('./repositories/nis2IncidentsRepository');
+const { createNis2ReportsRepository } = require('./repositories/nis2ReportsRepository');
+const { createNis2EvidenceRepository } = require('./repositories/nis2EvidenceRepository');
+const { createNis2AuditRepository } = require('./repositories/nis2AuditRepository');
 
 // Wires up real dependencies, starts the HTTP server and installs graceful
 // shutdown handlers.
@@ -207,6 +213,15 @@ function start() {
   const ldapRoleMapRepo = createLdapRoleMapRepository(db);
   const ldapLoginAuditRepo = createLdapLoginAuditRepository(db);
   const ldapAuth = createLdapAuth({ config: config.ldap, ldapConfigRepo, ldapRoleMapRepo, secretBox, logger: console });
+
+  // NIS2 Reporting Center repositories (risk register, control evidence, security
+  // incidents, generated reports, evidence references, and the module audit log).
+  const nis2RisksRepo = createNis2RisksRepository(db);
+  const nis2ControlsRepo = createNis2ControlsRepository(db);
+  const nis2IncidentsRepo = createNis2IncidentsRepository(db);
+  const nis2ReportsRepo = createNis2ReportsRepository(db);
+  const nis2EvidenceRepo = createNis2EvidenceRepository(db);
+  const nis2AuditRepo = createNis2AuditRepository(db);
 
   // Pushes a live event to every connected dashboard (assigned below; the
   // closure runs later). Used for enrollment/agent-status feedback in the UI.
@@ -383,6 +398,12 @@ function start() {
     ldapLoginAuditRepo,
     ldapAuth,
     ldapAuthEnabledFlag: config.ldap.authEnabled,
+    nis2RisksRepo,
+    nis2ControlsRepo,
+    nis2IncidentsRepo,
+    nis2ReportsRepo,
+    nis2EvidenceRepo,
+    nis2AuditRepo,
     enrollConfig: { publicUrl: config.publicUrl, certFingerprint: config.enroll.certFingerprint },
     notifyDashboard,
     logger: console,

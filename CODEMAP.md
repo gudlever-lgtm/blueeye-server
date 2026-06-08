@@ -107,6 +107,7 @@ Mounted in `src/routes/index.js`. User endpoints use JWT + roles
 | `/api/search` | search.js | viewer+ | **global search** (agents/hosts/locations + IP/port → agents) |
 | `/api/integrations` | integrations.js | admin | **outbound API integrations** (ITSM/IPAM connectors): CRUD + manual test-fire; credentials encrypted at rest |
 | `/api/ldap` | ldap.js | admin | **LDAP/AD auth** config + group→role map + connectivity test |
+| `/api/nis2` | nis2.js | viewer+ read / operator+ write / admin approve | **NIS2 Reporting Center** — `/dashboard` (readiness score + category status + top actions), `/risks` `/controls` `/incidents` `/evidence` (CRUD), `/reports` (+ `/:id/approve`), `/audit` (admin), `/export/*.csv` + `/export/*.html` (print→PDF) |
 
 ## Data model (MySQL)
 
@@ -130,6 +131,7 @@ Later migrations add:
 | 025 | `incidents` | incident derivation — one row per (agent, metric, target) outage; `started_at`/`resolved_at`/`duration_seconds` |
 | 026 / 027 | `integrations` / `integration_audit` | outbound API integrations + per-fire audit (credentials encrypted at rest) |
 | 028 / 029 | `ldap_config` + `ldap_role_map` / `ldap_login_audit` | LDAP/AD auth config + group→role map + login audit (bind password encrypted at rest) |
+| 031 | `blueeye_nis2_risks` · `blueeye_nis2_controls` · `blueeye_nis2_incidents` · `blueeye_nis2_reports` · `blueeye_nis2_evidence` · `blueeye_audit_log` | **NIS2 Reporting Center** — risk register, control evidence, security incidents, generated reports (with frozen metric snapshots for trend), evidence references + a generic change audit log |
 
 Interface health, traffic-type categories and **fleet health** add **no** tables — they
 derive from the existing `results.payload.traffic` (and `flow_records.asn` for org
@@ -189,6 +191,7 @@ A single vanilla-JS SPA. Key building blocks:
 | Outbound integrations (ITSM/IPAM) | connectors in `src/integrations/connectors/*` (+ `index.js` registry); trigger/debounce/retry/audit in `src/integrations/dispatcher.js`; HTTP in `src/routes/integrations.js`; validation in `src/validation/integrationValidation.js`; tables `integrations`/`integration_audit` (migrations 026/027). Events wired in `analysis/pipeline.js` + `probePipeline.js` (findings) and the enroll/agent-delete routes. See docs/integrations.md |
 | LDAP/AD authentication | `src/auth/ldap.js` (bind + group→role); login flow in `src/routes/auth.js`; config CRUD in `src/routes/ldap.js`; validation in `src/validation/ldapValidation.js`; tables `ldap_config`/`ldap_role_map`/`ldap_login_audit` (migrations 028/029); gate `LDAP_AUTH_ENABLED`. See docs/ldap-auth.md |
 | Encrypting a secret at rest | `src/lib/secretBox.js` (AES-256-GCM, keyed by `SECRET_ENCRYPTION_KEY`→`JWT_SECRET`); store the token in a `*_encrypted` column, decrypt only at use |
+| NIS2 Reporting Center | `src/routes/nis2.js` (mounted in `routes/index.js`); pure scoring in `src/nis2/dashboard.js` (`computeDashboard`/`recommendedActions`), report build + print-ready HTML in `src/nis2/report.js`, shared enums in `src/nis2/constants.js`; repositories `src/repositories/nis2{Risks,Controls,Incidents,Reports,Evidence,Audit}Repository.js`; validation `src/validation/nis2Validation.js`; tables in migration 031; UI `views.nis2` (sub-tabs Dashboard/Risks/Controls/Incidents/Reports/Audit) + `PAGE_INFO.nis2` in `public/app.js`. See docs/nis2.md |
 
 ## Conventions
 

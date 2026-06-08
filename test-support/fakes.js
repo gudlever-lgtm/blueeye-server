@@ -646,6 +646,148 @@ function makeLdapAuth(overrides = {}) {
   };
 }
 
+// ---- NIS2 Reporting Center ------------------------------------------------
+
+const { riskBand } = require('../src/nis2/constants');
+
+// A fake NIS2 risk register (in-memory, stateful). risk_score is recomputed on
+// write exactly like the real repo, so dashboard/score tests behave the same.
+function makeNis2RisksRepo(overrides = {}) {
+  const rows = [];
+  let seq = 0;
+  const map = (r) => ({ ...r, band: riskBand(r.riskScore) });
+  const mk = (input, id) => ({
+    id, title: input.title, description: input.description ?? null, category: input.category,
+    affectedAsset: input.affectedAsset ?? null, likelihood: input.likelihood, impact: input.impact,
+    riskScore: Number(input.likelihood) * Number(input.impact), owner: input.owner ?? null,
+    status: input.status || 'open', mitigationPlan: input.mitigationPlan ?? null,
+    dueDate: input.dueDate ?? null, managementAcceptance: !!input.managementAcceptance,
+    evidenceLink: input.evidenceLink ?? null,
+    createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+  });
+  return {
+    rows,
+    findAll: overrides.findAll || (async ({ status = null, category = null } = {}) =>
+      rows.filter((r) => (!status || r.status === status) && (!category || r.category === category)).map(map)),
+    findById: overrides.findById || (async (id) => { const r = rows.find((x) => x.id === id); return r ? map(r) : null; }),
+    create: overrides.create || (async (input) => { const r = mk(input, (seq += 1)); rows.push(r); return map(r); }),
+    update: overrides.update || (async (id, input) => { const i = rows.findIndex((x) => x.id === id); if (i < 0) return null; rows[i] = mk(input, id); return map(rows[i]); }),
+    remove: overrides.remove || (async (id) => { const i = rows.findIndex((x) => x.id === id); if (i < 0) return false; rows.splice(i, 1); return true; }),
+  };
+}
+
+// A fake NIS2 controls repository (in-memory, stateful).
+function makeNis2ControlsRepo(overrides = {}) {
+  const rows = [];
+  let seq = 0;
+  const mk = (input, id) => ({
+    id, controlName: input.controlName, nis2Area: input.nis2Area, description: input.description ?? null,
+    owner: input.owner ?? null, frequency: input.frequency || 'quarterly', lastPerformed: input.lastPerformed ?? null,
+    nextDue: input.nextDue ?? null, evidenceFile: input.evidenceFile ?? null,
+    hasEvidence: !!(input.evidenceFile && String(input.evidenceFile).trim()),
+    status: input.status || 'Missing', comment: input.comment ?? null,
+    createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+  });
+  const needs = (c) => !c.hasEvidence || c.status === 'Missing' || c.status === 'Overdue';
+  return {
+    rows,
+    findAll: overrides.findAll || (async ({ status = null, area = null } = {}) =>
+      rows.filter((c) => (!status || c.status === status) && (!area || c.nis2Area === area))),
+    findById: overrides.findById || (async (id) => rows.find((x) => x.id === id) || null),
+    findWithoutEvidence: overrides.findWithoutEvidence || (async () => rows.filter(needs)),
+    create: overrides.create || (async (input) => { const c = mk(input, (seq += 1)); rows.push(c); return c; }),
+    update: overrides.update || (async (id, input) => { const i = rows.findIndex((x) => x.id === id); if (i < 0) return null; rows[i] = mk(input, id); return rows[i]; }),
+    remove: overrides.remove || (async (id) => { const i = rows.findIndex((x) => x.id === id); if (i < 0) return false; rows.splice(i, 1); return true; }),
+  };
+}
+
+// A fake NIS2 incidents repository (in-memory, stateful). Mints INC-YYYY-NNNN.
+function makeNis2IncidentsRepo(overrides = {}) {
+  const rows = [];
+  let seq = 0;
+  const mk = (input, id, ref) => ({
+    id, incidentId: ref, title: input.title, severity: input.severity || 'medium',
+    detectedAt: input.detectedAt ?? null, startedAt: input.startedAt ?? null, resolvedAt: input.resolvedAt ?? null,
+    affectedSystems: input.affectedSystems ?? null, businessImpact: input.businessImpact ?? null,
+    rootCause: input.rootCause ?? null, actionsTaken: input.actionsTaken ?? null,
+    nis2Relevant: !!input.nis2Relevant, notificationRequired: !!input.notificationRequired,
+    status: input.status || 'open', lessonsLearned: input.lessonsLearned ?? null,
+    createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+  });
+  return {
+    rows,
+    findAll: overrides.findAll || (async ({ status = null, severity = null, nis2Relevant = null } = {}) =>
+      rows.filter((i) => (!status || i.status === status) && (!severity || i.severity === severity)
+        && (nis2Relevant == null || i.nis2Relevant === nis2Relevant))),
+    findById: overrides.findById || (async (id) => rows.find((x) => x.id === id) || null),
+    create: overrides.create || (async (input) => { const id = (seq += 1); const r = mk(input, id, `INC-2026-${String(id).padStart(4, '0')}`); rows.push(r); return r; }),
+    update: overrides.update || (async (id, input) => { const i = rows.findIndex((x) => x.id === id); if (i < 0) return null; rows[i] = mk(input, id, rows[i].incidentId); return rows[i]; }),
+    remove: overrides.remove || (async (id) => { const i = rows.findIndex((x) => x.id === id); if (i < 0) return false; rows.splice(i, 1); return true; }),
+    nextRef: overrides.nextRef || (async () => `INC-2026-${String(seq + 1).padStart(4, '0')}`),
+  };
+}
+
+// A fake NIS2 reports repository (in-memory, stateful).
+function makeNis2ReportsRepo(overrides = {}) {
+  const rows = [];
+  let seq = 0;
+  return {
+    rows,
+    findAll: overrides.findAll || (async ({ type = null } = {}) => rows.filter((r) => !type || r.reportType === type).slice().reverse()),
+    findById: overrides.findById || (async (id) => rows.find((x) => x.id === id) || null),
+    findLatest: overrides.findLatest || (async (type) => { const m = rows.filter((r) => r.reportType === type); return m.length ? m[m.length - 1] : null; }),
+    create: overrides.create || (async (input) => {
+      const r = {
+        id: (seq += 1), reportType: input.reportType, title: input.title,
+        periodStart: input.periodStart ?? null, periodEnd: input.periodEnd ?? null,
+        status: input.status || 'draft', summary: input.summary ?? null, snapshot: input.snapshot ?? null,
+        generatedBy: input.generatedBy ?? null, generatedByEmail: input.generatedByEmail ?? null,
+        approvedBy: null, approvedByEmail: null, approvedAt: null, createdAt: '2026-01-01T00:00:00.000Z',
+      };
+      rows.push(r); return r;
+    }),
+    approve: overrides.approve || (async (id, { approvedBy, approvedByEmail }) => {
+      const r = rows.find((x) => x.id === id && x.status === 'draft');
+      if (!r) return null;
+      r.status = 'approved'; r.approvedBy = approvedBy ?? null; r.approvedByEmail = approvedByEmail ?? null; r.approvedAt = new Date().toISOString();
+      return r;
+    }),
+    remove: overrides.remove || (async (id) => { const i = rows.findIndex((x) => x.id === id); if (i < 0) return false; rows.splice(i, 1); return true; }),
+  };
+}
+
+// A fake NIS2 evidence repository (in-memory, stateful).
+function makeNis2EvidenceRepo(overrides = {}) {
+  const rows = [];
+  let seq = 0;
+  return {
+    rows,
+    findAll: overrides.findAll || (async ({ entityType = null, entityId = null } = {}) =>
+      rows.filter((e) => (!entityType || e.entityType === entityType) && (entityId == null || e.entityId === entityId)).slice().reverse()),
+    findById: overrides.findById || (async (id) => rows.find((x) => x.id === id) || null),
+    create: overrides.create || (async (input) => {
+      const r = { id: (seq += 1), title: input.title, description: input.description ?? null, fileName: input.fileName ?? null,
+        fileUrl: input.fileUrl ?? null, contentType: input.contentType ?? null, entityType: input.entityType ?? null,
+        entityId: input.entityId ?? null, uploadedBy: input.uploadedBy ?? null, uploadedByEmail: input.uploadedByEmail ?? null,
+        createdAt: '2026-01-01T00:00:00.000Z' };
+      rows.push(r); return r;
+    }),
+    remove: overrides.remove || (async (id) => { const i = rows.findIndex((x) => x.id === id); if (i < 0) return false; rows.splice(i, 1); return true; }),
+  };
+}
+
+// A fake NIS2 audit-log repository (in-memory). Records create/update/delete.
+function makeNis2AuditRepo(overrides = {}) {
+  const rows = [];
+  let seq = 0;
+  return {
+    rows,
+    record: overrides.record || (async (r) => { const id = (seq += 1); rows.push({ id, createdAt: new Date().toISOString(), ...r }); return id; }),
+    findAll: overrides.findAll || (async ({ entityType = null, limit = 100 } = {}) =>
+      rows.filter((r) => !entityType || r.entityType === entityType).slice().reverse().slice(0, limit)),
+  };
+}
+
 // ---- App + auth helpers ---------------------------------------------------
 
 // Builds an app wired with fakes; pass overrides to swap any dependency.
@@ -709,6 +851,12 @@ function makeApp(overrides = {}) {
     ldapLoginAuditRepo: overrides.ldapLoginAuditRepo || makeLdapLoginAuditRepo(),
     ldapAuth: overrides.ldapAuth || makeLdapAuth(),
     ldapAuthEnabledFlag: overrides.ldapAuthEnabledFlag || false,
+    nis2RisksRepo: overrides.nis2RisksRepo || makeNis2RisksRepo(),
+    nis2ControlsRepo: overrides.nis2ControlsRepo || makeNis2ControlsRepo(),
+    nis2IncidentsRepo: overrides.nis2IncidentsRepo || makeNis2IncidentsRepo(),
+    nis2ReportsRepo: overrides.nis2ReportsRepo || makeNis2ReportsRepo(),
+    nis2EvidenceRepo: overrides.nis2EvidenceRepo || makeNis2EvidenceRepo(),
+    nis2AuditRepo: overrides.nis2AuditRepo || makeNis2AuditRepo(),
     enrollConfig: overrides.enrollConfig || { publicUrl: '', certFingerprint: '' },
     notifyDashboard: overrides.notifyDashboard || (() => 0),
   });
@@ -794,6 +942,12 @@ module.exports = {
   makeLdapRoleMapRepo,
   makeLdapLoginAuditRepo,
   makeLdapAuth,
+  makeNis2RisksRepo,
+  makeNis2ControlsRepo,
+  makeNis2IncidentsRepo,
+  makeNis2ReportsRepo,
+  makeNis2EvidenceRepo,
+  makeNis2AuditRepo,
   makeDb,
   makeApp,
   tokenFor,

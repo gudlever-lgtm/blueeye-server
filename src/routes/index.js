@@ -34,6 +34,7 @@ const { createTestPackagesRouter } = require('./testPackages');
 const { createSpeedtestRouter, createSpeedtestReadRouter } = require('./speedtest');
 const { createIntegrationsRouter } = require('./integrations');
 const { createLdapRouter } = require('./ldap');
+const { createNis2Router } = require('./nis2');
 const {
   createAgentAuthenticator,
   createAgentTokenMiddleware,
@@ -90,6 +91,12 @@ function createApiRouter({
   ldapLoginAuditRepo,
   ldapAuth,
   ldapAuthEnabledFlag = false,
+  nis2RisksRepo,
+  nis2ControlsRepo,
+  nis2IncidentsRepo,
+  nis2ReportsRepo,
+  nis2EvidenceRepo,
+  nis2AuditRepo,
   enrollConfig = {},
   notifyDashboard,
 }) {
@@ -141,6 +148,14 @@ function createApiRouter({
   if (ldapConfigRepo && ldapRoleMapRepo && secretBox) {
     router.use('/api/ldap', createLdapRouter({
       ldapConfigRepo, ldapRoleMapRepo, ldapAuth, secretBox, authEnabledFlag: ldapAuthEnabledFlag,
+    }));
+  }
+  // NIS2 Reporting Center — risk register, control evidence, security incidents,
+  // management reports, evidence references + audit trail. Self-contained module.
+  if (nis2RisksRepo && nis2ControlsRepo && nis2IncidentsRepo) {
+    router.use('/api/nis2', createNis2Router({
+      nis2RisksRepo, nis2ControlsRepo, nis2IncidentsRepo,
+      nis2ReportsRepo, nis2EvidenceRepo, nis2AuditRepo,
     }));
   }
   if (testPackagesRepo) router.use('/api/test-packages', createTestPackagesRouter({ repo: testPackagesRepo, runner: testPackageRunner, usageService }));

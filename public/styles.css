@@ -905,3 +905,49 @@ button.active-btn { outline: 2px solid var(--accent); }
 .np-node .np-t { fill: var(--text); font-weight: 700; font-size: 13px; }
 .np-node .np-s { fill: var(--muted); font-size: 11px; }
 @media (prefers-reduced-motion: reduce) { .np-flow { animation: none; } }
+
+/* ---- NIS2 Reporting Center ----------------------------------------------- */
+.nis2-subtabs { flex-wrap: wrap; }
+.nis2-subtabs button.active { background: var(--panel-2); color: var(--text); border-color: var(--accent); }
+.nis2-h3 { margin: 18px 0 10px; font-size: 15px; }
+.nis2-body { margin-top: 8px; }
+.crit-text { color: var(--bad); }
+.warn-text { color: var(--warn); }
+
+/* Readiness gauge */
+.nis2-readiness { display: flex; align-items: center; gap: 20px; background: var(--panel);
+  border: 1px solid var(--border); border-radius: 12px; padding: 16px 20px; margin: 0 0 16px; }
+.nis2-gauge { flex: 1; max-width: 360px; }
+.nis2-gauge-v { font-size: 40px; font-weight: 800; line-height: 1; }
+.nis2-gauge-v.ok { color: var(--ok); }
+.nis2-gauge-v.warn { color: var(--warn); }
+.nis2-gauge-v.crit { color: var(--bad); }
+.nis2-gauge-bar { height: 10px; border-radius: 999px; background: var(--panel-2); overflow: hidden; margin-top: 8px; }
+.nis2-gauge-bar.sm { height: 6px; margin-top: 5px; }
+.nis2-gauge-bar > span { display: block; height: 100%; border-radius: 999px; background: var(--accent); transition: width .4s ease; }
+.nis2-gauge-bar > span.ok { background: var(--ok); }
+.nis2-gauge-bar > span.warn { background: var(--warn); }
+.nis2-gauge-bar > span.crit { background: var(--bad); }
+.nis2-gauge-bar > span.neutral { background: var(--muted); }
+.nis2-gauge-label strong { font-size: 16px; }
+
+/* Category grid */
+.nis2-cats { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
+.nis2-cat { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
+.nis2-cat-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 13px; font-weight: 600; }
+.nis2-cat-sub { font-size: 11px; margin-top: 5px; }
+
+/* Recommended actions + alerts */
+.nis2-actions { margin: 4px 0 0; padding-left: 20px; }
+.nis2-actions li { margin: 6px 0; }
+.nis2-alert { background: rgba(245,158,11,.12); border: 1px solid rgba(245,158,11,.35);
+  color: var(--text); border-radius: 8px; padding: 8px 12px; margin: 0 0 12px; font-size: 13px; }
+.nis2-exports { display: flex; gap: 8px; margin-top: 18px; flex-wrap: wrap; }
+.nis2-note { margin: 0 0 14px; font-size: 13px; }
+
+/* The many-field NIS2 edit modal reads best as a two-column grid. */
+.modal-card.wide .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 16px; }
+.modal-card.wide .form-grid textarea { min-height: 52px; }
+.modal-card.wide .form-grid .error,
+.modal-card.wide .form-grid .form-actions { grid-column: 1 / -1; }
+@media (max-width: 640px) { .modal-card.wide .form-grid { grid-template-columns: 1fr; } }

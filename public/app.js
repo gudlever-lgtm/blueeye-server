@@ -341,7 +341,7 @@ function showSigningKeySetupPrompt() {
 const VIEW_LABELS = {
   fleet: 'Overview', overview: 'Traffic', map: 'Sites', geo: 'Destinations', agents: 'Agents',
   interfaces: 'Interfaces', probes: 'Probes', tests: 'Tests', flows: 'Flows',
-  findings: 'Analysis', locations: 'Locations', enrollment: 'Enrollment', settings: 'Settings',
+  findings: 'Analysis', nis2: 'NIS2', locations: 'Locations', enrollment: 'Enrollment', settings: 'Settings',
 };
 function gotoView(viewKey) { closeDrawer(); currentView = viewKey; render(); }
 function viewLink(viewKey, label) {
@@ -5597,6 +5597,439 @@ function onLiveFinding(f) {
     }
   }
 }
+
+// ---- NIS2 Reporting Center ------------------------------------------------
+// A self-contained compliance module: readiness dashboard, risk register,
+// control evidence, security incidents, generated management reports and an
+// audit trail. Talks to /api/nis2/*; PDF export opens the server's print-ready
+// HTML in a new window (authed fetch → window.print), CSV downloads as a file.
+
+const NIS2_CATEGORIES = [
+  'Governance', 'Risk Management', 'Incident Response', 'Backup/Recovery', 'Access Control',
+  'Supplier Management', 'Network Security', 'Logging/Monitoring', 'Vulnerability Management', 'Documentation',
+];
+const NIS2_RISK_STATUS = ['open', 'mitigating', 'accepted', 'closed'];
+const NIS2_CONTROL_STATUS = ['OK', 'Partial', 'Missing', 'Overdue'];
+const NIS2_FREQ = ['daily', 'weekly', 'monthly', 'quarterly', 'annually', 'ad-hoc'];
+const NIS2_SEVERITY = ['low', 'medium', 'high', 'critical'];
+const NIS2_INCIDENT_STATUS = ['open', 'investigating', 'contained', 'resolved', 'closed'];
+
+const nis2State = { tab: 'dashboard' };
+
+// Maps a value to one of the shared badge palette classes (ok/warn/crit/INFO/neutral).
+const NIS2_BAND_CLASS = { Critical: 'crit', High: 'warn', Medium: 'INFO', Low: 'ok' };
+const NIS2_CTRL_CLASS = { OK: 'ok', Partial: 'warn', Missing: 'crit', Overdue: 'crit' };
+const NIS2_SEV_CLASS = { critical: 'crit', high: 'warn', medium: 'INFO', low: 'neutral' };
+const NIS2_CATSTATUS_CLASS = { good: 'ok', partial: 'warn', weak: 'crit', 'no-data': 'neutral' };
+const NIS2_PRIO_CLASS = { critical: 'crit', high: 'warn', medium: 'INFO' };
+
+const nbadge = (text, cls) => el('span', { class: `badge ${cls || 'neutral'}` }, text);
+function selField(name, label, options, value) {
+  return { name, label, type: 'select', value, options: options.map((o) => (typeof o === 'object' ? o : { value: o, label: o })) };
+}
+const yesNo = () => [{ value: 'false', label: 'No' }, { value: 'true', label: 'Yes' }];
+
+// Opens the standard edit modal, then widens it (NIS2 records have many fields).
+function nis2Modal(title, fields, onSubmit) {
+  openModal(title, fields, onSubmit);
+  $('#modal-card').classList.add('wide');
+}
+
+// Authenticated file download (CSV) — fetch with the bearer token, save a blob.
+async function nis2Download(path, filename) {
+  try {
+    const res = await fetch(path, { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = el('a', { href: url, download: filename });
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  } catch (err) { toast(`Export failed: ${err.message}`, true); }
+}
+
+// Authenticated print: fetch the server's print-ready HTML and open it in a new
+// window for the browser's "Save as PDF". The document carries its own print CSS.
+async function nis2Print(path) {
+  try {
+    const res = await fetch(path, { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const html = await res.text();
+    const w = window.open('', '_blank');
+    if (!w) { toast('Pop-up blocked — allow pop-ups to export PDF', true); return; }
+    w.document.open(); w.document.write(html); w.document.close();
+    w.focus();
+    setTimeout(() => { try { w.print(); } catch { /* user can print manually */ } }, 400);
+  } catch (err) { toast(`Export failed: ${err.message}`, true); }
+}
+
+views.nis2 = async () => {
+  const root = el('div', { class: 'nis2' });
+  const tabs = [
+    ['dashboard', 'Dashboard'], ['risks', 'Risk Register'], ['controls', 'Controls'],
+    ['incidents', 'Incidents'], ['reports', 'Reports'],
+  ];
+  if (role === 'admin') tabs.push(['audit', 'Audit Trail']);
+  const bar = el('div', { class: 'subtabs nis2-subtabs' },
+    ...tabs.map(([key, label]) => el('button', {
+      class: `small ghost${nis2State.tab === key ? ' active' : ''}`,
+      onclick: () => { nis2State.tab = key; render(); },
+    }, label)));
+  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'NIS2 Reporting Center'), bar));
+
+  const body = el('div', { class: 'nis2-body' }, el('div', { class: 'empty' }, 'Loading…'));
+  root.append(body);
+  const renderers = {
+    dashboard: nis2Dashboard, risks: nis2Risks, controls: nis2Controls,
+    incidents: nis2Incidents, reports: nis2Reports, audit: nis2Audit,
+  };
+  try { body.replaceChildren(await renderers[nis2State.tab]()); }
+  catch (err) { body.replaceChildren(el('div', { class: 'empty error' }, err.message)); }
+  return root;
+};
+
+// ---- NIS2: Dashboard -------------------------------------------------------
+async function nis2Dashboard() {
+  const d = await api('/api/nis2/dashboard');
+  const wrap = el('div');
+
+  // Readiness hero + KPI cards.
+  const readinessClass = d.readinessScore >= 80 ? 'ok' : d.readinessScore >= 50 ? 'warn' : 'crit';
+  wrap.append(el('div', { class: 'nis2-readiness' },
+    el('div', { class: 'nis2-gauge' },
+      el('div', { class: `nis2-gauge-v ${readinessClass}` }, `${d.readinessScore}%`),
+      el('div', { class: 'nis2-gauge-bar' }, el('span', { class: readinessClass, style: `width:${d.readinessScore}%` }))),
+    el('div', { class: 'nis2-gauge-label' }, el('strong', {}, 'NIS2 readiness'),
+      el('div', { class: 'muted' }, `${d.totals.controls} controls · ${d.totals.risks} risks · ${d.totals.incidents} incidents`))));
+
+  const kpi = (k, v, cls) => el('div', { class: 'kpi' },
+    el('div', { class: 'kpi-k' }, k), el('div', { class: `kpi-v ${cls || ''}` }, String(v)));
+  wrap.append(el('div', { class: 'kpi-grid' },
+    kpi('Open critical risks', d.openCriticalRisks, d.openCriticalRisks ? 'crit-text' : ''),
+    kpi('High/medium findings', d.openHighMediumFindings),
+    kpi('Incidents (30 days)', d.incidentsLast30Days),
+    kpi('Controls without evidence', d.controlsWithoutEvidence, d.controlsWithoutEvidence ? 'warn-text' : '')));
+
+  // Category status grid.
+  wrap.append(el('h3', { class: 'nis2-h3' }, 'Status by category'));
+  wrap.append(el('div', { class: 'nis2-cats' }, ...d.categories.map((c) => el('div', { class: 'nis2-cat' },
+    el('div', { class: 'nis2-cat-top' }, el('span', {}, c.category), nbadge(c.status, NIS2_CATSTATUS_CLASS[c.status])),
+    el('div', { class: 'nis2-gauge-bar sm' }, el('span', { class: NIS2_CATSTATUS_CLASS[c.status], style: `width:${c.score}%` })),
+    el('div', { class: 'muted nis2-cat-sub' }, `${c.controlCount} control(s) · ${c.score}%`)))));
+
+  // Top recommended actions.
+  wrap.append(el('h3', { class: 'nis2-h3' }, 'Top recommended actions'));
+  if (!d.topActions.length) wrap.append(el('div', { class: 'empty' }, 'No outstanding actions — nice work.'));
+  else wrap.append(el('ol', { class: 'nis2-actions' }, ...d.topActions.map((a) =>
+    el('li', {}, nbadge(a.priority, NIS2_PRIO_CLASS[a.priority] || 'neutral'), ' ', a.text))));
+
+  // Export shortcuts.
+  wrap.append(el('div', { class: 'nis2-exports' },
+    el('button', { class: 'small', onclick: () => nis2Print('/api/nis2/export/readiness.html') }, '⤓ Readiness PDF'),
+    el('button', { class: 'small', onclick: () => nis2Print('/api/nis2/export/executive.html') }, '⤓ Executive PDF')));
+  return wrap;
+}
+
+// ---- NIS2: Risk Register ---------------------------------------------------
+function nis2RiskFields(r) {
+  r = r || {};
+  return [
+    { name: 'title', label: 'Title', value: r.title },
+    selField('category', 'Category', NIS2_CATEGORIES, r.category || NIS2_CATEGORIES[0]),
+    { name: 'affectedAsset', label: 'Affected asset', value: r.affectedAsset },
+    selField('likelihood', 'Likelihood (1–5)', ['1', '2', '3', '4', '5'], String(r.likelihood || 1)),
+    selField('impact', 'Impact (1–5)', ['1', '2', '3', '4', '5'], String(r.impact || 1)),
+    { name: 'owner', label: 'Owner', value: r.owner },
+    selField('status', 'Status', NIS2_RISK_STATUS, r.status || 'open'),
+    { name: 'dueDate', label: 'Due date', type: 'date', value: r.dueDate || '' },
+    selField('managementAcceptance', 'Management acceptance', yesNo(), String(!!r.managementAcceptance)),
+    { name: 'evidenceLink', label: 'Evidence link', value: r.evidenceLink },
+    { name: 'mitigationPlan', label: 'Mitigation plan', type: 'textarea', value: r.mitigationPlan },
+    { name: 'description', label: 'Description', type: 'textarea', value: r.description },
+  ];
+}
+function nis2RiskBody(v) {
+  return {
+    title: v.title, category: v.category, affectedAsset: v.affectedAsset,
+    likelihood: Number(v.likelihood), impact: Number(v.impact), owner: v.owner,
+    status: v.status, dueDate: v.dueDate || null, managementAcceptance: v.managementAcceptance === 'true',
+    evidenceLink: v.evidenceLink, mitigationPlan: v.mitigationPlan, description: v.description,
+  };
+}
+async function nis2Risks() {
+  const risks = await api('/api/nis2/risks');
+  const wrap = el('div');
+  wrap.append(el('div', { class: 'section-head' },
+    el('h3', { class: 'nis2-h3' }, `Risk register (${risks.length})`),
+    el('span', { class: 'spacer', style: 'flex:1' }),
+    el('button', { class: 'small ghost', onclick: () => nis2Download('/api/nis2/export/risks.csv', 'nis2-risks.csv') }, '⤓ CSV'),
+    el('button', { class: 'small ghost', onclick: () => nis2Print('/api/nis2/export/risk.html') }, '⤓ PDF'),
+    canWrite() ? el('button', { class: 'small', onclick: () => nis2EditRisk() }, '+ New risk') : null));
+  if (!risks.length) { wrap.append(el('div', { class: 'empty' }, 'No risks recorded yet.')); return wrap; }
+  const head = ['Title', 'Category', 'Asset', 'L×I', 'Score', 'Owner', 'Status', 'Due', ''];
+  const rows = risks.map((r) => el('tr', {},
+    el('td', {}, el('strong', {}, r.title), r.managementAcceptance ? el('div', { class: 'muted' }, 'Mgmt accepted') : null),
+    el('td', {}, r.category),
+    el('td', {}, r.affectedAsset || '–'),
+    el('td', {}, `${r.likelihood}×${r.impact}`),
+    el('td', {}, nbadge(`${r.riskScore} ${r.band}`, NIS2_BAND_CLASS[r.band])),
+    el('td', {}, r.owner || '–'),
+    el('td', {}, nbadge(r.status, 'neutral')),
+    el('td', {}, r.dueDate || '–'),
+    el('td', {}, el('div', { class: 'row-actions' },
+      canWrite() ? el('button', { class: 'small ghost', onclick: () => nis2EditRisk(r) }, 'Edit') : null,
+      canWrite() ? el('button', { class: 'small ghost', onclick: () => nis2DeleteRisk(r) }, 'Delete') : null))));
+  wrap.append(el('div', { class: 'tablewrap' }, el('table', {},
+    el('thead', {}, el('tr', {}, ...head.map((h) => el('th', {}, h)))), el('tbody', {}, ...rows))));
+  return wrap;
+}
+function nis2EditRisk(r) {
+  const editing = r && r.id;
+  nis2Modal(editing ? 'Edit risk' : 'New risk', nis2RiskFields(r), async (v) => {
+    const path = editing ? `/api/nis2/risks/${r.id}` : '/api/nis2/risks';
+    await api(path, { method: editing ? 'PUT' : 'POST', body: nis2RiskBody(v) });
+    closeModal(); toast('Risk saved'); render();
+  });
+}
+async function nis2DeleteRisk(r) {
+  if (!confirm(`Delete risk "${r.title}"?`)) return;
+  try { await api(`/api/nis2/risks/${r.id}`, { method: 'DELETE' }); toast('Risk deleted'); render(); }
+  catch (err) { toast(errText(err), true); }
+}
+
+// ---- NIS2: Controls --------------------------------------------------------
+function nis2ControlFields(c) {
+  c = c || {};
+  return [
+    { name: 'controlName', label: 'Control name', value: c.controlName },
+    selField('nis2Area', 'NIS2 area', NIS2_CATEGORIES, c.nis2Area || NIS2_CATEGORIES[0]),
+    { name: 'owner', label: 'Owner', value: c.owner },
+    selField('frequency', 'Frequency', NIS2_FREQ, c.frequency || 'quarterly'),
+    selField('status', 'Status', NIS2_CONTROL_STATUS, c.status || 'Missing'),
+    { name: 'lastPerformed', label: 'Last performed', type: 'date', value: c.lastPerformed || '' },
+    { name: 'nextDue', label: 'Next due', type: 'date', value: c.nextDue || '' },
+    { name: 'evidenceFile', label: 'Evidence (link/reference)', value: c.evidenceFile },
+    { name: 'description', label: 'Description', type: 'textarea', value: c.description },
+    { name: 'comment', label: 'Comment', type: 'textarea', value: c.comment },
+  ];
+}
+function nis2ControlBody(v) {
+  return {
+    controlName: v.controlName, nis2Area: v.nis2Area, owner: v.owner, frequency: v.frequency,
+    status: v.status, lastPerformed: v.lastPerformed || null, nextDue: v.nextDue || null,
+    evidenceFile: v.evidenceFile, description: v.description, comment: v.comment,
+  };
+}
+async function nis2Controls() {
+  const [all, missing] = await Promise.all([api('/api/nis2/controls'), api('/api/nis2/controls?withoutEvidence=true')]);
+  const wrap = el('div');
+  wrap.append(el('div', { class: 'section-head' },
+    el('h3', { class: 'nis2-h3' }, `Controls (${all.length})`),
+    el('span', { style: 'flex:1' }),
+    el('button', { class: 'small ghost', onclick: () => nis2Download('/api/nis2/export/controls.csv', 'nis2-controls.csv') }, '⤓ CSV'),
+    el('button', { class: 'small ghost', onclick: () => nis2Print('/api/nis2/export/control.html') }, '⤓ PDF'),
+    canWrite() ? el('button', { class: 'small', onclick: () => nis2EditControl() }, '+ New control') : null));
+
+  if (missing.length) {
+    wrap.append(el('div', { class: 'nis2-alert' },
+      el('strong', {}, `${missing.length} control(s) need attention`),
+      ' — missing/overdue or without evidence.'));
+  }
+  if (!all.length) { wrap.append(el('div', { class: 'empty' }, 'No controls recorded yet.')); return wrap; }
+  const head = ['Control', 'Area', 'Owner', 'Frequency', 'Last', 'Next due', 'Evidence', 'Status', ''];
+  const rows = all.map((c) => el('tr', {},
+    el('td', {}, el('strong', {}, c.controlName)),
+    el('td', {}, c.nis2Area),
+    el('td', {}, c.owner || '–'),
+    el('td', {}, c.frequency),
+    el('td', {}, c.lastPerformed || '–'),
+    el('td', {}, c.nextDue || '–'),
+    el('td', {}, c.hasEvidence ? nbadge('yes', 'ok') : nbadge('none', 'crit')),
+    el('td', {}, nbadge(c.status, NIS2_CTRL_CLASS[c.status])),
+    el('td', {}, el('div', { class: 'row-actions' },
+      canWrite() ? el('button', { class: 'small ghost', onclick: () => nis2EditControl(c) }, 'Edit') : null,
+      canWrite() ? el('button', { class: 'small ghost', onclick: () => nis2DeleteControl(c) }, 'Delete') : null))));
+  wrap.append(el('div', { class: 'tablewrap' }, el('table', {},
+    el('thead', {}, el('tr', {}, ...head.map((h) => el('th', {}, h)))), el('tbody', {}, ...rows))));
+  return wrap;
+}
+function nis2EditControl(c) {
+  const editing = c && c.id;
+  nis2Modal(editing ? 'Edit control' : 'New control', nis2ControlFields(c), async (v) => {
+    const path = editing ? `/api/nis2/controls/${c.id}` : '/api/nis2/controls';
+    await api(path, { method: editing ? 'PUT' : 'POST', body: nis2ControlBody(v) });
+    closeModal(); toast('Control saved'); render();
+  });
+}
+async function nis2DeleteControl(c) {
+  if (!confirm(`Delete control "${c.controlName}"?`)) return;
+  try { await api(`/api/nis2/controls/${c.id}`, { method: 'DELETE' }); toast('Control deleted'); render(); }
+  catch (err) { toast(errText(err), true); }
+}
+
+// ---- NIS2: Incidents -------------------------------------------------------
+function nis2IncidentFields(i) {
+  i = i || {};
+  const dt = (v) => (v ? new Date(v).toISOString().slice(0, 16) : '');
+  return [
+    { name: 'title', label: 'Title', value: i.title },
+    selField('severity', 'Severity', NIS2_SEVERITY, i.severity || 'medium'),
+    selField('status', 'Status', NIS2_INCIDENT_STATUS, i.status || 'open'),
+    { name: 'detectedAt', label: 'Detected at', type: 'datetime-local', value: dt(i.detectedAt) },
+    { name: 'startedAt', label: 'Started at', type: 'datetime-local', value: dt(i.startedAt) },
+    { name: 'resolvedAt', label: 'Resolved at', type: 'datetime-local', value: dt(i.resolvedAt) },
+    selField('nis2Relevant', 'NIS2 relevant', yesNo(), String(!!i.nis2Relevant)),
+    selField('notificationRequired', 'Notification required', yesNo(), String(!!i.notificationRequired)),
+    { name: 'affectedSystems', label: 'Affected systems', type: 'textarea', value: i.affectedSystems },
+    { name: 'businessImpact', label: 'Business impact', type: 'textarea', value: i.businessImpact },
+    { name: 'rootCause', label: 'Root cause', type: 'textarea', value: i.rootCause },
+    { name: 'actionsTaken', label: 'Actions taken', type: 'textarea', value: i.actionsTaken },
+    { name: 'lessonsLearned', label: 'Lessons learned', type: 'textarea', value: i.lessonsLearned },
+  ];
+}
+function nis2IncidentBody(v) {
+  return {
+    title: v.title, severity: v.severity, status: v.status,
+    detectedAt: v.detectedAt || null, startedAt: v.startedAt || null, resolvedAt: v.resolvedAt || null,
+    nis2Relevant: v.nis2Relevant === 'true', notificationRequired: v.notificationRequired === 'true',
+    affectedSystems: v.affectedSystems, businessImpact: v.businessImpact, rootCause: v.rootCause,
+    actionsTaken: v.actionsTaken, lessonsLearned: v.lessonsLearned,
+  };
+}
+async function nis2Incidents() {
+  const incidents = await api('/api/nis2/incidents');
+  const wrap = el('div');
+  wrap.append(el('div', { class: 'section-head' },
+    el('h3', { class: 'nis2-h3' }, `Security incidents (${incidents.length})`),
+    el('span', { style: 'flex:1' }),
+    el('button', { class: 'small ghost', onclick: () => nis2Download('/api/nis2/export/incidents.csv', 'nis2-incidents.csv') }, '⤓ CSV'),
+    el('button', { class: 'small ghost', onclick: () => nis2Print('/api/nis2/export/incident.html') }, '⤓ PDF'),
+    canWrite() ? el('button', { class: 'small', onclick: () => nis2EditIncident() }, '+ New incident') : null));
+  if (!incidents.length) { wrap.append(el('div', { class: 'empty' }, 'No incidents recorded yet.')); return wrap; }
+  const head = ['Ref', 'Title', 'Severity', 'Detected', 'Status', 'NIS2', 'Notify', ''];
+  const rows = incidents.map((i) => el('tr', {},
+    el('td', {}, el('code', {}, i.incidentId)),
+    el('td', {}, el('strong', {}, i.title)),
+    el('td', {}, nbadge(i.severity, NIS2_SEV_CLASS[i.severity])),
+    el('td', {}, i.detectedAt ? fmtDate(i.detectedAt) : '–'),
+    el('td', {}, nbadge(i.status, 'neutral')),
+    el('td', {}, i.nis2Relevant ? nbadge('yes', 'warn') : '–'),
+    el('td', {}, i.notificationRequired ? nbadge('required', 'crit') : '–'),
+    el('td', {}, el('div', { class: 'row-actions' },
+      canWrite() ? el('button', { class: 'small ghost', onclick: () => nis2EditIncident(i) }, 'Edit') : null,
+      canWrite() ? el('button', { class: 'small ghost', onclick: () => nis2DeleteIncident(i) }, 'Delete') : null))));
+  wrap.append(el('div', { class: 'tablewrap' }, el('table', {},
+    el('thead', {}, el('tr', {}, ...head.map((h) => el('th', {}, h)))), el('tbody', {}, ...rows))));
+  return wrap;
+}
+function nis2EditIncident(i) {
+  const editing = i && i.id;
+  nis2Modal(editing ? `Edit incident ${i.incidentId}` : 'New incident', nis2IncidentFields(i), async (v) => {
+    const path = editing ? `/api/nis2/incidents/${i.id}` : '/api/nis2/incidents';
+    await api(path, { method: editing ? 'PUT' : 'POST', body: nis2IncidentBody(v) });
+    closeModal(); toast('Incident saved'); render();
+  });
+}
+async function nis2DeleteIncident(i) {
+  if (!confirm(`Delete incident "${i.title}"?`)) return;
+  try { await api(`/api/nis2/incidents/${i.id}`, { method: 'DELETE' }); toast('Incident deleted'); render(); }
+  catch (err) { toast(errText(err), true); }
+}
+
+// ---- NIS2: Reports ---------------------------------------------------------
+const NIS2_REPORT_TYPES = [
+  ['executive', 'Executive Report'], ['readiness', 'Readiness Report'],
+  ['risk', 'Risk Register Report'], ['control', 'Control Evidence Report'], ['incident', 'Incident Report'],
+];
+async function nis2Reports() {
+  const reports = await api('/api/nis2/reports');
+  const wrap = el('div');
+  wrap.append(el('div', { class: 'section-head' },
+    el('h3', { class: 'nis2-h3' }, 'Management reports'),
+    el('span', { style: 'flex:1' }),
+    canWrite() ? el('button', { class: 'small', onclick: () => nis2GenerateReport() }, '+ Generate report') : null));
+
+  wrap.append(el('p', { class: 'muted nis2-note' }, 'Generate a snapshot report (frozen metrics let the next report show the trend). View any report as a print-ready PDF. Reports are approved by an admin/compliance role.'));
+
+  if (!reports.length) wrap.append(el('div', { class: 'empty' }, 'No reports generated yet.'));
+  else {
+    const head = ['Type', 'Title', 'Readiness', 'Generated', 'By', 'Status', ''];
+    const rows = reports.map((r) => el('tr', {},
+      el('td', {}, (NIS2_REPORT_TYPES.find((t) => t[0] === r.reportType) || [r.reportType, r.reportType])[1]),
+      el('td', {}, r.title),
+      el('td', {}, r.snapshot && r.snapshot.readinessScore != null ? `${r.snapshot.readinessScore}%` : '–'),
+      el('td', {}, fmtDate(r.createdAt)),
+      el('td', {}, r.generatedByEmail || '–'),
+      el('td', {}, r.status === 'approved'
+        ? nbadge(`approved · ${r.approvedByEmail || ''}`, 'ok') : nbadge('draft', 'warn')),
+      el('td', {}, el('div', { class: 'row-actions' },
+        el('button', { class: 'small ghost', onclick: () => nis2PrintReportType(r.reportType) }, 'PDF'),
+        (role === 'admin' && r.status === 'draft') ? el('button', { class: 'small', onclick: () => nis2ApproveReport(r) }, 'Approve') : null,
+        canWrite() ? el('button', { class: 'small ghost', onclick: () => nis2DeleteReport(r) }, 'Delete') : null))));
+    wrap.append(el('div', { class: 'tablewrap' }, el('table', {},
+      el('thead', {}, el('tr', {}, ...head.map((h) => el('th', {}, h)))), el('tbody', {}, ...rows))));
+  }
+  return wrap;
+}
+function nis2PrintReportType(type) {
+  const map = { executive: 'executive', readiness: 'readiness', risk: 'risk', control: 'control', incident: 'incident' };
+  nis2Print(`/api/nis2/export/${map[type] || 'executive'}.html`);
+}
+function nis2GenerateReport() {
+  nis2Modal('Generate report', [
+    selField('reportType', 'Report type', NIS2_REPORT_TYPES.map((t) => ({ value: t[0], label: t[1] })), 'executive'),
+    { name: 'title', label: 'Title (optional)', value: '' },
+  ], async (v) => {
+    await api('/api/nis2/reports', { method: 'POST', body: { reportType: v.reportType, title: v.title || undefined } });
+    closeModal(); toast('Report generated'); render();
+  });
+}
+async function nis2ApproveReport(r) {
+  try { await api(`/api/nis2/reports/${r.id}/approve`, { method: 'POST' }); toast('Report approved'); render(); }
+  catch (err) { toast(errText(err), true); }
+}
+async function nis2DeleteReport(r) {
+  if (!confirm(`Delete report "${r.title}"?`)) return;
+  try { await api(`/api/nis2/reports/${r.id}`, { method: 'DELETE' }); toast('Report deleted'); render(); }
+  catch (err) { toast(errText(err), true); }
+}
+
+// ---- NIS2: Audit trail -----------------------------------------------------
+async function nis2Audit() {
+  const entries = await api('/api/nis2/audit');
+  const wrap = el('div');
+  wrap.append(el('h3', { class: 'nis2-h3' }, 'Audit trail'));
+  if (!entries.length) { wrap.append(el('div', { class: 'empty' }, 'No changes recorded yet.')); return wrap; }
+  const head = ['When', 'User', 'Action', 'Entity', 'ID'];
+  const rows = entries.map((e) => el('tr', {},
+    el('td', {}, fmtDate(e.createdAt)),
+    el('td', {}, e.userEmail || (e.userId != null ? `#${e.userId}` : '–')),
+    el('td', {}, nbadge(e.action, e.action === 'delete' ? 'crit' : e.action === 'approve' ? 'ok' : 'neutral')),
+    el('td', {}, e.entityType),
+    el('td', {}, e.entityId != null ? `#${e.entityId}` : '–')));
+  wrap.append(el('div', { class: 'tablewrap' }, el('table', {},
+    el('thead', {}, el('tr', {}, ...head.map((h) => el('th', {}, h)))), el('tbody', {}, ...rows))));
+  return wrap;
+}
+
+PAGE_INFO.nis2 = {
+  hero: 'NIS2 readiness at a glance — risks, controls, incidents and management reports in one place.',
+  title: 'NIS2 Reporting Center',
+  body: () => [
+    el('p', {}, 'A compliance workspace for NIS2: track your readiness score, maintain a risk register, evidence your controls, record security incidents, and generate management/executive reports.'),
+    el('h4', {}, 'Dashboard'),
+    el('p', {}, 'A single readiness percentage (the mean of the ten category scores, each derived from its controls’ evidence health), plus headline counts and the top recommended actions.'),
+    el('h4', {}, 'Risk register'),
+    el('p', {}, 'Risks are scored as likelihood × impact (1–25) and colour-banded Low/Medium/High/Critical. Export to CSV or PDF.'),
+    el('h4', {}, 'Controls'),
+    el('p', {}, 'Recurring assurance activities tied to a NIS2 area, with status (OK/Partial/Missing/Overdue) and an evidence reference. Controls lacking evidence are flagged.'),
+    el('h4', {}, 'Incidents'),
+    el('p', {}, 'Security incidents (distinct from the network incidents derived from probes). Flag the ones that may carry a NIS2 notification obligation.'),
+    el('h4', {}, 'Reports & audit'),
+    el('p', {}, 'Generate snapshot reports (the frozen metrics let the next report show the trend). Reports are approved by an admin/compliance role. Every change to a risk, control or incident is written to the audit trail.'),
+    el('p', { class: 'muted' }, 'PDF export opens a clean, print-ready document — use your browser’s “Save as PDF”.'),
+  ],
+};
 
 let currentView = 'fleet';
 const modalOpen = () => !$('#modal').classList.contains('hidden');

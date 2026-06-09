@@ -7,10 +7,13 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const request = require('supertest');
 
-const { makeApp, makeSecretBox, makeLdapConfigRepo, makeLdapRoleMapRepo, makeLdapAuth, authHeader, throwingAsync } = require('../test-support/fakes');
+const { makeApp, makeSecretBox, makeLdapConfigRepo, makeLdapRoleMapRepo, makeLdapLoginAuditRepo, makeLdapAuth, makeFeatureGate, authHeader, throwingAsync } = require('../test-support/fakes');
 
 const admin = () => authHeader('admin');
 const viewer = () => authHeader('viewer');
+
+// A feature gate with the LDAP/AD entitlement (sso_ldap) switched off.
+const unlicensed = () => makeFeatureGate({ isFeatureEnabled: () => false });
 
 const CFG = { host: 'ad.acme.dk', port: 636, useTls: true, bindDn: 'cn=svc,dc=x', baseDn: 'dc=x', userFilter: '(sAMAccountName={{username}})', enabled: true };
 
@@ -23,11 +26,45 @@ test('GET /api/ldap/config without a token -> 401; as viewer -> 403', async () =
 
 // ---- Config ---------------------------------------------------------------
 
-test('GET /api/ldap/config returns the env flag + null config initially', async () => {
+test('GET /api/ldap/config returns the env flag + licence flag + null config initially', async () => {
   const res = await request(makeApp({ ldapAuthEnabledFlag: true })).get('/api/ldap/config').set('Authorization', admin());
   assert.equal(res.status, 200);
   assert.equal(res.body.authEnabledFlag, true);
+  assert.equal(res.body.licensed, true); // default fake gate grants sso_ldap
   assert.equal(res.body.config, null);
+  assert.equal(res.body.bindPasswordSet, false);
+});
+
+test('GET /api/ldap/config reports bindPasswordSet without leaking the secret', async () => {
+  const secretBox = makeSecretBox();
+  const ldapConfigRepo = makeLdapConfigRepo();
+  const app = makeApp({ secretBox, ldapConfigRepo });
+  await request(app).put('/api/ldap/config').set('Authorization', admin()).send({ ...CFG, bindPassword: 's3cret' });
+  const res = await request(app).get('/api/ldap/config').set('Authorization', admin());
+  assert.equal(res.status, 200);
+  assert.equal(res.body.bindPasswordSet, true);
+  assert.equal(res.body.config.bind_pw_encrypted, undefined);
+  assert.ok(!JSON.stringify(res.body).includes('s3cret'));
+});
+
+// ---- Licence gate (sso_ldap) ----------------------------------------------
+
+test('GET /api/ldap/config still readable when unlicensed, but reports licensed:false', async () => {
+  const res = await request(makeApp({ featureGate: unlicensed() })).get('/api/ldap/config').set('Authorization', admin());
+  assert.equal(res.status, 200);
+  assert.equal(res.body.licensed, false);
+});
+
+test('mutations + test are refused (403, reason:license) when the licence lacks LDAP/AD', async () => {
+  const app = makeApp({ featureGate: unlicensed() });
+  const put = await request(app).put('/api/ldap/config').set('Authorization', admin()).send(CFG);
+  assert.equal(put.status, 403);
+  assert.equal(put.body.feature, 'sso_ldap');
+  assert.equal(put.body.reason, 'license');
+  assert.equal((await request(app).post('/api/ldap/role-map').set('Authorization', admin()).send({ groupDn: 'cn=a,dc=x', role: 'admin' })).status, 403);
+  assert.equal((await request(app).post('/api/ldap/test').set('Authorization', admin()).send({})).status, 403);
+  // Reads remain available so the admin can still inspect state.
+  assert.equal((await request(app).get('/api/ldap/role-map').set('Authorization', admin())).status, 200);
 });
 
 test('PUT /api/ldap/config saves; the bind password is encrypted at rest and never returned', async () => {
@@ -122,6 +159,24 @@ test('POST /api/ldap/test returns the connectivity result', async () => {
   assert.equal(res.status, 200);
   assert.equal(res.body.ok, false);
   assert.match(res.body.detail, /bind failed/);
+});
+
+// ---- Login audit ----------------------------------------------------------
+
+test('GET /api/ldap/login-audit returns recent attempts (newest first), admin-only', async () => {
+  const ldapLoginAuditRepo = makeLdapLoginAuditRepo();
+  await ldapLoginAuditRepo.record({ username: 'alice', ok: true, reason: 'ok', grantedRole: 'admin', groupsMatched: 2, sourceIp: '10.0.0.1' });
+  await ldapLoginAuditRepo.record({ username: 'mallory', ok: false, reason: 'no-role', grantedRole: null, groupsMatched: 0, sourceIp: '10.0.0.2' });
+  const app = makeApp({ ldapLoginAuditRepo });
+
+  assert.equal((await request(app).get('/api/ldap/login-audit')).status, 401);
+  assert.equal((await request(app).get('/api/ldap/login-audit').set('Authorization', viewer())).status, 403);
+
+  const res = await request(app).get('/api/ldap/login-audit').set('Authorization', admin());
+  assert.equal(res.status, 200);
+  assert.equal(res.body.length, 2);
+  assert.equal(res.body[0].username, 'mallory'); // newest first
+  assert.equal(res.body[1].granted_role || res.body[1].grantedRole, 'admin');
 });
 
 // ---- 500 ------------------------------------------------------------------

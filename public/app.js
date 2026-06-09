@@ -641,7 +641,8 @@ const PAGE_INFO = {
         el('li', {}, settingsLink('alerting', 'Alerting'), ': channels (e-mail/webhook/syslog) — enable, set a minimum severity, and fill in the connection details. Secrets (SMTP password, webhook HMAC) are write-only: stored on the server, never shown again.'),
         el('li', {}, settingsLink('retention', 'Retention'), ': how long raw/aggregated data and findings are kept before being cleaned up.'),
         el('li', {}, settingsLink('types', 'Traffic types'), ': define the categories (DNS, Facebook …) from service ports and destination ASN. Shown on ', viewLink('overview', 'Traffic'), ' → Traffic type.'),
-        el('li', {}, settingsLink('map', 'Map'), ': tile and geocoder source for the maps (use an EU/self-hosted source in production).')),
+        el('li', {}, settingsLink('map', 'Map'), ': tile and geocoder source for the maps (use an EU/self-hosted source in production).'),
+        el('li', {}, settingsLink('auth', 'Authentication'), ': connect an LDAP / Active Directory server so users log in with their directory account and get a role from their group membership. Requires the Enterprise licence and the server flag LDAP_AUTH_ENABLED; the bind password is write-only. Local accounts remain as a fallback.')),
       el('h4', {}, 'Read-only (set in .env / requires restart)'),
       el('ul', {},
         el('li', {}, settingsLink('users', 'Users'), ': create/edit staff and roles (admin only).'),
@@ -4853,18 +4854,32 @@ async function deleteCode(c) {
 
 // ---- Settings (settings overview: users + license + config) ---------
 let settingsTab = null;
+// Settings are organised into labelled sections rather than one long row of tabs,
+// so related controls sit together and the page stays scannable as it grows. Each
+// tab is [key, label, adminOnly]; non-admins only ever see the personal section.
+const SETTINGS_GROUPS = [
+  ['Access & security', [['users', 'Users', true], ['auth', 'Authentication', true], ['agentkey', 'Agent key', true]]],
+  ['Detection & alerts', [['analyse', 'Analysis', true], ['alerting', 'Alerting', true], ['maintenance', 'Maintenance', true]]],
+  ['Data', [['retention', 'Retention', true], ['types', 'Traffic types', true], ['map', 'Map', true]]],
+  ['System', [['updates', 'Updates', true]]],
+  ['Personal', [['appearance', 'Appearance', false], ['license', 'License', false]]],
+];
 views.settings = async () => {
   const root = el('div');
   const isAdmin = role === 'admin';
-  const subtabs = [];
-  if (isAdmin) subtabs.push(['analyse', 'Analysis'], ['alerting', 'Alerting'], ['maintenance', 'Maintenance'], ['updates', 'Updates'], ['agentkey', 'Agent key'], ['retention', 'Retention'], ['types', 'Traffic types'], ['map', 'Map'], ['users', 'Users']);
-  // Appearance + License are personal/read-only — available to every role.
-  subtabs.push(['appearance', 'Appearance'], ['license', 'License']);
-  if (!settingsTab || !subtabs.some(([k]) => k === settingsTab)) settingsTab = subtabs[0][0];
+  // Drop admin-only tabs for non-admins, then drop any section left empty.
+  const groups = SETTINGS_GROUPS
+    .map(([label, tabs]) => [label, tabs.filter(([, , adminOnly]) => isAdmin || !adminOnly)])
+    .filter(([, tabs]) => tabs.length > 0);
+  const allKeys = groups.flatMap(([, tabs]) => tabs.map(([k]) => k));
+  if (!settingsTab || !allKeys.includes(settingsTab)) settingsTab = allKeys[0];
 
-  const nav = el('div', { class: 'subtabs' }, ...subtabs.map(([k, label]) =>
-    el('button', { class: `small ghost${k === settingsTab ? ' active' : ''}`, onclick: () => { settingsTab = k; render(); } }, label)));
-  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Settings'), el('span', { class: 'spacer' }), nav));
+  const nav = el('div', { class: 'settings-nav' }, ...groups.map(([label, tabs]) =>
+    el('div', { class: 'settings-nav-group' },
+      el('span', { class: 'settings-nav-label' }, label),
+      el('div', { class: 'subtabs' }, ...tabs.map(([k, lbl]) =>
+        el('button', { class: `small ghost${k === settingsTab ? ' active' : ''}`, onclick: () => { settingsTab = k; render(); } }, lbl))))));
+  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Settings')), nav);
 
   const views2 = {
     users: () => views.users(),
@@ -4878,6 +4893,7 @@ views.settings = async () => {
     updates: settingsUpdatesView,
     agentkey: settingsAgentKeyView,
     retention: settingsRetentionView,
+    auth: settingsAuthView,
   };
   let content;
   try {
@@ -5291,6 +5307,216 @@ function alertingSyslogCard(channel) {
     ],
     gather: () => ({ host: hostI.value.trim(), port: Number(portI.value), proto: protoI.value, appName: appI.value.trim() }),
   });
+}
+
+// ---- Settings → Authentication (LDAP / Active Directory) ------------------
+// Connect BlueEye to an LDAP/AD directory so users sign in with their directory
+// account and get a role from their group membership. Backend: src/routes/ldap.js
+// (config CRUD + connectivity test + login audit) and src/auth/ldap.js (the bind
+// + group→role resolution, run from src/routes/auth.js at login). Admin-only and
+// licence-gated (sso_ldap, Enterprise) — the server returns licensed:false and
+// refuses the writes when the plan doesn't include it.
+async function settingsAuthView() {
+  const cfgRes = await api('/api/ldap/config');
+  const cfg = cfgRes.config || {};
+  const licensed = cfgRes.licensed !== false; // server-computed; allow-until-known-off
+  const envOn = cfgRes.authEnabledFlag === true;
+  const root = el('div');
+  root.append(el('p', { class: 'muted settings-intro' },
+    'Let users sign in with their Active Directory / LDAP account. After a successful bind, each user’s BlueEye role is taken from their directory group membership (the highest matching role wins), so access is governed centrally in the directory. Local accounts keep working as a fallback. ',
+    ldapBadge(licensed)));
+
+  if (!licensed) {
+    root.append(el('div', { class: 'settings-grid' }, ldapUnlicensedCard()));
+    return root;
+  }
+
+  const roleMap = await api('/api/ldap/role-map').catch(() => []);
+  if (!envOn) root.append(ldapInactiveBanner());
+  root.append(el('div', { class: 'settings-grid' },
+    ldapConnectionCard(cfg, cfgRes.bindPasswordSet),
+    ldapRoleMapCard(Array.isArray(roleMap) ? roleMap : []),
+    ldapAuditCard()));
+  return root;
+}
+
+// Licence badge for the Authentication tab. Built from the server-computed flag —
+// the generic licenseBadge() reads the legacy four-feature summary, which doesn't
+// carry the packaged sso_ldap key.
+function ldapBadge(licensed) {
+  return el('span', { class: `badge ${licensed ? 'active' : 'offline'}` }, `Licence: LDAP/AD ${licensed ? 'yes' : 'no'}`);
+}
+
+// Read-only placeholder when the licence doesn't include directory auth — the
+// writes are refused server-side too, so this explains the missing controls.
+function ldapUnlicensedCard() {
+  return el('div', { class: 'settings-card' }, el('h3', {}, 'LDAP / Active Directory'),
+    el('p', { class: 'muted' }, 'Directory login is not included in your licence, so it can’t be configured here. It is part of the BlueEye Enterprise plan — contact your provider to enable it. ',
+      settingsLink('license', 'See Settings → License'), ' for the full feature matrix.'),
+    ldapBadge(false));
+}
+
+// Shown when LDAP is configured here but the server wasn't started with
+// LDAP_AUTH_ENABLED=true, so directory login isn't actually live yet.
+function ldapInactiveBanner() {
+  return el('div', { class: 'settings-card wide ldap-banner' },
+    el('h3', {}, el('span', { class: 'badge warn' }, 'Inactive'), ' Server flag required'),
+    el('p', { class: 'muted' }, 'These settings are saved, but directory login only takes effect once the server is started with the environment variable ',
+      el('code', {}, 'LDAP_AUTH_ENABLED=true'), '. Until then, users sign in with local accounts.'));
+}
+
+function roleSelect(value) {
+  const sel = el('select', {}, ...['viewer', 'operator', 'admin'].map((r) => el('option', { value: r }, r)));
+  sel.value = ['viewer', 'operator', 'admin'].includes(value) ? value : 'viewer';
+  return sel;
+}
+
+// Connection settings: host/port/TLS, the search bind account (write-only
+// password), the directory base + filters, and the enable switch. Save persists
+// the whole config; "Test connection" binds with the saved service account.
+function ldapConnectionCard(cfg, bindPasswordSet) {
+  const enabledI = el('input', { type: 'checkbox' }); enabledI.checked = cfg.enabled === true;
+  const hostI = el('input', { type: 'text', value: cfg.host || '', placeholder: 'ad.example.eu' });
+  const tlsI = el('input', { type: 'checkbox' }); tlsI.checked = cfg.use_tls !== false;
+  const portI = el('input', { type: 'number', min: '1', max: '65535', step: '1', value: String(cfg.port ?? 636) });
+  const bindDnI = el('input', { type: 'text', value: cfg.bind_dn || '', placeholder: 'cn=svc-blueeye,ou=svc,dc=example,dc=eu — blank = anonymous' });
+  const baseDnI = el('input', { type: 'text', value: cfg.base_dn || '', placeholder: 'dc=example,dc=eu' });
+  const userFilterI = el('input', { type: 'text', value: cfg.user_filter || '(sAMAccountName={{username}})' });
+  const groupFilterI = el('input', { type: 'text', value: cfg.group_filter || '', placeholder: '(member={{dn}}) — optional, only if memberOf is absent' });
+  const pass = alertSecretField('Bind password', 'Service-account password used for the search bind. Write-only — stored encrypted, never shown.', !!bindPasswordSet, '••••');
+  const err = el('p', { class: 'error' });
+  const saveBtn = el('button', { class: 'small' }, 'Save');
+  const testBtn = el('button', { class: 'small ghost' }, 'Test connection');
+
+  // Flip the port to the scheme's standard when TLS is toggled and the port is
+  // still a default, mirroring the server's 636 (LDAPS) / 389 (LDAP) defaulting.
+  tlsI.addEventListener('change', () => {
+    if (['', '389', '636'].includes(portI.value)) portI.value = tlsI.checked ? '636' : '389';
+  });
+
+  function gather() {
+    const body = {
+      host: hostI.value.trim(), port: Number(portI.value), useTls: tlsI.checked,
+      bindDn: bindDnI.value.trim(), baseDn: baseDnI.value.trim(),
+      userFilter: userFilterI.value.trim(), groupFilter: groupFilterI.value.trim(),
+      enabled: enabledI.checked,
+    };
+    if (pass.clear.checked) body.clearBindPassword = true;
+    else if (pass.input.value !== '') body.bindPassword = pass.input.value;
+    return body;
+  }
+  async function save() {
+    err.textContent = ''; saveBtn.disabled = true;
+    try { await api('/api/ldap/config', { method: 'PUT', body: gather() }); toast('LDAP settings saved'); render(); }
+    catch (e) { err.textContent = errText(e); saveBtn.disabled = false; }
+  }
+  async function test() {
+    err.textContent = ''; testBtn.disabled = true;
+    try {
+      const r = await api('/api/ldap/test', { method: 'POST' });
+      if (r.ok) toast(`Connected: ${r.detail || 'ok'}`);
+      else err.textContent = `Test failed: ${r.detail || 'unknown error'}`;
+    } catch (e) { err.textContent = errText(e); }
+    finally { testBtn.disabled = false; }
+  }
+  saveBtn.addEventListener('click', save);
+  testBtn.addEventListener('click', test);
+
+  return el('div', { class: 'settings-card' }, el('h3', {}, 'Directory connection'),
+    el('div', { class: 'form-grid' },
+      alertField('Directory login enabled', enabledI, 'Master switch for this config. Login also requires the server flag LDAP_AUTH_ENABLED and the licence.'),
+      alertField('Host', hostI, 'Hostname or IP of the AD/LDAP server. Use an EU/on-prem directory.'),
+      alertField('Use TLS (LDAPS)', tlsI, 'Required for any non-local host — a plaintext bind off-localhost is refused.'),
+      alertField('Port', portI, 'Standard ports: 636 for LDAPS, 389 for plaintext.'),
+      alertField('Bind DN', bindDnI, 'Service account for the user search. Leave blank to search anonymously.'),
+      ...pass.rows,
+      alertField('Base DN', baseDnI, 'Where user/group searches start, e.g. dc=example,dc=eu.'),
+      alertField('User filter', userFilterI, 'Must contain {{username}}. AD: (sAMAccountName={{username}}); OpenLDAP: (uid={{username}}).'),
+      alertField('Group filter (optional)', groupFilterI, 'Only used when the user entry has no memberOf. {{dn}}/{{username}} are substituted.'),
+      err,
+      el('div', { class: 'form-actions' }, saveBtn, testBtn,
+        el('span', { class: 'muted small' }, 'Save before testing — the test uses the saved settings.'))));
+}
+
+// Group → role mapping: each LDAP/AD group DN maps to a BlueEye role. The change
+// select PUTs immediately; add/delete re-render the tab.
+function ldapRoleMapCard(roleMap) {
+  const card = el('div', { class: 'settings-card wide' }, el('h3', {}, 'Group → role mapping'));
+  card.append(el('p', { class: 'muted small' },
+    'Map a directory group (by its full DN) to a BlueEye role. A user gets the highest role across all their matched groups; a user in no mapped group is denied access — there is no default role. Roles: viewer < operator < admin.'));
+  const err = el('p', { class: 'error' });
+  const listEl = el('div', { class: 'tablewrap' });
+
+  function renderList() {
+    if (!roleMap.length) {
+      listEl.replaceChildren(el('div', { class: 'empty' }, 'No mappings yet. Until at least one exists, every directory login is denied — add one below.'));
+      return;
+    }
+    listEl.replaceChildren(el('table', {},
+      el('thead', {}, el('tr', {}, el('th', {}, 'Group DN'), el('th', {}, 'Role'), el('th', {}))),
+      el('tbody', {}, ...roleMap.map((m) => {
+        const sel = roleSelect(m.blueeye_role);
+        sel.addEventListener('change', async () => {
+          err.textContent = '';
+          try { await api(`/api/ldap/role-map/${m.id}`, { method: 'PUT', body: { groupDn: m.ldap_group_dn, role: sel.value } }); m.blueeye_role = sel.value; toast('Mapping updated'); }
+          catch (e) { sel.value = m.blueeye_role; err.textContent = errText(e); }
+        });
+        const del = el('button', { class: 'small ghost danger', onclick: async () => {
+          err.textContent = '';
+          try { await api(`/api/ldap/role-map/${m.id}`, { method: 'DELETE' }); render(); }
+          catch (e) { err.textContent = errText(e); }
+        } }, 'Delete');
+        return el('tr', {}, el('td', {}, el('code', {}, m.ldap_group_dn)), el('td', {}, sel), el('td', {}, del));
+      }))));
+  }
+  renderList();
+
+  const groupI = el('input', { type: 'text', placeholder: 'cn=NetOps,ou=Groups,dc=example,dc=eu' });
+  const roleI = roleSelect('viewer');
+  const addBtn = el('button', { class: 'small' }, '+ Add mapping');
+  addBtn.addEventListener('click', async () => {
+    err.textContent = '';
+    const groupDn = groupI.value.trim();
+    if (!groupDn) { err.textContent = 'Group DN is required.'; return; }
+    addBtn.disabled = true;
+    try { await api('/api/ldap/role-map', { method: 'POST', body: { groupDn, role: roleI.value } }); render(); }
+    catch (e) { err.textContent = e.status === 409 ? 'That group is already mapped.' : errText(e); addBtn.disabled = false; }
+  });
+
+  card.append(listEl, el('div', { class: 'ldap-add' },
+    el('label', { class: 'set-field' }, el('span', {}, 'Group DN'), groupI),
+    el('label', { class: 'set-field' }, el('span', {}, 'Role'), roleI),
+    addBtn), err);
+  return card;
+}
+
+// Recent directory sign-in attempts (read-only), so an admin can confirm logins
+// are flowing and see which role each grant resolved to. Lazy-loads + refreshes.
+function ldapAuditCard() {
+  const card = el('div', { class: 'settings-card wide' });
+  const body = el('div', {}, el('p', { class: 'muted small' }, 'Loading…'));
+  const refresh = el('button', { class: 'small ghost' }, '↻ Refresh');
+  card.append(el('div', { class: 'section-head' }, el('h3', {}, 'Recent sign-ins'), el('span', { class: 'spacer' }), refresh), body);
+
+  async function load() {
+    body.replaceChildren(el('p', { class: 'muted small' }, 'Loading…'));
+    let rows;
+    try { rows = await api('/api/ldap/login-audit?limit=25'); }
+    catch (e) { body.replaceChildren(el('p', { class: 'error' }, errText(e))); return; }
+    if (!rows.length) { body.replaceChildren(el('div', { class: 'empty' }, 'No directory sign-in attempts recorded yet.')); return; }
+    body.replaceChildren(el('div', { class: 'tablewrap' }, el('table', {},
+      el('thead', {}, el('tr', {}, ...['When', 'Username', 'Result', 'Role', 'Groups', 'Source IP'].map((h) => el('th', {}, h)))),
+      el('tbody', {}, ...rows.map((r) => el('tr', {},
+        el('td', { class: 'muted' }, fmtDate(r.created_at)),
+        el('td', {}, esc(r.username || '–')),
+        el('td', {}, r.ok ? el('span', { class: 'badge ok' }, 'ok') : el('span', { class: 'badge bad' }, esc(r.reason || 'failed'))),
+        el('td', {}, esc(r.granted_role || '–')),
+        el('td', { class: 'muted' }, String(r.groups_matched ?? 0)),
+        el('td', { class: 'muted' }, esc(r.source_ip || '–'))))))));
+  }
+  refresh.addEventListener('click', load);
+  load();
+  return card;
 }
 
 // Maintenance windows: during an active window, alert notifications are

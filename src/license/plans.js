@@ -31,6 +31,7 @@ const FEATURE_CATALOG = {
   rbac: { label: 'Role-based access control', minPlan: 'professional' },
   audit_log: { label: 'Audit log', minPlan: 'professional' },
   api_access: { label: 'API access', minPlan: 'professional' },
+  sso_ldap: { label: 'LDAP / Active Directory auth', minPlan: 'enterprise' },
   sso_oidc: { label: 'SSO (OIDC)', minPlan: 'enterprise' },
   sso_saml: { label: 'SSO (SAML)', minPlan: 'enterprise' },
   ha_deployment: { label: 'High-availability deployment', minPlan: 'enterprise' },
@@ -59,6 +60,7 @@ const PRO_FEATURES = [
 const ENTERPRISE_FEATURES = [
   ...PRO_FEATURES,
   'reports_compliance',
+  'sso_ldap',
   'sso_oidc',
   'sso_saml',
   'ha_deployment',

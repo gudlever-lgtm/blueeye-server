@@ -5668,12 +5668,13 @@ function editUser(u) {
       closeModal(); toast('Password changed'); render();
     });
   } else if (u) {
-    // Update: role + optional password reset (email is immutable here).
+    // Update: email, role + optional password reset.
     openModal(`Edit ${u.email}`, [
+      { name: 'email', label: 'Email', type: 'email', value: u.email },
       { name: 'role', label: 'Role', type: 'select', value: u.role, options: ROLE_OPTIONS },
       { name: 'password', label: 'New password (optional)', type: 'password', value: '' },
     ], async (v) => {
-      const body = { role: v.role };
+      const body = { email: v.email, role: v.role };
       if (v.password) body.password = v.password;
       await api(`/users/${u.id}`, { method: 'PUT', body });
       closeModal(); toast('User updated'); render();

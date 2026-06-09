@@ -62,14 +62,18 @@ function createUsersRepository(db) {
     return findById(result.insertId);
   }
 
-  // Patch may contain `role` and/or `passwordHash`. Returns the updated row,
-  // or null if no user with that id exists.
+  // Patch may contain `email`, `role` and/or `passwordHash`. Returns the updated
+  // row, or null if no user with that id exists.
   async function update(id, patch) {
     const existing = await findById(id);
     if (!existing) return null;
 
     const fields = [];
     const params = [];
+    if (patch.email !== undefined) {
+      fields.push('email = ?');
+      params.push(patch.email);
+    }
     if (patch.role !== undefined) {
       fields.push('role = ?');
       params.push(patch.role);

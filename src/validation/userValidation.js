@@ -58,13 +58,16 @@ function validateUserCreate(body) {
   return Object.keys(errors).length > 0 ? { errors } : { value };
 }
 
-// PUT /users/:id — role is required; password is an optional reset.
+// PUT /users/:id — role is required; email and password are optional updates.
 function validateUserUpdate(body) {
   const input = body && typeof body === 'object' && !Array.isArray(body) ? body : {};
   const errors = {};
   const value = {};
 
   value.role = validateRole(input.role, errors);
+  if (input.email !== undefined) {
+    value.email = validateEmail(input.email, errors);
+  }
   if (input.password !== undefined) {
     value.password = validatePassword(input.password, errors);
   }

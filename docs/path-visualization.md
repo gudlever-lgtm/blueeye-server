@@ -63,6 +63,13 @@ per-hop precision stays in the topology graph; the map answers "which countries 
 the traffic cross, and where did it degrade?". When there aren't at least two
 geolocated stops (no GeoIP DB, or all-private hops) the panel explains why.
 
+The same overlay is also reachable **from the Destinations tab** via a path picker
+(pick agent + traceroute target → "Show path"): `drawGeoPath()` draws the path into
+a dedicated Leaflet layer on the existing map (shared `renderPathStops()`), with a
+side-panel summary listing the geolocated stops and the worst hop; "Clear path"
+removes the layer and restores the destinations overview. Target options come from
+the agent's recent traceroutes (`/api/probes/latest`).
+
 ## Caveats (by design)
 
 - **Silent routers.** Many routers don't emit ICMP "TTL exceeded", so an

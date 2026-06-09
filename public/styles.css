@@ -718,6 +718,8 @@ th.sortable.sorted { color: var(--accent); }
 .badge.revoked, .badge.unlicensed, .badge.invalid, .badge.crit, .badge.bad, .badge.down, .badge.error { background: rgba(239,68,68,.15); color: var(--bad); }
 /* Neutral/consumed (e.g. an enrollment code that's been used up). */
 .badge.used, .badge.neutral { background: rgba(148,163,184,.18); color: var(--muted); }
+/* Planned-but-not-built feature (license feature matrix). Distinct from warn. */
+.badge.roadmap { background: rgba(139,92,246,.15); color: #8b5cf6; border: 1px dashed rgba(139,92,246,.45); }
 /* Finding severities. */
 .badge.CRIT { background: rgba(239,68,68,.15); color: var(--bad); }
 .badge.WARN { background: rgba(245,158,11,.15); color: var(--warn); }

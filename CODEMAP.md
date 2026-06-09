@@ -36,6 +36,7 @@ src/
 ├── auth/              # user JWT (roles) + separate agent-token auth
 │   ├── jwt.js password.js roles.js middleware.js   # user side (requireAuth/requireRole)
 │   ├── ldap.js                                      # external LDAP/AD auth (supplements local login)
+│   ├── apiTokenAuth.js                              # API tokens (api_access): authenticates X-API-Key / Bearer → req.user
 │   └── tokens.js agentAuth.js                       # agent opaque-token side
 ├── integrations/      # outbound API integrations (ITSM/IPAM connectors)
 │   ├── dispatcher.js  # trigger layer: events → enabled targets (debounce/retry/audit)
@@ -89,7 +90,9 @@ Mounted in `src/routes/index.js`. User endpoints use JWT + roles
 | `/enrollment-codes` | enrollmentCodes.js | operator+ | enrollment codes (single-use or **bulk / multi-use**) |
 | `/enroll` | enroll.js | none | **frictionless enrollment**: `/config`, `/agent-source.tgz` (agent source bundle + SHA-256, served locally — air-gap-friendly), `/agent-release(.tgz)` (signed release + manifest), `/agent-release-key` (release public key the agent pins for signed self-updates), `/uninstall.sh`, `/agent/:platform` (legacy pre-built binary), `/:code/install.sh` (self-contained installer: verifies the source, then installs natively via Node+systemd by default — Docker opt-in via `BLUEEYE_RUNTIME=docker`) |
 | `/api/enroll` | enrollCommand.js | operator+ | **install-command generator** (`/command`: one-liner + manual/checksum; mints or reuses a code) |
-| `/license` | license.js | viewer+ | license status + features |
+| `/license` | license.js | viewer+ | license status + features + plan/usage/**matrix** (feature `status`: available/roadmap) |
+| `/api/api-tokens` | apiTokens.js | admin (gated `api_access`) | **API tokens** — mint/list/revoke; secret shown once, hashed at rest |
+| `/api/audit-log` | auditLog.js | admin (gated `audit_log`) | **unified audit log** — auth/user/role/license/report/api_token events; `?category=&user=&limit=` |
 | `/system` | system.js | viewer+ | storage/disk/db + ingest estimate |
 | `/api/findings` | findings.js | viewer+ | analysis findings + ack |
 | `/api/assistant` | assistant.js | viewer+ (gated) | opt-in AI: `/explain` (per-host Q&A) + **`/location-summary`** (per-location "what's going on?") |
@@ -100,7 +103,7 @@ Mounted in `src/routes/index.js`. User endpoints use JWT + roles
 | `/api/export` | export.js | viewer+ | CSV/JSON export + **investigation bundle** (`/investigation`: per-agent health+probes+interfaces+findings+flows, JSON or event-log CSV; print→PDF client-side) |
 | `/api/flows` | flows.js | viewer+ | **traffic-type categories** (`/categories`) + **conversation explorer** (`/explore`: talkers/ports/protos/series + scan/fan-out) |
 | `/api/probes` | probes.js | viewer+ | **active-probe** results (ping/tcp/dns/traceroute/**http**); `/path` → **path-visualisation graph** (hop nodes+links with loss/latency/jitter + GeoIP/ASN, `src/analysis/pathGraph.js`) |
-| `/api/reports` | reports.js | viewer+ / operator+ | **availability** (uptime % from probes) + **incidents** list (viewer+); **NIS2 draft** (`/nis2-draft/:id`, operator+) |
+| `/api/reports` | reports.js | viewer+ / operator+ | **availability** (uptime % from probes) + **incidents** list (viewer+); CSV (`.csv`, gated `reports_csv`) + print-ready HTML→PDF (`.html`, gated `reports_pdf`); **NIS2 draft** (`/nis2-draft/:id`, operator+) |
 | `/api/thresholds` | thresholds.js | viewer+ read / admin write | **incident thresholds** — global defaults + per-location overrides |
 | `/api/fleet` | fleet.js | viewer+ | **fleet health** rollup (`/health`) + per-agent verdict (`/agent/:id`) + **NIC firmware inventory / drift** (`/nics`) |
 | `/api/interfaces` | interfaces.js | viewer+ | **interface health** (util/errors/discards/link) |
@@ -132,6 +135,8 @@ Later migrations add:
 | 026 / 027 | `integrations` / `integration_audit` | outbound API integrations + per-fire audit (credentials encrypted at rest) |
 | 028 / 029 | `ldap_config` + `ldap_role_map` / `ldap_login_audit` | LDAP/AD auth config + group→role map + login audit (bind password encrypted at rest) |
 | 031 | `blueeye_nis2_risks` · `blueeye_nis2_controls` · `blueeye_nis2_incidents` · `blueeye_nis2_reports` · `blueeye_nis2_evidence` · `blueeye_audit_log` | **NIS2 Reporting Center** — risk register, control evidence, security incidents, generated reports (with frozen metric snapshots for trend), evidence references + a generic change audit log |
+| 032 | `audit_log` | **unified audit log** (feature `audit_log`) — auth/user/role/license/report/api_token events; metadata only, never secrets |
+| 033 | `api_tokens` | **API tokens** (feature `api_access`) — programmatic access; only the SHA-256 hash stored, role-scoped |
 
 Interface health, traffic-type categories and **fleet health** add **no** tables — they
 derive from the existing `results.payload.traffic` (and `flow_records.asn` for org
@@ -187,7 +192,10 @@ A single vanilla-JS SPA. Key building blocks:
 | Agent data-quality (drops/skew/version) | `src/health/dataQuality.js` (`computeDataQuality`); surfaced via `/api/fleet/health` + `/api/fleet/agent/:id` — all signals already sent by the agent |
 | A dashboard tab/view | `public/index.html` (button) + `views.<x>` in `public/app.js` + `PAGE_INFO` |
 | A dashboard colour palette (light+dark) | `PALETTES` + paired `[data-theme=…]` blocks in `public/styles.css`; picker `settingsAppearanceView` in `public/app.js`; per-user persistence via `/me` (`src/routes/me.js`, `usersRepository.get/updatePreferences`) + key whitelist in `src/validation/preferencesValidation.js` |
-| License / feature gating | `src/license/*` (`features.js` = fail-closed gate; `plans.js` = plan/feature catalogue; `planService.js` = active-plan resolution + limits) + `src/services/usageService.js` (limit enforcement). Read-only API: `/license/plan`, `/license/usage`, `/license/matrix`. See `docs/licensing.md`. |
+| License / feature gating | `src/license/*` (`features.js` = fail-closed gate + `requirePlanFeature` middleware; `plans.js` = plan/feature catalogue incl. `status` available/roadmap; `planService.js` = active-plan resolution + limits) + `src/services/usageService.js` (limit enforcement). Read-only API: `/license/plan`, `/license/usage`, `/license/matrix`. Feature **status & roadmap** tracked in **`ROADMAP.md`** + the Settings → License matrix Roadmap badge. See `docs/licensing.md`. |
+| API tokens (programmatic access) | feature `api_access`: `src/routes/apiTokens.js` (admin CRUD, gated) + `src/repositories/apiTokensRepository.js` + `src/lib/apiToken.js` (mint/hash) + `src/auth/apiTokenAuth.js` (authenticates `X-API-Key`/`Bearer` → `req.user`, mounted in `routes/index.js`); table `api_tokens` (migration 033) |
+| Audit log (who-did-what) | feature `audit_log`: `src/routes/auditLog.js` (admin read, gated) + `src/repositories/auditLogRepository.js` + `src/services/auditLogger.js` (fail-safe recorder); recording wired in `routes/auth.js` (login), `users.js` (user admin), `license.js` (re-validate), `apiTokens.js` + `reports.js`; table `audit_log` (migration 032) |
+| Report exports (CSV / PDF) | `src/routes/reports.js` `*.csv` (gated `reports_csv`) + `*.html` (gated `reports_pdf`, print→PDF) via `src/lib/reportHtml.js`; NIS2 compliance pack gated `reports_compliance` in `src/routes/nis2.js` |
 | Offline (no-server) licensing | `src/license/licenseVerifier.js` (verifies a local signed file, Ed25519) + `offlineLicenseManager.js` (same surface as the online manager; restricted mode when invalid/expired). Selected by `LICENSE_MODE=offline`/`LICENSE_FILE` in `src/server.js`. Issue files with `scripts/sign-offline-license.js`. |
 | Outbound integrations (ITSM/IPAM) | connectors in `src/integrations/connectors/*` (+ `index.js` registry); trigger/debounce/retry/audit in `src/integrations/dispatcher.js`; HTTP in `src/routes/integrations.js`; validation in `src/validation/integrationValidation.js`; tables `integrations`/`integration_audit` (migrations 026/027). Events wired in `analysis/pipeline.js` + `probePipeline.js` (findings) and the enroll/agent-delete routes. See docs/integrations.md |
 | LDAP/AD authentication | `src/auth/ldap.js` (bind + group→role; **licence-gated** via injected `featureGate` → `sso_ldap`); login flow in `src/routes/auth.js`; config CRUD + login-audit in `src/routes/ldap.js`; validation in `src/validation/ldapValidation.js`; tables `ldap_config`/`ldap_role_map`/`ldap_login_audit` (migrations 028/029); gates: env `LDAP_AUTH_ENABLED` **+** licence `sso_ldap` (Enterprise, `src/license/plans.js`). **Dashboard UI = `settingsAuthView` (Settings → Authentication)** in `public/app.js`. See docs/ldap-auth.md |

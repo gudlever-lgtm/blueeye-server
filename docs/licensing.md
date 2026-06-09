@@ -238,17 +238,45 @@ Each plan carries a `support_level`, surfaced in `GET /license/plan` and the UI:
 | Enterprise | `premium` |
 | MSP | `partner` |
 
-## Not yet implemented (deferred)
+## Feature status & roadmap
 
-These were in the original brief but are **not** part of this change to avoid
-destabilising the existing single-tenant API. The plan/feature scaffolding is in
-place so they can be added behind their feature flags:
+Each feature in `FEATURE_CATALOG` carries a `status` (`available` | `roadmap`),
+surfaced in `GET /license/matrix` and rendered as a **Roadmap** badge in the
+Settings → License matrix. The human checklist is **[ROADMAP.md](../ROADMAP.md)**
+at the repo root — keep it and the `status` field in step.
 
-- Full **MSP multi-tenancy** (`tenant_id` on agents/test-paths/reports/users,
-  tenant-scoped UI/API) — gated by `msp_multitenant`.
-- Expanded **RBAC** roles (auditor / msp_admin / tenant_admin / …) — today the
-  system uses the existing `admin`/`operator`/`viewer` roles; gated by `rbac`.
-- A **retention cleanup job** keyed on `history_days` (the limit is already
-  surfaced and can hide out-of-window data in views).
-- Extending the audit trail beyond agent upgrade/delete to license/plan/user/
-  role/report/token events — gated by `audit_log`.
+**Now implemented & gated** (were partial/ungated before):
+
+- **API access** (`api_access`) — programmatic API tokens: `GET/POST/DELETE
+  /api/api-tokens` (admin), token hashed at rest and shown once; tokens
+  authenticate API calls via `Authorization: Bearer <token>` or `X-API-Key`
+  (`src/auth/apiTokenAuth.js`). Table `api_tokens` (migration 033).
+- **Audit log** (`audit_log`) — unified who-did-what trail: `GET /api/audit-log`
+  (admin), recording auth login success/failure, user create/update/delete,
+  licence re-validation, report generation and API-token management. Table
+  `audit_log` (migration 032), recorder `src/services/auditLogger.js`.
+- **PDF / CSV reports** (`reports_pdf` / `reports_csv`) — `GET
+  /api/reports/{availability,incidents}.{csv,html}`; the print-ready HTML is
+  Print→PDF client-side (no PDF library). JSON reads stay ungated (Basic reports).
+- **Compliance report pack** (`reports_compliance`) — NIS2 report
+  generation/approval and all `/api/nis2/export/*` artifacts are gated; the
+  registers + readiness dashboard stay open.
+- **Role-based access control** (`rbac`) — user administration (`/users`) is
+  gated; the seeded super-admin always works so a server without `rbac` can
+  still log in.
+- **E-mail / webhook alerts** (`alerts_email` / `alerts_webhook`) — the
+  dispatcher now gates per channel, OR-ed with the legacy `alerting` module so
+  plan-based installs alert without a legacy proof feature map.
+
+**Roadmap (not built yet)** — catalogued + priced, `status: 'roadmap'`, tackled
+one at a time (see ROADMAP.md):
+
+- **Advanced dashboard** (`dashboard_advanced`).
+- **SSO (OIDC)** (`sso_oidc`) and **SSO (SAML)** (`sso_saml`).
+- **High-availability deployment** (`ha_deployment`).
+- **MSP multi-tenancy** (`msp_multitenant`) — `tenant_id` on
+  agents/test-paths/reports/users + tenant-scoped UI/API.
+- **Security pack** (`security_pack`).
+
+A **retention cleanup job** keyed on `history_days` also remains deferred (the
+limit is surfaced and can hide out-of-window data in views).

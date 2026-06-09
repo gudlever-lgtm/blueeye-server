@@ -7,7 +7,7 @@ const { ROLES } = require('../auth/roles');
 
 // Read-only view of the local license state (staff, viewer+). The signed proof
 // itself is never exposed as a token — this only reports status.
-function createLicenseRouter({ licenseManager, featureGate, planService, usageService }) {
+function createLicenseRouter({ licenseManager, featureGate, planService, usageService, auditLogger = null }) {
   const router = express.Router();
 
   router.get(
@@ -83,6 +83,7 @@ function createLicenseRouter({ licenseManager, featureGate, planService, usageSe
         return res.status(503).json({ error: 'License manager not available' });
       }
       const status = await licenseManager.validateOnce();
+      if (auditLogger) await auditLogger.record(req, { category: 'license', action: 'license_revalidate', detail: `status=${status && status.status}` });
       res.json(status);
     })
   );

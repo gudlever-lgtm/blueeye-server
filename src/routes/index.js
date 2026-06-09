@@ -13,6 +13,8 @@ const { createEnrollmentCodesRouter } = require('./enrollmentCodes');
 const { createLicenseRouter } = require('./license');
 const { createSystemRouter } = require('./system');
 const { createAuditRouter } = require('./audit');
+const { createAuditLogRouter } = require('./auditLog');
+const { createApiTokensRouter } = require('./apiTokens');
 const { createFindingsRouter } = require('./findings');
 const { createAssistantRouter } = require('./assistant');
 const { createGeoRouter } = require('./geo');
@@ -39,6 +41,7 @@ const {
   createAgentAuthenticator,
   createAgentTokenMiddleware,
 } = require('../auth/agentAuth');
+const { createApiTokenMiddleware } = require('../auth/apiTokenAuth');
 
 // Aggregates the feature routers into a single API router. New resources are
 // mounted here, keeping the app factory (src/app.js) small.
@@ -48,6 +51,9 @@ function createApiRouter({
   usersRepo,
   agentsRepo,
   auditRepo,
+  auditLogRepo,
+  apiTokensRepo,
+  auditLogger,
   enrollmentCodesRepo,
   enrollmentStore,
   agentTokensRepo,
@@ -117,12 +123,17 @@ function createApiRouter({
     agentsRepo,
   });
 
+  // API-token auth (license feature `api_access`): a no-op unless the request
+  // carries an API token, in which case it populates req.user so the existing
+  // requireAuth/requireRole work unchanged. Mounted once, ahead of every router.
+  if (apiTokensRepo) router.use(createApiTokenMiddleware({ apiTokensRepo }));
+
   router.use('/health', createHealthRouter({ db }));
-  router.use('/auth', createAuthRouter({ usersRepo, ldapAuth, ldapLoginAuditRepo }));
-  router.use('/users', createUsersRouter({ usersRepo }));
+  router.use('/auth', createAuthRouter({ usersRepo, ldapAuth, ldapLoginAuditRepo, auditLogger }));
+  router.use('/users', createUsersRouter({ usersRepo, featureGate, planService, auditLogger }));
   router.use('/me', createMeRouter({ usersRepo }));
   router.use('/locations', createLocationsRouter({ locationsRepo, resultsRepo }));
-  router.use('/license', createLicenseRouter({ licenseManager, featureGate, planService, usageService }));
+  router.use('/license', createLicenseRouter({ licenseManager, featureGate, planService, usageService, auditLogger }));
   router.use('/system', createSystemRouter({ systemInfo, agentSourceStore, releaseStore }));
   if (findingStore) router.use('/api/findings', createFindingsRouter({ findingStore }));
   if (assistant) router.use('/api/assistant', createAssistantRouter({ assistant, featureGate }));
@@ -135,7 +146,7 @@ function createApiRouter({
   }));
   if (probeResultsRepo) router.use('/api/probes', createProbesRouter({ probeResultsRepo, agentsRepo, geoProvider, centroids }));
   if (probeResultsRepo) router.use('/api/fleet', createFleetRouter({ agentsRepo, probeResultsRepo, resultsRepo, speedtestResultsRepo, settingsService }));
-  if (incidentsRepo && probeResultsRepo) router.use('/api/reports', createReportsRouter({ probeResultsRepo, incidentsRepo, locationsRepo }));
+  if (incidentsRepo && probeResultsRepo) router.use('/api/reports', createReportsRouter({ probeResultsRepo, incidentsRepo, locationsRepo, featureGate, planService, auditLogger }));
   if (thresholdsRepo) router.use('/api/thresholds', createThresholdsRouter({ thresholdsRepo, locationsRepo }));
   router.use('/api/interfaces', createInterfacesRouter({ resultsRepo, agentsRepo }));
   router.use('/api/search', createSearchRouter({ agentsRepo, locationsRepo, flowsRepo }));
@@ -159,6 +170,7 @@ function createApiRouter({
     router.use('/api/nis2', createNis2Router({
       nis2RisksRepo, nis2ControlsRepo, nis2IncidentsRepo,
       nis2ReportsRepo, nis2EvidenceRepo, nis2AuditRepo,
+      featureGate, planService,
     }));
   }
   if (testPackagesRepo) router.use('/api/test-packages', createTestPackagesRouter({ repo: testPackagesRepo, runner: testPackageRunner, usageService }));
@@ -183,6 +195,9 @@ function createApiRouter({
   // Requests fall through routers that have no matching route.
   router.use('/agents', createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentCommander, agentSourceStore, releaseStore, releasePublicKey, auditRepo, integrationTrigger: integrationsDispatcher }));
   router.use('/audit', createAuditRouter({ auditRepo }));
+  // Unified audit log (license feature `audit_log`) + API tokens (`api_access`).
+  if (auditLogRepo) router.use('/api/audit-log', createAuditLogRouter({ auditLogRepo, featureGate, planService }));
+  if (apiTokensRepo) router.use('/api/api-tokens', createApiTokensRouter({ apiTokensRepo, featureGate, planService, auditLogger }));
   router.use('/agents', createAgentReportsRouter({ agentAuth, resultsRepo, agentsRepo, analysisPipeline, flowPipeline, probeResultsRepo, probePipeline, incidentService }));
   router.use('/agents', createAgentEnrollRouter({ enrollmentStore, notifyDashboard, integrationTrigger: integrationsDispatcher }));
 

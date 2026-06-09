@@ -4152,13 +4152,36 @@ function geoPathSummary(graph, stops) {
         esc(String(place)), ' ', el('span', { class: 'muted' }, hopLabel));
     }))
     : el('div', { class: 'empty' }, 'No geolocated stops — country-level geo needs the agent site and at least one public hop.');
-  panel.replaceChildren(
+  // When a run exists but the map stays (almost) empty, say why instead of leaving
+  // a blank panel: either no hops came back at all (the agent's traceroute/tracert
+  // is missing or blocked), or hops came back but can't be placed (private hops, or
+  // no GeoIP country). The full per-hop topology is always on the Probes view.
+  let note = null;
+  if (graph.samples > 0 && stops.length < 2) {
+    if (!hops.length) {
+      const why = graph.detail
+        ? `The agent couldn't run traceroute: ${esc(graph.detail)}.`
+        : 'The traceroute returned no hops — the agent is likely missing the traceroute/tracert command or has it blocked.';
+      note = el('p', { class: 'muted small' }, `${why} Open Probes to see the raw result.`);
+    } else {
+      const silent = hops.every((h) => h.unresponsive);
+      note = el('p', { class: 'muted small' }, `${hops.length} hop${hops.length === 1 ? '' : 's'} captured${silent ? ' (all silent — no ICMP replies)' : ''}, but none could be placed on the map (private hops or no GeoIP country). Open Probes for the per-hop topology.`);
+    }
+  }
+  // worst-hop line and `note` can be null; `el()` skips null kids but a bare
+  // `replaceChildren(…, null, …)` would stringify it to the text "null", so filter.
+  const worstLine = worst && (rank[worst.severity] || 0) > 0
+    ? el('p', { class: worst.severity === 'bad' ? 'bad-text' : 'warn-text' }, `Worst hop: #${worst.hop} — ${esc(worst.explain)}`)
+    : null;
+  panel.replaceChildren(...[
     el('div', { class: 'section-head' }, el('h3', {}, 'Traceroute path')),
     el('p', {}, esc(graph.target || '(latest)')),
     el('p', { class: 'muted' }, `${graph.samples} run${graph.samples === 1 ? '' : 's'} aggregated · ${stops.length} geolocated stop${stops.length === 1 ? '' : 's'}`),
-    worst && (rank[worst.severity] || 0) > 0 ? el('p', { class: worst.severity === 'bad' ? 'bad-text' : 'warn-text' }, `Worst hop: #${worst.hop} — ${esc(worst.explain)}`) : null,
+    worstLine,
+    note,
     list,
-    el('p', { class: 'muted small' }, 'Open Probes to inspect the per-hop topology, or “Clear path” to return to the overview.'));
+    el('p', { class: 'muted small' }, 'Open Probes to inspect the per-hop topology, or “Clear path” to return to the overview.'),
+  ].filter(Boolean));
 }
 
 async function selectDestination(d) {

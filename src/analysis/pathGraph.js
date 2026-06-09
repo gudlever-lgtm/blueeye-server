@@ -88,6 +88,9 @@ function buildPathGraph(results, { geoProvider = null, centroids = null, target 
     samples: runs.length,
     firstTs: tsList.length ? new Date(Math.min(...tsList)).toISOString() : null,
     lastTs: tsList.length ? new Date(Math.max(...tsList)).toISOString() : null,
+    // The newest run's diagnostic (e.g. "traceroute not installed"), so the UI can
+    // explain an empty path instead of rendering a blank map. null on a clean run.
+    detail: runs.length ? (runs[runs.length - 1].detail ?? null) : null,
   };
   if (!runs.length) return { ...meta, nodes: [], links: [] };
 

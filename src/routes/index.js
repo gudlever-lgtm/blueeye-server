@@ -126,7 +126,7 @@ function createApiRouter({
   router.use('/system', createSystemRouter({ systemInfo, agentSourceStore, releaseStore }));
   if (findingStore) router.use('/api/findings', createFindingsRouter({ findingStore }));
   if (assistant) router.use('/api/assistant', createAssistantRouter({ assistant, featureGate }));
-  if (flowsRepo) router.use('/api/geo', createGeoRouter({ flowsRepo, agentsRepo, findingStore, tileConfig: geoTileConfig, getMapConfig, featureGate }));
+  if (flowsRepo) router.use('/api/geo', createGeoRouter({ flowsRepo, agentsRepo, findingStore, tileConfig: geoTileConfig, getMapConfig, geoProvider, featureGate }));
   if (dispatcher) router.use('/api/alerting', createAlertingRouter({ dispatcher }));
   router.use('/api/map', createMapRouter({ getMapConfig }));
   router.use('/api/flows', createFlowsRouter({

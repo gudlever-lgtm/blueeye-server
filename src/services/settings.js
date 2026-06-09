@@ -32,7 +32,7 @@ function badRequest(message, details) {
 // the env defaults. The map tile source and the traffic-type categories are
 // editable from the UI; everything else stays env-driven. Validation lives here
 // so the route stays thin.
-function createSettingsService({ settingsRepo, config, liveAnalysis = null, liveRetention = null, liveAlerting = null }) {
+function createSettingsService({ settingsRepo, config, liveAnalysis = null, liveRetention = null, liveAlerting = null, liveGeo = null }) {
   function mapDefaults() {
     return {
       tileUrl: config.geo.tileUrl,
@@ -95,6 +95,63 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
     const merged = { tileUrl: current.tileUrl, attribution: current.attribution, maxZoom: current.maxZoom, geocodeUrl: current.geocodeUrl, ...value };
     await settingsRepo.set('map', merged);
     return merged;
+  }
+
+  // ---- GeoIP database (Settings → Map) ------------------------------------
+  // The offline GeoIP/ASN range CSV the server uses to place public hop/flow IPs
+  // by country (see docs/geo.md). Env-driven by default (GEOIP_DB_PATH); an admin
+  // can override the path here and reload it live (liveGeo.reload) — no restart,
+  // so a freshly-built DB starts geolocating immediately. We store only a path
+  // (the DB is a large on-disk file), never its contents.
+  function geoEnvPath() {
+    return (config.geo && config.geo.dbPath) || '';
+  }
+
+  // Effective GeoIP status: the configured path (settings override or env), where
+  // it came from, and whether the live provider actually has ranges loaded.
+  async function getGeoip() {
+    const override = await loadOverride('geoip');
+    const hasOverride = override && typeof override === 'object' && typeof override.dbPath === 'string';
+    const envPath = geoEnvPath();
+    const dbPath = hasOverride ? override.dbPath : envPath;
+    const st = liveGeo && typeof liveGeo.status === 'function'
+      ? liveGeo.status()
+      : { configured: false, size: 0, source: null, error: null };
+    return {
+      dbPath,
+      source: hasOverride ? 'settings' : (envPath ? 'env' : null),
+      configured: !!st.configured,
+      ranges: st.size || 0,
+      error: st.error || null,
+    };
+  }
+
+  function validateGeoip(patch) {
+    const p = patch && typeof patch === 'object' ? patch : {};
+    const errors = {};
+    const value = {};
+    if (p.dbPath !== undefined) {
+      const s = String(p.dbPath).trim();
+      if (s.length > 1024) errors.dbPath = 'dbPath must be at most 1024 characters';
+      else value.dbPath = s; // '' clears the override → fall back to env / disabled
+    }
+    return { errors: Object.keys(errors).length ? errors : null, value };
+  }
+
+  // Persists the GeoIP path override (empty clears it) and live-reloads the
+  // provider from the effective path. Returns the new status, including how many
+  // ranges loaded (0 ⇒ wrong path / unreadable / empty), so the UI can confirm.
+  async function setGeoip(patch) {
+    const { errors, value } = validateGeoip(patch || {});
+    if (errors) throw badRequest('invalid geoip settings', errors);
+    if (value.dbPath !== undefined) {
+      await settingsRepo.set('geoip', value.dbPath === '' ? null : { dbPath: value.dbPath });
+    }
+    const eff = await getGeoip(); // path after the write (override or env)
+    if (liveGeo && typeof liveGeo.reload === 'function') {
+      try { liveGeo.reload({ dbPath: eff.dbPath || '' }); } catch { /* status reflects configured:false */ }
+    }
+    return await getGeoip(); // re-read so configured/ranges reflect the reload
   }
 
   // ---- Traffic-type categories (DNS, Facebook, ...) -----------------------
@@ -657,10 +714,19 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
       const al = await settingsRepo.get('alerting');
       if (al && liveAlerting) applyAlertingToLive(normAlerting(al));
     } catch { /* ignore */ }
+    try {
+      // Only override the env-loaded GeoIP path when an admin set one in Settings;
+      // otherwise the provider keeps the path it already loaded at construction.
+      const g = await settingsRepo.get('geoip');
+      if (g && typeof g.dbPath === 'string' && liveGeo && typeof liveGeo.reload === 'function') {
+        liveGeo.reload({ dbPath: g.dbPath });
+      }
+    } catch { /* ignore */ }
   }
 
   return {
     getMap, setMap, validateMap,
+    getGeoip, setGeoip, validateGeoip,
     getMaintenance, setMaintenance, validateMaintenance,
     getFlowCategories, setFlowCategories, resetFlowCategories, validateFlowCategories,
     getAnalysis, setAnalysis, validateAnalysis,

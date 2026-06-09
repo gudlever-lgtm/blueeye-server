@@ -39,23 +39,42 @@ function parseCsv(text) {
 }
 
 function createGeoProvider({ ranges, csv, dbPath, logger = silentLogger } = {}) {
-  let table = Array.isArray(ranges) ? ranges.slice() : [];
+  let table = [];
+  let source = null; // 'ranges' | 'csv' | 'file' | null
+  let path = null;
+  let error = null;
 
-  if (!table.length && typeof csv === 'string') {
-    table = parseCsv(csv);
-  }
-  if (!table.length && dbPath) {
-    try {
-      table = parseCsv(fs.readFileSync(dbPath, 'utf8'));
-      logger.info(`geo: loaded ${table.length} IP ranges from ${dbPath}`);
-    } catch (err) {
-      logger.warn(`geo: could not read GeoIP database at ${dbPath} (${err.message}) — geo enrichment disabled`);
-      table = [];
-    }
+  // (Re)builds the range table from whichever source is given, newest wins:
+  // an explicit `ranges` array, a `csv` string, or a `dbPath` file on disk. An
+  // empty/absent source clears the table (geo enrichment disabled). Returns the
+  // resulting range count. Used at construction and by reload() at runtime, so an
+  // admin can point at a freshly-built GeoIP CSV without restarting the server.
+  function load(opts = {}) {
+    const r = opts.ranges;
+    const c = opts.csv;
+    const d = opts.dbPath;
+    error = null;
+    if (Array.isArray(r) && r.length) { table = r.slice(); source = 'ranges'; path = null; }
+    else if (typeof c === 'string' && c.trim()) { table = parseCsv(c); source = 'csv'; path = null; }
+    else if (d) {
+      path = String(d);
+      try {
+        table = parseCsv(fs.readFileSync(d, 'utf8'));
+        source = 'file';
+        logger.info(`geo: loaded ${table.length} IP ranges from ${d}`);
+      } catch (err) {
+        error = err.message;
+        logger.warn(`geo: could not read GeoIP database at ${d} (${err.message}) — geo enrichment disabled`);
+        table = [];
+        source = null;
+      }
+    } else { table = []; source = null; path = null; }
+    // Sort by lower bound so we can binary-search.
+    table.sort((a, b) => a.lo - b.lo);
+    return table.length;
   }
 
-  // Sort by lower bound so we can binary-search.
-  table.sort((a, b) => a.lo - b.lo);
+  load({ ranges, csv, dbPath });
 
   function lookup(ip) {
     const n = ipv4ToInt(ip);
@@ -74,7 +93,18 @@ function createGeoProvider({ ranges, csv, dbPath, logger = silentLogger } = {}) 
     return { country: r.country, asn: r.asn, asnName: r.asnName };
   }
 
-  return { lookup, size: table.length };
+  // Re-read the table from a new source at runtime (e.g. an admin set/cleared the
+  // GeoIP path in Settings). Callers that hold this provider keep working — the
+  // closure's `table` is swapped in place, so lookup() reflects it immediately.
+  function reload(opts = {}) { return load(opts); }
+
+  // Whether geo enrichment is live, and from where — drives the "GeoIP not
+  // configured" hints in the UI. Never exposes file contents, only counts.
+  function status() {
+    return { configured: table.length > 0, size: table.length, source, path: path || null, error };
+  }
+
+  return { lookup, reload, status, get size() { return table.length; } };
 }
 
 module.exports = { createGeoProvider, parseCsv };

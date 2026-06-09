@@ -80,7 +80,34 @@ IP-to-Country and IP-to-ASN lite files into the format above. RIPE NCC
 US-hosted geo SDK or tile/API service — the constraint is EU/self-hosted data.
 
 When `GEOIP_DB_PATH` is unset or the file is unreadable, flows are still stored
-but with `country`/`asn` NULL (no geolocation); a warning is logged at startup.
+but with `country`/`asn` NULL (no geolocation); a warning is logged at startup,
+and the Destinations map shows a **"GeoIP database not configured"** banner (so an
+empty map reads as "not set up" rather than "broken"). Traceroute path overlays
+likewise collapse to the agent origin until a database is loaded.
+
+### Building the CSV
+
+`scripts/build-geoip.js` turns the DB-IP Lite files into the format above (IPv4,
+Node stdlib only — no dependency):
+
+```
+node scripts/build-geoip.js --country dbip-country-lite.csv.gz \
+     --asn dbip-asn-lite.csv.gz --out /data/geoip.csv
+# or stream them straight from a URL:
+node scripts/build-geoip.js --country-url <URL> --asn-url <URL> --out /data/geoip.csv
+```
+
+It range-joins the optional ASN file onto the country ranges, so each output row
+carries `country` and (where known) `asn,asn_name`.
+
+### Configuring at runtime (admin)
+
+Besides `GEOIP_DB_PATH`, an **admin** can set the server-side CSV path under
+**Settings → Map → GeoIP database**. It persists in `app_settings` (overriding the
+env path) and reloads the provider **live** — the response reports how many ranges
+loaded, so a wrong path shows as `0` rather than a silent no-op. An empty path
+clears the override (falls back to env / disabled). Only a *path* is stored, never
+the file's contents.
 
 ## Map API (Phase 8)
 

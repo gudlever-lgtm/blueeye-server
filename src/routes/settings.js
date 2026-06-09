@@ -28,6 +28,7 @@ function createSettingsRouter({ settingsService, featureGate, dispatcher, analys
       throughput: settingsService ? await settingsService.getThroughput() : null,
       assistant: settingsService ? await settingsService.getAssistantSafe() : null,
       map: settingsService ? await settingsService.getMap() : null,
+      geoip: settingsService ? await settingsService.getGeoip() : null,
       flowCategories: settingsService ? await settingsService.getFlowCategories() : null,
       maintenance: settingsService ? await settingsService.getMaintenance() : null,
       agentReleaseKey: releaseKeyService ? releaseKeyService.status() : { configured: false },
@@ -176,6 +177,21 @@ function createSettingsRouter({ settingsService, featureGate, dispatcher, analys
     try {
       const map = await settingsService.setMap(req.body || {});
       res.json({ map });
+    } catch (err) {
+      if (err.statusCode === 400) {
+        return res.status(400).json({ error: 'Validation failed', details: err.details || {} });
+      }
+      throw err;
+    }
+  }));
+
+  // PUT /api/settings/geoip { dbPath } — point the server at an offline GeoIP/ASN
+  // range CSV and reload it live (admin). Empty dbPath clears the override (falls
+  // back to env / disables). The response reports how many ranges loaded, so a
+  // wrong/unreadable path surfaces as ranges:0 rather than a silent no-op.
+  router.put('/geoip', ...admin, asyncHandler(async (req, res) => {
+    try {
+      res.json({ geoip: await settingsService.setGeoip(req.body || {}) });
     } catch (err) {
       if (err.statusCode === 400) {
         return res.status(400).json({ error: 'Validation failed', details: err.details || {} });

@@ -548,6 +548,8 @@ const PAGE_INFO = {
       el('ul', {},
         el('li', {}, el('strong', {}, '“Select region” '), '— drag a box to aggregate all destinations inside it (with combined findings).'),
         el('li', {}, el('strong', {}, '“Clear selection” '), '— return to the overview summary.')),
+      el('h4', {}, 'Traceroute path overlay'),
+      el('p', {}, 'Pick an agent and one of its recent traceroute targets, then ', el('strong', {}, '“Show path”'), ' to draw that path on this map: the agent site → transit countries → destination, as a severity-coloured line with a per-stop popup (hops · ASN · latency · loss). Geo is country-level, so same-country hops collapse to one stop — for the full per-hop topology, run it in ', viewLink('probes'), '. ', el('strong', {}, '“Clear path”'), ' removes the overlay.'),
       el('p', { class: 'muted' }, 'Map tiles are fetched from the server\'s config (EU/self-hosted), not a hardcoded US source. Destinations come from the same NetFlow/sFlow flows you drill into on ', viewLink('flows'), '; volumes by type are on ', viewLink('overview', 'Traffic'), '.'),
     ],
   },
@@ -2716,12 +2718,102 @@ function pathGraph(graph) {
     ...[['ok', 'Healthy'], ['warn', 'Degraded'], ['bad', 'Critical'], ['muted', 'Silent hop']].map(([c, l]) =>
       el('span', { class: 'lg' }, el('span', { class: `pg-dot ${c}` }), l)));
 
+  // Geographic overlay: the same path on the Destinations map. Public hops sit at
+  // country-centroid precision, so consecutive hops in one country collapse to a
+  // single stop. Lazily built on first open (Leaflet needs a sized container).
+  const geoStops = pathGeoStops(nodes);
+  const mapHost = el('div', { class: 'pg-map' });
+  const mapSection = el('details', { class: 'sec pg-mapsec' },
+    el('summary', {}, 'Geographic map ',
+      el('span', { class: 'muted' }, geoStops.length >= 2 ? `· ${geoStops.length} located stops` : '· needs GeoIP + a public hop')),
+    mapHost);
+  let mapBuilt = false;
+  mapSection.addEventListener('toggle', () => {
+    if (!mapSection.open || mapBuilt) return;
+    mapBuilt = true;
+    drawPathMap(mapHost, geoStops);
+  });
+
   return el('div', { class: 'pathmap' },
     el('div', { class: 'pg-head' },
       el('span', { class: 'muted' }, `${graph.samples} traceroute${graph.samples === 1 ? '' : 's'} aggregated · hover a hop for detail`),
       legend),
     el('div', { class: 'pg-scroll' }, svg),
-    panel);
+    panel,
+    mapSection);
+}
+
+// Leaflet fill colour for a hop/segment severity (concrete hex — markers can't use
+// CSS vars). Mirrors the path-graph legend.
+function pgColor(sev) {
+  return sev === 'bad' ? '#ef4444' : sev === 'warn' ? '#f59e0b' : sev === 'muted' ? '#94a3b8' : '#16a34a';
+}
+
+// Collapses the ordered path nodes into geolocated "stops": consecutive nodes
+// sharing a coordinate (same country centroid) merge into one, carrying the worst
+// severity and the hops they cover. Nodes without coordinates are skipped.
+function pathGeoStops(nodes) {
+  const rank = { ok: 0, muted: 0, warn: 1, bad: 2 };
+  const stops = [];
+  for (const n of nodes || []) {
+    if (n.lat == null || n.lng == null) continue;
+    const last = stops[stops.length - 1];
+    if (last && last.lat === n.lat && last.lng === n.lng) { last.nodes.push(n); continue; }
+    stops.push({ lat: n.lat, lng: n.lng, nodes: [n] });
+  }
+  for (const s of stops) s.severity = s.nodes.reduce((w, n) => ((rank[n.severity] || 0) > rank[w] ? n.severity : w), 'ok');
+  return stops;
+}
+
+// Popup HTML for one map stop (esc-escaped — IPs/ASN come from GeoIP + traceroute).
+function pathStopPopup(s, i, total) {
+  const head = i === 0 ? 'Origin' : (i === total - 1 ? 'Destination' : 'Transit');
+  const place = s.nodes[0].country ? ` · ${esc(s.nodes[0].country)}` : '';
+  const lines = s.nodes.map((n) => {
+    const who = n.kind === 'source' ? esc(n.label || 'Agent') : `Hop ${n.hop}${n.ip ? ' · ' + esc(n.ip) : ''}`;
+    const asn = n.asn != null ? ` · AS${n.asn}${n.asnName ? ' ' + esc(n.asnName) : ''}` : '';
+    const met = n.rttMs != null ? ` · ${n.rttMs} ms` : '';
+    const loss = n.lossPct ? ` · ${n.lossPct}% loss` : '';
+    return `<div>${who}${asn}${met}${loss}</div>`;
+  }).join('');
+  return `<div class="pg-pop"><strong>${head}${place}</strong>${lines}</div>`;
+}
+
+// Draws a path's geolocated stops into a Leaflet layer group: a polyline (each
+// segment coloured by its downstream stop's severity) through circle markers with
+// per-stop popups. Returns the ordered [lat,lng] list so the caller can fitBounds.
+// Shared by the probe-detail map and the Destinations path picker.
+function renderPathStops(layer, stops) {
+  const latlngs = stops.map((s) => [s.lat, s.lng]);
+  for (let i = 1; i < stops.length; i += 1) {
+    L.polyline([latlngs[i - 1], latlngs[i]], { color: pgColor(stops[i].severity), weight: 3, opacity: 0.85 }).addTo(layer);
+  }
+  stops.forEach((s, i) => {
+    const isSrc = s.nodes.some((n) => n.kind === 'source');
+    L.circleMarker([s.lat, s.lng], {
+      radius: isSrc ? 9 : 7, weight: 2, color: '#fff',
+      fillColor: isSrc ? '#38bdf8' : pgColor(s.severity), fillOpacity: 0.95,
+    }).addTo(layer).bindPopup(pathStopPopup(s, i, stops.length));
+  });
+  return latlngs;
+}
+
+// Draws the path on its own Leaflet map (the Probes traceroute detail). Reuses the
+// Destinations tile config.
+async function drawPathMap(host, stops) {
+  if (typeof L === 'undefined') { host.replaceChildren(el('div', { class: 'error' }, 'Map library failed to load.')); return; }
+  if (!stops || stops.length < 2) {
+    host.replaceChildren(el('div', { class: 'empty' }, 'Not enough geolocated hops to map. Public hops are placed at country level, so this needs the GeoIP database plus the agent site and at least one public hop.'));
+    return;
+  }
+  let cfg = {};
+  try { cfg = await api('/api/map/config'); } catch { /* fall back to default tiles */ }
+  const map = createLeafletMap(host, cfg, { center: [stops[0].lat, stops[0].lng], zoom: 3 });
+  if (!map) return;
+  const layer = L.layerGroup().addTo(map);
+  const latlngs = renderPathStops(layer, stops);
+  try { map.fitBounds(latlngs, { padding: [30, 30], maxZoom: 7 }); } catch { /* single point */ }
+  setTimeout(() => { try { map.invalidateSize(); } catch { /* ignore */ } }, 60);
 }
 
 // Detail node for one probe result: traceroute path map (fetches + aggregates the
@@ -3796,12 +3888,12 @@ views.map = async () => {
 };
 
 // ---- Destinations map (internal sites + external destinations + selection) ----
-const geoState = { map: null, ext: null, hosts: null, rect: null, dests: [], sinceIso: '', panel: null, selecting: false, rectStart: null, healthByHost: null };
+const geoState = { map: null, ext: null, hosts: null, rect: null, dests: [], sinceIso: '', panel: null, selecting: false, rectStart: null, healthByHost: null, pathLayer: null };
 
 function stopGeo() {
   if (geoState.map) { try { geoState.map.remove(); } catch { /* ignore */ } }
   geoState.map = null; geoState.ext = null; geoState.hosts = null; geoState.rect = null;
-  geoState.dests = []; geoState.selecting = false; geoState.rectStart = null; geoState.healthByHost = null;
+  geoState.dests = []; geoState.selecting = false; geoState.rectStart = null; geoState.healthByHost = null; geoState.pathLayer = null;
 }
 
 function devColor(dev) {
@@ -3839,9 +3931,10 @@ views.geo = async () => {
   if (typeof L === 'undefined') {
     return el('div', { class: 'empty' }, 'Map library (Leaflet) could not be loaded — geo map is unavailable offline.');
   }
-  const [config, overview, fleet] = await Promise.all([
+  const [config, overview, fleet, agents] = await Promise.all([
     api('/api/geo/config'), api('/api/geo/overview'),
     api('/api/fleet/health').catch(() => ({ agents: [] })),
+    api('/agents').catch(() => []),
   ]);
   // hostId → health verdict, so internal site pins can be coloured by health.
   geoState.healthByHost = new Map((fleet.agents || []).map((a) => [a.agentId, a.health && a.health.status]));
@@ -3859,6 +3952,42 @@ views.geo = async () => {
     exportButtons('geo', () => (geoState.sinceIso ? { since: geoState.sinceIso } : {})),
     el('label', { class: 'muted inline' }, 'Period ', periodSel),
     regionBtn, clearBtn));
+
+  // Path picker: overlay an agent's traceroute path onto this map. Target options
+  // are the agent's recent traceroute destinations (run them in the Probes tab).
+  const pathAgentSel = el('select', { class: 'small' }, el('option', { value: '' }, 'Agent…'),
+    ...agents.map((a) => el('option', { value: String(a.id) }, a.display_name || a.hostname)));
+  const pathTargetSel = el('select', { class: 'small' }, el('option', { value: '' }, 'Traceroute target…'));
+  const showPathBtn = el('button', { class: 'small' }, 'Show path');
+  const clearPathBtn = el('button', { class: 'small ghost' }, 'Clear path');
+  async function loadPathTargets() {
+    pathTargetSel.replaceChildren(el('option', { value: '' }, 'Traceroute target…'));
+    const id = pathAgentSel.value;
+    if (!id) return;
+    try {
+      const data = await api(`/api/probes/latest?agentId=${encodeURIComponent(id)}`);
+      const targets = [...new Set((data.results || []).filter((r) => r.type === 'traceroute').map((r) => r.target))];
+      for (const t of targets) pathTargetSel.append(el('option', { value: t }, t));
+      if (!targets.length) pathTargetSel.append(el('option', { value: '', disabled: true }, 'no traceroutes yet — run one in Probes'));
+    } catch { /* leave the placeholder */ }
+  }
+  async function showPath() {
+    if (!geoState.map) return;
+    const id = pathAgentSel.value;
+    if (!id) { toast('Pick an agent first.', true); return; }
+    const target = pathTargetSel.value;
+    showPathBtn.disabled = true;
+    try {
+      const qs = `agentId=${encodeURIComponent(id)}${target ? `&target=${encodeURIComponent(target)}` : ''}`;
+      drawGeoPath(await api(`/api/probes/path?${qs}`));
+    } catch (e) { toast(errText(e), true); } finally { showPathBtn.disabled = false; }
+  }
+  pathAgentSel.addEventListener('change', loadPathTargets);
+  showPathBtn.addEventListener('click', showPath);
+  clearPathBtn.addEventListener('click', () => { if (geoState.pathLayer) geoState.pathLayer.clearLayers(); showOverviewSummary(); });
+  root.append(el('div', { class: 'geo-pathpick' },
+    el('span', { class: 'muted' }, 'Traceroute path:'),
+    pathAgentSel, pathTargetSel, showPathBtn, clearPathBtn));
 
   const mapEl = el('div', { class: 'map' });
   const panel = el('div', { class: 'geo-panel' });
@@ -3988,6 +4117,47 @@ function showOverviewSummary() {
     el('h4', {}, 'Top destinations'),
     topTable,
     el('p', { class: 'muted small' }, 'Click a row, a circle (destination) or a site pin for details, or select a region.'));
+}
+
+// Overlays a traceroute path graph (from /api/probes/path) onto the Destinations
+// map in a dedicated layer that "Clear path" wipes — same pgColor/pathGeoStops/
+// renderPathStops used by the Probes traceroute map — and summarises it in the
+// side panel.
+function drawGeoPath(graph) {
+  if (!geoState.map) return;
+  const stops = pathGeoStops(graph.nodes || []);
+  if (!geoState.pathLayer) geoState.pathLayer = L.layerGroup().addTo(geoState.map);
+  geoState.pathLayer.clearLayers();
+  if (stops.length >= 2) {
+    const latlngs = renderPathStops(geoState.pathLayer, stops);
+    try { geoState.map.fitBounds(latlngs, { padding: [40, 40], maxZoom: 7 }); } catch { /* single point */ }
+  }
+  geoPathSummary(graph, stops);
+}
+
+function geoPathSummary(graph, stops) {
+  const panel = geoState.panel;
+  if (!panel) return;
+  const rank = { bad: 3, warn: 2, muted: 1, ok: 0 };
+  const hops = (graph.nodes || []).filter((n) => n.kind !== 'source');
+  const worst = hops.reduce((w, n) => ((rank[n.severity] || 0) > (rank[(w && w.severity)] || 0) ? n : w), null);
+  const list = stops.length
+    ? el('ul', { class: 'geo-path-stops' }, ...stops.map((s) => {
+      const isSrc = s.nodes.some((n) => n.kind === 'source');
+      const place = isSrc ? (s.nodes[0].label || 'Agent') : (s.nodes[0].country || '—');
+      const hopLabel = isSrc ? 'origin'
+        : s.nodes.length > 1 ? `hops ${s.nodes[0].hop}–${s.nodes[s.nodes.length - 1].hop}` : `hop ${s.nodes[0].hop}`;
+      return el('li', {}, el('span', { class: 'dot', style: `background:${pgColor(s.severity)}` }), ' ',
+        esc(String(place)), ' ', el('span', { class: 'muted' }, hopLabel));
+    }))
+    : el('div', { class: 'empty' }, 'No geolocated stops — country-level geo needs the agent site and at least one public hop.');
+  panel.replaceChildren(
+    el('div', { class: 'section-head' }, el('h3', {}, 'Traceroute path')),
+    el('p', {}, esc(graph.target || '(latest)')),
+    el('p', { class: 'muted' }, `${graph.samples} run${graph.samples === 1 ? '' : 's'} aggregated · ${stops.length} geolocated stop${stops.length === 1 ? '' : 's'}`),
+    worst && (rank[worst.severity] || 0) > 0 ? el('p', { class: worst.severity === 'bad' ? 'bad-text' : 'warn-text' }, `Worst hop: #${worst.hop} — ${esc(worst.explain)}`) : null,
+    list,
+    el('p', { class: 'muted small' }, 'Open Probes to inspect the per-hop topology, or “Clear path” to return to the overview.'));
 }
 
 async function selectDestination(d) {

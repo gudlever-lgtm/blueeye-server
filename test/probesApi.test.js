@@ -132,6 +132,17 @@ test('GET /api/probes/path aggregates traceroutes into a hop graph (200) and enr
   assert.equal(res.body.links.length, 2);
 });
 
+test('GET /api/probes/path anchors the source node at the agent site coordinates', async () => {
+  const probeResultsRepo = makeProbeResultsRepo({ findByAgent: async () => [tracerouteRun('2026-06-09T10:00:00Z')] });
+  const agentsRepo = makeAgentsRepo({ findById: async (id) => ({ id, hostname: 'h1', location_lat: 55.6, location_lng: 12.6 }) });
+  const res = await request(makeApp({ agentsRepo, probeResultsRepo }))
+    .get('/api/probes/path?agentId=9').set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 200);
+  assert.equal(res.body.nodes[0].kind, 'source');
+  assert.equal(res.body.nodes[0].lat, 55.6);
+  assert.equal(res.body.nodes[0].lng, 12.6);
+});
+
 test('GET /api/probes/path requires agentId (400) and a real agent (404)', async () => {
   assert.equal((await request(withAgent()).get('/api/probes/path').set('Authorization', authHeader('viewer'))).status, 400);
   assert.equal((await request(makeApp()).get('/api/probes/path?agentId=9').set('Authorization', authHeader('viewer'))).status, 404);

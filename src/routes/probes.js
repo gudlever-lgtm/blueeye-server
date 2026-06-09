@@ -59,7 +59,12 @@ function createProbesRouter({ probeResultsRepo, agentsRepo, geoProvider = null, 
     const target = req.query.target ? String(req.query.target).slice(0, 255) : latestTarget(rows);
     // Newest `samples` runs for that target (rows arrive oldest-first).
     const runs = rows.filter((r) => r.target === target).slice(-samples);
-    const graph = buildPathGraph(runs, { geoProvider, centroids, target });
+    const origin = {
+      lat: agent.location_lat ?? null,
+      lng: agent.location_lng ?? null,
+      label: agent.display_name || agent.hostname || 'Agent',
+    };
+    const graph = buildPathGraph(runs, { geoProvider, centroids, target, origin });
     res.json({ agentId, ...graph });
   }));
 

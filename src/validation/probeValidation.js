@@ -60,7 +60,20 @@ function validateProbeResults(body) {
     let hops = null;
     if (r.hops != null) {
       if (!Array.isArray(r.hops) || r.hops.length > 64) return { errors: { [`results[${i}].hops`]: 'hops must be an array (<=64)' } };
-      hops = r.hops.map((h) => ({ hop: numOrNull(h && h.hop), ip: h && h.ip ? String(h.ip).slice(0, 45) : null, rttMs: numOrNull(h && h.rttMs) }));
+      // MTR-style hops carry per-hop loss/jitter and the sent/recv probe counts
+      // (the path-visualisation overlay). Older agents send only { hop, ip, rttMs };
+      // the extra fields normalise to null and are simply absent on the graph.
+      hops = r.hops.map((h) => ({
+        hop: numOrNull(h && h.hop),
+        ip: h && h.ip ? String(h.ip).slice(0, 45) : null,
+        rttMs: numOrNull(h && h.rttMs),
+        minMs: numOrNull(h && h.minMs),
+        maxMs: numOrNull(h && h.maxMs),
+        jitterMs: numOrNull(h && h.jitterMs),
+        lossPct: numOrNull(h && h.lossPct),
+        sent: intOrNull(h && h.sent),
+        recv: intOrNull(h && h.recv),
+      }));
     }
     out.push({
       ts, type, target, ok: r.ok === true,
@@ -98,6 +111,11 @@ function validateProbeSpec(body) {
       const m = Number(b.maxHops);
       if (!Number.isInteger(m) || m < 1 || m > 40) return { errors: { maxHops: 'maxHops must be an integer between 1 and 40' } };
       spec.maxHops = m;
+    }
+    if (type === 'traceroute' && b.queries !== undefined) {
+      const q = Number(b.queries);
+      if (!Number.isInteger(q) || q < 1 || q > 10) return { errors: { queries: 'queries must be an integer between 1 and 10' } };
+      spec.queries = q;
     }
   }
   if (b.count !== undefined) {

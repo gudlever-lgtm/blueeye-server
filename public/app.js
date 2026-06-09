@@ -506,7 +506,7 @@ const PAGE_INFO = {
         el('li', {}, 'Ping (ICMP): RTT min/avg/max + packet loss + jitter.'),
         el('li', {}, 'TCP-connect: opens host:port and measures connection time (no payload sent).'),
         el('li', {}, 'DNS: time to resolve a name (and which address was returned).'),
-        el('li', {}, 'Traceroute: the path (hops) to the target with RTT per hop.')),
+        el('li', {}, 'Traceroute: the path (hops) to the target. Each hop is probed several times (set “Queries/hop”), so you get per-hop loss, latency and jitter — rendered as an interactive path map (hover a hop for its metrics + ASN/country) plus a hop table. Repeated traceroutes are aggregated so the verdict is stable.')),
       el('p', {}, 'Select agent + type + target and click “Run probe”. The agent must be connected; the result comes back a moment later and is added to the history so you can see RTT/loss over time.'),
       el('p', { class: 'muted' }, 'To run the same probes on a schedule across many agents, use ', viewLink('tests'), '; probe results also drive the health verdict on ', viewLink('fleet', 'Overview'), '. Metadata only: targets and timings — never packet contents.'),
     ],
@@ -2648,16 +2648,100 @@ function probeLatestTable(rows, onDetail) {
       el('td', {}, el('button', { class: 'small ghost', onclick: () => onDetail(r) }, r.type === 'traceroute' ? 'Path' : 'History'))))));
 }
 
-// Detail node for one probe result: traceroute path (sync) or RTT history
-// (fetches the per-agent time series).
+// Interactive path map: a directed, weighted hop graph for a traceroute target
+// (agent → hops → destination). Nodes are TTL positions coloured by severity;
+// links carry the downstream loss + incremental latency. Hovering/focusing a node
+// fills the detail panel with its full per-hop metrics + GeoIP/ASN. Pure SVG, no
+// libs — same vanilla approach as networkPath()/historyChart().
+function pathGraph(graph) {
+  const nodes = graph.nodes || [];
+  if (nodes.length <= 1) return el('div', { class: 'empty' }, 'No traceroute path yet — run a traceroute above.');
+  const ns = 'http://www.w3.org/2000/svg';
+  const mk = (tag, attrs = {}, ...kids) => {
+    const e = document.createElementNS(ns, tag);
+    for (const [a, v] of Object.entries(attrs)) if (v != null) e.setAttribute(a, v);
+    for (const kid of kids) if (kid != null) e.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
+    return e;
+  };
+  const NW = 122, NH = 70, GAP = 56, top = 20, cy = top + NH / 2;
+  const xOf = (i) => 10 + i * (NW + GAP);
+  const width = xOf(nodes.length - 1) + NW + 10;
+  const height = NH + top * 2;
+
+  const fmtMs = (v) => (v == null ? '–' : `${v} ms`);
+  const fmtPct = (v) => (v == null ? '–' : `${v}%`);
+  const stat = (k, v) => el('span', { class: 'pg-stat' }, el('span', { class: 'k' }, k), el('span', { class: 'v' }, v));
+  const panel = el('div', { class: 'pg-panel' });
+  function showNode(n) {
+    const loc = [n.asnName ? `AS${n.asn ?? '?'} ${n.asnName}` : (n.asn != null ? `AS${n.asn}` : null), n.country].filter(Boolean).join(' · ');
+    panel.replaceChildren(
+      el('div', { class: 'pg-panel-head' },
+        el('span', { class: `pg-dot ${n.severity}` }),
+        el('strong', {}, n.kind === 'source' ? 'Agent (origin)' : (n.kind === 'dest' ? `Destination · hop ${n.hop}` : `Hop ${n.hop}`)),
+        el('span', { class: 'mono' }, n.ip || (n.unresponsive ? '* * * (silent)' : '–'))),
+      el('div', { class: 'muted' }, n.explain),
+      loc ? el('div', {}, esc(loc)) : (n.private ? el('div', { class: 'muted' }, 'Private / RFC1918 — not geolocated') : null),
+      el('div', { class: 'pg-stats' },
+        stat('Latency', fmtMs(n.rttMs)),
+        stat('Loss', fmtPct(n.lossPct)),
+        stat('Worst loss', fmtPct(n.worstLossPct)),
+        stat('Jitter', fmtMs(n.jitterMs)),
+        stat('Replied', `${n.responded}/${n.runs}`)));
+  }
+
+  const svg = mk('svg', { viewBox: `0 0 ${width} ${height}`, width: String(width), height: String(height), role: 'img', 'aria-label': `Network path to ${graph.target || 'target'}` });
+  (graph.links || []).forEach((lk) => {
+    const x1 = xOf(lk.from) + NW;
+    const x2 = xOf(lk.to);
+    const lab = lk.lossPct ? `${lk.lossPct}% loss` : (lk.latencyMs != null ? `+${lk.latencyMs} ms` : null);
+    svg.append(mk('line', { x1, y1: cy, x2, y2: cy, class: `pg-link ${lk.severity}`, 'stroke-linecap': 'round' }));
+    if (lab) svg.append(mk('text', { x: (x1 + x2) / 2, y: cy - 9, 'text-anchor': 'middle', class: `pg-llab ${lk.severity}` }, lab));
+  });
+  nodes.forEach((n, i) => {
+    const x = xOf(i);
+    const top3 = n.kind === 'source' ? 'AGENT' : (n.kind === 'dest' ? `DEST · #${n.hop}` : `HOP #${n.hop}`);
+    const meta = n.asn != null ? `AS${n.asn}${n.country ? ' · ' + n.country : ''}` : (n.rttMs != null ? `${n.rttMs} ms` : (n.unresponsive ? 'no reply' : ''));
+    const g = mk('g', { class: `pg-node ${n.severity} ${n.kind}`, tabindex: '0', role: 'button', 'aria-label': `${top3} ${n.ip || ''} ${n.explain}` },
+      mk('rect', { x, y: top, width: NW, height: NH, rx: 10 }),
+      mk('text', { x: x + 11, y: top + 19, class: 'pg-hop' }, top3),
+      mk('text', { x: x + 11, y: top + 38, class: 'pg-ip' }, (n.ip || (n.unresponsive ? '* * *' : '—')).slice(0, 17)),
+      mk('text', { x: x + 11, y: top + 56, class: 'pg-meta' }, meta));
+    g.addEventListener('mouseenter', () => showNode(n));
+    g.addEventListener('focus', () => showNode(n));
+    svg.append(g);
+  });
+  showNode(nodes[nodes.length - 1]); // default to the destination
+
+  const legend = el('div', { class: 'pg-legend' },
+    ...[['ok', 'Healthy'], ['warn', 'Degraded'], ['bad', 'Critical'], ['muted', 'Silent hop']].map(([c, l]) =>
+      el('span', { class: 'lg' }, el('span', { class: `pg-dot ${c}` }), l)));
+
+  return el('div', { class: 'pathmap' },
+    el('div', { class: 'pg-head' },
+      el('span', { class: 'muted' }, `${graph.samples} traceroute${graph.samples === 1 ? '' : 's'} aggregated · hover a hop for detail`),
+      legend),
+    el('div', { class: 'pg-scroll' }, svg),
+    panel);
+}
+
+// Detail node for one probe result: traceroute path map (fetches + aggregates the
+// recent traceroutes into a hop graph) or RTT history (the per-agent time series).
 async function probeDetail(r, agentId) {
   if (r.type === 'traceroute') {
+    let graph = null;
+    try { graph = await api(`/api/probes/path?agentId=${encodeURIComponent(agentId)}&target=${encodeURIComponent(r.target)}`); } catch { /* fall back to the table */ }
     const hops = r.hops || [];
-    return el('details', { class: 'sec', open: true }, el('summary', {}, `Path to ${esc(r.target)}`),
-      el('table', { class: 'probe-hops' }, el('tbody', {}, ...(hops.length ? hops.map((h) => el('tr', {},
-        el('td', { class: 'muted' }, `#${h.hop}`),
-        el('td', {}, h.ip || '* * *'),
-        el('td', { class: 'num' }, h.rttMs != null ? `${h.rttMs} ms` : '–'))) : [el('tr', {}, el('td', { class: 'muted' }, 'No hops.'))]))));
+    const hopRow = (h) => el('tr', {},
+      el('td', { class: 'muted' }, `#${h.hop}`),
+      el('td', { class: 'mono' }, h.ip || '* * *'),
+      el('td', { class: 'num' }, h.rttMs != null ? `${h.rttMs} ms` : '–'),
+      el('td', { class: 'num' }, h.lossPct != null ? `${h.lossPct}%` : '–'),
+      el('td', { class: 'num' }, h.jitterMs != null ? `${h.jitterMs} ms` : '–'));
+    return el('details', { class: 'sec', open: true }, el('summary', {}, `Path to ${esc(r.target)} `, el('span', { class: 'muted' }, '· loss · latency · jitter per hop')),
+      (graph && (graph.nodes || []).length > 1) ? pathGraph(graph) : null,
+      el('table', { class: 'probe-hops' },
+        el('thead', {}, el('tr', {}, ...['Hop', 'IP', 'RTT', 'Loss', 'Jitter'].map((h) => el('th', {}, h)))),
+        el('tbody', {}, ...(hops.length ? hops.map(hopRow) : [el('tr', {}, el('td', { class: 'muted', colspan: '5' }, 'No hops.'))]))));
   }
   let data;
   try { data = await api(`/api/probes?agentId=${encodeURIComponent(agentId)}&type=${r.type}`); } catch (e) { return el('div', { class: 'error' }, e.message); }
@@ -2729,9 +2813,18 @@ views.probes = async () => {
   const portInput = el('input', { type: 'number', min: '1', max: '65535', value: '443' });
   const portWrap = el('label', { class: 'inline muted' }, 'Port ', portInput);
   const countInput = el('input', { type: 'number', min: '1', max: '20', value: '4' });
+  const countLabelText = el('span', {}, 'Count ');
   const runBtn = el('button', { class: 'small' }, 'Run probe');
   const status = el('div', { class: 'muted' });
-  const syncPort = () => { portWrap.style.display = typeSel.value === 'tcp' ? '' : 'none'; };
+  // For traceroute the count is the per-hop probe count ("queries") that MTR-style
+  // sampling uses to derive per-hop loss/jitter (server caps it at 10).
+  const syncPort = () => {
+    const tr = typeSel.value === 'traceroute';
+    portWrap.style.display = typeSel.value === 'tcp' ? '' : 'none';
+    countLabelText.textContent = tr ? 'Queries/hop ' : 'Count ';
+    countInput.max = tr ? '10' : '20';
+    if (tr && Number(countInput.value) > 10) countInput.value = '3';
+  };
   typeSel.addEventListener('change', syncPort); syncPort();
 
   root.append(el('div', { class: 'history-controls' },
@@ -2739,7 +2832,7 @@ views.probes = async () => {
     el('label', { class: 'inline muted' }, 'Type ', typeSel),
     el('label', { class: 'inline muted' }, 'Target ', target),
     portWrap,
-    el('label', { class: 'inline muted' }, 'Count ', countInput),
+    el('label', { class: 'inline muted' }, countLabelText, countInput),
     runBtn, status));
 
   const latestHost = el('div', { class: 'probe-latest' });
@@ -2753,7 +2846,10 @@ views.probes = async () => {
     if (!host) { status.className = 'error'; status.textContent = 'Enter a target.'; return; }
     const body = { type: typeSel.value, host };
     if (typeSel.value === 'tcp') body.port = Number(portInput.value);
-    if (countInput.value) body.count = Number(countInput.value);
+    if (countInput.value) {
+      if (typeSel.value === 'traceroute') body.queries = Number(countInput.value);
+      else body.count = Number(countInput.value);
+    }
     status.className = 'muted'; status.textContent = 'Sending…'; runBtn.disabled = true;
     try {
       await api(`/agents/${id}/probe`, { method: 'POST', body });

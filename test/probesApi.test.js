@@ -105,6 +105,46 @@ test('GET /api/probes surfaces a repo failure as 500', async () => {
   assert.equal(res.status, 500);
 });
 
+// ---- path graph: GET /api/probes/path -------------------------------------
+
+const tracerouteRun = (ts, target = 'example.com') => ({
+  id: 1, type: 'traceroute', target, ts,
+  hops: [
+    { hop: 1, ip: '10.0.0.1', sent: 3, recv: 3, lossPct: 0, rttMs: 1, jitterMs: 0.2 },
+    { hop: 2, ip: '93.184.216.34', sent: 3, recv: 3, lossPct: 0, rttMs: 12, jitterMs: 1 },
+  ],
+});
+
+test('GET /api/probes/path aggregates traceroutes into a hop graph (200) and enriches geo', async () => {
+  const probeResultsRepo = makeProbeResultsRepo({ findByAgent: async () => [tracerouteRun('2026-06-09T10:00:00Z')] });
+  const geoProvider = { lookup: (ip) => (ip === '93.184.216.34' ? { country: 'DE', asn: 64500, asnName: 'Example' } : null) };
+  const centroids = { get: (c) => (c === 'DE' ? { lat: 51, lng: 10 } : null) };
+  const res = await request(withAgent({ probeResultsRepo, geoProvider, centroids }))
+    .get('/api/probes/path?agentId=9').set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 200);
+  assert.equal(res.body.target, 'example.com');
+  assert.equal(res.body.nodes.length, 3); // source + 2 hops
+  assert.equal(res.body.nodes[0].kind, 'source');
+  const dest = res.body.nodes[res.body.nodes.length - 1];
+  assert.equal(dest.kind, 'dest');
+  assert.equal(dest.country, 'DE');
+  assert.equal(dest.asn, 64500);
+  assert.equal(res.body.links.length, 2);
+});
+
+test('GET /api/probes/path requires agentId (400) and a real agent (404)', async () => {
+  assert.equal((await request(withAgent()).get('/api/probes/path').set('Authorization', authHeader('viewer'))).status, 400);
+  assert.equal((await request(makeApp()).get('/api/probes/path?agentId=9').set('Authorization', authHeader('viewer'))).status, 404);
+});
+
+test('GET /api/probes/path returns an empty graph when there are no traceroutes', async () => {
+  const probeResultsRepo = makeProbeResultsRepo({ findByAgent: async () => [] });
+  const res = await request(withAgent({ probeResultsRepo })).get('/api/probes/path?agentId=9').set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body.nodes, []);
+  assert.equal(res.body.samples, 0);
+});
+
 // ---- validation + repo units ----------------------------------------------
 
 test('validateProbeSpec requires a port for tcp and rejects flag-like hosts', () => {
@@ -146,6 +186,23 @@ test('validateProbeResults caps and normalises rows', () => {
   assert.equal(value.results[0].type, 'ping');
   assert.equal(value.results[0].rttMs, 12.5);
   assert.equal(value.results[0].hops[0].ip, '10.0.0.1');
+});
+
+test('validateProbeResults carries MTR-style per-hop loss/jitter/sent/recv', () => {
+  const { value, errors } = validateProbeResults({ results: [{ type: 'traceroute', target: 'x', ok: true,
+    hops: [{ hop: 2, ip: '203.0.113.9', sent: 3, recv: 2, lossPct: 33.3, rttMs: 12, minMs: 10, maxMs: 14, jitterMs: 2 }] }] });
+  assert.equal(errors, undefined);
+  const h = value.results[0].hops[0];
+  assert.equal(h.sent, 3);
+  assert.equal(h.recv, 2);
+  assert.equal(h.lossPct, 33.3);
+  assert.equal(h.jitterMs, 2);
+});
+
+test('validateProbeSpec accepts a traceroute queries count and rejects out-of-range', () => {
+  assert.equal(validateProbeSpec({ type: 'traceroute', host: '1.1.1.1', queries: 5 }).value.queries, 5);
+  assert.ok(validateProbeSpec({ type: 'traceroute', host: '1.1.1.1', queries: 99 }).errors);
+  assert.ok(validateProbeSpec({ type: 'traceroute', host: '1.1.1.1', queries: 'x' }).errors);
 });
 
 test('toRow serialises hops to JSON and maps fields positionally', () => {

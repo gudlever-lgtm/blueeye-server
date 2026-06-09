@@ -207,12 +207,13 @@ function start() {
     integrationsRepo, auditRepo: integrationAuditRepo, secretBox, registry: connectorRegistry, logger: console,
   });
 
-  // External auth (LDAP/AD). OFF unless LDAP_AUTH_ENABLED=true AND an admin has
-  // stored + enabled a config row. Local JWT login always remains as the fallback.
+  // External auth (LDAP/AD). OFF unless LDAP_AUTH_ENABLED=true, the licence covers
+  // it (sso_ldap), AND an admin has stored + enabled a config row. Local JWT login
+  // always remains as the fallback.
   const ldapConfigRepo = createLdapConfigRepository(db);
   const ldapRoleMapRepo = createLdapRoleMapRepository(db);
   const ldapLoginAuditRepo = createLdapLoginAuditRepository(db);
-  const ldapAuth = createLdapAuth({ config: config.ldap, ldapConfigRepo, ldapRoleMapRepo, secretBox, logger: console });
+  const ldapAuth = createLdapAuth({ config: config.ldap, ldapConfigRepo, ldapRoleMapRepo, secretBox, featureGate, logger: console });
 
   // NIS2 Reporting Center repositories (risk register, control evidence, security
   // incidents, generated reports, evidence references, and the module audit log).

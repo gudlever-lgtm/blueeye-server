@@ -146,10 +146,11 @@ function createApiRouter({
       integrationsRepo, integrationAuditRepo, dispatcher: integrationsDispatcher, registry: connectorRegistry, secretBox,
     }));
   }
-  // External auth (LDAP/AD) config — admin CRUD + connectivity test.
+  // External auth (LDAP/AD) config — admin CRUD + connectivity test + login audit.
+  // Licence-gated (sso_ldap) on the writes via the shared featureGate.
   if (ldapConfigRepo && ldapRoleMapRepo && secretBox) {
     router.use('/api/ldap', createLdapRouter({
-      ldapConfigRepo, ldapRoleMapRepo, ldapAuth, secretBox, authEnabledFlag: ldapAuthEnabledFlag,
+      ldapConfigRepo, ldapRoleMapRepo, ldapLoginAuditRepo, ldapAuth, secretBox, featureGate, authEnabledFlag: ldapAuthEnabledFlag,
     }));
   }
   // NIS2 Reporting Center — risk register, control evidence, security incidents,

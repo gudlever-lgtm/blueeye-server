@@ -43,15 +43,18 @@ function cfgRepo(over = {}) {
 }
 const mapRepo = (maps) => ({ findAll: async () => maps });
 
-function build({ authEnabled = true, cfgOver = {}, maps = [], client, captureFactory } = {}) {
+function build({ authEnabled = true, cfgOver = {}, maps = [], client, captureFactory, featureGate } = {}) {
   const state = {};
   const clientFactory = (args) => { state.url = args.url; state.client = client; return client; };
   if (captureFactory) captureFactory(state);
   return createLdapAuth({
     config: { authEnabled }, ldapConfigRepo: cfgRepo(cfgOver), ldapRoleMapRepo: mapRepo(maps),
-    secretBox: box, clientFactory,
+    secretBox: box, clientFactory, featureGate,
   });
 }
+
+// A feature gate that grants or denies the LDAP/AD entitlement (sso_ldap).
+const gateFor = (on) => ({ isFeatureEnabled: (f) => f === 'sso_ldap' && on });
 
 const aliceAdmin = { dn: 'cn=alice,dc=x', memberOf: ['cn=admins,dc=x', 'cn=ops,dc=x'], mail: 'Alice@x' };
 
@@ -69,6 +72,17 @@ test('isEnabled requires both the env flag and an enabled config', async () => {
   assert.equal(await build({ authEnabled: true, client: fakeClient({}) }).isEnabled(), true);
   assert.equal(await build({ authEnabled: false, client: fakeClient({}) }).isEnabled(), false);
   assert.equal(await build({ authEnabled: true, cfgOver: { enabled: false }, client: fakeClient({}) }).isEnabled(), false);
+});
+
+test('licence gate: without sso_ldap entitlement LDAP is OFF (falls back to local)', async () => {
+  // Gate denies the feature -> isEnabled false and authenticate reports disabled,
+  // so the login route uses local auth. An expired licence never locks everyone out.
+  const denied = build({ authEnabled: true, featureGate: gateFor(false), client: fakeClient({ userEntry: aliceAdmin }) });
+  assert.equal(await denied.isEnabled(), false);
+  assert.deepEqual(await denied.authenticate('alice', 'pw'), { enabled: false });
+  // Gate grants it -> behaves exactly as before.
+  const granted = build({ authEnabled: true, featureGate: gateFor(true), client: fakeClient({}) });
+  assert.equal(await granted.isEnabled(), true);
 });
 
 test('bind success + group hit -> highest matching role', async () => {

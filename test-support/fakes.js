@@ -365,7 +365,10 @@ function makeLicenseManager(overrides = {}) {
 // { features: { geo: false, ... } } (or a custom isFeatureEnabled) to simulate a
 // license that doesn't include a feature.
 function makeFeatureGate(overrides = {}) {
-  const enabled = overrides.features || { analysis: true, assistant: true, alerting: true, geo: true };
+  // Everything entitled by default (the four legacy modules + the packaged plan
+  // keys exercised by routes, e.g. sso_ldap). summary() keeps its legacy 4-key
+  // shape; plan keys are only surfaced via isFeatureEnabled.
+  const enabled = overrides.features || { analysis: true, assistant: true, alerting: true, geo: true, sso_ldap: true };
   return {
     isFeatureEnabled: overrides.isFeatureEnabled || ((f) => enabled[f] === true),
     summary: overrides.summary || (() => ({ analysis: !!enabled.analysis, assistant: !!enabled.assistant, alerting: !!enabled.alerting, geo: !!enabled.geo })),

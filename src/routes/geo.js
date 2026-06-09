@@ -12,8 +12,18 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 // 'geo' license feature. Aggregation is done server-side — raw flow records
 // never leave the server, and RFC1918/private endpoints are excluded at the
 // data layer (internal = 0).
-function createGeoRouter({ flowsRepo, agentsRepo, findingStore, tileConfig = {}, getMapConfig = null, featureGate }) {
+function createGeoRouter({ flowsRepo, agentsRepo, findingStore, tileConfig = {}, getMapConfig = null, geoProvider = null, featureGate }) {
   const router = express.Router();
+  // GeoIP enrichment status (configured? how many ranges?) — viewer-safe, no file
+  // contents. Lets the map views show a "GeoIP not configured" banner instead of
+  // a silently-empty map when no range database is loaded.
+  const geoipStatus = () => {
+    if (geoProvider && typeof geoProvider.status === 'function') {
+      const s = geoProvider.status();
+      return { configured: !!s.configured, ranges: s.size || 0 };
+    }
+    return { configured: false, ranges: 0 };
+  };
   // License gate for the whole module (403 when not included in the license).
   router.use(requireAuth, requireFeature(featureGate, 'geo'));
   const staff = [requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN)];
@@ -47,12 +57,10 @@ function createGeoRouter({ flowsRepo, agentsRepo, findingStore, tileConfig = {},
   // GET /api/geo/config — map tile source (so the frontend never hardcodes it).
   // Uses the effective (admin-editable) config when available.
   router.get('/config', ...staff, asyncHandler(async (req, res) => {
-    if (getMapConfig) return res.json(await getMapConfig());
-    res.json({
-      tileUrl: tileConfig.tileUrl || '',
-      attribution: tileConfig.tileAttribution || '',
-      maxZoom: tileConfig.tileMaxZoom || 19,
-    });
+    const base = getMapConfig
+      ? await getMapConfig()
+      : { tileUrl: tileConfig.tileUrl || '', attribution: tileConfig.tileAttribution || '', maxZoom: tileConfig.tileMaxZoom || 19 };
+    res.json({ ...base, geoip: geoipStatus() });
   }));
 
   // GET /api/geo/overview?since=&hostId= — internal hosts (site metadata) +

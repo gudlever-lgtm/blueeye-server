@@ -3990,6 +3990,22 @@ views.geo = async () => {
     el('span', { class: 'muted' }, 'Traceroute path:'),
     pathAgentSel, pathTargetSel, showPathBtn, clearPathBtn));
 
+  // No GeoIP database ⇒ public IPs can't be placed by country, so the map shows
+  // only site pins and traceroute paths collapse to the origin. Say so up front
+  // rather than letting the map look broken; point admins at where to fix it.
+  geoState.geoip = config.geoip || null;
+  if (config.geoip && config.geoip.configured === false) {
+    root.append(el('div', { class: 'alert-banner sev-WARN' },
+      el('span', { class: 'alert-ic' }, '⚠'),
+      el('span', {},
+        el('strong', {}, 'GeoIP database not configured. '),
+        'External destinations and traceroute hops can’t be placed by country until an offline GeoIP/ASN range database is loaded. ',
+        role === 'admin'
+          ? settingsLink('map', 'Configure it in Settings → Map')
+          : 'Ask an administrator to configure it in Settings → Map',
+        '.')));
+  }
+
   const mapEl = el('div', { class: 'map' });
   const panel = el('div', { class: 'geo-panel' });
   geoState.panel = panel;
@@ -5756,7 +5772,7 @@ async function settingsMapView() {
   const data = await api('/api/settings');
   const root = el('div');
   root.append(el('p', { class: 'muted settings-intro' }, 'The maps (Sites, Destinations and the location picker) fetch background tiles from the tile URL, and address search uses the geocoder URL. Use an EU/self-hosted source in production — no hardcoded US service. Stored in the database and works without restart.'));
-  root.append(el('div', { class: 'settings-grid' }, mapSettingsCard(data.map)));
+  root.append(el('div', { class: 'settings-grid' }, mapSettingsCard(data.map), geoipSettingsCard(data.geoip)));
   return root;
 }
 
@@ -5881,6 +5897,42 @@ function mapSettingsCard(map) {
       el('label', {}, 'Max zoom', zoom),
       el('label', {}, 'Geocoder URL (address search)', geo),
       err, el('div', { class: 'form-actions' }, btn)));
+}
+
+// Settings → Map: the offline GeoIP/ASN range database (admin). It places public
+// destination/hop IPs by country; without it the maps show only sites. We store
+// just a server-side path (the DB is a large file) and reload it live — the
+// response says how many ranges loaded so a wrong path shows as 0, not a silent
+// no-op. Build the CSV with scripts/build-geoip.js (see docs/geo.md).
+function geoipSettingsCard(geoip) {
+  const path = el('input', { type: 'text', value: (geoip && geoip.dbPath) || '', placeholder: '/data/geoip.csv' });
+  const err = el('p', { class: 'error' });
+  const status = el('p', { class: 'muted small' });
+  const btn = el('button', { class: 'small' }, 'Save & reload');
+  function renderStatus(s) {
+    const ok = s && s.configured;
+    status.replaceChildren(
+      el('span', ok ? { style: 'color:var(--ok);font-weight:600' } : { class: 'warn-text' },
+        ok ? `Loaded ${s.ranges} IP range${s.ranges === 1 ? '' : 's'}` : 'Not configured — geo enrichment disabled'),
+      s && s.source ? el('span', { class: 'muted' }, ` · source: ${esc(s.source)}`) : null,
+      s && s.error ? el('span', { class: 'warn-text' }, ` · ${esc(s.error)}`) : null);
+  }
+  renderStatus(geoip);
+  async function save() {
+    err.textContent = ''; btn.disabled = true;
+    try {
+      const res = await api('/api/settings/geoip', { method: 'PUT', body: { dbPath: path.value.trim() } });
+      renderStatus(res.geoip);
+      if (res.geoip && res.geoip.configured) toast(`GeoIP loaded — ${res.geoip.ranges} ranges`);
+      else toast('Saved, but no ranges loaded — check the path and CSV format.', true);
+    } catch (e2) { err.textContent = errText(e2); } finally { btn.disabled = false; }
+  }
+  btn.addEventListener('click', save);
+  return el('div', { class: 'settings-card' }, el('h3', {}, 'GeoIP database (country + ASN)'),
+    el('p', { class: 'muted small' }, 'Offline, EU-sourced IP→country/ASN range CSV used to place external destinations and traceroute hops on the maps. Without it the maps show only your sites. Point this at a file on the server (build one with scripts/build-geoip.js); it reloads live, no restart. See docs/geo.md.'),
+    el('div', { class: 'form-grid' },
+      el('label', {}, 'GeoIP CSV path (server-side file)', path),
+      status, err, el('div', { class: 'form-actions' }, btn)));
 }
 
 views.users = async () => {

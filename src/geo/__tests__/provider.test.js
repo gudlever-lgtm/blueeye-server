@@ -51,3 +51,36 @@ test('provider loads ranges from a CSV string', () => {
   const geo = createGeoProvider({ csv: '8.8.8.0,8.8.8.255,US,15169,GOOGLE' });
   assert.equal(geo.lookup('8.8.8.8').asn, 15169);
 });
+
+test('status reports whether enrichment is configured and from where', () => {
+  assert.deepEqual(createGeoProvider({}).status(), { configured: false, size: 0, source: null, path: null, error: null });
+  const s = createGeoProvider({ ranges: RANGES }).status();
+  assert.equal(s.configured, true);
+  assert.equal(s.size, 3);
+  assert.equal(s.source, 'ranges');
+});
+
+test('reload swaps the table live — disabled → loaded → disabled', () => {
+  const geo = createGeoProvider({}); // start empty (no DB configured)
+  assert.equal(geo.size, 0);
+  assert.equal(geo.lookup('8.8.8.8'), null);
+  // Admin points at a CSV at runtime → starts geolocating without a new provider.
+  geo.reload({ csv: '8.8.8.0,8.8.8.255,US,15169,GOOGLE' });
+  assert.equal(geo.size, 1);
+  assert.deepEqual(geo.lookup('8.8.8.8'), { country: 'US', asn: 15169, asnName: 'GOOGLE' });
+  assert.equal(geo.status().configured, true);
+  // Clearing it (empty path) disables enrichment again.
+  geo.reload({ dbPath: '' });
+  assert.equal(geo.size, 0);
+  assert.equal(geo.lookup('8.8.8.8'), null);
+  assert.equal(geo.status().configured, false);
+});
+
+test('reload from a missing file disables enrichment and records the error', () => {
+  const geo = createGeoProvider({ ranges: RANGES });
+  assert.equal(geo.size, 3);
+  geo.reload({ dbPath: '/no/such/geoip.csv' });
+  assert.equal(geo.size, 0);
+  assert.equal(geo.status().configured, false);
+  assert.ok(geo.status().error); // surfaced to the admin, not swallowed
+});

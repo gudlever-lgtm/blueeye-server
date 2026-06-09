@@ -8,7 +8,6 @@
 // dependency, in keeping with the on-prem / no-US-SDK constraint.
 
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
 const zlib = require('zlib');
 const https = require('https');
@@ -125,24 +124,35 @@ function* joinCountryAsn(country, asn) {
 
 // Writes the (optionally ASN-joined) ranges to `outPath` atomically (temp file +
 // rename). Returns the number of rows written. `source` is a label for the header.
+// The temp file lives in the SAME directory as `outPath` (not os.tmpdir()) so the
+// rename stays within one filesystem — across devices (e.g. /tmp → the Docker
+// /data volume) rename() fails with EXDEV and the build would silently never land.
 async function writeCsv(outPath, country, asn, source = 'DB-IP Lite (CC-BY-4.0)') {
-  const tmp = path.join(os.tmpdir(), `geoip-${process.pid}-${Date.now()}.csv`);
+  const dir = path.dirname(path.resolve(outPath));
+  fs.mkdirSync(dir, { recursive: true });
+  const tmp = path.join(dir, `.geoip-${process.pid}-${Date.now()}.tmp`);
   const ws = fs.createWriteStream(tmp);
   const write = (s) => new Promise((res, rej) => { ws.write(s, (e) => (e ? rej(e) : res())); });
-  await write(`# BlueEye GeoIP range table — built ${new Date().toISOString()} from ${source}\n`);
-  await write('# format: start_ip,end_ip,country[,asn[,asn_name]]\n');
-  let rows = 0;
-  const emit = asn && asn.length ? joinCountryAsn(country, asn) : (function* () { yield* country; })();
-  for (const r of emit) {
-    if (!r.country) continue;
-    const cells = [intToIp(r.lo), intToIp(r.hi), r.country];
-    if (r.asn) cells.push(String(r.asn), csvCell(r.asnName || ''));
-    await write(`${cells.join(',')}\n`); // eslint-disable-line no-await-in-loop
-    rows += 1;
+  try {
+    await write(`# BlueEye GeoIP range table — built ${new Date().toISOString()} from ${source}\n`);
+    await write('# format: start_ip,end_ip,country[,asn[,asn_name]]\n');
+    let rows = 0;
+    const emit = asn && asn.length ? joinCountryAsn(country, asn) : (function* () { yield* country; })();
+    for (const r of emit) {
+      if (!r.country) continue;
+      const cells = [intToIp(r.lo), intToIp(r.hi), r.country];
+      if (r.asn) cells.push(String(r.asn), csvCell(r.asnName || ''));
+      await write(`${cells.join(',')}\n`); // eslint-disable-line no-await-in-loop
+      rows += 1;
+    }
+    await new Promise((res, rej) => ws.end((err) => (err ? rej(err) : res())));
+    fs.renameSync(tmp, outPath);
+    return rows;
+  } catch (e) {
+    ws.destroy();
+    try { fs.unlinkSync(tmp); } catch { /* nothing to clean up */ }
+    throw e;
   }
-  await new Promise((res, rej) => ws.end((err) => (err ? rej(err) : res())));
-  fs.renameSync(tmp, outPath);
-  return rows;
 }
 
 // High-level: load country (+ optional ASN) from file/URL sources and write the

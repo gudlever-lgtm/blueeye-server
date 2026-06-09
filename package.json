@@ -1,6 +1,6 @@
 {
   "name": "blueeye-server",
-  "version": "0.11.0",
+  "version": "0.11.1",
   "private": true,
   "description": "BlueEye server — on-prem, single-tenant API (Node/Express + MySQL).",
   "license": "MIT",

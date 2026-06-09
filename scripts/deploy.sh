@@ -4,10 +4,11 @@
 #   1) updates blueeye-server + blueeye-agent (the agent is served as source) on
 #      the deploy branch,
 #   2) rebuilds + (re)starts the server (and demo agent) in the compose stack, and
-#   3) when the agent source moved, restarts the server so it re-packages the new
-#      agent bundle — that's what makes the dashboard flag out-of-date agents and
-#      offer the new version (otherwise the running server keeps serving the old
-#      cached bundle).
+#   3) restarts the server so it re-packages the on-disk agent bundle — that's
+#      what makes the dashboard flag out-of-date agents and offer the new version.
+#      Done on EVERY deploy (not just when the agent moved this run), because a
+#      server that's already running keeps serving the bundle it cached at its
+#      last boot, even if the agent was bumped in an earlier deploy.
 #
 # The license server (blueeye-licens) is NOT deployed here — it is vendor-managed.
 # Use scripts/deploy-licens.sh for that. (If a licens container is already running
@@ -108,16 +109,22 @@ log "Stack status"
 # --- Re-package the served agent bundle ------------------------------------
 # The server tars + caches the agent SOURCE (bind-mounted from ../blueeye-agent)
 # at boot, and the dashboard's "update available" badge compares a deployed
-# agent's version against THAT cached bundle. When only the agent changed, the
-# server image is unchanged so `up -d` leaves the old container running with the
-# stale bundle — the new agent version is never offered. Restart the server so it
-# re-packages the freshly-pulled source. (No-op when the agent didn't move.)
+# agent's version against THAT cached bundle. `up -d --build` only recreates the
+# server when its OWN image changed, so a server that's already running keeps
+# serving whatever bundle it cached at its last boot — including a stale one from
+# before the agent was bumped in an EARLIER deploy. In that case nothing is
+# fetched this run, yet the dashboard still shows no update.
+#
+# So reconcile unconditionally: restart the server on every deploy so the served
+# bundle always matches the on-disk agent source, regardless of whether anything
+# moved this run. (A restart re-runs the startup packaging; the bind mount always
+# reflects the current source, so this is the deterministic "make it match" step.)
 if [ "$AGENT_SHA_BEFORE" != "$AGENT_SHA_AFTER" ]; then
-  log "Agent source changed → restarting server to serve agent v${AGENT_VER:-?}"
-  "${DC[@]}" restart server
+  log "Agent source moved this deploy → restarting server to serve agent v${AGENT_VER:-?}"
 else
-  log "Agent source unchanged (v${AGENT_VER:-?}) — no re-package needed"
+  log "Reconciling served bundle with on-disk agent source (v${AGENT_VER:-?})"
 fi
+"${DC[@]}" restart server
 
 # --- Health check (non-fatal) ---------------------------------------------
 SERVER_PORT="${SERVER_HOST_PORT:-3000}"

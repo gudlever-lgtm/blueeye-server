@@ -1,0 +1,29 @@
+# blueeye.gnf.dk — Caddy reverse proxy for blueeye-server.
+#
+# Caddy terminates TLS on :443 and forwards to the app on 127.0.0.1:3000.
+# It AUTOMATICALLY obtains and renews the certificate (ACME), redirects
+# http:// -> https://, sets the X-Forwarded-* headers the app reads, and proxies
+# the /ws/agent + /ws/dashboard WebSocket channels transparently (no extra
+# directives needed).
+#
+# Run:
+#   caddy validate --config deploy/caddy/Caddyfile
+#   caddy run      --config deploy/caddy/Caddyfile      # foreground (testing)
+# or install Caddy as a service and copy this to /etc/caddy/Caddyfile, then:
+#   sudo systemctl reload caddy
+#
+# Firewall: open inbound 443 (and 80 for the http->https redirect / ACME HTTP-01
+# challenge; if only 443 is open, Caddy still issues/renews via TLS-ALPN-01 over
+# 443). Allow outbound 443 so Caddy can reach the ACME CA. See docs/reverse-proxy.md.
+
+blueeye.gnf.dk {
+	reverse_proxy 127.0.0.1:3000
+}
+
+# Already hold a certificate for the site? Skip ACME and point Caddy at it
+# instead of the block above:
+#
+# blueeye.gnf.dk {
+# 	tls /etc/ssl/blueeye.gnf.dk/fullchain.pem /etc/ssl/blueeye.gnf.dk/privkey.pem
+# 	reverse_proxy 127.0.0.1:3000
+# }

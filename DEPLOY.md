@@ -114,7 +114,8 @@ This compose is a **demo**. For production:
   production with the default JWT secret.
 - The agent normally runs on customer machines (not in this compose).
 - **Serve it over HTTPS on :443.** The app speaks plain HTTP on `:3000`; put a
-  TLS-terminating reverse proxy in front (e.g. lighttpd on `blueeye.gnf.dk` →
-  app on `:3000`). See [docs/reverse-proxy.md](docs/reverse-proxy.md) for a ready
-  lighttpd config — including the WebSocket `Upgrade` pass-through the agents and
-  live dashboard need.
+  TLS-terminating reverse proxy in front. Easiest is **Caddy** (a 2-line config
+  that auto-provisions + renews the certificate and proxies WebSockets
+  transparently); lighttpd works too if you already run it. Ready configs and
+  firewall notes are in [docs/reverse-proxy.md](docs/reverse-proxy.md)
+  (`deploy/caddy/Caddyfile`, `deploy/lighttpd/blueeye.gnf.dk.conf`).

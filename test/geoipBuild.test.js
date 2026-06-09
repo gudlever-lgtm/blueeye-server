@@ -49,6 +49,22 @@ test('buildFromSources skips IPv6 rows (IPv4-only reader)', async () => {
   [country, out].forEach((p) => fs.unlinkSync(p));
 });
 
+test('writeCsv creates the target dir and keeps the temp file beside the output', async () => {
+  // Regression: the temp file must live in the OUTPUT dir, not os.tmpdir(), or the
+  // rename crosses filesystems (EXDEV) in Docker (/tmp → the /data volume).
+  const base = path.join(os.tmpdir(), `geoipbuild-${process.pid}-nested-${Date.now()}`);
+  const out = path.join(base, 'sub', 'geoip.csv'); // dir does not exist yet
+  const country = tmp('cdir.csv', '5.5.5.0,5.5.5.255,SE\n');
+  const r = await buildFromSources({ country: { file: country }, out });
+  assert.equal(r.rows, 1);
+  assert.ok(fs.existsSync(out)); // mkdir -p happened + file landed
+  assert.deepEqual(rows(out), ['5.5.5.0,5.5.5.255,SE']);
+  // no leftover temp files in the target dir
+  assert.deepEqual(fs.readdirSync(path.dirname(out)).filter((f) => f.startsWith('.geoip-')), []);
+  fs.rmSync(base, { recursive: true, force: true });
+  fs.unlinkSync(country);
+});
+
 test('dbipUrls + monthCandidates build paths and fall back a month (incl. year rollover)', () => {
   const u = dbipUrls('https://x/free/', '2026-06');
   assert.equal(u.country, 'https://x/free/dbip-country-lite-2026-06.csv.gz');

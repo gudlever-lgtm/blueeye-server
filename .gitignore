@@ -14,6 +14,12 @@ node_modules/
 # Local compose overrides (e.g. host port tweaks)
 docker-compose.override.yml
 
+# GeoIP build inputs/outputs (downloaded/built into the repo dir during setup) —
+# keep them untracked so they never trip deploy.sh's "uncommitted changes" guard.
+dbip-*.csv
+dbip-*.csv.gz
+/geoip.csv
+
 # Logs
 *.log
 logs/

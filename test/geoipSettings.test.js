@@ -94,3 +94,29 @@ test('applyStoredOverrides reloads the provider from a stored path at boot', asy
   assert.equal(liveGeo.size, 2); // override applied on boot
   assert.equal(liveGeo.lookup('80.1.2.3').country, 'DE');
 });
+
+test('setGeoip toggles autoUpdate without clearing the path', async () => {
+  const repo = memRepo({ geoip: { dbPath: CSV_FILE } });
+  const svc = createSettingsService({ settingsRepo: repo, config: cfgNoEnv, liveGeo: createGeoProvider({ dbPath: CSV_FILE }) });
+  const res = await svc.setGeoip({ autoUpdate: true });
+  assert.equal(res.autoUpdate, true);
+  assert.equal(res.dbPath, CSV_FILE); // path preserved
+  assert.deepEqual(await repo.get('geoip'), { dbPath: CSV_FILE, autoUpdate: true });
+});
+
+test('recordGeoipBuild stores build metadata, reloads, and keeps autoUpdate', async () => {
+  const repo = memRepo({ geoip: { autoUpdate: true } });
+  const liveGeo = createGeoProvider({});
+  const svc = createSettingsService({ settingsRepo: repo, config: cfgNoEnv, liveGeo });
+  const res = await svc.recordGeoipBuild({ dbPath: CSV_FILE, month: '2026-06', ranges: 2 });
+  assert.equal(res.configured, true);
+  assert.equal(res.ranges, 2);
+  assert.equal(res.autoUpdate, true);
+  assert.equal(res.lastBuild.month, '2026-06');
+  assert.equal(res.lastBuild.ranges, 2);
+  assert.equal(liveGeo.lookup('8.8.8.8').country, 'US'); // live-reloaded
+  const stored = await repo.get('geoip');
+  assert.equal(stored.dbPath, CSV_FILE);
+  assert.equal(stored.autoUpdate, true); // preserved
+  assert.equal(stored.build.month, '2026-06');
+});

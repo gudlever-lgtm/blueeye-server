@@ -10,7 +10,7 @@ const { ROLES } = require('../auth/roles');
 // (passwords, webhook secrets) are never included; the AI assistant's API key is
 // editable here but only ever reported as "set or not" + a masked hint, never
 // echoed back in full.
-function createSettingsRouter({ settingsService, featureGate, dispatcher, analysisConfig, retentionConfig, releaseKeyService = null, publishRelease = null }) {
+function createSettingsRouter({ settingsService, featureGate, dispatcher, analysisConfig, retentionConfig, releaseKeyService = null, publishRelease = null, geoipUpdater = null }) {
   const router = express.Router();
   const admin = [requireAuth, requireRole(ROLES.ADMIN)];
   const reader = [requireAuth, requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN)];
@@ -185,10 +185,11 @@ function createSettingsRouter({ settingsService, featureGate, dispatcher, analys
     }
   }));
 
-  // PUT /api/settings/geoip { dbPath } — point the server at an offline GeoIP/ASN
-  // range CSV and reload it live (admin). Empty dbPath clears the override (falls
-  // back to env / disables). The response reports how many ranges loaded, so a
-  // wrong/unreadable path surfaces as ranges:0 rather than a silent no-op.
+  // PUT /api/settings/geoip { dbPath?, autoUpdate? } — point the server at an
+  // offline GeoIP/ASN range CSV and reload it live, and/or toggle monthly
+  // auto-update (admin). Empty dbPath clears the override (falls back to env /
+  // disables). The response reports how many ranges loaded, so a wrong/unreadable
+  // path surfaces as ranges:0 rather than a silent no-op.
   router.put('/geoip', ...admin, asyncHandler(async (req, res) => {
     try {
       res.json({ geoip: await settingsService.setGeoip(req.body || {}) });
@@ -198,6 +199,23 @@ function createSettingsRouter({ settingsService, featureGate, dispatcher, analys
       }
       throw err;
     }
+  }));
+
+  // POST /api/settings/geoip/update — fetch the latest DB-IP Lite release, build
+  // the CSV server-side (into the /data volume) and reload the provider (admin).
+  // Runs in the background and returns 202 + the job status; poll GET to track it.
+  // { countryOnly: true } skips the heavier ASN file.
+  router.post('/geoip/update', ...admin, asyncHandler(async (req, res) => {
+    if (!geoipUpdater) return res.status(503).json({ error: 'GeoIP auto-update is not available on this server' });
+    const includeAsn = (req.body && req.body.countryOnly) ? false : true;
+    res.status(202).json({ update: geoipUpdater.trigger({ includeAsn }) });
+  }));
+
+  // GET /api/settings/geoip/update — current update-job status (idle/running/ok/
+  // error + month/ranges). viewer+ so the Settings page can poll/show progress.
+  router.get('/geoip/update', ...reader, asyncHandler(async (req, res) => {
+    if (!geoipUpdater) return res.json({ update: { state: 'unavailable' } });
+    res.json({ update: geoipUpdater.status() });
   }));
 
   return router;

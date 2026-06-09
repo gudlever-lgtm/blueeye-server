@@ -5908,7 +5908,12 @@ function geoipSettingsCard(geoip) {
   const path = el('input', { type: 'text', value: (geoip && geoip.dbPath) || '', placeholder: '/data/geoip.csv' });
   const err = el('p', { class: 'error' });
   const status = el('p', { class: 'muted small' });
+  const built = el('p', { class: 'muted small' });
   const btn = el('button', { class: 'small' }, 'Save & reload');
+  const updateBtn = el('button', { class: 'small' }, 'Update now (download latest)');
+  const autoChk = el('input', { type: 'checkbox' });
+  if (geoip && geoip.autoUpdate) autoChk.checked = true;
+
   function renderStatus(s) {
     const ok = s && s.configured;
     status.replaceChildren(
@@ -5916,23 +5921,58 @@ function geoipSettingsCard(geoip) {
         ok ? `Loaded ${s.ranges} IP range${s.ranges === 1 ? '' : 's'}` : 'Not configured — geo enrichment disabled'),
       s && s.source ? el('span', { class: 'muted' }, ` · source: ${esc(s.source)}`) : null,
       s && s.error ? el('span', { class: 'warn-text' }, ` · ${esc(s.error)}`) : null);
+    const b = s && s.lastBuild;
+    built.textContent = b ? `Last downloaded: ${b.month || '?'} · ${b.ranges} ranges · ${fmtDate(b.builtAt)}` : '';
+    if (s && typeof s.dbPath === 'string' && s.dbPath !== path.value) path.value = s.dbPath;
   }
   renderStatus(geoip);
+
   async function save() {
     err.textContent = ''; btn.disabled = true;
     try {
       const res = await api('/api/settings/geoip', { method: 'PUT', body: { dbPath: path.value.trim() } });
       renderStatus(res.geoip);
-      if (res.geoip && res.geoip.configured) toast(`GeoIP loaded — ${res.geoip.ranges} ranges`);
-      else toast('Saved, but no ranges loaded — check the path and CSV format.', true);
+      toast(res.geoip && res.geoip.configured ? `GeoIP loaded — ${res.geoip.ranges} ranges` : 'Saved, but no ranges loaded — check the path and CSV format.', !(res.geoip && res.geoip.configured));
     } catch (e2) { err.textContent = errText(e2); } finally { btn.disabled = false; }
   }
+
+  // Kicks off the server-side download+build, then polls the job until it settles
+  // (it writes into the server's own /data volume, so no host path is needed).
+  let polling = null;
+  async function refreshGeoip() { try { const d = await api('/api/settings'); renderStatus(d.geoip); } catch { /* ignore */ } }
+  function setUpdating(on) { updateBtn.disabled = on; updateBtn.textContent = on ? 'Downloading + building…' : 'Update now (download latest)'; }
+  async function pollUpdate() {
+    try {
+      const { update: u } = await api('/api/settings/geoip/update');
+      if (u.state === 'running') return; // keep polling
+      clearInterval(polling); polling = null; setUpdating(false);
+      if (u.state === 'ok') { await refreshGeoip(); toast(`GeoIP updated to ${u.month} — ${u.ranges} ranges`); }
+      else if (u.state === 'error') { err.textContent = `Update failed: ${u.error || 'unknown error'}`; toast('GeoIP update failed', true); }
+    } catch (e2) { clearInterval(polling); polling = null; setUpdating(false); err.textContent = errText(e2); }
+  }
+  async function updateNow() {
+    err.textContent = ''; setUpdating(true);
+    try {
+      await api('/api/settings/geoip/update', { method: 'POST', body: {} });
+      if (!polling) polling = setInterval(pollUpdate, 2000);
+    } catch (e2) { setUpdating(false); err.textContent = errText(e2); }
+  }
+  async function toggleAuto() {
+    try { await api('/api/settings/geoip', { method: 'PUT', body: { autoUpdate: autoChk.checked } }); toast(autoChk.checked ? 'Monthly auto-update on' : 'Monthly auto-update off'); }
+    catch (e2) { autoChk.checked = !autoChk.checked; toast(errText(e2), true); }
+  }
+
   btn.addEventListener('click', save);
+  updateBtn.addEventListener('click', updateNow);
+  autoChk.addEventListener('change', toggleAuto);
+
   return el('div', { class: 'settings-card' }, el('h3', {}, 'GeoIP database (country + ASN)'),
-    el('p', { class: 'muted small' }, 'Offline, EU-sourced IP→country/ASN range CSV used to place external destinations and traceroute hops on the maps. Without it the maps show only your sites. Point this at a file on the server (build one with scripts/build-geoip.js); it reloads live, no restart. See docs/geo.md.'),
+    el('p', { class: 'muted small' }, 'Offline, EU-sourced IP→country/ASN range CSV used to place external destinations and traceroute hops on the maps. Without it the maps show only your sites. ', el('strong', {}, '“Update now”'), ' downloads the latest DB-IP Lite release (db-ip.com, CC-BY) and builds it on the server — no host file needed. Or point the path at a file you built with scripts/build-geoip.js. Reloads live, no restart. See docs/geo.md.'),
     el('div', { class: 'form-grid' },
       el('label', {}, 'GeoIP CSV path (server-side file)', path),
-      status, err, el('div', { class: 'form-actions' }, btn)));
+      status, built, err,
+      el('label', { class: 'inline' }, autoChk, ' Auto-update monthly (the server fetches a fresh DB-IP release; needs outbound internet)'),
+      el('div', { class: 'form-actions' }, btn, updateBtn)));
 }
 
 views.users = async () => {

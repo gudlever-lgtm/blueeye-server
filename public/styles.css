@@ -998,3 +998,38 @@ button.active-btn { outline: 2px solid var(--accent); }
 .modal-card.wide .form-grid .error,
 .modal-card.wide .form-grid .form-actions { grid-column: 1 / -1; }
 @media (max-width: 640px) { .modal-card.wide .form-grid { grid-template-columns: 1fr; } }
+
+/* ---- Reporting: two-level subtabs ---------------------------------------- */
+.nis2-inner-tabs { margin: 0 0 14px; }
+
+/* Get-started guide (NIS2 dashboard, empty state) */
+.nis2-getstarted { background: var(--panel); border: 1px solid var(--border); border-left: 3px solid var(--accent);
+  border-radius: 12px; padding: 16px 20px; margin: 0 0 18px; }
+.nis2-getstarted h3 { margin: 0 0 6px; }
+.nis2-gs-steps { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 12px; }
+.nis2-gs-step { display: flex; gap: 12px; align-items: flex-start; }
+.nis2-gs-num { flex: 0 0 26px; height: 26px; border-radius: 50%; background: var(--accent); color: #fff;
+  display: inline-flex; align-items: center; justify-content: center; font-weight: 700; font-size: 13px; }
+.nis2-gs-step button { margin-top: 6px; }
+.nis2-gs-seed { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 16px;
+  padding-top: 14px; border-top: 1px solid var(--border); }
+
+/* ---- Report Generator ---------------------------------------------------- */
+.rg-opts { display: flex; gap: 16px; flex-wrap: wrap; margin: 0 0 14px; }
+.rg-opts label { min-width: 200px; }
+.rg-sources { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+.rg-card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+.rg-head { flex-direction: row; align-items: center; gap: 8px; color: var(--text); font-size: 14px; cursor: pointer; }
+.rg-head input { width: auto; }
+.rg-desc { font-size: 12px; margin: 4px 0 8px; }
+.rg-filters { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 6px 0; }
+.rg-filter { font-size: 12px; }
+.rg-coldetails { margin-top: 6px; }
+.rg-coldetails > summary { cursor: pointer; font-size: 12px; color: var(--muted); }
+.rg-cols { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 4px 10px; margin-top: 8px; }
+.rg-col { flex-direction: row; align-items: center; gap: 6px; font-size: 12px; color: var(--text); }
+.rg-col input { width: auto; }
+.rg-actions { display: flex; gap: 8px; margin: 16px 0; }
+.rg-preview { margin-top: 8px; }
+.rg-sec-h { margin: 16px 0 6px; font-size: 14px; }
+@media (max-width: 640px) { .rg-filters { grid-template-columns: 1fr; } }

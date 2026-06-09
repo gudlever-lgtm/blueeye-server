@@ -192,6 +192,75 @@ test('executive HTML export renders a print-ready document', async () => {
   assert.match(res.text, /Acme/);
 });
 
+// ---- get-started seed ------------------------------------------------------
+
+test('seed creates one control per category, then refuses if any exist', async () => {
+  const nis2ControlsRepo = makeNis2ControlsRepo();
+  const app = makeApp({ nis2ControlsRepo });
+  const res = await request(app).post('/api/nis2/seed').set('Authorization', authHeader('operator'));
+  assert.equal(res.status, 201);
+  assert.equal(res.body.created, 10);
+  // Second call is a no-op (409) because controls now exist.
+  assert.equal((await request(app).post('/api/nis2/seed').set('Authorization', authHeader('operator'))).status, 409);
+});
+
+test('seed is forbidden for viewers (403)', async () => {
+  assert.equal((await request(makeApp()).post('/api/nis2/seed').set('Authorization', authHeader('viewer'))).status, 403);
+});
+
+// ---- Report Generator ------------------------------------------------------
+
+test('custom-report sources hide the audit source from non-admins', async () => {
+  const app = makeApp();
+  const asViewer = (await request(app).get('/api/nis2/custom-reports/sources').set('Authorization', authHeader('viewer'))).body.sources.map((s) => s.key);
+  const asAdmin = (await request(app).get('/api/nis2/custom-reports/sources').set('Authorization', authHeader('admin'))).body.sources.map((s) => s.key);
+  assert.ok(!asViewer.includes('audit'));
+  assert.ok(asAdmin.includes('audit'));
+});
+
+test('custom-report preview builds the requested sections', async () => {
+  const nis2RisksRepo = makeNis2RisksRepo();
+  await nis2RisksRepo.create(validRisk);
+  const res = await request(makeApp({ nis2RisksRepo }))
+    .post('/api/nis2/custom-reports/preview').set('Authorization', authHeader('viewer'))
+    .send({ title: 'My report', sections: [{ source: 'risks', columns: ['title', 'band'] }] });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.title, 'My report');
+  assert.equal(res.body.sections[0].headers.length, 2);
+  assert.equal(res.body.sections[0].rows.length, 1);
+});
+
+test('custom-report preview rejects an empty/invalid spec (400)', async () => {
+  const app = makeApp();
+  assert.equal((await request(app).post('/api/nis2/custom-reports/preview').set('Authorization', authHeader('viewer')).send({ sections: [] })).status, 400);
+  assert.equal((await request(app).post('/api/nis2/custom-reports/preview').set('Authorization', authHeader('viewer')).send({ sections: [{ source: 'nope' }] })).status, 400);
+});
+
+test('custom-report with the audit source is 403 for non-admins', async () => {
+  const res = await request(makeApp()).post('/api/nis2/custom-reports/preview').set('Authorization', authHeader('operator'))
+    .send({ sections: [{ source: 'audit' }] });
+  assert.equal(res.status, 403);
+});
+
+test('custom-report export honours the format (csv/json/html)', async () => {
+  const nis2RisksRepo = makeNis2RisksRepo();
+  await nis2RisksRepo.create(validRisk);
+  const app = makeApp({ nis2RisksRepo });
+  const spec = (format) => ({ format, sections: [{ source: 'risks', columns: ['title', 'band'] }] });
+
+  const csv = await request(app).post('/api/nis2/custom-reports/export').set('Authorization', authHeader('viewer')).send(spec('csv'));
+  assert.match(csv.headers['content-type'], /text\/csv/);
+  assert.match(csv.text, /# Risk register/);
+
+  const json = await request(app).post('/api/nis2/custom-reports/export').set('Authorization', authHeader('viewer')).send(spec('json'));
+  assert.match(json.headers['content-type'], /application\/json/);
+  assert.ok(JSON.parse(json.text).sections.length === 1);
+
+  const html = await request(app).post('/api/nis2/custom-reports/export').set('Authorization', authHeader('viewer')).send(spec('html'));
+  assert.match(html.headers['content-type'], /text\/html/);
+  assert.match(html.text, /<!DOCTYPE html>/);
+});
+
 // ---- error handling --------------------------------------------------------
 
 test('a repository failure surfaces as 500', async () => {

@@ -165,10 +165,47 @@ function validateReportRequest(body) {
   return done(errors, value);
 }
 
+// Validates a Report Generator spec. Body: { title?, org?, format?, sections:
+// [{ source, filters?, columns? }] }. source must be a known report source; the
+// route separately enforces the admin gate on admin-only sources. Filters are
+// passed through as a string map (the builder coerces); columns are an array of
+// strings. Returns { value } normalised for the builder, or { errors }.
+function validateCustomReportSpec(body, { sourceKeys = [] } = {}) {
+  const input = obj(body);
+  const errors = {};
+  const value = {};
+  value.title = optString(input, 'title', 255, errors);
+  value.org = optString(input, 'org', 120, errors);
+  value.format = input.format === undefined || input.format === null || input.format === ''
+    ? 'html'
+    : reqEnum(input, 'format', ['html', 'csv', 'json'], errors);
+
+  if (!Array.isArray(input.sections) || input.sections.length === 0) {
+    errors.sections = 'sections must be a non-empty array';
+  } else if (input.sections.length > 20) {
+    errors.sections = 'sections must contain at most 20 entries';
+  } else {
+    value.sections = [];
+    input.sections.forEach((sec, idx) => {
+      const s = obj(sec);
+      if (!sourceKeys.includes(s.source)) {
+        errors[`sections[${idx}].source`] = `source must be one of: ${sourceKeys.join(', ')}`;
+        return;
+      }
+      const filters = (s.filters && typeof s.filters === 'object' && !Array.isArray(s.filters)) ? s.filters : {};
+      const columns = Array.isArray(s.columns) ? s.columns.filter((c) => typeof c === 'string') : [];
+      value.sections.push({ source: s.source, filters, columns });
+    });
+  }
+
+  return done(errors, value);
+}
+
 module.exports = {
   validateRiskInput,
   validateControlInput,
   validateIncidentInput,
   validateEvidenceInput,
   validateReportRequest,
+  validateCustomReportSpec,
 };

@@ -8,11 +8,12 @@ const { parseId } = require('../validation/locationValidation');
 const { toCsv } = require('../lib/csv');
 const {
   validateRiskInput, validateControlInput, validateIncidentInput,
-  validateEvidenceInput, validateReportRequest,
+  validateEvidenceInput, validateReportRequest, validateCustomReportSpec,
 } = require('../validation/nis2Validation');
 const { computeDashboard } = require('../nis2/dashboard');
 const { buildExecutiveReport, buildSnapshot, managementConclusion, renderExecutiveHtml, renderRegisterHtml } = require('../nis2/report');
 const { CATEGORIES } = require('../nis2/constants');
+const { SOURCE_KEYS, sourcesFor, buildCustomReport, customReportToCsv } = require('../nis2/reportBuilder');
 
 // NIS2 Reporting Center API. Mounted at /api/nis2. Reads are viewer+, mutations
 // to the register/controls/incidents/evidence are operator+, report approval and
@@ -314,6 +315,91 @@ function createNis2Router({
       entityType: req.query.entityType || null,
       limit: Number.isFinite(limit) ? limit : 100,
     }));
+  }));
+
+  // ---- Get-started seed -----------------------------------------------------
+
+  // Seeds a baseline control per NIS2 category (status Missing) so a fresh
+  // install has something to evidence against. No-op (409) if controls already
+  // exist, so it can't duplicate. operator+.
+  router.post('/seed', requireAuth, writer, asyncHandler(async (req, res) => {
+    const existing = await nis2ControlsRepo.findAll();
+    if (existing.length > 0) return res.status(409).json({ error: 'Controls already exist — seed skipped', count: existing.length });
+    const created = [];
+    for (const area of CATEGORIES) {
+      const control = await nis2ControlsRepo.create({
+        controlName: `${area} baseline control`, nis2Area: area,
+        description: `Starter control for ${area}. Replace with your real assurance activity.`,
+        frequency: 'quarterly', status: 'Missing',
+      });
+      created.push(control);
+      await audit(req, 'create', 'control', control.id, null, control);
+    }
+    res.status(201).json({ created: created.length, controls: created });
+  }));
+
+  // ---- Report Generator (custom, selector-driven) ---------------------------
+
+  const isAdmin = (req) => req.user && req.user.role === 'admin';
+  const wantsAudit = (spec) => (spec.sections || []).some((s) => s.source === 'audit');
+
+  // The source catalogue the UI builds its selectors from (admin-only sources
+  // hidden from non-admins).
+  router.get('/custom-reports/sources', requireAuth, reader, (req, res) => {
+    res.json({ sources: sourcesFor(isAdmin(req)) });
+  });
+
+  // Loads exactly the data the requested sections need, then builds the report.
+  // Audit data is only loaded for admins. Returns the built report + isAdmin.
+  async function assembleCustomReport(spec, req) {
+    const sources = new Set((spec.sections || []).map((s) => s.source));
+    const needRisks = sources.has('risks');
+    const needControls = sources.has('controls') || sources.has('summary') || sources.has('categories');
+    const needIncidents = sources.has('incidents') || sources.has('summary');
+    const needDashboard = sources.has('summary') || sources.has('categories');
+    const [risks, controls, incidents] = await Promise.all([
+      needRisks || needDashboard ? nis2RisksRepo.findAll() : Promise.resolve([]),
+      needControls || needDashboard ? nis2ControlsRepo.findAll() : Promise.resolve([]),
+      needIncidents || needDashboard ? nis2IncidentsRepo.findAll() : Promise.resolve([]),
+    ]);
+    const dashboard = needDashboard ? computeDashboard({ risks, controls, incidents }) : null;
+    const admin = isAdmin(req);
+    const audit = admin && sources.has('audit') ? await nis2AuditRepo.findAll({ limit: 500 }) : [];
+    return buildCustomReport(spec, { risks, controls, incidents, dashboard, audit }, { isAdmin: admin });
+  }
+
+  // On-screen preview (JSON). Rows are capped per section so a huge register
+  // can't bloat the response; `truncated` tells the UI to note the cap.
+  router.post('/custom-reports/preview', requireAuth, reader, asyncHandler(async (req, res) => {
+    const { value, errors } = validateCustomReportSpec(req.body, { sourceKeys: SOURCE_KEYS });
+    if (errors) return fail(res, errors);
+    if (wantsAudit(value) && !isAdmin(req)) return res.status(403).json({ error: 'The audit source requires the admin role' });
+    const report = await assembleCustomReport(value, req);
+    const CAP = 100;
+    report.sections = report.sections.map((s) => ({
+      ...s, rows: s.rows.slice(0, CAP), truncated: s.rowCount > CAP,
+    }));
+    res.json(report);
+  }));
+
+  // Export the custom report as PDF-ready HTML, CSV, or JSON (format in body).
+  router.post('/custom-reports/export', requireAuth, reader, asyncHandler(async (req, res) => {
+    const { value, errors } = validateCustomReportSpec(req.body, { sourceKeys: SOURCE_KEYS });
+    if (errors) return fail(res, errors);
+    if (wantsAudit(value) && !isAdmin(req)) return res.status(403).json({ error: 'The audit source requires the admin role' });
+    const report = await assembleCustomReport(value, req);
+    if (value.format === 'csv') {
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', 'attachment; filename="custom-report.csv"');
+      return res.send(customReportToCsv(report));
+    }
+    if (value.format === 'json') {
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
+      res.setHeader('Content-Disposition', 'attachment; filename="custom-report.json"');
+      return res.send(JSON.stringify(report, null, 2));
+    }
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    return res.send(renderRegisterHtml(report.title, report.sections, { org: report.org }));
   }));
 
   // ---- CSV export -----------------------------------------------------------

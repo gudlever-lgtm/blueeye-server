@@ -313,7 +313,8 @@ function start() {
   // country/ASN. RFC1918/private endpoints are never geolocated.
   const flowsRepo = createFlowsRepository(db);
   const geoProvider = createGeoProvider({ dbPath: config.geo.dbPath, logger: console });
-  const geoEnricher = createGeoEnricher({ provider: geoProvider, centroids: createCentroids() });
+  const centroids = createCentroids();
+  const geoEnricher = createGeoEnricher({ provider: geoProvider, centroids });
   const flowPipeline = createFlowPipeline({
     flowsRepo,
     enricher: geoEnricher,
@@ -370,6 +371,8 @@ function start() {
     flowPipeline,
     flowsRepo,
     geoTileConfig: config.geo,
+    geoProvider,
+    centroids,
     assistant,
     dispatcher,
     featureGate,

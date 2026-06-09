@@ -65,6 +65,8 @@ function createApiRouter({
   flowPipeline,
   flowsRepo,
   geoTileConfig,
+  geoProvider,
+  centroids,
   assistant,
   dispatcher,
   featureGate,
@@ -131,7 +133,7 @@ function createApiRouter({
     resultsRepo, agentsRepo, flowsRepo,
     getCategories: settingsService ? () => settingsService.getFlowCategories() : undefined,
   }));
-  if (probeResultsRepo) router.use('/api/probes', createProbesRouter({ probeResultsRepo, agentsRepo }));
+  if (probeResultsRepo) router.use('/api/probes', createProbesRouter({ probeResultsRepo, agentsRepo, geoProvider, centroids }));
   if (probeResultsRepo) router.use('/api/fleet', createFleetRouter({ agentsRepo, probeResultsRepo, resultsRepo, speedtestResultsRepo, settingsService }));
   if (incidentsRepo && probeResultsRepo) router.use('/api/reports', createReportsRouter({ probeResultsRepo, incidentsRepo, locationsRepo }));
   if (thresholdsRepo) router.use('/api/thresholds', createThresholdsRouter({ thresholdsRepo, locationsRepo }));

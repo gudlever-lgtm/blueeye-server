@@ -826,6 +826,8 @@ function makeApp(overrides = {}) {
     flowPipeline: overrides.flowPipeline || makeFlowPipeline(),
     flowsRepo: overrides.flowsRepo || makeFlowsRepo(),
     geoTileConfig: overrides.geoTileConfig || { tileUrl: 'https://tiles.example/{z}/{x}/{y}.png', tileAttribution: 'test', tileMaxZoom: 19 },
+    geoProvider: overrides.geoProvider || null,
+    centroids: overrides.centroids || null,
     assistant: overrides.assistant || makeAssistant(),
     dispatcher: overrides.dispatcher || makeDispatcher(),
     featureGate: overrides.featureGate || makeFeatureGate(),

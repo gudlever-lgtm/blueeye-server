@@ -108,21 +108,25 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
   }
 
   // Effective GeoIP status: the configured path (settings override or env), where
-  // it came from, and whether the live provider actually has ranges loaded.
+  // it came from, whether the live provider actually has ranges loaded, plus the
+  // auto-update toggle and the last in-app build (month/ranges/time).
   async function getGeoip() {
     const override = await loadOverride('geoip');
-    const hasOverride = override && typeof override === 'object' && typeof override.dbPath === 'string';
+    const o = override && typeof override === 'object' ? override : {};
+    const hasPath = typeof o.dbPath === 'string';
     const envPath = geoEnvPath();
-    const dbPath = hasOverride ? override.dbPath : envPath;
+    const dbPath = hasPath ? o.dbPath : envPath;
     const st = liveGeo && typeof liveGeo.status === 'function'
       ? liveGeo.status()
       : { configured: false, size: 0, source: null, error: null };
     return {
       dbPath,
-      source: hasOverride ? 'settings' : (envPath ? 'env' : null),
+      source: hasPath ? 'settings' : (envPath ? 'env' : null),
       configured: !!st.configured,
       ranges: st.size || 0,
       error: st.error || null,
+      autoUpdate: o.autoUpdate === true, // opt-in (egress only when an admin enables it)
+      lastBuild: o.build || null,
     };
   }
 
@@ -135,23 +139,44 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
       if (s.length > 1024) errors.dbPath = 'dbPath must be at most 1024 characters';
       else value.dbPath = s; // '' clears the override → fall back to env / disabled
     }
+    if (p.autoUpdate !== undefined) value.autoUpdate = p.autoUpdate === true || p.autoUpdate === 'true';
     return { errors: Object.keys(errors).length ? errors : null, value };
   }
 
-  // Persists the GeoIP path override (empty clears it) and live-reloads the
-  // provider from the effective path. Returns the new status, including how many
-  // ranges loaded (0 ⇒ wrong path / unreadable / empty), so the UI can confirm.
+  // Merges a partial geoip override (path and/or auto-update flag) onto the stored
+  // one and live-reloads the provider from the effective path. Clearing the path
+  // also drops the stale build metadata. Returns the new status (ranges loaded ⇒
+  // 0 means a wrong/unreadable path, surfaced rather than failing silently).
   async function setGeoip(patch) {
     const { errors, value } = validateGeoip(patch || {});
     if (errors) throw badRequest('invalid geoip settings', errors);
+    const cur = await loadOverride('geoip');
+    const o = cur && typeof cur === 'object' ? { ...cur } : {};
     if (value.dbPath !== undefined) {
-      await settingsRepo.set('geoip', value.dbPath === '' ? null : { dbPath: value.dbPath });
+      if (value.dbPath === '') { delete o.dbPath; delete o.build; }
+      else o.dbPath = value.dbPath;
     }
-    const eff = await getGeoip(); // path after the write (override or env)
+    if (value.autoUpdate !== undefined) o.autoUpdate = value.autoUpdate;
+    await settingsRepo.set('geoip', Object.keys(o).length ? o : null);
+    const eff = await getGeoip();
     if (liveGeo && typeof liveGeo.reload === 'function') {
       try { liveGeo.reload({ dbPath: eff.dbPath || '' }); } catch { /* status reflects configured:false */ }
     }
-    return await getGeoip(); // re-read so configured/ranges reflect the reload
+    return await getGeoip();
+  }
+
+  // Records a freshly built database (path + month/ranges/time) from the in-app
+  // updater, preserving the auto-update flag, and live-reloads the provider.
+  async function recordGeoipBuild({ dbPath, month = null, ranges = 0 }) {
+    const cur = await loadOverride('geoip');
+    const o = cur && typeof cur === 'object' ? { ...cur } : {};
+    o.dbPath = String(dbPath);
+    o.build = { builtAt: new Date().toISOString(), month, ranges };
+    await settingsRepo.set('geoip', o);
+    if (liveGeo && typeof liveGeo.reload === 'function') {
+      try { liveGeo.reload({ dbPath: o.dbPath }); } catch { /* status reflects configured:false */ }
+    }
+    return getGeoip();
   }
 
   // ---- Traffic-type categories (DNS, Facebook, ...) -----------------------
@@ -726,7 +751,7 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
 
   return {
     getMap, setMap, validateMap,
-    getGeoip, setGeoip, validateGeoip,
+    getGeoip, setGeoip, validateGeoip, recordGeoipBuild,
     getMaintenance, setMaintenance, validateMaintenance,
     getFlowCategories, setFlowCategories, resetFlowCategories, validateFlowCategories,
     getAnalysis, setAnalysis, validateAnalysis,

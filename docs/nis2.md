@@ -1,10 +1,28 @@
-# NIS2 Reporting Center
+# Reporting (NIS2 + Report Generator)
 
-A self-contained compliance module that gives an organisation one place to see
-its NIS2 readiness, risks, controls, security incidents and management reporting.
-It is **modular** — designed to be extended later with API import, AI-generated
-recommendations and integration to tickets/assets/monitoring data, without schema
-churn.
+The **Reporting** tab has two sub-sections:
+
+- **NIS2** — a *stationary* compliance module with fixed parameters: readiness
+  dashboard, risk register, control evidence, security incidents, generated
+  management reports and an audit trail.
+- **Report Generator** — a flexible, *selector-driven* custom report builder:
+  pick sections, set per-section filters, choose columns, then preview or export
+  as PDF (print-ready HTML), CSV or JSON.
+
+The module is **modular** — designed to be extended later with API import,
+AI-generated recommendations and integration to tickets/assets/monitoring data,
+without schema churn. Both sub-sections share the `/api/nis2/*` API; the split is
+a UI organisation (`views.reporting` → `nis2Module()` / `reportGenerator()`).
+
+## Get-started
+
+A fresh install has no data, so the NIS2 dashboard shows a **get-started guide**
+(`nis2GetStarted()`) with the recommended workflow and a one-click
+`POST /api/nis2/seed` (operator+) that creates one baseline control per category
+(status `Missing`) — a no-op (409) once any control exists, so it can't
+duplicate.
+
+## NIS2 module
 
 ## Surface
 
@@ -27,6 +45,23 @@ existing user-JWT RBAC:
 | `GET /audit` | admin | The module change trail |
 | `GET /export/{risks,controls,incidents}.csv` | viewer+ | CSV export |
 | `GET /export/{executive,readiness,risk,control,incident}.html` | viewer+ | Print-ready HTML → browser "Save as PDF" |
+| `POST /seed` | operator+ | Seed one baseline control per category (get-started) |
+| `GET /custom-reports/sources` | viewer+ | Report Generator source catalogue (admin-only sources hidden from non-admins) |
+| `POST /custom-reports/preview` | viewer+ | Build a custom report (JSON; rows capped per section) |
+| `POST /custom-reports/export` | viewer+ | Export a custom report — `format`: `html` \| `csv` \| `json` |
+
+## Report Generator
+
+`src/nis2/reportBuilder.js` declares the available **sources** (`summary`,
+`categories`, `risks`, `controls`, `incidents`, and the admin-only `audit`),
+each with its projectable columns, default column set and understood filters.
+`GET /custom-reports/sources` serves this catalogue (so the UI selectors never
+drift from the server), `buildCustomReport(spec, data, { isAdmin })` applies a
+validated spec to the loaded data (filter → sort → project columns) and returns
+sections directly compatible with `renderRegisterHtml`. The audit source is
+gated: the route returns 403 if a non-admin requests it, and the builder skips it
+as defence in depth. CSV export (`customReportToCsv`) emits a heading + header +
+rows per section, using the injection-safe `cell()`.
 
 ## Readiness scoring (local + explainable)
 

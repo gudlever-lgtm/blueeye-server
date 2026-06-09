@@ -341,7 +341,7 @@ function showSigningKeySetupPrompt() {
 const VIEW_LABELS = {
   fleet: 'Overview', overview: 'Traffic', map: 'Sites', geo: 'Destinations', agents: 'Agents',
   interfaces: 'Interfaces', probes: 'Probes', tests: 'Tests', flows: 'Flows',
-  findings: 'Analysis', nis2: 'NIS2', locations: 'Locations', enrollment: 'Enrollment', settings: 'Settings',
+  findings: 'Analysis', reporting: 'Reporting', locations: 'Locations', enrollment: 'Enrollment', settings: 'Settings',
 };
 function gotoView(viewKey) { closeDrawer(); currentView = viewKey; render(); }
 function viewLink(viewKey, label) {
@@ -5881,6 +5881,7 @@ const NIS2_FREQ = ['daily', 'weekly', 'monthly', 'quarterly', 'annually', 'ad-ho
 const NIS2_SEVERITY = ['low', 'medium', 'high', 'critical'];
 const NIS2_INCIDENT_STATUS = ['open', 'investigating', 'contained', 'resolved', 'closed'];
 
+const reportingState = { section: 'nis2' }; // 'nis2' (stationary) | 'generator' (custom)
 const nis2State = { tab: 'dashboard' };
 
 // Maps a value to one of the shared badge palette classes (ok/warn/crit/INFO/neutral).
@@ -5930,35 +5931,61 @@ async function nis2Print(path) {
   } catch (err) { toast(`Export failed: ${err.message}`, true); }
 }
 
-views.nis2 = async () => {
+// Top-level Reporting view: NIS2 (a stationary page with fixed parameters) and
+// the Report Generator (a flexible, selector-driven custom report builder).
+views.reporting = async () => {
   const root = el('div', { class: 'nis2' });
+  const sections = [['nis2', 'NIS2'], ['generator', 'Report Generator']];
+  const bar = el('div', { class: 'subtabs nis2-subtabs' },
+    ...sections.map(([key, label]) => el('button', {
+      class: `small ghost${reportingState.section === key ? ' active' : ''}`,
+      onclick: () => { reportingState.section = key; render(); },
+    }, label)));
+  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Reporting'), bar));
+
+  const body = el('div', { class: 'nis2-body' }, el('div', { class: 'empty' }, 'Loading…'));
+  root.append(body);
+  try {
+    body.replaceChildren(reportingState.section === 'generator' ? await reportGenerator() : await nis2Module());
+  } catch (err) { body.replaceChildren(el('div', { class: 'empty error' }, err.message)); }
+  return root;
+};
+
+// The NIS2 module — a fixed set of pages (Dashboard, Risk Register, Controls,
+// Incidents, Reports, Audit). Rendered inside the Reporting view.
+async function nis2Module() {
+  const wrap = el('div', { class: 'nis2-inner' });
   const tabs = [
     ['dashboard', 'Dashboard'], ['risks', 'Risk Register'], ['controls', 'Controls'],
     ['incidents', 'Incidents'], ['reports', 'Reports'],
   ];
   if (role === 'admin') tabs.push(['audit', 'Audit Trail']);
-  const bar = el('div', { class: 'subtabs nis2-subtabs' },
+  wrap.append(el('div', { class: 'subtabs nis2-subtabs nis2-inner-tabs' },
     ...tabs.map(([key, label]) => el('button', {
       class: `small ghost${nis2State.tab === key ? ' active' : ''}`,
       onclick: () => { nis2State.tab = key; render(); },
-    }, label)));
-  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'NIS2 Reporting Center'), bar));
+    }, label))));
 
   const body = el('div', { class: 'nis2-body' }, el('div', { class: 'empty' }, 'Loading…'));
-  root.append(body);
+  wrap.append(body);
   const renderers = {
     dashboard: nis2Dashboard, risks: nis2Risks, controls: nis2Controls,
     incidents: nis2Incidents, reports: nis2Reports, audit: nis2Audit,
   };
   try { body.replaceChildren(await renderers[nis2State.tab]()); }
   catch (err) { body.replaceChildren(el('div', { class: 'empty error' }, err.message)); }
-  return root;
-};
+  return wrap;
+}
 
 // ---- NIS2: Dashboard -------------------------------------------------------
 async function nis2Dashboard() {
   const d = await api('/api/nis2/dashboard');
   const wrap = el('div');
+
+  // First-run "get started" guide when there is no data yet.
+  if (!d.totals.risks && !d.totals.controls && !d.totals.incidents) {
+    wrap.append(nis2GetStarted());
+  }
 
   // Readiness hero + KPI cards.
   const readinessClass = d.readinessScore >= 80 ? 'ok' : d.readinessScore >= 50 ? 'warn' : 'crit';
@@ -6279,12 +6306,179 @@ async function nis2Audit() {
   return wrap;
 }
 
-PAGE_INFO.nis2 = {
-  hero: 'NIS2 readiness at a glance — risks, controls, incidents and management reports in one place.',
-  title: 'NIS2 Reporting Center',
+// ---- NIS2: Get-started guide (shown when there is no data yet) -------------
+function nis2GetStarted() {
+  const step = (n, title, desc, btn) => el('li', { class: 'nis2-gs-step' },
+    el('span', { class: 'nis2-gs-num' }, String(n)),
+    el('div', {}, el('strong', {}, title), el('div', { class: 'muted' }, desc), btn || null));
+  const goto = (tab) => () => { nis2State.tab = tab; render(); };
+  const card = el('div', { class: 'nis2-getstarted' },
+    el('h3', {}, '👋 Get started with NIS2 reporting'),
+    el('p', { class: 'muted' }, 'There is no data yet. Follow these steps to build up your NIS2 picture — or seed a set of starter controls (one per category) to begin from a baseline.'),
+    el('ol', { class: 'nis2-gs-steps' },
+      step(1, 'Add controls', 'Record your recurring assurance activities (one per NIS2 area) and attach evidence.',
+        canWrite() ? el('button', { class: 'small', onclick: goto('controls') }, 'Go to Controls') : null),
+      step(2, 'Build the risk register', 'Capture risks with likelihood × impact; the score and band are computed for you.',
+        canWrite() ? el('button', { class: 'small', onclick: goto('risks') }, 'Go to Risk Register') : null),
+      step(3, 'Log security incidents', 'Record incidents and flag the ones that may carry a NIS2 notification obligation.',
+        canWrite() ? el('button', { class: 'small', onclick: goto('incidents') }, 'Go to Incidents') : null),
+      step(4, 'Generate a report', 'Produce an executive/readiness report (PDF), or build a custom one in the Report Generator.',
+        el('button', { class: 'small ghost', onclick: goto('reports') }, 'Go to Reports'))));
+  if (canWrite()) {
+    card.append(el('div', { class: 'nis2-gs-seed' },
+      el('button', { class: 'small', onclick: () => nis2Seed() }, '✨ Seed starter controls'),
+      el('span', { class: 'muted' }, 'Creates one baseline control per NIS2 category (status “Missing”) so you have something to evidence against.')));
+  }
+  return card;
+}
+async function nis2Seed() {
+  if (!confirm('Create one starter control per NIS2 category? You can edit or delete them afterwards.')) return;
+  try {
+    const r = await api('/api/nis2/seed', { method: 'POST' });
+    toast(`Seeded ${r.created} starter control(s)`);
+    nis2State.tab = 'controls';
+    render();
+  } catch (err) { toast(errText(err), true); }
+}
+
+// ---- Report Generator (custom, selector-driven) ---------------------------
+async function reportGenerator() {
+  const { sources } = await api('/api/nis2/custom-reports/sources');
+  const wrap = el('div', { class: 'rg' });
+  wrap.append(el('p', { class: 'muted nis2-note' },
+    'Build your own report: pick the sections to include, set filters and columns, then preview or export as PDF, CSV or JSON.'));
+
+  // Report-level options.
+  const titleInput = el('input', { type: 'text', placeholder: 'Custom Report', value: '' });
+  const orgInput = el('input', { type: 'text', placeholder: 'Organisation', value: '' });
+  const formatSel = el('select', {}, ...[['html', 'PDF (print)'], ['csv', 'CSV'], ['json', 'JSON']].map(([v, l]) => el('option', { value: v }, l)));
+  wrap.append(el('div', { class: 'rg-opts' },
+    el('label', {}, 'Report title', titleInput),
+    el('label', {}, 'Organisation', orgInput),
+    el('label', {}, 'Export format', formatSel)));
+
+  // Per-source cards. Each tracks include + filter inputs + column checkboxes.
+  const reg = []; // [{ source, includeCb, filterInputs:{key:node}, colChecks:{key:node} }]
+  const cards = el('div', { class: 'rg-sources' });
+  for (const src of sources) {
+    const includeCb = el('input', { type: 'checkbox' });
+    const filterInputs = {};
+    const colChecks = {};
+
+    const filterRow = el('div', { class: 'rg-filters' });
+    for (const f of src.filters || []) {
+      let input;
+      if (f.type === 'enum') input = el('select', {}, ...f.options.map((o) => el('option', { value: o.value }, o.label)));
+      else if (f.type === 'date') input = el('input', { type: 'date' });
+      else if (f.type === 'number') input = el('input', { type: 'number', min: '0' });
+      else input = el('input', { type: 'text' });
+      filterInputs[f.key] = input;
+      filterRow.append(el('label', { class: 'rg-filter' }, f.label, input));
+    }
+
+    const colRow = el('div', { class: 'rg-cols' });
+    for (const c of src.columns || []) {
+      const cb = el('input', { type: 'checkbox', ...(src.defaultColumns.includes(c.key) ? { checked: 'checked' } : {}) });
+      colChecks[c.key] = cb;
+      colRow.append(el('label', { class: 'rg-col' }, cb, c.label));
+    }
+
+    const card = el('div', { class: 'rg-card' },
+      el('label', { class: 'rg-head' }, includeCb, el('strong', {}, src.label),
+        src.adminOnly ? el('span', { class: 'badge neutral' }, 'admin') : null),
+      el('div', { class: 'muted rg-desc' }, src.description),
+      (src.filters && src.filters.length) ? filterRow : null,
+      (src.columns && src.columns.length) ? el('details', { class: 'rg-coldetails' }, el('summary', {}, 'Columns'), colRow) : null);
+    cards.append(card);
+    reg.push({ source: src.key, includeCb, filterInputs, colChecks });
+  }
+  wrap.append(cards);
+
+  // Build the spec from the current form state.
+  function buildSpec() {
+    const sectionsSel = [];
+    for (const r of reg) {
+      if (!r.includeCb.checked) continue;
+      const filters = {};
+      for (const [k, node] of Object.entries(r.filterInputs)) {
+        if (node.value !== '' && node.value != null) filters[k] = node.value;
+      }
+      const columns = Object.entries(r.colChecks).filter(([, cb]) => cb.checked).map(([k]) => k);
+      sectionsSel.push({ source: r.source, filters, columns });
+    }
+    return { title: titleInput.value || undefined, org: orgInput.value || undefined, format: formatSel.value, sections: sectionsSel };
+  }
+
+  const preview = el('div', { class: 'rg-preview' });
+  const actions = el('div', { class: 'rg-actions' },
+    el('button', { class: 'small', onclick: doPreview }, 'Preview'),
+    el('button', { class: 'small', onclick: doExport }, '⤓ Export'));
+  wrap.append(actions, preview);
+
+  async function doPreview() {
+    const spec = buildSpec();
+    if (!spec.sections.length) { toast('Select at least one section', true); return; }
+    preview.replaceChildren(el('div', { class: 'empty' }, 'Building preview…'));
+    try {
+      const report = await api('/api/nis2/custom-reports/preview', { method: 'POST', body: spec });
+      preview.replaceChildren(renderRgPreview(report));
+    } catch (err) { preview.replaceChildren(el('div', { class: 'empty error' }, errText(err))); }
+  }
+
+  async function doExport() {
+    const spec = buildSpec();
+    if (!spec.sections.length) { toast('Select at least one section', true); return; }
+    try {
+      const res = await fetch('/api/nis2/custom-reports/export', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify(spec),
+      });
+      if (!res.ok) { let m = `HTTP ${res.status}`; try { m = (await res.json()).error || m; } catch { /* ignore */ } throw new Error(m); }
+      if (spec.format === 'html') {
+        const html = await res.text();
+        const w = window.open('', '_blank');
+        if (!w) { toast('Pop-up blocked — allow pop-ups to export PDF', true); return; }
+        w.document.open(); w.document.write(html); w.document.close(); w.focus();
+        setTimeout(() => { try { w.print(); } catch { /* manual */ } }, 400);
+      } else {
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = el('a', { href: url, download: spec.format === 'csv' ? 'custom-report.csv' : 'custom-report.json' });
+        document.body.append(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 2000);
+      }
+    } catch (err) { toast(`Export failed: ${err.message}`, true); }
+  }
+
+  return wrap;
+}
+
+function renderRgPreview(report) {
+  const out = el('div');
+  out.append(el('div', { class: 'section-head' }, el('h3', { class: 'nis2-h3' }, report.title || 'Custom Report'),
+    el('span', { class: 'muted' }, `Generated ${fmtDate(report.generatedAt)}`)));
+  if (!report.sections.length) { out.append(el('div', { class: 'empty' }, 'No sections.')); return out; }
+  for (const s of report.sections) {
+    out.append(el('h4', { class: 'rg-sec-h' }, s.heading, s.truncated ? el('span', { class: 'muted' }, `  (showing first ${s.rows.length} of ${s.rowCount})`) : null));
+    if (!s.rows.length) { out.append(el('div', { class: 'empty' }, 'No matching rows.')); continue; }
+    const thead = el('thead', {}, el('tr', {}, ...s.headers.map((h) => el('th', {}, h))));
+    const tbody = el('tbody', {}, ...s.rows.map((r) => el('tr', {}, ...r.map((c) => el('td', {}, String(c ?? ''))))));
+    out.append(el('div', { class: 'tablewrap' }, el('table', {}, thead, tbody)));
+  }
+  return out;
+}
+
+PAGE_INFO.reporting = {
+  hero: 'Reporting — the NIS2 readiness module plus a Report Generator for building your own reports.',
+  title: 'Reporting',
   body: () => [
-    el('p', {}, 'A compliance workspace for NIS2: track your readiness score, maintain a risk register, evidence your controls, record security incidents, and generate management/executive reports.'),
-    el('h4', {}, 'Dashboard'),
+    el('p', {}, 'Two ways to report:'),
+    el('h4', {}, 'NIS2'),
+    el('p', {}, 'A stationary module with fixed parameters: a readiness dashboard, risk register, control evidence, security incidents, generated management/executive reports and an audit trail.'),
+    el('h4', {}, 'Report Generator'),
+    el('p', {}, 'Build your own report from selectable sections (readiness summary, category status, risks, controls, incidents, and — for admins — the audit trail). Set per-section filters and choose the columns, then preview on screen or export as PDF, CSV or JSON.'),
+    el('h4', {}, 'Inside NIS2 — Dashboard'),
     el('p', {}, 'A single readiness percentage (the mean of the ten category scores, each derived from its controls’ evidence health), plus headline counts and the top recommended actions.'),
     el('h4', {}, 'Risk register'),
     el('p', {}, 'Risks are scored as likelihood × impact (1–25) and colour-banded Low/Medium/High/Critical. Export to CSV or PDF.'),

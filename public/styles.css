@@ -480,6 +480,10 @@ main#view:has(.fleet) { max-width: 1320px; }
 .pg-stat { display: inline-flex; flex-direction: column; }
 .pg-stat .k { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
 .pg-stat .v { font-weight: 600; }
+.pg-mapsec { margin-top: 10px; }
+.pg-map { height: 360px; margin-top: 8px; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.pg-map .leaflet-popup-content { font: inherit; }
+.pg-pop strong { display: block; margin-bottom: 3px; }
 
 /* NICs view: firmware-drift card + inventory list. */
 .nics-summary { margin: 0 0 14px; }

@@ -46,6 +46,23 @@ dashboard Probes tab  ←  GET /api/probes/path  ←  buildPathGraph()  ←─�
    hop to fill the detail panel (full metrics + ASN/country). A hop table sits
    below. Reached from **Probes → run a traceroute → "Path"**.
 
+### Geographic map
+
+The same path can be plotted on the **Destinations** map (Leaflet, EU/self-hosted
+tiles via `GET /api/map/config`). Each node's `lat/lng` comes from its country
+centroid; the **source** node is anchored at the agent's site
+(`locations.latitude/longitude`, surfaced on `agentsRepo.findById` as
+`location_lat/location_lng` and passed to `buildPathGraph` as `origin`).
+
+`pathGraph()` adds a lazily-built "Geographic map" panel (`drawPathMap()`):
+`pathGeoStops()` collapses consecutive hops sharing a centroid into one stop, then
+it draws a polyline (each segment coloured by the downstream stop's severity)
+through circle markers, with a per-stop popup (hops · ASN · latency · loss). Since
+geo precision is country-level by design, same-country hops stack on one stop — the
+per-hop precision stays in the topology graph; the map answers "which countries did
+the traffic cross, and where did it degrade?". When there aren't at least two
+geolocated stops (no GeoIP DB, or all-private hops) the panel explains why.
+
 ## Caveats (by design)
 
 - **Silent routers.** Many routers don't emit ICMP "TTL exceeded", so an

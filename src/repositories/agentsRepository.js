@@ -4,7 +4,7 @@
 // because location_id is nullable (and ON DELETE SET NULL can clear it).
 const SELECT_AGENT = `
   SELECT a.id, a.hostname, a.platform, a.arch, a.last_seen, a.status, a.capabilities,
-         a.location_id, l.name AS location_name,
+         a.location_id, l.name AS location_name, l.latitude AS location_lat, l.longitude AS location_lng,
          a.display_name, a.notes, a.meta, a.monitor_config, a.created_at, a.updated_at,
          (SELECT MAX(r.created_at) FROM results r WHERE r.agent_id = a.id) AS last_report_at
   FROM agents a
@@ -36,6 +36,8 @@ function mapRow(row) {
     capabilities: parseJson(row.capabilities),
     location_id: row.location_id,
     location_name: row.location_name ?? null,
+    location_lat: row.location_lat != null ? Number(row.location_lat) : null,
+    location_lng: row.location_lng != null ? Number(row.location_lng) : null,
     display_name: row.display_name,
     notes: row.notes,
     meta: parseJson(row.meta),

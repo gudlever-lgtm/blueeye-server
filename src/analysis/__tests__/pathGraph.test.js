@@ -37,6 +37,18 @@ test('buildPathGraph builds source → hops → dest with links between them', (
   assert.equal(g.links[1].latencyMs, 11);
 });
 
+test('buildPathGraph anchors the source node at the agent origin coordinates', () => {
+  const g = buildPathGraph([
+    run('2026-06-09T10:00:00Z', [{ hop: 1, ip: '93.184.216.34', sent: 3, recv: 3, lossPct: 0, rttMs: 12 }]),
+  ], { geoProvider, centroids, origin: { lat: 55.6, lng: 12.6, label: 'Copenhagen DC' } });
+  assert.equal(g.nodes[0].kind, 'source');
+  assert.equal(g.nodes[0].lat, 55.6);
+  assert.equal(g.nodes[0].lng, 12.6);
+  assert.equal(g.nodes[0].label, 'Copenhagen DC');
+  // public hop got its country centroid, so the path has two geolocated points.
+  assert.equal(g.nodes[1].lat, 51);
+});
+
 test('buildPathGraph enriches public hop IPs with GeoIP/ASN and skips private', () => {
   const g = buildPathGraph([
     run('2026-06-09T10:00:00Z', [

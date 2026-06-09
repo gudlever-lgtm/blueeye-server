@@ -79,7 +79,7 @@ function enrichGeo(ip, geoProvider, centroids) {
   };
 }
 
-function buildPathGraph(results, { geoProvider = null, centroids = null, target = null } = {}) {
+function buildPathGraph(results, { geoProvider = null, centroids = null, target = null, origin = null } = {}) {
   const runs = (Array.isArray(results) ? results : [])
     .filter((r) => r && r.type === 'traceroute' && Array.isArray(r.hops));
   const tsList = runs.map((r) => (r.ts ? new Date(r.ts).getTime() : null)).filter((n) => n != null);
@@ -113,10 +113,14 @@ function buildPathGraph(results, { geoProvider = null, centroids = null, target 
     }
   }
 
-  // Source node = the reporting agent itself (TTL 0).
+  // Source node = the reporting agent itself (TTL 0). Its map coordinates come
+  // from the agent's configured site (locations.latitude/longitude), so the path
+  // can be anchored geographically; null when the site has no coordinates.
+  const originLat = origin && Number.isFinite(origin.lat) ? origin.lat : null;
+  const originLng = origin && Number.isFinite(origin.lng) ? origin.lng : null;
   const nodes = [{
-    index: 0, kind: 'source', hop: 0, ip: null, label: 'Agent',
-    country: null, asn: null, asnName: null, lat: null, lng: null,
+    index: 0, kind: 'source', hop: 0, ip: null, label: (origin && origin.label) || 'Agent',
+    country: null, asn: null, asnName: null, lat: originLat, lng: originLng,
     rttMs: 0, lossPct: 0, jitterMs: null, responded: runs.length, runs: runs.length,
     unresponsive: false, severity: 'ok', explain: 'Probe origin',
   }];

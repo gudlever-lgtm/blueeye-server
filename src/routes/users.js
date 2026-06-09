@@ -44,7 +44,7 @@ function createUsersRouter({ usersRepo }) {
     })
   );
 
-  // PUT /users/:id — updates the role and, optionally, resets the password.
+  // PUT /users/:id — updates the role and, optionally, the email and password.
   router.put(
     '/:id',
     asyncHandler(async (req, res) => {
@@ -76,6 +76,17 @@ function createUsersRouter({ usersRepo }) {
       }
 
       const patch = { role: existing.protected ? ROLES.ADMIN : value.role };
+
+      // Optional email change — must remain unique across users. Skipped when
+      // unchanged so a no-op resubmit never trips the uniqueness check.
+      if (value.email !== undefined && value.email !== existing.email) {
+        const owner = await usersRepo.findByEmail(value.email);
+        if (owner && owner.id !== id) {
+          return res.status(409).json({ error: 'Email already in use' });
+        }
+        patch.email = value.email;
+      }
+
       if (value.password !== undefined) {
         patch.passwordHash = await hashPassword(value.password);
       }

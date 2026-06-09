@@ -143,6 +143,71 @@ test('PUT /users/:id returns 409 when demoting the last admin', async () => {
   assert.equal(res.status, 409);
 });
 
+test('PUT /users/:id updates the email (normalised, in the patch) and returns 200', async () => {
+  let patch;
+  const usersRepo = makeUsersRepo({
+    findById: async () => ({ id: 3, email: 'old@blueeye.local', role: 'viewer' }),
+    findByEmail: async () => null, // the new address is free
+    update: async (id, p) => { patch = p; return { id, email: p.email, role: p.role }; },
+  });
+
+  const res = await request(makeApp({ usersRepo }))
+    .put('/users/3')
+    .set('Authorization', admin())
+    .send({ email: 'New@Blueeye.local', role: 'viewer' });
+
+  assert.equal(res.status, 200);
+  assert.equal(res.body.email, 'new@blueeye.local'); // normalised to lower-case
+  assert.equal(patch.email, 'new@blueeye.local');
+});
+
+test('PUT /users/:id returns 409 when the new email belongs to another user', async () => {
+  const usersRepo = makeUsersRepo({
+    findById: async () => ({ id: 3, email: 'old@blueeye.local', role: 'viewer' }),
+    findByEmail: async () => ({ id: 9, email: 'taken@blueeye.local', role: 'viewer' }),
+  });
+
+  const res = await request(makeApp({ usersRepo }))
+    .put('/users/3')
+    .set('Authorization', admin())
+    .send({ email: 'taken@blueeye.local', role: 'viewer' });
+
+  assert.equal(res.status, 409);
+  assert.equal(res.body.error, 'Email already in use');
+});
+
+test('PUT /users/:id allows resubmitting the same email (no self-conflict)', async () => {
+  let patch;
+  const usersRepo = makeUsersRepo({
+    findById: async () => ({ id: 3, email: 'same@blueeye.local', role: 'viewer' }),
+    findByEmail: async () => { throw new Error('uniqueness check should be skipped'); },
+    update: async (id, p) => { patch = p; return { id, email: 'same@blueeye.local', role: p.role }; },
+  });
+
+  const res = await request(makeApp({ usersRepo }))
+    .put('/users/3')
+    .set('Authorization', admin())
+    .send({ email: 'same@blueeye.local', role: 'operator' });
+
+  assert.equal(res.status, 200);
+  assert.equal(patch.email, undefined); // unchanged → not part of the patch
+  assert.equal(patch.role, 'operator');
+});
+
+test('PUT /users/:id returns 400 for an invalid email', async () => {
+  const usersRepo = makeUsersRepo({
+    findById: async () => ({ id: 3, email: 'old@blueeye.local', role: 'viewer' }),
+  });
+
+  const res = await request(makeApp({ usersRepo }))
+    .put('/users/3')
+    .set('Authorization', admin())
+    .send({ email: 'not-an-email', role: 'viewer' });
+
+  assert.equal(res.status, 400);
+  assert.equal(res.body.error, 'Validation failed');
+});
+
 // ------------------------------------------------------------ DELETE /users/:id
 test('DELETE /users/:id returns 204 on success', async () => {
   const usersRepo = makeUsersRepo({

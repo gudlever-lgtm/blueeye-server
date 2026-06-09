@@ -59,3 +59,40 @@ test('updatePreferences writes just the patch when nothing was stored', async ()
   const repo = createUsersRepository({ pool: makeFakePool({ existing: null }) });
   assert.deepEqual(await repo.updatePreferences(1, { theme: 'dark' }), { theme: 'dark' });
 });
+
+// A fake pool for the user-row CRUD path (id lookups + UPDATE), recording the
+// SQL/params so we can assert on the generated statement.
+function makeCrudPool(row) {
+  const queries = [];
+  return {
+    queries,
+    async query(sql, params) {
+      queries.push({ sql, params });
+      if (/^SELECT .* FROM users WHERE id/i.test(sql)) return [[row]];
+      if (/^UPDATE users SET/i.test(sql)) return [{ affectedRows: 1 }];
+      throw new Error(`unexpected SQL: ${sql}`);
+    },
+  };
+}
+
+test('update writes email, role and password_hash in one statement', async () => {
+  const pool = makeCrudPool({ id: 3, email: 'old@blueeye.local', role: 'viewer', protected: 0 });
+  const repo = createUsersRepository({ pool });
+
+  await repo.update(3, { email: 'new@blueeye.local', role: 'operator', passwordHash: 'h' });
+
+  const upd = pool.queries.find((q) => /^UPDATE users SET/i.test(q.sql));
+  assert.match(upd.sql, /email = \?/);
+  assert.match(upd.sql, /role = \?/);
+  assert.match(upd.sql, /password_hash = \?/);
+  assert.deepEqual(upd.params, ['new@blueeye.local', 'operator', 'h', 3]); // id last
+});
+
+test('update touches no columns when the patch is empty', async () => {
+  const pool = makeCrudPool({ id: 3, email: 'old@blueeye.local', role: 'viewer', protected: 0 });
+  const repo = createUsersRepository({ pool });
+
+  await repo.update(3, {});
+
+  assert.equal(pool.queries.some((q) => /^UPDATE users SET/i.test(q.sql)), false);
+});

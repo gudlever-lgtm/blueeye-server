@@ -206,7 +206,10 @@ function applyFeatureVisibility() {
   const feats = licenseFeatures || {};
   for (const b of document.querySelectorAll('.tabs button[data-feature]')) {
     const allowed = feats[b.dataset.feature] !== false; // show until we know it's off
-    b.classList.toggle('hidden', !allowed);
+    // "Free vs pro": rather than hide a module the licence excludes, keep it
+    // visible but dimmed with a PRO badge (see .tabs button.locked). Clicking it
+    // routes to Settings → License instead of opening the (would-be-403) view.
+    b.classList.toggle('locked', !allowed);
     if (!allowed && currentView === b.dataset.view) currentView = 'overview';
   }
 }
@@ -368,7 +371,7 @@ function gotoView(viewKey) { closeDrawer(); currentView = viewKey; render(); }
 function viewLink(viewKey, label) {
   const text = label || VIEW_LABELS[viewKey] || viewKey;
   const tab = document.querySelector(`.tabs button[data-view="${viewKey}"]`);
-  if (tab && tab.classList.contains('hidden')) return document.createTextNode(text);
+  if (tab && (tab.classList.contains('hidden') || tab.classList.contains('locked'))) return document.createTextNode(text);
   return el('a', { href: '#', class: 'drawer-link', onclick: (e) => { e.preventDefault(); gotoView(viewKey); } }, text);
 }
 // Deep-link into a specific Settings sub-tab (Analysis, Retention, Traffic types…).
@@ -6925,7 +6928,17 @@ $('#refresh').addEventListener('click', () => render());
 $('#autorefresh').addEventListener('change', (e) => setAutoRefresh(e.target.checked));
 function closeNav() { $('#app').classList.remove('nav-open'); }
 for (const b of document.querySelectorAll('.tabs button')) {
-  b.addEventListener('click', () => { closeDrawer(); closeNav(); currentView = b.dataset.view; render(); });
+  b.addEventListener('click', () => {
+    closeDrawer(); closeNav();
+    // Locked (licence-excluded) items don't open — they nudge to the licence page.
+    if (b.classList.contains('locked')) {
+      const name = (b.textContent || 'This feature').trim();
+      toast(`${name} isn't in your current licence — see upgrade options.`);
+      settingsTab = 'license'; currentView = 'settings'; render();
+      return;
+    }
+    currentView = b.dataset.view; render();
+  });
 }
 // Off-canvas sidebar (mobile/tablet): the ☰ button opens it; tapping the dimmed
 // backdrop or anything outside the sidebar closes it again.

@@ -325,6 +325,31 @@ test('validateProbeResults accepts a pageload waterfall (elements normalised)', 
   assert.equal(r.elements[1].ms, 40);
 });
 
+test('validateProbeSpec accepts a transaction with steps, assertions and extraction', () => {
+  const { value, errors } = validateProbeSpec({
+    type: 'transaction',
+    steps: [
+      { url: 'https://api.test/login', method: 'post', expectStatus: 200, extract: { name: 'token', pattern: '"token":"([^"]+)"' } },
+      { url: 'https://api.test/me', header: 'Authorization: Bearer {{token}}', expectStatus: 200, expectBody: 'welcome' },
+    ],
+  });
+  assert.equal(errors, undefined);
+  assert.equal(value.type, 'transaction');
+  assert.equal(value.steps.length, 2);
+  assert.equal(value.steps[0].method, 'POST');
+  assert.equal(value.steps[0].extract.name, 'token');
+  assert.equal(value.steps[0].extract.from, 'body');
+  assert.equal(value.host, 'https://api.test/login'); // target/display
+});
+
+test('validateProbeSpec rejects bad transactions (no steps, bad url, bad regex)', () => {
+  assert.ok(validateProbeSpec({ type: 'transaction' }).errors);
+  assert.ok(validateProbeSpec({ type: 'transaction', steps: [] }).errors);
+  assert.ok(validateProbeSpec({ type: 'transaction', steps: [{ url: 'ftp://x/' }] }).errors);
+  assert.ok(validateProbeSpec({ type: 'transaction', steps: [{ url: 'https://x/', extract: { name: 'a', pattern: '([' } }] }).errors);
+  assert.ok(validateProbeSpec({ type: 'transaction', steps: [{ url: 'https://x/', extract: { name: 'bad name', pattern: 'x' } }] }).errors);
+});
+
 test('toRow serialises pageload elements to JSON', () => {
   const row = toRow(9, { ts: new Date('2026-06-01T00:00:00Z'), type: 'pageload', target: 'https://x/', ok: true, rttMs: 800, bytes: 9000, elements: [{ url: 'https://x/', kind: 'document', status: 200, bytes: 9000, ms: 800 }] });
   assert.equal(row[2], 'pageload');

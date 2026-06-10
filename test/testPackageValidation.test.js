@@ -69,6 +69,21 @@ test('accepts a pageload probe item (URL + maxElements round-trip)', () => {
   assert.equal(p.maxElements, 25);
 });
 
+test('accepts a transaction probe item (steps round-trip)', () => {
+  const { value, errors } = validateTestPackageInput({
+    name: 'journey', targets: { mode: 'all' },
+    items: [{ type: 'probe', probe: { type: 'transaction', steps: [
+      { url: 'https://api.test/login', method: 'POST', extract: { name: 'tok', pattern: '"t":"([^"]+)"' } },
+      { url: 'https://api.test/me', header: 'Authorization: Bearer {{tok}}', expectStatus: 200 },
+    ] } }],
+  });
+  assert.equal(errors, undefined);
+  const p = value.items[0].probe;
+  assert.equal(p.type, 'transaction');
+  assert.equal(p.steps.length, 2);
+  assert.equal(p.steps[1].header, 'Authorization: Bearer {{tok}}');
+});
+
 test('accepts a run-test item', () => {
   const { value, errors } = validateTestPackageInput({ name: 't', targets: { mode: 'all' }, items: [{ type: 'run-test', intervalMs: 1000 }] });
   assert.equal(errors, undefined);

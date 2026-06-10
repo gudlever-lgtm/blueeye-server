@@ -371,7 +371,7 @@ const PAGE_INFO = {
       el('div', { class: 'callout' },
         el('strong', {}, 'Probes vs. Tests: '),
         el('span', {}, 'A ', viewLink('probes', 'Probe'), ' is a single check you run by hand, right now, from one agent — handy for troubleshooting. A ', el('strong', {}, 'Test'), ' (this tab) is a saved, reusable package of those same checks, aimed at many agents (all / specific / by location) and run on a recurring schedule (or on demand). Same probe engine underneath; Tests add naming, fleet targeting and recurrence.')),
-      el('p', {}, 'A test package is a named set of tests (ping / TCP / DNS / traceroute / cURL content check / page load / throughput / speed test) with a target selector and an optional schedule. The server pushes the tests to the selected, connected agents; each agent runs them and reports back — results appear on the ', viewLink('probes'), ' and ', viewLink('overview', 'Traffic'), ' pages as usual. A cURL test verifies the received HTTP response — status code, body match and a header — not just reachability.'),
+      el('p', {}, 'A test package is a named set of tests (ping / TCP / DNS / traceroute / cURL content check / page load / multi-step transaction / throughput / speed test) with a target selector and an optional schedule. The server pushes the tests to the selected, connected agents; each agent runs them and reports back — results appear on the ', viewLink('probes'), ' and ', viewLink('overview', 'Traffic'), ' pages as usual. A cURL test verifies the received HTTP response — status code, body match and a header — not just reachability.'),
       el('h4', {}, 'Targets'),
       el('ul', {},
         el('li', {}, el('strong', {}, 'All agents '), '— every enrolled agent.'),
@@ -521,7 +521,8 @@ const PAGE_INFO = {
         el('li', {}, 'DNS: time to resolve a name (and which address was returned).'),
         el('li', {}, 'Traceroute: the path (hops) to the target. Each hop is probed several times (set “Queries/hop”), so you get per-hop loss, latency and jitter — rendered as an interactive path map (hover a hop for its metrics + ASN/country) plus a hop table. Repeated traceroutes are aggregated so the verdict is stable.'),
         el('li', {}, el('strong', {}, 'cURL (content check): '), 'goes beyond “is it up” — the agent runs ', el('span', { class: 'mono' }, 'curl'), ' against an http(s) URL and verifies the received traffic: the HTTP status code, that the response body contains an expected substring or ', el('span', { class: 'mono' }, '/regex/'), ', the received byte count, and a response header. Leave the expectation fields blank for a plain status<400 check. The agent inspects the body locally but reports only metadata — status, byte count, content-type and pass/fail — never the body itself.'),
-        el('li', {}, el('strong', {}, 'Page load: '), 'measures how a whole page loads — the agent fetches the URL, then its sub-resources (scripts, stylesheets, images) and reports a per-element waterfall (status · size · load time) plus totals: element count, page weight and total load time. The total load time is charted over time. Browser-free (no JS execution), so it can\'t see real DOM/load events; metadata only — resource URLs, sizes and timings, never contents.')),
+        el('li', {}, el('strong', {}, 'Page load: '), 'measures how a whole page loads — the agent fetches the URL, then its sub-resources (scripts, stylesheets, images) and reports a per-element waterfall (status · size · load time) plus totals: element count, page weight and total load time. The total load time is charted over time. Browser-free (no JS execution), so it can\'t see real DOM/load events; metadata only — resource URLs, sizes and timings, never contents.'),
+        el('li', {}, el('strong', {}, 'Transaction (multi-step): '), 'simulates a user journey or scripted API call — an ordered list of HTTP steps, each with optional status/body assertions. A step can ', el('strong', {}, 'extract'), ' a value (regex capture) that later steps reference as ', el('span', { class: 'mono' }, '{{name}}'), ' in their URL, header or request body — e.g. log in, capture a token, then call an authenticated endpoint. It stops at the first failing step and reports a per-step waterfall plus the total journey time (charted over time). Extracted values stay on the agent and are never reported.')),
       el('p', {}, 'Select agent + type + target and click “Run probe”. The agent must be connected; the result comes back a moment later and is added to the history so you can see RTT / load time over time.'),
       el('p', { class: 'muted' }, 'To run the same probes on a schedule across many agents, use ', viewLink('tests'), '; probe results also drive the health verdict on ', viewLink('fleet', 'Overview'), '. Metadata only: targets, timings and content verdicts — never packet or response contents.'),
     ],
@@ -1063,6 +1064,7 @@ const TEST_TEMPLATES = [
   { key: 'path', label: 'Path trace — traceroute 9.9.9.9', item: { type: 'probe', probe: { type: 'traceroute', host: '9.9.9.9' } } },
   { key: 'content', label: 'Content check — cURL 200 from example.com', item: { type: 'probe', probe: { type: 'curl', url: 'https://example.com', expectStatus: 200 } } },
   { key: 'pageload', label: 'Page load — example.com (elements + load time)', item: { type: 'probe', probe: { type: 'pageload', url: 'https://example.com' } } },
+  { key: 'transaction', label: 'Transaction — 2-step journey (example.com)', item: { type: 'probe', probe: { type: 'transaction', steps: [{ url: 'https://example.com/', expectStatus: 200 }, { url: 'https://example.com/', expectStatus: 200 }] } } },
   { key: 'throughput', label: 'Throughput snapshot — current bandwidth', item: { type: 'run-test', intervalMs: 1000 } },
   { key: 'speed', label: 'Speed test — download/upload to server (Mbps)', item: { type: 'speedtest' } },
 ];
@@ -1125,6 +1127,7 @@ function testItemsSummary(items) {
     if (it.type === 'speedtest') return 'speed test';
     if (it.probe.type === 'curl') return `curl ${it.probe.url || it.probe.host}${it.probe.expectStatus ? ' →' + it.probe.expectStatus : ''}`;
     if (it.probe.type === 'pageload') return `pageload ${it.probe.url || it.probe.host}`;
+    if (it.probe.type === 'transaction') return `transaction (${(it.probe.steps || []).length} steps)`;
     return `${it.probe.type} ${it.probe.host}${it.probe.port ? ':' + it.probe.port : ''}`;
   });
   return el('span', { class: 'muted small' }, labels.join(', '));
@@ -1192,7 +1195,7 @@ function editTestPackage(pkg, agents, locations) {
   const itemsBox = el('div', { class: 'tc-list' });
   const itemRows = [];
   function addItemRow(item) {
-    const typeSel = el('select', {}, ...[['ping', 'Ping'], ['tcp', 'TCP'], ['dns', 'DNS'], ['traceroute', 'Traceroute'], ['curl', 'cURL'], ['pageload', 'Page load'], ['run-test', 'Throughput'], ['speedtest', 'Speed test']].map(([v, l]) => el('option', { value: v }, l)));
+    const typeSel = el('select', {}, ...[['ping', 'Ping'], ['tcp', 'TCP'], ['dns', 'DNS'], ['traceroute', 'Traceroute'], ['curl', 'cURL'], ['pageload', 'Page load'], ['transaction', 'Transaction'], ['run-test', 'Throughput'], ['speedtest', 'Speed test']].map(([v, l]) => el('option', { value: v }, l)));
     const host = el('input', { type: 'text', placeholder: 'host / target' });
     const port = el('input', { type: 'number', min: '1', max: '65535', placeholder: 'port' });
     const count = el('input', { type: 'number', min: '1', max: '40', placeholder: 'count' });
@@ -1200,6 +1203,8 @@ function editTestPackage(pkg, agents, locations) {
     const status = el('input', { type: 'number', min: '100', max: '599', placeholder: 'HTTP code', style: 'width:7em' });
     const body = el('input', { type: 'text', placeholder: 'body: substring or /regex/' });
     const header = el('input', { type: 'text', placeholder: 'header: Name or Name: value' });
+    const isTxItem = item && item.type === 'probe' && item.probe && item.probe.type === 'transaction';
+    const tx = transactionStepsEditor(isTxItem ? item.probe.steps : []);
     if (item) {
       if (item.type === 'run-test' || item.type === 'speedtest') { typeSel.value = item.type; }
       else {
@@ -1213,22 +1218,25 @@ function editTestPackage(pkg, agents, locations) {
         if (item.probe.expectHeader) header.value = item.probe.expectHeader;
       }
     }
-    const ctrl = { typeSel, host, port, count, status, body, header };
+    const ctrl = { typeSel, host, port, count, status, body, header, tx };
     const del = el('button', { type: 'button', class: 'small ghost danger', title: 'Remove', onclick: () => { const i = itemRows.indexOf(ctrl); if (i >= 0) itemRows.splice(i, 1); node.remove(); } }, '×');
-    const node = el('div', { class: 'test-item-row' }, typeSel, host, port, count, status, body, header, del);
+    const txWrap = el('div', { class: 'tx-wrap' }, tx.node);
+    const node = el('div', { class: 'test-item-row' }, typeSel, host, port, count, status, body, header, del, txWrap);
     const sync = () => {
       const t = typeSel.value;
       const noTarget = t === 'run-test' || t === 'speedtest';
       const isCurl = t === 'curl';
       const isPageload = t === 'pageload';
+      const isTx = t === 'transaction';
       const isUrl = isCurl || isPageload;
-      host.style.display = noTarget ? 'none' : '';
+      host.style.display = (noTarget || isTx) ? 'none' : '';
       host.placeholder = isUrl ? 'https://host/path' : 'host / target';
       port.style.display = t === 'tcp' ? '' : 'none';
       count.style.display = (t === 'ping' || t === 'tcp' || isCurl || isPageload) ? '' : 'none';
       count.placeholder = isPageload ? 'max elements' : 'count';
       count.max = isCurl ? '10' : (isPageload ? '40' : '20');
       for (const f of [status, body, header]) f.style.display = isCurl ? '' : 'none';
+      txWrap.style.display = isTx ? '' : 'none';
     };
     typeSel.addEventListener('change', sync); sync();
     itemRows.push(ctrl);
@@ -1265,6 +1273,9 @@ function editTestPackage(pkg, agents, locations) {
         const probe = { type: 'pageload', url: c.host.value.trim() };
         if (c.count.value) probe.maxElements = Number(c.count.value);
         return { type: 'probe', probe };
+      }
+      if (t === 'transaction') {
+        return { type: 'probe', probe: { type: 'transaction', steps: c.tx.collect() } };
       }
       const probe = { type: t, host: c.host.value.trim() };
       if (t === 'tcp' && c.port.value) probe.port = Number(c.port.value);
@@ -2713,6 +2724,54 @@ function curlInputs() {
   return { wrap, apply };
 }
 
+// Builds the multi-step transaction editor (shared by the Probe runner and the
+// test-package editor). Returns { node, collect }: collect() yields the steps
+// array. Each step is an http(s) request with optional assertions and an optional
+// value extraction; later steps reference an extracted value as {{name}}.
+function transactionStepsEditor(initial) {
+  const list = el('div', { class: 'tx-steps' });
+  const rows = [];
+  const renumber = () => rows.forEach((c, i) => { c.num.textContent = `Step ${i + 1}`; });
+  function addStep(s) {
+    s = s || {};
+    const method = el('select', {}, ...['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'].map((m) => el('option', { value: m, ...(String(s.method || 'GET').toUpperCase() === m ? { selected: 'selected' } : {}) }, m)));
+    const url = el('input', { type: 'text', class: 'tx-url', placeholder: 'https://api/… (may use {{var}})', value: s.url || '' });
+    const stat = el('input', { type: 'number', min: '100', max: '599', placeholder: 'expect status', value: s.expectStatus != null ? s.expectStatus : '' });
+    const bodyM = el('input', { type: 'text', placeholder: 'expect body (substring or /regex/)', value: s.expectBody || '' });
+    const header = el('input', { type: 'text', placeholder: 'send header — e.g. Authorization: Bearer {{token}}', value: s.header || '' });
+    const data = el('input', { type: 'text', placeholder: 'request body (POST/PUT)', value: s.data || '' });
+    const exName = el('input', { type: 'text', placeholder: 'extract → variable', value: (s.extract && s.extract.name) || '' });
+    const exPat = el('input', { type: 'text', placeholder: 'extract regex (capture group 1)', value: (s.extract && s.extract.pattern) || '' });
+    const num = el('span', { class: 'tx-step-num' }, '');
+    const ctrl = { method, url, stat, bodyM, header, data, exName, exPat, num };
+    const del = el('button', { type: 'button', class: 'small ghost danger', title: 'Remove step', onclick: () => { const i = rows.indexOf(ctrl); if (i >= 0) rows.splice(i, 1); block.remove(); renumber(); } }, '×');
+    const block = el('div', { class: 'tx-step' },
+      el('div', { class: 'tx-step-line' }, num, method, url, del),
+      el('div', { class: 'tx-step-line' }, stat, bodyM),
+      el('div', { class: 'tx-step-line' }, header, data),
+      el('div', { class: 'tx-step-line' }, exName, exPat));
+    rows.push(ctrl); list.append(block); renumber();
+    return ctrl;
+  }
+  (initial && initial.length ? initial : [{}]).forEach(addStep);
+  const node = el('div', { class: 'tx-editor' }, list,
+    el('button', { type: 'button', class: 'small ghost', onclick: () => addStep({}) }, '+ Step'));
+  function collect() {
+    return rows.map((c) => {
+      const step = { url: c.url.value.trim() };
+      if (c.method.value && c.method.value !== 'GET') step.method = c.method.value;
+      if (c.stat.value) step.expectStatus = Number(c.stat.value);
+      const b = c.bodyM.value.trim(); if (b) step.expectBody = b;
+      const h = c.header.value.trim(); if (h) step.header = h;
+      const d = c.data.value.trim(); if (d) step.data = d;
+      const en = c.exName.value.trim(); const ep = c.exPat.value.trim();
+      if (en && ep) step.extract = { name: en, pattern: ep };
+      return step;
+    }).filter((s) => s.url);
+  }
+  return { node, collect };
+}
+
 function probeLatestTable(rows, onDetail) {
   if (!rows.length) return el('div', { class: 'muted' }, 'No probe results yet — run one above.');
   return el('table', {},
@@ -2929,23 +2988,25 @@ async function probeDetail(r, agentId) {
     if (x.ok === false && x.ts) markers.push({ t: new Date(x.ts).getTime(), kind: 'probe', label: `Probe error${x.detail ? ': ' + x.detail : ''}` });
   }
   try { const fs = await api(`/api/findings?hostId=${encodeURIComponent(agentId)}&since=${new Date(fromMs).toISOString()}`); markers.push(...findingMarkers(fs)); } catch { /* findings optional */ }
-  // pageload graphs its total load time over time and adds a per-element waterfall
-  // for the selected run; everything else is the RTT-over-time chart.
+  // pageload/transaction graph their total time over time and add a step/element
+  // waterfall for the selected run; everything else is the RTT-over-time chart.
   const isPageload = r.type === 'pageload';
-  const metricLabel = isPageload ? 'Load time (ms)' : 'RTT (ms)';
-  const chart = el('details', { class: 'sec', open: true }, el('summary', {}, `${isPageload ? 'Load-time history' : 'RTT history'} — ${r.type} → ${esc(r.target)} `, el('span', { class: 'muted' }, '· band = normal range (median±MAD)')),
+  const isTx = r.type === 'transaction';
+  const metricLabel = isPageload ? 'Load time (ms)' : isTx ? 'Total time (ms)' : 'RTT (ms)';
+  const histTitle = isPageload ? 'Load-time history' : isTx ? 'Transaction-time history' : 'RTT history';
+  const chart = el('details', { class: 'sec', open: true }, el('summary', {}, `${histTitle} — ${r.type} → ${esc(r.target)} `, el('span', { class: 'muted' }, '· band = normal range (median±MAD)')),
     el('div', { class: 'overview-chart' }, pts.length ? historyChart([{ id: 'rtt', label: metricLabel, color: '#06b6d4', points: pts }], { fromMs, toMs, band, markers }) : el('div', { class: 'empty' }, 'No history yet — run a few measurements.')));
-  if (!isPageload) return chart;
+  if (!isPageload && !isTx) return chart;
   return el('div', {},
-    el('details', { class: 'sec', open: true }, el('summary', {}, `Page elements — ${esc(r.target)} `, el('span', { class: 'muted' }, '· per-resource status · size · load time')), pageloadWaterfall(r)),
+    el('details', { class: 'sec', open: true }, el('summary', {}, `${isTx ? 'Steps' : 'Page elements'} — ${esc(r.target)} `, el('span', { class: 'muted' }, isTx ? '· per-step status · size · time' : '· per-resource status · size · load time')), pageloadWaterfall(r)),
     chart);
 }
 
-// pageload waterfall: one row per fetched resource (document first), with a bar
-// scaled to the slowest element so the long poles stand out at a glance.
+// pageload/transaction waterfall: one row per fetched resource / step, with a bar
+// scaled to the slowest one so the long poles stand out at a glance.
 function pageloadWaterfall(r) {
   const els = (r && r.elements) || [];
-  if (!els.length) return el('div', { class: 'muted' }, 'No element breakdown for this run (older agent, or the document failed to load).');
+  if (!els.length) return el('div', { class: 'muted' }, 'No breakdown for this run (older agent, or it failed before the first step).');
   const maxMs = Math.max(1, ...els.map((e) => e.ms || 0));
   const row = (e) => el('tr', {},
     el('td', { class: 'muted' }, e.kind || '–'),
@@ -3015,14 +3076,15 @@ views.probes = async () => {
 
 async function probeRunnerView() {
   const root = el('div', { class: 'probes' });
-  root.append(el('div', { class: 'muted', style: 'margin:2px 0 10px' }, 'Run one check now from a single agent · ping · TCP · DNS · traceroute · cURL · page load'));
+  root.append(el('div', { class: 'muted', style: 'margin:2px 0 10px' }, 'Run one check now from a single agent · ping · TCP · DNS · traceroute · cURL · page load · transaction'));
 
   const agents = await api('/agents').catch(() => []);
   if (!agents.length) { root.append(el('div', { class: 'empty' }, 'No agents yet — enrol an agent first.')); return root; }
 
   const agentSel = el('select', {}, ...agents.map((a) => el('option', { value: String(a.id) }, a.display_name || a.hostname)));
-  const typeSel = el('select', {}, ...[['ping', 'Ping (ICMP)'], ['tcp', 'TCP-connect'], ['dns', 'DNS'], ['traceroute', 'Traceroute'], ['curl', 'cURL (content check)'], ['pageload', 'Page load']].map(([v, l]) => el('option', { value: v }, l)));
+  const typeSel = el('select', {}, ...[['ping', 'Ping (ICMP)'], ['tcp', 'TCP-connect'], ['dns', 'DNS'], ['traceroute', 'Traceroute'], ['curl', 'cURL (content check)'], ['pageload', 'Page load'], ['transaction', 'Transaction (multi-step)']].map(([v, l]) => el('option', { value: v }, l)));
   const target = el('input', { type: 'text', placeholder: 'e.g. 1.1.1.1 or example.com' });
+  const targetWrap = el('label', { class: 'inline muted' }, 'Target ', target);
   const portInput = el('input', { type: 'number', min: '1', max: '65535', value: '443' });
   const portWrap = el('label', { class: 'inline muted' }, 'Port ', portInput);
   const countInput = el('input', { type: 'number', min: '1', max: '20', value: '4' });
@@ -3031,6 +3093,8 @@ async function probeRunnerView() {
   // cURL content-verification inputs — only shown for the curl type. They let the
   // operator assert that the received traffic is correct, not just reachable.
   const curl = curlInputs();
+  const tx = transactionStepsEditor([]);
+  const txWrap = el('div', { class: 'tx-wrap' }, el('div', { class: 'muted small' }, 'Steps run in order; a step can extract a value (regex) for later steps as {{name}}. Stops at the first failure.'), tx.node);
   const runBtn = el('button', { class: 'small' }, 'Run probe');
   const status = el('div', { class: 'muted' });
   // For traceroute the count is the per-hop probe count ("queries") that MTR-style
@@ -3038,10 +3102,13 @@ async function probeRunnerView() {
   const syncPort = () => {
     const tr = typeSel.value === 'traceroute';
     const isCurl = typeSel.value === 'curl';
+    const isTx = typeSel.value === 'transaction';
     const isUrl = isCurl || typeSel.value === 'pageload';
+    targetWrap.style.display = isTx ? 'none' : '';
     portWrap.style.display = typeSel.value === 'tcp' ? '' : 'none';
     curl.wrap.style.display = isCurl ? '' : 'none';
-    countWrap.style.display = typeSel.value === 'pageload' ? 'none' : ''; // pageload uses the agent default
+    txWrap.style.display = isTx ? '' : 'none';
+    countWrap.style.display = (typeSel.value === 'pageload' || isTx) ? 'none' : '';
     target.placeholder = isUrl ? 'e.g. https://example.com/' : 'e.g. 1.1.1.1 or example.com';
     countLabelText.textContent = tr ? 'Queries/hop ' : 'Count ';
     countInput.max = tr ? '10' : (isCurl ? '10' : '20');
@@ -3052,11 +3119,11 @@ async function probeRunnerView() {
   root.append(el('div', { class: 'history-controls' },
     el('label', { class: 'inline muted' }, 'Agent ', agentSel),
     el('label', { class: 'inline muted' }, 'Type ', typeSel),
-    el('label', { class: 'inline muted' }, 'Target ', target),
+    targetWrap,
     portWrap,
     countWrap,
     curl.wrap,
-    runBtn, status));
+    runBtn, status), txWrap);
 
   const latestHost = el('div', { class: 'probe-latest' });
   const detailHost = el('div', {});
@@ -3065,13 +3132,20 @@ async function probeRunnerView() {
 
   async function run() {
     const id = agentSel.value;
-    const host = target.value.trim();
-    if (!host) { status.className = 'error'; status.textContent = 'Enter a target.'; return; }
-    const body = { type: typeSel.value, host };
-    if (typeSel.value === 'tcp') body.port = Number(portInput.value);
-    if (typeSel.value === 'curl') curl.apply(body);
-    if (typeSel.value === 'traceroute' && countInput.value) body.queries = Number(countInput.value);
-    else if ((typeSel.value === 'ping' || typeSel.value === 'tcp') && countInput.value) body.count = Number(countInput.value);
+    let body;
+    if (typeSel.value === 'transaction') {
+      const steps = tx.collect();
+      if (!steps.length) { status.className = 'error'; status.textContent = 'Add at least one step with a URL.'; return; }
+      body = { type: 'transaction', steps };
+    } else {
+      const host = target.value.trim();
+      if (!host) { status.className = 'error'; status.textContent = 'Enter a target.'; return; }
+      body = { type: typeSel.value, host };
+      if (typeSel.value === 'tcp') body.port = Number(portInput.value);
+      if (typeSel.value === 'curl') curl.apply(body);
+      if (typeSel.value === 'traceroute' && countInput.value) body.queries = Number(countInput.value);
+      else if ((typeSel.value === 'ping' || typeSel.value === 'tcp') && countInput.value) body.count = Number(countInput.value);
+    }
     status.className = 'muted'; status.textContent = 'Sending…'; runBtn.disabled = true;
     try {
       await api(`/agents/${id}/probe`, { method: 'POST', body });

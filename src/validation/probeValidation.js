@@ -1,6 +1,6 @@
 'use strict';
 
-const PROBE_TYPES = ['ping', 'tcp', 'dns', 'traceroute', 'http', 'curl', 'pageload'];
+const PROBE_TYPES = ['ping', 'tcp', 'dns', 'traceroute', 'http', 'curl', 'pageload', 'transaction'];
 const HTTP_METHODS = ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'];
 const HEADER_EXPECT_RE = /^[A-Za-z0-9!#$%&'*+.^_`|~-]+(\s*:\s*.{1,200})?$/;
 const MAX_RESULTS = 200;
@@ -157,6 +157,56 @@ function validateProbeSpec(body) {
         spec.maxBytes = mb;
       }
     }
+  } else if (type === 'transaction') {
+    // A multi-step journey: ordered steps, each an http(s) request (the URL may
+    // carry {{vars}} extracted from earlier steps) with optional assertions and an
+    // optional value extraction. The agent runs them in order and stops on failure.
+    if (!Array.isArray(b.steps) || b.steps.length === 0) return { errors: { steps: 'a transaction needs at least one step' } };
+    if (b.steps.length > 10) return { errors: { steps: 'too many steps (max 10)' } };
+    const steps = [];
+    for (let i = 0; i < b.steps.length; i += 1) {
+      const s = b.steps[i] && typeof b.steps[i] === 'object' ? b.steps[i] : {};
+      const url = String(s.url || '').trim();
+      if (!/^https?:\/\//i.test(url) || url.length > 512) return { errors: { [`steps[${i}].url`]: 'each step needs an http(s) URL (<=512 chars; may contain {{vars}})' } };
+      const step = { url };
+      if (s.method !== undefined && s.method !== '') {
+        const m = String(s.method).toUpperCase();
+        if (!HTTP_METHODS.includes(m)) return { errors: { [`steps[${i}].method`]: `method must be one of ${HTTP_METHODS.join(', ')}` } };
+        if (m !== 'GET') step.method = m;
+      }
+      if (s.expectStatus !== undefined && s.expectStatus !== null && s.expectStatus !== '') {
+        const st = Number(s.expectStatus);
+        if (!Number.isInteger(st) || st < 100 || st > 599) return { errors: { [`steps[${i}].expectStatus`]: 'expectStatus must be 100-599' } };
+        step.expectStatus = st;
+      }
+      if (s.expectBody) {
+        const eb = String(s.expectBody);
+        if (eb.length > 512) return { errors: { [`steps[${i}].expectBody`]: 'expectBody must be <=512 chars' } };
+        step.expectBody = eb;
+      }
+      if (s.header) {
+        const h = String(s.header);
+        if (h.length > 256) return { errors: { [`steps[${i}].header`]: 'header must be <=256 chars' } };
+        step.header = h;
+      }
+      if (s.data) {
+        const d = String(s.data);
+        if (d.length > 2048) return { errors: { [`steps[${i}].data`]: 'data must be <=2048 chars' } };
+        step.data = d;
+      }
+      if (s.extract && typeof s.extract === 'object' && (s.extract.name || s.extract.pattern)) {
+        const name = String(s.extract.name || '').trim();
+        const pattern = String(s.extract.pattern || '');
+        if (!/^[A-Za-z0-9_]{1,64}$/.test(name)) return { errors: { [`steps[${i}].extract.name`]: 'extract name must be 1-64 chars [A-Za-z0-9_]' } };
+        if (!pattern || pattern.length > 256) return { errors: { [`steps[${i}].extract.pattern`]: 'extract pattern is required (<=256 chars)' } };
+        try { new RegExp(pattern); } catch { return { errors: { [`steps[${i}].extract.pattern`]: 'extract pattern is not a valid regex' } }; }
+        step.extract = { name, pattern, from: s.extract.from === 'header' ? 'header' : 'body' };
+      }
+      steps.push(step);
+    }
+    spec.steps = steps;
+    spec.host = steps[0].url.slice(0, 255); // target/display column
+    if (b.name) spec.name = String(b.name).slice(0, 120);
   } else {
     const host = String(b.host || b.target || '').trim();
     if (!HOST_RE.test(host)) return { errors: { host: 'host/target is required and must be a valid hostname or IP' } };

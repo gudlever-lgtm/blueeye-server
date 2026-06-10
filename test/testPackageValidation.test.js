@@ -57,6 +57,18 @@ test('rejects a curl probe with an out-of-range expectStatus', () => {
   assert.ok(errors && errors.items);
 });
 
+test('accepts a pageload probe item (URL + maxElements round-trip)', () => {
+  const { value, errors } = validateTestPackageInput({
+    name: 'pageload', targets: { mode: 'all' },
+    items: [{ type: 'probe', probe: { type: 'pageload', url: 'example.com', maxElements: 25 } }],
+  });
+  assert.equal(errors, undefined);
+  const p = value.items[0].probe;
+  assert.equal(p.type, 'pageload');
+  assert.equal(p.host, 'https://example.com/');
+  assert.equal(p.maxElements, 25);
+});
+
 test('accepts a run-test item', () => {
   const { value, errors } = validateTestPackageInput({ name: 't', targets: { mode: 'all' }, items: [{ type: 'run-test', intervalMs: 1000 }] });
   assert.equal(errors, undefined);

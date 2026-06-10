@@ -1,6 +1,6 @@
 'use strict';
 
-const PROBE_TYPES = ['ping', 'tcp', 'dns', 'traceroute', 'http', 'curl'];
+const PROBE_TYPES = ['ping', 'tcp', 'dns', 'traceroute', 'http', 'curl', 'pageload'];
 const HTTP_METHODS = ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'];
 const HEADER_EXPECT_RE = /^[A-Za-z0-9!#$%&'*+.^_`|~-]+(\s*:\s*.{1,200})?$/;
 const MAX_RESULTS = 200;
@@ -59,6 +59,19 @@ function validateProbeResults(body) {
       if (Number.isNaN(d.getTime())) return { errors: { [`results[${i}].ts`]: 'ts must be a valid date' } };
       ts = d;
     }
+    let elements = null;
+    if (r.elements != null) {
+      if (!Array.isArray(r.elements) || r.elements.length > 64) return { errors: { [`results[${i}].elements`]: 'elements must be an array (<=64)' } };
+      // pageload waterfall: one row per fetched resource (document first). Metadata
+      // only — URL, resource kind, HTTP status, byte count and load time in ms.
+      elements = r.elements.map((e) => ({
+        url: e && e.url ? String(e.url).slice(0, 255) : null,
+        kind: e && e.kind ? String(e.kind).slice(0, 16) : null,
+        status: intOrNull(e && e.status),
+        bytes: intOrNull(e && e.bytes),
+        ms: numOrNull(e && e.ms),
+      }));
+    }
     let hops = null;
     if (r.hops != null) {
       if (!Array.isArray(r.hops) || r.hops.length > 64) return { errors: { [`results[${i}].hops`]: 'hops must be an array (<=64)' } };
@@ -86,6 +99,7 @@ function validateProbeResults(body) {
       // design: the agent reports only the received byte count + content-type,
       // never the response body itself.
       bytes: intOrNull(r.bytes), contentType: r.contentType != null ? String(r.contentType).slice(0, 120) : null,
+      elements,
       detail: r.detail != null ? String(r.detail).slice(0, 255) : (r.error != null ? String(r.error).slice(0, 255) : null),
     });
   }
@@ -99,11 +113,16 @@ function validateProbeSpec(body) {
   if (!PROBE_TYPES.includes(type)) return { errors: { type: `type must be one of ${PROBE_TYPES.join(', ')}` } };
 
   const spec = { type };
-  if (type === 'http' || type === 'curl') {
-    // http/curl take a URL (the agent reads spec.host as the target).
+  if (type === 'http' || type === 'curl' || type === 'pageload') {
+    // http/curl/pageload take a URL (the agent reads spec.host as the target).
     const url = normalizeHttpTarget(b.url || b.target || b.host);
     if (!url) return { errors: { target: `a valid http(s) URL is required for a ${type} probe` } };
     spec.host = url;
+    if (type === 'pageload' && b.maxElements !== undefined) {
+      const m = Number(b.maxElements);
+      if (!Number.isInteger(m) || m < 1 || m > 40) return { errors: { maxElements: 'maxElements must be an integer between 1 and 40' } };
+      spec.maxElements = m;
+    }
     if (type === 'curl') {
       // Content-verification parameters. All optional; with none set the curl
       // probe degrades to a status<400 reachability check (like the http probe).

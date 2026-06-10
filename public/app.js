@@ -358,10 +358,13 @@ function settingsLink(tab, label) {
 
 const PAGE_INFO = {
   tests: {
-    hero: 'Reusable test packages — sets of probe/traffic tests the server pushes to chosen agents to run, on a schedule or on demand.',
+    hero: 'Reusable test packages — run the same checks on a schedule across many agents. (For a quick one-off check from a single agent, use Probes instead.)',
     title: 'Tests — packages pushed to agents',
     body: () => [
-      el('p', {}, 'A test package is a named set of tests (ping / TCP / DNS / traceroute / cURL content check / throughput / speed test) with a target selector and an optional schedule. The server pushes the tests to the selected, connected agents; each agent runs them and reports back — results appear on the ', viewLink('probes'), ' and ', viewLink('overview', 'Traffic'), ' pages as usual. A cURL test verifies the received HTTP response — status code, body match and a header — not just reachability.'),
+      el('div', { class: 'callout' },
+        el('strong', {}, 'Probes vs. Tests: '),
+        el('span', {}, 'A ', viewLink('probes', 'Probe'), ' is a single check you run by hand, right now, from one agent — handy for troubleshooting. A ', el('strong', {}, 'Test'), ' (this page) is a saved, reusable package of those same checks, aimed at many agents (all / specific / by location) and run on a recurring schedule (or on demand). Same probe engine underneath; Tests add naming, fleet targeting and recurrence.')),
+      el('p', {}, 'A test package is a named set of tests (ping / TCP / DNS / traceroute / cURL content check / page load / throughput / speed test) with a target selector and an optional schedule. The server pushes the tests to the selected, connected agents; each agent runs them and reports back — results appear on the ', viewLink('probes'), ' and ', viewLink('overview', 'Traffic'), ' pages as usual. A cURL test verifies the received HTTP response — status code, body match and a header — not just reachability.'),
       el('h4', {}, 'Targets'),
       el('ul', {},
         el('li', {}, el('strong', {}, 'All agents '), '— every enrolled agent.'),
@@ -497,9 +500,12 @@ const PAGE_INFO = {
     ],
   },
   probes: {
-    hero: 'Active reachability from an agent: ping, TCP-connect, DNS, traceroute and a cURL content check — with RTT, loss and path.',
+    hero: 'Run a single active check from one agent, right now: ping, TCP-connect, DNS, traceroute, cURL content check or page load — with RTT, loss, path and history.',
     title: 'Probes',
     body: () => [
+      el('div', { class: 'callout' },
+        el('strong', {}, 'Probes vs. Tests: '),
+        el('span', {}, 'This page is for ', el('strong', {}, 'one-off, on-demand'), ' checks from a single agent — you pick agent + type + target and click “Run probe”. To run the same checks ', el('strong', {}, 'on a recurring schedule across many agents'), ', save them as a ', viewLink('tests', 'Test package'), '. Same probe engine; Tests add naming, fleet targeting and recurrence.')),
       el('p', {}, 'While the other pages measure traffic passively, probes run an active test from a selected agent against a target, so you can answer “can site A reach host B — and how quickly?”.'),
       el('h4', {}, 'Types'),
       el('ul', {},
@@ -507,8 +513,9 @@ const PAGE_INFO = {
         el('li', {}, 'TCP-connect: opens host:port and measures connection time (no payload sent).'),
         el('li', {}, 'DNS: time to resolve a name (and which address was returned).'),
         el('li', {}, 'Traceroute: the path (hops) to the target. Each hop is probed several times (set “Queries/hop”), so you get per-hop loss, latency and jitter — rendered as an interactive path map (hover a hop for its metrics + ASN/country) plus a hop table. Repeated traceroutes are aggregated so the verdict is stable.'),
-        el('li', {}, el('strong', {}, 'cURL (content check): '), 'goes beyond “is it up” — the agent runs ', el('span', { class: 'mono' }, 'curl'), ' against an http(s) URL and verifies the received traffic: the HTTP status code, that the response body contains an expected substring or ', el('span', { class: 'mono' }, '/regex/'), ', the received byte count, and a response header. Leave the expectation fields blank for a plain status<400 check. The agent inspects the body locally but reports only metadata — status, byte count, content-type and pass/fail — never the body itself.')),
-      el('p', {}, 'Select agent + type + target and click “Run probe”. The agent must be connected; the result comes back a moment later and is added to the history so you can see RTT/loss over time.'),
+        el('li', {}, el('strong', {}, 'cURL (content check): '), 'goes beyond “is it up” — the agent runs ', el('span', { class: 'mono' }, 'curl'), ' against an http(s) URL and verifies the received traffic: the HTTP status code, that the response body contains an expected substring or ', el('span', { class: 'mono' }, '/regex/'), ', the received byte count, and a response header. Leave the expectation fields blank for a plain status<400 check. The agent inspects the body locally but reports only metadata — status, byte count, content-type and pass/fail — never the body itself.'),
+        el('li', {}, el('strong', {}, 'Page load: '), 'measures how a whole page loads — the agent fetches the URL, then its sub-resources (scripts, stylesheets, images) and reports a per-element waterfall (status · size · load time) plus totals: element count, page weight and total load time. The total load time is charted over time. Browser-free (no JS execution), so it can\'t see real DOM/load events; metadata only — resource URLs, sizes and timings, never contents.')),
+      el('p', {}, 'Select agent + type + target and click “Run probe”. The agent must be connected; the result comes back a moment later and is added to the history so you can see RTT / load time over time.'),
       el('p', { class: 'muted' }, 'To run the same probes on a schedule across many agents, use ', viewLink('tests'), '; probe results also drive the health verdict on ', viewLink('fleet', 'Overview'), '. Metadata only: targets, timings and content verdicts — never packet or response contents.'),
     ],
   },
@@ -1046,6 +1053,7 @@ const TEST_TEMPLATES = [
   { key: 'web', label: 'Web reachability — TCP 443 example.com', item: { type: 'probe', probe: { type: 'tcp', host: 'example.com', port: 443, count: 3 } } },
   { key: 'path', label: 'Path trace — traceroute 9.9.9.9', item: { type: 'probe', probe: { type: 'traceroute', host: '9.9.9.9' } } },
   { key: 'content', label: 'Content check — cURL 200 from example.com', item: { type: 'probe', probe: { type: 'curl', url: 'https://example.com', expectStatus: 200 } } },
+  { key: 'pageload', label: 'Page load — example.com (elements + load time)', item: { type: 'probe', probe: { type: 'pageload', url: 'https://example.com' } } },
   { key: 'throughput', label: 'Throughput snapshot — current bandwidth', item: { type: 'run-test', intervalMs: 1000 } },
   { key: 'speed', label: 'Speed test — download/upload to server (Mbps)', item: { type: 'speedtest' } },
 ];
@@ -1107,6 +1115,7 @@ function testItemsSummary(items) {
     if (it.type === 'run-test') return 'throughput';
     if (it.type === 'speedtest') return 'speed test';
     if (it.probe.type === 'curl') return `curl ${it.probe.url || it.probe.host}${it.probe.expectStatus ? ' →' + it.probe.expectStatus : ''}`;
+    if (it.probe.type === 'pageload') return `pageload ${it.probe.url || it.probe.host}`;
     return `${it.probe.type} ${it.probe.host}${it.probe.port ? ':' + it.probe.port : ''}`;
   });
   return el('span', { class: 'muted small' }, labels.join(', '));
@@ -1174,10 +1183,10 @@ function editTestPackage(pkg, agents, locations) {
   const itemsBox = el('div', { class: 'tc-list' });
   const itemRows = [];
   function addItemRow(item) {
-    const typeSel = el('select', {}, ...[['ping', 'Ping'], ['tcp', 'TCP'], ['dns', 'DNS'], ['traceroute', 'Traceroute'], ['curl', 'cURL'], ['run-test', 'Throughput'], ['speedtest', 'Speed test']].map(([v, l]) => el('option', { value: v }, l)));
+    const typeSel = el('select', {}, ...[['ping', 'Ping'], ['tcp', 'TCP'], ['dns', 'DNS'], ['traceroute', 'Traceroute'], ['curl', 'cURL'], ['pageload', 'Page load'], ['run-test', 'Throughput'], ['speedtest', 'Speed test']].map(([v, l]) => el('option', { value: v }, l)));
     const host = el('input', { type: 'text', placeholder: 'host / target' });
     const port = el('input', { type: 'number', min: '1', max: '65535', placeholder: 'port' });
-    const count = el('input', { type: 'number', min: '1', max: '20', placeholder: 'count' });
+    const count = el('input', { type: 'number', min: '1', max: '40', placeholder: 'count' });
     // curl-only: assert the received HTTP status code, a body match, and a header.
     const status = el('input', { type: 'number', min: '100', max: '599', placeholder: 'HTTP code', style: 'width:7em' });
     const body = el('input', { type: 'text', placeholder: 'body: substring or /regex/' });
@@ -1189,6 +1198,7 @@ function editTestPackage(pkg, agents, locations) {
         host.value = item.probe.url || item.probe.host || '';
         if (item.probe.port) port.value = item.probe.port;
         if (item.probe.count) count.value = item.probe.count;
+        if (item.probe.maxElements) count.value = item.probe.maxElements;
         if (item.probe.expectStatus != null) status.value = item.probe.expectStatus;
         if (item.probe.expectBody) body.value = item.probe.expectBody;
         if (item.probe.expectHeader) header.value = item.probe.expectHeader;
@@ -1201,11 +1211,14 @@ function editTestPackage(pkg, agents, locations) {
       const t = typeSel.value;
       const noTarget = t === 'run-test' || t === 'speedtest';
       const isCurl = t === 'curl';
+      const isPageload = t === 'pageload';
+      const isUrl = isCurl || isPageload;
       host.style.display = noTarget ? 'none' : '';
-      host.placeholder = isCurl ? 'https://host/path' : 'host / target';
+      host.placeholder = isUrl ? 'https://host/path' : 'host / target';
       port.style.display = t === 'tcp' ? '' : 'none';
-      count.style.display = (t === 'ping' || t === 'tcp' || isCurl) ? '' : 'none';
-      count.max = isCurl ? '10' : '20';
+      count.style.display = (t === 'ping' || t === 'tcp' || isCurl || isPageload) ? '' : 'none';
+      count.placeholder = isPageload ? 'max elements' : 'count';
+      count.max = isCurl ? '10' : (isPageload ? '40' : '20');
       for (const f of [status, body, header]) f.style.display = isCurl ? '' : 'none';
     };
     typeSel.addEventListener('change', sync); sync();
@@ -1237,6 +1250,11 @@ function editTestPackage(pkg, agents, locations) {
         const b = c.body.value.trim(); if (b) probe.expectBody = b;
         const h = c.header.value.trim(); if (h) probe.expectHeader = h;
         if (c.count.value) probe.count = Number(c.count.value);
+        return { type: 'probe', probe };
+      }
+      if (t === 'pageload') {
+        const probe = { type: 'pageload', url: c.host.value.trim() };
+        if (c.count.value) probe.maxElements = Number(c.count.value);
         return { type: 'probe', probe };
       }
       const probe = { type: t, host: c.host.value.trim() };
@@ -2894,7 +2912,7 @@ async function probeDetail(r, agentId) {
   const pts = (data.results || []).filter((x) => x.target === r.target && x.rttMs != null).map((x) => ({ t: new Date(x.ts).getTime(), y: x.rttMs }));
   const fromMs = pts.length ? pts[0].t : Date.now() - 3600000;
   const toMs = pts.length ? pts[pts.length - 1].t : Date.now();
-  // #6 normal-range band (RTT vs. its own median±MAD) + #7 markers: probe
+  // #6 normal-range band (metric vs. its own median±MAD) + #7 markers: probe
   // failures (ok→fail flips) and recent findings for this agent.
   const band = robustBand(pts);
   const markers = [];
@@ -2902,8 +2920,34 @@ async function probeDetail(r, agentId) {
     if (x.ok === false && x.ts) markers.push({ t: new Date(x.ts).getTime(), kind: 'probe', label: `Probe error${x.detail ? ': ' + x.detail : ''}` });
   }
   try { const fs = await api(`/api/findings?hostId=${encodeURIComponent(agentId)}&since=${new Date(fromMs).toISOString()}`); markers.push(...findingMarkers(fs)); } catch { /* findings optional */ }
-  return el('details', { class: 'sec', open: true }, el('summary', {}, `RTT history — ${r.type} → ${esc(r.target)} `, el('span', { class: 'muted' }, '· band = normal range (median±MAD)')),
-    el('div', { class: 'overview-chart' }, pts.length ? historyChart([{ id: 'rtt', label: 'RTT (ms)', color: '#06b6d4', points: pts }], { fromMs, toMs, band, markers }) : el('div', { class: 'empty' }, 'No history yet — run a few measurements.')));
+  // pageload graphs its total load time over time and adds a per-element waterfall
+  // for the selected run; everything else is the RTT-over-time chart.
+  const isPageload = r.type === 'pageload';
+  const metricLabel = isPageload ? 'Load time (ms)' : 'RTT (ms)';
+  const chart = el('details', { class: 'sec', open: true }, el('summary', {}, `${isPageload ? 'Load-time history' : 'RTT history'} — ${r.type} → ${esc(r.target)} `, el('span', { class: 'muted' }, '· band = normal range (median±MAD)')),
+    el('div', { class: 'overview-chart' }, pts.length ? historyChart([{ id: 'rtt', label: metricLabel, color: '#06b6d4', points: pts }], { fromMs, toMs, band, markers }) : el('div', { class: 'empty' }, 'No history yet — run a few measurements.')));
+  if (!isPageload) return chart;
+  return el('div', {},
+    el('details', { class: 'sec', open: true }, el('summary', {}, `Page elements — ${esc(r.target)} `, el('span', { class: 'muted' }, '· per-resource status · size · load time')), pageloadWaterfall(r)),
+    chart);
+}
+
+// pageload waterfall: one row per fetched resource (document first), with a bar
+// scaled to the slowest element so the long poles stand out at a glance.
+function pageloadWaterfall(r) {
+  const els = (r && r.elements) || [];
+  if (!els.length) return el('div', { class: 'muted' }, 'No element breakdown for this run (older agent, or the document failed to load).');
+  const maxMs = Math.max(1, ...els.map((e) => e.ms || 0));
+  const row = (e) => el('tr', {},
+    el('td', { class: 'muted' }, e.kind || '–'),
+    el('td', { class: 'mono small pl-url', title: e.url || '' }, e.url || '–'),
+    el('td', {}, e.status != null ? el('span', { class: `badge ${e.status < 400 ? 'online' : 'offline'}` }, String(e.status)) : '–'),
+    el('td', { class: 'num' }, e.bytes != null ? fmtBytes(e.bytes) : '–'),
+    el('td', { class: 'num' }, e.ms != null ? `${e.ms} ms` : '–'),
+    el('td', {}, el('div', { class: 'pl-bar', style: `width:${Math.max(2, Math.round(((e.ms || 0) / maxMs) * 100))}%` })));
+  return el('table', { class: 'probe-hops pl-waterfall' },
+    el('thead', {}, el('tr', {}, ...['Element', 'URL', 'Status', 'Size', 'Time', ''].map((h) => el('th', {}, h)))),
+    el('tbody', {}, ...els.map(row)));
 }
 
 // Interface health per agent (utilisation, errors, discards, link state/speed)
@@ -2948,18 +2992,19 @@ views.interfaces = async () => {
 views.probes = async () => {
   const root = el('div', { class: 'probes' });
   root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Probes'),
-    el('span', { class: 'muted' }, 'Active reachability · ping · TCP · DNS · traceroute · cURL')));
+    el('span', { class: 'muted' }, 'Active reachability · ping · TCP · DNS · traceroute · cURL · page load')));
 
   const agents = await api('/agents').catch(() => []);
   if (!agents.length) { root.append(el('div', { class: 'empty' }, 'No agents yet — enrol an agent first.')); return root; }
 
   const agentSel = el('select', {}, ...agents.map((a) => el('option', { value: String(a.id) }, a.display_name || a.hostname)));
-  const typeSel = el('select', {}, ...[['ping', 'Ping (ICMP)'], ['tcp', 'TCP-connect'], ['dns', 'DNS'], ['traceroute', 'Traceroute'], ['curl', 'cURL (content check)']].map(([v, l]) => el('option', { value: v }, l)));
+  const typeSel = el('select', {}, ...[['ping', 'Ping (ICMP)'], ['tcp', 'TCP-connect'], ['dns', 'DNS'], ['traceroute', 'Traceroute'], ['curl', 'cURL (content check)'], ['pageload', 'Page load']].map(([v, l]) => el('option', { value: v }, l)));
   const target = el('input', { type: 'text', placeholder: 'e.g. 1.1.1.1 or example.com' });
   const portInput = el('input', { type: 'number', min: '1', max: '65535', value: '443' });
   const portWrap = el('label', { class: 'inline muted' }, 'Port ', portInput);
   const countInput = el('input', { type: 'number', min: '1', max: '20', value: '4' });
   const countLabelText = el('span', {}, 'Count ');
+  const countWrap = el('label', { class: 'inline muted' }, countLabelText, countInput);
   // cURL content-verification inputs — only shown for the curl type. They let the
   // operator assert that the received traffic is correct, not just reachable.
   const curl = curlInputs();
@@ -2970,9 +3015,11 @@ views.probes = async () => {
   const syncPort = () => {
     const tr = typeSel.value === 'traceroute';
     const isCurl = typeSel.value === 'curl';
+    const isUrl = isCurl || typeSel.value === 'pageload';
     portWrap.style.display = typeSel.value === 'tcp' ? '' : 'none';
     curl.wrap.style.display = isCurl ? '' : 'none';
-    target.placeholder = isCurl ? 'e.g. https://example.com/health' : 'e.g. 1.1.1.1 or example.com';
+    countWrap.style.display = typeSel.value === 'pageload' ? 'none' : ''; // pageload uses the agent default
+    target.placeholder = isUrl ? 'e.g. https://example.com/' : 'e.g. 1.1.1.1 or example.com';
     countLabelText.textContent = tr ? 'Queries/hop ' : 'Count ';
     countInput.max = tr ? '10' : (isCurl ? '10' : '20');
     if (tr && Number(countInput.value) > 10) countInput.value = '3';
@@ -2984,7 +3031,7 @@ views.probes = async () => {
     el('label', { class: 'inline muted' }, 'Type ', typeSel),
     el('label', { class: 'inline muted' }, 'Target ', target),
     portWrap,
-    el('label', { class: 'inline muted' }, countLabelText, countInput),
+    countWrap,
     curl.wrap,
     runBtn, status));
 
@@ -3000,10 +3047,8 @@ views.probes = async () => {
     const body = { type: typeSel.value, host };
     if (typeSel.value === 'tcp') body.port = Number(portInput.value);
     if (typeSel.value === 'curl') curl.apply(body);
-    if (countInput.value) {
-      if (typeSel.value === 'traceroute') body.queries = Number(countInput.value);
-      else body.count = Number(countInput.value);
-    }
+    if (typeSel.value === 'traceroute' && countInput.value) body.queries = Number(countInput.value);
+    else if ((typeSel.value === 'ping' || typeSel.value === 'tcp') && countInput.value) body.count = Number(countInput.value);
     status.className = 'muted'; status.textContent = 'Sending…'; runBtn.disabled = true;
     try {
       await api(`/agents/${id}/probe`, { method: 'POST', body });
@@ -3502,26 +3547,29 @@ views.agent = async () => {
   }
 
   // ---- Probes (this agent) ----
-  const typeSel = el('select', {}, ...[['ping', 'Ping (ICMP)'], ['tcp', 'TCP-connect'], ['dns', 'DNS'], ['traceroute', 'Traceroute'], ['curl', 'cURL (content check)']].map(([v, l]) => el('option', { value: v }, l)));
+  const typeSel = el('select', {}, ...[['ping', 'Ping (ICMP)'], ['tcp', 'TCP-connect'], ['dns', 'DNS'], ['traceroute', 'Traceroute'], ['curl', 'cURL (content check)'], ['pageload', 'Page load']].map(([v, l]) => el('option', { value: v }, l)));
   const target = el('input', { type: 'text', placeholder: 'e.g. 1.1.1.1 or example.com' });
   const portInput = el('input', { type: 'number', min: '1', max: '65535', value: '443' });
   const portWrap = el('label', { class: 'inline muted' }, 'Port ', portInput);
   const countInput = el('input', { type: 'number', min: '1', max: '20', value: '4' });
+  const countWrap = el('label', { class: 'inline muted' }, 'Count ', countInput);
   const curl = curlInputs();
   const runBtn = el('button', { class: 'small' }, 'Run probe');
   const probeStatus = el('span', { class: 'muted' });
   const syncPort = () => {
     const isCurl = typeSel.value === 'curl';
+    const isUrl = isCurl || typeSel.value === 'pageload';
     portWrap.style.display = typeSel.value === 'tcp' ? '' : 'none';
     curl.wrap.style.display = isCurl ? '' : 'none';
-    target.placeholder = isCurl ? 'e.g. https://example.com/health' : 'e.g. 1.1.1.1 or example.com';
+    countWrap.style.display = typeSel.value === 'pageload' ? 'none' : '';
+    target.placeholder = isUrl ? 'e.g. https://example.com/' : 'e.g. 1.1.1.1 or example.com';
   };
   typeSel.addEventListener('change', syncPort); syncPort();
   const probeForm = el('div', { class: 'history-controls' },
     el('label', { class: 'inline muted' }, 'Type ', typeSel),
     el('label', { class: 'inline muted' }, 'Target ', target),
     portWrap,
-    el('label', { class: 'inline muted' }, 'Count ', countInput),
+    countWrap,
     curl.wrap,
     runBtn, probeStatus);
   const probeLatestHost = el('div', { class: 'probe-latest' });
@@ -3533,7 +3581,7 @@ views.agent = async () => {
     const body = { type: typeSel.value, host };
     if (typeSel.value === 'tcp') body.port = Number(portInput.value);
     if (typeSel.value === 'curl') curl.apply(body);
-    if (countInput.value) body.count = Number(countInput.value);
+    if ((typeSel.value === 'ping' || typeSel.value === 'tcp') && countInput.value) body.count = Number(countInput.value);
     probeStatus.className = 'muted'; probeStatus.textContent = 'Sending…'; runBtn.disabled = true;
     try {
       await api(`/agents/${id}/probe`, { method: 'POST', body });

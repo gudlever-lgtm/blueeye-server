@@ -19,7 +19,7 @@ the `admin` role is the permission required to access the audit. Non-admins get
 
 ## Data model
 
-**`audit_events`** (migration 033) — one table, two write modes:
+**`audit_events`** (migration 035) — one table, two write modes:
 
 | Column | Meaning |
 | --- | --- |
@@ -94,7 +94,7 @@ as `Repeats every <interval> · ×<occurrences> · last <when>`.
 
 ## Where things live
 
-- Migration: `migrations/033_create_audit_events.sql`
+- Migration: `migrations/035_create_audit_events.sql`
 - Repository: `src/repositories/auditEventsRepository.js` (`record`,
   `recordRecurring`, `findAll`, `distinctActions`)
 - Middleware: `src/middleware/auditLogger.js`; pure helpers `src/audit/actions.js`

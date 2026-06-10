@@ -5,6 +5,7 @@ const {
   PLAN_ORDER,
   FEATURE_CATALOG,
   ALL_FEATURE_KEYS,
+  featureStatus,
   getPlan,
   planDisplayName,
 } = require('./plans');
@@ -161,6 +162,7 @@ function createPlanService({ licenseManager = null, configPlan = '' } = {}) {
       key,
       label: FEATURE_CATALOG[key].label,
       minPlan: FEATURE_CATALOG[key].minPlan,
+      status: featureStatus(key), // 'available' | 'roadmap' — UI shows a badge for roadmap
     }));
     return { activePlan: getPlanKey(), plans, features: featureList };
   }

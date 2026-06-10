@@ -63,6 +63,20 @@ test('probe results dedupe per (type → target); repeats bump occurrences', asy
   assert.ok(probes.some((p) => p.targetType === 'ping' && p.targetLabel === '8.8.8.8'));
 });
 
+test('probe dedup key stays bounded for a near-max-length target', async () => {
+  const captured = [];
+  const auditEventsRepo = makeAuditEventsRepo({
+    recordRecurring: async (e) => { captured.push(e); },
+  });
+  const app = makeApp({ auditEventsRepo, agentTokensRepo: agentToken(), agentsRepo: makeAgentsRepo() });
+  const longTarget = 'a'.repeat(255); // max allowed; overflows the prefixed key
+  await agentHdr(app, '/agents/probe-results').send({ results: [{ type: 'traceroute', target: longTarget, ok: true }] });
+  await settle();
+  assert.equal(captured.length, 1);
+  assert.ok(captured[0].dedupKey.length <= 255, 'dedup key must fit the column');
+  assert.equal(captured[0].targetLabel, longTarget); // full target still shown
+});
+
 test('agent auditing never blocks ingestion when the audit write throws', async () => {
   const auditEventsRepo = makeAuditEventsRepo({ recordRecurring: async () => { throw new Error('db down'); } });
   const app = makeApp({ auditEventsRepo, agentTokensRepo: agentToken(), agentsRepo: makeAgentsRepo() });

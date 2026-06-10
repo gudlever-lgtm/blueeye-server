@@ -28,6 +28,7 @@ function createSystemRouter({ systemInfo, agentSourceStore, releaseStore } = {})
     (req, res) => {
       res.json({
         server: pkg.version || null,
+        releaseDate: pkg.releaseDate || null,
         agent: offeredAgentVersion(),
       });
     }

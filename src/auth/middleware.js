@@ -5,7 +5,14 @@ const { verifyToken } = require('./jwt');
 // requireAuth — rejects the request with 401 unless it carries a valid
 // `Authorization: Bearer <jwt>` header. On success it attaches the decoded
 // identity to req.user.
+//
+// A trusted upstream authenticator (the API-token middleware) may already have
+// populated req.user and set req.authVerified; in that case we accept it as-is.
+// req.authVerified is set only by server code, never from client input, so this
+// cannot be spoofed by a request header.
 function requireAuth(req, res, next) {
+  if (req.authVerified && req.user) return next();
+
   const header = req.headers.authorization || '';
   const [scheme, token] = header.split(' ');
 
@@ -20,6 +27,7 @@ function requireAuth(req, res, next) {
       email: decoded.email,
       role: decoded.role,
     };
+    req.authVerified = true;
   } catch {
     return res.status(401).json({ error: 'Invalid or expired token' });
   }

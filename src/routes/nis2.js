@@ -3,6 +3,7 @@
 const express = require('express');
 const { asyncHandler } = require('../middleware/asyncHandler');
 const { requireAuth, requireRole } = require('../auth/middleware');
+const { requirePlanFeature } = require('../license/features');
 const { ROLES } = require('../auth/roles');
 const { parseId } = require('../validation/locationValidation');
 const { toCsv } = require('../lib/csv');
@@ -22,11 +23,17 @@ const { SOURCE_KEYS, sourcesFor, buildCustomReport, customReportToCsv } = requir
 function createNis2Router({
   nis2RisksRepo, nis2ControlsRepo, nis2IncidentsRepo,
   nis2ReportsRepo, nis2EvidenceRepo, nis2AuditRepo,
+  featureGate = null, planService = null,
 }) {
   const router = express.Router();
   const reader = requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN);
   const writer = requireRole(ROLES.OPERATOR, ROLES.ADMIN);
   const approver = requireRole(ROLES.ADMIN); // admin/compliance approves reports
+  // The generated/exportable "Compliance report pack" is licence-gated
+  // (reports_compliance, Enterprise+). The risk/control/incident registers and
+  // the readiness dashboard stay open as part of the NIS2 module; producing the
+  // report artifacts (generate / approve / CSV / print-ready HTML) requires it.
+  const compliancePack = requirePlanFeature({ featureGate, planService }, 'reports_compliance');
 
   // Best-effort audit write. Never throws into the request path.
   async function audit(req, action, entityType, entityId, oldValue, newValue) {
@@ -259,7 +266,7 @@ function createNis2Router({
 
   // Generates + persists a report (snapshot frozen for trend comparison). The
   // body chooses the type; the title/period are optional. operator+.
-  router.post('/reports', requireAuth, writer, asyncHandler(async (req, res) => {
+  router.post('/reports', requireAuth, writer, compliancePack, asyncHandler(async (req, res) => {
     const { value, errors } = validateReportRequest(req.body);
     if (errors) return fail(res, errors);
     const data = await loadAll();
@@ -283,7 +290,7 @@ function createNis2Router({
   }));
 
   // Approve a draft report — admin/compliance only.
-  router.post('/reports/:id/approve', requireAuth, approver, asyncHandler(async (req, res) => {
+  router.post('/reports/:id/approve', requireAuth, approver, compliancePack, asyncHandler(async (req, res) => {
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ error: 'Invalid id' });
     const before = await nis2ReportsRepo.findById(id);
@@ -383,7 +390,7 @@ function createNis2Router({
   }));
 
   // Export the custom report as PDF-ready HTML, CSV, or JSON (format in body).
-  router.post('/custom-reports/export', requireAuth, reader, asyncHandler(async (req, res) => {
+  router.post('/custom-reports/export', requireAuth, reader, compliancePack, asyncHandler(async (req, res) => {
     const { value, errors } = validateCustomReportSpec(req.body, { sourceKeys: SOURCE_KEYS });
     if (errors) return fail(res, errors);
     if (wantsAudit(value) && !isAdmin(req)) return res.status(403).json({ error: 'The audit source requires the admin role' });
@@ -402,7 +409,11 @@ function createNis2Router({
     return res.send(renderRegisterHtml(report.title, report.sections, { org: report.org }));
   }));
 
-  // ---- CSV export -----------------------------------------------------------
+  // ---- CSV / PDF export -----------------------------------------------------
+  // All downloadable report artifacts under /export are the licence-gated
+  // "Compliance report pack" (reports_compliance). This prefix guard runs
+  // auth → role → feature before any specific export route below.
+  router.use('/export', requireAuth, reader, compliancePack);
 
   function sendCsv(res, name, columns, rows) {
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');

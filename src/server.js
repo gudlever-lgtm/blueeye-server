@@ -8,6 +8,9 @@ const { createUsersRepository } = require('./repositories/usersRepository');
 const { createAgentsRepository } = require('./repositories/agentsRepository');
 const { createAgentActionAuditRepository } = require('./repositories/agentActionAuditRepository');
 const { createAuditEventsRepository } = require('./repositories/auditEventsRepository');
+const { createAuditLogRepository } = require('./repositories/auditLogRepository');
+const { createApiTokensRepository } = require('./repositories/apiTokensRepository');
+const { createAuditLogger } = require('./services/auditLogger');
 const { createEnrollmentCodesRepository } = require('./repositories/enrollmentCodesRepository');
 const { createEnrollmentStore } = require('./services/enrollmentStore');
 const { createAgentTokensRepository } = require('./repositories/agentTokensRepository');
@@ -99,6 +102,9 @@ function start() {
   const agentsRepo = createAgentsRepository(db);
   const auditRepo = createAgentActionAuditRepository(db);
   const auditEventsRepo = createAuditEventsRepository(db);
+  const auditLogRepo = createAuditLogRepository(db);
+  const apiTokensRepo = createApiTokensRepository(db);
+  const auditLogger = createAuditLogger({ auditLogRepo, logger: console });
   const enrollmentCodesRepo = createEnrollmentCodesRepository(db);
   const enrollmentStore = createEnrollmentStore(db);
   const agentTokensRepo = createAgentTokensRepository(db);
@@ -267,8 +273,20 @@ function start() {
       webhook: createWebhookChannel({ config: alertingConfig.channels.webhook, logger: console }),
       syslog: createSyslogChannel({ config: alertingConfig.channels.syslog, logger: console }),
     },
-    // Alerting only dispatches if the license includes it.
-    licensed: () => featureGate.isFeatureEnabled('alerting'),
+    // Alerting dispatches if the license includes the legacy `alerting` module
+    // OR the plan grants an alert channel feature (so plan-based Professional+
+    // installs alert without a legacy proof feature map).
+    licensed: () =>
+      featureGate.isFeatureEnabled('alerting') ||
+      featureGate.isFeatureEnabled('alerts_email') ||
+      featureGate.isFeatureEnabled('alerts_webhook'),
+    // Per-channel gate: email/webhook honour their plan feature keys, falling
+    // back to the legacy `alerting` entitlement; syslog stays under `alerting`.
+    channelLicensed: (name) => {
+      if (name === 'email') return featureGate.isFeatureEnabled('alerts_email') || featureGate.isFeatureEnabled('alerting');
+      if (name === 'webhook') return featureGate.isFeatureEnabled('alerts_webhook') || featureGate.isFeatureEnabled('alerting');
+      return featureGate.isFeatureEnabled('alerting');
+    },
     logger: console,
   });
   // Maintenance windows suppress notifications (findings still record). The
@@ -372,6 +390,9 @@ function start() {
     agentsRepo,
     auditRepo,
     auditEventsRepo,
+    auditLogRepo,
+    apiTokensRepo,
+    auditLogger,
     enrollmentCodesRepo,
     enrollmentStore,
     agentTokensRepo,

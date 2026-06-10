@@ -19,6 +19,7 @@ const { createProbeResultsRepository } = require('./repositories/probeResultsRep
 const { createIncidentsRepository } = require('./repositories/incidentsRepository');
 const { createIncidentThresholdsRepository } = require('./repositories/incidentThresholdsRepository');
 const { createIncidentService } = require('./incidents/incidentService');
+const { createInstallToolService } = require('./services/installToolService');
 const { createArtifactStore } = require('./enroll/artifactStore');
 const { createAgentSourceStore } = require('./enroll/agentSourceStore');
 const { createAgentReleaseStore } = require('./enroll/agentReleaseStore');
@@ -364,6 +365,12 @@ function start() {
   // provider). Egress is admin-initiated / opt-in, so air-gapped installs are fine.
   const geoipUpdater = createGeoipUpdater({ settingsService, config, logger: console });
   geoipUpdater.startSchedule();
+  // Auto-install of missing diagnostic tools (opt-in via Settings → Agents):
+  // pushes an install-tool command when a probe fails because the tool is
+  // missing on the host. Threaded into probe ingest below.
+  const installToolService = createInstallToolService({
+    agentCommander, auditRepo, auditEventsRepo, agentsRepo, settingsService, logger: console,
+  });
   // Now that settingsService exists, give the dispatcher its maintenance silencer.
   dispatcher.setSilencer(createSilencer({
     getWindows: async () => (await settingsService.getMaintenance()).windows,
@@ -394,6 +401,7 @@ function start() {
     incidentsRepo,
     thresholdsRepo,
     incidentService,
+    installToolService,
     agentCommander,
     systemInfo,
     licenseManager,
@@ -465,6 +473,7 @@ function start() {
     agentTokensRepo,
     agentsRepo,
     auditRepo,
+    auditEventsRepo,
     logger: console,
     path: config.ws.path,
     heartbeatMs: config.ws.heartbeatIntervalMs,

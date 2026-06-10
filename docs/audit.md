@@ -67,7 +67,21 @@ On ingest the agent's own activity is recorded:
 - `POST /agents/results` from a **commanded** run-test → discrete
   `record('agent.run-test')`.
 - `POST /agents/probe-results` → `recordRecurring('agent.probe')`, deduped per
-  `(agent, type → target)`.
+  `(agent, type → target)`. A probe the agent could **not execute at all** (a
+  missing binary like `traceroute not installed`, a tool that timed out
+  launching, or an unknown probe type — the agent reports it with an explicit
+  `error`, preserved by validation as `execError`) is instead recorded as
+  `recordRecurring('agent.probe-failed')` with the reason in `detail.reason`, so
+  the trail shows the failure (and why) rather than a normal probe. This is
+  distinct from ordinary reachability loss (`ok:false` with metrics, no error),
+  which stays a plain `agent.probe`.
+- **install-tool** — installing a missing diagnostic tool on an agent host leaves
+  a trail at both ends: the request (operator `POST /agents/:id/install-tool`, or
+  the auto-trigger when `Settings → Agents → auto-install` is on) and the
+  `agent.install-tool` OUTCOME row recorded from the agent's WebSocket
+  `action-result` (in `src/ws/agentSocket.js`), carrying `detail.ok` + the
+  reason. The request→complete lifecycle is also tracked in `agent_action_audit`
+  (migration 036) like upgrade/delete.
 
 No per-report agent lookup is added to the hot path: agent rows store only
 `actor_id`, and the read query `LEFT JOIN`s `agents` for the hostname.

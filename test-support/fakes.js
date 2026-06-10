@@ -13,6 +13,7 @@ const { createSecretBox } = require('../src/lib/secretBox');
 const { createConnectorRegistry } = require('../src/integrations/connectors');
 const { createPlanService } = require('../src/license/planService');
 const { createUsageService } = require('../src/services/usageService');
+const { createAuditLogger } = require('../src/services/auditLogger');
 
 // ---- Repositories ---------------------------------------------------------
 
@@ -306,6 +307,98 @@ function makeAuditRepo(overrides = {}) {
   };
 }
 
+// A fake unified audit-events repo (in-memory). Mirrors the real repo's two
+// write paths: record() always adds a row; recordRecurring() folds repeats onto
+// one row keyed by dedupKey (bumping occurrences + self-measuring the interval).
+function makeAuditEventsRepo(overrides = {}) {
+  const rows = [];
+  let seq = 0;
+  const iso = (v) => (v == null ? null : (v instanceof Date ? v.toISOString() : new Date(v).toISOString()));
+  return {
+    rows,
+    record: overrides.record || (async (e) => {
+      const id = (seq += 1);
+      const now = new Date().toISOString();
+      rows.push({
+        id, ts: now, actorType: e.actorType || 'user', actorId: e.actorId ?? null,
+        actorLabel: e.actorLabel ?? null, actorRole: e.actorRole ?? null, action: e.action,
+        targetType: e.targetType ?? null, targetId: e.targetId == null ? null : String(e.targetId),
+        targetLabel: e.targetLabel ?? null, method: e.method ?? null, path: e.path ?? null,
+        status: e.status ?? null, ip: e.ip ?? null, detail: e.detail ?? null,
+        repeatIntervalMs: e.repeatIntervalMs ?? null, occurrences: 1,
+        firstSeenAt: now, lastSeenAt: now, dedupKey: null,
+      });
+      return id;
+    }),
+    recordRecurring: overrides.recordRecurring || (async (e) => {
+      if (!e.dedupKey) throw new Error('recordRecurring requires a dedupKey');
+      const existing = rows.find((r) => r.dedupKey === e.dedupKey);
+      const now = new Date();
+      if (existing) {
+        existing.occurrences += 1;
+        if (existing.repeatIntervalMs == null) {
+          existing.repeatIntervalMs = e.repeatIntervalMs
+            ?? Math.max(0, Math.round((now.getTime() - new Date(existing.lastSeenAt).getTime())));
+        }
+        existing.lastSeenAt = now.toISOString();
+        return;
+      }
+      const id = (seq += 1);
+      rows.push({
+        id, ts: now.toISOString(), actorType: e.actorType || 'agent', actorId: e.actorId ?? null,
+        actorLabel: e.actorLabel ?? null, actorRole: e.actorRole ?? null, action: e.action,
+        targetType: e.targetType ?? null, targetId: e.targetId == null ? null : String(e.targetId),
+        targetLabel: e.targetLabel ?? null, method: null, path: null, status: null, ip: null,
+        detail: e.detail ?? null, repeatIntervalMs: e.repeatIntervalMs ?? null, occurrences: 1,
+        firstSeenAt: now.toISOString(), lastSeenAt: now.toISOString(), dedupKey: e.dedupKey,
+      });
+    }),
+    findAll: overrides.findAll || (async ({ actorType = null, action = null, limit = 100, offset = 0 } = {}) => {
+      let out = rows.slice().sort((a, b) => (a.lastSeenAt < b.lastSeenAt ? 1 : -1));
+      if (actorType) out = out.filter((r) => r.actorType === actorType);
+      if (action) out = out.filter((r) => r.action === action);
+      return out.slice(offset, offset + Math.min(limit, 500)).map((r) => ({ ...r, ts: iso(r.ts) }));
+    }),
+    distinctActions: overrides.distinctActions || (async () => [...new Set(rows.map((r) => r.action))].sort()),
+  };
+}
+
+// A fake unified audit-log repo (in-memory). record() appends; list() filters by
+// category/actor newest-first; categories() returns the distinct set.
+function makeAuditLogRepo(overrides = {}) {
+  const rows = [];
+  let seq = 0;
+  return {
+    rows,
+    record: overrides.record || (async (e) => { const id = (seq += 1); rows.push({ id, created_at: new Date().toISOString(), outcome: 'success', ...e }); return id; }),
+    list: overrides.list || (async ({ category = null, actorUserId = null, limit = 100 } = {}) =>
+      rows.filter((r) => (!category || r.category === category) && (actorUserId == null || r.actorUserId === actorUserId))
+        .slice().reverse().slice(0, limit)),
+    categories: overrides.categories || (async () => [...new Set(rows.map((r) => r.category))].sort()),
+  };
+}
+
+// A fake API-tokens repo (in-memory). Mirrors apiTokensRepository's surface so
+// both the admin routes and the auth middleware can be tested without a DB.
+function makeApiTokensRepo(overrides = {}) {
+  const rows = [];
+  let seq = 0;
+  return {
+    rows,
+    create: overrides.create || (async ({ name, tokenHash, tokenPrefix, role = 'viewer', createdByUserId = null, expiresAt = null }) => {
+      const row = { id: (seq += 1), name, token_prefix: tokenPrefix, token_hash: tokenHash, role, created_by_user_id: createdByUserId, created_at: new Date().toISOString(), last_used_at: null, expires_at: expiresAt, revoked_at: null };
+      rows.push(row);
+      const { token_hash, ...pub } = row;
+      return { ...pub, revoked: false, expired: false };
+    }),
+    findById: overrides.findById || (async (id) => { const r = rows.find((x) => x.id === id); if (!r) return null; const { token_hash, ...pub } = r; return { ...pub, revoked: r.revoked_at != null, expired: false }; }),
+    findAll: overrides.findAll || (async () => rows.map((r) => { const { token_hash, ...pub } = r; return { ...pub, revoked: r.revoked_at != null, expired: false }; })),
+    findActiveByHash: overrides.findActiveByHash || (async (hash) => { const r = rows.find((x) => x.token_hash === hash); if (!r || r.revoked_at != null) return null; return { id: r.id, name: r.name, role: r.role, expires_at: r.expires_at, revoked_at: r.revoked_at }; }),
+    touch: overrides.touch || (async (id) => { const r = rows.find((x) => x.id === id); if (r) r.last_used_at = new Date().toISOString(); }),
+    revoke: overrides.revoke || (async (id) => { const r = rows.find((x) => x.id === id && x.revoked_at == null); if (!r) return false; r.revoked_at = new Date().toISOString(); return true; }),
+  };
+}
+
 // A fake db with a ping() used by GET /health.
 function makeDb(overrides = {}) {
   return {
@@ -366,9 +459,16 @@ function makeLicenseManager(overrides = {}) {
 // license that doesn't include a feature.
 function makeFeatureGate(overrides = {}) {
   // Everything entitled by default (the four legacy modules + the packaged plan
-  // keys exercised by routes, e.g. sso_ldap). summary() keeps its legacy 4-key
-  // shape; plan keys are only surfaced via isFeatureEnabled.
-  const enabled = overrides.features || { analysis: true, assistant: true, alerting: true, geo: true, sso_ldap: true };
+  // keys exercised by routes). summary() keeps its legacy 4-key shape; plan keys
+  // are only surfaced via isFeatureEnabled. Tests that need a denial pass an
+  // explicit `features` map (or `isFeatureEnabled`).
+  const enabled = overrides.features || {
+    analysis: true, assistant: true, alerting: true, geo: true,
+    sso_ldap: true,
+    rbac: true, audit_log: true, api_access: true,
+    reports_csv: true, reports_pdf: true, reports_compliance: true,
+    alerts_email: true, alerts_webhook: true,
+  };
   return {
     isFeatureEnabled: overrides.isFeatureEnabled || ((f) => enabled[f] === true),
     summary: overrides.summary || (() => ({ analysis: !!enabled.analysis, assistant: !!enabled.assistant, alerting: !!enabled.alerting, geo: !!enabled.geo })),
@@ -801,6 +901,9 @@ function makeApp(overrides = {}) {
   // makeLicenseManager (or your own planService/usageService) to exercise limits.
   const agentsRepo = overrides.agentsRepo || makeAgentsRepo();
   const testPackagesRepo = overrides.testPackagesRepo || makeTestPackagesRepo();
+  const auditLogRepo = overrides.auditLogRepo || makeAuditLogRepo();
+  const apiTokensRepo = overrides.apiTokensRepo || makeApiTokensRepo();
+  const auditLogger = overrides.auditLogger || createAuditLogger({ auditLogRepo });
   const licenseManager = overrides.licenseManager || makeLicenseManager();
   const planService = overrides.planService || createPlanService({ licenseManager });
   const usageService =
@@ -818,6 +921,7 @@ function makeApp(overrides = {}) {
     incidentsRepo: overrides.incidentsRepo || makeIncidentsRepo(),
     thresholdsRepo: overrides.thresholdsRepo || makeIncidentThresholdsRepo(),
     incidentService: overrides.incidentService || makeIncidentService(),
+    installToolService: overrides.installToolService || null,
     licenseManager,
     planService,
     usageService,
@@ -846,6 +950,10 @@ function makeApp(overrides = {}) {
     releasePublicKey: overrides.releasePublicKey || '',
     releaseKeyService: overrides.releaseKeyService || makeReleaseKeyService(),
     auditRepo: overrides.auditRepo || makeAuditRepo(),
+    auditEventsRepo: overrides.auditEventsRepo || makeAuditEventsRepo(),
+    auditLogRepo,
+    apiTokensRepo,
+    auditLogger,
     integrationsRepo: overrides.integrationsRepo || makeIntegrationsRepo(),
     integrationAuditRepo: overrides.integrationAuditRepo || makeIntegrationAuditRepo(),
     integrationsDispatcher: overrides.integrationsDispatcher || makeIntegrationsDispatcher(),
@@ -923,6 +1031,9 @@ module.exports = {
   makeReleaseStore,
   makeReleaseKeyService,
   makeAuditRepo,
+  makeAuditEventsRepo,
+  makeAuditLogRepo,
+  makeApiTokensRepo,
   makeTestPackagesRepo,
   makeTestPackageRunner,
   makeSpeedtestResultsRepo,

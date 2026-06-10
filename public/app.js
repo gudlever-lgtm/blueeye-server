@@ -2706,6 +2706,20 @@ function interfaceTable(interfaces, source = null) {
 }
 
 // Latest probe results (newest per target). onDetail(r) fires from each row.
+// Diagnostic tools the agent can install on request (mirrors the server's
+// allowlist). Used to turn a "<tool> not installed" probe failure into an offer
+// to install it.
+const INSTALLABLE_TOOLS = ['traceroute', 'mtr', 'tcptraceroute'];
+
+// If a failed probe says a tool is missing (e.g. "traceroute not installed"),
+// returns that (installable) tool name, else null.
+function missingToolOf(r) {
+  if (!r || r.ok || !r.detail) return null;
+  const m = /([a-z][a-z0-9_-]*)\s+not installed/i.exec(String(r.detail));
+  const tool = m ? m[1].toLowerCase() : null;
+  return tool && INSTALLABLE_TOOLS.includes(tool) ? tool : null;
+}
+
 // Builds the cURL content-check controls (method + expectations) shared by both
 // probe forms. Returns { wrap, apply }: apply(body) copies any set expectation
 // onto the run-probe payload. Empty fields are omitted (no assertion made), so a
@@ -2729,22 +2743,45 @@ function curlInputs() {
   return { wrap, apply };
 }
 
-function probeLatestTable(rows, onDetail) {
+// `onInstall(tool, row)` is optional; when provided, a failed probe that names a
+// missing installable tool gets an "Install <tool>" button.
+function probeLatestTable(rows, onDetail, onInstall = null) {
   if (!rows.length) return el('div', { class: 'muted' }, 'No probe results yet — run one above.');
   return el('table', {},
     el('thead', {}, el('tr', {}, ...['Type', 'Target', 'Status', 'RTT', 'Loss', 'Jitter', 'Time', ''].map((h) => el('th', {}, h)))),
-    el('tbody', {}, ...rows.map((r) => el('tr', {},
-      el('td', {}, r.type),
-      el('td', {}, esc(r.target),
-        // curl/http carry a verification/cert explanation; surface it inline.
-        r.detail ? el('div', { class: 'muted small' }, esc(r.detail)) : null,
-        (r.type === 'curl' && r.contentType) ? el('div', { class: 'muted small' }, `${esc(r.contentType)}${r.bytes != null ? ` · ${r.bytes} B` : ''}`) : null),
-      el('td', {}, el('span', { class: `badge ${r.ok ? 'online' : 'offline'}` }, r.ok ? 'ok' : 'error')),
-      el('td', { class: 'num' }, r.rttMs != null ? `${r.rttMs} ms` : '–'),
-      el('td', { class: 'num' }, r.lossPct != null ? `${r.lossPct}%` : '–'),
-      el('td', { class: 'num' }, r.jitterMs != null ? `${r.jitterMs} ms` : '–'),
-      el('td', { class: 'muted' }, r.ts ? fmtTimeShort(new Date(r.ts).getTime()) : '–'),
-      el('td', {}, el('button', { class: 'small ghost', onclick: () => onDetail(r) }, r.type === 'traceroute' ? 'Path' : 'History'))))));
+    el('tbody', {}, ...rows.map((r) => {
+      const tool = onInstall ? missingToolOf(r) : null;
+      return el('tr', {},
+        el('td', {}, r.type),
+        el('td', {}, esc(r.target),
+          // curl/http carry a verification/cert explanation; a failed probe carries
+          // its reason (e.g. "traceroute not installed"). Surface it inline.
+          r.detail ? el('div', { class: 'muted small' }, esc(r.detail)) : null,
+          (r.type === 'curl' && r.contentType) ? el('div', { class: 'muted small' }, `${esc(r.contentType)}${r.bytes != null ? ` · ${r.bytes} B` : ''}`) : null),
+        el('td', {}, el('span', { class: `badge ${r.ok ? 'online' : 'offline'}`, title: !r.ok && r.detail ? r.detail : null }, r.ok ? 'ok' : 'error')),
+        el('td', { class: 'num' }, r.rttMs != null ? `${r.rttMs} ms` : '–'),
+        el('td', { class: 'num' }, r.lossPct != null ? `${r.lossPct}%` : '–'),
+        el('td', { class: 'num' }, r.jitterMs != null ? `${r.jitterMs} ms` : '–'),
+        el('td', { class: 'muted' }, r.ts ? fmtTimeShort(new Date(r.ts).getTime()) : '–'),
+        el('td', {},
+          tool ? el('button', { class: 'small', title: `Install ${tool} on the agent host`, onclick: (e) => onInstall(tool, r, e.target) }, `Install ${tool}`) : null,
+          el('button', { class: 'small ghost', onclick: () => onDetail(r) }, r.type === 'traceroute' ? 'Path' : 'History')));
+    })));
+}
+
+// Posts an install-tool request for one agent and reflects the outcome on the
+// clicked button. Shared by the Probes view and the agent detail page.
+async function requestToolInstall(agentId, tool, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = `Installing ${tool}…`; }
+  try {
+    const res = await api(`/agents/${encodeURIComponent(agentId)}/install-tool`, { method: 'POST', body: { tool } });
+    if (res && res.accepted) toast(`Installing ${tool} on the agent — watch Reporting → Audit for the result.`);
+    else toast(`Agent could not start the install${res && res.reason ? ` (${res.reason})` : ''}.`, true);
+  } catch (e) {
+    toast(e.status === 409 ? 'The agent is not connected right now.' : errText(e), true);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = `Install ${tool}`; }
+  }
 }
 
 // Interactive path map: a directed, weighted hop graph for a traceroute target
@@ -3064,7 +3101,7 @@ views.probes = async () => {
     let data;
     try { data = await api(`/api/probes/latest?agentId=${encodeURIComponent(id)}`); } catch { return; }
     const rows = data.results || [];
-    latestHost.replaceChildren(probeLatestTable(rows, showDetail));
+    latestHost.replaceChildren(probeLatestTable(rows, showDetail, (tool, r, btn) => requestToolInstall(agentSel.value, tool, btn)));
   }
 
   async function showDetail(r) {
@@ -3591,7 +3628,7 @@ views.agent = async () => {
   async function refreshProbes() {
     let data;
     try { data = await api(`/api/probes/latest?agentId=${encodeURIComponent(id)}`); } catch { return; }
-    probeLatestHost.replaceChildren(probeLatestTable(data.results || [], async (r) => { probeDetailHost.replaceChildren(await probeDetail(r, id)); }));
+    probeLatestHost.replaceChildren(probeLatestTable(data.results || [], async (r) => { probeDetailHost.replaceChildren(await probeDetail(r, id)); }, (tool, r, btn) => requestToolInstall(id, tool, btn)));
   }
 
   // ---- Interfaces ----
@@ -5009,10 +5046,10 @@ let settingsTab = null;
 // so related controls sit together and the page stays scannable as it grows. Each
 // tab is [key, label, adminOnly]; non-admins only ever see the personal section.
 const SETTINGS_GROUPS = [
-  ['Access & security', [['users', 'Users', true], ['auth', 'Authentication', true], ['agentkey', 'Agent key', true]]],
+  ['Access & security', [['users', 'Users', true], ['auth', 'Authentication', true], ['apitokens', 'API tokens', true], ['auditlog', 'Audit log', true], ['agentkey', 'Agent key', true]]],
   ['Detection & alerts', [['analyse', 'Analysis', true], ['alerting', 'Alerting', true], ['maintenance', 'Maintenance', true]]],
   ['Data', [['retention', 'Retention', true], ['types', 'Traffic types', true], ['map', 'Map', true]]],
-  ['System', [['updates', 'Updates', true]]],
+  ['System', [['updates', 'Updates', true], ['agents', 'Agents', true]]],
   ['Personal', [['appearance', 'Appearance', false], ['license', 'License', false]]],
 ];
 views.settings = async () => {
@@ -5043,8 +5080,11 @@ views.settings = async () => {
     maintenance: settingsMaintenanceView,
     updates: settingsUpdatesView,
     agentkey: settingsAgentKeyView,
+    agents: settingsAgentsView,
     retention: settingsRetentionView,
     auth: settingsAuthView,
+    apitokens: settingsApiTokensView,
+    auditlog: settingsAuditLogView,
   };
   let content;
   try {
@@ -5240,6 +5280,24 @@ async function settingsAnalyseView() {
 // Speed-test health thresholds: flag agents on the Overview when their latest
 // download/upload falls below a floor (0 = that floor is off). Folded into the
 // agent's health verdict like loss/latency. Admin, runtime-editable.
+// Settings → Agents: agent-management toggles. Currently the opt-in for the
+// server to auto-install a missing diagnostic tool when a probe reports it.
+async function settingsAgentsView() {
+  const data = await api('/api/settings');
+  return el('div', { class: 'settings-grid' }, agentsSettingsCard(data.agents));
+}
+
+function agentsSettingsCard(a) {
+  return settingsFormCard({
+    title: 'Diagnostic tools',
+    values: a || { autoInstallTools: false },
+    endpoint: '/api/settings/agents',
+    fields: [
+      { key: 'autoInstallTools', label: 'Auto-install missing tools', type: 'checkbox', hint: 'When on, a probe that fails because a tool is missing on the host (e.g. "traceroute not installed") makes the server push an install to that agent automatically. The agent only ever installs tools on its own allowlist (traceroute / mtr / tcptraceroute), never an arbitrary package. Off = install manually from the Probes page. Either way the request + outcome is recorded under Reporting → Audit.' },
+    ],
+  });
+}
+
 function throughputSettingsCard(t) {
   return settingsFormCard({
     title: 'Throughput (speed-test) health',
@@ -5973,6 +6031,134 @@ function flowCategoriesCard(categories) {
   return card;
 }
 function settingsCard(title, ...body) { return el('div', { class: 'settings-card' }, el('h3', {}, title), ...body); }
+
+// Shared placeholder for a settings tab whose licence feature isn't included —
+// the server refuses the API too (403 feature_not_available), so this explains
+// the missing controls and points at the matrix.
+function featureUpsell(title, message) {
+  return el('div', {}, el('div', { class: 'settings-grid' },
+    el('div', { class: 'settings-card' }, el('h3', {}, title),
+      el('p', { class: 'muted' }, message, ' ', settingsLink('license', 'See Settings → License'), ' for the full feature matrix.'),
+      el('span', { class: 'badge offline' }, 'Not included in your plan'))));
+}
+
+// One-shot holder for a freshly minted API token, shown once after creation
+// (the server never returns the plaintext again).
+let apiTokenJustCreated = null;
+
+// Settings → API tokens: mint/list/revoke programmatic tokens (licence feature
+// api_access, Professional+). Admin-only. The secret is shown exactly once.
+async function settingsApiTokensView() {
+  const root = el('div');
+  let tokens;
+  try {
+    tokens = await api('/api/api-tokens');
+  } catch (err) {
+    if (err.status === 403) return featureUpsell('API access', 'Programmatic API tokens are part of the BlueEye Professional plan and above, so they can’t be managed here.');
+    throw err;
+  }
+
+  root.append(el('p', { class: 'muted settings-intro' },
+    'Issue tokens for programmatic access to the BlueEye API (CI jobs, scripts, integrations). A token authenticates with a fixed role and is sent as ',
+    el('code', {}, 'Authorization: Bearer <token>'), ' or ', el('code', {}, 'X-API-Key: <token>'), '. The secret is shown only once, on creation.'));
+
+  // Banner with the just-created secret (cleared on the next render).
+  if (apiTokenJustCreated) {
+    const secret = apiTokenJustCreated;
+    apiTokenJustCreated = null;
+    root.append(el('div', { class: 'settings-card', style: 'border-color: var(--ok)' },
+      el('h3', {}, 'New API token — copy it now'),
+      el('p', { class: 'muted' }, 'This is the only time the token is shown. Store it securely; it cannot be retrieved again.'),
+      el('pre', { class: 'token-secret', style: 'white-space: pre-wrap; word-break: break-all;' }, secret),
+      el('button', { class: 'small', onclick: () => { navigator.clipboard && navigator.clipboard.writeText(secret); toast('Token copied'); } }, 'Copy')));
+  }
+
+  // Create form.
+  const nameInput = el('input', { type: 'text', placeholder: 'e.g. CI pipeline', maxlength: '120' });
+  const roleSelect = el('select', {}, ...['viewer', 'operator', 'admin'].map((r) => el('option', { value: r }, r)));
+  const expInput = el('input', { type: 'date' });
+  const createBtn = el('button', { class: 'small', onclick: async () => {
+    const name = nameInput.value.trim();
+    if (!name) { toast('Name is required', true); return; }
+    const bodyReq = { name, role: roleSelect.value };
+    if (expInput.value) bodyReq.expiresAt = new Date(`${expInput.value}T00:00:00Z`).toISOString();
+    try {
+      const created = await api('/api/api-tokens', { method: 'POST', body: bodyReq });
+      apiTokenJustCreated = created.token;
+      toast('API token created');
+      render();
+    } catch (err) { toast(err.message, true); }
+  } }, 'Create token');
+  root.append(settingsCard('Create a token',
+    el('div', { class: 'form-row' }, el('label', {}, 'Name', nameInput)),
+    el('div', { class: 'form-row' }, el('label', {}, 'Role', roleSelect)),
+    el('div', { class: 'form-row' }, el('label', {}, 'Expires (optional)', expInput)),
+    createBtn));
+
+  // Existing tokens.
+  const rows = (tokens || []).map((t) => el('tr', { class: t.revoked ? 'muted' : '' },
+    el('td', {}, t.name),
+    el('td', {}, el('code', {}, t.token_prefix + '…')),
+    el('td', {}, el('span', { class: `badge role-${t.role}` }, t.role)),
+    el('td', {}, fmtDate(t.created_at)),
+    el('td', {}, t.last_used_at ? fmtDate(t.last_used_at) : '–'),
+    el('td', {}, t.expires_at ? fmtDate(t.expires_at) : 'never'),
+    el('td', {}, t.revoked
+      ? el('span', { class: 'badge revoked' }, 'revoked')
+      : el('button', { class: 'small danger', onclick: async () => {
+          if (!confirm(`Revoke token "${t.name}"? Any client using it will stop working.`)) return;
+          try { await api(`/api/api-tokens/${t.id}`, { method: 'DELETE' }); toast('Token revoked'); render(); }
+          catch (err) { toast(err.message, true); }
+        } }, 'Revoke'))));
+  root.append(settingsCard('Tokens',
+    tokens && tokens.length
+      ? el('div', { class: 'tablewrap' }, el('table', {},
+          el('thead', {}, el('tr', {}, ...['Name', 'Prefix', 'Role', 'Created', 'Last used', 'Expires', ''].map((h) => el('th', {}, h)))),
+          el('tbody', {}, ...rows)))
+      : el('p', { class: 'muted' }, 'No API tokens yet.')));
+  return root;
+}
+
+// Settings → Audit log: the unified who-did-what trail (licence feature
+// audit_log, Professional+). Admin-only, read-only.
+let auditLogCategory = '';
+async function settingsAuditLogView() {
+  const root = el('div');
+  let entries;
+  try {
+    const qs = auditLogCategory ? `?category=${encodeURIComponent(auditLogCategory)}&limit=200` : '?limit=200';
+    entries = await api(`/api/audit-log${qs}`);
+  } catch (err) {
+    if (err.status === 403) return featureUpsell('Audit log', 'The audit log is part of the BlueEye Professional plan and above, so it isn’t available here.');
+    throw err;
+  }
+  const categories = await api('/api/audit-log/categories').catch(() => []);
+
+  root.append(el('p', { class: 'muted settings-intro' },
+    'A record of security and administrative events — sign-ins, user and role changes, licence actions, report generation and API-token management. Metadata only; never passwords, tokens or payloads.'));
+
+  const filter = el('select', { onchange: (e) => { auditLogCategory = e.target.value; render(); } },
+    el('option', { value: '' }, 'All categories'),
+    ...(Array.isArray(categories) ? categories : []).map((c) => el('option', { value: c, selected: c === auditLogCategory ? '' : undefined }, c)));
+  root.append(el('div', { class: 'form-row' }, el('label', {}, 'Category', filter)));
+
+  const outcomeBadge = (o) => el('span', { class: `badge ${o === 'success' ? 'ok' : o === 'denied' ? 'warn' : 'bad'}` }, o);
+  const rows = (entries || []).map((e) => el('tr', {},
+    el('td', {}, fmtDate(e.created_at)),
+    el('td', {}, e.category),
+    el('td', {}, e.action),
+    el('td', {}, outcomeBadge(e.outcome)),
+    el('td', {}, e.actor_email || '(system)', e.actor_role ? el('span', { class: 'muted' }, ` (${e.actor_role})`) : null),
+    el('td', {}, e.target || '–'),
+    el('td', {}, e.detail || '–'),
+    el('td', {}, e.ip || '–')));
+  root.append(entries && entries.length
+    ? el('div', { class: 'tablewrap' }, el('table', {},
+        el('thead', {}, el('tr', {}, ...['Time', 'Category', 'Action', 'Outcome', 'Actor', 'Target', 'Detail', 'IP'].map((h) => el('th', {}, h)))),
+        el('tbody', {}, ...rows)))
+    : el('p', { class: 'muted' }, 'No audit events recorded yet.'));
+  return root;
+}
 function boolText(v) { return v === true ? 'yes' : v === false ? 'no' : String(v ?? '–'); }
 function kvList(obj, labels) {
   if (!obj) return el('p', { class: 'muted' }, '–');
@@ -6236,18 +6422,24 @@ views.license = async () => {
     const head = el('tr', {}, el('th', {}, 'Feature'),
       ...matrix.plans.map((p) => el('th', { class: p.plan_key === active ? 'active' : '' }, p.plan_name)));
     const body = matrix.features.map((f) => {
+      const roadmap = f.status === 'roadmap';
       const cells = matrix.plans.map((p) => {
         const on = p.features[f.key];
-        return el('td', { class: p.plan_key === active ? 'active' : '' }, on ? '✓' : '–');
+        // A roadmap feature is priced into the plan but not built yet: show
+        // "Roadmap" where the tier would include it, never a tick.
+        const mark = on ? (roadmap ? el('span', { class: 'badge roadmap' }, 'Roadmap') : '✓') : '–';
+        return el('td', { class: p.plan_key === active ? 'active' : '' }, mark);
       });
       const activePlan = matrix.plans.find((p) => p.plan_key === active);
       const entitled = activePlan && activePlan.features[f.key];
-      return el('tr', { class: entitled ? '' : 'muted' },
-        el('td', {}, f.label), ...cells);
+      const label = roadmap
+        ? el('td', {}, f.label, ' ', el('span', { class: 'badge roadmap' }, 'Roadmap'))
+        : el('td', {}, f.label);
+      return el('tr', { class: (entitled && !roadmap) ? '' : 'muted' }, label, ...cells);
     });
     root.append(el('div', { class: 'tablewrap' },
       el('table', { class: 'matrix' }, el('thead', {}, head), el('tbody', {}, ...body))));
-    root.append(el('p', { class: 'muted' }, 'Features not included in your plan are greyed out — contact your administrator or upgrade the licence to enable them.'));
+    root.append(el('p', { class: 'muted' }, 'Features not included in your plan are greyed out — contact your administrator or upgrade the licence to enable them. Rows marked ', el('span', { class: 'badge roadmap' }, 'Roadmap'), ' are planned and not available yet (tracked in ROADMAP.md).'));
   }
 
   root.append(el('p', { class: 'muted' }, 'License renewal is done with the provider. Once renewed, press "Re-validate now" to fetch the updated status immediately (otherwise it is checked automatically every 6 hours).'));
@@ -6389,6 +6581,10 @@ async function nis2Print(path) {
 views.reporting = async () => {
   const root = el('div', { class: 'nis2' });
   const sections = [['nis2', 'NIS2'], ['generator', 'Report Generator']];
+  // Audit is RBAC-gated: only admins may see who did what on the server.
+  if (role === 'admin') sections.push(['audit', 'Audit']);
+  // Guard against a stale section the current user may no longer access.
+  if (!sections.some(([k]) => k === reportingState.section)) reportingState.section = 'nis2';
   const bar = el('div', { class: 'subtabs nis2-subtabs' },
     ...sections.map(([key, label]) => el('button', {
       class: `small ghost${reportingState.section === key ? ' active' : ''}`,
@@ -6399,7 +6595,10 @@ views.reporting = async () => {
   const body = el('div', { class: 'nis2-body' }, el('div', { class: 'empty' }, 'Loading…'));
   root.append(body);
   try {
-    body.replaceChildren(reportingState.section === 'generator' ? await reportGenerator() : await nis2Module());
+    body.replaceChildren(
+      reportingState.section === 'generator' ? await reportGenerator()
+        : reportingState.section === 'audit' ? await auditModule()
+          : await nis2Module());
   } catch (err) { body.replaceChildren(el('div', { class: 'empty error' }, err.message)); }
   return root;
 };
@@ -6759,6 +6958,94 @@ async function nis2Audit() {
   return wrap;
 }
 
+// ---- Audit (server-wide trail, admin only) --------------------------------
+// Surfaced under Reporting → Audit. Shows who did what on the server (user
+// actions) and what each agent performed (traffic/probes). Recurring activity
+// is folded onto one row annotated "Repeats every …", per the audit design.
+const auditState = { actorType: '', action: '' };
+
+function fmtInterval(ms) {
+  if (!ms || ms <= 0) return '';
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.round(s / 60)}m`;
+  return fmtDuration(s);
+}
+
+async function auditModule() {
+  const wrap = el('div', { class: 'nis2-inner' });
+  wrap.append(el('h3', { class: 'nis2-h3' }, 'Audit trail'));
+  wrap.append(el('p', { class: 'muted' }, 'Actions performed by users on the server, and what each agent reported — with when, who and what. Repeated activity (continuous reporting, scheduled probes) is recorded once and annotated with how often it repeats.'));
+
+  // Filters: actor type + action, plus refresh / CSV export.
+  const actorSel = el('select', { class: 'small', onchange: () => { auditState.actorType = actorSel.value; load(); } },
+    ...[['', 'All actors'], ['user', 'Users'], ['agent', 'Agents'], ['system', 'System']]
+      .map(([v, l]) => el('option', { value: v, selected: auditState.actorType === v }, l)));
+  const actionSel = el('select', { class: 'small', onchange: () => { auditState.action = actionSel.value; load(); } },
+    el('option', { value: '' }, 'All actions'));
+  const csvHref = () => {
+    const p = new URLSearchParams();
+    if (auditState.actorType) p.set('actorType', auditState.actorType);
+    if (auditState.action) p.set('action', auditState.action);
+    return `/api/audit/export.csv${p.toString() ? `?${p}` : ''}`;
+  };
+  const exportBtn = el('button', { class: 'small ghost', onclick: () => nis2Download(csvHref(), 'audit.csv') }, '⤓ CSV');
+  wrap.append(el('div', { class: 'subtabs', style: 'gap:8px;align-items:center' },
+    actorSel, actionSel, el('button', { class: 'small ghost', onclick: () => load() }, '↻ Refresh'), exportBtn));
+
+  const body = el('div', { class: 'nis2-body' }, el('div', { class: 'empty' }, 'Loading…'));
+  wrap.append(body);
+
+  // Populate the action dropdown once.
+  try {
+    const actions = await api('/api/audit/actions');
+    for (const a of actions) actionSel.append(el('option', { value: a, selected: auditState.action === a }, a));
+  } catch { /* dropdown stays "All actions" */ }
+
+  async function load() {
+    body.replaceChildren(el('div', { class: 'empty' }, 'Loading…'));
+    const p = new URLSearchParams();
+    if (auditState.actorType) p.set('actorType', auditState.actorType);
+    if (auditState.action) p.set('action', auditState.action);
+    p.set('limit', '300');
+    let entries;
+    try { entries = await api(`/api/audit?${p}`); }
+    catch (err) { body.replaceChildren(el('div', { class: 'empty error' }, err.message)); return; }
+    if (!entries.length) { body.replaceChildren(el('div', { class: 'empty' }, 'No audited activity yet.')); return; }
+
+    const head = ['When', 'Actor', 'Action', 'Target', 'Repeats', 'Details'];
+    const rows = entries.map((e) => {
+      const actorCls = e.actorType === 'agent' ? 'neutral' : e.actorType === 'system' ? 'warn' : 'ok';
+      const target = e.targetLabel || (e.targetType ? `${e.targetType}${e.targetId ? ` #${e.targetId}` : ''}` : (e.targetId ? `#${e.targetId}` : '–'));
+      let repeats = '–';
+      if (e.occurrences > 1 || e.repeatIntervalMs) {
+        const iv = fmtInterval(e.repeatIntervalMs);
+        repeats = `Repeats${iv ? ` every ${iv}` : ''} · ×${e.occurrences}${e.lastSeenAt ? ` · last ${fmtDate(e.lastSeenAt)}` : ''}`;
+      }
+      const detailBits = [];
+      if (e.method && e.path) detailBits.push(`${e.method} ${e.path}`);
+      // A failed probe carries a plain reason ("traceroute not installed") —
+      // show it as text, not raw JSON.
+      if (e.detail && e.detail.reason) detailBits.push(String(e.detail.reason));
+      else if (e.detail && Object.keys(e.detail).length) detailBits.push(JSON.stringify(e.detail));
+      if (e.ip) detailBits.push(e.ip);
+      return el('tr', {},
+        el('td', {}, fmtDate(e.ts)),
+        el('td', {}, nbadge(e.actorType, actorCls), ' ', el('span', {}, e.actorLabel || (e.actorId != null ? `#${e.actorId}` : '–')),
+          e.actorRole ? el('span', { class: 'muted' }, ` (${e.actorRole})`) : null),
+        el('td', {}, nbadge(e.action, e.action.endsWith('.delete') ? 'crit' : (e.action.endsWith('-failed') ? 'warn' : 'neutral'))),
+        el('td', {}, target),
+        el('td', { class: e.occurrences > 1 ? 'muted' : '' }, repeats),
+        el('td', { class: 'muted', style: 'max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap', title: detailBits.join(' · ') }, detailBits.join(' · ') || '–'));
+    });
+    body.replaceChildren(el('div', { class: 'tablewrap' }, el('table', {},
+      el('thead', {}, el('tr', {}, ...head.map((h) => el('th', {}, h)))), el('tbody', {}, ...rows))));
+  }
+
+  await load();
+  return wrap;
+}
+
 // ---- NIS2: Get-started guide (shown when there is no data yet) -------------
 function nis2GetStarted() {
   const step = (n, title, desc, btn) => el('li', { class: 'nis2-gs-step' },
@@ -6942,6 +7229,8 @@ PAGE_INFO.reporting = {
     el('h4', {}, 'Reports & audit'),
     el('p', {}, 'Generate snapshot reports (the frozen metrics let the next report show the trend). Reports are approved by an admin/compliance role. Every change to a risk, control or incident is written to the audit trail.'),
     el('p', { class: 'muted' }, 'PDF export opens a clean, print-ready document — use your browser’s “Save as PDF”.'),
+    el('h4', {}, 'Audit (admin only)'),
+    el('p', {}, 'A server-wide audit trail: which user did what (login, and every create/update/delete) and what each agent performed (traffic measurements, probes) — each with when, who and what. Repeated activity such as continuous reporting or scheduled probes is recorded once and annotated “Repeats every …” rather than spamming the log. Visible only to administrators; exportable to CSV.'),
   ],
 };
 

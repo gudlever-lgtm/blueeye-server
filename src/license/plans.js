@@ -18,27 +18,35 @@
 // ("This feature requires BlueEye Professional"). The four legacy module keys
 // (analysis/assistant/alerting/geo) are intentionally NOT here — those stay
 // governed by the signed proof's own `features` map for backward compatibility.
+//
+// `status` records whether the capability is actually SHIPPED or still on the
+// ROADMAP. The matrix endpoint and dashboard surface this so a plan column can
+// honestly distinguish "you have it" from "this is planned" (rendered as a
+// "Roadmap" badge instead of a tick). `ROADMAP.md` at the repo root tracks the
+// same list; keep the two in step. Defaults to 'available' when omitted.
+//   available — implemented end-to-end and gated by this key.
+//   roadmap   — catalogued + priced, but not built yet (do them one at a time).
 const FEATURE_CATALOG = {
-  dashboard_basic: { label: 'Basic dashboard', minPlan: 'pilot' },
-  dashboard_advanced: { label: 'Advanced dashboard', minPlan: 'professional' },
-  alerts_email: { label: 'E-mail alerts', minPlan: 'professional' },
-  alerts_webhook: { label: 'Webhook alerts', minPlan: 'professional' },
-  reports_basic: { label: 'Basic reports', minPlan: 'pilot' },
-  reports_pdf: { label: 'PDF reports', minPlan: 'professional' },
-  reports_csv: { label: 'CSV reports', minPlan: 'professional' },
-  reports_sla: { label: 'SLA / availability report', minPlan: 'professional' },
-  reports_compliance: { label: 'Compliance report pack', minPlan: 'enterprise' },
-  rbac: { label: 'Role-based access control', minPlan: 'professional' },
-  audit_log: { label: 'Audit log', minPlan: 'professional' },
-  api_access: { label: 'API access', minPlan: 'professional' },
-  sso_ldap: { label: 'LDAP / Active Directory auth', minPlan: 'enterprise' },
-  sso_oidc: { label: 'SSO (OIDC)', minPlan: 'enterprise' },
-  sso_saml: { label: 'SSO (SAML)', minPlan: 'enterprise' },
-  ha_deployment: { label: 'High-availability deployment', minPlan: 'enterprise' },
-  offline_license: { label: 'Offline license validation', minPlan: 'enterprise' },
-  msp_multitenant: { label: 'MSP multi-tenancy', minPlan: 'msp' },
-  security_pack: { label: 'Security pack', minPlan: 'enterprise' },
-  premium_support: { label: 'Premium / priority support', minPlan: 'enterprise' },
+  dashboard_basic: { label: 'Basic dashboard', minPlan: 'pilot', status: 'available' },
+  dashboard_advanced: { label: 'Advanced dashboard', minPlan: 'professional', status: 'roadmap' },
+  alerts_email: { label: 'E-mail alerts', minPlan: 'professional', status: 'available' },
+  alerts_webhook: { label: 'Webhook alerts', minPlan: 'professional', status: 'available' },
+  reports_basic: { label: 'Basic reports', minPlan: 'pilot', status: 'available' },
+  reports_pdf: { label: 'PDF reports', minPlan: 'professional', status: 'available' },
+  reports_csv: { label: 'CSV reports', minPlan: 'professional', status: 'available' },
+  reports_sla: { label: 'SLA / availability report', minPlan: 'professional', status: 'available' },
+  reports_compliance: { label: 'Compliance report pack', minPlan: 'enterprise', status: 'available' },
+  rbac: { label: 'Role-based access control', minPlan: 'professional', status: 'available' },
+  audit_log: { label: 'Audit log', minPlan: 'professional', status: 'available' },
+  api_access: { label: 'API access', minPlan: 'professional', status: 'available' },
+  sso_ldap: { label: 'LDAP / Active Directory auth', minPlan: 'enterprise', status: 'available' },
+  sso_oidc: { label: 'SSO (OIDC)', minPlan: 'enterprise', status: 'roadmap' },
+  sso_saml: { label: 'SSO (SAML)', minPlan: 'enterprise', status: 'roadmap' },
+  ha_deployment: { label: 'High-availability deployment', minPlan: 'enterprise', status: 'roadmap' },
+  offline_license: { label: 'Offline license validation', minPlan: 'enterprise', status: 'available' },
+  msp_multitenant: { label: 'MSP multi-tenancy', minPlan: 'msp', status: 'roadmap' },
+  security_pack: { label: 'Security pack', minPlan: 'enterprise', status: 'roadmap' },
+  premium_support: { label: 'Premium / priority support', minPlan: 'enterprise', status: 'available' },
 };
 
 const ALL_FEATURE_KEYS = Object.keys(FEATURE_CATALOG);
@@ -57,6 +65,14 @@ const MODULE_PLAN_TIER = {
   alerting: 'professional',
   assistant: 'enterprise',
 };
+// Convenience splits over FEATURE_CATALOG.status, for the UI legend, the matrix
+// and tests. A feature with no explicit status counts as 'available'.
+function featureStatus(featureKey) {
+  const meta = FEATURE_CATALOG[featureKey];
+  return meta && meta.status === 'roadmap' ? 'roadmap' : 'available';
+}
+const ROADMAP_FEATURE_KEYS = ALL_FEATURE_KEYS.filter((k) => featureStatus(k) === 'roadmap');
+const AVAILABLE_FEATURE_KEYS = ALL_FEATURE_KEYS.filter((k) => featureStatus(k) === 'available');
 
 // Shared feature bundles, composed below so each tier visibly extends the prior.
 const PRO_FEATURES = [
@@ -252,6 +268,9 @@ module.exports = {
   FEATURE_CATALOG,
   ALL_FEATURE_KEYS,
   MODULE_PLAN_TIER,
+  ROADMAP_FEATURE_KEYS,
+  AVAILABLE_FEATURE_KEYS,
+  featureStatus,
   getPlan,
   planDisplayName,
   meetsFeatureTier,

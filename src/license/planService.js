@@ -5,6 +5,8 @@ const {
   PLAN_ORDER,
   FEATURE_CATALOG,
   ALL_FEATURE_KEYS,
+  MODULE_PLAN_TIER,
+  featureStatus,
   getPlan,
   planDisplayName,
 } = require('./plans');
@@ -115,6 +117,23 @@ function createPlanService({ licenseManager = null, configPlan = '' } = {}) {
     return Boolean(getCurrentPlan().is_enterprise);
   }
 
+  // Which package each legacy module (analysis/assistant/alerting/geo) is sold
+  // under — for UI "Requires BlueEye <plan>" labels only (no enforcement effect;
+  // those modules are gated by the signed proof, see plans.js MODULE_PLAN_TIER).
+  function moduleRequirements() {
+    const out = {};
+    for (const [moduleKey, planKey] of Object.entries(MODULE_PLAN_TIER)) {
+      const p = getPlan(planKey);
+      if (!p) continue;
+      out[moduleKey] = {
+        required_plan: p.plan_key,
+        required_plan_name: p.plan_name, // short, e.g. "Professional"
+        required_plan_label: planDisplayName(p.plan_key), // full, e.g. "BlueEye Professional"
+      };
+    }
+    return out;
+  }
+
   // A compact, UI-ready summary of the active plan + its features + limits.
   function summary() {
     const plan = getCurrentPlan();
@@ -131,6 +150,7 @@ function createPlanService({ licenseManager = null, configPlan = '' } = {}) {
         history_days: getPlanLimit('history_days'),
       },
       features: getFeatures(),
+      modules: moduleRequirements(),
       price_reference_eur: plan.price_reference_eur,
       price_reference_dkk: plan.price_reference_dkk,
       price_from: !!plan.price_from,
@@ -161,6 +181,7 @@ function createPlanService({ licenseManager = null, configPlan = '' } = {}) {
       key,
       label: FEATURE_CATALOG[key].label,
       minPlan: FEATURE_CATALOG[key].minPlan,
+      status: featureStatus(key), // 'available' | 'roadmap' — UI shows a badge for roadmap
     }));
     return { activePlan: getPlanKey(), plans, features: featureList };
   }
@@ -171,6 +192,7 @@ function createPlanService({ licenseManager = null, configPlan = '' } = {}) {
     getPlanLimit,
     hasFeature,
     getFeatures,
+    moduleRequirements,
     upgradeHint,
     isMsp,
     isEnterprise,

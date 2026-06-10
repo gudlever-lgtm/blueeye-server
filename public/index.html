@@ -35,21 +35,39 @@
           <span class="brand-mark" aria-hidden="true">◉</span>
           <span class="brand-name">BlueEye <span class="muted">server</span></span>
         </div>
+        <!-- Navigation is grouped into categories and each item declares the
+             minimum role that may use it (data-min-role, default viewer). app.js
+             hides items above the user's role and collapses any empty category. -->
         <nav class="tabs">
-          <button data-view="fleet" class="active">Overview</button>
-          <button data-view="overview">Traffic</button>
-          <button data-view="map">Sites</button>
-          <button data-view="geo" data-feature="geo">Destinations</button>
-          <button data-view="agents">Agents</button>
-          <button data-view="interfaces">Interfaces</button>
-          <button data-view="nics">NICs</button>
-          <button data-view="probes">Probes &amp; Tests</button>
-          <button data-view="flows">Flows</button>
-          <button data-view="findings" data-feature="analysis">Analysis</button>
-          <button data-view="reporting">Reporting</button>
-          <button data-view="locations">Locations</button>
-          <button data-view="enrollment">Enrollment</button>
-          <button data-view="settings">Settings</button>
+          <div class="nav-group" data-category="Monitoring">
+            <span class="nav-group-label">Monitoring</span>
+            <button data-view="fleet" class="active">Overview</button>
+            <button data-view="overview">Traffic</button>
+            <button data-view="map">Sites</button>
+            <button data-view="geo" data-feature="geo">Destinations</button>
+          </div>
+          <div class="nav-group" data-category="Fleet">
+            <span class="nav-group-label">Fleet</span>
+            <button data-view="agents">Agents</button>
+            <button data-view="interfaces">Interfaces</button>
+            <button data-view="nics">NICs</button>
+          </div>
+          <div class="nav-group" data-category="Diagnostics">
+            <span class="nav-group-label">Diagnostics</span>
+            <button data-view="probes">Probes &amp; Tests</button>
+            <button data-view="flows">Flows</button>
+          </div>
+          <div class="nav-group" data-category="Insights">
+            <span class="nav-group-label">Insights</span>
+            <button data-view="findings" data-feature="analysis">Analysis</button>
+            <button data-view="reporting">Reporting</button>
+          </div>
+          <div class="nav-group" data-category="Administration">
+            <span class="nav-group-label">Administration</span>
+            <button data-view="locations">Locations</button>
+            <button data-view="enrollment" data-min-role="operator">Enrollment</button>
+            <button data-view="settings">Settings</button>
+          </div>
         </nav>
         <div class="sidebar-foot" id="sidebar-foot">BlueEye server</div>
       </aside>

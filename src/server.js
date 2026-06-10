@@ -7,6 +7,10 @@ const { createLocationsRepository } = require('./repositories/locationsRepositor
 const { createUsersRepository } = require('./repositories/usersRepository');
 const { createAgentsRepository } = require('./repositories/agentsRepository');
 const { createAgentActionAuditRepository } = require('./repositories/agentActionAuditRepository');
+const { createAuditEventsRepository } = require('./repositories/auditEventsRepository');
+const { createAuditLogRepository } = require('./repositories/auditLogRepository');
+const { createApiTokensRepository } = require('./repositories/apiTokensRepository');
+const { createAuditLogger } = require('./services/auditLogger');
 const { createEnrollmentCodesRepository } = require('./repositories/enrollmentCodesRepository');
 const { createEnrollmentStore } = require('./services/enrollmentStore');
 const { createAgentTokensRepository } = require('./repositories/agentTokensRepository');
@@ -15,6 +19,7 @@ const { createProbeResultsRepository } = require('./repositories/probeResultsRep
 const { createIncidentsRepository } = require('./repositories/incidentsRepository');
 const { createIncidentThresholdsRepository } = require('./repositories/incidentThresholdsRepository');
 const { createIncidentService } = require('./incidents/incidentService');
+const { createInstallToolService } = require('./services/installToolService');
 const { createArtifactStore } = require('./enroll/artifactStore');
 const { createAgentSourceStore } = require('./enroll/agentSourceStore');
 const { createAgentReleaseStore } = require('./enroll/agentReleaseStore');
@@ -96,6 +101,10 @@ function start() {
   const usersRepo = createUsersRepository(db);
   const agentsRepo = createAgentsRepository(db);
   const auditRepo = createAgentActionAuditRepository(db);
+  const auditEventsRepo = createAuditEventsRepository(db);
+  const auditLogRepo = createAuditLogRepository(db);
+  const apiTokensRepo = createApiTokensRepository(db);
+  const auditLogger = createAuditLogger({ auditLogRepo, logger: console });
   const enrollmentCodesRepo = createEnrollmentCodesRepository(db);
   const enrollmentStore = createEnrollmentStore(db);
   const agentTokensRepo = createAgentTokensRepository(db);
@@ -264,8 +273,20 @@ function start() {
       webhook: createWebhookChannel({ config: alertingConfig.channels.webhook, logger: console }),
       syslog: createSyslogChannel({ config: alertingConfig.channels.syslog, logger: console }),
     },
-    // Alerting only dispatches if the license includes it.
-    licensed: () => featureGate.isFeatureEnabled('alerting'),
+    // Alerting dispatches if the license includes the legacy `alerting` module
+    // OR the plan grants an alert channel feature (so plan-based Professional+
+    // installs alert without a legacy proof feature map).
+    licensed: () =>
+      featureGate.isFeatureEnabled('alerting') ||
+      featureGate.isFeatureEnabled('alerts_email') ||
+      featureGate.isFeatureEnabled('alerts_webhook'),
+    // Per-channel gate: email/webhook honour their plan feature keys, falling
+    // back to the legacy `alerting` entitlement; syslog stays under `alerting`.
+    channelLicensed: (name) => {
+      if (name === 'email') return featureGate.isFeatureEnabled('alerts_email') || featureGate.isFeatureEnabled('alerting');
+      if (name === 'webhook') return featureGate.isFeatureEnabled('alerts_webhook') || featureGate.isFeatureEnabled('alerting');
+      return featureGate.isFeatureEnabled('alerting');
+    },
     logger: console,
   });
   // Maintenance windows suppress notifications (findings still record). The
@@ -344,6 +365,12 @@ function start() {
   // provider). Egress is admin-initiated / opt-in, so air-gapped installs are fine.
   const geoipUpdater = createGeoipUpdater({ settingsService, config, logger: console });
   geoipUpdater.startSchedule();
+  // Auto-install of missing diagnostic tools (opt-in via Settings → Agents):
+  // pushes an install-tool command when a probe fails because the tool is
+  // missing on the host. Threaded into probe ingest below.
+  const installToolService = createInstallToolService({
+    agentCommander, auditRepo, auditEventsRepo, agentsRepo, settingsService, logger: console,
+  });
   // Now that settingsService exists, give the dispatcher its maintenance silencer.
   dispatcher.setSilencer(createSilencer({
     getWindows: async () => (await settingsService.getMaintenance()).windows,
@@ -362,6 +389,10 @@ function start() {
     usersRepo,
     agentsRepo,
     auditRepo,
+    auditEventsRepo,
+    auditLogRepo,
+    apiTokensRepo,
+    auditLogger,
     enrollmentCodesRepo,
     enrollmentStore,
     agentTokensRepo,
@@ -370,6 +401,7 @@ function start() {
     incidentsRepo,
     thresholdsRepo,
     incidentService,
+    installToolService,
     agentCommander,
     systemInfo,
     licenseManager,
@@ -441,6 +473,7 @@ function start() {
     agentTokensRepo,
     agentsRepo,
     auditRepo,
+    auditEventsRepo,
     logger: console,
     path: config.ws.path,
     heartbeatMs: config.ws.heartbeatIntervalMs,

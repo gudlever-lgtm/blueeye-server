@@ -10,6 +10,7 @@ const { validateTimeRange } = require('../validation/resultsValidation');
 const { validateProbeSpec } = require('../validation/probeValidation');
 const { parseId } = require('../validation/locationValidation');
 const { verifyProof } = require('../license/verify');
+const { INSTALLABLE_TOOLS, isAllowedTool } = require('../agentTools');
 
 // Aggregates the byPort / byProtocol / topTalkers entries across a set of
 // NetFlow measurements, optionally filtered to one port and/or protocol.
@@ -311,6 +312,49 @@ function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentComma
         acked: !!out.acked,
         accepted: !!reply.accepted,
         reason: reply.reason || null,
+        auditId: auditId || null,
+      });
+    })
+  );
+
+  // POST /agents/:id/install-tool { tool } — ask a connected agent to install a
+  // missing diagnostic tool (e.g. traceroute) from its package manager, then
+  // report back. operator/admin. The tool must be on the shared allowlist; the
+  // agent independently enforces its OWN allowlist (so the server can never push
+  // an arbitrary package). Audited (requested -> completed/failed) like
+  // upgrade/delete, with the agent echoing the audit id back on completion.
+  router.post(
+    '/:id/install-tool',
+    requireAuth,
+    requireRole(ROLES.OPERATOR, ROLES.ADMIN),
+    asyncHandler(async (req, res) => {
+      const id = parseId(req.params.id);
+      if (id === null) return invalidId(res);
+      const tool = String((req.body && req.body.tool) || '').trim().toLowerCase();
+      if (!isAllowedTool(tool)) {
+        return validationError(res, { tool: `tool must be one of ${INSTALLABLE_TOOLS.join(', ')}` });
+      }
+      const agent = await agentsRepo.findById(id);
+      if (!agent) return notFound(res);
+      if (!agentCommander || typeof agentCommander.sendCommandAndWait !== 'function') {
+        return res.status(503).json({ error: 'Agent channel not available' });
+      }
+      const auditId = await recordRequested('install-tool', agent, req, tool);
+      const command = { name: 'install-tool', tool };
+      if (auditId) command.auditId = auditId;
+      const out = await agentCommander.sendCommandAndWait(id, command, { timeoutMs: 8000 });
+      if (out.delivered === 0) {
+        await markFailed(auditId, 'agent not connected');
+        return res.status(409).json({ error: 'Agent not connected', connected: false });
+      }
+      const reply = out.reply || {};
+      if (reply.accepted === false) await markFailed(auditId, reply.reason || 'declined');
+      res.status(202).json({
+        connected: true,
+        acked: !!out.acked,
+        accepted: !!reply.accepted,
+        reason: reply.reason || null,
+        tool,
         auditId: auditId || null,
       });
     })

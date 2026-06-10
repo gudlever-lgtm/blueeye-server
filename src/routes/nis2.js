@@ -3,6 +3,7 @@
 const express = require('express');
 const { asyncHandler } = require('../middleware/asyncHandler');
 const { requireAuth, requireRole } = require('../auth/middleware');
+const { requirePlanFeature } = require('../license/features');
 const { ROLES } = require('../auth/roles');
 const { parseId } = require('../validation/locationValidation');
 const { toCsv } = require('../lib/csv');
@@ -22,11 +23,17 @@ const { SOURCE_KEYS, sourcesFor, buildCustomReport, customReportToCsv } = requir
 function createNis2Router({
   nis2RisksRepo, nis2ControlsRepo, nis2IncidentsRepo,
   nis2ReportsRepo, nis2EvidenceRepo, nis2AuditRepo,
+  featureGate = null, planService = null,
 }) {
   const router = express.Router();
   const reader = requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN);
   const writer = requireRole(ROLES.OPERATOR, ROLES.ADMIN);
   const approver = requireRole(ROLES.ADMIN); // admin/compliance approves reports
+  // The generated/exportable "Compliance report pack" is licence-gated
+  // (reports_compliance, Enterprise+). The risk/control/incident registers and
+  // the readiness dashboard stay open as part of the NIS2 module; producing the
+  // report artifacts (generate / approve / CSV / print-ready HTML) requires it.
+  const compliancePack = requirePlanFeature({ featureGate, planService }, 'reports_compliance');
 
   // Best-effort audit write. Never throws into the request path.
   async function audit(req, action, entityType, entityId, oldValue, newValue) {
@@ -259,7 +266,7 @@ function createNis2Router({
 
   // Generates + persists a report (snapshot frozen for trend comparison). The
   // body chooses the type; the title/period are optional. operator+.
-  router.post('/reports', requireAuth, writer, asyncHandler(async (req, res) => {
+  router.post('/reports', requireAuth, writer, compliancePack, asyncHandler(async (req, res) => {
     const { value, errors } = validateReportRequest(req.body);
     if (errors) return fail(res, errors);
     const data = await loadAll();
@@ -283,7 +290,7 @@ function createNis2Router({
   }));
 
   // Approve a draft report — admin/compliance only.
-  router.post('/reports/:id/approve', requireAuth, approver, asyncHandler(async (req, res) => {
+  router.post('/reports/:id/approve', requireAuth, approver, compliancePack, asyncHandler(async (req, res) => {
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ error: 'Invalid id' });
     const before = await nis2ReportsRepo.findById(id);
@@ -383,7 +390,7 @@ function createNis2Router({
   }));
 
   // Export the custom report as PDF-ready HTML, CSV, or JSON (format in body).
-  router.post('/custom-reports/export', requireAuth, reader, asyncHandler(async (req, res) => {
+  router.post('/custom-reports/export', requireAuth, reader, compliancePack, asyncHandler(async (req, res) => {
     const { value, errors } = validateCustomReportSpec(req.body, { sourceKeys: SOURCE_KEYS });
     if (errors) return fail(res, errors);
     if (wantsAudit(value) && !isAdmin(req)) return res.status(403).json({ error: 'The audit source requires the admin role' });
@@ -402,7 +409,11 @@ function createNis2Router({
     return res.send(renderRegisterHtml(report.title, report.sections, { org: report.org }));
   }));
 
-  // ---- CSV export -----------------------------------------------------------
+  // ---- CSV / PDF export -----------------------------------------------------
+  // All downloadable report artifacts under /export are the licence-gated
+  // "Compliance report pack" (reports_compliance). This prefix guard runs
+  // auth → role → feature before any specific export route below.
+  router.use('/export', requireAuth, reader, compliancePack);
 
   function sendCsv(res, name, columns, rows) {
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
@@ -454,7 +465,7 @@ function createNis2Router({
     sendHtml(res, renderRegisterHtml('NIS2 Readiness Report', [
       {
         heading: `Overall readiness: ${d.readinessScore}%`,
-        intro: `Open critical risks: ${d.openCriticalRisks} · High/medium findings: ${d.openHighMediumFindings} · Incidents (30d): ${d.incidentsLast30Days} · Controls without evidence: ${d.controlsWithoutEvidence}`,
+        intro: `Readiness is the mean of the ten NIS2 category scores, each derived from how complete its controls' evidence is (OK = 100, Partial = 50, Missing/Overdue = 0) — a self-assessment aid, not a certificate. Open critical risks: ${d.openCriticalRisks} · High/medium findings: ${d.openHighMediumFindings} · Incidents (30d): ${d.incidentsLast30Days} · Controls without evidence: ${d.controlsWithoutEvidence}`,
         headers: ['Category', 'Controls', 'Score', 'Status'],
         rows: d.categories.map((c) => [c.category, c.controlCount, `${c.score}%`, c.status]),
       },
@@ -470,6 +481,7 @@ function createNis2Router({
     const rows = await nis2RisksRepo.findAll();
     sendHtml(res, renderRegisterHtml('NIS2 Risk Register Report', [{
       heading: `Risk register (${rows.length})`,
+      intro: 'Risks to the systems and services in scope, each scored likelihood × impact (1–25, columns L and I) and banded Low–Critical. Maintaining this register — with an owner, a treatment status and, where a risk is tolerated, explicit management acceptance — is how the risk-management duty under NIS2 (Article 21) is evidenced.',
       headers: ['ID', 'Title', 'Category', 'Asset', 'L', 'I', 'Score', 'Band', 'Owner', 'Status', 'Due'],
       rows: rows.map((r) => [r.id, r.title, r.category, r.affectedAsset || '—', r.likelihood, r.impact, r.riskScore, r.band, r.owner || '—', r.status, r.dueDate || '—']),
     }], { org: orgOf(req) }));
@@ -479,6 +491,7 @@ function createNis2Router({
     const rows = await nis2ControlsRepo.findAll();
     sendHtml(res, renderRegisterHtml('NIS2 Control Evidence Report', [{
       heading: `Controls (${rows.length})`,
+      intro: 'The technical and organisational security measures in operation (e.g. backups, patching, access reviews, logging), each tied to a NIS2 area with an owner and a recurring cadence. NIS2 (Article 21) requires these measures to be implemented and kept effective; the "Evidence" column shows whether a reference proving the control was performed is on file — controls without evidence, or marked Missing/Overdue, are the gaps to close.',
       headers: ['ID', 'Control', 'Area', 'Owner', 'Frequency', 'Last performed', 'Next due', 'Evidence', 'Status'],
       rows: rows.map((c) => [c.id, c.controlName, c.nis2Area, c.owner || '—', c.frequency, c.lastPerformed || '—', c.nextDue || '—', c.hasEvidence ? 'yes' : 'no', c.status]),
     }], { org: orgOf(req) }));
@@ -488,6 +501,7 @@ function createNis2Router({
     const rows = await nis2IncidentsRepo.findAll();
     sendHtml(res, renderRegisterHtml('NIS2 Incident Report', [{
       heading: `Incidents (${rows.length})`,
+      intro: 'Security incidents recorded for NIS2 — what happened, when it was detected and resolved, and the impact. "Notify" marks incidents judged significant, which trigger the reporting duty to the national CSIRT/authority under NIS2 (Article 23): an early warning within 24 hours, a full incident notification within 72 hours, and a final report within one month. "NIS2" flags incidents in scope of the directive.',
       headers: ['Ref', 'Title', 'Severity', 'Detected', 'Resolved', 'Status', 'NIS2', 'Notify'],
       rows: rows.map((i) => [i.incidentId, i.title, i.severity, i.detectedAt ? new Date(i.detectedAt).toLocaleString('en-GB') : '—', i.resolvedAt ? new Date(i.resolvedAt).toLocaleString('en-GB') : '—', i.status, i.nis2Relevant ? 'yes' : 'no', i.notificationRequired ? 'yes' : 'no']),
     }], { org: orgOf(req) }));

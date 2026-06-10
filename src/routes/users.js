@@ -3,17 +3,25 @@
 const express = require('express');
 const { asyncHandler } = require('../middleware/asyncHandler');
 const { requireAuth, requireRole } = require('../auth/middleware');
+const { requirePlanFeature } = require('../license/features');
 const { ROLES } = require('../auth/roles');
 const { hashPassword } = require('../auth/password');
 const { validateUserCreate, validateUserUpdate } = require('../validation/userValidation');
 const { parseId } = require('../validation/locationValidation');
 
-// User administration. Every endpoint is admin-only — enforced once at the
-// router level.
-function createUsersRouter({ usersRepo }) {
+// User administration. Every endpoint is admin-only; the *mutations* (creating,
+// editing roles, deleting users) are additionally licence-gated behind `rbac`
+// (Role-based access control, Professional+) — managing multiple users/roles is
+// the sellable RBAC capability. Reading the list stays open (admin) so a lower
+// plan still sees its accounts and an honest upgrade prompt instead of an error.
+// The seeded super-admin always exists, so a server without `rbac` can still log
+// in. featureGate/planService are optional (a server without the plan layer
+// keeps user management open).
+function createUsersRouter({ usersRepo, featureGate = null, planService = null, auditLogger = null }) {
   const router = express.Router();
 
   router.use(requireAuth, requireRole(ROLES.ADMIN));
+  const rbacGate = requirePlanFeature({ featureGate, planService }, 'rbac');
 
   // GET /users
   router.get(
@@ -26,6 +34,7 @@ function createUsersRouter({ usersRepo }) {
   // POST /users — creates a user, hashing the supplied password.
   router.post(
     '/',
+    rbacGate,
     asyncHandler(async (req, res) => {
       const { value, errors } = validateUserCreate(req.body);
       if (errors) {
@@ -40,6 +49,7 @@ function createUsersRouter({ usersRepo }) {
         passwordHash,
         role: value.role,
       });
+      if (auditLogger) await auditLogger.record(req, { category: 'user', action: 'user_create', target: value.email, detail: `role=${value.role}` });
       res.status(201).json(created);
     })
   );
@@ -47,6 +57,7 @@ function createUsersRouter({ usersRepo }) {
   // PUT /users/:id — updates the role and, optionally, the email and password.
   router.put(
     '/:id',
+    rbacGate,
     asyncHandler(async (req, res) => {
       const id = parseId(req.params.id);
       if (id === null) {
@@ -91,6 +102,7 @@ function createUsersRouter({ usersRepo }) {
         patch.passwordHash = await hashPassword(value.password);
       }
       const updated = await usersRepo.update(id, patch);
+      if (auditLogger) await auditLogger.record(req, { category: 'user', action: 'user_update', target: existing.email, detail: `role=${patch.role}${patch.email ? `, email=${patch.email}` : ''}${patch.passwordHash ? ', password reset' : ''}` });
       res.json(updated);
     })
   );
@@ -98,6 +110,7 @@ function createUsersRouter({ usersRepo }) {
   // DELETE /users/:id — refuses to delete the last remaining admin.
   router.delete(
     '/:id',
+    rbacGate,
     asyncHandler(async (req, res) => {
       const id = parseId(req.params.id);
       if (id === null) {
@@ -121,6 +134,7 @@ function createUsersRouter({ usersRepo }) {
       }
 
       await usersRepo.remove(id);
+      if (auditLogger) await auditLogger.record(req, { category: 'user', action: 'user_delete', target: existing.email });
       res.status(204).end();
     })
   );

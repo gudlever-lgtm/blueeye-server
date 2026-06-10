@@ -26,6 +26,7 @@ function createSettingsRouter({ settingsService, featureGate, dispatcher, analys
       alerting: settingsService ? await settingsService.getAlertingSafe() : (dispatcher ? dispatcher.describe() : null),
       retention: settingsService ? await settingsService.getRetention() : (retentionConfig || null),
       throughput: settingsService ? await settingsService.getThroughput() : null,
+      agents: settingsService ? await settingsService.getAgents() : null,
       assistant: settingsService ? await settingsService.getAssistantSafe() : null,
       map: settingsService ? await settingsService.getMap() : null,
       geoip: settingsService ? await settingsService.getGeoip() : null,
@@ -151,6 +152,12 @@ function createSettingsRouter({ settingsService, featureGate, dispatcher, analys
       if (err.statusCode === 400) return res.status(400).json({ error: 'Validation failed', details: err.details || {} });
       throw err;
     }
+  }));
+
+  // PUT /api/settings/agents — agent-management toggles (currently the
+  // auto-install-tools opt-in). { autoInstallTools: bool }.
+  router.put('/agents', ...admin, asyncHandler(async (req, res) => {
+    res.json({ agents: await settingsService.setAgents(req.body || {}) });
   }));
 
   // PUT /api/settings/flow-categories — replace the traffic-type category list

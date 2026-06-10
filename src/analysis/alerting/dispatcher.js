@@ -11,7 +11,12 @@ const silentLogger = { info() {}, warn() {}, error() {} };
 //
 //   const dispatcher = createDispatcher({ config, channels: { email, webhook, syslog } });
 //   await dispatcher.dispatch(finding, group);
-function createDispatcher({ config, channels = {}, licensed = () => true, logger = silentLogger, now = () => Date.now(), silencer = null }) {
+//
+// `licensed()` gates the whole module; `channelLicensed(name)` gates an
+// individual channel (so e.g. a plan may include `alerts_email` but not
+// `alerts_webhook`). Both default to allow so callers that don't license per
+// channel are unaffected.
+function createDispatcher({ config, channels = {}, licensed = () => true, channelLicensed = () => true, logger = silentLogger, now = () => Date.now(), silencer = null }) {
   const lastSent = new Map(); // `${hostId}|${metric}|${kind}|${severity}` -> timestamp
   let silencedBy = typeof silencer === 'function' ? silencer : null;
 
@@ -50,6 +55,12 @@ function createDispatcher({ config, channels = {}, licensed = () => true, logger
     for (const [name, channel] of Object.entries(channels)) {
       const rule = config.channels && config.channels[name];
       if (!rule || !rule.enabled) continue;
+      // Per-channel licence (e.g. alerts_email / alerts_webhook). Skipped (not
+      // attempted) so an unlicensed channel never starts the cooldown.
+      if (!channelLicensed(name)) {
+        results.push({ channel: name, ok: false, skipped: true, detail: 'channel not licensed' });
+        continue;
+      }
       if (findingRank < rank(rule.minSeverity)) {
         results.push({ channel: name, ok: false, skipped: true, detail: 'below minSeverity' });
         continue;

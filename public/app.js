@@ -195,19 +195,87 @@ async function login(emailInput, password) {
 let licenseFeatures = null;
 let featuresLoadedAt = 0;
 const FEATURES_TTL_MS = 60000;
-function invalidateFeatures() { licenseFeatures = null; featuresLoadedAt = 0; }
+// The active licence package (Pilot/Starter/Professional/Enterprise/MSP). Locked
+// modules are presented relative to THIS — i.e. "not part of your <plan> licence" —
+// rather than as a generic free/pro tier. Same TTL + invalidation as the feature map.
+let licensePlan = null;
+let planLoadedAt = 0;
+function invalidateFeatures() {
+  licenseFeatures = null; featuresLoadedAt = 0;
+  licensePlan = null; planLoadedAt = 0;
+}
 async function loadFeatures() {
   if (licenseFeatures && Date.now() - featuresLoadedAt < FEATURES_TTL_MS) return licenseFeatures;
   try { licenseFeatures = await api('/license/features'); featuresLoadedAt = Date.now(); }
   catch { if (!licenseFeatures) licenseFeatures = {}; }
   return licenseFeatures;
 }
+async function loadPlan() {
+  if (licensePlan && Date.now() - planLoadedAt < FEATURES_TTL_MS) return licensePlan;
+  try { licensePlan = await api('/license/plan'); planLoadedAt = Date.now(); }
+  catch { if (!licensePlan) licensePlan = {}; }
+  return licensePlan;
+}
+// The customer-facing name of the active licence ("Professional"), or '' if unknown.
+function activePlanName() { return (licensePlan && licensePlan.plan_name) || ''; }
+// The package a locked module is sold under, from /license/plan's `modules` map
+// (server-side source of truth). Returns { name, label } or null when unknown.
+function moduleRequirement(featureKey) {
+  const m = licensePlan && licensePlan.modules && licensePlan.modules[featureKey];
+  return m && m.required_plan_name ? { name: m.required_plan_name, label: m.required_plan_label } : null;
+}
+// How a licence-excluded module is described in tooltips/toasts — tied to the
+// actual licence setup: name the package that unlocks it, else fall back to the
+// active plan.
+function lockedHint(label, featureKey) {
+  const need = moduleRequirement(featureKey);
+  if (need) return `${label} requires ${need.label}`;
+  const plan = activePlanName();
+  return plan
+    ? `${label} is not part of your ${plan} licence`
+    : `${label} is not included in your current licence`;
+}
 function applyFeatureVisibility() {
   const feats = licenseFeatures || {};
   for (const b of document.querySelectorAll('.tabs button[data-feature]')) {
     const allowed = feats[b.dataset.feature] !== false; // show until we know it's off
-    b.classList.toggle('hidden', !allowed);
+    // Rather than hide a module the licence excludes, keep it visible but dimmed
+    // with a lock marker (see .tabs button.locked). The state + tooltip are driven
+    // by the actual licence setup (active plan + module entitlements), not a generic
+    // free/pro split. Clicking it routes to Settings → License, never the 403 view.
+    b.classList.toggle('locked', !allowed);
+    if (!allowed) {
+      const label = (b.textContent || 'This module').trim();
+      const need = moduleRequirement(b.dataset.feature);
+      // Badge shows the required package (e.g. "Professional"); lock glyph if unknown.
+      b.dataset.lockBadge = need ? need.name : '🔒';
+      b.title = lockedHint(label, b.dataset.feature);
+    } else {
+      delete b.dataset.lockBadge;
+      b.removeAttribute('title');
+    }
     if (!allowed && currentView === b.dataset.view) currentView = 'overview';
+  }
+}
+// Role-based menu visibility. Roles are hierarchical (viewer < operator < admin);
+// a nav item's data-min-role is the lowest role allowed to open it (absent = viewer,
+// i.e. everyone). Items above the user's role are hidden, and any category group left
+// with no visible items collapses so the rail shows only relevant sections. Mirrors
+// applyFeatureVisibility's redirect: if the current view just disappeared, fall back
+// to the always-available landing page.
+const ROLE_RANK = { viewer: 1, operator: 2, admin: 3 };
+function roleAtLeast(min) { return (ROLE_RANK[role] || 0) >= (ROLE_RANK[min] || 1); }
+function applyRoleVisibility() {
+  for (const b of document.querySelectorAll('.tabs button[data-min-role]')) {
+    const allowed = roleAtLeast(b.dataset.minRole);
+    b.classList.toggle('role-hidden', !allowed);
+    if (!allowed && currentView === b.dataset.view) currentView = 'fleet';
+  }
+  // Collapse category groups whose items are all hidden (by role or licence).
+  for (const g of document.querySelectorAll('.tabs .nav-group')) {
+    const anyVisible = [...g.querySelectorAll('button')]
+      .some((b) => !b.classList.contains('hidden') && !b.classList.contains('role-hidden'));
+    g.classList.toggle('hidden', !anyVisible);
   }
 }
 // Synchronous entitlement check against the cached licence features. render()
@@ -265,7 +333,12 @@ function openModal(title, fields, onSubmit) {
       input = el('input', { type: f.type || 'text', value: f.value ?? '' });
     }
     inputs[f.name] = input;
-    form.append(el('label', {}, f.label, input));
+    const lbl = el('label', {}, f.label, input);
+    // Optional per-field guidance ("what is this / why does it matter") — rendered
+    // as a small muted note under the input. Backward-compatible: callers that
+    // pass no `hint` are unaffected.
+    if (f.hint) lbl.append(el('span', { class: 'field-hint' }, f.hint));
+    form.append(lbl);
   }
   const errP = el('p', { class: 'error' });
   form.append(errP);
@@ -354,7 +427,7 @@ function gotoView(viewKey) {
 function viewLink(viewKey, label) {
   const text = label || VIEW_LABELS[viewKey] || viewKey;
   const tab = document.querySelector(`.tabs button[data-view="${viewKey}"]`);
-  if (tab && tab.classList.contains('hidden')) return document.createTextNode(text);
+  if (tab && (tab.classList.contains('hidden') || tab.classList.contains('locked'))) return document.createTextNode(text);
   return el('a', { href: '#', class: 'drawer-link', onclick: (e) => { e.preventDefault(); gotoView(viewKey); } }, text);
 }
 // Deep-link into a specific Settings sub-tab (Analysis, Retention, Traffic types…).
@@ -2701,6 +2774,20 @@ function interfaceTable(interfaces, source = null) {
 }
 
 // Latest probe results (newest per target). onDetail(r) fires from each row.
+// Diagnostic tools the agent can install on request (mirrors the server's
+// allowlist). Used to turn a "<tool> not installed" probe failure into an offer
+// to install it.
+const INSTALLABLE_TOOLS = ['traceroute', 'mtr', 'tcptraceroute'];
+
+// If a failed probe says a tool is missing (e.g. "traceroute not installed"),
+// returns that (installable) tool name, else null.
+function missingToolOf(r) {
+  if (!r || r.ok || !r.detail) return null;
+  const m = /([a-z][a-z0-9_-]*)\s+not installed/i.exec(String(r.detail));
+  const tool = m ? m[1].toLowerCase() : null;
+  return tool && INSTALLABLE_TOOLS.includes(tool) ? tool : null;
+}
+
 // Builds the cURL content-check controls (method + expectations) shared by both
 // probe forms. Returns { wrap, apply }: apply(body) copies any set expectation
 // onto the run-probe payload. Empty fields are omitted (no assertion made), so a
@@ -2772,22 +2859,45 @@ function transactionStepsEditor(initial) {
   return { node, collect };
 }
 
-function probeLatestTable(rows, onDetail) {
+// `onInstall(tool, row)` is optional; when provided, a failed probe that names a
+// missing installable tool gets an "Install <tool>" button.
+function probeLatestTable(rows, onDetail, onInstall = null) {
   if (!rows.length) return el('div', { class: 'muted' }, 'No probe results yet — run one above.');
   return el('table', {},
     el('thead', {}, el('tr', {}, ...['Type', 'Target', 'Status', 'RTT', 'Loss', 'Jitter', 'Time', ''].map((h) => el('th', {}, h)))),
-    el('tbody', {}, ...rows.map((r) => el('tr', {},
-      el('td', {}, r.type),
-      el('td', {}, esc(r.target),
-        // curl/http carry a verification/cert explanation; surface it inline.
-        r.detail ? el('div', { class: 'muted small' }, esc(r.detail)) : null,
-        (r.type === 'curl' && r.contentType) ? el('div', { class: 'muted small' }, `${esc(r.contentType)}${r.bytes != null ? ` · ${r.bytes} B` : ''}`) : null),
-      el('td', {}, el('span', { class: `badge ${r.ok ? 'online' : 'offline'}` }, r.ok ? 'ok' : 'error')),
-      el('td', { class: 'num' }, r.rttMs != null ? `${r.rttMs} ms` : '–'),
-      el('td', { class: 'num' }, r.lossPct != null ? `${r.lossPct}%` : '–'),
-      el('td', { class: 'num' }, r.jitterMs != null ? `${r.jitterMs} ms` : '–'),
-      el('td', { class: 'muted' }, r.ts ? fmtTimeShort(new Date(r.ts).getTime()) : '–'),
-      el('td', {}, el('button', { class: 'small ghost', onclick: () => onDetail(r) }, r.type === 'traceroute' ? 'Path' : 'History'))))));
+    el('tbody', {}, ...rows.map((r) => {
+      const tool = onInstall ? missingToolOf(r) : null;
+      return el('tr', {},
+        el('td', {}, r.type),
+        el('td', {}, esc(r.target),
+          // curl/http carry a verification/cert explanation; a failed probe carries
+          // its reason (e.g. "traceroute not installed"). Surface it inline.
+          r.detail ? el('div', { class: 'muted small' }, esc(r.detail)) : null,
+          (r.type === 'curl' && r.contentType) ? el('div', { class: 'muted small' }, `${esc(r.contentType)}${r.bytes != null ? ` · ${r.bytes} B` : ''}`) : null),
+        el('td', {}, el('span', { class: `badge ${r.ok ? 'online' : 'offline'}`, title: !r.ok && r.detail ? r.detail : null }, r.ok ? 'ok' : 'error')),
+        el('td', { class: 'num' }, r.rttMs != null ? `${r.rttMs} ms` : '–'),
+        el('td', { class: 'num' }, r.lossPct != null ? `${r.lossPct}%` : '–'),
+        el('td', { class: 'num' }, r.jitterMs != null ? `${r.jitterMs} ms` : '–'),
+        el('td', { class: 'muted' }, r.ts ? fmtTimeShort(new Date(r.ts).getTime()) : '–'),
+        el('td', {},
+          tool ? el('button', { class: 'small', title: `Install ${tool} on the agent host`, onclick: (e) => onInstall(tool, r, e.target) }, `Install ${tool}`) : null,
+          el('button', { class: 'small ghost', onclick: () => onDetail(r) }, r.type === 'traceroute' ? 'Path' : 'History')));
+    })));
+}
+
+// Posts an install-tool request for one agent and reflects the outcome on the
+// clicked button. Shared by the Probes view and the agent detail page.
+async function requestToolInstall(agentId, tool, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = `Installing ${tool}…`; }
+  try {
+    const res = await api(`/agents/${encodeURIComponent(agentId)}/install-tool`, { method: 'POST', body: { tool } });
+    if (res && res.accepted) toast(`Installing ${tool} on the agent — watch Reporting → Audit for the result.`);
+    else toast(`Agent could not start the install${res && res.reason ? ` (${res.reason})` : ''}.`, true);
+  } catch (e) {
+    toast(e.status === 409 ? 'The agent is not connected right now.' : errText(e), true);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = `Install ${tool}`; }
+  }
 }
 
 // Interactive path map: a directed, weighted hop graph for a traceroute target
@@ -3163,7 +3273,7 @@ async function probeRunnerView() {
     let data;
     try { data = await api(`/api/probes/latest?agentId=${encodeURIComponent(id)}`); } catch { return; }
     const rows = data.results || [];
-    latestHost.replaceChildren(probeLatestTable(rows, showDetail));
+    latestHost.replaceChildren(probeLatestTable(rows, showDetail, (tool, r, btn) => requestToolInstall(agentSel.value, tool, btn)));
   }
 
   async function showDetail(r) {
@@ -3693,7 +3803,7 @@ views.agent = async () => {
   async function refreshProbes() {
     let data;
     try { data = await api(`/api/probes/latest?agentId=${encodeURIComponent(id)}`); } catch { return; }
-    probeLatestHost.replaceChildren(probeLatestTable(data.results || [], async (r) => { probeDetailHost.replaceChildren(await probeDetail(r, id)); }));
+    probeLatestHost.replaceChildren(probeLatestTable(data.results || [], async (r) => { probeDetailHost.replaceChildren(await probeDetail(r, id)); }, (tool, r, btn) => requestToolInstall(id, tool, btn)));
   }
 
   // ---- Interfaces ----
@@ -5139,10 +5249,10 @@ let settingsTab = null;
 // so related controls sit together and the page stays scannable as it grows. Each
 // tab is [key, label, adminOnly]; non-admins only ever see the personal section.
 const SETTINGS_GROUPS = [
-  ['Access & security', [['users', 'Users', true], ['auth', 'Authentication', true], ['agentkey', 'Agent key', true]]],
+  ['Access & security', [['users', 'Users', true], ['auth', 'Authentication', true], ['apitokens', 'API tokens', true], ['auditlog', 'Audit log', true], ['agentkey', 'Agent key', true]]],
   ['Detection & alerts', [['analyse', 'Analysis', true], ['alerting', 'Alerting', true], ['maintenance', 'Maintenance', true]]],
   ['Data', [['retention', 'Retention', true], ['types', 'Traffic types', true], ['map', 'Map', true]]],
-  ['System', [['updates', 'Updates', true]]],
+  ['System', [['updates', 'Updates', true], ['agents', 'Agents', true]]],
   ['Personal', [['appearance', 'Appearance', false], ['license', 'License', false]]],
 ];
 views.settings = async () => {
@@ -5173,8 +5283,11 @@ views.settings = async () => {
     maintenance: settingsMaintenanceView,
     updates: settingsUpdatesView,
     agentkey: settingsAgentKeyView,
+    agents: settingsAgentsView,
     retention: settingsRetentionView,
     auth: settingsAuthView,
+    apitokens: settingsApiTokensView,
+    auditlog: settingsAuditLogView,
   };
   let content;
   try {
@@ -5370,6 +5483,24 @@ async function settingsAnalyseView() {
 // Speed-test health thresholds: flag agents on the Overview when their latest
 // download/upload falls below a floor (0 = that floor is off). Folded into the
 // agent's health verdict like loss/latency. Admin, runtime-editable.
+// Settings → Agents: agent-management toggles. Currently the opt-in for the
+// server to auto-install a missing diagnostic tool when a probe reports it.
+async function settingsAgentsView() {
+  const data = await api('/api/settings');
+  return el('div', { class: 'settings-grid' }, agentsSettingsCard(data.agents));
+}
+
+function agentsSettingsCard(a) {
+  return settingsFormCard({
+    title: 'Diagnostic tools',
+    values: a || { autoInstallTools: false },
+    endpoint: '/api/settings/agents',
+    fields: [
+      { key: 'autoInstallTools', label: 'Auto-install missing tools', type: 'checkbox', hint: 'When on, a probe that fails because a tool is missing on the host (e.g. "traceroute not installed") makes the server push an install to that agent automatically. The agent only ever installs tools on its own allowlist (traceroute / mtr / tcptraceroute), never an arbitrary package. Off = install manually from the Probes page. Either way the request + outcome is recorded under Reporting → Audit.' },
+    ],
+  });
+}
+
 function throughputSettingsCard(t) {
   return settingsFormCard({
     title: 'Throughput (speed-test) health',
@@ -6103,6 +6234,134 @@ function flowCategoriesCard(categories) {
   return card;
 }
 function settingsCard(title, ...body) { return el('div', { class: 'settings-card' }, el('h3', {}, title), ...body); }
+
+// Shared placeholder for a settings tab whose licence feature isn't included —
+// the server refuses the API too (403 feature_not_available), so this explains
+// the missing controls and points at the matrix.
+function featureUpsell(title, message) {
+  return el('div', {}, el('div', { class: 'settings-grid' },
+    el('div', { class: 'settings-card' }, el('h3', {}, title),
+      el('p', { class: 'muted' }, message, ' ', settingsLink('license', 'See Settings → License'), ' for the full feature matrix.'),
+      el('span', { class: 'badge offline' }, 'Not included in your plan'))));
+}
+
+// One-shot holder for a freshly minted API token, shown once after creation
+// (the server never returns the plaintext again).
+let apiTokenJustCreated = null;
+
+// Settings → API tokens: mint/list/revoke programmatic tokens (licence feature
+// api_access, Professional+). Admin-only. The secret is shown exactly once.
+async function settingsApiTokensView() {
+  const root = el('div');
+  let tokens;
+  try {
+    tokens = await api('/api/api-tokens');
+  } catch (err) {
+    if (err.status === 403) return featureUpsell('API access', 'Programmatic API tokens are part of the BlueEye Professional plan and above, so they can’t be managed here.');
+    throw err;
+  }
+
+  root.append(el('p', { class: 'muted settings-intro' },
+    'Issue tokens for programmatic access to the BlueEye API (CI jobs, scripts, integrations). A token authenticates with a fixed role and is sent as ',
+    el('code', {}, 'Authorization: Bearer <token>'), ' or ', el('code', {}, 'X-API-Key: <token>'), '. The secret is shown only once, on creation.'));
+
+  // Banner with the just-created secret (cleared on the next render).
+  if (apiTokenJustCreated) {
+    const secret = apiTokenJustCreated;
+    apiTokenJustCreated = null;
+    root.append(el('div', { class: 'settings-card', style: 'border-color: var(--ok)' },
+      el('h3', {}, 'New API token — copy it now'),
+      el('p', { class: 'muted' }, 'This is the only time the token is shown. Store it securely; it cannot be retrieved again.'),
+      el('pre', { class: 'token-secret', style: 'white-space: pre-wrap; word-break: break-all;' }, secret),
+      el('button', { class: 'small', onclick: () => { navigator.clipboard && navigator.clipboard.writeText(secret); toast('Token copied'); } }, 'Copy')));
+  }
+
+  // Create form.
+  const nameInput = el('input', { type: 'text', placeholder: 'e.g. CI pipeline', maxlength: '120' });
+  const roleSelect = el('select', {}, ...['viewer', 'operator', 'admin'].map((r) => el('option', { value: r }, r)));
+  const expInput = el('input', { type: 'date' });
+  const createBtn = el('button', { class: 'small', onclick: async () => {
+    const name = nameInput.value.trim();
+    if (!name) { toast('Name is required', true); return; }
+    const bodyReq = { name, role: roleSelect.value };
+    if (expInput.value) bodyReq.expiresAt = new Date(`${expInput.value}T00:00:00Z`).toISOString();
+    try {
+      const created = await api('/api/api-tokens', { method: 'POST', body: bodyReq });
+      apiTokenJustCreated = created.token;
+      toast('API token created');
+      render();
+    } catch (err) { toast(err.message, true); }
+  } }, 'Create token');
+  root.append(settingsCard('Create a token',
+    el('div', { class: 'form-row' }, el('label', {}, 'Name', nameInput)),
+    el('div', { class: 'form-row' }, el('label', {}, 'Role', roleSelect)),
+    el('div', { class: 'form-row' }, el('label', {}, 'Expires (optional)', expInput)),
+    createBtn));
+
+  // Existing tokens.
+  const rows = (tokens || []).map((t) => el('tr', { class: t.revoked ? 'muted' : '' },
+    el('td', {}, t.name),
+    el('td', {}, el('code', {}, t.token_prefix + '…')),
+    el('td', {}, el('span', { class: `badge role-${t.role}` }, t.role)),
+    el('td', {}, fmtDate(t.created_at)),
+    el('td', {}, t.last_used_at ? fmtDate(t.last_used_at) : '–'),
+    el('td', {}, t.expires_at ? fmtDate(t.expires_at) : 'never'),
+    el('td', {}, t.revoked
+      ? el('span', { class: 'badge revoked' }, 'revoked')
+      : el('button', { class: 'small danger', onclick: async () => {
+          if (!confirm(`Revoke token "${t.name}"? Any client using it will stop working.`)) return;
+          try { await api(`/api/api-tokens/${t.id}`, { method: 'DELETE' }); toast('Token revoked'); render(); }
+          catch (err) { toast(err.message, true); }
+        } }, 'Revoke'))));
+  root.append(settingsCard('Tokens',
+    tokens && tokens.length
+      ? el('div', { class: 'tablewrap' }, el('table', {},
+          el('thead', {}, el('tr', {}, ...['Name', 'Prefix', 'Role', 'Created', 'Last used', 'Expires', ''].map((h) => el('th', {}, h)))),
+          el('tbody', {}, ...rows)))
+      : el('p', { class: 'muted' }, 'No API tokens yet.')));
+  return root;
+}
+
+// Settings → Audit log: the unified who-did-what trail (licence feature
+// audit_log, Professional+). Admin-only, read-only.
+let auditLogCategory = '';
+async function settingsAuditLogView() {
+  const root = el('div');
+  let entries;
+  try {
+    const qs = auditLogCategory ? `?category=${encodeURIComponent(auditLogCategory)}&limit=200` : '?limit=200';
+    entries = await api(`/api/audit-log${qs}`);
+  } catch (err) {
+    if (err.status === 403) return featureUpsell('Audit log', 'The audit log is part of the BlueEye Professional plan and above, so it isn’t available here.');
+    throw err;
+  }
+  const categories = await api('/api/audit-log/categories').catch(() => []);
+
+  root.append(el('p', { class: 'muted settings-intro' },
+    'A record of security and administrative events — sign-ins, user and role changes, licence actions, report generation and API-token management. Metadata only; never passwords, tokens or payloads.'));
+
+  const filter = el('select', { onchange: (e) => { auditLogCategory = e.target.value; render(); } },
+    el('option', { value: '' }, 'All categories'),
+    ...(Array.isArray(categories) ? categories : []).map((c) => el('option', { value: c, selected: c === auditLogCategory ? '' : undefined }, c)));
+  root.append(el('div', { class: 'form-row' }, el('label', {}, 'Category', filter)));
+
+  const outcomeBadge = (o) => el('span', { class: `badge ${o === 'success' ? 'ok' : o === 'denied' ? 'warn' : 'bad'}` }, o);
+  const rows = (entries || []).map((e) => el('tr', {},
+    el('td', {}, fmtDate(e.created_at)),
+    el('td', {}, e.category),
+    el('td', {}, e.action),
+    el('td', {}, outcomeBadge(e.outcome)),
+    el('td', {}, e.actor_email || '(system)', e.actor_role ? el('span', { class: 'muted' }, ` (${e.actor_role})`) : null),
+    el('td', {}, e.target || '–'),
+    el('td', {}, e.detail || '–'),
+    el('td', {}, e.ip || '–')));
+  root.append(entries && entries.length
+    ? el('div', { class: 'tablewrap' }, el('table', {},
+        el('thead', {}, el('tr', {}, ...['Time', 'Category', 'Action', 'Outcome', 'Actor', 'Target', 'Detail', 'IP'].map((h) => el('th', {}, h)))),
+        el('tbody', {}, ...rows)))
+    : el('p', { class: 'muted' }, 'No audit events recorded yet.'));
+  return root;
+}
 function boolText(v) { return v === true ? 'yes' : v === false ? 'no' : String(v ?? '–'); }
 function kvList(obj, labels) {
   if (!obj) return el('p', { class: 'muted' }, '–');
@@ -6366,18 +6625,24 @@ views.license = async () => {
     const head = el('tr', {}, el('th', {}, 'Feature'),
       ...matrix.plans.map((p) => el('th', { class: p.plan_key === active ? 'active' : '' }, p.plan_name)));
     const body = matrix.features.map((f) => {
+      const roadmap = f.status === 'roadmap';
       const cells = matrix.plans.map((p) => {
         const on = p.features[f.key];
-        return el('td', { class: p.plan_key === active ? 'active' : '' }, on ? '✓' : '–');
+        // A roadmap feature is priced into the plan but not built yet: show
+        // "Roadmap" where the tier would include it, never a tick.
+        const mark = on ? (roadmap ? el('span', { class: 'badge roadmap' }, 'Roadmap') : '✓') : '–';
+        return el('td', { class: p.plan_key === active ? 'active' : '' }, mark);
       });
       const activePlan = matrix.plans.find((p) => p.plan_key === active);
       const entitled = activePlan && activePlan.features[f.key];
-      return el('tr', { class: entitled ? '' : 'muted' },
-        el('td', {}, f.label), ...cells);
+      const label = roadmap
+        ? el('td', {}, f.label, ' ', el('span', { class: 'badge roadmap' }, 'Roadmap'))
+        : el('td', {}, f.label);
+      return el('tr', { class: (entitled && !roadmap) ? '' : 'muted' }, label, ...cells);
     });
     root.append(el('div', { class: 'tablewrap' },
       el('table', { class: 'matrix' }, el('thead', {}, head), el('tbody', {}, ...body))));
-    root.append(el('p', { class: 'muted' }, 'Features not included in your plan are greyed out — contact your administrator or upgrade the licence to enable them.'));
+    root.append(el('p', { class: 'muted' }, 'Features not included in your plan are greyed out — contact your administrator or upgrade the licence to enable them. Rows marked ', el('span', { class: 'badge roadmap' }, 'Roadmap'), ' are planned and not available yet (tracked in ROADMAP.md).'));
   }
 
   root.append(el('p', { class: 'muted' }, 'License renewal is done with the provider. Once renewed, press "Re-validate now" to fetch the updated status immediately (otherwise it is checked automatically every 6 hours).'));
@@ -6475,8 +6740,17 @@ const NIS2_CATSTATUS_CLASS = { good: 'ok', partial: 'warn', weak: 'crit', 'no-da
 const NIS2_PRIO_CLASS = { critical: 'crit', high: 'warn', medium: 'INFO' };
 
 const nbadge = (text, cls) => el('span', { class: `badge ${cls || 'neutral'}` }, text);
-function selField(name, label, options, value) {
-  return { name, label, type: 'select', value, options: options.map((o) => (typeof o === 'object' ? o : { value: o, label: o })) };
+
+// A short "what is this and why does it matter for NIS2" explainer shown at the
+// top of each register, so a first-time user understands what to capture — and
+// why it belongs in a NIS2 report — before filling it in.
+function nis2Explain(what, why) {
+  return el('div', { class: 'nis2-explain' },
+    el('div', {}, el('strong', {}, 'What: '), what),
+    el('div', { class: 'nis2-explain-why' }, el('strong', {}, 'Why: '), why));
+}
+function selField(name, label, options, value, hint) {
+  return { name, label, type: 'select', value, hint, options: options.map((o) => (typeof o === 'object' ? o : { value: o, label: o })) };
 }
 const yesNo = () => [{ value: 'false', label: 'No' }, { value: 'true', label: 'Yes' }];
 
@@ -6519,6 +6793,10 @@ async function nis2Print(path) {
 views.reporting = async () => {
   const root = el('div', { class: 'nis2' });
   const sections = [['nis2', 'NIS2'], ['generator', 'Report Generator']];
+  // Audit is RBAC-gated: only admins may see who did what on the server.
+  if (role === 'admin') sections.push(['audit', 'Audit']);
+  // Guard against a stale section the current user may no longer access.
+  if (!sections.some(([k]) => k === reportingState.section)) reportingState.section = 'nis2';
   const bar = el('div', { class: 'subtabs nis2-subtabs' },
     ...sections.map(([key, label]) => el('button', {
       class: `small ghost${reportingState.section === key ? ' active' : ''}`,
@@ -6529,7 +6807,10 @@ views.reporting = async () => {
   const body = el('div', { class: 'nis2-body' }, el('div', { class: 'empty' }, 'Loading…'));
   root.append(body);
   try {
-    body.replaceChildren(reportingState.section === 'generator' ? await reportGenerator() : await nis2Module());
+    body.replaceChildren(
+      reportingState.section === 'generator' ? await reportGenerator()
+        : reportingState.section === 'audit' ? await auditModule()
+          : await nis2Module());
   } catch (err) { body.replaceChildren(el('div', { class: 'empty error' }, err.message)); }
   return root;
 };
@@ -6579,13 +6860,21 @@ async function nis2Dashboard() {
     el('div', { class: 'nis2-gauge-label' }, el('strong', {}, 'NIS2 readiness'),
       el('div', { class: 'muted' }, `${d.totals.controls} controls · ${d.totals.risks} risks · ${d.totals.incidents} incidents`))));
 
-  const kpi = (k, v, cls) => el('div', { class: 'kpi' },
+  wrap.append(nis2Explain(
+    'A single self-assessment score for how prepared you are under the NIS2 directive — the mean of the ten risk-management areas below, each scored from how complete its controls’ evidence is.',
+    'It is a planning aid, not a certificate. Work the weak categories and the recommended actions until you can stand behind the number, then generate a report for the board or the authority.'));
+
+  const kpi = (k, v, cls, title) => el('div', { class: 'kpi', ...(title ? { title } : {}) },
     el('div', { class: 'kpi-k' }, k), el('div', { class: `kpi-v ${cls || ''}` }, String(v)));
   wrap.append(el('div', { class: 'kpi-grid' },
-    kpi('Open critical risks', d.openCriticalRisks, d.openCriticalRisks ? 'crit-text' : ''),
-    kpi('High/medium findings', d.openHighMediumFindings),
-    kpi('Incidents (30 days)', d.incidentsLast30Days),
-    kpi('Controls without evidence', d.controlsWithoutEvidence, d.controlsWithoutEvidence ? 'warn-text' : '')));
+    kpi('Open critical risks', d.openCriticalRisks, d.openCriticalRisks ? 'crit-text' : '',
+      'Risks in the Critical band (likelihood × impact ≥ 15) still open or only being mitigated — each warrants a documented management decision.'),
+    kpi('High/medium findings', d.openHighMediumFindings, '',
+      'Open risks in the High or Medium band — the next tier to work down once the critical ones are handled.'),
+    kpi('Incidents (30 days)', d.incidentsLast30Days, '',
+      'Security incidents detected in the last 30 days. Any flagged “notification required” carry a reporting duty to the authority within the NIS2 (Art. 23) deadlines.'),
+    kpi('Controls without evidence', d.controlsWithoutEvidence, d.controlsWithoutEvidence ? 'warn-text' : '',
+      'Controls with no evidence reference on file (or marked Missing/Overdue). Evidence is what an auditor asks for — these are what pull the readiness score down.')));
 
   // Category status grid.
   wrap.append(el('h3', { class: 'nis2-h3' }, 'Status by category'));
@@ -6611,18 +6900,18 @@ async function nis2Dashboard() {
 function nis2RiskFields(r) {
   r = r || {};
   return [
-    { name: 'title', label: 'Title', value: r.title },
-    selField('category', 'Category', NIS2_CATEGORIES, r.category || NIS2_CATEGORIES[0]),
-    { name: 'affectedAsset', label: 'Affected asset', value: r.affectedAsset },
-    selField('likelihood', 'Likelihood (1–5)', ['1', '2', '3', '4', '5'], String(r.likelihood || 1)),
-    selField('impact', 'Impact (1–5)', ['1', '2', '3', '4', '5'], String(r.impact || 1)),
-    { name: 'owner', label: 'Owner', value: r.owner },
-    selField('status', 'Status', NIS2_RISK_STATUS, r.status || 'open'),
-    { name: 'dueDate', label: 'Due date', type: 'date', value: r.dueDate || '' },
-    selField('managementAcceptance', 'Management acceptance', yesNo(), String(!!r.managementAcceptance)),
-    { name: 'evidenceLink', label: 'Evidence link', value: r.evidenceLink },
-    { name: 'mitigationPlan', label: 'Mitigation plan', type: 'textarea', value: r.mitigationPlan },
-    { name: 'description', label: 'Description', type: 'textarea', value: r.description },
+    { name: 'title', label: 'Title', value: r.title, hint: 'Short, recognisable name for the risk (e.g. “Unpatched internet-facing VPN gateway”).' },
+    selField('category', 'Category', NIS2_CATEGORIES, r.category || NIS2_CATEGORIES[0], 'Which NIS2 risk-management area this risk belongs to.'),
+    { name: 'affectedAsset', label: 'Affected asset', value: r.affectedAsset, hint: 'The system, service or data the risk threatens.' },
+    selField('likelihood', 'Likelihood (1–5)', ['1', '2', '3', '4', '5'], String(r.likelihood || 1), 'How probable is it? 1 = rare, 5 = almost certain.'),
+    selField('impact', 'Impact (1–5)', ['1', '2', '3', '4', '5'], String(r.impact || 1), 'How damaging if it happens? 1 = negligible, 5 = severe. The score (likelihood × impact, 1–25) and its band are computed for you.'),
+    { name: 'owner', label: 'Owner', value: r.owner, hint: 'Who is accountable for treating this risk.' },
+    selField('status', 'Status', NIS2_RISK_STATUS, r.status || 'open', 'open = untreated · mitigating = treatment under way · accepted = consciously tolerated · closed = resolved.'),
+    { name: 'dueDate', label: 'Due date', type: 'date', value: r.dueDate || '', hint: 'Target date for the mitigation to be in place.' },
+    selField('managementAcceptance', 'Management acceptance', yesNo(), String(!!r.managementAcceptance), 'Yes only when management has formally decided to tolerate this risk. NIS2 expects such decisions to be documented and owned at management level.'),
+    { name: 'evidenceLink', label: 'Evidence link', value: r.evidenceLink, hint: 'Link (URL or absolute path) to the assessment or decision record that backs this entry.' },
+    { name: 'mitigationPlan', label: 'Mitigation plan', type: 'textarea', value: r.mitigationPlan, hint: 'What you are doing to reduce the likelihood or impact.' },
+    { name: 'description', label: 'Description', type: 'textarea', value: r.description, hint: 'Context: what the risk is and how it could materialise.' },
   ];
 }
 function nis2RiskBody(v) {
@@ -6642,6 +6931,9 @@ async function nis2Risks() {
     el('button', { class: 'small ghost', onclick: () => nis2Download('/api/nis2/export/risks.csv', 'nis2-risks.csv') }, '⤓ CSV'),
     el('button', { class: 'small ghost', onclick: () => nis2Print('/api/nis2/export/risk.html') }, '⤓ PDF'),
     canWrite() ? el('button', { class: 'small', onclick: () => nis2EditRisk() }, '+ New risk') : null));
+  wrap.append(nis2Explain(
+    'Your inventory of cyber risks to the systems and services in scope. Each is scored likelihood × impact (1–25), banded Low→Critical, and given an owner, a due date and — where a risk is tolerated — explicit management sign-off.',
+    'NIS2 (Article 21) requires risk-based security measures. This register is the documented evidence that risks are identified, assessed and being treated — and it feeds the Risk and Executive reports.'));
   if (!risks.length) { wrap.append(el('div', { class: 'empty' }, 'No risks recorded yet.')); return wrap; }
   const head = ['Title', 'Category', 'Asset', 'L×I', 'Score', 'Owner', 'Status', 'Due', ''];
   const rows = risks.map((r) => el('tr', {},
@@ -6678,16 +6970,16 @@ async function nis2DeleteRisk(r) {
 function nis2ControlFields(c) {
   c = c || {};
   return [
-    { name: 'controlName', label: 'Control name', value: c.controlName },
-    selField('nis2Area', 'NIS2 area', NIS2_CATEGORIES, c.nis2Area || NIS2_CATEGORIES[0]),
-    { name: 'owner', label: 'Owner', value: c.owner },
-    selField('frequency', 'Frequency', NIS2_FREQ, c.frequency || 'quarterly'),
-    selField('status', 'Status', NIS2_CONTROL_STATUS, c.status || 'Missing'),
-    { name: 'lastPerformed', label: 'Last performed', type: 'date', value: c.lastPerformed || '' },
-    { name: 'nextDue', label: 'Next due', type: 'date', value: c.nextDue || '' },
-    { name: 'evidenceFile', label: 'Evidence (link/reference)', value: c.evidenceFile },
-    { name: 'description', label: 'Description', type: 'textarea', value: c.description },
-    { name: 'comment', label: 'Comment', type: 'textarea', value: c.comment },
+    { name: 'controlName', label: 'Control name', value: c.controlName, hint: 'The assurance activity itself (e.g. “Quarterly restore test of backups”).' },
+    selField('nis2Area', 'NIS2 area', NIS2_CATEGORIES, c.nis2Area || NIS2_CATEGORIES[0], 'Which of the ten NIS2 areas this control supports — it drives that area’s readiness score.'),
+    { name: 'owner', label: 'Owner', value: c.owner, hint: 'Who is responsible for performing the control.' },
+    selField('frequency', 'Frequency', NIS2_FREQ, c.frequency || 'quarterly', 'How often the control is performed. Frequency plus “Next due” is what makes a control fall Overdue.'),
+    selField('status', 'Status', NIS2_CONTROL_STATUS, c.status || 'Missing', 'OK = performed, with evidence · Partial = partly in place · Missing = not done yet · Overdue = past its due date. Toward readiness, OK counts 100%, Partial 50%, the rest 0%.'),
+    { name: 'lastPerformed', label: 'Last performed', type: 'date', value: c.lastPerformed || '', hint: 'When the control was last carried out.' },
+    { name: 'nextDue', label: 'Next due', type: 'date', value: c.nextDue || '', hint: 'When it is next due. Past this date with status not OK marks the control Overdue.' },
+    { name: 'evidenceFile', label: 'Evidence (link/reference)', value: c.evidenceFile, hint: 'Reference (URL or absolute path) to the proof it ran — test report, review minutes, ticket. This is what an auditor asks to see; controls without it are flagged.' },
+    { name: 'description', label: 'Description', type: 'textarea', value: c.description, hint: 'What the control does and how it is performed.' },
+    { name: 'comment', label: 'Comment', type: 'textarea', value: c.comment, hint: 'Optional notes — last outcome, exceptions, follow-ups.' },
   ];
 }
 function nis2ControlBody(v) {
@@ -6706,6 +6998,9 @@ async function nis2Controls() {
     el('button', { class: 'small ghost', onclick: () => nis2Download('/api/nis2/export/controls.csv', 'nis2-controls.csv') }, '⤓ CSV'),
     el('button', { class: 'small ghost', onclick: () => nis2Print('/api/nis2/export/control.html') }, '⤓ PDF'),
     canWrite() ? el('button', { class: 'small', onclick: () => nis2EditControl() }, '+ New control') : null));
+  wrap.append(nis2Explain(
+    'The recurring technical and organisational security measures you operate — backups, patching, access reviews, log monitoring, etc. — each tied to a NIS2 area, with an owner, a cadence and a reference to the evidence that proves it was performed.',
+    'NIS2 (Article 21) obliges you to implement these measures and keep them effective; the evidence link is what an auditor or the authority asks to see. Controls marked Missing/Overdue or without evidence are flagged here — they are the gaps that lower your readiness score.'));
 
   if (missing.length) {
     wrap.append(el('div', { class: 'nis2-alert' },
@@ -6749,19 +7044,19 @@ function nis2IncidentFields(i) {
   i = i || {};
   const dt = (v) => (v ? new Date(v).toISOString().slice(0, 16) : '');
   return [
-    { name: 'title', label: 'Title', value: i.title },
-    selField('severity', 'Severity', NIS2_SEVERITY, i.severity || 'medium'),
-    selField('status', 'Status', NIS2_INCIDENT_STATUS, i.status || 'open'),
-    { name: 'detectedAt', label: 'Detected at', type: 'datetime-local', value: dt(i.detectedAt) },
-    { name: 'startedAt', label: 'Started at', type: 'datetime-local', value: dt(i.startedAt) },
-    { name: 'resolvedAt', label: 'Resolved at', type: 'datetime-local', value: dt(i.resolvedAt) },
-    selField('nis2Relevant', 'NIS2 relevant', yesNo(), String(!!i.nis2Relevant)),
-    selField('notificationRequired', 'Notification required', yesNo(), String(!!i.notificationRequired)),
-    { name: 'affectedSystems', label: 'Affected systems', type: 'textarea', value: i.affectedSystems },
-    { name: 'businessImpact', label: 'Business impact', type: 'textarea', value: i.businessImpact },
-    { name: 'rootCause', label: 'Root cause', type: 'textarea', value: i.rootCause },
-    { name: 'actionsTaken', label: 'Actions taken', type: 'textarea', value: i.actionsTaken },
-    { name: 'lessonsLearned', label: 'Lessons learned', type: 'textarea', value: i.lessonsLearned },
+    { name: 'title', label: 'Title', value: i.title, hint: 'Short description of the incident.' },
+    selField('severity', 'Severity', NIS2_SEVERITY, i.severity || 'medium', 'Your impact assessment, low → critical. High/critical incidents surface in the Executive report.'),
+    selField('status', 'Status', NIS2_INCIDENT_STATUS, i.status || 'open', 'Where the incident is in its lifecycle: open → investigating → contained → resolved → closed.'),
+    { name: 'detectedAt', label: 'Detected at', type: 'datetime-local', value: dt(i.detectedAt), hint: 'When you became aware of it — the moment the NIS2 (Art. 23) reporting deadlines start counting from.' },
+    { name: 'startedAt', label: 'Started at', type: 'datetime-local', value: dt(i.startedAt), hint: 'When the incident actually began, if known (may precede detection).' },
+    { name: 'resolvedAt', label: 'Resolved at', type: 'datetime-local', value: dt(i.resolvedAt), hint: 'When normal service was restored.' },
+    selField('nis2Relevant', 'NIS2 relevant', yesNo(), String(!!i.nis2Relevant), 'Yes if the incident falls within the scope of the NIS2 directive for your organisation.'),
+    selField('notificationRequired', 'Notification required', yesNo(), String(!!i.notificationRequired), 'Yes if the incident is “significant” and must be reported to the authority/CSIRT. This is the duty that starts the 24-hour early warning / 72-hour notification / one-month final-report clock under NIS2 (Art. 23).'),
+    { name: 'affectedSystems', label: 'Affected systems', type: 'textarea', value: i.affectedSystems, hint: 'Which systems, services or sites were involved.' },
+    { name: 'businessImpact', label: 'Business impact', type: 'textarea', value: i.businessImpact, hint: 'What it meant in practice — downtime, users/customers affected, data exposed. Needed for the authority notification.' },
+    { name: 'rootCause', label: 'Root cause', type: 'textarea', value: i.rootCause, hint: 'What ultimately caused it, once known — required for the final report.' },
+    { name: 'actionsTaken', label: 'Actions taken', type: 'textarea', value: i.actionsTaken, hint: 'Containment, remediation and recovery steps taken.' },
+    { name: 'lessonsLearned', label: 'Lessons learned', type: 'textarea', value: i.lessonsLearned, hint: 'What you will change to prevent a recurrence.' },
   ];
 }
 function nis2IncidentBody(v) {
@@ -6782,6 +7077,9 @@ async function nis2Incidents() {
     el('button', { class: 'small ghost', onclick: () => nis2Download('/api/nis2/export/incidents.csv', 'nis2-incidents.csv') }, '⤓ CSV'),
     el('button', { class: 'small ghost', onclick: () => nis2Print('/api/nis2/export/incident.html') }, '⤓ PDF'),
     canWrite() ? el('button', { class: 'small', onclick: () => nis2EditIncident() }, '+ New incident') : null));
+  wrap.append(nis2Explain(
+    'Your log of significant security incidents — what happened, when it was detected, the systems and business affected, the root cause and the actions taken. These are incidents you record by hand, distinct from the network incidents derived automatically from probes.',
+    'NIS2 (Article 23) makes incident notification a legal duty. Flag “Notification required” for a significant incident: you then owe the national CSIRT/authority an early warning within 24 hours, a full notification within 72 hours, and a final report within one month. Capturing the timeline, impact and root cause here is what lets you produce that report.'));
   if (!incidents.length) { wrap.append(el('div', { class: 'empty' }, 'No incidents recorded yet.')); return wrap; }
   const head = ['Ref', 'Title', 'Severity', 'Detected', 'Status', 'NIS2', 'Notify', ''];
   const rows = incidents.map((i) => el('tr', {},
@@ -6826,7 +7124,9 @@ async function nis2Reports() {
     el('span', { style: 'flex:1' }),
     canWrite() ? el('button', { class: 'small', onclick: () => nis2GenerateReport() }, '+ Generate report') : null));
 
-  wrap.append(el('p', { class: 'muted nis2-note' }, 'Generate a snapshot report (frozen metrics let the next report show the trend). View any report as a print-ready PDF. Reports are approved by an admin/compliance role.'));
+  wrap.append(nis2Explain(
+    'Point-in-time management reports — Executive, Readiness, Risk, Control or Incident — built from the current data and viewable as a print-ready PDF for the board or the authority.',
+    'Each report freezes today’s metrics, so the next report of the same type can show the trend (“since last report”). An admin/compliance role signs a report off by approving the draft — the record that it was reviewed.'));
 
   if (!reports.length) wrap.append(el('div', { class: 'empty' }, 'No reports generated yet.'));
   else {
@@ -6854,8 +7154,9 @@ function nis2PrintReportType(type) {
 }
 function nis2GenerateReport() {
   nis2Modal('Generate report', [
-    selField('reportType', 'Report type', NIS2_REPORT_TYPES.map((t) => ({ value: t[0], label: t[1] })), 'executive'),
-    { name: 'title', label: 'Title (optional)', value: '' },
+    selField('reportType', 'Report type', NIS2_REPORT_TYPES.map((t) => ({ value: t[0], label: t[1] })), 'executive',
+      'Executive = board summary + trend · Readiness = the scorecard · Risk / Control / Incident = the full register for that area.'),
+    { name: 'title', label: 'Title (optional)', value: '', hint: 'Leave blank to use a sensible default for the chosen type.' },
   ], async (v) => {
     await api('/api/nis2/reports', { method: 'POST', body: { reportType: v.reportType, title: v.title || undefined } });
     closeModal(); toast('Report generated'); render();
@@ -6886,6 +7187,94 @@ async function nis2Audit() {
     el('td', {}, e.entityId != null ? `#${e.entityId}` : '–')));
   wrap.append(el('div', { class: 'tablewrap' }, el('table', {},
     el('thead', {}, el('tr', {}, ...head.map((h) => el('th', {}, h)))), el('tbody', {}, ...rows))));
+  return wrap;
+}
+
+// ---- Audit (server-wide trail, admin only) --------------------------------
+// Surfaced under Reporting → Audit. Shows who did what on the server (user
+// actions) and what each agent performed (traffic/probes). Recurring activity
+// is folded onto one row annotated "Repeats every …", per the audit design.
+const auditState = { actorType: '', action: '' };
+
+function fmtInterval(ms) {
+  if (!ms || ms <= 0) return '';
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.round(s / 60)}m`;
+  return fmtDuration(s);
+}
+
+async function auditModule() {
+  const wrap = el('div', { class: 'nis2-inner' });
+  wrap.append(el('h3', { class: 'nis2-h3' }, 'Audit trail'));
+  wrap.append(el('p', { class: 'muted' }, 'Actions performed by users on the server, and what each agent reported — with when, who and what. Repeated activity (continuous reporting, scheduled probes) is recorded once and annotated with how often it repeats.'));
+
+  // Filters: actor type + action, plus refresh / CSV export.
+  const actorSel = el('select', { class: 'small', onchange: () => { auditState.actorType = actorSel.value; load(); } },
+    ...[['', 'All actors'], ['user', 'Users'], ['agent', 'Agents'], ['system', 'System']]
+      .map(([v, l]) => el('option', { value: v, selected: auditState.actorType === v }, l)));
+  const actionSel = el('select', { class: 'small', onchange: () => { auditState.action = actionSel.value; load(); } },
+    el('option', { value: '' }, 'All actions'));
+  const csvHref = () => {
+    const p = new URLSearchParams();
+    if (auditState.actorType) p.set('actorType', auditState.actorType);
+    if (auditState.action) p.set('action', auditState.action);
+    return `/api/audit/export.csv${p.toString() ? `?${p}` : ''}`;
+  };
+  const exportBtn = el('button', { class: 'small ghost', onclick: () => nis2Download(csvHref(), 'audit.csv') }, '⤓ CSV');
+  wrap.append(el('div', { class: 'subtabs', style: 'gap:8px;align-items:center' },
+    actorSel, actionSel, el('button', { class: 'small ghost', onclick: () => load() }, '↻ Refresh'), exportBtn));
+
+  const body = el('div', { class: 'nis2-body' }, el('div', { class: 'empty' }, 'Loading…'));
+  wrap.append(body);
+
+  // Populate the action dropdown once.
+  try {
+    const actions = await api('/api/audit/actions');
+    for (const a of actions) actionSel.append(el('option', { value: a, selected: auditState.action === a }, a));
+  } catch { /* dropdown stays "All actions" */ }
+
+  async function load() {
+    body.replaceChildren(el('div', { class: 'empty' }, 'Loading…'));
+    const p = new URLSearchParams();
+    if (auditState.actorType) p.set('actorType', auditState.actorType);
+    if (auditState.action) p.set('action', auditState.action);
+    p.set('limit', '300');
+    let entries;
+    try { entries = await api(`/api/audit?${p}`); }
+    catch (err) { body.replaceChildren(el('div', { class: 'empty error' }, err.message)); return; }
+    if (!entries.length) { body.replaceChildren(el('div', { class: 'empty' }, 'No audited activity yet.')); return; }
+
+    const head = ['When', 'Actor', 'Action', 'Target', 'Repeats', 'Details'];
+    const rows = entries.map((e) => {
+      const actorCls = e.actorType === 'agent' ? 'neutral' : e.actorType === 'system' ? 'warn' : 'ok';
+      const target = e.targetLabel || (e.targetType ? `${e.targetType}${e.targetId ? ` #${e.targetId}` : ''}` : (e.targetId ? `#${e.targetId}` : '–'));
+      let repeats = '–';
+      if (e.occurrences > 1 || e.repeatIntervalMs) {
+        const iv = fmtInterval(e.repeatIntervalMs);
+        repeats = `Repeats${iv ? ` every ${iv}` : ''} · ×${e.occurrences}${e.lastSeenAt ? ` · last ${fmtDate(e.lastSeenAt)}` : ''}`;
+      }
+      const detailBits = [];
+      if (e.method && e.path) detailBits.push(`${e.method} ${e.path}`);
+      // A failed probe carries a plain reason ("traceroute not installed") —
+      // show it as text, not raw JSON.
+      if (e.detail && e.detail.reason) detailBits.push(String(e.detail.reason));
+      else if (e.detail && Object.keys(e.detail).length) detailBits.push(JSON.stringify(e.detail));
+      if (e.ip) detailBits.push(e.ip);
+      return el('tr', {},
+        el('td', {}, fmtDate(e.ts)),
+        el('td', {}, nbadge(e.actorType, actorCls), ' ', el('span', {}, e.actorLabel || (e.actorId != null ? `#${e.actorId}` : '–')),
+          e.actorRole ? el('span', { class: 'muted' }, ` (${e.actorRole})`) : null),
+        el('td', {}, nbadge(e.action, e.action.endsWith('.delete') ? 'crit' : (e.action.endsWith('-failed') ? 'warn' : 'neutral'))),
+        el('td', {}, target),
+        el('td', { class: e.occurrences > 1 ? 'muted' : '' }, repeats),
+        el('td', { class: 'muted', style: 'max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap', title: detailBits.join(' · ') }, detailBits.join(' · ') || '–'));
+    });
+    body.replaceChildren(el('div', { class: 'tablewrap' }, el('table', {},
+      el('thead', {}, el('tr', {}, ...head.map((h) => el('th', {}, h)))), el('tbody', {}, ...rows))));
+  }
+
+  await load();
   return wrap;
 }
 
@@ -7064,14 +7453,16 @@ PAGE_INFO.reporting = {
     el('h4', {}, 'Inside NIS2 — Dashboard'),
     el('p', {}, 'A single readiness percentage (the mean of the ten category scores, each derived from its controls’ evidence health), plus headline counts and the top recommended actions.'),
     el('h4', {}, 'Risk register'),
-    el('p', {}, 'Risks are scored as likelihood × impact (1–25) and colour-banded Low/Medium/High/Critical. Export to CSV or PDF.'),
+    el('p', {}, 'Your inventory of cyber risks to the systems in scope, each scored likelihood × impact (1–25) and banded Low/Medium/High/Critical, with an owner and treatment status. NIS2 (Article 21) requires risk-based security measures — this register is the evidence that risks are identified, assessed and being treated. Export to CSV or PDF.'),
     el('h4', {}, 'Controls'),
-    el('p', {}, 'Recurring assurance activities tied to a NIS2 area, with status (OK/Partial/Missing/Overdue) and an evidence reference. Controls lacking evidence are flagged.'),
+    el('p', {}, 'The recurring technical and organisational security measures you operate (backups, patching, access reviews, logging…), each tied to a NIS2 area with an owner, a cadence and an evidence reference. NIS2 (Article 21) requires these measures to be kept effective; the evidence is what an auditor asks for, so controls lacking it — or marked Missing/Overdue — are flagged.'),
     el('h4', {}, 'Incidents'),
-    el('p', {}, 'Security incidents (distinct from the network incidents derived from probes). Flag the ones that may carry a NIS2 notification obligation.'),
+    el('p', {}, 'Security incidents you record by hand (distinct from the network incidents derived automatically from probes), with timeline, impact and root cause. Flag “notification required” for a significant incident — NIS2 (Article 23) then obliges you to alert the national CSIRT/authority within 24 hours, file a full notification within 72 hours and a final report within one month.'),
     el('h4', {}, 'Reports & audit'),
     el('p', {}, 'Generate snapshot reports (the frozen metrics let the next report show the trend). Reports are approved by an admin/compliance role. Every change to a risk, control or incident is written to the audit trail.'),
     el('p', { class: 'muted' }, 'PDF export opens a clean, print-ready document — use your browser’s “Save as PDF”.'),
+    el('h4', {}, 'Audit (admin only)'),
+    el('p', {}, 'A server-wide audit trail: which user did what (login, and every create/update/delete) and what each agent performed (traffic measurements, probes) — each with when, who and what. Repeated activity such as continuous reporting or scheduled probes is recorded once and annotated “Repeats every …” rather than spamming the log. Visible only to administrators; exportable to CSV.'),
   ],
 };
 
@@ -7101,8 +7492,9 @@ async function render({ silent = false } = {}) {
   $('#app').classList.remove('hidden');
   connectLive(); // live findings channel (idempotent)
   await loadProfile(); // apply the user's saved colour theme (once per session)
-  await loadFeatures();
-  applyFeatureVisibility(); // hide modules not included in the licence
+  await Promise.all([loadFeatures(), loadPlan()]);
+  applyFeatureVisibility(); // dim modules the licence excludes (tied to the active plan)
+  applyRoleVisibility(); // hide nav items above the user's role + collapse empty groups
   // Show who is logged in: email + role.
   $('#whoami').replaceChildren(
     el('span', { class: 'who-email' }, email || '—'),
@@ -7163,7 +7555,16 @@ $('#refresh').addEventListener('click', () => render());
 $('#autorefresh').addEventListener('change', (e) => setAutoRefresh(e.target.checked));
 function closeNav() { $('#app').classList.remove('nav-open'); }
 for (const b of document.querySelectorAll('.tabs button')) {
-  b.addEventListener('click', () => { closeDrawer(); closeNav(); currentView = b.dataset.view; render(); });
+  b.addEventListener('click', () => {
+    closeDrawer(); closeNav();
+    // Locked (licence-excluded) items don't open — they nudge to the licence page.
+    if (b.classList.contains('locked')) {
+      toast(`${lockedHint((b.textContent || 'This module').trim(), b.dataset.feature)} — see License.`);
+      settingsTab = 'license'; currentView = 'settings'; render();
+      return;
+    }
+    currentView = b.dataset.view; render();
+  });
 }
 // Off-canvas sidebar (mobile/tablet): the ☰ button opens it; tapping the dimmed
 // backdrop or anything outside the sidebar closes it again.

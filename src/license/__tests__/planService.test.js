@@ -127,6 +127,31 @@ test('feature gate ORs the legacy proof map with plan features (never removes ac
   assert.deepEqual(gate.summary(), { analysis: true, assistant: false, alerting: false, geo: true });
 });
 
+test('moduleRequirements maps each legacy module to the package it is sold under', () => {
+  const ps = createPlanService({ licenseManager: lm({ plan: 'pilot' }) });
+  const mods = ps.moduleRequirements();
+  assert.deepEqual(mods.geo, {
+    required_plan: 'professional',
+    required_plan_name: 'Professional',
+    required_plan_label: 'BlueEye Professional',
+  });
+  assert.equal(mods.analysis.required_plan_name, 'Professional');
+  assert.equal(mods.assistant.required_plan_label, 'BlueEye Enterprise');
+  // Exposed on the UI summary too.
+  assert.deepEqual(ps.summary().modules, mods);
+});
+
+test('module tiering is display-only — a plan key never GRANTS a legacy module', () => {
+  // Professional plan, but the signed proof carries NO module features: the gate
+  // must still deny geo/analysis (no licence bypass via the plan/MODULE_PLAN_TIER).
+  const manager = lm({ plan: 'professional', features: {} });
+  const ps = createPlanService({ licenseManager: manager });
+  const gate = createFeatureGate({ licenseManager: manager, planService: ps });
+  assert.equal(gate.isFeatureEnabled('geo'), false);
+  assert.equal(gate.isFeatureEnabled('analysis'), false);
+  assert.equal(ps.hasFeature('geo'), false);
+});
+
 test('upgradeHint names the required BlueEye plan', () => {
   const ps = createPlanService({ licenseManager: lm({ plan: 'starter' }) });
   assert.equal(ps.upgradeHint('api_access'), 'This feature requires BlueEye Professional.');

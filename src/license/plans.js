@@ -51,6 +51,20 @@ const FEATURE_CATALOG = {
 
 const ALL_FEATURE_KEYS = Object.keys(FEATURE_CATALOG);
 
+// Display-only tiering for the four LEGACY module keys (analysis/assistant/
+// alerting/geo). These stay OUT of FEATURE_CATALOG / allowed_features on purpose:
+// a plan key alone must never GRANT them (that would let a bare LICENSE_PLAN env
+// unlock a module with no signed proof — a licence bypass). Entitlement keeps
+// flowing solely from the signed proof's own `features` map. This map exists ONLY
+// so the UI can label a locked module with the package it is sold under
+// ("Requires BlueEye Professional"). Adjust the tier here — it has no enforcement
+// effect.
+const MODULE_PLAN_TIER = {
+  analysis: 'professional',
+  geo: 'professional',
+  alerting: 'professional',
+  assistant: 'enterprise',
+};
 // Convenience splits over FEATURE_CATALOG.status, for the UI legend, the matrix
 // and tests. A feature with no explicit status counts as 'available'.
 function featureStatus(featureKey) {
@@ -253,6 +267,7 @@ module.exports = {
   PLAN_ORDER,
   FEATURE_CATALOG,
   ALL_FEATURE_KEYS,
+  MODULE_PLAN_TIER,
   ROADMAP_FEATURE_KEYS,
   AVAILABLE_FEATURE_KEYS,
   featureStatus,

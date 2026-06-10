@@ -195,19 +195,87 @@ async function login(emailInput, password) {
 let licenseFeatures = null;
 let featuresLoadedAt = 0;
 const FEATURES_TTL_MS = 60000;
-function invalidateFeatures() { licenseFeatures = null; featuresLoadedAt = 0; }
+// The active licence package (Pilot/Starter/Professional/Enterprise/MSP). Locked
+// modules are presented relative to THIS — i.e. "not part of your <plan> licence" —
+// rather than as a generic free/pro tier. Same TTL + invalidation as the feature map.
+let licensePlan = null;
+let planLoadedAt = 0;
+function invalidateFeatures() {
+  licenseFeatures = null; featuresLoadedAt = 0;
+  licensePlan = null; planLoadedAt = 0;
+}
 async function loadFeatures() {
   if (licenseFeatures && Date.now() - featuresLoadedAt < FEATURES_TTL_MS) return licenseFeatures;
   try { licenseFeatures = await api('/license/features'); featuresLoadedAt = Date.now(); }
   catch { if (!licenseFeatures) licenseFeatures = {}; }
   return licenseFeatures;
 }
+async function loadPlan() {
+  if (licensePlan && Date.now() - planLoadedAt < FEATURES_TTL_MS) return licensePlan;
+  try { licensePlan = await api('/license/plan'); planLoadedAt = Date.now(); }
+  catch { if (!licensePlan) licensePlan = {}; }
+  return licensePlan;
+}
+// The customer-facing name of the active licence ("Professional"), or '' if unknown.
+function activePlanName() { return (licensePlan && licensePlan.plan_name) || ''; }
+// The package a locked module is sold under, from /license/plan's `modules` map
+// (server-side source of truth). Returns { name, label } or null when unknown.
+function moduleRequirement(featureKey) {
+  const m = licensePlan && licensePlan.modules && licensePlan.modules[featureKey];
+  return m && m.required_plan_name ? { name: m.required_plan_name, label: m.required_plan_label } : null;
+}
+// How a licence-excluded module is described in tooltips/toasts — tied to the
+// actual licence setup: name the package that unlocks it, else fall back to the
+// active plan.
+function lockedHint(label, featureKey) {
+  const need = moduleRequirement(featureKey);
+  if (need) return `${label} requires ${need.label}`;
+  const plan = activePlanName();
+  return plan
+    ? `${label} is not part of your ${plan} licence`
+    : `${label} is not included in your current licence`;
+}
 function applyFeatureVisibility() {
   const feats = licenseFeatures || {};
   for (const b of document.querySelectorAll('.tabs button[data-feature]')) {
     const allowed = feats[b.dataset.feature] !== false; // show until we know it's off
-    b.classList.toggle('hidden', !allowed);
+    // Rather than hide a module the licence excludes, keep it visible but dimmed
+    // with a lock marker (see .tabs button.locked). The state + tooltip are driven
+    // by the actual licence setup (active plan + module entitlements), not a generic
+    // free/pro split. Clicking it routes to Settings → License, never the 403 view.
+    b.classList.toggle('locked', !allowed);
+    if (!allowed) {
+      const label = (b.textContent || 'This module').trim();
+      const need = moduleRequirement(b.dataset.feature);
+      // Badge shows the required package (e.g. "Professional"); lock glyph if unknown.
+      b.dataset.lockBadge = need ? need.name : '🔒';
+      b.title = lockedHint(label, b.dataset.feature);
+    } else {
+      delete b.dataset.lockBadge;
+      b.removeAttribute('title');
+    }
     if (!allowed && currentView === b.dataset.view) currentView = 'overview';
+  }
+}
+// Role-based menu visibility. Roles are hierarchical (viewer < operator < admin);
+// a nav item's data-min-role is the lowest role allowed to open it (absent = viewer,
+// i.e. everyone). Items above the user's role are hidden, and any category group left
+// with no visible items collapses so the rail shows only relevant sections. Mirrors
+// applyFeatureVisibility's redirect: if the current view just disappeared, fall back
+// to the always-available landing page.
+const ROLE_RANK = { viewer: 1, operator: 2, admin: 3 };
+function roleAtLeast(min) { return (ROLE_RANK[role] || 0) >= (ROLE_RANK[min] || 1); }
+function applyRoleVisibility() {
+  for (const b of document.querySelectorAll('.tabs button[data-min-role]')) {
+    const allowed = roleAtLeast(b.dataset.minRole);
+    b.classList.toggle('role-hidden', !allowed);
+    if (!allowed && currentView === b.dataset.view) currentView = 'fleet';
+  }
+  // Collapse category groups whose items are all hidden (by role or licence).
+  for (const g of document.querySelectorAll('.tabs .nav-group')) {
+    const anyVisible = [...g.querySelectorAll('button')]
+      .some((b) => !b.classList.contains('hidden') && !b.classList.contains('role-hidden'));
+    g.classList.toggle('hidden', !anyVisible);
   }
 }
 // Synchronous entitlement check against the cached licence features. render()
@@ -347,7 +415,7 @@ function gotoView(viewKey) { closeDrawer(); currentView = viewKey; render(); }
 function viewLink(viewKey, label) {
   const text = label || VIEW_LABELS[viewKey] || viewKey;
   const tab = document.querySelector(`.tabs button[data-view="${viewKey}"]`);
-  if (tab && tab.classList.contains('hidden')) return document.createTextNode(text);
+  if (tab && (tab.classList.contains('hidden') || tab.classList.contains('locked'))) return document.createTextNode(text);
   return el('a', { href: '#', class: 'drawer-link', onclick: (e) => { e.preventDefault(); gotoView(viewKey); } }, text);
 }
 // Deep-link into a specific Settings sub-tab (Analysis, Retention, Traffic types…).
@@ -7192,8 +7260,9 @@ async function render({ silent = false } = {}) {
   $('#app').classList.remove('hidden');
   connectLive(); // live findings channel (idempotent)
   await loadProfile(); // apply the user's saved colour theme (once per session)
-  await loadFeatures();
-  applyFeatureVisibility(); // hide modules not included in the licence
+  await Promise.all([loadFeatures(), loadPlan()]);
+  applyFeatureVisibility(); // dim modules the licence excludes (tied to the active plan)
+  applyRoleVisibility(); // hide nav items above the user's role + collapse empty groups
   // Show who is logged in: email + role.
   $('#whoami').replaceChildren(
     el('span', { class: 'who-email' }, email || '—'),
@@ -7254,7 +7323,16 @@ $('#refresh').addEventListener('click', () => render());
 $('#autorefresh').addEventListener('change', (e) => setAutoRefresh(e.target.checked));
 function closeNav() { $('#app').classList.remove('nav-open'); }
 for (const b of document.querySelectorAll('.tabs button')) {
-  b.addEventListener('click', () => { closeDrawer(); closeNav(); currentView = b.dataset.view; render(); });
+  b.addEventListener('click', () => {
+    closeDrawer(); closeNav();
+    // Locked (licence-excluded) items don't open — they nudge to the licence page.
+    if (b.classList.contains('locked')) {
+      toast(`${lockedHint((b.textContent || 'This module').trim(), b.dataset.feature)} — see License.`);
+      settingsTab = 'license'; currentView = 'settings'; render();
+      return;
+    }
+    currentView = b.dataset.view; render();
+  });
 }
 // Off-canvas sidebar (mobile/tablet): the ☰ button opens it; tapping the dimmed
 // backdrop or anything outside the sidebar closes it again.

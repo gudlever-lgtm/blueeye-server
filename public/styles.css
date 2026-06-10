@@ -520,6 +520,7 @@ main#view:has(.fleet) { max-width: 1320px; }
 .nic-model-row { display: flex; justify-content: space-between; gap: 16px; padding: 7px 0; border-top: 1px solid var(--border); }
 .nic-model-row:first-of-type { border-top: none; }
 .nics-controls { display: flex; align-items: center; gap: 10px; margin: 0 0 14px; }
+.nic-filter { flex: 0 1 320px; max-width: 320px; }
 .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
 .seg-btn { font: inherit; font-size: 13px; padding: 4px 12px; border: none; background: var(--panel); color: var(--muted); cursor: pointer; }
 .seg-btn + .seg-btn { border-left: 1px solid var(--border); }

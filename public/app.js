@@ -3792,24 +3792,43 @@ views.nics = async () => {
       esc(a.name), a.iface ? el('span', { class: 'muted' }, ` (${esc(a.iface)})`) : null)));
 
   // Group-by toggle: aggregate by NIC model (drift-first) or list every agent
-  // with its NIC specs. Defaults to models — the firmware-drift lens.
+  // with its NIC specs. Defaults to models — the firmware-drift lens. A search box
+  // filters within the active group (model/driver/firmware, or agent/location/nic).
   const body = el('div', { class: 'nics-body' });
+  let nicMode = 'models';
+  const filterInput = el('input', { type: 'search', class: 'nic-filter', placeholder: 'Filter…' });
+  const q = () => filterInput.value.trim().toLowerCase();
+  const renderBody = () => {
+    filterInput.placeholder = nicMode === 'agents'
+      ? 'Filter agent / location / driver / firmware…'
+      : 'Filter model / firmware…';
+    body.replaceChildren(nicMode === 'agents' ? renderByAgent(q()) : renderByModel(q()));
+  };
   const seg = el('div', { class: 'seg' });
   const setMode = (mode) => {
+    nicMode = mode;
     for (const b of seg.children) b.classList.toggle('on', b.dataset.mode === mode);
-    body.replaceChildren(mode === 'agents' ? renderByAgent() : renderByModel());
+    renderBody();
   };
   for (const [mode, label] of [['models', 'Models'], ['agents', 'Agents']]) {
     seg.append(el('button', { class: 'seg-btn', 'data-mode': mode, onclick: () => setMode(mode) }, label));
   }
-  root.append(el('div', { class: 'nics-controls' }, el('span', { class: 'muted' }, 'Group by'), seg), body);
+  filterInput.addEventListener('input', renderBody);
+  root.append(el('div', { class: 'nics-controls' },
+    el('span', { class: 'muted' }, 'Group by'), seg,
+    el('span', { class: 'spacer' }),
+    filterInput), body);
+
+  const has = (v, needle) => String(v == null ? '' : v).toLowerCase().includes(needle);
 
   // ---- Models view: firmware drift first, then the full model inventory. ----
-  function renderByModel() {
+  function renderByModel(needle) {
+    const modelMatch = (m) => !needle || has(m.label, needle) || (m.firmwares || []).some((f) => has(f.firmwareVersion, needle));
     const wrap = el('div', {});
-    if (inv.drift.length) {
+    const drift = inv.drift.filter(modelMatch);
+    if (drift.length) {
       const driftCard = el('div', { class: 'nic-card drift-card' }, el('h3', {}, '⚠ Firmware drift'));
-      for (const model of inv.drift) {
+      for (const model of drift) {
         const block = el('div', { class: 'drift-model' },
           el('div', { class: 'drift-head' }, el('strong', {}, esc(model.label)), el('span', { class: 'muted' }, ` · ${model.count} unit(s)`)));
         for (const f of model.firmwares) {
@@ -3823,8 +3842,10 @@ views.nics = async () => {
       }
       wrap.append(driftCard);
     }
-    const invCard = el('div', { class: 'nic-card' }, el('h3', {}, 'All NIC models'));
-    for (const model of inv.drivers) {
+    const models = inv.drivers.filter(modelMatch);
+    const invCard = el('div', { class: 'nic-card' }, el('h3', {}, needle ? `NIC models (${models.length} of ${inv.drivers.length})` : 'All NIC models'));
+    if (!models.length) invCard.append(el('div', { class: 'empty' }, needle ? 'No NIC models match the filter.' : 'No NIC models.'));
+    for (const model of models) {
       const fwSummary = model.firmwares.map((f) => `${f.firmwareVersion} ×${f.count}`).join(' · ');
       invCard.append(el('div', { class: 'nic-model-row' },
         el('div', {}, el('strong', {}, esc(model.label)), model.hasDrift ? el('span', { class: 'badge warn', style: 'margin-left:.4rem' }, 'drift') : null),
@@ -3835,15 +3856,22 @@ views.nics = async () => {
   }
 
   // ---- Agents view: each agent that reports NIC data + its NIC specs. ----
-  function renderByAgent() {
-    const card = el('div', { class: 'nic-card' }, el('h3', {}, `Agents reporting NIC data (${inv.byAgent.length})`));
-    for (const a of inv.byAgent) {
+  function renderByAgent(needle) {
+    const nicMatch = (n) => !needle || [n.iface, n.driver, n.driverVersion, n.firmwareVersion, n.busInfo, n.pciId].some((v) => has(v, needle));
+    const agentMatch = (a) => !needle || has(a.name, needle) || has(a.location, needle) || a.nics.some(nicMatch);
+    const agents = inv.byAgent.filter(agentMatch);
+    const card = el('div', { class: 'nic-card' }, el('h3', {}, `Agents reporting NIC data (${needle ? `${agents.length} of ${inv.byAgent.length}` : agents.length})`));
+    if (!agents.length) card.append(el('div', { class: 'empty' }, 'No agents match the filter.'));
+    for (const a of agents) {
+      // If the filter matched a NIC, show only the matching NICs; if it matched
+      // the agent's name/location, keep all of its interfaces.
+      const nics = needle && a.nics.some(nicMatch) ? a.nics.filter(nicMatch) : a.nics;
       card.append(el('div', { class: 'nic-agent-row' },
         el('div', { class: 'nic-agent-head' },
           el('button', { class: 'linklike', onclick: () => openAgent(a.id) }, esc(a.name)),
           a.location ? el('span', { class: 'muted' }, ` · ${esc(a.location)}`) : null,
           el('span', { class: 'muted' }, ` · ${a.nics.length} interface(s)`)),
-        nicTable(a.nics)));
+        nicTable(nics)));
     }
     return card;
   }

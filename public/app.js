@@ -2636,22 +2636,58 @@ function interfaceTable(interfaces, source = null) {
 }
 
 // Latest probe results (newest per target). onDetail(r) fires from each row.
-function probeLatestTable(rows, onDetail) {
+// Diagnostic tools the agent can install on request (mirrors the server's
+// allowlist). Used to turn a "<tool> not installed" probe failure into an offer
+// to install it.
+const INSTALLABLE_TOOLS = ['traceroute', 'mtr', 'tcptraceroute'];
+
+// If a failed probe says a tool is missing (e.g. "traceroute not installed"),
+// returns that (installable) tool name, else null.
+function missingToolOf(r) {
+  if (!r || r.ok || !r.detail) return null;
+  const m = /([a-z][a-z0-9_-]*)\s+not installed/i.exec(String(r.detail));
+  const tool = m ? m[1].toLowerCase() : null;
+  return tool && INSTALLABLE_TOOLS.includes(tool) ? tool : null;
+}
+
+// `onInstall(tool, row)` is optional; when provided, a failed probe that names a
+// missing installable tool gets an "Install <tool>" button.
+function probeLatestTable(rows, onDetail, onInstall = null) {
   if (!rows.length) return el('div', { class: 'muted' }, 'No probe results yet — run one above.');
   return el('table', {},
     el('thead', {}, el('tr', {}, ...['Type', 'Target', 'Status', 'RTT', 'Loss', 'Jitter', 'Time', ''].map((h) => el('th', {}, h)))),
-    el('tbody', {}, ...rows.map((r) => el('tr', {},
-      el('td', {}, r.type),
-      el('td', {}, esc(r.target)),
-      el('td', {}, el('span', { class: `badge ${r.ok ? 'online' : 'offline'}`, title: !r.ok && r.detail ? r.detail : null }, r.ok ? 'ok' : 'error'),
-        // Show *why* a probe failed (e.g. "traceroute not installed") so a blank
-        // result is explained inline rather than looking like missing data.
-        !r.ok && r.detail ? el('div', { class: 'small muted' }, esc(r.detail)) : null),
-      el('td', { class: 'num' }, r.rttMs != null ? `${r.rttMs} ms` : '–'),
-      el('td', { class: 'num' }, r.lossPct != null ? `${r.lossPct}%` : '–'),
-      el('td', { class: 'num' }, r.jitterMs != null ? `${r.jitterMs} ms` : '–'),
-      el('td', { class: 'muted' }, r.ts ? fmtTimeShort(new Date(r.ts).getTime()) : '–'),
-      el('td', {}, el('button', { class: 'small ghost', onclick: () => onDetail(r) }, r.type === 'traceroute' ? 'Path' : 'History'))))));
+    el('tbody', {}, ...rows.map((r) => {
+      const tool = onInstall ? missingToolOf(r) : null;
+      return el('tr', {},
+        el('td', {}, r.type),
+        el('td', {}, esc(r.target)),
+        el('td', {}, el('span', { class: `badge ${r.ok ? 'online' : 'offline'}`, title: !r.ok && r.detail ? r.detail : null }, r.ok ? 'ok' : 'error'),
+          // Show *why* a probe failed (e.g. "traceroute not installed") so a blank
+          // result is explained inline rather than looking like missing data.
+          !r.ok && r.detail ? el('div', { class: 'small muted' }, esc(r.detail)) : null),
+        el('td', { class: 'num' }, r.rttMs != null ? `${r.rttMs} ms` : '–'),
+        el('td', { class: 'num' }, r.lossPct != null ? `${r.lossPct}%` : '–'),
+        el('td', { class: 'num' }, r.jitterMs != null ? `${r.jitterMs} ms` : '–'),
+        el('td', { class: 'muted' }, r.ts ? fmtTimeShort(new Date(r.ts).getTime()) : '–'),
+        el('td', {},
+          tool ? el('button', { class: 'small', title: `Install ${tool} on the agent host`, onclick: (e) => onInstall(tool, r, e.target) }, `Install ${tool}`) : null,
+          el('button', { class: 'small ghost', onclick: () => onDetail(r) }, r.type === 'traceroute' ? 'Path' : 'History')));
+    })));
+}
+
+// Posts an install-tool request for one agent and reflects the outcome on the
+// clicked button. Shared by the Probes view and the agent detail page.
+async function requestToolInstall(agentId, tool, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = `Installing ${tool}…`; }
+  try {
+    const res = await api(`/agents/${encodeURIComponent(agentId)}/install-tool`, { method: 'POST', body: { tool } });
+    if (res && res.accepted) toast(`Installing ${tool} on the agent — watch Reporting → Audit for the result.`);
+    else toast(`Agent could not start the install${res && res.reason ? ` (${res.reason})` : ''}.`, true);
+  } catch (e) {
+    toast(e.status === 409 ? 'The agent is not connected right now.' : errText(e), true);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = `Install ${tool}`; }
+  }
 }
 
 // Interactive path map: a directed, weighted hop graph for a traceroute target
@@ -2963,7 +2999,7 @@ views.probes = async () => {
     let data;
     try { data = await api(`/api/probes/latest?agentId=${encodeURIComponent(id)}`); } catch { return; }
     const rows = data.results || [];
-    latestHost.replaceChildren(probeLatestTable(rows, showDetail));
+    latestHost.replaceChildren(probeLatestTable(rows, showDetail, (tool, r, btn) => requestToolInstall(agentSel.value, tool, btn)));
   }
 
   async function showDetail(r) {
@@ -3482,7 +3518,7 @@ views.agent = async () => {
   async function refreshProbes() {
     let data;
     try { data = await api(`/api/probes/latest?agentId=${encodeURIComponent(id)}`); } catch { return; }
-    probeLatestHost.replaceChildren(probeLatestTable(data.results || [], async (r) => { probeDetailHost.replaceChildren(await probeDetail(r, id)); }));
+    probeLatestHost.replaceChildren(probeLatestTable(data.results || [], async (r) => { probeDetailHost.replaceChildren(await probeDetail(r, id)); }, (tool, r, btn) => requestToolInstall(id, tool, btn)));
   }
 
   // ---- Interfaces ----
@@ -4903,7 +4939,7 @@ const SETTINGS_GROUPS = [
   ['Access & security', [['users', 'Users', true], ['auth', 'Authentication', true], ['agentkey', 'Agent key', true]]],
   ['Detection & alerts', [['analyse', 'Analysis', true], ['alerting', 'Alerting', true], ['maintenance', 'Maintenance', true]]],
   ['Data', [['retention', 'Retention', true], ['types', 'Traffic types', true], ['map', 'Map', true]]],
-  ['System', [['updates', 'Updates', true]]],
+  ['System', [['updates', 'Updates', true], ['agents', 'Agents', true]]],
   ['Personal', [['appearance', 'Appearance', false], ['license', 'License', false]]],
 ];
 views.settings = async () => {
@@ -4934,6 +4970,7 @@ views.settings = async () => {
     maintenance: settingsMaintenanceView,
     updates: settingsUpdatesView,
     agentkey: settingsAgentKeyView,
+    agents: settingsAgentsView,
     retention: settingsRetentionView,
     auth: settingsAuthView,
   };
@@ -5131,6 +5168,24 @@ async function settingsAnalyseView() {
 // Speed-test health thresholds: flag agents on the Overview when their latest
 // download/upload falls below a floor (0 = that floor is off). Folded into the
 // agent's health verdict like loss/latency. Admin, runtime-editable.
+// Settings → Agents: agent-management toggles. Currently the opt-in for the
+// server to auto-install a missing diagnostic tool when a probe reports it.
+async function settingsAgentsView() {
+  const data = await api('/api/settings');
+  return el('div', { class: 'settings-grid' }, agentsSettingsCard(data.agents));
+}
+
+function agentsSettingsCard(a) {
+  return settingsFormCard({
+    title: 'Diagnostic tools',
+    values: a || { autoInstallTools: false },
+    endpoint: '/api/settings/agents',
+    fields: [
+      { key: 'autoInstallTools', label: 'Auto-install missing tools', type: 'checkbox', hint: 'When on, a probe that fails because a tool is missing on the host (e.g. "traceroute not installed") makes the server push an install to that agent automatically. The agent only ever installs tools on its own allowlist (traceroute / mtr / tcptraceroute), never an arbitrary package. Off = install manually from the Probes page. Either way the request + outcome is recorded under Reporting → Audit.' },
+    ],
+  });
+}
+
 function throughputSettingsCard(t) {
   return settingsFormCard({
     title: 'Throughput (speed-test) health',

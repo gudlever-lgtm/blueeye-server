@@ -31,6 +31,7 @@ test('describeRequest names agent sub-actions', () => {
   assert.equal(d.targetType, 'agent');
   assert.equal(d.targetId, '5');
   assert.equal(describeRequest('POST', '/agents/5/probe').action, 'agent.probe');
+  assert.equal(describeRequest('POST', '/agents/5/install-tool').action, 'agent.install-tool');
   assert.equal(describeRequest('DELETE', '/agents/5').action, 'agent.delete');
 });
 

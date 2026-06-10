@@ -85,7 +85,7 @@ Mounted in `src/routes/index.js`. User endpoints use JWT + roles
 | `/users` | users.js | admin | user CRUD (last-admin protected) |
 | `/me` | me.js | viewer+ | current user: profile + **personal UI preferences** (colour theme) |
 | `/locations` | locations.js | viewer+/op/admin | sites + per-location live traffic |
-| `/agents` (3 routers) | agents.js · agentReports.js · agentEnroll.js | JWT / agent-token / none | CRUD + run-test + **run-probe**; agent self-report (`/results`, `/probe-results`, `/me/config`, `/me/capabilities`); enroll |
+| `/agents` (3 routers) | agents.js · agentReports.js · agentEnroll.js | JWT / agent-token / none | CRUD + run-test + **run-probe** + **install-tool** (operator+, install a missing diagnostic tool on the host — allowlisted, audited); agent self-report (`/results`, `/probe-results`, `/me/config`, `/me/capabilities`); enroll |
 | `/enrollment-codes` | enrollmentCodes.js | operator+ | enrollment codes (single-use or **bulk / multi-use**) |
 | `/enroll` | enroll.js | none | **frictionless enrollment**: `/config`, `/agent-source.tgz` (agent source bundle + SHA-256, served locally — air-gap-friendly), `/agent-release(.tgz)` (signed release + manifest), `/agent-release-key` (release public key the agent pins for signed self-updates), `/uninstall.sh`, `/agent/:platform` (legacy pre-built binary), `/:code/install.sh` (self-contained installer: verifies the source, then installs natively via Node+systemd by default — Docker opt-in via `BLUEEYE_RUNTIME=docker`) |
 | `/api/enroll` | enrollCommand.js | operator+ | **install-command generator** (`/command`: one-liner + manual/checksum; mints or reuses a code) |
@@ -134,6 +134,7 @@ Later migrations add:
 | 028 / 029 | `ldap_config` + `ldap_role_map` / `ldap_login_audit` | LDAP/AD auth config + group→role map + login audit (bind password encrypted at rest) |
 | 031 | `blueeye_nis2_risks` · `blueeye_nis2_controls` · `blueeye_nis2_incidents` · `blueeye_nis2_reports` · `blueeye_nis2_evidence` · `blueeye_audit_log` | **NIS2 Reporting Center** — risk register, control evidence, security incidents, generated reports (with frozen metric snapshots for trend), evidence references + a generic change audit log |
 | 032 | `audit_events` | **unified, server-wide audit** (Reporting → Audit) — user actions (audit middleware) + agent activity (on ingest); recurring activity folded onto one row via a nullable UNIQUE `dedup_key`. Agent activity includes `agent.probe-failed` — a probe the agent could not execute (e.g. `traceroute` missing), with the reason in `detail.reason` |
+| 033 | (column) | extends `agent_action_audit.action` with `'install-tool'` — operator- or auto-triggered request that an agent install a missing diagnostic tool (request→complete like upgrade/delete; tool in `target_version`). See `src/agentTools.js`, `services/installToolService.js` |
 
 Interface health, traffic-type categories and **fleet health** add **no** tables — they
 derive from the existing `results.payload.traffic` (and `flow_records.asn` for org

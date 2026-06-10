@@ -408,6 +408,35 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
     return merged;
   }
 
+  // ---- Agent management (Settings → Agents) -------------------------------
+  // `autoInstallTools`: when on, a probe that fails because a diagnostic tool is
+  // missing on the host (e.g. "traceroute not installed") triggers the server to
+  // auto-push an install-tool command to that agent. OFF by default — installing
+  // software on customer machines should be a deliberate opt-in. The agent still
+  // enforces its own allowlist, so this can only ever install known tools.
+  const AGENTS_DEFAULTS = { autoInstallTools: false };
+
+  function validateAgents(patch) {
+    const p = patch && typeof patch === 'object' ? patch : {};
+    const value = {};
+    bool(p, 'autoInstallTools', value);
+    return { errors: null, value };
+  }
+
+  async function getAgents() {
+    const override = await loadOverride('agents');
+    const o = override && typeof override === 'object' ? override : {};
+    const base = { ...AGENTS_DEFAULTS, ...o };
+    return { autoInstallTools: !!base.autoInstallTools };
+  }
+
+  async function setAgents(patch) {
+    const { value } = validateAgents(patch || {});
+    const merged = { ...(await getAgents()), ...value };
+    await settingsRepo.set('agents', merged);
+    return merged;
+  }
+
   // ---- AI assistant (Settings → AI assistant) -----------------------------
   // The opt-in LLM assistant's enable flag, API key and model — editable at
   // runtime (admin) instead of env-only. Defaults come from the env-loaded
@@ -757,6 +786,7 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
     getAnalysis, setAnalysis, validateAnalysis,
     getRetention, setRetention, validateRetention,
     getThroughput, setThroughput, validateThroughput,
+    getAgents, setAgents, validateAgents,
     getAssistant, getAssistantSafe, setAssistant, validateAssistant,
     getAlerting, getAlertingSafe, setAlerting, validateAlerting,
     applyStoredOverrides,

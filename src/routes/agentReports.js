@@ -13,7 +13,7 @@ const { validateProbeResults } = require('../validation/probeValidation');
 //
 // Paths use the `/me/...` prefix so they don't collide with the user-JWT agents
 // router's `/:id` routes mounted under the same /agents path.
-function createAgentReportsRouter({ agentAuth, resultsRepo, agentsRepo, auditEventsRepo = null, analysisPipeline = null, flowPipeline = null, probeResultsRepo = null, probePipeline = null, incidentService = null }) {
+function createAgentReportsRouter({ agentAuth, resultsRepo, agentsRepo, auditEventsRepo = null, analysisPipeline = null, flowPipeline = null, probeResultsRepo = null, probePipeline = null, incidentService = null, installToolService = null }) {
   const router = express.Router();
 
   // Records what an agent actually performed in the unified audit trail. Recurring
@@ -74,6 +74,17 @@ function createAgentReportsRouter({ agentAuth, resultsRepo, agentsRepo, auditEve
           }
         }
       });
+
+      // If a probe failed because a tool is missing (e.g. traceroute) and the
+      // operator opted into auto-install, push the install to this agent.
+      // Best-effort + opt-in + throttled; must never break ingestion.
+      if (installToolService && typeof installToolService.maybeAutoInstall === 'function') {
+        try {
+          await installToolService.maybeAutoInstall(req.agent.agentId, value.results);
+        } catch {
+          /* auto-install is best-effort; ingestion already succeeded */
+        }
+      }
 
       // After persistence, derive probe-based findings (reachability/loss/latency/
       // jitter/cert) and alert. Resilient: must never break ingestion.

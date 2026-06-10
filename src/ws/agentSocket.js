@@ -17,8 +17,11 @@ function attachAgentWebSocket({
   agentTokensRepo,
   agentsRepo,
   // Optional: completes the audit row for a server-initiated action when the
-  // agent reports its result (upgrade/delete).
+  // agent reports its result (upgrade/delete/install-tool).
   auditRepo = null,
+  // Optional: the unified audit trail — records the OUTCOME of an install-tool
+  // so operators see it (and why) under Reporting → Audit.
+  auditEventsRepo = null,
   logger = silentLogger,
   path = '/ws/agent',
   heartbeatMs = 30000,
@@ -133,6 +136,16 @@ function attachAgentWebSocket({
         if (auditRepo && typeof auditRepo.complete === 'function') {
           auditRepo.complete(msg.auditId, { state: ok ? 'completed' : 'failed', resultDetail: detail })
             .catch((err) => logger.error('Failed to complete audit row:', err));
+        }
+        // Surface an install-tool outcome in the unified audit trail (the
+        // request was already audited when the operator/auto-trigger sent it).
+        if (msg.action === 'install-tool' && auditEventsRepo && typeof auditEventsRepo.record === 'function') {
+          const tool = typeof msg.tool === 'string' ? msg.tool : null;
+          auditEventsRepo.record({
+            actorType: 'agent', actorId: ws.agentId,
+            action: 'agent.install-tool', targetType: 'tool', targetLabel: tool,
+            detail: { ok, tool, reason: detail, package: msg.package || null },
+          }).catch((err) => logger.error('Failed to record install-tool audit event:', err));
         }
         if (msg.action === 'delete' && ok && agentsRepo && typeof agentsRepo.remove === 'function') {
           agentsRepo.remove(ws.agentId)

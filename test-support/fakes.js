@@ -874,6 +874,7 @@ function makeApp(overrides = {}) {
     incidentsRepo: overrides.incidentsRepo || makeIncidentsRepo(),
     thresholdsRepo: overrides.thresholdsRepo || makeIncidentThresholdsRepo(),
     incidentService: overrides.incidentService || makeIncidentService(),
+    installToolService: overrides.installToolService || null,
     licenseManager,
     planService,
     usageService,

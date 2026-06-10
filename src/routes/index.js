@@ -58,6 +58,7 @@ function createApiRouter({
   incidentsRepo,
   thresholdsRepo,
   incidentService,
+  installToolService,
   licenseManager,
   agentCommander,
   systemInfo,
@@ -188,7 +189,7 @@ function createApiRouter({
   router.use('/audit', createAuditRouter({ auditRepo }));
   // Unified, server-wide audit trail (Reporting → Audit) — admin only.
   if (auditEventsRepo) router.use('/api/audit', createAuditEventsRouter({ auditEventsRepo }));
-  router.use('/agents', createAgentReportsRouter({ agentAuth, resultsRepo, agentsRepo, auditEventsRepo, analysisPipeline, flowPipeline, probeResultsRepo, probePipeline, incidentService }));
+  router.use('/agents', createAgentReportsRouter({ agentAuth, resultsRepo, agentsRepo, auditEventsRepo, analysisPipeline, flowPipeline, probeResultsRepo, probePipeline, incidentService, installToolService }));
   router.use('/agents', createAgentEnrollRouter({ enrollmentStore, notifyDashboard, integrationTrigger: integrationsDispatcher }));
 
   return router;

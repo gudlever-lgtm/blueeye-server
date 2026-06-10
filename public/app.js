@@ -210,6 +210,27 @@ function applyFeatureVisibility() {
     if (!allowed && currentView === b.dataset.view) currentView = 'overview';
   }
 }
+// Role-based menu visibility. Roles are hierarchical (viewer < operator < admin);
+// a nav item's data-min-role is the lowest role allowed to open it (absent = viewer,
+// i.e. everyone). Items above the user's role are hidden, and any category group left
+// with no visible items collapses so the rail shows only relevant sections. Mirrors
+// applyFeatureVisibility's redirect: if the current view just disappeared, fall back
+// to the always-available landing page.
+const ROLE_RANK = { viewer: 1, operator: 2, admin: 3 };
+function roleAtLeast(min) { return (ROLE_RANK[role] || 0) >= (ROLE_RANK[min] || 1); }
+function applyRoleVisibility() {
+  for (const b of document.querySelectorAll('.tabs button[data-min-role]')) {
+    const allowed = roleAtLeast(b.dataset.minRole);
+    b.classList.toggle('role-hidden', !allowed);
+    if (!allowed && currentView === b.dataset.view) currentView = 'fleet';
+  }
+  // Collapse category groups whose items are all hidden (by role or licence).
+  for (const g of document.querySelectorAll('.tabs .nav-group')) {
+    const anyVisible = [...g.querySelectorAll('button')]
+      .some((b) => !b.classList.contains('hidden') && !b.classList.contains('role-hidden'));
+    g.classList.toggle('hidden', !anyVisible);
+  }
+}
 // Synchronous entitlement check against the cached licence features. render()
 // awaits loadFeatures() before any view runs, so the cache is warm. Mirrors
 // applyFeatureVisibility's "allow until we know it's off" rule, so an in-view
@@ -6844,6 +6865,7 @@ async function render({ silent = false } = {}) {
   await loadProfile(); // apply the user's saved colour theme (once per session)
   await loadFeatures();
   applyFeatureVisibility(); // hide modules not included in the licence
+  applyRoleVisibility(); // hide nav items above the user's role + collapse empty groups
   // Show who is logged in: email + role.
   $('#whoami').replaceChildren(
     el('span', { class: 'who-email' }, email || '—'),

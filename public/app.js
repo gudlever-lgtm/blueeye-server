@@ -333,7 +333,12 @@ function openModal(title, fields, onSubmit) {
       input = el('input', { type: f.type || 'text', value: f.value ?? '' });
     }
     inputs[f.name] = input;
-    form.append(el('label', {}, f.label, input));
+    const lbl = el('label', {}, f.label, input);
+    // Optional per-field guidance ("what is this / why does it matter") — rendered
+    // as a small muted note under the input. Backward-compatible: callers that
+    // pass no `hint` are unaffected.
+    if (f.hint) lbl.append(el('span', { class: 'field-hint' }, f.hint));
+    form.append(lbl);
   }
   const errP = el('p', { class: 'error' });
   form.append(errP);
@@ -6537,8 +6542,17 @@ const NIS2_CATSTATUS_CLASS = { good: 'ok', partial: 'warn', weak: 'crit', 'no-da
 const NIS2_PRIO_CLASS = { critical: 'crit', high: 'warn', medium: 'INFO' };
 
 const nbadge = (text, cls) => el('span', { class: `badge ${cls || 'neutral'}` }, text);
-function selField(name, label, options, value) {
-  return { name, label, type: 'select', value, options: options.map((o) => (typeof o === 'object' ? o : { value: o, label: o })) };
+
+// A short "what is this and why does it matter for NIS2" explainer shown at the
+// top of each register, so a first-time user understands what to capture — and
+// why it belongs in a NIS2 report — before filling it in.
+function nis2Explain(what, why) {
+  return el('div', { class: 'nis2-explain' },
+    el('div', {}, el('strong', {}, 'What: '), what),
+    el('div', { class: 'nis2-explain-why' }, el('strong', {}, 'Why: '), why));
+}
+function selField(name, label, options, value, hint) {
+  return { name, label, type: 'select', value, hint, options: options.map((o) => (typeof o === 'object' ? o : { value: o, label: o })) };
 }
 const yesNo = () => [{ value: 'false', label: 'No' }, { value: 'true', label: 'Yes' }];
 
@@ -6648,13 +6662,21 @@ async function nis2Dashboard() {
     el('div', { class: 'nis2-gauge-label' }, el('strong', {}, 'NIS2 readiness'),
       el('div', { class: 'muted' }, `${d.totals.controls} controls · ${d.totals.risks} risks · ${d.totals.incidents} incidents`))));
 
-  const kpi = (k, v, cls) => el('div', { class: 'kpi' },
+  wrap.append(nis2Explain(
+    'A single self-assessment score for how prepared you are under the NIS2 directive — the mean of the ten risk-management areas below, each scored from how complete its controls’ evidence is.',
+    'It is a planning aid, not a certificate. Work the weak categories and the recommended actions until you can stand behind the number, then generate a report for the board or the authority.'));
+
+  const kpi = (k, v, cls, title) => el('div', { class: 'kpi', ...(title ? { title } : {}) },
     el('div', { class: 'kpi-k' }, k), el('div', { class: `kpi-v ${cls || ''}` }, String(v)));
   wrap.append(el('div', { class: 'kpi-grid' },
-    kpi('Open critical risks', d.openCriticalRisks, d.openCriticalRisks ? 'crit-text' : ''),
-    kpi('High/medium findings', d.openHighMediumFindings),
-    kpi('Incidents (30 days)', d.incidentsLast30Days),
-    kpi('Controls without evidence', d.controlsWithoutEvidence, d.controlsWithoutEvidence ? 'warn-text' : '')));
+    kpi('Open critical risks', d.openCriticalRisks, d.openCriticalRisks ? 'crit-text' : '',
+      'Risks in the Critical band (likelihood × impact ≥ 15) still open or only being mitigated — each warrants a documented management decision.'),
+    kpi('High/medium findings', d.openHighMediumFindings, '',
+      'Open risks in the High or Medium band — the next tier to work down once the critical ones are handled.'),
+    kpi('Incidents (30 days)', d.incidentsLast30Days, '',
+      'Security incidents detected in the last 30 days. Any flagged “notification required” carry a reporting duty to the authority within the NIS2 (Art. 23) deadlines.'),
+    kpi('Controls without evidence', d.controlsWithoutEvidence, d.controlsWithoutEvidence ? 'warn-text' : '',
+      'Controls with no evidence reference on file (or marked Missing/Overdue). Evidence is what an auditor asks for — these are what pull the readiness score down.')));
 
   // Category status grid.
   wrap.append(el('h3', { class: 'nis2-h3' }, 'Status by category'));
@@ -6680,18 +6702,18 @@ async function nis2Dashboard() {
 function nis2RiskFields(r) {
   r = r || {};
   return [
-    { name: 'title', label: 'Title', value: r.title },
-    selField('category', 'Category', NIS2_CATEGORIES, r.category || NIS2_CATEGORIES[0]),
-    { name: 'affectedAsset', label: 'Affected asset', value: r.affectedAsset },
-    selField('likelihood', 'Likelihood (1–5)', ['1', '2', '3', '4', '5'], String(r.likelihood || 1)),
-    selField('impact', 'Impact (1–5)', ['1', '2', '3', '4', '5'], String(r.impact || 1)),
-    { name: 'owner', label: 'Owner', value: r.owner },
-    selField('status', 'Status', NIS2_RISK_STATUS, r.status || 'open'),
-    { name: 'dueDate', label: 'Due date', type: 'date', value: r.dueDate || '' },
-    selField('managementAcceptance', 'Management acceptance', yesNo(), String(!!r.managementAcceptance)),
-    { name: 'evidenceLink', label: 'Evidence link', value: r.evidenceLink },
-    { name: 'mitigationPlan', label: 'Mitigation plan', type: 'textarea', value: r.mitigationPlan },
-    { name: 'description', label: 'Description', type: 'textarea', value: r.description },
+    { name: 'title', label: 'Title', value: r.title, hint: 'Short, recognisable name for the risk (e.g. “Unpatched internet-facing VPN gateway”).' },
+    selField('category', 'Category', NIS2_CATEGORIES, r.category || NIS2_CATEGORIES[0], 'Which NIS2 risk-management area this risk belongs to.'),
+    { name: 'affectedAsset', label: 'Affected asset', value: r.affectedAsset, hint: 'The system, service or data the risk threatens.' },
+    selField('likelihood', 'Likelihood (1–5)', ['1', '2', '3', '4', '5'], String(r.likelihood || 1), 'How probable is it? 1 = rare, 5 = almost certain.'),
+    selField('impact', 'Impact (1–5)', ['1', '2', '3', '4', '5'], String(r.impact || 1), 'How damaging if it happens? 1 = negligible, 5 = severe. The score (likelihood × impact, 1–25) and its band are computed for you.'),
+    { name: 'owner', label: 'Owner', value: r.owner, hint: 'Who is accountable for treating this risk.' },
+    selField('status', 'Status', NIS2_RISK_STATUS, r.status || 'open', 'open = untreated · mitigating = treatment under way · accepted = consciously tolerated · closed = resolved.'),
+    { name: 'dueDate', label: 'Due date', type: 'date', value: r.dueDate || '', hint: 'Target date for the mitigation to be in place.' },
+    selField('managementAcceptance', 'Management acceptance', yesNo(), String(!!r.managementAcceptance), 'Yes only when management has formally decided to tolerate this risk. NIS2 expects such decisions to be documented and owned at management level.'),
+    { name: 'evidenceLink', label: 'Evidence link', value: r.evidenceLink, hint: 'Link (URL or absolute path) to the assessment or decision record that backs this entry.' },
+    { name: 'mitigationPlan', label: 'Mitigation plan', type: 'textarea', value: r.mitigationPlan, hint: 'What you are doing to reduce the likelihood or impact.' },
+    { name: 'description', label: 'Description', type: 'textarea', value: r.description, hint: 'Context: what the risk is and how it could materialise.' },
   ];
 }
 function nis2RiskBody(v) {
@@ -6711,6 +6733,9 @@ async function nis2Risks() {
     el('button', { class: 'small ghost', onclick: () => nis2Download('/api/nis2/export/risks.csv', 'nis2-risks.csv') }, '⤓ CSV'),
     el('button', { class: 'small ghost', onclick: () => nis2Print('/api/nis2/export/risk.html') }, '⤓ PDF'),
     canWrite() ? el('button', { class: 'small', onclick: () => nis2EditRisk() }, '+ New risk') : null));
+  wrap.append(nis2Explain(
+    'Your inventory of cyber risks to the systems and services in scope. Each is scored likelihood × impact (1–25), banded Low→Critical, and given an owner, a due date and — where a risk is tolerated — explicit management sign-off.',
+    'NIS2 (Article 21) requires risk-based security measures. This register is the documented evidence that risks are identified, assessed and being treated — and it feeds the Risk and Executive reports.'));
   if (!risks.length) { wrap.append(el('div', { class: 'empty' }, 'No risks recorded yet.')); return wrap; }
   const head = ['Title', 'Category', 'Asset', 'L×I', 'Score', 'Owner', 'Status', 'Due', ''];
   const rows = risks.map((r) => el('tr', {},
@@ -6747,16 +6772,16 @@ async function nis2DeleteRisk(r) {
 function nis2ControlFields(c) {
   c = c || {};
   return [
-    { name: 'controlName', label: 'Control name', value: c.controlName },
-    selField('nis2Area', 'NIS2 area', NIS2_CATEGORIES, c.nis2Area || NIS2_CATEGORIES[0]),
-    { name: 'owner', label: 'Owner', value: c.owner },
-    selField('frequency', 'Frequency', NIS2_FREQ, c.frequency || 'quarterly'),
-    selField('status', 'Status', NIS2_CONTROL_STATUS, c.status || 'Missing'),
-    { name: 'lastPerformed', label: 'Last performed', type: 'date', value: c.lastPerformed || '' },
-    { name: 'nextDue', label: 'Next due', type: 'date', value: c.nextDue || '' },
-    { name: 'evidenceFile', label: 'Evidence (link/reference)', value: c.evidenceFile },
-    { name: 'description', label: 'Description', type: 'textarea', value: c.description },
-    { name: 'comment', label: 'Comment', type: 'textarea', value: c.comment },
+    { name: 'controlName', label: 'Control name', value: c.controlName, hint: 'The assurance activity itself (e.g. “Quarterly restore test of backups”).' },
+    selField('nis2Area', 'NIS2 area', NIS2_CATEGORIES, c.nis2Area || NIS2_CATEGORIES[0], 'Which of the ten NIS2 areas this control supports — it drives that area’s readiness score.'),
+    { name: 'owner', label: 'Owner', value: c.owner, hint: 'Who is responsible for performing the control.' },
+    selField('frequency', 'Frequency', NIS2_FREQ, c.frequency || 'quarterly', 'How often the control is performed. Frequency plus “Next due” is what makes a control fall Overdue.'),
+    selField('status', 'Status', NIS2_CONTROL_STATUS, c.status || 'Missing', 'OK = performed, with evidence · Partial = partly in place · Missing = not done yet · Overdue = past its due date. Toward readiness, OK counts 100%, Partial 50%, the rest 0%.'),
+    { name: 'lastPerformed', label: 'Last performed', type: 'date', value: c.lastPerformed || '', hint: 'When the control was last carried out.' },
+    { name: 'nextDue', label: 'Next due', type: 'date', value: c.nextDue || '', hint: 'When it is next due. Past this date with status not OK marks the control Overdue.' },
+    { name: 'evidenceFile', label: 'Evidence (link/reference)', value: c.evidenceFile, hint: 'Reference (URL or absolute path) to the proof it ran — test report, review minutes, ticket. This is what an auditor asks to see; controls without it are flagged.' },
+    { name: 'description', label: 'Description', type: 'textarea', value: c.description, hint: 'What the control does and how it is performed.' },
+    { name: 'comment', label: 'Comment', type: 'textarea', value: c.comment, hint: 'Optional notes — last outcome, exceptions, follow-ups.' },
   ];
 }
 function nis2ControlBody(v) {
@@ -6775,6 +6800,9 @@ async function nis2Controls() {
     el('button', { class: 'small ghost', onclick: () => nis2Download('/api/nis2/export/controls.csv', 'nis2-controls.csv') }, '⤓ CSV'),
     el('button', { class: 'small ghost', onclick: () => nis2Print('/api/nis2/export/control.html') }, '⤓ PDF'),
     canWrite() ? el('button', { class: 'small', onclick: () => nis2EditControl() }, '+ New control') : null));
+  wrap.append(nis2Explain(
+    'The recurring technical and organisational security measures you operate — backups, patching, access reviews, log monitoring, etc. — each tied to a NIS2 area, with an owner, a cadence and a reference to the evidence that proves it was performed.',
+    'NIS2 (Article 21) obliges you to implement these measures and keep them effective; the evidence link is what an auditor or the authority asks to see. Controls marked Missing/Overdue or without evidence are flagged here — they are the gaps that lower your readiness score.'));
 
   if (missing.length) {
     wrap.append(el('div', { class: 'nis2-alert' },
@@ -6818,19 +6846,19 @@ function nis2IncidentFields(i) {
   i = i || {};
   const dt = (v) => (v ? new Date(v).toISOString().slice(0, 16) : '');
   return [
-    { name: 'title', label: 'Title', value: i.title },
-    selField('severity', 'Severity', NIS2_SEVERITY, i.severity || 'medium'),
-    selField('status', 'Status', NIS2_INCIDENT_STATUS, i.status || 'open'),
-    { name: 'detectedAt', label: 'Detected at', type: 'datetime-local', value: dt(i.detectedAt) },
-    { name: 'startedAt', label: 'Started at', type: 'datetime-local', value: dt(i.startedAt) },
-    { name: 'resolvedAt', label: 'Resolved at', type: 'datetime-local', value: dt(i.resolvedAt) },
-    selField('nis2Relevant', 'NIS2 relevant', yesNo(), String(!!i.nis2Relevant)),
-    selField('notificationRequired', 'Notification required', yesNo(), String(!!i.notificationRequired)),
-    { name: 'affectedSystems', label: 'Affected systems', type: 'textarea', value: i.affectedSystems },
-    { name: 'businessImpact', label: 'Business impact', type: 'textarea', value: i.businessImpact },
-    { name: 'rootCause', label: 'Root cause', type: 'textarea', value: i.rootCause },
-    { name: 'actionsTaken', label: 'Actions taken', type: 'textarea', value: i.actionsTaken },
-    { name: 'lessonsLearned', label: 'Lessons learned', type: 'textarea', value: i.lessonsLearned },
+    { name: 'title', label: 'Title', value: i.title, hint: 'Short description of the incident.' },
+    selField('severity', 'Severity', NIS2_SEVERITY, i.severity || 'medium', 'Your impact assessment, low → critical. High/critical incidents surface in the Executive report.'),
+    selField('status', 'Status', NIS2_INCIDENT_STATUS, i.status || 'open', 'Where the incident is in its lifecycle: open → investigating → contained → resolved → closed.'),
+    { name: 'detectedAt', label: 'Detected at', type: 'datetime-local', value: dt(i.detectedAt), hint: 'When you became aware of it — the moment the NIS2 (Art. 23) reporting deadlines start counting from.' },
+    { name: 'startedAt', label: 'Started at', type: 'datetime-local', value: dt(i.startedAt), hint: 'When the incident actually began, if known (may precede detection).' },
+    { name: 'resolvedAt', label: 'Resolved at', type: 'datetime-local', value: dt(i.resolvedAt), hint: 'When normal service was restored.' },
+    selField('nis2Relevant', 'NIS2 relevant', yesNo(), String(!!i.nis2Relevant), 'Yes if the incident falls within the scope of the NIS2 directive for your organisation.'),
+    selField('notificationRequired', 'Notification required', yesNo(), String(!!i.notificationRequired), 'Yes if the incident is “significant” and must be reported to the authority/CSIRT. This is the duty that starts the 24-hour early warning / 72-hour notification / one-month final-report clock under NIS2 (Art. 23).'),
+    { name: 'affectedSystems', label: 'Affected systems', type: 'textarea', value: i.affectedSystems, hint: 'Which systems, services or sites were involved.' },
+    { name: 'businessImpact', label: 'Business impact', type: 'textarea', value: i.businessImpact, hint: 'What it meant in practice — downtime, users/customers affected, data exposed. Needed for the authority notification.' },
+    { name: 'rootCause', label: 'Root cause', type: 'textarea', value: i.rootCause, hint: 'What ultimately caused it, once known — required for the final report.' },
+    { name: 'actionsTaken', label: 'Actions taken', type: 'textarea', value: i.actionsTaken, hint: 'Containment, remediation and recovery steps taken.' },
+    { name: 'lessonsLearned', label: 'Lessons learned', type: 'textarea', value: i.lessonsLearned, hint: 'What you will change to prevent a recurrence.' },
   ];
 }
 function nis2IncidentBody(v) {
@@ -6851,6 +6879,9 @@ async function nis2Incidents() {
     el('button', { class: 'small ghost', onclick: () => nis2Download('/api/nis2/export/incidents.csv', 'nis2-incidents.csv') }, '⤓ CSV'),
     el('button', { class: 'small ghost', onclick: () => nis2Print('/api/nis2/export/incident.html') }, '⤓ PDF'),
     canWrite() ? el('button', { class: 'small', onclick: () => nis2EditIncident() }, '+ New incident') : null));
+  wrap.append(nis2Explain(
+    'Your log of significant security incidents — what happened, when it was detected, the systems and business affected, the root cause and the actions taken. These are incidents you record by hand, distinct from the network incidents derived automatically from probes.',
+    'NIS2 (Article 23) makes incident notification a legal duty. Flag “Notification required” for a significant incident: you then owe the national CSIRT/authority an early warning within 24 hours, a full notification within 72 hours, and a final report within one month. Capturing the timeline, impact and root cause here is what lets you produce that report.'));
   if (!incidents.length) { wrap.append(el('div', { class: 'empty' }, 'No incidents recorded yet.')); return wrap; }
   const head = ['Ref', 'Title', 'Severity', 'Detected', 'Status', 'NIS2', 'Notify', ''];
   const rows = incidents.map((i) => el('tr', {},
@@ -6895,7 +6926,9 @@ async function nis2Reports() {
     el('span', { style: 'flex:1' }),
     canWrite() ? el('button', { class: 'small', onclick: () => nis2GenerateReport() }, '+ Generate report') : null));
 
-  wrap.append(el('p', { class: 'muted nis2-note' }, 'Generate a snapshot report (frozen metrics let the next report show the trend). View any report as a print-ready PDF. Reports are approved by an admin/compliance role.'));
+  wrap.append(nis2Explain(
+    'Point-in-time management reports — Executive, Readiness, Risk, Control or Incident — built from the current data and viewable as a print-ready PDF for the board or the authority.',
+    'Each report freezes today’s metrics, so the next report of the same type can show the trend (“since last report”). An admin/compliance role signs a report off by approving the draft — the record that it was reviewed.'));
 
   if (!reports.length) wrap.append(el('div', { class: 'empty' }, 'No reports generated yet.'));
   else {
@@ -6923,8 +6956,9 @@ function nis2PrintReportType(type) {
 }
 function nis2GenerateReport() {
   nis2Modal('Generate report', [
-    selField('reportType', 'Report type', NIS2_REPORT_TYPES.map((t) => ({ value: t[0], label: t[1] })), 'executive'),
-    { name: 'title', label: 'Title (optional)', value: '' },
+    selField('reportType', 'Report type', NIS2_REPORT_TYPES.map((t) => ({ value: t[0], label: t[1] })), 'executive',
+      'Executive = board summary + trend · Readiness = the scorecard · Risk / Control / Incident = the full register for that area.'),
+    { name: 'title', label: 'Title (optional)', value: '', hint: 'Leave blank to use a sensible default for the chosen type.' },
   ], async (v) => {
     await api('/api/nis2/reports', { method: 'POST', body: { reportType: v.reportType, title: v.title || undefined } });
     closeModal(); toast('Report generated'); render();
@@ -7221,11 +7255,11 @@ PAGE_INFO.reporting = {
     el('h4', {}, 'Inside NIS2 — Dashboard'),
     el('p', {}, 'A single readiness percentage (the mean of the ten category scores, each derived from its controls’ evidence health), plus headline counts and the top recommended actions.'),
     el('h4', {}, 'Risk register'),
-    el('p', {}, 'Risks are scored as likelihood × impact (1–25) and colour-banded Low/Medium/High/Critical. Export to CSV or PDF.'),
+    el('p', {}, 'Your inventory of cyber risks to the systems in scope, each scored likelihood × impact (1–25) and banded Low/Medium/High/Critical, with an owner and treatment status. NIS2 (Article 21) requires risk-based security measures — this register is the evidence that risks are identified, assessed and being treated. Export to CSV or PDF.'),
     el('h4', {}, 'Controls'),
-    el('p', {}, 'Recurring assurance activities tied to a NIS2 area, with status (OK/Partial/Missing/Overdue) and an evidence reference. Controls lacking evidence are flagged.'),
+    el('p', {}, 'The recurring technical and organisational security measures you operate (backups, patching, access reviews, logging…), each tied to a NIS2 area with an owner, a cadence and an evidence reference. NIS2 (Article 21) requires these measures to be kept effective; the evidence is what an auditor asks for, so controls lacking it — or marked Missing/Overdue — are flagged.'),
     el('h4', {}, 'Incidents'),
-    el('p', {}, 'Security incidents (distinct from the network incidents derived from probes). Flag the ones that may carry a NIS2 notification obligation.'),
+    el('p', {}, 'Security incidents you record by hand (distinct from the network incidents derived automatically from probes), with timeline, impact and root cause. Flag “notification required” for a significant incident — NIS2 (Article 23) then obliges you to alert the national CSIRT/authority within 24 hours, file a full notification within 72 hours and a final report within one month.'),
     el('h4', {}, 'Reports & audit'),
     el('p', {}, 'Generate snapshot reports (the frozen metrics let the next report show the trend). Reports are approved by an admin/compliance role. Every change to a risk, control or incident is written to the audit trail.'),
     el('p', { class: 'muted' }, 'PDF export opens a clean, print-ready document — use your browser’s “Save as PDF”.'),

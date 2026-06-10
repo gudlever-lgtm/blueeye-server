@@ -19,19 +19,19 @@ const withAny = (opts) => ['', ...opts].map((o) => (o === '' ? { value: '', labe
 const SOURCES = {
   summary: {
     label: 'Readiness summary',
-    description: 'Headline NIS2 metrics (readiness %, open risks, incidents, evidence gaps).',
+    description: 'The board-level snapshot: overall readiness %, open critical risks, recent incidents and how many controls still lack evidence.',
     columns: [], defaultColumns: [], filters: [],
   },
   categories: {
     label: 'Category status',
-    description: 'Per-category readiness score and status.',
+    description: 'Readiness broken down across the ten NIS2 risk-management areas (Governance, Access Control, Incident Response, …) — where you are covered and where the gaps are.',
     columns: [COL('category', 'Category'), COL('controlCount', 'Controls'), COL('score', 'Score'), COL('status', 'Status')],
     defaultColumns: ['category', 'controlCount', 'score', 'status'],
     filters: [],
   },
   risks: {
     label: 'Risk register',
-    description: 'Risks with likelihood/impact, score band, owner and status.',
+    description: 'Your inventory of cyber risks, each scored likelihood × impact with a band, owner and treatment status — the evidence of risk management required by NIS2 (Article 21).',
     columns: [
       COL('id', 'ID'), COL('title', 'Title'), COL('category', 'Category'), COL('affectedAsset', 'Asset'),
       COL('likelihood', 'Likelihood'), COL('impact', 'Impact'), COL('riskScore', 'Score'), COL('band', 'Band'),
@@ -49,7 +49,7 @@ const SOURCES = {
   },
   controls: {
     label: 'Controls',
-    description: 'Control-evidence activities with status, owner, cadence and evidence.',
+    description: 'The technical and organisational security measures you operate — each tied to a NIS2 area with an owner and a cadence — and whether an evidence reference proving it was performed is on file.',
     columns: [
       COL('id', 'ID'), COL('controlName', 'Control'), COL('nis2Area', 'Area'), COL('description', 'Description'),
       COL('owner', 'Owner'), COL('frequency', 'Frequency'), COL('lastPerformed', 'Last performed'),
@@ -66,7 +66,7 @@ const SOURCES = {
   },
   incidents: {
     label: 'Security incidents',
-    description: 'Recorded security incidents with severity, status and NIS2 flags.',
+    description: 'Recorded security incidents with severity, timeline and impact. The "Notify" flag marks significant incidents that carry a reporting duty to the authority/CSIRT under NIS2 (Article 23) — the basis for that report.',
     columns: [
       COL('id', 'ID'), COL('incidentId', 'Ref'), COL('title', 'Title'), COL('severity', 'Severity'),
       COL('detectedAt', 'Detected'), COL('startedAt', 'Started'), COL('resolvedAt', 'Resolved'),
@@ -88,7 +88,7 @@ const SOURCES = {
   },
   audit: {
     label: 'Audit trail',
-    description: 'Change log for risks, controls, incidents and reports (admin only).',
+    description: 'Who changed which risk, control, incident or report, and when — the change history that shows the programme is actively maintained (admin only).',
     adminOnly: true,
     columns: [
       COL('id', 'ID'), COL('createdAt', 'When'), COL('userEmail', 'User'),

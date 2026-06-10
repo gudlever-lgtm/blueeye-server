@@ -1017,6 +1017,16 @@ button.active-btn { outline: 2px solid var(--accent); }
 .nis2-exports { display: flex; gap: 8px; margin-top: 18px; flex-wrap: wrap; }
 .nis2-note { margin: 0 0 14px; font-size: 13px; }
 
+/* "What / why" explainer atop each register — a calm, accented info box. */
+.nis2-explain { background: var(--panel); border: 1px solid var(--border); border-left: 3px solid var(--accent);
+  border-radius: 8px; padding: 10px 14px; margin: 0 0 14px; font-size: 13px; line-height: 1.5; }
+.nis2-explain > div + div { margin-top: 4px; }
+.nis2-explain strong { font-weight: 650; color: var(--text); }
+.nis2-explain-why { color: var(--muted); }
+
+/* Optional per-field guidance under a modal input (openModal `hint`). */
+.form-grid .field-hint { font-size: 11.5px; line-height: 1.45; color: var(--muted); font-weight: 400; }
+
 /* The many-field NIS2 edit modal reads best as a two-column grid. */
 .modal-card.wide .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 16px; }
 .modal-card.wide .form-grid textarea { min-height: 52px; }

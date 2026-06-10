@@ -50,6 +50,30 @@ existing user-JWT RBAC:
 | `POST /custom-reports/preview` | viewer+ | Build a custom report (JSON; rows capped per section) |
 | `POST /custom-reports/export` | viewer+ | Export a custom report — `format`: `html` \| `csv` \| `json` |
 
+## Inline guidance (what & why)
+
+So a first-time user can fill the module in well enough to produce a NIS2 report,
+each register explains itself in place:
+
+- **Register explainers** — Dashboard, Risk Register, Controls, Incidents and
+  Reports each open with a small *“What / Why”* box (`nis2Explain()` in
+  `public/app.js`, styled `.nis2-explain`) that says what the register is and why
+  it matters under NIS2 (Art. 21 risk-management measures; Art. 23 incident
+  notification — 24 h / 72 h / 1-month deadlines).
+- **Field hints** — the New/Edit modals carry per-field guidance. `openModal`
+  renders an optional `field.hint` as a muted `.field-hint` note under the input;
+  `selField(name, label, options, value, hint)` takes the same. Used across the
+  risk/control/incident forms (e.g. likelihood × impact, management acceptance,
+  evidence reference, *notification required*).
+- **Dashboard KPIs** carry `title` tooltips explaining each headline count.
+- **Report intros** — the print-ready register PDFs pass a `sec.intro` to
+  `renderRegisterHtml` (risk/control/incident/readiness), and the Report
+  Generator **source descriptions** (`SOURCES[*].description`) spell out what each
+  selectable section contributes — so the *generated* report is self-describing too.
+
+This is copy only — no schema or API change — and the enums stay mirrored between
+`src/nis2/constants.js` and the dashboard `NIS2_*` constants.
+
 ## Report Generator
 
 `src/nis2/reportBuilder.js` declares the available **sources** (`summary`,

@@ -45,7 +45,11 @@ function createAgentReportsRouter({ agentAuth, resultsRepo, agentsRepo, auditEve
       const inserted = await probeResultsRepo.createMany(req.agent.agentId, value.results);
 
       // Audit what the agent probed. Each (type → target) collapses to one row;
-      // repeats (scheduled probes) bump it rather than spamming the trail.
+      // repeats (scheduled probes) bump it rather than spamming the trail. A
+      // probe the agent could not EXECUTE at all (e.g. "traceroute not
+      // installed") carries an explicit execError — audited distinctly as
+      // 'agent.probe-failed' with the reason, so the trail shows the failure
+      // (and why) instead of looking like a normal probe.
       await auditAgentActivity(req.agent.agentId, async (agentId) => {
         const seen = new Set();
         for (const r of value.results) {
@@ -54,11 +58,20 @@ function createAgentReportsRouter({ agentAuth, resultsRepo, agentsRepo, auditEve
           const key = `${type}:${target}`;
           if (seen.has(key)) continue;
           seen.add(key);
-          await auditEventsRepo.recordRecurring({
-            actorType: 'agent', actorId: agentId,
-            action: 'agent.probe', targetType: type, targetLabel: target || null,
-            dedupKey: `agent:${agentId}:probe:${key}`,
-          });
+          if (r && r.execError) {
+            await auditEventsRepo.recordRecurring({
+              actorType: 'agent', actorId: agentId,
+              action: 'agent.probe-failed', targetType: type, targetLabel: target || null,
+              detail: { reason: r.execError },
+              dedupKey: `agent:${agentId}:probe-failed:${key}`,
+            });
+          } else {
+            await auditEventsRepo.recordRecurring({
+              actorType: 'agent', actorId: agentId,
+              action: 'agent.probe', targetType: type, targetLabel: target || null,
+              dedupKey: `agent:${agentId}:probe:${key}`,
+            });
+          }
         }
       });
 

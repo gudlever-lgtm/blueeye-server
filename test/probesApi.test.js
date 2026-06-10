@@ -8,7 +8,7 @@ const assert = require('node:assert/strict');
 const request = require('supertest');
 
 const {
-  makeApp, makeAgentTokensRepo, makeAgentsRepo, makeProbeResultsRepo, makeAgentCommander, authHeader, throwingAsync,
+  makeApp, makeAgentTokensRepo, makeAgentsRepo, makeProbeResultsRepo, makeAgentCommander, makeAuditEventsRepo, authHeader, throwingAsync,
 } = require('../test-support/fakes');
 const { validateProbeSpec, validateProbeResults } = require('../src/validation/probeValidation');
 const { toRow } = require('../src/repositories/probeResultsRepository');
@@ -40,6 +40,55 @@ test('POST /agents/probe-results rejects an invalid type (400)', async () => {
     .post('/agents/probe-results').set('Authorization', 'Bearer t')
     .send({ results: [{ type: 'bogus', target: 'x' }] });
   assert.equal(res.status, 400);
+});
+
+// ---- ingest audits a probe the agent could not execute --------------------
+
+test('POST /agents/probe-results audits a probe the agent could not run as agent.probe-failed', async () => {
+  const auditEventsRepo = makeAuditEventsRepo();
+  const res = await request(makeApp({ agentTokensRepo: agentToken(), auditEventsRepo }))
+    .post('/agents/probe-results').set('Authorization', 'Bearer t')
+    .send({ results: [{ type: 'traceroute', target: 'example.com', ok: false, error: 'traceroute not installed' }] });
+  assert.equal(res.status, 201);
+  const row = auditEventsRepo.rows.find((r) => r.action === 'agent.probe-failed');
+  assert.ok(row, 'a probe-failed row was recorded');
+  assert.equal(row.actorType, 'agent');
+  assert.equal(row.actorId, 9);
+  assert.equal(row.targetType, 'traceroute');
+  assert.equal(row.targetLabel, 'example.com');
+  assert.deepEqual(row.detail, { reason: 'traceroute not installed' });
+  // it is NOT also logged as a normal probe
+  assert.equal(auditEventsRepo.rows.some((r) => r.action === 'agent.probe'), false);
+});
+
+test('POST /agents/probe-results audits ordinary reachability loss as a normal agent.probe', async () => {
+  const auditEventsRepo = makeAuditEventsRepo();
+  // ok:false from 100% loss reports metrics but no error → not an exec failure.
+  await request(makeApp({ agentTokensRepo: agentToken(), auditEventsRepo }))
+    .post('/agents/probe-results').set('Authorization', 'Bearer t')
+    .send({ results: [{ type: 'ping', target: '1.1.1.1', ok: false, lossPct: 100 }] });
+  assert.equal(auditEventsRepo.rows.some((r) => r.action === 'agent.probe-failed'), false);
+  assert.equal(auditEventsRepo.rows.some((r) => r.action === 'agent.probe'), true);
+});
+
+test('POST /agents/probe-results: a repeating probe failure folds onto one row', async () => {
+  const auditEventsRepo = makeAuditEventsRepo();
+  const body = { results: [{ type: 'traceroute', target: 'example.com', ok: false, error: 'traceroute not installed' }] };
+  const app = makeApp({ agentTokensRepo: agentToken(), auditEventsRepo });
+  await request(app).post('/agents/probe-results').set('Authorization', 'Bearer t').send(body);
+  await request(app).post('/agents/probe-results').set('Authorization', 'Bearer t').send(body);
+  const failed = auditEventsRepo.rows.filter((r) => r.action === 'agent.probe-failed');
+  assert.equal(failed.length, 1);
+  assert.equal(failed[0].occurrences, 2);
+});
+
+test('validateProbeResults exposes execError only for genuine run failures', () => {
+  const { value } = validateProbeResults({ results: [
+    { type: 'traceroute', target: 'a', ok: false, error: 'traceroute not installed' },
+    { type: 'ping', target: 'b', ok: false, lossPct: 100 },
+  ] });
+  assert.equal(value.results[0].execError, 'traceroute not installed');
+  assert.equal(value.results[1].execError, null);
 });
 
 // ---- trigger: POST /agents/:id/probe (operator) ---------------------------

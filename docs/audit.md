@@ -67,7 +67,14 @@ On ingest the agent's own activity is recorded:
 - `POST /agents/results` from a **commanded** run-test → discrete
   `record('agent.run-test')`.
 - `POST /agents/probe-results` → `recordRecurring('agent.probe')`, deduped per
-  `(agent, type → target)`.
+  `(agent, type → target)`. A probe the agent could **not execute at all** (a
+  missing binary like `traceroute not installed`, a tool that timed out
+  launching, or an unknown probe type — the agent reports it with an explicit
+  `error`, preserved by validation as `execError`) is instead recorded as
+  `recordRecurring('agent.probe-failed')` with the reason in `detail.reason`, so
+  the trail shows the failure (and why) rather than a normal probe. This is
+  distinct from ordinary reachability loss (`ok:false` with metrics, no error),
+  which stays a plain `agent.probe`.
 
 No per-report agent lookup is added to the hot path: agent rows store only
 `actor_id`, and the read query `LEFT JOIN`s `agents` for the hostname.

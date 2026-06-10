@@ -133,7 +133,7 @@ Later migrations add:
 | 026 / 027 | `integrations` / `integration_audit` | outbound API integrations + per-fire audit (credentials encrypted at rest) |
 | 028 / 029 | `ldap_config` + `ldap_role_map` / `ldap_login_audit` | LDAP/AD auth config + group→role map + login audit (bind password encrypted at rest) |
 | 031 | `blueeye_nis2_risks` · `blueeye_nis2_controls` · `blueeye_nis2_incidents` · `blueeye_nis2_reports` · `blueeye_nis2_evidence` · `blueeye_audit_log` | **NIS2 Reporting Center** — risk register, control evidence, security incidents, generated reports (with frozen metric snapshots for trend), evidence references + a generic change audit log |
-| 032 | `audit_events` | **unified, server-wide audit** (Reporting → Audit) — user actions (audit middleware) + agent activity (on ingest); recurring activity folded onto one row via a nullable UNIQUE `dedup_key` |
+| 032 | `audit_events` | **unified, server-wide audit** (Reporting → Audit) — user actions (audit middleware) + agent activity (on ingest); recurring activity folded onto one row via a nullable UNIQUE `dedup_key`. Agent activity includes `agent.probe-failed` — a probe the agent could not execute (e.g. `traceroute` missing), with the reason in `detail.reason` |
 
 Interface health, traffic-type categories and **fleet health** add **no** tables — they
 derive from the existing `results.payload.traffic` (and `flow_records.asn` for org

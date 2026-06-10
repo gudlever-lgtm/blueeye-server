@@ -81,6 +81,12 @@ function validateProbeResults(body) {
       jitterMs: numOrNull(r.jitterMs), lossPct: numOrNull(r.lossPct), hops,
       status: intOrNull(r.status), certExpiryDays: numOrNull(r.certExpiryDays),
       detail: r.detail != null ? String(r.detail).slice(0, 255) : (r.error != null ? String(r.error).slice(0, 255) : null),
+      // The agent sets `error` only when it could not RUN the probe at all
+      // (binary missing, tool timed out, unknown type) — distinct from ordinary
+      // reachability loss, which reports metrics with no error. Preserved here
+      // (separate from the stored `detail`) so ingestion can audit a genuine
+      // "agent cannot perform this task" without flagging every host-down probe.
+      execError: r.error != null ? String(r.error).slice(0, 255) : null,
     });
   }
   return { value: { results: out } };

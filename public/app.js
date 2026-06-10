@@ -2643,7 +2643,10 @@ function probeLatestTable(rows, onDetail) {
     el('tbody', {}, ...rows.map((r) => el('tr', {},
       el('td', {}, r.type),
       el('td', {}, esc(r.target)),
-      el('td', {}, el('span', { class: `badge ${r.ok ? 'online' : 'offline'}` }, r.ok ? 'ok' : 'error')),
+      el('td', {}, el('span', { class: `badge ${r.ok ? 'online' : 'offline'}`, title: !r.ok && r.detail ? r.detail : null }, r.ok ? 'ok' : 'error'),
+        // Show *why* a probe failed (e.g. "traceroute not installed") so a blank
+        // result is explained inline rather than looking like missing data.
+        !r.ok && r.detail ? el('div', { class: 'small muted' }, esc(r.detail)) : null),
       el('td', { class: 'num' }, r.rttMs != null ? `${r.rttMs} ms` : '–'),
       el('td', { class: 'num' }, r.lossPct != null ? `${r.lossPct}%` : '–'),
       el('td', { class: 'num' }, r.jitterMs != null ? `${r.jitterMs} ms` : '–'),
@@ -6720,13 +6723,16 @@ async function auditModule() {
       }
       const detailBits = [];
       if (e.method && e.path) detailBits.push(`${e.method} ${e.path}`);
-      if (e.detail && Object.keys(e.detail).length) detailBits.push(JSON.stringify(e.detail));
+      // A failed probe carries a plain reason ("traceroute not installed") —
+      // show it as text, not raw JSON.
+      if (e.detail && e.detail.reason) detailBits.push(String(e.detail.reason));
+      else if (e.detail && Object.keys(e.detail).length) detailBits.push(JSON.stringify(e.detail));
       if (e.ip) detailBits.push(e.ip);
       return el('tr', {},
         el('td', {}, fmtDate(e.ts)),
         el('td', {}, nbadge(e.actorType, actorCls), ' ', el('span', {}, e.actorLabel || (e.actorId != null ? `#${e.actorId}` : '–')),
           e.actorRole ? el('span', { class: 'muted' }, ` (${e.actorRole})`) : null),
-        el('td', {}, nbadge(e.action, e.action.endsWith('.delete') ? 'crit' : 'neutral')),
+        el('td', {}, nbadge(e.action, e.action.endsWith('.delete') ? 'crit' : (e.action.endsWith('-failed') ? 'warn' : 'neutral'))),
         el('td', {}, target),
         el('td', { class: e.occurrences > 1 ? 'muted' : '' }, repeats),
         el('td', { class: 'muted', style: 'max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap', title: detailBits.join(' · ') }, detailBits.join(' · ') || '–'));

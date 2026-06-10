@@ -1,6 +1,6 @@
 'use strict';
 
-const COLUMNS = ['agent_id', 'ts', 'type', 'target', 'ok', 'rtt_ms', 'min_ms', 'max_ms', 'jitter_ms', 'loss_pct', 'status', 'cert_expiry_days', 'hops', 'detail'];
+const COLUMNS = ['agent_id', 'ts', 'type', 'target', 'ok', 'rtt_ms', 'min_ms', 'max_ms', 'jitter_ms', 'loss_pct', 'status', 'cert_expiry_days', 'bytes', 'content_type', 'hops', 'detail'];
 
 function toRow(agentId, r) {
   const ts = r.ts instanceof Date ? r.ts : (r.ts ? new Date(r.ts) : new Date());
@@ -17,6 +17,8 @@ function toRow(agentId, r) {
     r.lossPct ?? null,
     r.status ?? null,
     r.certExpiryDays ?? null,
+    r.bytes ?? null,
+    r.contentType != null ? String(r.contentType).slice(0, 120) : null,
     Array.isArray(r.hops) ? JSON.stringify(r.hops) : null,
     r.detail != null ? String(r.detail).slice(0, 255) : null,
   ];
@@ -44,6 +46,8 @@ function fromRow(row) {
     lossPct: row.loss_pct,
     status: row.status ?? null,
     certExpiryDays: row.cert_expiry_days ?? null,
+    bytes: row.bytes ?? null,
+    contentType: row.content_type ?? null,
     hops: parseHops(row.hops),
     detail: row.detail,
   };

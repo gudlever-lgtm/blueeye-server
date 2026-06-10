@@ -1,6 +1,6 @@
 'use strict';
 
-const PROBE_TYPES = ['ping', 'tcp', 'dns', 'traceroute', 'http', 'curl'];
+const PROBE_TYPES = ['ping', 'tcp', 'dns', 'traceroute', 'http', 'curl', 'pageload', 'transaction'];
 const HTTP_METHODS = ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'];
 const HEADER_EXPECT_RE = /^[A-Za-z0-9!#$%&'*+.^_`|~-]+(\s*:\s*.{1,200})?$/;
 const MAX_RESULTS = 200;
@@ -59,6 +59,19 @@ function validateProbeResults(body) {
       if (Number.isNaN(d.getTime())) return { errors: { [`results[${i}].ts`]: 'ts must be a valid date' } };
       ts = d;
     }
+    let elements = null;
+    if (r.elements != null) {
+      if (!Array.isArray(r.elements) || r.elements.length > 64) return { errors: { [`results[${i}].elements`]: 'elements must be an array (<=64)' } };
+      // pageload waterfall: one row per fetched resource (document first). Metadata
+      // only — URL, resource kind, HTTP status, byte count and load time in ms.
+      elements = r.elements.map((e) => ({
+        url: e && e.url ? String(e.url).slice(0, 255) : null,
+        kind: e && e.kind ? String(e.kind).slice(0, 16) : null,
+        status: intOrNull(e && e.status),
+        bytes: intOrNull(e && e.bytes),
+        ms: numOrNull(e && e.ms),
+      }));
+    }
     let hops = null;
     if (r.hops != null) {
       if (!Array.isArray(r.hops) || r.hops.length > 64) return { errors: { [`results[${i}].hops`]: 'hops must be an array (<=64)' } };
@@ -86,6 +99,7 @@ function validateProbeResults(body) {
       // design: the agent reports only the received byte count + content-type,
       // never the response body itself.
       bytes: intOrNull(r.bytes), contentType: r.contentType != null ? String(r.contentType).slice(0, 120) : null,
+      elements,
       detail: r.detail != null ? String(r.detail).slice(0, 255) : (r.error != null ? String(r.error).slice(0, 255) : null),
       // The agent sets `error` only when it could not RUN the probe at all
       // (binary missing, tool timed out, unknown type) — distinct from ordinary
@@ -105,11 +119,16 @@ function validateProbeSpec(body) {
   if (!PROBE_TYPES.includes(type)) return { errors: { type: `type must be one of ${PROBE_TYPES.join(', ')}` } };
 
   const spec = { type };
-  if (type === 'http' || type === 'curl') {
-    // http/curl take a URL (the agent reads spec.host as the target).
+  if (type === 'http' || type === 'curl' || type === 'pageload') {
+    // http/curl/pageload take a URL (the agent reads spec.host as the target).
     const url = normalizeHttpTarget(b.url || b.target || b.host);
     if (!url) return { errors: { target: `a valid http(s) URL is required for a ${type} probe` } };
     spec.host = url;
+    if (type === 'pageload' && b.maxElements !== undefined) {
+      const m = Number(b.maxElements);
+      if (!Number.isInteger(m) || m < 1 || m > 40) return { errors: { maxElements: 'maxElements must be an integer between 1 and 40' } };
+      spec.maxElements = m;
+    }
     if (type === 'curl') {
       // Content-verification parameters. All optional; with none set the curl
       // probe degrades to a status<400 reachability check (like the http probe).
@@ -144,6 +163,56 @@ function validateProbeSpec(body) {
         spec.maxBytes = mb;
       }
     }
+  } else if (type === 'transaction') {
+    // A multi-step journey: ordered steps, each an http(s) request (the URL may
+    // carry {{vars}} extracted from earlier steps) with optional assertions and an
+    // optional value extraction. The agent runs them in order and stops on failure.
+    if (!Array.isArray(b.steps) || b.steps.length === 0) return { errors: { steps: 'a transaction needs at least one step' } };
+    if (b.steps.length > 10) return { errors: { steps: 'too many steps (max 10)' } };
+    const steps = [];
+    for (let i = 0; i < b.steps.length; i += 1) {
+      const s = b.steps[i] && typeof b.steps[i] === 'object' ? b.steps[i] : {};
+      const url = String(s.url || '').trim();
+      if (!/^https?:\/\//i.test(url) || url.length > 512) return { errors: { [`steps[${i}].url`]: 'each step needs an http(s) URL (<=512 chars; may contain {{vars}})' } };
+      const step = { url };
+      if (s.method !== undefined && s.method !== '') {
+        const m = String(s.method).toUpperCase();
+        if (!HTTP_METHODS.includes(m)) return { errors: { [`steps[${i}].method`]: `method must be one of ${HTTP_METHODS.join(', ')}` } };
+        if (m !== 'GET') step.method = m;
+      }
+      if (s.expectStatus !== undefined && s.expectStatus !== null && s.expectStatus !== '') {
+        const st = Number(s.expectStatus);
+        if (!Number.isInteger(st) || st < 100 || st > 599) return { errors: { [`steps[${i}].expectStatus`]: 'expectStatus must be 100-599' } };
+        step.expectStatus = st;
+      }
+      if (s.expectBody) {
+        const eb = String(s.expectBody);
+        if (eb.length > 512) return { errors: { [`steps[${i}].expectBody`]: 'expectBody must be <=512 chars' } };
+        step.expectBody = eb;
+      }
+      if (s.header) {
+        const h = String(s.header);
+        if (h.length > 256) return { errors: { [`steps[${i}].header`]: 'header must be <=256 chars' } };
+        step.header = h;
+      }
+      if (s.data) {
+        const d = String(s.data);
+        if (d.length > 2048) return { errors: { [`steps[${i}].data`]: 'data must be <=2048 chars' } };
+        step.data = d;
+      }
+      if (s.extract && typeof s.extract === 'object' && (s.extract.name || s.extract.pattern)) {
+        const name = String(s.extract.name || '').trim();
+        const pattern = String(s.extract.pattern || '');
+        if (!/^[A-Za-z0-9_]{1,64}$/.test(name)) return { errors: { [`steps[${i}].extract.name`]: 'extract name must be 1-64 chars [A-Za-z0-9_]' } };
+        if (!pattern || pattern.length > 256) return { errors: { [`steps[${i}].extract.pattern`]: 'extract pattern is required (<=256 chars)' } };
+        try { new RegExp(pattern); } catch { return { errors: { [`steps[${i}].extract.pattern`]: 'extract pattern is not a valid regex' } }; }
+        step.extract = { name, pattern, from: s.extract.from === 'header' ? 'header' : 'body' };
+      }
+      steps.push(step);
+    }
+    spec.steps = steps;
+    spec.host = steps[0].url.slice(0, 255); // target/display column
+    if (b.name) spec.name = String(b.name).slice(0, 120);
   } else {
     const host = String(b.host || b.target || '').trim();
     if (!HOST_RE.test(host)) return { errors: { host: 'host/target is required and must be a valid hostname or IP' } };

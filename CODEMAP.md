@@ -102,7 +102,7 @@ Mounted in `src/routes/index.js`. User endpoints use JWT + roles
 | `/api/settings` | settings.js | admin | editable map / **analysis** / **retention** / **flow-categories** / **AI assistant** (enable + API key + model) / **alerting** (channels + secrets, write-only) |
 | `/api/export` | export.js | viewer+ | CSV/JSON export + **investigation bundle** (`/investigation`: per-agent health+probes+interfaces+findings+flows, JSON or event-log CSV; print→PDF client-side) |
 | `/api/flows` | flows.js | viewer+ | **traffic-type categories** (`/categories`) + **conversation explorer** (`/explore`: talkers/ports/protos/series + scan/fan-out) |
-| `/api/probes` | probes.js | viewer+ | **active-probe** results (ping/tcp/dns/traceroute/**http**/**curl**); `/path` → **path-visualisation graph** (hop nodes+links with loss/latency/jitter + GeoIP/ASN, `src/analysis/pathGraph.js`) |
+| `/api/probes` | probes.js | viewer+ | **active-probe** results (ping/tcp/dns/traceroute/**http**/**curl**/**pageload**/**transaction**); `/path` → **path-visualisation graph** (hop nodes+links with loss/latency/jitter + GeoIP/ASN, `src/analysis/pathGraph.js`) |
 | `/api/reports` | reports.js | viewer+ / operator+ | **availability** (uptime % from probes) + **incidents** list (viewer+); CSV (`.csv`, gated `reports_csv`) + print-ready HTML→PDF (`.html`, gated `reports_pdf`); **NIS2 draft** (`/nis2-draft/:id`, operator+) |
 | `/api/thresholds` | thresholds.js | viewer+ read / admin write | **incident thresholds** — global defaults + per-location overrides |
 | `/api/fleet` | fleet.js | viewer+ | **fleet health** rollup (`/health`) + per-agent verdict (`/agent/:id`) + **NIC firmware inventory / drift** (`/nics`) |
@@ -129,6 +129,7 @@ Later migrations add:
 | 015 | (index only) | `idx_probe_ts` for the fleet-wide probe scan |
 | 019 | `probe_results.status` / `.cert_expiry_days` | http probe (status + TLS cert expiry) |
 | 032 | `probe_results.bytes` / `.content_type` | curl content-check probe (received byte count + content-type; pass/fail rides on `detail`) |
+| 033 | `probe_results.elements` | pageload probe waterfall — JSON `[{url,kind,status,bytes,ms}]` (rtt_ms = total load time, bytes = page weight) |
 | 020 | (column) | per-user UI preferences — `users.preferences` JSON (colour theme) |
 | 021 | (column) | `agents.enrollment_code_id` → links an agent to the code it enrolled with (Enrollment page shows each code's agents + live status); `ON DELETE SET NULL` |
 | 022 | `agent_action_audit` | server-initiated agent actions (upgrade/delete) |
@@ -183,7 +184,7 @@ A single vanilla-JS SPA. Key building blocks:
 | Geo/ASN enrichment | `src/geo/enricher.js`, `provider.js`; flows in `flowsRepository.js` |
 | Traffic-type categories | `src/flows/categories.js` (editable via Settings→Traffic types) |
 | Flow/conversation explorer | `flowsRepository.exploreFlows` + `src/routes/flows.js` (`/explore`); UI `views.flows` |
-| Active probes (server) | `src/routes/probes.js`, `probeResultsRepository.js`, `validation/probeValidation.js` (probe types incl. `http` + `curl` content check) — agent side in blueeye-agent `src/probes/` |
+| Active probes (server) | `src/routes/probes.js`, `probeResultsRepository.js`, `validation/probeValidation.js` (probe types incl. `http` + `curl` + `pageload` + multi-step `transaction`) — agent side in blueeye-agent `src/probes/` |
 | Path visualization (traceroute map) | `src/analysis/pathGraph.js` (`buildPathGraph` — aggregates traceroutes → hop graph, geo/ASN, severity), `GET /api/probes/path`; UI `pathGraph()` in `public/app.js` (traceroute detail) — SVG topology **+ a geographic Leaflet map** (`drawPathMap`/`pathGeoStops`/`renderPathStops`, source anchored at the agent site via `agentsRepo` `location_lat/lng`); also a **path picker in `views.geo`/Destinations** (`drawGeoPath`). Per-hop loss/jitter come from MTR-style agent traceroute. See `docs/path-visualization.md` |
 | Incident derivation (open/resolve) | `src/incidents/detection.js` (pure: threshold + debounce + first-failure/recovery rules), `src/incidents/incidentService.js` (reconciles vs. stored incidents, run on probe-results ingest in `routes/agentReports.js`); `incidentsRepository.js` + `incidentThresholdsRepository.js`. See `docs/incidents.md` |
 | Incident reports / NIS2 draft | `src/routes/reports.js` (availability + incidents + `/nis2-draft/:id`), `src/incidents/nis2.js` (English CFCS template); availability query in `probeResultsRepository.availability` |

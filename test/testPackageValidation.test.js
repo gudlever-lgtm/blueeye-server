@@ -35,6 +35,55 @@ test('rejects a tcp probe without a port', () => {
   assert.ok(errors && errors.items);
 });
 
+test('accepts a curl content-check probe item (URL + expectations round-trip)', () => {
+  const { value, errors } = validateTestPackageInput({
+    name: 'content', targets: { mode: 'all' },
+    items: [{ type: 'probe', probe: { type: 'curl', url: 'example.com', expectStatus: 200, expectBody: '/healthy/i', expectHeader: 'content-type' } }],
+  });
+  assert.equal(errors, undefined);
+  const p = value.items[0].probe;
+  assert.equal(p.type, 'curl');
+  assert.equal(p.host, 'https://example.com/'); // normalized URL (agent reads spec.host)
+  assert.equal(p.expectStatus, 200);
+  assert.equal(p.expectBody, '/healthy/i');
+  assert.equal(p.expectHeader, 'content-type');
+});
+
+test('rejects a curl probe with an out-of-range expectStatus', () => {
+  const { errors } = validateTestPackageInput({
+    name: 'bad', targets: { mode: 'all' },
+    items: [{ type: 'probe', probe: { type: 'curl', url: 'https://x/', expectStatus: 99 } }],
+  });
+  assert.ok(errors && errors.items);
+});
+
+test('accepts a pageload probe item (URL + maxElements round-trip)', () => {
+  const { value, errors } = validateTestPackageInput({
+    name: 'pageload', targets: { mode: 'all' },
+    items: [{ type: 'probe', probe: { type: 'pageload', url: 'example.com', maxElements: 25 } }],
+  });
+  assert.equal(errors, undefined);
+  const p = value.items[0].probe;
+  assert.equal(p.type, 'pageload');
+  assert.equal(p.host, 'https://example.com/');
+  assert.equal(p.maxElements, 25);
+});
+
+test('accepts a transaction probe item (steps round-trip)', () => {
+  const { value, errors } = validateTestPackageInput({
+    name: 'journey', targets: { mode: 'all' },
+    items: [{ type: 'probe', probe: { type: 'transaction', steps: [
+      { url: 'https://api.test/login', method: 'POST', extract: { name: 'tok', pattern: '"t":"([^"]+)"' } },
+      { url: 'https://api.test/me', header: 'Authorization: Bearer {{tok}}', expectStatus: 200 },
+    ] } }],
+  });
+  assert.equal(errors, undefined);
+  const p = value.items[0].probe;
+  assert.equal(p.type, 'transaction');
+  assert.equal(p.steps.length, 2);
+  assert.equal(p.steps[1].header, 'Authorization: Bearer {{tok}}');
+});
+
 test('accepts a run-test item', () => {
   const { value, errors } = validateTestPackageInput({ name: 't', targets: { mode: 'all' }, items: [{ type: 'run-test', intervalMs: 1000 }] });
   assert.equal(errors, undefined);

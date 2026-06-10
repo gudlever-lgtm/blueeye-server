@@ -274,7 +274,8 @@ test('toRow serialises hops to JSON and maps fields positionally', () => {
   assert.equal(row[11], null); // cert_expiry_days
   assert.equal(row[12], null); // bytes (not a curl probe)
   assert.equal(row[13], null); // content_type
-  assert.equal(typeof row[14], 'string'); // hops JSON
+  assert.equal(row[14], null); // elements (not a pageload probe)
+  assert.equal(typeof row[15], 'string'); // hops JSON
 });
 
 test('toRow carries http status + cert expiry through to the row', () => {
@@ -341,4 +342,67 @@ test('validateProbeResults accepts curl bytes + contentType (body-free metadata)
   assert.equal(value.results[0].bytes, 2048);
   assert.equal(value.results[0].contentType, 'application/json');
   assert.equal(value.results[0].detail, 'status 200 · body matched ✓');
+});
+
+test('validateProbeSpec accepts a pageload URL target with maxElements', () => {
+  const { value, errors } = validateProbeSpec({ type: 'pageload', target: 'example.com', maxElements: 25 });
+  assert.equal(errors, undefined);
+  assert.equal(value.type, 'pageload');
+  assert.equal(value.host, 'https://example.com/');
+  assert.equal(value.maxElements, 25);
+});
+
+test('validateProbeSpec rejects a bad pageload maxElements / missing URL', () => {
+  assert.ok(validateProbeSpec({ type: 'pageload', target: 'https://x/', maxElements: 99 }).errors);
+  assert.ok(validateProbeSpec({ type: 'pageload' }).errors);
+});
+
+test('validateProbeResults accepts a pageload waterfall (elements normalised)', () => {
+  const { value, errors } = validateProbeResults({ results: [{
+    type: 'pageload', target: 'https://x/', ok: true, status: 200, rttMs: 890, bytes: 12000,
+    elements: [
+      { url: 'https://x/', kind: 'document', status: 200, bytes: 4000, ms: 120 },
+      { url: 'https://x/a.css', kind: 'css', status: 200, bytes: 8000, ms: 40 },
+    ],
+  }] });
+  assert.equal(errors, undefined);
+  const r = value.results[0];
+  assert.equal(r.bytes, 12000);
+  assert.equal(r.elements.length, 2);
+  assert.equal(r.elements[0].kind, 'document');
+  assert.equal(r.elements[1].url, 'https://x/a.css');
+  assert.equal(r.elements[1].ms, 40);
+});
+
+test('validateProbeSpec accepts a transaction with steps, assertions and extraction', () => {
+  const { value, errors } = validateProbeSpec({
+    type: 'transaction',
+    steps: [
+      { url: 'https://api.test/login', method: 'post', expectStatus: 200, extract: { name: 'token', pattern: '"token":"([^"]+)"' } },
+      { url: 'https://api.test/me', header: 'Authorization: Bearer {{token}}', expectStatus: 200, expectBody: 'welcome' },
+    ],
+  });
+  assert.equal(errors, undefined);
+  assert.equal(value.type, 'transaction');
+  assert.equal(value.steps.length, 2);
+  assert.equal(value.steps[0].method, 'POST');
+  assert.equal(value.steps[0].extract.name, 'token');
+  assert.equal(value.steps[0].extract.from, 'body');
+  assert.equal(value.host, 'https://api.test/login'); // target/display
+});
+
+test('validateProbeSpec rejects bad transactions (no steps, bad url, bad regex)', () => {
+  assert.ok(validateProbeSpec({ type: 'transaction' }).errors);
+  assert.ok(validateProbeSpec({ type: 'transaction', steps: [] }).errors);
+  assert.ok(validateProbeSpec({ type: 'transaction', steps: [{ url: 'ftp://x/' }] }).errors);
+  assert.ok(validateProbeSpec({ type: 'transaction', steps: [{ url: 'https://x/', extract: { name: 'a', pattern: '([' } }] }).errors);
+  assert.ok(validateProbeSpec({ type: 'transaction', steps: [{ url: 'https://x/', extract: { name: 'bad name', pattern: 'x' } }] }).errors);
+});
+
+test('toRow serialises pageload elements to JSON', () => {
+  const row = toRow(9, { ts: new Date('2026-06-01T00:00:00Z'), type: 'pageload', target: 'https://x/', ok: true, rttMs: 800, bytes: 9000, elements: [{ url: 'https://x/', kind: 'document', status: 200, bytes: 9000, ms: 800 }] });
+  assert.equal(row[2], 'pageload');
+  assert.equal(row[12], 9000); // bytes
+  assert.equal(typeof row[14], 'string'); // elements JSON
+  assert.match(row[14], /document/);
 });

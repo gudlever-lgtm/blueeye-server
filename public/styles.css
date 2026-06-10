@@ -455,6 +455,27 @@ main#view:has(.fleet) { max-width: 1320px; }
 .probe-hops td { padding: 4px 10px; }
 .probe-hops td.mono, .pg-panel .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 
+/* pageload waterfall: per-element rows with a bar scaled to the slowest element. */
+.pl-waterfall td { vertical-align: middle; }
+.pl-url { max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pl-bar { height: 8px; min-width: 2px; border-radius: 4px; background: var(--accent); opacity: .8; }
+
+/* Transaction (multi-step) editor — a stack of step blocks. */
+.tx-wrap { flex: 1 1 100%; margin-top: 8px; }
+.tx-editor { display: flex; flex-direction: column; gap: 8px; }
+.tx-steps { display: flex; flex-direction: column; gap: 10px; }
+.tx-step { border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: var(--radius);
+  background: var(--panel-2); padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; }
+.tx-step-line { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.tx-step-line > input { flex: 1 1 200px; min-width: 140px; }
+.tx-step-line > select { flex: 0 0 100px; }
+.tx-step-line > input.tx-url { flex: 1 1 320px; }
+.tx-step-num { font-size: 11px; font-weight: 700; color: var(--muted); flex: 0 0 auto; min-width: 48px; }
+
+/* In-page explainer box (e.g. "Probes vs. Tests" on the help panel). */
+.callout { border: 1px solid var(--border); border-left: 3px solid var(--accent); background: var(--panel-2);
+  border-radius: var(--radius); padding: 9px 12px; margin: 0 0 12px; font-size: 13px; line-height: 1.5; }
+
 /* ---- Path map: interactive traceroute hop graph -------------------------- */
 .pathmap { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-lg);
   padding: 12px 14px; margin: 4px 0 12px; box-shadow: var(--shadow); }
@@ -514,6 +535,7 @@ main#view:has(.fleet) { max-width: 1320px; }
 .nic-model-row { display: flex; justify-content: space-between; gap: 16px; padding: 7px 0; border-top: 1px solid var(--border); }
 .nic-model-row:first-of-type { border-top: none; }
 .nics-controls { display: flex; align-items: center; gap: 10px; margin: 0 0 14px; }
+.nic-filter { flex: 0 1 320px; max-width: 320px; }
 .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
 .seg-btn { font: inherit; font-size: 13px; padding: 4px 12px; border: none; background: var(--panel); color: var(--muted); cursor: pointer; }
 .seg-btn + .seg-btn { border-left: 1px solid var(--border); }
@@ -837,9 +859,12 @@ button.ghost.danger { background: transparent; color: var(--bad); border-color: 
 .check-list { display: flex; flex-direction: column; gap: 2px; max-height: 168px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; }
 .check-row { display: flex; align-items: center; gap: 6px; font-weight: 400; }
 .check-row input { width: auto; }
-.test-item-row { display: grid; grid-template-columns: 120px 1fr 88px 78px 34px; gap: 8px; align-items: center; }
-.test-item-row input, .test-item-row select { width: 100%; }
-@media (max-width: 640px) { .test-item-row { grid-template-columns: 1fr 1fr; } }
+/* Flex-wrap (not a fixed grid) so curl's extra fields — and the irrelevant
+   ones we hide with display:none — lay out cleanly for any test type. */
+.test-item-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.test-item-row select { flex: 0 0 120px; }
+.test-item-row input[type=text] { flex: 1 1 160px; min-width: 120px; }
+.test-item-row input[type=number] { flex: 0 0 88px; }
 
 /* Auto-refresh toggle */
 .autorefresh { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; }

@@ -343,7 +343,14 @@ const VIEW_LABELS = {
   interfaces: 'Interfaces', probes: 'Probes', tests: 'Tests', flows: 'Flows',
   findings: 'Analysis', reporting: 'Reporting', locations: 'Locations', enrollment: 'Enrollment', settings: 'Settings',
 };
-function gotoView(viewKey) { closeDrawer(); currentView = viewKey; render(); }
+function gotoView(viewKey) {
+  closeDrawer();
+  // Probes and Tests share one view now; a 'tests' link opens the packages sub-tab.
+  if (viewKey === 'tests') { probesTab = 'packages'; viewKey = 'probes'; }
+  else if (viewKey === 'probes') { probesTab = 'run'; }
+  currentView = viewKey;
+  render();
+}
 function viewLink(viewKey, label) {
   const text = label || VIEW_LABELS[viewKey] || viewKey;
   const tab = document.querySelector(`.tabs button[data-view="${viewKey}"]`);
@@ -363,7 +370,7 @@ const PAGE_INFO = {
     body: () => [
       el('div', { class: 'callout' },
         el('strong', {}, 'Probes vs. Tests: '),
-        el('span', {}, 'A ', viewLink('probes', 'Probe'), ' is a single check you run by hand, right now, from one agent — handy for troubleshooting. A ', el('strong', {}, 'Test'), ' (this page) is a saved, reusable package of those same checks, aimed at many agents (all / specific / by location) and run on a recurring schedule (or on demand). Same probe engine underneath; Tests add naming, fleet targeting and recurrence.')),
+        el('span', {}, 'A ', viewLink('probes', 'Probe'), ' is a single check you run by hand, right now, from one agent — handy for troubleshooting. A ', el('strong', {}, 'Test'), ' (this tab) is a saved, reusable package of those same checks, aimed at many agents (all / specific / by location) and run on a recurring schedule (or on demand). Same probe engine underneath; Tests add naming, fleet targeting and recurrence.')),
       el('p', {}, 'A test package is a named set of tests (ping / TCP / DNS / traceroute / cURL content check / page load / throughput / speed test) with a target selector and an optional schedule. The server pushes the tests to the selected, connected agents; each agent runs them and reports back — results appear on the ', viewLink('probes'), ' and ', viewLink('overview', 'Traffic'), ' pages as usual. A cURL test verifies the received HTTP response — status code, body match and a header — not just reachability.'),
       el('h4', {}, 'Targets'),
       el('ul', {},
@@ -505,7 +512,7 @@ const PAGE_INFO = {
     body: () => [
       el('div', { class: 'callout' },
         el('strong', {}, 'Probes vs. Tests: '),
-        el('span', {}, 'This page is for ', el('strong', {}, 'one-off, on-demand'), ' checks from a single agent — you pick agent + type + target and click “Run probe”. To run the same checks ', el('strong', {}, 'on a recurring schedule across many agents'), ', save them as a ', viewLink('tests', 'Test package'), '. Same probe engine; Tests add naming, fleet targeting and recurrence.')),
+        el('span', {}, 'This tab is for ', el('strong', {}, 'one-off, on-demand'), ' checks from a single agent — you pick agent + type + target and click “Run probe”. To run the same checks ', el('strong', {}, 'on a recurring schedule across many agents'), ', use the ', viewLink('tests', 'Test packages'), ' tab. Same probe engine; Tests add naming, fleet targeting and recurrence.')),
       el('p', {}, 'While the other pages measure traffic passively, probes run an active test from a selected agent against a target, so you can answer “can site A reach host B — and how quickly?”.'),
       el('h4', {}, 'Types'),
       el('ul', {},
@@ -661,7 +668,9 @@ const PAGE_INFO = {
 };
 
 function hero(viewKey) {
-  const info = PAGE_INFO[viewKey];
+  // Probes & Tests is one view with two sub-tabs; show the matching help for each.
+  let info = PAGE_INFO[viewKey];
+  if (viewKey === 'probes' && probesTab === 'packages') info = PAGE_INFO.tests;
   if (!info) return null;
   return el('div', { class: 'hero' },
     el('div', { class: 'hero-text' }, info.hero),
@@ -1068,16 +1077,16 @@ const SCHEDULE_PRESETS = [
   ['86400000', 'Every 24 hours'],
 ];
 
-views.tests = async () => {
+async function testPackagesView() {
   const [packages, agents, locations] = await Promise.all([
     api('/api/test-packages'),
     api('/agents').catch(() => []),
     api('/locations').catch(() => []),
   ]);
   const root = el('div');
-  root.append(el('div', { class: 'section-head' },
-    el('h2', {}, 'Tests'),
-    el('span', { class: 'muted' }, `${packages.length} package${packages.length === 1 ? '' : 's'}`),
+  root.append(el('div', { class: 'history-controls' },
+    el('span', { class: 'muted' }, `Reusable packages run on a schedule across agents · ${packages.length} package${packages.length === 1 ? '' : 's'}`),
+    el('span', { class: 'spacer' }),
     canWrite() ? el('button', { class: 'small', onclick: () => editTestPackage(null, agents, locations) }, '+ New test package') : null));
 
   if (!packages.length) {
@@ -1150,7 +1159,7 @@ async function runTestPackage(p) {
     const s = await api(`/api/test-packages/${p.id}/run`, { method: 'POST' });
     if (!s.targeted) { toast(`"${p.name}": no matching agents to run on.`, true); return; }
     toast(`"${p.name}": ${s.reached}/${s.targeted} agents reached, ${s.delivered} test(s) sent.`);
-    setTimeout(() => { if (currentView === 'tests') render(); }, 1500);
+    setTimeout(() => { if (currentView === 'probes' && probesTab === 'packages') render(); }, 1500);
   } catch (err) { toast(errText(err), true); }
 }
 
@@ -2989,10 +2998,24 @@ views.interfaces = async () => {
 // Active probes: trigger ping/tcp/dns/traceroute from an agent and watch the
 // results (RTT/loss over time + traceroute path). The agent runs the probe and
 // reports back, so results land a moment after triggering.
+// "Probes & Tests" is one menu item with two sub-tabs: ad-hoc one-off probes
+// (probeRunnerView) and reusable scheduled packages (testPackagesView). probesTab
+// persists the active sub-tab across re-renders; gotoView('tests') deep-links here
+// onto the packages tab (the old standalone Tests page).
+let probesTab = 'run'; // 'run' | 'packages'
 views.probes = async () => {
+  const root = el('div');
+  const tab = (key, label) => el('button', { class: `small ghost${probesTab === key ? ' active' : ''}`,
+    onclick: () => { if (probesTab === key) return; if (key !== 'run') stopProbes(); probesTab = key; render(); } }, label);
+  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Probes & Tests'),
+    el('div', { class: 'subtabs' }, tab('run', 'Run a probe'), tab('packages', 'Test packages'))));
+  root.append(await (probesTab === 'packages' ? testPackagesView() : probeRunnerView()));
+  return root;
+};
+
+async function probeRunnerView() {
   const root = el('div', { class: 'probes' });
-  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Probes'),
-    el('span', { class: 'muted' }, 'Active reachability · ping · TCP · DNS · traceroute · cURL · page load')));
+  root.append(el('div', { class: 'muted', style: 'margin:2px 0 10px' }, 'Run one check now from a single agent · ping · TCP · DNS · traceroute · cURL · page load'));
 
   const agents = await api('/agents').catch(() => []);
   if (!agents.length) { root.append(el('div', { class: 'empty' }, 'No agents yet — enrol an agent first.')); return root; }

@@ -272,7 +272,9 @@ test('toRow serialises hops to JSON and maps fields positionally', () => {
   assert.equal(row[4], 1); // ok -> 1
   assert.equal(row[10], null); // status (not an http probe)
   assert.equal(row[11], null); // cert_expiry_days
-  assert.equal(typeof row[12], 'string'); // hops JSON
+  assert.equal(row[12], null); // bytes (not a curl probe)
+  assert.equal(row[13], null); // content_type
+  assert.equal(typeof row[14], 'string'); // hops JSON
 });
 
 test('toRow carries http status + cert expiry through to the row', () => {
@@ -300,4 +302,43 @@ test('validateProbeResults accepts http status + certExpiryDays', () => {
   assert.equal(errors, undefined);
   assert.equal(value.results[0].status, 200);
   assert.equal(value.results[0].certExpiryDays, 30);
+});
+
+test('toRow carries curl bytes + content-type through to the row', () => {
+  const row = toRow(9, { ts: new Date('2026-06-01T00:00:00Z'), type: 'curl', target: 'https://x/', ok: true, rttMs: 5, status: 200, bytes: 1234, contentType: 'text/html; charset=utf-8' });
+  assert.equal(row[2], 'curl');
+  assert.equal(row[10], 200); // status
+  assert.equal(row[12], 1234); // bytes
+  assert.equal(row[13], 'text/html; charset=utf-8'); // content_type
+});
+
+test('validateProbeSpec accepts a curl URL target with content expectations', () => {
+  const { value, errors } = validateProbeSpec({
+    type: 'curl', target: 'example.com', method: 'get',
+    expectStatus: 200, expectBody: '/healthy/i', expectHeader: 'content-type: text/html', minBytes: 10,
+  });
+  assert.equal(errors, undefined);
+  assert.equal(value.type, 'curl');
+  assert.equal(value.host, 'https://example.com/'); // bare host defaults to https
+  assert.equal(value.method, 'GET'); // upper-cased
+  assert.equal(value.expectStatus, 200);
+  assert.equal(value.expectBody, '/healthy/i');
+  assert.equal(value.expectHeader, 'content-type: text/html');
+  assert.equal(value.minBytes, 10);
+});
+
+test('validateProbeSpec rejects malformed curl expectations and bad URLs', () => {
+  assert.ok(validateProbeSpec({ type: 'curl', target: 'https://x/', expectStatus: 99 }).errors); // status out of range
+  assert.ok(validateProbeSpec({ type: 'curl', target: 'https://x/', method: 'FETCH' }).errors); // bad method
+  assert.ok(validateProbeSpec({ type: 'curl', target: 'https://x/', expectHeader: 'bad header name!' }).errors);
+  assert.ok(validateProbeSpec({ type: 'curl', target: 'ftp://x/' }).errors); // wrong scheme
+  assert.ok(validateProbeSpec({ type: 'curl' }).errors); // missing URL
+});
+
+test('validateProbeResults accepts curl bytes + contentType (body-free metadata)', () => {
+  const { value, errors } = validateProbeResults({ results: [{ type: 'curl', target: 'https://x/', ok: true, status: 200, bytes: 2048, contentType: 'application/json', detail: 'status 200 · body matched ✓' }] });
+  assert.equal(errors, undefined);
+  assert.equal(value.results[0].bytes, 2048);
+  assert.equal(value.results[0].contentType, 'application/json');
+  assert.equal(value.results[0].detail, 'status 200 · body matched ✓');
 });

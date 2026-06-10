@@ -1,6 +1,8 @@
 'use strict';
 
-const PROBE_TYPES = ['ping', 'tcp', 'dns', 'traceroute', 'http'];
+const PROBE_TYPES = ['ping', 'tcp', 'dns', 'traceroute', 'http', 'curl'];
+const HTTP_METHODS = ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'];
+const HEADER_EXPECT_RE = /^[A-Za-z0-9!#$%&'*+.^_`|~-]+(\s*:\s*.{1,200})?$/;
 const MAX_RESULTS = 200;
 // Host/IP/hostname must start alphanumeric (so it can never be read as a CLI
 // flag like "-rf") and contain only host-safe characters.
@@ -80,6 +82,10 @@ function validateProbeResults(body) {
       rttMs: numOrNull(r.rttMs), minMs: numOrNull(r.minMs), maxMs: numOrNull(r.maxMs),
       jitterMs: numOrNull(r.jitterMs), lossPct: numOrNull(r.lossPct), hops,
       status: intOrNull(r.status), certExpiryDays: numOrNull(r.certExpiryDays),
+      // curl content-check metadata (null for the other probe types). Privacy by
+      // design: the agent reports only the received byte count + content-type,
+      // never the response body itself.
+      bytes: intOrNull(r.bytes), contentType: r.contentType != null ? String(r.contentType).slice(0, 120) : null,
       detail: r.detail != null ? String(r.detail).slice(0, 255) : (r.error != null ? String(r.error).slice(0, 255) : null),
       // The agent sets `error` only when it could not RUN the probe at all
       // (binary missing, tool timed out, unknown type) — distinct from ordinary
@@ -99,11 +105,45 @@ function validateProbeSpec(body) {
   if (!PROBE_TYPES.includes(type)) return { errors: { type: `type must be one of ${PROBE_TYPES.join(', ')}` } };
 
   const spec = { type };
-  if (type === 'http') {
-    // http takes a URL (the agent reads spec.host as the target).
+  if (type === 'http' || type === 'curl') {
+    // http/curl take a URL (the agent reads spec.host as the target).
     const url = normalizeHttpTarget(b.url || b.target || b.host);
-    if (!url) return { errors: { target: 'a valid http(s) URL is required for an http probe' } };
+    if (!url) return { errors: { target: `a valid http(s) URL is required for a ${type} probe` } };
     spec.host = url;
+    if (type === 'curl') {
+      // Content-verification parameters. All optional; with none set the curl
+      // probe degrades to a status<400 reachability check (like the http probe).
+      if (b.method !== undefined) {
+        const m = String(b.method).toUpperCase();
+        if (!HTTP_METHODS.includes(m)) return { errors: { method: `method must be one of ${HTTP_METHODS.join(', ')}` } };
+        spec.method = m;
+      }
+      if (b.expectStatus !== undefined) {
+        const s = Number(b.expectStatus);
+        if (!Number.isInteger(s) || s < 100 || s > 599) return { errors: { expectStatus: 'expectStatus must be an HTTP status code (100-599)' } };
+        spec.expectStatus = s;
+      }
+      if (b.expectBody !== undefined) {
+        const body = String(b.expectBody);
+        if (!body || body.length > 512) return { errors: { expectBody: 'expectBody must be 1-512 chars (a substring or /regex/)' } };
+        spec.expectBody = body;
+      }
+      if (b.expectHeader !== undefined) {
+        const h = String(b.expectHeader).trim();
+        if (!HEADER_EXPECT_RE.test(h)) return { errors: { expectHeader: 'expectHeader must be "Name" or "Name: value"' } };
+        spec.expectHeader = h;
+      }
+      if (b.minBytes !== undefined) {
+        const mb = Number(b.minBytes);
+        if (!Number.isInteger(mb) || mb < 0 || mb > 1e9) return { errors: { minBytes: 'minBytes must be a non-negative integer' } };
+        spec.minBytes = mb;
+      }
+      if (b.maxBytes !== undefined) {
+        const mb = Number(b.maxBytes);
+        if (!Number.isInteger(mb) || mb < 1 || mb > 1e9) return { errors: { maxBytes: 'maxBytes must be a positive integer' } };
+        spec.maxBytes = mb;
+      }
+    }
   } else {
     const host = String(b.host || b.target || '').trim();
     if (!HOST_RE.test(host)) return { errors: { host: 'host/target is required and must be a valid hostname or IP' } };

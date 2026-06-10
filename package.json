@@ -1,6 +1,7 @@
 {
   "name": "blueeye-server",
-  "version": "0.14.0",
+  "version": "0.12.2",
+  "releaseDate": "2026-06-10",
   "private": true,
   "description": "BlueEye server — on-prem, single-tenant API (Node/Express + MySQL).",
   "license": "MIT",
@@ -12,7 +13,8 @@
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
     "migrate": "node src/migrate.js",
-    "test": "node --test"
+    "test": "node --test",
+    "version": "node scripts/stamp-release-date.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

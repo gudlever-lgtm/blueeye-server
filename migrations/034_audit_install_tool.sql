@@ -1,4 +1,4 @@
--- 033 — let the server→agent action audit trail also record 'install-tool'
+-- 034 — let the server→agent action audit trail also record 'install-tool'
 -- (operator- or auto-triggered request that an agent install a missing
 -- diagnostic tool, e.g. traceroute). Same request→complete lifecycle as
 -- upgrade/delete: the row is 'requested' when the command is sent and flips to

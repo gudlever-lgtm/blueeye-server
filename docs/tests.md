@@ -20,7 +20,12 @@ A package (`test_packages`, migration 017) has:
 - **targets** — `{ mode: 'all' | 'agents' | 'location', agentIds, locationIds }`.
 - **items** — an array of:
   - `{ type: 'probe', probe: { type, host, port?, count?, maxHops? } }` — validated
-    by `validateProbeSpec` (ping / tcp / dns / traceroute), or
+    by `validateProbeSpec` (ping / tcp / dns / traceroute / http / curl). A `curl`
+    probe takes a URL plus optional content expectations
+    (`method`, `expectStatus`, `expectBody` substring or `/regex/`, `expectHeader`,
+    `minBytes`/`maxBytes`) and verifies the received traffic — the agent inspects
+    the body locally but reports only metadata (status, byte count, content-type,
+    pass/fail), never the body. Or
   - `{ type: 'run-test', intervalMs? }` — a passive traffic/throughput snapshot.
   - `{ type: 'speedtest', bytes? }` — an active download+upload speed test against
     the server (see below).

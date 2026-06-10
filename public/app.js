@@ -4941,7 +4941,7 @@ let settingsTab = null;
 // so related controls sit together and the page stays scannable as it grows. Each
 // tab is [key, label, adminOnly]; non-admins only ever see the personal section.
 const SETTINGS_GROUPS = [
-  ['Access & security', [['users', 'Users', true], ['auth', 'Authentication', true], ['agentkey', 'Agent key', true]]],
+  ['Access & security', [['users', 'Users', true], ['auth', 'Authentication', true], ['apitokens', 'API tokens', true], ['auditlog', 'Audit log', true], ['agentkey', 'Agent key', true]]],
   ['Detection & alerts', [['analyse', 'Analysis', true], ['alerting', 'Alerting', true], ['maintenance', 'Maintenance', true]]],
   ['Data', [['retention', 'Retention', true], ['types', 'Traffic types', true], ['map', 'Map', true]]],
   ['System', [['updates', 'Updates', true]]],
@@ -4977,6 +4977,8 @@ views.settings = async () => {
     agentkey: settingsAgentKeyView,
     retention: settingsRetentionView,
     auth: settingsAuthView,
+    apitokens: settingsApiTokensView,
+    auditlog: settingsAuditLogView,
   };
   let content;
   try {
@@ -5905,6 +5907,134 @@ function flowCategoriesCard(categories) {
   return card;
 }
 function settingsCard(title, ...body) { return el('div', { class: 'settings-card' }, el('h3', {}, title), ...body); }
+
+// Shared placeholder for a settings tab whose licence feature isn't included —
+// the server refuses the API too (403 feature_not_available), so this explains
+// the missing controls and points at the matrix.
+function featureUpsell(title, message) {
+  return el('div', {}, el('div', { class: 'settings-grid' },
+    el('div', { class: 'settings-card' }, el('h3', {}, title),
+      el('p', { class: 'muted' }, message, ' ', settingsLink('license', 'See Settings → License'), ' for the full feature matrix.'),
+      el('span', { class: 'badge offline' }, 'Not included in your plan'))));
+}
+
+// One-shot holder for a freshly minted API token, shown once after creation
+// (the server never returns the plaintext again).
+let apiTokenJustCreated = null;
+
+// Settings → API tokens: mint/list/revoke programmatic tokens (licence feature
+// api_access, Professional+). Admin-only. The secret is shown exactly once.
+async function settingsApiTokensView() {
+  const root = el('div');
+  let tokens;
+  try {
+    tokens = await api('/api/api-tokens');
+  } catch (err) {
+    if (err.status === 403) return featureUpsell('API access', 'Programmatic API tokens are part of the BlueEye Professional plan and above, so they can’t be managed here.');
+    throw err;
+  }
+
+  root.append(el('p', { class: 'muted settings-intro' },
+    'Issue tokens for programmatic access to the BlueEye API (CI jobs, scripts, integrations). A token authenticates with a fixed role and is sent as ',
+    el('code', {}, 'Authorization: Bearer <token>'), ' or ', el('code', {}, 'X-API-Key: <token>'), '. The secret is shown only once, on creation.'));
+
+  // Banner with the just-created secret (cleared on the next render).
+  if (apiTokenJustCreated) {
+    const secret = apiTokenJustCreated;
+    apiTokenJustCreated = null;
+    root.append(el('div', { class: 'settings-card', style: 'border-color: var(--ok)' },
+      el('h3', {}, 'New API token — copy it now'),
+      el('p', { class: 'muted' }, 'This is the only time the token is shown. Store it securely; it cannot be retrieved again.'),
+      el('pre', { class: 'token-secret', style: 'white-space: pre-wrap; word-break: break-all;' }, secret),
+      el('button', { class: 'small', onclick: () => { navigator.clipboard && navigator.clipboard.writeText(secret); toast('Token copied'); } }, 'Copy')));
+  }
+
+  // Create form.
+  const nameInput = el('input', { type: 'text', placeholder: 'e.g. CI pipeline', maxlength: '120' });
+  const roleSelect = el('select', {}, ...['viewer', 'operator', 'admin'].map((r) => el('option', { value: r }, r)));
+  const expInput = el('input', { type: 'date' });
+  const createBtn = el('button', { class: 'small', onclick: async () => {
+    const name = nameInput.value.trim();
+    if (!name) { toast('Name is required', true); return; }
+    const bodyReq = { name, role: roleSelect.value };
+    if (expInput.value) bodyReq.expiresAt = new Date(`${expInput.value}T00:00:00Z`).toISOString();
+    try {
+      const created = await api('/api/api-tokens', { method: 'POST', body: bodyReq });
+      apiTokenJustCreated = created.token;
+      toast('API token created');
+      render();
+    } catch (err) { toast(err.message, true); }
+  } }, 'Create token');
+  root.append(settingsCard('Create a token',
+    el('div', { class: 'form-row' }, el('label', {}, 'Name', nameInput)),
+    el('div', { class: 'form-row' }, el('label', {}, 'Role', roleSelect)),
+    el('div', { class: 'form-row' }, el('label', {}, 'Expires (optional)', expInput)),
+    createBtn));
+
+  // Existing tokens.
+  const rows = (tokens || []).map((t) => el('tr', { class: t.revoked ? 'muted' : '' },
+    el('td', {}, t.name),
+    el('td', {}, el('code', {}, t.token_prefix + '…')),
+    el('td', {}, el('span', { class: `badge role-${t.role}` }, t.role)),
+    el('td', {}, fmtDate(t.created_at)),
+    el('td', {}, t.last_used_at ? fmtDate(t.last_used_at) : '–'),
+    el('td', {}, t.expires_at ? fmtDate(t.expires_at) : 'never'),
+    el('td', {}, t.revoked
+      ? el('span', { class: 'badge revoked' }, 'revoked')
+      : el('button', { class: 'small danger', onclick: async () => {
+          if (!confirm(`Revoke token "${t.name}"? Any client using it will stop working.`)) return;
+          try { await api(`/api/api-tokens/${t.id}`, { method: 'DELETE' }); toast('Token revoked'); render(); }
+          catch (err) { toast(err.message, true); }
+        } }, 'Revoke'))));
+  root.append(settingsCard('Tokens',
+    tokens && tokens.length
+      ? el('div', { class: 'tablewrap' }, el('table', {},
+          el('thead', {}, el('tr', {}, ...['Name', 'Prefix', 'Role', 'Created', 'Last used', 'Expires', ''].map((h) => el('th', {}, h)))),
+          el('tbody', {}, ...rows)))
+      : el('p', { class: 'muted' }, 'No API tokens yet.')));
+  return root;
+}
+
+// Settings → Audit log: the unified who-did-what trail (licence feature
+// audit_log, Professional+). Admin-only, read-only.
+let auditLogCategory = '';
+async function settingsAuditLogView() {
+  const root = el('div');
+  let entries;
+  try {
+    const qs = auditLogCategory ? `?category=${encodeURIComponent(auditLogCategory)}&limit=200` : '?limit=200';
+    entries = await api(`/api/audit-log${qs}`);
+  } catch (err) {
+    if (err.status === 403) return featureUpsell('Audit log', 'The audit log is part of the BlueEye Professional plan and above, so it isn’t available here.');
+    throw err;
+  }
+  const categories = await api('/api/audit-log/categories').catch(() => []);
+
+  root.append(el('p', { class: 'muted settings-intro' },
+    'A record of security and administrative events — sign-ins, user and role changes, licence actions, report generation and API-token management. Metadata only; never passwords, tokens or payloads.'));
+
+  const filter = el('select', { onchange: (e) => { auditLogCategory = e.target.value; render(); } },
+    el('option', { value: '' }, 'All categories'),
+    ...(Array.isArray(categories) ? categories : []).map((c) => el('option', { value: c, selected: c === auditLogCategory ? '' : undefined }, c)));
+  root.append(el('div', { class: 'form-row' }, el('label', {}, 'Category', filter)));
+
+  const outcomeBadge = (o) => el('span', { class: `badge ${o === 'success' ? 'ok' : o === 'denied' ? 'warn' : 'bad'}` }, o);
+  const rows = (entries || []).map((e) => el('tr', {},
+    el('td', {}, fmtDate(e.created_at)),
+    el('td', {}, e.category),
+    el('td', {}, e.action),
+    el('td', {}, outcomeBadge(e.outcome)),
+    el('td', {}, e.actor_email || '(system)', e.actor_role ? el('span', { class: 'muted' }, ` (${e.actor_role})`) : null),
+    el('td', {}, e.target || '–'),
+    el('td', {}, e.detail || '–'),
+    el('td', {}, e.ip || '–')));
+  root.append(entries && entries.length
+    ? el('div', { class: 'tablewrap' }, el('table', {},
+        el('thead', {}, el('tr', {}, ...['Time', 'Category', 'Action', 'Outcome', 'Actor', 'Target', 'Detail', 'IP'].map((h) => el('th', {}, h)))),
+        el('tbody', {}, ...rows)))
+    : el('p', { class: 'muted' }, 'No audit events recorded yet.'));
+  return root;
+}
 function boolText(v) { return v === true ? 'yes' : v === false ? 'no' : String(v ?? '–'); }
 function kvList(obj, labels) {
   if (!obj) return el('p', { class: 'muted' }, '–');
@@ -6168,18 +6298,24 @@ views.license = async () => {
     const head = el('tr', {}, el('th', {}, 'Feature'),
       ...matrix.plans.map((p) => el('th', { class: p.plan_key === active ? 'active' : '' }, p.plan_name)));
     const body = matrix.features.map((f) => {
+      const roadmap = f.status === 'roadmap';
       const cells = matrix.plans.map((p) => {
         const on = p.features[f.key];
-        return el('td', { class: p.plan_key === active ? 'active' : '' }, on ? '✓' : '–');
+        // A roadmap feature is priced into the plan but not built yet: show
+        // "Roadmap" where the tier would include it, never a tick.
+        const mark = on ? (roadmap ? el('span', { class: 'badge roadmap' }, 'Roadmap') : '✓') : '–';
+        return el('td', { class: p.plan_key === active ? 'active' : '' }, mark);
       });
       const activePlan = matrix.plans.find((p) => p.plan_key === active);
       const entitled = activePlan && activePlan.features[f.key];
-      return el('tr', { class: entitled ? '' : 'muted' },
-        el('td', {}, f.label), ...cells);
+      const label = roadmap
+        ? el('td', {}, f.label, ' ', el('span', { class: 'badge roadmap' }, 'Roadmap'))
+        : el('td', {}, f.label);
+      return el('tr', { class: (entitled && !roadmap) ? '' : 'muted' }, label, ...cells);
     });
     root.append(el('div', { class: 'tablewrap' },
       el('table', { class: 'matrix' }, el('thead', {}, head), el('tbody', {}, ...body))));
-    root.append(el('p', { class: 'muted' }, 'Features not included in your plan are greyed out — contact your administrator or upgrade the licence to enable them.'));
+    root.append(el('p', { class: 'muted' }, 'Features not included in your plan are greyed out — contact your administrator or upgrade the licence to enable them. Rows marked ', el('span', { class: 'badge roadmap' }, 'Roadmap'), ' are planned and not available yet (tracked in ROADMAP.md).'));
   }
 
   root.append(el('p', { class: 'muted' }, 'License renewal is done with the provider. Once renewed, press "Re-validate now" to fetch the updated status immediately (otherwise it is checked automatically every 6 hours).'));

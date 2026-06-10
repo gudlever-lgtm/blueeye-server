@@ -13,8 +13,18 @@ const { config } = require('../config');
 //      user is just-in-time provisioned so the rest of the system is unchanged;
 //   2) local JWT auth — the original flow, and the fallback when LDAP is
 //      disabled or doesn't authenticate the user.
-function createAuthRouter({ usersRepo, ldapAuth = null, ldapLoginAuditRepo = null }) {
+function createAuthRouter({ usersRepo, ldapAuth = null, ldapLoginAuditRepo = null, auditLogger = null }) {
   const router = express.Router();
+
+  // Records a login outcome in the unified audit log (best-effort). Distinct
+  // from the LDAP-specific login audit above, which captures bind detail.
+  async function auditLogin(req, { action, outcome, email, role = null, userId = null, detail = null }) {
+    if (!auditLogger) return;
+    await auditLogger.record(req, {
+      category: 'auth', action, outcome,
+      actorUserId: userId, actorEmail: email, actorRole: role, target: email, detail,
+    });
+  }
 
   // A throwaway hash compared against when the email is unknown, so login takes
   // roughly the same time whether or not the account exists (reduces user
@@ -96,6 +106,7 @@ function createAuthRouter({ usersRepo, ldapAuth = null, ldapLoginAuditRepo = nul
           if (result && result.ok) {
             const user = await provisionLdapUser(result);
             const token = issueToken(user);
+            await auditLogin(req, { action: 'login_success', outcome: 'success', email: user.email, role: user.role, userId: user.id, detail: 'auth=ldap' });
             return res.json({
               token,
               tokenType: 'Bearer',
@@ -113,10 +124,12 @@ function createAuthRouter({ usersRepo, ldapAuth = null, ldapLoginAuditRepo = nul
       const passwordOk = await verifyPassword(password, hash);
 
       if (!user || !passwordOk) {
+        await auditLogin(req, { action: 'login_failure', outcome: 'failure', email: email || '(none)', detail: 'invalid credentials' });
         return res.status(401).json({ error: 'Invalid credentials' });
       }
 
       const token = issueToken(user);
+      await auditLogin(req, { action: 'login_success', outcome: 'success', email: user.email, role: user.role, userId: user.id, detail: 'auth=local' });
       return res.json({
         token,
         tokenType: 'Bearer',

@@ -195,21 +195,48 @@ async function login(emailInput, password) {
 let licenseFeatures = null;
 let featuresLoadedAt = 0;
 const FEATURES_TTL_MS = 60000;
-function invalidateFeatures() { licenseFeatures = null; featuresLoadedAt = 0; }
+// The active licence package (Pilot/Starter/Professional/Enterprise/MSP). Locked
+// modules are presented relative to THIS — i.e. "not part of your <plan> licence" —
+// rather than as a generic free/pro tier. Same TTL + invalidation as the feature map.
+let licensePlan = null;
+let planLoadedAt = 0;
+function invalidateFeatures() {
+  licenseFeatures = null; featuresLoadedAt = 0;
+  licensePlan = null; planLoadedAt = 0;
+}
 async function loadFeatures() {
   if (licenseFeatures && Date.now() - featuresLoadedAt < FEATURES_TTL_MS) return licenseFeatures;
   try { licenseFeatures = await api('/license/features'); featuresLoadedAt = Date.now(); }
   catch { if (!licenseFeatures) licenseFeatures = {}; }
   return licenseFeatures;
 }
+async function loadPlan() {
+  if (licensePlan && Date.now() - planLoadedAt < FEATURES_TTL_MS) return licensePlan;
+  try { licensePlan = await api('/license/plan'); planLoadedAt = Date.now(); }
+  catch { if (!licensePlan) licensePlan = {}; }
+  return licensePlan;
+}
+// The customer-facing name of the active licence ("Professional"), or '' if unknown.
+function activePlanName() { return (licensePlan && licensePlan.plan_name) || ''; }
+// How a licence-excluded module is described in tooltips/toasts — tied to the
+// actual licence setup, not a marketing tier.
+function lockedHint(label) {
+  const plan = activePlanName();
+  return plan
+    ? `${label} is not part of your ${plan} licence`
+    : `${label} is not included in your current licence`;
+}
 function applyFeatureVisibility() {
   const feats = licenseFeatures || {};
   for (const b of document.querySelectorAll('.tabs button[data-feature]')) {
     const allowed = feats[b.dataset.feature] !== false; // show until we know it's off
-    // "Free vs pro": rather than hide a module the licence excludes, keep it
-    // visible but dimmed with a PRO badge (see .tabs button.locked). Clicking it
-    // routes to Settings → License instead of opening the (would-be-403) view.
+    // Rather than hide a module the licence excludes, keep it visible but dimmed
+    // with a lock marker (see .tabs button.locked). The state + tooltip are driven
+    // by the actual licence setup (active plan + module entitlements), not a generic
+    // free/pro split. Clicking it routes to Settings → License, never the 403 view.
     b.classList.toggle('locked', !allowed);
+    if (!allowed) b.title = lockedHint((b.textContent || 'This module').trim());
+    else if (b.dataset.feature) b.removeAttribute('title');
     if (!allowed && currentView === b.dataset.view) currentView = 'overview';
   }
 }
@@ -6866,8 +6893,8 @@ async function render({ silent = false } = {}) {
   $('#app').classList.remove('hidden');
   connectLive(); // live findings channel (idempotent)
   await loadProfile(); // apply the user's saved colour theme (once per session)
-  await loadFeatures();
-  applyFeatureVisibility(); // hide modules not included in the licence
+  await Promise.all([loadFeatures(), loadPlan()]);
+  applyFeatureVisibility(); // dim modules the licence excludes (tied to the active plan)
   applyRoleVisibility(); // hide nav items above the user's role + collapse empty groups
   // Show who is logged in: email + role.
   $('#whoami').replaceChildren(
@@ -6932,8 +6959,7 @@ for (const b of document.querySelectorAll('.tabs button')) {
     closeDrawer(); closeNav();
     // Locked (licence-excluded) items don't open — they nudge to the licence page.
     if (b.classList.contains('locked')) {
-      const name = (b.textContent || 'This feature').trim();
-      toast(`${name} isn't in your current licence — see upgrade options.`);
+      toast(`${lockedHint((b.textContent || 'This module').trim())} — see License.`);
       settingsTab = 'license'; currentView = 'settings'; render();
       return;
     }

@@ -46,6 +46,7 @@ const { createAssistant } = require('./analysis/assistant');
 const { loadConfig: loadAnalysisConfig } = require('./analysis/config');
 const { createFlowsRepository } = require('./repositories/flowsRepository');
 const { createGeoProvider } = require('./geo/provider');
+const { createGeoipUpdater } = require('./geo/geoipUpdater');
 const { createCentroids } = require('./geo/centroids');
 const { createGeoEnricher } = require('./geo/enricher');
 const { createFlowPipeline } = require('./geo/flowPipeline');
@@ -356,6 +357,11 @@ function start() {
   // Re-apply persisted analysis/retention edits onto the live config so they
   // survive restarts. Best-effort + fire-and-forget (consumers read lazily).
   settingsService.applyStoredOverrides().catch((err) => console.warn(`settings: could not apply stored overrides (${err.message})`));
+  // In-app GeoIP updater: powers Settings → Map "Update now" and the opt-in
+  // monthly auto-refresh (writes the built CSV into the /data volume, reloads the
+  // provider). Egress is admin-initiated / opt-in, so air-gapped installs are fine.
+  const geoipUpdater = createGeoipUpdater({ settingsService, config, logger: console });
+  geoipUpdater.startSchedule();
   // Now that settingsService exists, give the dispatcher its maintenance silencer.
   dispatcher.setSilencer(createSilencer({
     getWindows: async () => (await settingsService.getMaintenance()).windows,
@@ -395,6 +401,7 @@ function start() {
     flowsRepo,
     geoTileConfig: config.geo,
     geoProvider,
+    geoipUpdater,
     centroids,
     assistant,
     dispatcher,

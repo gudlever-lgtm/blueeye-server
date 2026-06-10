@@ -1,4 +1,4 @@
--- 033 — API tokens for programmatic access (license feature `api_access`,
+-- 034 — API tokens for programmatic access (license feature `api_access`,
 -- Professional+). A token authenticates REST calls without an interactive login
 -- and acts with a fixed role (viewer/operator/admin).
 --

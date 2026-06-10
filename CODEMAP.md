@@ -102,7 +102,7 @@ Mounted in `src/routes/index.js`. User endpoints use JWT + roles
 | `/api/settings` | settings.js | admin | editable map / **analysis** / **retention** / **flow-categories** / **AI assistant** (enable + API key + model) / **alerting** (channels + secrets, write-only) |
 | `/api/export` | export.js | viewer+ | CSV/JSON export + **investigation bundle** (`/investigation`: per-agent health+probes+interfaces+findings+flows, JSON or event-log CSV; print→PDF client-side) |
 | `/api/flows` | flows.js | viewer+ | **traffic-type categories** (`/categories`) + **conversation explorer** (`/explore`: talkers/ports/protos/series + scan/fan-out) |
-| `/api/probes` | probes.js | viewer+ | **active-probe** results (ping/tcp/dns/traceroute/**http**); `/path` → **path-visualisation graph** (hop nodes+links with loss/latency/jitter + GeoIP/ASN, `src/analysis/pathGraph.js`) |
+| `/api/probes` | probes.js | viewer+ | **active-probe** results (ping/tcp/dns/traceroute/**http**/**curl**); `/path` → **path-visualisation graph** (hop nodes+links with loss/latency/jitter + GeoIP/ASN, `src/analysis/pathGraph.js`) |
 | `/api/reports` | reports.js | viewer+ / operator+ | **availability** (uptime % from probes) + **incidents** list (viewer+); CSV (`.csv`, gated `reports_csv`) + print-ready HTML→PDF (`.html`, gated `reports_pdf`); **NIS2 draft** (`/nis2-draft/:id`, operator+) |
 | `/api/thresholds` | thresholds.js | viewer+ read / admin write | **incident thresholds** — global defaults + per-location overrides |
 | `/api/fleet` | fleet.js | viewer+ | **fleet health** rollup (`/health`) + per-agent verdict (`/agent/:id`) + **NIC firmware inventory / drift** (`/nics`) |
@@ -127,6 +127,7 @@ Later migrations add:
 | 014 | `probe_results` | active probes |
 | 015 | (index only) | `idx_probe_ts` for the fleet-wide probe scan |
 | 019 | `probe_results.status` / `.cert_expiry_days` | http probe (status + TLS cert expiry) |
+| 032 | `probe_results.bytes` / `.content_type` | curl content-check probe (received byte count + content-type; pass/fail rides on `detail`) |
 | 020 | (column) | per-user UI preferences — `users.preferences` JSON (colour theme) |
 | 021 | (column) | `agents.enrollment_code_id` → links an agent to the code it enrolled with (Enrollment page shows each code's agents + live status); `ON DELETE SET NULL` |
 | 022 | `agent_action_audit` | server-initiated agent actions (upgrade/delete) |
@@ -135,8 +136,8 @@ Later migrations add:
 | 026 / 027 | `integrations` / `integration_audit` | outbound API integrations + per-fire audit (credentials encrypted at rest) |
 | 028 / 029 | `ldap_config` + `ldap_role_map` / `ldap_login_audit` | LDAP/AD auth config + group→role map + login audit (bind password encrypted at rest) |
 | 031 | `blueeye_nis2_risks` · `blueeye_nis2_controls` · `blueeye_nis2_incidents` · `blueeye_nis2_reports` · `blueeye_nis2_evidence` · `blueeye_audit_log` | **NIS2 Reporting Center** — risk register, control evidence, security incidents, generated reports (with frozen metric snapshots for trend), evidence references + a generic change audit log |
-| 032 | `audit_log` | **unified audit log** (feature `audit_log`) — auth/user/role/license/report/api_token events; metadata only, never secrets |
-| 033 | `api_tokens` | **API tokens** (feature `api_access`) — programmatic access; only the SHA-256 hash stored, role-scoped |
+| 033 | `audit_log` | **unified audit log** (feature `audit_log`) — auth/user/role/license/report/api_token events; metadata only, never secrets |
+| 034 | `api_tokens` | **API tokens** (feature `api_access`) — programmatic access; only the SHA-256 hash stored, role-scoped |
 
 Interface health, traffic-type categories and **fleet health** add **no** tables — they
 derive from the existing `results.payload.traffic` (and `flow_records.asn` for org
@@ -179,7 +180,7 @@ A single vanilla-JS SPA. Key building blocks:
 | Geo/ASN enrichment | `src/geo/enricher.js`, `provider.js`; flows in `flowsRepository.js` |
 | Traffic-type categories | `src/flows/categories.js` (editable via Settings→Traffic types) |
 | Flow/conversation explorer | `flowsRepository.exploreFlows` + `src/routes/flows.js` (`/explore`); UI `views.flows` |
-| Active probes (server) | `src/routes/probes.js`, `probeResultsRepository.js`, `validation/probeValidation.js` (probe types incl. `http`) — agent side in blueeye-agent `src/probes/` |
+| Active probes (server) | `src/routes/probes.js`, `probeResultsRepository.js`, `validation/probeValidation.js` (probe types incl. `http` + `curl` content check) — agent side in blueeye-agent `src/probes/` |
 | Path visualization (traceroute map) | `src/analysis/pathGraph.js` (`buildPathGraph` — aggregates traceroutes → hop graph, geo/ASN, severity), `GET /api/probes/path`; UI `pathGraph()` in `public/app.js` (traceroute detail) — SVG topology **+ a geographic Leaflet map** (`drawPathMap`/`pathGeoStops`/`renderPathStops`, source anchored at the agent site via `agentsRepo` `location_lat/lng`); also a **path picker in `views.geo`/Destinations** (`drawGeoPath`). Per-hop loss/jitter come from MTR-style agent traceroute. See `docs/path-visualization.md` |
 | Incident derivation (open/resolve) | `src/incidents/detection.js` (pure: threshold + debounce + first-failure/recovery rules), `src/incidents/incidentService.js` (reconciles vs. stored incidents, run on probe-results ingest in `routes/agentReports.js`); `incidentsRepository.js` + `incidentThresholdsRepository.js`. See `docs/incidents.md` |
 | Incident reports / NIS2 draft | `src/routes/reports.js` (availability + incidents + `/nis2-draft/:id`), `src/incidents/nis2.js` (English CFCS template); availability query in `probeResultsRepository.availability` |
@@ -193,8 +194,8 @@ A single vanilla-JS SPA. Key building blocks:
 | A dashboard tab/view | `public/index.html` (button) + `views.<x>` in `public/app.js` + `PAGE_INFO` |
 | A dashboard colour palette (light+dark) | `PALETTES` + paired `[data-theme=…]` blocks in `public/styles.css`; picker `settingsAppearanceView` in `public/app.js`; per-user persistence via `/me` (`src/routes/me.js`, `usersRepository.get/updatePreferences`) + key whitelist in `src/validation/preferencesValidation.js` |
 | License / feature gating | `src/license/*` (`features.js` = fail-closed gate + `requirePlanFeature` middleware; `plans.js` = plan/feature catalogue incl. `status` available/roadmap; `planService.js` = active-plan resolution + limits) + `src/services/usageService.js` (limit enforcement). Read-only API: `/license/plan`, `/license/usage`, `/license/matrix`. Feature **status & roadmap** tracked in **`ROADMAP.md`** + the Settings → License matrix Roadmap badge. See `docs/licensing.md`. |
-| API tokens (programmatic access) | feature `api_access`: `src/routes/apiTokens.js` (admin CRUD, gated) + `src/repositories/apiTokensRepository.js` + `src/lib/apiToken.js` (mint/hash) + `src/auth/apiTokenAuth.js` (authenticates `X-API-Key`/`Bearer` → `req.user`, mounted in `routes/index.js`); table `api_tokens` (migration 033) |
-| Audit log (who-did-what) | feature `audit_log`: `src/routes/auditLog.js` (admin read, gated) + `src/repositories/auditLogRepository.js` + `src/services/auditLogger.js` (fail-safe recorder); recording wired in `routes/auth.js` (login), `users.js` (user admin), `license.js` (re-validate), `apiTokens.js` + `reports.js`; table `audit_log` (migration 032) |
+| API tokens (programmatic access) | feature `api_access`: `src/routes/apiTokens.js` (admin CRUD, gated) + `src/repositories/apiTokensRepository.js` + `src/lib/apiToken.js` (mint/hash) + `src/auth/apiTokenAuth.js` (authenticates `X-API-Key`/`Bearer` → `req.user`, mounted in `routes/index.js`); table `api_tokens` (migration 034) |
+| Audit log (who-did-what) | feature `audit_log`: `src/routes/auditLog.js` (admin read, gated) + `src/repositories/auditLogRepository.js` + `src/services/auditLogger.js` (fail-safe recorder); recording wired in `routes/auth.js` (login), `users.js` (user admin), `license.js` (re-validate), `apiTokens.js` + `reports.js`; table `audit_log` (migration 033) |
 | Report exports (CSV / PDF) | `src/routes/reports.js` `*.csv` (gated `reports_csv`) + `*.html` (gated `reports_pdf`, print→PDF) via `src/lib/reportHtml.js`; NIS2 compliance pack gated `reports_compliance` in `src/routes/nis2.js` |
 | Offline (no-server) licensing | `src/license/licenseVerifier.js` (verifies a local signed file, Ed25519) + `offlineLicenseManager.js` (same surface as the online manager; restricted mode when invalid/expired). Selected by `LICENSE_MODE=offline`/`LICENSE_FILE` in `src/server.js`. Issue files with `scripts/sign-offline-license.js`. |
 | Outbound integrations (ITSM/IPAM) | connectors in `src/integrations/connectors/*` (+ `index.js` registry); trigger/debounce/retry/audit in `src/integrations/dispatcher.js`; HTTP in `src/routes/integrations.js`; validation in `src/validation/integrationValidation.js`; tables `integrations`/`integration_audit` (migrations 026/027). Events wired in `analysis/pipeline.js` + `probePipeline.js` (findings) and the enroll/agent-delete routes. See docs/integrations.md |

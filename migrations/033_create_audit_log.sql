@@ -1,4 +1,4 @@
--- 032 — unified audit log (license feature `audit_log`, Professional+).
+-- 033 — unified audit log (license feature `audit_log`, Professional+).
 --
 -- A general security/change trail that complements the existing, purpose-built
 -- trails (agent_action_audit for upgrade/delete, blueeye_audit_log for the NIS2

@@ -72,6 +72,7 @@ function createApiRouter({
   flowsRepo,
   geoTileConfig,
   geoProvider,
+  geoipUpdater,
   centroids,
   assistant,
   dispatcher,
@@ -150,7 +151,7 @@ function createApiRouter({
   if (thresholdsRepo) router.use('/api/thresholds', createThresholdsRouter({ thresholdsRepo, locationsRepo }));
   router.use('/api/interfaces', createInterfacesRouter({ resultsRepo, agentsRepo }));
   router.use('/api/search', createSearchRouter({ agentsRepo, locationsRepo, flowsRepo }));
-  if (settingsService) router.use('/api/settings', createSettingsRouter({ settingsService, featureGate, dispatcher, analysisConfig, retentionConfig, releaseKeyService, publishRelease: () => publishSignedReleaseFromSource({ sourceStore: agentSourceStore, releaseStore, releaseKeyService }) }));
+  if (settingsService) router.use('/api/settings', createSettingsRouter({ settingsService, featureGate, dispatcher, analysisConfig, retentionConfig, releaseKeyService, geoipUpdater, publishRelease: () => publishSignedReleaseFromSource({ sourceStore: agentSourceStore, releaseStore, releaseKeyService }) }));
   // Outbound API integrations (ITSM/IPAM connectors) — admin CRUD + test-fire.
   if (integrationsRepo && connectorRegistry && secretBox) {
     router.use('/api/integrations', createIntegrationsRouter({

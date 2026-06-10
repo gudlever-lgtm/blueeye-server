@@ -250,11 +250,11 @@ at the repo root — keep it and the `status` field in step.
 - **API access** (`api_access`) — programmatic API tokens: `GET/POST/DELETE
   /api/api-tokens` (admin), token hashed at rest and shown once; tokens
   authenticate API calls via `Authorization: Bearer <token>` or `X-API-Key`
-  (`src/auth/apiTokenAuth.js`). Table `api_tokens` (migration 033).
+  (`src/auth/apiTokenAuth.js`). Table `api_tokens` (migration 034).
 - **Audit log** (`audit_log`) — unified who-did-what trail: `GET /api/audit-log`
   (admin), recording auth login success/failure, user create/update/delete,
   licence re-validation, report generation and API-token management. Table
-  `audit_log` (migration 032), recorder `src/services/auditLogger.js`.
+  `audit_log` (migration 033), recorder `src/services/auditLogger.js`.
 - **PDF / CSV reports** (`reports_pdf` / `reports_csv`) — `GET
   /api/reports/{availability,incidents}.{csv,html}`; the print-ready HTML is
   Print→PDF client-side (no PDF library). JSON reads stay ungated (Basic reports).

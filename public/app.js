@@ -497,7 +497,7 @@ const PAGE_INFO = {
     ],
   },
   probes: {
-    hero: 'Active reachability from an agent: ping, TCP-connect, DNS and traceroute — with RTT, loss and path.',
+    hero: 'Active reachability from an agent: ping, TCP-connect, DNS, traceroute and a cURL content check — with RTT, loss and path.',
     title: 'Probes',
     body: () => [
       el('p', {}, 'While the other pages measure traffic passively, probes run an active test from a selected agent against a target, so you can answer “can site A reach host B — and how quickly?”.'),
@@ -506,9 +506,10 @@ const PAGE_INFO = {
         el('li', {}, 'Ping (ICMP): RTT min/avg/max + packet loss + jitter.'),
         el('li', {}, 'TCP-connect: opens host:port and measures connection time (no payload sent).'),
         el('li', {}, 'DNS: time to resolve a name (and which address was returned).'),
-        el('li', {}, 'Traceroute: the path (hops) to the target. Each hop is probed several times (set “Queries/hop”), so you get per-hop loss, latency and jitter — rendered as an interactive path map (hover a hop for its metrics + ASN/country) plus a hop table. Repeated traceroutes are aggregated so the verdict is stable.')),
+        el('li', {}, 'Traceroute: the path (hops) to the target. Each hop is probed several times (set “Queries/hop”), so you get per-hop loss, latency and jitter — rendered as an interactive path map (hover a hop for its metrics + ASN/country) plus a hop table. Repeated traceroutes are aggregated so the verdict is stable.'),
+        el('li', {}, el('strong', {}, 'cURL (content check): '), 'goes beyond “is it up” — the agent runs ', el('span', { class: 'mono' }, 'curl'), ' against an http(s) URL and verifies the received traffic: the HTTP status code, that the response body contains an expected substring or ', el('span', { class: 'mono' }, '/regex/'), ', the received byte count, and a response header. Leave the expectation fields blank for a plain status<400 check. The agent inspects the body locally but reports only metadata — status, byte count, content-type and pass/fail — never the body itself.')),
       el('p', {}, 'Select agent + type + target and click “Run probe”. The agent must be connected; the result comes back a moment later and is added to the history so you can see RTT/loss over time.'),
-      el('p', { class: 'muted' }, 'To run the same probes on a schedule across many agents, use ', viewLink('tests'), '; probe results also drive the health verdict on ', viewLink('fleet', 'Overview'), '. Metadata only: targets and timings — never packet contents.'),
+      el('p', { class: 'muted' }, 'To run the same probes on a schedule across many agents, use ', viewLink('tests'), '; probe results also drive the health verdict on ', viewLink('fleet', 'Overview'), '. Metadata only: targets, timings and content verdicts — never packet or response contents.'),
     ],
   },
   flows: {
@@ -1044,6 +1045,7 @@ const TEST_TEMPLATES = [
   { key: 'dns', label: 'DNS resolution — example.com', item: { type: 'probe', probe: { type: 'dns', host: 'example.com' } } },
   { key: 'web', label: 'Web reachability — TCP 443 example.com', item: { type: 'probe', probe: { type: 'tcp', host: 'example.com', port: 443, count: 3 } } },
   { key: 'path', label: 'Path trace — traceroute 9.9.9.9', item: { type: 'probe', probe: { type: 'traceroute', host: '9.9.9.9' } } },
+  { key: 'content', label: 'Content check — cURL 200 from example.com', item: { type: 'probe', probe: { type: 'curl', url: 'https://example.com', expectStatus: 200 } } },
   { key: 'throughput', label: 'Throughput snapshot — current bandwidth', item: { type: 'run-test', intervalMs: 1000 } },
   { key: 'speed', label: 'Speed test — download/upload to server (Mbps)', item: { type: 'speedtest' } },
 ];
@@ -2636,13 +2638,39 @@ function interfaceTable(interfaces, source = null) {
 }
 
 // Latest probe results (newest per target). onDetail(r) fires from each row.
+// Builds the cURL content-check controls (method + expectations) shared by both
+// probe forms. Returns { wrap, apply }: apply(body) copies any set expectation
+// onto the run-probe payload. Empty fields are omitted (no assertion made), so a
+// bare curl probe is just a status<400 reachability check.
+function curlInputs() {
+  const method = el('select', {}, ...['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'].map((m) => el('option', { value: m }, m)));
+  const expectStatus = el('input', { type: 'number', min: '100', max: '599', placeholder: '200', style: 'width:5em' });
+  const expectBody = el('input', { type: 'text', placeholder: 'substring or /regex/' });
+  const expectHeader = el('input', { type: 'text', placeholder: 'Name or Name: value' });
+  const wrap = el('span', { class: 'inline muted curl-opts' },
+    el('label', { class: 'inline muted' }, 'Method ', method),
+    el('label', { class: 'inline muted' }, 'Expect status ', expectStatus),
+    el('label', { class: 'inline muted' }, 'Body ', expectBody),
+    el('label', { class: 'inline muted' }, 'Header ', expectHeader));
+  function apply(body) {
+    if (method.value && method.value !== 'GET') body.method = method.value;
+    if (expectStatus.value) body.expectStatus = Number(expectStatus.value);
+    const eb = expectBody.value.trim(); if (eb) body.expectBody = eb;
+    const eh = expectHeader.value.trim(); if (eh) body.expectHeader = eh;
+  }
+  return { wrap, apply };
+}
+
 function probeLatestTable(rows, onDetail) {
   if (!rows.length) return el('div', { class: 'muted' }, 'No probe results yet — run one above.');
   return el('table', {},
     el('thead', {}, el('tr', {}, ...['Type', 'Target', 'Status', 'RTT', 'Loss', 'Jitter', 'Time', ''].map((h) => el('th', {}, h)))),
     el('tbody', {}, ...rows.map((r) => el('tr', {},
       el('td', {}, r.type),
-      el('td', {}, esc(r.target)),
+      el('td', {}, esc(r.target),
+        // curl/http carry a verification/cert explanation; surface it inline.
+        r.detail ? el('div', { class: 'muted small' }, esc(r.detail)) : null,
+        (r.type === 'curl' && r.contentType) ? el('div', { class: 'muted small' }, `${esc(r.contentType)}${r.bytes != null ? ` · ${r.bytes} B` : ''}`) : null),
       el('td', {}, el('span', { class: `badge ${r.ok ? 'online' : 'offline'}` }, r.ok ? 'ok' : 'error')),
       el('td', { class: 'num' }, r.rttMs != null ? `${r.rttMs} ms` : '–'),
       el('td', { class: 'num' }, r.lossPct != null ? `${r.lossPct}%` : '–'),
@@ -2895,27 +2923,33 @@ views.interfaces = async () => {
 views.probes = async () => {
   const root = el('div', { class: 'probes' });
   root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Probes'),
-    el('span', { class: 'muted' }, 'Active reachability · ping · TCP · DNS · traceroute')));
+    el('span', { class: 'muted' }, 'Active reachability · ping · TCP · DNS · traceroute · cURL')));
 
   const agents = await api('/agents').catch(() => []);
   if (!agents.length) { root.append(el('div', { class: 'empty' }, 'No agents yet — enrol an agent first.')); return root; }
 
   const agentSel = el('select', {}, ...agents.map((a) => el('option', { value: String(a.id) }, a.display_name || a.hostname)));
-  const typeSel = el('select', {}, ...[['ping', 'Ping (ICMP)'], ['tcp', 'TCP-connect'], ['dns', 'DNS'], ['traceroute', 'Traceroute']].map(([v, l]) => el('option', { value: v }, l)));
+  const typeSel = el('select', {}, ...[['ping', 'Ping (ICMP)'], ['tcp', 'TCP-connect'], ['dns', 'DNS'], ['traceroute', 'Traceroute'], ['curl', 'cURL (content check)']].map(([v, l]) => el('option', { value: v }, l)));
   const target = el('input', { type: 'text', placeholder: 'e.g. 1.1.1.1 or example.com' });
   const portInput = el('input', { type: 'number', min: '1', max: '65535', value: '443' });
   const portWrap = el('label', { class: 'inline muted' }, 'Port ', portInput);
   const countInput = el('input', { type: 'number', min: '1', max: '20', value: '4' });
   const countLabelText = el('span', {}, 'Count ');
+  // cURL content-verification inputs — only shown for the curl type. They let the
+  // operator assert that the received traffic is correct, not just reachable.
+  const curl = curlInputs();
   const runBtn = el('button', { class: 'small' }, 'Run probe');
   const status = el('div', { class: 'muted' });
   // For traceroute the count is the per-hop probe count ("queries") that MTR-style
   // sampling uses to derive per-hop loss/jitter (server caps it at 10).
   const syncPort = () => {
     const tr = typeSel.value === 'traceroute';
+    const isCurl = typeSel.value === 'curl';
     portWrap.style.display = typeSel.value === 'tcp' ? '' : 'none';
+    curl.wrap.style.display = isCurl ? '' : 'none';
+    target.placeholder = isCurl ? 'e.g. https://example.com/health' : 'e.g. 1.1.1.1 or example.com';
     countLabelText.textContent = tr ? 'Queries/hop ' : 'Count ';
-    countInput.max = tr ? '10' : '20';
+    countInput.max = tr ? '10' : (isCurl ? '10' : '20');
     if (tr && Number(countInput.value) > 10) countInput.value = '3';
   };
   typeSel.addEventListener('change', syncPort); syncPort();
@@ -2926,6 +2960,7 @@ views.probes = async () => {
     el('label', { class: 'inline muted' }, 'Target ', target),
     portWrap,
     el('label', { class: 'inline muted' }, countLabelText, countInput),
+    curl.wrap,
     runBtn, status));
 
   const latestHost = el('div', { class: 'probe-latest' });
@@ -2939,6 +2974,7 @@ views.probes = async () => {
     if (!host) { status.className = 'error'; status.textContent = 'Enter a target.'; return; }
     const body = { type: typeSel.value, host };
     if (typeSel.value === 'tcp') body.port = Number(portInput.value);
+    if (typeSel.value === 'curl') curl.apply(body);
     if (countInput.value) {
       if (typeSel.value === 'traceroute') body.queries = Number(countInput.value);
       else body.count = Number(countInput.value);
@@ -3441,20 +3477,27 @@ views.agent = async () => {
   }
 
   // ---- Probes (this agent) ----
-  const typeSel = el('select', {}, ...[['ping', 'Ping (ICMP)'], ['tcp', 'TCP-connect'], ['dns', 'DNS'], ['traceroute', 'Traceroute']].map(([v, l]) => el('option', { value: v }, l)));
+  const typeSel = el('select', {}, ...[['ping', 'Ping (ICMP)'], ['tcp', 'TCP-connect'], ['dns', 'DNS'], ['traceroute', 'Traceroute'], ['curl', 'cURL (content check)']].map(([v, l]) => el('option', { value: v }, l)));
   const target = el('input', { type: 'text', placeholder: 'e.g. 1.1.1.1 or example.com' });
   const portInput = el('input', { type: 'number', min: '1', max: '65535', value: '443' });
   const portWrap = el('label', { class: 'inline muted' }, 'Port ', portInput);
   const countInput = el('input', { type: 'number', min: '1', max: '20', value: '4' });
+  const curl = curlInputs();
   const runBtn = el('button', { class: 'small' }, 'Run probe');
   const probeStatus = el('span', { class: 'muted' });
-  const syncPort = () => { portWrap.style.display = typeSel.value === 'tcp' ? '' : 'none'; };
+  const syncPort = () => {
+    const isCurl = typeSel.value === 'curl';
+    portWrap.style.display = typeSel.value === 'tcp' ? '' : 'none';
+    curl.wrap.style.display = isCurl ? '' : 'none';
+    target.placeholder = isCurl ? 'e.g. https://example.com/health' : 'e.g. 1.1.1.1 or example.com';
+  };
   typeSel.addEventListener('change', syncPort); syncPort();
   const probeForm = el('div', { class: 'history-controls' },
     el('label', { class: 'inline muted' }, 'Type ', typeSel),
     el('label', { class: 'inline muted' }, 'Target ', target),
     portWrap,
     el('label', { class: 'inline muted' }, 'Count ', countInput),
+    curl.wrap,
     runBtn, probeStatus);
   const probeLatestHost = el('div', { class: 'probe-latest' });
   const probeDetailHost = el('div', {});
@@ -3464,6 +3507,7 @@ views.agent = async () => {
     if (!host) { probeStatus.className = 'error'; probeStatus.textContent = 'Enter a target.'; return; }
     const body = { type: typeSel.value, host };
     if (typeSel.value === 'tcp') body.port = Number(portInput.value);
+    if (typeSel.value === 'curl') curl.apply(body);
     if (countInput.value) body.count = Number(countInput.value);
     probeStatus.className = 'muted'; probeStatus.textContent = 'Sending…'; runBtn.disabled = true;
     try {
@@ -3520,7 +3564,7 @@ views.agent = async () => {
   const nicSummary = el('span', { class: 'muted' }, nics.length ? `· ${nics.length} interface(s)` : '· none reported');
 
   root.append(
-    el('details', { class: 'sec', open: true }, el('summary', {}, 'Probes ', el('span', { class: 'muted' }, '· ping · TCP · DNS · traceroute')), probeForm, probeLatestHost, probeDetailHost),
+    el('details', { class: 'sec', open: true }, el('summary', {}, 'Probes ', el('span', { class: 'muted' }, '· ping · TCP · DNS · traceroute · cURL')), probeForm, probeLatestHost, probeDetailHost),
     el('details', { class: 'sec', open: true }, el('summary', {}, 'Interfaces ', ifaceStatus), ifaceHost),
     el('details', { class: 'sec' }, el('summary', {}, 'NIC firmware ', nicSummary), nicTable(nics)),
     el('details', { class: 'sec' }, el('summary', {}, 'Traffic ', el('span', { class: 'muted' }, '· recent bandwidth')), trafficHost));
@@ -6038,7 +6082,12 @@ function geoipSettingsCard(geoip) {
   const path = el('input', { type: 'text', value: (geoip && geoip.dbPath) || '', placeholder: '/data/geoip.csv' });
   const err = el('p', { class: 'error' });
   const status = el('p', { class: 'muted small' });
+  const built = el('p', { class: 'muted small' });
   const btn = el('button', { class: 'small' }, 'Save & reload');
+  const updateBtn = el('button', { class: 'small' }, 'Update now (download latest)');
+  const autoChk = el('input', { type: 'checkbox' });
+  if (geoip && geoip.autoUpdate) autoChk.checked = true;
+
   function renderStatus(s) {
     const ok = s && s.configured;
     status.replaceChildren(
@@ -6046,23 +6095,58 @@ function geoipSettingsCard(geoip) {
         ok ? `Loaded ${s.ranges} IP range${s.ranges === 1 ? '' : 's'}` : 'Not configured — geo enrichment disabled'),
       s && s.source ? el('span', { class: 'muted' }, ` · source: ${esc(s.source)}`) : null,
       s && s.error ? el('span', { class: 'warn-text' }, ` · ${esc(s.error)}`) : null);
+    const b = s && s.lastBuild;
+    built.textContent = b ? `Last downloaded: ${b.month || '?'} · ${b.ranges} ranges · ${fmtDate(b.builtAt)}` : '';
+    if (s && typeof s.dbPath === 'string' && s.dbPath !== path.value) path.value = s.dbPath;
   }
   renderStatus(geoip);
+
   async function save() {
     err.textContent = ''; btn.disabled = true;
     try {
       const res = await api('/api/settings/geoip', { method: 'PUT', body: { dbPath: path.value.trim() } });
       renderStatus(res.geoip);
-      if (res.geoip && res.geoip.configured) toast(`GeoIP loaded — ${res.geoip.ranges} ranges`);
-      else toast('Saved, but no ranges loaded — check the path and CSV format.', true);
+      toast(res.geoip && res.geoip.configured ? `GeoIP loaded — ${res.geoip.ranges} ranges` : 'Saved, but no ranges loaded — check the path and CSV format.', !(res.geoip && res.geoip.configured));
     } catch (e2) { err.textContent = errText(e2); } finally { btn.disabled = false; }
   }
+
+  // Kicks off the server-side download+build, then polls the job until it settles
+  // (it writes into the server's own /data volume, so no host path is needed).
+  let polling = null;
+  async function refreshGeoip() { try { const d = await api('/api/settings'); renderStatus(d.geoip); } catch { /* ignore */ } }
+  function setUpdating(on) { updateBtn.disabled = on; updateBtn.textContent = on ? 'Downloading + building…' : 'Update now (download latest)'; }
+  async function pollUpdate() {
+    try {
+      const { update: u } = await api('/api/settings/geoip/update');
+      if (u.state === 'running') return; // keep polling
+      clearInterval(polling); polling = null; setUpdating(false);
+      if (u.state === 'ok') { await refreshGeoip(); toast(`GeoIP updated to ${u.month} — ${u.ranges} ranges`); }
+      else if (u.state === 'error') { err.textContent = `Update failed: ${u.error || 'unknown error'}`; toast('GeoIP update failed', true); }
+    } catch (e2) { clearInterval(polling); polling = null; setUpdating(false); err.textContent = errText(e2); }
+  }
+  async function updateNow() {
+    err.textContent = ''; setUpdating(true);
+    try {
+      await api('/api/settings/geoip/update', { method: 'POST', body: {} });
+      if (!polling) polling = setInterval(pollUpdate, 2000);
+    } catch (e2) { setUpdating(false); err.textContent = errText(e2); }
+  }
+  async function toggleAuto() {
+    try { await api('/api/settings/geoip', { method: 'PUT', body: { autoUpdate: autoChk.checked } }); toast(autoChk.checked ? 'Monthly auto-update on' : 'Monthly auto-update off'); }
+    catch (e2) { autoChk.checked = !autoChk.checked; toast(errText(e2), true); }
+  }
+
   btn.addEventListener('click', save);
+  updateBtn.addEventListener('click', updateNow);
+  autoChk.addEventListener('change', toggleAuto);
+
   return el('div', { class: 'settings-card' }, el('h3', {}, 'GeoIP database (country + ASN)'),
-    el('p', { class: 'muted small' }, 'Offline, EU-sourced IP→country/ASN range CSV used to place external destinations and traceroute hops on the maps. Without it the maps show only your sites. Point this at a file on the server (build one with scripts/build-geoip.js); it reloads live, no restart. See docs/geo.md.'),
+    el('p', { class: 'muted small' }, 'Offline, EU-sourced IP→country/ASN range CSV used to place external destinations and traceroute hops on the maps. Without it the maps show only your sites. ', el('strong', {}, '“Update now”'), ' downloads the latest DB-IP Lite release (db-ip.com, CC-BY) and builds it on the server — no host file needed. Or point the path at a file you built with scripts/build-geoip.js. Reloads live, no restart. See docs/geo.md.'),
     el('div', { class: 'form-grid' },
       el('label', {}, 'GeoIP CSV path (server-side file)', path),
-      status, err, el('div', { class: 'form-actions' }, btn)));
+      status, built, err,
+      el('label', { class: 'inline' }, autoChk, ' Auto-update monthly (the server fetches a fresh DB-IP release; needs outbound internet)'),
+      el('div', { class: 'form-actions' }, btn, updateBtn)));
 }
 
 views.users = async () => {
@@ -6932,6 +7016,23 @@ PAGE_INFO.reporting = {
 let currentView = 'fleet';
 const modalOpen = () => !$('#modal').classList.contains('hidden');
 
+// One-time per session: stamp the sidebar foot with this server's build —
+// "BlueEye server · v<version> · <release date>" — from /system/version.
+let footStamped = false;
+async function stampFooter() {
+  if (footStamped) return;
+  footStamped = true;
+  const foot = $('#sidebar-foot');
+  if (!foot) return;
+  try {
+    const ver = await api('/system/version');
+    const parts = ['BlueEye server'];
+    if (ver && ver.server) parts.push(`v${ver.server}`);
+    if (ver && ver.releaseDate) parts.push(ver.releaseDate);
+    foot.textContent = parts.join(' · ');
+  } catch { footStamped = false; /* retry on the next render */ }
+}
+
 async function render({ silent = false } = {}) {
   if (!token) { $('#login').classList.remove('hidden'); $('#app').classList.add('hidden'); return; }
   $('#login').classList.add('hidden');
@@ -6944,6 +7045,7 @@ async function render({ silent = false } = {}) {
   $('#whoami').replaceChildren(
     el('span', { class: 'who-email' }, email || '—'),
     el('span', { class: `badge role-${role}` }, role));
+  stampFooter(); // sidebar foot: BlueEye server · version · release date
   // Admin-only, once per session: nudge to set the agent signing key if it's missing.
   maybePromptSigningKey();
 

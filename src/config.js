@@ -124,6 +124,13 @@ const config = {
   geo: {
     enabled: process.env.GEO_ENABLED !== 'false',
     dbPath: process.env.GEOIP_DB_PATH || '',
+    // Where the in-app "Update now" / monthly auto-update writes the built CSV.
+    // Defaults to the persistent /data volume so it works in Docker with no host
+    // mount; override for bare-node installs.
+    buildPath: process.env.GEOIP_BUILD_PATH || '/data/geoip.csv',
+    // Base URL for the offline GeoIP source (DB-IP Lite, EU, CC-BY). Point at a
+    // self-hosted/EU mirror if preferred; the constraint is EU/self-hosted data.
+    sourceUrl: process.env.GEOIP_SOURCE_URL || 'https://download.db-ip.com/free',
     // Map tiles. Served to the frontend via /api/geo/config so the URL is never
     // hardcoded. Default is OpenStreetMap (OSMF, EU); for production point this
     // at self-hosted or another EU tile source — never a US tile server.

@@ -109,6 +109,21 @@ loaded, so a wrong path shows as `0` rather than a silent no-op. An empty path
 clears the override (falls back to env / disabled). Only a *path* is stored, never
 the file's contents.
 
+### One-click / scheduled update (admin)
+
+The same card has **"Update now"**: the server downloads the latest DB-IP Lite
+release, builds the CSV with `geoipBuild.js` (shared with the CLI script) into
+`GEOIP_BUILD_PATH` (default `/data/geoip.csv` — the persistent volume, so it works
+in Docker with **no host mount**), then reloads the provider. It runs in the
+background; the UI polls the job (`POST`/`GET /api/settings/geoip/update`) and shows
+month + range count when done.
+
+An **Auto-update monthly** toggle (opt-in) lets the server refresh itself when a new
+month is published. This is the only part of geo that makes an **outbound** call, it's
+admin-initiated/opt-in, and the source base URL is configurable (`GEOIP_SOURCE_URL`,
+default db-ip.com). **Air-gapped installs** simply never enable it and keep using a
+file built by `scripts/build-geoip.js` (which also has a `--latest` mode).
+
 ## Map API (Phase 8)
 
 All endpoints are viewer+ behind the user JWT. Aggregation is server-side — raw

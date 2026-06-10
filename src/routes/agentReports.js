@@ -13,8 +13,23 @@ const { validateProbeResults } = require('../validation/probeValidation');
 //
 // Paths use the `/me/...` prefix so they don't collide with the user-JWT agents
 // router's `/:id` routes mounted under the same /agents path.
-function createAgentReportsRouter({ agentAuth, resultsRepo, agentsRepo, analysisPipeline = null, flowPipeline = null, probeResultsRepo = null, probePipeline = null, incidentService = null }) {
+function createAgentReportsRouter({ agentAuth, resultsRepo, agentsRepo, auditEventsRepo = null, analysisPipeline = null, flowPipeline = null, probeResultsRepo = null, probePipeline = null, incidentService = null }) {
   const router = express.Router();
+
+  // Records what an agent actually performed in the unified audit trail. Recurring
+  // activity (continuous traffic reporting, scheduled probes) collapses onto a
+  // single row via a dedup key — only the first run is a distinct audit entry,
+  // every repeat just bumps it ("Repeats …"). Best-effort: never breaks ingest.
+  async function auditAgentActivity(agentId, fn) {
+    if (!auditEventsRepo) return;
+    try { await fn(agentId); } catch { /* audit is non-fatal */ }
+  }
+
+  // A run-test triggered on demand (commanded) carries the command name; the
+  // agent's own continuous reporting uses 'auto-report'. Only the latter repeats.
+  function isAutoReport(r) {
+    return !r || !r.name || r.name === 'auto-report';
+  }
 
   // POST /agents/probe-results { results: [...] } — stores active-probe results
   // (ping/tcp/dns/traceroute/http) for the agent identified by the token.
@@ -28,6 +43,24 @@ function createAgentReportsRouter({ agentAuth, resultsRepo, agentsRepo, analysis
         return res.status(400).json({ error: 'Validation failed', details: errors });
       }
       const inserted = await probeResultsRepo.createMany(req.agent.agentId, value.results);
+
+      // Audit what the agent probed. Each (type → target) collapses to one row;
+      // repeats (scheduled probes) bump it rather than spamming the trail.
+      await auditAgentActivity(req.agent.agentId, async (agentId) => {
+        const seen = new Set();
+        for (const r of value.results) {
+          const type = r && r.type ? String(r.type) : 'probe';
+          const target = r && r.target ? String(r.target) : '';
+          const key = `${type}:${target}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          await auditEventsRepo.recordRecurring({
+            actorType: 'agent', actorId: agentId,
+            action: 'agent.probe', targetType: type, targetLabel: target || null,
+            dedupKey: `agent:${agentId}:probe:${key}`,
+          });
+        }
+      });
 
       // After persistence, derive probe-based findings (reachability/loss/latency/
       // jitter/cert) and alert. Resilient: must never break ingestion.
@@ -64,6 +97,25 @@ function createAgentReportsRouter({ agentAuth, resultsRepo, agentsRepo, analysis
         return res.status(400).json({ error: 'Validation failed', details: errors });
       }
       const inserted = await resultsRepo.createMany(req.agent.agentId, value.results);
+
+      // Audit what the agent measured. Continuous reporting ('auto-report')
+      // collapses onto a single recurring row ("Repeats …"); an on-demand
+      // (commanded) run-test is recorded as a distinct event.
+      await auditAgentActivity(req.agent.agentId, async (agentId) => {
+        if (value.results.some((r) => isAutoReport(r))) {
+          await auditEventsRepo.recordRecurring({
+            actorType: 'agent', actorId: agentId,
+            action: 'agent.traffic-report', targetType: 'traffic',
+            dedupKey: `agent:${agentId}:traffic-report`,
+          });
+        }
+        if (value.results.some((r) => !isAutoReport(r))) {
+          await auditEventsRepo.record({
+            actorType: 'agent', actorId: agentId,
+            action: 'agent.run-test', targetType: 'traffic',
+          });
+        }
+      });
 
       // After persistence, run analysis (behind its own feature flag). It is
       // resilient and must never break ingestion, so failures are swallowed.

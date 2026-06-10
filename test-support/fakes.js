@@ -306,6 +306,62 @@ function makeAuditRepo(overrides = {}) {
   };
 }
 
+// A fake unified audit-events repo (in-memory). Mirrors the real repo's two
+// write paths: record() always adds a row; recordRecurring() folds repeats onto
+// one row keyed by dedupKey (bumping occurrences + self-measuring the interval).
+function makeAuditEventsRepo(overrides = {}) {
+  const rows = [];
+  let seq = 0;
+  const iso = (v) => (v == null ? null : (v instanceof Date ? v.toISOString() : new Date(v).toISOString()));
+  return {
+    rows,
+    record: overrides.record || (async (e) => {
+      const id = (seq += 1);
+      const now = new Date().toISOString();
+      rows.push({
+        id, ts: now, actorType: e.actorType || 'user', actorId: e.actorId ?? null,
+        actorLabel: e.actorLabel ?? null, actorRole: e.actorRole ?? null, action: e.action,
+        targetType: e.targetType ?? null, targetId: e.targetId == null ? null : String(e.targetId),
+        targetLabel: e.targetLabel ?? null, method: e.method ?? null, path: e.path ?? null,
+        status: e.status ?? null, ip: e.ip ?? null, detail: e.detail ?? null,
+        repeatIntervalMs: e.repeatIntervalMs ?? null, occurrences: 1,
+        firstSeenAt: now, lastSeenAt: now, dedupKey: null,
+      });
+      return id;
+    }),
+    recordRecurring: overrides.recordRecurring || (async (e) => {
+      if (!e.dedupKey) throw new Error('recordRecurring requires a dedupKey');
+      const existing = rows.find((r) => r.dedupKey === e.dedupKey);
+      const now = new Date();
+      if (existing) {
+        existing.occurrences += 1;
+        if (existing.repeatIntervalMs == null) {
+          existing.repeatIntervalMs = e.repeatIntervalMs
+            ?? Math.max(0, Math.round((now.getTime() - new Date(existing.lastSeenAt).getTime())));
+        }
+        existing.lastSeenAt = now.toISOString();
+        return;
+      }
+      const id = (seq += 1);
+      rows.push({
+        id, ts: now.toISOString(), actorType: e.actorType || 'agent', actorId: e.actorId ?? null,
+        actorLabel: e.actorLabel ?? null, actorRole: e.actorRole ?? null, action: e.action,
+        targetType: e.targetType ?? null, targetId: e.targetId == null ? null : String(e.targetId),
+        targetLabel: e.targetLabel ?? null, method: null, path: null, status: null, ip: null,
+        detail: e.detail ?? null, repeatIntervalMs: e.repeatIntervalMs ?? null, occurrences: 1,
+        firstSeenAt: now.toISOString(), lastSeenAt: now.toISOString(), dedupKey: e.dedupKey,
+      });
+    }),
+    findAll: overrides.findAll || (async ({ actorType = null, action = null, limit = 100, offset = 0 } = {}) => {
+      let out = rows.slice().sort((a, b) => (a.lastSeenAt < b.lastSeenAt ? 1 : -1));
+      if (actorType) out = out.filter((r) => r.actorType === actorType);
+      if (action) out = out.filter((r) => r.action === action);
+      return out.slice(offset, offset + Math.min(limit, 500)).map((r) => ({ ...r, ts: iso(r.ts) }));
+    }),
+    distinctActions: overrides.distinctActions || (async () => [...new Set(rows.map((r) => r.action))].sort()),
+  };
+}
+
 // A fake db with a ping() used by GET /health.
 function makeDb(overrides = {}) {
   return {
@@ -846,6 +902,7 @@ function makeApp(overrides = {}) {
     releasePublicKey: overrides.releasePublicKey || '',
     releaseKeyService: overrides.releaseKeyService || makeReleaseKeyService(),
     auditRepo: overrides.auditRepo || makeAuditRepo(),
+    auditEventsRepo: overrides.auditEventsRepo || makeAuditEventsRepo(),
     integrationsRepo: overrides.integrationsRepo || makeIntegrationsRepo(),
     integrationAuditRepo: overrides.integrationAuditRepo || makeIntegrationAuditRepo(),
     integrationsDispatcher: overrides.integrationsDispatcher || makeIntegrationsDispatcher(),
@@ -923,6 +980,7 @@ module.exports = {
   makeReleaseStore,
   makeReleaseKeyService,
   makeAuditRepo,
+  makeAuditEventsRepo,
   makeTestPackagesRepo,
   makeTestPackageRunner,
   makeSpeedtestResultsRepo,

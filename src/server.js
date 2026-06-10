@@ -7,6 +7,7 @@ const { createLocationsRepository } = require('./repositories/locationsRepositor
 const { createUsersRepository } = require('./repositories/usersRepository');
 const { createAgentsRepository } = require('./repositories/agentsRepository');
 const { createAgentActionAuditRepository } = require('./repositories/agentActionAuditRepository');
+const { createAuditEventsRepository } = require('./repositories/auditEventsRepository');
 const { createEnrollmentCodesRepository } = require('./repositories/enrollmentCodesRepository');
 const { createEnrollmentStore } = require('./services/enrollmentStore');
 const { createAgentTokensRepository } = require('./repositories/agentTokensRepository');
@@ -96,6 +97,7 @@ function start() {
   const usersRepo = createUsersRepository(db);
   const agentsRepo = createAgentsRepository(db);
   const auditRepo = createAgentActionAuditRepository(db);
+  const auditEventsRepo = createAuditEventsRepository(db);
   const enrollmentCodesRepo = createEnrollmentCodesRepository(db);
   const enrollmentStore = createEnrollmentStore(db);
   const agentTokensRepo = createAgentTokensRepository(db);
@@ -362,6 +364,7 @@ function start() {
     usersRepo,
     agentsRepo,
     auditRepo,
+    auditEventsRepo,
     enrollmentCodesRepo,
     enrollmentStore,
     agentTokensRepo,

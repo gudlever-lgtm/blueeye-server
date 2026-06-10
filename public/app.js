@@ -6277,6 +6277,10 @@ async function nis2Print(path) {
 views.reporting = async () => {
   const root = el('div', { class: 'nis2' });
   const sections = [['nis2', 'NIS2'], ['generator', 'Report Generator']];
+  // Audit is RBAC-gated: only admins may see who did what on the server.
+  if (role === 'admin') sections.push(['audit', 'Audit']);
+  // Guard against a stale section the current user may no longer access.
+  if (!sections.some(([k]) => k === reportingState.section)) reportingState.section = 'nis2';
   const bar = el('div', { class: 'subtabs nis2-subtabs' },
     ...sections.map(([key, label]) => el('button', {
       class: `small ghost${reportingState.section === key ? ' active' : ''}`,
@@ -6287,7 +6291,10 @@ views.reporting = async () => {
   const body = el('div', { class: 'nis2-body' }, el('div', { class: 'empty' }, 'Loading…'));
   root.append(body);
   try {
-    body.replaceChildren(reportingState.section === 'generator' ? await reportGenerator() : await nis2Module());
+    body.replaceChildren(
+      reportingState.section === 'generator' ? await reportGenerator()
+        : reportingState.section === 'audit' ? await auditModule()
+          : await nis2Module());
   } catch (err) { body.replaceChildren(el('div', { class: 'empty error' }, err.message)); }
   return root;
 };
@@ -6647,6 +6654,91 @@ async function nis2Audit() {
   return wrap;
 }
 
+// ---- Audit (server-wide trail, admin only) --------------------------------
+// Surfaced under Reporting → Audit. Shows who did what on the server (user
+// actions) and what each agent performed (traffic/probes). Recurring activity
+// is folded onto one row annotated "Repeats every …", per the audit design.
+const auditState = { actorType: '', action: '' };
+
+function fmtInterval(ms) {
+  if (!ms || ms <= 0) return '';
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.round(s / 60)}m`;
+  return fmtDuration(s);
+}
+
+async function auditModule() {
+  const wrap = el('div', { class: 'nis2-inner' });
+  wrap.append(el('h3', { class: 'nis2-h3' }, 'Audit trail'));
+  wrap.append(el('p', { class: 'muted' }, 'Actions performed by users on the server, and what each agent reported — with when, who and what. Repeated activity (continuous reporting, scheduled probes) is recorded once and annotated with how often it repeats.'));
+
+  // Filters: actor type + action, plus refresh / CSV export.
+  const actorSel = el('select', { class: 'small', onchange: () => { auditState.actorType = actorSel.value; load(); } },
+    ...[['', 'All actors'], ['user', 'Users'], ['agent', 'Agents'], ['system', 'System']]
+      .map(([v, l]) => el('option', { value: v, selected: auditState.actorType === v }, l)));
+  const actionSel = el('select', { class: 'small', onchange: () => { auditState.action = actionSel.value; load(); } },
+    el('option', { value: '' }, 'All actions'));
+  const csvHref = () => {
+    const p = new URLSearchParams();
+    if (auditState.actorType) p.set('actorType', auditState.actorType);
+    if (auditState.action) p.set('action', auditState.action);
+    return `/api/audit/export.csv${p.toString() ? `?${p}` : ''}`;
+  };
+  const exportBtn = el('button', { class: 'small ghost', onclick: () => nis2Download(csvHref(), 'audit.csv') }, '⤓ CSV');
+  wrap.append(el('div', { class: 'subtabs', style: 'gap:8px;align-items:center' },
+    actorSel, actionSel, el('button', { class: 'small ghost', onclick: () => load() }, '↻ Refresh'), exportBtn));
+
+  const body = el('div', { class: 'nis2-body' }, el('div', { class: 'empty' }, 'Loading…'));
+  wrap.append(body);
+
+  // Populate the action dropdown once.
+  try {
+    const actions = await api('/api/audit/actions');
+    for (const a of actions) actionSel.append(el('option', { value: a, selected: auditState.action === a }, a));
+  } catch { /* dropdown stays "All actions" */ }
+
+  async function load() {
+    body.replaceChildren(el('div', { class: 'empty' }, 'Loading…'));
+    const p = new URLSearchParams();
+    if (auditState.actorType) p.set('actorType', auditState.actorType);
+    if (auditState.action) p.set('action', auditState.action);
+    p.set('limit', '300');
+    let entries;
+    try { entries = await api(`/api/audit?${p}`); }
+    catch (err) { body.replaceChildren(el('div', { class: 'empty error' }, err.message)); return; }
+    if (!entries.length) { body.replaceChildren(el('div', { class: 'empty' }, 'No audited activity yet.')); return; }
+
+    const head = ['When', 'Actor', 'Action', 'Target', 'Repeats', 'Details'];
+    const rows = entries.map((e) => {
+      const actorCls = e.actorType === 'agent' ? 'neutral' : e.actorType === 'system' ? 'warn' : 'ok';
+      const target = e.targetLabel || (e.targetType ? `${e.targetType}${e.targetId ? ` #${e.targetId}` : ''}` : (e.targetId ? `#${e.targetId}` : '–'));
+      let repeats = '–';
+      if (e.occurrences > 1 || e.repeatIntervalMs) {
+        const iv = fmtInterval(e.repeatIntervalMs);
+        repeats = `Repeats${iv ? ` every ${iv}` : ''} · ×${e.occurrences}${e.lastSeenAt ? ` · last ${fmtDate(e.lastSeenAt)}` : ''}`;
+      }
+      const detailBits = [];
+      if (e.method && e.path) detailBits.push(`${e.method} ${e.path}`);
+      if (e.detail && Object.keys(e.detail).length) detailBits.push(JSON.stringify(e.detail));
+      if (e.ip) detailBits.push(e.ip);
+      return el('tr', {},
+        el('td', {}, fmtDate(e.ts)),
+        el('td', {}, nbadge(e.actorType, actorCls), ' ', el('span', {}, e.actorLabel || (e.actorId != null ? `#${e.actorId}` : '–')),
+          e.actorRole ? el('span', { class: 'muted' }, ` (${e.actorRole})`) : null),
+        el('td', {}, nbadge(e.action, e.action.endsWith('.delete') ? 'crit' : 'neutral')),
+        el('td', {}, target),
+        el('td', { class: e.occurrences > 1 ? 'muted' : '' }, repeats),
+        el('td', { class: 'muted', style: 'max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap', title: detailBits.join(' · ') }, detailBits.join(' · ') || '–'));
+    });
+    body.replaceChildren(el('div', { class: 'tablewrap' }, el('table', {},
+      el('thead', {}, el('tr', {}, ...head.map((h) => el('th', {}, h)))), el('tbody', {}, ...rows))));
+  }
+
+  await load();
+  return wrap;
+}
+
 // ---- NIS2: Get-started guide (shown when there is no data yet) -------------
 function nis2GetStarted() {
   const step = (n, title, desc, btn) => el('li', { class: 'nis2-gs-step' },
@@ -6830,6 +6922,8 @@ PAGE_INFO.reporting = {
     el('h4', {}, 'Reports & audit'),
     el('p', {}, 'Generate snapshot reports (the frozen metrics let the next report show the trend). Reports are approved by an admin/compliance role. Every change to a risk, control or incident is written to the audit trail.'),
     el('p', { class: 'muted' }, 'PDF export opens a clean, print-ready document — use your browser’s “Save as PDF”.'),
+    el('h4', {}, 'Audit (admin only)'),
+    el('p', {}, 'A server-wide audit trail: which user did what (login, and every create/update/delete) and what each agent performed (traffic measurements, probes) — each with when, who and what. Repeated activity such as continuous reporting or scheduled probes is recorded once and annotated “Repeats every …” rather than spamming the log. Visible only to administrators; exportable to CSV.'),
   ],
 };
 

@@ -4,6 +4,7 @@ const path = require('path');
 const express = require('express');
 const { createApiRouter } = require('./routes');
 const { requestLogger } = require('./middleware/requestLogger');
+const { createAuditLogger } = require('./middleware/auditLogger');
 const { notFoundHandler, errorHandler } = require('./middleware/errorHandler');
 const { silentLogger } = require('./logger');
 
@@ -16,6 +17,7 @@ function createApp({
   usersRepo,
   agentsRepo,
   auditRepo,
+  auditEventsRepo,
   enrollmentCodesRepo,
   enrollmentStore,
   agentTokensRepo,
@@ -85,6 +87,10 @@ function createApp({
   // requests that don't match a file fall through to the JSON API.
   app.use(express.static(path.join(__dirname, '..', 'public')));
 
+  // Server-wide audit of user actions. Registered before the API router so its
+  // res.on('finish') hook sees req.user (set by each route's requireAuth).
+  if (auditEventsRepo) app.use(createAuditLogger({ auditRepo: auditEventsRepo, logger }));
+
   // Application routes. User-JWT RBAC and agent-token auth are enforced inside
   // the individual routers (see src/auth/* and src/routes/*).
   app.use(
@@ -95,6 +101,7 @@ function createApp({
       usersRepo,
       agentsRepo,
       auditRepo,
+      auditEventsRepo,
       enrollmentCodesRepo,
       enrollmentStore,
       agentTokensRepo,

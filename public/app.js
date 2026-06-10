@@ -6880,6 +6880,23 @@ PAGE_INFO.reporting = {
 let currentView = 'fleet';
 const modalOpen = () => !$('#modal').classList.contains('hidden');
 
+// One-time per session: stamp the sidebar foot with this server's build —
+// "BlueEye server · v<version> · <release date>" — from /system/version.
+let footStamped = false;
+async function stampFooter() {
+  if (footStamped) return;
+  footStamped = true;
+  const foot = $('#sidebar-foot');
+  if (!foot) return;
+  try {
+    const ver = await api('/system/version');
+    const parts = ['BlueEye server'];
+    if (ver && ver.server) parts.push(`v${ver.server}`);
+    if (ver && ver.releaseDate) parts.push(ver.releaseDate);
+    foot.textContent = parts.join(' · ');
+  } catch { footStamped = false; /* retry on the next render */ }
+}
+
 async function render({ silent = false } = {}) {
   if (!token) { $('#login').classList.remove('hidden'); $('#app').classList.add('hidden'); return; }
   $('#login').classList.add('hidden');
@@ -6892,6 +6909,7 @@ async function render({ silent = false } = {}) {
   $('#whoami').replaceChildren(
     el('span', { class: 'who-email' }, email || '—'),
     el('span', { class: `badge role-${role}` }, role));
+  stampFooter(); // sidebar foot: BlueEye server · version · release date
   // Admin-only, once per session: nudge to set the agent signing key if it's missing.
   maybePromptSigningKey();
 

@@ -361,7 +361,7 @@ const PAGE_INFO = {
     hero: 'Reusable test packages — sets of probe/traffic tests the server pushes to chosen agents to run, on a schedule or on demand.',
     title: 'Tests — packages pushed to agents',
     body: () => [
-      el('p', {}, 'A test package is a named set of tests (ping / TCP / DNS / traceroute / throughput) with a target selector and an optional schedule. The server pushes the tests to the selected, connected agents; each agent runs them and reports back — results appear on the ', viewLink('probes'), ' and ', viewLink('overview', 'Traffic'), ' pages as usual.'),
+      el('p', {}, 'A test package is a named set of tests (ping / TCP / DNS / traceroute / cURL content check / throughput / speed test) with a target selector and an optional schedule. The server pushes the tests to the selected, connected agents; each agent runs them and reports back — results appear on the ', viewLink('probes'), ' and ', viewLink('overview', 'Traffic'), ' pages as usual. A cURL test verifies the received HTTP response — status code, body match and a header — not just reachability.'),
       el('h4', {}, 'Targets'),
       el('ul', {},
         el('li', {}, el('strong', {}, 'All agents '), '— every enrolled agent.'),
@@ -1106,6 +1106,7 @@ function testItemsSummary(items) {
   const labels = items.map((it) => {
     if (it.type === 'run-test') return 'throughput';
     if (it.type === 'speedtest') return 'speed test';
+    if (it.probe.type === 'curl') return `curl ${it.probe.url || it.probe.host}${it.probe.expectStatus ? ' →' + it.probe.expectStatus : ''}`;
     return `${it.probe.type} ${it.probe.host}${it.probe.port ? ':' + it.probe.port : ''}`;
   });
   return el('span', { class: 'muted small' }, labels.join(', '));
@@ -1173,23 +1174,39 @@ function editTestPackage(pkg, agents, locations) {
   const itemsBox = el('div', { class: 'tc-list' });
   const itemRows = [];
   function addItemRow(item) {
-    const typeSel = el('select', {}, ...[['ping', 'Ping'], ['tcp', 'TCP'], ['dns', 'DNS'], ['traceroute', 'Traceroute'], ['run-test', 'Throughput'], ['speedtest', 'Speed test']].map(([v, l]) => el('option', { value: v }, l)));
+    const typeSel = el('select', {}, ...[['ping', 'Ping'], ['tcp', 'TCP'], ['dns', 'DNS'], ['traceroute', 'Traceroute'], ['curl', 'cURL'], ['run-test', 'Throughput'], ['speedtest', 'Speed test']].map(([v, l]) => el('option', { value: v }, l)));
     const host = el('input', { type: 'text', placeholder: 'host / target' });
     const port = el('input', { type: 'number', min: '1', max: '65535', placeholder: 'port' });
     const count = el('input', { type: 'number', min: '1', max: '20', placeholder: 'count' });
+    // curl-only: assert the received HTTP status code, a body match, and a header.
+    const status = el('input', { type: 'number', min: '100', max: '599', placeholder: 'HTTP code', style: 'width:7em' });
+    const body = el('input', { type: 'text', placeholder: 'body: substring or /regex/' });
+    const header = el('input', { type: 'text', placeholder: 'header: Name or Name: value' });
     if (item) {
       if (item.type === 'run-test' || item.type === 'speedtest') { typeSel.value = item.type; }
-      else { typeSel.value = item.probe.type; host.value = item.probe.host || ''; if (item.probe.port) port.value = item.probe.port; if (item.probe.count) count.value = item.probe.count; }
+      else {
+        typeSel.value = item.probe.type;
+        host.value = item.probe.url || item.probe.host || '';
+        if (item.probe.port) port.value = item.probe.port;
+        if (item.probe.count) count.value = item.probe.count;
+        if (item.probe.expectStatus != null) status.value = item.probe.expectStatus;
+        if (item.probe.expectBody) body.value = item.probe.expectBody;
+        if (item.probe.expectHeader) header.value = item.probe.expectHeader;
+      }
     }
-    const ctrl = { typeSel, host, port, count };
+    const ctrl = { typeSel, host, port, count, status, body, header };
     const del = el('button', { type: 'button', class: 'small ghost danger', title: 'Remove', onclick: () => { const i = itemRows.indexOf(ctrl); if (i >= 0) itemRows.splice(i, 1); node.remove(); } }, '×');
-    const node = el('div', { class: 'test-item-row' }, typeSel, host, port, count, del);
+    const node = el('div', { class: 'test-item-row' }, typeSel, host, port, count, status, body, header, del);
     const sync = () => {
       const t = typeSel.value;
       const noTarget = t === 'run-test' || t === 'speedtest';
-      host.style.visibility = noTarget ? 'hidden' : 'visible';
-      port.style.visibility = t === 'tcp' ? 'visible' : 'hidden';
-      count.style.visibility = (t === 'ping' || t === 'tcp') ? 'visible' : 'hidden';
+      const isCurl = t === 'curl';
+      host.style.display = noTarget ? 'none' : '';
+      host.placeholder = isCurl ? 'https://host/path' : 'host / target';
+      port.style.display = t === 'tcp' ? '' : 'none';
+      count.style.display = (t === 'ping' || t === 'tcp' || isCurl) ? '' : 'none';
+      count.max = isCurl ? '10' : '20';
+      for (const f of [status, body, header]) f.style.display = isCurl ? '' : 'none';
     };
     typeSel.addEventListener('change', sync); sync();
     itemRows.push(ctrl);
@@ -1214,6 +1231,14 @@ function editTestPackage(pkg, agents, locations) {
       const t = c.typeSel.value;
       if (t === 'run-test') return { type: 'run-test' };
       if (t === 'speedtest') return { type: 'speedtest' };
+      if (t === 'curl') {
+        const probe = { type: 'curl', url: c.host.value.trim() };
+        if (c.status.value) probe.expectStatus = Number(c.status.value);
+        const b = c.body.value.trim(); if (b) probe.expectBody = b;
+        const h = c.header.value.trim(); if (h) probe.expectHeader = h;
+        if (c.count.value) probe.count = Number(c.count.value);
+        return { type: 'probe', probe };
+      }
       const probe = { type: t, host: c.host.value.trim() };
       if (t === 'tcp' && c.port.value) probe.port = Number(c.port.value);
       if ((t === 'ping' || t === 'tcp') && c.count.value) probe.count = Number(c.count.value);

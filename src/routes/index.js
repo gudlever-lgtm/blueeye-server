@@ -13,6 +13,7 @@ const { createEnrollmentCodesRouter } = require('./enrollmentCodes');
 const { createLicenseRouter } = require('./license');
 const { createSystemRouter } = require('./system');
 const { createAuditRouter } = require('./audit');
+const { createAuditEventsRouter } = require('./auditEvents');
 const { createAuditLogRouter } = require('./auditLog');
 const { createApiTokensRouter } = require('./apiTokens');
 const { createFindingsRouter } = require('./findings');
@@ -51,6 +52,7 @@ function createApiRouter({
   usersRepo,
   agentsRepo,
   auditRepo,
+  auditEventsRepo,
   auditLogRepo,
   apiTokensRepo,
   auditLogger,
@@ -196,10 +198,12 @@ function createApiRouter({
   // Requests fall through routers that have no matching route.
   router.use('/agents', createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentCommander, agentSourceStore, releaseStore, releasePublicKey, auditRepo, integrationTrigger: integrationsDispatcher }));
   router.use('/audit', createAuditRouter({ auditRepo }));
+  // Unified, server-wide audit trail (Reporting → Audit) — admin only.
+  if (auditEventsRepo) router.use('/api/audit', createAuditEventsRouter({ auditEventsRepo }));
   // Unified audit log (license feature `audit_log`) + API tokens (`api_access`).
   if (auditLogRepo) router.use('/api/audit-log', createAuditLogRouter({ auditLogRepo, featureGate, planService }));
   if (apiTokensRepo) router.use('/api/api-tokens', createApiTokensRouter({ apiTokensRepo, featureGate, planService, auditLogger }));
-  router.use('/agents', createAgentReportsRouter({ agentAuth, resultsRepo, agentsRepo, analysisPipeline, flowPipeline, probeResultsRepo, probePipeline, incidentService }));
+  router.use('/agents', createAgentReportsRouter({ agentAuth, resultsRepo, agentsRepo, auditEventsRepo, analysisPipeline, flowPipeline, probeResultsRepo, probePipeline, incidentService }));
   router.use('/agents', createAgentEnrollRouter({ enrollmentStore, notifyDashboard, integrationTrigger: integrationsDispatcher }));
 
   return router;

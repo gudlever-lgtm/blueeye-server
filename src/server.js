@@ -7,6 +7,7 @@ const { createLocationsRepository } = require('./repositories/locationsRepositor
 const { createUsersRepository } = require('./repositories/usersRepository');
 const { createAgentsRepository } = require('./repositories/agentsRepository');
 const { createAgentActionAuditRepository } = require('./repositories/agentActionAuditRepository');
+const { createAuditEventsRepository } = require('./repositories/auditEventsRepository');
 const { createAuditLogRepository } = require('./repositories/auditLogRepository');
 const { createApiTokensRepository } = require('./repositories/apiTokensRepository');
 const { createAuditLogger } = require('./services/auditLogger');
@@ -99,6 +100,7 @@ function start() {
   const usersRepo = createUsersRepository(db);
   const agentsRepo = createAgentsRepository(db);
   const auditRepo = createAgentActionAuditRepository(db);
+  const auditEventsRepo = createAuditEventsRepository(db);
   const auditLogRepo = createAuditLogRepository(db);
   const apiTokensRepo = createApiTokensRepository(db);
   const auditLogger = createAuditLogger({ auditLogRepo, logger: console });
@@ -380,6 +382,7 @@ function start() {
     usersRepo,
     agentsRepo,
     auditRepo,
+    auditEventsRepo,
     auditLogRepo,
     apiTokensRepo,
     auditLogger,

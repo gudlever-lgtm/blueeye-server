@@ -218,9 +218,18 @@ async function loadPlan() {
 }
 // The customer-facing name of the active licence ("Professional"), or '' if unknown.
 function activePlanName() { return (licensePlan && licensePlan.plan_name) || ''; }
+// The package a locked module is sold under, from /license/plan's `modules` map
+// (server-side source of truth). Returns { name, label } or null when unknown.
+function moduleRequirement(featureKey) {
+  const m = licensePlan && licensePlan.modules && licensePlan.modules[featureKey];
+  return m && m.required_plan_name ? { name: m.required_plan_name, label: m.required_plan_label } : null;
+}
 // How a licence-excluded module is described in tooltips/toasts — tied to the
-// actual licence setup, not a marketing tier.
-function lockedHint(label) {
+// actual licence setup: name the package that unlocks it, else fall back to the
+// active plan.
+function lockedHint(label, featureKey) {
+  const need = moduleRequirement(featureKey);
+  if (need) return `${label} requires ${need.label}`;
   const plan = activePlanName();
   return plan
     ? `${label} is not part of your ${plan} licence`
@@ -235,8 +244,16 @@ function applyFeatureVisibility() {
     // by the actual licence setup (active plan + module entitlements), not a generic
     // free/pro split. Clicking it routes to Settings → License, never the 403 view.
     b.classList.toggle('locked', !allowed);
-    if (!allowed) b.title = lockedHint((b.textContent || 'This module').trim());
-    else if (b.dataset.feature) b.removeAttribute('title');
+    if (!allowed) {
+      const label = (b.textContent || 'This module').trim();
+      const need = moduleRequirement(b.dataset.feature);
+      // Badge shows the required package (e.g. "Professional"); lock glyph if unknown.
+      b.dataset.lockBadge = need ? need.name : '🔒';
+      b.title = lockedHint(label, b.dataset.feature);
+    } else {
+      delete b.dataset.lockBadge;
+      b.removeAttribute('title');
+    }
     if (!allowed && currentView === b.dataset.view) currentView = 'overview';
   }
 }
@@ -6959,7 +6976,7 @@ for (const b of document.querySelectorAll('.tabs button')) {
     closeDrawer(); closeNav();
     // Locked (licence-excluded) items don't open — they nudge to the licence page.
     if (b.classList.contains('locked')) {
-      toast(`${lockedHint((b.textContent || 'This module').trim())} — see License.`);
+      toast(`${lockedHint((b.textContent || 'This module').trim(), b.dataset.feature)} — see License.`);
       settingsTab = 'license'; currentView = 'settings'; render();
       return;
     }

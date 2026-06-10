@@ -333,13 +333,16 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   background: transparent; color: var(--muted); font-weight: 500; }
 .tabs button:hover { background: var(--panel-2); color: var(--text); }
 .tabs button.active { background: var(--accent-weak); color: var(--text); }
-/* Licence-excluded modules: shown but dimmed with a neutral lock marker. The
-   state reflects the active licence setup (not a free/pro tier); the tooltip
-   names the current plan. */
+/* Licence-excluded modules: shown but dimmed with a badge naming the package
+   that unlocks them (data-lock-badge, set from /license/plan — e.g. "Professional";
+   a lock glyph when the tier is unknown). Reflects the licence setup, not a
+   generic free/pro split. */
 .tabs button.locked { opacity: .5; }
 .tabs button.locked:hover { opacity: .85; background: var(--panel-2); }
-.tabs button.locked::after { content: '🔒'; margin-left: auto; font-size: 11px; opacity: .75;
-  filter: grayscale(1); }
+.tabs button.locked::after { content: attr(data-lock-badge); margin-left: auto;
+  font-size: 9px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+  padding: 1px 6px; border-radius: 999px; white-space: nowrap;
+  background: var(--accent-weak); color: var(--accent); }
 .tabs button.active::before { content: ''; position: absolute; left: 0; top: 8px; bottom: 8px;
   width: 3px; border-radius: 0 3px 3px 0; background: var(--accent); }
 

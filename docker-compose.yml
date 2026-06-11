@@ -19,15 +19,17 @@ services:
   db:
     image: mysql:8.4
     environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-rootpw}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD in .env (run scripts/dev-bootstrap.js)}
       MYSQL_USER: ${DB_USER:-blueeye}
-      MYSQL_PASSWORD: ${DB_PASSWORD:-blueeye-pw}
+      MYSQL_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env (run scripts/dev-bootstrap.js)}
     volumes:
       - db-data:/var/lib/mysql
       - ./docker/mysql-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     ports:
       # Host 3306 is often taken by a system MySQL — default to 3307 on the host.
-      - "${DB_HOST_PORT:-3307}:3306"
+      # Bound to loopback so the database is never published to the LAN; override
+      # DB_HOST_PORT only if you understand the exposure.
+      - "127.0.0.1:${DB_HOST_PORT:-3307}:3306"
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-p${MYSQL_ROOT_PASSWORD:-rootpw}"]
       interval: 5s
@@ -48,11 +50,13 @@ services:
       DB_USER: ${DB_USER:-blueeye}
       DB_PASSWORD: ${DB_PASSWORD:-blueeye-pw}
       DB_NAME: blueeye_licens
-      JWT_SECRET: ${LICENS_JWT_SECRET:-change-me-licens}
+      JWT_SECRET: ${LICENS_JWT_SECRET:?set LICENS_JWT_SECRET in .env (run scripts/dev-bootstrap.js)}
       SEED_ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@blueeye.local}
-      SEED_ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin-pw}
+      # Empty by default → migrate.js generates a random admin password and prints
+      # it once. Set ADMIN_PASSWORD only to choose your own.
+      SEED_ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       LICENSE_SIGNING_KEY: ${LICENSE_SIGNING_KEY}
-      SEED_DEMO: ${SEED_DEMO:-1}
+      SEED_DEMO: ${SEED_DEMO:-0}
       SEED_DEMO_LICENSE_KEY: ${SEED_DEMO_LICENSE_KEY:-DEMO-DEMO-DEMO-DEMO-DEMO}
       SEED_DEMO_MAX_AGENTS: ${SEED_DEMO_MAX_AGENTS:-100}
     command: sh -c "node src/migrate.js && node scripts/seed-demo.js && node src/server.js"
@@ -77,9 +81,11 @@ services:
       DB_USER: ${DB_USER:-blueeye}
       DB_PASSWORD: ${DB_PASSWORD:-blueeye-pw}
       DB_NAME: blueeye
-      JWT_SECRET: ${SERVER_JWT_SECRET:-change-me-server}
+      JWT_SECRET: ${SERVER_JWT_SECRET:?set SERVER_JWT_SECRET in .env (run scripts/dev-bootstrap.js)}
       SEED_ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@blueeye.local}
-      SEED_ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin-pw}
+      # Empty by default → migrate.js generates a random admin password and prints
+      # it once. Set ADMIN_PASSWORD only to choose your own.
+      SEED_ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       LICENSE_KEY: ${LICENSE_KEY:-DEMO-DEMO-DEMO-DEMO-DEMO}
       LICENSE_SERVER_ID: ${LICENSE_SERVER_ID:-gnf-server-1}
       # Where this server validates its license. Customers set this to the vendor's
@@ -88,7 +94,9 @@ services:
       LICENSE_SERVER_URL: ${LICENSE_SERVER_URL:-http://licens:4000}
       LICENSE_PUBLIC_KEY: ${LICENSE_PUBLIC_KEY}
       LICENSE_CACHE_PATH: /data/license-cache.json
-      SEED_DEMO: ${SEED_DEMO:-1}
+      # Demo enrollment seeding is OFF by default; scripts/dev-bootstrap.js sets
+      # SEED_DEMO=1 in .env for the turnkey demo. Never enable in production.
+      SEED_DEMO: ${SEED_DEMO:-0}
       SEED_DEMO_ENROLLMENT_CODE: ${SEED_DEMO_ENROLLMENT_CODE:-DEMO-ENROLL-CODE}
       # Where the agent source bundle is packaged from (see the bind mount below).
       AGENT_SOURCE_DIR: /agent-src

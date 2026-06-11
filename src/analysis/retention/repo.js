@@ -5,8 +5,25 @@ const METRIC_ROLLUP_COLS = ['bucket', 'agent_id', 'metric', 'samples', 'val_min'
 
 // Data-access for retention: reading raw rows in batches, writing rollups
 // (idempotent via ON DUPLICATE KEY UPDATE), and purging expired data.
+// Rows deleted per statement when purging. Keeps each DELETE short so it never
+// holds a long row-lock on tables that ingest is concurrently writing to, and
+// bounds the InnoDB undo log / replication lag per statement.
+const DELETE_BATCH = 10000;
+
 function createRetentionRepo(db) {
   const { pool } = db;
+
+  // Repeatedly runs a LIMIT-ed DELETE until fewer than a full batch remain.
+  // `sql` must end in `LIMIT ?`; the batch size is appended to `params`.
+  async function deleteInBatches(sql, params) {
+    let total = 0;
+    for (;;) {
+      const [res] = await pool.query(sql, [...params, DELETE_BATCH]);
+      total += res.affectedRows;
+      if (res.affectedRows < DELETE_BATCH) break;
+    }
+    return total;
+  }
 
   // ---- flows ---------------------------------------------------------------
   async function getRawExternalFlowsBatch(beforeTs, afterId, limit) {
@@ -38,8 +55,7 @@ function createRetentionRepo(db) {
   }
 
   async function deleteRawFlowsBefore(beforeTs) {
-    const [res] = await pool.query('DELETE FROM flow_records WHERE ts < ?', [beforeTs]);
-    return res.affectedRows;
+    return deleteInBatches('DELETE FROM flow_records WHERE ts < ? ORDER BY ts LIMIT ?', [beforeTs]);
   }
 
   // ---- metrics (from result payloads) -------------------------------------
@@ -67,24 +83,20 @@ function createRetentionRepo(db) {
   }
 
   async function deleteRawResultsBefore(beforeTs) {
-    const [res] = await pool.query('DELETE FROM results WHERE created_at < ?', [beforeTs]);
-    return res.affectedRows;
+    return deleteInBatches('DELETE FROM results WHERE created_at < ? ORDER BY created_at LIMIT ?', [beforeTs]);
   }
 
   // ---- purge ---------------------------------------------------------------
   async function purgeFlowRollupsBefore(ts) {
-    const [res] = await pool.query('DELETE FROM flow_rollup WHERE bucket < ?', [ts]);
-    return res.affectedRows;
+    return deleteInBatches('DELETE FROM flow_rollup WHERE bucket < ? ORDER BY bucket LIMIT ?', [ts]);
   }
   async function purgeMetricRollupsBefore(ts) {
-    const [res] = await pool.query('DELETE FROM metric_rollup WHERE bucket < ?', [ts]);
-    return res.affectedRows;
+    return deleteInBatches('DELETE FROM metric_rollup WHERE bucket < ? ORDER BY bucket LIMIT ?', [ts]);
   }
   // Only ACKNOWLEDGED findings are ever deleted — unacknowledged findings
   // (including CRIT) are kept regardless of age.
   async function purgeAckedFindingsBefore(ts) {
-    const [res] = await pool.query('DELETE FROM findings WHERE acked = 1 AND created_at < ?', [ts]);
-    return res.affectedRows;
+    return deleteInBatches('DELETE FROM findings WHERE acked = 1 AND created_at < ? ORDER BY created_at LIMIT ?', [ts]);
   }
 
   return {

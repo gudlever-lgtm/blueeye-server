@@ -121,6 +121,9 @@ function createApiRouter({
   haCoordinator,
   enrollConfig = {},
   notifyDashboard,
+  // Brute-force throttle for agent enrollment (login has its own loginThrottle).
+  // Default undefined → the router falls back to a no-op (tests stay unthrottled).
+  enrollRateLimiter,
 }) {
   const router = express.Router();
   // Effective (admin-editable) map config, used by both the geo view and the
@@ -234,7 +237,7 @@ function createApiRouter({
   if (auditLogRepo) router.use('/api/audit-log', createAuditLogRouter({ auditLogRepo, featureGate, planService }));
   if (apiTokensRepo) router.use('/api/api-tokens', createApiTokensRouter({ apiTokensRepo, featureGate, planService, auditLogger }));
   router.use('/agents', createAgentReportsRouter({ agentAuth, resultsRepo, agentsRepo, auditEventsRepo, analysisPipeline, flowPipeline, probeResultsRepo, probePipeline, incidentService, installToolService }));
-  router.use('/agents', createAgentEnrollRouter({ enrollmentStore, notifyDashboard, integrationTrigger: integrationsDispatcher }));
+  router.use('/agents', createAgentEnrollRouter({ enrollmentStore, notifyDashboard, integrationTrigger: integrationsDispatcher, rateLimit: enrollRateLimiter }));
 
   return router;
 }

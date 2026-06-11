@@ -1,6 +1,9 @@
 'use strict';
 
 const { config } = require('./config');
+const { createRateLimiter } = require('./middleware/rateLimit');
+const { createRevocationRegistry } = require('./auth/revocation');
+const { setRevocationCheck } = require('./auth/middleware');
 const { createDb } = require('./db');
 const { createApp } = require('./app');
 const { createLocationsRepository } = require('./repositories/locationsRepository');
@@ -40,6 +43,7 @@ const { isConfigured } = require('./license/publicKey');
 const { createSystemInfo } = require('./services/systemInfo');
 const { FindingStore } = require('./analysis/findings');
 const { createBaselineStore } = require('./analysis/baselines');
+const { createBaselineFileCache } = require('./analysis/baselineCache');
 const { createDetector } = require('./analysis/detector');
 const { createAnalysisPipeline } = require('./analysis/pipeline');
 const { createProbePipeline } = require('./analysis/probePipeline');
@@ -97,10 +101,14 @@ const { version: appVersion } = require('../package.json');
 // Wires up real dependencies, starts the HTTP server and installs graceful
 // shutdown handlers.
 function start() {
-  // Never run in production with the built-in development JWT secret.
-  if (config.env === 'production' && config.auth.usingDefaultSecret) {
+  // Never run in production with a weak JWT secret: the built-in development
+  // default, a known docker-compose example fallback, or anything too short.
+  // SECRET_ENCRYPTION_KEY falls back to JWT_SECRET, so this also guards secrets
+  // at rest.
+  if (config.env === 'production' && config.auth.weakSecret) {
     console.error(
-      'Refusing to start: JWT_SECRET must be set to a strong value in production.'
+      'Refusing to start: JWT_SECRET must be a strong, unique value in production ' +
+        '(not a known default, at least 32 characters).'
     );
     process.exit(1);
   }
@@ -108,6 +116,12 @@ function start() {
   const db = createDb(config);
   const locationsRepo = createLocationsRepository(db);
   const usersRepo = createUsersRepository(db);
+  // JWT revocation: load users' revocation cutoffs and refresh periodically, so
+  // requireAuth can reject pre-cutoff tokens synchronously (no per-request DB).
+  const revocationRegistry = createRevocationRegistry({ usersRepo, logger: console });
+  revocationRegistry.load().catch(() => {});
+  revocationRegistry.start();
+  setRevocationCheck(revocationRegistry.isRevoked);
   const agentsRepo = createAgentsRepository(db);
   const auditRepo = createAgentActionAuditRepository(db);
   const auditEventsRepo = createAuditEventsRepository(db);
@@ -278,8 +292,13 @@ function start() {
   // assigned just below; the closure runs later, at ingest time).
   const analysisConfig = loadAnalysisConfig();
   const findingStore = new FindingStore({ db });
-  const baselineCache = createFileCache(config.analysis.baselineCachePath);
-  const baselines = createBaselineStore({ store: baselineCache, minSamples: analysisConfig.minSamples });
+  const baselineCache = createBaselineFileCache(config.analysis.baselineCachePath);
+  const baselines = createBaselineStore({
+    store: baselineCache,
+    minSamples: analysisConfig.minSamples,
+    // Persist off the per-sample ingest path: debounce disk writes to ~30s.
+    persistIntervalMs: 30000,
+  });
   const detector = createDetector({ baselines, config: analysisConfig });
   const correlator = createCorrelator(); // uses src/analysis/dependency-graph.json
 
@@ -519,6 +538,9 @@ function start() {
     haCoordinator,
     enrollConfig: { publicUrl: config.publicUrl, certFingerprint: config.enroll.certFingerprint },
     notifyDashboard,
+    // Brute-force throttle for agent enrollment by IP (login has its own
+    // loginThrottle inside the auth router).
+    enrollRateLimiter: createRateLimiter({ windowMs: 15 * 60 * 1000, max: 30 }),
     logger: console,
   });
 
@@ -592,6 +614,8 @@ function start() {
     licenseManager.stop();
     // Releases the leader lock (if held) + stops the singleton jobs.
     haCoordinator.stop().catch((err) => console.error('HA coordinator stop failed:', err));
+    baselines.stop();
+    revocationRegistry.stop();
     agentWs.close();
     dashboardWs.close();
     server.close(async () => {

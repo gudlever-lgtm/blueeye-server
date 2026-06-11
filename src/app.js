@@ -83,14 +83,17 @@ function createApp({
   haCoordinator,
   enrollConfig,
   notifyDashboard,
+  enrollRateLimiter,
   logger = silentLogger,
 } = {}) {
   const app = express();
 
   app.disable('x-powered-by');
   // Behind a reverse proxy: trust X-Forwarded-* so req.protocol/host reflect the
-  // public origin (used to build enrollment URLs).
-  app.set('trust proxy', true);
+  // public origin (used to build enrollment URLs). Off by default so clients
+  // can't spoof X-Forwarded-* (e.g. into the auth audit log) when the server is
+  // exposed directly; set TRUST_PROXY=true when running behind a known proxy.
+  app.set('trust proxy', /^(1|true|yes|on)$/i.test(String(process.env.TRUST_PROXY || '').trim()) ? 1 : false);
   // Always-on baseline security headers (HSTS/CSP/X-Frame-Options/nosniff/
   // Referrer-Policy) on EVERY response — static dashboard + API alike. Mounted
   // first, before the static handler, and not behind any feature key.
@@ -181,6 +184,7 @@ function createApp({
       haCoordinator,
       enrollConfig,
       notifyDashboard,
+      enrollRateLimiter,
     })
   );
 

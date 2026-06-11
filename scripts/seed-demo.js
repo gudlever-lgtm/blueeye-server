@@ -11,6 +11,12 @@ async function run() {
     return;
   }
   const code = process.env.SEED_DEMO_ENROLLMENT_CODE || 'DEMO-ENROLL-CODE';
+  if ((process.env.NODE_ENV || '') === 'production') {
+    console.warn(
+      'WARNING: SEED_DEMO=1 with NODE_ENV=production — seeding a long-lived demo ' +
+        'enrollment code. This is for the local demo only; do NOT use in real deployments.'
+    );
+  }
 
   const conn = await mysql.createConnection({
     host: config.db.host,

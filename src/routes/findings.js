@@ -25,7 +25,16 @@ function createFindingsRouter({ findingStore }) {
         }
         since = d;
       }
-      res.json(await findingStore.list(hostId, since));
+      // Bounded result set: default 500, capped server-side in findingStore.list.
+      let limit = 500;
+      if (req.query.limit !== undefined) {
+        const n = Number.parseInt(req.query.limit, 10);
+        if (!Number.isInteger(n) || n < 1) {
+          return res.status(400).json({ error: 'Validation failed', details: { limit: 'limit must be a positive integer' } });
+        }
+        limit = n;
+      }
+      res.json(await findingStore.list(hostId, since, limit));
     })
   );
 

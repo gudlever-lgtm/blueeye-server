@@ -77,6 +77,30 @@ test('valid validation -> status valid, licensed, cached', async () => {
   assert.ok(cached && cached.payload.valid === true && typeof cached.verifiedAt === 'number');
 });
 
+// A signer that echoes the request's nonce into the signed proof (like the
+// upgraded blueeye-licens), so we can exercise the anti-replay path.
+function echoingNonceFetch() {
+  return async (_url, opts) => {
+    const sent = JSON.parse(opts.body);
+    return { status: 200, ok: true, json: async () => proof({ nonce: sent.nonce }) };
+  };
+}
+
+test('a proof echoing the request nonce is accepted', async () => {
+  const m = manager({ fetchImpl: echoingNonceFetch() });
+  await m.validateOnce();
+  assert.equal(m.getStatus().status, 'valid');
+});
+
+test('a replayed proof with a stale nonce is rejected', async () => {
+  // Always returns a proof carrying a FIXED nonce, never the one just sent.
+  const stale = proof({ nonce: 'stale-captured-nonce' });
+  const m = manager({ fetchImpl: okFetch(stale) });
+  await m.validateOnce();
+  assert.notEqual(m.getStatus().status, 'valid');
+  assert.equal(m.getStatus().reason, 'nonce_mismatch');
+});
+
 test('invalid signature -> rejected, not licensed, not cached', async () => {
   const cache = createMemoryCache();
   const { payload } = proof();

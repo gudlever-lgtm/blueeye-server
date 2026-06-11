@@ -4,9 +4,15 @@ const { METRICS, SEVERITY } = require('../incidents/detection');
 
 const SEVERITIES = Object.freeze(Object.values(SEVERITY));
 
+// Upper bound on a report span. Caps the scan over the time-series tables so a
+// single request can't aggregate an unbounded window (years of probe rows).
+const MAX_RANGE_DAYS = 366;
+const MAX_RANGE_MS = MAX_RANGE_DAYS * 24 * 60 * 60 * 1000;
+
 // Validates the report time-range query (?from=&to=). Both are REQUIRED, must be
-// parseable dates, and from must be strictly before to. Returns { value: { from,
-// to } } (Date objects) or { errors } — a 400 for any problem.
+// parseable dates, from must be strictly before to, and the span may not exceed
+// MAX_RANGE_DAYS. Returns { value: { from, to } } (Date objects) or { errors } —
+// a 400 for any problem.
 function validateReportRange(query) {
   const q = query && typeof query === 'object' ? query : {};
   const errors = {};
@@ -26,8 +32,12 @@ function validateReportRange(query) {
     }
   }
 
-  if (value.from && value.to && value.from.getTime() >= value.to.getTime()) {
-    errors.range = 'from must be before to';
+  if (value.from && value.to) {
+    if (value.from.getTime() >= value.to.getTime()) {
+      errors.range = 'from must be before to';
+    } else if (value.to.getTime() - value.from.getTime() > MAX_RANGE_MS) {
+      errors.range = `range must not exceed ${MAX_RANGE_DAYS} days`;
+    }
   }
 
   return Object.keys(errors).length > 0 ? { errors } : { value };

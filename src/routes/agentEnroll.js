@@ -4,17 +4,20 @@ const express = require('express');
 const { asyncHandler } = require('../middleware/asyncHandler');
 const { generateAgentToken, hashToken } = require('../auth/tokens');
 const { validateEnroll } = require('../validation/enrollmentValidation');
+const { noopRateLimiter } = require('../middleware/rateLimit');
 
 // Agent self-enrollment. This endpoint is intentionally UNAUTHENTICATED — the
 // agent has no token yet; the one-time enrollment code is its credential.
 // `notifyDashboard` (optional) pushes a live "agent enrolled" event to the UI so
-// the enrollment screen flips to "connected" within seconds.
-function createAgentEnrollRouter({ enrollmentStore, notifyDashboard, integrationTrigger = null }) {
+// the enrollment screen flips to "connected" within seconds. `rateLimit`
+// throttles code-guessing (defaults to a no-op so tests stay unthrottled).
+function createAgentEnrollRouter({ enrollmentStore, notifyDashboard, integrationTrigger = null, rateLimit = noopRateLimiter }) {
   const router = express.Router();
 
   // POST /agents/enroll { code, hostname, platform, arch }
   router.post(
     '/enroll',
+    rateLimit,
     asyncHandler(async (req, res) => {
       const { value, errors } = validateEnroll(req.body);
       if (errors) {

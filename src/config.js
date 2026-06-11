@@ -209,5 +209,12 @@ const config = {
 // The default JWT secret must never be used outside development.
 const DEFAULT_JWT_SECRET = 'dev-insecure-secret-change-me';
 config.auth.usingDefaultSecret = config.auth.jwtSecret === DEFAULT_JWT_SECRET;
+// Known-weak/published secrets that must never reach production. Covers the dev
+// default and the docker-compose example fallbacks; the production guard in
+// server.js also rejects anything shorter than the minimum length below.
+const WEAK_SECRETS = new Set([DEFAULT_JWT_SECRET, 'change-me-server', 'change-me-licens']);
+const MIN_SECRET_LENGTH = 32;
+config.auth.weakSecret =
+  WEAK_SECRETS.has(config.auth.jwtSecret) || config.auth.jwtSecret.length < MIN_SECRET_LENGTH;
 
 module.exports = { config };

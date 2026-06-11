@@ -42,6 +42,11 @@ test('GET /api/findings returns 400 for an invalid since', async () => {
   assert.equal(res.status, 400);
 });
 
+test('GET /api/findings returns 400 for an invalid limit', async () => {
+  const res = await request(makeApp()).get('/api/findings?limit=0').set('Authorization', viewer());
+  assert.equal(res.status, 400);
+});
+
 test('GET /api/findings without a token returns 401', async () => {
   const res = await request(makeApp()).get('/api/findings');
   assert.equal(res.status, 401);

@@ -26,6 +26,10 @@ function bearerToken(req) {
 // attaches req.agent = { agentId, tokenId } and best-effort updates
 // last_used_at (token) and last_seen (agent).
 function createAgentTokenMiddleware({ authenticator, agentTokensRepo, agentsRepo }) {
+  // Throttle liveness writes: agents hit REST frequently, and last_used/last_seen
+  // don't need sub-minute precision. Keyed by agentId; bounded by fleet size.
+  const TOUCH_THROTTLE_MS = 60000;
+  const lastTouched = new Map();
   return async (req, res, next) => {
     let agent;
     try {
@@ -44,12 +48,19 @@ function createAgentTokenMiddleware({ authenticator, agentTokensRepo, agentsRepo
 
     req.agent = agent;
 
-    // Liveness bookkeeping is best-effort: never fail the request on it.
-    try {
-      await agentTokensRepo.touchLastUsed(agent.tokenId);
-      await agentsRepo.touchLastSeen(agent.agentId);
-    } catch {
-      /* ignore */
+    // Liveness bookkeeping is best-effort and throttled: never fail the request
+    // on it, and skip the writes when this agent was touched recently.
+    const now = Date.now();
+    if (now - (lastTouched.get(agent.agentId) || 0) >= TOUCH_THROTTLE_MS) {
+      lastTouched.set(agent.agentId, now);
+      try {
+        await Promise.all([
+          agentTokensRepo.touchLastUsed(agent.tokenId),
+          agentsRepo.touchLastSeen(agent.agentId),
+        ]);
+      } catch {
+        /* ignore */
+      }
     }
 
     return next();

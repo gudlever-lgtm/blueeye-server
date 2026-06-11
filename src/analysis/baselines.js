@@ -39,10 +39,21 @@ function keyOf(hostId, metric, bucket) {
 }
 
 // Builds a baseline store. `store` (optional) persists the raw windows so the
-// median/MAD can be recomputed after a restart.
-function createBaselineStore({ store = null, windowSize = DEFAULT_WINDOW, minSamples = DEFAULT_MIN_SAMPLES } = {}) {
+// median/MAD can be recomputed after a restart. When `persistIntervalMs` > 0,
+// persistence is debounced onto a timer (and update() only marks the windows
+// dirty) so disk I/O never runs on the per-sample ingest path; the default of 0
+// persists synchronously on every update (used by tests and the in-memory store).
+function createBaselineStore({
+  store = null,
+  windowSize = DEFAULT_WINDOW,
+  minSamples = DEFAULT_MIN_SAMPLES,
+  persistIntervalMs = 0,
+} = {}) {
   /** @type {Map<string, number[]>} key -> rolling window of recent values */
   const windows = new Map();
+  const canPersist = Boolean(store && typeof store.write === 'function');
+  let dirty = false;
+  let flushTimer = null;
 
   // Load any persisted windows on construction.
   if (store && typeof store.read === 'function') {
@@ -61,11 +72,39 @@ function createBaselineStore({ store = null, windowSize = DEFAULT_WINDOW, minSam
   }
 
   function persist() {
-    if (!store || typeof store.write !== 'function') return;
+    if (!canPersist) return;
+    dirty = false;
     store.write(Object.fromEntries(windows));
   }
 
-  // Adds a sample's value to its window (capped at windowSize) and persists.
+  // Debounced flush: serialize + write only when something changed, at most
+  // once per interval. The timer is unref'd so it never holds the process open.
+  if (canPersist && persistIntervalMs > 0) {
+    flushTimer = setInterval(() => {
+      if (dirty) persist();
+    }, persistIntervalMs);
+    flushTimer.unref();
+  }
+
+  // Stops the flush timer and writes a final snapshot (synchronously when the
+  // store supports it) so a warmed-up baseline survives a graceful shutdown.
+  function stop() {
+    if (flushTimer) {
+      clearInterval(flushTimer);
+      flushTimer = null;
+    }
+    if (canPersist && dirty) {
+      if (typeof store.flushSync === 'function') {
+        dirty = false;
+        store.flushSync(Object.fromEntries(windows));
+      } else {
+        persist();
+      }
+    }
+  }
+
+  // Adds a sample's value to its window (capped at windowSize) and persists. When
+  // debounced persistence is active, this only marks the windows dirty.
   function update(sample) {
     if (!sample || typeof sample.value !== 'number' || Number.isNaN(sample.value)) return;
     const key = keyOf(sample.hostId, sample.metric, bucket(sample.ts));
@@ -73,7 +112,8 @@ function createBaselineStore({ store = null, windowSize = DEFAULT_WINDOW, minSam
     if (!win) { win = []; windows.set(key, win); }
     win.push(sample.value);
     if (win.length > windowSize) win.splice(0, win.length - windowSize);
-    persist();
+    if (flushTimer) dirty = true;
+    else persist();
   }
 
   // Returns { n, median, mad } for a key, or null until minSamples is reached.
@@ -99,7 +139,7 @@ function createBaselineStore({ store = null, windowSize = DEFAULT_WINDOW, minSam
     return false;
   }
 
-  return { bucket, update, get, isFlat, persist, _windows: windows };
+  return { bucket, update, get, isFlat, persist, stop, _windows: windows };
 }
 
 module.exports = {

@@ -7,6 +7,8 @@
 // { ok:false, status:0 }. The dispatcher uses status to decide whether a retry
 // makes sense (network/5xx) or not (4xx is the caller's fault and won't self-heal).
 
+const { baseUrlBlockedReason } = require('./ssrfGuard');
+
 const DEFAULT_TIMEOUT_MS = 15000;
 
 // Builds the Authorization header from the decrypted credentials. Returns {} when
@@ -35,6 +37,10 @@ function authHeader(authType, credentials = {}, { tokenScheme = 'Bearer' } = {})
 async function requestJson(fetchImpl, { method = 'GET', url, headers = {}, body = undefined, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
   if (typeof fetchImpl !== 'function') return { ok: false, status: 0, detail: 'no fetch implementation', json: null };
   if (!url) return { ok: false, status: 0, detail: 'no url', json: null };
+  // SSRF guard at send time too: blocks an internal IP-literal target even if it
+  // was stored before validation existed, or appears as a redirect Location.
+  const blocked = baseUrlBlockedReason(url);
+  if (blocked) return { ok: false, status: 0, detail: blocked, json: null };
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -49,6 +55,9 @@ async function requestJson(fetchImpl, { method = 'GET', url, headers = {}, body 
         ...headers,
       },
       body: sendBody ? JSON.stringify(body) : undefined,
+      // Don't follow redirects: an allowed host could otherwise 3xx us to an
+      // internal address, bypassing the host check above.
+      redirect: 'manual',
       signal: controller.signal,
     });
   } catch (err) {

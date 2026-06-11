@@ -92,3 +92,23 @@ test('baselines persist and reload via an injected store (survive restart)', () 
   const b = s2.get('h1', 'cpu', 7);
   assert.ok(b && b.n === 5 && b.median === 50);
 });
+
+test('debounced persistence does not write per sample and flushes on stop', () => {
+  let writes = 0;
+  let flushed = null;
+  const fileLike = {
+    read: () => null,
+    write() { writes += 1; },
+    flushSync(d) { flushed = d; },
+  };
+  const s = createBaselineStore({ store: fileLike, minSamples: 1, windowSize: 50, persistIntervalMs: 60000 });
+  const ts = at('2026-01-01T08:00:00Z');
+  for (let i = 0; i < 10; i += 1) s.update({ hostId: 'h1', metric: 'cpu', value: i, ts });
+
+  // No synchronous per-sample write happened (it is debounced onto the timer).
+  assert.equal(writes, 0);
+
+  // Graceful shutdown flushes the warmed window synchronously.
+  s.stop();
+  assert.ok(flushed && Array.isArray(flushed['h1|cpu|8']) && flushed['h1|cpu|8'].length === 10);
+});

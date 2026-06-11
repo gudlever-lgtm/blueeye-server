@@ -195,7 +195,7 @@ async function login(emailInput, password) {
 let licenseFeatures = null;
 let featuresLoadedAt = 0;
 const FEATURES_TTL_MS = 60000;
-// The active licence package (Pilot/Starter/Professional/Enterprise/MSP). Locked
+// The active licence package (Pilot/Starter/Professional/Enterprise). Locked
 // modules are presented relative to THIS — i.e. "not part of your <plan> licence" —
 // rather than as a generic free/pro tier. Same TTL + invalidation as the feature map.
 let licensePlan = null;

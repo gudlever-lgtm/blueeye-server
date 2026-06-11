@@ -25,7 +25,6 @@ offline (signed) license model fits in, and how support levels map to plans.
 | Starter | 5 | 25 | 90 days | basic | – | 4 000 | 30 000 |
 | Professional | 25 | 150 | 365 days | standard | – | 12 000 | 90 000 |
 | Enterprise | unlimited¹ | unlimited¹ | 1 095 days | premium | – | from 25 000 | from 187 000 |
-| MSP | unlimited¹ | unlimited¹ | 1 095 days | partner | – | from 15 000 | from 112 000 |
 
 ¹ "Unlimited" means configurable per contract; a signed proof may still set a
 per-customer `max_agents` which always wins over the plan default.
@@ -53,9 +52,7 @@ The full list of gateable feature keys is in `FEATURE_CATALOG`
 | `sso_oidc` / `sso_saml` | SSO (OIDC / SAML) | Enterprise |
 | `ha_deployment` | High-availability deployment | Enterprise |
 | `offline_license` | Offline license validation | Enterprise |
-| `security_pack` | Security pack | Enterprise |
 | `premium_support` | Premium / priority support | Enterprise |
-| `msp_multitenant` | MSP multi-tenancy | MSP |
 
 > The four **legacy module** keys (`analysis`, `assistant`, `alerting`, `geo`)
 > are intentionally **not** part of the plan catalogue. They remain governed by
@@ -86,7 +83,7 @@ HTTP 403 (never a stack trace):
   the disabled→enabled transition (`src/routes/testPackages.js`).
 - **History** — `history_days` (see *History retention* below).
 
-A `null` limit means unlimited (Enterprise / MSP).
+A `null` limit means unlimited (Enterprise).
 
 ## Feature gating — how to use it
 
@@ -236,7 +233,6 @@ Each plan carries a `support_level`, surfaced in `GET /license/plan` and the UI:
 | Pilot / Starter | `basic` |
 | Professional | `standard` |
 | Enterprise | `premium` |
-| MSP | `partner` |
 
 ## Feature status & roadmap
 
@@ -274,9 +270,12 @@ one at a time (see ROADMAP.md):
 - **Advanced dashboard** (`dashboard_advanced`).
 - **SSO (OIDC)** (`sso_oidc`) and **SSO (SAML)** (`sso_saml`).
 - **High-availability deployment** (`ha_deployment`).
-- **MSP multi-tenancy** (`msp_multitenant`) — `tenant_id` on
-  agents/test-paths/reports/users + tenant-scoped UI/API.
-- **Security pack** (`security_pack`).
 
 A **retention cleanup job** keyed on `history_days` also remains deferred (the
 limit is surfaced and can hide out-of-window data in views).
+
+> **Security is baseline, not a pack.** Security response headers (HSTS/CSP/
+> X-Frame-Options/nosniff/Referrer-Policy), brute-force login lockout (429) and
+> an enforced password policy (422) are always on, on every deployment,
+> independent of plan or licence. They are deliberately **not** feature keys and
+> cannot be switched off. See ROADMAP.md → *Baseline security*.

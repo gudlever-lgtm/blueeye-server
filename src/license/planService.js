@@ -109,10 +109,6 @@ function createPlanService({ licenseManager = null, configPlan = '' } = {}) {
     return `This feature requires ${planDisplayName(meta.minPlan)}.`;
   }
 
-  function isMsp() {
-    return Boolean(getCurrentPlan().is_msp);
-  }
-
   function isEnterprise() {
     return Boolean(getCurrentPlan().is_enterprise);
   }
@@ -142,7 +138,6 @@ function createPlanService({ licenseManager = null, configPlan = '' } = {}) {
       plan_name: plan.plan_name,
       support_level: plan.support_level,
       is_trial: !!plan.is_trial,
-      is_msp: !!plan.is_msp,
       is_enterprise: !!plan.is_enterprise,
       limits: {
         max_agents: getPlanLimit('max_agents'),
@@ -194,7 +189,6 @@ function createPlanService({ licenseManager = null, configPlan = '' } = {}) {
     getFeatures,
     moduleRequirements,
     upgradeHint,
-    isMsp,
     isEnterprise,
     summary,
     featureMatrix,

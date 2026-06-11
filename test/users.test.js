@@ -50,13 +50,13 @@ test('POST /users creates a user and stores a hashed password', async () => {
   const res = await request(makeApp({ usersRepo }))
     .post('/users')
     .set('Authorization', admin())
-    .send({ email: 'New@Blueeye.local', password: 'supersecret', role: 'operator' });
+    .send({ email: 'New@Blueeye.local', password: 'Sup3rSecret!', role: 'operator' });
 
   assert.equal(res.status, 201);
   assert.equal(res.body.email, 'new@blueeye.local'); // normalised to lower-case
   assert.equal(res.body.role, 'operator');
   // The plaintext is never stored; a bcrypt hash is passed to the repository.
-  assert.ok(receivedHash && receivedHash !== 'supersecret');
+  assert.ok(receivedHash && receivedHash !== 'Sup3rSecret!');
 });
 
 test('POST /users returns 400 for invalid input', async () => {
@@ -69,6 +69,33 @@ test('POST /users returns 400 for invalid input', async () => {
   assert.equal(res.body.error, 'Validation failed');
 });
 
+test('POST /users returns 422 when the password fails the policy', async () => {
+  const usersRepo = makeUsersRepo({ findByEmail: async () => null });
+  // Long but single character class → fails the complexity rule.
+  const res = await request(makeApp({ usersRepo }))
+    .post('/users')
+    .set('Authorization', admin())
+    .send({ email: 'weak@blueeye.local', password: 'alllowercaseletters', role: 'viewer' });
+
+  assert.equal(res.status, 422);
+  assert.equal(res.body.error, 'Password policy not met');
+  assert.ok(Array.isArray(res.body.details) && res.body.details.length > 0);
+});
+
+test('PUT /users/:id returns 422 when the new password fails the policy', async () => {
+  const usersRepo = makeUsersRepo({
+    findById: async () => ({ id: 3, email: 'u@blueeye.local', role: 'viewer' }),
+  });
+  const res = await request(makeApp({ usersRepo }))
+    .put('/users/3')
+    .set('Authorization', admin())
+    .send({ role: 'operator', password: 'short' });
+
+  // 'short' is < min length AND too few classes → policy violation (422).
+  assert.equal(res.status, 422);
+  assert.equal(res.body.error, 'Password policy not met');
+});
+
 test('POST /users returns 409 for a duplicate email', async () => {
   const usersRepo = makeUsersRepo({
     findByEmail: async () => ({ id: 1, email: 'dupe@blueeye.local', role: 'viewer' }),
@@ -77,7 +104,7 @@ test('POST /users returns 409 for a duplicate email', async () => {
   const res = await request(makeApp({ usersRepo }))
     .post('/users')
     .set('Authorization', admin())
-    .send({ email: 'dupe@blueeye.local', password: 'supersecret', role: 'viewer' });
+    .send({ email: 'dupe@blueeye.local', password: 'Sup3rSecret!', role: 'viewer' });
 
   assert.equal(res.status, 409);
 });
@@ -88,7 +115,7 @@ test('POST /users returns 500 when the repository throws', async () => {
   const res = await request(makeApp({ usersRepo }))
     .post('/users')
     .set('Authorization', admin())
-    .send({ email: 'new@blueeye.local', password: 'supersecret', role: 'viewer' });
+    .send({ email: 'new@blueeye.local', password: 'Sup3rSecret!', role: 'viewer' });
 
   assert.equal(res.status, 500);
 });
@@ -278,7 +305,7 @@ test('POST /users with a non-admin token returns 403', async () => {
   const res = await request(makeApp())
     .post('/users')
     .set('Authorization', authHeader('operator'))
-    .send({ email: 'x@blueeye.local', password: 'supersecret', role: 'viewer' });
+    .send({ email: 'x@blueeye.local', password: 'Sup3rSecret!', role: 'viewer' });
 
   assert.equal(res.status, 403);
 });
@@ -305,7 +332,7 @@ test('PUT /users/:id can still reset a protected super-admin password', async ()
   const res = await request(makeApp({ usersRepo }))
     .put('/users/1')
     .set('Authorization', admin())
-    .send({ role: 'admin', password: 'a-new-password' });
+    .send({ role: 'admin', password: 'A-new-Passw0rd!' });
   assert.equal(res.status, 200);
   assert.ok(patch.passwordHash); // password was reset
   assert.equal(patch.role, 'admin'); // stays admin

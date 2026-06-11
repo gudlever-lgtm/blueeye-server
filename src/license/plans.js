@@ -3,7 +3,7 @@
 // Central plan / pricing / feature catalogue for BlueEye.
 //
 // This is the single source of truth for what each commercial package
-// (Pilot / Starter / Professional / Enterprise / MSP) grants: limits, history
+// (Pilot / Starter / Professional / Enterprise) grants: limits, history
 // retention, the feature flags it unlocks, the support level and the reference
 // prices. Code MUST NOT hard-code plan names or sprinkle `if plan === 'starter'`
 // checks around — instead resolve the active plan via planService and ask the
@@ -11,7 +11,7 @@
 // makes it trivially testable and lets a future migration mirror it into the
 // `license_plans` table without changing any call site.
 //
-// `null` for a limit means "unlimited / configurable" (Enterprise & MSP).
+// `null` for a limit means "unlimited / configurable" (Enterprise).
 
 // The complete set of license-gateable feature keys, each with a UI label and
 // the LOWEST plan that grants it. `minPlan` powers the upgrade hints
@@ -44,8 +44,6 @@ const FEATURE_CATALOG = {
   sso_saml: { label: 'SSO (SAML)', minPlan: 'enterprise', status: 'roadmap' },
   ha_deployment: { label: 'High-availability deployment', minPlan: 'enterprise', status: 'roadmap' },
   offline_license: { label: 'Offline license validation', minPlan: 'enterprise', status: 'available' },
-  msp_multitenant: { label: 'MSP multi-tenancy', minPlan: 'msp', status: 'roadmap' },
-  security_pack: { label: 'Security pack', minPlan: 'enterprise', status: 'roadmap' },
   premium_support: { label: 'Premium / priority support', minPlan: 'enterprise', status: 'available' },
 };
 
@@ -96,12 +94,11 @@ const ENTERPRISE_FEATURES = [
   'sso_saml',
   'ha_deployment',
   'offline_license',
-  'security_pack',
   'premium_support',
 ];
 
 // The customer-facing packages, in ascending order of capability. `price_from`
-// marks "from" pricing (Enterprise / MSP are quoted). Prices are REFERENCE
+// marks "from" pricing (Enterprise is quoted). Prices are REFERENCE
 // figures for the admin UI only — never an enforcement input.
 const PLANS = {
   pilot: {
@@ -114,7 +111,6 @@ const PLANS = {
     support_level: 'basic',
     is_trial: true,
     trial_days: 60,
-    is_msp: false,
     is_enterprise: false,
     price_reference_eur: 2500,
     price_reference_dkk: 18500,
@@ -130,7 +126,6 @@ const PLANS = {
     support_level: 'basic',
     is_trial: false,
     trial_days: 0,
-    is_msp: false,
     is_enterprise: false,
     price_reference_eur: 4000,
     price_reference_dkk: 30000,
@@ -146,7 +141,6 @@ const PLANS = {
     support_level: 'standard',
     is_trial: false,
     trial_days: 0,
-    is_msp: false,
     is_enterprise: false,
     price_reference_eur: 12000,
     price_reference_dkk: 90000,
@@ -162,32 +156,15 @@ const PLANS = {
     support_level: 'premium',
     is_trial: false,
     trial_days: 0,
-    is_msp: false,
     is_enterprise: true,
     price_reference_eur: 25000,
     price_reference_dkk: 187000,
     price_from: true,
   },
-  msp: {
-    plan_key: 'msp',
-    plan_name: 'MSP',
-    max_agents: null,
-    max_test_paths: null,
-    history_days: 1095,
-    allowed_features: [...ENTERPRISE_FEATURES, 'msp_multitenant'],
-    support_level: 'partner',
-    is_trial: false,
-    trial_days: 0,
-    is_msp: true,
-    is_enterprise: true,
-    price_reference_eur: 15000,
-    price_reference_dkk: 112000,
-    price_from: true,
-  },
 };
 
 // Display order for the UI feature matrix (low → high).
-const PLAN_ORDER = ['pilot', 'starter', 'professional', 'enterprise', 'msp'];
+const PLAN_ORDER = ['pilot', 'starter', 'professional', 'enterprise'];
 
 // Internal fallback plans — never sold, never in PLAN_ORDER:
 //
@@ -211,7 +188,6 @@ const FALLBACK_PLANS = {
     support_level: 'standard',
     is_trial: false,
     trial_days: 0,
-    is_msp: false,
     is_enterprise: false,
     price_reference_eur: null,
     price_reference_dkk: null,
@@ -228,7 +204,6 @@ const FALLBACK_PLANS = {
     support_level: 'none',
     is_trial: false,
     trial_days: 0,
-    is_msp: false,
     is_enterprise: false,
     price_reference_eur: null,
     price_reference_dkk: null,

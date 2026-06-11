@@ -10,7 +10,7 @@
 // `body` is the documented denial contract: { success:false, error, message,
 // resource, limit, used }. Messages are plain, human and never leak internals.
 //
-// A `null` limit means unlimited (Enterprise / MSP) — always within limit.
+// A `null` limit means unlimited (Enterprise) — always within limit.
 function createUsageService({
   agentsRepo = null,
   testPackagesRepo = null,

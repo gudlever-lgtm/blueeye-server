@@ -246,6 +246,16 @@ a { color: var(--accent); }
 
 /* Login */
 .login { min-height: 100vh; display: grid; place-items: center; }
+/* Federated sign-in block on the login card (OIDC/SAML). */
+.sso-options { display: flex; flex-direction: column; gap: 8px; }
+.sso-divider { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
+.sso-divider::before, .sso-divider::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+.sso-button {
+  display: block; text-align: center; text-decoration: none;
+  padding: 9px 12px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--panel); color: var(--text);
+}
+.sso-button:hover { border-color: var(--accent); color: var(--accent); }
 .card {
   background: var(--panel);
   border: 1px solid var(--border);

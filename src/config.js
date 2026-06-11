@@ -124,6 +124,10 @@ const config = {
     lockName: process.env.HA_LOCK_NAME || 'blueeye_leader',
     // How often (ms) a node re-confirms / contends for leadership and heartbeats.
     intervalMs: toInt(process.env.HA_INTERVAL_MS, 10000),
+    // After an admin POST /api/ha/step-down, suspend re-contention for this long
+    // so a follower takes over instead of the drained node grabbing the lock back
+    // on the next tick. Auto-recovers, so a mistaken step-down isn't permanent.
+    stepDownCooldownMs: toInt(process.env.HA_STEPDOWN_COOLDOWN_MS, 60000),
   },
   // Storage monitoring: the path to statfs for disk usage. Default the server's
   // data dir; point it at the drive holding the DB/Docker volume if different.

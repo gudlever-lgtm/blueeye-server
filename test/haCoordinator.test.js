@@ -109,12 +109,43 @@ test('HA enabled: an admin step-down releases the lock and stops jobs', async ()
   assert.equal(coord.isLeader(), true);
 
   const res = await coord.stepDown();
-  assert.deepEqual(res, { ok: true });
+  assert.equal(res.ok, true);
+  assert.ok(res.drainingUntil); // reports when re-contention resumes
   assert.equal(coord.isLeader(), false);
   assert.equal(job.running, false);
 
   // A follower cannot step down.
   assert.deepEqual(await coord.stepDown(), { ok: false, reason: 'not_leader' });
+});
+
+test('HA enabled: a stepped-down node does not recontend during the cooldown', async () => {
+  const job = makeJob();
+  const lock = makeFakeLock(true);
+  let clock = 1000;
+  const coord = createHaCoordinator({
+    enabled: true, nodeId: 'n1', lock, nodesRepo: makeNodesRepo(), jobs: [job],
+    stepDownCooldownMs: 5000, now: () => clock,
+  });
+  await coord.start();
+  assert.equal(coord.isLeader(), true);
+
+  await coord.stepDown();
+  assert.equal(coord.isLeader(), false);
+  assert.equal(coord.getStatus().draining, true);
+
+  // Even though the lock is now free (and would grant), the drained node stands
+  // down: it must NOT reacquire while the cooldown is active.
+  lock.setLeader(true); // simulate the lock being grantable again
+  await coord.tickOnce();
+  assert.equal(coord.isLeader(), false, 'should not reacquire during cooldown');
+  assert.equal(job.running, false);
+
+  // After the cooldown elapses it is allowed to contend again.
+  clock += 6000;
+  assert.equal(coord.getStatus().draining, false);
+  await coord.tickOnce();
+  assert.equal(coord.isLeader(), true);
+  assert.equal(job.running, true);
 });
 
 test('listNodes reflects the cluster registry when enabled', async () => {

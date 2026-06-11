@@ -19,6 +19,7 @@ function createHaNodesRepository(db) {
   // Insert-or-update this node's heartbeat. started_at is preserved across
   // heartbeats (only set on first insert); last_seen_at is bumped every time.
   async function heartbeat({ nodeId, hostname = null, pid = null, version = null, isLeader = false }) {
+    const id = String(nodeId).slice(0, 191);
     await pool.query(
       `INSERT INTO ha_nodes (node_id, hostname, pid, version, is_leader, started_at, last_seen_at)
        VALUES (?, ?, ?, ?, ?, NOW(), NOW())
@@ -28,8 +29,19 @@ function createHaNodesRepository(db) {
          version = VALUES(version),
          is_leader = VALUES(is_leader),
          last_seen_at = NOW()`,
-      [String(nodeId).slice(0, 191), hostname, pid, version, isLeader ? 1 : 0]
+      [id, hostname, pid, version, isLeader ? 1 : 0]
     );
+    // Exactly one node holds the advisory lock, so exactly one row should show
+    // is_leader=1. A crashed ex-leader's row keeps its stale flag until it ages
+    // out of the active window; clear it on promotion so GET /api/ha/nodes never
+    // shows two leaders during failover. Self was just written as leader above,
+    // so there's no window with zero leaders.
+    if (isLeader) {
+      await pool.query(
+        'UPDATE ha_nodes SET is_leader = 0 WHERE node_id <> ? AND is_leader = 1',
+        [id]
+      );
+    }
   }
 
   // Nodes seen within `withinSeconds`, leader first then most-recently-seen. The

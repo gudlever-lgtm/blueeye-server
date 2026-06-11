@@ -28,6 +28,12 @@ function createHaCoordinator({
   pid = process.pid,
   // Treat a node as "active" in the cluster view if seen within this window.
   activeWindowSec = 60,
+  // After a voluntary step-down, suspend re-contention for this long so a
+  // follower wins the lock instead of the just-drained node grabbing it back on
+  // the very next tick. Long enough to drain/patch; auto-recovers if the node is
+  // never restarted (so a mistaken step-down isn't permanent).
+  stepDownCooldownMs = 60000,
+  now = () => Date.now(),
   logger = silentLogger,
 } = {}) {
   // Single-node installs are leader from the start; HA nodes earn it via the lock.
@@ -35,6 +41,9 @@ function createHaCoordinator({
   let jobsRunning = false;
   let leaderSince = enabled ? null : new Date().toISOString();
   let timer = null;
+  // While set to a future timestamp, this node will not contend for leadership
+  // (set by stepDown to drain the node for maintenance).
+  let recontendPausedUntil = 0;
 
   function startJobs() {
     if (jobsRunning) return;
@@ -78,9 +87,15 @@ function createHaCoordinator({
     }
   }
 
+  function draining() {
+    return !leader && recontendPausedUntil > now();
+  }
+
   async function tickOnce() {
     if (!enabled) return;
-    if (lock) {
+    // While draining after a voluntary step-down, stand down: don't contend for
+    // the lock (so a follower takes over), but keep heartbeating as a follower.
+    if (lock && !draining()) {
       await lock.tick();
       // React to any leadership change the tick produced (promotion on a free
       // lock, or demotion if our connection dropped).
@@ -121,9 +136,11 @@ function createHaCoordinator({
   async function stepDown() {
     if (!enabled || !lock) return { ok: false, reason: 'ha_disabled' };
     if (!leader) return { ok: false, reason: 'not_leader' };
+    // Pause re-contention BEFORE releasing, so the next tick can't reacquire.
+    recontendPausedUntil = now() + stepDownCooldownMs;
     await lock.release();
     await applyLeadership(false);
-    return { ok: true };
+    return { ok: true, drainingUntil: new Date(recontendPausedUntil).toISOString() };
   }
 
   function isLeader() {
@@ -141,6 +158,7 @@ function createHaCoordinator({
       isLeader: leader,
       leaderSince,
       jobsRunning,
+      draining: draining(),
       lockName: lock ? lock.status().lockName : null,
     };
   }

@@ -1,5 +1,7 @@
 'use strict';
 
+const { baseUrlBlockedReason } = require('../integrations/ssrfGuard');
+
 // Validation for the integrations CRUD API. Pure functions returning either
 // { value } (normalised, ready for the route to encrypt + persist) or { errors }
 // (a field -> message map) — never both. Connector-specific checks (is the type
@@ -33,6 +35,9 @@ function validBaseUrl(raw, errors) {
   if (typeof raw !== 'string' || raw.trim() === '') { errors.baseUrl = 'baseUrl is required'; return undefined; }
   const u = raw.trim();
   if (u.length > URL_MAX || !/^https?:\/\//i.test(u)) { errors.baseUrl = 'baseUrl must be an http(s) URL'; return undefined; }
+  // SSRF guard: reject internal/private/loopback/link-local targets.
+  const blocked = baseUrlBlockedReason(u);
+  if (blocked) { errors.baseUrl = blocked; return undefined; }
   return u.replace(/\/+$/, '');
 }
 

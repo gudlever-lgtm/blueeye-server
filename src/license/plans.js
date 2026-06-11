@@ -28,7 +28,7 @@
 //   roadmap   — catalogued + priced, but not built yet (do them one at a time).
 const FEATURE_CATALOG = {
   dashboard_basic: { label: 'Basic dashboard', minPlan: 'pilot', status: 'available' },
-  dashboard_advanced: { label: 'Advanced dashboard', minPlan: 'professional', status: 'roadmap' },
+  dashboard_advanced: { label: 'Advanced dashboard', minPlan: 'professional', status: 'available' },
   alerts_email: { label: 'E-mail alerts', minPlan: 'professional', status: 'available' },
   alerts_webhook: { label: 'Webhook alerts', minPlan: 'professional', status: 'available' },
   reports_basic: { label: 'Basic reports', minPlan: 'pilot', status: 'available' },

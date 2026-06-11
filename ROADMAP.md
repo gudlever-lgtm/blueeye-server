@@ -19,6 +19,7 @@ unlocked by editing local config — the Ed25519 signature would stop matching.
 ## ✅ Available (shipped)
 
 - [x] **Basic dashboard** (`dashboard_basic`) — `public/app.js` SPA.
+- [x] **Advanced dashboard** (`dashboard_advanced`) — drill-down widget panels (`views.advanced` + `GET /api/dashboard/advanced`, `src/dashboard/advancedDashboard.js`), gated.
 - [x] **Basic reports** (`reports_basic`) — `src/routes/reports.js` (availability + incidents).
 - [x] **SLA / availability report** (`reports_sla`) — `src/routes/reports.js` `/availability`.
 - [x] **CSV reports** (`reports_csv`) — `src/routes/reports.js` `*.csv` + `src/routes/export.js`, gated.
@@ -51,7 +52,6 @@ of plan or licence. It is intentionally **not** a sold feature key.
 
 ## 🛣️ Roadmap (not built yet — do one at a time)
 
-- [ ] **Advanced dashboard** (`dashboard_advanced`, Professional) — richer drill-downs / custom widgets beyond the basic dashboard.
 - [ ] **SSO (OIDC)** (`sso_oidc`, Enterprise) — OpenID Connect login (EU/self-hosted IdP), group→role mapping.
 - [ ] **SSO (SAML)** (`sso_saml`, Enterprise) — SAML 2.0 SP login, group→role mapping.
 - [ ] **High-availability deployment** (`ha_deployment`, Enterprise) — active/standby or clustered server, shared state, health/failover docs.

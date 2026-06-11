@@ -106,6 +106,7 @@ Mounted in `src/routes/index.js`. User endpoints use JWT + roles
 | `/api/reports` | reports.js | viewer+ / operator+ | **availability** (uptime % from probes) + **incidents** list (viewer+); CSV (`.csv`, gated `reports_csv`) + print-ready HTML→PDF (`.html`, gated `reports_pdf`); **NIS2 draft** (`/nis2-draft/:id`, operator+) |
 | `/api/thresholds` | thresholds.js | viewer+ read / admin write | **incident thresholds** — global defaults + per-location overrides |
 | `/api/fleet` | fleet.js | viewer+ | **fleet health** rollup (`/health`) + per-agent verdict (`/agent/:id`) + **NIC firmware inventory / drift** (`/nics`) |
+| `/api/dashboard` | dashboard.js | viewer+ (gated `dashboard_advanced`) | **advanced dashboard** (`/advanced`): drill-down widget panels (fleet roll-up + attention + incidents + findings), Professional+ |
 | `/api/interfaces` | interfaces.js | viewer+ | **interface health** (util/errors/discards/link) |
 | `/api/search` | search.js | viewer+ | **global search** (agents/hosts/locations + IP/port → agents) |
 | `/api/integrations` | integrations.js | admin | **outbound API integrations** (ITSM/IPAM connectors): CRUD + manual test-fire; credentials encrypted at rest |
@@ -154,6 +155,7 @@ A single vanilla-JS SPA. Key building blocks:
 - `views.<tab>` — async function per tab returning a node (`fleet` (landing),
   `overview`, `map` (UI label **“Sites”** — locations coloured by agent health),
   `geo` (UI label **“Destinations”** — external traffic by country/ASN),
+  `advanced` (Advanced dashboard — gated drill-down widgets, `dashboard_advanced`),
   `agents`, `interfaces`, `nics` (NIC firmware inventory + drift), `probes`, `flows`, `findings`, `locations`, `enrollment`,
   `settings`) plus `agent` (the combined per-agent drill-down page, no tab —
   reached via `openAgent(id)`). Both maps init via the shared `createLeafletMap`
@@ -196,6 +198,7 @@ A single vanilla-JS SPA. Key building blocks:
 | Interface health | `src/health/interfaceHealth.js` (`computeInterfaceHealth`/`interfaceHealthSummary`); HTTP in `src/routes/interfaces.js` — agent side in blueeye-agent |
 | Agent data-quality (drops/skew/version) | `src/health/dataQuality.js` (`computeDataQuality`); surfaced via `/api/fleet/health` + `/api/fleet/agent/:id` — all signals already sent by the agent |
 | A dashboard tab/view | `public/index.html` (button) + `views.<x>` in `public/app.js` + `PAGE_INFO` |
+| Advanced dashboard (drill-down widgets) | feature `dashboard_advanced` (Professional+): `src/dashboard/advancedDashboard.js` (pure `buildAdvancedDashboard`) + `src/routes/dashboard.js` (`GET /api/dashboard/advanced`, gated by `requirePlanFeature`); UI `views.advanced` + `PAGE_INFO.advanced` (nav button `data-feature="dashboard_advanced"`, locked below Professional via `featureEntitled`) |
 | A dashboard colour palette (light+dark) | `PALETTES` + paired `[data-theme=…]` blocks in `public/styles.css`; picker `settingsAppearanceView` in `public/app.js`; per-user persistence via `/me` (`src/routes/me.js`, `usersRepository.get/updatePreferences`) + key whitelist in `src/validation/preferencesValidation.js` |
 | License / feature gating | `src/license/*` (`features.js` = fail-closed gate + `requirePlanFeature` middleware; `plans.js` = plan/feature catalogue incl. `status` available/roadmap; `planService.js` = active-plan resolution + limits) + `src/services/usageService.js` (limit enforcement). Read-only API: `/license/plan`, `/license/usage`, `/license/matrix`. Feature **status & roadmap** tracked in **`ROADMAP.md`** + the Settings → License matrix Roadmap badge. See `docs/licensing.md`. |
 | API tokens (programmatic access) | feature `api_access`: `src/routes/apiTokens.js` (admin CRUD, gated) + `src/repositories/apiTokensRepository.js` + `src/lib/apiToken.js` (mint/hash) + `src/auth/apiTokenAuth.js` (authenticates `X-API-Key`/`Bearer` → `req.user`, mounted in `routes/index.js`); table `api_tokens` (migration 034) |

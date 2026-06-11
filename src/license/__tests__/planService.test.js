@@ -80,7 +80,7 @@ test('Q3/Q4: Professional grants PDF/CSV/SLA reports + RBAC + audit + API', () =
     assert.equal(ps.hasFeature(f), true, f);
   }
   // …but NOT the Enterprise-only ones.
-  for (const f of ['sso_oidc', 'sso_saml', 'reports_compliance', 'msp_multitenant']) {
+  for (const f of ['sso_oidc', 'sso_saml', 'reports_compliance']) {
     assert.equal(ps.hasFeature(f), false, f);
   }
 });
@@ -91,19 +91,17 @@ test('Q5: Enterprise grants SSO + compliance reports', () => {
     assert.equal(ps.hasFeature(f), true, f);
   }
   assert.equal(ps.isEnterprise(), true);
-  assert.equal(ps.hasFeature('msp_multitenant'), false); // MSP only
 });
 
-test('Q6/Q7: only MSP grants multi-tenancy', () => {
-  const msp = createPlanService({ licenseManager: lm({ plan: 'msp' }) });
-  assert.equal(msp.hasFeature('msp_multitenant'), true);
-  assert.equal(msp.isMsp(), true);
-
+test('multi-tenancy is gone: msp_multitenant is no longer a known feature key', () => {
   for (const key of ['pilot', 'starter', 'professional', 'enterprise']) {
     const ps = createPlanService({ licenseManager: lm({ plan: key }) });
     assert.equal(ps.hasFeature('msp_multitenant'), false, key);
-    assert.equal(ps.isMsp(), false, key);
+    assert.equal(ps.getFeatures().msp_multitenant, undefined, key);
   }
+  // The removed plan key resolves to the locked-down fallback, not a real plan.
+  const removed = createPlanService({ licenseManager: lm({ plan: 'msp' }) });
+  assert.equal(removed.getPlanKey(), 'licensed'); // unknown sellable key → safe fallback
 });
 
 test('Q8: an expired pilot (unlicensed) grants no packaged features', () => {
@@ -122,7 +120,7 @@ test('feature gate ORs the legacy proof map with plan features (never removes ac
   assert.equal(gate.isFeatureEnabled('analysis'), true); // legacy still works
   assert.equal(gate.isFeatureEnabled('geo'), true);
   assert.equal(gate.isFeatureEnabled('rbac'), true); // plan adds it
-  assert.equal(gate.isFeatureEnabled('msp_multitenant'), false);
+  assert.equal(gate.isFeatureEnabled('msp_multitenant'), false); // removed key never enabled
   // The legacy summary shape is untouched.
   assert.deepEqual(gate.summary(), { analysis: true, assistant: false, alerting: false, geo: true });
 });
@@ -156,7 +154,7 @@ test('upgradeHint names the required BlueEye plan', () => {
   const ps = createPlanService({ licenseManager: lm({ plan: 'starter' }) });
   assert.equal(ps.upgradeHint('api_access'), 'This feature requires BlueEye Professional.');
   assert.equal(ps.upgradeHint('sso_oidc'), 'This feature requires BlueEye Enterprise.');
-  assert.equal(ps.upgradeHint('msp_multitenant'), 'This feature requires BlueEye MSP.');
+  assert.equal(ps.upgradeHint('msp_multitenant'), null); // removed key → no hint
   assert.equal(ps.upgradeHint('reports_basic'), null); // already entitled
 });
 

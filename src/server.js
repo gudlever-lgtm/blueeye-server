@@ -170,7 +170,7 @@ function start() {
   }
 
   // Plan service: resolves the active package (Pilot/Starter/Professional/
-  // Enterprise/MSP) from the signed proof's plan field (or LICENSE_PLAN), and
+  // Enterprise) from the signed proof's plan field (or LICENSE_PLAN), and
   // exposes its limits + packaged feature flags. Additive to the license manager.
   const planService = createPlanService({ licenseManager, configPlan: config.license.plan });
 

@@ -1,4 +1,4 @@
--- 037 — cluster registry for high-availability deployments (feature
+-- 040 — cluster registry for high-availability deployments (feature
 -- `ha_deployment`, Enterprise+). When blueeye-server runs as multiple replicas
 -- behind a load balancer, each node upserts a heartbeat row here so the
 -- status/admin API (`GET /api/ha/*`) and the dashboard can show the live cluster

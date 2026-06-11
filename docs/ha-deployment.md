@@ -107,7 +107,7 @@ Shared secrets that **must match** across nodes: `JWT_SECRET`,
 connection to the one shared database.
 
 Run the migrations once (any node): `npm run migrate` creates the `ha_nodes`
-cluster-registry table (migration `037`).
+cluster-registry table (migration `040`).
 
 ## Status & admin API (`/api/ha/*`, gated `ha_deployment`)
 

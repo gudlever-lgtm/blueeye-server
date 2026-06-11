@@ -29,6 +29,7 @@ const { createReportsRouter } = require('./reports');
 const { createThresholdsRouter } = require('./thresholds');
 const { createInterfacesRouter } = require('./interfaces');
 const { createFleetRouter } = require('./fleet');
+const { createDashboardRouter } = require('./dashboard');
 const { createSearchRouter } = require('./search');
 const { createEnrollRouter } = require('./enroll');
 const { publishSignedReleaseFromSource } = require('../enroll/publishSignedRelease');
@@ -152,6 +153,9 @@ function createApiRouter({
   }));
   if (probeResultsRepo) router.use('/api/probes', createProbesRouter({ probeResultsRepo, agentsRepo, geoProvider, centroids }));
   if (probeResultsRepo) router.use('/api/fleet', createFleetRouter({ agentsRepo, probeResultsRepo, resultsRepo, speedtestResultsRepo, settingsService }));
+  // Advanced dashboard (license feature `dashboard_advanced`, Professional+) —
+  // drill-down widget panels composed from fleet/incident/finding data, gated.
+  if (probeResultsRepo) router.use('/api/dashboard', createDashboardRouter({ agentsRepo, probeResultsRepo, incidentsRepo, findingStore, featureGate, planService }));
   if (incidentsRepo && probeResultsRepo) router.use('/api/reports', createReportsRouter({ probeResultsRepo, incidentsRepo, locationsRepo, featureGate, planService, auditLogger }));
   if (thresholdsRepo) router.use('/api/thresholds', createThresholdsRouter({ thresholdsRepo, locationsRepo }));
   router.use('/api/interfaces', createInterfacesRouter({ resultsRepo, agentsRepo }));

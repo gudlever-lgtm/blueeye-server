@@ -92,6 +92,29 @@ test('POST /auth/login returns 500 when the repository throws', async () => {
   assert.equal(res.body.error, 'Internal Server Error');
 });
 
+// ------------------------------------------------- Brute-force lockout (429)
+test('POST /auth/login locks out after repeated failures (429, not 401)', async () => {
+  const user = await adminWithHash();
+  const app = makeApp({
+    usersRepo: makeUsersRepo({ findByEmailWithHash: async () => user }),
+  });
+  const send = (password) =>
+    request(app).post('/auth/login').send({ email: 'admin@blueeye.local', password });
+
+  // Default policy: 5 failures tolerated, the 6th attempt is locked out.
+  for (let i = 0; i < 5; i += 1) {
+    const res = await send('wrong-password');
+    assert.equal(res.status, 401, `attempt ${i + 1} should be a plain 401`);
+  }
+  const locked = await send('wrong-password');
+  assert.equal(locked.status, 429);
+  assert.ok(locked.headers['retry-after'], 'sets a Retry-After header');
+
+  // Even the CORRECT password is refused while locked (still 429, not 200).
+  const correctButLocked = await send(PASSWORD);
+  assert.equal(correctButLocked.status, 429);
+});
+
 // --------------------------------------------------- Auth/RBAC on protected routes
 test('protected endpoint without a token returns 401', async () => {
   const res = await request(makeApp()).get('/users');

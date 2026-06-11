@@ -81,15 +81,19 @@ function buildSignedResponse({
 } = {}) {
   const attrs = groups.map((g) => `<saml:AttributeValue>${sx.escapeText(g)}</saml:AttributeValue>`).join('');
   const scd = `<saml:SubjectConfirmationData${requestId ? ` InResponseTo="${requestId}"` : ''} NotOnOrAfter="${scdNotOnOrAfter}"/>`;
+  // Pass `issuer: null` to omit <Issuer> entirely, or `audience: null` to omit the
+  // whole <AudienceRestriction> — used to test that missing elements are rejected.
+  const issuerEl = issuer === null ? '' : `<saml:Issuer>${sx.escapeText(issuer)}</saml:Issuer>`;
+  const audienceEl = audience === null ? '' : `<saml:AudienceRestriction><saml:Audience>${sx.escapeText(audience)}</saml:Audience></saml:AudienceRestriction>`;
 
   // The assertion, with a placeholder where the signature will be inserted.
   const assertion =
     `<saml:Assertion xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="${assertionId}" Version="2.0" IssueInstant="${iso(Date.now())}">` +
-    `<saml:Issuer>${sx.escapeText(issuer)}</saml:Issuer>` +
+    issuerEl +
     '__SIG__' +
     `<saml:Subject><saml:NameID Format="urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress">${sx.escapeText(email)}</saml:NameID>` +
     `<saml:SubjectConfirmation Method="urn:oasis:names:tc:SAML:2.0:cm:bearer">${scd}</saml:SubjectConfirmation></saml:Subject>` +
-    `<saml:Conditions NotBefore="${notBefore}" NotOnOrAfter="${notOnOrAfter}"><saml:AudienceRestriction><saml:Audience>${sx.escapeText(audience)}</saml:Audience></saml:AudienceRestriction></saml:Conditions>` +
+    `<saml:Conditions NotBefore="${notBefore}" NotOnOrAfter="${notOnOrAfter}">${audienceEl}</saml:Conditions>` +
     `<saml:AttributeStatement><saml:Attribute Name="groups">${attrs}</saml:Attribute></saml:AttributeStatement>` +
     '</saml:Assertion>';
 

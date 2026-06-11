@@ -120,10 +120,12 @@ function createSamlAuth({
     else if (signed && signed.local === 'Response') assertion = samlXml.findFirstByLocal(signed, 'Assertion');
     if (!assertion) return { ok: false, reason: 'not-assertion' };
 
-    // 2) Issuer (optional, when an expected IdP entityID is configured).
+    // 2) Issuer (enforced when an expected IdP entityID is configured). A MISSING
+    //    <Issuer> is treated the same as a mismatch — a signed assertion that
+    //    omits its issuer must not bypass the configured-IdP binding.
     if (config.idpEntityId) {
       const issuer = samlXml.textOf(samlXml.findFirstByLocal(assertion, 'Issuer')).trim();
-      if (issuer && issuer !== config.idpEntityId) return { ok: false, reason: 'issuer-mismatch' };
+      if (issuer !== config.idpEntityId) return { ok: false, reason: 'issuer-mismatch' };
     }
 
     const now = nowFn();
@@ -135,10 +137,17 @@ function createSamlAuth({
       const notOnOrAfter = parseDate(samlXml.attrValue(conditions, 'NotOnOrAfter'));
       if (notBefore !== null && now + CLOCK_SKEW_MS < notBefore) return { ok: false, reason: 'not-yet-valid' };
       if (notOnOrAfter !== null && now - CLOCK_SKEW_MS >= notOnOrAfter) return { ok: false, reason: 'expired' };
+    }
 
-      // 4) AudienceRestriction must list our SP.
-      const audiences = samlXml.findAllByLocal(conditions, 'Audience').map((a) => samlXml.textOf(a).trim());
-      if (audiences.length && !audiences.includes(audience())) return { ok: false, reason: 'audience' };
+    // 4) AudienceRestriction must name our SP whenever an expected audience is
+    //    configured. Enforced even if the assertion omits AudienceRestriction (or
+    //    Conditions entirely): a signed assertion that never names this SP — e.g.
+    //    one minted for a different SP, or not audience-restricted at all — must be
+    //    rejected, not accepted just because the role attribute happens to map.
+    const expectedAudience = audience();
+    if (expectedAudience) {
+      const audiences = samlXml.findAllByLocal(assertion, 'Audience').map((a) => samlXml.textOf(a).trim());
+      if (!audiences.includes(expectedAudience)) return { ok: false, reason: 'audience' };
     }
 
     // 5) Subject confirmation expiry + (optional) InResponseTo binding.

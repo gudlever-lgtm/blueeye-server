@@ -113,6 +113,23 @@ test('an issuer mismatch is rejected', async () => {
   assert.equal(res.reason, 'issuer-mismatch');
 });
 
+test('a signed assertion that omits AudienceRestriction is rejected (no audience bypass)', async () => {
+  const { saml, seed } = authWith({ roleMap: [{ claimValue: 'be-admins', role: 'admin' }] });
+  await seed();
+  // Validly signed, Conditions present, but NO <AudienceRestriction> naming us.
+  const res = await saml.handleResponse(buildSignedResponse({ groups: ['be-admins'], audience: null }));
+  assert.equal(res.ok, false);
+  assert.equal(res.reason, 'audience');
+});
+
+test('a signed assertion with no Issuer is rejected when an IdP entityID is configured', async () => {
+  const { saml, seed } = authWith({ roleMap: [{ claimValue: 'be-admins', role: 'admin' }] });
+  await seed();
+  const res = await saml.handleResponse(buildSignedResponse({ groups: ['be-admins'], issuer: null }));
+  assert.equal(res.ok, false);
+  assert.equal(res.reason, 'issuer-mismatch');
+});
+
 test('an unsigned response is rejected (no signature)', async () => {
   const { saml } = authWith();
   const unsigned = Buffer.from('<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol"><saml:Assertion xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion"><saml:Issuer>https://idp.example</saml:Issuer></saml:Assertion></samlp:Response>', 'utf8').toString('base64');

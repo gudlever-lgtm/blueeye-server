@@ -235,10 +235,20 @@ function lockedHint(label, featureKey) {
     ? `${label} is not part of your ${plan} licence`
     : `${label} is not included in your current licence`;
 }
+// Combined entitlement for a nav `data-feature` key. A module/feature is locked
+// only when EITHER the legacy module map (/license/features: analysis/assistant/
+// alerting/geo) OR the active plan's packaged-feature map (/license/plan, e.g.
+// dashboard_advanced) explicitly excludes it. Unknown keys stay allowed ("show
+// until we know it's off"), so a cold cache never hides a tab.
+function featureEntitled(key) {
+  if ((licenseFeatures || {})[key] === false) return false;
+  const pf = (licensePlan && licensePlan.features) || {};
+  if (Object.prototype.hasOwnProperty.call(pf, key) && pf[key] !== true) return false;
+  return true;
+}
 function applyFeatureVisibility() {
-  const feats = licenseFeatures || {};
   for (const b of document.querySelectorAll('.tabs button[data-feature]')) {
-    const allowed = feats[b.dataset.feature] !== false; // show until we know it's off
+    const allowed = featureEntitled(b.dataset.feature); // show until we know it's off
     // Rather than hide a module the licence excludes, keep it visible but dimmed
     // with a lock marker (see .tabs button.locked). The state + tooltip are driven
     // by the actual licence setup (active plan + module entitlements), not a generic
@@ -284,7 +294,7 @@ function applyRoleVisibility() {
 // affordance (e.g. the AI assistant box) is hidden only when the licence
 // explicitly excludes its module — never merely because the cache is cold.
 function featureEnabled(name) {
-  return (licenseFeatures || {})[name] !== false;
+  return featureEntitled(name);
 }
 
 // The user's saved preferences (currently just the colour theme). Loaded once
@@ -483,6 +493,19 @@ const PAGE_INFO = {
       el('h4', {}, 'KPI strip & network path'),
       el('p', {}, 'Above the list, a strip of live KPIs (latency, loss, jitter, active agents, monitored paths, alerts) and a network-path diagram (HQ → ISP → Cloud → SaaS, with a branch feeding the uplink) summarise the fleet at a glance. The diagram\'s topology is illustrative, but each segment\'s colour and the loss/latency figures are live — a hop turns amber when loss, jitter or a critical agent says so. Both summarise ', el('strong', {}, 'all'), ' agents by default; use the ', el('strong', {}, 'Location'), ' selector to scope the KPIs and the path to a single site.'),
       el('p', { class: 'muted' }, 'Health is based on active probes — run a few per agent on ', viewLink('probes'), ' (or schedule them fleet-wide via ', viewLink('tests'), ') for a complete picture; the interface signal comes from ', viewLink('interfaces'), '. Metadata only: targets and timings, never packet contents.'),
+    ],
+  },
+  advanced: {
+    hero: 'Advanced dashboard — drill-down widget panels that pull fleet health, open incidents and analysis findings into one Professional-tier overview.',
+    title: 'Advanced dashboard',
+    body: () => [
+      el('p', {}, 'A consolidated operations view for Professional licences and above. A KPI strip rolls up the whole fleet (agents, healthy / warning / critical counts, open incidents and unacknowledged findings); below it, three drill-down panels surface what needs action — worst-first agents, active incidents and the most recent analysis findings.'),
+      el('h4', {}, 'Panels'),
+      el('ul', {},
+        el('li', {}, el('strong', {}, 'Needs attention '), '— agents whose health verdict is not OK, worst-first. Click a row to open that agent\'s combined page.'),
+        el('li', {}, el('strong', {}, 'Active incidents '), '— currently-open incidents derived from the probe thresholds; click to drill into the affected agent.'),
+        el('li', {}, el('strong', {}, 'Recent findings '), '— the newest unacknowledged anomaly findings from local analysis, with their explanation.')),
+      el('p', { class: 'muted' }, 'Everything here is composed from data the server already holds (', viewLink('fleet', 'fleet health'), ', incidents and ', viewLink('findings', 'findings'), ') — no new collection. The view is gated by the ', el('strong', {}, 'dashboard_advanced'), ' licence feature (Professional+); below that the tab is locked and points to Settings → License.'),
     ],
   },
   agent: {
@@ -3872,6 +3895,76 @@ function nicTable(nics) {
     el('td', { class: 'muted' }, esc(n.busInfo || n.pciId || '—'))));
   return el('table', { class: 'iface-table' }, el('thead', {}, head), el('tbody', {}, ...rows));
 }
+
+// ---- Advanced dashboard (licence feature dashboard_advanced) ---------------
+// Drill-down widget panels — a fleet-health KPI strip plus "needs attention",
+// active-incidents and recent-findings panels — from GET /api/dashboard/advanced
+// (Professional+). The nav item is locked below Professional and routes to the
+// licence page; if the view is somehow reached directly, a 403 degrades to an
+// inline upgrade hint rather than a raw error.
+views.advanced = async () => {
+  const root = el('div', { class: 'advanced-view' });
+  let data;
+  try {
+    data = await api('/api/dashboard/advanced');
+  } catch (e) {
+    if (e.status === 403) {
+      return el('div', { class: 'card' },
+        el('h3', {}, 'Advanced dashboard'),
+        el('p', { class: 'muted' }, (e.data && e.data.message) || 'This feature is not included in your current plan.'),
+        el('button', { class: 'primary', onclick: () => { settingsTab = 'license'; currentView = 'settings'; render(); } }, 'View licence'));
+    }
+    throw e;
+  }
+  const w = data.widgets;
+  const f = w.fleet;
+  const crit = f.critical + f.down;
+
+  // KPI strip — fleet-health roll-up + open incidents/findings (6-up grid).
+  root.append(el('div', { class: 'noc-kpis' },
+    kpiCard('Agents', String(f.total), 'total enrolled', 'accent'),
+    kpiCard('Healthy', String(f.healthy), 'all signals OK', f.total && f.healthy === f.total ? 'ok' : 'accent'),
+    kpiCard('Warning', String(f.warning), 'degraded', f.warning ? 'warn' : 'ok'),
+    kpiCard('Critical', String(crit), 'critical / down', crit ? 'bad' : 'ok'),
+    kpiCard('Incidents', String(w.incidents.active), 'active now', w.incidents.active ? 'warn' : 'ok'),
+    kpiCard('Findings', String(w.findings.open), 'unacknowledged', w.findings.open ? 'warn' : 'ok')));
+
+  const panels = el('div', { class: 'panel-grid' });
+
+  // Needs-attention panel — worst-first agents; click a row to drill into it.
+  const attn = el('div', { class: 'card' }, el('h3', {}, 'Needs attention'));
+  if (!w.attention.length) attn.append(el('p', { class: 'muted' }, 'Every measured agent is healthy.'));
+  else attn.append(el('table', { class: 'adv-table' }, el('tbody', {}, ...w.attention.map((a) =>
+    el('tr', { class: 'clickable', onclick: () => openAgent(a.agentId) },
+      el('td', {}, healthBadge({ status: a.status, reason: a.reason })),
+      el('td', {}, esc(a.displayName), a.locationName ? el('span', { class: 'muted' }, ` · ${esc(a.locationName)}`) : null),
+      el('td', { class: 'muted' }, esc(a.reason || '')))))));
+  panels.append(attn);
+
+  // Active incidents panel.
+  const inc = el('div', { class: 'card' }, el('h3', {}, 'Active incidents'));
+  if (!w.incidents.recent.length) inc.append(el('p', { class: 'muted' }, 'No active incidents.'));
+  else inc.append(el('table', { class: 'adv-table' }, el('tbody', {}, ...w.incidents.recent.map((i) =>
+    el('tr', i.agentId ? { class: 'clickable', onclick: () => openAgent(i.agentId) } : {},
+      el('td', {}, el('span', { class: `badge ${i.severity === 'critical' ? 'crit' : 'warn'}` }, i.severity)),
+      el('td', {}, esc(i.agentName || `agent ${i.agentId}`), i.locationName ? el('span', { class: 'muted' }, ` · ${esc(i.locationName)}`) : null),
+      el('td', {}, esc(i.metric)),
+      el('td', { class: 'muted' }, fmtDate(i.startedAt)))))));
+  panels.append(inc);
+
+  // Recent (open) analysis findings panel.
+  const fnd = el('div', { class: 'card' }, el('h3', {}, 'Recent findings'));
+  if (!w.findings.recent.length) fnd.append(el('p', { class: 'muted' }, 'No open analysis findings.'));
+  else fnd.append(el('table', { class: 'adv-table' }, el('tbody', {}, ...w.findings.recent.map((x) =>
+    el('tr', {},
+      el('td', {}, el('span', { class: `badge ${x.severity === 'CRIT' ? 'crit' : x.severity === 'WARN' ? 'warn' : 'grace'}` }, x.severity)),
+      el('td', {}, esc(x.hostId), el('span', { class: 'muted' }, ` · ${esc(x.metric)}`)),
+      el('td', { class: 'muted' }, esc(x.explanation || x.kind || '')))))));
+  panels.append(fnd);
+
+  root.append(panels);
+  return root;
+};
 
 // Fleet NIC inventory + firmware-drift detection. Groups identical NIC models
 // across all agents and surfaces firmware-version outliers — the "47 units on

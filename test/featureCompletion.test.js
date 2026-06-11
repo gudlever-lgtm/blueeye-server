@@ -22,18 +22,18 @@ test('GET /license/matrix marks each feature available|roadmap', async () => {
   assert.equal(byKey.ha_deployment, 'roadmap');
   assert.equal(byKey.msp_multitenant, 'roadmap');
   assert.equal(byKey.security_pack, 'roadmap');
-  assert.equal(byKey.dashboard_advanced, 'roadmap');
   // The finished ones are available.
+  assert.equal(byKey.dashboard_advanced, 'available');
   assert.equal(byKey.audit_log, 'available');
   assert.equal(byKey.api_access, 'available');
   assert.equal(byKey.reports_compliance, 'available');
   assert.equal(byKey.sso_ldap, 'available');
 });
 
-test('catalogue exposes exactly the six roadmap keys', () => {
+test('catalogue exposes exactly the five roadmap keys', () => {
   assert.deepEqual(
     [...ROADMAP_FEATURE_KEYS].sort(),
-    ['dashboard_advanced', 'ha_deployment', 'msp_multitenant', 'security_pack', 'sso_oidc', 'sso_saml'].sort()
+    ['ha_deployment', 'msp_multitenant', 'security_pack', 'sso_oidc', 'sso_saml'].sort()
   );
   // Every catalogue entry has a known status.
   for (const meta of Object.values(FEATURE_CATALOG)) {

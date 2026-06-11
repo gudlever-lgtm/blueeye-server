@@ -974,6 +974,19 @@ button.active-btn { outline: 2px solid var(--accent); }
 .kpi .kpi-v.v-warn { color: var(--warn); }
 .kpi .kpi-v.v-bad { color: var(--bad); }
 
+/* Advanced dashboard (dashboard_advanced): the NOC KPI strip above a responsive
+   grid of drill-down panels. Panel tables are compact; rows that drill into an
+   agent show a pointer + hover tint, reusing the shared status/border tokens. */
+.advanced-view .panel-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
+@media (max-width: 900px) { .advanced-view .panel-grid { grid-template-columns: 1fr; } }
+.advanced-view .panel-grid .card { margin: 0; }
+.advanced-view .panel-grid .card h3 { margin: 0 0 10px; }
+.adv-table { width: 100%; border-collapse: collapse; }
+.adv-table td { padding: 6px 8px; border-top: 1px solid var(--border); vertical-align: middle; }
+.adv-table tr:first-child td { border-top: 0; }
+.adv-table tr.clickable { cursor: pointer; }
+.adv-table tr.clickable:hover { background: var(--accent-weak); }
+
 /* Network path — HQ → ISP → Cloud → SaaS with a Branch feeding the uplink.
    Nominal segments use the primary/accent token; a degraded hop uses --warn. */
 .netpath { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-lg);

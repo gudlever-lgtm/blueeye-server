@@ -33,13 +33,32 @@ function createHaCoordinator({
   // the very next tick. Long enough to drain/patch; auto-recovers if the node is
   // never restarted (so a mistaken step-down isn't permanent).
   stepDownCooldownMs = 60000,
+  // Licence entitlement for HA. Clustering (leader election + the cluster
+  // registry) only activates when this gate grants `ha_deployment`; without it a
+  // node with HA_ENABLED degrades to a plain standalone node (runs its own jobs,
+  // no election). Checked LAZILY each tick, so a node whose licence validates a
+  // moment after boot starts clustering on its own — no startup race. When no
+  // gate is wired (unit tests), entitlement is assumed.
+  featureGate = null,
+  featureKey = 'ha_deployment',
   now = () => Date.now(),
   logger = silentLogger,
 } = {}) {
-  // Single-node installs are leader from the start; HA nodes earn it via the lock.
-  let leader = !enabled;
+  function entitled() {
+    if (!featureGate || typeof featureGate.isFeatureEnabled !== 'function') return true;
+    try { return featureGate.isFeatureEnabled(featureKey) === true; } catch { return false; }
+  }
+  // True only when HA is BOTH configured (env) AND licensed. This is what drives
+  // real clustering; otherwise the node behaves as a standalone single node.
+  function clustering() {
+    return enabled && entitled();
+  }
+
+  // Standalone (not clustering) installs are leader from the start; clustering
+  // nodes earn leadership via the lock.
+  let leader = !clustering();
   let jobsRunning = false;
-  let leaderSince = enabled ? null : new Date().toISOString();
+  let leaderSince = clustering() ? null : new Date().toISOString();
   let timer = null;
   // While set to a future timestamp, this node will not contend for leadership
   // (set by stepDown to drain the node for maintenance).
@@ -77,7 +96,9 @@ function createHaCoordinator({
   }
 
   async function heartbeat() {
-    if (!nodesRepo) return;
+    // Only clustering nodes register in the cluster view; a standalone or
+    // unlicensed node never writes a heartbeat row.
+    if (!nodesRepo || !clustering()) return;
     try {
       await nodesRepo.heartbeat({
         nodeId, hostname, pid, version, isLeader: leader,
@@ -93,6 +114,14 @@ function createHaCoordinator({
 
   async function tickOnce() {
     if (!enabled) return;
+    // Configured but not licensed for HA → run as a standalone leader: keep the
+    // singleton jobs on this node, but never contend for the lock or register in
+    // the cluster view. If/when the licence validates, the branch below takes over.
+    if (!entitled()) {
+      if (!leader) await applyLeadership(true);
+      else if (!jobsRunning) startJobs();
+      return;
+    }
     // While draining after a voluntary step-down, stand down: don't contend for
     // the lock (so a follower takes over), but keep heartbeating as a follower.
     if (lock && !draining()) {
@@ -112,7 +141,14 @@ function createHaCoordinator({
       startJobs();
       return;
     }
-    logger.info(`ha: enabled — node ${nodeId} joining the cluster (lock contention every ${intervalMs}ms)`);
+    if (!entitled()) {
+      // HA configured but the licence doesn't (yet) include ha_deployment: run
+      // the jobs locally as a standalone node and keep re-checking on each tick.
+      logger.warn('ha: HA_ENABLED set but licence feature ha_deployment is not present — running standalone (no clustering) until entitled');
+      startJobs();
+    } else {
+      logger.info(`ha: enabled — node ${nodeId} joining the cluster (lock contention every ${intervalMs}ms)`);
+    }
     await tickOnce();
     timer = setInterval(() => { tickOnce().catch((err) => logger.error('ha: tick failed:', err)); }, intervalMs);
     if (timer.unref) timer.unref();
@@ -134,7 +170,8 @@ function createHaCoordinator({
   // Voluntary step-down (admin). On an HA node this releases the lock; a follower
   // promotes on its next tick. A no-op on a standalone node.
   async function stepDown() {
-    if (!enabled || !lock) return { ok: false, reason: 'ha_disabled' };
+    // Only meaningful for a licensed, clustering node.
+    if (!clustering() || !lock) return { ok: false, reason: 'ha_disabled' };
     if (!leader) return { ok: false, reason: 'not_leader' };
     // Pause re-contention BEFORE releasing, so the next tick can't reacquire.
     recontendPausedUntil = now() + stepDownCooldownMs;
@@ -150,6 +187,11 @@ function createHaCoordinator({
   function getStatus() {
     return {
       enabled,
+      // Whether HA clustering is actually active (configured AND licensed). When
+      // false on an `enabled` node, the licence doesn't include ha_deployment and
+      // the node is running standalone.
+      clustering: clustering(),
+      licensed: entitled(),
       nodeId,
       hostname,
       pid,
@@ -164,8 +206,8 @@ function createHaCoordinator({
   }
 
   async function listNodes() {
-    if (!nodesRepo) {
-      // Standalone: the cluster is just this node.
+    if (!clustering() || !nodesRepo) {
+      // Standalone (or unlicensed): the cluster is just this node.
       return [{
         node_id: nodeId, hostname, pid, version,
         is_leader: leader, active: true, last_seen_at: new Date().toISOString(),

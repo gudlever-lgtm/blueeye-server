@@ -1,9 +1,14 @@
 # High-availability deployment (Enterprise)
 
 > Licence feature: **`ha_deployment`** (Enterprise+). The status/admin API
-> (`/api/ha/*`) is gated by this key; running multiple replicas itself only
-> needs `HA_ENABLED=true` on each node, but a valid Enterprise licence is what
-> entitles the deployment.
+> (`/api/ha/*`) is gated by this key, and so is the **clustering behaviour
+> itself**: a node started with `HA_ENABLED=true` but **without** the
+> `ha_deployment` entitlement degrades to a plain standalone node (it runs its
+> own singleton jobs and never contends for the lock or joins the cluster
+> registry). The entitlement is re-checked on every tick, so a node whose licence
+> validates shortly after boot begins clustering on its own — no restart needed.
+> `GET /api/ha/status` reports `clustering` and `licensed` so you can see which
+> mode a node is in.
 
 BlueEye server is **stateless per request**: every authenticated call is
 verified from the JWT (or an API token) and reads/writes only the shared MySQL
@@ -97,7 +102,8 @@ Set these on **every** replica (identical values except `HA_NODE_ID`):
 
 | Env var | Default | Meaning |
 | --- | --- | --- |
-| `HA_ENABLED` | `false` | Turn HA on. Off ⇒ classic single node that runs every job itself. |
+| `HA_ENABLED` | `false` | Turn HA on. Off ⇒ classic single node that runs every job itself. On **and** licensed (`ha_deployment`) ⇒ clustering; on but unlicensed ⇒ degrades to standalone. |
+| `HA_STEPDOWN_COOLDOWN_MS` | `60000` | After `POST /api/ha/step-down`, how long the drained node suspends re-contention so a follower takes over. Auto-recovers. |
 | `HA_NODE_ID` | `<hostname>:<pid>` | Stable identity in the cluster registry + logs. Set it to something readable (e.g. `blueeye-1`). |
 | `HA_LOCK_NAME` | `blueeye_leader` | Advisory-lock name. All nodes of one cluster share it; distinct clusters on the same MySQL must differ. |
 | `HA_INTERVAL_MS` | `10000` | How often a node contends/re-confirms leadership and heartbeats. |

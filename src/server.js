@@ -412,6 +412,10 @@ function start() {
     nodesRepo: config.ha.enabled ? haNodesRepo : null,
     intervalMs: config.ha.intervalMs,
     stepDownCooldownMs: config.ha.stepDownCooldownMs,
+    // Clustering only activates with the ha_deployment entitlement; without it a
+    // node with HA_ENABLED degrades to standalone (checked lazily as the licence
+    // validates). The status/admin routes stay gated by the same feature.
+    featureGate,
     version: appVersion,
     logger: console,
     // Leader-only singleton work. GeoIP exposes startSchedule/stopSchedule;

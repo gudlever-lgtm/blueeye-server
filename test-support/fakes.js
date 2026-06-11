@@ -375,6 +375,7 @@ function makeAuditLogRepo(overrides = {}) {
       rows.filter((r) => (!category || r.category === category) && (actorUserId == null || r.actorUserId === actorUserId))
         .slice().reverse().slice(0, limit)),
     categories: overrides.categories || (async () => [...new Set(rows.map((r) => r.category))].sort()),
+    verifyChain: overrides.verifyChain || (async () => ({ ok: true, checked: rows.length, brokenAt: null })),
   };
 }
 

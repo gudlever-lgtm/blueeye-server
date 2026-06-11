@@ -1,4 +1,4 @@
--- 037 — SSO via OpenID Connect (authorization-code + PKCE). Supplements local
+-- 038 — SSO via OpenID Connect (authorization-code + PKCE). Supplements local
 -- JWT login behind the licence feature `sso_oidc` (Enterprise+). The IdP
 -- connection (issuer/client id/secret/redirect) comes from ENV VARS — see
 -- src/config.js `oidc` — so there is no connection-config table; only the

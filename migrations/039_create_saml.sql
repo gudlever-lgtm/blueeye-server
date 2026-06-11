@@ -1,4 +1,4 @@
--- 038 — SSO via SAML 2.0 (SP-initiated). Supplements local JWT login behind the
+-- 039 — SSO via SAML 2.0 (SP-initiated). Supplements local JWT login behind the
 -- licence feature `sso_saml` (Enterprise+). The IdP connection (entry point / SP
 -- entityID / audience / signing certificate) comes from ENV VARS — see
 -- src/config.js `saml` — so there is no connection-config table; only the

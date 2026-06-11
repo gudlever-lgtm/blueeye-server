@@ -465,6 +465,7 @@ function makeFeatureGate(overrides = {}) {
   const enabled = overrides.features || {
     analysis: true, assistant: true, alerting: true, geo: true,
     sso_ldap: true, sso_oidc: true, sso_saml: true,
+    dashboard_advanced: true,
     rbac: true, audit_log: true, api_access: true,
     reports_csv: true, reports_pdf: true, reports_compliance: true,
     alerts_email: true, alerts_webhook: true,

@@ -58,7 +58,7 @@ function requireFeature(featureGate, feature) {
 }
 
 // Express middleware for the NEW packaged feature keys (api_access,
-// reports_compliance, msp_multitenant, …). On denial it returns the documented
+// reports_compliance, …). On denial it returns the documented
 // contract — HTTP 403 with { success, error, message } — and a precise upgrade
 // hint derived from the active plan ("This feature requires BlueEye Enterprise").
 // Kept distinct from requireFeature() so the four legacy module endpoints keep

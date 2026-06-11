@@ -409,16 +409,9 @@ VALUES
    JSON_ARRAY('dashboard_basic', 'dashboard_advanced', 'reports_basic', 'reports_pdf',
               'reports_csv', 'reports_sla', 'rbac', 'audit_log', 'api_access',
               'alerts_email', 'alerts_webhook', 'reports_compliance', 'sso_oidc',
-              'sso_saml', 'ha_deployment', 'offline_license', 'security_pack',
+              'sso_saml', 'ha_deployment', 'offline_license',
               'premium_support'),
-   'premium', 0, 0, 0, 1, 25000, 187000, 1),
-  ('msp', 'MSP', NULL, NULL, 1095,
-   JSON_ARRAY('dashboard_basic', 'dashboard_advanced', 'reports_basic', 'reports_pdf',
-              'reports_csv', 'reports_sla', 'rbac', 'audit_log', 'api_access',
-              'alerts_email', 'alerts_webhook', 'reports_compliance', 'sso_oidc',
-              'sso_saml', 'ha_deployment', 'offline_license', 'security_pack',
-              'premium_support', 'msp_multitenant'),
-   'partner', 0, 0, 1, 1, 15000, 112000, 1)
+   'premium', 0, 0, 0, 1, 25000, 187000, 1)
 ON DUPLICATE KEY UPDATE
   plan_name = VALUES(plan_name),
   max_agents = VALUES(max_agents),

@@ -84,7 +84,7 @@ Mounted in `src/routes/index.js`. User endpoints use JWT + roles
 | `/health` | health.js | none | liveness + db ping |
 | `/auth` | auth.js | none | login → JWT (tries **LDAP/AD** first when enabled, else local) |
 | `/users` | users.js | admin | user CRUD (last-admin protected) |
-| `/me` | me.js | viewer+ | current user: profile + **personal UI preferences** (colour theme) |
+| `/me` | me.js | viewer+ | current user: profile + **personal UI preferences** (colour theme) + **self-service password change** (`PUT /me/password`, security-pack policy) |
 | `/locations` | locations.js | viewer+/op/admin | sites + per-location live traffic |
 | `/agents` (3 routers) | agents.js · agentReports.js · agentEnroll.js | JWT / agent-token / none | CRUD + run-test + **run-probe** + **install-tool** (operator+, install a missing diagnostic tool on the host — allowlisted, audited); agent self-report (`/results`, `/probe-results`, `/me/config`, `/me/capabilities`); enroll |
 | `/enrollment-codes` | enrollmentCodes.js | operator+ | enrollment codes (single-use or **bulk / multi-use**) |
@@ -92,7 +92,7 @@ Mounted in `src/routes/index.js`. User endpoints use JWT + roles
 | `/api/enroll` | enrollCommand.js | operator+ | **install-command generator** (`/command`: one-liner + manual/checksum; mints or reuses a code) |
 | `/license` | license.js | viewer+ | license status + features + plan/usage/**matrix** (feature `status`: available/roadmap) |
 | `/api/api-tokens` | apiTokens.js | admin (gated `api_access`) | **API tokens** — mint/list/revoke; secret shown once, hashed at rest |
-| `/api/audit-log` | auditLog.js | admin (gated `audit_log`) | **unified audit log** — auth/user/role/license/report/api_token events; `?category=&user=&limit=` |
+| `/api/audit-log` | auditLog.js | admin (gated `audit_log`) | **unified audit log** — auth/user/role/license/report/api_token events; `?category=&user=&limit=`; `/verify` = **tamper-evident hash-chain check** (security pack) |
 | `/system` | system.js | viewer+ | storage/disk/db + ingest estimate |
 | `/api/findings` | findings.js | viewer+ | analysis findings + ack |
 | `/api/assistant` | assistant.js | viewer+ (gated) | opt-in AI: `/explain` (per-host Q&A) + **`/location-summary`** (per-location "what's going on?") |
@@ -141,6 +141,7 @@ Later migrations add:
 | 033 | `audit_log` | **unified audit log** (feature `audit_log`) — auth/user/role/license/report/api_token events; metadata only, never secrets |
 | 034 | `api_tokens` | **API tokens** (feature `api_access`) — programmatic access; only the SHA-256 hash stored, role-scoped |
 | 035 | `audit_events` | **unified, server-wide audit** (Reporting → Audit) — user actions (audit middleware) + agent activity (on ingest); recurring activity folded onto one row via a nullable UNIQUE `dedup_key`. Agent activity includes `agent.probe-failed` — a probe the agent could not execute (e.g. `traceroute` missing), with the reason in `detail.reason` |
+| 037 | `password_history` · `auth_lockouts` + columns | **security pack** (`security_pack`, Enterprise) — password reuse history + `users.password_changed_at` (max age); per-user/per-IP brute-force lockout counters; `audit_log.prev_hash`/`entry_hash` (tamper-evident hash chain). Config in `app_settings` (`security`). See `src/security/*`, `docs/security-pack.md` |
 | 036 | (column) | extends `agent_action_audit.action` with `'install-tool'` — operator- or auto-triggered request that an agent install a missing diagnostic tool (request→complete like upgrade/delete; tool in `target_version`). See `src/agentTools.js`, `services/installToolService.js` |
 
 Interface health, traffic-type categories and **fleet health** add **no** tables — they
@@ -199,6 +200,7 @@ A single vanilla-JS SPA. Key building blocks:
 | A dashboard colour palette (light+dark) | `PALETTES` + paired `[data-theme=…]` blocks in `public/styles.css`; picker `settingsAppearanceView` in `public/app.js`; per-user persistence via `/me` (`src/routes/me.js`, `usersRepository.get/updatePreferences`) + key whitelist in `src/validation/preferencesValidation.js` |
 | License / feature gating | `src/license/*` (`features.js` = fail-closed gate + `requirePlanFeature` middleware; `plans.js` = plan/feature catalogue incl. `status` available/roadmap; `planService.js` = active-plan resolution + limits) + `src/services/usageService.js` (limit enforcement). Read-only API: `/license/plan`, `/license/usage`, `/license/matrix`. Feature **status & roadmap** tracked in **`ROADMAP.md`** + the Settings → License matrix Roadmap badge. See `docs/licensing.md`. |
 | API tokens (programmatic access) | feature `api_access`: `src/routes/apiTokens.js` (admin CRUD, gated) + `src/repositories/apiTokensRepository.js` + `src/lib/apiToken.js` (mint/hash) + `src/auth/apiTokenAuth.js` (authenticates `X-API-Key`/`Bearer` → `req.user`, mounted in `routes/index.js`); table `api_tokens` (migration 034) |
+| Security pack (password policy / lockout / IP allowlist / tamper-evident audit) | feature `security_pack` (Enterprise): pure rules in `src/security/{passwordPolicy,lockout,ipAllowlist}.js`, orchestration in `src/security/securityService.js`; enforced in `routes/auth.js` (lockout 429 + IP allowlist 403 + password-age flag), `routes/users.js` + `routes/me.js` (policy 422), audit hash chain in `repositories/auditLogRepository.js` (`/api/audit-log/verify`); config via `settingsService.getSecurity/setSecurity` + `GET/PUT /api/settings/security`; tables `password_history`/`auth_lockouts` + columns (migration 037). See `docs/security-pack.md` |
 | Audit log (who-did-what) | feature `audit_log`: `src/routes/auditLog.js` (admin read, gated) + `src/repositories/auditLogRepository.js` + `src/services/auditLogger.js` (fail-safe recorder); recording wired in `routes/auth.js` (login), `users.js` (user admin), `license.js` (re-validate), `apiTokens.js` + `reports.js`; table `audit_log` (migration 033) |
 | Report exports (CSV / PDF) | `src/routes/reports.js` `*.csv` (gated `reports_csv`) + `*.html` (gated `reports_pdf`, print→PDF) via `src/lib/reportHtml.js`; NIS2 compliance pack gated `reports_compliance` in `src/routes/nis2.js` |
 | Offline (no-server) licensing | `src/license/licenseVerifier.js` (verifies a local signed file, Ed25519) + `offlineLicenseManager.js` (same surface as the online manager; restricted mode when invalid/expired). Selected by `LICENSE_MODE=offline`/`LICENSE_FILE` in `src/server.js`. Issue files with `scripts/sign-offline-license.js`. |

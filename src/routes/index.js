@@ -111,6 +111,7 @@ function createApiRouter({
   nis2AuditRepo,
   enrollConfig = {},
   notifyDashboard,
+  securityService = null,
 }) {
   const router = express.Router();
   // Effective (admin-editable) map config, used by both the geo view and the
@@ -133,9 +134,9 @@ function createApiRouter({
   if (apiTokensRepo) router.use(createApiTokenMiddleware({ apiTokensRepo }));
 
   router.use('/health', createHealthRouter({ db }));
-  router.use('/auth', createAuthRouter({ usersRepo, ldapAuth, ldapLoginAuditRepo, auditLogger }));
-  router.use('/users', createUsersRouter({ usersRepo, featureGate, planService, auditLogger }));
-  router.use('/me', createMeRouter({ usersRepo }));
+  router.use('/auth', createAuthRouter({ usersRepo, ldapAuth, ldapLoginAuditRepo, auditLogger, securityService }));
+  router.use('/users', createUsersRouter({ usersRepo, featureGate, planService, auditLogger, securityService }));
+  router.use('/me', createMeRouter({ usersRepo, securityService, auditLogger }));
   router.use('/locations', createLocationsRouter({ locationsRepo, resultsRepo }));
   router.use('/license', createLicenseRouter({ licenseManager, featureGate, planService, usageService, auditLogger }));
   router.use('/system', createSystemRouter({ systemInfo, agentSourceStore, releaseStore }));

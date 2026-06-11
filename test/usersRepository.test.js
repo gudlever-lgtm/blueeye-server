@@ -96,3 +96,53 @@ test('update touches no columns when the patch is empty', async () => {
 
   assert.equal(pool.queries.some((q) => /^UPDATE users SET/i.test(q.sql)), false);
 });
+
+// ---- security pack: password history + age ---------------------------------
+function makeHistoryPool({ current = 'cur', history = [] } = {}) {
+  const queries = [];
+  return {
+    queries,
+    async query(sql, params) {
+      queries.push({ sql, params });
+      if (/^SELECT id, email, role, protected/i.test(sql)) {
+        return [[{ id: params[0], email: 'u@blueeye.local', role: 'viewer', protected: 0 }]];
+      }
+      if (/^SELECT password_hash FROM users/i.test(sql)) {
+        return [current === undefined ? [] : [{ password_hash: current }]];
+      }
+      if (/^SELECT password_hash FROM password_history/i.test(sql)) {
+        return [history.map((h) => ({ password_hash: h }))];
+      }
+      if (/^INSERT INTO password_history/i.test(sql)) return [{ insertId: 1 }];
+      if (/^UPDATE users SET password_hash/i.test(sql)) return [{ affectedRows: 1 }];
+      if (/^DELETE FROM password_history/i.test(sql)) return [{ affectedRows: 0 }];
+      throw new Error(`unexpected SQL: ${sql}`);
+    },
+  };
+}
+
+test('recentPasswordHashes returns current first, then history, capped at n', async () => {
+  const repo = createUsersRepository({ pool: makeHistoryPool({ current: 'cur', history: ['h3', 'h2', 'h1'] }) });
+  assert.deepEqual(await repo.recentPasswordHashes(5, 5), ['cur', 'h3', 'h2', 'h1']);
+  assert.deepEqual(await repo.recentPasswordHashes(5, 2), ['cur', 'h3']);
+});
+
+test('recentPasswordHashes returns [] when n is 0', async () => {
+  const repo = createUsersRepository({ pool: makeHistoryPool() });
+  assert.deepEqual(await repo.recentPasswordHashes(5, 0), []);
+});
+
+test('changePassword archives the old hash, stamps the time and prunes history', async () => {
+  const pool = makeHistoryPool({ current: 'old-hash' });
+  const repo = createUsersRepository({ pool });
+  await repo.changePassword(7, 'new-hash');
+
+  const archived = pool.queries.find((q) => /^INSERT INTO password_history/i.test(q.sql));
+  assert.deepEqual(archived.params, [7, 'old-hash']); // outgoing hash archived
+
+  const upd = pool.queries.find((q) => /^UPDATE users SET password_hash/i.test(q.sql));
+  assert.match(upd.sql, /password_changed_at = NOW\(\)/);
+  assert.deepEqual(upd.params, ['new-hash', 7]);
+
+  assert.ok(pool.queries.some((q) => /^DELETE FROM password_history/i.test(q.sql))); // pruned
+});

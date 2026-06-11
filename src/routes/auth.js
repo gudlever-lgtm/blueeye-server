@@ -13,8 +13,24 @@ const { config } = require('../config');
 //      user is just-in-time provisioned so the rest of the system is unchanged;
 //   2) local JWT auth — the original flow, and the fallback when LDAP is
 //      disabled or doesn't authenticate the user.
-function createAuthRouter({ usersRepo, ldapAuth = null, ldapLoginAuditRepo = null, auditLogger = null }) {
+function createAuthRouter({ usersRepo, ldapAuth = null, ldapLoginAuditRepo = null, auditLogger = null, securityService = null }) {
   const router = express.Router();
+
+  // Security pack (Enterprise `security_pack`): IP allowlist + lockout reset on a
+  // successful login. Returns false (and writes the 403) when the source IP is
+  // not allowed for this user's role; the caller must then NOT issue a token.
+  async function passSecurityChecks(req, res, user, authKind) {
+    if (!securityService) return true;
+    const ip = req.ip;
+    const chk = await securityService.checkIp({ ip, role: user.role });
+    if (!chk.allowed) {
+      await auditLogin(req, { action: 'login_denied_ip', outcome: 'denied', email: user.email, role: user.role, userId: user.id, detail: `auth=${authKind} ip not allowlisted` });
+      res.status(403).json({ error: 'Access from this network is not permitted', reason: 'ip_not_allowlisted' });
+      return false;
+    }
+    try { await securityService.recordSuccess({ email: user.email, ip }); } catch { /* best-effort */ }
+    return true;
+  }
 
   // Records a login outcome in the unified audit log (best-effort). Distinct
   // from the LDAP-specific login audit above, which captures bind detail.
@@ -94,6 +110,18 @@ function createAuthRouter({ usersRepo, ldapAuth = null, ldapLoginAuditRepo = nul
         return res.status(400).json({ error: 'email and password are required' });
       }
 
+      // 0) Brute-force lockout (security pack). If this user or source IP is
+      //    currently locked, refuse with 429 BEFORE touching any auth backend —
+      //    a distinct code so the audit log can tell lockouts from bad passwords.
+      if (securityService) {
+        const lock = await securityService.checkLockout({ email, ip: req.ip });
+        if (lock.locked) {
+          res.set('Retry-After', String(lock.retryAfterSeconds));
+          await auditLogin(req, { action: 'login_locked', outcome: 'denied', email, detail: `locked scope=${lock.scope}, retryAfter=${lock.retryAfterSeconds}s` });
+          return res.status(429).json({ error: 'Too many failed login attempts — try again later', retryAfter: lock.retryAfterSeconds });
+        }
+      }
+
       // 1) LDAP first, if enabled. On success issue the same JWT; on any miss,
       //    fall through to local auth (per spec: fall back when LDAP fails/disabled).
       if (ldapAuth && typeof ldapAuth.isEnabled === 'function') {
@@ -105,6 +133,7 @@ function createAuthRouter({ usersRepo, ldapAuth = null, ldapLoginAuditRepo = nul
           if (result && result.enabled) await auditLdap(identifier, result, req.ip);
           if (result && result.ok) {
             const user = await provisionLdapUser(result);
+            if (!(await passSecurityChecks(req, res, user, 'ldap'))) return;
             const token = issueToken(user);
             await auditLogin(req, { action: 'login_success', outcome: 'success', email: user.email, role: user.role, userId: user.id, detail: 'auth=ldap' });
             return res.json({
@@ -124,17 +153,26 @@ function createAuthRouter({ usersRepo, ldapAuth = null, ldapLoginAuditRepo = nul
       const passwordOk = await verifyPassword(password, hash);
 
       if (!user || !passwordOk) {
+        // Count this failure toward the per-user + per-IP lockout (security pack).
+        if (securityService) { try { await securityService.recordFailure({ email, ip: req.ip }); } catch { /* best-effort */ } }
         await auditLogin(req, { action: 'login_failure', outcome: 'failure', email: email || '(none)', detail: 'invalid credentials' });
         return res.status(401).json({ error: 'Invalid credentials' });
       }
 
+      if (!(await passSecurityChecks(req, res, user, 'local'))) return;
+
       const token = issueToken(user);
-      await auditLogin(req, { action: 'login_success', outcome: 'success', email: user.email, role: user.role, userId: user.id, detail: 'auth=local' });
+      // Password max-age (security pack): surface expiry so the client can prompt
+      // a change. Non-blocking — the user can still sign in to change it.
+      let passwordExpired = false;
+      if (securityService) { try { passwordExpired = await securityService.isPasswordExpired(user.password_changed_at); } catch { passwordExpired = false; } }
+      await auditLogin(req, { action: 'login_success', outcome: 'success', email: user.email, role: user.role, userId: user.id, detail: `auth=local${passwordExpired ? ', password expired' : ''}` });
       return res.json({
         token,
         tokenType: 'Bearer',
         expiresIn: config.auth.jwtExpiresIn,
         user: { id: user.id, email: user.email, role: user.role },
+        passwordExpired,
       });
     })
   );

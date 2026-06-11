@@ -32,6 +32,7 @@ unlocked by editing local config — the Ed25519 signature would stop matching.
 - [x] **LDAP / Active Directory auth** (`sso_ldap`) — `src/auth/ldap.js` + `src/routes/ldap.js`, gated.
 - [x] **Offline license validation** (`offline_license`) — `src/license/licenseVerifier.js` + `offlineLicenseManager.js`.
 - [x] **Premium / priority support** (`premium_support`) — `support_level` carried by the plan (not a software module).
+- [x] **Security pack** (`security_pack`, Enterprise) — enforced password policy, brute-force lockout, login IP allowlist + tamper-evident (hash-chained) audit log (`src/security/*`, `src/routes/{auth,users,me,settings,auditLog}.js`), gated.
 
 ## 🛣️ Roadmap (not built yet — do one at a time)
 
@@ -40,7 +41,6 @@ unlocked by editing local config — the Ed25519 signature would stop matching.
 - [ ] **SSO (SAML)** (`sso_saml`, Enterprise) — SAML 2.0 SP login, group→role mapping.
 - [ ] **High-availability deployment** (`ha_deployment`, Enterprise) — active/standby or clustered server, shared state, health/failover docs.
 - [ ] **MSP multi-tenancy** (`msp_multitenant`, MSP) — `tenant_id` on agents/test-paths/reports/users + tenant-scoped UI/API.
-- [ ] **Security pack** (`security_pack`, Enterprise) — scope TBD (e.g. hardening checks, expanded threat findings, signed audit export).
 
 ## How to mark a roadmap item done
 

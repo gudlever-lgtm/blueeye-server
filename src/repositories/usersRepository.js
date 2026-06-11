@@ -45,21 +45,69 @@ function createUsersRepository(db) {
     return mapRow(rows[0]) ?? null;
   }
 
-  // Includes the password hash — used only by the login flow.
+  // Includes the password hash + when it was last changed (security-pack max-age)
+  // — used only by the login flow.
   async function findByEmailWithHash(email) {
     const [rows] = await pool.query(
-      'SELECT id, email, password_hash, role, created_at, updated_at FROM users WHERE email = ?',
+      'SELECT id, email, password_hash, password_changed_at, role, created_at, updated_at FROM users WHERE email = ?',
       [email]
+    );
+    return rows[0] ?? null;
+  }
+
+  // Same, by id — backs the self-service password change (verifies the current
+  // password before allowing a new one).
+  async function findByIdWithHash(id) {
+    const [rows] = await pool.query(
+      'SELECT id, email, password_hash, password_changed_at, role, created_at, updated_at FROM users WHERE id = ?',
+      [id]
     );
     return rows[0] ?? null;
   }
 
   async function create({ email, passwordHash, role, protected: isProtected = false }) {
     const [result] = await pool.query(
-      'INSERT INTO users (email, password_hash, role, protected) VALUES (?, ?, ?, ?)',
+      'INSERT INTO users (email, password_hash, password_changed_at, role, protected) VALUES (?, ?, NOW(), ?, ?)',
       [email, passwordHash, role, isProtected ? 1 : 0]
     );
     return findById(result.insertId);
+  }
+
+  // The current + recent past password hashes (newest first, up to `n`), so a
+  // password change can refuse to reuse the last N. The live hash counts as #1.
+  async function recentPasswordHashes(id, n = 5) {
+    const limit = Math.max(0, Math.min(Number(n) || 0, 50));
+    if (limit === 0) return [];
+    const out = [];
+    const [u] = await pool.query('SELECT password_hash FROM users WHERE id = ?', [id]);
+    if (u[0] && u[0].password_hash) out.push(u[0].password_hash);
+    const [h] = await pool.query(
+      'SELECT password_hash FROM password_history WHERE user_id = ? ORDER BY id DESC LIMIT ?',
+      [id, limit]
+    );
+    for (const r of h) out.push(r.password_hash);
+    return out.slice(0, limit);
+  }
+
+  // Sets a new password: archives the outgoing hash into password_history,
+  // stamps password_changed_at, and prunes history to a bounded size. Returns the
+  // updated public row (or null if the user is gone).
+  async function changePassword(id, newHash) {
+    const existing = await findById(id);
+    if (!existing) return null;
+    const [u] = await pool.query('SELECT password_hash FROM users WHERE id = ?', [id]);
+    if (u[0] && u[0].password_hash) {
+      await pool.query('INSERT INTO password_history (user_id, password_hash) VALUES (?, ?)', [id, u[0].password_hash]);
+    }
+    await pool.query('UPDATE users SET password_hash = ?, password_changed_at = NOW() WHERE id = ?', [newHash, id]);
+    // Keep history bounded (the policy never looks back more than 50).
+    await pool.query(
+      `DELETE FROM password_history WHERE user_id = ? AND id NOT IN (
+         SELECT id FROM (SELECT id FROM password_history WHERE user_id = ? ORDER BY id DESC LIMIT 50) keep
+       )`,
+      [id, id]
+    );
+    return findById(id);
   }
 
   // Patch may contain `email`, `role` and/or `passwordHash`. Returns the updated
@@ -124,10 +172,13 @@ function createUsersRepository(db) {
     findById,
     findByEmail,
     findByEmailWithHash,
+    findByIdWithHash,
     create,
     update,
     remove,
     countByRole,
+    recentPasswordHashes,
+    changePassword,
     getPreferences,
     updatePreferences,
   };

@@ -17,11 +17,25 @@ const { parseId } = require('../validation/locationValidation');
 // The seeded super-admin always exists, so a server without `rbac` can still log
 // in. featureGate/planService are optional (a server without the plan layer
 // keeps user management open).
-function createUsersRouter({ usersRepo, featureGate = null, planService = null, auditLogger = null }) {
+function createUsersRouter({ usersRepo, featureGate = null, planService = null, auditLogger = null, securityService = null }) {
   const router = express.Router();
 
   router.use(requireAuth, requireRole(ROLES.ADMIN));
   const rbacGate = requirePlanFeature({ featureGate, planService }, 'rbac');
+
+  // Runs the security-pack password policy (complexity + reuse-of-last-N) over a
+  // candidate. Writes the 422 response and returns false on violation; returns
+  // true (and does nothing) when the policy is disabled/unlicensed. `userId` is
+  // null at creation (no history to check yet).
+  async function enforcePasswordPolicy(req, res, plain, userId = null) {
+    if (!securityService) return true;
+    const result = await securityService.evaluateNewPassword({ userId, plain });
+    if (!result.ok) {
+      res.status(422).json({ error: 'Password does not meet the policy', reason: 'password_policy', violations: result.violations });
+      return false;
+    }
+    return true;
+  }
 
   // GET /users
   router.get(
@@ -43,6 +57,7 @@ function createUsersRouter({ usersRepo, featureGate = null, planService = null, 
       if (await usersRepo.findByEmail(value.email)) {
         return res.status(409).json({ error: 'Email already in use' });
       }
+      if (!(await enforcePasswordPolicy(req, res, value.password, null))) return;
       const passwordHash = await hashPassword(value.password);
       const created = await usersRepo.create({
         email: value.email,
@@ -86,6 +101,9 @@ function createUsersRouter({ usersRepo, featureGate = null, planService = null, 
         }
       }
 
+      // Enforce the password policy before any mutation (422 on violation).
+      if (value.password !== undefined && !(await enforcePasswordPolicy(req, res, value.password, id))) return;
+
       const patch = { role: existing.protected ? ROLES.ADMIN : value.role };
 
       // Optional email change — must remain unique across users. Skipped when
@@ -98,11 +116,13 @@ function createUsersRouter({ usersRepo, featureGate = null, planService = null, 
         patch.email = value.email;
       }
 
+      let updated = await usersRepo.update(id, patch);
+      // Password reset goes through changePassword so the old hash is archived to
+      // history (reuse-of-last-N) and password_changed_at is stamped (max-age).
       if (value.password !== undefined) {
-        patch.passwordHash = await hashPassword(value.password);
+        updated = await usersRepo.changePassword(id, await hashPassword(value.password));
       }
-      const updated = await usersRepo.update(id, patch);
-      if (auditLogger) await auditLogger.record(req, { category: 'user', action: 'user_update', target: existing.email, detail: `role=${patch.role}${patch.email ? `, email=${patch.email}` : ''}${patch.passwordHash ? ', password reset' : ''}` });
+      if (auditLogger) await auditLogger.record(req, { category: 'user', action: 'user_update', target: existing.email, detail: `role=${patch.role}${patch.email ? `, email=${patch.email}` : ''}${value.password !== undefined ? ', password reset' : ''}` });
       res.json(updated);
     })
   );

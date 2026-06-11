@@ -27,6 +27,7 @@ function createSettingsRouter({ settingsService, featureGate, dispatcher, analys
       retention: settingsService ? await settingsService.getRetention() : (retentionConfig || null),
       throughput: settingsService ? await settingsService.getThroughput() : null,
       agents: settingsService ? await settingsService.getAgents() : null,
+      security: settingsService && settingsService.getSecurity ? await settingsService.getSecurity() : null,
       assistant: settingsService ? await settingsService.getAssistantSafe() : null,
       map: settingsService ? await settingsService.getMap() : null,
       geoip: settingsService ? await settingsService.getGeoip() : null,
@@ -158,6 +159,32 @@ function createSettingsRouter({ settingsService, featureGate, dispatcher, analys
   // auto-install-tools opt-in). { autoInstallTools: bool }.
   router.put('/agents', ...admin, asyncHandler(async (req, res) => {
     res.json({ agents: await settingsService.setAgents(req.body || {}) });
+  }));
+
+  // GET /api/settings/security — effective security-pack config (password policy,
+  // lockout, IP allowlist, audit retention) + whether the Enterprise entitlement
+  // is present (so the UI can show enforcement as active vs. config-only). admin.
+  router.get('/security', ...admin, asyncHandler(async (req, res) => {
+    if (!settingsService || typeof settingsService.getSecurity !== 'function') {
+      return res.status(503).json({ error: 'Security settings not available' });
+    }
+    const security = await settingsService.getSecurity();
+    res.json({ security, licensed: featureGate ? featureGate.isFeatureEnabled('security_pack') : false });
+  }));
+
+  // PUT /api/settings/security — update the security-pack config (admin).
+  // Licence-gated (`security_pack`, Enterprise): the same gate that activates
+  // enforcement, so config can only be saved on a server that can act on it.
+  router.put('/security', ...admin, asyncHandler(async (req, res) => {
+    if (featureGate && !featureGate.isFeatureEnabled('security_pack')) {
+      return res.status(403).json({ error: 'This feature is not included in your license', feature: 'security_pack', reason: 'license' });
+    }
+    try {
+      res.json({ security: await settingsService.setSecurity(req.body || {}) });
+    } catch (err) {
+      if (err.statusCode === 400) return res.status(400).json({ error: 'Validation failed', details: err.details || {} });
+      throw err;
+    }
   }));
 
   // PUT /api/settings/flow-categories — replace the traffic-type category list

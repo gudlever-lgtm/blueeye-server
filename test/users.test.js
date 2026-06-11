@@ -298,16 +298,19 @@ test('PUT /users/:id cannot demote a protected super-admin (409)', async () => {
 
 test('PUT /users/:id can still reset a protected super-admin password', async () => {
   let patch;
+  let changedHash;
   const usersRepo = makeUsersRepo({
     findById: async () => ({ id: 1, email: 'admin@blueeye.local', role: 'admin', protected: true }),
     update: async (id, p) => { patch = p; return { id, email: 'admin@blueeye.local', role: 'admin', protected: true }; },
+    // Password resets go through changePassword (archives history, stamps age).
+    changePassword: async (id, hash) => { changedHash = hash; return { id, email: 'admin@blueeye.local', role: 'admin', protected: true }; },
   });
   const res = await request(makeApp({ usersRepo }))
     .put('/users/1')
     .set('Authorization', admin())
     .send({ role: 'admin', password: 'a-new-password' });
   assert.equal(res.status, 200);
-  assert.ok(patch.passwordHash); // password was reset
+  assert.ok(changedHash); // password was reset via changePassword
   assert.equal(patch.role, 'admin'); // stays admin
 });
 

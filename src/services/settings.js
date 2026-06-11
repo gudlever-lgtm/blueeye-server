@@ -1,6 +1,10 @@
 'use strict';
 
 const { DEFAULT_CATEGORIES, listCategories } = require('../flows/categories');
+const { DEFAULT_POLICY, normalizePolicy } = require('../security/passwordPolicy');
+const { DEFAULT_LOCKOUT, normalizeLockout } = require('../security/lockout');
+const { parseCidr, normalizeRules } = require('../security/ipAllowlist');
+const { ALL_ROLES } = require('../auth/roles');
 
 // Parses a list of integers, keeping only unique values within [min, max].
 // Returns null if the result is empty or the cap is exceeded.
@@ -437,6 +441,116 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
     return merged;
   }
 
+  // ---- Security pack (Settings → Security) --------------------------------
+  // Enterprise `security_pack`: password policy, brute-force lockout, login IP
+  // allowlisting and audit-trail retention/tamper-evidence. Stored under the
+  // `security` key; enforcement is additionally licence-gated in securityService,
+  // so persisting config here never activates anything without the entitlement.
+  const SECURITY_DEFAULTS = {
+    passwordPolicy: { ...DEFAULT_POLICY },
+    lockout: { ...DEFAULT_LOCKOUT },
+    ipAllowlist: { enabled: false, global: [], roles: ALL_ROLES.reduce((a, r) => ((a[r] = []), a), {}) },
+    audit: { retentionDays: 365, tamperEvident: true },
+  };
+
+  async function getSecurity() {
+    const override = await loadOverride('security');
+    const o = override && typeof override === 'object' ? override : {};
+    const rules = normalizeRules({ ...SECURITY_DEFAULTS.ipAllowlist, ...(o.ipAllowlist || {}) });
+    const a = { ...SECURITY_DEFAULTS.audit, ...(o.audit || {}) };
+    return {
+      passwordPolicy: normalizePolicy({ ...SECURITY_DEFAULTS.passwordPolicy, ...(o.passwordPolicy || {}) }),
+      lockout: normalizeLockout({ ...SECURITY_DEFAULTS.lockout, ...(o.lockout || {}) }),
+      ipAllowlist: rules,
+      audit: {
+        retentionDays: Number.isInteger(Number(a.retentionDays)) ? Math.min(Math.max(Number(a.retentionDays), 1), 3650) : 365,
+        tamperEvident: a.tamperEvident !== false,
+      },
+    };
+  }
+
+  // Validates a list of CIDR strings (IPv4/IPv6 or bare address). Returns the
+  // cleaned list, or null with the offending entry recorded in `errors[at]`.
+  function validCidrList(list, at, errors, cap = 200) {
+    if (list === undefined) return undefined;
+    if (!Array.isArray(list)) { errors[at] = 'must be an array of CIDRs'; return undefined; }
+    if (list.length > cap) { errors[at] = `too many entries (max ${cap})`; return undefined; }
+    const out = [];
+    for (const c of list) {
+      const s = String(c).trim();
+      if (s === '') continue;
+      if (parseCidr(s) === null) { errors[at] = `invalid CIDR "${s.slice(0, 60)}"`; return undefined; }
+      out.push(s);
+    }
+    return out;
+  }
+
+  function validateSecurity(patch) {
+    const p = patch && typeof patch === 'object' ? patch : {};
+    const errors = {};
+    const value = {};
+
+    if (p.passwordPolicy && typeof p.passwordPolicy === 'object') {
+      const pp = p.passwordPolicy; const v = {};
+      bool(pp, 'enabled', v);
+      num(pp, 'minLength', 8, 72, true, errors, v);
+      ['requireUppercase', 'requireLowercase', 'requireDigit', 'requireSymbol'].forEach((k) => bool(pp, k, v));
+      num(pp, 'historyCount', 0, 50, true, errors, v);
+      num(pp, 'maxAgeDays', 0, 3650, true, errors, v);
+      value.passwordPolicy = v;
+    }
+    if (p.lockout && typeof p.lockout === 'object') {
+      const lo = p.lockout; const v = {};
+      bool(lo, 'enabled', v);
+      num(lo, 'maxAttempts', 1, 100, true, errors, v);
+      num(lo, 'baseBackoffSeconds', 1, 86400, true, errors, v);
+      num(lo, 'maxBackoffSeconds', 1, 604800, true, errors, v);
+      num(lo, 'windowSeconds', 10, 86400, true, errors, v);
+      value.lockout = v;
+    }
+    if (p.ipAllowlist && typeof p.ipAllowlist === 'object') {
+      const ip = p.ipAllowlist; const v = {};
+      bool(ip, 'enabled', v);
+      const g = validCidrList(ip.global, 'ipAllowlist.global', errors);
+      if (g !== undefined) v.global = g;
+      if (ip.roles && typeof ip.roles === 'object') {
+        const roles = {};
+        for (const r of ALL_ROLES) {
+          const rl = validCidrList(ip.roles[r], `ipAllowlist.roles.${r}`, errors);
+          if (rl !== undefined) roles[r] = rl;
+        }
+        v.roles = roles;
+      }
+      value.ipAllowlist = v;
+    }
+    if (p.audit && typeof p.audit === 'object') {
+      const au = p.audit; const v = {};
+      num(au, 'retentionDays', 1, 3650, true, errors, v);
+      bool(au, 'tamperEvident', v);
+      value.audit = v;
+    }
+    return { errors: Object.keys(errors).length ? errors : null, value };
+  }
+
+  // Validates + persists a partial security config (deep-merged onto current).
+  async function setSecurity(patch) {
+    const { errors, value } = validateSecurity(patch || {});
+    if (errors) throw badRequest('invalid security settings', errors);
+    const current = await getSecurity();
+    const merged = {
+      passwordPolicy: { ...current.passwordPolicy, ...(value.passwordPolicy || {}) },
+      lockout: { ...current.lockout, ...(value.lockout || {}) },
+      ipAllowlist: {
+        enabled: value.ipAllowlist && value.ipAllowlist.enabled !== undefined ? value.ipAllowlist.enabled : current.ipAllowlist.enabled,
+        global: value.ipAllowlist && value.ipAllowlist.global !== undefined ? value.ipAllowlist.global : current.ipAllowlist.global,
+        roles: { ...current.ipAllowlist.roles, ...((value.ipAllowlist && value.ipAllowlist.roles) || {}) },
+      },
+      audit: { ...current.audit, ...(value.audit || {}) },
+    };
+    await settingsRepo.set('security', merged);
+    return getSecurity();
+  }
+
   // ---- AI assistant (Settings → AI assistant) -----------------------------
   // The opt-in LLM assistant's enable flag, API key and model — editable at
   // runtime (admin) instead of env-only. Defaults come from the env-loaded
@@ -787,6 +901,7 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
     getRetention, setRetention, validateRetention,
     getThroughput, setThroughput, validateThroughput,
     getAgents, setAgents, validateAgents,
+    getSecurity, setSecurity, validateSecurity,
     getAssistant, getAssistantSafe, setAssistant, validateAssistant,
     getAlerting, getAlertingSafe, setAlerting, validateAlerting,
     applyStoredOverrides,

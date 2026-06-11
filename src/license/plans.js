@@ -45,7 +45,7 @@ const FEATURE_CATALOG = {
   ha_deployment: { label: 'High-availability deployment', minPlan: 'enterprise', status: 'roadmap' },
   offline_license: { label: 'Offline license validation', minPlan: 'enterprise', status: 'available' },
   msp_multitenant: { label: 'MSP multi-tenancy', minPlan: 'msp', status: 'roadmap' },
-  security_pack: { label: 'Security pack', minPlan: 'enterprise', status: 'roadmap' },
+  security_pack: { label: 'Security pack', minPlan: 'enterprise', status: 'available' },
   premium_support: { label: 'Premium / priority support', minPlan: 'enterprise', status: 'available' },
 };
 

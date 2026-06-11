@@ -14,6 +14,7 @@ const { createConnectorRegistry } = require('../src/integrations/connectors');
 const { createPlanService } = require('../src/license/planService');
 const { createUsageService } = require('../src/services/usageService');
 const { createAuditLogger } = require('../src/services/auditLogger');
+const { createSecurityService } = require('../src/security/securityService');
 
 // ---- Repositories ---------------------------------------------------------
 
@@ -43,6 +44,7 @@ function makeUsersRepo(overrides = {}) {
     findById: overrides.findById || (async () => null),
     findByEmail: overrides.findByEmail || (async () => null),
     findByEmailWithHash: overrides.findByEmailWithHash || (async () => null),
+    findByIdWithHash: overrides.findByIdWithHash || (async () => null),
     create:
       overrides.create ||
       (async (input) => ({
@@ -55,6 +57,8 @@ function makeUsersRepo(overrides = {}) {
     update: overrides.update || (async () => null),
     remove: overrides.remove || (async () => false),
     countByRole: overrides.countByRole || (async () => 1),
+    recentPasswordHashes: overrides.recentPasswordHashes || (async () => []),
+    changePassword: overrides.changePassword || (async (id) => ({ id, email: 'user@blueeye.local', role: 'admin' })),
     getPreferences: overrides.getPreferences || (async () => ({})),
     updatePreferences: overrides.updatePreferences || (async (id, patch) => ({ ...patch })),
   };
@@ -375,6 +379,28 @@ function makeAuditLogRepo(overrides = {}) {
       rows.filter((r) => (!category || r.category === category) && (actorUserId == null || r.actorUserId === actorUserId))
         .slice().reverse().slice(0, limit)),
     categories: overrides.categories || (async () => [...new Set(rows.map((r) => r.category))].sort()),
+    verifyChain: overrides.verifyChain || (async () => ({ ok: true, checked: rows.length, brokenAt: null })),
+  };
+}
+
+// A fake auth-lockout repository (in-memory). Mirrors authLockoutRepository so
+// the brute-force lockout flow can be exercised without a DB.
+function makeAuthLockoutRepo(overrides = {}) {
+  const store = new Map();
+  const key = (scope, id) => `${scope}:${id}`;
+  return {
+    store,
+    get: overrides.get || (async (scope, id) => store.get(key(scope, id)) || null),
+    upsert: overrides.upsert || (async (scope, id, state) => {
+      store.set(key(scope, id), {
+        scope, identifier: id,
+        fail_count: state.failCount,
+        first_failed_at: state.firstFailedAt,
+        last_failed_at: state.lastFailedAt,
+        locked_until: state.lockedUntil,
+      });
+    }),
+    clear: overrides.clear || (async (scope, id) => { store.delete(key(scope, id)); }),
   };
 }
 
@@ -468,6 +494,7 @@ function makeFeatureGate(overrides = {}) {
     rbac: true, audit_log: true, api_access: true,
     reports_csv: true, reports_pdf: true, reports_compliance: true,
     alerts_email: true, alerts_webhook: true,
+    security_pack: true,
   };
   return {
     isFeatureEnabled: overrides.isFeatureEnabled || ((f) => enabled[f] === true),
@@ -908,10 +935,18 @@ function makeApp(overrides = {}) {
   const planService = overrides.planService || createPlanService({ licenseManager });
   const usageService =
     overrides.usageService || createUsageService({ agentsRepo, testPackagesRepo, planService, licenseManager });
+  // Shared so the security service sees the same config/gate/repo the routes do.
+  const usersRepo = overrides.usersRepo || makeUsersRepo();
+  const settingsService = overrides.settingsService || makeSettingsService();
+  const featureGate = overrides.featureGate || makeFeatureGate();
+  const authLockoutRepo = overrides.authLockoutRepo || makeAuthLockoutRepo();
+  const securityService =
+    overrides.securityService ||
+    createSecurityService({ settingsService, featureGate, usersRepo, lockoutRepo: authLockoutRepo });
   return createApp({
     db: overrides.db || makeDb(),
     locationsRepo: overrides.locationsRepo || makeLocationsRepo(),
-    usersRepo: overrides.usersRepo || makeUsersRepo(),
+    usersRepo,
     agentsRepo,
     enrollmentCodesRepo: overrides.enrollmentCodesRepo || makeEnrollmentCodesRepo(),
     enrollmentStore: overrides.enrollmentStore || makeEnrollmentStore(),
@@ -937,8 +972,9 @@ function makeApp(overrides = {}) {
     centroids: overrides.centroids || null,
     assistant: overrides.assistant || makeAssistant(),
     dispatcher: overrides.dispatcher || makeDispatcher(),
-    featureGate: overrides.featureGate || makeFeatureGate(),
-    settingsService: overrides.settingsService || makeSettingsService(),
+    featureGate,
+    settingsService,
+    securityService,
     analysisConfig: overrides.analysisConfig || { analysisEnabled: true, assistantEnabled: false, critSigma: 4, warnSigma: 3, baselineDays: 7, minSamples: 200 },
     retentionConfig: overrides.retentionConfig || { enabled: true, rawRetentionDays: 7, rollupRetentionDays: 90, findingRetentionDays: 365, rollupIntervalMinutes: 60 },
     artifactStore: overrides.artifactStore || makeArtifactStore(),
@@ -1033,6 +1069,7 @@ module.exports = {
   makeAuditRepo,
   makeAuditEventsRepo,
   makeAuditLogRepo,
+  makeAuthLockoutRepo,
   makeApiTokensRepo,
   makeTestPackagesRepo,
   makeTestPackageRunner,

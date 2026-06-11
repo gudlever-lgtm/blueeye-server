@@ -65,6 +65,8 @@ const { createPurge } = require('./analysis/retention/purge');
 const { createRetentionScheduler } = require('./analysis/retention/scheduler');
 const { createSettingsRepository } = require('./repositories/settingsRepository');
 const { createSettingsService } = require('./services/settings');
+const { createAuthLockoutRepository } = require('./repositories/authLockoutRepository');
+const { createSecurityService } = require('./security/securityService');
 const { createTestPackagesRepository } = require('./repositories/testPackagesRepository');
 const { createTestPackageRunner } = require('./services/testPackageRunner');
 const { createTestPackageScheduler } = require('./services/testPackageScheduler');
@@ -104,6 +106,7 @@ function start() {
   const auditEventsRepo = createAuditEventsRepository(db);
   const auditLogRepo = createAuditLogRepository(db);
   const apiTokensRepo = createApiTokensRepository(db);
+  const authLockoutRepo = createAuthLockoutRepository(db);
   const auditLogger = createAuditLogger({ auditLogRepo, logger: console });
   const enrollmentCodesRepo = createEnrollmentCodesRepository(db);
   const enrollmentStore = createEnrollmentStore(db);
@@ -360,6 +363,10 @@ function start() {
   // Re-apply persisted analysis/retention edits onto the live config so they
   // survive restarts. Best-effort + fire-and-forget (consumers read lazily).
   settingsService.applyStoredOverrides().catch((err) => console.warn(`settings: could not apply stored overrides (${err.message})`));
+  // Security pack (Enterprise `security_pack`): password policy, brute-force
+  // lockout, login IP allowlist + tamper-evident audit. Reads its config from
+  // settingsService and is licence-gated internally, so it's safe to always wire.
+  const securityService = createSecurityService({ settingsService, featureGate, usersRepo, lockoutRepo: authLockoutRepo });
   // In-app GeoIP updater: powers Settings → Map "Update now" and the opt-in
   // monthly auto-refresh (writes the built CSV into the /data volume, reloads the
   // provider). Egress is admin-initiated / opt-in, so air-gapped installs are fine.
@@ -420,6 +427,7 @@ function start() {
     planService,
     usageService,
     settingsService,
+    securityService,
     analysisConfig,
     retentionConfig,
     artifactStore,

@@ -45,6 +45,21 @@ function createAuditLogRouter({ auditLogRepo, featureGate, planService }) {
     })
   );
 
+  // GET /api/audit-log/verify — recompute the tamper-evident hash chain and
+  // report whether the trail is intact (security pack). { ok, checked, brokenAt }.
+  router.get(
+    '/verify',
+    requireAuth,
+    requireRole(ROLES.ADMIN),
+    gate,
+    asyncHandler(async (req, res) => {
+      if (!auditLogRepo || typeof auditLogRepo.verifyChain !== 'function') {
+        return res.status(503).json({ error: 'Audit log verification not available' });
+      }
+      res.json(await auditLogRepo.verifyChain({ limit: req.query.limit }));
+    })
+  );
+
   return router;
 }
 

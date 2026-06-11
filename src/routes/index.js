@@ -111,6 +111,10 @@ function createApiRouter({
   nis2AuditRepo,
   enrollConfig = {},
   notifyDashboard,
+  // Brute-force throttles for the unauthenticated endpoints (login, enrollment).
+  // Default undefined → the routers fall back to a no-op (tests stay unthrottled).
+  authRateLimiter,
+  enrollRateLimiter,
 }) {
   const router = express.Router();
   // Effective (admin-editable) map config, used by both the geo view and the
@@ -133,7 +137,7 @@ function createApiRouter({
   if (apiTokensRepo) router.use(createApiTokenMiddleware({ apiTokensRepo }));
 
   router.use('/health', createHealthRouter({ db }));
-  router.use('/auth', createAuthRouter({ usersRepo, ldapAuth, ldapLoginAuditRepo, auditLogger }));
+  router.use('/auth', createAuthRouter({ usersRepo, ldapAuth, ldapLoginAuditRepo, auditLogger, rateLimit: authRateLimiter }));
   router.use('/users', createUsersRouter({ usersRepo, featureGate, planService, auditLogger }));
   router.use('/me', createMeRouter({ usersRepo }));
   router.use('/locations', createLocationsRouter({ locationsRepo, resultsRepo }));
@@ -205,7 +209,7 @@ function createApiRouter({
   if (auditLogRepo) router.use('/api/audit-log', createAuditLogRouter({ auditLogRepo, featureGate, planService }));
   if (apiTokensRepo) router.use('/api/api-tokens', createApiTokensRouter({ apiTokensRepo, featureGate, planService, auditLogger }));
   router.use('/agents', createAgentReportsRouter({ agentAuth, resultsRepo, agentsRepo, auditEventsRepo, analysisPipeline, flowPipeline, probeResultsRepo, probePipeline, incidentService, installToolService }));
-  router.use('/agents', createAgentEnrollRouter({ enrollmentStore, notifyDashboard, integrationTrigger: integrationsDispatcher }));
+  router.use('/agents', createAgentEnrollRouter({ enrollmentStore, notifyDashboard, integrationTrigger: integrationsDispatcher, rateLimit: enrollRateLimiter }));
 
   return router;
 }

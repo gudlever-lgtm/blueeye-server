@@ -76,6 +76,8 @@ function createApp({
   nis2AuditRepo,
   enrollConfig,
   notifyDashboard,
+  authRateLimiter,
+  enrollRateLimiter,
   logger = silentLogger,
 } = {}) {
   const app = express();
@@ -178,6 +180,8 @@ function createApp({
       nis2AuditRepo,
       enrollConfig,
       notifyDashboard,
+      authRateLimiter,
+      enrollRateLimiter,
     })
   );
 

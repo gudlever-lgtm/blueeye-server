@@ -7,13 +7,14 @@ const { verifyPassword, hashPassword } = require('../auth/password');
 const { issueToken } = require('../auth/jwt');
 const { ROLES } = require('../auth/roles');
 const { config } = require('../config');
+const { noopRateLimiter } = require('../middleware/rateLimit');
 
 // Authentication routes (public). Supports two paths behind the SAME endpoint:
 //   1) external LDAP/AD auth (when enabled) — tried first; on success a local
 //      user is just-in-time provisioned so the rest of the system is unchanged;
 //   2) local JWT auth — the original flow, and the fallback when LDAP is
 //      disabled or doesn't authenticate the user.
-function createAuthRouter({ usersRepo, ldapAuth = null, ldapLoginAuditRepo = null, auditLogger = null }) {
+function createAuthRouter({ usersRepo, ldapAuth = null, ldapLoginAuditRepo = null, auditLogger = null, rateLimit = noopRateLimiter }) {
   const router = express.Router();
 
   // Records a login outcome in the unified audit log (best-effort). Distinct
@@ -82,6 +83,7 @@ function createAuthRouter({ usersRepo, ldapAuth = null, ldapLoginAuditRepo = nul
   // POST /auth/login { email, password } -> { token, ... } or 401.
   router.post(
     '/login',
+    rateLimit,
     asyncHandler(async (req, res) => {
       const body = req.body && typeof req.body === 'object' ? req.body : {};
       // `email` is the login identifier; for LDAP it may be a username/UPN, so we

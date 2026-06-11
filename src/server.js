@@ -1,6 +1,7 @@
 'use strict';
 
 const { config } = require('./config');
+const { createRateLimiter } = require('./middleware/rateLimit');
 const { createDb } = require('./db');
 const { createApp } = require('./app');
 const { createLocationsRepository } = require('./repositories/locationsRepository');
@@ -460,6 +461,14 @@ function start() {
     nis2AuditRepo,
     enrollConfig: { publicUrl: config.publicUrl, certFingerprint: config.enroll.certFingerprint },
     notifyDashboard,
+    // Brute-force throttles on the unauthenticated endpoints. Login is keyed by
+    // IP + email so one IP can't grind many accounts; enrollment by IP only.
+    authRateLimiter: createRateLimiter({
+      windowMs: 15 * 60 * 1000,
+      max: 10,
+      keyFn: (req) => `${req.ip}|${(req.body && typeof req.body.email === 'string' ? req.body.email : '').toLowerCase()}`,
+    }),
+    enrollRateLimiter: createRateLimiter({ windowMs: 15 * 60 * 1000, max: 30 }),
     logger: console,
   });
 

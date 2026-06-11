@@ -5,7 +5,7 @@ const { asyncHandler } = require('../middleware/asyncHandler');
 const { requireAuth, requireRole } = require('../auth/middleware');
 const { requirePlanFeature } = require('../license/features');
 const { ROLES } = require('../auth/roles');
-const { hashPassword } = require('../auth/password');
+const { hashPassword, checkPasswordPolicy } = require('../auth/password');
 const { validateUserCreate, validateUserUpdate } = require('../validation/userValidation');
 const { parseId } = require('../validation/locationValidation');
 
@@ -40,6 +40,12 @@ function createUsersRouter({ usersRepo, featureGate = null, planService = null, 
       if (errors) {
         return res.status(400).json({ error: 'Validation failed', details: errors });
       }
+      // Baseline password policy (always enforced) → 422, distinct from the 400
+      // type/shape error above.
+      const policy = checkPasswordPolicy(value.password);
+      if (!policy.ok) {
+        return res.status(422).json({ error: 'Password policy not met', details: policy.errors });
+      }
       if (await usersRepo.findByEmail(value.email)) {
         return res.status(409).json({ error: 'Email already in use' });
       }
@@ -66,6 +72,13 @@ function createUsersRouter({ usersRepo, featureGate = null, planService = null, 
       const { value, errors } = validateUserUpdate(req.body);
       if (errors) {
         return res.status(400).json({ error: 'Validation failed', details: errors });
+      }
+      // Enforce the baseline password policy on any password change → 422.
+      if (value.password !== undefined) {
+        const policy = checkPasswordPolicy(value.password);
+        if (!policy.ok) {
+          return res.status(422).json({ error: 'Password policy not met', details: policy.errors });
+        }
       }
       const existing = await usersRepo.findById(id);
       if (!existing) {

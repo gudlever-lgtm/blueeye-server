@@ -4,6 +4,7 @@ const path = require('path');
 const express = require('express');
 const { createApiRouter } = require('./routes');
 const { requestLogger } = require('./middleware/requestLogger');
+const { securityHeaders } = require('./middleware/securityHeaders');
 const { createAuditLogger } = require('./middleware/auditLogger');
 const { notFoundHandler, errorHandler } = require('./middleware/errorHandler');
 const { silentLogger } = require('./logger');
@@ -84,6 +85,10 @@ function createApp({
   // Behind a reverse proxy: trust X-Forwarded-* so req.protocol/host reflect the
   // public origin (used to build enrollment URLs).
   app.set('trust proxy', true);
+  // Always-on baseline security headers (HSTS/CSP/X-Frame-Options/nosniff/
+  // Referrer-Policy) on EVERY response — static dashboard + API alike. Mounted
+  // first, before the static handler, and not behind any feature key.
+  app.use(securityHeaders());
   app.use(express.json({ limit: '1mb' }));
   app.use(requestLogger(logger));
 

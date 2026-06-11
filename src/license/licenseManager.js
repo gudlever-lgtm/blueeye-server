@@ -1,5 +1,6 @@
 'use strict';
 
+const crypto = require('crypto');
 const { verifyProof } = require('./verify');
 
 const silentLogger = { info() {}, warn() {}, error() {} };
@@ -74,7 +75,7 @@ function createLicenseManager({
     }
   }
 
-  async function fetchProof(agentCount) {
+  async function fetchProof(agentCount, nonce) {
     const res = await fetchImpl(`${config.serverUrl}/validate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -82,6 +83,7 @@ function createLicenseManager({
         licenseKey: config.key,
         serverId: config.serverId,
         agentCount,
+        nonce,
       }),
     });
     if (res.status !== 200) {
@@ -96,10 +98,12 @@ function createLicenseManager({
   async function validateOnce() {
     state.lastCheckAt = now();
     const agentCount = safeAgentCount();
+    // Per-request anti-replay nonce: the signer echoes it into the signed proof.
+    const nonce = crypto.randomBytes(16).toString('hex');
 
     let body;
     try {
-      body = await fetchProof(agentCount);
+      body = await fetchProof(agentCount, nonce);
     } catch (err) {
       // Offline / unexpected status / unsigned response -> rely on cache + grace.
       state.lastError = `unreachable: ${err.message}`;
@@ -124,6 +128,15 @@ function createLicenseManager({
       logger.error(
         `License: proof serverId (${payload.serverId}) does not match this server (${config.serverId}) — rejecting.`
       );
+      return getStatus();
+    }
+    // Anti-replay: a fresh proof must echo the nonce we just sent. Tolerant of an
+    // older signer that doesn't include the field (payload.nonce === undefined),
+    // so an upgraded server still validates against a not-yet-upgraded licens.
+    if (payload.nonce !== undefined && payload.nonce !== nonce) {
+      state.lastError = 'nonce_mismatch';
+      applyOfflineFallback();
+      logger.error('License: proof nonce does not match the request — possible replay; rejecting.');
       return getStatus();
     }
 

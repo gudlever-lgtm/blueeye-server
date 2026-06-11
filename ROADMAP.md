@@ -30,13 +30,13 @@ unlocked by editing local config — the Ed25519 signature would stop matching.
 - [x] **Audit log** (`audit_log`) — unified change/security trail (`src/routes/auditLog.js`, `audit_log` table), gated.
 - [x] **API access** (`api_access`) — programmatic API tokens (`src/routes/apiTokens.js`, `api_tokens` table), gated.
 - [x] **LDAP / Active Directory auth** (`sso_ldap`) — `src/auth/ldap.js` + `src/routes/ldap.js`, gated.
+- [x] **SSO (OIDC)** (`sso_oidc`) — OpenID Connect (authorization-code + PKCE, EU/self-hosted IdP), claim→role mapping; `src/auth/oidc.js` + `src/routes/oidc.js`, gated.
 - [x] **Offline license validation** (`offline_license`) — `src/license/licenseVerifier.js` + `offlineLicenseManager.js`.
 - [x] **Premium / priority support** (`premium_support`) — `support_level` carried by the plan (not a software module).
 
 ## 🛣️ Roadmap (not built yet — do one at a time)
 
 - [ ] **Advanced dashboard** (`dashboard_advanced`, Professional) — richer drill-downs / custom widgets beyond the basic dashboard.
-- [ ] **SSO (OIDC)** (`sso_oidc`, Enterprise) — OpenID Connect login (EU/self-hosted IdP), group→role mapping.
 - [ ] **SSO (SAML)** (`sso_saml`, Enterprise) — SAML 2.0 SP login, group→role mapping.
 - [ ] **High-availability deployment** (`ha_deployment`, Enterprise) — active/standby or clustered server, shared state, health/failover docs.
 - [ ] **MSP multi-tenancy** (`msp_multitenant`, MSP) — `tenant_id` on agents/test-paths/reports/users + tenant-scoped UI/API.

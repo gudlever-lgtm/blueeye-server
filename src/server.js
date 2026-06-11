@@ -78,6 +78,9 @@ const { createLdapConfigRepository } = require('./repositories/ldapConfigReposit
 const { createLdapRoleMapRepository } = require('./repositories/ldapRoleMapRepository');
 const { createLdapLoginAuditRepository } = require('./repositories/ldapLoginAuditRepository');
 const { createLdapAuth } = require('./auth/ldap');
+const { createOidcRoleMapRepository } = require('./repositories/oidcRoleMapRepository');
+const { createSsoLoginAuditRepository } = require('./repositories/ssoLoginAuditRepository');
+const { createOidcAuth } = require('./auth/oidc');
 const { createNis2RisksRepository } = require('./repositories/nis2RisksRepository');
 const { createNis2ControlsRepository } = require('./repositories/nis2ControlsRepository');
 const { createNis2IncidentsRepository } = require('./repositories/nis2IncidentsRepository');
@@ -224,6 +227,14 @@ function start() {
   const ldapRoleMapRepo = createLdapRoleMapRepository(db);
   const ldapLoginAuditRepo = createLdapLoginAuditRepository(db);
   const ldapAuth = createLdapAuth({ config: config.ldap, ldapConfigRepo, ldapRoleMapRepo, secretBox, featureGate, logger: console });
+
+  // SSO (OIDC). OFF unless OIDC_AUTH_ENABLED=true, the licence covers it
+  // (sso_oidc) AND the issuer/client/redirect are env-configured. The group→role
+  // map is admin-managed; the (shared) SSO login audit records every attempt.
+  // Local JWT login always remains as the fallback.
+  const ssoLoginAuditRepo = createSsoLoginAuditRepository(db);
+  const oidcRoleMapRepo = createOidcRoleMapRepository(db);
+  const oidcAuth = createOidcAuth({ config: config.oidc, oidcRoleMapRepo, featureGate, logger: console });
 
   // NIS2 Reporting Center repositories (risk register, control evidence, security
   // incidents, generated reports, evidence references, and the module audit log).
@@ -442,6 +453,9 @@ function start() {
     ldapLoginAuditRepo,
     ldapAuth,
     ldapAuthEnabledFlag: config.ldap.authEnabled,
+    oidcAuth,
+    oidcRoleMapRepo,
+    ssoLoginAuditRepo,
     nis2RisksRepo,
     nis2ControlsRepo,
     nis2IncidentsRepo,

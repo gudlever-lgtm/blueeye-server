@@ -95,6 +95,32 @@ const el = (tag, attrs = {}, ...kids) => {
 };
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
+// Capture a federated (OIDC/SAML) sign-in BEFORE reading the stored session: the
+// /auth/*/callback redirects back with the freshly-minted JWT in the URL FRAGMENT
+// (#sso_token=…&role=…&email=…) — fragments never reach the server, so the token
+// stays out of access logs. We persist it like a local login and scrub the URL.
+let ssoLoginError = '';
+(function captureSso() {
+  try {
+    const hash = window.location.hash || '';
+    if (hash.startsWith('#') && hash.includes('sso_token=')) {
+      const p = new URLSearchParams(hash.slice(1));
+      const t = p.get('sso_token');
+      if (t) {
+        localStorage.setItem(TOKEN_KEY, t);
+        localStorage.setItem(ROLE_KEY, p.get('role') || 'viewer');
+        localStorage.setItem(EMAIL_KEY, p.get('email') || '');
+      }
+      history.replaceState(null, '', window.location.pathname);
+    }
+    const q = new URLSearchParams(window.location.search || '');
+    if (q.get('sso_error')) {
+      ssoLoginError = q.get('sso_error');
+      history.replaceState(null, '', window.location.pathname);
+    }
+  } catch { /* storage / URL API off — fall through to local login */ }
+})();
+
 let token = localStorage.getItem(TOKEN_KEY);
 let role = localStorage.getItem(ROLE_KEY) || 'viewer';
 let email = localStorage.getItem(EMAIL_KEY) || '';
@@ -7550,6 +7576,26 @@ $('#login-form').addEventListener('submit', async (e) => {
   try { await login($('#email').value, $('#password').value); render(); }
   catch (err) { $('#login-error').textContent = err.message; }
 });
+
+// Federated sign-in buttons on the login screen. Asks the server which SSO
+// methods are live (GET /auth/sso) and shows a button per method; each is just a
+// link to the provider-initiated flow. Local login always stays as the fallback.
+async function renderSsoOptions() {
+  const host = $('#sso-options');
+  if (!host) return;
+  if (ssoLoginError) $('#login-error').textContent = `Single sign-on failed: ${ssoLoginError}`;
+  let sso = null;
+  try { sso = await (await fetch('/auth/sso')).json(); } catch { sso = null; }
+  const methods = [];
+  if (sso && sso.oidc && sso.oidc.enabled) methods.push({ label: 'Sign in with SSO (OIDC)', url: sso.oidc.loginUrl });
+  if (sso && sso.saml && sso.saml.enabled) methods.push({ label: 'Sign in with SSO (SAML)', url: sso.saml.loginUrl });
+  if (!methods.length) { host.classList.add('hidden'); return; }
+  host.replaceChildren(
+    el('div', { class: 'sso-divider' }, el('span', {}, 'or')),
+    ...methods.map((m) => el('a', { class: 'sso-button', href: m.url }, m.label)));
+  host.classList.remove('hidden');
+}
+renderSsoOptions();
 $('#logout').addEventListener('click', () => { setAutoRefresh(false); stopOverview(); stopFleet(); stopAgent(); stopProbes(); stopIfaces(); stopMap(); stopGeo(); $('#autorefresh').checked = false; logout(); });
 $('#refresh').addEventListener('click', () => render());
 $('#autorefresh').addEventListener('change', (e) => setAutoRefresh(e.target.checked));

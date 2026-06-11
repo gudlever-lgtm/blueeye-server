@@ -41,7 +41,7 @@ const FEATURE_CATALOG = {
   api_access: { label: 'API access', minPlan: 'professional', status: 'available' },
   sso_ldap: { label: 'LDAP / Active Directory auth', minPlan: 'enterprise', status: 'available' },
   sso_oidc: { label: 'SSO (OIDC)', minPlan: 'enterprise', status: 'available' },
-  sso_saml: { label: 'SSO (SAML)', minPlan: 'enterprise', status: 'roadmap' },
+  sso_saml: { label: 'SSO (SAML)', minPlan: 'enterprise', status: 'available' },
   ha_deployment: { label: 'High-availability deployment', minPlan: 'enterprise', status: 'roadmap' },
   offline_license: { label: 'Offline license validation', minPlan: 'enterprise', status: 'available' },
   msp_multitenant: { label: 'MSP multi-tenancy', minPlan: 'msp', status: 'roadmap' },

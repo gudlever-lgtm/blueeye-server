@@ -79,8 +79,10 @@ const { createLdapRoleMapRepository } = require('./repositories/ldapRoleMapRepos
 const { createLdapLoginAuditRepository } = require('./repositories/ldapLoginAuditRepository');
 const { createLdapAuth } = require('./auth/ldap');
 const { createOidcRoleMapRepository } = require('./repositories/oidcRoleMapRepository');
+const { createSamlRoleMapRepository } = require('./repositories/samlRoleMapRepository');
 const { createSsoLoginAuditRepository } = require('./repositories/ssoLoginAuditRepository');
 const { createOidcAuth } = require('./auth/oidc');
+const { createSamlAuth } = require('./auth/saml');
 const { createNis2RisksRepository } = require('./repositories/nis2RisksRepository');
 const { createNis2ControlsRepository } = require('./repositories/nis2ControlsRepository');
 const { createNis2IncidentsRepository } = require('./repositories/nis2IncidentsRepository');
@@ -235,6 +237,12 @@ function start() {
   const ssoLoginAuditRepo = createSsoLoginAuditRepository(db);
   const oidcRoleMapRepo = createOidcRoleMapRepository(db);
   const oidcAuth = createOidcAuth({ config: config.oidc, oidcRoleMapRepo, featureGate, logger: console });
+
+  // SSO (SAML 2.0, SP-initiated). OFF unless SAML_AUTH_ENABLED=true, the licence
+  // covers it (sso_saml) AND the IdP entry-point/cert/SP entityID are
+  // env-configured. Attribute→role mapping is admin-managed. Local login stays.
+  const samlRoleMapRepo = createSamlRoleMapRepository(db);
+  const samlAuth = createSamlAuth({ config: config.saml, samlRoleMapRepo, featureGate, logger: console });
 
   // NIS2 Reporting Center repositories (risk register, control evidence, security
   // incidents, generated reports, evidence references, and the module audit log).
@@ -455,6 +463,8 @@ function start() {
     ldapAuthEnabledFlag: config.ldap.authEnabled,
     oidcAuth,
     oidcRoleMapRepo,
+    samlAuth,
+    samlRoleMapRepo,
     ssoLoginAuditRepo,
     nis2RisksRepo,
     nis2ControlsRepo,

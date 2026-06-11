@@ -2,6 +2,8 @@
 
 const { config } = require('./config');
 const { createRateLimiter } = require('./middleware/rateLimit');
+const { createRevocationRegistry } = require('./auth/revocation');
+const { setRevocationCheck } = require('./auth/middleware');
 const { createDb } = require('./db');
 const { createApp } = require('./app');
 const { createLocationsRepository } = require('./repositories/locationsRepository');
@@ -105,6 +107,12 @@ function start() {
   const db = createDb(config);
   const locationsRepo = createLocationsRepository(db);
   const usersRepo = createUsersRepository(db);
+  // JWT revocation: load users' revocation cutoffs and refresh periodically, so
+  // requireAuth can reject pre-cutoff tokens synchronously (no per-request DB).
+  const revocationRegistry = createRevocationRegistry({ usersRepo, logger: console });
+  revocationRegistry.load().catch(() => {});
+  revocationRegistry.start();
+  setRevocationCheck(revocationRegistry.isRevoked);
   const agentsRepo = createAgentsRepository(db);
   const auditRepo = createAgentActionAuditRepository(db);
   const auditEventsRepo = createAuditEventsRepository(db);
@@ -543,6 +551,7 @@ function start() {
     retentionScheduler.stop();
     testPackageScheduler.stop();
     baselines.stop();
+    revocationRegistry.stop();
     agentWs.close();
     dashboardWs.close();
     server.close(async () => {

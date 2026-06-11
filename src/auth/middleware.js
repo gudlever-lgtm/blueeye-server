@@ -2,6 +2,14 @@
 
 const { verifyToken } = require('./jwt');
 
+// Optional synchronous revocation check, injected by the server at startup
+// (createRevocationRegistry.isRevoked). Left null in tests and any context that
+// doesn't wire it, so the default behaviour is unchanged.
+let isRevoked = null;
+function setRevocationCheck(fn) {
+  isRevoked = typeof fn === 'function' ? fn : null;
+}
+
 // requireAuth — rejects the request with 401 unless it carries a valid
 // `Authorization: Bearer <jwt>` header. On success it attaches the decoded
 // identity to req.user.
@@ -22,6 +30,11 @@ function requireAuth(req, res, next) {
 
   try {
     const decoded = verifyToken(token);
+    // Reject tokens issued before the user's revocation cutoff (password/role
+    // change, delete, explicit revoke). Synchronous, in-memory — no DB hit.
+    if (isRevoked && isRevoked(Number(decoded.sub), decoded.iat)) {
+      return res.status(401).json({ error: 'Token has been revoked' });
+    }
     req.user = {
       id: Number(decoded.sub),
       email: decoded.email,
@@ -49,4 +62,4 @@ function requireRole(...roles) {
   };
 }
 
-module.exports = { requireAuth, requireRole };
+module.exports = { requireAuth, requireRole, setRevocationCheck };

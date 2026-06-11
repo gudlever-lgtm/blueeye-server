@@ -44,6 +44,9 @@ CREATE TABLE IF NOT EXISTS users (
   role ENUM('admin', 'operator', 'viewer') NOT NULL DEFAULT 'viewer',
   protected TINYINT(1) NOT NULL DEFAULT 0,
   preferences JSON DEFAULT NULL,
+  -- JWTs issued before this instant are rejected (set on password/role change,
+  -- delete, or explicit revoke). NULL = never revoked. See src/auth/revocation.
+  tokens_valid_after DATETIME NULL DEFAULT NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),

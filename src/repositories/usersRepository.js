@@ -83,6 +83,12 @@ function createUsersRepository(db) {
       params.push(patch.passwordHash);
     }
 
+    // A role or password change must invalidate any tokens issued earlier (the
+    // user is being deprovisioned, locked out, or having their access narrowed).
+    if (patch.role !== undefined || patch.passwordHash !== undefined) {
+      fields.push('tokens_valid_after = NOW()');
+    }
+
     if (fields.length > 0) {
       params.push(id);
       await pool.query(`UPDATE users SET ${fields.join(', ')} WHERE id = ?`, params);
@@ -93,6 +99,15 @@ function createUsersRepository(db) {
   async function remove(id) {
     const [result] = await pool.query('DELETE FROM users WHERE id = ?', [id]);
     return result.affectedRows > 0;
+  }
+
+  // Users with a token-revocation cutoff set — loaded by the revocation registry
+  // so requireAuth can reject pre-cutoff tokens without a per-request DB read.
+  async function findRevocations() {
+    const [rows] = await pool.query(
+      'SELECT id, tokens_valid_after FROM users WHERE tokens_valid_after IS NOT NULL'
+    );
+    return rows;
   }
 
   async function countByRole(role) {
@@ -127,6 +142,7 @@ function createUsersRepository(db) {
     create,
     update,
     remove,
+    findRevocations,
     countByRole,
     getPreferences,
     updatePreferences,

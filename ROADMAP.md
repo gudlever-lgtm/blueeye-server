@@ -34,6 +34,7 @@ unlocked by editing local config — the Ed25519 signature would stop matching.
 - [x] **SSO (OIDC)** (`sso_oidc`) — OpenID Connect (authorization-code + PKCE, EU/self-hosted IdP), claim→role mapping; `src/auth/oidc.js` + `src/routes/oidc.js`, gated.
 - [x] **SSO (SAML)** (`sso_saml`) — SAML 2.0 SP-initiated login, hand-rolled signature/assertion verification, attribute→role mapping; `src/auth/saml.js` + `src/routes/saml.js`, gated.
 - [x] **Offline license validation** (`offline_license`) — `src/license/licenseVerifier.js` + `offlineLicenseManager.js`.
+- [x] **High-availability deployment** (`ha_deployment`) — multiple replicas behind a load balancer; one elected leader runs the singleton jobs (retention / test-packages / GeoIP) via a MySQL advisory lock (`src/ha/leaderLock.js` + `src/ha/coordinator.js`), request handling stays stateless; status/admin API `src/routes/ha.js` (`/api/ha/*`), gated; cluster registry `ha_nodes` (migration 040). See docs/ha-deployment.md.
 - [x] **Premium / priority support** (`premium_support`) — `support_level` carried by the plan (not a software module).
 
 ### 🔒 Baseline security (always on — not a pack, not licence-gated)
@@ -54,7 +55,8 @@ of plan or licence. It is intentionally **not** a sold feature key.
 
 ## 🛣️ Roadmap (not built yet — do one at a time)
 
-- [ ] **High-availability deployment** (`ha_deployment`, Enterprise) — active/standby or clustered server, shared state, health/failover docs.
+_Nothing queued — every catalogued feature is shipped. New roadmap items get added
+here (and as `status: 'roadmap'` in `src/license/plans.js`) before work starts._
 
 ## How to mark a roadmap item done
 

@@ -41,6 +41,7 @@ const { createLdapRouter } = require('./ldap');
 const { createOidcAuthRouter, createOidcAdminRouter } = require('./oidc');
 const { createSamlAuthRouter, createSamlAdminRouter } = require('./saml');
 const { createNis2Router } = require('./nis2');
+const { createHaRouter } = require('./ha');
 const {
   createAgentAuthenticator,
   createAgentTokenMiddleware,
@@ -117,6 +118,7 @@ function createApiRouter({
   nis2ReportsRepo,
   nis2EvidenceRepo,
   nis2AuditRepo,
+  haCoordinator,
   enrollConfig = {},
   notifyDashboard,
 }) {
@@ -202,6 +204,8 @@ function createApiRouter({
       featureGate, planService,
     }));
   }
+  // High-availability status + admin (licence-gated `ha_deployment`, Enterprise+).
+  if (haCoordinator) router.use('/api/ha', createHaRouter({ haCoordinator, featureGate, planService }));
   if (testPackagesRepo) router.use('/api/test-packages', createTestPackagesRouter({ repo: testPackagesRepo, runner: testPackageRunner, usageService }));
   if (speedtestResultsRepo) {
     router.use('/speedtest', createSpeedtestRouter({ agentAuth, speedtestResultsRepo }));

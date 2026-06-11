@@ -736,3 +736,19 @@ CREATE TABLE IF NOT EXISTS audit_events (
   KEY idx_audit_action (action),
   KEY idx_audit_last_seen (last_seen_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Cluster registry for high-availability deployments (feature `ha_deployment`).
+-- Each replica upserts a heartbeat row so the status/admin API + dashboard can
+-- show the live cluster topology + which node holds the leader lock. Leader
+-- election itself uses MySQL advisory locks (no table). Operational metadata only.
+CREATE TABLE IF NOT EXISTS ha_nodes (
+  node_id VARCHAR(191) NOT NULL,
+  hostname VARCHAR(255) NULL DEFAULT NULL,
+  pid INT UNSIGNED NULL DEFAULT NULL,
+  version VARCHAR(32) NULL DEFAULT NULL,
+  is_leader TINYINT(1) NOT NULL DEFAULT 0,
+  started_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_seen_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (node_id),
+  KEY idx_ha_nodes_last_seen (last_seen_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

@@ -150,6 +150,27 @@ const config = {
     mode: process.env.LICENSE_MODE || (process.env.LICENSE_FILE ? 'offline' : 'online'),
     recheckHours: toInt(process.env.LICENSE_VALIDATE_INTERVAL_HOURS, 6),
   },
+  // High-availability deployment (licence feature `ha_deployment`, Enterprise+).
+  // OFF by default → a classic single node that runs every singleton job itself.
+  // Set HA_ENABLED=true on each replica behind the load balancer: the nodes then
+  // elect ONE leader via a MySQL advisory lock and only the leader runs the
+  // singleton background work (retention, test-package scheduler, GeoIP refresh).
+  // Request handling stays stateless on every node. See docs/ha-deployment.md.
+  ha: {
+    enabled: /^(1|true|yes|on)$/i.test(String(process.env.HA_ENABLED || '').trim()),
+    // Stable identity for this replica in the cluster registry / logs. Falls back
+    // to hostname:pid when unset (good enough; set it for readable dashboards).
+    nodeId: process.env.HA_NODE_ID || `${require('os').hostname()}:${process.pid}`,
+    // The advisory-lock name every replica contends for. All nodes of ONE cluster
+    // must share it; distinct clusters on the same MySQL must use distinct names.
+    lockName: process.env.HA_LOCK_NAME || 'blueeye_leader',
+    // How often (ms) a node re-confirms / contends for leadership and heartbeats.
+    intervalMs: toInt(process.env.HA_INTERVAL_MS, 10000),
+    // After an admin POST /api/ha/step-down, suspend re-contention for this long
+    // so a follower takes over instead of the drained node grabbing the lock back
+    // on the next tick. Auto-recovers, so a mistaken step-down isn't permanent.
+    stepDownCooldownMs: toInt(process.env.HA_STEPDOWN_COOLDOWN_MS, 60000),
+  },
   // Storage monitoring: the path to statfs for disk usage. Default the server's
   // data dir; point it at the drive holding the DB/Docker volume if different.
   storage: {

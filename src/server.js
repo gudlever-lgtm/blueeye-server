@@ -40,6 +40,7 @@ const { isConfigured } = require('./license/publicKey');
 const { createSystemInfo } = require('./services/systemInfo');
 const { FindingStore } = require('./analysis/findings');
 const { createBaselineStore } = require('./analysis/baselines');
+const { createBaselineFileCache } = require('./analysis/baselineCache');
 const { createDetector } = require('./analysis/detector');
 const { createAnalysisPipeline } = require('./analysis/pipeline');
 const { createProbePipeline } = require('./analysis/probePipeline');
@@ -259,8 +260,13 @@ function start() {
   // assigned just below; the closure runs later, at ingest time).
   const analysisConfig = loadAnalysisConfig();
   const findingStore = new FindingStore({ db });
-  const baselineCache = createFileCache(config.analysis.baselineCachePath);
-  const baselines = createBaselineStore({ store: baselineCache, minSamples: analysisConfig.minSamples });
+  const baselineCache = createBaselineFileCache(config.analysis.baselineCachePath);
+  const baselines = createBaselineStore({
+    store: baselineCache,
+    minSamples: analysisConfig.minSamples,
+    // Persist off the per-sample ingest path: debounce disk writes to ~30s.
+    persistIntervalMs: 30000,
+  });
   const detector = createDetector({ baselines, config: analysisConfig });
   const correlator = createCorrelator(); // uses src/analysis/dependency-graph.json
 
@@ -527,6 +533,7 @@ function start() {
     licenseManager.stop();
     retentionScheduler.stop();
     testPackageScheduler.stop();
+    baselines.stop();
     agentWs.close();
     dashboardWs.close();
     server.close(async () => {

@@ -36,6 +36,17 @@ function attachAgentWebSocket({
   // to 100 MB, which any token holder could use to pressure memory on JSON.parse.
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
 
+  // Liveness UPDATEs are throttled per socket: agents heartbeat every ~15s, so
+  // writing last_seen on every pong/frame is mostly redundant churn on a row the
+  // dashboard reads. One write per minute is enough to drive online/offline.
+  const TOUCH_THROTTLE_MS = 60000;
+  function maybeTouchLastSeen(ws, agentId) {
+    const now = Date.now();
+    if (ws._lastSeenAt && now - ws._lastSeenAt < TOUCH_THROTTLE_MS) return;
+    ws._lastSeenAt = now;
+    agentsRepo.touchLastSeen(agentId).catch(() => {});
+  }
+
   // Correlated server -> agent requests: sendCommandAndWait() stores a waiter
   // keyed by a command id; the agent echoes that id back in an 'ack' frame and
   // we resolve it. Powers the dashboard "Ping" (liveness) and "Update" buttons.
@@ -99,12 +110,12 @@ function attachAgentWebSocket({
 
     ws.on('pong', () => {
       ws.isAlive = true;
-      agentsRepo.touchLastSeen(agent.agentId).catch(() => {});
+      maybeTouchLastSeen(ws, agent.agentId);
     });
 
     ws.on('message', (data) => {
-      // Any inbound frame counts as a sign of life.
-      agentsRepo.touchLastSeen(agent.agentId).catch(() => {});
+      // Any inbound frame counts as a sign of life (throttled to ~1/min).
+      maybeTouchLastSeen(ws, agent.agentId);
       // Resolve a correlated request: the agent echoes the command id in an
       // 'ack' (or 'command-result') frame. Heartbeats and other frames are
       // ignored here. Parsing is defensive — a bad frame must not crash the hub.

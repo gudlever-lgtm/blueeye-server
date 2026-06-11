@@ -128,7 +128,8 @@ CREATE TABLE IF NOT EXISTS results (
   payload JSON NOT NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
-  KEY idx_results_agent_id (agent_id),
+  KEY idx_results_agent_created (agent_id, created_at),
+  KEY idx_results_created (created_at),
   CONSTRAINT fk_results_agent FOREIGN KEY (agent_id)
     REFERENCES agents (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -265,6 +266,7 @@ CREATE TABLE IF NOT EXISTS probe_results (
   PRIMARY KEY (id),
   KEY idx_probe_agent_ts (agent_id, ts),
   KEY idx_probe_agent_type_ts (agent_id, type, ts),
+  KEY idx_probe_agent_type_target_id (agent_id, type, target, id),
   KEY idx_probe_ts (ts),
   CONSTRAINT fk_probe_agent FOREIGN KEY (agent_id)
     REFERENCES agents (id) ON DELETE CASCADE

@@ -8,6 +8,9 @@ const COLUMNS =
   'id, host_id, metric, severity, kind, observed, baseline, deviation, ' +
   'window_from, window_to, explanation, evidence, correlated_with, acked, created_at';
 
+// Hard ceiling on how many findings a single list() call can return.
+const MAX_LIST = 5000;
+
 function parseJson(value, fallback) {
   if (value === null || value === undefined) return fallback;
   if (typeof value === 'string') {
@@ -103,8 +106,10 @@ class FindingStore {
   }
 
   // Lists findings, newest first. Optionally filters by hostId and/or a `since`
-  // lower bound on created_at (Date or ISO string).
-  async list(hostId, since) {
+  // lower bound on created_at (Date or ISO string). `limit` is always bounded so
+  // an unfiltered call can never return the whole table; it defaults to (and is
+  // capped at) MAX_LIST.
+  async list(hostId, since, limit) {
     const where = [];
     const params = [];
     if (hostId) {
@@ -116,8 +121,10 @@ class FindingStore {
       params.push(since instanceof Date ? since : new Date(since));
     }
     const clause = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const n = Number.isInteger(limit) && limit > 0 ? Math.min(limit, MAX_LIST) : MAX_LIST;
+    params.push(n);
     const [rows] = await this.pool.query(
-      `SELECT ${COLUMNS} FROM findings ${clause} ORDER BY created_at DESC, id`,
+      `SELECT ${COLUMNS} FROM findings ${clause} ORDER BY created_at DESC, id LIMIT ?`,
       params
     );
     return rows.map(mapRow);

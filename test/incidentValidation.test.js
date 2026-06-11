@@ -28,6 +28,14 @@ test('validateReportRange returns Date objects for a valid range', () => {
   assert.ok(value.from < value.to);
 });
 
+test('validateReportRange rejects a span longer than 366 days', () => {
+  const over = validateReportRange({ from: '2025-01-01T00:00:00Z', to: '2026-06-01T00:00:00Z' });
+  assert.ok(over.errors && over.errors.range);
+  // Exactly within the cap is accepted.
+  const ok = validateReportRange({ from: '2025-06-01T00:00:00Z', to: '2026-06-01T00:00:00Z' });
+  assert.equal(ok.errors, undefined);
+});
+
 // ---- validateThresholdInput ------------------------------------------------
 
 test('validateThresholdInput requires a valid metric', () => {

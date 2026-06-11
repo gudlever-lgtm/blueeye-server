@@ -468,6 +468,7 @@ function makeFeatureGate(overrides = {}) {
     rbac: true, audit_log: true, api_access: true,
     reports_csv: true, reports_pdf: true, reports_compliance: true,
     alerts_email: true, alerts_webhook: true,
+    ha_deployment: true,
   };
   return {
     isFeatureEnabled: overrides.isFeatureEnabled || ((f) => enabled[f] === true),
@@ -894,6 +895,39 @@ function makeNis2AuditRepo(overrides = {}) {
 // ---- App + auth helpers ---------------------------------------------------
 
 // Builds an app wired with fakes; pass overrides to swap any dependency.
+// A fake HA coordinator. Defaults to a standalone (HA-off) node that is its own
+// leader — the classic single-node posture. Override any method per test.
+function makeHaCoordinator(overrides = {}) {
+  const status = {
+    enabled: false,
+    nodeId: 'test-node',
+    hostname: 'test-host',
+    pid: 1234,
+    version: '0.0.0-test',
+    role: 'leader',
+    isLeader: true,
+    leaderSince: '2026-01-01T00:00:00.000Z',
+    jobsRunning: true,
+    lockName: null,
+    ...(overrides.status || {}),
+  };
+  return {
+    start: overrides.start || (async () => {}),
+    stop: overrides.stop || (async () => {}),
+    tickOnce: overrides.tickOnce || (async () => {}),
+    isLeader: overrides.isLeader || (() => status.isLeader),
+    getStatus: overrides.getStatus || (() => ({ ...status })),
+    listNodes:
+      overrides.listNodes ||
+      (async () => [{
+        node_id: status.nodeId, hostname: status.hostname, pid: status.pid,
+        version: status.version, is_leader: status.isLeader, active: true,
+        last_seen_at: '2026-01-01T00:00:00.000Z',
+      }]),
+    stepDown: overrides.stepDown || (async () => (status.enabled ? { ok: true } : { ok: false, reason: 'ha_disabled' })),
+  };
+}
+
 function makeApp(overrides = {}) {
   // Resolve the deps the plan/usage services build on, so the (real) services
   // can wrap them. Default plan resolution lands on the internal 'licensed'
@@ -970,6 +1004,7 @@ function makeApp(overrides = {}) {
     nis2ReportsRepo: overrides.nis2ReportsRepo || makeNis2ReportsRepo(),
     nis2EvidenceRepo: overrides.nis2EvidenceRepo || makeNis2EvidenceRepo(),
     nis2AuditRepo: overrides.nis2AuditRepo || makeNis2AuditRepo(),
+    haCoordinator: overrides.haCoordinator || makeHaCoordinator(),
     enrollConfig: overrides.enrollConfig || { publicUrl: '', certFingerprint: '' },
     notifyDashboard: overrides.notifyDashboard || (() => 0),
   });
@@ -1064,6 +1099,7 @@ module.exports = {
   makeNis2ReportsRepo,
   makeNis2EvidenceRepo,
   makeNis2AuditRepo,
+  makeHaCoordinator,
   makeDb,
   makeApp,
   tokenFor,

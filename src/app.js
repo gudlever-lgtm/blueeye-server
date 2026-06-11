@@ -74,6 +74,7 @@ function createApp({
   nis2ReportsRepo,
   nis2EvidenceRepo,
   nis2AuditRepo,
+  haCoordinator,
   enrollConfig,
   notifyDashboard,
   logger = silentLogger,
@@ -162,6 +163,7 @@ function createApp({
       nis2ReportsRepo,
       nis2EvidenceRepo,
       nis2AuditRepo,
+      haCoordinator,
       enrollConfig,
       notifyDashboard,
     })

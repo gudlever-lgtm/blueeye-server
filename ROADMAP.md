@@ -31,6 +31,7 @@ unlocked by editing local config — the Ed25519 signature would stop matching.
 - [x] **API access** (`api_access`) — programmatic API tokens (`src/routes/apiTokens.js`, `api_tokens` table), gated.
 - [x] **LDAP / Active Directory auth** (`sso_ldap`) — `src/auth/ldap.js` + `src/routes/ldap.js`, gated.
 - [x] **Offline license validation** (`offline_license`) — `src/license/licenseVerifier.js` + `offlineLicenseManager.js`.
+- [x] **High-availability deployment** (`ha_deployment`) — multiple replicas behind a load balancer; one elected leader runs the singleton jobs (retention / test-packages / GeoIP) via a MySQL advisory lock (`src/ha/leaderLock.js` + `src/ha/coordinator.js`), request handling stays stateless; status/admin API `src/routes/ha.js` (`/api/ha/*`), gated; cluster registry `ha_nodes` (migration 037). See docs/ha-deployment.md.
 - [x] **Premium / priority support** (`premium_support`) — `support_level` carried by the plan (not a software module).
 
 ## 🛣️ Roadmap (not built yet — do one at a time)
@@ -38,7 +39,6 @@ unlocked by editing local config — the Ed25519 signature would stop matching.
 - [ ] **Advanced dashboard** (`dashboard_advanced`, Professional) — richer drill-downs / custom widgets beyond the basic dashboard.
 - [ ] **SSO (OIDC)** (`sso_oidc`, Enterprise) — OpenID Connect login (EU/self-hosted IdP), group→role mapping.
 - [ ] **SSO (SAML)** (`sso_saml`, Enterprise) — SAML 2.0 SP login, group→role mapping.
-- [ ] **High-availability deployment** (`ha_deployment`, Enterprise) — active/standby or clustered server, shared state, health/failover docs.
 - [ ] **MSP multi-tenancy** (`msp_multitenant`, MSP) — `tenant_id` on agents/test-paths/reports/users + tenant-scoped UI/API.
 - [ ] **Security pack** (`security_pack`, Enterprise) — scope TBD (e.g. hardening checks, expanded threat findings, signed audit export).
 

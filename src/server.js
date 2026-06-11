@@ -88,10 +88,14 @@ const { createNis2AuditRepository } = require('./repositories/nis2AuditRepositor
 // Wires up real dependencies, starts the HTTP server and installs graceful
 // shutdown handlers.
 function start() {
-  // Never run in production with the built-in development JWT secret.
-  if (config.env === 'production' && config.auth.usingDefaultSecret) {
+  // Never run in production with a weak JWT secret: the built-in development
+  // default, a known docker-compose example fallback, or anything too short.
+  // SECRET_ENCRYPTION_KEY falls back to JWT_SECRET, so this also guards secrets
+  // at rest.
+  if (config.env === 'production' && config.auth.weakSecret) {
     console.error(
-      'Refusing to start: JWT_SECRET must be set to a strong value in production.'
+      'Refusing to start: JWT_SECRET must be a strong, unique value in production ' +
+        '(not a known default, at least 32 characters).'
     );
     process.exit(1);
   }

@@ -20,7 +20,8 @@ function attachDashboardWebSocket({
   if (typeof verifyToken !== 'function') {
     throw new Error('attachDashboardWebSocket requires a verifyToken(token) function');
   }
-  const wss = new WebSocketServer({ noServer: true });
+  // Cap inbound frames at 1 MB (aligns with the Express body limit); ws defaults to 100 MB.
+  const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
 
   server.on('upgrade', (req, socket, head) => {
     // Cooperative: only claim our path, ignore others (see agentSocket).

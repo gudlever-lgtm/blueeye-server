@@ -32,7 +32,9 @@ function attachAgentWebSocket({
   notifyDashboard = null,
 }) {
   const authenticator = createAgentAuthenticator({ agentTokensRepo });
-  const wss = new WebSocketServer({ noServer: true });
+  // Cap inbound frames at 1 MB (aligns with the Express body limit). ws defaults
+  // to 100 MB, which any token holder could use to pressure memory on JSON.parse.
+  const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
 
   // Correlated server -> agent requests: sendCommandAndWait() stores a waiter
   // keyed by a command id; the agent echoes that id back in an 'ack' frame and

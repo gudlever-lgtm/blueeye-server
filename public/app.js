@@ -717,6 +717,7 @@ const PAGE_INFO = {
         el('li', {}, 'valid: fresh and valid.'),
         el('li', {}, 'grace: cannot reach the licence server, but cached proof < 14 days old.'),
         el('li', {}, 'unlicensed: no valid licence — new agent connections are rejected.')),
+      el('p', { class: 'muted' }, 'The Legal section states the governing law and venue: the licence is governed by Danish law, and disputes are settled by the Danish Maritime and Commercial High Court (Sø- og Handelsretten) in Copenhagen.'),
     ],
   },
   settings: {
@@ -6646,6 +6647,10 @@ views.license = async () => {
   }
 
   root.append(el('p', { class: 'muted' }, 'License renewal is done with the provider. Once renewed, press "Re-validate now" to fetch the updated status immediately (otherwise it is checked automatically every 6 hours).'));
+
+  // ---- Legal (governing law + venue) --------------------------------------
+  root.append(el('h3', {}, 'Legal'));
+  root.append(el('p', { class: 'muted' }, 'This licence is governed by Danish law. Any dispute arising out of or in connection with the licence shall be settled by the Danish Maritime and Commercial High Court (Sø- og Handelsretten) in Copenhagen.'));
   return root;
 };
 

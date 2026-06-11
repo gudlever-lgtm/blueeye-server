@@ -25,6 +25,9 @@
         <label>Password <input type="password" id="password" required /></label>
         <button type="submit">Log in</button>
         <p id="login-error" class="error"></p>
+        <!-- Federated sign-in (OIDC/SAML). Populated by app.js from GET /auth/sso
+             only when a method is licensed + configured; hidden otherwise. -->
+        <div id="sso-options" class="sso-options hidden"></div>
       </form>
     </main>
 

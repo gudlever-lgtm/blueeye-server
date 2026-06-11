@@ -464,7 +464,7 @@ function makeFeatureGate(overrides = {}) {
   // explicit `features` map (or `isFeatureEnabled`).
   const enabled = overrides.features || {
     analysis: true, assistant: true, alerting: true, geo: true,
-    sso_ldap: true,
+    sso_ldap: true, sso_oidc: true, sso_saml: true,
     dashboard_advanced: true,
     rbac: true, audit_log: true, api_access: true,
     reports_csv: true, reports_pdf: true, reports_compliance: true,
@@ -751,6 +751,65 @@ function makeLdapAuth(overrides = {}) {
   };
 }
 
+// ---- SSO (OIDC / SAML) ----------------------------------------------------
+
+// A fake claim/attribute → role map repository (stateful, in-memory). Backs both
+// the OIDC (claim_value) and SAML role-map routes — same shape, same surface.
+function makeSsoRoleMapRepo(overrides = {}) {
+  const rows = [];
+  let seq = 0;
+  return {
+    rows,
+    findAll: overrides.findAll || (async () => rows.slice()),
+    findById: overrides.findById || (async (id) => rows.find((r) => r.id === id) || null),
+    findByClaim: overrides.findByClaim || (async (v) => rows.find((r) => r.claim_value === v) || null),
+    create: overrides.create || (async ({ claimValue, role }) => { const r = { id: (seq += 1), claim_value: claimValue, blueeye_role: role, created_at: '2026-01-01T00:00:00.000Z' }; rows.push(r); return r; }),
+    update: overrides.update || (async (id, { claimValue, role }) => { const r = rows.find((x) => x.id === id); if (!r) return null; if (claimValue !== undefined) r.claim_value = claimValue; if (role !== undefined) r.blueeye_role = role; return r; }),
+    remove: overrides.remove || (async (id) => { const i = rows.findIndex((r) => r.id === id); if (i < 0) return false; rows.splice(i, 1); return true; }),
+  };
+}
+const makeOidcRoleMapRepo = makeSsoRoleMapRepo;
+
+// A fake shared SSO login-audit repository (in-memory).
+function makeSsoLoginAuditRepo(overrides = {}) {
+  const rows = [];
+  let seq = 0;
+  return {
+    rows,
+    record: overrides.record || (async (r) => { const id = (seq += 1); rows.push({ id, created_at: new Date().toISOString(), ...r }); return id; }),
+    findAll: overrides.findAll || (async ({ provider = null } = {}) => rows.filter((r) => !provider || r.provider === provider).slice().reverse()),
+  };
+}
+
+// A fake OIDC auth service. DISABLED by default so existing local-login tests are
+// unaffected; opt in via overrides (isEnabled/handleCallback/status).
+function makeOidcAuth(overrides = {}) {
+  return {
+    isEnabled: overrides.isEnabled || (() => false),
+    isConfigured: overrides.isConfigured || (() => false),
+    licensed: overrides.licensed || (() => true),
+    createLoginRequest: overrides.createLoginRequest || (async () => ({ url: 'https://idp.example/authorize?x=1', state: 's', nonce: 'n', codeVerifier: 'v' })),
+    handleCallback: overrides.handleCallback || (async () => ({ ok: false, reason: 'disabled' })),
+    resolveRole: overrides.resolveRole || (async () => ({ role: null, matched: 0 })),
+    testDiscovery: overrides.testDiscovery || (async () => ({ ok: true, detail: 'discovered' })),
+    status: overrides.status || (() => ({ authEnabledFlag: false, licensed: true, configured: false, enabled: false, issuer: '', clientId: '', redirectUri: '', scopes: 'openid email profile', roleClaim: 'groups', clientSecretSet: false })),
+  };
+}
+
+// A fake SAML auth service. DISABLED by default; opt in via overrides.
+function makeSamlAuth(overrides = {}) {
+  return {
+    isEnabled: overrides.isEnabled || (() => false),
+    isConfigured: overrides.isConfigured || (() => false),
+    licensed: overrides.licensed || (() => true),
+    createLoginRequest: overrides.createLoginRequest || (async () => ({ url: 'https://idp.example/sso?SAMLRequest=x', requestId: 'r' })),
+    handleResponse: overrides.handleResponse || (async () => ({ ok: false, reason: 'disabled' })),
+    resolveRole: overrides.resolveRole || (async () => ({ role: null, matched: 0 })),
+    metadata: overrides.metadata || (() => '<EntityDescriptor/>'),
+    status: overrides.status || (() => ({ authEnabledFlag: false, licensed: true, configured: false, enabled: false, entryPoint: '', spEntityId: '', audience: '', idpEntityId: '', callbackUrl: '', roleAttribute: 'groups', idpCertSet: false })),
+  };
+}
+
 // ---- NIS2 Reporting Center ------------------------------------------------
 
 const { riskBand } = require('../src/nis2/constants');
@@ -999,6 +1058,11 @@ function makeApp(overrides = {}) {
     ldapLoginAuditRepo: overrides.ldapLoginAuditRepo || makeLdapLoginAuditRepo(),
     ldapAuth: overrides.ldapAuth || makeLdapAuth(),
     ldapAuthEnabledFlag: overrides.ldapAuthEnabledFlag || false,
+    oidcAuth: overrides.oidcAuth || makeOidcAuth(),
+    oidcRoleMapRepo: overrides.oidcRoleMapRepo || makeOidcRoleMapRepo(),
+    samlAuth: overrides.samlAuth || makeSamlAuth(),
+    samlRoleMapRepo: overrides.samlRoleMapRepo || makeSsoRoleMapRepo(),
+    ssoLoginAuditRepo: overrides.ssoLoginAuditRepo || makeSsoLoginAuditRepo(),
     nis2RisksRepo: overrides.nis2RisksRepo || makeNis2RisksRepo(),
     nis2ControlsRepo: overrides.nis2ControlsRepo || makeNis2ControlsRepo(),
     nis2IncidentsRepo: overrides.nis2IncidentsRepo || makeNis2IncidentsRepo(),
@@ -1094,6 +1158,11 @@ module.exports = {
   makeLdapRoleMapRepo,
   makeLdapLoginAuditRepo,
   makeLdapAuth,
+  makeSsoRoleMapRepo,
+  makeOidcRoleMapRepo,
+  makeSsoLoginAuditRepo,
+  makeOidcAuth,
+  makeSamlAuth,
   makeNis2RisksRepo,
   makeNis2ControlsRepo,
   makeNis2IncidentsRepo,

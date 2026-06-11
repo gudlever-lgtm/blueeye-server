@@ -35,7 +35,9 @@ src/
 ├── repositories/      # data access (one per table-ish); pool in, plain objects out
 ├── auth/              # user JWT (roles) + separate agent-token auth
 │   ├── jwt.js password.js roles.js middleware.js   # user side (requireAuth/requireRole)
+│   ├── provision.js                                 # shared JIT user provisioning for external auth (LDAP/OIDC/SAML)
 │   ├── ldap.js                                      # external LDAP/AD auth (supplements local login)
+│   ├── oidc.js saml.js samlXml.js                   # SSO: OIDC (auth-code+PKCE) + SAML 2.0 (SP-initiated, hand-rolled XML-DSig), EU/self-hosted IdPs
 │   ├── apiTokenAuth.js                              # API tokens (api_access): authenticates X-API-Key / Bearer → req.user
 │   └── tokens.js agentAuth.js                       # agent opaque-token side
 ├── integrations/      # outbound API integrations (ITSM/IPAM connectors)
@@ -82,7 +84,9 @@ Mounted in `src/routes/index.js`. User endpoints use JWT + roles
 | Mount | File | Auth | Purpose |
 | --- | --- | --- | --- |
 | `/health` | health.js | none | liveness + db ping |
-| `/auth` | auth.js | none | login → JWT (tries **LDAP/AD** first when enabled, else local) |
+| `/auth` | auth.js | none | login → JWT (tries **LDAP/AD** first when enabled, else local); `/sso` lists live SSO methods for the login screen |
+| `/auth/oidc` | oidc.js | none | **SSO (OIDC)** browser flow: `/login` (302 → IdP, PKCE) + `/callback` (verify id-token → JIT user → JWT). Gated by `sso_oidc` |
+| `/auth/saml` | saml.js | none | **SSO (SAML)** SP-initiated flow: `/login` (302 → IdP) + `/callback` (ACS: verify signed assertion → JIT user → JWT) + `/metadata`. Gated by `sso_saml` |
 | `/users` | users.js | admin | user CRUD (last-admin protected) |
 | `/me` | me.js | viewer+ | current user: profile + **personal UI preferences** (colour theme) |
 | `/locations` | locations.js | viewer+/op/admin | sites + per-location live traffic |
@@ -111,6 +115,8 @@ Mounted in `src/routes/index.js`. User endpoints use JWT + roles
 | `/api/search` | search.js | viewer+ | **global search** (agents/hosts/locations + IP/port → agents) |
 | `/api/integrations` | integrations.js | admin | **outbound API integrations** (ITSM/IPAM connectors): CRUD + manual test-fire; credentials encrypted at rest |
 | `/api/ldap` | ldap.js | admin | **LDAP/AD auth** config + group→role map + connectivity test + login audit (`/login-audit`); writes licence-gated (`sso_ldap`, Enterprise) |
+| `/api/oidc` | oidc.js | admin | **SSO (OIDC)** status + claim→role map + discovery test + login audit; writes licence-gated (`sso_oidc`, Enterprise). Connection from env vars |
+| `/api/saml` | saml.js | admin | **SSO (SAML)** status + attribute→role map + login audit; writes licence-gated (`sso_saml`, Enterprise). Connection from env vars |
 | `/api/audit` | auditEvents.js | admin | **Reporting → Audit** — unified server-wide audit trail (user actions + agent activity); `/` (filterable list), `/actions` (distinct), `/export.csv`. Writes come from the audit middleware + agent ingest, not HTTP |
 | `/api/nis2` | nis2.js | viewer+ read / operator+ write / admin approve | **Reporting** (UI tab) — **NIS2** module: `/dashboard` (readiness score + category status + top actions), `/risks` `/controls` `/incidents` `/evidence` (CRUD), `/reports` (+ `/:id/approve`), `/audit` (admin), `/seed` (starter controls), `/export/*.csv` + `/export/*.html` (print→PDF); **Report Generator**: `/custom-reports/sources` + `/custom-reports/{preview,export}` (selector-driven custom reports, HTML/CSV/JSON) |
 
@@ -209,6 +215,8 @@ A single vanilla-JS SPA. Key building blocks:
 | Offline (no-server) licensing | `src/license/licenseVerifier.js` (verifies a local signed file, Ed25519) + `offlineLicenseManager.js` (same surface as the online manager; restricted mode when invalid/expired). Selected by `LICENSE_MODE=offline`/`LICENSE_FILE` in `src/server.js`. Issue files with `scripts/sign-offline-license.js`. |
 | Outbound integrations (ITSM/IPAM) | connectors in `src/integrations/connectors/*` (+ `index.js` registry); trigger/debounce/retry/audit in `src/integrations/dispatcher.js`; HTTP in `src/routes/integrations.js`; validation in `src/validation/integrationValidation.js`; tables `integrations`/`integration_audit` (migrations 026/027). Events wired in `analysis/pipeline.js` + `probePipeline.js` (findings) and the enroll/agent-delete routes. See docs/integrations.md |
 | LDAP/AD authentication | `src/auth/ldap.js` (bind + group→role; **licence-gated** via injected `featureGate` → `sso_ldap`); login flow in `src/routes/auth.js`; config CRUD + login-audit in `src/routes/ldap.js`; validation in `src/validation/ldapValidation.js`; tables `ldap_config`/`ldap_role_map`/`ldap_login_audit` (migrations 028/029); gates: env `LDAP_AUTH_ENABLED` **+** licence `sso_ldap` (Enterprise, `src/license/plans.js`). **Dashboard UI = `settingsAuthView` (Settings → Authentication)** in `public/app.js`. See docs/ldap-auth.md |
+| SSO (OIDC) | `src/auth/oidc.js` (discovery + PKCE + id-token verify via JWK→KeyObject + `jsonwebtoken`; claim→role; **licence-gated** `sso_oidc`); browser flow `/auth/oidc/login`+`/callback` and admin role-map in `src/routes/oidc.js`; shared JIT provisioning `src/auth/provision.js`; validation `src/validation/oidcValidation.js`; tables `oidc_role_map`/`sso_login_audit` (migration 038); env vars `OIDC_*` (issuer/client id/secret/redirect). **Login-screen buttons** from `GET /auth/sso` in `public/app.js`. See docs/sso-oidc.md |
+| SSO (SAML) | `src/auth/saml.js` (SP-initiated; assertion verify via hand-rolled exc-c14n + XML-DSig in `src/auth/samlXml.js` — no XML lib; signature+digest+issuer+conditions+audience+expiry; attribute→role; **licence-gated** `sso_saml`); SP flow `/auth/saml/login`+`/callback`(ACS)+`/metadata` and admin role-map in `src/routes/saml.js`; validation `src/validation/samlValidation.js`; table `saml_role_map` (migration 039) + shared `sso_login_audit`; env vars `SAML_*`. Test signer: `test-support/samlTestkit.js`. See docs/sso-saml.md |
 | Encrypting a secret at rest | `src/lib/secretBox.js` (AES-256-GCM, keyed by `SECRET_ENCRYPTION_KEY`→`JWT_SECRET`); store the token in a `*_encrypted` column, decrypt only at use |
 | Audit trail (Reporting → Audit) | unified server-wide audit, **admin only**: middleware `src/middleware/auditLogger.js` (records user actions in `res.on('finish')`, mounted in `src/app.js`) + pure helpers `src/audit/actions.js` (`describeRequest`/`redactBody`); agent activity recorded on ingest in `src/routes/agentReports.js`; repository `src/repositories/auditEventsRepository.js` (`record` discrete / `recordRecurring` repeat-suppressed via UNIQUE `dedup_key`); read router `src/routes/auditEvents.js` (`/api/audit`); table `audit_events` (migration 035); UI `auditModule()` in `public/app.js` (Reporting → Audit). See docs/audit.md |
 | Reporting (NIS2 + Report Generator) | `src/routes/nis2.js` (mounted in `routes/index.js`); pure scoring in `src/nis2/dashboard.js` (`computeDashboard`/`recommendedActions`), report build + print-ready HTML in `src/nis2/report.js`, the selector-driven custom-report engine in `src/nis2/reportBuilder.js` (`SOURCES`/`sourcesFor`/`buildCustomReport`/`customReportToCsv`), shared enums in `src/nis2/constants.js`; repositories `src/repositories/nis2{Risks,Controls,Incidents,Reports,Evidence,Audit}Repository.js`; validation `src/validation/nis2Validation.js`; tables in migration 031; UI `views.reporting` (sub-sections **NIS2** `nis2Module()` + **Report Generator** `reportGenerator()`), get-started guide `nis2GetStarted()`, + `PAGE_INFO.reporting` in `public/app.js`. See docs/nis2.md |

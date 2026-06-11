@@ -17,22 +17,19 @@ test('GET /license/matrix marks each feature available|roadmap', async () => {
   const res = await request(makeApp()).get('/license/matrix').set('Authorization', authHeader('viewer'));
   assert.equal(res.status, 200);
   const byKey = Object.fromEntries(res.body.features.map((f) => [f.key, f.status]));
-  assert.equal(byKey.sso_oidc, 'roadmap');
-  assert.equal(byKey.sso_saml, 'roadmap');
-  // The finished ones are available.
+  // Everything in the catalogue is now shipped — SSO (OIDC/SAML) and HA landed.
   assert.equal(byKey.dashboard_advanced, 'available');
   assert.equal(byKey.audit_log, 'available');
   assert.equal(byKey.api_access, 'available');
   assert.equal(byKey.reports_compliance, 'available');
   assert.equal(byKey.sso_ldap, 'available');
+  assert.equal(byKey.sso_oidc, 'available');
+  assert.equal(byKey.sso_saml, 'available');
   assert.equal(byKey.ha_deployment, 'available');
 });
 
-test('catalogue exposes exactly the two roadmap keys', () => {
-  assert.deepEqual(
-    [...ROADMAP_FEATURE_KEYS].sort(),
-    ['sso_oidc', 'sso_saml'].sort()
-  );
+test('catalogue has no remaining roadmap keys (all shipped)', () => {
+  assert.deepEqual([...ROADMAP_FEATURE_KEYS].sort(), []);
   // Every catalogue entry has a known status.
   for (const meta of Object.values(FEATURE_CATALOG)) {
     assert.ok(meta.status === 'available' || meta.status === 'roadmap');

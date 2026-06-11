@@ -38,6 +38,8 @@ const { createTestPackagesRouter } = require('./testPackages');
 const { createSpeedtestRouter, createSpeedtestReadRouter } = require('./speedtest');
 const { createIntegrationsRouter } = require('./integrations');
 const { createLdapRouter } = require('./ldap');
+const { createOidcAuthRouter, createOidcAdminRouter } = require('./oidc');
+const { createSamlAuthRouter, createSamlAdminRouter } = require('./saml');
 const { createNis2Router } = require('./nis2');
 const { createHaRouter } = require('./ha');
 const {
@@ -105,6 +107,11 @@ function createApiRouter({
   ldapLoginAuditRepo,
   ldapAuth,
   ldapAuthEnabledFlag = false,
+  oidcAuth,
+  oidcRoleMapRepo,
+  samlAuth,
+  samlRoleMapRepo,
+  ssoLoginAuditRepo,
   nis2RisksRepo,
   nis2ControlsRepo,
   nis2IncidentsRepo,
@@ -136,7 +143,21 @@ function createApiRouter({
   if (apiTokensRepo) router.use(createApiTokenMiddleware({ apiTokensRepo }));
 
   router.use('/health', createHealthRouter({ db }));
-  router.use('/auth', createAuthRouter({ usersRepo, ldapAuth, ldapLoginAuditRepo, auditLogger }));
+  router.use('/auth', createAuthRouter({ usersRepo, ldapAuth, ldapLoginAuditRepo, auditLogger, oidcAuth, samlAuth }));
+  // SSO (OIDC) — public browser flow (login/callback) + admin config/role-map.
+  // Licence-gated (sso_oidc) on the admin writes; the login flow itself is gated
+  // by oidcAuth.isEnabled() (env flag + licence + configured). Local login stays.
+  if (oidcAuth && oidcRoleMapRepo) {
+    router.use('/auth/oidc', createOidcAuthRouter({ usersRepo, oidcAuth, ssoLoginAuditRepo, auditLogger }));
+    router.use('/api/oidc', createOidcAdminRouter({ oidcAuth, oidcRoleMapRepo, ssoLoginAuditRepo, featureGate }));
+  }
+  // SSO (SAML 2.0) — public SP-initiated flow (login/ACS/metadata) + admin
+  // attribute→role map. Licence-gated (sso_saml) on the admin writes; the login
+  // flow is gated by samlAuth.isEnabled(). Local login stays as the fallback.
+  if (samlAuth && samlRoleMapRepo) {
+    router.use('/auth/saml', createSamlAuthRouter({ usersRepo, samlAuth, ssoLoginAuditRepo, auditLogger }));
+    router.use('/api/saml', createSamlAdminRouter({ samlAuth, samlRoleMapRepo, ssoLoginAuditRepo, featureGate }));
+  }
   router.use('/users', createUsersRouter({ usersRepo, featureGate, planService, auditLogger }));
   router.use('/me', createMeRouter({ usersRepo }));
   router.use('/locations', createLocationsRouter({ locationsRepo, resultsRepo }));

@@ -6648,9 +6648,12 @@ views.license = async () => {
 
   root.append(el('p', { class: 'muted' }, 'License renewal is done with the provider. Once renewed, press "Re-validate now" to fetch the updated status immediately (otherwise it is checked automatically every 6 hours).'));
 
-  // ---- Legal (governing law + venue) --------------------------------------
+  // ---- Legal (copyright + terms + governing law + venue) ------------------
   root.append(el('h3', {}, 'Legal'));
-  root.append(el('p', { class: 'muted' }, 'This licence is governed by Danish law. Any dispute arising out of or in connection with the licence shall be settled by the Danish Maritime and Commercial High Court (Sø- og Handelsretten) in Copenhagen.'));
+  root.append(el('p', { class: 'muted' }, '© 2026 gnf.dk v/Lars Knudsen. All rights reserved. This is proprietary software; redistribution and use in source or binary form, with or without modification, are not permitted except as expressly allowed in the licence agreement.'));
+  root.append(el('p', { class: 'muted' }, 'The software validates its licence against BlueEye’s central licence server. Apart from this licence validation, no usage data, traffic metadata or other data is transmitted off-premises.'));
+  root.append(el('p', { class: 'muted' }, 'The software is provided “as is”, without warranty of any kind; the copyright holder and contributors are not liable for any damages arising from its use, to the extent permitted by law.'));
+  root.append(el('p', { class: 'muted' }, 'This licence is governed by Danish law. Any dispute or claim arising from the use of the software or from these terms shall be settled exclusively by the Danish Maritime and Commercial High Court (Sø- og Handelsretten) in Copenhagen. The language of proceedings shall be Danish.'));
   return root;
 };
 

@@ -1,0 +1,34 @@
+Copyright (c) 2026 -, gnf.dk v/Lars Knudsen
+All rights reserved.
+
+This is proprietary software. Redistribution and use in source and binary
+forms, with or without modification, are NOT permitted except as expressly
+allowed below.
+
+You may install and run the software, and keep copies for backup and for use
+as nodes in a single licensed cluster, provided that:
+  * the above copyright notice, this list of conditions and the following
+    disclaimer are retained in all copies; and
+  * the name of the author and contributors may not be used to endorse or
+    promote derived products without specific prior written permission.
+
+The software validates its licence against BlueEye's central licence server.
+Apart from this licence validation, no usage data, traffic metadata or other
+data is transmitted off-premises.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+POSSIBILITY OF SUCH DAMAGE.
+
+Any dispute or claim arising from the use of this software or from these terms
+shall be governed by Danish law and shall be settled exclusively by the Danish
+Maritime and Commercial High Court (Sø- og Handelsretten) in Copenhagen,
+Denmark. The language of proceedings shall be Danish.

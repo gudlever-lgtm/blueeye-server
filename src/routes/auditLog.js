@@ -45,6 +45,21 @@ function createAuditLogRouter({ auditLogRepo, featureGate, planService }) {
     })
   );
 
+  // GET /api/audit-log/verify — tamper-evidence check. Walks the per-row hash
+  // chain and reports the first broken row (id), or that the trail is intact.
+  router.get(
+    '/verify',
+    requireAuth,
+    requireRole(ROLES.ADMIN),
+    gate,
+    asyncHandler(async (req, res) => {
+      if (!auditLogRepo || typeof auditLogRepo.verifyChain !== 'function') {
+        return res.status(503).json({ error: 'Audit log not available' });
+      }
+      res.json(await auditLogRepo.verifyChain({ limit: req.query.limit }));
+    })
+  );
+
   return router;
 }
 

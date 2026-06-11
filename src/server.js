@@ -82,12 +82,21 @@ const { createLdapConfigRepository } = require('./repositories/ldapConfigReposit
 const { createLdapRoleMapRepository } = require('./repositories/ldapRoleMapRepository');
 const { createLdapLoginAuditRepository } = require('./repositories/ldapLoginAuditRepository');
 const { createLdapAuth } = require('./auth/ldap');
+const { createOidcRoleMapRepository } = require('./repositories/oidcRoleMapRepository');
+const { createSamlRoleMapRepository } = require('./repositories/samlRoleMapRepository');
+const { createSsoLoginAuditRepository } = require('./repositories/ssoLoginAuditRepository');
+const { createOidcAuth } = require('./auth/oidc');
+const { createSamlAuth } = require('./auth/saml');
 const { createNis2RisksRepository } = require('./repositories/nis2RisksRepository');
 const { createNis2ControlsRepository } = require('./repositories/nis2ControlsRepository');
 const { createNis2IncidentsRepository } = require('./repositories/nis2IncidentsRepository');
 const { createNis2ReportsRepository } = require('./repositories/nis2ReportsRepository');
 const { createNis2EvidenceRepository } = require('./repositories/nis2EvidenceRepository');
 const { createNis2AuditRepository } = require('./repositories/nis2AuditRepository');
+const { createHaNodesRepository } = require('./repositories/haNodesRepository');
+const { createLeaderLock } = require('./ha/leaderLock');
+const { createHaCoordinator } = require('./ha/coordinator');
+const { version: appVersion } = require('../package.json');
 
 // Wires up real dependencies, starts the HTTP server and installs graceful
 // shutdown handlers.
@@ -180,7 +189,7 @@ function start() {
   }
 
   // Plan service: resolves the active package (Pilot/Starter/Professional/
-  // Enterprise/MSP) from the signed proof's plan field (or LICENSE_PLAN), and
+  // Enterprise) from the signed proof's plan field (or LICENSE_PLAN), and
   // exposes its limits + packaged feature flags. Additive to the license manager.
   const planService = createPlanService({ licenseManager, configPlan: config.license.plan });
 
@@ -238,6 +247,20 @@ function start() {
   const ldapRoleMapRepo = createLdapRoleMapRepository(db);
   const ldapLoginAuditRepo = createLdapLoginAuditRepository(db);
   const ldapAuth = createLdapAuth({ config: config.ldap, ldapConfigRepo, ldapRoleMapRepo, secretBox, featureGate, logger: console });
+
+  // SSO (OIDC). OFF unless OIDC_AUTH_ENABLED=true, the licence covers it
+  // (sso_oidc) AND the issuer/client/redirect are env-configured. The group→role
+  // map is admin-managed; the (shared) SSO login audit records every attempt.
+  // Local JWT login always remains as the fallback.
+  const ssoLoginAuditRepo = createSsoLoginAuditRepository(db);
+  const oidcRoleMapRepo = createOidcRoleMapRepository(db);
+  const oidcAuth = createOidcAuth({ config: config.oidc, oidcRoleMapRepo, featureGate, logger: console });
+
+  // SSO (SAML 2.0, SP-initiated). OFF unless SAML_AUTH_ENABLED=true, the licence
+  // covers it (sso_saml) AND the IdP entry-point/cert/SP entityID are
+  // env-configured. Attribute→role mapping is admin-managed. Local login stays.
+  const samlRoleMapRepo = createSamlRoleMapRepository(db);
+  const samlAuth = createSamlAuth({ config: config.saml, samlRoleMapRepo, featureGate, logger: console });
 
   // NIS2 Reporting Center repositories (risk register, control evidence, security
   // incidents, generated reports, evidence references, and the module audit log).
@@ -383,7 +406,10 @@ function start() {
   // monthly auto-refresh (writes the built CSV into the /data volume, reloads the
   // provider). Egress is admin-initiated / opt-in, so air-gapped installs are fine.
   const geoipUpdater = createGeoipUpdater({ settingsService, config, logger: console });
-  geoipUpdater.startSchedule();
+  // NB: the GeoIP auto-update schedule is a singleton job — it is started by the
+  // HA coordinator (leader-only), not eagerly here, so multiple replicas don't
+  // all refresh the shared data volume. On a single node the coordinator (HA
+  // off) starts it immediately, preserving the previous behaviour.
   // Auto-install of missing diagnostic tools (opt-in via Settings → Agents):
   // pushes an install-tool command when a probe fails because the tool is
   // missing on the host. Threaded into probe ingest below.
@@ -400,6 +426,43 @@ function start() {
     purge: createPurge({ repo: retentionRepo, config: retentionConfig }),
     config: retentionConfig,
     logger: console,
+  });
+
+  // High-availability: elect a single leader across replicas and run the
+  // singleton background jobs (retention, test-package scheduler, GeoIP refresh)
+  // ONLY on the leader. Request handling stays stateless on every node, so the
+  // load balancer can route to any of them. When HA is off (the default) the
+  // coordinator is permanently "leader" and starts every job immediately — i.e.
+  // exactly the classic single-node behaviour. See docs/ha-deployment.md.
+  const haNodesRepo = createHaNodesRepository(db);
+  const leaderLock = config.ha.enabled
+    ? createLeaderLock({
+        pool: db.pool,
+        lockName: config.ha.lockName,
+        nodeId: config.ha.nodeId,
+        logger: console,
+      })
+    : null;
+  const haCoordinator = createHaCoordinator({
+    enabled: config.ha.enabled,
+    nodeId: config.ha.nodeId,
+    lock: leaderLock,
+    nodesRepo: config.ha.enabled ? haNodesRepo : null,
+    intervalMs: config.ha.intervalMs,
+    stepDownCooldownMs: config.ha.stepDownCooldownMs,
+    // Clustering only activates with the ha_deployment entitlement; without it a
+    // node with HA_ENABLED degrades to standalone (checked lazily as the licence
+    // validates). The status/admin routes stay gated by the same feature.
+    featureGate,
+    version: appVersion,
+    logger: console,
+    // Leader-only singleton work. GeoIP exposes startSchedule/stopSchedule;
+    // adapt it to the uniform { start, stop } the coordinator expects.
+    jobs: [
+      retentionScheduler,
+      testPackageScheduler,
+      { start: () => geoipUpdater.startSchedule(), stop: () => geoipUpdater.stopSchedule() },
+    ],
   });
 
   const app = createApp({
@@ -461,21 +524,22 @@ function start() {
     ldapLoginAuditRepo,
     ldapAuth,
     ldapAuthEnabledFlag: config.ldap.authEnabled,
+    oidcAuth,
+    oidcRoleMapRepo,
+    samlAuth,
+    samlRoleMapRepo,
+    ssoLoginAuditRepo,
     nis2RisksRepo,
     nis2ControlsRepo,
     nis2IncidentsRepo,
     nis2ReportsRepo,
     nis2EvidenceRepo,
     nis2AuditRepo,
+    haCoordinator,
     enrollConfig: { publicUrl: config.publicUrl, certFingerprint: config.enroll.certFingerprint },
     notifyDashboard,
-    // Brute-force throttles on the unauthenticated endpoints. Login is keyed by
-    // IP + email so one IP can't grind many accounts; enrollment by IP only.
-    authRateLimiter: createRateLimiter({
-      windowMs: 15 * 60 * 1000,
-      max: 10,
-      keyFn: (req) => `${req.ip}|${(req.body && typeof req.body.email === 'string' ? req.body.email : '').toLowerCase()}`,
-    }),
+    // Brute-force throttle for agent enrollment by IP (login has its own
+    // loginThrottle inside the auth router).
     enrollRateLimiter: createRateLimiter({ windowMs: 15 * 60 * 1000, max: 30 }),
     logger: console,
   });
@@ -539,17 +603,17 @@ function start() {
   // Validate at startup, then periodically. Failures fall back to cache + grace.
   licenseManager.start().catch((err) => console.error('License manager error:', err));
 
-  // Periodic retention rollup + purge (behind RETENTION_ENABLED, default on).
-  retentionScheduler.start();
-
-  // Periodic test-package scheduler: runs enabled, scheduled packages when due.
-  testPackageScheduler.start();
+  // Start the HA coordinator. On a single node (HA off) this immediately starts
+  // the singleton jobs — retention rollup/purge, the test-package scheduler and
+  // the GeoIP auto-update — exactly as before. With HA on, only the elected
+  // leader runs them; followers serve requests statelessly and stand by.
+  haCoordinator.start().catch((err) => console.error('HA coordinator start failed:', err));
 
   function shutdown(signal) {
     console.info(`Received ${signal}, shutting down gracefully...`);
     licenseManager.stop();
-    retentionScheduler.stop();
-    testPackageScheduler.stop();
+    // Releases the leader lock (if held) + stops the singleton jobs.
+    haCoordinator.stop().catch((err) => console.error('HA coordinator stop failed:', err));
     baselines.stop();
     revocationRegistry.stop();
     agentWs.close();

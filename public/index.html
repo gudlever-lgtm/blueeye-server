@@ -25,6 +25,9 @@
         <label>Password <input type="password" id="password" required /></label>
         <button type="submit">Log in</button>
         <p id="login-error" class="error"></p>
+        <!-- Federated sign-in (OIDC/SAML). Populated by app.js from GET /auth/sso
+             only when a method is licensed + configured; hidden otherwise. -->
+        <div id="sso-options" class="sso-options hidden"></div>
       </form>
     </main>
 
@@ -42,6 +45,7 @@
           <div class="nav-group" data-category="Monitoring">
             <span class="nav-group-label">Monitoring</span>
             <button data-view="fleet" class="active">Overview</button>
+            <button data-view="advanced" data-feature="dashboard_advanced">Advanced</button>
             <button data-view="overview">Traffic</button>
             <button data-view="map">Sites</button>
             <button data-view="geo" data-feature="geo">Destinations</button>

@@ -4,6 +4,7 @@ const path = require('path');
 const express = require('express');
 const { createApiRouter } = require('./routes');
 const { requestLogger } = require('./middleware/requestLogger');
+const { securityHeaders } = require('./middleware/securityHeaders');
 const { createAuditLogger } = require('./middleware/auditLogger');
 const { notFoundHandler, errorHandler } = require('./middleware/errorHandler');
 const { silentLogger } = require('./logger');
@@ -68,15 +69,20 @@ function createApp({
   ldapLoginAuditRepo,
   ldapAuth,
   ldapAuthEnabledFlag,
+  oidcAuth,
+  oidcRoleMapRepo,
+  samlAuth,
+  samlRoleMapRepo,
+  ssoLoginAuditRepo,
   nis2RisksRepo,
   nis2ControlsRepo,
   nis2IncidentsRepo,
   nis2ReportsRepo,
   nis2EvidenceRepo,
   nis2AuditRepo,
+  haCoordinator,
   enrollConfig,
   notifyDashboard,
-  authRateLimiter,
   enrollRateLimiter,
   logger = silentLogger,
 } = {}) {
@@ -88,18 +94,10 @@ function createApp({
   // can't spoof X-Forwarded-* (e.g. into the auth audit log) when the server is
   // exposed directly; set TRUST_PROXY=true when running behind a known proxy.
   app.set('trust proxy', /^(1|true|yes|on)$/i.test(String(process.env.TRUST_PROXY || '').trim()) ? 1 : false);
-  // Baseline security headers (no dependency — fits the dependency-free convention).
-  // HSTS is intentionally omitted here; it belongs on the TLS-terminating proxy.
-  app.use((req, res, next) => {
-    res.set({
-      'Content-Security-Policy':
-        "default-src 'self'; img-src 'self' https: data:; connect-src 'self' https: wss:",
-      'X-Content-Type-Options': 'nosniff',
-      'X-Frame-Options': 'DENY',
-      'Referrer-Policy': 'no-referrer',
-    });
-    next();
-  });
+  // Always-on baseline security headers (HSTS/CSP/X-Frame-Options/nosniff/
+  // Referrer-Policy) on EVERY response — static dashboard + API alike. Mounted
+  // first, before the static handler, and not behind any feature key.
+  app.use(securityHeaders());
   app.use(express.json({ limit: '1mb' }));
   app.use(requestLogger(logger));
 
@@ -172,15 +170,20 @@ function createApp({
       ldapLoginAuditRepo,
       ldapAuth,
       ldapAuthEnabledFlag,
+      oidcAuth,
+      oidcRoleMapRepo,
+      samlAuth,
+      samlRoleMapRepo,
+      ssoLoginAuditRepo,
       nis2RisksRepo,
       nis2ControlsRepo,
       nis2IncidentsRepo,
       nis2ReportsRepo,
       nis2EvidenceRepo,
       nis2AuditRepo,
+      haCoordinator,
       enrollConfig,
       notifyDashboard,
-      authRateLimiter,
       enrollRateLimiter,
     })
   );

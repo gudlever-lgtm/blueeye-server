@@ -1,21 +1,37 @@
 'use strict';
 
-const crypto = require('crypto');
 const express = require('express');
 const { asyncHandler } = require('../middleware/asyncHandler');
 const { verifyPassword, hashPassword } = require('../auth/password');
 const { issueToken } = require('../auth/jwt');
-const { ROLES } = require('../auth/roles');
+const { createUserProvisioner } = require('../auth/provision');
+const { createLoginThrottle } = require('../auth/loginThrottle');
 const { config } = require('../config');
-const { noopRateLimiter } = require('../middleware/rateLimit');
 
 // Authentication routes (public). Supports two paths behind the SAME endpoint:
 //   1) external LDAP/AD auth (when enabled) — tried first; on success a local
 //      user is just-in-time provisioned so the rest of the system is unchanged;
 //   2) local JWT auth — the original flow, and the fallback when LDAP is
 //      disabled or doesn't authenticate the user.
-function createAuthRouter({ usersRepo, ldapAuth = null, ldapLoginAuditRepo = null, auditLogger = null, rateLimit = noopRateLimiter }) {
+function createAuthRouter({ usersRepo, ldapAuth = null, ldapLoginAuditRepo = null, auditLogger = null, oidcAuth = null, samlAuth = null, loginThrottle = null }) {
   const router = express.Router();
+  const provisioner = createUserProvisioner({ usersRepo });
+
+  // GET /auth/sso — PUBLIC. Tells the login screen which federated sign-in
+  // methods are live (env flag + licence + configured), so it can render an
+  // "Sign in with SSO" button. Never exposes secrets. Local login always works.
+  router.get('/sso', asyncHandler(async (req, res) => {
+    const oidcEnabled = Boolean(oidcAuth && typeof oidcAuth.isEnabled === 'function' && oidcAuth.isEnabled());
+    const samlEnabled = Boolean(samlAuth && typeof samlAuth.isEnabled === 'function' && samlAuth.isEnabled());
+    res.json({
+      oidc: { enabled: oidcEnabled, loginUrl: '/auth/oidc/login' },
+      saml: { enabled: samlEnabled, loginUrl: '/auth/saml/login' },
+    });
+  }));
+
+  // Always-on brute-force lockout (baseline security, never licence-gated). Each
+  // app instance gets its own in-memory throttle unless one is injected.
+  const throttle = loginThrottle || createLoginThrottle();
 
   // Records a login outcome in the unified audit log (best-effort). Distinct
   // from the LDAP-specific login audit above, which captures bind detail.
@@ -53,37 +69,9 @@ function createAuthRouter({ usersRepo, ldapAuth = null, ldapLoginAuditRepo = nul
     } catch { /* best-effort */ }
   }
 
-  // Finds or just-in-time provisions the local user backing an LDAP identity, so
-  // we can issue the SAME JWT (sub = local user id) and the rest of the system —
-  // /me, audit FKs, the users list — sees no difference. AD is the source of
-  // truth for the role: an existing (non-protected) user's role is realigned to
-  // the LDAP-derived one; a protected super-admin is never demoted.
-  async function provisionLdapUser(result) {
-    const email = result.email;
-    const existing = await usersRepo.findByEmail(email);
-    if (existing) {
-      if (existing.protected) return { id: existing.id, email: existing.email, role: ROLES.ADMIN };
-      if (existing.role !== result.role) {
-        try { await usersRepo.update(existing.id, { role: result.role }); } catch { /* best-effort */ }
-      }
-      return { id: existing.id, email: existing.email, role: result.role };
-    }
-    // Unusable random password — LDAP is this user's auth path, not local login.
-    const passwordHash = await hashPassword(crypto.randomBytes(24).toString('base64url'));
-    try {
-      return await usersRepo.create({ email, passwordHash, role: result.role });
-    } catch {
-      // Lost a create race (unique email) — re-read the now-existing row.
-      const again = await usersRepo.findByEmail(email);
-      if (again) return { id: again.id, email: again.email, role: again.protected ? ROLES.ADMIN : result.role };
-      throw new Error('could not provision LDAP user');
-    }
-  }
-
   // POST /auth/login { email, password } -> { token, ... } or 401.
   router.post(
     '/login',
-    rateLimit,
     asyncHandler(async (req, res) => {
       const body = req.body && typeof req.body === 'object' ? req.body : {};
       // `email` is the login identifier; for LDAP it may be a username/UPN, so we
@@ -96,6 +84,18 @@ function createAuthRouter({ usersRepo, ldapAuth = null, ldapLoginAuditRepo = nul
         return res.status(400).json({ error: 'email and password are required' });
       }
 
+      // Brute-force lockout: if this email OR source IP is already locked, refuse
+      // before touching credentials — answer 429 (NOT 401) so the audit log can
+      // distinguish a lockout from a bad password. A correct password during the
+      // lockout window is still refused.
+      const throttleId = { email, ip: req.ip };
+      const locked = throttle.check(throttleId);
+      if (locked.locked) {
+        res.set('Retry-After', String(locked.retryAfterSec));
+        await auditLogin(req, { action: 'login_lockout', outcome: 'lockout', email, detail: `locked; retry in ${locked.retryAfterSec}s` });
+        return res.status(429).json({ error: 'Too many failed login attempts. Try again later.', retryAfter: locked.retryAfterSec });
+      }
+
       // 1) LDAP first, if enabled. On success issue the same JWT; on any miss,
       //    fall through to local auth (per spec: fall back when LDAP fails/disabled).
       if (ldapAuth && typeof ldapAuth.isEnabled === 'function') {
@@ -106,8 +106,9 @@ function createAuthRouter({ usersRepo, ldapAuth = null, ldapLoginAuditRepo = nul
           try { result = await ldapAuth.authenticate(identifier, password); } catch { result = { enabled: true, ok: false, reason: 'bind-failed', matched: 0 }; }
           if (result && result.enabled) await auditLdap(identifier, result, req.ip);
           if (result && result.ok) {
-            const user = await provisionLdapUser(result);
+            const user = await provisioner.provision({ email: result.email, role: result.role });
             const token = issueToken(user);
+            throttle.recordSuccess(throttleId);
             await auditLogin(req, { action: 'login_success', outcome: 'success', email: user.email, role: user.role, userId: user.id, detail: 'auth=ldap' });
             return res.json({
               token,
@@ -126,11 +127,13 @@ function createAuthRouter({ usersRepo, ldapAuth = null, ldapLoginAuditRepo = nul
       const passwordOk = await verifyPassword(password, hash);
 
       if (!user || !passwordOk) {
+        throttle.recordFailure(throttleId);
         await auditLogin(req, { action: 'login_failure', outcome: 'failure', email: email || '(none)', detail: 'invalid credentials' });
         return res.status(401).json({ error: 'Invalid credentials' });
       }
 
       const token = issueToken(user);
+      throttle.recordSuccess(throttleId);
       await auditLogin(req, { action: 'login_success', outcome: 'success', email: user.email, role: user.role, userId: user.id, detail: 'auth=local' });
       return res.json({
         token,

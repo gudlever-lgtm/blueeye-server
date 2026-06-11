@@ -246,6 +246,16 @@ a { color: var(--accent); }
 
 /* Login */
 .login { min-height: 100vh; display: grid; place-items: center; }
+/* Federated sign-in block on the login card (OIDC/SAML). */
+.sso-options { display: flex; flex-direction: column; gap: 8px; }
+.sso-divider { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
+.sso-divider::before, .sso-divider::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+.sso-button {
+  display: block; text-align: center; text-decoration: none;
+  padding: 9px 12px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--panel); color: var(--text);
+}
+.sso-button:hover { border-color: var(--accent); color: var(--accent); }
 .card {
   background: var(--panel);
   border: 1px solid var(--border);
@@ -973,6 +983,19 @@ button.active-btn { outline: 2px solid var(--accent); }
 .kpi .kpi-v.v-ok { color: var(--ok); }
 .kpi .kpi-v.v-warn { color: var(--warn); }
 .kpi .kpi-v.v-bad { color: var(--bad); }
+
+/* Advanced dashboard (dashboard_advanced): the NOC KPI strip above a responsive
+   grid of drill-down panels. Panel tables are compact; rows that drill into an
+   agent show a pointer + hover tint, reusing the shared status/border tokens. */
+.advanced-view .panel-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
+@media (max-width: 900px) { .advanced-view .panel-grid { grid-template-columns: 1fr; } }
+.advanced-view .panel-grid .card { margin: 0; }
+.advanced-view .panel-grid .card h3 { margin: 0 0 10px; }
+.adv-table { width: 100%; border-collapse: collapse; }
+.adv-table td { padding: 6px 8px; border-top: 1px solid var(--border); vertical-align: middle; }
+.adv-table tr:first-child td { border-top: 0; }
+.adv-table tr.clickable { cursor: pointer; }
+.adv-table tr.clickable:hover { background: var(--accent-weak); }
 
 /* Network path — HQ → ISP → Cloud → SaaS with a Branch feeding the uplink.
    Nominal segments use the primary/accent token; a degraded hop uses --warn. */

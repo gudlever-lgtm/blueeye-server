@@ -41,7 +41,7 @@ test('GET /license/plan returns the active plan summary (viewer+)', async () => 
   assert.equal(res.body.plan_key, 'professional');
   assert.equal(res.body.limits.max_agents, 25);
   assert.equal(res.body.features.rbac, true);
-  assert.equal(res.body.features.msp_multitenant, false);
+  assert.equal(res.body.features.msp_multitenant, undefined); // feature removed
 });
 
 test('GET /license/plan requires auth (401)', async () => {
@@ -62,7 +62,8 @@ test('GET /license/matrix returns the full plan × feature grid', async () => {
   const res = await request(app).get('/license/matrix').set('Authorization', authHeader('viewer'));
   assert.equal(res.status, 200);
   assert.equal(res.body.activePlan, 'enterprise');
-  assert.equal(res.body.plans.length, 5);
+  assert.equal(res.body.plans.length, 4); // pilot/starter/professional/enterprise (MSP removed)
+  assert.ok(!res.body.plans.some((p) => p.plan_key === 'msp'));
   assert.ok(res.body.features.some((f) => f.key === 'sso_oidc' && f.minPlan === 'enterprise'));
 });
 

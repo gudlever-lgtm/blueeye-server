@@ -6,6 +6,7 @@ const { asyncHandler } = require('../middleware/asyncHandler');
 const { verifyPassword, hashPassword } = require('../auth/password');
 const { issueToken } = require('../auth/jwt');
 const { ROLES } = require('../auth/roles');
+const { createLoginThrottle } = require('../auth/loginThrottle');
 const { config } = require('../config');
 
 // Authentication routes (public). Supports two paths behind the SAME endpoint:
@@ -13,8 +14,12 @@ const { config } = require('../config');
 //      user is just-in-time provisioned so the rest of the system is unchanged;
 //   2) local JWT auth — the original flow, and the fallback when LDAP is
 //      disabled or doesn't authenticate the user.
-function createAuthRouter({ usersRepo, ldapAuth = null, ldapLoginAuditRepo = null, auditLogger = null }) {
+function createAuthRouter({ usersRepo, ldapAuth = null, ldapLoginAuditRepo = null, auditLogger = null, loginThrottle = null }) {
   const router = express.Router();
+
+  // Always-on brute-force lockout (baseline security, never licence-gated). Each
+  // app instance gets its own in-memory throttle unless one is injected.
+  const throttle = loginThrottle || createLoginThrottle();
 
   // Records a login outcome in the unified audit log (best-effort). Distinct
   // from the LDAP-specific login audit above, which captures bind detail.
@@ -94,6 +99,18 @@ function createAuthRouter({ usersRepo, ldapAuth = null, ldapLoginAuditRepo = nul
         return res.status(400).json({ error: 'email and password are required' });
       }
 
+      // Brute-force lockout: if this email OR source IP is already locked, refuse
+      // before touching credentials — answer 429 (NOT 401) so the audit log can
+      // distinguish a lockout from a bad password. A correct password during the
+      // lockout window is still refused.
+      const throttleId = { email, ip: req.ip };
+      const locked = throttle.check(throttleId);
+      if (locked.locked) {
+        res.set('Retry-After', String(locked.retryAfterSec));
+        await auditLogin(req, { action: 'login_lockout', outcome: 'lockout', email, detail: `locked; retry in ${locked.retryAfterSec}s` });
+        return res.status(429).json({ error: 'Too many failed login attempts. Try again later.', retryAfter: locked.retryAfterSec });
+      }
+
       // 1) LDAP first, if enabled. On success issue the same JWT; on any miss,
       //    fall through to local auth (per spec: fall back when LDAP fails/disabled).
       if (ldapAuth && typeof ldapAuth.isEnabled === 'function') {
@@ -106,6 +123,7 @@ function createAuthRouter({ usersRepo, ldapAuth = null, ldapLoginAuditRepo = nul
           if (result && result.ok) {
             const user = await provisionLdapUser(result);
             const token = issueToken(user);
+            throttle.recordSuccess(throttleId);
             await auditLogin(req, { action: 'login_success', outcome: 'success', email: user.email, role: user.role, userId: user.id, detail: 'auth=ldap' });
             return res.json({
               token,
@@ -124,11 +142,13 @@ function createAuthRouter({ usersRepo, ldapAuth = null, ldapLoginAuditRepo = nul
       const passwordOk = await verifyPassword(password, hash);
 
       if (!user || !passwordOk) {
+        throttle.recordFailure(throttleId);
         await auditLogin(req, { action: 'login_failure', outcome: 'failure', email: email || '(none)', detail: 'invalid credentials' });
         return res.status(401).json({ error: 'Invalid credentials' });
       }
 
       const token = issueToken(user);
+      throttle.recordSuccess(throttleId);
       await auditLogin(req, { action: 'login_success', outcome: 'success', email: user.email, role: user.role, userId: user.id, detail: 'auth=local' });
       return res.json({
         token,

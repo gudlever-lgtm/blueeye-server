@@ -4,9 +4,6 @@ const { isValidRole, ALL_ROLES } = require('../auth/roles');
 
 const EMAIL_MAX = 255;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-// bcrypt only considers the first 72 bytes, so cap there to avoid surprises.
-const PASSWORD_MIN = 8;
-const PASSWORD_MAX = 72;
 
 function validateEmail(raw, errors) {
   if (raw === undefined || raw === null) {
@@ -25,13 +22,14 @@ function validateEmail(raw, errors) {
   return email;
 }
 
+// Structural check only: the password must be present and a string (→ 400).
+// Strength rules (minimum length + character-class complexity) live in the
+// always-on password policy (src/auth/password.js → checkPasswordPolicy) and
+// are enforced by the route with a distinct 422, so the two concerns don't
+// report under the same status code.
 function validatePassword(raw, errors) {
-  if (typeof raw !== 'string' || raw.length < PASSWORD_MIN) {
-    errors.password = `password must be at least ${PASSWORD_MIN} characters`;
-    return undefined;
-  }
-  if (raw.length > PASSWORD_MAX) {
-    errors.password = `password must be at most ${PASSWORD_MAX} characters`;
+  if (typeof raw !== 'string' || raw.length === 0) {
+    errors.password = 'password must be a non-empty string';
     return undefined;
   }
   return raw;

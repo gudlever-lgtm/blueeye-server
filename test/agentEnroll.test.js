@@ -7,7 +7,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const request = require('supertest');
 
-const { makeApp, makeEnrollmentStore, throwingAsync } = require('../test-support/fakes');
+const { makeApp, makeEnrollmentStore, makeAuditEventsRepo, throwingAsync } = require('../test-support/fakes');
 const { hashToken } = require('../src/auth/tokens');
 
 const validBody = { code: 'a-code', hostname: 'node-01', platform: 'linux', arch: 'x64' };
@@ -31,6 +31,32 @@ test('POST /agents/enroll returns 201 with { agentId, token } on a valid code', 
   assert.equal(received.tokenHash, hashToken(res.body.token));
   assert.equal(received.code, 'a-code');
   assert.equal(received.hostname, 'node-01');
+});
+
+test('POST /agents/enroll records an agent.enrolled audit event', async () => {
+  const enrollmentStore = makeEnrollmentStore({ claimAndEnroll: async () => ({ status: 'ok', agentId: 42 }) });
+  const auditEventsRepo = makeAuditEventsRepo();
+
+  const res = await request(makeApp({ enrollmentStore, auditEventsRepo })).post('/agents/enroll').send(validBody);
+
+  assert.equal(res.status, 201);
+  const row = auditEventsRepo.rows.find((r) => r.action === 'agent.enrolled');
+  assert.ok(row, 'expected an agent.enrolled audit row');
+  assert.equal(row.actorType, 'agent');
+  assert.equal(row.actorId, 42);
+  assert.equal(row.actorLabel, 'node-01');
+  assert.equal(row.targetId, '42'); // stringified by the repo
+  assert.deepEqual(row.detail, { platform: 'linux', arch: 'x64' });
+});
+
+test('a failing audit write does not break enrollment', async () => {
+  const enrollmentStore = makeEnrollmentStore({ claimAndEnroll: async () => ({ status: 'ok', agentId: 7 }) });
+  const auditEventsRepo = { record: async () => { throw new Error('audit down'); } };
+
+  const res = await request(makeApp({ enrollmentStore, auditEventsRepo })).post('/agents/enroll').send(validBody);
+
+  assert.equal(res.status, 201);
+  assert.equal(res.body.agentId, 7);
 });
 
 test('POST /agents/enroll returns 401 for an invalid code', async () => {

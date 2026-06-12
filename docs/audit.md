@@ -6,7 +6,8 @@ answers *when, who and what* for two kinds of activity:
 - **User actions on the server** — every successful login plus every successful
   state-changing request (POST/PUT/PATCH/DELETE).
 - **Agent activity** — what each agent actually reported it performed (traffic
-  measurements, active probes) plus non-fatal operational errors it hit.
+  measurements, active probes), non-fatal operational errors it hit, and its
+  lifecycle (enrolment, online/offline).
 
 **RBAC:** the Audit view and the `/api/audit` endpoints are **admin only** —
 the `admin` role is the permission required to access the audit. Non-admins get
@@ -58,9 +59,10 @@ fields become `[redacted]`. The request is mapped to a readable
 
 Everything is best-effort: an audit failure never affects the response.
 
-### Agent activity — `src/routes/agentReports.js`
+### Agent activity — `src/routes/agentReports.js`, `src/ws/agentSocket.js`, `src/routes/agentEnroll.js`
 
-On ingest the agent's own activity is recorded:
+The agent's own activity is recorded as it ingests reports, as it connects/
+disconnects, and as it enrols:
 
 - `POST /agents/results` with `name: 'auto-report'` (continuous reporting) →
   `recordRecurring('agent.traffic-report')`, deduped per agent.
@@ -92,6 +94,14 @@ On ingest the agent's own activity is recorded:
   visibility into agent-side failures that otherwise live only in the host's local
   log (journald / `docker logs`). A 401 stays out of this trail — it's fatal on the
   agent and already visible as the agent going offline.
+- **Lifecycle** — `agent.enrolled` (a new agent joining the fleet via a one-time
+  code, `record`ed in `src/routes/agentEnroll.js` with `detail.platform`/`arch` and
+  the source `ip`) and `agent.online` / `agent.offline` (each WebSocket
+  connect/disconnect, `record`ed in `src/ws/agentSocket.js` with the source `ip`).
+  These are **discrete** rows, not deduped: the point is a timeline of who joined
+  and when each agent was reachable, so a server restart or a flapping link reads
+  as the transitions it actually was. All best-effort — never block enrolment or
+  the connection lifecycle.
 
 No per-report agent lookup is added to the hot path: agent rows store only
 `actor_id`, and the read query `LEFT JOIN`s `agents` for the hostname.

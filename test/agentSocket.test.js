@@ -158,6 +158,33 @@ test('a delete action-result completes the audit and removes the agent (tokens c
   });
 });
 
+test('records agent.online on connect and agent.offline on disconnect', async () => {
+  const tracker = makeStatusTracker();
+  const agentsRepo = makeAgentsRepo({ setStatus: tracker.setStatus });
+  const events = [];
+  let resolveOffline;
+  const offlineRecorded = new Promise((r) => { resolveOffline = r; });
+  const auditEventsRepo = {
+    record: async (e) => { events.push(e); if (e.action === 'agent.offline') resolveOffline(e); },
+  };
+
+  await withWsServer({ agentTokensRepo: validRepo(), agentsRepo, auditEventsRepo }, async ({ port }) => {
+    const client = new WebSocket(`ws://127.0.0.1:${port}/ws/agent`, { headers: { Authorization: 'Bearer good' } });
+    await withTimeout(waitOpen(client), 4000, 'did not open');
+    await withTimeout(tracker.waitFor('online'), 4000, 'online not set');
+    client.close();
+    await withTimeout(offlineRecorded, 4000, 'offline not recorded');
+
+    const online = events.find((e) => e.action === 'agent.online');
+    const offline = events.find((e) => e.action === 'agent.offline');
+    assert.ok(online, 'expected an agent.online audit row');
+    assert.equal(online.actorType, 'agent');
+    assert.equal(online.actorId, 9); // the connected agent's id (from the token)
+    assert.ok(offline, 'expected an agent.offline audit row');
+    assert.equal(offline.actorId, 9);
+  });
+});
+
 test('WS connect is rejected with an invalid token', async () => {
   const agentTokensRepo = makeAgentTokensRepo({ findActiveByHash: async () => null });
 

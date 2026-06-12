@@ -9,6 +9,15 @@ const silentLogger = { info() {}, warn() {}, error() {} };
 // The hsflowd exporter states an agent may report (mirrors the agent's vocabulary).
 const HSFLOWD_STATES = ['active', 'inactive', 'failed', 'not_installed', 'install_failed', 'permission_denied', 'unknown'];
 
+// Best source IP for a connecting agent: first X-Forwarded-For hop when present
+// (proxied deployments), else the socket peer. Bounded for the audit row.
+function clientIp(req) {
+  const xff = req && req.headers && req.headers['x-forwarded-for'];
+  if (typeof xff === 'string' && xff.length) return xff.split(',')[0].trim().slice(0, 64);
+  const ip = (req && req.socket && req.socket.remoteAddress) || '';
+  return ip ? ip.slice(0, 64) : null;
+}
+
 // Attaches the agent WebSocket endpoint to an existing HTTP server. Agent-token
 // auth is enforced during the upgrade handshake — a connection without a valid
 // token is rejected hard (no WebSocket is ever established).
@@ -46,6 +55,17 @@ function attachAgentWebSocket({
     if (ws._lastSeenAt && now - ws._lastSeenAt < TOUCH_THROTTLE_MS) return;
     ws._lastSeenAt = now;
     agentsRepo.touchLastSeen(agentId).catch(() => {});
+  }
+
+  // Audits an agent connect/disconnect transition (agent.online / agent.offline)
+  // in the unified trail, so operators have a timeline of agent availability — not
+  // just the live status flag. Discrete rows (the sequence is the point), so a
+  // server restart or a flapping link reads as the transitions it actually was.
+  // Best-effort: a recording failure must never affect the connection lifecycle.
+  function recordAgentAudit(action, agentId, ip) {
+    if (!auditEventsRepo || typeof auditEventsRepo.record !== 'function') return;
+    Promise.resolve(auditEventsRepo.record({ actorType: 'agent', actorId: agentId, action, ip: ip || null }))
+      .catch((err) => logger.error(`Failed to record ${action} audit event:`, err));
   }
 
   // Correlated server -> agent requests: sendCommandAndWait() stores a waiter
@@ -98,6 +118,7 @@ function attachAgentWebSocket({
   wss.on('connection', (ws, req, agent) => {
     ws.agentId = agent.agentId;
     ws.isAlive = true;
+    ws._remoteIp = clientIp(req); // captured here so the offline row can reuse it
 
     agentsRepo
       .setStatus(agent.agentId, 'online')
@@ -105,6 +126,7 @@ function attachAgentWebSocket({
     if (typeof notifyDashboard === 'function') {
       try { notifyDashboard({ type: 'agent-status', payload: { agentId: agent.agentId, status: 'online' } }); } catch { /* best-effort */ }
     }
+    recordAgentAudit('agent.online', agent.agentId, ws._remoteIp);
 
     // Initial server -> agent message (also demonstrates the push channel).
     safeSend(ws, { type: 'connected', agentId: agent.agentId });
@@ -201,6 +223,7 @@ function attachAgentWebSocket({
       if (typeof notifyDashboard === 'function') {
         try { notifyDashboard({ type: 'agent-status', payload: { agentId: agent.agentId, status: 'offline' } }); } catch { /* best-effort */ }
       }
+      recordAgentAudit('agent.offline', agent.agentId, ws._remoteIp);
     });
 
     ws.on('error', (err) => logger.error('Agent WS connection error:', err));

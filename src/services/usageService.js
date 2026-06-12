@@ -44,11 +44,14 @@ function createUsageService({
     return 'BlueEye';
   }
 
+  // The plan limit for a resource. `null` means an explicitly resolved
+  // "unlimited"; a missing plan service or an unknown resource resolves to 0
+  // (deny) so a wiring gap can never silently lift quotas.
   function limitFor(resourceType) {
-    if (!planService || typeof planService.getPlanLimit !== 'function') return null;
+    if (!planService || typeof planService.getPlanLimit !== 'function') return 0;
     if (resourceType === 'agents') return planService.getPlanLimit('max_agents');
     if (resourceType === 'test_paths') return planService.getPlanLimit('max_test_paths');
-    return null;
+    return 0;
   }
 
   async function usedFor(resourceType) {
@@ -81,7 +84,7 @@ function createUsageService({
   // True when creating `adding` more of `resourceType` would exceed the limit.
   async function isLimitReached(resourceType, { adding = 1 } = {}) {
     const limit = limitFor(resourceType);
-    if (limit === null || limit === undefined) return false; // unlimited
+    if (limit === null) return false; // unlimited
     const used = await usedFor(resourceType);
     return used + adding > limit;
   }
@@ -89,7 +92,7 @@ function createUsageService({
   // Resolves to { ok:true } or { ok:false, body } where body is the 403 payload.
   async function assertWithinLimit(resourceType, { adding = 1 } = {}) {
     const limit = limitFor(resourceType);
-    if (limit === null || limit === undefined) return { ok: true };
+    if (limit === null) return { ok: true };
     const used = await usedFor(resourceType);
     if (used + adding <= limit) return { ok: true };
 

@@ -81,15 +81,18 @@ function createLicenseVerifier({ publicKey, serverId = '', now = () => Date.now(
       return fail('server_mismatch', `license is bound to a different server (${payload.serverId})`);
     }
 
-    // 3) Validity window.
+    // 3) Validity window — REQUIRED. The issuer (blueeye-licens
+    //    buildOfflineLicensePayload) always emits both bounds, so a payload
+    //    missing either is malformed; treating absence as "perpetual" would let
+    //    a hand-built file fail open.
     const from = parseTime(payload.valid_from);
     const until = parseTime(payload.valid_until);
-    if (Number.isNaN(from) || Number.isNaN(until)) {
-      return fail('malformed', 'valid_from / valid_until is not a valid date');
+    if (from === null || until === null || Number.isNaN(from) || Number.isNaN(until)) {
+      return fail('malformed', 'valid_from / valid_until is missing or not a valid date');
     }
     const t = now();
-    if (from !== null && t < from) return fail('not_yet_valid', `license is not valid until ${payload.valid_from}`);
-    if (until !== null && t > until) return fail('expired', `license expired on ${payload.valid_until}`);
+    if (t < from) return fail('not_yet_valid', `license is not valid until ${payload.valid_from}`);
+    if (t > until) return fail('expired', `license expired on ${payload.valid_until}`);
 
     // Trusted, in-window license.
     return {

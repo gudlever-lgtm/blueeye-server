@@ -237,6 +237,19 @@ test('Enterprise (unlimited) never trips a limit', async () => {
   assert.equal((await usage.assertWithinLimit('test_paths')).ok, true);
 });
 
+test('usage limits fail closed without a plan service (or for unknown resources)', async () => {
+  const { agentsRepo, testPackagesRepo } = repos({ agents: 0, enabledPaths: 0 });
+  // No planService wired: a misconfiguration must deny, never lift quotas.
+  const usage = createUsageService({ agentsRepo, testPackagesRepo });
+  assert.equal((await usage.assertWithinLimit('agents')).ok, false);
+  assert.equal(await usage.isLimitReached('agents'), true);
+
+  // Unknown resource types deny too, even with a plan service present.
+  const ps = createPlanService({ licenseManager: lm({ plan: 'enterprise' }) });
+  const withPlan = createUsageService({ agentsRepo, testPackagesRepo, planService: ps });
+  assert.equal((await withPlan.assertWithinLimit('nonsense')).ok, false);
+});
+
 test('getUsage reports used + max for the active plan', async () => {
   const ps = createPlanService({ licenseManager: lm({ plan: 'professional' }) });
   const { agentsRepo, testPackagesRepo } = repos({ agents: 3, enabledPaths: 10 });

@@ -237,7 +237,7 @@ function createApiRouter({
   if (auditLogRepo) router.use('/api/audit-log', createAuditLogRouter({ auditLogRepo, featureGate, planService }));
   if (apiTokensRepo) router.use('/api/api-tokens', createApiTokensRouter({ apiTokensRepo, featureGate, planService, auditLogger }));
   router.use('/agents', createAgentReportsRouter({ agentAuth, resultsRepo, agentsRepo, auditEventsRepo, analysisPipeline, flowPipeline, probeResultsRepo, probePipeline, incidentService, installToolService }));
-  router.use('/agents', createAgentEnrollRouter({ enrollmentStore, notifyDashboard, integrationTrigger: integrationsDispatcher, rateLimit: enrollRateLimiter }));
+  router.use('/agents', createAgentEnrollRouter({ enrollmentStore, notifyDashboard, integrationTrigger: integrationsDispatcher, auditEventsRepo, rateLimit: enrollRateLimiter }));
 
   return router;
 }

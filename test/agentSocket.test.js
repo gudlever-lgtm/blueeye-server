@@ -43,10 +43,10 @@ function withTimeout(promise, ms, message) {
 
 // Boots an HTTP server with the agent WebSocket attached, runs fn, then cleans
 // up regardless of outcome.
-async function withWsServer({ agentTokensRepo, agentsRepo, auditRepo, notifyDashboard }, fn) {
+async function withWsServer({ agentTokensRepo, agentsRepo, auditRepo, auditEventsRepo, notifyDashboard }, fn) {
   const app = makeApp({ agentTokensRepo, agentsRepo });
   const server = http.createServer(app);
-  const handle = attachAgentWebSocket({ server, agentTokensRepo, agentsRepo, auditRepo, notifyDashboard });
+  const handle = attachAgentWebSocket({ server, agentTokensRepo, agentsRepo, auditRepo, auditEventsRepo, notifyDashboard });
   await new Promise((resolve) => server.listen(0, resolve));
   const port = server.address().port;
   try {
@@ -155,6 +155,33 @@ test('a delete action-result completes the audit and removes the agent (tokens c
     } finally {
       client.close();
     }
+  });
+});
+
+test('records agent.online on connect and agent.offline on disconnect', async () => {
+  const tracker = makeStatusTracker();
+  const agentsRepo = makeAgentsRepo({ setStatus: tracker.setStatus });
+  const events = [];
+  let resolveOffline;
+  const offlineRecorded = new Promise((r) => { resolveOffline = r; });
+  const auditEventsRepo = {
+    record: async (e) => { events.push(e); if (e.action === 'agent.offline') resolveOffline(e); },
+  };
+
+  await withWsServer({ agentTokensRepo: validRepo(), agentsRepo, auditEventsRepo }, async ({ port }) => {
+    const client = new WebSocket(`ws://127.0.0.1:${port}/ws/agent`, { headers: { Authorization: 'Bearer good' } });
+    await withTimeout(waitOpen(client), 4000, 'did not open');
+    await withTimeout(tracker.waitFor('online'), 4000, 'online not set');
+    client.close();
+    await withTimeout(offlineRecorded, 4000, 'offline not recorded');
+
+    const online = events.find((e) => e.action === 'agent.online');
+    const offline = events.find((e) => e.action === 'agent.offline');
+    assert.ok(online, 'expected an agent.online audit row');
+    assert.equal(online.actorType, 'agent');
+    assert.equal(online.actorId, 9); // the connected agent's id (from the token)
+    assert.ok(offline, 'expected an agent.offline audit row');
+    assert.equal(offline.actorId, 9);
   });
 });
 
@@ -356,6 +383,56 @@ test('coerces an out-of-vocabulary hsflowd state to "unknown"', async () => {
       })(), 4000, 'status not recorded');
       assert.equal(status.state, 'unknown');
       assert.equal(status.detail, null);
+    } finally {
+      client.close();
+    }
+  });
+});
+
+test('an agent.error frame is recorded in the unified audit trail (deduped per category)', async () => {
+  const tracker = makeStatusTracker();
+  const agentsRepo = makeAgentsRepo({ setStatus: tracker.setStatus });
+  let resolveRec;
+  const recorded = new Promise((r) => { resolveRec = r; });
+  const calls = [];
+  const auditEventsRepo = { recordRecurring: async (e) => { calls.push(e); resolveRec(e); } };
+
+  await withWsServer({ agentTokensRepo: validRepo(), agentsRepo, auditEventsRepo }, async ({ port }) => {
+    const client = new WebSocket(`ws://127.0.0.1:${port}/ws/agent`, { headers: { Authorization: 'Bearer good' } });
+    try {
+      await withTimeout(waitOpen(client), 4000, 'did not open');
+      client.send(JSON.stringify({ type: 'agent.error', category: 'config', message: 'Could not fetch monitor config', code: 'HTTP_ERROR' }));
+      const e = await withTimeout(recorded, 4000, 'error not recorded');
+      assert.equal(e.actorType, 'agent');
+      assert.equal(e.actorId, 9); // the connected agent's id (from the token)
+      assert.equal(e.action, 'agent.error');
+      assert.equal(e.targetType, 'config'); // the reported category
+      assert.equal(e.detail.reason, 'Could not fetch monitor config');
+      assert.equal(e.detail.code, 'HTTP_ERROR');
+      assert.equal(e.dedupKey, 'agent:9:error:config:HTTP_ERROR'); // repeats collapse here
+    } finally {
+      client.close();
+    }
+  });
+});
+
+test('an agent.error frame with no category/code defaults to "general" and no code', async () => {
+  const tracker = makeStatusTracker();
+  const agentsRepo = makeAgentsRepo({ setStatus: tracker.setStatus });
+  let resolveRec;
+  const recorded = new Promise((r) => { resolveRec = r; });
+  const auditEventsRepo = { recordRecurring: async (e) => { resolveRec(e); } };
+
+  await withWsServer({ agentTokensRepo: validRepo(), agentsRepo, auditEventsRepo }, async ({ port }) => {
+    const client = new WebSocket(`ws://127.0.0.1:${port}/ws/agent`, { headers: { Authorization: 'Bearer good' } });
+    try {
+      await withTimeout(waitOpen(client), 4000, 'did not open');
+      client.send(JSON.stringify({ type: 'agent.error', message: 'something broke' }));
+      const e = await withTimeout(recorded, 4000, 'error not recorded');
+      assert.equal(e.targetType, 'general');
+      assert.equal(e.targetLabel, null);
+      assert.equal(e.detail.code, null);
+      assert.equal(e.dedupKey, 'agent:9:error:general');
     } finally {
       client.close();
     }

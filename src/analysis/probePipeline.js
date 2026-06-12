@@ -23,6 +23,10 @@ function createProbePipeline({
   alertingEnabled = false,
   integrationTrigger = null,
   licensed = () => true,
+  // Optional offline GeoIP/ASN provider — passed to the evaluator so it can map
+  // traceroute hop IPs to ASNs for AS-path change detection. null → that check is
+  // skipped; all other findings are unaffected.
+  geoProvider = null,
   windowMs = 6 * 3600 * 1000, // how far back to look for the verdict
   cooldownMs = 30 * 60 * 1000, // don't re-raise the same (metric,target) within this
   evaluate = evaluateProbeFindings,
@@ -53,7 +57,7 @@ function createProbePipeline({
 
     let candidates;
     try {
-      candidates = evaluate(agentId, rows, { now });
+      candidates = evaluate(agentId, rows, { now, geoProvider });
     } catch (err) {
       logger.error(`probe-analysis: evaluate threw for ${agentId} (${err.message})`);
       return [];

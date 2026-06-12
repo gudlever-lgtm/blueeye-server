@@ -3025,6 +3025,70 @@ function pathGraph(graph) {
     ...[['ok', 'Healthy'], ['warn', 'Degraded'], ['bad', 'Critical'], ['muted', 'Silent hop']].map(([c, l]) =>
       el('span', { class: 'lg' }, el('span', { class: `pg-dot ${c}` }), l)));
 
+  // AS-level projection: the same path collapsed to AS hops (the observed
+  // FORWARDING AS-path — not the BGP AS_PATH attribute). A toggle swaps the hop
+  // graph for the AS graph (graph.asGraph, built server-side). Only offered when
+  // GeoIP/ASN resolved at least one transit/destination AS.
+  const asg = graph.asGraph && (graph.asGraph.nodes || []).length > 1 ? graph.asGraph : null;
+  function showAs(n) {
+    panel.replaceChildren(
+      el('div', { class: 'pg-panel-head' },
+        el('span', { class: `pg-dot ${n.severity}` }),
+        el('strong', {}, n.kind === 'source' ? 'Agent (origin)' : (n.kind === 'dest' ? 'Destination AS' : 'Transit AS')),
+        el('span', { class: 'mono' }, n.asn != null ? `AS${n.asn}` : '—')),
+      n.asnName ? el('div', {}, esc(n.asnName)) : null,
+      n.country ? el('div', { class: 'muted' }, esc(n.country)) : null,
+      el('div', { class: 'pg-stats' },
+        stat('Hops', n.hops && n.hops.length ? `#${n.hops.join(', #')}` : '–'),
+        stat('Latency', fmtMs(n.rttMs)),
+        stat('Loss', fmtPct(n.lossPct))));
+  }
+  function buildAsSvg(g) {
+    const an = g.nodes || [];
+    const w = xOf(an.length - 1) + NW + 10;
+    const s = mk('svg', { viewBox: `0 0 ${w} ${height}`, width: String(w), height: String(height), role: 'img', 'aria-label': `AS path to ${graph.target || 'target'}` });
+    (g.links || []).forEach((lk) => {
+      const x1 = xOf(lk.from) + NW; const x2 = xOf(lk.to);
+      s.append(mk('line', { x1, y1: cy, x2, y2: cy, class: `pg-link ${lk.severity}`, 'stroke-linecap': 'round' }));
+    });
+    an.forEach((n, i) => {
+      const x = xOf(i);
+      const top3 = n.kind === 'source' ? 'AGENT' : (n.kind === 'dest' ? 'DEST AS' : 'TRANSIT');
+      const mid = n.kind === 'source' ? (n.label || 'Agent') : (n.asn != null ? `AS${n.asn}` : '—');
+      const meta = n.asnName || n.country || (n.rttMs != null ? `${n.rttMs} ms` : '');
+      const gg = mk('g', { class: `pg-node ${n.severity} ${n.kind}`, tabindex: '0', role: 'button', 'aria-label': `${top3} ${mid} ${meta}` },
+        mk('rect', { x, y: top, width: NW, height: NH, rx: 10 }),
+        mk('text', { x: x + 11, y: top + 19, class: 'pg-hop' }, top3),
+        mk('text', { x: x + 11, y: top + 38, class: 'pg-ip' }, String(mid).slice(0, 17)),
+        mk('text', { x: x + 11, y: top + 56, class: 'pg-meta' }, String(meta).slice(0, 18)));
+      gg.addEventListener('mouseenter', () => showAs(n));
+      gg.addEventListener('focus', () => showAs(n));
+      s.append(gg);
+    });
+    return s;
+  }
+
+  // Two scroll panes (hop graph + optional AS graph); a toggle flips between them.
+  const hopWrap = el('div', { class: 'pg-scroll' }, svg);
+  const asWrap = asg ? el('div', { class: 'pg-scroll' }, buildAsSvg(asg)) : null;
+  if (asWrap) asWrap.style.display = 'none';
+  let toggle = null;
+  if (asg) {
+    toggle = el('div', { class: 'pg-toggle', role: 'tablist' });
+    const setView = (mode) => {
+      const hop = mode === 'hop';
+      hopWrap.style.display = hop ? '' : 'none';
+      asWrap.style.display = hop ? 'none' : '';
+      [...toggle.children].forEach((b) => b.classList.toggle('active', b.dataset.mode === mode));
+      if (hop) showNode(nodes[nodes.length - 1]); else showAs(asg.nodes[asg.nodes.length - 1]);
+    };
+    for (const [m, label] of [['hop', 'Hop view'], ['as', 'AS view']]) {
+      const b = el('button', { class: `pg-toggle-btn${m === 'hop' ? ' active' : ''}`, 'data-mode': m, type: 'button' }, label);
+      b.addEventListener('click', () => setView(m));
+      toggle.append(b);
+    }
+  }
+
   // Geographic overlay: the same path on the Destinations map. Public hops sit at
   // country-centroid precision, so consecutive hops in one country collapse to a
   // single stop. Lazily built on first open (Leaflet needs a sized container).
@@ -3043,9 +3107,11 @@ function pathGraph(graph) {
 
   return el('div', { class: 'pathmap' },
     el('div', { class: 'pg-head' },
-      el('span', { class: 'muted' }, `${graph.samples} traceroute${graph.samples === 1 ? '' : 's'} aggregated · hover a hop for detail`),
+      el('span', { class: 'muted' }, `${graph.samples} traceroute${graph.samples === 1 ? '' : 's'} aggregated · hover for detail`),
+      toggle,
       legend),
-    el('div', { class: 'pg-scroll' }, svg),
+    hopWrap,
+    asWrap,
     panel,
     mapSection);
 }

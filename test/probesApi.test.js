@@ -179,6 +179,13 @@ test('GET /api/probes/path aggregates traceroutes into a hop graph (200) and enr
   assert.equal(dest.country, 'DE');
   assert.equal(dest.asn, 64500);
   assert.equal(res.body.links.length, 2);
+  // AS-level projection: source + the one resolved AS (the private hop is dropped).
+  assert.ok(res.body.asGraph, 'response carries an AS-level projection');
+  assert.equal(res.body.asGraph.nodes.length, 2);
+  assert.equal(res.body.asGraph.nodes[0].kind, 'source');
+  const destAs = res.body.asGraph.nodes[res.body.asGraph.nodes.length - 1];
+  assert.equal(destAs.asn, 64500);
+  assert.equal(destAs.kind, 'dest');
 });
 
 test('GET /api/probes/path anchors the source node at the agent site coordinates', async () => {

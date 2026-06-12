@@ -484,6 +484,10 @@ main#view:has(.fleet) { max-width: 1320px; }
 .pg-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 12px; margin-bottom: 6px; }
 .pg-legend { display: flex; gap: 14px; margin-left: auto; color: var(--muted); }
 .pg-legend .lg { display: inline-flex; align-items: center; gap: 6px; }
+.pg-toggle { display: inline-flex; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; }
+.pg-toggle-btn { background: var(--panel-2); color: var(--muted); border: 0; padding: 3px 10px; font: inherit; font-size: 12px; cursor: pointer; }
+.pg-toggle-btn + .pg-toggle-btn { border-left: 1px solid var(--border); }
+.pg-toggle-btn.active { background: var(--accent); color: #fff; }
 .pg-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; background: var(--accent); }
 .pg-dot.ok { background: var(--ok); } .pg-dot.warn { background: var(--warn); }
 .pg-dot.bad { background: var(--bad); } .pg-dot.muted { background: var(--muted); }

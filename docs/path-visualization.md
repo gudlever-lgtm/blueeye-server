@@ -70,6 +70,44 @@ side-panel summary listing the geolocated stops and the worst hop; "Clear path"
 removes the layer and restores the destinations overview. Target options come from
 the agent's recent traceroutes (`/api/probes/latest`).
 
+## AS-path view & change detection
+
+Because every public hop is already enriched with its ASN, each traceroute carries
+the **observed AS-path** — the ordered list of autonomous systems the packets
+crossed (e.g. `AS3320 → AS1299 → AS15169`). Two things are built on top of it, with
+**no new agent capability and no new data collection** — it is pure server-side
+derivation over the hops already stored:
+
+1. **AS view** (`src/analysis/asPath.js`, `asGraphFromNodes`). `GET /api/probes/path`
+   returns an `asGraph` alongside the hop graph: the same path collapsed to AS hops
+   (consecutive hops in one AS merge; private/un-mapped hops drop out). The Probes
+   traceroute detail gets a **Hop view / AS view** toggle (`pathGraph()` in
+   `public/app.js`) — same colours/severity, an AS-level altitude.
+
+2. **AS-path change findings** (`extractAsPath` + `diffAsPath`, wired into
+   `src/analysis/probeFindings.js` → `probePipeline.js`). On probe-results ingest the
+   observed AS-path of the two most recent runs to a target is compared; a changed
+   ordered sequence raises a finding through the **same store + alerting + ITSM**
+   pipeline as the loss/latency findings:
+   - a different **destination/origin AS** → `WARN` ("Path to X now exits via AS999
+     (was AS200)");
+   - any other reroute (a new transit AS, a dropped AS, a length change) → `INFO`.
+
+   The per-(metric, target) cooldown means a path that changed and stays changed is
+   reported once, not on every probe. Needs the GeoIP/ASN DB to resolve hop ASNs;
+   without it the check is simply skipped (everything else is unaffected). Schedule a
+   recurring `traceroute` (a **test package**, `docs/tests.md`) to monitor a path
+   continuously.
+
+> **Honesty — forwarding vs. control plane.** This is the **data-plane** AS-path
+> *observed* via traceroute + GeoIP/ASN, **not** the BGP control-plane `AS_PATH`
+> attribute. They usually agree but can diverge (MPLS tunnels hide hops, IXP hops,
+> asymmetric return paths, anycast). True BGP/BMP monitoring — live route
+> announcements, RPKI validity, hijack detection — needs a control-plane feed and is
+> out of scope here (it would fight the offline/on-prem posture); the closest
+> in-architecture extension would be importing an offline RPKI/IRR snapshot the way
+> `src/geo/geoipUpdater.js` imports the GeoIP DB.
+
 ## Caveats (by design)
 
 - **Silent routers.** Many routers don't emit ICMP "TTL exceeded", so an

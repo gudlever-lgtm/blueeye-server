@@ -351,9 +351,16 @@ function start() {
     publishFinding: (hostId, message) => (dashboardWs ? dashboardWs.broadcast(message) : 0),
     logger: console,
   });
-  // Active-probe analysis: derive findings (reachability/loss/latency/jitter/cert)
-  // from probe-results on ingest, alongside the traffic detector above. Shares the
-  // analysis license+flag and the same alerting dispatcher + dashboard publish.
+  // Offline GeoIP/ASN provider (EU-sourced range DB; config.geo.dbPath). Created
+  // here so the probe pipeline can resolve traceroute hop IPs → ASNs for AS-path
+  // change detection; reused below for flow enrichment and the path/destination
+  // maps. Without a DB it simply no-ops (no country/ASN).
+  const geoProvider = createGeoProvider({ dbPath: config.geo.dbPath, logger: console });
+
+  // Active-probe analysis: derive findings (reachability/loss/latency/jitter/cert/
+  // AS-path change) from probe-results on ingest, alongside the traffic detector
+  // above. Shares the analysis license+flag and the same alerting dispatcher +
+  // dashboard publish.
   const probePipeline = createProbePipeline({
     probeResultsRepo,
     findingStore,
@@ -362,6 +369,7 @@ function start() {
     alertingEnabled: () => alertingConfig.enabled,
     integrationTrigger: integrationsDispatcher,
     licensed: () => featureGate.isFeatureEnabled('analysis'),
+    geoProvider,
     publishFinding: (hostId, message) => (dashboardWs ? dashboardWs.broadcast(message) : 0),
     logger: console,
   });
@@ -373,11 +381,10 @@ function start() {
     config: analysisConfig, findingStore, agentsRepo, locationsRepo, probeResultsRepo, logger: console,
   });
 
-  // Geo layer: enrich + store flow records. The GeoIP provider reads an offline,
-  // EU-sourced range DB (config.geo.dbPath); without it, flows store without
-  // country/ASN. RFC1918/private endpoints are never geolocated.
+  // Geo layer: enrich + store flow records. The GeoIP provider (created above for
+  // the probe pipeline) reads an offline, EU-sourced range DB; without it, flows
+  // store without country/ASN. RFC1918/private endpoints are never geolocated.
   const flowsRepo = createFlowsRepository(db);
-  const geoProvider = createGeoProvider({ dbPath: config.geo.dbPath, logger: console });
   const centroids = createCentroids();
   const geoEnricher = createGeoEnricher({ provider: geoProvider, centroids });
   const flowPipeline = createFlowPipeline({

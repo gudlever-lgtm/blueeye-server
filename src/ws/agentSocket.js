@@ -9,6 +9,15 @@ const silentLogger = { info() {}, warn() {}, error() {} };
 // The hsflowd exporter states an agent may report (mirrors the agent's vocabulary).
 const HSFLOWD_STATES = ['active', 'inactive', 'failed', 'not_installed', 'install_failed', 'permission_denied', 'unknown'];
 
+// Best source IP for a connecting agent: first X-Forwarded-For hop when present
+// (proxied deployments), else the socket peer. Bounded for the audit row.
+function clientIp(req) {
+  const xff = req && req.headers && req.headers['x-forwarded-for'];
+  if (typeof xff === 'string' && xff.length) return xff.split(',')[0].trim().slice(0, 64);
+  const ip = (req && req.socket && req.socket.remoteAddress) || '';
+  return ip ? ip.slice(0, 64) : null;
+}
+
 // Attaches the agent WebSocket endpoint to an existing HTTP server. Agent-token
 // auth is enforced during the upgrade handshake — a connection without a valid
 // token is rejected hard (no WebSocket is ever established).
@@ -20,7 +29,8 @@ function attachAgentWebSocket({
   // agent reports its result (upgrade/delete/install-tool).
   auditRepo = null,
   // Optional: the unified audit trail — records the OUTCOME of an install-tool
-  // so operators see it (and why) under Reporting → Audit.
+  // and agent-reported operational errors (`agent.error`) so operators see them
+  // (and why) under Reporting → Audit.
   auditEventsRepo = null,
   logger = silentLogger,
   path = '/ws/agent',
@@ -45,6 +55,17 @@ function attachAgentWebSocket({
     if (ws._lastSeenAt && now - ws._lastSeenAt < TOUCH_THROTTLE_MS) return;
     ws._lastSeenAt = now;
     agentsRepo.touchLastSeen(agentId).catch(() => {});
+  }
+
+  // Audits an agent connect/disconnect transition (agent.online / agent.offline)
+  // in the unified trail, so operators have a timeline of agent availability — not
+  // just the live status flag. Discrete rows (the sequence is the point), so a
+  // server restart or a flapping link reads as the transitions it actually was.
+  // Best-effort: a recording failure must never affect the connection lifecycle.
+  function recordAgentAudit(action, agentId, ip) {
+    if (!auditEventsRepo || typeof auditEventsRepo.record !== 'function') return;
+    Promise.resolve(auditEventsRepo.record({ actorType: 'agent', actorId: agentId, action, ip: ip || null }))
+      .catch((err) => logger.error(`Failed to record ${action} audit event:`, err));
   }
 
   // Correlated server -> agent requests: sendCommandAndWait() stores a waiter
@@ -97,6 +118,7 @@ function attachAgentWebSocket({
   wss.on('connection', (ws, req, agent) => {
     ws.agentId = agent.agentId;
     ws.isAlive = true;
+    ws._remoteIp = clientIp(req); // captured here so the offline row can reuse it
 
     agentsRepo
       .setStatus(agent.agentId, 'online')
@@ -104,6 +126,7 @@ function attachAgentWebSocket({
     if (typeof notifyDashboard === 'function') {
       try { notifyDashboard({ type: 'agent-status', payload: { agentId: agent.agentId, status: 'online' } }); } catch { /* best-effort */ }
     }
+    recordAgentAudit('agent.online', agent.agentId, ws._remoteIp);
 
     // Initial server -> agent message (also demonstrates the push channel).
     safeSend(ws, { type: 'connected', agentId: agent.agentId });
@@ -137,6 +160,27 @@ function attachAgentWebSocket({
         sflowStatus.set(ws.agentId, { state, detail, at: new Date().toISOString() });
         if (typeof notifyDashboard === 'function') {
           try { notifyDashboard({ type: 'sflow-status', payload: { agentId: ws.agentId, state, detail } }); } catch { /* best-effort */ }
+        }
+      }
+      // agent -> server: a non-fatal operational error the agent hit (couldn't
+      // submit a measurement, fetch its config, run a scheduled probe, …).
+      // Recorded in the unified audit trail (Reporting → Audit) as 'agent.error',
+      // collapsed per (agent, category[, code]) via the dedup key so a recurring
+      // failure is one annotated row, not a flood. Metadata only — `message` is
+      // the agent's Error text, never measured payload. Best-effort: a bad frame
+      // or a repo error must never break the hub.
+      if (msg.type === 'agent.error' && auditEventsRepo && typeof auditEventsRepo.recordRecurring === 'function') {
+        const category = (typeof msg.category === 'string' && msg.category.trim() ? msg.category.trim() : 'general').slice(0, 48);
+        const code = typeof msg.code === 'string' && msg.code ? msg.code.slice(0, 48) : null;
+        const reason = typeof msg.message === 'string' ? msg.message.slice(0, 300) : null;
+        auditEventsRepo.recordRecurring({
+          actorType: 'agent', actorId: ws.agentId,
+          action: 'agent.error', targetType: category, targetLabel: code,
+          detail: { reason, code },
+          dedupKey: `agent:${ws.agentId}:error:${category}${code ? `:${code}` : ''}`,
+        }).catch((err) => logger.error('Failed to record agent.error audit event:', err));
+        if (typeof notifyDashboard === 'function') {
+          try { notifyDashboard({ type: 'agent-error', payload: { agentId: ws.agentId, category, code, reason } }); } catch { /* best-effort */ }
         }
       }
       // agent -> server: result of a server-initiated action (upgrade/delete).
@@ -179,6 +223,7 @@ function attachAgentWebSocket({
       if (typeof notifyDashboard === 'function') {
         try { notifyDashboard({ type: 'agent-status', payload: { agentId: agent.agentId, status: 'offline' } }); } catch { /* best-effort */ }
       }
+      recordAgentAudit('agent.offline', agent.agentId, ws._remoteIp);
     });
 
     ws.on('error', (err) => logger.error('Agent WS connection error:', err));

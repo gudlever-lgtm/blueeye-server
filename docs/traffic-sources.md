@@ -58,6 +58,13 @@ straight into the agent's collector.
   packet-sampling module — the only one needed; `HOST` would pull in
   KVM/OVS/libvirt.
 
+  When hsflowd is the only exporter, also set the collector **bind address** to
+  `127.0.0.1` ("Collector bind address" in the edit modal, or
+  `"sflow": { "bindAddress": "127.0.0.1" }`) so the agent's UDP collector is
+  not reachable from the LAN. `bindAddress` (an IP literal) is accepted for
+  both `netflow` and `sflow`; blank means all interfaces (`0.0.0.0`). Requires
+  agent ≥ 0.9.x (older agents ignore it).
+
 - **Docker agents** can't install hsflowd onto the host, so they run the
   **hsflowd sidecar** instead (see the agent repo:
   `docker-compose.hsflowd.yml` / `ENABLE_HSFLOWD=1 ./install.sh`).

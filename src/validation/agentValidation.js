@@ -79,6 +79,18 @@ function validateMonitorConfig(raw, errors) {
         }
         out.port = n.port;
       }
+      // Optional collector bind address (IP literal). Lets the agent bind its
+      // UDP collector to a specific interface — e.g. 127.0.0.1 when only the
+      // local hsflowd exports, keeping the collector off the LAN. The agent
+      // defaults to 0.0.0.0 when unset.
+      if (n.bindAddress !== undefined && n.bindAddress !== null && n.bindAddress !== '') {
+        const addr = typeof n.bindAddress === 'string' ? n.bindAddress.trim() : '';
+        if (!/^[0-9a-fA-F.:]{1,45}$/.test(addr)) {
+          errors.monitor_config = `monitor_config.${src}.bindAddress must be an IPv4/IPv6 address literal`;
+          return undefined;
+        }
+        out.bindAddress = addr;
+      }
       // sflow only: an optional hsflowd block tells the agent to self-provision a
       // local Host sFlow exporter (apt install + /etc/hsflowd.conf + systemctl),
       // for hosts with no switch exporting sFlow. `true` (defaults) or options.

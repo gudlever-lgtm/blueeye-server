@@ -85,6 +85,21 @@ test('rejects a malformed file (missing signature)', () => {
   assert.equal(verifier().verify({ payload: basePayload, signature: 'not-base64-sig' }).status, 'invalid_signature');
 });
 
+test('a missing validity window is malformed, never perpetual', () => {
+  // The issuer always emits both bounds; a correctly-signed payload without
+  // them must fail closed rather than become a perpetual license.
+  const noUntil = { ...basePayload };
+  delete noUntil.valid_until;
+  assert.equal(verifier().verify(licenseFile(noUntil)).status, 'malformed');
+
+  const noFrom = { ...basePayload };
+  delete noFrom.valid_from;
+  assert.equal(verifier().verify(licenseFile(noFrom)).status, 'malformed');
+
+  const nullWindow = { ...basePayload, valid_from: null, valid_until: null };
+  assert.equal(verifier().verify(licenseFile(nullWindow)).status, 'malformed');
+});
+
 test('null overrides mean "use the plan default"', () => {
   const p = { ...basePayload, max_agents_override: null, max_test_paths_override: null, enabled_features_override: null };
   const r = verifier().verify(licenseFile(p));

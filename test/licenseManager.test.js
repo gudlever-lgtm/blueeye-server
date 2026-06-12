@@ -35,6 +35,14 @@ function proof(over = {}) {
 function okFetch(body) {
   return async () => ({ status: 200, ok: true, json: async () => body });
 }
+// Signs a fresh proof per request, echoing the request's nonce into the signed
+// payload — exactly what blueeye-licens does. The manager rejects anything else.
+function licensFetch(over = {}) {
+  return async (_url, opts) => {
+    const sent = JSON.parse(opts.body);
+    return { status: 200, ok: true, json: async () => proof({ nonce: sent.nonce, ...over }) };
+  };
+}
 function statusFetch(status, body = {}) {
   return async () => ({ status, ok: status >= 200 && status < 300, json: async () => body });
 }
@@ -55,18 +63,18 @@ function manager({ fetchImpl, cache = createMemoryCache(), now = () => NOW, getA
 }
 
 test('status surfaces the proof expiry as validUntil (null when perpetual)', async () => {
-  const noExpiry = manager({ fetchImpl: okFetch(proof()) });
+  const noExpiry = manager({ fetchImpl: licensFetch() });
   await noExpiry.validateOnce();
   assert.equal(noExpiry.getStatus().validUntil, null);
 
-  const withExpiry = manager({ fetchImpl: okFetch(proof({ expiry: '2027-01-01T00:00:00.000Z' })) });
+  const withExpiry = manager({ fetchImpl: licensFetch({ expiry: '2027-01-01T00:00:00.000Z' }) });
   await withExpiry.validateOnce();
   assert.equal(withExpiry.getStatus().validUntil, '2027-01-01T00:00:00.000Z');
 });
 
 test('valid validation -> status valid, licensed, cached', async () => {
   const cache = createMemoryCache();
-  const m = manager({ fetchImpl: okFetch(proof()), cache });
+  const m = manager({ fetchImpl: licensFetch(), cache });
 
   await m.validateOnce();
 
@@ -77,17 +85,8 @@ test('valid validation -> status valid, licensed, cached', async () => {
   assert.ok(cached && cached.payload.valid === true && typeof cached.verifiedAt === 'number');
 });
 
-// A signer that echoes the request's nonce into the signed proof (like the
-// upgraded blueeye-licens), so we can exercise the anti-replay path.
-function echoingNonceFetch() {
-  return async (_url, opts) => {
-    const sent = JSON.parse(opts.body);
-    return { status: 200, ok: true, json: async () => proof({ nonce: sent.nonce }) };
-  };
-}
-
 test('a proof echoing the request nonce is accepted', async () => {
-  const m = manager({ fetchImpl: echoingNonceFetch() });
+  const m = manager({ fetchImpl: licensFetch() });
   await m.validateOnce();
   assert.equal(m.getStatus().status, 'valid');
 });
@@ -98,6 +97,16 @@ test('a replayed proof with a stale nonce is rejected', async () => {
   const m = manager({ fetchImpl: okFetch(stale) });
   await m.validateOnce();
   assert.notEqual(m.getStatus().status, 'valid');
+  assert.equal(m.getStatus().reason, 'nonce_mismatch');
+});
+
+test('a proof without a nonce is rejected (replay of a pre-nonce capture)', async () => {
+  // A validly-signed proof that simply omits the nonce field — what a captured
+  // pre-nonce response (or a long-obsolete signer) would look like.
+  const m = manager({ fetchImpl: okFetch(proof()) });
+  await m.validateOnce();
+  assert.notEqual(m.getStatus().status, 'valid');
+  assert.equal(m.isLicensed(), false);
   assert.equal(m.getStatus().reason, 'nonce_mismatch');
 });
 
@@ -153,7 +162,7 @@ test('offline after grace expired -> unlicensed (hard fail)', async () => {
 });
 
 test('enforces max_agents on new connections', async () => {
-  const m = manager({ fetchImpl: okFetch(proof({ limits: { max_agents: 2 } })) });
+  const m = manager({ fetchImpl: licensFetch({ limits: { max_agents: 2 } }) });
 
   await m.validateOnce();
 
@@ -175,7 +184,7 @@ test('unlicensed (no cache, offline) -> no new connections allowed', async () =>
 
 test('a signed valid:false proof -> invalid, not licensed, not cached', async () => {
   const cache = createMemoryCache();
-  const m = manager({ fetchImpl: okFetch(proof({ valid: false, reason: 'status_revoked' })), cache });
+  const m = manager({ fetchImpl: licensFetch({ valid: false, reason: 'status_revoked' }), cache });
 
   await m.validateOnce();
 
@@ -186,7 +195,7 @@ test('a signed valid:false proof -> invalid, not licensed, not cached', async ()
 
 test('a signed valid:false/expired proof -> expired (distinct from invalid)', async () => {
   const cache = createMemoryCache();
-  const m = manager({ fetchImpl: okFetch(proof({ valid: false, reason: 'expired' })), cache });
+  const m = manager({ fetchImpl: licensFetch({ valid: false, reason: 'expired' }), cache });
 
   await m.validateOnce();
 
@@ -211,10 +220,9 @@ test('a non-200 response falls back to cache + grace (does not hard-reject)', as
 
 test('sends licenseKey, serverId and agentCount in the request', async () => {
   let sentBody;
-  const { payload, signature } = proof();
   const fetchImpl = async (url, opts) => {
     sentBody = JSON.parse(opts.body);
-    return { status: 200, ok: true, json: async () => ({ payload, signature }) };
+    return { status: 200, ok: true, json: async () => proof({ nonce: sentBody.nonce }) };
   };
   const m = manager({ fetchImpl, getAgentCount: () => 7 });
 
@@ -223,4 +231,50 @@ test('sends licenseKey, serverId and agentCount in the request', async () => {
   assert.equal(sentBody.licenseKey, 'lk');
   assert.equal(sentBody.serverId, 'srv-1');
   assert.equal(sentBody.agentCount, 7);
+});
+
+test('a trusted negative is durable: cache cleared, no grace resurrection, survives restart', async () => {
+  const cache = createMemoryCache();
+  let impl = licensFetch();
+  const m = manager({ fetchImpl: (...args) => impl(...args), cache });
+
+  // 1) A fresh valid proof — licensed and cached.
+  await m.validateOnce();
+  assert.equal(m.getStatus().status, 'valid');
+  assert.ok(cache.read());
+
+  // 2) The licens server revokes: a signature-verified valid:false proof.
+  impl = licensFetch({ valid: false, reason: 'status_revoked' });
+  await m.validateOnce();
+  assert.equal(m.getStatus().status, 'invalid');
+  assert.equal(cache.read(), null); // the denial cleared the on-disk cache
+
+  // 3) The licens server then becomes unreachable: the old valid proof must NOT
+  //    resurrect the licence into grace.
+  impl = offlineFetch();
+  await m.validateOnce();
+  assert.equal(m.getStatus().status, 'unlicensed');
+  assert.equal(m.isLicensed(), false);
+  assert.equal(m.canAcceptNewConnection(0), false);
+
+  // 4) A restart (fresh manager over the same cache) stays unlicensed too.
+  const m2 = manager({ fetchImpl: offlineFetch(), cache });
+  m2.loadCache();
+  await m2.validateOnce();
+  assert.equal(m2.isLicensed(), false);
+});
+
+test('grace never outlives the licence\'s own expiry', async () => {
+  // Last verified NOW, licence expires a day later, server offline ever since:
+  // at NOW+2d we are well inside the 14-day grace window but past expiry.
+  const { payload, signature } = proof({ expiry: new Date(NOW + DAY).toISOString() });
+  const cache = createMemoryCache({ payload, signature, verifiedAt: NOW });
+  const m = manager({ fetchImpl: offlineFetch(), cache, now: () => NOW + 2 * DAY });
+
+  m.loadCache();
+  await m.validateOnce();
+
+  assert.equal(m.isLicensed(), false);
+  assert.equal(m.getStatus().status, 'expired');
+  assert.equal(m.canAcceptNewConnection(0), false);
 });

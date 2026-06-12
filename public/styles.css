@@ -987,9 +987,12 @@ button.active-btn { outline: 2px solid var(--accent); }
 /* Advanced dashboard (dashboard_advanced): the NOC KPI strip above a responsive
    grid of drill-down panels. Panel tables are compact; rows that drill into an
    agent show a pointer + hover tint, reusing the shared status/border tokens. */
-.advanced-view .panel-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
+.advanced-view .panel-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; align-items: start; }
 @media (max-width: 900px) { .advanced-view .panel-grid { grid-template-columns: 1fr; } }
 .advanced-view .panel-grid .card { margin: 0; }
+/* The findings list is long; give it the full row below the two short summary
+   panels instead of stranding it in one column with dead space beside it. */
+.advanced-view .panel-grid .card.wide { grid-column: 1 / -1; }
 .advanced-view .panel-grid .card h3 { margin: 0 0 10px; }
 .adv-table { width: 100%; border-collapse: collapse; }
 .adv-table td { padding: 6px 8px; border-top: 1px solid var(--border); vertical-align: middle; }

@@ -1950,7 +1950,7 @@ function trafficHistorySection({ onData = () => {} } = {}) {
   const metricBoxes = METRIC_DEFS.map(([key, label]) => {
     const cb = el('input', { type: 'checkbox' });
     cb.checked = histState.metrics.has(key);
-    cb.addEventListener('change', () => { if (cb.checked) histState.metrics.add(key); else histState.metrics.delete(key); });
+    cb.addEventListener('change', () => { if (cb.checked) histState.metrics.add(key); else histState.metrics.delete(key); renderChart(); });
     return el('label', { class: 'check' }, cb, label);
   });
 
@@ -1958,6 +1958,13 @@ function trafficHistorySection({ onData = () => {} } = {}) {
   const status = el('div', { class: 'muted' });
   let baseFrom = null;
   let baseTo = null;
+  // Cache of the last fetch so ticking/unticking a metric re-renders the chart
+  // WITHOUT refetching — the samples, window and finding markers don't change,
+  // only which series are drawn.
+  let lastPoints = null;
+  let lastFromMs = null;
+  let lastToMs = null;
+  let lastMarkers = [];
 
   const fetchBtn = el('button', { class: 'small', onclick: () => { baseFrom = fromI.value; baseTo = toI.value; load(); } }, 'Fetch');
   const resetBtn = el('button', { class: 'small ghost', onclick: () => { if (baseFrom) { fromI.value = baseFrom; toI.value = baseTo; load(); } } }, 'Reset zoom');
@@ -1991,6 +1998,7 @@ function trafficHistorySection({ onData = () => {} } = {}) {
     if (toMs - fromMs < MIN_MS) { const mid = (fromMs + toMs) / 2; fromMs = Math.round(mid - MIN_MS / 2); toMs = Math.round(mid + MIN_MS / 2); }
     status.textContent = 'Fetching…';
     chartHost.replaceChildren();
+    lastPoints = null; // a failed/empty fetch must not leave stale data for a toggle
     let rows;
     try {
       rows = await api(`/agents/${agentId}/results?from=${new Date(fromMs).toISOString()}&to=${new Date(toMs).toISOString()}&limit=5000`);
@@ -2008,16 +2016,26 @@ function trafficHistorySection({ onData = () => {} } = {}) {
     status.textContent = `${points.length} measurements`;
     // Feed the companion Traffic types card the same samples (no extra fetch).
     onData({ state: 'data', agentId, fromMs, toMs, points });
-    const chosen = METRIC_DEFS.filter(([k]) => histState.metrics.has(k));
-    if (!chosen.length) { chartHost.replaceChildren(el('div', { class: 'empty' }, 'Select at least one type.')); return; }
-    const seriesList = chosen.map(([k, label], idx) => ({ id: k, label, color: SERIES_COLORS[idx % SERIES_COLORS.length], points: points.map((p) => ({ t: p.t, y: p[k] })) }));
-    const legend = legendFor(seriesList);
-    // #7 event timeline: findings for this agent in the window as markers. Band
-    // (#6) only when a single metric is shown (otherwise scales clash).
+    // #7 event timeline: findings for this agent in the window as markers.
     let markers = [];
     try { const fs = await api(`/api/findings?hostId=${encodeURIComponent(agentId)}&since=${new Date(fromMs).toISOString()}`); markers = findingMarkers(fs); } catch { markers = []; }
+    // Cache the window so the metric checkboxes can redraw it live, then draw.
+    lastPoints = points; lastFromMs = fromMs; lastToMs = toMs; lastMarkers = markers;
+    renderChart();
+  }
+
+  // Draws the chart from the LAST fetched samples and the current metric
+  // selection, so ticking/unticking a type updates the chart instantly without
+  // refetching. A no-op until something has been fetched.
+  function renderChart() {
+    if (!lastPoints || !lastPoints.length) return;
+    const chosen = METRIC_DEFS.filter(([k]) => histState.metrics.has(k));
+    if (!chosen.length) { chartHost.replaceChildren(el('div', { class: 'empty' }, 'Select at least one type.')); return; }
+    const seriesList = chosen.map(([k, label], idx) => ({ id: k, label, color: SERIES_COLORS[idx % SERIES_COLORS.length], points: lastPoints.map((p) => ({ t: p.t, y: p[k] })) }));
+    const legend = legendFor(seriesList);
+    // Band (#6) only when a single metric is shown (otherwise scales clash).
     const band = seriesList.length === 1 ? robustBand(seriesList[0].points) : null;
-    chartHost.replaceChildren(historyChart(seriesList, { fromMs, toMs, band, markers, onBrush: (f, t) => { fromI.value = toLocalInput(new Date(f)); toI.value = toLocalInput(new Date(t)); load({ fromMs: f, toMs: t }); } }), legend);
+    chartHost.replaceChildren(historyChart(seriesList, { fromMs: lastFromMs, toMs: lastToMs, band, markers: lastMarkers, onBrush: (f, t) => { fromI.value = toLocalInput(new Date(f)); toI.value = toLocalInput(new Date(t)); load({ fromMs: f, toMs: t }); } }), legend);
   }
 
   // Called from the live graph's brush: load the actual stored data for the
@@ -3978,8 +3996,9 @@ views.advanced = async () => {
       el('td', { class: 'muted' }, fmtDate(i.startedAt)))))));
   panels.append(inc);
 
-  // Recent (open) analysis findings panel.
-  const fnd = el('div', { class: 'card' }, el('h3', {}, 'Recent findings'));
+  // Recent (open) analysis findings panel — spans the full row (it's the long
+  // list) so the two short panels above sit side by side without dead space.
+  const fnd = el('div', { class: 'card wide' }, el('h3', {}, 'Recent findings'));
   if (!w.findings.recent.length) fnd.append(el('p', { class: 'muted' }, 'No open analysis findings.'));
   else fnd.append(el('table', { class: 'adv-table' }, el('tbody', {}, ...w.findings.recent.map((x) =>
     el('tr', {},

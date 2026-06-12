@@ -560,9 +560,9 @@ const PAGE_INFO = {
       el('ul', {},
         el('li', {}, 'Chips in the chart toolbar toggle Total RX and Total TX on/off.'),
         el('li', {}, '”Per agent ▾” opens a menu where you can add RX/TX for each individual agent.'),
-        el('li', {}, '”↔ Expand” stretches the chart to full width and height; click again for normal size.')),
+        el('li', {}, '”↺ Reset zoom” returns to the live rolling view after you have zoomed into a window (see below).')),
       el('h4', {}, 'Inspect a time window'),
-      el('p', {}, 'Drag across the chart to mark a window — the panel on the right shows average/min/max for the marked series. “Show stored data →” fetches the actual stored measurements for the window (in History). Right-click clears the selection.'),
+      el('p', {}, 'Drag across the chart to zoom into that timespan — the chart freezes to the selected window so you can read it. Click ”↺ Reset zoom” (or right-click the chart) to return to the live view.'),
       el('h4', {}, 'Rest of the page'),
       el('ul', {},
         el('li', {}, 'KPI strip at the top: current RX/TX, online agents and number of locations.'),
@@ -2539,25 +2539,22 @@ views.overview = async () => {
   // Top agents by current bandwidth (updated each tick).
   const topAgents = el('div', { class: 'top-agents' });
 
-  // Hero chart: the chart fills the card's full width; a "marked" side panel
-  // claims the right edge only while a window is selected. A size toggle widens
-  // the whole card to (almost) the viewport and makes the chart taller.
+  // Hero chart: the chart fills the card's full width. Dragging across it zooms
+  // into the selected timespan (freezing the live view to that window); the
+  // "Reset zoom" chip returns to the live rolling view.
   const chartHost = el('div', { class: 'overview-chart' });
   const controls = el('div', { class: 'peragent-list' });
-  const markedStrip = el('div', { class: 'marked-side hidden' });
   const chipRx = el('button', { class: 'chip rx', onclick: () => toggleSeries('total:rx') }, 'Total RX');
   const chipTx = el('button', { class: 'chip tx', onclick: () => toggleSeries('total:tx') }, 'Total TX');
   const perAgentCnt = el('span', { class: 'cnt muted' });
   const perAgent = el('details', { class: 'chip-det' },
     el('summary', { class: 'chip' }, 'Pr. agent ', perAgentCnt), controls);
-  const sizeBtn = el('button', { class: 'chip size-toggle', onclick: () => toggleSize() });
-  let bigView = false;
-  try { bigView = localStorage.getItem('blueeye.server.trafikBig') === '1'; } catch { /* storage off */ }
+  const zoomBtn = el('button', { class: 'chip size-toggle', onclick: () => resetZoom() });
+  let zoom = null; // frozen snapshot of the dragged window, or null while live
   const chartCard = el('div', { class: 'chart-card' },
-    el('div', { class: 'bar' }, el('h3', {}, 'Live traffic'), el('span', { class: 'spacer' }), chipRx, chipTx, perAgent, sizeBtn),
-    el('div', { class: 'chart-row' }, chartHost, markedStrip));
+    el('div', { class: 'bar' }, el('h3', {}, 'Live traffic'), el('span', { class: 'spacer' }), chipRx, chipTx, perAgent, zoomBtn),
+    el('div', { class: 'chart-row' }, chartHost));
   root.append(chartCard);
-  clearMarked(); // side panel stays hidden until a brush selection
 
   // Slim storage line; the full disk/DB/forbrug breakdown folds open below it.
   const storageSummary = el('summary', { class: 'storage-line' }, el('span', { class: 'muted' }, 'Storage …'));
@@ -2637,17 +2634,24 @@ views.overview = async () => {
     if (tickN % 10 === 0) { refreshAlert(); refreshStorage(); }
   }
 
-  function renderChart() {
-    // Cyan for RX, emerald for TX (NOC palette); palette colours for the rest.
+  // The live series: the selected ids mapped onto their rolling history
+  // buffers, coloured cyan for RX / emerald for TX and the palette otherwise.
+  function liveSeries() {
     const colorFor = (id, idx) => (id.includes('rx') ? '#06b6d4' : id.includes('tx') ? '#10b981' : SERIES_COLORS[idx % SERIES_COLORS.length]);
-    const chosen = [...selection].filter((id) => history.has(id));
-    const seriesList = chosen.map((id, idx) => ({
+    return [...selection].filter((id) => history.has(id)).map((id, idx) => ({
       id, label: history.get(id).label, color: colorFor(id, idx),
       points: history.get(id).points,
     }));
+  }
+
+  function renderChart() {
+    // While zoomed the chart is frozen to the snapshot taken at drag time, so
+    // the 3-second live tick doesn't fight the zoom; otherwise it's the rolling
+    // live series.
+    const seriesList = zoom ? zoom.series : liveSeries();
     const legend = legendFor(seriesList);
     // Running clock ticks (HH:MM:SS) from the actual point timestamps, so the
-    // x-axis shows the live timeframe rather than a static "~3 min siden / nu".
+    // x-axis shows the (live or zoomed) timeframe rather than a static label.
     const ref = seriesList.find((s) => s.points.length >= 2);
     const TICKS = 5;
     let xLabels = ['~3 min ago', '', 'now'];
@@ -2657,55 +2661,47 @@ views.overview = async () => {
         fmtClock(pts[Math.round((i / (TICKS - 1)) * (pts.length - 1))].t));
     }
     chartHost.replaceChildren(
-      seriesList.length ? multiChart(seriesList, { height: bigView ? 560 : 300, area: true, xLabels, onBrush: (f0, f1) => { if (f0 === null) clearMarked(); else renderMarked(f0, f1); } }) : el('div', { class: 'empty' }, 'Select series in the toolbar ↑'),
+      seriesList.length ? multiChart(seriesList, { height: 300, area: true, xLabels, onBrush: (f0, f1) => { if (f0 === null) resetZoom(); else zoomTo(f0, f1); } }) : el('div', { class: 'empty' }, 'Select series in the toolbar ↑'),
       legend);
     syncChips();
   }
 
-  function clearMarked() {
-    markedStrip.className = 'marked-side hidden';
-    markedStrip.replaceChildren();
+  // Drag-to-zoom: freeze the chart to the dragged slice of whatever is shown
+  // now (the live buffer, or an existing zoom — so a second drag zooms in
+  // further). Snapshots the points so later live ticks leave the window be.
+  function zoomTo(f0, f1) {
+    const base = zoom ? zoom.series : liveSeries();
+    if (!base.length) return;
+    const maxLen = Math.max(1, ...base.map((s) => s.points.length));
+    const i0 = Math.round(Math.min(f0, f1) * (maxLen - 1));
+    const i1 = Math.round(Math.max(f0, f1) * (maxLen - 1));
+    if (i1 <= i0) return; // ignore a click / zero-width drag
+    const series = base
+      .map((s) => ({ id: s.id, label: s.label, color: s.color, points: s.points.slice(i0, i1 + 1).map((p) => ({ t: p.t, y: p.y })) }))
+      .filter((s) => s.points.length >= 2);
+    if (!series.length) return;
+    zoom = { series };
+    updateZoomBtn();
+    renderChart();
   }
-  function renderMarked(f0, f1) {
-    const chosen = [...selection].filter((id) => history.has(id));
-    if (!chosen.length) { clearMarked(); return; }
-    const maxLen = Math.max(1, ...chosen.map((id) => history.get(id).points.length));
-    let i0 = Math.round(f0 * (maxLen - 1));
-    let i1 = Math.round(f1 * (maxLen - 1));
-    if (i1 < i0) { const tmp = i0; i0 = i1; i1 = tmp; }
-    const rows = [];
-    for (const id of chosen) {
-      const slice = history.get(id).points.slice(i0, i1 + 1);
-      if (!slice.length) continue;
-      const ys = slice.map((p) => p.y);
-      rows.push({ label: history.get(id).label, avg: ys.reduce((s, v) => s + v, 0) / ys.length, min: Math.min(...ys), max: Math.max(...ys) });
-    }
-    const ref = history.get(chosen[0]).points;
-    const tFrom = ref[i0] && ref[i0].t;
-    const lastIdx = Math.min(i1, ref.length - 1);
-    const tTo = ref[lastIdx] && ref[lastIdx].t;
-    const children = [
-      el('div', { class: 'ms-head' }, el('strong', {}, 'Marked'), el('span', { class: 'spacer' }), el('button', { class: 'small ghost', onclick: clearMarked }, 'Clear')),
-      el('div', { class: 'muted ms-range' }, (tFrom && tTo) ? `${fmtTimeShort(tFrom)} – ${fmtTimeShort(tTo)} · ${i1 - i0 + 1} pkt.` : `${i1 - i0 + 1} pkt.`),
-    ];
-    for (const r of rows) {
-      children.push(el('div', { class: 'ms-stat' },
-        el('span', { class: 'ms-name' }, r.label),
-        el('span', { class: 'num' }, `avg ${fmtBytes(r.avg)}/s`),
-        el('span', { class: 'num muted' }, `${fmtBytes(r.min)}–${fmtBytes(r.max)}`)));
-    }
-    // Drill into the ACTUAL stored data for the marked window (per agent).
-    if (tFrom && tTo) {
-      children.push(el('button', { class: 'small drill', onclick: () => { histDetails.open = true; histSection.focus(tFrom, tTo); } }, 'View stored data →'));
-    }
-    markedStrip.className = 'marked-side';
-    markedStrip.replaceChildren(...children);
+  function resetZoom() {
+    if (!zoom) return;
+    zoom = null;
+    updateZoomBtn();
+    renderChart();
+  }
+  // The toolbar chip only does something while zoomed; greyed out otherwise.
+  function updateZoomBtn() {
+    zoomBtn.textContent = '↺ Reset zoom';
+    zoomBtn.disabled = !zoom;
+    zoomBtn.classList.toggle('on', !!zoom);
+    zoomBtn.title = zoom ? 'Return to the live rolling view' : 'Drag across the chart to zoom into a timespan';
   }
 
   function checkbox(id, label) {
     const cb = el('input', { type: 'checkbox' });
     cb.checked = selection.has(id);
-    cb.addEventListener('change', () => { if (cb.checked) selection.add(id); else selection.delete(id); renderChart(); });
+    cb.addEventListener('change', () => { if (cb.checked) selection.add(id); else selection.delete(id); if (zoom) resetZoom(); else renderChart(); });
     return el('label', { class: 'check' }, cb, label);
   }
 
@@ -2723,7 +2719,7 @@ views.overview = async () => {
   // Toolbar chips toggle the two totals and reflect the live selection.
   function toggleSeries(id) {
     if (selection.has(id)) selection.delete(id); else selection.add(id);
-    renderChart();
+    if (zoom) resetZoom(); else renderChart();
   }
   function syncChips() {
     chipRx.classList.toggle('on', selection.has('total:rx'));
@@ -2731,20 +2727,6 @@ views.overview = async () => {
     let n = 0;
     for (const id of selection) if (id.startsWith('rx:') || id.startsWith('tx:')) n += 1;
     perAgentCnt.textContent = n ? `(${n})` : '';
-  }
-
-  // Widen the live-traffic card to (almost) the full viewport + taller chart,
-  // and back. Persisted so it survives reloads and tab switches.
-  function applySize() {
-    chartCard.classList.toggle('big', bigView);
-    sizeBtn.textContent = bigView ? '↔ Shrink' : '↔ Expand';
-    sizeBtn.title = bigView ? 'Shrink the chart to normal width' : 'Expand the chart to full width';
-    renderChart();
-  }
-  function toggleSize() {
-    bigView = !bigView;
-    try { localStorage.setItem('blueeye.server.trafikBig', bigView ? '1' : '0'); } catch { /* storage off */ }
-    applySize();
   }
 
   // Historical traffic explorer (date range, types, time axis, brush-to-zoom),
@@ -2759,8 +2741,9 @@ views.overview = async () => {
   const typeSection = trafficTypeSection();
   root.append(el('details', { class: 'sec' }, el('summary', {}, 'Traffic type ', el('span', { class: 'muted' }, '· per agent · DNS, Facebook, …')), typeSection.node));
 
-  // Reflect the persisted size + set the toggle label (renders the chart once).
-  applySize();
+  // Set the zoom-button state and render once before the first tick.
+  updateZoomBtn();
+  renderChart();
 
   // Lifecycle: poll while this view is mounted; stop when leaving.
   stopOverview();

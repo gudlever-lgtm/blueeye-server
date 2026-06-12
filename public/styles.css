@@ -432,23 +432,15 @@ main#view:has(.fleet) { max-width: 1320px; }
   display: flex; flex-direction: column; gap: 5px; box-shadow: 0 10px 28px rgba(15, 23, 42, .14); }
 .chip-det .peragent-list .check { flex-direction: row; align-items: center; gap: 7px; color: var(--text); }
 
-/* 3) Chart row: the chart fills the card width; a "marked" side panel claims the
-   right edge only while a window is selected. Size toggle widens the card. */
+/* 3) Chart row: the chart fills the card's full width; dragging across it zooms
+   into the selected timespan (the "Reset zoom" chip returns to live). */
 .chart-row { display: flex; gap: 14px; align-items: stretch; }
 .chart-row .overview-chart { flex: 1 1 auto; min-width: 0; }
-.marked-side { flex: 0 0 290px; display: flex; flex-direction: column; gap: 8px;
-  padding: 10px 12px; border: 1px dashed var(--border); border-radius: 8px; font-size: 13px; }
-.marked-side.hidden { display: none; }
-.marked-side .ms-head { display: flex; align-items: center; gap: 8px; }
-.marked-side .ms-range { font-size: 12px; }
-.marked-side .ms-stat { display: flex; flex-direction: column; gap: 1px; padding: 6px 0; border-top: 1px solid var(--border); }
-.marked-side .ms-name { color: var(--muted); }
-.marked-side .drill { margin-top: auto; }
-@media (max-width: 720px) { .chart-row { flex-direction: column; } .marked-side { flex-basis: auto; } }
+@media (max-width: 720px) { .chart-row { flex-direction: column; } }
 
-/* Size toggle: break the card out to (almost) the viewport width (centred). */
+/* Reset-zoom chip: keep it on one line; greyed out while there's no zoom. */
 .size-toggle { white-space: nowrap; }
-.chart-card.big { position: relative; left: 50%; transform: translateX(-50%); width: 98vw; max-width: 1800px; }
+.size-toggle:disabled { opacity: .5; cursor: default; }
 
 /* Traffic-type breakdown: a row of toggle chips above the per-type chart. */
 .tt-chips { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 8px 0 10px; }

@@ -1,6 +1,7 @@
 'use strict';
 
 const { silentLogger } = require('../logger');
+const { config } = require('../config');
 
 // 404 handler — mounted after all routes. Any request that did not match a
 // route lands here.
@@ -30,7 +31,7 @@ function errorHandler({ logger = silentLogger } = {}) {
       error: status === 500 ? 'Internal Server Error' : err.message || 'Error',
     };
     // Surface the underlying message off-production to aid debugging.
-    if (status === 500 && process.env.NODE_ENV !== 'production') {
+    if (status === 500 && config.env !== 'production') {
       body.detail = err.message;
     }
 

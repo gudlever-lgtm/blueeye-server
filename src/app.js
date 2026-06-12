@@ -2,6 +2,7 @@
 
 const path = require('path');
 const express = require('express');
+const { config } = require('./config');
 const { createApiRouter } = require('./routes');
 const { requestLogger } = require('./middleware/requestLogger');
 const { securityHeaders } = require('./middleware/securityHeaders');
@@ -93,7 +94,7 @@ function createApp({
   // public origin (used to build enrollment URLs). Off by default so clients
   // can't spoof X-Forwarded-* (e.g. into the auth audit log) when the server is
   // exposed directly; set TRUST_PROXY=true when running behind a known proxy.
-  app.set('trust proxy', /^(1|true|yes|on)$/i.test(String(process.env.TRUST_PROXY || '').trim()) ? 1 : false);
+  app.set('trust proxy', config.trustProxy ? 1 : false);
   // Always-on baseline security headers (HSTS/CSP/X-Frame-Options/nosniff/
   // Referrer-Policy) on EVERY response — static dashboard + API alike. Mounted
   // first, before the static handler, and not behind any feature key.

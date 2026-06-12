@@ -7,6 +7,9 @@ require('dotenv').config();
 const path = require('path');
 const { resolvePublicKey } = require('./license/publicKey');
 const { normalizeFingerprint } = require('./enroll/fingerprint');
+const { loadConfig: loadAnalysisConfig } = require('./analysis/config');
+const { loadAlertingConfig } = require('./analysis/alerting/config');
+const { loadRetentionConfig } = require('./analysis/retention/config');
 
 function toInt(value, fallback) {
   const parsed = Number.parseInt(value, 10);
@@ -20,6 +23,10 @@ const config = {
   // Recommended when running behind a reverse proxy; when unset the enrollment
   // endpoints derive it from the incoming request. No trailing slash.
   publicUrl: (process.env.BLUEEYE_PUBLIC_URL || process.env.PUBLIC_URL || '').replace(/\/+$/, ''),
+  // Behind a reverse proxy: trust X-Forwarded-* so req.protocol/host reflect the
+  // public origin. OFF by default so clients can't spoof X-Forwarded-* when the
+  // server is exposed directly. Consumed in src/app.js (app.set('trust proxy')).
+  trustProxy: /^(1|true|yes|on)$/i.test(String(process.env.TRUST_PROXY || '').trim()),
   db: {
     host: process.env.DB_HOST || '127.0.0.1',
     port: toInt(process.env.DB_PORT, 3306),
@@ -118,6 +125,9 @@ const config = {
     // reverse proxy's). Embedded into install scripts so the agent can pin it.
     // Leave unset for plain HTTP / development (no pinning).
     certFingerprint: normalizeFingerprint(process.env.AGENT_CERT_FINGERPRINT || process.env.TLS_CERT_FINGERPRINT || ''),
+    // Signed agent releases uploaded via POST /agents/releases are kept here and
+    // pushed to agents. Empty disables the release store (source-bundle installs).
+    releaseDir: process.env.AGENT_RELEASE_DIR || '',
   },
   ws: {
     // Agent live channel.
@@ -204,6 +214,14 @@ const config = {
     // Nominatim (OSMF, EU); point at a self-hosted/EU instance for production.
     geocodeUrl: process.env.MAP_GEOCODE_URL || 'https://nominatim.openstreetmap.org',
   },
+  // Per-module runtime configs, materialised here so config.js is the single
+  // place that reads process.env at startup. The pure loaders live alongside each
+  // module and stay directly importable (tests + the detector default param).
+  modules: {
+    analysis: loadAnalysisConfig(process.env),
+    alerting: loadAlertingConfig(process.env),
+    retention: loadRetentionConfig(process.env),
+  },
 };
 
 // The default JWT secret must never be used outside development.
@@ -217,4 +235,31 @@ const MIN_SECRET_LENGTH = 32;
 config.auth.weakSecret =
   WEAK_SECRETS.has(config.auth.jwtSecret) || config.auth.jwtSecret.length < MIN_SECRET_LENGTH;
 
-module.exports = { config };
+// Startup validation — fail closed (the same philosophy as the licence gate) so
+// the server never boots in a known-bad state. Returns { ok, errors }.
+// Conservative by design: each rule guards an invariant that, if violated, makes
+// the server insecure or unable to function, so any previously-valid deployment
+// still passes unchanged. Subsystem-specific keys (OIDC/SAML/LDAP issuer, certs,
+// …) stay validated lazily by those modules when the feature is enabled, so an
+// optional, half-configured feature never blocks startup.
+function validateConfig(c = config) {
+  const errors = [];
+  // Never run production on a weak/default JWT secret (this also guards
+  // SECRET_ENCRYPTION_KEY, which falls back to it). Previously enforced inline in
+  // src/server.js.
+  if (c.env === 'production' && c.auth.weakSecret) {
+    errors.push(
+      'JWT_SECRET must be a strong, unique value in production ' +
+        '(not a known default, at least 32 characters).'
+    );
+  }
+  // Core keys the server cannot run without. They carry safe defaults, so a
+  // standard deployment passes; these fail closed only if a deployment blanks them.
+  if (!c.db.host) errors.push('DB_HOST is required.');
+  if (!c.db.user) errors.push('DB_USER is required.');
+  if (!c.db.database) errors.push('DB_NAME is required.');
+  if (!Number.isInteger(c.port) || c.port <= 0) errors.push('PORT must be a positive integer.');
+  return { ok: errors.length === 0, errors };
+}
+
+module.exports = { config, validateConfig };

@@ -1,6 +1,6 @@
 'use strict';
 
-const { config } = require('./config');
+const { config, validateConfig } = require('./config');
 const { createRateLimiter } = require('./middleware/rateLimit');
 const { createRevocationRegistry } = require('./auth/revocation');
 const { setRevocationCheck } = require('./auth/middleware');
@@ -49,20 +49,17 @@ const { createAnalysisPipeline } = require('./analysis/pipeline');
 const { createProbePipeline } = require('./analysis/probePipeline');
 const { createCorrelator } = require('./analysis/correlator');
 const { createAssistant } = require('./analysis/assistant');
-const { loadConfig: loadAnalysisConfig } = require('./analysis/config');
 const { createFlowsRepository } = require('./repositories/flowsRepository');
 const { createGeoProvider } = require('./geo/provider');
 const { createGeoipUpdater } = require('./geo/geoipUpdater');
 const { createCentroids } = require('./geo/centroids');
 const { createGeoEnricher } = require('./geo/enricher');
 const { createFlowPipeline } = require('./geo/flowPipeline');
-const { loadAlertingConfig } = require('./analysis/alerting/config');
 const { createDispatcher } = require('./analysis/alerting/dispatcher');
 const { createSilencer } = require('./analysis/alerting/maintenance');
 const { createEmailChannel, createSmtpTransport } = require('./analysis/alerting/channels/email');
 const { createWebhookChannel } = require('./analysis/alerting/channels/webhook');
 const { createSyslogChannel } = require('./analysis/alerting/channels/syslog');
-const { loadRetentionConfig } = require('./analysis/retention/config');
 const { createRetentionRepo } = require('./analysis/retention/repo');
 const { createRollup } = require('./analysis/retention/rollup');
 const { createPurge } = require('./analysis/retention/purge');
@@ -101,15 +98,12 @@ const { version: appVersion } = require('../package.json');
 // Wires up real dependencies, starts the HTTP server and installs graceful
 // shutdown handlers.
 function start() {
-  // Never run in production with a weak JWT secret: the built-in development
-  // default, a known docker-compose example fallback, or anything too short.
-  // SECRET_ENCRYPTION_KEY falls back to JWT_SECRET, so this also guards secrets
-  // at rest.
-  if (config.env === 'production' && config.auth.weakSecret) {
-    console.error(
-      'Refusing to start: JWT_SECRET must be a strong, unique value in production ' +
-        '(not a known default, at least 32 characters).'
-    );
+  // Validate configuration up front and fail closed (the same philosophy as the
+  // licence gate) so the server never boots half-configured — e.g. a production
+  // deployment still on the insecure default JWT secret. See config.validateConfig.
+  const configCheck = validateConfig(config);
+  if (!configCheck.ok) {
+    console.error(`Refusing to start: invalid configuration:\n  - ${configCheck.errors.join('\n  - ')}`);
     process.exit(1);
   }
 
@@ -154,7 +148,7 @@ function start() {
   // POST /agents/releases (verified on upload), kept under AGENT_RELEASE_DIR and
   // pushed to agents. The release public key is a SEPARATE trust anchor from the
   // license key (see src/license/releaseKey.js).
-  const agentReleaseStore = createAgentReleaseStore({ dir: process.env.AGENT_RELEASE_DIR || '', logger: console });
+  const agentReleaseStore = createAgentReleaseStore({ dir: config.enroll.releaseDir, logger: console });
 
   // License validation. Two interchangeable backends with the SAME surface:
   //   - ONLINE  (default): validates a signed proof against blueeye-licens.
@@ -290,7 +284,7 @@ function start() {
   // Analysis module: findings store + detector pipeline hung off ingest. The
   // detector pushes findings to the UI over the SAME WebSocket (agentWs is
   // assigned just below; the closure runs later, at ingest time).
-  const analysisConfig = loadAnalysisConfig();
+  const analysisConfig = config.modules.analysis;
   const findingStore = new FindingStore({ db });
   const baselineCache = createBaselineFileCache(config.analysis.baselineCachePath);
   const baselines = createBaselineStore({
@@ -305,7 +299,7 @@ function start() {
   // Alerting: route findings to channels (email/webhook/syslog). Channels are
   // built unconditionally so the test endpoint works; rules/enable live in
   // config. Outgoing sends use Node's fetch / dgram / (lazy) nodemailer.
-  const alertingConfig = loadAlertingConfig();
+  const alertingConfig = config.modules.alerting;
   const dispatcher = createDispatcher({
     config: alertingConfig,
     channels: {
@@ -389,7 +383,7 @@ function start() {
 
   // Retention: nightly rollup (down-sample raw -> rollup tables) + purge of
   // expired data. DB hygiene; on by default. Started after the server is up.
-  const retentionConfig = loadRetentionConfig();
+  const retentionConfig = config.modules.retention;
   const retentionRepo = createRetentionRepo(db);
 
   // Runtime-editable settings (map tile/geocoder, traffic-type categories, and

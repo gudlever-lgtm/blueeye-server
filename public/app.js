@@ -4829,6 +4829,8 @@ function editAgent(a) {
       value: String((mc.netflow && mc.netflow.port) || 2055) },
     { name: 'sflow_port', label: 'sFlow UDP port (only for sflow)', type: 'number',
       value: String((mc.sflow && mc.sflow.port) || 6343) },
+    { name: 'collector_bind', label: 'Collector bind address (netflow/sflow; blank = all interfaces, 127.0.0.1 = local hsflowd only)',
+      value: (mc.netflow && mc.netflow.bindAddress) || (mc.sflow && mc.sflow.bindAddress) || '' },
     { name: 'sflow_hsflowd', label: 'Local hsflowd exporter (sflow; native installs — Docker uses the sidecar)', type: 'select',
       value: sflowHs ? 'on' : 'off',
       options: [{ value: 'off', label: 'Off (receives sFlow from a switch)' }, { value: 'on', label: 'On (sample this host)' }] },
@@ -4848,9 +4850,12 @@ function editAgent(a) {
         },
       };
     } else if (v.source === 'netflow') {
-      monitor_config = { source: 'netflow', netflow: { port: Number(v.netflow_port) || 2055 } };
+      const netflow = { port: Number(v.netflow_port) || 2055 };
+      if (v.collector_bind && v.collector_bind.trim()) netflow.bindAddress = v.collector_bind.trim();
+      monitor_config = { source: 'netflow', netflow };
     } else if (v.source === 'sflow') {
       const sflow = { port: Number(v.sflow_port) || 6343 };
+      if (v.collector_bind && v.collector_bind.trim()) sflow.bindAddress = v.collector_bind.trim();
       if (v.sflow_hsflowd === 'on') {
         const hs = {};
         const rate = Number(v.sflow_sampling);

@@ -66,6 +66,38 @@ test('PUT /agents/:id accepts source netflow with an optional port', async () =>
   assert.equal(patch.monitor_config.netflow.port, 2055);
 });
 
+test('PUT /agents/:id accepts a netflow/sflow collector bindAddress (IP literal)', async () => {
+  let patch;
+  const agentsRepo = makeAgentsRepo({
+    findById: async () => ({ id: 1 }),
+    updateManaged: async (id, p) => { patch = p; return { id, ...p }; },
+  });
+  const app = makeApp({ agentsRepo });
+  let res = await request(app)
+    .put('/agents/1')
+    .set('Authorization', operator())
+    .send({ monitor_config: { source: 'netflow', netflow: { port: 2055, bindAddress: '127.0.0.1' } } });
+  assert.equal(res.status, 200);
+  assert.equal(patch.monitor_config.netflow.bindAddress, '127.0.0.1');
+
+  res = await request(app)
+    .put('/agents/1')
+    .set('Authorization', operator())
+    .send({ monitor_config: { source: 'sflow', sflow: { bindAddress: '::1' } } });
+  assert.equal(res.status, 200);
+  assert.equal(patch.monitor_config.sflow.bindAddress, '::1');
+});
+
+test('PUT /agents/:id rejects a non-IP collector bindAddress (400)', async () => {
+  const agentsRepo = makeAgentsRepo({ findById: async () => ({ id: 1 }) });
+  const res = await request(makeApp({ agentsRepo }))
+    .put('/agents/1')
+    .set('Authorization', operator())
+    .send({ monitor_config: { source: 'sflow', sflow: { bindAddress: 'eth0; rm -rf /' } } });
+  assert.equal(res.status, 400);
+  assert.ok(res.body.details.monitor_config);
+});
+
 test('PUT /agents/:id rejects a bad netflow port (400)', async () => {
   const agentsRepo = makeAgentsRepo({ findById: async () => ({ id: 1 }) });
   const res = await request(makeApp({ agentsRepo }))

@@ -2672,12 +2672,19 @@ views.overview = async () => {
   function zoomTo(f0, f1) {
     const base = zoom ? zoom.series : liveSeries();
     if (!base.length) return;
-    const maxLen = Math.max(1, ...base.map((s) => s.points.length));
-    const i0 = Math.round(Math.min(f0, f1) * (maxLen - 1));
-    const i1 = Math.round(Math.max(f0, f1) * (maxLen - 1));
-    if (i1 <= i0) return; // ignore a click / zero-width drag
+    const lo = Math.min(f0, f1);
+    const hi = Math.max(f0, f1);
+    // multiChart stretches each series across the full width using its own
+    // point count, so map the dragged fraction onto each series' own index
+    // range. A single shared length would slice a shorter series past its end
+    // (it would vanish from the zoom) or zoom it to the wrong interval.
     const series = base
-      .map((s) => ({ id: s.id, label: s.label, color: s.color, points: s.points.slice(i0, i1 + 1).map((p) => ({ t: p.t, y: p.y })) }))
+      .map((s) => {
+        const n = s.points.length;
+        const i0 = Math.round(lo * (n - 1));
+        const i1 = Math.round(hi * (n - 1));
+        return { id: s.id, label: s.label, color: s.color, points: s.points.slice(i0, i1 + 1).map((p) => ({ t: p.t, y: p.y })) };
+      })
       .filter((s) => s.points.length >= 2);
     if (!series.length) return;
     zoom = { series };

@@ -45,14 +45,32 @@ function createLicenseManager({
     return state.verifiedAt !== null && now() - state.verifiedAt <= graceMs;
   }
 
-  // When we cannot obtain a fresh valid proof, fall back to the cached proof and
-  // the grace window.
+  // The cached proof carries the licence's own expiry; grace must never outlive
+  // it (grace bridges an unreachable licens server, it does not extend a licence).
+  function cachedProofExpired() {
+    if (!state.payload || !state.payload.expiry) return false;
+    const exp = Date.parse(state.payload.expiry);
+    return !Number.isNaN(exp) && now() > exp;
+  }
+
+  // When we cannot obtain a fresh trusted proof, fall back to the cached proof
+  // and the grace window.
   function applyOfflineFallback() {
-    if (state.payload && withinGrace()) {
+    if (state.payload && withinGrace() && !cachedProofExpired()) {
       state.status = 'grace';
     } else {
-      state.status = 'unlicensed';
+      state.status = cachedProofExpired() ? 'expired' : 'unlicensed';
     }
+  }
+
+  // A signature-verified denial is durable: drop the cached proof (memory + disk)
+  // so the offline/grace fallback can never resurrect entitlement the licens
+  // server has explicitly withdrawn. Grace covers "could not reach the server",
+  // never "the server said no".
+  function clearCachedProof() {
+    state.payload = null;
+    state.verifiedAt = null;
+    cache.write(null);
   }
 
   // Loads a previously cached valid proof (called once at startup).
@@ -130,13 +148,18 @@ function createLicenseManager({
       );
       return getStatus();
     }
-    // Anti-replay: a fresh proof must echo the nonce we just sent. Tolerant of an
-    // older signer that doesn't include the field (payload.nonce === undefined),
-    // so an upgraded server still validates against a not-yet-upgraded licens.
-    if (payload.nonce !== undefined && payload.nonce !== nonce) {
+    // Anti-replay: a fresh proof must echo the nonce we just sent. A proof
+    // without a nonce is indistinguishable from a replayed pre-nonce capture, so
+    // it is rejected the same way (blueeye-licens has echoed the nonce since the
+    // field was introduced; only a replay or a long-obsolete signer omits it).
+    if (payload.nonce !== nonce) {
       state.lastError = 'nonce_mismatch';
       applyOfflineFallback();
-      logger.error('License: proof nonce does not match the request — possible replay; rejecting.');
+      logger.error(
+        payload.nonce === undefined
+          ? 'License: proof carries no nonce — possible replay of an old capture; rejecting.'
+          : 'License: proof nonce does not match the request — possible replay; rejecting.'
+      );
       return getStatus();
     }
 
@@ -149,12 +172,15 @@ function createLicenseManager({
       cache.write({ payload, signature, verifiedAt: state.verifiedAt });
       logger.info(`License valid (max_agents=${getMaxAgents()}).`);
     } else {
-      // A trusted negative — deny, do not cache as valid. Distinguish an EXPIRED
-      // licence (its validity window lapsed) from other hard denials (suspended /
+      // A trusted negative — deny, and make the denial durable by clearing the
+      // cached proof, so a later unreachable cycle cannot fall back into grace on
+      // a proof this denial just contradicted. Distinguish an EXPIRED licence
+      // (its validity window lapsed) from other hard denials (suspended /
       // revoked / server mismatch / agent-limit) so the dashboard can say
       // "expired" instead of the catch-all "invalid" — mirroring the offline
       // manager's status vocabulary.
       const reason = payload.reason || 'unknown';
+      clearCachedProof();
       state.lastError = reason;
       state.status = reason === 'expired' ? 'expired' : 'invalid';
       logger.error(`License is NOT valid (${reason}); denying agent operations.`);

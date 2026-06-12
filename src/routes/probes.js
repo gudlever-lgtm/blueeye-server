@@ -7,6 +7,7 @@ const { ROLES } = require('../auth/roles');
 const { validateTimeRange } = require('../validation/resultsValidation');
 const { parseId } = require('../validation/locationValidation');
 const { buildPathGraph } = require('../analysis/pathGraph');
+const { asGraphFromNodes } = require('../analysis/asPath');
 
 // Read API for active-probe results (ping/tcp/dns/traceroute). viewer+.
 // geoProvider/centroids are optional — when wired, the path graph enriches public
@@ -47,6 +48,8 @@ function createProbesRouter({ probeResultsRepo, agentsRepo, geoProvider = null, 
   // GET /api/probes/path?agentId=&target=&samples=&from=&to= — aggregates the
   // recent traceroutes to one target into a directed, weighted hop graph with
   // per-hop loss/latency/jitter (+ GeoIP/ASN) for the path-visualisation map.
+  // `asGraph` is the same path collapsed to AS hops (the observed forwarding
+  // AS-path) for the dashboard's "AS view".
   router.get('/path', requireAuth, reader, asyncHandler(async (req, res) => {
     const agentId = parseId(req.query.agentId);
     if (agentId === null) return res.status(400).json({ error: 'agentId is required (positive integer)' });
@@ -65,7 +68,7 @@ function createProbesRouter({ probeResultsRepo, agentsRepo, geoProvider = null, 
       label: agent.display_name || agent.hostname || 'Agent',
     };
     const graph = buildPathGraph(runs, { geoProvider, centroids, target, origin });
-    res.json({ agentId, ...graph });
+    res.json({ agentId, ...graph, asGraph: asGraphFromNodes(graph.nodes) });
   }));
 
   return router;

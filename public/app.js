@@ -7384,7 +7384,7 @@ async function auditModule() {
         el('td', {}, fmtDate(e.ts)),
         el('td', {}, nbadge(e.actorType, actorCls), ' ', el('span', {}, e.actorLabel || (e.actorId != null ? `#${e.actorId}` : '–')),
           e.actorRole ? el('span', { class: 'muted' }, ` (${e.actorRole})`) : null),
-        el('td', {}, nbadge(e.action, e.action.endsWith('.delete') ? 'crit' : (e.action.endsWith('-failed') ? 'warn' : 'neutral'))),
+        el('td', {}, nbadge(e.action, e.action.endsWith('.delete') ? 'crit' : (e.action.endsWith('-failed') || e.action.endsWith('.error') ? 'warn' : 'neutral'))),
         el('td', {}, target),
         el('td', { class: e.occurrences > 1 ? 'muted' : '' }, repeats),
         el('td', { class: 'muted', style: 'max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap', title: detailBits.join(' · ') }, detailBits.join(' · ') || '–'));

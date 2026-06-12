@@ -20,7 +20,8 @@ function attachAgentWebSocket({
   // agent reports its result (upgrade/delete/install-tool).
   auditRepo = null,
   // Optional: the unified audit trail — records the OUTCOME of an install-tool
-  // so operators see it (and why) under Reporting → Audit.
+  // and agent-reported operational errors (`agent.error`) so operators see them
+  // (and why) under Reporting → Audit.
   auditEventsRepo = null,
   logger = silentLogger,
   path = '/ws/agent',
@@ -137,6 +138,27 @@ function attachAgentWebSocket({
         sflowStatus.set(ws.agentId, { state, detail, at: new Date().toISOString() });
         if (typeof notifyDashboard === 'function') {
           try { notifyDashboard({ type: 'sflow-status', payload: { agentId: ws.agentId, state, detail } }); } catch { /* best-effort */ }
+        }
+      }
+      // agent -> server: a non-fatal operational error the agent hit (couldn't
+      // submit a measurement, fetch its config, run a scheduled probe, …).
+      // Recorded in the unified audit trail (Reporting → Audit) as 'agent.error',
+      // collapsed per (agent, category[, code]) via the dedup key so a recurring
+      // failure is one annotated row, not a flood. Metadata only — `message` is
+      // the agent's Error text, never measured payload. Best-effort: a bad frame
+      // or a repo error must never break the hub.
+      if (msg.type === 'agent.error' && auditEventsRepo && typeof auditEventsRepo.recordRecurring === 'function') {
+        const category = (typeof msg.category === 'string' && msg.category.trim() ? msg.category.trim() : 'general').slice(0, 48);
+        const code = typeof msg.code === 'string' && msg.code ? msg.code.slice(0, 48) : null;
+        const reason = typeof msg.message === 'string' ? msg.message.slice(0, 300) : null;
+        auditEventsRepo.recordRecurring({
+          actorType: 'agent', actorId: ws.agentId,
+          action: 'agent.error', targetType: category, targetLabel: code,
+          detail: { reason, code },
+          dedupKey: `agent:${ws.agentId}:error:${category}${code ? `:${code}` : ''}`,
+        }).catch((err) => logger.error('Failed to record agent.error audit event:', err));
+        if (typeof notifyDashboard === 'function') {
+          try { notifyDashboard({ type: 'agent-error', payload: { agentId: ws.agentId, category, code, reason } }); } catch { /* best-effort */ }
         }
       }
       // agent -> server: result of a server-initiated action (upgrade/delete).

@@ -6,7 +6,7 @@ answers *when, who and what* for two kinds of activity:
 - **User actions on the server** — every successful login plus every successful
   state-changing request (POST/PUT/PATCH/DELETE).
 - **Agent activity** — what each agent actually reported it performed (traffic
-  measurements, active probes).
+  measurements, active probes) plus non-fatal operational errors it hit.
 
 **RBAC:** the Audit view and the `/api/audit` endpoints are **admin only** —
 the `admin` role is the permission required to access the audit. Non-admins get
@@ -82,6 +82,16 @@ On ingest the agent's own activity is recorded:
   `action-result` (in `src/ws/agentSocket.js`), carrying `detail.ok` + the
   reason. The request→complete lifecycle is also tracked in `agent_action_audit`
   (migration 036) like upgrade/delete.
+- **`agent.error`** — a non-fatal operational error the agent hit and could not
+  otherwise surface (failed to submit a measurement, fetch its config, resolve or
+  submit a scheduled probe, report capabilities, run a speed test). The agent
+  ships it over the live WebSocket as an `agent.error` frame; `src/ws/agentSocket.js`
+  records `recordRecurring('agent.error')`, deduped per `(agent, category[, code])`
+  with the message in `detail.reason`. Metadata only — the `message` is the agent's
+  `Error` text, never measured payload. This is what gives operators server-side
+  visibility into agent-side failures that otherwise live only in the host's local
+  log (journald / `docker logs`). A 401 stays out of this trail — it's fatal on the
+  agent and already visible as the agent going offline.
 
 No per-report agent lookup is added to the hot path: agent rows store only
 `actor_id`, and the read query `LEFT JOIN`s `agents` for the hostname.

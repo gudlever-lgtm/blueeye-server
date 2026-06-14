@@ -526,6 +526,8 @@ function start() {
     integrationsDispatcher,
     connectorRegistry,
     secretBox,
+    // Outbound fetch for the Test area's reachability probes (SAML IdP / assistant).
+    diagnosticsFetch: globalThis.fetch,
     ldapConfigRepo,
     ldapRoleMapRepo,
     ldapLoginAuditRepo,

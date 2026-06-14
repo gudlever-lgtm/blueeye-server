@@ -44,6 +44,9 @@ src/
 │   ├── dispatcher.js  # trigger layer: events → enabled targets (debounce/retry/audit)
 │   ├── httpClient.js  # shared outbound HTTP (injected fetch + timeout)
 │   └── connectors/    # serviceNow.js, nautobot.js, webhook.js + index.js (registry)
+├── diagnostics/       # Test area — outbound connectivity + security screening
+│   ├── screening.js   # pure, explainable security-posture checks (per target)
+│   └── reach.js       # injected-fetch reachability probe (no SSRF block)
 ├── analysis/          # local, explainable anomaly detection (NO ML, NO cloud)
 │   ├── baselines.js detector.js findings.js correlator.js pipeline.js ingest.js
 │   ├── probeFindings.js probePipeline.js  # probe results → findings + alerts
@@ -114,6 +117,7 @@ Mounted in `src/routes/index.js`. User endpoints use JWT + roles
 | `/api/interfaces` | interfaces.js | viewer+ | **interface health** (util/errors/discards/link) |
 | `/api/search` | search.js | viewer+ | **global search** (agents/hosts/locations + IP/port → agents) |
 | `/api/integrations` | integrations.js | admin | **outbound API integrations** (ITSM/IPAM connectors): CRUD + manual test-fire; credentials encrypted at rest |
+| `/api/diagnostics` | diagnostics.js | admin | **Test area** — consolidated connectivity + security screening of every outbound integration (email/alert channels, ITSM/IPAM receivers, SSO, AI/map/licence). `/targets` (catalogue + posture, no live calls) + `/run` (run the tests). Reuses each subsystem's own test primitive; no secrets returned |
 | `/api/ldap` | ldap.js | admin | **LDAP/AD auth** config + group→role map + connectivity test + login audit (`/login-audit`); writes licence-gated (`sso_ldap`, Enterprise) |
 | `/api/oidc` | oidc.js | admin | **SSO (OIDC)** status + claim→role map + discovery test + login audit; writes licence-gated (`sso_oidc`, Enterprise). Connection from env vars |
 | `/api/saml` | saml.js | admin | **SSO (SAML)** status + attribute→role map + login audit; writes licence-gated (`sso_saml`, Enterprise). Connection from env vars |
@@ -163,7 +167,7 @@ A single vanilla-JS SPA. Key building blocks:
   `overview`, `map` (UI label **“Sites”** — locations coloured by agent health),
   `geo` (UI label **“Destinations”** — external traffic by country/ASN),
   `advanced` (Advanced dashboard — gated drill-down widgets, `dashboard_advanced`),
-  `agents`, `interfaces`, `nics` (NIC firmware inventory + drift), `probes`, `flows`, `findings`, `locations`, `enrollment`,
+  `agents`, `interfaces`, `nics` (NIC firmware inventory + drift), `probes`, `flows`, `screening` (**Test area** — admin-only outbound screening), `findings`, `locations`, `enrollment`,
   `settings`) plus `agent` (the combined per-agent drill-down page, no tab —
   reached via `openAgent(id)`). Both maps init via the shared `createLeafletMap`
   (server-configured EU/self-hosted tiles).
@@ -215,6 +219,7 @@ A single vanilla-JS SPA. Key building blocks:
 | Report exports (CSV / PDF) | `src/routes/reports.js` `*.csv` (gated `reports_csv`) + `*.html` (gated `reports_pdf`, print→PDF) via `src/lib/reportHtml.js`; NIS2 compliance pack gated `reports_compliance` in `src/routes/nis2.js` |
 | Offline (no-server) licensing | `src/license/licenseVerifier.js` (verifies a local signed file, Ed25519) + `offlineLicenseManager.js` (same surface as the online manager; restricted mode when invalid/expired). Selected by `LICENSE_MODE=offline`/`LICENSE_FILE` in `src/server.js`. Issue files with `scripts/sign-offline-license.js`. |
 | Outbound integrations (ITSM/IPAM) | connectors in `src/integrations/connectors/*` (+ `index.js` registry); trigger/debounce/retry/audit in `src/integrations/dispatcher.js`; HTTP in `src/routes/integrations.js`; validation in `src/validation/integrationValidation.js`; tables `integrations`/`integration_audit` (migrations 026/027). Events wired in `analysis/pipeline.js` + `probePipeline.js` (findings) and the enroll/agent-delete routes. See docs/integrations.md |
+| Test area (outbound screening) | `src/routes/diagnostics.js` (`/api/diagnostics/targets` + `/run`, admin) orchestrates each subsystem's own test primitive (alerting `dispatcher.test`, integrations `testFire`, `ldapAuth.testConnection`, `oidcAuth.testDiscovery`, reachability for SAML/assistant); security-posture lens (pure) in `src/diagnostics/screening.js`; reachability probe in `src/diagnostics/reach.js`. Injected `diagnosticsFetch` (wired in `src/server.js` → `app.js` → `routes/index.js`). UI `views.screening` + `PAGE_INFO.screening` + `.screen-*` CSS. **No new table** (results computed live). See docs/diagnostics.md |
 | LDAP/AD authentication | `src/auth/ldap.js` (bind + group→role; **licence-gated** via injected `featureGate` → `sso_ldap`); login flow in `src/routes/auth.js`; config CRUD + login-audit in `src/routes/ldap.js`; validation in `src/validation/ldapValidation.js`; tables `ldap_config`/`ldap_role_map`/`ldap_login_audit` (migrations 028/029); gates: env `LDAP_AUTH_ENABLED` **+** licence `sso_ldap` (Enterprise, `src/license/plans.js`). **Dashboard UI = `settingsAuthView` (Settings → Authentication)** in `public/app.js`. See docs/ldap-auth.md |
 | SSO (OIDC) | `src/auth/oidc.js` (discovery + PKCE + id-token verify via JWK→KeyObject + `jsonwebtoken`; claim→role; **licence-gated** `sso_oidc`); browser flow `/auth/oidc/login`+`/callback` and admin role-map in `src/routes/oidc.js`; shared JIT provisioning `src/auth/provision.js`; validation `src/validation/oidcValidation.js`; tables `oidc_role_map`/`sso_login_audit` (migration 038); env vars `OIDC_*` (issuer/client id/secret/redirect). **Login-screen buttons** from `GET /auth/sso` in `public/app.js`. See docs/sso-oidc.md |
 | SSO (SAML) | `src/auth/saml.js` (SP-initiated; assertion verify via hand-rolled exc-c14n + XML-DSig in `src/auth/samlXml.js` — no XML lib; signature+digest+issuer+conditions+audience+expiry; attribute→role; **licence-gated** `sso_saml`); SP flow `/auth/saml/login`+`/callback`(ACS)+`/metadata` and admin role-map in `src/routes/saml.js`; validation `src/validation/samlValidation.js`; table `saml_role_map` (migration 039) + shared `sso_login_audit`; env vars `SAML_*`. Test signer: `test-support/samlTestkit.js`. See docs/sso-saml.md |

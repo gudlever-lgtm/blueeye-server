@@ -1124,3 +1124,21 @@ button.active-btn { outline: 2px solid var(--accent); }
 .rg-preview { margin-top: 8px; }
 .rg-sec-h { margin: 16px 0 6px; font-size: 14px; }
 @media (max-width: 640px) { .rg-filters { grid-template-columns: 1fr; } }
+
+/* Test area (security screening) */
+.screen-summary { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 14px; }
+.screen-groups { display: flex; flex-direction: column; gap: 16px; }
+.screen-list { display: flex; flex-direction: column; }
+.screen-row { display: flex; align-items: flex-start; gap: 12px; padding: 12px 0; border-top: 1px solid var(--border); }
+.screen-row:first-child { border-top: 0; }
+.screen-row-main { flex: 1; min-width: 0; }
+.screen-row-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.screen-row-detail { font-size: 12px; font-family: var(--mono, monospace); }
+.screen-row-actions { flex-shrink: 0; }
+.screen-checks { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 0; }
+.screen-chip { font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); cursor: help; }
+.screen-chip.ok { color: var(--ok); border-color: var(--ok-weak); background: var(--ok-weak); }
+.screen-chip.warn { color: var(--warn); border-color: var(--warn-weak); background: var(--warn-weak); }
+.screen-chip.bad { color: var(--bad); border-color: var(--bad-weak); background: var(--bad-weak); }
+.screen-detail { font-size: 12px; margin-top: 8px; }
+@media (max-width: 640px) { .screen-row { flex-direction: column; } }

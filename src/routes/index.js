@@ -37,6 +37,7 @@ const { createEnrollCommandRouter } = require('./enrollCommand');
 const { createTestPackagesRouter } = require('./testPackages');
 const { createSpeedtestRouter, createSpeedtestReadRouter } = require('./speedtest');
 const { createIntegrationsRouter } = require('./integrations');
+const { createDiagnosticsRouter } = require('./diagnostics');
 const { createLdapRouter } = require('./ldap');
 const { createOidcAuthRouter, createOidcAdminRouter } = require('./oidc');
 const { createSamlAuthRouter, createSamlAdminRouter } = require('./saml');
@@ -102,6 +103,9 @@ function createApiRouter({
   integrationsDispatcher,
   connectorRegistry,
   secretBox,
+  // Injected fetch for the Test area's reachability probes (SAML IdP / AI
+  // assistant). Defaults to the global fetch; tests inject a fake so they stay offline.
+  diagnosticsFetch,
   ldapConfigRepo,
   ldapRoleMapRepo,
   ldapLoginAuditRepo,
@@ -191,6 +195,23 @@ function createApiRouter({
       integrationsRepo, integrationAuditRepo, dispatcher: integrationsDispatcher, registry: connectorRegistry, secretBox,
     }));
   }
+  // Test area — consolidated, admin-only security screening of every outbound
+  // integration (email/alert channels, ITSM/IPAM receivers, SSO, AI/map/licence).
+  // Reuses each subsystem's own test primitive; adds a security-posture lens.
+  router.use('/api/diagnostics', createDiagnosticsRouter({
+    alertingDispatcher: dispatcher,
+    integrationsRepo,
+    integrationsDispatcher,
+    ldapAuth,
+    ldapConfigRepo,
+    oidcAuth,
+    samlAuth,
+    assistant,
+    settingsService,
+    licenseManager,
+    featureGate,
+    fetchImpl: diagnosticsFetch,
+  }));
   // External auth (LDAP/AD) config — admin CRUD + connectivity test + login audit.
   // Licence-gated (sso_ldap) on the writes via the shared featureGate.
   if (ldapConfigRepo && ldapRoleMapRepo && secretBox) {

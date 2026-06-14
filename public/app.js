@@ -473,6 +473,29 @@ function settingsLink(tab, label) {
 }
 
 const PAGE_INFO = {
+  screening: {
+    hero: 'Test area — one place to verify every outbound integration: send a test email, reach your ITSM/IPAM receivers, check SSO and the other services BlueEye talks to — each with a security check.',
+    title: 'Test area — connectivity & security screening',
+    body: () => [
+      el('p', {}, 'A consolidated, admin-only screening of everything BlueEye reaches OUTWARD to. Each target gets two verdicts: a live connectivity test and a security-posture check (HTTPS vs plaintext, TLS, signed webhooks, authentication, certificate/secret presence, licence state).'),
+      el('div', { class: 'callout' },
+        el('strong', {}, 'Running a test sends real traffic: '),
+        el('span', {}, 'the email / webhook / syslog tests deliver an actual test message, and an ITSM/IPAM test performs a real (read-only) connectivity call to the receiver. SSO and the other services are probed for reachability.')),
+      el('h4', {}, 'What is screened'),
+      el('ul', {},
+        el('li', {}, el('strong', {}, 'Email & alert channels '), '— SMTP email, webhook and syslog. Configure under ', viewLink('settings', 'Settings → Alerting'), '.'),
+        el('li', {}, el('strong', {}, 'Remote API receivers (ITSM/IPAM) '), '— ServiceNow, Nautobot and generic webhook connectors (Settings → Integrations).'),
+        el('li', {}, el('strong', {}, 'Authentication (SSO) '), '— LDAP/AD bind, OIDC discovery and the SAML IdP.'),
+        el('li', {}, el('strong', {}, 'Other outbound services '), '— the AI assistant endpoint, map tiles / geocoder and the licence server.')),
+      el('h4', {}, 'Reading the result'),
+      el('ul', {},
+        el('li', {}, el('strong', {}, 'OK '), '— reachable and securely configured.'),
+        el('li', {}, el('strong', {}, 'Warning '), '— reachable but worth hardening (e.g. an unsigned webhook, plaintext syslog).'),
+        el('li', {}, el('strong', {}, 'Critical '), '— failed to connect, or an insecure configuration (e.g. plaintext HTTP, no authentication).'),
+        el('li', {}, el('strong', {}, 'Info '), '— not configured / not applicable.')),
+      el('p', { class: 'muted' }, 'Hover a check chip for the reason behind it. No secrets are ever shown on this page.'),
+    ],
+  },
   tests: {
     hero: 'Reusable test packages — run the same checks on a schedule across many agents. (For a quick one-off check from a single agent, use Probes instead.)',
     title: 'Tests — packages pushed to agents',
@@ -826,6 +849,124 @@ function onDrawerKey(e) { if (e.key === 'Escape') closeDrawer(); }
 
 const views = {};
 let locationCache = [];
+
+// Test area — consolidated connectivity + security screening of every outbound
+// integration. Admin-only (the nav button + the /api/diagnostics routes both gate
+// on admin). Each subsystem's own test primitive is reused via the diagnostics API.
+const SCREEN_SEV_LABEL = { ok: 'OK', info: 'Info', warn: 'Warning', bad: 'Critical' };
+const SCREEN_SEV_BADGE = { ok: 'badge ok', info: 'badge', warn: 'badge warn', bad: 'badge bad' };
+
+views.screening = async () => {
+  const root = el('div');
+  let catalog = [];
+  let groupOrder = [];
+  const results = new Map(); // target id -> last run result
+
+  const runAllBtn = el('button', {}, 'Run full screening');
+  root.append(el('div', { class: 'section-head' },
+    el('h2', {}, 'Test area'),
+    el('span', { class: 'spacer' }),
+    runAllBtn));
+
+  const summaryBar = el('div', { class: 'screen-summary' });
+  const bodyEl = el('div', { class: 'empty' }, 'Loading…');
+  root.append(summaryBar, bodyEl);
+
+  const chip = (label, n, cls) => el('span', { class: `badge ${cls || ''}`.trim() }, `${label}: ${n}`);
+
+  function renderSummary() {
+    const counts = { ok: 0, info: 0, warn: 0, bad: 0 };
+    for (const t of catalog) {
+      const r = results.get(t.id);
+      counts[(r ? r.severity : t.posture)] += 1;
+    }
+    summaryBar.replaceChildren(
+      chip('Targets', catalog.length, ''),
+      chip('OK', counts.ok, 'ok'),
+      chip('Warnings', counts.warn, 'warn'),
+      chip('Critical', counts.bad, 'bad'));
+  }
+
+  function targetRow(t) {
+    const r = results.get(t.id);
+    const sev = r ? r.severity : t.posture;
+    const statusBadge = el('span', { class: SCREEN_SEV_BADGE[sev] || 'badge' }, SCREEN_SEV_LABEL[sev] || sev);
+
+    const checks = el('div', { class: 'screen-checks' },
+      ...(t.security || []).map((c) => el('span',
+        { class: `screen-chip ${c.status}`, title: c.note || '' },
+        `${c.label}: ${SCREEN_SEV_LABEL[c.status] || c.status}`)));
+
+    const detailLine = el('div', { class: 'screen-detail muted' });
+    if (r) detailLine.textContent = `${r.ran ? (r.ok ? '✓ ' : '✗ ') : ''}${r.detail || ''}${r.ran && r.durationMs != null ? ` · ${r.durationMs} ms` : ''}`;
+    else if (!t.runnable) detailLine.textContent = 'Configuration screened only — no live test for this target.';
+
+    const runBtn = el('button', { class: 'small ghost' }, 'Run');
+    if (t.licensed === false) { runBtn.disabled = true; runBtn.textContent = 'Not licensed'; }
+    else if (!t.runnable) runBtn.disabled = true;
+    else runBtn.addEventListener('click', () => runTargets([t.id], runBtn));
+
+    return el('div', { class: 'screen-row' },
+      el('div', { class: 'screen-row-main' },
+        el('div', { class: 'screen-row-head' },
+          statusBadge,
+          el('strong', {}, t.name),
+          el('span', { class: 'muted screen-row-detail' }, t.detail)),
+        checks,
+        detailLine),
+      el('div', { class: 'screen-row-actions' }, runBtn));
+  }
+
+  function renderBody() {
+    if (!catalog.length) { bodyEl.className = 'empty'; bodyEl.replaceChildren('No targets to screen.'); return; }
+    const byGroup = new Map();
+    for (const t of catalog) { if (!byGroup.has(t.group)) byGroup.set(t.group, []); byGroup.get(t.group).push(t); }
+    const order = groupOrder.length ? groupOrder.map((g) => g.label) : [...byGroup.keys()];
+    const cards = [];
+    for (const label of order) {
+      const items = byGroup.get(label);
+      if (!items || !items.length) continue;
+      cards.push(el('div', { class: 'settings-card' },
+        el('h3', {}, label),
+        el('div', { class: 'screen-list' }, ...items.map(targetRow))));
+    }
+    bodyEl.className = 'screen-groups';
+    bodyEl.replaceChildren(...cards);
+    renderSummary();
+  }
+
+  async function runTargets(ids, btn) {
+    const all = !ids;
+    const restore = btn ? btn.textContent : null;
+    if (btn) { btn.disabled = true; btn.textContent = 'Running…'; }
+    try {
+      const data = await api('/api/diagnostics/run', { method: 'POST', body: all ? {} : { targets: ids } });
+      for (const t of data.targets || []) results.set(t.id, t.result);
+      renderBody();
+      if (all) toast(`Screening complete — ${data.summary.bad || 0} critical, ${data.summary.warn || 0} warning(s)`, (data.summary.bad || 0) > 0);
+    } catch (e) {
+      toast(errText(e), true);
+      if (btn) { btn.disabled = false; btn.textContent = restore || 'Run'; }
+    }
+  }
+
+  runAllBtn.addEventListener('click', async () => {
+    runAllBtn.disabled = true; runAllBtn.textContent = 'Running…';
+    await runTargets(null, null);
+    runAllBtn.disabled = false; runAllBtn.textContent = 'Run full screening';
+  });
+
+  try {
+    const data = await api('/api/diagnostics/targets');
+    catalog = data.targets || [];
+    groupOrder = data.groups || [];
+    renderBody();
+  } catch (e) {
+    bodyEl.className = 'empty error';
+    bodyEl.replaceChildren(errText(e));
+  }
+  return root;
+};
 
 views.agents = async () => {
   const [agents, locations, ver] = await Promise.all([api('/agents'), api('/locations'), api('/system/version').catch(() => null)]);

@@ -108,8 +108,11 @@ function createDiagnosticsRouter({
     add('oidc', 'auth', Boolean(oidcAuth && g.oidc && g.oidc.configured), isLicensed('sso_oidc'), screening.screenOidc(g.oidc || {}));
     add('saml', 'auth', Boolean(samlAuth && g.saml && g.saml.entryPoint), isLicensed('sso_saml'), screening.screenSaml(g.saml || {}));
 
-    // Other outbound services.
-    add('assistant', 'other', Boolean(g.assistant && g.assistant.baseUrl), true, screening.screenAssistant(g.assistant || {}));
+    // Other outbound services. Only probe the assistant once it is actually set up
+    // (an API key is present) or switched on — its base URL defaults to the provider
+    // even when the feature is off, so probing unconditionally would emit outbound
+    // traffic to a third party for a feature nobody enabled.
+    add('assistant', 'other', Boolean(g.assistant && g.assistant.baseUrl && (g.assistant.configured || g.assistant.enabled)), true, screening.screenAssistant(g.assistant || {}));
     add('map', 'other', false, true, screening.screenMap(g.map || {}));
     add('license', 'other', false, true, screening.screenLicense(g.license || {}));
 

@@ -10,7 +10,7 @@ const request = require('supertest');
 const {
   makeApp, authHeader,
   makeIntegrationsRepo, makeIntegrationsDispatcher,
-  makeSamlAuth, makeLdapConfigRepo, makeLdapAuth,
+  makeSamlAuth, makeLdapConfigRepo, makeLdapAuth, makeAssistant,
 } = require('../test-support/fakes');
 
 const admin = () => authHeader('admin');
@@ -123,6 +123,20 @@ test('run executes the LDAP connectivity test when a directory is configured', a
   assert.equal(t.result.ran, true);
   assert.equal(t.result.ok, true);
   assert.equal(t.result.severity, 'ok');
+});
+
+test('the assistant is only runnable once configured/enabled (no probe for an off feature)', async () => {
+  // Default fake assistant: disabled + no API key → screened, but NOT runnable,
+  // so a full run never emits outbound traffic to the provider.
+  const off = await request(makeApp()).get('/api/diagnostics/targets').set('Authorization', admin());
+  const a1 = off.body.targets.find((t) => t.id === 'assistant');
+  assert.equal(a1.runnable, false);
+
+  // With an API key configured → runnable.
+  const assistant = makeAssistant({ status: () => ({ enabled: false, configured: true, baseUrl: 'https://api.mistral.ai/v1/x', model: 'm' }) });
+  const on = await request(makeApp({ assistant })).get('/api/diagnostics/targets').set('Authorization', admin());
+  const a2 = on.body.targets.find((t) => t.id === 'assistant');
+  assert.equal(a2.runnable, true);
 });
 
 test('POST /api/diagnostics/run validates the targets payload', async () => {

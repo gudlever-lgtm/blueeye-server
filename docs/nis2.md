@@ -38,7 +38,8 @@ existing user-JWT RBAC:
 | `GET /dashboard` | viewer+ | Readiness score, headline counts, per-category status, top recommended actions |
 | `GET/POST /risks`, `GET/PUT/DELETE /risks/:id` | viewer/operator | Risk register CRUD |
 | `GET/POST /controls`, `GET/PUT/DELETE /controls/:id` | viewer/operator | Control-evidence CRUD; `?withoutEvidence=true` = prioritised gap list |
-| `GET/POST /incidents`, `GET/PUT/DELETE /incidents/:id` | viewer/operator | Security-incident CRUD (mints `INC-YYYY-NNNN`) |
+| `GET/POST /incidents`, `GET/PUT/DELETE /incidents/:id` | viewer/operator | Security-incident CRUD (mints `INC-YYYY-NNNN`). Reads carry computed Art.23 reporting **`deadlines`** (24h early-warning / 72h notification / 1-month final), anchored on `detectedAt`, for incidents with a reporting duty (`notificationRequired`/`nis2Relevant`). |
+| `GET /deadlines` | viewer+ | NIS2 Art.23 reporting-deadline overview — duty-bearing incidents, most-urgent first (`overdue` → `due-soon` → `upcoming`) + counts. Computed (no stored columns); status is time-based (submission to the authority isn't tracked). |
 | `GET/POST /evidence`, `DELETE /evidence/:id` | viewer/operator | Evidence references (link/document metadata) |
 | `GET/POST /reports`, `GET /reports/:id`, `DELETE /reports/:id` | viewer/operator | Generated reports (snapshot frozen for trend) |
 | `POST /reports/:id/approve` | admin | Approve a draft report |

@@ -395,6 +395,49 @@ function openModal(title, fields, onSubmit) {
 }
 function closeModal() { $('#modal').classList.add('hidden'); $('#modal-card').classList.remove('wide'); }
 
+// Accessibility for the (single, shared) modal — installed once at startup, so it
+// covers every modal flow without each open-site repeating it. On open it moves
+// focus into the dialog and labels it from its heading; on close it restores
+// focus to whatever was focused before. Escape closes; Tab is trapped inside the
+// dialog (so keyboard users can't tab out into the inert page behind it).
+const FOCUSABLE_SEL = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+let modalReturnFocus = null;
+function focusablesIn(container) {
+  return Array.from(container.querySelectorAll(FOCUSABLE_SEL)).filter((e) => e.offsetParent !== null);
+}
+function installModalA11y() {
+  const modal = $('#modal');
+  const card = $('#modal-card');
+  if (!modal || !card) return;
+  const obs = new MutationObserver(() => {
+    const open = !modal.classList.contains('hidden');
+    if (open && !modal._a11yOpen) {
+      modal._a11yOpen = true;
+      modalReturnFocus = document.activeElement;
+      const h = card.querySelector('h3, h2');
+      modal.setAttribute('aria-label', (h && h.textContent) || 'Dialog');
+      const f = focusablesIn(card);
+      (f[0] || card).focus();
+    } else if (!open && modal._a11yOpen) {
+      modal._a11yOpen = false;
+      if (modalReturnFocus && typeof modalReturnFocus.focus === 'function') modalReturnFocus.focus();
+      modalReturnFocus = null;
+    }
+  });
+  obs.observe(modal, { attributes: true, attributeFilter: ['class'] });
+  document.addEventListener('keydown', (e) => {
+    if (modal.classList.contains('hidden')) return;
+    if (e.key === 'Escape') { e.preventDefault(); closeModal(); return; }
+    if (e.key !== 'Tab') return;
+    const f = focusablesIn(card);
+    if (!f.length) return;
+    const first = f[0];
+    const last = f[f.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  });
+}
+
 // ---- First-run prompt: the agent signing key ------------------------------
 // On an admin's first authenticated render, if no agent signing key exists yet, pop
 // a prompt to generate it — it's required before any agent can be onboarded. Shown
@@ -869,8 +912,13 @@ views.agents = async () => {
   root.append(el('div', { class: 'table-toolbar' }, search));
 
   const headerEls = columns.map((c) => (c.key
-    ? el('th', { class: 'sortable', onclick: () => sortBy(c.key) })
-    : el('th', {}, c.label)));
+    ? el('th', {
+      class: 'sortable', scope: 'col', tabindex: '0', 'aria-sort': 'none',
+      title: `Sort by ${c.label}`,
+      onclick: () => sortBy(c.key),
+      onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); sortBy(c.key); } },
+    })
+    : el('th', { scope: 'col' }, c.label)));
   const tbody = el('tbody');
   root.append(el('table', { class: 'agents-table' },
     el('thead', {}, el('tr', {}, ...headerEls)),
@@ -906,6 +954,7 @@ views.agents = async () => {
       const on = sortKey === c.key;
       headerEls[i].textContent = c.label + (on ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '');
       headerEls[i].classList.toggle('sorted', on);
+      headerEls[i].setAttribute('aria-sort', on ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none');
     });
     countLabel.textContent = filter ? `${list.length} of ${agents.length}` : `${agents.length} total`;
   }
@@ -7725,6 +7774,10 @@ async function render({ silent = false } = {}) {
     const node = await views[currentView]();
     const h = hero(currentView);
     view.replaceChildren(...(h ? [h, node] : [node]));
+    // On user navigation (not the silent auto-refresh) move focus to the new
+    // content, so keyboard/screen-reader users land on it instead of being left
+    // on the nav button. #view has tabindex="-1" to be programmatically focusable.
+    if (!silent && typeof view.focus === 'function') view.focus();
   } catch (err) {
     if (!silent) view.replaceChildren(el('div', { class: 'empty error' }, err.message));
   }
@@ -7799,5 +7852,6 @@ for (const b of document.querySelectorAll('.tabs button')) {
   if (sq) sq.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); globalSearch(sq.value); sq.blur(); } });
 }
 $('#modal').addEventListener('click', (e) => { if (e.target.id === 'modal') closeModal(); });
+installModalA11y(); // focus management + trap + Escape for every modal flow
 
 render();

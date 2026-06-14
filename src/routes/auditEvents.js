@@ -5,6 +5,7 @@ const { asyncHandler } = require('../middleware/asyncHandler');
 const { requireAuth, requireRole } = require('../auth/middleware');
 const { ROLES } = require('../auth/roles');
 const { toCsv } = require('../lib/csv');
+const { CANONICAL_CATEGORIES, fromAuditEvent, fromAuditLog, mergeTrail } = require('../audit/categories');
 
 const ACTOR_TYPES = new Set(['user', 'agent', 'system']);
 
@@ -27,13 +28,37 @@ function parseQuery(q) {
 // is the RBAC gate: only admins can see who did what on the server. Read-only;
 // writes happen via the audit middleware (user actions) and on ingest (agent
 // activity).
-function createAuditEventsRouter({ auditEventsRepo }) {
+function createAuditEventsRouter({ auditEventsRepo, auditLogRepo = null, featureGate = null }) {
   const router = express.Router();
   const admin = requireRole(ROLES.ADMIN);
 
   router.get('/', requireAuth, admin, asyncHandler(async (req, res) => {
     if (!auditEventsRepo) return res.status(503).json({ error: 'Audit log not available' });
     res.json(await auditEventsRepo.findAll(parseQuery(req.query)));
+  }));
+
+  // Unified audit trail: ONE timeline merging the two general stores
+  // (`audit_events` + the licence-gated `audit_log`) onto the canonical shape, so
+  // operators have a single "who did what" view instead of two. Read-only +
+  // backward-compatible — the per-store endpoints (`/`, `/api/audit-log`) are
+  // unchanged. audit_log rows are included only when its feature is licensed.
+  router.get('/all', requireAuth, admin, asyncHandler(async (req, res) => {
+    const filters = parseQuery(req.query);
+    const category = typeof req.query.category === 'string' ? req.query.category.slice(0, 32) : null;
+    const events = auditEventsRepo ? await auditEventsRepo.findAll({ ...filters, limit: 500 }) : [];
+
+    const logLicensed = !featureGate || typeof featureGate.isFeatureEnabled !== 'function' || featureGate.isFeatureEnabled('audit_log');
+    let logs = [];
+    if (auditLogRepo && typeof auditLogRepo.list === 'function' && logLicensed) {
+      logs = await auditLogRepo.list({ limit: 500 });
+    }
+
+    const entries = mergeTrail(
+      events.map(fromAuditEvent),
+      logs.map(fromAuditLog),
+      { category, actorType: filters.actorType, limit: filters.limit, offset: filters.offset }
+    );
+    res.json({ entries, sources: { events: events.length, log: logs.length }, categories: CANONICAL_CATEGORIES });
   }));
 
   // Distinct action keys — powers the dashboard filter dropdown.

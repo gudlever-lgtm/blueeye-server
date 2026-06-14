@@ -520,6 +520,7 @@ function makeFlowsRepo(overrides = {}) {
     agentIdsForDestination: overrides.agentIdsForDestination || (async () => []),
     selectFlows: overrides.selectFlows || (async () => ({ byAsn: [], byDirection: [], byProto: [], series: [], totals: { bytes: 0, flowCount: 0, records: 0 } })),
     exploreFlows: overrides.exploreFlows || (async () => ({ topTalkers: [], byPort: [], byProto: [], series: [], scans: [], totals: { bytes: 0, packets: 0, flowCount: 0, records: 0 } })),
+    topologyEdges: overrides.topologyEdges || (async () => []),
     agentIdsForIp: overrides.agentIdsForIp || (async () => []),
     agentIdsForPort: overrides.agentIdsForPort || (async () => []),
     asnSeries: overrides.asnSeries || (async () => []),

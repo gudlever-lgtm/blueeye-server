@@ -24,12 +24,14 @@ const { createExportRouter } = require('./export');
 const { createSettingsRouter } = require('./settings');
 const { createMapRouter } = require('./map');
 const { createFlowsRouter } = require('./flows');
+const { createTopologyRouter } = require('./topology');
 const { createProbesRouter } = require('./probes');
 const { createReportsRouter } = require('./reports');
 const { createThresholdsRouter } = require('./thresholds');
 const { createInterfacesRouter } = require('./interfaces');
 const { createFleetRouter } = require('./fleet');
 const { createDashboardRouter } = require('./dashboard');
+const { createForecastRouter } = require('./forecast');
 const { createSearchRouter } = require('./search');
 const { createEnrollRouter } = require('./enroll');
 const { publishSignedReleaseFromSource } = require('../enroll/publishSignedRelease');
@@ -183,6 +185,8 @@ function createApiRouter({
     resultsRepo, agentsRepo, flowsRepo,
     getCategories: settingsService ? () => settingsService.getFlowCategories() : undefined,
   }));
+  // Flow-derived dependency/topology map (who-talks-to-whom from the 5-tuples).
+  if (flowsRepo) router.use('/api/topology', createTopologyRouter({ flowsRepo, agentsRepo }));
   if (probeResultsRepo) router.use('/api/probes', createProbesRouter({ probeResultsRepo, agentsRepo, geoProvider, centroids }));
   if (probeResultsRepo) router.use('/api/fleet', createFleetRouter({ agentsRepo, probeResultsRepo, resultsRepo, speedtestResultsRepo, settingsService, logger }));
   // Overview "open issues" rollup (license feature `dashboard_advanced`,
@@ -192,6 +196,8 @@ function createApiRouter({
   if (incidentsRepo && probeResultsRepo) router.use('/api/reports', createReportsRouter({ probeResultsRepo, incidentsRepo, locationsRepo, featureGate, planService, auditLogger }));
   if (thresholdsRepo) router.use('/api/thresholds', createThresholdsRouter({ thresholdsRepo, locationsRepo }));
   router.use('/api/interfaces', createInterfacesRouter({ resultsRepo, agentsRepo }));
+  // Capacity/trend forecasting (robust Theil–Sen projection + days-to-capacity).
+  router.use('/api/forecast', createForecastRouter());
   router.use('/api/search', createSearchRouter({ agentsRepo, locationsRepo, flowsRepo }));
   if (settingsService) router.use('/api/settings', createSettingsRouter({ settingsService, featureGate, dispatcher, analysisConfig, retentionConfig, releaseKeyService, geoipUpdater, publishRelease: () => publishSignedReleaseFromSource({ sourceStore: agentSourceStore, releaseStore, releaseKeyService }) }));
   // Outbound API integrations (ITSM/IPAM connectors) — admin CRUD + test-fire.
@@ -230,7 +236,7 @@ function createApiRouter({
     router.use('/api/nis2', createNis2Router({
       nis2RisksRepo, nis2ControlsRepo, nis2IncidentsRepo,
       nis2ReportsRepo, nis2EvidenceRepo, nis2AuditRepo,
-      featureGate, planService,
+      featureGate, planService, releaseKeyService,
     }));
   }
   // High-availability status + admin (licence-gated `ha_deployment`, Enterprise+).
@@ -258,7 +264,7 @@ function createApiRouter({
   router.use('/agents', createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentCommander, agentSourceStore, releaseStore, releasePublicKey, auditRepo, integrationTrigger: integrationsDispatcher, logger }));
   router.use('/audit', createAuditRouter({ auditRepo }));
   // Unified, server-wide audit trail (Reporting → Audit) — admin only.
-  if (auditEventsRepo) router.use('/api/audit', createAuditEventsRouter({ auditEventsRepo }));
+  if (auditEventsRepo) router.use('/api/audit', createAuditEventsRouter({ auditEventsRepo, auditLogRepo, featureGate }));
   // Unified audit log (license feature `audit_log`) + API tokens (`api_access`).
   if (auditLogRepo) router.use('/api/audit-log', createAuditLogRouter({ auditLogRepo, featureGate, planService }));
   if (apiTokensRepo) router.use('/api/api-tokens', createApiTokensRouter({ apiTokensRepo, featureGate, planService, auditLogger }));

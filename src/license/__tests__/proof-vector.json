@@ -1,5 +1,6 @@
 {
-  "_comment": "Golden cross-repo vector for the Ed25519 license-proof contract. The SAME file is committed to blueeye-licens (test/proof-vector.json) and blueeye-server (src/license/__tests__/proof-vector.json); each repo independently asserts that its canonicalize() reproduces `canonical` byte-for-byte and that the signature verifies. If a test fails here, the two repos have drifted on the signed-bytes contract — fix the code, do NOT regenerate this file on one side only. The key pair is TEST-ONLY, generated for this fixture and used for nothing else.",
+  "_comment": "Golden cross-repo vector for the shared wire contract. The SAME file is committed to blueeye-server (src/license/__tests__/proof-vector.json), blueeye-licens (test/proof-vector.json) AND blueeye-agent (test/proof-vector.json); each repo independently asserts that its canonicalize() reproduces `canonical` byte-for-byte, that the Ed25519 signature verifies, and (server/agent) that its PROTOCOL_VERSION matches `protocolVersion`. If a test fails here, the repos have drifted on the signed-bytes / protocol contract — fix the code, do NOT regenerate this file on one side only. The key pair is TEST-ONLY, generated for this fixture and used for nothing else.",
+  "protocolVersion": 1,
   "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA7LQZcyWMpLhScqBYj3+b7ORnJucM6UCPsa/aOjQp8EA=\n-----END PUBLIC KEY-----\n",
   "privateKeyPem": "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIOdSHiCA2liYp36M4PXnM2o12BLGpkEuJT7wkcTKTqK7\n-----END PRIVATE KEY-----\n",
   "payload": {

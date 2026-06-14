@@ -395,6 +395,49 @@ function openModal(title, fields, onSubmit) {
 }
 function closeModal() { $('#modal').classList.add('hidden'); $('#modal-card').classList.remove('wide'); }
 
+// Accessibility for the (single, shared) modal — installed once at startup, so it
+// covers every modal flow without each open-site repeating it. On open it moves
+// focus into the dialog and labels it from its heading; on close it restores
+// focus to whatever was focused before. Escape closes; Tab is trapped inside the
+// dialog (so keyboard users can't tab out into the inert page behind it).
+const FOCUSABLE_SEL = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+let modalReturnFocus = null;
+function focusablesIn(container) {
+  return Array.from(container.querySelectorAll(FOCUSABLE_SEL)).filter((e) => e.offsetParent !== null);
+}
+function installModalA11y() {
+  const modal = $('#modal');
+  const card = $('#modal-card');
+  if (!modal || !card) return;
+  const obs = new MutationObserver(() => {
+    const open = !modal.classList.contains('hidden');
+    if (open && !modal._a11yOpen) {
+      modal._a11yOpen = true;
+      modalReturnFocus = document.activeElement;
+      const h = card.querySelector('h3, h2');
+      modal.setAttribute('aria-label', (h && h.textContent) || 'Dialog');
+      const f = focusablesIn(card);
+      (f[0] || card).focus();
+    } else if (!open && modal._a11yOpen) {
+      modal._a11yOpen = false;
+      if (modalReturnFocus && typeof modalReturnFocus.focus === 'function') modalReturnFocus.focus();
+      modalReturnFocus = null;
+    }
+  });
+  obs.observe(modal, { attributes: true, attributeFilter: ['class'] });
+  document.addEventListener('keydown', (e) => {
+    if (modal.classList.contains('hidden')) return;
+    if (e.key === 'Escape') { e.preventDefault(); closeModal(); return; }
+    if (e.key !== 'Tab') return;
+    const f = focusablesIn(card);
+    if (!f.length) return;
+    const first = f[0];
+    const last = f[f.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  });
+}
+
 // ---- First-run prompt: the agent signing key ------------------------------
 // On an admin's first authenticated render, if no agent signing key exists yet, pop
 // a prompt to generate it — it's required before any agent can be onboarded. Shown
@@ -473,6 +516,14 @@ function settingsLink(tab, label) {
 }
 
 const PAGE_INFO = {
+  topology: {
+    hero: 'Dependency map — who talks to whom, built from the 5-tuple flows your agents already report (NetFlow/sFlow). Internal (RFC1918) hosts are kept as topology and never geolocated; external peers carry their ASN/country.',
+    title: 'Topology — flow-derived dependencies',
+    body: () => [
+      el('p', {}, 'Aggregates observed src→dst conversations over the last hour into a directed, byte-weighted graph: each edge is a dependency, each node a host or external peer. Complements ', viewLink('flows', 'Flows'), ' (raw conversations) and the per-target path map — this is the service/host dependency view. Metadata only: addresses, ports, ASNs and byte/flow counts, never payload.'),
+      el('p', { class: 'muted' }, 'Only agents whose traffic source is NetFlow or sFlow contribute flow records; the heaviest dependencies/hosts are shown when the graph is large.'),
+    ],
+  },
   screening: {
     hero: 'Test area — one place to verify every outbound integration: send a test email, reach your ITSM/IPAM receivers, check SSO and the other services BlueEye talks to — each with a security check.',
     title: 'Test area — connectivity & security screening',
@@ -1013,8 +1064,13 @@ views.agents = async () => {
   root.append(el('div', { class: 'table-toolbar' }, search));
 
   const headerEls = columns.map((c) => (c.key
-    ? el('th', { class: 'sortable', onclick: () => sortBy(c.key) })
-    : el('th', {}, c.label)));
+    ? el('th', {
+      class: 'sortable', scope: 'col', tabindex: '0', 'aria-sort': 'none',
+      title: `Sort by ${c.label}`,
+      onclick: () => sortBy(c.key),
+      onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); sortBy(c.key); } },
+    })
+    : el('th', { scope: 'col' }, c.label)));
   const tbody = el('tbody');
   root.append(el('table', { class: 'agents-table' },
     el('thead', {}, el('tr', {}, ...headerEls)),
@@ -1050,6 +1106,7 @@ views.agents = async () => {
       const on = sortKey === c.key;
       headerEls[i].textContent = c.label + (on ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '');
       headerEls[i].classList.toggle('sorted', on);
+      headerEls[i].setAttribute('aria-sort', on ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none');
     });
     countLabel.textContent = filter ? `${list.length} of ${agents.length}` : `${agents.length} total`;
   }
@@ -3396,6 +3453,59 @@ function pageloadWaterfall(r) {
     el('thead', {}, el('tr', {}, ...['Element', 'URL', 'Status', 'Size', 'Time', ''].map((h) => el('th', {}, h)))),
     el('tbody', {}, ...els.map(row)));
 }
+
+// Flow-derived dependency / topology map — who-talks-to-whom built from the
+// ingested 5-tuple flows. Internal (RFC1918) hosts vs external peers (with ASN/
+// country). Read-only: a summary + the heaviest dependencies and busiest hosts.
+views.topology = async () => {
+  const root = el('div', { class: 'topology' });
+  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Topology'),
+    el('span', { class: 'muted' }, 'Service/host dependencies from observed flows · last 60 min')));
+
+  const data = await api('/api/topology?minutes=60');
+  const t = data.totals || { nodes: 0, internal: 0, external: 0, edges: 0 };
+  root.append(el('p', { class: 'muted' },
+    `${t.nodes} hosts (${t.internal} internal, ${t.external} external) · ${t.edges} dependencies${data.truncated ? ' · showing the heaviest' : ''}`));
+
+  if (!data.edges || !data.edges.length) {
+    root.append(el('div', { class: 'empty' }, 'No flow data in this window. Topology is built from agents whose traffic source is NetFlow or sFlow.'));
+    return root;
+  }
+
+  const byId = Object.fromEntries((data.nodes || []).map((n) => [n.id, n]));
+  const label = (id) => {
+    const n = byId[id];
+    if (n && n.kind === 'external') return `${id}${n.asnName ? ` · ${n.asnName}` : ''}${n.country ? ` (${n.country})` : ''}`;
+    return id;
+  };
+  const kindBadge = (kind) => el('span', { class: `badge ${kind === 'external' ? 'warn' : 'ok'}` }, kind || '?');
+
+  root.append(el('h3', {}, 'Top dependencies'));
+  root.append(el('table', { class: 'agents-table' },
+    el('thead', {}, el('tr', {},
+      el('th', { scope: 'col' }, 'From'), el('th', { scope: 'col' }, 'To'),
+      el('th', { scope: 'col' }, 'Peer'), el('th', { scope: 'col' }, 'Bytes'), el('th', { scope: 'col' }, 'Flows'))),
+    el('tbody', {}, ...data.edges.slice(0, 100).map((e) => el('tr', {},
+      el('td', {}, label(e.from)),
+      el('td', {}, label(e.to)),
+      el('td', {}, kindBadge(byId[e.to] && byId[e.to].kind)),
+      el('td', {}, fmtBytes(e.bytes)),
+      el('td', {}, String(e.flows)))))));
+
+  root.append(el('h3', {}, 'Busiest hosts'));
+  root.append(el('table', { class: 'agents-table' },
+    el('thead', {}, el('tr', {},
+      el('th', { scope: 'col' }, 'Host'), el('th', { scope: 'col' }, 'Kind'),
+      el('th', { scope: 'col' }, 'Peers'), el('th', { scope: 'col' }, 'In'), el('th', { scope: 'col' }, 'Out'))),
+    el('tbody', {}, ...(data.nodes || []).slice(0, 50).map((n) => el('tr', {},
+      el('td', {}, label(n.id)),
+      el('td', {}, kindBadge(n.kind)),
+      el('td', {}, String(n.degree)),
+      el('td', {}, fmtBytes(n.bytesIn)),
+      el('td', {}, fmtBytes(n.bytesOut)))))));
+
+  return root;
+};
 
 // Interface health per agent (utilisation, errors, discards, link state/speed)
 // derived from the agent's latest measurement. Worst interfaces first.
@@ -8074,6 +8184,10 @@ async function render({ silent = false } = {}) {
     const node = await views[currentView]();
     const h = hero(currentView);
     view.replaceChildren(...(h ? [h, node] : [node]));
+    // On user navigation (not the silent auto-refresh) move focus to the new
+    // content, so keyboard/screen-reader users land on it instead of being left
+    // on the nav button. #view has tabindex="-1" to be programmatically focusable.
+    if (!silent && typeof view.focus === 'function') view.focus();
   } catch (err) {
     if (!silent) view.replaceChildren(el('div', { class: 'empty error' }, err.message));
   }
@@ -8148,5 +8262,6 @@ for (const b of document.querySelectorAll('.tabs button')) {
   if (sq) sq.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); globalSearch(sq.value); sq.blur(); } });
 }
 $('#modal').addEventListener('click', (e) => { if (e.target.id === 'modal') closeModal(); });
+installModalA11y(); // focus management + trap + Escape for every modal flow
 
 render();

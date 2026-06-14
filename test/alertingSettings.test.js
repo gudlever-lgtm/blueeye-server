@@ -116,6 +116,9 @@ test('validateAlerting rejects bad severity, port, url and proto', async () => {
   await assert.rejects(() => svc.setAlerting({ email: { minSeverity: 'LOUD' } }), (e) => e.statusCode === 400 && Boolean(e.details['email.minSeverity']));
   await assert.rejects(() => svc.setAlerting({ syslog: { port: 0 } }), (e) => e.statusCode === 400 && Boolean(e.details['syslog.port']));
   await assert.rejects(() => svc.setAlerting({ webhook: { url: 'ftp://nope' } }), (e) => e.statusCode === 400 && Boolean(e.details['webhook.url']));
+  // SSRF: an internal/loopback/link-local webhook target is rejected.
+  await assert.rejects(() => svc.setAlerting({ webhook: { url: 'http://169.254.169.254/latest/meta-data/' } }), (e) => e.statusCode === 400 && Boolean(e.details['webhook.url']));
+  await assert.rejects(() => svc.setAlerting({ webhook: { url: 'http://127.0.0.1:9200/_search' } }), (e) => e.statusCode === 400 && Boolean(e.details['webhook.url']));
   await assert.rejects(() => svc.setAlerting({ syslog: { proto: 'sctp' } }), (e) => e.statusCode === 400 && Boolean(e.details['syslog.proto']));
   await assert.rejects(() => svc.setAlerting({ email: { to: 'not-an-email' } }), (e) => e.statusCode === 400 && Boolean(e.details['email.to']));
   await assert.rejects(() => svc.setAlerting({ cooldownMs: -1 }), (e) => e.statusCode === 400 && Boolean(e.details.cooldownMs));

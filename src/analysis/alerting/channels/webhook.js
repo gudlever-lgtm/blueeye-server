@@ -27,7 +27,10 @@ function createWebhookChannel({ config = {}, fetchImpl = globalThis.fetch, logge
 
     let res;
     try {
-      res = await fetchImpl(config.url, { method: 'POST', headers, body });
+      // redirect:'manual' so a validated (external) URL can't 3xx-redirect the
+      // request onto an internal host — a redirect surfaces as a non-ok status
+      // below rather than being followed. Mirrors the integrations httpClient.
+      res = await fetchImpl(config.url, { method: 'POST', headers, body, redirect: 'manual' });
     } catch (err) {
       logger.warn(`alerting: webhook request failed (${err.message})`);
       return { ok: false, detail: `request failed: ${err.message}` };

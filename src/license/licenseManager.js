@@ -30,6 +30,11 @@ function createLicenseManager({
   getAgentCount = () => 0,
 }) {
   const graceMs = (config.graceDays ?? 14) * DAY_MS;
+  // A freshly fetched proof is signed in direct response to THIS request, so its
+  // signer timestamp (proof_issued_at) must be recent. Generous default (1h) —
+  // far larger than the round-trip yet small enough to bound replay — so normal
+  // clock skew can never cause a false denial.
+  const proofMaxAgeMs = config.proofMaxAgeMs ?? 60 * 60 * 1000;
 
   const state = {
     status: 'unknown',
@@ -160,6 +165,20 @@ function createLicenseManager({
           ? 'License: proof carries no nonce — possible replay of an old capture; rejecting.'
           : 'License: proof nonce does not match the request — possible replay; rejecting.'
       );
+      return getStatus();
+    }
+
+    // Defence-in-depth freshness: bound how old a freshly fetched proof may be,
+    // using the SIGNED proof_issued_at stamp (which can't be altered/stripped
+    // without breaking the signature). This bounds replay even on the legacy
+    // path where a client doesn't send a nonce. Enforced only when the field is
+    // present and parseable; a failure falls back to cache/grace (never a hard
+    // outage), and a future-dated stamp (server clock behind) is tolerated.
+    const proofIssuedAt = payload.proof_issued_at ? Date.parse(payload.proof_issued_at) : NaN;
+    if (!Number.isNaN(proofIssuedAt) && now() - proofIssuedAt > proofMaxAgeMs) {
+      state.lastError = 'proof_too_old';
+      applyOfflineFallback();
+      logger.error('License: proof timestamp is too old — possible replay; rejecting.');
       return getStatus();
     }
 

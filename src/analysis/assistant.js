@@ -293,7 +293,14 @@ function createAssistant({
     return { answer, model: currentModel(), usedFindings: findings.length };
   }
 
-  return { isEnabled, explain, explainDiagnostic, summarizeLocation, buildContext, buildLocationContext };
+  // Non-secret status for the admin "Test area" screening: whether it is enabled +
+  // configured (an API key is present), plus the (non-secret) base URL and model.
+  // Never returns the key itself.
+  function status() {
+    return { enabled: currentEnabled(), configured: currentApiKey() !== '', baseUrl, model: currentModel() };
+  }
+
+  return { isEnabled, status, explain, explainDiagnostic, summarizeLocation, buildContext, buildLocationContext };
 }
 
 module.exports = { createAssistant, FeatureDisabledError };

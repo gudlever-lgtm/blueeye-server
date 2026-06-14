@@ -565,6 +565,7 @@ function makeAssistant(overrides = {}) {
   const disabled = () => { const e = new Error('The AI assistant is disabled'); e.name = 'FeatureDisabled'; throw e; };
   return {
     isEnabled: overrides.isEnabled || (() => Boolean(overrides.explain || overrides.summarizeLocation || overrides.explainDiagnostic)),
+    status: overrides.status || (() => ({ enabled: false, configured: false, baseUrl: 'https://api.mistral.ai/v1/chat/completions', model: 'mistral-small-latest' })),
     explain: overrides.explain || (async () => disabled()),
     explainDiagnostic: overrides.explainDiagnostic || (async () => disabled()),
     summarizeLocation: overrides.summarizeLocation || (async () => disabled()),
@@ -1054,6 +1055,9 @@ function makeApp(overrides = {}) {
     integrationsDispatcher: overrides.integrationsDispatcher || makeIntegrationsDispatcher(),
     connectorRegistry: overrides.connectorRegistry || makeConnectorRegistry(),
     secretBox: overrides.secretBox || makeSecretBox(),
+    // Test area reachability probes: a benign 200 by default so route tests stay
+    // offline; a test can inject its own to simulate an unreachable endpoint.
+    diagnosticsFetch: overrides.diagnosticsFetch || (async () => ({ ok: true, status: 200, json: async () => ({}) })),
     ldapConfigRepo: overrides.ldapConfigRepo || makeLdapConfigRepo(),
     ldapRoleMapRepo: overrides.ldapRoleMapRepo || makeLdapRoleMapRepo(),
     ldapLoginAuditRepo: overrides.ldapLoginAuditRepo || makeLdapLoginAuditRepo(),

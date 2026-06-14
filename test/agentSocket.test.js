@@ -10,6 +10,7 @@ const WebSocket = require('ws');
 
 const { makeApp, makeAgentTokensRepo, makeAgentsRepo } = require('../test-support/fakes');
 const { attachAgentWebSocket } = require('../src/ws/agentSocket');
+const { PROTOCOL_VERSION } = require('../src/protocol');
 
 // Records agents.setStatus calls and lets a test await a particular status.
 function makeStatusTracker() {
@@ -91,6 +92,36 @@ test('WS connect succeeds with a valid token (header) and marks agent online', a
       assert.equal(online.id, 9);
       assert.equal(firstMessage.type, 'connected');
       assert.equal(firstMessage.agentId, 9);
+      // The connected frame echoes the server's wire-contract version.
+      assert.equal(firstMessage.protocolVersion, PROTOCOL_VERSION);
+    } finally {
+      client.close();
+    }
+  });
+});
+
+test('WS connect tolerates a mismatched protocol version (warn, not fatal)', async () => {
+  const tracker = makeStatusTracker();
+  const agentsRepo = makeAgentsRepo({ setStatus: tracker.setStatus });
+
+  await withWsServer({ agentTokensRepo: validRepo(), agentsRepo }, async ({ port }) => {
+    const client = new WebSocket(`ws://127.0.0.1:${port}/ws/agent`, {
+      headers: { Authorization: 'Bearer good', 'X-BlueEye-Protocol': '999' },
+    });
+    try {
+      const firstMessage = await withTimeout(
+        new Promise((resolve, reject) => {
+          client.on('message', (data) => resolve(JSON.parse(data.toString())));
+          client.on('error', reject);
+          client.on('unexpected-response', () => reject(new Error('rejected')));
+        }),
+        4000,
+        'no message received'
+      );
+      // Still connects despite the version mismatch (backward-compatible).
+      assert.equal(firstMessage.type, 'connected');
+      assert.equal(firstMessage.protocolVersion, PROTOCOL_VERSION);
+      await withTimeout(tracker.waitFor('online'), 4000, 'online not set');
     } finally {
       client.close();
     }

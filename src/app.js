@@ -187,6 +187,7 @@ function createApp({
       enrollConfig,
       notifyDashboard,
       enrollRateLimiter,
+      logger,
     })
   );
 

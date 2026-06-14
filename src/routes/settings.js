@@ -54,7 +54,7 @@ function createSettingsRouter({ settingsService, featureGate, dispatcher, analys
     try {
       const userId = (req.user && (req.user.id || req.user.sub)) || null;
       const status = await releaseKeyService.generate({ userId });
-      if (publishRelease) { try { await publishRelease(); } catch { /* best-effort: a release can also be published later */ } }
+      if (publishRelease) { try { await publishRelease(); } catch (err) { req.log.warn(`settings: signed-release publish after key generate failed (${err.message}); a release can be published later`); } }
       return res.status(201).json(status);
     } catch (err) {
       if (err.code === 'EXISTS') {

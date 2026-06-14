@@ -25,13 +25,13 @@ function createSystemRouter({ systemInfo, agentSourceStore, releaseStore } = {})
     '/version',
     requireAuth,
     requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN),
-    (req, res) => {
+    asyncHandler(async (req, res) => {
       res.json({
         server: pkg.version || null,
         releaseDate: pkg.releaseDate || null,
         agent: offeredAgentVersion(),
       });
-    }
+    })
   );
 
   // Re-package the agent source bundle from disk (AGENT_SOURCE_DIR) without
@@ -41,16 +41,16 @@ function createSystemRouter({ systemInfo, agentSourceStore, releaseStore } = {})
     '/agent-source/reload',
     requireAuth,
     requireRole(ROLES.ADMIN),
-    (req, res) => {
+    asyncHandler(async (req, res) => {
       if (!agentSourceStore || typeof agentSourceStore.reload !== 'function') {
         return res.status(503).json({ error: 'Agent source not configured on this server' });
       }
-      agentSourceStore.reload();
+      await agentSourceStore.reload();
       res.json({
         version: typeof agentSourceStore.sourceVersion === 'function' ? agentSourceStore.sourceVersion() : null,
         available: typeof agentSourceStore.available === 'function' ? agentSourceStore.available() : false,
       });
-    }
+    })
   );
 
   router.get(

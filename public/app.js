@@ -516,6 +516,14 @@ function settingsLink(tab, label) {
 }
 
 const PAGE_INFO = {
+  topology: {
+    hero: 'Dependency map — who talks to whom, built from the 5-tuple flows your agents already report (NetFlow/sFlow). Internal (RFC1918) hosts are kept as topology and never geolocated; external peers carry their ASN/country.',
+    title: 'Topology — flow-derived dependencies',
+    body: () => [
+      el('p', {}, 'Aggregates observed src→dst conversations over the last hour into a directed, byte-weighted graph: each edge is a dependency, each node a host or external peer. Complements ', viewLink('flows', 'Flows'), ' (raw conversations) and the per-target path map — this is the service/host dependency view. Metadata only: addresses, ports, ASNs and byte/flow counts, never payload.'),
+      el('p', { class: 'muted' }, 'Only agents whose traffic source is NetFlow or sFlow contribute flow records; the heaviest dependencies/hosts are shown when the graph is large.'),
+    ],
+  },
   tests: {
     hero: 'Reusable test packages — run the same checks on a schedule across many agents. (For a quick one-off check from a single agent, use Probes instead.)',
     title: 'Tests — packages pushed to agents',
@@ -3301,6 +3309,59 @@ function pageloadWaterfall(r) {
     el('thead', {}, el('tr', {}, ...['Element', 'URL', 'Status', 'Size', 'Time', ''].map((h) => el('th', {}, h)))),
     el('tbody', {}, ...els.map(row)));
 }
+
+// Flow-derived dependency / topology map — who-talks-to-whom built from the
+// ingested 5-tuple flows. Internal (RFC1918) hosts vs external peers (with ASN/
+// country). Read-only: a summary + the heaviest dependencies and busiest hosts.
+views.topology = async () => {
+  const root = el('div', { class: 'topology' });
+  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Topology'),
+    el('span', { class: 'muted' }, 'Service/host dependencies from observed flows · last 60 min')));
+
+  const data = await api('/api/topology?minutes=60');
+  const t = data.totals || { nodes: 0, internal: 0, external: 0, edges: 0 };
+  root.append(el('p', { class: 'muted' },
+    `${t.nodes} hosts (${t.internal} internal, ${t.external} external) · ${t.edges} dependencies${data.truncated ? ' · showing the heaviest' : ''}`));
+
+  if (!data.edges || !data.edges.length) {
+    root.append(el('div', { class: 'empty' }, 'No flow data in this window. Topology is built from agents whose traffic source is NetFlow or sFlow.'));
+    return root;
+  }
+
+  const byId = Object.fromEntries((data.nodes || []).map((n) => [n.id, n]));
+  const label = (id) => {
+    const n = byId[id];
+    if (n && n.kind === 'external') return `${id}${n.asnName ? ` · ${n.asnName}` : ''}${n.country ? ` (${n.country})` : ''}`;
+    return id;
+  };
+  const kindBadge = (kind) => el('span', { class: `badge ${kind === 'external' ? 'warn' : 'ok'}` }, kind || '?');
+
+  root.append(el('h3', {}, 'Top dependencies'));
+  root.append(el('table', { class: 'agents-table' },
+    el('thead', {}, el('tr', {},
+      el('th', { scope: 'col' }, 'From'), el('th', { scope: 'col' }, 'To'),
+      el('th', { scope: 'col' }, 'Peer'), el('th', { scope: 'col' }, 'Bytes'), el('th', { scope: 'col' }, 'Flows'))),
+    el('tbody', {}, ...data.edges.slice(0, 100).map((e) => el('tr', {},
+      el('td', {}, label(e.from)),
+      el('td', {}, label(e.to)),
+      el('td', {}, kindBadge(byId[e.to] && byId[e.to].kind)),
+      el('td', {}, fmtBytes(e.bytes)),
+      el('td', {}, String(e.flows)))))));
+
+  root.append(el('h3', {}, 'Busiest hosts'));
+  root.append(el('table', { class: 'agents-table' },
+    el('thead', {}, el('tr', {},
+      el('th', { scope: 'col' }, 'Host'), el('th', { scope: 'col' }, 'Kind'),
+      el('th', { scope: 'col' }, 'Peers'), el('th', { scope: 'col' }, 'In'), el('th', { scope: 'col' }, 'Out'))),
+    el('tbody', {}, ...(data.nodes || []).slice(0, 50).map((n) => el('tr', {},
+      el('td', {}, label(n.id)),
+      el('td', {}, kindBadge(n.kind)),
+      el('td', {}, String(n.degree)),
+      el('td', {}, fmtBytes(n.bytesIn)),
+      el('td', {}, fmtBytes(n.bytesOut)))))));
+
+  return root;
+};
 
 // Interface health per agent (utilisation, errors, discards, link state/speed)
 // derived from the agent's latest measurement. Worst interfaces first.

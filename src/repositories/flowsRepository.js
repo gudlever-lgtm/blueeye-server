@@ -282,6 +282,32 @@ function createFlowsRepository(db) {
     };
   }
 
+  // Flow-derived dependency/topology edges: who-talks-to-whom, aggregated by the
+  // (src_ip, dst_ip) conversation across the fleet (or one agent) over [from, to).
+  // Raw flow_records only (5-tuple metadata, never payload); INCLUDES internal
+  // RFC1918↔RFC1918 conversations so the graph shows the LAN, and carries the
+  // external endpoint's asn/country for classifying public peers. All filters are
+  // bound parameters. Capped + ordered by bytes so the heaviest edges win.
+  async function topologyEdges({ agentId = null, from, to, limit = 300 }) {
+    const where = ['ts >= ?', 'ts < ?', 'src_ip IS NOT NULL', 'dst_ip IS NOT NULL'];
+    const params = [from, to];
+    if (agentId) { where.push('agent_id = ?'); params.push(agentId); }
+    const lim = Number.isInteger(limit) && limit > 0 && limit <= 2000 ? limit : 300;
+    const rows = await q(
+      `SELECT src_ip, dst_ip, ext_ip, MAX(internal) AS internal, MAX(asn) AS asn,
+              MAX(asn_name) AS asnName, MAX(country) AS country,
+              SUM(bytes) AS bytes, SUM(packets) AS packets, SUM(flows) AS flowCount
+       FROM flow_records WHERE ${where.join(' AND ')}
+       GROUP BY src_ip, dst_ip, ext_ip ORDER BY bytes DESC LIMIT ?`,
+      [...params, lim]
+    );
+    return rows.map((r) => ({
+      srcIp: r.src_ip, dstIp: r.dst_ip, extIp: r.ext_ip, internal: !!r.internal,
+      asn: normAsn(r.asn), asnName: r.asnName ?? null, country: r.country ?? null,
+      bytes: numOf(r.bytes), packets: numOf(r.packets), flowCount: numOf(r.flowCount),
+    }));
+  }
+
   // Global-search helpers: which agents have recently seen a given IP / port?
   // Raw flow_records only (the rollup keeps no per-IP/port detail), windowed.
   async function agentIdsForIp({ ip, since, until }) {
@@ -302,7 +328,7 @@ function createFlowsRepository(db) {
     return [...new Set(rows.map((r) => r.agent_id))];
   }
 
-  return { insertMany, aggregateExternalDestinations, destinationExists, agentIdsForDestination, selectFlows, exploreFlows, agentIdsForIp, agentIdsForPort, asnSeries };
+  return { insertMany, aggregateExternalDestinations, destinationExists, agentIdsForDestination, selectFlows, exploreFlows, topologyEdges, agentIdsForIp, agentIdsForPort, asnSeries };
 }
 
 module.exports = { createFlowsRepository, toRow };

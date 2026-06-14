@@ -1131,7 +1131,9 @@ button.active-btn { outline: 2px solid var(--accent); }
 .screen-row-main { flex: 1; min-width: 0; }
 .screen-row-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .screen-row-detail { font-size: 12px; font-family: var(--mono, monospace); }
-.screen-row-actions { flex-shrink: 0; }
+.screen-row-actions { flex-shrink: 0; display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
+.screen-row-actions .drawer-link { font-size: 12px; }
+.inline-checks { display: flex; flex-wrap: wrap; gap: 10px; }
 .screen-checks { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 0; }
 .screen-chip { font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); cursor: help; }
 .screen-chip.ok { color: var(--ok); border-color: var(--ok-weak); background: var(--ok-weak); }

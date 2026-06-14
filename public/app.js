@@ -845,6 +845,20 @@ let locationCache = [];
 const SCREEN_SEV_LABEL = { ok: 'OK', info: 'Info', warn: 'Warning', bad: 'Critical' };
 const SCREEN_SEV_BADGE = { ok: 'badge ok', info: 'badge', warn: 'badge warn', bad: 'badge bad' };
 
+// Deep-link from a Test-area target to where it is configured. Every target maps
+// to a Settings sub-tab (integrations get their own page, implemented below).
+function screenSetupLink(t) {
+  let tab = null;
+  if (t.id.startsWith('alert:')) tab = 'alerting';
+  else if (t.category === 'itsm') tab = 'integrations';
+  else if (t.category === 'auth') tab = 'auth';
+  else if (t.id === 'assistant') tab = 'analyse';
+  else if (t.id === 'map') tab = 'map';
+  else if (t.id === 'license') tab = 'license';
+  if (!tab) return null;
+  return settingsLink(tab, 'Set up →');
+}
+
 views.screening = async () => {
   const root = el('div');
   let catalog = [];
@@ -903,7 +917,7 @@ views.screening = async () => {
           el('span', { class: 'muted screen-row-detail' }, t.detail)),
         checks,
         detailLine),
-      el('div', { class: 'screen-row-actions' }, runBtn));
+      el('div', { class: 'screen-row-actions' }, runBtn, screenSetupLink(t)));
   }
 
   function renderBody() {
@@ -5551,7 +5565,7 @@ let settingsTab = null;
 // tab is [key, label, adminOnly]; non-admins only ever see the personal section.
 const SETTINGS_GROUPS = [
   ['Access & security', [['users', 'Users', true], ['auth', 'Authentication', true], ['apitokens', 'API tokens', true], ['auditlog', 'Audit log', true], ['agentkey', 'Agent key', true]]],
-  ['Detection & alerts', [['analyse', 'Analysis', true], ['alerting', 'Alerting', true], ['maintenance', 'Maintenance', true]]],
+  ['Detection & alerts', [['analyse', 'Analysis', true], ['alerting', 'Alerting', true], ['integrations', 'Integrations', true], ['maintenance', 'Maintenance', true]]],
   ['Data', [['retention', 'Retention', true], ['types', 'Traffic types', true], ['map', 'Map', true]]],
   ['System', [['updates', 'Updates', true], ['agents', 'Agents', true]]],
   ['Personal', [['appearance', 'Appearance', false], ['license', 'License', false]]],
@@ -5581,6 +5595,7 @@ views.settings = async () => {
     types: settingsTypesView,
     analyse: settingsAnalyseView,
     alerting: settingsAlertingView,
+    integrations: settingsIntegrationsView,
     maintenance: settingsMaintenanceView,
     updates: settingsUpdatesView,
     agentkey: settingsAgentKeyView,
@@ -5815,6 +5830,238 @@ function throughputSettingsCard(t) {
       { key: 'upBadMbps', label: 'Upload CRITICAL below (Mbps)', type: 'number', min: 0, max: 1000000, step: 1, hint: '0 = no upload critical floor.' },
     ],
   });
+}
+
+// ---- Settings → Integrations (ITSM/IPAM outbound connectors) --------------
+// Manage outbound API integrations (ServiceNow, Nautobot, generic webhook): push
+// BlueEye events (incidents/anomalies, agent enroll/delete) to external systems.
+// Backend: src/routes/integrations.js (CRUD + /meta + test-fire). Credentials are
+// encrypted at rest (secret box) and never returned. Admin-only.
+let integrationsEditing = null; // null = list only · 'new' · <id> being edited
+
+async function settingsIntegrationsView() {
+  const root = el('div');
+  root.append(el('p', { class: 'muted settings-intro' },
+    'Push BlueEye events to your ITSM/IPAM systems — e.g. open a ServiceNow incident when a CRIT finding fires, or sync agents into Nautobot. Credentials are encrypted at rest and never shown again; changes take effect immediately.'));
+
+  let meta; let list;
+  try {
+    [meta, list] = await Promise.all([api('/api/integrations/meta'), api('/api/integrations')]);
+  } catch (e) {
+    root.append(el('div', { class: 'empty error' }, errText(e)));
+    return root;
+  }
+
+  if (!list.length) root.append(el('div', { class: 'empty' }, 'No integrations configured yet.'));
+  else root.append(el('div', { class: 'settings-grid' }, ...list.map((row) => integrationCard(row))));
+
+  if (integrationsEditing === 'new') {
+    root.append(integrationEditor(meta, null));
+  } else if (integrationsEditing != null) {
+    const existing = list.find((r) => r.id === integrationsEditing);
+    if (existing) { root.append(integrationEditor(meta, existing)); }
+    else { integrationsEditing = null; root.append(integrationAddButton()); }
+  } else {
+    root.append(integrationAddButton());
+  }
+  return root;
+}
+
+function integrationAddButton() {
+  const b = el('button', { class: 'small' }, '+ Add integration');
+  b.addEventListener('click', () => { integrationsEditing = 'new'; render(); });
+  return el('div', { class: 'form-actions' }, b);
+}
+
+function integrationCard(row) {
+  const enabledBadge = el('span', { class: `badge ${row.enabled ? 'ok' : ''}` }, row.enabled ? 'Enabled' : 'Disabled');
+  const result = el('p', { class: 'muted small' });
+
+  const editBtn = el('button', { class: 'small ghost' }, 'Edit');
+  editBtn.addEventListener('click', () => { integrationsEditing = row.id; render(); });
+
+  const testBtn = el('button', { class: 'small ghost' }, 'Test');
+  testBtn.addEventListener('click', async () => {
+    result.className = 'muted small'; result.textContent = 'Testing…'; testBtn.disabled = true;
+    try {
+      const res = await api(`/api/integrations/${row.id}/test`, { method: 'POST' });
+      const r = res.result || {};
+      result.className = `small ${r.ok ? 'ok' : 'error'}`;
+      result.textContent = `${r.ok ? '✓' : '✗'} ${r.detail || (r.ok ? 'ok' : 'failed')}${r.status != null ? ` (HTTP ${r.status})` : ''}`;
+    } catch (e) { result.className = 'small error'; result.textContent = errText(e); }
+    finally { testBtn.disabled = false; }
+  });
+
+  const delBtn = el('button', { class: 'small danger ghost' }, 'Delete');
+  delBtn.addEventListener('click', async () => {
+    if (!confirm(`Delete integration "${row.name}"?`)) return;
+    try {
+      await api(`/api/integrations/${row.id}`, { method: 'DELETE' });
+      if (integrationsEditing === row.id) integrationsEditing = null;
+      toast('Integration deleted'); render();
+    } catch (e) { toast(errText(e), true); }
+  });
+
+  const events = (row.config_json && row.config_json.events) || [];
+  return el('div', { class: 'settings-card' },
+    el('h3', {}, row.name, ' ', enabledBadge),
+    el('div', { class: 'form-grid' },
+      el('div', { class: 'muted small' }, `Type: ${row.type} · Auth: ${row.auth_type}`),
+      el('div', { class: 'muted small screen-row-detail' }, row.base_url),
+      events.length ? el('div', { class: 'muted small' }, `Events: ${events.join(', ')}`) : null,
+      el('div', { class: 'form-actions' }, editBtn, testBtn, delBtn),
+      result));
+}
+
+// Credential inputs for the chosen auth type (+ the webhook HMAC signing secret).
+// Write-only: on edit, a blank field keeps the stored secret; a "Clear" box wipes it.
+function integrationCredFields(authType, type, isEdit) {
+  const inputs = {};
+  const rows = [];
+  const keep = isEdit ? ' Leave blank to keep the stored value.' : '';
+  const text = (key, label, hint) => { const i = el('input', { type: 'text' }); inputs[key] = i; rows.push(alertField(label, i, hint)); };
+  const secret = (key, label, hint) => {
+    const i = el('input', { type: 'password', autocomplete: 'new-password', spellcheck: 'false', placeholder: isEdit ? 'unchanged' : '' });
+    inputs[key] = i; rows.push(alertField(label, i, (hint || '') + keep));
+  };
+  if (authType === 'basic') { text('username', 'Username'); secret('password', 'Password'); }
+  else if (authType === 'token') secret('token', 'API token', 'Sent in the Authorization header.');
+  else if (authType === 'oauth2') secret('accessToken', 'Access token', 'Sent as a Bearer token.');
+  if (type === 'webhook') secret('secret', 'Signing secret (HMAC)', 'Optional — signs the POST as X-BlueEye-Signature.');
+
+  let clear = null;
+  if (isEdit && rows.length) {
+    clear = el('input', { type: 'checkbox' });
+    rows.push(el('label', { class: 'inline muted small' }, clear, el('span', {}, 'Clear stored credentials')));
+  }
+  function gather() {
+    if (clear && clear.checked) return { clearCredentials: true };
+    const creds = {};
+    for (const [k, i] of Object.entries(inputs)) { const v = i.value.trim(); if (v) creds[k] = v; }
+    return Object.keys(creds).length ? { credentials: creds } : {};
+  }
+  return { rows, gather };
+}
+
+// Type-specific config_json fields. gather() may throw on bad JSON — the caller
+// catches it and shows the message.
+function integrationConfigFields(type, config) {
+  const c = config || {};
+  const rows = [];
+  let gather = () => ({});
+  if (type === 'servicenow') {
+    const tableI = el('input', { type: 'text', value: c.table || 'incident', placeholder: 'incident' });
+    rows.push(alertField('Table', tableI, 'ServiceNow table to create records in (default: incident).'));
+    gather = () => ({ table: tableI.value.trim() || 'incident' });
+  } else if (type === 'nautobot') {
+    const pathI = el('input', { type: 'text', value: c.devicePath || '/api/dcim/devices', placeholder: '/api/dcim/devices' });
+    const delI = el('input', { type: 'checkbox' }); delI.checked = !!c.allowDelete;
+    const defI = el('textarea', { rows: '4', spellcheck: 'false', placeholder: '{ "status": {"name": "Active"}, "role": {…} }' },
+      c.deviceDefaults ? JSON.stringify(c.deviceDefaults, null, 2) : '');
+    rows.push(alertField('Device path', pathI, 'Nautobot device API path.'));
+    rows.push(alertField('Allow delete', delI, 'Permit removing the device when an agent is deleted.'));
+    rows.push(alertField('Device defaults (JSON)', defI, 'Required fields merged into every device create (device_type, role, location, status).'));
+    gather = () => {
+      const out = { devicePath: pathI.value.trim() || '/api/dcim/devices', allowDelete: delI.checked };
+      const raw = defI.value.trim();
+      if (raw) { let parsed; try { parsed = JSON.parse(raw); } catch { throw new Error('Device defaults must be valid JSON.'); } out.deviceDefaults = parsed; }
+      return out;
+    };
+  }
+  return { rows, gather };
+}
+
+// Event checkboxes (which BlueEye events the integration reacts to).
+function integrationEventFields(allEvents, selected) {
+  const chosen = new Set(selected || []);
+  const boxes = (allEvents || []).map((ev) => {
+    const cb = el('input', { type: 'checkbox' }); cb.checked = chosen.has(ev);
+    return { ev, cb };
+  });
+  const row = el('label', { class: 'set-field' },
+    el('span', {}, 'Events'),
+    el('div', { class: 'inline-checks' }, ...boxes.map((b) => el('label', { class: 'inline muted small' }, b.cb, el('span', {}, b.ev)))),
+    el('span', { class: 'muted small' }, 'Which BlueEye events this integration reacts to.'));
+  return { row, gather: () => boxes.filter((b) => b.cb.checked).map((b) => b.ev) };
+}
+
+// The create/edit form. `existing` is null for a new integration, else the safe row.
+function integrationEditor(meta, existing) {
+  const isEdit = !!existing;
+  const types = meta.types || [];
+  const typeNames = types.map((t) => t.type);
+  const connectorFor = (type) => types.find((t) => t.type === type) || { authTypes: ['none'], defaultEvents: [] };
+
+  const typeSel = el('select', {}, ...typeNames.map((t) => el('option', { value: t }, t)));
+  typeSel.value = isEdit ? existing.type : (typeNames[0] || '');
+  if (isEdit) typeSel.disabled = true;
+
+  const nameI = el('input', { type: 'text', value: isEdit ? existing.name : '', placeholder: 'ServiceNow (prod)' });
+  const urlI = el('input', { type: 'text', value: isEdit ? existing.base_url : '', placeholder: 'https://example.service-now.com' });
+  const enabledI = el('input', { type: 'checkbox' }); enabledI.checked = isEdit ? !!existing.enabled : true;
+
+  const authWrap = el('div', { class: 'form-grid' });
+  const credWrap = el('div', { class: 'form-grid' });
+  const cfgWrap = el('div', { class: 'form-grid' });
+  const evWrap = el('div', { class: 'form-grid' });
+  const err = el('p', { class: 'error' });
+
+  let authSel; let credGather; let cfgGather; let evGather;
+
+  function rebuildCreds() {
+    const c = integrationCredFields(authSel.value, typeSel.value, isEdit);
+    credGather = c.gather;
+    credWrap.replaceChildren(...c.rows);
+  }
+  function rebuild() {
+    const conn = connectorFor(typeSel.value);
+    authSel = el('select', {}, ...conn.authTypes.map((a) => el('option', { value: a }, a)));
+    authSel.value = isEdit && conn.authTypes.includes(existing.auth_type) ? existing.auth_type : conn.authTypes[0];
+    authSel.addEventListener('change', rebuildCreds);
+    authWrap.replaceChildren(alertField('Auth type', authSel, 'How BlueEye authenticates to the target API.'));
+    rebuildCreds();
+    const cfg = integrationConfigFields(typeSel.value, isEdit ? existing.config_json : null);
+    cfgGather = cfg.gather;
+    cfgWrap.replaceChildren(...cfg.rows);
+    const ev = integrationEventFields(meta.events || [], (isEdit && existing.config_json && existing.config_json.events) || conn.defaultEvents || []);
+    evGather = ev.gather;
+    evWrap.replaceChildren(ev.row);
+  }
+  typeSel.addEventListener('change', rebuild);
+  rebuild();
+
+  const saveBtn = el('button', { class: 'small' }, isEdit ? 'Save changes' : 'Create integration');
+  const cancelBtn = el('button', { class: 'small ghost' }, 'Cancel');
+  cancelBtn.addEventListener('click', () => { integrationsEditing = null; render(); });
+  saveBtn.addEventListener('click', async () => {
+    err.textContent = ''; saveBtn.disabled = true;
+    try {
+      const body = {
+        name: nameI.value.trim(),
+        baseUrl: urlI.value.trim(),
+        authType: authSel.value,
+        enabled: enabledI.checked,
+        config: { ...cfgGather(), events: evGather() },
+        ...credGather(),
+      };
+      if (isEdit) await api(`/api/integrations/${existing.id}`, { method: 'PUT', body });
+      else { body.type = typeSel.value; await api('/api/integrations', { method: 'POST', body }); }
+      toast(isEdit ? 'Integration saved' : 'Integration created');
+      integrationsEditing = null; render();
+    } catch (e) { err.textContent = errText(e); saveBtn.disabled = false; }
+  });
+
+  return el('div', { class: 'settings-card' },
+    el('h3', {}, isEdit ? `Edit integration: ${existing.name}` : 'Add integration'),
+    el('div', { class: 'form-grid' },
+      isEdit ? alertField('Type', el('span', { class: 'muted' }, existing.type))
+        : alertField('Type', typeSel, 'Connector type (cannot be changed after creation).'),
+      alertField('Name', nameI, 'A label for this integration.'),
+      alertField('Base URL', urlI, 'https URL of the target API. Private/loopback addresses are rejected.'),
+      authWrap, credWrap, cfgWrap, evWrap,
+      alertField('Enabled', enabledI, 'When off, events are not dispatched to this target.'),
+      err,
+      el('div', { class: 'form-actions' }, saveBtn, cancelBtn)));
 }
 
 async function settingsAlertingView() {

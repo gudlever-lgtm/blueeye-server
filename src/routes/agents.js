@@ -11,6 +11,7 @@ const { validateProbeSpec } = require('../validation/probeValidation');
 const { parseId } = require('../validation/locationValidation');
 const { verifyProof } = require('../license/verify');
 const { INSTALLABLE_TOOLS, isAllowedTool } = require('../agentTools');
+const { silentLogger } = require('../logger');
 
 // Aggregates the byPort / byProtocol / topTalkers entries across a set of
 // NetFlow measurements, optionally filtered to one port and/or protocol.
@@ -69,7 +70,7 @@ function aggregateFlows(rows, { port = null, protocol = null } = {}) {
 //
 // Agents are created via enrollment (prompt 4) — there is intentionally no
 // manual POST /agents here.
-function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentCommander, agentSourceStore, releaseStore = null, releasePublicKey = '', auditRepo = null, integrationTrigger = null }) {
+function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentCommander, agentSourceStore, releaseStore = null, releasePublicKey = '', auditRepo = null, integrationTrigger = null, logger = silentLogger }) {
   const router = express.Router();
 
   // Response helpers for the error shapes repeated across this router.
@@ -94,13 +95,17 @@ function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentComma
         action,
         targetVersion,
       });
-    } catch {
+    } catch (err) {
+      // Best-effort audit: never block the action. But the FAILURE of an audit
+      // write belongs in the operational log (we can't audit the audit system),
+      // so it isn't lost silently. See docs/audit-vs-logging.md.
+      (req.log || logger).warn(`agents: audit record(${action}) for agent ${agent && agent.id} failed (${err.message})`);
       return null;
     }
   }
   async function markFailed(auditId, resultDetail) {
     if (!auditId || !auditRepo || typeof auditRepo.complete !== 'function') return;
-    try { await auditRepo.complete(auditId, { state: 'failed', resultDetail }); } catch { /* best-effort */ }
+    try { await auditRepo.complete(auditId, { state: 'failed', resultDetail }); } catch (err) { logger.warn(`agents: audit complete(failed) for auditId ${auditId} failed (${err.message})`); }
   }
 
   // POST /agents/releases — upload a SIGNED agent release tarball (admin). The

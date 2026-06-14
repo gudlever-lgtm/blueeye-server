@@ -3,6 +3,7 @@
 const { WebSocketServer } = require('ws');
 const { createAgentAuthenticator } = require('../auth/agentAuth');
 const { extractToken, pathnameOf, safeSend, startHeartbeat } = require('./wsCommon');
+const { PROTOCOL_VERSION } = require('../protocol');
 
 const silentLogger = { info() {}, warn() {}, error() {} };
 
@@ -128,8 +129,18 @@ function attachAgentWebSocket({
     }
     recordAgentAudit('agent.online', agent.agentId, ws._remoteIp);
 
+    // Protocol-version handshake. The agent declares its wire-contract version in
+    // the upgrade header; absent means a pre-versioning agent (→ v1). A mismatch
+    // is logged but NEVER fatal (agents update on their own schedule; the server
+    // stays backward-compatible). The server echoes its own version below.
+    const declared = Number(req && req.headers && req.headers['x-blueeye-protocol']);
+    const agentProtocol = Number.isInteger(declared) && declared > 0 ? declared : 1;
+    if (agentProtocol !== PROTOCOL_VERSION) {
+      logger.warn(`Agent ${agent.agentId} protocol v${agentProtocol} != server v${PROTOCOL_VERSION}; continuing (backward-compatible).`);
+    }
+
     // Initial server -> agent message (also demonstrates the push channel).
-    safeSend(ws, { type: 'connected', agentId: agent.agentId });
+    safeSend(ws, { type: 'connected', agentId: agent.agentId, protocolVersion: PROTOCOL_VERSION });
 
     ws.on('pong', () => {
       ws.isAlive = true;

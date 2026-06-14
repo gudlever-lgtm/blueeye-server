@@ -64,6 +64,19 @@ test('email without a transport or recipient fails cleanly', async () => {
   assert.equal((await createEmailChannel({ config: {}, transport: { sendMail: async () => {} } }).send({})).ok, false);
 });
 
+test('channel status() surfaces availability for describe()', () => {
+  // Injected transport is always available; webhook/syslog (built-ins) too.
+  assert.deepEqual(createEmailChannel({ config: {}, transport: { sendMail: async () => {} } }).status(), { available: true });
+  assert.equal(createWebhookChannel({ config: {} }).status().available, true);
+  assert.equal(createSyslogChannel({ config: {} }).status().available, true);
+  // With a createTransport factory but no nodemailer installed, email reports why.
+  const st = createEmailChannel({ config: {}, createTransport: () => null }).status();
+  // In a default install nodemailer is absent → unavailable with a reason; if it
+  // happens to be installed, available with no reason. Assert the shape holds.
+  if (st.available === false) assert.match(st.reason, /nodemailer/);
+  else assert.equal(st.available, true);
+});
+
 test('email builds its transport lazily from createTransport and rebuilds when SMTP changes', async () => {
   const config = { to: 'ops@b', from: 'a@b', smtp: { host: 'mail1', port: 587, user: '', pass: '', secure: false } };
   const builds = []; const sent = [];

@@ -42,8 +42,8 @@ function createDashboardRouter({
       const [agents, probeRows, incidents, findings] = await Promise.all([
         agentsRepo.findAll(),
         probeResultsRepo.fleetHealth({ windowMs: WINDOW_MS }),
-        incidentsRepo && incidentsRepo.list ? incidentsRepo.list().catch(() => []) : Promise.resolve([]),
-        findingStore && findingStore.list ? findingStore.list().catch(() => []) : Promise.resolve([]),
+        incidentsRepo && incidentsRepo.list ? incidentsRepo.list().catch((err) => { req.log.warn(`dashboard: incidents read failed (${err.message}); dropping widget`); return []; }) : Promise.resolve([]),
+        findingStore && findingStore.list ? findingStore.list().catch((err) => { req.log.warn(`dashboard: findings read failed (${err.message}); dropping widget`); return []; }) : Promise.resolve([]),
       ]);
       const probeRowsByAgentId = {};
       for (const r of probeRows || []) {

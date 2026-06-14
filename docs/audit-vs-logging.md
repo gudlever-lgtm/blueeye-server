@@ -35,13 +35,32 @@ Configuration: `LOG_LEVEL` (default `info`), `LOG_FORMAT` (`text` | `json`).
 
 ## Audit (the durable trail)
 
-Audit is rich but currently spread across several stores
-(`auditEvents`, `auditLog`, plus domain trails: agent actions, integrations,
-LDAP/SSO logins, NIS2). The canonical shape is
-`{ category, action, outcome, actor{type,id,label,role}, target{type,id,label},
-ip, detail(redacted), ts }`. Secrets are redacted before persistence
-(`audit/actions.js redactBody`); audit writes are best-effort and never block the
-action they describe — their *failures* are logged (see the rule above).
+Audit is rich but spread across several stores (`audit_events`, `audit_log`, plus
+domain trails: agent actions, integrations, LDAP/SSO logins, NIS2). The canonical
+shape is `{ source, id, ts, category, action, outcome, actor{type,id,label,role},
+target{type,id,label}, ip, detail, method, path, status, occurrences }`. Secrets
+are redacted before persistence (`audit/actions.js redactBody`); audit writes are
+best-effort and never block the action they describe — their *failures* are logged
+(see the rule above).
 
-> Consolidating the overlapping general audit stores behind one taxonomy/facade
-> is tracked separately; this document defines the boundary they must respect.
+The two general stores differ by design:
+- **`audit_events`** (`auditEventsRepository`) — auto-captured user actions + agent
+  activity; carries HTTP method/path/status and dedup `occurrences`.
+- **`audit_log`** (`auditLogRepository`) — the compliance trail, **hash-chained**
+  for tamper-evidence (`entry_hash = sha256(prev_hash ‖ canonical(fields))`,
+  `verifyChain()`), licence-gated (`audit_log`).
+
+### Unified read (`src/audit/categories.js`)
+
+Rather than a risky physical table merge, `fromAuditEvent` / `fromAuditLog`
+normalize both stores onto the canonical shape and `mergeTrail` merges them into a
+single newest-first timeline. **`GET /api/audit/all`** (admin) serves it —
+filterable by `category`/`actorType`, paged — so operators get ONE "who did what"
+view. The per-store endpoints (`GET /api/audit`, `GET /api/audit-log`) and every
+writer are unchanged (backward-compatible). `audit_log` rows are included only when
+its feature is licensed.
+
+> Next step (not yet done): route every writer through a single write facade and
+> physically reconcile the two tables behind a migration. The taxonomy + unified
+> read above are the foundation; the hash-chain on `audit_log` must be preserved
+> by any such merge.

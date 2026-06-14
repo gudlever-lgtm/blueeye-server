@@ -117,6 +117,32 @@ test('dashboard WS is rejected with an invalid token', async () => {
   });
 });
 
+test('dashboard WS is rejected when verifyToken returns null (e.g. a revoked JWT)', async () => {
+  // server.js wires a verifyToken wrapper that returns null for revoked tokens
+  // (deprovision / password / role change). The socket must treat null the same
+  // as an invalid token and refuse the upgrade.
+  const server = http.createServer(makeApp());
+  const handle = attachDashboardWebSocket({ server, verifyToken: () => null });
+  await new Promise((resolve) => server.listen(0, resolve));
+  const port = server.address().port;
+  try {
+    const outcome = await withTimeout(
+      new Promise((resolve) => {
+        const client = new WebSocket(`ws://127.0.0.1:${port}/ws/dashboard?token=${tokenFor('viewer')}`);
+        client.on('open', () => resolve('open'));
+        client.on('unexpected-response', () => resolve('rejected'));
+        client.on('error', () => resolve('rejected'));
+      }),
+      4000,
+      'no outcome'
+    );
+    assert.notEqual(outcome, 'open');
+  } finally {
+    handle.close();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test('dashboard WS is rejected without a token', async () => {
   await withWsServer(async ({ port }) => {
     const outcome = await withTimeout(

@@ -1,6 +1,7 @@
 'use strict';
 
 const { DEFAULT_CATEGORIES, listCategories } = require('../flows/categories');
+const { baseUrlBlockedReason } = require('../integrations/ssrfGuard');
 
 // Parses a list of integers, keeping only unique values within [min, max].
 // Returns null if the result is empty or the cap is exceeded.
@@ -659,7 +660,12 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
       chkBool(w, wv, 'enabled'); chkSev(w, wv, 'webhook');
       if (w.url !== undefined) {
         const u = String(w.url).trim();
+        let blocked = null;
         if (u !== '' && (!/^https?:\/\//i.test(u) || u.length > 500)) errors['webhook.url'] = 'url must be an http(s) URL (max 500 chars)';
+        // SSRF guard: an alerting webhook is a server-side outbound POST, so a
+        // private/loopback/link-local target turns the server into a network
+        // pivot. Mirror the integrations validator (which already guards).
+        else if (u !== '' && (blocked = baseUrlBlockedReason(u))) errors['webhook.url'] = blocked;
         else wv.url = u;
       }
       if (w.clearSecret === true || w.clearSecret === 'true') wv.secret = '';

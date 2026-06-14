@@ -10,6 +10,13 @@ on top.
 > in `public/app.js`, help in `PAGE_INFO.screening`.
 > API: `GET/POST /api/diagnostics/*` (admin), `src/routes/diagnostics.js`.
 
+Each row carries a **"Set up →"** link (`screenSetupLink` → `settingsLink`) that deep-links to
+where the target is configured: alert channels → **Settings → Alerting**, SSO → **Settings →
+Authentication**, AI → **Settings → Analysis**, map → **Settings → Map**, licence → **Settings →
+License**, and ITSM/IPAM receivers → **Settings → Integrations** (`settingsIntegrationsView` —
+the CRUD page for ServiceNow/Nautobot/webhook connectors, with a per-row test; credentials are
+write-only).
+
 ## What it screens
 
 | Group | Targets | Connectivity test (reused) |

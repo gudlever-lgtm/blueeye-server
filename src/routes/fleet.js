@@ -9,6 +9,7 @@ const { interfaceHealthSummary } = require('../health/interfaceHealth');
 const { throughputHealthSummary } = require('../health/throughputHealth');
 const { computeDataQuality } = require('../health/dataQuality');
 const { computeNicInventory } = require('../health/nicInventory');
+const { silentLogger } = require('../logger');
 
 const DEFAULT_WINDOW_MS = 6 * 3600 * 1000;
 const MAX_WINDOW_MS = 7 * 24 * 3600 * 1000;
@@ -31,7 +32,7 @@ function parseWindow(v) {
 // with its interface signal (link/errors/discards/util) — worst-first. viewer+.
 // Reads all agents + one windowed probe query + the latest result per agent; no
 // new storage.
-function createFleetRouter({ agentsRepo, probeResultsRepo, resultsRepo, speedtestResultsRepo = null, settingsService = null }) {
+function createFleetRouter({ agentsRepo, probeResultsRepo, resultsRepo, speedtestResultsRepo = null, settingsService = null, logger = silentLogger }) {
   const router = express.Router();
 
   // Latest result row per agent, keyed by agent id. Best-effort: a results read
@@ -39,7 +40,7 @@ function createFleetRouter({ agentsRepo, probeResultsRepo, resultsRepo, speedtes
   async function latestPerAgentMap() {
     if (!resultsRepo || !resultsRepo.latestPerAgent) return {};
     let latest;
-    try { latest = await resultsRepo.latestPerAgent(); } catch { return {}; }
+    try { latest = await resultsRepo.latestPerAgent(); } catch (err) { logger.warn(`fleet: latestPerAgent read failed (${err.message}); dropping interface/quality dimensions`); return {}; }
     const out = {};
     for (const row of latest || []) out[row.agent_id] = row;
     return out;
@@ -54,10 +55,10 @@ function createFleetRouter({ agentsRepo, probeResultsRepo, resultsRepo, speedtes
       try {
         const rows = await speedtestResultsRepo.latestPerAgent();
         for (const r of rows || []) throughputByAgentId[r.agent_id] = r;
-      } catch { throughputByAgentId = {}; }
+      } catch (err) { logger.warn(`fleet: speedtest latestPerAgent read failed (${err.message}); dropping throughput dimension`); throughputByAgentId = {}; }
     }
     if (settingsService && settingsService.getThroughput) {
-      try { throughputThresholds = await settingsService.getThroughput(); } catch { throughputThresholds = null; }
+      try { throughputThresholds = await settingsService.getThroughput(); } catch (err) { logger.warn(`fleet: throughput thresholds read failed (${err.message})`); throughputThresholds = null; }
     }
     return { throughputByAgentId, throughputThresholds };
   }

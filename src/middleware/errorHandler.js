@@ -23,7 +23,8 @@ function errorHandler({ logger = silentLogger } = {}) {
     const status = explicit >= 400 && explicit < 500 ? explicit : 500;
 
     if (status >= 500) {
-      logger.error(`Unhandled error on ${req.method} ${req.originalUrl}:`, err);
+      // Prefer the per-request child logger (carries reqId) when present.
+      (req.log || logger).error(`Unhandled error on ${req.method} ${req.originalUrl}:`, err);
     }
 
     const body = {

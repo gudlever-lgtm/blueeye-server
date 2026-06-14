@@ -30,6 +30,7 @@ const { createThresholdsRouter } = require('./thresholds');
 const { createInterfacesRouter } = require('./interfaces');
 const { createFleetRouter } = require('./fleet');
 const { createDashboardRouter } = require('./dashboard');
+const { createForecastRouter } = require('./forecast');
 const { createSearchRouter } = require('./search');
 const { createEnrollRouter } = require('./enroll');
 const { publishSignedReleaseFromSource } = require('../enroll/publishSignedRelease');
@@ -187,6 +188,8 @@ function createApiRouter({
   if (incidentsRepo && probeResultsRepo) router.use('/api/reports', createReportsRouter({ probeResultsRepo, incidentsRepo, locationsRepo, featureGate, planService, auditLogger }));
   if (thresholdsRepo) router.use('/api/thresholds', createThresholdsRouter({ thresholdsRepo, locationsRepo }));
   router.use('/api/interfaces', createInterfacesRouter({ resultsRepo, agentsRepo }));
+  // Capacity/trend forecasting (robust Theil–Sen projection + days-to-capacity).
+  router.use('/api/forecast', createForecastRouter());
   router.use('/api/search', createSearchRouter({ agentsRepo, locationsRepo, flowsRepo }));
   if (settingsService) router.use('/api/settings', createSettingsRouter({ settingsService, featureGate, dispatcher, analysisConfig, retentionConfig, releaseKeyService, geoipUpdater, publishRelease: () => publishSignedReleaseFromSource({ sourceStore: agentSourceStore, releaseStore, releaseKeyService }) }));
   // Outbound API integrations (ITSM/IPAM connectors) — admin CRUD + test-fire.

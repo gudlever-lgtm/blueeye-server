@@ -1,6 +1,7 @@
 'use strict';
 
 const { config } = require('./config');
+const { createLogger } = require('./logger');
 const { createRateLimiter } = require('./middleware/rateLimit');
 const { createRevocationRegistry } = require('./auth/revocation');
 const { setRevocationCheck } = require('./auth/middleware');
@@ -101,12 +102,17 @@ const { version: appVersion } = require('../package.json');
 // Wires up real dependencies, starts the HTTP server and installs graceful
 // shutdown handlers.
 function start() {
+  // Operational logger (LOG_LEVEL, LOG_FORMAT=json). Injected into every module
+  // below in place of bare console, so all diagnostics share one leveled,
+  // timestamped, optionally-JSON stream.
+  const logger = createLogger();
+
   // Never run in production with a weak JWT secret: the built-in development
   // default, a known docker-compose example fallback, or anything too short.
   // SECRET_ENCRYPTION_KEY falls back to JWT_SECRET, so this also guards secrets
   // at rest.
   if (config.env === 'production' && config.auth.weakSecret) {
-    console.error(
+    logger.error(
       'Refusing to start: JWT_SECRET must be a strong, unique value in production ' +
         '(not a known default, at least 32 characters).'
     );
@@ -118,7 +124,7 @@ function start() {
   const usersRepo = createUsersRepository(db);
   // JWT revocation: load users' revocation cutoffs and refresh periodically, so
   // requireAuth can reject pre-cutoff tokens synchronously (no per-request DB).
-  const revocationRegistry = createRevocationRegistry({ usersRepo, logger: console });
+  const revocationRegistry = createRevocationRegistry({ usersRepo, logger });
   revocationRegistry.load().catch(() => {});
   revocationRegistry.start();
   setRevocationCheck(revocationRegistry.isRevoked);
@@ -127,7 +133,7 @@ function start() {
   const auditEventsRepo = createAuditEventsRepository(db);
   const auditLogRepo = createAuditLogRepository(db);
   const apiTokensRepo = createApiTokensRepository(db);
-  const auditLogger = createAuditLogger({ auditLogRepo, logger: console });
+  const auditLogger = createAuditLogger({ auditLogRepo, logger });
   const enrollmentCodesRepo = createEnrollmentCodesRepository(db);
   const enrollmentStore = createEnrollmentStore(db);
   const agentTokensRepo = createAgentTokensRepository(db);
@@ -138,23 +144,23 @@ function start() {
   // Derives incidents from active-probe results on ingest (open/resolve), using
   // per-location thresholds with a global fallback. Best-effort + resilient.
   const incidentService = createIncidentService({
-    incidentsRepo, thresholdsRepo, agentsRepo, probeResultsRepo, logger: console,
+    incidentsRepo, thresholdsRepo, agentsRepo, probeResultsRepo, logger,
   });
 
   // Agent binaries served from a local dir for frictionless enrollment. SHA-256
   // is computed + cached now (at startup), so nothing is hashed per request.
   // (Legacy — the default install flow serves the source bundle below instead.)
-  const artifactStore = createArtifactStore({ dir: config.enroll.artifactsDir, logger: console });
+  const artifactStore = createArtifactStore({ dir: config.enroll.artifactsDir, logger });
 
   // Agent source bundle served at /enroll/agent-source.tgz — packaged +
   // checksummed at startup so the one-liner installs with no published binaries.
-  const agentSourceStore = createAgentSourceStore({ dir: config.enroll.agentSourceDir, logger: console });
+  const agentSourceStore = createAgentSourceStore({ dir: config.enroll.agentSourceDir, logger });
 
   // Signed agent releases: built + Ed25519-signed off-server, uploaded via
   // POST /agents/releases (verified on upload), kept under AGENT_RELEASE_DIR and
   // pushed to agents. The release public key is a SEPARATE trust anchor from the
   // license key (see src/license/releaseKey.js).
-  const agentReleaseStore = createAgentReleaseStore({ dir: process.env.AGENT_RELEASE_DIR || '', logger: console });
+  const agentReleaseStore = createAgentReleaseStore({ dir: process.env.AGENT_RELEASE_DIR || '', logger });
 
   // License validation. Two interchangeable backends with the SAME surface:
   //   - ONLINE  (default): validates a signed proof against blueeye-licens.
@@ -175,15 +181,15 @@ function start() {
       filePath: config.license.file,
       serverId: config.license.serverId,
       recheckHours: config.license.recheckHours,
-      logger: console,
+      logger,
     });
-    console.log(`License mode: offline (file=${config.license.file || 'unset'}).`);
+    logger.info(`License mode: offline (file=${config.license.file || 'unset'}).`);
   } else {
     licenseManager = createLicenseManager({
       config: config.license,
       publicKey: config.license.publicKey,
       cache: createFileCache(config.license.cachePath),
-      logger: console,
+      logger,
       getAgentCount: () => (agentWs ? agentWs.connectionCount() : 0),
     });
   }
@@ -212,8 +218,8 @@ function start() {
   // run, on a schedule or on demand. The runner reuses agentCommander to deliver
   // the items as run-probe/run-test commands.
   const testPackagesRepo = createTestPackagesRepository(db);
-  const testPackageRunner = createTestPackageRunner({ agentsRepo, agentCommander, repo: testPackagesRepo, logger: console });
-  const testPackageScheduler = createTestPackageScheduler({ repo: testPackagesRepo, runner: testPackageRunner, logger: console });
+  const testPackageRunner = createTestPackageRunner({ agentsRepo, agentCommander, repo: testPackagesRepo, logger });
+  const testPackageScheduler = createTestPackageScheduler({ repo: testPackagesRepo, runner: testPackageRunner, logger });
   // Active throughput ("speed test") results reported by agents.
   const speedtestResultsRepo = createSpeedtestResultsRepository(db);
 
@@ -227,7 +233,7 @@ function start() {
   // verify those signatures. When no managed key is stored it falls back to the
   // env/embedded key, so deployments that set AGENT_RELEASE_PUBLIC_KEY keep working.
   const agentReleaseKeyRepo = createAgentReleaseKeyRepository(db);
-  const releaseKeyService = createReleaseKeyService({ repo: agentReleaseKeyRepo, secretBox, logger: console });
+  const releaseKeyService = createReleaseKeyService({ repo: agentReleaseKeyRepo, secretBox, logger });
 
   // Outbound API integrations (ITSM/IPAM connectors). The dispatcher fans domain
   // events (incidents/anomalies, agent enroll/delete) out to enabled targets with
@@ -235,9 +241,9 @@ function start() {
   // every call. fetch is Node's global (mocked in tests).
   const integrationsRepo = createIntegrationsRepository(db);
   const integrationAuditRepo = createIntegrationAuditRepository(db);
-  const connectorRegistry = createConnectorRegistry({ fetchImpl: globalThis.fetch, logger: console });
+  const connectorRegistry = createConnectorRegistry({ fetchImpl: globalThis.fetch, logger });
   const integrationsDispatcher = createIntegrationsDispatcher({
-    integrationsRepo, auditRepo: integrationAuditRepo, secretBox, registry: connectorRegistry, logger: console,
+    integrationsRepo, auditRepo: integrationAuditRepo, secretBox, registry: connectorRegistry, logger,
   });
 
   // External auth (LDAP/AD). OFF unless LDAP_AUTH_ENABLED=true, the licence covers
@@ -246,7 +252,7 @@ function start() {
   const ldapConfigRepo = createLdapConfigRepository(db);
   const ldapRoleMapRepo = createLdapRoleMapRepository(db);
   const ldapLoginAuditRepo = createLdapLoginAuditRepository(db);
-  const ldapAuth = createLdapAuth({ config: config.ldap, ldapConfigRepo, ldapRoleMapRepo, secretBox, featureGate, logger: console });
+  const ldapAuth = createLdapAuth({ config: config.ldap, ldapConfigRepo, ldapRoleMapRepo, secretBox, featureGate, logger });
 
   // SSO (OIDC). OFF unless OIDC_AUTH_ENABLED=true, the licence covers it
   // (sso_oidc) AND the issuer/client/redirect are env-configured. The group→role
@@ -254,13 +260,13 @@ function start() {
   // Local JWT login always remains as the fallback.
   const ssoLoginAuditRepo = createSsoLoginAuditRepository(db);
   const oidcRoleMapRepo = createOidcRoleMapRepository(db);
-  const oidcAuth = createOidcAuth({ config: config.oidc, oidcRoleMapRepo, featureGate, logger: console });
+  const oidcAuth = createOidcAuth({ config: config.oidc, oidcRoleMapRepo, featureGate, logger });
 
   // SSO (SAML 2.0, SP-initiated). OFF unless SAML_AUTH_ENABLED=true, the licence
   // covers it (sso_saml) AND the IdP entry-point/cert/SP entityID are
   // env-configured. Attribute→role mapping is admin-managed. Local login stays.
   const samlRoleMapRepo = createSamlRoleMapRepository(db);
-  const samlAuth = createSamlAuth({ config: config.saml, samlRoleMapRepo, featureGate, logger: console });
+  const samlAuth = createSamlAuth({ config: config.saml, samlRoleMapRepo, featureGate, logger });
 
   // NIS2 Reporting Center repositories (risk register, control evidence, security
   // incidents, generated reports, evidence references, and the module audit log).
@@ -311,9 +317,9 @@ function start() {
     channels: {
       // createTransport (not an eager transport) so a runtime SMTP edit (Settings
       // → Alerting) rebuilds the mailer without a restart.
-      email: createEmailChannel({ config: alertingConfig.channels.email, createTransport: (smtp) => createSmtpTransport(smtp, console), logger: console }),
-      webhook: createWebhookChannel({ config: alertingConfig.channels.webhook, logger: console }),
-      syslog: createSyslogChannel({ config: alertingConfig.channels.syslog, logger: console }),
+      email: createEmailChannel({ config: alertingConfig.channels.email, createTransport: (smtp) => createSmtpTransport(smtp, logger), logger }),
+      webhook: createWebhookChannel({ config: alertingConfig.channels.webhook, logger }),
+      syslog: createSyslogChannel({ config: alertingConfig.channels.syslog, logger }),
     },
     // Alerting dispatches if the license includes the legacy `alerting` module
     // OR the plan grants an alert channel feature (so plan-based Professional+
@@ -329,7 +335,7 @@ function start() {
       if (name === 'webhook') return featureGate.isFeatureEnabled('alerts_webhook') || featureGate.isFeatureEnabled('alerting');
       return featureGate.isFeatureEnabled('alerting');
     },
-    logger: console,
+    logger,
   });
   // Maintenance windows suppress notifications (findings still record). The
   // silencer reads windows from settingsService, which is built further down, so
@@ -349,13 +355,13 @@ function start() {
     licensed: () => featureGate.isFeatureEnabled('analysis'),
     // Push findings to connected dashboards (browsers), not to agents.
     publishFinding: (hostId, message) => (dashboardWs ? dashboardWs.broadcast(message) : 0),
-    logger: console,
+    logger,
   });
   // Offline GeoIP/ASN provider (EU-sourced range DB; config.geo.dbPath). Created
   // here so the probe pipeline can resolve traceroute hop IPs → ASNs for AS-path
   // change detection; reused below for flow enrichment and the path/destination
   // maps. Without a DB it simply no-ops (no country/ASN).
-  const geoProvider = createGeoProvider({ dbPath: config.geo.dbPath, logger: console });
+  const geoProvider = createGeoProvider({ dbPath: config.geo.dbPath, logger });
 
   // Active-probe analysis: derive findings (reachability/loss/latency/jitter/cert/
   // AS-path change) from probe-results on ingest, alongside the traffic detector
@@ -371,14 +377,14 @@ function start() {
     licensed: () => featureGate.isFeatureEnabled('analysis'),
     geoProvider,
     publishFinding: (hostId, message) => (dashboardWs ? dashboardWs.broadcast(message) : 0),
-    logger: console,
+    logger,
   });
 
   // Opt-in LLM assistant (off unless ANALYSIS_ASSISTANT_ENABLED=true). Reads the
   // findings store for its compact context, plus agents/locations/probe health
   // for the per-location "what's going on here?" summary.
   const assistant = createAssistant({
-    config: analysisConfig, findingStore, agentsRepo, locationsRepo, probeResultsRepo, logger: console,
+    config: analysisConfig, findingStore, agentsRepo, locationsRepo, probeResultsRepo, logger,
   });
 
   // Geo layer: enrich + store flow records. The GeoIP provider (created above for
@@ -391,7 +397,7 @@ function start() {
     flowsRepo,
     enricher: geoEnricher,
     config: { geoEnabled: config.geo.enabled },
-    logger: console,
+    logger,
   });
 
   // Retention: nightly rollup (down-sample raw -> rollup tables) + purge of
@@ -408,11 +414,11 @@ function start() {
   });
   // Re-apply persisted analysis/retention edits onto the live config so they
   // survive restarts. Best-effort + fire-and-forget (consumers read lazily).
-  settingsService.applyStoredOverrides().catch((err) => console.warn(`settings: could not apply stored overrides (${err.message})`));
+  settingsService.applyStoredOverrides().catch((err) => logger.warn(`settings: could not apply stored overrides (${err.message})`));
   // In-app GeoIP updater: powers Settings → Map "Update now" and the opt-in
   // monthly auto-refresh (writes the built CSV into the /data volume, reloads the
   // provider). Egress is admin-initiated / opt-in, so air-gapped installs are fine.
-  const geoipUpdater = createGeoipUpdater({ settingsService, config, logger: console });
+  const geoipUpdater = createGeoipUpdater({ settingsService, config, logger });
   // NB: the GeoIP auto-update schedule is a singleton job — it is started by the
   // HA coordinator (leader-only), not eagerly here, so multiple replicas don't
   // all refresh the shared data volume. On a single node the coordinator (HA
@@ -421,7 +427,7 @@ function start() {
   // pushes an install-tool command when a probe fails because the tool is
   // missing on the host. Threaded into probe ingest below.
   const installToolService = createInstallToolService({
-    agentCommander, auditRepo, auditEventsRepo, agentsRepo, settingsService, logger: console,
+    agentCommander, auditRepo, auditEventsRepo, agentsRepo, settingsService, logger,
   });
   // Now that settingsService exists, give the dispatcher its maintenance silencer.
   dispatcher.setSilencer(createSilencer({
@@ -429,10 +435,10 @@ function start() {
     getAgentLocationId: async (agentId) => { const a = await agentsRepo.findById(agentId); return a ? a.location_id : null; },
   }));
   const retentionScheduler = createRetentionScheduler({
-    rollup: createRollup({ repo: retentionRepo, config: retentionConfig, logger: console }),
+    rollup: createRollup({ repo: retentionRepo, config: retentionConfig, logger }),
     purge: createPurge({ repo: retentionRepo, config: retentionConfig }),
     config: retentionConfig,
-    logger: console,
+    logger,
   });
 
   // High-availability: elect a single leader across replicas and run the
@@ -447,7 +453,7 @@ function start() {
         pool: db.pool,
         lockName: config.ha.lockName,
         nodeId: config.ha.nodeId,
-        logger: console,
+        logger,
       })
     : null;
   const haCoordinator = createHaCoordinator({
@@ -462,7 +468,7 @@ function start() {
     // validates). The status/admin routes stay gated by the same feature.
     featureGate,
     version: appVersion,
-    logger: console,
+    logger,
     // Leader-only singleton work. GeoIP exposes startSchedule/stopSchedule;
     // adapt it to the uniform { start, stop } the coordinator expects.
     jobs: [
@@ -548,11 +554,11 @@ function start() {
     // Brute-force throttle for agent enrollment by IP (login has its own
     // loginThrottle inside the auth router).
     enrollRateLimiter: createRateLimiter({ windowMs: 15 * 60 * 1000, max: 30 }),
-    logger: console,
+    logger,
   });
 
   const server = app.listen(config.port, () => {
-    console.info(
+    logger.info(
       `blueeye-server listening on port ${config.port} (env: ${config.env})`
     );
   });
@@ -561,8 +567,8 @@ function start() {
   // current agent source so upgrades are ready with no extra steps. Best-effort — a
   // missing key just means unsigned source installs until one is generated.
   releaseKeyService.load()
-    .then(() => publishSignedReleaseFromSource({ sourceStore: agentSourceStore, releaseStore: agentReleaseStore, releaseKeyService, logger: console }))
-    .catch((err) => console.warn(`agent release key: startup load/publish failed: ${err.message}`));
+    .then(() => publishSignedReleaseFromSource({ sourceStore: agentSourceStore, releaseStore: agentReleaseStore, releaseKeyService, logger }))
+    .catch((err) => logger.warn(`agent release key: startup load/publish failed: ${err.message}`));
 
   // Live agent channel (WebSocket). New connections are gated by the license
   // (capacity + validity) — this is separate from agent-token authentication.
@@ -572,7 +578,7 @@ function start() {
     agentsRepo,
     auditRepo,
     auditEventsRepo,
-    logger: console,
+    logger,
     path: config.ws.path,
     heartbeatMs: config.ws.heartbeatIntervalMs,
     licenseGuard: (count) => licenseManager.canAcceptNewConnection(count),
@@ -591,7 +597,7 @@ function start() {
       if (revocationRegistry.isRevoked(Number(decoded.sub), decoded.iat)) return null;
       return decoded;
     },
-    logger: console,
+    logger,
     path: config.ws.dashboardPath,
     heartbeatMs: config.ws.heartbeatIntervalMs,
   });
@@ -610,24 +616,24 @@ function start() {
   });
 
   if (!isConfigured(config.license.publicKey)) {
-    console.warn(
+    logger.warn(
       'License public key is not configured (placeholder) — proofs cannot be verified and agents will not be licensed. See src/license/publicKey.js.'
     );
   }
   // Validate at startup, then periodically. Failures fall back to cache + grace.
-  licenseManager.start().catch((err) => console.error('License manager error:', err));
+  licenseManager.start().catch((err) => logger.error('License manager error:', err));
 
   // Start the HA coordinator. On a single node (HA off) this immediately starts
   // the singleton jobs — retention rollup/purge, the test-package scheduler and
   // the GeoIP auto-update — exactly as before. With HA on, only the elected
   // leader runs them; followers serve requests statelessly and stand by.
-  haCoordinator.start().catch((err) => console.error('HA coordinator start failed:', err));
+  haCoordinator.start().catch((err) => logger.error('HA coordinator start failed:', err));
 
   function shutdown(signal) {
-    console.info(`Received ${signal}, shutting down gracefully...`);
+    logger.info(`Received ${signal}, shutting down gracefully...`);
     licenseManager.stop();
     // Releases the leader lock (if held) + stops the singleton jobs.
-    haCoordinator.stop().catch((err) => console.error('HA coordinator stop failed:', err));
+    haCoordinator.stop().catch((err) => logger.error('HA coordinator stop failed:', err));
     baselines.stop();
     revocationRegistry.stop();
     agentWs.close();
@@ -636,7 +642,7 @@ function start() {
       try {
         await db.close();
       } catch (err) {
-        console.error('Error while closing the database pool:', err);
+        logger.error('Error while closing the database pool:', err);
       }
       process.exit(0);
     });

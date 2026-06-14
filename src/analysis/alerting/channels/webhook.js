@@ -39,7 +39,12 @@ function createWebhookChannel({ config = {}, fetchImpl = globalThis.fetch, logge
     return { ok: true, detail: `posted (${res.status})` };
   }
 
-  return { name: 'webhook', send };
+  // Built on Node's global fetch — no optional dependency, always available.
+  function status() {
+    return { available: typeof fetchImpl === 'function', reason: typeof fetchImpl === 'function' ? undefined : 'no fetch implementation' };
+  }
+
+  return { name: 'webhook', send, status };
 }
 
 module.exports = { createWebhookChannel };

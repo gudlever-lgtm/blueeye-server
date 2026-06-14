@@ -47,6 +47,7 @@ const {
   createAgentTokenMiddleware,
 } = require('../auth/agentAuth');
 const { createApiTokenMiddleware } = require('../auth/apiTokenAuth');
+const { silentLogger } = require('../logger');
 
 // Aggregates the feature routers into a single API router. New resources are
 // mounted here, keeping the app factory (src/app.js) small.
@@ -124,6 +125,9 @@ function createApiRouter({
   // Brute-force throttle for agent enrollment (login has its own loginThrottle).
   // Default undefined → the router falls back to a no-op (tests stay unthrottled).
   enrollRateLimiter,
+  // Operational logger, threaded into routers that degrade best-effort (so a
+  // swallowed side-effect failure is observable). Defaults to the no-op.
+  logger = silentLogger,
 }) {
   const router = express.Router();
   // Effective (admin-editable) map config, used by both the geo view and the
@@ -176,10 +180,11 @@ function createApiRouter({
     getCategories: settingsService ? () => settingsService.getFlowCategories() : undefined,
   }));
   if (probeResultsRepo) router.use('/api/probes', createProbesRouter({ probeResultsRepo, agentsRepo, geoProvider, centroids }));
-  if (probeResultsRepo) router.use('/api/fleet', createFleetRouter({ agentsRepo, probeResultsRepo, resultsRepo, speedtestResultsRepo, settingsService }));
-  // Advanced dashboard (license feature `dashboard_advanced`, Professional+) —
-  // drill-down widget panels composed from fleet/incident/finding data, gated.
-  if (probeResultsRepo) router.use('/api/dashboard', createDashboardRouter({ agentsRepo, probeResultsRepo, incidentsRepo, findingStore, featureGate, planService }));
+  if (probeResultsRepo) router.use('/api/fleet', createFleetRouter({ agentsRepo, probeResultsRepo, resultsRepo, speedtestResultsRepo, settingsService, logger }));
+  // Overview "open issues" rollup (license feature `dashboard_advanced`,
+  // Professional+) — active incidents + recent findings, gated. Surfaced inline
+  // on the Overview page; fleet health itself comes from /api/fleet above.
+  router.use('/api/dashboard', createDashboardRouter({ incidentsRepo, findingStore, featureGate, planService }));
   if (incidentsRepo && probeResultsRepo) router.use('/api/reports', createReportsRouter({ probeResultsRepo, incidentsRepo, locationsRepo, featureGate, planService, auditLogger }));
   if (thresholdsRepo) router.use('/api/thresholds', createThresholdsRouter({ thresholdsRepo, locationsRepo }));
   router.use('/api/interfaces', createInterfacesRouter({ resultsRepo, agentsRepo }));
@@ -229,7 +234,7 @@ function createApiRouter({
   //   - POST /results          — agent token
   //   - POST /enroll           — unauthenticated
   // Requests fall through routers that have no matching route.
-  router.use('/agents', createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentCommander, agentSourceStore, releaseStore, releasePublicKey, auditRepo, integrationTrigger: integrationsDispatcher }));
+  router.use('/agents', createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentCommander, agentSourceStore, releaseStore, releasePublicKey, auditRepo, integrationTrigger: integrationsDispatcher, logger }));
   router.use('/audit', createAuditRouter({ auditRepo }));
   // Unified, server-wide audit trail (Reporting → Audit) — admin only.
   if (auditEventsRepo) router.use('/api/audit', createAuditEventsRouter({ auditEventsRepo }));

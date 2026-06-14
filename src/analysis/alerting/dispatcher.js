@@ -92,6 +92,15 @@ function createDispatcher({ config, channels = {}, licensed = () => true, channe
       if (name === 'email') { out[name].to = c.to; out[name].from = c.from; out[name].smtpHost = c.smtp && c.smtp.host; }
       if (name === 'webhook') { out[name].url = c.url; out[name].signed = Boolean(c.secret); }
       if (name === 'syslog') { out[name].host = c.host; out[name].port = c.port; out[name].proto = c.proto; }
+      // Surface runtime availability (e.g. an optional dependency like nodemailer
+      // is missing) so the dashboard shows WHY an enabled channel won't deliver,
+      // instead of the channel silently failing every send.
+      const impl = channels[name];
+      if (impl && typeof impl.status === 'function') {
+        const st = impl.status() || {};
+        out[name].available = st.available !== false;
+        if (st.reason) out[name].reason = st.reason;
+      }
     }
     return { enabled: Boolean(config && config.enabled), cooldownMs: config && config.cooldownMs, channels: out };
   }

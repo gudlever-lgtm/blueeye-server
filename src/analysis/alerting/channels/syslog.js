@@ -53,7 +53,12 @@ function createSyslogChannel({ config = {}, send = defaultSend, logger = silentL
     return { ok: true, detail: `sent to ${config.host}:${config.port}/${config.proto}` };
   }
 
-  return { name: 'syslog', send: sendFinding };
+  // Built on Node's dgram/net — no optional dependency, always available.
+  function status() {
+    return { available: true };
+  }
+
+  return { name: 'syslog', send: sendFinding, status };
 }
 
 module.exports = { createSyslogChannel, rfc5424, SYSLOG_SEVERITY };

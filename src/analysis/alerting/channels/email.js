@@ -2,6 +2,20 @@
 
 const silentLogger = { info() {}, warn() {}, error() {} };
 
+// Whether the optional `nodemailer` dependency is installed. The email channel
+// has no hard dependency on it (keeps the default footprint minimal), so it is
+// require()d lazily — this lets the dispatcher SURFACE "email disabled: nodemailer
+// not installed" instead of the channel silently failing every send.
+function isNodemailerAvailable() {
+  try {
+    // eslint-disable-next-line global-require, import/no-extraneous-dependencies
+    require.resolve('nodemailer');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // Lazily builds a nodemailer SMTP transport from config, IF nodemailer is
 // installed. Kept lazy so the server has no hard dependency on it (and tests
 // never need it — they inject a transport). Point SMTP at a European/self-hosted
@@ -70,7 +84,18 @@ function createEmailChannel({ config = {}, transport = null, createTransport = n
     return { ok: true, detail: `sent to ${config.to}` };
   }
 
-  return { name: 'email', send };
+  // Reports whether this channel can actually send, so describe() can tell an
+  // operator WHY a configured email channel isn't delivering. An injected
+  // transport (tests/custom) is always available; otherwise we need nodemailer.
+  function status() {
+    if (transport) return { available: true };
+    if (typeof createTransport === 'function' && !isNodemailerAvailable()) {
+      return { available: false, reason: 'nodemailer not installed (npm install nodemailer)' };
+    }
+    return { available: true };
+  }
+
+  return { name: 'email', send, status };
 }
 
-module.exports = { createEmailChannel, createSmtpTransport };
+module.exports = { createEmailChannel, createSmtpTransport, isNodemailerAvailable };

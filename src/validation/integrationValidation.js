@@ -16,6 +16,24 @@ const CONFIG_MAX_CHARS = 8000;
 const CRED_MAX_KEYS = 20;
 const CRED_KEY_RE = /^[\w.-]{1,64}$/;
 const CRED_VALUE_MAX = 2000;
+// Prototype-pollution vectors. `JSON.parse` materialises these as OWN enumerable
+// properties, so they survive a `{...spread}` and persist into config_json; a
+// later deep-merge of stored config would then pollute Object.prototype. Note
+// `__proto__`/`constructor`/`prototype` all match CRED_KEY_RE, so they must be
+// rejected explicitly.
+const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+// Recursively true if any object in the graph carries a forbidden own key.
+function hasForbiddenKey(value) {
+  if (Array.isArray(value)) return value.some(hasForbiddenKey);
+  if (value && typeof value === 'object') {
+    for (const k of Object.keys(value)) {
+      if (FORBIDDEN_KEYS.has(k)) return true;
+      if (hasForbiddenKey(value[k])) return true;
+    }
+  }
+  return false;
+}
 
 function validType(raw, errors) {
   if (typeof raw !== 'string' || raw.trim() === '') { errors.type = 'type is required'; return undefined; }
@@ -56,6 +74,7 @@ function validCredentials(raw, errors) {
   if (keys.length > CRED_MAX_KEYS) { errors.credentials = `credentials must have at most ${CRED_MAX_KEYS} keys`; return undefined; }
   const out = {};
   for (const k of keys) {
+    if (FORBIDDEN_KEYS.has(k)) { errors.credentials = `credential key "${k}" is not allowed`; return undefined; }
     if (!CRED_KEY_RE.test(k)) { errors.credentials = `credential key "${k}" must be 1-64 chars of [A-Za-z0-9_.-]`; return undefined; }
     const v = raw[k];
     if (typeof v !== 'string') { errors.credentials = `credential "${k}" must be a string`; return undefined; }
@@ -68,6 +87,7 @@ function validCredentials(raw, errors) {
 function validConfig(raw, errors) {
   if (raw === undefined) return undefined;
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) { errors.config = 'config must be an object'; return undefined; }
+  if (hasForbiddenKey(raw)) { errors.config = 'config must not contain __proto__, constructor or prototype keys'; return undefined; }
   let str;
   try { str = JSON.stringify(raw); } catch { errors.config = 'config must be JSON-serialisable'; return undefined; }
   if (str.length > CONFIG_MAX_CHARS) { errors.config = `config is too large (max ${CONFIG_MAX_CHARS} chars)`; return undefined; }

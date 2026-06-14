@@ -35,10 +35,12 @@ test('GET /api/dashboard/advanced returns the widget payload for a viewer (200)'
   assert.equal(res.status, 200);
   assert.ok(res.body.widgets, 'has widgets');
   const w = res.body.widgets;
-  assert.ok(w.fleet && typeof w.fleet.total === 'number');
-  assert.ok(Array.isArray(w.attention));
   assert.ok(w.incidents && Array.isArray(w.incidents.recent));
   assert.ok(w.findings && Array.isArray(w.findings.recent));
+  // Fleet health + the "needs attention" list moved to the Overview (served by
+  // /api/fleet/health); the rollup is purely the incidents/findings supplement.
+  assert.equal(w.fleet, undefined);
+  assert.equal(w.attention, undefined);
 });
 
 test('advanced dashboard reflects seeded incidents and findings (200)', async () => {
@@ -68,18 +70,11 @@ test('advanced dashboard reflects seeded incidents and findings (200)', async ()
 
 test('buildAdvancedDashboard: empty inputs produce zeroed widgets', () => {
   const out = buildAdvancedDashboard({});
-  assert.equal(out.widgets.fleet.total, 0);
-  assert.deepEqual(out.widgets.attention, []);
   assert.equal(out.widgets.incidents.active, 0);
+  assert.deepEqual(out.widgets.incidents.recent, []);
   assert.equal(out.widgets.findings.open, 0);
+  assert.deepEqual(out.widgets.findings.recent, []);
   assert.ok(out.generatedAt);
-});
-
-test('buildAdvancedDashboard: un-probed agents count as unknown and are not flagged for attention', () => {
-  const out = buildAdvancedDashboard({ agents: [{ id: 1, hostname: 'a' }, { id: 2, hostname: 'b' }] });
-  assert.equal(out.widgets.fleet.total, 2);
-  assert.equal(out.widgets.fleet.unknown, 2);
-  assert.deepEqual(out.widgets.attention, []); // unknown is excluded from "needs attention"
 });
 
 test('buildAdvancedDashboard: active incidents are filtered, sorted newest-first and capped', () => {

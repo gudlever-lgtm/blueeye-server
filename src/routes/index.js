@@ -39,6 +39,7 @@ const { createEnrollCommandRouter } = require('./enrollCommand');
 const { createTestPackagesRouter } = require('./testPackages');
 const { createSpeedtestRouter, createSpeedtestReadRouter } = require('./speedtest');
 const { createIntegrationsRouter } = require('./integrations');
+const { createDiagnosticsRouter } = require('./diagnostics');
 const { createLdapRouter } = require('./ldap');
 const { createOidcAuthRouter, createOidcAdminRouter } = require('./oidc');
 const { createSamlAuthRouter, createSamlAdminRouter } = require('./saml');
@@ -105,6 +106,9 @@ function createApiRouter({
   integrationsDispatcher,
   connectorRegistry,
   secretBox,
+  // Injected fetch for the Test area's reachability probes (SAML IdP / AI
+  // assistant). Defaults to the global fetch; tests inject a fake so they stay offline.
+  diagnosticsFetch,
   ldapConfigRepo,
   ldapRoleMapRepo,
   ldapLoginAuditRepo,
@@ -185,9 +189,10 @@ function createApiRouter({
   if (flowsRepo) router.use('/api/topology', createTopologyRouter({ flowsRepo, agentsRepo }));
   if (probeResultsRepo) router.use('/api/probes', createProbesRouter({ probeResultsRepo, agentsRepo, geoProvider, centroids }));
   if (probeResultsRepo) router.use('/api/fleet', createFleetRouter({ agentsRepo, probeResultsRepo, resultsRepo, speedtestResultsRepo, settingsService, logger }));
-  // Advanced dashboard (license feature `dashboard_advanced`, Professional+) —
-  // drill-down widget panels composed from fleet/incident/finding data, gated.
-  if (probeResultsRepo) router.use('/api/dashboard', createDashboardRouter({ agentsRepo, probeResultsRepo, incidentsRepo, findingStore, featureGate, planService }));
+  // Overview "open issues" rollup (license feature `dashboard_advanced`,
+  // Professional+) — active incidents + recent findings, gated. Surfaced inline
+  // on the Overview page; fleet health itself comes from /api/fleet above.
+  router.use('/api/dashboard', createDashboardRouter({ incidentsRepo, findingStore, featureGate, planService }));
   if (incidentsRepo && probeResultsRepo) router.use('/api/reports', createReportsRouter({ probeResultsRepo, incidentsRepo, locationsRepo, featureGate, planService, auditLogger }));
   if (thresholdsRepo) router.use('/api/thresholds', createThresholdsRouter({ thresholdsRepo, locationsRepo }));
   router.use('/api/interfaces', createInterfacesRouter({ resultsRepo, agentsRepo }));
@@ -201,6 +206,23 @@ function createApiRouter({
       integrationsRepo, integrationAuditRepo, dispatcher: integrationsDispatcher, registry: connectorRegistry, secretBox,
     }));
   }
+  // Test area — consolidated, admin-only security screening of every outbound
+  // integration (email/alert channels, ITSM/IPAM receivers, SSO, AI/map/licence).
+  // Reuses each subsystem's own test primitive; adds a security-posture lens.
+  router.use('/api/diagnostics', createDiagnosticsRouter({
+    alertingDispatcher: dispatcher,
+    integrationsRepo,
+    integrationsDispatcher,
+    ldapAuth,
+    ldapConfigRepo,
+    oidcAuth,
+    samlAuth,
+    assistant,
+    settingsService,
+    licenseManager,
+    featureGate,
+    fetchImpl: diagnosticsFetch,
+  }));
   // External auth (LDAP/AD) config — admin CRUD + connectivity test + login audit.
   // Licence-gated (sso_ldap) on the writes via the shared featureGate.
   if (ldapConfigRepo && ldapRoleMapRepo && secretBox) {

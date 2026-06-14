@@ -532,6 +532,8 @@ function start() {
     integrationsDispatcher,
     connectorRegistry,
     secretBox,
+    // Outbound fetch for the Test area's reachability probes (SAML IdP / assistant).
+    diagnosticsFetch: globalThis.fetch,
     ldapConfigRepo,
     ldapRoleMapRepo,
     ldapLoginAuditRepo,
@@ -587,9 +589,16 @@ function start() {
   });
 
   // Browser live channel (analysis findings -> dashboard), gated by the user JWT.
+  // Mirror requireAuth: also reject tokens revoked by a password/role change or
+  // deprovision, so a withdrawn user can't keep a live socket open until the JWT
+  // naturally expires.
   dashboardWs = attachDashboardWebSocket({
     server,
-    verifyToken,
+    verifyToken: (token) => {
+      const decoded = verifyToken(token);
+      if (revocationRegistry.isRevoked(Number(decoded.sub), decoded.iat)) return null;
+      return decoded;
+    },
     logger,
     path: config.ws.dashboardPath,
     heartbeatMs: config.ws.heartbeatIntervalMs,

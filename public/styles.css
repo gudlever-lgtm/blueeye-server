@@ -360,11 +360,9 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 main#view { padding: 18px; max-width: 1100px; margin: 0 auto; }
 /* The lean traffic overview reads best at a comfortable single-column width. */
 main#view:has(.overview) { max-width: 1180px; }
-/* The Overview/NOC landing (KPI cards + network path + fleet table) is wider. */
+/* The Overview/NOC landing (KPI cards + network path + fleet table + the gated
+   "Open issues" panels) is wider. */
 main#view:has(.fleet) { max-width: 1320px; }
-/* The Advanced dashboard is a NOC-style overview (KPI strip + drill-down
-   panels); give it the same roomy width as the Overview landing. */
-main#view:has(.advanced-view) { max-width: 1320px; }
 .section-head { display: flex; align-items: center; gap: 12px; margin: 0 0 14px; }
 
 /* Traffic overview: the big live chart (history view reuses .overview-chart). */
@@ -983,20 +981,19 @@ button.active-btn { outline: 2px solid var(--accent); }
 .kpi .kpi-v.v-warn { color: var(--warn); }
 .kpi .kpi-v.v-bad { color: var(--bad); }
 
-/* Advanced dashboard (dashboard_advanced): the NOC KPI strip above a responsive
-   grid of drill-down panels. Panel tables are compact; rows that drill into an
-   agent show a pointer + hover tint, reusing the shared status/border tokens. */
-.advanced-view .panel-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; align-items: start; }
-@media (max-width: 900px) { .advanced-view .panel-grid { grid-template-columns: 1fr; } }
+/* Overview "Open issues" rollup (dashboard_advanced): a responsive two-up grid
+   of compact panels (active incidents + recent findings) below the fleet table.
+   Rows that drill into an agent show a pointer + hover tint, reusing the shared
+   status/border tokens. */
+.fleet-issues { margin-top: 22px; }
+.fleet-issues .fi-head { margin: 0 0 12px; font-size: 15px; }
+.fleet-issues .panel-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; align-items: start; }
+@media (max-width: 900px) { .fleet-issues .panel-grid { grid-template-columns: 1fr; } }
 /* Panels must fill their grid track — the global .card is a fixed 320px, so
-   reset the width here (without it the panels strand left-aligned and the wide
-   findings card can't span the row). Compact panel padding + a soft elevation
-   matching the KPI cards. */
-.advanced-view .panel-grid .card { margin: 0; width: auto; padding: 18px 20px; box-shadow: var(--shadow); }
-/* The findings list is long; give it the full row below the two short summary
-   panels instead of stranding it in one column with dead space beside it. */
-.advanced-view .panel-grid .card.wide { grid-column: 1 / -1; }
-.advanced-view .panel-grid .card h3 { margin: 0; font-size: 15px; }
+   reset the width here (without it the panels strand left-aligned). Compact
+   panel padding + a soft elevation matching the KPI cards. */
+.fleet-issues .panel-grid .card { margin: 0; width: auto; padding: 18px 20px; box-shadow: var(--shadow); }
+.fleet-issues .panel-grid .card h3 { margin: 0; font-size: 15px; }
 .adv-table { width: 100%; border-collapse: collapse; }
 .adv-table td { padding: 8px 10px; border-top: 1px solid var(--border); vertical-align: top; }
 /* The badge column hugs its content so the name + detail columns get the room. */
@@ -1124,3 +1121,23 @@ button.active-btn { outline: 2px solid var(--accent); }
 .rg-preview { margin-top: 8px; }
 .rg-sec-h { margin: 16px 0 6px; font-size: 14px; }
 @media (max-width: 640px) { .rg-filters { grid-template-columns: 1fr; } }
+
+/* Test area (security screening) */
+.screen-summary { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 14px; }
+.screen-groups { display: flex; flex-direction: column; gap: 16px; }
+.screen-list { display: flex; flex-direction: column; }
+.screen-row { display: flex; align-items: flex-start; gap: 12px; padding: 12px 0; border-top: 1px solid var(--border); }
+.screen-row:first-child { border-top: 0; }
+.screen-row-main { flex: 1; min-width: 0; }
+.screen-row-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.screen-row-detail { font-size: 12px; font-family: var(--mono, monospace); }
+.screen-row-actions { flex-shrink: 0; display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
+.screen-row-actions .drawer-link { font-size: 12px; }
+.inline-checks { display: flex; flex-wrap: wrap; gap: 10px; }
+.screen-checks { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 0; }
+.screen-chip { font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); cursor: help; }
+.screen-chip.ok { color: var(--ok); border-color: var(--ok-weak); background: var(--ok-weak); }
+.screen-chip.warn { color: var(--warn); border-color: var(--warn-weak); background: var(--warn-weak); }
+.screen-chip.bad { color: var(--bad); border-color: var(--bad-weak); background: var(--bad-weak); }
+.screen-detail { font-size: 12px; margin-top: 8px; }
+@media (max-width: 640px) { .screen-row { flex-direction: column; } }

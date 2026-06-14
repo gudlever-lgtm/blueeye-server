@@ -524,6 +524,29 @@ const PAGE_INFO = {
       el('p', { class: 'muted' }, 'Only agents whose traffic source is NetFlow or sFlow contribute flow records; the heaviest dependencies/hosts are shown when the graph is large.'),
     ],
   },
+  screening: {
+    hero: 'Test area — one place to verify every outbound integration: send a test email, reach your ITSM/IPAM receivers, check SSO and the other services BlueEye talks to — each with a security check.',
+    title: 'Test area — connectivity & security screening',
+    body: () => [
+      el('p', {}, 'A consolidated, admin-only screening of everything BlueEye reaches OUTWARD to. Each target gets two verdicts: a live connectivity test and a security-posture check (HTTPS vs plaintext, TLS, signed webhooks, authentication, certificate/secret presence, licence state).'),
+      el('div', { class: 'callout' },
+        el('strong', {}, 'Running a test sends real traffic: '),
+        el('span', {}, 'the email / webhook / syslog tests deliver an actual test message, and an ITSM/IPAM test performs a real (read-only) connectivity call to the receiver. SSO and the other services are probed for reachability.')),
+      el('h4', {}, 'What is screened'),
+      el('ul', {},
+        el('li', {}, el('strong', {}, 'Email & alert channels '), '— SMTP email, webhook and syslog. Configure under ', viewLink('settings', 'Settings → Alerting'), '.'),
+        el('li', {}, el('strong', {}, 'Remote API receivers (ITSM/IPAM) '), '— ServiceNow, Nautobot and generic webhook connectors (Settings → Integrations).'),
+        el('li', {}, el('strong', {}, 'Authentication (SSO) '), '— LDAP/AD bind, OIDC discovery and the SAML IdP.'),
+        el('li', {}, el('strong', {}, 'Other outbound services '), '— the AI assistant endpoint, map tiles / geocoder and the licence server.')),
+      el('h4', {}, 'Reading the result'),
+      el('ul', {},
+        el('li', {}, el('strong', {}, 'OK '), '— reachable and securely configured.'),
+        el('li', {}, el('strong', {}, 'Warning '), '— reachable but worth hardening (e.g. an unsigned webhook, plaintext syslog).'),
+        el('li', {}, el('strong', {}, 'Critical '), '— failed to connect, or an insecure configuration (e.g. plaintext HTTP, no authentication).'),
+        el('li', {}, el('strong', {}, 'Info '), '— not configured / not applicable.')),
+      el('p', { class: 'muted' }, 'Hover a check chip for the reason behind it. No secrets are ever shown on this page.'),
+    ],
+  },
   tests: {
     hero: 'Reusable test packages — run the same checks on a schedule across many agents. (For a quick one-off check from a single agent, use Probes instead.)',
     title: 'Tests — packages pushed to agents',
@@ -569,20 +592,9 @@ const PAGE_INFO = {
         el('li', {}, el('strong', {}, 'UNKNOWN: '), 'agent has not run any probe yet.')),
       el('h4', {}, 'KPI strip & network path'),
       el('p', {}, 'Above the list, a strip of live KPIs (latency, loss, jitter, active agents, monitored paths, alerts) and a network-path diagram (HQ → ISP → Cloud → SaaS, with a branch feeding the uplink) summarise the fleet at a glance. The diagram\'s topology is illustrative, but each segment\'s colour and the loss/latency figures are live — a hop turns amber when loss, jitter or a critical agent says so. Both summarise ', el('strong', {}, 'all'), ' agents by default; use the ', el('strong', {}, 'Location'), ' selector to scope the KPIs and the path to a single site.'),
+      el('h4', {}, 'Open issues (Professional+)'),
+      el('p', {}, 'On Professional licences and above, the page ends with an ', el('strong', {}, 'Open issues'), ' rollup: the currently-active ', el('strong', {}, 'incidents'), ' (derived from the probe thresholds — click one to drill into the affected agent) beside the most recent unacknowledged analysis ', viewLink('findings', 'findings'), ', each with its explanation. It is composed from data the server already holds — no new collection — and is gated by the ', el('strong', {}, 'dashboard_advanced'), ' licence feature; below Professional the rollup is simply omitted and the rest of the page is unchanged.'),
       el('p', { class: 'muted' }, 'Health is based on active probes — run a few per agent on ', viewLink('probes'), ' (or schedule them fleet-wide via ', viewLink('tests'), ') for a complete picture; the interface signal comes from ', viewLink('interfaces'), '. Metadata only: targets and timings, never packet contents.'),
-    ],
-  },
-  advanced: {
-    hero: 'Advanced dashboard — drill-down widget panels that pull fleet health, open incidents and analysis findings into one Professional-tier overview.',
-    title: 'Advanced dashboard',
-    body: () => [
-      el('p', {}, 'A consolidated operations view for Professional licences and above. A KPI strip rolls up the whole fleet (agents, healthy / warning / critical counts, open incidents and unacknowledged findings); below it, three drill-down panels surface what needs action — worst-first agents, active incidents and the most recent analysis findings.'),
-      el('h4', {}, 'Panels'),
-      el('ul', {},
-        el('li', {}, el('strong', {}, 'Needs attention '), '— agents whose health verdict is not OK, worst-first. Click a row to open that agent\'s combined page.'),
-        el('li', {}, el('strong', {}, 'Active incidents '), '— currently-open incidents derived from the probe thresholds; click to drill into the affected agent.'),
-        el('li', {}, el('strong', {}, 'Recent findings '), '— the newest unacknowledged anomaly findings from local analysis, with their explanation.')),
-      el('p', { class: 'muted' }, 'Everything here is composed from data the server already holds (', viewLink('fleet', 'fleet health'), ', incidents and ', viewLink('findings', 'findings'), ') — no new collection. The view is gated by the ', el('strong', {}, 'dashboard_advanced'), ' licence feature (Professional+); below that the tab is locked and points to Settings → License.'),
     ],
   },
   agent: {
@@ -877,6 +889,138 @@ function onDrawerKey(e) { if (e.key === 'Escape') closeDrawer(); }
 
 const views = {};
 let locationCache = [];
+
+// Test area — consolidated connectivity + security screening of every outbound
+// integration. Admin-only (the nav button + the /api/diagnostics routes both gate
+// on admin). Each subsystem's own test primitive is reused via the diagnostics API.
+const SCREEN_SEV_LABEL = { ok: 'OK', info: 'Info', warn: 'Warning', bad: 'Critical' };
+const SCREEN_SEV_BADGE = { ok: 'badge ok', info: 'badge', warn: 'badge warn', bad: 'badge bad' };
+
+// Deep-link from a Test-area target to where it is configured. Every target maps
+// to a Settings sub-tab (integrations get their own page, implemented below).
+function screenSetupLink(t) {
+  let tab = null;
+  if (t.id.startsWith('alert:')) tab = 'alerting';
+  else if (t.category === 'itsm') tab = 'integrations';
+  else if (t.category === 'auth') tab = 'auth';
+  else if (t.id === 'assistant') tab = 'analyse';
+  else if (t.id === 'map') tab = 'map';
+  else if (t.id === 'license') tab = 'license';
+  if (!tab) return null;
+  return settingsLink(tab, 'Set up →');
+}
+
+views.screening = async () => {
+  const root = el('div');
+  let catalog = [];
+  let groupOrder = [];
+  const results = new Map(); // target id -> last run result
+
+  const runAllBtn = el('button', {}, 'Run full screening');
+  root.append(el('div', { class: 'section-head' },
+    el('h2', {}, 'Test area'),
+    el('span', { class: 'spacer' }),
+    runAllBtn));
+
+  const summaryBar = el('div', { class: 'screen-summary' });
+  const bodyEl = el('div', { class: 'empty' }, 'Loading…');
+  root.append(summaryBar, bodyEl);
+
+  const chip = (label, n, cls) => el('span', { class: `badge ${cls || ''}`.trim() }, `${label}: ${n}`);
+
+  function renderSummary() {
+    const counts = { ok: 0, info: 0, warn: 0, bad: 0 };
+    for (const t of catalog) {
+      const r = results.get(t.id);
+      counts[(r ? r.severity : t.posture)] += 1;
+    }
+    summaryBar.replaceChildren(
+      chip('Targets', catalog.length, ''),
+      chip('OK', counts.ok, 'ok'),
+      chip('Warnings', counts.warn, 'warn'),
+      chip('Critical', counts.bad, 'bad'));
+  }
+
+  function targetRow(t) {
+    const r = results.get(t.id);
+    const sev = r ? r.severity : t.posture;
+    const statusBadge = el('span', { class: SCREEN_SEV_BADGE[sev] || 'badge' }, SCREEN_SEV_LABEL[sev] || sev);
+
+    const checks = el('div', { class: 'screen-checks' },
+      ...(t.security || []).map((c) => el('span',
+        { class: `screen-chip ${c.status}`, title: c.note || '' },
+        `${c.label}: ${SCREEN_SEV_LABEL[c.status] || c.status}`)));
+
+    const detailLine = el('div', { class: 'screen-detail muted' });
+    if (r) detailLine.textContent = `${r.ran ? (r.ok ? '✓ ' : '✗ ') : ''}${r.detail || ''}${r.ran && r.durationMs != null ? ` · ${r.durationMs} ms` : ''}`;
+    else if (!t.runnable) detailLine.textContent = 'Configuration screened only — no live test for this target.';
+
+    const runBtn = el('button', { class: 'small ghost' }, 'Run');
+    if (t.licensed === false) { runBtn.disabled = true; runBtn.textContent = 'Not licensed'; }
+    else if (!t.runnable) runBtn.disabled = true;
+    else runBtn.addEventListener('click', () => runTargets([t.id], runBtn));
+
+    return el('div', { class: 'screen-row' },
+      el('div', { class: 'screen-row-main' },
+        el('div', { class: 'screen-row-head' },
+          statusBadge,
+          el('strong', {}, t.name),
+          el('span', { class: 'muted screen-row-detail' }, t.detail)),
+        checks,
+        detailLine),
+      el('div', { class: 'screen-row-actions' }, runBtn, screenSetupLink(t)));
+  }
+
+  function renderBody() {
+    if (!catalog.length) { bodyEl.className = 'empty'; bodyEl.replaceChildren('No targets to screen.'); return; }
+    const byGroup = new Map();
+    for (const t of catalog) { if (!byGroup.has(t.group)) byGroup.set(t.group, []); byGroup.get(t.group).push(t); }
+    const order = groupOrder.length ? groupOrder.map((g) => g.label) : [...byGroup.keys()];
+    const cards = [];
+    for (const label of order) {
+      const items = byGroup.get(label);
+      if (!items || !items.length) continue;
+      cards.push(el('div', { class: 'settings-card' },
+        el('h3', {}, label),
+        el('div', { class: 'screen-list' }, ...items.map(targetRow))));
+    }
+    bodyEl.className = 'screen-groups';
+    bodyEl.replaceChildren(...cards);
+    renderSummary();
+  }
+
+  async function runTargets(ids, btn) {
+    const all = !ids;
+    const restore = btn ? btn.textContent : null;
+    if (btn) { btn.disabled = true; btn.textContent = 'Running…'; }
+    try {
+      const data = await api('/api/diagnostics/run', { method: 'POST', body: all ? {} : { targets: ids } });
+      for (const t of data.targets || []) results.set(t.id, t.result);
+      renderBody();
+      if (all) toast(`Screening complete — ${data.summary.bad || 0} critical, ${data.summary.warn || 0} warning(s)`, (data.summary.bad || 0) > 0);
+    } catch (e) {
+      toast(errText(e), true);
+      if (btn) { btn.disabled = false; btn.textContent = restore || 'Run'; }
+    }
+  }
+
+  runAllBtn.addEventListener('click', async () => {
+    runAllBtn.disabled = true; runAllBtn.textContent = 'Running…';
+    await runTargets(null, null);
+    runAllBtn.disabled = false; runAllBtn.textContent = 'Run full screening';
+  });
+
+  try {
+    const data = await api('/api/diagnostics/targets');
+    catalog = data.targets || [];
+    groupOrder = data.groups || [];
+    renderBody();
+  } catch (e) {
+    bodyEl.className = 'empty error';
+    bodyEl.replaceChildren(errText(e));
+  }
+  return root;
+};
 
 views.agents = async () => {
   const [agents, locations, ver] = await Promise.all([api('/agents'), api('/locations'), api('/system/version').catch(() => null)]);
@@ -3790,8 +3934,41 @@ function nocDashboard(data, { controls = null, scopeName = null } = {}) {
     networkPath(data, k, scopeName));
 }
 
+// Overview "Open issues" section (licence feature dashboard_advanced, Pro+):
+// the active incidents and the most-recent unacknowledged analysis findings,
+// side by side. Composed from data the server already holds (no new collection)
+// and rendered with the compact .panel-grid / .adv-table styling. Rows that map
+// to an agent drill into its combined page.
+function fleetIssues(w) {
+  if (!w) return el('div', {});
+  const count = (n) => el('span', { class: 'muted fi-count' }, n ? ` · ${n}` : '');
+
+  const inc = el('div', { class: 'card' }, el('h3', {}, 'Active incidents', count(w.incidents.active)));
+  if (!w.incidents.recent.length) inc.append(el('p', { class: 'muted' }, 'No active incidents.'));
+  else inc.append(el('table', { class: 'adv-table' }, el('tbody', {}, ...w.incidents.recent.map((i) =>
+    el('tr', i.agentId ? { class: 'clickable', onclick: () => openAgent(i.agentId) } : {},
+      el('td', {}, el('span', { class: `badge ${i.severity === 'critical' ? 'crit' : 'warn'}` }, i.severity)),
+      el('td', {}, esc(i.agentName || `agent ${i.agentId}`), i.locationName ? el('span', { class: 'muted' }, ` · ${esc(i.locationName)}`) : null),
+      el('td', {}, esc(i.metric)),
+      el('td', { class: 'muted' }, fmtDate(i.startedAt)))))));
+
+  const fnd = el('div', { class: 'card' }, el('h3', {}, 'Recent findings', count(w.findings.open)));
+  if (!w.findings.recent.length) fnd.append(el('p', { class: 'muted' }, 'No open analysis findings.'));
+  else fnd.append(el('table', { class: 'adv-table' }, el('tbody', {}, ...w.findings.recent.map((x) =>
+    el('tr', {},
+      el('td', {}, el('span', { class: `badge ${x.severity === 'CRIT' ? 'crit' : x.severity === 'WARN' ? 'warn' : 'grace'}` }, x.severity)),
+      el('td', {}, esc(x.hostId), el('span', { class: 'muted' }, ` · ${esc(x.metric)}`)),
+      el('td', { class: 'muted' }, esc(x.explanation || x.kind || '')))))));
+
+  return el('section', { class: 'fleet-issues' },
+    el('h3', { class: 'fi-head' }, 'Open issues',
+      el('span', { class: 'muted' }, ' · active incidents & recent analysis findings')),
+    el('div', { class: 'panel-grid' }, inc, fnd));
+}
+
 // The landing view: all agents with a probe-derived health verdict, worst-first.
-// Click a row to pivot into that agent's combined detail page.
+// Click a row to pivot into that agent's combined detail page. For Professional+
+// licences it also surfaces an "Open issues" rollup (incidents + findings).
 views.fleet = async () => {
   const root = el('div', { class: 'fleet' });
   root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Overview'),
@@ -3800,7 +3977,8 @@ views.fleet = async () => {
   const nocHost = el('div', {});
   const summaryHost = el('div', { class: 'fleet-summary' });
   const tableHost = el('div', {});
-  root.append(bannerHost, nocHost, summaryHost, tableHost);
+  const issuesHost = el('div', {}); // gated (dashboard_advanced): incidents + findings
+  root.append(bannerHost, nocHost, summaryHost, tableHost, issuesHost);
 
   // Maintenance banner (viewer-readable) — shown while a window is active now.
   api('/api/settings/maintenance').then((m) => {
@@ -3918,7 +4096,16 @@ views.fleet = async () => {
       : el('div', { class: 'empty' }, `No ${FILTER_LABEL[activeFilter]} agents.`);
     tableHost.replaceChildren(...(bar ? [bar, body] : [body]));
   }
+  // Open issues (incidents + findings) — a Professional+ rollup (feature
+  // dashboard_advanced). Best-effort + gated: when the licence doesn't include
+  // it the panels are simply omitted, so the core Overview always renders.
+  async function refreshIssues() {
+    if (!featureEntitled('dashboard_advanced')) { issuesHost.replaceChildren(); return; }
+    try { issuesHost.replaceChildren(fleetIssues((await api('/api/dashboard/advanced')).widgets)); }
+    catch { issuesHost.replaceChildren(); }
+  }
   async function refresh() {
+    refreshIssues(); // gated incidents/findings panels, fetched in parallel
     let data;
     try { data = await api('/api/fleet/health'); } catch (e) { tableHost.replaceChildren(el('div', { class: 'error' }, e.message)); return; }
     lastData = data;
@@ -4105,77 +4292,6 @@ function nicTable(nics) {
     el('td', { class: 'muted' }, esc(n.busInfo || n.pciId || '—'))));
   return el('table', { class: 'iface-table' }, el('thead', {}, head), el('tbody', {}, ...rows));
 }
-
-// ---- Advanced dashboard (licence feature dashboard_advanced) ---------------
-// Drill-down widget panels — a fleet-health KPI strip plus "needs attention",
-// active-incidents and recent-findings panels — from GET /api/dashboard/advanced
-// (Professional+). The nav item is locked below Professional and routes to the
-// licence page; if the view is somehow reached directly, a 403 degrades to an
-// inline upgrade hint rather than a raw error.
-views.advanced = async () => {
-  const root = el('div', { class: 'advanced-view' });
-  let data;
-  try {
-    data = await api('/api/dashboard/advanced');
-  } catch (e) {
-    if (e.status === 403) {
-      return el('div', { class: 'card' },
-        el('h3', {}, 'Advanced dashboard'),
-        el('p', { class: 'muted' }, (e.data && e.data.message) || 'This feature is not included in your current plan.'),
-        el('button', { class: 'primary', onclick: () => { settingsTab = 'license'; currentView = 'settings'; render(); } }, 'View licence'));
-    }
-    throw e;
-  }
-  const w = data.widgets;
-  const f = w.fleet;
-  const crit = f.critical + f.down;
-
-  // KPI strip — fleet-health roll-up + open incidents/findings (6-up grid).
-  root.append(el('div', { class: 'noc-kpis' },
-    kpiCard('Agents', String(f.total), 'total enrolled', 'accent'),
-    kpiCard('Healthy', String(f.healthy), 'all signals OK', f.total && f.healthy === f.total ? 'ok' : 'accent'),
-    kpiCard('Warning', String(f.warning), 'degraded', f.warning ? 'warn' : 'ok'),
-    kpiCard('Critical', String(crit), 'critical / down', crit ? 'bad' : 'ok'),
-    kpiCard('Incidents', String(w.incidents.active), 'active now', w.incidents.active ? 'warn' : 'ok'),
-    kpiCard('Findings', String(w.findings.open), 'unacknowledged', w.findings.open ? 'warn' : 'ok')));
-
-  const panels = el('div', { class: 'panel-grid' });
-
-  // Needs-attention panel — worst-first agents; click a row to drill into it.
-  const attn = el('div', { class: 'card' }, el('h3', {}, 'Needs attention'));
-  if (!w.attention.length) attn.append(el('p', { class: 'muted' }, 'Every measured agent is healthy.'));
-  else attn.append(el('table', { class: 'adv-table' }, el('tbody', {}, ...w.attention.map((a) =>
-    el('tr', { class: 'clickable', onclick: () => openAgent(a.agentId) },
-      el('td', {}, healthBadge({ status: a.status, reason: a.reason })),
-      el('td', {}, esc(a.displayName), a.locationName ? el('span', { class: 'muted' }, ` · ${esc(a.locationName)}`) : null),
-      el('td', { class: 'muted' }, esc(a.reason || '')))))));
-  panels.append(attn);
-
-  // Active incidents panel.
-  const inc = el('div', { class: 'card' }, el('h3', {}, 'Active incidents'));
-  if (!w.incidents.recent.length) inc.append(el('p', { class: 'muted' }, 'No active incidents.'));
-  else inc.append(el('table', { class: 'adv-table' }, el('tbody', {}, ...w.incidents.recent.map((i) =>
-    el('tr', i.agentId ? { class: 'clickable', onclick: () => openAgent(i.agentId) } : {},
-      el('td', {}, el('span', { class: `badge ${i.severity === 'critical' ? 'crit' : 'warn'}` }, i.severity)),
-      el('td', {}, esc(i.agentName || `agent ${i.agentId}`), i.locationName ? el('span', { class: 'muted' }, ` · ${esc(i.locationName)}`) : null),
-      el('td', {}, esc(i.metric)),
-      el('td', { class: 'muted' }, fmtDate(i.startedAt)))))));
-  panels.append(inc);
-
-  // Recent (open) analysis findings panel — spans the full row (it's the long
-  // list) so the two short panels above sit side by side without dead space.
-  const fnd = el('div', { class: 'card wide' }, el('h3', {}, 'Recent findings'));
-  if (!w.findings.recent.length) fnd.append(el('p', { class: 'muted' }, 'No open analysis findings.'));
-  else fnd.append(el('table', { class: 'adv-table' }, el('tbody', {}, ...w.findings.recent.map((x) =>
-    el('tr', {},
-      el('td', {}, el('span', { class: `badge ${x.severity === 'CRIT' ? 'crit' : x.severity === 'WARN' ? 'warn' : 'grace'}` }, x.severity)),
-      el('td', {}, esc(x.hostId), el('span', { class: 'muted' }, ` · ${esc(x.metric)}`)),
-      el('td', { class: 'muted' }, esc(x.explanation || x.kind || '')))))));
-  panels.append(fnd);
-
-  root.append(panels);
-  return root;
-};
 
 // Fleet NIC inventory + firmware-drift detection. Groups identical NIC models
 // across all agents and surfaces firmware-version outliers — the "47 units on
@@ -5559,7 +5675,7 @@ let settingsTab = null;
 // tab is [key, label, adminOnly]; non-admins only ever see the personal section.
 const SETTINGS_GROUPS = [
   ['Access & security', [['users', 'Users', true], ['auth', 'Authentication', true], ['apitokens', 'API tokens', true], ['auditlog', 'Audit log', true], ['agentkey', 'Agent key', true]]],
-  ['Detection & alerts', [['analyse', 'Analysis', true], ['alerting', 'Alerting', true], ['maintenance', 'Maintenance', true]]],
+  ['Detection & alerts', [['analyse', 'Analysis', true], ['alerting', 'Alerting', true], ['integrations', 'Integrations', true], ['maintenance', 'Maintenance', true]]],
   ['Data', [['retention', 'Retention', true], ['types', 'Traffic types', true], ['map', 'Map', true]]],
   ['System', [['updates', 'Updates', true], ['agents', 'Agents', true]]],
   ['Personal', [['appearance', 'Appearance', false], ['license', 'License', false]]],
@@ -5589,6 +5705,7 @@ views.settings = async () => {
     types: settingsTypesView,
     analyse: settingsAnalyseView,
     alerting: settingsAlertingView,
+    integrations: settingsIntegrationsView,
     maintenance: settingsMaintenanceView,
     updates: settingsUpdatesView,
     agentkey: settingsAgentKeyView,
@@ -5823,6 +5940,238 @@ function throughputSettingsCard(t) {
       { key: 'upBadMbps', label: 'Upload CRITICAL below (Mbps)', type: 'number', min: 0, max: 1000000, step: 1, hint: '0 = no upload critical floor.' },
     ],
   });
+}
+
+// ---- Settings → Integrations (ITSM/IPAM outbound connectors) --------------
+// Manage outbound API integrations (ServiceNow, Nautobot, generic webhook): push
+// BlueEye events (incidents/anomalies, agent enroll/delete) to external systems.
+// Backend: src/routes/integrations.js (CRUD + /meta + test-fire). Credentials are
+// encrypted at rest (secret box) and never returned. Admin-only.
+let integrationsEditing = null; // null = list only · 'new' · <id> being edited
+
+async function settingsIntegrationsView() {
+  const root = el('div');
+  root.append(el('p', { class: 'muted settings-intro' },
+    'Push BlueEye events to your ITSM/IPAM systems — e.g. open a ServiceNow incident when a CRIT finding fires, or sync agents into Nautobot. Credentials are encrypted at rest and never shown again; changes take effect immediately.'));
+
+  let meta; let list;
+  try {
+    [meta, list] = await Promise.all([api('/api/integrations/meta'), api('/api/integrations')]);
+  } catch (e) {
+    root.append(el('div', { class: 'empty error' }, errText(e)));
+    return root;
+  }
+
+  if (!list.length) root.append(el('div', { class: 'empty' }, 'No integrations configured yet.'));
+  else root.append(el('div', { class: 'settings-grid' }, ...list.map((row) => integrationCard(row))));
+
+  if (integrationsEditing === 'new') {
+    root.append(integrationEditor(meta, null));
+  } else if (integrationsEditing != null) {
+    const existing = list.find((r) => r.id === integrationsEditing);
+    if (existing) { root.append(integrationEditor(meta, existing)); }
+    else { integrationsEditing = null; root.append(integrationAddButton()); }
+  } else {
+    root.append(integrationAddButton());
+  }
+  return root;
+}
+
+function integrationAddButton() {
+  const b = el('button', { class: 'small' }, '+ Add integration');
+  b.addEventListener('click', () => { integrationsEditing = 'new'; render(); });
+  return el('div', { class: 'form-actions' }, b);
+}
+
+function integrationCard(row) {
+  const enabledBadge = el('span', { class: `badge ${row.enabled ? 'ok' : ''}` }, row.enabled ? 'Enabled' : 'Disabled');
+  const result = el('p', { class: 'muted small' });
+
+  const editBtn = el('button', { class: 'small ghost' }, 'Edit');
+  editBtn.addEventListener('click', () => { integrationsEditing = row.id; render(); });
+
+  const testBtn = el('button', { class: 'small ghost' }, 'Test');
+  testBtn.addEventListener('click', async () => {
+    result.className = 'muted small'; result.textContent = 'Testing…'; testBtn.disabled = true;
+    try {
+      const res = await api(`/api/integrations/${row.id}/test`, { method: 'POST' });
+      const r = res.result || {};
+      result.className = `small ${r.ok ? 'ok' : 'error'}`;
+      result.textContent = `${r.ok ? '✓' : '✗'} ${r.detail || (r.ok ? 'ok' : 'failed')}${r.status != null ? ` (HTTP ${r.status})` : ''}`;
+    } catch (e) { result.className = 'small error'; result.textContent = errText(e); }
+    finally { testBtn.disabled = false; }
+  });
+
+  const delBtn = el('button', { class: 'small danger ghost' }, 'Delete');
+  delBtn.addEventListener('click', async () => {
+    if (!confirm(`Delete integration "${row.name}"?`)) return;
+    try {
+      await api(`/api/integrations/${row.id}`, { method: 'DELETE' });
+      if (integrationsEditing === row.id) integrationsEditing = null;
+      toast('Integration deleted'); render();
+    } catch (e) { toast(errText(e), true); }
+  });
+
+  const events = (row.config_json && row.config_json.events) || [];
+  return el('div', { class: 'settings-card' },
+    el('h3', {}, row.name, ' ', enabledBadge),
+    el('div', { class: 'form-grid' },
+      el('div', { class: 'muted small' }, `Type: ${row.type} · Auth: ${row.auth_type}`),
+      el('div', { class: 'muted small screen-row-detail' }, row.base_url),
+      events.length ? el('div', { class: 'muted small' }, `Events: ${events.join(', ')}`) : null,
+      el('div', { class: 'form-actions' }, editBtn, testBtn, delBtn),
+      result));
+}
+
+// Credential inputs for the chosen auth type (+ the webhook HMAC signing secret).
+// Write-only: on edit, a blank field keeps the stored secret; a "Clear" box wipes it.
+function integrationCredFields(authType, type, isEdit) {
+  const inputs = {};
+  const rows = [];
+  const keep = isEdit ? ' Leave blank to keep the stored value.' : '';
+  const text = (key, label, hint) => { const i = el('input', { type: 'text' }); inputs[key] = i; rows.push(alertField(label, i, hint)); };
+  const secret = (key, label, hint) => {
+    const i = el('input', { type: 'password', autocomplete: 'new-password', spellcheck: 'false', placeholder: isEdit ? 'unchanged' : '' });
+    inputs[key] = i; rows.push(alertField(label, i, (hint || '') + keep));
+  };
+  if (authType === 'basic') { text('username', 'Username'); secret('password', 'Password'); }
+  else if (authType === 'token') secret('token', 'API token', 'Sent in the Authorization header.');
+  else if (authType === 'oauth2') secret('accessToken', 'Access token', 'Sent as a Bearer token.');
+  if (type === 'webhook') secret('secret', 'Signing secret (HMAC)', 'Optional — signs the POST as X-BlueEye-Signature.');
+
+  let clear = null;
+  if (isEdit && rows.length) {
+    clear = el('input', { type: 'checkbox' });
+    rows.push(el('label', { class: 'inline muted small' }, clear, el('span', {}, 'Clear stored credentials')));
+  }
+  function gather() {
+    if (clear && clear.checked) return { clearCredentials: true };
+    const creds = {};
+    for (const [k, i] of Object.entries(inputs)) { const v = i.value.trim(); if (v) creds[k] = v; }
+    return Object.keys(creds).length ? { credentials: creds } : {};
+  }
+  return { rows, gather };
+}
+
+// Type-specific config_json fields. gather() may throw on bad JSON — the caller
+// catches it and shows the message.
+function integrationConfigFields(type, config) {
+  const c = config || {};
+  const rows = [];
+  let gather = () => ({});
+  if (type === 'servicenow') {
+    const tableI = el('input', { type: 'text', value: c.table || 'incident', placeholder: 'incident' });
+    rows.push(alertField('Table', tableI, 'ServiceNow table to create records in (default: incident).'));
+    gather = () => ({ table: tableI.value.trim() || 'incident' });
+  } else if (type === 'nautobot') {
+    const pathI = el('input', { type: 'text', value: c.devicePath || '/api/dcim/devices', placeholder: '/api/dcim/devices' });
+    const delI = el('input', { type: 'checkbox' }); delI.checked = !!c.allowDelete;
+    const defI = el('textarea', { rows: '4', spellcheck: 'false', placeholder: '{ "status": {"name": "Active"}, "role": {…} }' },
+      c.deviceDefaults ? JSON.stringify(c.deviceDefaults, null, 2) : '');
+    rows.push(alertField('Device path', pathI, 'Nautobot device API path.'));
+    rows.push(alertField('Allow delete', delI, 'Permit removing the device when an agent is deleted.'));
+    rows.push(alertField('Device defaults (JSON)', defI, 'Required fields merged into every device create (device_type, role, location, status).'));
+    gather = () => {
+      const out = { devicePath: pathI.value.trim() || '/api/dcim/devices', allowDelete: delI.checked };
+      const raw = defI.value.trim();
+      if (raw) { let parsed; try { parsed = JSON.parse(raw); } catch { throw new Error('Device defaults must be valid JSON.'); } out.deviceDefaults = parsed; }
+      return out;
+    };
+  }
+  return { rows, gather };
+}
+
+// Event checkboxes (which BlueEye events the integration reacts to).
+function integrationEventFields(allEvents, selected) {
+  const chosen = new Set(selected || []);
+  const boxes = (allEvents || []).map((ev) => {
+    const cb = el('input', { type: 'checkbox' }); cb.checked = chosen.has(ev);
+    return { ev, cb };
+  });
+  const row = el('label', { class: 'set-field' },
+    el('span', {}, 'Events'),
+    el('div', { class: 'inline-checks' }, ...boxes.map((b) => el('label', { class: 'inline muted small' }, b.cb, el('span', {}, b.ev)))),
+    el('span', { class: 'muted small' }, 'Which BlueEye events this integration reacts to.'));
+  return { row, gather: () => boxes.filter((b) => b.cb.checked).map((b) => b.ev) };
+}
+
+// The create/edit form. `existing` is null for a new integration, else the safe row.
+function integrationEditor(meta, existing) {
+  const isEdit = !!existing;
+  const types = meta.types || [];
+  const typeNames = types.map((t) => t.type);
+  const connectorFor = (type) => types.find((t) => t.type === type) || { authTypes: ['none'], defaultEvents: [] };
+
+  const typeSel = el('select', {}, ...typeNames.map((t) => el('option', { value: t }, t)));
+  typeSel.value = isEdit ? existing.type : (typeNames[0] || '');
+  if (isEdit) typeSel.disabled = true;
+
+  const nameI = el('input', { type: 'text', value: isEdit ? existing.name : '', placeholder: 'ServiceNow (prod)' });
+  const urlI = el('input', { type: 'text', value: isEdit ? existing.base_url : '', placeholder: 'https://example.service-now.com' });
+  const enabledI = el('input', { type: 'checkbox' }); enabledI.checked = isEdit ? !!existing.enabled : true;
+
+  const authWrap = el('div', { class: 'form-grid' });
+  const credWrap = el('div', { class: 'form-grid' });
+  const cfgWrap = el('div', { class: 'form-grid' });
+  const evWrap = el('div', { class: 'form-grid' });
+  const err = el('p', { class: 'error' });
+
+  let authSel; let credGather; let cfgGather; let evGather;
+
+  function rebuildCreds() {
+    const c = integrationCredFields(authSel.value, typeSel.value, isEdit);
+    credGather = c.gather;
+    credWrap.replaceChildren(...c.rows);
+  }
+  function rebuild() {
+    const conn = connectorFor(typeSel.value);
+    authSel = el('select', {}, ...conn.authTypes.map((a) => el('option', { value: a }, a)));
+    authSel.value = isEdit && conn.authTypes.includes(existing.auth_type) ? existing.auth_type : conn.authTypes[0];
+    authSel.addEventListener('change', rebuildCreds);
+    authWrap.replaceChildren(alertField('Auth type', authSel, 'How BlueEye authenticates to the target API.'));
+    rebuildCreds();
+    const cfg = integrationConfigFields(typeSel.value, isEdit ? existing.config_json : null);
+    cfgGather = cfg.gather;
+    cfgWrap.replaceChildren(...cfg.rows);
+    const ev = integrationEventFields(meta.events || [], (isEdit && existing.config_json && existing.config_json.events) || conn.defaultEvents || []);
+    evGather = ev.gather;
+    evWrap.replaceChildren(ev.row);
+  }
+  typeSel.addEventListener('change', rebuild);
+  rebuild();
+
+  const saveBtn = el('button', { class: 'small' }, isEdit ? 'Save changes' : 'Create integration');
+  const cancelBtn = el('button', { class: 'small ghost' }, 'Cancel');
+  cancelBtn.addEventListener('click', () => { integrationsEditing = null; render(); });
+  saveBtn.addEventListener('click', async () => {
+    err.textContent = ''; saveBtn.disabled = true;
+    try {
+      const body = {
+        name: nameI.value.trim(),
+        baseUrl: urlI.value.trim(),
+        authType: authSel.value,
+        enabled: enabledI.checked,
+        config: { ...cfgGather(), events: evGather() },
+        ...credGather(),
+      };
+      if (isEdit) await api(`/api/integrations/${existing.id}`, { method: 'PUT', body });
+      else { body.type = typeSel.value; await api('/api/integrations', { method: 'POST', body }); }
+      toast(isEdit ? 'Integration saved' : 'Integration created');
+      integrationsEditing = null; render();
+    } catch (e) { err.textContent = errText(e); saveBtn.disabled = false; }
+  });
+
+  return el('div', { class: 'settings-card' },
+    el('h3', {}, isEdit ? `Edit integration: ${existing.name}` : 'Add integration'),
+    el('div', { class: 'form-grid' },
+      isEdit ? alertField('Type', el('span', { class: 'muted' }, existing.type))
+        : alertField('Type', typeSel, 'Connector type (cannot be changed after creation).'),
+      alertField('Name', nameI, 'A label for this integration.'),
+      alertField('Base URL', urlI, 'https URL of the target API. Private/loopback addresses are rejected.'),
+      authWrap, credWrap, cfgWrap, evWrap,
+      alertField('Enabled', enabledI, 'When off, events are not dispatched to this target.'),
+      err,
+      el('div', { class: 'form-actions' }, saveBtn, cancelBtn)));
 }
 
 async function settingsAlertingView() {

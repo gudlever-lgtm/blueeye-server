@@ -110,6 +110,21 @@ test('a proof without a nonce is rejected (replay of a pre-nonce capture)', asyn
   assert.equal(m.getStatus().reason, 'nonce_mismatch');
 });
 
+test('a fresh proof carrying a recent proof_issued_at is accepted', async () => {
+  const m = manager({ fetchImpl: licensFetch({ proof_issued_at: new Date(NOW).toISOString() }) });
+  await m.validateOnce();
+  assert.equal(m.getStatus().status, 'valid');
+});
+
+test('a proof with a stale proof_issued_at is rejected (time-bounded replay)', async () => {
+  // Echoes the request nonce (so the nonce check passes) but was signed two days
+  // ago — the freshness bound still rejects it, even if a verifier skipped nonces.
+  const m = manager({ fetchImpl: licensFetch({ proof_issued_at: new Date(NOW - 2 * DAY).toISOString() }) });
+  await m.validateOnce();
+  assert.notEqual(m.getStatus().status, 'valid');
+  assert.equal(m.getStatus().reason, 'proof_too_old');
+});
+
 test('invalid signature -> rejected, not licensed, not cached', async () => {
   const cache = createMemoryCache();
   const { payload } = proof();

@@ -1,5 +1,6 @@
 'use strict';
 
+const crypto = require('crypto');
 const express = require('express');
 const { asyncHandler } = require('../middleware/asyncHandler');
 const { requireAuth, requireRole } = require('../auth/middleware');
@@ -7,6 +8,7 @@ const { requirePlanFeature } = require('../license/features');
 const { ROLES } = require('../auth/roles');
 const { parseId } = require('../validation/locationValidation');
 const { toCsv } = require('../lib/csv');
+const { canonicalize } = require('../lib/canonicalize');
 const {
   validateRiskInput, validateControlInput, validateIncidentInput,
   validateEvidenceInput, validateReportRequest, validateCustomReportSpec,
@@ -24,6 +26,9 @@ function createNis2Router({
   nis2RisksRepo, nis2ControlsRepo, nis2IncidentsRepo,
   nis2ReportsRepo, nis2EvidenceRepo, nis2AuditRepo,
   featureGate = null, planService = null,
+  // The server's Ed25519 signer (shared with agent-release signing). Used to
+  // produce tamper-evident, signed + timestamped evidence manifests for reports.
+  releaseKeyService = null,
 }) {
   const router = express.Router();
   const reader = requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN);
@@ -302,6 +307,47 @@ function createNis2Router({
     if (!updated) return res.status(409).json({ error: 'Report could not be approved' });
     await audit(req, 'approve', 'report', id, before, updated);
     res.json(updated);
+  }));
+
+  // GET /reports/:id/evidence — a SIGNED, TIMESTAMPED evidence manifest for a
+  // report. Binds the report's content (sha256 over its canonical bytes) plus a
+  // server-issued timestamp, signed with the server's Ed25519 key, so an auditor
+  // can verify OFFLINE that an exported NIS2 report is authentic and unaltered.
+  // This is the cryptographic complement to the draft→approved (organisational)
+  // sign-off. reader+, compliance-pack gated; 503 when no signing key exists.
+  //
+  // Verify: recompute sha256 over canonicalize(report), check it equals
+  // manifest.sha256, then Ed25519-verify `signature` over canonicalize(manifest)
+  // with `publicKey` (the same key agents use for signed releases). An optional
+  // RFC3161/TSA trusted timestamp can be layered on top later.
+  router.get('/reports/:id/evidence', requireAuth, reader, compliancePack, asyncHandler(async (req, res) => {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(400).json({ error: 'Invalid id' });
+    if (!releaseKeyService || typeof releaseKeyService.sign !== 'function' || !releaseKeyService.canSign()) {
+      return res.status(503).json({ error: 'No server signing key configured — generate one under Settings → Updates to sign evidence', code: 'NO_SIGNING_KEY' });
+    }
+    const report = await nis2ReportsRepo.findById(id);
+    if (!report) return res.status(404).json({ error: 'Report not found' });
+    const sha256 = crypto.createHash('sha256').update(canonicalize(report), 'utf8').digest('hex');
+    const manifest = {
+      type: 'nis2-evidence',
+      algorithm: 'ed25519',
+      contentHashAlg: 'sha256',
+      reportId: report.id,
+      reportType: report.reportType,
+      title: report.title,
+      status: report.status,
+      periodStart: report.periodStart,
+      periodEnd: report.periodEnd,
+      approvedByEmail: report.approvedByEmail,
+      approvedAt: report.approvedAt,
+      sha256,
+      signedAt: new Date().toISOString(),
+      serverFingerprint: (releaseKeyService.status && releaseKeyService.status().fingerprint) || null,
+    };
+    const signature = releaseKeyService.sign(manifest);
+    await audit(req, 'export', 'report', id, null, { evidence: true, sha256, signedAt: manifest.signedAt });
+    res.json({ manifest, signature, publicKey: releaseKeyService.getPublicKey() });
   }));
 
   router.delete('/reports/:id', requireAuth, writer, asyncHandler(async (req, res) => {

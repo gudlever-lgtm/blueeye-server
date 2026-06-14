@@ -208,7 +208,7 @@ function createApiRouter({
     router.use('/api/nis2', createNis2Router({
       nis2RisksRepo, nis2ControlsRepo, nis2IncidentsRepo,
       nis2ReportsRepo, nis2EvidenceRepo, nis2AuditRepo,
-      featureGate, planService,
+      featureGate, planService, releaseKeyService,
     }));
   }
   // High-availability status + admin (licence-gated `ha_deployment`, Enterprise+).

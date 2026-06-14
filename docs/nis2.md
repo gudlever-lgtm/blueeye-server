@@ -42,6 +42,7 @@ existing user-JWT RBAC:
 | `GET/POST /evidence`, `DELETE /evidence/:id` | viewer/operator | Evidence references (link/document metadata) |
 | `GET/POST /reports`, `GET /reports/:id`, `DELETE /reports/:id` | viewer/operator | Generated reports (snapshot frozen for trend) |
 | `POST /reports/:id/approve` | admin | Approve a draft report |
+| `GET /reports/:id/evidence` | viewer+ | **Signed + timestamped evidence manifest** — `{ manifest, signature, publicKey }`. The manifest binds the report's content hash (`sha256` over its canonical bytes) and a server timestamp (`signedAt`), Ed25519-signed with the server's key. Verify offline: recompute the hash, then verify `signature` over `canonicalize(manifest)` with `publicKey` (the same key agents use for signed releases). The cryptographic complement to the draft→approved organisational sign-off. `503` when no signing key exists; compliance-pack gated. |
 | `GET /audit` | admin | The module change trail |
 | `GET /export/{risks,controls,incidents}.csv` | viewer+ | CSV export |
 | `GET /export/{executive,readiness,risk,control,incident}.html` | viewer+ | Print-ready HTML → browser "Save as PDF" |

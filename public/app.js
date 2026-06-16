@@ -3675,10 +3675,10 @@ views.investigation = async () => {
     try {
       const inv = await api('/api/investigation/run', {
         method: 'POST',
-        body: JSON.stringify({
+        body: {
           locationRef: { type: t, value: rawValue },
           windowMinutes: Number(windowSelect.value),
-        }),
+        },
       });
       resultArea.replaceChildren(investigationCard(inv));
       statusEl.textContent = '';

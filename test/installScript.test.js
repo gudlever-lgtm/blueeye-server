@@ -29,11 +29,13 @@ test('renderInstallScript embeds server URL, code, fingerprint and the source ch
   assert.match(script, /checksum mismatch/);
 });
 
-test('renderInstallScript wires both runtimes: Node (default) and Docker (opt-in)', () => {
+test('renderInstallScript wires all three runtimes: binary (new default), Node, and Docker (opt-in)', () => {
   const script = renderInstallScript({ serverUrl: 'http://x', code: 'C', sourceSha: SHA });
-  // Native Node + systemd is the DEFAULT; Docker is opt-in (BLUEEYE_RUNTIME=docker),
-  // so a host that merely has Docker installed isn't silently containerised.
-  assert.match(script, /if command -v node >\/dev\/null 2>&1; then RUNTIME=node; else RUNTIME=none; fi/);
+  // Binary is the new default when a SHA is available; falls back to node, then none.
+  assert.match(script, /pick_binary_sha/);
+  assert.match(script, /RUNTIME=binary/);
+  assert.match(script, /command -v node/);
+  assert.match(script, /RUNTIME=node/);
   // Docker branch (opt-in)
   assert.match(script, /docker build -t "\$IMAGE"/);
   assert.match(script, /docker run -d --name "\$CONTAINER" --restart unless-stopped --network host/);
@@ -57,6 +59,34 @@ test('renderInstallScript wires both runtimes: Node (default) and Docker (opt-in
   assert.match(script, /uninstall\.sh/);
   // Graceful "ask" when no runtime is available.
   assert.match(script, /Node\.js was not found/);
+  // Binary install path: downloads pre-built binary, verifies checksum, enrolls.
+  assert.match(script, /enroll\/agent-binary\/\$BINARY_ARCH/);
+  assert.match(script, /"\$DEST\/blueeye-agent" enroll --code "\$ENROLL_CODE"/);
+  // Slim Docker path when binary is available.
+  assert.match(script, /Dockerfile\.slim/);
+  // install_service is called with "binary" as the runtime tag for binary installs.
+  assert.match(script, /install_service "\$CURRENT\/blueeye-agent" binary/);
+});
+
+test('renderInstallScript embeds binary SHA-256 checksums when provided', () => {
+  const x64sha  = 'b'.repeat(64);
+  const arm64sha = 'c'.repeat(64);
+  const script = renderInstallScript({
+    serverUrl: 'http://x',
+    code: 'C',
+    sourceSha: SHA,
+    binaryChecksums: { 'linux-x64': x64sha, 'linux-arm64': arm64sha },
+    agentVersion: '9.9.9',
+  });
+  assert.match(script, new RegExp(`BINARY_SHA_LINUX_X64="${x64sha}"`));
+  assert.match(script, new RegExp(`BINARY_SHA_LINUX_ARM64="${arm64sha}"`));
+  assert.match(script, /AGENT_VERSION="9\.9\.9"/);
+});
+
+test('renderInstallScript has empty binary SHAs when no checksums provided', () => {
+  const script = renderInstallScript({ serverUrl: 'http://x', code: 'C', sourceSha: SHA });
+  assert.match(script, /BINARY_SHA_LINUX_X64=""/);
+  assert.match(script, /BINARY_SHA_LINUX_ARM64=""/);
 });
 
 // Build a fake `curl` that writes fixed bytes to the -o target, so the script's

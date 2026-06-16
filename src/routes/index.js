@@ -97,6 +97,7 @@ function createApiRouter({
   retentionConfig,
   artifactStore,
   agentSourceStore,
+  agentBinaryStore,
   releaseStore,
   releasePublicKey,
   releaseKeyService,
@@ -178,7 +179,7 @@ function createApiRouter({
   router.use('/me', createMeRouter({ usersRepo }));
   router.use('/locations', createLocationsRouter({ locationsRepo, resultsRepo }));
   router.use('/license', createLicenseRouter({ licenseManager, featureGate, planService, usageService, auditLogger }));
-  router.use('/system', createSystemRouter({ systemInfo, agentSourceStore, releaseStore }));
+  router.use('/system', createSystemRouter({ systemInfo, agentSourceStore, agentBinaryStore, releaseStore }));
   if (findingStore) router.use('/api/findings', createFindingsRouter({ findingStore }));
   if (assistant) router.use('/api/assistant', createAssistantRouter({ assistant, featureGate }));
   if (flowsRepo) router.use('/api/geo', createGeoRouter({ flowsRepo, agentsRepo, findingStore, tileConfig: geoTileConfig, getMapConfig, geoProvider, featureGate }));
@@ -266,7 +267,7 @@ function createApiRouter({
   // Frictionless enrollment. Public (unauthenticated) source + install-script
   // endpoints under /enroll; the authenticated command generator under /api.
   if (artifactStore || agentSourceStore || releaseStore) {
-    router.use('/enroll', createEnrollRouter({ artifactStore, sourceStore: agentSourceStore, releaseStore, releasePublicKey, enrollmentCodesRepo, enrollConfig }));
+    router.use('/enroll', createEnrollRouter({ artifactStore, sourceStore: agentSourceStore, binaryStore: agentBinaryStore, releaseStore, releasePublicKey, enrollmentCodesRepo, enrollConfig }));
     router.use('/api/enroll', createEnrollCommandRouter({ enrollmentCodesRepo, artifactStore, sourceStore: agentSourceStore, enrollConfig, releaseKeyService }));
   }
 

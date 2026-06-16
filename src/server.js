@@ -26,6 +26,7 @@ const { createIncidentService } = require('./incidents/incidentService');
 const { createInstallToolService } = require('./services/installToolService');
 const { createArtifactStore } = require('./enroll/artifactStore');
 const { createAgentSourceStore } = require('./enroll/agentSourceStore');
+const { createAgentBinaryStore } = require('./enroll/agentBinaryStore');
 const { createAgentReleaseStore } = require('./enroll/agentReleaseStore');
 const { createAgentReleaseKeyRepository } = require('./repositories/agentReleaseKeyRepository');
 const { createReleaseKeyService } = require('./enroll/releaseKeyService');
@@ -156,6 +157,18 @@ function start() {
   // Agent source bundle served at /enroll/agent-source.tgz — packaged +
   // checksummed at startup so the one-liner installs with no published binaries.
   const agentSourceStore = createAgentSourceStore({ dir: config.enroll.agentSourceDir, logger });
+
+  // Self-contained agent binaries built via @yao-pkg/pkg and cached on disk.
+  // The one-line installer prefers these (~60 MB) over pulling a 500 MB Docker
+  // image or requiring Node.js on the target host.  Build runs in the background
+  // so startup is not delayed; the install script falls back to the source bundle
+  // until the first build completes.  Requires @yao-pkg/pkg as a devDependency
+  // and AGENT_SOURCE_DIR to be set; warnings are logged when either is missing.
+  const agentBinaryStore = createAgentBinaryStore({
+    agentDir: config.enroll.agentSourceDir,
+    cacheDir: config.enroll.agentBinaryCacheDir,
+    logger,
+  });
 
   // Signed agent releases: built + Ed25519-signed off-server, uploaded via
   // POST /agents/releases (verified on upload), kept under AGENT_RELEASE_DIR and
@@ -521,6 +534,7 @@ function start() {
     retentionConfig,
     artifactStore,
     agentSourceStore,
+    agentBinaryStore,
     releaseStore: agentReleaseStore,
     // A live resolver (not a static value): generating/deleting the key in Settings
     // takes effect without a restart.

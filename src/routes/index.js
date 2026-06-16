@@ -45,6 +45,8 @@ const { createOidcAuthRouter, createOidcAdminRouter } = require('./oidc');
 const { createSamlAuthRouter, createSamlAdminRouter } = require('./saml');
 const { createNis2Router } = require('./nis2');
 const { createHaRouter } = require('./ha');
+const { createInvestigationRouter } = require('./investigation');
+const { createLocator } = require('../investigation/locator');
 const {
   createAgentAuthenticator,
   createAgentTokenMiddleware,
@@ -126,6 +128,7 @@ function createApiRouter({
   nis2EvidenceRepo,
   nis2AuditRepo,
   haCoordinator,
+  investigationsRepo,
   enrollConfig = {},
   notifyDashboard,
   // Brute-force throttle for agent enrollment (login has its own loginThrottle).
@@ -241,6 +244,17 @@ function createApiRouter({
   }
   // High-availability status + admin (licence-gated `ha_deployment`, Enterprise+).
   if (haCoordinator) router.use('/api/ha', createHaRouter({ haCoordinator, featureGate, planService }));
+  // Lokationsdrevet investigation — trigger en rutine der samler og korrelerer
+  // anomali-/counter-data for et givet sted og klassificerer fejlen.
+  if (investigationsRepo && agentsRepo && findingStore) {
+    const locator = createLocator({ agentsRepo, findingStore, locationsRepo, flowsRepo: flowsRepo || null });
+    router.use('/api/investigation', createInvestigationRouter({
+      investigationsRepo,
+      locator,
+      assistant: assistant || null,
+      incidentsRepo: incidentsRepo || null,
+    }));
+  }
   if (testPackagesRepo) router.use('/api/test-packages', createTestPackagesRouter({ repo: testPackagesRepo, runner: testPackageRunner, usageService }));
   if (speedtestResultsRepo) {
     router.use('/speedtest', createSpeedtestRouter({ agentAuth, speedtestResultsRepo }));

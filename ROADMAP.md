@@ -52,6 +52,13 @@ of plan or licence. It is intentionally **not** a sold feature key.
 - [x] **Enforced password policy** — minimum length + character-class
   complexity; a violation is rejected with **422**
   (`src/auth/password.js` `checkPasswordPolicy`, enforced in `src/routes/users.js`).
+- [x] **Lokationsdrevet investigation** — triggerbar fejlfinding-rutine der tager en
+  lokation (agent/interface/subnet/site) som input og klassificerer fejlen som
+  LOCAL/UPSTREAM/DOWNSTREAM/APP_NOT_NET/INSUFFICIENT_DATA med forklaring, beviser og
+  workaround-hints. Valgfrit Mistral-narrativ. Persisteret og eksponeret via
+  `GET/POST /api/investigation`. "Fejlfinding"-tab i dashboard. Baseline (ingen
+  licens-gating). (`src/investigation/locator.js`, `src/routes/investigation.js`,
+  `src/repositories/investigationsRepository.js`, `migrations/044_create_investigations.sql`).
 
 ## 🛣️ Roadmap (not built yet — do one at a time)
 

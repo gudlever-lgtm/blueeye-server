@@ -1140,4 +1140,19 @@ button.active-btn { outline: 2px solid var(--accent); }
 .screen-chip.warn { color: var(--warn); border-color: var(--warn-weak); background: var(--warn-weak); }
 .screen-chip.bad { color: var(--bad); border-color: var(--bad-weak); background: var(--bad-weak); }
 .screen-detail { font-size: 12px; margin-top: 8px; }
+
+/* ---- Investigation (Fejlfinding) ----------------------------------------- */
+.inv-form { width: auto; }
+.inv-card { width: auto; overflow: hidden; }
+.inv-header { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.inv-conf { font-size: 13px; }
+.inv-explanation { margin: 0; }
+.inv-segment { font-size: 13px; }
+.inv-evidence { overflow-x: auto; }
+.inv-evidence h4, .inv-hints h4 { margin: 0 0 8px; font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.inv-evidence td { word-break: break-word; }
+.inv-hints ul { margin: 0; padding-left: 18px; }
+.inv-hints li { font-size: 13px; }
+.inv-narrative summary { cursor: pointer; font-size: 13px; color: var(--accent); }
+.inv-narrative p { margin: 8px 0 0; font-size: 13px; }
 @media (max-width: 640px) { .screen-row { flex-direction: column; } }

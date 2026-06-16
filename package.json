@@ -1,6 +1,6 @@
 {
   "name": "blueeye-server",
-  "version": "0.33.0",
+  "version": "0.33.1",
   "releaseDate": "2026-06-16",
   "private": true,
   "description": "BlueEye server — on-prem, single-tenant API (Node/Express + MySQL).",
@@ -14,6 +14,7 @@
     "dev": "node --watch src/server.js",
     "migrate": "node src/migrate.js",
     "test": "node --test",
+    "gen-favicon": "node scripts/gen-favicon.js",
     "version": "node scripts/stamp-release-date.js"
   },
   "dependencies": {

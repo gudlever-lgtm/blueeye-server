@@ -114,6 +114,10 @@ const config = {
     // binary. Defaults to the sibling checkout (standard deploy layout); the
     // compose file bind-mounts ../blueeye-agent to /agent-src.
     agentSourceDir: process.env.AGENT_SOURCE_DIR || path.join(process.cwd(), '..', 'blueeye-agent'),
+    // Where the server caches the @yao-pkg/pkg-built agent binaries across
+    // restarts.  On a cache hit (same agent version) the build is skipped.
+    // Mount this as a persistent volume in Docker (like /data).
+    agentBinaryCacheDir: process.env.AGENT_BINARY_CACHE_DIR || path.join(process.cwd(), 'agent-binaries'),
     // SHA-256 fingerprint of the server's TLS leaf cert (or the terminating
     // reverse proxy's). Embedded into install scripts so the agent can pin it.
     // Leave unset for plain HTTP / development (no pinning).

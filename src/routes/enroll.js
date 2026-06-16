@@ -23,12 +23,14 @@ function resolveServerUrl(req, enrollConfig) {
 
 // PUBLIC (unauthenticated) enrollment helpers, mounted at /enroll. A new agent
 // has no token yet, so these must be reachable without auth:
-//   GET /enroll/config              -> { serverUrl, certFingerprint, releasePublicKey }
-//   GET /enroll/agent-source.tgz    -> the agent source bundle (built + run on the target)
-//   GET /enroll/agent-release-key   -> the release trust anchor (PEM) the agent pins
-//   GET /enroll/agent/:platform     -> a pre-built agent binary (legacy; only if published)
-//   GET /enroll/:code/install.sh    -> the one-line installer for that code
-function createEnrollRouter({ artifactStore, sourceStore, releaseStore, enrollmentCodesRepo, enrollConfig = {}, releasePublicKey = '' }) {
+//   GET /enroll/config                 -> { serverUrl, certFingerprint, releasePublicKey }
+//   GET /enroll/agent-source.tgz       -> the agent source bundle (built + run on the target)
+//   GET /enroll/agent-release-key      -> the release trust anchor (PEM) the agent pins
+//   GET /enroll/agent-binary/:arch     -> auto-built self-contained binary (linux-x64|linux-arm64)
+//   GET /enroll/agent-binary-status    -> build status for operator inspection
+//   GET /enroll/agent/:platform        -> manually-dropped binary (legacy; only if published)
+//   GET /enroll/:code/install.sh       -> the one-line installer for that code
+function createEnrollRouter({ artifactStore, sourceStore, binaryStore, releaseStore, enrollmentCodesRepo, enrollConfig = {}, releasePublicKey = '' }) {
   const router = express.Router();
   const certFingerprint = enrollConfig.certFingerprint || '';
   // releasePublicKey may be a live resolver (it can change at runtime when an admin
@@ -119,6 +121,44 @@ function createEnrollRouter({ artifactStore, sourceStore, releaseStore, enrollme
     res.status(200).type('text/x-shellscript; charset=utf-8').send(script);
   }));
 
+  // Auto-built self-contained binaries (~60 MB each).  The server builds these at
+  // startup using @yao-pkg/pkg; 404 before the build completes or when pkg is not
+  // installed.  Use GET /enroll/agent-binary-status to see build progress.
+  router.get('/agent-binary/:arch', asyncHandler(async (req, res) => {
+    const arch = req.params.arch;
+    if (!binaryStore) {
+      return res.status(404).json({ error: 'Binary store not configured on this server' });
+    }
+    const entry = binaryStore.get(arch);
+    if (!entry) {
+      const st = binaryStore.status();
+      const archSt = st.arches[arch];
+      if (archSt && archSt.status === 'building') {
+        return res.status(503).json({ error: 'Binary is still building — retry in a few minutes', arch, status: 'building' });
+      }
+      return res.status(404).json({ error: 'No binary available for this arch', arch });
+    }
+    res.setHeader('Content-Type', entry.contentType);
+    res.setHeader('Content-Length', entry.size);
+    res.setHeader('X-Content-SHA256', entry.sha256);
+    res.setHeader('Content-Disposition', `attachment; filename="${entry.filename}"`);
+    await new Promise((resolve, reject) => {
+      const stream = fs.createReadStream(entry.path);
+      stream.on('error', reject);
+      stream.on('end', resolve);
+      stream.pipe(res);
+    });
+  }));
+
+  // Build status for operator inspection (no auth required — operators may need
+  // this before a session exists; it contains no sensitive data).
+  router.get('/agent-binary-status', (req, res) => {
+    if (!binaryStore) {
+      return res.json({ configured: false });
+    }
+    res.json({ configured: true, ...binaryStore.status() });
+  });
+
   // Serve a pre-built agent binary for a platform from the local artifacts dir.
   // LEGACY/optional: the default install flow uses the source bundle above, so
   // this only responds when an operator has dropped a binary in. 404 otherwise.
@@ -155,6 +195,8 @@ function createEnrollRouter({ artifactStore, sourceStore, releaseStore, enrollme
       code: req.params.code,
       certFingerprint,
       sourceSha: sourceStore ? sourceStore.sha256 : '',
+      binaryChecksums: binaryStore ? binaryStore.checksums() : {},
+      agentVersion: sourceStore ? sourceStore.sourceVersion() : '',
     });
     res.status(200).type('text/x-shellscript; charset=utf-8').send(script);
   }));

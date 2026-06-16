@@ -7,7 +7,7 @@ const { ROLES } = require('../auth/roles');
 const pkg = require('../../package.json');
 
 // Server storage info (disk free/used + database size). Read-only, viewer+.
-function createSystemRouter({ systemInfo, agentSourceStore, releaseStore } = {}) {
+function createSystemRouter({ systemInfo, agentSourceStore, agentBinaryStore, releaseStore } = {}) {
   const router = express.Router();
 
   // The agent version the server currently offers: a signed, uploaded release
@@ -30,6 +30,7 @@ function createSystemRouter({ systemInfo, agentSourceStore, releaseStore } = {})
         server: pkg.version || null,
         releaseDate: pkg.releaseDate || null,
         agent: offeredAgentVersion(),
+        binaryBuild: agentBinaryStore ? agentBinaryStore.status() : null,
       });
     })
   );
@@ -46,6 +47,10 @@ function createSystemRouter({ systemInfo, agentSourceStore, releaseStore } = {})
         return res.status(503).json({ error: 'Agent source not configured on this server' });
       }
       await agentSourceStore.reload();
+      // Kick off a binary rebuild for the new source version (non-blocking).
+      if (agentBinaryStore && typeof agentBinaryStore.reload === 'function') {
+        agentBinaryStore.reload();
+      }
       res.json({
         version: typeof agentSourceStore.sourceVersion === 'function' ? agentSourceStore.sourceVersion() : null,
         available: typeof agentSourceStore.available === 'function' ? agentSourceStore.available() : false,

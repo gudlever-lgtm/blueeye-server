@@ -95,6 +95,7 @@ const { createNis2ReportsRepository } = require('./repositories/nis2ReportsRepos
 const { createNis2EvidenceRepository } = require('./repositories/nis2EvidenceRepository');
 const { createNis2AuditRepository } = require('./repositories/nis2AuditRepository');
 const { createHaNodesRepository } = require('./repositories/haNodesRepository');
+const { createInvestigationsRepository } = require('./repositories/investigationsRepository');
 const { createLeaderLock } = require('./ha/leaderLock');
 const { createHaCoordinator } = require('./ha/coordinator');
 const { version: appVersion } = require('../package.json');
@@ -298,6 +299,7 @@ function start() {
   // assigned just below; the closure runs later, at ingest time).
   const analysisConfig = loadAnalysisConfig();
   const findingStore = new FindingStore({ db });
+  const investigationsRepo = createInvestigationsRepository(db);
   const baselineCache = createBaselineFileCache(config.analysis.baselineCachePath);
   const baselines = createBaselineStore({
     store: baselineCache,
@@ -551,6 +553,7 @@ function start() {
     nis2EvidenceRepo,
     nis2AuditRepo,
     haCoordinator,
+    investigationsRepo,
     enrollConfig: { publicUrl: config.publicUrl, certFingerprint: config.enroll.certFingerprint },
     notifyDashboard,
     // Brute-force throttle for agent enrollment by IP (login has its own

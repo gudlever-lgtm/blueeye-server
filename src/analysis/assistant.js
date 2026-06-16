@@ -293,6 +293,40 @@ function createAssistant({
     return { answer, model: currentModel(), usedFindings: findings.length };
   }
 
+  // Generates a short Danish plain-language narrative for an InvestigationResult.
+  // Sends ONLY aggregated evidence fields (metric, deviation, classification) —
+  // never raw packet/payload data. Returns the narrative string, or throws on error.
+  async function narrateInvestigation(result) {
+    if (!currentEnabled()) throw new FeatureDisabledError();
+    if (!result || typeof result !== 'object') {
+      const e = new Error('a valid InvestigationResult is required');
+      e.name = 'InvalidQuestion';
+      throw e;
+    }
+    // Sanitise to known fields only — never forward arbitrary client data.
+    const ctx = {
+      classification: result.classification,
+      confidence: result.confidence,
+      locationRef: result.locationRef,
+      window: result.window,
+      suspectedSegment: result.suspectedSegment || null,
+      evidenceSummary: (Array.isArray(result.evidence) ? result.evidence : []).slice(0, 8).map((e) => ({
+        ref: e.ref,
+        metric: e.ref ? e.ref.split('/')[1] || e.ref : null,
+        deviation: e.deviation,
+        observed: e.observed,
+        baseline: e.baseline,
+      })),
+      workaroundHints: Array.isArray(result.workaroundHints) ? result.workaroundHints : [],
+    };
+    const system =
+      'Du er en netværksdriftsassistent for BlueEye. Skriv et kort, klart resumé på DANSK ' +
+      '(3-5 sætninger) af denne netværksfejlfindingsanalyse: hvad blev fundet, hvad er den ' +
+      'sandsynlige årsag, og hvad er næste skridt. Brug KUN den angivne kontekst. ' +
+      'Undgå teknisk jargon der ikke fremgår af konteksten.';
+    return chat(system, JSON.stringify(ctx));
+  }
+
   // Non-secret status for the admin "Test area" screening: whether it is enabled +
   // configured (an API key is present), plus the (non-secret) base URL and model.
   // Never returns the key itself.
@@ -300,7 +334,7 @@ function createAssistant({
     return { enabled: currentEnabled(), configured: currentApiKey() !== '', baseUrl, model: currentModel() };
   }
 
-  return { isEnabled, status, explain, explainDiagnostic, summarizeLocation, buildContext, buildLocationContext };
+  return { isEnabled, status, explain, explainDiagnostic, summarizeLocation, narrateInvestigation, buildContext, buildLocationContext };
 }
 
 module.exports = { createAssistant, FeatureDisabledError };

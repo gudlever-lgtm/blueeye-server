@@ -565,11 +565,12 @@ function makeSettingsService(overrides = {}) {
 function makeAssistant(overrides = {}) {
   const disabled = () => { const e = new Error('The AI assistant is disabled'); e.name = 'FeatureDisabled'; throw e; };
   return {
-    isEnabled: overrides.isEnabled || (() => Boolean(overrides.explain || overrides.summarizeLocation || overrides.explainDiagnostic)),
+    isEnabled: overrides.isEnabled || (() => Boolean(overrides.explain || overrides.summarizeLocation || overrides.explainDiagnostic || overrides.narrateInvestigation)),
     status: overrides.status || (() => ({ enabled: false, configured: false, baseUrl: 'https://api.mistral.ai/v1/chat/completions', model: 'mistral-small-latest' })),
     explain: overrides.explain || (async () => disabled()),
     explainDiagnostic: overrides.explainDiagnostic || (async () => disabled()),
     summarizeLocation: overrides.summarizeLocation || (async () => disabled()),
+    narrateInvestigation: overrides.narrateInvestigation || (async () => disabled()),
   };
 }
 
@@ -960,6 +961,22 @@ function makeNis2AuditRepo(overrides = {}) {
 // Builds an app wired with fakes; pass overrides to swap any dependency.
 // A fake HA coordinator. Defaults to a standalone (HA-off) node that is its own
 // leader — the classic single-node posture. Override any method per test.
+// A fake investigations repository (in-memory, stateful).
+function makeInvestigationsRepo(overrides = {}) {
+  const rows = [];
+  return {
+    rows,
+    save: overrides.save || (async (inv) => {
+      const saved = { ...inv, id: inv.id || `inv-${rows.length + 1}` };
+      rows.push(saved);
+      return saved;
+    }),
+    findById: overrides.findById || (async (id) => rows.find((r) => r.id === id) || null),
+    list: overrides.list || (async ({ limit = 50, offset = 0 } = {}) =>
+      rows.slice().reverse().slice(offset, offset + limit)),
+  };
+}
+
 function makeHaCoordinator(overrides = {}) {
   const status = {
     enabled: false,
@@ -1076,6 +1093,7 @@ function makeApp(overrides = {}) {
     nis2EvidenceRepo: overrides.nis2EvidenceRepo || makeNis2EvidenceRepo(),
     nis2AuditRepo: overrides.nis2AuditRepo || makeNis2AuditRepo(),
     haCoordinator: overrides.haCoordinator || makeHaCoordinator(),
+    investigationsRepo: overrides.investigationsRepo || makeInvestigationsRepo(),
     enrollConfig: overrides.enrollConfig || { publicUrl: '', certFingerprint: '' },
     notifyDashboard: overrides.notifyDashboard || (() => 0),
   });
@@ -1176,6 +1194,7 @@ module.exports = {
   makeNis2EvidenceRepo,
   makeNis2AuditRepo,
   makeHaCoordinator,
+  makeInvestigationsRepo,
   makeDb,
   makeApp,
   tokenFor,

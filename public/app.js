@@ -3507,6 +3507,192 @@ views.topology = async () => {
   return root;
 };
 
+// ---- Fejlfinding (lokationsdrevet investigation) ----------------------------
+// Operatør+ kan triggere en undersøgelse for et sted/agent/interface/subnet og
+// få klassificeret fejlen som LOCAL / UPSTREAM / DOWNSTREAM / APP_NOT_NET /
+// INSUFFICIENT_DATA med forklaring, beviser og workaround-hints.
+
+const INVESTIGATION_BADGE_CLASS = {
+  LOCAL: 'CRIT',
+  UPSTREAM: 'WARN',
+  DOWNSTREAM: 'WARN',
+  APP_NOT_NET: 'INFO',
+  INSUFFICIENT_DATA: 'muted',
+};
+
+function investigationCard(inv) {
+  const cls = INVESTIGATION_BADGE_CLASS[inv.classification] || 'muted';
+  const conf = typeof inv.confidence === 'number' ? `${Math.round(inv.confidence * 100)} %` : '–';
+
+  const segmentEl = inv.suspectedSegment
+    ? el('div', { class: 'inv-segment' },
+        el('span', { class: 'muted' }, 'Mistænkt segment: '),
+        el('strong', {}, inv.suspectedSegment.from || '?'),
+        el('span', { class: 'muted' }, ' → '),
+        el('strong', {}, inv.suspectedSegment.to || '?'))
+    : null;
+
+  const evidenceRows = (Array.isArray(inv.evidence) ? inv.evidence : []).map((e) =>
+    el('tr', {},
+      el('td', {}, e.ref || '–'),
+      el('td', {}, e.observed != null ? String(Number(e.observed).toFixed(2)) : '–'),
+      el('td', {}, e.baseline != null ? String(Number(e.baseline).toFixed(2)) : '–'),
+      el('td', {}, e.deviation != null ? `${Number(e.deviation).toFixed(1)}σ` : '–'),
+      el('td', { class: 'muted' }, e.ts ? fmtDate(e.ts) : '–')));
+
+  const hints = Array.isArray(inv.workaroundHints) && inv.workaroundHints.length
+    ? el('div', { class: 'inv-hints' },
+        el('h4', {}, 'Mulige workarounds'),
+        el('ul', {}, ...inv.workaroundHints.map((h) => el('li', {}, h))))
+    : null;
+
+  let narrativeEl = null;
+  if (inv.narrative) {
+    const details = el('details', { class: 'inv-narrative' },
+      el('summary', {}, 'AI-genereret resumé (Mistral)'),
+      el('p', {}, inv.narrative));
+    narrativeEl = details;
+  }
+
+  return el('div', { class: 'card inv-card' },
+    el('div', { class: 'inv-header' },
+      el('span', { class: `badge inv-badge ${cls}` }, inv.classification),
+      el('span', { class: 'inv-conf muted' }, `Tillid: ${conf}`),
+      el('span', { class: 'muted' }, fmtDate(inv.createdAt || inv.window && inv.window.to))),
+    el('p', { class: 'inv-explanation' }, inv.explanation || '–'),
+    segmentEl,
+    evidenceRows.length
+      ? el('div', { class: 'inv-evidence' },
+          el('h4', {}, 'Beviser'),
+          el('table', { class: 'agents-table' },
+            el('thead', {}, el('tr', {},
+              el('th', {}, 'Metrik'), el('th', {}, 'Observeret'),
+              el('th', {}, 'Baseline'), el('th', {}, 'Afvigelse'), el('th', {}, 'Tidspunkt'))),
+            el('tbody', {}, ...evidenceRows)))
+      : null,
+    hints,
+    narrativeEl);
+}
+
+views.investigation = async () => {
+  const root = el('div', { class: 'investigation' });
+
+  const agents = await api('/agents').catch(() => []);
+  const locations = await api('/locations').catch(() => []);
+
+  // --- Input section ---
+  const typeSelect = el('select', { id: 'inv-type' },
+    el('option', { value: 'agent' }, 'Agent'),
+    el('option', { value: 'interface' }, 'Interface'),
+    el('option', { value: 'subnet' }, 'Subnet'),
+    el('option', { value: 'site' }, 'Site/lokation'));
+
+  // Dynamic value input: dropdown for agent/site, free text for subnet/interface.
+  const agentOptions = [el('option', { value: '' }, '— vælg agent —'),
+    ...agents.map((a) => el('option', { value: String(a.id) }, a.display_name || a.hostname))];
+  const siteOptions = [el('option', { value: '' }, '— vælg site —'),
+    ...locations.map((l) => el('option', { value: String(l.id) }, l.name))];
+
+  const valueSelect = el('select', { id: 'inv-value-select' }, ...agentOptions);
+  const valueText = el('input', { id: 'inv-value-text', type: 'text', placeholder: 'fx 10.0.1.0/24 eller eth0', class: 'hidden' });
+
+  typeSelect.addEventListener('change', () => {
+    const t = typeSelect.value;
+    if (t === 'agent') {
+      valueSelect.replaceChildren(...agentOptions.map((o) => o.cloneNode(true)));
+      valueSelect.classList.remove('hidden');
+      valueText.classList.add('hidden');
+    } else if (t === 'site') {
+      valueSelect.replaceChildren(...siteOptions.map((o) => o.cloneNode(true)));
+      valueSelect.classList.remove('hidden');
+      valueText.classList.add('hidden');
+    } else {
+      valueSelect.classList.add('hidden');
+      valueText.classList.remove('hidden');
+    }
+  });
+
+  const windowSelect = el('select', { id: 'inv-window' },
+    el('option', { value: '15' }, '15 min'),
+    el('option', { value: '30', selected: 'selected' }, '30 min'),
+    el('option', { value: '60' }, '60 min'));
+
+  const runBtn = el('button', { class: 'primary', id: 'inv-run-btn' }, 'Undersøg');
+  const statusEl = el('p', { class: 'muted', id: 'inv-status' }, '');
+
+  root.append(
+    el('div', { class: 'section-head' },
+      el('h2', {}, 'Fejlfinding'),
+      el('span', { class: 'muted' }, 'Lokationsdrevet anomali-undersøgelse')),
+    el('div', { class: 'card inv-form' },
+      el('div', { class: 'inv-form-row' },
+        el('label', {}, 'Lokationstype ', typeSelect),
+        el('label', {}, 'Værdi ', valueSelect, valueText),
+        el('label', {}, 'Tidsvindue ', windowSelect),
+        runBtn),
+      statusEl));
+
+  const resultArea = el('div', { id: 'inv-result-area' });
+  root.append(resultArea);
+
+  const historyArea = el('div', { id: 'inv-history-area' });
+  root.append(historyArea);
+
+  // Load history of previous investigations.
+  async function loadHistory() {
+    let list;
+    try {
+      list = await api('/api/investigation');
+    } catch {
+      return;
+    }
+    if (!Array.isArray(list) || list.length === 0) {
+      historyArea.replaceChildren(el('div', { class: 'empty' }, 'Ingen tidligere undersøgelser.'));
+      return;
+    }
+    historyArea.replaceChildren(
+      el('h3', {}, 'Tidligere undersøgelser'),
+      ...list.map(investigationCard));
+  }
+
+  loadHistory();
+
+  runBtn.addEventListener('click', async () => {
+    const t = typeSelect.value;
+    const rawValue = t === 'agent' || t === 'site'
+      ? valueSelect.value
+      : valueText.value.trim();
+
+    if (!rawValue) {
+      statusEl.textContent = 'Vælg eller angiv en lokationsværdi.';
+      return;
+    }
+
+    runBtn.disabled = true;
+    statusEl.textContent = 'Undersøger…';
+    resultArea.replaceChildren();
+
+    try {
+      const inv = await api('/api/investigation/run', {
+        method: 'POST',
+        body: JSON.stringify({
+          locationRef: { type: t, value: rawValue },
+          windowMinutes: Number(windowSelect.value),
+        }),
+      });
+      resultArea.replaceChildren(investigationCard(inv));
+      statusEl.textContent = '';
+      loadHistory();
+    } catch (err) {
+      statusEl.textContent = `Fejl: ${err.message}`;
+    } finally {
+      runBtn.disabled = false;
+    }
+  });
+
+  return root;
+};
+
 // Interface health per agent (utilisation, errors, discards, link state/speed)
 // derived from the agent's latest measurement. Worst interfaces first.
 views.interfaces = async () => {

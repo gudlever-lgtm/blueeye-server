@@ -3457,15 +3457,31 @@ function pageloadWaterfall(r) {
 // Flow-derived dependency / topology map — who-talks-to-whom built from the
 // ingested 5-tuple flows. Internal (RFC1918) hosts vs external peers (with ASN/
 // country). Read-only: a summary + the heaviest dependencies and busiest hosts.
+// Action buttons (Ping / Vis rute) let an operator run live diagnostics against
+// any observed host directly from this view, using a selectable online agent.
 views.topology = async () => {
   const root = el('div', { class: 'topology' });
   root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Topology'),
     el('span', { class: 'muted' }, 'Service/host dependencies from observed flows · last 60 min')));
 
-  const data = await api('/api/topology?minutes=60');
+  const [data, agentList] = await Promise.all([
+    api('/api/topology?minutes=60'),
+    api('/agents').catch(() => []),
+  ]);
+  const onlineAgents = agentList.filter((a) => a.status === 'online');
+
   const t = data.totals || { nodes: 0, internal: 0, external: 0, edges: 0 };
   root.append(el('p', { class: 'muted' },
     `${t.nodes} hosts (${t.internal} internal, ${t.external} external) · ${t.edges} dependencies${data.truncated ? ' · showing the heaviest' : ''}`));
+
+  // Agent selector — shown only when at least one agent is online so action
+  // buttons have something to send probes from.
+  const agentSel = el('select', { class: 'small' });
+  if (onlineAgents.length) {
+    onlineAgents.forEach((a) => agentSel.append(el('option', { value: String(a.id) }, a.display_name || a.hostname)));
+    root.append(el('div', { class: 'topo-action-bar' },
+      el('span', { class: 'muted' }, 'Kør handlinger fra agent:'), agentSel));
+  }
 
   if (!data.edges || !data.edges.length) {
     root.append(el('div', { class: 'empty' }, 'No flow data in this window. Topology is built from agents whose traffic source is NetFlow or sFlow.'));
@@ -3480,29 +3496,95 @@ views.topology = async () => {
   };
   const kindBadge = (kind) => el('span', { class: `badge ${kind === 'external' ? 'warn' : 'ok'}` }, kind || '?');
 
+  // Send a probe and poll until a result newer than sentAt appears (or timeout).
+  async function runProbeAndWait(type, host, maxAttempts, intervalMs) {
+    const id = agentSel.value;
+    if (!id) throw new Error('Vælg en agent.');
+    const sentAt = Date.now();
+    await api(`/agents/${id}/probe`, { method: 'POST', body: { type, host } });
+    for (let i = 0; i < maxAttempts; i++) {
+      await new Promise((res) => setTimeout(res, intervalMs));
+      const d = await api(`/api/probes/latest?agentId=${encodeURIComponent(id)}`);
+      const r = (d.results || []).find(
+        (x) => x.type === type && x.target === host && new Date(x.ts).getTime() > sentAt - 500);
+      if (r) return { r, agentId: id };
+    }
+    throw new Error('Intet resultat endnu — tjek Probes & Tests.');
+  }
+
+  // Per-row action buttons: Ping shows a quick RTT/loss summary; Vis rute runs
+  // traceroute and opens the full path-graph panel (same as Probes & Tests).
+  function actionBtns(host) {
+    const pingBtn = el('button', { class: 'small ghost', onclick: async () => {
+      if (!agentSel.value) { toast('Vælg en agent.', true); return; }
+      pingBtn.disabled = true;
+      const card = $('#modal-card');
+      const st = el('p', { class: 'muted' }, 'Sender ping…');
+      card.replaceChildren(
+        el('h3', {}, `Ping → ${esc(host)}`), st,
+        el('div', { class: 'form-actions' }, el('button', { class: 'ghost', onclick: closeModal }, 'Luk')));
+      $('#modal').classList.remove('hidden');
+      try {
+        const { r } = await runProbeAndWait('ping', host, 8, 2500);
+        st.className = r.ok ? '' : 'error';
+        st.textContent = r.ok
+          ? `RTT: ${r.rttMs} ms · Tab: ${r.lossPct ?? 0}% · Jitter: ${r.jitterMs != null ? r.jitterMs + ' ms' : '–'}`
+          : `Fejl: ${r.detail || 'intet svar'}`;
+      } catch (e) {
+        st.className = 'error'; st.textContent = errText(e);
+      } finally { pingBtn.disabled = false; }
+    }}, 'Ping');
+
+    const routeBtn = el('button', { class: 'small ghost', onclick: async () => {
+      if (!agentSel.value) { toast('Vælg en agent.', true); return; }
+      routeBtn.disabled = true;
+      const agentId = agentSel.value;
+      const card = $('#modal-card');
+      const st = el('p', { class: 'muted' }, 'Kører traceroute (op til ~30 s)…');
+      card.replaceChildren(
+        el('h3', {}, `Rute → ${esc(host)}`), st,
+        el('div', { class: 'form-actions' }, el('button', { class: 'ghost', onclick: closeModal }, 'Luk')));
+      $('#modal').classList.remove('hidden');
+      $('#modal-card').classList.add('wide');
+      try {
+        const { r } = await runProbeAndWait('traceroute', host, 12, 3000);
+        const detail = await probeDetail(r, agentId);
+        st.replaceWith(detail);
+      } catch (e) {
+        st.className = 'error'; st.textContent = errText(e);
+      } finally { routeBtn.disabled = false; }
+    }}, 'Vis rute');
+
+    return el('div', { class: 'row-actions' }, pingBtn, routeBtn);
+  }
+
   root.append(el('h3', {}, 'Top dependencies'));
   root.append(el('table', { class: 'agents-table' },
     el('thead', {}, el('tr', {},
       el('th', { scope: 'col' }, 'From'), el('th', { scope: 'col' }, 'To'),
-      el('th', { scope: 'col' }, 'Peer'), el('th', { scope: 'col' }, 'Bytes'), el('th', { scope: 'col' }, 'Flows'))),
+      el('th', { scope: 'col' }, 'Peer'), el('th', { scope: 'col' }, 'Bytes'), el('th', { scope: 'col' }, 'Flows'),
+      onlineAgents.length ? el('th', { scope: 'col' }, 'Actions') : null)),
     el('tbody', {}, ...data.edges.slice(0, 100).map((e) => el('tr', {},
       el('td', {}, label(e.from)),
       el('td', {}, label(e.to)),
       el('td', {}, kindBadge(byId[e.to] && byId[e.to].kind)),
       el('td', {}, fmtBytes(e.bytes)),
-      el('td', {}, String(e.flows)))))));
+      el('td', {}, String(e.flows)),
+      onlineAgents.length ? el('td', {}, actionBtns(e.to)) : null)))));
 
   root.append(el('h3', {}, 'Busiest hosts'));
   root.append(el('table', { class: 'agents-table' },
     el('thead', {}, el('tr', {},
       el('th', { scope: 'col' }, 'Host'), el('th', { scope: 'col' }, 'Kind'),
-      el('th', { scope: 'col' }, 'Peers'), el('th', { scope: 'col' }, 'In'), el('th', { scope: 'col' }, 'Out'))),
+      el('th', { scope: 'col' }, 'Peers'), el('th', { scope: 'col' }, 'In'), el('th', { scope: 'col' }, 'Out'),
+      onlineAgents.length ? el('th', { scope: 'col' }, 'Actions') : null)),
     el('tbody', {}, ...(data.nodes || []).slice(0, 50).map((n) => el('tr', {},
       el('td', {}, label(n.id)),
       el('td', {}, kindBadge(n.kind)),
       el('td', {}, String(n.degree)),
       el('td', {}, fmtBytes(n.bytesIn)),
-      el('td', {}, fmtBytes(n.bytesOut)))))));
+      el('td', {}, fmtBytes(n.bytesOut)),
+      onlineAgents.length ? el('td', {}, actionBtns(n.id)) : null)))));
 
   return root;
 };

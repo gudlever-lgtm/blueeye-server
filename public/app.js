@@ -3589,10 +3589,10 @@ views.topology = async () => {
   return root;
 };
 
-// ---- Fejlfinding (lokationsdrevet investigation) ----------------------------
-// Operatør+ kan triggere en undersøgelse for et sted/agent/interface/subnet og
-// få klassificeret fejlen som LOCAL / UPSTREAM / DOWNSTREAM / APP_NOT_NET /
-// INSUFFICIENT_DATA med forklaring, beviser og workaround-hints.
+// ---- Troubleshooting (location-driven investigation) ------------------------
+// Operator+ can trigger an investigation for a site/agent/interface/subnet and
+// get the fault classified as LOCAL / UPSTREAM / DOWNSTREAM / APP_NOT_NET /
+// INSUFFICIENT_DATA with explanation, evidence and workaround hints.
 
 const INVESTIGATION_BADGE_CLASS = {
   LOCAL: 'CRIT',
@@ -3608,7 +3608,7 @@ function investigationCard(inv) {
 
   const segmentEl = inv.suspectedSegment
     ? el('div', { class: 'inv-segment' },
-        el('span', { class: 'muted' }, 'Mistænkt segment: '),
+        el('span', { class: 'muted' }, 'Suspect segment: '),
         el('strong', {}, inv.suspectedSegment.from || '?'),
         el('span', { class: 'muted' }, ' → '),
         el('strong', {}, inv.suspectedSegment.to || '?'))
@@ -3624,14 +3624,14 @@ function investigationCard(inv) {
 
   const hints = Array.isArray(inv.workaroundHints) && inv.workaroundHints.length
     ? el('div', { class: 'inv-hints' },
-        el('h4', {}, 'Mulige workarounds'),
+        el('h4', {}, 'Possible workarounds'),
         el('ul', {}, ...inv.workaroundHints.map((h) => el('li', {}, h))))
     : null;
 
   let narrativeEl = null;
   if (inv.narrative) {
     const details = el('details', { class: 'inv-narrative' },
-      el('summary', {}, 'AI-genereret resumé (Mistral)'),
+      el('summary', {}, 'AI-generated summary (Mistral)'),
       el('p', {}, inv.narrative));
     narrativeEl = details;
   }
@@ -3639,17 +3639,17 @@ function investigationCard(inv) {
   return el('div', { class: 'card inv-card' },
     el('div', { class: 'inv-header' },
       el('span', { class: `badge inv-badge ${cls}` }, inv.classification),
-      el('span', { class: 'inv-conf muted' }, `Tillid: ${conf}`),
+      el('span', { class: 'inv-conf muted' }, `Confidence: ${conf}`),
       el('span', { class: 'muted' }, fmtDate(inv.createdAt || inv.window && inv.window.to))),
     el('p', { class: 'inv-explanation' }, inv.explanation || '–'),
     segmentEl,
     evidenceRows.length
       ? el('div', { class: 'inv-evidence' },
-          el('h4', {}, 'Beviser'),
+          el('h4', {}, 'Evidence'),
           el('table', { class: 'agents-table' },
             el('thead', {}, el('tr', {},
-              el('th', {}, 'Metrik'), el('th', {}, 'Observeret'),
-              el('th', {}, 'Baseline'), el('th', {}, 'Afvigelse'), el('th', {}, 'Tidspunkt'))),
+              el('th', {}, 'Metric'), el('th', {}, 'Observed'),
+              el('th', {}, 'Baseline'), el('th', {}, 'Deviation'), el('th', {}, 'Time'))),
             el('tbody', {}, ...evidenceRows)))
       : null,
     hints,
@@ -3667,16 +3667,16 @@ views.investigation = async () => {
     el('option', { value: 'agent' }, 'Agent'),
     el('option', { value: 'interface' }, 'Interface'),
     el('option', { value: 'subnet' }, 'Subnet'),
-    el('option', { value: 'site' }, 'Site/lokation'));
+    el('option', { value: 'site' }, 'Site/location'));
 
   // Dynamic value input: dropdown for agent/site, free text for subnet/interface.
-  const agentOptions = [el('option', { value: '' }, '— vælg agent —'),
+  const agentOptions = [el('option', { value: '' }, '— select agent —'),
     ...agents.map((a) => el('option', { value: String(a.id) }, a.display_name || a.hostname))];
-  const siteOptions = [el('option', { value: '' }, '— vælg site —'),
+  const siteOptions = [el('option', { value: '' }, '— select site —'),
     ...locations.map((l) => el('option', { value: String(l.id) }, l.name))];
 
   const valueSelect = el('select', { id: 'inv-value-select' }, ...agentOptions);
-  const valueText = el('input', { id: 'inv-value-text', type: 'text', placeholder: 'fx 10.0.1.0/24 eller eth0', class: 'hidden' });
+  const valueText = el('input', { id: 'inv-value-text', type: 'text', placeholder: 'e.g. 10.0.1.0/24 or eth0', class: 'hidden' });
 
   typeSelect.addEventListener('change', () => {
     const t = typeSelect.value;
@@ -3699,18 +3699,18 @@ views.investigation = async () => {
     el('option', { value: '30', selected: 'selected' }, '30 min'),
     el('option', { value: '60' }, '60 min'));
 
-  const runBtn = el('button', { class: 'primary', id: 'inv-run-btn' }, 'Undersøg');
+  const runBtn = el('button', { class: 'primary', id: 'inv-run-btn' }, 'Investigate');
   const statusEl = el('p', { class: 'muted', id: 'inv-status' }, '');
 
   root.append(
     el('div', { class: 'section-head' },
-      el('h2', {}, 'Fejlfinding'),
-      el('span', { class: 'muted' }, 'Lokationsdrevet anomali-undersøgelse')),
+      el('h2', {}, 'Troubleshooting'),
+      el('span', { class: 'muted' }, 'Location-driven anomaly investigation')),
     el('div', { class: 'card inv-form' },
       el('div', { class: 'inv-form-row' },
-        el('label', {}, 'Lokationstype ', typeSelect),
-        el('label', {}, 'Værdi ', valueSelect, valueText),
-        el('label', {}, 'Tidsvindue ', windowSelect),
+        el('label', {}, 'Location type ', typeSelect),
+        el('label', {}, 'Value ', valueSelect, valueText),
+        el('label', {}, 'Time window ', windowSelect),
         runBtn),
       statusEl));
 
@@ -3729,11 +3729,11 @@ views.investigation = async () => {
       return;
     }
     if (!Array.isArray(list) || list.length === 0) {
-      historyArea.replaceChildren(el('div', { class: 'empty' }, 'Ingen tidligere undersøgelser.'));
+      historyArea.replaceChildren(el('div', { class: 'empty' }, 'No previous investigations.'));
       return;
     }
     historyArea.replaceChildren(
-      el('h3', {}, 'Tidligere undersøgelser'),
+      el('h3', {}, 'Previous investigations'),
       ...list.map(investigationCard));
   }
 
@@ -3746,12 +3746,12 @@ views.investigation = async () => {
       : valueText.value.trim();
 
     if (!rawValue) {
-      statusEl.textContent = 'Vælg eller angiv en lokationsværdi.';
+      statusEl.textContent = 'Select or enter a location value.';
       return;
     }
 
     runBtn.disabled = true;
-    statusEl.textContent = 'Undersøger…';
+    statusEl.textContent = 'Investigating…';
     resultArea.replaceChildren();
 
     try {
@@ -3766,7 +3766,7 @@ views.investigation = async () => {
       statusEl.textContent = '';
       loadHistory();
     } catch (err) {
-      statusEl.textContent = `Fejl: ${err.message}`;
+      statusEl.textContent = `Error: ${err.message}`;
     } finally {
       runBtn.disabled = false;
     }
@@ -4743,7 +4743,7 @@ views.flows = async () => {
 
     // Scans/fan-out first — it's the security-relevant signal.
     if (data.scans && data.scans.length) {
-      kids.push(el('details', { class: 'sec scan-sec', open: true }, el('summary', {}, '⚠ Mulige scans / fan-out ', el('span', { class: 'muted' }, '· én kilde mod mange porte/hosts')),
+      kids.push(el('details', { class: 'sec scan-sec', open: true }, el('summary', {}, '⚠ Possible scans / fan-out ', el('span', { class: 'muted' }, '· one source against many ports/hosts')),
         el('table', {}, el('thead', {}, el('tr', {}, ...['Source', 'Type', 'Ports', 'Hosts', 'Bytes', 'Flows'].map((h) => el('th', {}, h)))),
           el('tbody', {}, ...data.scans.map((s) => el('tr', {},
             el('td', {}, esc(s.srcIp)),

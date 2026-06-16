@@ -5942,7 +5942,7 @@ let settingsTab = null;
 // so related controls sit together and the page stays scannable as it grows. Each
 // tab is [key, label, adminOnly]; non-admins only ever see the personal section.
 const SETTINGS_GROUPS = [
-  ['Access & security', [['users', 'Users', true], ['auth', 'Authentication', true], ['apitokens', 'API tokens', true], ['auditlog', 'Audit log', true], ['agentkey', 'Agent key', true]]],
+  ['Access & security', [['users', 'Users', true], ['auth', 'Authentication', true], ['apitokens', 'API tokens', true], ['agentkey', 'Agent key', true]]],
   ['Detection & alerts', [['analyse', 'Analysis', true], ['alerting', 'Alerting', true], ['integrations', 'Integrations', true], ['maintenance', 'Maintenance', true]]],
   ['Data', [['retention', 'Retention', true], ['types', 'Traffic types', true], ['map', 'Map', true]]],
   ['System', [['updates', 'Updates', true], ['agents', 'Agents', true]]],
@@ -5981,7 +5981,6 @@ views.settings = async () => {
     retention: settingsRetentionView,
     auth: settingsAuthView,
     apitokens: settingsApiTokensView,
-    auditlog: settingsAuditLogView,
   };
   let content;
   try {
@@ -7248,46 +7247,6 @@ async function settingsApiTokensView() {
   return root;
 }
 
-// Settings → Audit log: the unified who-did-what trail (licence feature
-// audit_log, Professional+). Admin-only, read-only.
-let auditLogCategory = '';
-async function settingsAuditLogView() {
-  const root = el('div');
-  let entries;
-  try {
-    const qs = auditLogCategory ? `?category=${encodeURIComponent(auditLogCategory)}&limit=200` : '?limit=200';
-    entries = await api(`/api/audit-log${qs}`);
-  } catch (err) {
-    if (err.status === 403) return featureUpsell('Audit log', 'The audit log is part of the BlueEye Professional plan and above, so it isn’t available here.');
-    throw err;
-  }
-  const categories = await api('/api/audit-log/categories').catch(() => []);
-
-  root.append(el('p', { class: 'muted settings-intro' },
-    'A record of security and administrative events — sign-ins, user and role changes, licence actions, report generation and API-token management. Metadata only; never passwords, tokens or payloads.'));
-
-  const filter = el('select', { onchange: (e) => { auditLogCategory = e.target.value; render(); } },
-    el('option', { value: '' }, 'All categories'),
-    ...(Array.isArray(categories) ? categories : []).map((c) => el('option', { value: c, selected: c === auditLogCategory ? '' : undefined }, c)));
-  root.append(el('div', { class: 'form-row' }, el('label', {}, 'Category', filter)));
-
-  const outcomeBadge = (o) => el('span', { class: `badge ${o === 'success' ? 'ok' : o === 'denied' ? 'warn' : 'bad'}` }, o);
-  const rows = (entries || []).map((e) => el('tr', {},
-    el('td', {}, fmtDate(e.created_at)),
-    el('td', {}, e.category),
-    el('td', {}, e.action),
-    el('td', {}, outcomeBadge(e.outcome)),
-    el('td', {}, e.actor_email || '(system)', e.actor_role ? el('span', { class: 'muted' }, ` (${e.actor_role})`) : null),
-    el('td', {}, e.target || '–'),
-    el('td', {}, e.detail || '–'),
-    el('td', {}, e.ip || '–')));
-  root.append(entries && entries.length
-    ? el('div', { class: 'tablewrap' }, el('table', {},
-        el('thead', {}, el('tr', {}, ...['Time', 'Category', 'Action', 'Outcome', 'Actor', 'Target', 'Detail', 'IP'].map((h) => el('th', {}, h)))),
-        el('tbody', {}, ...rows)))
-    : el('p', { class: 'muted' }, 'No audit events recorded yet.'));
-  return root;
-}
 function boolText(v) { return v === true ? 'yes' : v === false ? 'no' : String(v ?? '–'); }
 function kvList(obj, labels) {
   if (!obj) return el('p', { class: 'muted' }, '–');
@@ -8168,7 +8127,10 @@ async function auditModule() {
     p.set('limit', '300');
     let entries;
     try { entries = await api(`/api/audit?${p}`); }
-    catch (err) { body.replaceChildren(el('div', { class: 'empty error' }, err.message)); return; }
+    catch (err) {
+      if (err.status === 403) { body.replaceChildren(featureUpsell('Audit trail', 'The audit trail is part of the BlueEye Professional plan and above, so it isn\'t available here.')); return; }
+      body.replaceChildren(el('div', { class: 'empty error' }, err.message)); return;
+    }
     if (!entries.length) { body.replaceChildren(el('div', { class: 'empty' }, 'No audited activity yet.')); return; }
 
     const head = ['When', 'Actor', 'Action', 'Target', 'Repeats', 'Details'];

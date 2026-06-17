@@ -3636,7 +3636,7 @@ function investigationCard(inv) {
     narrativeEl = details;
   }
 
-  return el('div', { class: 'card inv-card' },
+  return el('div', { class: 'inv-card' },
     el('div', { class: 'inv-header' },
       el('span', { class: `badge inv-badge ${cls}` }, inv.classification),
       el('span', { class: 'inv-conf muted' }, `Confidence: ${conf}`),
@@ -3706,7 +3706,7 @@ views.investigation = async () => {
     el('div', { class: 'section-head' },
       el('h2', {}, 'Troubleshooting'),
       el('span', { class: 'muted' }, 'Location-driven anomaly investigation')),
-    el('div', { class: 'card inv-form' },
+    el('div', { class: 'inv-form' },
       el('div', { class: 'inv-form-row' },
         el('label', {}, 'Location type ', typeSelect),
         el('label', {}, 'Value ', valueSelect, valueText),

@@ -3636,6 +3636,35 @@ function investigationCard(inv) {
     narrativeEl = details;
   }
 
+  // NIS2 draft — created server-side from the same context; shown read-only here.
+  // A human must review it in Reporting → NIS2 Incidents before submission.
+  let nis2El = null;
+  if (inv.nis2Draft) {
+    const d = inv.nis2Draft;
+    const sevCls = { low: 'INFO', medium: 'WARN', high: 'CRIT', critical: 'CRIT' }[d.severity] || 'muted';
+    nis2El = el('details', { class: 'inv-nis2-draft' },
+      el('summary', {},
+        el('span', { class: 'badge inv-badge INFO' }, 'NIS2'),
+        ` Udkast oprettet (${esc(d.incidentId || '?')}) — gennemgå inden indsendelse`),
+      el('div', { class: 'inv-nis2-draft-body' },
+        el('p', { class: 'muted inv-nis2-notice' },
+          'AI-genereret udkast · Kræver menneskelig gennemgang · Aldrig auto-indsendt'),
+        el('dl', { class: 'inv-nis2-dl' },
+          el('dt', {}, 'Titel'), el('dd', {}, esc(d.title || '–')),
+          el('dt', {}, 'Alvorlighed'), el('dd', {},
+            el('span', { class: `badge inv-badge ${sevCls}` }, d.severity || '–')),
+          el('dt', {}, 'Opdaget'), el('dd', {}, d.detectedAt ? fmtDate(new Date(d.detectedAt).getTime()) : '–'),
+          el('dt', {}, 'Berørte systemer'), el('dd', {}, esc(d.affectedSystems || '–')),
+          el('dt', {}, 'Beskrivelse'), el('dd', {}, esc(d.businessImpact || '–'))),
+        el('p', { class: 'muted' },
+          'Rediger udkastet under ',
+          el('a', { href: '#', onclick: (ev) => { ev.preventDefault(); switchView('reporting'); } },
+            'Reporting → NIS2 Incidents'), '.')));
+  } else if (inv.nis2DraftError) {
+    nis2El = el('div', { class: 'inv-nis2-error muted' },
+      `NIS2-udkast kunne ikke oprettes: ${esc(inv.nis2DraftError)}`);
+  }
+
   return el('div', { class: 'inv-card' },
     el('div', { class: 'inv-header' },
       el('span', { class: `badge inv-badge ${cls}` }, inv.classification),
@@ -3653,7 +3682,8 @@ function investigationCard(inv) {
             el('tbody', {}, ...evidenceRows)))
       : null,
     hints,
-    narrativeEl);
+    narrativeEl,
+    nis2El);
 }
 
 views.investigation = async () => {

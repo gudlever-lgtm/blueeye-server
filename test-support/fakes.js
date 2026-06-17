@@ -565,12 +565,16 @@ function makeSettingsService(overrides = {}) {
 function makeAssistant(overrides = {}) {
   const disabled = () => { const e = new Error('The AI assistant is disabled'); e.name = 'FeatureDisabled'; throw e; };
   return {
-    isEnabled: overrides.isEnabled || (() => Boolean(overrides.explain || overrides.summarizeLocation || overrides.explainDiagnostic || overrides.narrateInvestigation)),
+    isEnabled: overrides.isEnabled || (() => Boolean(
+      overrides.explain || overrides.summarizeLocation ||
+      overrides.explainDiagnostic || overrides.narrateInvestigation ||
+      overrides.generateNis2Draft)),
     status: overrides.status || (() => ({ enabled: false, configured: false, baseUrl: 'https://api.mistral.ai/v1/chat/completions', model: 'mistral-small-latest' })),
     explain: overrides.explain || (async () => disabled()),
     explainDiagnostic: overrides.explainDiagnostic || (async () => disabled()),
     summarizeLocation: overrides.summarizeLocation || (async () => disabled()),
     narrateInvestigation: overrides.narrateInvestigation || (async () => disabled()),
+    generateNis2Draft: overrides.generateNis2Draft || (async () => disabled()),
   };
 }
 

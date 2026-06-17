@@ -16,6 +16,7 @@ function createInvestigationRouter({
   locator,
   assistant = null,
   incidentsRepo = null,
+  nis2IncidentsRepo = null,
 }) {
   const router = express.Router();
 
@@ -46,6 +47,35 @@ function createInvestigationRouter({
     }
   }
 
+  // Optionally generate a NIS2 incident draft via a second, independent Mistral
+  // call and persist it via the existing nis2IncidentsRepo. Never auto-submits:
+  // notificationRequired is always false, status always 'open'.
+  // Returns { nis2Draft: <created incident> } on success,
+  // { nis2DraftError: <message> } on failure, or {} when the feature is off.
+  async function maybeCreateNis2Draft(result) {
+    if (!assistant || typeof assistant.generateNis2Draft !== 'function') return {};
+    if (!assistant.isEnabled()) return {};
+    if (!nis2IncidentsRepo) return {};
+    try {
+      const draft = await assistant.generateNis2Draft(result);
+      if (!draft.title) return {};
+      const created = await nis2IncidentsRepo.create({
+        title: `[AI-udkast] ${draft.title}`,
+        severity: draft.severity || 'medium',
+        detectedAt: draft.detectedAt || null,
+        affectedSystems: draft.affectedSystems || null,
+        businessImpact: draft.description || null,
+        rootCause: 'Automatisk genereret af AI (BlueEye-fejlfinding) — kræver menneskelig gennemgang inden indsendelse.',
+        nis2Relevant: false,         // human must assess
+        notificationRequired: false, // NEVER auto-submitted via this path
+        status: 'open',
+      });
+      return { nis2Draft: created };
+    } catch (err) {
+      return { nis2DraftError: err.message || 'NIS2-udkast kunne ikke oprettes' };
+    }
+  }
+
   // POST /api/investigation/run — run a new investigation.
   router.post(
     '/run',
@@ -73,13 +103,16 @@ function createInvestigationRouter({
 
       result = await maybeAddNarrative(result);
 
+      // Independent NIS2 draft generation — failure never suppresses Output 1.
+      const nis2 = await maybeCreateNis2Draft(result);
+
       try {
         await investigationsRepo.save(result);
       } catch {
         // Persistence failure must not suppress the result.
       }
 
-      res.json(result);
+      res.json({ ...result, ...nis2 });
     })
   );
 
@@ -124,13 +157,15 @@ function createInvestigationRouter({
 
       result = await maybeAddNarrative(result);
 
+      const nis2 = await maybeCreateNis2Draft(result);
+
       try {
         await investigationsRepo.save(result);
       } catch {
         // Persistence failure must not suppress the result.
       }
 
-      res.json({ incidentId, investigation: result });
+      res.json({ incidentId, investigation: { ...result, ...nis2 } });
     })
   );
 

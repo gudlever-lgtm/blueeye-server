@@ -113,7 +113,7 @@ function createDiagnosticsRouter({
     // even when the feature is off, so probing unconditionally would emit outbound
     // traffic to a third party for a feature nobody enabled.
     add('assistant', 'other', Boolean(g.assistant && g.assistant.baseUrl && (g.assistant.configured || g.assistant.enabled)), true, screening.screenAssistant(g.assistant || {}));
-    add('map', 'other', false, true, screening.screenMap(g.map || {}));
+    add('map', 'other', Boolean(g.map && (g.map.geocodeUrl || g.map.tileUrl)), true, screening.screenMap(g.map || {}));
     add('license', 'other', false, true, screening.screenLicense(g.license || {}));
 
     return out;
@@ -163,6 +163,13 @@ function createDiagnosticsRouter({
     if (id === 'assistant') {
       const st = assistantStatus() || {};
       const r = await reachUrl(fetchImpl, st.baseUrl);
+      return { ran: true, ok: Boolean(r.ok), detail: r.detail };
+    }
+    if (id === 'map') {
+      const st = settingsService ? await safe(() => settingsService.getMap(), {}) : {};
+      const url = (st && st.geocodeUrl) || (st && st.tileUrl);
+      if (!url) return { ran: false, ok: null, detail: 'No URL configured.' };
+      const r = await reachUrl(fetchImpl, url);
       return { ran: true, ok: Boolean(r.ok), detail: r.detail };
     }
     return { ran: false, ok: null, detail: 'Unknown target.' };

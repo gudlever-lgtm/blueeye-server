@@ -23,6 +23,7 @@ const { createAlertingRouter } = require('./alerting');
 const { createExportRouter } = require('./export');
 const { createSettingsRouter } = require('./settings');
 const { createMapRouter } = require('./map');
+const { createGeocodeRouter } = require('./geocode');
 const { createFlowsRouter } = require('./flows');
 const { createTopologyRouter } = require('./topology');
 const { createProbesRouter } = require('./probes');
@@ -112,6 +113,9 @@ function createApiRouter({
   // Injected fetch for the Test area's reachability probes (SAML IdP / AI
   // assistant). Defaults to the global fetch; tests inject a fake so they stay offline.
   diagnosticsFetch,
+  // Injected fetch for the server-side geocoding proxy. Tests inject a fake so
+  // they stay offline; production uses the global fetch.
+  geocodeFetch,
   ldapConfigRepo,
   ldapRoleMapRepo,
   ldapLoginAuditRepo,
@@ -185,6 +189,12 @@ function createApiRouter({
   if (flowsRepo) router.use('/api/geo', createGeoRouter({ flowsRepo, agentsRepo, findingStore, tileConfig: geoTileConfig, getMapConfig, geoProvider, featureGate }));
   if (dispatcher) router.use('/api/alerting', createAlertingRouter({ dispatcher }));
   router.use('/api/map', createMapRouter({ getMapConfig }));
+  // Server-side geocoding proxy: the geocodeUrl stays server-side so
+  // private-network (self-hosted/EU) geocoders work without browser network access.
+  router.use('/api/geocode', createGeocodeRouter({
+    getGeocodeUrl: settingsService ? () => settingsService.getMap().then((m) => m.geocodeUrl || '') : null,
+    fetchImpl: geocodeFetch,
+  }));
   router.use('/api/flows', createFlowsRouter({
     resultsRepo, agentsRepo, flowsRepo,
     getCategories: settingsService ? () => settingsService.getFlowCategories() : undefined,

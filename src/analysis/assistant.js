@@ -2,6 +2,13 @@
 
 const { computeAgentHealth } = require('../health/probeHealth');
 
+// IPv4 address / CIDR masker — applied before sending any context to Mistral.
+// Replaces recognisable IPv4 literals (with optional /prefix-len) with [host].
+const ANY_IP_RE = /\b(?:\d{1,3}\.){3}\d{1,3}(?:\/\d{1,2})?\b/g;
+function maskIps(s) {
+  return typeof s === 'string' ? s.replace(ANY_IP_RE, '[host]') : s;
+}
+
 // Optional, opt-in LLM assistant. OFF by default; an admin enables it and sets
 // its API key in Settings → AI assistant (env defaults still apply at boot).
 // When enabled it answers questions / summarizes a location using ONLY a small,
@@ -327,6 +334,84 @@ function createAssistant({
     return chat(system, JSON.stringify(ctx));
   }
 
+  // Map investigation classification → a NIS2 severity suggestion.
+  const CLASSIFICATION_SEVERITY = {
+    LOCAL: 'high', UPSTREAM: 'medium', DOWNSTREAM: 'medium',
+    APP_NOT_NET: 'low', INSUFFICIENT_DATA: 'low',
+  };
+  const VALID_NIS2_SEVERITIES = new Set(['low', 'medium', 'high', 'critical']);
+
+  // Build a masked, NIS2-suitable context from an InvestigationResult.
+  // IPs in locationRef.value, explanation and suspectedSegment are replaced
+  // with [host] before the payload leaves the process.
+  function buildNis2Context(result) {
+    const lr = result.locationRef || {};
+    return {
+      classification: result.classification,
+      confidence: result.confidence,
+      locationRef: { type: lr.type, value: maskIps(String(lr.value || '')) },
+      window: result.window,
+      explanation: maskIps(result.explanation || ''),
+      suspectedSegment: result.suspectedSegment
+        ? { from: maskIps(result.suspectedSegment.from), to: maskIps(result.suspectedSegment.to) }
+        : null,
+      evidenceSummary: (Array.isArray(result.evidence) ? result.evidence : [])
+        .slice(0, 6).map((e) => ({ type: e.type, ref: e.ref, deviation: e.deviation, ts: e.ts })),
+      workaroundHints: (Array.isArray(result.workaroundHints) ? result.workaroundHints : []).map(maskIps),
+    };
+  }
+
+  // Parse Mistral's response for a NIS2 draft. Tries JSON first; strips markdown
+  // fences when present. Falls back to empty fields so the caller can decide.
+  function parseNis2Response(raw, classification, windowTo) {
+    let parsed = {};
+    try {
+      const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+      parsed = JSON.parse(cleaned);
+    } catch { /* best-effort */ }
+    return {
+      title: typeof parsed.title === 'string' ? parsed.title.slice(0, 200) : '',
+      severity: VALID_NIS2_SEVERITIES.has(parsed.severity)
+        ? parsed.severity
+        : (CLASSIFICATION_SEVERITY[classification] || 'medium'),
+      detectedAt: (typeof parsed.detectedAt === 'string' && parsed.detectedAt)
+        ? parsed.detectedAt
+        : (windowTo || null),
+      affectedSystems: typeof parsed.affectedSystems === 'string'
+        ? maskIps(parsed.affectedSystems.slice(0, 500))
+        : null,
+      description: typeof parsed.description === 'string'
+        ? parsed.description.slice(0, 500)
+        : maskIps(raw.slice(0, 500)),
+    };
+  }
+
+  // Generates a NIS2 incident draft structure from an InvestigationResult.
+  // Uses a separate Mistral call with a NIS2-focused Danish system prompt.
+  // Throws FeatureDisabled when off, AssistantMisconfigured when not wired,
+  // AssistantUpstreamError on provider failure.
+  async function generateNis2Draft(result) {
+    if (!currentEnabled()) throw new FeatureDisabledError();
+    if (!result || typeof result !== 'object' || Array.isArray(result)) {
+      const e = new Error('an InvestigationResult object is required');
+      e.name = 'InvalidQuestion';
+      throw e;
+    }
+    const ctx = buildNis2Context(result);
+    const system =
+      'Du er en cybersikkerhedsrådgiver der hjælper med NIS2-hændelsesindberetning i Danmark. ' +
+      'Analysér den vedlagte netværksanalyse og udfyld felterne til et NIS2-hændelsesudkast. ' +
+      'Svar KUN med gyldig JSON uden forklaring eller markdown-formatering. ' +
+      'JSON-format: {"title":"Kort hændelsesbeskrivelse (maks 100 tegn)",' +
+      '"severity":"low|medium|high|critical","detectedAt":"ISO-tidsstempel fra window.to eller null",' +
+      '"affectedSystems":"Berørte systemer maks 300 tegn — INGEN IP-adresser",' +
+      '"description":"Klartekst hændelsesbeskrivelse til NIS2 maks 400 tegn"} ' +
+      'Brug KUN den angivne kontekst. Indsæt ALDRIG rå IP-adresser, hostnavne med IP eller PII.';
+    const windowTo = result.window && result.window.to ? result.window.to : null;
+    const raw = await chat(system, JSON.stringify(ctx));
+    return parseNis2Response(raw, result.classification, windowTo);
+  }
+
   // Non-secret status for the admin "Test area" screening: whether it is enabled +
   // configured (an API key is present), plus the (non-secret) base URL and model.
   // Never returns the key itself.
@@ -334,7 +419,7 @@ function createAssistant({
     return { enabled: currentEnabled(), configured: currentApiKey() !== '', baseUrl, model: currentModel() };
   }
 
-  return { isEnabled, status, explain, explainDiagnostic, summarizeLocation, narrateInvestigation, buildContext, buildLocationContext };
+  return { isEnabled, status, explain, explainDiagnostic, summarizeLocation, narrateInvestigation, generateNis2Draft, buildContext, buildLocationContext };
 }
 
 module.exports = { createAssistant, FeatureDisabledError };

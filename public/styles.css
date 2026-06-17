@@ -1165,6 +1165,14 @@ button.active-btn { outline: 2px solid var(--accent); }
 .inv-narrative { margin-top: 8px; font-size: 13px; }
 .inv-narrative summary { cursor: pointer; color: var(--muted); }
 .inv-narrative p { margin: 8px 0 0; line-height: 1.55; }
+.inv-nis2-draft { margin-top: 8px; font-size: 13px; border-top: 1px solid var(--border); padding-top: 8px; }
+.inv-nis2-draft summary { cursor: pointer; display: flex; align-items: center; gap: 6px; }
+.inv-nis2-draft-body { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+.inv-nis2-notice { font-size: 12px; border-left: 3px solid var(--warn, #f59e0b); padding-left: 8px; }
+.inv-nis2-dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; font-size: 12px; margin: 0; }
+.inv-nis2-dl dt { color: var(--muted); font-weight: 500; align-self: start; }
+.inv-nis2-dl dd { margin: 0; word-break: break-word; }
+.inv-nis2-error { font-size: 12px; margin-top: 6px; font-style: italic; }
 #inv-history-area { display: flex; flex-direction: column; gap: 12px; }
 #inv-history-area h3 { margin: 8px 0 4px; font-size: 15px; }
 

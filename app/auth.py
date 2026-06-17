@@ -2,7 +2,7 @@
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import Depends, HTTPException, Request, status
+from fastapi import Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,9 +23,10 @@ async def current_user(request: Request, db: AsyncSession) -> Optional[User]:
 
 
 async def require_user(request: Request, db: AsyncSession = Depends(get_db)) -> User:
+    from fastapi.responses import RedirectResponse as _RR
     user = await current_user(request, db)
     if user is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+        raise _RR(url=f"/login?next={request.url.path}", status_code=302)
     return user
 
 

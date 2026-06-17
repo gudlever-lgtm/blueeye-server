@@ -199,6 +199,58 @@ async def create_customer(
     return RedirectResponse("/admin/customers", status_code=302)
 
 
+@router.get("/customers/{customer_id}/edit", response_class=HTMLResponse)
+async def edit_customer_form(
+    customer_id: int,
+    request: Request,
+    user: User = Depends(require_role("superadmin")),
+    db: AsyncSession = Depends(get_db),
+):
+    my_customer = await db.get(Customer, user.customer_id)
+    target = await db.get(Customer, customer_id)
+    if target is None:
+        raise HTTPException(404, "Not found")
+    return templates.TemplateResponse(
+        "admin/customer_form.html",
+        _ctx(request, user, my_customer, target=target, error=None),
+    )
+
+
+@router.post("/customers/{customer_id}/edit")
+async def update_customer(
+    customer_id: int,
+    name: str = Form(...),
+    slug: str = Form(...),
+    license_tier: str = Form("blueeye"),
+    user: User = Depends(require_role("superadmin")),
+    db: AsyncSession = Depends(get_db),
+):
+    target = await db.get(Customer, customer_id)
+    if target is None:
+        raise HTTPException(404, "Not found")
+    if license_tier not in ("blueeye", "blackeye"):
+        raise HTTPException(400, "Invalid tier")
+    target.name = name.strip()
+    target.slug = slug.strip().lower()
+    target.license_tier = license_tier
+    await db.commit()
+    return RedirectResponse("/admin/customers", status_code=302)
+
+
+@router.post("/customers/{customer_id}/toggle")
+async def toggle_customer(
+    customer_id: int,
+    user: User = Depends(require_role("superadmin")),
+    db: AsyncSession = Depends(get_db),
+):
+    target = await db.get(Customer, customer_id)
+    if target is None:
+        raise HTTPException(404, "Not found")
+    target.active = not target.active
+    await db.commit()
+    return RedirectResponse("/admin/customers", status_code=302)
+
+
 # ---- Licenses ----
 
 @router.get("/licenses", response_class=HTMLResponse)

@@ -1,18 +1,18 @@
 {% extends "base.html" %}
-{% block title %}New customer — BlueEye{% endblock %}
+{% block title %}{{ "Edit customer" if target else "New customer" }} — BlueEye{% endblock %}
 {% block content %}
-<h1>New customer</h1>
+<h1>{{ "Edit customer" if target else "New customer" }}</h1>
 {% if error %}<div class="error">{{ error }}</div>{% endif %}
-<form method="post" action="/admin/customers/new" class="form">
-  <label>Name <input type="text" name="name" required maxlength="255"></label>
-  <label>Slug <input type="text" name="slug" required pattern="[a-z0-9-]+" maxlength="64"></label>
+<form method="post" action="{{ '/admin/customers/' ~ target.id ~ '/edit' if target else '/admin/customers/new' }}" class="form">
+  <label>Name <input type="text" name="name" value="{{ target.name if target else '' }}" required maxlength="255"></label>
+  <label>Slug <input type="text" name="slug" value="{{ target.slug if target else '' }}" required pattern="[a-z0-9-]+" maxlength="64"></label>
   <label>License tier
     <select name="license_tier">
-      <option value="blueeye">BlueEye</option>
-      <option value="blackeye">BlackEye</option>
+      <option value="blueeye" {% if not target or target.license_tier == "blueeye" %}selected{% endif %}>BlueEye</option>
+      <option value="blackeye" {% if target and target.license_tier == "blackeye" %}selected{% endif %}>BlackEye</option>
     </select>
   </label>
-  <button type="submit">Create</button>
+  <button type="submit">{{ "Save" if target else "Create" }}</button>
   <a class="btn-secondary" href="/admin/customers">Cancel</a>
 </form>
 {% endblock %}

@@ -18,10 +18,10 @@ templates = Jinja2Templates(directory="app/templates")
 
 
 @router.get("/login", response_class=HTMLResponse)
-async def login_form(request: Request):
+async def login_form(request: Request, next: str = "/dashboard"):
     if request.session.get("user_id"):
         return RedirectResponse("/dashboard", status_code=302)
-    return templates.TemplateResponse("login.html", {"request": request, "error": None})
+    return templates.TemplateResponse("login.html", {"request": request, "error": None, "next": next})
 
 
 @router.post("/login", response_class=HTMLResponse)
@@ -29,6 +29,7 @@ async def login_submit(
     request: Request,
     email: str = Form(...),
     password: str = Form(...),
+    next: str = Form("/dashboard"),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(select(User).where(User.email == email.lower().strip()))
@@ -36,11 +37,13 @@ async def login_submit(
     if user is None or not user.active or not verify_password(password, user.password_hash):
         return templates.TemplateResponse(
             "login.html",
-            {"request": request, "error": "Invalid email or password"},
+            {"request": request, "error": "Invalid email or password", "next": next},
             status_code=401,
         )
     request.session["user_id"] = user.id
-    return RedirectResponse(url="/dashboard", status_code=302)
+    # Validate next to prevent open redirects — only allow relative paths
+    redirect_to = next if next.startswith("/") and not next.startswith("//") else "/dashboard"
+    return RedirectResponse(url=redirect_to, status_code=302)
 
 
 @router.get("/logout")

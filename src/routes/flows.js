@@ -186,6 +186,64 @@ function createFlowsRouter({ resultsRepo, agentsRepo, flowsRepo, getCategories }
     });
   }));
 
+  // GET /api/flows/bidirectional?agentId=&host=&from=&to=
+  // Bidirectional flow inspector: runs the flow explorer separately for ingress
+  // (direction='in') and egress (direction='out') and returns both sides plus an
+  // asymmetry indicator (inBytes / totalBytes). Optional `host` filters to one IP
+  // peer so you can focus on a specific conversation partner. Metadata only;
+  // includes internal RFC1918 conversations (never geolocated). viewer+.
+  router.get('/bidirectional', requireAuth, reader, asyncHandler(async (req, res) => {
+    const agentId = parseId(req.query.agentId);
+    if (agentId === null) return res.status(400).json({ error: 'agentId is required (positive integer)' });
+
+    const { value: range, errors } = validateTimeRange(req.query);
+    if (errors) return res.status(400).json({ error: 'Validation failed', details: errors });
+
+    // Optional host/IP filter — reject anything that doesn't look like an IP literal.
+    const hostRaw = req.query.host ? String(req.query.host).trim() : null;
+    if (hostRaw !== null && hostRaw !== '') {
+      if (!cleanPeer(hostRaw)) return res.status(400).json({ error: 'host must be a valid IP address (IPv4 or IPv6 literal)' });
+    }
+    const host = hostRaw ? cleanPeer(hostRaw) : null;
+
+    const agent = await agentsRepo.findById(agentId);
+    if (!agent) return res.status(404).json({ error: 'Agent not found' });
+
+    const toMs = range.to ? range.to.getTime() : Date.now();
+    const fromMs = range.from ? range.from.getTime() : toMs - DEFAULT_SPAN_MS;
+    const bucketSec = Math.max(60, Math.round((toMs - fromMs) / 1000 / TARGET_BUCKETS));
+
+    const emptyDir = { topTalkers: [], byPort: [], byProto: [], series: [], scans: [], totals: { bytes: 0, packets: 0, flowCount: 0, records: 0 } };
+    const explore = (direction) => (flowsRepo && typeof flowsRepo.exploreFlows === 'function')
+      ? flowsRepo.exploreFlows({ agentId, from: new Date(fromMs), to: new Date(toMs), peer: host, direction, bucketSec })
+      : Promise.resolve(emptyDir);
+
+    const [ingress, egress] = await Promise.all([explore('in'), explore('out')]);
+
+    const inBytes = ingress.totals.bytes;
+    const outBytes = egress.totals.bytes;
+    const totalBytes = inBytes + outBytes;
+    const ratio = totalBytes > 0 ? inBytes / totalBytes : null;
+
+    res.json({
+      agentId,
+      from: new Date(fromMs).toISOString(),
+      to: new Date(toMs).toISOString(),
+      host,
+      ingress,
+      egress,
+      asymmetry: {
+        inBytes,
+        outBytes,
+        totalBytes,
+        // ratio = fraction of total that is ingress (0.5 = symmetric)
+        ratio,
+        // flag when ≥ 80 % of traffic flows one way — typical of asymmetric routing
+        asymmetric: ratio !== null && (ratio <= 0.2 || ratio >= 0.8),
+      },
+    });
+  }));
+
   return router;
 }
 

@@ -4788,6 +4788,171 @@ views.flows = async () => {
   return root;
 };
 
+// Bidirectional Flow Inspector — shows ingress vs egress side-by-side for a
+// selected agent and optional host peer, with time-series charts, top-talker
+// tables, an asymmetry indicator and any anomaly findings overlaid as markers.
+views.flowbidi = async () => {
+  const root = el('div', { class: 'flowbidi' });
+  root.append(el('div', { class: 'section-head' },
+    el('h2', {}, 'Flow Inspector'),
+    el('span', { class: 'muted' }, 'Ingress vs egress · top talkers · asymmetry · anomaly correlation')));
+
+  const agents = await api('/agents').catch(() => []);
+  if (!agents.length) { root.append(el('div', { class: 'empty' }, 'No agents yet.')); return root; }
+
+  const agentSel = el('select', {}, ...agents.map((a) => el('option', { value: String(a.id) }, a.display_name || a.hostname)));
+  if (selectedAgentId != null && agents.some((a) => String(a.id) === String(selectedAgentId))) agentSel.value = String(selectedAgentId);
+
+  const hostInput = el('input', { type: 'text', placeholder: 'Filter IP (optional)' });
+
+  // Preset time windows.
+  const presets = [['15m', '15 min'], ['1h', '1 hour'], ['24h', '24 hours']];
+  let activePreset = '1h';
+  const presetBtns = presets.map(([val, label]) => {
+    const b = el('button', { class: `small ghost${val === activePreset ? ' active' : ''}`, onclick: () => {
+      activePreset = val;
+      presetBtns.forEach((pb) => pb.classList.toggle('active', pb === b));
+      fromI.value = ''; toI.value = '';
+      load();
+    } }, label);
+    return b;
+  });
+
+  const fromI = el('input', { type: 'datetime-local', title: 'From (overrides preset)' });
+  const toI = el('input', { type: 'datetime-local', title: 'To (overrides preset)' });
+  const runBtn = el('button', { class: 'small' }, 'Inspect');
+  const status = el('span', { class: 'muted' });
+
+  root.append(el('div', { class: 'history-controls' },
+    el('label', { class: 'inline muted' }, 'Agent ', agentSel),
+    el('label', { class: 'inline muted' }, 'Host ', hostInput),
+    ...presetBtns,
+    el('label', { class: 'inline muted' }, 'From ', fromI),
+    el('label', { class: 'inline muted' }, 'To ', toI),
+    runBtn, status));
+
+  const host = el('div', {});
+  root.append(host);
+
+  function windowMs() {
+    if (fromI.value && toI.value) return { fromMs: new Date(fromI.value).getTime(), toMs: new Date(toI.value).getTime() };
+    const now = Date.now();
+    if (activePreset === '15m') return { fromMs: now - 15 * 60000, toMs: now };
+    if (activePreset === '24h') return { fromMs: now - 24 * 3600000, toMs: now };
+    return { fromMs: now - 3600000, toMs: now }; // 1h default
+  }
+
+  function dirSection(title, color, data, fromMs, toMs, markers) {
+    const kids = [];
+
+    if (data.series && data.series.length >= 2) {
+      const pts = data.series.map((s) => ({ t: new Date(s.at).getTime(), y: s.bytes }));
+      kids.push(el('div', { class: 'overview-chart' },
+        historyChart([{ id: 'b', label: 'Bytes', color, points: pts }],
+          { fromMs: pts[0].t, toMs: pts[pts.length - 1].t, band: robustBand(pts), markers })));
+    } else {
+      kids.push(el('div', { class: 'empty' }, 'No flows in window.'));
+    }
+
+    kids.push(el('h4', {}, 'Top talkers'));
+    if (!data.topTalkers.length) {
+      kids.push(el('div', { class: 'empty' }, 'No flows recorded.'));
+    } else {
+      kids.push(el('table', {},
+        el('thead', {}, el('tr', {}, ...['Source', 'Destination', 'Org/Country', 'Bytes', 'Flows'].map((h) => el('th', {}, h)))),
+        el('tbody', {}, ...data.topTalkers.slice(0, 20).map((t) => el('tr', {},
+          el('td', {}, esc(t.srcIp || '–')),
+          el('td', {}, esc(t.dstIp || t.extIp || '–')),
+          el('td', {}, t.internal
+            ? el('span', { class: 'badge grace' }, 'internal')
+            : el('span', { class: 'muted' }, [t.asnName, t.country].filter(Boolean).join(' · ') || '–')),
+          el('td', { class: 'num' }, fmtBytes(t.bytes)),
+          el('td', { class: 'num muted' }, String(t.flowCount)))))));
+    }
+
+    if (data.byProto && data.byProto.length) {
+      kids.push(el('h4', {}, 'Protocols'));
+      kids.push(el('table', {},
+        el('thead', {}, el('tr', {}, ...['Protocol', 'Bytes', 'Flows'].map((h) => el('th', {}, h)))),
+        el('tbody', {}, ...data.byProto.slice(0, 8).map((p) => el('tr', {},
+          el('td', {}, p.proto || '–'),
+          el('td', { class: 'num' }, fmtBytes(p.bytes)),
+          el('td', { class: 'num muted' }, String(p.flowCount)))))));
+    }
+
+    return el('div', { class: 'flowbidi-panel' },
+      el('h3', { class: 'flowbidi-dir' }, title,
+        el('span', { class: 'muted' }, ` · ${fmtBytes(data.totals.bytes)}`)),
+      ...kids);
+  }
+
+  async function load() {
+    const { fromMs, toMs } = windowMs();
+    if (!Number.isFinite(fromMs) || !Number.isFinite(toMs) || toMs <= fromMs) {
+      host.replaceChildren(el('div', { class: 'error' }, 'Invalid time range — check From / To.'));
+      status.textContent = ''; return;
+    }
+    status.textContent = 'Loading…';
+    host.replaceChildren();
+
+    const qp = new URLSearchParams({ agentId: agentSel.value, from: new Date(fromMs).toISOString(), to: new Date(toMs).toISOString() });
+    const hostVal = hostInput.value.trim();
+    if (hostVal) qp.set('host', hostVal);
+
+    let data;
+    try {
+      data = await api(`/api/flows/bidirectional?${qp}`);
+    } catch (e) {
+      if (e.status === 404) {
+        host.replaceChildren(el('div', { class: 'empty' }, 'No agent found with that ID.'));
+      } else {
+        host.replaceChildren(el('div', { class: 'error' }, errText(e)));
+      }
+      status.textContent = ''; return;
+    }
+
+    const totalBytes = data.asymmetry.totalBytes;
+    const ratio = data.asymmetry.ratio;
+    status.textContent = `${fmtBytes(totalBytes)} total · ${fmtBytes(data.asymmetry.inBytes)} ↓ / ${fmtBytes(data.asymmetry.outBytes)} ↑`;
+
+    // Fetch findings for anomaly marker overlay (best-effort).
+    let markers = [];
+    try {
+      const fs = await api(`/api/findings?hostId=${encodeURIComponent(agentSel.value)}&since=${new Date(fromMs).toISOString()}`);
+      markers = findingMarkers(fs);
+    } catch { /* overlay is optional */ }
+
+    const kids = [];
+
+    // Asymmetry banner — shown whenever the imbalance is notable.
+    if (ratio !== null && data.asymmetry.asymmetric) {
+      const inPct = Math.round(ratio * 100);
+      const outPct = 100 - inPct;
+      kids.push(el('div', { class: 'flowbidi-asym warn' },
+        '⚠ Asymmetric traffic: ',
+        el('strong', {}, `${inPct}% ingress`), ' / ',
+        el('strong', {}, `${outPct}% egress`),
+        el('span', { class: 'muted' }, ' — replies may arrive on a different path.')));
+    } else if (ratio !== null) {
+      const inPct = Math.round(ratio * 100);
+      kids.push(el('div', { class: 'flowbidi-asym ok' },
+        `Symmetric traffic: ${inPct}% ingress / ${100 - inPct}% egress.`));
+    }
+
+    // Two-column layout: ingress left, egress right.
+    kids.push(el('div', { class: 'flowbidi-cols' },
+      dirSection('↓ Ingress', '#06b6d4', data.ingress, fromMs, toMs, markers),
+      dirSection('↑ Egress', '#10b981', data.egress, fromMs, toMs, markers)));
+
+    host.replaceChildren(...kids);
+  }
+
+  runBtn.addEventListener('click', load);
+  agentSel.addEventListener('change', () => { load(); });
+  await load();
+  return root;
+};
+
 // Map of locations with their agents. Uses Leaflet if available; otherwise falls
 // back to a list. Each located location gets a marker with agent count/status.
 // Creates a Leaflet map with the server-configured tiles (EU / self-hosted —

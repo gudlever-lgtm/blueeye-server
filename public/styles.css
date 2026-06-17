@@ -1167,3 +1167,14 @@ button.active-btn { outline: 2px solid var(--accent); }
 .inv-narrative p { margin: 8px 0 0; line-height: 1.55; }
 #inv-history-area { display: flex; flex-direction: column; gap: 12px; }
 #inv-history-area h3 { margin: 8px 0 4px; font-size: 15px; }
+
+
+/* ---- Bidirectional Flow Inspector ---------------------------------------- */
+.flowbidi { display: flex; flex-direction: column; gap: 16px; }
+.flowbidi-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.flowbidi-panel { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 20px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.flowbidi-dir { margin: 0 0 4px; font-size: 15px; font-weight: 600; }
+.flowbidi-asym { padding: 10px 16px; border-radius: 8px; font-size: 13px; }
+.flowbidi-asym.warn { background: var(--warn-weak); color: var(--warn); border: 1px solid var(--warn); }
+.flowbidi-asym.ok { background: var(--ok-weak); color: var(--ok); border: 1px solid var(--ok); }
+@media (max-width: 860px) { .flowbidi-cols { grid-template-columns: 1fr; } }

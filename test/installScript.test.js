@@ -36,6 +36,9 @@ test('renderInstallScript wires all three runtimes: binary (new default), Node, 
   assert.match(script, /RUNTIME=binary/);
   assert.match(script, /command -v node/);
   assert.match(script, /RUNTIME=node/);
+  // Docker is now automatic fallback (third priority).
+  assert.match(script, /command -v docker/);
+  assert.match(script, /RUNTIME=docker/);
   // Docker branch (opt-in)
   assert.match(script, /docker build -t "\$IMAGE"/);
   assert.match(script, /docker run -d --name "\$CONTAINER" --restart unless-stopped --network host/);
@@ -177,4 +180,48 @@ test('install script asks the user to install a runtime when neither is present'
   assert.equal(threw, true);
   assert.match(stderr, /Node\.js was not found/);
   assert.match(stderr, /docker\.com|nodejs\.org/);
+});
+
+test('install script fails clearly when docker is selected but not installed', () => {
+  const bytes = 'src-bytes';
+  const sha = crypto.createHash('sha256').update(bytes).digest('hex');
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'blueeye-nocker-'));
+  const curl = writeFakeCurl(tmpDir);
+
+  // Build a minimal PATH with sha256sum/awk/mktemp/rm/sh but WITHOUT docker, so the
+  // guard "RUNTIME=docker but docker not found" is exercised even when docker is
+  // installed on the host running the tests.
+  // NOTE: on modern Debian/Ubuntu /bin -> /usr/bin (usrmerge), so we cannot use /bin
+  // as a PATH component — it would expose /usr/bin/docker too. Instead we symlink the
+  // exact tools we need (including sh/dash) into an isolated dir.
+  const toolsDir = path.join(tmpDir, 'tools');
+  fs.mkdirSync(toolsDir);
+  for (const tool of ['sha256sum', 'shasum', 'awk', 'mktemp', 'rm', 'sh', 'dash']) {
+    try {
+      const real = execFileSync('which', [tool], { encoding: 'utf8' }).trim();
+      if (real) fs.symlinkSync(real, path.join(toolsDir, tool));
+    } catch (_) { /* optional tool */ }
+  }
+
+  const script = renderInstallScript({ serverUrl: 'http://x', code: 'C', sourceSha: sha });
+
+  // PATH is ONLY toolsDir — docker is absent; command -v docker will fail as intended.
+  const minimalPath = toolsDir;
+
+  let threw = false;
+  let stderr = '';
+  try {
+    runScript(script, {
+      BLUEEYE_CURL: curl,
+      BLUEEYE_FAKE_BYTES: bytes,
+      BLUEEYE_RUNTIME: 'docker',
+      PATH: minimalPath,
+    });
+  } catch (err) {
+    threw = true;
+    stderr = String(err.stderr || '');
+  }
+  assert.equal(threw, true);
+  assert.match(stderr, /Docker runtime selected/);
+  assert.match(stderr, /docker\.com/);
 });

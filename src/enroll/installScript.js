@@ -9,8 +9,8 @@
 //   2. verifies SHA-256 against the embedded checksum (ABORTS on mismatch),
 //   3. picks a runtime — pre-built binary by DEFAULT when the server has built one
 //      (no Node.js or Docker required); then native Node + systemd; then Docker
-//      (opt-in via BLUEEYE_RUNTIME=docker); if no runtime is available it prints
-//      clear instructions and stops — it never dead-ends,
+//      (auto-detected — slim image when binary available, otherwise node:22-alpine);
+//      if no runtime is available it prints clear instructions and stops — never dead-ends,
 //   4. for native installs (binary or node) lays the agent out in the versioned
 //      releases/<v> + `current` symlink layout (state in /var/lib, logs in
 //      /var/log) so signed self-updates can swap releases atomically with rollback,
@@ -55,7 +55,7 @@ function renderInstallScript({
 # can reach the server) and installed via the lightest runtime available:
 #   1. pre-built binary  (~60 MB, no Node.js or Docker needed) — default when ready
 #   2. native Node.js + systemd — fallback when Node is present
-#   3. Docker (opt-in)  — set BLUEEYE_RUNTIME=docker to force this
+#   3. Docker (auto)    — slim image (~120 MB) if binary ready, else node:22-alpine (~500 MB)
 set -eu
 
 SERVER_URL="${shDq(serverUrl)}"
@@ -129,8 +129,7 @@ main() {
   # Pick a runtime. Priority order (unless BLUEEYE_RUNTIME overrides):
   #   binary  — pre-built self-contained executable; no Node.js or Docker needed
   #   node    — native Node.js + systemd
-  #   docker  — containerised; opt-in only (BLUEEYE_RUNTIME=docker), so a host
-  #             that merely has Docker is not silently containerised
+  #   docker  — containerised; auto when Docker is found and no better runtime is available
   #   none    — nothing available; print instructions and exit
   if [ -z "$RUNTIME" ]; then
     BINARY_SHA=$(pick_binary_sha)
@@ -138,20 +137,23 @@ main() {
       RUNTIME=binary
     elif command -v node >/dev/null 2>&1; then
       RUNTIME=node
+    elif command -v docker >/dev/null 2>&1; then
+      RUNTIME=docker
     else
       RUNTIME=none
     fi
   fi
   if [ "$RUNTIME" = "docker" ] && ! command -v docker >/dev/null 2>&1; then
-    fail "BLUEEYE_RUNTIME=docker was requested but Docker is not installed on this host.
+    fail "Docker runtime selected but Docker is not installed on this host.
   - install Docker:  https://docs.docker.com/engine/install/
-  - or drop the override to install natively:  https://nodejs.org/"
+  - or install Node.js for a native install:  https://nodejs.org/"
   fi
   if [ "$RUNTIME" = "none" ]; then
-    fail "Node.js was not found on this host. The agent installs natively by default;
-install Node.js 18+ and re-run, or opt into Docker explicitly:
-  - Node.js 18+ (default):  https://nodejs.org/
-  - Docker (opt-in):        https://docs.docker.com/engine/install/  then re-run with BLUEEYE_RUNTIME=docker
+    fail "Node.js was not found on this host — no compatible runtime available.
+Install one of the following and re-run:
+  - pre-built binary:  retry once the server has finished building (check agent-binary-status)
+  - Node.js 18+:       https://nodejs.org/
+  - Docker:            https://docs.docker.com/engine/install/
 then:  curl -sSL $SERVER_URL/enroll/$ENROLL_CODE/install.sh | sh"
   fi
   log "runtime: $RUNTIME"

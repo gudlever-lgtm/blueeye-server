@@ -48,6 +48,9 @@ test('renderInstallScript wires all three runtimes: binary (new default), Node, 
   assert.match(script, /RELEASES="\$INSTALL_DIR\/releases"/);
   assert.match(script, /mv -T "\$CURRENT\.next" "\$CURRENT"/);
   assert.match(script, /node "\$CURRENT\/src\/index\.js" enroll --code "\$ENROLL_CODE"/);
+  // NODE_BIN must be captured before it's used in the ExecStart of the systemd unit.
+  assert.match(script, /NODE_BIN=\$\(command -v node\)/);
+  assert.match(script, /install_service "\$NODE_BIN \$CURRENT\/src\/index\.js" systemd/);
   assert.match(script, /systemctl/);
   assert.match(script, /Environment=BLUEEYE_RELEASES_DIR=\$RELEASES/);
   assert.match(script, /Environment=BLUEEYE_CURRENT_LINK=\$CURRENT/);

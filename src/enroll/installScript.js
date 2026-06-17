@@ -274,6 +274,7 @@ install_node() {
   TARBALL_PATH="$1"
   command -v node >/dev/null 2>&1 || fail "Node not found"
   command -v npm  >/dev/null 2>&1 || fail "npm is required to install the agent's dependencies (or use Docker: BLUEEYE_RUNTIME=docker)"
+  NODE_BIN=$(command -v node)
 
   RELEASES="$INSTALL_DIR/releases"
   CURRENT="$INSTALL_DIR/current"

@@ -5651,11 +5651,8 @@ async function editLocation(l) {
     }
   }
   async function reverseGeocode(la, lo) {
-    if (!mapCfg.geocodeUrl) return;
     try {
-      const res = await fetch(`${mapCfg.geocodeUrl}/reverse?format=jsonv2&lat=${la}&lon=${lo}`, { headers: { Accept: 'application/json' } });
-      if (!res.ok) return;
-      const data = await res.json();
+      const data = await api(`/api/geocode/reverse?lat=${la}&lon=${lo}`);
       if (data && data.display_name) address.value = data.display_name;
     } catch { /* geocoder optional */ }
   }
@@ -5663,19 +5660,20 @@ async function editLocation(l) {
     const q = search.value.trim();
     results.replaceChildren();
     if (!q) return;
-    if (!mapCfg.geocodeUrl) { results.append(el('p', { class: 'muted' }, 'No geocoder configured (Settings → Map).')); return; }
     results.append(el('p', { class: 'muted' }, 'Searching…'));
     try {
-      const res = await fetch(`${mapCfg.geocodeUrl}/search?format=jsonv2&limit=5&q=${encodeURIComponent(q)}`, { headers: { Accept: 'application/json' } });
-      const list = res.ok ? await res.json() : [];
-      results.replaceChildren(...(list.length ? list.map((r) => el('button', {
+      const list = await api(`/api/geocode/search?q=${encodeURIComponent(q)}`);
+      results.replaceChildren(...(Array.isArray(list) && list.length ? list.map((r) => el('button', {
         type: 'button', class: 'geocode-hit', onclick: () => {
           setPoint(Number(r.lat), Number(r.lon), true);
           if (r.display_name) { address.value = r.display_name; search.value = r.display_name; }
           results.replaceChildren();
         },
       }, r.display_name)) : [el('p', { class: 'muted' }, 'No results.')]));
-    } catch { results.replaceChildren(el('p', { class: 'error' }, 'Geocoder error.')); }
+    } catch (e2) {
+      const notConfigured = e2.status === 503;
+      results.replaceChildren(el('p', { class: notConfigured ? 'muted' : 'error' }, notConfigured ? (e2.message || 'No geocoder configured (Settings → Map).') : 'Geocoder error.'));
+    }
   }
   search.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); doSearch(); } });
 

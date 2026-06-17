@@ -1076,6 +1076,8 @@ function makeApp(overrides = {}) {
     // Test area reachability probes: a benign 200 by default so route tests stay
     // offline; a test can inject its own to simulate an unreachable endpoint.
     diagnosticsFetch: overrides.diagnosticsFetch || (async () => ({ ok: true, status: 200, json: async () => ({}) })),
+    // Geocoding proxy fetch: empty results by default so tests stay offline.
+    geocodeFetch: overrides.geocodeFetch || (async () => ({ ok: true, status: 200, json: async () => [] })),
     ldapConfigRepo: overrides.ldapConfigRepo || makeLdapConfigRepo(),
     ldapRoleMapRepo: overrides.ldapRoleMapRepo || makeLdapRoleMapRepo(),
     ldapLoginAuditRepo: overrides.ldapLoginAuditRepo || makeLdapLoginAuditRepo(),

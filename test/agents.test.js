@@ -231,7 +231,7 @@ test('PUT /agents/:id is forbidden for a viewer (403)', async () => {
 
 // ---------------------------------------------------------- DELETE /agents/:id
 test('DELETE /agents/:id returns 204 on success (admin)', async () => {
-  const agentsRepo = makeAgentsRepo({ remove: async () => true });
+  const agentsRepo = makeAgentsRepo({ findById: async () => sampleAgent, remove: async () => true });
 
   const res = await request(makeApp({ agentsRepo }))
     .delete('/agents/1')
@@ -242,7 +242,7 @@ test('DELETE /agents/:id returns 204 on success (admin)', async () => {
 });
 
 test('DELETE /agents/:id returns 404 when not found', async () => {
-  const agentsRepo = makeAgentsRepo({ remove: async () => false });
+  const agentsRepo = makeAgentsRepo({ findById: async () => null, remove: async () => false });
 
   const res = await request(makeApp({ agentsRepo }))
     .delete('/agents/999')
@@ -259,7 +259,7 @@ test('DELETE /agents/:id returns 400 for an invalid id', async () => {
 });
 
 test('DELETE /agents/:id returns 500 when the repository throws', async () => {
-  const agentsRepo = makeAgentsRepo({ remove: throwingAsync() });
+  const agentsRepo = makeAgentsRepo({ findById: async () => sampleAgent, remove: throwingAsync() });
 
   const res = await request(makeApp({ agentsRepo }))
     .delete('/agents/1')

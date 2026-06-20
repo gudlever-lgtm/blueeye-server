@@ -14,7 +14,7 @@ const { createAgentActionAuditRepository } = require('./repositories/agentAction
 const { createAuditEventsRepository } = require('./repositories/auditEventsRepository');
 const { createAuditLogRepository } = require('./repositories/auditLogRepository');
 const { createApiTokensRepository } = require('./repositories/apiTokensRepository');
-const { createAuditLogger } = require('./services/auditLogger');
+const { createAuditLogger } = require('./services/complianceLogger');
 const { createEnrollmentCodesRepository } = require('./repositories/enrollmentCodesRepository');
 const { createEnrollmentStore } = require('./services/enrollmentStore');
 const { createAgentTokensRepository } = require('./repositories/agentTokensRepository');
@@ -568,7 +568,7 @@ function start() {
     nis2AuditRepo,
     haCoordinator,
     investigationsRepo,
-    enrollConfig: { publicUrl: config.publicUrl, certFingerprint: config.enroll.certFingerprint },
+    enrollConfig: { publicUrl: config.publicUrl, certFingerprint: config.enroll.certFingerprint, defaultTtlMinutes: config.enrollment.defaultTtlMinutes },
     notifyDashboard,
     // Brute-force throttle for agent enrollment by IP (login has its own
     // loginThrottle inside the auth router).

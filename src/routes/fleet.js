@@ -10,15 +10,10 @@ const { throughputHealthSummary } = require('../health/throughputHealth');
 const { computeDataQuality } = require('../health/dataQuality');
 const { computeNicInventory } = require('../health/nicInventory');
 const { silentLogger } = require('../logger');
+const { parseId } = require('../validation/locationValidation');
 
 const DEFAULT_WINDOW_MS = 6 * 3600 * 1000;
 const MAX_WINDOW_MS = 7 * 24 * 3600 * 1000;
-
-function parseId(v) {
-  if (!/^\d+$/.test(String(v))) return null;
-  const n = Number(v);
-  return Number.isInteger(n) && n > 0 ? n : null;
-}
 
 function parseWindow(v) {
   if (v === undefined) return DEFAULT_WINDOW_MS;

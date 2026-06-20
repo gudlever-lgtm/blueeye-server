@@ -25,12 +25,12 @@ function createHaRouter({ haCoordinator, featureGate, planService }) {
   // step-down action additionally requires admin.
   router.use(requireAuth, gate);
 
-  router.get('/status', asyncHandler(async (req, res) => {
+  router.get('/status', requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN), asyncHandler(async (req, res) => {
     if (!haCoordinator) return res.status(503).json({ error: 'HA not available' });
     res.json(haCoordinator.getStatus());
   }));
 
-  router.get('/nodes', asyncHandler(async (req, res) => {
+  router.get('/nodes', requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN), asyncHandler(async (req, res) => {
     if (!haCoordinator) return res.status(503).json({ error: 'HA not available' });
     res.json({ nodes: await haCoordinator.listNodes() });
   }));

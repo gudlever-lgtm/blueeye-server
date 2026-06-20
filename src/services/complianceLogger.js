@@ -13,10 +13,8 @@
 // Privacy by design: callers pass metadata only — never passwords/tokens/payloads.
 function clientIp(req) {
   if (!req) return null;
-  // Trust the first X-Forwarded-For hop when present (set by the reverse proxy),
-  // else the socket address. Kept short for the column.
-  const xff = req.headers && req.headers['x-forwarded-for'];
-  if (xff) return String(xff).split(',')[0].trim().slice(0, 64);
+  // Use req.ip (Express, respects app trust-proxy setting) so raw
+  // X-Forwarded-For headers can't be spoofed when TRUST_PROXY=false.
   return (req.ip || (req.socket && req.socket.remoteAddress) || null);
 }
 

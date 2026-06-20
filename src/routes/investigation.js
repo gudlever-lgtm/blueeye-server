@@ -182,7 +182,7 @@ function createInvestigationRouter({
         if (!Number.isInteger(n) || n < 1) {
           return res.status(400).json({ error: 'Validation failed', details: 'limit must be a positive integer' });
         }
-        limit = n;
+        limit = Math.min(n, 500);
       }
       if (req.query.offset !== undefined) {
         const n = Number.parseInt(req.query.offset, 10);

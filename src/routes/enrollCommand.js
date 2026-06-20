@@ -7,7 +7,6 @@ const { ROLES } = require('../auth/roles');
 const { generateEnrollmentCode } = require('../auth/tokens');
 const { parseId } = require('../validation/locationValidation');
 const { resolveServerUrl } = require('./enroll');
-const { config } = require('../config');
 
 // Default platform offered when the caller doesn't specify one and we can't
 // infer it from the published artifacts.
@@ -29,7 +28,7 @@ function isExpired(row) {
 //   - codeId given  -> reuse that (active) code.
 //   - codeId absent -> mint a new code via the existing code flow (bulk-capable
 //     via maxUses + ttlMinutes).
-function createEnrollCommandRouter({ enrollmentCodesRepo, artifactStore, sourceStore, enrollConfig = {}, releaseKeyService = null }) {
+function createEnrollCommandRouter({ enrollmentCodesRepo, artifactStore, sourceStore, enrollConfig = {}, releaseKeyService = null, defaultTtlMinutes = 120 }) {
   const router = express.Router();
   const certFingerprint = enrollConfig.certFingerprint || '';
 
@@ -85,7 +84,7 @@ function createEnrollCommandRouter({ enrollmentCodesRepo, artifactStore, sourceS
           }
           uses = n;
         }
-        let ttl = config.enrollment.defaultTtlMinutes;
+        let ttl = defaultTtlMinutes;
         if (req.query.ttlMinutes !== undefined) {
           const t = Number(req.query.ttlMinutes);
           if (!Number.isInteger(t) || t < 1 || t > MAX_TTL_MINUTES) {

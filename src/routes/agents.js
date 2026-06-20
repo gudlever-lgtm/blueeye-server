@@ -573,7 +573,8 @@ function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentComma
     })
   );
 
-  // DELETE /agents/:id — admin only.
+  // DELETE /agents/:id — admin only. Force-removes the server-side record without
+  // coordinating with the agent (use POST /:id/delete for graceful removal).
   router.delete(
     '/:id',
     requireAuth,
@@ -581,15 +582,25 @@ function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentComma
     asyncHandler(async (req, res) => {
       const id = parseId(req.params.id);
       if (id === null) return invalidId(res);
-      // Snapshot the agent before removal so the integration event carries its
-      // hostname/location (for IPAM device removal when allowDelete is set).
+      // Snapshot the agent before removal so the audit + integration event carry
+      // hostname/location (they survive after the row is gone).
       const agent = await agentsRepo.findById(id);
+      if (!agent) return notFound(res);
+      // Audit 'requested' before the irreversible delete so the record exists even
+      // if the remove query fails. Completed immediately (synchronous operation).
+      const auditId = await recordRequested('force-delete', agent, req);
       const removed = await agentsRepo.remove(id);
-      if (!removed) return notFound(res);
+      if (!removed) {
+        await markFailed(auditId, 'row already gone');
+        return notFound(res);
+      }
+      if (auditId && auditRepo && typeof auditRepo.complete === 'function') {
+        try { await auditRepo.complete(auditId, { state: 'completed', resultDetail: 'force-removed' }); } catch (err) { logger.warn(`agents: audit complete(force-delete) for ${id} failed (${err.message})`); }
+      }
       // Outbound integrations: notify IPAM the agent is gone. Fire-and-forget; an
       // integration NEVER blocks or fails the delete (deletion is one-way and
       // gated by the connector's own allow-delete flag).
-      if (agent && integrationTrigger && typeof integrationTrigger.emitAgentEvent === 'function') {
+      if (integrationTrigger && typeof integrationTrigger.emitAgentEvent === 'function') {
         try { integrationTrigger.emitAgentEvent('delete', agent).catch(() => {}); } catch { /* best-effort */ }
       }
       res.status(204).end();

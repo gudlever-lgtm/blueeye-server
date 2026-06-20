@@ -4,6 +4,7 @@ const express = require('express');
 const { asyncHandler } = require('../middleware/asyncHandler');
 const { requireAuth, requireRole } = require('../auth/middleware');
 const { ROLES } = require('../auth/roles');
+const { baseUrlBlockedReason } = require('../integrations/ssrfGuard');
 
 const TIMEOUT_MS = 8000;
 
@@ -19,6 +20,10 @@ function createGeocodeRouter({
 
   async function proxy(url, res) {
     if (!fetchImpl) return res.status(503).json({ error: 'Geocoder not available' });
+    // SSRF guard: block private/loopback/link-local targets so the server can't
+    // be used as a pivot to reach internal services on behalf of VIEWER users.
+    const blocked = baseUrlBlockedReason(url);
+    if (blocked) return res.status(502).json({ error: blocked });
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
     try {

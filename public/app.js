@@ -5193,37 +5193,64 @@ views.geo = async () => {
   // are the agent's recent traceroute destinations (run them in the Probes tab).
   const pathAgentSel = el('select', { class: 'small' }, el('option', { value: '' }, 'Agent…'),
     ...agents.map((a) => el('option', { value: String(a.id) }, a.display_name || a.hostname)));
-  const pathTargetSel = el('select', { class: 'small' }, el('option', { value: '' }, 'Traceroute target…'));
+  const pathTargetDl = el('datalist', { id: 'geo-path-targets' });
+  const pathTargetInput = el('input', { type: 'text', class: 'small', list: 'geo-path-targets', placeholder: 'Traceroute target…' });
   const showPathBtn = el('button', { class: 'small' }, 'Show path');
   const clearPathBtn = el('button', { class: 'small ghost' }, 'Clear path');
   async function loadPathTargets() {
-    pathTargetSel.replaceChildren(el('option', { value: '' }, 'Traceroute target…'));
+    pathTargetDl.replaceChildren();
     const id = pathAgentSel.value;
+    pathTargetInput.value = '';
     if (!id) return;
     try {
       const data = await api(`/api/probes/latest?agentId=${encodeURIComponent(id)}`);
       const targets = [...new Set((data.results || []).filter((r) => r.type === 'traceroute').map((r) => r.target))];
-      for (const t of targets) pathTargetSel.append(el('option', { value: t }, t));
-      if (!targets.length) pathTargetSel.append(el('option', { value: '', disabled: true }, 'no traceroutes yet — run one in Probes'));
-    } catch { /* leave the placeholder */ }
+      for (const t of targets) pathTargetDl.append(el('option', { value: t }));
+    } catch { /* leave empty */ }
   }
   async function showPath() {
     if (!geoState.map) return;
     const id = pathAgentSel.value;
     if (!id) { toast('Pick an agent first.', true); return; }
-    const target = pathTargetSel.value;
+    const target = pathTargetInput.value.trim();
+    if (!target) { toast('Enter a traceroute target.', true); return; }
     showPathBtn.disabled = true;
+    let polling = false;
     try {
-      const qs = `agentId=${encodeURIComponent(id)}${target ? `&target=${encodeURIComponent(target)}` : ''}`;
-      drawGeoPath(await api(`/api/probes/path?${qs}`));
-    } catch (e) { toast(errText(e), true); } finally { showPathBtn.disabled = false; }
+      const qs = `agentId=${encodeURIComponent(id)}&target=${encodeURIComponent(target)}`;
+      const data = await api(`/api/probes/path?${qs}`);
+      if (data.nodes && data.nodes.length) {
+        drawGeoPath(data);
+      } else {
+        // No existing data — trigger a fresh traceroute and poll for results.
+        await api(`/agents/${id}/probe`, { method: 'POST', body: { type: 'traceroute', host: target } });
+        polling = true;
+        showPathBtn.textContent = 'Running…';
+        let attempts = 0;
+        const poll = setInterval(async () => {
+          attempts++;
+          try {
+            const d = await api(`/api/probes/path?${qs}`);
+            if ((d.nodes && d.nodes.length) || attempts >= 4) {
+              clearInterval(poll);
+              showPathBtn.textContent = 'Show path';
+              showPathBtn.disabled = false;
+              if (d.nodes && d.nodes.length) { drawGeoPath(d); loadPathTargets(); }
+              else toast('Traceroute sent — no path yet, try Show path again in a moment.', true);
+            }
+          } catch { clearInterval(poll); showPathBtn.textContent = 'Show path'; showPathBtn.disabled = false; }
+        }, 4000);
+      }
+    } catch (e) {
+      toast(e.status === 409 ? 'Agent not connected — run the traceroute from the Probes tab first.' : errText(e), true);
+    } finally { if (!polling) showPathBtn.disabled = false; }
   }
   pathAgentSel.addEventListener('change', loadPathTargets);
   showPathBtn.addEventListener('click', showPath);
   clearPathBtn.addEventListener('click', () => { if (geoState.pathLayer) geoState.pathLayer.clearLayers(); showOverviewSummary(); });
   root.append(el('div', { class: 'geo-pathpick' },
     el('span', { class: 'muted' }, 'Traceroute path:'),
-    pathAgentSel, pathTargetSel, showPathBtn, clearPathBtn));
+    pathAgentSel, pathTargetDl, pathTargetInput, showPathBtn, clearPathBtn));
 
   // No GeoIP database ⇒ public IPs can't be placed by country, so the map shows
   // only site pins and traceroute paths collapse to the origin. Say so up front

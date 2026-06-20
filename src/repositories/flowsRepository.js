@@ -288,10 +288,11 @@ function createFlowsRepository(db) {
   // RFC1918↔RFC1918 conversations so the graph shows the LAN, and carries the
   // external endpoint's asn/country for classifying public peers. All filters are
   // bound parameters. Capped + ordered by bytes so the heaviest edges win.
-  async function topologyEdges({ agentId = null, from, to, limit = 300 }) {
+  async function topologyEdges({ agentId = null, locationId = null, from, to, limit = 300 }) {
     const where = ['ts >= ?', 'ts < ?', 'src_ip IS NOT NULL', 'dst_ip IS NOT NULL'];
     const params = [from, to];
     if (agentId) { where.push('agent_id = ?'); params.push(agentId); }
+    else if (locationId) { where.push('agent_id IN (SELECT id FROM agents WHERE location_id = ?)'); params.push(locationId); }
     const lim = Number.isInteger(limit) && limit > 0 && limit <= 2000 ? limit : 300;
     const rows = await q(
       `SELECT src_ip, dst_ip, ext_ip, MAX(internal) AS internal, MAX(asn) AS asn,

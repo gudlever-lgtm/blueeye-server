@@ -517,10 +517,11 @@ function settingsLink(tab, label) {
 
 const PAGE_INFO = {
   topology: {
-    hero: 'Dependency map — who talks to whom, built from the 5-tuple flows your agents already report (NetFlow/sFlow). Internal (RFC1918) hosts are kept as topology and never geolocated; external peers carry their ASN/country.',
+    hero: 'Dependency map — who talks to whom, built from the 5-tuple flows your agents already report (NetFlow/sFlow). Filter by site to scope the graph to one location.',
     title: 'Topology — flow-derived dependencies',
     body: () => [
-      el('p', {}, 'Aggregates observed src→dst conversations over the last hour into a directed, byte-weighted graph: each edge is a dependency, each node a host or external peer. Complements ', viewLink('flows', 'Flows'), ' (raw conversations) and the per-target path map — this is the service/host dependency view. Metadata only: addresses, ports, ASNs and byte/flow counts, never payload.'),
+      el('p', {}, 'Aggregates observed src→dst conversations into a directed, byte-weighted graph: each edge is a dependency, each node a host or external peer. Complements ', viewLink('flows', 'Flows'), ' (raw conversations) and the per-target path map — this is the service/host dependency view. Metadata only: addresses, ports, ASNs and byte/flow counts, never payload.'),
+      el('p', {}, 'Use the ', el('strong', {}, 'Site'), ' filter to scope the graph to one location and reduce noise. Use the ', el('strong', {}, 'Window'), ' selector to widen or narrow the time range covered.'),
       el('p', { class: 'muted' }, 'Only agents whose traffic source is NetFlow or sFlow contribute flow records; the heaviest dependencies/hosts are shown when the graph is large.'),
     ],
   },
@@ -713,21 +714,22 @@ const PAGE_INFO = {
     ],
   },
   flows: {
-    hero: 'Inspect specific conversations (flows): who talks to whom, on which ports — and who is scanning.',
-    title: 'Flows — conversations',
+    hero: 'Inspect conversations: who talks to whom, on which ports, and who is scanning. Switch to Bidirectional mode for an ingress/egress split with asymmetry detection.',
+    title: 'Flows — conversations & bidirectional inspector',
     body: () => [
       el('p', {}, 'While ', viewLink('overview', 'Traffic'), ' shows volumes and the ', viewLink('geo', 'Destinations'), ' map shows where it goes, Flows lets you drill into individual conversations (5-tuple metadata from NetFlow/sFlow) for one agent.'),
-      el('h4', {}, 'Filters'),
+      el('h4', {}, 'Unified mode'),
       el('ul', {},
-        el('li', {}, 'Peer: show only conversations where a specific IP is source or destination (click a talker to set it).'),
-        el('li', {}, 'Port / Proto: narrow down to e.g. 443 or tcp/udp.'),
-        el('li', {}, 'Direction + scope: in/out, and internal (LAN↔LAN) vs. external.')),
-      el('h4', {}, 'What you see'),
+        el('li', {}, 'Top talkers: the largest conversations (source→destination) by bytes — click any row to filter by that peer.'),
+        el('li', {}, 'Top ports / protocols + a bytes-over-time chart with anomaly findings overlaid as markers.'),
+        el('li', {}, 'Scans / fan-out: sources hitting many different ports (port scan) or many hosts (fan-out).'),
+        el('li', {}, 'Filters: Peer, Port, Proto, Direction (in/out), Scope (internal/external).')),
+      el('h4', {}, 'Bidirectional mode'),
       el('ul', {},
-        el('li', {}, 'Top talkers: the largest conversations (source→destination) by bytes.'),
-        el('li', {}, 'Top ports / protocols + a bytes-over-time chart for the window.'),
-        el('li', {}, 'Scans / fan-out: sources hitting many different ports (port scan) or many hosts (fan-out) — a quick indicator of scanning or a runaway client.')),
-      el('p', { class: 'muted' }, 'Metadata only (5-tuple + bytes/flows), never packet contents. Internal RFC1918 addresses are shown (they are never geolocated). Requires a NetFlow/sFlow source + the geo pipeline being active.'),
+        el('li', {}, 'Ingress (↓) and egress (↑) side-by-side with separate charts, top talkers and protocol breakdowns.'),
+        el('li', {}, 'Asymmetry banner: flags when one direction carries ≥80% of traffic — a sign of asymmetric routing.'),
+        el('li', {}, 'Anomaly findings overlaid as markers on both charts.')),
+      el('p', { class: 'muted' }, 'Metadata only (5-tuple + bytes/flows), never packet contents. Internal RFC1918 addresses are shown but never geolocated. Requires NetFlow/sFlow + the geo pipeline.'),
     ],
   },
   geo: {
@@ -3457,22 +3459,36 @@ function pageloadWaterfall(r) {
 // Flow-derived dependency / topology map — who-talks-to-whom built from the
 // ingested 5-tuple flows. Internal (RFC1918) hosts vs external peers (with ASN/
 // country). Read-only: a summary + the heaviest dependencies and busiest hosts.
+// Site filter scopes the graph to one location; window selector adjusts depth.
 // Action buttons (Ping / Vis rute) let an operator run live diagnostics against
 // any observed host directly from this view, using a selectable online agent.
 views.topology = async () => {
   const root = el('div', { class: 'topology' });
-  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Topology'),
-    el('span', { class: 'muted' }, 'Service/host dependencies from observed flows · last 60 min')));
+  const headInfo = el('span', { class: 'muted' }, 'Service/host dependencies from observed flows');
+  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Topology'), headInfo));
 
-  const [data, agentList] = await Promise.all([
-    api('/api/topology?minutes=60'),
+  const [agentList, locations] = await Promise.all([
     api('/agents').catch(() => []),
+    api('/api/locations').catch(() => []),
   ]);
   const onlineAgents = agentList.filter((a) => a.status === 'online');
 
-  const t = data.totals || { nodes: 0, internal: 0, external: 0, edges: 0 };
-  root.append(el('p', { class: 'muted' },
-    `${t.nodes} hosts (${t.internal} internal, ${t.external} external) · ${t.edges} dependencies${data.truncated ? ' · showing the heaviest' : ''}`));
+  // Site and time-window selectors — control what the graph covers.
+  const locSel = el('select', { class: 'small' },
+    el('option', { value: '' }, 'All sites'),
+    ...locations.map((l) => el('option', { value: String(l.id) }, l.name)));
+  const winSel = el('select', { class: 'small' },
+    el('option', { value: '30' }, '30 min'),
+    el('option', { value: '60' }, '60 min'),
+    el('option', { value: '240' }, '4 hours'),
+    el('option', { value: '1440' }, '24 hours'));
+  winSel.value = '60';
+  const refreshBtn = el('button', { class: 'small ghost' }, 'Refresh');
+
+  root.append(el('div', { class: 'topo-action-bar' },
+    el('label', { class: 'inline muted' }, 'Site ', locSel),
+    el('label', { class: 'inline muted' }, ' Window ', winSel),
+    refreshBtn));
 
   // Agent selector — shown only when at least one agent is online so action
   // buttons have something to send probes from.
@@ -3483,12 +3499,13 @@ views.topology = async () => {
       el('span', { class: 'muted' }, 'Kør handlinger fra agent:'), agentSel));
   }
 
-  if (!data.edges || !data.edges.length) {
-    root.append(el('div', { class: 'empty' }, 'No flow data in this window. Topology is built from agents whose traffic source is NetFlow or sFlow.'));
-    return root;
-  }
+  const summary = el('p', { class: 'muted' });
+  root.append(summary);
+  const tableHost = el('div', {});
+  root.append(tableHost);
 
-  const byId = Object.fromEntries((data.nodes || []).map((n) => [n.id, n]));
+  // byId index is rebuilt on each load; shared by label() and actionBtns().
+  const byId = {};
   const label = (id) => {
     const n = byId[id];
     if (n && n.kind === 'external') return `${id}${n.asnName ? ` · ${n.asnName}` : ''}${n.country ? ` (${n.country})` : ''}`;
@@ -3558,34 +3575,68 @@ views.topology = async () => {
     return el('div', { class: 'row-actions' }, pingBtn, routeBtn);
   }
 
-  root.append(el('h3', {}, 'Top dependencies'));
-  root.append(el('table', { class: 'agents-table' },
-    el('thead', {}, el('tr', {},
-      el('th', { scope: 'col' }, 'From'), el('th', { scope: 'col' }, 'To'),
-      el('th', { scope: 'col' }, 'Peer'), el('th', { scope: 'col' }, 'Bytes'), el('th', { scope: 'col' }, 'Flows'),
-      onlineAgents.length ? el('th', { scope: 'col' }, 'Actions') : null)),
-    el('tbody', {}, ...data.edges.slice(0, 100).map((e) => el('tr', {},
-      el('td', {}, label(e.from)),
-      el('td', {}, label(e.to)),
-      el('td', {}, kindBadge(byId[e.to] && byId[e.to].kind)),
-      el('td', {}, fmtBytes(e.bytes)),
-      el('td', {}, String(e.flows)),
-      onlineAgents.length ? el('td', {}, actionBtns(e.to)) : null)))));
+  async function loadTopology() {
+    const qp = new URLSearchParams({ minutes: winSel.value });
+    const locId = locSel.value;
+    if (locId) qp.set('locationId', locId);
 
-  root.append(el('h3', {}, 'Busiest hosts'));
-  root.append(el('table', { class: 'agents-table' },
-    el('thead', {}, el('tr', {},
-      el('th', { scope: 'col' }, 'Host'), el('th', { scope: 'col' }, 'Kind'),
-      el('th', { scope: 'col' }, 'Peers'), el('th', { scope: 'col' }, 'In'), el('th', { scope: 'col' }, 'Out'),
-      onlineAgents.length ? el('th', { scope: 'col' }, 'Actions') : null)),
-    el('tbody', {}, ...(data.nodes || []).slice(0, 50).map((n) => el('tr', {},
-      el('td', {}, label(n.id)),
-      el('td', {}, kindBadge(n.kind)),
-      el('td', {}, String(n.degree)),
-      el('td', {}, fmtBytes(n.bytesIn)),
-      el('td', {}, fmtBytes(n.bytesOut)),
-      onlineAgents.length ? el('td', {}, actionBtns(n.id)) : null)))));
+    const locName = locId ? (locations.find((l) => String(l.id) === locId) || {}).name : null;
+    const winLabel = winSel.options[winSel.selectedIndex].text;
+    headInfo.textContent = `Service/host dependencies · ${winLabel}${locName ? ` · ${locName}` : ''}`;
 
+    let data;
+    try {
+      data = await api(`/api/topology?${qp}`);
+    } catch (e) {
+      tableHost.replaceChildren(el('div', { class: 'error' }, errText(e)));
+      summary.textContent = '';
+      return;
+    }
+
+    const t = data.totals || { nodes: 0, internal: 0, external: 0, edges: 0 };
+    summary.textContent = `${t.nodes} hosts (${t.internal} internal, ${t.external} external) · ${t.edges} dependencies${data.truncated ? ' · showing the heaviest' : ''}`;
+
+    if (!data.edges || !data.edges.length) {
+      tableHost.replaceChildren(el('div', { class: 'empty' }, 'No flow data in this window. Topology is built from agents whose traffic source is NetFlow or sFlow.'));
+      return;
+    }
+
+    Object.keys(byId).forEach((k) => delete byId[k]);
+    (data.nodes || []).forEach((n) => { byId[n.id] = n; });
+
+    tableHost.replaceChildren(
+      el('h3', {}, 'Top dependencies'),
+      el('table', { class: 'agents-table' },
+        el('thead', {}, el('tr', {},
+          el('th', { scope: 'col' }, 'From'), el('th', { scope: 'col' }, 'To'),
+          el('th', { scope: 'col' }, 'Peer'), el('th', { scope: 'col' }, 'Bytes'), el('th', { scope: 'col' }, 'Flows'),
+          onlineAgents.length ? el('th', { scope: 'col' }, 'Actions') : null)),
+        el('tbody', {}, ...data.edges.slice(0, 100).map((e) => el('tr', {},
+          el('td', {}, label(e.from)),
+          el('td', {}, label(e.to)),
+          el('td', {}, kindBadge(byId[e.to] && byId[e.to].kind)),
+          el('td', {}, fmtBytes(e.bytes)),
+          el('td', {}, String(e.flows)),
+          onlineAgents.length ? el('td', {}, actionBtns(e.to)) : null)))),
+      el('h3', {}, 'Busiest hosts'),
+      el('table', { class: 'agents-table' },
+        el('thead', {}, el('tr', {},
+          el('th', { scope: 'col' }, 'Host'), el('th', { scope: 'col' }, 'Kind'),
+          el('th', { scope: 'col' }, 'Peers'), el('th', { scope: 'col' }, 'In'), el('th', { scope: 'col' }, 'Out'),
+          onlineAgents.length ? el('th', { scope: 'col' }, 'Actions') : null)),
+        el('tbody', {}, ...(data.nodes || []).slice(0, 50).map((n) => el('tr', {},
+          el('td', {}, label(n.id)),
+          el('td', {}, kindBadge(n.kind)),
+          el('td', {}, String(n.degree)),
+          el('td', {}, fmtBytes(n.bytesIn)),
+          el('td', {}, fmtBytes(n.bytesOut)),
+          onlineAgents.length ? el('td', {}, actionBtns(n.id)) : null)))));
+  }
+
+  locSel.addEventListener('change', loadTopology);
+  winSel.addEventListener('change', loadTopology);
+  refreshBtn.addEventListener('click', loadTopology);
+  await loadTopology();
   return root;
 };
 
@@ -4708,29 +4759,61 @@ views.nics = async () => {
   return root;
 };
 
-// Flow / conversation explorer: query NetFlow/sFlow conversations for an agent
-// with filters, see top talkers + ports/protocols + a byte series, and surface
-// port-scan / fan-out sources. Metadata only; internal (LAN) conversations are
-// shown — they are simply never geolocated.
+// Flow Explorer — merged conversation explorer + bidirectional inspector.
+// Unified mode: top talkers, ports, protocols, scan/fan-out, anomaly markers.
+// Bidirectional mode: ingress/egress side-by-side with asymmetry indicator.
+// Metadata only; internal (LAN) conversations are shown — never geolocated.
 views.flows = async () => {
   const root = el('div', { class: 'flows-explorer' });
-  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Flows'),
-    el('span', { class: 'muted' }, 'Conversations · top talkers · ports · scan / fan-out')));
+  root.append(el('div', { class: 'section-head' },
+    el('h2', {}, 'Flows'),
+    el('span', { class: 'muted' }, 'Conversations · top talkers · ports · anomalies · ingress/egress')));
 
   const agents = await api('/agents').catch(() => []);
   if (!agents.length) { root.append(el('div', { class: 'empty' }, 'No agents yet.')); return root; }
 
   const agentSel = el('select', {}, ...agents.map((a) => el('option', { value: String(a.id) }, a.display_name || a.hostname)));
   if (selectedAgentId != null && agents.some((a) => String(a.id) === String(selectedAgentId))) agentSel.value = String(selectedAgentId);
+
+  // Mode toggle: Unified (explore) or Bidirectional (ingress/egress split).
+  let mode = 'unified';
+  const modeUnified = el('button', { class: 'small active' }, 'Unified');
+  const modeBidi = el('button', { class: 'small ghost' }, 'Bidirectional');
+
   const peerInput = el('input', { type: 'text', placeholder: 'IP (src/dst)' });
   const portInput = el('input', { type: 'number', min: '1', max: '65535', placeholder: 'port' });
   const protoInput = el('input', { type: 'text', placeholder: 'tcp/udp' });
-  const dirSel = el('select', {}, el('option', { value: '' }, 'All directions'), el('option', { value: 'out' }, 'Outbound'), el('option', { value: 'in' }, 'Inbound'));
-  const scopeSel = el('select', {}, el('option', { value: '' }, 'Internal + external'), el('option', { value: 'external' }, 'External only'), el('option', { value: 'internal' }, 'Internal only'));
-  const winSel = el('select', {}, el('option', { value: '1' }, 'Last 1 h'), el('option', { value: '6' }, 'Last 6 h'), el('option', { value: '24' }, 'Last 24 h'));
-  winSel.value = '6';
-  const runBtn = el('button', { class: 'small' }, 'Show');
+  const dirSel = el('select', {},
+    el('option', { value: '' }, 'All directions'),
+    el('option', { value: 'out' }, 'Outbound'),
+    el('option', { value: 'in' }, 'Inbound'));
+  const scopeSel = el('select', {},
+    el('option', { value: '' }, 'Internal + external'),
+    el('option', { value: 'external' }, 'External only'),
+    el('option', { value: 'internal' }, 'Internal only'));
+
+  // Time controls: preset buttons + optional custom from/to that override them.
+  const presets = [['15m', '15 min'], ['1h', '1 hour'], ['6h', '6 hours'], ['24h', '24 hours']];
+  let activePreset = '1h';
+  const fromI = el('input', { type: 'datetime-local', title: 'From (overrides preset)' });
+  const toI = el('input', { type: 'datetime-local', title: 'To (overrides preset)' });
+  const presetBtns = presets.map(([val, label]) => {
+    const b = el('button', { class: `small ghost${val === activePreset ? ' active' : ''}`, onclick: () => {
+      activePreset = val;
+      presetBtns.forEach((pb) => pb.classList.toggle('active', pb === b));
+      fromI.value = ''; toI.value = '';
+      refresh();
+    } }, label);
+    return b;
+  });
+  const runBtn = el('button', { class: 'small' }, 'Inspect');
   const status = el('span', { class: 'muted' });
+
+  // Unified-only filters — hidden when switching to bidirectional mode.
+  const unifiedControls = el('span', {},
+    el('label', { class: 'inline muted' }, ' Port ', portInput),
+    el('label', { class: 'inline muted' }, ' Proto ', protoInput),
+    dirSel, scopeSel);
 
   // Prefill from a deep link (global search → "→ flows").
   if (flowsPrefill) {
@@ -4740,125 +4823,26 @@ views.flows = async () => {
     flowsPrefill = null;
   }
 
-  root.append(el('div', { class: 'history-controls' },
-    el('label', { class: 'inline muted' }, 'Agent ', agentSel),
-    el('label', { class: 'inline muted' }, 'Peer ', peerInput),
-    el('label', { class: 'inline muted' }, 'Port ', portInput),
-    el('label', { class: 'inline muted' }, 'Proto ', protoInput),
-    dirSel, scopeSel, winSel, runBtn, status));
-
-  const host = el('div', {});
-  root.append(host);
-
-  function qs() {
-    const p = new URLSearchParams();
-    p.set('agentId', agentSel.value);
-    const hours = Number(winSel.value) || 6;
-    p.set('from', new Date(Date.now() - hours * 3600000).toISOString());
-    if (peerInput.value.trim()) p.set('peer', peerInput.value.trim());
-    if (portInput.value.trim()) p.set('port', portInput.value.trim());
-    if (protoInput.value.trim()) p.set('proto', protoInput.value.trim());
-    if (dirSel.value) p.set('direction', dirSel.value);
-    if (scopeSel.value) p.set('internal', scopeSel.value);
-    return p.toString();
+  function switchMode(m) {
+    mode = m;
+    modeUnified.classList.toggle('active', m === 'unified');
+    modeUnified.classList.toggle('ghost', m !== 'unified');
+    modeBidi.classList.toggle('active', m === 'bidi');
+    modeBidi.classList.toggle('ghost', m !== 'bidi');
+    unifiedControls.style.display = m === 'unified' ? '' : 'none';
+    refresh();
   }
-  const talkerPeer = (t) => (t.internal ? t.dstIp : (t.extIp || t.dstIp));
-
-  async function refresh() {
-    status.textContent = 'Loading…';
-    let data;
-    try { data = await api(`/api/flows/explore?${qs()}`); } catch (e) { host.replaceChildren(el('div', { class: 'error' }, e.message)); status.textContent = ''; return; }
-    status.textContent = `${fmtBytes(data.totals.bytes)} · ${data.totals.flowCount} flows · ${data.totals.records} records`;
-    const kids = [];
-
-    // Scans/fan-out first — it's the security-relevant signal.
-    if (data.scans && data.scans.length) {
-      kids.push(el('details', { class: 'sec scan-sec', open: true }, el('summary', {}, '⚠ Possible scans / fan-out ', el('span', { class: 'muted' }, '· one source against many ports/hosts')),
-        el('table', {}, el('thead', {}, el('tr', {}, ...['Source', 'Type', 'Ports', 'Hosts', 'Bytes', 'Flows'].map((h) => el('th', {}, h)))),
-          el('tbody', {}, ...data.scans.map((s) => el('tr', {},
-            el('td', {}, esc(s.srcIp)),
-            el('td', {}, el('span', { class: `badge ${s.kind === 'port-scan' ? 'offline' : 'warn'}` }, s.kind === 'port-scan' ? 'PORT-SCAN' : 'FAN-OUT')),
-            el('td', { class: 'num bad-text' }, String(s.distinctPorts)),
-            el('td', { class: 'num' }, String(s.distinctHosts)),
-            el('td', { class: 'num' }, fmtBytes(s.bytes)),
-            el('td', { class: 'num muted' }, String(s.flowCount))))))));
-    }
-
-    if (data.series && data.series.length >= 2) {
-      const pts = data.series.map((s) => ({ t: new Date(s.at).getTime(), y: s.bytes }));
-      kids.push(el('div', { class: 'overview-chart' }, historyChart([{ id: 'b', label: 'Bytes', color: '#06b6d4', points: pts }], { fromMs: pts[0].t, toMs: pts[pts.length - 1].t, band: robustBand(pts) })));
-    }
-
-    kids.push(el('h4', {}, 'Top talkers'));
-    if (!data.topTalkers.length) kids.push(el('div', { class: 'empty' }, 'No flows in the window — requires NetFlow/sFlow + geo-pipeline.'));
-    else kids.push(el('table', {},
-      el('thead', {}, el('tr', {}, ...['Source', 'Destination', 'Org/Country', 'Bytes', 'Packets', 'Flows'].map((h) => el('th', {}, h)))),
-      el('tbody', {}, ...data.topTalkers.map((t) => el('tr', { class: 'fleet-row', onclick: () => { peerInput.value = talkerPeer(t) || ''; refresh(); } },
-        el('td', {}, esc(t.srcIp || '–')),
-        el('td', {}, esc(t.dstIp || t.extIp || '–')),
-        el('td', {}, t.internal ? el('span', { class: 'badge grace' }, 'internal') : el('span', { class: 'muted' }, [t.asnName, t.country].filter(Boolean).join(' · ') || '–')),
-        el('td', { class: 'num' }, fmtBytes(t.bytes)),
-        el('td', { class: 'num muted' }, String(t.packets)),
-        el('td', { class: 'num muted' }, String(t.flowCount)))))));
-
-    const portTable = el('table', {}, el('thead', {}, el('tr', {}, ...['Port', 'Proto', 'Bytes', 'Flows'].map((h) => el('th', {}, h)))),
-      el('tbody', {}, ...(data.byPort.length ? data.byPort.map((p) => el('tr', {}, el('td', {}, String(p.port)), el('td', { class: 'muted' }, p.proto || '–'), el('td', { class: 'num' }, fmtBytes(p.bytes)), el('td', { class: 'num muted' }, String(p.flowCount)))) : [el('tr', {}, el('td', { class: 'muted' }, '–'))])));
-    const protoTable = el('table', {}, el('thead', {}, el('tr', {}, ...['Protocol', 'Bytes', 'Flows'].map((h) => el('th', {}, h)))),
-      el('tbody', {}, ...(data.byProto.length ? data.byProto.map((p) => el('tr', {}, el('td', {}, p.proto || '–'), el('td', { class: 'num' }, fmtBytes(p.bytes)), el('td', { class: 'num muted' }, String(p.flowCount)))) : [el('tr', {}, el('td', { class: 'muted' }, '–'))])));
-    kids.push(el('div', { class: 'flows-tables' },
-      el('div', {}, el('h4', {}, 'Top ports'), portTable),
-      el('div', {}, el('h4', {}, 'Protocols'), protoTable)));
-
-    host.replaceChildren(...kids);
-  }
-
-  runBtn.addEventListener('click', refresh);
-  agentSel.addEventListener('change', refresh);
-  await refresh();
-  return root;
-};
-
-// Bidirectional Flow Inspector — shows ingress vs egress side-by-side for a
-// selected agent and optional host peer, with time-series charts, top-talker
-// tables, an asymmetry indicator and any anomaly findings overlaid as markers.
-views.flowbidi = async () => {
-  const root = el('div', { class: 'flowbidi' });
-  root.append(el('div', { class: 'section-head' },
-    el('h2', {}, 'Flow Inspector'),
-    el('span', { class: 'muted' }, 'Ingress vs egress · top talkers · asymmetry · anomaly correlation')));
-
-  const agents = await api('/agents').catch(() => []);
-  if (!agents.length) { root.append(el('div', { class: 'empty' }, 'No agents yet.')); return root; }
-
-  const agentSel = el('select', {}, ...agents.map((a) => el('option', { value: String(a.id) }, a.display_name || a.hostname)));
-  if (selectedAgentId != null && agents.some((a) => String(a.id) === String(selectedAgentId))) agentSel.value = String(selectedAgentId);
-
-  const hostInput = el('input', { type: 'text', placeholder: 'Filter IP (optional)' });
-
-  // Preset time windows.
-  const presets = [['15m', '15 min'], ['1h', '1 hour'], ['24h', '24 hours']];
-  let activePreset = '1h';
-  const presetBtns = presets.map(([val, label]) => {
-    const b = el('button', { class: `small ghost${val === activePreset ? ' active' : ''}`, onclick: () => {
-      activePreset = val;
-      presetBtns.forEach((pb) => pb.classList.toggle('active', pb === b));
-      fromI.value = ''; toI.value = '';
-      load();
-    } }, label);
-    return b;
-  });
-
-  const fromI = el('input', { type: 'datetime-local', title: 'From (overrides preset)' });
-  const toI = el('input', { type: 'datetime-local', title: 'To (overrides preset)' });
-  const runBtn = el('button', { class: 'small' }, 'Inspect');
-  const status = el('span', { class: 'muted' });
+  modeUnified.addEventListener('click', () => switchMode('unified'));
+  modeBidi.addEventListener('click', () => switchMode('bidi'));
 
   root.append(el('div', { class: 'history-controls' },
     el('label', { class: 'inline muted' }, 'Agent ', agentSel),
-    el('label', { class: 'inline muted' }, 'Host ', hostInput),
-    ...presetBtns,
-    el('label', { class: 'inline muted' }, 'From ', fromI),
-    el('label', { class: 'inline muted' }, 'To ', toI),
+    el('span', { class: 'muted' }, ' Mode '), modeUnified, modeBidi,
+    el('label', { class: 'inline muted' }, ' Peer ', peerInput),
+    unifiedControls,
+    el('span', { class: 'muted' }, ' '), ...presetBtns,
+    el('label', { class: 'inline muted' }, ' From ', fromI),
+    el('label', { class: 'inline muted' }, ' To ', toI),
     runBtn, status));
 
   const host = el('div', {});
@@ -4868,13 +4852,13 @@ views.flowbidi = async () => {
     if (fromI.value && toI.value) return { fromMs: new Date(fromI.value).getTime(), toMs: new Date(toI.value).getTime() };
     const now = Date.now();
     if (activePreset === '15m') return { fromMs: now - 15 * 60000, toMs: now };
+    if (activePreset === '6h') return { fromMs: now - 6 * 3600000, toMs: now };
     if (activePreset === '24h') return { fromMs: now - 24 * 3600000, toMs: now };
-    return { fromMs: now - 3600000, toMs: now }; // 1h default
+    return { fromMs: now - 3600000, toMs: now };
   }
 
   function dirSection(title, color, data, fromMs, toMs, markers) {
     const kids = [];
-
     if (data.series && data.series.length >= 2) {
       const pts = data.series.map((s) => ({ t: new Date(s.at).getTime(), y: s.bytes }));
       kids.push(el('div', { class: 'overview-chart' },
@@ -4883,7 +4867,6 @@ views.flowbidi = async () => {
     } else {
       kids.push(el('div', { class: 'empty' }, 'No flows in window.'));
     }
-
     kids.push(el('h4', {}, 'Top talkers'));
     if (!data.topTalkers.length) {
       kids.push(el('div', { class: 'empty' }, 'No flows recorded.'));
@@ -4899,7 +4882,6 @@ views.flowbidi = async () => {
           el('td', { class: 'num' }, fmtBytes(t.bytes)),
           el('td', { class: 'num muted' }, String(t.flowCount)))))));
     }
-
     if (data.byProto && data.byProto.length) {
       kids.push(el('h4', {}, 'Protocols'));
       kids.push(el('table', {},
@@ -4909,14 +4891,14 @@ views.flowbidi = async () => {
           el('td', { class: 'num' }, fmtBytes(p.bytes)),
           el('td', { class: 'num muted' }, String(p.flowCount)))))));
     }
-
     return el('div', { class: 'flowbidi-panel' },
-      el('h3', { class: 'flowbidi-dir' }, title,
-        el('span', { class: 'muted' }, ` · ${fmtBytes(data.totals.bytes)}`)),
+      el('h3', { class: 'flowbidi-dir' }, title, el('span', { class: 'muted' }, ` · ${fmtBytes(data.totals.bytes)}`)),
       ...kids);
   }
 
-  async function load() {
+  const talkerPeer = (t) => (t.internal ? t.dstIp : (t.extIp || t.dstIp));
+
+  async function refresh() {
     const { fromMs, toMs } = windowMs();
     if (!Number.isFinite(fromMs) || !Number.isFinite(toMs) || toMs <= fromMs) {
       host.replaceChildren(el('div', { class: 'error' }, 'Invalid time range — check From / To.'));
@@ -4925,27 +4907,61 @@ views.flowbidi = async () => {
     status.textContent = 'Loading…';
     host.replaceChildren();
 
-    const qp = new URLSearchParams({ agentId: agentSel.value, from: new Date(fromMs).toISOString(), to: new Date(toMs).toISOString() });
-    const hostVal = hostInput.value.trim();
-    if (hostVal) qp.set('host', hostVal);
+    const qp = new URLSearchParams({
+      agentId: agentSel.value,
+      from: new Date(fromMs).toISOString(),
+      to: new Date(toMs).toISOString(),
+    });
+    const peerVal = peerInput.value.trim();
 
-    let data;
-    try {
-      data = await api(`/api/flows/bidirectional?${qp}`);
-    } catch (e) {
-      if (e.status === 404) {
-        host.replaceChildren(el('div', { class: 'empty' }, 'No agent found with that ID.'));
-      } else {
+    if (mode === 'bidi') {
+      if (peerVal) qp.set('host', peerVal);
+      let data;
+      try {
+        data = await api(`/api/flows/bidirectional?${qp}`);
+      } catch (e) {
         host.replaceChildren(el('div', { class: 'error' }, errText(e)));
+        status.textContent = ''; return;
       }
-      status.textContent = ''; return;
+      status.textContent = `${fmtBytes(data.asymmetry.totalBytes)} total · ${fmtBytes(data.asymmetry.inBytes)} ↓ / ${fmtBytes(data.asymmetry.outBytes)} ↑`;
+
+      let markers = [];
+      try {
+        const fs = await api(`/api/findings?hostId=${encodeURIComponent(agentSel.value)}&since=${new Date(fromMs).toISOString()}`);
+        markers = findingMarkers(fs);
+      } catch { /* overlay is optional */ }
+
+      const kids = [];
+      if (data.asymmetry.ratio !== null && data.asymmetry.asymmetric) {
+        const inPct = Math.round(data.asymmetry.ratio * 100);
+        kids.push(el('div', { class: 'flowbidi-asym warn' },
+          '⚠ Asymmetric traffic: ',
+          el('strong', {}, `${inPct}% ingress`), ' / ',
+          el('strong', {}, `${100 - inPct}% egress`),
+          el('span', { class: 'muted' }, ' — replies may arrive on a different path.')));
+      } else if (data.asymmetry.ratio !== null) {
+        const inPct = Math.round(data.asymmetry.ratio * 100);
+        kids.push(el('div', { class: 'flowbidi-asym ok' },
+          `Symmetric traffic: ${inPct}% ingress / ${100 - inPct}% egress.`));
+      }
+      kids.push(el('div', { class: 'flowbidi-cols' },
+        dirSection('↓ Ingress', '#06b6d4', data.ingress, fromMs, toMs, markers),
+        dirSection('↑ Egress', '#10b981', data.egress, fromMs, toMs, markers)));
+      host.replaceChildren(...kids);
+      return;
     }
 
-    const totalBytes = data.asymmetry.totalBytes;
-    const ratio = data.asymmetry.ratio;
-    status.textContent = `${fmtBytes(totalBytes)} total · ${fmtBytes(data.asymmetry.inBytes)} ↓ / ${fmtBytes(data.asymmetry.outBytes)} ↑`;
+    // Unified mode — /api/flows/explore.
+    if (peerVal) qp.set('peer', peerVal);
+    if (portInput.value.trim()) qp.set('port', portInput.value.trim());
+    if (protoInput.value.trim()) qp.set('proto', protoInput.value.trim());
+    if (dirSel.value) qp.set('direction', dirSel.value);
+    if (scopeSel.value) qp.set('internal', scopeSel.value);
 
-    // Fetch findings for anomaly marker overlay (best-effort).
+    let data;
+    try { data = await api(`/api/flows/explore?${qp}`); } catch (e) { host.replaceChildren(el('div', { class: 'error' }, e.message)); status.textContent = ''; return; }
+    status.textContent = `${fmtBytes(data.totals.bytes)} · ${data.totals.flowCount} flows · ${data.totals.records} records`;
+
     let markers = [];
     try {
       const fs = await api(`/api/findings?hostId=${encodeURIComponent(agentSel.value)}&since=${new Date(fromMs).toISOString()}`);
@@ -4953,33 +4969,60 @@ views.flowbidi = async () => {
     } catch { /* overlay is optional */ }
 
     const kids = [];
-
-    // Asymmetry banner — shown whenever the imbalance is notable.
-    if (ratio !== null && data.asymmetry.asymmetric) {
-      const inPct = Math.round(ratio * 100);
-      const outPct = 100 - inPct;
-      kids.push(el('div', { class: 'flowbidi-asym warn' },
-        '⚠ Asymmetric traffic: ',
-        el('strong', {}, `${inPct}% ingress`), ' / ',
-        el('strong', {}, `${outPct}% egress`),
-        el('span', { class: 'muted' }, ' — replies may arrive on a different path.')));
-    } else if (ratio !== null) {
-      const inPct = Math.round(ratio * 100);
-      kids.push(el('div', { class: 'flowbidi-asym ok' },
-        `Symmetric traffic: ${inPct}% ingress / ${100 - inPct}% egress.`));
+    if (data.scans && data.scans.length) {
+      kids.push(el('details', { class: 'sec scan-sec', open: true },
+        el('summary', {}, '⚠ Possible scans / fan-out ', el('span', { class: 'muted' }, '· one source against many ports/hosts')),
+        el('table', {},
+          el('thead', {}, el('tr', {}, ...['Source', 'Type', 'Ports', 'Hosts', 'Bytes', 'Flows'].map((h) => el('th', {}, h)))),
+          el('tbody', {}, ...data.scans.map((s) => el('tr', {},
+            el('td', {}, esc(s.srcIp)),
+            el('td', {}, el('span', { class: `badge ${s.kind === 'port-scan' ? 'offline' : 'warn'}` }, s.kind === 'port-scan' ? 'PORT-SCAN' : 'FAN-OUT')),
+            el('td', { class: 'num bad-text' }, String(s.distinctPorts)),
+            el('td', { class: 'num' }, String(s.distinctHosts)),
+            el('td', { class: 'num' }, fmtBytes(s.bytes)),
+            el('td', { class: 'num muted' }, String(s.flowCount))))))));
     }
+    if (data.series && data.series.length >= 2) {
+      const pts = data.series.map((s) => ({ t: new Date(s.at).getTime(), y: s.bytes }));
+      kids.push(el('div', { class: 'overview-chart' },
+        historyChart([{ id: 'b', label: 'Bytes', color: '#06b6d4', points: pts }],
+          { fromMs: pts[0].t, toMs: pts[pts.length - 1].t, band: robustBand(pts), markers })));
+    }
+    kids.push(el('h4', {}, 'Top talkers'));
+    if (!data.topTalkers.length) kids.push(el('div', { class: 'empty' }, 'No flows in the window — requires NetFlow/sFlow + geo-pipeline.'));
+    else kids.push(el('table', {},
+      el('thead', {}, el('tr', {}, ...['Source', 'Destination', 'Org/Country', 'Bytes', 'Packets', 'Flows'].map((h) => el('th', {}, h)))),
+      el('tbody', {}, ...data.topTalkers.map((t) => el('tr', { class: 'fleet-row', onclick: () => { peerInput.value = talkerPeer(t) || ''; refresh(); } },
+        el('td', {}, esc(t.srcIp || '–')),
+        el('td', {}, esc(t.dstIp || t.extIp || '–')),
+        el('td', {}, t.internal ? el('span', { class: 'badge grace' }, 'internal') : el('span', { class: 'muted' }, [t.asnName, t.country].filter(Boolean).join(' · ') || '–')),
+        el('td', { class: 'num' }, fmtBytes(t.bytes)),
+        el('td', { class: 'num muted' }, String(t.packets)),
+        el('td', { class: 'num muted' }, String(t.flowCount)))))));
 
-    // Two-column layout: ingress left, egress right.
-    kids.push(el('div', { class: 'flowbidi-cols' },
-      dirSection('↓ Ingress', '#06b6d4', data.ingress, fromMs, toMs, markers),
-      dirSection('↑ Egress', '#10b981', data.egress, fromMs, toMs, markers)));
+    const portTable = el('table', {},
+      el('thead', {}, el('tr', {}, ...['Port', 'Proto', 'Bytes', 'Flows'].map((h) => el('th', {}, h)))),
+      el('tbody', {}, ...(data.byPort.length ? data.byPort.map((p) => el('tr', {},
+        el('td', {}, String(p.port)), el('td', { class: 'muted' }, p.proto || '–'),
+        el('td', { class: 'num' }, fmtBytes(p.bytes)), el('td', { class: 'num muted' }, String(p.flowCount))))
+        : [el('tr', {}, el('td', { class: 'muted' }, '–'))])));
+    const protoTable = el('table', {},
+      el('thead', {}, el('tr', {}, ...['Protocol', 'Bytes', 'Flows'].map((h) => el('th', {}, h)))),
+      el('tbody', {}, ...(data.byProto.length ? data.byProto.map((p) => el('tr', {},
+        el('td', {}, p.proto || '–'),
+        el('td', { class: 'num' }, fmtBytes(p.bytes)),
+        el('td', { class: 'num muted' }, String(p.flowCount))))
+        : [el('tr', {}, el('td', { class: 'muted' }, '–'))])));
+    kids.push(el('div', { class: 'flows-tables' },
+      el('div', {}, el('h4', {}, 'Top ports'), portTable),
+      el('div', {}, el('h4', {}, 'Protocols'), protoTable)));
 
     host.replaceChildren(...kids);
   }
 
-  runBtn.addEventListener('click', load);
-  agentSel.addEventListener('change', () => { load(); });
-  await load();
+  runBtn.addEventListener('click', refresh);
+  agentSel.addEventListener('change', refresh);
+  await refresh();
   return root;
 };
 

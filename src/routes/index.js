@@ -279,7 +279,7 @@ function createApiRouter({
   // endpoints under /enroll; the authenticated command generator under /api.
   if (artifactStore || agentSourceStore || releaseStore) {
     router.use('/enroll', createEnrollRouter({ artifactStore, sourceStore: agentSourceStore, binaryStore: agentBinaryStore, releaseStore, releasePublicKey, enrollmentCodesRepo, enrollConfig }));
-    router.use('/api/enroll', createEnrollCommandRouter({ enrollmentCodesRepo, artifactStore, sourceStore: agentSourceStore, enrollConfig, releaseKeyService }));
+    router.use('/api/enroll', createEnrollCommandRouter({ enrollmentCodesRepo, artifactStore, sourceStore: agentSourceStore, enrollConfig, releaseKeyService, defaultTtlMinutes: enrollConfig.defaultTtlMinutes }));
   }
 
   // Three routers share the /agents prefix, each with its own auth model:

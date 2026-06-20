@@ -26,8 +26,8 @@ function createAuditLogger({ auditRepo, logger = null } = {}) {
   }
 
   function clientIp(req) {
-    const xff = req.headers && req.headers['x-forwarded-for'];
-    if (typeof xff === 'string' && xff.length) return xff.split(',')[0].trim().slice(0, 64);
+    // Use req.ip (Express, respects app trust-proxy setting) so raw
+    // X-Forwarded-For headers can't be spoofed when TRUST_PROXY=false.
     return (req.ip || (req.socket && req.socket.remoteAddress) || '').slice(0, 64) || null;
   }
 

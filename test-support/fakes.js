@@ -13,7 +13,7 @@ const { createSecretBox } = require('../src/lib/secretBox');
 const { createConnectorRegistry } = require('../src/integrations/connectors');
 const { createPlanService } = require('../src/license/planService');
 const { createUsageService } = require('../src/services/usageService');
-const { createAuditLogger } = require('../src/services/auditLogger');
+const { createAuditLogger } = require('../src/services/complianceLogger');
 
 // ---- Repositories ---------------------------------------------------------
 

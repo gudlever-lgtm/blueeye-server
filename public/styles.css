@@ -519,7 +519,7 @@ main#view:has(.fleet) { max-width: 1320px; }
 .pg-stat .k { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
 .pg-stat .v { font-weight: 600; }
 .geo-pathpick { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 0 10px; }
-.geo-pathpick select { max-width: 220px; }
+.geo-pathpick select, .geo-pathpick input[type=text] { max-width: 220px; }
 .geo-path-stops { list-style: none; margin: 6px 0 0; padding: 0; }
 .geo-path-stops li { padding: 3px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
 .geo-path-stops li:last-child { border-bottom: 0; }

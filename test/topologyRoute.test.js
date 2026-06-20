@@ -7,7 +7,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const request = require('supertest');
 
-const { makeApp, makeFlowsRepo, makeAgentsRepo, authHeader } = require('../test-support/fakes');
+const { makeApp, makeFlowsRepo, makeAgentsRepo, makeLocationsRepo, authHeader } = require('../test-support/fakes');
 
 const sampleEdges = [
   { srcIp: '10.0.0.5', dstIp: '8.8.8.8', extIp: '8.8.8.8', asn: 15169, asnName: 'GOOGLE', country: 'US', bytes: 9000, packets: 90, flowCount: 9 },
@@ -44,4 +44,26 @@ test('GET /api/topology scopes to one agent when agentId is valid', async () => 
   assert.equal(res.status, 200);
   assert.equal(receivedAgentId, 7);
   assert.equal(res.body.agentId, 7);
+});
+
+test('GET /api/topology validates locationId', async () => {
+  const flowsRepo = makeFlowsRepo({ topologyEdges: async () => [] });
+  const app = makeApp({ flowsRepo });
+  assert.equal((await request(app).get('/api/topology?locationId=abc').set('Authorization', authHeader('viewer'))).status, 400);
+});
+
+test('GET /api/topology 404s an unknown location', async () => {
+  const flowsRepo = makeFlowsRepo({ topologyEdges: async () => [] });
+  const app = makeApp({ flowsRepo, locationsRepo: makeLocationsRepo({ findById: async () => null }) });
+  assert.equal((await request(app).get('/api/topology?locationId=999').set('Authorization', authHeader('viewer'))).status, 404);
+});
+
+test('GET /api/topology scopes to a location when locationId is valid', async () => {
+  let receivedLocationId = 'unset';
+  const flowsRepo = makeFlowsRepo({ topologyEdges: async ({ locationId }) => { receivedLocationId = locationId; return sampleEdges; } });
+  const app = makeApp({ flowsRepo, locationsRepo: makeLocationsRepo({ findById: async (id) => ({ id, name: 'Test Site' }) }) });
+  const res = await request(app).get('/api/topology?locationId=3').set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 200);
+  assert.equal(receivedLocationId, 3);
+  assert.equal(res.body.locationId, 3);
 });

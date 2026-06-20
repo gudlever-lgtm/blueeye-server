@@ -525,8 +525,8 @@ const PAGE_INFO = {
     ],
   },
   screening: {
-    hero: 'Test area — one place to verify every outbound integration: send a test email, reach your ITSM/IPAM receivers, check SSO and the other services BlueEye talks to — each with a security check.',
-    title: 'Test area — connectivity & security screening',
+    hero: 'Test Settings — one place to verify every outbound integration: send a test email, reach your ITSM/IPAM receivers, check SSO and the other services BlueEye talks to — each with a security check.',
+    title: 'Test Settings — connectivity & security screening',
     body: () => [
       el('p', {}, 'A consolidated, admin-only screening of everything BlueEye reaches OUTWARD to. Each target gets two verdicts: a live connectivity test and a security-posture check (HTTPS vs plaintext, TLS, signed webhooks, authentication, certificate/secret presence, licence state).'),
       el('div', { class: 'callout' },
@@ -918,7 +918,7 @@ views.screening = async () => {
 
   const runAllBtn = el('button', {}, 'Run full screening');
   root.append(el('div', { class: 'section-head' },
-    el('h2', {}, 'Test area'),
+    el('h2', {}, 'Test Settings'),
     el('span', { class: 'spacer' }),
     runAllBtn));
 
@@ -6138,7 +6138,7 @@ const SETTINGS_GROUPS = [
   ['Access & security', [['users', 'Users', true], ['auth', 'Authentication', true], ['apitokens', 'API tokens', true], ['agentkey', 'Agent key', true]]],
   ['Detection & alerts', [['analyse', 'Analysis', true], ['alerting', 'Alerting', true], ['integrations', 'Integrations', true], ['maintenance', 'Maintenance', true]]],
   ['Data', [['retention', 'Retention', true], ['types', 'Traffic types', true], ['map', 'Map', true]]],
-  ['System', [['updates', 'Updates', true], ['agents', 'Agents', true]]],
+  ['System', [['updates', 'Updates', true], ['agents', 'Agents', true], ['screening', 'Test Settings', true]]],
   ['Personal', [['appearance', 'Appearance', false], ['license', 'License', false]]],
 ];
 views.settings = async () => {
@@ -6174,6 +6174,7 @@ views.settings = async () => {
     retention: settingsRetentionView,
     auth: settingsAuthView,
     apitokens: settingsApiTokensView,
+    screening: () => views.screening(),
   };
   let content;
   try {

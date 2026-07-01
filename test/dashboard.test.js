@@ -96,3 +96,17 @@ test('dashboard offers selectable colour themes saved per user', async () => {
   assert.match(css, /\[data-theme="solarized-dark"\]/);
   assert.match(css, /\.theme-grid/); // picker styling
 });
+
+test('topology view renders a force-directed diagram alongside the tables', async () => {
+  const app = makeApp();
+  const js = (await request(app).get('/app.js')).text;
+  assert.match(js, /function topoForceLayout/); // Fruchterman-Reingold layout, no external graph library
+  assert.match(js, /function topoGraphSvg/); // renders nodes/edges from GET \/api\/topology as SVG
+  assert.match(js, /GRAPH_MAX_NODES/); // diagram is capped to the busiest hosts for legibility
+  assert.match(js, /topoGraphSvg\(graphNodes, graphEdges/); // wired into views.topology
+
+  const css = (await request(app).get('/styles.css')).text;
+  assert.match(css, /\.topo-graph /); // diagram container + node/edge styling
+  assert.match(css, /\.topo-node\.internal circle/);
+  assert.match(css, /\.topo-node\.external circle/);
+});

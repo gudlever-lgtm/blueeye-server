@@ -38,5 +38,19 @@ addresses, ports, ASNs, byte/flow counts, never payload.
 
 `minutes` defaults to 60 (max 7 days). `agentId` scopes to one agent (400 invalid /
 404 unknown). Surfaced in the dashboard **Topology** view (Diagnostics group): a
-summary + the top dependencies and busiest hosts. A node/edge force-graph
-rendering is a natural UI follow-up on top of this payload.
+summary, a **Diagram**, and the top-dependencies/busiest-hosts tables.
+
+## Diagram
+
+`topoGraphSvg` (`public/app.js`) renders the same `nodes`/`edges` payload as a
+force-directed graph — no charting library, just hand-rolled SVG (mirrors the
+traceroute **path graph** in style). `topoForceLayout` runs a fixed-iteration
+Fruchterman-Reingold simulation (nodes repel, edges pull their endpoints
+together, cooled over 200 steps) starting from a deterministic circular layout,
+so the diagram doesn't jump around between refreshes.
+
+Circle radius is traffic volume (log-scaled), ring colour is internal (green) vs
+external (amber), line width is bytes on that edge. Clicking a host highlights
+its neighbourhood and opens a detail panel with Ping/Vis rute actions, same as a
+table row. The diagram is capped to the 40 busiest hosts (and edges between
+them) for legibility — the tables below still cover the full (API-capped) list.

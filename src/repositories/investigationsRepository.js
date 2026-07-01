@@ -56,8 +56,12 @@ function createInvestigationsRepository(db) {
       [
         id,
         JSON.stringify(inv.locationRef),
-        inv.window.from,
-        inv.window.to,
+        // window.from/to arrive as ISO strings (locator's public shape). mysql2
+        // needs a Date object for DATETIME columns — a raw ISO string's trailing
+        // 'Z'/milliseconds fails MySQL's strict-mode datetime parser, matching
+        // the convention used by findings.js / probeFindings.js.
+        new Date(inv.window.from),
+        new Date(inv.window.to),
         inv.classification,
         Number.isFinite(inv.confidence) ? inv.confidence : 0,
         inv.explanation,

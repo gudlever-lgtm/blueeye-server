@@ -265,6 +265,7 @@ function createApiRouter({
       assistant: assistant || null,
       incidentsRepo: incidentsRepo || null,
       nis2IncidentsRepo: nis2IncidentsRepo || null,
+      logger,
     }));
   }
   if (testPackagesRepo) router.use('/api/test-packages', createTestPackagesRouter({ repo: testPackagesRepo, runner: testPackageRunner, usageService }));

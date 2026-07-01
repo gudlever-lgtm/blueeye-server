@@ -4,6 +4,7 @@ const express = require('express');
 const { asyncHandler } = require('../middleware/asyncHandler');
 const { requireAuth, requireRole } = require('../auth/middleware');
 const { ROLES } = require('../auth/roles');
+const { silentLogger } = require('../logger');
 
 // Lokationsdrevet investigation-API. Monteret på /api/investigation.
 // RBAC:
@@ -17,6 +18,7 @@ function createInvestigationRouter({
   assistant = null,
   incidentsRepo = null,
   nis2IncidentsRepo = null,
+  logger = silentLogger,
 }) {
   const router = express.Router();
 
@@ -108,8 +110,9 @@ function createInvestigationRouter({
 
       try {
         await investigationsRepo.save(result);
-      } catch {
+      } catch (err) {
         // Persistence failure must not suppress the result.
+        logger.warn(`investigation: save(${result.id}) failed (${err.message})`);
       }
 
       res.json({ ...result, ...nis2 });
@@ -161,8 +164,9 @@ function createInvestigationRouter({
 
       try {
         await investigationsRepo.save(result);
-      } catch {
+      } catch (err) {
         // Persistence failure must not suppress the result.
+        logger.warn(`investigation: save(${result.id}) failed (${err.message})`);
       }
 
       res.json({ incidentId, investigation: { ...result, ...nis2 } });

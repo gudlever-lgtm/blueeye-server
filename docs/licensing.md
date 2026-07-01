@@ -150,6 +150,36 @@ and the `LICENSE_PUBLIC_KEY`, then the manager validates every 6 hours (or press
 - The catalogue itself (limits, features, prices) is edited in
   `src/license/plans.js`; re-running migration `023` re-seeds `license_plans`.
 
+## The public key trust anchor
+
+`src/license/publicKey.js` embeds the Ed25519 public key used to verify every
+proof (online or offline) — this repo being public does not weaken it, since a
+public key is not secret. What *would* weaken it is letting the same operator
+who runs the server also choose which public key gets trusted: they could then
+point verification at a key of their own and self-sign an arbitrary license,
+entirely without touching the tracked source.
+
+So `LICENSE_PUBLIC_KEY` (env override, handy for dev/tests) is only honoured in
+production when `TRUST_ANCHOR_OVERRIDE_ACK=i-accept-the-risk` is also set (see
+`src/license/trustAnchorGuard.js`); otherwise production always falls back to
+the embedded constant, and the blocked override is logged loudly at boot. **For
+a real production install, embed the real key directly in `publicKey.js`**
+instead of relying on the env var. `scripts/dev-bootstrap.js` sets the ack flag
+because it generates a fresh, self-consistent key pair for the local demo
+stack — that's the one legitimate case for it.
+
+The same reasoning does **not** apply to `AGENT_RELEASE_PUBLIC_KEY`
+(`src/license/releaseKey.js`): that trust anchor asserts "this server approved
+these agent updates," which the server's own operator is expected to control
+(see the managed key in `src/enroll/releaseKeyService.js`), so there's no
+equivalent env override to guard there.
+
+Relatedly, `LICENSE_GRACE_DAYS` (max 30) and `LICENSE_VALIDATE_INTERVAL_HOURS`
+(max 24) are clamped in `src/config.js` — an operator can shorten them but not
+extend them past the cap, so periodic re-validation can't be defeated by
+setting an extreme grace period once and then never letting the server reach
+the license server (or re-read the offline file) again.
+
 ## Offline license (implemented)
 
 The server can validate a **local signed license file** entirely on-box, with no

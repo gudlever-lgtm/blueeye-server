@@ -77,8 +77,13 @@ Edit `.env`:
 - `LICENSE_SERVER_ID` — a stable id for this server (bound to the licence on
   first validation; afterwards the proof must match it).
 - `LICENSE_SERVER_URL` — the licens server, e.g. `http://<licens-host>:4000`.
-- `LICENSE_PUBLIC_KEY` — the public key from step 1 (PEM or base64-of-PEM).
-  Alternatively embed it in `src/license/publicKey.js`.
+- The public key from step 1 (PEM or base64-of-PEM) — **for production, embed
+  it in `src/license/publicKey.js`** (it's not secret, so committing it is
+  fine). `LICENSE_PUBLIC_KEY` in `.env` also works, but is ignored in
+  production unless `TRUST_ANCHOR_OVERRIDE_ACK` is set too — that env var is
+  set by the same operator the license is meant to constrain, so relying on it
+  in production would let them point verification at a key of their own. See
+  `docs/licensing.md`.
 
 ```bash
 #  CREATE DATABASE blueeye CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;

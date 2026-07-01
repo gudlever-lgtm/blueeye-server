@@ -108,8 +108,12 @@ This compose is a **demo**. For production:
 
 - Remove the demo seeds (`SEED_DEMO=0`) and create real customers/licenses via the
   license API; set `LICENSE_KEY` to the issued key and a real `LICENSE_SERVER_ID`.
-- Keep `LICENSE_SIGNING_KEY` only on the license server; embed the public key in
-  blueeye-server (`src/license/publicKey.js` or `LICENSE_PUBLIC_KEY`).
+- Keep `LICENSE_SIGNING_KEY` only on the license server; embed the matching
+  public key in blueeye-server's `src/license/publicKey.js` (preferred for
+  production — public keys aren't secret, so committing the real one is safe).
+  `LICENSE_PUBLIC_KEY` + `TRUST_ANCHOR_OVERRIDE_ACK` also work but are meant
+  for dev/demo (see `docs/licensing.md`): in production, whoever can set env
+  vars on the box could otherwise redirect verification to a key of their own.
 - Set strong `JWT_SECRET`s and admin passwords; the server refuses to start in
   production with the default JWT secret.
 - The agent normally runs on customer machines (not in this compose).

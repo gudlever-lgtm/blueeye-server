@@ -93,6 +93,12 @@ services:
       # "licens" profile). The server tolerates outages up to LICENSE_GRACE_DAYS.
       LICENSE_SERVER_URL: ${LICENSE_SERVER_URL:-http://licens:4000}
       LICENSE_PUBLIC_KEY: ${LICENSE_PUBLIC_KEY}
+      # Only needed to make LICENSE_PUBLIC_KEY above take effect (NODE_ENV is
+      # production in this stack). scripts/dev-bootstrap.js sets this for the
+      # disposable local demo key pair. A real production install should embed
+      # the vendor's public key in src/license/publicKey.js instead and leave
+      # this unset — see docs/licensing.md.
+      TRUST_ANCHOR_OVERRIDE_ACK: ${TRUST_ANCHOR_OVERRIDE_ACK:-}
       LICENSE_CACHE_PATH: /data/license-cache.json
       # Demo enrollment seeding is OFF by default; scripts/dev-bootstrap.js sets
       # SEED_DEMO=1 in .env for the turnkey demo. Never enable in production.

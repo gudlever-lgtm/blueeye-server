@@ -121,6 +121,27 @@ function start() {
     process.exit(1);
   }
 
+  // License trust anchor: in production, LICENSE_PUBLIC_KEY is only honoured
+  // alongside TRUST_ANCHOR_OVERRIDE_ACK (see src/license/trustAnchorGuard.js) —
+  // otherwise the same operator the license is meant to constrain could point
+  // verification at a public key of their own and self-sign an unlimited
+  // license. Neither case is fatal (the server always boots), but both are
+  // loud: a blocked override usually means the operator forgot the embedded
+  // key belongs in src/license/publicKey.js, not .env.
+  if (config.license.publicKeySource === 'blocked') {
+    logger.warn(
+      'License: LICENSE_PUBLIC_KEY is set but ignored in production (no ' +
+        'TRUST_ANCHOR_OVERRIDE_ACK) — verifying against the embedded key in ' +
+        'src/license/publicKey.js instead. Set the real key there for production installs.'
+    );
+  } else if (config.license.publicKeySource === 'env' && config.env === 'production') {
+    logger.warn(
+      'License: verifying against LICENSE_PUBLIC_KEY from the environment ' +
+        '(TRUST_ANCHOR_OVERRIDE_ACK set) instead of the embedded key — only ' +
+        'expected for a demo/test install.'
+    );
+  }
+
   const db = createDb(config);
   const locationsRepo = createLocationsRepository(db);
   const usersRepo = createUsersRepository(db);

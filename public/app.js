@@ -3469,7 +3469,7 @@ views.topology = async () => {
 
   const [agentList, locations] = await Promise.all([
     api('/agents').catch(() => []),
-    api('/api/locations').catch(() => []),
+    api('/locations').catch(() => []),
   ]);
   const onlineAgents = agentList.filter((a) => a.status === 'online');
 

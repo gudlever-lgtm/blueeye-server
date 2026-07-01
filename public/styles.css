@@ -528,6 +528,22 @@ main#view:has(.fleet) { max-width: 1320px; }
 .pg-map .leaflet-popup-content { font: inherit; }
 .pg-pop strong { display: block; margin-bottom: 3px; }
 
+/* ---- Topology diagram: force-directed dependency graph -------------------- */
+.topo-graph { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-lg);
+  padding: 12px 14px; margin: 4px 0 12px; box-shadow: var(--shadow); }
+.topo-graph svg { display: block; width: 100%; height: auto; font-family: inherit; }
+.topo-link { stroke: var(--border); opacity: .55; transition: opacity .12s, stroke .12s; }
+.topo-graph.has-selection .topo-link:not(.active) { opacity: .12; }
+.topo-graph.has-selection .topo-link.active { stroke: var(--accent); opacity: .9; }
+.topo-node { cursor: pointer; }
+.topo-node circle { fill: var(--panel-2); stroke-width: 2; transition: opacity .12s, stroke-width .12s; }
+.topo-node.internal circle { stroke: var(--ok); }
+.topo-node.external circle { stroke: var(--warn); }
+.topo-node text { fill: var(--muted); font-size: 10px; text-anchor: middle; }
+.topo-node:hover circle, .topo-node:focus circle, .topo-node.selected circle { stroke-width: 3.5; }
+.topo-node:focus { outline: none; }
+.topo-graph.has-selection .topo-node:not(.active) { opacity: .25; }
+
 /* NICs view: firmware-drift card + inventory list. */
 .nics-summary { margin: 0 0 14px; }
 .nic-card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; margin: 0 0 16px; }

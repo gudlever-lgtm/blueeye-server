@@ -521,6 +521,7 @@ const PAGE_INFO = {
     title: 'Topology — flow-derived dependencies',
     body: () => [
       el('p', {}, 'Aggregates observed src→dst conversations into a directed, byte-weighted graph: each edge is a dependency, each node a host or external peer. Complements ', viewLink('flows', 'Flows'), ' (raw conversations) and the per-target path map — this is the service/host dependency view. Metadata only: addresses, ports, ASNs and byte/flow counts, never payload.'),
+      el('p', {}, 'The ', el('strong', {}, 'Diagram'), ' draws the busiest hosts as a force-directed graph — circle size is traffic volume, line width is bytes between two hosts, green rings mark internal (RFC1918) hosts and amber rings mark external peers. Click a host to highlight its neighbourhood and open Ping/Vis rute for it, same as a table row.'),
       el('p', {}, 'Use the ', el('strong', {}, 'Site'), ' filter to scope the graph to one location and reduce noise. Use the ', el('strong', {}, 'Window'), ' selector to widen or narrow the time range covered.'),
       el('p', { class: 'muted' }, 'Only agents whose traffic source is NetFlow or sFlow contribute flow records; the heaviest dependencies/hosts are shown when the graph is large.'),
     ],
@@ -3456,6 +3457,154 @@ function pageloadWaterfall(r) {
     el('tbody', {}, ...els.map(row)));
 }
 
+// Force-directed layout for the topology diagram (Fruchterman-Reingold): nodes
+// repel each other, edges pull their endpoints together, cooled over a fixed
+// number of iterations. Pure geometry — no physics/graph library. Deterministic
+// (initial placement is index-based, not random) so the diagram doesn't jump
+// around on every refresh. Fine for the capped node/edge counts this feeds on.
+function topoForceLayout(nodes, edges, width, height) {
+  const pos = new Map();
+  const n = Math.max(1, nodes.length);
+  nodes.forEach((node, i) => {
+    const angle = (i / n) * Math.PI * 2;
+    const r = Math.min(width, height) / 2.6;
+    pos.set(node.id, { x: width / 2 + r * Math.cos(angle), y: height / 2 + r * Math.sin(angle) });
+  });
+  if (nodes.length <= 1) return pos;
+
+  const k = Math.sqrt((width * height) / n); // ideal edge length
+  const disp = new Map();
+  let temp = width / 10;
+  const iterations = 200;
+  for (let iter = 0; iter < iterations; iter += 1) {
+    nodes.forEach((node) => disp.set(node.id, { x: 0, y: 0 }));
+    for (let i = 0; i < nodes.length; i += 1) {
+      for (let j = i + 1; j < nodes.length; j += 1) {
+        const pa = pos.get(nodes[i].id), pb = pos.get(nodes[j].id);
+        let dx = pa.x - pb.x, dy = pa.y - pb.y;
+        const dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
+        const force = (k * k) / dist;
+        dx = (dx / dist) * force; dy = (dy / dist) * force;
+        const da = disp.get(nodes[i].id); da.x += dx; da.y += dy;
+        const db = disp.get(nodes[j].id); db.x -= dx; db.y -= dy;
+      }
+    }
+    edges.forEach((e) => {
+      const pa = pos.get(e.from), pb = pos.get(e.to);
+      if (!pa || !pb) return;
+      let dx = pa.x - pb.x, dy = pa.y - pb.y;
+      const dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
+      const force = (dist * dist) / k;
+      dx = (dx / dist) * force; dy = (dy / dist) * force;
+      const da = disp.get(e.from); da.x -= dx; da.y -= dy;
+      const db = disp.get(e.to); db.x += dx; db.y += dy;
+    });
+    nodes.forEach((node) => {
+      const d = disp.get(node.id);
+      const dist = Math.sqrt(d.x * d.x + d.y * d.y) || 0.01;
+      const p = pos.get(node.id);
+      // Bottom/side margins leave room for the node's radius and its text
+      // label (drawn below the circle) so neither gets clipped by the SVG edge.
+      p.x = Math.min(width - 30, Math.max(30, p.x + (d.x / dist) * Math.min(dist, temp)));
+      p.y = Math.min(height - 46, Math.max(24, p.y + (d.y / dist) * Math.min(dist, temp)));
+    });
+    temp *= 0.96;
+  }
+  return pos;
+}
+
+// Renders the topology diagram: nodes sized by traffic volume and coloured by
+// kind (internal/external), edges weighted by bytes. Click a node to highlight
+// its neighbourhood and open a detail panel (reuses the pathGraph pg-panel
+// styling) with Ping/Vis rute actions, same as the table rows below it.
+function topoGraphSvg(nodes, edges, { label, kindBadge, actionBtns } = {}) {
+  const ns = 'http://www.w3.org/2000/svg';
+  const mk = (tag, attrs = {}, ...kids) => {
+    const e = document.createElementNS(ns, tag);
+    for (const [a, v] of Object.entries(attrs)) if (v != null) e.setAttribute(a, v);
+    for (const kid of kids) if (kid != null) e.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
+    return e;
+  };
+  const W = 760, H = 480;
+  const pos = topoForceLayout(nodes, edges, W, H);
+
+  const maxBytes = Math.max(1, ...nodes.map((n) => n.bytes || 0));
+  const radiusOf = (n) => 6 + Math.round((Math.log2(1 + (n.bytes || 0)) / Math.log2(1 + maxBytes)) * 16);
+  const maxEdgeBytes = Math.max(1, ...edges.map((e) => e.bytes || 0));
+  const widthOf = (e) => 1 + (Math.log2(1 + (e.bytes || 0)) / Math.log2(1 + maxEdgeBytes)) * 5;
+
+  const panel = el('div', { class: 'pg-panel' }, el('div', { class: 'muted' }, 'Click a host to see its details and run a live check.'));
+  const svg = mk('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': 'Topology diagram' });
+  const wrap = el('div', { class: 'topo-graph' }, svg, panel);
+
+  const nodeGroups = new Map();
+  const edgeLines = [];
+  const neighbours = new Map(); // id -> Set of connected node ids
+  nodes.forEach((n) => neighbours.set(n.id, new Set()));
+  edges.forEach((e) => {
+    if (neighbours.has(e.from)) neighbours.get(e.from).add(e.to);
+    if (neighbours.has(e.to)) neighbours.get(e.to).add(e.from);
+  });
+
+  function clearSelection() {
+    wrap.classList.remove('has-selection');
+    nodeGroups.forEach((g) => g.classList.remove('active', 'selected'));
+    edgeLines.forEach((l) => l.el.classList.remove('active'));
+    panel.replaceChildren(el('div', { class: 'muted' }, 'Click a host to see its details and run a live check.'));
+  }
+
+  function selectNode(n) {
+    wrap.classList.add('has-selection');
+    const near = neighbours.get(n.id) || new Set();
+    nodeGroups.forEach((g, id) => g.classList.toggle('active', id === n.id || near.has(id)));
+    nodeGroups.get(n.id).classList.add('selected');
+    edgeLines.forEach((l) => l.el.classList.toggle('active', l.from === n.id || l.to === n.id));
+
+    const rows = [
+      el('div', { class: 'pg-stat' }, el('span', { class: 'k' }, 'Peers'), el('span', { class: 'v' }, String(n.degree))),
+      el('div', { class: 'pg-stat' }, el('span', { class: 'k' }, 'In'), el('span', { class: 'v' }, fmtBytes(n.bytesIn))),
+      el('div', { class: 'pg-stat' }, el('span', { class: 'k' }, 'Out'), el('span', { class: 'v' }, fmtBytes(n.bytesOut))),
+    ];
+    const peerInfo = label(n.id) === n.id ? null : el('span', { class: 'mono' }, label(n.id));
+    panel.replaceChildren(
+      ...[el('div', { class: 'pg-panel-head' }, kindBadge(n.kind), el('strong', {}, n.id), peerInfo),
+        el('div', { class: 'pg-stats' }, ...rows),
+        actionBtns ? actionBtns(n.id) : null].filter(Boolean));
+  }
+
+  edges.forEach((e) => {
+    const pa = pos.get(e.from), pb = pos.get(e.to);
+    if (!pa || !pb) return;
+    const line = mk('line', { class: 'topo-link', x1: pa.x, y1: pa.y, x2: pb.x, y2: pb.y, 'stroke-width': widthOf(e).toFixed(1) });
+    svg.append(line);
+    edgeLines.push({ from: e.from, to: e.to, el: line });
+  });
+
+  nodes.forEach((n) => {
+    const p = pos.get(n.id);
+    if (!p) return;
+    const r = radiusOf(n);
+    const short = n.kind === 'external' && n.asnName ? n.asnName : n.id;
+    const g = mk('g', { class: `topo-node ${n.kind}`, tabindex: '0', role: 'button', 'aria-label': `${n.id} ${n.kind}` },
+      mk('circle', { cx: p.x, cy: p.y, r }),
+      mk('text', { x: p.x, y: p.y + r + 12, 'text-anchor': 'middle' }, short.length > 16 ? `${short.slice(0, 15)}…` : short),
+      mk('title', {}, `${label(n.id)}\n${n.kind} · ${fmtBytes(n.bytes)} · ${n.degree} peer${n.degree === 1 ? '' : 's'}`));
+    g.addEventListener('click', () => selectNode(n));
+    g.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); selectNode(n); } });
+    svg.append(g);
+    nodeGroups.set(n.id, g);
+  });
+
+  svg.addEventListener('click', (ev) => { if (ev.target === svg) clearSelection(); });
+
+  const legend = el('div', { class: 'pg-legend' },
+    el('span', { class: 'lg' }, el('span', { class: 'pg-dot ok' }), 'Internal host'),
+    el('span', { class: 'lg' }, el('span', { class: 'pg-dot warn' }), 'External peer'),
+    el('span', { class: 'lg muted' }, 'Circle size = traffic · line width = bytes between hosts'));
+
+  return el('div', {}, el('div', { class: 'pg-head' }, legend), wrap);
+}
+
 // Flow-derived dependency / topology map — who-talks-to-whom built from the
 // ingested 5-tuple flows. Internal (RFC1918) hosts vs external peers (with ASN/
 // country). Read-only: a summary + the heaviest dependencies and busiest hosts.
@@ -3501,6 +3650,8 @@ views.topology = async () => {
 
   const summary = el('p', { class: 'muted' });
   root.append(summary);
+  const graphHost = el('div', {});
+  root.append(graphHost);
   const tableHost = el('div', {});
   root.append(tableHost);
 
@@ -3588,6 +3739,7 @@ views.topology = async () => {
     try {
       data = await api(`/api/topology?${qp}`);
     } catch (e) {
+      graphHost.replaceChildren();
       tableHost.replaceChildren(el('div', { class: 'error' }, errText(e)));
       summary.textContent = '';
       return;
@@ -3597,12 +3749,28 @@ views.topology = async () => {
     summary.textContent = `${t.nodes} hosts (${t.internal} internal, ${t.external} external) · ${t.edges} dependencies${data.truncated ? ' · showing the heaviest' : ''}`;
 
     if (!data.edges || !data.edges.length) {
+      graphHost.replaceChildren();
       tableHost.replaceChildren(el('div', { class: 'empty' }, 'No flow data in this window. Topology is built from agents whose traffic source is NetFlow or sFlow.'));
       return;
     }
 
     Object.keys(byId).forEach((k) => delete byId[k]);
     (data.nodes || []).forEach((n) => { byId[n.id] = n; });
+
+    // Diagram: capped to the busiest hosts for legibility — the tables below
+    // carry the full (still-capped-by-the-API) list. Both draw from the same
+    // response, so the diagram and the tables always agree.
+    const GRAPH_MAX_NODES = 40;
+    const graphNodes = (data.nodes || []).slice(0, GRAPH_MAX_NODES);
+    const graphIds = new Set(graphNodes.map((n) => n.id));
+    const graphEdges = (data.edges || []).filter((e) => graphIds.has(e.from) && graphIds.has(e.to)).slice(0, 90);
+    const graphNote = graphNodes.length < (data.nodes || []).length
+      ? el('p', { class: 'muted small' }, `Diagram shows the ${graphNodes.length} busiest of ${data.nodes.length} hosts — see the tables below for the full list.`)
+      : null;
+    graphHost.replaceChildren(
+      ...[el('h3', {}, 'Diagram'),
+        topoGraphSvg(graphNodes, graphEdges, { label, kindBadge, actionBtns: onlineAgents.length ? actionBtns : null }),
+        graphNote].filter(Boolean));
 
     tableHost.replaceChildren(
       el('h3', {}, 'Top dependencies'),

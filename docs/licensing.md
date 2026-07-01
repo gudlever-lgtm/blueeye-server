@@ -180,6 +180,17 @@ extend them past the cap, so periodic re-validation can't be defeated by
 setting an extreme grace period once and then never letting the server reach
 the license server (or re-read the offline file) again.
 
+A misconfigured trust anchor (placeholder embedded key, or a blocked
+`LICENSE_PUBLIC_KEY` override) makes every proof fail signature verification
+the exact same way a genuinely bad proof would — `validateOnce()` falls back
+to whatever was last cached and reports `reason: 'invalid_signature'`. Pressing
+"Re-validate now" then keeps returning 200 while silently sitting on stale
+data, which looks like "revalidation doesn't pick up changes made on the
+license server" rather than "verifying against the wrong key". `GET
+/license/status` (and the dashboard's License settings page) surfaces this as
+`publicKeyTrust: { source, configured }` — check that first when a fresh
+license edit isn't showing up after revalidation.
+
 ## Offline license (implemented)
 
 The server can validate a **local signed license file** entirely on-box, with no

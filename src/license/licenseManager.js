@@ -28,6 +28,14 @@ function createLicenseManager({
   now = () => Date.now(),
   logger = silentLogger,
   getAgentCount = () => 0,
+  // Where the trust anchor (`publicKey` above) came from: { source: 'embedded'
+  // | 'env' | 'blocked', configured: boolean }. Purely informational — it never
+  // changes verification — but every rejection surfaced through getStatus()
+  // looks identical ('invalid_signature') whether the licens server sent a bad
+  // proof or this server is verifying against the wrong key entirely, so this
+  // is included in getStatus() to let the dashboard tell the two apart instead
+  // of an admin silently staring at stale data after every "Re-validate now".
+  keyTrust = { source: 'embedded', configured: true },
 }) {
   const graceMs = (config.graceDays ?? 14) * DAY_MS;
   // A freshly fetched proof is signed in direct response to THIS request, so its
@@ -256,6 +264,7 @@ function createLicenseManager({
       verifiedAt: state.verifiedAt ? new Date(state.verifiedAt).toISOString() : null,
       graceUntil: state.verifiedAt ? new Date(state.verifiedAt + graceMs).toISOString() : null,
       lastCheckAt: state.lastCheckAt ? new Date(state.lastCheckAt).toISOString() : null,
+      publicKeyTrust: keyTrust,
     };
   }
 

@@ -206,6 +206,15 @@ function start() {
   let agentWs = null;
   let dashboardWs = null;
   let licenseManager;
+  // Provenance of the configured public key, surfaced through
+  // licenseManager.getStatus().publicKeyTrust so the dashboard can tell "the
+  // licens server denied this" apart from "this server is verifying against
+  // the wrong key" — both look identical (reason: 'invalid_signature') from
+  // inside validateOnce().
+  const keyTrust = {
+    source: config.license.publicKeySource,
+    configured: isConfigured(config.license.publicKey),
+  };
   if (config.license.mode === 'offline') {
     const verifier = createLicenseVerifier({
       publicKey: config.license.publicKey,
@@ -217,6 +226,7 @@ function start() {
       serverId: config.license.serverId,
       recheckHours: config.license.recheckHours,
       logger,
+      keyTrust,
     });
     logger.info(`License mode: offline (file=${config.license.file || 'unset'}).`);
   } else {
@@ -226,6 +236,7 @@ function start() {
       cache: createFileCache(config.license.cachePath),
       logger,
       getAgentCount: () => (agentWs ? agentWs.connectionCount() : 0),
+      keyTrust,
     });
   }
 
@@ -655,7 +666,7 @@ function start() {
     if (!knownWsPaths.has(pathname)) socket.destroy();
   });
 
-  if (!isConfigured(config.license.publicKey)) {
+  if (!keyTrust.configured) {
     logger.warn(
       'License public key is not configured (placeholder) — proofs cannot be verified and agents will not be licensed. See src/license/publicKey.js.'
     );

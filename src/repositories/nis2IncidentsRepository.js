@@ -5,6 +5,17 @@ function toIso(v) {
   return v instanceof Date ? v.toISOString() : new Date(v).toISOString();
 }
 
+// Normalizes a caller-supplied datetime (Date, ISO string with T/Z, etc.) into
+// the 'YYYY-MM-DD HH:MM:SS' form MySQL's DATETIME columns require — callers
+// like the AI NIS2-draft path (src/routes/investigation.js) pass ISO strings
+// straight from Mistral/window.to without going through nis2Validation first.
+function toMysqlDateTime(v) {
+  if (v == null || v === '') return null;
+  const d = v instanceof Date ? v : new Date(v);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toISOString().slice(0, 19).replace('T', ' ');
+}
+
 function mapRow(row) {
   if (!row) return null;
   return {
@@ -81,8 +92,8 @@ function createNis2IncidentsRepository(db) {
           nis2_relevant, notification_required, status, lessons_learned)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
-        ref, input.title, input.severity, input.detectedAt ?? null, input.startedAt ?? null,
-        input.resolvedAt ?? null, input.affectedSystems ?? null, input.businessImpact ?? null,
+        ref, input.title, input.severity, toMysqlDateTime(input.detectedAt), toMysqlDateTime(input.startedAt),
+        toMysqlDateTime(input.resolvedAt), input.affectedSystems ?? null, input.businessImpact ?? null,
         input.rootCause ?? null, input.actionsTaken ?? null, input.nis2Relevant ? 1 : 0,
         input.notificationRequired ? 1 : 0, input.status, input.lessonsLearned ?? null,
       ]
@@ -98,8 +109,8 @@ function createNis2IncidentsRepository(db) {
          nis2_relevant = ?, notification_required = ?, status = ?, lessons_learned = ?
        WHERE id = ?`,
       [
-        input.title, input.severity, input.detectedAt ?? null, input.startedAt ?? null,
-        input.resolvedAt ?? null, input.affectedSystems ?? null, input.businessImpact ?? null,
+        input.title, input.severity, toMysqlDateTime(input.detectedAt), toMysqlDateTime(input.startedAt),
+        toMysqlDateTime(input.resolvedAt), input.affectedSystems ?? null, input.businessImpact ?? null,
         input.rootCause ?? null, input.actionsTaken ?? null, input.nis2Relevant ? 1 : 0,
         input.notificationRequired ? 1 : 0, input.status, input.lessonsLearned ?? null, id,
       ]

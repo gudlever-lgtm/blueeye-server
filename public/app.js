@@ -3503,8 +3503,10 @@ function topoForceLayout(nodes, edges, width, height) {
       const d = disp.get(node.id);
       const dist = Math.sqrt(d.x * d.x + d.y * d.y) || 0.01;
       const p = pos.get(node.id);
-      p.x = Math.min(width - 24, Math.max(24, p.x + (d.x / dist) * Math.min(dist, temp)));
-      p.y = Math.min(height - 24, Math.max(24, p.y + (d.y / dist) * Math.min(dist, temp)));
+      // Bottom/side margins leave room for the node's radius and its text
+      // label (drawn below the circle) so neither gets clipped by the SVG edge.
+      p.x = Math.min(width - 30, Math.max(30, p.x + (d.x / dist) * Math.min(dist, temp)));
+      p.y = Math.min(height - 46, Math.max(24, p.y + (d.y / dist) * Math.min(dist, temp)));
     });
     temp *= 0.96;
   }
@@ -3563,10 +3565,11 @@ function topoGraphSvg(nodes, edges, { label, kindBadge, actionBtns } = {}) {
       el('div', { class: 'pg-stat' }, el('span', { class: 'k' }, 'In'), el('span', { class: 'v' }, fmtBytes(n.bytesIn))),
       el('div', { class: 'pg-stat' }, el('span', { class: 'k' }, 'Out'), el('span', { class: 'v' }, fmtBytes(n.bytesOut))),
     ];
+    const peerInfo = label(n.id) === n.id ? null : el('span', { class: 'mono' }, label(n.id));
     panel.replaceChildren(
-      el('div', { class: 'pg-panel-head' }, kindBadge(n.kind), el('strong', {}, n.id), el('span', { class: 'mono' }, label(n.id) === n.id ? '' : label(n.id))),
-      el('div', { class: 'pg-stats' }, ...rows),
-      actionBtns ? actionBtns(n.id) : null);
+      ...[el('div', { class: 'pg-panel-head' }, kindBadge(n.kind), el('strong', {}, n.id), peerInfo),
+        el('div', { class: 'pg-stats' }, ...rows),
+        actionBtns ? actionBtns(n.id) : null].filter(Boolean));
   }
 
   edges.forEach((e) => {
@@ -3765,9 +3768,9 @@ views.topology = async () => {
       ? el('p', { class: 'muted small' }, `Diagram shows the ${graphNodes.length} busiest of ${data.nodes.length} hosts — see the tables below for the full list.`)
       : null;
     graphHost.replaceChildren(
-      el('h3', {}, 'Diagram'),
-      topoGraphSvg(graphNodes, graphEdges, { label, kindBadge, actionBtns: onlineAgents.length ? actionBtns : null }),
-      graphNote);
+      ...[el('h3', {}, 'Diagram'),
+        topoGraphSvg(graphNodes, graphEdges, { label, kindBadge, actionBtns: onlineAgents.length ? actionBtns : null }),
+        graphNote].filter(Boolean));
 
     tableHost.replaceChildren(
       el('h3', {}, 'Top dependencies'),

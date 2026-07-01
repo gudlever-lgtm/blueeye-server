@@ -43,6 +43,11 @@ LICENS_JWT_SECRET=${rand(48)}
 # License signing key pair (base64 of PEM). Private -> licens, public -> server.
 LICENSE_SIGNING_KEY=${privB64}
 LICENSE_PUBLIC_KEY=${pubB64}
+# Acknowledges overriding the license trust anchor via env in production — safe
+# ONLY here, because this key pair is freshly generated and self-consistent for
+# this disposable local stack. A real production install should instead embed
+# the vendor's public key in src/license/publicKey.js and leave this unset.
+TRUST_ANCHOR_OVERRIDE_ACK=i-accept-the-risk
 
 # Demo license + identifiers (the demo license is seeded into licens with this key)
 LICENSE_KEY=DEMO-DEMO-DEMO-DEMO-DEMO

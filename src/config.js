@@ -5,12 +5,21 @@
 // codebase easy to test and reason about.
 require('dotenv').config();
 const path = require('path');
-const { resolvePublicKey } = require('./license/publicKey');
+const { resolvePublicKey, publicKeySource } = require('./license/publicKey');
 const { normalizeFingerprint } = require('./enroll/fingerprint');
 
 function toInt(value, fallback) {
   const parsed = Number.parseInt(value, 10);
   return Number.isNaN(parsed) ? fallback : parsed;
+}
+
+// Bounds an env-configurable interval so it can't be tuned away to defeat
+// periodic re-validation (e.g. LICENSE_GRACE_DAYS set absurdly high so one
+// long-past successful check keeps the server "licensed" forever while it
+// never contacts the license server again).
+function clampInt(value, fallback, min, max) {
+  const n = toInt(value, fallback);
+  return Math.min(max, Math.max(min, n));
 }
 
 const config = {
@@ -136,9 +145,16 @@ const config = {
     serverId: process.env.LICENSE_SERVER_ID || '',
     serverUrl: process.env.LICENSE_SERVER_URL || '',
     publicKey: resolvePublicKey(),
+    // 'embedded' | 'env' | 'blocked' — logged at boot (server.js); never itself
+    // a trust decision, resolvePublicKey() above is the single source of truth.
+    publicKeySource: publicKeySource(),
     cachePath: process.env.LICENSE_CACHE_PATH || path.join(process.cwd(), '.license-cache.json'),
-    graceDays: toInt(process.env.LICENSE_GRACE_DAYS, 14),
-    intervalHours: toInt(process.env.LICENSE_VALIDATE_INTERVAL_HOURS, 6),
+    // Clamped to [1, 30] days / [1, 24] hours: an operator-set extreme value
+    // (e.g. a multi-year grace period) would let one long-past successful
+    // validation keep the server "licensed" indefinitely without ever having to
+    // reach the license server again — defeating periodic re-validation.
+    graceDays: clampInt(process.env.LICENSE_GRACE_DAYS, 14, 1, 30),
+    intervalHours: clampInt(process.env.LICENSE_VALIDATE_INTERVAL_HOURS, 6, 1, 24),
     // Locally-configured plan for on-prem installs that set the package without a
     // full signed proof (e.g. pilot evaluations). The signed proof's `plan` field
     // always wins when present. Blank → resolved by the plan service (legacy/
@@ -152,7 +168,10 @@ const config = {
     // 'online' (default) or 'offline'. Auto-selects 'offline' when LICENSE_FILE
     // is set; set explicitly to force a mode.
     mode: process.env.LICENSE_MODE || (process.env.LICENSE_FILE ? 'offline' : 'online'),
-    recheckHours: toInt(process.env.LICENSE_VALIDATE_INTERVAL_HOURS, 6),
+    // Same clamp as intervalHours above: bounds how stale an offline license
+    // file re-read can get, so an expired/revoked file is always caught within
+    // a day, not silently ignored for years via an extreme env value.
+    recheckHours: clampInt(process.env.LICENSE_VALIDATE_INTERVAL_HOURS, 6, 1, 24),
   },
   // High-availability deployment (licence feature `ha_deployment`, Enterprise+).
   // OFF by default → a classic single node that runs every singleton job itself.

@@ -50,7 +50,7 @@ const offlineFetch = () => async () => {
   throw new Error('ECONNREFUSED');
 };
 
-function manager({ fetchImpl, cache = createMemoryCache(), now = () => NOW, getAgentCount } = {}) {
+function manager({ fetchImpl, cache = createMemoryCache(), now = () => NOW, getAgentCount, keyTrust } = {}) {
   return createLicenseManager({
     config: { key: 'lk', serverId: 'srv-1', serverUrl: 'http://licens', graceDays: 14, intervalHours: 6 },
     publicKey,
@@ -59,6 +59,7 @@ function manager({ fetchImpl, cache = createMemoryCache(), now = () => NOW, getA
     now,
     logger: silentLogger,
     getAgentCount,
+    keyTrust,
   });
 }
 
@@ -231,6 +232,29 @@ test('a non-200 response falls back to cache + grace (does not hard-reject)', as
 
   assert.equal(m.getStatus().status, 'grace');
   assert.equal(m.isLicensed(), true);
+});
+
+test('getStatus defaults publicKeyTrust to embedded/configured', async () => {
+  const m = manager({ fetchImpl: licensFetch() });
+  await m.validateOnce();
+  assert.deepEqual(m.getStatus().publicKeyTrust, { source: 'embedded', configured: true });
+});
+
+// A blocked/misconfigured trust anchor makes every proof fail signature
+// verification the same way a genuinely bad proof would (reason:
+// 'invalid_signature') — getStatus() must still surface WHY, so the dashboard
+// can tell "the licens server denied this" apart from "this server is
+// verifying against the wrong key" instead of looking like a stuck refresh.
+test('getStatus surfaces an injected keyTrust (e.g. a blocked env override)', async () => {
+  const keyTrust = { source: 'blocked', configured: true };
+  const cache = createMemoryCache();
+  const { payload } = proof();
+  const m = manager({ fetchImpl: okFetch({ payload, signature: 'bm90LWEtc2lnbmF0dXJl' }), cache, keyTrust });
+
+  await m.validateOnce();
+
+  assert.equal(m.getStatus().reason, 'invalid_signature');
+  assert.deepEqual(m.getStatus().publicKeyTrust, keyTrust);
 });
 
 test('sends licenseKey, serverId and agentCount in the request', async () => {

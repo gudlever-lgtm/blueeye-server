@@ -165,6 +165,21 @@ test('offline manager: a missing license runs (restricted), never throws', async
   assert.equal(mgr.getStatus().status, 'unlicensed');
 });
 
+test('offline manager: getStatus defaults publicKeyTrust to embedded/configured', async () => {
+  const r = verifier().verify(licenseFile(basePayload));
+  const mgr = createOfflineLicenseManager({ verifier: fakeVerifier(r), filePath: '/x' });
+  await mgr.validateOnce();
+  assert.deepEqual(mgr.getStatus().publicKeyTrust, { source: 'embedded', configured: true });
+});
+
+test('offline manager: getStatus surfaces an injected keyTrust (e.g. a blocked env override)', async () => {
+  const r = verifier().verify(licenseFile(basePayload));
+  const keyTrust = { source: 'blocked', configured: true };
+  const mgr = createOfflineLicenseManager({ verifier: fakeVerifier(r), filePath: '/x', keyTrust });
+  await mgr.validateOnce();
+  assert.deepEqual(mgr.getStatus().publicKeyTrust, keyTrust);
+});
+
 // ---- Plan service over the offline manager --------------------------------
 
 test('plan service resolves plan + test-path override from the offline manager', () => {

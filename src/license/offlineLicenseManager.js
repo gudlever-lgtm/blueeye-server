@@ -20,6 +20,10 @@ function createOfflineLicenseManager({
   recheckHours = 6, // re-read the file periodically to catch valid_until crossing
   now = () => Date.now(),
   logger = silentLogger,
+  // See licenseManager.js — same trust-anchor provenance, surfaced through
+  // getStatus() so the dashboard can explain an 'invalid_signature' result
+  // that's actually "verifying against the wrong key", not a bad license file.
+  keyTrust = { source: 'embedded', configured: true },
 } = {}) {
   const state = {
     status: 'unknown', // 'valid' | 'expired' | 'not_yet_valid' | 'invalid' | 'unlicensed' | 'unknown'
@@ -121,6 +125,7 @@ function createOfflineLicenseManager({
       verifiedAt: state.loadedAt ? new Date(state.loadedAt).toISOString() : null,
       graceUntil: null,
       lastCheckAt: state.lastCheckAt ? new Date(state.lastCheckAt).toISOString() : null,
+      publicKeyTrust: keyTrust,
     };
   }
 

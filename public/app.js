@@ -7725,6 +7725,23 @@ views.license = async () => {
   root.append(el('div', { class: 'section-head' },
     el('h2', {}, 'License status'),
     canWrite() ? el('button', { class: 'small', onclick: refreshLicense }, 'Re-validate now') : null));
+  // A misconfigured trust anchor makes every proof fail signature verification
+  // (reason: 'invalid_signature') the same way a genuinely bad proof would —
+  // "Re-validate now" then keeps returning 200 while silently sitting on
+  // whatever was last cached, which looks like "revalidation doesn't pick up
+  // license changes" rather than "verifying against the wrong public key".
+  // Say so plainly instead of letting that look like a stuck refresh.
+  const trust = s.publicKeyTrust;
+  if (trust && (trust.source === 'blocked' || !trust.configured)) {
+    root.append(el('div', { class: 'alert-banner sev-WARN' },
+      el('span', { class: 'alert-ic' }, '⚠'),
+      el('span', {},
+        el('strong', {}, 'License verification is misconfigured. '),
+        !trust.configured
+          ? 'The embedded public key in src/license/publicKey.js is still the placeholder — no proof can ever verify, so "Re-validate now" will never reflect changes made on the license server. '
+          : 'LICENSE_PUBLIC_KEY is set but ignored in production (no TRUST_ANCHOR_OVERRIDE_ACK) — verification falls back to the embedded key instead. ',
+        'See docs/licensing.md.')));
+  }
   // Offline mode reports a different evidence trail (a local signed file with a
   // validity window) instead of the online grace window.
   const offline = s.mode === 'offline';

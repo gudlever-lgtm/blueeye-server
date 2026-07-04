@@ -61,6 +61,8 @@ const { silentLogger } = require('../logger');
 // mounted here, keeping the app factory (src/app.js) small.
 function createApiRouter({
   db,
+  tsdb = null,
+  resultsTsdbRepo = null,
   locationsRepo,
   usersRepo,
   agentsRepo,
@@ -167,7 +169,7 @@ function createApiRouter({
   // requireAuth/requireRole work unchanged. Mounted once, ahead of every router.
   if (apiTokensRepo) router.use(createApiTokenMiddleware({ apiTokensRepo }));
 
-  router.use('/health', createHealthRouter({ db }));
+  router.use('/health', createHealthRouter({ db, tsdb }));
   router.use('/auth', createAuthRouter({ usersRepo, ldapAuth, ldapLoginAuditRepo, auditLogger, oidcAuth, samlAuth }));
   // SSO (OIDC) — public browser flow (login/callback) + admin config/role-map.
   // Licence-gated (sso_oidc) on the admin writes; the login flow itself is gated
@@ -308,7 +310,7 @@ function createApiRouter({
   // Unified audit log (license feature `audit_log`) + API tokens (`api_access`).
   if (auditLogRepo) router.use('/api/audit-log', createAuditLogRouter({ auditLogRepo, featureGate, planService }));
   if (apiTokensRepo) router.use('/api/api-tokens', createApiTokensRouter({ apiTokensRepo, featureGate, planService, auditLogger }));
-  router.use('/agents', createAgentReportsRouter({ agentAuth, resultsRepo, agentsRepo, auditEventsRepo, analysisPipeline, flowPipeline, probeResultsRepo, probePipeline, incidentService, installToolService }));
+  router.use('/agents', createAgentReportsRouter({ agentAuth, resultsRepo, resultsTsdbRepo, agentsRepo, auditEventsRepo, analysisPipeline, flowPipeline, probeResultsRepo, probePipeline, incidentService, installToolService, logger }));
   router.use('/agents', createAgentEnrollRouter({ enrollmentStore, notifyDashboard, integrationTrigger: integrationsDispatcher, auditEventsRepo, rateLimit: enrollRateLimiter }));
 
   return router;

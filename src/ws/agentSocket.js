@@ -5,7 +5,7 @@ const { createAgentAuthenticator } = require('../auth/agentAuth');
 const { extractToken, pathnameOf, safeSend, startHeartbeat } = require('./wsCommon');
 const { PROTOCOL_VERSION } = require('../protocol');
 const { validateResultIngest } = require('../validation/transactionValidation');
-const { evaluateTransactionAlert } = require('../analysis/transactionAlerts');
+const { stepsOf, classifyDeviation, diagnoseText, evaluateThresholds } = require('../analysis/transactionAlerts');
 
 const silentLogger = { info() {}, warn() {}, error() {} };
 
@@ -44,11 +44,13 @@ function attachAgentWebSocket({
   // Optional: pushes live agent online/offline events to the dashboard channel.
   notifyDashboard = null,
   // Optional transaction-test channel: the repo (config push + result ingest),
-  // the alerting dispatcher, and whether alerting is on (bool or live getter).
+  // the alerting dispatcher, whether alerting is on (bool or live getter), and the
+  // AI assistant for an optional Danish diagnosis (falls back to a template).
   // All null/off by default so the socket works unchanged without them.
   transactionsRepo = null,
   alertDispatcher = null,
   alertingEnabled = false,
+  assistant = null,
 }) {
   const authenticator = createAgentAuthenticator({ agentTokensRepo });
   // Cap inbound frames at 1 MB (aligns with the Express body limit). ws defaults
@@ -320,8 +322,8 @@ function attachAgentWebSocket({
   }
 
   // agent -> server: validate a transaction_result batch, drop results for tests
-  // the agent isn't assigned (logged as a warning), batch-insert the rest, then
-  // evaluate alert thresholds.
+  // the agent isn't assigned (logged as a warning), classify baseline deviation,
+  // batch-insert, then evaluate alert thresholds.
   async function handleTransactionResult(agentId, msg) {
     const { value, errors } = validateResultIngest(msg);
     if (errors) {
@@ -335,30 +337,72 @@ function attachAgentWebSocket({
         logger.warn(`agent ${agentId} reported a result for unassigned test ${r.test_id}; dropping`);
         continue;
       }
+      // Baseline deviation (best-effort). Below MIN_BASELINE_SAMPLES → null.
+      let deviation = null;
+      let deviationStep = null;
+      try {
+        const baselines = new Map();
+        for (const step of stepsOf(r)) {
+          const b = await transactionsRepo.getBaseline(r.test_id, agentId, step);
+          if (b) baselines.set(step, b);
+        }
+        const d = classifyDeviation({ baselines, result: r });
+        deviation = d.deviation; deviationStep = d.step;
+      } catch { /* deviation is best-effort */ }
       accepted.push({
-        test_id: r.test_id,
-        agent_id: agentId,
-        time: r.time || new Date(),
-        status: r.status,
-        latency_ms: r.latency_ms,
-        step_timings: r.step_timings,
-        step_failed: r.step_failed,
-        deviation: null, // set by the baseline evaluation (workstream B)
-        detail: r.detail,
+        test_id: r.test_id, agent_id: agentId, time: r.time || new Date(),
+        status: r.status, latency_ms: r.latency_ms, step_timings: r.step_timings,
+        step_failed: r.step_failed, deviation, detail: r.detail, _deviationStep: deviationStep,
       });
     }
     if (!accepted.length) return;
-    await transactionsRepo.insertResults(accepted);
+    // Strip the transient _deviationStep before persisting.
+    await transactionsRepo.insertResults(accepted.map(({ _deviationStep, ...row }) => row));
     await maybeAlertTransaction(agentId, accepted);
   }
 
-  // Threshold alert-hook: after insert, evaluate the latest result per test
-  // against its thresholds and dispatch a finding. The dispatcher's own cooldown
-  // (keyed by hostId|metric|kind|severity) provides the debounce.
+  // Cross-check: are OTHER agents assigned to this test also failing within the
+  // last 2 intervals? All assigned agents with data failing → "system down";
+  // otherwise it's isolated to this agent's site.
+  async function crossCheck(testId, agentId, intervalSec) {
+    const since = new Date(Date.now() - 2 * (Number(intervalSec) || 60) * 1000);
+    const [statuses, assignedAgents] = await Promise.all([
+      transactionsRepo.latestStatusPerAgent(testId, since),
+      transactionsRepo.agentsFor(testId),
+    ]);
+    const statusOf = (aid) => { const s = statuses.find((x) => x.agent_id === aid); return s ? s.status : null; };
+    const withData = assignedAgents.filter((a) => statusOf(a) != null);
+    const failing = assignedAgents.filter((a) => { const s = statusOf(a); return s && s !== 'ok'; });
+    const allFail = withData.length > 0 && withData.every((a) => statusOf(a) !== 'ok');
+    return { scope: allFail ? 'system' : 'site', failing: failing.length, total: assignedAgents.length };
+  }
+
+  // Danish diagnosis: Mistral when licensed+configured, else the template.
+  async function buildDiagnosis(facts) {
+    const template = diagnoseText(facts);
+    if (assistant && typeof assistant.diagnoseTransaction === 'function'
+        && (typeof assistant.isEnabled !== 'function' || assistant.isEnabled())) {
+      try {
+        const detail = facts.result.detail && typeof facts.result.detail === 'object' ? facts.result.detail : {};
+        const answer = await assistant.diagnoseTransaction({
+          testName: facts.test.name, status: facts.result.status,
+          phase: detail.phase || null, step: detail.step != null ? detail.step : facts.deviationStep,
+          errno: detail.errno || null, deviation: facts.deviation || null,
+          crosscheck: facts.crosscheck ? facts.crosscheck.scope : null,
+        });
+        if (answer && typeof answer === 'string') return answer;
+      } catch { /* fall back to the template */ }
+    }
+    return template;
+  }
+
+  // Threshold alert-hook: after insert, evaluate the latest result per test and
+  // dispatch a finding with a Danish diagnosis + cross-check. The dispatcher's
+  // cooldown (hostId|metric|kind|severity) debounces per (agent, test).
   async function maybeAlertTransaction(agentId, accepted) {
     const alertOn = typeof alertingEnabled === 'function' ? alertingEnabled() : alertingEnabled;
     if (!alertDispatcher || typeof alertDispatcher.dispatch !== 'function' || !alertOn) return;
-    const latestPerTest = new Map(); // test_id -> latest result in this batch
+    const latestPerTest = new Map();
     for (const r of accepted) latestPerTest.set(r.test_id, r);
     for (const [testId, result] of latestPerTest) {
       try {
@@ -367,8 +411,18 @@ function attachAgentWebSocket({
         if (!thr) continue;
         const need = Math.max(1, Number(thr.consecutive_fails) || 1);
         const recentStatuses = await transactionsRepo.recentStatuses(testId, agentId, need);
-        const finding = evaluateTransactionAlert({ test, agentId, result, recentStatuses });
-        if (finding) await alertDispatcher.dispatch(finding, null);
+        const verdict = evaluateThresholds({ test, result, recentStatuses, deviation: result.deviation });
+        if (!verdict) continue;
+        const crosscheck = result.status !== 'ok' ? await crossCheck(testId, agentId, test.interval_sec) : null;
+        const explanation = await buildDiagnosis({ test, agentId, result, deviation: result.deviation, deviationStep: result._deviationStep, crosscheck });
+        await alertDispatcher.dispatch({
+          id: `tx-${verdict.metric}-${testId}-${agentId}`,
+          hostId: String(agentId),
+          metric: verdict.metric, kind: verdict.kind, severity: verdict.severity,
+          explanation,
+          evidence: [{ testId, testName: test.name, agentId, status: result.status, latencyMs: result.latency_ms ?? null, deviation: result.deviation || null, crosscheck: crosscheck ? crosscheck.scope : null }],
+          deviation: 0, createdAt: new Date(),
+        }, null);
       } catch (err) {
         logger.warn(`transaction alert evaluation failed for test ${testId}: ${err.message}`);
       }

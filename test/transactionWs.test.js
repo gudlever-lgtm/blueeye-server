@@ -21,12 +21,12 @@ function withTimeout(promise, ms, message) {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
-async function withWs({ transactionsRepo, alertDispatcher = null, alertingEnabled = false }, fn) {
+async function withWs({ transactionsRepo, alertDispatcher = null, alertingEnabled = false, assistant = null }, fn) {
   const agentsRepo = makeAgentsRepo({ setStatus: async () => {} });
   const app = makeApp({ agentTokensRepo: validTokens(), agentsRepo, transactionsRepo });
   const server = http.createServer(app);
   const handle = attachAgentWebSocket({
-    server, agentTokensRepo: validTokens(), agentsRepo, transactionsRepo, alertDispatcher, alertingEnabled,
+    server, agentTokensRepo: validTokens(), agentsRepo, transactionsRepo, alertDispatcher, alertingEnabled, assistant,
   });
   await new Promise((resolve) => server.listen(0, resolve));
   const port = server.address().port;
@@ -159,6 +159,115 @@ test('does not dispatch when alerting is disabled', async () => {
       await poll(() => repo.resultRows.length === 2);
       await new Promise((r) => setTimeout(r, 60));
       assert.equal(dispatched.length, 0);
+    } finally { client.close(); }
+  });
+});
+
+// ---- baseline deviation ----
+
+async function seedWithBaseline(thresholds) {
+  const repo = makeTransactionsRepo();
+  await repo.create({ name: 'DB', type: 'tcp', target: 'db', config: { port: 5432, ...(thresholds ? { thresholds } : {}) } });
+  await repo.setAgents(1, [AGENT_ID]);
+  await repo.upsertBaseline({ test_id: 1, agent_id: AGENT_ID, step: 0, median_ms: 100, mad_ms: 10, sample_count: 30 });
+  return repo;
+}
+
+test('classifies baseline deviation on insert (>3 MAD → slower)', async () => {
+  const repo = await seedWithBaseline();
+  await withWs({ transactionsRepo: repo }, async ({ port }) => {
+    const client = connect(port);
+    try {
+      await withTimeout(waitOpen(client), 4000, 'no open');
+      client.send(JSON.stringify({ type: 'transaction_result', results: [{ test_id: 1, status: 'ok', latency_ms: 300 }] }));
+      await poll(() => repo.resultRows.length === 1);
+      assert.equal(repo.resultRows[0].deviation, 'slower');
+    } finally { client.close(); }
+  });
+});
+
+test('no deviation verdict when the baseline has too few samples', async () => {
+  const repo = makeTransactionsRepo();
+  await repo.create({ name: 'DB', type: 'tcp', target: 'db', config: { port: 5432 } });
+  await repo.setAgents(1, [AGENT_ID]);
+  await repo.upsertBaseline({ test_id: 1, agent_id: AGENT_ID, step: 0, median_ms: 100, mad_ms: 10, sample_count: 5 });
+  await withWs({ transactionsRepo: repo }, async ({ port }) => {
+    const client = connect(port);
+    try {
+      await withTimeout(waitOpen(client), 4000, 'no open');
+      client.send(JSON.stringify({ type: 'transaction_result', results: [{ test_id: 1, status: 'ok', latency_ms: 300 }] }));
+      await poll(() => repo.resultRows.length === 1);
+      assert.equal(repo.resultRows[0].deviation, null);
+    } finally { client.close(); }
+  });
+});
+
+test('deviation threshold dispatches a WARN', async () => {
+  const repo = await seedWithBaseline({ deviation: 'slower' });
+  const dispatched = [];
+  await withWs({ transactionsRepo: repo, alertDispatcher: { dispatch: async (f) => dispatched.push(f) }, alertingEnabled: true }, async ({ port }) => {
+    const client = connect(port);
+    try {
+      await withTimeout(waitOpen(client), 4000, 'no open');
+      client.send(JSON.stringify({ type: 'transaction_result', results: [{ test_id: 1, status: 'ok', latency_ms: 300 }] }));
+      const f = await poll(() => dispatched[0]);
+      assert.equal(f.metric, 'transaction.deviation');
+      assert.equal(f.severity, 'WARN');
+    } finally { client.close(); }
+  });
+});
+
+// ---- cross-check ----
+
+async function seedCrossCheck(otherAgentStatus) {
+  const repo = makeTransactionsRepo();
+  await repo.create({ name: 'DB', type: 'tcp', target: 'db', config: { port: 5432, thresholds: { consecutive_fails: 1 } } });
+  await repo.setAgents(1, [AGENT_ID, 5]);
+  repo.resultRows.push({ time: new Date(), test_id: 1, agent_id: 5, status: otherAgentStatus, detail: { phase: 'connect' } });
+  return repo;
+}
+
+test('cross-check: all assigned agents failing → "systemet er nede"', async () => {
+  const repo = await seedCrossCheck('fail');
+  const dispatched = [];
+  await withWs({ transactionsRepo: repo, alertDispatcher: { dispatch: async (f) => dispatched.push(f) }, alertingEnabled: true }, async ({ port }) => {
+    const client = connect(port);
+    try {
+      await withTimeout(waitOpen(client), 4000, 'no open');
+      client.send(JSON.stringify({ type: 'transaction_result', results: [{ test_id: 1, status: 'fail', detail: { phase: 'connect' } }] }));
+      const f = await poll(() => dispatched[0]);
+      assert.match(f.explanation, /systemet er nede/);
+      assert.equal(f.evidence[0].crosscheck, 'system');
+    } finally { client.close(); }
+  });
+});
+
+test('cross-check: only this agent failing → site scope', async () => {
+  const repo = await seedCrossCheck('ok');
+  const dispatched = [];
+  await withWs({ transactionsRepo: repo, alertDispatcher: { dispatch: async (f) => dispatched.push(f) }, alertingEnabled: true }, async ({ port }) => {
+    const client = connect(port);
+    try {
+      await withTimeout(waitOpen(client), 4000, 'no open');
+      client.send(JSON.stringify({ type: 'transaction_result', results: [{ test_id: 1, status: 'fail', detail: { phase: 'connect' } }] }));
+      const f = await poll(() => dispatched[0]);
+      assert.match(f.explanation, /kun agent 9 fejler/);
+      assert.equal(f.evidence[0].crosscheck, 'site');
+    } finally { client.close(); }
+  });
+});
+
+test('Mistral diagnosis is used when the assistant is enabled (falls back on error)', async () => {
+  const repo = await seedCrossCheck('fail');
+  const dispatched = [];
+  const assistant = { isEnabled: () => true, diagnoseTransaction: async () => 'AI: hele systemet er utilgængeligt.' };
+  await withWs({ transactionsRepo: repo, alertDispatcher: { dispatch: async (f) => dispatched.push(f) }, alertingEnabled: true, assistant }, async ({ port }) => {
+    const client = connect(port);
+    try {
+      await withTimeout(waitOpen(client), 4000, 'no open');
+      client.send(JSON.stringify({ type: 'transaction_result', results: [{ test_id: 1, status: 'fail', detail: { phase: 'connect' } }] }));
+      const f = await poll(() => dispatched[0]);
+      assert.equal(f.explanation, 'AI: hele systemet er utilgængeligt.');
     } finally { client.close(); }
   });
 });

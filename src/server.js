@@ -651,9 +651,11 @@ function start() {
     notifyDashboard,
     // Transaction-test channel: config push on connect/change + result ingest +
     // threshold alerting (reuses the same dispatcher as probe/analysis findings).
+    // The assistant supplies an optional Danish diagnosis (falls back to a template).
     transactionsRepo,
     alertDispatcher: dispatcher,
     alertingEnabled: () => alertingConfig.enabled,
+    assistant,
   });
 
   // Browser live channel (analysis findings -> dashboard), gated by the user JWT.

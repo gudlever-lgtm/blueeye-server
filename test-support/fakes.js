@@ -7,6 +7,7 @@ process.env.NODE_ENV = process.env.NODE_ENV || 'test';
 process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-secret-do-not-use-in-prod';
 
 const { createApp } = require('../src/app');
+const { createLogRing } = require('../src/logger');
 const { issueToken } = require('../src/auth/jwt');
 const { createSettingsService } = require('../src/services/settings');
 const { createSecretBox } = require('../src/lib/secretBox');
@@ -651,6 +652,12 @@ function makeTransactionTestsRepo(overrides = {}) {
   };
 }
 
+// A real in-memory log ring (small capacity) so the Logs route exercises the
+// actual buffer behaviour. Seed records via .record(...) in a test.
+function makeLogRing(overrides = {}) {
+  return createLogRing({ capacity: overrides.capacity || 100 });
+}
+
 // A fake test-package runner; defaults to a benign run summary.
 function makeTestPackageRunner(overrides = {}) {
   return {
@@ -1114,6 +1121,7 @@ function makeApp(overrides = {}) {
     testPackagesRepo,
     testPackageRunner: overrides.testPackageRunner || makeTestPackageRunner(),
     transactionTestsRepo,
+    logRing: overrides.logRing || makeLogRing(),
     speedtestResultsRepo: overrides.speedtestResultsRepo || makeSpeedtestResultsRepo(),
     releaseStore: overrides.releaseStore || makeReleaseStore(),
     releasePublicKey: overrides.releasePublicKey || '',
@@ -1217,6 +1225,7 @@ module.exports = {
   makeApiTokensRepo,
   makeTestPackagesRepo,
   makeTransactionTestsRepo,
+  makeLogRing,
   makeTestPackageRunner,
   makeSpeedtestResultsRepo,
   makeLicenseManager,

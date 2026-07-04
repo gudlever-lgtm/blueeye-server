@@ -602,6 +602,55 @@ function makeSpeedtestResultsRepo(overrides = {}) {
   };
 }
 
+// A fake transaction-tests repository (in-memory, stateful).
+// Secrets are never stored in public fields — mimics the real repo contract.
+function makeTransactionTestsRepo(overrides = {}) {
+  const rows = [];
+  let seq = 0;
+  const resultRows = [];
+  const safe = (r) => r ? {
+    id: r.id, name: r.name, type: r.type, steps: r.steps || [],
+    secret_names: r.secret_names || [], agents: r.agents || ['all'],
+    enabled: r.enabled !== false, created_at: r.created_at, updated_at: r.updated_at,
+  } : null;
+  return {
+    rows, resultRows,
+    findAll: overrides.findAll || (async () => rows.map(safe)),
+    findById: overrides.findById || (async (id) => safe(rows.find((r) => r.id === id)) || null),
+    findByIdWithSecrets: overrides.findByIdWithSecrets || (async (id) => {
+      const r = rows.find((x) => x.id === id);
+      return r ? { ...safe(r), secrets: r.secrets || {} } : null;
+    }),
+    create: overrides.create || (async (p) => {
+      const id = (seq += 1);
+      const row = { id, type: 'http', steps: [], secret_names: [], agents: ['all'], enabled: true, created_at: new Date().toISOString(), updated_at: new Date().toISOString(), ...p, secrets: p.secrets || {} };
+      row.secret_names = Object.keys(row.secrets);
+      rows.push(row);
+      return safe(row);
+    }),
+    update: overrides.update || (async (id, p) => {
+      const row = rows.find((r) => r.id === id);
+      if (!row) return null;
+      Object.assign(row, p);
+      if (p.secrets && Object.keys(p.secrets).length) row.secret_names = Object.keys(p.secrets);
+      row.updated_at = new Date().toISOString();
+      return safe(row);
+    }),
+    remove: overrides.remove || (async (id) => {
+      const i = rows.findIndex((r) => r.id === id);
+      if (i < 0) return false;
+      rows.splice(i, 1);
+      return true;
+    }),
+    saveResult: overrides.saveResult || (async (r) => { resultRows.push(r); return resultRows.length; }),
+    latestPerTestAgent: overrides.latestPerTestAgent || (async () => []),
+    medianDurationsPerTestAgent: overrides.medianDurationsPerTestAgent || (async () => []),
+    heatmapBuckets: overrides.heatmapBuckets || (async () => []),
+    stepTrend: overrides.stepTrend || (async () => []),
+    findResults: overrides.findResults || (async () => []),
+  };
+}
+
 // A fake test-package runner; defaults to a benign run summary.
 function makeTestPackageRunner(overrides = {}) {
   return {
@@ -1019,6 +1068,7 @@ function makeApp(overrides = {}) {
   // makeLicenseManager (or your own planService/usageService) to exercise limits.
   const agentsRepo = overrides.agentsRepo || makeAgentsRepo();
   const testPackagesRepo = overrides.testPackagesRepo || makeTestPackagesRepo();
+  const transactionTestsRepo = overrides.transactionTestsRepo || makeTransactionTestsRepo();
   const auditLogRepo = overrides.auditLogRepo || makeAuditLogRepo();
   const apiTokensRepo = overrides.apiTokensRepo || makeApiTokensRepo();
   const auditLogger = overrides.auditLogger || createAuditLogger({ auditLogRepo });
@@ -1063,6 +1113,7 @@ function makeApp(overrides = {}) {
     agentSourceStore: overrides.agentSourceStore || makeSourceStore(),
     testPackagesRepo,
     testPackageRunner: overrides.testPackageRunner || makeTestPackageRunner(),
+    transactionTestsRepo,
     speedtestResultsRepo: overrides.speedtestResultsRepo || makeSpeedtestResultsRepo(),
     releaseStore: overrides.releaseStore || makeReleaseStore(),
     releasePublicKey: overrides.releasePublicKey || '',
@@ -1165,6 +1216,7 @@ module.exports = {
   makeAuditLogRepo,
   makeApiTokensRepo,
   makeTestPackagesRepo,
+  makeTransactionTestsRepo,
   makeTestPackageRunner,
   makeSpeedtestResultsRepo,
   makeLicenseManager,

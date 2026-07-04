@@ -1,7 +1,9 @@
 'use strict';
 
 const path = require('path');
+const fs = require('fs');
 const express = require('express');
+const { version: appVersion } = require('../package.json');
 const { createApiRouter } = require('./routes');
 const { requestLogger } = require('./middleware/requestLogger');
 const { securityHeaders } = require('./middleware/securityHeaders');
@@ -107,6 +109,29 @@ function createApp({
   app.use(securityHeaders());
   app.use(express.json({ limit: '1mb' }));
   app.use(requestLogger(logger));
+
+  // Version-stamp the dashboard entry point so a server upgrade forces browsers
+  // to re-fetch app.js/styles.css. Without this, index.html loads `/app.js` with
+  // no query string; a client holding a cached copy keeps calling retired
+  // endpoints after an upgrade (e.g. the old /api/transaction-tests → 404). We
+  // rewrite the local <script>/<link> src to `?v=<version>` — a new URL per
+  // release busts the cache; API/data storage are untouched. Built once at
+  // startup (version is constant per process); on any read error we fall through
+  // to the raw static file so the dashboard still loads.
+  let stampedIndexHtml = null;
+  try {
+    const raw = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
+    stampedIndexHtml = raw
+      .replace('src="/app.js"', `src="/app.js?v=${appVersion}"`)
+      .replace('href="/styles.css"', `href="/styles.css?v=${appVersion}"`);
+  } catch (err) {
+    logger.warn({ err }, 'could not read index.html for version stamping; serving raw');
+  }
+  if (stampedIndexHtml) {
+    app.get(['/', '/index.html'], (req, res) => {
+      res.type('html').send(stampedIndexHtml);
+    });
+  }
 
   // Static admin dashboard (vanilla HTML/JS). Served before the API router;
   // requests that don't match a file fall through to the JSON API.

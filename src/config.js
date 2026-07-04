@@ -37,6 +37,22 @@ const config = {
     database: process.env.DB_NAME || 'blueeye',
     connectionLimit: toInt(process.env.DB_CONNECTION_LIMIT, 10),
   },
+  // TimescaleDB telemetry store (docs/storage-split-audit.md). Disabled by
+  // default: when TSDB_ENABLED is unset the server runs exactly as before with
+  // all telemetry in MySQL. When enabled, server.js builds a separate pg pool.
+  tsdb: {
+    enabled: /^(1|true|yes|on)$/i.test(String(process.env.TSDB_ENABLED || '').trim()),
+    host: process.env.TSDB_HOST || '127.0.0.1',
+    port: toInt(process.env.TSDB_PORT, 5432),
+    user: process.env.TSDB_USER || 'blueeye_tsdb',
+    password: process.env.TSDB_PASSWORD || '',
+    database: process.env.TSDB_NAME || 'blueeye_telemetry',
+    connectionLimit: toInt(process.env.TSDB_CONNECTION_LIMIT, 10),
+    connectionTimeoutMs: toInt(process.env.TSDB_CONNECTION_TIMEOUT_MS, 5000),
+    // Time window for the latestPerAgent last() query (Punkt 3); must stay
+    // small so the query only touches the current chunk.
+    latestWindowMinutes: toInt(process.env.TSDB_LATEST_WINDOW_MINUTES, 5),
+  },
   auth: {
     // NOTE: the default secret is for development only. server.js refuses to
     // start in production unless JWT_SECRET is set to something else.

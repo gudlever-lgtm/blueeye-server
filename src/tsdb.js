@@ -26,6 +26,15 @@ function createTsdb(config) {
   // query reconnects, and callers already treat TSDB writes as best-effort.
   pool.on('error', () => {});
 
+  // Normalised query helper: pg returns `{ rows }`, callers want the rows array.
+  // Keeping this shape (query(sql, params) -> rows[] + databaseName) lets
+  // consumers like systemInfo.getTsdb() stay driver-agnostic and unit-testable
+  // against the plain-object fake in test-support/fakes.js.
+  async function query(sql, params) {
+    const res = await pool.query(sql, params);
+    return res.rows;
+  }
+
   // Lightweight liveness check used by GET /health when TSDB is enabled.
   async function ping() {
     const client = await pool.connect();
@@ -40,7 +49,7 @@ function createTsdb(config) {
     await pool.end();
   }
 
-  return { pool, ping, close, databaseName: config.tsdb.database };
+  return { pool, query, ping, close, databaseName: config.tsdb.database };
 }
 
 module.exports = { createTsdb };

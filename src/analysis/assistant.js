@@ -419,7 +419,22 @@ function createAssistant({
     return { enabled: currentEnabled(), configured: currentApiKey() !== '', baseUrl, model: currentModel() };
   }
 
-  return { isEnabled, status, explain, explainDiagnostic, summarizeLocation, narrateInvestigation, generateNis2Draft, buildContext, buildLocationContext };
+  // Formulates a short Danish diagnosis for a failed/deviating transaction test
+  // from structured, non-sensitive facts (failure phase, step, cross-agent check,
+  // latency deviation). Throws FeatureDisabled when off; callers fall back to a
+  // template. Facts carry no IPs/payload, so no masking is needed.
+  async function diagnoseTransaction(facts) {
+    if (!currentEnabled()) throw new FeatureDisabledError();
+    const system =
+      'Du er en dansk netværks- og driftsassistent for BlueEye. Formulér en KORT, ' +
+      'konkret diagnose på dansk (højst 2 sætninger) af en fejlet eller afvigende ' +
+      'transaktionstest ud fra de givne fakta (fejlfase, trin, krydscheck mellem ' +
+      'agenter, latens-afvigelse). Gæt ikke ud over fakta.';
+    const answer = await chat(system, JSON.stringify(facts || {}));
+    return answer;
+  }
+
+  return { isEnabled, status, explain, explainDiagnostic, summarizeLocation, narrateInvestigation, generateNis2Draft, diagnoseTransaction, buildContext, buildLocationContext };
 }
 
 module.exports = { createAssistant, FeatureDisabledError };

@@ -65,12 +65,14 @@ What it does, in order:
 
 ### Note on the health 500-path
 
-blueeye-server's `GET /health` currently pings **MySQL** (`db.ping()`), not
-this telemetry node — so stopping PostgreSQL here does **not** make `/health`
-return 500 today. The script therefore asserts the DB-down / 500 behaviour at
-the psql layer (stop → query fails → restart → recovers). When a TSDB-backed
-health route lands on the server, the same *stop → curl → expect 500* assertion
-applies to it; the optional HTTP block already covers the 200 and 404 cases.
+When the server runs with `TSDB_ENABLED=true`, `GET /health` now pings **both**
+MySQL and this telemetry node and returns `503 {tsdb:"down"}` if the TSDB is
+unreachable — so a *stop PostgreSQL → curl `/health` → expect 503* assertion is
+now meaningful end-to-end. The installer still also asserts the DB-down path
+directly at the psql layer (stop → query fails → restart → recovers), which
+holds even when `BLUEEYE_SERVER_URL` is not provided or the server has TSDB
+disabled. The optional HTTP block covers the 200 (healthy) and 404
+(unknown-route) cases.
 
 Re-run the checks by hand any time:
 

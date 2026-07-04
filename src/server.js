@@ -6,6 +6,8 @@ const { createRateLimiter } = require('./middleware/rateLimit');
 const { createRevocationRegistry } = require('./auth/revocation');
 const { setRevocationCheck } = require('./auth/middleware');
 const { createDb } = require('./db');
+const { createTsdb } = require('./tsdb');
+const { createResultsTsdbRepository } = require('./repositories/resultsTsdbRepository');
 const { createApp } = require('./app');
 const { createLocationsRepository } = require('./repositories/locationsRepository');
 const { createUsersRepository } = require('./repositories/usersRepository');
@@ -149,6 +151,12 @@ function start() {
   }
 
   const db = createDb(config);
+  // Telemetry store (storage split). Null unless TSDB_ENABLED — then the server
+  // behaves exactly as before with all telemetry in MySQL.
+  const tsdb = config.tsdb.enabled ? createTsdb(config) : null;
+  if (tsdb) {
+    logger.info(`TSDB telemetry enabled → ${config.tsdb.host}:${config.tsdb.port}/${config.tsdb.database}`);
+  }
   const locationsRepo = createLocationsRepository(db);
   const usersRepo = createUsersRepository(db);
   // JWT revocation: load users' revocation cutoffs and refresh periodically, so
@@ -167,6 +175,9 @@ function start() {
   const enrollmentStore = createEnrollmentStore(db);
   const agentTokensRepo = createAgentTokensRepository(db);
   const resultsRepo = createResultsRepository(db);
+  const resultsTsdbRepo = tsdb
+    ? createResultsTsdbRepository(tsdb, { latestWindowMinutes: config.tsdb.latestWindowMinutes })
+    : null;
   const probeResultsRepo = createProbeResultsRepository(db);
   const incidentsRepo = createIncidentsRepository(db);
   const thresholdsRepo = createIncidentThresholdsRepository(db);
@@ -544,6 +555,8 @@ function start() {
 
   const app = createApp({
     db,
+    tsdb,
+    resultsTsdbRepo,
     locationsRepo,
     usersRepo,
     agentsRepo,
@@ -720,6 +733,13 @@ function start() {
         await db.close();
       } catch (err) {
         logger.error('Error while closing the database pool:', err);
+      }
+      if (tsdb) {
+        try {
+          await tsdb.close();
+        } catch (err) {
+          logger.error('Error while closing the TSDB pool:', err);
+        }
       }
       process.exit(0);
     });

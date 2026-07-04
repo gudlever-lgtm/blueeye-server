@@ -1128,6 +1128,8 @@ function makeApp(overrides = {}) {
     overrides.usageService || createUsageService({ agentsRepo, testPackagesRepo, planService, licenseManager });
   return createApp({
     db: overrides.db || makeDb(),
+    tsdb: overrides.tsdb || null,
+    resultsTsdbRepo: overrides.resultsTsdbRepo || null,
     locationsRepo: overrides.locationsRepo || makeLocationsRepo(),
     usersRepo: overrides.usersRepo || makeUsersRepo(),
     agentsRepo,

@@ -90,6 +90,8 @@ function createApp({
   notifyDashboard,
   enrollRateLimiter,
   logger = silentLogger,
+  // In-memory operational log ring buffer, surfaced admin-only in the Logs view.
+  logRing = null,
 } = {}) {
   const app = express();
 
@@ -196,6 +198,7 @@ function createApp({
       notifyDashboard,
       enrollRateLimiter,
       logger,
+      logRing,
     })
   );
 

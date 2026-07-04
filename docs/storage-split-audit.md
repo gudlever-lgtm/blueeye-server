@@ -258,6 +258,18 @@ WebSocket-stien i `src/ws/agentSocket.js` har et tilsvarende 60s-throttle per so
 
 **Ingen kodeændring i denne session.** Beslutningen er dokumenteret.
 
+**Implementeringsnote (skema-fase, `server/db/timescale/001_init.sql`):**
+`audit_events` bevarer sin TSDB-placering, men dedup-mekanismen ændres.
+MySQL-tabellen folder gentagen aktivitet på én række via `UNIQUE(dedup_key)` +
+`ON DUPLICATE KEY UPDATE occurrences`. En TimescaleDB-hypertabel **kan ikke**
+bære et globalt `UNIQUE(dedup_key)`: unikke indekser på en hypertabel skal
+inkludere partitionsnøglen (`ts`), så en dedup-nøgle kan ikke håndhæves på
+tværs af chunks. Den TSDB-native løsning er **append-only**: hver forekomst
+gemmes som sin egen række, og `occurrences`/`first_seen`/`last_seen` udledes ved
+læsning (`GROUP BY dedup_key, min(ts), max(ts), count(*)`). Dette er tillige
+strengere audit-semantik (ingen mutation af historiske rækker). Beslutningen om
+placering (`audit_events` → TSDB) står ved magt; kun mekanismen forfines.
+
 ---
 
 ### Punkt 3 — latestPerAgent MAX(id) GROUP BY → TimescaleDB last()
@@ -314,9 +326,37 @@ GROUP BY agent_id;
 
 Alt andet: inventory, auth, config, compliance (`audit_log` inkl. hash-kæde), NIS2-modul, SSO-konfiguration, licenser, HA-koordination.
 
+### Implementeringsnoter — TSDB-skema (`server/db/timescale/001_init.sql`)
+
+Skema-fasen er påbegyndt. Filen er idempotent og validérbar; se
+`server/db/timescale/README.md`. Beslutninger truffet under skema-bygningen:
+
+- **Tidskolonne `ts` (ikke `time`).** Alle hypertabeller bruger `ts
+  TIMESTAMPTZ NOT NULL` for at Punkt 3-queryen (`last(payload, ts)`) virker
+  uændret. MySQL-kildekolonner mappes: `results.created_at → ts`,
+  `findings.created_at → ts`, `incidents.started_at → ts`; resten har `ts`.
+- **`metric_rollup` som WIDE continuous aggregate fra `results`.** App-rollup'en
+  pivoterer hver JSON-payload til mange `(metric, value)`-rækker via
+  `extractSamples()`. En continuous aggregate er én `GROUP BY` og kan ikke
+  pivotere én række til mange. Metric-sættet er lille og fast, så aggregatet
+  materialiserer én bred række pr. `(agent, bucket)` med en avg/min/max-kolonne­
+  gruppe pr. metric, udtrukket fra JSONB på samme stier som `extractSamples`
+  (cpu, mem, load1, rx/tx bytes/sec). Ny metric = ny kolonnegruppe (bevidst,
+  reviewet skemaændring). Læse-stien tilpasses i repository-split-fasen.
+- **`flow_rollup` som continuous aggregate fra `flow_records`** (1-times buckets,
+  grain `(agent, direction, country, asn)`, kun eksterne/geolokaliserede flows).
+  De gamle MySQL-rollup-tabeller + nightly rollup-job pensioneres på TSDB-stien.
+- **Ingen eksakt median i rollups.** Continuous aggregates kan ikke beregne
+  eksakt median; aggregaterne beholder sum/min/max/avg/count. Approksimeret
+  median kræver `timescaledb_toolkit` (`percentile_agg`) — bevidst holdt ude af
+  basismigrationen for at være afhængigheds-let.
+- **`audit_events` er append-only** (se Punkt 2-implementeringsnote ovenfor).
+- **Deploy:** `deploy/install-timescale.sh` provisionerer en dedikeret
+  Ubuntu-node (adskilt fra MySQL på 192.168.1.140); se `deploy/README-timescale.md`.
+
 ### Næste skridt (implementeringsfase)
 
-1. Definér TSDB-skema: `CREATE TABLE` + `SELECT create_hypertable('results', 'ts', chunk_time_interval => INTERVAL '1 hour')`.
+1. ✅ Definér TSDB-skema: `CREATE TABLE` + `SELECT create_hypertable('results', 'ts', chunk_time_interval => INTERVAL '1 hour')`. — implementeret i `server/db/timescale/001_init.sql`.
 2. Opdel repositories i MySQL- og TSDB-varianter; injicér via DI i `server.js`.
 3. Implementer applikationslagsjoin i de berørte forespørgsler (trin 3).
 4. Migrér historiske data (mysqldump → `\COPY` eller ETL-script).

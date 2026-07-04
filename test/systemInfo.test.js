@@ -8,7 +8,7 @@ const assert = require('node:assert/strict');
 const request = require('supertest');
 
 const { createSystemInfo } = require('../src/services/systemInfo');
-const { makeApp, makeSystemInfo, makeSourceStore, authHeader } = require('../test-support/fakes');
+const { makeApp, makeSystemInfo, makeTsdb, makeSourceStore, authHeader } = require('../test-support/fakes');
 
 // ---- service unit tests ----------------------------------------------------
 test('getDisk computes total/used/free from statfs', async () => {
@@ -74,6 +74,76 @@ test('getIngest reports recent rows/bytes and getStorage includes the estimate',
   assert.ok(out.ingest && out.ingest.bytes === 1200);
 });
 
+// ---- TSDB (TimescaleDB telemetry store) ------------------------------------
+test('getTsdb reports not configured when no TSDB client is wired', async () => {
+  const si = createSystemInfo({ db: {} });
+  const out = await si.getTsdb();
+  assert.deepEqual(out, { configured: false });
+});
+
+test('getTsdb sums size + largest hypertables from a fake TSDB client', async () => {
+  const tsdb = makeTsdb({
+    databaseName: 'blueeye_telemetry',
+    query: async (sql) => {
+      if (/pg_database_size/.test(sql)) return [{ bytes: 5000, tables: 4 }];
+      if (/timescaledb_information\.hypertables/.test(sql)) {
+        return [
+          { name: 'results', bytes: 3000, rows: 900, hypertable: true },
+          { name: 'flow_records', bytes: 1500, rows: 400, hypertable: true },
+          { name: 'schema_migrations', bytes: 100, rows: 3, hypertable: false },
+        ];
+      }
+      return [];
+    },
+  });
+  const si = createSystemInfo({ db: {}, tsdb });
+  const out = await si.getTsdb();
+  assert.equal(out.configured, true);
+  assert.equal(out.name, 'blueeye_telemetry');
+  assert.equal(out.totalBytes, 5000);
+  assert.equal(out.tableCount, 4);
+  assert.equal(out.hypertableCount, 2);
+  assert.equal(out.tables[0].name, 'results');
+  assert.equal(out.tables[0].bytes, 3000);
+  assert.equal(out.tables[0].hypertable, true);
+});
+
+test('getTsdb falls back to a plain-PostgreSQL query when the TS-aware one fails', async () => {
+  let sawFallback = false;
+  const tsdb = makeTsdb({
+    query: async (sql) => {
+      if (/pg_database_size/.test(sql)) return [{ bytes: 200, tables: 1 }];
+      if (/timescaledb_information\.hypertables/.test(sql)) throw new Error('function hypertable_size does not exist');
+      sawFallback = true;
+      return [{ name: 'results', bytes: 200, rows: 5, hypertable: false }];
+    },
+  });
+  const si = createSystemInfo({ db: {}, tsdb });
+  const out = await si.getTsdb();
+  assert.equal(sawFallback, true);
+  assert.equal(out.tables[0].name, 'results');
+  assert.equal(out.hypertableCount, 0);
+});
+
+test('getStorage includes tsdb and stays resilient when the TSDB query throws', async () => {
+  const statfs = (path, cb) => cb(null, { bsize: 1, blocks: 10, bfree: 5, bavail: 5 });
+  const db = { pool: { query: async () => [[]] } };
+  const tsdb = makeTsdb({ query: async () => { throw new Error('tsdb down'); } });
+  const si = createSystemInfo({ db, tsdb, statfs });
+  const out = await si.getStorage();
+  assert.equal(out.tsdb.configured, true);
+  assert.equal(out.tsdb.available, false);
+  assert.match(out.tsdb.error, /tsdb down/);
+});
+
+test('getStorage reports tsdb not-configured by default (no TSDB wired)', async () => {
+  const statfs = (path, cb) => cb(null, { bsize: 1, blocks: 10, bfree: 5, bavail: 5 });
+  const db = { pool: { query: async () => [[]] } };
+  const si = createSystemInfo({ db, statfs });
+  const out = await si.getStorage();
+  assert.deepEqual(out.tsdb, { configured: false });
+});
+
 test('getStorage stays resilient when the DB query throws', async () => {
   const statfs = (path, cb) => cb(null, { bsize: 1, blocks: 10, bfree: 5, bavail: 5 });
   const db = { pool: { query: async () => { throw new Error('db down'); } } };
@@ -90,6 +160,7 @@ test('GET /system/storage returns disk + database (viewer+)', async () => {
   assert.equal(res.status, 200);
   assert.equal(res.body.disk.usedPercent, 40);
   assert.equal(res.body.database.name, 'blueeye');
+  assert.equal(res.body.tsdb.configured, false);
 });
 
 test('GET /system/storage without a token returns 401', async () => {

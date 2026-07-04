@@ -100,7 +100,7 @@ Mounted in `src/routes/index.js`. User endpoints use JWT + roles
 | `/license` | license.js | viewer+ | license status + features + plan/usage/**matrix** (feature `status`: available/roadmap) |
 | `/api/api-tokens` | apiTokens.js | admin (gated `api_access`) | **API tokens** — mint/list/revoke; secret shown once, hashed at rest |
 | `/api/audit-log` | auditLog.js | admin (gated `audit_log`) | **unified audit log** — auth/user/role/license/report/api_token events; `?category=&user=&limit=` |
-| `/system` | system.js | viewer+ | storage/disk/db + ingest estimate |
+| `/system` | system.js | viewer+ | storage/disk + **MySQL & TimescaleDB** db sizes (split) + ingest estimate |
 | `/api/findings` | findings.js | viewer+ | analysis findings + ack |
 | `/api/assistant` | assistant.js | viewer+ (gated) | opt-in AI: `/explain` (per-host Q&A) + **`/location-summary`** (per-location "what's going on?") |
 | `/api/geo` | geo.js | gated | geo overview + flow selection |

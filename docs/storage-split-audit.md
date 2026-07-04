@@ -354,12 +354,41 @@ Skema-fasen er påbegyndt. Filen er idempotent og validérbar; se
 - **Deploy:** `deploy/install-timescale.sh` provisionerer en dedikeret
   Ubuntu-node (adskilt fra MySQL på 192.168.1.140); se `deploy/README-timescale.md`.
 
+### Implementeringsnoter — repository-split (fase 2)
+
+Fundamentet for repository-splittet er lagt, feature-flagget bag `TSDB_ENABLED`
+(default off → serveren kører præcis som før, al telemetri i MySQL):
+
+- **`src/tsdb.js`** — separat pg-pool (`createTsdb`) parallelt med `src/db.js`;
+  bygges kun når `config.tsdb.enabled`. `pool.on('error')` sluges så en
+  TSDB-genstart ikke crasher processen.
+- **`src/repositories/resultsTsdbRepository.js`** — TSDB-variant: `createMany`
+  (parameteriseret multi-row INSERT mod hypertablen) + `latestPerAgent`
+  (`last(payload, ts)` med obligatorisk tidsvindue). Læse-shape matcher
+  MySQL-repo'et (`agent_id`/`payload`/`created_at`), så app-layer-joinet i
+  `routes/fleet.js` er uændret ved senere read-cutover.
+- **Dual-write (best-effort):** `POST /agents/results` spejler results til TSDB
+  når aktiveret. MySQL er kilde til sandhed under udrulning — en TSDB-fejl
+  brydes aldrig igennem til ingest (fanget + logget). Read-cutover (fleet →
+  TSDB) afventer at dual-write er bekræftet i produktion.
+- **`/health` er nu TSDB-backed** når `TSDB_ENABLED`: pinger både MySQL og TSDB,
+  returnerer 503 `{tsdb:"down"}` hvis TSDB er nede — lukker hullet noteret i
+  deploy-README (500-stien er nu ægte).
+
+**Punkt 3 verificeret mod REAL TimescaleDB (2.17.2, PG16):** migrationen kørt
+fuldt (7 hypertabeller, 4 retention-policies, 2 continuous aggregates). 2.600
+syntetiske agenter × 24t historik (100 chunks). `EXPLAIN ANALYZE` på
+latestPerAgent: `Custom Scan (ChunkAppend)` rører kun **4 distinkte chunks** =
+den aktuelle 1-times tids-chunk × 4 space-partitioner; de 96 historik-chunks
+ekskluderes. **Median latency 23–27 ms** (mål < 50 ms). Reproducér med
+`bench/latestPerAgent.bench.js` (kræver `TSDB_TEST_URL`).
+
 ### Næste skridt (implementeringsfase)
 
-1. ✅ Definér TSDB-skema: `CREATE TABLE` + `SELECT create_hypertable('results', 'ts', chunk_time_interval => INTERVAL '1 hour')`. — implementeret i `server/db/timescale/001_init.sql`.
-2. Opdel repositories i MySQL- og TSDB-varianter; injicér via DI i `server.js`.
-3. Implementer applikationslagsjoin i de berørte forespørgsler (trin 3).
+1. ✅ Definér TSDB-skema: `CREATE TABLE` + `create_hypertable(...)` — `server/db/timescale/001_init.sql` (kørt mod real TSDB).
+2. ⏳ Opdel repositories i MySQL- og TSDB-varianter; injicér via DI i `server.js` — **påbegyndt**: `resultsTsdbRepository` + pg-pool + dual-write + `/health` (flagget). Resterende telemetri-repos (flows/probe/findings/incidents/speedtest/audit_events) følger samme skabelon.
+3. ⏳ Implementer applikationslagsjoin i de berørte forespørgsler (trin 3) — læse-shape bevaret; read-cutover afventer produktions-soak af dual-write.
 4. Migrér historiske data (mysqldump → `\COPY` eller ETL-script).
-5. Kør `EXPLAIN ANALYZE` på latestPerAgent-query for at bekræfte chunk-exclusion.
-6. Kør `bench/latestPerAgent.bench.js` mod 2.600 syntetiske agenter.
+5. ✅ Kør `EXPLAIN ANALYZE` på latestPerAgent for at bekræfte chunk-exclusion — 4 chunks, kun aktuel tids-chunk.
+6. ✅ Kør `bench/latestPerAgent.bench.js` mod 2.600 syntetiske agenter — median 23–27 ms < 50 ms.
 7. Bump `package.json` version (minor) ved release.

@@ -658,7 +658,7 @@ const PAGE_INFO = {
       el('h4', {}, 'Rest of the page'),
       el('ul', {},
         el('li', {}, 'KPI strip at the top: current RX/TX, online agents and number of locations.'),
-        el('li', {}, 'The storage line shows disk usage + estimated consumption per day (“Details” expands the DB/disk breakdown).'),
+        el('li', {}, 'The storage line shows disk usage + estimated consumption per day (“Details” expands the split breakdown: the drive plus the MySQL and TimescaleDB databases side by side — TimescaleDB shows “not configured” until the telemetry store is wired).'),
         el('li', {}, 'At the bottom you can expand Top agents, History (select agent + period) and Traffic type (DNS, Facebook etc.) — those categories are defined under ', settingsLink('types', 'Settings → Traffic types'), '.')),
       el('p', { class: 'muted' }, 'Related views: ', viewLink('geo'), ' (where the traffic goes on a map) and ', viewLink('flows'), ' (individual conversations).'),
     ],
@@ -2492,10 +2492,13 @@ function fmtTimeToFull(days) {
 }
 
 // Slim one-line storage summary (the parts of a <summary> row): disk usage bar +
-// a terse "· DB … · ~…/dag · disk fuld …". The full breakdown folds open below.
+// a terse "· MySQL … · TSDB … · ~…/dag · disk fuld …". The split breakdown folds
+// open below. Telemetry is being split across two stores (MySQL + TimescaleDB,
+// see docs/storage-split-audit.md), so both DB sizes are surfaced here.
 function storageLineParts(s) {
   const d = s.disk || {};
   const db = s.database || {};
+  const tsdb = s.tsdb || null;
   const ing = s.ingest || null;
   const parts = [el('span', { class: 'muted' }, 'Storage')];
   if (d.available) {
@@ -2505,7 +2508,12 @@ function storageLineParts(s) {
     parts.push(el('span', { class: 'muted' }, 'drive unavailable'));
   }
   const extra = [];
-  if (!db.error && db.totalBytes != null) extra.push(`DB ${fmtBytes(db.totalBytes)}`);
+  // Label the store as "MySQL" (not just "DB") only when the TSDB half is
+  // actually in use, so single-store installs keep the terser wording.
+  const tsdbActive = tsdb && tsdb.configured && !tsdb.error;
+  if (!db.error && db.totalBytes != null) extra.push(`${tsdbActive ? 'MySQL' : 'DB'} ${fmtBytes(db.totalBytes)}`);
+  if (tsdbActive && tsdb.totalBytes != null) extra.push(`TSDB ${fmtBytes(tsdb.totalBytes)}`);
+  else if (tsdb && tsdb.configured && tsdb.error) extra.push('TSDB unavailable');
   if (ing) {
     const perSec = ing.minutes > 0 ? ing.bytes / (ing.minutes * 60) : 0;
     extra.push(`~${fmtBytes(ing.bytesPerDay)}/day`);
@@ -2517,17 +2525,43 @@ function storageLineParts(s) {
   return parts;
 }
 
-// One combined storage card: disk + database + a consumption estimate derived
-// from how much was actually stored in the last few minutes.
+// One store's rows inside the split card: total size + a "N tables · largest …"
+// summary. Shared by the MySQL and TimescaleDB columns so both render alike.
+function storeSection(opts) {
+  const { label, sub, info, kind } = opts;
+  const col = el('div', { class: 'storage-store' });
+  col.append(el('div', { class: 'storage-store-h' }, el('span', { class: 'badge' }, label), sub ? el('span', { class: 'muted small' }, sub) : ''));
+  if (!info || info.configured === false) {
+    col.append(el('div', { class: 'small muted' }, 'not configured'));
+    return col;
+  }
+  if (info.error || info.available === false) {
+    col.append(el('div', { class: 'storage-row' }, el('span', { class: 'k' }, 'Size'), el('span', { class: 'v muted' }, 'unavailable')));
+    if (info.error) col.append(el('div', { class: 'small muted' }, esc(info.error)));
+    return col;
+  }
+  const biggest = (info.tables && info.tables[0]) || null;
+  const counts = [`${info.tableCount} tables`];
+  if (kind === 'tsdb' && info.hypertableCount) counts.push(`${info.hypertableCount} hypertables`);
+  col.append(
+    el('div', { class: 'storage-row' }, el('span', { class: 'k' }, `Database ${esc(info.name || '')}`), el('span', { class: 'v' }, fmtBytes(info.totalBytes))),
+    el('div', { class: 'small muted' }, `${counts.join(' · ')}${biggest ? ` · largest: ${esc(biggest.name)} (${fmtBytes(biggest.bytes)})` : ''}`));
+  return col;
+}
+
+// One combined storage card: shared disk, a MySQL | TimescaleDB split of the
+// database sizes, and a consumption estimate derived from how much was actually
+// stored in the last few minutes.
 function storageCards(s) {
   const wrap = el('div', { class: 'storage' });
   wrap.append(el('h3', { class: 'storage-h' }, 'Server storage'));
   const card = el('div', { class: 'stat storage-card' });
   const d = s.disk || {};
   const db = s.database || {};
+  const tsdb = s.tsdb || null;
   const ing = s.ingest || null;
 
-  // Disk
+  // Disk (shared physical drive under both stores in a single-host deploy).
   if (d.available) {
     card.append(
       el('div', { class: 'storage-row' }, el('span', { class: 'k' }, `Drive ${esc(d.path || '')}`), el('span', { class: 'v' }, `${fmtBytes(d.freeBytes)} free`)),
@@ -2539,15 +2573,13 @@ function storageCards(s) {
 
   card.append(el('hr', { class: 'storage-sep' }));
 
-  // Database
-  if (db.error) {
-    card.append(el('div', { class: 'storage-row' }, el('span', { class: 'k' }, 'Database'), el('span', { class: 'v muted' }, 'unavailable')));
-  } else {
-    const biggest = (db.tables && db.tables[0]) || null;
-    card.append(
-      el('div', { class: 'storage-row' }, el('span', { class: 'k' }, `Database ${esc(db.name || '')}`), el('span', { class: 'v' }, fmtBytes(db.totalBytes))),
-      el('div', { class: 'small muted' }, `${db.tableCount} tables${biggest ? ` · largest: ${esc(biggest.name)} (${fmtBytes(biggest.bytes)})` : ''}`));
-  }
+  // Database split: MySQL (inventory/auth/config) alongside TimescaleDB
+  // (telemetry). The TSDB column shows "not configured" until the telemetry node
+  // is wired — see docs/storage-split-audit.md.
+  const mysqlInfo = db.error ? { error: db.error } : { configured: true, ...db };
+  card.append(el('div', { class: 'storage-split' },
+    storeSection({ label: 'MySQL', sub: 'inventory · auth · config', info: mysqlInfo, kind: 'mysql' }),
+    storeSection({ label: 'TimescaleDB', sub: 'telemetry', info: tsdb, kind: 'tsdb' })));
 
   // Consumption estimate from the last few minutes of stored measurements.
   if (ing) {

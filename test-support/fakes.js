@@ -425,7 +425,7 @@ function makeAgentCommander(overrides = {}) {
   };
 }
 
-// A fake system-info service (storage/disk + database size).
+// A fake system-info service (storage/disk + MySQL/TSDB database size).
 function makeSystemInfo(overrides = {}) {
   return {
     getStorage:
@@ -434,11 +434,28 @@ function makeSystemInfo(overrides = {}) {
         at: '2026-01-01T00:00:00.000Z',
         disk: { path: '/data', available: true, totalBytes: 100, usedBytes: 40, freeBytes: 60, usedPercent: 40 },
         database: { name: 'blueeye', totalBytes: 10, dataBytes: 8, indexBytes: 2, tableCount: 3, tables: [] },
+        // TSDB off by default (the telemetry node isn't wired in most tests).
+        tsdb: { configured: false },
         ingest: { minutes: 3, rows: 5, bytes: 1024, bytesPerDay: Math.round((1024 / 3) * 1440) },
       })),
     getIngest: overrides.getIngest || (async () => ({ minutes: 3, rows: 5, bytes: 1024, bytesPerDay: Math.round((1024 / 3) * 1440) })),
     getDisk: overrides.getDisk || (async () => ({ path: '/data', available: true })),
     getDatabase: overrides.getDatabase || (async () => ({ name: 'blueeye', totalBytes: 0, tables: [] })),
+    getTsdb: overrides.getTsdb || (async () => ({ configured: false })),
+  };
+}
+
+// A fake TimescaleDB client mirroring src/tsdb.js: a normalized
+// `query(sql, params) -> rows[]` plus `databaseName`. `handler` receives the SQL
+// and returns the rows for that query (default: empty). Used to exercise
+// systemInfo.getTsdb without a real PostgreSQL/TimescaleDB node.
+function makeTsdb(overrides = {}) {
+  const handler = overrides.query || (async () => []);
+  return {
+    databaseName: overrides.databaseName || 'blueeye_telemetry',
+    query: handler,
+    ping: overrides.ping || (async () => {}),
+    close: overrides.close || (async () => {}),
   };
 }
 
@@ -1128,6 +1145,8 @@ function makeApp(overrides = {}) {
     overrides.usageService || createUsageService({ agentsRepo, testPackagesRepo, planService, licenseManager });
   return createApp({
     db: overrides.db || makeDb(),
+    tsdb: overrides.tsdb || null,
+    resultsTsdbRepo: overrides.resultsTsdbRepo || null,
     locationsRepo: overrides.locationsRepo || makeLocationsRepo(),
     usersRepo: overrides.usersRepo || makeUsersRepo(),
     agentsRepo,
@@ -1274,6 +1293,7 @@ module.exports = {
   makeLicenseManager,
   makeAgentCommander,
   makeSystemInfo,
+  makeTsdb,
   makeFindingStore,
   makeAnalysisPipeline,
   makeProbePipeline,

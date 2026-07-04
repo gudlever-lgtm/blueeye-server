@@ -16,6 +16,8 @@ const { silentLogger } = require('./logger');
 // It deliberately does NOT call listen() — that belongs to src/server.js.
 function createApp({
   db,
+  tsdb = null,
+  resultsTsdbRepo = null,
   locationsRepo,
   usersRepo,
   agentsRepo,
@@ -147,6 +149,8 @@ function createApp({
     '/',
     createApiRouter({
       db,
+      tsdb,
+      resultsTsdbRepo,
       locationsRepo,
       usersRepo,
       agentsRepo,

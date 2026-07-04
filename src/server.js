@@ -152,7 +152,8 @@ function start() {
 
   const db = createDb(config);
   // Telemetry store (storage split). Null unless TSDB_ENABLED — then the server
-  // behaves exactly as before with all telemetry in MySQL.
+  // behaves exactly as before with all telemetry in MySQL. When present, the
+  // Storage Counter reports both stores.
   const tsdb = config.tsdb.enabled ? createTsdb(config) : null;
   if (tsdb) {
     logger.info(`TSDB telemetry enabled → ${config.tsdb.host}:${config.tsdb.port}/${config.tsdb.database}`);
@@ -363,7 +364,7 @@ function start() {
   });
 
   // Storage info (disk free/used + database size).
-  const systemInfo = createSystemInfo({ db, diskPath: config.storage.diskPath });
+  const systemInfo = createSystemInfo({ db, tsdb, diskPath: config.storage.diskPath });
 
   // Analysis module: findings store + detector pipeline hung off ingest. The
   // detector pushes findings to the UI over the SAME WebSocket (agentWs is

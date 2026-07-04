@@ -700,6 +700,13 @@ details.sec .ta-row { padding: 7px 12px; }
 .storage-row .v { font-size: 18px; font-weight: 700; }
 .storage-card .small { font-size: 12px; margin-top: 4px; }
 .storage-sep { border: 0; border-top: 1px solid var(--border); margin: 12px 0; }
+/* MySQL | TimescaleDB split of the database sizes. */
+.storage-split { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 20px; }
+.storage-split .storage-store { min-width: 0; }
+.storage-store-h { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; flex-wrap: wrap; }
+.storage-store .badge { background: rgba(148,163,184,.18); color: var(--muted); }
+.storage-store .storage-row .v { font-size: 16px; }
+@media (max-width: 560px) { .storage-split { grid-template-columns: 1fr; } }
 .usagebar { height: 8px; border-radius: 5px; background: var(--bg); border: 1px solid var(--border); overflow: hidden; margin-top: 8px; }
 .usagebar .fill { height: 100%; }
 .usagebar .fill.ok { background: var(--ok); }

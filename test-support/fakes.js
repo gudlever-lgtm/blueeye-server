@@ -602,52 +602,72 @@ function makeSpeedtestResultsRepo(overrides = {}) {
   };
 }
 
-// A fake transaction-tests repository (in-memory, stateful).
-// Secrets are never stored in public fields — mimics the real repo contract.
-function makeTransactionTestsRepo(overrides = {}) {
-  const rows = [];
+// A fake transactions repository (in-memory, stateful). Mirrors the real
+// createTransactionsRepository contract (migration 046): tests + agent
+// assignments (join) + results.
+function makeTransactionsRepo(overrides = {}) {
+  const rows = [];          // tests
+  const assignments = [];   // { test_id, agent_id }
+  const resultRows = [];    // { test_id, agent_id, ran_at, status, latency_ms, detail }
   let seq = 0;
-  const resultRows = [];
-  const safe = (r) => r ? {
-    id: r.id, name: r.name, type: r.type, steps: r.steps || [],
-    secret_names: r.secret_names || [], agents: r.agents || ['all'],
-    enabled: r.enabled !== false, created_at: r.created_at, updated_at: r.updated_at,
-  } : null;
+  const agentIdsFor = (testId) => assignments.filter((a) => a.test_id === testId).map((a) => a.agent_id).sort((x, y) => x - y);
+  const shape = (r) => (r ? {
+    id: r.id, name: r.name, type: r.type, config: r.config || {},
+    thresholds: r.thresholds || null, interval_ms: r.interval_ms ?? 60000,
+    enabled: r.enabled !== false, agent_ids: agentIdsFor(r.id),
+    created_at: r.created_at, updated_at: r.updated_at,
+  } : null);
   return {
-    rows, resultRows,
-    findAll: overrides.findAll || (async () => rows.map(safe)),
-    findById: overrides.findById || (async (id) => safe(rows.find((r) => r.id === id)) || null),
-    findByIdWithSecrets: overrides.findByIdWithSecrets || (async (id) => {
-      const r = rows.find((x) => x.id === id);
-      return r ? { ...safe(r), secrets: r.secrets || {} } : null;
-    }),
+    rows, assignments, resultRows,
+    list: overrides.list || (async () => rows.map(shape)),
+    findById: overrides.findById || (async (id) => shape(rows.find((r) => r.id === id)) || null),
     create: overrides.create || (async (p) => {
       const id = (seq += 1);
-      const row = { id, type: 'http', steps: [], secret_names: [], agents: ['all'], enabled: true, created_at: new Date().toISOString(), updated_at: new Date().toISOString(), ...p, secrets: p.secrets || {} };
-      row.secret_names = Object.keys(row.secrets);
+      const row = {
+        id, name: p.name, type: p.type, config: p.config || {},
+        thresholds: p.thresholds || null, interval_ms: p.interval_ms ?? 60000,
+        enabled: p.enabled !== false,
+        created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z',
+      };
       rows.push(row);
-      return safe(row);
+      return shape(row);
     }),
     update: overrides.update || (async (id, p) => {
       const row = rows.find((r) => r.id === id);
       if (!row) return null;
-      Object.assign(row, p);
-      if (p.secrets && Object.keys(p.secrets).length) row.secret_names = Object.keys(p.secrets);
-      row.updated_at = new Date().toISOString();
-      return safe(row);
+      if (p.name !== undefined) row.name = p.name;
+      if (p.type !== undefined) row.type = p.type;
+      if (p.config !== undefined) row.config = p.config;
+      if (p.thresholds !== undefined) row.thresholds = p.thresholds;
+      if (p.interval_ms !== undefined) row.interval_ms = p.interval_ms;
+      if (p.enabled !== undefined) row.enabled = p.enabled;
+      row.updated_at = '2026-01-02T00:00:00.000Z';
+      return shape(row);
     }),
     remove: overrides.remove || (async (id) => {
       const i = rows.findIndex((r) => r.id === id);
       if (i < 0) return false;
       rows.splice(i, 1);
+      for (let j = assignments.length - 1; j >= 0; j -= 1) if (assignments[j].test_id === id) assignments.splice(j, 1);
       return true;
     }),
-    saveResult: overrides.saveResult || (async (r) => { resultRows.push(r); return resultRows.length; }),
-    latestPerTestAgent: overrides.latestPerTestAgent || (async () => []),
-    medianDurationsPerTestAgent: overrides.medianDurationsPerTestAgent || (async () => []),
-    heatmapBuckets: overrides.heatmapBuckets || (async () => []),
-    stepTrend: overrides.stepTrend || (async () => []),
-    findResults: overrides.findResults || (async () => []),
+    agentsFor: overrides.agentsFor || (async (testId) => agentIdsFor(testId)),
+    setAgents: overrides.setAgents || (async (testId, agentIds) => {
+      for (let j = assignments.length - 1; j >= 0; j -= 1) if (assignments[j].test_id === testId) assignments.splice(j, 1);
+      for (const aid of agentIds) assignments.push({ test_id: testId, agent_id: aid });
+      return agentIds.slice();
+    }),
+    testsForAgent: overrides.testsForAgent || (async (agentId) => rows
+      .filter((r) => r.enabled !== false && assignments.some((a) => a.test_id === r.id && a.agent_id === agentId))
+      .map(shape)),
+    assignedTestIds: overrides.assignedTestIds || (async (agentId) => new Set(assignments.filter((a) => a.agent_id === agentId).map((a) => a.test_id))),
+    insertResults: overrides.insertResults || (async (batch) => { resultRows.push(...batch); return batch.length; }),
+    results: overrides.results || (async ({ testId, agentId = null }) => resultRows
+      .filter((r) => r.test_id === testId && (agentId == null || r.agent_id === agentId))),
+    heatmap: overrides.heatmap || (async () => []),
+    recentStatuses: overrides.recentStatuses || (async (testId, agentId, limit = 10) => resultRows
+      .filter((r) => r.test_id === testId && r.agent_id === agentId)
+      .slice(-limit).reverse().map((r) => r.status)),
   };
 }
 
@@ -1068,7 +1088,7 @@ function makeApp(overrides = {}) {
   // makeLicenseManager (or your own planService/usageService) to exercise limits.
   const agentsRepo = overrides.agentsRepo || makeAgentsRepo();
   const testPackagesRepo = overrides.testPackagesRepo || makeTestPackagesRepo();
-  const transactionTestsRepo = overrides.transactionTestsRepo || makeTransactionTestsRepo();
+  const transactionsRepo = overrides.transactionsRepo || makeTransactionsRepo();
   const auditLogRepo = overrides.auditLogRepo || makeAuditLogRepo();
   const apiTokensRepo = overrides.apiTokensRepo || makeApiTokensRepo();
   const auditLogger = overrides.auditLogger || createAuditLogger({ auditLogRepo });
@@ -1113,7 +1133,7 @@ function makeApp(overrides = {}) {
     agentSourceStore: overrides.agentSourceStore || makeSourceStore(),
     testPackagesRepo,
     testPackageRunner: overrides.testPackageRunner || makeTestPackageRunner(),
-    transactionTestsRepo,
+    transactionsRepo,
     speedtestResultsRepo: overrides.speedtestResultsRepo || makeSpeedtestResultsRepo(),
     releaseStore: overrides.releaseStore || makeReleaseStore(),
     releasePublicKey: overrides.releasePublicKey || '',
@@ -1216,7 +1236,7 @@ module.exports = {
   makeAuditLogRepo,
   makeApiTokensRepo,
   makeTestPackagesRepo,
-  makeTransactionTestsRepo,
+  makeTransactionsRepo,
   makeTestPackageRunner,
   makeSpeedtestResultsRepo,
   makeLicenseManager,

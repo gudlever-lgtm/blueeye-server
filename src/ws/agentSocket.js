@@ -4,6 +4,8 @@ const { WebSocketServer } = require('ws');
 const { createAgentAuthenticator } = require('../auth/agentAuth');
 const { extractToken, pathnameOf, safeSend, startHeartbeat } = require('./wsCommon');
 const { PROTOCOL_VERSION } = require('../protocol');
+const { validateResultIngest } = require('../validation/transactionValidation');
+const { evaluateTransactionAlert } = require('../analysis/transactionAlerts');
 
 const silentLogger = { info() {}, warn() {}, error() {} };
 
@@ -41,6 +43,12 @@ function attachAgentWebSocket({
   licenseGuard = () => true,
   // Optional: pushes live agent online/offline events to the dashboard channel.
   notifyDashboard = null,
+  // Optional transaction-test channel: the repo (config push + result ingest),
+  // the alerting dispatcher, and whether alerting is on (bool or live getter).
+  // All null/off by default so the socket works unchanged without them.
+  transactionsRepo = null,
+  alertDispatcher = null,
+  alertingEnabled = false,
 }) {
   const authenticator = createAgentAuthenticator({ agentTokensRepo });
   // Cap inbound frames at 1 MB (aligns with the Express body limit). ws defaults
@@ -142,6 +150,10 @@ function attachAgentWebSocket({
     // Initial server -> agent message (also demonstrates the push channel).
     safeSend(ws, { type: 'connected', agentId: agent.agentId, protocolVersion: PROTOCOL_VERSION });
 
+    // Push the agent's currently-assigned transaction tests so it starts running
+    // them immediately (and reloads on every reconnect). Best-effort.
+    pushTransactionConfig(agent.agentId).catch((err) => logger.error('transaction_config push on connect failed:', err));
+
     ws.on('pong', () => {
       ws.isAlive = true;
       maybeTouchLastSeen(ws, agent.agentId);
@@ -225,6 +237,13 @@ function attachAgentWebSocket({
             .catch((err) => logger.error('Failed to remove self-deleted agent:', err));
         }
       }
+      // agent -> server: a buffer-flush of transaction-test results. Validated,
+      // authorised against the agent's assignments, batch-inserted, then run
+      // through the threshold alert-hook. Fully best-effort — a bad frame or a
+      // repo error must never break the hub.
+      if (msg.type === 'transaction_result' && transactionsRepo && typeof transactionsRepo.insertResults === 'function') {
+        handleTransactionResult(ws.agentId, msg).catch((err) => logger.error('transaction_result handling failed:', err));
+      }
     });
 
     ws.on('close', () => {
@@ -277,6 +296,74 @@ function attachAgentWebSocket({
     });
   }
 
+  // server -> agent: push an agent's currently-assigned (enabled) transaction
+  // tests to each of its live sockets, so it (re)loads its run schedule. Returns
+  // how many sockets received it. Safe no-op when no transactionsRepo is wired.
+  async function pushTransactionConfig(agentId) {
+    if (!transactionsRepo || typeof transactionsRepo.testsForAgent !== 'function') return 0;
+    let tests = [];
+    try {
+      tests = await transactionsRepo.testsForAgent(agentId);
+    } catch (err) {
+      logger.error(`Failed to load transaction config for agent ${agentId}:`, err);
+      return 0;
+    }
+    let sent = 0;
+    const target = String(agentId);
+    for (const ws of wss.clients) {
+      if (String(ws.agentId) === target && ws.readyState === ws.OPEN) {
+        safeSend(ws, { type: 'transaction_config', tests });
+        sent += 1;
+      }
+    }
+    return sent;
+  }
+
+  // agent -> server: validate a transaction_result batch, drop results for tests
+  // the agent isn't assigned (logged as a warning), batch-insert the rest, then
+  // evaluate alert thresholds.
+  async function handleTransactionResult(agentId, msg) {
+    const { value, errors } = validateResultIngest(msg);
+    if (errors) {
+      logger.warn(`transaction_result from agent ${agentId} rejected: ${JSON.stringify(errors)}`);
+      return;
+    }
+    const assigned = await transactionsRepo.assignedTestIds(agentId);
+    const accepted = [];
+    for (const r of value.results) {
+      if (!assigned.has(r.test_id)) {
+        logger.warn(`agent ${agentId} reported a result for unassigned test ${r.test_id}; dropping`);
+        continue;
+      }
+      accepted.push({ ...r, agent_id: agentId, ran_at: r.ran_at || new Date() });
+    }
+    if (!accepted.length) return;
+    await transactionsRepo.insertResults(accepted);
+    await maybeAlertTransaction(agentId, accepted);
+  }
+
+  // Threshold alert-hook: after insert, evaluate the latest result per test
+  // against its thresholds and dispatch a finding. The dispatcher's own cooldown
+  // (keyed by hostId|metric|kind|severity) provides the debounce.
+  async function maybeAlertTransaction(agentId, accepted) {
+    const alertOn = typeof alertingEnabled === 'function' ? alertingEnabled() : alertingEnabled;
+    if (!alertDispatcher || typeof alertDispatcher.dispatch !== 'function' || !alertOn) return;
+    const latestPerTest = new Map(); // test_id -> latest result in this batch
+    for (const r of accepted) latestPerTest.set(r.test_id, r);
+    for (const [testId, result] of latestPerTest) {
+      try {
+        const test = await transactionsRepo.findById(testId);
+        if (!test || !test.thresholds) continue;
+        const need = Math.max(1, Number(test.thresholds.consecutive_fails) || 1);
+        const recentStatuses = await transactionsRepo.recentStatuses(testId, agentId, need);
+        const finding = evaluateTransactionAlert({ test, agentId, result, recentStatuses });
+        if (finding) await alertDispatcher.dispatch(finding, null);
+      } catch (err) {
+        logger.warn(`transaction alert evaluation failed for test ${testId}: ${err.message}`);
+      }
+    }
+  }
+
   function close() {
     clearInterval(interval);
     for (const { timer } of pending.values()) clearTimeout(timer);
@@ -312,7 +399,7 @@ function attachAgentWebSocket({
     return sflowStatus.get(agentId) || null;
   }
 
-  return { wss, sendCommand, sendCommandAndWait, broadcast, close, connectionCount, getSflowStatus };
+  return { wss, sendCommand, sendCommandAndWait, broadcast, close, connectionCount, getSflowStatus, pushTransactionConfig };
 }
 
 module.exports = { attachAgentWebSocket };

@@ -39,6 +39,7 @@ const { publishSignedReleaseFromSource } = require('../enroll/publishSignedRelea
 const { createEnrollCommandRouter } = require('./enrollCommand');
 const { createTestPackagesRouter } = require('./testPackages');
 const { createTransactionsRouter } = require('./transactions');
+const { createLogsRouter } = require('./logs');
 const { createSpeedtestRouter, createSpeedtestReadRouter } = require('./speedtest');
 const { createIntegrationsRouter } = require('./integrations');
 const { createDiagnosticsRouter } = require('./diagnostics');
@@ -106,6 +107,7 @@ function createApiRouter({
   testPackagesRepo,
   testPackageRunner,
   transactionsRepo,
+  logRing,
   speedtestResultsRepo,
   integrationsRepo,
   integrationAuditRepo,
@@ -279,6 +281,7 @@ function createApiRouter({
       pushConfig: agentCommander ? agentCommander.pushTransactionConfig : null,
     }));
   }
+  if (logRing) router.use('/api/logs', createLogsRouter({ logRing }));
   if (speedtestResultsRepo) {
     router.use('/speedtest', createSpeedtestRouter({ agentAuth, speedtestResultsRepo }));
     router.use('/api/speedtest', createSpeedtestReadRouter({ speedtestResultsRepo, agentsRepo }));

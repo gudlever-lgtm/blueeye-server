@@ -166,6 +166,33 @@ function toast(message, bad = false) {
   t.textContent = message;
   t.className = `toast${bad ? ' bad' : ''}`;
   setTimeout(() => t.classList.add('hidden'), 3200);
+  // Every failure the user is shown is also captured into the Logs view, so an
+  // error that flashed past in a toast can still be found afterwards (and, via
+  // the best-effort ship to the server, by an admin in the merged log).
+  if (bad) recordClientLog('error', message);
+}
+
+// Client-side log ring — failed dashboard actions the user was shown. Kept in
+// memory for this session AND best-effort shipped to the server's log buffer so
+// they merge with the operational stream in the admin Logs view. The ship uses a
+// raw fetch (not api()) so it can never recurse through this capture path.
+const CLIENT_LOG_MAX = 200;
+const clientLog = [];
+let clientLogSeq = 0;
+function recordClientLog(level, message, meta) {
+  clientLogSeq += 1;
+  const id = `${Date.now()}-${clientLogSeq}`;
+  const row = { id, ts: new Date().toISOString(), level, msg: String(message).slice(0, 500), source: 'client', meta: meta || {} };
+  clientLog.push(row);
+  if (clientLog.length > CLIENT_LOG_MAX) clientLog.shift();
+  try {
+    fetch('/api/logs/client', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify({ id, level, msg: row.msg, meta: row.meta }),
+    }).catch(() => { /* offline / no perms — the local copy still shows */ });
+  } catch { /* ignore */ }
+  return row;
 }
 
 function copyText(text) {
@@ -4483,8 +4510,6 @@ function fleetIssues(w) {
     el('div', { class: 'panel-grid' }, inc, fnd));
 }
 
-function isAdmin() { return role === 'admin'; }
-
 // The landing view: all agents with a probe-derived health verdict, worst-first.
 // Click a row to pivot into that agent's combined detail page. For Professional+
 // licences it also surfaces an "Open issues" rollup (incidents + findings).
@@ -6381,6 +6406,95 @@ const SETTINGS_GROUPS = [
   ['System', [['updates', 'Updates', true], ['agents', 'Agents', true], ['screening', 'Test Settings', true]]],
   ['Personal', [['appearance', 'Appearance', false], ['license', 'License', false]]],
 ];
+// ---- Logs (admin-only operational + client-error view) ----------------------
+// The in-memory server operational stream (agent connect/disconnect, WS/DB
+// errors, HTTP failures) merged with client-side action failures. A live
+// diagnostic aid — cleared on server restart. Distinct from Reporting → Audit
+// (the durable "who did what" trail).
+const LOG_LEVEL_ORDER = { debug: 0, info: 1, warn: 2, error: 3 };
+let logsFilter = { level: '', source: '', q: '' };
+
+function logLevelBadge(level) {
+  const cls = level === 'error' ? 'danger' : (level === 'warn' ? 'warn' : (level === 'debug' ? 'neutral' : 'active'));
+  return el('span', { class: `badge ${cls}` }, level);
+}
+
+function mergeLogEntries(serverEntries) {
+  // Server ring already contains client errors shipped from any session (id
+  // prefixed with 'c'); dedup this session's local copies against them so a
+  // client error isn't shown twice.
+  const shipped = new Set(serverEntries.filter((e) => e.source === 'client').map((e) => String(e.id).replace(/^c/, '')));
+  const localOnly = clientLog.filter((e) => !shipped.has(e.id));
+  return [...serverEntries, ...localOnly].sort((a, b) => String(b.ts).localeCompare(String(a.ts)));
+}
+
+views.logs = async () => {
+  const root = el('div');
+  root.append(el('div', { class: 'section-head' },
+    el('h2', {}, 'Logs'),
+    el('span', { class: 'muted' }, 'Live server diagnostics + your dashboard errors · in-memory (cleared on restart)')));
+
+  const levelSel = el('select', {}, ...[['', 'All levels'], ['debug', 'Debug+'], ['info', 'Info+'], ['warn', 'Warn+'], ['error', 'Errors only']]
+    .map(([v, l]) => el('option', { value: v, ...(logsFilter.level === v ? { selected: 'selected' } : {}) }, l)));
+  const sourceSel = el('select', {}, ...[['', 'All sources'], ['server', 'Server'], ['client', 'Dashboard']]
+    .map(([v, l]) => el('option', { value: v, ...(logsFilter.source === v ? { selected: 'selected' } : {}) }, l)));
+  const qInput = el('input', { type: 'search', placeholder: 'Filter text…', value: logsFilter.q });
+  const refreshBtn = el('button', { class: 'small ghost' }, '⟳ Refresh');
+  const status = el('span', { class: 'muted small' });
+
+  const tbody = el('tbody');
+  const table = el('table', { class: 'tests-table logs-table' },
+    el('thead', {}, el('tr', {}, ...['Time', 'Level', 'Source', 'Message'].map((h) => el('th', {}, h)))),
+    tbody);
+  const host = el('div', { style: 'overflow-x:auto' }, table);
+
+  async function load() {
+    logsFilter = { level: levelSel.value, source: sourceSel.value, q: qInput.value.trim() };
+    let serverEntries = [];
+    try {
+      const p = new URLSearchParams();
+      if (logsFilter.level) p.set('level', logsFilter.level);
+      if (logsFilter.q) p.set('q', logsFilter.q);
+      p.set('limit', '500');
+      const resp = await api(`/api/logs?${p.toString()}`);
+      serverEntries = resp.entries || [];
+    } catch (e) {
+      // Non-fatal: still show the local client errors even if the server ring
+      // is unreachable. (Don't toast — that would re-enter recordClientLog.)
+      status.textContent = `server logs unavailable: ${errText(e)}`;
+    }
+    let rows = mergeLogEntries(serverEntries);
+    if (logsFilter.source) rows = rows.filter((r) => r.source === logsFilter.source);
+    if (logsFilter.level) { const min = LOG_LEVEL_ORDER[logsFilter.level]; rows = rows.filter((r) => (LOG_LEVEL_ORDER[r.level] ?? 1) >= min); }
+    if (logsFilter.q) { const s = logsFilter.q.toLowerCase(); rows = rows.filter((r) => r.msg.toLowerCase().includes(s) || JSON.stringify(r.meta || {}).toLowerCase().includes(s)); }
+
+    tbody.replaceChildren(...rows.map((r) => {
+      const metaStr = r.meta && Object.keys(r.meta).length ? JSON.stringify(r.meta) : '';
+      return el('tr', { class: r.level === 'error' ? 'log-row-error' : '' },
+        el('td', { class: 'muted small nowrap' }, fmtDate(r.ts)),
+        el('td', {}, logLevelBadge(r.level)),
+        el('td', { class: 'muted small' }, r.source === 'client' ? 'dashboard' : 'server'),
+        el('td', {}, el('div', {}, esc(r.msg)), metaStr ? el('div', { class: 'muted small' }, esc(metaStr)) : null));
+    }));
+    if (!status.textContent) status.textContent = `${rows.length} entr${rows.length === 1 ? 'y' : 'ies'} shown`;
+    else status.textContent += ` · ${rows.length} shown (local only)`;
+  }
+
+  levelSel.addEventListener('change', () => { status.textContent = ''; load(); });
+  sourceSel.addEventListener('change', () => { status.textContent = ''; load(); });
+  qInput.addEventListener('input', () => { status.textContent = ''; load(); });
+  refreshBtn.addEventListener('click', () => { status.textContent = ''; load(); });
+
+  root.append(el('div', { class: 'history-controls' },
+    el('label', { class: 'inline muted' }, 'Level ', levelSel),
+    el('label', { class: 'inline muted' }, 'Source ', sourceSel),
+    el('label', { class: 'inline muted' }, 'Search ', qInput),
+    refreshBtn, el('span', { class: 'spacer' }), status));
+  root.append(host);
+  await load();
+  return root;
+};
+
 views.settings = async () => {
   const root = el('div');
   const isAdmin = role === 'admin';
@@ -8802,6 +8916,21 @@ PAGE_INFO.reporting = {
     el('p', { class: 'muted' }, 'PDF export opens a clean, print-ready document — use your browser’s “Save as PDF”.'),
     el('h4', {}, 'Audit (admin only)'),
     el('p', {}, 'A server-wide audit trail: which user did what (login, and every create/update/delete) and what each agent performed (traffic measurements, probes) — each with when, who and what. Repeated activity such as continuous reporting or scheduled probes is recorded once and annotated “Repeats every …” rather than spamming the log. Visible only to administrators; exportable to CSV.'),
+  ],
+};
+
+PAGE_INFO.logs = {
+  hero: 'Logs — the live server diagnostic stream (agent connects, WebSocket/DB errors, HTTP failures) merged with the dashboard errors you were shown. In-memory: cleared when the server restarts.',
+  title: 'Logs — operational diagnostics',
+  body: () => [
+    el('p', {}, 'This is the operational/diagnostic stream — the same lines the server writes to its console (', el('code', {}, 'docker compose logs'), ') — kept in an in-memory ring buffer (the most recent ~1000 records) so you can read them here without shell access. It is merged with client-side failures: any error a dashboard action showed you (e.g. “Agent not connected”) is captured here too, so a toast that flashed past can still be found.'),
+    el('p', {}, el('strong', {}, 'This is not the audit trail. '), 'For the durable “who did what” security record (logins, create/update/delete), see ', viewLink('reporting', 'Reporting → Audit'), '. Logs here are ephemeral and reset on restart.'),
+    el('h4', {}, 'Filters'),
+    el('ul', {},
+      el('li', {}, el('strong', {}, 'Level '), '— show a minimum severity (Errors only, Warn+, …).'),
+      el('li', {}, el('strong', {}, 'Source '), '— Server (the diagnostic stream) or Dashboard (browser-side action failures).'),
+      el('li', {}, el('strong', {}, 'Search '), '— free-text match over the message and its structured detail.')),
+    el('p', { class: 'muted' }, 'Admin-only: operational logs can contain internal detail (hostnames, error messages, request ids).'),
   ],
 };
 

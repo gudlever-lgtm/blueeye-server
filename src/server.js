@@ -1,7 +1,7 @@
 'use strict';
 
 const { config } = require('./config');
-const { createLogger } = require('./logger');
+const { createLogger, createLogRing } = require('./logger');
 const { createRateLimiter } = require('./middleware/rateLimit');
 const { createRevocationRegistry } = require('./auth/revocation');
 const { setRevocationCheck } = require('./auth/middleware');
@@ -109,7 +109,11 @@ function start() {
   // Operational logger (LOG_LEVEL, LOG_FORMAT=json). Injected into every module
   // below in place of bare console, so all diagnostics share one leveled,
   // timestamped, optionally-JSON stream.
-  const logger = createLogger();
+  // In-memory ring buffer of recent log records, surfaced admin-only in the
+  // dashboard Logs view. The logger mirrors every record into it; stdout/stderr
+  // output is unchanged.
+  const logRing = createLogRing({ capacity: Number(process.env.LOG_BUFFER_SIZE) || 1000 });
+  const logger = createLogger({ onRecord: logRing.record });
 
   // Never run in production with a weak JWT secret: the built-in development
   // default, a known docker-compose example fallback, or anything too short.
@@ -620,6 +624,7 @@ function start() {
     // loginThrottle inside the auth router).
     enrollRateLimiter: createRateLimiter({ windowMs: 15 * 60 * 1000, max: 30 }),
     logger,
+    logRing,
   });
 
   const server = app.listen(config.port, () => {

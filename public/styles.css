@@ -1202,3 +1202,9 @@ button.active-btn { outline: 2px solid var(--accent); }
 .flowbidi-asym.warn { background: var(--warn-weak); color: var(--warn); border: 1px solid var(--warn); }
 .flowbidi-asym.ok { background: var(--ok-weak); color: var(--ok); border: 1px solid var(--ok); }
 @media (max-width: 860px) { .flowbidi-cols { grid-template-columns: 1fr; } }
+
+/* ---- Logs view ----------------------------------------------------------- */
+.logs-table td { vertical-align: top; }
+.logs-table .nowrap { white-space: nowrap; }
+.logs-table code { font-size: 12px; }
+.log-row-error > td:first-child { border-left: 3px solid var(--danger, #e5484d); }

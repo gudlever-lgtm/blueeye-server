@@ -53,6 +53,10 @@ function createLogger({
   stdout = (line) => process.stdout.write(`${line}\n`),
   stderr = (line) => process.stderr.write(`${line}\n`),
   bindings = {},
+  // Optional structured-record sink (e.g. an in-memory ring buffer surfaced in
+  // the dashboard). Receives every emitted record; a throw here must never break
+  // the app, so the call site guards it.
+  onRecord = null,
 } = {}) {
   const min = LEVELS[normalizeLevel(level)];
   const json = String(format).toLowerCase() === 'json';
@@ -65,6 +69,10 @@ function createLogger({
     const includeStack = name === 'error' || min <= LEVELS.debug;
     const { meta, extra } = splitArgs(rest, includeStack);
     const sink = LEVELS[name] >= LEVELS.warn ? stderr : stdout;
+    if (onRecord) {
+      // Never let a buffer/sink failure take down the caller's real work.
+      try { onRecord({ ts, level: name, msg: message, source: 'server', meta: { ...bindings, ...meta, ...(extra ? { extra } : {}) } }); } catch { /* ignore */ }
+    }
     if (json) {
       sink(JSON.stringify({ ts, level: name, msg: message, ...bindings, ...meta }));
     } else {
@@ -81,9 +89,51 @@ function createLogger({
     warn: (...a) => emit('warn', a),
     error: (...a) => emit('error', a),
     // A logger that carries extra bindings (e.g. { reqId }) on every line.
-    child: (extra = {}) => createLogger({ level, format, clock, stdout, stderr, bindings: { ...bindings, ...extra } }),
+    child: (extra = {}) => createLogger({ level, format, clock, stdout, stderr, bindings: { ...bindings, ...extra }, onRecord }),
     level,
   };
 }
 
-module.exports = { silentLogger, createLogger, LEVELS };
+// In-memory ring buffer of structured log records, surfaced (admin-only) in the
+// dashboard's Logs view. Holds the most recent `capacity` records; oldest drop
+// off. Also accepts client-reported records (source: 'client') so browser-side
+// action failures show up in the same merged stream. Cleared on restart — this
+// is a live diagnostic aid, not a durable audit trail.
+function createLogRing({ capacity = 1000, clock = () => new Date() } = {}) {
+  const buf = [];
+  let seq = 0;
+  function record(entry = {}) {
+    seq += 1;
+    const row = {
+      id: entry.id || `s${seq}`,
+      ts: entry.ts || clock().toISOString(),
+      level: normalizeLevel(entry.level),
+      msg: typeof entry.msg === 'string' ? entry.msg : '',
+      source: entry.source === 'client' ? 'client' : 'server',
+      meta: entry.meta && typeof entry.meta === 'object' ? entry.meta : {},
+    };
+    buf.push(row);
+    if (buf.length > capacity) buf.shift();
+    return row;
+  }
+  function list({ level, since, q, limit = 200 } = {}) {
+    let rows = buf;
+    if (level && LEVELS[normalizeLevel(level)] !== undefined) {
+      const min = LEVELS[normalizeLevel(level)];
+      rows = rows.filter((r) => (LEVELS[r.level] || 0) >= min);
+    }
+    if (since) {
+      const t = Date.parse(since);
+      if (!Number.isNaN(t)) rows = rows.filter((r) => Date.parse(r.ts) >= t);
+    }
+    if (q) {
+      const s = String(q).toLowerCase();
+      rows = rows.filter((r) => r.msg.toLowerCase().includes(s) || JSON.stringify(r.meta).toLowerCase().includes(s));
+    }
+    // Newest first, capped.
+    return rows.slice(-Math.min(Math.max(1, limit), capacity)).reverse();
+  }
+  return { record, list, get size() { return buf.length; }, capacity };
+}
+
+module.exports = { silentLogger, createLogger, createLogRing, LEVELS };

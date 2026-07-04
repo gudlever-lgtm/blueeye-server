@@ -12,11 +12,10 @@ const {
 
 // REST API for transaction tests (/api/transactions). RBAC: admin writes,
 // viewer/operator read. Agents run the tests and report results over the WS
-// channel (src/ws/agentSocket.js) — not here.
+// channel (src/ws/agentSocket.js). Secrets are write-only — never returned.
 //
-// `pushConfig(agentId)` (optional) notifies a connected agent that its assigned
-// tests changed, so it reloads. Best-effort — a missing/failing pusher never
-// affects the HTTP response.
+// `pushConfig(agentId)` (optional) notifies a connected agent its assigned tests
+// changed. Best-effort — never affects the HTTP response.
 function createTransactionsRouter({ repo, pushConfig = null }) {
   const router = express.Router();
 
@@ -32,7 +31,6 @@ function createTransactionsRouter({ repo, pushConfig = null }) {
     }
   }
 
-  // Parses an optional ?from/?to date query param → Date or null (400 on bad).
   function parseWindow(req, res) {
     const out = { from: null, to: null, ok: true };
     for (const key of ['from', 'to']) {
@@ -54,7 +52,7 @@ function createTransactionsRouter({ repo, pushConfig = null }) {
   router.post('/', requireAuth, requireRole(ROLES.ADMIN), asyncHandler(async (req, res) => {
     const { value, errors } = validateTransactionInput(req.body);
     if (errors) return invalid(res, errors);
-    const created = await repo.create(value);
+    const created = await repo.create({ ...value, created_by: req.user ? req.user.id : null });
     res.status(201).json(created);
   }));
 
@@ -71,12 +69,14 @@ function createTransactionsRouter({ repo, pushConfig = null }) {
   router.put('/:id', requireAuth, requireRole(ROLES.ADMIN), asyncHandler(async (req, res) => {
     const id = parseId(req.params.id);
     if (id === null) return invalidId(res);
-    const { value, errors } = validateTransactionInput(req.body);
-    if (errors) return invalid(res, errors);
     const existing = await repo.findById(id);
     if (!existing) return notFound(res);
+    // When the body omits `secrets`, secret references are validated against the
+    // already-stored secret names.
+    const { value, errors } = validateTransactionInput(req.body, { existingSecretNames: existing.secret_names || [] });
+    if (errors) return invalid(res, errors);
     const updated = await repo.update(id, value);
-    notifyAgents(updated.agent_ids); // config changed → reload assigned agents
+    notifyAgents(updated.agent_ids);
     res.json(updated);
   }));
 
@@ -84,8 +84,6 @@ function createTransactionsRouter({ repo, pushConfig = null }) {
   router.delete('/:id', requireAuth, requireRole(ROLES.ADMIN), asyncHandler(async (req, res) => {
     const id = parseId(req.params.id);
     if (id === null) return invalidId(res);
-    // Capture assignments before the cascade removes them, so we can tell those
-    // agents to drop the test.
     const affected = await repo.agentsFor(id);
     const removed = await repo.remove(id);
     if (!removed) return notFound(res);
@@ -103,10 +101,7 @@ function createTransactionsRouter({ repo, pushConfig = null }) {
     if (errors) return invalid(res, errors);
     const before = await repo.agentsFor(id);
     const agentIds = await repo.setAgents(id, value.agent_ids);
-    // Notify the union of previous + new assignees (added agents gain the test,
-    // removed agents lose it).
-    const union = new Set([...before, ...agentIds]);
-    notifyAgents([...union]);
+    notifyAgents([...new Set([...before, ...agentIds])]);
     res.json({ test_id: id, agent_ids: agentIds });
   }));
 
@@ -123,11 +118,10 @@ function createTransactionsRouter({ repo, pushConfig = null }) {
       agentId = parseId(req.query.agent_id);
       if (agentId === null) return res.status(400).json({ error: 'Invalid agent_id' });
     }
-    const rows = await repo.results({ testId: id, from: win.from, to: win.to, agentId });
-    return res.json({ test_id: id, results: rows });
+    return res.json({ test_id: id, results: await repo.results({ testId: id, from: win.from, to: win.to, agentId }) });
   }));
 
-  // Heatmap (viewer+): ?from&to&bucket → avg_latency/fail_count/sample_count per bucket per agent
+  // Heatmap (viewer+): ?from&to&bucket
   router.get('/:id/heatmap', requireAuth, readRoles, asyncHandler(async (req, res) => {
     const id = parseId(req.params.id);
     if (id === null) return invalidId(res);
@@ -136,8 +130,19 @@ function createTransactionsRouter({ repo, pushConfig = null }) {
     const win = parseWindow(req, res);
     if (!win.ok) return undefined;
     const bucket = ['5m', '15m', '1h'].includes(req.query.bucket) ? req.query.bucket : '5m';
-    const rows = await repo.heatmap({ testId: id, from: win.from, to: win.to, bucket });
-    return res.json({ test_id: id, bucket, rows });
+    return res.json({ test_id: id, bucket, rows: await repo.heatmap({ testId: id, from: win.from, to: win.to, bucket }) });
+  }));
+
+  // Trend (viewer+): ?agent_id&days=7 — median per day per step.
+  router.get('/:id/trend', requireAuth, readRoles, asyncHandler(async (req, res) => {
+    const id = parseId(req.params.id);
+    if (id === null) return invalidId(res);
+    const test = await repo.findById(id);
+    if (!test) return notFound(res);
+    const agentId = parseId(req.query.agent_id);
+    if (agentId === null) return res.status(400).json({ error: 'agent_id is required' });
+    const days = Math.min(90, Math.max(1, Number(req.query.days) || 7));
+    return res.json({ test_id: id, agent_id: agentId, days, rows: await repo.trend({ testId: id, agentId, days }) });
   }));
 
   return router;

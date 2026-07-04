@@ -335,7 +335,17 @@ function attachAgentWebSocket({
         logger.warn(`agent ${agentId} reported a result for unassigned test ${r.test_id}; dropping`);
         continue;
       }
-      accepted.push({ ...r, agent_id: agentId, ran_at: r.ran_at || new Date() });
+      accepted.push({
+        test_id: r.test_id,
+        agent_id: agentId,
+        time: r.time || new Date(),
+        status: r.status,
+        latency_ms: r.latency_ms,
+        step_timings: r.step_timings,
+        step_failed: r.step_failed,
+        deviation: null, // set by the baseline evaluation (workstream B)
+        detail: r.detail,
+      });
     }
     if (!accepted.length) return;
     await transactionsRepo.insertResults(accepted);
@@ -353,8 +363,9 @@ function attachAgentWebSocket({
     for (const [testId, result] of latestPerTest) {
       try {
         const test = await transactionsRepo.findById(testId);
-        if (!test || !test.thresholds) continue;
-        const need = Math.max(1, Number(test.thresholds.consecutive_fails) || 1);
+        const thr = test && test.config ? test.config.thresholds : null;
+        if (!thr) continue;
+        const need = Math.max(1, Number(thr.consecutive_fails) || 1);
         const recentStatuses = await transactionsRepo.recentStatuses(testId, agentId, need);
         const finding = evaluateTransactionAlert({ test, agentId, result, recentStatuses });
         if (finding) await alertDispatcher.dispatch(finding, null);

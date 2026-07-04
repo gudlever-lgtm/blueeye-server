@@ -12,7 +12,7 @@
 //   recentStatuses: the most recent statuses for (test, agent), NEWEST-FIRST,
 //   including the current result (the caller inserts before evaluating).
 function evaluateTransactionAlert({ test, agentId, result, recentStatuses = [] }) {
-  const thr = test && test.thresholds ? test.thresholds : null;
+  const thr = test && test.config && test.config.thresholds ? test.config.thresholds : null;
   if (!thr) return null;
 
   const evidence = [{

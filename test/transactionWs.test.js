@@ -52,7 +52,7 @@ async function poll(fn, ms = 2000) {
 
 async function seedRepo() {
   const repo = makeTransactionsRepo();
-  await repo.create({ name: 'DB', type: 'tcp', config: { host: 'db', port: 5432 }, thresholds: { consecutive_fails: 2 } }); // id 1
+  await repo.create({ name: 'DB', type: 'tcp', target: 'db', config: { port: 5432, thresholds: { consecutive_fails: 2 } } }); // id 1
   await repo.setAgents(1, [AGENT_ID]);
   return repo;
 }

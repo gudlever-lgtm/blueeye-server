@@ -603,31 +603,39 @@ function makeSpeedtestResultsRepo(overrides = {}) {
 }
 
 // A fake transactions repository (in-memory, stateful). Mirrors the real
-// createTransactionsRepository contract (migration 046): tests + agent
-// assignments (join) + results.
+// createTransactionsRepository contract (migration 046): tests (type
+// http/tcp/dns/icmp + config incl. thresholds), agent assignments (join),
+// results, and MAD baselines. Secrets are write-only — `secret_names` exposed,
+// values only via testsForAgent/findByIdWithSecrets.
 function makeTransactionsRepo(overrides = {}) {
   const rows = [];          // tests
   const assignments = [];   // { test_id, agent_id }
-  const resultRows = [];    // { test_id, agent_id, ran_at, status, latency_ms, detail }
+  const resultRows = [];    // { time, test_id, agent_id, status, latency_ms, step_timings, step_failed, deviation, detail }
+  const baselines = [];     // { test_id, agent_id, step, median_ms, mad_ms, sample_count }
   let seq = 0;
   const agentIdsFor = (testId) => assignments.filter((a) => a.test_id === testId).map((a) => a.agent_id).sort((x, y) => x - y);
-  const shape = (r) => (r ? {
-    id: r.id, name: r.name, type: r.type, config: r.config || {},
-    thresholds: r.thresholds || null, interval_ms: r.interval_ms ?? 60000,
-    enabled: r.enabled !== false, agent_ids: agentIdsFor(r.id),
-    created_at: r.created_at, updated_at: r.updated_at,
-  } : null);
+  const shape = (r, withSecrets = false) => {
+    if (!r) return null;
+    const base = {
+      id: r.id, name: r.name, type: r.type, target: r.target ?? null, config: r.config || {},
+      secret_names: Object.keys(r.secrets || {}), interval_sec: r.interval_sec ?? 60,
+      enabled: r.enabled !== false, agent_ids: agentIdsFor(r.id),
+      created_by: r.created_by ?? null, created_at: r.created_at,
+    };
+    if (withSecrets) base.secrets = { ...(r.secrets || {}) };
+    return base;
+  };
   return {
-    rows, assignments, resultRows,
-    list: overrides.list || (async () => rows.map(shape)),
+    rows, assignments, resultRows, baselines,
+    list: overrides.list || (async () => rows.map((r) => shape(r))),
     findById: overrides.findById || (async (id) => shape(rows.find((r) => r.id === id)) || null),
+    findByIdWithSecrets: overrides.findByIdWithSecrets || (async (id) => shape(rows.find((r) => r.id === id), true) || null),
     create: overrides.create || (async (p) => {
       const id = (seq += 1);
       const row = {
-        id, name: p.name, type: p.type, config: p.config || {},
-        thresholds: p.thresholds || null, interval_ms: p.interval_ms ?? 60000,
-        enabled: p.enabled !== false,
-        created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z',
+        id, name: p.name, type: p.type, target: p.target ?? null, config: p.config || {},
+        secrets: p.secrets ? { ...p.secrets } : {}, interval_sec: p.interval_sec ?? 60,
+        enabled: p.enabled !== false, created_by: p.created_by ?? null, created_at: '2026-01-01T00:00:00.000Z',
       };
       rows.push(row);
       return shape(row);
@@ -637,11 +645,11 @@ function makeTransactionsRepo(overrides = {}) {
       if (!row) return null;
       if (p.name !== undefined) row.name = p.name;
       if (p.type !== undefined) row.type = p.type;
+      if (p.target !== undefined) row.target = p.target;
       if (p.config !== undefined) row.config = p.config;
-      if (p.thresholds !== undefined) row.thresholds = p.thresholds;
-      if (p.interval_ms !== undefined) row.interval_ms = p.interval_ms;
+      if (p.secrets !== undefined) row.secrets = p.secrets ? { ...p.secrets } : {};
+      if (p.interval_sec !== undefined) row.interval_sec = p.interval_sec;
       if (p.enabled !== undefined) row.enabled = p.enabled;
-      row.updated_at = '2026-01-02T00:00:00.000Z';
       return shape(row);
     }),
     remove: overrides.remove || (async (id) => {
@@ -659,15 +667,30 @@ function makeTransactionsRepo(overrides = {}) {
     }),
     testsForAgent: overrides.testsForAgent || (async (agentId) => rows
       .filter((r) => r.enabled !== false && assignments.some((a) => a.test_id === r.id && a.agent_id === agentId))
-      .map(shape)),
+      .map((r) => shape(r, true))),
     assignedTestIds: overrides.assignedTestIds || (async (agentId) => new Set(assignments.filter((a) => a.agent_id === agentId).map((a) => a.test_id))),
     insertResults: overrides.insertResults || (async (batch) => { resultRows.push(...batch); return batch.length; }),
     results: overrides.results || (async ({ testId, agentId = null }) => resultRows
       .filter((r) => r.test_id === testId && (agentId == null || r.agent_id === agentId))),
     heatmap: overrides.heatmap || (async () => []),
+    trend: overrides.trend || (async () => []),
     recentStatuses: overrides.recentStatuses || (async (testId, agentId, limit = 10) => resultRows
       .filter((r) => r.test_id === testId && r.agent_id === agentId)
       .slice(-limit).reverse().map((r) => r.status)),
+    latestStatusPerAgent: overrides.latestStatusPerAgent || (async (testId) => {
+      const byAgent = new Map();
+      for (const r of resultRows.filter((x) => x.test_id === testId)) byAgent.set(r.agent_id, r);
+      return [...byAgent.values()].map((r) => ({ agent_id: r.agent_id, status: r.status, time: r.time }));
+    }),
+    getBaseline: overrides.getBaseline || (async (testId, agentId, step) => baselines.find((b) => b.test_id === testId && b.agent_id === agentId && b.step === step) || null),
+    upsertBaseline: overrides.upsertBaseline || (async (b) => {
+      const ex = baselines.find((x) => x.test_id === b.test_id && x.agent_id === b.agent_id && x.step === b.step);
+      if (ex) Object.assign(ex, b); else baselines.push({ ...b });
+    }),
+    assignedPairs: overrides.assignedPairs || (async () => assignments.map((a) => ({ test_id: a.test_id, agent_id: a.agent_id }))),
+    okResultsSince: overrides.okResultsSince || (async ({ testId, agentId }) => resultRows
+      .filter((r) => r.test_id === testId && r.agent_id === agentId && r.status === 'ok')
+      .map((r) => ({ latency_ms: r.latency_ms, step_timings: r.step_timings || null }))),
   };
 }
 

@@ -73,6 +73,7 @@ const { createSettingsRepository } = require('./repositories/settingsRepository'
 const { createSettingsService } = require('./services/settings');
 const { createTestPackagesRepository } = require('./repositories/testPackagesRepository');
 const { createTransactionsRepository } = require('./repositories/transactionsRepository');
+const { createTransactionBaselineJob } = require('./analysis/transactionBaselines');
 const { createTestPackageRunner } = require('./services/testPackageRunner');
 const { createTestPackageScheduler } = require('./services/testPackageScheduler');
 const { createSpeedtestResultsRepository } = require('./repositories/speedtestResultsRepository');
@@ -272,13 +273,16 @@ function start() {
   const testPackageScheduler = createTestPackageScheduler({ repo: testPackagesRepo, runner: testPackageRunner, logger });
   // Active throughput ("speed test") results reported by agents.
   const speedtestResultsRepo = createSpeedtestResultsRepository(db);
-  // Transaction tests (http/tcp/dns journeys): config pushed to agents over WS,
-  // results ingested over WS. See src/routes/transactions.js + src/ws/agentSocket.js.
-  const transactionsRepo = createTransactionsRepository(db);
 
   // Secret box: AES-256-GCM encryption for secrets stored at rest (integration
-  // credentials, the LDAP bind password). See src/lib/secretBox.js.
+  // credentials, the LDAP bind password, transaction-test secrets). See
+  // src/lib/secretBox.js.
   const secretBox = createSecretBox({ key: config.security.secretKey });
+
+  // Transaction tests (http/tcp/dns/icmp journeys): config pushed to agents over
+  // WS, results ingested over WS. Secrets (config_secrets) are AES-256-GCM at rest
+  // via secretBox. See src/routes/transactions.js + src/ws/agentSocket.js.
+  const transactionsRepo = createTransactionsRepository({ db, secretBox });
 
   // Agent-release signing key — generated + managed from Settings (write-once; the
   // private key is encrypted at rest via secretBox). It is the trust anchor for
@@ -529,6 +533,8 @@ function start() {
       retentionScheduler,
       testPackageScheduler,
       { start: () => geoipUpdater.startSchedule(), stop: () => geoipUpdater.stopSchedule() },
+      // Hourly MAD baseline recompute for transaction tests (leader-only).
+      createTransactionBaselineJob({ repo: transactionsRepo, logger }),
     ],
   });
 

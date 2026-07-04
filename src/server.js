@@ -72,6 +72,8 @@ const { createRetentionScheduler } = require('./analysis/retention/scheduler');
 const { createSettingsRepository } = require('./repositories/settingsRepository');
 const { createSettingsService } = require('./services/settings');
 const { createTestPackagesRepository } = require('./repositories/testPackagesRepository');
+const { createTransactionsRepository } = require('./repositories/transactionsRepository');
+const { createTransactionBaselineJob } = require('./analysis/transactionBaselines');
 const { createTestPackageRunner } = require('./services/testPackageRunner');
 const { createTestPackageScheduler } = require('./services/testPackageScheduler');
 const { createSpeedtestResultsRepository } = require('./repositories/speedtestResultsRepository');
@@ -262,6 +264,9 @@ function start() {
         ? agentWs.sendCommandAndWait(agentId, command, opts)
         : Promise.resolve({ delivered: 0, acked: false, reply: null })),
     getSflowStatus: (agentId) => (agentWs ? agentWs.getSflowStatus(agentId) : null),
+    // Push an agent's assigned transaction tests when they change (create/update/
+    // delete/assign). Best-effort — resolves to 0 before the WS server is up.
+    pushTransactionConfig: (agentId) => (agentWs ? agentWs.pushTransactionConfig(agentId) : Promise.resolve(0)),
   };
 
   // Test packages: server-defined probe/traffic test sets pushed to agents to
@@ -274,8 +279,14 @@ function start() {
   const speedtestResultsRepo = createSpeedtestResultsRepository(db);
 
   // Secret box: AES-256-GCM encryption for secrets stored at rest (integration
-  // credentials, the LDAP bind password). See src/lib/secretBox.js.
+  // credentials, the LDAP bind password, transaction-test secrets). See
+  // src/lib/secretBox.js.
   const secretBox = createSecretBox({ key: config.security.secretKey });
+
+  // Transaction tests (http/tcp/dns/icmp journeys): config pushed to agents over
+  // WS, results ingested over WS. Secrets (config_secrets) are AES-256-GCM at rest
+  // via secretBox. See src/routes/transactions.js + src/ws/agentSocket.js.
+  const transactionsRepo = createTransactionsRepository({ db, secretBox });
 
   // Agent-release signing key — generated + managed from Settings (write-once; the
   // private key is encrypted at rest via secretBox). It is the trust anchor for
@@ -526,6 +537,8 @@ function start() {
       retentionScheduler,
       testPackageScheduler,
       { start: () => geoipUpdater.startSchedule(), stop: () => geoipUpdater.stopSchedule() },
+      // Hourly MAD baseline recompute for transaction tests (leader-only).
+      createTransactionBaselineJob({ repo: transactionsRepo, logger }),
     ],
   });
 
@@ -578,6 +591,7 @@ function start() {
     releaseKeyService,
     testPackagesRepo,
     testPackageRunner,
+    transactionsRepo,
     speedtestResultsRepo,
     integrationsRepo,
     integrationAuditRepo,
@@ -640,6 +654,13 @@ function start() {
     licenseGuard: (count) => licenseManager.canAcceptNewConnection(count),
     // Push live online/offline transitions to the dashboard.
     notifyDashboard,
+    // Transaction-test channel: config push on connect/change + result ingest +
+    // threshold alerting (reuses the same dispatcher as probe/analysis findings).
+    // The assistant supplies an optional Danish diagnosis (falls back to a template).
+    transactionsRepo,
+    alertDispatcher: dispatcher,
+    alertingEnabled: () => alertingConfig.enabled,
+    assistant,
   });
 
   // Browser live channel (analysis findings -> dashboard), gated by the user JWT.

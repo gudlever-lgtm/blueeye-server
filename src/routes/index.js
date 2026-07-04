@@ -38,7 +38,7 @@ const { createEnrollRouter } = require('./enroll');
 const { publishSignedReleaseFromSource } = require('../enroll/publishSignedRelease');
 const { createEnrollCommandRouter } = require('./enrollCommand');
 const { createTestPackagesRouter } = require('./testPackages');
-const { createTransactionTestsRouter } = require('./transactionTests');
+const { createTransactionsRouter } = require('./transactions');
 const { createLogsRouter } = require('./logs');
 const { createSpeedtestRouter, createSpeedtestReadRouter } = require('./speedtest');
 const { createIntegrationsRouter } = require('./integrations');
@@ -106,7 +106,7 @@ function createApiRouter({
   releaseKeyService,
   testPackagesRepo,
   testPackageRunner,
-  transactionTestsRepo,
+  transactionsRepo,
   logRing,
   speedtestResultsRepo,
   integrationsRepo,
@@ -273,7 +273,14 @@ function createApiRouter({
     }));
   }
   if (testPackagesRepo) router.use('/api/test-packages', createTestPackagesRouter({ repo: testPackagesRepo, runner: testPackageRunner, usageService }));
-  if (transactionTestsRepo) router.use('/api/transaction-tests', createTransactionTestsRouter({ repo: transactionTestsRepo, agentAuth }));
+  if (transactionsRepo) {
+    router.use('/api/transactions', createTransactionsRouter({
+      repo: transactionsRepo,
+      // Config-push hook: notify affected agents over WS when tests/assignments
+      // change. Late-bound via agentCommander (the WS server starts after the app).
+      pushConfig: agentCommander ? agentCommander.pushTransactionConfig : null,
+    }));
+  }
   if (logRing) router.use('/api/logs', createLogsRouter({ logRing }));
   if (speedtestResultsRepo) {
     router.use('/speedtest', createSpeedtestRouter({ agentAuth, speedtestResultsRepo }));

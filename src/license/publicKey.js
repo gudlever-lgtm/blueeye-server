@@ -18,7 +18,7 @@ const { isKeyOverrideAllowed } = require('./trustAnchorGuard');
 // production it is ignored unless TRUST_ANCHOR_OVERRIDE_ACK is also set (see
 // trustAnchorGuard.js and docs/licensing.md).
 const EMBEDDED_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
-REPLACE_WITH_BLUEEYE_LICENS_PUBLIC_KEY
+MCowBQYDK2VwAyEAZpCaHLTayNw1SOfTRSoWKfUZWC2RJrUK7yoLdVhCyxo=
 -----END PUBLIC KEY-----`;
 
 function looksLikePem(value) {

@@ -64,7 +64,7 @@ const RESOURCE = {
 
 // Sub-action segments on /agents/:id/<sub> that name what was done.
 const AGENT_SUBACTIONS = new Set([
-  'run-test', 'probe', 'run-speedtest', 'update', 'upgrade', 'delete', 'diagnose', 'ping', 'install-tool',
+  'run-test', 'probe', 'run-speedtest', 'update', 'upgrade', 'delete', 'diagnose', 'ping', 'install-tool', 'reconnect',
 ]);
 
 // Splits a request path into clean segments (no query string, no trailing slash).

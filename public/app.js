@@ -679,7 +679,7 @@ const PAGE_INFO = {
       el('p', {}, 'Agents are installed on customer machines and report network traffic to the server.'),
       el('h4', {}, 'Status & health'),
       el('ul', {},
-        el('li', {}, 'Status: online/offline based on the WebSocket connection.'),
+        el('li', {}, 'Status: online/offline based on the WebSocket connection. Click the badge for a connection diagnosis — why the agent is offline, the evidence behind it, and a “Force reconnect” for connected agents (connections are agent-initiated, so an offline agent is revived from its own host).'),
         el('li', {}, 'Health: “healthy” = online and reported within 5 min., “delayed” = online but stale report, “down” = offline.'),
         el('li', {}, 'Last reported: the time of the agent\'s most recent traffic measurement.')),
       el('h4', {}, 'Actions'),
@@ -1152,7 +1152,14 @@ function agentRow(a, currentAgentVersion) {
     el('td', {}, String(a.id)),
     el('td', {}, el('div', {}, a.display_name || a.hostname), a.display_name ? el('div', { class: 'muted' }, a.hostname) : null),
     el('td', {}, `${a.platform} / ${a.arch}`, agentVersionLine(a, currentAgentVersion)),
-    el('td', {}, el('span', { class: `badge ${a.status}` }, a.status)),
+    el('td', {}, el('span', {
+      class: `badge ${a.status} clickable`,
+      role: 'button',
+      tabindex: '0',
+      title: 'Connection diagnosis — why this agent is online/offline, with a reconnect option',
+      onclick: () => showConnection(a),
+      onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); showConnection(a); } },
+    }, a.status)),
     el('td', {}, agentHealthCell(a)),
     el('td', {}, a.location_name || '–'),
     el('td', {}, agentSourceCell(a)),
@@ -1272,6 +1279,66 @@ async function pingAgent(a) {
     if (r.managed) bits.push(r.managed);
     toast(`${name}: ${bits.join(' · ')}`);
   } catch (err) { toast(`${name}: ${err.message}`, true); }
+}
+
+// Connection diagnosis (GET /agents/:id/connection): why the agent is
+// (dis)connected — verdict, explanation, evidence, next steps — plus a "Force
+// reconnect" for connected agents (the server closes the socket; the agent
+// re-dials with a clean session). Connections are agent-initiated, so a truly
+// offline agent can't be revived from here; the modal explains what will.
+async function showConnection(a) {
+  const name = a.display_name || a.hostname;
+  let d;
+  try { d = await api(`/agents/${a.id}/connection`); } catch (err) { toast(`${name}: ${err.message}`, true); return; }
+  renderConnectionModal(a, d);
+}
+
+// Badge styling per diagnosis state (renderConnectionModal).
+const CONNECTION_STATE_BADGES = {
+  connected: 'badge online',
+  reconnecting: 'badge grace',
+  'license-blocked': 'badge warn',
+  'auth-rejected': 'badge offline',
+  unreachable: 'badge offline',
+  'never-connected': 'badge grace',
+};
+
+function renderConnectionModal(a, d) {
+  const card = $('#modal-card');
+  const name = a.display_name || a.hostname;
+  const body = [el('h3', {}, `Connection — ${esc(name)}`)];
+  body.push(el('p', {}, el('span', { class: CONNECTION_STATE_BADGES[d.state] || 'badge' }, d.state), ' ', d.explanation));
+  if (d.hints && d.hints.length) {
+    body.push(el('p', { class: 'muted' }, 'What to do:'));
+    body.push(el('ul', {}, ...d.hints.map((h) => el('li', {}, h))));
+  }
+  if (d.evidence && d.evidence.length) {
+    body.push(el('details', {},
+      el('summary', { class: 'muted' }, 'Evidence'),
+      el('ul', {}, ...d.evidence.map((e) => el('li', {}, `${e.label}: ${e.value}`)))));
+  }
+  const actions = [];
+  if (canWrite() && d.connected) {
+    const btn = el('button', { class: 'small' }, 'Force reconnect');
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      btn.textContent = 'Reconnecting…';
+      try {
+        const r = await api(`/agents/${a.id}/reconnect`, { method: 'POST' });
+        if (r.reconnected) toast(`${name}: socket closed and re-established in ${(r.waitedMs / 1000).toFixed(1)} s.`);
+        else toast(`${name}: socket closed, but the agent had not reconnected after ${Math.round(r.waitedMs / 1000)} s — re-check in a moment.`, true);
+      } catch (err) {
+        toast(`${name}: ${err.message}`, true);
+      }
+      showConnection(a); // refresh the modal with the post-reconnect diagnosis
+    });
+    actions.push(btn);
+  }
+  const recheck = el('button', { class: 'small ghost', onclick: () => showConnection(a) }, 'Re-check');
+  actions.push(recheck);
+  body.push(el('div', { class: 'form-actions' }, ...actions, el('button', { class: 'ghost', onclick: closeModal }, 'Close')));
+  card.replaceChildren(...body);
+  $('#modal').classList.remove('hidden');
 }
 
 // Round-trips a "diagnose" to the agent and shows where its flow pipeline stands

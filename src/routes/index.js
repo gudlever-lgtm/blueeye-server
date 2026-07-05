@@ -82,6 +82,9 @@ function createApiRouter({
   installToolService,
   licenseManager,
   agentCommander,
+  // Optional { waitMs, pollMs } tuning for POST /agents/:id/reconnect (tests
+  // shrink these; production uses the router defaults).
+  agentReconnect = {},
   systemInfo,
   findingStore,
   analysisPipeline,
@@ -303,7 +306,7 @@ function createApiRouter({
   //   - POST /results          — agent token
   //   - POST /enroll           — unauthenticated
   // Requests fall through routers that have no matching route.
-  router.use('/agents', createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentCommander, agentSourceStore, releaseStore, releasePublicKey, auditRepo, integrationTrigger: integrationsDispatcher, logger }));
+  router.use('/agents', createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentCommander, agentSourceStore, releaseStore, releasePublicKey, auditRepo, integrationTrigger: integrationsDispatcher, logger, reconnect: agentReconnect }));
   router.use('/audit', createAuditRouter({ auditRepo }));
   // Unified, server-wide audit trail (Reporting → Audit) — admin only.
   if (auditEventsRepo) router.use('/api/audit', createAuditEventsRouter({ auditEventsRepo, auditLogRepo, featureGate }));

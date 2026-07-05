@@ -276,6 +276,10 @@ function start() {
         ? agentWs.sendCommandAndWait(agentId, command, opts)
         : Promise.resolve({ delivered: 0, acked: false, reply: null })),
     getSflowStatus: (agentId) => (agentWs ? agentWs.getSflowStatus(agentId) : null),
+    // Live connection evidence + forced re-dial for the connection diagnosis
+    // (GET /agents/:id/connection, POST /agents/:id/reconnect).
+    getConnectionInfo: (agentId) => (agentWs ? agentWs.getConnectionInfo(agentId) : null),
+    disconnectAgent: (agentId, opts) => (agentWs ? agentWs.disconnectAgent(agentId, opts) : 0),
     // Push an agent's assigned transaction tests when they change (create/update/
     // delete/assign). Best-effort — resolves to 0 before the WS server is up.
     pushTransactionConfig: (agentId) => (agentWs ? agentWs.pushTransactionConfig(agentId) : Promise.resolve(0)),

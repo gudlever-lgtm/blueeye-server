@@ -778,6 +778,8 @@ th.sortable.sorted { color: var(--accent); }
 .badge.online, .badge.active, .badge.valid, .badge.ok { background: rgba(34,197,94,.15); color: var(--ok); }
 .badge.offline, .badge.suspended, .badge.grace, .badge.expired, .badge.warn, .badge.stale { background: rgba(245,158,11,.15); color: var(--warn); }
 .badge.revoked, .badge.unlicensed, .badge.invalid, .badge.crit, .badge.bad, .badge.down, .badge.error { background: rgba(239,68,68,.15); color: var(--bad); }
+/* A badge that opens something (the agents' status badge -> connection diagnosis). */
+.badge.clickable { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; }
 /* Neutral/consumed (e.g. an enrollment code that's been used up). */
 .badge.used, .badge.neutral { background: rgba(148,163,184,.18); color: var(--muted); }
 /* Planned-but-not-built feature (license feature matrix). Distinct from warn. */

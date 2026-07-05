@@ -90,6 +90,27 @@ function attachAgentWebSocket({
   // repopulates after a server restart without needing a DB column.
   const sflowStatus = new Map(); // agentId -> { state, detail, at }
 
+  // Connection evidence for the "why is this agent disconnected?" diagnosis
+  // (GET /agents/:id/connection). All in-memory — it resets on a server restart,
+  // which the diagnosis states explicitly rather than pretending to know.
+  //   sessions          — last session per agent: ip + connect/disconnect times +
+  //                       the close code (the agent's last-known address is what
+  //                       lets us attribute anonymous 401 attempts below).
+  //   licenseRejections — when a VALID token was last turned away by the license
+  //                       gate (the agent keeps retrying, so this stays fresh).
+  //   authFailures      — recent upgrade attempts with a token we could not
+  //                       resolve (401). The agent is unknown at that point, so
+  //                       only the source IP is kept; bounded ring.
+  const sessions = new Map(); // String(agentId) -> { ip, connectedAt, disconnectedAt, closeCode }
+  const licenseRejections = new Map(); // String(agentId) -> ISO timestamp
+  const authFailures = []; // [{ at, ip }] newest last
+  const MAX_AUTH_FAILURES = 20;
+
+  function recordAuthFailure(ip) {
+    authFailures.push({ at: new Date().toISOString(), ip: ip || null });
+    if (authFailures.length > MAX_AUTH_FAILURES) authFailures.splice(0, authFailures.length - MAX_AUTH_FAILURES);
+  }
+
   server.on('upgrade', (req, socket, head) => {
     // Cooperative: only claim our path and ignore the rest, so sibling WS
     // servers on the same HTTP server (e.g. the dashboard socket) can handle
@@ -100,12 +121,14 @@ function attachAgentWebSocket({
       .verifyToken(extractToken(req))
       .then((agent) => {
         if (!agent) {
+          recordAuthFailure(clientIp(req));
           socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
           socket.destroy();
           return;
         }
         // License/capacity gate (token is valid; this is a separate concern).
         if (!licenseGuard(wss.clients.size)) {
+          licenseRejections.set(String(agent.agentId), new Date().toISOString());
           socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
           socket.destroy();
           logger.warn('Rejected agent connection: license invalid or agent limit reached.');
@@ -130,6 +153,19 @@ function attachAgentWebSocket({
     ws.agentId = agent.agentId;
     ws.isAlive = true;
     ws._remoteIp = clientIp(req); // captured here so the offline row can reuse it
+
+    // ws._session is this socket's own entry — the close handler stamps only its
+    // own object, so a fast reconnect (which replaces the map entry) is never
+    // overwritten by the old socket closing late.
+    ws._session = {
+      ip: ws._remoteIp,
+      connectedAt: new Date().toISOString(),
+      disconnectedAt: null,
+      closeCode: null,
+    };
+    sessions.set(String(agent.agentId), ws._session);
+    // A successful connect supersedes any earlier license rejection.
+    licenseRejections.delete(String(agent.agentId));
 
     agentsRepo
       .setStatus(agent.agentId, 'online')
@@ -248,7 +284,9 @@ function attachAgentWebSocket({
       }
     });
 
-    ws.on('close', () => {
+    ws.on('close', (code) => {
+      ws._session.disconnectedAt = new Date().toISOString();
+      ws._session.closeCode = Number.isInteger(code) ? code : null;
       agentsRepo
         .setStatus(agent.agentId, 'offline')
         .catch((err) => logger.error('Failed to mark agent offline:', err));
@@ -464,7 +502,49 @@ function attachAgentWebSocket({
     return sflowStatus.get(agentId) || null;
   }
 
-  return { wss, sendCommand, sendCommandAndWait, broadcast, close, connectionCount, getSflowStatus, pushTransactionConfig };
+  // Everything the server knows about one agent's connection right now — the
+  // raw evidence behind GET /agents/:id/connection (interpretation lives in
+  // ../ws/connectionDiagnosis.js, which is pure). In-memory fields (session,
+  // rejections, auth failures) reset on a server restart.
+  function getConnectionInfo(agentId) {
+    const target = String(agentId);
+    let sockets = 0;
+    for (const ws of wss.clients) {
+      if (String(ws.agentId) === target && ws.readyState === ws.OPEN) sockets += 1;
+    }
+    // Would the license admit one more connection right now? Diagnostic only —
+    // a guard that throws must not break the endpoint.
+    let licenseAcceptsNew = null;
+    try { licenseAcceptsNew = !!licenseGuard(wss.clients.size); } catch { /* unknown */ }
+    return {
+      connected: sockets > 0,
+      sockets,
+      session: sessions.get(target) || null,
+      licenseRejectedAt: licenseRejections.get(target) || null,
+      authFailures: authFailures.slice(),
+      licenseAcceptsNew,
+    };
+  }
+
+  // Force-closes an agent's live socket(s) so the agent re-dials on its own
+  // (its client reconnects with backoff, re-runs its reconcile and reloads its
+  // transaction config). This is the only "reconnect" the server can offer —
+  // connections are always initiated by the agent. Returns how many sockets
+  // were closed. 4001 is an application close code the agent treats like any
+  // other drop.
+  function disconnectAgent(agentId, { code = 4001, reason = 'reconnect requested by the server' } = {}) {
+    let closed = 0;
+    const target = String(agentId);
+    for (const ws of wss.clients) {
+      if (String(ws.agentId) === target && ws.readyState === ws.OPEN) {
+        try { ws.close(code, reason); } catch { ws.terminate(); }
+        closed += 1;
+      }
+    }
+    return closed;
+  }
+
+  return { wss, sendCommand, sendCommandAndWait, broadcast, close, connectionCount, getSflowStatus, pushTransactionConfig, getConnectionInfo, disconnectAgent };
 }
 
 module.exports = { attachAgentWebSocket };

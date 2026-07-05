@@ -11,7 +11,10 @@ const { validateProbeSpec } = require('../validation/probeValidation');
 const { parseId } = require('../validation/locationValidation');
 const { verifyProof } = require('../license/verify');
 const { INSTALLABLE_TOOLS, isAllowedTool } = require('../agentTools');
+const { diagnoseConnection } = require('../ws/connectionDiagnosis');
 const { silentLogger } = require('../logger');
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // Aggregates the byPort / byProtocol / topTalkers entries across a set of
 // NetFlow measurements, optionally filtered to one port and/or protocol.
@@ -70,7 +73,11 @@ function aggregateFlows(rows, { port = null, protocol = null } = {}) {
 //
 // Agents are created via enrollment (prompt 4) — there is intentionally no
 // manual POST /agents here.
-function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentCommander, agentSourceStore, releaseStore = null, releasePublicKey = '', auditRepo = null, integrationTrigger = null, logger = silentLogger }) {
+function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentCommander, agentSourceStore, releaseStore = null, releasePublicKey = '', auditRepo = null, integrationTrigger = null, logger = silentLogger, reconnect = {} }) {
+  // How long POST /:id/reconnect waits for the agent to re-dial after the forced
+  // close (the agent's first backoff step is ~1 s), and how often it re-checks.
+  const reconnectWaitMs = Number.isInteger(reconnect.waitMs) ? reconnect.waitMs : 12000;
+  const reconnectPollMs = Number.isInteger(reconnect.pollMs) ? reconnect.pollMs : 250;
   const router = express.Router();
 
   // Response helpers for the error shapes repeated across this router.
@@ -436,6 +443,67 @@ function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentComma
         return res.status(409).json({ error: 'Agent not connected', delivered: 0 });
       }
       res.status(202).json({ delivered, agentId: id });
+    })
+  );
+
+  // GET /agents/:id/connection — an explainable verdict on the agent's live
+  // connection: connected or not, WHY (license gate, rejected token, fresh drop,
+  // unreachable host), what evidence supports it, and what to do about it.
+  // viewer+ (read-only; no agent interaction — this must work precisely when the
+  // agent is NOT connected). Backed by diagnoseConnection() + the WS hub's
+  // in-memory connection evidence.
+  router.get(
+    '/:id/connection',
+    requireAuth,
+    requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN),
+    asyncHandler(async (req, res) => {
+      const id = parseId(req.params.id);
+      if (id === null) return invalidId(res);
+      const agent = await agentsRepo.findById(id);
+      if (!agent) return notFound(res);
+      const live = agentCommander && typeof agentCommander.getConnectionInfo === 'function'
+        ? agentCommander.getConnectionInfo(id)
+        : null;
+      res.json({ agentId: id, ...diagnoseConnection({ agent, live }) });
+    })
+  );
+
+  // POST /agents/:id/reconnect — force a clean reconnect of a CONNECTED agent:
+  // the server closes its socket(s) and the agent re-dials on its own (backoff,
+  // then reconcile + config reload), then we wait briefly for it to come back.
+  // operator/admin. Connections are agent-initiated, so this cannot revive a
+  // disconnected agent — that case returns 409 with the diagnosis explaining
+  // why it is down and what will actually bring it back.
+  router.post(
+    '/:id/reconnect',
+    requireAuth,
+    requireRole(ROLES.OPERATOR, ROLES.ADMIN),
+    asyncHandler(async (req, res) => {
+      const id = parseId(req.params.id);
+      if (id === null) return invalidId(res);
+      const agent = await agentsRepo.findById(id);
+      if (!agent) return notFound(res);
+      if (!agentCommander || typeof agentCommander.disconnectAgent !== 'function'
+        || typeof agentCommander.getConnectionInfo !== 'function') {
+        return res.status(503).json({ error: 'Agent channel not available' });
+      }
+      const live = agentCommander.getConnectionInfo(id);
+      if (!live || !live.connected) {
+        return res.status(409).json({
+          error: 'Agent not connected — the server cannot dial out to an agent, so only a live connection can be reconnected',
+          connected: false,
+          diagnosis: diagnoseConnection({ agent, live }),
+        });
+      }
+      const closed = agentCommander.disconnectAgent(id);
+      const startedAt = Date.now();
+      let reconnected = false;
+      while (Date.now() - startedAt < reconnectWaitMs) {
+        await sleep(reconnectPollMs);
+        const info = agentCommander.getConnectionInfo(id);
+        if (info && info.connected) { reconnected = true; break; }
+      }
+      res.json({ connected: reconnected, closed, reconnected, waitedMs: Date.now() - startedAt });
     })
   );
 

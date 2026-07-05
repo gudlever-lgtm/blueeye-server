@@ -392,14 +392,16 @@ server never touches them.
 
 | Variable | Description |
 | --- | --- |
-| `LICENSE_KEY` | License key issued by blueeye-licens |
-| `LICENSE_SERVER_ID` | This server's ID (must match `payload.serverId`) |
-| `LICENSE_SERVER_URL` | blueeye-licens URL |
-| `LICENSE_PUBLIC_KEY` | Embedded Ed25519 public key (overrides `src/license/publicKey.js`) |
+| `LICENSE_KEY` | License key issued by blueeye-licens — **the only value a customer must set** |
+| `LICENSE_SERVER_ID` | *Optional.* This server's ID (must match `payload.serverId`). When unset, derived from a stable host fingerprint and bound on first validation — see *Minimal customer setup* in `docs/licensing.md` |
+| `LICENSE_SERVER_URL` | *Optional.* blueeye-licens URL; defaults to the vendor's hosted licens |
+| `LICENSE_PUBLIC_KEY` | *Optional.* Ed25519 public key overriding `src/license/publicKey.js` (dev/test only; ignored in production without `TRUST_ANCHOR_OVERRIDE_ACK`) |
 | `LICENSE_GRACE_DAYS` | Offline grace period (default 14) |
 | `LICENSE_VALIDATE_INTERVAL_HOURS` | Validation interval (default 6) |
 
-The embedded public key comes from `docs/public-key.md` in blueeye-licens.
+The embedded public key comes from `docs/public-key.md` in blueeye-licens. For a
+customer, setting `LICENSE_KEY` alone is enough (see
+[`docs/licensing.md` → *Minimal customer setup*](docs/licensing.md#minimal-customer-setup--license_key-only)).
 
 > **This server never holds the private signing key.** `LICENSE_SIGNING_KEY`
 > (and `LICENS_JWT_SECRET`) belong **only** to the vendor's blueeye-licens host;

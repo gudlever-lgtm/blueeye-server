@@ -150,6 +150,23 @@ function start() {
     );
   }
 
+  // Log how this server identifies itself to blueeye-licens. When derived (no
+  // LICENSE_SERVER_ID set), the id is stable per host and licens binds the
+  // license to it on first validation — so a customer only configures
+  // LICENSE_KEY. 'host-attributes' (no machine-id) is less stable in a
+  // container: mount /etc/machine-id read-only to keep it fixed across recreates.
+  if (config.license.serverIdSource === 'host-attributes') {
+    logger.warn(
+      `License: serverId ${config.license.serverId} derived from host attributes ` +
+        '(no machine-id found) — mount /etc/machine-id read-only, or set ' +
+        'LICENSE_SERVER_ID, to keep it stable across container recreation.'
+    );
+  } else {
+    logger.info(
+      `License: serverId ${config.license.serverId} (${config.license.serverIdSource}).`
+    );
+  }
+
   const db = createDb(config);
   // Telemetry store (storage split). Null unless TSDB_ENABLED — then the server
   // behaves exactly as before with all telemetry in MySQL. When present, the

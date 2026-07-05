@@ -87,12 +87,20 @@ services:
       # it once. Set ADMIN_PASSWORD only to choose your own.
       SEED_ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       LICENSE_KEY: ${LICENSE_KEY:-DEMO-DEMO-DEMO-DEMO-DEMO}
-      LICENSE_SERVER_ID: ${LICENSE_SERVER_ID:-gnf-server-1}
+      # Left blank for real customers: the server then derives a stable serverId
+      # from the host (see src/license/serverIdentity.js) and licens binds the
+      # licence to it on first validation, so only LICENSE_KEY need be set. The
+      # demo .env (scripts/dev-bootstrap.js) sets gnf-server-1 explicitly to match
+      # its seeded demo licence.
+      LICENSE_SERVER_ID: ${LICENSE_SERVER_ID:-}
       # Where this server validates its license. Customers set this to the vendor's
       # hosted licens URL. Default keeps the vendor's on-host licens (run with the
       # "licens" profile). The server tolerates outages up to LICENSE_GRACE_DAYS.
       LICENSE_SERVER_URL: ${LICENSE_SERVER_URL:-http://licens:4000}
-      LICENSE_PUBLIC_KEY: ${LICENSE_PUBLIC_KEY}
+      # Empty default so removing it from .env doesn't emit a Compose "variable is
+      # not set" warning — a real production install leaves this unset and relies
+      # on the key embedded in src/license/publicKey.js.
+      LICENSE_PUBLIC_KEY: ${LICENSE_PUBLIC_KEY:-}
       # Only needed to make LICENSE_PUBLIC_KEY above take effect (NODE_ENV is
       # production in this stack). scripts/dev-bootstrap.js sets this for the
       # disposable local demo key pair. A real production install should embed
@@ -109,6 +117,11 @@ services:
     command: sh -c "node src/migrate.js && node scripts/seed-demo.js && node src/server.js"
     volumes:
       - server-data:/data
+      # Host machine-id (read-only) so the derived LICENSE_SERVER_ID stays stable
+      # across container recreation when LICENSE_SERVER_ID is unset. Without it the
+      # server falls back to hostname/MAC, which change on recreate — see
+      # src/license/serverIdentity.js and docs/licensing.md.
+      - /etc/machine-id:/etc/machine-id:ro
       # The agent source tree (the sibling checkout), packaged + served at
       # /enroll/agent-source.tgz so the one-line installer can build + run it
       # (Docker/Node) with NO published binaries. Read-only — the server only

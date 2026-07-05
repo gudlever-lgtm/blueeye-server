@@ -137,10 +137,52 @@ The active plan is resolved (in priority order):
    (legacy behaviour — unlimited plan limits, no new features), otherwise
    `unlicensed` (locked down — zero limits, no features).
 
-To activate online: set `LICENSE_KEY` / `LICENSE_SERVER_ID` / `LICENSE_SERVER_URL`
-and the `LICENSE_PUBLIC_KEY`, then the manager validates every 6 hours (or press
-**Re-validate now** in the UI). To run a pilot without the license server, set
-`LICENSE_PLAN=pilot`.
+To run a pilot without the license server, set `LICENSE_PLAN=pilot`.
+
+### Minimal customer setup — `LICENSE_KEY` only
+
+A customer install needs to configure **just the license key**:
+
+```
+LICENSE_KEY=<key issued by the vendor>
+```
+
+Everything else resolves on its own:
+
+- **Public key** — embedded in `src/license/publicKey.js` (shipped in the build);
+  nothing to set.
+- **`LICENSE_SERVER_URL`** — defaults to the vendor's hosted licens; only set it
+  to point somewhere else.
+- **`LICENSE_SERVER_ID`** — when unset, the server derives a **stable, host-specific**
+  id (`src/license/serverIdentity.js`): the host machine-id
+  (`/etc/machine-id`), or a hostname+MAC hash if none is present. blueeye-licens
+  **binds the licence to the first serverId that validates it** (trust-on-first-use,
+  `licenseProof.js`), and every later proof must match — so the key sticks to one
+  host with no manual id. The resolved id + its source (`configured` / `machine-id`
+  / `host-attributes`) is logged at boot and shown in `GET /license/status`.
+
+> **Docker:** mount the host machine-id read-only so the derived id survives
+> container recreation — `-/etc/machine-id:/etc/machine-id:ro` (already in the
+> bundled `docker-compose.yml`). Without it the server falls back to the
+> container's hostname/MAC, which change on recreate and would force a rebind.
+> You can always pin `LICENSE_SERVER_ID` explicitly to opt out of derivation.
+
+After setup the manager validates every 6 hours (or on **Re-validate now**).
+
+### Reinstalls & hardware moves — rebinding a licence
+
+Because the derived id is host-specific, a genuinely new host (or a wipe that
+loses the machine-id) produces a new serverId, which licens rejects as
+`server_mismatch` against the already-bound licence. To re-claim the key, an
+operator clears the binding on the license server:
+
+```
+POST /licenses/:id/unbind        # blueeye-licens, operator/admin
+```
+
+The next validation from the new host rebinds the licence (trust-on-first-use)
+and verification resumes. Pinning `LICENSE_SERVER_ID` to a fixed value avoids
+the churn where hosts are expected to change.
 
 ## Changing plan
 

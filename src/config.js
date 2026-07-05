@@ -6,7 +6,12 @@
 require('dotenv').config();
 const path = require('path');
 const { resolvePublicKey, publicKeySource } = require('./license/publicKey');
+const { resolveServerId } = require('./license/serverIdentity');
 const { normalizeFingerprint } = require('./enroll/fingerprint');
+
+// Resolve the license server identity once: LICENSE_SERVER_ID when set, else a
+// stable machine-derived id so a customer only needs to configure LICENSE_KEY.
+const licenseIdentity = resolveServerId();
 
 function toInt(value, fallback) {
   const parsed = Number.parseInt(value, 10);
@@ -158,8 +163,14 @@ const config = {
   // Client-side licensing against blueeye-licens. Set at installation (not CRUD).
   license: {
     key: process.env.LICENSE_KEY || '',
-    serverId: process.env.LICENSE_SERVER_ID || '',
-    serverUrl: process.env.LICENSE_SERVER_URL || '',
+    // Machine-derived when LICENSE_SERVER_ID is unset (see serverIdentity.js), so
+    // a customer install only needs LICENSE_KEY. serverIdSource is 'configured' |
+    // 'machine-id' | 'host-attributes', logged at boot.
+    serverId: licenseIdentity.serverId,
+    serverIdSource: licenseIdentity.source,
+    // Defaults to the vendor's hosted license server so customers don't set it;
+    // the compose demo overrides it to the on-host licens (http://licens:4000).
+    serverUrl: process.env.LICENSE_SERVER_URL || 'https://licens.gnf.dk',
     publicKey: resolvePublicKey(),
     // 'embedded' | 'env' | 'blocked' — logged at boot (server.js); never itself
     // a trust decision, resolvePublicKey() above is the single source of truth.

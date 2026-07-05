@@ -5,6 +5,7 @@ const TOKEN_KEY = 'blueeye.server.token';
 const ROLE_KEY = 'blueeye.server.role';
 const EMAIL_KEY = 'blueeye.server.email';
 const THEME_KEY = 'blueeye.server.theme';
+const NAV_COLLAPSE_KEY = 'blueeye.server.navCollapsed';
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -336,8 +337,9 @@ function applyRoleVisibility() {
     if (!allowed && currentView === b.dataset.view) currentView = 'fleet';
   }
   // Collapse category groups whose items are all hidden (by role or licence).
+  // Only nav items count — the category-label button never keeps a group alive.
   for (const g of document.querySelectorAll('.tabs .nav-group')) {
-    const anyVisible = [...g.querySelectorAll('button')]
+    const anyVisible = [...g.querySelectorAll('button[data-view]')]
       .some((b) => !b.classList.contains('hidden') && !b.classList.contains('role-hidden'));
     g.classList.toggle('hidden', !anyVisible);
   }
@@ -9570,7 +9572,7 @@ async function render({ silent = false } = {}) {
     b.classList.toggle('hidden', role !== 'admin');
   }
   if (currentView === 'users' && role !== 'admin') currentView = 'overview';
-  for (const b of document.querySelectorAll('.tabs button')) b.classList.toggle('active', b.dataset.view === currentView);
+  for (const b of document.querySelectorAll('.tabs button[data-view]')) b.classList.toggle('active', b.dataset.view === currentView);
 
   const view = $('#view');
   if (!silent) view.replaceChildren(el('div', { class: 'empty' }, 'Loading…'));
@@ -9630,7 +9632,7 @@ $('#logout').addEventListener('click', () => { setAutoRefresh(false); stopOvervi
 $('#refresh').addEventListener('click', () => render());
 $('#autorefresh').addEventListener('change', (e) => setAutoRefresh(e.target.checked));
 function closeNav() { $('#app').classList.remove('nav-open'); }
-for (const b of document.querySelectorAll('.tabs button')) {
+for (const b of document.querySelectorAll('.tabs button[data-view]')) {
   b.addEventListener('click', () => {
     closeDrawer(); closeNav();
     // Locked (licence-excluded) items don't open — they nudge to the licence page.
@@ -9642,6 +9644,39 @@ for (const b of document.querySelectorAll('.tabs button')) {
     currentView = b.dataset.view; render();
   });
 }
+// Foldable nav categories: clicking a category label collapses/expands its group.
+// The set of collapsed categories is remembered per browser (localStorage), so the
+// rail comes back the way the user left it. Independent of the mobile off-canvas nav.
+function loadCollapsedCategories() {
+  try {
+    const raw = localStorage.getItem(NAV_COLLAPSE_KEY);
+    const arr = raw ? JSON.parse(raw) : [];
+    return new Set(Array.isArray(arr) ? arr : []);
+  } catch { return new Set(); }
+}
+function saveCollapsedCategories(set) {
+  try { localStorage.setItem(NAV_COLLAPSE_KEY, JSON.stringify([...set])); } catch { /* storage off */ }
+}
+function setupNavGroups() {
+  const collapsed = loadCollapsedCategories();
+  for (const g of document.querySelectorAll('.tabs .nav-group')) {
+    const label = g.querySelector('.nav-group-label');
+    if (!label) continue;
+    const cat = g.dataset.category || label.textContent.trim();
+    const setState = (isCollapsed) => {
+      g.classList.toggle('collapsed', isCollapsed);
+      label.setAttribute('aria-expanded', String(!isCollapsed));
+    };
+    setState(collapsed.has(cat));
+    label.addEventListener('click', () => {
+      const nowCollapsed = !g.classList.contains('collapsed');
+      setState(nowCollapsed);
+      if (nowCollapsed) collapsed.add(cat); else collapsed.delete(cat);
+      saveCollapsedCategories(collapsed);
+    });
+  }
+}
+setupNavGroups();
 // Off-canvas sidebar (mobile/tablet): the ☰ button opens it; tapping the dimmed
 // backdrop or anything outside the sidebar closes it again.
 {

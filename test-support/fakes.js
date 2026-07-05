@@ -422,6 +422,19 @@ function makeAgentCommander(overrides = {}) {
         acked: true,
         reply: { agentVersion: '0.1.0', sources: ['proc'], managed: 'systemd', accepted: true, runtime: 'systemd' },
       })),
+    // Connection diagnosis + forced re-dial (GET /connection, POST /reconnect).
+    // Defaults to "connected with one healthy session".
+    getConnectionInfo:
+      overrides.getConnectionInfo ||
+      (() => ({
+        connected: true,
+        sockets: 1,
+        session: { ip: '10.0.0.5', connectedAt: new Date().toISOString(), disconnectedAt: null, closeCode: null },
+        licenseRejectedAt: null,
+        authFailures: [],
+        licenseAcceptsNew: true,
+      })),
+    disconnectAgent: overrides.disconnectAgent || (() => 1),
   };
 }
 
@@ -1163,6 +1176,7 @@ function makeApp(overrides = {}) {
     planService,
     usageService,
     agentCommander: overrides.agentCommander || makeAgentCommander(),
+    agentReconnect: overrides.agentReconnect || { waitMs: 200, pollMs: 10 },
     systemInfo: overrides.systemInfo || makeSystemInfo(),
     findingStore: overrides.findingStore || makeFindingStore(),
     analysisPipeline: overrides.analysisPipeline || makeAnalysisPipeline(),

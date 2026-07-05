@@ -44,10 +44,10 @@ function withTimeout(promise, ms, message) {
 
 // Boots an HTTP server with the agent WebSocket attached, runs fn, then cleans
 // up regardless of outcome.
-async function withWsServer({ agentTokensRepo, agentsRepo, auditRepo, auditEventsRepo, notifyDashboard }, fn) {
+async function withWsServer({ agentTokensRepo, agentsRepo, auditRepo, auditEventsRepo, notifyDashboard, licenseGuard }, fn) {
   const app = makeApp({ agentTokensRepo, agentsRepo });
   const server = http.createServer(app);
-  const handle = attachAgentWebSocket({ server, agentTokensRepo, agentsRepo, auditRepo, auditEventsRepo, notifyDashboard });
+  const handle = attachAgentWebSocket({ server, agentTokensRepo, agentsRepo, auditRepo, auditEventsRepo, notifyDashboard, ...(licenseGuard ? { licenseGuard } : {}) });
   await new Promise((resolve) => server.listen(0, resolve));
   const port = server.address().port;
   try {
@@ -468,4 +468,108 @@ test('an agent.error frame with no category/code defaults to "general" and no co
       client.close();
     }
   });
+});
+
+// ---------- Connection diagnosis evidence + forced reconnect ----------
+
+test('getConnectionInfo tracks the live session, then the disconnect (with close code)', async () => {
+  const tracker = makeStatusTracker();
+  const agentsRepo = makeAgentsRepo({ setStatus: tracker.setStatus });
+
+  await withWsServer({ agentTokensRepo: validRepo(), agentsRepo }, async ({ port, handle }) => {
+    const client = new WebSocket(`ws://127.0.0.1:${port}/ws/agent`, { headers: { Authorization: 'Bearer good' } });
+    try {
+      await withTimeout(waitOpen(client), 4000, 'did not open');
+      await withTimeout(tracker.waitFor('online'), 4000, 'online not set');
+
+      const live = handle.getConnectionInfo(9);
+      assert.equal(live.connected, true);
+      assert.equal(live.sockets, 1);
+      assert.ok(live.session);
+      assert.ok(live.session.connectedAt);
+      assert.equal(live.session.disconnectedAt, null);
+      assert.ok(live.session.ip); // the peer address, for 401 attribution
+      assert.equal(live.licenseAcceptsNew, true);
+
+      client.close(1000);
+      await withTimeout(tracker.waitFor('offline'), 4000, 'offline not set');
+      const after = handle.getConnectionInfo(9);
+      assert.equal(after.connected, false);
+      assert.equal(after.sockets, 0);
+      assert.ok(after.session.disconnectedAt);
+      assert.equal(after.session.closeCode, 1000);
+    } finally {
+      client.close();
+    }
+  });
+});
+
+test('disconnectAgent force-closes the socket with code 4001 and returns the count', async () => {
+  const tracker = makeStatusTracker();
+  const agentsRepo = makeAgentsRepo({ setStatus: tracker.setStatus });
+
+  await withWsServer({ agentTokensRepo: validRepo(), agentsRepo }, async ({ port, handle }) => {
+    const client = new WebSocket(`ws://127.0.0.1:${port}/ws/agent`, { headers: { Authorization: 'Bearer good' } });
+    try {
+      await withTimeout(waitOpen(client), 4000, 'did not open');
+      await withTimeout(tracker.waitFor('online'), 4000, 'online not set');
+
+      const closedOnClient = new Promise((resolve) => client.on('close', (code) => resolve(code)));
+      const closed = handle.disconnectAgent(9);
+      assert.equal(closed, 1);
+      const code = await withTimeout(closedOnClient, 4000, 'client saw no close');
+      assert.equal(code, 4001);
+
+      await withTimeout(tracker.waitFor('offline'), 4000, 'offline not set');
+      assert.equal(handle.getConnectionInfo(9).connected, false);
+    } finally {
+      client.close();
+    }
+  });
+});
+
+test('disconnectAgent returns 0 for an agent with no live connection', async () => {
+  const agentsRepo = makeAgentsRepo({ setStatus: async () => {} });
+  await withWsServer({ agentTokensRepo: validRepo(), agentsRepo }, async ({ handle }) => {
+    assert.equal(handle.disconnectAgent(12345), 0);
+  });
+});
+
+test('a rejected token (401) is recorded as an auth failure with the source ip', async () => {
+  const agentsRepo = makeAgentsRepo({ setStatus: async () => {} });
+  const agentTokensRepo = makeAgentTokensRepo({ findActiveByHash: async () => null });
+
+  await withWsServer({ agentTokensRepo, agentsRepo }, async ({ port, handle }) => {
+    const client = new WebSocket(`ws://127.0.0.1:${port}/ws/agent`, { headers: { Authorization: 'Bearer stale' } });
+    const rejected = new Promise((resolve) => {
+      client.on('unexpected-response', (_req, res) => resolve(res.statusCode));
+      client.on('error', () => resolve(null));
+    });
+    const status = await withTimeout(rejected, 4000, 'handshake not rejected');
+    assert.equal(status, 401);
+    const live = handle.getConnectionInfo(9);
+    assert.equal(live.authFailures.length, 1);
+    assert.ok(live.authFailures[0].at);
+    assert.ok(live.authFailures[0].ip);
+  });
+});
+
+test('a license rejection (403) is recorded against the agent id', async () => {
+  const agentsRepo = makeAgentsRepo({ setStatus: async () => {} });
+
+  await withWsServer(
+    { agentTokensRepo: validRepo(), agentsRepo, licenseGuard: () => false },
+    async ({ port, handle }) => {
+      const client = new WebSocket(`ws://127.0.0.1:${port}/ws/agent`, { headers: { Authorization: 'Bearer good' } });
+      const rejected = new Promise((resolve) => {
+        client.on('unexpected-response', (_req, res) => resolve(res.statusCode));
+        client.on('error', () => resolve(null));
+      });
+      const status = await withTimeout(rejected, 4000, 'handshake not rejected');
+      assert.equal(status, 403);
+      const live = handle.getConnectionInfo(9); // the token maps to agent 9
+      assert.ok(live.licenseRejectedAt);
+      assert.equal(live.licenseAcceptsNew, false);
+    }
+  );
 });

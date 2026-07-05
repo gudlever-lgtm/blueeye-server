@@ -28,7 +28,9 @@ function parseCookies(req) {
     if (i < 0) continue;
     const k = part.slice(0, i).trim();
     const v = part.slice(i + 1).trim();
-    if (k) out[k] = decodeURIComponent(v);
+    // A foreign cookie on the same host can carry a bare '%' — a URIError
+    // here must not 500 the whole SSO callback; keep the raw value instead.
+    if (k) { try { out[k] = decodeURIComponent(v); } catch { out[k] = v; } }
   }
   return out;
 }

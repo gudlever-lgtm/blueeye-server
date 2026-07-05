@@ -94,10 +94,15 @@ function createIncidentsRepository(db) {
 
   // Lists incidents overlapping [from, to], optionally filtered by severity and
   // location. An incident overlaps the window if it started before `to` and was
-  // either unresolved or resolved after `from`. Newest-first.
+  // either unresolved or resolved after `from`. Newest-first. Each bound only
+  // filters when provided — a missing `from`/`to` means "unbounded", NOT a
+  // `<= NULL` comparison (which matches no rows: list() with no window used to
+  // return an always-empty set).
   async function list({ from, to, severity = null, locationId = null, limit = 1000 } = {}) {
-    const where = ['i.started_at <= ?', '(i.resolved_at IS NULL OR i.resolved_at >= ?)'];
-    const params = [to, from];
+    const where = [];
+    const params = [];
+    if (to != null) { where.push('i.started_at <= ?'); params.push(to); }
+    if (from != null) { where.push('(i.resolved_at IS NULL OR i.resolved_at >= ?)'); params.push(from); }
     if (severity) { where.push('i.severity = ?'); params.push(severity); }
     if (locationId != null) { where.push('i.location_id = ?'); params.push(locationId); }
     const lim = Number.isInteger(limit) && limit > 0 && limit <= 5000 ? limit : 1000;
@@ -108,7 +113,7 @@ function createIncidentsRepository(db) {
        FROM incidents i
        LEFT JOIN locations l ON l.id = i.location_id
        LEFT JOIN agents a ON a.id = i.agent_id
-       WHERE ${where.join(' AND ')}
+       ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
        ORDER BY i.started_at DESC, i.id DESC
        LIMIT ?`,
       params

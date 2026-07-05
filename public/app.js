@@ -9430,8 +9430,26 @@ async function stampFooter() {
   } catch { footStamped = false; /* retry on the next render */ }
 }
 
+// Initial focus on the login form: straight to the password when the username
+// (email) is already filled — it is prefilled by default — otherwise to the
+// username. Never steals focus once the user is already typing in the form.
+function focusLoginField() {
+  const emailEl = $('#email');
+  const passEl = $('#password');
+  if (!emailEl || !passEl) return;
+  const active = document.activeElement;
+  if (active && active !== document.body && $('#login-form').contains(active)) return;
+  if (emailEl.value.trim()) passEl.focus();
+  else emailEl.focus();
+}
+
 async function render({ silent = false } = {}) {
-  if (!token) { $('#login').classList.remove('hidden'); $('#app').classList.add('hidden'); return; }
+  if (!token) {
+    $('#login').classList.remove('hidden');
+    $('#app').classList.add('hidden');
+    focusLoginField();
+    return;
+  }
   $('#login').classList.add('hidden');
   $('#app').classList.remove('hidden');
   connectLive(); // live findings channel (idempotent)

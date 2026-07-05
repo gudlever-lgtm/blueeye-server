@@ -268,3 +268,18 @@ test('a repository failure surfaces as 500', async () => {
   const res = await request(makeApp({ nis2RisksRepo })).get('/api/nis2/risks').set('Authorization', authHeader('viewer'));
   assert.equal(res.status, 500);
 });
+
+test('evidence rejects a present-but-invalid entityId (400) instead of widening the filter', async () => {
+  const app = makeApp();
+  assert.equal((await request(app).get('/api/nis2/evidence?entityId=abc').set('Authorization', authHeader('viewer'))).status, 400);
+  assert.equal((await request(app).get('/api/nis2/evidence?entityId=0').set('Authorization', authHeader('viewer'))).status, 400);
+  assert.equal((await request(app).get('/api/nis2/evidence?entityId=7').set('Authorization', authHeader('viewer'))).status, 200);
+});
+
+test('array-shaped query filters are ignored, not passed to SQL (?status=a&status=b)', async () => {
+  const app = makeApp();
+  // Express parses the repeated param into an array; the route must coerce it
+  // to "no filter" rather than let mysql2 expand it into invalid SQL.
+  assert.equal((await request(app).get('/api/nis2/risks?status=Open&status=Closed').set('Authorization', authHeader('viewer'))).status, 200);
+  assert.equal((await request(app).get('/api/nis2/incidents?severity[x]=1').set('Authorization', authHeader('viewer'))).status, 200);
+});

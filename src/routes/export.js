@@ -149,7 +149,11 @@ function createExportRouter({ findingStore, flowsRepo, agentsRepo, locationsRepo
     requireAuth,
     requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN),
     asyncHandler(async (req, res) => {
-      const resource = resources[req.params.resource];
+      // Own-property lookup only: a bare index would walk the prototype chain,
+      // so /export/constructor would pass the guard and 500 on .fetch().
+      const resource = Object.prototype.hasOwnProperty.call(resources, req.params.resource)
+        ? resources[req.params.resource]
+        : null;
       if (!resource) return res.status(404).json({ error: 'Unknown export resource' });
 
       if (resource.feature && featureGate && !featureGate.isFeatureEnabled(resource.feature)) {

@@ -41,23 +41,25 @@
         </div>
         <!-- Navigation is grouped into categories and each item declares the
              minimum role that may use it (data-min-role, default viewer). app.js
-             hides items above the user's role and collapses any empty category. -->
+             hides items above the user's role and collapses any empty category.
+             Each category label is a button that folds/unfolds its group; the
+             collapsed state is remembered per browser (see setupNavGroups). -->
         <nav class="tabs">
           <div class="nav-group" data-category="Monitoring">
-            <span class="nav-group-label">Monitoring</span>
+            <button type="button" class="nav-group-label" aria-expanded="true">Monitoring</button>
             <button data-view="fleet" class="active">Overview</button>
             <button data-view="overview">Traffic</button>
             <button data-view="map">Sites</button>
             <button data-view="geo" data-feature="geo">Destinations</button>
           </div>
           <div class="nav-group" data-category="Fleet">
-            <span class="nav-group-label">Fleet</span>
+            <button type="button" class="nav-group-label" aria-expanded="true">Fleet</button>
             <button data-view="agents">Agents</button>
             <button data-view="interfaces">Interfaces</button>
             <button data-view="nics">NICs</button>
           </div>
           <div class="nav-group" data-category="Diagnostics">
-            <span class="nav-group-label">Diagnostics</span>
+            <button type="button" class="nav-group-label" aria-expanded="true">Diagnostics</button>
             <button data-view="probes">Probes &amp; Tests</button>
             <button data-view="transactions">Transaktionstests</button>
             <button data-view="flows">Flows</button>
@@ -65,12 +67,12 @@
             <button data-view="investigation" data-min-role="operator">Troubleshooting</button>
           </div>
           <div class="nav-group" data-category="Insights">
-            <span class="nav-group-label">Insights</span>
+            <button type="button" class="nav-group-label" aria-expanded="true">Insights</button>
             <button data-view="findings" data-feature="analysis">Analysis</button>
             <button data-view="reporting">Reporting</button>
           </div>
           <div class="nav-group" data-category="Administration">
-            <span class="nav-group-label">Administration</span>
+            <button type="button" class="nav-group-label" aria-expanded="true">Administration</button>
             <button data-view="locations">Locations</button>
             <button data-view="enrollment" data-min-role="operator">Enrollment</button>
             <button data-view="logs" data-min-role="admin">Logs</button>

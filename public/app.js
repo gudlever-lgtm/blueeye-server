@@ -6624,6 +6624,10 @@ views.settings = async () => {
       el('div', { class: 'subtabs' }, ...tabs.map(([k, lbl]) =>
         el('button', { class: `small ghost${k === settingsTab ? ' active' : ''}`, onclick: () => { settingsTab = k; render(); } }, lbl))))));
   root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Settings')), nav);
+  // Per-section licence pill (green = included in this licence, red = not).
+  // Needs the feature + plan maps; both are cached, so this is usually instant.
+  await Promise.all([loadFeatures(), loadPlan()]);
+  root.append(el('div', { class: 'settings-license-row' }, settingsLicensePill(settingsTab)));
 
   const views2 = {
     users: () => views.users(),
@@ -6654,10 +6658,37 @@ views.settings = async () => {
 };
 
 // A small "Licence: <feature> yes/no" badge so each feature tab shows whether the
-// licence covers it.
+// licence covers it. Green when included, red when not.
 function licenseBadge(license, feature) {
   const ok = license && license[feature] === true;
-  return el('span', { class: `badge ${ok ? 'active' : 'offline'}` }, `Licence: ${feature} ${ok ? 'yes' : 'no'}`);
+  return el('span', { class: `badge ${ok ? 'active' : 'bad'}` }, `Licence: ${feature} ${ok ? 'yes' : 'no'}`);
+}
+
+// Which licence feature (if any) governs each Settings tab. A tab not listed
+// here is baseline — always included in every licence, never gateable — and
+// shows a green "included" pill. Gated tabs show green when the active licence
+// entitles them and red when it doesn't (via featureEntitled, which ORs the
+// legacy module map with the packaged-plan feature map). Keys mirror
+// SETTINGS_GROUPS.
+const SETTINGS_FEATURE = {
+  users: { feature: 'rbac', label: 'Role-based access' },
+  apitokens: { feature: 'api_access', label: 'API access' },
+  analyse: { feature: 'analysis', label: 'Analysis' },
+  alerting: { feature: 'alerting', label: 'Alerting' },
+  map: { feature: 'geo', label: 'Destinations / geo' },
+};
+
+// The green/red licence pill shown at the top of every Settings section.
+function settingsLicensePill(tabKey) {
+  const info = SETTINGS_FEATURE[tabKey];
+  if (!info) {
+    return el('span', { class: 'badge active', title: 'Included in every BlueEye licence — not a gateable feature.' },
+      'Licence: included');
+  }
+  const ok = featureEntitled(info.feature);
+  const title = ok ? `${info.label} is included in your licence.` : lockedHint(info.label, info.feature);
+  return el('span', { class: `badge ${ok ? 'active' : 'bad'}`, title },
+    `Licence: ${info.label} — ${ok ? 'included' : 'not in licence'}`);
 }
 
 // Settings → Agent key: generate / show / delete the agent-release SIGNING key.
@@ -6828,7 +6859,7 @@ async function settingsAnalyseView() {
   // refused server-side otherwise). An unknown licence (null) keeps the card, in
   // line with the "allow until we know it's off" rule used elsewhere.
   const assistantLicensed = !data.license || data.license.assistant !== false;
-  root.append(el('p', { class: 'muted settings-intro' }, 'The server learns a normal baseline for each metric and raises a finding when a measurement deviates enough from it. Here you set how sensitive detection is — changes take effect immediately, without restart. The opt-in AI assistant (its on/off switch and API key) is configured here too. ', licenseBadge(data.license, 'analysis')));
+  root.append(el('p', { class: 'muted settings-intro' }, 'The server learns a normal baseline for each metric and raises a finding when a measurement deviates enough from it. Here you set how sensitive detection is — changes take effect immediately, without restart. The opt-in AI assistant (its on/off switch and API key) is configured here too.'));
   root.append(el('div', { class: 'settings-grid' }, analyseSettingsCard(data.analysis), throughputSettingsCard(data.throughput),
     assistantLicensed ? assistantSettingsCard(data.assistant) : assistantUnlicensedCard(data.license)));
   return root;
@@ -7112,8 +7143,7 @@ async function settingsAlertingView() {
   // know it's off" rule used for the assistant.
   const alertingLicensed = !data.license || data.license.alerting !== false;
   root.append(el('p', { class: 'muted settings-intro' },
-    'When a finding is raised it can be dispatched by e-mail, webhook or syslog. Turn alerting on, then enable the channels you want and set a minimum severity for each. Settings are stored in the database and take effect immediately — no restart. ',
-    licenseBadge(data.license, 'alerting')));
+    'When a finding is raised it can be dispatched by e-mail, webhook or syslog. Turn alerting on, then enable the channels you want and set a minimum severity for each. Settings are stored in the database and take effect immediately — no restart.'));
   if (!alertingLicensed) {
     root.append(el('div', { class: 'settings-grid' }, alertingUnlicensedCard(data.license)));
     return root;

@@ -401,6 +401,13 @@ server never touches them.
 
 The embedded public key comes from `docs/public-key.md` in blueeye-licens.
 
+> **This server never holds the private signing key.** `LICENSE_SIGNING_KEY`
+> (and `LICENS_JWT_SECRET`) belong **only** to the vendor's blueeye-licens host;
+> this server verifies with the *public* key alone. For the full "which host
+> holds what" breakdown — including how `.env` is read (dotenv vs. Docker
+> Compose) and how to validate a running host — see
+> [`docs/licensing.md` → *Environment, secrets & deployment topology*](docs/licensing.md#environment-secrets--deployment-topology-which-host-holds-what).
+
 **Logic:**
 
 - At startup + every 6 hours: `POST /validate` with `{ licenseKey, serverId, agentCount }`.

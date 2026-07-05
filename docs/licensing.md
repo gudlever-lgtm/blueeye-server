@@ -191,6 +191,101 @@ license server" rather than "verifying against the wrong key". `GET
 `publicKeyTrust: { source, configured }` — check that first when a fresh
 license edit isn't showing up after revalidation.
 
+## Environment, secrets & deployment topology (which host holds what)
+
+There are **two different hosts**, and a setting that belongs on one must not be
+placed on the other. Confusing them is the most common licensing mistake.
+
+| Host | Repo | Role | Runs |
+| --- | --- | --- | --- |
+| **Customer server** (on-prem) | `blueeye-server` | Monitors the customer network; *verifies* a license proof | `db` + `server` (+ `agent`) — the customer stack |
+| **Vendor license server** | `blueeye-licens` | *Signs* license proofs; vendor-operated only | `licens` (the `licens` compose profile) |
+
+The customer server **only ever needs the public key** (embedded in
+`src/license/publicKey.js`) and its own activation identifiers. The **private
+signing key lives only on the vendor license server** and must never be copied
+to a customer box — anyone holding it can forge a license.
+
+### Which setting belongs where
+
+| Variable | Belongs on | Secret? | Notes |
+| --- | --- | --- | --- |
+| `LICENSE_KEY` | customer server | no | The license credential this server presents to `/validate`. |
+| `LICENSE_SERVER_ID` | customer server | no | Must equal `payload.serverId` on the proof. |
+| `LICENSE_SERVER_URL` | customer server | no | The vendor licens URL to validate against. |
+| `LICENSE_PUBLIC_KEY` | customer server (dev only) | no | Public key; **not needed in production** — the key is embedded in `src/license/publicKey.js`. |
+| `LICENSE_GRACE_DAYS` / `LICENSE_VALIDATE_INTERVAL_HOURS` | customer server | no | Clamped (≤30 / ≤24). |
+| `SERVER_JWT_SECRET` → app `JWT_SECRET` | customer server | **yes** | Signs *customer* dashboard sessions. |
+| **`LICENSE_SIGNING_KEY`** | **vendor licens only** | **yes** | The Ed25519 **private** key that signs every proof. **Never put this on a customer server.** |
+| **`LICENS_JWT_SECRET`** → licens app `JWT_SECRET` | **vendor licens only** | **yes** | Signs *vendor staff* sessions on the license server. Distinct from `SERVER_JWT_SECRET`. |
+| `SEED_DEMO_*`, demo `LICENSE_KEY` | wherever seeded | no | Demo-only seeding. Never enable in production. |
+
+### Why one `.env` seems to hold "everything"
+
+`scripts/dev-bootstrap.js` writes a single `.env` for the **all-in-one demo**,
+where the customer stack *and* the vendor `licens` service run on one host from
+one compose project — so both hosts' settings land in the same file. In a real
+deployment they are split across two machines. That single demo file is also why
+you see a private key and a public key together: dev-bootstrap generates a
+throwaway, self-consistent key pair for the disposable stack (via the
+`LICENSE_PUBLIC_KEY` + `TRUST_ANCHOR_OVERRIDE_ACK` override path), **not** the
+production pair embedded in source.
+
+### How `.env` is actually read (and the name remap)
+
+Two independent mechanisms consume it — don't conflate them:
+
+1. **The app** (`dotenv`): each service calls `require('dotenv').config()` in its
+   own `src/config.js`, so a bare (non-Docker) `node src/server.js` reads a
+   `.env` **in that repo's own directory** — `blueeye-server/.env` for the
+   server, `blueeye-licens/.env` for licens. They are different files.
+2. **Docker Compose**: the single `.env` next to `docker-compose.yml` (in
+   `blueeye-server/`) is read by Compose itself to interpolate `${VAR}` into each
+   service's `environment:` block. Inside the built containers there is **no**
+   `.env` file (it is git-ignored and not copied in), so the container app uses
+   the injected `environment:` values, not dotenv.
+
+Because of (2), the compose-level names in that `.env` are **remapped** to the
+app's own env names per service. In particular the JWT secrets are split by
+service so they can never collide:
+
+| `.env` name (compose) | Maps to app var | In service |
+| --- | --- | --- |
+| `SERVER_JWT_SECRET` | `JWT_SECRET` | `server` |
+| `LICENS_JWT_SECRET` | `JWT_SECRET` | `licens` |
+| `LICENSE_SIGNING_KEY` | `LICENSE_SIGNING_KEY` | `licens` only |
+
+### Not admin-settable — by design
+
+None of the keys or secrets above are configurable from the dashboard. The
+trust anchor is deliberately kept out of the operator's reach (`publicKeyGuard`
+reasoning above), and the signing/JWT secrets are bootstrap credentials that
+must exist before the app can sign anything — so they live in the
+environment/secret store, never the database or a settings UI. The admin's only
+runtime license control is **Re-validate now**; activation identifiers
+(`LICENSE_KEY` / `LICENSE_SERVER_ID` / `LICENSE_SERVER_URL` / `LICENSE_PLAN`) are
+set once at install time via env.
+
+### How to validate what a running host actually uses
+
+- **Docker — which services run here?** From the `blueeye-server/` dir:
+  `docker compose ps`. If a **`licens`** container is listed, this host is (also)
+  the vendor license server; if you see only `db` / `server` / `agent`, it's a
+  customer-style deployment and the licens-only vars in `.env` are unused.
+- **What did each container actually receive?**
+  `docker compose exec server printenv | grep -E 'LICENSE|JWT'` versus
+  `docker compose exec licens printenv | grep -E 'LICENSE|JWT'` (the latter only
+  if `licens` is running). Confirms the remap and that the signing key reached
+  **only** licens.
+- **Bare (non-Docker)?** Each app reads the `.env` in its own directory. If you
+  put licens secrets in `blueeye-server/.env` and run licens from
+  `blueeye-licens/`, licens will **not** see them.
+- **Boot-time signals.** licens logs `LICENSE_SIGNING_KEY is not set — POST
+  /validate will return 500` when it lacks the key; the server logs the trust
+  anchor source. At runtime, `GET /license/status` reports
+  `publicKeyTrust: { source, configured }` — `configured:false` means the server
+  is still on the placeholder anchor.
+
 ## Offline license (implemented)
 
 The server can validate a **local signed license file** entirely on-box, with no

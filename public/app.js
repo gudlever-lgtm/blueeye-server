@@ -126,6 +126,7 @@ let role = localStorage.getItem(ROLE_KEY) || 'viewer';
 let email = localStorage.getItem(EMAIL_KEY) || '';
 const canWrite = () => role === 'operator' || role === 'admin';
 const canDelete = () => role === 'admin';
+const isAdmin = () => role === 'admin';
 
 // ---- API helper -----------------------------------------------------------
 async function api(path, { method = 'GET', body } = {}) {
@@ -360,11 +361,18 @@ async function loadProfile() {
   try {
     const me = await api('/me');
     const theme = me && me.preferences && me.preferences.theme;
-    // Skip if the user already chose a theme this session (e.g. toggled while
-    // this request was in flight) — their deliberate choice must win.
-    if (!themeUserChoice && theme && THEME_KEYS.includes(theme)) {
+    // The theme belongs to this account. Skip only if the user already chose one
+    // this session (e.g. toggled while this request was in flight) — their
+    // deliberate choice must win.
+    if (themeUserChoice) return;
+    if (theme && THEME_KEYS.includes(theme)) {
       applyTheme(theme);
       try { localStorage.setItem(THEME_KEY, theme); } catch { /* storage off */ }
+    } else {
+      // This account has no saved theme: fall back to the default rather than
+      // inheriting a theme another account cached in this browser's localStorage.
+      applyTheme('dark');
+      try { localStorage.removeItem(THEME_KEY); } catch { /* storage off */ }
     }
   } catch { /* keep the cached theme */ }
 }
@@ -378,6 +386,13 @@ function logout() {
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(ROLE_KEY);
   localStorage.removeItem(EMAIL_KEY);
+  // The colour theme is per-account, so drop this account's cached choice and
+  // revert to the default. The next sign-in loads that account's own theme
+  // (loadProfile), preventing one account's theme from following another when
+  // they share a browser.
+  themeUserChoice = false;
+  localStorage.removeItem(THEME_KEY);
+  applyTheme('dark');
   render();
 }
 
@@ -6596,10 +6611,9 @@ views.logs = async () => {
 
 views.settings = async () => {
   const root = el('div');
-  const isAdmin = role === 'admin';
   // Drop admin-only tabs for non-admins, then drop any section left empty.
   const groups = SETTINGS_GROUPS
-    .map(([label, tabs]) => [label, tabs.filter(([, , adminOnly]) => isAdmin || !adminOnly)])
+    .map(([label, tabs]) => [label, tabs.filter(([, , adminOnly]) => isAdmin() || !adminOnly)])
     .filter(([, tabs]) => tabs.length > 0);
   const allKeys = groups.flatMap(([, tabs]) => tabs.map(([k]) => k));
   if (!settingsTab || !allKeys.includes(settingsTab)) settingsTab = allKeys[0];

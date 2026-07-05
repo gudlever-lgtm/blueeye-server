@@ -635,7 +635,7 @@ const PAGE_INFO = {
         el('li', {}, el('strong', {}, 'STALE: '), 'no fresh measurements (> 15 min).'),
         el('li', {}, el('strong', {}, 'UNKNOWN: '), 'agent has not run any probe yet.')),
       el('h4', {}, 'KPI strip & network path'),
-      el('p', {}, 'Above the list, a strip of live KPIs (latency, loss, jitter, active agents, monitored paths, alerts) and a network-path diagram (HQ → ISP → Cloud → SaaS, with a branch feeding the uplink) summarise the fleet at a glance. The diagram\'s topology is illustrative, but each segment\'s colour and the loss/latency figures are live — a hop turns amber when loss, jitter or a critical agent says so. Both summarise ', el('strong', {}, 'all'), ' agents by default; use the ', el('strong', {}, 'Location'), ' selector to scope the KPIs and the path to a single site.'),
+      el('p', {}, 'Above the list, a strip of live KPIs (latency, loss, jitter, active agents, monitored paths, alerts) and a network-path diagram (Origin → ISP → Cloud → SaaS) summarise the selected scope at a glance. The diagram is data-driven: the origin node names the site (or the whole fleet) and its online agents, and each segment\'s colour, label and hover tooltip come from that scope\'s own probe metrics — worst packet loss on the local access link, median RTT and jitter on the WAN uplink, and target reachability on the SaaS leg (the SaaS node shows the real count of monitored targets). A segment turns amber at a warning threshold and red when critical. Both the KPIs and the path summarise ', el('strong', {}, 'all'), ' agents by default; use the ', el('strong', {}, 'Location'), ' selector to scope them to a single site — which recomputes every segment and drops the fleet-only "Branch" origin, so the picture changes with your selection.'),
       el('h4', {}, 'Open issues (Professional+)'),
       el('p', {}, 'On Professional licences and above, the page ends with an ', el('strong', {}, 'Open issues'), ' rollup: the currently-active ', el('strong', {}, 'incidents'), ' (derived from the probe thresholds — click one to drill into the affected agent) beside the most recent unacknowledged analysis ', viewLink('findings', 'findings'), ', each with its explanation. It is composed from data the server already holds — no new collection — and is gated by the ', el('strong', {}, 'dashboard_advanced'), ' licence feature; below Professional the rollup is simply omitted and the rest of the page is unchanged.'),
       el('p', { class: 'muted' }, 'Health is based on active probes — run a few per agent on ', viewLink('probes'), ' (or schedule them fleet-wide via ', viewLink('tests'), ') for a complete picture; the interface signal comes from ', viewLink('interfaces'), '. Metadata only: targets and timings, never packet contents.'),
@@ -4478,8 +4478,9 @@ function throughputText(t) {
 
 // ---- Overview NOC dashboard (KPI cards + live network path) ----------------
 // Both are derived from the same /api/fleet/health payload the Overview already
-// polls, so they refresh live with the table. KPI thresholds mirror the health
-// model documented in PAGE_INFO.fleet (loss ≥2/20 %, jitter ≥30/100 ms).
+// polls, so they refresh live with the table, and both are recomputed for the
+// active location scope so they reflect just that site. KPI thresholds mirror
+// the health model documented in PAGE_INFO.fleet (loss ≥2/20 %, jitter ≥30/100 ms).
 function fleetKpis(data) {
   const agents = (data && data.agents) || [];
   const s = (data && data.summary) || {};
@@ -4513,18 +4514,57 @@ function kpiCard(label, value, sub, status) {
     el('div', { class: `kpi-v${vCls}` }, value),
     el('div', { class: 'kpi-sub muted' }, sub));
 }
-// The conceptual path a branch/HQ user's traffic takes to a SaaS app, drawn as
-// an SVG: HQ → ISP → Cloud → SaaS, with a Branch feeding into the ISP uplink.
-// A hop is "degraded" (warning token) when the fleet's loss/jitter/health say
-// so; otherwise it stays on the primary/accent token. The topology is fixed,
-// but the degraded states + the loss/latency figures are live — driven by `k`
-// (and `data.summary`), which the caller can narrow to a single location;
-// `scopeName` is that location's name (null = whole fleet), shown as a chip.
+// The path a scoped set of agents' traffic takes to reach its monitored
+// targets, drawn as an SVG: Origin → ISP uplink → Cloud egress → SaaS. Unlike
+// a fixed schematic, every element is live and genuinely reflects the current
+// scope. The origin node names the selected site (or the whole fleet) and its
+// online agents; each segment's colour, label and tooltip are driven by that
+// scope's own probe metrics — packet loss on the local access link, median
+// RTT + jitter on the WAN uplink, target reachability on the SaaS leg — and
+// the SaaS node shows the real count of monitored targets. Scoping to one
+// location drops the second "Branch" origin (a fleet-only concept) and
+// recomputes every segment, so the picture visibly changes with the selector.
+// `scopeName` is the selected location's name (null = whole fleet).
 function networkPath(data, k, scopeName = null) {
   const s = (data && data.summary) || {};
-  const wanDegraded = (k.loss != null && k.loss >= 2) || (k.jitter != null && k.jitter >= 30) || k.crit > 0;
-  const branchDegraded = (s.down || 0) + (s.stale || 0) > 0;
-  const saasDegraded = k.crit > 0;
+  const agents = (data && data.agents) || [];
+  const scoped = scopeName != null;
+  const met = (a) => (a.health && a.health.metrics) || {};
+  const sum = (pick) => agents.reduce((n, a) => n + (Number(met(a)[pick]) || 0), 0);
+  const online = agents.filter((a) => a.online).length;
+  const total = agents.length;
+  const targets = sum('targets');
+  const reachable = sum('reachable');
+  const unreachable = sum('unreachable');
+  const siteIds = new Set();
+  for (const a of agents) siteIds.add(a.locationId != null ? `l${a.locationId}` : `a${a.agentId}`);
+  const sites = siteIds.size;
+
+  // Per-segment health, ok < warn < bad, from the scope's own metrics.
+  const RANK = { ok: 0, warn: 1, bad: 2 };
+  const worst = (...ls) => ls.reduce((m, l) => (RANK[l] > RANK[m] ? l : m), 'ok');
+  const band = (v, warn, bad) => (v == null ? 'ok' : v >= bad ? 'bad' : v >= warn ? 'warn' : 'ok');
+  const accessLvl = band(k.loss, 2, 20);                       // packet loss on the local access link
+  const wanLvl = worst(band(k.jitter, 30, 100), k.crit > 0 ? 'warn' : 'ok'); // jitter/critical on the uplink
+  const saasLvl = targets === 0 ? 'ok' : reachable === 0 ? 'bad' : unreachable > 0 ? 'warn' : 'ok';
+  const branchLvl = (s.down || 0) + (s.stale || 0) > 0 ? 'warn' : 'ok';
+  const originLvl = total === 0 ? 'warn' : online === 0 ? 'bad'
+    : ((s.down || 0) + (s.stale || 0) > 0 || online < total) ? 'warn' : 'ok';
+
+  const shownUnit = (v, unit) => (v == null ? '–' : `${v}${unit}`);
+  const clip = (t, n) => (t && t.length > n ? `${t.slice(0, n - 1)}…` : t);
+  const originTitle = scoped ? clip(scopeName, 13) : 'Fleet';
+  const originSub = scoped ? `${online}/${total} agents up`
+    : `${sites} site${sites === 1 ? '' : 's'} · ${online}/${total} up`;
+  const accessLab = k.loss != null ? `${k.loss}% loss` : (targets ? 'no loss' : null);
+  const wanLab = k.latency != null ? `${k.latency} ms` : null;
+  const saasLab = targets ? `${reachable}/${targets} up` : null;
+  const originTip = `${scoped ? scopeName : 'Whole fleet'} — ${online} of ${total} agents online`
+    + ` across ${sites} site${sites === 1 ? '' : 's'}`;
+  const accessTip = `Local access — worst packet loss ${shownUnit(k.loss, '%')} across ${total} agent${total === 1 ? '' : 's'}`;
+  const wanTip = `WAN uplink — median RTT ${shownUnit(k.latency, ' ms')}, jitter ${shownUnit(k.jitter, ' ms')}`;
+  const saasTip = `SaaS reachability — ${reachable}/${targets} monitored target${targets === 1 ? '' : 's'} responding`;
+
   const ns = 'http://www.w3.org/2000/svg';
   const mk = (tag, attrs = {}, ...kids) => {
     const e = document.createElementNS(ns, tag);
@@ -4532,46 +4572,52 @@ function networkPath(data, k, scopeName = null) {
     for (const kid of kids) if (kid != null) e.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
     return e;
   };
+  const cls = (base, lvl) => `${base}${lvl === 'warn' ? ' degraded' : lvl === 'bad' ? ' bad' : ''}`;
   const NW = 120, NH = 58, top = 28, cy = top + NH / 2;
   const X = { HQ: 20, ISP: 220, CL: 420, SA: 620 };
-  const node = (x, title, sub, edge) => mk('g', { class: `np-node${edge ? ' edge' : ''}` },
+  const node = (x, title, sub, lvl, edge, tip) => mk('g', { class: `np-node${edge ? ' edge' : ''}${lvl && lvl !== 'ok' ? ` ${lvl}` : ''}` },
+    tip ? mk('title', {}, tip) : null,
     mk('rect', { x, y: top, width: NW, height: NH, rx: 10 }),
     mk('circle', { cx: x + 16, cy: top + 18, r: 4, class: 'np-ico' }),
     mk('text', { x: x + 30, y: top + 23, class: 'np-t' }, title),
     mk('text', { x: x + 12, y: top + 42, class: 'np-s' }, sub));
-  const link = (x1, y1, x2, y2, degraded, label) => {
+  const link = (x1, y1, x2, y2, lvl, label, tip) => {
     const g = mk('g', {},
-      mk('line', { x1, y1, x2, y2, class: `np-link${degraded ? ' degraded' : ''}`, 'stroke-linecap': 'round' }),
-      mk('line', { x1, y1, x2, y2, class: `np-flow${degraded ? ' degraded' : ''}`, 'stroke-linecap': 'round' }));
-    if (label) g.append(mk('text', { x: (x1 + x2) / 2, y: Math.min(y1, y2) - 7, 'text-anchor': 'middle', class: `np-lab${degraded ? ' degraded' : ''}` }, label));
+      tip ? mk('title', {}, tip) : null,
+      mk('line', { x1, y1, x2, y2, class: cls('np-link', lvl), 'stroke-linecap': 'round' }),
+      mk('line', { x1, y1, x2, y2, class: cls('np-flow', lvl), 'stroke-linecap': 'round' }));
+    if (label) g.append(mk('text', { x: (x1 + x2) / 2, y: Math.min(y1, y2) - 7, 'text-anchor': 'middle', class: cls('np-lab', lvl) }, label));
     return g;
   };
   const Bx = 320, By = 150, BNH = 50;
-  const ariaLabel = 'Network path from HQ and Branch through ISP and Cloud to SaaS'
-    + (scopeName ? ` — ${scopeName}` : '');
+  const overall = worst(originLvl, accessLvl, wanLvl, saasLvl, scoped ? 'ok' : branchLvl);
+  const statusTxt = overall === 'bad' ? 'Critical segment' : overall === 'warn' ? 'Degraded segment detected' : 'All segments nominal';
+  const ariaLabel = `Network path for ${scoped ? scopeName : 'the whole fleet'} — origin, ISP, cloud, SaaS — ${statusTxt.toLowerCase()}`;
+  const branchTip = `Other sites — ${(s.down || 0) + (s.stale || 0)} agent(s) down or stale`;
   const svg = mk('svg', { viewBox: '0 0 820 214', role: 'img', 'aria-label': ariaLabel },
-    link(X.HQ + NW, cy, X.ISP, cy, false, k.loss != null ? `${k.loss}% loss` : null),
-    link(X.ISP + NW, cy, X.CL, cy, wanDegraded, k.latency != null ? `${k.latency} ms` : null),
-    link(X.CL + NW, cy, X.SA, cy, saasDegraded, null),
-    link(Bx + NW / 2, By, X.ISP + NW / 2, top + NH, branchDegraded, null),
-    node(X.HQ, 'HQ', 'Core network', true),
-    node(X.ISP, 'ISP', 'WAN uplink', false),
-    node(X.CL, 'Cloud', 'Egress / IXP', false),
-    node(X.SA, 'SaaS', 'Applications', false),
-    mk('g', { class: 'np-node edge' },
+    link(X.HQ + NW, cy, X.ISP, cy, accessLvl, accessLab, accessTip),
+    link(X.ISP + NW, cy, X.CL, cy, wanLvl, wanLab, wanTip),
+    link(X.CL + NW, cy, X.SA, cy, saasLvl, saasLab, saasTip),
+    scoped ? null : link(Bx + NW / 2, By, X.ISP + NW / 2, top + NH, branchLvl, null, branchTip),
+    node(X.HQ, originTitle, originSub, originLvl, true, originTip),
+    node(X.ISP, 'ISP', 'WAN uplink', wanLvl, false, wanTip),
+    node(X.CL, 'Cloud', 'Egress / IXP', saasLvl, false, saasTip),
+    node(X.SA, 'SaaS', targets ? `${targets} target${targets === 1 ? '' : 's'}` : 'Applications', saasLvl, false, saasTip),
+    scoped ? null : mk('g', { class: `np-node edge${branchLvl !== 'ok' ? ` ${branchLvl}` : ''}` },
+      mk('title', {}, branchTip),
       mk('rect', { x: Bx, y: By, width: NW, height: BNH, rx: 10 }),
       mk('circle', { cx: Bx + 16, cy: By + 16, r: 4, class: 'np-ico' }),
       mk('text', { x: Bx + 30, y: By + 21, class: 'np-t' }, 'Branch'),
-      mk('text', { x: Bx + 12, y: By + 38, class: 'np-s' }, 'Remote site')));
-  const degraded = wanDegraded || branchDegraded || saasDegraded;
+      mk('text', { x: Bx + 12, y: By + 38, class: 'np-s' }, 'Remote sites')));
   return el('div', { class: 'netpath' },
     el('div', { class: 'netpath-head' },
       el('h3', {}, 'Network path'),
       scopeName ? el('span', { class: 'netpath-scope' }, scopeName) : null,
-      el('span', { class: degraded ? 'warn-text' : 'muted' }, degraded ? 'Degraded segment detected' : 'All segments nominal'),
+      el('span', { class: overall === 'bad' ? 'bad-text' : overall === 'warn' ? 'warn-text' : 'muted' }, statusTxt),
       el('div', { class: 'netpath-legend' },
         el('span', { class: 'lg' }, el('span', { class: 'ln normal' }), 'Normal path'),
-        el('span', { class: 'lg' }, el('span', { class: 'ln degraded' }), 'Degraded segment'))),
+        el('span', { class: 'lg' }, el('span', { class: 'ln degraded' }), 'Degraded'),
+        el('span', { class: 'lg' }, el('span', { class: 'ln bad' }), 'Critical'))),
     svg);
 }
 function nocDashboard(data, { controls = null, scopeName = null } = {}) {

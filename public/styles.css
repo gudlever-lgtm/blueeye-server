@@ -1043,18 +1043,27 @@ button.active-btn { outline: 2px solid var(--accent); }
 .netpath-legend .ln { width: 20px; height: 3px; border-radius: 2px; }
 .netpath-legend .ln.normal { background: var(--accent); }
 .netpath-legend .ln.degraded { background: var(--warn); }
+.netpath-legend .ln.bad { background: var(--bad); }
 .netpath svg { width: 100%; height: auto; display: block; font-family: inherit; overflow: visible; }
+.netpath .np-node, .netpath .np-link, .netpath .np-flow { cursor: default; }
 .np-link { fill: none; stroke: var(--accent); stroke-width: 2.5; }
 .np-link.degraded { stroke: var(--warn); stroke-dasharray: 8 5; }
+.np-link.bad { stroke: var(--bad); stroke-dasharray: 8 5; }
 .np-flow { fill: none; stroke: var(--accent); stroke-width: 2.5; stroke-dasharray: 3 11;
   opacity: .85; animation: np-flow 1.2s linear infinite; }
 .np-flow.degraded { stroke: var(--warn); }
+.np-flow.bad { stroke: var(--bad); }
 @keyframes np-flow { to { stroke-dashoffset: -28; } }
 .np-lab { fill: var(--muted); font-size: 11px; font-weight: 600; }
 .np-lab.degraded { fill: var(--warn); }
+.np-lab.bad { fill: var(--bad); }
 .np-node rect { fill: var(--panel-2); stroke: var(--border); stroke-width: 1; }
 .np-node.edge rect { stroke: var(--accent); }
+.np-node.warn rect { stroke: var(--warn); }
+.np-node.bad rect { stroke: var(--bad); }
 .np-node .np-ico { fill: var(--accent); }
+.np-node.warn .np-ico { fill: var(--warn); }
+.np-node.bad .np-ico { fill: var(--bad); }
 .np-node .np-t { fill: var(--text); font-weight: 700; font-size: 13px; }
 .np-node .np-s { fill: var(--muted); font-size: 11px; }
 @media (prefers-reduced-motion: reduce) { .np-flow { animation: none; } }

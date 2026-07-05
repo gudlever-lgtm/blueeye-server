@@ -8,7 +8,7 @@ const assert = require('node:assert/strict');
 const request = require('supertest');
 
 const { makeApp, makeAgentsRepo, makeProbeResultsRepo, makeResultsRepo, makeSpeedtestResultsRepo, makeSettingsService, authHeader, throwingAsync } = require('../test-support/fakes');
-const { computeAgentHealth, computeFleet, mergeHealth, robustStats } = require('../src/health/probeHealth');
+const { computeAgentHealth, computeFleet, mergeHealth, mergeConnection, robustStats } = require('../src/health/probeHealth');
 const { interfaceHealthSummary } = require('../src/health/interfaceHealth');
 
 // A traffic payload with a single interface, overridable per test.
@@ -158,6 +158,67 @@ test('mergeHealth folds the interface signal into the probe verdict', () => {
 
   // no interface data ⇒ the probe verdict is returned unchanged.
   assert.equal(mergeHealth(probeOk, null), probeOk);
+});
+
+test('mergeHealth: a healthy interface never manufactures a HEALTHY verdict from no probe data', () => {
+  // Regression: an agent with no probe rows but a (possibly stale) OK interface
+  // reading used to read HEALTHY ("Interfaces healthy."), masking that we can't
+  // actually vouch for reachability/loss/latency.
+  const probeUnknown = computeAgentHealth([], { now: NOW });
+  const ifaceOk = interfaceHealthSummary(trafficWithIface({}));
+  const merged = mergeHealth(probeUnknown, ifaceOk);
+  assert.equal(merged.status, 'unknown'); // NOT 'ok'
+  assert.notEqual(merged.reason, 'Interfaces healthy.'); // not the health headline
+  assert.equal(merged.metrics.ifaceStatus, 'ok'); // still surfaced as evidence
+
+  // A healthy probe verdict with a healthy interface stays HEALTHY.
+  const probeOk = computeAgentHealth(samples('1.1.1.1', [10, 10, 10]), { now: NOW });
+  assert.equal(mergeHealth(probeOk, ifaceOk).status, 'ok');
+});
+
+// ---- connection folding ----------------------------------------------------
+
+test('mergeConnection: a disconnected agent never reads HEALTHY', () => {
+  const probeOk = computeAgentHealth(samples('1.1.1.1', [10, 10, 10]), { now: NOW });
+  const offline = mergeConnection(probeOk, true);
+  assert.equal(offline.status, 'stale');
+  assert.match(offline.reason, /disconnected/i);
+  assert.equal(offline.evidence[0].metric, 'connection');
+  assert.equal(offline.metrics.online, false);
+
+  // online (or unknown) ⇒ verdict unchanged.
+  assert.equal(mergeConnection(probeOk, false), probeOk);
+});
+
+test('mergeConnection: a real problem stays the headline when disconnected', () => {
+  const probeLoss = computeAgentHealth(samples('8.8.8.8', [20, 20], { lossPct: 30 }), { now: NOW });
+  const offline = mergeConnection(probeLoss, true);
+  assert.equal(offline.status, 'bad'); // loss is worse than the disconnection floor
+  assert.equal(offline.evidence[0].metric, 'loss'); // loss still leads
+  assert.ok(offline.evidence.some((e) => e.metric === 'connection')); // disconnect kept as evidence
+});
+
+test('computeFleet folds a disconnected agent so a fresh-but-offline agent is not HEALTHY', () => {
+  const agents = [
+    { id: 1, hostname: 'online-ok', status: 'online' },
+    { id: 2, hostname: 'offline-ok', status: 'offline' },
+  ];
+  const byAgent = {
+    1: samples('1.1.1.1', [10, 10, 10]),
+    2: samples('1.1.1.1', [10, 10, 10]),
+  };
+  const { agents: fleet } = computeFleet(agents, byAgent, { now: NOW });
+  assert.equal(fleet.find((a) => a.agentId === 1).health.status, 'ok');
+  assert.equal(fleet.find((a) => a.agentId === 2).health.status, 'stale'); // offline ⇒ not HEALTHY
+});
+
+test('GET /api/fleet/agent/:id downgrades an offline agent from HEALTHY', async () => {
+  const agentsRepo = makeAgentsRepo({ findById: async (id) => ({ id, hostname: 'h', status: 'offline' }) });
+  const probeResultsRepo = makeProbeResultsRepo({ findByAgent: async () => samples('1.1.1.1', [10, 10, 10]).reverse() });
+  const res = await request(makeApp({ agentsRepo, probeResultsRepo })).get('/api/fleet/agent/9').set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 200);
+  assert.equal(res.body.health.status, 'stale');
+  assert.match(res.body.health.reason, /disconnected/i);
 });
 
 // ---- route: GET /api/fleet/health -----------------------------------------

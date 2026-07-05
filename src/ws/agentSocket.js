@@ -287,6 +287,15 @@ function attachAgentWebSocket({
     ws.on('close', (code) => {
       ws._session.disconnectedAt = new Date().toISOString();
       ws._session.closeCode = Number.isInteger(code) ? code : null;
+      // Same stale-close race the per-socket _session guards against above,
+      // but for the PERSISTENT status: after a network flap the agent's new
+      // socket is already open when the half-dead one is finally reaped —
+      // flipping the DB to 'offline' here would stick until the next
+      // connect/close even though the agent is connected. Skip when another
+      // live socket exists for this agent.
+      for (const other of wss.clients) {
+        if (other !== ws && other.agentId === agent.agentId && other.readyState === other.OPEN) return;
+      }
       agentsRepo
         .setStatus(agent.agentId, 'offline')
         .catch((err) => logger.error('Failed to mark agent offline:', err));

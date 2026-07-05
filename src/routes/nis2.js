@@ -53,6 +53,10 @@ function createNis2Router({
   }
 
   const orgOf = (req) => (typeof req.query.org === 'string' && req.query.org.trim() ? req.query.org.trim().slice(0, 120) : 'Organisation');
+  // Query filters must be plain strings before they reach a `col = ?` binding:
+  // Express parses ?x=a&x=b into an array (and ?x[y]=1 into an object), which
+  // mysql2 expands into invalid/shifted SQL. Anything non-string → no filter.
+  const qstr = (v) => (typeof v === 'string' && v ? v : null);
   const fail = (res, errors) => res.status(400).json({ error: 'Validation failed', details: errors });
 
   // Loads the three core record sets in parallel — the dashboard + reports basis.
@@ -82,8 +86,8 @@ function createNis2Router({
 
   router.get('/risks', requireAuth, reader, asyncHandler(async (req, res) => {
     res.json(await nis2RisksRepo.findAll({
-      status: req.query.status || null,
-      category: req.query.category || null,
+      status: qstr(req.query.status),
+      category: qstr(req.query.category),
     }));
   }));
 
@@ -132,8 +136,8 @@ function createNis2Router({
       return res.json(await nis2ControlsRepo.findWithoutEvidence());
     }
     res.json(await nis2ControlsRepo.findAll({
-      status: req.query.status || null,
-      area: req.query.area || null,
+      status: qstr(req.query.status),
+      area: qstr(req.query.area),
     }));
   }));
 
@@ -182,8 +186,8 @@ function createNis2Router({
     if (req.query.nis2Relevant === 'true') nis2Relevant = true;
     else if (req.query.nis2Relevant === 'false') nis2Relevant = false;
     const incidents = await nis2IncidentsRepo.findAll({
-      status: req.query.status || null,
-      severity: req.query.severity || null,
+      status: qstr(req.query.status),
+      severity: qstr(req.query.severity),
       nis2Relevant,
     });
     // Attach the computed NIS2 Art.23 reporting deadlines (additive field).
@@ -240,10 +244,16 @@ function createNis2Router({
   // ---- Evidence -------------------------------------------------------------
 
   router.get('/evidence', requireAuth, reader, asyncHandler(async (req, res) => {
-    const entityId = req.query.entityId ? parseId(req.query.entityId) : null;
+    // A present-but-invalid entityId must be a 400, not a silently widened
+    // "no filter" result set (the convention every :id route here follows).
+    let entityId = null;
+    if (req.query.entityId !== undefined) {
+      entityId = parseId(req.query.entityId);
+      if (entityId === null) return res.status(400).json({ error: 'Invalid entityId' });
+    }
     res.json(await nis2EvidenceRepo.findAll({
-      entityType: req.query.entityType || null,
-      entityId: entityId || null,
+      entityType: qstr(req.query.entityType),
+      entityId,
     }));
   }));
 
@@ -270,7 +280,7 @@ function createNis2Router({
   // ---- Reports --------------------------------------------------------------
 
   router.get('/reports', requireAuth, reader, asyncHandler(async (req, res) => {
-    res.json(await nis2ReportsRepo.findAll({ type: req.query.type || null }));
+    res.json(await nis2ReportsRepo.findAll({ type: qstr(req.query.type) }));
   }));
 
   router.get('/reports/:id', requireAuth, reader, asyncHandler(async (req, res) => {
@@ -377,7 +387,7 @@ function createNis2Router({
   router.get('/audit', requireAuth, requireRole(ROLES.ADMIN), asyncHandler(async (req, res) => {
     const limit = parseInt(req.query.limit, 10);
     res.json(await nis2AuditRepo.findAll({
-      entityType: req.query.entityType || null,
+      entityType: qstr(req.query.entityType),
       limit: Number.isFinite(limit) ? limit : 100,
     }));
   }));

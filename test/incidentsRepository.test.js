@@ -42,6 +42,19 @@ test('incidents.list maps joined rows to the API shape and derives status', asyn
   assert.equal(rows[0].startedAt, '2026-06-01T08:00:00.000Z');
 });
 
+test('incidents.list without a window omits the time clauses (no `<= NULL` matching nothing)', async () => {
+  const pool = fakePool((sql, params) => {
+    assert.doesNotMatch(sql, /started_at <= \?/);
+    assert.doesNotMatch(sql, /resolved_at >= \?/);
+    assert.deepEqual(params, [1000]); // just the LIMIT — no undefined bindings
+    return [[]];
+  });
+  const repo = createIncidentsRepository({ pool });
+  const rows = await repo.list(); // dashboard/advanced calls it with no args
+  assert.deepEqual(rows, []);
+  assert.equal(pool.calls.length, 1);
+});
+
 test('incidents.findActive returns the open row for the tuple or null', async () => {
   const pool = fakePool((sql) => {
     assert.match(sql, /resolved_at IS NULL/);

@@ -126,6 +126,7 @@ let role = localStorage.getItem(ROLE_KEY) || 'viewer';
 let email = localStorage.getItem(EMAIL_KEY) || '';
 const canWrite = () => role === 'operator' || role === 'admin';
 const canDelete = () => role === 'admin';
+const isAdmin = () => role === 'admin';
 
 // ---- API helper -----------------------------------------------------------
 async function api(path, { method = 'GET', body } = {}) {
@@ -6596,10 +6597,9 @@ views.logs = async () => {
 
 views.settings = async () => {
   const root = el('div');
-  const isAdmin = role === 'admin';
   // Drop admin-only tabs for non-admins, then drop any section left empty.
   const groups = SETTINGS_GROUPS
-    .map(([label, tabs]) => [label, tabs.filter(([, , adminOnly]) => isAdmin || !adminOnly)])
+    .map(([label, tabs]) => [label, tabs.filter(([, , adminOnly]) => isAdmin() || !adminOnly)])
     .filter(([, tabs]) => tabs.length > 0);
   const allKeys = groups.flatMap(([, tabs]) => tabs.map(([k]) => k));
   if (!settingsTab || !allKeys.includes(settingsTab)) settingsTab = allKeys[0];

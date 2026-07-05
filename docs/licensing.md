@@ -328,6 +328,30 @@ set once at install time via env.
   `publicKeyTrust: { source, configured }` — `configured:false` means the server
   is still on the placeholder anchor.
 
+### Vendor combined-host `.env` — what each variable is (and whether it's required)
+
+The vendor's turnkey stack runs **both** the customer `server` and the `licens`
+service from one compose project, so a single `.env` (next to
+`docker-compose.yml`) feeds both. This is the checklist for that file. Note the
+compose-level names differ from the app-level names (the remap above): the `.env`
+holds `SERVER_JWT_SECRET` / `LICENS_JWT_SECRET`, each injected as that service's
+`JWT_SECRET`.
+
+| `.env` variable | Required? | Consumed by | Notes |
+| --- | --- | --- | --- |
+| `SERVER_JWT_SECRET` | **required** | server | Compose `:?` guard — the server container won't start without it. Secret. |
+| `LICENS_JWT_SECRET` | **required** | licens | Compose `:?` guard — the licens container won't start without it. Secret. Distinct value from `SERVER_JWT_SECRET`. |
+| `LICENSE_SIGNING_KEY` | **required** | licens | The Ed25519 **private** key that signs proofs (base64 of PKCS8 PEM). Secret; never on a customer server. |
+| `COMPOSE_PROFILES=licens` | **keep** | compose | Puts the profiled `licens` service into the default project so `docker compose up` includes it. Without it, licens starts only via explicit `--profile licens` (`scripts/deploy-licens.sh`). |
+| `LICENSE_SERVER_ID` | **keep as-is** | server | ⚠️ Once a licence is **bound** to this id, changing/removing it makes the server derive a *new* id → `server_mismatch` → licence invalid. Only change it together with `POST /licenses/:id/unbind` on licens. |
+| `LICENSE_KEY` | required | server | The licence credential presented to `/validate`. |
+| `LICENSE_SERVER_URL` | optional | server | Compose defaults it to the on-host `http://licens:4000`; safe to omit. |
+| `LICENSE_PUBLIC_KEY` / `TRUST_ANCHOR_OVERRIDE_ACK` | omit | server | Leave unset in production — the public key is embedded; a set-but-blocked override only produces the "misconfigured" banner. |
+
+The three secrets (`SERVER_JWT_SECRET`, `LICENS_JWT_SECRET`, `LICENSE_SIGNING_KEY`)
+must be long, random, and never committed. `scripts/dev-bootstrap.js` generates a
+complete demo `.env` with all of the above for the local stack.
+
 ## Offline license (implemented)
 
 The server can validate a **local signed license file** entirely on-box, with no

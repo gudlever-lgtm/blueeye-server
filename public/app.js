@@ -361,11 +361,18 @@ async function loadProfile() {
   try {
     const me = await api('/me');
     const theme = me && me.preferences && me.preferences.theme;
-    // Skip if the user already chose a theme this session (e.g. toggled while
-    // this request was in flight) — their deliberate choice must win.
-    if (!themeUserChoice && theme && THEME_KEYS.includes(theme)) {
+    // The theme belongs to this account. Skip only if the user already chose one
+    // this session (e.g. toggled while this request was in flight) — their
+    // deliberate choice must win.
+    if (themeUserChoice) return;
+    if (theme && THEME_KEYS.includes(theme)) {
       applyTheme(theme);
       try { localStorage.setItem(THEME_KEY, theme); } catch { /* storage off */ }
+    } else {
+      // This account has no saved theme: fall back to the default rather than
+      // inheriting a theme another account cached in this browser's localStorage.
+      applyTheme('dark');
+      try { localStorage.removeItem(THEME_KEY); } catch { /* storage off */ }
     }
   } catch { /* keep the cached theme */ }
 }
@@ -379,6 +386,13 @@ function logout() {
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(ROLE_KEY);
   localStorage.removeItem(EMAIL_KEY);
+  // The colour theme is per-account, so drop this account's cached choice and
+  // revert to the default. The next sign-in loads that account's own theme
+  // (loadProfile), preventing one account's theme from following another when
+  // they share a browser.
+  themeUserChoice = false;
+  localStorage.removeItem(THEME_KEY);
+  applyTheme('dark');
   render();
 }
 

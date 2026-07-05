@@ -161,11 +161,14 @@ function reasonFor(status, m, evidence, stale) {
   return 'Healthy.';
 }
 
-// Worst of two statuses, but a real signal always beats 'unknown' (we DO have
-// data, just from the other source).
+// Worst of two statuses. 'unknown' is TIER-ranked like any other status, so a
+// *concerning* signal (warn/bad/down) from one source still surfaces when the
+// other says nothing — but a merely-OK signal never upgrades an 'unknown' into a
+// confident 'ok'. A healthy link (or a passing speed test) does not, on its own,
+// prove reachability/loss/latency are fine; only real probe data can vouch for
+// that. Folding an OK-but-partial signal into 'ok' is what let a disconnected /
+// no-probe-data agent read HEALTHY off a single (often stale) interface reading.
 function combineStatus(a, b) {
-  if (a === 'unknown') return b;
-  if (b === 'unknown') return a;
   return TIER[a] <= TIER[b] ? a : b;
 }
 
@@ -179,9 +182,11 @@ function mergeHealth(probe, iface) {
   const ifaceTier = iface.status === 'down' ? 'bad' : iface.status; // ok|warn|bad
   const status = combineStatus(probe.status, ifaceTier);
   const w = iface.worst || {};
-  // The interface is the headline only when it is the (strictly) dominant signal,
-  // or when probes told us nothing.
-  const ifaceDrives = probe.status === 'unknown' || TIER[ifaceTier] < TIER[probe.status];
+  // The interface is the headline only when it is the (strictly) dominant signal
+  // — i.e. it is a *worse* signal than the probe verdict. A healthy interface is
+  // never the headline: it must not relabel an 'unknown' (no probe data) verdict
+  // as "Interfaces healthy." and mask that we cannot actually vouch for the agent.
+  const ifaceDrives = TIER[ifaceTier] < TIER[probe.status];
   const evidence = ifaceDrives
     ? [{ metric: 'interface', iface: w.iface, status: iface.status, errPerSec: w.errPerSec, dropPerSec: w.dropPerSec, operStatus: w.operStatus, utilPct: w.utilPct }, ...probe.evidence]
     : [...probe.evidence, { metric: 'interface', iface: w.iface, status: iface.status, errPerSec: w.errPerSec, dropPerSec: w.dropPerSec }];
@@ -210,7 +215,9 @@ function interfaceReason(iface) {
 function mergeThroughput(health, thr) {
   if (!thr || !thr.status) return health;
   const status = combineStatus(health.status, thr.status);
-  const drives = health.status === 'unknown' || TIER[thr.status] < TIER[health.status];
+  // As with the interface fold: throughput is the headline only when it is a
+  // worse signal. A passing speed test alone never manufactures a HEALTHY verdict.
+  const drives = TIER[thr.status] < TIER[health.status];
   const ev = { metric: 'throughput', downMbps: thr.downMbps, upMbps: thr.upMbps, status: thr.status };
   const evidence = drives ? [ev, ...health.evidence] : [...health.evidence, ev];
   const reason = drives ? thr.reason : health.reason;
@@ -220,6 +227,27 @@ function mergeThroughput(health, thr) {
     evidence,
     metrics: { ...health.metrics, downMbps: thr.downMbps, upMbps: thr.upMbps, throughputStatus: thr.status },
   };
+}
+
+// Fold the agent's live connection state into its verdict. A disconnected agent
+// is not reporting, so its probe/interface/throughput readings are — by
+// definition — stale and cannot vouch for current health: it must never read
+// HEALTHY (or a confident UNKNOWN) just because the last data on file looked
+// fine. `offline` is the WS-connection state (agents.status === 'offline').
+// Mirrors mergeHealth/mergeThroughput: the disconnection is the headline only
+// when the last-known verdict wasn't a worse, concrete problem — a real
+// loss/latency/link-down signal still leads, with the disconnection kept as
+// evidence. A `down`/`stale` floor (not a new tier) keeps the existing badge
+// palette + fleet chips intact; the separate online/offline pill names the
+// disconnection explicitly.
+function mergeConnection(health, offline) {
+  if (!offline) return health;
+  const status = combineStatus(health.status, 'stale');
+  const drives = TIER.stale <= TIER[health.status];
+  const ev = { metric: 'connection', online: false };
+  const evidence = drives ? [ev, ...health.evidence] : [...health.evidence, ev];
+  const reason = drives ? 'Agent disconnected — not reporting (readings may be stale).' : health.reason;
+  return { status, reason, evidence, metrics: { ...health.metrics, online: false } };
 }
 
 // Build the fleet rollup: each agent's identity + health verdict (probe verdict
@@ -234,6 +262,7 @@ function computeFleet(agents, rowsByAgentId, { now = Date.now(), ifaceByAgentId 
     const latestThr = throughputByAgentId[a.id] || throughputByAgentId[String(a.id)] || null;
     const thr = throughputHealthSummary(latestThr, throughputThresholds || {});
     if (thr) health = mergeThroughput(health, thr);
+    health = mergeConnection(health, a.status === 'offline');
     return {
       agentId: a.id,
       hostname: a.hostname,
@@ -264,6 +293,7 @@ module.exports = {
   computeFleet,
   mergeHealth,
   mergeThroughput,
+  mergeConnection,
   robustStats,
   // exported for tests / tuning visibility
   THRESHOLDS: { LOSS_WARN, LOSS_BAD, JITTER_WARN, JITTER_BAD, Z_WARN, Z_BAD, MIN_BASELINE, STALE_MS },

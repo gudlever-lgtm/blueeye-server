@@ -4,7 +4,7 @@ const express = require('express');
 const { asyncHandler } = require('../middleware/asyncHandler');
 const { requireAuth, requireRole } = require('../auth/middleware');
 const { ROLES } = require('../auth/roles');
-const { computeFleet, computeAgentHealth, mergeHealth, mergeThroughput } = require('../health/probeHealth');
+const { computeFleet, computeAgentHealth, mergeHealth, mergeThroughput, mergeConnection } = require('../health/probeHealth');
 const { interfaceHealthSummary } = require('../health/interfaceHealth');
 const { throughputHealthSummary } = require('../health/throughputHealth');
 const { computeDataQuality } = require('../health/dataQuality');
@@ -121,6 +121,7 @@ function createFleetRouter({ agentsRepo, probeResultsRepo, resultsRepo, speedtes
     const latestSpeed = speed && speed[0] ? speed[0] : null;
     const thr = throughputHealthSummary(latestSpeed, thresholds || {});
     if (thr) health = mergeThroughput(health, thr);
+    health = mergeConnection(health, agent.status === 'offline');
     const quality = computeDataQuality({
       capabilities: agent.capabilities || null,
       latest: latest && latest[0] ? { payload: latest[0].payload, created_at: latest[0].created_at } : null,

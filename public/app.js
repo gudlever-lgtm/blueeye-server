@@ -399,6 +399,89 @@ function logout() {
 }
 
 // ---- Modal ----------------------------------------------------------------
+// ---- Password policy (client-side mirror) ---------------------------------
+// These constants and rules MUST mirror src/auth/password.js
+// (checkPasswordPolicy) — there is no build step, so the dashboard re-states the
+// always-on policy to give live "criteria + strength" feedback before submit.
+// The server re-checks on every create/reset and stays the source of truth
+// (a violation is rejected with HTTP 422), so a drift here can never weaken it —
+// it would only show over-optimistic feedback, so keep the two in lockstep.
+const PW_MIN_LENGTH = 12;
+const PW_MAX_LENGTH = 72;
+const PW_MIN_CLASSES = 3;
+const PW_CLASS_NAMES = ['lowercase', 'uppercase', 'digit', 'symbol'];
+
+// Evaluates a plaintext password against the baseline policy. Returns the tick
+// list the meter renders plus whether the whole policy is met.
+function evaluatePassword(pw) {
+  const s = typeof pw === 'string' ? pw : '';
+  const classes = {
+    lower: /[a-z]/.test(s),
+    upper: /[A-Z]/.test(s),
+    digit: /[0-9]/.test(s),
+    symbol: /[^A-Za-z0-9]/.test(s),
+  };
+  const classCount = Object.values(classes).filter(Boolean).length;
+  const tooLong = s.length > PW_MAX_LENGTH;
+  const rules = [
+    { label: `At least ${PW_MIN_LENGTH} characters`, ok: s.length >= PW_MIN_LENGTH },
+    { label: `${PW_MIN_CLASSES} of 4: ${PW_CLASS_NAMES.join(', ')} (${classCount}/4 used)`, ok: classCount >= PW_MIN_CLASSES },
+  ];
+  // The 72-char cap only matters once exceeded — surface it as a failing rule
+  // exactly when it bites, so the common case isn't cluttered with it.
+  if (tooLong) rules.push({ label: `No more than ${PW_MAX_LENGTH} characters`, ok: false });
+  const meetsPolicy = s.length >= PW_MIN_LENGTH && classCount >= PW_MIN_CLASSES && !tooLong;
+  return { classCount, rules, meetsPolicy, length: s.length };
+}
+
+// Strength score 0..4 (length + character variety) — independent of the pass/
+// fail policy, so a merely-compliant password reads "Fair"/"Good" and a longer,
+// more varied one reads "Strong". Empty → level 0 (meter hidden by the caller).
+function passwordStrength(ev) {
+  if (ev.length === 0) return { level: 0, label: '' };
+  let score = 0;
+  if (ev.length >= 8) score += 1;
+  if (ev.length >= PW_MIN_LENGTH) score += 1;
+  if (ev.length >= 16) score += 1;
+  score += Math.max(0, ev.classCount - 2); // variety bonus: 0..2
+  const level = Math.max(1, Math.min(4, score));
+  return { level, label: ['', 'Weak', 'Fair', 'Good', 'Strong'][level] };
+}
+
+// Builds the live strength + criteria meter appended under a password input.
+// `optional`: when the field may be left blank (edit flows that keep the current
+// password), the meter stays hidden until the user starts typing.
+// Returns { node, update } — the caller wires `update` to the input's `input`
+// event and calls it once for the initial state.
+function passwordMeter(input, { optional = false } = {}) {
+  const fill = el('div', { class: 'fill' });
+  const bar = el('div', { class: 'usagebar' }, fill);
+  const strengthLabel = el('span', { class: 'pw-strength-label' });
+  const accepted = el('span', { class: 'pw-accepted hidden' }, '✓ Meets requirements');
+  const rules = el('ul', { class: 'pw-rules' });
+  const node = el('div', { class: 'pw-meter' },
+    el('div', { class: 'pw-strength-row' }, bar, strengthLabel, accepted),
+    rules);
+  function update() {
+    const val = input.value;
+    if (optional && val === '') { node.classList.add('hidden'); return; }
+    node.classList.remove('hidden');
+    const ev = evaluatePassword(val);
+    const st = passwordStrength(ev);
+    // Bar colour reads as an "accepted" signal: green only once the policy is
+    // met, otherwise warn/bad by raw strength so weak input looks unfinished.
+    const cls = ev.meetsPolicy ? 'ok' : (st.level >= 2 ? 'warn' : 'bad');
+    fill.className = `fill ${cls}`;
+    fill.style.width = `${st.level * 25}%`;
+    strengthLabel.textContent = st.label;
+    strengthLabel.className = `pw-strength-label lvl-${st.level}`;
+    accepted.classList.toggle('hidden', !ev.meetsPolicy);
+    rules.replaceChildren(...ev.rules.map((r) =>
+      el('li', { class: r.ok ? 'ok' : '' }, el('span', { class: 'pw-tick' }, r.ok ? '✓' : '○'), r.label)));
+  }
+  return { node, update };
+}
+
 function openModal(title, fields, onSubmit) {
   const card = $('#modal-card');
   const inputs = {};
@@ -409,6 +492,8 @@ function openModal(title, fields, onSubmit) {
       input = el('select', {}, ...f.options.map((o) => el('option', { value: o.value, ...(o.value === f.value ? { selected: 'selected' } : {}) }, o.label)));
     } else if (f.type === 'textarea') {
       input = el('textarea', { rows: 3 }, f.value || '');
+    } else if (f.type === 'password-strength') {
+      input = el('input', { type: 'password', value: f.value ?? '', autocomplete: 'new-password', spellcheck: 'false' });
     } else {
       input = el('input', { type: f.type || 'text', value: f.value ?? '' });
     }
@@ -418,6 +503,13 @@ function openModal(title, fields, onSubmit) {
     // as a small muted note under the input. Backward-compatible: callers that
     // pass no `hint` are unaffected.
     if (f.hint) lbl.append(el('span', { class: 'field-hint' }, f.hint));
+    // A password field can opt into the live strength + criteria meter.
+    if (f.type === 'password-strength') {
+      const meter = passwordMeter(input, { optional: f.optional });
+      lbl.append(meter.node);
+      input.addEventListener('input', meter.update);
+      meter.update();
+    }
     form.append(lbl);
   }
   const errP = el('p', { class: 'error' });
@@ -432,7 +524,9 @@ function openModal(title, fields, onSubmit) {
     // onSubmit decides whether to close (some flows re-render the modal, e.g.
     // to show a one-time code), so don't auto-close here.
     try { await onSubmit(values); }
-    catch (err) { errP.textContent = err.message; }
+    // Prefer the server's field-level validation details (e.g. the 422 password
+    // policy list) over the generic top-line message; errText falls back to it.
+    catch (err) { errP.textContent = errText(err); }
   });
   card.replaceChildren(el('h3', {}, title), form);
   $('#modal').classList.remove('hidden');
@@ -864,6 +958,8 @@ const PAGE_INFO = {
         el('li', {}, 'operator: create/edit agents, locations and enrollment codes.'),
         el('li', {}, 'viewer: read-only access.')),
       el('p', {}, 'The last admin cannot be deleted or demoted.'),
+      el('h4', {}, 'Password policy'),
+      el('p', {}, `New and reset passwords must be at least ${PW_MIN_LENGTH} characters and use at least ${PW_MIN_CLASSES} of the four character classes (lowercase, uppercase, digit, symbol). The create/reset dialog shows a live strength bar and ticks each rule as it is met; the server enforces the same policy.`),
       el('p', { class: 'muted' }, 'Operators manage those resources under ', viewLink('agents'), ', ', viewLink('locations'), ' and ', viewLink('enrollment'), '.'),
     ],
   },
@@ -8127,9 +8223,10 @@ function editUser(u) {
   if (u && u.protected) {
     // Super-admin: only a password reset is allowed.
     openModal(`Change password — ${u.email}`, [
-      { name: 'password', label: 'New password (min. 8 characters)', type: 'password', value: '' },
+      { name: 'password', label: 'New password', type: 'password-strength', value: '' },
     ], async (v) => {
       if (!v.password) throw new Error('Enter a new password');
+      if (!evaluatePassword(v.password).meetsPolicy) throw new Error('Password does not meet the requirements below');
       await api(`/users/${u.id}`, { method: 'PUT', body: { role: 'admin', password: v.password } });
       closeModal(); toast('Password changed'); render();
     });
@@ -8138,19 +8235,23 @@ function editUser(u) {
     openModal(`Edit ${u.email}`, [
       { name: 'email', label: 'Email', type: 'email', value: u.email },
       { name: 'role', label: 'Role', type: 'select', value: u.role, options: ROLE_OPTIONS },
-      { name: 'password', label: 'New password (optional)', type: 'password', value: '' },
+      { name: 'password', label: 'New password (optional — leave blank to keep)', type: 'password-strength', optional: true, value: '' },
     ], async (v) => {
       const body = { email: v.email, role: v.role };
-      if (v.password) body.password = v.password;
+      if (v.password) {
+        if (!evaluatePassword(v.password).meetsPolicy) throw new Error('Password does not meet the requirements below');
+        body.password = v.password;
+      }
       await api(`/users/${u.id}`, { method: 'PUT', body });
       closeModal(); toast('User updated'); render();
     });
   } else {
     openModal('New user', [
       { name: 'email', label: 'Email', type: 'email', value: '' },
-      { name: 'password', label: 'Password (min. 8 characters)', type: 'password', value: '' },
+      { name: 'password', label: 'Password', type: 'password-strength', value: '' },
       { name: 'role', label: 'Role', type: 'select', value: 'viewer', options: ROLE_OPTIONS },
     ], async (v) => {
+      if (!evaluatePassword(v.password).meetsPolicy) throw new Error('Password does not meet the requirements below');
       await api('/users', { method: 'POST', body: { email: v.email, password: v.password, role: v.role } });
       closeModal(); toast('User created'); render();
     });

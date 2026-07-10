@@ -5045,6 +5045,29 @@ views.fleet = async () => {
 
 // Combined per-agent page: health résumé + probes (latency/loss/jitter) +
 // interface health + recent traffic — the troubleshooting surface for one agent.
+// Device config history (masked snapshots + risk-classified diffs). operator/
+// admin only — a viewer gets a 403 the card explains rather than an empty box.
+async function loadDeviceConfigHistory(id, card) {
+  const head = el('h3', {}, 'Config history');
+  try {
+    const { snapshots, diffs } = await api(`/api/devices/${id}/config-history`);
+    if (!snapshots || !snapshots.length) {
+      card.replaceChildren(head, el('p', { class: 'muted' }, 'No config snapshots captured for this device yet.'));
+      return;
+    }
+    const diffEls = (diffs || []).map((d) => el('details', { class: 'cfg-diff' },
+      el('summary', {}, `${fmtDate(d.capturedAt)} · `,
+        el('span', { class: `badge risk-${d.risk}` }, d.risk),
+        el('span', { class: 'muted' }, ` +${(d.stats && d.stats.added) || 0}/-${(d.stats && d.stats.removed) || 0}${(d.riskReasons || []).length ? ` · ${d.riskReasons.join(', ')}` : ''}`)),
+      el('pre', { class: 'config-diff' }, (d.changedLines || []).map((l) => `${l.op} ${l.text}`).join('\n'))));
+    card.replaceChildren(head,
+      el('p', { class: 'muted' }, `${snapshots.length} snapshot(s); ${(diffs || []).length} change(s). Secrets are masked.`),
+      (diffs || []).length ? el('div', { class: 'cfg-diffs' }, ...diffEls) : el('p', { class: 'muted' }, 'No changes between snapshots.'));
+  } catch (err) {
+    card.replaceChildren(head, el('p', { class: err.status === 403 ? 'muted' : 'error' }, err.status === 403 ? 'Requires operator/admin.' : err.message));
+  }
+}
+
 views.agent = async () => {
   const id = selectedAgentId;
   const root = el('div', { class: 'agent-detail' });
@@ -5064,6 +5087,14 @@ views.agent = async () => {
   // Health résumé (the headline + the metrics that drove it).
   const healthHost = el('div', { class: 'agent-health' });
   root.append(healthHost);
+
+  // Device config history (operator/admin) — masked snapshots + risk-classified
+  // diffs from GET /api/devices/:id/config-history. Lazy-loaded.
+  if (canWrite()) {
+    const cfgHost = el('div', { class: 'card agent-config-history' }, el('h3', {}, 'Config history'), el('div', { class: 'muted' }, 'Loading…'));
+    root.append(cfgHost);
+    loadDeviceConfigHistory(id, cfgHost);
+  }
   function renderHealth(h, q, thr) {
     const m = h.metrics;
     const kv = (k, v, cls) => el('div', { class: 'ah-kv' }, el('span', { class: 'ah-k' }, k), el('span', { class: `ah-v${cls ? ' ' + cls : ''}` }, v));

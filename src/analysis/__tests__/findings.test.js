@@ -44,6 +44,12 @@ function makeFakePool() {
         r.correlated_with = params[0];
         return [{ affectedRows: 1 }];
       }
+      if (/^UPDATE findings SET incident_case_id = \? WHERE id = \?/i.test(sql)) {
+        const r = rows.find((x) => x.id === params[1]);
+        if (!r) return [{ affectedRows: 0 }];
+        r.incident_case_id = params[0];
+        return [{ affectedRows: 1 }];
+      }
       throw new Error(`unexpected SQL in fake pool: ${sql}`);
     },
   };
@@ -131,6 +137,23 @@ test('setCorrelations coerces a non-array argument to an empty list', async () =
   assert.equal(await store.setCorrelations(a.id, null), true);
   const got = await store.get(a.id);
   assert.deepEqual(got.correlatedWith, []);
+});
+
+test('a freshly saved finding has no incident case', async () => {
+  const store = new FindingStore({ db: { pool: makeFakePool() } });
+  const saved = await store.save(finding());
+  const got = await store.get(saved.id);
+  assert.equal(got.incidentCaseId, null);
+});
+
+test('setIncidentCase links (and unlinks) a finding to an incident case', async () => {
+  const store = new FindingStore({ db: { pool: makeFakePool() } });
+  const a = await store.save(finding());
+  assert.equal(await store.setIncidentCase(a.id, 42), true);
+  assert.equal((await store.get(a.id)).incidentCaseId, 42);
+  assert.equal(await store.setIncidentCase(a.id, null), true);
+  assert.equal((await store.get(a.id)).incidentCaseId, null);
+  assert.equal(await store.setIncidentCase('no-such-id', 1), false);
 });
 
 test('constructor requires the db pool handle', () => {

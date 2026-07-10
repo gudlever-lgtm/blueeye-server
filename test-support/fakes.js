@@ -160,6 +160,136 @@ function makeIncidentsRepo(overrides = {}) {
   };
 }
 
+// A fake incident_cases repository (in-memory) — the first-class incident entity
+// wrapping findings (migration 047). Mirrors incidentCasesRepository's surface.
+function makeIncidentCasesRepo(overrides = {}) {
+  const rows = [];
+  let seq = 0;
+  const rank = { INFO: 0, WARN: 1, CRIT: 2 };
+  const iso = (v) => (v == null ? null : (v instanceof Date ? v.toISOString() : new Date(v).toISOString()));
+  const mapOut = (r) => ({
+    id: r.id,
+    hostId: r.host_id,
+    title: r.title,
+    status: r.status,
+    severity: r.severity,
+    primaryFindingId: r.primary_finding_id ?? null,
+    configChangeId: r.config_change_id ?? null,
+    firstEventAt: iso(r.first_event_at),
+    lastEventAt: iso(r.last_event_at),
+    resolvedAt: iso(r.resolved_at),
+    createdBy: r.created_by,
+    closedBy: r.closed_by ?? null,
+    createdAt: iso(r.created_at || r.first_event_at),
+  });
+  return {
+    rows,
+    create: overrides.create || (async (c) => {
+      const id = (seq += 1);
+      rows.push({
+        id, status: 'open', severity: 'INFO', primary_finding_id: null, config_change_id: null,
+        resolved_at: null, created_by: 'system', closed_by: null, created_at: new Date(), ...c,
+      });
+      return id;
+    }),
+    setConfigChange: overrides.setConfigChange || (async (id, configSnapshotId) => {
+      const r = rows.find((x) => x.id === Number(id) && (x.config_change_id == null));
+      if (!r) return false;
+      r.config_change_id = configSnapshotId;
+      return true;
+    }),
+    findById: overrides.findById || (async (id) => { const r = rows.find((x) => x.id === Number(id)); return r ? mapOut(r) : null; }),
+    findOpenByHost: overrides.findOpenByHost || (async (hostId) => {
+      const open = rows
+        .filter((x) => x.host_id === hostId && (x.status === 'open' || x.status === 'investigating'))
+        .sort((a, b) => new Date(b.last_event_at) - new Date(a.last_event_at) || b.id - a.id);
+      return open[0] ? mapOut(open[0]) : null;
+    }),
+    updateActivity: overrides.updateActivity || (async (id, { lastEventAt, severity = null }) => {
+      const r = rows.find((x) => x.id === Number(id));
+      if (!r) return false;
+      if (new Date(lastEventAt) > new Date(r.last_event_at)) r.last_event_at = lastEventAt;
+      if (severity && (rank[severity] ?? -1) > (rank[r.severity] ?? -1)) r.severity = severity;
+      return true;
+    }),
+    updateStatus: overrides.updateStatus || (async (id, { from, to, closedBy = null, at = null }) => {
+      const r = rows.find((x) => x.id === Number(id) && x.status === from);
+      if (!r) return false;
+      r.status = to;
+      if (to === 'resolved') r.resolved_at = at;
+      if (to === 'closed') r.closed_by = closedBy;
+      if (to === 'open') { r.resolved_at = null; r.closed_by = null; }
+      return true;
+    }),
+    listResolvedClosed: overrides.listResolvedClosed || (async ({ excludeId = null, limit = 100 } = {}) => rows
+      .filter((r) => (r.status === 'resolved' || r.status === 'closed') && (excludeId == null || r.id !== Number(excludeId)))
+      .sort((a, b) => new Date(b.last_event_at) - new Date(a.last_event_at) || b.id - a.id)
+      .slice(0, limit)
+      .map((r) => ({ ...mapOut(r), primaryMetric: r.primary_metric ?? null, closedByEmail: r.closed_by_email ?? null, platform: r.platform ?? null }))),
+    listStaleInvestigating: overrides.listStaleInvestigating || (async (olderThan) => rows
+      .filter((r) => r.status === 'investigating' && new Date(r.last_event_at) < new Date(olderThan))
+      .sort((a, b) => new Date(a.last_event_at) - new Date(b.last_event_at))
+      .map(mapOut)),
+    list: overrides.list || (async (f = {}) => rows
+      .filter((r) => (!f.status || r.status === f.status)
+        && (!f.severity || r.severity === f.severity)
+        && (!f.hostId || r.host_id === f.hostId))
+      .sort((a, b) => new Date(b.last_event_at) - new Date(a.last_event_at) || b.id - a.id)
+      .map(mapOut)),
+  };
+}
+
+// A fake incident-case service (records calls; groups nothing by default).
+function makeIncidentCaseService(overrides = {}) {
+  const calls = [];
+  return {
+    calls,
+    assignFinding: overrides.assignFinding || (async (finding) => { calls.push(finding); return null; }),
+  };
+}
+
+// A fake config-snapshots repository (in-memory). Mirrors
+// configSnapshotsRepository's surface for the device-config history/diff.
+function makeConfigSnapshotsRepo(overrides = {}) {
+  const rows = [];
+  let seq = 0;
+  const iso = (v) => (v == null ? null : (v instanceof Date ? v.toISOString() : new Date(v).toISOString()));
+  const mapOut = (r, withText) => {
+    const o = { id: r.id, deviceId: r.device_id, capturedAt: iso(r.captured_at), capturedVia: r.captured_via, createdAt: iso(r.created_at || r.captured_at) };
+    if (withText) o.configText = r.config_text;
+    return o;
+  };
+  const before = (a, b) => new Date(a.captured_at) - new Date(b.captured_at) || a.id - b.id;
+  return {
+    rows,
+    insert: overrides.insert || (async ({ deviceId, configText, capturedVia = 'manual', capturedAt = null }) => {
+      const id = (seq += 1);
+      rows.push({ id, device_id: deviceId, config_text: configText, captured_via: capturedVia, captured_at: capturedAt || new Date(), created_at: new Date() });
+      return id;
+    }),
+    findById: overrides.findById || (async (id) => { const r = rows.find((x) => x.id === Number(id)); return r ? mapOut(r, true) : null; }),
+    listForDevice: overrides.listForDevice || (async (deviceId, { limit = 50, withText = false } = {}) => rows
+      .filter((r) => r.device_id === deviceId)
+      .sort((a, b) => before(b, a))
+      .slice(0, limit)
+      .map((r) => mapOut(r, withText))),
+    previousBefore: overrides.previousBefore || (async (deviceId, id) => {
+      const cur = rows.find((x) => x.id === Number(id));
+      if (!cur) return null;
+      const prev = rows
+        .filter((r) => r.device_id === deviceId && r.id !== cur.id && before(r, cur) < 0)
+        .sort((a, b) => before(b, a));
+      return prev[0] ? mapOut(prev[0], true) : null;
+    }),
+    latestForDeviceBetween: overrides.latestForDeviceBetween || (async (deviceId, from, to) => {
+      const match = rows
+        .filter((r) => r.device_id === deviceId && new Date(r.captured_at) > new Date(from) && new Date(r.captured_at) <= new Date(to))
+        .sort((a, b) => before(b, a));
+      return match[0] ? mapOut(match[0], true) : null;
+    }),
+  };
+}
+
 // A fake incident-thresholds repository (in-memory) seeded with the same global
 // defaults as migration 023, so the derivation service behaves as in production.
 function makeIncidentThresholdsRepo(overrides = {}) {
@@ -360,6 +490,13 @@ function makeAuditEventsRepo(overrides = {}) {
       if (action) out = out.filter((r) => r.action === action);
       return out.slice(offset, offset + Math.min(limit, 500)).map((r) => ({ ...r, ts: iso(r.ts) }));
     }),
+    findByTarget: overrides.findByTarget || (async ({ targetType = null, targetId = null, from = null, to = null } = {}) => rows
+      .filter((r) => (!targetType || r.targetType === targetType)
+        && (targetId == null || r.targetId === String(targetId))
+        && (!from || new Date(r.lastSeenAt) >= new Date(from))
+        && (!to || new Date(r.lastSeenAt) <= new Date(to)))
+      .sort((a, b) => (a.lastSeenAt < b.lastSeenAt ? -1 : 1))
+      .map((r) => ({ ...r, ts: iso(r.ts) }))),
     distinctActions: overrides.distinctActions || (async () => [...new Set(rows.map((r) => r.action))].sort()),
   };
 }
@@ -376,6 +513,9 @@ function makeAuditLogRepo(overrides = {}) {
       rows.filter((r) => (!category || r.category === category) && (actorUserId == null || r.actorUserId === actorUserId))
         .slice().reverse().slice(0, limit)),
     categories: overrides.categories || (async () => [...new Set(rows.map((r) => r.category))].sort()),
+    listByTarget: overrides.listByTarget || (async ({ category = null, target, limit = 200 } = {}) => rows
+      .filter((r) => String(r.target) === String(target) && (!category || r.category === category))
+      .slice(0, limit)),
     verifyChain: overrides.verifyChain || (async () => ({ ok: true, checked: rows.length, brokenAt: null })),
   };
 }
@@ -516,9 +656,13 @@ function makeFindingStore(overrides = {}) {
     rows,
     save: overrides.save || (async (f) => { const saved = { ...f, id: f.id || `f${rows.length + 1}`, acked: false }; rows.push(saved); return saved; }),
     list: overrides.list || (async (hostId, since) => rows.filter((f) => (!hostId || f.hostId === hostId) && (!since || new Date(f.createdAt || 0) >= new Date(since)))),
+    listByIncidentCase: overrides.listByIncidentCase || (async (incidentCaseId) => rows
+      .filter((f) => f.incidentCaseId === incidentCaseId)
+      .sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0))),
     get: overrides.get || (async (id) => rows.find((f) => f.id === id) || null),
     ack: overrides.ack || (async (id) => { const f = rows.find((x) => x.id === id); if (!f) return false; f.acked = true; return true; }),
     setCorrelations: overrides.setCorrelations || (async (id, ids) => { const f = rows.find((x) => x.id === id); if (!f) return false; f.correlatedWith = Array.isArray(ids) ? ids : []; return true; }),
+    setIncidentCase: overrides.setIncidentCase || (async (id, incidentCaseId) => { const f = rows.find((x) => x.id === id); if (!f) return false; f.incidentCaseId = incidentCaseId ?? null; return true; }),
   };
 }
 
@@ -599,13 +743,14 @@ function makeAssistant(overrides = {}) {
     isEnabled: overrides.isEnabled || (() => Boolean(
       overrides.explain || overrides.summarizeLocation ||
       overrides.explainDiagnostic || overrides.narrateInvestigation ||
-      overrides.generateNis2Draft)),
+      overrides.askIncident || overrides.generateNis2Draft)),
     status: overrides.status || (() => ({ enabled: false, configured: false, baseUrl: 'https://api.mistral.ai/v1/chat/completions', model: 'mistral-small-latest' })),
     explain: overrides.explain || (async () => disabled()),
     explainDiagnostic: overrides.explainDiagnostic || (async () => disabled()),
     summarizeLocation: overrides.summarizeLocation || (async () => disabled()),
     narrateInvestigation: overrides.narrateInvestigation || (async () => disabled()),
     generateNis2Draft: overrides.generateNis2Draft || (async () => disabled()),
+    askIncident: overrides.askIncident || (async () => disabled()),
   };
 }
 
@@ -1169,6 +1314,8 @@ function makeApp(overrides = {}) {
     resultsRepo: overrides.resultsRepo || makeResultsRepo(),
     probeResultsRepo: overrides.probeResultsRepo || makeProbeResultsRepo(),
     incidentsRepo: overrides.incidentsRepo || makeIncidentsRepo(),
+    incidentCasesRepo: overrides.incidentCasesRepo || makeIncidentCasesRepo(),
+    configSnapshotsRepo: overrides.configSnapshotsRepo || makeConfigSnapshotsRepo(),
     thresholdsRepo: overrides.thresholdsRepo || makeIncidentThresholdsRepo(),
     incidentService: overrides.incidentService || makeIncidentService(),
     installToolService: overrides.installToolService || null,
@@ -1287,6 +1434,9 @@ module.exports = {
   makeResultsRepo,
   makeProbeResultsRepo,
   makeIncidentsRepo,
+  makeIncidentCasesRepo,
+  makeIncidentCaseService,
+  makeConfigSnapshotsRepo,
   makeIncidentThresholdsRepo,
   makeIncidentService,
   makeEnrollmentCodesRepo,

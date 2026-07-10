@@ -36,6 +36,11 @@ class FeatureDisabledError extends Error {
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
+// The exact answer the incident assistant must return when the context does not
+// contain enough information — also used by the route to short-circuit (no data
+// at all → this reply without a provider call).
+const INCIDENT_INSUFFICIENT_ANSWER = 'Der findes ikke tilstrækkelige data til at konkludere.';
+
 function createAssistant({
   config = {},
   findingStore,
@@ -453,7 +458,32 @@ function createAssistant({
     return answer;
   }
 
-  return { isEnabled, status, explain, explainDiagnostic, summarizeLocation, narrateInvestigation, generateNis2Draft, diagnoseTransaction, buildContext, buildLocationContext };
+  // Answers a free-text question about a specific incident using ONLY the
+  // already-masked/aggregated context the caller assembled (askContext). The
+  // system prompt forbids inventing anything and pins the exact fallback string
+  // when the context is insufficient. Throws FeatureDisabled when off,
+  // InvalidQuestion on empty input, AssistantMisconfigured/UpstreamError on
+  // provider problems. The context is NOT re-masked here — masking already
+  // happened before it reached this method.
+  async function askIncident(question, context) {
+    if (!currentEnabled()) throw new FeatureDisabledError();
+    if (typeof question !== 'string' || question.trim() === '') {
+      const e = new Error('question must be a non-empty string');
+      e.name = 'InvalidQuestion';
+      throw e;
+    }
+    const system =
+      'You are a network operations assistant for BlueEye, answering a question about ONE specific ' +
+      'incident. Answer briefly and concretely in the language of the question. Use ONLY the provided ' +
+      'context (incident, timeline, config changes, similar incidents). NEVER invent facts, causes, ' +
+      'hostnames or addresses that are not present in the context. If the context does not contain ' +
+      `enough information to answer, reply EXACTLY with: "${INCIDENT_INSUFFICIENT_ANSWER}"`;
+    const user = JSON.stringify({ question: question.trim(), context });
+    const answer = await chat(system, user);
+    return { answer, model: currentModel() };
+  }
+
+  return { isEnabled, status, explain, explainDiagnostic, summarizeLocation, narrateInvestigation, generateNis2Draft, diagnoseTransaction, askIncident, buildContext, buildLocationContext };
 }
 
-module.exports = { createAssistant, FeatureDisabledError };
+module.exports = { createAssistant, FeatureDisabledError, INCIDENT_INSUFFICIENT_ANSWER };

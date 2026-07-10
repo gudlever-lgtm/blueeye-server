@@ -97,3 +97,27 @@ test('buildAdvancedDashboard: only unacknowledged findings are surfaced', () => 
   assert.equal(out.widgets.findings.open, 1);
   assert.equal(out.widgets.findings.recent[0].id, 'a');
 });
+
+test('buildAdvancedDashboard: only open|investigating incident_cases are surfaced, newest activity first', () => {
+  const incidentCases = [
+    { id: 1, deviceId: '9', title: 'A', severity: 'CRIT', status: 'open', lastEventAt: '2026-06-01T00:00:00.000Z' },
+    { id: 2, deviceId: '9', title: 'B', severity: 'WARN', status: 'resolved', lastEventAt: '2026-06-05T00:00:00.000Z' },
+    { id: 3, deviceId: '7', title: 'C', severity: 'WARN', status: 'investigating', lastEventAt: '2026-06-03T00:00:00.000Z' },
+    { id: 4, deviceId: '5', title: 'D', severity: 'INFO', status: 'closed', lastEventAt: '2026-06-04T00:00:00.000Z' },
+  ];
+  const out = buildAdvancedDashboard({ incidentCases });
+  assert.equal(out.widgets.incidentCases.open, 2); // resolved + closed excluded
+  assert.deepEqual(out.widgets.incidentCases.recent.map((c) => c.id), [3, 1]); // newest activity first
+});
+
+test('advanced dashboard exposes the incidentCases widget over HTTP (200)', async () => {
+  const incidentCasesRepo = { list: async () => [
+    { id: 1, deviceId: '9', title: 'CPU on 9', severity: 'CRIT', status: 'investigating', lastEventAt: '2026-06-11T10:00:00.000Z' },
+  ] };
+  const res = await request(makeApp({ incidentCasesRepo }))
+    .get('/api/dashboard/advanced')
+    .set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 200);
+  assert.equal(res.body.widgets.incidentCases.open, 1);
+  assert.equal(res.body.widgets.incidentCases.recent[0].id, 1);
+});

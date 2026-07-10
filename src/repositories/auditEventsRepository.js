@@ -140,6 +140,30 @@ function createAuditEventsRepository(db) {
     return rows.map(mapRow);
   }
 
+  // Oldest-first events for one target (e.g. all activity on a given agent)
+  // within an optional time window. Used by the incident timeline read-model to
+  // surface config-changes on the incident's device. Chronological to match the
+  // timeline's ordering.
+  async function findByTarget({
+    targetType = null, targetId = null, from = null, to = null, limit = 500,
+  } = {}) {
+    const where = [];
+    const params = [];
+    if (targetType) { where.push('ae.target_type = ?'); params.push(targetType); }
+    if (targetId != null) { where.push('ae.target_id = ?'); params.push(String(targetId)); }
+    if (from) { where.push('ae.last_seen_at >= ?'); params.push(from); }
+    if (to) { where.push('ae.last_seen_at <= ?'); params.push(to); }
+    const clause = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const lim = clampLimit(limit, 500, 2000);
+    params.push(lim);
+    const [rows] = await pool.query(
+      `SELECT ${SELECT_COLS} FROM ${FROM} ${clause}
+       ORDER BY ae.last_seen_at ASC, ae.id ASC LIMIT ?`,
+      params
+    );
+    return rows.map(mapRow);
+  }
+
   // The distinct action keys present, for the dashboard filter dropdown.
   async function distinctActions() {
     const [rows] = await pool.query(
@@ -148,7 +172,7 @@ function createAuditEventsRepository(db) {
     return rows.map((r) => r.action);
   }
 
-  return { record, recordRecurring, findAll, distinctActions };
+  return { record, recordRecurring, findAll, findByTarget, distinctActions };
 }
 
 module.exports = { createAuditEventsRepository, mapRow };

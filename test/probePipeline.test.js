@@ -7,7 +7,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
 const { createProbePipeline } = require('../src/analysis/probePipeline');
-const { makeFindingStore, makeProbeResultsRepo, makeDispatcher } = require('../test-support/fakes');
+const { makeFindingStore, makeProbeResultsRepo, makeDispatcher, makeIncidentCaseService } = require('../test-support/fakes');
 
 const T = '2026-06-01T12:00:00.000Z';
 const now = () => new Date(T);
@@ -54,4 +54,30 @@ test('processAgent does nothing when the analysis license is absent', async () =
   const pipe = createProbePipeline({ probeResultsRepo, findingStore, config: { analysisEnabled: true }, licensed: () => false, now });
   assert.deepEqual(await pipe.processAgent(7), []);
   assert.equal(findingStore.rows.length, 0);
+});
+
+test('processAgent routes each produced finding to the incident-case service', async () => {
+  const findingStore = makeFindingStore();
+  const incidentCaseService = makeIncidentCaseService();
+  const probeResultsRepo = makeProbeResultsRepo({ findByAgent: async () => downRows });
+  const pipe = createProbePipeline({
+    probeResultsRepo, findingStore, incidentCaseService,
+    config: { analysisEnabled: true }, licensed: () => true, now,
+  });
+  const produced = await pipe.processAgent(7);
+  assert.equal(produced.length, 1);
+  assert.equal(incidentCaseService.calls.length, 1);
+  assert.equal(incidentCaseService.calls[0].metric, 'probe.reachability');
+});
+
+test('a failing incident-case service never breaks probe ingestion', async () => {
+  const findingStore = makeFindingStore();
+  const incidentCaseService = makeIncidentCaseService({ assignFinding: async () => { throw new Error('boom'); } });
+  const probeResultsRepo = makeProbeResultsRepo({ findByAgent: async () => downRows });
+  const pipe = createProbePipeline({
+    probeResultsRepo, findingStore, incidentCaseService,
+    config: { analysisEnabled: true }, licensed: () => true, now,
+  });
+  const produced = await pipe.processAgent(7);
+  assert.equal(produced.length, 1); // still produced despite the service throwing
 });

@@ -236,6 +236,42 @@ function makeIncidentCaseService(overrides = {}) {
   };
 }
 
+// A fake config-snapshots repository (in-memory). Mirrors
+// configSnapshotsRepository's surface for the device-config history/diff.
+function makeConfigSnapshotsRepo(overrides = {}) {
+  const rows = [];
+  let seq = 0;
+  const iso = (v) => (v == null ? null : (v instanceof Date ? v.toISOString() : new Date(v).toISOString()));
+  const mapOut = (r, withText) => {
+    const o = { id: r.id, deviceId: r.device_id, capturedAt: iso(r.captured_at), capturedVia: r.captured_via, createdAt: iso(r.created_at || r.captured_at) };
+    if (withText) o.configText = r.config_text;
+    return o;
+  };
+  const before = (a, b) => new Date(a.captured_at) - new Date(b.captured_at) || a.id - b.id;
+  return {
+    rows,
+    insert: overrides.insert || (async ({ deviceId, configText, capturedVia = 'manual', capturedAt = null }) => {
+      const id = (seq += 1);
+      rows.push({ id, device_id: deviceId, config_text: configText, captured_via: capturedVia, captured_at: capturedAt || new Date(), created_at: new Date() });
+      return id;
+    }),
+    findById: overrides.findById || (async (id) => { const r = rows.find((x) => x.id === Number(id)); return r ? mapOut(r, true) : null; }),
+    listForDevice: overrides.listForDevice || (async (deviceId, { limit = 50, withText = false } = {}) => rows
+      .filter((r) => r.device_id === deviceId)
+      .sort((a, b) => before(b, a))
+      .slice(0, limit)
+      .map((r) => mapOut(r, withText))),
+    previousBefore: overrides.previousBefore || (async (deviceId, id) => {
+      const cur = rows.find((x) => x.id === Number(id));
+      if (!cur) return null;
+      const prev = rows
+        .filter((r) => r.device_id === deviceId && r.id !== cur.id && before(r, cur) < 0)
+        .sort((a, b) => before(b, a));
+      return prev[0] ? mapOut(prev[0], true) : null;
+    }),
+  };
+}
+
 // A fake incident-thresholds repository (in-memory) seeded with the same global
 // defaults as migration 023, so the derivation service behaves as in production.
 function makeIncidentThresholdsRepo(overrides = {}) {
@@ -1380,6 +1416,7 @@ module.exports = {
   makeIncidentsRepo,
   makeIncidentCasesRepo,
   makeIncidentCaseService,
+  makeConfigSnapshotsRepo,
   makeIncidentThresholdsRepo,
   makeIncidentService,
   makeEnrollmentCodesRepo,

@@ -1,0 +1,95 @@
+'use strict';
+
+// Data-access for `config_snapshots` — raw device-config captures (migration
+// 049). Pure data-access: diff-generation lives in src/config/diff.js, and the
+// risk classification + incident correlation + endpoints build on top of this.
+//
+// A "device" is an agent (device_id → agents.id), consistent with how findings /
+// incidents key on the agent. config_text is raw and may contain secrets, so
+// callers gate reads to operator/admin and mask at the API layer.
+
+const META_COLUMNS = 'id, device_id, captured_at, captured_via, created_at';
+const FULL_COLUMNS = `${META_COLUMNS}, config_text`;
+
+function toIso(v) {
+  if (v == null) return null;
+  return v instanceof Date ? v.toISOString() : new Date(v).toISOString();
+}
+
+// Maps a row to the API shape. config_text is only present when it was selected
+// (list-metadata omits it to keep history responses light).
+function mapRow(row) {
+  if (!row) return null;
+  const out = {
+    id: Number(row.id),
+    deviceId: Number(row.device_id),
+    capturedAt: toIso(row.captured_at),
+    capturedVia: row.captured_via,
+    createdAt: toIso(row.created_at),
+  };
+  if (Object.prototype.hasOwnProperty.call(row, 'config_text')) out.configText = row.config_text;
+  return out;
+}
+
+function createConfigSnapshotsRepository(db) {
+  const { pool } = db;
+
+  // Inserts a snapshot and returns its new id. captured_at defaults to now in SQL
+  // when not supplied.
+  async function insert({ deviceId, configText, capturedVia = 'manual', capturedAt = null }) {
+    if (capturedAt == null) {
+      const [res] = await pool.query(
+        `INSERT INTO config_snapshots (device_id, config_text, captured_via)
+         VALUES (?, ?, ?)`,
+        [deviceId, configText, capturedVia]
+      );
+      return Number(res.insertId);
+    }
+    const [res] = await pool.query(
+      `INSERT INTO config_snapshots (device_id, config_text, captured_via, captured_at)
+       VALUES (?, ?, ?, ?)`,
+      [deviceId, configText, capturedVia, capturedAt]
+    );
+    return Number(res.insertId);
+  }
+
+  // One snapshot by id, including its raw config_text.
+  async function findById(id) {
+    const [rows] = await pool.query(
+      `SELECT ${FULL_COLUMNS} FROM config_snapshots WHERE id = ?`,
+      [id]
+    );
+    return mapRow(rows[0]) ?? null;
+  }
+
+  // Snapshots for a device, newest-first. `withText` includes the raw config_text
+  // (heavier); the history endpoint uses metadata-only for the list and fetches
+  // text per diff. Bounded.
+  async function listForDevice(deviceId, { limit = 50, withText = false } = {}) {
+    const lim = Number.isInteger(limit) && limit > 0 && limit <= 500 ? limit : 50;
+    const [rows] = await pool.query(
+      `SELECT ${withText ? FULL_COLUMNS : META_COLUMNS} FROM config_snapshots
+       WHERE device_id = ? ORDER BY captured_at DESC, id DESC LIMIT ?`,
+      [deviceId, lim]
+    );
+    return rows.map(mapRow);
+  }
+
+  // The snapshot immediately preceding `id` for the same device (the one to diff
+  // against), or null when `id` is the device's first snapshot. Ordered by
+  // captured_at then id so ties are deterministic.
+  async function previousBefore(deviceId, id) {
+    const [rows] = await pool.query(
+      `SELECT ${FULL_COLUMNS} FROM config_snapshots
+       WHERE device_id = ? AND id <> ?
+         AND (captured_at, id) < (SELECT captured_at, id FROM config_snapshots WHERE id = ?)
+       ORDER BY captured_at DESC, id DESC LIMIT 1`,
+      [deviceId, id, id]
+    );
+    return mapRow(rows[0]) ?? null;
+  }
+
+  return { insert, findById, listForDevice, previousBefore };
+}
+
+module.exports = { createConfigSnapshotsRepository, mapRow };

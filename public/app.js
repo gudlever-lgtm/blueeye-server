@@ -9748,19 +9748,31 @@ for (const b of document.querySelectorAll('.tabs button[data-view]')) {
 // Foldable nav categories: clicking a category label collapses/expands its group.
 // The set of collapsed categories is remembered per browser (localStorage), so the
 // rail comes back the way the user left it. Independent of the mobile off-canvas nav.
+// Default (no stored preference yet): every category starts collapsed, so the rail
+// opens compact and the user unfolds only the groups they care about — their choices
+// are remembered from the first toggle on. `null` distinguishes "never chosen" from a
+// stored-but-empty set (which means the user has expanded everything).
 function loadCollapsedCategories() {
   try {
     const raw = localStorage.getItem(NAV_COLLAPSE_KEY);
-    const arr = raw ? JSON.parse(raw) : [];
+    if (raw === null) return null;
+    const arr = JSON.parse(raw);
     return new Set(Array.isArray(arr) ? arr : []);
-  } catch { return new Set(); }
+  } catch { return null; }
 }
 function saveCollapsedCategories(set) {
   try { localStorage.setItem(NAV_COLLAPSE_KEY, JSON.stringify([...set])); } catch { /* storage off */ }
 }
 function setupNavGroups() {
-  const collapsed = loadCollapsedCategories();
-  for (const g of document.querySelectorAll('.tabs .nav-group')) {
+  const groups = [...document.querySelectorAll('.tabs .nav-group')];
+  const catOf = (g) => g.dataset.category || g.querySelector('.nav-group-label')?.textContent.trim();
+  let collapsed = loadCollapsedCategories();
+  if (collapsed === null) {
+    // First visit: fold every category. Nothing is persisted until the user
+    // toggles a group, at which point the full set is saved.
+    collapsed = new Set(groups.map(catOf).filter(Boolean));
+  }
+  for (const g of groups) {
     const label = g.querySelector('.nav-group-label');
     if (!label) continue;
     const cat = g.dataset.category || label.textContent.trim();

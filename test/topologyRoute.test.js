@@ -29,6 +29,19 @@ test('GET /api/topology returns a flow-derived graph', async () => {
   assert.ok(res.body.from && res.body.to);
 });
 
+test('GET /api/topology geolocates external peers when centroids are wired', async () => {
+  const flowsRepo = makeFlowsRepo({ topologyEdges: async () => sampleEdges });
+  const centroids = { get: (c) => (c === 'US' ? { lat: 38, lng: -97 } : null) };
+  const res = await request(makeApp({ flowsRepo, centroids }))
+    .get('/api/topology?minutes=30').set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 200);
+  const ext = res.body.nodes.find((n) => n.kind === 'external');
+  assert.equal(ext.lat, 38);
+  assert.equal(ext.lng, -97);
+  const int = res.body.nodes.find((n) => n.kind === 'internal');
+  assert.equal(int.lat, null); // internal endpoints are never geolocated
+});
+
 test('GET /api/topology validates agentId and 404s an unknown agent', async () => {
   const flowsRepo = makeFlowsRepo({ topologyEdges: async () => [] });
   const app = makeApp({ flowsRepo, agentsRepo: makeAgentsRepo({ findById: async () => null }) });

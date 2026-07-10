@@ -660,6 +660,7 @@ const PAGE_INFO = {
     body: () => [
       el('p', {}, 'Aggregates observed src→dst conversations into a directed, byte-weighted graph: each edge is a dependency, each node a host or external peer. Complements ', viewLink('flows', 'Flows'), ' (raw conversations) and the per-target path map — this is the service/host dependency view. Metadata only: addresses, ports, ASNs and byte/flow counts, never payload.'),
       el('p', {}, 'The ', el('strong', {}, 'Diagram'), ' draws the busiest hosts as a force-directed graph — circle size is traffic volume, line width is bytes between two hosts, green rings mark internal (RFC1918) hosts and amber rings mark external peers. Click a host to highlight its neighbourhood and open Ping/Vis rute for it, same as a table row.'),
+      el('p', {}, 'The ', el('strong', {}, 'Map'), ' plots the same data geographically: external peers by country (circle size = traffic), your sites as anchor pins, and the observed dependencies as routes between them. Internal (private) hosts are never geolocated, so the map covers only the external subset — the Diagram remains the view for the internal structure. Routes internal→external are drawn from a single anchor site, so pick a ', el('strong', {}, 'Site'), ' to see its routes to external peers.'),
       el('p', {}, 'Use the ', el('strong', {}, 'Site'), ' filter to scope the graph to one location and reduce noise. Use the ', el('strong', {}, 'Window'), ' selector to widen or narrow the time range covered.'),
       el('p', { class: 'muted' }, 'Only agents whose traffic source is NetFlow or sFlow contribute flow records; the heaviest dependencies/hosts are shown when the graph is large.'),
     ],
@@ -4097,10 +4098,20 @@ views.topology = async () => {
   winSel.value = '60';
   const refreshBtn = el('button', { class: 'small ghost' }, 'Refresh');
 
+  // View-mode toggle: the who-talks-to-whom SVG diagram (default) or a map of the
+  // public peers by country. Internal hosts are never geolocated, so the map only
+  // covers the external subset — see drawTopoMap.
+  let mode = 'diagram';
+  const diagramBtn = el('button', { class: 'small', 'aria-pressed': 'true' }, 'Diagram');
+  const mapBtn = el('button', { class: 'small ghost', 'aria-pressed': 'false' }, 'Map');
+  const modeToggle = el('div', { class: 'topo-mode', role: 'group', 'aria-label': 'View mode' }, diagramBtn, mapBtn);
+
   root.append(el('div', { class: 'topo-action-bar' },
     el('label', { class: 'inline muted' }, 'Site ', locSel),
     el('label', { class: 'inline muted' }, ' Window ', winSel),
-    refreshBtn));
+    refreshBtn,
+    el('span', { class: 'spacer' }),
+    modeToggle));
 
   // Agent selector — shown only when at least one agent is online so action
   // buttons have something to send probes from.
@@ -4113,10 +4124,15 @@ views.topology = async () => {
 
   const summary = el('p', { class: 'muted' });
   root.append(summary);
+  // The visual area holds either the diagram (graphHost) or the map (mapHost);
+  // the tables below stay visible in both modes (full list). lastData is the most
+  // recent /api/topology response so the toggle can redraw without refetching.
   const graphHost = el('div', {});
-  root.append(graphHost);
+  const mapHost = el('div', { class: 'topo-maphost hidden' });
+  root.append(el('div', {}, graphHost, mapHost));
   const tableHost = el('div', {});
   root.append(tableHost);
+  let lastData = null;
 
   // byId index is rebuilt on each load; shared by label() and actionBtns().
   const byId = {};
@@ -4189,6 +4205,149 @@ views.topology = async () => {
     return el('div', { class: 'row-actions' }, pingBtn, routeBtn);
   }
 
+  // Map mode: plots the PUBLIC peers by country (circles sized by traffic) over
+  // the shared EU/self-hosted tiles, your sites as anchor pins, and the observed
+  // dependencies as routes. Internal (RFC1918) hosts are never geolocated, so the
+  // map deliberately shows only the external subset; the diagram remains the tool
+  // for the internal structure. Routes internal→external are drawn from a single
+  // anchor site — the selected Site, or the only located site — because the graph
+  // doesn't tie each internal IP to a site; when the fleet spans several sites we
+  // show the peers without those lines and say so. External↔external edges (both
+  // ends geolocated) are always drawn.
+  const EXT_COLOR = '#f59e0b'; // external peer (matches the diagram's amber)
+  const SITE_COLOR = '#38bdf8'; // internal site anchor
+
+  async function drawTopoMap() {
+    stopTopoMap();
+    if (typeof L === 'undefined') {
+      mapHost.replaceChildren(el('div', { class: 'empty' }, 'Map library (Leaflet) could not be loaded — the map is unavailable offline. Use the Diagram.'));
+      return;
+    }
+    const nodes = (lastData && lastData.nodes) || [];
+    const edges = (lastData && lastData.edges) || [];
+    const byId = {}; nodes.forEach((n) => { byId[n.id] = n; });
+    const located = locations.filter((l) => l.latitude != null && l.longitude != null);
+    const extNodes = nodes.filter((n) => n.kind === 'external');
+    const geoNodes = extNodes.filter((n) => n.lat != null && n.lng != null);
+
+    // Aggregate the geolocated peers to their country centroid (many peer IPs
+    // stack on one point otherwise): sum bytes, count peers, collect ASN names.
+    const byCountry = new Map();
+    for (const n of geoNodes) {
+      const e = byCountry.get(n.country) || { country: n.country, lat: n.lat, lng: n.lng, bytes: 0, peers: 0, asns: new Set() };
+      e.bytes += n.bytes || 0; e.peers += 1; if (n.asnName) e.asns.add(n.asnName);
+      byCountry.set(n.country, e);
+    }
+
+    // Which site anchors the internal→external routes (see the note above).
+    const selLoc = locSel.value ? located.find((l) => String(l.id) === locSel.value) : null;
+    const anchor = selLoc || (located.length === 1 ? located[0] : null);
+
+    if (!geoNodes.length && !located.length) {
+      mapHost.replaceChildren(el('div', { class: 'empty' },
+        extNodes.length
+          ? 'No public peers could be placed on the map yet. Country-level placement needs the offline GeoIP/ASN database (Settings → Map).'
+          : 'Nothing to map in this window — the graph is all internal hosts, which are never geolocated. Use the Diagram.'));
+      return;
+    }
+
+    let cfg = {};
+    try { cfg = await api('/api/map/config'); } catch { /* fall back to default tiles */ }
+    // The user may have switched mode / left the view while awaiting.
+    if (mode !== 'map' || !mapHost.isConnected) return;
+
+    const canvas = el('div', { class: 'map' });
+    // GeoIP-missing banner: peers exist but none could be placed by country.
+    const banner = (extNodes.length && !geoNodes.length)
+      ? el('div', { class: 'alert-banner sev-WARN' },
+          el('span', { class: 'alert-ic' }, '⚠'),
+          el('span', {}, el('strong', {}, 'GeoIP database not configured. '),
+            'External peers can’t be placed by country until the offline GeoIP/ASN database is loaded. ',
+            role === 'admin' ? settingsLink('map', 'Configure it in Settings → Map') : 'Ask an administrator to configure it in Settings → Map', '.'))
+      : null;
+    const noAnchor = geoNodes.length && !anchor;
+    const legend = el('div', { class: 'legend geo-legend' },
+      el('span', {}, el('span', { class: 'dot ring', style: `background:${SITE_COLOR}` }), ' site'),
+      el('span', {}, el('span', { class: 'dot', style: `background:${EXT_COLOR}` }), ' external peer'),
+      el('span', { class: 'muted' }, '· circle size = traffic · lines = observed routes · public peers placed at country level'));
+    const note = el('p', { class: 'muted small' },
+      `Internal (private) hosts are never geolocated — the map shows only the ${byCountry.size} external ${byCountry.size === 1 ? 'country' : 'countries'} (${geoNodes.length} peers). `,
+      noAnchor ? 'Select a single Site above to draw its routes to those peers.' : (anchor ? `Routes are drawn from ${esc(anchor.name)}.` : ''));
+    mapHost.replaceChildren(...[banner, canvas, legend, note].filter(Boolean));
+
+    const center = anchor ? [anchor.latitude, anchor.longitude]
+      : (geoNodes.length ? [geoNodes[0].lat, geoNodes[0].lng] : [located[0].latitude, located[0].longitude]);
+    const map = createLeafletMap(canvas, cfg, { center, zoom: 3 });
+    if (!map) return;
+    topoMapState.map = map;
+    const pts = [];
+
+    // Routes: internal→external anchored to the site; external↔external between
+    // the two country centroids. Aggregate by endpoints so repeated conversations
+    // become one line weighted (log-scaled) by total bytes.
+    const routes = new Map();
+    const addRoute = (key, a, b, bytes) => {
+      const r = routes.get(key) || { a, b, bytes: 0 };
+      r.bytes += bytes || 0; routes.set(key, r);
+    };
+    for (const e of edges) {
+      const a = byId[e.from]; const b = byId[e.to];
+      if (!a || !b) continue;
+      const aExt = a.kind === 'external' && a.lat != null;
+      const bExt = b.kind === 'external' && b.lat != null;
+      if (aExt && bExt) {
+        if (a.country === b.country) continue; // same centroid — nothing to draw
+        addRoute(`x:${[a.country, b.country].sort().join('>')}`, [a.lat, a.lng], [b.lat, b.lng], e.bytes);
+      } else if (anchor && (aExt || bExt)) {
+        const ext = aExt ? a : b;
+        addRoute(`s:${ext.country}`, [anchor.latitude, anchor.longitude], [ext.lat, ext.lng], e.bytes);
+      }
+    }
+    const maxRouteBytes = Math.max(1, ...[...routes.values()].map((r) => r.bytes));
+    for (const r of routes.values()) {
+      const w = 1 + (Math.log2(1 + r.bytes) / Math.log2(1 + maxRouteBytes)) * 4;
+      L.polyline([r.a, r.b], { color: EXT_COLOR, weight: w, opacity: 0.5 }).addTo(map);
+    }
+
+    // Site anchor pins (the anchor is emphasised; others give geographic context).
+    for (const l of located) {
+      const isAnchor = anchor && String(l.id) === String(anchor.id);
+      L.circleMarker([l.latitude, l.longitude], {
+        radius: isAnchor ? 9 : 7, color: '#fff', weight: 2,
+        fillColor: SITE_COLOR, fillOpacity: isAnchor ? 0.95 : 0.6,
+      }).addTo(map).bindTooltip(`${esc(l.name)}${isAnchor ? ' · routes anchor' : ''}`);
+      pts.push([l.latitude, l.longitude]);
+    }
+
+    // External peers by country.
+    for (const c of byCountry.values()) {
+      const asns = [...c.asns].slice(0, 4).join(', ');
+      L.circleMarker([c.lat, c.lng], {
+        radius: radiusForBytes(c.bytes), color: EXT_COLOR, fillColor: EXT_COLOR, fillOpacity: 0.5, weight: 1,
+      }).addTo(map).bindTooltip(
+        `${esc(c.country)} · ${c.peers} peer${c.peers === 1 ? '' : 's'} · ${fmtBytes(c.bytes)}${asns ? ` · ${esc(asns)}` : ''}`);
+      pts.push([c.lat, c.lng]);
+    }
+
+    if (pts.length > 1) { try { map.fitBounds(pts, { padding: [40, 40], maxZoom: 7 }); } catch { /* single point */ } }
+    setTimeout(() => { try { map.invalidateSize(); } catch { /* ignore */ } }, 60);
+  }
+
+  // Show the active mode's host, keep the other hidden, and (re)draw the map.
+  function applyMode() {
+    const isMap = mode === 'map';
+    graphHost.classList.toggle('hidden', isMap);
+    mapHost.classList.toggle('hidden', !isMap);
+    diagramBtn.classList.toggle('ghost', isMap);
+    mapBtn.classList.toggle('ghost', !isMap);
+    diagramBtn.setAttribute('aria-pressed', String(!isMap));
+    mapBtn.setAttribute('aria-pressed', String(isMap));
+    if (isMap) drawTopoMap();
+    else stopTopoMap();
+  }
+  diagramBtn.addEventListener('click', () => { if (mode !== 'diagram') { mode = 'diagram'; applyMode(); } });
+  mapBtn.addEventListener('click', () => { if (mode !== 'map') { mode = 'map'; applyMode(); } });
+
   async function loadTopology() {
     const qp = new URLSearchParams({ minutes: winSel.value });
     const locId = locSel.value;
@@ -4202,11 +4361,14 @@ views.topology = async () => {
     try {
       data = await api(`/api/topology?${qp}`);
     } catch (e) {
+      lastData = null;
       graphHost.replaceChildren();
       tableHost.replaceChildren(el('div', { class: 'error' }, errText(e)));
       summary.textContent = '';
+      applyMode();
       return;
     }
+    lastData = data;
 
     const t = data.totals || { nodes: 0, internal: 0, external: 0, edges: 0 };
     summary.textContent = `${t.nodes} hosts (${t.internal} internal, ${t.external} external) · ${t.edges} dependencies${data.truncated ? ' · showing the heaviest' : ''}`;
@@ -4214,6 +4376,7 @@ views.topology = async () => {
     if (!data.edges || !data.edges.length) {
       graphHost.replaceChildren();
       tableHost.replaceChildren(el('div', { class: 'empty' }, 'No flow data in this window. Topology is built from agents whose traffic source is NetFlow or sFlow.'));
+      applyMode();
       return;
     }
 
@@ -4262,6 +4425,8 @@ views.topology = async () => {
           el('td', {}, fmtBytes(n.bytesIn)),
           el('td', {}, fmtBytes(n.bytesOut)),
           onlineAgents.length ? el('td', {}, actionBtns(n.id)) : null)))));
+
+    applyMode();
   }
 
   locSel.addEventListener('change', loadTopology);
@@ -5761,6 +5926,14 @@ function createLeafletMap(host, config, { center = [20, 0], zoom = 3 } = {}) {
     attribution: cfg.attribution || '© OpenStreetMap',
   }).addTo(map);
   return map;
+}
+
+// Topology map-mode Leaflet instance. The Topology tab defaults to the SVG
+// diagram; when the user switches to Map mode a Leaflet map is built here and
+// torn down on mode switch / view leave (it rebuilds on entry).
+const topoMapState = { map: null };
+function stopTopoMap() {
+  if (topoMapState.map) { try { topoMapState.map.remove(); } catch { /* ignore */ } topoMapState.map = null; }
 }
 
 // Sites-map polling state (mirrors stopOverview/stopGeo). Re-drawn on a timer so
@@ -9973,6 +10146,7 @@ async function render({ silent = false } = {}) {
   // Tear down the Leaflet maps when leaving their views (they rebuild on entry).
   if (currentView !== 'geo') stopGeo();
   if (currentView !== 'map') stopMap();
+  if (currentView !== 'topology') stopTopoMap();
 
   // Admin-only tabs (e.g. Users); send non-admins back to agents if needed.
   for (const b of document.querySelectorAll('.tabs button[data-admin]')) {
@@ -10035,7 +10209,7 @@ async function renderSsoOptions() {
   host.classList.remove('hidden');
 }
 renderSsoOptions();
-$('#logout').addEventListener('click', () => { setAutoRefresh(false); stopOverview(); stopFleet(); stopAgent(); stopProbes(); stopIfaces(); stopMap(); stopGeo(); $('#autorefresh').checked = false; logout(); });
+$('#logout').addEventListener('click', () => { setAutoRefresh(false); stopOverview(); stopFleet(); stopAgent(); stopProbes(); stopIfaces(); stopMap(); stopGeo(); stopTopoMap(); $('#autorefresh').checked = false; logout(); });
 $('#refresh').addEventListener('click', () => render());
 $('#autorefresh').addEventListener('change', (e) => setAutoRefresh(e.target.checked));
 function closeNav() { $('#app').classList.remove('nav-open'); }

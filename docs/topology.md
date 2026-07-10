@@ -19,7 +19,9 @@ addresses, ports, ASNs, byte/flow counts, never payload.
   each endpoint internal/external (`geo/privateIp.js isPrivate`), accumulates node
   in/out bytes + peer degree, and de-dupes directed edges. Caps to the heaviest
   nodes/edges for the UI (`truncated` flags when more exist); `totals` reflect the
-  full graph.
+  full graph. When a `centroids` lookup (`geo/centroids.js`) is injected, external
+  nodes also get a country-level `lat`/`lng` for the map; internal nodes always
+  keep `lat`/`lng` = `null` (never geolocated).
 
 ## API
 
@@ -29,7 +31,8 @@ addresses, ports, ASNs, byte/flow counts, never payload.
 {
   "from": "...", "to": "...", "agentId": null,
   "nodes": [{ "id": "8.8.8.8", "kind": "external", "asn": 15169, "asnName": "GOOGLE",
-              "country": "US", "bytesIn": 0, "bytesOut": 9000, "bytes": 9000, "degree": 1 }],
+              "country": "US", "lat": 38, "lng": -97,
+              "bytesIn": 0, "bytesOut": 9000, "bytes": 9000, "degree": 1 }],
   "edges": [{ "from": "10.0.0.5", "to": "8.8.8.8", "bytes": 9000, "packets": 90, "flows": 9 }],
   "truncated": false,
   "totals": { "nodes": 3, "edges": 2, "internal": 2, "external": 1 }
@@ -38,7 +41,26 @@ addresses, ports, ASNs, byte/flow counts, never payload.
 
 `minutes` defaults to 60 (max 7 days). `agentId` scopes to one agent (400 invalid /
 404 unknown). Surfaced in the dashboard **Topology** view (Diagnostics group): a
-summary, a **Diagram**, and the top-dependencies/busiest-hosts tables.
+summary, a **Diagram** / **Map** toggle, and the top-dependencies/busiest-hosts
+tables.
+
+## Map
+
+The **Map** toggle plots the same payload geographically, reusing the shared
+Leaflet factory (`createLeafletMap`, EU/self-hosted tiles) and country centroids:
+
+- **External peers** are aggregated to their country centroid and drawn as circles
+  sized by traffic — the honest subset the map can place.
+- **Sites** (from the Locations table, the same coordinates the Sites/Destinations
+  maps use) are drawn as anchor pins.
+- **Routes** are drawn as lines: internal→external edges from a single anchor site
+  (the selected Site, or the only located site — because the graph doesn't tie each
+  internal IP to a site), and external↔external edges between the two centroids.
+
+Because internal (RFC1918) hosts are never geolocated, the map covers **only the
+external subset**; the Diagram remains the view for the internal dependency
+structure. When no GeoIP/ASN database is loaded, the peers can't be placed and the
+map shows a "GeoIP not configured" banner (mirroring Destinations).
 
 ## Diagram
 

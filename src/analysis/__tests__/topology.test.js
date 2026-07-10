@@ -47,6 +47,38 @@ test('ignores self-loops and incomplete rows', () => {
   assert.equal(g.nodes.length, 2);
 });
 
+test('attaches country centroids to external nodes when a centroids lookup is injected', () => {
+  const centroids = { get: (c) => (c === 'US' ? { lat: 38, lng: -97 } : null) };
+  const g = buildTopology([
+    { srcIp: '10.0.0.5', dstIp: '8.8.8.8', extIp: '8.8.8.8', asn: 15169, asnName: 'GOOGLE', country: 'US', bytes: 1000 },
+  ], { centroids });
+  const ext = g.nodes.find((n) => n.id === '8.8.8.8');
+  const int = g.nodes.find((n) => n.id === '10.0.0.5');
+  assert.equal(ext.lat, 38);
+  assert.equal(ext.lng, -97);
+  assert.equal(int.lat, null); // internal hosts are never geolocated
+  assert.equal(int.lng, null);
+});
+
+test('external node with an unknown country keeps null coordinates', () => {
+  const g = buildTopology([
+    { srcIp: '10.0.0.5', dstIp: '1.1.1.1', extIp: '1.1.1.1', country: 'ZZ', bytes: 10 },
+  ], { centroids: { get: () => null } });
+  const ext = g.nodes.find((n) => n.id === '1.1.1.1');
+  assert.equal(ext.lat, null);
+  assert.equal(ext.lng, null);
+  assert.equal(ext.country, 'ZZ');
+});
+
+test('nodes carry null coordinates when no centroids lookup is provided', () => {
+  const g = buildTopology([
+    { srcIp: '10.0.0.5', dstIp: '8.8.8.8', extIp: '8.8.8.8', country: 'US', bytes: 10 },
+  ]);
+  const ext = g.nodes.find((n) => n.id === '8.8.8.8');
+  assert.equal(ext.lat, null);
+  assert.equal(ext.lng, null);
+});
+
 test('caps nodes/edges by weight and flags truncation', () => {
   const rows = [];
   for (let i = 0; i < 50; i += 1) rows.push({ srcIp: '10.0.0.1', dstIp: `10.0.1.${i}`, bytes: i + 1 });

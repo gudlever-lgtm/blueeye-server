@@ -1127,6 +1127,22 @@ button.active-btn { outline: 2px solid var(--accent); }
 /* Optional per-field guidance under a modal input (openModal `hint`). */
 .form-grid .field-hint { font-size: 11.5px; line-height: 1.45; color: var(--muted); font-weight: 400; }
 
+/* Live password strength + criteria meter (openModal `password-strength`). */
+.pw-meter { margin-top: 8px; font-weight: 400; }
+.pw-meter.hidden { display: none; }
+.pw-meter .pw-strength-row { display: flex; align-items: center; gap: 8px; }
+.pw-meter .usagebar { flex: 1; margin: 0; }
+.pw-strength-label { font-size: 11.5px; font-weight: 600; color: var(--muted); min-width: 42px; }
+.pw-strength-label.lvl-1 { color: var(--bad); }
+.pw-strength-label.lvl-2 { color: var(--warn); }
+.pw-strength-label.lvl-3, .pw-strength-label.lvl-4 { color: var(--ok); }
+.pw-accepted { font-size: 11.5px; font-weight: 600; color: var(--ok); white-space: nowrap; }
+.pw-accepted.hidden { display: none; }
+.pw-rules { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 3px; }
+.pw-rules li { display: flex; align-items: baseline; gap: 6px; font-size: 11.5px; color: var(--muted); }
+.pw-rules li.ok { color: var(--ok); }
+.pw-rules .pw-tick { flex: 0 0 auto; font-weight: 700; }
+
 /* The many-field NIS2 edit modal reads best as a two-column grid. */
 .modal-card.wide .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 16px; }
 .modal-card.wide .form-grid textarea { min-height: 52px; }

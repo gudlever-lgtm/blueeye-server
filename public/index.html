@@ -43,37 +43,39 @@
              minimum role that may use it (data-min-role, default viewer). app.js
              hides items above the user's role and collapses any empty category.
              Each category label is a button that folds/unfolds its group; the
-             collapsed state is remembered per browser (see setupNavGroups). -->
+             collapsed state is remembered per browser (see setupNavGroups). Groups
+             start collapsed here to match the default; setupNavGroups then applies
+             the per-browser remembered state. -->
         <nav class="tabs">
-          <div class="nav-group" data-category="Monitoring">
-            <button type="button" class="nav-group-label" aria-expanded="true">Monitoring</button>
+          <div class="nav-group collapsed" data-category="Monitoring">
+            <button type="button" class="nav-group-label" aria-expanded="false">Monitoring</button>
             <button data-view="fleet" class="active">Overview</button>
             <button data-view="overview">Traffic</button>
             <button data-view="map">Sites</button>
             <button data-view="geo" data-feature="geo">Destinations</button>
           </div>
-          <div class="nav-group" data-category="Fleet">
-            <button type="button" class="nav-group-label" aria-expanded="true">Fleet</button>
+          <div class="nav-group collapsed" data-category="Fleet">
+            <button type="button" class="nav-group-label" aria-expanded="false">Fleet</button>
             <button data-view="agents">Agents</button>
             <button data-view="interfaces">Interfaces</button>
             <button data-view="nics">NICs</button>
           </div>
-          <div class="nav-group" data-category="Diagnostics">
-            <button type="button" class="nav-group-label" aria-expanded="true">Diagnostics</button>
+          <div class="nav-group collapsed" data-category="Diagnostics">
+            <button type="button" class="nav-group-label" aria-expanded="false">Diagnostics</button>
             <button data-view="probes">Probes &amp; Tests</button>
             <button data-view="transactions">Transaktionstests</button>
             <button data-view="flows">Flows</button>
             <button data-view="topology">Topology</button>
             <button data-view="investigation" data-min-role="operator">Troubleshooting</button>
           </div>
-          <div class="nav-group" data-category="Insights">
-            <button type="button" class="nav-group-label" aria-expanded="true">Insights</button>
+          <div class="nav-group collapsed" data-category="Insights">
+            <button type="button" class="nav-group-label" aria-expanded="false">Insights</button>
             <button data-view="findings" data-feature="analysis">Analysis</button>
             <button data-view="incidents" data-feature="analysis">Incidents</button>
             <button data-view="reporting">Reporting</button>
           </div>
-          <div class="nav-group" data-category="Administration">
-            <button type="button" class="nav-group-label" aria-expanded="true">Administration</button>
+          <div class="nav-group collapsed" data-category="Administration">
+            <button type="button" class="nav-group-label" aria-expanded="false">Administration</button>
             <button data-view="locations">Locations</button>
             <button data-view="enrollment" data-min-role="operator">Enrollment</button>
             <button data-view="logs" data-min-role="admin">Logs</button>

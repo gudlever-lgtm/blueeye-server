@@ -9,6 +9,8 @@ const { validateStatusPatch } = require('../validation/incidentCaseValidation');
 const { buildTimeline } = require('../incidentCases/timeline');
 const { maskedDiff } = require('../config/configContext');
 const { scoreSimilarIncidents } = require('../incidentCases/similarity');
+const { gatherIncidentAskContext } = require('../incidentCases/askContext');
+const { INCIDENT_INSUFFICIENT_ANSWER } = require('../analysis/assistant');
 
 const SEVERITIES = ['INFO', 'WARN', 'CRIT'];
 
@@ -39,6 +41,9 @@ function createIncidentsRouter({
   auditLogRepo = null,
   configSnapshotsRepo = null,
   agentsRepo = null,
+  assistant = null,
+  featureGate = null,
+  askCache = null,
 }) {
   const router = express.Router();
   const reader = requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN);
@@ -203,6 +208,64 @@ function createIncidentsRouter({
     }));
 
     return res.json({ incidentId: id, similar });
+  }));
+
+  // POST /api/incidents/:id/ask — free-text question about the incident, answered
+  // by the opt-in EU (Mistral) assistant using ONLY the masked/aggregated context
+  // (askContext). Operator/admin (the context is config-derived). Short-lived
+  // cache per incident+question; each ask is recorded in the hash-chained audit.
+  router.post('/:id/ask', requireAuth, writer, asyncHandler(async (req, res) => {
+    if (!assistant) return res.status(404).json({ error: 'Assistant is not available' });
+    // License gate (distinct from the runtime on/off below).
+    if (featureGate && !featureGate.isFeatureEnabled('assistant')) {
+      return res.status(403).json({ error: 'This feature is not included in your license', feature: 'assistant', reason: 'license' });
+    }
+    const id = parseIncidentId(req.params.id);
+    if (id === null) return res.status(400).json({ error: 'id must be a positive integer' });
+    const question = typeof (req.body || {}).question === 'string' ? req.body.question : '';
+    if (question.trim() === '') {
+      return res.status(400).json({ error: 'Validation failed', details: { question: 'question is required' } });
+    }
+    if (typeof assistant.isEnabled === 'function' && !assistant.isEnabled()) {
+      return res.status(403).json({ error: 'The AI assistant is disabled (enable it in Settings → AI assistant)' });
+    }
+
+    const context = await gatherIncidentAskContext(id, { incidentCasesRepo, findingStore, auditEventsRepo, auditLogRepo, configSnapshotsRepo });
+    if (!context) return res.status(404).json({ error: 'Incident not found' });
+
+    // No context at all → the honest fallback, WITHOUT a provider call.
+    if (!context.dataAvailability.hasAnyData) {
+      return res.json({ answer: INCIDENT_INSUFFICIENT_ANSWER, model: null, cached: false, aiGenerated: true, dataAvailable: false });
+    }
+
+    // Cache hit → return without hitting Mistral again.
+    const hit = askCache && askCache.get(id, question);
+    if (hit) return res.json({ ...hit, cached: true });
+
+    let result;
+    try {
+      result = await assistant.askIncident(question, context);
+    } catch (err) {
+      if (err && err.name === 'FeatureDisabled') return res.status(403).json({ error: err.message });
+      if (err && err.name === 'InvalidQuestion') return res.status(400).json({ error: 'Validation failed', details: { question: 'question is required' } });
+      throw err; // AssistantMisconfigured / AssistantUpstreamError / unknown → 500
+    }
+
+    const value = { answer: result.answer, model: result.model, aiGenerated: true, dataAvailable: true };
+    if (askCache) askCache.set(id, question, value);
+
+    // Audit: who asked, when, the question and a short answer excerpt. Metadata
+    // only — the context sent to Mistral was already masked.
+    if (auditLogger) {
+      await auditLogger.record(req, {
+        category: 'incident',
+        action: 'incident_ask',
+        target: String(id),
+        detail: `q="${question.trim().slice(0, 180)}" → ${String(result.answer).slice(0, 200)}`,
+      });
+    }
+
+    return res.json({ ...value, cached: false });
   }));
 
   // PATCH /api/incidents/:id — status transition. operator/admin only.

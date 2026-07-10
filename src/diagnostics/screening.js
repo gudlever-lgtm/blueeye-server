@@ -181,9 +181,9 @@ function screenAssistant(status = {}) {
   const host = hostOf(baseUrl);
   const security = [transportCheck(baseUrl, { plaintext: 'bad' })];
   if (host) {
-    security.push(host.endsWith('mistral.ai')
-      ? check('provider', 'Provider', 'ok', 'Mistral (EU) — complies with the no-US-vendor policy.')
-      : check('provider', 'Provider', 'info', 'Custom/self-hosted endpoint — confirm it is EU or self-hosted per policy.'));
+    security.push(/(^|\.)(mistral\.ai|scaleway\.ai)$/.test(host)
+      ? check('provider', 'Provider', 'ok', 'EU-hosted provider.')
+      : check('provider', 'Provider', 'info', 'Confirm the provider’s data residency meets your requirements (only metadata summaries are sent).'));
   }
   if (status.enabled && !status.configured) {
     security.push(check('key', 'API key', 'warn', 'The assistant is enabled but no API key is set.'));

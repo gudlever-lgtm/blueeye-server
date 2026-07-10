@@ -1,8 +1,9 @@
 'use strict';
 
 const { computeAgentHealth } = require('../health/probeHealth');
+const { resolveBaseUrl, defaultModel, inferProvider, getProvider } = require('./assistantProviders');
 
-// IPv4 address / CIDR masker — applied before sending any context to Mistral.
+// IPv4 address / CIDR masker — applied before sending any context to the provider.
 // Replaces recognisable IPv4 literals (with optional /prefix-len) with [host].
 const ANY_IP_RE = /\b(?:\d{1,3}\.){3}\d{1,3}(?:\/\d{1,2})?\b/g;
 function maskIps(s) {
@@ -15,8 +16,10 @@ function maskIps(s) {
 // local context the analysis module already produced — recent findings (each
 // already carrying a plain-language explanation) plus, for a location summary,
 // each agent's status + probe-health verdict. It never ships raw metric history,
-// credentials, or payload to the provider. Uses Mistral's (EU) chat-completions
-// API over fetch; the network call is injected (fetchImpl) so tests run offline.
+// credentials, or payload to the provider. Speaks the OpenAI-compatible
+// chat-completions API — the provider (Mistral by default, or another EU /
+// self-hosted endpoint chosen in Settings) is selected at runtime; the network
+// call is injected (fetchImpl) so tests run offline.
 //
 //   const assistant = createAssistant({ config, findingStore, agentsRepo, locationsRepo, probeResultsRepo });
 //   const { answer } = await assistant.explain('why is cpu high?', hostId);
@@ -49,17 +52,20 @@ function createAssistant({
   now = () => new Date(),
   logger = { info() {}, warn() {}, error() {} },
 } = {}) {
-  const baseUrl = config.assistantBaseUrl || 'https://api.mistral.ai/v1/chat/completions';
   const maxFindings = Number.isFinite(config.assistantMaxFindings) ? config.assistantMaxFindings : 20;
   const timeoutMs = Number.isFinite(config.assistantTimeoutMs) ? config.assistantTimeoutMs : 20000;
 
-  // enabled / apiKey / model are read live from `config` on every call. The
-  // server passes its analysis-config object, which Settings → AI assistant
-  // mutates, so an admin can enable the assistant or set its key at runtime with
-  // no restart. baseUrl + limits stay env-driven (captured once above).
+  // enabled / provider / apiKey / model / baseUrl are read live from `config` on
+  // every call. The server passes its analysis-config object, which Settings → AI
+  // assistant mutates, so an admin can enable the assistant, switch provider or
+  // set its key at runtime with no restart. Only the limits stay env-driven
+  // (captured once above). When no provider is set explicitly it is inferred from
+  // the configured base URL, so env-only installs keep working unchanged.
   const currentEnabled = () => Boolean(config.assistantEnabled);
   const currentApiKey = () => config.assistantApiKey || '';
-  const currentModel = () => config.assistantModel || 'mistral-small-latest';
+  const currentProvider = () => config.assistantProvider || inferProvider(config.assistantBaseUrl);
+  const currentModel = () => config.assistantModel || defaultModel(currentProvider());
+  const currentBaseUrl = () => resolveBaseUrl(currentProvider(), config.assistantBaseUrl);
 
   function isEnabled() {
     return currentEnabled();
@@ -156,7 +162,13 @@ function createAssistant({
   async function chat(system, user) {
     const apiKey = currentApiKey();
     const model = currentModel();
-    if (!apiKey) {
+    const provider = getProvider(currentProvider());
+    // Hosted providers need a key; self-hosted ones (e.g. Ollama) do not. Only
+    // demand a key when the selected provider requires one — a preset with
+    // keyRequired, or an unknown/custom provider that still supplied no key would
+    // otherwise be un-testable. Custom endpoints may run without auth.
+    const keyRequired = provider ? provider.keyRequired : true;
+    if (!apiKey && keyRequired) {
       const e = new Error('assistant is enabled but no API key is configured (set one in Settings → AI assistant)');
       e.name = 'AssistantMisconfigured';
       throw e;
@@ -167,13 +179,18 @@ function createAssistant({
       throw e;
     }
 
+    // Only send Authorization when a key is present; auth-less self-hosted
+    // endpoints reject an empty bearer token.
+    const headers = { 'Content-Type': 'application/json' };
+    if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     let res;
     try {
-      res = await fetchImpl(baseUrl, {
+      res = await fetchImpl(currentBaseUrl(), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+        headers,
         body: JSON.stringify({
           model,
           messages: [
@@ -421,7 +438,9 @@ function createAssistant({
   // configured (an API key is present), plus the (non-secret) base URL and model.
   // Never returns the key itself.
   function status() {
-    return { enabled: currentEnabled(), configured: currentApiKey() !== '', baseUrl, model: currentModel() };
+    const provider = getProvider(currentProvider());
+    const configured = currentApiKey() !== '' || (provider && !provider.keyRequired);
+    return { enabled: currentEnabled(), configured, provider: currentProvider(), baseUrl: currentBaseUrl(), model: currentModel() };
   }
 
   // Formulates a short Danish diagnosis for a failed/deviating transaction test

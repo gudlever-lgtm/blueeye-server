@@ -2,6 +2,9 @@
 
 const { DEFAULT_CATEGORIES, listCategories } = require('../flows/categories');
 const { baseUrlBlockedReason } = require('../integrations/ssrfGuard');
+const {
+  isProviderId, resolveBaseUrl, defaultModel, inferProvider, listProvidersSafe,
+} = require('../analysis/assistantProviders');
 
 // Parses a list of integers, keeping only unique values within [min, max].
 // Returns null if the result is empty or the cap is exceeded.
@@ -33,7 +36,21 @@ function badRequest(message, details) {
 // the env defaults. The map tile source and the traffic-type categories are
 // editable from the UI; everything else stays env-driven. Validation lives here
 // so the route stays thin.
-function createSettingsService({ settingsRepo, config, liveAnalysis = null, liveRetention = null, liveAlerting = null, liveGeo = null }) {
+function createSettingsService({ settingsRepo, config, liveAnalysis = null, liveRetention = null, liveAlerting = null, liveGeo = null, secretBox = null }) {
+  // Encrypt/decrypt the assistant API key for storage at rest (AES-256-GCM via
+  // secretBox, the same scheme integration credentials + the LDAP bind password
+  // use). When no box is wired (some tests) values pass through as plaintext. A
+  // stored legacy plaintext key (from before encryption) is returned as-is and
+  // re-encrypted on the next save, so the migration is transparent — no data step.
+  const encKey = (v) => {
+    const s = v || '';
+    return secretBox && s ? secretBox.encrypt(s) : s;
+  };
+  const decKey = (v) => {
+    const s = v || '';
+    if (!secretBox || !secretBox.isEncrypted(s)) return s;
+    try { return secretBox.decrypt(s); } catch { return ''; } // tampered / rotated key ⇒ treat as unset
+  };
   function mapDefaults() {
     return {
       tileUrl: config.geo.tileUrl,
@@ -439,14 +456,24 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
   }
 
   // ---- AI assistant (Settings → AI assistant) -----------------------------
-  // The opt-in LLM assistant's enable flag, API key and model — editable at
-  // runtime (admin) instead of env-only. Defaults come from the env-loaded
-  // analysis config (liveAnalysis), so existing .env deployments keep working.
-  // The API key is a secret: stored in app_settings but NEVER returned by the
-  // API — reads expose only whether a key is set, plus a short masked hint.
+  // The opt-in LLM assistant's enable flag, PROVIDER, API key, model and (for the
+  // "Other"/custom provider) endpoint URL — editable at runtime (admin) instead of
+  // env-only. Presets (Mistral, Scaleway, Ollama, …) carry their own endpoint; the
+  // custom provider takes an admin-supplied base URL. Defaults come from the
+  // env-loaded analysis config (liveAnalysis), so existing .env deployments keep
+  // working (the provider is inferred from the base URL when unset). The API key is
+  // a secret: stored in app_settings but NEVER returned by the API — reads expose
+  // only whether a key is set, plus a short masked hint. baseUrl is non-secret.
   function assistantDefaults() {
     const a = liveAnalysis || {};
-    return { enabled: !!a.assistantEnabled, apiKey: a.assistantApiKey || '', model: a.assistantModel || 'mistral-small-latest' };
+    const provider = a.assistantProvider || inferProvider(a.assistantBaseUrl || '');
+    return {
+      enabled: !!a.assistantEnabled,
+      provider,
+      apiKey: a.assistantApiKey || '',
+      model: a.assistantModel || defaultModel(provider),
+      baseUrl: a.assistantBaseUrl || '',
+    };
   }
 
   // Effective assistant config INCLUDING the raw key — server-internal only
@@ -455,16 +482,33 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
     const override = await loadOverride('assistant');
     const o = override && typeof override === 'object' ? override : {};
     const base = { ...assistantDefaults(), ...o };
-    return { enabled: !!base.enabled, apiKey: base.apiKey || '', model: base.model || 'mistral-small-latest' };
+    const provider = isProviderId(base.provider) ? base.provider : 'mistral';
+    return {
+      enabled: !!base.enabled,
+      provider,
+      apiKey: decKey(base.apiKey), // encrypted at rest → plaintext for internal use
+      model: base.model || defaultModel(provider),
+      baseUrl: base.baseUrl || '',
+    };
   }
 
-  // The client-safe view: only whether a key is set + a masked hint, never the key.
+  // The client-safe view: the provider + effective endpoint + whether a key is set
+  // (+ a masked hint), never the key itself. The custom provider's stored base URL
+  // round-trips so the admin can see/edit it; presets report their fixed endpoint.
   function redactAssistant(a) {
     const key = a.apiKey || '';
-    return { enabled: !!a.enabled, model: a.model || 'mistral-small-latest', apiKeySet: key !== '', apiKeyHint: key ? `••••${key.slice(-4)}` : '' };
+    const provider = isProviderId(a.provider) ? a.provider : 'mistral';
+    return {
+      enabled: !!a.enabled,
+      provider,
+      model: a.model || defaultModel(provider),
+      baseUrl: resolveBaseUrl(provider, a.baseUrl),
+      apiKeySet: key !== '',
+      apiKeyHint: key ? `••••${key.slice(-4)}` : '',
+    };
   }
   async function getAssistantSafe() {
-    return redactAssistant(await getAssistant());
+    return { ...redactAssistant(await getAssistant()), providers: listProvidersSafe() };
   }
 
   function validateAssistant(patch) {
@@ -472,10 +516,24 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
     const errors = {};
     const value = {};
     bool(p, 'enabled', value);
+    if (p.provider !== undefined) {
+      const id = String(p.provider).trim();
+      if (!isProviderId(id)) errors.provider = 'provider must be one of the supported providers';
+      else value.provider = id;
+    }
     if (p.model !== undefined) {
       const m = String(p.model).trim();
       if (m === '' || m.length > 100 || !/^[\w.:-]+$/.test(m)) errors.model = 'model must be 1-100 chars of letters, digits and . _ - :';
       else value.model = m;
+    }
+    // baseUrl is only meaningful for the custom provider; it must be an http(s)
+    // URL. Self-hosted/loopback targets are allowed on purpose (an on-box LLM is
+    // a legitimate, encouraged use), so no SSRF guard here.
+    if (p.baseUrl !== undefined) {
+      const u = String(p.baseUrl).trim();
+      if (u === '') value.baseUrl = '';
+      else if (!/^https?:\/\//i.test(u) || u.length > 500) errors.baseUrl = 'baseUrl must be an http(s) URL (max 500 characters)';
+      else value.baseUrl = u;
     }
     // apiKey is write-only. clearApiKey removes it; an empty apiKey is ignored,
     // so saving the form without retyping the key never wipes it by accident.
@@ -498,11 +556,23 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
     if (errors) throw badRequest('invalid assistant settings', errors);
     const current = await getAssistant();
     const merged = { ...current, ...value };
-    await settingsRepo.set('assistant', { enabled: merged.enabled, apiKey: merged.apiKey, model: merged.model });
+    // A custom ("Other") provider is useless without an endpoint URL.
+    if (merged.provider === 'custom' && String(merged.baseUrl || '').trim() === '') {
+      throw badRequest('invalid assistant settings', { baseUrl: 'a base URL is required for a custom provider' });
+    }
+    // Fall back to the provider's default model when none is set.
+    if (!merged.model) merged.model = defaultModel(merged.provider);
+    // Persist the key ENCRYPTED at rest; the live config below keeps the plaintext
+    // (the assistant needs it to authenticate to the provider).
+    await settingsRepo.set('assistant', {
+      enabled: merged.enabled, provider: merged.provider, apiKey: encKey(merged.apiKey), model: merged.model, baseUrl: merged.baseUrl || '',
+    });
     if (liveAnalysis) {
       liveAnalysis.assistantEnabled = merged.enabled;
+      liveAnalysis.assistantProvider = merged.provider;
       liveAnalysis.assistantApiKey = merged.apiKey;
       liveAnalysis.assistantModel = merged.model;
+      liveAnalysis.assistantBaseUrl = merged.baseUrl || '';
     }
     return redactAssistant(merged);
   }
@@ -766,8 +836,11 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
       const a = await settingsRepo.get('assistant');
       if (a && liveAnalysis) {
         if (a.enabled !== undefined) liveAnalysis.assistantEnabled = !!a.enabled;
-        if (a.apiKey !== undefined) liveAnalysis.assistantApiKey = a.apiKey || '';
+        if (a.provider !== undefined && isProviderId(a.provider)) liveAnalysis.assistantProvider = a.provider;
+        if (a.apiKey !== undefined) liveAnalysis.assistantApiKey = decKey(a.apiKey); // stored encrypted → plaintext live
+
         if (a.model) liveAnalysis.assistantModel = a.model;
+        if (a.baseUrl !== undefined) liveAnalysis.assistantBaseUrl = a.baseUrl || '';
       }
     } catch { /* ignore */ }
     try {

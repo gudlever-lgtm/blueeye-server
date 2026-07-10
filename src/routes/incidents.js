@@ -6,6 +6,7 @@ const { requireAuth, requireRole } = require('../auth/middleware');
 const { ROLES } = require('../auth/roles');
 const { canTransition, requiresComment, isStatus } = require('../incidentCases/stateMachine');
 const { validateStatusPatch } = require('../validation/incidentCaseValidation');
+const { buildTimeline } = require('../incidentCases/timeline');
 
 const SEVERITIES = ['INFO', 'WARN', 'CRIT'];
 
@@ -28,7 +29,13 @@ function parseDate(v) {
 // Follows the existing RBAC pattern (viewer < operator < admin): reads are
 // viewer+, status changes are operator/admin. Every transition is recorded in
 // the hash-chained audit_log via the injected auditLogger.
-function createIncidentsRouter({ incidentCasesRepo, findingStore, auditLogger = null }) {
+function createIncidentsRouter({
+  incidentCasesRepo,
+  findingStore,
+  auditLogger = null,
+  auditEventsRepo = null,
+  auditLogRepo = null,
+}) {
   const router = express.Router();
   const reader = requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN);
   const writer = requireRole(ROLES.OPERATOR, ROLES.ADMIN);
@@ -62,6 +69,42 @@ function createIncidentsRouter({ incidentCasesRepo, findingStore, auditLogger = 
     // Playbook runs are not modelled in this codebase (no playbook subsystem);
     // the key is present for forward-compatibility and always empty for now.
     return res.json({ incident, anomalies, playbookRuns: [] });
+  }));
+
+  // GET /api/incidents/:id/timeline — a flat, chronological read-model merging
+  // the incident's anomalies, config-changes on its device, and status changes.
+  // No new storage. viewer+.
+  router.get('/:id/timeline', requireAuth, reader, asyncHandler(async (req, res) => {
+    const id = parseIncidentId(req.params.id);
+    if (id === null) return res.status(400).json({ error: 'id must be a positive integer' });
+    const incident = await incidentCasesRepo.findById(id);
+    if (!incident) return res.status(404).json({ error: 'Incident not found' });
+
+    // Linked anomalies (findings), chronological.
+    const anomalies = await findingStore.listByIncidentCase(id);
+
+    // Config-changes on the same device within the incident's active window.
+    // The device is the finding host_id, which the ingest path sets to the agent
+    // id — so match audit_events with target_type='agent' target_id=host_id.
+    // Not yet FK-linked to the incident (that is a later phase) — display only.
+    let configChanges = [];
+    if (auditEventsRepo && typeof auditEventsRepo.findByTarget === 'function') {
+      configChanges = await auditEventsRepo.findByTarget({
+        targetType: 'agent',
+        targetId: incident.hostId,
+        from: incident.firstEventAt,
+        to: incident.resolvedAt || null, // open incident ⇒ unbounded (up to now)
+      });
+    }
+
+    // Manual + automatic status changes from the hash-chained audit_log.
+    let statusChanges = [];
+    if (auditLogRepo && typeof auditLogRepo.listByTarget === 'function') {
+      statusChanges = await auditLogRepo.listByTarget({ category: 'incident', target: String(id) });
+    }
+
+    const events = buildTimeline({ anomalies, configChanges, statusChanges });
+    return res.json({ incidentId: id, events });
   }));
 
   // PATCH /api/incidents/:id — status transition. operator/admin only.

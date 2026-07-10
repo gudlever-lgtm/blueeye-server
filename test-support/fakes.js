@@ -436,6 +436,13 @@ function makeAuditEventsRepo(overrides = {}) {
       if (action) out = out.filter((r) => r.action === action);
       return out.slice(offset, offset + Math.min(limit, 500)).map((r) => ({ ...r, ts: iso(r.ts) }));
     }),
+    findByTarget: overrides.findByTarget || (async ({ targetType = null, targetId = null, from = null, to = null } = {}) => rows
+      .filter((r) => (!targetType || r.targetType === targetType)
+        && (targetId == null || r.targetId === String(targetId))
+        && (!from || new Date(r.lastSeenAt) >= new Date(from))
+        && (!to || new Date(r.lastSeenAt) <= new Date(to)))
+      .sort((a, b) => (a.lastSeenAt < b.lastSeenAt ? -1 : 1))
+      .map((r) => ({ ...r, ts: iso(r.ts) }))),
     distinctActions: overrides.distinctActions || (async () => [...new Set(rows.map((r) => r.action))].sort()),
   };
 }
@@ -452,6 +459,9 @@ function makeAuditLogRepo(overrides = {}) {
       rows.filter((r) => (!category || r.category === category) && (actorUserId == null || r.actorUserId === actorUserId))
         .slice().reverse().slice(0, limit)),
     categories: overrides.categories || (async () => [...new Set(rows.map((r) => r.category))].sort()),
+    listByTarget: overrides.listByTarget || (async ({ category = null, target, limit = 200 } = {}) => rows
+      .filter((r) => String(r.target) === String(target) && (!category || r.category === category))
+      .slice(0, limit)),
     verifyChain: overrides.verifyChain || (async () => ({ ok: true, checked: rows.length, brokenAt: null })),
   };
 }

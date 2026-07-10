@@ -227,7 +227,7 @@ async function seedCrossCheck(otherAgentStatus) {
   return repo;
 }
 
-test('cross-check: all assigned agents failing → "systemet er nede"', async () => {
+test('cross-check: all assigned agents failing → "the system is down"', async () => {
   const repo = await seedCrossCheck('fail');
   const dispatched = [];
   await withWs({ transactionsRepo: repo, alertDispatcher: { dispatch: async (f) => dispatched.push(f) }, alertingEnabled: true }, async ({ port }) => {
@@ -236,7 +236,7 @@ test('cross-check: all assigned agents failing → "systemet er nede"', async ()
       await withTimeout(waitOpen(client), 4000, 'no open');
       client.send(JSON.stringify({ type: 'transaction_result', results: [{ test_id: 1, status: 'fail', detail: { phase: 'connect' } }] }));
       const f = await poll(() => dispatched[0]);
-      assert.match(f.explanation, /systemet er nede/);
+      assert.match(f.explanation, /the system is down/);
       assert.equal(f.evidence[0].crosscheck, 'system');
     } finally { client.close(); }
   });
@@ -251,7 +251,7 @@ test('cross-check: only this agent failing → site scope', async () => {
       await withTimeout(waitOpen(client), 4000, 'no open');
       client.send(JSON.stringify({ type: 'transaction_result', results: [{ test_id: 1, status: 'fail', detail: { phase: 'connect' } }] }));
       const f = await poll(() => dispatched[0]);
-      assert.match(f.explanation, /kun agent 9 fejler/);
+      assert.match(f.explanation, /only agent 9 fails/);
       assert.equal(f.evidence[0].crosscheck, 'site');
     } finally { client.close(); }
   });

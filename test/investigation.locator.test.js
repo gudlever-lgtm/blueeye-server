@@ -121,7 +121,7 @@ test('classifies LOCAL when anomalies are only on the local agent', async () => 
   const result = await locator.runInvestigation({ locationRef: { type: 'agent', value: AGENT_ID } });
   assert.equal(result.classification, 'LOCAL');
   assert.ok(result.confidence > 0.5);
-  assert.ok(result.explanation.includes('lokalt'));
+  assert.ok(result.explanation.includes('locally'));
   assert.ok(result.evidence.length > 0);
 });
 
@@ -175,7 +175,7 @@ test('classifies APP_NOT_NET when only TCP metrics anomalous, no net counters', 
   const result = await locator.runInvestigation({ locationRef: { type: 'agent', value: AGENT_ID } });
   assert.equal(result.classification, 'APP_NOT_NET');
   assert.ok(result.confidence >= 0.5);
-  assert.ok(result.explanation.includes('applikation') || result.explanation.includes('Applikation'));
+  assert.ok(result.explanation.includes('application') || result.explanation.includes('Application'));
   assert.ok(result.evidence.length > 0);
   assert.equal(result.suspectedSegment, null);
 });

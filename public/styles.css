@@ -1286,7 +1286,10 @@ button.active-btn { outline: 2px solid var(--accent); }
 .inc-header h2 { margin: 0 0 4px; }
 .inc-meta { font-size: 13px; }
 .inc-actions { display: flex; gap: 8px; margin: 8px 0 14px; flex-wrap: wrap; }
-.incident-detail .card { margin-bottom: 14px; }
+/* The base .card is a fixed 320px column (the login card). The incident detail
+   page stacks several cards, so let them fill the page width like the other
+   full-width views instead of rendering as a narrow 320px column. */
+.incident-detail .card { margin-bottom: 14px; width: auto; }
 .badge.inc-sev-CRIT { background: #c0392b; color: #fff; }
 .badge.inc-sev-WARN { background: #e67e22; color: #fff; }
 .badge.inc-sev-INFO { background: #7f8c8d; color: #fff; }

@@ -6,7 +6,7 @@ const { Severity, FindingKind } = require('./constants');
 // Columns selected when reading findings back.
 const COLUMNS =
   'id, host_id, metric, severity, kind, observed, baseline, deviation, ' +
-  'window_from, window_to, explanation, evidence, correlated_with, acked, created_at';
+  'window_from, window_to, explanation, evidence, correlated_with, incident_case_id, acked, created_at';
 
 // Hard ceiling on how many findings a single list() call can return.
 const MAX_LIST = 5000;
@@ -44,6 +44,7 @@ function mapRow(row) {
     explanation: row.explanation,
     evidence: reviveEvidence(parseJson(row.evidence, [])),
     correlatedWith: parseJson(row.correlated_with, []) || [],
+    incidentCaseId: row.incident_case_id == null ? null : Number(row.incident_case_id),
     createdAt: row.created_at,
     acked: row.acked === 1 || row.acked === true,
   };
@@ -151,6 +152,16 @@ class FindingStore {
     const [result] = await this.pool.query(
       'UPDATE findings SET correlated_with = ? WHERE id = ?',
       [JSON.stringify(ids), id]
+    );
+    return result.affectedRows > 0;
+  }
+
+  // Links a finding to an incident case (migration 048). Passing null unlinks it.
+  // Returns true if a row was updated, false if no finding has that id.
+  async setIncidentCase(id, incidentCaseId) {
+    const [result] = await this.pool.query(
+      'UPDATE findings SET incident_case_id = ? WHERE id = ?',
+      [incidentCaseId ?? null, id]
     );
     return result.affectedRows > 0;
   }

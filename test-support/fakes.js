@@ -573,6 +573,7 @@ function makeFindingStore(overrides = {}) {
     get: overrides.get || (async (id) => rows.find((f) => f.id === id) || null),
     ack: overrides.ack || (async (id) => { const f = rows.find((x) => x.id === id); if (!f) return false; f.acked = true; return true; }),
     setCorrelations: overrides.setCorrelations || (async (id, ids) => { const f = rows.find((x) => x.id === id); if (!f) return false; f.correlatedWith = Array.isArray(ids) ? ids : []; return true; }),
+    setIncidentCase: overrides.setIncidentCase || (async (id, incidentCaseId) => { const f = rows.find((x) => x.id === id); if (!f) return false; f.incidentCaseId = incidentCaseId ?? null; return true; }),
   };
 }
 

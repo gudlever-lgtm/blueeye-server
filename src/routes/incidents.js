@@ -8,6 +8,7 @@ const { canTransition, requiresComment, isStatus } = require('../incidentCases/s
 const { validateStatusPatch } = require('../validation/incidentCaseValidation');
 const { buildTimeline } = require('../incidentCases/timeline');
 const { maskedDiff } = require('../config/configContext');
+const { scoreSimilarIncidents } = require('../incidentCases/similarity');
 
 const SEVERITIES = ['INFO', 'WARN', 'CRIT'];
 
@@ -37,6 +38,7 @@ function createIncidentsRouter({
   auditEventsRepo = null,
   auditLogRepo = null,
   configSnapshotsRepo = null,
+  agentsRepo = null,
 }) {
   const router = express.Router();
   const reader = requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN);
@@ -141,6 +143,66 @@ function createIncidentsRouter({
         note: `Formodet udløst af konfigurationsændring ${minutesBefore} minutter forinden.`,
       },
     });
+  }));
+
+  // GET /api/incidents/:id/similar — earlier resolved/closed incidents that match
+  // this one (Fase 4): same device or device-type, same primary anomaly type, and
+  // — where available — the same config-change risk class. Weighted, top 5, most
+  // similar first. Read-model only. viewer+.
+  async function configChangeType(configChangeId) {
+    if (!configChangeId || !configSnapshotsRepo) return null;
+    const change = await configSnapshotsRepo.findById(configChangeId);
+    if (!change) return null;
+    const prev = await configSnapshotsRepo.previousBefore(change.deviceId, change.id);
+    const risk = maskedDiff(prev ? prev.configText : null, change.configText).risk;
+    return risk === 'none' ? null : risk;
+  }
+
+  router.get('/:id/similar', requireAuth, reader, asyncHandler(async (req, res) => {
+    const id = parseIncidentId(req.params.id);
+    if (id === null) return res.status(400).json({ error: 'id must be a positive integer' });
+    const incident = await incidentCasesRepo.findById(id);
+    if (!incident) return res.status(404).json({ error: 'Incident not found' });
+
+    // Enrich the target with its matching criteria.
+    const primaryFinding = incident.primaryFindingId && findingStore
+      ? await findingStore.get(incident.primaryFindingId) : null;
+    const platform = agentsRepo && typeof agentsRepo.findById === 'function' && Number.isInteger(Number(incident.hostId))
+      ? (await agentsRepo.findById(Number(incident.hostId)))?.platform ?? null : null;
+    const target = {
+      id: incident.id,
+      hostId: incident.hostId,
+      platform,
+      primaryMetric: primaryFinding ? primaryFinding.metric : null,
+      configChangeType: await configChangeType(incident.configChangeId),
+    };
+
+    const candidates = typeof incidentCasesRepo.listResolvedClosed === 'function'
+      ? await incidentCasesRepo.listResolvedClosed({ excludeId: id, limit: 50 }) : [];
+    // Enrich candidates' config-change risk class (only those that have one).
+    for (const c of candidates) {
+      // eslint-disable-next-line no-await-in-loop
+      c.configChangeType = await configChangeType(c.configChangeId);
+    }
+
+    const ranked = scoreSimilarIncidents(target, candidates, { limit: 5 });
+    const similar = ranked.map((r) => ({
+      id: r.id,
+      title: r.title,
+      status: r.status,
+      severity: r.severity,
+      primaryMetric: r.primaryMetric ?? null,
+      resolvedAt: r.resolvedAt ?? null,
+      closedBy: r.closedByEmail ?? null,
+      score: r.score,
+      matchedOn: r.matchedOn,
+      // No playbook subsystem exists in this codebase, so remediation history is
+      // not available — surfaced as null rather than omitted.
+      playbook: null,
+      playbookSucceeded: null,
+    }));
+
+    return res.json({ incidentId: id, similar });
   }));
 
   // PATCH /api/incidents/:id — status transition. operator/admin only.

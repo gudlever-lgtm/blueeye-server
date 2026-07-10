@@ -221,6 +221,11 @@ function makeIncidentCasesRepo(overrides = {}) {
       if (to === 'open') { r.resolved_at = null; r.closed_by = null; }
       return true;
     }),
+    listResolvedClosed: overrides.listResolvedClosed || (async ({ excludeId = null, limit = 100 } = {}) => rows
+      .filter((r) => (r.status === 'resolved' || r.status === 'closed') && (excludeId == null || r.id !== Number(excludeId)))
+      .sort((a, b) => new Date(b.last_event_at) - new Date(a.last_event_at) || b.id - a.id)
+      .slice(0, limit)
+      .map((r) => ({ ...mapOut(r), primaryMetric: r.primary_metric ?? null, closedByEmail: r.closed_by_email ?? null, platform: r.platform ?? null }))),
     listStaleInvestigating: overrides.listStaleInvestigating || (async (olderThan) => rows
       .filter((r) => r.status === 'investigating' && new Date(r.last_event_at) < new Date(olderThan))
       .sort((a, b) => new Date(a.last_event_at) - new Date(b.last_event_at))

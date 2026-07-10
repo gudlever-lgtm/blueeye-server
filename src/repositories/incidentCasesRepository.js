@@ -152,6 +152,35 @@ function createIncidentCasesRepository(db) {
     return rows.map(mapRow);
   }
 
+  // Past resolved/closed incidents for the similarity read-model (Fase 4), joined
+  // with the primary anomaly type (finding metric), the device platform (a
+  // device-type proxy) and the email of whoever closed it. Newest-resolved first.
+  async function listResolvedClosed({ excludeId = null, limit = 100 } = {}) {
+    const lim = Number.isInteger(limit) && limit > 0 && limit <= 1000 ? limit : 100;
+    const icCols = BASE_COLUMNS.split(',').map((c) => `ic.${c.trim()}`).join(', ');
+    const where = ["ic.status IN ('resolved', 'closed')"];
+    const params = [];
+    if (excludeId != null) { where.push('ic.id <> ?'); params.push(excludeId); }
+    params.push(lim);
+    const [rows] = await pool.query(
+      `SELECT ${icCols}, f.metric AS primary_metric, u.email AS closed_by_email, a.platform AS device_platform
+       FROM incident_cases ic
+       LEFT JOIN findings f ON f.id = ic.primary_finding_id
+       LEFT JOIN users u ON u.id = ic.closed_by
+       LEFT JOIN agents a ON a.id = ic.host_id
+       WHERE ${where.join(' AND ')}
+       ORDER BY ic.last_event_at DESC, ic.id DESC
+       LIMIT ?`,
+      params
+    );
+    return rows.map((row) => ({
+      ...mapRow(row),
+      primaryMetric: row.primary_metric ?? null,
+      closedByEmail: row.closed_by_email ?? null,
+      platform: row.device_platform ?? null,
+    }));
+  }
+
   // Lists incident cases, newest activity first, with optional filters. `from`/
   // `to` bound last_event_at. Used by the read API (added with the endpoints).
   async function list({ status = null, severity = null, hostId = null, from = null, to = null, limit = 1000 } = {}) {
@@ -174,7 +203,7 @@ function createIncidentCasesRepository(db) {
     return rows.map(mapRow);
   }
 
-  return { create, findById, findOpenByHost, updateActivity, updateStatus, setConfigChange, listStaleInvestigating, list };
+  return { create, findById, findOpenByHost, updateActivity, updateStatus, setConfigChange, listStaleInvestigating, listResolvedClosed, list };
 }
 
 module.exports = { createIncidentCasesRepository, mapRow, isWorse, SEVERITY_RANK, OPEN_STATUSES };

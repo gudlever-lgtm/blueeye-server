@@ -160,6 +160,60 @@ function makeIncidentsRepo(overrides = {}) {
   };
 }
 
+// A fake incident_cases repository (in-memory) — the first-class incident entity
+// wrapping findings (migration 047). Mirrors incidentCasesRepository's surface.
+function makeIncidentCasesRepo(overrides = {}) {
+  const rows = [];
+  let seq = 0;
+  const rank = { INFO: 0, WARN: 1, CRIT: 2 };
+  const iso = (v) => (v == null ? null : (v instanceof Date ? v.toISOString() : new Date(v).toISOString()));
+  const mapOut = (r) => ({
+    id: r.id,
+    hostId: r.host_id,
+    title: r.title,
+    status: r.status,
+    severity: r.severity,
+    primaryFindingId: r.primary_finding_id ?? null,
+    firstEventAt: iso(r.first_event_at),
+    lastEventAt: iso(r.last_event_at),
+    resolvedAt: iso(r.resolved_at),
+    createdBy: r.created_by,
+    closedBy: r.closed_by ?? null,
+    createdAt: iso(r.created_at || r.first_event_at),
+  });
+  return {
+    rows,
+    create: overrides.create || (async (c) => {
+      const id = (seq += 1);
+      rows.push({
+        id, status: 'open', severity: 'INFO', primary_finding_id: null,
+        resolved_at: null, created_by: 'system', closed_by: null, created_at: new Date(), ...c,
+      });
+      return id;
+    }),
+    findById: overrides.findById || (async (id) => { const r = rows.find((x) => x.id === Number(id)); return r ? mapOut(r) : null; }),
+    findOpenByHost: overrides.findOpenByHost || (async (hostId) => {
+      const open = rows
+        .filter((x) => x.host_id === hostId && (x.status === 'open' || x.status === 'investigating'))
+        .sort((a, b) => new Date(b.last_event_at) - new Date(a.last_event_at) || b.id - a.id);
+      return open[0] ? mapOut(open[0]) : null;
+    }),
+    updateActivity: overrides.updateActivity || (async (id, { lastEventAt, severity = null }) => {
+      const r = rows.find((x) => x.id === Number(id));
+      if (!r) return false;
+      if (new Date(lastEventAt) > new Date(r.last_event_at)) r.last_event_at = lastEventAt;
+      if (severity && (rank[severity] ?? -1) > (rank[r.severity] ?? -1)) r.severity = severity;
+      return true;
+    }),
+    list: overrides.list || (async (f = {}) => rows
+      .filter((r) => (!f.status || r.status === f.status)
+        && (!f.severity || r.severity === f.severity)
+        && (!f.hostId || r.host_id === f.hostId))
+      .sort((a, b) => new Date(b.last_event_at) - new Date(a.last_event_at) || b.id - a.id)
+      .map(mapOut)),
+  };
+}
+
 // A fake incident-thresholds repository (in-memory) seeded with the same global
 // defaults as migration 023, so the derivation service behaves as in production.
 function makeIncidentThresholdsRepo(overrides = {}) {
@@ -1287,6 +1341,7 @@ module.exports = {
   makeResultsRepo,
   makeProbeResultsRepo,
   makeIncidentsRepo,
+  makeIncidentCasesRepo,
   makeIncidentThresholdsRepo,
   makeIncidentService,
   makeEnrollmentCodesRepo,

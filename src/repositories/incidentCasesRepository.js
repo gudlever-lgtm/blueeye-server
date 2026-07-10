@@ -13,7 +13,7 @@
 const SEVERITY_RANK = { INFO: 0, WARN: 1, CRIT: 2 };
 const OPEN_STATUSES = ['open', 'investigating']; // an incident still absorbing findings
 
-const BASE_COLUMNS = `id, host_id, title, status, severity, primary_finding_id,
+const BASE_COLUMNS = `id, host_id, title, status, severity, primary_finding_id, config_change_id,
   first_event_at, last_event_at, resolved_at, created_by, closed_by, created_at`;
 
 function toIso(v) {
@@ -36,6 +36,7 @@ function mapRow(row) {
     status: row.status,
     severity: row.severity,
     primaryFindingId: row.primary_finding_id ?? null,
+    configChangeId: row.config_change_id == null ? null : Number(row.config_change_id),
     firstEventAt: toIso(row.first_event_at),
     lastEventAt: toIso(row.last_event_at),
     resolvedAt: toIso(row.resolved_at),
@@ -124,6 +125,19 @@ function createIncidentCasesRepository(db) {
     return res.affectedRows > 0;
   }
 
+  // Links the config change (config_snapshots id) suspected to have triggered an
+  // incident. Guarded so the FIRST correlated change wins and a later anomaly
+  // can't overwrite it (only sets when config_change_id IS NULL). Returns true if
+  // a row changed.
+  async function setConfigChange(id, configSnapshotId) {
+    const [res] = await pool.query(
+      `UPDATE incident_cases SET config_change_id = ?
+       WHERE id = ? AND config_change_id IS NULL`,
+      [configSnapshotId, id]
+    );
+    return res.affectedRows > 0;
+  }
+
   // Investigating incidents whose last activity is older than `olderThan` — the
   // auto-resolve candidates (no new anomalies linked within the inactivity
   // window). Oldest-first so the job processes the stalest first.
@@ -160,7 +174,7 @@ function createIncidentCasesRepository(db) {
     return rows.map(mapRow);
   }
 
-  return { create, findById, findOpenByHost, updateActivity, updateStatus, listStaleInvestigating, list };
+  return { create, findById, findOpenByHost, updateActivity, updateStatus, setConfigChange, listStaleInvestigating, list };
 }
 
 module.exports = { createIncidentCasesRepository, mapRow, isWorse, SEVERITY_RANK, OPEN_STATUSES };

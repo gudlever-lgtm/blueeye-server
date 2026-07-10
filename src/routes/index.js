@@ -79,6 +79,7 @@ function createApiRouter({
   probeResultsRepo,
   incidentsRepo,
   incidentCasesRepo,
+  configSnapshotsRepo,
   thresholdsRepo,
   incidentService,
   installToolService,

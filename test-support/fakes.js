@@ -174,6 +174,7 @@ function makeIncidentCasesRepo(overrides = {}) {
     status: r.status,
     severity: r.severity,
     primaryFindingId: r.primary_finding_id ?? null,
+    configChangeId: r.config_change_id ?? null,
     firstEventAt: iso(r.first_event_at),
     lastEventAt: iso(r.last_event_at),
     resolvedAt: iso(r.resolved_at),
@@ -186,10 +187,16 @@ function makeIncidentCasesRepo(overrides = {}) {
     create: overrides.create || (async (c) => {
       const id = (seq += 1);
       rows.push({
-        id, status: 'open', severity: 'INFO', primary_finding_id: null,
+        id, status: 'open', severity: 'INFO', primary_finding_id: null, config_change_id: null,
         resolved_at: null, created_by: 'system', closed_by: null, created_at: new Date(), ...c,
       });
       return id;
+    }),
+    setConfigChange: overrides.setConfigChange || (async (id, configSnapshotId) => {
+      const r = rows.find((x) => x.id === Number(id) && (x.config_change_id == null));
+      if (!r) return false;
+      r.config_change_id = configSnapshotId;
+      return true;
     }),
     findById: overrides.findById || (async (id) => { const r = rows.find((x) => x.id === Number(id)); return r ? mapOut(r) : null; }),
     findOpenByHost: overrides.findOpenByHost || (async (hostId) => {
@@ -268,6 +275,12 @@ function makeConfigSnapshotsRepo(overrides = {}) {
         .filter((r) => r.device_id === deviceId && r.id !== cur.id && before(r, cur) < 0)
         .sort((a, b) => before(b, a));
       return prev[0] ? mapOut(prev[0], true) : null;
+    }),
+    latestForDeviceBetween: overrides.latestForDeviceBetween || (async (deviceId, from, to) => {
+      const match = rows
+        .filter((r) => r.device_id === deviceId && new Date(r.captured_at) > new Date(from) && new Date(r.captured_at) <= new Date(to))
+        .sort((a, b) => before(b, a));
+      return match[0] ? mapOut(match[0], true) : null;
     }),
   };
 }
@@ -1296,6 +1309,7 @@ function makeApp(overrides = {}) {
     probeResultsRepo: overrides.probeResultsRepo || makeProbeResultsRepo(),
     incidentsRepo: overrides.incidentsRepo || makeIncidentsRepo(),
     incidentCasesRepo: overrides.incidentCasesRepo || makeIncidentCasesRepo(),
+    configSnapshotsRepo: overrides.configSnapshotsRepo || makeConfigSnapshotsRepo(),
     thresholdsRepo: overrides.thresholdsRepo || makeIncidentThresholdsRepo(),
     incidentService: overrides.incidentService || makeIncidentService(),
     installToolService: overrides.installToolService || null,

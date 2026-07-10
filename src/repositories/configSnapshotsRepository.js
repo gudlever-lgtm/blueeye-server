@@ -75,6 +75,19 @@ function createConfigSnapshotsRepository(db) {
     return rows.map(mapRow);
   }
 
+  // The most recent snapshot for a device captured within (from, to] — used by
+  // the anomaly↔config correlation to find a config change shortly BEFORE an
+  // anomaly. Includes config_text so the caller can diff/classify it.
+  async function latestForDeviceBetween(deviceId, from, to) {
+    const [rows] = await pool.query(
+      `SELECT ${FULL_COLUMNS} FROM config_snapshots
+       WHERE device_id = ? AND captured_at > ? AND captured_at <= ?
+       ORDER BY captured_at DESC, id DESC LIMIT 1`,
+      [deviceId, from, to]
+    );
+    return mapRow(rows[0]) ?? null;
+  }
+
   // The snapshot immediately preceding `id` for the same device (the one to diff
   // against), or null when `id` is the device's first snapshot. Ordered by
   // captured_at then id so ties are deterministic.
@@ -89,7 +102,7 @@ function createConfigSnapshotsRepository(db) {
     return mapRow(rows[0]) ?? null;
   }
 
-  return { insert, findById, listForDevice, previousBefore };
+  return { insert, findById, listForDevice, previousBefore, latestForDeviceBetween };
 }
 
 module.exports = { createConfigSnapshotsRepository, mapRow };

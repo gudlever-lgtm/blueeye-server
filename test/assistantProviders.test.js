@@ -9,20 +9,26 @@ const {
 
 const MISTRAL_URL = 'https://api.mistral.ai/v1/chat/completions';
 
-test('the catalog offers Mistral (default) plus other EU / self-hosted options and a custom one', () => {
+test('the catalog offers Mistral (default) plus a broad selection and a custom one', () => {
   const ids = PROVIDERS.map((p) => p.id);
   assert.ok(ids.includes('mistral'));
-  assert.ok(ids.length >= 3); // a real "selection of others"
+  assert.equal(PROVIDERS[0].id, 'mistral'); // default sits first
+  assert.ok(ids.length >= 5); // a real "selection of others"
   const custom = PROVIDERS.find((p) => p.custom);
   assert.ok(custom, 'a custom ("Other") provider must exist');
   assert.equal(custom.baseUrl, ''); // admin supplies it
-  // No US vendor presets (policy): no openai/azure/anthropic/google endpoints.
-  assert.ok(!PROVIDERS.some((p) => /openai\.com|azure|anthropic|googleapis/.test(p.baseUrl || '')));
+  // The choice is the admin's: both EU and US presets are offered (no US block).
+  assert.ok(PROVIDERS.some((p) => p.region === 'EU'));
+  assert.ok(PROVIDERS.some((p) => p.region === 'US'));
+  assert.ok(PROVIDERS.some((p) => p.region === 'self-hosted'));
+  // Every preset carries a region hint so an admin can weigh data residency.
+  for (const p of PROVIDERS) assert.ok(p.region, `${p.id} must declare a region`);
 });
 
 test('isProviderId / getProvider', () => {
   assert.ok(isProviderId('mistral'));
-  assert.ok(!isProviderId('openai'));
+  assert.ok(isProviderId('openai'));
+  assert.ok(!isProviderId('not-a-provider'));
   assert.ok(!isProviderId(''));
   assert.equal(getProvider('mistral').keyRequired, true);
   assert.equal(getProvider('ollama').keyRequired, false);
@@ -46,6 +52,7 @@ test('defaultModel falls back per provider', () => {
 test('inferProvider matches known endpoints, else custom', () => {
   assert.equal(inferProvider(MISTRAL_URL), 'mistral');
   assert.equal(inferProvider('http://localhost:11434/v1/chat/completions'), 'ollama');
+  assert.equal(inferProvider('https://api.openai.com/v1/chat/completions'), 'openai');
   assert.equal(inferProvider('https://llm.internal/v1/chat'), 'custom');
   assert.equal(inferProvider(''), 'mistral'); // nothing configured -> default
 });
@@ -53,7 +60,7 @@ test('inferProvider matches known endpoints, else custom', () => {
 test('listProvidersSafe carries no secrets and every entry is renderable', () => {
   const list = listProvidersSafe();
   for (const p of list) {
-    assert.ok(p.id && p.label);
+    assert.ok(p.id && p.label && p.region);
     assert.equal(typeof p.custom, 'boolean');
     assert.equal(typeof p.keyRequired, 'boolean');
   }

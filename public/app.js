@@ -7842,7 +7842,7 @@ function assistantSettingsCard(a) {
   const modelI = el('input', { type: 'text', placeholder: 'mistral-small-latest' });
   const baseUrlI = el('input', { type: 'text', placeholder: 'https://…/v1/chat/completions' });
   const baseUrlField = el('label', { class: 'set-field' }, el('span', {}, 'Endpoint URL'), baseUrlI,
-    el('span', { class: 'muted small' }, 'OpenAI-compatible chat-completions URL for the custom provider. Keep it EU-hosted or self-hosted.'));
+    el('span', { class: 'muted small' }, 'OpenAI-compatible chat-completions URL for the custom provider (e.g. an Azure or self-hosted deployment).'));
   const keyI = el('input', { type: 'password', autocomplete: 'new-password', spellcheck: 'false' });
   const clearI = el('input', { type: 'checkbox' });
   const clearRow = el('label', { class: 'inline muted small' }, clearI, el('span', {}, 'Remove the stored key'));
@@ -7854,10 +7854,10 @@ function assistantSettingsCard(a) {
     const p = provById(providerI.value);
     baseUrlField.classList.toggle('hidden', !p.custom);
     modelI.placeholder = p.defaultModel || 'model id';
-    if (p.custom) note.textContent = 'Calls your custom OpenAI-compatible endpoint. Keep it EU-hosted or self-hosted; the key (if any) is stored on the server and never shown again.';
+    if (p.custom) note.textContent = 'Calls your custom OpenAI-compatible endpoint. The key (if any) is encrypted at rest and never shown again. Only metadata summaries are sent — no raw data or payload.';
     else if (!p.keyRequired) note.textContent = `Calls ${p.label}. No API key is needed for a local endpoint.`;
     else if (enabledI.checked && !v.apiKeySet && keyI.value.trim() === '') note.textContent = '⚠ Enabled but no API key set — add one above, or the assistant returns an error.';
-    else note.textContent = `Calls ${p.label}. The key is stored in the server database and is never shown again.`;
+    else note.textContent = `Calls ${p.label}. The key is encrypted at rest and never shown again. Only metadata summaries are sent — no raw data or payload.`;
   }
 
   function applyState(s) {
@@ -7906,10 +7906,10 @@ function assistantSettingsCard(a) {
       el('label', { class: 'set-field' }, el('span', {}, 'Assistant enabled'), enabledI,
         el('span', { class: 'muted small' }, 'Opt-in natural-language assistant: host Q&A + per-location summaries.')),
       el('label', { class: 'set-field' }, el('span', {}, 'Provider'), providerI,
-        el('span', { class: 'muted small' }, 'Which LLM endpoint to call. All options are EU-hosted or self-hosted.')),
+        el('span', { class: 'muted small' }, 'Which LLM endpoint to call — EU, US or self-hosted, your choice. Region is shown per option; prefer EU/self-hosted if data residency matters.')),
       baseUrlField,
       el('label', { class: 'set-field' }, el('span', {}, 'API key'), keyI,
-        el('span', { class: 'muted small' }, 'Provider API key. Write-only — stored on the server, never displayed again.')),
+        el('span', { class: 'muted small' }, 'Provider API key. Write-only — encrypted at rest on the server, never displayed again.')),
       clearRow,
       el('label', { class: 'set-field' }, el('span', {}, 'Model'), modelI,
         el('span', { class: 'muted small' }, 'Provider model id (a per-provider default is used if left blank).')),

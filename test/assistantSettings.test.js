@@ -10,7 +10,10 @@ const request = require('supertest');
 const { createSettingsService } = require('../src/services/settings');
 const { createAssistant } = require('../src/analysis/assistant');
 const { listProvidersSafe } = require('../src/analysis/assistantProviders');
+const { createSecretBox } = require('../src/lib/secretBox');
 const { makeApp, makeSettingsService, authHeader } = require('../test-support/fakes');
+
+const TEST_SECRET = 'a-strong-enough-test-secret-key-1234567890';
 
 const MISTRAL_URL = 'https://api.mistral.ai/v1/chat/completions';
 
@@ -115,7 +118,7 @@ test('setAssistant: custom provider requires a base URL and round-trips it', asy
 
 test('validateAssistant rejects an unknown provider and a malformed base URL', async () => {
   const svc = createSettingsService({ settingsRepo: memRepo(), config: cfg, liveAnalysis: {} });
-  await assert.rejects(() => svc.setAssistant({ provider: 'openai' }), (e) => e.statusCode === 400 && Boolean(e.details.provider));
+  await assert.rejects(() => svc.setAssistant({ provider: 'not-a-provider' }), (e) => e.statusCode === 400 && Boolean(e.details.provider));
   await assert.rejects(() => svc.setAssistant({ provider: 'custom', baseUrl: 'not-a-url' }), (e) => e.statusCode === 400 && Boolean(e.details.baseUrl));
 });
 
@@ -125,6 +128,55 @@ test('getAssistantSafe exposes the provider catalog for the dashboard dropdown',
   assert.ok(Array.isArray(safe.providers) && safe.providers.length >= 2);
   assert.ok(safe.providers.some((p) => p.id === 'mistral'));
   assert.ok(safe.providers.some((p) => p.id === 'custom' && p.custom === true));
+});
+
+// ---- API key encryption at rest --------------------------------------------
+
+test('setAssistant encrypts the API key at rest; getAssistant decrypts it', async () => {
+  const secretBox = createSecretBox({ key: TEST_SECRET });
+  const liveAnalysis = { assistantEnabled: false, assistantApiKey: '', assistantModel: 'mistral-small-latest' };
+  const repo = memRepo();
+  const svc = createSettingsService({ settingsRepo: repo, config: cfg, liveAnalysis, secretBox });
+
+  const out = await svc.setAssistant({ enabled: true, apiKey: 'sk-secret-1234' });
+  assert.equal(out.apiKeySet, true);
+  assert.equal(out.apiKeyHint, '••••1234'); // hint still derives from the plaintext
+  assert.equal(out.apiKey, undefined); // never echoed
+
+  // Stored value is ciphertext — the plaintext key never touches the row.
+  const stored = await repo.get('assistant');
+  assert.ok(secretBox.isEncrypted(stored.apiKey));
+  assert.ok(!stored.apiKey.includes('sk-secret-1234'));
+
+  // Live config keeps the PLAINTEXT (the assistant needs it to authenticate).
+  assert.equal(liveAnalysis.assistantApiKey, 'sk-secret-1234');
+  // Server-internal getter round-trips back to plaintext.
+  assert.equal((await svc.getAssistant()).apiKey, 'sk-secret-1234');
+});
+
+test('a legacy plaintext key is still readable and gets re-encrypted on the next save', async () => {
+  const secretBox = createSecretBox({ key: TEST_SECRET });
+  const repo = memRepo({ assistant: { enabled: true, provider: 'mistral', apiKey: 'legacy-plain-9999', model: 'mistral-small-latest', baseUrl: '' } });
+  const svc = createSettingsService({ settingsRepo: repo, config: cfg, liveAnalysis: {}, secretBox });
+
+  assert.equal((await svc.getAssistant()).apiKey, 'legacy-plain-9999'); // read as-is
+
+  await svc.setAssistant({ enabled: true }); // saving without retyping the key migrates it
+  const stored = await repo.get('assistant');
+  assert.ok(secretBox.isEncrypted(stored.apiKey));
+  assert.equal((await svc.getAssistant()).apiKey, 'legacy-plain-9999');
+});
+
+test('applyStoredOverrides decrypts the stored key into the live config at boot', async () => {
+  const secretBox = createSecretBox({ key: TEST_SECRET });
+  const repo = memRepo();
+  const liveAnalysis = { assistantEnabled: false, assistantApiKey: '', assistantModel: 'mistral-small-latest' };
+  // Persist an encrypted key, then simulate a fresh boot with an empty live config.
+  await createSettingsService({ settingsRepo: repo, config: cfg, liveAnalysis: { ...liveAnalysis }, secretBox })
+    .setAssistant({ enabled: true, apiKey: 'boot-secret-4242' });
+  const svc = createSettingsService({ settingsRepo: repo, config: cfg, liveAnalysis, secretBox });
+  await svc.applyStoredOverrides();
+  assert.equal(liveAnalysis.assistantApiKey, 'boot-secret-4242'); // decrypted for use
 });
 
 // ---- settings route --------------------------------------------------------

@@ -100,20 +100,38 @@ set, plus a masked hint).
 `/v1/chat/completions` API, so the provider is swappable. Pick one in **Settings →
 Analysis → AI assistant**:
 
-| Provider | Endpoint | Key | Notes |
+| Provider | Region | Endpoint | Key |
 | --- | --- | --- | --- |
-| `mistral` | `api.mistral.ai` | required | Default. EU. |
-| `scaleway` | `api.scaleway.ai` | required | EU (France). |
-| `ollama` | `localhost:11434` | none | Self-hosted / on-box. |
-| `custom` ("Other") | admin-supplied | optional | Any other OpenAI-compatible endpoint. |
+| `mistral` | EU | `api.mistral.ai` | required |
+| `scaleway` | EU | `api.scaleway.ai` | required |
+| `openai` | US | `api.openai.com` | required |
+| `anthropic` | US | `api.anthropic.com` | required |
+| `gemini` | US | `generativelanguage.googleapis.com` | required |
+| `groq` | US | `api.groq.com` | required |
+| `openrouter` | US | `openrouter.ai` | required |
+| `ollama` | self-hosted | `localhost:11434` | none |
+| `custom` ("Other") | any | admin-supplied | optional |
 
-Every option must be **EU-hosted or self-hosted** (see `CLAUDE.md` — no US
-vendors). The `custom` provider takes a base URL you enter yourself; a private /
-loopback target is allowed on purpose (running an LLM on-box is a supported use).
-The preset catalog lives in `src/analysis/assistantProviders.js`. When
+**Which LLM to use is the admin's decision, not a product constraint.** The
+no-US-vendor rule in `CLAUDE.md` governs BlueEye's *own* dependencies (map tiles,
+GeoIP, geocoder, fonts) — not where an admin chooses to send the assistant's
+context. The assistant only ever sends **metadata-derived summaries** (never raw
+data or payload), so the choice is about **data-residency preference**: each
+preset shows its region (default Mistral is EU) so an admin who cares can choose
+accordingly, but no option is blocked. The `custom` provider takes a base URL you
+enter yourself (e.g. an Azure or self-hosted deployment); a private / loopback
+target is allowed on purpose (running an LLM on-box is a supported use). The
+preset catalog lives in `src/analysis/assistantProviders.js`. When
 `ANALYSIS_ASSISTANT_PROVIDER` is unset the provider is inferred from
 `ANALYSIS_ASSISTANT_URL` (a preset match, else `custom`), so existing env-only
 installs keep working unchanged.
+
+**API key at rest.** The key is stored **encrypted** in `app_settings`
+(AES-256-GCM via `secretBox`, the same scheme integration credentials and the LDAP
+bind password use, keyed by `SECRET_ENCRYPTION_KEY`). It is decrypted only in
+memory to authenticate to the provider, and the API never returns it (only
+`apiKeySet` + a masked hint). A pre-encryption plaintext key is read transparently
+and re-encrypted on the next save.
 
 ## REST API
 

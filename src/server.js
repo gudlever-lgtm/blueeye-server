@@ -505,7 +505,7 @@ function start() {
   const settingsService = createSettingsService({
     settingsRepo: createSettingsRepository(db), config,
     liveAnalysis: analysisConfig, liveRetention: retentionConfig, liveAlerting: alertingConfig,
-    liveGeo: geoProvider,
+    liveGeo: geoProvider, secretBox,
   });
   // Re-apply persisted analysis/retention edits onto the live config so they
   // survive restarts. Best-effort + fire-and-forget (consumers read lazily).

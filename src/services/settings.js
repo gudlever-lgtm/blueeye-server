@@ -36,7 +36,21 @@ function badRequest(message, details) {
 // the env defaults. The map tile source and the traffic-type categories are
 // editable from the UI; everything else stays env-driven. Validation lives here
 // so the route stays thin.
-function createSettingsService({ settingsRepo, config, liveAnalysis = null, liveRetention = null, liveAlerting = null, liveGeo = null }) {
+function createSettingsService({ settingsRepo, config, liveAnalysis = null, liveRetention = null, liveAlerting = null, liveGeo = null, secretBox = null }) {
+  // Encrypt/decrypt the assistant API key for storage at rest (AES-256-GCM via
+  // secretBox, the same scheme integration credentials + the LDAP bind password
+  // use). When no box is wired (some tests) values pass through as plaintext. A
+  // stored legacy plaintext key (from before encryption) is returned as-is and
+  // re-encrypted on the next save, so the migration is transparent — no data step.
+  const encKey = (v) => {
+    const s = v || '';
+    return secretBox && s ? secretBox.encrypt(s) : s;
+  };
+  const decKey = (v) => {
+    const s = v || '';
+    if (!secretBox || !secretBox.isEncrypted(s)) return s;
+    try { return secretBox.decrypt(s); } catch { return ''; } // tampered / rotated key ⇒ treat as unset
+  };
   function mapDefaults() {
     return {
       tileUrl: config.geo.tileUrl,
@@ -472,7 +486,7 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
     return {
       enabled: !!base.enabled,
       provider,
-      apiKey: base.apiKey || '',
+      apiKey: decKey(base.apiKey), // encrypted at rest → plaintext for internal use
       model: base.model || defaultModel(provider),
       baseUrl: base.baseUrl || '',
     };
@@ -548,8 +562,10 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
     }
     // Fall back to the provider's default model when none is set.
     if (!merged.model) merged.model = defaultModel(merged.provider);
+    // Persist the key ENCRYPTED at rest; the live config below keeps the plaintext
+    // (the assistant needs it to authenticate to the provider).
     await settingsRepo.set('assistant', {
-      enabled: merged.enabled, provider: merged.provider, apiKey: merged.apiKey, model: merged.model, baseUrl: merged.baseUrl || '',
+      enabled: merged.enabled, provider: merged.provider, apiKey: encKey(merged.apiKey), model: merged.model, baseUrl: merged.baseUrl || '',
     });
     if (liveAnalysis) {
       liveAnalysis.assistantEnabled = merged.enabled;
@@ -821,7 +837,8 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
       if (a && liveAnalysis) {
         if (a.enabled !== undefined) liveAnalysis.assistantEnabled = !!a.enabled;
         if (a.provider !== undefined && isProviderId(a.provider)) liveAnalysis.assistantProvider = a.provider;
-        if (a.apiKey !== undefined) liveAnalysis.assistantApiKey = a.apiKey || '';
+        if (a.apiKey !== undefined) liveAnalysis.assistantApiKey = decKey(a.apiKey); // stored encrypted → plaintext live
+
         if (a.model) liveAnalysis.assistantModel = a.model;
         if (a.baseUrl !== undefined) liveAnalysis.assistantBaseUrl = a.baseUrl || '';
       }

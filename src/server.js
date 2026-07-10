@@ -52,6 +52,10 @@ const { createDetector } = require('./analysis/detector');
 const { createAnalysisPipeline } = require('./analysis/pipeline');
 const { createProbePipeline } = require('./analysis/probePipeline');
 const { createCorrelator } = require('./analysis/correlator');
+const { createIncidentCasesRepository } = require('./repositories/incidentCasesRepository');
+const { createConfigSnapshotsRepository } = require('./repositories/configSnapshotsRepository');
+const { createIncidentCaseService } = require('./incidentCases/incidentCaseService');
+const { createIncidentAutoResolveJob } = require('./incidentCases/autoResolveJob');
 const { createAssistant } = require('./analysis/assistant');
 const { loadConfig: loadAnalysisConfig } = require('./analysis/config');
 const { createFlowsRepository } = require('./repositories/flowsRepository');
@@ -403,6 +407,13 @@ function start() {
   const detector = createDetector({ baselines, config: analysisConfig });
   const correlator = createCorrelator(); // uses src/analysis/dependency-graph.json
 
+  // Incident cases: first-class incidents wrapping findings. The service groups
+  // each newly-detected finding into an open incident on the same device (within
+  // the correlator window) or opens a new one; wired into both analysis pipelines.
+  const incidentCasesRepo = createIncidentCasesRepository(db);
+  const configSnapshotsRepo = createConfigSnapshotsRepository(db);
+  const incidentCaseService = createIncidentCaseService({ incidentCasesRepo, findingStore, configSnapshotsRepo, logger });
+
   // Alerting: route findings to channels (email/webhook/syslog). Channels are
   // built unconditionally so the test endpoint works; rules/enable live in
   // config. Outgoing sends use Node's fetch / dgram / (lazy) nodemailer.
@@ -441,6 +452,7 @@ function start() {
     findingStore,
     config: analysisConfig,
     correlator,
+    incidentCaseService,
     dispatcher,
     // Live getter (not a snapshot) so a runtime enable in Settings → Alerting applies.
     alertingEnabled: () => alertingConfig.enabled,
@@ -467,6 +479,7 @@ function start() {
     findingStore,
     config: analysisConfig,
     dispatcher,
+    incidentCaseService,
     alertingEnabled: () => alertingConfig.enabled,
     integrationTrigger: integrationsDispatcher,
     licensed: () => featureGate.isFeatureEnabled('analysis'),
@@ -572,6 +585,9 @@ function start() {
       { start: () => geoipUpdater.startSchedule(), stop: () => geoipUpdater.stopSchedule() },
       // Hourly MAD baseline recompute for transaction tests (leader-only).
       createTransactionBaselineJob({ repo: transactionsRepo, logger }),
+      // Auto-resolve incidents stuck in `investigating` with no new anomalies
+      // within the inactivity window (leader-only).
+      createIncidentAutoResolveJob({ incidentCasesRepo, auditLogRepo, logger }),
     ],
   });
 
@@ -593,6 +609,8 @@ function start() {
     resultsRepo,
     probeResultsRepo,
     incidentsRepo,
+    incidentCasesRepo,
+    configSnapshotsRepo,
     thresholdsRepo,
     incidentService,
     installToolService,

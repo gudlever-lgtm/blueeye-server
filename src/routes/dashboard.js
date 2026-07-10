@@ -17,6 +17,7 @@ const { buildAdvancedDashboard } = require('../dashboard/advancedDashboard');
 //   GET /api/dashboard/advanced — the aggregated widget payload.
 function createDashboardRouter({
   incidentsRepo = null,
+  incidentCasesRepo = null,
   findingStore = null,
   featureGate,
   planService,
@@ -33,11 +34,12 @@ function createDashboardRouter({
       const now = Date.now();
       // Incidents + findings are best-effort dimensions — a read failure just
       // drops that widget rather than sinking the panel.
-      const [incidents, findings] = await Promise.all([
+      const [incidents, findings, incidentCases] = await Promise.all([
         incidentsRepo && incidentsRepo.list ? incidentsRepo.list().catch((err) => { req.log.warn(`dashboard: incidents read failed (${err.message}); dropping widget`); return []; }) : Promise.resolve([]),
         findingStore && findingStore.list ? findingStore.list().catch((err) => { req.log.warn(`dashboard: findings read failed (${err.message}); dropping widget`); return []; }) : Promise.resolve([]),
+        incidentCasesRepo && incidentCasesRepo.list ? incidentCasesRepo.list({ limit: 200 }).catch((err) => { req.log.warn(`dashboard: incident-cases read failed (${err.message}); dropping widget`); return []; }) : Promise.resolve([]),
       ]);
-      res.json(buildAdvancedDashboard({ incidents, findings, now }));
+      res.json(buildAdvancedDashboard({ incidents, findings, incidentCases, now }));
     })
   );
 

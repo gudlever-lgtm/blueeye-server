@@ -11,17 +11,21 @@
 // the worst-first agent table from /api/fleet/health), so they were dropped as
 // redundant — this payload is purely the incidents/findings supplement.
 //
-//   buildAdvancedDashboard({ incidents, findings })
+//   buildAdvancedDashboard({ incidents, findings, incidentCases })
 //
-// `incidents` — incident rows (incidentsRepo.list(), camelCase API shape).
-// `findings`  — analysis findings (findingStore.list()).
+// `incidents`     — probe-outage incident rows (incidentsRepo.list()).
+// `findings`      — analysis findings (findingStore.list()).
+// `incidentCases` — first-class incidents (incidentCasesRepo.list()); the open
+//                   (open|investigating) ones are surfaced as their own widget.
 function buildAdvancedDashboard({
   incidents = [],
   findings = [],
+  incidentCases = [],
   now = Date.now(),
 } = {}) {
   const activeIncidents = (incidents || []).filter((i) => i && i.status === 'active');
   const openFindings = (findings || []).filter((f) => f && !f.acked);
+  const openCases = (incidentCases || []).filter((c) => c && (c.status === 'open' || c.status === 'investigating'));
 
   return {
     generatedAt: new Date(now).toISOString(),
@@ -56,6 +60,21 @@ function buildAdvancedDashboard({
             kind: f.kind,
             explanation: f.explanation || null,
             createdAt: f.createdAt || null,
+          })),
+      },
+      incidentCases: {
+        open: openCases.length,
+        recent: openCases
+          .slice()
+          .sort((a, b) => String(b.lastEventAt || '').localeCompare(String(a.lastEventAt || '')))
+          .slice(0, 10)
+          .map((c) => ({
+            id: c.id,
+            deviceId: c.deviceId ?? null,
+            title: c.title,
+            severity: c.severity,
+            status: c.status,
+            lastEventAt: c.lastEventAt || null,
           })),
       },
     },

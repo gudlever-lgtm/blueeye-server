@@ -121,6 +121,21 @@ function createAuditLogRepository(db) {
     return distinctCategories(pool);
   }
 
+  // Oldest-first events for one target (e.g. all transitions on an incident),
+  // optionally scoped to a category. Chronological, for the incident timeline
+  // read-model (manual + automatic status changes are recorded here).
+  async function listByTarget({ category = null, target, limit = 200 } = {}) {
+    const where = ['target = ?'];
+    const params = [String(target).slice(0, 255)];
+    if (category) { where.push('category = ?'); params.push(String(category).slice(0, 32)); }
+    params.push(clampLimit(limit, 200, 2000));
+    const [rows] = await pool.query(
+      `SELECT ${COLS} FROM audit_log WHERE ${where.join(' AND ')} ORDER BY id ASC LIMIT ?`,
+      params
+    );
+    return rows;
+  }
+
   // Walks the hash chain (oldest→newest over the rows that carry a hash) and
   // recomputes each entry_hash. Returns { ok, checked, brokenAt } where brokenAt
   // is the id of the first tampered/removed row, or null when intact.
@@ -143,7 +158,7 @@ function createAuditLogRepository(db) {
     return { ok: true, checked: rows.length, brokenAt: null };
   }
 
-  return { record, list, categories, verifyChain };
+  return { record, list, categories, listByTarget, verifyChain };
 }
 
 module.exports = { createAuditLogRepository, entryHashFor, canonicalFields };

@@ -2908,17 +2908,27 @@ views.incidents = async () => {
   return wrap;
 };
 
-async function loadIncidentTimeline(id, card) {
+async function loadIncidentTimeline(id, card, deviceId) {
   const head = el('h3', {}, 'Timeline');
+  const devNum = Number(deviceId);
+  // Anomaly + config-change events link to the device page (its findings/health
+  // and, for config, the Config history card). Status changes have no target.
+  const canLink = Number.isInteger(devNum);
   try {
     const { events } = await api(`/api/incidents/${id}/timeline`);
     if (!events.length) { card.replaceChildren(head, el('p', { class: 'muted' }, 'No events yet.')); return; }
-    card.replaceChildren(head, el('ul', { class: 'timeline' }, ...events.map((e) => el('li', { class: `tl tl-${e.type}` },
-      el('span', { class: 'tl-time muted' }, fmtDate(e.timestamp)),
-      el('span', { class: `tl-dot tl-dot-${e.type}` }),
-      el('span', { class: 'tl-desc' }, esc(e.description || e.type),
-        e.severity ? el('span', { class: 'muted' }, ` [${e.severity}]`) : null,
-        e.status ? el('span', { class: 'muted' }, ` [${e.status}]`) : null)))));
+    card.replaceChildren(head, el('ul', { class: 'timeline' }, ...events.map((e) => {
+      const linkable = canLink && (e.type === 'anomaly' || e.type === 'config_change');
+      return el('li', {
+        class: `tl tl-${e.type}${linkable ? ' clickable' : ''}`,
+        ...(linkable ? { title: 'Open device', onclick: () => openAgent(devNum) } : {}),
+      },
+        el('span', { class: 'tl-time muted' }, fmtDate(e.timestamp)),
+        el('span', { class: `tl-dot tl-dot-${e.type}` }),
+        el('span', { class: 'tl-desc' }, esc(e.description || e.type),
+          e.severity ? el('span', { class: 'muted' }, ` [${e.severity}]`) : null,
+          e.status ? el('span', { class: 'muted' }, ` [${e.status}]`) : null));
+    })));
   } catch (err) { card.replaceChildren(head, el('p', { class: 'error' }, err.message)); }
 }
 
@@ -3040,7 +3050,7 @@ views.incident = async () => {
       : el('p', { class: 'muted' }, 'No linked anomalies.'));
 
   const timelineCard = el('div', { class: 'card' }, el('h3', {}, 'Timeline'), el('div', { class: 'muted' }, 'Loading…'));
-  loadIncidentTimeline(id, timelineCard);
+  loadIncidentTimeline(id, timelineCard, inc.deviceId);
   const similarCard = el('div', { class: 'card' }, el('h3', {}, 'Similar past incidents'), el('div', { class: 'muted' }, 'Loading…'));
   loadIncidentSimilar(id, similarCard);
 
@@ -4880,10 +4890,22 @@ function fleetIssues(w) {
       el('td', {}, esc(x.hostId), el('span', { class: 'muted' }, ` · ${esc(x.metric)}`)),
       el('td', { class: 'muted' }, esc(x.explanation || x.kind || '')))))));
 
+  // First-class incidents (incident_cases) — open/investigating cases; click a
+  // row to open its detail page. Guarded for older servers without the widget.
+  const ic = w.incidentCases || { open: 0, recent: [] };
+  const cases = el('div', { class: 'card' }, el('h3', {}, 'Open incidents', count(ic.open)));
+  if (!ic.recent.length) cases.append(el('p', { class: 'muted' }, 'No open incidents.'));
+  else cases.append(el('table', { class: 'adv-table' }, el('tbody', {}, ...ic.recent.map((c) =>
+    el('tr', { class: 'clickable', onclick: () => openIncident(c.id) },
+      el('td', {}, el('span', { class: `badge inc-sev-${c.severity}` }, c.severity)),
+      el('td', {}, esc(c.title)),
+      el('td', {}, el('span', { class: `badge inc-status-${c.status}` }, INC_STATUS_LABEL[c.status] || c.status)),
+      el('td', { class: 'muted' }, fmtDate(c.lastEventAt)))))));
+
   return el('section', { class: 'fleet-issues' },
     el('h3', { class: 'fi-head' }, 'Open issues',
-      el('span', { class: 'muted' }, ' · active incidents & recent analysis findings')),
-    el('div', { class: 'panel-grid' }, inc, fnd));
+      el('span', { class: 'muted' }, ' · open incidents, probe outages & recent analysis findings')),
+    el('div', { class: 'panel-grid' }, cases, inc, fnd));
 }
 
 // The landing view: all agents with a probe-derived health verdict, worst-first.

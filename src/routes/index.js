@@ -220,7 +220,7 @@ function createApiRouter({
   // Overview "open issues" rollup (license feature `dashboard_advanced`,
   // Professional+) — active incidents + recent findings, gated. Surfaced inline
   // on the Overview page; fleet health itself comes from /api/fleet above.
-  router.use('/api/dashboard', createDashboardRouter({ incidentsRepo, findingStore, featureGate, planService }));
+  router.use('/api/dashboard', createDashboardRouter({ incidentsRepo, incidentCasesRepo, findingStore, featureGate, planService }));
   if (incidentsRepo && probeResultsRepo) router.use('/api/reports', createReportsRouter({ probeResultsRepo, incidentsRepo, locationsRepo, featureGate, planService, auditLogger }));
   // First-class incidents (incident_cases) wrapping findings — distinct from the
   // probe-outage `incidents` used by /api/reports above.

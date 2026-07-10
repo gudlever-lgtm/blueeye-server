@@ -607,6 +607,7 @@ function start() {
     resultsRepo,
     probeResultsRepo,
     incidentsRepo,
+    incidentCasesRepo,
     thresholdsRepo,
     incidentService,
     installToolService,

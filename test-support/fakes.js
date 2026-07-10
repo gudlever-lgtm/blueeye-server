@@ -1249,6 +1249,7 @@ function makeApp(overrides = {}) {
     resultsRepo: overrides.resultsRepo || makeResultsRepo(),
     probeResultsRepo: overrides.probeResultsRepo || makeProbeResultsRepo(),
     incidentsRepo: overrides.incidentsRepo || makeIncidentsRepo(),
+    incidentCasesRepo: overrides.incidentCasesRepo || makeIncidentCasesRepo(),
     thresholdsRepo: overrides.thresholdsRepo || makeIncidentThresholdsRepo(),
     incidentService: overrides.incidentService || makeIncidentService(),
     installToolService: overrides.installToolService || null,

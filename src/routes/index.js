@@ -28,6 +28,7 @@ const { createFlowsRouter } = require('./flows');
 const { createTopologyRouter } = require('./topology');
 const { createProbesRouter } = require('./probes');
 const { createReportsRouter } = require('./reports');
+const { createIncidentsRouter } = require('./incidents');
 const { createThresholdsRouter } = require('./thresholds');
 const { createInterfacesRouter } = require('./interfaces');
 const { createFleetRouter } = require('./fleet');
@@ -77,6 +78,7 @@ function createApiRouter({
   resultsRepo,
   probeResultsRepo,
   incidentsRepo,
+  incidentCasesRepo,
   thresholdsRepo,
   incidentService,
   installToolService,
@@ -217,6 +219,9 @@ function createApiRouter({
   // on the Overview page; fleet health itself comes from /api/fleet above.
   router.use('/api/dashboard', createDashboardRouter({ incidentsRepo, findingStore, featureGate, planService }));
   if (incidentsRepo && probeResultsRepo) router.use('/api/reports', createReportsRouter({ probeResultsRepo, incidentsRepo, locationsRepo, featureGate, planService, auditLogger }));
+  // First-class incidents (incident_cases) wrapping findings — distinct from the
+  // probe-outage `incidents` used by /api/reports above.
+  if (incidentCasesRepo && findingStore) router.use('/api/incidents', createIncidentsRouter({ incidentCasesRepo, findingStore, auditLogger }));
   if (thresholdsRepo) router.use('/api/thresholds', createThresholdsRouter({ thresholdsRepo, locationsRepo }));
   router.use('/api/interfaces', createInterfacesRouter({ resultsRepo, agentsRepo }));
   // Capacity/trend forecasting (robust Theil–Sen projection + days-to-capacity).

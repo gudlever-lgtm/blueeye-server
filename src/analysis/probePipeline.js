@@ -22,6 +22,7 @@ function createProbePipeline({
   dispatcher = null,
   alertingEnabled = false,
   integrationTrigger = null,
+  incidentCaseService = null,
   licensed = () => true,
   // Optional offline GeoIP/ASN provider — passed to the evaluator so it can map
   // traceroute hop IPs to ASNs for AS-path change detection. null → that check is
@@ -88,6 +89,18 @@ function createProbePipeline({
         }
       } catch (err) {
         logger.error(`probe-analysis: could not save finding (${err.message})`);
+      }
+    }
+
+    // Incident cases: group each produced probe finding into an open incident on
+    // its device (within the window) or open a new one. Sequential + best-effort.
+    if (incidentCaseService && produced.length > 0) {
+      for (const finding of produced) {
+        try {
+          await incidentCaseService.assignFinding(finding);
+        } catch (err) {
+          logger.warn(`probe-analysis: incident assignment failed for ${finding.id} (${err.message})`);
+        }
       }
     }
 

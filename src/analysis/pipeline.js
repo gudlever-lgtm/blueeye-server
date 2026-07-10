@@ -19,6 +19,7 @@ function createAnalysisPipeline({
   extract = extractSamples,
   correlator = null,
   correlationWindowMs = 60000,
+  incidentCaseService = null,
   dispatcher = null,
   alertingEnabled = false,
   integrationTrigger = null,
@@ -114,6 +115,19 @@ function createAnalysisPipeline({
           }
         } catch (err) {
           logger.error(`analysis: could not save finding (${err.message})`);
+        }
+      }
+    }
+    // Incident cases: place each produced finding into an open incident on its
+    // device (grouping within the window) or open a new one. Sequential so that
+    // same-batch findings on one host land in the same incident. Best-effort —
+    // an assignment failure never affects ingestion.
+    if (incidentCaseService && produced.length > 0) {
+      for (const finding of produced) {
+        try {
+          await incidentCaseService.assignFinding(finding);
+        } catch (err) {
+          logger.warn(`analysis: incident assignment failed for ${finding.id} (${err.message})`);
         }
       }
     }

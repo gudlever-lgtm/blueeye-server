@@ -214,6 +214,15 @@ function makeIncidentCasesRepo(overrides = {}) {
   };
 }
 
+// A fake incident-case service (records calls; groups nothing by default).
+function makeIncidentCaseService(overrides = {}) {
+  const calls = [];
+  return {
+    calls,
+    assignFinding: overrides.assignFinding || (async (finding) => { calls.push(finding); return null; }),
+  };
+}
+
 // A fake incident-thresholds repository (in-memory) seeded with the same global
 // defaults as migration 023, so the derivation service behaves as in production.
 function makeIncidentThresholdsRepo(overrides = {}) {
@@ -1343,6 +1352,7 @@ module.exports = {
   makeProbeResultsRepo,
   makeIncidentsRepo,
   makeIncidentCasesRepo,
+  makeIncidentCaseService,
   makeIncidentThresholdsRepo,
   makeIncidentService,
   makeEnrollmentCodesRepo,

@@ -52,6 +52,8 @@ const { createDetector } = require('./analysis/detector');
 const { createAnalysisPipeline } = require('./analysis/pipeline');
 const { createProbePipeline } = require('./analysis/probePipeline');
 const { createCorrelator } = require('./analysis/correlator');
+const { createIncidentCasesRepository } = require('./repositories/incidentCasesRepository');
+const { createIncidentCaseService } = require('./incidentCases/incidentCaseService');
 const { createAssistant } = require('./analysis/assistant');
 const { loadConfig: loadAnalysisConfig } = require('./analysis/config');
 const { createFlowsRepository } = require('./repositories/flowsRepository');
@@ -403,6 +405,12 @@ function start() {
   const detector = createDetector({ baselines, config: analysisConfig });
   const correlator = createCorrelator(); // uses src/analysis/dependency-graph.json
 
+  // Incident cases: first-class incidents wrapping findings. The service groups
+  // each newly-detected finding into an open incident on the same device (within
+  // the correlator window) or opens a new one; wired into both analysis pipelines.
+  const incidentCasesRepo = createIncidentCasesRepository(db);
+  const incidentCaseService = createIncidentCaseService({ incidentCasesRepo, findingStore, logger });
+
   // Alerting: route findings to channels (email/webhook/syslog). Channels are
   // built unconditionally so the test endpoint works; rules/enable live in
   // config. Outgoing sends use Node's fetch / dgram / (lazy) nodemailer.
@@ -441,6 +449,7 @@ function start() {
     findingStore,
     config: analysisConfig,
     correlator,
+    incidentCaseService,
     dispatcher,
     // Live getter (not a snapshot) so a runtime enable in Settings → Alerting applies.
     alertingEnabled: () => alertingConfig.enabled,
@@ -467,6 +476,7 @@ function start() {
     findingStore,
     config: analysisConfig,
     dispatcher,
+    incidentCaseService,
     alertingEnabled: () => alertingConfig.enabled,
     integrationTrigger: integrationsDispatcher,
     licensed: () => featureGate.isFeatureEnabled('analysis'),

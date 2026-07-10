@@ -44,9 +44,23 @@ test('explain rejects an empty/missing question (when enabled)', async () => {
   await assert.rejects(() => a.explain(null, 'h1'), (e) => e.name === 'InvalidQuestion');
 });
 
-test('explain throws AssistantMisconfigured when enabled without an API key', async () => {
-  const a = createAssistant({ config: { ...ENABLED, assistantApiKey: '' }, findingStore: findings(), fetchImpl: okFetch({}) });
+test('explain throws AssistantMisconfigured when a key-required provider has no API key', async () => {
+  // Mistral (and other hosted presets) require a key: enabled without one is misconfigured.
+  const a = createAssistant({ config: { ...ENABLED, assistantProvider: 'mistral', assistantApiKey: '' }, findingStore: findings(), fetchImpl: okFetch({}) });
   await assert.rejects(() => a.explain('what is happening?', 'h1'), (e) => e.name === 'AssistantMisconfigured');
+});
+
+test('explain works for a keyless self-hosted provider (no API key required)', async () => {
+  // Ollama is self-hosted: no key needed, and no Authorization header is sent.
+  const fetchImpl = okFetch({ choices: [{ message: { content: 'ok' } }] });
+  const a = createAssistant({
+    config: { ...ENABLED, assistantProvider: 'ollama', assistantApiKey: '', assistantModel: 'llama3.1' },
+    findingStore: findings(), fetchImpl,
+  });
+  const out = await a.explain('what is happening?', 'h1');
+  assert.equal(out.answer, 'ok');
+  assert.equal(fetchImpl.calls[0].url, 'http://localhost:11434/v1/chat/completions');
+  assert.equal(fetchImpl.calls[0].opts.headers.Authorization, undefined); // no bearer when keyless
 });
 
 test('explain returns the trimmed answer and the context it used', async () => {
@@ -125,10 +139,16 @@ test('buildContext caps to maxFindings, keeps only summary fields, survives stor
 test('loadConfig exposes assistant defaults (off, Mistral) and honours overrides', () => {
   const d = loadConfig({});
   assert.equal(d.assistantEnabled, false);
+  assert.equal(d.assistantProvider, 'mistral'); // inferred from the default (Mistral) URL
   assert.equal(d.assistantApiKey, '');
   assert.equal(d.assistantModel, 'mistral-small-latest');
   assert.match(d.assistantBaseUrl, /mistral/);
   assert.equal(d.assistantMaxFindings, 20);
+
+  // A non-preset ANALYSIS_ASSISTANT_URL is treated as a custom provider so the
+  // configured endpoint is honoured (backward compatibility for env-only installs).
+  assert.equal(loadConfig({ ANALYSIS_ASSISTANT_URL: 'https://llm.internal/v1/chat' }).assistantProvider, 'custom');
+  assert.equal(loadConfig({ ANALYSIS_ASSISTANT_PROVIDER: 'ollama' }).assistantProvider, 'ollama');
 
   const o = loadConfig({
     ANALYSIS_ASSISTANT_ENABLED: 'true',

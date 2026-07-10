@@ -89,12 +89,31 @@ runtime in the dashboard (**Settings → Analysis → AI assistant**, admin) —
 stored setting overrides the env defaults and applies without a restart. Once
 enabled you can ask a question about a host; the assistant builds a small context
 from the most recent findings (summary fields only — no raw data or secrets) and
-queries Mistral. When disabled the endpoint returns `403`. The same assistant also
+queries the configured provider. When disabled the endpoint returns `403`. The same assistant also
 powers the **Explain with AI** button on an agent's **Diagnose** result — turning
 the (bounded) flow-pipeline snapshot, plus the host's recent findings/probe-health,
 into a plain-language read-out and next step. The API key is stored in
 `app_settings` but never returned by the API (reads expose only whether a key is
 set, plus a masked hint).
+
+**Provider selection.** The assistant speaks the OpenAI-compatible
+`/v1/chat/completions` API, so the provider is swappable. Pick one in **Settings →
+Analysis → AI assistant**:
+
+| Provider | Endpoint | Key | Notes |
+| --- | --- | --- | --- |
+| `mistral` | `api.mistral.ai` | required | Default. EU. |
+| `scaleway` | `api.scaleway.ai` | required | EU (France). |
+| `ollama` | `localhost:11434` | none | Self-hosted / on-box. |
+| `custom` ("Other") | admin-supplied | optional | Any other OpenAI-compatible endpoint. |
+
+Every option must be **EU-hosted or self-hosted** (see `CLAUDE.md` — no US
+vendors). The `custom` provider takes a base URL you enter yourself; a private /
+loopback target is allowed on purpose (running an LLM on-box is a supported use).
+The preset catalog lives in `src/analysis/assistantProviders.js`. When
+`ANALYSIS_ASSISTANT_PROVIDER` is unset the provider is inferred from
+`ANALYSIS_ASSISTANT_URL` (a preset match, else `custom`), so existing env-only
+installs keep working unchanged.
 
 ## REST API
 
@@ -129,9 +148,10 @@ panel. New findings appear live via WebSocket and can also be retrieved via REST
 | `ANALYSIS_MIN_SAMPLES` | `200` | Points before a baseline is used. |
 | `ANALYSIS_BASELINE_CACHE_PATH` | `./.analysis-baselines.json` | Where baselines are persisted. |
 | `ANALYSIS_ASSISTANT_ENABLED` | `false` | Enable the AI assistant (opt-in). |
-| `ANALYSIS_ASSISTANT_API_KEY` | – | Key (fallback: `MISTRAL_API_KEY`). |
+| `ANALYSIS_ASSISTANT_PROVIDER` | inferred from URL | Provider preset: `mistral`, `scaleway`, `ollama` or `custom`. |
+| `ANALYSIS_ASSISTANT_API_KEY` | – | Key (fallback: `MISTRAL_API_KEY`); not needed for keyless self-hosted providers. |
 | `ANALYSIS_ASSISTANT_MODEL` | `mistral-small-latest` | Model. |
-| `ANALYSIS_ASSISTANT_URL` | Mistral chat-completions | Provider endpoint. |
+| `ANALYSIS_ASSISTANT_URL` | Mistral chat-completions | Endpoint (used for the `custom` provider; presets use their own). |
 | `ANALYSIS_ASSISTANT_MAX_FINDINGS` | `20` | Max findings in context. |
 | `ANALYSIS_ASSISTANT_TIMEOUT_MS` | `20000` | Timeout for the provider call. |
 
@@ -141,8 +161,9 @@ panel. New findings appear live via WebSocket and can also be retrieved via REST
 > (`PUT /api/settings/analysis`). Overrides are stored in `app_settings`, layered
 > on top of env defaults and re-applied at startup; the detector reads thresholds
 > **per evaluation**, so changes take effect without a restart. The AI assistant's
-> enable flag, API key and model are runtime-editable the same way
-> (`PUT /api/settings/assistant`); other secrets remain env-controlled.
+> enable flag, provider, API key, model and custom endpoint are runtime-editable
+> the same way (`PUT /api/settings/assistant`); other secrets remain
+> env-controlled.
 
 ## Probe-based findings
 

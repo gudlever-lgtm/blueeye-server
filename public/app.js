@@ -908,7 +908,7 @@ const PAGE_INFO = {
       el('h4', {}, 'Acknowledgement'),
       el('p', {}, 'Operators and administrators can acknowledge a finding once it has been seen/handled.'),
       el('h4', {}, 'AI assistant'),
-      el('p', {}, 'If enabled (opt-in) you can ask in natural language — the assistant replies based on the latest findings, not raw data. Turn it on and pick the model under ', settingsLink('analyse', 'Settings → Analysis'), '.'),
+      el('p', {}, 'If enabled (opt-in) you can ask in natural language — the assistant replies based on the latest findings, not raw data. Turn it on and pick the provider (Mistral or another EU / self-hosted endpoint) and model under ', settingsLink('analyse', 'Settings → Analysis'), '.'),
       el('p', { class: 'muted' }, 'New findings appear live via WebSocket and can also be fetched via REST.'),
     ],
   },
@@ -7823,14 +7823,26 @@ function analyseSettingsCard(a) {
   });
 }
 
-// AI assistant (opt-in): admin-editable enable flag, API key and model — instead
-// of env-only. The key is write-only: the API only reports whether one is set
-// (apiKeySet + a masked hint), so the field stays blank and a typed value
-// replaces the stored key. The assistant calls Mistral (EU).
+// AI assistant (opt-in): admin-editable enable flag, PROVIDER, API key, model and
+// (for the "Other"/custom provider) endpoint URL — instead of env-only. The key is
+// write-only: the API only reports whether one is set (apiKeySet + a masked hint),
+// so the field stays blank and a typed value replaces the stored key. The provider
+// dropdown is data-driven from the server catalog (a.providers); every option is
+// EU-hosted or self-hosted.
 function assistantSettingsCard(a) {
-  const v = a || { enabled: false, model: '', apiKeySet: false, apiKeyHint: '' };
+  const v = a || { enabled: false, provider: 'mistral', model: '', baseUrl: '', apiKeySet: false, apiKeyHint: '', providers: [] };
+  const providers = (Array.isArray(v.providers) && v.providers.length)
+    ? v.providers
+    : [{ id: 'mistral', label: 'Mistral AI (EU)', defaultModel: 'mistral-small-latest', keyRequired: true, custom: false }];
+  const provById = (id) => providers.find((p) => p.id === id) || providers[0];
+
   const enabledI = el('input', { type: 'checkbox' });
+  const providerI = el('select', {});
+  providers.forEach((p) => providerI.append(el('option', { value: p.id }, p.label)));
   const modelI = el('input', { type: 'text', placeholder: 'mistral-small-latest' });
+  const baseUrlI = el('input', { type: 'text', placeholder: 'https://…/v1/chat/completions' });
+  const baseUrlField = el('label', { class: 'set-field' }, el('span', {}, 'Endpoint URL'), baseUrlI,
+    el('span', { class: 'muted small' }, 'OpenAI-compatible chat-completions URL for the custom provider. Keep it EU-hosted or self-hosted.'));
   const keyI = el('input', { type: 'password', autocomplete: 'new-password', spellcheck: 'false' });
   const clearI = el('input', { type: 'checkbox' });
   const clearRow = el('label', { class: 'inline muted small' }, clearI, el('span', {}, 'Remove the stored key'));
@@ -7838,22 +7850,46 @@ function assistantSettingsCard(a) {
   const err = el('p', { class: 'error' });
   const btn = el('button', { class: 'small' }, 'Save');
 
+  function refresh() {
+    const p = provById(providerI.value);
+    baseUrlField.classList.toggle('hidden', !p.custom);
+    modelI.placeholder = p.defaultModel || 'model id';
+    if (p.custom) note.textContent = 'Calls your custom OpenAI-compatible endpoint. Keep it EU-hosted or self-hosted; the key (if any) is stored on the server and never shown again.';
+    else if (!p.keyRequired) note.textContent = `Calls ${p.label}. No API key is needed for a local endpoint.`;
+    else if (enabledI.checked && !v.apiKeySet && keyI.value.trim() === '') note.textContent = '⚠ Enabled but no API key set — add one above, or the assistant returns an error.';
+    else note.textContent = `Calls ${p.label}. The key is stored in the server database and is never shown again.`;
+  }
+
   function applyState(s) {
     enabledI.checked = !!s.enabled;
+    if (s.apiKeySet !== undefined) v.apiKeySet = s.apiKeySet;
+    providerI.value = providers.some((p) => p.id === s.provider) ? s.provider : providers[0].id;
+    const p = provById(providerI.value);
     modelI.value = s.model || '';
+    baseUrlI.value = (p.custom && s.baseUrl) ? s.baseUrl : '';
     keyI.value = '';
-    keyI.placeholder = s.apiKeySet ? `Key set (${s.apiKeyHint}) — type to replace` : 'Paste an API key to enable';
-    clearRow.classList.toggle('hidden', !s.apiKeySet);
+    keyI.placeholder = v.apiKeySet ? `Key set (${s.apiKeyHint || ''}) — type to replace` : 'Paste an API key to enable';
+    clearRow.classList.toggle('hidden', !v.apiKeySet);
     clearI.checked = false;
-    note.textContent = (s.enabled && !s.apiKeySet)
-      ? '⚠ Enabled but no API key set — add one above, or the assistant returns an error.'
-      : 'Calls Mistral (EU). The key is stored in the server database and is never shown again.';
+    refresh();
   }
   applyState(v);
 
+  // Switching provider pre-fills the default model when the field is empty, and
+  // shows/hides the custom endpoint field.
+  providerI.addEventListener('change', () => {
+    const p = provById(providerI.value);
+    if (modelI.value.trim() === '' && p.defaultModel) modelI.value = p.defaultModel;
+    refresh();
+  });
+  enabledI.addEventListener('change', refresh);
+  keyI.addEventListener('input', refresh);
+
   async function save() {
     err.textContent = ''; btn.disabled = true;
-    const body = { enabled: enabledI.checked, model: modelI.value.trim() || 'mistral-small-latest' };
+    const p = provById(providerI.value);
+    const body = { enabled: enabledI.checked, provider: providerI.value, model: modelI.value.trim() || (p.defaultModel || '') };
+    if (p.custom) body.baseUrl = baseUrlI.value.trim();
     if (clearI.checked) body.clearApiKey = true;
     else if (keyI.value.trim() !== '') body.apiKey = keyI.value.trim();
     try {
@@ -7869,11 +7905,14 @@ function assistantSettingsCard(a) {
     el('div', { class: 'form-grid' },
       el('label', { class: 'set-field' }, el('span', {}, 'Assistant enabled'), enabledI,
         el('span', { class: 'muted small' }, 'Opt-in natural-language assistant: host Q&A + per-location summaries.')),
+      el('label', { class: 'set-field' }, el('span', {}, 'Provider'), providerI,
+        el('span', { class: 'muted small' }, 'Which LLM endpoint to call. All options are EU-hosted or self-hosted.')),
+      baseUrlField,
       el('label', { class: 'set-field' }, el('span', {}, 'API key'), keyI,
-        el('span', { class: 'muted small' }, 'Mistral API key. Write-only — stored on the server, never displayed again.')),
+        el('span', { class: 'muted small' }, 'Provider API key. Write-only — stored on the server, never displayed again.')),
       clearRow,
       el('label', { class: 'set-field' }, el('span', {}, 'Model'), modelI,
-        el('span', { class: 'muted small' }, 'Provider model id. Default mistral-small-latest.')),
+        el('span', { class: 'muted small' }, 'Provider model id (a per-provider default is used if left blank).')),
       note, err, el('div', { class: 'form-actions' }, btn)));
 }
 

@@ -2,39 +2,19 @@
 
 const { buildTimeline } = require('./timeline');
 const { computeConfigDiff } = require('../config/diff');
+const { maskIps, maskSecrets, maskConfigLine } = require('../config/mask');
 
 // Builds the MASKED, aggregated context for the incident query-assistant
 // (POST /api/incidents/:id/ask — the Mistral call itself is a later step). It
 // reuses the same principle as the existing NIS2-draft / flow advisory: only
 // aggregated and masked data ever leaves the process. In particular RAW device
 // config text is NEVER forwarded — only masked diff summaries — and secret-
-// bearing config lines and IP literals are redacted.
+// bearing config lines and IP literals are redacted (via ../config/mask).
 
 // Max changed config lines forwarded per config change (aggregation cap).
 const MAX_CHANGED_LINES = 40;
 // Max timeline events forwarded.
 const MAX_TIMELINE = 100;
-
-// IPv4 address / CIDR masker — same expression the assistant already uses.
-const ANY_IP_RE = /\b(?:\d{1,3}\.){3}\d{1,3}(?:\/\d{1,2})?\b/g;
-function maskIps(s) {
-  return typeof s === 'string' ? s.replace(ANY_IP_RE, '[host]') : s;
-}
-
-// Redacts the value part of a secret-bearing device-config line (password,
-// enable secret, snmp community, pre-shared key, key-string, …) from the
-// keyword to end of line. Over-masking is intentional — better to lose signal
-// than leak a credential.
-const SECRET_KEYWORD_RE =
-  /(\b(?:password|passwd|secret|community|pre-shared-key|pre-shared|psk|credential|private-key|key-string|auth-key|wpa-psk)\b\s*[:= ]?\s*).+$/i;
-function maskSecrets(line) {
-  return typeof line === 'string' ? line.replace(SECRET_KEYWORD_RE, '$1[redacted]') : line;
-}
-
-// A single changed config line, safe to forward: secrets then IPs masked.
-function maskConfigLine(line) {
-  return maskIps(maskSecrets(line));
-}
 
 // Pure assembly + masking. Inputs are already-read rows; output is the object a
 // later step hands to Mistral. No raw config_text is ever included.

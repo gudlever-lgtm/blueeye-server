@@ -7,6 +7,7 @@ const { ROLES } = require('../auth/roles');
 const { canTransition, requiresComment, isStatus } = require('../incidentCases/stateMachine');
 const { validateStatusPatch } = require('../validation/incidentCaseValidation');
 const { buildTimeline } = require('../incidentCases/timeline');
+const { maskedDiff } = require('../config/configContext');
 
 const SEVERITIES = ['INFO', 'WARN', 'CRIT'];
 
@@ -35,6 +36,7 @@ function createIncidentsRouter({
   auditLogger = null,
   auditEventsRepo = null,
   auditLogRepo = null,
+  configSnapshotsRepo = null,
 }) {
   const router = express.Router();
   const reader = requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN);
@@ -105,6 +107,40 @@ function createIncidentsRouter({
 
     const events = buildTimeline({ anomalies, configChanges, statusChanges });
     return res.json({ incidentId: id, events });
+  }));
+
+  // GET /api/incidents/:id/config-context — the device-config change suspected to
+  // have triggered this incident (Fase 3 pt 4/5): the linked change, its masked
+  // + risk-classified diff, and "suspected trigger N minutes before". Contains
+  // device-config, so operator/admin only. Returns nulls when nothing is linked.
+  router.get('/:id/config-context', requireAuth, writer, asyncHandler(async (req, res) => {
+    const id = parseIncidentId(req.params.id);
+    if (id === null) return res.status(400).json({ error: 'id must be a positive integer' });
+    const incident = await incidentCasesRepo.findById(id);
+    if (!incident) return res.status(404).json({ error: 'Incident not found' });
+
+    const empty = { incidentId: id, configChangeId: incident.configChangeId ?? null, change: null, diff: null, suspectedTrigger: null };
+    if (!incident.configChangeId || !configSnapshotsRepo) return res.json(empty);
+
+    const change = await configSnapshotsRepo.findById(incident.configChangeId);
+    if (!change) return res.json(empty);
+
+    const prev = await configSnapshotsRepo.previousBefore(change.deviceId, change.id);
+    const diff = maskedDiff(prev ? prev.configText : null, change.configText);
+    const minutesBefore = incident.firstEventAt && change.capturedAt
+      ? Math.max(0, Math.round((new Date(incident.firstEventAt).getTime() - new Date(change.capturedAt).getTime()) / 60000))
+      : null;
+
+    return res.json({
+      incidentId: id,
+      configChangeId: change.id,
+      change: { id: change.id, deviceId: change.deviceId, capturedAt: change.capturedAt, capturedVia: change.capturedVia },
+      diff,
+      suspectedTrigger: minutesBefore == null ? null : {
+        minutesBefore,
+        note: `Formodet udløst af konfigurationsændring ${minutesBefore} minutter forinden.`,
+      },
+    });
   }));
 
   // PATCH /api/incidents/:id — status transition. operator/admin only.

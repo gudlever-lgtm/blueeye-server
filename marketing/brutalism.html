@@ -1,0 +1,495 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BlueEye — On-Prem Network Monitoring &amp; NIS2 Compliance | Buy a License</title>
+<meta name="description" content="BlueEye is on-prem, EU-hosted network monitoring with explainable anomaly detection and a built-in NIS2 compliance module. No SaaS. No telemetry. Buy a license.">
+<style>
+  /* ============================================================
+     BlueEye — Sales page · Example A: TACTILE BRUTALISM
+     Self-contained. No build step, no external fonts/CDN/JS libs.
+     Raw borders, hard offset shadows, chunky pressable controls.
+     ============================================================ */
+  :root{
+    --ink:#0a0a0a;
+    --paper:#f3efe3;
+    --paper-2:#e9e3d1;
+    --blue:#1f38ff;
+    --blue-deep:#0a1cc9;
+    --cyan:#00e0d5;
+    --amber:#ffcf2e;
+    --pink:#ff4d80;
+    --line:4px;
+    --shadow:8px 8px 0 var(--ink);
+    --shadow-sm:5px 5px 0 var(--ink);
+    --mono:"DejaVu Sans Mono","Courier New",monospace;
+    --sans:"Arial Black","Helvetica Neue",Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0;background:var(--paper);color:var(--ink);
+    font-family:var(--sans);line-height:1.35;
+    -webkit-font-smoothing:none;
+  }
+  .wrap{max-width:1180px;margin:0 auto;padding:0 20px}
+  a{color:inherit}
+  h1,h2,h3{margin:0;text-transform:uppercase;letter-spacing:-.5px;font-weight:900}
+  p{margin:0}
+  .mono{font-family:var(--mono);text-transform:none;letter-spacing:0}
+
+  /* ---- pressable button ---- */
+  .btn{
+    display:inline-block;cursor:pointer;text-decoration:none;
+    border:var(--line) solid var(--ink);background:var(--blue);color:#fff;
+    font-family:var(--sans);text-transform:uppercase;font-weight:900;
+    font-size:16px;letter-spacing:.5px;padding:14px 22px;
+    box-shadow:var(--shadow-sm);transition:transform .05s,box-shadow .05s;
+  }
+  .btn:hover{transform:translate(-1px,-1px);box-shadow:7px 7px 0 var(--ink)}
+  .btn:active{transform:translate(5px,5px);box-shadow:0 0 0 var(--ink)}
+  .btn.alt{background:var(--amber);color:var(--ink)}
+  .btn.ghost{background:var(--paper);color:var(--ink)}
+  .btn.big{font-size:20px;padding:18px 30px}
+
+  /* ---- ticker ---- */
+  .ticker{
+    background:var(--ink);color:var(--amber);border-bottom:var(--line) solid var(--ink);
+    overflow:hidden;white-space:nowrap;font-family:var(--mono);font-size:14px;
+    letter-spacing:1px;padding:8px 0;
+  }
+  .ticker span{display:inline-block;padding-left:100%;animation:scroll 26s linear infinite}
+  .ticker b{color:var(--cyan);padding:0 4px}
+  @keyframes scroll{from{transform:translateX(0)}to{transform:translateX(-100%)}}
+
+  /* ---- nav ---- */
+  nav{
+    position:sticky;top:0;z-index:50;background:var(--paper);
+    border-bottom:var(--line) solid var(--ink);
+    display:flex;align-items:center;justify-content:space-between;
+    padding:12px 20px;gap:14px;flex-wrap:wrap;
+  }
+  .brand{display:flex;align-items:center;gap:12px;font-size:22px;font-weight:900;text-transform:uppercase}
+  .logo{
+    width:38px;height:38px;border:var(--line) solid var(--ink);background:var(--blue);
+    display:grid;place-items:center;box-shadow:3px 3px 0 var(--ink);
+  }
+  .logo::after{content:"";width:14px;height:14px;border-radius:50%;background:var(--paper);box-shadow:inset 0 0 0 4px var(--ink)}
+  .navlinks{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+  .navlinks a{
+    font-family:var(--mono);font-size:13px;text-decoration:none;padding:8px 10px;
+    border:3px solid transparent;text-transform:uppercase;letter-spacing:.5px;
+  }
+  .navlinks a:hover{border:3px solid var(--ink);background:var(--amber)}
+
+  /* ---- hero ---- */
+  .hero{padding:56px 0 40px;position:relative;overflow:hidden}
+  .hero .grid{display:grid;grid-template-columns:1.15fr .85fr;gap:30px;align-items:start}
+  .tag{
+    display:inline-block;font-family:var(--mono);font-size:13px;background:var(--cyan);
+    border:var(--line) solid var(--ink);padding:6px 12px;text-transform:uppercase;
+    box-shadow:var(--shadow-sm);margin-bottom:20px;letter-spacing:1px;
+  }
+  .hero h1{font-size:clamp(38px,7vw,78px);line-height:.92;margin-bottom:18px}
+  .hero h1 mark{background:var(--amber);padding:0 6px;box-decoration-break:clone;-webkit-box-decoration-break:clone}
+  .hero .lead{font-family:var(--mono);text-transform:none;font-size:18px;line-height:1.55;max-width:52ch;margin-bottom:26px}
+  .cta-row{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:22px}
+  .trust{display:flex;gap:8px;flex-wrap:wrap;font-family:var(--mono);font-size:12px}
+  .trust span{border:3px solid var(--ink);padding:5px 9px;background:var(--paper-2)}
+
+  /* hero card: fake terminal / finding */
+  .panel{
+    border:var(--line) solid var(--ink);background:#fff;box-shadow:var(--shadow);
+  }
+  .panel .bar{
+    background:var(--ink);color:#fff;font-family:var(--mono);font-size:13px;
+    padding:8px 12px;display:flex;justify-content:space-between;align-items:center;
+  }
+  .dots{display:flex;gap:6px}
+  .dots i{width:11px;height:11px;border-radius:50%;display:block;border:2px solid #fff}
+  .dots i:nth-child(1){background:var(--pink)}
+  .dots i:nth-child(2){background:var(--amber)}
+  .dots i:nth-child(3){background:var(--cyan)}
+  .term{font-family:var(--mono);font-size:13.5px;padding:16px;line-height:1.7;text-transform:none}
+  .term .k{color:var(--blue-deep);font-weight:900}
+  .term .warn{background:var(--amber);padding:0 4px}
+  .term .ok{color:#0a8a2a;font-weight:900}
+  .term .dim{color:#666}
+  .finding{
+    border:3px solid var(--ink);margin-top:12px;padding:10px;background:var(--paper);
+  }
+  .finding .sev{display:inline-block;background:var(--pink);color:#fff;font-family:var(--sans);
+    font-size:11px;padding:2px 7px;border:2px solid var(--ink);text-transform:uppercase}
+
+  /* ---- section frame ---- */
+  section{padding:54px 0;border-top:var(--line) solid var(--ink)}
+  .kicker{font-family:var(--mono);font-size:13px;letter-spacing:2px;text-transform:uppercase;
+    display:inline-block;background:var(--ink);color:var(--amber);padding:4px 10px;margin-bottom:14px}
+  .sec-title{font-size:clamp(28px,4.6vw,46px);line-height:1;margin-bottom:14px}
+  .sec-sub{font-family:var(--mono);text-transform:none;font-size:16px;max-width:60ch;line-height:1.6;color:#222}
+
+  /* ---- value cards ---- */
+  .cards{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;margin-top:34px}
+  .card{
+    border:var(--line) solid var(--ink);background:#fff;padding:20px;box-shadow:var(--shadow-sm);
+    transition:transform .08s,box-shadow .08s;
+  }
+  .card:hover{transform:translate(-2px,-2px);box-shadow:9px 9px 0 var(--ink)}
+  .card .ic{
+    width:52px;height:52px;border:var(--line) solid var(--ink);display:grid;place-items:center;
+    font-size:26px;margin-bottom:14px;background:var(--cyan)
+  }
+  .card:nth-child(2n) .ic{background:var(--amber)}
+  .card:nth-child(3n) .ic{background:var(--pink)}
+  .card h3{font-size:20px;margin-bottom:8px}
+  .card p{font-family:var(--mono);text-transform:none;font-size:14px;line-height:1.6;color:#222}
+
+  /* ---- how it works ---- */
+  .steps{display:grid;grid-template-columns:repeat(4,1fr);gap:18px;margin-top:34px}
+  .step{border:var(--line) solid var(--ink);background:var(--paper-2);padding:18px;position:relative;box-shadow:var(--shadow-sm)}
+  .step .num{font-size:44px;font-weight:900;line-height:1}
+  .step h3{font-size:16px;margin:8px 0}
+  .step p{font-family:var(--mono);text-transform:none;font-size:13px;line-height:1.55}
+
+  /* ---- pricing ---- */
+  #pricing{background:var(--ink);color:var(--paper)}
+  #pricing .kicker{background:var(--amber);color:var(--ink)}
+  #pricing .sec-sub{color:#d9d4c4}
+  .tiers{display:grid;grid-template-columns:repeat(5,1fr);gap:16px;margin-top:34px}
+  .tier{
+    border:var(--line) solid var(--paper);background:#111;padding:18px;display:flex;flex-direction:column;
+    box-shadow:6px 6px 0 var(--blue);
+  }
+  .tier.feat{background:var(--paper);color:var(--ink);box-shadow:6px 6px 0 var(--amber)}
+  .tier .name{font-size:22px;margin-bottom:4px}
+  .tier .who{font-family:var(--mono);text-transform:none;font-size:12px;color:#9a95c8;min-height:34px}
+  .tier.feat .who{color:#555}
+  .tier .price{font-family:var(--mono);font-size:15px;margin:12px 0;border-top:3px solid currentColor;border-bottom:3px solid currentColor;padding:10px 0}
+  .tier .price b{font-size:26px}
+  .tier ul{list-style:none;padding:0;margin:0 0 16px;font-family:var(--mono);text-transform:none;font-size:13px;line-height:1.5;flex:1}
+  .tier li{padding:5px 0;border-bottom:2px dotted #444;display:flex;gap:8px}
+  .tier.feat li{border-bottom:2px dotted #bbb}
+  .tier li::before{content:"■";color:var(--cyan)}
+  .tier.feat li::before{color:var(--blue)}
+  .badge-pop{
+    position:absolute;transform:rotate(6deg) translate(0,-50%);top:0;right:-6px;
+    background:var(--pink);color:#fff;border:3px solid var(--paper);font-family:var(--mono);
+    font-size:11px;padding:4px 8px;text-transform:uppercase;box-shadow:3px 3px 0 rgba(0,0,0,.4)
+  }
+  .tier .btn{width:100%;text-align:center}
+
+  /* feature matrix note */
+  .matrix{margin-top:26px;border:var(--line) solid var(--paper);overflow-x:auto}
+  table{border-collapse:collapse;width:100%;font-family:var(--mono);font-size:13px;text-transform:none}
+  th,td{border:2px solid #333;padding:9px 12px;text-align:center}
+  th{background:#000;color:var(--amber);text-transform:uppercase;font-size:12px}
+  td:first-child,th:first-child{text-align:left;background:#151515}
+  .yes{color:var(--cyan);font-weight:900}
+  .no{color:#666}
+
+  /* ---- compliance strip ---- */
+  .comply{display:grid;grid-template-columns:1.1fr .9fr;gap:26px;margin-top:30px;align-items:center}
+  .comply .box{border:var(--line) solid var(--ink);background:#fff;padding:22px;box-shadow:var(--shadow-sm)}
+  .comply h3{font-size:22px;margin-bottom:10px}
+  .comply ul{margin:12px 0 0;padding-left:18px;font-family:var(--mono);text-transform:none;font-size:14px;line-height:1.7}
+  .clock{display:flex;gap:10px;flex-wrap:wrap;margin-top:16px}
+  .clock div{border:3px solid var(--ink);padding:10px 12px;background:var(--amber);font-family:var(--mono);text-align:center}
+  .clock b{display:block;font-size:24px;font-family:var(--sans)}
+
+  /* ---- big CTA ---- */
+  .final{background:var(--blue);color:#fff;text-align:center}
+  .final .sec-title{font-size:clamp(32px,6vw,64px)}
+  .final .kicker{background:#fff;color:var(--blue)}
+  .final p{font-family:var(--mono);text-transform:none;font-size:17px;max-width:50ch;margin:14px auto 26px}
+
+  /* ---- footer ---- */
+  footer{background:var(--ink);color:var(--paper);padding:40px 0;font-family:var(--mono);font-size:13px}
+  .fgrid{display:grid;grid-template-columns:2fr 1fr 1fr;gap:24px}
+  footer a{color:var(--cyan);text-decoration:none}
+  footer a:hover{text-decoration:underline}
+  .fnote{margin-top:26px;border-top:2px solid #444;padding-top:14px;color:#8a8578;display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}
+
+  @media(max-width:960px){
+    .hero .grid,.comply{grid-template-columns:1fr}
+    .cards,.steps{grid-template-columns:1fr 1fr}
+    .tiers{grid-template-columns:1fr 1fr}
+  }
+  @media(max-width:600px){
+    .cards,.steps,.tiers{grid-template-columns:1fr}
+    .navlinks{display:none}
+  }
+</style>
+</head>
+<body>
+
+<div class="ticker" aria-hidden="true"><span>ON-PREM ONLY <b>///</b> NO SAAS <b>///</b> NO TELEMETRY <b>///</b> EU DATA SOVEREIGNTY <b>///</b> METADATA-ONLY · NEVER DPI <b>///</b> NIS2 READY <b>///</b> EXPLAINABLE ANOMALY DETECTION <b>///</b> AIR-GAP LICENSING <b>///</b> OFFLINE-SIGNED PROOFS <b>///</b> ON-PREM ONLY <b>///</b> NO SAAS <b>///</b> NO TELEMETRY <b>///</b> EU DATA SOVEREIGNTY <b>///</b></span></div>
+
+<nav>
+  <div class="brand"><span class="logo" aria-hidden="true"></span> BlueEye</div>
+  <div class="navlinks">
+    <a href="#why">Why</a>
+    <a href="#features">Features</a>
+    <a href="#how">How it works</a>
+    <a href="#compliance">NIS2</a>
+    <a href="#pricing">Licenses</a>
+  </div>
+  <a href="#pricing" class="btn alt" style="font-size:14px;padding:10px 16px">Buy a license →</a>
+</nav>
+
+<header class="hero">
+  <div class="wrap">
+    <div class="grid">
+      <div>
+        <span class="tag">Self-hosted · Made in the EU</span>
+        <h1>See your <mark>whole network</mark>. Own <mark>all the data</mark>.</h1>
+        <p class="lead">BlueEye is on-prem network monitoring with explainable anomaly detection and a built-in <b>NIS2 compliance module</b>. It runs entirely on your infrastructure — no cloud, no telemetry, no US SDKs. Metadata only. Never payload.</p>
+        <div class="cta-row">
+          <a href="#pricing" class="btn big">Get a license</a>
+          <a href="#how" class="btn ghost big">See how it works</a>
+        </div>
+        <div class="trust">
+          <span>■ 100% on-prem</span>
+          <span>■ Metadata-only</span>
+          <span>■ Ed25519 offline licensing</span>
+          <span>■ MIT/BSD deps</span>
+        </div>
+      </div>
+
+      <div class="panel" role="img" aria-label="Example BlueEye finding">
+        <div class="bar"><span>blueeye · analysis</span><span class="dots"><i></i><i></i><i></i></span></div>
+        <div class="term">
+<span class="dim"># local + explainable — no cloud, no ML black box</span><br>
+<span class="k">agents</span> online: <span class="ok">42/42</span>  ·  <span class="k">license</span>: <span class="ok">PROFESSIONAL</span><br>
+<span class="k">detector</span>: median + MAD z-score<br>
+<div class="finding">
+  <span class="sev">HIGH</span> &nbsp;<b>Unusual egress to ASN 12345</b><br>
+  <span class="dim">host</span> 10.0.4.19 → 203.0.113.7 :443<br>
+  <span class="dim">why:</span> bytes_out z=<span class="warn">6.8</span> vs 30-day median<br>
+  <span class="dim">evidence:</span> 5-tuple, ports, timings (no payload)<br>
+  <span class="dim">geo:</span> destination outside EU · <span class="warn">flagged</span>
+</div>
+<span class="dim" style="font-size:12px">Every finding ships an explanation + evidence.</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</header>
+
+<section id="why">
+  <div class="wrap">
+    <span class="kicker">Why teams switch</span>
+    <h2 class="sec-title">Monitoring that never leaves the building.</h2>
+    <p class="sec-sub">Most monitoring tools ship your traffic metadata to someone else's cloud. BlueEye doesn't. It's a single on-prem server plus lightweight agents — you keep the data, the keys, and the audit trail.</p>
+    <div class="cards">
+      <div class="card"><div class="ic">🏢</div><h3>On-prem by design</h3><p>One Node.js + MySQL server on your own hardware. No SaaS account, no outbound telemetry, no third-party data processor to vet.</p></div>
+      <div class="card"><div class="ic">🕵️</div><h3>Privacy first</h3><p>Metadata only — ports, ASN, timings, the 5-tuple. Never deep packet inspection. Private/RFC1918 addresses are never geolocated.</p></div>
+      <div class="card"><div class="ic">🧮</div><h3>Explainable analysis</h3><p>Robust statistics (median + MAD z-score), not an opaque ML model. Every finding carries a plain-language reason and its evidence.</p></div>
+      <div class="card"><div class="ic">🇪🇺</div><h3>EU sovereignty</h3><p>European or self-hosted map tiles, GeoIP, fonts. No US-based vendors in the stack. Built for GDPR and data-residency requirements.</p></div>
+      <div class="card"><div class="ic">🛰️</div><h3>Air-gap ready</h3><p>Licenses verify offline with an embedded Ed25519 public key. Signed offline license files run in fully disconnected sites.</p></div>
+      <div class="card"><div class="ic">📊</div><h3>NIS2 built in</h3><p>Risk register, control evidence, incident deadlines and signed management reports — compliance isn't a bolt-on, it's a tab.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="features">
+  <div class="wrap">
+    <span class="kicker">What's in the box</span>
+    <h2 class="sec-title">One platform. Every layer of visibility.</h2>
+    <p class="sec-sub">Lightweight agents report traffic, flows, system health and active probes to the server over an authenticated WebSocket. The dashboard turns it into answers.</p>
+    <div class="cards">
+      <div class="card"><div class="ic">🌍</div><h3>Geo &amp; ASN map</h3><p>See internal hosts and external destinations on a European map. Drill into a country or ASN to the exact flows and findings behind it.</p></div>
+      <div class="card"><div class="ic">🚨</div><h3>Alerting</h3><p>Route findings to email, webhook or syslog with per-channel rules. Test any channel with one click before you rely on it.</p></div>
+      <div class="card"><div class="ic">🤖</div><h3>Opt-in AI assistant</h3><p>An optional, license-gated assistant explains a finding in context — on your terms, disabled by default, fully auditable.</p></div>
+      <div class="card"><div class="ic">🗺️</div><h3>Topology &amp; paths</h3><p>Path visualization and topology views show how traffic actually moves between locations, agents and destinations.</p></div>
+      <div class="card"><div class="ic">🔐</div><h3>RBAC + audit</h3><p>Three roles (viewer / operator / admin), JWT sessions, bcrypt hashes, and a change trail on every compliance action.</p></div>
+      <div class="card"><div class="ic">📁</div><h3>Export anything</h3><p>CSV or JSON export on findings, geo, agents, locations and traffic. Print-ready HTML reports become PDFs in one step.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="how">
+  <div class="wrap">
+    <span class="kicker">Live in an afternoon</span>
+    <h2 class="sec-title">From zero to visibility in four steps.</h2>
+    <div class="steps">
+      <div class="step"><div class="num">01</div><h3>Install the server</h3><p>Node.js + MySQL on your own box. Run the migrations, start the service. Docker Compose if you prefer.</p></div>
+      <div class="step"><div class="num">02</div><h3>Drop in your key</h3><p>Set <span class="mono">LICENSE_KEY</span> — the only value a customer must configure. The server binds and verifies offline.</p></div>
+      <div class="step"><div class="num">03</div><h3>Enroll agents</h3><p>Generate one-time codes, run the installer on each host. Agents self-enroll and start reporting over a secure channel.</p></div>
+      <div class="step"><div class="num">04</div><h3>Watch &amp; comply</h3><p>Findings, maps and NIS2 evidence fill in automatically. Tune alerts, approve reports, export the audit trail.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="compliance">
+  <div class="wrap">
+    <span class="kicker">NIS2 &amp; GDPR</span>
+    <h2 class="sec-title">Compliance without the consultants.</h2>
+    <p class="sec-sub">The Reporting tab is a stationary NIS2 module: readiness dashboard, risk register, control evidence, security incidents and generated management reports — with a cryptographically signed, timestamped evidence manifest.</p>
+    <div class="comply">
+      <div class="box">
+        <h3>Article 23 deadlines, tracked for you</h3>
+        <p class="mono" style="font-size:14px">Every reportable incident is anchored on its detection time and carries its statutory clocks automatically:</p>
+        <div class="clock">
+          <div><b>24h</b>Early warning</div>
+          <div><b>72h</b>Notification</div>
+          <div><b>1mo</b>Final report</div>
+        </div>
+        <ul>
+          <li>Overdue → due-soon → upcoming, most urgent first</li>
+          <li>Readiness score is local, explainable, and reproducible</li>
+          <li>Signed evidence manifest — verify offline, no vendor needed</li>
+        </ul>
+      </div>
+      <div class="box">
+        <h3>Built for European rules</h3>
+        <ul>
+          <li>Data never leaves your premises</li>
+          <li>Metadata only — no payload, no DPI</li>
+          <li>Private addresses are never geolocated</li>
+          <li>European / self-hosted tiles, GeoIP &amp; fonts</li>
+          <li>Full audit log on every create / update / delete</li>
+          <li>Open-source, permissively licensed dependencies</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="pricing">
+  <div class="wrap">
+    <span class="kicker">Licenses</span>
+    <h2 class="sec-title">Pick a tier. Grow when you need to.</h2>
+    <p class="sec-sub">Every license is a signed proof your server verifies offline. Agent limits and the feature matrix are baked into the signature — upgrade by re-issuing a key, no reinstall. Annual licensing, priced per site.</p>
+
+    <div class="tiers">
+      <div class="tier">
+        <div class="name">Pilot</div>
+        <div class="who">Evaluate BlueEye risk-free on a small site.</div>
+        <div class="price"><b>Free</b><br><span style="font-size:12px">30-day trial</span></div>
+        <ul>
+          <li>Up to 3 agents</li>
+          <li>Core monitoring</li>
+          <li>Explainable findings</li>
+          <li>Community docs</li>
+        </ul>
+        <a href="#contact" class="btn ghost">Start trial</a>
+      </div>
+
+      <div class="tier">
+        <div class="name">Starter</div>
+        <div class="who">Small teams that need real visibility.</div>
+        <div class="price"><b>Quote</b><br><span style="font-size:12px">per site / yr</span></div>
+        <ul>
+          <li>Up to 10 agents</li>
+          <li>Analysis + alerting</li>
+          <li>Email &amp; webhook</li>
+          <li>CSV / JSON export</li>
+        </ul>
+        <a href="#contact" class="btn ghost">Request quote</a>
+      </div>
+
+      <div class="tier feat">
+        <span class="badge-pop">Most popular</span>
+        <div class="name">Professional</div>
+        <div class="who">The full picture for a growing estate.</div>
+        <div class="price"><b>Quote</b><br><span style="font-size:12px">per site / yr</span></div>
+        <ul>
+          <li>Up to 50 agents</li>
+          <li>Geo &amp; ASN map</li>
+          <li>NIS2 reporting</li>
+          <li>Opt-in AI assistant</li>
+          <li>Priority support</li>
+        </ul>
+        <a href="#contact" class="btn">Request quote</a>
+      </div>
+
+      <div class="tier">
+        <div class="name">Enterprise</div>
+        <div class="who">Large, multi-site, high-assurance estates.</div>
+        <div class="price"><b>Quote</b><br><span style="font-size:12px">custom</span></div>
+        <ul>
+          <li>Unlimited agents</li>
+          <li>SSO (OIDC / SAML)</li>
+          <li>Air-gap / offline license</li>
+          <li>HA deployment</li>
+          <li>SLA support</li>
+        </ul>
+        <a href="#contact" class="btn ghost">Talk to sales</a>
+      </div>
+
+      <div class="tier">
+        <div class="name">MSP</div>
+        <div class="who">Run BlueEye for many customers.</div>
+        <div class="price"><b>Quote</b><br><span style="font-size:12px">volume</span></div>
+        <ul>
+          <li>Multi-tenant licensing</li>
+          <li>Volume agent pricing</li>
+          <li>White-glove onboarding</li>
+          <li>Partner terms</li>
+        </ul>
+        <a href="#contact" class="btn ghost">Become a partner</a>
+      </div>
+    </div>
+
+    <div class="matrix">
+      <table>
+        <thead>
+          <tr><th>Feature</th><th>Pilot</th><th>Starter</th><th>Professional</th><th>Enterprise</th><th>MSP</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Explainable analysis</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+          <tr><td>Alerting (email/webhook/syslog)</td><td class="no">—</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+          <tr><td>Geo &amp; ASN map</td><td class="no">—</td><td class="no">—</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+          <tr><td>NIS2 reporting module</td><td class="no">—</td><td class="no">—</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+          <tr><td>Opt-in AI assistant</td><td class="no">—</td><td class="no">—</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+          <tr><td>SSO (OIDC / SAML)</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+          <tr><td>Offline / air-gap license</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+          <tr><td>Agents included</td><td>3</td><td>10</td><td>50</td><td>∞</td><td>volume</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section class="final" id="contact">
+  <div class="wrap">
+    <span class="kicker">Ready when you are</span>
+    <h2 class="sec-title">Own your network's data.</h2>
+    <p>Start a free 30-day Pilot on one site, or tell us about your estate and we'll size a license. No cloud sign-up, no credit card.</p>
+    <div class="cta-row" style="justify-content:center">
+      <a href="mailto:sales@blueeye.local?subject=BlueEye%20license%20enquiry" class="btn alt big">Email sales</a>
+      <a href="#pricing" class="btn ghost big">Compare tiers</a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="fgrid">
+      <div>
+        <div class="brand" style="color:#fff;margin-bottom:10px"><span class="logo"></span> BlueEye</div>
+        <p style="max-width:40ch;color:#b7b2a4">On-prem network monitoring &amp; NIS2 compliance. Your infrastructure. Your data. Your keys.</p>
+      </div>
+      <div>
+        <p style="color:#fff;text-transform:uppercase;margin-bottom:8px">Product</p>
+        <p><a href="#features">Features</a></p>
+        <p><a href="#how">How it works</a></p>
+        <p><a href="#pricing">Licenses</a></p>
+      </div>
+      <div>
+        <p style="color:#fff;text-transform:uppercase;margin-bottom:8px">Company</p>
+        <p><a href="#compliance">NIS2 &amp; GDPR</a></p>
+        <p><a href="#contact">Contact sales</a></p>
+        <p><a href="#">Documentation</a></p>
+      </div>
+    </div>
+    <div class="fnote">
+      <span>© BlueEye — Self-hosted, EU-built. No SaaS. No telemetry.</span>
+      <span class="mono">Example sales page · Style A: Tactile Brutalism</span>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>

@@ -13,7 +13,7 @@ const MAX_WINDOW_MIN = 7 * 24 * 60;
 // Flow-derived dependency / topology map. Mounted at /api/topology behind the
 // user JWT. Builds a who-talks-to-whom graph from the ingested 5-tuple flows
 // (whole fleet, or one agent via ?agentId=), over a ?minutes window. viewer+.
-function createTopologyRouter({ flowsRepo, agentsRepo = null, locationsRepo = null }) {
+function createTopologyRouter({ flowsRepo, agentsRepo = null, locationsRepo = null, centroids = null }) {
   const router = express.Router();
 
   router.get(
@@ -50,7 +50,7 @@ function createTopologyRouter({ flowsRepo, agentsRepo = null, locationsRepo = nu
         to: to.toISOString(),
         agentId,
         locationId,
-        ...buildTopology(rows),
+        ...buildTopology(rows, { centroids }),
       });
     })
   );

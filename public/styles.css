@@ -375,6 +375,12 @@ main#view:has(.overview) { max-width: 95%; }
 main#view:has(.fleet) { max-width: 95%; }
 .section-head { display: flex; align-items: center; gap: 12px; margin: 0 0 14px; }
 .topo-action-bar { display: flex; align-items: center; gap: 8px; margin: 0 0 16px; }
+/* Diagram/Map segmented toggle (the active button is the non-ghost one). */
+.topo-mode { display: inline-flex; gap: 0; }
+.topo-mode button { border-radius: 0; }
+.topo-mode button:first-child { border-top-left-radius: 8px; border-bottom-left-radius: 8px; }
+.topo-mode button:last-child { border-top-right-radius: 8px; border-bottom-right-radius: 8px; }
+.topo-maphost .map { margin-top: 4px; }
 
 /* Traffic overview: the big live chart (history view reuses .overview-chart). */
 .overview-chart { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px; }

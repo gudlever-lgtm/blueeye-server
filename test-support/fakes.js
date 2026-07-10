@@ -205,6 +205,19 @@ function makeIncidentCasesRepo(overrides = {}) {
       if (severity && (rank[severity] ?? -1) > (rank[r.severity] ?? -1)) r.severity = severity;
       return true;
     }),
+    updateStatus: overrides.updateStatus || (async (id, { from, to, closedBy = null, at = null }) => {
+      const r = rows.find((x) => x.id === Number(id) && x.status === from);
+      if (!r) return false;
+      r.status = to;
+      if (to === 'resolved') r.resolved_at = at;
+      if (to === 'closed') r.closed_by = closedBy;
+      if (to === 'open') { r.resolved_at = null; r.closed_by = null; }
+      return true;
+    }),
+    listStaleInvestigating: overrides.listStaleInvestigating || (async (olderThan) => rows
+      .filter((r) => r.status === 'investigating' && new Date(r.last_event_at) < new Date(olderThan))
+      .sort((a, b) => new Date(a.last_event_at) - new Date(b.last_event_at))
+      .map(mapOut)),
     list: overrides.list || (async (f = {}) => rows
       .filter((r) => (!f.status || r.status === f.status)
         && (!f.severity || r.severity === f.severity)
@@ -579,6 +592,9 @@ function makeFindingStore(overrides = {}) {
     rows,
     save: overrides.save || (async (f) => { const saved = { ...f, id: f.id || `f${rows.length + 1}`, acked: false }; rows.push(saved); return saved; }),
     list: overrides.list || (async (hostId, since) => rows.filter((f) => (!hostId || f.hostId === hostId) && (!since || new Date(f.createdAt || 0) >= new Date(since)))),
+    listByIncidentCase: overrides.listByIncidentCase || (async (incidentCaseId) => rows
+      .filter((f) => f.incidentCaseId === incidentCaseId)
+      .sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0))),
     get: overrides.get || (async (id) => rows.find((f) => f.id === id) || null),
     ack: overrides.ack || (async (id) => { const f = rows.find((x) => x.id === id); if (!f) return false; f.acked = true; return true; }),
     setCorrelations: overrides.setCorrelations || (async (id, ids) => { const f = rows.find((x) => x.id === id); if (!f) return false; f.correlatedWith = Array.isArray(ids) ? ids : []; return true; }),

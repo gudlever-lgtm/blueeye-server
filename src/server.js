@@ -54,6 +54,7 @@ const { createProbePipeline } = require('./analysis/probePipeline');
 const { createCorrelator } = require('./analysis/correlator');
 const { createIncidentCasesRepository } = require('./repositories/incidentCasesRepository');
 const { createIncidentCaseService } = require('./incidentCases/incidentCaseService');
+const { createIncidentAutoResolveJob } = require('./incidentCases/autoResolveJob');
 const { createAssistant } = require('./analysis/assistant');
 const { loadConfig: loadAnalysisConfig } = require('./analysis/config');
 const { createFlowsRepository } = require('./repositories/flowsRepository');
@@ -582,6 +583,9 @@ function start() {
       { start: () => geoipUpdater.startSchedule(), stop: () => geoipUpdater.stopSchedule() },
       // Hourly MAD baseline recompute for transaction tests (leader-only).
       createTransactionBaselineJob({ repo: transactionsRepo, logger }),
+      // Auto-resolve incidents stuck in `investigating` with no new anomalies
+      // within the inactivity window (leader-only).
+      createIncidentAutoResolveJob({ incidentCasesRepo, auditLogRepo, logger }),
     ],
   });
 

@@ -106,6 +106,38 @@ function createIncidentCasesRepository(db) {
     return res.affectedRows > 0;
   }
 
+  // Guarded status transition. The current status is part of the WHERE, so a
+  // stale read or a concurrent change can never apply an out-of-order transition
+  // (it just affects 0 rows). Stamps resolved_at on →resolved, closed_by on
+  // →closed, and clears both on reopen (→open). Returns true if a row changed.
+  async function updateStatus(id, { from, to, closedBy = null, at = null }) {
+    const sets = ['status = ?'];
+    const params = [to];
+    if (to === 'resolved') { sets.push('resolved_at = ?'); params.push(at); }
+    if (to === 'closed') { sets.push('closed_by = ?'); params.push(closedBy); }
+    if (to === 'open') { sets.push('resolved_at = NULL', 'closed_by = NULL'); }
+    params.push(id, from);
+    const [res] = await pool.query(
+      `UPDATE incident_cases SET ${sets.join(', ')} WHERE id = ? AND status = ?`,
+      params
+    );
+    return res.affectedRows > 0;
+  }
+
+  // Investigating incidents whose last activity is older than `olderThan` — the
+  // auto-resolve candidates (no new anomalies linked within the inactivity
+  // window). Oldest-first so the job processes the stalest first.
+  async function listStaleInvestigating(olderThan, limit = 500) {
+    const lim = Number.isInteger(limit) && limit > 0 && limit <= 5000 ? limit : 500;
+    const [rows] = await pool.query(
+      `SELECT ${BASE_COLUMNS} FROM incident_cases
+       WHERE status = 'investigating' AND last_event_at < ?
+       ORDER BY last_event_at ASC LIMIT ?`,
+      [olderThan, lim]
+    );
+    return rows.map(mapRow);
+  }
+
   // Lists incident cases, newest activity first, with optional filters. `from`/
   // `to` bound last_event_at. Used by the read API (added with the endpoints).
   async function list({ status = null, severity = null, hostId = null, from = null, to = null, limit = 1000 } = {}) {
@@ -128,7 +160,7 @@ function createIncidentCasesRepository(db) {
     return rows.map(mapRow);
   }
 
-  return { create, findById, findOpenByHost, updateActivity, list };
+  return { create, findById, findOpenByHost, updateActivity, updateStatus, listStaleInvestigating, list };
 }
 
 module.exports = { createIncidentCasesRepository, mapRow, isWorse, SEVERITY_RANK, OPEN_STATUSES };

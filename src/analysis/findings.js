@@ -131,6 +131,16 @@ class FindingStore {
     return rows.map(mapRow);
   }
 
+  // Lists the findings linked to an incident case, oldest-first (chronological),
+  // for the incident detail view + timeline read-model. Bounded like list().
+  async listByIncidentCase(incidentCaseId) {
+    const [rows] = await this.pool.query(
+      `SELECT ${COLUMNS} FROM findings WHERE incident_case_id = ? ORDER BY created_at ASC, id LIMIT ?`,
+      [incidentCaseId, MAX_LIST]
+    );
+    return rows.map(mapRow);
+  }
+
   // Fetches one finding by id, or null.
   async get(id) {
     const [rows] = await this.pool.query(`SELECT ${COLUMNS} FROM findings WHERE id = ?`, [id]);

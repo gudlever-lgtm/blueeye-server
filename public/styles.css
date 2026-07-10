@@ -1257,3 +1257,32 @@ button.active-btn { outline: 2px solid var(--accent); }
 .tx-secrets { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0; }
 .tx-legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; margin-top: 6px; }
 .tx-heat text { user-select: none; }
+
+/* ---- Incidents (incident_cases) ---- */
+.incidents-view .toolbar { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+.inc-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+.inc-header h2 { margin: 0 0 4px; }
+.inc-meta { font-size: 13px; }
+.inc-actions { display: flex; gap: 8px; margin: 8px 0 14px; flex-wrap: wrap; }
+.incident-detail .card { margin-bottom: 14px; }
+.badge.inc-sev-CRIT { background: #c0392b; color: #fff; }
+.badge.inc-sev-WARN { background: #e67e22; color: #fff; }
+.badge.inc-sev-INFO { background: #7f8c8d; color: #fff; }
+.badge.inc-status-open { background: #2980b9; color: #fff; }
+.badge.inc-status-investigating { background: #8e44ad; color: #fff; }
+.badge.inc-status-resolved { background: #27ae60; color: #fff; }
+.badge.inc-status-closed { background: #95a5a6; color: #fff; }
+ul.timeline { list-style: none; padding-left: 0; margin: 0; }
+ul.timeline li.tl { display: flex; align-items: baseline; gap: 10px; padding: 3px 0; }
+.tl-time { min-width: 12rem; font-variant-numeric: tabular-nums; font-size: 12px; }
+.tl-dot { width: 9px; height: 9px; border-radius: 50%; background: #888; display: inline-block; flex: 0 0 auto; }
+.tl-dot-anomaly { background: #c0392b; }
+.tl-dot-config_change { background: #e67e22; }
+.tl-dot-status_change { background: #2980b9; }
+ul.inc-similar, ul.inc-anoms { list-style: none; padding-left: 0; margin: 0; }
+ul.inc-similar li, ul.inc-anoms li { padding: 4px 0; }
+ul.inc-similar li.clickable { cursor: pointer; }
+pre.config-diff { background: #1e1e24; color: #e0e0e0; padding: 10px; overflow: auto; border-radius: 6px; font-size: 12px; line-height: 1.4; }
+.inc-ask { display: flex; gap: 8px; margin: 8px 0; }
+.inc-ask-input { flex: 1; }
+.ai-badge { display: inline-block; font-size: 11px; font-weight: 600; color: #8e44ad; margin-bottom: 4px; text-transform: uppercase; letter-spacing: .04em; }

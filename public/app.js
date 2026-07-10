@@ -2841,6 +2841,220 @@ function assistantBox(getHostId) {
     out);
 }
 
+// ---- Incidents (first-class incident_cases) --------------------------------
+let selectedIncidentId = null;
+function openIncident(id) { selectedIncidentId = id; currentView = 'incident'; render(); }
+
+const INC_STATUS_LABEL = { open: 'Open', investigating: 'Investigating', resolved: 'Resolved', closed: 'Closed' };
+const INC_TRANSITIONS = { open: ['investigating'], investigating: ['resolved'], resolved: ['closed'], closed: ['open'] };
+const incStatusBadge = (s) => el('span', { class: `badge inc-status-${s}` }, INC_STATUS_LABEL[s] || s);
+const incSevBadge = (s) => el('span', { class: `badge inc-sev-${s}` }, s);
+
+PAGE_INFO.incidents = {
+  hero: 'Incidents group related anomalies on the same device into one case you can track from open to closed — with a timeline, the config change that may have triggered it, similar past incidents, and an opt-in AI assistant.',
+  title: 'Incidents — grouped anomalies, tracked end-to-end',
+  body: () => [
+    el('p', {}, 'Each incident wraps the analysis findings (anomalies) that fired close together on one device. Status moves open → investigating → resolved → closed; a closed incident can be reopened with a comment (recorded in the audit trail).'),
+    el('p', {}, 'The detail page shows the incident timeline, the device-config change suspected to have triggered it, similar past incidents, and — when the EU AI assistant is enabled — a chat that answers questions using only masked, aggregated context.'),
+    el('p', { class: 'muted' }, 'Status changes, config history and the AI chat are operator/admin only.'),
+  ],
+};
+
+views.incidents = async () => {
+  const wrap = el('div', { class: 'incidents-view' });
+  const filters = { status: '', severity: '', device: '' };
+  const tbody = el('tbody', {});
+  const table = el('table', { class: 'data' },
+    el('thead', {}, el('tr', {},
+      el('th', {}, 'Severity'), el('th', {}, 'Status'), el('th', {}, 'Title'),
+      el('th', {}, 'Device'), el('th', {}, 'First seen'), el('th', {}, 'Last activity'))),
+    tbody);
+
+  async function load() {
+    tbody.replaceChildren(el('tr', {}, el('td', { colspan: '6', class: 'muted' }, 'Loading…')));
+    const qs = new URLSearchParams();
+    if (filters.status) qs.set('status', filters.status);
+    if (filters.severity) qs.set('severity', filters.severity);
+    if (filters.device) qs.set('device', filters.device);
+    try {
+      const { incidents } = await api(`/api/incidents${qs.toString() ? `?${qs}` : ''}`);
+      if (!incidents.length) { tbody.replaceChildren(el('tr', {}, el('td', { colspan: '6', class: 'muted' }, 'No incidents match.'))); return; }
+      tbody.replaceChildren(...incidents.map((i) => el('tr', {
+        class: 'clickable', tabindex: '0',
+        onclick: () => openIncident(i.id), onkeydown: (e) => { if (e.key === 'Enter') openIncident(i.id); },
+      },
+        el('td', {}, incSevBadge(i.severity)),
+        el('td', {}, incStatusBadge(i.status)),
+        el('td', {}, esc(i.title)),
+        el('td', { class: 'muted' }, esc(i.deviceId)),
+        el('td', { class: 'muted' }, fmtDate(i.firstEventAt)),
+        el('td', { class: 'muted' }, fmtDate(i.lastEventAt)))));
+    } catch (err) {
+      tbody.replaceChildren(el('tr', {}, el('td', { colspan: '6', class: 'error' }, err.message)));
+    }
+  }
+
+  const statusSel = el('select', { onchange: (e) => { filters.status = e.target.value; load(); } },
+    el('option', { value: '' }, 'All statuses'),
+    ...Object.keys(INC_STATUS_LABEL).map((s) => el('option', { value: s }, INC_STATUS_LABEL[s])));
+  const sevSel = el('select', { onchange: (e) => { filters.severity = e.target.value; load(); } },
+    el('option', { value: '' }, 'All severities'),
+    ...['INFO', 'WARN', 'CRIT'].map((s) => el('option', { value: s }, s)));
+  const devInput = el('input', { type: 'text', placeholder: 'Device id', oninput: (e) => { filters.device = e.target.value.trim(); } });
+  const devBtn = el('button', { class: 'small ghost', onclick: () => load() }, 'Filter');
+
+  wrap.append(el('div', { class: 'toolbar' }, statusSel, sevSel, devInput, devBtn), table);
+  await load();
+  return wrap;
+};
+
+async function loadIncidentTimeline(id, card) {
+  const head = el('h3', {}, 'Timeline');
+  try {
+    const { events } = await api(`/api/incidents/${id}/timeline`);
+    if (!events.length) { card.replaceChildren(head, el('p', { class: 'muted' }, 'No events yet.')); return; }
+    card.replaceChildren(head, el('ul', { class: 'timeline' }, ...events.map((e) => el('li', { class: `tl tl-${e.type}` },
+      el('span', { class: 'tl-time muted' }, fmtDate(e.timestamp)),
+      el('span', { class: `tl-dot tl-dot-${e.type}` }),
+      el('span', { class: 'tl-desc' }, esc(e.description || e.type),
+        e.severity ? el('span', { class: 'muted' }, ` [${e.severity}]`) : null,
+        e.status ? el('span', { class: 'muted' }, ` [${e.status}]`) : null)))));
+  } catch (err) { card.replaceChildren(head, el('p', { class: 'error' }, err.message)); }
+}
+
+async function loadIncidentSimilar(id, card) {
+  const head = el('h3', {}, 'Similar past incidents');
+  try {
+    const { similar } = await api(`/api/incidents/${id}/similar`);
+    if (!similar.length) { card.replaceChildren(head, el('p', { class: 'muted' }, 'No similar incidents found.')); return; }
+    card.replaceChildren(head, el('ul', { class: 'inc-similar' }, ...similar.map((s) => el('li', {
+      class: 'clickable', onclick: () => openIncident(s.id),
+    },
+      el('span', { class: 'badge' }, `score ${s.score}`), ' ', esc(s.title || `#${s.id}`),
+      el('span', { class: 'muted' }, ` · ${(s.matchedOn || []).join(', ')} · resolved ${fmtDate(s.resolvedAt)}${s.closedBy ? ` by ${esc(s.closedBy)}` : ''}`)))));
+  } catch (err) { card.replaceChildren(head, el('p', { class: 'error' }, err.message)); }
+}
+
+async function loadIncidentConfigContext(id, card) {
+  const head = el('h3', {}, 'Config context');
+  try {
+    const ctx = await api(`/api/incidents/${id}/config-context`);
+    if (!ctx.configChangeId) { card.replaceChildren(head, el('p', { class: 'muted' }, 'No correlated config change.')); return; }
+    const st = ctx.suspectedTrigger;
+    const diff = ctx.diff || {};
+    card.replaceChildren(head,
+      st ? el('p', { class: 'callout' }, `⚠ ${esc(st.note)}`) : null,
+      el('p', { class: 'muted' }, `Risk: ${diff.risk || 'n/a'}${(diff.riskReasons || []).length ? ` (${diff.riskReasons.join(', ')})` : ''} · +${(diff.stats && diff.stats.added) || 0}/-${(diff.stats && diff.stats.removed) || 0} lines · captured ${fmtDate(ctx.change && ctx.change.capturedAt)} (${esc((ctx.change && ctx.change.capturedVia) || '')})`),
+      diff.changedLines && diff.changedLines.length
+        ? el('pre', { class: 'config-diff' }, diff.changedLines.map((l) => `${l.op} ${l.text}`).join('\n'))
+        : null);
+  } catch (err) {
+    card.replaceChildren(head, el('p', { class: err.status === 403 ? 'muted' : 'error' }, err.status === 403 ? 'Requires operator/admin.' : err.message));
+  }
+}
+
+function incidentAssistantCard(id) {
+  const out = el('div', { class: 'assistant-out muted' }, 'Ask a question about this incident.');
+  const input = el('input', { type: 'text', placeholder: 'e.g. what likely triggered this?', class: 'inc-ask-input' });
+  const askBtn = el('button', { class: 'small' }, 'Ask AI');
+  async function ask() {
+    const q = input.value.trim();
+    if (!q) return;
+    out.className = 'assistant-out muted';
+    out.textContent = 'Thinking…';
+    askBtn.disabled = true;
+    try {
+      const res = await api(`/api/incidents/${id}/ask`, { method: 'POST', body: { question: q } });
+      out.className = 'assistant-out';
+      out.replaceChildren(
+        el('div', { class: 'ai-badge' }, '⚠ AI-generated'),
+        el('div', {}, res.answer || '(empty response)'),
+        el('div', { class: 'assistant-meta muted' }, `${esc(res.model || 'no provider call')}${res.cached ? ' · cached' : ''}${res.dataAvailable === false ? ' · insufficient context' : ''}`));
+    } catch (err) {
+      out.className = 'assistant-out muted';
+      out.textContent = err.status === 403
+        ? 'The AI assistant is disabled or not licensed. Enable it in Settings → AI assistant.'
+        : (err.status === 404 ? 'Incident not found.' : err.message);
+    } finally { askBtn.disabled = false; }
+  }
+  askBtn.addEventListener('click', ask);
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') ask(); });
+  return el('div', { class: 'card' },
+    el('h3', {}, 'Ask AI about this incident'),
+    el('p', { class: 'muted' }, 'Answers use only masked, aggregated context (timeline, config diff, similar incidents). No raw config or secrets are sent.'),
+    el('div', { class: 'inc-ask' }, input, askBtn),
+    out);
+}
+
+// The per-incident detail page (no tab — reached via openIncident).
+views.incident = async () => {
+  const id = selectedIncidentId;
+  const back = el('button', { class: 'small ghost', onclick: () => { currentView = 'incidents'; render(); } }, '← Incidents');
+  if (id == null) return el('div', { class: 'empty' }, back, el('p', {}, 'No incident selected.'));
+
+  let data;
+  try {
+    data = await api(`/api/incidents/${id}`);
+  } catch (err) {
+    if (err.status === 404) return el('div', { class: 'empty' }, back, el('p', { class: 'error' }, 'Incident not found.'));
+    return el('div', { class: 'empty error' }, back, ' ', err.message);
+  }
+  const inc = data.incident;
+  const anomalies = data.anomalies || [];
+
+  const header = el('div', { class: 'inc-header' },
+    el('div', {},
+      el('h2', {}, esc(inc.title)),
+      el('div', { class: 'inc-meta' }, incSevBadge(inc.severity), ' ', incStatusBadge(inc.status),
+        el('span', { class: 'muted' }, ` · device ${esc(inc.deviceId)} · opened ${fmtDate(inc.firstEventAt)}`))),
+    back);
+
+  const controls = el('div', { class: 'inc-actions' });
+  if (canWrite()) {
+    for (const to of (INC_TRANSITIONS[inc.status] || [])) {
+      const label = to === 'open' ? 'Reopen' : `Mark ${INC_STATUS_LABEL[to]}`;
+      controls.append(el('button', {
+        class: 'small',
+        onclick: async () => {
+          let comment;
+          if (inc.status === 'closed' && to === 'open') {
+            comment = window.prompt('Reason for reopening (required):');
+            if (!comment) return;
+          }
+          try {
+            await api(`/api/incidents/${id}`, { method: 'PATCH', body: { status: to, ...(comment ? { comment } : {}) } });
+            toast(`Incident ${INC_STATUS_LABEL[to].toLowerCase()}`);
+            render();
+          } catch (err) { toast(errText(err), true); }
+        },
+      }, label));
+    }
+  }
+
+  const anomaliesCard = el('div', { class: 'card' },
+    el('h3', {}, `Anomalies (${anomalies.length})`),
+    anomalies.length
+      ? el('ul', { class: 'inc-anoms' }, ...anomalies.map((a) => el('li', {},
+          incSevBadge(a.severity), ' ', el('strong', {}, esc(a.metric)), ' — ', esc(a.explanation || ''),
+          el('span', { class: 'muted' }, ` (${fmtDate(a.createdAt)})`))))
+      : el('p', { class: 'muted' }, 'No linked anomalies.'));
+
+  const timelineCard = el('div', { class: 'card' }, el('h3', {}, 'Timeline'), el('div', { class: 'muted' }, 'Loading…'));
+  loadIncidentTimeline(id, timelineCard);
+  const similarCard = el('div', { class: 'card' }, el('h3', {}, 'Similar past incidents'), el('div', { class: 'muted' }, 'Loading…'));
+  loadIncidentSimilar(id, similarCard);
+
+  const extra = [];
+  if (canWrite()) {
+    const cfgCard = el('div', { class: 'card' }, el('h3', {}, 'Config context'), el('div', { class: 'muted' }, 'Loading…'));
+    loadIncidentConfigContext(id, cfgCard);
+    extra.push(cfgCard);
+    if (featureEnabled('assistant')) extra.push(incidentAssistantCard(id));
+  }
+
+  return el('div', { class: 'incident-detail' }, header, controls, anomaliesCard, timelineCard, similarCard, ...extra);
+};
+
 views.overview = async () => {
   const root = el('div', { class: 'overview' });
   root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Traffic'),

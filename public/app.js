@@ -5330,12 +5330,39 @@ views.fleet = async () => {
 // interface health + recent traffic — the troubleshooting surface for one agent.
 // Device config history (masked snapshots + risk-classified diffs). operator/
 // admin only — a viewer gets a 403 the card explains rather than an empty box.
+// A collapsible "paste the running-config" form that POSTs a snapshot, then
+// reloads the card. operator/admin only (the card is already gated).
+function configIngestForm(id, onAdded) {
+  const ta = el('textarea', { rows: '6', placeholder: 'Paste the device running-config…', class: 'cfg-ingest-text' });
+  const via = el('select', {}, ...[['manual', 'Manual'], ['agent_poll', 'Agent poll'], ['change_detected', 'Change detected']].map(([v, l]) => el('option', { value: v }, l)));
+  const status = el('span', { class: 'muted' });
+  const submit = el('button', { class: 'small' }, 'Add snapshot');
+  submit.addEventListener('click', async () => {
+    if (!ta.value.trim()) { status.textContent = 'Paste a config first.'; return; }
+    submit.disabled = true;
+    status.textContent = 'Saving…';
+    try {
+      const res = await api(`/api/devices/${id}/config-snapshots`, { method: 'POST', body: { configText: ta.value, capturedVia: via.value } });
+      ta.value = '';
+      status.textContent = res.unchanged ? 'No change vs. the latest snapshot.' : 'Snapshot added.';
+      if (!res.unchanged && typeof onAdded === 'function') onAdded();
+    } catch (err) {
+      status.textContent = errText(err);
+    } finally { submit.disabled = false; }
+  });
+  return el('details', { class: 'cfg-ingest' },
+    el('summary', {}, 'Add a config snapshot'),
+    el('div', { class: 'cfg-ingest-body' }, ta,
+      el('div', { class: 'cfg-ingest-actions' }, el('label', { class: 'inline muted' }, 'Via ', via), submit, status)));
+}
+
 async function loadDeviceConfigHistory(id, card) {
   const head = el('h3', {}, 'Config history');
+  const form = configIngestForm(id, () => loadDeviceConfigHistory(id, card));
   try {
     const { snapshots, diffs } = await api(`/api/devices/${id}/config-history`);
     if (!snapshots || !snapshots.length) {
-      card.replaceChildren(head, el('p', { class: 'muted' }, 'No config snapshots captured for this device yet.'));
+      card.replaceChildren(head, form, el('p', { class: 'muted' }, 'No config snapshots captured for this device yet.'));
       return;
     }
     const diffEls = (diffs || []).map((d) => el('details', { class: 'cfg-diff' },
@@ -5343,7 +5370,7 @@ async function loadDeviceConfigHistory(id, card) {
         el('span', { class: `badge risk-${d.risk}` }, d.risk),
         el('span', { class: 'muted' }, ` +${(d.stats && d.stats.added) || 0}/-${(d.stats && d.stats.removed) || 0}${(d.riskReasons || []).length ? ` · ${d.riskReasons.join(', ')}` : ''}`)),
       el('pre', { class: 'config-diff' }, (d.changedLines || []).map((l) => `${l.op} ${l.text}`).join('\n'))));
-    card.replaceChildren(head,
+    card.replaceChildren(head, form,
       el('p', { class: 'muted' }, `${snapshots.length} snapshot(s); ${(diffs || []).length} change(s). Secrets are masked.`),
       (diffs || []).length ? el('div', { class: 'cfg-diffs' }, ...diffEls) : el('p', { class: 'muted' }, 'No changes between snapshots.'));
   } catch (err) {

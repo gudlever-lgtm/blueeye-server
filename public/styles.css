@@ -1319,3 +1319,9 @@ pre.config-diff { background: #1e1e24; color: #e0e0e0; padding: 10px; overflow: 
 .badge.risk-none { background: #95a5a6; color: #fff; }
 details.cfg-diff { margin: 4px 0; }
 details.cfg-diff summary { cursor: pointer; padding: 4px 0; }
+
+/* ---- Config snapshot ingest (agent page) ---- */
+.cfg-ingest { margin: 6px 0 10px; }
+.cfg-ingest summary { cursor: pointer; }
+.cfg-ingest-text { width: 100%; box-sizing: border-box; font-family: monospace; font-size: 12px; margin: 6px 0; }
+.cfg-ingest-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }

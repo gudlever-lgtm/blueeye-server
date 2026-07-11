@@ -12,13 +12,66 @@ function parseId(raw) {
   return Number.isInteger(n) && n > 0 ? n : null;
 }
 
-// Device config history (Fase 3 pt 5). A device is an agent. This exposes raw
-// device config, so it is operator/admin only (never viewer) and everything is
-// secret-masked on the way out — raw config_text is never returned.
-//   GET /api/devices/:id/config-history — masked snapshots + consecutive diffs
-function createDeviceConfigRouter({ configSnapshotsRepo, agentsRepo = null }) {
+const CAPTURED_VIA = ['manual', 'agent_poll', 'change_detected'];
+const MAX_CONFIG_BYTES = 512 * 1024; // 512 KiB — a device config, not a data dump
+// (kept below the app's 1 MiB JSON body limit so an over-cap-but-parseable config
+// returns a clean 400 here rather than the body parser's 413).
+
+// Device config history (Fase 3 pt 5) + manual ingest. A device is an agent.
+// This handles raw device config, so it is operator/admin only (never viewer);
+// reads are secret-masked on the way out (raw config_text is never returned) and
+// the store keeps the raw text (mask-on-read).
+//   GET  /api/devices/:id/config-history   — masked snapshots + consecutive diffs
+//   POST /api/devices/:id/config-snapshots — ingest one raw config capture
+function createDeviceConfigRouter({ configSnapshotsRepo, agentsRepo = null, auditLogger = null }) {
   const router = express.Router();
   const gate = requireRole(ROLES.OPERATOR, ROLES.ADMIN);
+
+  // Resolves the device (agent) or sends 404. Returns true when it exists (or
+  // when no agentsRepo is wired, i.e. tests that don't care).
+  async function deviceExists(id) {
+    if (!agentsRepo || typeof agentsRepo.findById !== 'function') return true;
+    return Boolean(await agentsRepo.findById(id));
+  }
+
+  // POST /api/devices/:id/config-snapshots — the config producer (operator/admin).
+  // Body: { configText (required), capturedVia? }. Stores the raw text (masked
+  // only on read). Idempotent-ish: if the text is identical to the device's
+  // latest snapshot it is not stored again (200 unchanged) so re-polling the same
+  // config doesn't pile up duplicate rows.
+  router.post('/:id/config-snapshots', requireAuth, gate, asyncHandler(async (req, res) => {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(400).json({ error: 'id must be a positive integer' });
+
+    const body = req.body || {};
+    const configText = typeof body.configText === 'string' ? body.configText : null;
+    if (!configText || configText.trim() === '') {
+      return res.status(400).json({ error: 'Validation failed', details: { configText: 'configText is required' } });
+    }
+    if (Buffer.byteLength(configText, 'utf8') > MAX_CONFIG_BYTES) {
+      return res.status(400).json({ error: 'Validation failed', details: { configText: 'config is too large (max 1 MiB)' } });
+    }
+    const capturedVia = CAPTURED_VIA.includes(body.capturedVia) ? body.capturedVia : 'manual';
+
+    if (!(await deviceExists(id))) return res.status(404).json({ error: 'Device not found' });
+
+    // Skip when unchanged vs. the most recent snapshot for this device.
+    const [latest] = await configSnapshotsRepo.listForDevice(id, { limit: 1, withText: true });
+    if (latest && latest.configText === configText) {
+      return res.json({ id: latest.id, deviceId: id, unchanged: true });
+    }
+
+    const newId = await configSnapshotsRepo.insert({ deviceId: id, configText, capturedVia });
+    if (auditLogger) {
+      await auditLogger.record(req, {
+        category: 'config',
+        action: 'config_snapshot_ingest',
+        target: String(id),
+        detail: `via=${capturedVia}, ${Buffer.byteLength(configText, 'utf8')} bytes`,
+      });
+    }
+    return res.status(201).json({ id: newId, deviceId: id, capturedVia, unchanged: false });
+  }));
 
   router.get('/:id/config-history', requireAuth, gate, asyncHandler(async (req, res) => {
     const id = parseId(req.params.id);

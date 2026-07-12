@@ -182,7 +182,22 @@ then:  curl -sSL $SERVER_URL/enroll/$ENROLL_CODE/install.sh | sh"
   elif [ "$RUNTIME" = "docker" ]; then install_docker "$TARBALL"
   else                                  install_node   "$TARBALL"
   fi
+  run_doctor
   log "to remove the agent later: curl -sSL $SERVER_URL/enroll/uninstall.sh | sudo sh"
+}
+
+# Connection self-test after install: run the agent's built-in \`doctor\` so the
+# install ends with a CONNECTED / NOT-CONNECTED verdict + fix suggestions instead
+# of a silent success. Informational only — never fails the install (|| true); an
+# older agent source without 'doctor' just prints usage.
+run_doctor() {
+  log "running connection self-test (blueeye-agent doctor) ..."
+  DOC_ENV="BLUEEYE_TOKEN_PATH=$TOKEN_PATH BLUEEYE_AGENT_CONFIG=$CONFIG_PATH BLUEEYE_SERVER_URL=$SERVER_URL BLUEEYE_SERVER_CERT_FINGERPRINT=$CERT_FINGERPRINT"
+  case "$RUNTIME" in
+    node)   env $DOC_ENV node "$CURRENT/src/index.js" doctor || true ;;
+    binary) env $DOC_ENV "$CURRENT/blueeye-agent" doctor || true ;;
+    docker) docker exec "$CONTAINER" node src/index.js doctor || true ;;
+  esac
 }
 
 install_binary() {

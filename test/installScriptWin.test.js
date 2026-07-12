@@ -3,7 +3,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { renderInstallPs1, winSecurityPrelude } = require('../src/enroll/installScriptWin');
+const { renderInstallPs1, winSecurityPrelude, renderUninstallPs1 } = require('../src/enroll/installScriptWin');
 
 const SHA = 'a'.repeat(64);
 const FP = Array.from({ length: 32 }, () => 'ab').join(':'); // valid 32-byte SHA-256
@@ -56,6 +56,42 @@ test('renderInstallPs1 requires Node, extracts with tar, enrolls, and registers 
   assert.match(script, /New-ScheduledTaskTrigger -AtStartup/);
   assert.match(script, /-UserId 'SYSTEM'/);
   assert.match(script, /RestartCount/);
+});
+
+test('renderInstallPs1 makes the SYSTEM service observable — captures the agent log and shows it', () => {
+  const script = renderInstallPs1({ serverUrl: 'http://x', code: 'C', sourceSha: SHA });
+  // The launcher redirects the agent's stdout+stderr into agent.log (a SYSTEM
+  // scheduled task has no console, so otherwise "not connected" has no indicator).
+  assert.match(script, /agent\.log/);
+  assert.match(script, /index\.js'\)"" >> ""\$AgentLog"" 2>&1/);
+  // The installer shows the first log lines + how to tail it, so the operator can
+  // see whether it actually connected.
+  assert.match(script, /Get-Content \$AgentLog -Tail/);
+  assert.match(script, /Get-Content '\$AgentLog' -Wait/);
+  assert.match(script, /Get-ScheduledTaskInfo/);
+});
+
+test('renderInstallPs1 runs the agent connection self-test (doctor) at the end', () => {
+  const script = renderInstallPs1({ serverUrl: 'http://x', code: 'C', sourceSha: SHA });
+  assert.match(script, /index\.js'\) doctor/);
+});
+
+test('renderInstallPs1 Fail prints a clean message, not a WriteErrorException', () => {
+  const script = renderInstallPs1({ serverUrl: 'http://x', code: 'C', sourceSha: SHA });
+  assert.match(script, /\[Console\]::Error\.WriteLine\("\[blueeye\] ERROR: \$m"\); exit 1/);
+  assert.ok(!/function Fail.*Write-Error/.test(script), 'Fail must not use Write-Error (throws WriteErrorException under Stop)');
+});
+
+test('renderUninstallPs1 is a real Windows uninstaller, not a Linux one', () => {
+  const script = renderUninstallPs1();
+  assert.match(script, /#Requires -Version 5\.1/);
+  assert.match(script, /Unregister-ScheduledTask -TaskName \$ServiceName -Confirm:\$false/);
+  assert.match(script, /Remove-Item -Recurse -Force \$d/);
+  // Must not be bash / point Windows at the Linux uninstaller.
+  assert.ok(!/#!\/.*sh/.test(script));
+  assert.ok(!/curl -sSL/.test(script));
+  assert.ok(!/\| sudo sh/.test(script));
+  assert.ok(!/systemctl|launchctl/.test(script));
 });
 
 test('renderInstallPs1 forces TLS 1.2 and pins a self-signed cert when a fingerprint is given', () => {

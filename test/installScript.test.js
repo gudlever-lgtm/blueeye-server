@@ -250,3 +250,10 @@ test('renderInstallScript installs a launchd daemon on macOS and a portable curr
   assert.match(script, /rm -f "\$CURRENT" && ln -sfn "\$DEST_LINK" "\$CURRENT"/);
   assert.match(script, /mv -T "\$CURRENT\.next" "\$CURRENT"/);
 });
+
+test('renderInstallScript runs the agent connection self-test (doctor) after install', () => {
+  const script = renderInstallScript({ serverUrl: 'http://x', code: 'C', sourceSha: 'a'.repeat(64) });
+  assert.match(script, /run_doctor/);
+  assert.match(script, /node "\$CURRENT\/src\/index\.js" doctor/);
+  assert.match(script, /docker exec "\$CONTAINER" node src\/index\.js doctor/);
+});

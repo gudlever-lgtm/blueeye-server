@@ -11,10 +11,46 @@ const {
   makeApp, authHeader,
   makeIntegrationsRepo, makeIntegrationsDispatcher,
   makeSamlAuth, makeLdapConfigRepo, makeLdapAuth, makeAssistant,
+  makeCmdbConfigRepo, makeConnectorRegistry, makeSecretBox,
 } = require('../test-support/fakes');
 
 const admin = () => authHeader('admin');
 const viewer = () => authHeader('viewer');
+
+test('GET /api/diagnostics/targets lists the configured CMDB source', async () => {
+  const cmdbConfigRepo = makeCmdbConfigRepo({ row: {
+    id: 1, type: 'servicenow', base_url: 'https://cmdb.example', auth_type: 'basic',
+    credentials_encrypted: 'x', enabled: true, verified_at: null, updated_by: 1,
+  } });
+  const res = await request(makeApp({ cmdbConfigRepo })).get('/api/diagnostics/targets').set('Authorization', admin());
+  assert.equal(res.status, 200);
+  const cmdb = res.body.targets.find((t) => t.id === 'cmdb');
+  assert.ok(cmdb, 'cmdb target missing');
+  assert.equal(cmdb.category, 'itsm');
+  assert.ok(['ok', 'info', 'warn', 'bad'].includes(cmdb.posture));
+});
+
+test('GET /api/diagnostics/targets omits CMDB when none is configured', async () => {
+  const res = await request(makeApp()).get('/api/diagnostics/targets').set('Authorization', admin());
+  assert.equal(res.status, 200);
+  assert.ok(!res.body.targets.some((t) => t.id === 'cmdb'));
+});
+
+test('POST /api/diagnostics/run tests the CMDB via the connector (bad creds -> not ok)', async () => {
+  const box = makeSecretBox();
+  const cmdbConfigRepo = makeCmdbConfigRepo({ row: {
+    id: 1, type: 'servicenow', base_url: 'https://cmdb.example', auth_type: 'basic',
+    credentials_encrypted: box.encryptJson({ username: 'u', password: 'p' }), enabled: true, verified_at: null, updated_by: 1,
+  } });
+  const connectorRegistry = makeConnectorRegistry({ fetchImpl: async () => ({ ok: false, status: 401, json: async () => ({}) }) });
+  const app = makeApp({ cmdbConfigRepo, connectorRegistry, secretBox: box });
+  const res = await request(app).post('/api/diagnostics/run').set('Authorization', admin()).send({ targets: ['cmdb'] });
+  assert.equal(res.status, 200);
+  const cmdb = res.body.targets.find((t) => t.id === 'cmdb');
+  assert.ok(cmdb);
+  assert.equal(cmdb.result.ran, true);
+  assert.equal(cmdb.result.ok, false);
+});
 
 test('GET /api/diagnostics/targets returns the grouped catalogue (admin)', async () => {
   const res = await request(makeApp()).get('/api/diagnostics/targets').set('Authorization', admin());

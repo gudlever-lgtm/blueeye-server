@@ -252,7 +252,7 @@ function createApiRouter({
     router.use('/api/cmdb/assets', createCmdbAssetsRouter({ cmdbConfigRepo, registry: connectorRegistry, secretBox }));
   }
   if (agentCmdbLinksRepo) {
-    router.use('/api/agents', createAgentCmdbLinkRouter({ agentCmdbLinksRepo, agentsRepo }));
+    router.use('/api/agents', createAgentCmdbLinkRouter({ agentCmdbLinksRepo, agentsRepo, locationsRepo }));
   }
   // Test area — consolidated, admin-only security screening of every outbound
   // integration (email/alert channels, ITSM/IPAM receivers, SSO, AI/map/licence).
@@ -261,6 +261,9 @@ function createApiRouter({
     alertingDispatcher: dispatcher,
     integrationsRepo,
     integrationsDispatcher,
+    cmdbConfigRepo,
+    connectorRegistry,
+    secretBox,
     ldapAuth,
     ldapConfigRepo,
     oidcAuth,

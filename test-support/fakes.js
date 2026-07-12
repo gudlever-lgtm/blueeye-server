@@ -24,6 +24,7 @@ function makeLocationsRepo(overrides = {}) {
   return {
     findAll: overrides.findAll || (async () => []),
     findById: overrides.findById || (async () => null),
+    findByName: overrides.findByName || (async () => null),
     create:
       overrides.create ||
       (async (input) => ({
@@ -69,6 +70,8 @@ function makeAgentsRepo(overrides = {}) {
     findForGeo: overrides.findForGeo || (async () => []),
     updateManaged:
       overrides.updateManaged || (async (id, patch) => ({ id, ...patch })),
+    setLocation:
+      overrides.setLocation || (async (id, locationId) => ({ id, location_id: locationId ?? null })),
     setCapabilities:
       overrides.setCapabilities || (async (id, capabilities) => ({ id, capabilities })),
     remove: overrides.remove || (async () => false),

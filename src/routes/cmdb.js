@@ -124,9 +124,21 @@ function createCmdbAssetsRouter({ cmdbConfigRepo, registry, secretBox }) {
   return router;
 }
 
+// Resolves a CMDB asset location label to a BlueEye location id, creating the
+// site (name only, no coordinates) when none matches by name. Returns the linked
+// { id, name } or null when there is nothing to sync. Match is by name so two
+// agents at "Copenhagen DC" converge on ONE location row.
+async function syncLocation(locationsRepo, agentsRepo, agentId, label) {
+  if (!locationsRepo || !label) return null;
+  let loc = await locationsRepo.findByName(label);
+  if (!loc) loc = await locationsRepo.create({ name: label });
+  await agentsRepo.setLocation(agentId, loc.id);
+  return { id: loc.id, name: loc.name };
+}
+
 // --- Agent link (read viewer+, write operator+) -------------------------------
 // Mounted at /api/agents; owns /:id/cmdb-link.
-function createAgentCmdbLinkRouter({ agentCmdbLinksRepo, agentsRepo }) {
+function createAgentCmdbLinkRouter({ agentCmdbLinksRepo, agentsRepo, locationsRepo = null }) {
   const router = express.Router();
   const reader = [requireAuth, requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN)];
   const writer = [requireAuth, requireRole(ROLES.OPERATOR, ROLES.ADMIN)];
@@ -153,7 +165,15 @@ function createAgentCmdbLinkRouter({ agentCmdbLinksRepo, agentsRepo }) {
       cmdbAssetLocation: value.cmdbAssetLocation,
       linkedBy: (req.user && req.user.id) || null,
     });
-    res.json(link);
+    // Sync the agent's BlueEye site from the asset's CMDB location (match by name,
+    // create if absent). Best-effort: a location failure must not fail the link.
+    let syncedLocation = null;
+    try {
+      syncedLocation = await syncLocation(locationsRepo, agentsRepo, id, value.cmdbAssetLocation);
+    } catch (err) {
+      req.log.warn(`cmdb-link: location sync failed for agent ${id} (${err.message}); link saved without it`);
+    }
+    res.json({ ...link, synced_location: syncedLocation });
   }));
 
   router.delete('/:id/cmdb-link', ...writer, asyncHandler(async (req, res) => {

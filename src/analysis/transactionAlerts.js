@@ -1,19 +1,19 @@
 'use strict';
 
-// Pure helpers for transaction alerting: phase → Danish diagnosis, baseline
+// Pure helpers for transaction alerting: phase → human-readable diagnosis, baseline
 // deviation classification, and threshold evaluation. All I/O (baseline lookups,
 // cross-check, Mistral) lives in the caller (src/ws/agentSocket.js); everything
 // here is pure and unit-testable.
 
-// Failure-phase → human-readable Danish diagnosis. Mirrored in the dashboard
+// Failure-phase → human-readable diagnosis. Mirrored in the dashboard
 // (public/app.js) so alert text and UI diagnosis read identically.
 const PHASE_LABELS = {
-  dns: 'DNS-opslag mislykkedes — hostnavnet kunne ikke løses',
-  connect: 'TCP-forbindelsen fejlede — netværk, firewall eller host nede',
-  tls: 'TLS-håndtrykket fejlede — certifikat- eller protokolproblem',
-  http_status: 'Uventet HTTP-statuskode',
-  keyword: 'Svaret manglede det forventede indhold',
-  timeout: 'Trinnet timede ud',
+  dns: 'DNS lookup failed — the hostname could not be resolved',
+  connect: 'TCP connection failed — network, firewall, or host down',
+  tls: 'TLS handshake failed — certificate or protocol problem',
+  http_status: 'Unexpected HTTP status code',
+  keyword: 'Response was missing the expected content',
+  timeout: 'The step timed out',
 };
 
 const MIN_BASELINE_SAMPLES = 20; // below this, no deviation verdict
@@ -47,26 +47,26 @@ function classifyDeviation({ baselines, result }) {
   return best ? { deviation: best.deviation, step: best.step } : { deviation: null, step: null };
 }
 
-// Danish template diagnosis — the Mistral fallback. Uses the agent's structured
+// Template diagnosis — the Mistral fallback. Uses the agent's structured
 // detail.phase, the deviation, and the cross-check scope.
 function diagnoseText({ test, agentId, result, deviation, deviationStep, crosscheck }) {
   const detail = result && result.detail && typeof result.detail === 'object' ? result.detail : {};
   const stepIdx = detail.step != null ? detail.step : deviationStep;
-  const stepPart = stepIdx != null ? ` (trin ${stepIdx})` : '';
+  const stepPart = stepIdx != null ? ` (step ${stepIdx})` : '';
   let head;
   if (result.status === 'ok') {
-    head = deviation ? `Latenstid væsentligt ${deviation === 'slower' ? 'over' : 'under'} baseline` : 'OK';
+    head = deviation ? `Latency significantly ${deviation === 'slower' ? 'above' : 'below'} baseline` : 'OK';
   } else {
-    head = PHASE_LABELS[detail.phase] || `Fejlede (${result.status})`;
+    head = PHASE_LABELS[detail.phase] || `Failed (${result.status})`;
     if (detail.errno) head += ` [${detail.errno}]`;
   }
   let scope = '';
   if (crosscheck) {
     scope = crosscheck.scope === 'system'
-      ? ' — alle tildelte agenter fejler: systemet er nede'
-      : ` — kun agent ${agentId} fejler: problem fra denne agents site/netværk`;
+      ? ' — all assigned agents fail: the system is down'
+      : ` — only agent ${agentId} fails: problem from this agent's site/network`;
   }
-  return `Transaktionstest "${test.name}"${stepPart}: ${head}${scope}`;
+  return `Transaction test "${test.name}"${stepPart}: ${head}${scope}`;
 }
 
 // Evaluates the test's thresholds. Returns { metric, kind, severity } to alert,

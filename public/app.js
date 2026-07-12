@@ -659,7 +659,7 @@ const PAGE_INFO = {
     title: 'Topology — flow-derived dependencies',
     body: () => [
       el('p', {}, 'Aggregates observed src→dst conversations into a directed, byte-weighted graph: each edge is a dependency, each node a host or external peer. Complements ', viewLink('flows', 'Flows'), ' (raw conversations) and the per-target path map — this is the service/host dependency view. Metadata only: addresses, ports, ASNs and byte/flow counts, never payload.'),
-      el('p', {}, 'The ', el('strong', {}, 'Diagram'), ' draws the busiest hosts as a force-directed graph — circle size is traffic volume, line width is bytes between two hosts, green rings mark internal (RFC1918) hosts and amber rings mark external peers. Click a host to highlight its neighbourhood and open Ping/Vis rute for it, same as a table row.'),
+      el('p', {}, 'The ', el('strong', {}, 'Diagram'), ' draws the busiest hosts as a force-directed graph — circle size is traffic volume, line width is bytes between two hosts, green rings mark internal (RFC1918) hosts and amber rings mark external peers. Click a host to highlight its neighbourhood and open Ping/Show route for it, same as a table row.'),
       el('p', {}, 'The ', el('strong', {}, 'Map'), ' plots the same data geographically: external peers by country (circle size = traffic), your sites as anchor pins, and the observed dependencies as routes between them. Internal (private) hosts are never geolocated, so the map covers only the external subset — the Diagram remains the view for the internal structure. Routes internal→external are drawn from a single anchor site, so pick a ', el('strong', {}, 'Site'), ' to see its routes to external peers.'),
       el('p', {}, 'Use the ', el('strong', {}, 'Site'), ' filter to scope the graph to one location and reduce noise. Use the ', el('strong', {}, 'Window'), ' selector to widen or narrow the time range covered.'),
       el('p', { class: 'muted' }, 'Only agents whose traffic source is NetFlow or sFlow contribute flow records; the heaviest dependencies/hosts are shown when the graph is large.'),
@@ -4119,7 +4119,7 @@ views.topology = async () => {
   if (onlineAgents.length) {
     onlineAgents.forEach((a) => agentSel.append(el('option', { value: String(a.id) }, a.display_name || a.hostname)));
     root.append(el('div', { class: 'topo-action-bar' },
-      el('span', { class: 'muted' }, 'Kør handlinger fra agent:'), agentSel));
+      el('span', { class: 'muted' }, 'Run actions from agent:'), agentSel));
   }
 
   const summary = el('p', { class: 'muted' });
@@ -4146,7 +4146,7 @@ views.topology = async () => {
   // Send a probe and poll until a result newer than sentAt appears (or timeout).
   async function runProbeAndWait(type, host, maxAttempts, intervalMs) {
     const id = agentSel.value;
-    if (!id) throw new Error('Vælg en agent.');
+    if (!id) throw new Error('Select an agent.');
     const sentAt = Date.now();
     await api(`/agents/${id}/probe`, { method: 'POST', body: { type, host } });
     for (let i = 0; i < maxAttempts; i++) {
@@ -4156,41 +4156,41 @@ views.topology = async () => {
         (x) => x.type === type && x.target === host && new Date(x.ts).getTime() > sentAt - 500);
       if (r) return { r, agentId: id };
     }
-    throw new Error('Intet resultat endnu — tjek Probes & Tests.');
+    throw new Error('No result yet — check Probes & Tests.');
   }
 
-  // Per-row action buttons: Ping shows a quick RTT/loss summary; Vis rute runs
+  // Per-row action buttons: Ping shows a quick RTT/loss summary; Show route runs
   // traceroute and opens the full path-graph panel (same as Probes & Tests).
   function actionBtns(host) {
     const pingBtn = el('button', { class: 'small ghost', onclick: async () => {
-      if (!agentSel.value) { toast('Vælg en agent.', true); return; }
+      if (!agentSel.value) { toast('Select an agent.', true); return; }
       pingBtn.disabled = true;
       const card = $('#modal-card');
-      const st = el('p', { class: 'muted' }, 'Sender ping…');
+      const st = el('p', { class: 'muted' }, 'Sending ping…');
       card.replaceChildren(
         el('h3', {}, `Ping → ${esc(host)}`), st,
-        el('div', { class: 'form-actions' }, el('button', { class: 'ghost', onclick: closeModal }, 'Luk')));
+        el('div', { class: 'form-actions' }, el('button', { class: 'ghost', onclick: closeModal }, 'Close')));
       $('#modal').classList.remove('hidden');
       try {
         const { r } = await runProbeAndWait('ping', host, 8, 2500);
         st.className = r.ok ? '' : 'error';
         st.textContent = r.ok
           ? `RTT: ${r.rttMs} ms · Tab: ${r.lossPct ?? 0}% · Jitter: ${r.jitterMs != null ? r.jitterMs + ' ms' : '–'}`
-          : `Fejl: ${r.detail || 'intet svar'}`;
+          : `Error: ${r.detail || 'no response'}`;
       } catch (e) {
         st.className = 'error'; st.textContent = errText(e);
       } finally { pingBtn.disabled = false; }
     }}, 'Ping');
 
     const routeBtn = el('button', { class: 'small ghost', onclick: async () => {
-      if (!agentSel.value) { toast('Vælg en agent.', true); return; }
+      if (!agentSel.value) { toast('Select an agent.', true); return; }
       routeBtn.disabled = true;
       const agentId = agentSel.value;
       const card = $('#modal-card');
-      const st = el('p', { class: 'muted' }, 'Kører traceroute (op til ~30 s)…');
+      const st = el('p', { class: 'muted' }, 'Running traceroute (up to ~30 s)…');
       card.replaceChildren(
-        el('h3', {}, `Rute → ${esc(host)}`), st,
-        el('div', { class: 'form-actions' }, el('button', { class: 'ghost', onclick: closeModal }, 'Luk')));
+        el('h3', {}, `Route → ${esc(host)}`), st,
+        el('div', { class: 'form-actions' }, el('button', { class: 'ghost', onclick: closeModal }, 'Close')));
       $('#modal').classList.remove('hidden');
       $('#modal-card').classList.add('wide');
       try {
@@ -4200,7 +4200,7 @@ views.topology = async () => {
       } catch (e) {
         st.className = 'error'; st.textContent = errText(e);
       } finally { routeBtn.disabled = false; }
-    }}, 'Vis rute');
+    }}, 'Show route');
 
     return el('div', { class: 'row-actions' }, pingBtn, routeBtn);
   }
@@ -4492,24 +4492,24 @@ function investigationCard(inv) {
     nis2El = el('details', { class: 'inv-nis2-draft' },
       el('summary', {},
         el('span', { class: 'badge inv-badge INFO' }, 'NIS2'),
-        ` Udkast oprettet (${esc(d.incidentId || '?')}) — gennemgå inden indsendelse`),
+        ` Draft created (${esc(d.incidentId || '?')}) — review before submission`),
       el('div', { class: 'inv-nis2-draft-body' },
         el('p', { class: 'muted inv-nis2-notice' },
-          'AI-genereret udkast · Kræver menneskelig gennemgang · Aldrig auto-indsendt'),
+          'AI-generated draft · Requires human review · Never auto-submitted'),
         el('dl', { class: 'inv-nis2-dl' },
-          el('dt', {}, 'Titel'), el('dd', {}, esc(d.title || '–')),
-          el('dt', {}, 'Alvorlighed'), el('dd', {},
+          el('dt', {}, 'Title'), el('dd', {}, esc(d.title || '–')),
+          el('dt', {}, 'Severity'), el('dd', {},
             el('span', { class: `badge inv-badge ${sevCls}` }, d.severity || '–')),
-          el('dt', {}, 'Opdaget'), el('dd', {}, d.detectedAt ? fmtDate(new Date(d.detectedAt).getTime()) : '–'),
-          el('dt', {}, 'Berørte systemer'), el('dd', {}, esc(d.affectedSystems || '–')),
-          el('dt', {}, 'Beskrivelse'), el('dd', {}, esc(d.businessImpact || '–'))),
+          el('dt', {}, 'Detected'), el('dd', {}, d.detectedAt ? fmtDate(new Date(d.detectedAt).getTime()) : '–'),
+          el('dt', {}, 'Affected systems'), el('dd', {}, esc(d.affectedSystems || '–')),
+          el('dt', {}, 'Description'), el('dd', {}, esc(d.businessImpact || '–'))),
         el('p', { class: 'muted' },
-          'Rediger udkastet under ',
+          'Edit the draft under ',
           el('a', { href: '#', onclick: (ev) => { ev.preventDefault(); switchView('reporting'); } },
             'Reporting → NIS2 Incidents'), '.')));
   } else if (inv.nis2DraftError) {
     nis2El = el('div', { class: 'inv-nis2-error muted' },
-      `NIS2-udkast kunne ikke oprettes: ${esc(inv.nis2DraftError)}`);
+      `NIS2 draft could not be created: ${esc(inv.nis2DraftError)}`);
   }
 
   return el('div', { class: 'inv-card' },
@@ -9706,28 +9706,28 @@ PAGE_INFO.logs = {
 };
 
 PAGE_INFO.transactions = {
-  hero: 'Transaktionstests — http/tcp/dns/icmp der køres fra tildelte agenter på et interval, med latenstid, baseline-afvigelse og fejldiagnose pr. trin.',
-  title: 'Transaktionstests',
+  hero: 'Transaction tests — http/tcp/dns/icmp run from assigned agents on an interval, with latency, baseline deviation, and failure diagnosis per step.',
+  title: 'Transaction tests',
   body: () => [
-    el('p', {}, 'En transaktionstest kører fra udvalgte agenter på sit eget interval. HTTP-tests er en sekvens af trin (metode, URL, headers, body) der kan validere statuskode og et nøgleord samt udtrække værdier (regex/JSON-path/cookie) til efterfølgende trin. Hemmeligheder refereres som ', el('span', { class: 'mono' }, '{{secret:navn}}'), ' — de skrives kun og vises aldrig igen.'),
-    el('h4', {}, 'Matrix'), el('p', {}, 'Agenter × tests med seneste status som farvet celle. En pil (↑/↓) viser at seneste kørsel afveg fra baseline (langsommere/hurtigere).'),
-    el('h4', {}, 'Tidsheatmap'), el('p', {}, 'Ren SVG: X = tidsbuckets (5m/15m/1h), Y = agenter. Farven afspejler gennemsnitlig latenstid (grøn→gul→rød); mørke celler = fejl. Tooltip: avg latenstid, fejl, kørsler.'),
-    el('h4', {}, 'Trend pr. trin'), el('p', {}, 'Median pr. dag pr. trin over 7/30 dage. Linjen for hele testen er stiplet.'),
-    el('h4', {}, 'Diagnose'), el('p', {}, 'Fejl vises med en læsbar diagnose ud fra fejlfasen (DNS, connect, TLS, HTTP-status, keyword, timeout) — samme tekster som server-alarmerne.'),
+    el('p', {}, 'A transaction test runs from selected agents on its own interval. HTTP tests are a sequence of steps (method, URL, headers, body) that can validate the status code and a keyword, and extract values (regex/JSON-path/cookie) for subsequent steps. Secrets are referenced as ', el('span', { class: 'mono' }, '{{secret:name}}'), ' — they are write-only and never shown again.'),
+    el('h4', {}, 'Matrix'), el('p', {}, 'Agents × tests with the latest status as a coloured cell. An arrow (↑/↓) shows that the latest run deviated from the baseline (slower/faster).'),
+    el('h4', {}, 'Time heatmap'), el('p', {}, 'Pure SVG: X = time buckets (5m/15m/1h), Y = agents. Colour reflects average latency (green→yellow→red); dark cells = failures. Tooltip: avg latency, failures, runs.'),
+    el('h4', {}, 'Trend per step'), el('p', {}, 'Median per day per step over 7/30 days. The line for the whole test is dashed.'),
+    el('h4', {}, 'Diagnosis'), el('p', {}, 'Failures are shown with a readable diagnosis based on the failure phase (DNS, connect, TLS, HTTP status, keyword, timeout) — same text as the server alerts.'),
   ],
 };
 
-// ---- Transaktionstests ------------------------------------------------------
-// Phase → Danish diagnosis. MUST match src/analysis/transactionAlerts.js so the
+// ---- Transaction tests ------------------------------------------------------
+// Phase → diagnosis. MUST match src/analysis/transactionAlerts.js so the
 // UI diagnosis and the server alert text read identically.
 const TX_PHASE_LABELS = {
-  dns: 'DNS-opslag mislykkedes — hostnavnet kunne ikke løses',
-  connect: 'TCP-forbindelsen fejlede — netværk, firewall eller host nede',
-  tls: 'TLS-håndtrykket fejlede — certifikat- eller protokolproblem',
-  http_status: 'Uventet HTTP-statuskode',
-  keyword: 'Svaret manglede det forventede indhold',
-  timeout: 'Trinnet timede ud',
-  error: 'Testen kunne ikke køres',
+  dns: 'DNS lookup failed — the hostname could not be resolved',
+  connect: 'TCP connection failed — network, firewall, or host down',
+  tls: 'TLS handshake failed — certificate or protocol problem',
+  http_status: 'Unexpected HTTP status code',
+  keyword: 'Response was missing the expected content',
+  timeout: 'The step timed out',
+  error: 'The test could not be run',
 };
 const TX_TYPES = ['http', 'tcp', 'dns', 'icmp'];
 const TX_DNS_RECORDS = ['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'NS', 'SOA', 'PTR', 'SRV'];
@@ -9737,14 +9737,14 @@ const TX_STATUS_COLOR = { ok: '#2e7d32', fail: '#c62828', timeout: '#e65100', er
 function txDiagnose(detail, status) {
   const d = detail && typeof detail === 'object' ? detail : {};
   if (status === 'ok') return 'OK';
-  const base = TX_PHASE_LABELS[d.phase] || `Fejlede (${status || 'ukendt'})`;
-  const step = d.step != null ? ` (trin ${d.step})` : '';
+  const base = TX_PHASE_LABELS[d.phase] || `Failed (${status || 'unknown'})`;
+  const step = d.step != null ? ` (step ${d.step})` : '';
   const errno = d.errno ? ` [${d.errno}]` : '';
   return `${base}${step}${errno}`;
 }
 function txDeviationArrow(dev) {
-  if (dev === 'slower') return el('span', { class: 'tx-arrow', title: 'Langsommere end baseline', style: 'color:#e65100' }, ' ↑');
-  if (dev === 'faster') return el('span', { class: 'tx-arrow', title: 'Hurtigere end baseline', style: 'color:#1565c0' }, ' ↓');
+  if (dev === 'slower') return el('span', { class: 'tx-arrow', title: 'Slower than baseline', style: 'color:#e65100' }, ' ↑');
+  if (dev === 'faster') return el('span', { class: 'tx-arrow', title: 'Faster than baseline', style: 'color:#1565c0' }, ' ↓');
   return null;
 }
 function txAgentName(agents, id) { const a = agents.find((x) => x.id === id); return a ? (a.display_name || a.hostname || `#${id}`) : `#${id}`; }
@@ -9760,11 +9760,11 @@ function txHeatColor(cell, maxLatency) {
 // Swaps a container's content, catching errors (incl. 404 for an unknown test)
 // into a tidy error panel so the UI never crashes.
 async function txMount(host, builder) {
-  host.replaceChildren(el('div', { class: 'muted' }, 'Indlæser …'));
+  host.replaceChildren(el('div', { class: 'muted' }, 'Loading …'));
   try {
     host.replaceChildren(await builder());
   } catch (e) {
-    const msg = e && e.status === 404 ? 'Transaktionstesten findes ikke (måske slettet).' : (errText ? errText(e) : e.message);
+    const msg = e && e.status === 404 ? 'The transaction test does not exist (perhaps deleted).' : (errText ? errText(e) : e.message);
     host.replaceChildren(el('div', { class: 'error' }, msg));
   }
 }
@@ -9773,10 +9773,10 @@ let txTab = 'list';
 views.transactions = async () => {
   const root = el('div', { class: 'transactions' });
   const body = el('div', {});
-  const tabs = el('div', { class: 'subtabs' }, ...[['list', 'Liste'], ['matrix', 'Matrix']].map(([k, label]) =>
+  const tabs = el('div', { class: 'subtabs' }, ...[['list', 'List'], ['matrix', 'Matrix']].map(([k, label]) =>
     el('button', { class: `subtab${txTab === k ? ' active' : ''}`, onclick: () => { txTab = k; draw(); } }, label)));
-  const head = el('div', { class: 'section-head' }, el('h2', {}, 'Transaktionstests'),
-    isAdmin() ? el('button', { class: 'primary', onclick: () => txMount(body, () => txForm(null, body)) }, '+ Ny test') : null);
+  const head = el('div', { class: 'section-head' }, el('h2', {}, 'Transaction tests'),
+    isAdmin() ? el('button', { class: 'primary', onclick: () => txMount(body, () => txForm(null, body)) }, '+ New test') : null);
   function draw() {
     tabs.querySelectorAll('.subtab').forEach((b, i) => b.classList.toggle('active', ['list', 'matrix'][i] === txTab));
     if (txTab === 'matrix') txMount(body, () => txMatrixView(body));
@@ -9789,25 +9789,25 @@ views.transactions = async () => {
 
 async function txListView(host) {
   const tests = await api('/api/transactions');
-  if (!tests.length) return el('div', { class: 'empty' }, 'Ingen transaktionstests endnu. En transaktionstest kører http/tcp/dns/icmp fra tildelte agenter på et interval.');
+  if (!tests.length) return el('div', { class: 'empty' }, 'No transaction tests yet. A transaction test runs http/tcp/dns/icmp from assigned agents on an interval.');
   const rows = tests.map((t) => el('tr', { class: 'clickable', onclick: () => txMount(host, () => txDetailView(t.id, host)) },
     el('td', {}, t.name),
     el('td', {}, el('span', { class: 'chip' }, t.type)),
     el('td', {}, t.target || '—'),
     el('td', {}, String((t.agent_ids || []).length)),
     el('td', {}, `${t.interval_sec}s`),
-    el('td', {}, t.enabled ? 'Aktiv' : 'Deaktiveret'),
+    el('td', {}, t.enabled ? 'Active' : 'Disabled'),
     el('td', {}, isAdmin() ? el('span', {},
-      el('button', { class: 'ghost small', onclick: (e) => { e.stopPropagation(); txMount(host, () => txForm(t, host)); } }, 'Redigér'),
-      el('button', { class: 'ghost small danger', onclick: (e) => { e.stopPropagation(); txDelete(t, host); } }, 'Slet')) : null)));
+      el('button', { class: 'ghost small', onclick: (e) => { e.stopPropagation(); txMount(host, () => txForm(t, host)); } }, 'Edit'),
+      el('button', { class: 'ghost small danger', onclick: (e) => { e.stopPropagation(); txDelete(t, host); } }, 'Delete')) : null)));
   return el('table', { class: 'data-table' },
-    el('thead', {}, el('tr', {}, ...['Navn', 'Type', 'Mål', 'Agenter', 'Interval', 'Status', ''].map((h) => el('th', {}, h)))),
+    el('thead', {}, el('tr', {}, ...['Name', 'Type', 'Target', 'Agents', 'Interval', 'Status', ''].map((h) => el('th', {}, h)))),
     el('tbody', {}, ...rows));
 }
 
 async function txDelete(test, host) {
-  if (!confirm(`Slet transaktionstest "${test.name}"?`)) return;
-  try { await api(`/api/transactions/${test.id}`, { method: 'DELETE' }); toast('Slettet'); txMount(host, () => txListView(host)); }
+  if (!confirm(`Delete transaction test "${test.name}"?`)) return;
+  try { await api(`/api/transactions/${test.id}`, { method: 'DELETE' }); toast('Deleted'); txMount(host, () => txListView(host)); }
   catch (e) { toast(errText(e), true); }
 }
 
@@ -9829,19 +9829,19 @@ async function txForm(test, host) {
   const thr = (model.config.thresholds) || {};
   const consecIn = el('input', { type: 'number', value: thr.consecutive_fails ?? '', min: 1, placeholder: 'fx 3' });
   const latIn = el('input', { type: 'number', value: thr.latency_ms ?? '', min: 1, placeholder: 'ms' });
-  const devSel = el('select', {}, ...[['', '—'], ['slower', 'langsommere'], ['faster', 'hurtigere'], ['any', 'enhver']].map(([v, l]) => el('option', { value: v, ...(v === (thr.deviation || '') ? { selected: 'selected' } : {}) }, l)));
+  const devSel = el('select', {}, ...[['', '—'], ['slower', 'slower'], ['faster', 'faster'], ['any', 'any']].map(([v, l]) => el('option', { value: v, ...(v === (thr.deviation || '') ? { selected: 'selected' } : {}) }, l)));
 
   // http multi-step editor
   const stepsHost = el('div', { class: 'tx-steps' });
   function stepRow(s) {
     const methodSel = el('select', {}, ...TX_METHODS.map((m) => el('option', { value: m, ...(m === (s.method || 'GET') ? { selected: 'selected' } : {}) }, m)));
-    const nameI = el('input', { type: 'text', value: s.name || '', placeholder: 'navn' });
+    const nameI = el('input', { type: 'text', value: s.name || '', placeholder: 'name' });
     const urlI = el('input', { type: 'text', value: s.url || '', placeholder: 'https://… ({{secret:x}}/{{var}})' });
-    const headersI = el('textarea', { rows: 2, placeholder: 'Header: value pr. linje' }, s.headers ? Object.entries(s.headers).map(([k, v]) => `${k}: ${v}`).join('\n') : '');
+    const headersI = el('textarea', { rows: 2, placeholder: 'Header: value per line' }, s.headers ? Object.entries(s.headers).map(([k, v]) => `${k}: ${v}`).join('\n') : '');
     const bodyI = el('textarea', { rows: 2, placeholder: 'body' }, s.body || '');
     const statusI = el('input', { type: 'number', value: s.expect_status ?? '', placeholder: 'expect status' });
     const kwI = el('input', { type: 'text', value: s.expect_keyword || '', placeholder: 'expect keyword' });
-    const exNameI = el('input', { type: 'text', value: s.extract && s.extract.name || '', placeholder: 'extract navn' });
+    const exNameI = el('input', { type: 'text', value: s.extract && s.extract.name || '', placeholder: 'extract name' });
     const exTypeSel = el('select', {}, ...['regex', 'json', 'cookie'].map((t) => el('option', { value: t, ...(s.extract && s.extract.type === t ? { selected: 'selected' } : {}) }, t)));
     const exPatI = el('input', { type: 'text', value: s.extract && s.extract.pattern || '', placeholder: 'pattern / path / cookie' });
     const row = el('div', { class: 'tx-step-row' },
@@ -9869,12 +9869,12 @@ async function txForm(test, host) {
     targetIn.parentElement && (targetIn.closest('label').style.display = type === 'http' ? 'none' : '');
     if (type === 'http') {
       (model.config.steps && model.config.steps.length ? model.config.steps : [{ method: 'GET', url: '' }]).forEach((s) => stepsHost.append(stepRow(s)));
-      cfgHost.append(el('label', {}, 'HTTP-trin'), stepsHost, el('button', { type: 'button', class: 'ghost small', onclick: () => stepsHost.append(stepRow({ method: 'GET', url: '' })) }, '+ Trin'));
+      cfgHost.append(el('label', {}, 'HTTP steps'), stepsHost, el('button', { type: 'button', class: 'ghost small', onclick: () => stepsHost.append(stepRow({ method: 'GET', url: '' })) }, '+ Step'));
     } else if (type === 'tcp') {
       cfgHost.append(el('label', {}, 'Port', el('input', { type: 'number', id: 'tx-port', value: model.config.port || '', min: 1, max: 65535 })));
     } else if (type === 'dns') {
       cfgHost.append(el('label', {}, 'Record', el('select', { id: 'tx-record' }, ...TX_DNS_RECORDS.map((r) => el('option', { value: r, ...(r === (model.config.record || 'A') ? { selected: 'selected' } : {}) }, r)))),
-        el('label', {}, 'Forventet svar (valgfri)', el('input', { type: 'text', id: 'tx-expect', value: model.config.expect || '' })));
+        el('label', {}, 'Expected response (optional)', el('input', { type: 'text', id: 'tx-expect', value: model.config.expect || '' })));
     }
   }
   typeSel.addEventListener('change', renderConfig);
@@ -9888,11 +9888,11 @@ async function txForm(test, host) {
 
   // Secrets (write-only): existing shown as "sat" chips + add new name/value rows.
   const secretsHost = el('div', { class: 'tx-secrets' });
-  (model.secret_names || []).forEach((n) => secretsHost.append(el('span', { class: 'chip', title: 'Sat (skjult)' }, `${n} ✓`)));
+  (model.secret_names || []).forEach((n) => secretsHost.append(el('span', { class: 'chip', title: 'Set (hidden)' }, `${n} ✓`)));
   const newSecHost = el('div', {});
   function addSecretRow() {
-    const nI = el('input', { type: 'text', placeholder: 'navn' });
-    const vI = el('input', { type: 'password', placeholder: 'værdi (skrives kun)' });
+    const nI = el('input', { type: 'text', placeholder: 'name' });
+    const vI = el('input', { type: 'password', placeholder: 'value (write-only)' });
     const r = el('div', { class: 'tx-secret-row' }, nI, vI, el('button', { type: 'button', class: 'ghost small danger', onclick: () => r.remove() }, '×'));
     r._collect = () => (nI.value.trim() ? { name: nI.value.trim(), value: vI.value } : null);
     newSecHost.append(r);
@@ -9900,24 +9900,24 @@ async function txForm(test, host) {
 
   const errP = el('p', { class: 'error' });
   const form = el('div', { class: 'form-grid' },
-    el('label', {}, 'Navn', nameIn),
+    el('label', {}, 'Name', nameIn),
     el('label', {}, 'Type', typeSel),
-    el('label', {}, 'Mål (host)', targetIn),
+    el('label', {}, 'Target (host)', targetIn),
     cfgHost,
-    el('label', {}, 'Interval (sek)', intervalIn),
-    el('label', { class: 'tx-inline' }, enabledIn, ' Aktiv'),
-    el('h4', {}, 'Alarmtærskler'),
+    el('label', {}, 'Interval (sec)', intervalIn),
+    el('label', { class: 'tx-inline' }, enabledIn, ' Active'),
+    el('h4', {}, 'Alert thresholds'),
     el('div', { class: 'tx-thresholds' },
-      el('label', {}, 'Fejl i træk', consecIn),
-      el('label', {}, 'Latenstid (ms)', latIn),
-      el('label', {}, 'Afvigelse', devSel)),
-    el('h4', {}, 'Hemmeligheder'), el('div', { class: 'muted' }, 'Skrives kun — værdier vises aldrig igen, kun navn + ✓.'), secretsHost, newSecHost,
-    el('button', { type: 'button', class: 'ghost small', onclick: addSecretRow }, '+ Hemmelighed'),
-    el('h4', {}, 'Agenter'), el('div', { class: 'tx-agents' }, ...(agentChecks.length ? agentChecks : [el('div', { class: 'muted' }, 'Ingen agenter.')])),
+      el('label', {}, 'Consecutive failures', consecIn),
+      el('label', {}, 'Latency (ms)', latIn),
+      el('label', {}, 'Deviation', devSel)),
+    el('h4', {}, 'Secrets'), el('div', { class: 'muted' }, 'Write-only — values are never shown again, only name + ✓.'), secretsHost, newSecHost,
+    el('button', { type: 'button', class: 'ghost small', onclick: addSecretRow }, '+ Secret'),
+    el('h4', {}, 'Agents'), el('div', { class: 'tx-agents' }, ...(agentChecks.length ? agentChecks : [el('div', { class: 'muted' }, 'No agents.')])),
     errP,
     el('div', { class: 'form-actions' },
-      el('button', { type: 'button', class: 'ghost', onclick: () => txMount(host, () => txListView(host)) }, 'Annuller'),
-      el('button', { type: 'button', class: 'primary', onclick: save }, isEdit ? 'Gem' : 'Opret')));
+      el('button', { type: 'button', class: 'ghost', onclick: () => txMount(host, () => txListView(host)) }, 'Cancel'),
+      el('button', { type: 'button', class: 'primary', onclick: save }, isEdit ? 'Save' : 'Create')));
 
   async function save() {
     errP.textContent = '';
@@ -9939,19 +9939,19 @@ async function txForm(test, host) {
     try {
       const saved = isEdit ? await api(`/api/transactions/${test.id}`, { method: 'PUT', body: payload }) : await api('/api/transactions', { method: 'POST', body: payload });
       await api(`/api/transactions/${saved.id}/agents`, { method: 'PUT', body: { agent_ids: agentIds } });
-      toast('Gemt');
+      toast('Saved');
       txMount(host, () => txListView(host));
     } catch (e) { errP.textContent = errText(e); }
   }
 
   renderConfig();
-  return el('div', { class: 'tx-form' }, el('h3', {}, isEdit ? 'Redigér transaktionstest' : 'Ny transaktionstest'), form);
+  return el('div', { class: 'tx-form' }, el('h3', {}, isEdit ? 'Edit transaction test' : 'New transaction test'), form);
 }
 
 // Matrix: agents × tests, latest status as a coloured cell (+ deviation arrow).
 async function txMatrixView(host) {
   const [tests, agents] = await Promise.all([api('/api/transactions'), api('/agents').catch(() => [])]);
-  if (!tests.length) return el('div', { class: 'empty' }, 'Ingen transaktionstests endnu.');
+  if (!tests.length) return el('div', { class: 'empty' }, 'No transaction tests yet.');
   // Latest result per (test, agent) from each test's recent results.
   const latest = {}; // `${testId}:${agentId}` -> result
   await Promise.all(tests.map(async (t) => {
@@ -9961,7 +9961,7 @@ async function txMatrixView(host) {
     } catch { /* skip a test that fails to load */ }
   }));
   const agentIds = [...new Set(Object.keys(latest).map((k) => Number(k.split(':')[1])))].sort((a, b) => a - b);
-  if (!agentIds.length) return el('div', { class: 'empty' }, 'Ingen resultater endnu.');
+  if (!agentIds.length) return el('div', { class: 'empty' }, 'No results yet.');
   const header = el('tr', {}, el('th', {}, 'Test'), ...agentIds.map((id) => el('th', {}, txAgentName(agents, id))));
   const rows = tests.map((t) => el('tr', {},
     el('td', { class: 'clickable', onclick: () => txMount(host, () => txDetailView(t.id, host)) }, t.name),
@@ -9979,11 +9979,11 @@ async function txDetailView(id, host) {
   const test = await api(`/api/transactions/${id}`); // throws 404 -> txMount shows a tidy error
   const agents = await api('/agents').catch(() => []);
   const root = el('div', { class: 'tx-detail' });
-  root.append(el('button', { class: 'ghost small', onclick: () => txMount(host, () => txListView(host)) }, '← Tilbage'),
+  root.append(el('button', { class: 'ghost small', onclick: () => txMount(host, () => txListView(host)) }, '← Back'),
     el('h3', {}, test.name, ' ', el('span', { class: 'chip' }, test.type), test.target ? el('span', { class: 'muted' }, ` · ${test.target}`) : null));
 
   // Heatmap with a bucket selector.
-  const bucketSel = el('select', {}, ...[['5m', '5 min'], ['15m', '15 min'], ['1h', '1 time']].map(([v, l]) => el('option', { value: v }, l)));
+  const bucketSel = el('select', {}, ...[['5m', '5 min'], ['15m', '15 min'], ['1h', '1 hour']].map(([v, l]) => el('option', { value: v }, l)));
   const heatHost = el('div', {});
   async function drawHeat() {
     try {
@@ -9992,14 +9992,14 @@ async function txDetailView(id, host) {
     } catch (e) { heatHost.replaceChildren(el('div', { class: 'error' }, errText(e))); }
   }
   bucketSel.addEventListener('change', drawHeat);
-  root.append(el('div', { class: 'section-head' }, el('h4', {}, 'Tidsheatmap'), bucketSel), heatHost);
+  root.append(el('div', { class: 'section-head' }, el('h4', {}, 'Time heatmap'), bucketSel), heatHost);
 
   // Trend per step (per agent, with day range).
   const agentSel = el('select', {}, ...(test.agent_ids || []).map((aid) => el('option', { value: aid }, txAgentName(agents, aid))));
-  const daysSel = el('select', {}, ...[['7', '7 dage'], ['30', '30 dage']].map(([v, l]) => el('option', { value: v }, l)));
+  const daysSel = el('select', {}, ...[['7', '7 days'], ['30', '30 days']].map(([v, l]) => el('option', { value: v }, l)));
   const trendHost = el('div', {});
   async function drawTrend() {
-    if (!agentSel.value) { trendHost.replaceChildren(el('div', { class: 'muted' }, 'Tildel en agent for at se trend.')); return; }
+    if (!agentSel.value) { trendHost.replaceChildren(el('div', { class: 'muted' }, 'Assign an agent to see the trend.')); return; }
     try {
       const { rows } = await api(`/api/transactions/${id}/trend?agent_id=${agentSel.value}&days=${daysSel.value}`);
       trendHost.replaceChildren(txTrendSvg(rows));
@@ -10007,7 +10007,7 @@ async function txDetailView(id, host) {
   }
   agentSel.addEventListener('change', drawTrend);
   daysSel.addEventListener('change', drawTrend);
-  root.append(el('div', { class: 'section-head' }, el('h4', {}, 'Trend pr. trin'), agentSel, daysSel), trendHost);
+  root.append(el('div', { class: 'section-head' }, el('h4', {}, 'Trend per step'), agentSel, daysSel), trendHost);
 
   // Recent results + diagnosis.
   const resHost = el('div', {});
@@ -10015,15 +10015,15 @@ async function txDetailView(id, host) {
     const { results } = await api(`/api/transactions/${id}/results`);
     const recent = results.slice(0, 15);
     resHost.replaceChildren(recent.length ? el('table', { class: 'data-table' },
-      el('thead', {}, el('tr', {}, ...['Tid', 'Agent', 'Status', 'Latenstid', 'Diagnose'].map((h) => el('th', {}, h)))),
+      el('thead', {}, el('tr', {}, ...['Time', 'Agent', 'Status', 'Latency', 'Diagnosis'].map((h) => el('th', {}, h)))),
       el('tbody', {}, ...recent.map((r) => el('tr', {},
-        el('td', {}, new Date(r.time).toLocaleString('da-DK')),
+        el('td', {}, new Date(r.time).toLocaleString('en-GB')),
         el('td', {}, txAgentName(agents, r.agent_id)),
         el('td', {}, el('span', { style: `color:${TX_STATUS_COLOR[r.status] || '#777'};font-weight:600` }, r.status), txDeviationArrow(r.deviation)),
         el('td', {}, r.latency_ms != null ? `${r.latency_ms} ms` : '—'),
-        el('td', { class: r.status === 'ok' ? 'muted' : '' }, txDiagnose(r.detail, r.status)))))) : el('div', { class: 'empty' }, 'Ingen resultater endnu.'));
+        el('td', { class: r.status === 'ok' ? 'muted' : '' }, txDiagnose(r.detail, r.status)))))) : el('div', { class: 'empty' }, 'No results yet.'));
   } catch (e) { resHost.replaceChildren(el('div', { class: 'error' }, errText(e))); }
-  root.append(el('h4', {}, 'Seneste resultater'), resHost);
+  root.append(el('h4', {}, 'Latest results'), resHost);
 
   drawHeat(); drawTrend();
   return root;
@@ -10031,7 +10031,7 @@ async function txDetailView(id, host) {
 
 // Pure SVG heatmap: X = time buckets, Y = agents. Colour by avg latency; dark on fails.
 function txHeatmapSvg(rows, agents) {
-  if (!rows || !rows.length) return el('div', { class: 'empty' }, 'Ingen data i perioden.');
+  if (!rows || !rows.length) return el('div', { class: 'empty' }, 'No data in the period.');
   const buckets = [...new Set(rows.map((r) => r.bucket))].sort((a, b) => a - b);
   const agentIds = [...new Set(rows.map((r) => r.agent_id))].sort((a, b) => a - b);
   const maxLat = Math.max(1, ...rows.map((r) => r.avg_latency || 0));
@@ -10043,7 +10043,7 @@ function txHeatmapSvg(rows, agents) {
     buckets.forEach((b, x) => {
       const c = rows.find((r) => r.agent_id === aid && r.bucket === b);
       if (!c) return;
-      const title = `avg ${c.avg_latency ?? '?'} ms · ${c.fail_count} fejl · ${c.sample_count} kørsler`;
+      const title = `avg ${c.avg_latency ?? '?'} ms · ${c.fail_count} failures · ${c.sample_count} runs`;
       svg.push(`<rect x="${padL + x * cell}" y="${padT + y * cell}" width="${cell - 1}" height="${cell - 1}" fill="${txHeatColor(c, maxLat)}"><title>${esc(title)}</title></rect>`);
     });
   });
@@ -10056,7 +10056,7 @@ function txHeatmapSvg(rows, agents) {
 // Pure SVG trend: one polyline per step, median per day. step 0 dashed = baseline
 // reference is implied by the whole-test line; each step is a separate series.
 function txTrendSvg(rows) {
-  if (!rows || !rows.length) return el('div', { class: 'empty' }, 'Ingen ok-resultater i perioden.');
+  if (!rows || !rows.length) return el('div', { class: 'empty' }, 'No ok results in the period.');
   const days = [...new Set(rows.map((r) => r.day))].sort();
   const steps = [...new Set(rows.map((r) => r.step))].sort((a, b) => a - b);
   const maxMs = Math.max(1, ...rows.map((r) => r.median_ms || 0));

@@ -122,7 +122,7 @@ test('NIS2 draft is persisted with status=open and notificationRequired=false', 
   assert.equal(draft.nis2Relevant, false, 'nis2Relevant must be false — human must assess');
 });
 
-test('NIS2 draft title is prefixed with [AI-udkast]', async () => {
+test('NIS2 draft title is prefixed with [AI draft]', async () => {
   const nis2IncidentsRepo = makeNis2IncidentsRepo();
   const app = makeEnabledApp({}, { nis2IncidentsRepo });
   const res = await request(app).post('/api/investigation/run')
@@ -130,8 +130,8 @@ test('NIS2 draft title is prefixed with [AI-udkast]', async () => {
     .send({ locationRef: { type: 'agent', value: '1' } });
 
   assert.equal(res.status, 200);
-  assert.ok(res.body.nis2Draft.title.startsWith('[AI-udkast]'),
-    'title must start with [AI-udkast] to mark as AI-generated');
+  assert.ok(res.body.nis2Draft.title.startsWith('[AI draft]'),
+    'title must start with [AI draft] to mark as AI-generated');
 });
 
 test('NIS2 draft rootCause contains AI-generated marker', async () => {

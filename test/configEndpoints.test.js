@@ -74,7 +74,7 @@ test('config-context returns the linked change + suspected-trigger note → 200'
   assert.equal(res.body.configChangeId, changeId);
   assert.equal(res.body.diff.risk, 'high'); // routing change
   assert.equal(res.body.suspectedTrigger.minutesBefore, 15); // 08:00 - 07:45
-  assert.match(res.body.suspectedTrigger.note, /15 minutter forinden/);
+  assert.match(res.body.suspectedTrigger.note, /15 minutes earlier/);
   assert.equal(prevId < changeId, true);
   // no raw IP survives the diff masking
   assert.doesNotMatch(JSON.stringify(res.body), /10\.0\.0\.1/);

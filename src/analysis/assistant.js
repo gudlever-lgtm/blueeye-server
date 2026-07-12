@@ -39,7 +39,7 @@ const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 // The exact answer the incident assistant must return when the context does not
 // contain enough information — also used by the route to short-circuit (no data
 // at all → this reply without a provider call).
-const INCIDENT_INSUFFICIENT_ANSWER = 'Der findes ikke tilstrækkelige data til at konkludere.';
+const INCIDENT_INSUFFICIENT_ANSWER = 'There is not enough data to reach a conclusion.';
 
 function createAssistant({
   config = {},
@@ -322,7 +322,7 @@ function createAssistant({
     return { answer, model: currentModel(), usedFindings: findings.length };
   }
 
-  // Generates a short Danish plain-language narrative for an InvestigationResult.
+  // Generates a short English plain-language narrative for an InvestigationResult.
   // Sends ONLY aggregated evidence fields (metric, deviation, classification) —
   // never raw packet/payload data. Returns the narrative string, or throws on error.
   async function narrateInvestigation(result) {
@@ -349,10 +349,10 @@ function createAssistant({
       workaroundHints: Array.isArray(result.workaroundHints) ? result.workaroundHints : [],
     };
     const system =
-      'Du er en netværksdriftsassistent for BlueEye. Skriv et kort, klart resumé på DANSK ' +
-      '(3-5 sætninger) af denne netværksfejlfindingsanalyse: hvad blev fundet, hvad er den ' +
-      'sandsynlige årsag, og hvad er næste skridt. Brug KUN den angivne kontekst. ' +
-      'Undgå teknisk jargon der ikke fremgår af konteksten.';
+      'You are a network operations assistant for BlueEye. Write a short, clear summary in ENGLISH ' +
+      '(3-5 sentences) of this network troubleshooting analysis: what was found, what is the ' +
+      'likely cause, and what is the next step. Use ONLY the provided context. ' +
+      'Avoid technical jargon that does not appear in the context.';
     return chat(system, JSON.stringify(ctx));
   }
 
@@ -409,7 +409,7 @@ function createAssistant({
   }
 
   // Generates a NIS2 incident draft structure from an InvestigationResult.
-  // Uses a separate Mistral call with a NIS2-focused Danish system prompt.
+  // Uses a separate Mistral call with a NIS2-focused system prompt.
   // Throws FeatureDisabled when off, AssistantMisconfigured when not wired,
   // AssistantUpstreamError on provider failure.
   async function generateNis2Draft(result) {
@@ -421,14 +421,14 @@ function createAssistant({
     }
     const ctx = buildNis2Context(result);
     const system =
-      'Du er en cybersikkerhedsrådgiver der hjælper med NIS2-hændelsesindberetning i Danmark. ' +
-      'Analysér den vedlagte netværksanalyse og udfyld felterne til et NIS2-hændelsesudkast. ' +
-      'Svar KUN med gyldig JSON uden forklaring eller markdown-formatering. ' +
-      'JSON-format: {"title":"Kort hændelsesbeskrivelse (maks 100 tegn)",' +
-      '"severity":"low|medium|high|critical","detectedAt":"ISO-tidsstempel fra window.to eller null",' +
-      '"affectedSystems":"Berørte systemer maks 300 tegn — INGEN IP-adresser",' +
-      '"description":"Klartekst hændelsesbeskrivelse til NIS2 maks 400 tegn"} ' +
-      'Brug KUN den angivne kontekst. Indsæt ALDRIG rå IP-adresser, hostnavne med IP eller PII.';
+      'You are a cybersecurity advisor helping with NIS2 incident reporting in Denmark. ' +
+      'Analyze the attached network analysis and fill in the fields for a NIS2 incident draft. ' +
+      'Reply ONLY with valid JSON, without explanation or markdown formatting. ' +
+      'JSON format: {"title":"Short incident description (max 100 chars)",' +
+      '"severity":"low|medium|high|critical","detectedAt":"ISO timestamp from window.to or null",' +
+      '"affectedSystems":"Affected systems, max 300 chars — NO IP addresses",' +
+      '"description":"Plain-text incident description for NIS2, max 400 chars"} ' +
+      'Use ONLY the provided context. NEVER insert raw IP addresses, hostnames with IP, or PII.';
     const windowTo = result.window && result.window.to ? result.window.to : null;
     const raw = await chat(system, JSON.stringify(ctx));
     return parseNis2Response(raw, result.classification, windowTo);
@@ -443,17 +443,17 @@ function createAssistant({
     return { enabled: currentEnabled(), configured, provider: currentProvider(), baseUrl: currentBaseUrl(), model: currentModel() };
   }
 
-  // Formulates a short Danish diagnosis for a failed/deviating transaction test
+  // Formulates a short English diagnosis for a failed/deviating transaction test
   // from structured, non-sensitive facts (failure phase, step, cross-agent check,
   // latency deviation). Throws FeatureDisabled when off; callers fall back to a
   // template. Facts carry no IPs/payload, so no masking is needed.
   async function diagnoseTransaction(facts) {
     if (!currentEnabled()) throw new FeatureDisabledError();
     const system =
-      'Du er en dansk netværks- og driftsassistent for BlueEye. Formulér en KORT, ' +
-      'konkret diagnose på dansk (højst 2 sætninger) af en fejlet eller afvigende ' +
-      'transaktionstest ud fra de givne fakta (fejlfase, trin, krydscheck mellem ' +
-      'agenter, latens-afvigelse). Gæt ikke ud over fakta.';
+      'You are a network and operations assistant for BlueEye. Formulate a SHORT, ' +
+      'concrete diagnosis in English (at most 2 sentences) of a failed or deviating ' +
+      'transaction test based on the given facts (failure phase, step, cross-check between ' +
+      'agents, latency deviation). Do not guess beyond the facts.';
     const answer = await chat(system, JSON.stringify(facts || {}));
     return answer;
   }

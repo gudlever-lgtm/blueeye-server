@@ -125,7 +125,7 @@ function metaEvidence(ts) {
 
 // Agent display name, defensive.
 function agentLabel(a) {
-  if (!a) return 'ukendt';
+  if (!a) return 'unknown';
   return a.display_name || a.hostname || `agent-${a.id}`;
 }
 
@@ -215,7 +215,7 @@ function createLocator({ agentsRepo, findingStore, locationsRepo = null, flowsRe
     const toISO = to.toISOString();
 
     const relatedFindingIds = localFindings.map((f) => f.id).filter(Boolean);
-    const localEvidence = localFindings.slice(0, 15).map((f) => findingToEvidence(f, 'lokal'));
+    const localEvidence = localFindings.slice(0, 15).map((f) => findingToEvidence(f, 'local'));
 
     // --- INSUFFICIENT_DATA: ingen agenter fundet ---
     if (localAgents.length === 0) {
@@ -223,14 +223,14 @@ function createLocator({ agentsRepo, findingStore, locationsRepo = null, flowsRe
         id, locationRef, window,
         classification: 'INSUFFICIENT_DATA',
         confidence: 0,
-        explanation: `Ingen agenter fundet for lokationspegepunkt ${locationRef.type}="${locationRef.value}". ` +
-          'Kan ikke afgøre fejlplacering uden måledata fra stedet.',
+        explanation: `No agents found for location reference ${locationRef.type}="${locationRef.value}". ` +
+          'Cannot determine fault location without measurement data from the site.',
         evidence: [metaEvidence(toISO)],
         suspectedSegment: null,
         relatedFindingIds: [],
         workaroundHints: [
-          `Registrér en BlueEye-agent på ${locationRef.type}="${locationRef.value}" for at aktivere topologidiagnose.`,
-          'Kontrollér at agenten er online og indrapporterer til serveren.',
+          `Register a BlueEye agent on ${locationRef.type}="${locationRef.value}" to enable topology diagnosis.`,
+          'Verify that the agent is online and reporting to the server.',
         ],
       };
     }
@@ -248,16 +248,16 @@ function createLocator({ agentsRepo, findingStore, locationsRepo = null, flowsRe
         classification: 'APP_NOT_NET',
         confidence: 0.7,
         explanation:
-          `Applikationslags-anomalier (${appMetrics}) observeret på ${names}, men ingen ` +
-          'netværkstæller-afvigelser og ingen samtidige tegn på problemer hos naboer. ' +
-          'Fejlen peger væk fra netværket — undersøg server- eller applikationslaget.',
+          `Application-layer anomalies (${appMetrics}) observed on ${names}, but no ` +
+          'network-counter deviations and no concurrent signs of problems at neighbors. ' +
+          'The fault points away from the network — investigate the server or application layer.',
         evidence: localEvidence.length > 0 ? localEvidence : [metaEvidence(toISO)],
         suspectedSegment: null,
         relatedFindingIds,
         workaroundHints: [
-          'Tjek applikations-logs og server-ressourcer (CPU, hukommelse, diskadgang).',
-          'Sammenlign TCP-retransmission-mønstre med applikationsresponstider.',
-          'Overvej om det er et kapacitetsproblem på serveren snarere end netværk.',
+          'Check application logs and server resources (CPU, memory, disk access).',
+          'Compare TCP retransmission patterns with application response times.',
+          'Consider whether it is a capacity problem on the server rather than the network.',
         ],
       };
     }
@@ -270,35 +270,35 @@ function createLocator({ agentsRepo, findingStore, locationsRepo = null, flowsRe
           classification: 'INSUFFICIENT_DATA',
           confidence: 0.3,
           explanation:
-            `Ingen anomalier fundet i tidsvinduet (${windowMinutes} min) for ` +
-            `${locationRef.type}="${locationRef.value}" eller naboer. ` +
-            'Fejlen er enten ikke målbar endnu, er løst, eller falder uden for det valgte vindue.',
+            `No anomalies found in the time window (${windowMinutes} min) for ` +
+            `${locationRef.type}="${locationRef.value}" or neighbors. ` +
+            'The fault is either not measurable yet, is resolved, or falls outside the selected window.',
           evidence: [metaEvidence(toISO)],
           suspectedSegment: null,
           relatedFindingIds: [],
           workaroundHints: [
-            'Udvid tidsvinduet (prøv 60 min) og kør undersøgelsen igen.',
-            'Kontrollér at agenter er online og aktivt indrapporterer måledata.',
+            'Widen the time window (try 60 min) and run the investigation again.',
+            'Verify that agents are online and actively reporting measurement data.',
           ],
         };
       }
 
       // Naboer har anomalier men stedet selv er sundt → downstream
       const neighborNames = [...new Set(neighborFindings.map((f) => f.hostId))].slice(0, 3).join(', ');
-      const neighborEvidence = neighborFindings.slice(0, 10).map((f) => findingToEvidence(f, 'downstream-nabo'));
+      const neighborEvidence = neighborFindings.slice(0, 10).map((f) => findingToEvidence(f, 'downstream-neighbor'));
       return {
         id, locationRef, window,
         classification: 'DOWNSTREAM',
         confidence: 0.6,
         explanation:
-          `Lokationen "${locationRef.value}" er selv sund, men naboer (${neighborNames}) viser ` +
-          `anomalier. Fejlen ser ud til at ligge downstream (efter dette punkt).`,
+          `The location "${locationRef.value}" is itself healthy, but neighbors (${neighborNames}) show ` +
+          `anomalies. The fault appears to lie downstream (after this point).`,
         evidence: neighborEvidence.length > 0 ? neighborEvidence : [metaEvidence(toISO)],
         suspectedSegment: null,
         relatedFindingIds: neighborFindings.map((f) => f.id).filter(Boolean),
         workaroundHints: [
-          'Undersøg de downstream-naboer der viser afvigelser.',
-          'Tjek om nedstrøms-segmenter har interface-fejl eller kapacitetsproblemer.',
+          'Investigate the downstream neighbors showing deviations.',
+          'Check whether downstream segments have interface errors or capacity problems.',
         ],
       };
     }
@@ -330,7 +330,7 @@ function createLocator({ agentsRepo, findingStore, locationsRepo = null, flowsRe
         const neighborMetrics = [...new Set(neighborFindings.map((f) => f.metric))].slice(0, 3).join(', ');
 
         const allEvidence = [
-          ...localFindings.slice(0, 5).map((f) => findingToEvidence(f, 'lokal')),
+          ...localFindings.slice(0, 5).map((f) => findingToEvidence(f, 'local')),
           ...neighborFindings.slice(0, 5).map((f) => findingToEvidence(f, 'upstream')),
         ];
 
@@ -339,9 +339,9 @@ function createLocator({ agentsRepo, findingStore, locationsRepo = null, flowsRe
           classification: 'UPSTREAM',
           confidence: neighborHostIds.length >= 2 ? 0.75 : 0.6,
           explanation:
-            `Anomalier på upstream-nabo "${neighborName}" (${neighborMetrics}) opstod ` +
-            `${leadMinutes} min FØR den lokale fejl på "${localName}". ` +
-            `Symptomet er sandsynligvis nedarvet fra et opstrøms-led — undersøg "${neighborName}" først.`,
+            `Anomalies on upstream neighbor "${neighborName}" (${neighborMetrics}) occurred ` +
+            `${leadMinutes} min BEFORE the local fault on "${localName}". ` +
+            `The symptom is likely inherited from an upstream link — investigate "${neighborName}" first.`,
           evidence: allEvidence.length > 0 ? allEvidence : [metaEvidence(toISO)],
           suspectedSegment: { from: neighborName, to: localName },
           relatedFindingIds: [
@@ -349,9 +349,9 @@ function createLocator({ agentsRepo, findingStore, locationsRepo = null, flowsRe
             ...neighborFindings.map((f) => f.id).filter(Boolean),
           ],
           workaroundHints: [
-            `Undersøg "${neighborName}" — det er den sandsynlige kilde til fejlen.`,
-            `Overvej at omdiriger trafik forbi "${neighborName}" mens fejlen udbedres.`,
-            'Tjek routinglog og interface-counters på det mistænkte segment.',
+            `Investigate "${neighborName}" — it is the likely source of the fault.`,
+            `Consider rerouting traffic around "${neighborName}" while the fault is being fixed.`,
+            'Check the routing log and interface counters on the suspected segment.',
           ],
         };
       }
@@ -368,16 +368,16 @@ function createLocator({ agentsRepo, findingStore, locationsRepo = null, flowsRe
       : neighborFindings.length === 0 ? 0.8
         : 0.65;
     const neighborNote = neighborFindings.length === 0
-      ? 'Naboerne er sunde.'
-      : `Naboer viser ${neighborFindings.length} samtidige afvigelse(r) men INGEN tidsmæssig forløber.`;
+      ? 'The neighbors are healthy.'
+      : `Neighbors show ${neighborFindings.length} concurrent deviation(s) but NO temporal precursor.`;
 
     return {
       id, locationRef, window,
       classification: 'LOCAL',
       confidence,
       explanation:
-        `Afvigelse er koncentreret på ${names} (${metrics}; maks. ${maxDev.toFixed(1)}σ). ` +
-        `${neighborNote} Fejlen ser ud til at sidde lokalt på dette segment.`,
+        `Deviation is concentrated on ${names} (${metrics}; max ${maxDev.toFixed(1)}σ). ` +
+        `${neighborNote} The fault appears to sit locally on this segment.`,
       evidence: localEvidence.length > 0 ? localEvidence : [metaEvidence(toISO)],
       suspectedSegment: null,
       relatedFindingIds,
@@ -389,19 +389,19 @@ function createLocator({ agentsRepo, findingStore, locationsRepo = null, flowsRe
     const hints = [];
     const metrics = findings.map((f) => String(f.metric || '').toLowerCase());
     if (metrics.some((m) => m.includes('cpu') || m.includes('load'))) {
-      hints.push(`Undersøg CPU/load-årsager på ${agentName} — høj CPU kan blokkere netværkspakker.`);
+      hints.push(`Investigate CPU/load causes on ${agentName} — high CPU can block network packets.`);
     }
     if (metrics.some((m) => m.includes('error') || m.includes('drop') || m.includes('discard'))) {
-      hints.push('Tjek kabel/SFP og switch-port for fysiske fejl (CRC, runt frames, discards).');
+      hints.push('Check cable/SFP and switch port for physical errors (CRC, runt frames, discards).');
     }
     if (metrics.some((m) => m.includes('mem'))) {
-      hints.push('Undersøg om hukommelsespres forårsager pakketab via bufferoverløb.');
+      hints.push('Investigate whether memory pressure causes packet loss via buffer overflow.');
     }
     if (hints.length === 0) {
-      hints.push(`Undersøg interface-counters og systemlog på ${agentName}.`);
+      hints.push(`Investigate interface counters and system log on ${agentName}.`);
     }
     hints.push(
-      'Sammenlign med baseline-tidspunkter (samme ugedag, samme klokkeslæt) for at skelne sæsonmønster fra fejl.'
+      'Compare with baseline times (same weekday, same time of day) to distinguish seasonal patterns from faults.'
     );
     return hints;
   }

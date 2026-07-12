@@ -145,7 +145,7 @@ function createIncidentsRouter({
       diff,
       suspectedTrigger: minutesBefore == null ? null : {
         minutesBefore,
-        note: `Formodet udløst af konfigurationsændring ${minutesBefore} minutter forinden.`,
+        note: `Suspected trigger: configuration change ${minutesBefore} minutes earlier.`,
       },
     });
   }));

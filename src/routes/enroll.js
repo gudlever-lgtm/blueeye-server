@@ -4,6 +4,7 @@ const fs = require('fs');
 const express = require('express');
 const { asyncHandler } = require('../middleware/asyncHandler');
 const { renderInstallScript } = require('../enroll/installScript');
+const { renderInstallPs1 } = require('../enroll/installScriptWin');
 
 // Only allow a sane host[:port] when deriving the server URL from the request,
 // so a forged Host header can't be reflected into the install script.
@@ -199,6 +200,25 @@ function createEnrollRouter({ artifactStore, sourceStore, binaryStore, releaseSt
       agentVersion: sourceStore ? sourceStore.sourceVersion() : '',
     });
     res.status(200).type('text/x-shellscript; charset=utf-8').send(script);
+  }));
+
+  // The Windows one-line installer (PowerShell). Same contract as install.sh but
+  // for hosts where `curl … | sh` cannot run: fetched with `irm … | iex`. 404 for
+  // an unknown/expired/exhausted code so a bad code never yields a runnable script.
+  router.get('/:code/install.ps1', asyncHandler(async (req, res) => {
+    const row = await enrollmentCodesRepo.findByCode(req.params.code);
+    if (!row || row.status !== 'active') {
+      res.status(404).type('text/plain; charset=utf-8');
+      return res.send('# Unknown, expired or exhausted enrollment code.\n');
+    }
+    const script = renderInstallPs1({
+      serverUrl: resolveServerUrl(req, enrollConfig),
+      code: req.params.code,
+      certFingerprint,
+      sourceSha: sourceStore ? sourceStore.sha256 : '',
+      agentVersion: sourceStore ? sourceStore.sourceVersion() : '',
+    });
+    res.status(200).type('text/plain; charset=utf-8').send(script);
   }));
 
   return router;

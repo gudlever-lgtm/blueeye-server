@@ -111,7 +111,14 @@ function createEnrollCommandRouter({ enrollmentCodesRepo, artifactStore, sourceS
       }
 
       const serverUrl = resolveServerUrl(req, enrollConfig);
-      const oneLiner = `curl -sSL ${serverUrl}/enroll/${code}/install.sh | sh`;
+      // Windows PowerShell cannot run `curl -sSL … | sh` (curl is an alias for
+      // Invoke-WebRequest with different flags, and there is no `sh`), so Windows
+      // hosts get a PowerShell one-liner that fetches install.ps1 with `irm … | iex`.
+      // Linux and macOS both have real curl + sh, so they share the sh installer.
+      const isWindows = /^windows(-|$)/.test(platform);
+      const oneLiner = isWindows
+        ? `powershell -NoProfile -ExecutionPolicy Bypass -Command "irm ${serverUrl}/enroll/${code}/install.ps1 | iex"`
+        : `curl -sSL ${serverUrl}/enroll/${code}/install.sh | sh`;
       // The installer downloads + verifies the agent SOURCE bundle, then builds +
       // runs it (Docker/Node) — no pre-built binary. The manual block lets a
       // cautious operator inspect the bundle + its checksum before running.
@@ -119,6 +126,7 @@ function createEnrollCommandRouter({ enrollmentCodesRepo, artifactStore, sourceS
 
       res.json({
         oneLiner,
+        os: isWindows ? 'windows' : (/^darwin(-|$)/.test(platform) ? 'macos' : 'linux'),
         manual: {
           downloadUrl: `${serverUrl}/enroll/agent-source.tgz`,
           checksum,

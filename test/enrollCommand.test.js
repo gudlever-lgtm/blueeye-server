@@ -35,6 +35,28 @@ test('GET /api/enroll/command mints a code and returns all three variants (200)'
   assert.ok(Array.isArray(res.body.platforms));
 });
 
+test('GET /api/enroll/command returns a PowerShell one-liner for a Windows platform', async () => {
+  const repo = makeEnrollmentCodesRepo({ create: async () => ({ id: 7, code: 'WINCODE', expires_at: '2099-01-01T00:00:00.000Z', max_uses: 1, uses_remaining: 1 }) });
+  const res = await request(makeApp({ enrollmentCodesRepo: repo })).get('/api/enroll/command?platform=windows-amd64').set('Authorization', operator());
+  assert.equal(res.status, 200);
+  assert.equal(res.body.os, 'windows');
+  // PowerShell idiom (irm … install.ps1 | iex) — never the POSIX curl … | sh.
+  assert.match(res.body.oneLiner, /powershell .*irm .*\/enroll\/WINCODE\/install\.ps1 \| iex/);
+  assert.ok(!/curl -sSL/.test(res.body.oneLiner));
+  assert.ok(!/\| sh\b/.test(res.body.oneLiner));
+  assert.equal(res.body.manual.command, res.body.oneLiner);
+});
+
+test('GET /api/enroll/command keeps the sh one-liner for Linux and macOS', async () => {
+  const repo = makeEnrollmentCodesRepo({ create: async () => ({ id: 8, code: 'NIXCODE', expires_at: '2099-01-01T00:00:00.000Z', max_uses: 1, uses_remaining: 1 }) });
+  const linux = await request(makeApp({ enrollmentCodesRepo: repo })).get('/api/enroll/command?platform=linux-amd64').set('Authorization', operator());
+  assert.equal(linux.body.os, 'linux');
+  assert.match(linux.body.oneLiner, /curl -sSL .*\/install\.sh \| sh/);
+  const mac = await request(makeApp({ enrollmentCodesRepo: repo })).get('/api/enroll/command?platform=darwin-arm64').set('Authorization', operator());
+  assert.equal(mac.body.os, 'macos');
+  assert.match(mac.body.oneLiner, /curl -sSL .*\/install\.sh \| sh/);
+});
+
 test('GET /api/enroll/command supports bulk (maxUses + ttlMinutes)', async () => {
   let createdWith = null;
   const repo = makeEnrollmentCodesRepo({

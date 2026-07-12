@@ -7580,7 +7580,27 @@ async function settingsAnalyseView() {
 // server to auto-install a missing diagnostic tool when a probe reports it.
 async function settingsAgentsView() {
   const data = await api('/api/settings');
-  return el('div', { class: 'settings-grid' }, agentsSettingsCard(data.agents));
+  return el('div', { class: 'settings-grid' },
+    agentDefaultsCard(data.agents),
+    agentsSettingsCard(data.agents));
+}
+
+// Default traffic source stamped on each agent as it enrolls (Settings → Agents).
+// Both cards PUT /api/settings/agents; setAgents merges the disjoint field sets,
+// so a save from one card never clobbers the other's value.
+function agentDefaultsCard(a) {
+  return settingsFormCard({
+    title: 'New agent defaults',
+    values: a || { defaultTrafficSource: 'proc', defaultSflowHsflowd: false },
+    endpoint: '/api/settings/agents',
+    fields: [
+      { key: 'defaultTrafficSource', label: 'Default traffic source', type: 'select',
+        options: [['proc', 'proc — host /proc counters'], ['netflow', 'NetFlow (v5/v9/IPFIX)'], ['sflow', 'sFlow (sampled)']],
+        hint: 'Traffic source stamped on each agent when it enrolls. NetFlow/sFlow open a collector and need a device (or the local exporter below) to export to them. You can still change the source per agent under Agents → Edit.' },
+      { key: 'defaultSflowHsflowd', label: 'Self-provision local sFlow exporter (hsflowd)', type: 'checkbox',
+        hint: 'Only applies when the default source is sFlow. When on, a newly enrolled agent installs and configures a local Host sFlow exporter (hsflowd) so it collects flows without an external exporter. Installs software on the host — leave off if a switch/host already exports sFlow to the agent.' },
+    ],
+  });
 }
 
 function agentsSettingsCard(a) {
@@ -8345,6 +8365,9 @@ function settingsFormCard({ title, fields, values, endpoint }) {
     if (f.type === 'checkbox') {
       input = el('input', { type: 'checkbox' });
       input.checked = v[f.key] === true;
+    } else if (f.type === 'select') {
+      input = el('select', {}, ...(f.options || []).map(([val, lbl]) => el('option', { value: val }, lbl)));
+      input.value = v[f.key] != null ? String(v[f.key]) : '';
     } else {
       input = el('input', { type: 'number', value: String(v[f.key] ?? ''), min: f.min ?? null, max: f.max ?? null, step: f.step ?? null });
     }
@@ -8361,7 +8384,9 @@ function settingsFormCard({ title, fields, values, endpoint }) {
     const body = {};
     for (const f of fields) {
       if (f.readonly) continue;
-      body[f.key] = f.type === 'checkbox' ? inputs[f.key].checked : Number(inputs[f.key].value);
+      if (f.type === 'checkbox') body[f.key] = inputs[f.key].checked;
+      else if (f.type === 'select') body[f.key] = inputs[f.key].value;
+      else body[f.key] = Number(inputs[f.key].value);
     }
     try { await api(endpoint, { method: 'PUT', body }); toast(`${title} saved`); }
     catch (e2) { err.textContent = errText(e2); }

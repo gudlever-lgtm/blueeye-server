@@ -37,6 +37,21 @@ function psSq(value) {
   return String(value == null ? '' : value).replace(/'/g, "''");
 }
 
+// A single-line PowerShell prelude that makes the `irm …/install.ps1 | iex`
+// bootstrap itself work against an on-prem server: force TLS 1.2 (5.1 defaults to
+// TLS 1.0) and, when the cert fingerprint is known, pin the self-signed leaf to
+// it so the bootstrap fetch is authenticated (no MITM of install.ps1) rather than
+// blindly trusted. Contains NO double quotes, so it embeds safely inside a
+// `powershell -Command "…"` argument. Ends with ';' so a fetch can follow.
+function winSecurityPrelude(certFingerprint) {
+  const tls = '[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072;';
+  const fp = normalizeFingerprint(certFingerprint);
+  if (!fp) return tls;
+  const fpHex = fp.replace(/:/g, '').toLowerCase();
+  const pin = `[Net.ServicePointManager]::ServerCertificateValidationCallback = { param($s,$c,$ch,$e) try { ((([Security.Cryptography.SHA256]::Create().ComputeHash($c.GetRawCertData()) | ForEach-Object { $_.ToString('x2') }) -join '') -eq '${fpHex}') } catch { $false } };`;
+  return `${tls} ${pin}`;
+}
+
 function renderInstallPs1({
   serverUrl,
   code,
@@ -78,6 +93,40 @@ $ConfigPath = Join-Path $StateDir 'config.json'
 function Info([string]$m) { Write-Host "[blueeye] $m" }
 function Fail([string]$m) { Write-Error "[blueeye] ERROR: $m"; exit 1 }
 
+# Windows PowerShell 5.1 still negotiates TLS 1.0 by default (which a modern
+# server rejects) and refuses a self-signed certificate outright — the two most
+# common on-prem failures. Force TLS 1.2, and when the server's cert fingerprint
+# is known, PIN the self-signed leaf to it (SHA-256 of the DER) instead of
+# disabling validation, so integrity is preserved.
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072
+$FpHex = ($CertFingerprint -replace '[^0-9A-Fa-f]', '').ToLower()
+if ($FpHex) {
+  [Net.ServicePointManager]::ServerCertificateValidationCallback = {
+    param($psender, $cert, $chain, $sslErrors)
+    try {
+      $h = [Security.Cryptography.SHA256]::Create().ComputeHash($cert.GetRawCertData())
+      ((($h | ForEach-Object { $_.ToString('x2') }) -join '') -eq $FpHex)
+    } catch { $false }
+  }
+}
+
+# Turns a raw Invoke-WebRequest failure into an actionable message (an indicator,
+# not a .NET stack): TLS-trust vs unreachable-host vs other.
+function Fetch-Or-Explain([string]$url, [string]$outFile) {
+  try {
+    Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $outFile
+  } catch {
+    $m = $_.Exception.Message
+    if ($m -match 'trust relationship|SSL/TLS|secure channel|certificate') {
+      Fail ("could not verify the server's TLS certificate for $url. On-prem servers usually use a self-signed cert — set its SHA-256 fingerprint on the server (AGENT_CERT_FINGERPRINT) and regenerate the command so the installer can pin it. Details: $m")
+    } elseif ($m -match 'Unable to connect|could not be resolved|actively refused|timed out|remote name') {
+      Fail ("cannot reach $url from this host — check DNS/firewall, or set BLUEEYE_PUBLIC_URL on the server to an address this machine can actually reach (a bare hostname often will not resolve). Details: $m")
+    } else {
+      Fail "download failed for $url : $m"
+    }
+  }
+}
+
 if (-not $SourceSha256) {
   Fail 'the BlueEye server has no agent source published — set AGENT_SOURCE_DIR on the server (see docs/enrollment.md), then retry'
 }
@@ -101,11 +150,7 @@ New-Item -ItemType Directory -Force -Path $Tmp | Out-Null
 try {
   $Tarball = Join-Path $Tmp 'agent-source.tgz'
   Info "downloading agent source from $ServerUrl/enroll/agent-source.tgz"
-  try {
-    Invoke-WebRequest -UseBasicParsing -Uri "$ServerUrl/enroll/agent-source.tgz" -OutFile $Tarball
-  } catch {
-    Fail "download failed: $($_.Exception.Message)"
-  }
+  Fetch-Or-Explain "$ServerUrl/enroll/agent-source.tgz" $Tarball
 
   $actual = (Get-FileHash -Algorithm SHA256 -Path $Tarball).Hash.ToLower()
   if ($actual -ne $SourceSha256.ToLower()) {
@@ -185,4 +230,4 @@ try {
 `;
 }
 
-module.exports = { renderInstallPs1 };
+module.exports = { renderInstallPs1, winSecurityPrelude };

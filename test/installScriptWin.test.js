@@ -3,9 +3,10 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { renderInstallPs1 } = require('../src/enroll/installScriptWin');
+const { renderInstallPs1, winSecurityPrelude } = require('../src/enroll/installScriptWin');
 
 const SHA = 'a'.repeat(64);
+const FP = Array.from({ length: 32 }, () => 'ab').join(':'); // valid 32-byte SHA-256
 
 test('renderInstallPs1 embeds server URL, code, fingerprint and the source checksum', () => {
   const script = renderInstallPs1({
@@ -50,6 +51,42 @@ test('renderInstallPs1 requires Node, extracts with tar, enrolls, and registers 
   assert.match(script, /New-ScheduledTaskTrigger -AtStartup/);
   assert.match(script, /-UserId 'SYSTEM'/);
   assert.match(script, /RestartCount/);
+});
+
+test('renderInstallPs1 forces TLS 1.2 and pins a self-signed cert when a fingerprint is given', () => {
+  const script = renderInstallPs1({ serverUrl: 'https://x', code: 'C', certFingerprint: FP, sourceSha: SHA });
+  // TLS 1.2 (5.1 defaults to 1.0) — the 3072 bitmask.
+  assert.match(script, /SecurityProtocol -bor 3072/);
+  // Pins the leaf cert (SHA-256 of the DER) instead of disabling validation.
+  assert.match(script, /ServerCertificateValidationCallback/);
+  assert.match(script, /SHA256\]::Create\(\)\.ComputeHash\(\$cert\.GetRawCertData\(\)\)/);
+  assert.ok(!/SkipCertificateCheck/.test(script), 'never blindly skips validation');
+});
+
+test('renderInstallPs1 forces TLS 1.2 but does NOT pin when no fingerprint is configured', () => {
+  const script = renderInstallPs1({ serverUrl: 'https://x', code: 'C', certFingerprint: '', sourceSha: SHA });
+  assert.match(script, /SecurityProtocol -bor 3072/);
+  // With no fingerprint the pinning callback body is guarded off ($FpHex empty).
+  assert.match(script, /if \(\$FpHex\)/);
+});
+
+test('renderInstallPs1 turns fetch failures into actionable indicators (cert vs unreachable)', () => {
+  const script = renderInstallPs1({ serverUrl: 'https://x', code: 'C', certFingerprint: FP, sourceSha: SHA });
+  assert.match(script, /Fetch-Or-Explain/);
+  assert.match(script, /AGENT_CERT_FINGERPRINT/);       // self-signed guidance
+  assert.match(script, /check DNS\/firewall/);          // unreachable-host guidance
+  assert.match(script, /BLUEEYE_PUBLIC_URL/);           // bare-hostname guidance
+});
+
+test('winSecurityPrelude: single line, no double quotes, TLS always, pin only with a fingerprint', () => {
+  const withFp = winSecurityPrelude(FP);
+  assert.ok(!/\n/.test(withFp) && !/"/.test(withFp), 'safe to embed in powershell -Command "…"');
+  assert.match(withFp, /SecurityProtocol -bor 3072/);
+  assert.match(withFp, /ServerCertificateValidationCallback/);
+  assert.match(withFp, new RegExp("'" + 'ab'.repeat(32) + "'")); // fingerprint hex, no separators
+  const noFp = winSecurityPrelude('');
+  assert.match(noFp, /SecurityProtocol -bor 3072/);
+  assert.ok(!/ServerCertificateValidationCallback/.test(noFp));
 });
 
 test('renderInstallPs1 fails clearly when the server has no source published', () => {

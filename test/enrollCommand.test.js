@@ -44,7 +44,22 @@ test('GET /api/enroll/command returns a PowerShell one-liner for a Windows platf
   assert.match(res.body.oneLiner, /powershell .*irm .*\/enroll\/WINCODE\/install\.ps1 \| iex/);
   assert.ok(!/curl -sSL/.test(res.body.oneLiner));
   assert.ok(!/\| sh\b/.test(res.body.oneLiner));
+  // Carries the TLS-1.2 prelude so PowerShell 5.1 can reach a modern server.
+  assert.match(res.body.oneLiner, /SecurityProtocol -bor 3072/);
+  // Balanced quoting: exactly one pair of double quotes (the -Command argument).
+  assert.equal((res.body.oneLiner.match(/"/g) || []).length, 2);
   assert.equal(res.body.manual.command, res.body.oneLiner);
+});
+
+test('GET /api/enroll/command pins the self-signed cert in the Windows one-liner when a fingerprint is configured', async () => {
+  const fp = Array.from({ length: 32 }, () => 'ab').join(':');
+  const repo = makeEnrollmentCodesRepo({ create: async () => ({ id: 9, code: 'WINFP', expires_at: '2099-01-01T00:00:00.000Z', max_uses: 1, uses_remaining: 1 }) });
+  const res = await request(makeApp({ enrollmentCodesRepo: repo, enrollConfig: { certFingerprint: fp } }))
+    .get('/api/enroll/command?platform=windows-amd64').set('Authorization', operator());
+  assert.equal(res.status, 200);
+  assert.match(res.body.oneLiner, /ServerCertificateValidationCallback/);
+  assert.match(res.body.oneLiner, new RegExp("'" + 'ab'.repeat(32) + "'"));
+  assert.equal((res.body.oneLiner.match(/"/g) || []).length, 2); // still balanced
 });
 
 test('GET /api/enroll/command keeps the sh one-liner for Linux and macOS', async () => {

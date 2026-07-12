@@ -44,6 +44,18 @@ test('GET /license/plan returns the active plan summary (viewer+)', async () => 
   assert.equal(res.body.features.msp_multitenant, undefined); // feature removed
 });
 
+test('GET /license/plan shows Starter its mid-tier features (alerts + exports), not the pro-only ones', async () => {
+  const app = appOnPlan('starter');
+  const res = await request(app).get('/license/plan').set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 200);
+  assert.equal(res.body.plan_key, 'starter');
+  assert.equal(res.body.features.alerts_email, true);
+  assert.equal(res.body.features.reports_pdf, true);
+  assert.equal(res.body.features.reports_csv, true);
+  assert.equal(res.body.features.rbac, false); // still Professional-only
+  assert.equal(res.body.features.sso_oidc, false);
+});
+
 test('GET /license/plan requires auth (401)', async () => {
   const app = appOnPlan('starter');
   const res = await request(app).get('/license/plan');

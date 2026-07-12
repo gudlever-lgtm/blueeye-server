@@ -40,13 +40,14 @@ The full list of gateable feature keys is in `FEATURE_CATALOG`
 | --- | --- | --- |
 | `dashboard_basic` | Basic dashboard | Pilot |
 | `reports_basic` | Basic reports | Pilot |
+| `alerts_email` | E-mail alerts | Starter |
+| `reports_pdf` / `reports_csv` | PDF / CSV reports | Starter |
 | `dashboard_advanced` | Advanced dashboard | Professional |
-| `reports_pdf` / `reports_csv` | PDF / CSV reports | Professional |
 | `reports_sla` | SLA / availability report | Professional |
+| `alerts_webhook` | Webhook alerts | Professional |
 | `rbac` | Role-based access control | Professional |
 | `audit_log` | Audit log | Professional |
 | `api_access` | API access | Professional |
-| `alerts_email` / `alerts_webhook` | E-mail / webhook alerts | Professional |
 | `reports_compliance` | Compliance report pack | Professional |
 | `sso_ldap` | LDAP / Active Directory auth | Professional |
 | `sso_oidc` / `sso_saml` | SSO (OIDC / SAML) | Professional |

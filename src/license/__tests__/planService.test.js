@@ -75,6 +75,18 @@ test('Q10: every plan grants exactly its catalogued features and nothing more', 
   }
 });
 
+test('Starter is a real mid-tier: e-mail alerts + PDF/CSV exports, but not the pro-only keys', () => {
+  const ps = createPlanService({ licenseManager: lm({ plan: 'starter' }) });
+  // Mid-tier bundle over Pilot's basics.
+  for (const f of ['dashboard_basic', 'reports_basic', 'alerts_email', 'reports_pdf', 'reports_csv']) {
+    assert.equal(ps.hasFeature(f), true, f);
+  }
+  // …but NOT the Professional-only ones.
+  for (const f of ['dashboard_advanced', 'alerts_webhook', 'rbac', 'api_access', 'sso_oidc', 'reports_compliance']) {
+    assert.equal(ps.hasFeature(f), false, f);
+  }
+});
+
 test('Q3/Q4: Professional (top tier) grants reports, RBAC, API and the SSO suite', () => {
   const ps = createPlanService({ licenseManager: lm({ plan: 'professional' }) });
   for (const f of ['reports_pdf', 'reports_csv', 'reports_sla', 'rbac', 'audit_log', 'api_access']) {
@@ -159,6 +171,7 @@ test('upgradeHint names the required BlueEye plan', () => {
   assert.equal(ps.upgradeHint('sso_oidc'), 'This feature requires BlueEye Professional.');
   assert.equal(ps.upgradeHint('msp_multitenant'), null); // removed key → no hint
   assert.equal(ps.upgradeHint('reports_basic'), null); // already entitled
+  assert.equal(ps.upgradeHint('reports_pdf'), null); // Starter mid-tier already grants it
 });
 
 test('requirePlanFeature returns the documented 403 contract on denial', () => {

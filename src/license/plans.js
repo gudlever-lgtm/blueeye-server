@@ -29,11 +29,11 @@
 const FEATURE_CATALOG = {
   dashboard_basic: { label: 'Basic dashboard', minPlan: 'pilot', status: 'available' },
   dashboard_advanced: { label: 'Advanced dashboard', minPlan: 'professional', status: 'available' },
-  alerts_email: { label: 'E-mail alerts', minPlan: 'professional', status: 'available' },
+  alerts_email: { label: 'E-mail alerts', minPlan: 'starter', status: 'available' },
   alerts_webhook: { label: 'Webhook alerts', minPlan: 'professional', status: 'available' },
   reports_basic: { label: 'Basic reports', minPlan: 'pilot', status: 'available' },
-  reports_pdf: { label: 'PDF reports', minPlan: 'professional', status: 'available' },
-  reports_csv: { label: 'CSV reports', minPlan: 'professional', status: 'available' },
+  reports_pdf: { label: 'PDF reports', minPlan: 'starter', status: 'available' },
+  reports_csv: { label: 'CSV reports', minPlan: 'starter', status: 'available' },
   reports_sla: { label: 'SLA / availability report', minPlan: 'professional', status: 'available' },
   reports_compliance: { label: 'Compliance report pack', minPlan: 'professional', status: 'available' },
   rbac: { label: 'Role-based access control', minPlan: 'professional', status: 'available' },
@@ -70,23 +70,30 @@ function featureStatus(featureKey) {
 const ROADMAP_FEATURE_KEYS = ALL_FEATURE_KEYS.filter((k) => featureStatus(k) === 'roadmap');
 const AVAILABLE_FEATURE_KEYS = ALL_FEATURE_KEYS.filter((k) => featureStatus(k) === 'available');
 
-// The full Professional (top-tier) feature bundle. It now absorbs the SSO /
-// compliance / premium-support functions that used to be Enterprise-only —
-// the Enterprise and MSP tiers, and the HA / offline-license capabilities,
-// have been retired from the product.
-const PRO_FEATURES = [
+// Shared feature bundles, composed so each tier visibly extends the prior.
+// Starter is a real mid-tier — it adds basic e-mail alerting + report exports
+// over Pilot's basics, so it is no longer feature-identical to Pilot.
+const STARTER_FEATURES = [
   'dashboard_basic',
-  'dashboard_advanced',
   'reports_basic',
+  'alerts_email',
   'reports_pdf',
   'reports_csv',
+];
+
+// The full Professional (top-tier) feature bundle. It extends Starter and
+// absorbs the SSO / compliance / premium-support functions that used to be
+// Enterprise-only — the Enterprise and MSP tiers, and the HA / offline-license
+// capabilities, have been retired from the product.
+const PRO_FEATURES = [
+  ...STARTER_FEATURES,
+  'dashboard_advanced',
   'reports_sla',
+  'alerts_webhook',
   'reports_compliance',
   'rbac',
   'audit_log',
   'api_access',
-  'alerts_email',
-  'alerts_webhook',
   'sso_ldap',
   'sso_oidc',
   'sso_saml',
@@ -118,7 +125,7 @@ const PLANS = {
     max_agents: 5,
     max_test_paths: 25,
     history_days: 90,
-    allowed_features: ['dashboard_basic', 'reports_basic'],
+    allowed_features: [...STARTER_FEATURES],
     support_level: 'basic',
     is_trial: false,
     trial_days: 0,

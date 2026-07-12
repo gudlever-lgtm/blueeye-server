@@ -6,8 +6,8 @@
 // the analysis module — no duplicated statistics. step 0 = whole-test latency;
 // steps 1..N = per-step timings.
 //
-// Exposes { start, stop } so it can be handed to the HA coordinator as a
-// leader-only singleton job (like retention), plus runOnce() for tests.
+// Exposes { start, stop } so it can run as a singleton background job (like
+// retention), plus runOnce() for tests.
 
 const { median, mad } = require('./baselines');
 

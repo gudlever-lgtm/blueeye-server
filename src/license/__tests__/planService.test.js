@@ -51,15 +51,16 @@ test('max_agents honours the signed proof override over the plan default', () =>
   assert.equal(ps.getPlanLimit('max_agents'), 7); // proof wins over plan's 25
 });
 
-test('plan limits match the catalogue (Starter / Enterprise)', () => {
+test('plan limits match the catalogue (Starter / Professional)', () => {
   const starter = createPlanService({ licenseManager: lm({ plan: 'starter' }) });
   assert.equal(starter.getPlanLimit('max_agents'), 5);
   assert.equal(starter.getPlanLimit('max_test_paths'), 25);
   assert.equal(starter.getPlanLimit('history_days'), 90);
 
-  const ent = createPlanService({ licenseManager: lm({ plan: 'enterprise' }) });
-  assert.equal(ent.getPlanLimit('max_agents'), null); // unlimited / configurable
-  assert.equal(ent.getPlanLimit('history_days'), 1095);
+  const pro = createPlanService({ licenseManager: lm({ plan: 'professional' }) });
+  assert.equal(pro.getPlanLimit('max_agents'), 25);
+  assert.equal(pro.getPlanLimit('max_test_paths'), 150);
+  assert.equal(pro.getPlanLimit('history_days'), 365);
 });
 
 // ---- Q10: FeatureGate returns correct true/false per plan -----------------
@@ -74,34 +75,36 @@ test('Q10: every plan grants exactly its catalogued features and nothing more', 
   }
 });
 
-test('Q3/Q4: Professional grants PDF/CSV/SLA reports + RBAC + audit + API', () => {
+test('Q3/Q4: Professional (top tier) grants reports, RBAC, API and the SSO suite', () => {
   const ps = createPlanService({ licenseManager: lm({ plan: 'professional' }) });
   for (const f of ['reports_pdf', 'reports_csv', 'reports_sla', 'rbac', 'audit_log', 'api_access']) {
     assert.equal(ps.hasFeature(f), true, f);
   }
-  // …but NOT the Enterprise-only ones.
-  for (const f of ['sso_oidc', 'sso_saml', 'reports_compliance']) {
-    assert.equal(ps.hasFeature(f), false, f);
-  }
-});
-
-test('Q5: Enterprise grants SSO + compliance reports', () => {
-  const ps = createPlanService({ licenseManager: lm({ plan: 'enterprise' }) });
-  for (const f of ['sso_oidc', 'sso_saml', 'reports_compliance', 'ha_deployment', 'offline_license']) {
+  // The SSO / compliance / premium-support functions moved down into Professional.
+  for (const f of ['sso_ldap', 'sso_oidc', 'sso_saml', 'reports_compliance', 'premium_support']) {
     assert.equal(ps.hasFeature(f), true, f);
   }
-  assert.equal(ps.isEnterprise(), true);
 });
 
-test('multi-tenancy is gone: msp_multitenant is no longer a known feature key', () => {
-  for (const key of ['pilot', 'starter', 'professional', 'enterprise']) {
+test('retired capabilities (HA / offline / multi-tenancy) are no longer known feature keys', () => {
+  const ps = createPlanService({ licenseManager: lm({ plan: 'professional' }) });
+  for (const f of ['ha_deployment', 'offline_license', 'msp_multitenant', 'security_pack']) {
+    assert.equal(ps.hasFeature(f), false, f);
+    assert.equal(ALL_FEATURE_KEYS.includes(f), false, `${f} should not be catalogued`);
+  }
+});
+
+test('retired plan keys resolve to the locked-down fallback, not a real plan', () => {
+  for (const key of ['pilot', 'starter', 'professional']) {
     const ps = createPlanService({ licenseManager: lm({ plan: key }) });
     assert.equal(ps.hasFeature('msp_multitenant'), false, key);
     assert.equal(ps.getFeatures().msp_multitenant, undefined, key);
   }
-  // The removed plan key resolves to the locked-down fallback, not a real plan.
-  const removed = createPlanService({ licenseManager: lm({ plan: 'msp' }) });
-  assert.equal(removed.getPlanKey(), 'licensed'); // unknown sellable key → safe fallback
+  // The removed sellable keys resolve to the internal "licensed" fallback.
+  for (const removedKey of ['enterprise', 'msp']) {
+    const removed = createPlanService({ licenseManager: lm({ plan: removedKey }) });
+    assert.equal(removed.getPlanKey(), 'licensed', removedKey);
+  }
 });
 
 test('Q8: an expired pilot (unlicensed) grants no packaged features', () => {
@@ -134,7 +137,7 @@ test('moduleRequirements maps each legacy module to the package it is sold under
     required_plan_label: 'BlueEye Professional',
   });
   assert.equal(mods.analysis.required_plan_name, 'Professional');
-  assert.equal(mods.assistant.required_plan_label, 'BlueEye Enterprise');
+  assert.equal(mods.assistant.required_plan_label, 'BlueEye Professional');
   // Exposed on the UI summary too.
   assert.deepEqual(ps.summary().modules, mods);
 });
@@ -153,7 +156,7 @@ test('module tiering is display-only — a plan key never GRANTS a legacy module
 test('upgradeHint names the required BlueEye plan', () => {
   const ps = createPlanService({ licenseManager: lm({ plan: 'starter' }) });
   assert.equal(ps.upgradeHint('api_access'), 'This feature requires BlueEye Professional.');
-  assert.equal(ps.upgradeHint('sso_oidc'), 'This feature requires BlueEye Enterprise.');
+  assert.equal(ps.upgradeHint('sso_oidc'), 'This feature requires BlueEye Professional.');
   assert.equal(ps.upgradeHint('msp_multitenant'), null); // removed key → no hint
   assert.equal(ps.upgradeHint('reports_basic'), null); // already entitled
 });
@@ -175,13 +178,13 @@ test('requirePlanFeature returns the documented 403 contract on denial', () => {
     success: false,
     error: 'feature_not_available',
     feature: 'reports_compliance',
-    message: 'This feature requires BlueEye Enterprise.',
+    message: 'This feature requires BlueEye Professional.',
   });
 });
 
 test('requirePlanFeature calls next() when entitled', () => {
-  const ps = createPlanService({ licenseManager: lm({ plan: 'enterprise' }) });
-  const gate = createFeatureGate({ licenseManager: lm({ plan: 'enterprise' }), planService: ps });
+  const ps = createPlanService({ licenseManager: lm({ plan: 'professional' }) });
+  const gate = createFeatureGate({ licenseManager: lm({ plan: 'professional' }), planService: ps });
   const mw = requirePlanFeature({ featureGate: gate, planService: ps }, 'reports_compliance');
   let nexted = false;
   mw({}, { status() { return this; }, json() {} }, () => { nexted = true; });
@@ -229,8 +232,8 @@ test('Starter caps active test paths at 25', async () => {
   assert.equal(check.body.limit, 25);
 });
 
-test('Enterprise (unlimited) never trips a limit', async () => {
-  const ps = createPlanService({ licenseManager: lm({ plan: 'enterprise' }) });
+test('an unlimited plan (internal "licensed" fallback) never trips a limit', async () => {
+  const ps = createPlanService({ licenseManager: lm({ plan: 'licensed' }) });
   const { agentsRepo, testPackagesRepo } = repos({ agents: 9999, enabledPaths: 9999 });
   const usage = createUsageService({ agentsRepo, testPackagesRepo, planService: ps });
   assert.equal((await usage.assertWithinLimit('agents')).ok, true);
@@ -245,7 +248,7 @@ test('usage limits fail closed without a plan service (or for unknown resources)
   assert.equal(await usage.isLimitReached('agents'), true);
 
   // Unknown resource types deny too, even with a plan service present.
-  const ps = createPlanService({ licenseManager: lm({ plan: 'enterprise' }) });
+  const ps = createPlanService({ licenseManager: lm({ plan: 'professional' }) });
   const withPlan = createUsageService({ agentsRepo, testPackagesRepo, planService: ps });
   assert.equal((await withPlan.assertWithinLimit('nonsense')).ok, false);
 });

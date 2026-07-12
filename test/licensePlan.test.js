@@ -58,13 +58,14 @@ test('GET /license/usage reports usage against plan limits', async () => {
 });
 
 test('GET /license/matrix returns the full plan × feature grid', async () => {
-  const app = appOnPlan('enterprise');
+  const app = appOnPlan('professional');
   const res = await request(app).get('/license/matrix').set('Authorization', authHeader('viewer'));
   assert.equal(res.status, 200);
-  assert.equal(res.body.activePlan, 'enterprise');
-  assert.equal(res.body.plans.length, 4); // pilot/starter/professional/enterprise (MSP removed)
-  assert.ok(!res.body.plans.some((p) => p.plan_key === 'msp'));
-  assert.ok(res.body.features.some((f) => f.key === 'sso_oidc' && f.minPlan === 'enterprise'));
+  assert.equal(res.body.activePlan, 'professional');
+  assert.equal(res.body.plans.length, 3); // pilot/starter/professional (Enterprise + MSP removed)
+  assert.ok(!res.body.plans.some((p) => p.plan_key === 'enterprise' || p.plan_key === 'msp'));
+  // SSO moved down into Professional (the top tier).
+  assert.ok(res.body.features.some((f) => f.key === 'sso_oidc' && f.minPlan === 'professional'));
 });
 
 test('legacy GET /license/features is unchanged', async () => {
@@ -96,8 +97,8 @@ test('Starter allows a DISABLED test package even at the limit', async () => {
   assert.equal(res.status, 201);
 });
 
-test('Enterprise (unlimited) creates test paths without a cap', async () => {
-  const app = appOnPlan('enterprise', { enabledPaths: 9999 });
+test('an unlimited plan (internal "licensed" fallback) creates test paths without a cap', async () => {
+  const app = appOnPlan('licensed', { enabledPaths: 9999 });
   const res = await request(app)
     .post('/api/test-packages')
     .set('Authorization', authHeader('operator'))

@@ -9,7 +9,7 @@ const ROLE_RANK = { viewer: 1, operator: 2, admin: 3 };
 const CLOCK_SKEW_MS = 5 * 60 * 1000; // tolerate 5 minutes of IdP/SP clock drift
 
 // SAML 2.0 SP-initiated SSO service. Supplements local login behind the licence
-// feature `sso_saml` (Enterprise+). The AuthnRequest goes out over HTTP-Redirect;
+// feature `sso_saml` (Professional+). The AuthnRequest goes out over HTTP-Redirect;
 // the IdP POSTs the SAMLResponse back to the ACS. The assertion is verified with
 // the HAND-ROLLED, dependency-free XML-DSig verifier (src/auth/samlXml.js) — no
 // US SDK. We validate, in order: signature → referenced element is the Assertion

@@ -17,7 +17,8 @@ test('GET /license/matrix marks each feature available|roadmap', async () => {
   const res = await request(makeApp()).get('/license/matrix').set('Authorization', authHeader('viewer'));
   assert.equal(res.status, 200);
   const byKey = Object.fromEntries(res.body.features.map((f) => [f.key, f.status]));
-  // Everything in the catalogue is now shipped — SSO (OIDC/SAML) and HA landed.
+  // Everything in the catalogue is now shipped — SSO (OIDC/SAML) landed and the
+  // retired HA / offline capabilities are gone from the grid entirely.
   assert.equal(byKey.dashboard_advanced, 'available');
   assert.equal(byKey.audit_log, 'available');
   assert.equal(byKey.api_access, 'available');
@@ -25,7 +26,7 @@ test('GET /license/matrix marks each feature available|roadmap', async () => {
   assert.equal(byKey.sso_ldap, 'available');
   assert.equal(byKey.sso_oidc, 'available');
   assert.equal(byKey.sso_saml, 'available');
-  assert.equal(byKey.ha_deployment, 'available');
+  assert.equal(byKey.ha_deployment, undefined); // retired
 });
 
 test('catalogue has no remaining roadmap keys (all shipped)', () => {

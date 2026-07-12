@@ -3,15 +3,15 @@
 // Central plan / pricing / feature catalogue for BlueEye.
 //
 // This is the single source of truth for what each commercial package
-// (Pilot / Starter / Professional / Enterprise) grants: limits, history
-// retention, the feature flags it unlocks, the support level and the reference
-// prices. Code MUST NOT hard-code plan names or sprinkle `if plan === 'starter'`
+// (Pilot / Starter / Professional) grants: limits, history retention, the
+// feature flags it unlocks, the support level and the reference prices.
+// Code MUST NOT hard-code plan names or sprinkle `if plan === 'starter'`
 // checks around — instead resolve the active plan via planService and ask the
 // feature gate / usage service. Keeping the catalogue here (data, not logic)
 // makes it trivially testable and lets a future migration mirror it into the
 // `license_plans` table without changing any call site.
 //
-// `null` for a limit means "unlimited / configurable" (Enterprise).
+// `null` for a limit means "unlimited / configurable".
 
 // The complete set of license-gateable feature keys, each with a UI label and
 // the LOWEST plan that grants it. `minPlan` powers the upgrade hints
@@ -35,16 +35,14 @@ const FEATURE_CATALOG = {
   reports_pdf: { label: 'PDF reports', minPlan: 'professional', status: 'available' },
   reports_csv: { label: 'CSV reports', minPlan: 'professional', status: 'available' },
   reports_sla: { label: 'SLA / availability report', minPlan: 'professional', status: 'available' },
-  reports_compliance: { label: 'Compliance report pack', minPlan: 'enterprise', status: 'available' },
+  reports_compliance: { label: 'Compliance report pack', minPlan: 'professional', status: 'available' },
   rbac: { label: 'Role-based access control', minPlan: 'professional', status: 'available' },
   audit_log: { label: 'Audit log', minPlan: 'professional', status: 'available' },
   api_access: { label: 'API access', minPlan: 'professional', status: 'available' },
-  sso_ldap: { label: 'LDAP / Active Directory auth', minPlan: 'enterprise', status: 'available' },
-  sso_oidc: { label: 'SSO (OIDC)', minPlan: 'enterprise', status: 'available' },
-  sso_saml: { label: 'SSO (SAML)', minPlan: 'enterprise', status: 'available' },
-  ha_deployment: { label: 'High-availability deployment', minPlan: 'enterprise', status: 'available' },
-  offline_license: { label: 'Offline license validation', minPlan: 'enterprise', status: 'available' },
-  premium_support: { label: 'Premium / priority support', minPlan: 'enterprise', status: 'available' },
+  sso_ldap: { label: 'LDAP / Active Directory auth', minPlan: 'professional', status: 'available' },
+  sso_oidc: { label: 'SSO (OIDC)', minPlan: 'professional', status: 'available' },
+  sso_saml: { label: 'SSO (SAML)', minPlan: 'professional', status: 'available' },
+  premium_support: { label: 'Premium / priority support', minPlan: 'professional', status: 'available' },
 };
 
 const ALL_FEATURE_KEYS = Object.keys(FEATURE_CATALOG);
@@ -61,7 +59,7 @@ const MODULE_PLAN_TIER = {
   analysis: 'professional',
   geo: 'professional',
   alerting: 'professional',
-  assistant: 'enterprise',
+  assistant: 'professional',
 };
 // Convenience splits over FEATURE_CATALOG.status, for the UI legend, the matrix
 // and tests. A feature with no explicit status counts as 'available'.
@@ -72,7 +70,10 @@ function featureStatus(featureKey) {
 const ROADMAP_FEATURE_KEYS = ALL_FEATURE_KEYS.filter((k) => featureStatus(k) === 'roadmap');
 const AVAILABLE_FEATURE_KEYS = ALL_FEATURE_KEYS.filter((k) => featureStatus(k) === 'available');
 
-// Shared feature bundles, composed below so each tier visibly extends the prior.
+// The full Professional (top-tier) feature bundle. It now absorbs the SSO /
+// compliance / premium-support functions that used to be Enterprise-only —
+// the Enterprise and MSP tiers, and the HA / offline-license capabilities,
+// have been retired from the product.
 const PRO_FEATURES = [
   'dashboard_basic',
   'dashboard_advanced',
@@ -80,26 +81,21 @@ const PRO_FEATURES = [
   'reports_pdf',
   'reports_csv',
   'reports_sla',
+  'reports_compliance',
   'rbac',
   'audit_log',
   'api_access',
   'alerts_email',
   'alerts_webhook',
-];
-const ENTERPRISE_FEATURES = [
-  ...PRO_FEATURES,
-  'reports_compliance',
   'sso_ldap',
   'sso_oidc',
   'sso_saml',
-  'ha_deployment',
-  'offline_license',
   'premium_support',
 ];
 
 // The customer-facing packages, in ascending order of capability. `price_from`
-// marks "from" pricing (Enterprise is quoted). Prices are REFERENCE
-// figures for the admin UI only — never an enforcement input.
+// marks "from" pricing. Prices are REFERENCE figures for the admin UI only —
+// never an enforcement input. Professional is the top tier.
 const PLANS = {
   pilot: {
     plan_key: 'pilot',
@@ -138,7 +134,7 @@ const PLANS = {
     max_test_paths: 150,
     history_days: 365,
     allowed_features: [...PRO_FEATURES],
-    support_level: 'standard',
+    support_level: 'premium',
     is_trial: false,
     trial_days: 0,
     is_enterprise: false,
@@ -146,25 +142,10 @@ const PLANS = {
     price_reference_dkk: 90000,
     price_from: false,
   },
-  enterprise: {
-    plan_key: 'enterprise',
-    plan_name: 'Enterprise',
-    max_agents: null, // configurable / unlimited
-    max_test_paths: null,
-    history_days: 1095,
-    allowed_features: [...ENTERPRISE_FEATURES],
-    support_level: 'premium',
-    is_trial: false,
-    trial_days: 0,
-    is_enterprise: true,
-    price_reference_eur: 25000,
-    price_reference_dkk: 187000,
-    price_from: true,
-  },
 };
 
 // Display order for the UI feature matrix (low → high).
-const PLAN_ORDER = ['pilot', 'starter', 'professional', 'enterprise'];
+const PLAN_ORDER = ['pilot', 'starter', 'professional'];
 
 // Internal fallback plans — never sold, never in PLAN_ORDER:
 //

@@ -37,8 +37,6 @@ const { attachAgentWebSocket } = require('./ws/agentSocket');
 const { attachDashboardWebSocket } = require('./ws/dashboardSocket');
 const { verifyToken } = require('./auth/jwt');
 const { createLicenseManager } = require('./license/licenseManager');
-const { createLicenseVerifier } = require('./license/licenseVerifier');
-const { createOfflineLicenseManager } = require('./license/offlineLicenseManager');
 const { createFeatureGate } = require('./license/features');
 const { createPlanService } = require('./license/planService');
 const { createUsageService } = require('./services/usageService');
@@ -105,10 +103,7 @@ const { createNis2IncidentsRepository } = require('./repositories/nis2IncidentsR
 const { createNis2ReportsRepository } = require('./repositories/nis2ReportsRepository');
 const { createNis2EvidenceRepository } = require('./repositories/nis2EvidenceRepository');
 const { createNis2AuditRepository } = require('./repositories/nis2AuditRepository');
-const { createHaNodesRepository } = require('./repositories/haNodesRepository');
 const { createInvestigationsRepository } = require('./repositories/investigationsRepository');
-const { createLeaderLock } = require('./ha/leaderLock');
-const { createHaCoordinator } = require('./ha/coordinator');
 const { version: appVersion } = require('../package.json');
 
 // Wires up real dependencies, starts the HTTP server and installs graceful
@@ -238,12 +233,10 @@ function start() {
   // license key (see src/license/releaseKey.js).
   const agentReleaseStore = createAgentReleaseStore({ dir: process.env.AGENT_RELEASE_DIR || '', logger });
 
-  // License validation. Two interchangeable backends with the SAME surface:
-  //   - ONLINE  (default): validates a signed proof against blueeye-licens.
-  //   - OFFLINE (LICENSE_FILE set): validates a local signed license file
-  //     entirely on-box — no external server. Invalid/expired → restricted mode.
-  // getAgentCount reads the live WebSocket connection count (agentWs is assigned
-  // just below; the closure is only invoked later, at validation time).
+  // License validation: validates a signed proof against blueeye-licens, with a
+  // local cache + grace window for network outages. getAgentCount reads the live
+  // WebSocket connection count (agentWs is assigned just below; the closure is
+  // only invoked later, at validation time).
   let agentWs = null;
   let dashboardWs = null;
   let licenseManager;
@@ -256,34 +249,18 @@ function start() {
     source: config.license.publicKeySource,
     configured: isConfigured(config.license.publicKey),
   };
-  if (config.license.mode === 'offline') {
-    const verifier = createLicenseVerifier({
-      publicKey: config.license.publicKey,
-      serverId: config.license.serverId,
-    });
-    licenseManager = createOfflineLicenseManager({
-      verifier,
-      filePath: config.license.file,
-      serverId: config.license.serverId,
-      recheckHours: config.license.recheckHours,
-      logger,
-      keyTrust,
-    });
-    logger.info(`License mode: offline (file=${config.license.file || 'unset'}).`);
-  } else {
-    licenseManager = createLicenseManager({
-      config: config.license,
-      publicKey: config.license.publicKey,
-      cache: createFileCache(config.license.cachePath),
-      logger,
-      getAgentCount: () => (agentWs ? agentWs.connectionCount() : 0),
-      keyTrust,
-    });
-  }
+  licenseManager = createLicenseManager({
+    config: config.license,
+    publicKey: config.license.publicKey,
+    cache: createFileCache(config.license.cachePath),
+    logger,
+    getAgentCount: () => (agentWs ? agentWs.connectionCount() : 0),
+    keyTrust,
+  });
 
-  // Plan service: resolves the active package (Pilot/Starter/Professional/
-  // Enterprise) from the signed proof's plan field (or LICENSE_PLAN), and
-  // exposes its limits + packaged feature flags. Additive to the license manager.
+  // Plan service: resolves the active package (Pilot/Starter/Professional) from
+  // the signed proof's plan field (or LICENSE_PLAN), and exposes its limits +
+  // packaged feature flags. Additive to the license manager.
   const planService = createPlanService({ licenseManager, configPlan: config.license.plan });
 
   // Feature gate: signature-verified module entitlements (fail-closed), now also
@@ -557,47 +534,28 @@ function start() {
     logger,
   });
 
-  // High-availability: elect a single leader across replicas and run the
-  // singleton background jobs (retention, test-package scheduler, GeoIP refresh)
-  // ONLY on the leader. Request handling stays stateless on every node, so the
-  // load balancer can route to any of them. When HA is off (the default) the
-  // coordinator is permanently "leader" and starts every job immediately — i.e.
-  // exactly the classic single-node behaviour. See docs/ha-deployment.md.
-  const haNodesRepo = createHaNodesRepository(db);
-  const leaderLock = config.ha.enabled
-    ? createLeaderLock({
-        pool: db.pool,
-        lockName: config.ha.lockName,
-        nodeId: config.ha.nodeId,
-        logger,
-      })
-    : null;
-  const haCoordinator = createHaCoordinator({
-    enabled: config.ha.enabled,
-    nodeId: config.ha.nodeId,
-    lock: leaderLock,
-    nodesRepo: config.ha.enabled ? haNodesRepo : null,
-    intervalMs: config.ha.intervalMs,
-    stepDownCooldownMs: config.ha.stepDownCooldownMs,
-    // Clustering only activates with the ha_deployment entitlement; without it a
-    // node with HA_ENABLED degrades to standalone (checked lazily as the licence
-    // validates). The status/admin routes stay gated by the same feature.
-    featureGate,
-    version: appVersion,
-    logger,
-    // Leader-only singleton work. GeoIP exposes startSchedule/stopSchedule;
-    // adapt it to the uniform { start, stop } the coordinator expects.
-    jobs: [
-      retentionScheduler,
-      testPackageScheduler,
-      { start: () => geoipUpdater.startSchedule(), stop: () => geoipUpdater.stopSchedule() },
-      // Hourly MAD baseline recompute for transaction tests (leader-only).
-      createTransactionBaselineJob({ repo: transactionsRepo, logger }),
-      // Auto-resolve incidents stuck in `investigating` with no new anomalies
-      // within the inactivity window (leader-only).
-      createIncidentAutoResolveJob({ incidentCasesRepo, auditLogRepo, logger }),
-    ],
-  });
+  // Singleton background jobs for this single-node install: retention
+  // rollup/purge, the test-package scheduler, GeoIP auto-update, the hourly MAD
+  // baseline recompute for transaction tests, and incident auto-resolve. They
+  // are started on boot and stopped on graceful shutdown.
+  const backgroundJobs = [
+    retentionScheduler,
+    testPackageScheduler,
+    // GeoIP exposes startSchedule/stopSchedule; adapt it to the uniform { start, stop }.
+    { start: () => geoipUpdater.startSchedule(), stop: () => geoipUpdater.stopSchedule() },
+    createTransactionBaselineJob({ repo: transactionsRepo, logger }),
+    createIncidentAutoResolveJob({ incidentCasesRepo, auditLogRepo, logger }),
+  ];
+  function startBackgroundJobs() {
+    for (const job of backgroundJobs) {
+      try { job.start(); } catch (err) { logger.error(`background job start failed (${err && err.message})`); }
+    }
+  }
+  function stopBackgroundJobs() {
+    for (const job of backgroundJobs) {
+      try { job.stop(); } catch (err) { logger.error(`background job stop failed (${err && err.message})`); }
+    }
+  }
 
   const app = createApp({
     db,
@@ -679,7 +637,6 @@ function start() {
     nis2ReportsRepo,
     nis2EvidenceRepo,
     nis2AuditRepo,
-    haCoordinator,
     investigationsRepo,
     enrollConfig: { publicUrl: config.publicUrl, certFingerprint: config.enroll.certFingerprint, defaultTtlMinutes: config.enrollment.defaultTtlMinutes },
     notifyDashboard,
@@ -763,17 +720,16 @@ function start() {
   // Validate at startup, then periodically. Failures fall back to cache + grace.
   licenseManager.start().catch((err) => logger.error('License manager error:', err));
 
-  // Start the HA coordinator. On a single node (HA off) this immediately starts
-  // the singleton jobs — retention rollup/purge, the test-package scheduler and
-  // the GeoIP auto-update — exactly as before. With HA on, only the elected
-  // leader runs them; followers serve requests statelessly and stand by.
-  haCoordinator.start().catch((err) => logger.error('HA coordinator start failed:', err));
+  // Start the singleton background jobs — retention rollup/purge, the
+  // test-package scheduler, the GeoIP auto-update, the transaction baseline
+  // recompute and incident auto-resolve.
+  startBackgroundJobs();
 
   function shutdown(signal) {
     logger.info(`Received ${signal}, shutting down gracefully...`);
     licenseManager.stop();
-    // Releases the leader lock (if held) + stops the singleton jobs.
-    haCoordinator.stop().catch((err) => logger.error('HA coordinator stop failed:', err));
+    // Stops the singleton background jobs.
+    stopBackgroundJobs();
     baselines.stop();
     revocationRegistry.stop();
     agentWs.close();

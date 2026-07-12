@@ -73,10 +73,10 @@ client factory is injected so tests never touch it.
 When the server wasn't started with `LDAP_AUTH_ENABLED=true` the tab shows an
 "Inactive — server flag required" banner (settings are saved but not yet live).
 
-## Licensing (`sso_ldap`, Enterprise)
+## Licensing (`sso_ldap`, Professional)
 
 Directory auth is a packaged plan feature — `sso_ldap` in `src/license/plans.js`
-(label *"LDAP / Active Directory auth"*), granted from the **Enterprise** tier
+(label *"LDAP / Active Directory auth"*), granted from the **Professional** tier
 (alongside `sso_oidc`/`sso_saml`). It is enforced in two places:
 
 - **Server-side login** — `createLdapAuth({ featureGate })`: `isEnabled()` /

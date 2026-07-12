@@ -7957,32 +7957,58 @@ function integrationEditor(meta, existing) {
 // CMDB (single source of truth) — configure the ONE CMDB source (ServiceNow or
 // Nautobot), test the connection, enable it. Reuses the integrations connector
 // metadata (auth types) + credential inputs. Credentials are write-only.
+// The custom ("bring your own") CMDB config fields — search path + how to read
+// the response. gather() returns { config: {...} } (always incl. searchPath).
+function cmdbCustomConfigFields(config) {
+  const c = config || {};
+  const inputs = {};
+  const rows = [];
+  const text = (key, label, hint, ph) => { const i = el('input', { type: 'text', value: c[key] || '', placeholder: ph || '' }); inputs[key] = i; rows.push(alertField(label, i, hint)); };
+  text('searchPath', 'Search path', 'Required. Path appended to the base URL for asset search.', '/api/assets');
+  text('queryParam', 'Query parameter', 'Query-string param carrying the search text (default: q).', 'q');
+  text('resultsPath', 'Results path', 'Dot-path to the results array in the response (blank = the body is the array).', 'result');
+  text('idField', 'ID field', 'Dot-path to the asset id within a result (default: id).', 'id');
+  text('nameField', 'Name field', 'Dot-path to the display name within a result (default: name).', 'name');
+  text('typeField', 'Type field', 'Optional dot-path to the asset type/class.', 'sys_class_name');
+  text('locationField', 'Location field', 'Optional dot-path to the location label (used for the site sync).', 'location');
+  text('testPath', 'Test path', 'Optional path for the connection test (default: the search path).', '/api/assets');
+  text('tokenScheme', 'Token scheme', 'Optional Authorization scheme word for token auth (default: Bearer).', 'Bearer');
+  function gather() {
+    const out = {};
+    for (const [k, i] of Object.entries(inputs)) { const v = i.value.trim(); if (v) out[k] = v; }
+    return { config: out };
+  }
+  return { rows, gather };
+}
+
 async function settingsCmdbView() {
   const root = el('div');
   root.append(el('p', { class: 'muted settings-intro' },
-    'Configure the single CMDB source BlueEye links agents to. Credentials are encrypted at rest and never shown again. Use “Test connection” to verify before enabling; linking an agent to an asset also syncs the agent’s site from the asset’s CMDB location.'));
+    'Configure the single CMDB source BlueEye links agents to — ServiceNow, Nautobot, or a Custom HTTP/JSON CMDB you describe yourself. Credentials are encrypted at rest and never shown again. Use “Test connection” to verify before enabling; linking an agent to an asset also syncs the agent’s site from the asset’s CMDB location.'));
 
   let cfg; let meta;
   try {
-    [cfg, meta] = await Promise.all([api('/api/settings/cmdb'), api('/api/integrations/meta')]);
+    [cfg, meta] = await Promise.all([api('/api/settings/cmdb'), api('/api/settings/cmdb/meta')]);
   } catch (e) { root.append(el('div', { class: 'empty error' }, errText(e))); return root; }
 
-  const types = (meta.types || []).filter((t) => t.type === 'servicenow' || t.type === 'nautobot');
+  const types = meta.types || [];
   const typeNames = types.map((t) => t.type);
-  const connectorFor = (type) => types.find((t) => t.type === type) || { authTypes: ['basic'] };
+  const TYPE_LABEL = { servicenow: 'ServiceNow', nautobot: 'Nautobot', custom: 'Custom (bring your own)' };
+  const connectorFor = (type) => types.find((t) => t.type === type) || { authTypes: ['basic'], custom: false };
   const isSet = Boolean(cfg && cfg.type);
 
-  const typeSel = el('select', {}, ...typeNames.map((t) => el('option', { value: t }, t)));
+  const typeSel = el('select', {}, ...typeNames.map((t) => el('option', { value: t }, TYPE_LABEL[t] || t)));
   typeSel.value = isSet ? cfg.type : (typeNames[0] || '');
   const urlI = el('input', { type: 'text', value: isSet ? cfg.base_url : '', placeholder: 'https://example.service-now.com' });
   const enabledI = el('input', { type: 'checkbox' }); enabledI.checked = isSet ? !!cfg.enabled : false;
 
   const authWrap = el('div', { class: 'form-grid' });
   const credWrap = el('div', { class: 'form-grid' });
+  const cfgWrap = el('div', { class: 'form-grid' });
   const err = el('p', { class: 'error' });
   const result = el('p', { class: 'muted small' });
 
-  let authSel; let credGather;
+  let authSel; let credGather; let cfgGather = null;
   function rebuildCreds() {
     const c = integrationCredFields(authSel.value, typeSel.value, isSet);
     credGather = c.gather;
@@ -7995,6 +8021,15 @@ async function settingsCmdbView() {
     authSel.addEventListener('change', rebuildCreds);
     authWrap.replaceChildren(alertField('Auth type', authSel, 'How BlueEye authenticates to the CMDB API.'));
     rebuildCreds();
+    // Only the custom connector needs the free-form config block.
+    if (conn.custom) {
+      const cc = cmdbCustomConfigFields(isSet && cfg.type === 'custom' ? cfg.config_json : null);
+      cfgGather = cc.gather;
+      cfgWrap.replaceChildren(el('h4', { class: 'cmdb-cfg-head' }, 'Custom API settings'), ...cc.rows);
+    } else {
+      cfgGather = null;
+      cfgWrap.replaceChildren();
+    }
   }
   typeSel.addEventListener('change', rebuild);
   rebuild();
@@ -8004,6 +8039,7 @@ async function settingsCmdbView() {
     base_url: urlI.value.trim(),
     auth_type: authSel.value,
     enabled: enabledI.checked,
+    ...(cfgGather ? cfgGather() : {}),
     ...credGather(),
   });
 
@@ -8044,9 +8080,9 @@ async function settingsCmdbView() {
   root.append(el('div', { class: 'settings-card' },
     el('h3', {}, 'CMDB source', ' ', el('span', { class: `badge ${isSet && cfg.enabled ? 'ok' : ''}` }, isSet && cfg.enabled ? 'Enabled' : 'Disabled')),
     el('div', { class: 'form-grid' },
-      alertField('Type', typeSel, 'ServiceNow or Nautobot — the single source of truth.'),
+      alertField('Type', typeSel, 'ServiceNow, Nautobot, or a Custom HTTP/JSON CMDB — the single source of truth.'),
       alertField('Base URL', urlI, 'https URL of the CMDB API. Private/loopback addresses are rejected.'),
-      authWrap, credWrap,
+      authWrap, credWrap, cfgWrap,
       alertField('Enabled', enabledI, 'When off, asset search is not served.'),
       statusLine,
       err,

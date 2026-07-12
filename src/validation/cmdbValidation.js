@@ -8,9 +8,14 @@ const { baseUrlBlockedReason } = require('../integrations/ssrfGuard');
 // the route, which holds the connector registry — here we validate the shared,
 // type-agnostic shape, mirroring integrationValidation.js.
 
-const CMDB_TYPES = ['servicenow', 'nautobot'];
+const CMDB_TYPES = ['servicenow', 'nautobot', 'custom'];
 const AUTH_TYPES = ['none', 'basic', 'oauth2', 'token'];
 const URL_MAX = 512;
+const PATH_MAX = 256;
+const FIELD_MAX = 128;
+// The custom-connector config keys (all optional except searchPath). Values are
+// short strings (paths / query param / dot-paths / a token scheme word).
+const CUSTOM_KEYS = ['searchPath', 'testPath', 'queryParam', 'resultsPath', 'idField', 'nameField', 'typeField', 'locationField', 'tokenScheme'];
 const CRED_MAX_KEYS = 20;
 const CRED_KEY_RE = /^[\w.-]{1,64}$/;
 const CRED_VALUE_MAX = 2000;
@@ -68,8 +73,32 @@ function validEnabled(raw) {
   return raw === true || raw === 'true';
 }
 
+// The custom-connector `config` block (only for type === 'custom'). Every key is a
+// short string; searchPath is required and must be a path. Unknown keys are
+// dropped. Returns the normalised config or sets an error.
+function validCustomConfig(raw, errors) {
+  const c = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  const out = {};
+  const sp = c.searchPath;
+  if (typeof sp !== 'string' || sp.trim() === '') { errors.config = 'config.searchPath is required for a custom CMDB'; return undefined; }
+  if (!sp.startsWith('/') || sp.length > PATH_MAX) { errors.config = 'config.searchPath must start with / and be at most 256 chars'; return undefined; }
+  out.searchPath = sp.trim();
+  for (const key of CUSTOM_KEYS) {
+    if (key === 'searchPath') continue;
+    const v = c[key];
+    if (v === undefined || v === null || v === '') continue;
+    if (typeof v !== 'string') { errors.config = `config.${key} must be a string`; return undefined; }
+    const max = (key === 'testPath') ? PATH_MAX : FIELD_MAX;
+    if (v.length > max) { errors.config = `config.${key} is too long`; return undefined; }
+    if (key === 'testPath' && !v.startsWith('/')) { errors.config = 'config.testPath must start with /'; return undefined; }
+    out[key] = v.trim();
+  }
+  return out;
+}
+
 // PUT /api/settings/cmdb — type + baseUrl required; credentials optional on an
-// edit (omit to keep the stored secret). clearCredentials wipes them.
+// edit (omit to keep the stored secret). clearCredentials wipes them. A custom
+// type also requires a `config` block (searchPath + optional mappings).
 function validateCmdbConfig(body) {
   const input = body && typeof body === 'object' && !Array.isArray(body) ? body : {};
   const errors = {};
@@ -78,6 +107,14 @@ function validateCmdbConfig(body) {
   value.type = validType(input.type, errors);
   value.baseUrl = validBaseUrl(input.base_url, errors);
   value.authType = validAuthType(input.auth_type, errors);
+
+  // config only applies to the custom connector; the built-ins ignore it.
+  if (value.type === 'custom') {
+    const cfg = validCustomConfig(input.config, errors);
+    if (cfg !== undefined) value.config = cfg;
+  } else {
+    value.config = {};
+  }
 
   if (input.clearCredentials === true || input.clearCredentials === 'true') {
     value.clearCredentials = true;

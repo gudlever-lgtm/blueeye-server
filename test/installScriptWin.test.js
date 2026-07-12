@@ -82,6 +82,14 @@ test('renderInstallPs1 Fail prints a clean message, not a WriteErrorException', 
   assert.ok(!/function Fail.*Write-Error/.test(script), 'Fail must not use Write-Error (throws WriteErrorException under Stop)');
 });
 
+test('renderInstallPs1 prints a runnable manual uninstall hint (backtick-escaped $false)', () => {
+  const script = renderInstallPs1({ serverUrl: 'http://x', code: 'C', sourceSha: SHA });
+  const line = script.split('\n').find((l) => /remove it:/.test(l));
+  // Must be `$false (escaped) so Write-Host prints a literal $false, not "False".
+  assert.match(line, /-Confirm:`\$false/);
+  assert.ok(!/-Confirm:\$false(?!`)/.test(line.replace('`$false', '')), 'no un-escaped $false that would expand to False');
+});
+
 test('renderUninstallPs1 is a real Windows uninstaller, not a Linux one', () => {
   const script = renderUninstallPs1();
   assert.match(script, /#Requires -Version 5\.1/);

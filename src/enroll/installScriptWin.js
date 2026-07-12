@@ -262,7 +262,10 @@ try {
   Info "live log:  Get-Content '$AgentLog' -Wait -Tail 30"
   Info "task state:  Get-ScheduledTask $ServiceName | Get-ScheduledTaskInfo"
   Info "manage it:  Stop-ScheduledTask $ServiceName  |  Start-ScheduledTask $ServiceName"
-  Info "remove it:  powershell -NoProfile -ExecutionPolicy Bypass -Command ""irm $ServerUrl/enroll/uninstall.ps1 | iex""  (or: Unregister-ScheduledTask -TaskName $ServiceName -Confirm:\$false ; Remove-Item -Recurse -Force '$InstallDir','$StateDir')"
+  # The false literal below is backtick-escaped so PowerShell prints it verbatim:
+  # an un-escaped false inside this double-quoted string expands to the word
+  # "False", producing a broken "-Confirm:False" the operator cannot run.
+  Info "remove it:  powershell -NoProfile -ExecutionPolicy Bypass -Command ""irm $ServerUrl/enroll/uninstall.ps1 | iex""  (or: Unregister-ScheduledTask -TaskName $ServiceName -Confirm:\`$false ; Remove-Item -Recurse -Force '$InstallDir','$StateDir')"
 } finally {
   Remove-Item -Recurse -Force $Tmp -ErrorAction SilentlyContinue
 }

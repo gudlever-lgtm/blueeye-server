@@ -796,7 +796,7 @@ const PAGE_INFO = {
         el('li', {}, 'Last reported: the time of the agent\'s most recent traffic measurement.')),
       el('h4', {}, 'Actions'),
       el('ul', {},
-        el('li', {}, '”+ New agent” issues a one-time code for installation (operator+) — or use ', viewLink('enrollment'), ' for a ready-to-run one-liner.'),
+        el('li', {}, '”+ New agent” (operator+) opens ', viewLink('enrollment'), ', where you generate a code and a ready-to-run install one-liner.'),
         el('li', {}, '”Run test” asks the agent to measure immediately; “Traffic” shows the measurements.'),
         el('li', {}, '”Edit” sets name, location, notes and traffic source (proc, SNMP, NetFlow or sFlow).'),
         el('li', {}, '”Upgrade” (admin) rebuilds a systemd-managed agent from the server\'s published source and restarts it — always available for a manual re-deploy; it shows as a highlighted “Update” when the agent is behind. Docker/unmanaged agents decline (re-run the host installer).')),

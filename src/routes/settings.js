@@ -32,6 +32,7 @@ function createSettingsRouter({ settingsService, featureGate, dispatcher, analys
       geoip: settingsService ? await settingsService.getGeoip() : null,
       flowCategories: settingsService ? await settingsService.getFlowCategories() : null,
       maintenance: settingsService ? await settingsService.getMaintenance() : null,
+      tsdb: settingsService ? settingsService.getTsdb() : null,
       agentReleaseKey: releaseKeyService ? releaseKeyService.status() : { configured: false },
     });
   }));

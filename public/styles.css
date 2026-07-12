@@ -827,6 +827,11 @@ tr.acked td { opacity: .55; }
 .settings-card table.kv { background: transparent; }
 .settings-card table.kv td { padding: 4px 8px; border-bottom: 1px solid var(--border); }
 .settings-card .badges { display: flex; flex-wrap: wrap; gap: 6px; }
+.settings-help { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 10px; }
+.settings-help > summary { cursor: pointer; }
+.settings-help ol { margin: 8px 0; padding-left: 20px; }
+.settings-help li { margin: 4px 0; }
+.settings-env { background: var(--code-bg, rgba(127,127,127,.12)); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; margin: 6px 0; font-size: 12px; white-space: pre-wrap; overflow-x: auto; }
 .settings-grid:has(.form-grid) .settings-card:has(.form-grid) { grid-column: 1 / -1; }
 
 /* Settings → Appearance: colour-theme picker. */

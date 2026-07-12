@@ -990,6 +990,7 @@ const PAGE_INFO = {
         el('li', {}, settingsLink('auth', 'Authentication'), ': connect an LDAP / Active Directory server so users log in with their directory account and get a role from their group membership. Requires the Professional licence and the server flag LDAP_AUTH_ENABLED; the bind password is write-only. Local accounts remain as a fallback.')),
       el('h4', {}, 'Read-only (set in .env / requires restart)'),
       el('ul', {},
+        el('li', {}, settingsLink('database', 'Database'), ': status of the MySQL primary store and the optional TimescaleDB telemetry node, plus how to wire up TimescaleDB. Database connections are set in the server environment (deploy-time infrastructure), so they are read-only here.'),
         el('li', {}, settingsLink('users', 'Users'), ': create/edit staff and roles (admin only).'),
         el('li', {}, settingsLink('license', 'License'), ': status + “Revalidate now”.')),
       el('p', { class: 'muted' }, 'Editable changes are stored in app_settings and are reloaded on startup, so they survive a restart.'),
@@ -7335,7 +7336,7 @@ let settingsTab = null;
 const SETTINGS_GROUPS = [
   ['Access & security', [['users', 'Users', true], ['auth', 'Authentication', true], ['apitokens', 'API tokens', true], ['agentkey', 'Agent key', true]]],
   ['Detection & alerts', [['analyse', 'Analysis', true], ['alerting', 'Alerting', true], ['integrations', 'Integrations', true], ['cmdb', 'CMDB', true], ['maintenance', 'Maintenance', true]]],
-  ['Data', [['retention', 'Retention', true], ['types', 'Traffic types', true], ['map', 'Map', true]]],
+  ['Data', [['database', 'Database', true], ['retention', 'Retention', true], ['types', 'Traffic types', true], ['map', 'Map', true]]],
   ['System', [['updates', 'Updates', true], ['agents', 'Agents', true], ['screening', 'Test Settings', true]]],
   ['Personal', [['appearance', 'Appearance', false], ['license', 'License', false]]],
 ];
@@ -7452,6 +7453,7 @@ views.settings = async () => {
     users: () => views.users(),
     license: () => views.license(),
     appearance: settingsAppearanceView,
+    database: settingsDatabaseView,
     map: settingsMapView,
     types: settingsTypesView,
     analyse: settingsAnalyseView,
@@ -8775,6 +8777,94 @@ function retentionSettingsCard(r) {
       { key: 'rollupIntervalMinutes', label: 'Bucket size (min)', type: 'number', readonly: true, hint: 'How wide aggregation buckets are. Set via .env (cached at startup).' },
     ],
   });
+}
+
+// Settings → Data → Database: read-only status + how-to for the split storage
+// backends — MySQL (the always-on primary store) and the OPTIONAL TimescaleDB
+// telemetry node. Both connections live in the server's environment, not here: a
+// database connection is deploy-time infrastructure (the pg pool is built once
+// at boot, and TSDB is provisioned by deploy/install-timescale.sh). This panel
+// exists so the "TimescaleDB: not configured" state comes with live status and a
+// concrete how-to instead of a dead end. See docs/storage-split-audit.md.
+async function settingsDatabaseView() {
+  const root = el('div');
+  root.append(el('p', { class: 'muted settings-intro' },
+    'BlueEye keeps inventory, users and configuration in MySQL (always on) and can offload high-volume telemetry (traffic, flows, metrics) to a dedicated TimescaleDB node. Both connections are set in the server environment, not here — a database connection is deploy-time infrastructure, so this tab is read-only status plus how to configure it.'));
+
+  let cfg = {}; let storage = {};
+  try {
+    [cfg, storage] = await Promise.all([api('/api/settings'), api('/system/storage')]);
+  } catch (err) {
+    root.append(el('div', { class: 'empty error' }, errText(err)));
+    return root;
+  }
+  root.append(el('div', { class: 'settings-grid' },
+    mysqlStatusCard(storage.database || {}),
+    tsdbStatusCard(cfg.tsdb || {}, storage.tsdb || null)));
+  return root;
+}
+
+// MySQL — the primary store. Always env-configured; here we only report the live
+// size/health (from /system/storage) so the two stores read alike side by side.
+function mysqlStatusCard(info) {
+  const card = el('div', { class: 'settings-card' }, el('h3', {}, 'MySQL'));
+  card.append(el('p', { class: 'muted small' }, 'Primary store — inventory, users, configuration. Configured in the server environment (DB_HOST, DB_USER, …).'));
+  if (info && !info.error) {
+    card.append(el('div', { class: 'section-head' }, el('span', { class: 'badge active' }, 'Connected ✓')));
+    const bits = [];
+    if (info.name) bits.push(el('li', {}, el('strong', {}, 'Database: '), el('code', {}, info.name)));
+    if (info.totalBytes != null) bits.push(el('li', {}, el('strong', {}, 'Size: '), fmtBytes(info.totalBytes)));
+    if (info.tableCount != null) bits.push(el('li', {}, el('strong', {}, 'Tables: '), String(info.tableCount)));
+    if (bits.length) card.append(el('ul', {}, ...bits));
+  } else {
+    card.append(el('div', { class: 'section-head' }, el('span', { class: 'badge bad' }, 'Unavailable')));
+    if (info && info.error) card.append(el('p', { class: 'small muted' }, info.error));
+  }
+  return card;
+}
+
+// TimescaleDB — the optional telemetry store. `cfg` is the effective env-driven
+// target (from /api/settings, password never included); `live` is the live
+// status (from /system/storage): null/`configured:false` when disabled, or
+// `{ available, error, totalBytes, hypertableCount, … }` when wired.
+function tsdbStatusCard(cfg, live) {
+  const card = el('div', { class: 'settings-card' }, el('h3', {}, 'TimescaleDB', el('span', { class: 'muted small' }, ' · telemetry')));
+
+  if (!cfg.enabled) {
+    card.append(el('div', { class: 'section-head' }, el('span', { class: 'badge neutral' }, 'Not configured')));
+    card.append(el('p', {}, 'The optional telemetry store is disabled — traffic, flows and metrics stay in MySQL. Wire up a TimescaleDB node to offload that high-volume data.'));
+  } else if (live && live.available !== false && !live.error) {
+    card.append(el('div', { class: 'section-head' }, el('span', { class: 'badge active' }, 'Connected ✓')));
+    const bits = [el('li', {}, el('strong', {}, 'Target: '), el('code', {}, `${cfg.host || '?'}:${cfg.port || '?'}`))];
+    if (cfg.user) bits.push(el('li', {}, el('strong', {}, 'User: '), el('code', {}, cfg.user)));
+    if (live.name || cfg.database) bits.push(el('li', {}, el('strong', {}, 'Database: '), el('code', {}, live.name || cfg.database)));
+    if (live.totalBytes != null) bits.push(el('li', {}, el('strong', {}, 'Size: '), fmtBytes(live.totalBytes)));
+    if (live.hypertableCount != null) bits.push(el('li', {}, el('strong', {}, 'Hypertables: '), String(live.hypertableCount)));
+    card.append(el('ul', {}, ...bits));
+  } else {
+    // Enabled in env but the node isn't answering — surface the reason.
+    card.append(el('div', { class: 'section-head' }, el('span', { class: 'badge bad' }, 'Unavailable')));
+    card.append(el('p', {}, 'Enabled in the server environment, but the telemetry node isn\'t reachable.'));
+    const bits = [el('li', {}, el('strong', {}, 'Target: '), el('code', {}, `${cfg.host || '?'}:${cfg.port || '?'}`))];
+    if (live && live.error) bits.push(el('li', {}, el('strong', {}, 'Error: '), live.error));
+    card.append(el('ul', {}, ...bits));
+  }
+
+  // The how-to is shown in every state (folded) so the tab is self-documenting.
+  const guide = el('details', { class: 'settings-help' },
+    el('summary', { class: 'muted' }, cfg.enabled ? 'How TimescaleDB is configured' : 'How to configure TimescaleDB'),
+    el('ol', {},
+      el('li', {}, 'Provision a dedicated telemetry node with ', el('code', {}, 'deploy/install-timescale.sh'), ' (installs PostgreSQL + TimescaleDB, applies the schema, sets up backups). See ', el('code', {}, 'deploy/README-timescale.md'), '.'),
+      el('li', {}, 'Point the server at it via environment variables and restart:',
+        el('pre', { class: 'settings-env' },
+          'TSDB_ENABLED=true\n'
+          + 'TSDB_HOST=<telemetry-node-ip>\n'
+          + 'TSDB_PASSWORD=<the blueeye_tsdb password>\n'
+          + '# TSDB_PORT / TSDB_USER / TSDB_NAME default to 5432 / blueeye_tsdb / blueeye_telemetry')),
+      el('li', {}, 'Once connected, ', el('code', {}, 'GET /health'), ' pings the telemetry node too, and the live size appears here and on the Server-storage card.')),
+    el('p', { class: 'muted small' }, 'The connection (including the password) is set in the server environment, never in the database — so it is read-only here.'));
+  card.append(guide);
+  return card;
 }
 
 async function settingsMapView() {

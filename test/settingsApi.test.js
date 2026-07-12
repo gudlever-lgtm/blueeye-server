@@ -21,6 +21,16 @@ test('GET /api/settings returns the effective configuration for an admin', async
   assert.ok(res.body.alerting);
   assert.ok(res.body.retention);
   assert.ok(res.body.map.tileUrl.includes('{z}'));
+  // TSDB status is reported (read-only, env-driven) with the connection target
+  // but never the password.
+  assert.ok(res.body.tsdb && res.body.tsdb.enabled === true);
+  assert.equal(res.body.tsdb.host, 'tsdb.example');
+  assert.equal(res.body.tsdb.database, 'blueeye_telemetry');
+  assert.equal(res.body.tsdb.passwordSet, true);
+  assert.equal(res.body.tsdb.editable, false);
+  assert.equal(res.body.tsdb.source, 'env');
+  assert.ok(!('password' in res.body.tsdb));
+  assert.ok(!JSON.stringify(res.body).includes('super-secret-pw'));
   // No secrets leaked.
   assert.ok(!JSON.stringify(res.body).toLowerCase().includes('api_key'));
 });

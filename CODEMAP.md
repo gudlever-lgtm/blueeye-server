@@ -204,6 +204,7 @@ A single vanilla-JS SPA. Key building blocks:
 | Alert channels | `src/analysis/alerting/channels/*` + `dispatcher.js`; runtime-editable via Settings→Alerting (`settingsService.getAlerting/setAlerting`, `PUT /api/settings/alerting`, UI `settingsAlertingView` in `public/app.js`) — live-applied onto the running `alertingConfig`, secrets write-only |
 | Maintenance windows / silencing | `src/analysis/alerting/maintenance.js` (`createSilencer`) + dispatcher hook; windows in `settingsService` (`maintenance` key), route `/api/settings/maintenance` |
 | Data retention | `src/analysis/retention/*` (editable via Settings→Retention) |
+| Storage backends (MySQL + optional TimescaleDB) status | `settingsService.getTsdb()` (read-only, env-driven — the pg pool is boot-time infra, no `setTsdb`) exposed on `GET /api/settings`; live sizes on `GET /system/storage` (`services/systemInfo.js`). **UI: Settings → Database** (`settingsDatabaseView`) with status + how-to. Configure via `TSDB_*` env (`src/config.js`) + `deploy/install-timescale.sh`; see `docs/storage-split-audit.md` |
 | Geo/ASN enrichment | `src/geo/enricher.js`, `provider.js`; flows in `flowsRepository.js` |
 | Traffic-type categories | `src/flows/categories.js` (editable via Settings→Traffic types) |
 | Flow/conversation explorer | `flowsRepository.exploreFlows` + `src/routes/flows.js` (`/explore`); UI `views.flows` |

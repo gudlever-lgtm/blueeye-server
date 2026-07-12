@@ -125,7 +125,8 @@ function createApiRouter({
   connectorRegistry,
   secretBox,
   // CMDB integration (single source of truth): the singleton config + agent↔asset
-  // links. Reuse the connectorRegistry (ServiceNow/Nautobot) + secretBox above.
+  // links + its OWN connector registry (ServiceNow / Nautobot / custom).
+  cmdbConnectorRegistry,
   cmdbConfigRepo,
   agentCmdbLinksRepo,
   // Injected fetch for the Test area's reachability probes (SAML IdP / AI
@@ -245,9 +246,9 @@ function createApiRouter({
   // CMDB integration (single source of truth) — admin config + connection test,
   // operator+ asset search, and per-agent asset links. Reuses the connector
   // registry + secretBox that the integrations feature already wires.
-  if (cmdbConfigRepo && connectorRegistry && secretBox) {
-    router.use('/api/settings/cmdb', createCmdbSettingsRouter({ cmdbConfigRepo, registry: connectorRegistry, secretBox }));
-    router.use('/api/cmdb/assets', createCmdbAssetsRouter({ cmdbConfigRepo, registry: connectorRegistry, secretBox }));
+  if (cmdbConfigRepo && cmdbConnectorRegistry && secretBox) {
+    router.use('/api/settings/cmdb', createCmdbSettingsRouter({ cmdbConfigRepo, registry: cmdbConnectorRegistry, secretBox }));
+    router.use('/api/cmdb/assets', createCmdbAssetsRouter({ cmdbConfigRepo, registry: cmdbConnectorRegistry, secretBox }));
   }
   if (agentCmdbLinksRepo) {
     router.use('/api/agents', createAgentCmdbLinkRouter({ agentCmdbLinksRepo, agentsRepo, locationsRepo }));
@@ -260,7 +261,7 @@ function createApiRouter({
     integrationsRepo,
     integrationsDispatcher,
     cmdbConfigRepo,
-    connectorRegistry,
+    connectorRegistry: cmdbConnectorRegistry,
     secretBox,
     ldapAuth,
     ldapConfigRepo,

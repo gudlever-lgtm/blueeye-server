@@ -1,29 +1,53 @@
 # CMDB integration (single source of truth)
 
-BlueEye links agents to assets in **one** external CMDB — either **ServiceNow** or
-**Nautobot**. An admin configures the single source; operators link an agent to an
-asset via a searchable lookup. Linking also **syncs the agent's site** from the
-asset's CMDB location.
+BlueEye links agents to assets in **one** external CMDB — **ServiceNow**,
+**Nautobot**, or a **Custom** HTTP/JSON CMDB you describe yourself. An admin
+configures the single source; operators link an agent to an asset via a searchable
+lookup. Linking also **syncs the agent's site** from the asset's CMDB location.
 
 Only ONE source is supported by design (single source of truth). Multi-source,
 bulk import/sync are out of scope.
 
 ## Data model (migration `051_create_cmdb.sql`)
 
-- **`cmdb_config`** — a singleton connection config: `type` (`servicenow`|`nautobot`),
-  `base_url`, `auth_type`, `credentials_encrypted`, `enabled`, `verified_at`,
-  `updated_by`. Credentials are encrypted at rest (AES‑256‑GCM via
-  `src/lib/secretBox.js`) and are **never** returned by the API. Editing any field
-  clears `verified_at` (the connection must be re‑tested).
+- **`cmdb_config`** — a singleton connection config: `type`
+  (`servicenow`|`nautobot`|`custom`), `base_url`, `auth_type`, `config_json` (the
+  custom connector's settings; empty for the built-ins), `credentials_encrypted`,
+  `enabled`, `verified_at`, `updated_by`. Credentials are encrypted at rest
+  (AES‑256‑GCM via `src/lib/secretBox.js`) and are **never** returned by the API.
+  Editing any field clears `verified_at` (the connection must be re‑tested).
+  (Migration `052` adds the `custom` type + `config_json`.)
 - **`agent_cmdb_links`** — one asset per agent (`agent_id` PK, FK **cascade on
   agent delete**): `cmdb_asset_id`, `cmdb_asset_name`, `cmdb_asset_location`
   (the asset's CMDB location label), `linked_at`, `linked_by`.
 
-## Connectors (reused, not rewritten)
+## Connectors
 
-The ServiceNow/Nautobot connectors under `src/integrations/connectors/` — the same
-ones the outbound integrations feature uses — gained two CMDB methods, leaving
-their existing `send()`/`test()` untouched:
+The CMDB feature has its **own** connector registry (`src/cmdb/connectors.js`),
+separate from the outbound-integrations registry — CMDB connectors *read*
+(`testConnection` + `search`) rather than *push* (`send` + events). It holds three:
+
+- **`servicenow`** / **`nautobot`** — reuse the same factory functions the
+  integrations feature uses (under `src/integrations/connectors/`), which gained two
+  CMDB methods while leaving their existing `send()`/`test()` untouched.
+- **`custom`** (`src/integrations/connectors/customCmdb.js`) — a **config-driven**
+  connector for any HTTP/JSON asset API. Everything is supplied in the config's
+  `config` block, so no code change is needed to onboard a new CMDB:
+
+  | key | meaning | default |
+  | --- | --- | --- |
+  | `searchPath` | path appended to `base_url` for search (**required**) | — |
+  | `queryParam` | query-string param carrying the search text | `q` |
+  | `testPath` | path for the connection test | `searchPath` |
+  | `resultsPath` | dot-path to the results array (blank = body is the array) | `''` |
+  | `idField` / `nameField` | dot-path to the id / display name in a result | `id` / `name` |
+  | `typeField` / `locationField` | optional dot-paths to type / location | — |
+  | `tokenScheme` | Authorization scheme word for token auth | `Bearer` |
+
+`GET /api/settings/cmdb/meta` returns the three types + their auth types + whether
+each needs the `config` block (only `custom` does), which drives the Settings form.
+
+The built-in ServiceNow/Nautobot methods:
 
 - `testConnection(integration)` → `{ ok, status, detail }`. A bounded read of the
   asset surface (ServiceNow `cmdb_ci`, Nautobot `dcim/devices`), so a service

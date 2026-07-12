@@ -75,3 +75,48 @@ test('nautobot.search surfaces an upstream failure as ok:false', async () => {
   assert.equal(res.ok, false);
   assert.equal(res.status, 502);
 });
+
+// ---- Custom (bring-your-own) CMDB ------------------------------------------
+
+const { createCustomCmdbConnector } = require('../src/integrations/connectors/customCmdb');
+
+const CUSTOM = {
+  baseUrl: 'https://cmdb.example.com', authType: 'token', credentials: { token: 't' },
+  config: { searchPath: '/api/assets', queryParam: 'search', resultsPath: 'data.items', idField: 'uuid', nameField: 'label', typeField: 'kind', locationField: 'site.name' },
+};
+
+test('customCmdb.search maps nested results via configured dot-paths', async () => {
+  let calledUrl = null;
+  const connector = createCustomCmdbConnector({ fetchImpl: async (u) => {
+    calledUrl = u;
+    return { ok: true, status: 200, json: async () => ({ data: { items: [
+      { uuid: 'a1', label: 'db-1', kind: 'server', site: { name: 'Odense' } },
+      { label: 'no-id' }, // dropped: no id
+    ] } }) };
+  } });
+  const res = await connector.search(CUSTOM, 'db');
+  assert.equal(res.ok, true);
+  assert.match(calledUrl, /\/api\/assets\?search=db$/);
+  assert.deepEqual(res.assets, [{ id: 'a1', name: 'db-1', type: 'server', location: 'Odense' }]);
+});
+
+test('customCmdb.search: empty resultsPath treats the body as the array; defaults id/name', async () => {
+  const connector = createCustomCmdbConnector({ fetchImpl: async () => ({ ok: true, status: 200, json: async () => ([{ id: 'x', name: 'n' }]) }) });
+  const res = await connector.search({ baseUrl: 'https://c.example', authType: 'none', credentials: {}, config: { searchPath: '/s' } }, 'q');
+  assert.deepEqual(res.assets, [{ id: 'x', name: 'n', type: null, location: null }]);
+});
+
+test('customCmdb.testConnection uses testPath and reports the status', async () => {
+  let calledUrl = null;
+  const connector = createCustomCmdbConnector({ fetchImpl: async (u) => { calledUrl = u; return { ok: true, status: 200, json: async () => ({}) }; } });
+  const res = await connector.testConnection({ ...CUSTOM, config: { ...CUSTOM.config, testPath: '/api/ping' } });
+  assert.equal(res.ok, true);
+  assert.match(calledUrl, /\/api\/ping$/);
+});
+
+test('customCmdb.search surfaces an upstream failure as ok:false', async () => {
+  const connector = createCustomCmdbConnector({ fetchImpl: fetchReturning(503, {}) });
+  const res = await connector.search(CUSTOM, 'db');
+  assert.equal(res.ok, false);
+  assert.equal(res.status, 503);
+});

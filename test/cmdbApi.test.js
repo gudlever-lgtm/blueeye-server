@@ -9,7 +9,7 @@ const request = require('supertest');
 
 const {
   makeApp, makeCmdbConfigRepo, makeAgentCmdbLinksRepo, makeAgentsRepo, makeLocationsRepo,
-  makeConnectorRegistry, makeSecretBox, authHeader,
+  makeCmdbConnectorRegistry, makeSecretBox, authHeader,
 } = require('../test-support/fakes');
 
 const admin = () => authHeader('admin');
@@ -95,6 +95,56 @@ test('PUT with a private/internal base_url -> 400 (SSRF guard)', async () => {
   assert.ok(res.body.details.base_url);
 });
 
+// ---- Custom ("bring your own") CMDB ----------------------------------------
+
+const CUSTOM_CFG = {
+  type: 'custom', base_url: 'https://cmdb.example.com', auth_type: 'token', credentials: { token: 't' }, enabled: true,
+  config: { searchPath: '/api/assets', queryParam: 'q', resultsPath: 'result', idField: 'id', nameField: 'name', locationField: 'loc' },
+};
+
+test('GET /api/settings/cmdb/meta lists servicenow, nautobot and custom', async () => {
+  const res = await request(makeApp()).get('/api/settings/cmdb/meta').set('Authorization', admin());
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body.types.map((t) => t.type).sort(), ['custom', 'nautobot', 'servicenow']);
+  const custom = res.body.types.find((t) => t.type === 'custom');
+  assert.equal(custom.custom, true);
+  assert.ok(custom.authTypes.includes('token'));
+});
+
+test('PUT a custom CMDB stores config_json; GET returns it (no credentials)', async () => {
+  const repo = makeCmdbConfigRepo();
+  const app = makeApp({ cmdbConfigRepo: repo });
+  const put = await request(app).put('/api/settings/cmdb').set('Authorization', admin()).send(CUSTOM_CFG);
+  assert.equal(put.status, 200);
+  assert.equal(put.body.type, 'custom');
+  assert.equal(put.body.config_json.searchPath, '/api/assets');
+  assert.equal(put.body.credentials, undefined);
+  const stored = await repo.getWithSecret();
+  assert.equal(stored.config_json.searchPath, '/api/assets');
+  assert.ok(stored.credentials_encrypted.startsWith('v1.gcm.'));
+});
+
+test('PUT a custom CMDB without config.searchPath -> 400', async () => {
+  const { config, ...rest } = CUSTOM_CFG;
+  const res = await request(makeApp()).put('/api/settings/cmdb').set('Authorization', admin()).send({ ...rest, config: { queryParam: 'q' } });
+  assert.equal(res.status, 400);
+  assert.ok(res.body.details.config);
+});
+
+test('search via a custom CMDB uses the configured connector + mappings', async () => {
+  const box = makeSecretBox();
+  const cmdbConfigRepo = makeCmdbConfigRepo({ row: {
+    id: 1, type: 'custom', base_url: 'https://cmdb.example.com', auth_type: 'token',
+    config_json: { searchPath: '/api/assets', resultsPath: 'result', idField: 'id', nameField: 'name', locationField: 'loc' },
+    credentials_encrypted: box.encryptJson({ token: 't' }), enabled: true, verified_at: null, updated_by: 1,
+  } });
+  const cmdbConnectorRegistry = makeCmdbConnectorRegistry({ fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ result: [{ id: 'z9', name: 'host9', loc: 'Aarhus' }] }) }) });
+  const app = makeApp({ cmdbConfigRepo, cmdbConnectorRegistry, secretBox: box });
+  const res = await request(app).get('/api/cmdb/assets/search?q=host').set('Authorization', operator());
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body.assets, [{ id: 'z9', name: 'host9', type: null, location: 'Aarhus' }]);
+});
+
 // ---- Phase 2: POST /test ---------------------------------------------------
 
 test('POST /test with no config -> 400', async () => {
@@ -105,8 +155,8 @@ test('POST /test with no config -> 400', async () => {
 test('POST /test success -> 200 and stamps verified_at', async () => {
   const box = makeSecretBox();
   const cmdbConfigRepo = seededConfig(box);
-  const connectorRegistry = makeConnectorRegistry({ fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ result: [] }) }) });
-  const app = makeApp({ cmdbConfigRepo, connectorRegistry, secretBox: box });
+  const connectorRegistry = makeCmdbConnectorRegistry({ fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ result: [] }) }) });
+  const app = makeApp({ cmdbConfigRepo, cmdbConnectorRegistry: connectorRegistry, secretBox: box });
   const res = await request(app).post('/api/settings/cmdb/test').set('Authorization', admin());
   assert.equal(res.status, 200);
   assert.equal(res.body.ok, true);
@@ -117,8 +167,8 @@ test('POST /test success -> 200 and stamps verified_at', async () => {
 test('POST /test with bad credentials -> 401', async () => {
   const box = makeSecretBox();
   const cmdbConfigRepo = seededConfig(box);
-  const connectorRegistry = makeConnectorRegistry({ fetchImpl: async () => ({ ok: false, status: 401, json: async () => ({}) }) });
-  const app = makeApp({ cmdbConfigRepo, connectorRegistry, secretBox: box });
+  const connectorRegistry = makeCmdbConnectorRegistry({ fetchImpl: async () => ({ ok: false, status: 401, json: async () => ({}) }) });
+  const app = makeApp({ cmdbConfigRepo, cmdbConnectorRegistry: connectorRegistry, secretBox: box });
   const res = await request(app).post('/api/settings/cmdb/test').set('Authorization', admin());
   assert.equal(res.status, 401);
   assert.equal(res.body.ok, false);
@@ -129,8 +179,8 @@ test('POST /test with bad credentials -> 401', async () => {
 test('POST /test with an unreachable base_url -> 500', async () => {
   const box = makeSecretBox();
   const cmdbConfigRepo = seededConfig(box);
-  const connectorRegistry = makeConnectorRegistry({ fetchImpl: async () => { throw new Error('ECONNREFUSED'); } });
-  const app = makeApp({ cmdbConfigRepo, connectorRegistry, secretBox: box });
+  const connectorRegistry = makeCmdbConnectorRegistry({ fetchImpl: async () => { throw new Error('ECONNREFUSED'); } });
+  const app = makeApp({ cmdbConfigRepo, cmdbConnectorRegistry: connectorRegistry, secretBox: box });
   const res = await request(app).post('/api/settings/cmdb/test').set('Authorization', admin());
   assert.equal(res.status, 500);
   assert.equal(res.body.ok, false);
@@ -169,12 +219,12 @@ test('GET search when CMDB is configured but disabled -> 404', async () => {
 test('GET search normalizes connector results to {id,name,type,location}', async () => {
   const box = makeSecretBox();
   const cmdbConfigRepo = seededConfig(box);
-  const connectorRegistry = makeConnectorRegistry({
+  const connectorRegistry = makeCmdbConnectorRegistry({
     fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ result: [
       { sys_id: 'abc123', name: 'web01', sys_class_name: 'cmdb_ci_server', location: 'Copenhagen DC' },
     ] }) }),
   });
-  const app = makeApp({ cmdbConfigRepo, connectorRegistry, secretBox: box });
+  const app = makeApp({ cmdbConfigRepo, cmdbConnectorRegistry: connectorRegistry, secretBox: box });
   const res = await request(app).get('/api/cmdb/assets/search?q=web').set('Authorization', operator());
   assert.equal(res.status, 200);
   assert.deepEqual(res.body.assets, [{ id: 'abc123', name: 'web01', type: 'cmdb_ci_server', location: 'Copenhagen DC' }]);
@@ -183,8 +233,8 @@ test('GET search normalizes connector results to {id,name,type,location}', async
 test('GET search when the connector call fails -> 500', async () => {
   const box = makeSecretBox();
   const cmdbConfigRepo = seededConfig(box);
-  const connectorRegistry = makeConnectorRegistry({ fetchImpl: async () => { throw new Error('down'); } });
-  const app = makeApp({ cmdbConfigRepo, connectorRegistry, secretBox: box });
+  const connectorRegistry = makeCmdbConnectorRegistry({ fetchImpl: async () => { throw new Error('down'); } });
+  const app = makeApp({ cmdbConfigRepo, cmdbConnectorRegistry: connectorRegistry, secretBox: box });
   const res = await request(app).get('/api/cmdb/assets/search?q=web').set('Authorization', operator());
   assert.equal(res.status, 500);
 });

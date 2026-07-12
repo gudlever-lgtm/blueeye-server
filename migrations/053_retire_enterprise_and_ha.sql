@@ -1,4 +1,4 @@
--- 052 — retire the Enterprise tier and the HA / offline-license capabilities.
+-- 053 — retire the Enterprise tier and the HA / offline-license capabilities.
 --
 -- Product simplification: the sellable tiers are now Pilot / Starter /
 -- Professional (Professional is the top tier). The SSO (LDAP/OIDC/SAML),

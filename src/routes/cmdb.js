@@ -20,8 +20,9 @@ const { validateCmdbConfig, validateAssetSearch, validateAgentLink } = require('
 
 // Builds the { baseUrl, authType, credentials, config } shape the connectors
 // expect from the stored (safe) config row + freshly-decrypted credentials.
+// config_json carries the custom connector's settings (empty for the built-ins).
 function toIntegration(cfg, credentials) {
-  return { baseUrl: cfg.base_url, authType: cfg.auth_type, credentials, config: {} };
+  return { baseUrl: cfg.base_url, authType: cfg.auth_type, credentials, config: cfg.config_json || {} };
 }
 
 // Strips the encrypted blob and exposes a boolean so the UI can render a
@@ -44,6 +45,13 @@ function createCmdbSettingsRouter({ cmdbConfigRepo, registry, secretBox }) {
     res.json(full ? safeConfig(full) : {});
   }));
 
+  // GET /meta — the available CMDB connector types + their supported auth types
+  // + whether each needs the free-form `config` block (only `custom` does). Lets
+  // the Settings form offer ServiceNow / Nautobot / Custom and show the right fields.
+  router.get('/meta', (req, res) => {
+    res.json({ types: typeof registry.meta === 'function' ? registry.meta() : registry.types().map((t) => ({ type: t, authTypes: (registry.get(t) || {}).authTypes || [], custom: t === 'custom' })) });
+  });
+
   router.put('/', asyncHandler(async (req, res) => {
     const { value, errors } = validateCmdbConfig(req.body);
     if (errors) return res.status(400).json({ error: 'Validation failed', details: errors });
@@ -57,7 +65,7 @@ function createCmdbSettingsRouter({ cmdbConfigRepo, registry, secretBox }) {
 
     const patch = {
       type: value.type, baseUrl: value.baseUrl, authType: value.authType,
-      enabled: value.enabled, updatedBy: (req.user && req.user.id) || null,
+      config: value.config, enabled: value.enabled, updatedBy: (req.user && req.user.id) || null,
     };
     if (value.clearCredentials) patch.credentialsEncrypted = null;
     else if (value.credentials !== undefined) patch.credentialsEncrypted = secretBox.encryptJson(value.credentials);

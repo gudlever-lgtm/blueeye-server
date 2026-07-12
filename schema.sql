@@ -407,16 +407,10 @@ VALUES
    'basic', 0, 0, 0, 0, 4000, 30000, 0),
   ('professional', 'Professional', 25, 150, 365,
    JSON_ARRAY('dashboard_basic', 'dashboard_advanced', 'reports_basic', 'reports_pdf',
-              'reports_csv', 'reports_sla', 'rbac', 'audit_log', 'api_access',
-              'alerts_email', 'alerts_webhook'),
-   'standard', 0, 0, 0, 0, 12000, 90000, 0),
-  ('enterprise', 'Enterprise', NULL, NULL, 1095,
-   JSON_ARRAY('dashboard_basic', 'dashboard_advanced', 'reports_basic', 'reports_pdf',
-              'reports_csv', 'reports_sla', 'rbac', 'audit_log', 'api_access',
-              'alerts_email', 'alerts_webhook', 'reports_compliance', 'sso_oidc',
-              'sso_saml', 'ha_deployment', 'offline_license',
-              'premium_support'),
-   'premium', 0, 0, 0, 1, 25000, 187000, 1)
+              'reports_csv', 'reports_sla', 'reports_compliance', 'rbac', 'audit_log',
+              'api_access', 'alerts_email', 'alerts_webhook', 'sso_ldap', 'sso_oidc',
+              'sso_saml', 'premium_support'),
+   'premium', 0, 0, 0, 0, 12000, 90000, 0)
 ON DUPLICATE KEY UPDATE
   plan_name = VALUES(plan_name),
   max_agents = VALUES(max_agents),
@@ -740,22 +734,6 @@ CREATE TABLE IF NOT EXISTS audit_events (
   KEY idx_audit_actor (actor_type, actor_id),
   KEY idx_audit_action (action),
   KEY idx_audit_last_seen (last_seen_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
--- Cluster registry for high-availability deployments (feature `ha_deployment`).
--- Each replica upserts a heartbeat row so the status/admin API + dashboard can
--- show the live cluster topology + which node holds the leader lock. Leader
--- election itself uses MySQL advisory locks (no table). Operational metadata only.
-CREATE TABLE IF NOT EXISTS ha_nodes (
-  node_id VARCHAR(191) NOT NULL,
-  hostname VARCHAR(255) NULL DEFAULT NULL,
-  pid INT UNSIGNED NULL DEFAULT NULL,
-  version VARCHAR(32) NULL DEFAULT NULL,
-  is_leader TINYINT(1) NOT NULL DEFAULT 0,
-  started_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  last_seen_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (node_id),
-  KEY idx_ha_nodes_last_seen (last_seen_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- CMDB integration (single source of truth) — migration 051. See docs/cmdb.md.

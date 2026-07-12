@@ -34,7 +34,7 @@ function createLicenseRouter({ licenseManager, featureGate, planService, usageSe
   );
 
   // GET /license/plan — the active package (Pilot/Starter/Professional/
-  // Enterprise): name, support level, limits and the packaged feature flags.
+  // Professional): name, support level, limits and the packaged feature flags.
   // Powers the admin "License overview" panel (viewer+).
   router.get(
     '/plan',

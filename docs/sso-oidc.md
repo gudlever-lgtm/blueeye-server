@@ -1,7 +1,7 @@
 # SSO — OpenID Connect (OIDC)
 
 BlueEye supports **single sign-on via OpenID Connect** (authorization-code flow
-with **PKCE**) as a supplement to local login. It is an **Enterprise** capability,
+with **PKCE**) as a supplement to local login. It is a **Professional** capability,
 gated behind the licence feature key **`sso_oidc`**. Local username/password login
 always remains available as the fallback.
 

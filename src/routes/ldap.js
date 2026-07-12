@@ -12,7 +12,7 @@ const { validateLdapConfig, validateRoleMap } = require('../validation/ldapValid
 // JWT. The bind password is encrypted (secret box) before it touches the DB and
 // is NEVER returned. The login flow itself lives in src/routes/auth.js.
 //
-// Licence-gated: the feature lives in the Enterprise plan (FEATURE key
+// Licence-gated: the feature lives in the Professional plan (FEATURE key
 // `sso_ldap`). Reads stay open (admin can always inspect the current state), but
 // every mutation and the connectivity test require the entitlement, mirroring how
 // the alerting/assistant config endpoints gate their writes.

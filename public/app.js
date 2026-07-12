@@ -250,7 +250,7 @@ async function login(emailInput, password) {
 let licenseFeatures = null;
 let featuresLoadedAt = 0;
 const FEATURES_TTL_MS = 60000;
-// The active licence package (Pilot/Starter/Professional/Enterprise). Locked
+// The active licence package (Pilot/Starter/Professional). Locked
 // modules are presented relative to THIS — i.e. "not part of your <plan> licence" —
 // rather than as a generic free/pro tier. Same TTL + invalidation as the feature map.
 let licensePlan = null;
@@ -987,7 +987,7 @@ const PAGE_INFO = {
         el('li', {}, settingsLink('retention', 'Retention'), ': how long raw/aggregated data and findings are kept before being cleaned up.'),
         el('li', {}, settingsLink('types', 'Traffic types'), ': define the categories (DNS, Facebook …) from service ports and destination ASN. Shown on ', viewLink('overview', 'Traffic'), ' → Traffic type.'),
         el('li', {}, settingsLink('map', 'Map'), ': tile and geocoder source for the maps (use an EU/self-hosted source in production).'),
-        el('li', {}, settingsLink('auth', 'Authentication'), ': connect an LDAP / Active Directory server so users log in with their directory account and get a role from their group membership. Requires the Enterprise licence and the server flag LDAP_AUTH_ENABLED; the bind password is write-only. Local accounts remain as a fallback.')),
+        el('li', {}, settingsLink('auth', 'Authentication'), ': connect an LDAP / Active Directory server so users log in with their directory account and get a role from their group membership. Requires the Professional licence and the server flag LDAP_AUTH_ENABLED; the bind password is write-only. Local accounts remain as a fallback.')),
       el('h4', {}, 'Read-only (set in .env / requires restart)'),
       el('ul', {},
         el('li', {}, settingsLink('users', 'Users'), ': create/edit staff and roles (admin only).'),
@@ -8299,7 +8299,7 @@ function alertingSyslogCard(channel) {
 // account and get a role from their group membership. Backend: src/routes/ldap.js
 // (config CRUD + connectivity test + login audit) and src/auth/ldap.js (the bind
 // + group→role resolution, run from src/routes/auth.js at login). Admin-only and
-// licence-gated (sso_ldap, Enterprise) — the server returns licensed:false and
+// licence-gated (sso_ldap, Professional) — the server returns licensed:false and
 // refuses the writes when the plan doesn't include it.
 async function settingsAuthView() {
   const cfgRes = await api('/api/ldap/config');
@@ -8336,7 +8336,7 @@ function ldapBadge(licensed) {
 // writes are refused server-side too, so this explains the missing controls.
 function ldapUnlicensedCard() {
   return el('div', { class: 'settings-card' }, el('h3', {}, 'LDAP / Active Directory'),
-    el('p', { class: 'muted' }, 'Directory login is not included in your licence, so it can’t be configured here. It is part of the BlueEye Enterprise plan — contact your provider to enable it. ',
+    el('p', { class: 'muted' }, 'Directory login is not included in your licence, so it can’t be configured here. It is part of the BlueEye Professional plan — contact your provider to enable it. ',
       settingsLink('license', 'See Settings → License'), ' for the full feature matrix.'),
     ldapBadge(false));
 }

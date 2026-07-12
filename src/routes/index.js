@@ -51,7 +51,6 @@ const { createLdapRouter } = require('./ldap');
 const { createOidcAuthRouter, createOidcAdminRouter } = require('./oidc');
 const { createSamlAuthRouter, createSamlAdminRouter } = require('./saml');
 const { createNis2Router } = require('./nis2');
-const { createHaRouter } = require('./ha');
 const { createInvestigationRouter } = require('./investigation');
 const { createLocator } = require('../investigation/locator');
 const {
@@ -152,7 +151,6 @@ function createApiRouter({
   nis2ReportsRepo,
   nis2EvidenceRepo,
   nis2AuditRepo,
-  haCoordinator,
   investigationsRepo,
   enrollConfig = {},
   notifyDashboard,
@@ -291,8 +289,6 @@ function createApiRouter({
       featureGate, planService, releaseKeyService,
     }));
   }
-  // High-availability status + admin (licence-gated `ha_deployment`, Enterprise+).
-  if (haCoordinator) router.use('/api/ha', createHaRouter({ haCoordinator, featureGate, planService }));
   // Lokationsdrevet investigation — trigger en rutine der samler og korrelerer
   // anomali-/counter-data for et givet sted og klassificerer fejlen.
   if (investigationsRepo && agentsRepo && findingStore) {

@@ -30,14 +30,12 @@ test('LICENSE_GRACE_DAYS / LICENSE_VALIDATE_INTERVAL_HOURS clamp to sane caps', 
   const config = loadConfig({ LICENSE_GRACE_DAYS: '99999', LICENSE_VALIDATE_INTERVAL_HOURS: '99999' });
   assert.equal(config.license.graceDays, 30);
   assert.equal(config.license.intervalHours, 24);
-  assert.equal(config.license.recheckHours, 24);
 });
 
 test('LICENSE_GRACE_DAYS / LICENSE_VALIDATE_INTERVAL_HOURS default when unset', () => {
   const config = loadConfig({ LICENSE_GRACE_DAYS: undefined, LICENSE_VALIDATE_INTERVAL_HOURS: undefined });
   assert.equal(config.license.graceDays, 14);
   assert.equal(config.license.intervalHours, 6);
-  assert.equal(config.license.recheckHours, 6);
 });
 
 test('LICENSE_GRACE_DAYS / LICENSE_VALIDATE_INTERVAL_HOURS keep a sane operator value under the cap', () => {

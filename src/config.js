@@ -83,7 +83,7 @@ const config = {
     authEnabled: /^(1|true|yes|on)$/i.test(String(process.env.LDAP_AUTH_ENABLED || '').trim()),
   },
   // SSO via OpenID Connect (authorization-code + PKCE). Supplements local JWT
-  // login behind the licence feature `sso_oidc` (Enterprise+). The IdP must be
+  // login behind the licence feature `sso_oidc` (Professional+). The IdP must be
   // EU/self-hosted (Keycloak, Authentik, Zitadel, …) — there is no US SDK; the
   // flow is hand-rolled with Node crypto + `jsonwebtoken`. The env flag is the
   // hard gate (default OFF); even when on, OIDC login is only offered once the
@@ -101,7 +101,7 @@ const config = {
     roleClaim: process.env.OIDC_ROLE_CLAIM || 'groups',
   },
   // SSO via SAML 2.0 (SP-initiated). Supplements local JWT login behind the
-  // licence feature `sso_saml` (Enterprise+). Assertion signatures are verified
+  // licence feature `sso_saml` (Professional+). Assertion signatures are verified
   // with a hand-rolled, dependency-free XML-DSig verifier (src/auth/saml.js) —
   // no US SDK. The env flag is the hard gate (default OFF). Attribute→role
   // mapping is admin-managed (saml_role_map). See docs/sso-saml.md.
@@ -187,39 +187,6 @@ const config = {
     // always wins when present. Blank → resolved by the plan service (legacy/
     // unlicensed fallback). See src/license/plans.js for the valid keys.
     plan: process.env.LICENSE_PLAN || '',
-    // OFFLINE licensing: path to a local signed license file. When set, the
-    // server validates this file on-box (Ed25519, no external license server)
-    // and runs in restricted mode if it is missing/expired/invalid. Takes
-    // precedence over the online validator. See docs/licensing.md.
-    file: process.env.LICENSE_FILE || '',
-    // 'online' (default) or 'offline'. Auto-selects 'offline' when LICENSE_FILE
-    // is set; set explicitly to force a mode.
-    mode: process.env.LICENSE_MODE || (process.env.LICENSE_FILE ? 'offline' : 'online'),
-    // Same clamp as intervalHours above: bounds how stale an offline license
-    // file re-read can get, so an expired/revoked file is always caught within
-    // a day, not silently ignored for years via an extreme env value.
-    recheckHours: clampInt(process.env.LICENSE_VALIDATE_INTERVAL_HOURS, 6, 1, 24),
-  },
-  // High-availability deployment (licence feature `ha_deployment`, Enterprise+).
-  // OFF by default → a classic single node that runs every singleton job itself.
-  // Set HA_ENABLED=true on each replica behind the load balancer: the nodes then
-  // elect ONE leader via a MySQL advisory lock and only the leader runs the
-  // singleton background work (retention, test-package scheduler, GeoIP refresh).
-  // Request handling stays stateless on every node. See docs/ha-deployment.md.
-  ha: {
-    enabled: /^(1|true|yes|on)$/i.test(String(process.env.HA_ENABLED || '').trim()),
-    // Stable identity for this replica in the cluster registry / logs. Falls back
-    // to hostname:pid when unset (good enough; set it for readable dashboards).
-    nodeId: process.env.HA_NODE_ID || `${require('os').hostname()}:${process.pid}`,
-    // The advisory-lock name every replica contends for. All nodes of ONE cluster
-    // must share it; distinct clusters on the same MySQL must use distinct names.
-    lockName: process.env.HA_LOCK_NAME || 'blueeye_leader',
-    // How often (ms) a node re-confirms / contends for leadership and heartbeats.
-    intervalMs: toInt(process.env.HA_INTERVAL_MS, 10000),
-    // After an admin POST /api/ha/step-down, suspend re-contention for this long
-    // so a follower takes over instead of the drained node grabbing the lock back
-    // on the next tick. Auto-recovers, so a mistaken step-down isn't permanent.
-    stepDownCooldownMs: toInt(process.env.HA_STEPDOWN_COOLDOWN_MS, 60000),
   },
   // Storage monitoring: the path to statfs for disk usage. Default the server's
   // data dir; point it at the drive holding the DB/Docker volume if different.

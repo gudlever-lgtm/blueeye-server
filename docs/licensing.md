@@ -1,8 +1,8 @@
 # Licensing, plans & feature gating
 
 BlueEye is sold in packages. This document describes the plan model, the
-features and limits per plan, how a license is activated/changed, how the
-offline (signed) license model fits in, and how support levels map to plans.
+features and limits per plan, how a license is activated/changed, and how
+support levels map to plans.
 
 > **Where the code lives**
 > - `src/license/plans.js` — the plan + feature **catalogue** (single source of truth).
@@ -12,10 +12,10 @@ offline (signed) license model fits in, and how support levels map to plans.
 >   `requireFeature`, `requirePlanFeature`).
 > - `src/services/usageService.js` — counts agents / active test paths and
 >   enforces limits.
-> - `src/license/licenseManager.js` — validates the signed proof (online today,
->   offline-ready).
+> - `src/license/licenseManager.js` — validates the signed proof against the
+>   online license server (with a network-outage cache + grace window).
 > - `migrations/023_create_license_plans.sql` — mirrors the catalogue into
->   `license_plans` + a `licenses` table for the admin UI and offline model.
+>   `license_plans` + a `licenses` table for the admin UI.
 
 ## Plans
 
@@ -23,11 +23,10 @@ offline (signed) license model fits in, and how support levels map to plans.
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Pilot | 5 | 10 | 60 days | basic | 60-day trial | 2 500 | 18 500 |
 | Starter | 5 | 25 | 90 days | basic | – | 4 000 | 30 000 |
-| Professional | 25 | 150 | 365 days | standard | – | 12 000 | 90 000 |
-| Enterprise | unlimited¹ | unlimited¹ | 1 095 days | premium | – | from 25 000 | from 187 000 |
+| Professional | 25 | 150 | 365 days | premium | – | 12 000 | 90 000 |
 
-¹ "Unlimited" means configurable per contract; a signed proof may still set a
-per-customer `max_agents` which always wins over the plan default.
+**Professional is the top tier.** A signed proof may still set a per-customer
+`max_agents` / `max_test_paths` override, which always wins over the plan default.
 
 Prices are **reference figures** for the admin UI only — they are never an
 enforcement input.
@@ -48,11 +47,10 @@ The full list of gateable feature keys is in `FEATURE_CATALOG`
 | `audit_log` | Audit log | Professional |
 | `api_access` | API access | Professional |
 | `alerts_email` / `alerts_webhook` | E-mail / webhook alerts | Professional |
-| `reports_compliance` | Compliance report pack | Enterprise |
-| `sso_oidc` / `sso_saml` | SSO (OIDC / SAML) | Enterprise |
-| `ha_deployment` | High-availability deployment | Enterprise |
-| `offline_license` | Offline license validation | Enterprise |
-| `premium_support` | Premium / priority support | Enterprise |
+| `reports_compliance` | Compliance report pack | Professional |
+| `sso_ldap` | LDAP / Active Directory auth | Professional |
+| `sso_oidc` / `sso_saml` | SSO (OIDC / SAML) | Professional |
+| `premium_support` | Premium / priority support | Professional |
 
 > The four **legacy module** keys (`analysis`, `assistant`, `alerting`, `geo`)
 > are intentionally **not** part of the plan catalogue. They remain governed by
@@ -83,7 +81,8 @@ HTTP 403 (never a stack trace):
   the disabled→enabled transition (`src/routes/testPackages.js`).
 - **History** — `history_days` (see *History retention* below).
 
-A `null` limit means unlimited (Enterprise).
+A `null` limit means unlimited — only ever set by a per-customer override on the
+signed proof, never by a stock plan.
 
 ## Feature gating — how to use it
 
@@ -110,7 +109,7 @@ if (!check.ok) return res.status(403).json(check.body);
 Denial for a packaged feature returns the documented contract:
 
 ```json
-{ "success": false, "error": "feature_not_available", "message": "This feature requires BlueEye Enterprise." }
+{ "success": false, "error": "feature_not_available", "message": "This feature requires BlueEye Professional." }
 ```
 
 ### Read-only endpoints for the UI
@@ -195,7 +194,7 @@ the churn where hosts are expected to change.
 ## The public key trust anchor
 
 `src/license/publicKey.js` embeds the Ed25519 public key used to verify every
-proof (online or offline) — this repo being public does not weaken it, since a
+proof — this repo being public does not weaken it, since a
 public key is not secret. What *would* weaken it is letting the same operator
 who runs the server also choose which public key gets trusted: they could then
 point verification at a key of their own and self-sign an arbitrary license,
@@ -220,7 +219,7 @@ Relatedly, `LICENSE_GRACE_DAYS` (max 30) and `LICENSE_VALIDATE_INTERVAL_HOURS`
 (max 24) are clamped in `src/config.js` — an operator can shorten them but not
 extend them past the cap, so periodic re-validation can't be defeated by
 setting an extreme grace period once and then never letting the server reach
-the license server (or re-read the offline file) again.
+the license server again.
 
 A misconfigured trust anchor (placeholder embedded key, or a blocked
 `LICENSE_PUBLIC_KEY` override) makes every proof fail signature verification
@@ -352,80 +351,6 @@ The three secrets (`SERVER_JWT_SECRET`, `LICENS_JWT_SECRET`, `LICENSE_SIGNING_KE
 must be long, random, and never committed. `scripts/dev-bootstrap.js` generates a
 complete demo `.env` with all of the above for the local stack.
 
-## Offline license (implemented)
-
-The server can validate a **local signed license file** entirely on-box, with no
-contact to any external license server. Set `LICENSE_FILE` (which implies
-`LICENSE_MODE=offline`) and point it at a signed license:
-
-```
-LICENSE_FILE=/etc/blueeye/license.json
-LICENSE_PUBLIC_KEY=...        # the blueeye-licens PUBLIC key (PEM or base64)
-LICENSE_SERVER_ID=<server id> # optional binding; a bound licence must match
-```
-
-The license file is a signed proof — the canonical payload plus an Ed25519
-signature over it (same primitive and canonical bytes as the online proof):
-
-```json
-{
-  "payload": {
-    "organization_id": "org-42",
-    "plan_key": "professional",
-    "serverId": "<LICENSE_SERVER_ID>",
-    "valid_from": "2026-01-01T00:00:00Z",
-    "valid_until": "2027-01-01T00:00:00Z",
-    "max_agents_override": 50,
-    "max_test_paths_override": 300,
-    "enabled_features_override": ["rbac", "sso_oidc"]
-  },
-  "signature": "<base64 Ed25519 signature over canonicalize(payload)>"
-}
-```
-
-How it works:
-
-- `src/license/licenseVerifier.js` (**LicenseVerifier**) reads the file, verifies
-  the signature with the public key (`verifyProof` / `src/license/verify.js`),
-  checks the optional server binding and the `valid_from`/`valid_until` window,
-  and maps the payload to `{ plan, limits, features }`.
-- `src/license/offlineLicenseManager.js` wraps the verifier behind the **same
-  interface** as the online manager (`isLicensed` / `getMaxAgents` /
-  `getMaxTestPaths` / `getPlan` / `getFeatures` / `canAcceptNewConnection` /
-  `getStatus` / `start` / `stop` / `validateOnce`). `src/server.js` selects it
-  when `LICENSE_MODE=offline`, so the plan service, feature gate, WS connection
-  guard and routes are all unchanged.
-- It re-reads the file periodically (`LICENSE_VALIDATE_INTERVAL_HOURS`) to catch
-  `valid_until` crossing, and **Re-validate now** re-reads it immediately — both
-  without any network.
-
-**Restricted mode:** if the file is missing, malformed, not yet valid, expired
-or its signature does not verify, the manager reports *not licensed*. The plan
-service then falls back to the locked-down `unlicensed` plan (zero limits, no
-features) and new agent connections are refused — the server still boots and
-runs, just restricted. `GET /license/status` reports `mode: "offline"` with the
-reason and `validUntil`.
-
-### Issuing an offline license
-
-Signing uses the **private** key (kept in blueeye-licens, never on this server).
-The operator helper produces a signed file:
-
-```
-node scripts/sign-offline-license.js \
-  --key ./license-signing-private.pem --out ./license.json \
-  --org org-42 --plan professional --server <LICENSE_SERVER_ID> \
-  --from 2026-01-01 --until 2027-01-01 \
-  --max-agents 50 --max-test-paths 300 \
-  --feature rbac --feature sso_oidc
-```
-
-The optional `licenses` table (migration 023) mirrors `signed_payload` +
-`signature` for installs that prefer to store the license in the database.
-
-The signed payload is **only ever evidence of license status — never an access
-token.** Agent tokens stay entirely local to the server.
-
 ## Support levels
 
 Each plan carries a `support_level`, surfaced in `GET /license/plan` and the UI:
@@ -433,8 +358,7 @@ Each plan carries a `support_level`, surfaced in `GET /license/plan` and the UI:
 | Plan | `support_level` |
 | --- | --- |
 | Pilot / Starter | `basic` |
-| Professional | `standard` |
-| Enterprise | `premium` |
+| Professional | `premium` |
 
 ## Feature status & roadmap
 
@@ -467,11 +391,9 @@ at the repo root — keep it and the `status` field in step.
   plan-based installs alert without a legacy proof feature map.
 
 **Roadmap (not built yet)** — catalogued + priced, `status: 'roadmap'`, tackled
-one at a time (see ROADMAP.md):
-
-- **Advanced dashboard** (`dashboard_advanced`).
-- **SSO (OIDC)** (`sso_oidc`) and **SSO (SAML)** (`sso_saml`).
-- **High-availability deployment** (`ha_deployment`).
+one at a time (see ROADMAP.md). Nothing is currently queued — every catalogued
+feature (incl. the advanced dashboard and SSO OIDC/SAML/LDAP, all Professional)
+is shipped and gated.
 
 A **retention cleanup job** keyed on `history_days` also remains deferred (the
 limit is surfaced and can hide out-of-window data in views).

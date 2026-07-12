@@ -36,7 +36,7 @@ function createNis2Router({
   const writer = requireRole(ROLES.OPERATOR, ROLES.ADMIN);
   const approver = requireRole(ROLES.ADMIN); // admin/compliance approves reports
   // The generated/exportable "Compliance report pack" is licence-gated
-  // (reports_compliance, Enterprise+). The risk/control/incident registers and
+  // (reports_compliance, Professional+). The risk/control/incident registers and
   // the readiness dashboard stay open as part of the NIS2 module; producing the
   // report artifacts (generate / approve / CSV / print-ready HTML) requires it.
   const compliancePack = requirePlanFeature({ featureGate, planService }, 'reports_compliance');

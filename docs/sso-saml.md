@@ -1,7 +1,7 @@
 # SSO — SAML 2.0
 
 BlueEye supports **SP-initiated SAML 2.0 single sign-on** as a supplement to local
-login. It is an **Enterprise** capability, gated behind the licence feature key
+login. It is a **Professional** capability, gated behind the licence feature key
 **`sso_saml`**. Local username/password login always remains as the fallback.
 
 Signature and assertion validation are **hand-rolled** — no US SDK and no XML

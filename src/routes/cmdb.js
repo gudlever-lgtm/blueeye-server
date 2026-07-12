@@ -124,9 +124,36 @@ function createCmdbAssetsRouter({ cmdbConfigRepo, registry, secretBox }) {
   return router;
 }
 
+// Reconciles the agent's BlueEye site with the linked asset's CMDB location.
+// Match is by name so two agents at "Copenhagen DC" converge on ONE location row.
+// Returns { synced, suggestion }:
+//   - synced { id, name }     — the site was set (or already correct).
+//   - suggestion { current, proposed } — the agent ALREADY has a (manual) site
+//     that differs, so we do NOT overwrite; the caller surfaces a confirm and
+//     re-links with overwrite:true to apply it.
+// A site is created (name only, no coordinates) only when we actually apply.
+async function reconcileLocation(locationsRepo, agentsRepo, agent, label, { overwrite = false } = {}) {
+  if (!locationsRepo || !label) return { synced: null, suggestion: null };
+  const current = agent.location_id ? { id: agent.location_id, name: agent.location_name || null } : null;
+  let match = await locationsRepo.findByName(label);
+
+  // Already on the right site — nothing to change.
+  if (current && match && match.id === current.id) {
+    return { synced: { id: current.id, name: match.name }, suggestion: null };
+  }
+  // A manual/existing site that differs — suggest rather than overwrite.
+  if (current && !overwrite) {
+    return { synced: null, suggestion: { current, proposed: { id: match ? match.id : null, name: match ? match.name : label } } };
+  }
+  // No current site, or the overwrite was confirmed — apply (match or create).
+  if (!match) match = await locationsRepo.create({ name: label });
+  await agentsRepo.setLocation(agent.id, match.id);
+  return { synced: { id: match.id, name: match.name }, suggestion: null };
+}
+
 // --- Agent link (read viewer+, write operator+) -------------------------------
 // Mounted at /api/agents; owns /:id/cmdb-link.
-function createAgentCmdbLinkRouter({ agentCmdbLinksRepo, agentsRepo }) {
+function createAgentCmdbLinkRouter({ agentCmdbLinksRepo, agentsRepo, locationsRepo = null }) {
   const router = express.Router();
   const reader = [requireAuth, requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN)];
   const writer = [requireAuth, requireRole(ROLES.OPERATOR, ROLES.ADMIN)];
@@ -153,7 +180,17 @@ function createAgentCmdbLinkRouter({ agentCmdbLinksRepo, agentsRepo }) {
       cmdbAssetLocation: value.cmdbAssetLocation,
       linkedBy: (req.user && req.user.id) || null,
     });
-    res.json(link);
+    // Reconcile the agent's BlueEye site from the asset's CMDB location. Auto-sync
+    // when the agent has no site; when it already has a (manual) one that differs,
+    // return a suggestion instead of overwriting (the client confirms + re-links
+    // with overwrite_location:true). Best-effort: a failure never fails the link.
+    let synced = null; let suggestion = null;
+    try {
+      ({ synced, suggestion } = await reconcileLocation(locationsRepo, agentsRepo, agent, value.cmdbAssetLocation, { overwrite: value.overwriteLocation }));
+    } catch (err) {
+      req.log.warn(`cmdb-link: location reconcile failed for agent ${id} (${err.message}); link saved without it`);
+    }
+    res.json({ ...link, synced_location: synced, location_suggestion: suggestion });
   }));
 
   router.delete('/:id/cmdb-link', ...writer, asyncHandler(async (req, res) => {

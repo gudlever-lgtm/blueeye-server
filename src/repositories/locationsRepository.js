@@ -27,6 +27,16 @@ function createLocationsRepository(db) {
     return mapRow(rows[0]) ?? null;
   }
 
+  // Case-insensitive exact-name lookup — used to resolve a CMDB asset's location
+  // label to an existing BlueEye site before creating a new one. Lowest id wins.
+  async function findByName(name) {
+    const [rows] = await pool.query(
+      `SELECT ${COLUMNS} FROM locations WHERE LOWER(name) = LOWER(?) ORDER BY id LIMIT 1`,
+      [String(name == null ? '' : name).trim()]
+    );
+    return mapRow(rows[0]) ?? null;
+  }
+
   async function create({ name, description = null, address = null, latitude = null, longitude = null }) {
     const [result] = await pool.query(
       'INSERT INTO locations (name, description, address, latitude, longitude) VALUES (?, ?, ?, ?, ?)',
@@ -53,7 +63,7 @@ function createLocationsRepository(db) {
     return result.affectedRows > 0;
   }
 
-  return { findAll, findById, create, update, remove };
+  return { findAll, findById, findByName, create, update, remove };
 }
 
 module.exports = { createLocationsRepository };

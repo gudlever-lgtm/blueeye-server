@@ -122,6 +122,31 @@ function screenIntegration(row = {}) {
 
 const LOCAL_HOSTS = ['localhost', '127.0.0.1', '::1'];
 
+// The single configured CMDB source (ServiceNow/Nautobot). Judges transport,
+// whether credentials are present, and whether the connection has ever verified.
+function screenCmdb(cfg = {}) {
+  const url = cfg.base_url || '';
+  const type = cfg.type || 'cmdb';
+  const authType = cfg.auth_type || 'none';
+  const security = [transportCheck(url, { plaintext: 'bad' })];
+  if (url && baseUrlBlockedReason(url)) {
+    security.push(check('target', 'Target address', 'bad', 'Points at a private, loopback or link-local address.'));
+  }
+  if (authType === 'none') {
+    security.push(check('auth', 'Authentication', 'bad', 'No authentication configured for the CMDB.'));
+  } else {
+    security.push(check('auth', 'Authentication', 'ok', `Authenticated (${authType}).`));
+  }
+  if (!cfg.enabled) security.push(check('enabled', 'State', 'info', 'Disabled — asset search is not served.'));
+  security.push(cfg.verified_at
+    ? check('verified', 'Last test', 'ok', `Connection verified at ${cfg.verified_at}.`)
+    : check('verified', 'Last test', 'warn', 'Connection has never been successfully tested.'));
+  return entry(`CMDB (${type})`, {
+    detail: `${type} · ${hostOf(url) || url || 'no url'}`,
+    configured: Boolean(url), enabled: Boolean(cfg.enabled), security,
+  });
+}
+
 function screenLdap(cfg = {}) {
   const host = cfg.host || '';
   const security = [];
@@ -232,6 +257,7 @@ module.exports = {
   rollup, worse, isHttps, isHttp, hostOf,
   screenEmail, screenWebhook, screenSyslog,
   screenIntegration,
+  screenCmdb,
   screenLdap, screenOidc, screenSaml,
   screenAssistant, screenMap, screenLicense,
 };

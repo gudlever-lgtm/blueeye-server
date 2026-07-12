@@ -295,16 +295,30 @@ Info "stopping and removing scheduled task '$ServiceName' ..."
 Stop-ScheduledTask -TaskName $ServiceName -ErrorAction SilentlyContinue | Out-Null
 Unregister-ScheduledTask -TaskName $ServiceName -Confirm:\$false -ErrorAction SilentlyContinue | Out-Null
 
-# Best-effort: stop any lingering agent process launched from our install dir.
+# Stop any agent node.exe still holding the install dir open (the service AND any
+# foreground diagnosis run) — otherwise Remove-Item fails with "in use". Match on
+# the BlueEye path so a foreground 'node ...\\index.js doctor' is caught too, then
+# wait a moment for the file handles to release.
 Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" -ErrorAction SilentlyContinue |
-  Where-Object { $_.CommandLine -and ($_.CommandLine -like '*BlueEye*agent*index.js*') } |
-  ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+  Where-Object { $_.CommandLine -and ($_.CommandLine -like '*BlueEye*') } |
+  ForEach-Object { Info "stopping agent process $($_.ProcessId)"; Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+Start-Sleep -Seconds 2
 
+# Remove the folders, retrying briefly in case a handle is still releasing.
 foreach ($d in @($InstallDir, $StateDir, $LogDir)) {
-  if (Test-Path $d) { Info "removing $d"; Remove-Item -Recurse -Force $d -ErrorAction SilentlyContinue }
+  for ($i = 0; ($i -lt 3) -and (Test-Path $d); $i++) {
+    Info "removing $d"
+    Remove-Item -Recurse -Force $d -ErrorAction SilentlyContinue
+    if (Test-Path $d) { Start-Sleep -Seconds 2 }
+  }
 }
 
-Info 'BlueEye agent removed from this host. (Node.js itself was left installed.)'
+$leftover = @($InstallDir, $StateDir, $LogDir) | Where-Object { Test-Path $_ }
+if ($leftover) {
+  Info "could not fully remove: $($leftover -join ', '). Close any window running the agent (a foreground 'node' or a live-log tail), then re-run this uninstaller."
+} else {
+  Info 'BlueEye agent removed from this host. (Node.js itself was left installed.)'
+}
 `;
 }
 

@@ -42,6 +42,11 @@ test('renderInstallPs1 requires Node, extracts with tar, enrolls, and registers 
   assert.match(script, /nodejs\.org/); // clear guidance when Node is missing
   assert.match(script, /tar\.exe/);
   assert.match(script, /-xzf/);
+  // npm runs via cmd.exe (cmd merges stderr) so an "npm notice" on stderr can't
+  // trip $ErrorActionPreference='Stop' into a NativeCommandError on success.
+  assert.match(script, /cmd \/c 'npm ci --omit=dev 2>&1'/);
+  assert.match(script, /cmd \/c 'npm install --omit=dev 2>&1'/);
+  assert.ok(!/& npm .*2>&1 \| Out-Null/.test(script), 'must not pipe npm stderr back into PowerShell');
   // Enrolls via the agent CLI, pinning token/config into a state dir.
   assert.match(script, /'enroll', '--code', \$EnrollCode, '--server', \$ServerUrl/);
   assert.match(script, /index\.js/);

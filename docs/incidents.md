@@ -1,5 +1,9 @@
 # Incidents & NIS2 reporting
 
+> This is the **probe-outage** incidents table (`incidents`, migration 025). For
+> the separate **first-class incident entity** that groups analysis findings
+> (`incident_cases`, `/api/incidents`), see **[incident-cases.md](incident-cases.md)**.
+
 Derives **incidents** from active-probe results (`probe_results`) and exposes
 availability / incident / NIS2-draft reports. Single-tenant, on-prem, local +
 explainable — every decision is a plain comparison against an auditable

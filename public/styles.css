@@ -1319,3 +1319,27 @@ pre.config-diff { background: #1e1e24; color: #e0e0e0; padding: 10px; overflow: 
 .badge.risk-none { background: #95a5a6; color: #fff; }
 details.cfg-diff { margin: 4px 0; }
 details.cfg-diff summary { cursor: pointer; padding: 4px 0; }
+
+/* ---- Config snapshot ingest (agent page) ---- */
+.cfg-ingest { margin: 6px 0 10px; }
+.cfg-ingest summary { cursor: pointer; }
+.cfg-ingest-text { width: 100%; box-sizing: border-box; font-family: monospace; font-size: 12px; margin: 6px 0; }
+.cfg-ingest-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+
+/* ---- Guided troubleshooting ("Guide me") ---- */
+.guide-card > summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 8px; }
+.guide-card > summary::-webkit-details-marker { display: none; }
+.pill.guide-pill { display: inline-flex; align-items: center; gap: 4px; background: #2d6cdf; color: #fff; border: 0; border-radius: 999px; padding: 4px 12px; font-weight: 600; cursor: pointer; }
+.pill.guide-pill.small { padding: 2px 9px; font-size: 12px; }
+.guide-progress { margin: 8px 0; font-size: 12px; }
+ol.guide-steps { margin: 6px 0; padding-left: 18px; }
+li.guide-step { margin: 0 0 12px; }
+li.guide-step.done .guide-step-title { text-decoration: line-through; opacity: 0.6; }
+.guide-step-head { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+.guide-detail { margin: 4px 0 2px; }
+.guide-rationale { margin: 0 0 4px; font-size: 12px; }
+.guide-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.badge.kind-action { background: #8e44ad; color: #fff; }
+.badge.kind-check { background: #2980b9; color: #fff; }
+.badge.kind-info { background: #7f8c8d; color: #fff; }
+.guide-ai { margin-top: 10px; border-top: 1px solid rgba(127,127,127,.2); padding-top: 8px; }

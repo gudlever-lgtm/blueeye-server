@@ -98,6 +98,12 @@ function createRetentionRepo(db) {
   async function purgeAckedFindingsBefore(ts) {
     return deleteInBatches('DELETE FROM findings WHERE acked = 1 AND created_at < ? ORDER BY created_at LIMIT ?', [ts]);
   }
+  // Raw device-config snapshots older than the cutoff. The incident_cases FK is
+  // ON DELETE SET NULL, so purging an old snapshot just clears any stale
+  // config-change link — it never deletes an incident.
+  async function purgeConfigSnapshotsBefore(ts) {
+    return deleteInBatches('DELETE FROM config_snapshots WHERE captured_at < ? ORDER BY captured_at LIMIT ?', [ts]);
+  }
 
   return {
     getRawExternalFlowsBatch,
@@ -109,6 +115,7 @@ function createRetentionRepo(db) {
     purgeFlowRollupsBefore,
     purgeMetricRollupsBefore,
     purgeAckedFindingsBefore,
+    purgeConfigSnapshotsBefore,
   };
 }
 

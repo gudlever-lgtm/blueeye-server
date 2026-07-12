@@ -10,6 +10,7 @@ const { buildTimeline } = require('../incidentCases/timeline');
 const { maskedDiff } = require('../config/configContext');
 const { scoreSimilarIncidents } = require('../incidentCases/similarity');
 const { gatherIncidentAskContext } = require('../incidentCases/askContext');
+const { buildIncidentGuide } = require('../incidentCases/guide');
 const { INCIDENT_INSUFFICIENT_ANSWER } = require('../analysis/assistant');
 
 const SEVERITIES = ['INFO', 'WARN', 'CRIT'];
@@ -208,6 +209,57 @@ function createIncidentsRouter({
     }));
 
     return res.json({ incidentId: id, similar });
+  }));
+
+  // Compact config-context (change id + minutes-before + risk) for the guide.
+  async function configContextForGuide(incident) {
+    if (!incident.configChangeId || !configSnapshotsRepo) return null;
+    const change = await configSnapshotsRepo.findById(incident.configChangeId);
+    if (!change) return null;
+    const prev = await configSnapshotsRepo.previousBefore(change.deviceId, change.id);
+    const d = maskedDiff(prev ? prev.configText : null, change.configText);
+    const minutesBefore = incident.firstEventAt && change.capturedAt
+      ? Math.max(0, Math.round((new Date(incident.firstEventAt).getTime() - new Date(change.capturedAt).getTime()) / 60000))
+      : null;
+    return { configChangeId: change.id, minutesBefore, risk: d.risk, riskReasons: d.riskReasons };
+  }
+
+  // Top-N similar past incidents (light shape) for the guide's resolution step.
+  async function topSimilar(incident, id, limit) {
+    const primaryFinding = incident.primaryFindingId && findingStore ? await findingStore.get(incident.primaryFindingId) : null;
+    const platform = agentsRepo && typeof agentsRepo.findById === 'function' && Number.isInteger(Number(incident.hostId))
+      ? (await agentsRepo.findById(Number(incident.hostId)))?.platform ?? null : null;
+    const target = {
+      id: incident.id, hostId: incident.hostId, platform,
+      primaryMetric: primaryFinding ? primaryFinding.metric : null,
+      configChangeType: await configChangeType(incident.configChangeId),
+    };
+    const candidates = typeof incidentCasesRepo.listResolvedClosed === 'function'
+      ? await incidentCasesRepo.listResolvedClosed({ excludeId: id, limit: 50 }) : [];
+    for (const c of candidates) {
+      // eslint-disable-next-line no-await-in-loop
+      c.configChangeType = await configChangeType(c.configChangeId);
+    }
+    return scoreSimilarIncidents(target, candidates, { limit }).map((r) => ({
+      id: r.id, title: r.title, resolvedAt: r.resolvedAt ?? null, closedBy: r.closedByEmail ?? null,
+    }));
+  }
+
+  // GET /api/incidents/:id/guide — a deterministic, local, explainable step-by-step
+  // troubleshooting guide ("Guide me") built from the incident's data (anomaly
+  // type, correlated config change, similar prior incidents). Always available; the
+  // opt-in AI assistant augments it in the UI via POST /:id/ask. operator/admin.
+  router.get('/:id/guide', requireAuth, writer, asyncHandler(async (req, res) => {
+    const id = parseIncidentId(req.params.id);
+    if (id === null) return res.status(400).json({ error: 'id must be a positive integer' });
+    const incident = await incidentCasesRepo.findById(id);
+    if (!incident) return res.status(404).json({ error: 'Incident not found' });
+
+    const anomalies = findingStore ? await findingStore.listByIncidentCase(id) : [];
+    const configContext = await configContextForGuide(incident);
+    const similar = await topSimilar(incident, id, 2);
+
+    return res.json(buildIncidentGuide({ incident, anomalies, configContext, similar }));
   }));
 
   // POST /api/incidents/:id/ask — free-text question about the incident, answered

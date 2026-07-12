@@ -33,6 +33,28 @@ test('purgeExpired removes expired rollups using the right cutoffs', async () =>
   assert.equal(repo.state.flowRollupCut.toISOString(), new Date(NOW.getTime() - 90 * 864e5).toISOString());
 });
 
+test('purgeExpired removes config snapshots older than configSnapshotRetentionDays', async () => {
+  let cut = null;
+  const repo = {
+    purgeFlowRollupsBefore: async () => 0,
+    purgeMetricRollupsBefore: async () => 0,
+    purgeAckedFindingsBefore: async () => 0,
+    purgeConfigSnapshotsBefore: async (ts) => { cut = ts; return 4; },
+  };
+  const purge = createPurge({ repo, config: { ...config, configSnapshotRetentionDays: 180 }, now: () => NOW });
+  const res = await purge.purgeExpired();
+  assert.equal(res.configSnapshots, 4);
+  assert.equal(cut.toISOString(), new Date(NOW.getTime() - 180 * 864e5).toISOString());
+});
+
+test('config-snapshot purge is skipped when the repo/config lacks the dimension', async () => {
+  // The original fakeRepo has no purgeConfigSnapshotsBefore and config has no
+  // configSnapshotRetentionDays — purgeExpired must not throw.
+  const purge = createPurge({ repo: fakeRepo([]), config, now: () => NOW });
+  const res = await purge.purgeExpired();
+  assert.equal(res.configSnapshots, 0);
+});
+
 test('purge deletes old ACKED findings but NEVER an unacknowledged CRIT', async () => {
   const old = new Date('2024-01-01T00:00:00Z'); // way past findingRetentionDays
   const repo = fakeRepo([

@@ -13,7 +13,14 @@ function createPurge({ repo, config, now = () => new Date() }) {
     const flowRollups = await repo.purgeFlowRollupsBefore(rollupCut);
     const metricRollups = await repo.purgeMetricRollupsBefore(rollupCut);
     const findings = await repo.purgeAckedFindingsBefore(findingCut);
-    return { flowRollups, metricRollups, findings };
+    // Raw device-config snapshots. Guarded so a repo/config without this
+    // dimension (older wiring / tests) simply skips it.
+    let configSnapshots = 0;
+    if (config.configSnapshotRetentionDays && typeof repo.purgeConfigSnapshotsBefore === 'function') {
+      const configCut = new Date(t - config.configSnapshotRetentionDays * DAY_MS);
+      configSnapshots = await repo.purgeConfigSnapshotsBefore(configCut);
+    }
+    return { flowRollups, metricRollups, findings, configSnapshots };
   }
 
   return { purgeExpired };

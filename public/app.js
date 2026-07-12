@@ -2964,18 +2964,18 @@ views.incidents = async () => {
   const table = el('table', { class: 'data' },
     el('thead', {}, el('tr', {},
       el('th', {}, 'Severity'), el('th', {}, 'Status'), el('th', {}, 'Title'),
-      el('th', {}, 'Device'), el('th', {}, 'First seen'), el('th', {}, 'Last activity'))),
+      el('th', {}, 'Device'), el('th', {}, 'First seen'), el('th', {}, 'Last activity'), el('th', {}, ''))),
     tbody);
 
   async function load() {
-    tbody.replaceChildren(el('tr', {}, el('td', { colspan: '6', class: 'muted' }, 'Loading…')));
+    tbody.replaceChildren(el('tr', {}, el('td', { colspan: '7', class: 'muted' }, 'Loading…')));
     const qs = new URLSearchParams();
     if (filters.status) qs.set('status', filters.status);
     if (filters.severity) qs.set('severity', filters.severity);
     if (filters.device) qs.set('device', filters.device);
     try {
       const { incidents } = await api(`/api/incidents${qs.toString() ? `?${qs}` : ''}`);
-      if (!incidents.length) { tbody.replaceChildren(el('tr', {}, el('td', { colspan: '6', class: 'muted' }, 'No incidents match.'))); return; }
+      if (!incidents.length) { tbody.replaceChildren(el('tr', {}, el('td', { colspan: '7', class: 'muted' }, 'No incidents match.'))); return; }
       tbody.replaceChildren(...incidents.map((i) => el('tr', {
         class: 'clickable', tabindex: '0',
         onclick: () => openIncident(i.id), onkeydown: (e) => { if (e.key === 'Enter') openIncident(i.id); },
@@ -2985,9 +2985,10 @@ views.incidents = async () => {
         el('td', {}, esc(i.title)),
         el('td', { class: 'muted' }, esc(i.deviceId)),
         el('td', { class: 'muted' }, fmtDate(i.firstEventAt)),
-        el('td', { class: 'muted' }, fmtDate(i.lastEventAt)))));
+        el('td', { class: 'muted' }, fmtDate(i.lastEventAt)),
+        el('td', {}, canWrite() ? el('button', { class: 'pill guide-pill small', title: 'Guided troubleshooting', onclick: (e) => { e.stopPropagation(); guideFromList(i.id); } }, '🧭 Guide') : ''))));
     } catch (err) {
-      tbody.replaceChildren(el('tr', {}, el('td', { colspan: '6', class: 'error' }, err.message)));
+      tbody.replaceChildren(el('tr', {}, el('td', { colspan: '7', class: 'error' }, err.message)));
     }
   }
 
@@ -3094,6 +3095,99 @@ function incidentAssistantCard(id) {
 }
 
 // The per-incident detail page (no tab — reached via openIncident).
+// ---- Guided troubleshooting ("Guide me") -----------------------------------
+let guideAutoOpen = false;
+function guideFromList(id) { guideAutoOpen = true; openIncident(id); }
+
+// Deep-link a guide step's suggested action into the existing tools.
+function guideNavigate(action, incident) {
+  if (!action) return;
+  if (action.view === 'incident') { openIncident(action.targetId); return; }
+  const dev = Number(action.view === 'config-context' ? (incident.deviceId ?? incident.hostId) : action.targetId);
+  if (!Number.isInteger(dev)) return;
+  if (action.view === 'flows') { openFlows(dev); return; }
+  openAgent(dev); // agent / interfaces / config-context all live on the device page
+}
+
+async function loadGuide(incident, body) {
+  try {
+    const guide = await api(`/api/incidents/${incident.id}/guide`);
+    if (!guide.steps || !guide.steps.length) { body.replaceChildren(el('p', { class: 'muted' }, 'No guidance available for this incident.')); return; }
+    const doneKey = `blueeye.guide.${incident.id}`;
+    let done = [];
+    try { done = JSON.parse(localStorage.getItem(doneKey) || '[]'); } catch { done = []; }
+    const progress = el('div', { class: 'guide-progress muted' });
+    const aiOut = el('div', { class: 'assistant-out muted' });
+    aiOut.style.display = 'none';
+    const refresh = () => { progress.textContent = `${done.length}/${guide.steps.length} steps done`; };
+    const save = () => { try { localStorage.setItem(doneKey, JSON.stringify(done)); } catch { /* storage off */ } refresh(); };
+
+    async function askAbout(seed) {
+      aiOut.style.display = '';
+      aiOut.className = 'assistant-out muted';
+      aiOut.textContent = 'Thinking…';
+      try {
+        const res = await api(`/api/incidents/${incident.id}/ask`, { method: 'POST', body: { question: seed } });
+        aiOut.className = 'assistant-out';
+        aiOut.replaceChildren(
+          el('div', { class: 'ai-badge' }, '⚠ AI-generated'),
+          el('div', {}, res.answer || '(empty response)'),
+          el('div', { class: 'assistant-meta muted' }, `${esc(res.model || 'no provider call')}${res.dataAvailable === false ? ' · insufficient context' : ''}`));
+      } catch (err) {
+        aiOut.className = 'assistant-out muted';
+        aiOut.textContent = err.status === 403 ? 'The AI assistant is disabled or not licensed (Settings → AI assistant).' : err.message;
+      }
+    }
+
+    const steps = guide.steps.map((s) => {
+      const cb = el('input', { type: 'checkbox' });
+      if (done.includes(s.id)) cb.checked = true;
+      const li = el('li', { class: `guide-step guide-${s.kind}${cb.checked ? ' done' : ''}` });
+      cb.addEventListener('change', () => {
+        if (cb.checked) { if (!done.includes(s.id)) done.push(s.id); } else { done = done.filter((x) => x !== s.id); }
+        li.classList.toggle('done', cb.checked); save();
+      });
+      const actionBtn = s.action ? el('button', { class: 'small ghost', onclick: () => guideNavigate(s.action, incident) }, s.action.label) : null;
+      const askBtn = el('button', { class: 'small ghost', onclick: () => askAbout(`Help me with this troubleshooting step for the incident: "${s.title}". ${s.detail}`) }, 'Ask AI');
+      li.append(
+        el('label', { class: 'guide-step-head' }, cb, el('span', { class: 'guide-step-title' }, esc(s.title)), el('span', { class: `badge kind-${s.kind}` }, s.kind)),
+        el('p', { class: 'guide-detail' }, esc(s.detail)),
+        el('p', { class: 'guide-rationale muted' }, '↳ ', esc(s.rationale)),
+        el('div', { class: 'guide-actions' }, actionBtn, askBtn));
+      return li;
+    });
+
+    const freeQ = el('input', { type: 'text', placeholder: 'Ask BlueEye AI about this incident…', class: 'inc-ask-input' });
+    const freeBtn = el('button', { class: 'small', onclick: () => { if (freeQ.value.trim()) askAbout(freeQ.value.trim()); } }, 'Ask AI');
+    freeQ.addEventListener('keydown', (e) => { if (e.key === 'Enter' && freeQ.value.trim()) askAbout(freeQ.value.trim()); });
+
+    refresh();
+    body.replaceChildren(
+      progress,
+      el('ol', { class: 'guide-steps' }, ...steps),
+      el('div', { class: 'guide-ai' },
+        el('p', { class: 'muted' }, 'BlueEye built these steps from this incident. Ask the AI to explain a step or the likely cause — it uses only masked context.'),
+        el('div', { class: 'inc-ask' }, freeQ, freeBtn), aiOut));
+  } catch (err) {
+    body.replaceChildren(el('p', { class: err.status === 403 ? 'muted' : 'error' }, err.status === 403 ? 'Guided troubleshooting requires operator/admin.' : err.message));
+  }
+}
+
+// A collapsible "Guide me" card that lazy-loads the step-by-step guide on open.
+function incidentGuideCard(incident) {
+  const body = el('div', { class: 'guide-body' }, el('p', { class: 'muted' }, 'Loading…'));
+  let loaded = false;
+  const openAndLoad = () => { if (!loaded) { loaded = true; loadGuide(incident, body); } };
+  const details = el('details', { class: 'card guide-card' },
+    el('summary', { class: 'guide-summary' },
+      el('span', { class: 'pill guide-pill' }, '🧭 Guide me'),
+      el('span', { class: 'muted' }, ' — step-by-step troubleshooting, BlueEye + AI')),
+    body);
+  details.addEventListener('toggle', () => { if (details.open) openAndLoad(); });
+  if (guideAutoOpen) { guideAutoOpen = false; details.open = true; openAndLoad(); }
+  return details;
+}
+
 views.incident = async () => {
   const id = selectedIncidentId;
   const back = el('button', { class: 'small ghost', onclick: () => { currentView = 'incidents'; render(); } }, '← Incidents');
@@ -3159,7 +3253,10 @@ views.incident = async () => {
     if (featureEnabled('assistant')) extra.push(incidentAssistantCard(id));
   }
 
-  return el('div', { class: 'incident-detail' }, header, controls, anomaliesCard, timelineCard, similarCard, ...extra);
+  // "Guide me" — operator/admin (the guide endpoint + its config/AI steps are).
+  const guideCard = canWrite() ? incidentGuideCard(inc) : null;
+
+  return el('div', { class: 'incident-detail' }, header, controls, guideCard, anomaliesCard, timelineCard, similarCard, ...extra);
 };
 
 views.overview = async () => {
@@ -5330,12 +5427,39 @@ views.fleet = async () => {
 // interface health + recent traffic — the troubleshooting surface for one agent.
 // Device config history (masked snapshots + risk-classified diffs). operator/
 // admin only — a viewer gets a 403 the card explains rather than an empty box.
+// A collapsible "paste the running-config" form that POSTs a snapshot, then
+// reloads the card. operator/admin only (the card is already gated).
+function configIngestForm(id, onAdded) {
+  const ta = el('textarea', { rows: '6', placeholder: 'Paste the device running-config…', class: 'cfg-ingest-text' });
+  const via = el('select', {}, ...[['manual', 'Manual'], ['agent_poll', 'Agent poll'], ['change_detected', 'Change detected']].map(([v, l]) => el('option', { value: v }, l)));
+  const status = el('span', { class: 'muted' });
+  const submit = el('button', { class: 'small' }, 'Add snapshot');
+  submit.addEventListener('click', async () => {
+    if (!ta.value.trim()) { status.textContent = 'Paste a config first.'; return; }
+    submit.disabled = true;
+    status.textContent = 'Saving…';
+    try {
+      const res = await api(`/api/devices/${id}/config-snapshots`, { method: 'POST', body: { configText: ta.value, capturedVia: via.value } });
+      ta.value = '';
+      status.textContent = res.unchanged ? 'No change vs. the latest snapshot.' : 'Snapshot added.';
+      if (!res.unchanged && typeof onAdded === 'function') onAdded();
+    } catch (err) {
+      status.textContent = errText(err);
+    } finally { submit.disabled = false; }
+  });
+  return el('details', { class: 'cfg-ingest' },
+    el('summary', {}, 'Add a config snapshot'),
+    el('div', { class: 'cfg-ingest-body' }, ta,
+      el('div', { class: 'cfg-ingest-actions' }, el('label', { class: 'inline muted' }, 'Via ', via), submit, status)));
+}
+
 async function loadDeviceConfigHistory(id, card) {
   const head = el('h3', {}, 'Config history');
+  const form = configIngestForm(id, () => loadDeviceConfigHistory(id, card));
   try {
     const { snapshots, diffs } = await api(`/api/devices/${id}/config-history`);
     if (!snapshots || !snapshots.length) {
-      card.replaceChildren(head, el('p', { class: 'muted' }, 'No config snapshots captured for this device yet.'));
+      card.replaceChildren(head, form, el('p', { class: 'muted' }, 'No config snapshots captured for this device yet.'));
       return;
     }
     const diffEls = (diffs || []).map((d) => el('details', { class: 'cfg-diff' },
@@ -5343,7 +5467,7 @@ async function loadDeviceConfigHistory(id, card) {
         el('span', { class: `badge risk-${d.risk}` }, d.risk),
         el('span', { class: 'muted' }, ` +${(d.stats && d.stats.added) || 0}/-${(d.stats && d.stats.removed) || 0}${(d.riskReasons || []).length ? ` · ${d.riskReasons.join(', ')}` : ''}`)),
       el('pre', { class: 'config-diff' }, (d.changedLines || []).map((l) => `${l.op} ${l.text}`).join('\n'))));
-    card.replaceChildren(head,
+    card.replaceChildren(head, form,
       el('p', { class: 'muted' }, `${snapshots.length} snapshot(s); ${(diffs || []).length} change(s). Secrets are masked.`),
       (diffs || []).length ? el('div', { class: 'cfg-diffs' }, ...diffEls) : el('p', { class: 'muted' }, 'No changes between snapshots.'));
   } catch (err) {

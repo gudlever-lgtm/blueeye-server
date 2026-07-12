@@ -114,6 +114,15 @@ function createAgentsRepository(db) {
     return findById(id);
   }
 
+  // Sets ONLY the location, without disturbing the other managed fields (unlike
+  // updateManaged, which rewrites the whole managed set). Used by the CMDB link to
+  // sync an agent's site from the linked asset's location. locationId may be null
+  // to clear it. Returns the refreshed row.
+  async function setLocation(id, locationId) {
+    await pool.query('UPDATE agents SET location_id = ? WHERE id = ?', [locationId ?? null, id]);
+    return findById(id);
+  }
+
   // Stores agent-reported capabilities (what the agent can do).
   async function setCapabilities(id, capabilities) {
     await pool.query('UPDATE agents SET capabilities = ? WHERE id = ?', [
@@ -147,6 +156,7 @@ function createAgentsRepository(db) {
     count,
     findForGeo,
     updateManaged,
+    setLocation,
     setCapabilities,
     remove,
     setStatus,

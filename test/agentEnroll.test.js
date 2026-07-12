@@ -7,7 +7,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const request = require('supertest');
 
-const { makeApp, makeEnrollmentStore, makeAuditEventsRepo, throwingAsync } = require('../test-support/fakes');
+const { makeApp, makeEnrollmentStore, makeAuditEventsRepo, makeSettingsService, throwingAsync } = require('../test-support/fakes');
 const { hashToken } = require('../src/auth/tokens');
 
 const validBody = { code: 'a-code', hostname: 'node-01', platform: 'linux', arch: 'x64' };
@@ -31,6 +31,45 @@ test('POST /agents/enroll returns 201 with { agentId, token } on a valid code', 
   assert.equal(received.tokenHash, hashToken(res.body.token));
   assert.equal(received.code, 'a-code');
   assert.equal(received.hostname, 'node-01');
+});
+
+test('POST /agents/enroll stamps the fleet-wide default traffic source onto the new agent', async () => {
+  let received;
+  const enrollmentStore = makeEnrollmentStore({
+    claimAndEnroll: async (input) => { received = input; return { status: 'ok', agentId: 5 }; },
+  });
+  // Settings → Agents default: sFlow with the local hsflowd exporter.
+  const settingsService = makeSettingsService({ initial: { agents: { defaultTrafficSource: 'sflow', defaultSflowHsflowd: true } } });
+
+  const res = await request(makeApp({ enrollmentStore, settingsService })).post('/agents/enroll').send(validBody);
+
+  assert.equal(res.status, 201);
+  assert.deepEqual(received.monitorConfig, { source: 'sflow', sflow: { hsflowd: true } });
+});
+
+test('POST /agents/enroll passes a null monitor config when the default is proc', async () => {
+  let received;
+  const enrollmentStore = makeEnrollmentStore({
+    claimAndEnroll: async (input) => { received = input; return { status: 'ok', agentId: 6 }; },
+  });
+  // Default (empty store) is proc → the agent is left unstamped.
+  const res = await request(makeApp({ enrollmentStore })).post('/agents/enroll').send(validBody);
+
+  assert.equal(res.status, 201);
+  assert.equal(received.monitorConfig, null);
+});
+
+test('a failing settings read does not break enrollment (falls back to unstamped)', async () => {
+  let received;
+  const enrollmentStore = makeEnrollmentStore({
+    claimAndEnroll: async (input) => { received = input; return { status: 'ok', agentId: 8 }; },
+  });
+  const settingsService = { getDefaultMonitorConfig: async () => { throw new Error('settings down'); } };
+
+  const res = await request(makeApp({ enrollmentStore, settingsService })).post('/agents/enroll').send(validBody);
+
+  assert.equal(res.status, 201);
+  assert.equal(received.monitorConfig, null);
 });
 
 test('POST /agents/enroll records an agent.enrolled audit event', async () => {

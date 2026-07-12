@@ -19,7 +19,7 @@ function clientIp(req) {
 // `notifyDashboard` (optional) pushes a live "agent enrolled" event to the UI so
 // the enrollment screen flips to "connected" within seconds. `rateLimit`
 // throttles code-guessing (defaults to a no-op so tests stay unthrottled).
-function createAgentEnrollRouter({ enrollmentStore, notifyDashboard, integrationTrigger = null, auditEventsRepo = null, rateLimit = noopRateLimiter }) {
+function createAgentEnrollRouter({ enrollmentStore, notifyDashboard, integrationTrigger = null, auditEventsRepo = null, settingsService = null, rateLimit = noopRateLimiter }) {
   const router = express.Router();
 
   // POST /agents/enroll { code, hostname, platform, arch }
@@ -34,12 +34,24 @@ function createAgentEnrollRouter({ enrollmentStore, notifyDashboard, integration
 
       // Generate the opaque token here; only its hash is persisted.
       const token = generateAgentToken();
+
+      // Stamp the fleet-wide default traffic source (Settings → Agents) onto the
+      // new agent, so its very first /me/config already returns the chosen source
+      // instead of the built-in `proc`. Best-effort: a settings read must never
+      // fail the enrollment — fall back to the unstamped (proc) behaviour.
+      let monitorConfig = null;
+      if (settingsService && typeof settingsService.getDefaultMonitorConfig === 'function') {
+        try { monitorConfig = await settingsService.getDefaultMonitorConfig(); }
+        catch { monitorConfig = null; }
+      }
+
       const outcome = await enrollmentStore.claimAndEnroll({
         code: value.code,
         hostname: value.hostname,
         platform: value.platform,
         arch: value.arch,
         tokenHash: hashToken(token),
+        monitorConfig,
       });
 
       switch (outcome.status) {

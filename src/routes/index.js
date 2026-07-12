@@ -250,7 +250,7 @@ function createApiRouter({
     router.use('/api/cmdb/assets', createCmdbAssetsRouter({ cmdbConfigRepo, registry: connectorRegistry, secretBox }));
   }
   if (agentCmdbLinksRepo) {
-    router.use('/api/agents', createAgentCmdbLinkRouter({ agentCmdbLinksRepo, agentsRepo }));
+    router.use('/api/agents', createAgentCmdbLinkRouter({ agentCmdbLinksRepo, agentsRepo, locationsRepo }));
   }
   // Test area — consolidated, admin-only security screening of every outbound
   // integration (email/alert channels, ITSM/IPAM receivers, SSO, AI/map/licence).
@@ -259,6 +259,9 @@ function createApiRouter({
     alertingDispatcher: dispatcher,
     integrationsRepo,
     integrationsDispatcher,
+    cmdbConfigRepo,
+    connectorRegistry,
+    secretBox,
     ldapAuth,
     ldapConfigRepo,
     oidcAuth,
@@ -335,7 +338,7 @@ function createApiRouter({
   if (auditLogRepo) router.use('/api/audit-log', createAuditLogRouter({ auditLogRepo, featureGate, planService }));
   if (apiTokensRepo) router.use('/api/api-tokens', createApiTokensRouter({ apiTokensRepo, featureGate, planService, auditLogger }));
   router.use('/agents', createAgentReportsRouter({ agentAuth, resultsRepo, resultsTsdbRepo, agentsRepo, auditEventsRepo, analysisPipeline, flowPipeline, probeResultsRepo, probePipeline, incidentService, installToolService, logger }));
-  router.use('/agents', createAgentEnrollRouter({ enrollmentStore, notifyDashboard, integrationTrigger: integrationsDispatcher, auditEventsRepo, rateLimit: enrollRateLimiter }));
+  router.use('/agents', createAgentEnrollRouter({ enrollmentStore, notifyDashboard, integrationTrigger: integrationsDispatcher, auditEventsRepo, settingsService, rateLimit: enrollRateLimiter }));
 
   return router;
 }

@@ -35,6 +35,17 @@ test('describeRequest names agent sub-actions', () => {
   assert.equal(describeRequest('DELETE', '/agents/5').action, 'agent.delete');
 });
 
+test('describeRequest maps the CMDB link as an agent sub-action (keeps the agent id)', () => {
+  const put = describeRequest('PUT', '/api/agents/5/cmdb-link');
+  assert.equal(put.action, 'agent.cmdb-link');
+  assert.equal(put.targetType, 'agent');
+  assert.equal(put.targetId, '5');
+  // A DELETE unlink must NOT read as deleting the agent itself.
+  const del = describeRequest('DELETE', '/api/agents/5/cmdb-link');
+  assert.equal(del.action, 'agent.cmdb-link');
+  assert.equal(del.targetId, '5');
+});
+
 test('describeRequest strips /api and keeps the settings sub-area as target', () => {
   const d = describeRequest('PUT', '/api/settings/map');
   assert.equal(d.action, 'settings.update');

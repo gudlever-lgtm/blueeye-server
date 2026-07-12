@@ -5475,6 +5475,93 @@ async function loadDeviceConfigHistory(id, card) {
   }
 }
 
+// The per-agent CMDB card: shows the linked asset as a removable chip, or (for
+// operator+) a debounced, min-2-char asset search that links + syncs the site.
+async function loadAgentCmdbLink(id, host) {
+  const writable = canWrite();
+  const body = el('div', { class: 'cmdb-body' });
+  host.replaceChildren(el('h3', {}, 'CMDB asset'), body);
+
+  let link = null;
+  try { link = await api(`/api/agents/${id}/cmdb-link`); }
+  catch (e) {
+    if (e.status !== 404) { body.replaceChildren(el('div', { class: 'error' }, errText(e))); return; }
+  }
+
+  function showLinked(l) {
+    const kids = [el('span', { class: 'cmdb-chip-name' }, esc(l.cmdb_asset_name || l.cmdb_asset_id))];
+    if (l.cmdb_asset_location) kids.push(el('span', { class: 'muted small' }, `· ${esc(l.cmdb_asset_location)}`));
+    if (writable) {
+      const x = el('button', { class: 'cmdb-chip-x', title: 'Remove link' }, '×');
+      x.addEventListener('click', unlink);
+      kids.push(x);
+    }
+    body.replaceChildren(el('div', { class: 'muted small' }, 'Linked asset'), el('span', { class: 'cmdb-chip' }, ...kids));
+  }
+
+  async function unlink() {
+    if (!confirm('Remove the CMDB link for this agent?')) return;
+    try { await api(`/api/agents/${id}/cmdb-link`, { method: 'DELETE' }); toast('CMDB link removed'); render(); }
+    catch (e) { toast(errText(e), true); }
+  }
+
+  async function linkTo(a, overwrite) {
+    try {
+      const body = { cmdb_asset_id: a.id, cmdb_asset_name: a.name, cmdb_asset_location: a.location || null };
+      if (overwrite) body.overwrite_location = true;
+      const res = await api(`/api/agents/${id}/cmdb-link`, { method: 'PUT', body });
+      // The agent already has a (manual) site that differs — suggest, don't clobber.
+      if (res && res.location_suggestion && !overwrite) {
+        const s = res.location_suggestion;
+        const ok = confirm(`This agent is already assigned to site “${s.current.name || s.current.id}”.\nThe CMDB asset is in “${s.proposed.name}”.\n\nOverwrite the agent’s site with the CMDB location?`);
+        if (ok) return linkTo(a, true);
+        toast('Asset linked · existing site kept');
+        return render();
+      }
+      toast(res && res.synced_location ? `Asset linked · site set to ${res.synced_location.name}` : 'Asset linked');
+      render();
+    } catch (e) { toast(errText(e), true); }
+  }
+
+  function showSearch() {
+    if (!writable) { body.replaceChildren(el('div', { class: 'muted' }, 'Not linked to a CMDB asset.')); return; }
+    const input = el('input', { type: 'search', placeholder: 'Search CMDB assets (min 2 chars)…', autocomplete: 'off' });
+    const results = el('div', { class: 'cmdb-results' });
+    const status = el('div', { class: 'muted small' });
+    let timer = null; let seq = 0;
+    async function run(q) {
+      const my = ++seq;
+      status.textContent = 'Searching…'; results.replaceChildren();
+      try {
+        const data = await api(`/api/cmdb/assets/search?q=${encodeURIComponent(q)}`);
+        if (my !== seq) return;
+        const assets = data.assets || [];
+        status.textContent = assets.length ? '' : 'No matches.';
+        results.replaceChildren(...assets.map((a) => {
+          const row = el('button', { class: 'cmdb-result' },
+            el('span', {}, esc(a.name || a.id)),
+            a.type ? el('span', { class: 'muted small' }, esc(a.type)) : null,
+            a.location ? el('span', { class: 'muted small' }, esc(a.location)) : null);
+          row.addEventListener('click', () => linkTo(a));
+          return row;
+        }));
+      } catch (e) {
+        if (my !== seq) return;
+        status.textContent = e.status === 404 ? 'No CMDB is configured or enabled (Settings → CMDB).' : errText(e);
+      }
+    }
+    input.addEventListener('input', () => {
+      const q = input.value.trim();
+      clearTimeout(timer);
+      if (q.length < 2) { status.textContent = ''; results.replaceChildren(); return; }
+      timer = setTimeout(() => run(q), 300);
+    });
+    body.replaceChildren(el('div', { class: 'muted small' }, 'Not linked — search to link an asset:'), input, status, results);
+  }
+
+  if (link) showLinked(link); else showSearch();
+}
+
 views.agent = async () => {
   const id = selectedAgentId;
   const root = el('div', { class: 'agent-detail' });
@@ -5502,6 +5589,11 @@ views.agent = async () => {
     root.append(cfgHost);
     loadDeviceConfigHistory(id, cfgHost);
   }
+
+  // CMDB asset link (viewer sees the linked asset; operator+ can search/link/unlink).
+  const cmdbHost = el('div', { class: 'card agent-cmdb' }, el('h3', {}, 'CMDB asset'), el('div', { class: 'muted' }, 'Loading…'));
+  root.append(cmdbHost);
+  loadAgentCmdbLink(id, cmdbHost);
   function renderHealth(h, q, thr) {
     const m = h.metrics;
     const kv = (k, v, cls) => el('div', { class: 'ah-kv' }, el('span', { class: 'ah-k' }, k), el('span', { class: `ah-v${cls ? ' ' + cls : ''}` }, v));
@@ -7223,7 +7315,7 @@ let settingsTab = null;
 // tab is [key, label, adminOnly]; non-admins only ever see the personal section.
 const SETTINGS_GROUPS = [
   ['Access & security', [['users', 'Users', true], ['auth', 'Authentication', true], ['apitokens', 'API tokens', true], ['agentkey', 'Agent key', true]]],
-  ['Detection & alerts', [['analyse', 'Analysis', true], ['alerting', 'Alerting', true], ['integrations', 'Integrations', true], ['maintenance', 'Maintenance', true]]],
+  ['Detection & alerts', [['analyse', 'Analysis', true], ['alerting', 'Alerting', true], ['integrations', 'Integrations', true], ['cmdb', 'CMDB', true], ['maintenance', 'Maintenance', true]]],
   ['Data', [['retention', 'Retention', true], ['types', 'Traffic types', true], ['map', 'Map', true]]],
   ['System', [['updates', 'Updates', true], ['agents', 'Agents', true], ['screening', 'Test Settings', true]]],
   ['Personal', [['appearance', 'Appearance', false], ['license', 'License', false]]],
@@ -7346,6 +7438,7 @@ views.settings = async () => {
     analyse: settingsAnalyseView,
     alerting: settingsAlertingView,
     integrations: settingsIntegrationsView,
+    cmdb: settingsCmdbView,
     maintenance: settingsMaintenanceView,
     updates: settingsUpdatesView,
     agentkey: settingsAgentKeyView,
@@ -7580,7 +7673,27 @@ async function settingsAnalyseView() {
 // server to auto-install a missing diagnostic tool when a probe reports it.
 async function settingsAgentsView() {
   const data = await api('/api/settings');
-  return el('div', { class: 'settings-grid' }, agentsSettingsCard(data.agents));
+  return el('div', { class: 'settings-grid' },
+    agentDefaultsCard(data.agents),
+    agentsSettingsCard(data.agents));
+}
+
+// Default traffic source stamped on each agent as it enrolls (Settings → Agents).
+// Both cards PUT /api/settings/agents; setAgents merges the disjoint field sets,
+// so a save from one card never clobbers the other's value.
+function agentDefaultsCard(a) {
+  return settingsFormCard({
+    title: 'New agent defaults',
+    values: a || { defaultTrafficSource: 'proc', defaultSflowHsflowd: false },
+    endpoint: '/api/settings/agents',
+    fields: [
+      { key: 'defaultTrafficSource', label: 'Default traffic source', type: 'select',
+        options: [['proc', 'proc — host /proc counters'], ['netflow', 'NetFlow (v5/v9/IPFIX)'], ['sflow', 'sFlow (sampled)']],
+        hint: 'Traffic source stamped on each agent when it enrolls. NetFlow/sFlow open a collector and need a device (or the local exporter below) to export to them. You can still change the source per agent under Agents → Edit.' },
+      { key: 'defaultSflowHsflowd', label: 'Self-provision local sFlow exporter (hsflowd)', type: 'checkbox',
+        hint: 'Only applies when the default source is sFlow. When on, a newly enrolled agent installs and configures a local Host sFlow exporter (hsflowd) so it collects flows without an external exporter. Installs software on the host — leave off if a switch/host already exports sFlow to the agent.' },
+    ],
+  });
 }
 
 function agentsSettingsCard(a) {
@@ -7839,6 +7952,106 @@ function integrationEditor(meta, existing) {
       alertField('Enabled', enabledI, 'When off, events are not dispatched to this target.'),
       err,
       el('div', { class: 'form-actions' }, saveBtn, cancelBtn)));
+}
+
+// CMDB (single source of truth) — configure the ONE CMDB source (ServiceNow or
+// Nautobot), test the connection, enable it. Reuses the integrations connector
+// metadata (auth types) + credential inputs. Credentials are write-only.
+async function settingsCmdbView() {
+  const root = el('div');
+  root.append(el('p', { class: 'muted settings-intro' },
+    'Configure the single CMDB source BlueEye links agents to. Credentials are encrypted at rest and never shown again. Use “Test connection” to verify before enabling; linking an agent to an asset also syncs the agent’s site from the asset’s CMDB location.'));
+
+  let cfg; let meta;
+  try {
+    [cfg, meta] = await Promise.all([api('/api/settings/cmdb'), api('/api/integrations/meta')]);
+  } catch (e) { root.append(el('div', { class: 'empty error' }, errText(e))); return root; }
+
+  const types = (meta.types || []).filter((t) => t.type === 'servicenow' || t.type === 'nautobot');
+  const typeNames = types.map((t) => t.type);
+  const connectorFor = (type) => types.find((t) => t.type === type) || { authTypes: ['basic'] };
+  const isSet = Boolean(cfg && cfg.type);
+
+  const typeSel = el('select', {}, ...typeNames.map((t) => el('option', { value: t }, t)));
+  typeSel.value = isSet ? cfg.type : (typeNames[0] || '');
+  const urlI = el('input', { type: 'text', value: isSet ? cfg.base_url : '', placeholder: 'https://example.service-now.com' });
+  const enabledI = el('input', { type: 'checkbox' }); enabledI.checked = isSet ? !!cfg.enabled : false;
+
+  const authWrap = el('div', { class: 'form-grid' });
+  const credWrap = el('div', { class: 'form-grid' });
+  const err = el('p', { class: 'error' });
+  const result = el('p', { class: 'muted small' });
+
+  let authSel; let credGather;
+  function rebuildCreds() {
+    const c = integrationCredFields(authSel.value, typeSel.value, isSet);
+    credGather = c.gather;
+    credWrap.replaceChildren(...c.rows);
+  }
+  function rebuild() {
+    const conn = connectorFor(typeSel.value);
+    authSel = el('select', {}, ...conn.authTypes.map((a) => el('option', { value: a }, a)));
+    authSel.value = isSet && conn.authTypes.includes(cfg.auth_type) ? cfg.auth_type : conn.authTypes[0];
+    authSel.addEventListener('change', rebuildCreds);
+    authWrap.replaceChildren(alertField('Auth type', authSel, 'How BlueEye authenticates to the CMDB API.'));
+    rebuildCreds();
+  }
+  typeSel.addEventListener('change', rebuild);
+  rebuild();
+
+  const bodyFromForm = () => ({
+    type: typeSel.value,
+    base_url: urlI.value.trim(),
+    auth_type: authSel.value,
+    enabled: enabledI.checked,
+    ...credGather(),
+  });
+
+  const saveBtn = el('button', { class: 'small' }, isSet ? 'Save changes' : 'Save CMDB');
+  saveBtn.addEventListener('click', async () => {
+    err.textContent = ''; saveBtn.disabled = true;
+    try {
+      await api('/api/settings/cmdb', { method: 'PUT', body: bodyFromForm() });
+      toast('CMDB settings saved'); render();
+    } catch (e) { err.textContent = errText(e); saveBtn.disabled = false; }
+  });
+
+  // Raw fetch (NOT api()) so a real HTTP 401 from the upstream test is shown
+  // inline instead of triggering api()'s session-expiry logout.
+  const testBtn = el('button', { class: 'small ghost' }, 'Test connection');
+  testBtn.addEventListener('click', async () => {
+    result.className = 'muted small'; result.textContent = 'Testing…'; testBtn.disabled = true;
+    try {
+      const res = await fetch('/api/settings/cmdb/test', { method: 'POST', headers: token ? { Authorization: `Bearer ${token}` } : {} });
+      let data = null; try { data = await res.json(); } catch { /* no body */ }
+      if (res.ok) {
+        result.className = 'small ok';
+        result.textContent = `✓ ${(data && data.detail) || 'connected'}${data && data.status != null ? ` (HTTP ${data.status})` : ''}`;
+        render();
+      } else {
+        result.className = 'small error';
+        const label = res.status === 401 ? 'Authentication failed' : ((data && data.error) || `HTTP ${res.status}`);
+        result.textContent = `✗ ${label}${data && data.detail ? ` — ${data.detail}` : ''}`;
+      }
+    } catch (e) { result.className = 'small error'; result.textContent = `✗ ${e.message}`; }
+    finally { testBtn.disabled = false; }
+  });
+
+  const statusLine = isSet
+    ? el('div', { class: 'muted small' }, `Credentials: ${cfg.credentialsSet ? 'set' : 'not set'} · Last verified: ${cfg.verified_at ? new Date(cfg.verified_at).toLocaleString() : 'never'}`)
+    : null;
+
+  root.append(el('div', { class: 'settings-card' },
+    el('h3', {}, 'CMDB source', ' ', el('span', { class: `badge ${isSet && cfg.enabled ? 'ok' : ''}` }, isSet && cfg.enabled ? 'Enabled' : 'Disabled')),
+    el('div', { class: 'form-grid' },
+      alertField('Type', typeSel, 'ServiceNow or Nautobot — the single source of truth.'),
+      alertField('Base URL', urlI, 'https URL of the CMDB API. Private/loopback addresses are rejected.'),
+      authWrap, credWrap,
+      alertField('Enabled', enabledI, 'When off, asset search is not served.'),
+      statusLine,
+      err,
+      el('div', { class: 'form-actions' }, saveBtn, testBtn, result))));
+  return root;
 }
 
 async function settingsAlertingView() {
@@ -8345,6 +8558,9 @@ function settingsFormCard({ title, fields, values, endpoint }) {
     if (f.type === 'checkbox') {
       input = el('input', { type: 'checkbox' });
       input.checked = v[f.key] === true;
+    } else if (f.type === 'select') {
+      input = el('select', {}, ...(f.options || []).map(([val, lbl]) => el('option', { value: val }, lbl)));
+      input.value = v[f.key] != null ? String(v[f.key]) : '';
     } else {
       input = el('input', { type: 'number', value: String(v[f.key] ?? ''), min: f.min ?? null, max: f.max ?? null, step: f.step ?? null });
     }
@@ -8361,7 +8577,9 @@ function settingsFormCard({ title, fields, values, endpoint }) {
     const body = {};
     for (const f of fields) {
       if (f.readonly) continue;
-      body[f.key] = f.type === 'checkbox' ? inputs[f.key].checked : Number(inputs[f.key].value);
+      if (f.type === 'checkbox') body[f.key] = inputs[f.key].checked;
+      else if (f.type === 'select') body[f.key] = inputs[f.key].value;
+      else body[f.key] = Number(inputs[f.key].value);
     }
     try { await api(endpoint, { method: 'PUT', body }); toast(`${title} saved`); }
     catch (e2) { err.textContent = errText(e2); }

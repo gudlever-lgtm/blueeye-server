@@ -735,3 +735,30 @@ CREATE TABLE IF NOT EXISTS audit_events (
   KEY idx_audit_action (action),
   KEY idx_audit_last_seen (last_seen_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- CMDB integration (single source of truth) — migration 051. See docs/cmdb.md.
+CREATE TABLE IF NOT EXISTS cmdb_config (
+  id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  type ENUM('servicenow', 'nautobot') NOT NULL,
+  base_url VARCHAR(512) NOT NULL,
+  auth_type VARCHAR(32) NOT NULL DEFAULT 'none',
+  credentials_encrypted TEXT NULL DEFAULT NULL,    -- secretBox token; never plaintext
+  enabled TINYINT(1) NOT NULL DEFAULT 0,
+  verified_at DATETIME NULL DEFAULT NULL,
+  updated_by INT UNSIGNED NULL DEFAULT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS agent_cmdb_links (
+  agent_id INT UNSIGNED NOT NULL,
+  cmdb_asset_id VARCHAR(255) NOT NULL,
+  cmdb_asset_name VARCHAR(255) NOT NULL,
+  cmdb_asset_location VARCHAR(255) NULL DEFAULT NULL, -- syncs agents.location_id at link time
+  linked_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  linked_by INT UNSIGNED NULL DEFAULT NULL,
+  PRIMARY KEY (agent_id),
+  CONSTRAINT fk_agent_cmdb_links_agent FOREIGN KEY (agent_id)
+    REFERENCES agents (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

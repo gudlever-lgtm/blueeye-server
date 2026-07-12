@@ -38,6 +38,12 @@ function createDiagnosticsRouter({
   alertingDispatcher = null,
   integrationsRepo = null,
   integrationsDispatcher = null,
+  // CMDB (single source of truth): its config repo + the connector registry +
+  // secretBox let the Test area probe the one configured CMDB like any other
+  // outbound integration (reuses the connector's testConnection()).
+  cmdbConfigRepo = null,
+  connectorRegistry = null,
+  secretBox = null,
   ldapAuth = null,
   ldapConfigRepo = null,
   oidcAuth = null,
@@ -70,6 +76,7 @@ function createDiagnosticsRouter({
     return {
       channels: (alerting && alerting.channels) || {},
       integrations: integrationsRepo ? await safe(() => integrationsRepo.findAll(), []) : [],
+      cmdb: cmdbConfigRepo ? await safe(() => cmdbConfigRepo.get(), null) : null,
       ldap: ldapConfigRepo ? await safe(() => ldapConfigRepo.get(), null) : null,
       oidc: oidcAuth ? oidcAuth.status() : null,
       saml: samlAuth ? samlAuth.status() : null,
@@ -101,6 +108,13 @@ function createDiagnosticsRouter({
     // Remote API receivers (ITSM/IPAM).
     for (const row of g.integrations) {
       add(`integration:${row.id}`, 'itsm', true, true, screening.screenIntegration(row));
+    }
+    // CMDB (single source of truth) — runnable only once a source is configured
+    // with a base URL and the connector supports a live test.
+    if (g.cmdb && g.cmdb.base_url) {
+      const runnable = Boolean(cmdbConfigRepo && connectorRegistry && secretBox
+        && connectorRegistry.get(g.cmdb.type) && typeof connectorRegistry.get(g.cmdb.type).testConnection === 'function');
+      add('cmdb', 'itsm', runnable, true, screening.screenCmdb(g.cmdb));
     }
 
     // Authentication (SSO).
@@ -145,6 +159,17 @@ function createDiagnosticsRouter({
       }
       const r = await integrationsDispatcher.testFire(intId, actor);
       if (r === null) return { ran: true, ok: false, detail: 'integration not found' };
+      const status = r.status != null ? ` (HTTP ${r.status})` : '';
+      return { ran: true, ok: Boolean(r.ok), detail: `${r.detail || (r.ok ? 'ok' : 'failed')}${status}` };
+    }
+    if (id === 'cmdb') {
+      const full = cmdbConfigRepo ? await cmdbConfigRepo.getWithSecret() : null;
+      const connector = full && connectorRegistry ? connectorRegistry.get(full.type) : null;
+      if (!full || !connector || typeof connector.testConnection !== 'function') {
+        return { ran: false, ok: null, detail: 'No CMDB configured, or connector cannot test.' };
+      }
+      const credentials = secretBox ? secretBox.decryptJson(full.credentials_encrypted) : {};
+      const r = await connector.testConnection({ baseUrl: full.base_url, authType: full.auth_type, credentials, config: {} });
       const status = r.status != null ? ` (HTTP ${r.status})` : '';
       return { ran: true, ok: Boolean(r.ok), detail: `${r.detail || (r.ok ? 'ok' : 'failed')}${status}` };
     }

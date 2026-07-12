@@ -7253,9 +7253,19 @@ function renderEnrollResult(host, data, cfg, regen) {
   // Linux/macOS need root for the system service. The Ansible helper only fits
   // the Linux shell installer, so it's hidden for Windows/macOS.
   const os = data.os || 'linux';
-  const runNote = os === 'windows'
-    ? el('p', { class: 'muted small' }, 'Run this in an ', el('strong', {}, 'elevated PowerShell (Administrator)'), ' on the Windows host. It installs the agent as a scheduled task that starts at boot.')
-    : el('p', { class: 'muted small' }, 'Run on the target host; the installer needs root for the system service (', el('span', { class: 'mono' }, 'sudo'), ' — it will tell you if so).');
+  let runNote;
+  if (os === 'windows') {
+    const bits = ['Run this in an ', el('strong', {}, 'elevated PowerShell (Administrator)'), ' on the Windows host. It forces TLS 1.2 and installs the agent as a scheduled task that starts at boot.'];
+    // Without a pinned cert fingerprint, Windows PowerShell rejects a self-signed
+    // server cert — tell the operator how to make the download trust it.
+    if (!data.certFingerprint) {
+      bits.push(el('br'));
+      bits.push(el('span', {}, 'If the server uses a self-signed TLS certificate, set its SHA-256 fingerprint (', el('span', { class: 'mono' }, 'AGENT_CERT_FINGERPRINT'), ') on the server so the command can pin it — otherwise the download will fail cert validation.'));
+    }
+    runNote = el('p', { class: 'muted small' }, ...bits);
+  } else {
+    runNote = el('p', { class: 'muted small' }, 'Run on the target host; the installer needs root for the system service (', el('span', { class: 'mono' }, 'sudo'), ' — it will tell you if so).');
+  }
 
   host.replaceChildren(
     live,

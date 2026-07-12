@@ -7,6 +7,7 @@ const { ROLES } = require('../auth/roles');
 const { generateEnrollmentCode } = require('../auth/tokens');
 const { parseId } = require('../validation/locationValidation');
 const { resolveServerUrl } = require('./enroll');
+const { winSecurityPrelude } = require('../enroll/installScriptWin');
 
 // Default platform offered when the caller doesn't specify one and we can't
 // infer it from the published artifacts.
@@ -116,8 +117,11 @@ function createEnrollCommandRouter({ enrollmentCodesRepo, artifactStore, sourceS
       // hosts get a PowerShell one-liner that fetches install.ps1 with `irm … | iex`.
       // Linux and macOS both have real curl + sh, so they share the sh installer.
       const isWindows = /^windows(-|$)/.test(platform);
+      // The Windows one-liner carries a TLS-1.2 + (when known) cert-pinning prelude
+      // so the `irm …/install.ps1 | iex` bootstrap works against an on-prem HTTPS
+      // server with a self-signed cert (PowerShell 5.1 would otherwise reject it).
       const oneLiner = isWindows
-        ? `powershell -NoProfile -ExecutionPolicy Bypass -Command "irm ${serverUrl}/enroll/${code}/install.ps1 | iex"`
+        ? `powershell -NoProfile -ExecutionPolicy Bypass -Command "${winSecurityPrelude(certFingerprint)} irm ${serverUrl}/enroll/${code}/install.ps1 | iex"`
         : `curl -sSL ${serverUrl}/enroll/${code}/install.sh | sh`;
       // The installer downloads + verifies the agent SOURCE bundle, then builds +
       // runs it (Docker/Node) — no pre-built binary. The manual block lets a

@@ -102,6 +102,76 @@ test('unreachable: offline past the grace window with no attempts seen', () => {
   assert.ok(d.hints.some((h) => /systemctl/.test(h)));
 });
 
+test('unreachable (windows): hints speak PowerShell / services, never systemctl', () => {
+  const d = diagnoseConnection({
+    agent: { ...baseAgent, platform: 'win32' },
+    live: { ...liveBase, session: { ip: '10.0.0.5', connectedAt: iso(7200 * 1000), disconnectedAt: iso(3600 * 1000), closeCode: 1006 } },
+    now: NOW,
+  });
+  assert.equal(d.state, 'unreachable');
+  assert.ok(d.hints.some((h) => /Restart-Service|Get-Service|services\.msc/.test(h)));
+  assert.ok(!d.hints.some((h) => /systemctl|journalctl/.test(h)));
+});
+
+test('never-connected (windows): install check names the Windows service, not systemctl', () => {
+  const d = diagnoseConnection({
+    agent: { id: 9, status: 'offline', last_seen: null, platform: 'win32' },
+    live: { ...liveBase },
+    now: NOW,
+  });
+  assert.equal(d.state, 'never-connected');
+  assert.ok(d.hints.some((h) => /Get-Service|services\.msc/.test(h)));
+  assert.ok(!d.hints.some((h) => /systemctl/.test(h)));
+});
+
+test('auth-rejected (windows): restart hint uses Restart-Service, not systemctl', () => {
+  const d = diagnoseConnection({
+    agent: { ...baseAgent, platform: 'win32' },
+    live: {
+      ...liveBase,
+      session: { ip: '10.0.0.5', connectedAt: iso(3600 * 1000), disconnectedAt: iso(600 * 1000), closeCode: 1006 },
+      authFailures: [{ at: iso(20 * 1000), ip: '10.0.0.5' }],
+    },
+    now: NOW,
+  });
+  assert.equal(d.state, 'auth-rejected');
+  assert.ok(d.hints.some((h) => /re-enroll/i.test(h)));
+  assert.ok(d.hints.some((h) => /Restart-Service/.test(h)));
+  assert.ok(!d.hints.some((h) => /systemctl/.test(h)));
+});
+
+test('unreachable (macos): hints use launchctl, not systemctl', () => {
+  const d = diagnoseConnection({
+    agent: { ...baseAgent, platform: 'darwin' },
+    live: { ...liveBase, session: { ip: '10.0.0.5', connectedAt: iso(7200 * 1000), disconnectedAt: iso(3600 * 1000), closeCode: 1006 } },
+    now: NOW,
+  });
+  assert.equal(d.state, 'unreachable');
+  assert.ok(d.hints.some((h) => /launchctl/.test(h)));
+  assert.ok(!d.hints.some((h) => /systemctl/.test(h)));
+});
+
+test('unreachable (docker-managed linux): hints use docker, not systemctl', () => {
+  const d = diagnoseConnection({
+    agent: { ...baseAgent, platform: 'linux', capabilities: { managed: 'docker' } },
+    live: { ...liveBase, session: { ip: '10.0.0.5', connectedAt: iso(7200 * 1000), disconnectedAt: iso(3600 * 1000), closeCode: 1006 } },
+    now: NOW,
+  });
+  assert.equal(d.state, 'unreachable');
+  assert.ok(d.hints.some((h) => /docker/.test(h)));
+  assert.ok(!d.hints.some((h) => /systemctl/.test(h)));
+});
+
+test('linux systemd remains the default when platform is absent', () => {
+  const d = diagnoseConnection({
+    agent: { ...baseAgent, platform: 'linux' },
+    live: { ...liveBase, session: { ip: '10.0.0.5', connectedAt: iso(7200 * 1000), disconnectedAt: iso(3600 * 1000), closeCode: 1006 } },
+    now: NOW,
+  });
+  assert.equal(d.state, 'unreachable');
+  assert.ok(d.hints.some((h) => /systemctl/.test(h)));
+});
+
 test('never-connected: no last_seen and no session', () => {
   const d = diagnoseConnection({
     agent: { id: 9, status: 'offline', last_seen: null },

@@ -89,6 +89,7 @@ const { createIntegrationAuditRepository } = require('./repositories/integration
 const { createCmdbConfigRepository } = require('./repositories/cmdbConfigRepository');
 const { createAgentCmdbLinksRepository } = require('./repositories/agentCmdbLinksRepository');
 const { createConnectorRegistry } = require('./integrations/connectors');
+const { createCmdbConnectorRegistry } = require('./cmdb/connectors');
 const { createIntegrationsDispatcher } = require('./integrations/dispatcher');
 const { createLdapConfigRepository } = require('./repositories/ldapConfigRepository');
 const { createLdapRoleMapRepository } = require('./repositories/ldapRoleMapRepository');
@@ -351,6 +352,10 @@ function start() {
   // connection test + asset search, and secretBox to encrypt credentials at rest.
   const cmdbConfigRepo = createCmdbConfigRepository(db);
   const agentCmdbLinksRepo = createAgentCmdbLinksRepository(db);
+  // CMDB's OWN connector registry (ServiceNow / Nautobot / custom) — separate from
+  // the integrations registry, since CMDB connectors read (testConnection/search)
+  // rather than push (send/events). "custom" is the bring-your-own-CMDB connector.
+  const cmdbConnectorRegistry = createCmdbConnectorRegistry({ fetchImpl: globalThis.fetch, logger });
 
   // External auth (LDAP/AD). OFF unless LDAP_AUTH_ENABLED=true, the licence covers
   // it (sso_ldap), AND an admin has stored + enabled a config row. Local JWT login
@@ -658,6 +663,7 @@ function start() {
     integrationAuditRepo,
     integrationsDispatcher,
     connectorRegistry,
+    cmdbConnectorRegistry,
     secretBox,
     cmdbConfigRepo,
     agentCmdbLinksRepo,

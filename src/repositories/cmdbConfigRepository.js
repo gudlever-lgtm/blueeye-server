@@ -1,13 +1,24 @@
 'use strict';
 
 // Columns safe to return to API clients — NEVER includes credentials_encrypted.
-const SAFE_COLUMNS = 'id, type, base_url, auth_type, enabled, verified_at, updated_by, created_at, updated_at';
+const SAFE_COLUMNS = 'id, type, base_url, auth_type, config_json, enabled, verified_at, updated_by, created_at, updated_at';
+
+// config_json is a JSON column (custom-connector settings). mysql2 usually returns
+// it parsed, but tolerate a string / bad JSON and always hand callers an object.
+function parseConfig(value) {
+  if (value === null || value === undefined) return {};
+  if (typeof value === 'string') {
+    try { return JSON.parse(value) || {}; } catch { return {}; }
+  }
+  return typeof value === 'object' ? value : {};
+}
 
 function mapRow(row) {
   if (!row) return null;
   return {
     ...row,
     enabled: row.enabled === 1 || row.enabled === true,
+    config_json: parseConfig(row.config_json),
   };
 }
 
@@ -40,9 +51,9 @@ function createCmdbConfigRepository(db) {
     const existing = await getWithSecret();
     if (!existing) {
       await pool.query(
-        `INSERT INTO cmdb_config (type, base_url, auth_type, credentials_encrypted, enabled, updated_by)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-        [patch.type, patch.baseUrl, patch.authType ?? 'none', patch.credentialsEncrypted ?? null, patch.enabled ? 1 : 0, patch.updatedBy ?? null]
+        `INSERT INTO cmdb_config (type, base_url, auth_type, config_json, credentials_encrypted, enabled, updated_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [patch.type, patch.baseUrl, patch.authType ?? 'none', JSON.stringify(patch.config || {}), patch.credentialsEncrypted ?? null, patch.enabled ? 1 : 0, patch.updatedBy ?? null]
       );
       return get();
     }
@@ -52,6 +63,7 @@ function createCmdbConfigRepository(db) {
     if (patch.type !== undefined) { fields.push('type = ?'); params.push(patch.type); }
     if (patch.baseUrl !== undefined) { fields.push('base_url = ?'); params.push(patch.baseUrl); }
     if (patch.authType !== undefined) { fields.push('auth_type = ?'); params.push(patch.authType); }
+    if (patch.config !== undefined) { fields.push('config_json = ?'); params.push(JSON.stringify(patch.config || {})); }
     if (patch.credentialsEncrypted !== undefined) { fields.push('credentials_encrypted = ?'); params.push(patch.credentialsEncrypted); }
     if (patch.enabled !== undefined) { fields.push('enabled = ?'); params.push(patch.enabled ? 1 : 0); }
     if (patch.updatedBy !== undefined) { fields.push('updated_by = ?'); params.push(patch.updatedBy); }

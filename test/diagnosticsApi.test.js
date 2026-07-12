@@ -11,7 +11,7 @@ const {
   makeApp, authHeader,
   makeIntegrationsRepo, makeIntegrationsDispatcher,
   makeSamlAuth, makeLdapConfigRepo, makeLdapAuth, makeAssistant,
-  makeCmdbConfigRepo, makeConnectorRegistry, makeSecretBox,
+  makeCmdbConfigRepo, makeCmdbConnectorRegistry, makeSecretBox,
 } = require('../test-support/fakes');
 
 const admin = () => authHeader('admin');
@@ -42,8 +42,8 @@ test('POST /api/diagnostics/run tests the CMDB via the connector (bad creds -> n
     id: 1, type: 'servicenow', base_url: 'https://cmdb.example', auth_type: 'basic',
     credentials_encrypted: box.encryptJson({ username: 'u', password: 'p' }), enabled: true, verified_at: null, updated_by: 1,
   } });
-  const connectorRegistry = makeConnectorRegistry({ fetchImpl: async () => ({ ok: false, status: 401, json: async () => ({}) }) });
-  const app = makeApp({ cmdbConfigRepo, connectorRegistry, secretBox: box });
+  const cmdbConnectorRegistry = makeCmdbConnectorRegistry({ fetchImpl: async () => ({ ok: false, status: 401, json: async () => ({}) }) });
+  const app = makeApp({ cmdbConfigRepo, cmdbConnectorRegistry, secretBox: box });
   const res = await request(app).post('/api/diagnostics/run').set('Authorization', admin()).send({ targets: ['cmdb'] });
   assert.equal(res.status, 200);
   const cmdb = res.body.targets.find((t) => t.id === 'cmdb');

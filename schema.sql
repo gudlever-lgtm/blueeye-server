@@ -761,9 +761,10 @@ CREATE TABLE IF NOT EXISTS ha_nodes (
 -- CMDB integration (single source of truth) — migration 051. See docs/cmdb.md.
 CREATE TABLE IF NOT EXISTS cmdb_config (
   id INT UNSIGNED NOT NULL AUTO_INCREMENT,
-  type ENUM('servicenow', 'nautobot') NOT NULL,
+  type ENUM('servicenow', 'nautobot', 'custom') NOT NULL,
   base_url VARCHAR(512) NOT NULL,
   auth_type VARCHAR(32) NOT NULL DEFAULT 'none',
+  config_json JSON NULL DEFAULT NULL,              -- custom connector settings (search path, field maps)
   credentials_encrypted TEXT NULL DEFAULT NULL,    -- secretBox token; never plaintext
   enabled TINYINT(1) NOT NULL DEFAULT 0,
   verified_at DATETIME NULL DEFAULT NULL,

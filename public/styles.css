@@ -1365,3 +1365,4 @@ li.guide-step.done .guide-step-title { text-decoration: line-through; opacity: 0
 }
 .cmdb-result:hover { border-color: var(--accent); background: var(--accent-weak); }
 .cmdb-result > span:first-child { font-weight: 600; }
+.cmdb-cfg-head { margin: 6px 0 2px; font-size: 0.9rem; color: var(--muted); grid-column: 1 / -1; }

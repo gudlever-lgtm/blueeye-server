@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS agent_cmdb_links (
   agent_id INT UNSIGNED NOT NULL,                  -- one link per agent
   cmdb_asset_id VARCHAR(255) NOT NULL,
   cmdb_asset_name VARCHAR(255) NOT NULL,
+  cmdb_asset_location VARCHAR(255) NULL DEFAULT NULL, -- asset's CMDB location label, captured at link time (informational; does NOT touch agents.location_id)
   linked_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   linked_by INT UNSIGNED NULL DEFAULT NULL,        -- user id who linked it
   PRIMARY KEY (agent_id),

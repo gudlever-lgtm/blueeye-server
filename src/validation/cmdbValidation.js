@@ -16,6 +16,7 @@ const CRED_KEY_RE = /^[\w.-]{1,64}$/;
 const CRED_VALUE_MAX = 2000;
 const ASSET_ID_MAX = 255;
 const ASSET_NAME_MAX = 255;
+const ASSET_LOCATION_MAX = 255;
 const SEARCH_MIN = 2;
 const SEARCH_MAX = 256;
 // Prototype-pollution vectors — rejected explicitly (they match CRED_KEY_RE).
@@ -101,7 +102,9 @@ function validateAssetSearch(rawQuery) {
   return { q };
 }
 
-// PUT /api/agents/:id/cmdb-link — both asset id and name are required strings.
+// PUT /api/agents/:id/cmdb-link — asset id + name are required strings;
+// cmdb_asset_location is OPTIONAL (an asset may have no location) and captured
+// as an informational label (never touches agents.location_id).
 function validateAgentLink(body) {
   const input = body && typeof body === 'object' && !Array.isArray(body) ? body : {};
   const errors = {};
@@ -116,6 +119,17 @@ function validateAgentLink(body) {
   if (typeof name !== 'string' || name.trim() === '') { errors.cmdb_asset_name = 'cmdb_asset_name is required'; }
   else if (name.length > ASSET_NAME_MAX) { errors.cmdb_asset_name = `cmdb_asset_name must be at most ${ASSET_NAME_MAX} characters`; }
   else value.cmdbAssetName = name.trim();
+
+  // Optional: absent/null → no location stored. A non-string is a bad request; an
+  // empty string normalises to null.
+  const loc = input.cmdb_asset_location;
+  if (loc !== undefined && loc !== null) {
+    if (typeof loc !== 'string') { errors.cmdb_asset_location = 'cmdb_asset_location must be a string'; }
+    else if (loc.length > ASSET_LOCATION_MAX) { errors.cmdb_asset_location = `cmdb_asset_location must be at most ${ASSET_LOCATION_MAX} characters`; }
+    else value.cmdbAssetLocation = loc.trim() === '' ? null : loc.trim();
+  } else {
+    value.cmdbAssetLocation = null;
+  }
 
   return Object.keys(errors).length > 0 ? { errors } : { value };
 }

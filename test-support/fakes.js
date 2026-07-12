@@ -1011,10 +1011,10 @@ function makeAgentCmdbLinksRepo(overrides = {}) {
   return {
     rows,
     get: overrides.get || (async (agentId) => rows.find((r) => r.agent_id === agentId) || null),
-    set: overrides.set || (async (agentId, { cmdbAssetId, cmdbAssetName, linkedBy = null }) => {
+    set: overrides.set || (async (agentId, { cmdbAssetId, cmdbAssetName, cmdbAssetLocation = null, linkedBy = null }) => {
       let r = rows.find((x) => x.agent_id === agentId);
-      if (r) { r.cmdb_asset_id = cmdbAssetId; r.cmdb_asset_name = cmdbAssetName; r.linked_by = linkedBy; }
-      else { r = { agent_id: agentId, cmdb_asset_id: cmdbAssetId, cmdb_asset_name: cmdbAssetName, linked_by: linkedBy, linked_at: '2026-01-01T00:00:00.000Z' }; rows.push(r); }
+      if (r) { r.cmdb_asset_id = cmdbAssetId; r.cmdb_asset_name = cmdbAssetName; r.cmdb_asset_location = cmdbAssetLocation; r.linked_by = linkedBy; }
+      else { r = { agent_id: agentId, cmdb_asset_id: cmdbAssetId, cmdb_asset_name: cmdbAssetName, cmdb_asset_location: cmdbAssetLocation, linked_by: linkedBy, linked_at: '2026-01-01T00:00:00.000Z' }; rows.push(r); }
       return { ...r };
     }),
     remove: overrides.remove || (async (agentId) => { const i = rows.findIndex((x) => x.agent_id === agentId); if (i < 0) return false; rows.splice(i, 1); return true; }),

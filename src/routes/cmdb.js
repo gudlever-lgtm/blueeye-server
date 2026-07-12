@@ -150,6 +150,7 @@ function createAgentCmdbLinkRouter({ agentCmdbLinksRepo, agentsRepo }) {
 
     const link = await agentCmdbLinksRepo.set(id, {
       cmdbAssetId: value.cmdbAssetId, cmdbAssetName: value.cmdbAssetName,
+      cmdbAssetLocation: value.cmdbAssetLocation,
       linkedBy: (req.user && req.user.id) || null,
     });
     res.json(link);

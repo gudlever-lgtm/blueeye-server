@@ -8,22 +8,25 @@ function createAgentCmdbLinksRepository(db) {
 
   async function get(agentId) {
     const [rows] = await pool.query(
-      'SELECT agent_id, cmdb_asset_id, cmdb_asset_name, linked_at, linked_by FROM agent_cmdb_links WHERE agent_id = ?',
+      'SELECT agent_id, cmdb_asset_id, cmdb_asset_name, cmdb_asset_location, linked_at, linked_by FROM agent_cmdb_links WHERE agent_id = ?',
       [agentId]
     );
     return rows[0] ?? null;
   }
 
   // Upsert the single link for an agent (a re-link overwrites the previous asset).
-  async function set(agentId, { cmdbAssetId, cmdbAssetName, linkedBy = null }) {
+  // cmdbAssetLocation is the asset's CMDB location label (nullable — an asset may
+  // have none); it is informational only and never touches agents.location_id.
+  async function set(agentId, { cmdbAssetId, cmdbAssetName, cmdbAssetLocation = null, linkedBy = null }) {
     await pool.query(
-      `INSERT INTO agent_cmdb_links (agent_id, cmdb_asset_id, cmdb_asset_name, linked_by)
-       VALUES (?, ?, ?, ?)
+      `INSERT INTO agent_cmdb_links (agent_id, cmdb_asset_id, cmdb_asset_name, cmdb_asset_location, linked_by)
+       VALUES (?, ?, ?, ?, ?)
        ON DUPLICATE KEY UPDATE cmdb_asset_id = VALUES(cmdb_asset_id),
                                cmdb_asset_name = VALUES(cmdb_asset_name),
+                               cmdb_asset_location = VALUES(cmdb_asset_location),
                                linked_by = VALUES(linked_by),
                                linked_at = CURRENT_TIMESTAMP`,
-      [agentId, cmdbAssetId, cmdbAssetName, linkedBy]
+      [agentId, cmdbAssetId, cmdbAssetName, cmdbAssetLocation, linkedBy]
     );
     return get(agentId);
   }

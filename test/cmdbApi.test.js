@@ -233,6 +233,32 @@ test('PUT link -> 200 and stores the link', async () => {
   assert.equal(agentCmdbLinksRepo.rows[0].agent_id, 5);
 });
 
+test('PUT link captures the CMDB asset location as an informational label', async () => {
+  const agentCmdbLinksRepo = makeAgentCmdbLinksRepo();
+  const app = makeApp({ agentsRepo: agentExists(), agentCmdbLinksRepo });
+  const res = await request(app).put('/api/agents/5/cmdb-link').set('Authorization', operator())
+    .send({ ...LINK, cmdb_asset_location: 'Copenhagen DC' });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.cmdb_asset_location, 'Copenhagen DC');
+  assert.equal(agentCmdbLinksRepo.rows[0].cmdb_asset_location, 'Copenhagen DC');
+});
+
+test('PUT link without a location -> 200 and stores null (location is optional)', async () => {
+  const agentCmdbLinksRepo = makeAgentCmdbLinksRepo();
+  const app = makeApp({ agentsRepo: agentExists(), agentCmdbLinksRepo });
+  const res = await request(app).put('/api/agents/5/cmdb-link').set('Authorization', operator()).send(LINK);
+  assert.equal(res.status, 200);
+  assert.equal(res.body.cmdb_asset_location, null);
+});
+
+test('PUT link with a non-string location -> 400', async () => {
+  const app = makeApp({ agentsRepo: agentExists() });
+  const res = await request(app).put('/api/agents/5/cmdb-link').set('Authorization', operator())
+    .send({ ...LINK, cmdb_asset_location: 42 });
+  assert.equal(res.status, 400);
+  assert.ok(res.body.details.cmdb_asset_location);
+});
+
 test('DELETE link with no existing link -> 404', async () => {
   const res = await request(makeApp()).delete('/api/agents/5/cmdb-link').set('Authorization', operator());
   assert.equal(res.status, 404);

@@ -155,6 +155,15 @@ test('GET /enroll/:code/install.sh 500s when the lookup throws', async () => {
   assert.equal(res.status, 500);
 });
 
+// ---- GET /enroll/uninstall.ps1 (Windows) -----------------------------------
+test('GET /enroll/uninstall.ps1 serves a PowerShell uninstaller (200), not a bash one', async () => {
+  const res = await request(makeApp()).get('/enroll/uninstall.ps1');
+  assert.equal(res.status, 200);
+  assert.match(res.headers['content-type'], /text\/plain/);
+  assert.match(res.text, /Unregister-ScheduledTask/);
+  assert.ok(!/curl -sSL/.test(res.text) && !/\| sudo sh/.test(res.text));
+});
+
 // ---- GET /enroll/:code/install.ps1 (Windows) -------------------------------
 test('GET /enroll/:code/install.ps1 returns a PowerShell script for an active code (200)', async () => {
   const store = makeSourceStore({ sha256: 's'.repeat(64) });

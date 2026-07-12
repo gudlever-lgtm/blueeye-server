@@ -4,7 +4,7 @@ const fs = require('fs');
 const express = require('express');
 const { asyncHandler } = require('../middleware/asyncHandler');
 const { renderInstallScript } = require('../enroll/installScript');
-const { renderInstallPs1 } = require('../enroll/installScriptWin');
+const { renderInstallPs1, renderUninstallPs1 } = require('../enroll/installScriptWin');
 
 // Only allow a sane host[:port] when deriving the server URL from the request,
 // so a forged Host header can't be reflected into the install script.
@@ -220,6 +220,14 @@ function createEnrollRouter({ artifactStore, sourceStore, binaryStore, releaseSt
     });
     res.status(200).type('text/plain; charset=utf-8').send(script);
   }));
+
+  // The Windows uninstaller (PowerShell) — the analogue of uninstall.sh, so a
+  // Windows host removes the agent with
+  //   irm <server>/enroll/uninstall.ps1 | iex
+  // rather than a bash `curl … | sudo sh`. No code needed; static + best-effort.
+  router.get('/uninstall.ps1', (req, res) => {
+    res.status(200).type('text/plain; charset=utf-8').send(renderUninstallPs1());
+  });
 
   return router;
 }

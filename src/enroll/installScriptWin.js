@@ -178,9 +178,19 @@ try {
   Info "installing dependencies (npm) for v$version ..."
   Push-Location $InstallDir
   try {
-    & npm ci --omit=dev 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) { & npm install --omit=dev 2>&1 | Out-Null }
-    if ($LASTEXITCODE -ne 0) { Fail 'dependency install failed (npm)' }
+    # Run npm via cmd.exe with cmd's own 2>&1 merge. npm writes notices/warnings to
+    # stderr, and on Windows npm resolves to the npm.ps1 shim: piping its stderr
+    # back into PowerShell (2>&1) under $ErrorActionPreference='Stop' turns the very
+    # first npm-notice line into a terminating NativeCommandError even on success.
+    # Letting cmd merge the streams means PowerShell only sees stdout — no phantom
+    # error — and we judge success by the real process exit code.
+    $npmOut = & cmd /c 'npm ci --omit=dev 2>&1'
+    if ($LASTEXITCODE -ne 0) { $npmOut = & cmd /c 'npm install --omit=dev 2>&1' }
+    if ($LASTEXITCODE -ne 0) {
+      Info 'npm failed — last lines of its output:'
+      $npmOut | Select-Object -Last 25 | ForEach-Object { Write-Host "  $_" }
+      Fail 'dependency install failed (npm) — see the npm output above'
+    }
   } finally { Pop-Location }
 
   # Enroll once — idempotent: the agent skips enrollment when a token already

@@ -154,10 +154,16 @@ function createSettingsRouter({ settingsService, featureGate, dispatcher, analys
     }
   }));
 
-  // PUT /api/settings/agents — agent-management toggles (currently the
-  // auto-install-tools opt-in). { autoInstallTools: bool }.
+  // PUT /api/settings/agents — agent-management settings: the auto-install-tools
+  // opt-in plus the default traffic source stamped on newly enrolled agents.
+  // { autoInstallTools: bool, defaultTrafficSource: 'proc'|'netflow'|'sflow', defaultSflowHsflowd: bool }.
   router.put('/agents', ...admin, asyncHandler(async (req, res) => {
-    res.json({ agents: await settingsService.setAgents(req.body || {}) });
+    try {
+      res.json({ agents: await settingsService.setAgents(req.body || {}) });
+    } catch (err) {
+      if (err.statusCode === 400) return res.status(400).json({ error: 'Validation failed', details: err.details || {} });
+      throw err;
+    }
   }));
 
   // PUT /api/settings/flow-categories — replace the traffic-type category list

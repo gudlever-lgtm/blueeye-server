@@ -5,6 +5,12 @@ const { baseUrlBlockedReason } = require('../integrations/ssrfGuard');
 const {
   isProviderId, resolveBaseUrl, defaultModel, inferProvider, listProvidersSafe,
 } = require('../analysis/assistantProviders');
+const { MONITOR_SOURCES } = require('../validation/agentValidation');
+
+// Traffic sources that make sense as a fleet-wide default. SNMP is excluded: it
+// needs a per-device host, so it can only be configured per agent, never as a
+// blanket default.
+const DEFAULT_SOURCE_CHOICES = MONITOR_SOURCES.filter((s) => s !== 'snmp');
 
 // Parses a list of integers, keeping only unique values within [min, max].
 // Returns null if the result is empty or the cap is exceeded.
@@ -432,27 +438,63 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
   // auto-push an install-tool command to that agent. OFF by default — installing
   // software on customer machines should be a deliberate opt-in. The agent still
   // enforces its own allowlist, so this can only ever install known tools.
-  const AGENTS_DEFAULTS = { autoInstallTools: false };
+  //
+  // `defaultTrafficSource` / `defaultSflowHsflowd`: the traffic source stamped
+  // onto each agent when it enrolls (its monitor_config), so a fleet can be
+  // brought up on e.g. sFlow without editing every agent by hand. `proc` (the
+  // built-in default) leaves the agent unstamped; per-agent Edit always wins.
+  // `defaultSflowHsflowd` only applies to an sFlow default: it self-provisions
+  // the agent's local hsflowd exporter so sFlow collects out of the box.
+  const AGENTS_DEFAULTS = { autoInstallTools: false, defaultTrafficSource: 'proc', defaultSflowHsflowd: false };
 
   function validateAgents(patch) {
     const p = patch && typeof patch === 'object' ? patch : {};
+    const errors = {};
     const value = {};
     bool(p, 'autoInstallTools', value);
-    return { errors: null, value };
+    if (p.defaultTrafficSource !== undefined) {
+      const s = String(p.defaultTrafficSource);
+      if (!DEFAULT_SOURCE_CHOICES.includes(s)) {
+        errors.defaultTrafficSource = `defaultTrafficSource must be one of: ${DEFAULT_SOURCE_CHOICES.join(', ')}`;
+      } else {
+        value.defaultTrafficSource = s;
+      }
+    }
+    bool(p, 'defaultSflowHsflowd', value);
+    return { errors: Object.keys(errors).length ? errors : null, value };
   }
 
   async function getAgents() {
     const override = await loadOverride('agents');
     const o = override && typeof override === 'object' ? override : {};
     const base = { ...AGENTS_DEFAULTS, ...o };
-    return { autoInstallTools: !!base.autoInstallTools };
+    const src = DEFAULT_SOURCE_CHOICES.includes(base.defaultTrafficSource) ? base.defaultTrafficSource : 'proc';
+    return {
+      autoInstallTools: !!base.autoInstallTools,
+      defaultTrafficSource: src,
+      defaultSflowHsflowd: !!base.defaultSflowHsflowd,
+    };
   }
 
   async function setAgents(patch) {
-    const { value } = validateAgents(patch || {});
+    const { errors, value } = validateAgents(patch || {});
+    if (errors) throw badRequest('invalid agent settings', errors);
     const merged = { ...(await getAgents()), ...value };
     await settingsRepo.set('agents', merged);
     return merged;
+  }
+
+  // Builds the monitor_config a newly enrolled agent should start with, from the
+  // Settings → Agents default. Returns null for the plain `proc` default (so the
+  // agent row stays unstamped and the /me/config `proc` fallback applies), or a
+  // validated monitor_config object otherwise. Per-agent Edit always overrides it.
+  async function getDefaultMonitorConfig() {
+    const a = await getAgents();
+    if (a.defaultTrafficSource === 'sflow') {
+      return a.defaultSflowHsflowd ? { source: 'sflow', sflow: { hsflowd: true } } : { source: 'sflow' };
+    }
+    if (a.defaultTrafficSource === 'netflow') return { source: 'netflow' };
+    return null; // proc (or anything unrecognised) → leave unstamped
   }
 
   // ---- AI assistant (Settings → AI assistant) -----------------------------
@@ -865,7 +907,7 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
     getAnalysis, setAnalysis, validateAnalysis,
     getRetention, setRetention, validateRetention,
     getThroughput, setThroughput, validateThroughput,
-    getAgents, setAgents, validateAgents,
+    getAgents, setAgents, validateAgents, getDefaultMonitorConfig,
     getAssistant, getAssistantSafe, setAssistant, validateAssistant,
     getAlerting, getAlertingSafe, setAlerting, validateAlerting,
     applyStoredOverrides,

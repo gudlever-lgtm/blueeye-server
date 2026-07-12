@@ -255,4 +255,4 @@ function validateAgentManagedInput(body) {
   return Object.keys(errors).length > 0 ? { errors } : { value };
 }
 
-module.exports = { validateAgentManagedInput, validateMonitorConfig, validateCapabilities, MAX_INTERVAL_MS };
+module.exports = { validateAgentManagedInput, validateMonitorConfig, validateCapabilities, MAX_INTERVAL_MS, MONITOR_SOURCES };

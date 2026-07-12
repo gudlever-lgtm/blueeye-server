@@ -32,7 +32,7 @@ function createEnrollmentStore(db) {
   //   { status: 'expired' }               — past its expiry
   //   { status: 'ok', agentId: <number> } — enrolled
   // Throws only on unexpected database errors.
-  async function claimAndEnroll({ code, hostname, platform, arch, tokenHash }) {
+  async function claimAndEnroll({ code, hostname, platform, arch, tokenHash, monitorConfig = null }) {
     const conn = await pool.getConnection();
     try {
       await conn.beginTransaction();
@@ -50,10 +50,14 @@ function createEnrollmentStore(db) {
         return { status: decision.status };
       }
 
+      // monitor_config: the fleet-wide default traffic source (Settings → Agents),
+      // if any, stamped at enrollment so the agent's first /me/config already
+      // reflects it. null leaves the agent on the `proc` fallback. Per-agent Edit
+      // overrides it later.
       const [agentResult] = await conn.query(
-        `INSERT INTO agents (hostname, platform, arch, location_id, enrollment_code_id)
-         VALUES (?, ?, ?, ?, ?)`,
-        [hostname, platform, arch, row.location_id, row.id]
+        `INSERT INTO agents (hostname, platform, arch, location_id, enrollment_code_id, monitor_config)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [hostname, platform, arch, row.location_id, row.id, monitorConfig == null ? null : JSON.stringify(monitorConfig)]
       );
       const agentId = agentResult.insertId;
 

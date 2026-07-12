@@ -95,3 +95,42 @@ test('GET /api/settings includes throughput defaults (disabled)', async () => {
   const res = await request(makeApp()).get('/api/settings').set('Authorization', admin());
   assert.ok(res.body.throughput && res.body.throughput.enabled === false);
 });
+
+// ---- PUT /api/settings/agents (default traffic source for new agents) ------
+test('GET /api/settings includes agent defaults (proc, hsflowd off)', async () => {
+  const res = await request(makeApp()).get('/api/settings').set('Authorization', admin());
+  assert.ok(res.body.agents);
+  assert.equal(res.body.agents.defaultTrafficSource, 'proc');
+  assert.equal(res.body.agents.defaultSflowHsflowd, false);
+});
+
+test('PUT /api/settings/agents saves the default traffic source and GET reflects it (admin)', async () => {
+  const app = makeApp();
+  const put = await request(app).put('/api/settings/agents').set('Authorization', admin())
+    .send({ defaultTrafficSource: 'sflow', defaultSflowHsflowd: true });
+  assert.equal(put.status, 200);
+  assert.equal(put.body.agents.defaultTrafficSource, 'sflow');
+  assert.equal(put.body.agents.defaultSflowHsflowd, true);
+  const get = await request(app).get('/api/settings').set('Authorization', admin());
+  assert.equal(get.body.agents.defaultTrafficSource, 'sflow');
+  assert.equal(get.body.agents.defaultSflowHsflowd, true);
+});
+
+test('PUT /api/settings/agents rejects an unknown source with 400 + details', async () => {
+  const res = await request(makeApp()).put('/api/settings/agents').set('Authorization', admin())
+    .send({ defaultTrafficSource: 'wireshark' });
+  assert.equal(res.status, 400);
+  assert.ok(res.body.details && res.body.details.defaultTrafficSource);
+});
+
+test('PUT /api/settings/agents rejects snmp as a fleet-wide default (400)', async () => {
+  const res = await request(makeApp()).put('/api/settings/agents').set('Authorization', admin())
+    .send({ defaultTrafficSource: 'snmp' });
+  assert.equal(res.status, 400);
+});
+
+test('PUT /api/settings/agents is admin-only (viewer 403)', async () => {
+  const res = await request(makeApp()).put('/api/settings/agents').set('Authorization', viewer())
+    .send({ defaultTrafficSource: 'netflow' });
+  assert.equal(res.status, 403);
+});

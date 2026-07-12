@@ -5505,9 +5505,19 @@ async function loadAgentCmdbLink(id, host) {
     catch (e) { toast(errText(e), true); }
   }
 
-  async function linkTo(a) {
+  async function linkTo(a, overwrite) {
     try {
-      const res = await api(`/api/agents/${id}/cmdb-link`, { method: 'PUT', body: { cmdb_asset_id: a.id, cmdb_asset_name: a.name, cmdb_asset_location: a.location || null } });
+      const body = { cmdb_asset_id: a.id, cmdb_asset_name: a.name, cmdb_asset_location: a.location || null };
+      if (overwrite) body.overwrite_location = true;
+      const res = await api(`/api/agents/${id}/cmdb-link`, { method: 'PUT', body });
+      // The agent already has a (manual) site that differs — suggest, don't clobber.
+      if (res && res.location_suggestion && !overwrite) {
+        const s = res.location_suggestion;
+        const ok = confirm(`This agent is already assigned to site “${s.current.name || s.current.id}”.\nThe CMDB asset is in “${s.proposed.name}”.\n\nOverwrite the agent’s site with the CMDB location?`);
+        if (ok) return linkTo(a, true);
+        toast('Asset linked · existing site kept');
+        return render();
+      }
       toast(res && res.synced_location ? `Asset linked · site set to ${res.synced_location.name}` : 'Asset linked');
       render();
     } catch (e) { toast(errText(e), true); }

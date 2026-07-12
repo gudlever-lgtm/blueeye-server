@@ -58,13 +58,23 @@ Agent link — read **viewer+**, write **operator+** (`createAgentCmdbLinkRouter
 
 ### Location sync
 
-When a linked asset carries a location, the PUT resolves it to a BlueEye
-`locations` row — **matching by name (case‑insensitive), creating one if absent**
-— and sets `agents.location_id`. Two agents whose assets share a location converge
-on one site. The created location has no coordinates, so it won't plot on the map
-until an admin adds them. The sync is best‑effort: a location failure never fails
-the link. (`agentsRepository.setLocation` touches only `location_id`, leaving other
-managed fields intact.)
+When a linked asset carries a location, the PUT reconciles the agent's BlueEye
+site with it, matching a `locations` row **by name (case‑insensitive)**:
+
+- **Agent has no site** → auto‑sync: match the location (or **create** it, name
+  only, no coordinates) and set `agents.location_id`. The response carries
+  `synced_location`.
+- **Agent already sits on the matching site** → no‑op (already correct).
+- **Agent already has a *different* (manual) site** → **do not overwrite.** The
+  response carries `location_suggestion { current, proposed }` and the site is left
+  as‑is. The dashboard shows a confirm; on **Overwrite** it re‑links with
+  `overwrite_location: true`, which applies the match‑or‑create and sets the site.
+
+Two agents whose assets share a location converge on one site. A created site has
+no coordinates, so it won't plot on the map until an admin adds them. The reconcile
+is best‑effort: a location failure never fails the link.
+(`agentsRepository.setLocation` touches only `location_id`, leaving other managed
+fields intact.)
 
 ## Test area
 

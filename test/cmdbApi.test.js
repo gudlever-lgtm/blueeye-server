@@ -289,6 +289,57 @@ test('PUT link with a location creates a new BlueEye site when none matches', as
   assert.deepEqual(setCalls, [{ id: 5, locationId: 42 }]);
 });
 
+test('PUT link SUGGESTS (does not overwrite) when the agent already has a differing manual site', async () => {
+  const setCalls = [];
+  const agentsRepo = makeAgentsRepo({
+    findById: async (id) => ({ id, hostname: 'web01', location_id: 3, location_name: 'Manual Site' }),
+    setLocation: async (id, locationId) => { setCalls.push({ id, locationId }); return { id }; },
+  });
+  const locationsRepo = makeLocationsRepo({
+    findByName: async () => ({ id: 7, name: 'Copenhagen DC' }),
+    create: async () => { throw new Error('should not create on a mere suggestion'); },
+  });
+  const app = makeApp({ agentsRepo, locationsRepo });
+  const res = await request(app).put('/api/agents/5/cmdb-link').set('Authorization', operator())
+    .send({ ...LINK, cmdb_asset_location: 'Copenhagen DC' });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.synced_location, null);
+  assert.deepEqual(res.body.location_suggestion, { current: { id: 3, name: 'Manual Site' }, proposed: { id: 7, name: 'Copenhagen DC' } });
+  assert.equal(setCalls.length, 0); // the manual site was NOT overwritten
+});
+
+test('PUT link with overwrite_location applies the overwrite', async () => {
+  const setCalls = [];
+  const agentsRepo = makeAgentsRepo({
+    findById: async (id) => ({ id, hostname: 'web01', location_id: 3, location_name: 'Manual Site' }),
+    setLocation: async (id, locationId) => { setCalls.push({ id, locationId }); return { id }; },
+  });
+  const locationsRepo = makeLocationsRepo({ findByName: async () => ({ id: 7, name: 'Copenhagen DC' }) });
+  const app = makeApp({ agentsRepo, locationsRepo });
+  const res = await request(app).put('/api/agents/5/cmdb-link').set('Authorization', operator())
+    .send({ ...LINK, cmdb_asset_location: 'Copenhagen DC', overwrite_location: true });
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body.synced_location, { id: 7, name: 'Copenhagen DC' });
+  assert.equal(res.body.location_suggestion, null);
+  assert.deepEqual(setCalls, [{ id: 5, locationId: 7 }]);
+});
+
+test('PUT link is a no-op sync when the agent already sits on the matching site', async () => {
+  const setCalls = [];
+  const agentsRepo = makeAgentsRepo({
+    findById: async (id) => ({ id, hostname: 'web01', location_id: 7, location_name: 'Copenhagen DC' }),
+    setLocation: async (id, locationId) => { setCalls.push({ id, locationId }); return { id }; },
+  });
+  const locationsRepo = makeLocationsRepo({ findByName: async () => ({ id: 7, name: 'Copenhagen DC' }) });
+  const app = makeApp({ agentsRepo, locationsRepo });
+  const res = await request(app).put('/api/agents/5/cmdb-link').set('Authorization', operator())
+    .send({ ...LINK, cmdb_asset_location: 'Copenhagen DC' });
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body.synced_location, { id: 7, name: 'Copenhagen DC' });
+  assert.equal(res.body.location_suggestion, null);
+  assert.equal(setCalls.length, 0); // already correct — nothing written
+});
+
 test('PUT link without a location does not sync location_id', async () => {
   const setCalls = [];
   const agentsRepo = makeAgentsRepo({

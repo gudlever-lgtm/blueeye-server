@@ -131,6 +131,9 @@ function validateAgentLink(body) {
     value.cmdbAssetLocation = null;
   }
 
+  // Optional: confirm overwriting an existing (manual) site with the CMDB location.
+  value.overwriteLocation = input.overwrite_location === true || input.overwrite_location === 'true';
+
   return Object.keys(errors).length > 0 ? { errors } : { value };
 }
 

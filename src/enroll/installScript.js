@@ -89,7 +89,11 @@ pick_sha_tool() {
 }
 
 # Returns the arch slug that matches this host, or empty on unsupported arch.
+# The pre-built binaries are Linux-only, so a non-Linux kernel (e.g. macOS, whose
+# uname -m is also x86_64/arm64) must NOT match one — it would download a Linux
+# executable and fail to run. macOS/other kernels fall through to node/docker.
 pick_binary_arch() {
+  [ "$(uname -s)" = "Linux" ] || { printf ''; return 0; }
   case "$(uname -m)" in
     x86_64|amd64)  printf '%s' "linux-x64"  ;;
     aarch64|arm64) printf '%s' "linux-arm64" ;;
@@ -99,11 +103,25 @@ pick_binary_arch() {
 
 # Returns the embedded binary SHA-256 for this host's arch, or empty.
 pick_binary_sha() {
+  [ "$(uname -s)" = "Linux" ] || { printf ''; return 0; }
   case "$(uname -m)" in
     x86_64|amd64)  printf '%s' "$BINARY_SHA_LINUX_X64"  ;;
     aarch64|arm64) printf '%s' "$BINARY_SHA_LINUX_ARM64" ;;
     *)             printf ''                              ;;
   esac
+}
+
+# Point the \`current\` symlink at $1 (a release dir). On Linux we stage the new
+# link then rename it over the old one — an atomic replace (mv -T needs GNU mv).
+# BSD/macOS mv has no -T (and would move INTO the target dir), so there we replace
+# the symlink directly; still effectively instantaneous for a symlink swap.
+point_current() {
+  DEST_LINK="$1"
+  if [ "$(uname -s)" = "Darwin" ]; then
+    rm -f "$CURRENT" && ln -sfn "$DEST_LINK" "$CURRENT" || fail "could not point current -> $DEST_LINK"
+  else
+    ln -sfn "$DEST_LINK" "$CURRENT.next" && mv -T "$CURRENT.next" "$CURRENT" || fail "could not point current -> $DEST_LINK"
+  fi
 }
 
 main() {
@@ -209,7 +227,7 @@ install_binary() {
     "$DEST/blueeye-agent" enroll --code "$ENROLL_CODE" --server "$SERVER_URL" $FP_ARG \\
     || fail "enrollment failed"
 
-  ln -sfn "$DEST" "$CURRENT.next" && mv -T "$CURRENT.next" "$CURRENT" || fail "could not point current -> $DEST"
+  point_current "$DEST"
 
   install_service "$CURRENT/blueeye-agent" binary
   log "done — agent v\${AGENT_VERSION:-?} enrolled and running (binary)"
@@ -297,7 +315,7 @@ install_node() {
 
   # Atomic blue/green: point \`current\` at the new release (rename over a symlink
   # is atomic on POSIX), so a later signed update swaps releases the same way.
-  ln -sfn "$DEST" "$CURRENT.next" && mv -T "$CURRENT.next" "$CURRENT" || fail "could not point current -> $DEST"
+  point_current "$DEST"
 
   # Fetch the release trust anchor (Ed25519 public key) from the server so SIGNED
   # self-updates verify automatically — no manual key provisioning. Not secret;
@@ -317,6 +335,57 @@ install_node() {
   log "done — agent v$VERSION enrolled and running (node + systemd)"
 }
 
+# install_launchd EXEC_START RUNTIME_TAG
+# macOS service install: writes a LaunchDaemon plist that runs the agent from the
+# \`current\` symlink and reloads it. Env mirrors the systemd unit so token/config/
+# logs live outside the swappable release dir. Label: com.blueeye.agent.
+install_launchd() {
+  EXEC_START="$1"
+  RUNTIME_TAG="\${2:-launchd}"
+  LABEL="com.blueeye.agent"
+  PLIST="/Library/LaunchDaemons/$LABEL.plist"
+
+  {
+    printf '%s\\n' '<?xml version="1.0" encoding="UTF-8"?>'
+    printf '%s\\n' '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">'
+    printf '%s\\n' '<plist version="1.0"><dict>'
+    printf '  <key>Label</key><string>%s</string>\\n' "$LABEL"
+    printf '%s\\n' '  <key>ProgramArguments</key><array>'
+    # EXEC_START is a space-joined command (e.g. "/usr/local/bin/node /opt/.../src/index.js");
+    # the install paths we control have no spaces, so word-splitting is safe here.
+    # shellcheck disable=SC2086
+    for arg in $EXEC_START; do printf '    <string>%s</string>\\n' "$arg"; done
+    printf '%s\\n' '  </array>'
+    printf '  <key>WorkingDirectory</key><string>%s</string>\\n' "$CURRENT"
+    printf '%s\\n' '  <key>EnvironmentVariables</key><dict>'
+    printf '    <key>BLUEEYE_SERVER_URL</key><string>%s</string>\\n' "$SERVER_URL"
+    printf '    <key>BLUEEYE_SERVER_CERT_FINGERPRINT</key><string>%s</string>\\n' "$CERT_FINGERPRINT"
+    printf '    <key>BLUEEYE_TOKEN_PATH</key><string>%s</string>\\n' "$TOKEN_PATH"
+    printf '    <key>BLUEEYE_AGENT_CONFIG</key><string>%s</string>\\n' "$CONFIG_PATH"
+    printf '    <key>BLUEEYE_ACTION_LOG</key><string>%s</string>\\n' "$LOG_DIR/actions.log"
+    printf '    <key>BLUEEYE_RELEASES_DIR</key><string>%s</string>\\n' "$RELEASES"
+    printf '    <key>BLUEEYE_CURRENT_LINK</key><string>%s</string>\\n' "$CURRENT"
+    printf '    <key>BLUEEYE_RUNTIME</key><string>%s</string>\\n' "$RUNTIME_TAG"
+    printf '    <key>BLUEEYE_SERVICE_NAME</key><string>%s</string>\\n' "$SERVICE_NAME"
+    printf '%s\\n' '  </dict>'
+    printf '%s\\n' '  <key>RunAtLoad</key><true/>'
+    printf '%s\\n' '  <key>KeepAlive</key><true/>'
+    printf '  <key>StandardOutPath</key><string>%s</string>\\n' "$LOG_DIR/agent.log"
+    printf '  <key>StandardErrorPath</key><string>%s</string>\\n' "$LOG_DIR/agent.err.log"
+    printf '%s\\n' '</dict></plist>'
+  } > "$PLIST" || fail "could not write $PLIST"
+
+  # Reload: bootout the old daemon (ignored if not loaded) then bootstrap the new
+  # one. Fall back to legacy load/unload on older macOS without bootstrap.
+  if launchctl bootstrap system "$PLIST" 2>/dev/null; then
+    launchctl kickstart -k "system/$LABEL" 2>/dev/null || true
+  else
+    launchctl unload "$PLIST" 2>/dev/null || true
+    launchctl load -w "$PLIST" || fail "launchctl load failed"
+  fi
+  log "launchd daemon $LABEL loaded (starts at boot; manage with: sudo launchctl print system/$LABEL)"
+}
+
 # install_service EXEC_START RUNTIME_TAG
 # Installs (or reinstalls) the systemd unit that runs the agent.
 # EXEC_START — the full ExecStart value (e.g. "/opt/.../blueeye-agent" or "node .../src/index.js")
@@ -324,6 +393,14 @@ install_node() {
 install_service() {
   EXEC_START="$1"
   RUNTIME_TAG="\${2:-systemd}"
+
+  # macOS: run under launchd as a LaunchDaemon (starts at boot, KeepAlive restarts
+  # on exit) — the platform-native equivalent of the systemd unit. Label matches
+  # the server's connection-diagnosis hints (system/com.blueeye.agent).
+  if [ "$(uname -s)" = "Darwin" ]; then
+    install_launchd "$EXEC_START" "$RUNTIME_TAG"
+    return $?
+  fi
 
   if ! command -v systemctl >/dev/null 2>&1; then
     log "systemd not found — start the agent manually:"

@@ -7249,13 +7249,22 @@ function renderEnrollResult(host, data, cfg, regen) {
   const usesText = data.maxUses > 1 ? ` · bulk: ${data.usesRemaining}/${data.maxUses} machines` : '';
   const meta = el('p', { class: 'muted small' }, `Code ${data.code} · expires ${fmtDate(data.expiresAt)}${usesText}`);
 
+  // Per-OS run note: Windows needs an elevated PowerShell (curl|sh won't run);
+  // Linux/macOS need root for the system service. The Ansible helper only fits
+  // the Linux shell installer, so it's hidden for Windows/macOS.
+  const os = data.os || 'linux';
+  const runNote = os === 'windows'
+    ? el('p', { class: 'muted small' }, 'Run this in an ', el('strong', {}, 'elevated PowerShell (Administrator)'), ' on the Windows host. It installs the agent as a scheduled task that starts at boot.')
+    : el('p', { class: 'muted small' }, 'Run on the target host; the installer needs root for the system service (', el('span', { class: 'mono' }, 'sudo'), ' — it will tell you if so).');
+
   host.replaceChildren(
     live,
     el('div', { class: 'enroll-cmd-row' }, cmdPre, copyBtn),
+    runNote,
     el('div', { class: 'form-actions' }, manualToggle, regenBtn),
     manual,
     meta,
-    enrollAnsibleBlock(oneLiner));
+    os === 'linux' ? enrollAnsibleBlock(oneLiner) : null);
 }
 
 // Copy-paste Ansible task running the same one-liner. `creates:` makes it

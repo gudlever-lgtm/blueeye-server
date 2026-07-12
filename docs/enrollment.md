@@ -73,7 +73,8 @@ Routes (admin): `GET/POST/DELETE /api/settings/agent-release-key` — status / g
 | `GET /enroll/agent-source.tgz` | none | the agent **source bundle** (+ `X-Content-SHA256`); 404 if `AGENT_SOURCE_DIR` is unset/empty |
 | `GET /enroll/agent-release-key` | none | the release trust anchor (PEM) the agent pins to verify **signed self-updates**; 404 if no key is configured |
 | `GET /enroll/agent/:platform` | none | *legacy/optional* pre-built binary, only if one was dropped in the artifacts dir; 404 otherwise |
-| `GET /enroll/:code/install.sh` | none | the self-contained installer for that code; 404 if unknown/expired/exhausted |
+| `GET /enroll/:code/install.sh` | none | the self-contained installer for that code (Linux + macOS); 404 if unknown/expired/exhausted |
+| `GET /enroll/:code/install.ps1` | none | the self-contained **PowerShell** installer for that code (Windows); 404 if unknown/expired/exhausted |
 | `GET /enroll/uninstall.sh` | none | the agent uninstaller — `curl … \| sudo sh` removes the agent from a host (warns + confirms first); 404 if no agent source is configured |
 | `GET /api/enroll/command` | operator+ | builds the one-liner + manual/checksum variants (mints or reuses a code) |
 
@@ -92,6 +93,26 @@ Routes (admin): `GET/POST/DELETE /api/settings/agent-release-key` — status / g
 
 `serverUrl` comes from `BLUEEYE_PUBLIC_URL` (recommended behind a proxy) or is
 derived from the request; `checksum` is the server's cached hash of the bundle.
+An `os` field (`linux` | `macos` | `windows`) is derived from the requested
+`platform` so the dashboard can label the command.
+
+### Per-OS install commands
+
+The one-liner is tailored to the selected platform, because Windows PowerShell
+cannot run `curl -sSL … | sh` (`curl` is an alias for `Invoke-WebRequest` with
+different flags, and there is no `sh`):
+
+- **Linux / macOS** — `curl -sSL https://<server>/enroll/<CODE>/install.sh | sh`.
+  One installer serves both: it detects the kernel, picks a runtime (Linux:
+  pre-built binary → Node+systemd → Docker; macOS: Node, service via **launchd**),
+  and never mistakes a Linux binary for a macOS host.
+- **Windows** — `powershell -NoProfile -ExecutionPolicy Bypass -Command "irm
+  https://<server>/enroll/<CODE>/install.ps1 | iex"`, run from an **elevated**
+  PowerShell. It requires Node.js, verifies the source checksum, and registers a
+  **Scheduled Task** (SYSTEM, at boot, restart-on-failure) as the service.
+
+Windows/macOS agents don't self-update (that path is systemd-only) — re-run the
+installer to upgrade.
 
 ## Agent source (no binaries)
 

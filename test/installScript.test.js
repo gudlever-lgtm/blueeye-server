@@ -228,3 +228,25 @@ test('install script fails clearly when docker is selected but not installed', (
   assert.match(stderr, /Docker runtime selected/);
   assert.match(stderr, /docker\.com/);
 });
+
+// ---- cross-platform: macOS (Darwin) support --------------------------------
+test('renderInstallScript guards the pre-built binary to Linux (macOS must not grab a Linux binary)', () => {
+  const script = renderInstallScript({ serverUrl: 'http://x', code: 'C', sourceSha: 'a'.repeat(64) });
+  // Both binary pickers bail out unless the kernel is Linux.
+  const guards = script.match(/\[ "\$\(uname -s\)" = "Linux" \] \|\| \{ printf ''; return 0; \}/g) || [];
+  assert.ok(guards.length >= 2, 'both pick_binary_arch and pick_binary_sha are Linux-guarded');
+});
+
+test('renderInstallScript installs a launchd daemon on macOS and a portable current-symlink swap', () => {
+  const script = renderInstallScript({ serverUrl: 'http://x', code: 'C', sourceSha: 'a'.repeat(64) });
+  // Darwin branch in install_service delegates to a LaunchDaemon writer.
+  assert.match(script, /uname -s.*= "Darwin"/);
+  assert.match(script, /install_launchd/);
+  assert.match(script, /LaunchDaemons\/\$LABEL\.plist/);
+  assert.match(script, /com\.blueeye\.agent/);
+  assert.match(script, /launchctl bootstrap system|launchctl load -w/);
+  // The current-symlink swap is portable: GNU mv -T on Linux, plain ln on Darwin.
+  assert.match(script, /point_current/);
+  assert.match(script, /rm -f "\$CURRENT" && ln -sfn "\$DEST_LINK" "\$CURRENT"/);
+  assert.match(script, /mv -T "\$CURRENT\.next" "\$CURRENT"/);
+});

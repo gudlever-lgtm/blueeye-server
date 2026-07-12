@@ -154,3 +154,25 @@ test('GET /enroll/:code/install.sh 500s when the lookup throws', async () => {
   const res = await request(makeApp({ artifactStore: store, enrollmentCodesRepo: repo })).get('/enroll/GOOD/install.sh');
   assert.equal(res.status, 500);
 });
+
+// ---- GET /enroll/:code/install.ps1 (Windows) -------------------------------
+test('GET /enroll/:code/install.ps1 returns a PowerShell script for an active code (200)', async () => {
+  const store = makeSourceStore({ sha256: 's'.repeat(64) });
+  const app = makeApp({ agentSourceStore: store, enrollmentCodesRepo: activeCode(), enrollConfig: { publicUrl: 'https://blueeye.acme.dk', certFingerprint: '' } });
+  const res = await request(app).get('/enroll/GOOD/install.ps1');
+  assert.equal(res.status, 200);
+  assert.match(res.headers['content-type'], /text\/plain/);
+  assert.match(res.text, /\$EnrollCode\s*=\s*'GOOD'/);
+  assert.match(res.text, /\$ServerUrl\s*=\s*'https:\/\/blueeye\.acme\.dk'/);
+  assert.match(res.text, /Register-ScheduledTask/);
+  assert.ok(res.text.includes('s'.repeat(64)), 'embeds the agent source checksum');
+  // Must not contain the POSIX one-liner PowerShell cannot run.
+  assert.ok(!/curl -sSL/.test(res.text));
+});
+
+test('GET /enroll/:code/install.ps1 404s for an unknown/expired code', async () => {
+  const app = makeApp({ enrollmentCodesRepo: activeCode() });
+  assert.equal((await request(app).get('/enroll/EXPIRED/install.ps1')).status, 404);
+  const unknown = makeApp({ enrollmentCodesRepo: makeEnrollmentCodesRepo({ findByCode: async () => null }) });
+  assert.equal((await request(unknown).get('/enroll/NOPE/install.ps1')).status, 404);
+});

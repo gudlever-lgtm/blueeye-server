@@ -208,6 +208,11 @@ try {
   # Task action cannot set env vars itself) — the Windows analogue of the
   # systemd unit's Environment= lines.
   $launcher = Join-Path $InstallDir 'run-agent.cmd'
+  $AgentLog = Join-Path $LogDir 'agent.log'
+  # The Scheduled Task runs as SYSTEM with no console, so the agent's stdout/stderr
+  # would otherwise vanish (and "installed but not connected" has no indicator).
+  # Redirect both to agent.log with a timestamped start marker, so a failure to
+  # launch node, reach the server, or a rejected token is visible on the host.
   $launcherLines = @(
     '@echo off',
     "set ""BLUEEYE_SERVER_URL=$ServerUrl""",
@@ -217,7 +222,8 @@ try {
     "set ""BLUEEYE_ACTION_LOG=$(Join-Path $LogDir 'actions.log')""",
     'set "BLUEEYE_RUNTIME=unmanaged"',
     "cd /d ""$InstallDir""",
-    """$NodeExe"" ""$(Join-Path $InstallDir 'src\\index.js')"""
+    "echo [%DATE% %TIME%] starting blueeye-agent >> ""$AgentLog""",
+    """$NodeExe"" ""$(Join-Path $InstallDir 'src\\index.js')"" >> ""$AgentLog"" 2>&1"
   )
   Set-Content -Path $launcher -Value $launcherLines -Encoding ASCII
 
@@ -231,9 +237,21 @@ try {
   Register-ScheduledTask -TaskName $ServiceName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
   Start-ScheduledTask -TaskName $ServiceName
 
-  Info "done — agent v$version enrolled and running as scheduled task '$ServiceName'."
-  Info "manage it with:  Get-ScheduledTask $ServiceName  |  Stop-ScheduledTask $ServiceName  |  Start-ScheduledTask $ServiceName"
-  Info "to remove it later:  Unregister-ScheduledTask -TaskName $ServiceName -Confirm:\$false ; Remove-Item -Recurse -Force '$InstallDir','$StateDir'"
+  # Give the agent a moment to boot and show what it logged, so the operator sees
+  # right away whether it connected — rather than "installed OK" with no signal.
+  Start-Sleep -Seconds 4
+  if (Test-Path $AgentLog) {
+    Info 'first lines from the agent log:'
+    Get-Content $AgentLog -Tail 20 | ForEach-Object { Write-Host "  $_" }
+  } else {
+    Info "the agent has not written a log yet — check $AgentLog in a moment."
+  }
+
+  Info "done — agent v$version enrolled; scheduled task '$ServiceName' started."
+  Info "live log:  Get-Content '$AgentLog' -Wait -Tail 30"
+  Info "task state:  Get-ScheduledTask $ServiceName | Get-ScheduledTaskInfo"
+  Info "manage it:  Stop-ScheduledTask $ServiceName  |  Start-ScheduledTask $ServiceName"
+  Info "remove it:  Unregister-ScheduledTask -TaskName $ServiceName -Confirm:\$false ; Remove-Item -Recurse -Force '$InstallDir','$StateDir'"
 } finally {
   Remove-Item -Recurse -Force $Tmp -ErrorAction SilentlyContinue
 }

@@ -58,6 +58,19 @@ test('renderInstallPs1 requires Node, extracts with tar, enrolls, and registers 
   assert.match(script, /RestartCount/);
 });
 
+test('renderInstallPs1 makes the SYSTEM service observable — captures the agent log and shows it', () => {
+  const script = renderInstallPs1({ serverUrl: 'http://x', code: 'C', sourceSha: SHA });
+  // The launcher redirects the agent's stdout+stderr into agent.log (a SYSTEM
+  // scheduled task has no console, so otherwise "not connected" has no indicator).
+  assert.match(script, /agent\.log/);
+  assert.match(script, /index\.js'\)"" >> ""\$AgentLog"" 2>&1/);
+  // The installer shows the first log lines + how to tail it, so the operator can
+  // see whether it actually connected.
+  assert.match(script, /Get-Content \$AgentLog -Tail/);
+  assert.match(script, /Get-Content '\$AgentLog' -Wait/);
+  assert.match(script, /Get-ScheduledTaskInfo/);
+});
+
 test('renderInstallPs1 forces TLS 1.2 and pins a self-signed cert when a fingerprint is given', () => {
   const script = renderInstallPs1({ serverUrl: 'https://x', code: 'C', certFingerprint: FP, sourceSha: SHA });
   // TLS 1.2 (5.1 defaults to 1.0) — the 3072 bitmask.

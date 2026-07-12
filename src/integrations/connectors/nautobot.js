@@ -119,7 +119,40 @@ function createNautobotConnector({ fetchImpl = globalThis.fetch, logger = silent
     return { ok: res.ok, status: res.status, detail: res.ok ? `reached Nautobot (${res.status})` : res.detail };
   }
 
-  return { type, authTypes, defaultEvents, validateConfig, send, test };
+  // --- CMDB integration (single source of truth) -------------------------------
+  // Reads a nested reference's readable label defensively — Nautobot returns
+  // related objects as { id, url, display, name, ... } (or occasionally a bare id).
+  function label(ref) {
+    if (ref && typeof ref === 'object') return ref.display || ref.name || null;
+    return ref == null ? null : String(ref);
+  }
+
+  // CMDB connectivity/auth check: a bounded read of the devices endpoint — the
+  // same surface asset search uses. Returns { ok, status, detail }.
+  async function testConnection(integration) {
+    return test(integration);
+  }
+
+  // CMDB asset search. Uses Nautobot's general `q` filter over devices and
+  // normalises to { id, name, type, location }[]. Returns { ok, status, detail, assets }.
+  async function search(integration, query) {
+    const base = String(integration.baseUrl || '').replace(/\/+$/, '');
+    const q = String(query || '').trim();
+    const res = await requestJson(fetchImpl, {
+      method: 'GET',
+      url: `${base}${devicePath(integration)}/?q=${encodeURIComponent(q)}&limit=20`,
+      headers: headersFor(integration),
+      timeoutMs,
+    });
+    if (!res.ok) return { ok: false, status: res.status, detail: res.detail, assets: [] };
+    const rows = res.json && Array.isArray(res.json.results) ? res.json.results : [];
+    const assets = rows
+      .map((r) => ({ id: String(r.id ?? ''), name: r.name || label(r) || '', type: label(r.device_type) || label(r.role) || null, location: label(r.location) || label(r.site) || null }))
+      .filter((a) => a.id);
+    return { ok: true, status: res.status, assets };
+  }
+
+  return { type, authTypes, defaultEvents, validateConfig, send, test, testConnection, search };
 }
 
 module.exports = { createNautobotConnector };

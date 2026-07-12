@@ -137,7 +137,52 @@ function createServiceNowConnector({ fetchImpl = globalThis.fetch, logger = sile
     return { ok: res.ok, status: res.status, detail: res.ok ? `reached ServiceNow (${res.status})` : res.detail };
   }
 
-  return { type, authTypes, defaultEvents, validateConfig, send, test };
+  // --- CMDB integration (single source of truth) -------------------------------
+  // The CMDB asset table (Configuration Items). Defaults to the platform's cmdb_ci
+  // base class; override via config.assetTable to scope to a subclass.
+  function assetTableOf(integration) {
+    const t = integration.config && integration.config.assetTable;
+    return typeof t === 'string' && t ? t : 'cmdb_ci';
+  }
+
+  // CMDB connectivity/auth check: a bounded read of the asset (CI) table — this
+  // exercises the exact endpoint asset search uses, so a service account scoped to
+  // the CMDB (but not to incidents) still passes. Returns { ok, status, detail }.
+  async function testConnection(integration) {
+    const base = String(integration.baseUrl || '').replace(/\/+$/, '');
+    const res = await requestJson(fetchImpl, {
+      method: 'GET',
+      url: `${base}/api/now/table/${encodeURIComponent(assetTableOf(integration))}?sysparm_limit=1&sysparm_fields=sys_id`,
+      headers: headersFor(integration),
+      timeoutMs,
+    });
+    return { ok: res.ok, status: res.status, detail: res.ok ? `reached ServiceNow (${res.status})` : res.detail };
+  }
+
+  // CMDB asset search. Queries the CI table by name (nameLIKE) and normalises the
+  // result to { id, name, type, location }[]. display_value=true resolves the
+  // location reference to a readable string. Returns { ok, status, detail, assets }.
+  async function search(integration, query) {
+    const base = String(integration.baseUrl || '').replace(/\/+$/, '');
+    const q = String(query || '').trim();
+    const res = await requestJson(fetchImpl, {
+      method: 'GET',
+      url: `${base}/api/now/table/${encodeURIComponent(assetTableOf(integration))}`
+        + `?sysparm_query=${encodeURIComponent('nameLIKE' + q)}`
+        + '&sysparm_limit=20&sysparm_display_value=true'
+        + '&sysparm_fields=sys_id,name,sys_class_name,location',
+      headers: headersFor(integration),
+      timeoutMs,
+    });
+    if (!res.ok) return { ok: false, status: res.status, detail: res.detail, assets: [] };
+    const rows = res.json && Array.isArray(res.json.result) ? res.json.result : [];
+    const assets = rows
+      .map((r) => ({ id: String(r.sys_id ?? ''), name: r.name ?? '', type: r.sys_class_name || null, location: r.location || null }))
+      .filter((a) => a.id);
+    return { ok: true, status: res.status, assets };
+  }
+
+  return { type, authTypes, defaultEvents, validateConfig, send, test, testConnection, search };
 }
 
 module.exports = { createServiceNowConnector };

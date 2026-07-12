@@ -45,6 +45,7 @@ const { createTransactionsRouter } = require('./transactions');
 const { createLogsRouter } = require('./logs');
 const { createSpeedtestRouter, createSpeedtestReadRouter } = require('./speedtest');
 const { createIntegrationsRouter } = require('./integrations');
+const { createCmdbSettingsRouter, createCmdbAssetsRouter, createAgentCmdbLinkRouter } = require('./cmdb');
 const { createDiagnosticsRouter } = require('./diagnostics');
 const { createLdapRouter } = require('./ldap');
 const { createOidcAuthRouter, createOidcAdminRouter } = require('./oidc');
@@ -124,6 +125,10 @@ function createApiRouter({
   integrationsDispatcher,
   connectorRegistry,
   secretBox,
+  // CMDB integration (single source of truth): the singleton config + agent↔asset
+  // links. Reuse the connectorRegistry (ServiceNow/Nautobot) + secretBox above.
+  cmdbConfigRepo,
+  agentCmdbLinksRepo,
   // Injected fetch for the Test area's reachability probes (SAML IdP / AI
   // assistant). Defaults to the global fetch; tests inject a fake so they stay offline.
   diagnosticsFetch,
@@ -238,6 +243,16 @@ function createApiRouter({
     router.use('/api/integrations', createIntegrationsRouter({
       integrationsRepo, integrationAuditRepo, dispatcher: integrationsDispatcher, registry: connectorRegistry, secretBox,
     }));
+  }
+  // CMDB integration (single source of truth) — admin config + connection test,
+  // operator+ asset search, and per-agent asset links. Reuses the connector
+  // registry + secretBox that the integrations feature already wires.
+  if (cmdbConfigRepo && connectorRegistry && secretBox) {
+    router.use('/api/settings/cmdb', createCmdbSettingsRouter({ cmdbConfigRepo, registry: connectorRegistry, secretBox }));
+    router.use('/api/cmdb/assets', createCmdbAssetsRouter({ cmdbConfigRepo, registry: connectorRegistry, secretBox }));
+  }
+  if (agentCmdbLinksRepo) {
+    router.use('/api/agents', createAgentCmdbLinkRouter({ agentCmdbLinksRepo, agentsRepo }));
   }
   // Test area — consolidated, admin-only security screening of every outbound
   // integration (email/alert channels, ITSM/IPAM receivers, SSO, AI/map/licence).

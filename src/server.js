@@ -86,6 +86,8 @@ const { createSpeedtestResultsRepository } = require('./repositories/speedtestRe
 const { createSecretBox } = require('./lib/secretBox');
 const { createIntegrationsRepository } = require('./repositories/integrationsRepository');
 const { createIntegrationAuditRepository } = require('./repositories/integrationAuditRepository');
+const { createCmdbConfigRepository } = require('./repositories/cmdbConfigRepository');
+const { createAgentCmdbLinksRepository } = require('./repositories/agentCmdbLinksRepository');
 const { createConnectorRegistry } = require('./integrations/connectors');
 const { createIntegrationsDispatcher } = require('./integrations/dispatcher');
 const { createLdapConfigRepository } = require('./repositories/ldapConfigRepository');
@@ -343,6 +345,12 @@ function start() {
   const integrationsDispatcher = createIntegrationsDispatcher({
     integrationsRepo, auditRepo: integrationAuditRepo, secretBox, registry: connectorRegistry, logger,
   });
+
+  // CMDB integration (single source of truth): the singleton connection config +
+  // per-agent asset links. Reuses connectorRegistry (ServiceNow/Nautobot) for the
+  // connection test + asset search, and secretBox to encrypt credentials at rest.
+  const cmdbConfigRepo = createCmdbConfigRepository(db);
+  const agentCmdbLinksRepo = createAgentCmdbLinksRepository(db);
 
   // External auth (LDAP/AD). OFF unless LDAP_AUTH_ENABLED=true, the licence covers
   // it (sso_ldap), AND an admin has stored + enabled a config row. Local JWT login
@@ -651,6 +659,8 @@ function start() {
     integrationsDispatcher,
     connectorRegistry,
     secretBox,
+    cmdbConfigRepo,
+    agentCmdbLinksRepo,
     // Outbound fetch for the Test area's reachability probes (SAML IdP / assistant).
     diagnosticsFetch: globalThis.fetch,
     ldapConfigRepo,

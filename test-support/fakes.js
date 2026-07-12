@@ -965,6 +965,62 @@ function makeIntegrationsDispatcher(overrides = {}) {
   };
 }
 
+// A fake CMDB config repository (stateful, in-memory singleton). Mirrors the real
+// safe vs. with-secret split + the singleton upsert (editing clears verified_at).
+// Seed a starting row with { row: { ... , credentials_encrypted } }.
+function makeCmdbConfigRepo(overrides = {}) {
+  let row = overrides.row || null; // a full (with-secret) row or null
+  const safe = (r) => (r ? {
+    id: r.id, type: r.type, base_url: r.base_url, auth_type: r.auth_type, enabled: r.enabled,
+    verified_at: r.verified_at ?? null, updated_by: r.updated_by ?? null,
+    created_at: r.created_at || '2026-01-01T00:00:00.000Z', updated_at: r.updated_at || '2026-01-01T00:00:00.000Z',
+  } : null);
+  return {
+    get: overrides.get || (async () => safe(row)),
+    getWithSecret: overrides.getWithSecret || (async () => (row ? { ...safe(row), credentials_encrypted: row.credentials_encrypted ?? null } : null)),
+    upsert: overrides.upsert || (async (patch) => {
+      if (!row) {
+        row = {
+          id: 1, type: patch.type, base_url: patch.baseUrl, auth_type: patch.authType ?? 'none',
+          credentials_encrypted: patch.credentialsEncrypted ?? null, enabled: Boolean(patch.enabled),
+          verified_at: null, updated_by: patch.updatedBy ?? null,
+        };
+        return safe(row);
+      }
+      row.verified_at = null; // editing invalidates the previous connection test
+      if (patch.type !== undefined) row.type = patch.type;
+      if (patch.baseUrl !== undefined) row.base_url = patch.baseUrl;
+      if (patch.authType !== undefined) row.auth_type = patch.authType;
+      if (patch.credentialsEncrypted !== undefined) row.credentials_encrypted = patch.credentialsEncrypted;
+      if (patch.enabled !== undefined) row.enabled = Boolean(patch.enabled);
+      if (patch.updatedBy !== undefined) row.updated_by = patch.updatedBy;
+      return safe(row);
+    }),
+    markVerified: overrides.markVerified || (async (at = new Date()) => {
+      if (!row) return null;
+      row.verified_at = at instanceof Date ? at.toISOString() : at;
+      return safe(row);
+    }),
+  };
+}
+
+// A fake agent↔CMDB-asset links repository (stateful, in-memory). One row per
+// agent, keyed by agent_id; set() upserts, remove() reports whether a row existed.
+function makeAgentCmdbLinksRepo(overrides = {}) {
+  const rows = overrides.rows || [];
+  return {
+    rows,
+    get: overrides.get || (async (agentId) => rows.find((r) => r.agent_id === agentId) || null),
+    set: overrides.set || (async (agentId, { cmdbAssetId, cmdbAssetName, linkedBy = null }) => {
+      let r = rows.find((x) => x.agent_id === agentId);
+      if (r) { r.cmdb_asset_id = cmdbAssetId; r.cmdb_asset_name = cmdbAssetName; r.linked_by = linkedBy; }
+      else { r = { agent_id: agentId, cmdb_asset_id: cmdbAssetId, cmdb_asset_name: cmdbAssetName, linked_by: linkedBy, linked_at: '2026-01-01T00:00:00.000Z' }; rows.push(r); }
+      return { ...r };
+    }),
+    remove: overrides.remove || (async (agentId) => { const i = rows.findIndex((x) => x.agent_id === agentId); if (i < 0) return false; rows.splice(i, 1); return true; }),
+  };
+}
+
 // A fake LDAP config repository (stateful, in-memory). Mirrors the safe vs.
 // with-secret split + the upsert merge semantics of the real repo.
 function makeLdapConfigRepo(overrides = {}) {
@@ -1359,6 +1415,8 @@ function makeApp(overrides = {}) {
     integrationsDispatcher: overrides.integrationsDispatcher || makeIntegrationsDispatcher(),
     connectorRegistry: overrides.connectorRegistry || makeConnectorRegistry(),
     secretBox: overrides.secretBox || makeSecretBox(),
+    cmdbConfigRepo: overrides.cmdbConfigRepo || makeCmdbConfigRepo(),
+    agentCmdbLinksRepo: overrides.agentCmdbLinksRepo || makeAgentCmdbLinksRepo(),
     // Test area reachability probes: a benign 200 by default so route tests stay
     // offline; a test can inject its own to simulate an unreachable endpoint.
     diagnosticsFetch: overrides.diagnosticsFetch || (async () => ({ ok: true, status: 200, json: async () => ({}) })),
@@ -1472,6 +1530,8 @@ module.exports = {
   makeIntegrationsRepo,
   makeIntegrationAuditRepo,
   makeIntegrationsDispatcher,
+  makeCmdbConfigRepo,
+  makeAgentCmdbLinksRepo,
   makeLdapConfigRepo,
   makeLdapRoleMapRepo,
   makeLdapLoginAuditRepo,

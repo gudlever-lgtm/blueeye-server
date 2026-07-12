@@ -45,6 +45,53 @@ function fmtAge(value, now) {
   return `${Math.round(h / 24)} days ago`;
 }
 
+// Host-specific remediation phrasing. The verdict (WHY the agent is down) is the
+// same everywhere, but the concrete "restart / inspect / verify the service"
+// commands are not — a Windows operator told to run `systemctl` has no usable
+// indicator at all, only a dead-end. The agent reports its OS at enrollment
+// (`platform`: 'linux' | 'win32' | 'darwin') and its supervisor rides along in
+// `capabilities.managed` ('systemd' | 'docker' | 'unmanaged'), so we tailor the
+// hints to the host we actually have. Linux/unknown keeps the historical
+// systemd wording (also the safe default for older rows without a platform).
+function hostOps(agent) {
+  const platform = agent && agent.platform ? String(agent.platform).toLowerCase() : '';
+  const managed = agent && agent.capabilities && agent.capabilities.managed
+    ? String(agent.capabilities.managed).toLowerCase() : '';
+
+  if (platform === 'win32') {
+    return {
+      restart: 'A restart is the agent-side "reconnect button": from an elevated PowerShell run `Restart-Service BlueEyeAgent` (or restart the "BlueEye Agent" service in services.msc).',
+      status: 'On the host: `Get-Service BlueEyeAgent` shows whether the service is running; the agent log (or the Application log in Event Viewer) shows what it last logged.',
+      installed: 'Verify the install finished on the host and the "BlueEye Agent" service is running: `Get-Service BlueEyeAgent` (or open services.msc).',
+    };
+  }
+
+  if (platform === 'darwin') {
+    return {
+      restart: 'A restart is the agent-side "reconnect button": `sudo launchctl kickstart -k system/com.blueeye.agent` (or restart the launchd job that runs the agent).',
+      status: 'On the host: `sudo launchctl print system/com.blueeye.agent` shows whether it is running; the agent log shows what it last logged.',
+      installed: 'Verify the install finished on the host and the launchd job for the agent is loaded and running: `sudo launchctl print system/com.blueeye.agent`.',
+    };
+  }
+
+  // Docker-managed hosts rebuild/restart the container rather than a service —
+  // pointing them at systemctl would be another dead end.
+  if (managed === 'docker') {
+    return {
+      restart: 'A restart is the agent-side "reconnect button": `docker restart blueeye-agent` (or re-run install.sh to rebuild the container).',
+      status: 'On the host: `docker ps` shows whether the container is running and `docker logs blueeye-agent --tail 100` shows what it last logged.',
+      installed: 'Verify the container is running on the host: `docker ps` (and `docker logs blueeye-agent` for why it exited).',
+    };
+  }
+
+  // Linux / unknown — the historical systemd default.
+  return {
+    restart: 'A restart is the agent-side "reconnect button": systemctl restart blueeye-agent.',
+    status: 'On the host: systemctl status blueeye-agent and journalctl -u blueeye-agent -n 100 show whether it is running and what it last logged.',
+    installed: 'Verify the install finished on the host and the service is running: systemctl status blueeye-agent.',
+  };
+}
+
 // Recent 401 attempts, attributed to this agent when they come from its
 // last-known address. Unattributed ones are still surfaced (as a caution, not
 // a verdict) — the token of a rejected agent can't be resolved to an id.
@@ -64,6 +111,7 @@ function splitAuthFailures(live, session, now) {
 function diagnoseConnection({ agent, live, now = Date.now() }) {
   const session = (live && live.session) || null;
   const connected = !!(live && live.connected);
+  const ops = hostOps(agent);
   const { matched: authMatched, unmatched: authUnmatched } = splitAuthFailures(live, session, now);
 
   const evidence = [];
@@ -116,7 +164,7 @@ function diagnoseConnection({ agent, live, now = Date.now() }) {
       explanation: `${authMatched.length} connection attempt${authMatched.length === 1 ? '' : 's'} from this agent's last-known address (${session.ip}) ${authMatched.length === 1 ? 'was' : 'were'} rejected because the token was not accepted (HTTP 401). After a 401 the agent deliberately stops retrying and stays down until it is restarted.`,
       hints: [
         'If the agent was deleted or re-enrolled on the server, its old token is gone for good — re-enroll the agent with a new one-time code.',
-        'Otherwise restart the agent service on its host: systemctl restart blueeye-agent.',
+        `Otherwise restart the agent on its host. ${ops.restart}`,
       ],
     };
   }
@@ -138,7 +186,7 @@ function diagnoseConnection({ agent, live, now = Date.now() }) {
       state: 'never-connected',
       explanation: 'This agent has never connected. Connections are always made by the agent (the server cannot dial out), so either the installer was never run on the host, or the agent cannot reach this server’s address/port.',
       hints: [
-        'Verify the install finished on the host and the service is running: systemctl status blueeye-agent.',
+        ops.installed,
         'From the host, verify it can reach the server URL (and that the port is open through firewalls).',
       ],
     };
@@ -155,8 +203,8 @@ function diagnoseConnection({ agent, live, now = Date.now() }) {
     state: 'unreachable',
     explanation: `The agent has been offline since ${lastRef ? fmtAge(lastRef, now) : 'an unknown time'} and the server has seen no connection attempts from it since${session ? '' : ' the server started'}. Connections are always initiated by the agent, so the cause is on its side: the process is stopped, the host is down or asleep, or a network/firewall/DNS change is blocking it.${unattributed}`,
     hints: [
-      'On the host: systemctl status blueeye-agent and journalctl -u blueeye-agent -n 100 show whether it is running and what it last logged.',
-      'A restart is the agent-side "reconnect button": systemctl restart blueeye-agent.',
+      ops.status,
+      ops.restart,
       'If the agent log shows a fatal 401, re-enroll the agent; if it shows connect timeouts, check the network path to this server.',
     ],
   };

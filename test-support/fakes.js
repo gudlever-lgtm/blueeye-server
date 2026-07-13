@@ -734,7 +734,10 @@ function makeSettingsService(overrides = {}) {
     get: async (k) => (store.has(k) ? store.get(k) : null),
     set: async (k, v) => { store.set(k, v); return v; },
   };
-  const config = { geo: { tileUrl: 'https://tiles.example/{z}/{x}/{y}.png', tileAttribution: 'test', tileMaxZoom: 19, geocodeUrl: 'https://nominatim.example' } };
+  const config = {
+    geo: { tileUrl: 'https://tiles.example/{z}/{x}/{y}.png', tileAttribution: 'test', tileMaxZoom: 19, geocodeUrl: 'https://nominatim.example' },
+    tsdb: { enabled: true, host: 'tsdb.example', port: 5432, user: 'blueeye_tsdb', password: 'super-secret-pw', database: 'blueeye_telemetry', connectionLimit: 10, connectionTimeoutMs: 5000 },
+  };
   return createSettingsService({ settingsRepo, config });
 }
 

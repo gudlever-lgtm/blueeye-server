@@ -863,6 +863,33 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
     return redactAlerting(merged);
   }
 
+  // ---- TimescaleDB telemetry store (Settings → Database) ------------------
+  // Read-only status for the optional telemetry store. Unlike every other tab
+  // here this is deliberately NOT editable from the UI: the pg pool is built
+  // once at boot from env (server.js), because a database connection is
+  // deploy-time infrastructure — provisioned by deploy/install-timescale.sh,
+  // not by an admin click. We surface the effective connection target (never
+  // the password, only whether one is set) plus the fact that it's env-driven,
+  // so the dashboard's "not configured" state comes with a how-to instead of a
+  // dead end. Live size/reachability is reported separately by
+  // GET /system/storage; this returns only the configured target. See
+  // docs/storage-split-audit.md.
+  function getTsdb() {
+    const t = (config && config.tsdb) || {};
+    return {
+      enabled: !!t.enabled,
+      host: t.host || null,
+      port: t.port || null,
+      user: t.user || null,
+      database: t.database || null,
+      connectionLimit: t.connectionLimit ?? null,
+      connectionTimeoutMs: t.connectionTimeoutMs ?? null,
+      passwordSet: !!(t.password && String(t.password).length),
+      source: 'env',
+      editable: false,
+    };
+  }
+
   // Re-applies persisted analysis/retention/assistant/alerting overrides onto the
   // live config objects at boot, so admin edits survive a restart. Best-effort.
   async function applyStoredOverrides() {
@@ -910,6 +937,7 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
     getAgents, setAgents, validateAgents, getDefaultMonitorConfig,
     getAssistant, getAssistantSafe, setAssistant, validateAssistant,
     getAlerting, getAlertingSafe, setAlerting, validateAlerting,
+    getTsdb,
     applyStoredOverrides,
   };
 }

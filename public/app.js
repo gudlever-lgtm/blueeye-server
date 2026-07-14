@@ -632,6 +632,7 @@ const VIEW_LABELS = {
   fleet: 'Overview', overview: 'Traffic', map: 'Sites', geo: 'Destinations', agents: 'Agents',
   interfaces: 'Interfaces', probes: 'Probes', tests: 'Tests', flows: 'Flows',
   findings: 'Analysis', reporting: 'Reporting', locations: 'Locations', enrollment: 'Enrollment', settings: 'Settings',
+  docs: 'Documentation', investigation: 'Troubleshooting', nics: 'NICs', incidents: 'Incidents',
 };
 function gotoView(viewKey) {
   closeDrawer();
@@ -654,6 +655,15 @@ function settingsLink(tab, label) {
 }
 
 const PAGE_INFO = {
+  docs: {
+    hero: 'Documentation & how-to guides — step-by-step troubleshooting walkthroughs with worked examples, plus (for admins) setup guides for integrations like ServiceNow, including what a working connection and a failure look like.',
+    title: 'Documentation — guides & how-tos',
+    body: () => [
+      el('p', {}, 'A built-in handbook. The ', el('strong', {}, 'Getting started'), ' and ', el('strong', {}, 'Troubleshooting how-tos'), ' sections are available to everyone and walk through real tasks — diagnosing an offline agent, chasing latency to a destination, reading a finding — using the pages you already have.'),
+      el('p', {}, 'The ', el('strong', {}, 'Administration & setup'), ' section is admin-only. It explains how to wire up external systems (ServiceNow ITSM/CMDB, alerting, SSO/LDAP, enrollment) — exactly what each field needs and what a successful vs. failed connection looks like, so you can tell a misconfiguration from an outage.'),
+      el('p', { class: 'muted' }, 'Links inside an article jump straight to the relevant page or Settings tab. Links to a page your role or licence hides simply render as plain text.'),
+    ],
+  },
   topology: {
     hero: 'Dependency map — who talks to whom, built from the 5-tuple flows your agents already report (NetFlow/sFlow). Filter by site to scope the graph to one location.',
     title: 'Topology — flow-derived dependencies',
@@ -7426,6 +7436,273 @@ views.logs = async () => {
     refreshBtn, el('span', { class: 'spacer' }), status));
   root.append(host);
   await load();
+  return root;
+};
+
+// ---- Documentation (built-in handbook / how-tos) ---------------------------
+// A static, in-app documentation centre. Content lives here as DOM-builder
+// functions (same style as PAGE_INFO drawers) so it stays dependency-free and
+// versions with the dashboard. Two-pane layout mirrors Settings: a grouped topic
+// list on the left, the selected article on the right. RBAC: the "Getting
+// started" and "Troubleshooting" sections are viewer+, the "Administration &
+// setup" section is admin-only (the request: admin has full access). Cross-links
+// reuse viewLink/settingsLink, which degrade to plain text when the target is
+// hidden by role/licence — so an article never offers a dead end.
+let docsTopic = null;
+
+// Small article-building helpers (kept local to the docs feature).
+function docsLead(text) { return el('p', { class: 'docs-lead' }, text); }
+function docsCode(text) { return el('pre', { class: 'docs-code' }, text); }
+function docsSteps(items) {
+  return el('ol', { class: 'docs-steps' }, ...items.map((it) => el('li', {}, ...(Array.isArray(it) ? it : [it]))));
+}
+// A "What to expect" callout — success vs. failure signals for a task.
+function docsExpect(...kids) {
+  return el('div', { class: 'callout docs-expect' }, el('strong', {}, 'What to expect '), ...kids);
+}
+// A three-column reference table: symptom / meaning / action (or you-see / etc.).
+function docsTable(head, rows) {
+  return el('div', { class: 'docs-tablewrap' }, el('table', { class: 'docs-table' },
+    el('thead', {}, el('tr', {}, ...head.map((h) => el('th', {}, h)))),
+    el('tbody', {}, ...rows.map((r) => el('tr', {}, ...r.map((c) => el('td', {}, ...(Array.isArray(c) ? c : [c]))))))));
+}
+
+// The handbook. Each article: { id, title, body: () => [nodes] }. Sections carry
+// an `admin` flag; admin sections are dropped for non-admins before render.
+const DOCS = [
+  {
+    section: 'Getting started', admin: false, articles: [
+      {
+        id: 'what-is', title: 'What BlueEye does', body: () => [
+          docsLead('BlueEye is an on-prem network-monitoring server. Lightweight agents run on your machines and report metadata — traffic counters, active-probe results (ping/DNS/HTTP/traceroute), interface health and flow 5-tuples — back to this server, which stores, analyses and visualises it.'),
+          el('p', {}, 'Everything is ', el('strong', {}, 'metadata only'), ' (ports, ASNs, timings, the 5-tuple) — never packet payload or deep inspection. Private (RFC1918) addresses are never geolocated. Analysis runs locally with explainable robust statistics (median + MAD), so every finding carries an explanation and its evidence — there is no cloud and no black-box ML.'),
+          el('h4', {}, 'The moving parts'),
+          el('ul', {},
+            el('li', {}, el('strong', {}, 'Agents '), '— enrolled with a one-time code, then report over a WebSocket + REST. See ', viewLink('agents', 'Agents'), ' and ', viewLink('enrollment', 'Enrollment'), '.'),
+            el('li', {}, el('strong', {}, 'This server '), '— stores measurements, derives health/findings/incidents, and is where you manage the fleet.'),
+            el('li', {}, el('strong', {}, 'Integrations '), '— optional outbound links to ITSM/IPAM/CMDB (e.g. ServiceNow), alert channels and SSO — all configured in Settings (admin).')),
+          docsExpect('Once an agent is enrolled and connected it turns green on the ', viewLink('fleet', 'Overview'), ' within a minute, and its traffic/probe data starts filling the ', viewLink('overview', 'Traffic'), ' and ', viewLink('probes', 'Probes'), ' pages.'),
+        ],
+      },
+      {
+        id: 'tour', title: 'Finding your way around', body: () => [
+          docsLead('The left rail is grouped by job. Here is where each thing lives.'),
+          docsTable(['Group', 'Use it for'], [
+            [viewLink('fleet', 'Monitoring'), 'Overview (fleet health at a glance), Traffic, Sites (map) and Destinations (external traffic by country/ASN).'],
+            [el('strong', {}, 'Fleet'), ['Per-', viewLink('agents', 'Agent'), ' drill-down, ', viewLink('interfaces', 'Interfaces'), ' health and NIC firmware inventory.']],
+            [el('strong', {}, 'Diagnostics'), ['Ad-hoc ', viewLink('probes', 'Probes & Tests'), ', ', viewLink('flows', 'Flows'), ', Topology, the ', viewLink('investigation', 'Troubleshooting'), ' investigator — and this Documentation.']],
+            [el('strong', {}, 'Insights'), ['Anomaly ', viewLink('findings', 'Analysis'), ', ', viewLink('incidents', 'Incidents'), ' and ', viewLink('reporting', 'Reporting'), ' (incl. NIS2).']],
+            [el('strong', {}, 'Administration'), ['Locations, Enrollment, Logs and ', viewLink('settings', 'Settings'), '.']],
+          ]),
+          el('p', {}, 'Every page has a one-line hero at the top and a ', el('strong', {}, 'More info'), ' button that opens a drawer explaining that page in depth. The topbar search jumps to an agent, host, IP or port. The 🌙/☀️ button flips light/dark; pick a colour palette in ', settingsLink('appearance', 'Settings → Appearance'), '.'),
+          el('p', { class: 'muted' }, 'What you can see depends on your role (viewer < operator < admin) and the licence. Items above your role, or excluded by the licence, are hidden or locked.'),
+        ],
+      },
+    ],
+  },
+  {
+    section: 'Troubleshooting how-tos', admin: false, articles: [
+      {
+        id: 'agent-offline', title: 'An agent is offline', body: () => [
+          docsLead('An agent shows as disconnected, or dropped off the Overview. Work from the server outward.'),
+          docsSteps([
+            ['Open ', viewLink('fleet', 'Overview'), ' and find the agent — offline agents sort to the top with a grey/《offline》badge. Click it to open the agent page.'],
+            ['On the agent page, read the ', el('strong', {}, 'Connection'), ' card. It gives an explainable verdict (last seen, last WebSocket close reason, clock skew) — this usually names the cause outright.'],
+            'Check whether it is one agent or many. Many agents offline at once points at the server/network side (firewall, DNS, this server restarting); a single agent points at that host.',
+            ['If the agent is up but stale, use ', el('strong', {}, 'Reconnect'), ' (operator+) on the agent page to force it to re-dial the server.'],
+            ['On the host itself: confirm the agent process/service is running, and that it can reach this server’s URL and port. Re-running the installer (', el('code', {}, 'git pull && ./install.sh'), ') repairs a broken systemd install.'],
+          ]),
+          docsExpect(
+            el('span', {}, 'A healthy agent reports within seconds of connecting and its ', el('strong', {}, 'Last seen'), ' stays under a minute. '),
+            el('span', {}, 'Common close reasons: ', el('code', {}, 'auth failed'), ' → the agent token was rotated/revoked (re-enroll); ', el('code', {}, 'timeout'), '/', el('code', {}, 'ECONNREFUSED'), ' → network path or the server is down; large ', el('strong', {}, 'clock skew'), ' → fix NTP on the host, it degrades data quality.')),
+          el('p', { class: 'muted' }, ['Related: ', viewLink('logs', 'Logs'), ' shows server-side connect/disconnect events, and Reporting → Audit records each agent online/offline transition.']),
+        ],
+      },
+      {
+        id: 'site-unhealthy', title: 'A site looks unhealthy', body: () => [
+          docsLead('A location is amber/red on the map, or a whole office reports problems.'),
+          docsSteps([
+            ['Open ', viewLink('map', 'Sites'), '. Locations are coloured by the health of the agents at them — click the site to list its agents.'],
+            ['Switch to ', viewLink('fleet', 'Overview'), ' and click the count chips (Critical / Warning) to filter the fleet to just the unhealthy agents — is it every agent at the site (shared uplink/DNS) or one?'],
+            ['Use the ', viewLink('investigation', 'Troubleshooting'), ' investigator (operator+): pick ', el('strong', {}, 'Site/location'), ' as the scope and a time window. It correlates the anomalies at that site into one explained picture.'],
+            ['Check ', viewLink('geo', 'Destinations'), ' / Topology to see whether the site lost a key dependency (a DNS resolver, a SaaS endpoint, an upstream ASN).'],
+          ]),
+          docsExpect('A site anomaly that hits every agent simultaneously is almost always shared infrastructure (WAN link, firewall, DNS, power). A single agent standing out while its neighbours are green is a host- or NIC-local problem — jump to “Investigate an interface”.'),
+        ],
+      },
+      {
+        id: 'latency-loss', title: 'High latency or packet loss to a destination', body: () => [
+          docsLead('Users report a slow or flaky service. Confirm it, localise it, and capture evidence.'),
+          docsSteps([
+            ['From the affected agent, run an ad-hoc ', viewLink('probes', 'Probe'), ': a ', el('strong', {}, 'ping'), ' to the target for a quick loss/latency read, then a ', el('strong', {}, 'traceroute'), ' to see where it degrades.'],
+            'Compare against a known-good target (e.g. a well-known resolver) from the same agent — if that is also bad, the problem is local/first-hop, not the destination.',
+            ['Open the traceroute result and use the ', el('strong', {}, 'path view'), ': each hop shows loss/latency/jitter with GeoIP/ASN, so you can point at the exact hop and network where it turns red.'],
+            ['For an HTTP service, run an ', el('strong', {}, 'HTTP'), ' or ', el('strong', {}, 'cURL'), ' probe — you get status code, TLS cert expiry and (cURL) a body/header content check, not just reachability.'],
+            ['Make it ongoing: save the checks as a ', viewLink('tests', 'Test'), ' package aimed at the relevant agents on a schedule, so you catch it next time and build an availability history.'],
+          ]),
+          docsExpect(
+            el('span', {}, 'Loss/latency that starts at a specific hop and persists downstream localises the fault to that hop’s network (often an ASN boundary). '),
+            el('span', {}, 'Loss only at the final hop with clean transit usually means the destination host/service itself. First-hop loss points at the local LAN/NIC — see the interface how-to.')),
+        ],
+      },
+      {
+        id: 'interface', title: 'Investigate an interface', body: () => [
+          docsLead('Errors, discards, saturation or a flapping link on a monitored interface.'),
+          docsSteps([
+            ['Open ', viewLink('interfaces', 'Interfaces'), ' (or the Interfaces card on the agent page). Rows are health-rated on utilisation, errors, discards and link state.'],
+            'Read the four signals separately: high utilisation = capacity/QoS; rising errors = physical layer (cabling, SFP, duplex mismatch); discards = buffer/queue pressure; link down/flap = physical or driver.',
+            ['Cross-check the NIC: the ', viewLink('nics', 'NICs'), ' page flags firmware/driver outliers — a single NIC on old firmware among identical peers is a strong lead.'],
+            ['Correlate with time: interface anomalies raise ', viewLink('findings', 'findings'), ' with a normal-range band and event markers, so you can line up the errors against a change or a traffic spike.'],
+          ]),
+          docsExpect('Errors and discards should sit at ~0 on a healthy link. A steady error rate that scales with traffic is classic duplex/cabling; bursty discards under load are congestion. Link flaps almost always mean a physical or driver fault — check the NIC firmware first.'),
+        ],
+      },
+      {
+        id: 'findings', title: 'Reading findings & incidents', body: () => [
+          docsLead('The Analysis and Incidents pages turn raw metrics into explained problems. Here is how to read them.'),
+          el('p', {}, ['A ', viewLink('findings', 'finding'), ' is one detected anomaly on one host/metric. Because detection is robust-statistical (median + MAD z-score), each finding states what was ', el('strong', {}, 'observed'), ', the ', el('strong', {}, 'baseline'), ' it deviated from, the ', el('strong', {}, 'deviation'), ', and an evidence array — so you can judge it, not just trust it. Acknowledge a finding to mute repeats.']),
+          el('p', {}, ['An ', viewLink('incidents', 'incident'), ' groups related findings on a device within a correlation window into one case, and auto-correlates a device config change from just before it as the suspected trigger. Open a case for its timeline, a plain-language what/where/why, similar past cases, and a combined recommendation (matching playbook → resolved-case history → optional EU-hosted AI).']),
+          docsTable(['On the page', 'Means'], [
+            [el('span', {}, el('strong', {}, 'CRIT'), ' / red'), 'A strong, high-confidence deviation — act now.'],
+            [el('span', {}, el('strong', {}, 'WARN'), ' / amber'), 'A moderate deviation — worth a look, may be transient.'],
+            [el('span', {}, el('strong', {}, 'Config change'), ' link'), 'A device config snapshot captured shortly before the incident — the likely cause; open it to see the risk-classified diff.'],
+          ]),
+          docsExpect('If a finding looks wrong, read its evidence — a legitimate baseline shift (a planned change, a new service) explains most “false” anomalies. Acknowledge it and, if it recurs by design, tune thresholds in Settings → Analysis.'),
+        ],
+      },
+      {
+        id: 'adhoc', title: 'Run an ad-hoc probe or test', body: () => [
+          docsLead('The fastest way to answer “can this host reach X right now?”.'),
+          docsSteps([
+            ['Open ', viewLink('probes', 'Probes & Tests'), ', keep the ', el('strong', {}, 'Run'), ' sub-tab, choose the agent to run from and the probe type.'],
+            ['Pick the type for the question: ', el('strong', {}, 'ping'), ' (reachability/loss/latency), ', el('strong', {}, 'tcp'), ' (is a port open), ', el('strong', {}, 'dns'), ' (resolution + timing), ', el('strong', {}, 'traceroute'), ' (path + per-hop loss), ', el('strong', {}, 'http/curl'), ' (status, TLS, content) or ', el('strong', {}, 'pageload'), ' (waterfall).'],
+            'Read the result inline — it carries a pass/fail verdict with the numbers behind it. Traceroute results open into the path visualisation.',
+            ['To repeat it automatically across many agents on a schedule, promote it to a ', viewLink('tests', 'Test'), ' package (the same probe engine, plus fleet targeting and recurrence).'],
+          ]),
+          el('div', { class: 'callout' }, el('strong', {}, 'Probe vs. Test: '), 'a probe is a one-off you run by hand from a single agent (troubleshooting); a Test is a saved, scheduled package of probes aimed at many agents (monitoring). Same engine underneath.'),
+        ],
+      },
+    ],
+  },
+  {
+    section: 'Administration & setup', admin: true, articles: [
+      {
+        id: 'servicenow', title: 'Connect ServiceNow (ITSM)', body: () => [
+          docsLead('Push BlueEye incidents/anomalies into ServiceNow as Incident records. Configured under Settings → Integrations as a “servicenow” connector. This is the outbound ITSM link; for asset lookup see “Connect a CMDB”.'),
+          el('h4', {}, 'What you need first (in ServiceNow)'),
+          el('ul', {},
+            el('li', {}, el('strong', {}, 'Instance URL '), '— e.g. ', el('code', {}, 'https://acme.service-now.com'), ' (HTTPS, no trailing path).'),
+            el('li', {}, el('strong', {}, 'A service account '), 'with REST Table API access to the target table. For the default ', el('code', {}, 'incident'), ' table it needs to create/read/update incidents — typically the ', el('code', {}, 'itil'), ' role (plus ', el('code', {}, 'web_service_admin'), ' / SOAP access if your instance restricts the REST API).'),
+            el('li', {}, el('strong', {}, 'Credentials '), '— Basic auth (username + password) or OAuth2 (a bearer token). Store them in the connector; they are encrypted at rest (AES-256-GCM) and write-only — never shown back.'),
+            el('li', {}, el('strong', {}, 'Table '), '(optional) — defaults to ', el('code', {}, 'incident'), '. Override only to a valid table name (', el('code', {}, '[a-z0-9_]'), ', ≤64 chars).')),
+          el('h4', {}, 'Set it up'),
+          docsSteps([
+            [settingsLink('integrations', 'Open Settings → Integrations'), ' and add a connector of type ', el('strong', {}, 'ServiceNow'), '.'],
+            ['Fill in the ', el('strong', {}, 'Base URL'), ', pick the ', el('strong', {}, 'auth type'), ' (basic/oauth2) and enter the credentials. Optionally set the table and which events fire it (', el('code', {}, 'incident'), ', ', el('code', {}, 'anomaly'), ').'],
+            ['Save, then click ', el('strong', {}, 'Test'), '. The test does a bounded read of the table (', el('code', {}, 'GET /api/now/table/<table>?sysparm_limit=1'), ') — it proves URL + auth + table access without creating anything.'],
+            ['Verify end-to-end from ', settingsLink('screening', 'Settings → Test Settings'), ', which screens every outbound integration for connectivity and security posture in one place.'],
+          ]),
+          el('h4', {}, 'How a fire behaves'),
+          el('p', {}, ['When a qualifying event fires, the connector is ', el('strong', {}, 'idempotent by '), el('code', {}, 'correlation_id'), ': it first looks up an existing record with that id and ', el('strong', {}, 'PATCHes'), ' it if found, otherwise ', el('strong', {}, 'POSTs'), ' a new one — so a recurring condition updates one ticket instead of spawning duplicates. Severity maps to impact/urgency: CRIT→1/1, WARN→2/2, else 3/3. Every ticket is tagged ', el('code', {}, 'u_source = BlueEye'), ' so your ServiceNow admins can filter them.']),
+          docsExpect(
+            el('div', {}, el('strong', {}, 'Success — '), 'the Test returns ', el('code', {}, 'reached ServiceNow (200)'), '. A real fire returns e.g. ', el('code', {}, 'create incident INC0012345 (201)'), ' or ', el('code', {}, 'update incident INC0012345 (200)'), ', and the per-fire result is recorded in the integration audit.')),
+          el('h4', {}, 'When it fails — reading the error'),
+          docsTable(['Status / detail', 'Likely cause', 'Fix'], [
+            [el('code', {}, '401'), 'Bad username/password or an expired OAuth2 token.', 'Re-enter the credentials; for OAuth2 refresh the token.'],
+            [el('code', {}, '403'), 'Authenticated but the account lacks rights on that table (ACL/role).', ['Grant ', el('code', {}, 'itil'), ' / REST access, or point at a table the account can use.']],
+            [el('code', {}, '400'), 'Invalid table name or a field the instance rejects.', 'Check the table exists and is spelled correctly.'],
+            [el('span', {}, el('code', {}, 'ENOTFOUND'), ' / ', el('code', {}, 'ETIMEDOUT'), ' / TLS error'), 'DNS, firewall/proxy, or a TLS trust problem reaching the instance.', 'Confirm the URL and that this server can egress to it over HTTPS; check any proxy/CA.'],
+            [el('span', {}, el('code', {}, 'lookup failed: …')), 'The idempotency read before a write failed (auth/network) — BlueEye will not blind-create.', 'Resolve the underlying auth/network error above; the write retries next fire.'],
+          ]),
+          el('p', { class: 'muted' }, 'No secrets are ever returned by the API or shown on the Test Settings page.'),
+        ],
+      },
+      {
+        id: 'cmdb', title: 'Connect a CMDB (single source of truth)', body: () => [
+          docsLead('Link agents to their asset in a CMDB so BlueEye can enrich them and keep each agent’s site in sync. One CMDB source at a time: ServiceNow, Nautobot, or a config-driven custom HTTP/JSON source. Configured under Settings → CMDB.'),
+          el('p', {}, ['This is separate from the outbound ITSM integration above — a CMDB connector is ', el('strong', {}, 'read-only'), ' (test + asset search), not a ticket writer. For ServiceNow the asset table defaults to ', el('code', {}, 'cmdb_ci'), '; a service account scoped only to the CMDB (but not to incidents) is enough, because the test reads the CI table, not ', el('code', {}, 'incident'), '.']),
+          docsSteps([
+            [settingsLink('cmdb', 'Open Settings → CMDB'), ' and choose the source type (ServiceNow / Nautobot / custom).'],
+            'Enter the base URL + credentials (encrypted at rest, never returned). For custom, provide the request/JSON mapping the page describes.',
+            ['Click ', el('strong', {}, 'Test connection'), ' — a bounded read of the asset table (', el('code', {}, 'sysparm_limit=1'), ' for ServiceNow).'],
+            ['On an agent page, search the CMDB and attach the matching asset. Linking ', el('strong', {}, 'syncs the agent’s location'), ': BlueEye matches a site by the asset’s CMDB location name (creating one if absent).'],
+          ]),
+          docsExpect('A working connection returns ', [el('code', {}, 'reached ServiceNow (200)')], ' (or the equivalent) and asset search returns rows. 401/403/network errors read exactly as in the ServiceNow ITSM table above. The CMDB is also a target in ', [settingsLink('screening', 'Test Settings')], '.'),
+        ],
+      },
+      {
+        id: 'alerting', title: 'Configure alerting', body: () => [
+          docsLead('Deliver findings/incidents to email, a webhook, or syslog. Configured under Settings → Alerting; changes apply live to the running dispatcher.'),
+          el('ul', {},
+            el('li', {}, el('strong', {}, 'Email (SMTP) '), '— host, port, TLS, from-address and (optional) credentials. Use a EU/self-hosted relay in keeping with the no-US-vendor rule.'),
+            el('li', {}, el('strong', {}, 'Webhook '), '— a receiver URL; sign it with a shared secret so the receiver can verify authenticity. An unsigned webhook is flagged as a warning in Test Settings.'),
+            el('li', {}, el('strong', {}, 'Syslog '), '— host/port/protocol; prefer TLS over plaintext.')),
+          docsSteps([
+            [settingsLink('alerting', 'Open Settings → Alerting'), ', enable the channel(s) and fill in the fields. Secrets are write-only.'],
+            ['Use the per-channel ', el('strong', {}, 'Test'), ' to send a real test message, or screen all channels at once from ', settingsLink('screening', 'Test Settings'), '.'],
+            ['Optionally set ', settingsLink('maintenance', 'Maintenance windows'), ' to silence alerts during planned work.'],
+          ]),
+          docsExpect('A successful email/webhook/syslog test delivers an actual message to the destination — check the inbox/receiver/collector to confirm. A failure reports the transport error (SMTP auth, connection refused, TLS). Test Settings additionally flags insecure posture (plaintext, unsigned, no auth) even when delivery “works”.'),
+        ],
+      },
+      {
+        id: 'sso', title: 'Set up SSO & LDAP', body: () => [
+          docsLead('Let staff sign in with your directory/IdP and get a BlueEye role from their group/claim. Three options, each licence-gated (Professional): LDAP/AD, OIDC and SAML.'),
+          docsTable(['Method', 'Configured in', 'Connection from', 'Maps role by'], [
+            ['LDAP/AD', settingsLink('auth', 'Settings → Authentication'), ['env ', el('code', {}, 'LDAP_AUTH_ENABLED'), ' + bind config'], 'directory group → role'],
+            ['SSO (OIDC)', settingsLink('auth', 'Settings → Authentication'), ['env ', el('code', {}, 'OIDC_*'), ' (issuer/client)'], 'token claim → role'],
+            ['SSO (SAML)', settingsLink('auth', 'Settings → Authentication'), ['env ', el('code', {}, 'SAML_*'), ' (IdP/SP)'], 'assertion attribute → role'],
+          ]),
+          el('p', {}, ['The connection itself (bind host, issuer, IdP metadata) comes from server ', el('strong', {}, 'environment variables'), ' — set those on the server. The dashboard tab is where you map groups/claims/attributes to BlueEye roles and read the login audit. Local accounts always remain as a fallback, so you can never lock yourself out.']),
+          docsExpect('Each method has a built-in test: an LDAP bind check, OIDC discovery, and a SAML reachability probe (all also surfaced in Test Settings). A successful test + a correct role map means a directory user lands on the right role on first login (just-in-time provisioning). Failures name the step: bind failed (credentials/DN), discovery failed (issuer/URL), signature/audience mismatch (SAML metadata).'),
+        ],
+      },
+      {
+        id: 'enroll-key', title: 'Agent enrollment & the signing key', body: () => [
+          docsLead('How new agents join, and the key that underpins secure agent management.'),
+          el('p', {}, ['New agents enroll with a one-time (or bulk/multi-use) code from ', viewLink('enrollment', 'Enrollment'), ' (operator+). The one-liner installer verifies the agent source and installs natively (Node + systemd) by default. Each enrolled agent links back to the code it used, so the Enrollment page shows each code’s agents and their live status.']),
+          el('p', {}, ['Secure agent management rests on the ', settingsLink('agentkey', 'agent signing key'), ' (Settings → Agent key, admin). It is generated on the server and ', el('strong', {}, 'never shown again'), ' — only whether it exists (+ a non-secret fingerprint). It is the trust anchor for signed agent releases and one-click updates.']),
+          docsExpect('With a signing key present you can add agents and push signed upgrades. Delete it and you cannot add new agents or upgrade existing ones from the server until you generate a new one — so treat deletion as deliberate.'),
+        ],
+      },
+      {
+        id: 'retention', title: 'Data retention & storage', body: () => [
+          docsLead('Control how long raw measurements are kept and how they roll up, plus where data is stored.'),
+          el('p', {}, ['BlueEye down-samples over time (raw → rollups) and purges on a nightly schedule. Tune windows in ', settingsLink('retention', 'Settings → Retention'), '. Config snapshots have their own retention (default 180 days).']),
+          el('p', {}, ['Storage is MySQL, optionally with TimescaleDB for time-series. Status and live sizes are shown in ', settingsLink('database', 'Settings → Database'), ' (read-only — the backends are boot-time infra configured via env + install scripts).']),
+          docsExpect('Shorter retention lowers storage but shortens history for baselines and reports; the Database page shows current MySQL/TimescaleDB sizes and an ingest estimate so you can size the trade-off before changing it.'),
+        ],
+      },
+    ],
+  },
+];
+
+views.docs = async () => {
+  const root = el('div');
+  // Drop the admin-only section for non-admins (RBAC: admin has full access).
+  const sections = DOCS.filter((s) => !s.admin || isAdmin());
+  const allIds = sections.flatMap((s) => s.articles.map((a) => a.id));
+  if (!docsTopic || !allIds.includes(docsTopic)) docsTopic = allIds[0];
+
+  // Left rail: grouped topic list (mirrors the Settings nav).
+  const nav = el('div', { class: 'settings-nav docs-nav' }, ...sections.map((s) =>
+    el('div', { class: 'settings-nav-group' },
+      el('span', { class: 'settings-nav-label' }, s.section),
+      el('div', { class: 'subtabs docs-subtabs' }, ...s.articles.map((a) =>
+        el('button', { class: `small ghost${a.id === docsTopic ? ' active' : ''}`, onclick: () => { docsTopic = a.id; render(); } }, a.title))))));
+
+  root.append(el('div', { class: 'section-head' },
+    el('h2', {}, 'Documentation'),
+    el('span', { class: 'muted' }, 'Guides, how-tos & setup — with worked examples')), nav);
+
+  const article = sections.flatMap((s) => s.articles).find((a) => a.id === docsTopic);
+  const body = el('article', { class: 'docs-article' });
+  if (article) {
+    body.append(el('h3', { class: 'docs-title' }, article.title));
+    try { body.append(...article.body()); }
+    catch (err) { body.append(el('div', { class: 'empty error' }, err.message)); }
+  }
+  root.append(body);
   return root;
 };
 

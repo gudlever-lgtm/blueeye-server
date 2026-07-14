@@ -1371,3 +1371,24 @@ li.guide-step.done .guide-step-title { text-decoration: line-through; opacity: 0
 .cmdb-result:hover { border-color: var(--accent); background: var(--accent-weak); }
 .cmdb-result > span:first-child { font-weight: 600; }
 .cmdb-cfg-head { margin: 6px 0 2px; font-size: 0.9rem; color: var(--muted); grid-column: 1 / -1; }
+
+/* ---- Documentation (built-in handbook / how-tos) ------------------------- */
+/* Two-pane doc browser: reuses .settings-nav for the grouped topic rail and
+   renders the selected article in a readable, measured column. */
+.docs-nav .docs-subtabs { flex-direction: column; align-items: flex-start; }
+.docs-nav .docs-subtabs button { text-align: left; white-space: normal; }
+.docs-article { max-width: 760px; }
+.docs-title { margin: 0 0 12px; font-size: 20px; }
+.docs-article h4 { margin: 20px 0 6px; font-size: 14px; }
+.docs-article p { line-height: 1.6; }
+.docs-article ul, .docs-article ol { line-height: 1.6; }
+.docs-lead { font-size: 15px; color: var(--text); }
+.docs-code { white-space: pre-wrap; word-break: break-word; font-size: 12.5px; line-height: 1.5; }
+.docs-steps { padding-left: 22px; }
+.docs-steps li { margin: 6px 0; }
+.docs-expect { margin: 16px 0; }
+.docs-tablewrap { overflow-x: auto; margin: 12px 0; }
+.docs-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.docs-table th, .docs-table td { text-align: left; vertical-align: top; padding: 7px 10px; border-bottom: 1px solid var(--border); }
+.docs-table th { color: var(--muted); font-weight: 600; white-space: nowrap; }
+.docs-table code { white-space: nowrap; }

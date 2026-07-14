@@ -161,3 +161,21 @@ test('loadConfig exposes assistant defaults (off, Mistral) and honours overrides
   assert.equal(o.assistantModel, 'mistral-large-latest');
   assert.equal(o.assistantMaxFindings, 3);
 });
+
+test('suggestRemediation throws FeatureDisabled when the assistant is off', async () => {
+  const a = createAssistant({ config: { assistantEnabled: false }, findingStore: findings() });
+  await assert.rejects(() => a.suggestRemediation({ incident: {} }), (e) => e.name === 'FeatureDisabled');
+});
+
+test('suggestRemediation forwards the masked context and returns the model answer', async () => {
+  const fetchImpl = okFetch({ choices: [{ message: { content: '  Restart the service.  ' } }] });
+  const a = createAssistant({ config: ENABLED, findingStore: findings(), fetchImpl });
+  const out = await a.suggestRemediation({ incident: { id: 1 }, timeline: [] });
+  assert.equal(out.answer, 'Restart the service.'); // trimmed
+  assert.equal(out.model, 'mistral-small-latest');
+  // The system prompt forbids inventing a fix and pins the insufficient-context string.
+  const body = JSON.parse(fetchImpl.calls[0].opts.body);
+  const system = body.messages.find((m) => m.role === 'system').content;
+  assert.match(system, /NEVER invent/);
+  assert.match(system, /not enough data to reach a conclusion/);
+});

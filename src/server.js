@@ -51,6 +51,7 @@ const { createAnalysisPipeline } = require('./analysis/pipeline');
 const { createProbePipeline } = require('./analysis/probePipeline');
 const { createCorrelator } = require('./analysis/correlator');
 const { createIncidentCasesRepository } = require('./repositories/incidentCasesRepository');
+const { createRemediationPlaybooksRepository } = require('./repositories/remediationPlaybooksRepository');
 const { createConfigSnapshotsRepository } = require('./repositories/configSnapshotsRepository');
 const { createIncidentCaseService } = require('./incidentCases/incidentCaseService');
 const { createIncidentAutoResolveJob } = require('./incidentCases/autoResolveJob');
@@ -401,6 +402,7 @@ function start() {
   // each newly-detected finding into an open incident on the same device (within
   // the correlator window) or opens a new one; wired into both analysis pipelines.
   const incidentCasesRepo = createIncidentCasesRepository(db);
+  const remediationPlaybooksRepo = createRemediationPlaybooksRepository(db);
   const configSnapshotsRepo = createConfigSnapshotsRepository(db);
   const incidentCaseService = createIncidentCaseService({ incidentCasesRepo, findingStore, configSnapshotsRepo, logger });
 
@@ -581,6 +583,7 @@ function start() {
     probeResultsRepo,
     incidentsRepo,
     incidentCasesRepo,
+    remediationPlaybooksRepo,
     configSnapshotsRepo,
     thresholdsRepo,
     incidentService,

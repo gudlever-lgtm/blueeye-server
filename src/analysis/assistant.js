@@ -483,7 +483,29 @@ function createAssistant({
     return { answer, model: currentModel() };
   }
 
-  return { isEnabled, status, explain, explainDiagnostic, summarizeLocation, narrateInvestigation, generateNis2Draft, diagnoseTransaction, askIncident, buildContext, buildLocationContext };
+  // Proposes a remediation for ONE incident from the SAME already-masked context
+  // askIncident uses (no re-masking here — masking happened before it reached this
+  // method). The fallback recommendation surface calls this only after a playbook
+  // + historical match both came up empty (or an operator forced it). The system
+  // prompt forbids inventing a fix and pins the exact insufficient-context string,
+  // so the caller can detect "the model had nothing concrete to offer". Throws
+  // FeatureDisabled when off; AssistantMisconfigured/UpstreamError on provider
+  // problems.
+  async function suggestRemediation(context) {
+    if (!currentEnabled()) throw new FeatureDisabledError();
+    const system =
+      'You are a network operations assistant for BlueEye, proposing a remediation for ONE specific ' +
+      'incident. Use ONLY the provided masked context (incident, timeline, config changes, similar ' +
+      'incidents). Propose at most a few concrete, actionable steps, in the language of the incident ' +
+      'title. This is a SUGGESTION, never verified fact. NEVER invent facts, causes, hostnames, ' +
+      'addresses or fixes that are not supported by the context. If the context does not contain ' +
+      `enough information to suggest anything concrete, reply EXACTLY with: "${INCIDENT_INSUFFICIENT_ANSWER}"`;
+    const user = JSON.stringify({ task: 'suggest_remediation', context });
+    const answer = await chat(system, user);
+    return { answer, model: currentModel() };
+  }
+
+  return { isEnabled, status, explain, explainDiagnostic, summarizeLocation, narrateInvestigation, generateNis2Draft, diagnoseTransaction, askIncident, suggestRemediation, buildContext, buildLocationContext };
 }
 
 module.exports = { createAssistant, FeatureDisabledError, INCIDENT_INSUFFICIENT_ANSWER };

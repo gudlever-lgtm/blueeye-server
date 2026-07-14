@@ -225,8 +225,8 @@ function makeIncidentCasesRepo(overrides = {}) {
       if (to === 'open') { r.resolved_at = null; r.closed_by = null; }
       return true;
     }),
-    listResolvedClosed: overrides.listResolvedClosed || (async ({ excludeId = null, limit = 100 } = {}) => rows
-      .filter((r) => (r.status === 'resolved' || r.status === 'closed') && (excludeId == null || r.id !== Number(excludeId)))
+    listResolvedClosed: overrides.listResolvedClosed || (async ({ excludeId = null, limit = 100, statuses = ['resolved', 'closed'] } = {}) => rows
+      .filter((r) => (Array.isArray(statuses) && statuses.length ? statuses : ['resolved', 'closed']).includes(r.status) && (excludeId == null || r.id !== Number(excludeId)))
       .sort((a, b) => new Date(b.last_event_at) - new Date(a.last_event_at) || b.id - a.id)
       .slice(0, limit)
       .map((r) => ({ ...mapOut(r), primaryMetric: r.primary_metric ?? null, closedByEmail: r.closed_by_email ?? null, platform: r.platform ?? null }))),
@@ -240,6 +240,68 @@ function makeIncidentCasesRepo(overrides = {}) {
         && (!f.hostId || r.host_id === f.hostId))
       .sort((a, b) => new Date(b.last_event_at) - new Date(a.last_event_at) || b.id - a.id)
       .map(mapOut)),
+  };
+}
+
+// A fake remediation-playbooks repository (in-memory). Mirrors
+// remediationPlaybooksRepository's surface for the recommendation read-model.
+// Seed playbooks with `create()` and runs with `recordRun()`.
+function makeRemediationPlaybooksRepo(overrides = {}) {
+  const playbooks = [];
+  const runs = [];
+  let pbSeq = 0;
+  let runSeq = 0;
+  const iso = (v) => (v == null ? null : (v instanceof Date ? v.toISOString() : new Date(v).toISOString()));
+  const mapPb = (p) => ({
+    id: p.id,
+    name: p.name,
+    triggerCondition: p.trigger_condition,
+    actionType: p.action_type,
+    autoTrigger: !!p.auto_trigger,
+    manualActionText: p.manual_action_text ?? null,
+    enabled: p.enabled == null ? true : !!p.enabled,
+    createdAt: iso(p.created_at || new Date()),
+  });
+  const mapRun = (r) => {
+    const pb = playbooks.find((p) => p.id === r.playbook_id);
+    return {
+      id: r.id,
+      incidentCaseId: r.incident_case_id,
+      playbookId: r.playbook_id,
+      status: r.status,
+      resultText: r.result_text ?? null,
+      ranBy: r.ran_by ?? null,
+      ranAt: iso(r.ran_at || new Date()),
+      playbookName: pb ? pb.name : null,
+      playbookActionType: pb ? pb.action_type : null,
+    };
+  };
+  return {
+    playbooks,
+    runs,
+    create: overrides.create || (async (p) => {
+      const id = (pbSeq += 1);
+      playbooks.push({ id, auto_trigger: 0, manual_action_text: null, enabled: 1, created_at: new Date(), ...p });
+      return id;
+    }),
+    recordRun: overrides.recordRun || (async ({ incidentCaseId, playbookId, status = 'pending', resultText = null, ranBy = null, ranAt = null }) => {
+      const id = (runSeq += 1);
+      runs.push({ id, incident_case_id: incidentCaseId, playbook_id: playbookId, status, result_text: resultText, ran_by: ranBy, ran_at: ranAt || new Date() });
+      return id;
+    }),
+    matchByAnomalyType: overrides.matchByAnomalyType || (async (anomalyType) => {
+      if (anomalyType == null || anomalyType === '') return null;
+      const hit = playbooks
+        .filter((p) => (p.enabled == null ? true : !!p.enabled) && p.trigger_condition === anomalyType)
+        .sort((a, b) => b.id - a.id)[0];
+      return hit ? mapPb(hit) : null;
+    }),
+    findById: overrides.findById || (async (id) => { const p = playbooks.find((x) => x.id === Number(id)); return p ? mapPb(p) : null; }),
+    list: overrides.list || (async () => playbooks.slice().sort((a, b) => b.id - a.id).map(mapPb)),
+    listRunsForIncident: overrides.listRunsForIncident || (async (incidentCaseId) => runs
+      .filter((r) => r.incident_case_id === Number(incidentCaseId))
+      .sort((a, b) => new Date(b.ran_at) - new Date(a.ran_at) || b.id - a.id)
+      .map(mapRun)),
   };
 }
 
@@ -749,7 +811,7 @@ function makeAssistant(overrides = {}) {
     isEnabled: overrides.isEnabled || (() => Boolean(
       overrides.explain || overrides.summarizeLocation ||
       overrides.explainDiagnostic || overrides.narrateInvestigation ||
-      overrides.askIncident || overrides.generateNis2Draft)),
+      overrides.askIncident || overrides.suggestRemediation || overrides.generateNis2Draft)),
     status: overrides.status || (() => ({ enabled: false, configured: false, baseUrl: 'https://api.mistral.ai/v1/chat/completions', model: 'mistral-small-latest' })),
     explain: overrides.explain || (async () => disabled()),
     explainDiagnostic: overrides.explainDiagnostic || (async () => disabled()),
@@ -757,6 +819,7 @@ function makeAssistant(overrides = {}) {
     narrateInvestigation: overrides.narrateInvestigation || (async () => disabled()),
     generateNis2Draft: overrides.generateNis2Draft || (async () => disabled()),
     askIncident: overrides.askIncident || (async () => disabled()),
+    suggestRemediation: overrides.suggestRemediation || (async () => disabled()),
   };
 }
 
@@ -1352,6 +1415,7 @@ function makeApp(overrides = {}) {
     probeResultsRepo: overrides.probeResultsRepo || makeProbeResultsRepo(),
     incidentsRepo: overrides.incidentsRepo || makeIncidentsRepo(),
     incidentCasesRepo: overrides.incidentCasesRepo || makeIncidentCasesRepo(),
+    remediationPlaybooksRepo: overrides.remediationPlaybooksRepo || makeRemediationPlaybooksRepo(),
     configSnapshotsRepo: overrides.configSnapshotsRepo || makeConfigSnapshotsRepo(),
     thresholdsRepo: overrides.thresholdsRepo || makeIncidentThresholdsRepo(),
     incidentService: overrides.incidentService || makeIncidentService(),
@@ -1474,6 +1538,7 @@ module.exports = {
   makeProbeResultsRepo,
   makeIncidentsRepo,
   makeIncidentCasesRepo,
+  makeRemediationPlaybooksRepo,
   makeIncidentCaseService,
   makeConfigSnapshotsRepo,
   makeIncidentThresholdsRepo,

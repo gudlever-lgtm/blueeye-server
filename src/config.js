@@ -227,11 +227,25 @@ const config = {
 const DEFAULT_JWT_SECRET = 'dev-insecure-secret-change-me';
 config.auth.usingDefaultSecret = config.auth.jwtSecret === DEFAULT_JWT_SECRET;
 // Known-weak/published secrets that must never reach production. Covers the dev
-// default and the docker-compose example fallbacks; the production guard in
-// server.js also rejects anything shorter than the minimum length below.
-const WEAK_SECRETS = new Set([DEFAULT_JWT_SECRET, 'change-me-server', 'change-me-licens']);
+// default, the docker-compose example fallbacks, and the value shipped in
+// .env.example. The production guard in server.js also rejects anything shorter
+// than the minimum length below.
+const WEAK_SECRETS = new Set([
+  DEFAULT_JWT_SECRET,
+  'change-me-server',
+  'change-me-licens',
+  // Shipped verbatim in .env.example — 33 chars, so it would otherwise slip past
+  // the length gate. A deploy that copies the example and forgets to change it
+  // must not boot with a secret published in this repo.
+  'change-me-to-a-long-random-string',
+]);
 const MIN_SECRET_LENGTH = 32;
+// Any obvious "change me" placeholder is weak regardless of length, so copy-paste
+// variants of the published examples are caught too.
+const isPlaceholderSecret = (s) => /change[-_ ]?me/i.test(String(s));
 config.auth.weakSecret =
-  WEAK_SECRETS.has(config.auth.jwtSecret) || config.auth.jwtSecret.length < MIN_SECRET_LENGTH;
+  WEAK_SECRETS.has(config.auth.jwtSecret) ||
+  isPlaceholderSecret(config.auth.jwtSecret) ||
+  config.auth.jwtSecret.length < MIN_SECRET_LENGTH;
 
 module.exports = { config };

@@ -1,6 +1,6 @@
 {
   "name": "blueeye-server",
-  "version": "0.75.2",
+  "version": "0.75.3",
   "releaseDate": "2026-07-14",
   "private": true,
   "description": "BlueEye server — on-prem, single-tenant API (Node/Express + MySQL).",

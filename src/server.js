@@ -130,6 +130,15 @@ function start() {
         '(not a known default, at least 32 characters).'
     );
     process.exit(1);
+  } else if (config.auth.weakSecret) {
+    // Not production, so we don't refuse — but a deploy that forgot to set
+    // NODE_ENV=production would otherwise run with a weak secret and no warning.
+    // A weak secret means anyone can forge an admin session token.
+    logger.warn(
+      'WARNING: JWT_SECRET is weak or a known placeholder. This is only safe for ' +
+        'local development. Set a strong, unique JWT_SECRET (and NODE_ENV=production) ' +
+        'before exposing this server — a weak secret lets anyone forge admin tokens.'
+    );
   }
 
   // License trust anchor: in production, LICENSE_PUBLIC_KEY is only honoured

@@ -62,9 +62,26 @@ function createOidcAuth({
     return authEnabledFlag && licensed() && isConfigured();
   }
 
-  async function fetchJson(url, opts) {
+  // All OIDC endpoints (discovery, token, JWKS) live behind an env-configured
+  // issuer but are still remote: a stalled IdP must not hang the public
+  // /auth/oidc/login and /callback routes and pile up sockets. Bound every call
+  // with an AbortController timeout, mirroring the assistant/geocode/integration
+  // callers. Best-effort: if the injected fetch ignores `signal` (some test
+  // fakes), the await simply resolves normally.
+  const FETCH_TIMEOUT_MS = 10000;
+  async function fetchJson(url, opts = {}) {
     if (typeof fetchImpl !== 'function') throw new Error('no fetch implementation');
-    const res = await fetchImpl(url, opts);
+    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+    const timer = controller ? setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS) : null;
+    if (timer && typeof timer.unref === 'function') timer.unref();
+    let res;
+    try {
+      res = await fetchImpl(url, controller ? { ...opts, signal: controller.signal } : opts);
+    } catch (err) {
+      throw new Error(`request to ${url} failed (${err && err.name === 'AbortError' ? 'timeout' : (err && err.message) || 'network error'})`);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
     if (!res || !res.ok) {
       const status = res ? res.status : 'no-response';
       throw new Error(`request to ${url} failed (${status})`);

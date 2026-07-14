@@ -91,6 +91,13 @@ function parseAttributes(s) {
 //   { type:'element', qname, prefix, local, attributes:[{qname,prefix,local,value}],
 //     nsdecls:{ '<prefix>': uri }, children:[…], parent }
 // Text nodes: { type:'text', value }.
+// The tree walkers below (iterElements/canonicalize/textOf) recurse over element
+// depth, so an attacker-supplied, deeply-nested document on the public ACS could
+// blow the call stack (RangeError) before the signature is ever checked. The
+// parser here is iterative and knows the live depth, so cap it: a legitimate SAML
+// assertion nests only a handful of levels.
+const MAX_DEPTH = 200;
+
 function parseXml(xml) {
   const root = { type: 'root', children: [] };
   const stack = [root];
@@ -127,7 +134,10 @@ function parseXml(xml) {
       }
       const node = { type: 'element', qname, prefix, local, attributes, nsdecls, children: [], parent: stack[stack.length - 1] };
       stack[stack.length - 1].children.push(node);
-      if (!selfClose) stack.push(node);
+      if (!selfClose) {
+        stack.push(node);
+        if (stack.length > MAX_DEPTH) throw new Error('XML nesting too deep');
+      }
       i = end + 1;
     } else {
       const next = xml.indexOf('<', i);

@@ -26,7 +26,8 @@ test('GET /api/diagnostics/targets lists the configured CMDB source', async () =
   assert.equal(res.status, 200);
   const cmdb = res.body.targets.find((t) => t.id === 'cmdb');
   assert.ok(cmdb, 'cmdb target missing');
-  assert.equal(cmdb.category, 'itsm');
+  // CMDB has its own diagnostics group now (it is an asset source, not ITSM).
+  assert.equal(cmdb.category, 'cmdb');
   assert.ok(['ok', 'info', 'warn', 'bad'].includes(cmdb.posture));
 });
 

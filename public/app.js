@@ -686,7 +686,8 @@ const PAGE_INFO = {
       el('h4', {}, 'What is screened'),
       el('ul', {},
         el('li', {}, el('strong', {}, 'Email & alert channels '), '— SMTP email, webhook and syslog. Configure under ', viewLink('settings', 'Settings → Alerting'), '.'),
-        el('li', {}, el('strong', {}, 'Remote API receivers (ITSM/IPAM) '), '— ServiceNow, Nautobot and generic webhook connectors (Settings → Integrations).'),
+        el('li', {}, el('strong', {}, 'ITSM / API receivers '), '— ServiceNow, Jira/TOPdesk/GLPI, a generic webhook or a custom ticket API, and the Nautobot device sync (Settings → ITSM).'),
+        el('li', {}, el('strong', {}, 'CMDB / asset inventory '), '— the single CMDB source agents link to: ServiceNow, Nautobot, NetBox, i-doit, GLPI or a custom source (Settings → CMDB).'),
         el('li', {}, el('strong', {}, 'Authentication (SSO) '), '— LDAP/AD bind, OIDC discovery and the SAML IdP.'),
         el('li', {}, el('strong', {}, 'Other outbound services '), '— the AI assistant endpoint, map tiles / geocoder and the licence server.')),
       el('h4', {}, 'Reading the result'),
@@ -919,7 +920,7 @@ const PAGE_INFO = {
       el('h4', {}, 'Acknowledgement'),
       el('p', {}, 'Operators and administrators can acknowledge a finding once it has been seen/handled.'),
       el('h4', {}, 'AI assistant'),
-      el('p', {}, 'If enabled (opt-in) you can ask in natural language — the assistant replies based on the latest findings, not raw data. Turn it on and pick the provider (Mistral or another EU / self-hosted endpoint) and model under ', settingsLink('analyse', 'Settings → Analysis'), '.'),
+      el('p', {}, 'If enabled (opt-in) you can ask in natural language — the assistant replies based on the latest findings, not raw data. Turn it on and pick the provider (Mistral or another EU / self-hosted endpoint) and model under ', settingsLink('ai', 'Settings → AI'), '.'),
       el('p', { class: 'muted' }, 'New findings appear live via WebSocket and can also be fetched via REST.'),
     ],
   },
@@ -1056,9 +1057,10 @@ const SCREEN_SEV_BADGE = { ok: 'badge ok', info: 'badge', warn: 'badge warn', ba
 function screenSetupLink(t) {
   let tab = null;
   if (t.id.startsWith('alert:')) tab = 'alerting';
+  else if (t.id === 'cmdb' || t.category === 'cmdb') tab = 'cmdb';
   else if (t.category === 'itsm') tab = 'integrations';
   else if (t.category === 'auth') tab = 'auth';
-  else if (t.id === 'assistant') tab = 'analyse';
+  else if (t.id === 'assistant') tab = 'ai';
   else if (t.id === 'map') tab = 'map';
   else if (t.id === 'license') tab = 'license';
   if (!tab) return null;
@@ -1538,7 +1540,7 @@ function showDiagnostic(a, d) {
       } catch (err) {
         aiOut.className = 'assistant-out muted';
         aiOut.textContent = err.status === 403
-          ? 'The AI assistant is disabled. An administrator can enable it under Settings → Analysis → AI assistant.'
+          ? 'The AI assistant is disabled. An administrator can enable it under Settings → AI.'
           : err.message;
       } finally {
         aiBtn.disabled = false;
@@ -2936,7 +2938,7 @@ function assistantBox(getHostId) {
     } catch (err) {
       out.className = 'assistant-out muted';
       out.textContent = err.status === 403
-        ? 'The AI assistant is disabled. An administrator can enable it under Settings → Analysis → AI assistant.'
+        ? 'The AI assistant is disabled. An administrator can enable it under Settings → AI.'
         : err.message;
     } finally {
       btn.disabled = false;
@@ -3092,7 +3094,7 @@ function incidentAssistantCard(id) {
     } catch (err) {
       out.className = 'assistant-out muted';
       out.textContent = err.status === 403
-        ? 'The AI assistant is disabled or not licensed. Enable it in Settings → AI assistant.'
+        ? 'The AI assistant is disabled or not licensed. Enable it in Settings → AI.'
         : (err.status === 404 ? 'Incident not found.' : err.message);
     } finally { askBtn.disabled = false; }
   }
@@ -3146,7 +3148,7 @@ async function loadGuide(incident, body) {
           el('div', { class: 'assistant-meta muted' }, `${esc(res.model || 'no provider call')}${res.dataAvailable === false ? ' · insufficient context' : ''}`));
       } catch (err) {
         aiOut.className = 'assistant-out muted';
-        aiOut.textContent = err.status === 403 ? 'The AI assistant is disabled or not licensed (Settings → AI assistant).' : err.message;
+        aiOut.textContent = err.status === 403 ? 'The AI assistant is disabled or not licensed (Settings → AI).' : err.message;
       }
     }
 
@@ -7345,7 +7347,7 @@ let settingsTab = null;
 // tab is [key, label, adminOnly]; non-admins only ever see the personal section.
 const SETTINGS_GROUPS = [
   ['Access & security', [['users', 'Users', true], ['auth', 'Authentication', true], ['apitokens', 'API tokens', true], ['agentkey', 'Agent key', true]]],
-  ['Detection & alerts', [['analyse', 'Analysis', true], ['alerting', 'Alerting', true], ['integrations', 'Integrations', true], ['cmdb', 'CMDB', true], ['maintenance', 'Maintenance', true]]],
+  ['Detection & alerts', [['analyse', 'Analysis', true], ['alerting', 'Alerting', true], ['integrations', 'ITSM', true], ['cmdb', 'CMDB', true], ['ai', 'AI', true], ['maintenance', 'Maintenance', true]]],
   ['Data', [['database', 'Database', true], ['retention', 'Retention', true], ['types', 'Traffic types', true], ['map', 'Map', true]]],
   ['System', [['updates', 'Updates', true], ['agents', 'Agents', true], ['screening', 'Test Settings', true]]],
   ['Personal', [['appearance', 'Appearance', false], ['license', 'License', false]]],
@@ -7737,6 +7739,7 @@ views.settings = async () => {
     alerting: settingsAlertingView,
     integrations: settingsIntegrationsView,
     cmdb: settingsCmdbView,
+    ai: settingsAiView,
     maintenance: settingsMaintenanceView,
     updates: settingsUpdatesView,
     agentkey: settingsAgentKeyView,
@@ -7774,6 +7777,7 @@ const SETTINGS_FEATURE = {
   apitokens: { feature: 'api_access', label: 'API access' },
   analyse: { feature: 'analysis', label: 'Analysis' },
   alerting: { feature: 'alerting', label: 'Alerting' },
+  ai: { feature: 'assistant', label: 'AI assistant' },
   map: { feature: 'geo', label: 'Destinations / geo' },
 };
 
@@ -7954,12 +7958,21 @@ async function settingsUpdatesView() {
 async function settingsAnalyseView() {
   const data = await api('/api/settings');
   const root = el('div');
-  // The assistant is configurable only when the licence includes it (the PUT is
-  // refused server-side otherwise). An unknown licence (null) keeps the card, in
-  // line with the "allow until we know it's off" rule used elsewhere.
+  root.append(el('p', { class: 'muted settings-intro' }, 'The server learns a normal baseline for each metric and raises a finding when a measurement deviates enough from it. Here you set how sensitive detection is — changes take effect immediately, without restart. The opt-in AI assistant is configured on its own ', settingsLink('ai', 'Settings → AI'), ' tab.'));
+  root.append(el('div', { class: 'settings-grid' }, analyseSettingsCard(data.analysis), throughputSettingsCard(data.throughput)));
+  return root;
+}
+
+// Settings → AI: the opt-in LLM assistant (enable flag, provider, key, model,
+// custom endpoint). Split out of Analysis into its own tab. Configurable only when
+// the licence includes it (the PUT is refused server-side otherwise); an unknown
+// licence (null) keeps the card, per the "allow until we know it's off" rule.
+async function settingsAiView() {
+  const data = await api('/api/settings');
+  const root = el('div');
   const assistantLicensed = !data.license || data.license.assistant !== false;
-  root.append(el('p', { class: 'muted settings-intro' }, 'The server learns a normal baseline for each metric and raises a finding when a measurement deviates enough from it. Here you set how sensitive detection is — changes take effect immediately, without restart. The opt-in AI assistant (its on/off switch and API key) is configured here too.'));
-  root.append(el('div', { class: 'settings-grid' }, analyseSettingsCard(data.analysis), throughputSettingsCard(data.throughput),
+  root.append(el('p', { class: 'muted settings-intro' }, 'The opt-in AI assistant answers natural-language questions using only the latest findings (metadata summaries — never raw data or payload). Pick any OpenAI-compatible provider — an EU-hosted, US or self-hosted endpoint — or point it at your own via the “Other” option. Which LLM you use is your choice; the region of each preset is shown so you can weigh data residency.'));
+  root.append(el('div', { class: 'settings-grid' },
     assistantLicensed ? assistantSettingsCard(data.assistant) : assistantUnlicensedCard(data.license)));
   return root;
 }
@@ -8020,9 +8033,10 @@ function throughputSettingsCard(t) {
   });
 }
 
-// ---- Settings → Integrations (ITSM/IPAM outbound connectors) --------------
-// Manage outbound API integrations (ServiceNow, Nautobot, generic webhook): push
-// BlueEye events (incidents/anomalies, agent enroll/delete) to external systems.
+// ---- Settings → ITSM (outbound API receivers) -----------------------------
+// Manage outbound API integrations (ServiceNow, Jira/TOPdesk/GLPI or a custom
+// ticket API, generic webhook, Nautobot CMDB/IPAM device sync): push BlueEye
+// events (incidents/anomalies, agent enroll/delete) to external systems.
 // Backend: src/routes/integrations.js (CRUD + /meta + test-fire). Credentials are
 // encrypted at rest (secret box) and never returned. Admin-only.
 let integrationsEditing = null; // null = list only · 'new' · <id> being edited
@@ -8030,7 +8044,7 @@ let integrationsEditing = null; // null = list only · 'new' · <id> being edite
 async function settingsIntegrationsView() {
   const root = el('div');
   root.append(el('p', { class: 'muted settings-intro' },
-    'Push BlueEye events to your ITSM/IPAM systems — e.g. open a ServiceNow incident when a CRIT finding fires, or sync agents into Nautobot. Credentials are encrypted at rest and never shown again; changes take effect immediately.'));
+    'Push BlueEye events to your ITSM and asset systems — e.g. open a ServiceNow (or Jira / TOPdesk / GLPI, or your own) incident when a CRIT finding fires, or sync agents into Nautobot (CMDB/IPAM). Pick a system to pre-fill its defaults, or “Custom” to inject your own ticket API. Credentials are encrypted at rest and never shown again; changes take effect immediately.'));
 
   let meta; let list;
   try {
@@ -8155,6 +8169,37 @@ function integrationConfigFields(type, config) {
       if (raw) { let parsed; try { parsed = JSON.parse(raw); } catch { throw new Error('Device defaults must be valid JSON.'); } out.deviceDefaults = parsed; }
       return out;
     };
+  } else if (type === 'custom') {
+    // Config-driven "bring your own ITSM" connector: build any JSON ticket body.
+    const pathI = el('input', { type: 'text', value: c.path || '/', placeholder: '/rest/api/2/issue' });
+    const methodSel = el('select', {}, ...['POST', 'PUT'].map((m) => el('option', { value: m }, m)));
+    methodSel.value = (c.method || 'POST').toUpperCase() === 'PUT' ? 'PUT' : 'POST';
+    const schemeI = el('input', { type: 'text', value: c.tokenScheme || '', placeholder: 'Bearer' });
+    const testI = el('input', { type: 'text', value: c.testPath || '', placeholder: '/ (defaults to the create path)' });
+    const fieldsI = el('textarea', { rows: '4', spellcheck: 'false', placeholder: '{ "short_description": "title", "description": "explanation" }' },
+      c.fields ? JSON.stringify(c.fields, null, 2) : '');
+    const staticI = el('textarea', { rows: '4', spellcheck: 'false', placeholder: '{ "fields": { "project": { "key": "OPS" } } }' },
+      c.staticFields ? JSON.stringify(c.staticFields, null, 2) : '');
+    const headersI = el('textarea', { rows: '3', spellcheck: 'false', placeholder: '{ "App-Token": "…" }' },
+      c.headers ? JSON.stringify(c.headers, null, 2) : '');
+    rows.push(alertField('Create path', pathI, 'Path appended to the base URL for the ticket create call.'));
+    rows.push(alertField('Method', methodSel, 'HTTP method for the create call.'));
+    rows.push(alertField('Field map (JSON)', fieldsI, 'Maps API fields (dotted keys build nesting, e.g. "fields.summary") to BlueEye values: title, explanation, summary, severity, metric, host, correlationId, deviation, observed, baseline, impact, urgency.'));
+    rows.push(alertField('Static fields (JSON)', staticI, 'Constant fields merged into every request body (e.g. project/queue/issue type).'));
+    rows.push(alertField('Extra headers (JSON)', headersI, 'Optional static headers (the Authorization header is set from the auth type).'));
+    rows.push(alertField('Token scheme', schemeI, 'Optional Authorization scheme word for token auth (default: Bearer).'));
+    rows.push(alertField('Test path', testI, 'Optional path for the connection test (GET; defaults to the create path).'));
+    gather = () => {
+      const out = { path: pathI.value.trim() || '/', method: methodSel.value };
+      if (schemeI.value.trim()) out.tokenScheme = schemeI.value.trim();
+      if (testI.value.trim()) out.testPath = testI.value.trim();
+      const jsonField = (raw, label) => { const s = raw.trim(); if (!s) return undefined; let p; try { p = JSON.parse(s); } catch { throw new Error(`${label} must be valid JSON.`); } return p; };
+      const f = jsonField(fieldsI.value, 'Field map'); if (f !== undefined) out.fields = f;
+      const s = jsonField(staticI.value, 'Static fields'); if (s !== undefined) out.staticFields = s;
+      const h = jsonField(headersI.value, 'Extra headers'); if (h !== undefined) out.headers = h;
+      if (c.preset) out.preset = c.preset;
+      return out;
+    };
   }
   return { rows, gather };
 }
@@ -8177,12 +8222,17 @@ function integrationEventFields(allEvents, selected) {
 function integrationEditor(meta, existing) {
   const isEdit = !!existing;
   const types = meta.types || [];
-  const typeNames = types.map((t) => t.type);
   const connectorFor = (type) => types.find((t) => t.type === type) || { authTypes: ['none'], defaultEvents: [] };
 
-  const typeSel = el('select', {}, ...typeNames.map((t) => el('option', { value: t }, t)));
-  typeSel.value = isEdit ? existing.type : (typeNames[0] || '');
-  if (isEdit) typeSel.disabled = true;
+  // Preset-driven "System" dropdown on create (built-ins + Jira/TOPdesk/GLPI custom
+  // templates). Falls back to bare types if the server sent no presets.
+  const presets = (Array.isArray(meta.presets) && meta.presets.length)
+    ? meta.presets
+    : types.map((t) => ({ id: t.type, label: t.type, type: t.type, authType: (t.authTypes || ['none'])[0], config: t.custom ? { preset: 'custom' } : {}, baseUrlPlaceholder: '' }));
+  const presetById = (id) => presets.find((p) => p.id === id) || presets[0];
+  const presetSel = el('select', {}, ...presets.map((p) => el('option', { value: p.id }, p.label)));
+  presetSel.value = presets[0].id;
+  const currentType = () => (isEdit ? existing.type : presetById(presetSel.value).type);
 
   const nameI = el('input', { type: 'text', value: isEdit ? existing.name : '', placeholder: 'ServiceNow (prod)' });
   const urlI = el('input', { type: 'text', value: isEdit ? existing.base_url : '', placeholder: 'https://example.service-now.com' });
@@ -8192,30 +8242,36 @@ function integrationEditor(meta, existing) {
   const credWrap = el('div', { class: 'form-grid' });
   const cfgWrap = el('div', { class: 'form-grid' });
   const evWrap = el('div', { class: 'form-grid' });
+  const hintWrap = el('div', {});
   const err = el('p', { class: 'error' });
 
   let authSel; let credGather; let cfgGather; let evGather;
 
   function rebuildCreds() {
-    const c = integrationCredFields(authSel.value, typeSel.value, isEdit);
+    const c = integrationCredFields(authSel.value, currentType(), isEdit);
     credGather = c.gather;
     credWrap.replaceChildren(...c.rows);
   }
   function rebuild() {
-    const conn = connectorFor(typeSel.value);
+    const preset = isEdit ? null : presetById(presetSel.value);
+    const type = currentType();
+    const conn = connectorFor(type);
     authSel = el('select', {}, ...conn.authTypes.map((a) => el('option', { value: a }, a)));
-    authSel.value = isEdit && conn.authTypes.includes(existing.auth_type) ? existing.auth_type : conn.authTypes[0];
+    authSel.value = isEdit && conn.authTypes.includes(existing.auth_type) ? existing.auth_type
+      : (preset && conn.authTypes.includes(preset.authType) ? preset.authType : conn.authTypes[0]);
     authSel.addEventListener('change', rebuildCreds);
     authWrap.replaceChildren(alertField('Auth type', authSel, 'How BlueEye authenticates to the target API.'));
     rebuildCreds();
-    const cfg = integrationConfigFields(typeSel.value, isEdit ? existing.config_json : null);
+    if (!isEdit) urlI.placeholder = (preset && preset.baseUrlPlaceholder) || 'https://example.service-now.com';
+    hintWrap.replaceChildren(...(preset && preset.docsHint ? [el('p', { class: 'muted small cmdb-preset-hint' }, preset.docsHint)] : []));
+    const cfg = integrationConfigFields(type, isEdit ? existing.config_json : (preset && preset.config));
     cfgGather = cfg.gather;
     cfgWrap.replaceChildren(...cfg.rows);
     const ev = integrationEventFields(meta.events || [], (isEdit && existing.config_json && existing.config_json.events) || conn.defaultEvents || []);
     evGather = ev.gather;
     evWrap.replaceChildren(ev.row);
   }
-  typeSel.addEventListener('change', rebuild);
+  presetSel.addEventListener('change', rebuild);
   rebuild();
 
   const saveBtn = el('button', { class: 'small' }, isEdit ? 'Save changes' : 'Create integration');
@@ -8233,17 +8289,22 @@ function integrationEditor(meta, existing) {
         ...credGather(),
       };
       if (isEdit) await api(`/api/integrations/${existing.id}`, { method: 'PUT', body });
-      else { body.type = typeSel.value; await api('/api/integrations', { method: 'POST', body }); }
+      else { body.type = currentType(); await api('/api/integrations', { method: 'POST', body }); }
       toast(isEdit ? 'Integration saved' : 'Integration created');
       integrationsEditing = null; render();
     } catch (e) { err.textContent = errText(e); saveBtn.disabled = false; }
   });
 
+  const editTypeLabel = isEdit
+    ? (existing.type === 'custom' && existing.config_json && existing.config_json.preset && existing.config_json.preset !== 'custom'
+      ? `${existing.type} · ${existing.config_json.preset}` : existing.type)
+    : '';
   return el('div', { class: 'settings-card' },
     el('h3', {}, isEdit ? `Edit integration: ${existing.name}` : 'Add integration'),
     el('div', { class: 'form-grid' },
-      isEdit ? alertField('Type', el('span', { class: 'muted' }, existing.type))
-        : alertField('Type', typeSel, 'Connector type (cannot be changed after creation).'),
+      isEdit ? alertField('System', el('span', { class: 'muted' }, editTypeLabel))
+        : alertField('System', presetSel, 'ServiceNow, Nautobot (CMDB/IPAM sync), a generic webhook, Jira/TOPdesk/GLPI, or a Custom ticket API. Named systems pre-fill defaults you can tweak. Cannot be changed after creation.'),
+      hintWrap,
       alertField('Name', nameI, 'A label for this integration.'),
       alertField('Base URL', urlI, 'https URL of the target API. Private/loopback addresses are rejected.'),
       authWrap, credWrap, cfgWrap, evWrap,
@@ -8271,9 +8332,17 @@ function cmdbCustomConfigFields(config) {
   text('locationField', 'Location field', 'Optional dot-path to the location label (used for the site sync).', 'location');
   text('testPath', 'Test path', 'Optional path for the connection test (default: the search path).', '/api/assets');
   text('tokenScheme', 'Token scheme', 'Optional Authorization scheme word for token auth (default: Bearer).', 'Bearer');
+  // Optional static extra headers (e.g. GLPI's App-Token) as a JSON object.
+  const headersI = el('textarea', { rows: '3', spellcheck: 'false', placeholder: '{ "App-Token": "…" }' },
+    c.headers ? JSON.stringify(c.headers, null, 2) : '');
+  rows.push(alertField('Extra headers (JSON)', headersI, 'Optional static headers sent on every call (the Authorization header is set from the auth type above).'));
   function gather() {
     const out = {};
     for (const [k, i] of Object.entries(inputs)) { const v = i.value.trim(); if (v) out[k] = v; }
+    const raw = headersI.value.trim();
+    if (raw) { let parsed; try { parsed = JSON.parse(raw); } catch { throw new Error('Extra headers must be valid JSON.'); } out.headers = parsed; }
+    // Preserve the preset marker so the dropdown re-selects this template on reload.
+    if (c.preset) out.preset = c.preset;
     return { config: out };
   }
   return { rows, gather };
@@ -8282,7 +8351,7 @@ function cmdbCustomConfigFields(config) {
 async function settingsCmdbView() {
   const root = el('div');
   root.append(el('p', { class: 'muted settings-intro' },
-    'Configure the single CMDB source BlueEye links agents to — ServiceNow, Nautobot, or a Custom HTTP/JSON CMDB you describe yourself. Credentials are encrypted at rest and never shown again. Use “Test connection” to verify before enabling; linking an agent to an asset also syncs the agent’s site from the asset’s CMDB location.'));
+    'Configure the single CMDB source BlueEye links agents to — ServiceNow, Nautobot, NetBox, i-doit, GLPI, or a Custom HTTP/JSON CMDB you describe yourself. Pick a system to pre-fill its defaults, or “Custom” to inject your own. Credentials are encrypted at rest and never shown again. Use “Test connection” to verify before enabling; linking an agent to an asset also syncs the agent’s site from the asset’s CMDB location.'));
 
   let cfg; let meta;
   try {
@@ -8290,13 +8359,28 @@ async function settingsCmdbView() {
   } catch (e) { root.append(el('div', { class: 'empty error' }, errText(e))); return root; }
 
   const types = meta.types || [];
-  const typeNames = types.map((t) => t.type);
-  const TYPE_LABEL = { servicenow: 'ServiceNow', nautobot: 'Nautobot', custom: 'Custom (bring your own)' };
-  const connectorFor = (type) => types.find((t) => t.type === type) || { authTypes: ['basic'], custom: false };
+  const connectorFor = (type) => types.find((t) => t.type === type) || { authTypes: ['basic'], custom: type === 'custom' };
   const isSet = Boolean(cfg && cfg.type);
 
-  const typeSel = el('select', {}, ...typeNames.map((t) => el('option', { value: t }, TYPE_LABEL[t] || t)));
-  typeSel.value = isSet ? cfg.type : (typeNames[0] || '');
+  // Preset-driven dropdown: built-ins (ServiceNow/Nautobot) + named custom
+  // templates (NetBox/i-doit/GLPI) + a blank Custom. Falls back to bare types if
+  // the server sent no presets (older build).
+  const presets = (Array.isArray(meta.presets) && meta.presets.length)
+    ? meta.presets
+    : types.map((t) => ({ id: t.type, label: t.type, type: t.type, authType: (t.authTypes || ['basic'])[0], config: t.custom ? { preset: 'custom' } : {}, baseUrlPlaceholder: '' }));
+  const presetById = (id) => presets.find((p) => p.id === id) || presets[0];
+  // Which preset is active for the stored config: an explicit preset marker wins,
+  // else the built-in whose type matches, else the blank Custom.
+  const initialPresetId = (() => {
+    if (!isSet) return presets[0].id;
+    const marker = cfg.config_json && cfg.config_json.preset;
+    if (marker && presets.some((p) => p.id === marker)) return marker;
+    const byType = presets.find((p) => p.type === cfg.type && p.type !== 'custom');
+    return byType ? byType.id : (presets.find((p) => p.type === 'custom') || presets[0]).id;
+  })();
+
+  const presetSel = el('select', {}, ...presets.map((p) => el('option', { value: p.id }, p.label)));
+  presetSel.value = initialPresetId;
   const urlI = el('input', { type: 'text', value: isSet ? cfg.base_url : '', placeholder: 'https://example.service-now.com' });
   const enabledI = el('input', { type: 'checkbox' }); enabledI.checked = isSet ? !!cfg.enabled : false;
 
@@ -8306,34 +8390,45 @@ async function settingsCmdbView() {
   const err = el('p', { class: 'error' });
   const result = el('p', { class: 'muted small' });
 
+  const currentType = () => presetById(presetSel.value).type;
   let authSel; let credGather; let cfgGather = null;
   function rebuildCreds() {
-    const c = integrationCredFields(authSel.value, typeSel.value, isSet);
+    const c = integrationCredFields(authSel.value, currentType(), isSet);
     credGather = c.gather;
     credWrap.replaceChildren(...c.rows);
   }
-  function rebuild() {
-    const conn = connectorFor(typeSel.value);
+  // `keepStored` = re-render for the config already saved (initial load / same
+  // preset), so we prefill from cfg; switching preset uses the template's defaults.
+  function rebuild(keepStored) {
+    const preset = presetById(presetSel.value);
+    const conn = connectorFor(preset.type);
+    const sameAsStored = keepStored && isSet && cfg.type === preset.type;
     authSel = el('select', {}, ...conn.authTypes.map((a) => el('option', { value: a }, a)));
-    authSel.value = isSet && conn.authTypes.includes(cfg.auth_type) ? cfg.auth_type : conn.authTypes[0];
+    const preferredAuth = sameAsStored && conn.authTypes.includes(cfg.auth_type) ? cfg.auth_type
+      : (conn.authTypes.includes(preset.authType) ? preset.authType : conn.authTypes[0]);
+    authSel.value = preferredAuth;
     authSel.addEventListener('change', rebuildCreds);
     authWrap.replaceChildren(alertField('Auth type', authSel, 'How BlueEye authenticates to the CMDB API.'));
     rebuildCreds();
+    urlI.placeholder = preset.baseUrlPlaceholder || 'https://example.service-now.com';
     // Only the custom connector needs the free-form config block.
     if (conn.custom) {
-      const cc = cmdbCustomConfigFields(isSet && cfg.type === 'custom' ? cfg.config_json : null);
+      const initial = sameAsStored && cfg.config_json ? cfg.config_json : preset.config;
+      const cc = cmdbCustomConfigFields(initial);
       cfgGather = cc.gather;
-      cfgWrap.replaceChildren(el('h4', { class: 'cmdb-cfg-head' }, 'Custom API settings'), ...cc.rows);
+      const kids = [el('h4', { class: 'cmdb-cfg-head' }, 'Custom API settings')];
+      if (preset.docsHint) kids.push(el('p', { class: 'muted small cmdb-preset-hint' }, preset.docsHint));
+      cfgWrap.replaceChildren(...kids, ...cc.rows);
     } else {
       cfgGather = null;
       cfgWrap.replaceChildren();
     }
   }
-  typeSel.addEventListener('change', rebuild);
-  rebuild();
+  presetSel.addEventListener('change', () => rebuild(false));
+  rebuild(true);
 
   const bodyFromForm = () => ({
-    type: typeSel.value,
+    type: currentType(),
     base_url: urlI.value.trim(),
     auth_type: authSel.value,
     enabled: enabledI.checked,
@@ -8378,7 +8473,7 @@ async function settingsCmdbView() {
   root.append(el('div', { class: 'settings-card' },
     el('h3', {}, 'CMDB source', ' ', el('span', { class: `badge ${isSet && cfg.enabled ? 'ok' : ''}` }, isSet && cfg.enabled ? 'Enabled' : 'Disabled')),
     el('div', { class: 'form-grid' },
-      alertField('Type', typeSel, 'ServiceNow, Nautobot, or a Custom HTTP/JSON CMDB — the single source of truth.'),
+      alertField('System', presetSel, 'ServiceNow, Nautobot, NetBox, i-doit, GLPI, or a Custom HTTP/JSON CMDB — the single source of truth. Named systems pre-fill sensible defaults you can tweak.'),
       alertField('Base URL', urlI, 'https URL of the CMDB API. Private/loopback addresses are rejected.'),
       authWrap, credWrap, cfgWrap,
       alertField('Enabled', enabledI, 'When off, asset search is not served.'),

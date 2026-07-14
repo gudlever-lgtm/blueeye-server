@@ -3,7 +3,7 @@
 const { DEFAULT_CATEGORIES, listCategories } = require('../flows/categories');
 const { baseUrlBlockedReason } = require('../integrations/ssrfGuard');
 const {
-  isProviderId, resolveBaseUrl, defaultModel, inferProvider, listProvidersSafe,
+  isProviderId, resolveBaseUrl, defaultModel, inferProvider, listProvidersSafe, getProvider,
 } = require('../analysis/assistantProviders');
 const { MONITOR_SOURCES } = require('../validation/agentValidation');
 
@@ -598,9 +598,12 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
     if (errors) throw badRequest('invalid assistant settings', errors);
     const current = await getAssistant();
     const merged = { ...current, ...value };
-    // A custom ("Other") provider is useless without an endpoint URL.
-    if (merged.provider === 'custom' && String(merged.baseUrl || '').trim() === '') {
-      throw badRequest('invalid assistant settings', { baseUrl: 'a base URL is required for a custom provider' });
+    // A custom-endpoint provider (the "Other" option or Azure OpenAI, both of
+    // which have no fixed preset URL) is useless without an endpoint URL — and
+    // would otherwise silently fall back to Mistral, calling the wrong service.
+    const prov = getProvider(merged.provider);
+    if (prov && prov.custom && String(merged.baseUrl || '').trim() === '') {
+      throw badRequest('invalid assistant settings', { baseUrl: 'a base URL is required for this provider' });
     }
     // Fall back to the provider's default model when none is set.
     if (!merged.model) merged.model = defaultModel(merged.provider);

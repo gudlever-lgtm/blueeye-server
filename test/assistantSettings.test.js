@@ -116,6 +116,16 @@ test('setAssistant: custom provider requires a base URL and round-trips it', asy
   assert.equal(liveAnalysis.assistantBaseUrl, 'https://llm.example.eu/v1/chat/completions');
 });
 
+test('setAssistant: Azure (a custom-endpoint preset) also requires a base URL', async () => {
+  const svc = createSettingsService({ settingsRepo: memRepo(), config: cfg, liveAnalysis: {} });
+  // No fixed endpoint for Azure — without a base URL it would silently fall back
+  // to Mistral, so the save must be rejected.
+  await assert.rejects(() => svc.setAssistant({ provider: 'azure', model: 'gpt-4o' }), (e) => e.statusCode === 400 && Boolean(e.details.baseUrl));
+  const out = await svc.setAssistant({ provider: 'azure', model: 'gpt-4o', baseUrl: 'https://acme.openai.azure.com/openai/deployments/gpt/chat/completions?api-version=2024-02-01' });
+  assert.equal(out.provider, 'azure');
+  assert.match(out.baseUrl, /azure\.com/);
+});
+
 test('validateAssistant rejects an unknown provider and a malformed base URL', async () => {
   const svc = createSettingsService({ settingsRepo: memRepo(), config: cfg, liveAnalysis: {} });
   await assert.rejects(() => svc.setAssistant({ provider: 'not-a-provider' }), (e) => e.statusCode === 400 && Boolean(e.details.provider));

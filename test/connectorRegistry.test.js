@@ -12,9 +12,18 @@ test('registry exposes the built-in connector types', () => {
   assert.ok(types.includes('servicenow'));
   assert.ok(types.includes('nautobot'));
   assert.ok(types.includes('webhook'));
+  assert.ok(types.includes('custom')); // config-driven "bring your own ITSM"
   assert.equal(reg.has('servicenow'), true);
   assert.equal(reg.has('nope'), false);
   assert.equal(reg.get('nope'), null);
+});
+
+test('categoryOf tags ServiceNow as ITSM and Nautobot as CMDB/IPAM (not ITSM)', () => {
+  assert.equal(reg.categoryOf('servicenow'), 'itsm');
+  assert.equal(reg.categoryOf('nautobot'), 'cmdb');
+  assert.equal(reg.categoryOf('webhook'), 'any');
+  assert.equal(reg.categoryOf('custom'), 'any');
+  assert.equal(reg.categoryOf('nope'), 'any');
 });
 
 test('eventsFor uses the connector default events when no override', () => {

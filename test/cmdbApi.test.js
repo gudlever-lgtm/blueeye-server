@@ -109,6 +109,16 @@ test('GET /api/settings/cmdb/meta lists servicenow, nautobot and custom', async 
   const custom = res.body.types.find((t) => t.type === 'custom');
   assert.equal(custom.custom, true);
   assert.ok(custom.authTypes.includes('token'));
+  // Named presets are exposed and every one points at a real connector type.
+  const presets = res.body.presets || [];
+  const ids = presets.map((p) => p.id);
+  assert.ok(ids.includes('netbox'));
+  assert.ok(ids.includes('glpi'));
+  const known = new Set(res.body.types.map((t) => t.type));
+  for (const p of presets) assert.ok(known.has(p.type), `preset ${p.id} -> unknown type ${p.type}`);
+  const netbox = presets.find((p) => p.id === 'netbox');
+  assert.equal(netbox.type, 'custom');
+  assert.equal(netbox.config.searchPath, '/api/dcim/devices/');
 });
 
 test('PUT a custom CMDB stores config_json; GET returns it (no credentials)', async () => {

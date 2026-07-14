@@ -37,6 +37,27 @@ fetch is injected (tests run offline) and every call is bounded by a timeout
   (an `agent.delete` is otherwise recorded as skipped).
 - **webhook** — generic JSON POST (optionally HMAC-SHA256 signed via
   `credentials.secret`), proof that the interface is open for future targets.
+- **custom** — a **config-driven** "bring your own ITSM" connector
+  (`src/integrations/connectors/customItsm.js`). No new code is needed to onboard a
+  ticket API: the request body is built from a `fields` map (API field → BlueEye
+  value; dotted keys like `fields.summary` build nesting, so Jira/GLPI shapes are
+  expressible), merged over `staticFields` (constants like project/queue), with
+  optional static `headers` (e.g. GLPI's `App-Token`). Keys: `path` (create path),
+  `method` (POST/PUT), `fields`, `staticFields`, `headers`, `tokenScheme`,
+  `testPath` (GET reachability). The mappable event vocabulary is `title`,
+  `explanation`, `summary`, `severity`, `metric`, `host`, `correlationId`,
+  `deviation`, `observed`, `baseline`, `impact`, `urgency`. No idempotency lookup is
+  attempted (arbitrary APIs share no correlation surface); the dispatcher's debounce
+  already suppresses duplicates.
+
+Each connector declares a **category** — `itsm` (ServiceNow tickets), `cmdb`
+(Nautobot device/IPAM sync — this is CMDB/IPAM, **not** ITSM), or `any` (webhook,
+custom). `GET /api/integrations/meta` returns the categories plus a `presets` list —
+named templates for the Settings dropdown (ServiceNow, Nautobot, Webhook, and the
+custom-connector templates **Jira Service Management**, **TOPdesk**, **GLPI**). A
+preset pre-fills the type/auth/config; the admin still supplies the URL, credentials
+and any project keys, and can edit every field. The preset id round-trips in
+`config_json.preset` so the dropdown re-selects it on reload.
 
 ## Trigger layer (`src/integrations/dispatcher.js`)
 
@@ -60,7 +81,7 @@ pipelines/routes — it never slows or breaks ingestion, enrollment or deletion.
 | Method | Path | Description |
 | --- | --- | --- |
 | `GET` | `/api/integrations` | list (safe; **no credentials**). |
-| `GET` | `/api/integrations/meta` | connector catalogue (types + supported auth + default events). |
+| `GET` | `/api/integrations/meta` | connector catalogue (types + supported auth + default events + category + custom flag) and named presets. |
 | `GET` | `/api/integrations/:id` | one (safe). `404` unknown. |
 | `GET` | `/api/integrations/:id/audit` | recent fire history. |
 | `POST` | `/api/integrations` | create. `400` invalid/unknown type/auth/config, `409` duplicate name. |

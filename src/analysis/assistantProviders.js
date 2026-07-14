@@ -21,14 +21,28 @@ const DEFAULT_PROVIDER_ID = 'mistral';
 const DEFAULT_MODEL = 'mistral-small-latest';
 
 const PROVIDERS = [
-  { id: 'mistral', label: 'Mistral AI (EU)', region: 'EU', baseUrl: MISTRAL_URL, defaultModel: DEFAULT_MODEL, keyRequired: true, custom: false },
+  // EU-hosted presets first (data residency stays in the EU) — Mistral is the default.
+  { id: 'mistral', label: 'Mistral AI (EU, France)', region: 'EU', baseUrl: MISTRAL_URL, defaultModel: DEFAULT_MODEL, keyRequired: true, custom: false },
   { id: 'scaleway', label: 'Scaleway AI (EU, France)', region: 'EU', baseUrl: 'https://api.scaleway.ai/v1/chat/completions', defaultModel: 'mistral-nemo-instruct-2407', keyRequired: true, custom: false },
+  { id: 'ovhcloud', label: 'OVHcloud AI Endpoints (EU, France)', region: 'EU', baseUrl: 'https://oai.endpoints.kepler.ai.cloud.ovh.net/v1/chat/completions', defaultModel: 'Mistral-7B-Instruct-v0.3', keyRequired: true, custom: false },
+  { id: 'ionos', label: 'IONOS AI Model Hub (EU, Germany)', region: 'EU', baseUrl: 'https://openai.inference.de-txl.ionos.com/v1/chat/completions', defaultModel: 'meta-llama/Meta-Llama-3.1-8B-Instruct', keyRequired: true, custom: false },
+  { id: 'alephalpha', label: 'Aleph Alpha (EU, Germany)', region: 'EU', baseUrl: 'https://api.aleph-alpha.com/v1/chat/completions', defaultModel: 'pharia-1-llm-7b-control', keyRequired: true, custom: false },
+  // US / non-EU presets — offered but never the default; region is shown so an
+  // admin who cares about residency can avoid them.
   { id: 'openai', label: 'OpenAI (US)', region: 'US', baseUrl: 'https://api.openai.com/v1/chat/completions', defaultModel: 'gpt-4o-mini', keyRequired: true, custom: false },
   { id: 'anthropic', label: 'Anthropic · Claude (US)', region: 'US', baseUrl: 'https://api.anthropic.com/v1/chat/completions', defaultModel: 'claude-3-5-haiku-latest', keyRequired: true, custom: false },
   { id: 'gemini', label: 'Google Gemini (US)', region: 'US', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', defaultModel: 'gemini-1.5-flash', keyRequired: true, custom: false },
   { id: 'groq', label: 'Groq (US)', region: 'US', baseUrl: 'https://api.groq.com/openai/v1/chat/completions', defaultModel: 'llama-3.3-70b-versatile', keyRequired: true, custom: false },
+  { id: 'together', label: 'Together AI (US)', region: 'US', baseUrl: 'https://api.together.xyz/v1/chat/completions', defaultModel: 'meta-llama/Llama-3.3-70B-Instruct-Turbo', keyRequired: true, custom: false },
   { id: 'openrouter', label: 'OpenRouter (US, aggregator)', region: 'US', baseUrl: 'https://openrouter.ai/api/v1/chat/completions', defaultModel: 'openai/gpt-4o-mini', keyRequired: true, custom: false },
+  { id: 'deepseek', label: 'DeepSeek (non-EU, China)', region: 'non-EU', baseUrl: 'https://api.deepseek.com/v1/chat/completions', defaultModel: 'deepseek-chat', keyRequired: true, custom: false },
+  // Azure OpenAI has a per-resource/per-deployment endpoint, so there is no fixed
+  // preset URL — it behaves like a custom provider (admin supplies the base URL and
+  // uses their deployment name as the model).
+  { id: 'azure', label: 'Azure OpenAI (US, bring-your-own endpoint)', region: 'US', baseUrl: '', defaultModel: '', keyRequired: true, custom: true },
   { id: 'ollama', label: 'Ollama (self-hosted)', region: 'self-hosted', baseUrl: 'http://localhost:11434/v1/chat/completions', defaultModel: 'llama3.1', keyRequired: false, custom: false },
+  // The generic escape hatch — points the assistant at ANY OpenAI-compatible
+  // endpoint (a self-hosted vLLM/LocalAI, a private gateway, …).
   { id: 'custom', label: 'Other (custom endpoint)', region: 'any', baseUrl: '', defaultModel: '', keyRequired: false, custom: true },
 ];
 

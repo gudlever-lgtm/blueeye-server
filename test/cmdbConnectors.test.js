@@ -100,6 +100,17 @@ test('customCmdb.search maps nested results via configured dot-paths', async () 
   assert.deepEqual(res.assets, [{ id: 'a1', name: 'db-1', type: 'server', location: 'Odense' }]);
 });
 
+test('customCmdb.search: static headers are sent and auth still wins', async () => {
+  let sentHeaders = null;
+  const connector = createCustomCmdbConnector({ fetchImpl: async (u, opts) => { sentHeaders = opts.headers; return { ok: true, status: 200, json: async () => ([]) }; } });
+  await connector.search({
+    baseUrl: 'https://glpi.example', authType: 'token', credentials: { token: 'usr' },
+    config: { searchPath: '/apirest.php/search/Computer', tokenScheme: 'user_token', headers: { 'App-Token': 'APP', Authorization: 'ignored' } },
+  }, 'db');
+  assert.equal(sentHeaders['App-Token'], 'APP');
+  assert.equal(sentHeaders.Authorization, 'user_token usr'); // auth header wins over static
+});
+
 test('customCmdb.search: empty resultsPath treats the body as the array; defaults id/name', async () => {
   const connector = createCustomCmdbConnector({ fetchImpl: async () => ({ ok: true, status: 200, json: async () => ([{ id: 'x', name: 'n' }]) }) });
   const res = await connector.search({ baseUrl: 'https://c.example', authType: 'none', credentials: {}, config: { searchPath: '/s' } }, 'q');

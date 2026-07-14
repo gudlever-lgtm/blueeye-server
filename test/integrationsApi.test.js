@@ -19,6 +19,36 @@ function create(app, body, who = admin) {
   return request(app).post('/api/integrations').set('Authorization', who()).send(body);
 }
 
+// ---- Custom ITSM connector (config-driven) --------------------------------
+
+test('create a custom ITSM integration: validates config, persists preset marker, redacts creds', async () => {
+  const app = makeApp();
+  const body = {
+    type: 'custom', name: 'Jira', baseUrl: 'https://org.atlassian.net', authType: 'basic',
+    credentials: { username: 'a@b.c', password: 'tok' },
+    config: {
+      preset: 'jira', path: '/rest/api/2/issue', method: 'POST',
+      fields: { 'fields.summary': 'title' }, staticFields: { fields: { project: { key: 'OPS' } } },
+      events: ['incident'],
+    },
+  };
+  const res = await create(app, body);
+  assert.equal(res.status, 201);
+  assert.equal(res.body.type, 'custom');
+  assert.equal(res.body.config_json.preset, 'jira'); // marker round-trips for the dropdown
+  assert.equal(res.body.config_json.path, '/rest/api/2/issue');
+  assert.deepEqual(res.body.config_json.events, ['incident']);
+  assert.equal(res.body.credentials, undefined);
+});
+
+test('create a custom ITSM integration with an unknown event key -> 400', async () => {
+  const res = await create(makeApp(), {
+    type: 'custom', name: 'Bad', baseUrl: 'https://x.example', authType: 'none',
+    config: { path: '/t', fields: { summary: 'not-a-key' } },
+  });
+  assert.equal(res.status, 400);
+});
+
 // ---- AuthN / AuthZ --------------------------------------------------------
 
 test('GET /api/integrations without a token -> 401', async () => {
@@ -170,7 +200,32 @@ test('GET /api/integrations/meta lists the connector catalogue', async () => {
   const types = res.body.types.map((t) => t.type);
   assert.ok(types.includes('servicenow'));
   assert.ok(types.includes('nautobot'));
+  assert.ok(types.includes('custom'));
   assert.ok(res.body.events.includes('incident'));
+  // Each type carries a category (ITSM vs CMDB/IPAM) and a custom flag.
+  const nautobot = res.body.types.find((t) => t.type === 'nautobot');
+  assert.equal(nautobot.category, 'cmdb');
+  const custom = res.body.types.find((t) => t.type === 'custom');
+  assert.equal(custom.custom, true);
+});
+
+test('GET /api/integrations/meta exposes named presets, all backed by real types', async () => {
+  const res = await request(makeApp()).get('/api/integrations/meta').set('Authorization', admin());
+  const presets = res.body.presets || [];
+  const ids = presets.map((p) => p.id);
+  assert.ok(ids.includes('servicenow'));
+  assert.ok(ids.includes('jira'));
+  assert.ok(ids.includes('topdesk'));
+  const known = new Set(res.body.types.map((t) => t.type));
+  for (const p of presets) {
+    assert.ok(known.has(p.type), `preset ${p.id} points at unknown type ${p.type}`);
+    assert.ok(p.label && p.category);
+  }
+  // The Jira preset is a custom-connector template carrying a nested field map.
+  const jira = presets.find((p) => p.id === 'jira');
+  assert.equal(jira.type, 'custom');
+  assert.equal(jira.config.preset, 'jira');
+  assert.equal(jira.config.fields['fields.summary'], 'title');
 });
 
 test('GET :id/audit -> 404 unknown, 200 list when known', async () => {

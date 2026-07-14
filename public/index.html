@@ -67,7 +67,6 @@
             <button data-view="flows">Flows</button>
             <button data-view="topology">Topology</button>
             <button data-view="investigation" data-min-role="operator">Troubleshooting</button>
-            <button data-view="docs">Documentation</button>
           </div>
           <div class="nav-group collapsed" data-category="Insights">
             <button type="button" class="nav-group-label" aria-expanded="false">Insights</button>
@@ -83,20 +82,30 @@
             <button data-view="settings">Settings</button>
           </div>
         </nav>
-        <div class="sidebar-foot" id="sidebar-foot">BlueEye server</div>
+        <div class="sidebar-foot" id="sidebar-foot">
+          <button type="button" class="foot-docs" data-view="docs" title="Open the built-in documentation">
+            <span class="foot-docs-icon" aria-hidden="true">📖</span> Documentation
+          </button>
+          <span id="sidebar-version" class="foot-version">BlueEye server</span>
+        </div>
       </aside>
       <div class="shell">
         <header class="topbar">
           <button id="nav-toggle" class="ghost nav-toggle" title="Toggle navigation" aria-label="Toggle navigation">☰</button>
+          <div class="topbar-search-wrap">
+            <span class="topbar-search-icon" aria-hidden="true">🔍</span>
+            <input id="search-q" class="topbar-search" type="search" placeholder="Search agent / IP / port…" autocomplete="off" />
+          </div>
           <span class="spacer"></span>
-          <input id="search-q" class="topbar-search" type="search" placeholder="Search agent / IP / port…" autocomplete="off" />
-          <label class="autorefresh muted" title="Auto-refresh every 5 seconds">
-            <input type="checkbox" id="autorefresh" /> Auto
+          <label class="autorefresh" title="Auto-refresh every 5 seconds">
+            <input type="checkbox" id="autorefresh" /> <span>Auto</span>
           </label>
-          <span id="whoami" class="muted"></span>
-          <button id="theme" class="ghost" title="Toggle light/dark theme">🌙</button>
-          <button id="refresh" class="ghost" title="Refresh">⟳</button>
-          <button id="logout" class="ghost">Log out</button>
+          <span id="whoami" class="user-chip"></span>
+          <div class="topbar-tools">
+            <button id="theme" class="icon-btn" title="Toggle light/dark theme">🌙</button>
+            <button id="refresh" class="icon-btn" title="Refresh">⟳</button>
+          </div>
+          <button id="logout" class="ghost logout-btn">Log out</button>
         </header>
         <main id="view" tabindex="-1"></main>
       </div>

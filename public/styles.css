@@ -309,20 +309,73 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .brand-mark { width: 28px; height: 28px; flex: 0 0 28px; border-radius: 8px;
   display: grid; place-items: center; background: var(--accent-weak); color: var(--accent); font-size: 16px; }
 .brand-name { font-weight: 700; font-size: 15px; letter-spacing: -.01em; }
-.sidebar-foot { margin-top: auto; padding: 12px 16px; border-top: 1px solid var(--border);
-  font-size: 11px; letter-spacing: .02em; color: var(--muted); }
+.sidebar-foot { margin-top: auto; padding: 12px 12px; border-top: 1px solid var(--border);
+  display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+.foot-version { font-size: 11px; letter-spacing: .02em; color: var(--muted); padding: 0 4px; }
+/* Documentation pill — reads as a clickable action (not muted text), tucked in
+   the sidebar footer beside the version line instead of taking a nav slot. */
+.foot-docs { display: inline-flex; align-items: center; gap: 7px;
+  padding: 6px 12px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--panel-2);
+  color: var(--text); font-size: 12px; font-weight: 600; line-height: 1;
+  transition: border-color .15s ease, background .15s ease, color .15s ease; }
+.foot-docs:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-weak); }
+.foot-docs.active { border-color: var(--accent); color: var(--accent); background: var(--accent-weak); }
+.foot-docs-icon { font-size: 13px; line-height: 1; }
 
 .shell { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
 
-/* Topbar (inside the content column). */
+/* Topbar (inside the content column). A single row: the global search sits on
+   the left; a spacer pushes the utility cluster (auto-refresh, user chip,
+   icon tools, log out) to the right. */
 .topbar {
-  display: flex; align-items: center; gap: 14px;
-  padding: 10px 18px; background: var(--panel);
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 20px; min-height: 58px; background: var(--panel);
   border-bottom: 1px solid var(--border);
   position: sticky; top: 0; z-index: 30;
 }
 .nav-toggle { display: none; font-size: 16px; line-height: 1; padding: 6px 10px; }
 .spacer { flex: 1; }
+
+/* Global search — the input is borderless; the wrapper carries the pill border,
+   background and focus ring so the magnifier glyph sits inside the field. */
+.topbar-search-wrap {
+  display: inline-flex; align-items: center; gap: 7px;
+  height: 36px; padding: 0 14px;
+  border: 1px solid var(--border); border-radius: 999px;
+  background: var(--panel-2);
+  transition: border-color .15s ease, box-shadow .15s ease, background .15s ease;
+}
+.topbar-search-wrap:focus-within {
+  border-color: var(--accent); background: var(--panel);
+  box-shadow: 0 0 0 3px var(--accent-weak);
+}
+.topbar-search-icon { font-size: 13px; line-height: 1; opacity: .55; }
+
+/* Auto-refresh — a compact pill toggle instead of a bare checkbox + label. */
+.autorefresh {
+  display: inline-flex; align-items: center; gap: 7px;
+  height: 36px; padding: 0 14px;
+  border: 1px solid var(--border); border-radius: 999px;
+  background: var(--panel); color: var(--muted);
+  font-size: 12px; font-weight: 500; cursor: pointer; user-select: none;
+  transition: border-color .15s ease, color .15s ease;
+}
+.autorefresh:hover { border-color: var(--accent); color: var(--text); }
+.autorefresh input { width: auto; margin: 0; accent-color: var(--accent); }
+
+/* Square icon buttons (theme / refresh) grouped as a small segment. */
+.topbar-tools { display: inline-flex; align-items: center; gap: 6px; }
+.icon-btn {
+  display: inline-grid; place-items: center;
+  width: 36px; height: 36px; padding: 0;
+  border: 1px solid var(--border); border-radius: 10px;
+  background: var(--panel); color: var(--text);
+  font-size: 15px; line-height: 1;
+  transition: background .15s ease, border-color .15s ease, color .15s ease;
+}
+.icon-btn:hover { background: var(--panel-2); border-color: var(--accent); color: var(--accent); }
+.logout-btn { height: 36px; border-radius: 10px; }
 
 /* Sidebar navigation — the .tabs nav keeps its data-view buttons + JS hooks,
    laid out as a vertical rail grouped into labelled categories, with an accent
@@ -360,9 +413,11 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .tabs button.active::before { content: ''; position: absolute; left: 0; top: 8px; bottom: 8px;
   width: 3px; border-radius: 0 3px 3px 0; background: var(--accent); }
 
-/* Logged-in user (email + role) in the topbar. */
-#whoami { display: inline-flex; align-items: center; gap: 8px; }
-#whoami .who-email { color: var(--text); font-size: 13px; }
+/* Logged-in user (email + role) in the topbar, rendered as a rounded chip. */
+#whoami.user-chip { display: inline-flex; align-items: center; gap: 8px;
+  height: 36px; padding: 0 6px 0 14px;
+  border: 1px solid var(--border); border-radius: 999px; background: var(--panel-2); }
+#whoami .who-email { color: var(--text); font-size: 13px; font-weight: 500; }
 #whoami .badge.role-admin { background: rgba(56,189,248,.15); color: var(--accent); }
 #whoami .badge.role-operator { background: rgba(34,197,94,.15); color: var(--ok); }
 #whoami .badge.role-viewer { background: rgba(148,163,184,.15); color: var(--muted); }
@@ -631,9 +686,10 @@ main#view:has(.fleet) { max-width: 95%; }
 .dq-flag { color: var(--warn); cursor: help; }
 
 /* Topbar global search + results modal. */
-.topbar-search { width: 200px; max-width: 36vw; padding: 5px 10px; border: 1px solid var(--border); border-radius: 999px;
-  background: var(--bg); color: var(--text); font: inherit; font-size: 13px; }
-.topbar-search:focus { outline: none; border-color: var(--accent); }
+.topbar-search { width: 220px; max-width: 34vw; padding: 0; border: 0; border-radius: 0;
+  background: transparent; color: var(--text); font: inherit; font-size: 13px; }
+.topbar-search:focus { outline: none; }
+.topbar-search::placeholder { color: var(--muted); }
 .search-list { display: flex; flex-direction: column; gap: 4px; margin: 2px 0 10px; }
 .search-item { display: flex; align-items: center; gap: 10px; justify-content: flex-start; text-align: left;
   background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; cursor: pointer; color: var(--text); }
@@ -921,10 +977,6 @@ button.ghost.danger { background: transparent; color: var(--bad); border-color: 
 .test-item-row select { flex: 0 0 120px; }
 .test-item-row input[type=text] { flex: 1 1 160px; min-width: 120px; }
 .test-item-row input[type=number] { flex: 0 0 88px; }
-
-/* Auto-refresh toggle */
-.autorefresh { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; }
-.autorefresh input { width: auto; }
 
 /* Geo map: map + selection side panel. */
 .geo-grid { display: grid; grid-template-columns: 1fr 340px; gap: 16px; align-items: start; }

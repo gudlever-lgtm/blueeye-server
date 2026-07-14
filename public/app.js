@@ -10950,7 +10950,7 @@ let footStamped = false;
 async function stampFooter() {
   if (footStamped) return;
   footStamped = true;
-  const foot = $('#sidebar-foot');
+  const foot = $('#sidebar-version') || $('#sidebar-foot');
   if (!foot) return;
   try {
     const ver = await api('/system/version');
@@ -11012,7 +11012,7 @@ async function render({ silent = false } = {}) {
     b.classList.toggle('hidden', role !== 'admin');
   }
   if (currentView === 'users' && role !== 'admin') currentView = 'overview';
-  for (const b of document.querySelectorAll('.tabs button[data-view]')) b.classList.toggle('active', b.dataset.view === currentView);
+  for (const b of document.querySelectorAll('.tabs button[data-view], #sidebar-foot button[data-view]')) b.classList.toggle('active', b.dataset.view === currentView);
 
   const view = $('#view');
   if (!silent) view.replaceChildren(el('div', { class: 'empty' }, 'Loading…'));
@@ -11072,7 +11072,7 @@ $('#logout').addEventListener('click', () => { setAutoRefresh(false); stopOvervi
 $('#refresh').addEventListener('click', () => render());
 $('#autorefresh').addEventListener('change', (e) => setAutoRefresh(e.target.checked));
 function closeNav() { $('#app').classList.remove('nav-open'); }
-for (const b of document.querySelectorAll('.tabs button[data-view]')) {
+for (const b of document.querySelectorAll('.tabs button[data-view], #sidebar-foot button[data-view]')) {
   b.addEventListener('click', () => {
     closeDrawer(); closeNav();
     // Locked (licence-excluded) items don't open — they nudge to the licence page.

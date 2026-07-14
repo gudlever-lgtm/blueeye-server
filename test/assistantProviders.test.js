@@ -25,6 +25,25 @@ test('the catalog offers Mistral (default) plus a broad selection and a custom o
   for (const p of PROVIDERS) assert.ok(p.region, `${p.id} must declare a region`);
 });
 
+test('the catalog includes the EU + additional presets we advertise', () => {
+  const ids = PROVIDERS.map((p) => p.id);
+  for (const id of ['ovhcloud', 'ionos', 'alephalpha', 'together', 'deepseek', 'azure']) {
+    assert.ok(ids.includes(id), `expected provider ${id}`);
+  }
+  // The three added EU presets are region EU with a fixed https endpoint + a model.
+  for (const id of ['ovhcloud', 'ionos', 'alephalpha']) {
+    const p = getProvider(id);
+    assert.equal(p.region, 'EU');
+    assert.match(p.baseUrl, /^https:\/\//);
+    assert.ok(p.defaultModel);
+  }
+  // Azure has no fixed endpoint — it behaves like a custom provider (admin URL).
+  const azure = getProvider('azure');
+  assert.equal(azure.custom, true);
+  assert.equal(azure.baseUrl, '');
+  assert.equal(resolveBaseUrl('azure', 'https://my.openai.azure.com/…'), 'https://my.openai.azure.com/…');
+});
+
 test('isProviderId / getProvider', () => {
   assert.ok(isProviderId('mistral'));
   assert.ok(isProviderId('openai'));

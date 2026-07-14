@@ -43,9 +43,16 @@ separate from the outbound-integrations registry — CMDB connectors *read*
   | `idField` / `nameField` | dot-path to the id / display name in a result | `id` / `name` |
   | `typeField` / `locationField` | optional dot-paths to type / location | — |
   | `tokenScheme` | Authorization scheme word for token auth | `Bearer` |
+  | `headers` | optional static extra headers (e.g. GLPI's `App-Token`); auth always wins | — |
 
 `GET /api/settings/cmdb/meta` returns the three types + their auth types + whether
-each needs the `config` block (only `custom` does), which drives the Settings form.
+each needs the `config` block (only `custom` does), plus a `presets` list — named
+templates for the Settings dropdown. Built-ins (**ServiceNow**, **Nautobot**) and
+config-driven templates for **NetBox**, **i-doit** and **GLPI** pre-fill sensible
+paths/field-maps; the admin still supplies the URL + credentials and can tweak every
+field. The preset id round-trips in `config_json.preset` so the dropdown re-selects
+it on reload. (NetBox works out of the box; i-doit's JSON-RPC API and GLPI's
+session-token auth may need a proxy — each carries a `docsHint`.)
 
 The built-in ServiceNow/Nautobot methods:
 
@@ -109,8 +116,10 @@ verified posture) plus a live connectivity test via the connector's
 
 ## Dashboard
 
-- **Settings → CMDB** (`settingsCmdbView` in `public/app.js`): type/base_url/auth
-  form, write‑only credentials, an **Enabled** toggle and a **Test connection**
+- **Settings → CMDB** (`settingsCmdbView` in `public/app.js`): a **System** preset
+  dropdown (ServiceNow / Nautobot / NetBox / i-doit / GLPI / Custom) that pre-fills
+  the base_url placeholder + custom config, write‑only credentials, an **Enabled**
+  toggle and a **Test connection**
   button that shows the real 200/401/500 result inline. (The test uses a raw
   `fetch`, not `api()`, so an upstream 401 shows inline instead of logging the
   admin out.)

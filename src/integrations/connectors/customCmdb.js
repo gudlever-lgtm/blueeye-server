@@ -19,9 +19,13 @@ const silentLogger = { info() {}, warn() {}, error() {} };
 //   typeField      dot-path to the asset type/class                (optional)
 //   locationField  dot-path to the location label                  (optional)
 //   tokenScheme    Authorization scheme word for token auth        (default 'Bearer')
+//   headers        static extra request headers (name -> value)    (optional)
 //
-// Auth reuses the shared authHeader (basic/token/oauth2/none). Only metadata is
-// ever read — the connector normalises every result to { id, name, type, location }.
+// `headers` lets APIs that need a fixed side-channel header (e.g. GLPI's
+// App-Token) be wired up without code. Auth reuses the shared authHeader
+// (basic/token/oauth2/none) and always wins over a same-named static header. Only
+// metadata is ever read — the connector normalises every result to
+// { id, name, type, location }.
 function createCustomCmdbConnector({ fetchImpl = globalThis.fetch, logger = silentLogger, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
   const type = 'custom';
   const authTypes = ['none', 'basic', 'token', 'oauth2'];
@@ -44,7 +48,9 @@ function createCustomCmdbConnector({ fetchImpl = globalThis.fetch, logger = sile
   }
   function headersFor(integration) {
     const c = cfgOf(integration);
-    return authHeader(integration.authType, integration.credentials, { tokenScheme: c.tokenScheme || 'Bearer' });
+    const staticHeaders = (c.headers && typeof c.headers === 'object' && !Array.isArray(c.headers)) ? c.headers : {};
+    // Auth header wins over any static header of the same name.
+    return { ...staticHeaders, ...authHeader(integration.authType, integration.credentials, { tokenScheme: c.tokenScheme || 'Bearer' }) };
   }
   function urlFor(integration, path, params) {
     const base = String(integration.baseUrl || '').replace(/\/+$/, '');

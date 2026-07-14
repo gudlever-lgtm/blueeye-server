@@ -85,7 +85,7 @@ hard-codes no metric relationships.
 
 **Off** by default. Enable it and set the API key **either** via env
 (`ANALYSIS_ASSISTANT_ENABLED=true` + `ANALYSIS_ASSISTANT_API_KEY`) **or** at
-runtime in the dashboard (**Settings → Analysis → AI assistant**, admin) — the
+runtime in the dashboard (**Settings → AI**, its own tab, admin) — the
 stored setting overrides the env defaults and applies without a restart. Once
 enabled you can ask a question about a host; the assistant builds a small context
 from the most recent findings (summary fields only — no raw data or secrets) and
@@ -98,19 +98,28 @@ set, plus a masked hint).
 
 **Provider selection.** The assistant speaks the OpenAI-compatible
 `/v1/chat/completions` API, so the provider is swappable. Pick one in **Settings →
-Analysis → AI assistant**:
+AI**:
 
 | Provider | Region | Endpoint | Key |
 | --- | --- | --- | --- |
 | `mistral` | EU | `api.mistral.ai` | required |
 | `scaleway` | EU | `api.scaleway.ai` | required |
+| `ovhcloud` | EU | `oai.endpoints…ovh.net` | required |
+| `ionos` | EU | `openai.inference…ionos.com` | required |
+| `alephalpha` | EU | `api.aleph-alpha.com` | required |
 | `openai` | US | `api.openai.com` | required |
 | `anthropic` | US | `api.anthropic.com` | required |
 | `gemini` | US | `generativelanguage.googleapis.com` | required |
 | `groq` | US | `api.groq.com` | required |
+| `together` | US | `api.together.xyz` | required |
 | `openrouter` | US | `openrouter.ai` | required |
+| `deepseek` | non-EU | `api.deepseek.com` | required |
+| `azure` | US | admin-supplied (per-deployment URL) | required |
 | `ollama` | self-hosted | `localhost:11434` | none |
 | `custom` ("Other") | any | admin-supplied | optional |
+
+`azure` and `custom` have no fixed endpoint — both require an admin-supplied base
+URL (the save is rejected without one, so neither silently falls back to Mistral).
 
 **Which LLM to use is the admin's decision, not a product constraint.** The
 no-US-vendor rule in `CLAUDE.md` governs BlueEye's *own* dependencies (map tiles,

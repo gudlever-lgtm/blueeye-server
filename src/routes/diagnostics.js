@@ -23,13 +23,15 @@ const { reachUrl } = require('../diagnostics/reach');
 
 const GROUPS = {
   email: 'Email & alert channels',
-  itsm: 'Remote API receivers (ITSM/IPAM)',
+  itsm: 'ITSM / API receivers',
+  cmdb: 'CMDB / asset inventory',
   auth: 'Authentication (SSO)',
   other: 'Other outbound services',
 };
 const GROUP_ORDER = [
   { key: 'email', label: GROUPS.email },
   { key: 'itsm', label: GROUPS.itsm },
+  { key: 'cmdb', label: GROUPS.cmdb },
   { key: 'auth', label: GROUPS.auth },
   { key: 'other', label: GROUPS.other },
 ];
@@ -105,16 +107,20 @@ function createDiagnosticsRouter({
     add('alert:webhook', 'email', alertRunnable('webhook'), true, screening.screenWebhook(g.channels.webhook));
     add('alert:syslog', 'email', alertRunnable('syslog'), true, screening.screenSyslog(g.channels.syslog));
 
-    // Remote API receivers (ITSM/IPAM).
+    // ITSM / outbound API receivers (ServiceNow tickets, generic/custom receivers,
+    // Nautobot device sync). A Nautobot integration is IPAM/CMDB rather than ITSM,
+    // but it shares the outbound-integrations plumbing, so it stays in this group.
     for (const row of g.integrations) {
       add(`integration:${row.id}`, 'itsm', true, true, screening.screenIntegration(row));
     }
-    // CMDB (single source of truth) — runnable only once a source is configured
-    // with a base URL and the connector supports a live test.
+    // CMDB (single source of truth) — its OWN group, not ITSM: this is the asset
+    // inventory BlueEye links agents to (ServiceNow CMDB / Nautobot / NetBox / …),
+    // distinct from ticketing. Runnable only once a source is configured with a base
+    // URL and the connector supports a live test.
     if (g.cmdb && g.cmdb.base_url) {
       const runnable = Boolean(cmdbConfigRepo && connectorRegistry && secretBox
         && connectorRegistry.get(g.cmdb.type) && typeof connectorRegistry.get(g.cmdb.type).testConnection === 'function');
-      add('cmdb', 'itsm', runnable, true, screening.screenCmdb(g.cmdb));
+      add('cmdb', 'cmdb', runnable, true, screening.screenCmdb(g.cmdb));
     }
 
     // Authentication (SSO).

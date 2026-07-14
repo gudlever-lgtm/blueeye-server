@@ -13,9 +13,14 @@ const AUTH_TYPES = ['none', 'basic', 'oauth2', 'token'];
 const URL_MAX = 512;
 const PATH_MAX = 256;
 const FIELD_MAX = 128;
-// The custom-connector config keys (all optional except searchPath). Values are
-// short strings (paths / query param / dot-paths / a token scheme word).
-const CUSTOM_KEYS = ['searchPath', 'testPath', 'queryParam', 'resultsPath', 'idField', 'nameField', 'typeField', 'locationField', 'tokenScheme'];
+// The custom-connector STRING config keys (all optional except searchPath). Values
+// are short strings (paths / query param / dot-paths / a token scheme word). A
+// `preset` marker (which named template prefilled the form) round-trips too so the
+// dropdown can re-select it on reload.
+const CUSTOM_KEYS = ['searchPath', 'testPath', 'queryParam', 'resultsPath', 'idField', 'nameField', 'typeField', 'locationField', 'tokenScheme', 'preset'];
+const HEADER_NAME_RE = /^[A-Za-z0-9-]{1,128}$/;
+const HEADER_VALUE_MAX = 1024;
+const HEADER_MAX_KEYS = 20;
 const CRED_MAX_KEYS = 20;
 const CRED_KEY_RE = /^[\w.-]{1,64}$/;
 const CRED_VALUE_MAX = 2000;
@@ -92,6 +97,21 @@ function validCustomConfig(raw, errors) {
     if (v.length > max) { errors.config = `config.${key} is too long`; return undefined; }
     if (key === 'testPath' && !v.startsWith('/')) { errors.config = 'config.testPath must start with /'; return undefined; }
     out[key] = v.trim();
+  }
+  // Optional static extra headers (e.g. GLPI's App-Token). An object of string
+  // values; header names are HTTP tokens, values are bounded.
+  if (c.headers !== undefined && c.headers !== null) {
+    if (typeof c.headers !== 'object' || Array.isArray(c.headers)) { errors.config = 'config.headers must be an object of string values'; return undefined; }
+    const hkeys = Object.keys(c.headers);
+    if (hkeys.length > HEADER_MAX_KEYS) { errors.config = `config.headers must have at most ${HEADER_MAX_KEYS} entries`; return undefined; }
+    const headers = {};
+    for (const name of hkeys) {
+      if (FORBIDDEN_KEYS.has(name) || !HEADER_NAME_RE.test(name)) { errors.config = `config.headers name "${name}" must be a 1-128 char token ([A-Za-z0-9-])`; return undefined; }
+      const hv = c.headers[name];
+      if (typeof hv !== 'string' || hv.length > HEADER_VALUE_MAX) { errors.config = `config.headers "${name}" must be a string up to ${HEADER_VALUE_MAX} chars`; return undefined; }
+      headers[name] = hv;
+    }
+    if (Object.keys(headers).length) out.headers = headers;
   }
   return out;
 }

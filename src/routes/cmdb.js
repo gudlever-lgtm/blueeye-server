@@ -6,6 +6,7 @@ const { requireAuth, requireRole } = require('../auth/middleware');
 const { ROLES } = require('../auth/roles');
 const { parseId } = require('../validation/locationValidation');
 const { validateCmdbConfig, validateAssetSearch, validateAgentLink } = require('../validation/cmdbValidation');
+const { CMDB_PRESETS } = require('../cmdb/presets');
 
 // CMDB integration (single source of truth). Three routers:
 //   - createCmdbSettingsRouter  → /api/settings/cmdb  (admin: configure + test)
@@ -49,7 +50,13 @@ function createCmdbSettingsRouter({ cmdbConfigRepo, registry, secretBox }) {
   // + whether each needs the free-form `config` block (only `custom` does). Lets
   // the Settings form offer ServiceNow / Nautobot / Custom and show the right fields.
   router.get('/meta', (req, res) => {
-    res.json({ types: typeof registry.meta === 'function' ? registry.meta() : registry.types().map((t) => ({ type: t, authTypes: (registry.get(t) || {}).authTypes || [], custom: t === 'custom' })) });
+    res.json({
+      types: typeof registry.meta === 'function' ? registry.meta() : registry.types().map((t) => ({ type: t, authTypes: (registry.get(t) || {}).authTypes || [], custom: t === 'custom' })),
+      // Named templates for the dropdown (built-ins + NetBox / i-doit / GLPI custom
+      // presets). Filtered to types the registry actually has, so a preset can never
+      // point at an unavailable connector.
+      presets: CMDB_PRESETS.filter((p) => registry.has(p.type)),
+    });
   });
 
   router.put('/', asyncHandler(async (req, res) => {

@@ -6,6 +6,7 @@ const { requireAuth, requireRole } = require('../auth/middleware');
 const { ROLES } = require('../auth/roles');
 const { parseId } = require('../validation/locationValidation');
 const { validateIntegrationCreate, validateIntegrationUpdate } = require('../validation/integrationValidation');
+const { ITSM_PRESETS } = require('../integrations/presets');
 
 const KNOWN_EVENTS = ['incident', 'anomaly', 'agent.enroll', 'agent.delete'];
 
@@ -60,11 +61,17 @@ function createIntegrationsRouter({ integrationsRepo, integrationAuditRepo = nul
   // GET /api/integrations/meta — connector catalogue (types + supported auth +
   // default events). Declared before /:id so "meta" isn't parsed as an id.
   router.get('/meta', (req, res) => {
+    const catOf = typeof registry.categoryOf === 'function' ? registry.categoryOf : () => 'any';
     const types = registry.types().map((type) => {
       const c = registry.get(type);
-      return { type, authTypes: c.authTypes || [], defaultEvents: c.defaultEvents || [] };
+      // custom = the config-driven "bring your own" connector; category tags each
+      // type as ITSM ticketing vs CMDB/IPAM inventory (Nautobot) vs generic.
+      return { type, authTypes: c.authTypes || [], defaultEvents: c.defaultEvents || [], category: catOf(type), custom: type === 'custom' };
     });
-    res.json({ types, events: KNOWN_EVENTS });
+    // Named templates for the dropdown (built-ins + Jira / TOPdesk / GLPI custom
+    // presets). Filtered to types the registry actually has.
+    const presets = ITSM_PRESETS.filter((p) => registry.has(p.type));
+    res.json({ types, events: KNOWN_EVENTS, presets });
   });
 
   // GET /api/integrations — list (safe; no credentials).

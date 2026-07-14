@@ -193,8 +193,15 @@ A single vanilla-JS SPA. Key building blocks:
   `robustBand`, `markers` = event lines via `findingMarkers`). `usageBar()` for utilisation bars.
 - Theme: a catalogue of colour palettes (`PALETTES`: default/midnight/nord/forest/sunset/
   solarized/contrast), each in a **light + dark** variant. Pick a palette in **Settings →
-  Appearance**; the topbar 🌙/☀️ button flips brightness within it (`dual`). **Saved per
-  user** (`/me/preferences`), cached in localStorage for instant apply. Mobile: tab bar → bottom nav.
+  Appearance**; the **account menu**'s "Dark mode" row (topbar `#user-menu`, `#theme`)
+  flips brightness within it (`dual`). **Saved per user** (`/me/preferences`), cached in
+  localStorage for instant apply. Mobile: tab bar → bottom nav.
+
+- Topbar account menu (`#user-menu` in `index.html`): one dropdown, opened from a trigger
+  showing the signed-in user (`#whoami` = email + role badge) + a chevron. Houses **Refresh**
+  (full `location.reload()`) with the **auto-refresh** toggle (`#autorefresh`; persisted in
+  `localStorage` under `AUTOREFRESH_KEY`, restored + started on load, reload on change),
+  **Dark mode** (`#theme`) and **Log out** (`#logout`). Closes on outside-click + Escape.
 
 ## Where do I change…?
 

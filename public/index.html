@@ -97,17 +97,33 @@
             <input id="search-q" class="topbar-search" type="search" placeholder="Search agent / IP / port…" autocomplete="off" />
           </div>
           <span class="spacer"></span>
-          <label class="autorefresh" title="Auto-refresh every 5 seconds">
-            <span class="ar-label">Auto</span>
-            <input type="checkbox" id="autorefresh" />
-            <span class="ar-switch" aria-hidden="true"></span>
-          </label>
-          <span id="whoami" class="user-chip"></span>
-          <div class="topbar-tools">
-            <button id="theme" class="icon-btn" title="Toggle light/dark theme">🌙</button>
-            <button id="refresh" class="icon-btn" title="Refresh">⟳</button>
+          <!-- Account menu: the trigger shows the signed-in user (email + role)
+               and a chevron; clicking it opens a dropdown that houses what used
+               to be the standalone Auto toggle, refresh, theme and log-out
+               controls. Closes on outside-click and Escape (see app.js). -->
+          <div class="user-menu" id="user-menu">
+            <button type="button" class="user-menu-trigger" id="user-menu-trigger" aria-haspopup="true" aria-expanded="false" aria-controls="user-menu-panel">
+              <span id="whoami" class="user-chip-inner"></span>
+              <span class="user-menu-caret" aria-hidden="true">⌄</span>
+            </button>
+            <div class="user-menu-panel hidden" id="user-menu-panel" role="menu">
+              <div class="user-menu-item user-menu-refresh">
+                <button type="button" class="user-menu-refresh-main" id="refresh" role="menuitem">
+                  <span class="menu-ico" aria-hidden="true">⟳</span> Refresh
+                </button>
+                <label class="autorefresh" title="Auto-refresh every 5 seconds">
+                  <input type="checkbox" id="autorefresh" />
+                  <span class="ar-switch" aria-hidden="true"></span>
+                </label>
+              </div>
+              <button type="button" class="user-menu-item" id="theme" role="menuitem" title="Toggle light/dark theme">
+                <span class="menu-ico" aria-hidden="true">🌙</span> Dark mode
+              </button>
+              <button type="button" class="user-menu-item" id="logout" role="menuitem">
+                <span class="menu-ico" aria-hidden="true">⎋</span> Log out
+              </button>
+            </div>
           </div>
-          <button id="logout" class="ghost logout-btn">Log out</button>
         </header>
         <main id="view" tabindex="-1"></main>
       </div>

@@ -763,3 +763,37 @@ CREATE TABLE IF NOT EXISTS agent_cmdb_links (
   CONSTRAINT fk_agent_cmdb_links_agent FOREIGN KEY (agent_id)
     REFERENCES agents (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Remediation playbooks + their per-incident run history (migration 055). A
+-- playbook is a pre-defined response keyed to an anomaly-type (trigger_condition
+-- matches the incident's primary finding metric, exactly); incident_playbook_runs
+-- records that a playbook ran against a specific incident and the outcome.
+CREATE TABLE IF NOT EXISTS remediation_playbooks (
+  id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  name VARCHAR(200) NOT NULL,
+  trigger_condition VARCHAR(120) NOT NULL,
+  action_type VARCHAR(60) NOT NULL,
+  auto_trigger TINYINT(1) NOT NULL DEFAULT 0,
+  manual_action_text TEXT NULL DEFAULT NULL,
+  enabled TINYINT(1) NOT NULL DEFAULT 1,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_remediation_playbooks_trigger (trigger_condition, enabled)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS incident_playbook_runs (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  incident_case_id BIGINT UNSIGNED NOT NULL,
+  playbook_id INT UNSIGNED NOT NULL,
+  status ENUM('pending', 'succeeded', 'failed') NOT NULL DEFAULT 'pending',
+  result_text TEXT NULL DEFAULT NULL,
+  ran_by VARCHAR(120) NULL DEFAULT NULL,
+  ran_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_incident_playbook_runs_incident (incident_case_id, ran_at),
+  KEY idx_incident_playbook_runs_playbook (playbook_id),
+  CONSTRAINT fk_incident_playbook_runs_incident FOREIGN KEY (incident_case_id)
+    REFERENCES incident_cases (id) ON DELETE CASCADE,
+  CONSTRAINT fk_incident_playbook_runs_playbook FOREIGN KEY (playbook_id)
+    REFERENCES remediation_playbooks (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

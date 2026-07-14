@@ -11,9 +11,11 @@ const { maskedDiff } = require('../config/configContext');
 const { scoreSimilarIncidents } = require('../incidentCases/similarity');
 const { gatherIncidentAskContext } = require('../incidentCases/askContext');
 const { buildIncidentGuide } = require('../incidentCases/guide');
+const { buildMatchingPlaybook, buildHistoricalMatches } = require('../incidentCases/recommendation');
 const { INCIDENT_INSUFFICIENT_ANSWER } = require('../analysis/assistant');
 
 const SEVERITIES = ['INFO', 'WARN', 'CRIT'];
+const OPERATOR_ROLES = [ROLES.OPERATOR, ROLES.ADMIN]; // force_ai (costs a Mistral call) is operator+
 
 function parseIncidentId(raw) {
   const n = Number(raw);
@@ -45,6 +47,7 @@ function createIncidentsRouter({
   assistant = null,
   featureGate = null,
   askCache = null,
+  remediationPlaybooksRepo = null,
 }) {
   const router = express.Router();
   const reader = requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN);
@@ -164,13 +167,14 @@ function createIncidentsRouter({
     return risk === 'none' ? null : risk;
   }
 
-  router.get('/:id/similar', requireAuth, reader, asyncHandler(async (req, res) => {
-    const id = parseIncidentId(req.params.id);
-    if (id === null) return res.status(400).json({ error: 'id must be a positive integer' });
-    const incident = await incidentCasesRepo.findById(id);
-    if (!incident) return res.status(404).json({ error: 'Incident not found' });
-
-    // Enrich the target with its matching criteria.
+  // Shared similarity ranking (Fase 4). Builds the target's matching criteria,
+  // pulls the past resolved/closed candidates, enriches each with its config-
+  // change risk class, and returns the top-`limit` scored candidates plus the
+  // (enriched) candidate pool. `statuses` narrows the pool — the recommendation
+  // read-model passes ['resolved'] (a closed-without-resolution is not a solution),
+  // the /similar endpoint keeps the default (resolved + closed). No re-scoring by
+  // callers: order + score come straight from scoreSimilarIncidents.
+  async function rankSimilar(incident, id, { limit = 5, statuses } = {}) {
     const primaryFinding = incident.primaryFindingId && findingStore
       ? await findingStore.get(incident.primaryFindingId) : null;
     const platform = agentsRepo && typeof agentsRepo.findById === 'function' && Number.isInteger(Number(incident.hostId))
@@ -182,16 +186,24 @@ function createIncidentsRouter({
       primaryMetric: primaryFinding ? primaryFinding.metric : null,
       configChangeType: await configChangeType(incident.configChangeId),
     };
-
     const candidates = typeof incidentCasesRepo.listResolvedClosed === 'function'
-      ? await incidentCasesRepo.listResolvedClosed({ excludeId: id, limit: 50 }) : [];
+      ? await incidentCasesRepo.listResolvedClosed({ excludeId: id, limit: 50, ...(statuses ? { statuses } : {}) }) : [];
     // Enrich candidates' config-change risk class (only those that have one).
     for (const c of candidates) {
       // eslint-disable-next-line no-await-in-loop
       c.configChangeType = await configChangeType(c.configChangeId);
     }
+    const ranked = scoreSimilarIncidents(target, candidates, { limit });
+    return { target, candidates, ranked };
+  }
 
-    const ranked = scoreSimilarIncidents(target, candidates, { limit: 5 });
+  router.get('/:id/similar', requireAuth, reader, asyncHandler(async (req, res) => {
+    const id = parseIncidentId(req.params.id);
+    if (id === null) return res.status(400).json({ error: 'id must be a positive integer' });
+    const incident = await incidentCasesRepo.findById(id);
+    if (!incident) return res.status(404).json({ error: 'Incident not found' });
+
+    const { ranked } = await rankSimilar(incident, id, { limit: 5 });
     const similar = ranked.map((r) => ({
       id: r.id,
       title: r.title,
@@ -211,6 +223,62 @@ function createIncidentsRouter({
     return res.json({ incidentId: id, similar });
   }));
 
+  // GET /api/incidents/:id/recommendation — a single, combined recommendation in
+  // three ordered sections: (a) matching_playbook, (b) historical_matches, then
+  // (c) ai_suggestion. Read-only, so viewer+. `?force_ai=true` forces the AI
+  // fallback and is operator/admin only (it costs a Mistral call). The AI section
+  // itself (1c) is wired in a later step; it is null here.
+  router.get('/:id/recommendation', requireAuth, reader, asyncHandler(async (req, res) => {
+    const id = parseIncidentId(req.params.id);
+    if (id === null) return res.status(400).json({ error: 'id must be a positive integer' });
+
+    const forceAi = req.query.force_ai === 'true';
+    if (forceAi && !OPERATOR_ROLES.includes(req.user && req.user.role)) {
+      return res.status(403).json({ error: 'Forbidden', requiredRoles: OPERATOR_ROLES });
+    }
+
+    const incident = await incidentCasesRepo.findById(id);
+    if (!incident) return res.status(404).json({ error: 'Incident not found' });
+
+    const primaryFinding = incident.primaryFindingId && findingStore
+      ? await findingStore.get(incident.primaryFindingId) : null;
+    const anomalyType = primaryFinding ? primaryFinding.metric : null;
+
+    // (a) matching_playbook — match on the incident's primary anomaly-type. If the
+    // playbook already ran on this incident, show its result instead of re-suggesting.
+    let matchedPlaybook = null;
+    let playbookRuns = [];
+    if (remediationPlaybooksRepo && typeof remediationPlaybooksRepo.matchByAnomalyType === 'function') {
+      matchedPlaybook = await remediationPlaybooksRepo.matchByAnomalyType(anomalyType);
+      if (matchedPlaybook && typeof remediationPlaybooksRepo.listRunsForIncident === 'function') {
+        playbookRuns = await remediationPlaybooksRepo.listRunsForIncident(id);
+      }
+    }
+    const matchingPlaybook = buildMatchingPlaybook(matchedPlaybook, playbookRuns);
+
+    // (b) historical_matches — reuse Fase-4 similarity, RESOLVED-only. No re-scoring.
+    const { ranked, candidates } = await rankSimilar(incident, id, { limit: 5, statuses: ['resolved'] });
+    const runsByIncident = {};
+    if (remediationPlaybooksRepo && typeof remediationPlaybooksRepo.listRunsForIncident === 'function') {
+      for (const r of ranked) {
+        // eslint-disable-next-line no-await-in-loop
+        runsByIncident[r.id] = await remediationPlaybooksRepo.listRunsForIncident(r.id);
+      }
+    }
+    const historicalMatches = buildHistoricalMatches(ranked, { runsByIncident, resolvedCandidates: candidates });
+
+    // (c) ai_suggestion — the Mistral fallback is wired in a later step (1c). It is
+    // only generated when (a) is null AND (b) is empty, or force_ai=true.
+    const aiSuggestion = null;
+
+    return res.json({
+      incidentId: id,
+      matching_playbook: matchingPlaybook,
+      historical_matches: historicalMatches,
+      ai_suggestion: aiSuggestion,
+    });
+  }));
+
   // Compact config-context (change id + minutes-before + risk) for the guide.
   async function configContextForGuide(incident) {
     if (!incident.configChangeId || !configSnapshotsRepo) return null;
@@ -226,21 +294,8 @@ function createIncidentsRouter({
 
   // Top-N similar past incidents (light shape) for the guide's resolution step.
   async function topSimilar(incident, id, limit) {
-    const primaryFinding = incident.primaryFindingId && findingStore ? await findingStore.get(incident.primaryFindingId) : null;
-    const platform = agentsRepo && typeof agentsRepo.findById === 'function' && Number.isInteger(Number(incident.hostId))
-      ? (await agentsRepo.findById(Number(incident.hostId)))?.platform ?? null : null;
-    const target = {
-      id: incident.id, hostId: incident.hostId, platform,
-      primaryMetric: primaryFinding ? primaryFinding.metric : null,
-      configChangeType: await configChangeType(incident.configChangeId),
-    };
-    const candidates = typeof incidentCasesRepo.listResolvedClosed === 'function'
-      ? await incidentCasesRepo.listResolvedClosed({ excludeId: id, limit: 50 }) : [];
-    for (const c of candidates) {
-      // eslint-disable-next-line no-await-in-loop
-      c.configChangeType = await configChangeType(c.configChangeId);
-    }
-    return scoreSimilarIncidents(target, candidates, { limit }).map((r) => ({
+    const { ranked } = await rankSimilar(incident, id, { limit });
+    return ranked.map((r) => ({
       id: r.id, title: r.title, resolvedAt: r.resolvedAt ?? null, closedBy: r.closedByEmail ?? null,
     }));
   }

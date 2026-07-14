@@ -58,6 +58,30 @@ test('renderInstallPs1 requires Node, extracts with tar, enrolls, and registers 
   assert.match(script, /RestartCount/);
 });
 
+test('renderInstallPs1 treats a stored token as success even when node exits non-zero', () => {
+  const script = renderInstallPs1({ serverUrl: 'http://x', code: 'C', sourceSha: SHA });
+  // Capture the enroll exit code, then decide by the RESULT (token present) rather
+  // than the exit code — so an exit-time crash after a successful enroll doesn't
+  // abort a working install.
+  assert.match(script, /\$enrollExit = \$LASTEXITCODE/);
+  assert.match(script, /Test-Path \$TokenPath/);
+  assert.match(script, /treating enrollment as successful/);
+  // A genuinely missing token is still a hard failure.
+  assert.match(script, /no token was written/);
+  // And "success" with no token written is rejected too (never register a dead agent).
+  assert.match(script, /refusing to register a non-working agent/);
+});
+
+test('renderInstallPs1 prints the uninstall command up front, not only at the end', () => {
+  const script = renderInstallPs1({ serverUrl: 'https://blueeye.example.dk', code: 'C', sourceSha: SHA });
+  const lines = script.split('\n');
+  const earlyIdx = lines.findIndex((l) => /to remove the agent at any time/.test(l));
+  const downloadIdx = lines.findIndex((l) => /downloading agent source/.test(l));
+  assert.ok(earlyIdx !== -1, 'must echo an uninstall hint');
+  assert.ok(earlyIdx < downloadIdx, 'uninstall hint must come before the download line');
+  assert.match(lines[earlyIdx], /uninstall\.ps1 \| iex/);
+});
+
 test('renderInstallPs1 makes the SYSTEM service observable — captures the agent log and shows it', () => {
   const script = renderInstallPs1({ serverUrl: 'http://x', code: 'C', sourceSha: SHA });
   // The launcher redirects the agent's stdout+stderr into agent.log (a SYSTEM

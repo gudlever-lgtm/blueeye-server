@@ -151,6 +151,11 @@ if (-not $tar) {
 $Tmp = Join-Path ([System.IO.Path]::GetTempPath()) ('blueeye-' + [System.IO.Path]::GetRandomFileName())
 New-Item -ItemType Directory -Force -Path $Tmp | Out-Null
 try {
+  # Show how to undo this right up front, so an operator who needs to bail out (a
+  # failed/partial install, a wrong host) always has the removal command to hand —
+  # without hunting for it at the very end of a long install.
+  Info "to remove the agent at any time, run (elevated):  powershell -NoProfile -ExecutionPolicy Bypass -Command ""irm $ServerUrl/enroll/uninstall.ps1 | iex"""
+
   $Tarball = Join-Path $Tmp 'agent-source.tgz'
   Info "downloading agent source from $ServerUrl/enroll/agent-source.tgz"
   Fetch-Or-Explain "$ServerUrl/enroll/agent-source.tgz" $Tarball
@@ -205,7 +210,23 @@ try {
   $enrollArgs = @((Join-Path $InstallDir 'src\\index.js'), 'enroll', '--code', $EnrollCode, '--server', $ServerUrl)
   if ($CertFingerprint) { $enrollArgs += @('--fingerprint', $CertFingerprint) }
   & $NodeExe @enrollArgs
-  if ($LASTEXITCODE -ne 0) { Fail 'enrollment failed' }
+  $enrollExit = $LASTEXITCODE
+  # Trust the RESULT, not just the exit code. Enrollment writes the token before
+  # the process exits; some hosts (notably older agents on Windows) can abort node
+  # on the way out AFTER that write, on a libuv teardown race, leaving a non-zero
+  # exit code on a genuinely successful enrollment. If the token file is present
+  # and non-empty, the agent is enrolled — proceed (with a note) instead of forcing
+  # a pointless re-run. Only a MISSING/empty token is a real failure.
+  $tokenOk = (Test-Path $TokenPath) -and ((Get-Item $TokenPath -ErrorAction SilentlyContinue).Length -gt 0)
+  if ($enrollExit -ne 0) {
+    if ($tokenOk) {
+      Info "enroll process exited with code $enrollExit, but a token was stored at $TokenPath — treating enrollment as successful (this is a known exit-time crash, harmless here)."
+    } else {
+      Fail "enrollment failed (node exited with code $enrollExit and no token was written to $TokenPath)"
+    }
+  } elseif (-not $tokenOk) {
+    Fail "enrollment reported success but no token was written to $TokenPath — refusing to register a non-working agent"
+  }
 
   # Launcher .cmd carries the environment the agent needs at boot (a Scheduled
   # Task action cannot set env vars itself) — the Windows analogue of the

@@ -40,7 +40,9 @@ async function seed({ withPlaybook = false } = {}) {
   });
 
   const findingStore = makeFindingStore();
-  await findingStore.save({ id: 'pf', hostId: '9', metric: 'cpu', severity: 'CRIT', explanation: 'x', evidence: [{}], createdAt: new Date('2026-06-01T08:00:00Z') });
+  // The target's primary finding is linked to the incident (so the masked AI
+  // context has data when the AI path is exercised).
+  await findingStore.save({ id: 'pf', hostId: '9', metric: 'cpu', severity: 'CRIT', kind: 'ANOMALY', explanation: 'x', observed: 95, baseline: 20, deviation: 6, evidence: [{ metric: 'cpu', value: 95, ts: new Date().toISOString() }], incidentCaseId: targetId, createdAt: new Date('2026-06-01T08:00:00Z') });
   const agentsRepo = makeAgentsRepo({ findById: async (aid) => (Number(aid) === 9 ? { id: 9, platform: 'linux' } : null) });
 
   const remediationPlaybooksRepo = makeRemediationPlaybooksRepo();
@@ -147,4 +149,109 @@ test('GET /recommendation surfaces a repo failure as 500', async () => {
 test('GET /recommendation requires auth → 401', async () => {
   const res = await request(makeApp()).get('/api/incidents/1/recommendation');
   assert.equal(res.status, 401);
+});
+
+// --- (c) ai_suggestion ordering: AI is the LAST resort -----------------------
+
+// A spy assistant that counts suggestRemediation calls. Passing suggestRemediation
+// also flips the fake's isEnabled() to true.
+function spyAssistant(answer = 'Restart the service and re-check the interface counters.') {
+  const calls = [];
+  return {
+    calls,
+    assistant: {
+      isEnabled: () => true,
+      status: () => ({ enabled: true, configured: true }),
+      suggestRemediation: async (context) => { calls.push(context); return { answer, model: 'mistral-small-latest' }; },
+    },
+  };
+}
+
+// Builds an incident that has NO matching playbook and NO resolved history, but a
+// linked finding so the masked AI context has data (hasAnyData=true).
+async function seedNoMatch() {
+  const incidentCasesRepo = makeIncidentCasesRepo();
+  const id = await incidentCasesRepo.create({ host_id: '5', title: 'lonely', status: 'open', severity: 'WARN', first_event_at: new Date('2026-06-01T00:00:00Z'), last_event_at: new Date('2026-06-01T00:00:00Z') });
+  const findingStore = makeFindingStore();
+  await findingStore.save({ id: 'f1', hostId: '5', metric: 'io.await', severity: 'WARN', kind: 'ANOMALY', explanation: 'x', evidence: [{ metric: 'io.await', value: 9, ts: new Date().toISOString() }], incidentCaseId: id, createdAt: new Date('2026-06-01T00:00:00Z') });
+  return { incidentCasesRepo, findingStore, id };
+}
+
+test('ordering: no playbook + no history → the AI IS called, tagged ai_generated', async () => {
+  const { incidentCasesRepo, findingStore, id } = await seedNoMatch();
+  const spy = spyAssistant();
+  const app = makeApp({ incidentCasesRepo, findingStore, assistant: spy.assistant });
+  const res = await request(app).get(`/api/incidents/${id}/recommendation`).set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 200);
+  assert.equal(res.body.matching_playbook, null);
+  assert.deepEqual(res.body.historical_matches, []);
+  assert.equal(spy.calls.length, 1, 'AI called exactly once');
+  assert.equal(res.body.ai_suggestion.source, 'ai_generated');
+  assert.equal(res.body.ai_suggestion.sufficient, true);
+  assert.match(res.body.ai_suggestion.suggestion, /Restart the service/);
+});
+
+test('ordering: a matching playbook suppresses the AI call', async () => {
+  const { incidentCasesRepo, findingStore, agentsRepo, remediationPlaybooksRepo, targetId } = await seed({ withPlaybook: true });
+  const spy = spyAssistant();
+  const app = makeApp({ incidentCasesRepo, findingStore, agentsRepo, remediationPlaybooksRepo, assistant: spy.assistant });
+  const res = await request(app).get(`/api/incidents/${targetId}/recommendation`).set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 200);
+  assert.ok(res.body.matching_playbook); // playbook matched
+  assert.equal(spy.calls.length, 0, 'AI NOT called when a playbook matched');
+  assert.equal(res.body.ai_suggestion, null);
+});
+
+test('ordering: historical matches suppress the AI call', async () => {
+  // seed() has resolved history (A, B) for the cpu target, but no playbook.
+  const { incidentCasesRepo, findingStore, agentsRepo, remediationPlaybooksRepo, targetId } = await seed();
+  const spy = spyAssistant();
+  const app = makeApp({ incidentCasesRepo, findingStore, agentsRepo, remediationPlaybooksRepo, assistant: spy.assistant });
+  const res = await request(app).get(`/api/incidents/${targetId}/recommendation`).set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 200);
+  assert.ok(res.body.historical_matches.length > 0);
+  assert.equal(spy.calls.length, 0, 'AI NOT called when history exists');
+  assert.equal(res.body.ai_suggestion, null);
+});
+
+test('force_ai=true (operator) calls the AI even when a playbook + history exist', async () => {
+  const { incidentCasesRepo, findingStore, agentsRepo, remediationPlaybooksRepo, targetId } = await seed({ withPlaybook: true });
+  const spy = spyAssistant();
+  const app = makeApp({ incidentCasesRepo, findingStore, agentsRepo, remediationPlaybooksRepo, assistant: spy.assistant });
+  const res = await request(app).get(`/api/incidents/${targetId}/recommendation?force_ai=true`).set('Authorization', authHeader('operator'));
+  assert.equal(res.status, 200);
+  assert.equal(spy.calls.length, 1, 'force_ai overrides the ordering');
+  assert.equal(res.body.ai_suggestion.source, 'ai_generated');
+});
+
+test('ai_suggestion is the honest fallback (no provider call) when the context is empty', async () => {
+  // No linked finding + no config/status history → hasAnyData=false.
+  const incidentCasesRepo = makeIncidentCasesRepo();
+  const id = await incidentCasesRepo.create({ host_id: '5', title: 'empty', status: 'open', severity: 'WARN', first_event_at: new Date(), last_event_at: new Date() });
+  const spy = spyAssistant();
+  const app = makeApp({ incidentCasesRepo, assistant: spy.assistant });
+  const res = await request(app).get(`/api/incidents/${id}/recommendation`).set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 200);
+  assert.equal(spy.calls.length, 0, 'no provider call on empty context');
+  assert.equal(res.body.ai_suggestion.source, 'ai_generated');
+  assert.equal(res.body.ai_suggestion.sufficient, false);
+});
+
+test('ai_suggestion is null when the assistant is disabled (endpoint still serves a+b)', async () => {
+  const { incidentCasesRepo, findingStore, id } = await seedNoMatch();
+  // Default makeAssistant() is disabled (isEnabled false).
+  const res = await request(makeApp({ incidentCasesRepo, findingStore })).get(`/api/incidents/${id}/recommendation`).set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 200);
+  assert.equal(res.body.ai_suggestion, null);
+});
+
+test('ai_suggestion is cached on the second identical request (one provider call)', async () => {
+  const { incidentCasesRepo, findingStore, id } = await seedNoMatch();
+  const spy = spyAssistant();
+  const app = makeApp({ incidentCasesRepo, findingStore, assistant: spy.assistant });
+  const first = await request(app).get(`/api/incidents/${id}/recommendation`).set('Authorization', authHeader('viewer'));
+  const second = await request(app).get(`/api/incidents/${id}/recommendation`).set('Authorization', authHeader('viewer'));
+  assert.equal(first.body.ai_suggestion.cached, false);
+  assert.equal(second.body.ai_suggestion.cached, true);
+  assert.equal(spy.calls.length, 1, 'provider hit once; the second read is cached');
 });

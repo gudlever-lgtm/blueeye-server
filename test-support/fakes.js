@@ -811,7 +811,7 @@ function makeAssistant(overrides = {}) {
     isEnabled: overrides.isEnabled || (() => Boolean(
       overrides.explain || overrides.summarizeLocation ||
       overrides.explainDiagnostic || overrides.narrateInvestigation ||
-      overrides.askIncident || overrides.generateNis2Draft)),
+      overrides.askIncident || overrides.suggestRemediation || overrides.generateNis2Draft)),
     status: overrides.status || (() => ({ enabled: false, configured: false, baseUrl: 'https://api.mistral.ai/v1/chat/completions', model: 'mistral-small-latest' })),
     explain: overrides.explain || (async () => disabled()),
     explainDiagnostic: overrides.explainDiagnostic || (async () => disabled()),
@@ -819,6 +819,7 @@ function makeAssistant(overrides = {}) {
     narrateInvestigation: overrides.narrateInvestigation || (async () => disabled()),
     generateNis2Draft: overrides.generateNis2Draft || (async () => disabled()),
     askIncident: overrides.askIncident || (async () => disabled()),
+    suggestRemediation: overrides.suggestRemediation || (async () => disabled()),
   };
 }
 

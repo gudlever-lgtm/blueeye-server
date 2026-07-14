@@ -11,7 +11,8 @@ const { maskedDiff } = require('../config/configContext');
 const { scoreSimilarIncidents } = require('../incidentCases/similarity');
 const { gatherIncidentAskContext } = require('../incidentCases/askContext');
 const { buildIncidentGuide } = require('../incidentCases/guide');
-const { buildMatchingPlaybook, buildHistoricalMatches } = require('../incidentCases/recommendation');
+const { buildMatchingPlaybook, buildHistoricalMatches, shouldGenerateAi } = require('../incidentCases/recommendation');
+const { buildExplanation } = require('../incidentCases/explanation');
 const { INCIDENT_INSUFFICIENT_ANSWER } = require('../analysis/assistant');
 
 const SEVERITIES = ['INFO', 'WARN', 'CRIT'];
@@ -79,9 +80,21 @@ function createIncidentsRouter({
     const incident = await incidentCasesRepo.findById(id);
     if (!incident) return res.status(404).json({ error: 'Incident not found' });
     const anomalies = await findingStore.listByIncidentCase(id);
-    // Playbook runs are not modelled in this codebase (no playbook subsystem);
-    // the key is present for forward-compatibility and always empty for now.
-    return res.json({ incident, anomalies, playbookRuns: [] });
+
+    // Playbook runs recorded against this incident (empty when the subsystem/repo
+    // is not wired). Read-only here; the recommendation endpoint interprets them.
+    const playbookRuns = remediationPlaybooksRepo && typeof remediationPlaybooksRepo.listRunsForIncident === 'function'
+      ? await remediationPlaybooksRepo.listRunsForIncident(id) : [];
+
+    // Separate, light explanation (what/where/why) — a small extension of the
+    // incident response, delivered here rather than bundled into the recommendation.
+    const primaryFinding = incident.primaryFindingId && findingStore
+      ? await findingStore.get(incident.primaryFindingId) : null;
+    const agent = agentsRepo && typeof agentsRepo.findById === 'function' && Number.isInteger(Number(incident.hostId))
+      ? await agentsRepo.findById(Number(incident.hostId)) : null;
+    const explanation = buildExplanation({ incident, primaryFinding, agent });
+
+    return res.json({ incident, anomalies, playbookRuns, explanation });
   }));
 
   // GET /api/incidents/:id/timeline — a flat, chronological read-model merging
@@ -223,11 +236,52 @@ function createIncidentsRouter({
     return res.json({ incidentId: id, similar });
   }));
 
+  // (c) ai_suggestion. Generated ONLY when there is no matching playbook AND no
+  // historical match, or when an operator forced it (?force_ai=true). Reuses the
+  // EXISTING masked/aggregated context (gatherIncidentAskContext — same masking as
+  // POST /:id/ask; raw config never leaves the process) and the honest
+  // insufficient-context fallback, and caches per incident+context-hash. Returns
+  // null when the AI is not eligible / not available / errored — a read endpoint
+  // must never let an AI problem sink sections (a) + (b).
+  async function generateAiSuggestion({ id, forceAi, matchingPlaybook, historicalMatches }) {
+    if (!shouldGenerateAi({ matchingPlaybook, historicalMatches, forceAi })) return null;
+    if (!assistant) return null;
+    if (featureGate && typeof featureGate.isFeatureEnabled === 'function' && !featureGate.isFeatureEnabled('assistant')) return null;
+    if (typeof assistant.isEnabled === 'function' && !assistant.isEnabled()) return null;
+
+    const context = await gatherIncidentAskContext(id, { incidentCasesRepo, findingStore, auditEventsRepo, auditLogRepo, configSnapshotsRepo });
+    if (!context) return null;
+
+    // No context at all → the honest fallback, WITHOUT a provider call.
+    if (!context.dataAvailability || !context.dataAvailability.hasAnyData) {
+      return { source: 'ai_generated', suggestion: INCIDENT_INSUFFICIENT_ANSWER, sufficient: false, model: null, cached: false };
+    }
+
+    // Cache per incident + context-hash (reuse askCache; tag to avoid colliding
+    // with /:id/ask question keys).
+    const cacheKey = `recommendation\n${JSON.stringify(context)}`;
+    const hit = askCache && askCache.get(id, cacheKey);
+    if (hit) return { ...hit, cached: true };
+
+    let result;
+    try {
+      result = await assistant.suggestRemediation(context);
+    } catch (err) {
+      return null; // FeatureDisabled / Misconfigured / Upstream — keep (a)+(b).
+    }
+
+    // The model must never fabricate: it either returns the pinned insufficient
+    // string (sufficient:false) or a concrete, context-grounded suggestion.
+    const sufficient = result.answer !== INCIDENT_INSUFFICIENT_ANSWER;
+    const value = { source: 'ai_generated', suggestion: result.answer, sufficient, model: result.model, cached: false };
+    if (askCache) askCache.set(id, cacheKey, value);
+    return value;
+  }
+
   // GET /api/incidents/:id/recommendation — a single, combined recommendation in
   // three ordered sections: (a) matching_playbook, (b) historical_matches, then
   // (c) ai_suggestion. Read-only, so viewer+. `?force_ai=true` forces the AI
-  // fallback and is operator/admin only (it costs a Mistral call). The AI section
-  // itself (1c) is wired in a later step; it is null here.
+  // fallback and is operator/admin only (it costs a Mistral call).
   router.get('/:id/recommendation', requireAuth, reader, asyncHandler(async (req, res) => {
     const id = parseIncidentId(req.params.id);
     if (id === null) return res.status(400).json({ error: 'id must be a positive integer' });
@@ -267,9 +321,8 @@ function createIncidentsRouter({
     }
     const historicalMatches = buildHistoricalMatches(ranked, { runsByIncident, resolvedCandidates: candidates });
 
-    // (c) ai_suggestion — the Mistral fallback is wired in a later step (1c). It is
-    // only generated when (a) is null AND (b) is empty, or force_ai=true.
-    const aiSuggestion = null;
+    // (c) ai_suggestion — only when (a) is null AND (b) is empty, or force_ai=true.
+    const aiSuggestion = await generateAiSuggestion({ id, forceAi, matchingPlaybook, historicalMatches });
 
     return res.json({
       incidentId: id,

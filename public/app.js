@@ -6,6 +6,7 @@ const ROLE_KEY = 'blueeye.server.role';
 const EMAIL_KEY = 'blueeye.server.email';
 const THEME_KEY = 'blueeye.server.theme';
 const NAV_COLLAPSE_KEY = 'blueeye.server.navCollapsed';
+const AUTOREFRESH_KEY = 'blueeye.server.autoRefresh';
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -41,7 +42,11 @@ function applyTheme(theme) {
   const btn = document.querySelector('#theme');
   if (btn) {
     const isDark = themeMeta(t).family === 'dark';
-    btn.textContent = isDark ? '☀️' : '🌙';
+    const ico = isDark ? '☀️' : '🌙';
+    // The theme control is now a labelled menu row ("Dark mode") with a leading
+    // .menu-ico span — update just the icon so the label text is preserved.
+    const icoEl = btn.querySelector('.menu-ico');
+    if (icoEl) icoEl.textContent = ico; else btn.textContent = ico;
     btn.title = isDark ? 'Switch to light mode' : 'Switch to dark mode';
   }
 }
@@ -11069,8 +11074,40 @@ async function renderSsoOptions() {
 }
 renderSsoOptions();
 $('#logout').addEventListener('click', () => { setAutoRefresh(false); stopOverview(); stopFleet(); stopAgent(); stopProbes(); stopIfaces(); stopMap(); stopGeo(); stopTopoMap(); $('#autorefresh').checked = false; logout(); });
-$('#refresh').addEventListener('click', () => render());
-$('#autorefresh').addEventListener('change', (e) => setAutoRefresh(e.target.checked));
+// Refresh row: the main action does a real, full page reload (not a soft
+// re-render), so it always reflects the freshest server state.
+$('#refresh').addEventListener('click', () => window.location.reload());
+// Auto-refresh toggle (in the account menu): persist the new setting, then
+// reload — the reload restarts the interval from the restored state below.
+$('#autorefresh').addEventListener('change', (e) => {
+  try { localStorage.setItem(AUTOREFRESH_KEY, e.target.checked ? '1' : '0'); } catch { /* storage off */ }
+  window.location.reload();
+});
+// Restore the persisted auto-refresh preference once at load: reflect it on the
+// (hidden) checkbox and start/stop the 5s interval accordingly.
+{
+  let autoOn = false;
+  try { autoOn = localStorage.getItem(AUTOREFRESH_KEY) === '1'; } catch { /* storage off */ }
+  const cb = $('#autorefresh');
+  if (cb) cb.checked = autoOn;
+  setAutoRefresh(autoOn);
+}
+// Account menu: click the trigger to open/close; closes on outside-click and
+// Escape. Item clicks that reload/navigate (refresh, auto toggle, log out) tear
+// the panel down on their own; theme toggle intentionally leaves it open.
+{
+  const menu = $('#user-menu');
+  const trigger = $('#user-menu-trigger');
+  const panel = $('#user-menu-panel');
+  if (menu && trigger && panel) {
+    const isOpen = () => !panel.classList.contains('hidden');
+    const open = () => { panel.classList.remove('hidden'); trigger.setAttribute('aria-expanded', 'true'); };
+    const close = () => { panel.classList.add('hidden'); trigger.setAttribute('aria-expanded', 'false'); };
+    trigger.addEventListener('click', (e) => { e.stopPropagation(); isOpen() ? close() : open(); });
+    document.addEventListener('click', (e) => { if (isOpen() && !menu.contains(e.target)) close(); });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && isOpen()) { close(); trigger.focus(); } });
+  }
+}
 function closeNav() { $('#app').classList.remove('nav-open'); }
 for (const b of document.querySelectorAll('.tabs button[data-view], #sidebar-foot button[data-view]')) {
   b.addEventListener('click', () => {

@@ -352,17 +352,30 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 }
 .topbar-search-icon { font-size: 13px; line-height: 1; opacity: .55; }
 
-/* Auto-refresh — a compact pill toggle instead of a bare checkbox + label. */
+/* Auto-refresh — an "Auto" label beside a sliding on/off switch. The native
+   checkbox stays (JS reads #autorefresh) but is visually hidden; the .ar-switch
+   span is the toggle, driven off the checkbox's :checked state via :has(). */
 .autorefresh {
-  display: inline-flex; align-items: center; gap: 7px;
-  height: 36px; padding: 0 14px;
+  display: inline-flex; align-items: center; gap: 9px;
+  height: 36px; padding: 0 12px 0 14px;
   border: 1px solid var(--border); border-radius: 999px;
   background: var(--panel); color: var(--muted);
   font-size: 12px; font-weight: 500; cursor: pointer; user-select: none;
-  transition: border-color .15s ease, color .15s ease;
+  transition: border-color .15s ease, color .15s ease, box-shadow .15s ease;
 }
 .autorefresh:hover { border-color: var(--accent); color: var(--text); }
-.autorefresh input { width: auto; margin: 0; accent-color: var(--accent); }
+.autorefresh:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-weak); }
+/* Visually hide the checkbox but keep it in the tab order + JS-addressable. */
+.autorefresh input { position: absolute; width: 1px; height: 1px; opacity: 0; margin: 0; pointer-events: none; }
+.ar-switch { position: relative; flex: 0 0 auto; width: 32px; height: 18px;
+  border-radius: 999px; background: var(--muted-weak); border: 1px solid var(--border);
+  transition: background .15s ease, border-color .15s ease; }
+.ar-switch::after { content: ''; position: absolute; top: 50%; left: 2px; transform: translateY(-50%);
+  width: 14px; height: 14px; border-radius: 50%; background: var(--panel);
+  box-shadow: 0 1px 2px rgba(0,0,0,.25); transition: left .15s ease; }
+.autorefresh:has(input:checked) { color: var(--text); border-color: var(--accent); }
+.autorefresh:has(input:checked) .ar-switch { background: var(--accent); border-color: var(--accent); }
+.autorefresh:has(input:checked) .ar-switch::after { left: 16px; }
 
 /* Square icon buttons (theme / refresh) grouped as a small segment. */
 .topbar-tools { display: inline-flex; align-items: center; gap: 6px; }

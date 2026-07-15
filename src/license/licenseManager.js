@@ -6,6 +6,32 @@ const { verifyProof } = require('./verify');
 const silentLogger = { info() {}, warn() {}, error() {} };
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+// `fetch()` rejects with a generic TypeError('fetch failed') and hides the real
+// network error on `.cause` (and, for happy-eyeballs multi-address attempts, in
+// an AggregateError's `.errors`). Walk the chain and pull out code+message so a
+// customer sees e.g. "ENOTFOUND blueeye-license.gnf.dk" or "ECONNREFUSED"
+// instead of a bare, undiagnosable "fetch failed". Purely diagnostic — it only
+// changes the surfaced text, never the validation outcome.
+function describeFetchError(err) {
+  const parts = [];
+  const seen = new Set();
+  let cur = err;
+  while (cur && !seen.has(cur)) {
+    seen.add(cur);
+    const bit = cur.code ? `${cur.code} ${cur.message}` : cur.message;
+    if (bit && !parts.includes(bit)) parts.push(bit);
+    if (Array.isArray(cur.errors)) {
+      for (const e of cur.errors) {
+        if (!e) continue;
+        const b = e.code ? `${e.code} ${e.message}` : e.message;
+        if (b && !parts.includes(b)) parts.push(b);
+      }
+    }
+    cur = cur.cause;
+  }
+  return parts.join(' <- ') || 'fetch failed';
+}
+
 // Drives client-side license validation against blueeye-licens.
 //
 // Status values:
@@ -137,9 +163,13 @@ function createLicenseManager({
       body = await fetchProof(agentCount, nonce);
     } catch (err) {
       // Offline / unexpected status / unsigned response -> rely on cache + grace.
-      state.lastError = `unreachable: ${err.message}`;
+      // Surface the underlying network cause AND the URL we tried, so an admin
+      // staring at "unreachable: fetch failed" can see it was e.g. a DNS miss on
+      // blueeye-license.gnf.dk (wrong LICENSE_SERVER_URL, blocked egress, …).
+      const detail = describeFetchError(err);
+      state.lastError = `unreachable: ${detail}`;
       applyOfflineFallback();
-      logger.warn(`License: could not get a fresh validation (${err.message}); status=${state.status}.`);
+      logger.warn(`License: could not reach ${config.serverUrl}/validate (${detail}); status=${state.status}.`);
       return getStatus();
     }
 

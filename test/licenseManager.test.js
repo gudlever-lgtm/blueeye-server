@@ -198,6 +198,25 @@ test('unlicensed (no cache, offline) -> no new connections allowed', async () =>
   assert.equal(m.canAcceptNewConnection(0), false);
 });
 
+test('unreachable reason surfaces the underlying network cause, not just "fetch failed"', async () => {
+  // Node's fetch() rejects with a generic TypeError('fetch failed') and stashes
+  // the real error on .cause (here a DNS miss); the reason must reveal it.
+  const fetchFailed = () => async () => {
+    const cause = Object.assign(new Error('getaddrinfo ENOTFOUND blueeye-license.gnf.dk'), {
+      code: 'ENOTFOUND',
+    });
+    throw Object.assign(new TypeError('fetch failed'), { cause });
+  };
+  const m = manager({ fetchImpl: fetchFailed(), cache: createMemoryCache() });
+
+  await m.validateOnce();
+
+  const reason = m.getStatus().reason;
+  assert.match(reason, /^unreachable:/);
+  assert.match(reason, /ENOTFOUND/);
+  assert.match(reason, /blueeye-license\.gnf\.dk/);
+});
+
 test('a signed valid:false proof -> invalid, not licensed, not cached', async () => {
   const cache = createMemoryCache();
   const m = manager({ fetchImpl: licensFetch({ valid: false, reason: 'status_revoked' }), cache });

@@ -797,3 +797,21 @@ CREATE TABLE IF NOT EXISTS incident_playbook_runs (
   CONSTRAINT fk_incident_playbook_runs_playbook FOREIGN KEY (playbook_id)
     REFERENCES remediation_playbooks (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Cross-agent incident clusters (migration 056): findings from DIFFERENT agents
+-- within a short time window, grouped with a suspected common cause + confidence
+-- tier (time-only=low, +shared site=medium, +same finding-type=high). member_finding_ids
+-- is a JSON array of findings.id. See src/analysis/crossAgentCorrelator.js.
+CREATE TABLE IF NOT EXISTS incident_clusters (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  confidence ENUM('low', 'medium', 'high') NOT NULL DEFAULT 'low',
+  member_finding_ids JSON NOT NULL,
+  suspected_common_cause TEXT NULL DEFAULT NULL,
+  status ENUM('open', 'resolved', 'closed') NOT NULL DEFAULT 'open',
+  detected_at DATETIME NOT NULL,
+  resolved_at DATETIME NULL DEFAULT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_incident_clusters_status_detected (status, detected_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

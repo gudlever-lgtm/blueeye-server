@@ -55,6 +55,9 @@ const { createRemediationPlaybooksRepository } = require('./repositories/remedia
 const { createConfigSnapshotsRepository } = require('./repositories/configSnapshotsRepository');
 const { createIncidentCaseService } = require('./incidentCases/incidentCaseService');
 const { createIncidentAutoResolveJob } = require('./incidentCases/autoResolveJob');
+const { createIncidentClustersRepository } = require('./repositories/incidentClustersRepository');
+const { createCrossAgentClusterService } = require('./analysis/crossAgentClusterService');
+const { createCrossAgentClusterJob } = require('./analysis/crossAgentClusterJob');
 const { createAssistant } = require('./analysis/assistant');
 const { loadConfig: loadAnalysisConfig } = require('./analysis/config');
 const { createFlowsRepository } = require('./repositories/flowsRepository');
@@ -415,6 +418,20 @@ function start() {
   const configSnapshotsRepo = createConfigSnapshotsRepository(db);
   const incidentCaseService = createIncidentCaseService({ incidentCasesRepo, findingStore, configSnapshotsRepo, logger });
 
+  // Cross-agent incident clusters: groups findings from DIFFERENT agents that fire
+  // in the same time window into one cluster with a suspected common cause +
+  // confidence (time-only=low, +shared site=medium, +same finding-type=high). Runs
+  // as a leader-only sweep (below) — off the ingest hot path — and pushes cluster
+  // events over the SAME dashboard WebSocket as findings.
+  const incidentClustersRepo = createIncidentClustersRepository(db);
+  const crossAgentClusterService = createCrossAgentClusterService({
+    clustersRepo: incidentClustersRepo,
+    findingStore,
+    agentsRepo,
+    publishCluster: (cluster) => (dashboardWs ? dashboardWs.broadcast({ type: 'incident_cluster', payload: cluster }) : 0),
+    logger,
+  });
+
   // Alerting: route findings to channels (email/webhook/syslog). Channels are
   // built unconditionally so the test endpoint works; rules/enable live in
   // config. Outgoing sends use Node's fetch / dgram / (lazy) nodemailer.
@@ -561,6 +578,7 @@ function start() {
     { start: () => geoipUpdater.startSchedule(), stop: () => geoipUpdater.stopSchedule() },
     createTransactionBaselineJob({ repo: transactionsRepo, logger }),
     createIncidentAutoResolveJob({ incidentCasesRepo, auditLogRepo, logger }),
+    createCrossAgentClusterJob({ service: crossAgentClusterService, logger }),
   ];
   function startBackgroundJobs() {
     for (const job of backgroundJobs) {

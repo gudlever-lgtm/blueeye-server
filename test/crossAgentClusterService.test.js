@@ -1,0 +1,173 @@
+'use strict';
+
+process.env.NODE_ENV = 'test';
+process.env.JWT_SECRET = 'test-secret-do-not-use-in-prod';
+
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+
+const { createCrossAgentClusterService } = require('../src/analysis/crossAgentClusterService');
+const { makeIncidentClustersRepo, makeFindingStore, makeAgentsRepo } = require('../test-support/fakes');
+
+const T = new Date('2026-07-01T12:00:00Z');
+const ago = (ms) => new Date(T.getTime() - ms);
+
+function finding(over = {}) {
+  return { id: 'f', hostId: '1', metric: 'cpu', severity: 'WARN', explanation: 'x', evidence: [{}], createdAt: ago(60000), ...over };
+}
+
+// Two agents (1,2) in the same site (10) unless overridden.
+function svcWith({ findings = [], agents = [{ id: 1, location_id: 10 }, { id: 2, location_id: 10 }], publishCluster, clustersRepo } = {}) {
+  const repo = clustersRepo || makeIncidentClustersRepo();
+  const findingStore = makeFindingStore();
+  for (const f of findings) findingStore.rows.push({ ...f, acked: false });
+  const agentsRepo = makeAgentsRepo({ findAll: async () => agents });
+  const published = [];
+  const svc = createCrossAgentClusterService({
+    clustersRepo: repo,
+    findingStore,
+    agentsRepo,
+    publishCluster: publishCluster || ((c) => published.push(c)),
+    now: () => T,
+  });
+  return { svc, repo, findingStore, published };
+}
+
+// ---- detection + persistence ----------------------------------------------
+
+test('two agents, same site, same metric in the window -> creates one HIGH cluster', async () => {
+  const { svc, repo, published } = svcWith({
+    findings: [
+      finding({ id: 'a', hostId: '1', metric: 'probe.loss', createdAt: ago(90000) }),
+      finding({ id: 'b', hostId: '2', metric: 'probe.loss', createdAt: ago(30000) }),
+    ],
+  });
+  const summary = await svc.detectAndPersist();
+  assert.equal(summary.created, 1);
+  assert.equal(repo.rows.length, 1);
+  assert.equal(repo.rows[0].confidence, 'high');
+  assert.deepEqual(repo.rows[0].member_finding_ids.sort(), ['a', 'b']);
+  assert.equal(repo.rows[0].status, 'open');
+  // Cluster event was published (server wraps it as {type:'incident_cluster'}).
+  assert.equal(published.length, 1);
+  assert.equal(published[0].status, 'open');
+});
+
+test('two agents, same site, different metric -> MEDIUM cluster', async () => {
+  const { svc, repo } = svcWith({
+    findings: [
+      finding({ id: 'a', hostId: '1', metric: 'cpu', createdAt: ago(90000) }),
+      finding({ id: 'b', hostId: '2', metric: 'mem', createdAt: ago(30000) }),
+    ],
+  });
+  await svc.detectAndPersist();
+  assert.equal(repo.rows.length, 1);
+  assert.equal(repo.rows[0].confidence, 'medium');
+});
+
+test('two agents, different sites -> topology gap, stays LOW', async () => {
+  const { svc, repo } = svcWith({
+    agents: [{ id: 1, location_id: 10 }, { id: 2, location_id: 20 }],
+    findings: [
+      finding({ id: 'a', hostId: '1', metric: 'cpu', createdAt: ago(90000) }),
+      finding({ id: 'b', hostId: '2', metric: 'cpu', createdAt: ago(30000) }),
+    ],
+  });
+  await svc.detectAndPersist();
+  assert.equal(repo.rows.length, 1);
+  assert.equal(repo.rows[0].confidence, 'low');
+});
+
+test('findings from only one agent create NO cluster', async () => {
+  const { svc, repo } = svcWith({
+    findings: [
+      finding({ id: 'a', hostId: '1', metric: 'cpu', createdAt: ago(90000) }),
+      finding({ id: 'b', hostId: '1', metric: 'mem', createdAt: ago(30000) }),
+    ],
+  });
+  const summary = await svc.detectAndPersist();
+  assert.equal(summary.created, 0);
+  assert.equal(repo.rows.length, 0);
+});
+
+// ---- dedup -----------------------------------------------------------------
+
+test('re-running detection over the same findings UPDATES the open cluster, does not spawn a new one', async () => {
+  const { svc, repo } = svcWith({
+    findings: [
+      finding({ id: 'a', hostId: '1', metric: 'probe.loss', createdAt: ago(90000) }),
+      finding({ id: 'b', hostId: '2', metric: 'probe.loss', createdAt: ago(30000) }),
+    ],
+  });
+  const s1 = await svc.detectAndPersist();
+  const s2 = await svc.detectAndPersist();
+  assert.equal(s1.created, 1);
+  assert.equal(s2.created, 0);
+  assert.equal(s2.updated, 1);
+  assert.equal(repo.rows.length, 1); // still one cluster
+});
+
+test('a new overlapping finding merges into the existing cluster (member set grows, no new row)', async () => {
+  const { svc, repo, findingStore } = svcWith({
+    findings: [
+      finding({ id: 'a', hostId: '1', metric: 'probe.loss', createdAt: ago(120000) }),
+      finding({ id: 'b', hostId: '2', metric: 'probe.loss', createdAt: ago(90000) }),
+    ],
+  });
+  await svc.detectAndPersist();
+  // A third finding (same site+metric, new agent) arrives within the window.
+  findingStore.rows.push({ id: 'c', hostId: '2', metric: 'probe.loss', severity: 'WARN', explanation: 'x', evidence: [{}], createdAt: ago(20000), acked: false });
+  const s2 = await svc.detectAndPersist();
+  assert.equal(s2.created, 0);
+  assert.equal(s2.updated, 1);
+  assert.equal(repo.rows.length, 1);
+  assert.deepEqual(repo.rows[0].member_finding_ids.sort(), ['a', 'b', 'c']);
+});
+
+// ---- resolution ------------------------------------------------------------
+
+test('resolveStale closes open clusters whose last activity is older than the inactivity window', async () => {
+  const repo = makeIncidentClustersRepo();
+  const id = await repo.create({ confidence: 'high', memberFindingIds: ['a', 'b'], suspectedCommonCause: 'x', detectedAt: ago(20 * 60 * 1000) }); // 20 min ago
+  const { svc, published } = svcWith({ clustersRepo: repo });
+  const resolved = await svc.resolveStale();
+  assert.equal(resolved, 1);
+  assert.equal(repo.rows.find((r) => r.id === id).status, 'resolved');
+  assert.ok(published.some((p) => p.status === 'resolved'));
+});
+
+test('resolveStale leaves recently-active clusters open', async () => {
+  const repo = makeIncidentClustersRepo();
+  await repo.create({ confidence: 'high', memberFindingIds: ['a'], detectedAt: ago(2 * 60 * 1000) }); // 2 min ago
+  const { svc } = svcWith({ clustersRepo: repo });
+  const resolved = await svc.resolveStale();
+  assert.equal(resolved, 0);
+  assert.equal(repo.rows[0].status, 'open');
+});
+
+// ---- best-effort -----------------------------------------------------------
+
+test('a finding-store failure is swallowed (never throws to the sweep)', async () => {
+  const findingStore = makeFindingStore({ list: async () => { throw new Error('db down'); } });
+  const svc = createCrossAgentClusterService({
+    clustersRepo: makeIncidentClustersRepo(),
+    findingStore,
+    agentsRepo: makeAgentsRepo(),
+    now: () => T,
+  });
+  const summary = await svc.detectAndPersist();
+  assert.deepEqual(summary, { created: 0, updated: 0 });
+});
+
+test('unrelated findings spread beyond the window create no cluster', async () => {
+  const { svc, repo } = svcWith({
+    findings: [
+      finding({ id: 'a', hostId: '1', metric: 'cpu', createdAt: ago(4 * 60 * 1000) }),
+      // 'b' is outside the 5-min load window entirely, so it is never even fetched.
+      finding({ id: 'b', hostId: '2', metric: 'cpu', createdAt: ago(30 * 60 * 1000) }),
+    ],
+  });
+  const summary = await svc.detectAndPersist();
+  assert.equal(summary.created, 0);
+  assert.equal(repo.rows.length, 0);
+});

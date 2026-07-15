@@ -43,6 +43,24 @@ function validateRole(raw, errors) {
   return raw;
 }
 
+const NAME_MAX = 120;
+
+// Optional display name — used only in the one-time-password email greeting
+// (BlueEye keys users by email; there is no name column). Trimmed; length-capped.
+function validateName(raw, errors) {
+  if (raw === undefined || raw === null || raw === '') return undefined;
+  if (typeof raw !== 'string') {
+    errors.name = 'name must be a string';
+    return undefined;
+  }
+  const name = raw.trim();
+  if (name.length > NAME_MAX) {
+    errors.name = `name must be at most ${NAME_MAX} characters`;
+    return undefined;
+  }
+  return name || undefined;
+}
+
 // POST /users — email, password and role are all required.
 function validateUserCreate(body) {
   const input = body && typeof body === 'object' && !Array.isArray(body) ? body : {};
@@ -73,4 +91,47 @@ function validateUserUpdate(body) {
   return Object.keys(errors).length > 0 ? { errors } : { value };
 }
 
-module.exports = { validateUserCreate, validateUserUpdate };
+// POST /users/local — admin creates a local user who receives a one-time
+// password by email. email + role are required; name is optional (email only).
+// No password field: the server generates the one-time password itself.
+function validateLocalUserCreate(body) {
+  const input = body && typeof body === 'object' && !Array.isArray(body) ? body : {};
+  const errors = {};
+  const value = {};
+
+  value.email = validateEmail(input.email, errors);
+  value.role = validateRole(input.role, errors);
+  const name = validateName(input.name, errors);
+  if (name !== undefined) value.name = name;
+
+  return Object.keys(errors).length > 0 ? { errors } : { value };
+}
+
+// POST /auth/change-password — the current (one-time or normal) password plus a
+// new one. Both must be present non-empty strings; the new password's strength is
+// enforced separately by the route (checkPasswordPolicy → 422).
+function validatePasswordChange(body) {
+  const input = body && typeof body === 'object' && !Array.isArray(body) ? body : {};
+  const errors = {};
+  const value = {};
+
+  if (typeof input.currentPassword !== 'string' || input.currentPassword.length === 0) {
+    errors.currentPassword = 'currentPassword must be a non-empty string';
+  } else {
+    value.currentPassword = input.currentPassword;
+  }
+  if (typeof input.newPassword !== 'string' || input.newPassword.length === 0) {
+    errors.newPassword = 'newPassword must be a non-empty string';
+  } else {
+    value.newPassword = input.newPassword;
+  }
+
+  return Object.keys(errors).length > 0 ? { errors } : { value };
+}
+
+module.exports = {
+  validateUserCreate,
+  validateUserUpdate,
+  validateLocalUserCreate,
+  validatePasswordChange,
+};

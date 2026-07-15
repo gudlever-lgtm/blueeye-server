@@ -12,6 +12,11 @@ function issueToken(user) {
     email: user.email,
     role: user.role,
   };
+  // Flag a token minted for a user who still holds a one-time password. The
+  // global gate (src/routes/index.js) blocks every route except the
+  // change-password flow until the flag is gone. Only set when true so ordinary
+  // tokens stay byte-for-byte identical to before.
+  if (user.mustChangePassword) payload.mustChangePassword = true;
   return jwt.sign(payload, config.auth.jwtSecret, {
     algorithm: ALGORITHM,
     subject: String(user.id),

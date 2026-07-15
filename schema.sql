@@ -807,6 +807,7 @@ CREATE TABLE IF NOT EXISTS incident_clusters (
   confidence ENUM('low', 'medium', 'high') NOT NULL DEFAULT 'low',
   member_finding_ids JSON NOT NULL,
   suspected_common_cause TEXT NULL DEFAULT NULL,
+  advisory TEXT NULL DEFAULT NULL,                     -- opt-in AI root-cause + troubleshooting (migration 057)
   status ENUM('open', 'resolved', 'closed') NOT NULL DEFAULT 'open',
   detected_at DATETIME NOT NULL,
   resolved_at DATETIME NULL DEFAULT NULL,

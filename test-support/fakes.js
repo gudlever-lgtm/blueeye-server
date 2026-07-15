@@ -254,6 +254,7 @@ function makeIncidentClustersRepo(overrides = {}) {
     confidence: r.confidence,
     memberFindingIds: Array.isArray(r.member_finding_ids) ? r.member_finding_ids : [],
     suspectedCommonCause: r.suspected_common_cause ?? null,
+    advisory: r.advisory ?? null,
     status: r.status,
     detectedAt: iso(r.detected_at),
     resolvedAt: iso(r.resolved_at),
@@ -265,7 +266,7 @@ function makeIncidentClustersRepo(overrides = {}) {
     create: overrides.create || (async (c) => {
       const id = (seq += 1);
       rows.push({
-        id, confidence: 'low', member_finding_ids: [], suspected_common_cause: null,
+        id, confidence: 'low', member_finding_ids: [], suspected_common_cause: null, advisory: null,
         status: 'open', resolved_at: null, created_at: new Date(), updated_at: new Date(),
         ...c,
         member_finding_ids: c.memberFindingIds || [],
@@ -286,6 +287,12 @@ function makeIncidentClustersRepo(overrides = {}) {
       r.member_finding_ids = memberFindingIds || [];
       r.suspected_common_cause = suspectedCommonCause ?? null;
       if (new Date(detectedAt) > new Date(r.detected_at)) r.detected_at = detectedAt;
+      return true;
+    }),
+    setAdvisory: overrides.setAdvisory || (async (id, advisory) => {
+      const r = rows.find((x) => x.id === Number(id) && x.status === 'open' && (x.advisory == null));
+      if (!r) return false;
+      r.advisory = advisory;
       return true;
     }),
     updateStatus: overrides.updateStatus || (async (id, { from, to, at = null }) => {

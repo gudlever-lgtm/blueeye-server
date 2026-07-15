@@ -16,8 +16,22 @@ function finding(over = {}) {
   return { id: 'f', hostId: '1', metric: 'cpu', severity: 'WARN', explanation: 'x', evidence: [{}], createdAt: ago(60000), ...over };
 }
 
+// A fake opt-in assistant for the Step 2 advisory path.
+function fakeAssistant({ enabled = true, answer = 'Likely a shared uplink fault at the site. Check the site switch/WAN.', throws = false } = {}) {
+  const calls = [];
+  return {
+    calls,
+    isEnabled: () => enabled,
+    suggestClusterCause: async (cluster, members) => {
+      calls.push({ cluster, members });
+      if (throws) throw new Error('provider down');
+      return { answer, model: 'test-model', usedFindings: (members || []).length };
+    },
+  };
+}
+
 // Two agents (1,2) in the same site (10) unless overridden.
-function svcWith({ findings = [], agents = [{ id: 1, location_id: 10 }, { id: 2, location_id: 10 }], publishCluster, clustersRepo } = {}) {
+function svcWith({ findings = [], agents = [{ id: 1, location_id: 10 }, { id: 2, location_id: 10 }], publishCluster, clustersRepo, assistant } = {}) {
   const repo = clustersRepo || makeIncidentClustersRepo();
   const findingStore = makeFindingStore();
   for (const f of findings) findingStore.rows.push({ ...f, acked: false });
@@ -27,6 +41,7 @@ function svcWith({ findings = [], agents = [{ id: 1, location_id: 10 }, { id: 2,
     clustersRepo: repo,
     findingStore,
     agentsRepo,
+    assistant,
     publishCluster: publishCluster || ((c) => published.push(c)),
     now: () => T,
   });
@@ -143,6 +158,74 @@ test('resolveStale leaves recently-active clusters open', async () => {
   const resolved = await svc.resolveStale();
   assert.equal(resolved, 0);
   assert.equal(repo.rows[0].status, 'open');
+});
+
+// ---- Step 2: cluster-level advisory ---------------------------------------
+
+const highFindings = () => [
+  finding({ id: 'a', hostId: '1', metric: 'probe.loss', createdAt: ago(90000) }),
+  finding({ id: 'b', hostId: '2', metric: 'probe.loss', createdAt: ago(30000) }),
+];
+
+test('a HIGH cluster gets an AI advisory stored + published WITH its evidence (assistant enabled)', async () => {
+  const assistant = fakeAssistant();
+  const { svc, repo, published } = svcWith({ findings: highFindings(), assistant });
+  await svc.detectAndPersist();
+  assert.equal(assistant.calls.length, 1);
+  assert.equal(repo.rows[0].advisory, 'Likely a shared uplink fault at the site. Check the site switch/WAN.');
+  // The advisory publish carries the evidence list (member findings).
+  const advEvent = published.find((p) => p.advisory);
+  assert.ok(advEvent, 'an advisory event was published');
+  assert.ok(Array.isArray(advEvent.evidence) && advEvent.evidence.length === 2);
+  assert.deepEqual(advEvent.evidence.map((e) => e.findingId).sort(), ['a', 'b']);
+});
+
+test('a LOW cluster gets NO advisory (medium/high only)', async () => {
+  const assistant = fakeAssistant();
+  const { svc, repo } = svcWith({
+    agents: [{ id: 1, location_id: 10 }, { id: 2, location_id: 20 }], // different sites -> low
+    findings: [
+      finding({ id: 'a', hostId: '1', metric: 'cpu', createdAt: ago(90000) }),
+      finding({ id: 'b', hostId: '2', metric: 'cpu', createdAt: ago(30000) }),
+    ],
+    assistant,
+  });
+  await svc.detectAndPersist();
+  assert.equal(assistant.calls.length, 0);
+  assert.equal(repo.rows[0].advisory, null);
+});
+
+test('no advisory when the assistant is opted out (disabled)', async () => {
+  const assistant = fakeAssistant({ enabled: false });
+  const { svc, repo } = svcWith({ findings: highFindings(), assistant });
+  await svc.detectAndPersist();
+  assert.equal(assistant.calls.length, 0);
+  assert.equal(repo.rows[0].advisory, null);
+});
+
+test('an "insufficient context" answer is NOT surfaced as advice', async () => {
+  const assistant = fakeAssistant({ answer: 'There is not enough data to reach a conclusion.' });
+  const { svc, repo, published } = svcWith({ findings: highFindings(), assistant });
+  await svc.detectAndPersist();
+  assert.equal(assistant.calls.length, 1);
+  assert.equal(repo.rows[0].advisory, null);
+  assert.ok(!published.some((p) => p.advisory));
+});
+
+test('an assistant failure never breaks the sweep (advisory just absent)', async () => {
+  const assistant = fakeAssistant({ throws: true });
+  const { svc, repo } = svcWith({ findings: highFindings(), assistant });
+  const summary = await svc.detectAndPersist();
+  assert.equal(summary.created, 1);           // cluster still created
+  assert.equal(repo.rows[0].advisory, null);  // advisory absent, no throw
+});
+
+test('advisory is generated once, not regenerated on the next sweep', async () => {
+  const assistant = fakeAssistant();
+  const { svc } = svcWith({ findings: highFindings(), assistant });
+  await svc.detectAndPersist();
+  await svc.detectAndPersist();
+  assert.equal(assistant.calls.length, 1); // second sweep sees advisory already set -> no call
 });
 
 // ---- best-effort -----------------------------------------------------------

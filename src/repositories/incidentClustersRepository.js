@@ -10,7 +10,7 @@
 
 const OPEN_STATUSES = ['open'];
 
-const BASE_COLUMNS = `id, confidence, member_finding_ids, suspected_common_cause,
+const BASE_COLUMNS = `id, confidence, member_finding_ids, suspected_common_cause, advisory,
   status, detected_at, resolved_at, created_at, updated_at`;
 
 function toIso(v) {
@@ -34,6 +34,7 @@ function mapRow(row) {
     confidence: row.confidence,
     memberFindingIds: parseIds(row.member_finding_ids),
     suspectedCommonCause: row.suspected_common_cause ?? null,
+    advisory: row.advisory ?? null,
     status: row.status,
     detectedAt: toIso(row.detected_at),
     resolvedAt: toIso(row.resolved_at),
@@ -85,6 +86,18 @@ function createIncidentClustersRepository(db) {
     return res.affectedRows > 0;
   }
 
+  // Stores the cluster-level AI advisory (Step 2). Only sets it on an OPEN cluster
+  // that has none yet, so a later sweep never overwrites or regenerates it. Returns
+  // true if a row changed.
+  async function setAdvisory(id, advisory) {
+    const [res] = await pool.query(
+      `UPDATE incident_clusters SET advisory = ?
+       WHERE id = ? AND status = 'open' AND advisory IS NULL`,
+      [advisory, id],
+    );
+    return res.affectedRows > 0;
+  }
+
   // Guarded status transition (current status is in the WHERE, so a stale read or a
   // concurrent change just affects 0 rows). Stamps resolved_at on →resolved. Returns
   // true if a row changed.
@@ -131,7 +144,7 @@ function createIncidentClustersRepository(db) {
     return rows.map(mapRow);
   }
 
-  return { create, findById, listOpen, updateMembership, updateStatus, listStaleOpen, list };
+  return { create, findById, listOpen, updateMembership, setAdvisory, updateStatus, listStaleOpen, list };
 }
 
 module.exports = { createIncidentClustersRepository, mapRow, OPEN_STATUSES };

@@ -38,6 +38,39 @@ test('FeatureDisabledError carries the documented name', () => {
   assert.equal(new FeatureDisabledError().name, 'FeatureDisabled');
 });
 
+// ---- suggestClusterCause (cross-agent cluster advisory, Step 2) -------------
+
+test('suggestClusterCause throws FeatureDisabled when the assistant is off', async () => {
+  const a = createAssistant({ config: { assistantEnabled: false }, findingStore: findings() });
+  await assert.rejects(() => a.suggestClusterCause({ confidence: 'high' }, []), (e) => e.name === 'FeatureDisabled');
+});
+
+test('suggestClusterCause builds a prompt from member findings and masks IPs before sending', async () => {
+  const fetchImpl = okFetch({ choices: [{ message: { content: 'Likely a shared uplink fault at the site.' } }] });
+  const a = createAssistant({ config: ENABLED, findingStore: findings(), fetchImpl });
+  const members = [
+    { id: 'a', hostId: 1, metric: 'probe.loss', severity: 'CRIT', deviation: 9, explanation: 'loss to 10.0.0.1 spiked', evidence: [{}], createdAt: new Date('2026-07-01T00:00:00Z') },
+    { id: 'b', hostId: 2, metric: 'probe.loss', severity: 'WARN', deviation: 5, explanation: 'loss rising', evidence: [{}], createdAt: new Date('2026-07-01T00:01:00Z') },
+  ];
+  const res = await a.suggestClusterCause({ confidence: 'high', signals: { time: true, topology: true, type: true }, site: '10', commonType: 'probe.loss', hostIds: [1, 2] }, members);
+  assert.equal(res.answer, 'Likely a shared uplink fault at the site.');
+  assert.equal(res.usedFindings, 2);
+  // The provider payload must contain the members but NOT the raw IP literal.
+  const sent = fetchImpl.calls[0].opts.body;
+  assert.match(sent, /probe\.loss/);
+  assert.match(sent, /\[host\]/);       // IP masked
+  assert.ok(!/10\.0\.0\.1/.test(sent)); // raw IP never leaves the process
+});
+
+test('suggestClusterCause pins the exact insufficient-context string in its system prompt', async () => {
+  const fetchImpl = okFetch({ choices: [{ message: { content: 'There is not enough data to reach a conclusion.' } }] });
+  const a = createAssistant({ config: ENABLED, findingStore: findings(), fetchImpl });
+  const res = await a.suggestClusterCause({ confidence: 'medium' }, [{ id: 'a', hostId: 1, metric: 'cpu', explanation: 'x', evidence: [{}] }]);
+  assert.equal(res.answer, 'There is not enough data to reach a conclusion.');
+  const system = JSON.parse(fetchImpl.calls[0].opts.body).messages[0].content;
+  assert.match(system, /There is not enough data to reach a conclusion\./);
+});
+
 test('explain rejects an empty/missing question (when enabled)', async () => {
   const a = createAssistant({ config: ENABLED, findingStore: findings(), fetchImpl: okFetch({}) });
   await assert.rejects(() => a.explain('   ', 'h1'), (e) => e.name === 'InvalidQuestion');

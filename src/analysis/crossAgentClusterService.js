@@ -1,8 +1,12 @@
 'use strict';
 
 const { createCrossAgentCorrelator, DEFAULT_WINDOW_MS } = require('./crossAgentCorrelator');
+const { INCIDENT_INSUFFICIENT_ANSWER } = require('./assistant');
 
 const silentLogger = { info() {}, warn() {}, error() {}, debug() {} };
+
+// Medium/high clusters are the ones worth an AI advisory (and, later, an alert).
+const ADVISORY_CONFIDENCE = new Set(['medium', 'high']);
 
 // Orchestrates the cross-agent correlator against the live finding store: loads the
 // recent findings across ALL agents, runs the detector, then persists each candidate
@@ -22,6 +26,10 @@ function createCrossAgentClusterService({
   clustersRepo,
   findingStore,
   agentsRepo = null,
+  // Opt-in AI assistant (nullable). When enabled and a cluster reaches medium/high
+  // confidence, a cluster-level root-cause advisory is generated from the member
+  // findings. Never surfaced without the member evidence.
+  assistant = null,
   correlator = createCrossAgentCorrelator({ windowMs: DEFAULT_WINDOW_MS }),
   windowMs = DEFAULT_WINDOW_MS,
   // No new member finding within this window → the cluster is resolved (findings
@@ -56,6 +64,61 @@ function createCrossAgentClusterService({
     return open.find((c) => c.memberFindingIds.some((id) => wanted.has(id))) || null;
   }
 
+  // Compact evidence reference for a member finding — surfaced ALONGSIDE the advisory
+  // so advice never travels without its underlying evidence list (the member findings,
+  // each carrying its own evidence samples).
+  function evidenceRef(f) {
+    return {
+      findingId: f.id,
+      host: f.hostId,
+      metric: f.metric,
+      severity: f.severity,
+      deviation: f.deviation,
+      samples: Array.isArray(f.evidence) ? f.evidence.length : 0,
+    };
+  }
+
+  // Step 2: builds an opt-in cluster-level AI advisory (likely common root cause +
+  // troubleshooting) from the member findings, stores it and publishes it WITH the
+  // evidence list. Only for medium/high clusters that don't already carry advice,
+  // only when the assistant is enabled. Best-effort — an assistant/provider failure
+  // never affects the sweep, and an "insufficient context" / empty answer is never
+  // surfaced as advice.
+  async function maybeAdvise(clusterId, cluster, membersById, existingAdvisory) {
+    if (existingAdvisory) return;                                   // already advised
+    if (!ADVISORY_CONFIDENCE.has(cluster.confidence)) return;       // low = no advisory
+    if (!assistant || typeof assistant.suggestClusterCause !== 'function') return;
+    if (typeof assistant.isEnabled === 'function' && !assistant.isEnabled()) return; // opt-in
+    const members = cluster.memberFindingIds.map((id) => membersById.get(id)).filter(Boolean);
+    if (members.length === 0) return;                              // no evidence -> no advice
+
+    let answer;
+    try {
+      const r = await assistant.suggestClusterCause(cluster, members);
+      answer = r && typeof r.answer === 'string' ? r.answer.trim() : '';
+    } catch (err) {
+      logger.warn(`cross-agent: advisory generation failed (${err.message})`);
+      return;
+    }
+    if (!answer || answer === INCIDENT_INSUFFICIENT_ANSWER) return; // never surface non-advice
+
+    try {
+      const ok = await clustersRepo.setAdvisory(clusterId, answer);
+      if (ok) {
+        publishCluster({
+          id: clusterId,
+          status: 'open',
+          confidence: cluster.confidence,
+          memberFindingIds: cluster.memberFindingIds,
+          advisory: answer,
+          evidence: members.map(evidenceRef),
+        });
+      }
+    } catch (err) {
+      logger.warn(`cross-agent: could not store advisory for cluster ${clusterId} (${err.message})`);
+    }
+  }
+
   // Runs one detection pass: load recent findings across all hosts, detect
   // candidate clusters, then create-or-update each (deduped). Returns a summary
   // { created, updated } for the caller/tests. Never throws.
@@ -70,6 +133,7 @@ function createCrossAgentClusterService({
       return summary;
     }
     if (!Array.isArray(recent) || recent.length === 0) return summary;
+    const membersById = new Map(recent.map((f) => [f.id, f]));
 
     const siteOf = await buildSiteLookup();
     let candidates = [];
@@ -105,6 +169,7 @@ function createCrossAgentClusterService({
             summary.updated += 1;
             existing.memberFindingIds = merged; // keep local view consistent for later candidates
             publishCluster({ ...candidate, id: existing.id, status: 'open', memberFindingIds: merged, updated: true });
+            await maybeAdvise(existing.id, { ...candidate, memberFindingIds: merged }, membersById, existing.advisory);
           }
         } else {
           const id = await clustersRepo.create({
@@ -118,6 +183,7 @@ function createCrossAgentClusterService({
           const created = { ...candidate, id, status: 'open' };
           open.push({ id, memberFindingIds: candidate.memberFindingIds, status: 'open' });
           publishCluster(created);
+          await maybeAdvise(id, candidate, membersById, null);
         }
       } catch (err) {
         logger.warn(`cross-agent: could not persist cluster (${err.message})`);

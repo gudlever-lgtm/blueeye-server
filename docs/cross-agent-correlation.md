@@ -73,12 +73,32 @@ schema/repository addition; until then this is a known gap, not a bug.
   whose `detected_at` is older than the inactivity window (default 15 min, i.e. no
   member finding refreshed it) is flipped `open → resolved`.
 
+## Cluster-level AI advisory (opt-in — Step 2)
+
+When a cluster reaches **medium/high** confidence **and** the opt-in assistant is
+enabled (Settings → AI), the service builds a prompt from the cluster's **member
+findings** (not a single finding) and asks for a likely **common root cause +
+troubleshooting steps** — `assistant.suggestClusterCause(cluster, members)` in
+`src/analysis/assistant.js`, a NEW method that reuses the existing OpenAI-compatible
+`chat()` (Mistral by default). Same guarantees as the other assistant calls: IPs are
+masked before anything leaves the process, it uses ONLY the provided context, and it
+pins the exact insufficient-context string (which the service treats as "no advice").
+
+The advisory is stored in `incident_clusters.advisory` (migration 057, set once per
+cluster, never regenerated on later sweeps) and **always surfaced with its evidence**:
+the publish payload carries both `advisory` and an `evidence` array (one entry per
+member finding — `findingId`, host, metric, severity, deviation, sample count), so
+advice never travels without the underlying evidence list. Best-effort: the assistant
+being off, a provider failure, or an "insufficient" answer simply leaves `advisory`
+NULL and never affects the sweep. `low`-confidence clusters get no advisory.
+
 ## UI push
 
 Cluster events reuse the **existing** dashboard WebSocket (`/ws/dashboard`) — the
 same channel findings use. The service's `publishCluster` is wired in `server.js`
 to `dashboardWs.broadcast({ type: 'incident_cluster', payload })`, so no new socket
-or auth path is introduced. Payloads carry `status: 'open' | 'resolved'`.
+or auth path is introduced. Payloads carry `status: 'open' | 'resolved'`, and the
+advisory follow-up carries `advisory` + `evidence`.
 
 ## Data model
 
@@ -91,8 +111,6 @@ derived read-model.
 
 ## Not yet wired (later phases)
 
-- **Cluster-level Mistral advisory** (opt-in) — build the prompt from the cluster's
-  member findings, keeping the explanation+evidence rule.
-- **Cluster-level alerting** — fire once per cluster through the existing channels,
-  referencing (not resending) alerts already sent for member findings.
+- **Cluster-level alerting** (Step 3) — fire once per cluster through the existing
+  channels, referencing (not resending) alerts already sent for member findings.
 - A read API / dashboard view over `incident_clusters`.

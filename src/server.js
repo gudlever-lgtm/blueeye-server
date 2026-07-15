@@ -424,13 +424,8 @@ function start() {
   // as a leader-only sweep (below) — off the ingest hot path — and pushes cluster
   // events over the SAME dashboard WebSocket as findings.
   const incidentClustersRepo = createIncidentClustersRepository(db);
-  const crossAgentClusterService = createCrossAgentClusterService({
-    clustersRepo: incidentClustersRepo,
-    findingStore,
-    agentsRepo,
-    publishCluster: (cluster) => (dashboardWs ? dashboardWs.broadcast({ type: 'incident_cluster', payload: cluster }) : 0),
-    logger,
-  });
+  // The service is wired below, once the opt-in AI assistant exists — it uses the
+  // assistant (when enabled) for a cluster-level root-cause advisory.
 
   // Alerting: route findings to channels (email/webhook/syslog). Channels are
   // built unconditionally so the test endpoint works; rules/enable live in
@@ -511,6 +506,22 @@ function start() {
   // for the per-location "what's going on here?" summary.
   const assistant = createAssistant({
     config: analysisConfig, findingStore, agentsRepo, locationsRepo, probeResultsRepo, logger,
+  });
+
+  // Cross-agent cluster service (repo created above). Groups findings from DIFFERENT
+  // agents in the same window into one cluster with a suspected common cause +
+  // confidence, deduped, resolved on inactivity, and pushed over the SAME dashboard
+  // WebSocket as findings. When a cluster reaches medium/high confidence AND the
+  // opt-in assistant is enabled, it also builds a cluster-level Mistral advisory from
+  // the member findings (never surfaced without their evidence). Runs as a
+  // leader-only sweep (backgroundJobs) — off the ingest hot path.
+  const crossAgentClusterService = createCrossAgentClusterService({
+    clustersRepo: incidentClustersRepo,
+    findingStore,
+    agentsRepo,
+    assistant,
+    publishCluster: (cluster) => (dashboardWs ? dashboardWs.broadcast({ type: 'incident_cluster', payload: cluster }) : 0),
+    logger,
   });
 
   // Geo layer: enrich + store flow records. The GeoIP provider (created above for

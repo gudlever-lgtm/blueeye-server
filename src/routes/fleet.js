@@ -73,8 +73,14 @@ function createFleetRouter({ agentsRepo, probeResultsRepo, resultsRepo, speedtes
     }
     const ifaceByAgentId = {};
     for (const [aid, row] of Object.entries(latestMap)) {
-      const summ = interfaceHealthSummary(row.payload && row.payload.traffic);
-      if (summ) ifaceByAgentId[aid] = summ;
+      // Per-agent isolation: a single agent's malformed payload must degrade
+      // only its own row, never 500 the fleet-wide rollup for every operator.
+      try {
+        const summ = interfaceHealthSummary(row.payload && row.payload.traffic);
+        if (summ) ifaceByAgentId[aid] = summ;
+      } catch (err) {
+        logger.warn(`fleet: interface health for agent ${aid} failed (${err.message}); dropping its interface dimension`);
+      }
     }
     const { agents: fleet, summary } = computeFleet(agents, byAgent, {
       ifaceByAgentId,

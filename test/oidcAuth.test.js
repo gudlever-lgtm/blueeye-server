@@ -34,8 +34,12 @@ function makeKeys(kid = 'kid-1') {
   return { privateKey, jwk, kid };
 }
 
-function signIdToken(privateKey, { sub = 'user-1', email = 'Alice@Acme.dk', groups = [], nonce = NONCE, kid = 'kid-1', aud = CLIENT_ID, iss = ISSUER } = {}) {
-  return jwt.sign({ email, groups, nonce }, privateKey, {
+function signIdToken(privateKey, { sub = 'user-1', email = 'Alice@Acme.dk', emailVerified = true, groups = [], nonce = NONCE, kid = 'kid-1', aud = CLIENT_ID, iss = ISSUER } = {}) {
+  const claims = { email, groups, nonce };
+  // Only include email_verified when an email is present (an IdP with no email
+  // scope emits neither), and allow a test to omit it via emailVerified:null.
+  if (email !== undefined && email !== null && emailVerified !== null) claims.email_verified = emailVerified;
+  return jwt.sign(claims, privateKey, {
     algorithm: 'RS256', keyid: kid, subject: sub, audience: aud, issuer: iss, expiresIn: '5m',
   });
 }
@@ -91,6 +95,29 @@ test('handleCallback: happy path verifies the id_token and maps the claim to a r
   assert.equal(res.email, 'alice@acme.dk'); // lower-cased
   assert.equal(res.subject, 'user-1');
   assert.equal(res.matched, 1);
+});
+
+test('handleCallback: an UNVERIFIED email claim is refused (no account takeover)', async () => {
+  const { jwk, privateKey } = makeKeys();
+  // A hostile/misconfigured IdP asserts a victim's email without verifying it.
+  const idToken = signIdToken(privateKey, { email: 'admin@acme.dk', emailVerified: false, groups: ['be-admins'] });
+  const { oidc, seed } = authWith({ jwk, idToken, roleMap: [{ claimValue: 'be-admins', role: 'admin' }] });
+  await seed();
+  const res = await oidc.handleCallback({ code: 'abc', codeVerifier: 'v', nonce: NONCE });
+  assert.equal(res.ok, false);
+  assert.equal(res.reason, 'email-unverified');
+});
+
+test('handleCallback: no email claim falls back to the stable sub identity', async () => {
+  const { jwk, privateKey } = makeKeys();
+  // email:null → the token carries neither email nor email_verified.
+  const idToken = signIdToken(privateKey, { sub: 'user-42', email: null, emailVerified: null, groups: ['be-admins'] });
+  const { oidc, seed } = authWith({ jwk, idToken, roleMap: [{ claimValue: 'be-admins', role: 'admin' }] });
+  await seed();
+  const res = await oidc.handleCallback({ code: 'abc', codeVerifier: 'v', nonce: NONCE });
+  assert.equal(res.ok, true);
+  assert.equal(res.email, 'user-42'); // provisioning identity = sub
+  assert.equal(res.subject, 'user-42');
 });
 
 test('claim→role mapping: the HIGHEST matching role wins', async () => {

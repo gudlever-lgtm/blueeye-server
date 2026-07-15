@@ -94,11 +94,41 @@ function createSamlAuth({
     return out.filter(Boolean);
   }
 
+  // One-time-use guard: assertion IDs we have already consumed, each mapped to
+  // the ms after which the assertion is expired anyway (so the entry can be
+  // dropped). A signed SAMLResponse is a bearer artifact valid for its whole
+  // Conditions window; without this an attacker who captures one (proxy log,
+  // browser history, a shared-workstation POST body, or an IdP-initiated flow
+  // with no InResponseTo) could re-POST it to the ACS and mint a fresh session
+  // for the victim. In-memory + per-process: it does not survive a restart and
+  // is not shared across instances, but the assertion window is short (minutes),
+  // so it closes the practical replay window. Bounded by that window — an
+  // assertion that can no longer be replayed needs no entry.
+  const seenAssertions = new Map(); // assertion ID -> expiry ms
+  const DEFAULT_REPLAY_TTL_MS = 10 * 60 * 1000; // used when the assertion names no window
+
+  function sweepSeen(now) {
+    for (const [id, exp] of seenAssertions) if (exp <= now) seenAssertions.delete(id);
+  }
+  // Latest NotOnOrAfter the assertion asserts (Conditions or any
+  // SubjectConfirmationData), plus skew — after that it fails the window checks
+  // regardless, so the replay entry can expire with it.
+  function replayExpiry(assertion, now) {
+    let latest = 0;
+    const cond = samlXml.findFirstByLocal(assertion, 'Conditions');
+    if (cond) { const t = parseDate(samlXml.attrValue(cond, 'NotOnOrAfter')); if (t) latest = Math.max(latest, t); }
+    for (const scd of samlXml.findAllByLocal(assertion, 'SubjectConfirmationData')) {
+      const t = parseDate(samlXml.attrValue(scd, 'NotOnOrAfter')); if (t) latest = Math.max(latest, t);
+    }
+    return (latest > 0 ? latest : now + DEFAULT_REPLAY_TTL_MS) + CLOCK_SKEW_MS;
+  }
+
   // Handles the SAMLResponse from the ACS (base64, HTTP-POST binding). Return:
   //   { ok:true, email, role, subject, attributes, matched }
   //   { ok:false, reason }  reason in: 'disabled' | 'invalid-input' | 'parse-error' |
   //     'bad-signature' | 'not-assertion' | 'issuer-mismatch' | 'expired' |
-  //     'not-yet-valid' | 'audience' | 'no-subject' | 'no-role'
+  //     'not-yet-valid' | 'audience' | 'no-subject' | 'no-role' | 'no-assertion-id' |
+  //     'replayed'
   async function handleResponse(samlResponseB64, { requestId = null } = {}) {
     if (!isEnabled()) return { ok: false, reason: 'disabled' };
     if (typeof samlResponseB64 !== 'string' || !samlResponseB64) return { ok: false, reason: 'invalid-input' };
@@ -157,6 +187,19 @@ function createSamlAuth({
       const inResponseTo = samlXml.attrValue(scd, 'InResponseTo');
       if (requestId && inResponseTo && inResponseTo !== requestId) return { ok: false, reason: 'bad-signature' };
     }
+
+    // 5b) One-time use: reject a replayed assertion. Only runs once the assertion
+    //     is signature-valid and inside its window, so an unsigned/expired ID can
+    //     never poison the cache. Checked-and-marked SYNCHRONOUSLY here (before the
+    //     awaited role lookup below) so two concurrent replays cannot both pass.
+    const assertionId = samlXml.attrValue(assertion, 'ID');
+    if (!assertionId) return { ok: false, reason: 'no-assertion-id' };
+    sweepSeen(now);
+    if (seenAssertions.has(assertionId)) {
+      logger.warn('saml: rejected replayed assertion (ID already consumed)');
+      return { ok: false, reason: 'replayed' };
+    }
+    seenAssertions.set(assertionId, replayExpiry(assertion, now));
 
     // 6) Identity + role.
     const nameId = samlXml.findFirstByLocal(samlXml.findFirstByLocal(assertion, 'Subject') || assertion, 'NameID');

@@ -1,6 +1,6 @@
 'use strict';
 
-// Data-access for `incident_clusters` (migration 056) — cross-agent incident
+// Data-access for `incident_clusters` (migration 057) — cross-agent incident
 // clusters produced by src/analysis/crossAgentCorrelator.js. Pure data-access;
 // the detect/dedup/resolve policy lives in src/analysis/crossAgentClusterService.js
 // and the resolution sweep in src/analysis/crossAgentResolveJob.js.

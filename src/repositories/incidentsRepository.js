@@ -121,7 +121,31 @@ function createIncidentsRepository(db) {
     return rows.map(mapRow);
   }
 
-  return { findActive, open, resolve, updateSeverity, findById, list };
+  // Incidents for ONE agent overlapping [from, to], newest-first. Same overlap
+  // semantics as list() (started before `to`, and unresolved or resolved after
+  // `from`) but scoped to a single agent — used by the per-target timeline.
+  async function listForAgent(agentId, { from = null, to = null, limit = 500 } = {}) {
+    const where = ['i.agent_id = ?'];
+    const params = [agentId];
+    if (to != null) { where.push('i.started_at <= ?'); params.push(to); }
+    if (from != null) { where.push('(i.resolved_at IS NULL OR i.resolved_at >= ?)'); params.push(from); }
+    const lim = Number.isInteger(limit) && limit > 0 && limit <= 5000 ? limit : 500;
+    params.push(lim);
+    const [rows] = await pool.query(
+      `SELECT ${BASE_COLUMNS}, l.name AS location_name,
+              COALESCE(a.display_name, a.hostname) AS agent_name
+       FROM incidents i
+       LEFT JOIN locations l ON l.id = i.location_id
+       LEFT JOIN agents a ON a.id = i.agent_id
+       WHERE ${where.join(' AND ')}
+       ORDER BY i.started_at DESC, i.id DESC
+       LIMIT ?`,
+      params
+    );
+    return rows.map(mapRow);
+  }
+
+  return { findActive, open, resolve, updateSeverity, findById, list, listForAgent };
 }
 
 module.exports = { createIncidentsRepository, mapRow };

@@ -65,6 +65,9 @@ const config = {
     jwtExpiresIn: process.env.JWT_EXPIRES_IN || '12h',
     jwtIssuer: process.env.JWT_ISSUER || 'blueeye-server',
     bcryptRounds: toInt(process.env.BCRYPT_ROUNDS, 12),
+    // Lifetime of an admin-issued one-time password for local user creation
+    // (src/routes/users.js). Clamped to [1, 168] hours; default 48h.
+    tempPasswordTtlHours: clampInt(process.env.TEMP_PASSWORD_TTL_HOURS, 48, 1, 168),
   },
   // Symmetric key for encrypting secrets at rest (integration credentials, the
   // LDAP bind password) via src/lib/secretBox.js. Defaults to JWT_SECRET so

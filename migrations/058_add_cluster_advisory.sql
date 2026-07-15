@@ -1,4 +1,4 @@
--- 057 — cluster-level AI advisory (Step 2).
+-- 058 — cluster-level AI advisory (Step 2).
 --
 -- Stores the opt-in Mistral advisory (likely common root cause + troubleshooting)
 -- generated for a cross-agent cluster once it reaches medium/high confidence. NULL

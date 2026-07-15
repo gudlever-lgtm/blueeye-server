@@ -47,10 +47,19 @@ CREATE TABLE IF NOT EXISTS users (
   -- JWTs issued before this instant are rejected (set on password/role change,
   -- delete, or explicit revoke). NULL = never revoked. See src/auth/revocation.
   tokens_valid_after DATETIME NULL DEFAULT NULL,
+  -- Local user creation with a one-time password (migration 056). While
+  -- must_change_password=1 the user is forced through the change-password flow
+  -- before any other access; the one-time password is valid until
+  -- temp_password_expires_at; temp_password_created_by records the issuing admin.
+  must_change_password TINYINT(1) NOT NULL DEFAULT 0,
+  temp_password_expires_at DATETIME NULL DEFAULT NULL,
+  temp_password_created_by INT UNSIGNED NULL DEFAULT NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
-  UNIQUE KEY uq_users_email (email)
+  UNIQUE KEY uq_users_email (email),
+  CONSTRAINT fk_users_temp_pw_creator
+    FOREIGN KEY (temp_password_created_by) REFERENCES users (id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Managed endpoints/agents. Agent-reported fields (hostname, platform, arch,
@@ -798,7 +807,7 @@ CREATE TABLE IF NOT EXISTS incident_playbook_runs (
     REFERENCES remediation_playbooks (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Cross-agent incident clusters (migration 056): findings from DIFFERENT agents
+-- Cross-agent incident clusters (migration 057): findings from DIFFERENT agents
 -- within a short time window, grouped with a suspected common cause + confidence
 -- tier (time-only=low, +shared site=medium, +same finding-type=high). member_finding_ids
 -- is a JSON array of findings.id. See src/analysis/crossAgentCorrelator.js.
@@ -807,7 +816,7 @@ CREATE TABLE IF NOT EXISTS incident_clusters (
   confidence ENUM('low', 'medium', 'high') NOT NULL DEFAULT 'low',
   member_finding_ids JSON NOT NULL,
   suspected_common_cause TEXT NULL DEFAULT NULL,
-  advisory TEXT NULL DEFAULT NULL,                     -- opt-in AI root-cause + troubleshooting (migration 057)
+  advisory TEXT NULL DEFAULT NULL,                     -- opt-in AI root-cause + troubleshooting (migration 058)
   status ENUM('open', 'resolved', 'closed') NOT NULL DEFAULT 'open',
   detected_at DATETIME NOT NULL,
   resolved_at DATETIME NULL DEFAULT NULL,
@@ -817,7 +826,7 @@ CREATE TABLE IF NOT EXISTS incident_clusters (
   KEY idx_incident_clusters_status_detected (status, detected_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Durable alert-dispatch log (migration 058): one row per alert actually sent.
+-- Durable alert-dispatch log (migration 059): one row per alert actually sent.
 -- finding rows let a cluster alert reference members already alerted individually;
 -- cluster rows make "fire once per cluster" durable. Metadata only. See
 -- src/repositories/alertDispatchLogRepository.js.

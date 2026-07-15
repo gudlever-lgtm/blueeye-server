@@ -1,4 +1,4 @@
--- 058 — durable alert-dispatch log.
+-- 059 — durable alert-dispatch log.
 --
 -- Records each alert actually dispatched to a channel, for TWO purposes:
 --   * finding-level rows (subject_type='finding', subject_id = findings.id) let the

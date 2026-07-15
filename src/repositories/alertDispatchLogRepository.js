@@ -1,6 +1,6 @@
 'use strict';
 
-// Data-access for `alert_dispatch_log` (migration 058) — a durable record of alerts
+// Data-access for `alert_dispatch_log` (migration 059) — a durable record of alerts
 // actually dispatched to channels. Two consumers:
 //   * the alerting dispatcher records each finding-level + cluster-level send;
 //   * the cross-agent cluster alert reads it to (a) fire once per cluster

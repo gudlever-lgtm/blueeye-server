@@ -48,7 +48,7 @@ schema/repository addition; until then this is a known gap, not a bug.
   decreasing confidence: per-site groups (≥2 agents) → topology clusters, then
   per-metric groups → type-only clusters, then a time-only leftover.
 - **`src/repositories/incidentClustersRepository.js`** — data access for
-  `incident_clusters` (migration 056). `create` / `listOpen` / `updateMembership` /
+  `incident_clusters` (migration 057). `create` / `listOpen` / `updateMembership` /
   `updateStatus` (guarded) / `listStaleOpen` / `list`.
 - **`src/analysis/crossAgentClusterService.js`** — orchestration + policy.
   `detectAndPersist()` loads recent findings across ALL agents
@@ -84,7 +84,7 @@ troubleshooting steps** — `assistant.suggestClusterCause(cluster, members)` in
 masked before anything leaves the process, it uses ONLY the provided context, and it
 pins the exact insufficient-context string (which the service treats as "no advice").
 
-The advisory is stored in `incident_clusters.advisory` (migration 057, set once per
+The advisory is stored in `incident_clusters.advisory` (migration 058, set once per
 cluster, never regenerated on later sweeps) and **always surfaced with its evidence**:
 the publish payload carries both `advisory` and an `evidence` array (one entry per
 member finding — `findingId`, host, metric, severity, deviation, sample count), so
@@ -99,7 +99,7 @@ channels (email/webhook/syslog, and — via the integrations dispatcher — ITSM
 gated the same way as the advisory (**medium/high** only). It must not duplicate the
 alerts member findings already sent, so it **references** them instead of resending:
 
-- **Durable alert-dispatch log** (`alert_dispatch_log`, migration 058, repo
+- **Durable alert-dispatch log** (`alert_dispatch_log`, migration 059, repo
   `src/repositories/alertDispatchLogRepository.js`). The dispatcher records every
   send: finding-level rows (`subject_type='finding'`) and cluster-level rows
   (`subject_type='cluster'`).
@@ -129,7 +129,7 @@ advisory follow-up carries `advisory` + `evidence`.
 
 ## Data model
 
-`incident_clusters` (migration 056): `id`, `confidence` (enum low/medium/high),
+`incident_clusters` (migration 057): `id`, `confidence` (enum low/medium/high),
 `member_finding_ids` (JSON array of `findings.id`), `suspected_common_cause` (text,
 nullable), `status` (open/resolved/closed), `detected_at` (last activity),
 `resolved_at`, timestamps. `member_finding_ids` is JSON (not a join table) to mirror

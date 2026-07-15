@@ -106,11 +106,13 @@ class FindingStore {
     return { ...finding, id, createdAt, acked: Boolean(finding.acked) };
   }
 
-  // Lists findings, newest first. Optionally filters by hostId and/or a `since`
-  // lower bound on created_at (Date or ISO string). `limit` is always bounded so
-  // an unfiltered call can never return the whole table; it defaults to (and is
-  // capped at) MAX_LIST.
-  async list(hostId, since, limit) {
+  // Lists findings, newest first. Optionally filters by hostId, a `since` lower
+  // bound and an `until` UPPER bound on created_at (Date or ISO string). The
+  // upper bound matters for historical windows: without it, `limit` is applied
+  // to [since, now] and a later in-window slice can silently drop rows. `limit`
+  // is always bounded so an unfiltered call can never return the whole table; it
+  // defaults to (and is capped at) MAX_LIST.
+  async list(hostId, since, limit, until) {
     const where = [];
     const params = [];
     if (hostId) {
@@ -120,6 +122,10 @@ class FindingStore {
     if (since) {
       where.push('created_at >= ?');
       params.push(since instanceof Date ? since : new Date(since));
+    }
+    if (until) {
+      where.push('created_at <= ?');
+      params.push(until instanceof Date ? until : new Date(until));
     }
     const clause = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const n = Number.isInteger(limit) && limit > 0 ? Math.min(limit, MAX_LIST) : MAX_LIST;

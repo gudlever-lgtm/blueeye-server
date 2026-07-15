@@ -39,6 +39,9 @@ function requireAuth(req, res, next) {
       id: Number(decoded.sub),
       email: decoded.email,
       role: decoded.role,
+      // True while the user still holds a one-time password and must change it
+      // before using the rest of the system (see the gate in src/routes/index.js).
+      mustChangePassword: decoded.mustChangePassword === true,
     };
     req.authVerified = true;
   } catch {

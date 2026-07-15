@@ -130,6 +130,24 @@ let ssoLoginError = '';
 let token = localStorage.getItem(TOKEN_KEY);
 let role = localStorage.getItem(ROLE_KEY) || 'viewer';
 let email = localStorage.getItem(EMAIL_KEY) || '';
+
+// Reads the (unverified) payload of the current JWT — used only to detect the
+// mustChangePassword flag so the UI can force the change screen even after a
+// page reload (the server is still the authority; it 403s every other route).
+function decodeToken(t = token) {
+  if (!t || typeof t !== 'string') return {};
+  const part = t.split('.')[1];
+  if (!part) return {};
+  try {
+    const json = atob(part.replace(/-/g, '+').replace(/_/g, '/'));
+    return JSON.parse(json) || {};
+  } catch { return {}; }
+}
+// True while the signed-in user must change their one-time password first.
+function needsPasswordChange() {
+  return decodeToken().mustChangePassword === true;
+}
+
 const canWrite = () => role === 'operator' || role === 'admin';
 const canDelete = () => role === 'admin';
 const isAdmin = () => role === 'admin';
@@ -146,9 +164,10 @@ async function api(path, { method = 'GET', body } = {}) {
   });
   let data = null;
   try { data = await res.json(); } catch { /* no body (e.g. 204) */ }
-  // A 401 on an authenticated call means the session expired; on the login call
-  // itself it just means wrong credentials — surface the server's message.
-  if (res.status === 401 && path !== '/auth/login') {
+  // A 401 on an authenticated call means the session expired; on the login and
+  // change-password calls it just means wrong credentials — surface the server's
+  // message instead of tearing the session down.
+  if (res.status === 401 && path !== '/auth/login' && path !== '/auth/change-password') {
     logout();
     throw new Error('Session expired — please log in again.');
   }
@@ -2903,9 +2922,50 @@ function findingRow(agentName, f) {
       f.kind === 'FLATLINE' ? el('span', { class: 'muted' }, ' flatline') : null),
     el('td', {}, dev),
     el('td', {}, el('div', {}, f.explanation || '–'), corr),
-    el('td', {}, action));
+    el('td', {}, action, action ? ' ' : null,
+      el('button', { class: 'small ghost', title: 'What changed on this device just before the anomaly', onclick: (e) => toggleFindingContext(f, e.target) }, 'What changed?')));
   tr.dataset.findingId = f.id;
   return tr;
+}
+
+// Phase 3 — "what changed before this": expands an inline row under a finding
+// showing the CHANGE-type events on its device in the window before the trigger
+// (GET /api/findings/:id/context). Reuses timelineRowEl (Phase 2). Explicit
+// loading/empty/error states.
+function toggleFindingContext(f, btn) {
+  const tr = btn.closest('tr');
+  if (!tr) return;
+  const next = tr.nextElementSibling;
+  if (next && next.classList.contains('finding-context-row')) {
+    next.remove();
+    btn.textContent = 'What changed?';
+    return;
+  }
+  const cell = el('td', { colspan: String(tr.children.length), class: 'finding-context' });
+  tr.after(el('tr', { class: 'finding-context-row' }, cell));
+  btn.textContent = 'Hide changes';
+  loadFindingContext(f, cell);
+}
+
+async function loadFindingContext(f, container) {
+  const head = el('div', { class: 'muted fc-head' }, 'What changed before this anomaly');
+  const list = el('div', {});
+  container.replaceChildren(head, list);
+  const agentId = Number(f.hostId);
+  const opts = timelineRenderOpts(Number.isInteger(agentId) ? agentId : null, {
+    onRetry: () => loadFindingContext(f, container),
+    emptyText: 'No changes detected in this window.',
+  });
+  TimelineView.renderInto(document, list, TimelineView.resolveState({ loading: true }), opts);
+  let view;
+  try {
+    const data = await api(`/api/findings/${encodeURIComponent(f.id)}/context`);
+    // The context endpoint returns `changes`; adapt to the timeline state shape.
+    view = TimelineView.resolveState({ data: { events: data.changes, partial: data.partial, failedSources: data.failedSources } });
+  } catch (err) {
+    view = TimelineView.resolveState({ error: err });
+  }
+  TimelineView.renderInto(document, list, view, opts);
 }
 
 async function ackFinding(f, btn) {
@@ -3046,6 +3106,66 @@ async function loadIncidentTimeline(id, card, deviceId) {
           e.status ? el('span', { class: 'muted' }, ` [${e.status}]`) : null));
     })));
   } catch (err) { card.replaceChildren(head, el('p', { class: 'error' }, err.message)); }
+}
+
+// ---- Per-target activity timeline (Phase 2) --------------------------------
+// Consumes GET /api/targets/:id/timeline. Pure state/mapping logic lives in
+// public/timelineView.js (TimelineView, unit-tested); this is just the DOM.
+
+// Shared options for the timeline render layer (TimelineView.renderRow/
+// renderInto, unit-tested under jsdom). Rows deep-link to the device page; time
+// is formatted with the app's fmtDate.
+function timelineRenderOpts(agentId, extra) {
+  return Object.assign({ agentId, onOpen: (id) => openAgent(id), formatTime: fmtDate }, extra || {});
+}
+
+// The per-target timeline card, embedded on the device detail page. Time-range
+// selector (1h/24h/7d/custom) + manual refresh; explicit loading/empty/error/
+// partial states. No polling in this phase.
+function targetTimelineCard(agentId) {
+  const card = el('div', { class: 'card agent-timeline' });
+  const body = el('div', { class: 'tl-body' });
+  let rangeKey = '24h';
+  const customFrom = el('input', { type: 'datetime-local', class: 'tl-dt' });
+  const customTo = el('input', { type: 'datetime-local', class: 'tl-dt' });
+  const customWrap = el('span', { class: 'tl-custom hidden' }, customFrom, el('span', { class: 'muted' }, ' → '), customTo);
+  const rangeSel = el('select', { class: 'tl-range' },
+    ...TimelineView.RANGE_PRESETS.map((p) => el('option', { value: p.key }, p.label)));
+  rangeSel.value = rangeKey;
+  const refreshBtn = el('button', { class: 'small ghost' }, '↻ Refresh');
+  const setBusy = (b) => { refreshBtn.disabled = b; };
+  const draw = (view) => TimelineView.renderInto(document, body, view,
+    timelineRenderOpts(agentId, { onRetry: load, emptyText: 'No events in this window.' }));
+
+  async function load() {
+    const win = TimelineView.rangeToWindow(rangeKey, Date.now(), customFrom.value, customTo.value);
+    if (!win) { body.replaceChildren(el('p', { class: 'muted' }, 'Pick a valid custom range (from ≤ to).')); return; }
+    draw(TimelineView.resolveState({ loading: true }));
+    setBusy(true);
+    let view;
+    try {
+      const data = await api(`/api/targets/${agentId}/timeline${TimelineView.timelineQuery(win, 500)}`);
+      view = TimelineView.resolveState({ data });
+    } catch (err) {
+      view = TimelineView.resolveState({ error: err });
+    } finally { setBusy(false); }
+    draw(view);
+  }
+
+  rangeSel.onchange = (e) => {
+    rangeKey = e.target.value;
+    customWrap.classList.toggle('hidden', rangeKey !== 'custom');
+    if (rangeKey !== 'custom') load();
+  };
+  customFrom.onchange = () => { if (rangeKey === 'custom') load(); };
+  customTo.onchange = () => { if (rangeKey === 'custom') load(); };
+  refreshBtn.onclick = load;
+
+  card.append(
+    el('div', { class: 'tl-head' }, el('h3', {}, 'Activity timeline'), rangeSel, customWrap, refreshBtn),
+    body);
+  load();
+  return card;
 }
 
 async function loadIncidentSimilar(id, card) {
@@ -5612,6 +5732,10 @@ views.agent = async () => {
   const cmdbHost = el('div', { class: 'card agent-cmdb' }, el('h3', {}, 'CMDB asset'), el('div', { class: 'muted' }, 'Loading…'));
   root.append(cmdbHost);
   loadAgentCmdbLink(id, cmdbHost);
+
+  // Unified activity timeline (findings + probe-outage incidents + connect/
+  // disconnect + playbook runs) — GET /api/targets/:id/timeline.
+  root.append(targetTimelineCard(id));
   function renderHealth(h, q, thr) {
     const m = h.metrics;
     const kv = (k, v, cls) => el('div', { class: 'ah-kv' }, el('span', { class: 'ah-k' }, k), el('span', { class: `ah-v${cls ? ' ' + cls : ''}` }, v));
@@ -9540,25 +9664,66 @@ function geoipSettingsCard(geoip) {
 }
 
 views.users = async () => {
-  const users = await api('/users');
+  const [users, avail] = await Promise.all([
+    api('/users'),
+    api('/users/local-availability').catch(() => ({ available: false, ssoActive: false, mailerReady: false })),
+  ]);
   const root = el('div');
-  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Users'),
-    el('button', { class: 'small', onclick: () => editUser() }, '+ New user')));
+  const headBtns = [el('button', { class: 'small', onclick: () => editUser() }, '+ New user')];
+  // Local user creation with a one-time password — only offered when no SSO/LDAP
+  // is active. The server enforces the same rule (403); this just hides the UI.
+  if (avail.available) {
+    headBtns.unshift(el('button', { class: 'small', onclick: () => createLocalUser() }, '+ Invite user (one-time password)'));
+  }
+  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Users'), ...headBtns));
   root.append(el('p', { class: 'muted' }, 'Roles: viewer (read), operator (create/edit), admin (all). Only admins see this tab.'));
+  if (!avail.available && avail.ssoActive) {
+    root.append(el('p', { class: 'muted' }, 'Local user invitations are disabled while SSO/LDAP is active — manage users in your directory.'));
+  } else if (!avail.available && !avail.mailerReady) {
+    root.append(el('p', { class: 'muted' }, ['One-time-password invitations need SMTP configured in ', settingsLink('alerting', 'Settings → Alerting'), '.']));
+  }
   root.append(el('table', {},
-    el('thead', {}, el('tr', {}, ...['ID', 'Email', 'Role', 'Created', ''].map((h) => el('th', {}, h)))),
+    el('thead', {}, el('tr', {}, ...['ID', 'Email', 'Role', 'Status', 'Created', ''].map((h) => el('th', {}, h)))),
     el('tbody', {}, ...users.map((u) => el('tr', {},
       el('td', {}, String(u.id)),
       el('td', {}, u.email),
       el('td', {}, el('span', { class: 'badge' }, u.role),
         u.protected ? el('span', { class: 'badge', title: 'Superadmin — cannot be changed/deleted, password only', style: 'margin-left:6px' }, 'superadmin') : null),
+      el('td', {}, u.must_change_password
+        ? el('span', { class: 'badge', title: u.temp_password_expires_at ? `One-time password expires ${fmtDate(u.temp_password_expires_at)}` : 'Awaiting first password change' }, 'pending first login')
+        : el('span', { class: 'muted' }, '—')),
       el('td', { class: 'muted' }, fmtDate(u.created_at)),
       el('td', {}, el('div', { class: 'row-actions' },
+        (avail.available && u.must_change_password)
+          ? el('button', { class: 'small ghost', title: 'Generate and email a new one-time password', onclick: () => resendTempPassword(u) }, 'Resend password')
+          : null,
         el('button', { class: 'small ghost', onclick: () => editUser(u) }, u.protected ? 'Change password' : 'Edit'),
         u.protected ? null : el('button', { class: 'small danger', onclick: () => deleteUser(u) }, 'Delete'))),
     )))));
   return root;
 };
+
+// Invite a local user: the server generates a one-time password and emails it;
+// the user must change it on first login. No password field here.
+function createLocalUser() {
+  openModal('Invite user (one-time password)', [
+    { name: 'email', label: 'Email', type: 'email', value: '' },
+    { name: 'name', label: 'Name (optional)', type: 'text', optional: true, value: '' },
+    { name: 'role', label: 'Role', type: 'select', value: 'viewer', options: ROLE_OPTIONS },
+  ], async (v) => {
+    if (!v.email) throw new Error('Enter an email address');
+    await api('/users/local', { method: 'POST', body: { email: v.email, name: v.name || undefined, role: v.role } });
+    closeModal();
+    toast('Invitation sent — a one-time password was emailed');
+    render();
+  });
+}
+
+async function resendTempPassword(u) {
+  if (!confirm(`Email a new one-time password to ${u.email}? Any current one-time password stops working.`)) return;
+  try { await api(`/users/${u.id}/resend-temp-password`, { method: 'POST', body: {} }); toast('New one-time password emailed'); render(); }
+  catch (err) { toast(err.message, true); }
+}
 
 const ROLE_OPTIONS = ['viewer', 'operator', 'admin'].map((r) => ({ value: r, label: r }));
 
@@ -10982,11 +11147,23 @@ function focusLoginField() {
 async function render({ silent = false } = {}) {
   if (!token) {
     $('#login').classList.remove('hidden');
+    $('#force-change').classList.add('hidden');
     $('#app').classList.add('hidden');
     focusLoginField();
     return;
   }
+  // A user still holding a one-time password is locked to the change screen —
+  // the server refuses every other route until they pick a new password.
+  if (needsPasswordChange()) {
+    $('#login').classList.add('hidden');
+    $('#app').classList.add('hidden');
+    $('#force-change').classList.remove('hidden');
+    const cur = $('#fc-current');
+    if (cur && document.activeElement !== cur) cur.focus();
+    return;
+  }
   $('#login').classList.add('hidden');
+  $('#force-change').classList.add('hidden');
   $('#app').classList.remove('hidden');
   connectLive(); // live findings channel (idempotent)
   await loadProfile(); // apply the user's saved colour theme (once per session)
@@ -11053,6 +11230,35 @@ $('#login-form').addEventListener('submit', async (e) => {
   try { await login($('#email').value, $('#password').value); render(); }
   catch (err) { $('#login-error').textContent = err.message; }
 });
+
+// Forced password change (first login with a one-time password). Posts the
+// current + new password; on success the server returns a fresh, unflagged token
+// so the user drops straight into the app. Client-side confirm-match check only;
+// the server enforces the real policy (422) and current-password check (401).
+$('#force-change-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const errEl = $('#fc-error');
+  errEl.textContent = '';
+  const currentPassword = $('#fc-current').value;
+  const newPassword = $('#fc-new').value;
+  const confirm = $('#fc-confirm').value;
+  if (newPassword !== confirm) { errEl.textContent = 'De to nye adgangskoder er ikke ens. / New passwords do not match.'; return; }
+  try {
+    const data = await api('/auth/change-password', { method: 'POST', body: { currentPassword, newPassword } });
+    token = data.token;
+    role = data.user.role;
+    email = data.user.email;
+    localStorage.setItem(TOKEN_KEY, token);
+    localStorage.setItem(ROLE_KEY, role);
+    localStorage.setItem(EMAIL_KEY, email);
+    $('#force-change-form').reset();
+    toast('Adgangskode skiftet / Password changed');
+    render();
+  } catch (err) {
+    errEl.textContent = errText(err);
+  }
+});
+$('#fc-logout').addEventListener('click', () => logout());
 
 // Federated sign-in buttons on the login screen. Asks the server which SSO
 // methods are live (GET /auth/sso) and shows a button per method; each is just a

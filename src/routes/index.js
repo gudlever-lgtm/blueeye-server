@@ -29,6 +29,8 @@ const { createTopologyRouter } = require('./topology');
 const { createProbesRouter } = require('./probes');
 const { createReportsRouter } = require('./reports');
 const { createIncidentsRouter } = require('./incidents');
+const { createTargetsRouter } = require('./targets');
+const { createTargetTimelineService } = require('../timeline/targetTimelineService');
 const { createDeviceConfigRouter } = require('./deviceConfig');
 const { createAskCache } = require('../incidentCases/askCache');
 const { createThresholdsRouter } = require('./thresholds');
@@ -58,6 +60,7 @@ const {
   createAgentTokenMiddleware,
 } = require('../auth/agentAuth');
 const { createApiTokenMiddleware } = require('../auth/apiTokenAuth');
+const { verifyToken } = require('../auth/jwt');
 const { silentLogger } = require('../logger');
 
 // Aggregates the feature routers into a single API router. New resources are
@@ -74,6 +77,8 @@ function createApiRouter({
   auditLogRepo,
   apiTokensRepo,
   auditLogger,
+  // Sends the one-time password for local user creation (Settings-configured SMTP).
+  userMailer,
   enrollmentCodesRepo,
   enrollmentStore,
   agentTokensRepo,
@@ -182,6 +187,29 @@ function createApiRouter({
   // requireAuth/requireRole work unchanged. Mounted once, ahead of every router.
   if (apiTokensRepo) router.use(createApiTokenMiddleware({ apiTokensRepo }));
 
+  // Forced-password-change gate. A user holding a one-time password gets a JWT
+  // flagged mustChangePassword; until they complete the change, EVERY route is
+  // refused (403) except the ones needed to do it: the login/SSO/change-password
+  // endpoints, the identity read (/me) and health. Best-effort decode — on any
+  // token error we fall through so the downstream requireAuth returns the right
+  // 401. API-token callers never carry the flag, so they're unaffected.
+  const PASSWORD_CHANGE_ALLOWED = new Set(['/auth/login', '/auth/change-password', '/auth/sso', '/me', '/health']);
+  router.use((req, res, next) => {
+    const header = req.headers.authorization || '';
+    const [scheme, token] = header.split(' ');
+    if (scheme === 'Bearer' && token) {
+      let decoded = null;
+      try { decoded = verifyToken(token); } catch { decoded = null; }
+      if (decoded && decoded.mustChangePassword && !PASSWORD_CHANGE_ALLOWED.has(req.path)) {
+        return res.status(403).json({
+          error: 'password_change_required',
+          message: 'You must change your one-time password before using the system.',
+        });
+      }
+    }
+    return next();
+  });
+
   router.use('/health', createHealthRouter({ db, tsdb }));
   router.use('/auth', createAuthRouter({ usersRepo, ldapAuth, ldapLoginAuditRepo, auditLogger, oidcAuth, samlAuth }));
   // SSO (OIDC) — public browser flow (login/callback) + admin config/role-map.
@@ -198,12 +226,23 @@ function createApiRouter({
     router.use('/auth/saml', createSamlAuthRouter({ usersRepo, samlAuth, ssoLoginAuditRepo, auditLogger }));
     router.use('/api/saml', createSamlAdminRouter({ samlAuth, samlRoleMapRepo, ssoLoginAuditRepo, featureGate }));
   }
-  router.use('/users', createUsersRouter({ usersRepo, featureGate, planService, auditLogger }));
+  router.use('/users', createUsersRouter({
+    usersRepo, featureGate, planService, auditLogger,
+    // Local user creation with a one-time password: mailer + the auth services
+    // used to detect (and refuse under) an active SSO/LDAP setup.
+    userMailer, ldapAuth, oidcAuth, samlAuth,
+    publicUrl: (enrollConfig && enrollConfig.publicUrl) || '',
+  }));
   router.use('/me', createMeRouter({ usersRepo }));
   router.use('/locations', createLocationsRouter({ locationsRepo, resultsRepo }));
   router.use('/license', createLicenseRouter({ licenseManager, featureGate, planService, usageService, auditLogger }));
   router.use('/system', createSystemRouter({ systemInfo, agentSourceStore, agentBinaryStore, releaseStore }));
-  if (findingStore) router.use('/api/findings', createFindingsRouter({ findingStore }));
+  // Shared per-target timeline service (Phase 1 merge/fan-out) — powers both the
+  // /api/targets timeline and the /api/findings/:id/context change-diff.
+  const targetTimelineService = findingStore
+    ? createTargetTimelineService({ findingStore, incidentsRepo, auditEventsRepo, remediationPlaybooksRepo })
+    : null;
+  if (findingStore) router.use('/api/findings', createFindingsRouter({ findingStore, timelineService: targetTimelineService }));
   if (assistant) router.use('/api/assistant', createAssistantRouter({ assistant, featureGate }));
   if (flowsRepo) router.use('/api/geo', createGeoRouter({ flowsRepo, agentsRepo, findingStore, tileConfig: geoTileConfig, getMapConfig, geoProvider, featureGate }));
   if (dispatcher) router.use('/api/alerting', createAlertingRouter({ dispatcher }));
@@ -230,6 +269,9 @@ function createApiRouter({
   // First-class incidents (incident_cases) wrapping findings — distinct from the
   // probe-outage `incidents` used by /api/reports above.
   if (incidentCasesRepo && findingStore) router.use('/api/incidents', createIncidentsRouter({ incidentCasesRepo, findingStore, auditLogger, auditEventsRepo, auditLogRepo, configSnapshotsRepo, agentsRepo, assistant, featureGate, askCache: createAskCache(), remediationPlaybooksRepo }));
+  // Per-target (per-agent) incident timeline — merges findings, probe-outage
+  // incidents, agent connect/disconnect and playbook runs (read-only, viewer+).
+  if (agentsRepo && targetTimelineService) router.use('/api/targets', createTargetsRouter({ agentsRepo, timelineService: targetTimelineService }));
   // Device config history (operator/admin, masked) — Fase 3.
   if (configSnapshotsRepo) router.use('/api/devices', createDeviceConfigRouter({ configSnapshotsRepo, agentsRepo, auditLogger }));
   if (thresholdsRepo) router.use('/api/thresholds', createThresholdsRouter({ thresholdsRepo, locationsRepo }));

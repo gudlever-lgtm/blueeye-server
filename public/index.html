@@ -32,6 +32,24 @@
       </form>
     </main>
 
+    <!-- Forced password change: shown when the signed-in user still holds a
+         one-time password (must_change_password). Blocks the rest of the app. -->
+    <main id="force-change" class="login hidden">
+      <form id="force-change-form" class="card">
+        <h1>BlueEye <span class="muted">server</span></h1>
+        <p class="muted">Vælg en ny adgangskode for at fortsætte. / Choose a new password to continue.</p>
+        <label>Nuværende (engangs) adgangskode / Current (one-time) password
+          <input type="password" id="fc-current" autocomplete="current-password" required /></label>
+        <label>Ny adgangskode / New password
+          <input type="password" id="fc-new" autocomplete="new-password" required /></label>
+        <label>Gentag ny adgangskode / Repeat new password
+          <input type="password" id="fc-confirm" autocomplete="new-password" required /></label>
+        <button type="submit">Skift adgangskode / Change password</button>
+        <p id="fc-error" class="error"></p>
+        <button type="button" id="fc-logout" class="linklike">Log ud / Log out</button>
+      </form>
+    </main>
+
     <!-- App: fixed sidebar (brand + nav) + content column (topbar + view) -->
     <div id="app" class="hidden">
       <aside class="sidebar">
@@ -132,6 +150,7 @@
     <div id="toast" class="toast hidden" role="status" aria-live="polite" aria-atomic="true"></div>
     <div id="modal" class="modal hidden" role="dialog" aria-modal="true" aria-label="Dialog"><div class="modal-card" id="modal-card" tabindex="-1"></div></div>
 
+    <script src="/timelineView.js"></script>
     <script src="/app.js"></script>
   </body>
 </html>

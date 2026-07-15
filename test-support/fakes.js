@@ -57,9 +57,23 @@ function makeUsersRepo(overrides = {}) {
       })),
     update: overrides.update || (async () => null),
     remove: overrides.remove || (async () => false),
+    setTempPassword: overrides.setTempPassword || (async (id, patch) => ({ id, must_change_password: true, ...patch })),
+    clearTempPassword: overrides.clearTempPassword || (async (id) => ({ id, must_change_password: false })),
     countByRole: overrides.countByRole || (async () => 1),
     getPreferences: overrides.getPreferences || (async () => ({})),
     updatePreferences: overrides.updatePreferences || (async (id, patch) => ({ ...patch })),
+  };
+}
+
+// A fake one-time-password mailer. Records every send; a test can point
+// `sendTempPassword` at a rejecting stub to exercise the 500 rollback path.
+function makeUserMailer(overrides = {}) {
+  const sent = [];
+  return {
+    sent,
+    sendTempPassword:
+      overrides.sendTempPassword ||
+      (async (msg) => { sent.push(msg); return { ok: true }; }),
   };
 }
 
@@ -161,6 +175,12 @@ function makeIncidentsRepo(overrides = {}) {
     }),
     findById: overrides.findById || (async (id) => { const r = rows.find((x) => x.id === id); return r ? mapOut(r) : null; }),
     list: overrides.list || (async () => rows.map(mapOut)),
+    listForAgent: overrides.listForAgent || (async (agentId, { from = null, to = null } = {}) => rows
+      .filter((r) => r.agent_id === agentId
+        && (to == null || new Date(r.started_at) <= new Date(to))
+        && (from == null || r.resolved_at == null || new Date(r.resolved_at) >= new Date(from)))
+      .sort((a, b) => new Date(b.started_at) - new Date(a.started_at) || b.id - a.id)
+      .map(mapOut)),
   };
 }
 
@@ -355,11 +375,20 @@ function makeRemediationPlaybooksRepo(overrides = {}) {
       playbooks.push({ id, auto_trigger: 0, manual_action_text: null, enabled: 1, created_at: new Date(), ...p });
       return id;
     }),
-    recordRun: overrides.recordRun || (async ({ incidentCaseId, playbookId, status = 'pending', resultText = null, ranBy = null, ranAt = null }) => {
+    recordRun: overrides.recordRun || (async ({ incidentCaseId, playbookId, status = 'pending', resultText = null, ranBy = null, ranAt = null, hostId = null }) => {
       const id = (runSeq += 1);
-      runs.push({ id, incident_case_id: incidentCaseId, playbook_id: playbookId, status, result_text: resultText, ran_by: ranBy, ran_at: ranAt || new Date() });
+      // hostId is a fake-only convenience: the real listRunsForHost joins through
+      // incident_cases, but the fake stores the host on the run so it can filter.
+      runs.push({ id, incident_case_id: incidentCaseId, playbook_id: playbookId, host_id: hostId, status, result_text: resultText, ran_by: ranBy, ran_at: ranAt || new Date() });
       return id;
     }),
+    listRunsForHost: overrides.listRunsForHost || (async (hostId, { from = null, to = null, limit = 500 } = {}) => runs
+      .filter((r) => String(r.host_id) === String(hostId)
+        && (!from || new Date(r.ran_at) >= new Date(from))
+        && (!to || new Date(r.ran_at) <= new Date(to)))
+      .sort((a, b) => new Date(b.ran_at) - new Date(a.ran_at) || b.id - a.id)
+      .slice(0, Number.isInteger(limit) && limit > 0 ? limit : 500)
+      .map(mapRun)),
     matchByAnomalyType: overrides.matchByAnomalyType || (async (anomalyType) => {
       if (anomalyType == null || anomalyType === '') return null;
       const hit = playbooks
@@ -634,6 +663,14 @@ function makeAuditEventsRepo(overrides = {}) {
         && (!to || new Date(r.lastSeenAt) <= new Date(to)))
       .sort((a, b) => (a.lastSeenAt < b.lastSeenAt ? -1 : 1))
       .map((r) => ({ ...r, ts: iso(r.ts) }))),
+    findByActor: overrides.findByActor || (async ({ actorType = null, actorId = null, actions = null, from = null, to = null } = {}) => rows
+      .filter((r) => (!actorType || r.actorType === actorType)
+        && (actorId == null || r.actorId === actorId)
+        && (!Array.isArray(actions) || !actions.length || actions.includes(r.action))
+        && (!from || new Date(r.ts) >= new Date(from))
+        && (!to || new Date(r.ts) <= new Date(to)))
+      .sort((a, b) => (a.ts < b.ts ? 1 : -1))
+      .map((r) => ({ ...r, ts: iso(r.ts) }))),
     distinctActions: overrides.distinctActions || (async () => [...new Set(rows.map((r) => r.action))].sort()),
   };
 }
@@ -791,7 +828,14 @@ function makeFindingStore(overrides = {}) {
   return {
     rows,
     save: overrides.save || (async (f) => { const saved = { ...f, id: f.id || `f${rows.length + 1}`, acked: false }; rows.push(saved); return saved; }),
-    list: overrides.list || (async (hostId, since) => rows.filter((f) => (!hostId || f.hostId === hostId) && (!since || new Date(f.createdAt || 0) >= new Date(since)))),
+    list: overrides.list || (async (hostId, since, limit, until) => {
+      let out = rows.filter((f) => (!hostId || f.hostId === hostId)
+        && (!since || new Date(f.createdAt || 0) >= new Date(since))
+        && (!until || new Date(f.createdAt || 0) <= new Date(until)));
+      out = out.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0)); // newest-first, like the real store
+      if (Number.isInteger(limit) && limit > 0) out = out.slice(0, limit);
+      return out;
+    }),
     listByIncidentCase: overrides.listByIncidentCase || (async (incidentCaseId) => rows
       .filter((f) => f.incidentCaseId === incidentCaseId)
       .sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0))),
@@ -1546,6 +1590,7 @@ function makeApp(overrides = {}) {
     auditLogRepo,
     apiTokensRepo,
     auditLogger,
+    userMailer: overrides.userMailer || makeUserMailer(),
     integrationsRepo: overrides.integrationsRepo || makeIntegrationsRepo(),
     integrationAuditRepo: overrides.integrationAuditRepo || makeIntegrationAuditRepo(),
     integrationsDispatcher: overrides.integrationsDispatcher || makeIntegrationsDispatcher(),
@@ -1606,6 +1651,7 @@ function tokenFor(role, overrides = {}) {
     id: overrides.id ?? 1,
     email: overrides.email ?? `${role}@blueeye.local`,
     role,
+    mustChangePassword: overrides.mustChangePassword === true,
   });
 }
 
@@ -1623,6 +1669,7 @@ const throwingAsync = (message = 'simulated database failure') => async () => {
 module.exports = {
   makeLocationsRepo,
   makeUsersRepo,
+  makeUserMailer,
   makeAgentsRepo,
   makeAgentTokensRepo,
   makeResultsRepo,

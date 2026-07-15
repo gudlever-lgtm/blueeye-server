@@ -7,13 +7,19 @@ server validates its license against the license server**.
 ## Prerequisites
 
 - Docker + Docker Compose v2.
-- The three repos cloned **as siblings** (as on this server):
+- The repos cloned **as siblings**. A **customer** install needs only
+  `blueeye-server` + `blueeye-agent`:
   ```
   /var/www/blueeye.gnf.dk/
   ├── blueeye-server     # docker-compose.yml lives here
-  ├── blueeye-agent
-  └── blueeye-licens
+  └── blueeye-agent
   ```
+  > **Do not clone `blueeye-licens` on a customer host.** It is the vendor's
+  > license *signer* (holds `LICENSE_SIGNING_KEY`); customers never run it and
+  > validate against the vendor's hosted licens over `LICENSE_SERVER_URL`.
+  > Only the **vendor** demo/full stack (the `licens` compose profile,
+  > `scripts/deploy-licens.sh`) adds a third sibling, `blueeye-licens`, on the
+  > vendor host.
 
 ## 1) Bootstrap (once)
 
@@ -36,8 +42,8 @@ docker compose up --build
 
 ### Updating later (deploy script)
 
-To pull the latest code on all three repos and rebuild/restart the stack, use
-the deploy script (run it from the `blueeye-server` repo):
+To pull the latest code and rebuild/restart the customer stack, use the deploy
+script (run it from the `blueeye-server` repo):
 
 ```bash
 ./scripts/deploy.sh
@@ -45,9 +51,10 @@ the deploy script (run it from the `blueeye-server` repo):
 BLUEEYE_BRANCH=main ./scripts/deploy.sh
 ```
 
-It updates `blueeye-server`, `blueeye-licens` and `blueeye-agent` (sibling
-repos) on the branch, then runs `docker compose up --build -d` and waits for the
-`/health` endpoints. It is safe: it refuses to run if a repo has uncommitted
+It updates **only `blueeye-server` and `blueeye-agent`** (the customer sibling
+repos) on the branch — it never touches `blueeye-licens`, which is vendor-managed
+(`scripts/deploy-licens.sh`) — then runs `docker compose up --build -d` and waits
+for the `/health` endpoints. It is safe: it refuses to run if a repo has uncommitted
 local changes, retries `git pull` on transient network errors, and works with
 either `docker compose` or `docker-compose`. Host ports for the health check
 honour `SERVER_HOST_PORT` / `LICENS_HOST_PORT`.

@@ -20,25 +20,23 @@ const { buildTargetTimeline } = require('./targetTimeline');
 // `host_id` and incident_cases' `host_id`, numeric for incidents' `agent_id` and
 // audit_events' `actor_id`. This service centralises that mapping in ONE place.
 
+// Agent lifecycle actions that belong on the timeline (connect/disconnect/enrol).
+// Whitelisted at the SQL layer so recurring activity never crowds out the limit.
+const AGENT_LIFECYCLE_ACTIONS = ['agent.online', 'agent.offline', 'agent.enrolled'];
+
 function createTargetTimelineService({
   findingStore,
   incidentsRepo,
   auditEventsRepo,
   remediationPlaybooksRepo,
-  incidentCasesRepo,
 } = {}) {
   // --- per-source fetchers (each rejects on its own backend failure) ---------
 
-  // Anomaly findings for the host. FindingStore.list takes a `since` lower
-  // bound only, so we bound the upper end (`to`) in memory.
+  // Anomaly findings for the host, bounded by BOTH `from` and `to` in SQL (the
+  // upper bound prevents historical-window truncation — see FindingStore.list).
   async function fetchFindings(agentId, { from, to, limit }) {
     if (!findingStore || typeof findingStore.list !== 'function') return [];
-    const rows = await findingStore.list(String(agentId), from, limit);
-    const toMs = to ? new Date(to).getTime() : Infinity;
-    return rows.filter((f) => {
-      const t = f.createdAt ? new Date(f.createdAt).getTime() : NaN;
-      return !Number.isNaN(t) && t <= toMs;
-    });
+    return findingStore.list(String(agentId), from, limit, to);
   }
 
   // Probe-outage incidents overlapping the window for this agent.
@@ -51,27 +49,16 @@ function createTargetTimelineService({
   // trail, keyed by actor (actor_type='agent', actor_id=<agent id>).
   async function fetchAgentEvents(agentId, { from, to, limit }) {
     if (!auditEventsRepo || typeof auditEventsRepo.findByActor !== 'function') return [];
-    return auditEventsRepo.findByActor({ actorType: 'agent', actorId: agentId, from, to, limit });
+    return auditEventsRepo.findByActor({
+      actorType: 'agent', actorId: agentId, actions: AGENT_LIFECYCLE_ACTIONS, from, to, limit,
+    });
   }
 
-  // Remediation playbook runs for the host. Playbook runs are NOT agent-keyed
-  // directly — they hang off incident_cases (host_id). We resolve the host's
-  // cases, then their runs, then window-filter by ran_at. Reuses existing repo
-  // methods (no new SQL join) — keeps the fragile string host_id join in code.
+  // Remediation playbook runs for the host — one JOIN through incident_cases
+  // (playbook runs are not host-keyed directly). No N+1.
   async function fetchPlaybookRuns(agentId, { from, to, limit }) {
-    if (!remediationPlaybooksRepo || typeof remediationPlaybooksRepo.listRunsForIncident !== 'function') return [];
-    if (!incidentCasesRepo || typeof incidentCasesRepo.list !== 'function') return [];
-    const cases = await incidentCasesRepo.list({ hostId: String(agentId), limit: 500 });
-    if (!Array.isArray(cases) || cases.length === 0) return [];
-    const runLists = await Promise.all(
-      cases.map((c) => remediationPlaybooksRepo.listRunsForIncident(c.id, { limit }))
-    );
-    const fromMs = from ? new Date(from).getTime() : -Infinity;
-    const toMs = to ? new Date(to).getTime() : Infinity;
-    return runLists.flat().filter((r) => {
-      const t = r && r.ranAt ? new Date(r.ranAt).getTime() : NaN;
-      return !Number.isNaN(t) && t >= fromMs && t <= toMs;
-    });
+    if (!remediationPlaybooksRepo || typeof remediationPlaybooksRepo.listRunsForHost !== 'function') return [];
+    return remediationPlaybooksRepo.listRunsForHost(String(agentId), { from, to, limit });
   }
 
   // Fans out all sources; merges the ones that succeed; flags any that failed.

@@ -60,14 +60,10 @@ function seededApp(over = {}) {
   return { app, agentsRepo, findingStore, incidentsRepo, auditEventsRepo, incidentCasesRepo, remediationPlaybooksRepo };
 }
 
-async function seedPlaybookRun(incidentCasesRepo, remediationPlaybooksRepo) {
-  const caseId = await incidentCasesRepo.create({
-    host_id: String(AGENT_ID), title: 'CRIT cpu', severity: 'CRIT',
-    first_event_at: new Date('2026-06-01T08:00:00Z'), last_event_at: new Date('2026-06-01T08:00:00Z'),
-  });
+async function seedPlaybookRun(remediationPlaybooksRepo) {
   const pbId = await remediationPlaybooksRepo.create({ name: 'Restart iface', trigger_condition: 'cpu', action_type: 'manual' });
   await remediationPlaybooksRepo.recordRun({
-    incidentCaseId: caseId, playbookId: pbId, status: 'success', resultText: 'done',
+    incidentCaseId: 1, playbookId: pbId, hostId: String(AGENT_ID), status: 'success', resultText: 'done',
     ranAt: new Date('2026-06-01T08:10:00Z'),
   });
 }
@@ -76,7 +72,7 @@ async function seedPlaybookRun(incidentCasesRepo, remediationPlaybooksRepo) {
 
 test('GET /api/targets/:id/timeline merges all sources, newest-first → 200', async () => {
   const ctx = seededApp();
-  await seedPlaybookRun(ctx.incidentCasesRepo, ctx.remediationPlaybooksRepo);
+  await seedPlaybookRun(ctx.remediationPlaybooksRepo);
 
   const res = await request(ctx.app)
     .get(`/api/targets/${AGENT_ID}/timeline${WINDOW}`)
@@ -239,6 +235,29 @@ test('GET /api/targets/:id/timeline defaults to the last 24h when from/to omitte
   const ids = res.body.events.map((e) => e.ref_id);
   assert.ok(ids.includes('recent'));
   assert.ok(!ids.includes('old')); // outside the default 24h window
+});
+
+// ---- historical window: findings must be bounded by `to`, not just `from` --
+// Regression guard for the truncation bug: without an upper bound in the query,
+// a `limit` applied to [from, now] can hide the in-window rows for a window that
+// ends in the past. Here the newer (out-of-window) findings must NOT crowd out
+// the in-window one, and none of them should leak into the result.
+test('GET /api/targets/:id/timeline bounds findings by `to` for a past window', async () => {
+  const agentsRepo = makeAgentsRepo({ findById: async () => ({ id: AGENT_ID, hostname: 'q' }) });
+  const findingStore = makeFindingStore();
+  // One finding inside the window …
+  findingStore.rows.push({ id: 'in-window', hostId: String(AGENT_ID), metric: 'cpu', severity: 'WARN', explanation: 'in', createdAt: '2026-06-01T07:00:00Z' });
+  // … and several NEWER ones after `to` that would fill a small limit first.
+  for (let i = 0; i < 5; i += 1) {
+    findingStore.rows.push({ id: `after-${i}`, hostId: String(AGENT_ID), metric: 'cpu', severity: 'WARN', explanation: 'after', createdAt: `2026-06-01T1${i}:00:00Z` });
+  }
+  const app = makeApp({ agentsRepo, findingStore });
+  const res = await request(app)
+    .get(`/api/targets/${AGENT_ID}/timeline?from=2026-06-01T00:00:00Z&to=2026-06-01T08:00:00Z&limit=3`)
+    .set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 200);
+  const ids = res.body.events.filter((e) => e.source === 'finding').map((e) => e.ref_id);
+  assert.deepEqual(ids, ['in-window']); // the past-window finding survives; none of the newer ones leak
 });
 
 // ---- pure builder unit tests ---------------------------------------------

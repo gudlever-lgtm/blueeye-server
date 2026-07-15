@@ -171,12 +171,18 @@ function createAuditEventsRepository(db) {
   // actor-keyed read. Windowed on `ts` (the event time; equals last_seen_at for
   // discrete rows).
   async function findByActor({
-    actorType = null, actorId = null, from = null, to = null, limit = 500,
+    actorType = null, actorId = null, actions = null, from = null, to = null, limit = 500,
   } = {}) {
     const where = [];
     const params = [];
     if (actorType) { where.push('ae.actor_type = ?'); params.push(actorType); }
     if (actorId != null) { where.push('ae.actor_id = ?'); params.push(actorId); }
+    // Whitelist actions at the SQL layer so we only fetch (and count against the
+    // limit) the rows the caller will actually use — not the whole activity feed.
+    if (Array.isArray(actions) && actions.length) {
+      where.push(`ae.action IN (${actions.map(() => '?').join(', ')})`);
+      params.push(...actions);
+    }
     if (from) { where.push('ae.ts >= ?'); params.push(from); }
     if (to) { where.push('ae.ts <= ?'); params.push(to); }
     const clause = where.length ? `WHERE ${where.join(' AND ')}` : '';

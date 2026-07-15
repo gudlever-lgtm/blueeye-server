@@ -90,6 +90,32 @@ function createRemediationPlaybooksRepository(db) {
     return rows.map(mapRun);
   }
 
+  // All playbook runs for a HOST within [from, to], newest-first. Playbook runs
+  // are not host-keyed directly — they hang off incident_cases (host_id) — so
+  // this joins through incident_cases in ONE query. Used by the per-target
+  // timeline (avoids an N+1 over the host's incident cases) and keeps the
+  // (fragile, string-vs-int) host_id join in a single auditable place.
+  async function listRunsForHost(hostId, { from = null, to = null, limit = 500 } = {}) {
+    const lim = Number.isInteger(limit) && limit > 0 && limit <= 500 ? limit : 500;
+    const where = ['ic.host_id = ?'];
+    const params = [String(hostId)];
+    if (from) { where.push('r.ran_at >= ?'); params.push(from); }
+    if (to) { where.push('r.ran_at <= ?'); params.push(to); }
+    params.push(lim);
+    const [rows] = await pool.query(
+      `SELECT r.id, r.incident_case_id, r.playbook_id, r.status, r.result_text, r.ran_by, r.ran_at,
+              p.name AS playbook_name, p.action_type AS playbook_action_type
+       FROM incident_playbook_runs r
+       JOIN incident_cases ic ON ic.id = r.incident_case_id
+       LEFT JOIN remediation_playbooks p ON p.id = r.playbook_id
+       WHERE ${where.join(' AND ')}
+       ORDER BY r.ran_at DESC, r.id DESC
+       LIMIT ?`,
+      params
+    );
+    return rows.map(mapRun);
+  }
+
   // Records a playbook run against an incident and returns the new run id.
   // Playbook execution is not exposed over HTTP yet (a later phase) — this exists
   // so runs can be seeded/recorded and read back by the recommendation path.
@@ -102,7 +128,7 @@ function createRemediationPlaybooksRepository(db) {
     return Number(res.insertId);
   }
 
-  return { matchByAnomalyType, findById, list, listRunsForIncident, recordRun };
+  return { matchByAnomalyType, findById, list, listRunsForIncident, listRunsForHost, recordRun };
 }
 
 module.exports = { createRemediationPlaybooksRepository, mapPlaybook, mapRun };

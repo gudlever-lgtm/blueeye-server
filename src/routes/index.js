@@ -233,7 +233,7 @@ function createApiRouter({
   if (incidentCasesRepo && findingStore) router.use('/api/incidents', createIncidentsRouter({ incidentCasesRepo, findingStore, auditLogger, auditEventsRepo, auditLogRepo, configSnapshotsRepo, agentsRepo, assistant, featureGate, askCache: createAskCache(), remediationPlaybooksRepo }));
   // Per-target (per-agent) incident timeline — merges findings, probe-outage
   // incidents, agent connect/disconnect and playbook runs (read-only, viewer+).
-  if (agentsRepo && findingStore) router.use('/api/targets', createTargetsRouter({ agentsRepo, findingStore, incidentsRepo, auditEventsRepo, remediationPlaybooksRepo, incidentCasesRepo }));
+  if (agentsRepo && findingStore) router.use('/api/targets', createTargetsRouter({ agentsRepo, findingStore, incidentsRepo, auditEventsRepo, remediationPlaybooksRepo }));
   // Device config history (operator/admin, masked) — Fase 3.
   if (configSnapshotsRepo) router.use('/api/devices', createDeviceConfigRouter({ configSnapshotsRepo, agentsRepo, auditLogger }));
   if (thresholdsRepo) router.use('/api/thresholds', createThresholdsRouter({ thresholdsRepo, locationsRepo }));

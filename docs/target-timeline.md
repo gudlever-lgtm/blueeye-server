@@ -72,6 +72,9 @@ frontend colours the whole timeline from the findings palette (probe-outage
 - Route: `src/routes/targets.js` (mounted `/api/targets` in `routes/index.js`).
 - Merge (pure): `src/timeline/targetTimeline.js`.
 - Fan-out/partial: `src/timeline/targetTimelineService.js`.
-- Read-only repo additions: `incidentsRepository.listForAgent`,
-  `auditEventsRepository.findByActor` (no schema changes).
+- Read-only repo additions (no schema changes): `incidentsRepository.listForAgent`,
+  `auditEventsRepository.findByActor` (accepts an `actions` whitelist so only
+  lifecycle rows are fetched), `remediationPlaybooksRepository.listRunsForHost`
+  (single JOIN through `incident_cases` — no N+1), and a `to`/`until` upper bound
+  on `findingStore.list` (prevents historical-window truncation).
 - Tests: `test/targetTimeline.test.js`.

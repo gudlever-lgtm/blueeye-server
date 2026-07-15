@@ -32,12 +32,11 @@ function createTargetsRouter({
   incidentsRepo,
   auditEventsRepo,
   remediationPlaybooksRepo,
-  incidentCasesRepo,
 }) {
   const router = express.Router();
   const reader = requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN);
   const timelineService = createTargetTimelineService({
-    findingStore, incidentsRepo, auditEventsRepo, remediationPlaybooksRepo, incidentCasesRepo,
+    findingStore, incidentsRepo, auditEventsRepo, remediationPlaybooksRepo,
   });
 
   router.get('/:id/timeline', requireAuth, reader, asyncHandler(async (req, res) => {

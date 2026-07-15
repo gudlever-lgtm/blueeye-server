@@ -40,7 +40,14 @@ function isVirtual(name) {
 }
 
 function computeInterfaceHealth(traffic) {
-  const ifaces = traffic && Array.isArray(traffic.interfaces) ? traffic.interfaces : [];
+  // Defensive: a result payload is only shallow-validated at ingest (object +
+  // size), so `traffic.interfaces` may carry a null/non-object element from a
+  // malformed or hostile agent. Drop those here rather than let a property read
+  // throw — one bad element must never blank the whole /api/interfaces or
+  // /fleet/health view (see routes/fleet.js per-agent guards).
+  const ifaces = traffic && Array.isArray(traffic.interfaces)
+    ? traffic.interfaces.filter((i) => i && typeof i === 'object')
+    : [];
   const elapsed = Number(traffic && traffic.elapsedSec) > 0 ? Number(traffic.elapsedSec) : 1;
   return ifaces.map((i) => {
     const rxBytesPerSec = Number(i.rxBytesPerSec) || 0;

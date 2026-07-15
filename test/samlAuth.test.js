@@ -49,6 +49,27 @@ test('handleResponse: happy path verifies the signed assertion and maps a role',
   assert.equal(res.matched, 1);
 });
 
+test('REPLAY: the same signed assertion cannot be consumed twice', async () => {
+  const { saml, seed } = authWith({ roleMap: [{ claimValue: 'be-admins', role: 'admin' }] });
+  await seed();
+  const saml64 = buildSignedResponse({ email: 'alice@acme.dk', groups: ['be-admins'] });
+  const first = await saml.handleResponse(saml64);
+  assert.equal(first.ok, true);
+  // An attacker captures the SAMLResponse and re-POSTs it to the ACS.
+  const second = await saml.handleResponse(saml64);
+  assert.equal(second.ok, false);
+  assert.equal(second.reason, 'replayed');
+});
+
+test('REPLAY: two DISTINCT assertions both succeed (cache does not block real logins)', async () => {
+  const { saml, seed } = authWith({ roleMap: [{ claimValue: 'be-admins', role: 'admin' }] });
+  await seed();
+  const a = await saml.handleResponse(buildSignedResponse({ assertionId: '_login-a', groups: ['be-admins'] }));
+  const b = await saml.handleResponse(buildSignedResponse({ assertionId: '_login-b', groups: ['be-admins'] }));
+  assert.equal(a.ok, true);
+  assert.equal(b.ok, true);
+});
+
 test('attribute→role mapping: the HIGHEST matching role wins', async () => {
   const { saml, seed } = authWith({ roleMap: [
     { claimValue: 'be-viewers', role: 'viewer' },

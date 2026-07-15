@@ -225,7 +225,21 @@ function createOidcAuth({
     const { role, matched } = await resolveRole(claimGroups(claims));
     if (!role) return { ok: false, reason: 'no-role' };
 
-    const email = (typeof claims.email === 'string' && claims.email)
+    // An id_token that carries an UNVERIFIED email is refused rather than
+    // trusted: provision() finds/creates (and role-realigns) the local user by
+    // email, so an IdP that lets a user set an arbitrary, unverified email would
+    // otherwise allow binding to — and taking over — another user's account
+    // (e.g. a low-privilege user setting their email to an admin's address).
+    // Requiring email_verified before the email claim is used closes that. When
+    // the IdP asserts no email at all (email scope not configured), the stable,
+    // non-user-settable `sub` is used instead — unchanged.
+    const hasEmail = typeof claims.email === 'string' && !!claims.email;
+    const emailVerified = claims.email_verified === true || claims.email_verified === 'true';
+    if (hasEmail && !emailVerified) {
+      logger.warn('oidc: refusing login — email claim present but email_verified is not true');
+      return { ok: false, reason: 'email-unverified' };
+    }
+    const email = hasEmail
       ? claims.email.toLowerCase()
       : (typeof claims.preferred_username === 'string' && claims.preferred_username
         ? claims.preferred_username.toLowerCase()

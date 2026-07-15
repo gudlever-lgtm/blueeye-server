@@ -2922,9 +2922,50 @@ function findingRow(agentName, f) {
       f.kind === 'FLATLINE' ? el('span', { class: 'muted' }, ' flatline') : null),
     el('td', {}, dev),
     el('td', {}, el('div', {}, f.explanation || '–'), corr),
-    el('td', {}, action));
+    el('td', {}, action, action ? ' ' : null,
+      el('button', { class: 'small ghost', title: 'What changed on this device just before the anomaly', onclick: (e) => toggleFindingContext(f, e.target) }, 'What changed?')));
   tr.dataset.findingId = f.id;
   return tr;
+}
+
+// Phase 3 — "what changed before this": expands an inline row under a finding
+// showing the CHANGE-type events on its device in the window before the trigger
+// (GET /api/findings/:id/context). Reuses timelineRowEl (Phase 2). Explicit
+// loading/empty/error states.
+function toggleFindingContext(f, btn) {
+  const tr = btn.closest('tr');
+  if (!tr) return;
+  const next = tr.nextElementSibling;
+  if (next && next.classList.contains('finding-context-row')) {
+    next.remove();
+    btn.textContent = 'What changed?';
+    return;
+  }
+  const cell = el('td', { colspan: String(tr.children.length), class: 'finding-context' });
+  tr.after(el('tr', { class: 'finding-context-row' }, cell));
+  btn.textContent = 'Hide changes';
+  loadFindingContext(f, cell);
+}
+
+async function loadFindingContext(f, container) {
+  const head = el('div', { class: 'muted fc-head' }, 'What changed before this anomaly');
+  const list = el('div', {});
+  container.replaceChildren(head, list);
+  const agentId = Number(f.hostId);
+  const opts = timelineRenderOpts(Number.isInteger(agentId) ? agentId : null, {
+    onRetry: () => loadFindingContext(f, container),
+    emptyText: 'No changes detected in this window.',
+  });
+  TimelineView.renderInto(document, list, TimelineView.resolveState({ loading: true }), opts);
+  let view;
+  try {
+    const data = await api(`/api/findings/${encodeURIComponent(f.id)}/context`);
+    // The context endpoint returns `changes`; adapt to the timeline state shape.
+    view = TimelineView.resolveState({ data: { events: data.changes, partial: data.partial, failedSources: data.failedSources } });
+  } catch (err) {
+    view = TimelineView.resolveState({ error: err });
+  }
+  TimelineView.renderInto(document, list, view, opts);
 }
 
 async function ackFinding(f, btn) {
@@ -3065,6 +3106,66 @@ async function loadIncidentTimeline(id, card, deviceId) {
           e.status ? el('span', { class: 'muted' }, ` [${e.status}]`) : null));
     })));
   } catch (err) { card.replaceChildren(head, el('p', { class: 'error' }, err.message)); }
+}
+
+// ---- Per-target activity timeline (Phase 2) --------------------------------
+// Consumes GET /api/targets/:id/timeline. Pure state/mapping logic lives in
+// public/timelineView.js (TimelineView, unit-tested); this is just the DOM.
+
+// Shared options for the timeline render layer (TimelineView.renderRow/
+// renderInto, unit-tested under jsdom). Rows deep-link to the device page; time
+// is formatted with the app's fmtDate.
+function timelineRenderOpts(agentId, extra) {
+  return Object.assign({ agentId, onOpen: (id) => openAgent(id), formatTime: fmtDate }, extra || {});
+}
+
+// The per-target timeline card, embedded on the device detail page. Time-range
+// selector (1h/24h/7d/custom) + manual refresh; explicit loading/empty/error/
+// partial states. No polling in this phase.
+function targetTimelineCard(agentId) {
+  const card = el('div', { class: 'card agent-timeline' });
+  const body = el('div', { class: 'tl-body' });
+  let rangeKey = '24h';
+  const customFrom = el('input', { type: 'datetime-local', class: 'tl-dt' });
+  const customTo = el('input', { type: 'datetime-local', class: 'tl-dt' });
+  const customWrap = el('span', { class: 'tl-custom hidden' }, customFrom, el('span', { class: 'muted' }, ' → '), customTo);
+  const rangeSel = el('select', { class: 'tl-range' },
+    ...TimelineView.RANGE_PRESETS.map((p) => el('option', { value: p.key }, p.label)));
+  rangeSel.value = rangeKey;
+  const refreshBtn = el('button', { class: 'small ghost' }, '↻ Refresh');
+  const setBusy = (b) => { refreshBtn.disabled = b; };
+  const draw = (view) => TimelineView.renderInto(document, body, view,
+    timelineRenderOpts(agentId, { onRetry: load, emptyText: 'No events in this window.' }));
+
+  async function load() {
+    const win = TimelineView.rangeToWindow(rangeKey, Date.now(), customFrom.value, customTo.value);
+    if (!win) { body.replaceChildren(el('p', { class: 'muted' }, 'Pick a valid custom range (from ≤ to).')); return; }
+    draw(TimelineView.resolveState({ loading: true }));
+    setBusy(true);
+    let view;
+    try {
+      const data = await api(`/api/targets/${agentId}/timeline${TimelineView.timelineQuery(win, 500)}`);
+      view = TimelineView.resolveState({ data });
+    } catch (err) {
+      view = TimelineView.resolveState({ error: err });
+    } finally { setBusy(false); }
+    draw(view);
+  }
+
+  rangeSel.onchange = (e) => {
+    rangeKey = e.target.value;
+    customWrap.classList.toggle('hidden', rangeKey !== 'custom');
+    if (rangeKey !== 'custom') load();
+  };
+  customFrom.onchange = () => { if (rangeKey === 'custom') load(); };
+  customTo.onchange = () => { if (rangeKey === 'custom') load(); };
+  refreshBtn.onclick = load;
+
+  card.append(
+    el('div', { class: 'tl-head' }, el('h3', {}, 'Activity timeline'), rangeSel, customWrap, refreshBtn),
+    body);
+  load();
+  return card;
 }
 
 async function loadIncidentSimilar(id, card) {
@@ -5631,6 +5732,10 @@ views.agent = async () => {
   const cmdbHost = el('div', { class: 'card agent-cmdb' }, el('h3', {}, 'CMDB asset'), el('div', { class: 'muted' }, 'Loading…'));
   root.append(cmdbHost);
   loadAgentCmdbLink(id, cmdbHost);
+
+  // Unified activity timeline (findings + probe-outage incidents + connect/
+  // disconnect + playbook runs) — GET /api/targets/:id/timeline.
+  root.append(targetTimelineCard(id));
   function renderHealth(h, q, thr) {
     const m = h.metrics;
     const kv = (k, v, cls) => el('div', { class: 'ah-kv' }, el('span', { class: 'ah-k' }, k), el('span', { class: `ah-v${cls ? ' ' + cls : ''}` }, v));

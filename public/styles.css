@@ -1392,6 +1392,21 @@ ul.timeline li.tl { display: flex; align-items: baseline; gap: 10px; padding: 3p
 .tl-dot-anomaly { background: #c0392b; }
 .tl-dot-config_change { background: #e67e22; }
 .tl-dot-status_change { background: #2980b9; }
+/* Per-target activity timeline (Phase 2) + finding "what changed" (Phase 3). */
+.agent-timeline .tl-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.agent-timeline .tl-head h3 { margin: 0; margin-right: auto; }
+.tl-range, .tl-dt { font-size: 12px; }
+.tl-custom { display: inline-flex; align-items: center; gap: 4px; }
+.tl-custom.hidden { display: none; }
+.tl-body { margin-top: 8px; }
+ul.timeline li.tl.clickable { cursor: pointer; border-radius: 4px; }
+ul.timeline li.tl.clickable:hover { background: var(--accent-weak, var(--panel-2)); }
+.tl-sev { flex: 0 0 auto; }
+.tl-src { flex: 0 0 auto; background: var(--panel-2); color: var(--fg); }
+.tl-type { font-size: 12px; flex: 0 0 auto; }
+.tl-desc { flex: 1 1 auto; }
+.tl-partial { margin-bottom: 8px; }
+.tl-partial.callout { border-left-color: #e67e22; }
 ul.inc-similar, ul.inc-anoms { list-style: none; padding-left: 0; margin: 0; }
 ul.inc-similar li, ul.inc-anoms li { padding: 4px 0; }
 ul.inc-similar li.clickable { cursor: pointer; }

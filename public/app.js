@@ -3048,6 +3048,93 @@ async function loadIncidentTimeline(id, card, deviceId) {
   } catch (err) { card.replaceChildren(head, el('p', { class: 'error' }, err.message)); }
 }
 
+// ---- Per-target activity timeline (Phase 2) --------------------------------
+// Consumes GET /api/targets/:id/timeline. Pure state/mapping logic lives in
+// public/timelineView.js (TimelineView, unit-tested); this is just the DOM.
+
+// Shared row for the timeline card AND the finding "what changed" list (Phase 3)
+// — reuses the .timeline/.tl classes and the .badge severity palette. When
+// `agentId` is given the row deep-links to that device's detail page.
+function timelineRowEl(event, opts) {
+  opts = opts || {};
+  const m = TimelineView.rowModel(event);
+  const link = opts.agentId != null ? TimelineView.deepLink(event, opts.agentId) : null;
+  const refLabel = m.refId != null ? ` #${m.refId}` : '';
+  return el('li', {
+    class: `tl tl-src-${m.source || 'x'}${link ? ' clickable' : ''}`,
+    ...(link ? { title: `Open device (${m.sourceLabel}${refLabel})`, onclick: () => openAgent(link.id) } : {}),
+  },
+    el('span', { class: 'tl-time muted' }, fmtDate(m.time)),
+    el('span', { class: `badge ${m.severity} tl-sev` }, m.severity),
+    el('span', { class: 'badge tl-src' }, m.sourceLabel),
+    m.type ? el('span', { class: 'tl-type muted' }, esc(m.type)) : null,
+    el('span', { class: 'tl-desc' }, esc(m.summary)));
+}
+
+// The per-target timeline card, embedded on the device detail page. Time-range
+// selector (1h/24h/7d/custom) + manual refresh; explicit loading/empty/error/
+// partial states. No polling in this phase.
+function targetTimelineCard(agentId) {
+  const card = el('div', { class: 'card agent-timeline' });
+  const body = el('div', { class: 'tl-body' });
+  let rangeKey = '24h';
+  const customFrom = el('input', { type: 'datetime-local', class: 'tl-dt' });
+  const customTo = el('input', { type: 'datetime-local', class: 'tl-dt' });
+  const customWrap = el('span', { class: 'tl-custom hidden' }, customFrom, el('span', { class: 'muted' }, ' → '), customTo);
+  const rangeSel = el('select', { class: 'tl-range' },
+    ...TimelineView.RANGE_PRESETS.map((p) => el('option', { value: p.key }, p.label)));
+  rangeSel.value = rangeKey;
+  const refreshBtn = el('button', { class: 'small ghost' }, '↻ Refresh');
+  const setBusy = (b) => { refreshBtn.disabled = b; };
+
+  function renderState(view) {
+    if (view.state === 'error') {
+      body.replaceChildren(
+        el('p', { class: 'error' }, view.message),
+        el('button', { class: 'small', onclick: load }, 'Retry'));
+      return;
+    }
+    const kids = [];
+    if (view.partial) kids.push(el('div', { class: 'tl-partial callout' }, `⚠ ${TimelineView.partialNotice(view.failedSources)}`));
+    if (view.state === 'empty') {
+      kids.push(el('p', { class: 'muted' }, 'No events in this window.'));
+    } else {
+      kids.push(el('ul', { class: 'timeline' }, ...view.events.map((e) => timelineRowEl(e, { agentId }))));
+    }
+    body.replaceChildren(...kids);
+  }
+
+  async function load() {
+    const win = TimelineView.rangeToWindow(rangeKey, Date.now(), customFrom.value, customTo.value);
+    if (!win) { body.replaceChildren(el('p', { class: 'muted' }, 'Pick a valid custom range (from ≤ to).')); return; }
+    body.replaceChildren(el('p', { class: 'muted' }, 'Loading…'));
+    setBusy(true);
+    let view;
+    try {
+      const data = await api(`/api/targets/${agentId}/timeline${TimelineView.timelineQuery(win, 500)}`);
+      view = TimelineView.resolveState({ data });
+    } catch (err) {
+      view = TimelineView.resolveState({ error: err });
+    } finally { setBusy(false); }
+    renderState(view);
+  }
+
+  rangeSel.onchange = (e) => {
+    rangeKey = e.target.value;
+    customWrap.classList.toggle('hidden', rangeKey !== 'custom');
+    if (rangeKey !== 'custom') load();
+  };
+  customFrom.onchange = () => { if (rangeKey === 'custom') load(); };
+  customTo.onchange = () => { if (rangeKey === 'custom') load(); };
+  refreshBtn.onclick = load;
+
+  card.append(
+    el('div', { class: 'tl-head' }, el('h3', {}, 'Activity timeline'), rangeSel, customWrap, refreshBtn),
+    body);
+  load();
+  return card;
+}
+
 async function loadIncidentSimilar(id, card) {
   const head = el('h3', {}, 'Similar past incidents');
   try {
@@ -5612,6 +5699,10 @@ views.agent = async () => {
   const cmdbHost = el('div', { class: 'card agent-cmdb' }, el('h3', {}, 'CMDB asset'), el('div', { class: 'muted' }, 'Loading…'));
   root.append(cmdbHost);
   loadAgentCmdbLink(id, cmdbHost);
+
+  // Unified activity timeline (findings + probe-outage incidents + connect/
+  // disconnect + playbook runs) — GET /api/targets/:id/timeline.
+  root.append(targetTimelineCard(id));
   function renderHealth(h, q, thr) {
     const m = h.metrics;
     const kv = (k, v, cls) => el('div', { class: 'ah-kv' }, el('span', { class: 'ah-k' }, k), el('span', { class: `ah-v${cls ? ' ' + cls : ''}` }, v));

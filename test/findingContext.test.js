@@ -93,6 +93,32 @@ test('GET /api/findings/:id/context honours a custom window', async () => {
   assert.deepEqual(res.body.changes.map((c) => c.type), ['agent.online']);
 });
 
+// ---- anchors the look-back on anomaly ONSET (window_from) when present -----
+
+test('GET /api/findings/:id/context anchors on onset (window_from), not detection', async () => {
+  const findingStore = makeFindingStore();
+  // Detected at 08:00 but the anomaly ONSET (window_from) was 07:00.
+  findingStore.rows.push({
+    id: 'slow', hostId: HOST, metric: 'cpu', severity: 'CRIT', explanation: 'slow',
+    createdAt: '2026-06-01T08:00:00Z', window: ['2026-06-01T07:00:00Z', '2026-06-01T07:30:00Z'],
+  });
+  const auditEventsRepo = makeAuditEventsRepo();
+  auditEventsRepo.rows.push(
+    { id: 1, ts: '2026-06-01T06:45:00Z', actorType: 'agent', actorId: 9, action: 'agent.online', ip: null }, // in [06:30,07:00] onset window
+    { id: 2, ts: '2026-06-01T07:45:00Z', actorType: 'agent', actorId: 9, action: 'agent.online', ip: null }, // only in the detection window — must NOT appear
+  );
+  const app = makeApp({ findingStore, auditEventsRepo });
+  const res = await request(app)
+    .get('/api/findings/slow/context')
+    .set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 200);
+  assert.equal(res.body.window.anchoredOn, 'onset');
+  assert.equal(res.body.window.to, '2026-06-01T07:00:00.000Z');
+  assert.equal(res.body.trigger.at, '2026-06-01T08:00:00.000Z'); // trigger still reports detection time
+  const ids = res.body.changes.map((c) => c.ref_id);
+  assert.deepEqual(ids, [1]); // the onset-window change only; the detection-window one is excluded
+});
+
 // ---- 200 empty (not 404) --------------------------------------------------
 
 test('GET /api/findings/:id/context returns [] (not 404) when no changes → 200', async () => {

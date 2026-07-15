@@ -2922,33 +2922,31 @@ function toggleFindingContext(f, btn) {
     btn.textContent = 'What changed?';
     return;
   }
-  const cell = el('td', { colspan: '7', class: 'finding-context' });
+  const cell = el('td', { colspan: String(tr.children.length), class: 'finding-context' });
   tr.after(el('tr', { class: 'finding-context-row' }, cell));
   btn.textContent = 'Hide changes';
   loadFindingContext(f, cell);
 }
 
 async function loadFindingContext(f, container) {
-  container.replaceChildren(el('span', { class: 'muted' }, 'Loading changes…'));
-  let data;
-  try {
-    data = await api(`/api/findings/${encodeURIComponent(f.id)}/context`);
-  } catch (err) {
-    container.replaceChildren(
-      el('span', { class: 'error' }, err.message), ' ',
-      el('button', { class: 'small', onclick: () => loadFindingContext(f, container) }, 'Retry'));
-    return;
-  }
-  const changes = Array.isArray(data.changes) ? data.changes : [];
+  const head = el('div', { class: 'muted fc-head' }, 'What changed before this anomaly');
+  const list = el('div', {});
+  container.replaceChildren(head, list);
   const agentId = Number(f.hostId);
-  const kids = [el('div', { class: 'muted fc-head' }, 'What changed before this anomaly')];
-  if (data.partial) kids.push(el('div', { class: 'tl-partial callout' }, `⚠ ${TimelineView.partialNotice(data.failedSources)}`));
-  if (!changes.length) {
-    kids.push(el('p', { class: 'muted' }, 'No changes detected in this window.'));
-  } else {
-    kids.push(el('ul', { class: 'timeline' }, ...changes.map((e) => timelineRowEl(e, { agentId: Number.isInteger(agentId) ? agentId : null }))));
+  const opts = timelineRenderOpts(Number.isInteger(agentId) ? agentId : null, {
+    onRetry: () => loadFindingContext(f, container),
+    emptyText: 'No changes detected in this window.',
+  });
+  TimelineView.renderInto(document, list, TimelineView.resolveState({ loading: true }), opts);
+  let view;
+  try {
+    const data = await api(`/api/findings/${encodeURIComponent(f.id)}/context`);
+    // The context endpoint returns `changes`; adapt to the timeline state shape.
+    view = TimelineView.resolveState({ data: { events: data.changes, partial: data.partial, failedSources: data.failedSources } });
+  } catch (err) {
+    view = TimelineView.resolveState({ error: err });
   }
-  container.replaceChildren(...kids);
+  TimelineView.renderInto(document, list, view, opts);
 }
 
 async function ackFinding(f, btn) {
@@ -3095,23 +3093,11 @@ async function loadIncidentTimeline(id, card, deviceId) {
 // Consumes GET /api/targets/:id/timeline. Pure state/mapping logic lives in
 // public/timelineView.js (TimelineView, unit-tested); this is just the DOM.
 
-// Shared row for the timeline card AND the finding "what changed" list (Phase 3)
-// — reuses the .timeline/.tl classes and the .badge severity palette. When
-// `agentId` is given the row deep-links to that device's detail page.
-function timelineRowEl(event, opts) {
-  opts = opts || {};
-  const m = TimelineView.rowModel(event);
-  const link = opts.agentId != null ? TimelineView.deepLink(event, opts.agentId) : null;
-  const refLabel = m.refId != null ? ` #${m.refId}` : '';
-  return el('li', {
-    class: `tl tl-src-${m.source || 'x'}${link ? ' clickable' : ''}`,
-    ...(link ? { title: `Open device (${m.sourceLabel}${refLabel})`, onclick: () => openAgent(link.id) } : {}),
-  },
-    el('span', { class: 'tl-time muted' }, fmtDate(m.time)),
-    el('span', { class: `badge ${m.severity} tl-sev` }, m.severity),
-    el('span', { class: 'badge tl-src' }, m.sourceLabel),
-    m.type ? el('span', { class: 'tl-type muted' }, esc(m.type)) : null,
-    el('span', { class: 'tl-desc' }, esc(m.summary)));
+// Shared options for the timeline render layer (TimelineView.renderRow/
+// renderInto, unit-tested under jsdom). Rows deep-link to the device page; time
+// is formatted with the app's fmtDate.
+function timelineRenderOpts(agentId, extra) {
+  return Object.assign({ agentId, onOpen: (id) => openAgent(id), formatTime: fmtDate }, extra || {});
 }
 
 // The per-target timeline card, embedded on the device detail page. Time-range
@@ -3129,28 +3115,13 @@ function targetTimelineCard(agentId) {
   rangeSel.value = rangeKey;
   const refreshBtn = el('button', { class: 'small ghost' }, '↻ Refresh');
   const setBusy = (b) => { refreshBtn.disabled = b; };
-
-  function renderState(view) {
-    if (view.state === 'error') {
-      body.replaceChildren(
-        el('p', { class: 'error' }, view.message),
-        el('button', { class: 'small', onclick: load }, 'Retry'));
-      return;
-    }
-    const kids = [];
-    if (view.partial) kids.push(el('div', { class: 'tl-partial callout' }, `⚠ ${TimelineView.partialNotice(view.failedSources)}`));
-    if (view.state === 'empty') {
-      kids.push(el('p', { class: 'muted' }, 'No events in this window.'));
-    } else {
-      kids.push(el('ul', { class: 'timeline' }, ...view.events.map((e) => timelineRowEl(e, { agentId }))));
-    }
-    body.replaceChildren(...kids);
-  }
+  const draw = (view) => TimelineView.renderInto(document, body, view,
+    timelineRenderOpts(agentId, { onRetry: load, emptyText: 'No events in this window.' }));
 
   async function load() {
     const win = TimelineView.rangeToWindow(rangeKey, Date.now(), customFrom.value, customTo.value);
     if (!win) { body.replaceChildren(el('p', { class: 'muted' }, 'Pick a valid custom range (from ≤ to).')); return; }
-    body.replaceChildren(el('p', { class: 'muted' }, 'Loading…'));
+    draw(TimelineView.resolveState({ loading: true }));
     setBusy(true);
     let view;
     try {
@@ -3159,7 +3130,7 @@ function targetTimelineCard(agentId) {
     } catch (err) {
       view = TimelineView.resolveState({ error: err });
     } finally { setBusy(false); }
-    renderState(view);
+    draw(view);
   }
 
   rangeSel.onchange = (e) => {

@@ -108,6 +108,63 @@
     return 'Some data sources were unavailable (' + list + '); this timeline may be incomplete.';
   }
 
+  // --- render layer (DOM) ---------------------------------------------------
+  // Kept here (taking an injected `document`) rather than in app.js so the
+  // rendered output is unit-testable under jsdom — the DOM is where the bugs a
+  // pure-logic test can't see actually live. app.js wires fetch + navigation.
+
+  function elem(doc, tag, cls, text) {
+    var n = doc.createElement(tag);
+    if (cls) n.className = cls;
+    if (text != null) n.textContent = text; // textContent — never innerHTML — so content is inert
+    return n;
+  }
+
+  // One timeline row. `opts`: { agentId, onOpen(id,link), formatTime(iso)->str }.
+  function renderRow(doc, event, opts) {
+    opts = opts || {};
+    var m = rowModel(event);
+    var fmt = typeof opts.formatTime === 'function' ? opts.formatTime : function (t) { return t == null ? '' : String(t); };
+    var li = elem(doc, 'li', 'tl tl-src-' + (m.source || 'x'));
+    var link = opts.agentId != null ? deepLink(event, opts.agentId) : null;
+    if (link && typeof opts.onOpen === 'function') {
+      li.className += ' clickable';
+      li.title = 'Open device (' + m.sourceLabel + (m.refId != null ? ' #' + m.refId : '') + ')';
+      li.addEventListener('click', function () { opts.onOpen(link.id, link); });
+    }
+    li.appendChild(elem(doc, 'span', 'tl-time muted', fmt(m.time)));
+    li.appendChild(elem(doc, 'span', 'badge ' + m.severity + ' tl-sev', m.severity));
+    li.appendChild(elem(doc, 'span', 'badge tl-src', m.sourceLabel));
+    if (m.type) li.appendChild(elem(doc, 'span', 'tl-type muted', m.type));
+    li.appendChild(elem(doc, 'span', 'tl-desc', m.summary));
+    return li;
+  }
+
+  // Render a resolved state (from resolveState) into `container`, replacing its
+  // contents. `opts`: { agentId, onOpen, formatTime, onRetry, emptyText }.
+  function renderInto(doc, container, view, opts) {
+    opts = opts || {};
+    while (container.firstChild) container.removeChild(container.firstChild);
+    if (view.state === 'loading') { container.appendChild(elem(doc, 'p', 'muted', 'Loading…')); return; }
+    if (view.state === 'error') {
+      container.appendChild(elem(doc, 'p', 'error', view.message));
+      if (typeof opts.onRetry === 'function') {
+        var btn = elem(doc, 'button', 'small', 'Retry');
+        btn.addEventListener('click', opts.onRetry);
+        container.appendChild(btn);
+      }
+      return;
+    }
+    if (view.partial) container.appendChild(elem(doc, 'div', 'tl-partial callout', '⚠ ' + partialNotice(view.failedSources)));
+    if (view.state === 'empty') {
+      container.appendChild(elem(doc, 'p', 'muted', opts.emptyText || 'No events in this window.'));
+      return;
+    }
+    var ul = elem(doc, 'ul', 'timeline');
+    for (var i = 0; i < view.events.length; i += 1) ul.appendChild(renderRow(doc, view.events[i], opts));
+    container.appendChild(ul);
+  }
+
   var apiObj = {
     severityClass: severityClass,
     sourceLabel: sourceLabel,
@@ -118,6 +175,8 @@
     rowModel: rowModel,
     deepLink: deepLink,
     partialNotice: partialNotice,
+    renderRow: renderRow,
+    renderInto: renderInto,
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = apiObj;

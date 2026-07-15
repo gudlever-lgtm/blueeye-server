@@ -68,18 +68,31 @@ function createFindingsRouter({ findingStore, timelineService = null }) {
         const finding = await findingStore.get(id);
         if (!finding) return res.status(404).json({ error: 'finding not found' });
 
-        // The trigger timestamp is the finding's created_at (detection time).
-        const triggerAt = finding.createdAt ? new Date(finding.createdAt) : null;
+        const detectedAt = finding.createdAt ? new Date(finding.createdAt) : null;
+        const detectedValid = detectedAt && !Number.isNaN(detectedAt.getTime());
+        // Anchor the look-back on anomaly ONSET (findings.window_from) when it
+        // exists — the change that caused an anomaly precedes its onset, which
+        // can be well before detection for a slow-to-fire finding. Fall back to
+        // detection time (created_at) otherwise.
+        const win = Array.isArray(finding.window) ? finding.window : [];
+        const onset = win[0] ? new Date(win[0]) : null;
+        const onsetValid = onset && !Number.isNaN(onset.getTime());
+        const anchorAt = onsetValid ? onset : (detectedValid ? detectedAt : null);
         const agentId = Number(finding.hostId);
+
         // A finding with no usable timestamp or a non-numeric host can't be
         // correlated — that's an empty result, not an error (like the timeline).
-        if (!triggerAt || Number.isNaN(triggerAt.getTime()) || !Number.isInteger(agentId)) {
-          return res.json({ changes: [], partial: false, failedSources: [], trigger: { findingId: id, at: null }, window: { minutes } });
+        if (!anchorAt || !Number.isInteger(agentId)) {
+          return res.json({
+            changes: [], partial: false, failedSources: [],
+            trigger: { findingId: id, at: detectedValid ? detectedAt.toISOString() : null },
+            window: { minutes },
+          });
         }
 
-        const from = new Date(triggerAt.getTime() - minutes * 60 * 1000);
+        const from = new Date(anchorAt.getTime() - minutes * 60 * 1000);
         const { events, partial, failedSources } = await timelineService.getTimeline(agentId, {
-          from, to: triggerAt, limit: CONTEXT_LIMIT,
+          from, to: anchorAt, limit: CONTEXT_LIMIT,
         });
         // Change-type only. The finding itself is a symptom, so it's excluded.
         const changes = events.filter(isChangeEvent);
@@ -88,8 +101,8 @@ function createFindingsRouter({ findingStore, timelineService = null }) {
           changes,
           partial,
           failedSources,
-          trigger: { findingId: id, at: triggerAt.toISOString() },
-          window: { from: from.toISOString(), to: triggerAt.toISOString(), minutes },
+          trigger: { findingId: id, at: detectedValid ? detectedAt.toISOString() : null },
+          window: { from: from.toISOString(), to: anchorAt.toISOString(), minutes, anchoredOn: onsetValid ? 'onset' : 'detection' },
         });
       })
     );

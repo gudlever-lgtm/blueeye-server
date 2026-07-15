@@ -74,10 +74,14 @@ GET /api/findings/:id/context?window=<minutes>
 ```
 
 Returns the **change-type** timeline events on the finding's device in the
-window immediately before the finding's trigger timestamp
-(`findings.created_at`, default **30** min, capped 24h). Reuses the Phase 1
-merge (`getTimeline` over the same sources), then filters with `classifyEvent`
-— not a separate query path. Chronological, **closest-to-trigger first**.
+window immediately before the anomaly (default **30** min, capped 24h). The
+look-back is anchored on the anomaly **onset** (`findings.window_from`) when
+present — the change that caused an anomaly precedes its onset, which can be
+well before detection — falling back to detection time (`findings.created_at`);
+`window.anchoredOn` reports which was used, and `trigger.at` always reports the
+detection time. Reuses the Phase 1 merge (`getTimeline` over the same sources),
+then filters with `classifyEvent` — not a separate query path. Chronological,
+**closest-to-trigger first**.
 
 - `viewer+`. **404** unknown finding; **400** invalid `window`; **200 with `[]`**
   (not 404) when no changes; partial-failure handling identical to the timeline.

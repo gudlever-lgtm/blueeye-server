@@ -16,7 +16,7 @@ const silentLogger = { info() {}, warn() {}, error() {} };
 // individual channel (so e.g. a plan may include `alerts_email` but not
 // `alerts_webhook`). Both default to allow so callers that don't license per
 // channel are unaffected.
-function createDispatcher({ config, channels = {}, licensed = () => true, channelLicensed = () => true, logger = silentLogger, now = () => Date.now(), silencer = null }) {
+function createDispatcher({ config, channels = {}, licensed = () => true, channelLicensed = () => true, logger = silentLogger, now = () => Date.now(), silencer = null, alertLog = null }) {
   const lastSent = new Map(); // `${hostId}|${metric}|${kind}|${severity}` -> timestamp
   let silencedBy = typeof silencer === 'function' ? silencer : null;
 
@@ -24,6 +24,46 @@ function createDispatcher({ config, channels = {}, licensed = () => true, channe
   // a later CRIT escalation for the same metric — each severity throttles on its
   // own. (Repeated same-severity findings are still de-duped within the window.)
   const throttleKey = (f) => `${f.hostId}|${f.metric}|${f.kind}|${f.severity}`;
+
+  // Sends a finding-shaped subject to every enabled + licensed + severity-eligible
+  // channel. Shared by dispatch() (findings) and dispatchCluster() (clusters). One
+  // channel's failure never aborts the rest. Returns { attempted, results }.
+  async function sendToChannels(subject, group) {
+    const subjectRank = rank(subject.severity);
+    const results = [];
+    let attempted = false;
+    for (const [name, channel] of Object.entries(channels)) {
+      const rule = config.channels && config.channels[name];
+      if (!rule || !rule.enabled) continue;
+      if (!channelLicensed(name)) {
+        results.push({ channel: name, ok: false, skipped: true, detail: 'channel not licensed' });
+        continue;
+      }
+      if (subjectRank < rank(rule.minSeverity)) {
+        results.push({ channel: name, ok: false, skipped: true, detail: 'below minSeverity' });
+        continue;
+      }
+      attempted = true;
+      try {
+        const r = await channel.send(subject, group);
+        results.push({ channel: name, ok: Boolean(r && r.ok), detail: r && r.detail });
+      } catch (err) {
+        results.push({ channel: name, ok: false, detail: `threw: ${err.message}` });
+      }
+    }
+    return { attempted, results };
+  }
+
+  // Comma-separated names of the channels that sent OK (for the alert log).
+  const okChannelNames = (results) => results.filter((r) => r.ok).map((r) => r.channel).join(',');
+
+  // Best-effort append to the durable alert-dispatch log; never throws to the caller.
+  function logAlert(row) {
+    if (!alertLog || typeof alertLog.record !== 'function') return;
+    Promise.resolve()
+      .then(() => alertLog.record(row))
+      .catch((err) => logger.warn(`alerting: could not record alert log (${err && err.message})`));
+  }
 
   async function dispatch(finding, group) {
     if (!licensed()) return { dispatched: false, reason: 'unlicensed', results: [] };
@@ -48,38 +88,60 @@ function createDispatcher({ config, channels = {}, licensed = () => true, channe
       return { dispatched: false, reason: 'throttled', results: [] };
     }
 
-    const findingRank = rank(finding.severity);
-    const results = [];
-    let attempted = false;
-
-    for (const [name, channel] of Object.entries(channels)) {
-      const rule = config.channels && config.channels[name];
-      if (!rule || !rule.enabled) continue;
-      // Per-channel licence (e.g. alerts_email / alerts_webhook). Skipped (not
-      // attempted) so an unlicensed channel never starts the cooldown.
-      if (!channelLicensed(name)) {
-        results.push({ channel: name, ok: false, skipped: true, detail: 'channel not licensed' });
-        continue;
-      }
-      if (findingRank < rank(rule.minSeverity)) {
-        results.push({ channel: name, ok: false, skipped: true, detail: 'below minSeverity' });
-        continue;
-      }
-      attempted = true;
-      try {
-        const r = await channel.send(finding, group);
-        results.push({ channel: name, ok: Boolean(r && r.ok), detail: r && r.detail });
-      } catch (err) {
-        // One channel's failure must not abort the rest.
-        results.push({ channel: name, ok: false, detail: `threw: ${err.message}` });
-      }
-    }
+    const { attempted, results } = await sendToChannels(finding, group);
 
     // Only start the cooldown once a channel actually matched and was attempted.
     if (attempted) lastSent.set(key, ts);
+    // Durable record so a cross-agent cluster alert can reference (not resend) the
+    // members already alerted individually. Best-effort, fire-and-forget.
+    if (attempted) {
+      logAlert({
+        subjectType: 'finding', subjectId: finding.id, hostId: finding.hostId,
+        metric: finding.metric, severity: finding.severity, channels: okChannelNames(results), sentAt: new Date(ts),
+      });
+    }
     const outcome = (r) => (r.ok ? 'ok' : r.skipped ? 'skip' : 'fail');
     const summary = results.map((r) => `${r.channel}:${outcome(r)}`).join(', ') || 'no channel';
     logger.info(`alerting: ${finding.metric} ${finding.severity} -> ${summary}`);
+    return { dispatched: attempted, results };
+  }
+
+  // Fires ONE cluster-level alert (Step 3) for a cross-agent incident cluster, reusing
+  // the same channels as findings. Deduped DURABLY via the alert log so a cluster
+  // alerts at most once even across restarts (the in-memory throttle wouldn't survive
+  // a restart). The `cluster` is a finding-shaped object (metric/severity/explanation/
+  // evidence) plus `clusterId`; `group` carries { advisory, memberFindingIds,
+  // alreadyAlerted, ... } so the channels can reference the members already notified.
+  // Bypasses the per-(host,metric) throttle and the maintenance silencer (a cluster
+  // spans multiple hosts). Best-effort — a channel/log failure never throws.
+  async function dispatchCluster(cluster, group) {
+    if (!licensed()) return { dispatched: false, reason: 'unlicensed', results: [] };
+    if (!config || !config.enabled) return { dispatched: false, reason: 'disabled', results: [] };
+    if (!cluster || cluster.clusterId == null) return { dispatched: false, reason: 'no-cluster', results: [] };
+
+    // Durable "once per cluster".
+    if (alertLog && typeof alertLog.existsForCluster === 'function') {
+      let already = false;
+      try { already = await alertLog.existsForCluster(cluster.clusterId); } catch { already = false; }
+      if (already) return { dispatched: false, reason: 'already-sent', results: [] };
+    }
+
+    const { attempted, results } = await sendToChannels(cluster, group);
+    // Await the cluster record (unlike the fire-and-forget finding record) so the
+    // durable "once per cluster" guard is visible to any subsequent call.
+    if (attempted && alertLog && typeof alertLog.record === 'function') {
+      try {
+        await alertLog.record({
+          subjectType: 'cluster', subjectId: cluster.clusterId, hostId: null,
+          metric: cluster.metric, severity: cluster.severity, channels: okChannelNames(results), sentAt: new Date(now()),
+        });
+      } catch (err) {
+        logger.warn(`alerting: could not record cluster alert log (${err && err.message})`);
+      }
+    }
+    const outcome = (r) => (r.ok ? 'ok' : r.skipped ? 'skip' : 'fail');
+    const summary = results.map((r) => `${r.channel}:${outcome(r)}`).join(', ') || 'no channel';
+    logger.info(`alerting: cluster ${cluster.clusterId} ${cluster.severity} -> ${summary}`);
     return { dispatched: attempted, results };
   }
 
@@ -127,7 +189,7 @@ function createDispatcher({ config, channels = {}, licensed = () => true, channe
   // Late-bind the silencer (server.js builds it after settingsService exists).
   function setSilencer(fn) { silencedBy = typeof fn === 'function' ? fn : null; }
 
-  return { dispatch, describe, channelNames, test, setSilencer };
+  return { dispatch, dispatchCluster, describe, channelNames, test, setSilencer };
 }
 
 module.exports = { createDispatcher };

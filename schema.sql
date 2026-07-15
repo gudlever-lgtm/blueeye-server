@@ -806,3 +806,40 @@ CREATE TABLE IF NOT EXISTS incident_playbook_runs (
   CONSTRAINT fk_incident_playbook_runs_playbook FOREIGN KEY (playbook_id)
     REFERENCES remediation_playbooks (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Cross-agent incident clusters (migration 057): findings from DIFFERENT agents
+-- within a short time window, grouped with a suspected common cause + confidence
+-- tier (time-only=low, +shared site=medium, +same finding-type=high). member_finding_ids
+-- is a JSON array of findings.id. See src/analysis/crossAgentCorrelator.js.
+CREATE TABLE IF NOT EXISTS incident_clusters (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  confidence ENUM('low', 'medium', 'high') NOT NULL DEFAULT 'low',
+  member_finding_ids JSON NOT NULL,
+  suspected_common_cause TEXT NULL DEFAULT NULL,
+  advisory TEXT NULL DEFAULT NULL,                     -- opt-in AI root-cause + troubleshooting (migration 058)
+  status ENUM('open', 'resolved', 'closed') NOT NULL DEFAULT 'open',
+  detected_at DATETIME NOT NULL,
+  resolved_at DATETIME NULL DEFAULT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_incident_clusters_status_detected (status, detected_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Durable alert-dispatch log (migration 059): one row per alert actually sent.
+-- finding rows let a cluster alert reference members already alerted individually;
+-- cluster rows make "fire once per cluster" durable. Metadata only. See
+-- src/repositories/alertDispatchLogRepository.js.
+CREATE TABLE IF NOT EXISTS alert_dispatch_log (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  subject_type ENUM('finding', 'cluster') NOT NULL,
+  subject_id VARCHAR(64) NOT NULL,
+  host_id VARCHAR(64) NULL DEFAULT NULL,
+  metric VARCHAR(120) NULL DEFAULT NULL,
+  severity VARCHAR(16) NULL DEFAULT NULL,
+  channels VARCHAR(255) NULL DEFAULT NULL,
+  sent_at DATETIME NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_alert_dispatch_subject (subject_type, subject_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

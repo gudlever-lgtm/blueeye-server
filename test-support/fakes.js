@@ -263,6 +263,77 @@ function makeIncidentCasesRepo(overrides = {}) {
   };
 }
 
+// A fake incident_clusters repository (in-memory) — cross-agent clusters
+// (migration 056). Mirrors incidentClustersRepository's surface.
+function makeIncidentClustersRepo(overrides = {}) {
+  const rows = [];
+  let seq = 0;
+  const iso = (v) => (v == null ? null : (v instanceof Date ? v.toISOString() : new Date(v).toISOString()));
+  const mapOut = (r) => ({
+    id: r.id,
+    confidence: r.confidence,
+    memberFindingIds: Array.isArray(r.member_finding_ids) ? r.member_finding_ids : [],
+    suspectedCommonCause: r.suspected_common_cause ?? null,
+    advisory: r.advisory ?? null,
+    status: r.status,
+    detectedAt: iso(r.detected_at),
+    resolvedAt: iso(r.resolved_at),
+    createdAt: iso(r.created_at),
+    updatedAt: iso(r.updated_at),
+  });
+  return {
+    rows,
+    create: overrides.create || (async (c) => {
+      const id = (seq += 1);
+      rows.push({
+        id, confidence: 'low', member_finding_ids: [], suspected_common_cause: null, advisory: null,
+        status: 'open', resolved_at: null, created_at: new Date(), updated_at: new Date(),
+        ...c,
+        member_finding_ids: c.memberFindingIds || [],
+        suspected_common_cause: c.suspectedCommonCause ?? null,
+        detected_at: c.detectedAt,
+      });
+      return id;
+    }),
+    findById: overrides.findById || (async (id) => { const r = rows.find((x) => x.id === Number(id)); return r ? mapOut(r) : null; }),
+    listOpen: overrides.listOpen || (async () => rows
+      .filter((r) => r.status === 'open')
+      .sort((a, b) => new Date(b.detected_at) - new Date(a.detected_at) || b.id - a.id)
+      .map(mapOut)),
+    updateMembership: overrides.updateMembership || (async (id, { confidence, memberFindingIds, suspectedCommonCause, detectedAt }) => {
+      const r = rows.find((x) => x.id === Number(id) && x.status === 'open');
+      if (!r) return false;
+      r.confidence = confidence;
+      r.member_finding_ids = memberFindingIds || [];
+      r.suspected_common_cause = suspectedCommonCause ?? null;
+      if (new Date(detectedAt) > new Date(r.detected_at)) r.detected_at = detectedAt;
+      return true;
+    }),
+    setAdvisory: overrides.setAdvisory || (async (id, advisory) => {
+      const r = rows.find((x) => x.id === Number(id) && x.status === 'open' && (x.advisory == null));
+      if (!r) return false;
+      r.advisory = advisory;
+      return true;
+    }),
+    updateStatus: overrides.updateStatus || (async (id, { from, to, at = null }) => {
+      const r = rows.find((x) => x.id === Number(id) && x.status === from);
+      if (!r) return false;
+      r.status = to;
+      if (to === 'resolved' || to === 'closed') r.resolved_at = at;
+      if (to === 'open') r.resolved_at = null;
+      return true;
+    }),
+    listStaleOpen: overrides.listStaleOpen || (async (olderThan) => rows
+      .filter((r) => r.status === 'open' && new Date(r.detected_at) < new Date(olderThan))
+      .sort((a, b) => new Date(a.detected_at) - new Date(b.detected_at))
+      .map(mapOut)),
+    list: overrides.list || (async (f = {}) => rows
+      .filter((r) => (!f.status || r.status === f.status))
+      .sort((a, b) => new Date(b.detected_at) - new Date(a.detected_at) || b.id - a.id)
+      .map(mapOut)),
+  };
+}
+
 // A fake remediation-playbooks repository (in-memory). Mirrors
 // remediationPlaybooksRepository's surface for the recommendation read-model.
 // Seed playbooks with `create()` and runs with `recordRun()`.
@@ -823,12 +894,32 @@ function makeFlowPipeline(overrides = {}) {
 // A fake alerting dispatcher (records dispatch calls; knows three channels).
 function makeDispatcher(overrides = {}) {
   const calls = [];
+  const clusterCalls = [];
   return {
     calls,
+    clusterCalls,
     dispatch: overrides.dispatch || (async (finding, group) => { calls.push({ finding, group }); return { dispatched: true, results: [] }; }),
+    dispatchCluster: overrides.dispatchCluster || (async (cluster, group) => { clusterCalls.push({ cluster, group }); return { dispatched: true, results: [] }; }),
     describe: overrides.describe || (() => ({ enabled: false, cooldownMs: 0, channels: {} })),
     channelNames: overrides.channelNames || (() => ['email', 'webhook', 'syslog']),
     test: overrides.test || (async (channel) => ({ channel, ok: true, detail: 'test' })),
+  };
+}
+
+// A fake durable alert-dispatch log (in-memory, stateful) — mirrors
+// alertDispatchLogRepository's surface for cluster-alert dedup + member referencing.
+function makeAlertDispatchLogRepo(overrides = {}) {
+  const rows = [];
+  let seq = 0;
+  return {
+    rows,
+    record: overrides.record || (async (row) => { const id = (seq += 1); rows.push({ id, ...row }); return id; }),
+    existsForCluster: overrides.existsForCluster || (async (clusterId) => rows.some((r) => r.subjectType === 'cluster' && String(r.subjectId) === String(clusterId))),
+    listAlertedFindings: overrides.listAlertedFindings || (async (findingIds) => {
+      const want = new Set((Array.isArray(findingIds) ? findingIds : []).map(String));
+      return [...new Set(rows.filter((r) => r.subjectType === 'finding' && want.has(String(r.subjectId))).map((r) => String(r.subjectId)))];
+    }),
+    list: overrides.list || (async ({ subjectType = null } = {}) => rows.filter((r) => !subjectType || r.subjectType === subjectType)),
   };
 }
 
@@ -1585,6 +1676,8 @@ module.exports = {
   makeProbeResultsRepo,
   makeIncidentsRepo,
   makeIncidentCasesRepo,
+  makeIncidentClustersRepo,
+  makeAlertDispatchLogRepo,
   makeRemediationPlaybooksRepo,
   makeIncidentCaseService,
   makeConfigSnapshotsRepo,

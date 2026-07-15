@@ -505,7 +505,48 @@ function createAssistant({
     return { answer, model: currentModel() };
   }
 
-  return { isEnabled, status, explain, explainDiagnostic, summarizeLocation, narrateInvestigation, generateNis2Draft, diagnoseTransaction, askIncident, suggestRemediation, buildContext, buildLocationContext };
+  // Proposes a likely COMMON root cause + troubleshooting steps for a cross-agent
+  // incident CLUSTER — findings from several agents that fired together. The prompt
+  // is built from the cluster's member findings (not a single finding), each already
+  // carrying a plain-language explanation; IPs in explanations are masked here before
+  // anything leaves the process. Same contract as suggestRemediation: it is a
+  // SUGGESTION, never invents facts, and pins the exact insufficient-context string
+  // so the caller can tell "the model had nothing concrete" and NOT surface it as
+  // advice. Throws FeatureDisabled when off; AssistantMisconfigured/UpstreamError on
+  // provider problems. Returns { answer, model, usedFindings }.
+  async function suggestClusterCause(cluster = {}, members = []) {
+    if (!currentEnabled()) throw new FeatureDisabledError();
+    const findings = (Array.isArray(members) ? members : []).slice(0, maxFindings).map((f) => ({
+      host: f.hostId,
+      metric: f.metric,
+      severity: f.severity,
+      deviation: f.deviation,
+      explanation: maskIps(f.explanation || ''),
+      at: f.createdAt,
+    }));
+    const context = {
+      confidence: cluster.confidence ?? null,
+      signals: cluster.signals ?? null,
+      site: cluster.site ?? null,
+      commonType: cluster.commonType ?? null,
+      agents: Array.isArray(cluster.hostIds) ? cluster.hostIds.length : findings.length,
+      localHint: maskIps(cluster.suspectedCommonCause || ''),
+      findings,
+    };
+    const system =
+      'You are a network operations assistant for BlueEye, analyzing ONE incident that spans MULTIPLE ' +
+      'agents (a cross-agent cluster). Propose the single most likely COMMON root cause and a few ' +
+      'concrete troubleshooting steps, in the language of the findings. Focus on what the agents share ' +
+      '(same site, same anomaly type, same time). This is a SUGGESTION, never verified fact. Use ONLY ' +
+      'the provided context (per-agent findings, each already explained). NEVER invent facts, causes, ' +
+      'hostnames or addresses that are not present in the context. If the context does not contain enough ' +
+      `information to suggest a common cause, reply EXACTLY with: "${INCIDENT_INSUFFICIENT_ANSWER}"`;
+    const user = JSON.stringify({ task: 'cluster_common_cause', context });
+    const answer = await chat(system, user);
+    return { answer, model: currentModel(), usedFindings: findings.length };
+  }
+
+  return { isEnabled, status, explain, explainDiagnostic, summarizeLocation, narrateInvestigation, generateNis2Draft, diagnoseTransaction, askIncident, suggestRemediation, suggestClusterCause, buildContext, buildLocationContext };
 }
 
 module.exports = { createAssistant, FeatureDisabledError, INCIDENT_INSUFFICIENT_ANSWER };

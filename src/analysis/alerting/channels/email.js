@@ -73,6 +73,14 @@ function createEmailChannel({ config = {}, transport = null, createTransport = n
       `Kind: ${finding.kind}`,
       finding.deviation != null ? `Deviation: ${finding.deviation}` : null,
       group && group.hint ? `\nRoot-cause: ${group.hint}` : null,
+      // Cross-agent cluster alert extras (only present on cluster-level alerts).
+      group && Array.isArray(group.memberFindingIds)
+        ? `\nCluster: ${group.memberFindingIds.length} member finding(s)`
+          + (Array.isArray(group.alreadyAlerted) && group.alreadyAlerted.length
+            ? ` — ${group.alreadyAlerted.length} already alerted individually (referenced, not resent)`
+            : '')
+        : null,
+      group && group.advisory ? `\nAdvisory: ${group.advisory}` : null,
     ].filter((x) => x != null).join('\n');
 
     try {

@@ -1,11 +1,16 @@
 'use strict';
 
 // Columns safe to return to API clients — never includes password_hash.
-const PUBLIC_COLUMNS = 'id, email, role, protected, created_at, updated_at';
+const PUBLIC_COLUMNS =
+  'id, email, role, protected, must_change_password, temp_password_expires_at, temp_password_created_by, created_at, updated_at';
 
 function mapRow(row) {
   if (!row) return null;
-  return { ...row, protected: row.protected === 1 || row.protected === true };
+  return {
+    ...row,
+    protected: row.protected === 1 || row.protected === true,
+    must_change_password: row.must_change_password === 1 || row.must_change_password === true,
+  };
 }
 
 // `preferences` is a JSON column. mysql2 usually returns it already parsed, but
@@ -45,19 +50,38 @@ function createUsersRepository(db) {
     return mapRow(rows[0]) ?? null;
   }
 
-  // Includes the password hash — used only by the login flow.
+  // Includes the password hash + one-time-password state — used only by the
+  // login flow (verify the password, then enforce the forced-change/expiry rules).
   async function findByEmailWithHash(email) {
     const [rows] = await pool.query(
-      'SELECT id, email, password_hash, role, created_at, updated_at FROM users WHERE email = ?',
+      'SELECT id, email, password_hash, role, must_change_password, temp_password_expires_at, created_at, updated_at FROM users WHERE email = ?',
       [email]
     );
-    return rows[0] ?? null;
+    const row = rows[0];
+    if (!row) return null;
+    return { ...row, must_change_password: row.must_change_password === 1 || row.must_change_password === true };
   }
 
-  async function create({ email, passwordHash, role, protected: isProtected = false }) {
+  async function create({
+    email,
+    passwordHash,
+    role,
+    protected: isProtected = false,
+    mustChangePassword = false,
+    tempPasswordExpiresAt = null,
+    tempPasswordCreatedBy = null,
+  }) {
     const [result] = await pool.query(
-      'INSERT INTO users (email, password_hash, role, protected) VALUES (?, ?, ?, ?)',
-      [email, passwordHash, role, isProtected ? 1 : 0]
+      'INSERT INTO users (email, password_hash, role, protected, must_change_password, temp_password_expires_at, temp_password_created_by) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [
+        email,
+        passwordHash,
+        role,
+        isProtected ? 1 : 0,
+        mustChangePassword ? 1 : 0,
+        tempPasswordExpiresAt,
+        tempPasswordCreatedBy,
+      ]
     );
     return findById(result.insertId);
   }
@@ -101,6 +125,43 @@ function createUsersRepository(db) {
     return result.affectedRows > 0;
   }
 
+  // Issues (or re-issues) a one-time password: replaces the hash, flags the user
+  // for a forced change, sets the new expiry and issuing admin, and revokes any
+  // JWTs already outstanding (tokens_valid_after) so an old session can't skip
+  // the change. Returns the updated public row, or null if the user is gone.
+  async function setTempPassword(id, { passwordHash, expiresAt, createdBy = null }) {
+    const [result] = await pool.query(
+      `UPDATE users
+          SET password_hash = ?,
+              must_change_password = 1,
+              temp_password_expires_at = ?,
+              temp_password_created_by = ?,
+              tokens_valid_after = NOW()
+        WHERE id = ?`,
+      [passwordHash, expiresAt, createdBy, id]
+    );
+    if (result.affectedRows === 0) return null;
+    return findById(id);
+  }
+
+  // Completes a forced change: stores the new (policy-checked) hash, clears the
+  // one-time-password flags, and revokes older tokens. Returns the updated public
+  // row, or null if the user is gone.
+  async function clearTempPassword(id, passwordHash) {
+    const [result] = await pool.query(
+      `UPDATE users
+          SET password_hash = ?,
+              must_change_password = 0,
+              temp_password_expires_at = NULL,
+              temp_password_created_by = NULL,
+              tokens_valid_after = NOW()
+        WHERE id = ?`,
+      [passwordHash, id]
+    );
+    if (result.affectedRows === 0) return null;
+    return findById(id);
+  }
+
   // Users with a token-revocation cutoff set — loaded by the revocation registry
   // so requireAuth can reject pre-cutoff tokens without a per-request DB read.
   async function findRevocations() {
@@ -142,6 +203,8 @@ function createUsersRepository(db) {
     create,
     update,
     remove,
+    setTempPassword,
+    clearTempPassword,
     findRevocations,
     countByRole,
     getPreferences,

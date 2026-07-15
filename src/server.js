@@ -67,6 +67,7 @@ const { loadAlertingConfig } = require('./analysis/alerting/config');
 const { createDispatcher } = require('./analysis/alerting/dispatcher');
 const { createSilencer } = require('./analysis/alerting/maintenance');
 const { createEmailChannel, createSmtpTransport } = require('./analysis/alerting/channels/email');
+const { createUserMailer } = require('./services/userMailer');
 const { createWebhookChannel } = require('./analysis/alerting/channels/webhook');
 const { createSyslogChannel } = require('./analysis/alerting/channels/syslog');
 const { loadRetentionConfig } = require('./analysis/retention/config');
@@ -444,6 +445,18 @@ function start() {
     },
     logger,
   });
+  // One-time-password email for local user creation. It reuses the SAME live
+  // alerting email settings (from + SMTP) so an admin only configures SMTP once
+  // (Settings → Alerting) and both alerts and account emails go out the same way.
+  const userMailer = createUserMailer({
+    getEmailConfig: () => ({
+      from: alertingConfig.channels.email.from,
+      smtp: alertingConfig.channels.email.smtp,
+    }),
+    createTransport: (smtp) => createSmtpTransport(smtp, logger),
+    logger,
+  });
+
   // Maintenance windows suppress notifications (findings still record). The
   // silencer reads windows from settingsService, which is built further down, so
   // it's bound after that. (createSilencer is in alerting/maintenance.js.)
@@ -585,6 +598,7 @@ function start() {
     auditLogRepo,
     apiTokensRepo,
     auditLogger,
+    userMailer,
     enrollmentCodesRepo,
     enrollmentStore,
     agentTokensRepo,

@@ -2,10 +2,12 @@
 
 const express = require('express');
 const { asyncHandler } = require('../middleware/asyncHandler');
-const { verifyPassword, hashPassword } = require('../auth/password');
+const { verifyPassword, hashPassword, checkPasswordPolicy } = require('../auth/password');
 const { issueToken } = require('../auth/jwt');
+const { requireAuth } = require('../auth/middleware');
 const { createUserProvisioner } = require('../auth/provision');
 const { createLoginThrottle } = require('../auth/loginThrottle');
+const { validatePasswordChange } = require('../validation/userValidation');
 const { config } = require('../config');
 
 // Authentication routes (public). Supports two paths behind the SAME endpoint:
@@ -132,9 +134,87 @@ function createAuthRouter({ usersRepo, ldapAuth = null, ldapLoginAuditRepo = nul
         return res.status(401).json({ error: 'Invalid credentials' });
       }
 
+      // One-time-password handling. The credential itself was correct, so the
+      // brute-force counter is cleared either way — but a temp password that has
+      // expired is refused with a distinct, non-500 error so the client can tell
+      // the user to ask an admin to re-send, and issued tokens stay flagged for a
+      // forced change until it's done.
+      if (user.must_change_password) {
+        const exp = user.temp_password_expires_at ? new Date(user.temp_password_expires_at).getTime() : NaN;
+        if (Number.isFinite(exp) && exp <= Date.now()) {
+          // Don't count as a throttle failure (the password was valid) and don't
+          // reset it either — just report the expiry.
+          await auditLogin(req, { action: 'temp_password_expired', outcome: 'failure', email: user.email, userId: user.id, detail: 'one-time password expired' });
+          return res.status(401).json({
+            error: 'temp_password_expired',
+            message: 'Your one-time password has expired. Ask an administrator to send a new one.',
+          });
+        }
+        const token = issueToken({ ...user, mustChangePassword: true });
+        throttle.recordSuccess(throttleId);
+        await auditLogin(req, { action: 'login_success', outcome: 'success', email: user.email, role: user.role, userId: user.id, detail: 'auth=local, must_change_password' });
+        return res.json({
+          token,
+          tokenType: 'Bearer',
+          expiresIn: config.auth.jwtExpiresIn,
+          user: { id: user.id, email: user.email, role: user.role },
+          mustChangePassword: true,
+        });
+      }
+
       const token = issueToken(user);
       throttle.recordSuccess(throttleId);
       await auditLogin(req, { action: 'login_success', outcome: 'success', email: user.email, role: user.role, userId: user.id, detail: 'auth=local' });
+      return res.json({
+        token,
+        tokenType: 'Bearer',
+        expiresIn: config.auth.jwtExpiresIn,
+        user: { id: user.id, email: user.email, role: user.role },
+      });
+    })
+  );
+
+  // POST /auth/change-password { currentPassword, newPassword } — authenticated.
+  // Serves the forced first-login change (must_change_password) and an ordinary
+  // self-service password change. Verifies the current password, enforces the
+  // baseline policy (422), then stores the new hash, clears any one-time-password
+  // state, revokes older tokens, and issues a fresh (unflagged) token so the user
+  // continues without re-logging in.
+  router.post(
+    '/change-password',
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      const { value, errors } = validatePasswordChange(req.body);
+      if (errors) {
+        return res.status(400).json({ error: 'Validation failed', details: errors });
+      }
+      const policy = checkPasswordPolicy(value.newPassword);
+      if (!policy.ok) {
+        return res.status(422).json({ error: 'Password policy not met', details: policy.errors });
+      }
+
+      const user = await usersRepo.findByEmailWithHash(req.user.email);
+      if (!user) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+      const currentOk = await verifyPassword(value.currentPassword, user.password_hash);
+      if (!currentOk) {
+        await auditLogin(req, { action: 'password_change_failure', outcome: 'failure', email: user.email, userId: user.id, detail: 'current password mismatch' });
+        return res.status(401).json({ error: 'Current password is incorrect' });
+      }
+      // Reject a no-op change so the temp password can't be re-set as the new one.
+      if (value.newPassword === value.currentPassword) {
+        return res.status(422).json({ error: 'Password policy not met', details: ['new password must differ from the current password'] });
+      }
+
+      const newHash = await hashPassword(value.newPassword);
+      await usersRepo.clearTempPassword(user.id, newHash);
+      await auditLogin(req, { action: 'password_changed', outcome: 'success', email: user.email, role: user.role, userId: user.id, detail: 'password changed' });
+
+      // A brand-new token (no must_change flag). Its iat >= the revocation cutoff
+      // just set, so the revocation registry does not reject it (same-second
+      // tolerance in src/auth/revocation.js).
+      const token = issueToken({ id: user.id, email: user.email, role: user.role });
       return res.json({
         token,
         tokenType: 'Bearer',

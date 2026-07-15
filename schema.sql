@@ -47,10 +47,19 @@ CREATE TABLE IF NOT EXISTS users (
   -- JWTs issued before this instant are rejected (set on password/role change,
   -- delete, or explicit revoke). NULL = never revoked. See src/auth/revocation.
   tokens_valid_after DATETIME NULL DEFAULT NULL,
+  -- Local user creation with a one-time password (migration 056). While
+  -- must_change_password=1 the user is forced through the change-password flow
+  -- before any other access; the one-time password is valid until
+  -- temp_password_expires_at; temp_password_created_by records the issuing admin.
+  must_change_password TINYINT(1) NOT NULL DEFAULT 0,
+  temp_password_expires_at DATETIME NULL DEFAULT NULL,
+  temp_password_created_by INT UNSIGNED NULL DEFAULT NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
-  UNIQUE KEY uq_users_email (email)
+  UNIQUE KEY uq_users_email (email),
+  CONSTRAINT fk_users_temp_pw_creator
+    FOREIGN KEY (temp_password_created_by) REFERENCES users (id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Managed endpoints/agents. Agent-reported fields (hostname, platform, arch,

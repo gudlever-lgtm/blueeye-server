@@ -60,6 +60,7 @@ const {
   createAgentTokenMiddleware,
 } = require('../auth/agentAuth');
 const { createApiTokenMiddleware } = require('../auth/apiTokenAuth');
+const { verifyToken } = require('../auth/jwt');
 const { silentLogger } = require('../logger');
 
 // Aggregates the feature routers into a single API router. New resources are
@@ -76,6 +77,8 @@ function createApiRouter({
   auditLogRepo,
   apiTokensRepo,
   auditLogger,
+  // Sends the one-time password for local user creation (Settings-configured SMTP).
+  userMailer,
   enrollmentCodesRepo,
   enrollmentStore,
   agentTokensRepo,
@@ -184,6 +187,29 @@ function createApiRouter({
   // requireAuth/requireRole work unchanged. Mounted once, ahead of every router.
   if (apiTokensRepo) router.use(createApiTokenMiddleware({ apiTokensRepo }));
 
+  // Forced-password-change gate. A user holding a one-time password gets a JWT
+  // flagged mustChangePassword; until they complete the change, EVERY route is
+  // refused (403) except the ones needed to do it: the login/SSO/change-password
+  // endpoints, the identity read (/me) and health. Best-effort decode — on any
+  // token error we fall through so the downstream requireAuth returns the right
+  // 401. API-token callers never carry the flag, so they're unaffected.
+  const PASSWORD_CHANGE_ALLOWED = new Set(['/auth/login', '/auth/change-password', '/auth/sso', '/me', '/health']);
+  router.use((req, res, next) => {
+    const header = req.headers.authorization || '';
+    const [scheme, token] = header.split(' ');
+    if (scheme === 'Bearer' && token) {
+      let decoded = null;
+      try { decoded = verifyToken(token); } catch { decoded = null; }
+      if (decoded && decoded.mustChangePassword && !PASSWORD_CHANGE_ALLOWED.has(req.path)) {
+        return res.status(403).json({
+          error: 'password_change_required',
+          message: 'You must change your one-time password before using the system.',
+        });
+      }
+    }
+    return next();
+  });
+
   router.use('/health', createHealthRouter({ db, tsdb }));
   router.use('/auth', createAuthRouter({ usersRepo, ldapAuth, ldapLoginAuditRepo, auditLogger, oidcAuth, samlAuth }));
   // SSO (OIDC) — public browser flow (login/callback) + admin config/role-map.
@@ -200,7 +226,13 @@ function createApiRouter({
     router.use('/auth/saml', createSamlAuthRouter({ usersRepo, samlAuth, ssoLoginAuditRepo, auditLogger }));
     router.use('/api/saml', createSamlAdminRouter({ samlAuth, samlRoleMapRepo, ssoLoginAuditRepo, featureGate }));
   }
-  router.use('/users', createUsersRouter({ usersRepo, featureGate, planService, auditLogger }));
+  router.use('/users', createUsersRouter({
+    usersRepo, featureGate, planService, auditLogger,
+    // Local user creation with a one-time password: mailer + the auth services
+    // used to detect (and refuse under) an active SSO/LDAP setup.
+    userMailer, ldapAuth, oidcAuth, samlAuth,
+    publicUrl: (enrollConfig && enrollConfig.publicUrl) || '',
+  }));
   router.use('/me', createMeRouter({ usersRepo }));
   router.use('/locations', createLocationsRouter({ locationsRepo, resultsRepo }));
   router.use('/license', createLicenseRouter({ licenseManager, featureGate, planService, usageService, auditLogger }));

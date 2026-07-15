@@ -57,9 +57,23 @@ function makeUsersRepo(overrides = {}) {
       })),
     update: overrides.update || (async () => null),
     remove: overrides.remove || (async () => false),
+    setTempPassword: overrides.setTempPassword || (async (id, patch) => ({ id, must_change_password: true, ...patch })),
+    clearTempPassword: overrides.clearTempPassword || (async (id) => ({ id, must_change_password: false })),
     countByRole: overrides.countByRole || (async () => 1),
     getPreferences: overrides.getPreferences || (async () => ({})),
     updatePreferences: overrides.updatePreferences || (async (id, patch) => ({ ...patch })),
+  };
+}
+
+// A fake one-time-password mailer. Records every send; a test can point
+// `sendTempPassword` at a rejecting stub to exercise the 500 rollback path.
+function makeUserMailer(overrides = {}) {
+  const sent = [];
+  return {
+    sent,
+    sendTempPassword:
+      overrides.sendTempPassword ||
+      (async (msg) => { sent.push(msg); return { ok: true }; }),
   };
 }
 
@@ -1485,6 +1499,7 @@ function makeApp(overrides = {}) {
     auditLogRepo,
     apiTokensRepo,
     auditLogger,
+    userMailer: overrides.userMailer || makeUserMailer(),
     integrationsRepo: overrides.integrationsRepo || makeIntegrationsRepo(),
     integrationAuditRepo: overrides.integrationAuditRepo || makeIntegrationAuditRepo(),
     integrationsDispatcher: overrides.integrationsDispatcher || makeIntegrationsDispatcher(),
@@ -1545,6 +1560,7 @@ function tokenFor(role, overrides = {}) {
     id: overrides.id ?? 1,
     email: overrides.email ?? `${role}@blueeye.local`,
     role,
+    mustChangePassword: overrides.mustChangePassword === true,
   });
 }
 
@@ -1562,6 +1578,7 @@ const throwingAsync = (message = 'simulated database failure') => async () => {
 module.exports = {
   makeLocationsRepo,
   makeUsersRepo,
+  makeUserMailer,
   makeAgentsRepo,
   makeAgentTokensRepo,
   makeResultsRepo,

@@ -7,7 +7,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
 const { createCrossAgentClusterService } = require('../src/analysis/crossAgentClusterService');
-const { makeIncidentClustersRepo, makeFindingStore, makeAgentsRepo } = require('../test-support/fakes');
+const { makeIncidentClustersRepo, makeFindingStore, makeAgentsRepo, makeDispatcher, makeAlertDispatchLogRepo } = require('../test-support/fakes');
 
 const T = new Date('2026-07-01T12:00:00Z');
 const ago = (ms) => new Date(T.getTime() - ms);
@@ -31,7 +31,7 @@ function fakeAssistant({ enabled = true, answer = 'Likely a shared uplink fault 
 }
 
 // Two agents (1,2) in the same site (10) unless overridden.
-function svcWith({ findings = [], agents = [{ id: 1, location_id: 10 }, { id: 2, location_id: 10 }], publishCluster, clustersRepo, assistant } = {}) {
+function svcWith({ findings = [], agents = [{ id: 1, location_id: 10 }, { id: 2, location_id: 10 }], publishCluster, clustersRepo, assistant, alertDispatcher, alertLog } = {}) {
   const repo = clustersRepo || makeIncidentClustersRepo();
   const findingStore = makeFindingStore();
   for (const f of findings) findingStore.rows.push({ ...f, acked: false });
@@ -42,6 +42,8 @@ function svcWith({ findings = [], agents = [{ id: 1, location_id: 10 }, { id: 2,
     findingStore,
     agentsRepo,
     assistant,
+    alertDispatcher,
+    alertLog,
     publishCluster: publishCluster || ((c) => published.push(c)),
     now: () => T,
   });
@@ -226,6 +228,56 @@ test('advisory is generated once, not regenerated on the next sweep', async () =
   await svc.detectAndPersist();
   await svc.detectAndPersist();
   assert.equal(assistant.calls.length, 1); // second sweep sees advisory already set -> no call
+});
+
+// ---- Step 3: cluster-level alerting ---------------------------------------
+
+test('a medium/high cluster fires exactly ONE cluster-level alert, referencing already-alerted members', async () => {
+  const alertDispatcher = makeDispatcher();
+  const alertLog = makeAlertDispatchLogRepo();
+  // Member 'a' was already alerted individually (finding-level).
+  await alertLog.record({ subjectType: 'finding', subjectId: 'a', sentAt: T });
+  const { svc } = svcWith({ findings: highFindings(), alertDispatcher, alertLog });
+  await svc.detectAndPersist();
+  assert.equal(alertDispatcher.clusterCalls.length, 1);
+  const { cluster, group } = alertDispatcher.clusterCalls[0];
+  assert.equal(cluster.metric, 'incident_cluster');
+  assert.equal(cluster.severity, 'WARN'); // max of the two WARN members
+  assert.ok(Array.isArray(cluster.evidence) && cluster.evidence.length === 2);
+  assert.deepEqual(group.memberFindingIds.sort(), ['a', 'b']);
+  assert.deepEqual(group.alreadyAlerted, ['a']); // referenced, not resent
+});
+
+test('a LOW cluster fires NO cluster alert', async () => {
+  const alertDispatcher = makeDispatcher();
+  const { svc } = svcWith({
+    agents: [{ id: 1, location_id: 10 }, { id: 2, location_id: 20 }], // different sites -> low
+    findings: [
+      finding({ id: 'a', hostId: '1', metric: 'cpu', createdAt: ago(90000) }),
+      finding({ id: 'b', hostId: '2', metric: 'cpu', createdAt: ago(30000) }),
+    ],
+    alertDispatcher,
+  });
+  await svc.detectAndPersist();
+  assert.equal(alertDispatcher.clusterCalls.length, 0);
+});
+
+test('the cluster alert carries the AI advisory when one was generated', async () => {
+  const alertDispatcher = makeDispatcher();
+  const assistant = fakeAssistant();
+  const { svc } = svcWith({ findings: highFindings(), assistant, alertDispatcher });
+  await svc.detectAndPersist();
+  assert.equal(alertDispatcher.clusterCalls.length, 1);
+  assert.equal(alertDispatcher.clusterCalls[0].group.advisory, 'Likely a shared uplink fault at the site. Check the site switch/WAN.');
+  assert.match(alertDispatcher.clusterCalls[0].cluster.explanation, /uplink/);
+});
+
+test('a dispatcher failure never breaks the sweep', async () => {
+  const alertDispatcher = makeDispatcher({ dispatchCluster: async () => { throw new Error('smtp down'); } });
+  const { svc, repo } = svcWith({ findings: highFindings(), alertDispatcher });
+  const summary = await svc.detectAndPersist();
+  assert.equal(summary.created, 1);
+  assert.equal(repo.rows.length, 1); // cluster still persisted
 });
 
 // ---- best-effort -----------------------------------------------------------

@@ -92,6 +92,33 @@ advice never travels without the underlying evidence list. Best-effort: the assi
 being off, a provider failure, or an "insufficient" answer simply leaves `advisory`
 NULL and never affects the sweep. `low`-confidence clusters get no advisory.
 
+## Cluster-level alerting (Step 3)
+
+A cluster fires **one** alert (not one per member finding) through the **existing**
+channels (email/webhook/syslog, and — via the integrations dispatcher — ITSM/CMDB),
+gated the same way as the advisory (**medium/high** only). It must not duplicate the
+alerts member findings already sent, so it **references** them instead of resending:
+
+- **Durable alert-dispatch log** (`alert_dispatch_log`, migration 058, repo
+  `src/repositories/alertDispatchLogRepository.js`). The dispatcher records every
+  send: finding-level rows (`subject_type='finding'`) and cluster-level rows
+  (`subject_type='cluster'`).
+- **Fire once per cluster** — `dispatcher.dispatchCluster(cluster, group)` checks
+  `alertLog.existsForCluster(id)` (awaited before returning) so a cluster alerts at
+  most once **even across restarts** (the in-memory throttle wouldn't survive one).
+- **Reference, don't resend** — the service calls `alertLog.listAlertedFindings(memberIds)`
+  and passes the result as `group.alreadyAlerted`; the cluster alert names how many
+  members were already notified individually. It never re-fires their alerts (it's a
+  single new cluster alert). The alert carries the member evidence + the advisory.
+- Channels format the cluster like a finding (email/webhook gained additive,
+  backward-compatible fields for `memberFindingIds`/`alreadyAlerted`/`advisory` — the
+  finding-level payload shape is unchanged). Cluster alerts bypass the per-(host,metric)
+  throttle and the maintenance silencer (a cluster spans multiple hosts).
+
+The dispatcher change is additive: `createDispatcher` gained an optional `alertLog`
+(default null → no-op) and a `dispatchCluster` method; existing `dispatch` behaviour
+is unchanged apart from the best-effort log write.
+
 ## UI push
 
 Cluster events reuse the **existing** dashboard WebSocket (`/ws/dashboard`) — the
@@ -111,6 +138,5 @@ derived read-model.
 
 ## Not yet wired (later phases)
 
-- **Cluster-level alerting** (Step 3) — fire once per cluster through the existing
-  channels, referencing (not resending) alerts already sent for member findings.
-- A read API / dashboard view over `incident_clusters`.
+- A read API / dashboard view over `incident_clusters` (the data + WS push exist;
+  no REST route / `views.*` tab yet).

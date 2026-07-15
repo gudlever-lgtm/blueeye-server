@@ -13,11 +13,28 @@ function createWebhookChannel({ config = {}, fetchImpl = globalThis.fetch, logge
     if (!config.url) return { ok: false, detail: 'no webhook url configured' };
     if (typeof fetchImpl !== 'function') return { ok: false, detail: 'no fetch implementation' };
 
+    // Cluster-level alerts carry memberFindingIds in the group; surface those extra
+    // fields (advisory + the referenced, not-resent members) without changing the
+    // finding-level payload shape.
+    const isCluster = group && Array.isArray(group.memberFindingIds);
     const body = JSON.stringify({
-      type: 'finding',
+      type: isCluster ? 'incident_cluster' : 'finding',
       sentAt: new Date().toISOString(),
       finding,
-      group: group ? { likelyCause: group.likelyCause, hint: group.hint } : null,
+      group: group
+        ? {
+          likelyCause: group.likelyCause,
+          hint: group.hint,
+          ...(isCluster
+            ? {
+              confidence: group.confidence,
+              advisory: group.advisory,
+              memberFindingIds: group.memberFindingIds,
+              alreadyAlerted: group.alreadyAlerted,
+            }
+            : {}),
+        }
+        : null,
     });
     const headers = { 'Content-Type': 'application/json' };
     if (config.secret) {

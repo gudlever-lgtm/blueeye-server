@@ -30,6 +30,11 @@ function createCrossAgentClusterService({
   // confidence, a cluster-level root-cause advisory is generated from the member
   // findings. Never surfaced without the member evidence.
   assistant = null,
+  // Opt-in alerting: the shared alerting dispatcher + the durable alert log. When a
+  // cluster reaches medium/high, ONE cluster-level alert fires through the existing
+  // channels, referencing (not resending) member findings already alerted.
+  alertDispatcher = null,
+  alertLog = null,
   correlator = createCrossAgentCorrelator({ windowMs: DEFAULT_WINDOW_MS }),
   windowMs = DEFAULT_WINDOW_MS,
   // No new member finding within this window → the cluster is resolved (findings
@@ -84,13 +89,15 @@ function createCrossAgentClusterService({
   // only when the assistant is enabled. Best-effort — an assistant/provider failure
   // never affects the sweep, and an "insufficient context" / empty answer is never
   // surfaced as advice.
+  // Returns the advisory text now on the cluster (existing, freshly-generated, or
+  // null) so the caller can fold it into the cluster alert.
   async function maybeAdvise(clusterId, cluster, membersById, existingAdvisory) {
-    if (existingAdvisory) return;                                   // already advised
-    if (!ADVISORY_CONFIDENCE.has(cluster.confidence)) return;       // low = no advisory
-    if (!assistant || typeof assistant.suggestClusterCause !== 'function') return;
-    if (typeof assistant.isEnabled === 'function' && !assistant.isEnabled()) return; // opt-in
+    if (existingAdvisory) return existingAdvisory;                  // already advised
+    if (!ADVISORY_CONFIDENCE.has(cluster.confidence)) return null;  // low = no advisory
+    if (!assistant || typeof assistant.suggestClusterCause !== 'function') return null;
+    if (typeof assistant.isEnabled === 'function' && !assistant.isEnabled()) return null; // opt-in
     const members = cluster.memberFindingIds.map((id) => membersById.get(id)).filter(Boolean);
-    if (members.length === 0) return;                              // no evidence -> no advice
+    if (members.length === 0) return null;                         // no evidence -> no advice
 
     let answer;
     try {
@@ -98,9 +105,9 @@ function createCrossAgentClusterService({
       answer = r && typeof r.answer === 'string' ? r.answer.trim() : '';
     } catch (err) {
       logger.warn(`cross-agent: advisory generation failed (${err.message})`);
-      return;
+      return null;
     }
-    if (!answer || answer === INCIDENT_INSUFFICIENT_ANSWER) return; // never surface non-advice
+    if (!answer || answer === INCIDENT_INSUFFICIENT_ANSWER) return null; // never surface non-advice
 
     try {
       const ok = await clustersRepo.setAdvisory(clusterId, answer);
@@ -117,6 +124,52 @@ function createCrossAgentClusterService({
     } catch (err) {
       logger.warn(`cross-agent: could not store advisory for cluster ${clusterId} (${err.message})`);
     }
+    return answer;
+  }
+
+  // Step 3: fires ONE cluster-level alert for a medium/high cluster through the
+  // existing channels, referencing (not resending) the members already alerted
+  // individually. The dispatcher dedups it durably (once per cluster). Best-effort.
+  async function maybeAlert(clusterId, cluster, members) {
+    if (!alertDispatcher || typeof alertDispatcher.dispatchCluster !== 'function') return;
+    if (!ADVISORY_CONFIDENCE.has(cluster.confidence)) return; // medium/high only
+    if (members.length === 0) return;                         // no evidence -> no alert
+
+    let alreadyAlerted = [];
+    if (alertLog && typeof alertLog.listAlertedFindings === 'function') {
+      try { alreadyAlerted = await alertLog.listAlertedFindings(cluster.memberFindingIds); } catch { alreadyAlerted = []; }
+    }
+    // Finding-shaped subject so the existing channels format it unchanged.
+    const clusterAlert = {
+      clusterId,
+      id: `cluster:${clusterId}`,
+      hostId: `${Array.isArray(cluster.hostIds) ? cluster.hostIds.length : members.length} agents`,
+      metric: 'incident_cluster',
+      kind: 'CLUSTER',
+      severity: cluster.severity || 'WARN',
+      explanation: cluster.advisory || cluster.suspectedCommonCause || 'Cross-agent incident cluster',
+      deviation: null,
+      evidence: members.map(evidenceRef),
+      createdAt: now(),
+    };
+    const group = {
+      likelyCause: null,
+      hint: cluster.suspectedCommonCause || null,
+      confidence: cluster.confidence,
+      advisory: cluster.advisory || null,
+      memberFindingIds: cluster.memberFindingIds,
+      alreadyAlerted,
+    };
+    try {
+      await alertDispatcher.dispatchCluster(clusterAlert, group);
+    } catch (err) {
+      logger.warn(`cross-agent: cluster alert failed (${err.message})`);
+    }
+  }
+
+  // Member finding objects for a cluster, from the sweep's loaded findings.
+  function membersOf(memberFindingIds, membersById) {
+    return memberFindingIds.map((id) => membersById.get(id)).filter(Boolean);
   }
 
   // Runs one detection pass: load recent findings across all hosts, detect
@@ -169,7 +222,9 @@ function createCrossAgentClusterService({
             summary.updated += 1;
             existing.memberFindingIds = merged; // keep local view consistent for later candidates
             publishCluster({ ...candidate, id: existing.id, status: 'open', memberFindingIds: merged, updated: true });
-            await maybeAdvise(existing.id, { ...candidate, memberFindingIds: merged }, membersById, existing.advisory);
+            const mergedCandidate = { ...candidate, memberFindingIds: merged };
+            const advisory = await maybeAdvise(existing.id, mergedCandidate, membersById, existing.advisory);
+            await maybeAlert(existing.id, { ...mergedCandidate, advisory }, membersOf(merged, membersById));
           }
         } else {
           const id = await clustersRepo.create({
@@ -183,7 +238,8 @@ function createCrossAgentClusterService({
           const created = { ...candidate, id, status: 'open' };
           open.push({ id, memberFindingIds: candidate.memberFindingIds, status: 'open' });
           publishCluster(created);
-          await maybeAdvise(id, candidate, membersById, null);
+          const advisory = await maybeAdvise(id, candidate, membersById, null);
+          await maybeAlert(id, { ...candidate, advisory }, membersOf(candidate.memberFindingIds, membersById));
         }
       } catch (err) {
         logger.warn(`cross-agent: could not persist cluster (${err.message})`);

@@ -816,3 +816,21 @@ CREATE TABLE IF NOT EXISTS incident_clusters (
   PRIMARY KEY (id),
   KEY idx_incident_clusters_status_detected (status, detected_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Durable alert-dispatch log (migration 058): one row per alert actually sent.
+-- finding rows let a cluster alert reference members already alerted individually;
+-- cluster rows make "fire once per cluster" durable. Metadata only. See
+-- src/repositories/alertDispatchLogRepository.js.
+CREATE TABLE IF NOT EXISTS alert_dispatch_log (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  subject_type ENUM('finding', 'cluster') NOT NULL,
+  subject_id VARCHAR(64) NOT NULL,
+  host_id VARCHAR(64) NULL DEFAULT NULL,
+  metric VARCHAR(120) NULL DEFAULT NULL,
+  severity VARCHAR(16) NULL DEFAULT NULL,
+  channels VARCHAR(255) NULL DEFAULT NULL,
+  sent_at DATETIME NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_alert_dispatch_subject (subject_type, subject_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

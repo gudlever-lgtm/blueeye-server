@@ -104,3 +104,70 @@ test('test() returns null for an unknown channel, result for a known one', async
   const r = await d.test('syslog');
   assert.equal(r.ok, true);
 });
+
+// ---- durable alert log + cluster dispatch (Step 3) -------------------------
+
+function fakeLog() {
+  const rows = [];
+  return {
+    rows,
+    record: async (r) => { rows.push(r); return rows.length; },
+    existsForCluster: async (id) => rows.some((r) => r.subjectType === 'cluster' && String(r.subjectId) === String(id)),
+    listAlertedFindings: async (ids) => {
+      const w = new Set((ids || []).map(String));
+      return [...new Set(rows.filter((r) => r.subjectType === 'finding' && w.has(String(r.subjectId))).map((r) => String(r.subjectId)))];
+    },
+  };
+}
+
+const flush = () => new Promise((r) => setImmediate(r));
+
+test('dispatch records a finding-level alert in the durable log when a channel was attempted', async () => {
+  const syslog = chan();
+  const alertLog = fakeLog();
+  const d = createDispatcher({ config: baseConfig(), channels: { syslog }, alertLog, now: () => 0 });
+  await d.dispatch(finding({ id: 'f-1', severity: 'WARN' }));
+  await flush(); // finding record is fire-and-forget
+  assert.equal(alertLog.rows.length, 1);
+  assert.equal(alertLog.rows[0].subjectType, 'finding');
+  assert.equal(alertLog.rows[0].subjectId, 'f-1');
+  assert.match(alertLog.rows[0].channels, /syslog/);
+});
+
+test('dispatch does NOT record when no channel was attempted (below minSeverity)', async () => {
+  const webhook = chan(); // baseConfig webhook minSeverity = CRIT
+  const alertLog = fakeLog();
+  const d = createDispatcher({
+    config: baseConfig({ channels: { email: { enabled: false }, syslog: { enabled: false } } }),
+    channels: { webhook }, alertLog, now: () => 0,
+  });
+  await d.dispatch(finding({ severity: 'WARN' })); // below CRIT -> not attempted
+  await flush();
+  assert.equal(alertLog.rows.length, 0);
+});
+
+test('dispatchCluster fires once per cluster (durable dedup) and records a cluster row', async () => {
+  const syslog = chan();
+  const alertLog = fakeLog();
+  const d = createDispatcher({ config: baseConfig(), channels: { syslog }, alertLog, now: () => 0 });
+  const cluster = { clusterId: 7, id: 'cluster:7', hostId: '2 agents', metric: 'incident_cluster', kind: 'CLUSTER', severity: 'CRIT', explanation: 'x', evidence: [{}] };
+  const r1 = await d.dispatchCluster(cluster, { memberFindingIds: ['a', 'b'], alreadyAlerted: ['a'] });
+  const r2 = await d.dispatchCluster(cluster, { memberFindingIds: ['a', 'b'] });
+  assert.equal(r1.dispatched, true);
+  assert.equal(r2.dispatched, false);
+  assert.equal(r2.reason, 'already-sent');
+  assert.equal(syslog.calls.length, 1); // fired exactly once
+  assert.equal(alertLog.rows.filter((x) => x.subjectType === 'cluster').length, 1);
+  // The channel received the cluster subject + the member-reference group.
+  assert.equal(syslog.calls[0].g.memberFindingIds.length, 2);
+  assert.deepEqual(syslog.calls[0].g.alreadyAlerted, ['a']);
+});
+
+test('dispatchCluster is a no-op when alerting is disabled', async () => {
+  const syslog = chan();
+  const d = createDispatcher({ config: baseConfig({ enabled: false }), channels: { syslog }, alertLog: fakeLog(), now: () => 0 });
+  const r = await d.dispatchCluster({ clusterId: 1, metric: 'incident_cluster', severity: 'CRIT' }, {});
+  assert.equal(r.dispatched, false);
+  assert.equal(r.reason, 'disabled');
+  assert.equal(syslog.calls.length, 0);
+});

@@ -850,12 +850,32 @@ function makeFlowPipeline(overrides = {}) {
 // A fake alerting dispatcher (records dispatch calls; knows three channels).
 function makeDispatcher(overrides = {}) {
   const calls = [];
+  const clusterCalls = [];
   return {
     calls,
+    clusterCalls,
     dispatch: overrides.dispatch || (async (finding, group) => { calls.push({ finding, group }); return { dispatched: true, results: [] }; }),
+    dispatchCluster: overrides.dispatchCluster || (async (cluster, group) => { clusterCalls.push({ cluster, group }); return { dispatched: true, results: [] }; }),
     describe: overrides.describe || (() => ({ enabled: false, cooldownMs: 0, channels: {} })),
     channelNames: overrides.channelNames || (() => ['email', 'webhook', 'syslog']),
     test: overrides.test || (async (channel) => ({ channel, ok: true, detail: 'test' })),
+  };
+}
+
+// A fake durable alert-dispatch log (in-memory, stateful) — mirrors
+// alertDispatchLogRepository's surface for cluster-alert dedup + member referencing.
+function makeAlertDispatchLogRepo(overrides = {}) {
+  const rows = [];
+  let seq = 0;
+  return {
+    rows,
+    record: overrides.record || (async (row) => { const id = (seq += 1); rows.push({ id, ...row }); return id; }),
+    existsForCluster: overrides.existsForCluster || (async (clusterId) => rows.some((r) => r.subjectType === 'cluster' && String(r.subjectId) === String(clusterId))),
+    listAlertedFindings: overrides.listAlertedFindings || (async (findingIds) => {
+      const want = new Set((Array.isArray(findingIds) ? findingIds : []).map(String));
+      return [...new Set(rows.filter((r) => r.subjectType === 'finding' && want.has(String(r.subjectId))).map((r) => String(r.subjectId)))];
+    }),
+    list: overrides.list || (async ({ subjectType = null } = {}) => rows.filter((r) => !subjectType || r.subjectType === subjectType)),
   };
 }
 
@@ -1610,6 +1630,7 @@ module.exports = {
   makeIncidentsRepo,
   makeIncidentCasesRepo,
   makeIncidentClustersRepo,
+  makeAlertDispatchLogRepo,
   makeRemediationPlaybooksRepo,
   makeIncidentCaseService,
   makeConfigSnapshotsRepo,

@@ -56,6 +56,7 @@ const { createConfigSnapshotsRepository } = require('./repositories/configSnapsh
 const { createIncidentCaseService } = require('./incidentCases/incidentCaseService');
 const { createIncidentAutoResolveJob } = require('./incidentCases/autoResolveJob');
 const { createIncidentClustersRepository } = require('./repositories/incidentClustersRepository');
+const { createAlertDispatchLogRepository } = require('./repositories/alertDispatchLogRepository');
 const { createCrossAgentClusterService } = require('./analysis/crossAgentClusterService');
 const { createCrossAgentClusterJob } = require('./analysis/crossAgentClusterJob');
 const { createAssistant } = require('./analysis/assistant');
@@ -424,6 +425,10 @@ function start() {
   // as a leader-only sweep (below) — off the ingest hot path — and pushes cluster
   // events over the SAME dashboard WebSocket as findings.
   const incidentClustersRepo = createIncidentClustersRepository(db);
+  // Durable alert-dispatch log: lets a cluster alert fire once + reference (not
+  // resend) member findings already alerted individually. Passed to the dispatcher
+  // (records each send) and the cross-agent service (reads it).
+  const alertDispatchLogRepo = createAlertDispatchLogRepository(db);
   // The service is wired below, once the opt-in AI assistant exists — it uses the
   // assistant (when enabled) for a cluster-level root-cause advisory.
 
@@ -454,6 +459,7 @@ function start() {
       if (name === 'webhook') return featureGate.isFeatureEnabled('alerts_webhook') || featureGate.isFeatureEnabled('alerting');
       return featureGate.isFeatureEnabled('alerting');
     },
+    alertLog: alertDispatchLogRepo,
     logger,
   });
   // Maintenance windows suppress notifications (findings still record). The
@@ -520,6 +526,8 @@ function start() {
     findingStore,
     agentsRepo,
     assistant,
+    alertDispatcher: dispatcher,
+    alertLog: alertDispatchLogRepo,
     publishCluster: (cluster) => (dashboardWs ? dashboardWs.broadcast({ type: 'incident_cluster', payload: cluster }) : 0),
     logger,
   });

@@ -11,7 +11,7 @@ const {
   makeApp, makeAgentsRepo, makeFindingStore, makeIncidentsRepo,
   makeAuditEventsRepo, makeIncidentCasesRepo, makeRemediationPlaybooksRepo, authHeader,
 } = require('../test-support/fakes');
-const { buildTargetTimeline } = require('../src/timeline/targetTimeline');
+const { buildTargetTimeline, classifyEvent } = require('../src/timeline/targetTimeline');
 
 const AGENT_ID = 9;
 const WINDOW = '?from=2026-06-01T00:00:00Z&to=2026-06-01T23:59:59Z';
@@ -297,6 +297,18 @@ test('buildTargetTimeline ignores non-lifecycle agent events and null timestamps
   });
   assert.equal(events.length, 1);
   assert.equal(events[0].ref_id, 3);
+});
+
+test('classifyEvent splits change vs symptom (Phase 3)', () => {
+  // Changes: playbook runs, agent reconnect, agent enrolment.
+  assert.equal(classifyEvent({ source: 'playbook', type: 'playbook.success' }), 'change');
+  assert.equal(classifyEvent({ source: 'agent', type: 'agent.online' }), 'change');
+  assert.equal(classifyEvent({ source: 'agent', type: 'agent.enrolled' }), 'change');
+  // Symptoms: another finding, a probe-outage incident, an agent going offline.
+  assert.equal(classifyEvent({ source: 'finding', type: 'cpu' }), 'symptom');
+  assert.equal(classifyEvent({ source: 'incident', type: 'incident.reachability' }), 'symptom');
+  assert.equal(classifyEvent({ source: 'agent', type: 'agent.offline' }), 'symptom');
+  assert.equal(classifyEvent(null), 'symptom');
 });
 
 test('buildTargetTimeline caps to limit (most recent)', () => {

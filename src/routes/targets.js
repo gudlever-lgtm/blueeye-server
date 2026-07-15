@@ -4,7 +4,6 @@ const express = require('express');
 const { asyncHandler } = require('../middleware/asyncHandler');
 const { requireAuth, requireRole } = require('../auth/middleware');
 const { ROLES } = require('../auth/roles');
-const { createTargetTimelineService } = require('../timeline/targetTimelineService');
 
 const DEFAULT_WINDOW_MS = 24 * 60 * 60 * 1000; // last 24h when from/to omitted
 const MAX_LIMIT = 500;
@@ -26,18 +25,9 @@ function parseDate(v) {
 // remediation playbook runs into one chronological (newest-first) list. RBAC
 // follows the existing viewer<operator<admin read convention (same as
 // /api/incidents/:id/timeline). Read-only; no writes, no schema changes.
-function createTargetsRouter({
-  agentsRepo,
-  findingStore,
-  incidentsRepo,
-  auditEventsRepo,
-  remediationPlaybooksRepo,
-}) {
+function createTargetsRouter({ agentsRepo, timelineService }) {
   const router = express.Router();
   const reader = requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN);
-  const timelineService = createTargetTimelineService({
-    findingStore, incidentsRepo, auditEventsRepo, remediationPlaybooksRepo,
-  });
 
   router.get('/:id/timeline', requireAuth, reader, asyncHandler(async (req, res) => {
     const id = parseTargetId(req.params.id);

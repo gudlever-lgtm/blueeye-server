@@ -30,6 +30,7 @@ const { createProbesRouter } = require('./probes');
 const { createReportsRouter } = require('./reports');
 const { createIncidentsRouter } = require('./incidents');
 const { createTargetsRouter } = require('./targets');
+const { createTargetTimelineService } = require('../timeline/targetTimelineService');
 const { createDeviceConfigRouter } = require('./deviceConfig');
 const { createAskCache } = require('../incidentCases/askCache');
 const { createThresholdsRouter } = require('./thresholds');
@@ -204,7 +205,12 @@ function createApiRouter({
   router.use('/locations', createLocationsRouter({ locationsRepo, resultsRepo }));
   router.use('/license', createLicenseRouter({ licenseManager, featureGate, planService, usageService, auditLogger }));
   router.use('/system', createSystemRouter({ systemInfo, agentSourceStore, agentBinaryStore, releaseStore }));
-  if (findingStore) router.use('/api/findings', createFindingsRouter({ findingStore }));
+  // Shared per-target timeline service (Phase 1 merge/fan-out) — powers both the
+  // /api/targets timeline and the /api/findings/:id/context change-diff.
+  const targetTimelineService = findingStore
+    ? createTargetTimelineService({ findingStore, incidentsRepo, auditEventsRepo, remediationPlaybooksRepo })
+    : null;
+  if (findingStore) router.use('/api/findings', createFindingsRouter({ findingStore, timelineService: targetTimelineService }));
   if (assistant) router.use('/api/assistant', createAssistantRouter({ assistant, featureGate }));
   if (flowsRepo) router.use('/api/geo', createGeoRouter({ flowsRepo, agentsRepo, findingStore, tileConfig: geoTileConfig, getMapConfig, geoProvider, featureGate }));
   if (dispatcher) router.use('/api/alerting', createAlertingRouter({ dispatcher }));
@@ -233,7 +239,7 @@ function createApiRouter({
   if (incidentCasesRepo && findingStore) router.use('/api/incidents', createIncidentsRouter({ incidentCasesRepo, findingStore, auditLogger, auditEventsRepo, auditLogRepo, configSnapshotsRepo, agentsRepo, assistant, featureGate, askCache: createAskCache(), remediationPlaybooksRepo }));
   // Per-target (per-agent) incident timeline — merges findings, probe-outage
   // incidents, agent connect/disconnect and playbook runs (read-only, viewer+).
-  if (agentsRepo && findingStore) router.use('/api/targets', createTargetsRouter({ agentsRepo, findingStore, incidentsRepo, auditEventsRepo, remediationPlaybooksRepo }));
+  if (agentsRepo && targetTimelineService) router.use('/api/targets', createTargetsRouter({ agentsRepo, timelineService: targetTimelineService }));
   // Device config history (operator/admin, masked) — Fase 3.
   if (configSnapshotsRepo) router.use('/api/devices', createDeviceConfigRouter({ configSnapshotsRepo, agentsRepo, auditLogger }));
   if (thresholdsRepo) router.use('/api/thresholds', createThresholdsRouter({ thresholdsRepo, locationsRepo }));

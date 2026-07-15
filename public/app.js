@@ -2903,9 +2903,52 @@ function findingRow(agentName, f) {
       f.kind === 'FLATLINE' ? el('span', { class: 'muted' }, ' flatline') : null),
     el('td', {}, dev),
     el('td', {}, el('div', {}, f.explanation || '–'), corr),
-    el('td', {}, action));
+    el('td', {}, action, action ? ' ' : null,
+      el('button', { class: 'small ghost', title: 'What changed on this device just before the anomaly', onclick: (e) => toggleFindingContext(f, e.target) }, 'What changed?')));
   tr.dataset.findingId = f.id;
   return tr;
+}
+
+// Phase 3 — "what changed before this": expands an inline row under a finding
+// showing the CHANGE-type events on its device in the window before the trigger
+// (GET /api/findings/:id/context). Reuses timelineRowEl (Phase 2). Explicit
+// loading/empty/error states.
+function toggleFindingContext(f, btn) {
+  const tr = btn.closest('tr');
+  if (!tr) return;
+  const next = tr.nextElementSibling;
+  if (next && next.classList.contains('finding-context-row')) {
+    next.remove();
+    btn.textContent = 'What changed?';
+    return;
+  }
+  const cell = el('td', { colspan: '7', class: 'finding-context' });
+  tr.after(el('tr', { class: 'finding-context-row' }, cell));
+  btn.textContent = 'Hide changes';
+  loadFindingContext(f, cell);
+}
+
+async function loadFindingContext(f, container) {
+  container.replaceChildren(el('span', { class: 'muted' }, 'Loading changes…'));
+  let data;
+  try {
+    data = await api(`/api/findings/${encodeURIComponent(f.id)}/context`);
+  } catch (err) {
+    container.replaceChildren(
+      el('span', { class: 'error' }, err.message), ' ',
+      el('button', { class: 'small', onclick: () => loadFindingContext(f, container) }, 'Retry'));
+    return;
+  }
+  const changes = Array.isArray(data.changes) ? data.changes : [];
+  const agentId = Number(f.hostId);
+  const kids = [el('div', { class: 'muted fc-head' }, 'What changed before this anomaly')];
+  if (data.partial) kids.push(el('div', { class: 'tl-partial callout' }, `⚠ ${TimelineView.partialNotice(data.failedSources)}`));
+  if (!changes.length) {
+    kids.push(el('p', { class: 'muted' }, 'No changes detected in this window.'));
+  } else {
+    kids.push(el('ul', { class: 'timeline' }, ...changes.map((e) => timelineRowEl(e, { agentId: Number.isInteger(agentId) ? agentId : null }))));
+  }
+  container.replaceChildren(...kids);
 }
 
 async function ackFinding(f, btn) {

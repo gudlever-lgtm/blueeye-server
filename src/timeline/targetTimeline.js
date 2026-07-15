@@ -175,8 +175,31 @@ function buildTargetTimeline({
   return valid;
 }
 
+// Change-vs-symptom classification for the "what changed before this finding"
+// read (Phase 3). A CHANGE is something that acted on or altered the target — a
+// remediation playbook run, an agent reconnect/restart (agent.online) or an
+// agent enrolment. A SYMPTOM is the problem manifesting — another anomaly
+// finding, a probe-outage incident, or an agent going offline. This is a
+// PROPOSED split (per the Phase 3 audit): each membership is a one-line change.
+// Kept here, next to the mappers, so both the timeline and the change-diff share
+// one definition.
+const CHANGE_EVENT_TYPES = new Set(['agent.online', 'agent.enrolled']);
+
+function classifyEvent(event) {
+  if (!event) return 'symptom';
+  if (event.source === SOURCES.PLAYBOOK) return 'change';
+  if (CHANGE_EVENT_TYPES.has(event.type)) return 'change';
+  return 'symptom';
+}
+
+function isChangeEvent(event) {
+  return classifyEvent(event) === 'change';
+}
+
 module.exports = {
   buildTargetTimeline,
+  classifyEvent,
+  isChangeEvent,
   normalizeSeverity,
   mapFinding,
   mapIncident,

@@ -101,7 +101,7 @@ Mounted in `src/routes/index.js`. User endpoints use JWT + roles
 | `/api/api-tokens` | apiTokens.js | admin (gated `api_access`) | **API tokens** — mint/list/revoke; secret shown once, hashed at rest |
 | `/api/audit-log` | auditLog.js | admin (gated `audit_log`) | **unified audit log** — auth/user/role/license/report/api_token events; `?category=&user=&limit=` |
 | `/system` | system.js | viewer+ | storage/disk + **MySQL & TimescaleDB** db sizes (split) + ingest estimate |
-| `/api/findings` | findings.js | viewer+ | analysis findings + ack |
+| `/api/findings` | findings.js | viewer+ | analysis findings + ack + **`GET /:id/context`** ("what changed before this": change-type timeline events in a window before the finding's trigger, default 30 min — reuses the target-timeline merge) |
 | `/api/assistant` | assistant.js | viewer+ (gated) | opt-in AI: `/explain` (per-host Q&A) + **`/location-summary`** (per-location "what's going on?") |
 | `/api/geo` | geo.js | gated | geo overview + flow selection |
 | `/api/alerting` | alerting.js | admin | channel config + test |

@@ -67,6 +67,40 @@ frontend colours the whole timeline from the findings palette (probe-outage
   for incidents `agent_id` and audit_events `actor_id`. The service centralises
   that mapping. See `REFACTOR-AUDIT-timeline.md` for the full identity analysis.
 
+## "What changed before this" (Phase 3)
+
+```
+GET /api/findings/:id/context?window=<minutes>
+```
+
+Returns the **change-type** timeline events on the finding's device in the
+window immediately before the finding's trigger timestamp
+(`findings.created_at`, default **30** min, capped 24h). Reuses the Phase 1
+merge (`getTimeline` over the same sources), then filters with `classifyEvent`
+— not a separate query path. Chronological, **closest-to-trigger first**.
+
+- `viewer+`. **404** unknown finding; **400** invalid `window`; **200 with `[]`**
+  (not 404) when no changes; partial-failure handling identical to the timeline.
+- Response: `{ changes, partial, failedSources, trigger: { findingId, at }, window }`.
+
+### change vs symptom (`classifyEvent`)
+
+A **change** acted on/altered the target; a **symptom** is the problem
+manifesting. Proposed split (one line each to adjust in `targetTimeline.js`):
+
+| event | class |
+|---|---|
+| playbook run (`playbook.*`) | change |
+| agent reconnect (`agent.online`) | change |
+| agent enrolment (`agent.enrolled`) | change |
+| anomaly finding (`finding.*`) | symptom |
+| probe-outage incident (`incident.*`) | symptom |
+| agent offline (`agent.offline`) | symptom |
+
+The frontend surfaces this as an inline **"What changed?"** expander per row on
+the Findings table (`toggleFindingContext`/`loadFindingContext` in `app.js`),
+reusing the Phase 2 `timelineRowEl` row.
+
 ## Where things live
 
 - Route: `src/routes/targets.js` (mounted `/api/targets` in `routes/index.js`).

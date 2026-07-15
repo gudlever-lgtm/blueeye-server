@@ -29,6 +29,7 @@ const { createTopologyRouter } = require('./topology');
 const { createProbesRouter } = require('./probes');
 const { createReportsRouter } = require('./reports');
 const { createIncidentsRouter } = require('./incidents');
+const { createTargetsRouter } = require('./targets');
 const { createDeviceConfigRouter } = require('./deviceConfig');
 const { createAskCache } = require('../incidentCases/askCache');
 const { createThresholdsRouter } = require('./thresholds');
@@ -230,6 +231,9 @@ function createApiRouter({
   // First-class incidents (incident_cases) wrapping findings — distinct from the
   // probe-outage `incidents` used by /api/reports above.
   if (incidentCasesRepo && findingStore) router.use('/api/incidents', createIncidentsRouter({ incidentCasesRepo, findingStore, auditLogger, auditEventsRepo, auditLogRepo, configSnapshotsRepo, agentsRepo, assistant, featureGate, askCache: createAskCache(), remediationPlaybooksRepo }));
+  // Per-target (per-agent) incident timeline — merges findings, probe-outage
+  // incidents, agent connect/disconnect and playbook runs (read-only, viewer+).
+  if (agentsRepo && findingStore) router.use('/api/targets', createTargetsRouter({ agentsRepo, findingStore, incidentsRepo, auditEventsRepo, remediationPlaybooksRepo, incidentCasesRepo }));
   // Device config history (operator/admin, masked) — Fase 3.
   if (configSnapshotsRepo) router.use('/api/devices', createDeviceConfigRouter({ configSnapshotsRepo, agentsRepo, auditLogger }));
   if (thresholdsRepo) router.use('/api/thresholds', createThresholdsRouter({ thresholdsRepo, locationsRepo }));

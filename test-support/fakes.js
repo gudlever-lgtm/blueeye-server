@@ -161,6 +161,12 @@ function makeIncidentsRepo(overrides = {}) {
     }),
     findById: overrides.findById || (async (id) => { const r = rows.find((x) => x.id === id); return r ? mapOut(r) : null; }),
     list: overrides.list || (async () => rows.map(mapOut)),
+    listForAgent: overrides.listForAgent || (async (agentId, { from = null, to = null } = {}) => rows
+      .filter((r) => r.agent_id === agentId
+        && (to == null || new Date(r.started_at) <= new Date(to))
+        && (from == null || r.resolved_at == null || new Date(r.resolved_at) >= new Date(from)))
+      .sort((a, b) => new Date(b.started_at) - new Date(a.started_at) || b.id - a.id)
+      .map(mapOut)),
   };
 }
 
@@ -562,6 +568,13 @@ function makeAuditEventsRepo(overrides = {}) {
         && (!from || new Date(r.lastSeenAt) >= new Date(from))
         && (!to || new Date(r.lastSeenAt) <= new Date(to)))
       .sort((a, b) => (a.lastSeenAt < b.lastSeenAt ? -1 : 1))
+      .map((r) => ({ ...r, ts: iso(r.ts) }))),
+    findByActor: overrides.findByActor || (async ({ actorType = null, actorId = null, from = null, to = null } = {}) => rows
+      .filter((r) => (!actorType || r.actorType === actorType)
+        && (actorId == null || r.actorId === actorId)
+        && (!from || new Date(r.ts) >= new Date(from))
+        && (!to || new Date(r.ts) <= new Date(to)))
+      .sort((a, b) => (a.ts < b.ts ? 1 : -1))
       .map((r) => ({ ...r, ts: iso(r.ts) }))),
     distinctActions: overrides.distinctActions || (async () => [...new Set(rows.map((r) => r.action))].sort()),
   };

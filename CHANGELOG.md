@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.80.0 — Incident Situation View (timeline + what-changed + evidence)
+
+One page per cross-agent situation (cluster) that answers, under pressure, what is
+happening, where, since when, what changed right before, and what the evidence
+says — "ét fælles billede". Queries + UI only; no new AI/ML. Builds on the Fase-1
+cluster API and reuses the existing timeline, badge and advisory patterns.
+
+### Backend
+- **`GET /api/incident-clusters/:id/timeline`** — one chronologically merged event
+  stream for the cluster's affected agents, from `first_seen − lookback` (default
+  30 min, `?lookback=<minutes>`) to now, merging: member findings, cluster
+  lifecycle transitions, playbook runs, agent connect/disconnect/enrol, and
+  config-change captures. Each event carries `{ timestamp, source, target,
+  severity, summary, ref_id }`. A separate **`whatChanged`** slice flags the
+  sources-c–e events in the pre-incident window. viewer+; 400 on bad lookback,
+  404 unknown cluster, clean 500; partial-failure tolerant (`partial` +
+  `failedSources`, never a blank timeline).
+- Pure merge `src/timeline/incidentTimeline.js` (reuses the per-target mappers,
+  adds `target` + config/state-change sources) + fan-out
+  `src/timeline/incidentTimelineService.js`. New windowed
+  `configSnapshotsRepository.listForDeviceBetween`.
+
+### Frontend
+- **Situations** list (`views.clusters`) + per-situation page (`views.cluster`),
+  cloning the incident list/detail patterns. Panels: header
+  (status/confidence/root-cause/agents + RBAC-aware ack/resolve), a prominent
+  **"What changed"** panel (explicit "no recorded changes" when empty — absence is
+  diagnostic), an **Evidence** panel (Fase-1 confidence breakdown in plain
+  language), the **merged timeline** (filterable by source, severity-coloured,
+  rows deep-link to the affected device), and an optional AI advisory block
+  (rendered read-only from the cluster; an independent failure domain — never
+  breaks the page). Reuses `TimelineView`; page assembly + panels live in the pure,
+  jsdom-tested `public/clusterView.js` (`window.ClusterView`). New nav entry +
+  `PAGE_INFO.clusters` + a `type:'incident_cluster'` branch on the dashboard WS.
+
+### Tests
+- Backend: timeline merge ordering, lookback boundary, what-changed separation,
+  400/401/404/partial/clean-500.
+- Frontend (jsdom): full-data render, empty timeline, advisory disabled, advisory
+  failing (page still renders), timeline failing, RBAC actions, source filter.
+- Installed the declared `jsdom` devDependency so the DOM render tests (and the
+  pre-existing `timelineView` suite) run.
+
 ## 0.79.1 — Cross-agent incident clusters: operator API + lifecycle
 
 Builds the operator-facing surface on top of the existing cross-agent clustering

@@ -18,7 +18,10 @@
     return SEVERITIES[s] ? s : 'INFO';
   }
 
-  var SOURCE_LABELS = { finding: 'Finding', incident: 'Incident', agent: 'Agent', playbook: 'Playbook' };
+  var SOURCE_LABELS = {
+    finding: 'Finding', incident: 'Incident', agent: 'Agent', playbook: 'Playbook',
+    config: 'Config change', status: 'State change',
+  };
   function sourceLabel(source) { return SOURCE_LABELS[source] || String(source == null ? '—' : source); }
 
   // Time-range presets for the selector. `custom` carries no ms (the caller
@@ -88,6 +91,10 @@
       severity: severityClass(e.severity),
       summary: e.summary || e.type || '',
       refId: e.ref_id != null ? e.ref_id : null,
+      // The agent this event concerns. Present on cross-agent (cluster) timelines
+      // so each row can deep-link to its OWN target; null/absent on single-target
+      // timelines (the caller passes a fixed agentId instead).
+      target: e.target != null ? e.target : null,
     };
   }
 
@@ -100,6 +107,22 @@
   function deepLink(event, agentId) {
     if (agentId == null) return null;
     return { view: 'agent', id: agentId, source: event ? event.source : null, refId: event ? event.ref_id : null };
+  }
+
+  // Distinct sources present in an event list, in first-seen order — powers the
+  // "filter by source" control on the cluster timeline.
+  function distinctSources(events) {
+    var seen = {}; var out = [];
+    (Array.isArray(events) ? events : []).forEach(function (e) {
+      if (e && e.source && !seen[e.source]) { seen[e.source] = 1; out.push(e.source); }
+    });
+    return out;
+  }
+
+  // Filter an event list to one source (empty/null source → all events).
+  function filterBySource(events, source) {
+    if (!source) return Array.isArray(events) ? events.slice() : [];
+    return (Array.isArray(events) ? events : []).filter(function (e) { return e && e.source === source; });
   }
 
   // Human notice for a partial response (some sources unavailable). Never hidden.
@@ -126,7 +149,12 @@
     var m = rowModel(event);
     var fmt = typeof opts.formatTime === 'function' ? opts.formatTime : function (t) { return t == null ? '' : String(t); };
     var li = elem(doc, 'li', 'tl tl-src-' + (m.source || 'x'));
-    var link = opts.agentId != null ? deepLink(event, opts.agentId) : null;
+    // Fixed agentId (single-target timeline) wins; otherwise fall back to the
+    // event's own target (cross-agent cluster timeline), so each row links to the
+    // agent it actually concerns. A targetless event (e.g. cluster state change)
+    // is not clickable.
+    var linkAgent = opts.agentId != null ? opts.agentId : m.target;
+    var link = linkAgent != null ? deepLink(event, linkAgent) : null;
     if (link && typeof opts.onOpen === 'function') {
       li.className += ' clickable';
       li.title = 'Open device (' + m.sourceLabel + (m.refId != null ? ' #' + m.refId : '') + ')';
@@ -174,6 +202,8 @@
     resolveState: resolveState,
     rowModel: rowModel,
     deepLink: deepLink,
+    distinctSources: distinctSources,
+    filterBySource: filterBySource,
     partialNotice: partialNotice,
     renderRow: renderRow,
     renderInto: renderInto,

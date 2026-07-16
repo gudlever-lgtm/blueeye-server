@@ -27,6 +27,8 @@ const { buildClusterDetail } = require('../analysis/clusterView');
 const VALID_STATUSES = ['open', 'acknowledged', 'resolved', 'closed'];
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
+const DEFAULT_LOOKBACK_MINUTES = 30;
+const MAX_LOOKBACK_MINUTES = 24 * 60; // one day of lookback is plenty
 
 function parseId(raw) {
   const n = Number(raw);
@@ -47,7 +49,7 @@ function parseIntParam(raw, fallback, { min = 0, max = Number.MAX_SAFE_INTEGER }
   return n;
 }
 
-function createIncidentClustersRouter({ clustersRepo, findingStore = null, auditLogger = null }) {
+function createIncidentClustersRouter({ clustersRepo, findingStore = null, auditLogger = null, timelineService = null }) {
   const router = express.Router();
   const reader = requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN);
   const writer = requireRole(ROLES.OPERATOR, ROLES.ADMIN);
@@ -99,6 +101,26 @@ function createIncidentClustersRouter({ clustersRepo, findingStore = null, audit
 
     const members = await hydrateMembers(cluster.memberFindingIds);
     return res.json({ cluster: buildClusterDetail(cluster, members) });
+  }));
+
+  // GET /api/incident-clusters/:id/timeline — one merged, chronological event
+  // stream for the cluster's affected agents (member findings + cluster state
+  // transitions + playbook runs + agent lifecycle + config changes), plus a
+  // "what changed" slice of the pre-incident lookback window. viewer+.
+  router.get('/:id/timeline', requireAuth, reader, asyncHandler(async (req, res) => {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(400).json({ error: 'id must be a positive integer' });
+
+    // lookback is in MINUTES (default 30, bounded); a garbage value is a 400.
+    const lookback = parseIntParam(req.query.lookback, DEFAULT_LOOKBACK_MINUTES, { min: 1, max: MAX_LOOKBACK_MINUTES });
+    if (lookback === null) return res.status(400).json({ error: `lookback must be 1..${MAX_LOOKBACK_MINUTES} minutes` });
+
+    if (!timelineService || typeof timelineService.getTimeline !== 'function') {
+      return res.status(404).json({ error: 'Timeline not available' });
+    }
+    const result = await timelineService.getTimeline(id, { lookbackMinutes: lookback });
+    if (!result) return res.status(404).json({ error: 'Incident cluster not found' });
+    return res.json(result);
   }));
 
   // POST /api/incident-clusters/:id/ack — acknowledge (operator+). Audited.

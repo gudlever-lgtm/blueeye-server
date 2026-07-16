@@ -485,6 +485,13 @@ function makeConfigSnapshotsRepo(overrides = {}) {
         .sort((a, b) => before(b, a));
       return match[0] ? mapOut(match[0], true) : null;
     }),
+    listForDeviceBetween: overrides.listForDeviceBetween || (async (deviceId, from, to, { limit = 500 } = {}) => rows
+      .filter((r) => r.device_id === deviceId
+        && (!from || new Date(r.captured_at) >= new Date(from))
+        && (!to || new Date(r.captured_at) <= new Date(to)))
+      .sort((a, b) => before(a, b)) // oldest-first, like the real repo
+      .slice(0, limit)
+      .map((r) => mapOut(r, false))),
   };
 }
 

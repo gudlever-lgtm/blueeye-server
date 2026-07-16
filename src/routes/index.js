@@ -32,6 +32,7 @@ const { createIncidentsRouter } = require('./incidents');
 const { createIncidentClustersRouter } = require('./incidentClusters');
 const { createTargetsRouter } = require('./targets');
 const { createTargetTimelineService } = require('../timeline/targetTimelineService');
+const { createIncidentClusterTimelineService } = require('../timeline/incidentTimelineService');
 const { createDeviceConfigRouter } = require('./deviceConfig');
 const { createAskCache } = require('../incidentCases/askCache');
 const { createThresholdsRouter } = require('./thresholds');
@@ -271,7 +272,15 @@ function createApiRouter({
   // First-class incidents (incident_cases) wrapping findings — distinct from the
   // probe-outage `incidents` used by /api/reports above.
   if (incidentCasesRepo && findingStore) router.use('/api/incidents', createIncidentsRouter({ incidentCasesRepo, findingStore, auditLogger, auditEventsRepo, auditLogRepo, configSnapshotsRepo, agentsRepo, assistant, featureGate, askCache: createAskCache(), remediationPlaybooksRepo }));
-  if (incidentClustersRepo) router.use('/api/incident-clusters', createIncidentClustersRouter({ clustersRepo: incidentClustersRepo, findingStore, auditLogger }));
+  if (incidentClustersRepo) {
+    const clusterTimelineService = createIncidentClusterTimelineService({
+      clustersRepo: incidentClustersRepo, findingStore, auditEventsRepo,
+      remediationPlaybooksRepo, incidentsRepo, configSnapshotsRepo, auditLogRepo,
+    });
+    router.use('/api/incident-clusters', createIncidentClustersRouter({
+      clustersRepo: incidentClustersRepo, findingStore, auditLogger, timelineService: clusterTimelineService,
+    }));
+  }
   // Per-target (per-agent) incident timeline — merges findings, probe-outage
   // incidents, agent connect/disconnect and playbook runs (read-only, viewer+).
   if (agentsRepo && targetTimelineService) router.use('/api/targets', createTargetsRouter({ agentsRepo, timelineService: targetTimelineService }));

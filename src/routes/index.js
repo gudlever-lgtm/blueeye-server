@@ -92,6 +92,8 @@ function createApiRouter({
   incidentClustersRepo,
   clusterNotifier,
   alertDispatchLogRepo,
+  evidenceRepo,
+  snapshotService,
   runbooksRepo,
   verificationRunsRepo,
   verificationService,
@@ -283,12 +285,13 @@ function createApiRouter({
     const clusterTimelineService = createIncidentClusterTimelineService({
       clustersRepo: incidentClustersRepo, findingStore, auditEventsRepo,
       remediationPlaybooksRepo, incidentsRepo, configSnapshotsRepo, auditLogRepo,
-      verificationRunsRepo,
+      verificationRunsRepo, evidenceRepo,
     });
     router.use('/api/incident-clusters', createIncidentClustersRouter({
       clustersRepo: incidentClustersRepo, findingStore, auditLogger, timelineService: clusterTimelineService,
       runbooksRepo, playbooksRepo: remediationPlaybooksRepo, verificationService, settingsService, assistant,
       alertLog: alertDispatchLogRepo, notifier: clusterNotifier,
+      evidenceRepo, snapshotService,
     }));
   }
   if (runbooksRepo) router.use('/api/runbooks', createRunbooksRouter({ runbooksRepo, playbooksRepo: remediationPlaybooksRepo }));

@@ -62,6 +62,9 @@ const { createLldpGraphService } = require('./topology/lldpGraphService');
 const { createClusterNotifier } = require('./analysis/clusterNotifier');
 const { createClusterNis2Service } = require('./analysis/clusterNis2');
 const { createClusterAlertGate } = require('./analysis/clusterAlertGate');
+const { createEvidenceSnapshotsRepository } = require('./repositories/evidenceSnapshotsRepository');
+const { createSnapshotService } = require('./evidence/snapshotService');
+const { createEvidenceRetention } = require('./evidence/evidenceRetention');
 const { createVerificationRunsRepository } = require('./repositories/verificationRunsRepository');
 const { createVerificationService } = require('./remediation/verificationService');
 const { createVerificationJob } = require('./remediation/verificationJob');
@@ -574,6 +577,19 @@ function start() {
     logger,
   });
 
+  // Fase 6: read-only evidence snapshot engine — captures a diagnostic snapshot
+  // per affected target when a cluster opens, over the existing (authenticated,
+  // Ed25519-signable) agent-command path. Best-effort, fire-and-forget.
+  const evidenceRepo = createEvidenceSnapshotsRepository(db);
+  const snapshotService = createSnapshotService({
+    evidenceRepo,
+    agentCommander,
+    releaseKeyService,
+    auditLogger,
+    publishCluster: (cluster) => (dashboardWs ? dashboardWs.broadcast({ type: 'incident_cluster', payload: cluster }) : 0),
+    logger,
+  });
+
   const crossAgentClusterService = createCrossAgentClusterService({
     clustersRepo: incidentClustersRepo,
     findingStore,
@@ -583,6 +599,7 @@ function start() {
     alertLog: alertDispatchLogRepo,
     topologyGraph: lldpGraphService,
     notifier: clusterNotifier,
+    snapshotService,
     publishCluster: (cluster) => (dashboardWs ? dashboardWs.broadcast({ type: 'incident_cluster', payload: cluster }) : 0),
     logger,
   });
@@ -680,6 +697,21 @@ function start() {
         stop() { if (t) { clearInterval(t); t = null; } },
       };
     })(),
+    // Fase 6: evidence-snapshot retention (default 90d) — never deletes evidence
+    // on clusters with an unacknowledged CRIT finding. Nightly-ish sweep.
+    (() => {
+      const retention = createEvidenceRetention({ evidenceRepo, clustersRepo: incidentClustersRepo, findingStore, retentionDays: Number(process.env.RETENTION_EVIDENCE_DAYS) || 90, logger });
+      let t = null;
+      return {
+        start() {
+          if (t) return;
+          retention.run().catch(() => {});
+          t = setInterval(() => retention.run().catch(() => {}), 6 * 60 * 60 * 1000);
+          if (t.unref) t.unref();
+        },
+        stop() { if (t) { clearInterval(t); t = null; } },
+      };
+    })(),
   ];
   function startBackgroundJobs() {
     for (const job of backgroundJobs) {
@@ -715,6 +747,8 @@ function start() {
     incidentClustersRepo,
     clusterNotifier,
     alertDispatchLogRepo,
+    evidenceRepo,
+    snapshotService,
     runbooksRepo,
     verificationRunsRepo,
     verificationService,

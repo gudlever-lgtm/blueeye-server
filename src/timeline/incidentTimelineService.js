@@ -43,6 +43,7 @@ function createIncidentClusterTimelineService({
   configSnapshotsRepo = null,
   auditLogRepo = null,
   verificationRunsRepo = null,
+  evidenceRepo = null,
 } = {}) {
   // Member finding objects for the cluster, by id (in member order). Rejects on a
   // store failure so the caller can flag `findings` as a failed source.
@@ -103,6 +104,12 @@ function createIncidentClusterTimelineService({
     return verificationRunsRepo.listForCluster(clusterId);
   }
 
+  // Evidence snapshots captured for the cluster (the 'evidence' source).
+  async function fetchEvidence(clusterId) {
+    if (!evidenceRepo || typeof evidenceRepo.listForCluster !== 'function') return [];
+    return evidenceRepo.listForCluster(clusterId);
+  }
+
   // Returns null if the cluster does not exist (→ 404); otherwise the merged
   // timeline + what-changed slice + partial-failure metadata.
   async function getTimeline(clusterId, { lookbackMinutes = 30, now = () => new Date() } = {}) {
@@ -150,8 +157,10 @@ function createIncidentClusterTimelineService({
     }
     let statusChanges = [];
     let verifications = [];
+    let evidenceSnapshots = [];
     const statusJob = fetchStatusChanges(clusterId);
     const verifyJob = fetchVerifications(clusterId);
+    const evidenceJob = fetchEvidence(clusterId);
 
     const settled = await Promise.allSettled(jobs.map(([, , p]) => p));
     settled.forEach((res, idx) => {
@@ -175,6 +184,12 @@ function createIncidentClusterTimelineService({
     } catch {
       failedNames.add('verifications');
     }
+    try {
+      evidenceSnapshots = await evidenceJob;
+      evidenceSnapshots = Array.isArray(evidenceSnapshots) ? evidenceSnapshots : [];
+    } catch {
+      failedNames.add('evidence');
+    }
 
     for (const n of failedNames) failedSources.push(n);
 
@@ -183,6 +198,7 @@ function createIncidentClusterTimelineService({
       agentSources: [...perAgent.values()],
       statusChanges,
       verifications,
+      evidenceSnapshots,
       firstFindingAt,
       lookbackMs,
     });

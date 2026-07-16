@@ -43,6 +43,10 @@ function createCrossAgentClusterService({
   // clusters keep per-finding alerting (nothing to roll up). Nullable → legacy
   // single cluster-alert via maybeAlert.
   notifier = null,
+  // Fase 6: read-only evidence snapshot engine. On cluster-open it captures a
+  // diagnostic snapshot from each affected target (best-effort, fire-and-forget —
+  // a slow/offline agent NEVER delays clustering). Nullable → no capture.
+  snapshotService = null,
   correlator = createCrossAgentCorrelator({ windowMs: DEFAULT_WINDOW_MS }),
   windowMs = DEFAULT_WINDOW_MS,
   // No new member finding within this window → the cluster is resolved (findings
@@ -291,6 +295,11 @@ function createCrossAgentClusterService({
           // already-opened (no duplicate opened alert).
           open.push({ id, memberFindingIds: candidate.memberFindingIds, status: 'open', alertLastAt: now(), alertLastSeverity: candidate.severity, alertMemberCount: candidate.memberFindingIds.length });
           publishCluster(created);
+          // Fase 6: capture a read-only evidence snapshot per affected target on
+          // open. Fire-and-forget — never blocks the sweep, alerting or the page.
+          if (snapshotService && typeof snapshotService.captureForCluster === 'function') {
+            Promise.resolve().then(() => snapshotService.captureForCluster(id, candidate.hostIds, { trigger: 'auto' })).catch(() => {});
+          }
           const advisory = await maybeAdvise(id, candidate, membersById, null);
           if (notifier && ADVISORY_CONFIDENCE.has(candidate.confidence)) {
             await notifier.notify({

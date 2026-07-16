@@ -31,6 +31,7 @@ const CLUSTER_SOURCES = Object.freeze({
   CONFIG: 'config',
   STATUS: 'status',
   VERIFICATION: 'verification',
+  EVIDENCE: 'evidence',
 });
 
 // Sources c–e in the requirement: playbook executions (c), agent
@@ -40,7 +41,7 @@ const PRE_INCIDENT_SOURCES = new Set([
   CLUSTER_SOURCES.PLAYBOOK, CLUSTER_SOURCES.AGENT, CLUSTER_SOURCES.CONFIG,
 ]);
 
-const SOURCE_ORDER = { finding: 0, incident: 1, agent: 2, playbook: 3, config: 4, status: 5, verification: 6 };
+const SOURCE_ORDER = { finding: 0, incident: 1, agent: 2, playbook: 3, config: 4, status: 5, verification: 6, evidence: 7 };
 
 function toIso(v) {
   if (v == null) return null;
@@ -126,6 +127,29 @@ function mapVerification(v) {
   }];
 }
 
+// An evidence snapshot (cluster_evidence_snapshots row): "evidence snapshot
+// captured" per target, linking (ref_id = snapshot id) to the raw-text viewer.
+// A partial/offline/failed capture is surfaced (WARN) — never a silent gap.
+function mapEvidenceSnapshot(s) {
+  if (!s) return [];
+  const status = s.status || 'pending';
+  const ok = status === 'complete';
+  const okItems = (Array.isArray(s.items) ? s.items : []).filter((i) => i && i.status === 'ok').length;
+  const total = Array.isArray(s.items) ? s.items.length : 0;
+  const summary = status === 'agent-offline'
+    ? `Evidence snapshot skipped — agent ${s.target} offline`
+    : `Evidence snapshot captured on ${s.target} — ${status}${total ? ` (${okItems}/${total} read-only items)` : ''}`;
+  return [{
+    timestamp: toIso(s.capturedAt),
+    source: CLUSTER_SOURCES.EVIDENCE,
+    target: s.target != null ? String(s.target) : null,
+    type: `evidence.${status}`,
+    severity: ok ? 'INFO' : 'WARN',
+    summary,
+    ref_id: s.id,
+  }];
+}
+
 // Sort newest-first, breaking ties by source then ref for deterministic output.
 function sortEvents(events) {
   return events.slice().sort((a, b) => ms(b.timestamp) - ms(a.timestamp)
@@ -153,6 +177,7 @@ function buildIncidentTimeline({
   agentSources = [],
   statusChanges = [],
   verifications = [],
+  evidenceSnapshots = [],
   firstFindingAt = null,
   lookbackMs = 30 * 60 * 1000,
 } = {}) {
@@ -171,6 +196,7 @@ function buildIncidentTimeline({
   // Cluster lifecycle transitions + verification runs are not tied to a single agent.
   for (const s of statusChanges) events.push(...withTarget(mapStatusChange(s), null));
   for (const v of verifications) events.push(...withTarget(mapVerification(v), null));
+  for (const s of evidenceSnapshots) events.push(...mapEvidenceSnapshot(s)); // already carry target
 
   const valid = sortEvents(events.filter((e) => e.timestamp != null));
 
@@ -194,6 +220,7 @@ module.exports = {
   mapConfigChange,
   mapStatusChange,
   mapVerification,
+  mapEvidenceSnapshot,
   CLUSTER_SOURCES,
   PRE_INCIDENT_SOURCES,
 };

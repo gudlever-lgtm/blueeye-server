@@ -1,5 +1,61 @@
 # Changelog
 
+## 0.84.0 — Automated read-only evidence snapshot on cluster open
+
+When a cross-agent cluster opens, BlueEye captures a **READ-ONLY** diagnostic
+snapshot from each affected target over the **existing** authenticated, audited
+agent-command path — then references one compressed blob per (cluster, target)
+from the incident timeline. The capture is bounded and best-effort: it never
+blocks clustering, alerting or the incident page.
+
+**Audit note (premise partly off, as in F3–F5):** agent commands were **not
+Ed25519-signed** before this (only release manifests were), there was **no
+playbook/command executor for read-only diagnostics**, and nothing captured
+point-in-time evidence for a cluster. This phase reuses the existing release
+signing key + the `sendCommandAndWait` command path rather than inventing new
+transport.
+
+### Read-only by contract (defense in depth)
+- Server allowlist `src/evidence/commandAllowlist.js` (`evidence-v1`) is the single
+  source of truth for WHAT may be collected — `iface.counters`, `arp.table`,
+  `snmp.reads`, `agent.state`, every entry `readOnly: true`. A would-be write item
+  simply is not on the list.
+- The **agent enforces its own copy** of the allowlist (`blueeye-agent`
+  `src/evidenceCollector.js`) and hard-refuses any non-allowlisted item **without
+  invoking a collector** — so a compromised/buggy server still cannot make an agent
+  act.
+- The evidence command is **Ed25519-signed** with the existing release key when one
+  is configured; the agent verifies it and refuses a bad signature.
+
+### Bounded + best-effort capture
+- `src/evidence/snapshotService.js` — per-target hard timeout (default 30s),
+  concurrency cap (default 4), an offline agent retried **once** after 60s then
+  recorded `agent-offline`. Partial results are valid: each item's outcome
+  (`ok`/`timeout`/`refused`/`agent-offline`) is stored. Every path swallows its own
+  errors — the trigger is fire-and-forget from the clustering sweep.
+
+### Evidence, not time series
+- Migration `065_create_cluster_evidence_snapshots.sql` — one row per (cluster,
+  target) with a **gzip blob** (`payload_gzip`), not metric rows; nothing lands in
+  TimescaleDB. `src/repositories/evidenceSnapshotsRepository.js` gzips on write /
+  gunzips on read so callers deal in plain text.
+- Timeline gains an **`evidence`** source (`src/timeline/incidentTimeline.js`):
+  "evidence snapshot captured" per target (INFO when complete, WARN for
+  partial/offline/failed), linking to the raw-text viewer.
+
+### Retention (existing never-delete rule)
+- `src/evidence/evidenceRetention.js` — a 6h background job ages out snapshots older
+  than `RETENTION_EVIDENCE_DAYS` (default 90) **except** those on a cluster that
+  still has an **unacknowledged CRIT** finding.
+
+### API + RBAC
+- `GET /api/incident-clusters/:id/evidence` (viewer+) lists snapshots;
+  `GET …/evidence/:sid` (viewer+) returns the decompressed raw text (`text/plain`);
+  `POST …/evidence` (operator+) triggers a **manual re-snapshot**, rate-limited
+  (once/min, `429` + `Retry-After`) and evidence-class **audit-logged**.
+
+Agent bumped to **0.17.0** in lockstep (`evidence` command recognizer + collector).
+
 ## 0.83.0 — Cluster-level alerting, ITSM bridge & NIS2 draft
 
 Rolls a clustered incident's notifications up to the CLUSTER: one alert lifecycle,

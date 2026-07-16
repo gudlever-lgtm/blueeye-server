@@ -181,3 +181,59 @@ The auto-resolve sweep closes a live cluster after a configurable **quiet period
 is kept open until a human acknowledges the CRIT (the existing retention rule). The
 guard reads member severities via the finding store; a member that can't be read is
 not treated as CRIT (a lookup failure never blocks resolution).
+
+## Automated read-only evidence snapshot on cluster open (Fase 6)
+
+When a cluster opens, BlueEye captures a **point-in-time, READ-ONLY** diagnostic
+snapshot from each affected target — so an operator opening the incident sees "what
+the network looked like when it fired" without SSHing anywhere. It reuses the
+**existing** authenticated, cert-pinned, audited agent-command path
+(`agentCommander.sendCommandAndWait` over `/ws/agent`) — no new transport.
+
+### Read-only by contract (defense in depth)
+
+`src/evidence/commandAllowlist.js` (`COMMAND_SET_VERSION = 'evidence-v1'`) is the
+single source of truth for WHAT may be collected — every entry is `readOnly: true`:
+
+| item | what |
+| --- | --- |
+| `iface.counters` | interface error/discard/utilisation counters |
+| `arp.table` | ARP/MAC table extract for the affected segment |
+| `snmp.reads` | allowlisted SNMP reads the collector already supports |
+| `agent.state` | agent connection status + last collection timestamps |
+
+There is **no** write/mutate item. The **agent enforces its own copy** of the
+allowlist (`blueeye-agent` `src/evidenceCollector.js`) and hard-refuses anything not
+on it **without invoking a collector** — so even a compromised or buggy server can't
+make an agent act. The command is **Ed25519-signed** with the existing release key
+(`releaseKeyService`) when configured; the agent verifies it and refuses a bad
+signature.
+
+### Bounded + best-effort
+
+`src/evidence/snapshotService.js`: a hard per-target timeout (default **30s**), a
+concurrency cap (default **4**), and a single **60s** retry for an offline agent
+before recording `agent-offline`. Partial results are valid — each item's outcome
+(`ok`/`timeout`/`refused`/`agent-offline`) is stored. Every path swallows its own
+errors: the trigger is fire-and-forget from the clustering sweep and **never** blocks
+clustering, alerting or the incident page.
+
+### Evidence, not time series
+
+One row per (cluster, target) in `cluster_evidence_snapshots` (migration 065) with a
+**gzip blob** (`payload_gzip`) — not metric rows, and nothing in TimescaleDB.
+`src/repositories/evidenceSnapshotsRepository.js` gzips on write / gunzips on read.
+The incident timeline gains an **`evidence`** source (INFO when complete, WARN for
+partial/offline/failed) linking to the raw-text viewer.
+
+### API + retention
+
+- `GET /api/incident-clusters/:id/evidence` (viewer+) — snapshots (metadata).
+- `GET /api/incident-clusters/:id/evidence/:sid` (viewer+) — decompressed raw text
+  (`text/plain`, no parsing/visualisation).
+- `POST /api/incident-clusters/:id/evidence` (**operator+**) — manual re-snapshot,
+  rate-limited (once/min → `429` + `Retry-After`), evidence-class audit-logged.
+
+`src/evidence/evidenceRetention.js` ages out snapshots older than
+`RETENTION_EVIDENCE_DAYS` (default **90**) on a 6h job — **except** those on a cluster
+that still holds an **unacknowledged CRIT** finding (the same never-delete rule).

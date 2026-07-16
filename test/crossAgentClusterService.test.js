@@ -31,7 +31,7 @@ function fakeAssistant({ enabled = true, answer = 'Likely a shared uplink fault 
 }
 
 // Two agents (1,2) in the same site (10) unless overridden.
-function svcWith({ findings = [], agents = [{ id: 1, location_id: 10 }, { id: 2, location_id: 10 }], publishCluster, clustersRepo, assistant, alertDispatcher, alertLog } = {}) {
+function svcWith({ findings = [], agents = [{ id: 1, location_id: 10 }, { id: 2, location_id: 10 }], publishCluster, clustersRepo, assistant, alertDispatcher, alertLog, snapshotService } = {}) {
   const repo = clustersRepo || makeIncidentClustersRepo();
   const findingStore = makeFindingStore();
   for (const f of findings) findingStore.rows.push({ ...f, acked: false });
@@ -44,6 +44,7 @@ function svcWith({ findings = [], agents = [{ id: 1, location_id: 10 }, { id: 2,
     assistant,
     alertDispatcher,
     alertLog,
+    snapshotService,
     publishCluster: publishCluster || ((c) => published.push(c)),
     now: () => T,
   });
@@ -68,6 +69,40 @@ test('two agents, same site, same metric in the window -> creates one HIGH clust
   // Cluster event was published (server wraps it as {type:'incident_cluster'}).
   assert.equal(published.length, 1);
   assert.equal(published[0].status, 'open');
+});
+
+test('opening a cluster fires a read-only evidence capture for the affected targets (fire-and-forget)', async () => {
+  const captures = [];
+  const snapshotService = { captureForCluster: async (id, targets, opts) => { captures.push({ id, targets, opts }); return { snapshots: [] }; } };
+  const { svc } = svcWith({
+    findings: [
+      finding({ id: 'a', hostId: '1', metric: 'probe.loss', createdAt: ago(90000) }),
+      finding({ id: 'b', hostId: '2', metric: 'probe.loss', createdAt: ago(30000) }),
+    ],
+    snapshotService,
+  });
+  const summary = await svc.detectAndPersist();
+  assert.equal(summary.created, 1);
+  // The capture is fire-and-forget (not awaited by the sweep) — flush microtasks.
+  await new Promise((r) => setImmediate(r));
+  assert.equal(captures.length, 1);
+  assert.equal(captures[0].opts.trigger, 'auto');
+  assert.deepEqual([...captures[0].targets].map(String).sort(), ['1', '2']);
+});
+
+test('a throwing evidence capture never breaks the clustering sweep', async () => {
+  const snapshotService = { captureForCluster: async () => { throw new Error('evidence boom'); } };
+  const { svc, repo } = svcWith({
+    findings: [
+      finding({ id: 'a', hostId: '1', metric: 'probe.loss', createdAt: ago(90000) }),
+      finding({ id: 'b', hostId: '2', metric: 'probe.loss', createdAt: ago(30000) }),
+    ],
+    snapshotService,
+  });
+  const summary = await svc.detectAndPersist();
+  await new Promise((r) => setImmediate(r));
+  assert.equal(summary.created, 1);
+  assert.equal(repo.rows.length, 1); // the cluster was still created
 });
 
 test('two agents, same site, different metric -> MEDIUM cluster', async () => {

@@ -58,10 +58,14 @@ function createIncidentClustersRouter({
   clustersRepo, findingStore = null, auditLogger = null, timelineService = null,
   runbooksRepo = null, playbooksRepo = null, verificationService = null,
   settingsService = null, assistant = null, alertLog = null, notifier = null,
+  evidenceRepo = null, snapshotService = null,
 }) {
   const router = express.Router();
   const reader = requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN);
   const writer = requireRole(ROLES.OPERATOR, ROLES.ADMIN);
+  // Manual re-snapshot rate limit: at most once per cluster per window.
+  const RESNAPSHOT_MIN_INTERVAL_MS = 60 * 1000;
+  const lastResnapshot = new Map(); // clusterId -> ms
 
   // GET /api/incident-clusters — filterable, paginated list. viewer+.
   router.get('/', requireAuth, reader, asyncHandler(async (req, res) => {
@@ -246,6 +250,66 @@ function createIncidentClustersRouter({
       alertLastSeverity: cluster.alertLastSeverity ?? null,
       alerts,
     });
+  }));
+
+  // GET /api/incident-clusters/:id/evidence — the read-only evidence snapshots
+  // captured for the cluster (metadata + per-item status). viewer+.
+  router.get('/:id/evidence', requireAuth, reader, asyncHandler(async (req, res) => {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(400).json({ error: 'id must be a positive integer' });
+    const cluster = await clustersRepo.findById(id);
+    if (!cluster) return res.status(404).json({ error: 'Incident cluster not found' });
+    const snapshots = evidenceRepo && typeof evidenceRepo.listForCluster === 'function'
+      ? await evidenceRepo.listForCluster(id) : [];
+    return res.json({ clusterId: id, snapshots });
+  }));
+
+  // GET /api/incident-clusters/:id/evidence/:sid — the raw-text payload of one
+  // snapshot (decompressed). viewer+. text/plain — no parsing/visualisation.
+  router.get('/:id/evidence/:sid', requireAuth, reader, asyncHandler(async (req, res) => {
+    const id = parseId(req.params.id);
+    const sid = parseId(req.params.sid);
+    if (id === null || sid === null) return res.status(400).json({ error: 'id and sid must be positive integers' });
+    if (!evidenceRepo || typeof evidenceRepo.findById !== 'function') return res.status(404).json({ error: 'Evidence not available' });
+    const snap = await evidenceRepo.findById(sid);
+    if (!snap || snap.clusterId !== id) return res.status(404).json({ error: 'Snapshot not found' });
+    const text = await evidenceRepo.getPayload(sid);
+    res.type('text/plain').send(text == null ? '' : text);
+  }));
+
+  // POST /api/incident-clusters/:id/evidence — manual re-snapshot (operator+),
+  // rate-limited + audit-logged. Fire-and-forget: never blocks the response.
+  router.post('/:id/evidence', requireAuth, writer, asyncHandler(async (req, res) => {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(400).json({ error: 'id must be a positive integer' });
+    if (!snapshotService || typeof snapshotService.captureForCluster !== 'function') {
+      return res.status(404).json({ error: 'Evidence capture not available' });
+    }
+    const cluster = await clustersRepo.findById(id);
+    if (!cluster) return res.status(404).json({ error: 'Incident cluster not found' });
+
+    const last = lastResnapshot.get(id);
+    const nowMs = Date.now();
+    if (last !== undefined && nowMs - last < RESNAPSHOT_MIN_INTERVAL_MS) {
+      const retryAfter = Math.ceil((RESNAPSHOT_MIN_INTERVAL_MS - (nowMs - last)) / 1000);
+      res.set('Retry-After', String(retryAfter));
+      return res.status(429).json({ error: 'A re-snapshot was requested too recently; try again shortly', retryAfterSec: retryAfter });
+    }
+    lastResnapshot.set(id, nowMs);
+
+    // Affected targets = distinct hosts of the cluster's member findings.
+    const members = await hydrateMembers(cluster.memberFindingIds);
+    const targets = [...new Set(members.map((f) => f.hostId).filter((h) => h != null).map(String))];
+
+    if (auditLogger) {
+      await auditLogger.record(req, {
+        category: 'incident', action: 'evidence_resnapshot', target: String(id),
+        detail: `Manual read-only evidence re-snapshot of ${targets.length} target(s).`,
+      });
+    }
+    // Fire-and-forget — capture must not delay the response.
+    Promise.resolve().then(() => snapshotService.captureForCluster(id, targets, { trigger: 'manual' })).catch(() => {});
+    return res.status(202).json({ clusterId: id, targets });
   }));
 
   // POST /api/incident-clusters/:id/ack — acknowledge (operator+). Audited.

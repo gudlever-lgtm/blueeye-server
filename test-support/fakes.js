@@ -16,6 +16,7 @@ const { createCmdbConnectorRegistry } = require('../src/cmdb/connectors');
 const { createPlanService } = require('../src/license/planService');
 const { createUsageService } = require('../src/services/usageService');
 const { createAuditLogger } = require('../src/services/complianceLogger');
+const { createSnapshotService } = require('../src/evidence/snapshotService');
 
 // ---- Repositories ---------------------------------------------------------
 
@@ -1120,6 +1121,62 @@ function makeAlertDispatchLogRepo(overrides = {}) {
   };
 }
 
+// A fake cluster_evidence_snapshots repository (in-memory) — mirrors
+// evidenceSnapshotsRepository's surface. Callers deal in plain text; this fake
+// keeps the payload as a string (the real repo gzips it transparently).
+function makeEvidenceSnapshotsRepo(overrides = {}) {
+  const rows = [];
+  let seq = 0;
+  const iso = (v) => (v == null ? null : (v instanceof Date ? v.toISOString() : new Date(v).toISOString()));
+  const mapMeta = (r) => ({
+    id: r.id,
+    clusterId: Number(r.cluster_id),
+    target: r.target,
+    commandSetVersion: r.command_set_version,
+    status: r.status,
+    items: Array.isArray(r.items) ? r.items : [],
+    payloadBytes: Number(r.payload_bytes || 0),
+    capturedAt: iso(r.captured_at),
+    trigger: r.trigger,
+    createdAt: iso(r.created_at),
+  });
+  return {
+    rows,
+    create: overrides.create || (async ({ clusterId, target, commandSetVersion, capturedAt, trigger = 'auto' }) => {
+      const id = (seq += 1);
+      rows.push({ id, cluster_id: clusterId, target: String(target), command_set_version: commandSetVersion, status: 'pending', items: [], payload_gzip: null, payload_bytes: 0, captured_at: capturedAt, trigger, created_at: new Date() });
+      return id;
+    }),
+    complete: overrides.complete || (async (id, { status, items = [], payloadText = null }) => {
+      const r = rows.find((x) => x.id === Number(id));
+      if (!r) return false;
+      r.status = status;
+      r.items = items || [];
+      r.payload_gzip = payloadText != null ? String(payloadText) : null;
+      r.payload_bytes = payloadText != null ? Buffer.byteLength(String(payloadText), 'utf8') : 0;
+      return true;
+    }),
+    findById: overrides.findById || (async (id) => { const r = rows.find((x) => x.id === Number(id)); return r ? mapMeta(r) : null; }),
+    listForCluster: overrides.listForCluster || (async (clusterId, { limit = 200 } = {}) => rows
+      .filter((r) => r.cluster_id === Number(clusterId))
+      .sort((a, b) => new Date(b.captured_at) - new Date(a.captured_at) || b.id - a.id)
+      .slice(0, limit)
+      .map(mapMeta)),
+    getPayload: overrides.getPayload || (async (id) => { const r = rows.find((x) => x.id === Number(id)); if (!r) return null; return r.payload_gzip == null ? '' : String(r.payload_gzip); }),
+    ageOut: overrides.ageOut || (async (olderThan, { protectedClusterIds = [] } = {}) => {
+      const protectedIds = new Set((protectedClusterIds || []).map(Number));
+      let deleted = 0;
+      for (let i = rows.length - 1; i >= 0; i -= 1) {
+        if (new Date(rows[i].captured_at) < new Date(olderThan) && !protectedIds.has(rows[i].cluster_id)) { rows.splice(i, 1); deleted += 1; }
+      }
+      return deleted;
+    }),
+    clusterIdsWithSnapshotsOlderThan: overrides.clusterIdsWithSnapshotsOlderThan || (async (olderThan, { limit = 5000 } = {}) => [...new Set(rows
+      .filter((r) => new Date(r.captured_at) < new Date(olderThan))
+      .map((r) => r.cluster_id))].slice(0, limit)),
+  };
+}
+
 // A real settings service backed by an in-memory store, so PUT validation and
 // the effective-map overlay behave exactly as in production.
 function makeSettingsService(overrides = {}) {
@@ -1735,6 +1792,12 @@ function makeApp(overrides = {}) {
   const planService = overrides.planService || createPlanService({ licenseManager });
   const usageService =
     overrides.usageService || createUsageService({ agentsRepo, testPackagesRepo, planService, licenseManager });
+  const agentCommander = overrides.agentCommander || makeAgentCommander();
+  const evidenceRepo = overrides.evidenceRepo || makeEvidenceSnapshotsRepo();
+  // Real snapshot service over the fake repo + commander, so evidence-capture
+  // logic (allowlist/timeout/offline) is exercised end-to-end in API tests.
+  const snapshotService = overrides.snapshotService
+    || createSnapshotService({ evidenceRepo, agentCommander, scheduleRetry: (fn) => { const t = setTimeout(fn, 0); if (t.unref) t.unref(); return t; } });
   return createApp({
     db: overrides.db || makeDb(),
     tsdb: overrides.tsdb || null,
@@ -1752,6 +1815,8 @@ function makeApp(overrides = {}) {
     incidentClustersRepo: overrides.incidentClustersRepo || makeIncidentClustersRepo(),
     alertDispatchLogRepo: overrides.alertDispatchLogRepo || makeAlertDispatchLogRepo(),
     clusterNotifier: overrides.clusterNotifier || null,
+    evidenceRepo,
+    snapshotService,
     runbooksRepo: overrides.runbooksRepo || makeRunbooksRepo(),
     verificationRunsRepo: overrides.verificationRunsRepo || makeVerificationRunsRepo(),
     verificationService: overrides.verificationService || makeVerificationService(),
@@ -1763,7 +1828,7 @@ function makeApp(overrides = {}) {
     licenseManager,
     planService,
     usageService,
-    agentCommander: overrides.agentCommander || makeAgentCommander(),
+    agentCommander,
     agentReconnect: overrides.agentReconnect || { waitMs: 200, pollMs: 10 },
     systemInfo: overrides.systemInfo || makeSystemInfo(),
     findingStore: overrides.findingStore || makeFindingStore(),
@@ -1888,6 +1953,7 @@ module.exports = {
   makeVerificationService,
   makeLldpNeighborsRepo,
   makeAlertDispatchLogRepo,
+  makeEvidenceSnapshotsRepo,
   makeRemediationPlaybooksRepo,
   makeIncidentCaseService,
   makeConfigSnapshotsRepo,

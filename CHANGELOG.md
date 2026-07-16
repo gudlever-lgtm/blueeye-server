@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.79.0 — Cross-agent incident clusters: operator API + lifecycle
+## 0.79.1 — Cross-agent incident clusters: operator API + lifecycle
 
 Builds the operator-facing surface on top of the existing cross-agent clustering
 engine (detector + dedup/auto-resolve + AI advisory + alerting already shipped in

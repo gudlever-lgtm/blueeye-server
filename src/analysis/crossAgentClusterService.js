@@ -38,9 +38,9 @@ function createCrossAgentClusterService({
   correlator = createCrossAgentCorrelator({ windowMs: DEFAULT_WINDOW_MS }),
   windowMs = DEFAULT_WINDOW_MS,
   // No new member finding within this window → the cluster is resolved (findings
-  // carry no "cleared" event, so inactivity is the resolution proxy). Reuses the
-  // incident auto-resolve default.
-  inactivityMs = 15 * 60 * 1000,
+  // carry no "cleared" event, so inactivity is the resolution proxy). Default is
+  // the 30-min quiet period; configurable.
+  inactivityMs = 30 * 60 * 1000,
   publishCluster = () => {},
   now = () => new Date(),
   logger = silentLogger,
@@ -248,9 +248,30 @@ function createCrossAgentClusterService({
     return summary;
   }
 
-  // Resolves open clusters whose last activity (detected_at) is older than the
-  // inactivity window — the members stopped recurring, so the pattern has cleared.
-  // Returns the number resolved. Never throws.
+  // True when a cluster still holds an UNACKNOWLEDGED CRIT member finding — the
+  // existing retention rule that such an incident must never auto-close (a human
+  // has to acknowledge the CRIT first). Best-effort: an unreadable member is not
+  // treated as CRIT (the auto-resolve is not blocked by a lookup failure).
+  async function hasUnacknowledgedCrit(memberFindingIds) {
+    if (!findingStore || typeof findingStore.get !== 'function') return false;
+    for (const id of memberFindingIds || []) {
+      let f = null;
+      try {
+        f = await findingStore.get(id); // eslint-disable-line no-await-in-loop
+      } catch (err) {
+        logger.warn(`cross-agent: could not read member finding ${id} (${err.message})`);
+        f = null;
+      }
+      if (f && f.severity === 'CRIT' && !f.acked) return true;
+    }
+    return false;
+  }
+
+  // Resolves live clusters (open + acknowledged) whose last activity (detected_at)
+  // is older than the inactivity window — the members stopped recurring, so the
+  // pattern has cleared. A cluster that still contains an unacknowledged CRIT
+  // finding is SKIPPED (never auto-closed) per the retention rule. Returns the
+  // number resolved. Never throws.
   async function resolveStale() {
     const olderThan = new Date(now().getTime() - inactivityMs);
     let stale = [];
@@ -263,7 +284,13 @@ function createCrossAgentClusterService({
     let resolved = 0;
     for (const c of stale) {
       try {
-        const ok = await clustersRepo.updateStatus(c.id, { from: 'open', to: 'resolved', at: now() });
+        if (await hasUnacknowledgedCrit(c.memberFindingIds)) {
+          logger.info(`cross-agent: cluster ${c.id} kept open — unacknowledged CRIT member.`);
+          continue; // retention rule: never auto-close an unacknowledged CRIT
+        }
+        // Guard on the cluster's CURRENT status (open or acknowledged) so the
+        // transition is race-safe.
+        const ok = await clustersRepo.updateStatus(c.id, { from: c.status, to: 'resolved', at: now() });
         if (!ok) continue; // lost a race
         resolved += 1;
         publishCluster({ id: c.id, status: 'resolved', confidence: c.confidence, memberFindingIds: c.memberFindingIds });

@@ -643,6 +643,7 @@ function start() {
     probeResultsRepo,
     incidentsRepo,
     incidentCasesRepo,
+    incidentClustersRepo,
     remediationPlaybooksRepo,
     configSnapshotsRepo,
     thresholdsRepo,

@@ -131,12 +131,53 @@ advisory follow-up carries `advisory` + `evidence`.
 
 `incident_clusters` (migration 057): `id`, `confidence` (enum low/medium/high),
 `member_finding_ids` (JSON array of `findings.id`), `suspected_common_cause` (text,
-nullable), `status` (open/resolved/closed), `detected_at` (last activity),
-`resolved_at`, timestamps. `member_finding_ids` is JSON (not a join table) to mirror
-how a finding's own `correlated_with` links are stored — clusters are a lightweight
-derived read-model.
+nullable), `status`, `detected_at` (last activity), `resolved_at`, timestamps.
+`member_finding_ids` is JSON (not a join table) to mirror how a finding's own
+`correlated_with` links are stored — clusters are a lightweight derived read-model.
 
-## Not yet wired (later phases)
+**Migration 060** adds the operator lifecycle: the `status` enum gains
+`acknowledged` (`open` → `acknowledged` → `resolved`/`closed`), plus
+`acknowledged_at`/`acknowledged_by`, `resolved_by` and `resolution_note`
+(`*_by` → `users(id)`, `ON DELETE SET NULL`). Both `open` and `acknowledged` count
+as **live** for dedup + auto-resolve.
 
-- A read API / dashboard view over `incident_clusters` (the data + WS push exist;
-  no REST route / `views.*` tab yet).
+## Operator lifecycle & REST API
+
+The clustering engine creates/updates/auto-resolves clusters automatically; on top
+of that, an operator can **acknowledge** and **resolve** a cluster.
+
+`GET /api/incident-clusters` — list, newest activity first. Filters: `status`,
+`from`/`to` (on `detected_at`), pagination `limit` (default 50, max 200) + `offset`;
+returns `{ clusters, page: { limit, offset, total } }`. **viewer+**.
+
+`GET /api/incident-clusters/:id` — the full cluster: hydrated **members** (each with
+its evidence-sample count), **affected agents/targets**, a **confidence breakdown**
+(which signals fired, their weights, the summed score vs the single-signal baseline —
+`src/analysis/crossAgentCorrelator.js` `confidenceBreakdown`), a suspected
+**root-cause layer** (`network-layer`/`application-layer`/`undetermined`, reusing the
+L2 `isAppMetric`/`isNetMetric` classifiers from `investigation/locator.js`) and a
+plain-language **evidence summary**. Pure assembly in `src/analysis/clusterView.js`.
+**viewer+**.
+
+`POST /api/incident-clusters/:id/ack` — `open` → `acknowledged` (**operator+**,
+hash-chained audit via `auditLogger`). `409` if not `open`.
+
+`POST /api/incident-clusters/:id/resolve` — requires a **free-text `note`** (`400`
+without it), `open`/`acknowledged` → `resolved` stamping `resolved_by` + the note
+(**operator+**, audited). `409` on a second resolve / lost race.
+
+> The task specified `/api/incidents` for these, but that path is already the
+> first-class `incident_cases` router (a distinct feature), so clusters mount at
+> **`/api/incident-clusters`** with the same verbs/shapes.
+
+Router `src/routes/incidentClusters.js`; repo methods `acknowledge`/`resolve`/`list`
+(time-range + pagination)/`count` in `src/repositories/incidentClustersRepository.js`.
+
+## Retention: never auto-close an unacknowledged CRIT
+
+The auto-resolve sweep closes a live cluster after a configurable **quiet period**
+(default **30 min** without a new member, `crossAgentClusterService` `inactivityMs`)
+— **except** a cluster still holding an **unacknowledged CRIT** member finding, which
+is kept open until a human acknowledges the CRIT (the existing retention rule). The
+guard reads member severities via the finding store; a member that can't be read is
+not treated as CRIT (a lookup failure never blocks resolution).

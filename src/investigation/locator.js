@@ -465,4 +465,4 @@ function createLocator({ agentsRepo, findingStore, locationsRepo = null, flowsRe
   return { runInvestigation };
 }
 
-module.exports = { createLocator };
+module.exports = { createLocator, isAppMetric, isNetMetric };

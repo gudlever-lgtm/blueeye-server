@@ -172,6 +172,46 @@ function createCrossAgentCorrelator({ windowMs = DEFAULT_WINDOW_MS } = {}) {
   return { detect, windowMs };
 }
 
+// Per-signal weights for the explainable confidence breakdown, in the spirit of
+// the L2-loop multi-signal weighting (investigation/locator.js): more independent
+// signal types → higher confidence that this is ONE incident. `time` is the base
+// signal (always present in a cluster); topology + type are the corroborating ones.
+const SIGNAL_WEIGHTS = Object.freeze({ time: 0.4, topology: 0.35, type: 0.25 });
+// Single-signal (time-only) baseline — what a cluster scores on time proximity alone.
+const SINGLE_SIGNAL_BASELINE = SIGNAL_WEIGHTS.time;
+
+// Explainable confidence breakdown for a stored cluster: which signals drove the
+// grouping, each signal's weight, the summed score and how it compares to the
+// single-signal (time-only) baseline. The signals are re-derived from the stored
+// tier + the member findings (topology is the only thing that lifts a cluster
+// above `low`; a shared finding-type is recomputable from the members), so this
+// never needs the signals persisted on the row.
+function confidenceBreakdown(confidence, members = []) {
+  const topology = confidence === 'medium' || confidence === 'high';
+  const type = sharedMetric(Array.isArray(members) ? members : []) != null;
+  const signals = { time: true, topology, type };
+
+  const contributing = [];
+  let score = 0;
+  for (const key of Object.keys(SIGNAL_WEIGHTS)) {
+    if (signals[key]) { score += SIGNAL_WEIGHTS[key]; contributing.push({ signal: key, weight: SIGNAL_WEIGHTS[key] }); }
+  }
+  score = Number(score.toFixed(2));
+
+  const names = contributing.map((c) => c.signal).join(' + ');
+  return {
+    tier: confidence,
+    score,
+    baseline: SINGLE_SIGNAL_BASELINE,
+    aboveBaseline: score > SINGLE_SIGNAL_BASELINE,
+    signals,
+    weights: SIGNAL_WEIGHTS,
+    contributing,
+    explanation: `${contributing.length} independent signal(s) — ${names} — score ${score.toFixed(2)} `
+      + `vs single-signal baseline ${SINGLE_SIGNAL_BASELINE.toFixed(2)}.`,
+  };
+}
+
 // The metric shared by >=2 distinct agents in a list, or null. When several
 // metrics qualify, the one with the widest agent spread wins (ties: first seen).
 function sharedMetric(list) {
@@ -191,6 +231,9 @@ function sharedMetric(list) {
 module.exports = {
   createCrossAgentCorrelator,
   sharedMetric,
+  confidenceBreakdown,
+  SIGNAL_WEIGHTS,
+  SINGLE_SIGNAL_BASELINE,
   DEFAULT_WINDOW_MS,
   CONFIDENCE_RANK,
 };

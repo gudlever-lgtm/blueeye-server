@@ -269,6 +269,7 @@ function makeIncidentClustersRepo(overrides = {}) {
   const rows = [];
   let seq = 0;
   const iso = (v) => (v == null ? null : (v instanceof Date ? v.toISOString() : new Date(v).toISOString()));
+  const LIVE = ['open', 'acknowledged'];
   const mapOut = (r) => ({
     id: r.id,
     confidence: r.confidence,
@@ -277,7 +278,11 @@ function makeIncidentClustersRepo(overrides = {}) {
     advisory: r.advisory ?? null,
     status: r.status,
     detectedAt: iso(r.detected_at),
+    acknowledgedAt: iso(r.acknowledged_at),
+    acknowledgedBy: r.acknowledged_by == null ? null : Number(r.acknowledged_by),
     resolvedAt: iso(r.resolved_at),
+    resolvedBy: r.resolved_by == null ? null : Number(r.resolved_by),
+    resolutionNote: r.resolution_note ?? null,
     createdAt: iso(r.created_at),
     updatedAt: iso(r.updated_at),
   });
@@ -297,11 +302,11 @@ function makeIncidentClustersRepo(overrides = {}) {
     }),
     findById: overrides.findById || (async (id) => { const r = rows.find((x) => x.id === Number(id)); return r ? mapOut(r) : null; }),
     listOpen: overrides.listOpen || (async () => rows
-      .filter((r) => r.status === 'open')
+      .filter((r) => LIVE.includes(r.status))
       .sort((a, b) => new Date(b.detected_at) - new Date(a.detected_at) || b.id - a.id)
       .map(mapOut)),
     updateMembership: overrides.updateMembership || (async (id, { confidence, memberFindingIds, suspectedCommonCause, detectedAt }) => {
-      const r = rows.find((x) => x.id === Number(id) && x.status === 'open');
+      const r = rows.find((x) => x.id === Number(id) && LIVE.includes(x.status));
       if (!r) return false;
       r.confidence = confidence;
       r.member_finding_ids = memberFindingIds || [];
@@ -310,7 +315,7 @@ function makeIncidentClustersRepo(overrides = {}) {
       return true;
     }),
     setAdvisory: overrides.setAdvisory || (async (id, advisory) => {
-      const r = rows.find((x) => x.id === Number(id) && x.status === 'open' && (x.advisory == null));
+      const r = rows.find((x) => x.id === Number(id) && LIVE.includes(x.status) && (x.advisory == null));
       if (!r) return false;
       r.advisory = advisory;
       return true;
@@ -323,14 +328,41 @@ function makeIncidentClustersRepo(overrides = {}) {
       if (to === 'open') r.resolved_at = null;
       return true;
     }),
+    acknowledge: overrides.acknowledge || (async (id, { by = null, at = null } = {}) => {
+      const r = rows.find((x) => x.id === Number(id) && x.status === 'open');
+      if (!r) return false;
+      r.status = 'acknowledged';
+      r.acknowledged_at = at;
+      r.acknowledged_by = by;
+      return true;
+    }),
+    resolve: overrides.resolve || (async (id, { by = null, note = null, at = null } = {}) => {
+      const r = rows.find((x) => x.id === Number(id) && LIVE.includes(x.status));
+      if (!r) return false;
+      r.status = 'resolved';
+      r.resolved_at = at;
+      r.resolved_by = by;
+      r.resolution_note = note;
+      return true;
+    }),
     listStaleOpen: overrides.listStaleOpen || (async (olderThan) => rows
-      .filter((r) => r.status === 'open' && new Date(r.detected_at) < new Date(olderThan))
+      .filter((r) => LIVE.includes(r.status) && new Date(r.detected_at) < new Date(olderThan))
       .sort((a, b) => new Date(a.detected_at) - new Date(b.detected_at))
       .map(mapOut)),
-    list: overrides.list || (async (f = {}) => rows
-      .filter((r) => (!f.status || r.status === f.status))
-      .sort((a, b) => new Date(b.detected_at) - new Date(a.detected_at) || b.id - a.id)
-      .map(mapOut)),
+    list: overrides.list || (async (f = {}) => {
+      let out = rows
+        .filter((r) => (!f.status || r.status === f.status)
+          && (!f.from || new Date(r.detected_at) >= new Date(f.from))
+          && (!f.to || new Date(r.detected_at) <= new Date(f.to)))
+        .sort((a, b) => new Date(b.detected_at) - new Date(a.detected_at) || b.id - a.id)
+        .map(mapOut);
+      const off = Number.isInteger(f.offset) && f.offset > 0 ? f.offset : 0;
+      const lim = Number.isInteger(f.limit) && f.limit > 0 ? f.limit : out.length;
+      return out.slice(off, off + lim);
+    }),
+    count: overrides.count || (async (f = {}) => rows.filter((r) => (!f.status || r.status === f.status)
+      && (!f.from || new Date(r.detected_at) >= new Date(f.from))
+      && (!f.to || new Date(r.detected_at) <= new Date(f.to))).length),
   };
 }
 
@@ -1550,6 +1582,7 @@ function makeApp(overrides = {}) {
     probeResultsRepo: overrides.probeResultsRepo || makeProbeResultsRepo(),
     incidentsRepo: overrides.incidentsRepo || makeIncidentsRepo(),
     incidentCasesRepo: overrides.incidentCasesRepo || makeIncidentCasesRepo(),
+    incidentClustersRepo: overrides.incidentClustersRepo || makeIncidentClustersRepo(),
     remediationPlaybooksRepo: overrides.remediationPlaybooksRepo || makeRemediationPlaybooksRepo(),
     configSnapshotsRepo: overrides.configSnapshotsRepo || makeConfigSnapshotsRepo(),
     thresholdsRepo: overrides.thresholdsRepo || makeIncidentThresholdsRepo(),

@@ -5,6 +5,11 @@ const { asyncHandler } = require('../middleware/asyncHandler');
 const { requireAuth, requireRole } = require('../auth/middleware');
 const { ROLES } = require('../auth/roles');
 const { buildClusterDetail } = require('../analysis/clusterView');
+const { dominantFindingTypes, buildRecommendedActions } = require('../remediation/recommendedActions');
+
+// A cluster is still "live" (a playbook can be run against it) while open or
+// acknowledged; resolved/closed clusters are done.
+const LIVE_STATUSES = new Set(['open', 'acknowledged']);
 
 // Cross-agent incident CLUSTERS (incident_clusters) — findings from ≥2 agents that
 // fired together, grouped by the clustering engine (src/analysis/crossAgent*).
@@ -49,7 +54,11 @@ function parseIntParam(raw, fallback, { min = 0, max = Number.MAX_SAFE_INTEGER }
   return n;
 }
 
-function createIncidentClustersRouter({ clustersRepo, findingStore = null, auditLogger = null, timelineService = null }) {
+function createIncidentClustersRouter({
+  clustersRepo, findingStore = null, auditLogger = null, timelineService = null,
+  runbooksRepo = null, playbooksRepo = null, verificationService = null,
+  settingsService = null, assistant = null,
+}) {
   const router = express.Router();
   const reader = requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN);
   const writer = requireRole(ROLES.OPERATOR, ROLES.ADMIN);
@@ -121,6 +130,100 @@ function createIncidentClustersRouter({ clustersRepo, findingStore = null, audit
     const result = await timelineService.getTimeline(id, { lookbackMinutes: lookback });
     if (!result) return res.status(404).json({ error: 'Incident cluster not found' });
     return res.json(result);
+  }));
+
+  // GET /api/incident-clusters/:id/recommended-actions — runbooks matching the
+  // cluster's dominant finding-types (static mapping first), plus the opt-in
+  // cluster AI advisory (Fase 2) when the assistant is enabled. viewer+.
+  router.get('/:id/recommended-actions', requireAuth, reader, asyncHandler(async (req, res) => {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(400).json({ error: 'id must be a positive integer' });
+    const cluster = await clustersRepo.findById(id);
+    if (!cluster) return res.status(404).json({ error: 'Incident cluster not found' });
+
+    const members = await hydrateMembers(cluster.memberFindingIds);
+    const findingTypes = dominantFindingTypes(members);
+    const runbooks = runbooksRepo && typeof runbooksRepo.listByFindingTypes === 'function'
+      ? await runbooksRepo.listByFindingTypes(findingTypes) : [];
+    const mistralEnabled = !!(assistant && typeof assistant.isEnabled === 'function' && assistant.isEnabled());
+
+    return res.json(buildRecommendedActions({ findingTypes, runbooks, advisory: cluster.advisory, mistralEnabled }));
+  }));
+
+  // Settle time (seconds) for post-remediation verification, from Settings →
+  // Analysis (`verifySettleMinutes`, default 5 min). Read live at execution time.
+  async function settleSeconds() {
+    const fallback = 5 * 60;
+    if (!settingsService || typeof settingsService.getAnalysis !== 'function') return fallback;
+    try {
+      const a = await settingsService.getAnalysis();
+      const m = Number(a && a.verifySettleMinutes);
+      return Number.isFinite(m) && m >= 0 ? Math.round(m * 60) : fallback;
+    } catch { return fallback; }
+  }
+
+  // POST /api/incident-clusters/:id/run-playbook — operator+. Explicit, audited
+  // execution of a playbook against the cluster's targets, which schedules a
+  // post-remediation verification. No auto-execution — this is always operator-
+  // initiated. Body: { runbookId } (uses the runbook's linked playbook) OR
+  // { playbookId }.
+  router.post('/:id/run-playbook', requireAuth, writer, asyncHandler(async (req, res) => {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(400).json({ error: 'id must be a positive integer' });
+
+    const body = req.body || {};
+    const runbookId = body.runbookId != null ? parseId(body.runbookId) : null;
+    let playbookId = body.playbookId != null ? parseId(body.playbookId) : null;
+    if (runbookId === null && playbookId === null) {
+      return res.status(400).json({ error: 'Validation failed', details: { playbookId: 'a runbookId or playbookId is required' } });
+    }
+
+    const cluster = await clustersRepo.findById(id);
+    if (!cluster) return res.status(404).json({ error: 'Incident cluster not found' });
+    if (!LIVE_STATUSES.has(cluster.status)) {
+      return res.status(409).json({ error: `Cannot run a playbook against a ${cluster.status} cluster` });
+    }
+
+    // Resolve the playbook — directly, or via the runbook's link.
+    let usedRunbookId = null;
+    if (runbookId !== null) {
+      const runbook = runbooksRepo && typeof runbooksRepo.findById === 'function' ? await runbooksRepo.findById(runbookId) : null;
+      if (!runbook) return res.status(404).json({ error: 'Runbook not found' });
+      if (runbook.linkedPlaybookId == null) {
+        return res.status(400).json({ error: 'Validation failed', details: { runbookId: 'this runbook has no linked playbook to run' } });
+      }
+      usedRunbookId = runbook.id;
+      playbookId = runbook.linkedPlaybookId;
+    }
+    const playbook = playbooksRepo && typeof playbooksRepo.findById === 'function' ? await playbooksRepo.findById(playbookId) : null;
+    if (!playbook) return res.status(404).json({ error: 'Playbook not found' });
+
+    const members = await hydrateMembers(cluster.memberFindingIds);
+    const affectedTargets = [...new Set(members.map((f) => f.hostId).filter((h) => h != null).map(String))];
+    const findingTypes = dominantFindingTypes(members);
+
+    // Executing a playbook is audit-logged (the existing hash-chained audit).
+    if (auditLogger) {
+      await auditLogger.record(req, {
+        category: 'incident', action: 'playbook_run', target: String(id),
+        detail: `Ran playbook "${playbook.name}" (${playbook.actionType}) against ${affectedTargets.length} target(s)`,
+      });
+    }
+
+    // Schedule the post-remediation verification (never auto-resolves).
+    let verification = null;
+    if (verificationService && typeof verificationService.schedule === 'function') {
+      verification = await verificationService.schedule({
+        clusterId: id, playbookId, runbookId: usedRunbookId,
+        triggeredBy: (req.user && req.user.email) || 'operator',
+        affectedTargets, findingTypes, settleSeconds: await settleSeconds(),
+      });
+    }
+
+    return res.status(202).json({
+      run: { playbookId, playbookName: playbook.name, runbookId: usedRunbookId, affectedTargets, findingTypes },
+      verification,
+    });
   }));
 
   // POST /api/incident-clusters/:id/ack — acknowledge (operator+). Audited.

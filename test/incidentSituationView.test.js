@@ -196,3 +196,80 @@ test('timeline source filter narrows the rows', () => {
   assert.equal(rows.length, 1);
   assert.match(rows[0].textContent, /Configuration change/);
 });
+
+// ---- Recommended actions panel (Fase 3) ------------------------------------
+
+const ACTIONS = {
+  findingTypes: ['cpu', 'mem'],
+  hasRunbooks: true,
+  runbooks: [
+    { id: 1, findingType: 'cpu', title: 'Tame CPU', bodyMarkdown: '# Steps\n- restart **svc**\n- check `top`', linkedPlaybookId: 5, linkedPlaybookName: 'Restart svc' },
+    { id: 2, findingType: 'mem', title: 'Free memory', bodyMarkdown: 'Reclaim caches.', linkedPlaybookId: null, linkedPlaybookName: null },
+  ],
+  advisory: null, advisoryEnabled: false,
+};
+
+test('renderPage shows the recommended-actions panel with rendered markdown + a run button for operators', () => {
+  const doc = newDoc();
+  const root = doc.createElement('div');
+  let ran = null;
+  CV.renderPage(doc, root, { detail: DETAIL, timeline: TIMELINE, actions: ACTIONS }, {
+    canWrite: true, onRunPlaybook: (rb) => { ran = rb.id; },
+  });
+  const panel = root.querySelector('.inc-recactions');
+  assert.ok(panel, 'recommended-actions panel present');
+  assert.match(panel.textContent, /Tame CPU/);
+  // markdown rendered to nodes (heading + list + bold + inline code)
+  assert.ok(panel.querySelector('.md h4'));
+  assert.ok(panel.querySelector('.md-list li'));
+  assert.ok(panel.querySelector('.md strong'));
+  assert.ok(panel.querySelector('.md code'));
+  // the linked runbook has a Run playbook button; clicking calls back
+  const runBtn = [...panel.querySelectorAll('button')].find((b) => /Run playbook/.test(b.textContent));
+  assert.ok(runBtn);
+  click(runBtn, doc);
+  assert.equal(ran, 1);
+});
+
+test('recommended-actions: viewer sees no run button but a "operator can run it" note', () => {
+  const doc = newDoc();
+  const root = doc.createElement('div');
+  CV.renderPage(doc, root, { detail: DETAIL, timeline: TIMELINE, actions: ACTIONS }, { canWrite: false });
+  const panel = root.querySelector('.inc-recactions');
+  assert.equal([...panel.querySelectorAll('button')].filter((b) => /Run playbook/.test(b.textContent)).length, 0);
+  assert.match(panel.textContent, /operator\/admin can run it/);
+});
+
+test('recommended-actions: no matching runbook → explicit empty state', () => {
+  const doc = newDoc();
+  const root = doc.createElement('div');
+  CV.renderPage(doc, root, { detail: DETAIL, timeline: TIMELINE, actions: { findingTypes: ['cpu'], hasRunbooks: false, runbooks: [] } }, { canWrite: true });
+  assert.match(root.querySelector('.inc-recactions').textContent, /No runbook matches/);
+});
+
+test('recommended-actions: a fetch failure renders its own error, page still renders', () => {
+  const doc = newDoc();
+  const root = doc.createElement('div');
+  CV.renderPage(doc, root, { detail: DETAIL, timeline: TIMELINE, actionsError: new Error('boom') }, { canWrite: true });
+  assert.match(root.querySelector('.inc-recactions').textContent, /Could not load recommended actions/);
+  assert.ok(root.querySelector('.inc-header'));
+  assert.ok(root.querySelector('.inc-timeline'));
+});
+
+test('advisory panel renders directly after recommended actions (below runbooks)', () => {
+  const doc = newDoc();
+  const root = doc.createElement('div');
+  CV.renderPage(doc, root, { detail: { ...DETAIL, advisory: 'Check the uplink.' }, timeline: TIMELINE, actions: ACTIONS }, {});
+  const cards = [...root.children];
+  const recIdx = cards.findIndex((c) => c.classList.contains('inc-recactions'));
+  const advIdx = cards.findIndex((c) => c.classList.contains('inc-advisory'));
+  assert.ok(recIdx >= 0 && advIdx === recIdx + 1, 'advisory is immediately below recommended actions');
+});
+
+test('renderMarkdown escapes and never uses innerHTML (no injection)', () => {
+  const doc = newDoc();
+  const node = CV.renderMarkdown(doc, 'plain <img src=x onerror=alert(1)> text');
+  // The angle-bracket content is inert text, not an element.
+  assert.equal(node.querySelector('img'), null);
+  assert.match(node.textContent, /<img src=x onerror=alert\(1\)>/);
+});

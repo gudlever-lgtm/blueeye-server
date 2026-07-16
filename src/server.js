@@ -56,6 +56,10 @@ const { createConfigSnapshotsRepository } = require('./repositories/configSnapsh
 const { createIncidentCaseService } = require('./incidentCases/incidentCaseService');
 const { createIncidentAutoResolveJob } = require('./incidentCases/autoResolveJob');
 const { createIncidentClustersRepository } = require('./repositories/incidentClustersRepository');
+const { createRunbooksRepository } = require('./repositories/runbooksRepository');
+const { createVerificationRunsRepository } = require('./repositories/verificationRunsRepository');
+const { createVerificationService } = require('./remediation/verificationService');
+const { createVerificationJob } = require('./remediation/verificationJob');
 const { createAlertDispatchLogRepository } = require('./repositories/alertDispatchLogRepository');
 const { createCrossAgentClusterService } = require('./analysis/crossAgentClusterService');
 const { createCrossAgentClusterJob } = require('./analysis/crossAgentClusterJob');
@@ -426,6 +430,10 @@ function start() {
   // as a leader-only sweep (below) — off the ingest hot path — and pushes cluster
   // events over the SAME dashboard WebSocket as findings.
   const incidentClustersRepo = createIncidentClustersRepository(db);
+  // Fase 3: runbooks (static finding-type → recommended action) + post-remediation
+  // verification runs.
+  const runbooksRepo = createRunbooksRepository(db);
+  const verificationRunsRepo = createVerificationRunsRepository(db);
   // Durable alert-dispatch log: lets a cluster alert fire once + reference (not
   // resend) member findings already alerted individually. Passed to the dispatcher
   // (records each send) and the cross-agent service (reads it).
@@ -545,6 +553,18 @@ function start() {
     logger,
   });
 
+  // Fase 3: post-remediation verification. After an operator runs a playbook
+  // against an open cluster's targets, a leader-only sweep re-checks the affected
+  // targets for fresh symptoms once the settle window elapses, records the outcome
+  // (audit + cluster timeline), and NEVER auto-resolves.
+  const verificationService = createVerificationService({
+    verificationRunsRepo,
+    findingStore,
+    auditLogger,
+    publishCluster: (cluster) => (dashboardWs ? dashboardWs.broadcast({ type: 'incident_cluster', payload: cluster }) : 0),
+    logger,
+  });
+
   // Geo layer: enrich + store flow records. The GeoIP provider (created above for
   // the probe pipeline) reads an offline, EU-sourced range DB; without it, flows
   // store without country/ASN. RFC1918/private endpoints are never geolocated.
@@ -611,6 +631,7 @@ function start() {
     createTransactionBaselineJob({ repo: transactionsRepo, logger }),
     createIncidentAutoResolveJob({ incidentCasesRepo, auditLogRepo, logger }),
     createCrossAgentClusterJob({ service: crossAgentClusterService, logger }),
+    createVerificationJob({ service: verificationService, logger }),
   ];
   function startBackgroundJobs() {
     for (const job of backgroundJobs) {
@@ -644,6 +665,9 @@ function start() {
     incidentsRepo,
     incidentCasesRepo,
     incidentClustersRepo,
+    runbooksRepo,
+    verificationRunsRepo,
+    verificationService,
     remediationPlaybooksRepo,
     configSnapshotsRepo,
     thresholdsRepo,

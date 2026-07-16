@@ -25,11 +25,12 @@ const {
   SOURCES,
 } = require('./targetTimeline');
 
-// Cluster timeline adds two sources on top of the per-target ones.
+// Cluster timeline adds sources on top of the per-target ones.
 const CLUSTER_SOURCES = Object.freeze({
   ...SOURCES,
   CONFIG: 'config',
   STATUS: 'status',
+  VERIFICATION: 'verification',
 });
 
 // Sources c–e in the requirement: playbook executions (c), agent
@@ -39,7 +40,7 @@ const PRE_INCIDENT_SOURCES = new Set([
   CLUSTER_SOURCES.PLAYBOOK, CLUSTER_SOURCES.AGENT, CLUSTER_SOURCES.CONFIG,
 ]);
 
-const SOURCE_ORDER = { finding: 0, incident: 1, agent: 2, playbook: 3, config: 4, status: 5 };
+const SOURCE_ORDER = { finding: 0, incident: 1, agent: 2, playbook: 3, config: 4, status: 5, verification: 6 };
 
 function toIso(v) {
   if (v == null) return null;
@@ -89,6 +90,42 @@ function mapStatusChange(s) {
   }];
 }
 
+// A post-remediation verification run (verification_runs row). A completed run
+// surfaces its outcome at completed_at (passed=INFO, failed/error=WARN); a still
+// pending run surfaces a "scheduled, re-check due" marker at executed_at. Carries
+// `suggestResolve` on a pass so the UI can hint (never auto-resolves).
+function mapVerification(v) {
+  if (!v) return [];
+  const status = v.status || 'pending';
+  if (status === 'pending') {
+    return [{
+      timestamp: toIso(v.executedAt),
+      source: CLUSTER_SOURCES.VERIFICATION,
+      type: 'verification.pending',
+      severity: 'INFO',
+      summary: `Verification scheduled — re-check due ${toIso(v.dueAt) || 'after settle'}`,
+      ref_id: v.id,
+      suggestResolve: false,
+    }];
+  }
+  const passed = status === 'passed';
+  const readings = Array.isArray(v.readings) ? v.readings : [];
+  const summary = passed
+    ? 'Verification passed — original symptoms cleared. Resolution suggested.'
+    : status === 'failed'
+      ? `Verification failed — symptoms persist${readings.length ? ` (${[...new Set(readings.map((r) => r.metric))].join(', ')})` : ''}.`
+      : 'Verification could not run (re-check error).';
+  return [{
+    timestamp: toIso(v.completedAt) || toIso(v.executedAt),
+    source: CLUSTER_SOURCES.VERIFICATION,
+    type: `verification.${status}`,
+    severity: passed ? 'INFO' : 'WARN',
+    summary,
+    ref_id: v.id,
+    suggestResolve: passed,
+  }];
+}
+
 // Sort newest-first, breaking ties by source then ref for deterministic output.
 function sortEvents(events) {
   return events.slice().sort((a, b) => ms(b.timestamp) - ms(a.timestamp)
@@ -115,6 +152,7 @@ function buildIncidentTimeline({
   memberFindings = [],
   agentSources = [],
   statusChanges = [],
+  verifications = [],
   firstFindingAt = null,
   lookbackMs = 30 * 60 * 1000,
 } = {}) {
@@ -130,8 +168,9 @@ function buildIncidentTimeline({
     for (const i of (src && src.incidents) || []) events.push(...withTarget(mapIncident(i), agentId));
     for (const c of (src && src.configChanges) || []) events.push(...withTarget(mapConfigChange(c), agentId));
   }
-  // Cluster lifecycle transitions are not tied to a single agent.
+  // Cluster lifecycle transitions + verification runs are not tied to a single agent.
   for (const s of statusChanges) events.push(...withTarget(mapStatusChange(s), null));
+  for (const v of verifications) events.push(...withTarget(mapVerification(v), null));
 
   const valid = sortEvents(events.filter((e) => e.timestamp != null));
 
@@ -154,6 +193,7 @@ module.exports = {
   buildIncidentTimeline,
   mapConfigChange,
   mapStatusChange,
+  mapVerification,
   CLUSTER_SOURCES,
   PRE_INCIDENT_SOURCES,
 };

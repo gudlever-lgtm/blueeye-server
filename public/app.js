@@ -3481,16 +3481,23 @@ views.cluster = async () => {
     return el('div', { class: 'empty error' }, back, ' ', err.message);
   }
 
-  // The timeline is an INDEPENDENT fetch — its failure must not blank the page.
+  // The timeline + recommended actions are INDEPENDENT fetches — their failure
+  // must not blank the page (each renders its own error state).
   let timeline = null;
   let timelineError = false;
   try {
     timeline = await api(`/api/incident-clusters/${id}/timeline`);
   } catch { timelineError = true; }
 
+  let actions = null;
+  let actionsError = false;
+  try {
+    actions = await api(`/api/incident-clusters/${id}/recommended-actions`);
+  } catch { actionsError = true; }
+
   const container = el('div', { class: 'cluster-detail' });
 
-  // Write actions (operator+), driven through ClusterView's header buttons.
+  // Write actions (operator+), driven through ClusterView's buttons.
   async function doAck() {
     try { await api(`/api/incident-clusters/${id}/ack`, { method: 'POST' }); toast('Situation acknowledged'); render(); }
     catch (err) { toast(errText(err), true); }
@@ -3501,9 +3508,19 @@ views.cluster = async () => {
     try { await api(`/api/incident-clusters/${id}/resolve`, { method: 'POST', body: { note: note.trim() } }); toast('Situation resolved'); render(); }
     catch (err) { toast(errText(err), true); }
   }
+  // Explicit, confirmed, audit-logged playbook execution from the incident page.
+  async function doRunPlaybook(rb) {
+    if (!confirm(`Run playbook "${rb.linkedPlaybookName || rb.title}" against this situation's targets? It will be verified after the settle window.`)) return;
+    try {
+      const { verification } = await api(`/api/incident-clusters/${id}/run-playbook`, { method: 'POST', body: { runbookId: rb.id } });
+      const mins = verification ? Math.round((verification.settleSeconds || 300) / 60) : 5;
+      toast(`Playbook queued — verification in ~${mins} min`);
+      render();
+    } catch (err) { toast(errText(err), true); }
+  }
 
-  ClusterView.renderPage(document, container, { detail, timeline, timelineError }, clusterRenderOpts({
-    canWrite: canWrite(), back, onAck: doAck, onResolve: doResolve,
+  ClusterView.renderPage(document, container, { detail, timeline, timelineError, actions, actionsError }, clusterRenderOpts({
+    canWrite: canWrite(), back, onAck: doAck, onResolve: doResolve, onRunPlaybook: doRunPlaybook,
   }));
   return container;
 };
@@ -7587,7 +7604,7 @@ let settingsTab = null;
 // tab is [key, label, adminOnly]; non-admins only ever see the personal section.
 const SETTINGS_GROUPS = [
   ['Access & security', [['users', 'Users', true], ['auth', 'Authentication', true], ['apitokens', 'API tokens', true], ['agentkey', 'Agent key', true]]],
-  ['Detection & alerts', [['analyse', 'Analysis', true], ['alerting', 'Alerting', true], ['integrations', 'ITSM', true], ['cmdb', 'CMDB', true], ['ai', 'AI', true], ['maintenance', 'Maintenance', true]]],
+  ['Detection & alerts', [['analyse', 'Analysis', true], ['alerting', 'Alerting', true], ['runbooks', 'Runbooks', true], ['integrations', 'ITSM', true], ['cmdb', 'CMDB', true], ['ai', 'AI', true], ['maintenance', 'Maintenance', true]]],
   ['Data', [['database', 'Database', true], ['retention', 'Retention', true], ['types', 'Traffic types', true], ['map', 'Map', true]]],
   ['System', [['updates', 'Updates', true], ['agents', 'Agents', true], ['screening', 'Test Settings', true]]],
   ['Personal', [['appearance', 'Appearance', false], ['license', 'License', false]]],
@@ -7977,6 +7994,7 @@ views.settings = async () => {
     types: settingsTypesView,
     analyse: settingsAnalyseView,
     alerting: settingsAlertingView,
+    runbooks: settingsRunbooksView,
     integrations: settingsIntegrationsView,
     cmdb: settingsCmdbView,
     ai: settingsAiView,
@@ -9207,6 +9225,62 @@ async function settingsMaintenanceView() {
   return root;
 }
 
+// Runbooks admin (Fase 3): the static finding-type → recommended-action mapping
+// surfaced on the incident (Situations) page. Admin CRUD; clones the list + modal
+// + delete-confirm pattern used elsewhere.
+async function settingsRunbooksView() {
+  const { runbooks } = await api('/api/runbooks');
+  const root = el('div');
+  root.append(el('p', { class: 'muted settings-intro' }, 'Runbooks map an anomaly finding-type (e.g. cpu, probe.loss) to a concrete recommended action shown on the incident page. Write the action in Markdown; optionally link a remediation playbook so operators can run it (with verification) from the incident.'));
+
+  root.append(el('div', { class: 'section-head' },
+    el('h3', {}, `Runbooks (${runbooks.length})`),
+    el('button', { class: 'small', onclick: () => editRunbook() }, '+ New runbook')));
+
+  if (!runbooks.length) {
+    root.append(el('div', { class: 'empty' }, 'No runbooks yet. Add one to bridge a finding-type to a recommended action.'));
+    return root;
+  }
+  const rows = runbooks.map((r) => el('tr', {},
+    el('td', {}, el('span', { class: 'badge rc-type' }, esc(r.findingType))),
+    el('td', {}, el('strong', {}, esc(r.title))),
+    el('td', { class: 'muted' }, r.linkedPlaybookName ? esc(r.linkedPlaybookName) : '—'),
+    el('td', {}, el('div', { class: 'row-actions' },
+      el('button', { class: 'small ghost', onclick: () => editRunbook(r) }, 'Edit'),
+      el('button', { class: 'small ghost', onclick: () => deleteRunbook(r) }, 'Delete')))));
+  root.append(el('div', { class: 'tablewrap' }, el('table', {},
+    el('thead', {}, el('tr', {}, el('th', {}, 'Finding type'), el('th', {}, 'Title'), el('th', {}, 'Linked playbook'), el('th', {}, ''))),
+    el('tbody', {}, ...rows))));
+  return root;
+}
+
+async function editRunbook(r) {
+  // Offer the existing playbooks as link options (best-effort; empty if none).
+  let playbooks = [];
+  try { const resp = await api('/api/runbooks/playbooks'); playbooks = (resp && resp.playbooks) || []; } catch { playbooks = []; }
+  const editing = r && r.id;
+  const fields = [
+    { name: 'findingType', label: 'Finding type (metric, e.g. cpu)', type: 'text', value: r ? r.findingType : '' },
+    { name: 'title', label: 'Title', type: 'text', value: r ? r.title : '' },
+    { name: 'bodyMarkdown', label: 'Action (Markdown)', type: 'textarea', value: r ? r.bodyMarkdown : '' },
+    { name: 'linkedPlaybookId', label: 'Linked playbook (optional)', type: 'select',
+      value: r && r.linkedPlaybookId != null ? String(r.linkedPlaybookId) : '',
+      options: [{ value: '', label: '— none —' }, ...playbooks.map((p) => ({ value: String(p.id), label: p.name }))] },
+  ];
+  openModal(editing ? 'Edit runbook' : 'New runbook', fields, async (v) => {
+    const body = { findingType: v.findingType, title: v.title, bodyMarkdown: v.bodyMarkdown, linkedPlaybookId: v.linkedPlaybookId || null };
+    await api(editing ? `/api/runbooks/${r.id}` : '/api/runbooks', { method: editing ? 'PUT' : 'POST', body });
+    closeModal(); toast('Runbook saved'); render();
+  });
+  $('#modal-card').classList.add('wide');
+}
+
+async function deleteRunbook(r) {
+  if (!confirm(`Delete runbook "${r.title}"?`)) return;
+  try { await api(`/api/runbooks/${r.id}`, { method: 'DELETE' }); toast('Runbook deleted'); render(); }
+  catch (err) { toast(errText(err), true); }
+}
+
 async function settingsRetentionView() {
   const data = await api('/api/settings');
   const root = el('div');
@@ -9270,6 +9344,7 @@ function analyseSettingsCard(a) {
       { key: 'warnSigma', label: 'WARN threshold (σ from baseline)', type: 'number', min: 0.5, max: 20, step: 0.1, hint: 'Threshold for WARN — should be lower than CRIT. Typically 3.' },
       { key: 'baselineDays', label: 'Baseline window (days)', type: 'number', min: 1, max: 90, step: 1, hint: 'How many days of history the normal is calculated from.' },
       { key: 'minSamples', label: 'Min. samples before alerting', type: 'number', min: 10, max: 100000, step: 1, hint: 'Number of measurements before a metric is monitored — avoids false alarms right after startup.' },
+      { key: 'verifySettleMinutes', label: 'Verification settle time (min)', type: 'number', min: 0, max: 1440, step: 1, hint: 'After a playbook is run from an incident, how long to wait before re-checking whether the symptoms cleared. Default 5.' },
     ],
   });
 }

@@ -192,6 +192,102 @@
     return card;
   }
 
+  // --- tiny, safe markdown renderer -----------------------------------------
+  // The dashboard ships no markdown library and no HTML sanitizer beyond escaping,
+  // so this builds DOM NODES (never innerHTML) from a small, safe subset:
+  // #/##/### headings, - / * bullet lists, ``` fenced code, blank-line paragraphs,
+  // and inline **bold**, `code` and [text](http(s)://…) links. Anything else is
+  // rendered as plain, inert text — no script/raw-HTML path exists.
+  function appendInline(doc, parent, text) {
+    var re = /(\*\*([^*]+)\*\*|`([^`]+)`|\[([^\]]+)\]\((https?:\/\/[^\s)]+)\))/g;
+    var last = 0; var m;
+    while ((m = re.exec(text))) {
+      if (m.index > last) parent.appendChild(doc.createTextNode(text.slice(last, m.index)));
+      if (m[2] != null) parent.appendChild(elem(doc, 'strong', null, m[2]));
+      else if (m[3] != null) parent.appendChild(elem(doc, 'code', null, m[3]));
+      else if (m[4] != null) {
+        var a = elem(doc, 'a', null, m[4]);
+        a.setAttribute('href', m[5]); a.setAttribute('target', '_blank'); a.setAttribute('rel', 'noopener noreferrer');
+        parent.appendChild(a);
+      }
+      last = re.lastIndex;
+    }
+    if (last < text.length) parent.appendChild(doc.createTextNode(text.slice(last)));
+  }
+
+  function renderMarkdown(doc, text) {
+    var root = elem(doc, 'div', 'md');
+    var lines = String(text == null ? '' : text).replace(/\r\n/g, '\n').split('\n');
+    var i = 0; var para = null; var list = null;
+    var flushPara = function () { if (para) { root.appendChild(para); para = null; } };
+    var flushList = function () { if (list) { root.appendChild(list); list = null; } };
+    while (i < lines.length) {
+      var line = lines[i];
+      if (/^```/.test(line)) {                       // fenced code block
+        flushPara(); flushList();
+        var buf = []; i += 1;
+        while (i < lines.length && !/^```/.test(lines[i])) { buf.push(lines[i]); i += 1; }
+        root.appendChild(elem(doc, 'pre', 'md-code', buf.join('\n')));
+        i += 1; continue;
+      }
+      var h = line.match(/^(#{1,3})\s+(.*)$/);
+      if (h) { flushPara(); flushList(); var tag = h[1].length === 1 ? 'h4' : (h[1].length === 2 ? 'h5' : 'h6'); var hn = elem(doc, tag); appendInline(doc, hn, h[2]); root.appendChild(hn); i += 1; continue; }
+      var li = line.match(/^\s*[-*]\s+(.*)$/);
+      if (li) { flushPara(); if (!list) list = elem(doc, 'ul', 'md-list'); var liEl = elem(doc, 'li'); appendInline(doc, liEl, li[1]); list.appendChild(liEl); i += 1; continue; }
+      if (line.trim() === '') { flushPara(); flushList(); i += 1; continue; }
+      flushList();
+      if (!para) para = elem(doc, 'p');
+      else para.appendChild(doc.createElement('br'));
+      appendInline(doc, para, line);
+      i += 1;
+    }
+    flushPara(); flushList();
+    return root;
+  }
+
+  // Panel — Recommended actions: runbooks matching the cluster's dominant
+  // finding-types (static mapping first), each with rendered markdown and, when a
+  // runbook links a playbook, an operator+ "Run playbook" button. Its own failure
+  // domain. The AI advisory is rendered as a separate panel directly below.
+  function renderRecommendedActions(doc, actions, opts) {
+    opts = opts || {};
+    var card = elem(doc, 'div', 'card inc-recactions');
+    card.appendChild(elem(doc, 'h3', null, 'Recommended actions'));
+
+    if (opts.error) { card.appendChild(elem(doc, 'p', 'muted', 'Could not load recommended actions — the rest of this page is unaffected.')); return card; }
+    var a = actions || {};
+    var runbooks = Array.isArray(a.runbooks) ? a.runbooks : [];
+    var types = Array.isArray(a.findingTypes) ? a.findingTypes : [];
+
+    if (!runbooks.length) {
+      card.appendChild(elem(doc, 'p', 'muted',
+        types.length
+          ? 'No runbook matches this incident’s finding types (' + types.join(', ') + '). Add one in Settings → Runbooks.'
+          : 'No recommended actions — this incident has no finding-types to match.'));
+      return card;
+    }
+
+    runbooks.forEach(function (rb) {
+      var block = elem(doc, 'div', 'recaction');
+      var head = elem(doc, 'div', 'recaction-head');
+      head.appendChild(elem(doc, 'strong', null, rb.title));
+      head.appendChild(badge(doc, 'rc-type', rb.findingType));
+      block.appendChild(head);
+      block.appendChild(renderMarkdown(doc, rb.bodyMarkdown));
+      if (rb.linkedPlaybookId != null) {
+        if (opts.canWrite && typeof opts.onRunPlaybook === 'function') {
+          var btn = elem(doc, 'button', 'small', 'Run playbook' + (rb.linkedPlaybookName ? ': ' + rb.linkedPlaybookName : ''));
+          btn.addEventListener('click', function () { opts.onRunPlaybook(rb); });
+          block.appendChild(btn);
+        } else {
+          block.appendChild(elem(doc, 'p', 'muted', 'A playbook is linked — operator/admin can run it.'));
+        }
+      }
+      card.appendChild(block);
+    });
+    return card;
+  }
+
   // Panel 4 — merged timeline, filterable by source. Reuses TimelineView rows;
   // each event deep-links to its own target's device page.
   function renderTimeline(doc, timeline, opts) {
@@ -266,6 +362,12 @@
     container.appendChild(renderWhatChanged(doc, timeline || { whatChanged: [] }, opts));
     container.appendChild(renderEvidence(doc, detail));
 
+    // Recommended actions (static runbooks first) + the AI advisory directly below.
+    container.appendChild(renderRecommendedActions(doc, data.actions, {
+      error: data.actionsError, canWrite: opts.canWrite, onRunPlaybook: opts.onRunPlaybook,
+    }));
+    container.appendChild(renderAdvisory(doc, detail, { error: data.advisoryError }));
+
     if (data.timelineError) {
       var tlCard = elem(doc, 'div', 'card inc-timeline');
       tlCard.appendChild(elem(doc, 'h3', null, 'Timeline'));
@@ -274,8 +376,6 @@
     } else {
       container.appendChild(renderTimeline(doc, timeline, opts));
     }
-
-    container.appendChild(renderAdvisory(doc, detail, { error: data.advisoryError }));
     return container;
   }
 
@@ -291,6 +391,8 @@
     renderHeader: renderHeader,
     renderWhatChanged: renderWhatChanged,
     renderEvidence: renderEvidence,
+    renderRecommendedActions: renderRecommendedActions,
+    renderMarkdown: renderMarkdown,
     renderTimeline: renderTimeline,
     renderAdvisory: renderAdvisory,
     renderPage: renderPage,

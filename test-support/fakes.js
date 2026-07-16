@@ -495,6 +495,91 @@ function makeConfigSnapshotsRepo(overrides = {}) {
   };
 }
 
+// A fake runbooks repository (in-memory). Mirrors runbooksRepository's surface.
+function makeRunbooksRepo(overrides = {}) {
+  const rows = [];
+  let seq = 0;
+  const mapOut = (r) => ({
+    id: r.id, findingType: r.finding_type, title: r.title, bodyMarkdown: r.body_markdown,
+    linkedPlaybookId: r.linked_playbook_id ?? null, updatedBy: r.updated_by ?? null,
+    updatedAt: r.updated_at, createdAt: r.created_at, linkedPlaybookName: r.linked_playbook_name ?? null,
+  });
+  return {
+    rows,
+    list: overrides.list || (async () => rows.slice().sort((a, b) => (a.finding_type < b.finding_type ? -1 : 1) || b.id - a.id).map(mapOut)),
+    findById: overrides.findById || (async (id) => { const r = rows.find((x) => x.id === Number(id)); return r ? mapOut(r) : null; }),
+    listByFindingTypes: overrides.listByFindingTypes || (async (types) => {
+      const set = new Set((Array.isArray(types) ? types : []).filter((t) => t != null && t !== ''));
+      return rows.filter((r) => set.has(r.finding_type)).map(mapOut);
+    }),
+    create: overrides.create || (async ({ findingType, title, bodyMarkdown, linkedPlaybookId = null, updatedBy = null }) => {
+      const id = (seq += 1);
+      rows.push({ id, finding_type: findingType, title, body_markdown: bodyMarkdown, linked_playbook_id: linkedPlaybookId, updated_by: updatedBy, updated_at: new Date().toISOString(), created_at: new Date().toISOString() });
+      return id;
+    }),
+    update: overrides.update || (async (id, { findingType, title, bodyMarkdown, linkedPlaybookId = null, updatedBy = null }) => {
+      const r = rows.find((x) => x.id === Number(id));
+      if (!r) return false;
+      Object.assign(r, { finding_type: findingType, title, body_markdown: bodyMarkdown, linked_playbook_id: linkedPlaybookId, updated_by: updatedBy, updated_at: new Date().toISOString() });
+      return true;
+    }),
+    remove: overrides.remove || (async (id) => { const i = rows.findIndex((x) => x.id === Number(id)); if (i < 0) return false; rows.splice(i, 1); return true; }),
+  };
+}
+
+// A fake verification-runs repository (in-memory). Mirrors
+// verificationRunsRepository's surface for the verification loop + timeline.
+function makeVerificationRunsRepo(overrides = {}) {
+  const rows = [];
+  let seq = 0;
+  const iso = (v) => (v == null ? null : (v instanceof Date ? v.toISOString() : new Date(v).toISOString()));
+  const mapOut = (r) => ({
+    id: r.id, clusterId: r.cluster_id, playbookId: r.playbook_id ?? null, runbookId: r.runbook_id ?? null,
+    triggeredBy: r.triggered_by ?? null, affectedTargets: r.affected_targets || [], findingTypes: r.finding_types || [],
+    settleSeconds: r.settle_seconds, executedAt: iso(r.executed_at), dueAt: iso(r.due_at),
+    status: r.status, readings: r.readings ?? null, completedAt: iso(r.completed_at), createdAt: iso(r.created_at),
+  });
+  return {
+    rows,
+    create: overrides.create || (async (c) => {
+      const id = (seq += 1);
+      rows.push({
+        id, cluster_id: c.clusterId, playbook_id: c.playbookId ?? null, runbook_id: c.runbookId ?? null,
+        triggered_by: c.triggeredBy ?? null, affected_targets: c.affectedTargets || [], finding_types: c.findingTypes || [],
+        settle_seconds: c.settleSeconds, executed_at: c.executedAt, due_at: c.dueAt, status: 'pending',
+        readings: null, completed_at: null, created_at: new Date(),
+      });
+      return id;
+    }),
+    findById: overrides.findById || (async (id) => { const r = rows.find((x) => x.id === Number(id)); return r ? mapOut(r) : null; }),
+    listDuePending: overrides.listDuePending || (async (now) => rows
+      .filter((r) => r.status === 'pending' && new Date(r.due_at) <= new Date(now))
+      .sort((a, b) => new Date(a.due_at) - new Date(b.due_at) || a.id - b.id)
+      .map(mapOut)),
+    complete: overrides.complete || (async (id, { status, readings = null, completedAt }) => {
+      const r = rows.find((x) => x.id === Number(id) && x.status === 'pending');
+      if (!r) return false;
+      r.status = status; r.readings = readings; r.completed_at = completedAt;
+      return true;
+    }),
+    listForCluster: overrides.listForCluster || (async (clusterId) => rows
+      .filter((r) => r.cluster_id === Number(clusterId))
+      .sort((a, b) => new Date(b.executed_at) - new Date(a.executed_at) || b.id - a.id)
+      .map(mapOut)),
+  };
+}
+
+// A fake verification service (records schedule() calls; no-op sweep by default).
+function makeVerificationService(overrides = {}) {
+  const scheduled = [];
+  return {
+    scheduled,
+    schedule: overrides.schedule || (async (spec) => { const run = { id: scheduled.length + 1, status: 'pending', ...spec }; scheduled.push(run); return run; }),
+    recheck: overrides.recheck || (async () => ({ status: 'passed', readings: null })),
+    runDue: overrides.runDue || (async () => ({ checked: 0, passed: 0, failed: 0, error: 0 })),
+  };
+}
+
 // A fake incident-thresholds repository (in-memory) seeded with the same global
 // defaults as migration 023, so the derivation service behaves as in production.
 function makeIncidentThresholdsRepo(overrides = {}) {
@@ -1590,6 +1675,9 @@ function makeApp(overrides = {}) {
     incidentsRepo: overrides.incidentsRepo || makeIncidentsRepo(),
     incidentCasesRepo: overrides.incidentCasesRepo || makeIncidentCasesRepo(),
     incidentClustersRepo: overrides.incidentClustersRepo || makeIncidentClustersRepo(),
+    runbooksRepo: overrides.runbooksRepo || makeRunbooksRepo(),
+    verificationRunsRepo: overrides.verificationRunsRepo || makeVerificationRunsRepo(),
+    verificationService: overrides.verificationService || makeVerificationService(),
     remediationPlaybooksRepo: overrides.remediationPlaybooksRepo || makeRemediationPlaybooksRepo(),
     configSnapshotsRepo: overrides.configSnapshotsRepo || makeConfigSnapshotsRepo(),
     thresholdsRepo: overrides.thresholdsRepo || makeIncidentThresholdsRepo(),
@@ -1717,6 +1805,9 @@ module.exports = {
   makeIncidentsRepo,
   makeIncidentCasesRepo,
   makeIncidentClustersRepo,
+  makeRunbooksRepo,
+  makeVerificationRunsRepo,
+  makeVerificationService,
   makeAlertDispatchLogRepo,
   makeRemediationPlaybooksRepo,
   makeIncidentCaseService,

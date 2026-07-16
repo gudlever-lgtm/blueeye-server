@@ -1,5 +1,52 @@
 # Changelog
 
+## 0.81.0 — Recommended actions + post-remediation verification loop
+
+Completes "not who's to blame, but what to do": a static finding-type → runbook
+bridge on the incident (Situation) page, explicit operator-run playbooks, and a
+verification cycle that re-checks whether the symptoms actually cleared. Queries +
+UI; no new AI/ML (the Mistral advisory stays opt-in garnish).
+
+**Audit note:** the phase brief assumed an existing playbook execution path with
+retry/backoff, a `remediating` state, and playbook-success logging — none of which
+existed (migration 055 explicitly deferred execution; `recordRun` was never
+called; the state machine excludes playbook transitions). This phase builds the
+minimal execution + verification path faithful to that schema's intent.
+
+### Runbooks (static mapping first)
+- Migration **061** `runbooks` (finding_type → title + markdown body + optional
+  `linked_playbook_id`). Admin CRUD API `/api/runbooks` (+ `/playbooks` for the
+  link editor); reads viewer+, writes admin. UI: **Settings → Runbooks**.
+
+### Recommended actions on the incident page
+- `GET /api/incident-clusters/:id/recommended-actions` — runbooks matching the
+  cluster's dominant finding-types (rendered markdown), plus the cluster AI
+  advisory **only when the assistant is enabled** (clearly AI-labelled).
+- `POST /api/incident-clusters/:id/run-playbook` — operator+, confirm dialog,
+  hash-chained audit, uses the run-recording execution model and **schedules a
+  verification**. No auto-execution from clustering; existing auto-trigger rules
+  untouched. 409 on a resolved cluster.
+- Frontend: a "Recommended actions" panel (with a safe, dependency-free markdown
+  renderer) + AI advisory directly below, on the Situation page.
+
+### Verification loop
+- Migration **062** `verification_runs`. After a playbook runs, a leader-only
+  sweep (`verificationJob`) waits the configurable settle time (**Settings →
+  Analysis → verify settle**, default 5 min) then re-checks the affected targets
+  for fresh, unacknowledged findings of the relevant types:
+  cleared → **passed** (suggest resolution, never auto-resolve); persists →
+  **failed** with the current readings (cluster stays open). Every outcome is
+  hash-chained-audited and surfaced on the cluster timeline as a new
+  **`verification`** source.
+
+### Tests
+- Runbook CRUD (happy/400/401/403/404/clean-500); recommended-actions (match /
+  no-match / advisory gated by Mistral) + run-playbook (202/400/403/404/409);
+  verification (cleared, persisting-with-readings, settle-time respected,
+  acked-ignored, error, no-reprocess, timeline emission, never auto-resolves);
+  frontend jsdom (panel render, viewer vs operator, empty state, fetch-failure
+  isolation, advisory placement, markdown-injection safety).
+
 ## 0.80.0 — Incident Situation View (timeline + what-changed + evidence)
 
 One page per cross-agent situation (cluster) that answers, under pressure, what is

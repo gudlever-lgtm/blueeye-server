@@ -30,6 +30,7 @@ const { createProbesRouter } = require('./probes');
 const { createReportsRouter } = require('./reports');
 const { createIncidentsRouter } = require('./incidents');
 const { createIncidentClustersRouter } = require('./incidentClusters');
+const { createRunbooksRouter } = require('./runbooks');
 const { createTargetsRouter } = require('./targets');
 const { createTargetTimelineService } = require('../timeline/targetTimelineService');
 const { createIncidentClusterTimelineService } = require('../timeline/incidentTimelineService');
@@ -89,6 +90,9 @@ function createApiRouter({
   incidentsRepo,
   incidentCasesRepo,
   incidentClustersRepo,
+  runbooksRepo,
+  verificationRunsRepo,
+  verificationService,
   remediationPlaybooksRepo,
   configSnapshotsRepo,
   thresholdsRepo,
@@ -276,11 +280,14 @@ function createApiRouter({
     const clusterTimelineService = createIncidentClusterTimelineService({
       clustersRepo: incidentClustersRepo, findingStore, auditEventsRepo,
       remediationPlaybooksRepo, incidentsRepo, configSnapshotsRepo, auditLogRepo,
+      verificationRunsRepo,
     });
     router.use('/api/incident-clusters', createIncidentClustersRouter({
       clustersRepo: incidentClustersRepo, findingStore, auditLogger, timelineService: clusterTimelineService,
+      runbooksRepo, playbooksRepo: remediationPlaybooksRepo, verificationService, settingsService, assistant,
     }));
   }
+  if (runbooksRepo) router.use('/api/runbooks', createRunbooksRouter({ runbooksRepo, playbooksRepo: remediationPlaybooksRepo }));
   // Per-target (per-agent) incident timeline — merges findings, probe-outage
   // incidents, agent connect/disconnect and playbook runs (read-only, viewer+).
   if (agentsRepo && targetTimelineService) router.use('/api/targets', createTargetsRouter({ agentsRepo, timelineService: targetTimelineService }));

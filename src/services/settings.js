@@ -314,7 +314,7 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
   // ---- Analysis thresholds (Settings → Analysis) ----------------------
   // Editable subset of the analysis config; the AI assistant + secrets stay
   // env-only. Defaults mirror src/analysis/config.js.
-  const ANALYSIS_DEFAULTS = { analysisEnabled: true, assistantEnabled: false, critSigma: 4.0, warnSigma: 3.0, baselineDays: 7, minSamples: 200 };
+  const ANALYSIS_DEFAULTS = { analysisEnabled: true, assistantEnabled: false, critSigma: 4.0, warnSigma: 3.0, baselineDays: 7, minSamples: 200, verifySettleMinutes: 5 };
 
   function num(patch, key, min, max, isInt, errors, value) {
     if (patch[key] === undefined) return;
@@ -337,6 +337,7 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
     num(p, 'warnSigma', 0.5, 20, false, errors, value);
     num(p, 'baselineDays', 1, 90, true, errors, value);
     num(p, 'minSamples', 10, 100000, true, errors, value);
+    num(p, 'verifySettleMinutes', 0, 1440, true, errors, value);
     return { errors: Object.keys(errors).length ? errors : null, value };
   }
 
@@ -347,6 +348,7 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
     return {
       analysisEnabled: !!base.analysisEnabled, assistantEnabled: !!base.assistantEnabled,
       critSigma: base.critSigma, warnSigma: base.warnSigma, baselineDays: base.baselineDays, minSamples: base.minSamples,
+      verifySettleMinutes: base.verifySettleMinutes,
     };
   }
 
@@ -355,7 +357,7 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
     if (errors) throw badRequest('invalid analysis settings', errors);
     const current = await getAnalysis();
     const merged = { ...current, ...value };
-    await settingsRepo.set('analysis', { analysisEnabled: merged.analysisEnabled, critSigma: merged.critSigma, warnSigma: merged.warnSigma, baselineDays: merged.baselineDays, minSamples: merged.minSamples });
+    await settingsRepo.set('analysis', { analysisEnabled: merged.analysisEnabled, critSigma: merged.critSigma, warnSigma: merged.warnSigma, baselineDays: merged.baselineDays, minSamples: merged.minSamples, verifySettleMinutes: merged.verifySettleMinutes });
     if (liveAnalysis) Object.assign(liveAnalysis, value); // live-apply (consumers read lazily)
     return merged;
   }

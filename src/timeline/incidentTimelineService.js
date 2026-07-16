@@ -42,6 +42,7 @@ function createIncidentClusterTimelineService({
   incidentsRepo = null,
   configSnapshotsRepo = null,
   auditLogRepo = null,
+  verificationRunsRepo = null,
 } = {}) {
   // Member finding objects for the cluster, by id (in member order). Rejects on a
   // store failure so the caller can flag `findings` as a failed source.
@@ -85,10 +86,21 @@ function createIncidentClusterTimelineService({
     return configSnapshotsRepo.listForDeviceBetween(toNum(agentId), from, to, { limit });
   }
 
-  // Cluster lifecycle transitions (ack/resolve …) from the hash-chained audit_log.
+  // Cluster lifecycle transitions (ack/resolve, playbook_run …) from the
+  // hash-chained audit_log. Verification outcomes are ALSO audit-logged there, but
+  // they are surfaced via the dedicated 'verification' source (from
+  // verification_runs, which carries the readings) — so they are filtered out here
+  // to avoid showing each verification twice.
   async function fetchStatusChanges(clusterId) {
     if (!auditLogRepo || typeof auditLogRepo.listByTarget !== 'function') return [];
-    return auditLogRepo.listByTarget({ category: 'incident', target: String(clusterId) });
+    const rows = await auditLogRepo.listByTarget({ category: 'incident', target: String(clusterId) });
+    return (Array.isArray(rows) ? rows : []).filter((r) => !String(r.action || '').startsWith('verification_'));
+  }
+
+  // Post-remediation verification runs for the cluster (the 'verification' source).
+  async function fetchVerifications(clusterId) {
+    if (!verificationRunsRepo || typeof verificationRunsRepo.listForCluster !== 'function') return [];
+    return verificationRunsRepo.listForCluster(clusterId);
   }
 
   // Returns null if the cluster does not exist (→ 404); otherwise the merged
@@ -137,7 +149,9 @@ function createIncidentClusterTimelineService({
       jobs.push(['configChanges', id, fetchConfigChanges(id, window)]);
     }
     let statusChanges = [];
+    let verifications = [];
     const statusJob = fetchStatusChanges(clusterId);
+    const verifyJob = fetchVerifications(clusterId);
 
     const settled = await Promise.allSettled(jobs.map(([, , p]) => p));
     settled.forEach((res, idx) => {
@@ -155,6 +169,12 @@ function createIncidentClusterTimelineService({
     } catch {
       failedNames.add('statusChanges');
     }
+    try {
+      verifications = await verifyJob;
+      verifications = Array.isArray(verifications) ? verifications : [];
+    } catch {
+      failedNames.add('verifications');
+    }
 
     for (const n of failedNames) failedSources.push(n);
 
@@ -162,6 +182,7 @@ function createIncidentClusterTimelineService({
       memberFindings: members,
       agentSources: [...perAgent.values()],
       statusChanges,
+      verifications,
       firstFindingAt,
       lookbackMs,
     });

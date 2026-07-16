@@ -73,6 +73,25 @@ test('serviceNow: updates the existing incident (PATCH) for idempotency', async 
   assert.equal(patch.headers.Authorization, 'Bearer tok'); // oauth2 -> Bearer
 });
 
+test('serviceNow: a worknote event APPENDS work_notes to the same ticket (no field rewrite)', async () => {
+  const fetchImpl = scriptFetch([
+    { status: 200, body: { result: [{ sys_id: 'SYS9' }] } },   // lookup: existing cluster ticket
+    { status: 200, body: { result: { number: 'INC0009', sys_id: 'SYS9' } } }, // PATCH work_notes
+  ]);
+  const c = createServiceNowConnector({ fetchImpl });
+  const res = await c.send(
+    { baseUrl: 'https://x', authType: 'basic', credentials: { username: 'u', password: 'p' }, config: {} },
+    { correlationId: 'be-cluster-7', worknote: 'Escalated: first CRIT member (agent 3).' },
+  );
+  assert.equal(res.ok, true);
+  assert.equal(res.action, 'worknote');
+  assert.equal(res.ref, 'SYS9'); // the ticket ref is surfaced (stored on the cluster)
+  const patch = fetchImpl.calls[1];
+  assert.equal(patch.method, 'PATCH');
+  assert.equal(patch.body.work_notes, 'Escalated: first CRIT member (agent 3).');
+  assert.equal(patch.body.short_description, undefined); // journal-only append, no field rewrite
+});
+
 test('serviceNow: WARN/INFO map to lower impact/urgency', async () => {
   for (const [severity, want] of [['WARN', '2'], ['INFO', '3']]) {
     const fetchImpl = scriptFetch([{ status: 200, body: { result: [] } }, { status: 201, body: {} }]);

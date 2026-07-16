@@ -276,6 +276,12 @@ function makeIncidentClustersRepo(overrides = {}) {
     memberFindingIds: Array.isArray(r.member_finding_ids) ? r.member_finding_ids : [],
     suspectedCommonCause: r.suspected_common_cause ?? null,
     advisory: r.advisory ?? null,
+    alertLastAt: iso(r.alert_last_at),
+    alertLastSeverity: r.alert_last_severity ?? null,
+    alertMemberCount: r.alert_member_count ?? null,
+    itsmTicketRef: r.itsm_ticket_ref ?? null,
+    itsmIntegrationId: r.itsm_integration_id ?? null,
+    nis2DraftId: r.nis2_draft_id ?? null,
     status: r.status,
     detectedAt: iso(r.detected_at),
     acknowledgedAt: iso(r.acknowledged_at),
@@ -363,6 +369,18 @@ function makeIncidentClustersRepo(overrides = {}) {
     count: overrides.count || (async (f = {}) => rows.filter((r) => (!f.status || r.status === f.status)
       && (!f.from || new Date(r.detected_at) >= new Date(f.from))
       && (!f.to || new Date(r.detected_at) <= new Date(f.to))).length),
+    updateAlertState: overrides.updateAlertState || (async (id, { at, severity, memberCount }) => {
+      const r = rows.find((x) => x.id === Number(id)); if (!r) return false;
+      r.alert_last_at = at; r.alert_last_severity = severity; r.alert_member_count = memberCount; return true;
+    }),
+    setItsmRef: overrides.setItsmRef || (async (id, { ticketRef, integrationId = null }) => {
+      const r = rows.find((x) => x.id === Number(id)); if (!r) return false;
+      r.itsm_ticket_ref = ticketRef; r.itsm_integration_id = integrationId; return true;
+    }),
+    setNis2Draft: overrides.setNis2Draft || (async (id, draftId) => {
+      const r = rows.find((x) => x.id === Number(id)); if (!r || r.nis2_draft_id != null) return false;
+      r.nis2_draft_id = draftId; return true;
+    }),
   };
 }
 
@@ -1095,6 +1113,10 @@ function makeAlertDispatchLogRepo(overrides = {}) {
       return [...new Set(rows.filter((r) => r.subjectType === 'finding' && want.has(String(r.subjectId))).map((r) => String(r.subjectId)))];
     }),
     list: overrides.list || (async ({ subjectType = null } = {}) => rows.filter((r) => !subjectType || r.subjectType === subjectType)),
+    listForSubject: overrides.listForSubject || (async ({ subjectType, subjectId } = {}) => rows
+      .filter((r) => r.subjectType === subjectType && String(r.subjectId) === String(subjectId))
+      .slice().reverse()
+      .map((r) => ({ id: r.id, subjectType: r.subjectType, subjectId: r.subjectId, event: r.hostId ?? null, metric: r.metric ?? null, severity: r.severity ?? null, channels: r.channels ?? null, sentAt: r.sentAt ?? null }))),
   };
 }
 
@@ -1347,6 +1369,8 @@ function makeIntegrationsDispatcher(overrides = {}) {
     emit: overrides.emit || (async (event) => { calls.push(event); return { dispatched: 0, results: [] }; }),
     emitFinding: overrides.emitFinding || (async (finding) => { calls.push({ kind: 'finding', finding }); return { dispatched: 0, results: [] }; }),
     emitAgentEvent: overrides.emitAgentEvent || (async (kind, agent) => { calls.push({ kind: `agent.${kind}`, agent }); return { dispatched: 0, results: [] }; }),
+    emitCluster: overrides.emitCluster || (async (cluster) => { calls.push({ kind: 'cluster', cluster }); return { dispatched: 1, results: [{ ok: true, ref: `SNOW-${cluster.clusterId}` }], ref: { ticketRef: `SNOW-${cluster.clusterId}`, integrationId: 1 } }; }),
+    emitClusterNote: overrides.emitClusterNote || (async (cluster, note) => { calls.push({ kind: 'cluster-note', cluster, note }); return { dispatched: 1, results: [{ ok: true }] }; }),
     testFire: overrides.testFire || (async () => ({ ok: true, status: 201, detail: 'created (201)' })),
   };
 }
@@ -1726,6 +1750,8 @@ function makeApp(overrides = {}) {
     incidentsRepo: overrides.incidentsRepo || makeIncidentsRepo(),
     incidentCasesRepo: overrides.incidentCasesRepo || makeIncidentCasesRepo(),
     incidentClustersRepo: overrides.incidentClustersRepo || makeIncidentClustersRepo(),
+    alertDispatchLogRepo: overrides.alertDispatchLogRepo || makeAlertDispatchLogRepo(),
+    clusterNotifier: overrides.clusterNotifier || null,
     runbooksRepo: overrides.runbooksRepo || makeRunbooksRepo(),
     verificationRunsRepo: overrides.verificationRunsRepo || makeVerificationRunsRepo(),
     verificationService: overrides.verificationService || makeVerificationService(),

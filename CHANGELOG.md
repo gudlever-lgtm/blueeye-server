@@ -1,5 +1,57 @@
 # Changelog
 
+## 0.83.0 — Cluster-level alerting, ITSM bridge & NIS2 draft
+
+Rolls a clustered incident's notifications up to the CLUSTER: one alert lifecycle,
+one ITSM ticket, one NIS2 draft — instead of N per member finding. Backward
+compatible: un-clustered findings and low-confidence clusters keep per-finding
+alerting unchanged.
+
+**Audit note (premise partly off, as in F3/F4):** ITSM connectors had **no
+worknote/comment method** and **no state-map**; nothing stored an external ticket
+id per cluster; the cluster path never called the integrations dispatcher; and the
+NIS2 persisted-draft path had **no template fallback** when Mistral is off.
+
+### Alert rollup
+- Pure engine `src/analysis/clusterRollup.js` — decides **opened / update /
+  escalation / resolved / none** from the cluster's stored alert state. Digest
+  window (default 10 min) + **CRIT escalation bypass**. Dispatcher gains
+  `dispatchClusterEvent` with **per-channel digest** (`digestMode: 'silent'` skips
+  mid-incident updates, still gets opened/escalation/resolved).
+- Orchestrator `clusterNotifier.js` wired into the cluster sweep + the resolve API:
+  cluster-opened alert, digested updates, immediate escalation, one resolution
+  alert (duration + note).
+- **Suppression**: a dispatch-time gate (`clusterAlertGate.js`) suppresses a
+  finding's individual alert + ITSM emit once its host is in an open medium/high
+  cluster; the sweep records every suppression (audit + cluster timeline —
+  "rolled into cluster #X"), honouring the **race case** (already-alerted members
+  are noted, never recalled). Migration **064** adds the rollup state + refs.
+
+### ITSM bridge
+- ServiceNow/custom connectors gain **worknote append** (`work_notes`, journal-only)
+  + return the ticket ref; integrations dispatcher gains `emitCluster` /
+  `emitClusterNote`. **One ticket per cluster** (idempotent `be-cluster-<id>`),
+  worknotes on update/escalation/resolve, ref stored on the cluster. Reuses the
+  existing retry/backoff; a connector failure never blocks alerting or the sweep.
+
+### NIS2 cluster draft
+- `clusterNis2.js` — **one** cluster-level draft via the existing pipeline,
+  **fully functional without Mistral** (template fallback), AI-masked + clearly
+  marked when enabled. Invariants preserved (`notification_required=false`, never
+  auto-submitted, `[AI draft]`/`[Cluster draft]` title). Per-finding drafts
+  suppressed with an audit link; `nis2_draft_id` stored on the cluster.
+
+### API
+- `GET /api/incident-clusters/:id/notifications` — the ONE ticket ref, the ONE
+  NIS2 draft id, and the cluster-level alert history (viewer+, 400/401/404/500).
+
+### Tests
+Rollup (opened/digest/silent/escalation/resolved), notifier (opened + one ticket +
+NIS2 + suppression; escalation worknote; digest hold; resolution; ITSM-failure
+isolation; race case), NIS2 (invariants, works without Mistral, AI-marked,
+idempotent), gate + pipeline suppression (individual alert + ITSM emit skipped),
+ServiceNow worknote append, and the notifications API.
+
 ## 0.82.0 — LLDP neighbor graph for incident clustering
 
 Adds a minimal, queryable L2 topology so cross-agent clustering can group findings

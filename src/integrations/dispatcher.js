@@ -133,7 +133,7 @@ function createIntegrationsDispatcher({
   }
 
   // Fans an event out to every enabled, subscribed integration.
-  async function emit(event) {
+  async function emit(event, { bypassDebounce = false } = {}) {
     let integrations = [];
     try {
       integrations = await integrationsRepo.findEnabledWithSecret();
@@ -146,7 +146,7 @@ function createIntegrationsDispatcher({
       const connector = registry.get(integration.type);
       if (!connector) continue;
       if (!registry.eventsFor(integration, connector).includes(event.type)) continue;
-      const r = await fireOne(integration, event); // eslint-disable-line no-await-in-loop
+      const r = await fireOne(integration, event, { bypassDebounce }); // eslint-disable-line no-await-in-loop
       results.push({ integrationId: integration.id, name: integration.name, ...r });
     }
     return { dispatched: results.filter((r) => !r.skipped).length, results };
@@ -193,6 +193,47 @@ function createIntegrationsDispatcher({
     return emit(agentEvent(kind, agent));
   }
 
+  // A cross-agent incident cluster as an ITSM event (Fase 5). ONE ticket per
+  // cluster: correlation_id `be-cluster-<id>` makes the connector idempotent, so a
+  // clustered incident never spawns per-member tickets. `worknote`, when set, makes
+  // the connector APPEND a comment to the same ticket instead of rewriting it.
+  function clusterEvent(cluster, { worknote = null } = {}) {
+    return {
+      type: 'incident',
+      kind: 'cluster',
+      severity: String(cluster.severity || 'WARN').toUpperCase(),
+      correlationId: `be-cluster-${cluster.clusterId}`,
+      summary: cluster.summary || cluster.suspectedCommonCause || 'Cross-agent incident',
+      worknote: worknote || null,
+      cluster: {
+        id: cluster.clusterId, confidence: cluster.confidence, agentCount: cluster.agentCount,
+        classification: cluster.classification, memberCount: cluster.memberCount,
+      },
+    };
+  }
+
+  // First ok result's external ticket ref (sys_id) + integration id — the caller
+  // stores these on the cluster.
+  function firstRef(results) {
+    const ok = (results || []).find((r) => r.ok && r.ref);
+    return ok ? { ticketRef: ok.ref, integrationId: ok.integrationId } : null;
+  }
+
+  // Cluster-opened → create-or-update the ONE ticket. Returns the fan-out result
+  // plus `ref` (ticketRef + integrationId) so the cluster can store it.
+  async function emitCluster(cluster) {
+    if (!cluster || cluster.clusterId == null) return { dispatched: 0, results: [], ref: null };
+    const out = await emit(clusterEvent(cluster), { bypassDebounce: true });
+    return { ...out, ref: firstRef(out.results) };
+  }
+
+  // Cluster update/escalation/verification/resolve → append a worknote to the same
+  // ticket. Connectors without worknote support skip it (never a duplicate ticket).
+  async function emitClusterNote(cluster, note) {
+    if (!cluster || cluster.clusterId == null || !note) return { dispatched: 0, results: [] };
+    return emit(clusterEvent(cluster, { worknote: String(note) }), { bypassDebounce: true });
+  }
+
   // Manual test-fire from the admin API. Loads the integration (with its secret),
   // runs the connector's connectivity test (NO debounce), records an audit row and
   // returns the ACTUAL result (incl. the target's HTTP status). Returns null when
@@ -216,7 +257,7 @@ function createIntegrationsDispatcher({
     return result;
   }
 
-  return { emit, emitFinding, emitAgentEvent, testFire };
+  return { emit, emitFinding, emitAgentEvent, emitCluster, emitClusterNote, testFire };
 }
 
 module.exports = { createIntegrationsDispatcher, isRetryable };

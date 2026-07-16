@@ -38,6 +38,11 @@ function createCrossAgentClusterService({
   // Opt-in LLDP neighbor graph (nullable). When present, it is the topology signal
   // for findings NOT already grouped by shared site — manual/site ALWAYS wins.
   topologyGraph = null,
+  // Fase 5: cluster notification orchestrator (rollup alerting + ITSM + NIS2 +
+  // suppression). When present it OWNS medium/high cluster notification; low
+  // clusters keep per-finding alerting (nothing to roll up). Nullable → legacy
+  // single cluster-alert via maybeAlert.
+  notifier = null,
   correlator = createCrossAgentCorrelator({ windowMs: DEFAULT_WINDOW_MS }),
   windowMs = DEFAULT_WINDOW_MS,
   // No new member finding within this window → the cluster is resolved (findings
@@ -188,6 +193,22 @@ function createCrossAgentClusterService({
     return memberFindingIds.map((id) => membersById.get(id)).filter(Boolean);
   }
 
+  // Normalised cluster object for the notifier (candidate fields + persisted refs).
+  function toNotifyCluster(id, cand, persisted = {}) {
+    return {
+      clusterId: id, id,
+      confidence: cand.confidence,
+      severity: cand.severity || 'WARN',
+      memberFindingIds: cand.memberFindingIds || [],
+      hostIds: cand.hostIds || [],
+      suspectedCommonCause: cand.suspectedCommonCause || null,
+      advisory: cand.advisory || null,
+      firstSeen: persisted.createdAt || cand.detectedAt || null,
+      itsmTicketRef: persisted.itsmTicketRef || null,
+      nis2DraftId: persisted.nis2DraftId || null,
+    };
+  }
+
   // Runs one detection pass: load recent findings across all hosts, detect
   // candidate clusters, then create-or-update each (deduped). Returns a summary
   // { created, updated } for the caller/tests. Never throws.
@@ -237,11 +258,23 @@ function createCrossAgentClusterService({
           });
           if (ok) {
             summary.updated += 1;
+            const prevMemberIds = existing.memberFindingIds; // pre-merge
+            const newIds = merged.filter((mid) => !prevMemberIds.includes(mid));
             existing.memberFindingIds = merged; // keep local view consistent for later candidates
             publishCluster({ ...candidate, id: existing.id, status: 'open', memberFindingIds: merged, updated: true });
             const mergedCandidate = { ...candidate, memberFindingIds: merged };
             const advisory = await maybeAdvise(existing.id, mergedCandidate, membersById, existing.advisory);
-            await maybeAlert(existing.id, { ...mergedCandidate, advisory }, membersOf(merged, membersById));
+            if (notifier && ADVISORY_CONFIDENCE.has(candidate.confidence)) {
+              await notifier.notify({
+                event: 'updated',
+                cluster: toNotifyCluster(existing.id, { ...mergedCandidate, advisory }, existing),
+                prev: { alertLastAt: existing.alertLastAt, alertLastSeverity: existing.alertLastSeverity, alertMemberCount: existing.alertMemberCount },
+                members: membersOf(merged, membersById),
+                newMemberFindings: membersOf(newIds, membersById),
+              });
+            } else {
+              await maybeAlert(existing.id, { ...mergedCandidate, advisory }, membersOf(merged, membersById));
+            }
           }
         } else {
           const id = await clustersRepo.create({
@@ -253,10 +286,23 @@ function createCrossAgentClusterService({
           });
           summary.created += 1;
           const created = { ...candidate, id, status: 'open' };
-          open.push({ id, memberFindingIds: candidate.memberFindingIds, status: 'open' });
+          // Seed the local open-list entry with alert state so a later candidate
+          // overlapping this just-created cluster in the same sweep sees it as
+          // already-opened (no duplicate opened alert).
+          open.push({ id, memberFindingIds: candidate.memberFindingIds, status: 'open', alertLastAt: now(), alertLastSeverity: candidate.severity, alertMemberCount: candidate.memberFindingIds.length });
           publishCluster(created);
           const advisory = await maybeAdvise(id, candidate, membersById, null);
-          await maybeAlert(id, { ...candidate, advisory }, membersOf(candidate.memberFindingIds, membersById));
+          if (notifier && ADVISORY_CONFIDENCE.has(candidate.confidence)) {
+            await notifier.notify({
+              event: 'opened',
+              cluster: toNotifyCluster(id, { ...candidate, advisory }, {}),
+              prev: {},
+              members: membersOf(candidate.memberFindingIds, membersById),
+              newMemberFindings: membersOf(candidate.memberFindingIds, membersById),
+            });
+          } else {
+            await maybeAlert(id, { ...candidate, advisory }, membersOf(candidate.memberFindingIds, membersById));
+          }
         }
       } catch (err) {
         logger.warn(`cross-agent: could not persist cluster (${err.message})`);
@@ -311,6 +357,17 @@ function createCrossAgentClusterService({
         if (!ok) continue; // lost a race
         resolved += 1;
         publishCluster({ id: c.id, status: 'resolved', confidence: c.confidence, memberFindingIds: c.memberFindingIds });
+        // ONE resolution alert (+ ITSM worknote) with duration. Only for clusters
+        // that were notified (medium/high); best-effort, never blocks resolution.
+        if (notifier && ADVISORY_CONFIDENCE.has(c.confidence)) {
+          const startMs = new Date(c.createdAt || c.detectedAt || now()).getTime();
+          const mins = Math.max(0, Math.round((now().getTime() - startMs) / 60000));
+          await notifier.notify({
+            event: 'resolved',
+            cluster: { ...toNotifyCluster(c.id, { confidence: c.confidence, severity: c.alertLastSeverity || 'WARN', memberFindingIds: c.memberFindingIds, suspectedCommonCause: c.suspectedCommonCause }, c), durationText: `${mins} min`, resolvedAt: now(), resolutionNote: c.resolutionNote || 'auto-resolved after inactivity' },
+            members: [],
+          });
+        }
       } catch (err) {
         logger.warn(`cross-agent: could not resolve cluster ${c.id} (${err.message})`);
       }

@@ -57,7 +57,7 @@ function parseIntParam(raw, fallback, { min = 0, max = Number.MAX_SAFE_INTEGER }
 function createIncidentClustersRouter({
   clustersRepo, findingStore = null, auditLogger = null, timelineService = null,
   runbooksRepo = null, playbooksRepo = null, verificationService = null,
-  settingsService = null, assistant = null,
+  settingsService = null, assistant = null, alertLog = null, notifier = null,
 }) {
   const router = express.Router();
   const reader = requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN);
@@ -226,6 +226,28 @@ function createIncidentClustersRouter({
     });
   }));
 
+  // GET /api/incident-clusters/:id/notifications — the cluster's rollup state:
+  // the ONE ITSM ticket ref, the ONE NIS2 draft id, and the cluster-level alert
+  // history (opened/update/escalation/resolved). viewer+.
+  router.get('/:id/notifications', requireAuth, reader, asyncHandler(async (req, res) => {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(400).json({ error: 'id must be a positive integer' });
+    const cluster = await clustersRepo.findById(id);
+    if (!cluster) return res.status(404).json({ error: 'Incident cluster not found' });
+
+    const alerts = alertLog && typeof alertLog.listForSubject === 'function'
+      ? await alertLog.listForSubject({ subjectType: 'cluster', subjectId: id }) : [];
+    return res.json({
+      clusterId: id,
+      itsmTicketRef: cluster.itsmTicketRef ?? null,
+      itsmIntegrationId: cluster.itsmIntegrationId ?? null,
+      nis2DraftId: cluster.nis2DraftId ?? null,
+      alertLastAt: cluster.alertLastAt ?? null,
+      alertLastSeverity: cluster.alertLastSeverity ?? null,
+      alerts,
+    });
+  }));
+
   // POST /api/incident-clusters/:id/ack — acknowledge (operator+). Audited.
   router.post('/:id/ack', requireAuth, writer, asyncHandler(async (req, res) => {
     const id = parseId(req.params.id);
@@ -276,6 +298,24 @@ function createIncidentClustersRouter({
         category: 'incident', action: 'cluster_resolve', target: String(id),
         detail: `${existing.status}→resolved: ${note.slice(0, 200)}`,
       });
+    }
+
+    // ONE resolution alert (+ ITSM worknote) with the note — best-effort, never
+    // blocks the response. Only for clusters that were notified (medium/high).
+    if (notifier && typeof notifier.notify === 'function' && ['medium', 'high'].includes(existing.confidence)) {
+      const startMs = new Date(existing.createdAt || existing.detectedAt || Date.now()).getTime();
+      const mins = Math.max(0, Math.round((Date.now() - startMs) / 60000));
+      try {
+        await notifier.notify({
+          event: 'resolved',
+          cluster: {
+            clusterId: id, id, confidence: existing.confidence, severity: existing.alertLastSeverity || 'WARN',
+            memberFindingIds: existing.memberFindingIds, suspectedCommonCause: existing.suspectedCommonCause,
+            itsmTicketRef: existing.itsmTicketRef, durationText: `${mins} min`, resolutionNote: note,
+          },
+          members: [],
+        });
+      } catch { /* notification failure never affects the resolve */ }
     }
 
     const updated = await clustersRepo.findById(id);

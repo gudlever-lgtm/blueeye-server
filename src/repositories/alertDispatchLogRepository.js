@@ -78,7 +78,29 @@ function createAlertDispatchLogRepository(db) {
     }));
   }
 
-  return { record, existsForCluster, listAlertedFindings, list };
+  // All dispatched-alert rows for one subject (e.g. a cluster's notification
+  // history), newest first. For the read API.
+  async function listForSubject({ subjectType, subjectId, limit = 200 }) {
+    const lim = Number.isInteger(limit) && limit > 0 && limit <= 2000 ? limit : 200;
+    const [rows] = await pool.query(
+      `SELECT id, subject_type, subject_id, host_id, metric, severity, channels, sent_at, created_at
+         FROM alert_dispatch_log WHERE subject_type = ? AND subject_id = ?
+        ORDER BY id DESC LIMIT ?`,
+      [subjectType, String(subjectId), lim],
+    );
+    return rows.map((r) => ({
+      id: Number(r.id),
+      subjectType: r.subject_type,
+      subjectId: r.subject_id,
+      event: r.host_id ?? null,   // dispatchClusterEvent stamps the kind into host_id
+      metric: r.metric ?? null,
+      severity: r.severity ?? null,
+      channels: r.channels ?? null,
+      sentAt: toIso(r.sent_at),
+    }));
+  }
+
+  return { record, existsForCluster, listAlertedFindings, list, listForSubject };
 }
 
 module.exports = { createAlertDispatchLogRepository };

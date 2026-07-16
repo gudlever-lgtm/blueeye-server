@@ -186,6 +186,12 @@ function createCustomItsmConnector({ fetchImpl = globalThis.fetch, logger = sile
 
   // Sends the event as a ticket create. Returns { ok, status, detail, correlationId }.
   async function send(integration, event) {
+    // This connector is create-only (no idempotent update path), so a cluster
+    // WORKNOTE event would create a duplicate record. Skip it — cluster updates
+    // only append to connectors that support worknotes (e.g. ServiceNow).
+    if (event && event.worknote) {
+      return { ok: true, skipped: true, detail: 'worknotes unsupported by custom ITSM' };
+    }
     const base = String(integration.baseUrl || '').replace(/\/+$/, '');
     const method = methodOf(integration);
     const path = pathOf(integration);

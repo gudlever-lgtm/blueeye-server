@@ -13,6 +13,7 @@
 const OPEN_STATUSES = ['open', 'acknowledged'];
 
 const BASE_COLUMNS = `id, confidence, member_finding_ids, suspected_common_cause, advisory,
+  alert_last_at, alert_last_severity, alert_member_count, itsm_ticket_ref, itsm_integration_id, nis2_draft_id,
   status, detected_at, acknowledged_at, acknowledged_by, resolved_at, resolved_by,
   resolution_note, created_at, updated_at`;
 
@@ -38,6 +39,12 @@ function mapRow(row) {
     memberFindingIds: parseIds(row.member_finding_ids),
     suspectedCommonCause: row.suspected_common_cause ?? null,
     advisory: row.advisory ?? null,
+    alertLastAt: toIso(row.alert_last_at),
+    alertLastSeverity: row.alert_last_severity ?? null,
+    alertMemberCount: row.alert_member_count == null ? null : Number(row.alert_member_count),
+    itsmTicketRef: row.itsm_ticket_ref ?? null,
+    itsmIntegrationId: row.itsm_integration_id == null ? null : Number(row.itsm_integration_id),
+    nis2DraftId: row.nis2_draft_id == null ? null : Number(row.nis2_draft_id),
     status: row.status,
     detectedAt: toIso(row.detected_at),
     acknowledgedAt: toIso(row.acknowledged_at),
@@ -203,9 +210,40 @@ function createIncidentClustersRepository(db) {
     return Number(rows[0] ? rows[0].n : 0);
   }
 
+  // Records that a cluster-level alert was just sent — the digest/escalation state
+  // the rollup engine reads next time.
+  async function updateAlertState(id, { at, severity, memberCount }) {
+    const [res] = await pool.query(
+      `UPDATE incident_clusters
+          SET alert_last_at = ?, alert_last_severity = ?, alert_member_count = ?
+        WHERE id = ?`,
+      [at, severity, memberCount, id],
+    );
+    return res.affectedRows > 0;
+  }
+
+  // Stores the ONE external ITSM ticket a clustered incident maps to.
+  async function setItsmRef(id, { ticketRef, integrationId = null }) {
+    const [res] = await pool.query(
+      'UPDATE incident_clusters SET itsm_ticket_ref = ?, itsm_integration_id = ? WHERE id = ?',
+      [ticketRef, integrationId, id],
+    );
+    return res.affectedRows > 0;
+  }
+
+  // Links the ONE cluster-level NIS2 draft (blueeye_nis2_incidents.id).
+  async function setNis2Draft(id, draftId) {
+    const [res] = await pool.query(
+      'UPDATE incident_clusters SET nis2_draft_id = ? WHERE id = ? AND nis2_draft_id IS NULL',
+      [draftId, id],
+    );
+    return res.affectedRows > 0;
+  }
+
   return {
     create, findById, listOpen, updateMembership, setAdvisory, updateStatus,
     listStaleOpen, list, count, acknowledge, resolve,
+    updateAlertState, setItsmRef, setNis2Draft,
   };
 }
 

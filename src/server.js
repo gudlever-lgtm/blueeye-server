@@ -59,6 +59,9 @@ const { createIncidentClustersRepository } = require('./repositories/incidentClu
 const { createRunbooksRepository } = require('./repositories/runbooksRepository');
 const { createLldpNeighborsRepository } = require('./repositories/lldpNeighborsRepository');
 const { createLldpGraphService } = require('./topology/lldpGraphService');
+const { createClusterNotifier } = require('./analysis/clusterNotifier');
+const { createClusterNis2Service } = require('./analysis/clusterNis2');
+const { createClusterAlertGate } = require('./analysis/clusterAlertGate');
 const { createVerificationRunsRepository } = require('./repositories/verificationRunsRepository');
 const { createVerificationService } = require('./remediation/verificationService');
 const { createVerificationJob } = require('./remediation/verificationJob');
@@ -493,6 +496,11 @@ function start() {
   // silencer reads windows from settingsService, which is built further down, so
   // it's bound after that. (createSilencer is in alerting/maintenance.js.)
 
+  // Fase 5: dispatch-time cluster suppression gate — suppresses a finding's
+  // individual alert + ITSM emit when its host is already covered by an open
+  // medium/high cluster (rolled into the ONE cluster notification).
+  const clusterAlertGate = createClusterAlertGate({ clustersRepo: incidentClustersRepo, findingStore, logger });
+
   const analysisPipeline = createAnalysisPipeline({
     detector,
     findingStore,
@@ -504,6 +512,7 @@ function start() {
     alertingEnabled: () => alertingConfig.enabled,
     // Outbound integrations fire on findings independently of local alerting.
     integrationTrigger: integrationsDispatcher,
+    clusterAlertGate,
     // Detector runs only if the license includes analysis (AND config enables it).
     licensed: () => featureGate.isFeatureEnabled('analysis'),
     // Push findings to connected dashboards (browsers), not to agents.
@@ -528,6 +537,7 @@ function start() {
     incidentCaseService,
     alertingEnabled: () => alertingConfig.enabled,
     integrationTrigger: integrationsDispatcher,
+    clusterAlertGate,
     licensed: () => featureGate.isFeatureEnabled('analysis'),
     geoProvider,
     publishFinding: (hostId, message) => (dashboardWs ? dashboardWs.broadcast(message) : 0),
@@ -548,6 +558,22 @@ function start() {
   // opt-in assistant is enabled, it also builds a cluster-level Mistral advisory from
   // the member findings (never surfaced without their evidence). Runs as a
   // leader-only sweep (backgroundJobs) — off the ingest hot path.
+  // Fase 5: cluster notification orchestrator — rolls the incident's alerting,
+  // ITSM ticket and NIS2 draft up to the cluster (one each) instead of per finding.
+  const clusterNis2Service = createClusterNis2Service({
+    nis2IncidentsRepo, clustersRepo: incidentClustersRepo, assistant, auditLogger, logger,
+  });
+  const clusterNotifier = createClusterNotifier({
+    alertDispatcher: dispatcher,
+    integrationTrigger: integrationsDispatcher,
+    nis2Service: clusterNis2Service,
+    clustersRepo: incidentClustersRepo,
+    alertLog: alertDispatchLogRepo,
+    auditLogger,
+    publishCluster: (cluster) => (dashboardWs ? dashboardWs.broadcast({ type: 'incident_cluster', payload: cluster }) : 0),
+    logger,
+  });
+
   const crossAgentClusterService = createCrossAgentClusterService({
     clustersRepo: incidentClustersRepo,
     findingStore,
@@ -556,6 +582,7 @@ function start() {
     alertDispatcher: dispatcher,
     alertLog: alertDispatchLogRepo,
     topologyGraph: lldpGraphService,
+    notifier: clusterNotifier,
     publishCluster: (cluster) => (dashboardWs ? dashboardWs.broadcast({ type: 'incident_cluster', payload: cluster }) : 0),
     logger,
   });
@@ -686,6 +713,8 @@ function start() {
     incidentsRepo,
     incidentCasesRepo,
     incidentClustersRepo,
+    clusterNotifier,
+    alertDispatchLogRepo,
     runbooksRepo,
     verificationRunsRepo,
     verificationService,

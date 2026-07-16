@@ -23,6 +23,10 @@ function createAnalysisPipeline({
   dispatcher = null,
   alertingEnabled = false,
   integrationTrigger = null,
+  // Fase 5: dispatch-time cluster suppression gate. When a finding's host is
+  // already covered by an open medium/high cluster, its INDIVIDUAL alert + ITSM
+  // emit are suppressed (rolled into the cluster). Nullable → no suppression.
+  clusterAlertGate = null,
   licensed = () => true,
   logger = silentLogger,
 }) {
@@ -63,18 +67,33 @@ function createAnalysisPipeline({
   // Sends produced findings to the alerting channels (behind the feature flag).
   // Each finding is dispatched with the correlation group it belongs to, if any.
   // Best-effort: a dispatch failure never affects ingestion.
-  async function dispatchAlerts(produced, groups) {
+  async function dispatchAlerts(produced, groups, suppressed) {
     const groupOf = new Map();
     for (const g of groups || []) {
       for (const f of g.findings || []) groupOf.set(f.id, g);
     }
     for (const finding of produced) {
+      if (suppressed && suppressed.has(finding.id)) continue; // rolled into an open cluster
       try {
         await dispatcher.dispatch(finding, groupOf.get(finding.id) || null);
       } catch (err) {
         logger.warn(`alerting: dispatch failed for ${finding.id} (${err.message})`);
       }
     }
+  }
+
+  // The ids of findings whose individual alert + ITSM emit are suppressed because
+  // their host is already covered by an open medium/high cluster.
+  async function suppressedFindingIds(produced) {
+    if (!clusterAlertGate || typeof clusterAlertGate.suppressedCluster !== 'function') return new Set();
+    try {
+      if (typeof clusterAlertGate.ensureFresh === 'function') await clusterAlertGate.ensureFresh();
+    } catch { /* stale gate is fine — falls back to per-finding alerting */ }
+    const set = new Set();
+    for (const f of produced) {
+      if (clusterAlertGate.suppressedCluster(f)) set.add(f.id);
+    }
+    return set;
   }
 
   // Evaluates every metric sample in a batch of result payloads; saves and
@@ -143,9 +162,11 @@ function createAnalysisPipeline({
     // Alerting: route findings to channels (behind the alerting feature flag).
     // alertingEnabled may be a live getter so a runtime enable/disable applies.
     const alertOn = typeof alertingEnabled === 'function' ? alertingEnabled() : alertingEnabled;
+    // Compute cluster-suppressed findings once (shared by alerting + ITSM emit).
+    const suppressed = produced.length > 0 ? await suppressedFindingIds(produced) : new Set();
     if (dispatcher && alertOn && produced.length > 0) {
       try {
-        await dispatchAlerts(produced, groups);
+        await dispatchAlerts(produced, groups, suppressed);
       } catch (err) {
         logger.warn(`alerting: dispatch step failed (${err.message})`);
       }
@@ -154,8 +175,10 @@ function createAnalysisPipeline({
     // (ServiceNow incident, etc.). Fire-and-forget so the dispatcher's own
     // retry/backoff never slows or breaks ingestion; it is independent of the
     // alerting flag (a customer may push to ServiceNow without local alerting).
+    // Cluster-suppressed findings are NOT emitted — the ONE cluster ticket covers them.
     if (integrationTrigger && typeof integrationTrigger.emitFinding === 'function') {
       for (const finding of produced) {
+        if (suppressed.has(finding.id)) continue;
         try { integrationTrigger.emitFinding(finding).catch(() => {}); } catch { /* never affects ingestion */ }
       }
     }

@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.82.0 — LLDP neighbor graph for incident clustering
+
+Adds a minimal, queryable L2 topology so cross-agent clustering can group findings
+by neighbor adjacency when no shared-site (manual) topology applies.
+
+**Audit note:** the brief assumed BlueEye already collects LLDP as part of "L2 loop
+detection" — it does **not** (no L2 loop detection, no SNMP/BRIDGE-MIB/LLDP
+collection exists; `locator.js`'s "neighbor" means neighbor *agents*). And Fase 1's
+topology signal is **shared-site** (`location_id`), not a manual dependency graph.
+So this phase persists LLDP data arriving on the **existing agent report path**
+(no new SNMP polling) and wires it in as a topology fallback.
+
+### Persistence
+- Migration **063** `lldp_neighbors` (`local_agent_id`, `local_chassis_id`,
+  `local_port`, `remote_chassis_id`, `remote_port`, `last_seen`) + repository:
+  upsert (bumps `last_seen`), batch upsert, age-out (default 24h, configurable),
+  list/count. Ingested from a `capabilities.lldp` list in the agent's existing
+  `POST /agents/me/capabilities` report — no new polling.
+
+### Graph service
+- Pure agent-projected graph (`src/topology/lldpGraph.js`): `adjacent` / `within-N
+  hops` / `unknown`, via direct links (remote chassis = another agent's chassis)
+  and shared segments (two agents on one switch). Partial coverage → partial graph;
+  a pair with no path is **unknown, never "unrelated"**.
+- TTL-cached service (`lldpGraphService.js`): rebuilds ≤ once/min (ageing out stale
+  rows first), exposes a **sync** `relation()` for the clustering hot path.
+
+### Fase 1 integration
+- The correlator gains an LLDP topology pass **between** the site pass and the
+  type pass, so **manual/site ALWAYS wins** (it consumes its findings first),
+  LLDP fills the remainder, and anything else stays unknown. A cluster now records
+  `topologySource` (`site`/`lldp`) and the evidence/`suspected_common_cause` names
+  it ("LLDP: sw-03 adjacent to sw-04"). Wired via a background refresh/age-out job.
+
+### API
+- `GET /api/topology/neighbors` — viewer+, filter by `target` (both directions),
+  pagination; 400/401/404/clean-500.
+
+### Tests
+- Graph queries (adjacent / 2-hop / unknown / partial coverage); upsert + age-out +
+  TTL refresh; resolution order (site wins over LLDP); clustering integration
+  (two LLDP-adjacent agents at different sites with different finding-types →
+  clustered via LLDP, evidence names the source); ingest via the capabilities path;
+  API 400/401/404/500.
+
 ## 0.81.0 — Recommended actions + post-remediation verification loop
 
 Completes "not who's to blame, but what to do": a static finding-type → runbook

@@ -35,6 +35,9 @@ function createCrossAgentClusterService({
   // channels, referencing (not resending) member findings already alerted.
   alertDispatcher = null,
   alertLog = null,
+  // Opt-in LLDP neighbor graph (nullable). When present, it is the topology signal
+  // for findings NOT already grouped by shared site — manual/site ALWAYS wins.
+  topologyGraph = null,
   correlator = createCrossAgentCorrelator({ windowMs: DEFAULT_WINDOW_MS }),
   windowMs = DEFAULT_WINDOW_MS,
   // No new member finding within this window → the cluster is resolved (findings
@@ -59,6 +62,19 @@ function createCrossAgentClusterService({
       logger.warn(`cross-agent: could not load agents for topology (${err.message})`);
     }
     return (hostId) => (map.has(String(hostId)) ? map.get(String(hostId)) : null);
+  }
+
+  // Builds the LLDP topology resolver for a sweep: refresh the cached graph (at
+  // most once per TTL), then hand the correlator a sync `related(a, b)`. Returns
+  // null when no graph is wired, so the correlator falls back to site-only.
+  async function buildTopologyResolver() {
+    if (!topologyGraph || typeof topologyGraph.relation !== 'function') return null;
+    try {
+      if (typeof topologyGraph.ensureFresh === 'function') await topologyGraph.ensureFresh();
+    } catch (err) {
+      logger.warn(`cross-agent: LLDP graph refresh failed (${err.message})`);
+    }
+    return { related: (a, b) => topologyGraph.relation(a, b) };
   }
 
   // Finds an open cluster whose member set OVERLAPS the candidate's (shares >=1
@@ -189,9 +205,10 @@ function createCrossAgentClusterService({
     const membersById = new Map(recent.map((f) => [f.id, f]));
 
     const siteOf = await buildSiteLookup();
+    const topology = await buildTopologyResolver();
     let candidates = [];
     try {
-      candidates = correlator.detect(recent, { siteOf });
+      candidates = correlator.detect(recent, { siteOf, topology });
     } catch (err) {
       logger.warn(`cross-agent: detector threw (${err.message})`);
       return summary;

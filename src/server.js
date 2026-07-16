@@ -57,6 +57,8 @@ const { createIncidentCaseService } = require('./incidentCases/incidentCaseServi
 const { createIncidentAutoResolveJob } = require('./incidentCases/autoResolveJob');
 const { createIncidentClustersRepository } = require('./repositories/incidentClustersRepository');
 const { createRunbooksRepository } = require('./repositories/runbooksRepository');
+const { createLldpNeighborsRepository } = require('./repositories/lldpNeighborsRepository');
+const { createLldpGraphService } = require('./topology/lldpGraphService');
 const { createVerificationRunsRepository } = require('./repositories/verificationRunsRepository');
 const { createVerificationService } = require('./remediation/verificationService');
 const { createVerificationJob } = require('./remediation/verificationJob');
@@ -434,6 +436,10 @@ function start() {
   // verification runs.
   const runbooksRepo = createRunbooksRepository(db);
   const verificationRunsRepo = createVerificationRunsRepository(db);
+  // Fase 4: LLDP neighbor graph — a queryable L2 topology for cross-agent
+  // clustering, fed by the existing agent report path (no new SNMP polling).
+  const lldpNeighborsRepo = createLldpNeighborsRepository(db);
+  const lldpGraphService = createLldpGraphService({ lldpNeighborsRepo, logger });
   // Durable alert-dispatch log: lets a cluster alert fire once + reference (not
   // resend) member findings already alerted individually. Passed to the dispatcher
   // (records each send) and the cross-agent service (reads it).
@@ -549,6 +555,7 @@ function start() {
     assistant,
     alertDispatcher: dispatcher,
     alertLog: alertDispatchLogRepo,
+    topologyGraph: lldpGraphService,
     publishCluster: (cluster) => (dashboardWs ? dashboardWs.broadcast({ type: 'incident_cluster', payload: cluster }) : 0),
     logger,
   });
@@ -632,6 +639,20 @@ function start() {
     createIncidentAutoResolveJob({ incidentCasesRepo, auditLogRepo, logger }),
     createCrossAgentClusterJob({ service: crossAgentClusterService, logger }),
     createVerificationJob({ service: verificationService, logger }),
+    // LLDP graph refresh + age-out (default 24h). Self-contained interval so
+    // stale neighbors are purged even when clustering is idle.
+    (() => {
+      let t = null;
+      return {
+        start() {
+          if (t) return;
+          lldpGraphService.refresh().catch((e) => logger.warn(`lldp: initial refresh failed (${e.message})`));
+          t = setInterval(() => lldpGraphService.refresh().catch((e) => logger.warn(`lldp: refresh failed (${e.message})`)), 5 * 60 * 1000);
+          if (t.unref) t.unref();
+        },
+        stop() { if (t) { clearInterval(t); t = null; } },
+      };
+    })(),
   ];
   function startBackgroundJobs() {
     for (const job of backgroundJobs) {
@@ -668,6 +689,7 @@ function start() {
     runbooksRepo,
     verificationRunsRepo,
     verificationService,
+    lldpNeighborsRepo,
     remediationPlaybooksRepo,
     configSnapshotsRepo,
     thresholdsRepo,

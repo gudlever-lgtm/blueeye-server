@@ -569,6 +569,57 @@ function makeVerificationRunsRepo(overrides = {}) {
   };
 }
 
+// A fake lldp_neighbors repository (in-memory). Mirrors
+// lldpNeighborsRepository's surface for the graph + topology API.
+function makeLldpNeighborsRepo(overrides = {}) {
+  const rows = [];
+  let seq = 0;
+  const iso = (v) => (v == null ? null : (v instanceof Date ? v.toISOString() : new Date(v).toISOString()));
+  const key = (r) => `${r.local_agent_id}|${r.local_port || ''}|${r.remote_chassis_id}|${r.remote_port || ''}`;
+  const mapOut = (r) => ({
+    id: r.id, localAgentId: r.local_agent_id, localChassisId: r.local_chassis_id ?? null,
+    localPort: r.local_port ?? null, remoteChassisId: r.remote_chassis_id, remotePort: r.remote_port ?? null,
+    lastSeen: iso(r.last_seen),
+  });
+  const chassisOf = (agentId) => rows.filter((r) => r.local_agent_id === Number(agentId) && r.local_chassis_id).map((r) => r.local_chassis_id);
+  const matchTarget = (r, targetAgentId) => {
+    if (targetAgentId == null) return true;
+    if (r.local_agent_id === Number(targetAgentId)) return true;
+    return chassisOf(targetAgentId).includes(r.remote_chassis_id);
+  };
+  return {
+    rows,
+    upsert: overrides.upsert || (async ({ localAgentId, localChassisId = null, localPort = null, remoteChassisId, remotePort = null, lastSeen = null }) => {
+      const row = { local_agent_id: Number(localAgentId), local_chassis_id: localChassisId, local_port: localPort, remote_chassis_id: remoteChassisId, remote_port: remotePort, last_seen: lastSeen || new Date() };
+      const existing = rows.find((r) => key(r) === key(row));
+      if (existing) { existing.last_seen = row.last_seen; existing.local_chassis_id = row.local_chassis_id; return existing; }
+      row.id = (seq += 1); rows.push(row); return row;
+    }),
+    upsertMany: overrides.upsertMany || (async function upsertMany(localAgentId, neighbors, { localChassisId = null, lastSeen = null } = {}) {
+      let n = 0;
+      for (const nb of Array.isArray(neighbors) ? neighbors : []) {
+        const remoteChassisId = nb && (nb.remoteChassisId ?? nb.remote_chassis_id);
+        if (!remoteChassisId) continue;
+        await this.upsert({ localAgentId, localChassisId: nb.localChassisId ?? nb.local_chassis_id ?? localChassisId, localPort: nb.localPort ?? nb.local_port ?? null, remoteChassisId, remotePort: nb.remotePort ?? nb.remote_port ?? null, lastSeen });
+        n += 1;
+      }
+      return n;
+    }),
+    ageOut: overrides.ageOut || (async (olderThan) => {
+      const before = rows.length;
+      for (let i = rows.length - 1; i >= 0; i -= 1) if (new Date(rows[i].last_seen) < new Date(olderThan)) rows.splice(i, 1);
+      return before - rows.length;
+    }),
+    listAll: overrides.listAll || (async ({ since = null } = {}) => rows
+      .filter((r) => !since || new Date(r.last_seen) >= new Date(since)).map(mapOut)),
+    list: overrides.list || (async ({ targetAgentId = null, limit = 50, offset = 0 } = {}) => rows
+      .filter((r) => matchTarget(r, targetAgentId))
+      .sort((a, b) => new Date(b.last_seen) - new Date(a.last_seen) || b.id - a.id)
+      .slice(offset, offset + limit).map(mapOut)),
+    count: overrides.count || (async ({ targetAgentId = null } = {}) => rows.filter((r) => matchTarget(r, targetAgentId)).length),
+  };
+}
+
 // A fake verification service (records schedule() calls; no-op sweep by default).
 function makeVerificationService(overrides = {}) {
   const scheduled = [];
@@ -1694,6 +1745,7 @@ function makeApp(overrides = {}) {
     probePipeline: overrides.probePipeline || makeProbePipeline(),
     flowPipeline: overrides.flowPipeline || makeFlowPipeline(),
     flowsRepo: overrides.flowsRepo || makeFlowsRepo(),
+    lldpNeighborsRepo: overrides.lldpNeighborsRepo || makeLldpNeighborsRepo(),
     geoTileConfig: overrides.geoTileConfig || { tileUrl: 'https://tiles.example/{z}/{x}/{y}.png', tileAttribution: 'test', tileMaxZoom: 19 },
     geoProvider: overrides.geoProvider || null,
     centroids: overrides.centroids || null,
@@ -1808,6 +1860,7 @@ module.exports = {
   makeRunbooksRepo,
   makeVerificationRunsRepo,
   makeVerificationService,
+  makeLldpNeighborsRepo,
   makeAlertDispatchLogRepo,
   makeRemediationPlaybooksRepo,
   makeIncidentCaseService,

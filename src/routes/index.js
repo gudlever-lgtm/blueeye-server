@@ -109,6 +109,7 @@ function createApiRouter({
   probePipeline,
   flowPipeline,
   flowsRepo,
+  lldpNeighborsRepo,
   geoTileConfig,
   geoProvider,
   geoipUpdater,
@@ -265,7 +266,7 @@ function createApiRouter({
     getCategories: settingsService ? () => settingsService.getFlowCategories() : undefined,
   }));
   // Flow-derived dependency/topology map (who-talks-to-whom from the 5-tuples).
-  if (flowsRepo) router.use('/api/topology', createTopologyRouter({ flowsRepo, agentsRepo, locationsRepo, centroids }));
+  if (flowsRepo || lldpNeighborsRepo) router.use('/api/topology', createTopologyRouter({ flowsRepo, agentsRepo, locationsRepo, centroids, lldpNeighborsRepo }));
   if (probeResultsRepo) router.use('/api/probes', createProbesRouter({ probeResultsRepo, agentsRepo, geoProvider, centroids }));
   if (probeResultsRepo) router.use('/api/fleet', createFleetRouter({ agentsRepo, probeResultsRepo, resultsRepo, speedtestResultsRepo, settingsService, logger }));
   // Overview "open issues" rollup (license feature `dashboard_advanced`,
@@ -400,7 +401,7 @@ function createApiRouter({
   // Unified audit log (license feature `audit_log`) + API tokens (`api_access`).
   if (auditLogRepo) router.use('/api/audit-log', createAuditLogRouter({ auditLogRepo, featureGate, planService }));
   if (apiTokensRepo) router.use('/api/api-tokens', createApiTokensRouter({ apiTokensRepo, featureGate, planService, auditLogger }));
-  router.use('/agents', createAgentReportsRouter({ agentAuth, resultsRepo, resultsTsdbRepo, agentsRepo, auditEventsRepo, analysisPipeline, flowPipeline, probeResultsRepo, probePipeline, incidentService, installToolService, logger }));
+  router.use('/agents', createAgentReportsRouter({ agentAuth, resultsRepo, resultsTsdbRepo, agentsRepo, auditEventsRepo, analysisPipeline, flowPipeline, probeResultsRepo, probePipeline, incidentService, installToolService, lldpNeighborsRepo, logger }));
   router.use('/agents', createAgentEnrollRouter({ enrollmentStore, notifyDashboard, integrationTrigger: integrationsDispatcher, auditEventsRepo, settingsService, rateLimit: enrollRateLimiter }));
 
   return router;

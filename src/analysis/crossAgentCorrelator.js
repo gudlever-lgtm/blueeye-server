@@ -78,7 +78,10 @@ function createCrossAgentCorrelator({ windowMs = DEFAULT_WINDOW_MS } = {}) {
   // Assembles a cluster record from a set of member findings + the signals that
   // fired. `site` is the shared site id when topology fired, else null; `commonType`
   // is the shared metric when type fired, else null.
-  function makeCluster(members, { topology, site = null, commonType = null }) {
+  // `topologySource` names WHICH topology signal fired: 'site' (shared location,
+  // the manual/configured signal) or 'lldp' (L2 neighbor adjacency). `topologyDetail`
+  // is a short evidence string (e.g. "LLDP: sw-03 adjacent to sw-04").
+  function makeCluster(members, { topology, site = null, commonType = null, topologySource = null, topologyDetail = null }) {
     const type = commonType != null;
     let confidence = 'low';
     if (topology && type) confidence = 'high';
@@ -86,13 +89,15 @@ function createCrossAgentCorrelator({ windowMs = DEFAULT_WINDOW_MS } = {}) {
 
     const hostIds = [...distinctHosts(members)];
     const metrics = [...new Set(members.map((f) => f.metric))];
-    const cause = suspectedCause({ confidence, count: hostIds.length, commonType, metrics });
+    const cause = suspectedCause({ confidence, count: hostIds.length, commonType, metrics, topologySource, topologyDetail });
     return {
       memberFindingIds: members.map((f) => f.id),
       hostIds,
       confidence,
       signals: { time: true, topology: Boolean(topology), type },
       site: topology ? site : null,
+      topologySource: topology ? topologySource : null,
+      topologyDetail: topology ? topologyDetail : null,
       commonType: type ? commonType : null,
       severity: maxSeverity(members),
       detectedAt: new Date(Math.max(...members.map(toTime))),
@@ -100,8 +105,18 @@ function createCrossAgentCorrelator({ windowMs = DEFAULT_WINDOW_MS } = {}) {
     };
   }
 
-  // Explainable, template-free hint that names the real agent count + metric(s).
-  function suspectedCause({ confidence, count, commonType, metrics }) {
+  // Explainable, template-free hint that names the real agent count + metric(s) +
+  // which topology source drove the grouping.
+  function suspectedCause({ confidence, count, commonType, metrics, topologySource, topologyDetail }) {
+    if (topologySource === 'lldp') {
+      const via = topologyDetail ? ` (${topologyDetail})` : '';
+      if (confidence === 'high') {
+        return `${count} agents adjacent in the LLDP neighbor graph${via} reported ${commonType} within ${minutes} min `
+          + '— likely a shared L2 segment/switch cause. Investigate the common neighbor first.';
+      }
+      return `${count} agents adjacent in the LLDP neighbor graph${via} reported anomalies (${metrics.join(', ')}) within ${minutes} min `
+        + '— likely a shared L2 topology cause rather than N independent faults.';
+    }
     if (confidence === 'high') {
       return `${count} agents at the same site reported ${commonType} within ${minutes} min `
         + '— likely a common cause on that site (e.g. a shared uplink, switch or power event). '
@@ -122,16 +137,20 @@ function createCrossAgentCorrelator({ windowMs = DEFAULT_WINDOW_MS } = {}) {
   // findings from >=2 distinct agents. Within each such bucket it peels off, in
   // order of decreasing confidence:
   //   1. per-site groups with >=2 distinct agents  -> topology cluster (medium/high),
+  //   1b LLDP-adjacent groups among the remainder    -> topology cluster (medium/high),
   //   2. per-metric groups with >=2 distinct agents -> type-only cluster (low),
   //   3. any remaining >=2-distinct-agent leftover  -> time-only cluster (low).
-  // A finding lands in at most one cluster (strongest signal wins).
-  function detect(findings, { siteOf = () => null } = {}) {
+  // A finding lands in at most one cluster (strongest signal wins). Topology
+  // resolution order is manual/site (step 1) -> LLDP (step 1b) -> unknown: the
+  // site pass consumes its findings first, so a configured site ALWAYS wins over
+  // an inferred LLDP edge.
+  function detect(findings, { siteOf = () => null, topology = null } = {}) {
     const clusters = [];
     for (const bucket of timeBuckets(findings)) {
       if (distinctHosts(bucket).size < 2) continue; // no cross-agent time proximity
       const consumed = new Set();
 
-      // 1. Topology: group by shared, non-null site.
+      // 1. Topology (manual/site): group by shared, non-null site.
       const bySite = new Map();
       for (const f of bucket) {
         const site = siteOf(f.hostId);
@@ -144,7 +163,18 @@ function createCrossAgentCorrelator({ windowMs = DEFAULT_WINDOW_MS } = {}) {
         if (distinctHosts(list).size < 2) continue;
         list.forEach((f) => consumed.add(f.id));
         const commonType = sharedMetric(list);
-        clusters.push(makeCluster(list, { topology: true, site, commonType }));
+        clusters.push(makeCluster(list, { topology: true, site, commonType, topologySource: 'site' }));
+      }
+
+      // 1b. Topology (LLDP): among findings NOT grouped by site, group agents that
+      // are LLDP-adjacent (within maxHops) into connected components. Missing edges
+      // are "unknown" (no union), never "unrelated".
+      if (topology && typeof topology.related === 'function') {
+        for (const group of lldpComponents(bucket.filter((f) => !consumed.has(f.id)), topology)) {
+          group.list.forEach((f) => consumed.add(f.id));
+          const commonType = sharedMetric(group.list);
+          clusters.push(makeCluster(group.list, { topology: true, commonType, topologySource: 'lldp', topologyDetail: group.detail }));
+        }
       }
 
       // 2. Type-only: group the remainder by metric.
@@ -212,6 +242,53 @@ function confidenceBreakdown(confidence, members = []) {
   };
 }
 
+// Groups findings whose agents are LLDP-adjacent (per the topology resolver) into
+// connected components. Returns [{ list, detail }] for each component spanning >=2
+// distinct agents; `detail` is a representative adjacency string for the evidence.
+// Union-find over the agents present; a pair is only unioned when the resolver
+// says related (missing edges stay separate = "unknown", never forced together).
+function lldpComponents(findings, topology) {
+  const byAgent = new Map();
+  for (const f of findings) {
+    const h = String(f.hostId);
+    if (!byAgent.has(h)) byAgent.set(h, []);
+    byAgent.get(h).push(f);
+  }
+  const agents = [...byAgent.keys()];
+  if (agents.length < 2) return [];
+
+  const parent = new Map(agents.map((a) => [a, a]));
+  const find = (x) => { let r = x; while (parent.get(r) !== r) r = parent.get(r); while (parent.get(x) !== r) { const n = parent.get(x); parent.set(x, r); x = n; } return r; };
+  const union = (a, b) => { parent.set(find(a), find(b)); };
+  const detailByRoot = new Map();
+
+  for (let i = 0; i < agents.length; i += 1) {
+    for (let j = i + 1; j < agents.length; j += 1) {
+      const rel = topology.related(agents[i], agents[j]);
+      if (rel && rel.related) {
+        union(agents[i], agents[j]);
+        const root = find(agents[i]);
+        if (!detailByRoot.has(root) && rel.detail) detailByRoot.set(root, rel.detail);
+      }
+    }
+  }
+
+  const comps = new Map();
+  for (const a of agents) {
+    const r = find(a);
+    if (!comps.has(r)) comps.set(r, []);
+    comps.get(r).push(a);
+  }
+
+  const out = [];
+  for (const [root, compAgents] of comps) {
+    if (compAgents.length < 2) continue;
+    const list = compAgents.flatMap((a) => byAgent.get(a));
+    out.push({ list, detail: detailByRoot.get(root) || null });
+  }
+  return out;
+}
+
 // The metric shared by >=2 distinct agents in a list, or null. When several
 // metrics qualify, the one with the widest agent spread wins (ties: first seen).
 function sharedMetric(list) {
@@ -231,6 +308,7 @@ function sharedMetric(list) {
 module.exports = {
   createCrossAgentCorrelator,
   sharedMetric,
+  lldpComponents,
   confidenceBreakdown,
   SIGNAL_WEIGHTS,
   SINGLE_SIGNAL_BASELINE,

@@ -7750,7 +7750,7 @@ const DOCS = [
             [viewLink('fleet', 'Monitoring'), 'Overview (fleet health at a glance), Traffic, Sites (map) and Destinations (external traffic by country/ASN).'],
             [el('strong', {}, 'Fleet'), ['Per-', viewLink('agents', 'Agent'), ' drill-down, ', viewLink('interfaces', 'Interfaces'), ' health and NIC firmware inventory.']],
             [el('strong', {}, 'Diagnostics'), ['Ad-hoc ', viewLink('probes', 'Probes & Tests'), ', ', viewLink('flows', 'Flows'), ', Topology, the ', viewLink('investigation', 'Troubleshooting'), ' investigator — and this Documentation.']],
-            [el('strong', {}, 'Insights'), ['Anomaly ', viewLink('findings', 'Analysis'), ', ', viewLink('incidents', 'Incidents'), ' and ', viewLink('reporting', 'Reporting'), ' (incl. NIS2).']],
+            [el('strong', {}, 'Insights'), ['Anomaly ', viewLink('findings', 'Analysis'), ', ', viewLink('incidents', 'Incidents'), ', ', viewLink('clusters', 'Situations'), ' (one incident across many agents) and ', viewLink('reporting', 'Reporting'), ' (incl. NIS2).']],
             [el('strong', {}, 'Administration'), ['Locations, Enrollment, Logs and ', viewLink('settings', 'Settings'), '.']],
           ]),
           el('p', {}, 'Every page has a one-line hero at the top and a ', el('strong', {}, 'More info'), ' button that opens a drawer explaining that page in depth. The topbar search jumps to an agent, host, IP or port. The 🌙/☀️ button flips light/dark; pick a colour palette in ', settingsLink('appearance', 'Settings → Appearance'), '.'),
@@ -7827,6 +7827,28 @@ const DOCS = [
             [el('span', {}, el('strong', {}, 'Config change'), ' link'), 'A device config snapshot captured shortly before the incident — the likely cause; open it to see the risk-classified diff.'],
           ]),
           docsExpect('If a finding looks wrong, read its evidence — a legitimate baseline shift (a planned change, a new service) explains most “false” anomalies. Acknowledge it and, if it recurs by design, tune thresholds in Settings → Analysis.'),
+        ],
+      },
+      {
+        id: 'situations', title: 'Situations — one incident across many agents', body: () => [
+          docsLead('When the same fault hits several agents at once, BlueEye groups their findings into one Situation (a cross-agent cluster) instead of N look-alike alerts — so you chase one root cause, not a wall of duplicates.'),
+          el('p', {}, ['Open ', viewLink('clusters', 'Situations'), ' (Insights group). Each row is one cross-agent incident with a confidence tier, a suspected common cause and how many findings it groups. It is distinct from an ', viewLink('incidents', 'incident'), ', which groups findings on a ', el('strong', {}, 'single'), ' device.']),
+          el('h4', {}, 'How confident is the grouping?'),
+          el('p', {}, 'The confidence tier says how independent the signals tying the agents together were — not how severe the fault is:'),
+          docsTable(['Tier', 'What tied the agents together'], [
+            [el('strong', {}, 'High'), 'Same time window + shared topology (same site, or an LLDP-adjacent link) + the same finding type — very likely one shared cause.'],
+            [el('strong', {}, 'Medium'), 'Same time window + shared topology, but mixed finding types.'],
+            [el('strong', {}, 'Low'), 'Only close in time (no shared site and/or no common type) — a weak, watch-it correlation.'],
+          ]),
+          el('p', { class: 'muted' }, 'Topology today means a shared site or an LLDP-adjacent link — it is never guessed: agents with no known relationship do not raise the tier.'),
+          el('h4', {}, 'Working a Situation'),
+          docsSteps([
+            ['Open the Situation for the “one common picture”: the suspected common cause, the per-agent evidence that drove the grouping, and a single ', el('strong', {}, 'timeline'), ' merging findings, agent events, config changes and playbook runs across every affected agent.'],
+            ['Check ', el('strong', {}, 'Recommended actions'), ' — a matching playbook, similar resolved Situations, and (opt-in) an EU-hosted AI advisory. Advice is always shown WITH the evidence behind it, never on its own.'],
+            'Acknowledge it (operator+) so colleagues know someone owns it; resolve it with a note when fixed. Both are recorded in the audit trail. A Situation also auto-resolves once its findings stop recurring.',
+          ]),
+          el('div', { class: 'callout' }, el('strong', {}, 'One alert, not N: '), 'a Situation raises a SINGLE cross-agent alert through your configured channels and references the member findings already alerted individually — it never re-sends their alerts. Alerting needs a channel set up in Settings → Alerting; the AI advisory needs the assistant enabled in Settings → AI.'),
+          docsExpect('A high-confidence Situation usually means ONE thing to fix (a shared uplink, switch, power event or upstream dependency) rather than many — start from its suspected common cause and the change that landed just before the first finding.'),
         ],
       },
       {

@@ -36,7 +36,9 @@ function mapMeta(row) {
   };
 }
 
-const META_COLS = 'id, cluster_id, target, command_set_version, status, items, payload_bytes, captured_at, trigger, created_at';
+// NOTE: `trigger` is a MySQL reserved word — it MUST stay backticked in every
+// statement that names it (SELECT list here, INSERT column list below).
+const META_COLS = 'id, cluster_id, target, command_set_version, status, items, payload_bytes, captured_at, `trigger`, created_at';
 
 function createEvidenceSnapshotsRepository(db) {
   const { pool } = db;
@@ -45,7 +47,7 @@ function createEvidenceSnapshotsRepository(db) {
   async function create({ clusterId, target, commandSetVersion, capturedAt, trigger = 'auto' }) {
     const [res] = await pool.query(
       `INSERT INTO cluster_evidence_snapshots
-         (cluster_id, target, command_set_version, status, items, captured_at, trigger)
+         (cluster_id, target, command_set_version, status, items, captured_at, \`trigger\`)
        VALUES (?, ?, ?, 'pending', ?, ?, ?)`,
       [clusterId, String(target), commandSetVersion, JSON.stringify([]), capturedAt, trigger],
     );

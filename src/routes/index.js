@@ -29,8 +29,11 @@ const { createTopologyRouter } = require('./topology');
 const { createProbesRouter } = require('./probes');
 const { createReportsRouter } = require('./reports');
 const { createIncidentsRouter } = require('./incidents');
+const { createIncidentClustersRouter } = require('./incidentClusters');
+const { createRunbooksRouter } = require('./runbooks');
 const { createTargetsRouter } = require('./targets');
 const { createTargetTimelineService } = require('../timeline/targetTimelineService');
+const { createIncidentClusterTimelineService } = require('../timeline/incidentTimelineService');
 const { createDeviceConfigRouter } = require('./deviceConfig');
 const { createAskCache } = require('../incidentCases/askCache');
 const { createThresholdsRouter } = require('./thresholds');
@@ -86,6 +89,14 @@ function createApiRouter({
   probeResultsRepo,
   incidentsRepo,
   incidentCasesRepo,
+  incidentClustersRepo,
+  clusterNotifier,
+  alertDispatchLogRepo,
+  evidenceRepo,
+  snapshotService,
+  runbooksRepo,
+  verificationRunsRepo,
+  verificationService,
   remediationPlaybooksRepo,
   configSnapshotsRepo,
   thresholdsRepo,
@@ -102,6 +113,7 @@ function createApiRouter({
   probePipeline,
   flowPipeline,
   flowsRepo,
+  lldpNeighborsRepo,
   geoTileConfig,
   geoProvider,
   geoipUpdater,
@@ -258,7 +270,7 @@ function createApiRouter({
     getCategories: settingsService ? () => settingsService.getFlowCategories() : undefined,
   }));
   // Flow-derived dependency/topology map (who-talks-to-whom from the 5-tuples).
-  if (flowsRepo) router.use('/api/topology', createTopologyRouter({ flowsRepo, agentsRepo, locationsRepo, centroids }));
+  if (flowsRepo || lldpNeighborsRepo) router.use('/api/topology', createTopologyRouter({ flowsRepo, agentsRepo, locationsRepo, centroids, lldpNeighborsRepo }));
   if (probeResultsRepo) router.use('/api/probes', createProbesRouter({ probeResultsRepo, agentsRepo, geoProvider, centroids }));
   if (probeResultsRepo) router.use('/api/fleet', createFleetRouter({ agentsRepo, probeResultsRepo, resultsRepo, speedtestResultsRepo, settingsService, logger }));
   // Overview "open issues" rollup (license feature `dashboard_advanced`,
@@ -269,6 +281,20 @@ function createApiRouter({
   // First-class incidents (incident_cases) wrapping findings — distinct from the
   // probe-outage `incidents` used by /api/reports above.
   if (incidentCasesRepo && findingStore) router.use('/api/incidents', createIncidentsRouter({ incidentCasesRepo, findingStore, auditLogger, auditEventsRepo, auditLogRepo, configSnapshotsRepo, agentsRepo, assistant, featureGate, askCache: createAskCache(), remediationPlaybooksRepo }));
+  if (incidentClustersRepo) {
+    const clusterTimelineService = createIncidentClusterTimelineService({
+      clustersRepo: incidentClustersRepo, findingStore, auditEventsRepo,
+      remediationPlaybooksRepo, incidentsRepo, configSnapshotsRepo, auditLogRepo,
+      verificationRunsRepo, evidenceRepo,
+    });
+    router.use('/api/incident-clusters', createIncidentClustersRouter({
+      clustersRepo: incidentClustersRepo, findingStore, auditLogger, timelineService: clusterTimelineService,
+      runbooksRepo, playbooksRepo: remediationPlaybooksRepo, verificationService, settingsService, assistant,
+      alertLog: alertDispatchLogRepo, notifier: clusterNotifier,
+      evidenceRepo, snapshotService,
+    }));
+  }
+  if (runbooksRepo) router.use('/api/runbooks', createRunbooksRouter({ runbooksRepo, playbooksRepo: remediationPlaybooksRepo }));
   // Per-target (per-agent) incident timeline — merges findings, probe-outage
   // incidents, agent connect/disconnect and playbook runs (read-only, viewer+).
   if (agentsRepo && targetTimelineService) router.use('/api/targets', createTargetsRouter({ agentsRepo, timelineService: targetTimelineService }));
@@ -381,7 +407,7 @@ function createApiRouter({
   // Unified audit log (license feature `audit_log`) + API tokens (`api_access`).
   if (auditLogRepo) router.use('/api/audit-log', createAuditLogRouter({ auditLogRepo, featureGate, planService }));
   if (apiTokensRepo) router.use('/api/api-tokens', createApiTokensRouter({ apiTokensRepo, featureGate, planService, auditLogger }));
-  router.use('/agents', createAgentReportsRouter({ agentAuth, resultsRepo, resultsTsdbRepo, agentsRepo, auditEventsRepo, analysisPipeline, flowPipeline, probeResultsRepo, probePipeline, incidentService, installToolService, logger }));
+  router.use('/agents', createAgentReportsRouter({ agentAuth, resultsRepo, resultsTsdbRepo, agentsRepo, auditEventsRepo, analysisPipeline, flowPipeline, probeResultsRepo, probePipeline, incidentService, installToolService, lldpNeighborsRepo, logger }));
   router.use('/agents', createAgentEnrollRouter({ enrollmentStore, notifyDashboard, integrationTrigger: integrationsDispatcher, auditEventsRepo, settingsService, rateLimit: enrollRateLimiter }));
 
   return router;

@@ -56,6 +56,18 @@ const { createConfigSnapshotsRepository } = require('./repositories/configSnapsh
 const { createIncidentCaseService } = require('./incidentCases/incidentCaseService');
 const { createIncidentAutoResolveJob } = require('./incidentCases/autoResolveJob');
 const { createIncidentClustersRepository } = require('./repositories/incidentClustersRepository');
+const { createRunbooksRepository } = require('./repositories/runbooksRepository');
+const { createLldpNeighborsRepository } = require('./repositories/lldpNeighborsRepository');
+const { createLldpGraphService } = require('./topology/lldpGraphService');
+const { createClusterNotifier } = require('./analysis/clusterNotifier');
+const { createClusterNis2Service } = require('./analysis/clusterNis2');
+const { createClusterAlertGate } = require('./analysis/clusterAlertGate');
+const { createEvidenceSnapshotsRepository } = require('./repositories/evidenceSnapshotsRepository');
+const { createSnapshotService } = require('./evidence/snapshotService');
+const { createEvidenceRetention } = require('./evidence/evidenceRetention');
+const { createVerificationRunsRepository } = require('./repositories/verificationRunsRepository');
+const { createVerificationService } = require('./remediation/verificationService');
+const { createVerificationJob } = require('./remediation/verificationJob');
 const { createAlertDispatchLogRepository } = require('./repositories/alertDispatchLogRepository');
 const { createCrossAgentClusterService } = require('./analysis/crossAgentClusterService');
 const { createCrossAgentClusterJob } = require('./analysis/crossAgentClusterJob');
@@ -426,6 +438,14 @@ function start() {
   // as a leader-only sweep (below) — off the ingest hot path — and pushes cluster
   // events over the SAME dashboard WebSocket as findings.
   const incidentClustersRepo = createIncidentClustersRepository(db);
+  // Fase 3: runbooks (static finding-type → recommended action) + post-remediation
+  // verification runs.
+  const runbooksRepo = createRunbooksRepository(db);
+  const verificationRunsRepo = createVerificationRunsRepository(db);
+  // Fase 4: LLDP neighbor graph — a queryable L2 topology for cross-agent
+  // clustering, fed by the existing agent report path (no new SNMP polling).
+  const lldpNeighborsRepo = createLldpNeighborsRepository(db);
+  const lldpGraphService = createLldpGraphService({ lldpNeighborsRepo, logger });
   // Durable alert-dispatch log: lets a cluster alert fire once + reference (not
   // resend) member findings already alerted individually. Passed to the dispatcher
   // (records each send) and the cross-agent service (reads it).
@@ -479,6 +499,11 @@ function start() {
   // silencer reads windows from settingsService, which is built further down, so
   // it's bound after that. (createSilencer is in alerting/maintenance.js.)
 
+  // Fase 5: dispatch-time cluster suppression gate — suppresses a finding's
+  // individual alert + ITSM emit when its host is already covered by an open
+  // medium/high cluster (rolled into the ONE cluster notification).
+  const clusterAlertGate = createClusterAlertGate({ clustersRepo: incidentClustersRepo, findingStore, logger });
+
   const analysisPipeline = createAnalysisPipeline({
     detector,
     findingStore,
@@ -490,6 +515,7 @@ function start() {
     alertingEnabled: () => alertingConfig.enabled,
     // Outbound integrations fire on findings independently of local alerting.
     integrationTrigger: integrationsDispatcher,
+    clusterAlertGate,
     // Detector runs only if the license includes analysis (AND config enables it).
     licensed: () => featureGate.isFeatureEnabled('analysis'),
     // Push findings to connected dashboards (browsers), not to agents.
@@ -514,6 +540,7 @@ function start() {
     incidentCaseService,
     alertingEnabled: () => alertingConfig.enabled,
     integrationTrigger: integrationsDispatcher,
+    clusterAlertGate,
     licensed: () => featureGate.isFeatureEnabled('analysis'),
     geoProvider,
     publishFinding: (hostId, message) => (dashboardWs ? dashboardWs.broadcast(message) : 0),
@@ -534,6 +561,35 @@ function start() {
   // opt-in assistant is enabled, it also builds a cluster-level Mistral advisory from
   // the member findings (never surfaced without their evidence). Runs as a
   // leader-only sweep (backgroundJobs) — off the ingest hot path.
+  // Fase 5: cluster notification orchestrator — rolls the incident's alerting,
+  // ITSM ticket and NIS2 draft up to the cluster (one each) instead of per finding.
+  const clusterNis2Service = createClusterNis2Service({
+    nis2IncidentsRepo, clustersRepo: incidentClustersRepo, assistant, auditLogger, logger,
+  });
+  const clusterNotifier = createClusterNotifier({
+    alertDispatcher: dispatcher,
+    integrationTrigger: integrationsDispatcher,
+    nis2Service: clusterNis2Service,
+    clustersRepo: incidentClustersRepo,
+    alertLog: alertDispatchLogRepo,
+    auditLogger,
+    publishCluster: (cluster) => (dashboardWs ? dashboardWs.broadcast({ type: 'incident_cluster', payload: cluster }) : 0),
+    logger,
+  });
+
+  // Fase 6: read-only evidence snapshot engine — captures a diagnostic snapshot
+  // per affected target when a cluster opens, over the existing (authenticated,
+  // Ed25519-signable) agent-command path. Best-effort, fire-and-forget.
+  const evidenceRepo = createEvidenceSnapshotsRepository(db);
+  const snapshotService = createSnapshotService({
+    evidenceRepo,
+    agentCommander,
+    releaseKeyService,
+    auditLogger,
+    publishCluster: (cluster) => (dashboardWs ? dashboardWs.broadcast({ type: 'incident_cluster', payload: cluster }) : 0),
+    logger,
+  });
+
   const crossAgentClusterService = createCrossAgentClusterService({
     clustersRepo: incidentClustersRepo,
     findingStore,
@@ -541,6 +597,21 @@ function start() {
     assistant,
     alertDispatcher: dispatcher,
     alertLog: alertDispatchLogRepo,
+    topologyGraph: lldpGraphService,
+    notifier: clusterNotifier,
+    snapshotService,
+    publishCluster: (cluster) => (dashboardWs ? dashboardWs.broadcast({ type: 'incident_cluster', payload: cluster }) : 0),
+    logger,
+  });
+
+  // Fase 3: post-remediation verification. After an operator runs a playbook
+  // against an open cluster's targets, a leader-only sweep re-checks the affected
+  // targets for fresh symptoms once the settle window elapses, records the outcome
+  // (audit + cluster timeline), and NEVER auto-resolves.
+  const verificationService = createVerificationService({
+    verificationRunsRepo,
+    findingStore,
+    auditLogger,
     publishCluster: (cluster) => (dashboardWs ? dashboardWs.broadcast({ type: 'incident_cluster', payload: cluster }) : 0),
     logger,
   });
@@ -611,6 +682,36 @@ function start() {
     createTransactionBaselineJob({ repo: transactionsRepo, logger }),
     createIncidentAutoResolveJob({ incidentCasesRepo, auditLogRepo, logger }),
     createCrossAgentClusterJob({ service: crossAgentClusterService, logger }),
+    createVerificationJob({ service: verificationService, logger }),
+    // LLDP graph refresh + age-out (default 24h). Self-contained interval so
+    // stale neighbors are purged even when clustering is idle.
+    (() => {
+      let t = null;
+      return {
+        start() {
+          if (t) return;
+          lldpGraphService.refresh().catch((e) => logger.warn(`lldp: initial refresh failed (${e.message})`));
+          t = setInterval(() => lldpGraphService.refresh().catch((e) => logger.warn(`lldp: refresh failed (${e.message})`)), 5 * 60 * 1000);
+          if (t.unref) t.unref();
+        },
+        stop() { if (t) { clearInterval(t); t = null; } },
+      };
+    })(),
+    // Fase 6: evidence-snapshot retention (default 90d) — never deletes evidence
+    // on clusters with an unacknowledged CRIT finding. Nightly-ish sweep.
+    (() => {
+      const retention = createEvidenceRetention({ evidenceRepo, clustersRepo: incidentClustersRepo, findingStore, retentionDays: Number(process.env.RETENTION_EVIDENCE_DAYS) || 90, logger });
+      let t = null;
+      return {
+        start() {
+          if (t) return;
+          retention.run().catch(() => {});
+          t = setInterval(() => retention.run().catch(() => {}), 6 * 60 * 60 * 1000);
+          if (t.unref) t.unref();
+        },
+        stop() { if (t) { clearInterval(t); t = null; } },
+      };
+    })(),
   ];
   function startBackgroundJobs() {
     for (const job of backgroundJobs) {
@@ -643,6 +744,15 @@ function start() {
     probeResultsRepo,
     incidentsRepo,
     incidentCasesRepo,
+    incidentClustersRepo,
+    clusterNotifier,
+    alertDispatchLogRepo,
+    evidenceRepo,
+    snapshotService,
+    runbooksRepo,
+    verificationRunsRepo,
+    verificationService,
+    lldpNeighborsRepo,
     remediationPlaybooksRepo,
     configSnapshotsRepo,
     thresholdsRepo,

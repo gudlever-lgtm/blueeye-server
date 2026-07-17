@@ -90,13 +90,18 @@ function createServiceNowConnector({ fetchImpl = globalThis.fetch, logger = sile
       return { ok: false, status: lookup.status, detail: `lookup failed: ${lookup.detail}`, correlationId: cid, action: 'lookup' };
     }
     const existing = lookup.json && Array.isArray(lookup.json.result) ? lookup.json.result[0] : null;
-    const body = incidentBody(event);
+    // A worknote event just APPENDS to the journal field (ServiceNow work_notes is
+    // additive on PATCH) — used to roll cluster updates onto the ONE cluster ticket
+    // without rewriting its fields. Falls back to the full body when creating.
+    const body = event.worknote
+      ? { work_notes: String(event.worknote), correlation_id: cid, u_source: 'BlueEye' }
+      : incidentBody(event);
 
     // 2) PATCH the existing ticket, or POST a new one.
     let res;
     let action;
     if (existing && existing.sys_id) {
-      action = 'update';
+      action = event.worknote ? 'worknote' : 'update';
       res = await requestJson(fetchImpl, {
         method: 'PATCH',
         url: `${base}/api/now/table/${encodeURIComponent(table)}/${encodeURIComponent(existing.sys_id)}`,
@@ -114,13 +119,17 @@ function createServiceNowConnector({ fetchImpl = globalThis.fetch, logger = sile
         timeoutMs,
       });
     }
-    const number = res.json && res.json.result && res.json.result.number;
+    const result = res.json && res.json.result;
+    const number = result && result.number;
+    const ref = (existing && existing.sys_id) || (result && result.sys_id) || null;
     return {
       ok: res.ok,
       status: res.status,
       detail: res.ok ? `${action} incident${number ? ' ' + number : ''} (${res.status})` : `${action} failed: ${res.detail}`,
       correlationId: cid,
       action,
+      ref,               // sys_id of the ticket — stored on the cluster
+      ticketNumber: number || null,
     };
   }
 

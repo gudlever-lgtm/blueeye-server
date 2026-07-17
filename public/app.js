@@ -3397,6 +3397,134 @@ views.incident = async () => {
   return el('div', { class: 'incident-detail' }, header, controls, guideCard, anomaliesCard, timelineCard, similarCard, ...extra);
 };
 
+// ---- Incident Situation View (cross-agent clusters) ------------------------
+// "ét fælles billede": one page per cluster answering what/where/since-when,
+// what changed just before, and what the evidence says. Backed by
+// /api/incident-clusters (Fase 1) + /api/incident-clusters/:id/timeline. Page
+// assembly + panel rendering live in the pure, jsdom-tested public/clusterView.js
+// (window.ClusterView); this wires fetch, navigation and the write actions.
+let selectedClusterId = null;
+function openCluster(id) { selectedClusterId = id; currentView = 'cluster'; render(); }
+
+const CLUSTER_STATUS_LABEL = { open: 'Open', acknowledged: 'Acknowledged', resolved: 'Resolved', closed: 'Closed' };
+const CLUSTER_CONF_LABEL = { low: 'Low', medium: 'Medium', high: 'High' };
+const clusterStatusBadge = (s) => el('span', { class: `badge inc-status-${s}` }, CLUSTER_STATUS_LABEL[s] || s);
+const clusterConfBadge = (c) => el('span', { class: `badge conf-${c}` }, `${CLUSTER_CONF_LABEL[c] || c}`);
+
+PAGE_INFO.clusters = {
+  hero: 'Situations group findings that fired on SEVERAL agents at once into one cross-agent incident — with the change that came just before, a plain-language evidence breakdown, and one merged timeline.',
+  title: 'Situations — cross-agent incidents, one common picture',
+  body: () => [
+    el('p', {}, 'When a fault hits many agents at the same time, BlueEye clusters their findings into one situation instead of N look-alike alerts. Each situation carries a confidence tier (how independent the grouping signals were) and a suspected common cause.'),
+    el('p', {}, 'The detail page is the “one common picture”: what changed in the minutes before the first finding, the evidence that drove the grouping, and a single timeline merging findings, agent events, playbook runs and config changes across every affected agent.'),
+    el('p', { class: 'muted' }, 'Everyone can view; acknowledging and resolving are operator/admin and are recorded in the audit trail.'),
+  ],
+};
+
+views.clusters = async () => {
+  const wrap = el('div', { class: 'clusters-view' });
+  const filters = { status: '' };
+  const tbody = el('tbody', {});
+  const table = el('table', { class: 'data' },
+    el('thead', {}, el('tr', {},
+      el('th', {}, 'Confidence'), el('th', {}, 'Status'), el('th', {}, 'Members'),
+      el('th', {}, 'Suspected cause'), el('th', {}, 'First seen'), el('th', {}, 'Last activity'))),
+    tbody);
+
+  async function load() {
+    tbody.replaceChildren(el('tr', {}, el('td', { colspan: '6', class: 'muted' }, 'Loading…')));
+    const qs = new URLSearchParams();
+    if (filters.status) qs.set('status', filters.status);
+    try {
+      const { clusters } = await api(`/api/incident-clusters${qs.toString() ? `?${qs}` : ''}`);
+      if (!clusters.length) { tbody.replaceChildren(el('tr', {}, el('td', { colspan: '6', class: 'muted' }, 'No situations match.'))); return; }
+      tbody.replaceChildren(...clusters.map((c) => el('tr', {
+        class: 'clickable', tabindex: '0',
+        onclick: () => openCluster(c.id), onkeydown: (e) => { if (e.key === 'Enter') openCluster(c.id); },
+      },
+        el('td', {}, clusterConfBadge(c.confidence)),
+        el('td', {}, clusterStatusBadge(c.status)),
+        el('td', { class: 'muted' }, String((c.memberFindingIds || []).length)),
+        el('td', { class: 'muted' }, esc(c.suspectedCommonCause || '—')),
+        el('td', { class: 'muted' }, fmtDate(c.createdAt)),
+        el('td', { class: 'muted' }, fmtDate(c.detectedAt)))));
+    } catch (err) {
+      tbody.replaceChildren(el('tr', {}, el('td', { colspan: '6', class: 'error' }, err.message)));
+    }
+  }
+
+  const statusSel = el('select', { onchange: (e) => { filters.status = e.target.value; load(); } },
+    el('option', { value: '' }, 'All statuses'),
+    ...Object.keys(CLUSTER_STATUS_LABEL).map((s) => el('option', { value: s }, CLUSTER_STATUS_LABEL[s])));
+  wrap.append(el('div', { class: 'toolbar' }, statusSel), table);
+  await load();
+  return wrap;
+};
+
+// Options passed to the ClusterView render layer: time formatting + per-event
+// deep-link to the affected agent's device page (which aggregates its findings,
+// flows, probes and config history — the closest thing to per-record views).
+function clusterRenderOpts(extra) {
+  return Object.assign({ formatTime: fmtDate, onOpen: (agentId) => { const n = Number(agentId); if (Number.isInteger(n)) openAgent(n); } }, extra || {});
+}
+
+views.cluster = async () => {
+  const id = selectedClusterId;
+  const back = el('button', { class: 'small ghost', onclick: () => { currentView = 'clusters'; render(); } }, '← Situations');
+  if (id == null) return el('div', { class: 'empty' }, back, el('p', {}, 'No situation selected.'));
+
+  let detail;
+  try {
+    ({ cluster: detail } = await api(`/api/incident-clusters/${id}`));
+  } catch (err) {
+    if (err.status === 404) return el('div', { class: 'empty' }, back, el('p', { class: 'error' }, 'Situation not found.'));
+    return el('div', { class: 'empty error' }, back, ' ', err.message);
+  }
+
+  // The timeline + recommended actions are INDEPENDENT fetches — their failure
+  // must not blank the page (each renders its own error state).
+  let timeline = null;
+  let timelineError = false;
+  try {
+    timeline = await api(`/api/incident-clusters/${id}/timeline`);
+  } catch { timelineError = true; }
+
+  let actions = null;
+  let actionsError = false;
+  try {
+    actions = await api(`/api/incident-clusters/${id}/recommended-actions`);
+  } catch { actionsError = true; }
+
+  const container = el('div', { class: 'cluster-detail' });
+
+  // Write actions (operator+), driven through ClusterView's buttons.
+  async function doAck() {
+    try { await api(`/api/incident-clusters/${id}/ack`, { method: 'POST' }); toast('Situation acknowledged'); render(); }
+    catch (err) { toast(errText(err), true); }
+  }
+  async function doResolve() {
+    const note = window.prompt('Resolution note (required):');
+    if (!note || !note.trim()) return;
+    try { await api(`/api/incident-clusters/${id}/resolve`, { method: 'POST', body: { note: note.trim() } }); toast('Situation resolved'); render(); }
+    catch (err) { toast(errText(err), true); }
+  }
+  // Explicit, confirmed, audit-logged playbook execution from the incident page.
+  async function doRunPlaybook(rb) {
+    if (!confirm(`Run playbook "${rb.linkedPlaybookName || rb.title}" against this situation's targets? It will be verified after the settle window.`)) return;
+    try {
+      const { verification } = await api(`/api/incident-clusters/${id}/run-playbook`, { method: 'POST', body: { runbookId: rb.id } });
+      const mins = verification ? Math.round((verification.settleSeconds || 300) / 60) : 5;
+      toast(`Playbook queued — verification in ~${mins} min`);
+      render();
+    } catch (err) { toast(errText(err), true); }
+  }
+
+  ClusterView.renderPage(document, container, { detail, timeline, timelineError, actions, actionsError }, clusterRenderOpts({
+    canWrite: canWrite(), back, onAck: doAck, onResolve: doResolve, onRunPlaybook: doRunPlaybook,
+  }));
+  return container;
+};
+
 views.overview = async () => {
   const root = el('div', { class: 'overview' });
   root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Traffic'),
@@ -7476,7 +7604,7 @@ let settingsTab = null;
 // tab is [key, label, adminOnly]; non-admins only ever see the personal section.
 const SETTINGS_GROUPS = [
   ['Access & security', [['users', 'Users', true], ['auth', 'Authentication', true], ['apitokens', 'API tokens', true], ['agentkey', 'Agent key', true]]],
-  ['Detection & alerts', [['analyse', 'Analysis', true], ['alerting', 'Alerting', true], ['integrations', 'ITSM', true], ['cmdb', 'CMDB', true], ['ai', 'AI', true], ['maintenance', 'Maintenance', true]]],
+  ['Detection & alerts', [['analyse', 'Analysis', true], ['alerting', 'Alerting', true], ['runbooks', 'Runbooks', true], ['integrations', 'ITSM', true], ['cmdb', 'CMDB', true], ['ai', 'AI', true], ['maintenance', 'Maintenance', true]]],
   ['Data', [['database', 'Database', true], ['retention', 'Retention', true], ['types', 'Traffic types', true], ['map', 'Map', true]]],
   ['System', [['updates', 'Updates', true], ['agents', 'Agents', true], ['screening', 'Test Settings', true]]],
   ['Personal', [['appearance', 'Appearance', false], ['license', 'License', false]]],
@@ -7866,6 +7994,7 @@ views.settings = async () => {
     types: settingsTypesView,
     analyse: settingsAnalyseView,
     alerting: settingsAlertingView,
+    runbooks: settingsRunbooksView,
     integrations: settingsIntegrationsView,
     cmdb: settingsCmdbView,
     ai: settingsAiView,
@@ -9096,6 +9225,62 @@ async function settingsMaintenanceView() {
   return root;
 }
 
+// Runbooks admin (Fase 3): the static finding-type → recommended-action mapping
+// surfaced on the incident (Situations) page. Admin CRUD; clones the list + modal
+// + delete-confirm pattern used elsewhere.
+async function settingsRunbooksView() {
+  const { runbooks } = await api('/api/runbooks');
+  const root = el('div');
+  root.append(el('p', { class: 'muted settings-intro' }, 'Runbooks map an anomaly finding-type (e.g. cpu, probe.loss) to a concrete recommended action shown on the incident page. Write the action in Markdown; optionally link a remediation playbook so operators can run it (with verification) from the incident.'));
+
+  root.append(el('div', { class: 'section-head' },
+    el('h3', {}, `Runbooks (${runbooks.length})`),
+    el('button', { class: 'small', onclick: () => editRunbook() }, '+ New runbook')));
+
+  if (!runbooks.length) {
+    root.append(el('div', { class: 'empty' }, 'No runbooks yet. Add one to bridge a finding-type to a recommended action.'));
+    return root;
+  }
+  const rows = runbooks.map((r) => el('tr', {},
+    el('td', {}, el('span', { class: 'badge rc-type' }, esc(r.findingType))),
+    el('td', {}, el('strong', {}, esc(r.title))),
+    el('td', { class: 'muted' }, r.linkedPlaybookName ? esc(r.linkedPlaybookName) : '—'),
+    el('td', {}, el('div', { class: 'row-actions' },
+      el('button', { class: 'small ghost', onclick: () => editRunbook(r) }, 'Edit'),
+      el('button', { class: 'small ghost', onclick: () => deleteRunbook(r) }, 'Delete')))));
+  root.append(el('div', { class: 'tablewrap' }, el('table', {},
+    el('thead', {}, el('tr', {}, el('th', {}, 'Finding type'), el('th', {}, 'Title'), el('th', {}, 'Linked playbook'), el('th', {}, ''))),
+    el('tbody', {}, ...rows))));
+  return root;
+}
+
+async function editRunbook(r) {
+  // Offer the existing playbooks as link options (best-effort; empty if none).
+  let playbooks = [];
+  try { const resp = await api('/api/runbooks/playbooks'); playbooks = (resp && resp.playbooks) || []; } catch { playbooks = []; }
+  const editing = r && r.id;
+  const fields = [
+    { name: 'findingType', label: 'Finding type (metric, e.g. cpu)', type: 'text', value: r ? r.findingType : '' },
+    { name: 'title', label: 'Title', type: 'text', value: r ? r.title : '' },
+    { name: 'bodyMarkdown', label: 'Action (Markdown)', type: 'textarea', value: r ? r.bodyMarkdown : '' },
+    { name: 'linkedPlaybookId', label: 'Linked playbook (optional)', type: 'select',
+      value: r && r.linkedPlaybookId != null ? String(r.linkedPlaybookId) : '',
+      options: [{ value: '', label: '— none —' }, ...playbooks.map((p) => ({ value: String(p.id), label: p.name }))] },
+  ];
+  openModal(editing ? 'Edit runbook' : 'New runbook', fields, async (v) => {
+    const body = { findingType: v.findingType, title: v.title, bodyMarkdown: v.bodyMarkdown, linkedPlaybookId: v.linkedPlaybookId || null };
+    await api(editing ? `/api/runbooks/${r.id}` : '/api/runbooks', { method: editing ? 'PUT' : 'POST', body });
+    closeModal(); toast('Runbook saved'); render();
+  });
+  $('#modal-card').classList.add('wide');
+}
+
+async function deleteRunbook(r) {
+  if (!confirm(`Delete runbook "${r.title}"?`)) return;
+  try { await api(`/api/runbooks/${r.id}`, { method: 'DELETE' }); toast('Runbook deleted'); render(); }
+  catch (err) { toast(errText(err), true); }
+}
+
 async function settingsRetentionView() {
   const data = await api('/api/settings');
   const root = el('div');
@@ -9159,6 +9344,7 @@ function analyseSettingsCard(a) {
       { key: 'warnSigma', label: 'WARN threshold (σ from baseline)', type: 'number', min: 0.5, max: 20, step: 0.1, hint: 'Threshold for WARN — should be lower than CRIT. Typically 3.' },
       { key: 'baselineDays', label: 'Baseline window (days)', type: 'number', min: 1, max: 90, step: 1, hint: 'How many days of history the normal is calculated from.' },
       { key: 'minSamples', label: 'Min. samples before alerting', type: 'number', min: 10, max: 100000, step: 1, hint: 'Number of measurements before a metric is monitored — avoids false alarms right after startup.' },
+      { key: 'verifySettleMinutes', label: 'Verification settle time (min)', type: 'number', min: 0, max: 1440, step: 1, hint: 'After a playbook is run from an incident, how long to wait before re-checking whether the symptoms cleared. Default 5.' },
     ],
   });
 }
@@ -9931,6 +10117,7 @@ function connectLive() {
     if (msg.type === 'finding') onLiveFinding(msg.payload);
     else if (msg.type === 'agent-enrolled') onAgentEvent('enrolled', msg.payload);
     else if (msg.type === 'agent-status') onAgentEvent(msg.payload && msg.payload.status, msg.payload);
+    else if (msg.type === 'incident_cluster') onIncidentCluster(msg.payload);
   });
   sock.addEventListener('close', () => {
     liveWs = null;
@@ -9947,6 +10134,16 @@ function disconnectLive() {
 function onAgentEvent(kind, payload) {
   if (kind === 'enrolled') toast(`New agent connected${payload && payload.hostname ? ': ' + payload.hostname : ''}`);
   if (currentView === 'enrollment' && typeof enrollWatch === 'function') enrollWatch(kind, payload);
+}
+
+// Live cross-agent cluster events (open/updated/resolved). Toast, and when the
+// Situations list is on screen, refresh it so the new/updated cluster shows;
+// otherwise the next REST fetch will pick it up.
+function onIncidentCluster(c) {
+  if (!c) return;
+  if (c.status === 'resolved') toast('Situation resolved');
+  else toast(`Cross-agent situation ${c.updated ? 'updated' : 'detected'}${c.confidence ? ` (${c.confidence} confidence)` : ''}`, c.confidence === 'high');
+  if (currentView === 'clusters') render(true);
 }
 
 function onLiveFinding(f) {

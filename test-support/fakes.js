@@ -16,6 +16,7 @@ const { createCmdbConnectorRegistry } = require('../src/cmdb/connectors');
 const { createPlanService } = require('../src/license/planService');
 const { createUsageService } = require('../src/services/usageService');
 const { createAuditLogger } = require('../src/services/complianceLogger');
+const { createSnapshotService } = require('../src/evidence/snapshotService');
 
 // ---- Repositories ---------------------------------------------------------
 
@@ -269,15 +270,26 @@ function makeIncidentClustersRepo(overrides = {}) {
   const rows = [];
   let seq = 0;
   const iso = (v) => (v == null ? null : (v instanceof Date ? v.toISOString() : new Date(v).toISOString()));
+  const LIVE = ['open', 'acknowledged'];
   const mapOut = (r) => ({
     id: r.id,
     confidence: r.confidence,
     memberFindingIds: Array.isArray(r.member_finding_ids) ? r.member_finding_ids : [],
     suspectedCommonCause: r.suspected_common_cause ?? null,
     advisory: r.advisory ?? null,
+    alertLastAt: iso(r.alert_last_at),
+    alertLastSeverity: r.alert_last_severity ?? null,
+    alertMemberCount: r.alert_member_count ?? null,
+    itsmTicketRef: r.itsm_ticket_ref ?? null,
+    itsmIntegrationId: r.itsm_integration_id ?? null,
+    nis2DraftId: r.nis2_draft_id ?? null,
     status: r.status,
     detectedAt: iso(r.detected_at),
+    acknowledgedAt: iso(r.acknowledged_at),
+    acknowledgedBy: r.acknowledged_by == null ? null : Number(r.acknowledged_by),
     resolvedAt: iso(r.resolved_at),
+    resolvedBy: r.resolved_by == null ? null : Number(r.resolved_by),
+    resolutionNote: r.resolution_note ?? null,
     createdAt: iso(r.created_at),
     updatedAt: iso(r.updated_at),
   });
@@ -297,11 +309,11 @@ function makeIncidentClustersRepo(overrides = {}) {
     }),
     findById: overrides.findById || (async (id) => { const r = rows.find((x) => x.id === Number(id)); return r ? mapOut(r) : null; }),
     listOpen: overrides.listOpen || (async () => rows
-      .filter((r) => r.status === 'open')
+      .filter((r) => LIVE.includes(r.status))
       .sort((a, b) => new Date(b.detected_at) - new Date(a.detected_at) || b.id - a.id)
       .map(mapOut)),
     updateMembership: overrides.updateMembership || (async (id, { confidence, memberFindingIds, suspectedCommonCause, detectedAt }) => {
-      const r = rows.find((x) => x.id === Number(id) && x.status === 'open');
+      const r = rows.find((x) => x.id === Number(id) && LIVE.includes(x.status));
       if (!r) return false;
       r.confidence = confidence;
       r.member_finding_ids = memberFindingIds || [];
@@ -310,7 +322,7 @@ function makeIncidentClustersRepo(overrides = {}) {
       return true;
     }),
     setAdvisory: overrides.setAdvisory || (async (id, advisory) => {
-      const r = rows.find((x) => x.id === Number(id) && x.status === 'open' && (x.advisory == null));
+      const r = rows.find((x) => x.id === Number(id) && LIVE.includes(x.status) && (x.advisory == null));
       if (!r) return false;
       r.advisory = advisory;
       return true;
@@ -323,14 +335,53 @@ function makeIncidentClustersRepo(overrides = {}) {
       if (to === 'open') r.resolved_at = null;
       return true;
     }),
+    acknowledge: overrides.acknowledge || (async (id, { by = null, at = null } = {}) => {
+      const r = rows.find((x) => x.id === Number(id) && x.status === 'open');
+      if (!r) return false;
+      r.status = 'acknowledged';
+      r.acknowledged_at = at;
+      r.acknowledged_by = by;
+      return true;
+    }),
+    resolve: overrides.resolve || (async (id, { by = null, note = null, at = null } = {}) => {
+      const r = rows.find((x) => x.id === Number(id) && LIVE.includes(x.status));
+      if (!r) return false;
+      r.status = 'resolved';
+      r.resolved_at = at;
+      r.resolved_by = by;
+      r.resolution_note = note;
+      return true;
+    }),
     listStaleOpen: overrides.listStaleOpen || (async (olderThan) => rows
-      .filter((r) => r.status === 'open' && new Date(r.detected_at) < new Date(olderThan))
+      .filter((r) => LIVE.includes(r.status) && new Date(r.detected_at) < new Date(olderThan))
       .sort((a, b) => new Date(a.detected_at) - new Date(b.detected_at))
       .map(mapOut)),
-    list: overrides.list || (async (f = {}) => rows
-      .filter((r) => (!f.status || r.status === f.status))
-      .sort((a, b) => new Date(b.detected_at) - new Date(a.detected_at) || b.id - a.id)
-      .map(mapOut)),
+    list: overrides.list || (async (f = {}) => {
+      let out = rows
+        .filter((r) => (!f.status || r.status === f.status)
+          && (!f.from || new Date(r.detected_at) >= new Date(f.from))
+          && (!f.to || new Date(r.detected_at) <= new Date(f.to)))
+        .sort((a, b) => new Date(b.detected_at) - new Date(a.detected_at) || b.id - a.id)
+        .map(mapOut);
+      const off = Number.isInteger(f.offset) && f.offset > 0 ? f.offset : 0;
+      const lim = Number.isInteger(f.limit) && f.limit > 0 ? f.limit : out.length;
+      return out.slice(off, off + lim);
+    }),
+    count: overrides.count || (async (f = {}) => rows.filter((r) => (!f.status || r.status === f.status)
+      && (!f.from || new Date(r.detected_at) >= new Date(f.from))
+      && (!f.to || new Date(r.detected_at) <= new Date(f.to))).length),
+    updateAlertState: overrides.updateAlertState || (async (id, { at, severity, memberCount }) => {
+      const r = rows.find((x) => x.id === Number(id)); if (!r) return false;
+      r.alert_last_at = at; r.alert_last_severity = severity; r.alert_member_count = memberCount; return true;
+    }),
+    setItsmRef: overrides.setItsmRef || (async (id, { ticketRef, integrationId = null }) => {
+      const r = rows.find((x) => x.id === Number(id)); if (!r) return false;
+      r.itsm_ticket_ref = ticketRef; r.itsm_integration_id = integrationId; return true;
+    }),
+    setNis2Draft: overrides.setNis2Draft || (async (id, draftId) => {
+      const r = rows.find((x) => x.id === Number(id)); if (!r || r.nis2_draft_id != null) return false;
+      r.nis2_draft_id = draftId; return true;
+    }),
   };
 }
 
@@ -453,6 +504,149 @@ function makeConfigSnapshotsRepo(overrides = {}) {
         .sort((a, b) => before(b, a));
       return match[0] ? mapOut(match[0], true) : null;
     }),
+    listForDeviceBetween: overrides.listForDeviceBetween || (async (deviceId, from, to, { limit = 500 } = {}) => rows
+      .filter((r) => r.device_id === deviceId
+        && (!from || new Date(r.captured_at) >= new Date(from))
+        && (!to || new Date(r.captured_at) <= new Date(to)))
+      .sort((a, b) => before(a, b)) // oldest-first, like the real repo
+      .slice(0, limit)
+      .map((r) => mapOut(r, false))),
+  };
+}
+
+// A fake runbooks repository (in-memory). Mirrors runbooksRepository's surface.
+function makeRunbooksRepo(overrides = {}) {
+  const rows = [];
+  let seq = 0;
+  const mapOut = (r) => ({
+    id: r.id, findingType: r.finding_type, title: r.title, bodyMarkdown: r.body_markdown,
+    linkedPlaybookId: r.linked_playbook_id ?? null, updatedBy: r.updated_by ?? null,
+    updatedAt: r.updated_at, createdAt: r.created_at, linkedPlaybookName: r.linked_playbook_name ?? null,
+  });
+  return {
+    rows,
+    list: overrides.list || (async () => rows.slice().sort((a, b) => (a.finding_type < b.finding_type ? -1 : 1) || b.id - a.id).map(mapOut)),
+    findById: overrides.findById || (async (id) => { const r = rows.find((x) => x.id === Number(id)); return r ? mapOut(r) : null; }),
+    listByFindingTypes: overrides.listByFindingTypes || (async (types) => {
+      const set = new Set((Array.isArray(types) ? types : []).filter((t) => t != null && t !== ''));
+      return rows.filter((r) => set.has(r.finding_type)).map(mapOut);
+    }),
+    create: overrides.create || (async ({ findingType, title, bodyMarkdown, linkedPlaybookId = null, updatedBy = null }) => {
+      const id = (seq += 1);
+      rows.push({ id, finding_type: findingType, title, body_markdown: bodyMarkdown, linked_playbook_id: linkedPlaybookId, updated_by: updatedBy, updated_at: new Date().toISOString(), created_at: new Date().toISOString() });
+      return id;
+    }),
+    update: overrides.update || (async (id, { findingType, title, bodyMarkdown, linkedPlaybookId = null, updatedBy = null }) => {
+      const r = rows.find((x) => x.id === Number(id));
+      if (!r) return false;
+      Object.assign(r, { finding_type: findingType, title, body_markdown: bodyMarkdown, linked_playbook_id: linkedPlaybookId, updated_by: updatedBy, updated_at: new Date().toISOString() });
+      return true;
+    }),
+    remove: overrides.remove || (async (id) => { const i = rows.findIndex((x) => x.id === Number(id)); if (i < 0) return false; rows.splice(i, 1); return true; }),
+  };
+}
+
+// A fake verification-runs repository (in-memory). Mirrors
+// verificationRunsRepository's surface for the verification loop + timeline.
+function makeVerificationRunsRepo(overrides = {}) {
+  const rows = [];
+  let seq = 0;
+  const iso = (v) => (v == null ? null : (v instanceof Date ? v.toISOString() : new Date(v).toISOString()));
+  const mapOut = (r) => ({
+    id: r.id, clusterId: r.cluster_id, playbookId: r.playbook_id ?? null, runbookId: r.runbook_id ?? null,
+    triggeredBy: r.triggered_by ?? null, affectedTargets: r.affected_targets || [], findingTypes: r.finding_types || [],
+    settleSeconds: r.settle_seconds, executedAt: iso(r.executed_at), dueAt: iso(r.due_at),
+    status: r.status, readings: r.readings ?? null, completedAt: iso(r.completed_at), createdAt: iso(r.created_at),
+  });
+  return {
+    rows,
+    create: overrides.create || (async (c) => {
+      const id = (seq += 1);
+      rows.push({
+        id, cluster_id: c.clusterId, playbook_id: c.playbookId ?? null, runbook_id: c.runbookId ?? null,
+        triggered_by: c.triggeredBy ?? null, affected_targets: c.affectedTargets || [], finding_types: c.findingTypes || [],
+        settle_seconds: c.settleSeconds, executed_at: c.executedAt, due_at: c.dueAt, status: 'pending',
+        readings: null, completed_at: null, created_at: new Date(),
+      });
+      return id;
+    }),
+    findById: overrides.findById || (async (id) => { const r = rows.find((x) => x.id === Number(id)); return r ? mapOut(r) : null; }),
+    listDuePending: overrides.listDuePending || (async (now) => rows
+      .filter((r) => r.status === 'pending' && new Date(r.due_at) <= new Date(now))
+      .sort((a, b) => new Date(a.due_at) - new Date(b.due_at) || a.id - b.id)
+      .map(mapOut)),
+    complete: overrides.complete || (async (id, { status, readings = null, completedAt }) => {
+      const r = rows.find((x) => x.id === Number(id) && x.status === 'pending');
+      if (!r) return false;
+      r.status = status; r.readings = readings; r.completed_at = completedAt;
+      return true;
+    }),
+    listForCluster: overrides.listForCluster || (async (clusterId) => rows
+      .filter((r) => r.cluster_id === Number(clusterId))
+      .sort((a, b) => new Date(b.executed_at) - new Date(a.executed_at) || b.id - a.id)
+      .map(mapOut)),
+  };
+}
+
+// A fake lldp_neighbors repository (in-memory). Mirrors
+// lldpNeighborsRepository's surface for the graph + topology API.
+function makeLldpNeighborsRepo(overrides = {}) {
+  const rows = [];
+  let seq = 0;
+  const iso = (v) => (v == null ? null : (v instanceof Date ? v.toISOString() : new Date(v).toISOString()));
+  const key = (r) => `${r.local_agent_id}|${r.local_port || ''}|${r.remote_chassis_id}|${r.remote_port || ''}`;
+  const mapOut = (r) => ({
+    id: r.id, localAgentId: r.local_agent_id, localChassisId: r.local_chassis_id ?? null,
+    localPort: r.local_port ?? null, remoteChassisId: r.remote_chassis_id, remotePort: r.remote_port ?? null,
+    lastSeen: iso(r.last_seen),
+  });
+  const chassisOf = (agentId) => rows.filter((r) => r.local_agent_id === Number(agentId) && r.local_chassis_id).map((r) => r.local_chassis_id);
+  const matchTarget = (r, targetAgentId) => {
+    if (targetAgentId == null) return true;
+    if (r.local_agent_id === Number(targetAgentId)) return true;
+    return chassisOf(targetAgentId).includes(r.remote_chassis_id);
+  };
+  return {
+    rows,
+    upsert: overrides.upsert || (async ({ localAgentId, localChassisId = null, localPort = null, remoteChassisId, remotePort = null, lastSeen = null }) => {
+      const row = { local_agent_id: Number(localAgentId), local_chassis_id: localChassisId, local_port: localPort, remote_chassis_id: remoteChassisId, remote_port: remotePort, last_seen: lastSeen || new Date() };
+      const existing = rows.find((r) => key(r) === key(row));
+      if (existing) { existing.last_seen = row.last_seen; existing.local_chassis_id = row.local_chassis_id; return existing; }
+      row.id = (seq += 1); rows.push(row); return row;
+    }),
+    upsertMany: overrides.upsertMany || (async function upsertMany(localAgentId, neighbors, { localChassisId = null, lastSeen = null } = {}) {
+      let n = 0;
+      for (const nb of Array.isArray(neighbors) ? neighbors : []) {
+        const remoteChassisId = nb && (nb.remoteChassisId ?? nb.remote_chassis_id);
+        if (!remoteChassisId) continue;
+        await this.upsert({ localAgentId, localChassisId: nb.localChassisId ?? nb.local_chassis_id ?? localChassisId, localPort: nb.localPort ?? nb.local_port ?? null, remoteChassisId, remotePort: nb.remotePort ?? nb.remote_port ?? null, lastSeen });
+        n += 1;
+      }
+      return n;
+    }),
+    ageOut: overrides.ageOut || (async (olderThan) => {
+      const before = rows.length;
+      for (let i = rows.length - 1; i >= 0; i -= 1) if (new Date(rows[i].last_seen) < new Date(olderThan)) rows.splice(i, 1);
+      return before - rows.length;
+    }),
+    listAll: overrides.listAll || (async ({ since = null } = {}) => rows
+      .filter((r) => !since || new Date(r.last_seen) >= new Date(since)).map(mapOut)),
+    list: overrides.list || (async ({ targetAgentId = null, limit = 50, offset = 0 } = {}) => rows
+      .filter((r) => matchTarget(r, targetAgentId))
+      .sort((a, b) => new Date(b.last_seen) - new Date(a.last_seen) || b.id - a.id)
+      .slice(offset, offset + limit).map(mapOut)),
+    count: overrides.count || (async ({ targetAgentId = null } = {}) => rows.filter((r) => matchTarget(r, targetAgentId)).length),
+  };
+}
+
+// A fake verification service (records schedule() calls; no-op sweep by default).
+function makeVerificationService(overrides = {}) {
+  const scheduled = [];
+  return {
+    scheduled,
+    schedule: overrides.schedule || (async (spec) => { const run = { id: scheduled.length + 1, status: 'pending', ...spec }; scheduled.push(run); return run; }),
+    recheck: overrides.recheck || (async () => ({ status: 'passed', readings: null })),
+    runDue: overrides.runDue || (async () => ({ checked: 0, passed: 0, failed: 0, error: 0 })),
   };
 }
 
@@ -920,6 +1114,66 @@ function makeAlertDispatchLogRepo(overrides = {}) {
       return [...new Set(rows.filter((r) => r.subjectType === 'finding' && want.has(String(r.subjectId))).map((r) => String(r.subjectId)))];
     }),
     list: overrides.list || (async ({ subjectType = null } = {}) => rows.filter((r) => !subjectType || r.subjectType === subjectType)),
+    listForSubject: overrides.listForSubject || (async ({ subjectType, subjectId } = {}) => rows
+      .filter((r) => r.subjectType === subjectType && String(r.subjectId) === String(subjectId))
+      .slice().reverse()
+      .map((r) => ({ id: r.id, subjectType: r.subjectType, subjectId: r.subjectId, event: r.hostId ?? null, metric: r.metric ?? null, severity: r.severity ?? null, channels: r.channels ?? null, sentAt: r.sentAt ?? null }))),
+  };
+}
+
+// A fake cluster_evidence_snapshots repository (in-memory) — mirrors
+// evidenceSnapshotsRepository's surface. Callers deal in plain text; this fake
+// keeps the payload as a string (the real repo gzips it transparently).
+function makeEvidenceSnapshotsRepo(overrides = {}) {
+  const rows = [];
+  let seq = 0;
+  const iso = (v) => (v == null ? null : (v instanceof Date ? v.toISOString() : new Date(v).toISOString()));
+  const mapMeta = (r) => ({
+    id: r.id,
+    clusterId: Number(r.cluster_id),
+    target: r.target,
+    commandSetVersion: r.command_set_version,
+    status: r.status,
+    items: Array.isArray(r.items) ? r.items : [],
+    payloadBytes: Number(r.payload_bytes || 0),
+    capturedAt: iso(r.captured_at),
+    trigger: r.trigger,
+    createdAt: iso(r.created_at),
+  });
+  return {
+    rows,
+    create: overrides.create || (async ({ clusterId, target, commandSetVersion, capturedAt, trigger = 'auto' }) => {
+      const id = (seq += 1);
+      rows.push({ id, cluster_id: clusterId, target: String(target), command_set_version: commandSetVersion, status: 'pending', items: [], payload_gzip: null, payload_bytes: 0, captured_at: capturedAt, trigger, created_at: new Date() });
+      return id;
+    }),
+    complete: overrides.complete || (async (id, { status, items = [], payloadText = null }) => {
+      const r = rows.find((x) => x.id === Number(id));
+      if (!r) return false;
+      r.status = status;
+      r.items = items || [];
+      r.payload_gzip = payloadText != null ? String(payloadText) : null;
+      r.payload_bytes = payloadText != null ? Buffer.byteLength(String(payloadText), 'utf8') : 0;
+      return true;
+    }),
+    findById: overrides.findById || (async (id) => { const r = rows.find((x) => x.id === Number(id)); return r ? mapMeta(r) : null; }),
+    listForCluster: overrides.listForCluster || (async (clusterId, { limit = 200 } = {}) => rows
+      .filter((r) => r.cluster_id === Number(clusterId))
+      .sort((a, b) => new Date(b.captured_at) - new Date(a.captured_at) || b.id - a.id)
+      .slice(0, limit)
+      .map(mapMeta)),
+    getPayload: overrides.getPayload || (async (id) => { const r = rows.find((x) => x.id === Number(id)); if (!r) return null; return r.payload_gzip == null ? '' : String(r.payload_gzip); }),
+    ageOut: overrides.ageOut || (async (olderThan, { protectedClusterIds = [] } = {}) => {
+      const protectedIds = new Set((protectedClusterIds || []).map(Number));
+      let deleted = 0;
+      for (let i = rows.length - 1; i >= 0; i -= 1) {
+        if (new Date(rows[i].captured_at) < new Date(olderThan) && !protectedIds.has(rows[i].cluster_id)) { rows.splice(i, 1); deleted += 1; }
+      }
+      return deleted;
+    }),
+    clusterIdsWithSnapshotsOlderThan: overrides.clusterIdsWithSnapshotsOlderThan || (async (olderThan, { limit = 5000 } = {}) => [...new Set(rows
+      .filter((r) => new Date(r.captured_at) < new Date(olderThan))
+      .map((r) => r.cluster_id))].slice(0, limit)),
   };
 }
 
@@ -1172,6 +1426,8 @@ function makeIntegrationsDispatcher(overrides = {}) {
     emit: overrides.emit || (async (event) => { calls.push(event); return { dispatched: 0, results: [] }; }),
     emitFinding: overrides.emitFinding || (async (finding) => { calls.push({ kind: 'finding', finding }); return { dispatched: 0, results: [] }; }),
     emitAgentEvent: overrides.emitAgentEvent || (async (kind, agent) => { calls.push({ kind: `agent.${kind}`, agent }); return { dispatched: 0, results: [] }; }),
+    emitCluster: overrides.emitCluster || (async (cluster) => { calls.push({ kind: 'cluster', cluster }); return { dispatched: 1, results: [{ ok: true, ref: `SNOW-${cluster.clusterId}` }], ref: { ticketRef: `SNOW-${cluster.clusterId}`, integrationId: 1 } }; }),
+    emitClusterNote: overrides.emitClusterNote || (async (cluster, note) => { calls.push({ kind: 'cluster-note', cluster, note }); return { dispatched: 1, results: [{ ok: true }] }; }),
     testFire: overrides.testFire || (async () => ({ ok: true, status: 201, detail: 'created (201)' })),
   };
 }
@@ -1536,6 +1792,12 @@ function makeApp(overrides = {}) {
   const planService = overrides.planService || createPlanService({ licenseManager });
   const usageService =
     overrides.usageService || createUsageService({ agentsRepo, testPackagesRepo, planService, licenseManager });
+  const agentCommander = overrides.agentCommander || makeAgentCommander();
+  const evidenceRepo = overrides.evidenceRepo || makeEvidenceSnapshotsRepo();
+  // Real snapshot service over the fake repo + commander, so evidence-capture
+  // logic (allowlist/timeout/offline) is exercised end-to-end in API tests.
+  const snapshotService = overrides.snapshotService
+    || createSnapshotService({ evidenceRepo, agentCommander, scheduleRetry: (fn) => { const t = setTimeout(fn, 0); if (t.unref) t.unref(); return t; } });
   return createApp({
     db: overrides.db || makeDb(),
     tsdb: overrides.tsdb || null,
@@ -1550,6 +1812,14 @@ function makeApp(overrides = {}) {
     probeResultsRepo: overrides.probeResultsRepo || makeProbeResultsRepo(),
     incidentsRepo: overrides.incidentsRepo || makeIncidentsRepo(),
     incidentCasesRepo: overrides.incidentCasesRepo || makeIncidentCasesRepo(),
+    incidentClustersRepo: overrides.incidentClustersRepo || makeIncidentClustersRepo(),
+    alertDispatchLogRepo: overrides.alertDispatchLogRepo || makeAlertDispatchLogRepo(),
+    clusterNotifier: overrides.clusterNotifier || null,
+    evidenceRepo,
+    snapshotService,
+    runbooksRepo: overrides.runbooksRepo || makeRunbooksRepo(),
+    verificationRunsRepo: overrides.verificationRunsRepo || makeVerificationRunsRepo(),
+    verificationService: overrides.verificationService || makeVerificationService(),
     remediationPlaybooksRepo: overrides.remediationPlaybooksRepo || makeRemediationPlaybooksRepo(),
     configSnapshotsRepo: overrides.configSnapshotsRepo || makeConfigSnapshotsRepo(),
     thresholdsRepo: overrides.thresholdsRepo || makeIncidentThresholdsRepo(),
@@ -1558,7 +1828,7 @@ function makeApp(overrides = {}) {
     licenseManager,
     planService,
     usageService,
-    agentCommander: overrides.agentCommander || makeAgentCommander(),
+    agentCommander,
     agentReconnect: overrides.agentReconnect || { waitMs: 200, pollMs: 10 },
     systemInfo: overrides.systemInfo || makeSystemInfo(),
     findingStore: overrides.findingStore || makeFindingStore(),
@@ -1566,6 +1836,7 @@ function makeApp(overrides = {}) {
     probePipeline: overrides.probePipeline || makeProbePipeline(),
     flowPipeline: overrides.flowPipeline || makeFlowPipeline(),
     flowsRepo: overrides.flowsRepo || makeFlowsRepo(),
+    lldpNeighborsRepo: overrides.lldpNeighborsRepo || makeLldpNeighborsRepo(),
     geoTileConfig: overrides.geoTileConfig || { tileUrl: 'https://tiles.example/{z}/{x}/{y}.png', tileAttribution: 'test', tileMaxZoom: 19 },
     geoProvider: overrides.geoProvider || null,
     centroids: overrides.centroids || null,
@@ -1677,7 +1948,12 @@ module.exports = {
   makeIncidentsRepo,
   makeIncidentCasesRepo,
   makeIncidentClustersRepo,
+  makeRunbooksRepo,
+  makeVerificationRunsRepo,
+  makeVerificationService,
+  makeLldpNeighborsRepo,
   makeAlertDispatchLogRepo,
+  makeEvidenceSnapshotsRepo,
   makeRemediationPlaybooksRepo,
   makeIncidentCaseService,
   makeConfigSnapshotsRepo,

@@ -88,6 +88,25 @@ function createConfigSnapshotsRepository(db) {
     return mapRow(rows[0]) ?? null;
   }
 
+  // All snapshots for a device captured within [from, to], oldest-first — the
+  // config-change events for the incident-cluster timeline read-model. Metadata
+  // only (no config_text); the timeline just needs the "a change happened" marker
+  // + captured_via, not the diff. Bounded like listForDevice.
+  async function listForDeviceBetween(deviceId, from, to, { limit = 500 } = {}) {
+    const lim = Number.isInteger(limit) && limit > 0 && limit <= 2000 ? limit : 500;
+    const where = ['device_id = ?'];
+    const params = [deviceId];
+    if (from) { where.push('captured_at >= ?'); params.push(from); }
+    if (to) { where.push('captured_at <= ?'); params.push(to); }
+    params.push(lim);
+    const [rows] = await pool.query(
+      `SELECT ${META_COLUMNS} FROM config_snapshots
+       WHERE ${where.join(' AND ')} ORDER BY captured_at ASC, id ASC LIMIT ?`,
+      params
+    );
+    return rows.map(mapRow);
+  }
+
   // The snapshot immediately preceding `id` for the same device (the one to diff
   // against), or null when `id` is the device's first snapshot. Ordered by
   // captured_at then id so ties are deterministic.
@@ -102,7 +121,7 @@ function createConfigSnapshotsRepository(db) {
     return mapRow(rows[0]) ?? null;
   }
 
-  return { insert, findById, listForDevice, previousBefore, latestForDeviceBetween };
+  return { insert, findById, listForDevice, listForDeviceBetween, previousBefore, latestForDeviceBetween };
 }
 
 module.exports = { createConfigSnapshotsRepository, mapRow };

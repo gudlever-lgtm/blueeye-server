@@ -1383,8 +1383,27 @@ button.active-btn { outline: 2px solid var(--accent); }
 .badge.inc-sev-INFO { background: #7f8c8d; color: #fff; }
 .badge.inc-status-open { background: #2980b9; color: #fff; }
 .badge.inc-status-investigating { background: #8e44ad; color: #fff; }
+.badge.inc-status-acknowledged { background: #8e44ad; color: #fff; }
 .badge.inc-status-resolved { background: #27ae60; color: #fff; }
 .badge.inc-status-closed { background: #95a5a6; color: #fff; }
+/* Cross-agent situation (cluster) badges: confidence tier + root-cause layer. */
+.badge.conf-high { background: #c0392b; color: #fff; }
+.badge.conf-medium { background: #e67e22; color: #fff; }
+.badge.conf-low { background: #7f8c8d; color: #fff; }
+.badge.rc-network-layer { background: #2980b9; color: #fff; }
+.badge.rc-application-layer { background: #16a085; color: #fff; }
+.badge.rc-undetermined { background: #95a5a6; color: #fff; }
+/* Situation "what changed" panel — make the pre-incident changes prominent. */
+.inc-whatchanged { border-left: 3px solid #e67e22; }
+.inc-drivers { margin: 6px 0 0; padding-left: 1.1rem; }
+/* Recommended actions (runbooks) panel. */
+.badge.rc-type { background: #34495e; color: #fff; }
+.inc-recactions .recaction { padding: 8px 0; border-top: 1px solid var(--border, #e2e2e2); }
+.inc-recactions .recaction:first-of-type { border-top: 0; }
+.recaction-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.recaction .md { font-size: 0.95em; }
+.recaction .md-code { background: rgba(127,127,127,0.12); padding: 6px 8px; border-radius: 4px; overflow-x: auto; }
+.recaction .md-list { margin: 4px 0; padding-left: 1.2rem; }
 ul.timeline { list-style: none; padding-left: 0; margin: 0; }
 ul.timeline li.tl { display: flex; align-items: baseline; gap: 10px; padding: 3px 0; }
 .tl-time { min-width: 12rem; font-variant-numeric: tabular-nums; font-size: 12px; }

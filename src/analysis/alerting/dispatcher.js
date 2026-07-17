@@ -145,6 +145,52 @@ function createDispatcher({ config, channels = {}, licensed = () => true, channe
     return { dispatched: attempted, results };
   }
 
+  // Fires a cluster LIFECYCLE event (opened/update/escalation/resolved — Fase 5)
+  // to the channels. Unlike dispatchCluster (the once-per-cluster opened guard),
+  // this fires each time the rollup engine decides an event is due; the engine
+  // owns "opened once" via the cluster's stored alert state.
+  //
+  // Per-channel digest: a channel configured `digestMode: 'silent'` receives ONLY
+  // opened/escalation/resolved — 'update' events are skipped for it (no per-member
+  // noise). All other channels (default 'update') receive everything. `kind` is
+  // stamped on the durable alert log. Bypasses the per-host throttle + silencer.
+  async function dispatchClusterEvent(cluster, group, { kind = 'update' } = {}) {
+    if (!licensed()) return { dispatched: false, reason: 'unlicensed', results: [] };
+    if (!config || !config.enabled) return { dispatched: false, reason: 'disabled', results: [] };
+    if (!cluster || cluster.clusterId == null) return { dispatched: false, reason: 'no-cluster', results: [] };
+
+    const subjectRank = rank(cluster.severity);
+    const results = [];
+    let attempted = false;
+    for (const [name, channel] of Object.entries(channels)) {
+      const rule = (config.channels && config.channels[name]) || null;
+      if (!rule || !rule.enabled) continue;
+      if (!channelLicensed(name)) { results.push({ channel: name, ok: false, skipped: true, detail: 'channel not licensed' }); continue; }
+      if (subjectRank < rank(rule.minSeverity)) { results.push({ channel: name, ok: false, skipped: true, detail: 'below minSeverity' }); continue; }
+      // Digest: 'silent' channels skip mid-incident update noise.
+      if (kind === 'update' && String(rule.digestMode || 'update') === 'silent') {
+        results.push({ channel: name, ok: false, skipped: true, detail: 'silent digest' });
+        continue;
+      }
+      attempted = true;
+      try {
+        const r = await channel.send({ ...cluster, clusterEvent: kind }, group);
+        results.push({ channel: name, ok: Boolean(r && r.ok), detail: r && r.detail });
+      } catch (err) {
+        results.push({ channel: name, ok: false, detail: `threw: ${err.message}` });
+      }
+    }
+    if (attempted) {
+      logAlert({
+        subjectType: 'cluster', subjectId: cluster.clusterId, hostId: kind,
+        metric: `cluster.${kind}`, severity: cluster.severity, channels: okChannelNames(results), sentAt: new Date(now()),
+      });
+    }
+    const outcome = (r) => (r.ok ? 'ok' : r.skipped ? 'skip' : 'fail');
+    logger.info(`alerting: cluster ${cluster.clusterId} ${kind} ${cluster.severity} -> ${results.map((r) => `${r.channel}:${outcome(r)}`).join(', ') || 'no channel'}`);
+    return { dispatched: attempted, results, kind };
+  }
+
   // Sanitised view of the active channels + rules (no secrets) for the API.
   function describe() {
     const out = {};
@@ -189,7 +235,7 @@ function createDispatcher({ config, channels = {}, licensed = () => true, channe
   // Late-bind the silencer (server.js builds it after settingsService exists).
   function setSilencer(fn) { silencedBy = typeof fn === 'function' ? fn : null; }
 
-  return { dispatch, dispatchCluster, describe, channelNames, test, setSilencer };
+  return { dispatch, dispatchCluster, dispatchClusterEvent, describe, channelNames, test, setSilencer };
 }
 
 module.exports = { createDispatcher };

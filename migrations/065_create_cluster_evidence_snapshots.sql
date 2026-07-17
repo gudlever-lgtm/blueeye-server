@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS cluster_evidence_snapshots (
   payload_gzip MEDIUMBLOB NULL DEFAULT NULL,       -- gzip of the concatenated raw text evidence
   payload_bytes INT UNSIGNED NOT NULL DEFAULT 0,   -- uncompressed size (for the UI, no decompress)
   captured_at DATETIME NOT NULL,
-  trigger VARCHAR(16) NOT NULL DEFAULT 'auto',     -- 'auto' (cluster-open) or 'manual' (re-snapshot)
+  `trigger` VARCHAR(16) NOT NULL DEFAULT 'auto',   -- 'auto' (cluster-open) or 'manual' (re-snapshot); reserved word → backticked
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   KEY idx_evidence_cluster (cluster_id, captured_at),

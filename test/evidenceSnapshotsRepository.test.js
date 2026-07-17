@@ -29,6 +29,21 @@ test('create opens a pending snapshot and returns the new id', async () => {
   assert.match(pool.calls[0].sql, /'pending'/);
   assert.equal(pool.calls[0].params[0], 5);
   assert.equal(pool.calls[0].params[1], '10');
+  // `trigger` is a MySQL reserved word — it MUST be backticked in the column list,
+  // or CREATE/INSERT fail at runtime (regression: migrate.js exited 1 on deploy).
+  assert.match(pool.calls[0].sql, /`trigger`/);
+  assert.doesNotMatch(pool.calls[0].sql, /[,(]\s*trigger\b/);
+});
+
+test('reserved-word `trigger` is backticked in the metadata SELECT (findById/listForCluster)', async () => {
+  const pool = fakePool(() => [[]]);
+  const repo = createEvidenceSnapshotsRepository({ pool });
+  await repo.findById(1);
+  await repo.listForCluster(1);
+  for (const call of pool.calls) {
+    assert.match(call.sql, /`trigger`/, 'the SELECT column list must backtick `trigger`');
+    assert.doesNotMatch(call.sql, /,\s*trigger\b/, 'no un-backticked `trigger` identifier');
+  }
 });
 
 test('complete gzips the payload text and records byte length', async () => {

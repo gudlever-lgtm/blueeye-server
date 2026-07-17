@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.84.2 — Fix: `trigger` reserved word broke migration 065 (deploy hotfix)
+
+`cluster_evidence_snapshots.trigger` (Fase 6) is a **MySQL reserved word** and was
+used unquoted in the `CREATE TABLE` (migration 065) and in the repository's
+`INSERT`/`SELECT` column lists — so `node src/migrate.js` failed with a syntax error
+on a fresh deploy, aborting the container's `migrate && seed && server` startup chain
+(`blueeye-server` exited 1). Backticked `` `trigger` `` everywhere it names the column.
+Added a repository regression test asserting the emitted SQL backticks the column
+(the fake pool doesn't parse SQL, so the original bug passed CI). No schema/behaviour
+change — re-running the migration now applies cleanly (065 had rolled back, so nothing
+was recorded).
+
 ## 0.84.0 — Automated read-only evidence snapshot on cluster open
 
 When a cross-agent cluster opens, BlueEye captures a **READ-ONLY** diagnostic

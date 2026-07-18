@@ -283,8 +283,11 @@ function computeFleet(agents, rowsByAgentId, { now = Date.now(), ifaceByAgentId 
   list.sort((x, y) => (TIER[x.health.status] - TIER[y.health.status])
     || ((y.health.metrics.latencyZ || 0) - (x.health.metrics.latencyZ || 0))
     || String(x.displayName).localeCompare(String(y.displayName)));
-  const summary = { ok: 0, warn: 0, bad: 0, down: 0, stale: 0, unknown: 0, total: list.length };
-  for (const a of list) summary[a.health.status] = (summary[a.health.status] || 0) + 1;
+  const summary = { ok: 0, warn: 0, bad: 0, down: 0, stale: 0, unknown: 0, offline: 0, total: list.length };
+  for (const a of list) {
+    summary[a.health.status] = (summary[a.health.status] || 0) + 1;
+    if (!a.online) summary.offline += 1; // connection state (independent of the health verdict)
+  }
   return { agents: list, summary };
 }
 

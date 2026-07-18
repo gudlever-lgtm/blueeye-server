@@ -295,6 +295,57 @@ test('GET /api/fleet/agent/:id includes throughput and folds it when enabled', a
   assert.equal(res.body.health.status, 'bad');
 });
 
+// A mixed fleet: 1 critical (heavy loss ⇒ bad), 1 warning (elevated latency),
+// 1 healthy, 1 offline-with-no-probes (⇒ unknown). Reused by the severity tests.
+function mixedFleet() {
+  const agentsRepo = makeAgentsRepo({ findAll: async () => [
+    { id: 1, hostname: 'a1', status: 'online' },
+    { id: 3, hostname: 'a3', status: 'online' },
+    { id: 4, hostname: 'a4', status: 'online' },
+    { id: 5, hostname: 'a5', status: 'offline' },
+  ] });
+  const rows = [
+    ...samples('8.8.8.8', [30, 31], { lossPct: 40 }).map((r) => ({ ...r, agentId: 1 })),   // bad
+    ...samples('gw', [16, 11, 9, 10, 12, 8, 11, 9, 10]).map((r) => ({ ...r, agentId: 3 })), // warn
+    ...samples('1.1.1.1', [10, 10, 10]).map((r) => ({ ...r, agentId: 4 })),                 // ok
+    // agent 5: no probe rows ⇒ unknown; its offline status feeds summary.offline.
+  ];
+  const probeResultsRepo = makeProbeResultsRepo({ fleetHealth: async () => rows });
+  return { agentsRepo, probeResultsRepo };
+}
+
+test('GET /api/fleet/health summary carries per-status counts + an offline count', async () => {
+  const res = await request(makeApp(mixedFleet())).get('/api/fleet/health').set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 200);
+  assert.equal(res.body.summary.total, 4);
+  assert.equal(res.body.summary.bad, 1);       // loss-driven — clock-independent
+  assert.equal(res.body.summary.warn, 1);      // latency-z-driven — clock-independent
+  assert.equal(res.body.summary.offline, 1);   // agent 5 is offline (connection state)
+  assert.equal(res.body.agents.length, 4);     // unfiltered ⇒ whole fleet
+});
+
+test('GET /api/fleet/health?severity=CRIT narrows agents to bad/down, keeps a full summary', async () => {
+  const res = await request(makeApp(mixedFleet())).get('/api/fleet/health?severity=CRIT').set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body.agents.map((a) => a.agentId).sort(), [1]);
+  assert.ok(res.body.agents.every((a) => a.health.status === 'bad' || a.health.status === 'down'));
+  assert.equal(res.body.summary.total, 4); // summary stays whole-fleet so the cards stay honest
+});
+
+test('GET /api/fleet/health?severity=CRIT,WARN combines statuses (OR within severity)', async () => {
+  const res = await request(makeApp(mixedFleet())).get('/api/fleet/health?severity=CRIT,WARN').set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body.agents.map((a) => a.agentId).sort(), [1, 3]);
+});
+
+test('GET /api/fleet/health tolerates an invalid severity (200 + whole fleet, not 400/500)', async () => {
+  for (const q of ['?severity=BOGUS', '?severity=', '?severity=crit;drop', '?severity=,,']) {
+    const res = await request(makeApp(mixedFleet())).get(`/api/fleet/health${q}`).set('Authorization', authHeader('viewer'));
+    assert.equal(res.status, 200, `expected 200 for ${q}`);
+    assert.equal(res.body.agents.length, 4, `expected the whole fleet for ${q}`);
+  }
+});
+
 test('GET /api/fleet/health requires auth (401) and surfaces a repo failure (500)', async () => {
   assert.equal((await request(makeApp()).get('/api/fleet/health')).status, 401);
   const probeResultsRepo = makeProbeResultsRepo({ fleetHealth: throwingAsync('db down') });

@@ -22,6 +22,25 @@ function parseWindow(v) {
   return Math.min(n * 60 * 1000, MAX_WINDOW_MS); // query is in minutes
 }
 
+// Optional `severity` query param on the fleet overview: the dashboard filters
+// client-side for normal fleets, but for large fleets (>500 agents) it offloads
+// the severity filter to the server as `?severity=CRIT,WARN` to shrink the
+// payload. We map the dashboard's severity tokens onto the health statuses they
+// stand for (CRIT ⇒ bad/down, WARN ⇒ warn). This is deliberately forgiving:
+// unknown tokens (e.g. `?severity=BOGUS`) are ignored rather than rejected, so a
+// bad or stale deep-link degrades to "no filter" (200 + the whole fleet) instead
+// of a 400/500. Returns a Set of statuses to keep, or null for "no filtering".
+const SEVERITY_STATUSES = { CRIT: ['bad', 'down'], WARN: ['warn'] };
+function parseSeverityParam(v) {
+  if (v === undefined || v === null) return null;
+  const statuses = new Set();
+  for (const raw of String(v).split(',')) {
+    const mapped = SEVERITY_STATUSES[raw.trim().toUpperCase()];
+    if (mapped) for (const s of mapped) statuses.add(s);
+  }
+  return statuses.size ? statuses : null; // no valid tokens ⇒ don't filter
+}
+
 // Fleet health overview: every agent with a health verdict — its active-probe
 // signals (reachability + loss + latency-vs-baseline + jitter) folded together
 // with its interface signal (link/errors/discards/util) — worst-first. viewer+.
@@ -94,7 +113,12 @@ function createFleetRouter({ agentsRepo, probeResultsRepo, resultsRepo, speedtes
       const latest = latestMap[a.agentId];
       a.quality = computeDataQuality({ capabilities: capsById[a.agentId], latest: latest ? { payload: latest.payload, created_at: latest.created_at } : null });
     }
-    res.json({ windowMin: Math.round(windowMs / 60000), summary, agents: fleet });
+    // `summary` always reflects the WHOLE fleet (so the dashboard's metric-card
+    // counts stay honest); only the returned `agents` list is narrowed when a
+    // valid severity filter is supplied.
+    const sevFilter = parseSeverityParam(req.query.severity);
+    const agentsOut = sevFilter ? fleet.filter((a) => sevFilter.has(a.health.status)) : fleet;
+    res.json({ windowMin: Math.round(windowMs / 60000), summary, agents: agentsOut });
   }));
 
   // Fleet-wide NIC inventory + firmware-drift detection: groups identical NIC

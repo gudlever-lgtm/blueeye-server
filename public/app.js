@@ -747,7 +747,9 @@ const PAGE_INFO = {
     hero: 'All agents in one view — with a health assessment based on active reachability, packet loss, latency and jitter.',
     title: 'Overview — fleet health',
     body: () => [
-      el('p', {}, 'The landing page collects all agents with a single health stamp, so you immediately see where something is wrong. Rows are sorted worst-first and refresh continuously. Click an agent to drill into its measurements, or click a count chip (Healthy, Critical, …) to filter the list to just those agents.'),
+      el('p', {}, 'The landing page collects all agents with a single health stamp, so you immediately see where something is wrong. Rows are sorted worst-first and refresh continuously. Click an agent to drill into its measurements.'),
+      el('h4', {}, 'Filtering with the metric cards'),
+      el('p', {}, 'The four metric cards are active filters — click a card (anywhere on it, or focus it and press Enter/Space) to narrow the grid. ', el('strong', {}, 'Kritiske'), ' and ', el('strong', {}, 'Advarsler'), ' filter to critical / warning agents (both can be on at once), ', el('strong', {}, 'Offline'), ' to disconnected agents; filters stack with AND and a count line ("3 af 47 agenter") appears above the table. ', el('strong', {}, 'Fleet health'), ' does not filter — it sorts the grid by health score, worst-first. A chip row above the cards shows every active filter (✕ to drop one, "Ryd alle" to clear); the filter is mirrored into the URL, so a filtered view can be shared as a link (e.g. ', el('code', {}, '?severity=CRIT&site=vest'), ') and opens pre-filtered.'),
       el('h4', {}, 'Two independent verdicts'),
       el('ul', {},
         el('li', {}, el('strong', {}, 'Health '), '— is the monitored network OK right now? Driven by active reachability, loss, latency, jitter and interface/link state.'),
@@ -5675,6 +5677,26 @@ async function globalSearch(q) {
 
 const fleetState = { timer: null };
 function stopFleet() { if (fleetState.timer) { clearInterval(fleetState.timer); fleetState.timer = null; } }
+
+// Shared Overview filter state. Kept at module scope (not inside views.fleet) so
+// it survives a view switch and the 10 s poll, and is seeded from the URL query
+// string on load so a shared deep-link (…?severity=CRIT&site=vest) renders
+// pre-filtered. `sortByHealth` is the "Fleet health" card's sort mode (a sort,
+// not a filter, so it stays out of the persisted filter shape).
+let fleetFilter = FleetFilter.parseQuery(window.location.search);
+let fleetSortByHealth = false;
+// Mirror the current filter into the URL (replaceState so it doesn't spam the
+// history stack) — this is what makes a filtered Overview shareable as a link.
+function syncFleetUrl() {
+  const q = FleetFilter.toQuery(fleetFilter);
+  const url = window.location.pathname + (q ? `?${q}` : '') + window.location.hash;
+  try { window.history.replaceState(null, '', url); } catch { /* non-browser / restricted */ }
+}
+function summaryTotal(s) {
+  if (!s) return 0;
+  if (typeof s.total === 'number') return s.total;
+  return (s.ok || 0) + (s.warn || 0) + (s.bad || 0) + (s.down || 0) + (s.stale || 0) + (s.unknown || 0);
+}
 const agentState = { timer: null };
 function stopAgent() { if (agentState.timer) { clearInterval(agentState.timer); agentState.timer = null; } }
 
@@ -5929,10 +5951,11 @@ views.fleet = async () => {
     el('span', { class: 'muted' }, 'All agents · health from reachability · loss · latency · jitter')));
   const bannerHost = el('div', {});
   const nocHost = el('div', {});
-  const summaryHost = el('div', { class: 'fleet-summary' });
+  const chipsHost = el('div', { class: 'filter-chips' });   // active-filter chips (self-hides when empty)
+  const cardsHost = el('div', { class: 'fleet-cards' });     // four clickable metric cards
   const tableHost = el('div', {});
   const issuesHost = el('div', {}); // gated (dashboard_advanced): incidents + findings
-  root.append(bannerHost, nocHost, summaryHost, tableHost, issuesHost);
+  root.append(bannerHost, nocHost, chipsHost, cardsHost, tableHost, issuesHost);
 
   // Maintenance banner (viewer-readable) — shown while a window is active now.
   api('/api/settings/maintenance').then((m) => {
@@ -5942,27 +5965,23 @@ views.fleet = async () => {
     else bannerHost.replaceChildren();
   }).catch(() => {});
 
-  // Click a summary chip ("3 Healthy", "1 Critical", …) to filter the table to
-  // just those agents; click it again — or "Show all" — to clear. null = no
-  // filter. Kept in the closure so it survives the 10 s poll; the latest fetch
-  // is cached so a toggle re-renders instantly without refetching.
-  let activeFilter = null;
+  // The four metric cards (Kritiske / Advarsler / Offline) are whole-card filter
+  // toggles over the shared `fleetFilter` state; "Fleet health" is a sort, not a
+  // filter (it orders the grid by health score, worst-first, and scrolls to it).
+  // The latest fetch is cached so a toggle re-renders instantly without a
+  // refetch, and every change mirrors into the URL so the view is shareable.
   let lastData = null;
-  // Independent of the chip filter above: the NOC header (KPI cards + live
+  // Independent of the metric-card filters: the NOC header (KPI cards + live
   // network path) can be narrowed to a single location. null = whole fleet.
   let locationScope = null;
-  // Chip ⇒ which health verdicts it covers. "Critical" folds in 'down' to match
-  // its count (bad + down); the rest map one-to-one.
-  const FILTER_MATCH = {
-    ok: (s) => s === 'ok', warn: (s) => s === 'warn',
-    bad: (s) => s === 'bad' || s === 'down',
-    stale: (s) => s === 'stale', unknown: (s) => s === 'unknown',
-  };
-  const FILTER_LABEL = { ok: 'healthy', warn: 'warning', bad: 'critical', stale: 'stale', unknown: 'unknown' };
-  function setFilter(cls) {
-    activeFilter = activeFilter === cls ? null : cls;
-    if (lastData) { renderSummary(lastData.summary); renderTable(lastData.agents); }
+  function applyFleet() {
+    if (!lastData) return;
+    renderChips();
+    renderCards(lastData);
+    renderTable(lastData.agents);
   }
+  function updateFilter(next) { fleetFilter = next; syncFleetUrl(); applyFleet(); }
+  function clearAllFilters() { updateFilter(FleetFilter.emptyState()); }
 
   // Distinct locations present in the latest poll (only sites that actually have
   // an agent are offered as scope options), name-sorted.
@@ -6000,23 +6019,53 @@ views.fleet = async () => {
     nocHost.replaceChildren(nocDashboard(scopeData(lastData, locationScope), { controls, scopeName }));
   }
 
-  function renderSummary(s) {
-    const chip = (cls, label, n) => {
-      const on = activeFilter === cls;
-      return el('div', {
-        class: `fs-chip ${cls}${n ? '' : ' zero'}${on ? ' active' : ''}`,
-        role: 'button', tabindex: '0', 'aria-pressed': on ? 'true' : 'false',
-        title: on ? 'Show all agents' : `Show only ${label.toLowerCase()} agents`,
-        onclick: () => setFilter(cls),
-        onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setFilter(cls); } },
-      }, el('span', { class: 'fs-n' }, String(n)), el('span', { class: 'fs-l' }, label));
-    };
-    summaryHost.replaceChildren(
-      chip('ok', 'Healthy', s.ok),
-      chip('warn', 'Warnings', s.warn),
-      chip('bad', 'Critical', s.bad + s.down),
-      chip('stale', 'Stale', s.stale),
-      chip('unknown', 'Unknown', s.unknown));
+  // A whole-card filter toggle. `onActivate` runs on click and on Enter/Space;
+  // aria-pressed mirrors the active state for screen readers.
+  function metricCard({ cls, label, value, sub, active, onActivate }) {
+    return el('div', {
+      class: `metric-card ${cls}${active ? ' active' : ''}`,
+      role: 'button', tabindex: '0', 'aria-pressed': active ? 'true' : 'false',
+      title: sub,
+      onclick: onActivate,
+      onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onActivate(); } },
+    }, el('div', { class: 'mc-k' }, label), el('div', { class: 'mc-v' }, value), el('div', { class: 'mc-sub' }, sub));
+  }
+  // "Fleet health" doesn't filter — it toggles a worst-first sort of the grid by
+  // health score (ascending) and scrolls the grid into view.
+  function onFleetHealth() {
+    fleetSortByHealth = !fleetSortByHealth;
+    applyFleet();
+    try { tableHost.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch { /* jsdom / old browsers */ }
+  }
+  function renderCards(data) {
+    const s = data.summary || {};
+    const agents = data.agents || [];
+    const total = summaryTotal(s);
+    const crit = (s.bad || 0) + (s.down || 0);
+    const warn = s.warn || 0;
+    // The summary always reflects the whole fleet (even when the returned agent
+    // list is narrowed by a server-side severity filter), so the card counts stay
+    // honest. `offline` counts connection state; fall back to the list for older
+    // servers that don't emit summary.offline.
+    const offline = typeof s.offline === 'number' ? s.offline : agents.filter((a) => !a.online).length;
+    const healthPct = total ? Math.round(((s.ok || 0) / total) * 100) : null;
+    cardsHost.replaceChildren(
+      metricCard({ cls: 'health', label: 'Fleet health', value: healthPct == null ? '–' : `${healthPct}%`, sub: 'sortér grid efter score', active: fleetSortByHealth, onActivate: onFleetHealth }),
+      metricCard({ cls: 'crit', label: 'Kritiske', value: String(crit), sub: 'CRIT · klik for at filtrere', active: fleetFilter.severity.includes('CRIT'), onActivate: () => updateFilter(FleetFilter.toggleSeverity(fleetFilter, 'CRIT')) }),
+      metricCard({ cls: 'warn', label: 'Advarsler', value: String(warn), sub: 'WARN · klik for at filtrere', active: fleetFilter.severity.includes('WARN'), onActivate: () => updateFilter(FleetFilter.toggleSeverity(fleetFilter, 'WARN')) }),
+      metricCard({ cls: 'offline', label: 'Offline', value: String(offline), sub: 'ikke forbundet', active: fleetFilter.offline, onActivate: () => updateFilter(FleetFilter.toggleOffline(fleetFilter)) }));
+  }
+  // One removable chip per active filter; a "Ryd alle" appears once two or more
+  // filters are stacked. The row self-hides (CSS :empty) when nothing is active.
+  function renderChips() {
+    const cs = FleetFilter.chips(fleetFilter);
+    if (!cs.length) { chipsHost.replaceChildren(); return; }
+    const kids = cs.map((c) => el('button', {
+      class: 'filter-chip', type: 'button', 'aria-label': `Fjern filter: ${c.label}`,
+      onclick: () => updateFilter(FleetFilter.removeChip(fleetFilter, c)),
+    }, el('span', {}, c.label), el('span', { class: 'fc-x', 'aria-hidden': 'true' }, '✕')));
+    if (cs.length >= 2) kids.push(el('button', { class: 'filter-chip clear-all', type: 'button', onclick: clearAllFilters }, 'Ryd alle'));
+    chipsHost.replaceChildren(...kids);
   }
   function fleetRow(a) {
     const m = a.health.metrics;
@@ -6036,19 +6085,27 @@ views.fleet = async () => {
       el('td', { class: 'muted' }, m.lastTs ? fmtTimeShort(new Date(m.lastTs).getTime()) : '–'));
   }
   function renderTable(agents) {
-    if (!agents.length) { tableHost.replaceChildren(el('div', { class: 'empty' }, 'No agents yet — go to Agents to enrol one.')); return; }
-    const shown = activeFilter ? agents.filter((a) => FILTER_MATCH[activeFilter](a.health.status)) : agents;
-    const bar = activeFilter
-      ? el('div', { class: 'fleet-filter' },
-        el('span', { class: 'muted' }, `Showing ${shown.length} of ${agents.length} — ${FILTER_LABEL[activeFilter]}`),
-        el('button', { class: 'small ghost', onclick: () => setFilter(activeFilter) }, 'Show all'))
-      : null;
-    const body = shown.length
-      ? el('table', { class: 'fleet-table' },
-        el('thead', {}, el('tr', {}, ...['Agent', 'Status', 'Health', 'Loss', 'Latency', 'Jitter', 'Targets', 'Speed', 'Location', 'Last seen'].map((h) => el('th', {}, h)))),
-        el('tbody', {}, ...shown.map(fleetRow)))
-      : el('div', { class: 'empty' }, `No ${FILTER_LABEL[activeFilter]} agents.`);
-    tableHost.replaceChildren(...(bar ? [bar, body] : [body]));
+    // Total across the whole fleet — from the summary so it's right even when the
+    // list was pre-narrowed by a server-side severity filter (an empty list then
+    // means "nothing matched", not "no agents enrolled").
+    const total = summaryTotal((lastData && lastData.summary)) || agents.length;
+    if (!total) { tableHost.replaceChildren(el('div', { class: 'empty' }, 'No agents yet — go to Agents to enrol one.')); return; }
+    const filtered = FleetFilter.applyFilter(agents, fleetFilter);
+    const active = FleetFilter.isActive(fleetFilter);
+    // "3 af 47 agenter" over the table, shown while a filter is active.
+    const countLine = active ? el('div', { class: 'fleet-count' }, `${filtered.length} af ${total} agenter`) : null;
+    // Empty result: an explicit message + a way out — never a bare empty table.
+    if (!filtered.length) {
+      tableHost.replaceChildren(...[countLine, el('div', { class: 'empty fleet-empty' },
+        el('div', {}, 'Ingen agenter matcher filteret'),
+        el('button', { class: 'small ghost', onclick: clearAllFilters }, 'Ryd filter'))].filter(Boolean));
+      return;
+    }
+    const ordered = fleetSortByHealth ? FleetFilter.sortByHealth(filtered) : filtered;
+    const body = el('table', { class: 'fleet-table' },
+      el('thead', {}, el('tr', {}, ...['Agent', 'Status', 'Health', 'Loss', 'Latency', 'Jitter', 'Targets', 'Speed', 'Location', 'Last seen'].map((h) => el('th', {}, h)))),
+      el('tbody', {}, ...ordered.map(fleetRow)));
+    tableHost.replaceChildren(...[countLine, body].filter(Boolean));
   }
   // Open issues (incidents + findings) — a Professional+ rollup (feature
   // dashboard_advanced). Best-effort + gated: when the licence doesn't include
@@ -6060,12 +6117,17 @@ views.fleet = async () => {
   }
   async function refresh() {
     refreshIssues(); // gated incidents/findings panels, fetched in parallel
+    // Filtering is client-side on the dataset the Overview already holds. Only
+    // for a large fleet (>500 agents) do we offload the severity filter to the
+    // server as a query param to shrink the payload; the summary stays whole-
+    // fleet either way, so the metric-card counts remain correct.
+    const big = lastData && summaryTotal(lastData.summary) > 500;
+    const q = big && fleetFilter.severity.length ? `?severity=${encodeURIComponent(fleetFilter.severity.join(','))}` : '';
     let data;
-    try { data = await api('/api/fleet/health'); } catch (e) { tableHost.replaceChildren(el('div', { class: 'error' }, e.message)); return; }
+    try { data = await api(`/api/fleet/health${q}`); } catch (e) { tableHost.replaceChildren(el('div', { class: 'error' }, e.message)); return; }
     lastData = data;
     renderNoc();
-    renderSummary(data.summary);
-    renderTable(data.agents);
+    applyFleet();
   }
 
   await refresh();

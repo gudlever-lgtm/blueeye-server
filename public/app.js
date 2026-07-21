@@ -3394,7 +3394,24 @@ views.incident = async () => {
   // "Guide me" — operator/admin (the guide endpoint + its config/AI steps are).
   const guideCard = canWrite() ? incidentGuideCard(inc) : null;
 
-  return el('div', { class: 'incident-detail' }, header, controls, guideCard, anomaliesCard, timelineCard, similarCard, ...extra);
+  // Affected path — the shared Path Visualization pre-filtered to the incident
+  // window, with the problem hop pre-highlighted. Mounted only when the incident
+  // has a numeric device (agent) and a derivable target (from a linked anomaly).
+  let pathCard = null;
+  const pathTarget = (anomalies.find((a) => a.target) || {}).target || inc.target || null;
+  const pathSource = Number.parseInt(inc.deviceId, 10);
+  if (pathTarget && Number.isInteger(pathSource) && pathSource > 0) {
+    pathCard = el('div', { class: 'card' }, el('h3', {}, 'Affected path'), el('div', { class: 'muted' }, 'Loading…'));
+    (async () => {
+      const fromMs = inc.firstEventAt ? Date.parse(inc.firstEventAt) : (Date.now() - 24 * 3600 * 1000);
+      try {
+        const viz = await pathVisualization({ sourceId: pathSource, targetId: pathTarget, incidentId: id, timeRange: { fromMs, toMs: Date.now() } });
+        pathCard.replaceChildren(el('h3', {}, 'Affected path'), viz);
+      } catch (e) { pathCard.replaceChildren(el('h3', {}, 'Affected path'), el('div', { class: 'error' }, errText(e))); }
+    })();
+  }
+
+  return el('div', { class: 'incident-detail' }, header, controls, guideCard, anomaliesCard, timelineCard, similarCard, pathCard, ...extra);
 };
 
 // ---- Incident Situation View (cross-agent clusters) ------------------------
@@ -3993,8 +4010,9 @@ async function requestToolInstall(agentId, tool, btn) {
 // links carry the downstream loss + incremental latency. Hovering/focusing a node
 // fills the detail panel with its full per-hop metrics + GeoIP/ASN. Pure SVG, no
 // libs — same vanilla approach as networkPath()/historyChart().
-function pathGraph(graph) {
+function pathGraph(graph, pgOpts = {}) {
   const nodes = graph.nodes || [];
+  const onNodeClick = typeof pgOpts.onNodeClick === 'function' ? pgOpts.onNodeClick : null;
   if (nodes.length <= 1) return el('div', { class: 'empty' }, 'No traceroute path yet — run a traceroute above.');
   const ns = 'http://www.w3.org/2000/svg';
   const mk = (tag, attrs = {}, ...kids) => {
@@ -4037,20 +4055,109 @@ function pathGraph(graph) {
     svg.append(mk('line', { x1, y1: cy, x2, y2: cy, class: `pg-link ${lk.severity}`, 'stroke-linecap': 'round' }));
     if (lab) svg.append(mk('text', { x: (x1 + x2) / 2, y: cy - 9, 'text-anchor': 'middle', class: `pg-llab ${lk.severity}` }, lab));
   });
+  // Problem hop (the highest-severity hop) gets a red ring so it stands out even
+  // before hovering — used by the Troubleshooting view's pre-highlight.
+  const worstIdx = graph.worstHopIndex != null ? graph.worstHopIndex : null;
   nodes.forEach((n, i) => {
     const x = xOf(i);
     const top3 = n.kind === 'source' ? 'AGENT' : (n.kind === 'dest' ? `DEST · #${n.hop}` : `HOP #${n.hop}`);
     const meta = n.asn != null ? `AS${n.asn}${n.country ? ' · ' + n.country : ''}` : (n.rttMs != null ? `${n.rttMs} ms` : (n.unresponsive ? 'no reply' : ''));
-    const g = mk('g', { class: `pg-node ${n.severity} ${n.kind}`, tabindex: '0', role: 'button', 'aria-label': `${top3} ${n.ip || ''} ${n.explain}` },
+    const flags = `${n.index === worstIdx ? ' worst' : ''}${n.severity === 'bad' ? ' problem' : ''}${onNodeClick ? ' clickable' : ''}`;
+    const g = mk('g', { class: `pg-node ${n.severity} ${n.kind}${flags}`, tabindex: '0', role: 'button', 'aria-label': `${top3} ${n.ip || ''} ${n.explain}` },
       mk('rect', { x, y: top, width: NW, height: NH, rx: 10 }),
       mk('text', { x: x + 11, y: top + 19, class: 'pg-hop' }, top3),
       mk('text', { x: x + 11, y: top + 38, class: 'pg-ip' }, (n.ip || (n.unresponsive ? '* * *' : '—')).slice(0, 17)),
       mk('text', { x: x + 11, y: top + 56, class: 'pg-meta' }, meta));
     g.addEventListener('mouseenter', () => showNode(n));
     g.addEventListener('focus', () => showNode(n));
+    if (onNodeClick) {
+      g.addEventListener('click', () => onNodeClick(n));
+      g.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onNodeClick(n); } });
+    }
     svg.append(g);
   });
   showNode(nodes[nodes.length - 1]); // default to the destination
+
+  // ECMP / multipath: when a hop load-balances across several next-hops, draw the
+  // branches as separate bezier curves that fan out from the shared upstream node
+  // and rejoin downstream, each alternate keeping its own hop node. Built from the
+  // server's `branches` structure (distinct IPs per TTL + observed transitions).
+  const branches = graph.branches && graph.branches.multipath ? graph.branches : null;
+  function buildBranchSvg() {
+    const ALT_H = 46, BH = 44;
+    const nodeByHop = new Map();
+    for (const n of nodes) if (n.kind !== 'source') nodeByHop.set(n.hop, n);
+    const source = nodes[0];
+    // Per hop, assign a y-centre to each IP: primary at the main row, alternates
+    // stacked below. posY: hop -> Map(ip -> yCentre); posMeta: hop -> Map(ip -> ipEntry).
+    const posY = new Map();
+    const posMeta = new Map();
+    let maxAlt = 0;
+    for (const h of branches.hops) {
+      const ym = new Map(); const mm = new Map();
+      h.ips.forEach((ipEntry, k) => {
+        const yc = k === 0 ? cy : (top + NH + (k - 1) * ALT_H + BH / 2);
+        ym.set(ipEntry.ip, yc); mm.set(ipEntry.ip, ipEntry);
+      });
+      maxAlt = Math.max(maxAlt, h.ips.length - 1);
+      posY.set(h.hop, ym); posMeta.set(h.hop, mm);
+    }
+    const bh = NH + top * 2 + maxAlt * ALT_H;
+    const s = mk('svg', { viewBox: `0 0 ${width} ${bh}`, width: String(width), height: String(bh), role: 'img', 'aria-label': `ECMP path to ${graph.target || 'target'}` });
+    const xOfHop = (hop) => (hop === 0 ? xOf(0) : (nodeByHop.has(hop) ? xOf(nodeByHop.get(hop).index) : null));
+    const bez = (x1, y1, x2, y2) => { const mx = (x1 + x2) / 2; return `M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`; };
+    // Source → each IP of the earliest hop (transitions from the agent aren't recorded).
+    const firstHop = branches.hops.length ? branches.hops[0].hop : null;
+    if (firstHop != null && source) {
+      const x1 = xOf(0) + NW; const ym = posY.get(firstHop);
+      for (const [ip, y2] of ym) {
+        const sev = (posMeta.get(firstHop).get(ip) || {}).severity || 'ok';
+        s.append(mk('path', { d: bez(x1, cy, xOfHop(firstHop), y2), class: `pg-link ${sev}`, fill: 'none' }));
+      }
+    }
+    // Observed transitions become the branch edges.
+    for (const e of branches.edges) {
+      const x1 = xOfHop(e.fromHop); const x2 = xOfHop(e.toHop);
+      if (x1 == null || x2 == null) continue;
+      const y1 = (posY.get(e.fromHop) || new Map()).get(e.fromIp);
+      const y2 = (posY.get(e.toHop) || new Map()).get(e.toIp);
+      if (y1 == null || y2 == null) continue;
+      const sev = ((posMeta.get(e.toHop) || new Map()).get(e.toIp) || {}).severity || 'ok';
+      s.append(mk('path', { d: bez(x1 + NW, y1, x2, y2), class: `pg-link ${sev}`, fill: 'none' }));
+    }
+    // Draw the source node + every branch node.
+    const drawNode = (x, yTop, w, hgt, sev, kind, line1, line2, line3, pseudo) => {
+      const g = mk('g', { class: `pg-node ${sev} ${kind}${sev === 'bad' ? ' problem' : ''}${onNodeClick ? ' clickable' : ''}`, tabindex: '0', role: 'button', 'aria-label': `${line1} ${line2}` },
+        mk('rect', { x, y: yTop, width: w, height: hgt, rx: 10 }),
+        mk('text', { x: x + 11, y: yTop + 18, class: 'pg-hop' }, line1),
+        mk('text', { x: x + 11, y: yTop + 34, class: 'pg-ip' }, String(line2).slice(0, 17)),
+        line3 != null ? mk('text', { x: x + 11, y: yTop + (hgt > 50 ? 52 : 42), class: 'pg-meta' }, String(line3).slice(0, 18)) : null);
+      if (pseudo) {
+        g.addEventListener('mouseenter', () => showNode(pseudo));
+        g.addEventListener('focus', () => showNode(pseudo));
+        if (onNodeClick) g.addEventListener('click', () => onNodeClick(pseudo));
+      }
+      s.append(g);
+    };
+    drawNode(xOf(0), top, NW, NH, 'ok', 'source', 'AGENT', source.label || 'Agent', 'origin', source);
+    for (const h of branches.hops) {
+      const x = xOfHop(h.hop);
+      h.ips.forEach((ip, k) => {
+        const isDest = nodeByHop.get(h.hop) && nodeByHop.get(h.hop).kind === 'dest' && k === 0;
+        const yc = posY.get(h.hop).get(ip.ip);
+        const yTop = k === 0 ? top : yc - BH / 2;
+        const hgt = k === 0 ? NH : BH;
+        const kind = isDest ? 'dest' : 'hop';
+        const label1 = isDest ? `DEST · #${h.hop}` : (k === 0 ? `HOP #${h.hop}` : `ALT #${h.hop}`);
+        const meta = ip.asn != null ? `AS${ip.asn}${ip.country ? ' · ' + ip.country : ''}` : (ip.rttMs != null ? `${ip.rttMs} ms` : '');
+        const isWorst = k === 0 && nodeByHop.get(h.hop) && nodeByHop.get(h.hop).index === graph.worstHopIndex;
+        const pseudo = { ...ip, kind, hop: h.hop, worstLossPct: ip.lossPct, responded: ip.responded, runs: ip.runs, unresponsive: false };
+        drawNode(x, yTop, NW, hgt, ip.severity, `${kind}${ip.primary ? '' : ' alt'}${isWorst ? ' worst' : ''}`, label1, ip.ip || '—', meta, pseudo);
+      });
+    }
+    return s;
+  }
+  const branchSvg = branches ? buildBranchSvg() : null;
 
   const legend = el('div', { class: 'pg-legend' },
     ...[['ok', 'Healthy'], ['warn', 'Degraded'], ['bad', 'Critical'], ['muted', 'Silent hop']].map(([c, l]) =>
@@ -4100,7 +4207,8 @@ function pathGraph(graph) {
   }
 
   // Two scroll panes (hop graph + optional AS graph); a toggle flips between them.
-  const hopWrap = el('div', { class: 'pg-scroll' }, svg);
+  // When the path is multipath, the hop pane shows the branch-aware graph.
+  const hopWrap = el('div', { class: 'pg-scroll' }, branchSvg || svg);
   const asWrap = asg ? el('div', { class: 'pg-scroll' }, buildAsSvg(asg)) : null;
   if (asWrap) asWrap.style.display = 'none';
   let toggle = null;
@@ -4139,6 +4247,7 @@ function pathGraph(graph) {
   return el('div', { class: 'pathmap' },
     el('div', { class: 'pg-head' },
       el('span', { class: 'muted' }, `${graph.samples} traceroute${graph.samples === 1 ? '' : 's'} aggregated · hover for detail`),
+      branches ? el('span', { class: 'pg-ecmp', title: 'This path load-balances across multiple next-hops (ECMP)' }, 'ECMP · multipath') : null,
       toggle,
       legend),
     hopWrap,
@@ -4220,12 +4329,269 @@ async function drawPathMap(host, stops) {
   setTimeout(() => { try { map.invalidateSize(); } catch { /* ignore */ } }, 60);
 }
 
+// ==========================================================================
+// Path Visualization — one shared component (path graph + brushable metric
+// timeline) mounted in Topology (drawer), Probes, Tests and Troubleshooting.
+// Props contract: pathVisualization({ sourceId, targetId, probeId, testId,
+//   incidentId, timeRange:{fromMs,toMs}, metric, overlay, problemHop,
+//   onSelectionChange }). Vanilla JS, no build step — matches the SPA.
+// ==========================================================================
+
+const PATHVIZ_PALETTE = ['#06b6d4', '#f59e0b', '#8b5cf6', '#ec4899', '#10b981', '#ef4444', '#3b82f6', '#eab308'];
+
+// Shareable brush state (from/to/metric/overlay) round-trips through the URL
+// query string so a view can be linked — the SPA's filter-persistence pattern.
+function pathVizReadParams() {
+  try {
+    const q = new URLSearchParams(window.location.search || '');
+    return { from: q.get('from'), to: q.get('to'), metric: q.get('metric'), overlay: q.get('overlay') };
+  } catch { return {}; }
+}
+function pathVizWriteParams(patch) {
+  try {
+    const q = new URLSearchParams(window.location.search || '');
+    for (const [k, v] of Object.entries(patch)) { if (v == null || v === '') q.delete(k); else q.set(k, String(v)); }
+    const qs = q.toString();
+    history.replaceState(null, '', qs ? `${window.location.pathname}?${qs}` : window.location.pathname);
+  } catch { /* URL API off — persistence is best-effort */ }
+}
+
+function pvFmtTime(ms) { return new Date(ms).toLocaleString('en-GB', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }); }
+
+// A compact metric chart used for both the overview strip (low-opacity, no axes)
+// and the detail chart. `render`: 'bars' (loss), 'line' (latency/jitter) or
+// 'area' (throughput). Multiple series (per-agent overlay) always draw as lines.
+// seriesList: [{ label, color, points:[{t(ms), y}] }]. onBrush(fromMs,toMs).
+function pvChart(seriesList, { fromMs, toMs, render = 'line', unit = '', height = 180, onBrush = null, overview = false } = {}) {
+  const W = 1000, H = height;
+  const pad = overview ? { l: 8, r: 8, t: 6, b: 6 } : { l: 58, r: 12, t: 12, b: 24 };
+  const ns = 'http://www.w3.org/2000/svg';
+  const mk = (tag, attrs) => { const e = document.createElementNS(ns, tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v); return e; };
+  const all = seriesList.flatMap((s) => s.points.map((p) => p.y)).filter(Number.isFinite);
+  const max = Math.max(1, ...all);
+  const span = Math.max(1, toMs - fromMs);
+  const xOf = (t) => pad.l + ((t - fromMs) / span) * (W - pad.l - pad.r);
+  const yOf = (v) => H - pad.b - (Math.max(0, v) / max) * (H - pad.t - pad.b);
+  const svg = mk('svg', { viewBox: `0 0 ${W} ${H}`, class: 'big-chart-svg', preserveAspectRatio: 'none' });
+  if (!overview) {
+    for (const frac of [0, 0.5, 1]) {
+      const yy = yOf(max * frac);
+      svg.append(mk('line', { class: 'grid', x1: pad.l, y1: yy, x2: W - pad.r, y2: yy }));
+      const lbl = mk('text', { x: 6, y: yy + 4, class: 'axis' }); lbl.textContent = fmtNum(max * frac); svg.append(lbl);
+    }
+    for (const frac of [0, 0.5, 1]) {
+      const t = fromMs + frac * span; const xx = xOf(t);
+      const lbl = mk('text', { x: xx, y: H - 8, class: 'axis', 'text-anchor': frac === 0 ? 'start' : frac === 1 ? 'end' : 'middle' });
+      lbl.textContent = pvFmtTime(t); svg.append(lbl);
+    }
+  }
+  const multi = seriesList.length > 1;
+  seriesList.forEach((s) => {
+    if (!s.points.length) return;
+    const eff = (multi && render === 'bars') ? 'line' : render;
+    const op = overview ? 0.5 : 1;
+    if (eff === 'bars') {
+      const bw = Math.max(1, ((W - pad.l - pad.r) / Math.max(1, s.points.length)) * 0.7);
+      for (const p of s.points) {
+        if (!Number.isFinite(p.y)) continue;
+        const x = xOf(p.t) - bw / 2; const y = yOf(p.y);
+        svg.append(mk('rect', { x: x.toFixed(1), y: y.toFixed(1), width: bw.toFixed(1), height: Math.max(0, (H - pad.b - y)).toFixed(1), fill: s.color, 'fill-opacity': String(op * 0.8) }));
+      }
+    } else if (eff === 'area') {
+      const n = s.points.length;
+      const line = s.points.map((p, i) => `${i ? 'L' : 'M'}${xOf(p.t).toFixed(1)},${yOf(p.y).toFixed(1)}`).join(' ');
+      const d = `${line} L${xOf(s.points[n - 1].t).toFixed(1)},${yOf(0).toFixed(1)} L${xOf(s.points[0].t).toFixed(1)},${yOf(0).toFixed(1)} Z`;
+      svg.append(mk('path', { d, fill: s.color, 'fill-opacity': String(op * 0.18), stroke: 'none' }));
+      svg.append(mk('path', { d: line, fill: 'none', stroke: s.color, 'stroke-width': overview ? 1 : 2, 'stroke-opacity': String(op) }));
+    } else {
+      const d = s.points.map((p, i) => `${i ? 'L' : 'M'}${xOf(p.t).toFixed(1)},${yOf(p.y).toFixed(1)}`).join(' ');
+      svg.append(mk('path', { d, fill: 'none', stroke: s.color, 'stroke-width': overview ? 1 : 2, 'stroke-opacity': String(op) }));
+    }
+  });
+  if (onBrush) attachBrush(svg, { W, padL: pad.l, padR: pad.r, padT: pad.t, padB: pad.b, H, onSelect: (f0, f1) => onBrush(Math.round(fromMs + f0 * span), Math.round(fromMs + f1 * span)), onClear: () => onBrush(null, null) });
+  return el('div', { class: `pv-chart${overview ? ' pv-ov' : ''}` }, svg);
+}
+
+// Turns a server timeseries response into chart series (per-agent overlay gets
+// palette colours + a legend label).
+function pvSeries(resp, overlay) {
+  const list = (resp && resp.series) || [];
+  return list.map((s, i) => ({
+    label: overlay === 'agents' ? (s.agentName || `Agent ${s.agentId}`) : (resp.label || 'value'),
+    color: PATHVIZ_PALETTE[i % PATHVIZ_PALETTE.length],
+    points: (s.points || []).filter((p) => p.value != null).map((p) => ({ t: Date.parse(p.t), y: p.value })),
+  }));
+}
+
+// The metric timeline: overview strip (brush) on top, detail chart below, with a
+// metric selector, per-agent overlay toggle and an opt-in "Explain Selection".
+function pathVizTimeline({ agentId, target, metrics, metric, overlay, fullFromMs, fullToMs, windowFromMs, windowToMs, onWindow }) {
+  const root = el('div', { class: 'pv-timeline' });
+  const state = { metric, overlay, from: windowFromMs, to: windowToMs };
+
+  const metricSel = el('select', { class: 'small' },
+    ...(metrics.length ? metrics : [{ id: 'latency', label: 'Latency' }]).map((m) => el('option', { value: m.id }, m.label)));
+  metricSel.value = state.metric;
+  const overlayBtn = el('button', { class: 'small ghost', 'aria-pressed': String(overlay === 'agents') }, overlay === 'agents' ? 'Overlay: Agents' : 'Overlay: Off');
+  const explainBtn = featureEnabled('assistant') ? el('button', { class: 'small ghost' }, 'Explain selection') : null;
+  const controls = el('div', { class: 'pv-controls' },
+    el('label', { class: 'inline muted' }, 'Metric ', metricSel),
+    overlayBtn, explainBtn);
+
+  const ovHost = el('div', { class: 'pv-ovhost' });
+  const detailHost = el('div', { class: 'pv-detailhost' });
+  const legendHost = el('div', { class: 'legend pv-legend' });
+  const explainHost = el('div', { class: 'pv-explain hidden' });
+  root.append(controls, el('div', { class: 'pv-strip-label muted' }, 'Overview — drag to select a window'), ovHost, detailHost, legendHost, explainHost);
+
+  let lastDetail = null;
+  const metricDef = () => (metrics.find((m) => m.id === state.metric) || { render: 'line', unit: '' });
+
+  async function loadOverview() {
+    ovHost.replaceChildren(el('div', { class: 'pv-skel', style: 'height:60px' }));
+    try {
+      const resp = await api(`/api/probes/path/timeseries?agentId=${encodeURIComponent(agentId)}&target=${encodeURIComponent(target)}&metric=${state.metric}&overlay=off&from=${new Date(fullFromMs).toISOString()}&to=${new Date(fullToMs).toISOString()}`);
+      const series = pvSeries(resp, 'off');
+      const chart = pvChart(series, { fromMs: fullFromMs, toMs: fullToMs, render: resp.render, unit: resp.unit, height: 60, overview: true, onBrush: (f, t) => { if (f == null) setWindow(fullFromMs, fullToMs); else setWindow(f, t); } });
+      // Shade the current window on the strip.
+      const marker = el('div', { class: 'pv-ov-window' });
+      const pctFrom = ((state.from - fullFromMs) / Math.max(1, fullToMs - fullFromMs)) * 100;
+      const pctTo = ((state.to - fullFromMs) / Math.max(1, fullToMs - fullFromMs)) * 100;
+      marker.style.left = `${Math.max(0, pctFrom)}%`;
+      marker.style.width = `${Math.max(1, Math.min(100, pctTo) - Math.max(0, pctFrom))}%`;
+      ovHost.replaceChildren(el('div', { class: 'pv-ov-wrap' }, chart, marker));
+    } catch (e) {
+      ovHost.replaceChildren(el('div', { class: 'error' }, `Overview failed: ${e.message}`));
+    }
+  }
+
+  async function loadDetail() {
+    detailHost.replaceChildren(el('div', { class: 'pv-skel', style: 'height:180px' }));
+    try {
+      const resp = await api(`/api/probes/path/timeseries?agentId=${encodeURIComponent(agentId)}&target=${encodeURIComponent(target)}&metric=${state.metric}&overlay=${state.overlay}&from=${new Date(state.from).toISOString()}&to=${new Date(state.to).toISOString()}`);
+      lastDetail = resp;
+      const series = pvSeries(resp, state.overlay);
+      if (!series.some((s) => s.points.length)) {
+        detailHost.replaceChildren(el('div', { class: 'empty' }, 'No data in the selected window.'));
+        legendHost.replaceChildren();
+        return;
+      }
+      detailHost.replaceChildren(pvChart(series, { fromMs: state.from, toMs: state.to, render: resp.render, unit: resp.unit, height: 200 }));
+      legendHost.replaceChildren(...(state.overlay === 'agents' ? series.map((s) => el('span', {}, el('span', { class: 'dot', style: `background:${s.color}` }), s.label)) : []));
+    } catch (e) {
+      detailHost.replaceChildren(el('div', { class: 'error' }, `Detail failed: ${e.message}`));
+    }
+  }
+
+  function setWindow(f, t) {
+    state.from = f; state.to = t;
+    pathVizWriteParams({ from: new Date(f).toISOString(), to: new Date(t).toISOString() });
+    loadOverview(); loadDetail();
+    if (typeof onWindow === 'function') onWindow(f, t);
+  }
+
+  metricSel.addEventListener('change', () => { state.metric = metricSel.value; pathVizWriteParams({ metric: state.metric }); loadOverview(); loadDetail(); });
+  overlayBtn.addEventListener('click', () => {
+    state.overlay = state.overlay === 'agents' ? 'off' : 'agents';
+    overlayBtn.setAttribute('aria-pressed', String(state.overlay === 'agents'));
+    overlayBtn.textContent = state.overlay === 'agents' ? 'Overlay: Agents' : 'Overlay: Off';
+    pathVizWriteParams({ overlay: state.overlay === 'agents' ? 'agents' : null });
+    loadDetail();
+  });
+  if (explainBtn) explainBtn.addEventListener('click', async () => {
+    explainHost.classList.remove('hidden');
+    explainHost.replaceChildren(el('div', { class: 'muted' }, 'Asking the advisor…'));
+    const def = metricDef();
+    const agg = (lastDetail && lastDetail.series || []).map((s) => {
+      const vals = (s.points || []).map((p) => p.value).filter((v) => v != null);
+      if (!vals.length) return null;
+      const avg = Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 100) / 100;
+      return `${s.agentName || 'agent'}: avg ${avg}${def.unit || ''} (min ${Math.min(...vals)}, max ${Math.max(...vals)}, n=${vals.length})`;
+    }).filter(Boolean).join('; ');
+    const question = `For the path to ${target} between ${pvFmtTime(state.from)} and ${pvFmtTime(state.to)}, the ${def.label || state.metric} was — ${agg || 'no samples'}. What is the likely cause and what should I check?`;
+    try {
+      const res = await api('/api/assistant/explain', { method: 'POST', body: { question, hostId: agentId } });
+      explainHost.replaceChildren(el('div', { class: 'pv-explain-head' }, 'Advisor'), el('div', {}, esc(res.answer || res.text || 'No answer.')));
+    } catch (e) {
+      explainHost.replaceChildren(el('div', { class: 'muted' }, e.status === 403 ? 'The AI advisor is disabled. An administrator can enable it under Settings → AI.' : `Advisor error: ${e.message}`));
+    }
+  });
+
+  loadOverview(); loadDetail();
+  return root;
+}
+
+// Loading skeleton for the whole component.
+function pathVizSkeleton() {
+  return el('div', { class: 'pv-loading' },
+    el('div', { class: 'pv-skel', style: 'height:110px' }),
+    el('div', { class: 'pv-skel', style: 'height:60px;margin-top:10px' }),
+    el('div', { class: 'pv-skel', style: 'height:200px;margin-top:6px' }));
+}
+
+// The shared component. Returns a container node; fetches the path graph + the
+// metric catalogue, wires the brush window to a graph refetch, and node clicks to
+// the selection callback.
+async function pathVisualization(opts = {}) {
+  const { sourceId, targetId, probeId, timeRange, onSelectionChange } = opts;
+  const root = el('div', { class: 'pathviz' });
+  if (sourceId == null || !targetId) {
+    root.append(el('div', { class: 'empty' }, 'Select a source agent and a destination to see its path.'));
+    return root;
+  }
+  root.append(pathVizSkeleton());
+
+  const urlp = pathVizReadParams();
+  const nowMs = Date.now();
+  const fullFromMs = (timeRange && timeRange.fromMs) || (nowMs - 7 * 24 * 3600 * 1000);
+  const fullToMs = (timeRange && timeRange.toMs) || nowMs;
+  const windowFromMs = urlp.from ? Date.parse(urlp.from) : ((timeRange && timeRange.fromMs) || (nowMs - 24 * 3600 * 1000));
+  const windowToMs = urlp.to ? Date.parse(urlp.to) : fullToMs;
+  const metric = urlp.metric || opts.metric || 'latency';
+  const overlay = urlp.overlay === 'agents' ? 'agents' : (opts.overlay || 'off');
+
+  const graphHost = el('div', { class: 'pv-graphhost' });
+  const probeQ = probeId != null ? `&probeId=${encodeURIComponent(probeId)}` : '';
+
+  async function loadGraph(fromMs, toMs) {
+    graphHost.replaceChildren(el('div', { class: 'pv-skel', style: 'height:110px' }));
+    try {
+      const graph = await api(`/api/probes/path?agentId=${encodeURIComponent(sourceId)}&target=${encodeURIComponent(targetId)}${probeQ}&from=${new Date(fromMs).toISOString()}&to=${new Date(toMs).toISOString()}`);
+      if (!graph || (graph.nodes || []).length <= 1) {
+        graphHost.replaceChildren(el('div', { class: 'empty' }, `No path data for ${esc(targetId)} in this window. Run a traceroute from this agent to populate it.`));
+        return;
+      }
+      const onNodeClick = (n) => {
+        if (typeof onSelectionChange === 'function') onSelectionChange({ hop: n.hop, ip: n.ip, node: n });
+        // Scroll the timeline into view — the click "focuses" this hop's series.
+        const tl = root.querySelector('.pv-timeline');
+        if (tl) tl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        graphHost.querySelectorAll('.pg-node.selected').forEach((g) => g.classList.remove('selected'));
+      };
+      graphHost.replaceChildren(pathGraph(graph, { onNodeClick }));
+    } catch (e) {
+      graphHost.replaceChildren(el('div', { class: 'error' }, `Path graph failed: ${e.message}`));
+    }
+  }
+
+  let metricsList = [];
+  try { metricsList = (await api('/api/probes/path/metrics')).metrics || []; } catch { metricsList = []; }
+
+  await loadGraph(windowFromMs, windowToMs);
+  const timeline = pathVizTimeline({
+    agentId: sourceId, target: targetId, metrics: metricsList, metric, overlay,
+    fullFromMs, fullToMs, windowFromMs, windowToMs,
+    onWindow: (f, t) => loadGraph(f, t), // brush is the single source of truth
+  });
+
+  root.replaceChildren(graphHost, timeline);
+  return root;
+}
+
 // Detail node for one probe result: traceroute path map (fetches + aggregates the
 // recent traceroutes into a hop graph) or RTT history (the per-agent time series).
 async function probeDetail(r, agentId) {
   if (r.type === 'traceroute') {
-    let graph = null;
-    try { graph = await api(`/api/probes/path?agentId=${encodeURIComponent(agentId)}&target=${encodeURIComponent(r.target)}`); } catch { /* fall back to the table */ }
     const hops = r.hops || [];
     const hopRow = (h) => el('tr', {},
       el('td', { class: 'muted' }, `#${h.hop}`),
@@ -4233,8 +4599,11 @@ async function probeDetail(r, agentId) {
       el('td', { class: 'num' }, h.rttMs != null ? `${h.rttMs} ms` : '–'),
       el('td', { class: 'num' }, h.lossPct != null ? `${h.lossPct}%` : '–'),
       el('td', { class: 'num' }, h.jitterMs != null ? `${h.jitterMs} ms` : '–'));
+    // Full-width shared Path Visualization (path graph + brushable metric timeline)
+    // under the probe detail header.
+    const viz = await pathVisualization({ sourceId: agentId, targetId: r.target });
     return el('details', { class: 'sec', open: true }, el('summary', {}, `Path to ${esc(r.target)} `, el('span', { class: 'muted' }, '· loss · latency · jitter per hop')),
-      (graph && (graph.nodes || []).length > 1) ? pathGraph(graph) : null,
+      viz,
       el('table', { class: 'probe-hops' },
         el('thead', {}, el('tr', {}, ...['Hop', 'IP', 'RTT', 'Loss', 'Jitter'].map((h) => el('th', {}, h)))),
         el('tbody', {}, ...(hops.length ? hops.map(hopRow) : [el('tr', {}, el('td', { class: 'muted', colspan: '5' }, 'No hops.'))]))));
@@ -4565,7 +4934,26 @@ views.topology = async () => {
       } finally { routeBtn.disabled = false; }
     }}, 'Show route');
 
-    return el('div', { class: 'row-actions' }, pingBtn, routeBtn);
+    // "Path" opens the shared Path Visualization (graph + brushable timeline) for
+    // the selected peer, sourced from the chosen agent — a drawer over the topology.
+    const pathBtn = el('button', { class: 'small ghost', onclick: async () => {
+      if (!agentSel.value) { toast('Select an agent.', true); return; }
+      const card = $('#modal-card');
+      card.replaceChildren(el('h3', {}, `Path → ${esc(host)}`), el('p', { class: 'muted' }, 'Loading path…'),
+        el('div', { class: 'form-actions' }, el('button', { class: 'ghost', onclick: closeModal }, 'Close')));
+      $('#modal').classList.remove('hidden');
+      $('#modal-card').classList.add('wide');
+      try {
+        const viz = await pathVisualization({ sourceId: agentSel.value, targetId: host });
+        card.replaceChildren(el('h3', {}, `Path → ${esc(host)}`), viz,
+          el('div', { class: 'form-actions' }, el('button', { class: 'ghost', onclick: closeModal }, 'Close')));
+      } catch (e) {
+        card.replaceChildren(el('h3', {}, `Path → ${esc(host)}`), el('p', { class: 'error' }, errText(e)),
+          el('div', { class: 'form-actions' }, el('button', { class: 'ghost', onclick: closeModal }, 'Close')));
+      }
+    }}, 'Path');
+
+    return el('div', { class: 'row-actions' }, pingBtn, routeBtn, pathBtn);
   }
 
   // Map mode: plots the PUBLIC peers by country (circles sized by traffic) over
@@ -11272,6 +11660,19 @@ async function txDetailView(id, host) {
         el('td', { class: r.status === 'ok' ? 'muted' : '' }, txDiagnose(r.detail, r.status)))))) : el('div', { class: 'empty' }, 'No results yet.'));
   } catch (e) { resHost.replaceChildren(el('div', { class: 'error' }, errText(e))); }
   root.append(el('h4', {}, 'Latest results'), resHost);
+
+  // Network path for this test run: the shared Path Visualization, sourced from
+  // the first assigned agent to the test's target. Shows the path graph +
+  // brushable metric timeline when traceroute data to that target exists.
+  const pathSrc = (test.agent_ids || [])[0];
+  if (test.target && pathSrc != null) {
+    const pathHost = el('div', {});
+    root.append(el('div', { class: 'section-head' }, el('h4', {}, 'Network path')), pathHost);
+    (async () => {
+      try { pathHost.replaceChildren(await pathVisualization({ sourceId: pathSrc, targetId: test.target, testId: id })); }
+      catch (e) { pathHost.replaceChildren(el('div', { class: 'error' }, errText(e))); }
+    })();
+  }
 
   drawHeat(); drawTrend();
   return root;

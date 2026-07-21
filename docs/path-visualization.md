@@ -70,6 +70,71 @@ side-panel summary listing the geolocated stops and the worst hop; "Clear path"
 removes the layer and restores the destinations overview. Target options come from
 the agent's recent traceroutes (`/api/probes/latest`).
 
+## Shared Path Visualization component (path graph + metric timeline)
+
+The path graph is also packaged as a **single reusable component**
+(`pathVisualization(opts)` in `public/app.js`) mounted across four views, so the
+same path graph + a brushable metric timeline appear everywhere without four
+copies:
+
+- **Probes** — full width under the probe detail header (`probeDetail`, the
+  canonical home).
+- **Topology** — a drawer over the diagram: select a peer → **Path** action
+  (`actionBtns` in `views.topology`), sourced from the chosen agent.
+- **Tests** — a *Network path* section per transaction test (`txDetailView`),
+  sourced from the test's first assigned agent to its target.
+- **Troubleshooting** — an *Affected path* card in `views.incident`,
+  pre-filtered to the incident window with the problem hop pre-highlighted.
+
+Props: `{ sourceId, targetId, probeId?, testId?, incidentId?, timeRange, metric,
+overlay, onSelectionChange }`.
+
+### Metric timeline
+
+Below the graph sits a two-pane timeline (`pathVizTimeline`):
+
+- **Overview strip** (~60 px, low opacity) over the full window with a
+  drag-to-select **brush** (reusing the shared `attachBrush`). The brushed window
+  is the **single source of truth** — it drives the detail chart *and* re-fetches
+  the path graph so its per-hop stats recompute for the same window.
+- **Detail chart** renders only the brushed window: **loss as bars**,
+  **latency/jitter as lines**, **throughput as an area** (`pvChart`, `render`
+  chosen per metric).
+- **Metric selector** (Loss / Latency / Jitter / Throughput — an extensible list
+  from `GET /api/probes/path/metrics`) + a per-agent **overlay** toggle
+  (one colour-coded series per probing agent, with a legend).
+- **Explain selection** — opt-in: sends the brushed window's aggregates to the
+  EU-sovereign advisory endpoint (`POST /api/assistant/explain`); the button is
+  hidden unless the `assistant` feature is entitled and answers 403 while the
+  admin has it disabled (the standard graceful-degrade).
+- The brush window + metric + overlay round-trip through the URL query string
+  (`?from&to&metric&overlay`) so a view is shareable.
+
+Bucketing is **DST-safe**: buckets align on the absolute UTC epoch
+(`src/analysis/pathTimeseries.js`), so a bucket is always the same real duration
+across a spring-forward / fall-back; the tenant timezone only affects tick
+labels. Telemetry is read from MySQL `probe_results` (TimescaleDB is optional and
+not required) via `probeResultsRepository.metricRows`.
+
+### ECMP / multipath
+
+When a hop load-balances across several next-hops, the linear median graph would
+hide it (it collapses to the mode IP). `buildPathGraph` therefore also emits an
+additive **`branches`** structure (`{ multipath, hops[], edges[] }`) inferred from
+the **multiple stored runs** — no agent change: each TTL keeps *every* distinct
+responding IP as its own branch node, and the observed hop→hop transitions become
+the branch edges. When `branches.multipath` is set, the hop pane draws the
+branches as parallel bezier curves that fan out and rejoin, and the head shows an
+**ECMP** badge. (True single-run multipath — Paris-traceroute — would need an
+agent release and is out of scope here.)
+
+### API
+
+- `GET /api/probes/path/metrics` — the metric catalogue for the selector.
+- `GET /api/probes/path/timeseries?agentId=&target=&metric=&overlay=&bucket=&from=&to=`
+  — bucketed series (one per agent when `overlay=agents`); empty window ⇒ empty
+  `series` array. viewer+.
+
 ## AS-path view & change detection
 
 Because every public hop is already enriched with its ASN, each traceroute carries

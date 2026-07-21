@@ -146,6 +146,40 @@ function createProbeResultsRepository(db) {
     });
   }
 
+  // Rows to ONE target for the path-visualisation metric timeline. `agentId` is
+  // optional: pass it for the single-agent series, omit it for the per-agent
+  // overlay (every agent probing that target). Only the metric columns are
+  // selected, newest-first then reversed to oldest-first. Carries the agent's
+  // display name so the overlay legend needs no extra query.
+  async function metricRows({ target, agentId = null, from = null, to = null, limit = 5000 }) {
+    const where = ['pr.target = ?'];
+    const params = [target];
+    if (agentId != null) { where.push('pr.agent_id = ?'); params.push(agentId); }
+    if (from) { where.push('pr.ts >= ?'); params.push(from); }
+    if (to) { where.push('pr.ts <= ?'); params.push(to); }
+    const lim = Number.isInteger(limit) && limit > 0 && limit <= 20000 ? limit : 5000;
+    params.push(lim);
+    const [rows] = await pool.query(
+      `SELECT pr.agent_id, pr.ts, pr.ok, pr.rtt_ms, pr.jitter_ms, pr.loss_pct, pr.bytes,
+              COALESCE(a.display_name, a.hostname) AS agent_name
+       FROM probe_results pr
+       LEFT JOIN agents a ON a.id = pr.agent_id
+       WHERE ${where.join(' AND ')}
+       ORDER BY pr.ts DESC LIMIT ?`,
+      params
+    );
+    return rows.map((row) => ({
+      agentId: row.agent_id,
+      agentName: row.agent_name ?? null,
+      ts: row.ts instanceof Date ? row.ts.toISOString() : row.ts,
+      ok: !!row.ok,
+      rttMs: row.rtt_ms,
+      jitterMs: row.jitter_ms,
+      lossPct: row.loss_pct,
+      bytes: row.bytes ?? null,
+    })).reverse();
+  }
+
   // The most recent result per (type, target) for an agent — the "current state".
   async function latestByAgent(agentId, limit = 50) {
     const lim = Number.isInteger(limit) && limit > 0 && limit <= 500 ? limit : 50;
@@ -159,7 +193,7 @@ function createProbeResultsRepository(db) {
     return rows.map(fromRow);
   }
 
-  return { createMany, findByAgent, latestByAgent, fleetHealth, availability };
+  return { createMany, findByAgent, metricRows, latestByAgent, fleetHealth, availability };
 }
 
 module.exports = { createProbeResultsRepository, toRow, fromRow };

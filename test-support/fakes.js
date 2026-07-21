@@ -122,6 +122,7 @@ function makeProbeResultsRepo(overrides = {}) {
     rows,
     createMany: overrides.createMany || (async (agentId, results) => { for (const r of results) rows.push({ agentId, ...r }); return results.length; }),
     findByAgent: overrides.findByAgent || (async () => []),
+    metricRows: overrides.metricRows || (async () => []),
     latestByAgent: overrides.latestByAgent || (async () => []),
     fleetHealth: overrides.fleetHealth || (async () => []),
     availability: overrides.availability || (async () => []),

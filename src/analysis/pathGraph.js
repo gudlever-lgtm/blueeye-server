@@ -178,7 +178,104 @@ function buildPathGraph(results, { geoProvider = null, centroids = null, target 
     links.push({ from: prev.index, to: cur.index, lossPct: cur.lossPct, latencyMs, severity });
   }
 
-  return { ...meta, nodes, links };
+  // Worst hop (highest-severity real node) — lets the Troubleshooting view
+  // pre-highlight the failing hop. bad(3) > warn(2) > ok(1) > muted(0).
+  const sevRank = { bad: 3, warn: 2, ok: 1, muted: 0 };
+  let worstHopIndex = null;
+  let worstRank = 0;
+  for (const n of nodes) {
+    if (n.kind === 'source') continue;
+    const r = sevRank[n.severity] || 0;
+    if (r > worstRank && r >= sevRank.warn) { worstRank = r; worstHopIndex = n.index; }
+  }
+
+  const branches = buildBranches(runs, byPos, maxPos, { geoProvider, centroids });
+
+  return { ...meta, worstHopIndex, nodes, links, branches };
 }
 
-module.exports = { buildPathGraph, THRESHOLDS: T };
+// ECMP / multipath inference — server-only, from the runs already stored (no
+// agent change). Load-balancers make the responding IP at one TTL vary run to
+// run; the linear graph above collapses that to the single mode IP. Here we keep
+// EVERY distinct responding IP per TTL as a separate branch node, and record the
+// observed hop→hop transitions across runs so the UI can fan the parallel paths
+// out and rejoin them. `multipath` is true when any TTL saw more than one IP.
+//
+//   branches = {
+//     multipath,
+//     hops:  [{ hop, ips: [{ ip, asn, country, rttMs, lossPct, jitterMs,
+//                            responded, runs, severity, explain, primary }] }],
+//     edges: [{ fromHop, fromIp, toHop, toIp, runs }],
+//   }
+function buildBranches(runs, byPos, maxPos, { geoProvider = null, centroids = null } = {}) {
+  // Per (position, ip): accumulate the samples so each branch carries its own
+  // aggregated metrics, exactly like the linear nodes but split by IP.
+  const perPos = new Map(); // pos -> Map(ip -> { rtt:[], loss:[], jitter:[], responded, runs })
+  const edgeCounts = new Map(); // "fromHop|fromIp|toHop|toIp" -> count
+  let multipath = false;
+
+  for (const run of runs) {
+    // Ordered, responding hops in this run (skip silent/no-IP hops so branches
+    // stay connected across a silent router).
+    const seq = [];
+    for (const h of run.hops) {
+      const pos = Number(h.hop);
+      if (!Number.isInteger(pos) || pos < 1) continue;
+      const ip = h.ip || null;
+      if (ip == null || h.rttMs == null) continue; // only responding hops branch
+      if (!perPos.has(pos)) perPos.set(pos, new Map());
+      const ipMap = perPos.get(pos);
+      if (!ipMap.has(ip)) ipMap.set(ip, { rtt: [], loss: [], jitter: [], responded: 0, runs: 0 });
+      const b = ipMap.get(ip);
+      b.runs += 1;
+      b.responded += 1;
+      b.rtt.push(h.rttMs);
+      if (h.jitterMs != null) b.jitter.push(h.jitterMs);
+      b.loss.push(h.lossPct != null ? h.lossPct : 0);
+      seq.push({ pos, ip });
+    }
+    // Consecutive responding hops become a directed transition (the branch edge).
+    for (let i = 1; i < seq.length; i += 1) {
+      const a = seq[i - 1];
+      const b = seq[i];
+      const key = `${a.pos}|${a.ip}|${b.pos}|${b.ip}`;
+      edgeCounts.set(key, (edgeCounts.get(key) || 0) + 1);
+    }
+  }
+
+  const hops = [];
+  for (let pos = 1; pos <= maxPos; pos += 1) {
+    const ipMap = perPos.get(pos);
+    if (!ipMap || ipMap.size === 0) continue;
+    if (ipMap.size > 1) multipath = true;
+    // Most-frequent IP at this position is the "primary" (matches the linear node).
+    const primaryIp = mode((byPos.get(pos) || { ips: [] }).ips);
+    const ips = [];
+    for (const [ip, b] of ipMap) {
+      const rttMs = round(median(b.rtt));
+      const jitterMs = round(median(b.jitter));
+      const lossPct = round(median(b.loss));
+      const geo = enrichGeo(ip, geoProvider, centroids);
+      const { severity, reason } = classify({ lossPct, jitterMs, rttMs, responded: b.responded, unresponsive: false });
+      ips.push({
+        ip, asn: geo.asn, asnName: geo.asnName, country: geo.country, private: geo.private,
+        lat: geo.lat, lng: geo.lng,
+        rttMs, jitterMs, lossPct, responded: b.responded, runs: b.runs,
+        severity, explain: reason, primary: ip === primaryIp,
+      });
+    }
+    // Primary first, then by descending run count (the strongest branches lead).
+    ips.sort((x, y) => (Number(y.primary) - Number(x.primary)) || (y.runs - x.runs));
+    hops.push({ hop: pos, ips });
+  }
+
+  const edges = [];
+  for (const [key, count] of edgeCounts) {
+    const [fromHop, fromIp, toHop, toIp] = key.split('|');
+    edges.push({ fromHop: Number(fromHop), fromIp, toHop: Number(toHop), toIp, runs: count });
+  }
+
+  return { multipath, hops, edges };
+}
+
+module.exports = { buildPathGraph, buildBranches, THRESHOLDS: T };

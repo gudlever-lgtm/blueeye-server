@@ -8,6 +8,7 @@ const { validateTimeRange } = require('../validation/resultsValidation');
 const { parseId } = require('../validation/locationValidation');
 const { buildPathGraph } = require('../analysis/pathGraph');
 const { asGraphFromNodes } = require('../analysis/asPath');
+const { METRICS, getMetric, bucketMetric } = require('../analysis/pathTimeseries');
 
 // Read API for active-probe results (ping/tcp/dns/traceroute). viewer+.
 // geoProvider/centroids are optional — when wired, the path graph enriches public
@@ -69,6 +70,47 @@ function createProbesRouter({ probeResultsRepo, agentsRepo, geoProvider = null, 
     };
     const graph = buildPathGraph(runs, { geoProvider, centroids, target, origin });
     res.json({ agentId, ...graph, asGraph: asGraphFromNodes(graph.nodes) });
+  }));
+
+  // GET /api/probes/path/metrics — the metric catalogue for the timeline's
+  // selector (extensible list, per the spec). No agent needed; viewer+.
+  router.get('/path/metrics', requireAuth, reader, asyncHandler(async (_req, res) => {
+    res.json({ metrics: METRICS.map((m) => ({ id: m.id, label: m.label, unit: m.unit, render: m.render })) });
+  }));
+
+  // GET /api/probes/path/timeseries?agentId=&target=&metric=&overlay=&bucket=&from=&to=
+  // Bucketed metric series for the path timeline (overview strip + detail chart).
+  // `overlay=agents` returns one series per probing agent to that target; the
+  // brush window (from/to) is the caller's single source of truth. Empty window
+  // ⇒ empty `series` array, not null.
+  router.get('/path/timeseries', requireAuth, reader, asyncHandler(async (req, res) => {
+    const agentId = parseId(req.query.agentId);
+    if (agentId === null) return res.status(400).json({ error: 'agentId is required (positive integer)' });
+    const { value: range, errors } = validateTimeRange(req.query);
+    if (errors) return res.status(400).json({ error: 'Validation failed', details: errors });
+    const metric = getMetric(req.query.metric || 'latency');
+    if (!metric) return res.status(400).json({ error: `Unknown metric: ${req.query.metric}` });
+    const overlay = String(req.query.overlay || 'off').toLowerCase() === 'agents' ? 'agents' : 'off';
+    const agent = await agentsRepo.findById(agentId);
+    if (!agent) return res.status(404).json({ error: 'Agent not found' });
+
+    // Default the target to the agent's most recent traceroute, matching /path.
+    let target = req.query.target ? String(req.query.target).slice(0, 255) : null;
+    if (!target) {
+      const recent = await probeResultsRepo.findByAgent({ agentId, from: range.from, to: range.to, type: 'traceroute', limit: 500 });
+      target = latestTarget(recent);
+    }
+    if (!target) return res.json({ agentId, target: null, overlay, metric: metric.id, series: [] });
+
+    const rows = await probeResultsRepo.metricRows({
+      target,
+      agentId: overlay === 'agents' ? null : agentId,
+      from: range.from,
+      to: range.to,
+    });
+    const bucketMs = req.query.bucket ? (Number.parseInt(req.query.bucket, 10) || 0) * 1000 : null;
+    const out = bucketMetric(rows, { from: range.from, to: range.to, bucketMs, metric, overlay });
+    res.json({ agentId, target, overlay, ...out });
   }));
 
   return router;

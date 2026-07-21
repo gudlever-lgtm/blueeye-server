@@ -9899,7 +9899,7 @@ views.users = async () => {
         u.protected ? el('span', { class: 'badge', title: 'Superadmin — cannot be changed/deleted, password only', style: 'margin-left:6px' }, 'superadmin') : null),
       el('td', {}, u.must_change_password
         ? el('span', { class: 'badge', title: u.temp_password_expires_at ? `One-time password expires ${fmtDate(u.temp_password_expires_at)}` : 'Awaiting first password change' }, 'pending first login')
-        : el('span', { class: 'muted' }, '—')),
+        : el('span', { class: 'badge active', title: 'Account active — first-login password change completed' }, 'Active')),
       el('td', { class: 'muted' }, fmtDate(u.created_at)),
       el('td', {}, el('div', { class: 'row-actions' },
         (avail.available && u.must_change_password)

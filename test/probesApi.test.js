@@ -212,6 +212,85 @@ test('GET /api/probes/path returns an empty graph when there are no traceroutes'
   assert.equal(res.body.samples, 0);
 });
 
+// ---- metric timeline: GET /api/probes/path/metrics + /timeseries ----------
+
+test('GET /api/probes/path/metrics lists the metric catalogue (viewer, 200)', async () => {
+  const res = await request(withAgent()).get('/api/probes/path/metrics').set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 200);
+  assert.ok(Array.isArray(res.body.metrics));
+  assert.ok(res.body.metrics.some((m) => m.id === 'latency' && m.render === 'line'));
+  assert.ok(res.body.metrics.some((m) => m.id === 'loss' && m.render === 'bars'));
+});
+
+test('GET /api/probes/path/metrics is 401 without a token', async () => {
+  assert.equal((await request(withAgent()).get('/api/probes/path/metrics')).status, 401);
+});
+
+const metricRow = (ts, over = {}) => ({ agentId: 9, agentName: 'h1', ts, ok: true, rttMs: 10, jitterMs: 2, lossPct: 0, bytes: 1000, ...over });
+
+test('GET /api/probes/path/timeseries buckets a metric window (200)', async () => {
+  const probeResultsRepo = makeProbeResultsRepo({
+    metricRows: async () => [
+      metricRow('2026-06-09T10:00:10Z', { rttMs: 10 }),
+      metricRow('2026-06-09T10:00:20Z', { rttMs: 30 }),
+    ],
+  });
+  const res = await request(withAgent({ probeResultsRepo }))
+    .get('/api/probes/path/timeseries?agentId=9&target=example.com&metric=latency&from=2026-06-09T10:00:00Z&to=2026-06-09T10:05:00Z&bucket=300')
+    .set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 200);
+  assert.equal(res.body.target, 'example.com');
+  assert.equal(res.body.metric, 'latency');
+  assert.equal(res.body.series.length, 1);
+  assert.equal(res.body.series[0].points[0].value, 20); // median of [10,30]
+});
+
+test('GET /api/probes/path/timeseries overlay=agents returns one series per agent', async () => {
+  const probeResultsRepo = makeProbeResultsRepo({
+    metricRows: async ({ agentId }) => {
+      assert.equal(agentId, null); // overlay omits the single-agent filter
+      return [
+        metricRow('2026-06-09T10:00:10Z', { agentId: 9, agentName: 'h1', rttMs: 10 }),
+        metricRow('2026-06-09T10:00:10Z', { agentId: 10, agentName: 'h2', rttMs: 40 }),
+      ];
+    },
+  });
+  const res = await request(withAgent({ probeResultsRepo }))
+    .get('/api/probes/path/timeseries?agentId=9&target=example.com&metric=latency&overlay=agents&from=2026-06-09T10:00:00Z&to=2026-06-09T10:05:00Z&bucket=300')
+    .set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 200);
+  assert.equal(res.body.overlay, 'agents');
+  assert.equal(res.body.series.length, 2);
+  assert.deepEqual(res.body.series.map((s) => s.agentId), [9, 10]);
+});
+
+test('GET /api/probes/path/timeseries rejects an unknown metric (400)', async () => {
+  const res = await request(withAgent())
+    .get('/api/probes/path/timeseries?agentId=9&target=x&metric=bogus').set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 400);
+});
+
+test('GET /api/probes/path/timeseries requires agentId (400) and a real agent (404)', async () => {
+  assert.equal((await request(withAgent()).get('/api/probes/path/timeseries?metric=loss').set('Authorization', authHeader('viewer'))).status, 400);
+  assert.equal((await request(makeApp()).get('/api/probes/path/timeseries?agentId=9&target=x&metric=loss').set('Authorization', authHeader('viewer'))).status, 404);
+});
+
+test('GET /api/probes/path/timeseries returns empty series (not null) with no data', async () => {
+  const res = await request(withAgent({ probeResultsRepo: makeProbeResultsRepo({ metricRows: async () => [] }) }))
+    .get('/api/probes/path/timeseries?agentId=9&target=example.com&metric=loss&from=2026-06-09T10:00:00Z&to=2026-06-09T11:00:00Z')
+    .set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body.series, []);
+});
+
+test('GET /api/probes/path/timeseries surfaces a repo failure as 500', async () => {
+  const probeResultsRepo = makeProbeResultsRepo({ metricRows: throwingAsync('db down') });
+  const res = await request(withAgent({ probeResultsRepo }))
+    .get('/api/probes/path/timeseries?agentId=9&target=example.com&metric=latency&from=2026-06-09T10:00:00Z&to=2026-06-09T11:00:00Z')
+    .set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 500);
+});
+
 // ---- validation + repo units ----------------------------------------------
 
 test('validateProbeSpec requires a port for tcp and rejects flag-like hosts', () => {

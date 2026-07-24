@@ -1552,11 +1552,50 @@ function renderConnectionModal(a, d) {
     });
     actions.push(btn);
   }
+  // Admin-only: the server-initiated action trail (upgrade/delete) for this
+  // agent. This is where a one-click Update that was accepted but then FAILED
+  // during the agent's rebuild (bad signature, missing release key, download
+  // blocked, npm failure…) shows its reason — the outcome the agent reports back
+  // lands here, not as a toast. Lazily loaded when the section is opened.
+  if (canDelete()) {
+    const auditBox = el('div', {}, el('p', { class: 'muted' }, 'Open to load the update/delete outcomes for this agent.'));
+    const details = el('details', { class: 'conn-audit' }, el('summary', { class: 'muted' }, 'Update / delete history'), auditBox);
+    let loaded = false;
+    details.addEventListener('toggle', async () => {
+      if (!details.open || loaded) return;
+      loaded = true;
+      auditBox.replaceChildren(el('p', { class: 'muted' }, 'Loading…'));
+      try {
+        const rows = await api(`/agents/${a.id}/audit`);
+        auditBox.replaceChildren(renderActionAuditList(rows));
+      } catch (err) { loaded = false; auditBox.replaceChildren(el('p', { class: 'muted' }, errText(err))); }
+    });
+    body.push(details);
+  }
   const recheck = el('button', { class: 'small ghost', onclick: () => showConnection(a) }, 'Re-check');
   actions.push(recheck);
   body.push(el('div', { class: 'form-actions' }, ...actions, el('button', { class: 'ghost', onclick: closeModal }, 'Close')));
   card.replaceChildren(...body);
   $('#modal').classList.remove('hidden');
+}
+
+// Renders the agent_action_audit trail (upgrade/delete, requested -> completed/
+// failed) as a table. A `failed` row's Detail carries the agent's own error text
+// — the answer to "I clicked Update and nothing happened". Newest first.
+function renderActionAuditList(rows) {
+  if (!rows || !rows.length) {
+    return el('p', { class: 'muted' }, 'No update or delete actions have been sent to this agent yet.');
+  }
+  const stateBadge = (s) => el('span', { class: `badge ${s === 'completed' ? 'active' : s === 'failed' ? 'bad' : 'warn'}` }, s);
+  return el('table', { class: 'audit-table' },
+    el('thead', {}, el('tr', {}, ...['When', 'Action', 'Target', 'Result', 'Detail'].map((h) => el('th', {}, h)))),
+    el('tbody', {}, ...rows.map((r) => el('tr', {},
+      el('td', { class: 'muted' }, fmtDate(r.requested_at)),
+      el('td', {}, r.action),
+      el('td', {}, r.target_version ? `v${r.target_version}` : '–'),
+      el('td', {}, stateBadge(r.state)),
+      el('td', { class: 'muted' }, r.result_detail || (r.state === 'requested' ? 'awaiting agent…' : '–')),
+    ))));
 }
 
 // Round-trips a "diagnose" to the agent and shows where its flow pipeline stands

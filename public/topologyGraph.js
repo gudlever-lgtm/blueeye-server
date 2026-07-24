@@ -185,11 +185,66 @@
     return { changed: changed, flapping: flapping };
   }
 
+  // Split a host's service-dependency edges (GET /api/topology/dependencies?
+  // host=&direction=both) into what it TALKS TO (outbound, this host is the
+  // source) and what TALKS TO IT (inbound, this host is the destination), each
+  // sorted heaviest-first. An edge can appear in only one list for a given host.
+  function splitDependencies(edges, hostId) {
+    var id = Number(hostId);
+    var outbound = [];
+    var inbound = [];
+    (Array.isArray(edges) ? edges : []).forEach(function (e) {
+      if (!e) return;
+      if (Number(e.srcHostId) === id) outbound.push(e);
+      else if (Number(e.dstHostId) === id) inbound.push(e);
+    });
+    var byBytes = function (a, b) { return (Number(b.bytes) || 0) - (Number(a.bytes) || 0); };
+    outbound.sort(byBytes);
+    inbound.sort(byBytes);
+    return { outbound: outbound, inbound: inbound };
+  }
+
+  // MAD → standard-deviation scale (same constant the server detector uses), so
+  // the client band matches the analysis definition of "normal range".
+  var MAD_TO_SIGMA = 1.4826;
+
+  // Build a 24-slot hour-of-day baseline profile for one dependency (dst host +
+  // port) on a given day-of-week, from GET /api/topology/flow-baselines rows.
+  // Each slot: { hour, median, lo, hi, count } — lo/hi = median ± sigma·MAD·k
+  // (the "normal range", default sigma 3 = the WARN band); a slot with no
+  // baseline is { hour, median:null }. Pure — the chart just draws it.
+  function baselineProfile(baselines, dstHostId, dstPort, dow, opts) {
+    var o = opts || {};
+    var sigma = o.sigma != null ? o.sigma : 3;
+    var dh = Number(dstHostId);
+    var dp = Number(dstPort);
+    var wantDow = dow != null ? Number(dow) : null;
+    var slots = [];
+    for (var h = 0; h < 24; h += 1) slots.push({ hour: h, median: null, lo: null, hi: null, count: 0 });
+    (Array.isArray(baselines) ? baselines : []).forEach(function (b) {
+      if (!b || Number(b.dstHostId) !== dh || Number(b.dstPort) !== dp) return;
+      if (wantDow != null && Number(b.dow) !== wantDow) return;
+      var hr = Number(b.hour);
+      if (!(hr >= 0 && hr < 24)) return;
+      var med = Number(b.medianBytes) || 0;
+      var mad = Number(b.madBytes) || 0;
+      var half = sigma * mad * MAD_TO_SIGMA;
+      // If several days map to the same hour (dow omitted), keep the widest band.
+      var s = slots[hr];
+      if (s.median == null || med > s.median) { s.median = med; s.lo = Math.max(0, med - half); s.hi = med + half; }
+      s.count += Number(b.observationCount) || Number(b.sampleCount) || 0;
+    });
+    return slots;
+  }
+
   var apiObj = {
     LAYERS: LAYERS,
+    MAD_TO_SIGMA: MAD_TO_SIGMA,
     blastSets: blastSets,
     blastIsEmpty: blastIsEmpty,
     changedHostSets: changedHostSets,
+    splitDependencies: splitDependencies,
+    baselineProfile: baselineProfile,
     defaultState: defaultState,
     normalizeLayer: normalizeLayer,
     parseParams: parseParams,

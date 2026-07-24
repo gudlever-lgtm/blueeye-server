@@ -6663,6 +6663,123 @@ async function loadAgentCmdbLink(id, host) {
   if (link) showLinked(link); else showSearch();
 }
 
+// Hour-of-day baseline profile chart for one service dependency: the median
+// volume per hour with the "normal range" band (median ± 3·MAD) shaded. Slots
+// come from the pure TopologyGraph.baselineProfile. Hand-drawn SVG, no lib.
+function baselineBandChart(slots, { title } = {}) {
+  const ns = 'http://www.w3.org/2000/svg';
+  const mk = (tag, attrs = {}, ...kids) => {
+    const e = document.createElementNS(ns, tag);
+    for (const [a, v] of Object.entries(attrs)) if (v != null) e.setAttribute(a, v);
+    for (const kid of kids) if (kid != null) e.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
+    return e;
+  };
+  const present = (slots || []).filter((s) => s.median != null);
+  if (!present.length) {
+    return el('div', { class: 'empty' }, 'Not enough history yet — a pair needs ≥100 hourly observations before it is baselined.');
+  }
+  const W = 560, H = 190, padL = 52, padR = 10, padT = 12, padB = 26;
+  const maxY = Math.max(1, ...present.map((s) => (s.hi != null ? s.hi : s.median)));
+  const x = (h) => padL + (h / 23) * (W - padL - padR);
+  const y = (v) => padT + (1 - (v / maxY)) * (H - padT - padB);
+  const svg = mk('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': title || 'Baseline profile' });
+  // y grid: 0 and max
+  [0, maxY].forEach((v) => {
+    svg.append(mk('line', { class: 'bl-grid', x1: padL, x2: W - padR, y1: y(v), y2: y(v) }));
+    svg.append(mk('text', { class: 'bl-axis', x: padL - 6, y: y(v) + 3, 'text-anchor': 'end' }, fmtBytes(v)));
+  });
+  // x ticks (hours)
+  [0, 6, 12, 18, 23].forEach((h) => svg.append(mk('text', { class: 'bl-axis', x: x(h), y: H - 8, 'text-anchor': 'middle' }, `${h}:00`)));
+  // band = per-hour vertical segment lo..hi
+  slots.forEach((s) => { if (s.median == null) return; const bx = x(s.hour); svg.append(mk('line', { class: 'bl-band', x1: bx, x2: bx, y1: y(s.hi), y2: y(s.lo) })); });
+  // median polyline over present, contiguous points
+  let d = ''; let pen = false;
+  slots.forEach((s) => { if (s.median == null) { pen = false; return; } const px = x(s.hour); const py = y(s.median); d += `${pen ? 'L' : 'M'}${px.toFixed(1)} ${py.toFixed(1)} `; pen = true; });
+  svg.append(mk('path', { class: 'bl-median', d, fill: 'none' }));
+  slots.forEach((s) => { if (s.median == null) return; const dot = mk('circle', { class: 'bl-dot', cx: x(s.hour), cy: y(s.median), r: '2.4' }); dot.append(mk('title', {}, `${s.hour}:00 · median ${fmtBytes(s.median)} · normal ${fmtBytes(s.lo)}–${fmtBytes(s.hi)}`)); svg.append(dot); });
+  return el('div', { class: 'bl-chart' }, svg, el('div', { class: 'muted small' }, 'Normal range = median ± 3·MAD · y-axis bytes/hour, x-axis hour of day'));
+}
+
+// Host dependency list (Part 6 host detail): what this host talks to (outbound)
+// and what talks to it (inbound), with ports + volume, from
+// GET /api/topology/dependencies. Each outbound row links to its per-hour
+// baseline band (operator+; the baselines are keyed by the source host).
+async function loadAgentDependencies(id, host) {
+  let data; let agents = [];
+  try {
+    [data, agents] = await Promise.all([
+      api(`/api/topology/dependencies?host=${encodeURIComponent(id)}&direction=both&limit=100`),
+      api('/agents').catch(() => []),
+    ]);
+  } catch (e) {
+    host.replaceChildren(el('h3', {}, 'Dependencies'), el('div', { class: 'error' }, errText(e)));
+    return;
+  }
+  const nameById = {};
+  (agents || []).forEach((a) => { nameById[a.id] = a.display_name || a.hostname || `agent ${a.id}`; });
+  const nameFor = (hid) => nameById[hid] || `host ${hid}`;
+  const { outbound, inbound } = TopologyGraph.splitDependencies(data.edges || [], id);
+
+  if (!outbound.length && !inbound.length) {
+    host.replaceChildren(el('h3', {}, 'Dependencies'),
+      el('div', { class: 'empty' }, 'No service dependencies observed for this host yet. Dependency edges are aggregated from TCP flows (NetFlow/sFlow) by a scheduled job.'));
+    return;
+  }
+
+  async function openBaseline(dstHostId, dstPort, peerLabel) {
+    const card = $('#modal-card');
+    card.classList.add('wide');
+    const dowNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const dowSel = el('select', { class: 'small' }, ...dowNames.map((n, i) => el('option', { value: String(i) }, n)));
+    dowSel.value = String(new Date().getDay());
+    const chartHost = el('div', {}, el('p', { class: 'muted' }, 'Loading baseline…'));
+    const draw = (baselines) => {
+      const slots = TopologyGraph.baselineProfile(baselines, dstHostId, dstPort, Number(dowSel.value), { sigma: 3 });
+      chartHost.replaceChildren(baselineBandChart(slots, { title: `Baseline → ${peerLabel}:${dstPort}` }));
+    };
+    card.replaceChildren(
+      el('h3', {}, `Baseline · ${esc(peerLabel)}:${dstPort}`),
+      el('div', { class: 'history-controls' }, el('label', { class: 'inline muted' }, 'Day ', dowSel)),
+      chartHost,
+      el('div', { class: 'form-actions' }, el('button', { class: 'ghost', onclick: closeModal }, 'Close')));
+    $('#modal').classList.remove('hidden');
+    let baselines = [];
+    try {
+      const r = await api(`/api/topology/flow-baselines?host=${encodeURIComponent(id)}&limit=5000`);
+      baselines = r.baselines || [];
+    } catch (e) {
+      chartHost.replaceChildren(el('div', { class: 'error' }, errText(e)));
+      return;
+    }
+    dowSel.addEventListener('change', () => draw(baselines));
+    draw(baselines);
+  }
+
+  const depTable = (rows, dir) => el('table', { class: 'agents-table' },
+    el('thead', {}, el('tr', {},
+      el('th', { scope: 'col' }, dir === 'out' ? 'Talks to' : 'Talked to by'),
+      el('th', { scope: 'col' }, 'Port'), el('th', { scope: 'col' }, 'Bytes'),
+      el('th', { scope: 'col' }, 'Conns'), el('th', { scope: 'col' }, 'Last seen'),
+      dir === 'out' && canWrite() ? el('th', { scope: 'col' }, '') : null)),
+    el('tbody', {}, ...rows.map((e) => {
+      const peerId = dir === 'out' ? e.dstHostId : e.srcHostId;
+      return el('tr', {},
+        el('td', {}, el('button', { class: 'linklike', onclick: () => openAgent(peerId) }, esc(nameFor(peerId)))),
+        el('td', { class: 'num' }, String(e.dstPort)),
+        el('td', { class: 'num' }, fmtBytes(e.bytes)),
+        el('td', { class: 'num' }, String(e.connCount)),
+        el('td', {}, e.lastSeen ? fmtTimeShort(new Date(e.lastSeen).getTime()) : '–'),
+        dir === 'out' && canWrite()
+          ? el('td', {}, el('button', { class: 'small ghost', onclick: () => openBaseline(e.dstHostId, e.dstPort, nameFor(e.dstHostId)) }, 'Baseline'))
+          : null);
+    })));
+
+  const children = [el('h3', {}, 'Dependencies')];
+  if (outbound.length) children.push(el('h4', { class: 'sub' }, `Talks to (${outbound.length})`), depTable(outbound, 'out'));
+  if (inbound.length) children.push(el('h4', { class: 'sub' }, `Talked to by (${inbound.length})`), depTable(inbound, 'in'));
+  host.replaceChildren(...children);
+}
+
 views.agent = async () => {
   const id = selectedAgentId;
   const root = el('div', { class: 'agent-detail' });
@@ -6695,6 +6812,12 @@ views.agent = async () => {
   const cmdbHost = el('div', { class: 'card agent-cmdb' }, el('h3', {}, 'CMDB asset'), el('div', { class: 'muted' }, 'Loading…'));
   root.append(cmdbHost);
   loadAgentCmdbLink(id, cmdbHost);
+
+  // Service dependencies (viewer+): who this host talks to / who talks to it,
+  // ports + volume; each outbound row links to its per-hour baseline band.
+  const depsHost = el('div', { class: 'card agent-deps' }, el('h3', {}, 'Dependencies'), el('div', { class: 'muted' }, 'Loading…'));
+  root.append(depsHost);
+  loadAgentDependencies(id, depsHost);
 
   // Unified activity timeline (findings + probe-outage incidents + connect/
   // disconnect + playbook runs) — GET /api/targets/:id/timeline.

@@ -134,3 +134,32 @@ test('changedHostSets splits flapping from other changes', () => {
   assert.deepEqual([...s.changed].sort(), [1, 2]);
   assert.deepEqual([...s.flapping], [3]);
 });
+
+// ---- host dependency list + baseline profile -------------------------------
+
+test('splitDependencies separates outbound vs inbound for a host', () => {
+  const edges = [
+    { srcHostId: 5, dstHostId: 6, dstPort: 443, bytes: 900 },
+    { srcHostId: 5, dstHostId: 7, dstPort: 22, bytes: 100 },
+    { srcHostId: 8, dstHostId: 5, dstPort: 5432, bytes: 500 },
+  ];
+  const s = TG.splitDependencies(edges, 5);
+  assert.deepEqual(s.outbound.map((e) => e.dstHostId), [6, 7]); // heaviest first
+  assert.deepEqual(s.inbound.map((e) => e.srcHostId), [8]);
+});
+
+test('baselineProfile builds a 24-slot hour-of-day band for a dependency', () => {
+  const baselines = [
+    { srcHostId: 5, dstHostId: 6, dstPort: 443, dow: 2, hour: 14, medianBytes: 1000, madBytes: 100, observationCount: 120 },
+    { srcHostId: 5, dstHostId: 6, dstPort: 443, dow: 2, hour: 15, medianBytes: 2000, madBytes: 0, observationCount: 120 },
+    { srcHostId: 5, dstHostId: 9, dstPort: 443, dow: 2, hour: 14, medianBytes: 9, madBytes: 9, observationCount: 5 }, // other dst
+  ];
+  const slots = TG.baselineProfile(baselines, 6, 443, 2, { sigma: 3 });
+  assert.equal(slots.length, 24);
+  assert.equal(slots[14].median, 1000);
+  assert.ok(slots[14].hi > slots[14].lo, 'a band with spread');
+  assert.equal(slots[15].lo, 2000); // zero MAD ⇒ zero-width band at the median
+  assert.equal(slots[15].hi, 2000);
+  assert.equal(slots[0].median, null); // no baseline for that hour
+  assert.equal(slots[14].count, 120);
+});

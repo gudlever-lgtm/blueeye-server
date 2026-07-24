@@ -720,6 +720,15 @@ main#view:has(.fleet) { max-width: 95%; }
 .blast-list { margin: 4px 0 0; padding-left: 16px; max-height: 220px; overflow: auto; }
 .blast-list li { margin: 2px 0; }
 
+/* Host dependency list + per-hour baseline band chart. */
+.agent-deps h4.sub { margin: 12px 0 4px; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.bl-chart svg { display: block; width: 100%; height: auto; }
+.bl-grid { stroke: var(--border); opacity: .5; }
+.bl-axis { fill: var(--muted); font-size: 10px; }
+.bl-band { stroke: color-mix(in srgb, var(--accent) 45%, transparent); stroke-width: 7; stroke-linecap: round; }
+.bl-median { stroke: var(--accent); stroke-width: 2; }
+.bl-dot { fill: var(--accent); }
+
 /* NICs view: firmware-drift card + inventory list. */
 .nics-summary { margin: 0 0 14px; }
 .nic-card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; margin: 0 0 16px; }

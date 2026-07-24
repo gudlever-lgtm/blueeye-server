@@ -5794,6 +5794,8 @@ views.discovery = async () => {
   const candHost = el('div', { class: 'card' }, el('h3', {}, 'Candidates'), el('div', { class: 'muted' }, 'Loading…'));
   const sweepHost = el('div', { class: 'card' }, el('h3', {}, 'Sweep history'), el('div', { class: 'muted' }, 'Loading…'));
   root.append(cfgHost, scanHost, candHost, sweepHost);
+  let agents = []; // for the "sweep from agent" picker + found-by resolution
+  const agentNameById = {};
 
   function renderConfig(cfg) {
     const enabledBadge = el('span', { class: `badge ${cfg.enabled ? 'online' : 'muted'}` }, cfg.enabled ? 'Scheduled sweep ON' : 'Scheduled sweep OFF (env)');
@@ -5843,19 +5845,36 @@ views.discovery = async () => {
 
   function renderScan() {
     const status = el('span', { class: 'muted' });
+    // Choose where the sweep runs FROM: the server (its own vantage) or a
+    // connected agent (the segment it sits on — empty scope ⇒ the agent's own
+    // subnet). Only online agents can be sent a command.
+    const online = agents.filter((a) => a.status === 'online');
+    const fromSel = el('select', { class: 'small' },
+      el('option', { value: '' }, 'Server (default vantage)'),
+      ...online.map((a) => el('option', { value: String(a.id) }, `Agent · ${a.display_name || a.hostname}`)));
     const btn = el('button', { class: 'small' }, 'Run a sweep now');
     btn.addEventListener('click', async () => {
       btn.disabled = true; status.className = 'muted'; status.textContent = 'Scanning…';
       try {
-        const r = await api('/api/discovery/scan', { method: 'POST' });
-        status.className = r.refused ? 'error' : '';
-        status.textContent = r.refused
-          ? `Refused: ${r.reason}`
-          : `Swept ${r.addresses ?? '?'} addresses · ${r.found ?? 0} candidate(s).`;
-        loadCandidates(); loadSweeps();
-      } catch (e) { status.className = 'error'; status.textContent = errText(e); } finally { btn.disabled = false; }
+        const body = fromSel.value ? { agentId: Number(fromSel.value) } : {};
+        const r = await api('/api/discovery/scan', { method: 'POST', body });
+        if (r.mode === 'agent') {
+          status.className = '';
+          status.textContent = `Requested — the agent is sweeping; candidates will appear here shortly.`;
+          setTimeout(() => { loadCandidates(); loadSweeps(); }, 4000);
+        } else {
+          status.className = r.refused ? 'error' : '';
+          status.textContent = r.refused ? `Refused: ${r.reason}` : `Swept ${r.addresses ?? '?'} addresses · ${r.found ?? 0} candidate(s).`;
+          loadCandidates(); loadSweeps();
+        }
+      } catch (e) {
+        status.className = 'error';
+        status.textContent = e.status === 409 ? 'That agent is not connected right now.' : errText(e);
+      } finally { btn.disabled = false; }
     });
-    scanHost.replaceChildren(el('h3', {}, 'Manual sweep'), el('div', { class: 'form-actions' }, btn, status));
+    scanHost.replaceChildren(el('h3', {}, 'Manual sweep'),
+      el('div', { class: 'form-actions' }, el('label', { class: 'inline muted' }, 'From ', fromSel), btn, status),
+      el('p', { class: 'muted small' }, 'Sweeping from an agent reaches segments the server can’t; leave the CIDR scope blank to scan that agent’s own subnet.'));
   }
 
   const statusFilter = el('select', { class: 'small' },
@@ -5878,10 +5897,14 @@ views.discovery = async () => {
       candHost.replaceChildren(head, el('div', { class: 'empty' }, 'No candidates. Configure a scope and run a sweep.'));
       return;
     }
+    const foundByCell = (c) => (c.foundByAgentId
+      ? el('button', { class: 'linklike', onclick: () => openAgent(c.foundByAgentId) }, esc(agentNameById[c.foundByAgentId] || `agent ${c.foundByAgentId}`))
+      : el('span', { class: 'muted' }, 'server'));
     const rowEl = (c) => el('tr', {},
       el('td', { class: 'mono' }, esc(c.ip)),
       el('td', {}, esc(c.hostname || '—')),
       el('td', { class: 'mono' }, (c.openPorts || c.open_ports || []).join(', ')),
+      el('td', {}, foundByCell(c)),
       el('td', {}, el('span', { class: `badge ${DISCOVERY_STATUS_BADGE[c.status] || 'muted'}` }, c.status)),
       el('td', {}, c.status === 'discovered'
         ? el('div', { class: 'row-actions' },
@@ -5889,7 +5912,7 @@ views.discovery = async () => {
             el('button', { class: 'small ghost', onclick: () => ignore(c) }, 'Dismiss'))
         : (c.status === 'promoted' && c.promotedAgentId ? el('button', { class: 'linklike', onclick: () => openAgent(c.promotedAgentId) }, `agent ${c.promotedAgentId}`) : '—')));
     candHost.replaceChildren(head, el('table', { class: 'agents-table' },
-      el('thead', {}, el('tr', {}, ...['IP', 'Hostname', 'Open ports', 'Status', ''].map((h) => el('th', { scope: 'col' }, h)))),
+      el('thead', {}, el('tr', {}, ...['IP', 'Hostname', 'Open ports', 'Found by', 'Status', ''].map((h) => el('th', { scope: 'col' }, h)))),
       el('tbody', {}, ...(data.candidates || []).map(rowEl))));
   }
 
@@ -5921,7 +5944,12 @@ views.discovery = async () => {
 
   // Initial load — a 403 means the caller isn't an admin (nav should hide it).
   try {
-    const cfg = await api('/api/discovery/config');
+    const [cfg, ag] = await Promise.all([
+      api('/api/discovery/config'),
+      api('/agents').catch(() => []),
+    ]);
+    agents = ag || [];
+    agents.forEach((a) => { agentNameById[a.id] = a.display_name || a.hostname || `agent ${a.id}`; });
     renderConfig(cfg);
     renderScan();
   } catch (e) {

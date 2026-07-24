@@ -8223,10 +8223,20 @@ views.logs = async () => {
     el('h2', {}, 'Logs'),
     el('span', { class: 'muted' }, 'Live server diagnostics + your dashboard errors · in-memory (cleared on restart)')));
 
-  const levelSel = el('select', {}, ...[['', 'All levels'], ['debug', 'Debug+'], ['info', 'Info+'], ['warn', 'Warn+'], ['error', 'Errors only']]
-    .map(([v, l]) => el('option', { value: v, ...(logsFilter.level === v ? { selected: 'selected' } : {}) }, l)));
-  const sourceSel = el('select', {}, ...[['', 'All sources'], ['server', 'Server'], ['client', 'Dashboard']]
-    .map(([v, l]) => el('option', { value: v, ...(logsFilter.source === v ? { selected: 'selected' } : {}) }, l)));
+  const LEVEL_OPTS = [['', 'All levels'], ['debug', 'Debug+'], ['info', 'Info+'], ['warn', 'Warn+'], ['error', 'Errors only']];
+  const SOURCE_OPTS = [['', 'All sources'], ['server', 'Server'], ['client', 'Dashboard']];
+  // Rebuild a select's options, appending a per-option match count (e.g.
+  // "Errors only (3)") when counts are supplied, and preserving the selection.
+  const fillOptions = (sel, opts, selected, counts) => {
+    sel.replaceChildren(...opts.map(([v, l]) => el('option',
+      { value: v, ...(selected === v ? { selected: 'selected' } : {}) },
+      counts ? `${l} (${counts[v] ?? 0})` : l)));
+    sel.value = selected;
+  };
+  const levelSel = el('select', {});
+  const sourceSel = el('select', {});
+  fillOptions(levelSel, LEVEL_OPTS, logsFilter.level);
+  fillOptions(sourceSel, SOURCE_OPTS, logsFilter.source);
   const qInput = el('input', { type: 'search', placeholder: 'Filter text…', value: logsFilter.q });
   const refreshBtn = el('button', { class: 'small ghost' }, '⟳ Refresh');
   const status = el('span', { class: 'muted small' });
@@ -8242,7 +8252,9 @@ views.logs = async () => {
     let serverEntries = [];
     try {
       const p = new URLSearchParams();
-      if (logsFilter.level) p.set('level', logsFilter.level);
+      // Level is filtered client-side (below) so the Level dropdown can show a
+      // per-level count over the full, search-filtered set — not just the rows
+      // that survive the currently selected level. Only q/limit go to the server.
       if (logsFilter.q) p.set('q', logsFilter.q);
       p.set('limit', '500');
       const resp = await api(`/api/logs?${p.toString()}`);
@@ -8252,10 +8264,22 @@ views.logs = async () => {
       // is unreachable. (Don't toast — that would re-enter recordClientLog.)
       status.textContent = `server logs unavailable: ${errText(e)}`;
     }
-    let rows = mergeLogEntries(serverEntries);
-    if (logsFilter.source) rows = rows.filter((r) => r.source === logsFilter.source);
-    if (logsFilter.level) { const min = LOG_LEVEL_ORDER[logsFilter.level]; rows = rows.filter((r) => (LOG_LEVEL_ORDER[r.level] ?? 1) >= min); }
-    if (logsFilter.q) { const s = logsFilter.q.toLowerCase(); rows = rows.filter((r) => r.msg.toLowerCase().includes(s) || JSON.stringify(r.meta || {}).toLowerCase().includes(s)); }
+    const lvl = (r) => LOG_LEVEL_ORDER[r.level] ?? 1;
+    let base = mergeLogEntries(serverEntries);
+    if (logsFilter.q) { const s = logsFilter.q.toLowerCase(); base = base.filter((r) => r.msg.toLowerCase().includes(s) || JSON.stringify(r.meta || {}).toLowerCase().includes(s)); }
+
+    // Faceted counts: each dropdown counts over the set narrowed by the OTHER
+    // active filter, so a selection in one still shows meaningful tallies in it.
+    const bySource = logsFilter.source ? base.filter((r) => r.source === logsFilter.source) : base;
+    const byLevel = logsFilter.level ? base.filter((r) => lvl(r) >= LOG_LEVEL_ORDER[logsFilter.level]) : base;
+    const levelCounts = { '': bySource.length };
+    for (const [v] of LEVEL_OPTS) if (v) levelCounts[v] = bySource.filter((r) => lvl(r) >= LOG_LEVEL_ORDER[v]).length;
+    const sourceCounts = { '': byLevel.length, server: byLevel.filter((r) => r.source === 'server').length, client: byLevel.filter((r) => r.source === 'client').length };
+    fillOptions(levelSel, LEVEL_OPTS, logsFilter.level, levelCounts);
+    fillOptions(sourceSel, SOURCE_OPTS, logsFilter.source, sourceCounts);
+
+    let rows = bySource;
+    if (logsFilter.level) rows = rows.filter((r) => lvl(r) >= LOG_LEVEL_ORDER[logsFilter.level]);
 
     tbody.replaceChildren(...rows.map((r) => {
       const metaStr = r.meta && Object.keys(r.meta).length ? JSON.stringify(r.meta) : '';

@@ -42,6 +42,18 @@ full HTTP route table, the data model, the dashboard structure, and a
   `PAGE_INFO` help entry, and tests + a fake in `test-support/fakes.js`.
 - Per-feature docs live in `docs/` (analysis, geo, alerting, retention, traffic-types, …).
 
+## ai-codex (AI codebase index)
+
+- [`ai-codex`](https://github.com/skibidiskib/ai-codex) generates a compact, token-cheap
+  `.ai-codex/` index for AI assistants. Run it with `npm run codex` (wraps
+  `npx ai-codex`); defaults come from `codex.config.json`.
+- **Status: currently a no-op here.** ai-codex only reads ESM `export`/TypeScript,
+  Next.js/SvelteKit routing, and Prisma/Drizzle schemas. This repo is CommonJS + vanilla
+  JS + raw `schema.sql` (see conventions above), so every generator is skipped and
+  `.ai-codex/` comes out empty. **Rely on [CODEMAP.md](CODEMAP.md)** for navigation — it
+  hand-covers what ai-codex would auto-generate. The `codex` script + config are kept
+  wired up so the index starts producing output if the stack ever adopts TS/Prisma.
+
 ## Sister repos
 
 - **blueeye-agent** — runs on customer machines; reports traffic/system/flows/probes.

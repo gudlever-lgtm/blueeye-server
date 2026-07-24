@@ -60,6 +60,7 @@ const { createRunbooksRepository } = require('./repositories/runbooksRepository'
 const { createLldpNeighborsRepository } = require('./repositories/lldpNeighborsRepository');
 const { createLldpGraphService } = require('./topology/lldpGraphService');
 const { createServiceDependenciesRepository } = require('./repositories/serviceDependenciesRepository');
+const { createHostConnectionsRepository } = require('./repositories/hostConnectionsRepository');
 const { createServiceDependencyJob } = require('./topology/serviceDependencyJob');
 const { createBlastRadiusService } = require('./topology/blastRadiusService');
 const { createTopologyChangesRepository } = require('./repositories/topologyChangesRepository');
@@ -463,7 +464,8 @@ function start() {
   // Service dependency graph — 'service_dep' edges (host↔host TCP dependencies)
   // recomputed off the ingest hot path by a leader-only job (backgroundJobs).
   const serviceDependenciesRepo = createServiceDependenciesRepository(db);
-  const serviceDependencyJob = createServiceDependencyJob({ serviceDependenciesRepo, flowsRepo, agentsRepo, logger });
+  const hostConnectionsRepo = createHostConnectionsRepository(db);
+  const serviceDependencyJob = createServiceDependencyJob({ serviceDependenciesRepo, flowsRepo, agentsRepo, hostConnectionsRepo, logger });
   // Blast-radius impact analysis over the unified topology graph (l2_link +
   // service_dep). Used by the incident enrichment + the topology endpoint.
   const blastRadiusService = createBlastRadiusService({ lldpNeighborsRepo, serviceDependenciesRepo, agentsRepo });
@@ -480,7 +482,10 @@ function start() {
   // Scheduled active discovery (admin-only). Probes the configured CIDR scope for
   // devices passive collection misses; candidates require admin promotion.
   const discoveredDevicesRepo = createDiscoveredDevicesRepository(db);
-  const discoverySweepJob = createDiscoverySweepJob({ discoveredDevicesRepo, auditLogger, config: config.discovery, logger });
+  // Scope is re-read each sweep from the settings-backed provider (defined
+  // below), so an admin's in-UI scope edit applies without a restart; the static
+  // env config remains the fallback + the enable/schedule source.
+  const discoverySweepJob = createDiscoverySweepJob({ discoveredDevicesRepo, auditLogger, config: config.discovery, getConfig: () => settingsService.getDiscovery(), logger });
   // Durable alert-dispatch log: lets a cluster alert fire once + reference (not
   // resend) member findings already alerted individually. Passed to the dispatcher
   // (records each send) and the cross-agent service (reads it).
@@ -796,6 +801,7 @@ function start() {
     verificationService,
     lldpNeighborsRepo,
     serviceDependenciesRepo,
+    hostConnectionsRepo,
     serviceDependencyJob,
     blastRadiusService,
     topologyChangesRepo,

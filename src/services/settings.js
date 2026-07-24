@@ -6,6 +6,7 @@ const {
   isProviderId, resolveBaseUrl, defaultModel, inferProvider, listProvidersSafe, getProvider,
 } = require('../analysis/assistantProviders');
 const { MONITOR_SOURCES } = require('../validation/agentValidation');
+const { parseCidr } = require('../discovery/cidr');
 
 // Traffic sources that make sense as a fleet-wide default. SNMP is excluded: it
 // needs a per-device host, so it can only be configured per agent, never as a
@@ -931,6 +932,78 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
     } catch { /* ignore */ }
   }
 
+  // ---- Active-discovery scope (Admin → Discovery) -------------------------
+  // Runtime-editable scan scope: CIDR ranges, port list, rate and address cap.
+  // Overlays the env defaults (config.discovery) the same way the other settings
+  // do. `enabled` stays env-only — turning network scanning ON is an operator
+  // decision made where the server runs (DISCOVERY_ENABLED), not remotely; the UI
+  // configures scope and can trigger manual scans regardless.
+  function validateDiscovery(patch) {
+    const p = patch && typeof patch === 'object' ? patch : {};
+    const errors = {};
+    const value = {};
+    if (p.cidrs !== undefined) {
+      if (!Array.isArray(p.cidrs)) errors.cidrs = 'cidrs must be an array of CIDR strings';
+      else {
+        const out = [];
+        for (const c of p.cidrs) {
+          const s = String(c == null ? '' : c).trim();
+          if (!s) continue;
+          if (!parseCidr(s)) { errors.cidrs = `invalid CIDR: ${s}`; break; }
+          out.push(s);
+        }
+        if (!errors.cidrs) { if (out.length > 256) errors.cidrs = 'too many ranges (max 256)'; else value.cidrs = out; }
+      }
+    }
+    if (p.ports !== undefined) {
+      if (!Array.isArray(p.ports)) errors.ports = 'ports must be an array of port numbers';
+      else if (p.ports.length === 0) value.ports = [];
+      else {
+        const ports = uniqInts(p.ports, 1, 65535, 100);
+        if (!ports) errors.ports = 'ports must be up to 100 unique values in 1..65535';
+        else value.ports = ports;
+      }
+    }
+    num(p, 'rateLimit', 1, 10000, true, errors, value);
+    num(p, 'addressCap', 1, 16777216, true, errors, value);
+    num(p, 'intervalMinutes', 1, 10080, true, errors, value);
+    return { errors: Object.keys(errors).length ? errors : null, value };
+  }
+
+  async function getDiscovery() {
+    const override = await loadOverride('discovery');
+    const o = override && typeof override === 'object' ? override : {};
+    const base = config.discovery || {};
+    const eff = {
+      enabled: !!base.enabled,
+      cidrs: Array.isArray(o.cidrs) ? o.cidrs : (base.cidrs || []),
+      ports: Array.isArray(o.ports) ? o.ports : (base.ports || []),
+      rateLimit: o.rateLimit != null ? o.rateLimit : (base.rateLimit != null ? base.rateLimit : 50),
+      addressCap: o.addressCap != null ? o.addressCap : (base.addressCap != null ? base.addressCap : 65536),
+      intervalMinutes: o.intervalMinutes != null ? o.intervalMinutes : (base.intervalMinutes != null ? base.intervalMinutes : 360),
+    };
+    // Which fields are set in the UI (settings) vs inherited from env — so the
+    // admin panel can label the source and warn when scope is unconfigured.
+    eff.source = { cidrs: Array.isArray(o.cidrs) ? 'settings' : 'env', ports: Array.isArray(o.ports) ? 'settings' : 'env' };
+    eff.scopeConfigured = (eff.cidrs || []).length > 0;
+    return eff;
+  }
+
+  async function setDiscovery(patch) {
+    const { errors, value } = validateDiscovery(patch || {});
+    if (errors) throw badRequest('invalid discovery settings', errors);
+    const current = (await loadOverride('discovery')) || {};
+    const merged = { ...current, ...value };
+    await settingsRepo.set('discovery', {
+      cidrs: Array.isArray(merged.cidrs) ? merged.cidrs : [],
+      ports: Array.isArray(merged.ports) ? merged.ports : [],
+      ...(merged.rateLimit != null ? { rateLimit: merged.rateLimit } : {}),
+      ...(merged.addressCap != null ? { addressCap: merged.addressCap } : {}),
+      ...(merged.intervalMinutes != null ? { intervalMinutes: merged.intervalMinutes } : {}),
+    });
+    return getDiscovery();
+  }
+
   return {
     getMap, setMap, validateMap,
     getGeoip, setGeoip, validateGeoip, recordGeoipBuild,
@@ -938,6 +1011,7 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
     getFlowCategories, setFlowCategories, resetFlowCategories, validateFlowCategories,
     getAnalysis, setAnalysis, validateAnalysis,
     getRetention, setRetention, validateRetention,
+    getDiscovery, setDiscovery, validateDiscovery,
     getThroughput, setThroughput, validateThroughput,
     getAgents, setAgents, validateAgents, getDefaultMonitorConfig,
     getAssistant, getAssistantSafe, setAssistant, validateAssistant,

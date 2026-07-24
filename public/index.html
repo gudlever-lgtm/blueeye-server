@@ -84,6 +84,7 @@
             <button data-view="transactions">Transaktionstests</button>
             <button data-view="flows">Flows</button>
             <button data-view="topology">Topology</button>
+            <button data-view="delta" data-min-role="operator">Changes</button>
             <button data-view="investigation" data-min-role="operator">Troubleshooting</button>
           </div>
           <div class="nav-group collapsed" data-category="Insights">
@@ -97,6 +98,7 @@
             <button type="button" class="nav-group-label" aria-expanded="false">Administration</button>
             <button data-view="locations">Locations</button>
             <button data-view="enrollment" data-min-role="operator">Enrollment</button>
+            <button data-view="discovery" data-min-role="admin">Discovery</button>
             <button data-view="logs" data-min-role="admin">Logs</button>
             <button data-view="settings">Settings</button>
           </div>
@@ -154,6 +156,8 @@
     <script src="/timelineView.js"></script>
     <script src="/clusterView.js"></script>
     <script src="/fleetFilter.js"></script>
+    <script src="/topologyGraph.js"></script>
+    <script src="/deltaView.js"></script>
     <script src="/app.js"></script>
   </body>
 </html>

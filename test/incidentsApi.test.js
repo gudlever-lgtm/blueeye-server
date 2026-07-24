@@ -71,6 +71,38 @@ test('GET /api/incidents/:id returns the incident + linked anomalies → 200', a
   assert.deepEqual(res.body.playbookRuns, []);
 });
 
+test('GET /api/incidents/:id enriches with blast radius when the host is numeric', async () => {
+  const incidentCasesRepo = makeIncidentCasesRepo();
+  const findingStore = makeFindingStore();
+  const id = await incidentCasesRepo.create({
+    host_id: 42, title: 'CRIT on 42', status: 'open', severity: 'CRIT',
+    first_event_at: new Date('2026-06-01T08:00:00Z'), last_event_at: new Date('2026-06-01T08:05:00Z'),
+  });
+  let askedFor = null;
+  const blastRadiusService = {
+    compute: async (hostId) => { askedFor = hostId; return { failingNode: hostId, directly_isolated: [{ hostId: 7, path: [42, 7] }], dependency_affected: [], totals: { directly_isolated: 1, dependency_affected: 0 } }; },
+  };
+  const app = makeApp({ incidentCasesRepo, findingStore, blastRadiusService });
+  const res = await request(app).get(`/api/incidents/${id}`).set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 200);
+  assert.equal(askedFor, 42);
+  assert.equal(res.body.incident.blastRadius.failingNode, 42);
+  assert.equal(res.body.incident.blastRadius.directly_isolated[0].hostId, 7);
+});
+
+test('GET /api/incidents/:id tolerates a blast-radius failure (field null, still 200)', async () => {
+  const incidentCasesRepo = makeIncidentCasesRepo();
+  const id = await incidentCasesRepo.create({
+    host_id: 42, title: 'CRIT on 42', status: 'open', severity: 'CRIT',
+    first_event_at: new Date('2026-06-01T08:00:00Z'), last_event_at: new Date('2026-06-01T08:05:00Z'),
+  });
+  const blastRadiusService = { compute: async () => { throw new Error('topology store down'); } };
+  const app = makeApp({ incidentCasesRepo, blastRadiusService });
+  const res = await request(app).get(`/api/incidents/${id}`).set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 200);
+  assert.equal(res.body.incident.blastRadius, null);
+});
+
 test('GET /api/incidents/:id is 404 for an unknown incident', async () => {
   const { app } = await withIncident();
   const res = await request(app).get('/api/incidents/9999').set('Authorization', authHeader('viewer'));

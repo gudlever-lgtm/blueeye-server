@@ -11,9 +11,17 @@ const { createScanner } = require('./scanner');
 // scanner validates this BEFORE probing, and the refusal is itself audited.
 // Best-effort: a run never throws out of the interval.
 
-function createDiscoverySweepJob({ discoveredDevicesRepo, scanner = createScanner(), auditLogger = null, config, logger = null, now = () => new Date() }) {
+function createDiscoverySweepJob({ discoveredDevicesRepo, scanner = createScanner(), auditLogger = null, config, getConfig = null, logger = null, now = () => new Date() }) {
   let timer = null;
   let running = false;
+
+  // Effective scope is re-read on every sweep from the settings-backed provider
+  // (so an admin's in-UI scope edit takes effect on the next run without a
+  // restart); falls back to the static env config when no provider is wired.
+  async function effectiveConfig() {
+    if (!getConfig) return config;
+    try { return (await getConfig()) || config; } catch { return config; }
+  }
 
   async function audit(action, detail, target) {
     if (!auditLogger || typeof auditLogger.record !== 'function') return null;
@@ -28,11 +36,12 @@ function createDiscoverySweepJob({ discoveredDevicesRepo, scanner = createScanne
     if (running) return null;
     running = true;
     const startedAt = now();
-    const scope = (config.cidrs || []).join(',');
+    const cfg = await effectiveConfig();
+    const scope = (cfg.cidrs || []).join(',');
     try {
       let result;
       try {
-        result = await scanner.scan({ cidrs: config.cidrs, addressCap: config.addressCap, ratePerSec: config.rateLimit, portList: config.ports });
+        result = await scanner.scan({ cidrs: cfg.cidrs, addressCap: cfg.addressCap, ratePerSec: cfg.rateLimit, portList: cfg.ports });
       } catch (err) {
         if (err && err.code) {
           await audit('discovery_sweep_refused', `reason=${err.code} scope=${scope || '(none)'}`, scope);

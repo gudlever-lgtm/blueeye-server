@@ -71,7 +71,11 @@ function createTopologyRouter({ flowsRepo = null, agentsRepo = null, locationsRe
       const rows = hostId === null
         ? await topologyChangesRepo.list({ limit })
         : await topologyChangesRepo.listForAgent({ agentId: hostId, limit });
-      const events = rows.flatMap((r) => mapTopologyChange(r));
+      // Same timeline record shape as the delta/changes view, plus an ADDITIVE
+      // `agentId` (the local endpoint) so the topology map can locate a change on
+      // its host and flag recently-changed / flapping links. Other consumers of
+      // the timeline shape simply ignore the extra field.
+      const events = rows.flatMap((r) => mapTopologyChange(r).map((e) => ({ ...e, agentId: r.agentId ?? null })));
       res.json({ host: hostId, events });
     }));
   }

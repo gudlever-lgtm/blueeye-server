@@ -3517,7 +3517,24 @@ views.incident = async () => {
     })();
   }
 
-  return el('div', { class: 'incident-detail' }, header, controls, guideCard, anomaliesCard, timelineCard, similarCard, pathCard, ...extra);
+  // Blast radius — which downstream hosts/services fail if this device goes down
+  // (enrichment already on the incident response). Both tiers with justifying
+  // paths; each host links into the topology map focused on it.
+  let blastCard = null;
+  if (inc.blastRadius) {
+    blastCard = el('div', { class: 'card' }, el('h3', {}, 'Blast radius'), el('div', { class: 'muted' }, 'Loading…'));
+    (async () => {
+      let agents = [];
+      try { agents = await api('/agents'); } catch { /* labels best-effort */ }
+      const nameById = {};
+      (agents || []).forEach((a) => { nameById[a.id] = a.display_name || a.hostname || `host ${a.id}`; });
+      const nameFor = (hid) => nameById[hid] || `host ${hid}`;
+      blastCard.replaceChildren(el('h3', {}, 'Blast radius'),
+        blastRadiusPanel(inc.blastRadius, { nameFor, onFocusHost: (hid) => openTopologyFocus(hid) }));
+    })();
+  }
+
+  return el('div', { class: 'incident-detail' }, header, controls, guideCard, anomaliesCard, blastCard, timelineCard, similarCard, pathCard, ...extra);
 };
 
 // ---- Incident Situation View (cross-agent clusters) ------------------------
@@ -4907,6 +4924,151 @@ function topoGraphSvg(nodes, edges, { label, kindBadge, actionBtns } = {}) {
   return el('div', {}, el('div', { class: 'pg-head' }, legend), wrap);
 }
 
+// Navigate to the Topology map in Layers mode focused on one host — the map
+// reads ?layer/?focus from the URL on load, opens straight into Layers and (for
+// operator+) previews that host's blast radius. Shared by the incident view's
+// "show on map" links.
+function openTopologyFocus(hostId) {
+  try {
+    const q = new URLSearchParams(window.location.search || '');
+    q.set('layer', 'both');
+    q.set('focus', String(hostId));
+    window.history.replaceState(null, '', `${window.location.pathname}?${q}`);
+  } catch { /* URL API off */ }
+  currentView = 'topology';
+  render();
+}
+
+// Reusable blast-radius result panel: the two tiers (directly-isolated L2 +
+// dependency-affected), each host carrying the path that justifies it. Shared by
+// the topology what-if preview and the incident view. `nameFor` resolves a host
+// id → label; `onFocusHost` (optional) makes each host a link (e.g. into the map
+// focused on it).
+function blastRadiusPanel(blast, { nameFor, onFocusHost } = {}) {
+  const name = nameFor || ((hid) => String(hid));
+  const iso = (blast && blast.directly_isolated) || [];
+  const aff = (blast && blast.dependency_affected) || [];
+  const l2Path = (p) => (Array.isArray(p) ? p : []).map(name).join(' → ');
+  const depPath = (p) => (Array.isArray(p) ? p : []).map((s) => (s && typeof s === 'object' ? name(s.hostId) + (s.viaPort ? `:${s.viaPort}` : '') : name(s))).join(' → ');
+  const hostCell = (hid) => (onFocusHost
+    ? el('button', { class: 'linklike mono', title: 'Show on the topology map', onclick: () => onFocusHost(hid) }, name(hid))
+    : el('span', { class: 'mono' }, name(hid)));
+  const tier = (title, cls, list, pathFn) => el('div', { class: `blast-tier ${cls}` },
+    el('div', { class: 'blast-tier-head' }, el('strong', {}, title), el('span', { class: 'badge' }, String(list.length))),
+    list.length
+      ? el('ul', { class: 'blast-list' }, ...list.slice(0, 100).map((x) => el('li', {}, hostCell(x.hostId), el('span', { class: 'muted small' }, ' — ', pathFn(x.path)))))
+      : el('div', { class: 'muted small' }, 'None'));
+  return el('div', { class: 'blast-panel' },
+    el('div', { class: 'blast-head' }, el('strong', {}, `If ${name(blast.failingNode)} fails`),
+      TopologyGraph.blastIsEmpty(blast) ? el('span', { class: 'muted small' }, ' — nothing downstream is isolated') : null),
+    tier('Directly isolated (L2)', 'iso', iso, l2Path),
+    tier('Dependency-affected', 'aff', aff, depPath));
+}
+
+// Renders the UNIFIED resilience graph (the "Layers" mode) from GET
+// /api/topology/graph: monitored hosts as nodes, physical LLDP adjacencies
+// (l2_link) as SOLID lines and observed TCP dependencies (service_dep) as DASHED,
+// arrowed lines weighted by byte volume. Distinct from the flow-derived diagram
+// above (external peers). Layer selection + the view-model are computed by the
+// pure window.TopologyGraph module; this only lays out and draws. Returns helpers
+// ({ setHighlight, neighbourhood, clear, nodeEls }) so blast-radius/what-if mode
+// can dim + emphasise nodes without a redraw.
+function topoLayersSvg(vm, { onNodeClick, focusId } = {}) {
+  const ns = 'http://www.w3.org/2000/svg';
+  const mk = (tag, attrs = {}, ...kids) => {
+    const e = document.createElementNS(ns, tag);
+    for (const [a, v] of Object.entries(attrs)) if (v != null) e.setAttribute(a, v);
+    for (const kid of kids) if (kid != null) e.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
+    return e;
+  };
+  const W = 760, H = 480;
+  const layoutEdges = vm.edges.map((e) => ({ from: e.source, to: e.target }));
+  const pos = topoForceLayout(vm.nodes, layoutEdges, W, H);
+  const maxDeg = Math.max(1, ...vm.nodes.map((n) => n.degree || 0));
+  const radiusOf = (n) => 6 + Math.round((Math.log2(1 + (n.degree || 0)) / Math.log2(1 + maxDeg)) * 12);
+
+  const svg = mk('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': 'Topology layers' });
+  svg.append(mk('defs', {}, mk('marker', { id: 'topo-arrow', viewBox: '0 0 10 10', refX: '9', refY: '5', markerWidth: '6', markerHeight: '6', orient: 'auto-start-reverse' }, mk('path', { d: 'M0 0 L10 5 L0 10 z' }))));
+
+  const neighbours = new Map();
+  vm.nodes.forEach((n) => neighbours.set(n.id, new Set()));
+  const edgeEls = [];
+  vm.edges.forEach((e) => {
+    const pa = pos.get(e.source), pb = pos.get(e.target);
+    if (!pa || !pb) return;
+    if (neighbours.has(e.source)) neighbours.get(e.source).add(e.target);
+    if (neighbours.has(e.target)) neighbours.get(e.target).add(e.source);
+    const style = TopologyGraph.edgeStyle(e);
+    const w = TopologyGraph.edgeWeight(e, vm.maxBytes, { min: 1, max: 6, l2: 1.75 });
+    const line = mk('line', {
+      class: `topo-edge ${style.cls}`, x1: pa.x, y1: pa.y, x2: pb.x, y2: pb.y,
+      'stroke-width': w.toFixed(1), 'marker-end': style.directed ? 'url(#topo-arrow)' : null,
+    });
+    line.append(mk('title', {}, style.cls === 'dep'
+      ? `${e.source} → ${e.target} :${e.dstPort} · ${fmtBytes(e.bytes)}`
+      : `${e.source} — ${e.target} · physical link`));
+    svg.append(line);
+    edgeEls.push({ from: e.source, to: e.target, cls: style.cls, el: line });
+  });
+
+  const nodeEls = new Map();
+  vm.nodes.forEach((n) => {
+    const p = pos.get(n.id);
+    if (!p) return;
+    const r = radiusOf(n);
+    const short = String(n.label);
+    const g = mk('g', { class: `topo-node${focusId === n.id ? ' focus' : ''}`, tabindex: '0', role: 'button', 'aria-label': short },
+      mk('circle', { cx: p.x, cy: p.y, r }),
+      mk('text', { x: p.x, y: p.y + r + 12, 'text-anchor': 'middle' }, short.length > 16 ? `${short.slice(0, 15)}…` : short),
+      mk('title', {}, `${short}\n${n.degree} link${n.degree === 1 ? '' : 's'}`));
+    if (onNodeClick) {
+      g.addEventListener('click', () => onNodeClick(n.id));
+      g.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); onNodeClick(n.id); } });
+    }
+    svg.append(g);
+    nodeEls.set(n.id, g);
+  });
+
+  const wrap = el('div', { class: 'topo-graph topo-layers' }, svg);
+
+  function clear() {
+    wrap.classList.remove('has-selection');
+    nodeEls.forEach((g) => g.classList.remove('active', 'selected', 'iso', 'aff', 'dim'));
+    edgeEls.forEach((x) => x.el.classList.remove('active', 'dim'));
+  }
+  // Local neighbourhood highlight (default click behaviour): emphasise the node,
+  // its direct neighbours and their edges; dim the rest.
+  function neighbourhood(id) {
+    const near = neighbours.get(id) || new Set();
+    wrap.classList.add('has-selection');
+    nodeEls.forEach((g, nid) => g.classList.toggle('active', nid === id || near.has(nid)));
+    if (nodeEls.get(id)) nodeEls.get(id).classList.add('selected');
+    edgeEls.forEach((x) => x.el.classList.toggle('active', x.from === id || x.to === id));
+  }
+  // Blast-radius highlight (what-if / incident): { focus, isolated:Set, affected:Set }.
+  function setHighlight(sets) {
+    if (!sets) { clear(); return; }
+    wrap.classList.add('has-selection');
+    nodeEls.forEach((g, id) => {
+      const iso = sets.isolated && sets.isolated.has(id);
+      const aff = sets.affected && sets.affected.has(id);
+      const focus = id === sets.focus;
+      g.classList.toggle('focus', focus);
+      g.classList.toggle('iso', !!iso && !focus);
+      g.classList.toggle('aff', !!aff && !focus && !iso);
+      g.classList.toggle('dim', !focus && !iso && !aff);
+    });
+    edgeEls.forEach((x) => {
+      const inSet = (nid) => nid === sets.focus || (sets.isolated && sets.isolated.has(nid)) || (sets.affected && sets.affected.has(nid));
+      const hot = inSet(x.from) && inSet(x.to);
+      x.el.classList.toggle('active', hot);
+      x.el.classList.toggle('dim', !hot);
+    });
+  }
+
+  return { wrap, svg, nodeEls, edgeEls, neighbours, clear, neighbourhood, setHighlight };
+}
+
 // Flow-derived dependency / topology map — who-talks-to-whom built from the
 // ingested 5-tuple flows. Internal (RFC1918) hosts vs external peers (with ASN/
 // country). Read-only: a summary + the heaviest dependencies and busiest hosts.
@@ -4936,13 +5098,17 @@ views.topology = async () => {
   winSel.value = '60';
   const refreshBtn = el('button', { class: 'small ghost' }, 'Refresh');
 
-  // View-mode toggle: the who-talks-to-whom SVG diagram (default) or a map of the
-  // public peers by country. Internal hosts are never geolocated, so the map only
-  // covers the external subset — see drawTopoMap.
-  let mode = 'diagram';
+  // View-mode toggle: the who-talks-to-whom SVG diagram (default), the unified
+  // resilience "Layers" graph (LLDP links + service dependencies from
+  // /api/topology/graph), or a map of the public peers by country. Internal hosts
+  // are never geolocated, so the map only covers the external subset — see
+  // drawTopoMap. A ?layer/?focus deep-link opens straight into Layers.
+  const topoState = TopologyGraph.parseParams(window.location.search);
+  let mode = (window.location.search && /[?&](layer|focus)=/.test(window.location.search)) ? 'layers' : 'diagram';
   const diagramBtn = el('button', { class: 'small', 'aria-pressed': 'true' }, 'Diagram');
+  const layersBtn = el('button', { class: 'small ghost', 'aria-pressed': 'false' }, 'Layers');
   const mapBtn = el('button', { class: 'small ghost', 'aria-pressed': 'false' }, 'Map');
-  const modeToggle = el('div', { class: 'topo-mode', role: 'group', 'aria-label': 'View mode' }, diagramBtn, mapBtn);
+  const modeToggle = el('div', { class: 'topo-mode', role: 'group', 'aria-label': 'View mode' }, diagramBtn, layersBtn, mapBtn);
 
   root.append(el('div', { class: 'topo-action-bar' },
     el('label', { class: 'inline muted' }, 'Site ', locSel),
@@ -4979,10 +5145,27 @@ views.topology = async () => {
   // recent /api/topology response so the toggle can redraw without refetching.
   const graphHost = el('div', {});
   const mapHost = el('div', { class: 'topo-maphost hidden' });
-  root.append(el('div', {}, graphHost, mapHost));
+  const layerHost = el('div', { class: 'topo-layerhost hidden' });
+  root.append(el('div', {}, graphHost, mapHost, layerHost));
   const tableHost = el('div', {});
   root.append(tableHost);
   let lastData = null;
+  let graphData = null; // cached /api/topology/graph (unified l2_link + service_dep)
+  let layersApi = null; // handles returned by topoLayersSvg (highlight control)
+  let changeSets = null; // { changed:Set, flapping:Set } from /api/topology/changes
+  let whatIf = topoState.focus != null && canWrite(); // "what if this node fails?" preview mode
+
+  // Persist ONLY the topology-owned query params (layer + focus) without
+  // clobbering unrelated ones — the SPA's replaceState persistence pattern.
+  function syncTopoUrl() {
+    try {
+      const q = new URLSearchParams(window.location.search || '');
+      const patch = TopologyGraph.paramsPatch(topoState);
+      for (const [k, v] of Object.entries(patch)) { if (v == null) q.delete(k); else q.set(k, v); }
+      const qs = q.toString();
+      window.history.replaceState(null, '', qs ? `${window.location.pathname}?${qs}` : window.location.pathname);
+    } catch { /* URL API off — best-effort */ }
+  }
 
   // byId index is rebuilt on each load; shared by label() and actionBtns().
   const byId = {};
@@ -5202,20 +5385,155 @@ views.topology = async () => {
     setTimeout(() => { try { map.invalidateSize(); } catch { /* ignore */ } }, 60);
   }
 
-  // Show the active mode's host, keep the other hidden, and (re)draw the map.
+  // Show the active mode's host, keep the others hidden, and (re)draw it. Three
+  // modes: 'diagram' (flow-derived), 'layers' (unified resilience graph), 'map'.
   function applyMode() {
-    const isMap = mode === 'map';
-    graphHost.classList.toggle('hidden', isMap);
-    mapHost.classList.toggle('hidden', !isMap);
-    diagramBtn.classList.toggle('ghost', isMap);
-    mapBtn.classList.toggle('ghost', !isMap);
-    diagramBtn.setAttribute('aria-pressed', String(!isMap));
-    mapBtn.setAttribute('aria-pressed', String(isMap));
-    if (isMap) drawTopoMap();
-    else stopTopoMap();
+    graphHost.classList.toggle('hidden', mode !== 'diagram');
+    layerHost.classList.toggle('hidden', mode !== 'layers');
+    mapHost.classList.toggle('hidden', mode !== 'map');
+    for (const [btn, m] of [[diagramBtn, 'diagram'], [layersBtn, 'layers'], [mapBtn, 'map']]) {
+      btn.classList.toggle('ghost', mode !== m);
+      btn.setAttribute('aria-pressed', String(mode === m));
+    }
+    if (mode === 'map') drawTopoMap(); else stopTopoMap();
+    if (mode === 'layers') drawLayers();
   }
   diagramBtn.addEventListener('click', () => { if (mode !== 'diagram') { mode = 'diagram'; applyMode(); } });
+  layersBtn.addEventListener('click', () => { if (mode !== 'layers') { mode = 'layers'; applyMode(); } });
   mapBtn.addEventListener('click', () => { if (mode !== 'map') { mode = 'map'; applyMode(); } });
+
+  // Layers mode: the unified resilience graph (LLDP l2_link + service_dep) with a
+  // layer toggle. Fetches /api/topology/graph once (cached), then re-renders the
+  // chosen layer locally. Distinct from the flow-derived diagram — see the note
+  // in the empty state. The layer choice persists to the URL.
+  // What-if / blast-radius result panel for the map. Null ⇒ the click-a-host
+  // prompt; otherwise the shared blastRadiusPanel.
+  function blastPanel(blast, nameFor) {
+    if (!blast) return el('div', { class: 'muted small' }, 'What-if mode: click a host to preview what fails if it goes down.');
+    return blastRadiusPanel(blast, { nameFor });
+  }
+
+  async function runBlast(id) {
+    if (!layersApi) return;
+    topoState.focus = id; syncTopoUrl();
+    const panel = layerHost.querySelector('.blast-slot');
+    if (panel) panel.replaceChildren(el('div', { class: 'muted small' }, `Computing blast radius for ${id}…`));
+    let blast;
+    try {
+      blast = await api(`/api/topology/blast-radius/${encodeURIComponent(id)}`);
+    } catch (e) {
+      layersApi.setHighlight({ focus: id, isolated: new Set(), affected: new Set() });
+      if (panel) panel.replaceChildren(el('div', { class: 'error small' }, errText(e)));
+      return;
+    }
+    const sets = TopologyGraph.blastSets(blast);
+    layersApi.setHighlight(sets);
+    const nameFor = (nid) => { const n = (graphData.nodes || []).find((x) => x.id === Number(nid)); return n ? n.label : String(nid); };
+    if (panel) panel.replaceChildren(blastPanel(blast, nameFor));
+  }
+
+  function renderLayers() {
+    const layerBtn = (val, txt) => {
+      const active = topoState.layer === val;
+      const b = el('button', { class: `small${active ? '' : ' ghost'}`, 'aria-pressed': String(active) }, txt);
+      b.addEventListener('click', () => {
+        if (topoState.layer === val) return;
+        topoState.layer = val;
+        syncTopoUrl();
+        renderLayers();
+      });
+      return b;
+    };
+    const layerBar = el('div', { class: 'topo-layerbar', role: 'group', 'aria-label': 'Topology layer' },
+      el('span', { class: 'muted' }, 'Layer:'),
+      layerBtn('both', 'Both'), layerBtn('l2', 'L2 links'), layerBtn('dep', 'Dependencies'));
+    // "What if" is a blast-radius preview — operator+ only (the endpoint is
+    // operator+). Viewers don't see the toggle.
+    let whatIfBtn = null;
+    if (canWrite()) {
+      whatIfBtn = el('button', { class: `small${whatIf ? '' : ' ghost'}`, 'aria-pressed': String(whatIf), title: 'Preview which hosts fail if a node goes down' }, 'What if?');
+      whatIfBtn.addEventListener('click', () => {
+        whatIf = !whatIf;
+        if (!whatIf) { topoState.focus = null; syncTopoUrl(); }
+        renderLayers();
+      });
+      // Force a fresh service-dependency aggregation (normally a scheduled job),
+      // then reload the graph — operator+ (the recompute endpoint is).
+      const recomputeBtn = el('button', { class: 'small ghost', title: 'Recompute service dependencies now' }, 'Recompute');
+      recomputeBtn.addEventListener('click', async () => {
+        recomputeBtn.disabled = true;
+        try {
+          await api('/api/topology/dependencies/recompute', { method: 'POST' });
+          graphData = null;
+          await drawLayers();
+          toast('Service dependencies recomputed');
+        } catch (e) { toast(errText(e), true); } finally { recomputeBtn.disabled = false; }
+      });
+      layerBar.append(el('span', { class: 'spacer' }), recomputeBtn, whatIfBtn);
+    }
+
+    if (!graphData) {
+      layerHost.replaceChildren(layerBar, el('div', { class: 'muted' }, 'Loading graph…'));
+      return;
+    }
+    const totals = graphData.totals || { nodes: 0, l2_link: 0, service_dep: 0 };
+    if (!(graphData.edges || []).length) {
+      layerHost.replaceChildren(layerBar, el('div', { class: 'empty' },
+        'No topology graph yet. L2 links come from agents reporting LLDP neighbours; dependency edges are aggregated from TCP flows by a scheduled job.'));
+      layersApi = null;
+      return;
+    }
+    const vm = TopologyGraph.buildViewModel(graphData, topoState.layer, { focus: topoState.focus });
+    if (!vm.nodes.length) {
+      layerHost.replaceChildren(layerBar, el('div', { class: 'empty' }, 'No edges in this layer — switch the layer above.'));
+      layersApi = null;
+      return;
+    }
+    layersApi = topoLayersSvg(vm, {
+      focusId: topoState.focus,
+      onNodeClick: (id) => {
+        if (whatIf && canWrite()) runBlast(id);
+        else if (layersApi) layersApi.neighbourhood(id);
+      },
+    });
+    // Flag recently-changed + flapping hosts (operator+ data) on their nodes.
+    if (changeSets) {
+      layersApi.nodeEls.forEach((g, id) => {
+        g.classList.toggle('flapping', changeSets.flapping.has(id));
+        g.classList.toggle('changed', changeSets.changed.has(id));
+      });
+    }
+    const legend = el('div', { class: 'pg-legend' },
+      el('span', { class: 'lg' }, el('span', { class: 'topo-swatch l2' }), 'Physical link (L2)'),
+      el('span', { class: 'lg' }, el('span', { class: 'topo-swatch dep' }), 'Service dependency'),
+      changeSets && (changeSets.changed.size || changeSets.flapping.size)
+        ? el('span', { class: 'lg' }, el('span', { class: 'topo-dot flapping' }), 'Recently changed / flapping') : null,
+      el('span', { class: 'lg muted' }, `${totals.nodes} hosts · ${totals.l2_link} links · ${totals.service_dep} dependencies · line width = bytes`));
+    const children = [layerBar, el('div', { class: 'pg-head' }, legend), layersApi.wrap];
+    if (canWrite()) children.push(el('div', { class: 'blast-slot' }, blastPanel(null)));
+    layerHost.replaceChildren(...children);
+
+    // Deep-linked (or re-render while) a node is focused in what-if mode: re-run.
+    if (whatIf && canWrite() && topoState.focus != null) runBlast(topoState.focus);
+  }
+  async function drawLayers() {
+    if (graphData) { renderLayers(); return; }
+    renderLayers(); // shows "Loading…" with the layer bar
+    try {
+      graphData = await api('/api/topology/graph');
+    } catch (e) {
+      layerHost.replaceChildren(el('div', { class: 'error' }, errText(e)));
+      return;
+    }
+    // Recently-changed / flapping links are operator+ data — fetch best-effort.
+    if (canWrite() && changeSets === null) {
+      try {
+        const cg = await api('/api/topology/changes?limit=200');
+        changeSets = TopologyGraph.changedHostSets(cg.events || []);
+      } catch { changeSets = { changed: new Set(), flapping: new Set() }; }
+    }
+    renderLayers();
+  }
 
   async function loadTopology() {
     const qp = new URLSearchParams({ minutes: winSel.value });
@@ -5308,6 +5626,311 @@ views.topology = async () => {
   winSel.addEventListener('change', loadTopology);
   refreshBtn.addEventListener('click', loadTopology);
   await loadTopology();
+  return root;
+};
+
+// ---- Delta / Changes view (topology change feed) ---------------------------
+// The recorded topology changes (neighbour add/remove, link-state, port-move,
+// flapping) from GET /api/topology/changes, newest first. The view owns a
+// change-TYPE filter; the site + severity come from the SHARED global filter
+// (the same fleetFilter the Overview uses) — not a separate filter state.
+// Operator+ (changes are evidence records; the endpoint is operator+).
+PAGE_INFO.delta = {
+  hero: 'Topology changes — neighbour add/remove, link-state changes, port moves and flaps, newest first.',
+  title: 'Changes — the topology delta feed',
+  body: () => [
+    el('p', {}, 'Each LLDP poll is compared against the previous snapshot and every difference is recorded as an immutable change (also written to the hash-chained audit log). A change that reverts within the flap window collapses into a single “flapping” record.'),
+    el('p', {}, 'Filter by change type here; the Site and severity come from the shared global filter (the same one the Overview uses), so a filtered feed is one deep-link.'),
+    el('p', { class: 'muted' }, 'Operator/admin — topology changes are evidence records.'),
+  ],
+};
+
+const CHANGE_SEV_CLASS = { CRIT: 'bad', WARN: 'warn', INFO: 'muted' };
+
+views.delta = async () => {
+  const root = el('div', { class: 'delta-view' });
+  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Changes'), el('span', { class: 'muted' }, 'Topology delta feed')));
+  const controls = el('div', { class: 'delta-controls' });
+  const listHost = el('div', {});
+  root.append(controls, listHost);
+
+  let types = DeltaView.parseChangeTypes(window.location.search);
+  let events = [];
+  let agents = [];
+  let locations = [];
+
+  function syncDeltaUrl() {
+    try {
+      const q = new URLSearchParams(window.location.search || '');
+      const patch = DeltaView.changeTypesPatch(types);
+      if (patch.changeTypes == null) q.delete('changeTypes'); else q.set('changeTypes', patch.changeTypes);
+      const qs = q.toString();
+      window.history.replaceState(null, '', window.location.pathname + (qs ? `?${qs}` : '') + window.location.hash);
+    } catch { /* best-effort */ }
+  }
+
+  const nameById = {};
+  const nameFor = (hid) => nameById[hid] || `host ${hid}`;
+  function siteAgentIdSet() {
+    if (!fleetFilter.site) return null;
+    const want = String(fleetFilter.site).toLowerCase();
+    const s = new Set();
+    agents.forEach((a) => {
+      if (String(a.location_name || '').toLowerCase() === want || String(a.location_id) === want) s.add(Number(a.id));
+    });
+    return s;
+  }
+
+  function changeTypeRow() {
+    const counts = DeltaView.countByType(events);
+    const chip = (t) => {
+      const on = types.includes(t.key);
+      const b = el('button', { class: `chip${on ? ' active' : ''}`, 'aria-pressed': String(on) },
+        t.label, el('span', { class: 'chip-count' }, String(counts[t.key] || 0)));
+      b.addEventListener('click', () => {
+        types = on ? types.filter((k) => k !== t.key) : DeltaView.normalizeTypes(types.concat(t.key));
+        syncDeltaUrl();
+        renderDelta();
+      });
+      return b;
+    };
+    const row = el('div', { class: 'delta-typebar', role: 'group', 'aria-label': 'Change type' },
+      el('span', { class: 'muted' }, 'Type:'), ...DeltaView.CHANGE_TYPES.map(chip));
+    if (types.length) row.append(el('button', { class: 'small ghost', onclick: () => { types = []; syncDeltaUrl(); renderDelta(); } }, 'All'));
+    return row;
+  }
+
+  function globalFilterRow() {
+    // Site + severity come from the shared global filter — editing here mutates
+    // the SAME fleetFilter the Overview uses and re-syncs the shared URL params.
+    const siteSel = el('select', { class: 'small' }, el('option', { value: '' }, 'All sites'),
+      ...locations.map((l) => el('option', { value: String(l.id) }, l.name)));
+    if (fleetFilter.site) siteSel.value = String(fleetFilter.site);
+    siteSel.addEventListener('change', () => { fleetFilter = FleetFilter.setSite(fleetFilter, siteSel.value || null); syncFleetUrl(); renderDelta(); });
+    const sevBtn = (tok, label) => {
+      const on = fleetFilter.severity.includes(tok);
+      const b = el('button', { class: `chip${on ? ' active' : ''}`, 'aria-pressed': String(on) }, label);
+      b.addEventListener('click', () => { fleetFilter = FleetFilter.toggleSeverity(fleetFilter, tok); syncFleetUrl(); renderDelta(); });
+      return b;
+    };
+    const chips = FleetFilter.chips(fleetFilter).map((c) => el('button', { class: 'chip removable', title: 'Remove filter',
+      onclick: () => { fleetFilter = FleetFilter.removeChip(fleetFilter, c); syncFleetUrl(); renderDelta(); } }, c.label, ' ×'));
+    return el('div', { class: 'delta-globalbar' },
+      el('label', { class: 'inline muted' }, 'Site ', siteSel),
+      el('span', { class: 'muted' }, 'Severity:'), sevBtn('CRIT', 'Kritiske'), sevBtn('WARN', 'Advarsler'),
+      chips.length ? el('span', { class: 'delta-chips' }, ...chips) : null);
+  }
+
+  function changeTable(rows) {
+    return el('table', { class: 'agents-table delta-table' },
+      el('thead', {}, el('tr', {},
+        el('th', { scope: 'col' }, 'Time'), el('th', { scope: 'col' }, 'Type'),
+        el('th', { scope: 'col' }, 'Host'), el('th', { scope: 'col' }, 'Severity'), el('th', { scope: 'col' }, 'What changed'))),
+      el('tbody', {}, ...rows.map((e) => {
+        const sev = DeltaView.severityToken(e);
+        const ct = DeltaView.changeTypeOf(e);
+        return el('tr', {},
+          el('td', {}, e.timestamp ? fmtDate(e.timestamp) : '–'),
+          el('td', {}, el('span', { class: 'badge' }, ct.replace(/_/g, ' '))),
+          el('td', {}, e.agentId != null ? el('button', { class: 'linklike', onclick: () => openAgent(e.agentId) }, esc(nameFor(e.agentId))) : '–'),
+          el('td', {}, el('span', { class: `badge ${CHANGE_SEV_CLASS[sev] || 'muted'}` }, sev)),
+          el('td', {}, esc(e.summary || '')));
+      })));
+  }
+
+  function renderDelta() {
+    controls.replaceChildren(changeTypeRow(), globalFilterRow());
+    if (!events.length) { listHost.replaceChildren(el('div', { class: 'empty' }, 'No topology changes recorded yet. Changes appear as agents report LLDP neighbours across poll cycles.')); return; }
+    const filtered = DeltaView.filterChanges(events, { types, severityTokens: fleetFilter.severity, siteAgentIds: siteAgentIdSet() });
+    listHost.replaceChildren(filtered.length
+      ? changeTable(filtered)
+      : el('div', { class: 'empty' }, 'No changes match the current filter.'));
+  }
+
+  controls.replaceChildren(el('div', { class: 'muted' }, 'Loading…'));
+  try {
+    const [chg, ag, loc] = await Promise.all([
+      api('/api/topology/changes?limit=500'),
+      api('/agents').catch(() => []),
+      api('/locations').catch(() => []),
+    ]);
+    events = chg.events || [];
+    agents = ag || [];
+    locations = loc || [];
+  } catch (e) {
+    controls.replaceChildren();
+    listHost.replaceChildren(el('div', { class: e.status === 403 ? 'empty' : 'error' },
+      e.status === 403 ? 'The changes feed is available to operators and admins.' : errText(e)));
+    return root;
+  }
+  agents.forEach((a) => { nameById[a.id] = a.display_name || a.hostname || `host ${a.id}`; });
+  renderDelta();
+  return root;
+};
+
+// ---- Admin → Discovery (active scan scope + candidate queue) ---------------
+// Admin-only. Configure the scan scope (CIDRs / ports / rate / cap), trigger a
+// sweep, promote or dismiss discovered candidates, and review sweep history.
+// The section is hidden from non-admins in the nav (data-min-role="admin") and
+// every /api/discovery endpoint is admin-only server-side.
+PAGE_INFO.discovery = {
+  hero: 'Active discovery finds devices passive collection misses — a rate-limited native scan of the CIDR scope you configure. Nothing is ever auto-enrolled.',
+  title: 'Discovery — find what passive monitoring misses',
+  body: () => [
+    el('p', {}, 'A scheduled, rate-limited sweep probes the CIDR ranges you configure (TCP-connect on a port list + reverse DNS). Live hosts become candidates you review — promotion to a monitored device is always a manual, admin action.'),
+    el('p', {}, 'The scan never leaves the configured scope and refuses to start if the scope is unconfigured or exceeds the address cap. Every sweep is written to the hash-chained audit log.'),
+    el('p', { class: 'muted' }, 'Admin only. Enable the scheduled sweep with DISCOVERY_ENABLED where the server runs; scope + manual scans are managed here.'),
+  ],
+};
+
+const DISCOVERY_STATUS_BADGE = { discovered: 'warn', promoted: 'online', ignored: 'muted' };
+
+views.discovery = async () => {
+  const root = el('div', { class: 'discovery-view' });
+  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Discovery'), el('span', { class: 'muted' }, 'Active discovery scope + candidates')));
+
+  const cfgHost = el('div', { class: 'card' }, el('h3', {}, 'Scan scope'), el('div', { class: 'muted' }, 'Loading…'));
+  const scanHost = el('div', { class: 'card' });
+  const candHost = el('div', { class: 'card' }, el('h3', {}, 'Candidates'), el('div', { class: 'muted' }, 'Loading…'));
+  const sweepHost = el('div', { class: 'card' }, el('h3', {}, 'Sweep history'), el('div', { class: 'muted' }, 'Loading…'));
+  root.append(cfgHost, scanHost, candHost, sweepHost);
+
+  function renderConfig(cfg) {
+    const enabledBadge = el('span', { class: `badge ${cfg.enabled ? 'online' : 'muted'}` }, cfg.enabled ? 'Scheduled sweep ON' : 'Scheduled sweep OFF (env)');
+    const cidrs = el('textarea', { class: 'mono', rows: '4', placeholder: '10.0.0.0/24\n192.168.1.0/24' }, (cfg.cidrs || []).join('\n'));
+    const ports = el('input', { type: 'text', class: 'mono', value: (cfg.ports || []).join(', '), placeholder: '22, 80, 161, 443, 3389' });
+    const rate = el('input', { type: 'number', min: '1', max: '10000', value: String(cfg.rateLimit ?? 50) });
+    const cap = el('input', { type: 'number', min: '1', max: '16777216', value: String(cfg.addressCap ?? 65536) });
+    const interval = el('input', { type: 'number', min: '1', max: '10080', value: String(cfg.intervalMinutes ?? 360) });
+    const status = el('span', { class: 'muted' });
+    const saveBtn = el('button', { class: 'small' }, 'Save scope');
+    const field = (label, node, hint) => el('label', { class: 'field' }, el('span', {}, label), node, hint ? el('span', { class: 'muted small' }, hint) : null);
+
+    saveBtn.addEventListener('click', async () => {
+      const body = {
+        cidrs: cidrs.value.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean),
+        ports: ports.value.split(/[\s,]+/).map(Number).filter((n) => Number.isInteger(n) && n > 0),
+        rateLimit: Number(rate.value), addressCap: Number(cap.value), intervalMinutes: Number(interval.value),
+      };
+      saveBtn.disabled = true; status.className = 'muted'; status.textContent = 'Saving…';
+      try {
+        const r = await api('/api/discovery/config', { method: 'PUT', body });
+        status.className = ''; status.textContent = 'Saved.';
+        renderConfig(r.config);
+      } catch (e) {
+        status.className = 'error';
+        status.textContent = e.data && e.data.details ? Object.entries(e.data.details).map(([k, v]) => `${k}: ${v}`).join(' · ') : errText(e);
+      } finally { saveBtn.disabled = false; }
+    });
+
+    const children = [el('h3', {}, 'Scan scope'), el('div', { class: 'discovery-cfg-head' }, enabledBadge,
+      cfg.scopeConfigured ? null : el('span', { class: 'badge warn' }, 'Scope not configured — sweeps refuse to run'))];
+    if (cfg.editable === false) {
+      children.push(el('div', { class: 'muted' }, 'Scope is read-only (env-managed): CIDRs ', el('span', { class: 'mono' }, (cfg.cidrs || []).join(', ') || '—'),
+        ' · ports ', el('span', { class: 'mono' }, (cfg.ports || []).join(', '))));
+    } else {
+      children.push(el('div', { class: 'discovery-form' },
+        field('CIDR ranges (one per line)', cidrs),
+        el('div', { class: 'discovery-form-row' },
+          field('Ports', ports, 'TCP-connect targets'),
+          field('Rate (probes/sec)', rate),
+          field('Address cap', cap),
+          field('Sweep interval (min)', interval, 'applies on restart')),
+        el('div', { class: 'form-actions' }, saveBtn, status)));
+    }
+    cfgHost.replaceChildren(...children);
+  }
+
+  function renderScan() {
+    const status = el('span', { class: 'muted' });
+    const btn = el('button', { class: 'small' }, 'Run a sweep now');
+    btn.addEventListener('click', async () => {
+      btn.disabled = true; status.className = 'muted'; status.textContent = 'Scanning…';
+      try {
+        const r = await api('/api/discovery/scan', { method: 'POST' });
+        status.className = r.refused ? 'error' : '';
+        status.textContent = r.refused
+          ? `Refused: ${r.reason}`
+          : `Swept ${r.addresses ?? '?'} addresses · ${r.found ?? 0} candidate(s).`;
+        loadCandidates(); loadSweeps();
+      } catch (e) { status.className = 'error'; status.textContent = errText(e); } finally { btn.disabled = false; }
+    });
+    scanHost.replaceChildren(el('h3', {}, 'Manual sweep'), el('div', { class: 'form-actions' }, btn, status));
+  }
+
+  const statusFilter = el('select', { class: 'small' },
+    ...[['', 'All'], ['discovered', 'Discovered'], ['promoted', 'Promoted'], ['ignored', 'Ignored']].map(([v, l]) => el('option', { value: v }, l)));
+  statusFilter.addEventListener('change', loadCandidates);
+
+  async function loadCandidates() {
+    let data;
+    try {
+      const qs = statusFilter.value ? `?status=${statusFilter.value}` : '';
+      data = await api(`/api/discovery/candidates${qs}`);
+    } catch (e) {
+      candHost.replaceChildren(el('h3', {}, 'Candidates'), el('div', { class: 'error' }, errText(e)));
+      return;
+    }
+    const counts = data.counts || {};
+    const countLine = el('span', { class: 'muted' }, `discovered ${counts.discovered || 0} · promoted ${counts.promoted || 0} · ignored ${counts.ignored || 0}`);
+    const head = el('div', { class: 'discovery-cand-head' }, el('h3', {}, 'Candidates'), el('label', { class: 'inline muted' }, 'Status ', statusFilter), countLine);
+    if (!(data.candidates || []).length) {
+      candHost.replaceChildren(head, el('div', { class: 'empty' }, 'No candidates. Configure a scope and run a sweep.'));
+      return;
+    }
+    const rowEl = (c) => el('tr', {},
+      el('td', { class: 'mono' }, esc(c.ip)),
+      el('td', {}, esc(c.hostname || '—')),
+      el('td', { class: 'mono' }, (c.openPorts || c.open_ports || []).join(', ')),
+      el('td', {}, el('span', { class: `badge ${DISCOVERY_STATUS_BADGE[c.status] || 'muted'}` }, c.status)),
+      el('td', {}, c.status === 'discovered'
+        ? el('div', { class: 'row-actions' },
+            el('button', { class: 'small', onclick: () => promote(c) }, 'Promote'),
+            el('button', { class: 'small ghost', onclick: () => ignore(c) }, 'Dismiss'))
+        : (c.status === 'promoted' && c.promotedAgentId ? el('button', { class: 'linklike', onclick: () => openAgent(c.promotedAgentId) }, `agent ${c.promotedAgentId}`) : '—')));
+    candHost.replaceChildren(head, el('table', { class: 'agents-table' },
+      el('thead', {}, el('tr', {}, ...['IP', 'Hostname', 'Open ports', 'Status', ''].map((h) => el('th', { scope: 'col' }, h)))),
+      el('tbody', {}, ...(data.candidates || []).map(rowEl))));
+  }
+
+  async function promote(c) {
+    if (!window.confirm(`Promote ${c.ip} to a monitored SNMP device?`)) return;
+    try { const r = await api(`/api/discovery/candidates/${c.id}/promote`, { method: 'POST' }); toast(`Promoted → agent ${r.agentId}`); loadCandidates(); }
+    catch (e) { toast(errText(e), true); }
+  }
+  async function ignore(c) {
+    try { await api(`/api/discovery/candidates/${c.id}/ignore`, { method: 'POST' }); toast('Dismissed'); loadCandidates(); }
+    catch (e) { toast(errText(e), true); }
+  }
+
+  async function loadSweeps() {
+    let data;
+    try { data = await api('/api/discovery/sweeps?limit=50'); }
+    catch (e) { sweepHost.replaceChildren(el('h3', {}, 'Sweep history'), el('div', { class: 'error' }, errText(e))); return; }
+    if (!(data.sweeps || []).length) {
+      sweepHost.replaceChildren(el('h3', {}, 'Sweep history'), el('div', { class: 'empty' }, 'No sweeps recorded yet.'));
+      return;
+    }
+    sweepHost.replaceChildren(el('h3', {}, 'Sweep history'), el('table', { class: 'agents-table' },
+      el('thead', {}, el('tr', {}, ...['Time', 'Result', 'Detail'].map((h) => el('th', { scope: 'col' }, h)))),
+      el('tbody', {}, ...(data.sweeps || []).map((s) => el('tr', {},
+        el('td', {}, s.createdAt ? fmtDate(s.createdAt) : '—'),
+        el('td', {}, el('span', { class: `badge ${s.action === 'discovery_sweep_refused' ? 'warn' : 'online'}` }, s.action === 'discovery_sweep_refused' ? 'refused' : 'swept')),
+        el('td', { class: 'muted' }, esc(s.detail || '')))))));
+  }
+
+  // Initial load — a 403 means the caller isn't an admin (nav should hide it).
+  try {
+    const cfg = await api('/api/discovery/config');
+    renderConfig(cfg);
+    renderScan();
+  } catch (e) {
+    root.replaceChildren(el('div', { class: 'section-head' }, el('h2', {}, 'Discovery')),
+      el('div', { class: e.status === 403 ? 'empty' : 'error' }, e.status === 403 ? 'Discovery is available to administrators only.' : errText(e)));
+    return root;
+  }
+  loadCandidates();
+  loadSweeps();
   return root;
 };
 
@@ -5805,14 +6428,26 @@ function stopFleet() { if (fleetState.timer) { clearInterval(fleetState.timer); 
 // string on load so a shared deep-link (…?severity=CRIT&site=vest) renders
 // pre-filtered. `sortByHealth` is the "Fleet health" card's sort mode (a sort,
 // not a filter, so it stays out of the persisted filter shape).
+// The global cross-view filter state (severity / site / healthBelow / offline).
+// Shared by the Overview and the Delta/Changes view — one state, one URL, not a
+// per-view copy. Any view that reads it does so through this module-level var.
 let fleetFilter = FleetFilter.parseQuery(window.location.search);
 let fleetSortByHealth = false;
+// The query keys the global filter owns — cleared before re-serialising so a
+// dropped dimension leaves the URL, without disturbing OTHER views' params
+// (topology ?layer/?focus, delta ?changeTypes). This merge is what lets the
+// global filter coexist across views instead of clobbering their state.
+const FLEET_PARAM_KEYS = ['severity', 'site', 'healthBelow', 'offline'];
 // Mirror the current filter into the URL (replaceState so it doesn't spam the
-// history stack) — this is what makes a filtered Overview shareable as a link.
+// history stack) — this is what makes a filtered view shareable as a link.
 function syncFleetUrl() {
-  const q = FleetFilter.toQuery(fleetFilter);
-  const url = window.location.pathname + (q ? `?${q}` : '') + window.location.hash;
-  try { window.history.replaceState(null, '', url); } catch { /* non-browser / restricted */ }
+  try {
+    const q = new URLSearchParams(window.location.search || '');
+    FLEET_PARAM_KEYS.forEach((k) => q.delete(k));
+    new URLSearchParams(FleetFilter.toQuery(fleetFilter)).forEach((v, k) => q.set(k, v));
+    const qs = q.toString();
+    window.history.replaceState(null, '', window.location.pathname + (qs ? `?${qs}` : '') + window.location.hash);
+  } catch { /* non-browser / restricted */ }
 }
 function summaryTotal(s) {
   if (!s) return 0;
@@ -6400,6 +7035,123 @@ async function loadAgentCmdbLink(id, host) {
   if (link) showLinked(link); else showSearch();
 }
 
+// Hour-of-day baseline profile chart for one service dependency: the median
+// volume per hour with the "normal range" band (median ± 3·MAD) shaded. Slots
+// come from the pure TopologyGraph.baselineProfile. Hand-drawn SVG, no lib.
+function baselineBandChart(slots, { title } = {}) {
+  const ns = 'http://www.w3.org/2000/svg';
+  const mk = (tag, attrs = {}, ...kids) => {
+    const e = document.createElementNS(ns, tag);
+    for (const [a, v] of Object.entries(attrs)) if (v != null) e.setAttribute(a, v);
+    for (const kid of kids) if (kid != null) e.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
+    return e;
+  };
+  const present = (slots || []).filter((s) => s.median != null);
+  if (!present.length) {
+    return el('div', { class: 'empty' }, 'Not enough history yet — a pair needs ≥100 hourly observations before it is baselined.');
+  }
+  const W = 560, H = 190, padL = 52, padR = 10, padT = 12, padB = 26;
+  const maxY = Math.max(1, ...present.map((s) => (s.hi != null ? s.hi : s.median)));
+  const x = (h) => padL + (h / 23) * (W - padL - padR);
+  const y = (v) => padT + (1 - (v / maxY)) * (H - padT - padB);
+  const svg = mk('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': title || 'Baseline profile' });
+  // y grid: 0 and max
+  [0, maxY].forEach((v) => {
+    svg.append(mk('line', { class: 'bl-grid', x1: padL, x2: W - padR, y1: y(v), y2: y(v) }));
+    svg.append(mk('text', { class: 'bl-axis', x: padL - 6, y: y(v) + 3, 'text-anchor': 'end' }, fmtBytes(v)));
+  });
+  // x ticks (hours)
+  [0, 6, 12, 18, 23].forEach((h) => svg.append(mk('text', { class: 'bl-axis', x: x(h), y: H - 8, 'text-anchor': 'middle' }, `${h}:00`)));
+  // band = per-hour vertical segment lo..hi
+  slots.forEach((s) => { if (s.median == null) return; const bx = x(s.hour); svg.append(mk('line', { class: 'bl-band', x1: bx, x2: bx, y1: y(s.hi), y2: y(s.lo) })); });
+  // median polyline over present, contiguous points
+  let d = ''; let pen = false;
+  slots.forEach((s) => { if (s.median == null) { pen = false; return; } const px = x(s.hour); const py = y(s.median); d += `${pen ? 'L' : 'M'}${px.toFixed(1)} ${py.toFixed(1)} `; pen = true; });
+  svg.append(mk('path', { class: 'bl-median', d, fill: 'none' }));
+  slots.forEach((s) => { if (s.median == null) return; const dot = mk('circle', { class: 'bl-dot', cx: x(s.hour), cy: y(s.median), r: '2.4' }); dot.append(mk('title', {}, `${s.hour}:00 · median ${fmtBytes(s.median)} · normal ${fmtBytes(s.lo)}–${fmtBytes(s.hi)}`)); svg.append(dot); });
+  return el('div', { class: 'bl-chart' }, svg, el('div', { class: 'muted small' }, 'Normal range = median ± 3·MAD · y-axis bytes/hour, x-axis hour of day'));
+}
+
+// Host dependency list (Part 6 host detail): what this host talks to (outbound)
+// and what talks to it (inbound), with ports + volume, from
+// GET /api/topology/dependencies. Each outbound row links to its per-hour
+// baseline band (operator+; the baselines are keyed by the source host).
+async function loadAgentDependencies(id, host) {
+  let data; let agents = [];
+  try {
+    [data, agents] = await Promise.all([
+      api(`/api/topology/dependencies?host=${encodeURIComponent(id)}&direction=both&limit=100`),
+      api('/agents').catch(() => []),
+    ]);
+  } catch (e) {
+    host.replaceChildren(el('h3', {}, 'Dependencies'), el('div', { class: 'error' }, errText(e)));
+    return;
+  }
+  const nameById = {};
+  (agents || []).forEach((a) => { nameById[a.id] = a.display_name || a.hostname || `agent ${a.id}`; });
+  const nameFor = (hid) => nameById[hid] || `host ${hid}`;
+  const { outbound, inbound } = TopologyGraph.splitDependencies(data.edges || [], id);
+
+  if (!outbound.length && !inbound.length) {
+    host.replaceChildren(el('h3', {}, 'Dependencies'),
+      el('div', { class: 'empty' }, 'No service dependencies observed for this host yet. Dependency edges are aggregated from TCP flows (NetFlow/sFlow) by a scheduled job.'));
+    return;
+  }
+
+  async function openBaseline(dstHostId, dstPort, peerLabel) {
+    const card = $('#modal-card');
+    card.classList.add('wide');
+    const dowNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const dowSel = el('select', { class: 'small' }, ...dowNames.map((n, i) => el('option', { value: String(i) }, n)));
+    dowSel.value = String(new Date().getDay());
+    const chartHost = el('div', {}, el('p', { class: 'muted' }, 'Loading baseline…'));
+    const draw = (baselines) => {
+      const slots = TopologyGraph.baselineProfile(baselines, dstHostId, dstPort, Number(dowSel.value), { sigma: 3 });
+      chartHost.replaceChildren(baselineBandChart(slots, { title: `Baseline → ${peerLabel}:${dstPort}` }));
+    };
+    card.replaceChildren(
+      el('h3', {}, `Baseline · ${esc(peerLabel)}:${dstPort}`),
+      el('div', { class: 'history-controls' }, el('label', { class: 'inline muted' }, 'Day ', dowSel)),
+      chartHost,
+      el('div', { class: 'form-actions' }, el('button', { class: 'ghost', onclick: closeModal }, 'Close')));
+    $('#modal').classList.remove('hidden');
+    let baselines = [];
+    try {
+      const r = await api(`/api/topology/flow-baselines?host=${encodeURIComponent(id)}&limit=5000`);
+      baselines = r.baselines || [];
+    } catch (e) {
+      chartHost.replaceChildren(el('div', { class: 'error' }, errText(e)));
+      return;
+    }
+    dowSel.addEventListener('change', () => draw(baselines));
+    draw(baselines);
+  }
+
+  const depTable = (rows, dir) => el('table', { class: 'agents-table' },
+    el('thead', {}, el('tr', {},
+      el('th', { scope: 'col' }, dir === 'out' ? 'Talks to' : 'Talked to by'),
+      el('th', { scope: 'col' }, 'Port'), el('th', { scope: 'col' }, 'Bytes'),
+      el('th', { scope: 'col' }, 'Conns'), el('th', { scope: 'col' }, 'Last seen'),
+      dir === 'out' && canWrite() ? el('th', { scope: 'col' }, '') : null)),
+    el('tbody', {}, ...rows.map((e) => {
+      const peerId = dir === 'out' ? e.dstHostId : e.srcHostId;
+      return el('tr', {},
+        el('td', {}, el('button', { class: 'linklike', onclick: () => openAgent(peerId) }, esc(nameFor(peerId)))),
+        el('td', { class: 'num' }, String(e.dstPort)),
+        el('td', { class: 'num' }, fmtBytes(e.bytes)),
+        el('td', { class: 'num' }, String(e.connCount)),
+        el('td', {}, e.lastSeen ? fmtTimeShort(new Date(e.lastSeen).getTime()) : '–'),
+        dir === 'out' && canWrite()
+          ? el('td', {}, el('button', { class: 'small ghost', onclick: () => openBaseline(e.dstHostId, e.dstPort, nameFor(e.dstHostId)) }, 'Baseline'))
+          : null);
+    })));
+
+  const children = [el('h3', {}, 'Dependencies')];
+  if (outbound.length) children.push(el('h4', { class: 'sub' }, `Talks to (${outbound.length})`), depTable(outbound, 'out'));
+  if (inbound.length) children.push(el('h4', { class: 'sub' }, `Talked to by (${inbound.length})`), depTable(inbound, 'in'));
+  host.replaceChildren(...children);
+}
+
 views.agent = async () => {
   const id = selectedAgentId;
   const root = el('div', { class: 'agent-detail' });
@@ -6432,6 +7184,12 @@ views.agent = async () => {
   const cmdbHost = el('div', { class: 'card agent-cmdb' }, el('h3', {}, 'CMDB asset'), el('div', { class: 'muted' }, 'Loading…'));
   root.append(cmdbHost);
   loadAgentCmdbLink(id, cmdbHost);
+
+  // Service dependencies (viewer+): who this host talks to / who talks to it,
+  // ports + volume; each outbound row links to its per-hour baseline band.
+  const depsHost = el('div', { class: 'card agent-deps' }, el('h3', {}, 'Dependencies'), el('div', { class: 'muted' }, 'Loading…'));
+  root.append(depsHost);
+  loadAgentDependencies(id, depsHost);
 
   // Unified activity timeline (findings + probe-outage incidents + connect/
   // disconnect + playbook runs) — GET /api/targets/:id/timeline.
@@ -8561,14 +9319,15 @@ const DOCS = [
           el('div', { class: 'callout' }, el('strong', {}, 'Safe by design: '), 'discovery only ever probes the CIDR ranges you configure — never outside them, never auto-expanding. It refuses to start if no scope is set or the scope exceeds the address cap (default 65,536). Nothing is auto-enrolled: candidates become monitored devices only when you promote them.'),
           el('h4', {}, 'Configure the scope'),
           docsSteps([
-            ['Set the CIDR scope and options via environment (', el('code', {}, 'DISCOVERY_ENABLED=true'), ', ', el('code', {}, 'DISCOVERY_CIDRS=10.0.0.0/24,10.0.1.0/24'), '). Optional: ', el('code', {}, 'DISCOVERY_PORTS'), ' (default 22,80,161,443,3389), ', el('code', {}, 'DISCOVERY_RATE_LIMIT'), ' (default 50/s), ', el('code', {}, 'DISCOVERY_ADDRESS_CAP'), ' (default 65536).'],
+            ['Open ', el('strong', {}, 'Administration → Discovery'), ' and set the CIDR ranges, port list, rate and address cap in the Scan scope form. Scope changes take effect on the next sweep — no restart.'],
+            ['Turning the SCHEDULED sweep on is an operator decision made where the server runs (', el('code', {}, 'DISCOVERY_ENABLED=true'), '); scope + manual sweeps are managed in the UI. The env vars (', el('code', {}, 'DISCOVERY_CIDRS'), ', ', el('code', {}, 'DISCOVERY_PORTS'), ', ', el('code', {}, 'DISCOVERY_RATE_LIMIT'), ', ', el('code', {}, 'DISCOVERY_ADDRESS_CAP'), ') still provide the defaults.'],
             ['Discovery uses native probes only — TCP connect + reverse DNS (and ICMP where the host OS permits a raw socket). It never shells out to nmap or ping.'],
-            ['A sweep runs on a schedule, or on demand via ', el('code', {}, 'POST /api/discovery/scan'), ' (admin). Every sweep is written to the audit log with its scope, start, end and result count.'],
+            ['A sweep runs on a schedule, or on demand from the Discovery page (', el('code', {}, 'POST /api/discovery/scan'), ', admin). Every sweep is written to the hash-chained audit log with its scope, start, end and result count — shown under Sweep history.'],
           ]),
           el('h4', {}, 'Promote a candidate'),
           docsSteps([
-            ['Review candidates at ', el('code', {}, 'GET /api/discovery/candidates'), ' — each shows its IP, reverse-DNS hostname, open ports and whether it answered ICMP.'],
-            ['Promote one (', el('code', {}, 'POST /api/discovery/candidates/:id/promote'), ') to create a monitored SNMP device (an agents row with an SNMP monitor config aimed at that IP), or Ignore it to hide it from future sweeps.'],
+            ['Review candidates on the Discovery page (', el('code', {}, 'GET /api/discovery/candidates'), ') — each shows its IP, reverse-DNS hostname, open ports and status.'],
+            ['Promote one to create a monitored SNMP device (an agents row with an SNMP monitor config aimed at that IP), or Dismiss it to hide it from future sweeps.'],
           ]),
           docsExpect('A sweep of a /24 finds the live hosts within it and lists them as “discovered”. They do NOT appear on the fleet or count toward monitoring until promoted. All of this is admin-only — operator and viewer accounts get 403 on every discovery endpoint.'),
         ],

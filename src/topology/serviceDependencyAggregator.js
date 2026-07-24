@@ -10,8 +10,11 @@
 //     edge is DROPPED (never stored).
 //   - Self-edges (src host === dst host) are dropped.
 //   - Multiple IPs mapping to the same host fold into one edge.
-//   - Top-N edges PER SOURCE HOST by byte volume (a host's heaviest outbound
-//     service dependencies); N configurable, default 50.
+//   - Top-N edges PER HOST by byte volume, counting a host's edges in BOTH
+//     directions — an edge survives if it ranks within the Top-N heaviest edges
+//     incident to EITHER of its endpoint hosts (heaviest inbound OR outbound
+//     relationships), so a busy server keeps the clients that lean on it even
+//     when it is rarely the source. N configurable, default 50.
 //
 // No process attribution, no service naming/classification — just the edge.
 
@@ -59,30 +62,38 @@ function aggregateServiceDependencies(flowRows, resolver, { topN = DEFAULT_TOP_N
     if (l != null) e.lastSeenMs = e.lastSeenMs == null ? l : Math.max(e.lastSeenMs, l);
   }
 
-  // Top-N per source host by bytes.
-  const bySrc = new Map();
-  for (const e of byEdge.values()) {
-    if (!bySrc.has(e.srcHostId)) bySrc.set(e.srcHostId, []);
-    bySrc.get(e.srcHostId).push(e);
+  // Top-N per host by bytes, in BOTH directions. Index every edge under each of
+  // its two endpoint hosts, rank each host's incident edges by bytes, and keep an
+  // edge if it lands in the Top-N for EITHER endpoint (union).
+  const incident = new Map(); // hostId -> edge[]
+  const addIncident = (hostId, e) => {
+    if (!incident.has(hostId)) incident.set(hostId, []);
+    incident.get(hostId).push(e);
+  };
+  for (const e of byEdge.values()) { addIncident(e.srcHostId, e); addIncident(e.dstHostId, e); }
+
+  const byBytesDesc = (a, b) => b.bytes - a.bytes
+    || a.srcHostId - b.srcHostId || a.dstHostId - b.dstHostId || a.dstPort - b.dstPort;
+  const keep = new Set();
+  for (const list of incident.values()) {
+    list.sort(byBytesDesc);
+    for (const e of list.slice(0, n)) keep.add(e);
   }
-  const edges = [];
-  for (const list of bySrc.values()) {
-    list.sort((a, b) => b.bytes - a.bytes || a.dstHostId - b.dstHostId || a.dstPort - b.dstPort);
-    if (list.length > n) stats.truncated += list.length - n;
-    for (const e of list.slice(0, n)) {
-      edges.push({
-        srcHostId: e.srcHostId,
-        dstHostId: e.dstHostId,
-        dstPort: e.dstPort,
-        proto: e.proto,
-        bytes: e.bytes,
-        packets: e.packets,
-        connCount: e.connCount,
-        firstSeen: e.firstSeenMs != null ? new Date(e.firstSeenMs) : null,
-        lastSeen: e.lastSeenMs != null ? new Date(e.lastSeenMs) : null,
-      });
-    }
-  }
+  stats.truncated = byEdge.size - keep.size;
+
+  const edges = [...keep]
+    .sort(byBytesDesc)
+    .map((e) => ({
+      srcHostId: e.srcHostId,
+      dstHostId: e.dstHostId,
+      dstPort: e.dstPort,
+      proto: e.proto,
+      bytes: e.bytes,
+      packets: e.packets,
+      connCount: e.connCount,
+      firstSeen: e.firstSeenMs != null ? new Date(e.firstSeenMs) : null,
+      lastSeen: e.lastSeenMs != null ? new Date(e.lastSeenMs) : null,
+    }));
   stats.edges = edges.length;
   return { edges, stats };
 }

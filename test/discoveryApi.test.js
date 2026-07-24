@@ -34,6 +34,8 @@ test('discovery endpoints are ADMIN-only — viewer AND operator get 403 on ever
   const paths = [
     ['get', '/api/discovery/candidates'],
     ['get', '/api/discovery/config'],
+    ['put', '/api/discovery/config'],
+    ['get', '/api/discovery/sweeps'],
     ['post', '/api/discovery/scan'],
     ['post', '/api/discovery/candidates/1/promote'],
     ['post', '/api/discovery/candidates/1/ignore'],
@@ -99,4 +101,55 @@ test('ignore marks a candidate ignored (admin)', async () => {
   const res = await request(app).post(`/api/discovery/candidates/${id}/ignore`).set('Authorization', authHeader('admin'));
   assert.equal(res.status, 200);
   assert.equal(discoveredDevicesRepo.rows[0].status, 'ignored');
+});
+
+// ---- runtime-editable scope (PUT /config) ----------------------------------
+
+test('GET /api/discovery/config reports the effective scope + editable flag', async () => {
+  const app = makeApp({ discoveredDevicesRepo: await seededRepo() });
+  const res = await request(app).get('/api/discovery/config').set('Authorization', authHeader('admin'));
+  assert.equal(res.status, 200);
+  assert.equal(res.body.editable, true); // settings-backed provider wired
+  assert.equal(res.body.scopeConfigured, false); // no CIDRs yet
+  assert.ok(Array.isArray(res.body.ports));
+});
+
+test('PUT /api/discovery/config sets the scope and it round-trips (admin)', async () => {
+  const app = makeApp({ discoveredDevicesRepo: await seededRepo() });
+  const res = await request(app).put('/api/discovery/config')
+    .set('Authorization', authHeader('admin'))
+    .send({ cidrs: ['10.0.0.0/24'], ports: [22, 443], rateLimit: 25 });
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body.config.cidrs, ['10.0.0.0/24']);
+  assert.deepEqual(res.body.config.ports, [22, 443]);
+  assert.equal(res.body.config.rateLimit, 25);
+  assert.equal(res.body.config.scopeConfigured, true);
+  // Read back through GET.
+  const got = await request(app).get('/api/discovery/config').set('Authorization', authHeader('admin'));
+  assert.deepEqual(got.body.cidrs, ['10.0.0.0/24']);
+  assert.equal(got.body.source.cidrs, 'settings');
+});
+
+test('PUT /api/discovery/config rejects an invalid CIDR → 400', async () => {
+  const app = makeApp({ discoveredDevicesRepo: await seededRepo() });
+  const res = await request(app).put('/api/discovery/config')
+    .set('Authorization', authHeader('admin'))
+    .send({ cidrs: ['not-a-cidr'] });
+  assert.equal(res.status, 400);
+  assert.ok(res.body.details && res.body.details.cidrs);
+});
+
+test('PUT /api/discovery/config rejects an out-of-range port → 400', async () => {
+  const app = makeApp({ discoveredDevicesRepo: await seededRepo() });
+  const res = await request(app).put('/api/discovery/config')
+    .set('Authorization', authHeader('admin'))
+    .send({ ports: [70000] });
+  assert.equal(res.status, 400);
+});
+
+test('GET /api/discovery/sweeps returns audited sweeps (admin)', async () => {
+  const app = makeApp({ discoveredDevicesRepo: await seededRepo() });
+  const res = await request(app).get('/api/discovery/sweeps').set('Authorization', authHeader('admin'));
+  assert.equal(res.status, 200);
+  assert.ok(Array.isArray(res.body.sweeps));
 });

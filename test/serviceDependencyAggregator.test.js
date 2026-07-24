@@ -72,7 +72,7 @@ test('self-edges (same host on both ends) are dropped', () => {
   assert.equal(stats.droppedSelf, 1);
 });
 
-test('Top-N truncation works per source host (heaviest edges kept)', () => {
+test('Top-N truncation keeps the heaviest edges per host', () => {
   // Host 1 talks to 5 distinct services on host 2; keep the top 2 by bytes.
   const agents = [
     { id: 1, capabilities: { ips: ['10.0.0.1'] } },
@@ -90,7 +90,7 @@ test('Top-N truncation works per source host (heaviest edges kept)', () => {
   assert.equal(stats.truncated, 3);
 });
 
-test('Top-N is per source host, not global', () => {
+test('Top-N is per host, not global', () => {
   const agents = [
     { id: 1, capabilities: { ips: ['10.0.0.1'] } },
     { id: 2, capabilities: { ips: ['10.0.0.2'] } },
@@ -102,9 +102,34 @@ test('Top-N is per source host, not global', () => {
     { srcIp: '10.0.0.1', dstIp: '10.0.0.3', dstPort: 443, bytes: 90, packets: 1, connCount: 1 },
     { srcIp: '10.0.0.2', dstIp: '10.0.0.3', dstPort: 443, bytes: 80, packets: 1, connCount: 1 },
   ];
-  // topN=1 per host: host1 keeps its heaviest (1→2), host2 keeps its only (2→3).
+  // topN=1 per host, both directions: host1 keeps its heaviest (1→2:100), and
+  // host3's heaviest INBOUND (1→3:90) survives even though it is host1's second
+  // edge — a global top-1 would keep only 1→2.
   const { edges } = aggregateServiceDependencies(flows, r, { topN: 1 });
   assert.equal(edges.length, 2);
   assert.ok(edges.find((e) => e.srcHostId === 1 && e.dstHostId === 2));
-  assert.ok(edges.find((e) => e.srcHostId === 2 && e.dstHostId === 3));
+  assert.ok(edges.find((e) => e.srcHostId === 1 && e.dstHostId === 3));
+});
+
+test('Top-N counts BOTH directions: a heavy inbound edge survives a busy source', () => {
+  // Host 1 (source) has three outbound edges heavier than 1→2, so a source-only
+  // Top-2 would drop 1→2. But host 2's ONLY relationship is 1→2, so counting the
+  // destination's incident edges keeps it.
+  const agents = [
+    { id: 1, capabilities: { ips: ['10.0.0.1'] } },
+    { id: 2, capabilities: { ips: ['10.0.0.2'] } },
+    { id: 3, capabilities: { ips: ['10.0.0.3'] } },
+    { id: 4, capabilities: { ips: ['10.0.0.4'] } },
+  ];
+  const r = buildHostResolver(agents);
+  const flows = [
+    { srcIp: '10.0.0.1', dstIp: '10.0.0.3', dstPort: 443, bytes: 500, packets: 1, connCount: 1 },
+    { srcIp: '10.0.0.1', dstIp: '10.0.0.4', dstPort: 443, bytes: 400, packets: 1, connCount: 1 },
+    { srcIp: '10.0.0.1', dstIp: '10.0.0.2', dstPort: 5432, bytes: 100, packets: 1, connCount: 1 },
+  ];
+  const { edges } = aggregateServiceDependencies(flows, r, { topN: 2 });
+  // 1→2 is host 1's 3rd-heaviest outbound (dropped by source-only Top-2) but
+  // host 2's heaviest (only) inbound — so it is retained.
+  assert.ok(edges.find((e) => e.srcHostId === 1 && e.dstHostId === 2 && e.dstPort === 5432),
+    'heavy-inbound edge for host 2 retained');
 });

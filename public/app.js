@@ -5756,6 +5756,172 @@ views.delta = async () => {
   return root;
 };
 
+// ---- Admin → Discovery (active scan scope + candidate queue) ---------------
+// Admin-only. Configure the scan scope (CIDRs / ports / rate / cap), trigger a
+// sweep, promote or dismiss discovered candidates, and review sweep history.
+// The section is hidden from non-admins in the nav (data-min-role="admin") and
+// every /api/discovery endpoint is admin-only server-side.
+PAGE_INFO.discovery = {
+  hero: 'Active discovery finds devices passive collection misses — a rate-limited native scan of the CIDR scope you configure. Nothing is ever auto-enrolled.',
+  title: 'Discovery — find what passive monitoring misses',
+  body: () => [
+    el('p', {}, 'A scheduled, rate-limited sweep probes the CIDR ranges you configure (TCP-connect on a port list + reverse DNS). Live hosts become candidates you review — promotion to a monitored device is always a manual, admin action.'),
+    el('p', {}, 'The scan never leaves the configured scope and refuses to start if the scope is unconfigured or exceeds the address cap. Every sweep is written to the hash-chained audit log.'),
+    el('p', { class: 'muted' }, 'Admin only. Enable the scheduled sweep with DISCOVERY_ENABLED where the server runs; scope + manual scans are managed here.'),
+  ],
+};
+
+const DISCOVERY_STATUS_BADGE = { discovered: 'warn', promoted: 'online', ignored: 'muted' };
+
+views.discovery = async () => {
+  const root = el('div', { class: 'discovery-view' });
+  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Discovery'), el('span', { class: 'muted' }, 'Active discovery scope + candidates')));
+
+  const cfgHost = el('div', { class: 'card' }, el('h3', {}, 'Scan scope'), el('div', { class: 'muted' }, 'Loading…'));
+  const scanHost = el('div', { class: 'card' });
+  const candHost = el('div', { class: 'card' }, el('h3', {}, 'Candidates'), el('div', { class: 'muted' }, 'Loading…'));
+  const sweepHost = el('div', { class: 'card' }, el('h3', {}, 'Sweep history'), el('div', { class: 'muted' }, 'Loading…'));
+  root.append(cfgHost, scanHost, candHost, sweepHost);
+
+  function renderConfig(cfg) {
+    const enabledBadge = el('span', { class: `badge ${cfg.enabled ? 'online' : 'muted'}` }, cfg.enabled ? 'Scheduled sweep ON' : 'Scheduled sweep OFF (env)');
+    const cidrs = el('textarea', { class: 'mono', rows: '4', placeholder: '10.0.0.0/24\n192.168.1.0/24' }, (cfg.cidrs || []).join('\n'));
+    const ports = el('input', { type: 'text', class: 'mono', value: (cfg.ports || []).join(', '), placeholder: '22, 80, 161, 443, 3389' });
+    const rate = el('input', { type: 'number', min: '1', max: '10000', value: String(cfg.rateLimit ?? 50) });
+    const cap = el('input', { type: 'number', min: '1', max: '16777216', value: String(cfg.addressCap ?? 65536) });
+    const interval = el('input', { type: 'number', min: '1', max: '10080', value: String(cfg.intervalMinutes ?? 360) });
+    const status = el('span', { class: 'muted' });
+    const saveBtn = el('button', { class: 'small' }, 'Save scope');
+    const field = (label, node, hint) => el('label', { class: 'field' }, el('span', {}, label), node, hint ? el('span', { class: 'muted small' }, hint) : null);
+
+    saveBtn.addEventListener('click', async () => {
+      const body = {
+        cidrs: cidrs.value.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean),
+        ports: ports.value.split(/[\s,]+/).map(Number).filter((n) => Number.isInteger(n) && n > 0),
+        rateLimit: Number(rate.value), addressCap: Number(cap.value), intervalMinutes: Number(interval.value),
+      };
+      saveBtn.disabled = true; status.className = 'muted'; status.textContent = 'Saving…';
+      try {
+        const r = await api('/api/discovery/config', { method: 'PUT', body });
+        status.className = ''; status.textContent = 'Saved.';
+        renderConfig(r.config);
+      } catch (e) {
+        status.className = 'error';
+        status.textContent = e.data && e.data.details ? Object.entries(e.data.details).map(([k, v]) => `${k}: ${v}`).join(' · ') : errText(e);
+      } finally { saveBtn.disabled = false; }
+    });
+
+    const children = [el('h3', {}, 'Scan scope'), el('div', { class: 'discovery-cfg-head' }, enabledBadge,
+      cfg.scopeConfigured ? null : el('span', { class: 'badge warn' }, 'Scope not configured — sweeps refuse to run'))];
+    if (cfg.editable === false) {
+      children.push(el('div', { class: 'muted' }, 'Scope is read-only (env-managed): CIDRs ', el('span', { class: 'mono' }, (cfg.cidrs || []).join(', ') || '—'),
+        ' · ports ', el('span', { class: 'mono' }, (cfg.ports || []).join(', '))));
+    } else {
+      children.push(el('div', { class: 'discovery-form' },
+        field('CIDR ranges (one per line)', cidrs),
+        el('div', { class: 'discovery-form-row' },
+          field('Ports', ports, 'TCP-connect targets'),
+          field('Rate (probes/sec)', rate),
+          field('Address cap', cap),
+          field('Sweep interval (min)', interval, 'applies on restart')),
+        el('div', { class: 'form-actions' }, saveBtn, status)));
+    }
+    cfgHost.replaceChildren(...children);
+  }
+
+  function renderScan() {
+    const status = el('span', { class: 'muted' });
+    const btn = el('button', { class: 'small' }, 'Run a sweep now');
+    btn.addEventListener('click', async () => {
+      btn.disabled = true; status.className = 'muted'; status.textContent = 'Scanning…';
+      try {
+        const r = await api('/api/discovery/scan', { method: 'POST' });
+        status.className = r.refused ? 'error' : '';
+        status.textContent = r.refused
+          ? `Refused: ${r.reason}`
+          : `Swept ${r.addresses ?? '?'} addresses · ${r.found ?? 0} candidate(s).`;
+        loadCandidates(); loadSweeps();
+      } catch (e) { status.className = 'error'; status.textContent = errText(e); } finally { btn.disabled = false; }
+    });
+    scanHost.replaceChildren(el('h3', {}, 'Manual sweep'), el('div', { class: 'form-actions' }, btn, status));
+  }
+
+  const statusFilter = el('select', { class: 'small' },
+    ...[['', 'All'], ['discovered', 'Discovered'], ['promoted', 'Promoted'], ['ignored', 'Ignored']].map(([v, l]) => el('option', { value: v }, l)));
+  statusFilter.addEventListener('change', loadCandidates);
+
+  async function loadCandidates() {
+    let data;
+    try {
+      const qs = statusFilter.value ? `?status=${statusFilter.value}` : '';
+      data = await api(`/api/discovery/candidates${qs}`);
+    } catch (e) {
+      candHost.replaceChildren(el('h3', {}, 'Candidates'), el('div', { class: 'error' }, errText(e)));
+      return;
+    }
+    const counts = data.counts || {};
+    const countLine = el('span', { class: 'muted' }, `discovered ${counts.discovered || 0} · promoted ${counts.promoted || 0} · ignored ${counts.ignored || 0}`);
+    const head = el('div', { class: 'discovery-cand-head' }, el('h3', {}, 'Candidates'), el('label', { class: 'inline muted' }, 'Status ', statusFilter), countLine);
+    if (!(data.candidates || []).length) {
+      candHost.replaceChildren(head, el('div', { class: 'empty' }, 'No candidates. Configure a scope and run a sweep.'));
+      return;
+    }
+    const rowEl = (c) => el('tr', {},
+      el('td', { class: 'mono' }, esc(c.ip)),
+      el('td', {}, esc(c.hostname || '—')),
+      el('td', { class: 'mono' }, (c.openPorts || c.open_ports || []).join(', ')),
+      el('td', {}, el('span', { class: `badge ${DISCOVERY_STATUS_BADGE[c.status] || 'muted'}` }, c.status)),
+      el('td', {}, c.status === 'discovered'
+        ? el('div', { class: 'row-actions' },
+            el('button', { class: 'small', onclick: () => promote(c) }, 'Promote'),
+            el('button', { class: 'small ghost', onclick: () => ignore(c) }, 'Dismiss'))
+        : (c.status === 'promoted' && c.promotedAgentId ? el('button', { class: 'linklike', onclick: () => openAgent(c.promotedAgentId) }, `agent ${c.promotedAgentId}`) : '—')));
+    candHost.replaceChildren(head, el('table', { class: 'agents-table' },
+      el('thead', {}, el('tr', {}, ...['IP', 'Hostname', 'Open ports', 'Status', ''].map((h) => el('th', { scope: 'col' }, h)))),
+      el('tbody', {}, ...(data.candidates || []).map(rowEl))));
+  }
+
+  async function promote(c) {
+    if (!window.confirm(`Promote ${c.ip} to a monitored SNMP device?`)) return;
+    try { const r = await api(`/api/discovery/candidates/${c.id}/promote`, { method: 'POST' }); toast(`Promoted → agent ${r.agentId}`); loadCandidates(); }
+    catch (e) { toast(errText(e), true); }
+  }
+  async function ignore(c) {
+    try { await api(`/api/discovery/candidates/${c.id}/ignore`, { method: 'POST' }); toast('Dismissed'); loadCandidates(); }
+    catch (e) { toast(errText(e), true); }
+  }
+
+  async function loadSweeps() {
+    let data;
+    try { data = await api('/api/discovery/sweeps?limit=50'); }
+    catch (e) { sweepHost.replaceChildren(el('h3', {}, 'Sweep history'), el('div', { class: 'error' }, errText(e))); return; }
+    if (!(data.sweeps || []).length) {
+      sweepHost.replaceChildren(el('h3', {}, 'Sweep history'), el('div', { class: 'empty' }, 'No sweeps recorded yet.'));
+      return;
+    }
+    sweepHost.replaceChildren(el('h3', {}, 'Sweep history'), el('table', { class: 'agents-table' },
+      el('thead', {}, el('tr', {}, ...['Time', 'Result', 'Detail'].map((h) => el('th', { scope: 'col' }, h)))),
+      el('tbody', {}, ...(data.sweeps || []).map((s) => el('tr', {},
+        el('td', {}, s.createdAt ? fmtDate(s.createdAt) : '—'),
+        el('td', {}, el('span', { class: `badge ${s.action === 'discovery_sweep_refused' ? 'warn' : 'online'}` }, s.action === 'discovery_sweep_refused' ? 'refused' : 'swept')),
+        el('td', { class: 'muted' }, esc(s.detail || '')))))));
+  }
+
+  // Initial load — a 403 means the caller isn't an admin (nav should hide it).
+  try {
+    const cfg = await api('/api/discovery/config');
+    renderConfig(cfg);
+    renderScan();
+  } catch (e) {
+    root.replaceChildren(el('div', { class: 'section-head' }, el('h2', {}, 'Discovery')),
+      el('div', { class: e.status === 403 ? 'empty' : 'error' }, e.status === 403 ? 'Discovery is available to administrators only.' : errText(e)));
+    return root;
+  }
+  loadCandidates();
+  loadSweeps();
+  return root;
+};
+
 // ---- Troubleshooting (location-driven investigation) ------------------------
 // Operator+ can trigger an investigation for a site/agent/interface/subnet and
 // get the fault classified as LOCAL / UPSTREAM / DOWNSTREAM / APP_NOT_NET /
@@ -9141,14 +9307,15 @@ const DOCS = [
           el('div', { class: 'callout' }, el('strong', {}, 'Safe by design: '), 'discovery only ever probes the CIDR ranges you configure — never outside them, never auto-expanding. It refuses to start if no scope is set or the scope exceeds the address cap (default 65,536). Nothing is auto-enrolled: candidates become monitored devices only when you promote them.'),
           el('h4', {}, 'Configure the scope'),
           docsSteps([
-            ['Set the CIDR scope and options via environment (', el('code', {}, 'DISCOVERY_ENABLED=true'), ', ', el('code', {}, 'DISCOVERY_CIDRS=10.0.0.0/24,10.0.1.0/24'), '). Optional: ', el('code', {}, 'DISCOVERY_PORTS'), ' (default 22,80,161,443,3389), ', el('code', {}, 'DISCOVERY_RATE_LIMIT'), ' (default 50/s), ', el('code', {}, 'DISCOVERY_ADDRESS_CAP'), ' (default 65536).'],
+            ['Open ', el('strong', {}, 'Administration → Discovery'), ' and set the CIDR ranges, port list, rate and address cap in the Scan scope form. Scope changes take effect on the next sweep — no restart.'],
+            ['Turning the SCHEDULED sweep on is an operator decision made where the server runs (', el('code', {}, 'DISCOVERY_ENABLED=true'), '); scope + manual sweeps are managed in the UI. The env vars (', el('code', {}, 'DISCOVERY_CIDRS'), ', ', el('code', {}, 'DISCOVERY_PORTS'), ', ', el('code', {}, 'DISCOVERY_RATE_LIMIT'), ', ', el('code', {}, 'DISCOVERY_ADDRESS_CAP'), ') still provide the defaults.'],
             ['Discovery uses native probes only — TCP connect + reverse DNS (and ICMP where the host OS permits a raw socket). It never shells out to nmap or ping.'],
-            ['A sweep runs on a schedule, or on demand via ', el('code', {}, 'POST /api/discovery/scan'), ' (admin). Every sweep is written to the audit log with its scope, start, end and result count.'],
+            ['A sweep runs on a schedule, or on demand from the Discovery page (', el('code', {}, 'POST /api/discovery/scan'), ', admin). Every sweep is written to the hash-chained audit log with its scope, start, end and result count — shown under Sweep history.'],
           ]),
           el('h4', {}, 'Promote a candidate'),
           docsSteps([
-            ['Review candidates at ', el('code', {}, 'GET /api/discovery/candidates'), ' — each shows its IP, reverse-DNS hostname, open ports and whether it answered ICMP.'],
-            ['Promote one (', el('code', {}, 'POST /api/discovery/candidates/:id/promote'), ') to create a monitored SNMP device (an agents row with an SNMP monitor config aimed at that IP), or Ignore it to hide it from future sweeps.'],
+            ['Review candidates on the Discovery page (', el('code', {}, 'GET /api/discovery/candidates'), ') — each shows its IP, reverse-DNS hostname, open ports and status.'],
+            ['Promote one to create a monitored SNMP device (an agents row with an SNMP monitor config aimed at that IP), or Dismiss it to hide it from future sweeps.'],
           ]),
           docsExpect('A sweep of a /24 finds the live hosts within it and lists them as “discovered”. They do NOT appear on the fleet or count toward monitoring until promoted. All of this is admin-only — operator and viewer accounts get 403 on every discovery endpoint.'),
         ],

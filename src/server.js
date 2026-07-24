@@ -480,7 +480,10 @@ function start() {
   // Scheduled active discovery (admin-only). Probes the configured CIDR scope for
   // devices passive collection misses; candidates require admin promotion.
   const discoveredDevicesRepo = createDiscoveredDevicesRepository(db);
-  const discoverySweepJob = createDiscoverySweepJob({ discoveredDevicesRepo, auditLogger, config: config.discovery, logger });
+  // Scope is re-read each sweep from the settings-backed provider (defined
+  // below), so an admin's in-UI scope edit applies without a restart; the static
+  // env config remains the fallback + the enable/schedule source.
+  const discoverySweepJob = createDiscoverySweepJob({ discoveredDevicesRepo, auditLogger, config: config.discovery, getConfig: () => settingsService.getDiscovery(), logger });
   // Durable alert-dispatch log: lets a cluster alert fire once + reference (not
   // resend) member findings already alerted individually. Passed to the dispatcher
   // (records each send) and the cross-agent service (reads it).

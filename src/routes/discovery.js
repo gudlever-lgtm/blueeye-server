@@ -10,15 +10,18 @@ const { parseId } = require('../validation/locationValidation');
 // operator get 403 (requireRole(ADMIN), no role hierarchy). Candidates are never
 // auto-enrolled; promotion (admin) is the only path that creates a monitored
 // device. Mounted at /api/discovery.
-function createDiscoveryRouter({ discoveredDevicesRepo, agentsRepo = null, discoverySweepJob = null, auditLogger = null, config = null }) {
+function createDiscoveryRouter({ discoveredDevicesRepo, agentsRepo = null, discoverySweepJob = null, auditLogger = null, auditLogRepo = null, config = null, getConfig = null, setConfig = null }) {
   const router = express.Router();
   router.use(requireAuth, requireRole(ROLES.ADMIN));
 
   const STATUSES = ['discovered', 'promoted', 'ignored'];
+  // Effective config comes from the settings-backed provider when wired (so the
+  // admin can edit scope in the UI); otherwise the static env config.
+  const effectiveConfig = async () => (getConfig ? await getConfig() : (config || {}));
 
   // Effective scan configuration (no secrets — scope/ports/limits only).
   router.get('/config', asyncHandler(async (req, res) => {
-    const c = config || {};
+    const c = await effectiveConfig();
     res.json({
       enabled: !!c.enabled,
       cidrs: c.cidrs || [],
@@ -26,7 +29,36 @@ function createDiscoveryRouter({ discoveredDevicesRepo, agentsRepo = null, disco
       rateLimit: c.rateLimit ?? null,
       addressCap: c.addressCap ?? null,
       intervalMinutes: c.intervalMinutes ?? null,
+      source: c.source || null,
+      scopeConfigured: c.scopeConfigured != null ? c.scopeConfigured : (c.cidrs || []).length > 0,
+      editable: !!setConfig,
     });
+  }));
+
+  // Update the scan scope (CIDRs / ports / rate / cap / interval). Admin only.
+  // 503 when no settings-backed provider is wired; 400 on validation failure.
+  router.put('/config', asyncHandler(async (req, res) => {
+    if (!setConfig) return res.status(503).json({ error: 'Discovery config is read-only (env-managed)' });
+    let effective;
+    try {
+      effective = await setConfig(req.body || {});
+    } catch (err) {
+      if (err && err.statusCode === 400) return res.status(400).json({ error: err.message, details: err.details || null });
+      throw err;
+    }
+    if (auditLogger) await auditLogger.record(req, { category: 'discovery', action: 'discovery_config', detail: `cidrs=${(effective.cidrs || []).length} ports=${(effective.ports || []).length}` });
+    res.json({ ok: true, config: effective });
+  }));
+
+  // Recent sweeps (from the hash-chained audit log; category 'discovery').
+  router.get('/sweeps', asyncHandler(async (req, res) => {
+    const limRaw = req.query.limit;
+    const limit = limRaw === undefined || limRaw === '' ? 50 : Number(limRaw);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 500) return res.status(400).json({ error: 'limit must be 1..500' });
+    if (!auditLogRepo || typeof auditLogRepo.list !== 'function') return res.json({ sweeps: [] });
+    const rows = await auditLogRepo.list({ category: 'discovery', limit });
+    const sweeps = rows.filter((r) => r.action === 'discovery_sweep' || r.action === 'discovery_sweep_refused');
+    res.json({ sweeps });
   }));
 
   // List candidates (optionally by status).

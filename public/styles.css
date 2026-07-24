@@ -737,6 +737,15 @@ main#view:has(.fleet) { max-width: 95%; }
 .delta-chips { display: inline-flex; gap: 6px; flex-wrap: wrap; }
 .delta-table td:last-child { color: var(--muted); }
 
+/* Admin → Discovery: scope form + candidate queue. */
+.discovery-view .card { margin-bottom: 16px; }
+.discovery-cfg-head, .discovery-cand-head { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
+.discovery-form { display: flex; flex-direction: column; gap: 12px; }
+.discovery-form .field { display: flex; flex-direction: column; gap: 4px; }
+.discovery-form .field > span:first-child { font-size: 12px; color: var(--muted); }
+.discovery-form textarea, .discovery-form input { width: 100%; box-sizing: border-box; }
+.discovery-form-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
+
 /* NICs view: firmware-drift card + inventory list. */
 .nics-summary { margin: 0 0 14px; }
 .nic-card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; margin: 0 0 16px; }

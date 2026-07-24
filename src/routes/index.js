@@ -284,7 +284,7 @@ function createApiRouter({
     getCategories: settingsService ? () => settingsService.getFlowCategories() : undefined,
   }));
   // Flow-derived dependency/topology map (who-talks-to-whom from the 5-tuples).
-  if (discoveredDevicesRepo) router.use('/api/discovery', createDiscoveryRouter({ discoveredDevicesRepo, agentsRepo, discoverySweepJob, auditLogger, config: discoveryConfig }));
+  if (discoveredDevicesRepo) router.use('/api/discovery', createDiscoveryRouter({ discoveredDevicesRepo, agentsRepo, discoverySweepJob, auditLogger, auditLogRepo, config: discoveryConfig, getConfig: settingsService ? () => settingsService.getDiscovery() : null, setConfig: settingsService ? (patch) => settingsService.setDiscovery(patch) : null }));
 
   if (flowsRepo || lldpNeighborsRepo || serviceDependenciesRepo || topologyChangesRepo || flowPairBaselinesRepo) router.use('/api/topology', createTopologyRouter({ flowsRepo, agentsRepo, locationsRepo, centroids, lldpNeighborsRepo, serviceDependenciesRepo, serviceDependencyJob, blastRadiusService, topologyChangesRepo, flowPairBaselinesRepo, flowPairBaselineJob }));
   if (probeResultsRepo) router.use('/api/probes', createProbesRouter({ probeResultsRepo, agentsRepo, geoProvider, centroids }));

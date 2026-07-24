@@ -5094,6 +5094,8 @@ views.topology = async () => {
   let lastData = null;
   let graphData = null; // cached /api/topology/graph (unified l2_link + service_dep)
   let layersApi = null; // handles returned by topoLayersSvg (highlight control)
+  let changeSets = null; // { changed:Set, flapping:Set } from /api/topology/changes
+  let whatIf = topoState.focus != null && canWrite(); // "what if this node fails?" preview mode
 
   // Persist ONLY the topology-owned query params (layer + focus) without
   // clobbering unrelated ones — the SPA's replaceState persistence pattern.
@@ -5346,6 +5348,47 @@ views.topology = async () => {
   // layer toggle. Fetches /api/topology/graph once (cached), then re-renders the
   // chosen layer locally. Distinct from the flow-derived diagram — see the note
   // in the empty state. The layer choice persists to the URL.
+  // Panel showing the last "what if" / blast-radius result: the two tiers and the
+  // path that justifies each affected host. `nameFor` resolves a node id → label.
+  function blastPanel(blast, nameFor) {
+    if (!blast) return el('div', { class: 'muted small' }, 'What-if mode: click a host to preview what fails if it goes down.');
+    const iso = blast.directly_isolated || [];
+    const aff = blast.dependency_affected || [];
+    const l2Path = (p) => (Array.isArray(p) ? p : []).map(nameFor).join(' → ');
+    const depPath = (p) => (Array.isArray(p) ? p : []).map((s) => (s && typeof s === 'object' ? nameFor(s.hostId) + (s.viaPort ? `:${s.viaPort}` : '') : nameFor(s))).join(' → ');
+    const tier = (title, cls, list, pathFn) => el('div', { class: `blast-tier ${cls}` },
+      el('div', { class: 'blast-tier-head' }, el('strong', {}, title), el('span', { class: 'badge' }, String(list.length))),
+      list.length
+        ? el('ul', { class: 'blast-list' }, ...list.slice(0, 50).map((x) => el('li', {},
+            el('span', { class: 'mono' }, nameFor(x.hostId)),
+            el('span', { class: 'muted small' }, ' — ', pathFn(x.path)))))
+        : el('div', { class: 'muted small' }, 'None'));
+    return el('div', { class: 'blast-panel' },
+      el('div', { class: 'blast-head' }, el('strong', {}, `If ${nameFor(blast.failingNode)} fails`),
+        TopologyGraph.blastIsEmpty(blast) ? el('span', { class: 'muted small' }, ' — nothing downstream is isolated') : null),
+      tier('Directly isolated (L2)', 'iso', iso, l2Path),
+      tier('Dependency-affected', 'aff', aff, depPath));
+  }
+
+  async function runBlast(id) {
+    if (!layersApi) return;
+    topoState.focus = id; syncTopoUrl();
+    const panel = layerHost.querySelector('.blast-slot');
+    if (panel) panel.replaceChildren(el('div', { class: 'muted small' }, `Computing blast radius for ${id}…`));
+    let blast;
+    try {
+      blast = await api(`/api/topology/blast-radius/${encodeURIComponent(id)}`);
+    } catch (e) {
+      layersApi.setHighlight({ focus: id, isolated: new Set(), affected: new Set() });
+      if (panel) panel.replaceChildren(el('div', { class: 'error small' }, errText(e)));
+      return;
+    }
+    const sets = TopologyGraph.blastSets(blast);
+    layersApi.setHighlight(sets);
+    const nameFor = (nid) => { const n = (graphData.nodes || []).find((x) => x.id === Number(nid)); return n ? n.label : String(nid); };
+    if (panel) panel.replaceChildren(blastPanel(blast, nameFor));
+  }
+
   function renderLayers() {
     const layerBtn = (val, txt) => {
       const active = topoState.layer === val;
@@ -5361,6 +5404,18 @@ views.topology = async () => {
     const layerBar = el('div', { class: 'topo-layerbar', role: 'group', 'aria-label': 'Topology layer' },
       el('span', { class: 'muted' }, 'Layer:'),
       layerBtn('both', 'Both'), layerBtn('l2', 'L2 links'), layerBtn('dep', 'Dependencies'));
+    // "What if" is a blast-radius preview — operator+ only (the endpoint is
+    // operator+). Viewers don't see the toggle.
+    let whatIfBtn = null;
+    if (canWrite()) {
+      whatIfBtn = el('button', { class: `small${whatIf ? '' : ' ghost'}`, 'aria-pressed': String(whatIf), title: 'Preview which hosts fail if a node goes down' }, 'What if?');
+      whatIfBtn.addEventListener('click', () => {
+        whatIf = !whatIf;
+        if (!whatIf) { topoState.focus = null; syncTopoUrl(); }
+        renderLayers();
+      });
+      layerBar.append(el('span', { class: 'spacer' }), whatIfBtn);
+    }
 
     if (!graphData) {
       layerHost.replaceChildren(layerBar, el('div', { class: 'muted' }, 'Loading graph…'));
@@ -5381,13 +5436,30 @@ views.topology = async () => {
     }
     layersApi = topoLayersSvg(vm, {
       focusId: topoState.focus,
-      onNodeClick: (id) => layersApi && layersApi.neighbourhood(id),
+      onNodeClick: (id) => {
+        if (whatIf && canWrite()) runBlast(id);
+        else if (layersApi) layersApi.neighbourhood(id);
+      },
     });
+    // Flag recently-changed + flapping hosts (operator+ data) on their nodes.
+    if (changeSets) {
+      layersApi.nodeEls.forEach((g, id) => {
+        g.classList.toggle('flapping', changeSets.flapping.has(id));
+        g.classList.toggle('changed', changeSets.changed.has(id));
+      });
+    }
     const legend = el('div', { class: 'pg-legend' },
       el('span', { class: 'lg' }, el('span', { class: 'topo-swatch l2' }), 'Physical link (L2)'),
       el('span', { class: 'lg' }, el('span', { class: 'topo-swatch dep' }), 'Service dependency'),
+      changeSets && (changeSets.changed.size || changeSets.flapping.size)
+        ? el('span', { class: 'lg' }, el('span', { class: 'topo-dot flapping' }), 'Recently changed / flapping') : null,
       el('span', { class: 'lg muted' }, `${totals.nodes} hosts · ${totals.l2_link} links · ${totals.service_dep} dependencies · line width = bytes`));
-    layerHost.replaceChildren(layerBar, el('div', { class: 'pg-head' }, legend), layersApi.wrap);
+    const children = [layerBar, el('div', { class: 'pg-head' }, legend), layersApi.wrap];
+    if (canWrite()) children.push(el('div', { class: 'blast-slot' }, blastPanel(null)));
+    layerHost.replaceChildren(...children);
+
+    // Deep-linked (or re-render while) a node is focused in what-if mode: re-run.
+    if (whatIf && canWrite() && topoState.focus != null) runBlast(topoState.focus);
   }
   async function drawLayers() {
     if (graphData) { renderLayers(); return; }
@@ -5397,6 +5469,13 @@ views.topology = async () => {
     } catch (e) {
       layerHost.replaceChildren(el('div', { class: 'error' }, errText(e)));
       return;
+    }
+    // Recently-changed / flapping links are operator+ data — fetch best-effort.
+    if (canWrite() && changeSets === null) {
+      try {
+        const cg = await api('/api/topology/changes?limit=200');
+        changeSets = TopologyGraph.changedHostSets(cg.events || []);
+      } catch { changeSets = { changed: new Set(), flapping: new Set() }; }
     }
     renderLayers();
   }

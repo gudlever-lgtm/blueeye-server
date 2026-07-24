@@ -145,8 +145,51 @@
     return { layer: lyr, nodes: nodes, edges: edges, maxBytes: maxEdgeBytes(edges) };
   }
 
+  // Turn a blast-radius response (GET /api/topology/blast-radius/:node) into the
+  // highlight sets the map draws: the failing node (focus), the L2 directly-
+  // isolated hosts, and the service_dep dependency-affected hosts. Membership is
+  // exclusive in the renderer (focus > isolated > affected), so overlaps resolve
+  // to the more severe tier.
+  function blastSets(blast) {
+    var b = blast || {};
+    var focus = b.failingNode != null ? Number(b.failingNode) : null;
+    var isolated = new Set();
+    (b.directly_isolated || []).forEach(function (x) { if (x && x.hostId != null) isolated.add(Number(x.hostId)); });
+    var affected = new Set();
+    (b.dependency_affected || []).forEach(function (x) { if (x && x.hostId != null) affected.add(Number(x.hostId)); });
+    return { focus: focus, isolated: isolated, affected: affected };
+  }
+
+  // Whether a blast result affects anything at all (both tiers empty ⇒ a leaf /
+  // no downstream, so the map should say "nothing isolated").
+  function blastIsEmpty(blast) {
+    var s = blastSets(blast);
+    return s.isolated.size === 0 && s.affected.size === 0;
+  }
+
+  // From the topology-changes events (GET /api/topology/changes, each carrying an
+  // additive `agentId` + a `type` like 'topology.link_state_changed' or
+  // 'topology.flapping'), the hosts to flag on the map: `changed` = any host with
+  // a recent change, `flapping` = hosts whose recent change is a flap (marked
+  // distinctly). A flapping host is not also listed in `changed`.
+  function changedHostSets(events) {
+    var flapping = new Set();
+    var changed = new Set();
+    (Array.isArray(events) ? events : []).forEach(function (e) {
+      if (!e || e.agentId == null) return;
+      var id = Number(e.agentId);
+      if (String(e.type) === 'topology.flapping') flapping.add(id);
+      else changed.add(id);
+    });
+    flapping.forEach(function (id) { changed.delete(id); });
+    return { changed: changed, flapping: flapping };
+  }
+
   var apiObj = {
     LAYERS: LAYERS,
+    blastSets: blastSets,
+    blastIsEmpty: blastIsEmpty,
+    changedHostSets: changedHostSets,
     defaultState: defaultState,
     normalizeLayer: normalizeLayer,
     parseParams: parseParams,

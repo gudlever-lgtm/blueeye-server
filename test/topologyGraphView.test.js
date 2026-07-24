@@ -99,3 +99,38 @@ test('parseParams is forgiving about junk', () => {
   assert.deepEqual(TG.parseParams('?layer=xxx&focus=-4'), { layer: 'both', focus: null });
   assert.deepEqual(TG.parseParams('not a query'), { layer: 'both', focus: null });
 });
+
+// ---- blast-radius highlight sets -------------------------------------------
+
+test('blastSets maps a blast response into focus/isolated/affected', () => {
+  const blast = {
+    failingNode: 5,
+    directly_isolated: [{ hostId: 6, path: [5, 6] }, { hostId: 7, path: [5, 7] }],
+    dependency_affected: [{ hostId: 9, path: [{ hostId: 6 }, { hostId: 9 }] }],
+  };
+  const s = TG.blastSets(blast);
+  assert.equal(s.focus, 5);
+  assert.deepEqual([...s.isolated].sort(), [6, 7]);
+  assert.deepEqual([...s.affected], [9]);
+  assert.equal(TG.blastIsEmpty(blast), false);
+});
+
+test('blastIsEmpty is true for a leaf with no downstream', () => {
+  assert.equal(TG.blastIsEmpty({ failingNode: 1, directly_isolated: [], dependency_affected: [] }), true);
+  assert.equal(TG.blastIsEmpty(null), true);
+});
+
+// ---- recently-changed / flapping host flags --------------------------------
+
+test('changedHostSets splits flapping from other changes', () => {
+  const events = [
+    { type: 'topology.neighbour_added', agentId: 1 },
+    { type: 'topology.link_state_changed', agentId: 2 },
+    { type: 'topology.flapping', agentId: 3 },
+    { type: 'topology.neighbour_removed', agentId: 3 }, // host 3 also flaps ⇒ flapping wins
+    { type: 'topology.neighbour_added' }, // no agentId ⇒ ignored
+  ];
+  const s = TG.changedHostSets(events);
+  assert.deepEqual([...s.changed].sort(), [1, 2]);
+  assert.deepEqual([...s.flapping], [3]);
+});

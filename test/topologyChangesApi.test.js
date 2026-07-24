@@ -31,10 +31,13 @@ test('GET /api/topology/changes returns timeline-shaped events (operator+)', asy
   assert.equal(res.status, 200);
   assert.equal(res.body.events.length, 2);
   const e = res.body.events[0];
-  // Exactly the target-timeline event shape — no second changes format.
-  assert.deepEqual(Object.keys(e).sort(), ['ref_id', 'severity', 'source', 'summary', 'timestamp', 'type'].sort());
+  // The target-timeline event shape — no second changes format — plus one
+  // ADDITIVE `agentId` (the local endpoint) so the topology map can locate a
+  // change on its host and flag recently-changed / flapping links.
+  assert.deepEqual(Object.keys(e).sort(), ['agentId', 'ref_id', 'severity', 'source', 'summary', 'timestamp', 'type'].sort());
   assert.equal(e.source, 'topology');
   assert.ok(e.type.startsWith('topology.'));
+  assert.equal(e.agentId, 9);
 });
 
 test('GET /api/topology/changes requires auth → 401', async () => {

@@ -57,7 +57,9 @@ function createDiscoveryRouter({ discoveredDevicesRepo, agentsRepo = null, disco
     if (!Number.isInteger(limit) || limit < 1 || limit > 500) return res.status(400).json({ error: 'limit must be 1..500' });
     if (!auditLogRepo || typeof auditLogRepo.list !== 'function') return res.json({ sweeps: [] });
     const rows = await auditLogRepo.list({ category: 'discovery', limit });
-    const sweeps = rows.filter((r) => r.action === 'discovery_sweep' || r.action === 'discovery_sweep_refused');
+    const sweeps = rows
+      .filter((r) => r.action === 'discovery_sweep' || r.action === 'discovery_sweep_refused')
+      .map((r) => ({ createdAt: r.created_at instanceof Date ? r.created_at.toISOString() : r.created_at, action: r.action, target: r.target ?? null, detail: r.detail ?? null }));
     res.json({ sweeps });
   }));
 

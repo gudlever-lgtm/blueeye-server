@@ -6670,14 +6670,26 @@ views.flows = async () => {
     } }, label);
     return b;
   });
-  const runBtn = el('button', { class: 'small' }, 'Inspect');
-  const status = el('span', { class: 'muted' });
+  const runBtn = el('button', { class: 'flows-inspect' }, 'Inspect');
+  const status = el('span', { class: 'muted flows-status' });
+
+  // A labelled control group: a small uppercase caption stacked above its
+  // input/select/button-group, so the filter bar reads as discrete fields
+  // instead of one crowded row.
+  const flowField = (labelText, cls, ...controls) =>
+    el('div', { class: 'flows-field' + (cls ? ' ' + cls : '') },
+      el('span', { class: 'flows-field-label' }, labelText), ...controls);
+
+  // Mode + time presets rendered as connected "segmented" controls (one active).
+  const modeSeg = el('div', { class: 'flows-seg' }, modeUnified, modeBidi);
+  const rangeSeg = el('div', { class: 'flows-seg' }, ...presetBtns);
 
   // Unified-only filters — hidden when switching to bidirectional mode.
-  const unifiedControls = el('span', {},
-    el('label', { class: 'inline muted' }, ' Port ', portInput),
-    el('label', { class: 'inline muted' }, ' Proto ', protoInput),
-    dirSel, scopeSel);
+  const unifiedControls = el('div', { class: 'flows-row flows-row-filters' },
+    flowField('Port', 'flows-field-sm', portInput),
+    flowField('Proto', 'flows-field-sm', protoInput),
+    flowField('Direction', '', dirSel),
+    flowField('Scope', '', scopeSel));
 
   // Prefill from a deep link (global search → "→ flows").
   if (flowsPrefill) {
@@ -6699,15 +6711,17 @@ views.flows = async () => {
   modeUnified.addEventListener('click', () => switchMode('unified'));
   modeBidi.addEventListener('click', () => switchMode('bidi'));
 
-  root.append(el('div', { class: 'history-controls' },
-    el('label', { class: 'inline muted' }, 'Agent ', agentSel),
-    el('span', { class: 'muted' }, ' Mode '), modeUnified, modeBidi,
-    el('label', { class: 'inline muted' }, ' Peer ', peerInput),
+  root.append(el('div', { class: 'flows-controls' },
+    el('div', { class: 'flows-row' },
+      flowField('Agent', 'flows-field-agent', agentSel),
+      flowField('Mode', '', modeSeg),
+      flowField('Peer', 'flows-field-grow', peerInput)),
     unifiedControls,
-    el('span', { class: 'muted' }, ' '), ...presetBtns,
-    el('label', { class: 'inline muted' }, ' From ', fromI),
-    el('label', { class: 'inline muted' }, ' To ', toI),
-    runBtn, status));
+    el('div', { class: 'flows-row flows-row-time' },
+      flowField('Range', '', rangeSeg),
+      flowField('From', '', fromI),
+      flowField('To', '', toI),
+      el('div', { class: 'flows-field flows-field-action' }, runBtn, status))));
 
   const host = el('div', {});
   root.append(host);

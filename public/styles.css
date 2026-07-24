@@ -1114,6 +1114,52 @@ button.active-btn { outline: 2px solid var(--accent); }
 .history-controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-bottom: 8px; }
 .history-controls label.inline { flex-direction: row; align-items: center; gap: 6px; }
 .history-controls input, .history-controls select { padding: 4px 8px; }
+
+/* Flows filter toolbar — grouped, labelled fields instead of one crowded row.
+   Three stacked rows (scope / unified filters / time+action) inside a panel. */
+.flows-controls {
+  display: flex; flex-direction: column; gap: 12px;
+  margin: 0 0 16px; padding: 14px 16px;
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px;
+}
+.flows-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px 16px; }
+/* The unified-filter and time rows sit below a light divider from the row above. */
+.flows-row-filters, .flows-row-time { padding-top: 12px; border-top: 1px dashed var(--border); }
+.flows-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.flows-field-label {
+  font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--muted); line-height: 1;
+}
+.flows-field input, .flows-field select {
+  padding: 7px 10px; font: inherit; font-size: 13px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--panel); color: var(--text);
+}
+.flows-field input:focus, .flows-field select:focus {
+  outline: none; border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-weak);
+}
+.flows-field-sm input { width: 6.5rem; }
+.flows-field-agent select { min-width: 12rem; }
+.flows-field-grow { flex: 1 1 16rem; }
+.flows-field-grow input { width: 100%; }
+/* Push the Inspect button (+ status) to the far end of the time row. */
+.flows-field-action { flex-direction: row; align-items: center; gap: 10px; margin-left: auto; }
+.flows-status { font-size: 12px; }
+
+/* Segmented control: connected buttons sharing one border, one highlighted. */
+.flows-seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px;
+  overflow: hidden; background: var(--panel); }
+.flows-seg button {
+  border: 0; border-radius: 0; background: transparent; color: var(--text);
+  font-weight: 600; font-size: 12px; padding: 7px 12px; white-space: nowrap;
+}
+.flows-seg button + button { border-left: 1px solid var(--border); }
+.flows-seg button:hover { background: var(--panel-2); }
+.flows-seg button.active { background: var(--accent); color: var(--btn-fg); }
+
+/* Primary action — a touch larger than the compact fields around it. */
+.flows-inspect { padding: 8px 20px; font-size: 13px; }
+
 .history-metrics { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 10px; }
 .big-chart-svg .brush { pointer-events: none; }
 .big-chart-svg { cursor: crosshair; }

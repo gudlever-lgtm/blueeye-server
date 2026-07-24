@@ -11,6 +11,10 @@ node_modules/
 # Persisted analysis baselines
 .analysis-baselines.json
 
+# Cross-compiled agent binaries cached at runtime for enrolment downloads
+# (agentBinaryCacheDir, src/enroll/agentBinaryStore.js) — generated, never tracked.
+agent-binaries/
+
 # Local compose overrides (e.g. host port tweaks)
 docker-compose.override.yml
 

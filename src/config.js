@@ -151,6 +151,13 @@ const config = {
     // restarts.  On a cache hit (same agent version) the build is skipped.
     // Mount this as a persistent volume in Docker (like /data).
     agentBinaryCacheDir: process.env.AGENT_BINARY_CACHE_DIR || path.join(process.cwd(), 'agent-binaries'),
+    // Where SIGNED agent releases are stored (the server auto-signs one from
+    // source at startup, and one-click Update signs on demand). Defaults to a
+    // local dir so signed updates work out of the box — WITHOUT it the release
+    // store has nowhere to persist and every update falls back to an unsigned
+    // push that key-pinning agents refuse. Mount as a persistent volume (like
+    // /data) so published releases survive restarts.
+    releaseDir: process.env.AGENT_RELEASE_DIR || path.join(process.cwd(), 'agent-releases'),
     // SHA-256 fingerprint of the server's TLS leaf cert (or the terminating
     // reverse proxy's). Embedded into install scripts so the agent can pin it.
     // Leave unset for plain HTTP / development (no pinning).

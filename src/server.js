@@ -264,11 +264,13 @@ function start() {
     logger,
   });
 
-  // Signed agent releases: built + Ed25519-signed off-server, uploaded via
-  // POST /agents/releases (verified on upload), kept under AGENT_RELEASE_DIR and
-  // pushed to agents. The release public key is a SEPARATE trust anchor from the
+  // Signed agent releases: the server auto-signs one from source at startup (and
+  // one-click Update signs on demand); also accepts off-server uploads via
+  // POST /agents/releases (verified on upload). Kept under config.enroll.releaseDir
+  // (AGENT_RELEASE_DIR, defaulting to ./agent-releases so signed updates work with
+  // no extra config). The release public key is a SEPARATE trust anchor from the
   // license key (see src/license/releaseKey.js).
-  const agentReleaseStore = createAgentReleaseStore({ dir: process.env.AGENT_RELEASE_DIR || '', logger });
+  const agentReleaseStore = createAgentReleaseStore({ dir: config.enroll.releaseDir, logger });
 
   // License validation: validates a signed proof against blueeye-licens, with a
   // local cache + grace window for network outages. getAgentCount reads the live

@@ -114,6 +114,9 @@ services:
       SEED_DEMO_ENROLLMENT_CODE: ${SEED_DEMO_ENROLLMENT_CODE:-DEMO-ENROLL-CODE}
       # Where the agent source bundle is packaged from (see the bind mount below).
       AGENT_SOURCE_DIR: /agent-src
+      # Signed agent releases live on the persistent /data volume so they survive
+      # container recreation (the server also auto-signs one from source on boot).
+      AGENT_RELEASE_DIR: /data/agent-releases
     command: sh -c "node src/migrate.js && node scripts/seed-demo.js && node src/server.js"
     volumes:
       - server-data:/data

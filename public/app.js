@@ -8905,6 +8905,50 @@ async function settingsUpdatesView() {
   // installer, so counting them under a plain "click Update" is misleading.
   const installerOnly = behind.filter((a) => !agentSelfUpdatable(a));
 
+  // Signed-release gate: a one-click Update is only ACCEPTED by an agent that
+  // pinned a release key when the server has a SIGNED release to push. With none
+  // published the command goes out unsigned and those agents refuse it (the exact
+  // "accepted 202, then Self-update failed: refusing unsigned update" case). This
+  // failure is otherwise invisible on the server, so surface it — and offer the
+  // one-click fix (sign the current source) when the server holds a signing key.
+  const signedRelease = ver.agentReleaseVersion || null;
+  const canSign = !!ver.canSignReleases;
+  const selfUpdatableBehind = behind.filter((a) => agentSelfUpdatable(a));
+  if (!signedRelease && selfUpdatableBehind.length) {
+    const box = el('div', { class: 'callout' });
+    if (canSign) {
+      // Not blocked — the Update button mints a signed release from source on
+      // demand and pushes THAT. Explain, and offer the explicit publish too.
+      box.append(el('p', {}, el('strong', {}, 'No signed release is published yet.')));
+      box.append(el('p', { class: 'muted' },
+        'Clicking Update on a systemd agent now signs the current source with this server\'s agent key, publishes it as a release, and pushes that — so a key-pinning agent accepts it. You can also publish it up front:'));
+      if (canDelete()) {
+        const label = `Publish signed release (v${source})`;
+        const btn = el('button', { class: 'small' }, label);
+        btn.addEventListener('click', async () => {
+          btn.disabled = true; btn.textContent = 'Publishing…';
+          try {
+            const r = await api('/system/agent-release/publish', { method: 'POST' });
+            toast(`Signed release v${r.version} published — one-click updates are enabled.`);
+            render();
+          } catch (err) { btn.disabled = false; btn.textContent = label; toast(err.message, true); }
+        });
+        box.append(el('div', { class: 'row-actions' }, btn));
+      }
+    } else {
+      // Genuinely blocked: the update goes out unsigned and key-pinning agents
+      // refuse it, and this server has no key that can sign a release.
+      box.append(el('p', {}, el('strong', {}, '⚠ One-click updates are blocked: no signed release, and this server can\'t sign one.')));
+      box.append(el('p', { class: 'muted' },
+        `${selfUpdatableBehind.length} systemd agent(s) are behind, but the server pushes an UNSIGNED update. An agent that pinned a release key accepts the command, then fails with "refusing unsigned update", so its version never advances.`));
+      box.append(el('p', { class: 'muted' },
+        ver.agentKeyConfigured
+          ? 'The server\'s signing key is verify-only (no private key here), so it can\'t publish a signed release — a managed signing key is required.'
+          : ['Generate a signing key under ', settingsLink('agentkey', 'Settings → Agent key'), ' to enable signed releases and one-click updates — note that agents enrolled against a different key must be re-enrolled to pin the new one.']));
+    }
+    root.append(box);
+  }
+
   root.append(el('div', { class: 'cards' },
     stat('Agents reporting', `${withVer.length} / ${agents.length}`),
     stat('Up to date', offered ? String(withVer.length - behind.length) : '–'),

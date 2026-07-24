@@ -73,7 +73,7 @@ function aggregateFlows(rows, { port = null, protocol = null } = {}) {
 //
 // Agents are created via enrollment (prompt 4) — there is intentionally no
 // manual POST /agents here.
-function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentCommander, agentSourceStore, releaseStore = null, releasePublicKey = '', auditRepo = null, integrationTrigger = null, logger = silentLogger, reconnect = {} }) {
+function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentCommander, agentSourceStore, releaseStore = null, releasePublicKey = '', publishRelease = null, auditRepo = null, integrationTrigger = null, logger = silentLogger, reconnect = {} }) {
   // How long POST /:id/reconnect waits for the agent to re-dial after the forced
   // close (the agent's first backoff step is ~1 s), and how often it re-checks.
   const reconnectWaitMs = Number.isInteger(reconnect.waitMs) ? reconnect.waitMs : 12000;
@@ -254,8 +254,22 @@ function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentComma
       const agent = await agentsRepo.findById(id);
       if (!agent) return notFound(res);
 
-      const release = releaseStore && typeof releaseStore.latest === 'function' ? releaseStore.latest() : null;
+      let release = releaseStore && typeof releaseStore.latest === 'function' ? releaseStore.latest() : null;
       const haveSource = agentSourceStore && typeof agentSourceStore.available === 'function' && agentSourceStore.available();
+      // Prefer a SIGNED push. If none is published yet but this server holds a
+      // signing key, mint one from the current source on demand — otherwise the
+      // command goes out unsigned and an agent that pinned a release key refuses
+      // it ("signature downgrade"), so the one-click Update could never land. A
+      // no-op without a signing key (publishRelease returns null), leaving the
+      // legacy unsigned-source fallback intact.
+      if (!release && typeof publishRelease === 'function') {
+        try {
+          const minted = await publishRelease();
+          if (minted && minted.version) release = releaseStore.latest();
+        } catch (err) {
+          (req.log || logger).warn(`agents: on-demand signed-release publish failed (${err.message}); falling back to source bundle`);
+        }
+      }
       if (!release && !haveSource) {
         return res.status(503).json({ error: 'No agent source is published on the server' });
       }

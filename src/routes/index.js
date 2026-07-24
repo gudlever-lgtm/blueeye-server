@@ -259,7 +259,10 @@ function createApiRouter({
   router.use('/me', createMeRouter({ usersRepo }));
   router.use('/locations', createLocationsRouter({ locationsRepo, resultsRepo }));
   router.use('/license', createLicenseRouter({ licenseManager, featureGate, planService, usageService, auditLogger }));
-  router.use('/system', createSystemRouter({ systemInfo, agentSourceStore, agentBinaryStore, releaseStore }));
+  router.use('/system', createSystemRouter({
+    systemInfo, agentSourceStore, agentBinaryStore, releaseStore, releaseKeyService,
+    publishRelease: () => publishSignedReleaseFromSource({ sourceStore: agentSourceStore, releaseStore, releaseKeyService }),
+  }));
   // Shared per-target timeline service (Phase 1 merge/fan-out) — powers both the
   // /api/targets timeline and the /api/findings/:id/context change-diff.
   const targetTimelineService = findingStore
@@ -413,7 +416,7 @@ function createApiRouter({
   //   - POST /results          — agent token
   //   - POST /enroll           — unauthenticated
   // Requests fall through routers that have no matching route.
-  router.use('/agents', createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentCommander, agentSourceStore, releaseStore, releasePublicKey, auditRepo, integrationTrigger: integrationsDispatcher, logger, reconnect: agentReconnect }));
+  router.use('/agents', createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentCommander, agentSourceStore, releaseStore, releasePublicKey, publishRelease: () => publishSignedReleaseFromSource({ sourceStore: agentSourceStore, releaseStore, releaseKeyService }), auditRepo, integrationTrigger: integrationsDispatcher, logger, reconnect: agentReconnect }));
   router.use('/audit', createAuditRouter({ auditRepo }));
   // Unified, server-wide audit trail (Reporting → Audit) — admin only.
   if (auditEventsRepo) router.use('/api/audit', createAuditEventsRouter({ auditEventsRepo, auditLogRepo, featureGate }));

@@ -12,6 +12,7 @@ const {
   makeAgentsRepo,
   makeAgentCommander,
   makeSourceStore,
+  makeReleaseKeyService,
   authHeader,
 } = require('../test-support/fakes');
 
@@ -152,7 +153,10 @@ test('POST /agents/:id/update sends the bundle SHA and reports acceptance (admin
   });
   const agentSourceStore = makeSourceStore({ sha256: 'd'.repeat(64) });
 
-  const res = await request(makeApp({ agentsRepo, agentCommander, agentSourceStore }))
+  // No signing key → the update pushes the unsigned source bundle (its SHA),
+  // the legacy fallback this test covers. (With a key the route signs on demand,
+  // exercised in agentReleaseServe.test.js.)
+  const res = await request(makeApp({ agentsRepo, agentCommander, agentSourceStore, releaseKeyService: makeReleaseKeyService({ configured: false }) }))
     .post('/agents/5/update')
     .set('Authorization', admin());
 

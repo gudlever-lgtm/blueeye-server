@@ -10,17 +10,28 @@ const pkg = require('../../package.json');
 function createSystemRouter({ systemInfo, agentSourceStore, agentBinaryStore, releaseStore } = {}) {
   const router = express.Router();
 
+  // The startup-packaged agent SOURCE bundle version. This is what the one-line
+  // installer and the Windows/enrollment path actually download
+  // (GET /enroll/agent-source.tgz), so it's the newest version a non-systemd
+  // agent (Docker/Windows/unmanaged) can reach by re-running its installer.
+  const sourceAgentVersion = () =>
+    (agentSourceStore && typeof agentSourceStore.sourceVersion === 'function' ? agentSourceStore.sourceVersion() : null);
+
   // The agent version the server currently offers: a signed, uploaded release
   // takes precedence over the startup-packaged source bundle, so "is this agent
-  // out of date?" tracks what the Update button would actually push.
+  // out of date?" tracks what a systemd one-click Update would actually push.
   const offeredAgentVersion = () => {
     const rel = releaseStore && typeof releaseStore.latest === 'function' ? releaseStore.latest() : null;
     if (rel && rel.version) return rel.version;
-    return agentSourceStore && typeof agentSourceStore.sourceVersion === 'function' ? agentSourceStore.sourceVersion() : null;
+    return sourceAgentVersion();
   };
 
   // Versions, for the Settings "Updates" panel: this server's version and the
-  // agent version it serves (so the UI can flag out-of-date agents). viewer+.
+  // agent versions it serves (so the UI can flag out-of-date agents). `agent` is
+  // what a systemd one-click Update pushes (signed release, else source); when a
+  // signed release is newer than the packaged source these diverge, and
+  // `agentSource` is what installer-based agents can actually reach — the UI
+  // compares those two against the right target. viewer+.
   router.get(
     '/version',
     requireAuth,
@@ -30,6 +41,7 @@ function createSystemRouter({ systemInfo, agentSourceStore, agentBinaryStore, re
         server: pkg.version || null,
         releaseDate: pkg.releaseDate || null,
         agent: offeredAgentVersion(),
+        agentSource: sourceAgentVersion(),
         binaryBuild: agentBinaryStore ? agentBinaryStore.status() : null,
       });
     })

@@ -1207,12 +1207,19 @@ views.screening = async () => {
 
 views.agents = async () => {
   const [agents, locations, ver] = await Promise.all([api('/agents'), api('/locations'), api('/system/version').catch(() => null)]);
-  const currentAgentVersion = ver && ver.agent ? ver.agent : null;
+  // Two served versions: `offered` is what a systemd one-click Update pushes (a
+  // signed release, else the source bundle); `source` is what installer-based
+  // agents can reach (always the source bundle). They diverge when a signed
+  // release is newer than the packaged source — each agent is judged against the
+  // one IT can actually reach (agentUpdateTarget), so an installer-only agent
+  // that's on the newest installable build isn't flagged as forever "behind".
+  const offered = ver && ver.agent ? ver.agent : null;
+  const versions = { offered, source: (ver && ver.agentSource) || offered };
   locationCache = locations;
   // Only systemd agents can be rebuilt-and-restarted from here; Docker/unmanaged/
   // Windows agents would just decline, so the bulk action targets (and counts)
   // the self-updatable ones — the rest are flagged with an "installer" badge.
-  const outdated = agents.filter((a) => agentIsBehind(a, currentAgentVersion) && agentSelfUpdatable(a));
+  const outdated = agents.filter((a) => agentSelfUpdatable(a) && agentIsBehind(a, agentUpdateTarget(a, versions)));
   const root = el('div');
   const countLabel = el('span', { class: 'muted' }, `${agents.length} total`);
   root.append(el('div', { class: 'section-head' },
@@ -1220,7 +1227,7 @@ views.agents = async () => {
     countLabel,
     canWrite() ? el('button', { class: 'small', onclick: () => newAgent() }, '+ New agent') : null,
     (canDelete() && outdated.length)
-      ? el('button', { class: 'small', onclick: () => bulkUpdateAgents(outdated, currentAgentVersion), title: 'Rebuild every self-updatable (systemd) outdated agent from the server source, one at a time' }, `Update outdated (${outdated.length})`)
+      ? el('button', { class: 'small', onclick: () => bulkUpdateAgents(outdated, offered), title: 'Rebuild every self-updatable (systemd) outdated agent from the server source, one at a time' }, `Update outdated (${outdated.length})`)
       : null));
   if (!agents.length) { root.append(el('div', { class: 'empty' }, 'No agents yet. Click "+ New agent" to get an enrollment code for installation.')); return root; }
 
@@ -1285,7 +1292,7 @@ views.agents = async () => {
       return sortDir === 'asc' ? r : -r;
     });
     tbody.replaceChildren(...(list.length
-      ? list.map((a) => agentRow(a, currentAgentVersion))
+      ? list.map((a) => agentRow(a, versions))
       : [el('tr', {}, el('td', { colspan: String(columns.length), class: 'muted' }, 'No agents match your filter.'))]));
     columns.forEach((c, i) => {
       if (!c.key) return;
@@ -1302,12 +1309,13 @@ views.agents = async () => {
 };
 
 // One agent table row (extracted so the agents view can re-render on filter/sort).
-function agentRow(a, currentAgentVersion) {
-  const behind = agentIsBehind(a, currentAgentVersion);
+function agentRow(a, versions) {
+  const target = agentUpdateTarget(a, versions);
+  const behind = agentIsBehind(a, target);
   return el('tr', {},
     el('td', {}, String(a.id)),
     el('td', {}, el('div', {}, a.display_name || a.hostname), a.display_name ? el('div', { class: 'muted' }, a.hostname) : null),
-    el('td', {}, `${a.platform} / ${a.arch}`, agentVersionLine(a, currentAgentVersion)),
+    el('td', {}, `${a.platform} / ${a.arch}`, agentVersionLine(a, target)),
     el('td', {}, el('span', {
       class: `badge ${a.status} clickable`,
       role: 'button',
@@ -1330,7 +1338,7 @@ function agentRow(a, currentAgentVersion) {
       el('button', { class: 'small ghost', onclick: () => showSpeedtest(a), title: 'Active download/upload speed test to the server' }, 'Speed'),
       canWrite() ? el('button', { class: 'small', onclick: () => runTest(a) }, 'Run test') : null,
       canWrite() ? el('button', { class: 'small ghost', onclick: () => editAgent(a) }, 'Edit') : null,
-      canDelete() ? agentUpdateButton(a, currentAgentVersion, behind) : null,
+      canDelete() ? agentUpdateButton(a, target, behind) : null,
       canDelete() ? el('button', { class: 'small danger', onclick: () => deleteAgent(a) }, 'Delete') : null,
     )),
   );
@@ -1419,6 +1427,20 @@ function agentIsBehind(a, current) {
 function agentSelfUpdatable(a) {
   const managed = a && a.capabilities && a.capabilities.managed;
   return managed !== 'docker' && managed !== 'unmanaged';
+}
+
+// The newest version THIS agent can actually reach, so "behind" compares against
+// what its own update path delivers — not a version it can never get to. A
+// systemd agent one-click-updates to the offered version (a signed release, else
+// the source bundle); a Docker/Windows/unmanaged agent can only re-run its
+// installer, which downloads the SOURCE bundle. When the server publishes a
+// signed release newer than the packaged source these differ, and judging an
+// installer-only agent against the release would flag it as forever "behind"
+// even when it's on the newest build its installer can produce. `versions` is
+// { offered, source }; falls back gracefully when only one is known.
+function agentUpdateTarget(a, versions) {
+  if (!versions) return null;
+  return agentSelfUpdatable(a) ? versions.offered : (versions.source || versions.offered);
 }
 
 // Why a non-self-updatable agent's version won't change from here, and how to
@@ -8799,9 +8821,21 @@ async function settingsUpdatesView() {
   const root = el('div');
   root.append(el('p', { class: 'muted settings-intro' }, 'Version of this server and the agent it ships, plus which enrolled agents are out of date. Checks are local — no external calls.'));
 
+  const offered = ver.agent || null;
+  const source = ver.agentSource || offered;
+  const versions = { offered, source };
+  // When a signed release is newer than the packaged source, the "one-click"
+  // (release) and "installer" (source) targets diverge — show both so it's clear
+  // why an installer-only agent stops at the older number.
+  const diverged = offered && source && compareVersions(offered, source) !== 0;
   root.append(el('div', { class: 'cards' },
     stat('Server', ver.server ? `v${ver.server}` : '–'),
-    stat('Agent (served)', ver.agent ? `v${ver.agent}` : '–')));
+    stat('Agent (one-click)', offered ? `v${offered}` : '–'),
+    diverged ? stat('Agent (installer)', `v${source}`) : null));
+  if (diverged) {
+    root.append(el('p', { class: 'muted' },
+      `A signed release (v${offered}) is newer than the packaged source (v${source}). Systemd agents one-click-update to v${offered}; Docker/Windows/unmanaged agents re-run their installer and reach v${source}. To lift the installer target, pull the new agent source on the server host and "Reload agent source" below.`));
+  }
 
   // Re-read the agent source from disk so a freshly-pulled version is served
   // without restarting the server. admin only.
@@ -8821,9 +8855,10 @@ async function settingsUpdatesView() {
     root.append(el('p', { class: 'muted' }, 'After pulling a new agent version on the server host, reload to publish it without restarting the server.'));
   }
 
-  const cur = ver.agent || null;
   const withVer = agents.filter((a) => a.capabilities && a.capabilities.agentVersion);
-  const behind = withVer.filter((a) => agentIsBehind(a, cur));
+  // Judge each agent against the version IT can reach: systemd agents vs the
+  // one-click (release) target, installer-based agents vs the source target.
+  const behind = withVer.filter((a) => agentIsBehind(a, agentUpdateTarget(a, versions)));
   // Split "behind" by whether one click here can actually fix it: only systemd
   // agents self-update — Docker/unmanaged/Windows update from their host
   // installer, so counting them under a plain "click Update" is misleading.
@@ -8831,8 +8866,8 @@ async function settingsUpdatesView() {
 
   root.append(el('div', { class: 'cards' },
     stat('Agents reporting', `${withVer.length} / ${agents.length}`),
-    stat('Up to date', cur ? String(withVer.length - behind.length) : '–'),
-    stat('Behind', cur ? String(behind.length) : '–')));
+    stat('Up to date', offered ? String(withVer.length - behind.length) : '–'),
+    stat('Behind', offered ? String(behind.length) : '–')));
 
   if (behind.length) {
     root.append(el('h4', {}, 'Agents needing an update'));
@@ -8840,25 +8875,26 @@ async function settingsUpdatesView() {
       root.append(el('p', { class: 'muted' },
         `${installerOnly.length} of these can't self-update from here (Docker/unmanaged/Windows) — update those by re-running the installer on the host.`));
     }
-    const cols = canDelete() ? ['Agent', 'Installed', 'Current', 'Update via', ''] : ['Agent', 'Installed', 'Current', 'Update via'];
+    const cols = canDelete() ? ['Agent', 'Installed', 'Target', 'Update via', ''] : ['Agent', 'Installed', 'Target', 'Update via'];
     root.append(el('table', {},
       el('thead', {}, el('tr', {}, ...cols.map((h) => el('th', {}, h)))),
       el('tbody', {}, ...behind.map((a) => {
         const selfUpdatable = agentSelfUpdatable(a);
+        const target = agentUpdateTarget(a, versions);
         return el('tr', {},
           el('td', {}, a.display_name || a.hostname),
           el('td', {}, el('span', { class: 'badge warn' }, `v${a.capabilities.agentVersion}`)),
-          el('td', {}, el('span', { class: 'badge active' }, `v${cur}`)),
+          el('td', {}, el('span', { class: 'badge active' }, `v${target}`)),
           el('td', {}, selfUpdatable
             ? el('span', { class: 'muted', title: 'systemd — one-click Update rebuilds from the server source and restarts' }, 'one-click')
             : el('span', { class: 'muted', title: agentUpdateHint(a) }, 'host installer')),
           canDelete() ? el('td', {}, selfUpdatable
-            ? el('div', { class: 'row-actions' }, el('button', { class: 'small', onclick: () => updateAgent(a, cur) }, 'Update'))
+            ? el('div', { class: 'row-actions' }, el('button', { class: 'small', onclick: () => updateAgent(a, target) }, 'Update'))
             : el('span', { class: 'muted', title: agentUpdateHint(a) }, '—')) : null,
         );
       }))));
-  } else if (cur && withVer.length) {
-    root.append(el('p', { class: 'muted' }, 'All reporting agents are on the current version.'));
+  } else if (offered && withVer.length) {
+    root.append(el('p', { class: 'muted' }, 'All reporting agents are on the version their update path can reach.'));
   }
 
   root.append(el('h4', {}, 'How to update'));

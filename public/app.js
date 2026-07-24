@@ -836,7 +836,7 @@ const PAGE_INFO = {
         el('li', {}, '”+ New agent” (operator+) opens ', viewLink('enrollment'), ', where you generate a code and a ready-to-run install one-liner.'),
         el('li', {}, '”Run test” asks the agent to measure immediately; “Traffic” shows the measurements.'),
         el('li', {}, '”Edit” sets name, location, notes and traffic source (proc, SNMP, NetFlow or sFlow).'),
-        el('li', {}, '”Upgrade” (admin) rebuilds a systemd-managed agent from the server\'s published source and restarts it — always available for a manual re-deploy; it shows as a highlighted “Update” when the agent is behind. Docker/unmanaged agents decline (re-run the host installer).')),
+        el('li', {}, '”Upgrade” (admin) rebuilds a systemd-managed agent from the server\'s published source and restarts it — always available for a manual re-deploy; it shows as a highlighted “Update” when the agent is behind. Docker/unmanaged/Windows agents can\'t self-update from here: their version line shows an “update · installer” badge (and an “Installer” button) instead — update those by re-running the installer on the host.')),
       el('p', { class: 'muted' }, 'Group agents by site under ', viewLink('locations'), '; see them all with a single health verdict on ', viewLink('fleet', 'Overview'), '.'),
     ],
   },
@@ -1209,7 +1209,10 @@ views.agents = async () => {
   const [agents, locations, ver] = await Promise.all([api('/agents'), api('/locations'), api('/system/version').catch(() => null)]);
   const currentAgentVersion = ver && ver.agent ? ver.agent : null;
   locationCache = locations;
-  const outdated = agents.filter((a) => agentIsBehind(a, currentAgentVersion));
+  // Only systemd agents can be rebuilt-and-restarted from here; Docker/unmanaged/
+  // Windows agents would just decline, so the bulk action targets (and counts)
+  // the self-updatable ones — the rest are flagged with an "installer" badge.
+  const outdated = agents.filter((a) => agentIsBehind(a, currentAgentVersion) && agentSelfUpdatable(a));
   const root = el('div');
   const countLabel = el('span', { class: 'muted' }, `${agents.length} total`);
   root.append(el('div', { class: 'section-head' },
@@ -1217,7 +1220,7 @@ views.agents = async () => {
     countLabel,
     canWrite() ? el('button', { class: 'small', onclick: () => newAgent() }, '+ New agent') : null,
     (canDelete() && outdated.length)
-      ? el('button', { class: 'small', onclick: () => bulkUpdateAgents(outdated, currentAgentVersion), title: 'Rebuild every outdated agent from the server source, one at a time' }, `Update outdated (${outdated.length})`)
+      ? el('button', { class: 'small', onclick: () => bulkUpdateAgents(outdated, currentAgentVersion), title: 'Rebuild every self-updatable (systemd) outdated agent from the server source, one at a time' }, `Update outdated (${outdated.length})`)
       : null));
   if (!agents.length) { root.append(el('div', { class: 'empty' }, 'No agents yet. Click "+ New agent" to get an enrollment code for installation.')); return root; }
 
@@ -1327,18 +1330,7 @@ function agentRow(a, currentAgentVersion) {
       el('button', { class: 'small ghost', onclick: () => showSpeedtest(a), title: 'Active download/upload speed test to the server' }, 'Speed'),
       canWrite() ? el('button', { class: 'small', onclick: () => runTest(a) }, 'Run test') : null,
       canWrite() ? el('button', { class: 'small ghost', onclick: () => editAgent(a) }, 'Edit') : null,
-      canDelete()
-        ? el('button', {
-            // Always available to admins as a manual upgrade link; emphasised
-            // (solid) when the agent is behind the published version, otherwise a
-            // subtle ghost link that re-deploys the current server source.
-            class: behind ? 'small' : 'small ghost',
-            onclick: () => updateAgent(a, currentAgentVersion),
-            title: behind
-              ? `Update this agent to v${currentAgentVersion} — rebuild from the server source and restart`
-              : 'Manually rebuild this agent from the server source and restart it',
-          }, behind ? 'Update' : 'Upgrade')
-        : null,
+      canDelete() ? agentUpdateButton(a, currentAgentVersion, behind) : null,
       canDelete() ? el('button', { class: 'small danger', onclick: () => deleteAgent(a) }, 'Delete') : null,
     )),
   );
@@ -1356,14 +1348,45 @@ function agentHealthRank(a) {
 
 // Small "v<x>" line under the platform, with an "update" badge when the agent is
 // behind the version the server currently serves. Version comes from the agent's
-// reported capabilities (capabilities.agentVersion).
+// reported capabilities (capabilities.agentVersion). Only systemd agents can be
+// upgraded with one click from here — for Docker/unmanaged/Windows agents the
+// badge is neutral and says the update comes from the host installer, so the
+// flag doesn't imply an action that would just silently decline.
 function agentVersionLine(a, current) {
   const v = a.capabilities && a.capabilities.agentVersion;
   if (!v) return null;
-  const behind = agentIsBehind(a, current);
-  return el('div', { class: 'muted' },
-    `v${v}${behind ? ' ' : ''}`,
-    behind ? el('span', { class: 'badge warn', title: `Current agent version is ${current}` }, 'update') : null);
+  if (!agentIsBehind(a, current)) return el('div', { class: 'muted' }, `v${v}`);
+  return el('div', { class: 'muted' }, `v${v} `,
+    agentSelfUpdatable(a)
+      ? el('span', { class: 'badge warn', title: `Current agent version is ${current}` }, 'update')
+      : el('span', { class: 'badge neutral', title: `${agentUpdateHint(a)} (current version is ${current})` }, 'update · installer'));
+}
+
+// The row-actions button for pushing an agent onto the current version. Solid
+// "Update" when a systemd agent is behind; a subtle "Upgrade" (manual re-deploy)
+// when it's already current. Docker/unmanaged/Windows agents can't self-update
+// from here, so we don't offer a button that would just decline — a behind one
+// gets an "installer" affordance whose click explains where the update comes
+// from instead.
+function agentUpdateButton(a, current, behind) {
+  if (agentSelfUpdatable(a)) {
+    return el('button', {
+      // Always available to admins as a manual upgrade link; emphasised (solid)
+      // when the agent is behind the published version, otherwise a subtle ghost
+      // link that re-deploys the current server source.
+      class: behind ? 'small' : 'small ghost',
+      onclick: () => updateAgent(a, current),
+      title: behind
+        ? `Update this agent to v${current} — rebuild from the server source and restart`
+        : 'Manually rebuild this agent from the server source and restart it',
+    }, behind ? 'Update' : 'Upgrade');
+  }
+  if (!behind) return null; // up-to-date + can't self-update from here → no action
+  return el('button', {
+    class: 'small ghost',
+    onclick: () => updateAgent(a, current),
+    title: agentUpdateHint(a),
+  }, 'Installer');
 }
 
 // Compare dotted versions: <0 if a<b, 0 if equal, >0 if a>b. Ignores any
@@ -1385,6 +1408,26 @@ function compareVersions(a, b) {
 function agentIsBehind(a, current) {
   const v = a.capabilities && a.capabilities.agentVersion;
   return !!(v && current && compareVersions(v, current) < 0);
+}
+
+// Whether the server's one-click Update can actually upgrade this agent. Only
+// systemd-managed agents self-update from here (rebuild-from-source + restart);
+// Docker, unmanaged and Windows agents report managed 'docker'/'unmanaged' and
+// must be updated by re-running the host installer. An agent that never reported
+// a managed-state (a very old agent, pre-capabilities.managed) is treated as
+// updatable so we don't hide an action we're merely unsure about.
+function agentSelfUpdatable(a) {
+  const managed = a && a.capabilities && a.capabilities.managed;
+  return managed !== 'docker' && managed !== 'unmanaged';
+}
+
+// Why a non-self-updatable agent's version won't change from here, and how to
+// update it — used for the neutral badge tooltip and the "Installer" button.
+function agentUpdateHint(a) {
+  const managed = a && a.capabilities && a.capabilities.managed;
+  return managed === 'docker'
+    ? 'Runs under Docker — update it by re-running the install one-liner on the host (it rebuilds the container there, not from the server).'
+    : "Isn't service-managed (e.g. a Windows or bare-process agent) — update it by re-running the installer on the host.";
 }
 
 // Health derived from how recently the agent last reported in. online + a fresh
@@ -8693,6 +8736,10 @@ async function settingsUpdatesView() {
   const cur = ver.agent || null;
   const withVer = agents.filter((a) => a.capabilities && a.capabilities.agentVersion);
   const behind = withVer.filter((a) => agentIsBehind(a, cur));
+  // Split "behind" by whether one click here can actually fix it: only systemd
+  // agents self-update — Docker/unmanaged/Windows update from their host
+  // installer, so counting them under a plain "click Update" is misleading.
+  const installerOnly = behind.filter((a) => !agentSelfUpdatable(a));
 
   root.append(el('div', { class: 'cards' },
     stat('Agents reporting', `${withVer.length} / ${agents.length}`),
@@ -8701,16 +8748,27 @@ async function settingsUpdatesView() {
 
   if (behind.length) {
     root.append(el('h4', {}, 'Agents needing an update'));
-    const cols = canDelete() ? ['Agent', 'Installed', 'Current', ''] : ['Agent', 'Installed', 'Current'];
+    if (installerOnly.length) {
+      root.append(el('p', { class: 'muted' },
+        `${installerOnly.length} of these can't self-update from here (Docker/unmanaged/Windows) — update those by re-running the installer on the host.`));
+    }
+    const cols = canDelete() ? ['Agent', 'Installed', 'Current', 'Update via', ''] : ['Agent', 'Installed', 'Current', 'Update via'];
     root.append(el('table', {},
       el('thead', {}, el('tr', {}, ...cols.map((h) => el('th', {}, h)))),
-      el('tbody', {}, ...behind.map((a) => el('tr', {},
-        el('td', {}, a.display_name || a.hostname),
-        el('td', {}, el('span', { class: 'badge warn' }, `v${a.capabilities.agentVersion}`)),
-        el('td', {}, el('span', { class: 'badge active' }, `v${cur}`)),
-        canDelete() ? el('td', {}, el('div', { class: 'row-actions' },
-          el('button', { class: 'small', onclick: () => updateAgent(a, cur) }, 'Update'))) : null,
-      )))));
+      el('tbody', {}, ...behind.map((a) => {
+        const selfUpdatable = agentSelfUpdatable(a);
+        return el('tr', {},
+          el('td', {}, a.display_name || a.hostname),
+          el('td', {}, el('span', { class: 'badge warn' }, `v${a.capabilities.agentVersion}`)),
+          el('td', {}, el('span', { class: 'badge active' }, `v${cur}`)),
+          el('td', {}, selfUpdatable
+            ? el('span', { class: 'muted', title: 'systemd — one-click Update rebuilds from the server source and restarts' }, 'one-click')
+            : el('span', { class: 'muted', title: agentUpdateHint(a) }, 'host installer')),
+          canDelete() ? el('td', {}, selfUpdatable
+            ? el('div', { class: 'row-actions' }, el('button', { class: 'small', onclick: () => updateAgent(a, cur) }, 'Update'))
+            : el('span', { class: 'muted', title: agentUpdateHint(a) }, '—')) : null,
+        );
+      }))));
   } else if (cur && withVer.length) {
     root.append(el('p', { class: 'muted' }, 'All reporting agents are on the current version.'));
   }
@@ -8719,7 +8777,8 @@ async function settingsUpdatesView() {
   root.append(el('ul', {},
     el('li', {}, el('strong', {}, 'Server: '), 'on the server host run ', el('code', {}, './scripts/deploy.sh'), ' (git pull + rebuild).'),
     el('li', {}, el('strong', {}, 'Agents (systemd): '), 'click ', el('strong', {}, 'Update'), ' above (or on the Agents tab) — the server tells the agent to rebuild from the published source and restart.'),
-    el('li', {}, el('strong', {}, 'Agents (Docker): '), 're-run the install one-liner from ', el('strong', {}, 'Enrollment'), ' on that host (a container rebuilds on the host, not from here).')));
+    el('li', {}, el('strong', {}, 'Agents (Docker): '), 're-run the install one-liner from ', el('strong', {}, 'Enrollment'), ' on that host (a container rebuilds on the host, not from here).'),
+    el('li', {}, el('strong', {}, 'Agents (Windows / unmanaged): '), 're-run the installer on the host — these aren\'t service-managed the way systemd agents are, so the server can\'t rebuild-and-restart them remotely. Their row shows an ', el('strong', {}, 'installer'), ' badge instead of a one-click Update.')));
   return root;
 }
 

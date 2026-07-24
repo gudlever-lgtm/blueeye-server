@@ -167,6 +167,24 @@ function createAgentsRepository(db) {
     await pool.query('UPDATE agents SET last_seen = NOW() WHERE id = ?', [id]);
   }
 
+  // Reconciles stale 'online' rows to 'offline'. The DB only flips to 'offline'
+  // on a WS *close* event, so an agent that was online when the server last
+  // stopped (a restart drops sockets with no per-agent close) stays stuck
+  // 'online' forever if it never comes back — showing a green badge while it's
+  // actually unreachable. Run at startup: any agent marked 'online' that hasn't
+  // been seen within `olderThanSec` is set 'offline'. `last_seen` is bumped by
+  // ANY activity (WS or REST, shared across instances), so a still-live agent
+  // has a fresh timestamp and is left alone — no flap. Returns rows changed.
+  async function markStaleOffline({ olderThanSec = 300 } = {}) {
+    const [res] = await pool.query(
+      `UPDATE agents SET status = 'offline'
+        WHERE status = 'online'
+          AND (last_seen IS NULL OR last_seen < (NOW() - INTERVAL ? SECOND))`,
+      [olderThanSec],
+    );
+    return res.affectedRows || 0;
+  }
+
   return {
     findAll,
     findById,
@@ -179,6 +197,7 @@ function createAgentsRepository(db) {
     remove,
     setStatus,
     touchLastSeen,
+    markStaleOffline,
   };
 }
 

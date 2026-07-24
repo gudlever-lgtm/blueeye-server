@@ -891,6 +891,17 @@ function start() {
     .then(() => publishSignedReleaseFromSource({ sourceStore: agentSourceStore, releaseStore: agentReleaseStore, releaseKeyService, logger }))
     .catch((err) => logger.warn(`agent release key: startup load/publish failed: ${err.message}`));
 
+  // Reconcile stale 'online' rows on boot. A restart drops all live sockets
+  // without a per-agent WS close, so agents that were online (and never come
+  // back) would stay 'online' in the DB forever — a green badge on a dead
+  // agent. Still-live agents reconnect within seconds and re-set 'online'; the
+  // last_seen threshold means we only touch ones already silent past it, so a
+  // healthy fleet doesn't flap. Best-effort.
+  Promise.resolve()
+    .then(() => agentsRepo.markStaleOffline({ olderThanSec: 300 }))
+    .then((n) => { if (n) logger.info(`agents: reconciled ${n} stale 'online' row(s) to 'offline' at startup.`); })
+    .catch((err) => logger.warn(`agents: startup stale-status reconcile failed: ${err.message}`));
+
   // Live agent channel (WebSocket). New connections are gated by the license
   // (capacity + validity) — this is separate from agent-token authentication.
   agentWs = attachAgentWebSocket({

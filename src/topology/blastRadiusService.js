@@ -2,6 +2,7 @@
 
 const { buildTopologyGraph } = require('./graph');
 const { computeBlastRadius, DEFAULT_MAX_DEPTH } = require('./blastRadius');
+const { loadTopologyConfig } = require('./config');
 
 // Builds the unified topology graph from the persisted edges and computes the
 // blast radius for a node. Shared by the incident enrichment (best-effort) and
@@ -12,8 +13,7 @@ const { computeBlastRadius, DEFAULT_MAX_DEPTH } = require('./blastRadius');
 // (BLAST_RADIUS_MAX_DEPTH, default 4).
 
 function readMaxDepth(env = process.env) {
-  const n = Number(env.BLAST_RADIUS_MAX_DEPTH);
-  return Number.isInteger(n) && n > 0 ? n : DEFAULT_MAX_DEPTH;
+  return loadTopologyConfig(env).blastRadiusMaxDepth || DEFAULT_MAX_DEPTH;
 }
 
 function createBlastRadiusService({ lldpNeighborsRepo = null, serviceDependenciesRepo = null, agentsRepo = null, maxDepth = readMaxDepth() }) {

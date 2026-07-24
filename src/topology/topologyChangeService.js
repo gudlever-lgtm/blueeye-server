@@ -1,6 +1,7 @@
 'use strict';
 
 const { diffSnapshots, isInverse, flapKey, summarize } = require('./topologyDiff');
+const { loadTopologyConfig, DEFAULTS } = require('./config');
 
 // Detects topology changes between LLDP poll cycles and records them.
 //
@@ -16,11 +17,10 @@ const { diffSnapshots, isInverse, flapKey, summarize } = require('./topologyDiff
 // Off the ingest hot path is not required — this runs inline on the (infrequent)
 // capabilities report, and is best-effort: a failure never breaks the report.
 
-const DEFAULT_FLAP_WINDOW_SEC = 300;
+const DEFAULT_FLAP_WINDOW_SEC = DEFAULTS.flapWindowSeconds;
 
 function readFlapWindowSec(env = process.env) {
-  const n = Number(env.TOPOLOGY_FLAP_WINDOW_SECONDS);
-  return Number.isInteger(n) && n > 0 ? n : DEFAULT_FLAP_WINDOW_SEC;
+  return loadTopologyConfig(env).flapWindowSeconds;
 }
 
 function normEntry(e) {

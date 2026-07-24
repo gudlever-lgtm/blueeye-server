@@ -1,7 +1,8 @@
 'use strict';
 
 const { buildHostResolver } = require('./hostResolver');
-const { aggregateServiceDependencies, DEFAULT_TOP_N } = require('./serviceDependencyAggregator');
+const { aggregateServiceDependencies } = require('./serviceDependencyAggregator');
+const { loadTopologyConfig } = require('./config');
 
 // Scheduled recompute of the service-dependency edges — OFF the ingest hot path
 // (a leader-only singleton in server.js `backgroundJobs`, same as the LLDP graph
@@ -14,16 +15,12 @@ const { aggregateServiceDependencies, DEFAULT_TOP_N } = require('./serviceDepend
 //
 // Best-effort: a run failure is logged and never throws out of the interval.
 
-function toInt(v, dflt) {
-  const n = Number(v);
-  return Number.isFinite(n) && n > 0 ? Math.floor(n) : dflt;
-}
-
 function readConfig(env = process.env) {
+  const t = loadTopologyConfig(env);
   return {
-    windowHours: toInt(env.SERVICE_DEP_WINDOW_HOURS, 24),
-    topN: toInt(env.SERVICE_DEP_TOP_N, DEFAULT_TOP_N),
-    intervalMinutes: toInt(env.SERVICE_DEP_JOB_INTERVAL_MINUTES, 10),
+    windowHours: t.serviceDepWindowHours,
+    topN: t.serviceDepTopN,
+    intervalMinutes: t.serviceDepIntervalMinutes,
   };
 }
 

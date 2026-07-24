@@ -729,6 +729,14 @@ main#view:has(.fleet) { max-width: 95%; }
 .bl-median { stroke: var(--accent); stroke-width: 2; }
 .bl-dot { fill: var(--accent); }
 
+/* Delta / Changes view: change-type filter + shared global filter bar. */
+.delta-controls { display: flex; flex-direction: column; gap: 8px; margin: 6px 0 12px; }
+.delta-typebar, .delta-globalbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.delta-typebar .chip-count { margin-left: 6px; opacity: .7; font-variant-numeric: tabular-nums; }
+.delta-globalbar .chip.removable { border-style: dashed; }
+.delta-chips { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+.delta-table td:last-child { color: var(--muted); }
+
 /* NICs view: firmware-drift card + inventory list. */
 .nics-summary { margin: 0 0 14px; }
 .nic-card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; margin: 0 0 16px; }

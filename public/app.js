@@ -5617,6 +5617,145 @@ views.topology = async () => {
   return root;
 };
 
+// ---- Delta / Changes view (topology change feed) ---------------------------
+// The recorded topology changes (neighbour add/remove, link-state, port-move,
+// flapping) from GET /api/topology/changes, newest first. The view owns a
+// change-TYPE filter; the site + severity come from the SHARED global filter
+// (the same fleetFilter the Overview uses) — not a separate filter state.
+// Operator+ (changes are evidence records; the endpoint is operator+).
+PAGE_INFO.delta = {
+  hero: 'Topology changes — neighbour add/remove, link-state changes, port moves and flaps, newest first.',
+  title: 'Changes — the topology delta feed',
+  body: () => [
+    el('p', {}, 'Each LLDP poll is compared against the previous snapshot and every difference is recorded as an immutable change (also written to the hash-chained audit log). A change that reverts within the flap window collapses into a single “flapping” record.'),
+    el('p', {}, 'Filter by change type here; the Site and severity come from the shared global filter (the same one the Overview uses), so a filtered feed is one deep-link.'),
+    el('p', { class: 'muted' }, 'Operator/admin — topology changes are evidence records.'),
+  ],
+};
+
+const CHANGE_SEV_CLASS = { CRIT: 'bad', WARN: 'warn', INFO: 'muted' };
+
+views.delta = async () => {
+  const root = el('div', { class: 'delta-view' });
+  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Changes'), el('span', { class: 'muted' }, 'Topology delta feed')));
+  const controls = el('div', { class: 'delta-controls' });
+  const listHost = el('div', {});
+  root.append(controls, listHost);
+
+  let types = DeltaView.parseChangeTypes(window.location.search);
+  let events = [];
+  let agents = [];
+  let locations = [];
+
+  function syncDeltaUrl() {
+    try {
+      const q = new URLSearchParams(window.location.search || '');
+      const patch = DeltaView.changeTypesPatch(types);
+      if (patch.changeTypes == null) q.delete('changeTypes'); else q.set('changeTypes', patch.changeTypes);
+      const qs = q.toString();
+      window.history.replaceState(null, '', window.location.pathname + (qs ? `?${qs}` : '') + window.location.hash);
+    } catch { /* best-effort */ }
+  }
+
+  const nameById = {};
+  const nameFor = (hid) => nameById[hid] || `host ${hid}`;
+  function siteAgentIdSet() {
+    if (!fleetFilter.site) return null;
+    const want = String(fleetFilter.site).toLowerCase();
+    const s = new Set();
+    agents.forEach((a) => {
+      if (String(a.location_name || '').toLowerCase() === want || String(a.location_id) === want) s.add(Number(a.id));
+    });
+    return s;
+  }
+
+  function changeTypeRow() {
+    const counts = DeltaView.countByType(events);
+    const chip = (t) => {
+      const on = types.includes(t.key);
+      const b = el('button', { class: `chip${on ? ' active' : ''}`, 'aria-pressed': String(on) },
+        t.label, el('span', { class: 'chip-count' }, String(counts[t.key] || 0)));
+      b.addEventListener('click', () => {
+        types = on ? types.filter((k) => k !== t.key) : DeltaView.normalizeTypes(types.concat(t.key));
+        syncDeltaUrl();
+        renderDelta();
+      });
+      return b;
+    };
+    const row = el('div', { class: 'delta-typebar', role: 'group', 'aria-label': 'Change type' },
+      el('span', { class: 'muted' }, 'Type:'), ...DeltaView.CHANGE_TYPES.map(chip));
+    if (types.length) row.append(el('button', { class: 'small ghost', onclick: () => { types = []; syncDeltaUrl(); renderDelta(); } }, 'All'));
+    return row;
+  }
+
+  function globalFilterRow() {
+    // Site + severity come from the shared global filter — editing here mutates
+    // the SAME fleetFilter the Overview uses and re-syncs the shared URL params.
+    const siteSel = el('select', { class: 'small' }, el('option', { value: '' }, 'All sites'),
+      ...locations.map((l) => el('option', { value: String(l.id) }, l.name)));
+    if (fleetFilter.site) siteSel.value = String(fleetFilter.site);
+    siteSel.addEventListener('change', () => { fleetFilter = FleetFilter.setSite(fleetFilter, siteSel.value || null); syncFleetUrl(); renderDelta(); });
+    const sevBtn = (tok, label) => {
+      const on = fleetFilter.severity.includes(tok);
+      const b = el('button', { class: `chip${on ? ' active' : ''}`, 'aria-pressed': String(on) }, label);
+      b.addEventListener('click', () => { fleetFilter = FleetFilter.toggleSeverity(fleetFilter, tok); syncFleetUrl(); renderDelta(); });
+      return b;
+    };
+    const chips = FleetFilter.chips(fleetFilter).map((c) => el('button', { class: 'chip removable', title: 'Remove filter',
+      onclick: () => { fleetFilter = FleetFilter.removeChip(fleetFilter, c); syncFleetUrl(); renderDelta(); } }, c.label, ' ×'));
+    return el('div', { class: 'delta-globalbar' },
+      el('label', { class: 'inline muted' }, 'Site ', siteSel),
+      el('span', { class: 'muted' }, 'Severity:'), sevBtn('CRIT', 'Kritiske'), sevBtn('WARN', 'Advarsler'),
+      chips.length ? el('span', { class: 'delta-chips' }, ...chips) : null);
+  }
+
+  function changeTable(rows) {
+    return el('table', { class: 'agents-table delta-table' },
+      el('thead', {}, el('tr', {},
+        el('th', { scope: 'col' }, 'Time'), el('th', { scope: 'col' }, 'Type'),
+        el('th', { scope: 'col' }, 'Host'), el('th', { scope: 'col' }, 'Severity'), el('th', { scope: 'col' }, 'What changed'))),
+      el('tbody', {}, ...rows.map((e) => {
+        const sev = DeltaView.severityToken(e);
+        const ct = DeltaView.changeTypeOf(e);
+        return el('tr', {},
+          el('td', {}, e.timestamp ? fmtDate(e.timestamp) : '–'),
+          el('td', {}, el('span', { class: 'badge' }, ct.replace(/_/g, ' '))),
+          el('td', {}, e.agentId != null ? el('button', { class: 'linklike', onclick: () => openAgent(e.agentId) }, esc(nameFor(e.agentId))) : '–'),
+          el('td', {}, el('span', { class: `badge ${CHANGE_SEV_CLASS[sev] || 'muted'}` }, sev)),
+          el('td', {}, esc(e.summary || '')));
+      })));
+  }
+
+  function renderDelta() {
+    controls.replaceChildren(changeTypeRow(), globalFilterRow());
+    if (!events.length) { listHost.replaceChildren(el('div', { class: 'empty' }, 'No topology changes recorded yet. Changes appear as agents report LLDP neighbours across poll cycles.')); return; }
+    const filtered = DeltaView.filterChanges(events, { types, severityTokens: fleetFilter.severity, siteAgentIds: siteAgentIdSet() });
+    listHost.replaceChildren(filtered.length
+      ? changeTable(filtered)
+      : el('div', { class: 'empty' }, 'No changes match the current filter.'));
+  }
+
+  controls.replaceChildren(el('div', { class: 'muted' }, 'Loading…'));
+  try {
+    const [chg, ag, loc] = await Promise.all([
+      api('/api/topology/changes?limit=500'),
+      api('/agents').catch(() => []),
+      api('/locations').catch(() => []),
+    ]);
+    events = chg.events || [];
+    agents = ag || [];
+    locations = loc || [];
+  } catch (e) {
+    controls.replaceChildren();
+    listHost.replaceChildren(el('div', { class: e.status === 403 ? 'empty' : 'error' },
+      e.status === 403 ? 'The changes feed is available to operators and admins.' : errText(e)));
+    return root;
+  }
+  agents.forEach((a) => { nameById[a.id] = a.display_name || a.hostname || `host ${a.id}`; });
+  renderDelta();
+  return root;
+};
+
 // ---- Troubleshooting (location-driven investigation) ------------------------
 // Operator+ can trigger an investigation for a site/agent/interface/subnet and
 // get the fault classified as LOCAL / UPSTREAM / DOWNSTREAM / APP_NOT_NET /
@@ -6111,14 +6250,26 @@ function stopFleet() { if (fleetState.timer) { clearInterval(fleetState.timer); 
 // string on load so a shared deep-link (…?severity=CRIT&site=vest) renders
 // pre-filtered. `sortByHealth` is the "Fleet health" card's sort mode (a sort,
 // not a filter, so it stays out of the persisted filter shape).
+// The global cross-view filter state (severity / site / healthBelow / offline).
+// Shared by the Overview and the Delta/Changes view — one state, one URL, not a
+// per-view copy. Any view that reads it does so through this module-level var.
 let fleetFilter = FleetFilter.parseQuery(window.location.search);
 let fleetSortByHealth = false;
+// The query keys the global filter owns — cleared before re-serialising so a
+// dropped dimension leaves the URL, without disturbing OTHER views' params
+// (topology ?layer/?focus, delta ?changeTypes). This merge is what lets the
+// global filter coexist across views instead of clobbering their state.
+const FLEET_PARAM_KEYS = ['severity', 'site', 'healthBelow', 'offline'];
 // Mirror the current filter into the URL (replaceState so it doesn't spam the
-// history stack) — this is what makes a filtered Overview shareable as a link.
+// history stack) — this is what makes a filtered view shareable as a link.
 function syncFleetUrl() {
-  const q = FleetFilter.toQuery(fleetFilter);
-  const url = window.location.pathname + (q ? `?${q}` : '') + window.location.hash;
-  try { window.history.replaceState(null, '', url); } catch { /* non-browser / restricted */ }
+  try {
+    const q = new URLSearchParams(window.location.search || '');
+    FLEET_PARAM_KEYS.forEach((k) => q.delete(k));
+    new URLSearchParams(FleetFilter.toQuery(fleetFilter)).forEach((v, k) => q.set(k, v));
+    const qs = q.toString();
+    window.history.replaceState(null, '', window.location.pathname + (qs ? `?${qs}` : '') + window.location.hash);
+  } catch { /* non-browser / restricted */ }
 }
 function summaryTotal(s) {
   if (!s) return 0;

@@ -8982,7 +8982,7 @@ async function settingsUpdatesView() {
   }
 
   root.append(el('div', { class: 'cards' },
-    stat('Agents reporting', `${withVer.length} / ${agents.length}`),
+    stat('Reporting a version', `${withVer.length} / ${agents.length}`),
     stat('Up to date', offered ? String(withVer.length - behind.length) : '–'),
     stat('Behind', offered ? String(behind.length) : '–')));
 

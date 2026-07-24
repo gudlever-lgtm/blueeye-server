@@ -62,6 +62,8 @@ const { createLldpGraphService } = require('./topology/lldpGraphService');
 const { createServiceDependenciesRepository } = require('./repositories/serviceDependenciesRepository');
 const { createServiceDependencyJob } = require('./topology/serviceDependencyJob');
 const { createBlastRadiusService } = require('./topology/blastRadiusService');
+const { createTopologyChangesRepository } = require('./repositories/topologyChangesRepository');
+const { createTopologyChangeService } = require('./topology/topologyChangeService');
 const { createClusterNotifier } = require('./analysis/clusterNotifier');
 const { createClusterNis2Service } = require('./analysis/clusterNis2');
 const { createClusterAlertGate } = require('./analysis/clusterAlertGate');
@@ -456,6 +458,11 @@ function start() {
   // Blast-radius impact analysis over the unified topology graph (l2_link +
   // service_dep). Used by the incident enrichment + the topology endpoint.
   const blastRadiusService = createBlastRadiusService({ lldpNeighborsRepo, serviceDependenciesRepo, agentsRepo });
+  // Topology change detection — diffs each LLDP report against the previous
+  // snapshot, records changes (reusing the timeline shape) + writes them to the
+  // hash-chained audit log as evidence, with flap suppression.
+  const topologyChangesRepo = createTopologyChangesRepository(db);
+  const topologyChangeService = createTopologyChangeService({ topologyChangesRepo, lldpNeighborsRepo, auditLogger });
   // Durable alert-dispatch log: lets a cluster alert fire once + reference (not
   // resend) member findings already alerted individually. Passed to the dispatcher
   // (records each send) and the cross-agent service (reads it).
@@ -769,6 +776,8 @@ function start() {
     serviceDependenciesRepo,
     serviceDependencyJob,
     blastRadiusService,
+    topologyChangesRepo,
+    topologyChangeService,
     remediationPlaybooksRepo,
     configSnapshotsRepo,
     thresholdsRepo,

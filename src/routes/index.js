@@ -117,6 +117,8 @@ function createApiRouter({
   serviceDependenciesRepo,
   serviceDependencyJob,
   blastRadiusService,
+  topologyChangesRepo,
+  topologyChangeService,
   geoTileConfig,
   geoProvider,
   geoipUpdater,
@@ -255,7 +257,7 @@ function createApiRouter({
   // Shared per-target timeline service (Phase 1 merge/fan-out) — powers both the
   // /api/targets timeline and the /api/findings/:id/context change-diff.
   const targetTimelineService = findingStore
-    ? createTargetTimelineService({ findingStore, incidentsRepo, auditEventsRepo, remediationPlaybooksRepo })
+    ? createTargetTimelineService({ findingStore, incidentsRepo, auditEventsRepo, remediationPlaybooksRepo, topologyChangesRepo })
     : null;
   if (findingStore) router.use('/api/findings', createFindingsRouter({ findingStore, timelineService: targetTimelineService }));
   if (assistant) router.use('/api/assistant', createAssistantRouter({ assistant, featureGate }));
@@ -273,7 +275,7 @@ function createApiRouter({
     getCategories: settingsService ? () => settingsService.getFlowCategories() : undefined,
   }));
   // Flow-derived dependency/topology map (who-talks-to-whom from the 5-tuples).
-  if (flowsRepo || lldpNeighborsRepo || serviceDependenciesRepo) router.use('/api/topology', createTopologyRouter({ flowsRepo, agentsRepo, locationsRepo, centroids, lldpNeighborsRepo, serviceDependenciesRepo, serviceDependencyJob, blastRadiusService }));
+  if (flowsRepo || lldpNeighborsRepo || serviceDependenciesRepo || topologyChangesRepo) router.use('/api/topology', createTopologyRouter({ flowsRepo, agentsRepo, locationsRepo, centroids, lldpNeighborsRepo, serviceDependenciesRepo, serviceDependencyJob, blastRadiusService, topologyChangesRepo }));
   if (probeResultsRepo) router.use('/api/probes', createProbesRouter({ probeResultsRepo, agentsRepo, geoProvider, centroids }));
   if (probeResultsRepo) router.use('/api/fleet', createFleetRouter({ agentsRepo, probeResultsRepo, resultsRepo, speedtestResultsRepo, settingsService, logger }));
   // Overview "open issues" rollup (license feature `dashboard_advanced`,
@@ -410,7 +412,7 @@ function createApiRouter({
   // Unified audit log (license feature `audit_log`) + API tokens (`api_access`).
   if (auditLogRepo) router.use('/api/audit-log', createAuditLogRouter({ auditLogRepo, featureGate, planService }));
   if (apiTokensRepo) router.use('/api/api-tokens', createApiTokensRouter({ apiTokensRepo, featureGate, planService, auditLogger }));
-  router.use('/agents', createAgentReportsRouter({ agentAuth, resultsRepo, resultsTsdbRepo, agentsRepo, auditEventsRepo, analysisPipeline, flowPipeline, probeResultsRepo, probePipeline, incidentService, installToolService, lldpNeighborsRepo, logger }));
+  router.use('/agents', createAgentReportsRouter({ agentAuth, resultsRepo, resultsTsdbRepo, agentsRepo, auditEventsRepo, analysisPipeline, flowPipeline, probeResultsRepo, probePipeline, incidentService, installToolService, lldpNeighborsRepo, topologyChangeService, logger }));
   router.use('/agents', createAgentEnrollRouter({ enrollmentStore, notifyDashboard, integrationTrigger: integrationsDispatcher, auditEventsRepo, settingsService, rateLimit: enrollRateLimiter }));
 
   return router;

@@ -8383,6 +8383,30 @@ const DOCS = [
         ],
       },
       {
+        id: 'topology-changes', title: 'Track topology changes', body: () => [
+          docsLead('BlueEye detects LLDP/CDP topology changes between poll cycles and records them — so you can see when a neighbour appeared, vanished, moved ports, or flapped, with an immutable audit trail.'),
+          el('p', {}, ['Every agent capabilities report is a “poll”. Each report is diffed against the agent’s previous neighbour snapshot; the differences become change records. Four change types:']),
+          docsTable(['Change', 'Means'], [
+            [el('strong', {}, 'neighbour_added'), 'A neighbour appeared on a local port that had none.'],
+            [el('strong', {}, 'neighbour_removed'), 'A previously-seen neighbour is gone.'],
+            [el('strong', {}, 'link_state_changed'), 'A neighbour’s link state flipped (e.g. up→down). Requires agents that report link state.'],
+            [el('strong', {}, 'port_moved'), 'The same neighbour chassis id is now seen on a different local port.'],
+          ]),
+          el('h4', {}, 'Flap suppression'),
+          el('p', {}, ['A change that reverts within a window (default 300s) does not spam the feed — the pair ', el('strong', {}, 'collapses to a single '), el('code', {}, 'flapping'), el('strong', {}, ' record'), '. So a link bouncing every few seconds shows up once, as flapping, not as hundreds of add/remove events.']),
+          el('h4', {}, 'Where changes show up'),
+          docsSteps([
+            ['On the device page ', el('strong', {}, 'activity timeline'), ': topology changes appear inline with findings, incidents and agent events, tagged ', el('strong', {}, 'Topology change'), ' — the same feed, one shape.'],
+            ['Directly (operator+): ', el('code', {}, 'GET /api/topology/changes?host=<agentId>'), ' returns the change events.'],
+            ['As evidence: every change is written to the ', el('strong', {}, 'hash-chained audit log'), ' (category ', el('code', {}, 'topology'), ', actor ', el('code', {}, 'system'), '), so the record is tamper-evident.'],
+          ]),
+          el('h4', {}, 'Worked example'),
+          el('p', {}, 'A switch neighbour on port eth3 moves to eth4, then its link drops:'),
+          docsCode('GET /api/topology/changes?host=42\n\n{\n  "host": 42,\n  "events": [\n    { "timestamp": "…:05Z", "source": "topology", "type": "topology.link_state_changed",\n      "severity": "WARN", "summary": "Link up→down for sw-c on eth4", "ref_id": 1802 },\n    { "timestamp": "…:00Z", "source": "topology", "type": "topology.port_moved",\n      "severity": "WARN", "summary": "Neighbour sw-c moved eth3→eth4", "ref_id": 1801 }\n  ]\n}'),
+          docsExpect('Identical polls emit nothing — the feed only shows real changes. A neighbour that removes and re-adds within 5 minutes shows once as flapping (chase a cabling/optic fault). Link-state changes only appear once your agents report link state; add/remove/move work from the neighbour set alone.'),
+        ],
+      },
+      {
         id: 'adhoc', title: 'Run an ad-hoc probe or test', body: () => [
           docsLead('The fastest way to answer “can this host reach X right now?”.'),
           docsSteps([

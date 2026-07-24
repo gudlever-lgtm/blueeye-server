@@ -18,6 +18,7 @@ const { createUsageService } = require('../src/services/usageService');
 const { createAuditLogger } = require('../src/services/complianceLogger');
 const { createSnapshotService } = require('../src/evidence/snapshotService');
 const { createBlastRadiusService } = require('../src/topology/blastRadiusService');
+const { createTopologyChangeService } = require('../src/topology/topologyChangeService');
 
 // ---- Repositories ---------------------------------------------------------
 
@@ -600,7 +601,7 @@ function makeLldpNeighborsRepo(overrides = {}) {
   const mapOut = (r) => ({
     id: r.id, localAgentId: r.local_agent_id, localChassisId: r.local_chassis_id ?? null,
     localPort: r.local_port ?? null, remoteChassisId: r.remote_chassis_id, remotePort: r.remote_port ?? null,
-    lastSeen: iso(r.last_seen),
+    linkState: r.link_state ?? null, lastSeen: iso(r.last_seen),
   });
   const chassisOf = (agentId) => rows.filter((r) => r.local_agent_id === Number(agentId) && r.local_chassis_id).map((r) => r.local_chassis_id);
   const matchTarget = (r, targetAgentId) => {
@@ -610,10 +611,10 @@ function makeLldpNeighborsRepo(overrides = {}) {
   };
   return {
     rows,
-    upsert: overrides.upsert || (async ({ localAgentId, localChassisId = null, localPort = null, remoteChassisId, remotePort = null, lastSeen = null }) => {
-      const row = { local_agent_id: Number(localAgentId), local_chassis_id: localChassisId, local_port: localPort, remote_chassis_id: remoteChassisId, remote_port: remotePort, last_seen: lastSeen || new Date() };
+    upsert: overrides.upsert || (async ({ localAgentId, localChassisId = null, localPort = null, remoteChassisId, remotePort = null, linkState = null, lastSeen = null }) => {
+      const row = { local_agent_id: Number(localAgentId), local_chassis_id: localChassisId, local_port: localPort, remote_chassis_id: remoteChassisId, remote_port: remotePort, link_state: linkState, last_seen: lastSeen || new Date() };
       const existing = rows.find((r) => key(r) === key(row));
-      if (existing) { existing.last_seen = row.last_seen; existing.local_chassis_id = row.local_chassis_id; return existing; }
+      if (existing) { existing.last_seen = row.last_seen; existing.local_chassis_id = row.local_chassis_id; existing.link_state = row.link_state; return existing; }
       row.id = (seq += 1); rows.push(row); return row;
     }),
     upsertMany: overrides.upsertMany || (async function upsertMany(localAgentId, neighbors, { localChassisId = null, lastSeen = null } = {}) {
@@ -621,7 +622,7 @@ function makeLldpNeighborsRepo(overrides = {}) {
       for (const nb of Array.isArray(neighbors) ? neighbors : []) {
         const remoteChassisId = nb && (nb.remoteChassisId ?? nb.remote_chassis_id);
         if (!remoteChassisId) continue;
-        await this.upsert({ localAgentId, localChassisId: nb.localChassisId ?? nb.local_chassis_id ?? localChassisId, localPort: nb.localPort ?? nb.local_port ?? null, remoteChassisId, remotePort: nb.remotePort ?? nb.remote_port ?? null, lastSeen });
+        await this.upsert({ localAgentId, localChassisId: nb.localChassisId ?? nb.local_chassis_id ?? localChassisId, localPort: nb.localPort ?? nb.local_port ?? null, remoteChassisId, remotePort: nb.remotePort ?? nb.remote_port ?? null, linkState: nb.linkState ?? nb.link_state ?? null, lastSeen });
         n += 1;
       }
       return n;
@@ -638,6 +639,63 @@ function makeLldpNeighborsRepo(overrides = {}) {
       .sort((a, b) => new Date(b.last_seen) - new Date(a.last_seen) || b.id - a.id)
       .slice(offset, offset + limit).map(mapOut)),
     count: overrides.count || (async ({ targetAgentId = null } = {}) => rows.filter((r) => matchTarget(r, targetAgentId)).length),
+    listByAgent: overrides.listByAgent || (async (localAgentId) => rows.filter((r) => r.local_agent_id === Number(localAgentId)).sort((a, b) => a.id - b.id).map(mapOut)),
+    deleteEdge: overrides.deleteEdge || (async ({ localAgentId, localPort = null, remoteChassisId, remotePort = null }) => {
+      const eq = (a, b) => (a ?? null) === (b ?? null);
+      const before = rows.length;
+      for (let i = rows.length - 1; i >= 0; i -= 1) {
+        const r = rows[i];
+        if (r.local_agent_id === Number(localAgentId) && eq(r.local_port, localPort) && r.remote_chassis_id === remoteChassisId && eq(r.remote_port, remotePort)) rows.splice(i, 1);
+      }
+      return before - rows.length;
+    }),
+  };
+}
+
+// A fake topology_changes repository (in-memory). Mirrors
+// topologyChangesRepository's surface for the changes API + timeline.
+function makeTopologyChangesRepo(overrides = {}) {
+  const rows = [];
+  let seq = 0;
+  const iso = (v) => (v == null ? null : (v instanceof Date ? v.toISOString() : new Date(v).toISOString()));
+  const mapOut = (r) => ({
+    id: r.id, agentId: r.agent_id, changeType: r.change_type, localPort: r.local_port ?? null,
+    remoteChassisId: r.remote_chassis_id ?? null, remotePort: r.remote_port ?? null, fromLocalPort: r.from_local_port ?? null,
+    linkStateFrom: r.link_state_from ?? null, linkStateTo: r.link_state_to ?? null, severity: r.severity,
+    summary: r.summary, detectedAt: iso(r.detected_at), auditLogId: r.audit_log_id ?? null,
+  });
+  const inWindow = (r, from, to) => (!from || new Date(r.detected_at) >= new Date(from)) && (!to || new Date(r.detected_at) < new Date(to));
+  return {
+    rows,
+    insert: overrides.insert || (async (c) => {
+      const row = {
+        id: (seq += 1), agent_id: Number(c.agentId), change_type: c.changeType, local_port: c.localPort ?? null,
+        remote_chassis_id: c.remoteChassisId ?? null, remote_port: c.remotePort ?? null, from_local_port: c.fromLocalPort ?? null,
+        link_state_from: c.linkStateFrom ?? null, link_state_to: c.linkStateTo ?? null, severity: c.severity || 'INFO',
+        summary: c.summary, detected_at: c.detectedAt || new Date(), audit_log_id: c.auditLogId ?? null,
+      };
+      rows.push(row); return row.id;
+    }),
+    markFlapping: overrides.markFlapping || (async (id, { summary, detectedAt = null, auditLogId = null }) => {
+      const r = rows.find((x) => x.id === Number(id));
+      if (!r) return 0;
+      r.change_type = 'flapping'; r.severity = 'WARN'; r.summary = summary;
+      if (detectedAt) r.detected_at = detectedAt;
+      if (auditLogId != null) r.audit_log_id = auditLogId;
+      return 1;
+    }),
+    recentForAgent: overrides.recentForAgent || (async ({ agentId, since, limit = 500 }) => rows
+      .filter((r) => r.agent_id === Number(agentId) && new Date(r.detected_at) >= new Date(since))
+      .sort((a, b) => new Date(b.detected_at) - new Date(a.detected_at) || b.id - a.id)
+      .slice(0, limit).map(mapOut)),
+    listForAgent: overrides.listForAgent || (async ({ agentId, from = null, to = null, limit = 200 }) => rows
+      .filter((r) => r.agent_id === Number(agentId) && inWindow(r, from, to))
+      .sort((a, b) => new Date(b.detected_at) - new Date(a.detected_at) || b.id - a.id)
+      .slice(0, limit).map(mapOut)),
+    list: overrides.list || (async ({ from = null, to = null, limit = 200 } = {}) => rows
+      .filter((r) => inWindow(r, from, to))
+      .sort((a, b) => new Date(b.detected_at) - new Date(a.detected_at) || b.id - a.id)
+      .slice(0, limit).map(mapOut)),
   };
 }
 
@@ -1858,6 +1916,12 @@ function makeApp(overrides = {}) {
     || createSnapshotService({ evidenceRepo, agentCommander, scheduleRetry: (fn) => { const t = setTimeout(fn, 0); if (t.unref) t.unref(); return t; } });
   const lldpNeighborsRepo = overrides.lldpNeighborsRepo || makeLldpNeighborsRepo();
   const serviceDependenciesRepo = overrides.serviceDependenciesRepo || makeServiceDependenciesRepo();
+  const topologyChangesRepo = overrides.topologyChangesRepo || makeTopologyChangesRepo();
+  // Real topology-change service over the fakes, so change detection + flap
+  // suppression + audit-log writes are exercised end-to-end on capabilities ingest.
+  const topologyChangeService = overrides.topologyChangeService === undefined
+    ? createTopologyChangeService({ topologyChangesRepo, lldpNeighborsRepo, auditLogger })
+    : overrides.topologyChangeService;
   // Real blast-radius service over the fake topology repos, so the incident
   // enrichment + /api/topology/blast-radius are exercised end-to-end.
   const blastRadiusService = overrides.blastRadiusService === undefined
@@ -1905,6 +1969,8 @@ function makeApp(overrides = {}) {
     serviceDependenciesRepo,
     serviceDependencyJob: overrides.serviceDependencyJob || null,
     blastRadiusService,
+    topologyChangesRepo,
+    topologyChangeService,
     geoTileConfig: overrides.geoTileConfig || { tileUrl: 'https://tiles.example/{z}/{x}/{y}.png', tileAttribution: 'test', tileMaxZoom: 19 },
     geoProvider: overrides.geoProvider || null,
     centroids: overrides.centroids || null,
@@ -2021,6 +2087,7 @@ module.exports = {
   makeVerificationService,
   makeLldpNeighborsRepo,
   makeServiceDependenciesRepo,
+  makeTopologyChangesRepo,
   makeAlertDispatchLogRepo,
   makeEvidenceSnapshotsRepo,
   makeRemediationPlaybooksRepo,

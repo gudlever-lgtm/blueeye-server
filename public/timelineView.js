@@ -20,7 +20,7 @@
 
   var SOURCE_LABELS = {
     finding: 'Finding', incident: 'Incident', agent: 'Agent', playbook: 'Playbook',
-    config: 'Config change', status: 'State change',
+    config: 'Config change', status: 'State change', topology: 'Topology change',
   };
   function sourceLabel(source) { return SOURCE_LABELS[source] || String(source == null ? '—' : source); }
 

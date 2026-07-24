@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.89.0 — Topology change detection (LLDP neighbour changes + audit evidence)
+
+Detects and records LLDP/CDP topology changes between poll cycles. Each agent
+capabilities report is diffed against the agent's previous neighbour snapshot;
+differences become change records — `neighbour_added`, `neighbour_removed`,
+`link_state_changed`, `port_moved` — with flap suppression (a revert within
+`TOPOLOGY_FLAP_WINDOW_SECONDS`, default 300, collapses to one `flapping` record).
+
+- **Reuses the delta/changes shape** — change records surface as the existing
+  target-timeline event `{ timestamp, source:'topology', type, severity, summary,
+  ref_id }` (new `topology` source in `src/timeline/targetTimeline.js`, rendered
+  "Topology change"). No second changes format.
+- **Hash-chained audit evidence** — each change is written to `audit_log` (mig
+  033/041) via the fail-safe compliance logger (category `topology`, action
+  `topology_<type>`, `actorRole:'system'`, no actor user).
+- **Migration 067** — `topology_changes` table + nullable `lldp_neighbors.link_state`
+  (so a previous snapshot can carry state to diff). Diff seam at
+  `POST /agents/me/capabilities`: detect before upsert, reconcile removed/moved
+  edges so they don't re-emit.
+- **API** — `GET /api/topology/changes` (operator+, `?host=`): 400/404/500; changes
+  also merge into `GET /api/targets/:id/timeline` (viewer+).
+- Pure diff `src/topology/topologyDiff.js`; service `topologyChangeService.js`;
+  repo `topologyChangesRepository.js`; `lldpNeighborsRepository` gains
+  `listByAgent`/`deleteEdge` + `link_state`.
+- Tests: each change type on synthetic snapshots, flap window boundaries
+  (299/300/301s), no-change on identical, API 400/401/403/404/500, end-to-end
+  ingest + timeline. Documentation-center how-to + `docs/topology-changes.md`.
+- **Known gap:** the shipping agent doesn't collect LLDP yet, so this is dormant
+  in production until an agent reports `capabilities.lldp` (and per-neighbour
+  link state for `link_state_changed`). Server, storage and tests are ready.
+
 ## 0.88.0 — Blast radius (impact analysis from a failing node)
 
 Given a **failing node** (agent id), computes which downstream hosts/services are

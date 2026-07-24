@@ -18,25 +18,26 @@ function mapRow(row) {
     localPort: row.local_port ?? null,
     remoteChassisId: row.remote_chassis_id,
     remotePort: row.remote_port ?? null,
+    linkState: row.link_state ?? null,
     lastSeen: toIso(row.last_seen),
   };
 }
 
-const COLS = 'id, local_agent_id, local_chassis_id, local_port, remote_chassis_id, remote_port, last_seen';
+const COLS = 'id, local_agent_id, local_chassis_id, local_port, remote_chassis_id, remote_port, link_state, last_seen';
 
 function createLldpNeighborsRepository(db) {
   const { pool } = db;
 
   // Upserts one observed adjacency, bumping last_seen (+ refreshing the local
   // chassis) when the edge already exists. `lastSeen` defaults to now.
-  async function upsert({ localAgentId, localChassisId = null, localPort = null, remoteChassisId, remotePort = null, lastSeen = null }) {
+  async function upsert({ localAgentId, localChassisId = null, localPort = null, remoteChassisId, remotePort = null, linkState = null, lastSeen = null }) {
     const seen = lastSeen || new Date();
     const [res] = await pool.query(
       `INSERT INTO lldp_neighbors
-         (local_agent_id, local_chassis_id, local_port, remote_chassis_id, remote_port, last_seen)
-       VALUES (?, ?, ?, ?, ?, ?)
-       ON DUPLICATE KEY UPDATE last_seen = VALUES(last_seen), local_chassis_id = VALUES(local_chassis_id)`,
-      [localAgentId, localChassisId, localPort, remoteChassisId, remotePort, seen],
+         (local_agent_id, local_chassis_id, local_port, remote_chassis_id, remote_port, link_state, last_seen)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE last_seen = VALUES(last_seen), local_chassis_id = VALUES(local_chassis_id), link_state = VALUES(link_state)`,
+      [localAgentId, localChassisId, localPort, remoteChassisId, remotePort, linkState, seen],
     );
     return res;
   }
@@ -55,6 +56,7 @@ function createLldpNeighborsRepository(db) {
         localPort: nb.localPort ?? nb.local_port ?? null,
         remoteChassisId,
         remotePort: nb.remotePort ?? nb.remote_port ?? null,
+        linkState: nb.linkState ?? nb.link_state ?? null,
         lastSeen,
       });
       n += 1;
@@ -112,7 +114,29 @@ function createLldpNeighborsRepository(db) {
     return Number(rows[0] ? rows[0].n : 0);
   }
 
-  return { upsert, upsertMany, ageOut, listAll, list, count };
+  // The reporting agent's OWN current neighbour rows — the "previous snapshot" a
+  // poll cycle is diffed against for change detection. Ordered for stable diffs.
+  async function listByAgent(localAgentId) {
+    const [rows] = await pool.query(
+      `SELECT ${COLS} FROM lldp_neighbors WHERE local_agent_id = ? ORDER BY id ASC`,
+      [localAgentId],
+    );
+    return rows.map(mapRow);
+  }
+
+  // Deletes one specific edge (used to reconcile a removed/moved neighbour so it
+  // is not re-emitted as a change on the next poll). NULL-safe on port fields.
+  async function deleteEdge({ localAgentId, localPort = null, remoteChassisId, remotePort = null }) {
+    const [res] = await pool.query(
+      `DELETE FROM lldp_neighbors
+       WHERE local_agent_id = ?
+         AND (local_port <=> ?) AND remote_chassis_id = ? AND (remote_port <=> ?)`,
+      [localAgentId, localPort, remoteChassisId, remotePort],
+    );
+    return res.affectedRows || 0;
+  }
+
+  return { upsert, upsertMany, ageOut, listAll, list, count, listByAgent, deleteEdge };
 }
 
 module.exports = { createLldpNeighborsRepository, mapRow, COLS };

@@ -7,6 +7,7 @@ const { ROLES } = require('../auth/roles');
 const { parseId } = require('../validation/locationValidation');
 const { buildTopology } = require('../analysis/topology');
 const { buildTopologyGraph } = require('../topology/graph');
+const { mapTopologyChange } = require('../timeline/targetTimeline');
 
 const DEFAULT_WINDOW_MIN = 60;
 const MAX_WINDOW_MIN = 7 * 24 * 60;
@@ -15,10 +16,37 @@ const DEFAULT_TOP_N = 50;
 // Flow-derived dependency / topology map. Mounted at /api/topology behind the
 // user JWT. Builds a who-talks-to-whom graph from the ingested 5-tuple flows
 // (whole fleet, or one agent via ?agentId=), over a ?minutes window. viewer+.
-function createTopologyRouter({ flowsRepo = null, agentsRepo = null, locationsRepo = null, centroids = null, lldpNeighborsRepo = null, serviceDependenciesRepo = null, serviceDependencyJob = null, blastRadiusService = null }) {
+function createTopologyRouter({ flowsRepo = null, agentsRepo = null, locationsRepo = null, centroids = null, lldpNeighborsRepo = null, serviceDependenciesRepo = null, serviceDependencyJob = null, blastRadiusService = null, topologyChangesRepo = null }) {
   const router = express.Router();
   const reader = requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN);
   const writer = requireRole(ROLES.OPERATOR, ROLES.ADMIN);
+
+  // GET /api/topology/changes — recorded LLDP topology changes as change-feed
+  // events (the SAME shape as the target timeline: { timestamp, source:'topology',
+  // type, severity, summary, ref_id }). ?host=<agentId> scopes to one host.
+  // operator+ (these are evidence records). 400 invalid, 404 unknown host, 500 DB.
+  if (topologyChangesRepo) {
+    router.get('/changes', requireAuth, writer, asyncHandler(async (req, res) => {
+      const limRaw = req.query.limit;
+      const limit = limRaw === undefined || limRaw === '' ? 200 : Number(limRaw);
+      if (!Number.isInteger(limit) || limit < 1 || limit > 2000) return res.status(400).json({ error: 'limit must be 1..2000' });
+
+      let hostId = null;
+      if (req.query.host !== undefined && req.query.host !== '') {
+        hostId = parseId(req.query.host);
+        if (hostId === null) return res.status(400).json({ error: 'Invalid host' });
+        if (agentsRepo && typeof agentsRepo.findById === 'function' && !(await agentsRepo.findById(hostId))) {
+          return res.status(404).json({ error: 'Host not found' });
+        }
+      }
+
+      const rows = hostId === null
+        ? await topologyChangesRepo.list({ limit })
+        : await topologyChangesRepo.listForAgent({ agentId: hostId, limit });
+      const events = rows.flatMap((r) => mapTopologyChange(r));
+      res.json({ host: hostId, events });
+    }));
+  }
 
   // GET /api/topology/blast-radius/:node — impact analysis for a failing node:
   // directly_isolated[] (L2) + dependency_affected[] (service_dep), each with a

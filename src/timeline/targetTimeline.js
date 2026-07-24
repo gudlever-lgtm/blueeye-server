@@ -28,11 +28,12 @@ const SOURCES = Object.freeze({
   INCIDENT: 'incident',
   AGENT: 'agent',
   PLAYBOOK: 'playbook',
+  TOPOLOGY: 'topology',
 });
 
 // Stable tie-break order among events that share a timestamp — keeps the story
 // readable and the output deterministic (important for tests).
-const SOURCE_ORDER = { finding: 0, incident: 1, agent: 2, playbook: 3 };
+const SOURCE_ORDER = { finding: 0, incident: 1, agent: 2, playbook: 3, topology: 4 };
 
 function toIso(v) {
   if (v == null) return null;
@@ -145,7 +146,21 @@ function mapPlaybookRun(r) {
   }];
 }
 
-// Merge the four already-fetched source arrays into one timeline, newest first.
+// A recorded LLDP topology change (topology_changes, migration 067). Reuses the
+// exact timeline event shape — the change feed is not a second format.
+function mapTopologyChange(c) {
+  if (!c) return [];
+  return [{
+    timestamp: toIso(c.detectedAt),
+    source: SOURCES.TOPOLOGY,
+    type: `topology.${c.changeType}`,
+    severity: normalizeSeverity(c.severity),
+    summary: c.summary,
+    ref_id: c.id,
+  }];
+}
+
+// Merge the already-fetched source arrays into one timeline, newest first.
 // Any source array may be omitted/empty. `limit` (when a positive integer) caps
 // the returned events to the most recent N after the merge.
 function buildTargetTimeline({
@@ -153,6 +168,7 @@ function buildTargetTimeline({
   incidents = [],
   agentEvents = [],
   playbookRuns = [],
+  topologyChanges = [],
   limit = null,
 } = {}) {
   const events = [];
@@ -160,6 +176,7 @@ function buildTargetTimeline({
   for (const i of incidents) events.push(...mapIncident(i));
   for (const e of agentEvents) events.push(...mapAgentEvent(e));
   for (const r of playbookRuns) events.push(...mapPlaybookRun(r));
+  for (const c of topologyChanges) events.push(...mapTopologyChange(c));
 
   // Drop anything we couldn't assign a timestamp to (a malformed row) rather
   // than emit a null-timestamped event that would sort unpredictably.
@@ -188,6 +205,7 @@ const CHANGE_EVENT_TYPES = new Set(['agent.online', 'agent.enrolled']);
 function classifyEvent(event) {
   if (!event) return 'symptom';
   if (event.source === SOURCES.PLAYBOOK) return 'change';
+  if (event.source === SOURCES.TOPOLOGY) return 'change'; // a topology change IS a change
   if (CHANGE_EVENT_TYPES.has(event.type)) return 'change';
   return 'symptom';
 }
@@ -205,5 +223,6 @@ module.exports = {
   mapIncident,
   mapAgentEvent,
   mapPlaybookRun,
+  mapTopologyChange,
   SOURCES,
 };

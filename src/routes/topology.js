@@ -15,10 +15,31 @@ const DEFAULT_TOP_N = 50;
 // Flow-derived dependency / topology map. Mounted at /api/topology behind the
 // user JWT. Builds a who-talks-to-whom graph from the ingested 5-tuple flows
 // (whole fleet, or one agent via ?agentId=), over a ?minutes window. viewer+.
-function createTopologyRouter({ flowsRepo = null, agentsRepo = null, locationsRepo = null, centroids = null, lldpNeighborsRepo = null, serviceDependenciesRepo = null, serviceDependencyJob = null }) {
+function createTopologyRouter({ flowsRepo = null, agentsRepo = null, locationsRepo = null, centroids = null, lldpNeighborsRepo = null, serviceDependenciesRepo = null, serviceDependencyJob = null, blastRadiusService = null }) {
   const router = express.Router();
   const reader = requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN);
   const writer = requireRole(ROLES.OPERATOR, ROLES.ADMIN);
+
+  // GET /api/topology/blast-radius/:node — impact analysis for a failing node:
+  // directly_isolated[] (L2) + dependency_affected[] (service_dep), each with a
+  // justifying path. operator+ (a diagnostic compute). 404 unknown node, 400
+  // invalid, 500 when the topology store is unavailable.
+  if (blastRadiusService) {
+    router.get('/blast-radius/:node', requireAuth, writer, asyncHandler(async (req, res) => {
+      const nodeId = parseId(req.params.node);
+      if (nodeId === null) return res.status(400).json({ error: 'node must be a positive integer' });
+      if (agentsRepo && typeof agentsRepo.findById === 'function' && !(await agentsRepo.findById(nodeId))) {
+        return res.status(404).json({ error: 'Node not found' });
+      }
+      let depth;
+      if (req.query.depth !== undefined && req.query.depth !== '') {
+        depth = Number(req.query.depth);
+        if (!Number.isInteger(depth) || depth < 1 || depth > 32) return res.status(400).json({ error: 'depth must be 1..32' });
+      }
+      const result = await blastRadiusService.compute(nodeId, depth ? { depth } : {});
+      res.json(result);
+    }));
+  }
 
   // GET /api/topology/neighbors — persisted LLDP adjacencies (Fase 4). viewer+.
   // Filter by ?target=<agentId> (both directions), paginate with limit/offset.

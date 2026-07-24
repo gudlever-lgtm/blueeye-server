@@ -61,6 +61,7 @@ const { createLldpNeighborsRepository } = require('./repositories/lldpNeighborsR
 const { createLldpGraphService } = require('./topology/lldpGraphService');
 const { createServiceDependenciesRepository } = require('./repositories/serviceDependenciesRepository');
 const { createServiceDependencyJob } = require('./topology/serviceDependencyJob');
+const { createBlastRadiusService } = require('./topology/blastRadiusService');
 const { createClusterNotifier } = require('./analysis/clusterNotifier');
 const { createClusterNis2Service } = require('./analysis/clusterNis2');
 const { createClusterAlertGate } = require('./analysis/clusterAlertGate');
@@ -452,6 +453,9 @@ function start() {
   // recomputed off the ingest hot path by a leader-only job (backgroundJobs).
   const serviceDependenciesRepo = createServiceDependenciesRepository(db);
   const serviceDependencyJob = createServiceDependencyJob({ serviceDependenciesRepo, flowsRepo, agentsRepo, logger });
+  // Blast-radius impact analysis over the unified topology graph (l2_link +
+  // service_dep). Used by the incident enrichment + the topology endpoint.
+  const blastRadiusService = createBlastRadiusService({ lldpNeighborsRepo, serviceDependenciesRepo, agentsRepo });
   // Durable alert-dispatch log: lets a cluster alert fire once + reference (not
   // resend) member findings already alerted individually. Passed to the dispatcher
   // (records each send) and the cross-agent service (reads it).
@@ -764,6 +768,7 @@ function start() {
     lldpNeighborsRepo,
     serviceDependenciesRepo,
     serviceDependencyJob,
+    blastRadiusService,
     remediationPlaybooksRepo,
     configSnapshotsRepo,
     thresholdsRepo,

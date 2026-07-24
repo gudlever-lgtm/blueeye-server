@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.88.0 — Blast radius (impact analysis from a failing node)
+
+Given a **failing node** (agent id), computes which downstream hosts/services are
+affected, from the unified topology graph. Two tiers, each with a justifying path:
+`directly_isolated` (walk `l2_link` out from the node → hosts that lose L2
+connectivity) and `dependency_affected` (walk `service_dep` in reverse from the
+failing + isolated set → dependents, transitively). Depth-capped
+(`BLAST_RADIUS_MAX_DEPTH`, default 4), cycle-safe, `O(V + E)` (a 5,000-node perf
+test asserts <2s).
+
+- Pure engine `src/topology/blastRadius.js` + `blastRadiusService.js` (builds the
+  graph from the two bounded `listAll`s).
+- **Incident enrichment** — `GET /api/incidents/:id` (viewer+) gains **one** added
+  field, `blastRadius`, computed on read from the incident's `host_id`. Best-effort
+  (topology failure → `blastRadius: null`, incident still served). **No schema
+  change** — nothing persisted.
+- **Ad-hoc endpoint** — `GET /api/topology/blast-radius/:node` (operator+),
+  `?depth=N`; 404 unknown node, 400 invalid, 500 on topology-store failure.
+- Tests: linear/star/cyclic topologies, depth cap, empty downstream, dependency
+  chains, 5k-node perf; API 400/401/403/404/500 + incident-enrichment best-effort.
+- **Documentation center** (Diagnostics how-tos) gains worked-example articles for
+  the service dependency graph **and** blast radius. Docs `docs/blast-radius.md`.
+
 ## 0.87.0 — Service dependency graph (edge type `service_dep`)
 
 Adds a **service dependency graph**: directed edges between monitored hosts derived

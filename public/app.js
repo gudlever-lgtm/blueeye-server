@@ -8302,6 +8302,44 @@ const DOCS = [
         ],
       },
       {
+        id: 'dependencies', title: 'Map service dependencies', body: () => [
+          docsLead('The service dependency graph shows which monitored hosts depend on which — directed “host → host : port” edges built from observed TCP traffic. It is one half of the unified topology graph.'),
+          el('p', {}, ['Open ', viewLink('topology', 'Topology'), ' (Diagnostics group). The graph carries ', el('strong', {}, 'two edge types'), ':']),
+          docsTable(['Edge', 'Means'], [
+            [el('strong', {}, 'l2_link'), 'A physical LLDP/CDP adjacency between two monitored devices (undirected — “these two are wired together”).'],
+            [el('strong', {}, 'service_dep'), 'An observed TCP dependency: the source host talks to the destination host on a service port (directed — “source depends on destination:port”).'],
+          ]),
+          el('h4', {}, 'How service_dep edges are built'),
+          docsSteps([
+            'Agents report TCP flow 5-tuples (source/destination IP, destination port, byte/packet counts) plus their own IP addresses.',
+            ['A background job (every ~10 min) aggregates the last 24h by ', el('strong', {}, '(source host, destination host, destination port)'), ', resolves each IP to a monitored host, and keeps each host’s heaviest ', el('strong', {}, 'N'), ' edges (default 50).'],
+            ['Both ends must be monitored hosts — a known agent (by its reported IPs) or an SNMP-polled device (by its configured host). Edges to anything unknown (the internet, an unmonitored box) are ', el('strong', {}, 'dropped'), ', by design.'],
+          ]),
+          docsExpect('A newly-enrolled fleet shows edges within an hour or two, once agents have reported flows and their IPs. Purely-internal LAN dependencies appear; traffic to external/unmonitored endpoints does not (that lives under Destinations). No ports on the edges usually means the agents predate the flow-detail reporting — update them.'),
+          el('p', { class: 'muted' }, ['Worked example — a host’s top dependencies via the API: ', el('code', {}, 'GET /api/topology/dependencies?host=42'), ' returns that host’s heaviest edges, each with ', el('code', {}, 'dstPort'), ', ', el('code', {}, 'bytes'), ', ', el('code', {}, 'connCount'), ' and first/last-seen.']),
+        ],
+      },
+      {
+        id: 'blast-radius', title: 'Blast radius — what a failure takes down', body: () => [
+          docsLead('Blast radius answers “if this device/host fails, what else is affected?” — computed from the topology graph, in two tiers, each with the path that justifies it.'),
+          docsTable(['Tier', 'What it lists'], [
+            [el('strong', {}, 'directly_isolated'), 'Hosts that lose L2 connectivity when the node fails — found by walking l2_link edges out from the failure point.'],
+            [el('strong', {}, 'dependency_affected'), 'Hosts that depend (over service_dep) on any isolated/failing host — the knock-on service impact, followed transitively.'],
+          ]),
+          el('p', {}, ['It is bounded by a configurable ', el('strong', {}, 'depth cap'), ' (default 4 hops) and is cycle-safe, so it always terminates even on looped topologies.']),
+          el('h4', {}, 'Where you see it'),
+          docsSteps([
+            ['On an ', viewLink('incidents', 'incident'), ': the incident detail carries a ', el('code', {}, 'blastRadius'), ' section computed for the failing device — the downstream hosts and dependent services it puts at risk. It is best-effort: if topology is unavailable the incident still opens.'],
+            ['Ad-hoc for any node (operator+): ', el('code', {}, 'GET /api/topology/blast-radius/<agentId>'), ' — optionally ', el('code', {}, '?depth=N'), '.'],
+          ]),
+          el('h4', {}, 'Worked example'),
+          el('p', {}, ['Core switch ', el('strong', {}, 'agent 1'), ' fails. It is L2-adjacent to ', el('strong', {}, '2'), ' and ', el('strong', {}, '3'), '; the app server ', el('strong', {}, '4'), ' depends on ', el('strong', {}, '3'), ' on port 5432:']),
+          docsCode('GET /api/topology/blast-radius/1\n\n{\n  "failingNode": 1,\n  "depthCap": 4,\n  "directly_isolated": [\n    { "hostId": 2, "path": [1, 2] },\n    { "hostId": 3, "path": [1, 2, 3] }\n  ],\n  "dependency_affected": [\n    { "hostId": 4, "path": [\n      { "hostId": 3, "viaPort": null },\n      { "hostId": 4, "viaPort": 5432 }\n    ] }\n  ],\n  "totals": { "directly_isolated": 2, "dependency_affected": 1 }\n}'),
+          docsExpect('directly_isolated is your connectivity blast radius (who goes dark); dependency_affected is your service blast radius (who breaks even if still reachable). An empty result means the node has no known downstream — either it is a leaf, or the topology graph has not yet learned its links.'),
+          el('p', { class: 'muted' }, 'Because l2_link (LLDP) adjacency is symmetric, “downstream” means the failing node’s L2-reachable neighbourhood within the depth cap — the hosts cut off with or behind it.'),
+        ],
+      },
+      {
         id: 'adhoc', title: 'Run an ad-hoc probe or test', body: () => [
           docsLead('The fastest way to answer “can this host reach X right now?”.'),
           docsSteps([

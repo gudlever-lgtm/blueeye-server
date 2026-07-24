@@ -49,6 +49,7 @@ function createIncidentsRouter({
   featureGate = null,
   askCache = null,
   remediationPlaybooksRepo = null,
+  blastRadiusService = null,
 }) {
   const router = express.Router();
   const reader = requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN);
@@ -93,6 +94,18 @@ function createIncidentsRouter({
     const agent = agentsRepo && typeof agentsRepo.findById === 'function' && Number.isInteger(Number(incident.hostId))
       ? await agentsRepo.findById(Number(incident.hostId)) : null;
     const explanation = buildExplanation({ incident, primaryFinding, agent });
+
+    // Blast-radius enrichment (one added field on the incident object): which
+    // downstream hosts/services are affected if this device fails. Computed on
+    // read from the topology graph, seeded by the incident's agent-id host.
+    // Best-effort — a topology/DB hiccup must not break the incident view.
+    if (blastRadiusService && typeof blastRadiusService.compute === 'function' && Number.isInteger(Number(incident.hostId))) {
+      try {
+        incident.blastRadius = await blastRadiusService.compute(Number(incident.hostId));
+      } catch (err) {
+        incident.blastRadius = null;
+      }
+    }
 
     return res.json({ incident, anomalies, playbookRuns, explanation });
   }));

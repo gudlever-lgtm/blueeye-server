@@ -17,6 +17,7 @@ const { createPlanService } = require('../src/license/planService');
 const { createUsageService } = require('../src/services/usageService');
 const { createAuditLogger } = require('../src/services/complianceLogger');
 const { createSnapshotService } = require('../src/evidence/snapshotService');
+const { createBlastRadiusService } = require('../src/topology/blastRadiusService');
 
 // ---- Repositories ---------------------------------------------------------
 
@@ -1855,6 +1856,13 @@ function makeApp(overrides = {}) {
   // logic (allowlist/timeout/offline) is exercised end-to-end in API tests.
   const snapshotService = overrides.snapshotService
     || createSnapshotService({ evidenceRepo, agentCommander, scheduleRetry: (fn) => { const t = setTimeout(fn, 0); if (t.unref) t.unref(); return t; } });
+  const lldpNeighborsRepo = overrides.lldpNeighborsRepo || makeLldpNeighborsRepo();
+  const serviceDependenciesRepo = overrides.serviceDependenciesRepo || makeServiceDependenciesRepo();
+  // Real blast-radius service over the fake topology repos, so the incident
+  // enrichment + /api/topology/blast-radius are exercised end-to-end.
+  const blastRadiusService = overrides.blastRadiusService === undefined
+    ? createBlastRadiusService({ lldpNeighborsRepo, serviceDependenciesRepo, agentsRepo })
+    : overrides.blastRadiusService;
   return createApp({
     db: overrides.db || makeDb(),
     tsdb: overrides.tsdb || null,
@@ -1893,9 +1901,10 @@ function makeApp(overrides = {}) {
     probePipeline: overrides.probePipeline || makeProbePipeline(),
     flowPipeline: overrides.flowPipeline || makeFlowPipeline(),
     flowsRepo: overrides.flowsRepo || makeFlowsRepo(),
-    lldpNeighborsRepo: overrides.lldpNeighborsRepo || makeLldpNeighborsRepo(),
-    serviceDependenciesRepo: overrides.serviceDependenciesRepo || makeServiceDependenciesRepo(),
+    lldpNeighborsRepo,
+    serviceDependenciesRepo,
     serviceDependencyJob: overrides.serviceDependencyJob || null,
+    blastRadiusService,
     geoTileConfig: overrides.geoTileConfig || { tileUrl: 'https://tiles.example/{z}/{x}/{y}.png', tileAttribution: 'test', tileMaxZoom: 19 },
     geoProvider: overrides.geoProvider || null,
     centroids: overrides.centroids || null,

@@ -4907,6 +4907,110 @@ function topoGraphSvg(nodes, edges, { label, kindBadge, actionBtns } = {}) {
   return el('div', {}, el('div', { class: 'pg-head' }, legend), wrap);
 }
 
+// Renders the UNIFIED resilience graph (the "Layers" mode) from GET
+// /api/topology/graph: monitored hosts as nodes, physical LLDP adjacencies
+// (l2_link) as SOLID lines and observed TCP dependencies (service_dep) as DASHED,
+// arrowed lines weighted by byte volume. Distinct from the flow-derived diagram
+// above (external peers). Layer selection + the view-model are computed by the
+// pure window.TopologyGraph module; this only lays out and draws. Returns helpers
+// ({ setHighlight, neighbourhood, clear, nodeEls }) so blast-radius/what-if mode
+// can dim + emphasise nodes without a redraw.
+function topoLayersSvg(vm, { onNodeClick, focusId } = {}) {
+  const ns = 'http://www.w3.org/2000/svg';
+  const mk = (tag, attrs = {}, ...kids) => {
+    const e = document.createElementNS(ns, tag);
+    for (const [a, v] of Object.entries(attrs)) if (v != null) e.setAttribute(a, v);
+    for (const kid of kids) if (kid != null) e.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
+    return e;
+  };
+  const W = 760, H = 480;
+  const layoutEdges = vm.edges.map((e) => ({ from: e.source, to: e.target }));
+  const pos = topoForceLayout(vm.nodes, layoutEdges, W, H);
+  const maxDeg = Math.max(1, ...vm.nodes.map((n) => n.degree || 0));
+  const radiusOf = (n) => 6 + Math.round((Math.log2(1 + (n.degree || 0)) / Math.log2(1 + maxDeg)) * 12);
+
+  const svg = mk('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': 'Topology layers' });
+  svg.append(mk('defs', {}, mk('marker', { id: 'topo-arrow', viewBox: '0 0 10 10', refX: '9', refY: '5', markerWidth: '6', markerHeight: '6', orient: 'auto-start-reverse' }, mk('path', { d: 'M0 0 L10 5 L0 10 z' }))));
+
+  const neighbours = new Map();
+  vm.nodes.forEach((n) => neighbours.set(n.id, new Set()));
+  const edgeEls = [];
+  vm.edges.forEach((e) => {
+    const pa = pos.get(e.source), pb = pos.get(e.target);
+    if (!pa || !pb) return;
+    if (neighbours.has(e.source)) neighbours.get(e.source).add(e.target);
+    if (neighbours.has(e.target)) neighbours.get(e.target).add(e.source);
+    const style = TopologyGraph.edgeStyle(e);
+    const w = TopologyGraph.edgeWeight(e, vm.maxBytes, { min: 1, max: 6, l2: 1.75 });
+    const line = mk('line', {
+      class: `topo-edge ${style.cls}`, x1: pa.x, y1: pa.y, x2: pb.x, y2: pb.y,
+      'stroke-width': w.toFixed(1), 'marker-end': style.directed ? 'url(#topo-arrow)' : null,
+    });
+    line.append(mk('title', {}, style.cls === 'dep'
+      ? `${e.source} → ${e.target} :${e.dstPort} · ${fmtBytes(e.bytes)}`
+      : `${e.source} — ${e.target} · physical link`));
+    svg.append(line);
+    edgeEls.push({ from: e.source, to: e.target, cls: style.cls, el: line });
+  });
+
+  const nodeEls = new Map();
+  vm.nodes.forEach((n) => {
+    const p = pos.get(n.id);
+    if (!p) return;
+    const r = radiusOf(n);
+    const short = String(n.label);
+    const g = mk('g', { class: `topo-node${focusId === n.id ? ' focus' : ''}`, tabindex: '0', role: 'button', 'aria-label': short },
+      mk('circle', { cx: p.x, cy: p.y, r }),
+      mk('text', { x: p.x, y: p.y + r + 12, 'text-anchor': 'middle' }, short.length > 16 ? `${short.slice(0, 15)}…` : short),
+      mk('title', {}, `${short}\n${n.degree} link${n.degree === 1 ? '' : 's'}`));
+    if (onNodeClick) {
+      g.addEventListener('click', () => onNodeClick(n.id));
+      g.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); onNodeClick(n.id); } });
+    }
+    svg.append(g);
+    nodeEls.set(n.id, g);
+  });
+
+  const wrap = el('div', { class: 'topo-graph topo-layers' }, svg);
+
+  function clear() {
+    wrap.classList.remove('has-selection');
+    nodeEls.forEach((g) => g.classList.remove('active', 'selected', 'iso', 'aff', 'dim'));
+    edgeEls.forEach((x) => x.el.classList.remove('active', 'dim'));
+  }
+  // Local neighbourhood highlight (default click behaviour): emphasise the node,
+  // its direct neighbours and their edges; dim the rest.
+  function neighbourhood(id) {
+    const near = neighbours.get(id) || new Set();
+    wrap.classList.add('has-selection');
+    nodeEls.forEach((g, nid) => g.classList.toggle('active', nid === id || near.has(nid)));
+    if (nodeEls.get(id)) nodeEls.get(id).classList.add('selected');
+    edgeEls.forEach((x) => x.el.classList.toggle('active', x.from === id || x.to === id));
+  }
+  // Blast-radius highlight (what-if / incident): { focus, isolated:Set, affected:Set }.
+  function setHighlight(sets) {
+    if (!sets) { clear(); return; }
+    wrap.classList.add('has-selection');
+    nodeEls.forEach((g, id) => {
+      const iso = sets.isolated && sets.isolated.has(id);
+      const aff = sets.affected && sets.affected.has(id);
+      const focus = id === sets.focus;
+      g.classList.toggle('focus', focus);
+      g.classList.toggle('iso', !!iso && !focus);
+      g.classList.toggle('aff', !!aff && !focus && !iso);
+      g.classList.toggle('dim', !focus && !iso && !aff);
+    });
+    edgeEls.forEach((x) => {
+      const inSet = (nid) => nid === sets.focus || (sets.isolated && sets.isolated.has(nid)) || (sets.affected && sets.affected.has(nid));
+      const hot = inSet(x.from) && inSet(x.to);
+      x.el.classList.toggle('active', hot);
+      x.el.classList.toggle('dim', !hot);
+    });
+  }
+
+  return { wrap, svg, nodeEls, edgeEls, neighbours, clear, neighbourhood, setHighlight };
+}
+
 // Flow-derived dependency / topology map — who-talks-to-whom built from the
 // ingested 5-tuple flows. Internal (RFC1918) hosts vs external peers (with ASN/
 // country). Read-only: a summary + the heaviest dependencies and busiest hosts.
@@ -4936,13 +5040,17 @@ views.topology = async () => {
   winSel.value = '60';
   const refreshBtn = el('button', { class: 'small ghost' }, 'Refresh');
 
-  // View-mode toggle: the who-talks-to-whom SVG diagram (default) or a map of the
-  // public peers by country. Internal hosts are never geolocated, so the map only
-  // covers the external subset — see drawTopoMap.
-  let mode = 'diagram';
+  // View-mode toggle: the who-talks-to-whom SVG diagram (default), the unified
+  // resilience "Layers" graph (LLDP links + service dependencies from
+  // /api/topology/graph), or a map of the public peers by country. Internal hosts
+  // are never geolocated, so the map only covers the external subset — see
+  // drawTopoMap. A ?layer/?focus deep-link opens straight into Layers.
+  const topoState = TopologyGraph.parseParams(window.location.search);
+  let mode = (window.location.search && /[?&](layer|focus)=/.test(window.location.search)) ? 'layers' : 'diagram';
   const diagramBtn = el('button', { class: 'small', 'aria-pressed': 'true' }, 'Diagram');
+  const layersBtn = el('button', { class: 'small ghost', 'aria-pressed': 'false' }, 'Layers');
   const mapBtn = el('button', { class: 'small ghost', 'aria-pressed': 'false' }, 'Map');
-  const modeToggle = el('div', { class: 'topo-mode', role: 'group', 'aria-label': 'View mode' }, diagramBtn, mapBtn);
+  const modeToggle = el('div', { class: 'topo-mode', role: 'group', 'aria-label': 'View mode' }, diagramBtn, layersBtn, mapBtn);
 
   root.append(el('div', { class: 'topo-action-bar' },
     el('label', { class: 'inline muted' }, 'Site ', locSel),
@@ -4979,10 +5087,25 @@ views.topology = async () => {
   // recent /api/topology response so the toggle can redraw without refetching.
   const graphHost = el('div', {});
   const mapHost = el('div', { class: 'topo-maphost hidden' });
-  root.append(el('div', {}, graphHost, mapHost));
+  const layerHost = el('div', { class: 'topo-layerhost hidden' });
+  root.append(el('div', {}, graphHost, mapHost, layerHost));
   const tableHost = el('div', {});
   root.append(tableHost);
   let lastData = null;
+  let graphData = null; // cached /api/topology/graph (unified l2_link + service_dep)
+  let layersApi = null; // handles returned by topoLayersSvg (highlight control)
+
+  // Persist ONLY the topology-owned query params (layer + focus) without
+  // clobbering unrelated ones — the SPA's replaceState persistence pattern.
+  function syncTopoUrl() {
+    try {
+      const q = new URLSearchParams(window.location.search || '');
+      const patch = TopologyGraph.paramsPatch(topoState);
+      for (const [k, v] of Object.entries(patch)) { if (v == null) q.delete(k); else q.set(k, v); }
+      const qs = q.toString();
+      window.history.replaceState(null, '', qs ? `${window.location.pathname}?${qs}` : window.location.pathname);
+    } catch { /* URL API off — best-effort */ }
+  }
 
   // byId index is rebuilt on each load; shared by label() and actionBtns().
   const byId = {};
@@ -5202,20 +5325,81 @@ views.topology = async () => {
     setTimeout(() => { try { map.invalidateSize(); } catch { /* ignore */ } }, 60);
   }
 
-  // Show the active mode's host, keep the other hidden, and (re)draw the map.
+  // Show the active mode's host, keep the others hidden, and (re)draw it. Three
+  // modes: 'diagram' (flow-derived), 'layers' (unified resilience graph), 'map'.
   function applyMode() {
-    const isMap = mode === 'map';
-    graphHost.classList.toggle('hidden', isMap);
-    mapHost.classList.toggle('hidden', !isMap);
-    diagramBtn.classList.toggle('ghost', isMap);
-    mapBtn.classList.toggle('ghost', !isMap);
-    diagramBtn.setAttribute('aria-pressed', String(!isMap));
-    mapBtn.setAttribute('aria-pressed', String(isMap));
-    if (isMap) drawTopoMap();
-    else stopTopoMap();
+    graphHost.classList.toggle('hidden', mode !== 'diagram');
+    layerHost.classList.toggle('hidden', mode !== 'layers');
+    mapHost.classList.toggle('hidden', mode !== 'map');
+    for (const [btn, m] of [[diagramBtn, 'diagram'], [layersBtn, 'layers'], [mapBtn, 'map']]) {
+      btn.classList.toggle('ghost', mode !== m);
+      btn.setAttribute('aria-pressed', String(mode === m));
+    }
+    if (mode === 'map') drawTopoMap(); else stopTopoMap();
+    if (mode === 'layers') drawLayers();
   }
   diagramBtn.addEventListener('click', () => { if (mode !== 'diagram') { mode = 'diagram'; applyMode(); } });
+  layersBtn.addEventListener('click', () => { if (mode !== 'layers') { mode = 'layers'; applyMode(); } });
   mapBtn.addEventListener('click', () => { if (mode !== 'map') { mode = 'map'; applyMode(); } });
+
+  // Layers mode: the unified resilience graph (LLDP l2_link + service_dep) with a
+  // layer toggle. Fetches /api/topology/graph once (cached), then re-renders the
+  // chosen layer locally. Distinct from the flow-derived diagram — see the note
+  // in the empty state. The layer choice persists to the URL.
+  function renderLayers() {
+    const layerBtn = (val, txt) => {
+      const active = topoState.layer === val;
+      const b = el('button', { class: `small${active ? '' : ' ghost'}`, 'aria-pressed': String(active) }, txt);
+      b.addEventListener('click', () => {
+        if (topoState.layer === val) return;
+        topoState.layer = val;
+        syncTopoUrl();
+        renderLayers();
+      });
+      return b;
+    };
+    const layerBar = el('div', { class: 'topo-layerbar', role: 'group', 'aria-label': 'Topology layer' },
+      el('span', { class: 'muted' }, 'Layer:'),
+      layerBtn('both', 'Both'), layerBtn('l2', 'L2 links'), layerBtn('dep', 'Dependencies'));
+
+    if (!graphData) {
+      layerHost.replaceChildren(layerBar, el('div', { class: 'muted' }, 'Loading graph…'));
+      return;
+    }
+    const totals = graphData.totals || { nodes: 0, l2_link: 0, service_dep: 0 };
+    if (!(graphData.edges || []).length) {
+      layerHost.replaceChildren(layerBar, el('div', { class: 'empty' },
+        'No topology graph yet. L2 links come from agents reporting LLDP neighbours; dependency edges are aggregated from TCP flows by a scheduled job.'));
+      layersApi = null;
+      return;
+    }
+    const vm = TopologyGraph.buildViewModel(graphData, topoState.layer, { focus: topoState.focus });
+    if (!vm.nodes.length) {
+      layerHost.replaceChildren(layerBar, el('div', { class: 'empty' }, 'No edges in this layer — switch the layer above.'));
+      layersApi = null;
+      return;
+    }
+    layersApi = topoLayersSvg(vm, {
+      focusId: topoState.focus,
+      onNodeClick: (id) => layersApi && layersApi.neighbourhood(id),
+    });
+    const legend = el('div', { class: 'pg-legend' },
+      el('span', { class: 'lg' }, el('span', { class: 'topo-swatch l2' }), 'Physical link (L2)'),
+      el('span', { class: 'lg' }, el('span', { class: 'topo-swatch dep' }), 'Service dependency'),
+      el('span', { class: 'lg muted' }, `${totals.nodes} hosts · ${totals.l2_link} links · ${totals.service_dep} dependencies · line width = bytes`));
+    layerHost.replaceChildren(layerBar, el('div', { class: 'pg-head' }, legend), layersApi.wrap);
+  }
+  async function drawLayers() {
+    if (graphData) { renderLayers(); return; }
+    renderLayers(); // shows "Loading…" with the layer bar
+    try {
+      graphData = await api('/api/topology/graph');
+    } catch (e) {
+      layerHost.replaceChildren(el('div', { class: 'error' }, errText(e)));
+      return;
+    }
+    renderLayers();
+  }
 
   async function loadTopology() {
     const qp = new URLSearchParams({ minutes: winSel.value });

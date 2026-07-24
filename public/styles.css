@@ -681,6 +681,27 @@ main#view:has(.fleet) { max-width: 95%; }
 .topo-node:focus { outline: none; }
 .topo-graph.has-selection .topo-node:not(.active) { opacity: .25; }
 
+/* Layers mode: unified resilience graph (LLDP l2_link + service_dep). */
+.topo-layerbar { display: flex; align-items: center; gap: 8px; margin: 4px 0 8px; }
+.topo-layerbar .muted { margin-right: 2px; }
+.topo-swatch { width: 22px; height: 0; display: inline-block; vertical-align: middle;
+  border-top: 3px solid var(--border); }
+.topo-swatch.l2 { border-top-style: solid; border-top-color: var(--muted); }
+.topo-swatch.dep { border-top-style: dashed; border-top-color: var(--accent); }
+#topo-arrow path { fill: var(--accent); opacity: .7; }
+/* Edge types: physical links solid, service dependencies dashed + arrowed. */
+.topo-edge { transition: opacity .12s, stroke .12s; }
+.topo-edge.l2 { stroke: var(--muted); opacity: .5; }
+.topo-edge.dep { stroke: var(--accent); opacity: .55; stroke-dasharray: 5 4; }
+.topo-graph.has-selection .topo-edge.dim { opacity: .08; }
+.topo-graph.has-selection .topo-edge.active { opacity: .95; stroke-width: 3; }
+/* Blast-radius / what-if highlight tiers on the nodes. */
+.topo-layers .topo-node.dim { opacity: .18; }
+.topo-layers .topo-node.focus circle { stroke: var(--accent); stroke-width: 4; }
+.topo-layers .topo-node.iso circle { stroke: var(--bad); stroke-width: 3.5; fill: color-mix(in srgb, var(--bad) 18%, var(--panel-2)); }
+.topo-layers .topo-node.aff circle { stroke: var(--warn); stroke-width: 3; fill: color-mix(in srgb, var(--warn) 15%, var(--panel-2)); }
+.topo-layers .topo-node circle { stroke: var(--accent); }
+
 /* NICs view: firmware-drift card + inventory list. */
 .nics-summary { margin: 0 0 14px; }
 .nic-card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; margin: 0 0 16px; }

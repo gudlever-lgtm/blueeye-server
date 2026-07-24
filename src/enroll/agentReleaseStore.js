@@ -62,6 +62,13 @@ function createAgentReleaseStore({ dir, fsImpl = fs, logger = console } = {}) {
   }
   load();
 
+  // Whether releases can actually be PERSISTED (a writable dir is configured).
+  // Reads/serves still work without one, but add()/publish throws — so the UI can
+  // explain "set AGENT_RELEASE_DIR" instead of surfacing a raw 500.
+  function hasStorage() {
+    return !!dir;
+  }
+
   function list() {
     return Array.from(index.values()).sort((a, b) => compareVersions(a.version, b.version));
   }
@@ -101,7 +108,7 @@ function createAgentReleaseStore({ dir, fsImpl = fs, logger = console } = {}) {
     return { ...meta, buffer };
   }
 
-  return { reload: load, add, has, list, latest, get };
+  return { reload: load, add, has, list, latest, get, hasStorage };
 }
 
 module.exports = { createAgentReleaseStore };

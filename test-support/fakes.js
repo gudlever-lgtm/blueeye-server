@@ -970,6 +970,7 @@ function makeReleaseStore(overrides = {}) {
     latest: overrides.latest || (() => (added.length ? added[added.length - 1] : null)),
     get: overrides.get || ((v) => added.find((r) => r.version === v) || null),
     reload: overrides.reload || (() => {}),
+    hasStorage: overrides.hasStorage || (() => true),
   };
 }
 

@@ -8940,7 +8940,15 @@ async function settingsUpdatesView() {
   const selfUpdatableBehind = behind.filter((a) => agentSelfUpdatable(a));
   if (!signedRelease && selfUpdatableBehind.length) {
     const box = el('div', { class: 'callout' });
-    if (canSign) {
+    if (canSign && ver.releaseStoreReady === false) {
+      // Can sign, but there's nowhere to STORE the release (no AGENT_RELEASE_DIR).
+      // Publishing would fail, so show the config fix instead of a doomed button.
+      box.append(el('p', {}, el('strong', {}, '⚠ One-click updates are blocked: no release storage is configured.')));
+      box.append(el('p', { class: 'muted' },
+        `${selfUpdatableBehind.length} systemd agent(s) are behind. This server can sign releases, but it has no ` , el('code', {}, 'AGENT_RELEASE_DIR'), ' set, so a signed release can\'t be saved — publishing fails and updates go out unsigned (which key-pinning agents refuse).'));
+      box.append(el('p', { class: 'muted' },
+        'Set ', el('code', {}, 'AGENT_RELEASE_DIR'), ' to a writable path on the server host and restart. On startup the server then auto-publishes a signed release, and one-click updates work.'));
+    } else if (canSign) {
       // Not blocked — the Update button mints a signed release from source on
       // demand and pushes THAT. Explain, and offer the explicit publish too.
       box.append(el('p', {}, el('strong', {}, 'No signed release is published yet.')));
@@ -8974,7 +8982,7 @@ async function settingsUpdatesView() {
   }
 
   root.append(el('div', { class: 'cards' },
-    stat('Agents reporting', `${withVer.length} / ${agents.length}`),
+    stat('Reporting a version', `${withVer.length} / ${agents.length}`),
     stat('Up to date', offered ? String(withVer.length - behind.length) : '–'),
     stat('Behind', offered ? String(behind.length) : '–')));
 

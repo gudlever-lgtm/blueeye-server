@@ -58,6 +58,19 @@ test('renderInstallPs1 requires Node, extracts with tar, enrolls, and registers 
   assert.match(script, /RestartCount/);
 });
 
+test('renderInstallPs1 stops a running instance BEFORE replacing the code (so a re-run actually upgrades the running version)', () => {
+  const script = renderInstallPs1({ serverUrl: 'http://x', code: 'C', sourceSha: SHA });
+  // Must terminate the live agent first — otherwise the old-version process keeps
+  // running (Scheduled Task ignores a second Start) and the dashboard never sees
+  // the new version.
+  assert.match(script, /Stop-ScheduledTask -TaskName \$ServiceName/);
+  // ...and that stop has to happen before the extract, not after.
+  const stopIdx = script.indexOf('Stop-ScheduledTask -TaskName $ServiceName');
+  const extractIdx = script.indexOf('extracting agent source');
+  assert.ok(stopIdx !== -1 && extractIdx !== -1 && stopIdx < extractIdx,
+    'the running task must be stopped before the code is extracted');
+});
+
 test('renderInstallPs1 treats a stored token as success even when node exits non-zero', () => {
   const script = renderInstallPs1({ serverUrl: 'http://x', code: 'C', sourceSha: SHA });
   // Capture the enroll exit code, then decide by the RESULT (token present) rather

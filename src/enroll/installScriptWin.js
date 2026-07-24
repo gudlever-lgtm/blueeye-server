@@ -169,6 +169,24 @@ try {
   # Inspection/test mode: verified, nothing written to the system yet.
   if ($env:BLUEEYE_DRY_RUN) { Info 'dry-run: verified, stopping before install'; exit 0 }
 
+  # Stop any running instance BEFORE replacing the code. On a re-run/upgrade the
+  # old agent process keeps the PREVIOUS version loaded in memory and holds file
+  # locks in the install dir. If it's left running, the new code is written to
+  # disk but never actually runs — a Scheduled Task ignores a second Start while
+  # one instance is live (MultipleInstances = IgnoreNew) — so the agent keeps
+  # reporting the OLD version and the dashboard never advances. Stop the task,
+  # end any stray node still running from the install dir, and give Windows a
+  # moment to release the handles, so the extract is clean and the version we
+  # start is the one we just installed.
+  Info "stopping any running '$ServiceName' before replacing the code ..."
+  try { Stop-ScheduledTask -TaskName $ServiceName -ErrorAction SilentlyContinue | Out-Null } catch {}
+  try {
+    Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" -ErrorAction SilentlyContinue |
+      Where-Object { $_.CommandLine -and $_.CommandLine -like "*$InstallDir*" } |
+      ForEach-Object { try { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } catch {} }
+  } catch {}
+  Start-Sleep -Seconds 2
+
   # Lay the agent out fresh under the install dir (a re-run replaces the code but
   # keeps the token/config in the separate state dir, so it stays idempotent).
   New-Item -ItemType Directory -Force -Path $InstallDir, $StateDir, $LogDir | Out-Null

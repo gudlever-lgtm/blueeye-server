@@ -44,6 +44,14 @@ addresses, ports, ASNs, byte/flow counts, never payload.
 summary, a **Diagram** / **Map** toggle, and the top-dependencies/busiest-hosts
 tables.
 
+The **View / run actions from agent** selector (shown when ≥1 agent is online)
+drives both roles from one control: picking an agent re-scopes the whole view —
+diagram, tables and summary — to that agent's own exported flows (sends
+`agentId`), and that agent is also the vantage point for the per-node
+**Ping/Route/Path** probes. **All agents (fleet)** (the default) keeps the
+fleet-wide map. Because `agentId` takes precedence over `locationId` server-side,
+the **Site** filter is disabled while a single agent is selected.
+
 ## Map
 
 The **Map** toggle plots the same payload geographically, reusing the shared

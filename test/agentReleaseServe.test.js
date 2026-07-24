@@ -97,6 +97,23 @@ test('POST /system/agent-release/publish returns 409 with guidance when the serv
   assert.match(res.body.error, /signing key/i);
 });
 
+test('POST /system/agent-release/publish returns 503 naming AGENT_RELEASE_DIR when there is no release storage', async () => {
+  const res = await request(makeApp({
+    releaseStore: makeReleaseStore({ hasStorage: () => false }), // no AGENT_RELEASE_DIR
+    agentSourceStore: makeSourceStore({ sourceVersion: () => '0.5.0' }),
+  }))
+    .post('/system/agent-release/publish').set('Authorization', admin());
+  assert.equal(res.status, 503);
+  assert.match(res.body.error, /AGENT_RELEASE_DIR/);
+  assert.equal(res.body.releaseStoreReady, false);
+});
+
+test('GET /system/version reports releaseStoreReady:false when the release store has no directory', async () => {
+  const res = await request(makeApp({ releaseStore: makeReleaseStore({ hasStorage: () => false }), agentSourceStore: makeSourceStore({ sourceVersion: () => '0.5.0' }) }))
+    .get('/system/version').set('Authorization', viewer());
+  assert.equal(res.body.releaseStoreReady, false);
+});
+
 test('GET /system/version falls back to the source bundle when no release is published', async () => {
   const res = await request(makeApp({ releaseStore: makeReleaseStore(), agentSourceStore: makeSourceStore({ sourceVersion: () => '0.1.0' }) }))
     .get('/system/version').set('Authorization', viewer());

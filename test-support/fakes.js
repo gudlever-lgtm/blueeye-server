@@ -107,16 +107,17 @@ function makeDiscoveredDevicesRepo(overrides = {}) {
   const iso = (v) => (v == null ? null : (v instanceof Date ? v.toISOString() : new Date(v).toISOString()));
   const mapOut = (r) => ({
     id: r.id, ip: r.ip, hostname: r.hostname ?? null, openPorts: r.open_ports ? String(r.open_ports).split(',').map(Number).filter((n) => Number.isInteger(n)) : [],
-    icmp: !!r.icmp, status: r.status, promotedAgentId: r.promoted_agent_id ?? null, firstSeen: iso(r.first_seen), lastSeen: iso(r.last_seen),
+    icmp: !!r.icmp, status: r.status, promotedAgentId: r.promoted_agent_id ?? null, foundByAgentId: r.found_by_agent_id ?? null, firstSeen: iso(r.first_seen), lastSeen: iso(r.last_seen),
   });
   return {
     rows,
-    upsertCandidate: overrides.upsertCandidate || (async ({ ip, hostname = null, openPorts = [], icmp = false, seenAt = null }) => {
+    upsertCandidate: overrides.upsertCandidate || (async ({ ip, hostname = null, openPorts = [], icmp = false, seenAt = null, foundByAgentId = null }) => {
       const seen = seenAt || new Date();
       const ports = Array.isArray(openPorts) ? openPorts.join(',') : (openPorts || '');
+      const finder = Number.isInteger(Number(foundByAgentId)) && Number(foundByAgentId) > 0 ? Number(foundByAgentId) : null;
       const existing = rows.find((r) => r.ip === ip);
-      if (existing) { existing.hostname = hostname; existing.open_ports = ports; existing.icmp = icmp ? 1 : 0; existing.last_seen = seen; return existing; }
-      const row = { id: (seq += 1), ip, hostname, open_ports: ports, icmp: icmp ? 1 : 0, status: 'discovered', promoted_agent_id: null, first_seen: seen, last_seen: seen };
+      if (existing) { existing.hostname = hostname; existing.open_ports = ports; existing.icmp = icmp ? 1 : 0; if (finder != null) existing.found_by_agent_id = finder; existing.last_seen = seen; return existing; }
+      const row = { id: (seq += 1), ip, hostname, open_ports: ports, icmp: icmp ? 1 : 0, status: 'discovered', promoted_agent_id: null, found_by_agent_id: finder, first_seen: seen, last_seen: seen };
       rows.push(row); return row;
     }),
     list: overrides.list || (async ({ status = null, limit = 200, offset = 0 } = {}) => rows

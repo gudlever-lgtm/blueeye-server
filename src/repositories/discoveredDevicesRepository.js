@@ -19,12 +19,13 @@ function mapRow(row) {
     icmp: !!row.icmp,
     status: row.status,
     promotedAgentId: row.promoted_agent_id == null ? null : Number(row.promoted_agent_id),
+    foundByAgentId: row.found_by_agent_id == null ? null : Number(row.found_by_agent_id),
     firstSeen: toIso(row.first_seen),
     lastSeen: toIso(row.last_seen),
   };
 }
 
-const COLS = 'id, ip, hostname, open_ports, icmp, status, promoted_agent_id, first_seen, last_seen';
+const COLS = 'id, ip, hostname, open_ports, icmp, found_by_agent_id, status, promoted_agent_id, first_seen, last_seen';
 
 function createDiscoveredDevicesRepository(db) {
   const { pool } = db;
@@ -32,14 +33,16 @@ function createDiscoveredDevicesRepository(db) {
   // Upsert a candidate observed by a sweep. Re-observing an existing IP refreshes
   // hostname/ports/icmp/last_seen but NEVER changes status (an ignored or promoted
   // device stays ignored/promoted — a later sweep must not resurrect it).
-  async function upsertCandidate({ ip, hostname = null, openPorts = [], icmp = false, seenAt = null }) {
+  async function upsertCandidate({ ip, hostname = null, openPorts = [], icmp = false, seenAt = null, foundByAgentId = null }) {
     const seen = seenAt || new Date();
     const ports = Array.isArray(openPorts) ? openPorts.join(',') : (openPorts || '');
+    const finder = Number.isInteger(Number(foundByAgentId)) && Number(foundByAgentId) > 0 ? Number(foundByAgentId) : null;
     const [res] = await pool.query(
-      `INSERT INTO discovered_devices (ip, hostname, open_ports, icmp, status, first_seen, last_seen)
-       VALUES (?, ?, ?, ?, 'discovered', ?, ?)
-       ON DUPLICATE KEY UPDATE hostname = VALUES(hostname), open_ports = VALUES(open_ports), icmp = VALUES(icmp), last_seen = VALUES(last_seen)`,
-      [ip, hostname, ports, icmp ? 1 : 0, seen, seen],
+      `INSERT INTO discovered_devices (ip, hostname, open_ports, icmp, found_by_agent_id, status, first_seen, last_seen)
+       VALUES (?, ?, ?, ?, ?, 'discovered', ?, ?)
+       ON DUPLICATE KEY UPDATE hostname = VALUES(hostname), open_ports = VALUES(open_ports), icmp = VALUES(icmp),
+         found_by_agent_id = COALESCE(VALUES(found_by_agent_id), found_by_agent_id), last_seen = VALUES(last_seen)`,
+      [ip, hostname, ports, icmp ? 1 : 0, finder, seen, seen],
     );
     return res;
   }

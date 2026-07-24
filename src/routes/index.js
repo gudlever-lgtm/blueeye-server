@@ -285,7 +285,7 @@ function createApiRouter({
     getCategories: settingsService ? () => settingsService.getFlowCategories() : undefined,
   }));
   // Flow-derived dependency/topology map (who-talks-to-whom from the 5-tuples).
-  if (discoveredDevicesRepo) router.use('/api/discovery', createDiscoveryRouter({ discoveredDevicesRepo, agentsRepo, discoverySweepJob, auditLogger, auditLogRepo, config: discoveryConfig, getConfig: settingsService ? () => settingsService.getDiscovery() : null, setConfig: settingsService ? (patch) => settingsService.setDiscovery(patch) : null }));
+  if (discoveredDevicesRepo) router.use('/api/discovery', createDiscoveryRouter({ discoveredDevicesRepo, agentsRepo, discoverySweepJob, agentCommander, auditLogger, auditLogRepo, config: discoveryConfig, getConfig: settingsService ? () => settingsService.getDiscovery() : null, setConfig: settingsService ? (patch) => settingsService.setDiscovery(patch) : null }));
 
   if (flowsRepo || lldpNeighborsRepo || serviceDependenciesRepo || topologyChangesRepo || flowPairBaselinesRepo) router.use('/api/topology', createTopologyRouter({ flowsRepo, agentsRepo, locationsRepo, centroids, lldpNeighborsRepo, serviceDependenciesRepo, serviceDependencyJob, blastRadiusService, topologyChangesRepo, flowPairBaselinesRepo, flowPairBaselineJob }));
   if (probeResultsRepo) router.use('/api/probes', createProbesRouter({ probeResultsRepo, agentsRepo, geoProvider, centroids }));
@@ -424,7 +424,7 @@ function createApiRouter({
   // Unified audit log (license feature `audit_log`) + API tokens (`api_access`).
   if (auditLogRepo) router.use('/api/audit-log', createAuditLogRouter({ auditLogRepo, featureGate, planService }));
   if (apiTokensRepo) router.use('/api/api-tokens', createApiTokensRouter({ apiTokensRepo, featureGate, planService, auditLogger }));
-  router.use('/agents', createAgentReportsRouter({ agentAuth, resultsRepo, resultsTsdbRepo, agentsRepo, auditEventsRepo, analysisPipeline, flowPipeline, probeResultsRepo, probePipeline, incidentService, installToolService, lldpNeighborsRepo, topologyChangeService, hostConnectionsRepo, logger }));
+  router.use('/agents', createAgentReportsRouter({ agentAuth, resultsRepo, resultsTsdbRepo, agentsRepo, auditEventsRepo, analysisPipeline, flowPipeline, probeResultsRepo, probePipeline, incidentService, installToolService, lldpNeighborsRepo, topologyChangeService, hostConnectionsRepo, discoveredDevicesRepo, auditLogger, logger }));
   router.use('/agents', createAgentEnrollRouter({ enrollmentStore, notifyDashboard, integrationTrigger: integrationsDispatcher, auditEventsRepo, settingsService, rateLimit: enrollRateLimiter }));
 
   return router;

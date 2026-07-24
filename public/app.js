@@ -3517,7 +3517,24 @@ views.incident = async () => {
     })();
   }
 
-  return el('div', { class: 'incident-detail' }, header, controls, guideCard, anomaliesCard, timelineCard, similarCard, pathCard, ...extra);
+  // Blast radius — which downstream hosts/services fail if this device goes down
+  // (enrichment already on the incident response). Both tiers with justifying
+  // paths; each host links into the topology map focused on it.
+  let blastCard = null;
+  if (inc.blastRadius) {
+    blastCard = el('div', { class: 'card' }, el('h3', {}, 'Blast radius'), el('div', { class: 'muted' }, 'Loading…'));
+    (async () => {
+      let agents = [];
+      try { agents = await api('/agents'); } catch { /* labels best-effort */ }
+      const nameById = {};
+      (agents || []).forEach((a) => { nameById[a.id] = a.display_name || a.hostname || `host ${a.id}`; });
+      const nameFor = (hid) => nameById[hid] || `host ${hid}`;
+      blastCard.replaceChildren(el('h3', {}, 'Blast radius'),
+        blastRadiusPanel(inc.blastRadius, { nameFor, onFocusHost: (hid) => openTopologyFocus(hid) }));
+    })();
+  }
+
+  return el('div', { class: 'incident-detail' }, header, controls, guideCard, anomaliesCard, blastCard, timelineCard, similarCard, pathCard, ...extra);
 };
 
 // ---- Incident Situation View (cross-agent clusters) ------------------------
@@ -4907,6 +4924,47 @@ function topoGraphSvg(nodes, edges, { label, kindBadge, actionBtns } = {}) {
   return el('div', {}, el('div', { class: 'pg-head' }, legend), wrap);
 }
 
+// Navigate to the Topology map in Layers mode focused on one host — the map
+// reads ?layer/?focus from the URL on load, opens straight into Layers and (for
+// operator+) previews that host's blast radius. Shared by the incident view's
+// "show on map" links.
+function openTopologyFocus(hostId) {
+  try {
+    const q = new URLSearchParams(window.location.search || '');
+    q.set('layer', 'both');
+    q.set('focus', String(hostId));
+    window.history.replaceState(null, '', `${window.location.pathname}?${q}`);
+  } catch { /* URL API off */ }
+  currentView = 'topology';
+  render();
+}
+
+// Reusable blast-radius result panel: the two tiers (directly-isolated L2 +
+// dependency-affected), each host carrying the path that justifies it. Shared by
+// the topology what-if preview and the incident view. `nameFor` resolves a host
+// id → label; `onFocusHost` (optional) makes each host a link (e.g. into the map
+// focused on it).
+function blastRadiusPanel(blast, { nameFor, onFocusHost } = {}) {
+  const name = nameFor || ((hid) => String(hid));
+  const iso = (blast && blast.directly_isolated) || [];
+  const aff = (blast && blast.dependency_affected) || [];
+  const l2Path = (p) => (Array.isArray(p) ? p : []).map(name).join(' → ');
+  const depPath = (p) => (Array.isArray(p) ? p : []).map((s) => (s && typeof s === 'object' ? name(s.hostId) + (s.viaPort ? `:${s.viaPort}` : '') : name(s))).join(' → ');
+  const hostCell = (hid) => (onFocusHost
+    ? el('button', { class: 'linklike mono', title: 'Show on the topology map', onclick: () => onFocusHost(hid) }, name(hid))
+    : el('span', { class: 'mono' }, name(hid)));
+  const tier = (title, cls, list, pathFn) => el('div', { class: `blast-tier ${cls}` },
+    el('div', { class: 'blast-tier-head' }, el('strong', {}, title), el('span', { class: 'badge' }, String(list.length))),
+    list.length
+      ? el('ul', { class: 'blast-list' }, ...list.slice(0, 100).map((x) => el('li', {}, hostCell(x.hostId), el('span', { class: 'muted small' }, ' — ', pathFn(x.path)))))
+      : el('div', { class: 'muted small' }, 'None'));
+  return el('div', { class: 'blast-panel' },
+    el('div', { class: 'blast-head' }, el('strong', {}, `If ${name(blast.failingNode)} fails`),
+      TopologyGraph.blastIsEmpty(blast) ? el('span', { class: 'muted small' }, ' — nothing downstream is isolated') : null),
+    tier('Directly isolated (L2)', 'iso', iso, l2Path),
+    tier('Dependency-affected', 'aff', aff, depPath));
+}
+
 // Renders the UNIFIED resilience graph (the "Layers" mode) from GET
 // /api/topology/graph: monitored hosts as nodes, physical LLDP adjacencies
 // (l2_link) as SOLID lines and observed TCP dependencies (service_dep) as DASHED,
@@ -5348,26 +5406,11 @@ views.topology = async () => {
   // layer toggle. Fetches /api/topology/graph once (cached), then re-renders the
   // chosen layer locally. Distinct from the flow-derived diagram — see the note
   // in the empty state. The layer choice persists to the URL.
-  // Panel showing the last "what if" / blast-radius result: the two tiers and the
-  // path that justifies each affected host. `nameFor` resolves a node id → label.
+  // What-if / blast-radius result panel for the map. Null ⇒ the click-a-host
+  // prompt; otherwise the shared blastRadiusPanel.
   function blastPanel(blast, nameFor) {
     if (!blast) return el('div', { class: 'muted small' }, 'What-if mode: click a host to preview what fails if it goes down.');
-    const iso = blast.directly_isolated || [];
-    const aff = blast.dependency_affected || [];
-    const l2Path = (p) => (Array.isArray(p) ? p : []).map(nameFor).join(' → ');
-    const depPath = (p) => (Array.isArray(p) ? p : []).map((s) => (s && typeof s === 'object' ? nameFor(s.hostId) + (s.viaPort ? `:${s.viaPort}` : '') : nameFor(s))).join(' → ');
-    const tier = (title, cls, list, pathFn) => el('div', { class: `blast-tier ${cls}` },
-      el('div', { class: 'blast-tier-head' }, el('strong', {}, title), el('span', { class: 'badge' }, String(list.length))),
-      list.length
-        ? el('ul', { class: 'blast-list' }, ...list.slice(0, 50).map((x) => el('li', {},
-            el('span', { class: 'mono' }, nameFor(x.hostId)),
-            el('span', { class: 'muted small' }, ' — ', pathFn(x.path)))))
-        : el('div', { class: 'muted small' }, 'None'));
-    return el('div', { class: 'blast-panel' },
-      el('div', { class: 'blast-head' }, el('strong', {}, `If ${nameFor(blast.failingNode)} fails`),
-        TopologyGraph.blastIsEmpty(blast) ? el('span', { class: 'muted small' }, ' — nothing downstream is isolated') : null),
-      tier('Directly isolated (L2)', 'iso', iso, l2Path),
-      tier('Dependency-affected', 'aff', aff, depPath));
+    return blastRadiusPanel(blast, { nameFor });
   }
 
   async function runBlast(id) {

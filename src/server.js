@@ -455,6 +455,9 @@ function start() {
   // clustering, fed by the existing agent report path (no new SNMP polling).
   const lldpNeighborsRepo = createLldpNeighborsRepository(db);
   const lldpGraphService = createLldpGraphService({ lldpNeighborsRepo, logger });
+  // Flow records repo — declared here (only needs `db`) because the topology/flow
+  // analytics jobs below consume it; the geo flow pipeline reuses this instance.
+  const flowsRepo = createFlowsRepository(db);
   // Service dependency graph — 'service_dep' edges (host↔host TCP dependencies)
   // recomputed off the ingest hot path by a leader-only job (backgroundJobs).
   const serviceDependenciesRepo = createServiceDependenciesRepository(db);
@@ -649,7 +652,7 @@ function start() {
   // Geo layer: enrich + store flow records. The GeoIP provider (created above for
   // the probe pipeline) reads an offline, EU-sourced range DB; without it, flows
   // store without country/ASN. RFC1918/private endpoints are never geolocated.
-  const flowsRepo = createFlowsRepository(db);
+  // (flowsRepo is declared earlier — the topology/flow analytics jobs need it.)
   const centroids = createCentroids();
   const geoEnricher = createGeoEnricher({ provider: geoProvider, centroids });
   const flowPipeline = createFlowPipeline({

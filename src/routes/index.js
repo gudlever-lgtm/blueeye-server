@@ -26,6 +26,7 @@ const { createMapRouter } = require('./map');
 const { createGeocodeRouter } = require('./geocode');
 const { createFlowsRouter } = require('./flows');
 const { createTopologyRouter } = require('./topology');
+const { createDiscoveryRouter } = require('./discovery');
 const { createProbesRouter } = require('./probes');
 const { createReportsRouter } = require('./reports');
 const { createIncidentsRouter } = require('./incidents');
@@ -119,6 +120,11 @@ function createApiRouter({
   blastRadiusService,
   topologyChangesRepo,
   topologyChangeService,
+  flowPairBaselinesRepo,
+  flowPairBaselineJob,
+  discoveredDevicesRepo,
+  discoverySweepJob,
+  discoveryConfig,
   geoTileConfig,
   geoProvider,
   geoipUpdater,
@@ -275,7 +281,9 @@ function createApiRouter({
     getCategories: settingsService ? () => settingsService.getFlowCategories() : undefined,
   }));
   // Flow-derived dependency/topology map (who-talks-to-whom from the 5-tuples).
-  if (flowsRepo || lldpNeighborsRepo || serviceDependenciesRepo || topologyChangesRepo) router.use('/api/topology', createTopologyRouter({ flowsRepo, agentsRepo, locationsRepo, centroids, lldpNeighborsRepo, serviceDependenciesRepo, serviceDependencyJob, blastRadiusService, topologyChangesRepo }));
+  if (discoveredDevicesRepo) router.use('/api/discovery', createDiscoveryRouter({ discoveredDevicesRepo, agentsRepo, discoverySweepJob, auditLogger, config: discoveryConfig }));
+
+  if (flowsRepo || lldpNeighborsRepo || serviceDependenciesRepo || topologyChangesRepo || flowPairBaselinesRepo) router.use('/api/topology', createTopologyRouter({ flowsRepo, agentsRepo, locationsRepo, centroids, lldpNeighborsRepo, serviceDependenciesRepo, serviceDependencyJob, blastRadiusService, topologyChangesRepo, flowPairBaselinesRepo, flowPairBaselineJob }));
   if (probeResultsRepo) router.use('/api/probes', createProbesRouter({ probeResultsRepo, agentsRepo, geoProvider, centroids }));
   if (probeResultsRepo) router.use('/api/fleet', createFleetRouter({ agentsRepo, probeResultsRepo, resultsRepo, speedtestResultsRepo, settingsService, logger }));
   // Overview "open issues" rollup (license feature `dashboard_advanced`,

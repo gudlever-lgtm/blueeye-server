@@ -16,10 +16,38 @@ const DEFAULT_TOP_N = 50;
 // Flow-derived dependency / topology map. Mounted at /api/topology behind the
 // user JWT. Builds a who-talks-to-whom graph from the ingested 5-tuple flows
 // (whole fleet, or one agent via ?agentId=), over a ?minutes window. viewer+.
-function createTopologyRouter({ flowsRepo = null, agentsRepo = null, locationsRepo = null, centroids = null, lldpNeighborsRepo = null, serviceDependenciesRepo = null, serviceDependencyJob = null, blastRadiusService = null, topologyChangesRepo = null }) {
+function createTopologyRouter({ flowsRepo = null, agentsRepo = null, locationsRepo = null, centroids = null, lldpNeighborsRepo = null, serviceDependenciesRepo = null, serviceDependencyJob = null, blastRadiusService = null, topologyChangesRepo = null, flowPairBaselinesRepo = null, flowPairBaselineJob = null }) {
   const router = express.Router();
   const reader = requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN);
   const writer = requireRole(ROLES.OPERATOR, ROLES.ADMIN);
+
+  // GET /api/topology/flow-baselines?host=<agentId> — the per-flow-pair volume
+  // baselines for a host (as source), day-of-week/hour-of-day aware. operator+.
+  // 400 invalid, 404 unknown host, 500 on DB failure.
+  if (flowPairBaselinesRepo) {
+    router.get('/flow-baselines', requireAuth, writer, asyncHandler(async (req, res) => {
+      const limRaw = req.query.limit;
+      const limit = limRaw === undefined || limRaw === '' ? 500 : Number(limRaw);
+      if (!Number.isInteger(limit) || limit < 1 || limit > 5000) return res.status(400).json({ error: 'limit must be 1..5000' });
+      const hostId = parseId(req.query.host);
+      if (hostId === null) return res.status(400).json({ error: 'host is required (agent id)' });
+      if (agentsRepo && typeof agentsRepo.findById === 'function' && !(await agentsRepo.findById(hostId))) {
+        return res.status(404).json({ error: 'Host not found' });
+      }
+      const baselines = await flowPairBaselinesRepo.listForHost({ hostId, limit });
+      res.json({ host: hostId, baselines });
+    }));
+
+    // POST /api/topology/flow-baselines/recompute — run the baseline job now.
+    // operator+ (the write path). 503 when no job is wired.
+    router.post('/flow-baselines/recompute', requireAuth, writer, asyncHandler(async (req, res) => {
+      if (!flowPairBaselineJob || typeof flowPairBaselineJob.run !== 'function') {
+        return res.status(503).json({ error: 'Flow baseline job not available' });
+      }
+      const result = await flowPairBaselineJob.run();
+      res.json({ ok: true, ...(result || {}) });
+    }));
+  }
 
   // GET /api/topology/changes — recorded LLDP topology changes as change-feed
   // events (the SAME shape as the target timeline: { timestamp, source:'topology',

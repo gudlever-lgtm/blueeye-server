@@ -8407,6 +8407,20 @@ const DOCS = [
         ],
       },
       {
+        id: 'flow-baselines', title: 'Flow-pair traffic baselines', body: () => [
+          docsLead('Beyond per-metric anomalies (CPU, latency…), BlueEye baselines the traffic volume of each host→host:port flow pair and flags deviations — a database link that suddenly moves 50× its usual bytes, for instance.'),
+          el('p', {}, ['Baselines are ', el('strong', {}, 'day-of-week and hour-of-day aware'), ': a Tuesday 14:00 volume is compared against prior Tuesdays 14:00, not a flat average — so normal business-hours peaks don’t read as anomalies.']),
+          docsTable(['Aspect', 'Behaviour'], [
+            ['Statistics', 'The same robust median + MAD z-score used everywhere else — explainable, no ML.'],
+            ['Window', 'Rolling 14 days of hourly buckets (configurable). History builds forward from when the feature is enabled — it can’t be backfilled.'],
+            ['Eligibility', 'A pair needs ≥100 hourly observations before it’s scored — new/sparse pairs are left alone until there’s enough history.'],
+            ['Output', 'A deviation becomes an ordinary finding (metric flow.volume) that flows into the correlator and Situations like any other — no separate alert channel.'],
+          ]),
+          docsExpect('A steady flow pair produces no findings. A genuine step-change in volume for a specific weekday/hour scores WARN/CRIT and appears in Analysis/Incidents attributed to the source host, with the destination and port in its evidence. This is deviation only — BlueEye never labels traffic “malicious”, it just tells you it changed.'),
+          el('p', { class: 'muted' }, ['Operator+ can inspect a host’s learned baselines at ', el('code', {}, 'GET /api/topology/flow-baselines?host=<id>'), '.']),
+        ],
+      },
+      {
         id: 'adhoc', title: 'Run an ad-hoc probe or test', body: () => [
           docsLead('The fastest way to answer “can this host reach X right now?”.'),
           docsSteps([
@@ -8422,6 +8436,24 @@ const DOCS = [
   },
   {
     section: 'Administration & setup', admin: true, articles: [
+      {
+        id: 'discovery', title: 'Active device discovery', body: () => [
+          docsLead('Passive collection (LLDP, sFlow, agents) only sees devices that announce themselves. Active discovery probes an IP range you configure to find the rest — printers, switches, appliances — and lists them as candidates for you to promote.'),
+          el('div', { class: 'callout' }, el('strong', {}, 'Safe by design: '), 'discovery only ever probes the CIDR ranges you configure — never outside them, never auto-expanding. It refuses to start if no scope is set or the scope exceeds the address cap (default 65,536). Nothing is auto-enrolled: candidates become monitored devices only when you promote them.'),
+          el('h4', {}, 'Configure the scope'),
+          docsSteps([
+            ['Set the CIDR scope and options via environment (', el('code', {}, 'DISCOVERY_ENABLED=true'), ', ', el('code', {}, 'DISCOVERY_CIDRS=10.0.0.0/24,10.0.1.0/24'), '). Optional: ', el('code', {}, 'DISCOVERY_PORTS'), ' (default 22,80,161,443,3389), ', el('code', {}, 'DISCOVERY_RATE_LIMIT'), ' (default 50/s), ', el('code', {}, 'DISCOVERY_ADDRESS_CAP'), ' (default 65536).'],
+            ['Discovery uses native probes only — TCP connect + reverse DNS (and ICMP where the host OS permits a raw socket). It never shells out to nmap or ping.'],
+            ['A sweep runs on a schedule, or on demand via ', el('code', {}, 'POST /api/discovery/scan'), ' (admin). Every sweep is written to the audit log with its scope, start, end and result count.'],
+          ]),
+          el('h4', {}, 'Promote a candidate'),
+          docsSteps([
+            ['Review candidates at ', el('code', {}, 'GET /api/discovery/candidates'), ' — each shows its IP, reverse-DNS hostname, open ports and whether it answered ICMP.'],
+            ['Promote one (', el('code', {}, 'POST /api/discovery/candidates/:id/promote'), ') to create a monitored SNMP device (an agents row with an SNMP monitor config aimed at that IP), or Ignore it to hide it from future sweeps.'],
+          ]),
+          docsExpect('A sweep of a /24 finds the live hosts within it and lists them as “discovered”. They do NOT appear on the fleet or count toward monitoring until promoted. All of this is admin-only — operator and viewer accounts get 403 on every discovery endpoint.'),
+        ],
+      },
       {
         id: 'servicenow', title: 'Connect ServiceNow (ITSM)', body: () => [
           docsLead('Push BlueEye incidents/anomalies into ServiceNow as Incident records. Configured under Settings → Integrations as a “servicenow” connector. This is the outbound ITSM link; for asset lookup see “Connect a CMDB”.'),

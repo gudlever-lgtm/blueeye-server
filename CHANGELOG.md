@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.90.0 — Per-flow-pair volume baselines + scheduled active discovery
+
+Two features (migrations 068 + 069).
+
+**Per-flow-pair volume baselines.** Extends per-metric anomaly detection to
+per-`(src_host, dst_host, dst_port)`: baseline each pair's hourly traffic volume
+and flag deviations. Reuses the existing median/MAD z-score (`src/analysis/
+baselines.js`) — **no new statistical code**. Day-of-week + hour-of-day aware
+(Tuesday 14:00 vs prior Tuesdays 14:00). A new append-only `flow_pair_hourly`
+rollup (fed by the service-dep `tcpServiceFlows`+resolver path; history builds
+forward, ~7-day raw flows can't backfill) feeds `flow_pair_baselines`; a
+leader-only hourly job (`src/analysis/flowPairBaselineJob.js`) recomputes over a
+14-day window (min 100 observations before scoring) and emits deviations to the
+correlator as ordinary findings (`kind ANOMALY`, `metric flow.volume`) via
+`findingStore.save`. Deviation only — **no** threat classification, **no** new
+alerting channel. API `GET /api/topology/flow-baselines` (operator+, 400/404/500)
++ `POST …/recompute`. Config `FLOW_BASELINE_*`. See `docs/flow-pair-baselines.md`.
+
+**Scheduled active discovery.** Finds devices passive collection misses by probing
+an admin-configured CIDR scope. **Native Node only** (TCP connect via `net`,
+reverse DNS via `dns.promises`; ICMP is an injectable probe, unsupported by
+default since raw sockets need CAP_NET_RAW — no `nmap`/`ping`, ever). Scope is
+explicit — never scans outside the configured CIDRs, refuses to start when scope
+is unset/invalid or exceeds the address cap (default 65536, checked before any
+probe), rate-limited (default 50/s). Results are `discovered_devices` candidates —
+**never auto-enrolled**; an admin promotes one to a monitored SNMP device
+(`agents` row). Every sweep is written to the hash-chained audit log with scope,
+start, end and result count. **Admin-only** router (`/api/discovery/*`; viewer +
+operator get 403 on every path). Engine `src/discovery/` (`cidr`, `rateLimiter`,
+`probes`, `scanner`, `discoverySweepJob`); config `DISCOVERY_*` (`src/config.js`).
+See `docs/discovery.md`. Documentation-center how-tos added for both features.
+
 ## 0.89.0 — Topology change detection (LLDP neighbour changes + audit evidence)
 
 Detects and records LLDP/CDP topology changes between poll cycles. Each agent

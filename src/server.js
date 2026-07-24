@@ -64,6 +64,10 @@ const { createServiceDependencyJob } = require('./topology/serviceDependencyJob'
 const { createBlastRadiusService } = require('./topology/blastRadiusService');
 const { createTopologyChangesRepository } = require('./repositories/topologyChangesRepository');
 const { createTopologyChangeService } = require('./topology/topologyChangeService');
+const { createFlowPairBaselinesRepository } = require('./repositories/flowPairBaselinesRepository');
+const { createFlowPairBaselineJob } = require('./analysis/flowPairBaselineJob');
+const { createDiscoveredDevicesRepository } = require('./repositories/discoveredDevicesRepository');
+const { createDiscoverySweepJob } = require('./discovery/discoverySweepJob');
 const { createClusterNotifier } = require('./analysis/clusterNotifier');
 const { createClusterNis2Service } = require('./analysis/clusterNis2');
 const { createClusterAlertGate } = require('./analysis/clusterAlertGate');
@@ -463,6 +467,15 @@ function start() {
   // hash-chained audit log as evidence, with flap suppression.
   const topologyChangesRepo = createTopologyChangesRepository(db);
   const topologyChangeService = createTopologyChangeService({ topologyChangesRepo, lldpNeighborsRepo, auditLogger });
+  // Per-flow-pair traffic-volume baselines (extends per-metric anomaly detection
+  // to per-(src,dst,port)). Leader-only hourly rollup + robust baseline + scoring
+  // that emits deviations to the correlator as ordinary findings.
+  const flowPairBaselinesRepo = createFlowPairBaselinesRepository(db);
+  const flowPairBaselineJob = createFlowPairBaselineJob({ flowPairBaselinesRepo, flowsRepo, agentsRepo, findingStore, logger });
+  // Scheduled active discovery (admin-only). Probes the configured CIDR scope for
+  // devices passive collection misses; candidates require admin promotion.
+  const discoveredDevicesRepo = createDiscoveredDevicesRepository(db);
+  const discoverySweepJob = createDiscoverySweepJob({ discoveredDevicesRepo, auditLogger, config: config.discovery, logger });
   // Durable alert-dispatch log: lets a cluster alert fire once + reference (not
   // resend) member findings already alerted individually. Passed to the dispatcher
   // (records each send) and the cross-agent service (reads it).
@@ -703,6 +716,10 @@ function start() {
     // Service dependency graph recompute (rolling 24h TCP edges), off the ingest
     // hot path — same singleton pattern as the LLDP refresh.
     serviceDependencyJob,
+    // Per-flow-pair volume baseline recompute + scoring (hourly, leader-only).
+    flowPairBaselineJob,
+    // Scheduled active-discovery sweep (leader-only; no-op unless enabled+scoped).
+    discoverySweepJob,
     // LLDP graph refresh + age-out (default 24h). Self-contained interval so
     // stale neighbors are purged even when clustering is idle.
     (() => {
@@ -778,6 +795,11 @@ function start() {
     blastRadiusService,
     topologyChangesRepo,
     topologyChangeService,
+    flowPairBaselinesRepo,
+    flowPairBaselineJob,
+    discoveredDevicesRepo,
+    discoverySweepJob,
+    discoveryConfig: config.discovery,
     remediationPlaybooksRepo,
     configSnapshotsRepo,
     thresholdsRepo,

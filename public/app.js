@@ -4891,12 +4891,24 @@ views.topology = async () => {
     modeToggle));
 
   // Agent selector — shown only when at least one agent is online so action
-  // buttons have something to send probes from.
+  // buttons have something to send probes from. A specific choice scopes the
+  // diagram/tables to that agent's own exported flows AND is the vantage point
+  // for the per-node probes (Ping/Route/Path); "All agents" keeps the fleet view.
   const agentSel = el('select', { class: 'small' });
   if (onlineAgents.length) {
+    agentSel.append(el('option', { value: '' }, 'All agents (fleet)'));
     onlineAgents.forEach((a) => agentSel.append(el('option', { value: String(a.id) }, a.display_name || a.hostname)));
+    agentSel.addEventListener('change', () => {
+      // Server-side, agent scope takes precedence over the Site filter, so grey
+      // Site out while one agent is selected to avoid a "my site is ignored"
+      // surprise; re-enable it when back on the fleet view.
+      const scoped = !!agentSel.value;
+      locSel.disabled = scoped;
+      locSel.title = scoped ? 'Ignored while a single agent is selected — the map is scoped to that agent’s flows.' : '';
+      loadTopology();
+    });
     root.append(el('div', { class: 'topo-action-bar' },
-      el('span', { class: 'muted' }, 'Run actions from agent:'), agentSel));
+      el('span', { class: 'muted' }, 'View / run actions from agent:'), agentSel));
   }
 
   const summary = el('p', { class: 'muted' });
@@ -5146,12 +5158,18 @@ views.topology = async () => {
 
   async function loadTopology() {
     const qp = new URLSearchParams({ minutes: winSel.value });
+    const agentId = agentSel.value; // '' = whole fleet
     const locId = locSel.value;
-    if (locId) qp.set('locationId', locId);
+    // Agent scope wins over Site (mirrors the backend precedence): a specific
+    // agent limits the map to its own flows; otherwise fall back to the Site filter.
+    if (agentId) qp.set('agentId', agentId);
+    else if (locId) qp.set('locationId', locId);
 
-    const locName = locId ? (locations.find((l) => String(l.id) === locId) || {}).name : null;
+    const agentName = agentId ? (agentSel.options[agentSel.selectedIndex] || {}).text : null;
+    const locName = (!agentId && locId) ? (locations.find((l) => String(l.id) === locId) || {}).name : null;
     const winLabel = winSel.options[winSel.selectedIndex].text;
-    headInfo.textContent = `Service/host dependencies · ${winLabel}${locName ? ` · ${locName}` : ''}`;
+    const scopeName = agentName || locName;
+    headInfo.textContent = `Service/host dependencies · ${winLabel}${scopeName ? ` · ${scopeName}` : ''}`;
 
     let data;
     try {

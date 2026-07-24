@@ -7,7 +7,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const request = require('supertest');
 
-const { makeApp, makeDiscoveredDevicesRepo, makeAgentsRepo, authHeader } = require('../test-support/fakes');
+const { makeApp, makeDiscoveredDevicesRepo, makeAgentsRepo, makeAgentCommander, authHeader } = require('../test-support/fakes');
 
 async function seededRepo() {
   const repo = makeDiscoveredDevicesRepo();
@@ -152,4 +152,36 @@ test('GET /api/discovery/sweeps returns audited sweeps (admin)', async () => {
   const res = await request(app).get('/api/discovery/sweeps').set('Authorization', authHeader('admin'));
   assert.equal(res.status, 200);
   assert.ok(Array.isArray(res.body.sweeps));
+});
+
+// ---- agent-executed sweep (POST /scan with agentId) ------------------------
+
+test('POST /api/discovery/scan with agentId pushes run-discovery to that agent', async () => {
+  let sent = null;
+  const agentCommander = makeAgentCommander({ sendCommand: (id, cmd) => { sent = { id, cmd }; return 1; } });
+  const agentsRepo = makeAgentsRepo({ findById: async (id) => ({ id, hostname: 'a' }) });
+  const app = makeApp({ discoveredDevicesRepo: await seededRepo(), agentsRepo, agentCommander });
+  const res = await request(app).put('/api/discovery/config').set('Authorization', authHeader('admin')).send({ cidrs: ['10.0.0.0/24'] });
+  assert.equal(res.status, 200);
+  const scan = await request(app).post('/api/discovery/scan').set('Authorization', authHeader('admin')).send({ agentId: 7 });
+  assert.equal(scan.status, 202);
+  assert.equal(scan.body.mode, 'agent');
+  assert.equal(sent.id, 7);
+  assert.equal(sent.cmd.name, 'run-discovery');
+  assert.deepEqual(sent.cmd.discovery.cidrs, ['10.0.0.0/24']); // effective scope forwarded
+});
+
+test('POST /api/discovery/scan with agentId returns 409 when the agent is offline', async () => {
+  const agentCommander = makeAgentCommander({ sendCommand: () => 0 }); // not connected
+  const agentsRepo = makeAgentsRepo({ findById: async (id) => ({ id }) });
+  const app = makeApp({ discoveredDevicesRepo: await seededRepo(), agentsRepo, agentCommander });
+  const res = await request(app).post('/api/discovery/scan').set('Authorization', authHeader('admin')).send({ agentId: 7 });
+  assert.equal(res.status, 409);
+});
+
+test('POST /api/discovery/scan with an unknown agentId → 404', async () => {
+  const agentsRepo = makeAgentsRepo({ findById: async () => null });
+  const app = makeApp({ discoveredDevicesRepo: await seededRepo(), agentsRepo, agentCommander: makeAgentCommander() });
+  const res = await request(app).post('/api/discovery/scan').set('Authorization', authHeader('admin')).send({ agentId: 999 });
+  assert.equal(res.status, 404);
 });

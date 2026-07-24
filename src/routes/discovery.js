@@ -10,7 +10,7 @@ const { parseId } = require('../validation/locationValidation');
 // operator get 403 (requireRole(ADMIN), no role hierarchy). Candidates are never
 // auto-enrolled; promotion (admin) is the only path that creates a monitored
 // device. Mounted at /api/discovery.
-function createDiscoveryRouter({ discoveredDevicesRepo, agentsRepo = null, discoverySweepJob = null, auditLogger = null, auditLogRepo = null, config = null, getConfig = null, setConfig = null }) {
+function createDiscoveryRouter({ discoveredDevicesRepo, agentsRepo = null, discoverySweepJob = null, agentCommander = null, auditLogger = null, auditLogRepo = null, config = null, getConfig = null, setConfig = null }) {
   const router = express.Router();
   router.use(requireAuth, requireRole(ROLES.ADMIN));
 
@@ -88,13 +88,41 @@ function createDiscoveryRouter({ discoveredDevicesRepo, agentsRepo = null, disco
     res.json({ candidate: row });
   }));
 
-  // Run a sweep now (normally scheduled). 503 when no job is wired.
+  // Run a sweep now. With `agentId`, push a run-discovery command to that agent
+  // so it sweeps from ITS network vantage (empty scope ⇒ the agent's own subnet);
+  // candidates come back asynchronously to POST /agents/discovery-results. Without
+  // `agentId`, run the server-side sweep inline (as scheduled). 404 unknown agent,
+  // 409 agent offline, 503 when neither path is available.
   router.post('/scan', asyncHandler(async (req, res) => {
+    const rawAgent = req.body && req.body.agentId;
+    if (rawAgent !== undefined && rawAgent !== null && rawAgent !== '') {
+      const agentId = parseId(rawAgent);
+      if (agentId === null) return res.status(400).json({ error: 'Invalid agentId' });
+      if (!agentCommander || typeof agentCommander.sendCommand !== 'function') {
+        return res.status(503).json({ error: 'Agent command channel not available' });
+      }
+      if (agentsRepo && typeof agentsRepo.findById === 'function' && !(await agentsRepo.findById(agentId))) {
+        return res.status(404).json({ error: 'Agent not found' });
+      }
+      const cfg = await effectiveConfig();
+      const discovery = {
+        cidrs: Array.isArray(cfg.cidrs) ? cfg.cidrs : [],
+        ports: Array.isArray(cfg.ports) ? cfg.ports : [],
+        rateLimit: cfg.rateLimit ?? 50,
+        addressCap: cfg.addressCap ?? 65536,
+      };
+      const delivered = agentCommander.sendCommand(agentId, { name: 'run-discovery', discovery });
+      if (!delivered) return res.status(409).json({ error: 'Agent not connected', delivered: 0 });
+      if (auditLogger && typeof auditLogger.record === 'function') {
+        await auditLogger.record(req, { category: 'discovery', action: 'discovery_scan_requested', target: `agent:${agentId}`, detail: `scope=${discovery.cidrs.join(',') || '(self)'}` });
+      }
+      return res.status(202).json({ ok: true, agentId, delivered, mode: 'agent' });
+    }
     if (!discoverySweepJob || typeof discoverySweepJob.run !== 'function') {
       return res.status(503).json({ error: 'Discovery job not available' });
     }
     const result = await discoverySweepJob.run();
-    res.json({ ok: true, ...(result || {}) });
+    res.json({ ok: true, mode: 'server', ...(result || {}) });
   }));
 
   // Promote a candidate → create a monitored SNMP device. Admin only.

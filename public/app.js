@@ -8345,6 +8345,82 @@ const DOCS = [
         ],
       },
       {
+        id: 'dependencies', title: 'Map service dependencies', body: () => [
+          docsLead('The service dependency graph shows which monitored hosts depend on which — directed “host → host : port” edges built from observed TCP traffic. It is one half of the unified topology graph.'),
+          el('p', {}, ['Open ', viewLink('topology', 'Topology'), ' (Diagnostics group). The graph carries ', el('strong', {}, 'two edge types'), ':']),
+          docsTable(['Edge', 'Means'], [
+            [el('strong', {}, 'l2_link'), 'A physical LLDP/CDP adjacency between two monitored devices (undirected — “these two are wired together”).'],
+            [el('strong', {}, 'service_dep'), 'An observed TCP dependency: the source host talks to the destination host on a service port (directed — “source depends on destination:port”).'],
+          ]),
+          el('h4', {}, 'How service_dep edges are built'),
+          docsSteps([
+            'Agents report TCP flow 5-tuples (source/destination IP, destination port, byte/packet counts) plus their own IP addresses.',
+            ['A background job (every ~10 min) aggregates the last 24h by ', el('strong', {}, '(source host, destination host, destination port)'), ', resolves each IP to a monitored host, and keeps each host’s heaviest ', el('strong', {}, 'N'), ' edges (default 50).'],
+            ['Both ends must be monitored hosts — a known agent (by its reported IPs) or an SNMP-polled device (by its configured host). Edges to anything unknown (the internet, an unmonitored box) are ', el('strong', {}, 'dropped'), ', by design.'],
+          ]),
+          docsExpect('A newly-enrolled fleet shows edges within an hour or two, once agents have reported flows and their IPs. Purely-internal LAN dependencies appear; traffic to external/unmonitored endpoints does not (that lives under Destinations). No ports on the edges usually means the agents predate the flow-detail reporting — update them.'),
+          el('p', { class: 'muted' }, ['Worked example — a host’s top dependencies via the API: ', el('code', {}, 'GET /api/topology/dependencies?host=42'), ' returns that host’s heaviest edges, each with ', el('code', {}, 'dstPort'), ', ', el('code', {}, 'bytes'), ', ', el('code', {}, 'connCount'), ' and first/last-seen.']),
+        ],
+      },
+      {
+        id: 'blast-radius', title: 'Blast radius — what a failure takes down', body: () => [
+          docsLead('Blast radius answers “if this device/host fails, what else is affected?” — computed from the topology graph, in two tiers, each with the path that justifies it.'),
+          docsTable(['Tier', 'What it lists'], [
+            [el('strong', {}, 'directly_isolated'), 'Hosts that lose L2 connectivity when the node fails — found by walking l2_link edges out from the failure point.'],
+            [el('strong', {}, 'dependency_affected'), 'Hosts that depend (over service_dep) on any isolated/failing host — the knock-on service impact, followed transitively.'],
+          ]),
+          el('p', {}, ['It is bounded by a configurable ', el('strong', {}, 'depth cap'), ' (default 4 hops) and is cycle-safe, so it always terminates even on looped topologies.']),
+          el('h4', {}, 'Where you see it'),
+          docsSteps([
+            ['On an ', viewLink('incidents', 'incident'), ': the incident detail carries a ', el('code', {}, 'blastRadius'), ' section computed for the failing device — the downstream hosts and dependent services it puts at risk. It is best-effort: if topology is unavailable the incident still opens.'],
+            ['Ad-hoc for any node (operator+): ', el('code', {}, 'GET /api/topology/blast-radius/<agentId>'), ' — optionally ', el('code', {}, '?depth=N'), '.'],
+          ]),
+          el('h4', {}, 'Worked example'),
+          el('p', {}, ['Core switch ', el('strong', {}, 'agent 1'), ' fails. It is L2-adjacent to ', el('strong', {}, '2'), ' and ', el('strong', {}, '3'), '; the app server ', el('strong', {}, '4'), ' depends on ', el('strong', {}, '3'), ' on port 5432:']),
+          docsCode('GET /api/topology/blast-radius/1\n\n{\n  "failingNode": 1,\n  "depthCap": 4,\n  "directly_isolated": [\n    { "hostId": 2, "path": [1, 2] },\n    { "hostId": 3, "path": [1, 2, 3] }\n  ],\n  "dependency_affected": [\n    { "hostId": 4, "path": [\n      { "hostId": 3, "viaPort": null },\n      { "hostId": 4, "viaPort": 5432 }\n    ] }\n  ],\n  "totals": { "directly_isolated": 2, "dependency_affected": 1 }\n}'),
+          docsExpect('directly_isolated is your connectivity blast radius (who goes dark); dependency_affected is your service blast radius (who breaks even if still reachable). An empty result means the node has no known downstream — either it is a leaf, or the topology graph has not yet learned its links.'),
+          el('p', { class: 'muted' }, 'Because l2_link (LLDP) adjacency is symmetric, “downstream” means the failing node’s L2-reachable neighbourhood within the depth cap — the hosts cut off with or behind it.'),
+        ],
+      },
+      {
+        id: 'topology-changes', title: 'Track topology changes', body: () => [
+          docsLead('BlueEye detects LLDP/CDP topology changes between poll cycles and records them — so you can see when a neighbour appeared, vanished, moved ports, or flapped, with an immutable audit trail.'),
+          el('p', {}, ['Every agent capabilities report is a “poll”. Each report is diffed against the agent’s previous neighbour snapshot; the differences become change records. Four change types:']),
+          docsTable(['Change', 'Means'], [
+            [el('strong', {}, 'neighbour_added'), 'A neighbour appeared on a local port that had none.'],
+            [el('strong', {}, 'neighbour_removed'), 'A previously-seen neighbour is gone.'],
+            [el('strong', {}, 'link_state_changed'), 'A neighbour’s link state flipped (e.g. up→down). Requires agents that report link state.'],
+            [el('strong', {}, 'port_moved'), 'The same neighbour chassis id is now seen on a different local port.'],
+          ]),
+          el('h4', {}, 'Flap suppression'),
+          el('p', {}, ['A change that reverts within a window (default 300s) does not spam the feed — the pair ', el('strong', {}, 'collapses to a single '), el('code', {}, 'flapping'), el('strong', {}, ' record'), '. So a link bouncing every few seconds shows up once, as flapping, not as hundreds of add/remove events.']),
+          el('h4', {}, 'Where changes show up'),
+          docsSteps([
+            ['On the device page ', el('strong', {}, 'activity timeline'), ': topology changes appear inline with findings, incidents and agent events, tagged ', el('strong', {}, 'Topology change'), ' — the same feed, one shape.'],
+            ['Directly (operator+): ', el('code', {}, 'GET /api/topology/changes?host=<agentId>'), ' returns the change events.'],
+            ['As evidence: every change is written to the ', el('strong', {}, 'hash-chained audit log'), ' (category ', el('code', {}, 'topology'), ', actor ', el('code', {}, 'system'), '), so the record is tamper-evident.'],
+          ]),
+          el('h4', {}, 'Worked example'),
+          el('p', {}, 'A switch neighbour on port eth3 moves to eth4, then its link drops:'),
+          docsCode('GET /api/topology/changes?host=42\n\n{\n  "host": 42,\n  "events": [\n    { "timestamp": "…:05Z", "source": "topology", "type": "topology.link_state_changed",\n      "severity": "WARN", "summary": "Link up→down for sw-c on eth4", "ref_id": 1802 },\n    { "timestamp": "…:00Z", "source": "topology", "type": "topology.port_moved",\n      "severity": "WARN", "summary": "Neighbour sw-c moved eth3→eth4", "ref_id": 1801 }\n  ]\n}'),
+          docsExpect('Identical polls emit nothing — the feed only shows real changes. A neighbour that removes and re-adds within 5 minutes shows once as flapping (chase a cabling/optic fault). Link-state changes only appear once your agents report link state; add/remove/move work from the neighbour set alone.'),
+        ],
+      },
+      {
+        id: 'flow-baselines', title: 'Flow-pair traffic baselines', body: () => [
+          docsLead('Beyond per-metric anomalies (CPU, latency…), BlueEye baselines the traffic volume of each host→host:port flow pair and flags deviations — a database link that suddenly moves 50× its usual bytes, for instance.'),
+          el('p', {}, ['Baselines are ', el('strong', {}, 'day-of-week and hour-of-day aware'), ': a Tuesday 14:00 volume is compared against prior Tuesdays 14:00, not a flat average — so normal business-hours peaks don’t read as anomalies.']),
+          docsTable(['Aspect', 'Behaviour'], [
+            ['Statistics', 'The same robust median + MAD z-score used everywhere else — explainable, no ML.'],
+            ['Window', 'Rolling 14 days of hourly buckets (configurable). History builds forward from when the feature is enabled — it can’t be backfilled.'],
+            ['Eligibility', 'A pair needs ≥100 hourly observations before it’s scored — new/sparse pairs are left alone until there’s enough history.'],
+            ['Output', 'A deviation becomes an ordinary finding (metric flow.volume) that flows into the correlator and Situations like any other — no separate alert channel.'],
+          ]),
+          docsExpect('A steady flow pair produces no findings. A genuine step-change in volume for a specific weekday/hour scores WARN/CRIT and appears in Analysis/Incidents attributed to the source host, with the destination and port in its evidence. This is deviation only — BlueEye never labels traffic “malicious”, it just tells you it changed.'),
+          el('p', { class: 'muted' }, ['Operator+ can inspect a host’s learned baselines at ', el('code', {}, 'GET /api/topology/flow-baselines?host=<id>'), '.']),
+        ],
+      },
+      {
         id: 'adhoc', title: 'Run an ad-hoc probe or test', body: () => [
           docsLead('The fastest way to answer “can this host reach X right now?”.'),
           docsSteps([
@@ -8360,6 +8436,24 @@ const DOCS = [
   },
   {
     section: 'Administration & setup', admin: true, articles: [
+      {
+        id: 'discovery', title: 'Active device discovery', body: () => [
+          docsLead('Passive collection (LLDP, sFlow, agents) only sees devices that announce themselves. Active discovery probes an IP range you configure to find the rest — printers, switches, appliances — and lists them as candidates for you to promote.'),
+          el('div', { class: 'callout' }, el('strong', {}, 'Safe by design: '), 'discovery only ever probes the CIDR ranges you configure — never outside them, never auto-expanding. It refuses to start if no scope is set or the scope exceeds the address cap (default 65,536). Nothing is auto-enrolled: candidates become monitored devices only when you promote them.'),
+          el('h4', {}, 'Configure the scope'),
+          docsSteps([
+            ['Set the CIDR scope and options via environment (', el('code', {}, 'DISCOVERY_ENABLED=true'), ', ', el('code', {}, 'DISCOVERY_CIDRS=10.0.0.0/24,10.0.1.0/24'), '). Optional: ', el('code', {}, 'DISCOVERY_PORTS'), ' (default 22,80,161,443,3389), ', el('code', {}, 'DISCOVERY_RATE_LIMIT'), ' (default 50/s), ', el('code', {}, 'DISCOVERY_ADDRESS_CAP'), ' (default 65536).'],
+            ['Discovery uses native probes only — TCP connect + reverse DNS (and ICMP where the host OS permits a raw socket). It never shells out to nmap or ping.'],
+            ['A sweep runs on a schedule, or on demand via ', el('code', {}, 'POST /api/discovery/scan'), ' (admin). Every sweep is written to the audit log with its scope, start, end and result count.'],
+          ]),
+          el('h4', {}, 'Promote a candidate'),
+          docsSteps([
+            ['Review candidates at ', el('code', {}, 'GET /api/discovery/candidates'), ' — each shows its IP, reverse-DNS hostname, open ports and whether it answered ICMP.'],
+            ['Promote one (', el('code', {}, 'POST /api/discovery/candidates/:id/promote'), ') to create a monitored SNMP device (an agents row with an SNMP monitor config aimed at that IP), or Ignore it to hide it from future sweeps.'],
+          ]),
+          docsExpect('A sweep of a /24 finds the live hosts within it and lists them as “discovered”. They do NOT appear on the fleet or count toward monitoring until promoted. All of this is admin-only — operator and viewer accounts get 403 on every discovery endpoint.'),
+        ],
+      },
       {
         id: 'servicenow', title: 'Connect ServiceNow (ITSM)', body: () => [
           docsLead('Push BlueEye incidents/anomalies into ServiceNow as Incident records. Configured under Settings → Integrations as a “servicenow” connector. This is the outbound ITSM link; for asset lookup see “Connect a CMDB”.'),

@@ -29,6 +29,7 @@ function createTargetTimelineService({
   incidentsRepo,
   auditEventsRepo,
   remediationPlaybooksRepo,
+  topologyChangesRepo,
 } = {}) {
   // --- per-source fetchers (each rejects on its own backend failure) ---------
 
@@ -61,6 +62,12 @@ function createTargetTimelineService({
     return remediationPlaybooksRepo.listRunsForHost(String(agentId), { from, to, limit });
   }
 
+  // Recorded LLDP topology changes (topology_changes) for this agent.
+  async function fetchTopologyChanges(agentId, { from, to, limit }) {
+    if (!topologyChangesRepo || typeof topologyChangesRepo.listForAgent !== 'function') return [];
+    return topologyChangesRepo.listForAgent({ agentId, from, to, limit });
+  }
+
   // Fans out all sources; merges the ones that succeed; flags any that failed.
   async function getTimeline(agentId, { from = null, to = null, limit = 500 } = {}) {
     const sources = [
@@ -68,13 +75,14 @@ function createTargetTimelineService({
       ['incidents', fetchIncidents],
       ['agentEvents', fetchAgentEvents],
       ['playbookRuns', fetchPlaybookRuns],
+      ['topologyChanges', fetchTopologyChanges],
     ];
 
     const settled = await Promise.allSettled(
       sources.map(([, fn]) => fn(agentId, { from, to, limit }))
     );
 
-    const merged = { findings: [], incidents: [], agentEvents: [], playbookRuns: [] };
+    const merged = { findings: [], incidents: [], agentEvents: [], playbookRuns: [], topologyChanges: [] };
     const failedSources = [];
     settled.forEach((res, idx) => {
       const [name] = sources[idx];

@@ -17,6 +17,8 @@ const { createPlanService } = require('../src/license/planService');
 const { createUsageService } = require('../src/services/usageService');
 const { createAuditLogger } = require('../src/services/complianceLogger');
 const { createSnapshotService } = require('../src/evidence/snapshotService');
+const { createBlastRadiusService } = require('../src/topology/blastRadiusService');
+const { createTopologyChangeService } = require('../src/topology/topologyChangeService');
 
 // ---- Repositories ---------------------------------------------------------
 
@@ -90,9 +92,46 @@ function makeAgentsRepo(overrides = {}) {
       overrides.setLocation || (async (id, locationId) => ({ id, location_id: locationId ?? null })),
     setCapabilities:
       overrides.setCapabilities || (async (id, capabilities) => ({ id, capabilities })),
+    insertSnmpDevice: overrides.insertSnmpDevice || (async () => 9001),
     remove: overrides.remove || (async () => false),
     setStatus: overrides.setStatus || (async () => {}),
     touchLastSeen: overrides.touchLastSeen || (async () => {}),
+  };
+}
+
+// A fake discovered_devices repository (in-memory). Mirrors
+// discoveredDevicesRepository (migration 069).
+function makeDiscoveredDevicesRepo(overrides = {}) {
+  const rows = [];
+  let seq = 0;
+  const iso = (v) => (v == null ? null : (v instanceof Date ? v.toISOString() : new Date(v).toISOString()));
+  const mapOut = (r) => ({
+    id: r.id, ip: r.ip, hostname: r.hostname ?? null, openPorts: r.open_ports ? String(r.open_ports).split(',').map(Number).filter((n) => Number.isInteger(n)) : [],
+    icmp: !!r.icmp, status: r.status, promotedAgentId: r.promoted_agent_id ?? null, firstSeen: iso(r.first_seen), lastSeen: iso(r.last_seen),
+  });
+  return {
+    rows,
+    upsertCandidate: overrides.upsertCandidate || (async ({ ip, hostname = null, openPorts = [], icmp = false, seenAt = null }) => {
+      const seen = seenAt || new Date();
+      const ports = Array.isArray(openPorts) ? openPorts.join(',') : (openPorts || '');
+      const existing = rows.find((r) => r.ip === ip);
+      if (existing) { existing.hostname = hostname; existing.open_ports = ports; existing.icmp = icmp ? 1 : 0; existing.last_seen = seen; return existing; }
+      const row = { id: (seq += 1), ip, hostname, open_ports: ports, icmp: icmp ? 1 : 0, status: 'discovered', promoted_agent_id: null, first_seen: seen, last_seen: seen };
+      rows.push(row); return row;
+    }),
+    list: overrides.list || (async ({ status = null, limit = 200, offset = 0 } = {}) => rows
+      .filter((r) => !status || r.status === status)
+      .sort((a, b) => new Date(b.last_seen) - new Date(a.last_seen) || b.id - a.id)
+      .slice(offset, offset + limit).map(mapOut)),
+    findById: overrides.findById || (async (id) => { const r = rows.find((x) => x.id === Number(id)); return r ? mapOut(r) : null; }),
+    setStatus: overrides.setStatus || (async (id, status, { promotedAgentId = null } = {}) => {
+      const r = rows.find((x) => x.id === Number(id)); if (!r) return 0; r.status = status; r.promoted_agent_id = promotedAgentId; return 1;
+    }),
+    countByStatus: overrides.countByStatus || (async () => {
+      const out = { discovered: 0, promoted: 0, ignored: 0 };
+      for (const r of rows) out[r.status] = (out[r.status] || 0) + 1;
+      return out;
+    }),
   };
 }
 
@@ -599,7 +638,7 @@ function makeLldpNeighborsRepo(overrides = {}) {
   const mapOut = (r) => ({
     id: r.id, localAgentId: r.local_agent_id, localChassisId: r.local_chassis_id ?? null,
     localPort: r.local_port ?? null, remoteChassisId: r.remote_chassis_id, remotePort: r.remote_port ?? null,
-    lastSeen: iso(r.last_seen),
+    linkState: r.link_state ?? null, lastSeen: iso(r.last_seen),
   });
   const chassisOf = (agentId) => rows.filter((r) => r.local_agent_id === Number(agentId) && r.local_chassis_id).map((r) => r.local_chassis_id);
   const matchTarget = (r, targetAgentId) => {
@@ -609,10 +648,10 @@ function makeLldpNeighborsRepo(overrides = {}) {
   };
   return {
     rows,
-    upsert: overrides.upsert || (async ({ localAgentId, localChassisId = null, localPort = null, remoteChassisId, remotePort = null, lastSeen = null }) => {
-      const row = { local_agent_id: Number(localAgentId), local_chassis_id: localChassisId, local_port: localPort, remote_chassis_id: remoteChassisId, remote_port: remotePort, last_seen: lastSeen || new Date() };
+    upsert: overrides.upsert || (async ({ localAgentId, localChassisId = null, localPort = null, remoteChassisId, remotePort = null, linkState = null, lastSeen = null }) => {
+      const row = { local_agent_id: Number(localAgentId), local_chassis_id: localChassisId, local_port: localPort, remote_chassis_id: remoteChassisId, remote_port: remotePort, link_state: linkState, last_seen: lastSeen || new Date() };
       const existing = rows.find((r) => key(r) === key(row));
-      if (existing) { existing.last_seen = row.last_seen; existing.local_chassis_id = row.local_chassis_id; return existing; }
+      if (existing) { existing.last_seen = row.last_seen; existing.local_chassis_id = row.local_chassis_id; existing.link_state = row.link_state; return existing; }
       row.id = (seq += 1); rows.push(row); return row;
     }),
     upsertMany: overrides.upsertMany || (async function upsertMany(localAgentId, neighbors, { localChassisId = null, lastSeen = null } = {}) {
@@ -620,7 +659,7 @@ function makeLldpNeighborsRepo(overrides = {}) {
       for (const nb of Array.isArray(neighbors) ? neighbors : []) {
         const remoteChassisId = nb && (nb.remoteChassisId ?? nb.remote_chassis_id);
         if (!remoteChassisId) continue;
-        await this.upsert({ localAgentId, localChassisId: nb.localChassisId ?? nb.local_chassis_id ?? localChassisId, localPort: nb.localPort ?? nb.local_port ?? null, remoteChassisId, remotePort: nb.remotePort ?? nb.remote_port ?? null, lastSeen });
+        await this.upsert({ localAgentId, localChassisId: nb.localChassisId ?? nb.local_chassis_id ?? localChassisId, localPort: nb.localPort ?? nb.local_port ?? null, remoteChassisId, remotePort: nb.remotePort ?? nb.remote_port ?? null, linkState: nb.linkState ?? nb.link_state ?? null, lastSeen });
         n += 1;
       }
       return n;
@@ -637,6 +676,161 @@ function makeLldpNeighborsRepo(overrides = {}) {
       .sort((a, b) => new Date(b.last_seen) - new Date(a.last_seen) || b.id - a.id)
       .slice(offset, offset + limit).map(mapOut)),
     count: overrides.count || (async ({ targetAgentId = null } = {}) => rows.filter((r) => matchTarget(r, targetAgentId)).length),
+    listByAgent: overrides.listByAgent || (async (localAgentId) => rows.filter((r) => r.local_agent_id === Number(localAgentId)).sort((a, b) => a.id - b.id).map(mapOut)),
+    deleteEdge: overrides.deleteEdge || (async ({ localAgentId, localPort = null, remoteChassisId, remotePort = null }) => {
+      const eq = (a, b) => (a ?? null) === (b ?? null);
+      const before = rows.length;
+      for (let i = rows.length - 1; i >= 0; i -= 1) {
+        const r = rows[i];
+        if (r.local_agent_id === Number(localAgentId) && eq(r.local_port, localPort) && r.remote_chassis_id === remoteChassisId && eq(r.remote_port, remotePort)) rows.splice(i, 1);
+      }
+      return before - rows.length;
+    }),
+  };
+}
+
+// A fake topology_changes repository (in-memory). Mirrors
+// topologyChangesRepository's surface for the changes API + timeline.
+function makeTopologyChangesRepo(overrides = {}) {
+  const rows = [];
+  let seq = 0;
+  const iso = (v) => (v == null ? null : (v instanceof Date ? v.toISOString() : new Date(v).toISOString()));
+  const mapOut = (r) => ({
+    id: r.id, agentId: r.agent_id, changeType: r.change_type, localPort: r.local_port ?? null,
+    remoteChassisId: r.remote_chassis_id ?? null, remotePort: r.remote_port ?? null, fromLocalPort: r.from_local_port ?? null,
+    linkStateFrom: r.link_state_from ?? null, linkStateTo: r.link_state_to ?? null, severity: r.severity,
+    summary: r.summary, detectedAt: iso(r.detected_at), auditLogId: r.audit_log_id ?? null,
+  });
+  const inWindow = (r, from, to) => (!from || new Date(r.detected_at) >= new Date(from)) && (!to || new Date(r.detected_at) < new Date(to));
+  return {
+    rows,
+    insert: overrides.insert || (async (c) => {
+      const row = {
+        id: (seq += 1), agent_id: Number(c.agentId), change_type: c.changeType, local_port: c.localPort ?? null,
+        remote_chassis_id: c.remoteChassisId ?? null, remote_port: c.remotePort ?? null, from_local_port: c.fromLocalPort ?? null,
+        link_state_from: c.linkStateFrom ?? null, link_state_to: c.linkStateTo ?? null, severity: c.severity || 'INFO',
+        summary: c.summary, detected_at: c.detectedAt || new Date(), audit_log_id: c.auditLogId ?? null,
+      };
+      rows.push(row); return row.id;
+    }),
+    markFlapping: overrides.markFlapping || (async (id, { summary, detectedAt = null, auditLogId = null }) => {
+      const r = rows.find((x) => x.id === Number(id));
+      if (!r) return 0;
+      r.change_type = 'flapping'; r.severity = 'WARN'; r.summary = summary;
+      if (detectedAt) r.detected_at = detectedAt;
+      if (auditLogId != null) r.audit_log_id = auditLogId;
+      return 1;
+    }),
+    recentForAgent: overrides.recentForAgent || (async ({ agentId, since, limit = 500 }) => rows
+      .filter((r) => r.agent_id === Number(agentId) && new Date(r.detected_at) >= new Date(since))
+      .sort((a, b) => new Date(b.detected_at) - new Date(a.detected_at) || b.id - a.id)
+      .slice(0, limit).map(mapOut)),
+    listForAgent: overrides.listForAgent || (async ({ agentId, from = null, to = null, limit = 200 }) => rows
+      .filter((r) => r.agent_id === Number(agentId) && inWindow(r, from, to))
+      .sort((a, b) => new Date(b.detected_at) - new Date(a.detected_at) || b.id - a.id)
+      .slice(0, limit).map(mapOut)),
+    list: overrides.list || (async ({ from = null, to = null, limit = 200 } = {}) => rows
+      .filter((r) => inWindow(r, from, to))
+      .sort((a, b) => new Date(b.detected_at) - new Date(a.detected_at) || b.id - a.id)
+      .slice(0, limit).map(mapOut)),
+  };
+}
+
+// A fake service_dependencies repository (in-memory). Mirrors
+// serviceDependenciesRepository's surface for the graph + dependencies API.
+function makeServiceDependenciesRepo(overrides = {}) {
+  const rows = [];
+  const iso = (v) => (v == null ? null : (v instanceof Date ? v.toISOString() : new Date(v).toISOString()));
+  const key = (r) => `${r.src_host_id}|${r.dst_host_id}|${r.dst_port}`;
+  const mapOut = (r) => ({
+    id: r.id, srcHostId: r.src_host_id, dstHostId: r.dst_host_id, dstPort: r.dst_port,
+    proto: r.proto ?? null, bytes: Number(r.bytes) || 0, packets: Number(r.packets) || 0,
+    connCount: Number(r.conn_count) || 0, firstSeen: iso(r.first_seen), lastSeen: iso(r.last_seen),
+  });
+  const where = (r, hostId, direction) => {
+    if (hostId == null) return true;
+    const id = Number(hostId);
+    if (direction === 'out') return r.src_host_id === id;
+    if (direction === 'in') return r.dst_host_id === id;
+    return r.src_host_id === id || r.dst_host_id === id;
+  };
+  let seq = 0;
+  const repo = {
+    rows,
+    upsert: overrides.upsert || (async ({ srcHostId, dstHostId, dstPort, proto = 'tcp', bytes = 0, packets = 0, connCount = 0, firstSeen, lastSeen }) => {
+      const row = { src_host_id: Number(srcHostId), dst_host_id: Number(dstHostId), dst_port: Number(dstPort), proto, bytes, packets, conn_count: connCount, first_seen: firstSeen || lastSeen || new Date(), last_seen: lastSeen || firstSeen || new Date() };
+      const existing = rows.find((r) => key(r) === key(row));
+      if (existing) {
+        existing.proto = row.proto; existing.bytes = row.bytes; existing.packets = row.packets; existing.conn_count = row.conn_count;
+        existing.last_seen = row.last_seen;
+        if (new Date(row.first_seen) < new Date(existing.first_seen)) existing.first_seen = row.first_seen;
+        return existing;
+      }
+      row.id = (seq += 1); rows.push(row); return row;
+    }),
+    upsertMany: overrides.upsertMany || (async function upsertMany(edges) {
+      let n = 0;
+      for (const e of Array.isArray(edges) ? edges : []) {
+        if (e == null || e.srcHostId == null || e.dstHostId == null || e.dstPort == null) continue;
+        await this.upsert(e); n += 1;
+      }
+      return n;
+    }),
+    ageOut: overrides.ageOut || (async (olderThan) => {
+      const before = rows.length;
+      for (let i = rows.length - 1; i >= 0; i -= 1) if (new Date(rows[i].last_seen) < new Date(olderThan)) rows.splice(i, 1);
+      return before - rows.length;
+    }),
+    listAll: overrides.listAll || (async ({ limit = 100000 } = {}) => [...rows].sort((a, b) => b.bytes - a.bytes).slice(0, limit).map(mapOut)),
+    listForHost: overrides.listForHost || (async ({ hostId, direction = 'both', limit = 50, offset = 0 }) => rows
+      .filter((r) => where(r, hostId, direction))
+      .sort((a, b) => b.bytes - a.bytes || a.id - b.id)
+      .slice(offset, offset + limit).map(mapOut)),
+    countForHost: overrides.countForHost || (async ({ hostId, direction = 'both' }) => rows.filter((r) => where(r, hostId, direction)).length),
+  };
+  return repo;
+}
+
+// A fake flow_pair baselines repository (in-memory). Mirrors
+// flowPairBaselinesRepository (migration 068).
+function makeFlowPairBaselinesRepo(overrides = {}) {
+  const hourly = [];
+  const baselines = new Map(); // key -> baseline row
+  const bkey = (b) => `${b.srcHostId}|${b.dstHostId}|${b.dstPort}|${b.dow}|${b.hour}`;
+  const iso = (v) => (v == null ? null : (v instanceof Date ? v.toISOString() : new Date(v).toISOString()));
+  return {
+    hourly,
+    baselines,
+    insertHourly: overrides.insertHourly || (async (rows) => {
+      let n = 0;
+      for (const r of Array.isArray(rows) ? rows : []) {
+        if (r == null || r.srcHostId == null || r.dstHostId == null || r.dstPort == null) continue;
+        const k = `${iso(r.bucket)}|${r.srcHostId}|${r.dstHostId}|${r.dstPort}`;
+        const existing = hourly.find((x) => x._k === k);
+        if (existing) { existing.bytes = r.bytes || 0; existing.packets = r.packets || 0; existing.connCount = r.connCount || 0; }
+        else { hourly.push({ _k: k, srcHostId: Number(r.srcHostId), dstHostId: Number(r.dstHostId), dstPort: Number(r.dstPort), proto: r.proto || 'tcp', bucket: r.bucket instanceof Date ? r.bucket : new Date(r.bucket), bytes: r.bytes || 0, packets: r.packets || 0, connCount: r.connCount || 0 }); }
+        n += 1;
+      }
+      return n;
+    }),
+    purgeHourlyBefore: overrides.purgeHourlyBefore || (async (cutoff) => {
+      const before = hourly.length;
+      for (let i = hourly.length - 1; i >= 0; i -= 1) if (new Date(hourly[i].bucket) < new Date(cutoff)) hourly.splice(i, 1);
+      return before - hourly.length;
+    }),
+    hourlySince: overrides.hourlySince || (async ({ since }) => hourly
+      .filter((r) => new Date(r.bucket) >= new Date(since))
+      .map((r) => ({ srcHostId: r.srcHostId, dstHostId: r.dstHostId, dstPort: r.dstPort, proto: r.proto, bucket: iso(r.bucket), bytes: r.bytes, packets: r.packets, connCount: r.connCount }))),
+    rowsForBucket: overrides.rowsForBucket || (async (bucket) => hourly
+      .filter((r) => iso(r.bucket) === iso(bucket))
+      .map((r) => ({ srcHostId: r.srcHostId, dstHostId: r.dstHostId, dstPort: r.dstPort, proto: r.proto, bucket: iso(r.bucket), bytes: r.bytes, packets: r.packets, connCount: r.connCount }))),
+    upsertBaselines: overrides.upsertBaselines || (async (rows) => {
+      for (const r of Array.isArray(rows) ? rows : []) baselines.set(bkey(r), { ...r });
+      return (rows || []).length;
+    }),
+    baselinesForSlot: overrides.baselinesForSlot || (async ({ dow, hour }) => [...baselines.values()].filter((b) => b.dow === dow && b.hour === hour)),
+    listForHost: overrides.listForHost || (async ({ hostId, limit = 500 }) => [...baselines.values()].filter((b) => b.srcHostId === Number(hostId)).slice(0, limit)),
+    countForHost: overrides.countForHost || (async ({ hostId }) => [...baselines.values()].filter((b) => b.srcHostId === Number(hostId)).length),
   };
 }
 
@@ -1071,6 +1265,7 @@ function makeFlowsRepo(overrides = {}) {
     selectFlows: overrides.selectFlows || (async () => ({ byAsn: [], byDirection: [], byProto: [], series: [], totals: { bytes: 0, flowCount: 0, records: 0 } })),
     exploreFlows: overrides.exploreFlows || (async () => ({ topTalkers: [], byPort: [], byProto: [], series: [], scans: [], totals: { bytes: 0, packets: 0, flowCount: 0, records: 0 } })),
     topologyEdges: overrides.topologyEdges || (async () => []),
+    tcpServiceFlows: overrides.tcpServiceFlows || (async () => []),
     agentIdsForIp: overrides.agentIdsForIp || (async () => []),
     agentIdsForPort: overrides.agentIdsForPort || (async () => []),
     asnSeries: overrides.asnSeries || (async () => []),
@@ -1799,6 +1994,20 @@ function makeApp(overrides = {}) {
   // logic (allowlist/timeout/offline) is exercised end-to-end in API tests.
   const snapshotService = overrides.snapshotService
     || createSnapshotService({ evidenceRepo, agentCommander, scheduleRetry: (fn) => { const t = setTimeout(fn, 0); if (t.unref) t.unref(); return t; } });
+  const lldpNeighborsRepo = overrides.lldpNeighborsRepo || makeLldpNeighborsRepo();
+  const serviceDependenciesRepo = overrides.serviceDependenciesRepo || makeServiceDependenciesRepo();
+  const topologyChangesRepo = overrides.topologyChangesRepo || makeTopologyChangesRepo();
+  const flowPairBaselinesRepo = overrides.flowPairBaselinesRepo || makeFlowPairBaselinesRepo();
+  // Real topology-change service over the fakes, so change detection + flap
+  // suppression + audit-log writes are exercised end-to-end on capabilities ingest.
+  const topologyChangeService = overrides.topologyChangeService === undefined
+    ? createTopologyChangeService({ topologyChangesRepo, lldpNeighborsRepo, auditLogger })
+    : overrides.topologyChangeService;
+  // Real blast-radius service over the fake topology repos, so the incident
+  // enrichment + /api/topology/blast-radius are exercised end-to-end.
+  const blastRadiusService = overrides.blastRadiusService === undefined
+    ? createBlastRadiusService({ lldpNeighborsRepo, serviceDependenciesRepo, agentsRepo })
+    : overrides.blastRadiusService;
   return createApp({
     db: overrides.db || makeDb(),
     tsdb: overrides.tsdb || null,
@@ -1837,7 +2046,17 @@ function makeApp(overrides = {}) {
     probePipeline: overrides.probePipeline || makeProbePipeline(),
     flowPipeline: overrides.flowPipeline || makeFlowPipeline(),
     flowsRepo: overrides.flowsRepo || makeFlowsRepo(),
-    lldpNeighborsRepo: overrides.lldpNeighborsRepo || makeLldpNeighborsRepo(),
+    lldpNeighborsRepo,
+    serviceDependenciesRepo,
+    serviceDependencyJob: overrides.serviceDependencyJob || null,
+    blastRadiusService,
+    topologyChangesRepo,
+    topologyChangeService,
+    flowPairBaselinesRepo,
+    flowPairBaselineJob: overrides.flowPairBaselineJob || null,
+    discoveredDevicesRepo: overrides.discoveredDevicesRepo || makeDiscoveredDevicesRepo(),
+    discoverySweepJob: overrides.discoverySweepJob || null,
+    discoveryConfig: overrides.discoveryConfig || { enabled: false, cidrs: [], ports: [22, 80, 161, 443, 3389], rateLimit: 50, addressCap: 65536, intervalMinutes: 360 },
     geoTileConfig: overrides.geoTileConfig || { tileUrl: 'https://tiles.example/{z}/{x}/{y}.png', tileAttribution: 'test', tileMaxZoom: 19 },
     geoProvider: overrides.geoProvider || null,
     centroids: overrides.centroids || null,
@@ -1953,6 +2172,10 @@ module.exports = {
   makeVerificationRunsRepo,
   makeVerificationService,
   makeLldpNeighborsRepo,
+  makeServiceDependenciesRepo,
+  makeTopologyChangesRepo,
+  makeFlowPairBaselinesRepo,
+  makeDiscoveredDevicesRepo,
   makeAlertDispatchLogRepo,
   makeEvidenceSnapshotsRepo,
   makeRemediationPlaybooksRepo,

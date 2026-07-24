@@ -6,16 +6,96 @@ const { requireAuth, requireRole } = require('../auth/middleware');
 const { ROLES } = require('../auth/roles');
 const { parseId } = require('../validation/locationValidation');
 const { buildTopology } = require('../analysis/topology');
+const { buildTopologyGraph } = require('../topology/graph');
+const { mapTopologyChange } = require('../timeline/targetTimeline');
 
 const DEFAULT_WINDOW_MIN = 60;
 const MAX_WINDOW_MIN = 7 * 24 * 60;
+const DEFAULT_TOP_N = 50;
 
 // Flow-derived dependency / topology map. Mounted at /api/topology behind the
 // user JWT. Builds a who-talks-to-whom graph from the ingested 5-tuple flows
 // (whole fleet, or one agent via ?agentId=), over a ?minutes window. viewer+.
-function createTopologyRouter({ flowsRepo = null, agentsRepo = null, locationsRepo = null, centroids = null, lldpNeighborsRepo = null }) {
+function createTopologyRouter({ flowsRepo = null, agentsRepo = null, locationsRepo = null, centroids = null, lldpNeighborsRepo = null, serviceDependenciesRepo = null, serviceDependencyJob = null, blastRadiusService = null, topologyChangesRepo = null, flowPairBaselinesRepo = null, flowPairBaselineJob = null }) {
   const router = express.Router();
   const reader = requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN);
+  const writer = requireRole(ROLES.OPERATOR, ROLES.ADMIN);
+
+  // GET /api/topology/flow-baselines?host=<agentId> — the per-flow-pair volume
+  // baselines for a host (as source), day-of-week/hour-of-day aware. operator+.
+  // 400 invalid, 404 unknown host, 500 on DB failure.
+  if (flowPairBaselinesRepo) {
+    router.get('/flow-baselines', requireAuth, writer, asyncHandler(async (req, res) => {
+      const limRaw = req.query.limit;
+      const limit = limRaw === undefined || limRaw === '' ? 500 : Number(limRaw);
+      if (!Number.isInteger(limit) || limit < 1 || limit > 5000) return res.status(400).json({ error: 'limit must be 1..5000' });
+      const hostId = parseId(req.query.host);
+      if (hostId === null) return res.status(400).json({ error: 'host is required (agent id)' });
+      if (agentsRepo && typeof agentsRepo.findById === 'function' && !(await agentsRepo.findById(hostId))) {
+        return res.status(404).json({ error: 'Host not found' });
+      }
+      const baselines = await flowPairBaselinesRepo.listForHost({ hostId, limit });
+      res.json({ host: hostId, baselines });
+    }));
+
+    // POST /api/topology/flow-baselines/recompute — run the baseline job now.
+    // operator+ (the write path). 503 when no job is wired.
+    router.post('/flow-baselines/recompute', requireAuth, writer, asyncHandler(async (req, res) => {
+      if (!flowPairBaselineJob || typeof flowPairBaselineJob.run !== 'function') {
+        return res.status(503).json({ error: 'Flow baseline job not available' });
+      }
+      const result = await flowPairBaselineJob.run();
+      res.json({ ok: true, ...(result || {}) });
+    }));
+  }
+
+  // GET /api/topology/changes — recorded LLDP topology changes as change-feed
+  // events (the SAME shape as the target timeline: { timestamp, source:'topology',
+  // type, severity, summary, ref_id }). ?host=<agentId> scopes to one host.
+  // operator+ (these are evidence records). 400 invalid, 404 unknown host, 500 DB.
+  if (topologyChangesRepo) {
+    router.get('/changes', requireAuth, writer, asyncHandler(async (req, res) => {
+      const limRaw = req.query.limit;
+      const limit = limRaw === undefined || limRaw === '' ? 200 : Number(limRaw);
+      if (!Number.isInteger(limit) || limit < 1 || limit > 2000) return res.status(400).json({ error: 'limit must be 1..2000' });
+
+      let hostId = null;
+      if (req.query.host !== undefined && req.query.host !== '') {
+        hostId = parseId(req.query.host);
+        if (hostId === null) return res.status(400).json({ error: 'Invalid host' });
+        if (agentsRepo && typeof agentsRepo.findById === 'function' && !(await agentsRepo.findById(hostId))) {
+          return res.status(404).json({ error: 'Host not found' });
+        }
+      }
+
+      const rows = hostId === null
+        ? await topologyChangesRepo.list({ limit })
+        : await topologyChangesRepo.listForAgent({ agentId: hostId, limit });
+      const events = rows.flatMap((r) => mapTopologyChange(r));
+      res.json({ host: hostId, events });
+    }));
+  }
+
+  // GET /api/topology/blast-radius/:node — impact analysis for a failing node:
+  // directly_isolated[] (L2) + dependency_affected[] (service_dep), each with a
+  // justifying path. operator+ (a diagnostic compute). 404 unknown node, 400
+  // invalid, 500 when the topology store is unavailable.
+  if (blastRadiusService) {
+    router.get('/blast-radius/:node', requireAuth, writer, asyncHandler(async (req, res) => {
+      const nodeId = parseId(req.params.node);
+      if (nodeId === null) return res.status(400).json({ error: 'node must be a positive integer' });
+      if (agentsRepo && typeof agentsRepo.findById === 'function' && !(await agentsRepo.findById(nodeId))) {
+        return res.status(404).json({ error: 'Node not found' });
+      }
+      let depth;
+      if (req.query.depth !== undefined && req.query.depth !== '') {
+        depth = Number(req.query.depth);
+        if (!Number.isInteger(depth) || depth < 1 || depth > 32) return res.status(400).json({ error: 'depth must be 1..32' });
+      }
+      const result = await blastRadiusService.compute(nodeId, depth ? { depth } : {});
+      res.json(result);
+    }));
+  }
 
   // GET /api/topology/neighbors — persisted LLDP adjacencies (Fase 4). viewer+.
   // Filter by ?target=<agentId> (both directions), paginate with limit/offset.
@@ -42,6 +122,65 @@ function createTopologyRouter({ flowsRepo = null, agentsRepo = null, locationsRe
         typeof lldpNeighborsRepo.count === 'function' ? lldpNeighborsRepo.count(filter) : Promise.resolve(null),
       ]);
       res.json({ neighbors, page: { limit, offset, total } });
+    }));
+  }
+
+  // ---- Service dependency graph (edge type 'service_dep', migration 066) ----
+  if (serviceDependenciesRepo) {
+    // GET /api/topology/dependencies — the aggregated TCP service-dependency
+    // edges. ?host=<agentId> returns that host's Top-N edges (both directions
+    // unless ?direction=in|out); no host = the heaviest edges fleet-wide.
+    // viewer+. 404 when the host is unknown.
+    router.get('/dependencies', requireAuth, reader, asyncHandler(async (req, res) => {
+      const direction = ['in', 'out', 'both'].includes(req.query.direction) ? req.query.direction : 'both';
+      const limRaw = req.query.limit;
+      const limit = limRaw === undefined || limRaw === '' ? DEFAULT_TOP_N : Number(limRaw);
+      if (!Number.isInteger(limit) || limit < 1 || limit > 1000) return res.status(400).json({ error: 'limit must be 1..1000' });
+
+      let hostId = null;
+      if (req.query.host !== undefined && req.query.host !== '') {
+        hostId = parseId(req.query.host);
+        if (hostId === null) return res.status(400).json({ error: 'Invalid host' });
+        if (agentsRepo && typeof agentsRepo.findById === 'function' && !(await agentsRepo.findById(hostId))) {
+          return res.status(404).json({ error: 'Host not found' });
+        }
+      }
+
+      if (hostId === null) {
+        const edges = await serviceDependenciesRepo.listAll({ limit });
+        return res.json({ host: null, direction, edges });
+      }
+      const [edges, total] = await Promise.all([
+        serviceDependenciesRepo.listForHost({ hostId, direction, limit }),
+        typeof serviceDependenciesRepo.countForHost === 'function'
+          ? serviceDependenciesRepo.countForHost({ hostId, direction })
+          : Promise.resolve(null),
+      ]);
+      return res.json({ host: hostId, direction, edges, page: { limit, total } });
+    }));
+
+    // POST /api/topology/dependencies/recompute — force a recompute now
+    // (normally a scheduled job). operator+ (this is the write path). 403 for
+    // viewers, 503 when no job is wired.
+    router.post('/dependencies/recompute', requireAuth, writer, asyncHandler(async (req, res) => {
+      if (!serviceDependencyJob || typeof serviceDependencyJob.run !== 'function') {
+        return res.status(503).json({ error: 'Service dependency job not available' });
+      }
+      const result = await serviceDependencyJob.run();
+      return res.json({ ok: true, ...(result || {}) });
+    }));
+  }
+
+  // GET /api/topology/graph — the UNIFIED graph carrying both edge types:
+  // 'l2_link' (LLDP adjacencies) + 'service_dep' (TCP dependencies). viewer+.
+  if (lldpNeighborsRepo || serviceDependenciesRepo) {
+    router.get('/graph', requireAuth, reader, asyncHandler(async (req, res) => {
+      const [l2, serviceDeps, agents] = await Promise.all([
+        lldpNeighborsRepo && typeof lldpNeighborsRepo.listAll === 'function' ? lldpNeighborsRepo.listAll({}) : Promise.resolve([]),
+        serviceDependenciesRepo && typeof serviceDependenciesRepo.listAll === 'function' ? serviceDependenciesRepo.listAll({}) : Promise.resolve([]),
+        agentsRepo && typeof agentsRepo.findAll === 'function' ? agentsRepo.findAll() : Promise.resolve([]),
+      ]);
+      res.json(buildTopologyGraph({ l2, serviceDeps, agents }));
     }));
   }
 

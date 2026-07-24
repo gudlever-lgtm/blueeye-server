@@ -1,5 +1,123 @@
 # Changelog
 
+## 0.90.0 — Per-flow-pair volume baselines + scheduled active discovery
+
+Two features (migrations 068 + 069).
+
+**Per-flow-pair volume baselines.** Extends per-metric anomaly detection to
+per-`(src_host, dst_host, dst_port)`: baseline each pair's hourly traffic volume
+and flag deviations. Reuses the existing median/MAD z-score (`src/analysis/
+baselines.js`) — **no new statistical code**. Day-of-week + hour-of-day aware
+(Tuesday 14:00 vs prior Tuesdays 14:00). A new append-only `flow_pair_hourly`
+rollup (fed by the service-dep `tcpServiceFlows`+resolver path; history builds
+forward, ~7-day raw flows can't backfill) feeds `flow_pair_baselines`; a
+leader-only hourly job (`src/analysis/flowPairBaselineJob.js`) recomputes over a
+14-day window (min 100 observations before scoring) and emits deviations to the
+correlator as ordinary findings (`kind ANOMALY`, `metric flow.volume`) via
+`findingStore.save`. Deviation only — **no** threat classification, **no** new
+alerting channel. API `GET /api/topology/flow-baselines` (operator+, 400/404/500)
++ `POST …/recompute`. Config `FLOW_BASELINE_*`. See `docs/flow-pair-baselines.md`.
+
+**Scheduled active discovery.** Finds devices passive collection misses by probing
+an admin-configured CIDR scope. **Native Node only** (TCP connect via `net`,
+reverse DNS via `dns.promises`; ICMP is an injectable probe, unsupported by
+default since raw sockets need CAP_NET_RAW — no `nmap`/`ping`, ever). Scope is
+explicit — never scans outside the configured CIDRs, refuses to start when scope
+is unset/invalid or exceeds the address cap (default 65536, checked before any
+probe), rate-limited (default 50/s). Results are `discovered_devices` candidates —
+**never auto-enrolled**; an admin promotes one to a monitored SNMP device
+(`agents` row). Every sweep is written to the hash-chained audit log with scope,
+start, end and result count. **Admin-only** router (`/api/discovery/*`; viewer +
+operator get 403 on every path). Engine `src/discovery/` (`cidr`, `rateLimiter`,
+`probes`, `scanner`, `discoverySweepJob`); config `DISCOVERY_*` (`src/config.js`).
+See `docs/discovery.md`. Documentation-center how-tos added for both features.
+
+## 0.89.0 — Topology change detection (LLDP neighbour changes + audit evidence)
+
+Detects and records LLDP/CDP topology changes between poll cycles. Each agent
+capabilities report is diffed against the agent's previous neighbour snapshot;
+differences become change records — `neighbour_added`, `neighbour_removed`,
+`link_state_changed`, `port_moved` — with flap suppression (a revert within
+`TOPOLOGY_FLAP_WINDOW_SECONDS`, default 300, collapses to one `flapping` record).
+
+- **Reuses the delta/changes shape** — change records surface as the existing
+  target-timeline event `{ timestamp, source:'topology', type, severity, summary,
+  ref_id }` (new `topology` source in `src/timeline/targetTimeline.js`, rendered
+  "Topology change"). No second changes format.
+- **Hash-chained audit evidence** — each change is written to `audit_log` (mig
+  033/041) via the fail-safe compliance logger (category `topology`, action
+  `topology_<type>`, `actorRole:'system'`, no actor user).
+- **Migration 067** — `topology_changes` table + nullable `lldp_neighbors.link_state`
+  (so a previous snapshot can carry state to diff). Diff seam at
+  `POST /agents/me/capabilities`: detect before upsert, reconcile removed/moved
+  edges so they don't re-emit.
+- **API** — `GET /api/topology/changes` (operator+, `?host=`): 400/404/500; changes
+  also merge into `GET /api/targets/:id/timeline` (viewer+).
+- Pure diff `src/topology/topologyDiff.js`; service `topologyChangeService.js`;
+  repo `topologyChangesRepository.js`; `lldpNeighborsRepository` gains
+  `listByAgent`/`deleteEdge` + `link_state`.
+- Tests: each change type on synthetic snapshots, flap window boundaries
+  (299/300/301s), no-change on identical, API 400/401/403/404/500, end-to-end
+  ingest + timeline. Documentation-center how-to + `docs/topology-changes.md`.
+- **Known gap:** the shipping agent doesn't collect LLDP yet, so this is dormant
+  in production until an agent reports `capabilities.lldp` (and per-neighbour
+  link state for `link_state_changed`). Server, storage and tests are ready.
+
+## 0.88.0 — Blast radius (impact analysis from a failing node)
+
+Given a **failing node** (agent id), computes which downstream hosts/services are
+affected, from the unified topology graph. Two tiers, each with a justifying path:
+`directly_isolated` (walk `l2_link` out from the node → hosts that lose L2
+connectivity) and `dependency_affected` (walk `service_dep` in reverse from the
+failing + isolated set → dependents, transitively). Depth-capped
+(`BLAST_RADIUS_MAX_DEPTH`, default 4), cycle-safe, `O(V + E)` (a 5,000-node perf
+test asserts <2s).
+
+- Pure engine `src/topology/blastRadius.js` + `blastRadiusService.js` (builds the
+  graph from the two bounded `listAll`s).
+- **Incident enrichment** — `GET /api/incidents/:id` (viewer+) gains **one** added
+  field, `blastRadius`, computed on read from the incident's `host_id`. Best-effort
+  (topology failure → `blastRadius: null`, incident still served). **No schema
+  change** — nothing persisted.
+- **Ad-hoc endpoint** — `GET /api/topology/blast-radius/:node` (operator+),
+  `?depth=N`; 404 unknown node, 400 invalid, 500 on topology-store failure.
+- Tests: linear/star/cyclic topologies, depth cap, empty downstream, dependency
+  chains, 5k-node perf; API 400/401/403/404/500 + incident-enrichment best-effort.
+- **Documentation center** (Diagnostics how-tos) gains worked-example articles for
+  the service dependency graph **and** blast radius. Docs `docs/blast-radius.md`.
+
+## 0.87.0 — Service dependency graph (edge type `service_dep`)
+
+Adds a **service dependency graph**: directed edges between monitored hosts derived
+from observed **TCP** flows, aggregated over a rolling 24h window by
+`(src_host_id, dst_host_id, dst_port)` with byte/packet/connection counts +
+first/last-seen. This is the second edge type of the **unified topology graph** —
+`l2_link` (LLDP, migration 063) and now `service_dep` (migration 066) — merged by one
+host-keyed model in `src/topology/graph.js` (`buildTopologyGraph`), **not** a parallel
+structure.
+
+- **Storage:** new MySQL table `service_dependencies` (migration 066), modeled on
+  `lldp_neighbors` — a keyed, upsert + age-out current-state edge table (not
+  append-only telemetry). Repo `src/repositories/serviceDependenciesRepository.js`.
+- **Aggregation:** a leader-only scheduled job (`src/topology/serviceDependencyJob.js`,
+  in `server.js` `backgroundJobs`, default every 10 min) recomputes the rolling window
+  **off the ingest hot path**. Pure aggregation + Top-N-per-source-host truncation in
+  `src/topology/serviceDependencyAggregator.js` (default N=50, `SERVICE_DEP_TOP_N`).
+  IP→host resolution (`src/topology/hostResolver.js`) maps an IP to a monitored host
+  via the agent's own reported IPs (`capabilities.ips`) or an SNMP-monitored device's
+  `monitor_config.snmp.host`; **edges with either endpoint unresolved are dropped**.
+- **API (`/api/topology`, viewer+):** `GET /dependencies` (Top-N edges, `?host=` for one
+  host — 404 unknown), `GET /graph` (unified typed graph), `POST /dependencies/recompute`
+  (operator+ — the write path).
+- **v1 scope:** TCP only; both endpoints must be monitored hosts; no process attribution;
+  no service naming/classification.
+- **Agent lockstep (blueeye-agent 0.18.0):** the sFlow/NetFlow collector now emits a
+  capped per-5-tuple `traffic.flows` list (proto + dst_port, already decoded) and reports
+  the host's own IPs via `capabilities.ips` — both additive and backward-compatible
+  (older servers keep using `topTalkers`). Config: `SERVICE_DEP_WINDOW_HOURS` (24),
+  `SERVICE_DEP_TOP_N` (50), `SERVICE_DEP_JOB_INTERVAL_MINUTES` (10). See
+  `docs/service-dependencies.md`.
+
 ## 0.84.2 — Fix: `trigger` reserved word broke migration 065 (deploy hotfix)
 
 `cluster_evidence_snapshots.trigger` (Fase 6) is a **MySQL reserved word** and was

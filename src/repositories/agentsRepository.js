@@ -137,6 +137,23 @@ function createAgentsRepository(db) {
     return result.affectedRows > 0;
   }
 
+  // Creates a monitored SNMP device (no software agent, no token) — used when an
+  // admin PROMOTES a discovered candidate. hostname/platform/arch are NOT NULL, so
+  // a sentinel 'snmp' platform/arch is used; monitor_config points at the device.
+  async function insertSnmpDevice({ hostname, host, community = null, version = null, port = null }) {
+    const snmp = { host };
+    if (community != null) snmp.community = community;
+    if (version != null) snmp.version = String(version);
+    if (port != null) snmp.port = port;
+    const monitorConfig = { source: 'snmp', snmp };
+    const [res] = await pool.query(
+      `INSERT INTO agents (hostname, platform, arch, status, monitor_config)
+       VALUES (?, 'snmp', 'snmp', 'offline', ?)`,
+      [hostname || host, JSON.stringify(monitorConfig)],
+    );
+    return res.insertId;
+  }
+
   // Sets the agent-reported status (online/offline) and refreshes last_seen.
   async function setStatus(id, status) {
     await pool.query(
@@ -158,6 +175,7 @@ function createAgentsRepository(db) {
     updateManaged,
     setLocation,
     setCapabilities,
+    insertSnmpDevice,
     remove,
     setStatus,
     touchLastSeen,

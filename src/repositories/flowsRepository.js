@@ -309,6 +309,31 @@ function createFlowsRepository(db) {
     }));
   }
 
+  // Service-dependency input: TCP conversations aggregated by (src_ip, dst_ip,
+  // dst_port) over [from, to). Metadata only (5-tuple), TCP only, with a real
+  // dst_port — the raw material the service-dependency job resolves to
+  // host↔host edges. `flows` (per-row flow count) sums to conn_count; MIN/MAX ts
+  // bound the observation window. Raw flow_records only (rollups drop ports).
+  async function tcpServiceFlows({ from, to, limit = 100000 }) {
+    const lim = Number.isInteger(limit) && limit > 0 && limit <= 500000 ? limit : 100000;
+    const rows = await q(
+      `SELECT src_ip, dst_ip, dst_port,
+              SUM(bytes) AS bytes, SUM(packets) AS packets, SUM(flows) AS connCount,
+              MIN(ts) AS firstSeen, MAX(ts) AS lastSeen
+       FROM flow_records
+       WHERE ts >= ? AND ts < ? AND LOWER(proto) = 'tcp'
+         AND src_ip IS NOT NULL AND dst_ip IS NOT NULL AND dst_port IS NOT NULL
+       GROUP BY src_ip, dst_ip, dst_port
+       ORDER BY bytes DESC LIMIT ?`,
+      [from, to, lim],
+    );
+    return rows.map((r) => ({
+      srcIp: r.src_ip, dstIp: r.dst_ip, dstPort: Number(r.dst_port),
+      bytes: numOf(r.bytes), packets: numOf(r.packets), connCount: numOf(r.connCount),
+      firstSeen: r.firstSeen, lastSeen: r.lastSeen,
+    }));
+  }
+
   // Global-search helpers: which agents have recently seen a given IP / port?
   // Raw flow_records only (the rollup keeps no per-IP/port detail), windowed.
   async function agentIdsForIp({ ip, since, until }) {
@@ -329,7 +354,7 @@ function createFlowsRepository(db) {
     return [...new Set(rows.map((r) => r.agent_id))];
   }
 
-  return { insertMany, aggregateExternalDestinations, destinationExists, agentIdsForDestination, selectFlows, exploreFlows, topologyEdges, agentIdsForIp, agentIdsForPort, asnSeries };
+  return { insertMany, aggregateExternalDestinations, destinationExists, agentIdsForDestination, selectFlows, exploreFlows, topologyEdges, tcpServiceFlows, agentIdsForIp, agentIdsForPort, asnSeries };
 }
 
 module.exports = { createFlowsRepository, toRow };

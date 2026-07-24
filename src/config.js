@@ -196,6 +196,18 @@ const config = {
   storage: {
     diskPath: process.env.STORAGE_DISK_PATH || (process.env.LICENSE_CACHE_PATH ? path.dirname(process.env.LICENSE_CACHE_PATH) : process.cwd()),
   },
+  // Scheduled active discovery: probe admin-configured CIDR scope for devices
+  // passive collection misses. Disabled + scope-empty by default (refuses to run
+  // until an admin sets DISCOVERY_CIDRS). Never scans outside scope; the address
+  // cap is a hard ceiling on how large a scope may be. See docs/discovery.md.
+  discovery: {
+    enabled: /^(1|true|yes|on)$/i.test(String(process.env.DISCOVERY_ENABLED || '').trim()),
+    cidrs: (process.env.DISCOVERY_CIDRS || '').split(',').map((s) => s.trim()).filter(Boolean),
+    ports: (process.env.DISCOVERY_PORTS || '22,80,161,443,3389').split(',').map((s) => toInt(s, 0)).filter((n) => n > 0 && n <= 65535),
+    rateLimit: clampInt(process.env.DISCOVERY_RATE_LIMIT, 50, 1, 10000),
+    addressCap: clampInt(process.env.DISCOVERY_ADDRESS_CAP, 65536, 1, 16777216),
+    intervalMinutes: clampInt(process.env.DISCOVERY_INTERVAL_MINUTES, 360, 1, 10080),
+  },
   // Analysis module: where warmed-up baselines are persisted so they survive a
   // restart. The detector's tuning lives in src/analysis/config.js.
   analysis: {

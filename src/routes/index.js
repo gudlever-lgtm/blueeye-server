@@ -114,6 +114,8 @@ function createApiRouter({
   flowPipeline,
   flowsRepo,
   lldpNeighborsRepo,
+  serviceDependenciesRepo,
+  serviceDependencyJob,
   geoTileConfig,
   geoProvider,
   geoipUpdater,
@@ -270,7 +272,7 @@ function createApiRouter({
     getCategories: settingsService ? () => settingsService.getFlowCategories() : undefined,
   }));
   // Flow-derived dependency/topology map (who-talks-to-whom from the 5-tuples).
-  if (flowsRepo || lldpNeighborsRepo) router.use('/api/topology', createTopologyRouter({ flowsRepo, agentsRepo, locationsRepo, centroids, lldpNeighborsRepo }));
+  if (flowsRepo || lldpNeighborsRepo || serviceDependenciesRepo) router.use('/api/topology', createTopologyRouter({ flowsRepo, agentsRepo, locationsRepo, centroids, lldpNeighborsRepo, serviceDependenciesRepo, serviceDependencyJob }));
   if (probeResultsRepo) router.use('/api/probes', createProbesRouter({ probeResultsRepo, agentsRepo, geoProvider, centroids }));
   if (probeResultsRepo) router.use('/api/fleet', createFleetRouter({ agentsRepo, probeResultsRepo, resultsRepo, speedtestResultsRepo, settingsService, logger }));
   // Overview "open issues" rollup (license feature `dashboard_advanced`,

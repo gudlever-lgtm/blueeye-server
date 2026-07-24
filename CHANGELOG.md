@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.87.0 — Service dependency graph (edge type `service_dep`)
+
+Adds a **service dependency graph**: directed edges between monitored hosts derived
+from observed **TCP** flows, aggregated over a rolling 24h window by
+`(src_host_id, dst_host_id, dst_port)` with byte/packet/connection counts +
+first/last-seen. This is the second edge type of the **unified topology graph** —
+`l2_link` (LLDP, migration 063) and now `service_dep` (migration 066) — merged by one
+host-keyed model in `src/topology/graph.js` (`buildTopologyGraph`), **not** a parallel
+structure.
+
+- **Storage:** new MySQL table `service_dependencies` (migration 066), modeled on
+  `lldp_neighbors` — a keyed, upsert + age-out current-state edge table (not
+  append-only telemetry). Repo `src/repositories/serviceDependenciesRepository.js`.
+- **Aggregation:** a leader-only scheduled job (`src/topology/serviceDependencyJob.js`,
+  in `server.js` `backgroundJobs`, default every 10 min) recomputes the rolling window
+  **off the ingest hot path**. Pure aggregation + Top-N-per-source-host truncation in
+  `src/topology/serviceDependencyAggregator.js` (default N=50, `SERVICE_DEP_TOP_N`).
+  IP→host resolution (`src/topology/hostResolver.js`) maps an IP to a monitored host
+  via the agent's own reported IPs (`capabilities.ips`) or an SNMP-monitored device's
+  `monitor_config.snmp.host`; **edges with either endpoint unresolved are dropped**.
+- **API (`/api/topology`, viewer+):** `GET /dependencies` (Top-N edges, `?host=` for one
+  host — 404 unknown), `GET /graph` (unified typed graph), `POST /dependencies/recompute`
+  (operator+ — the write path).
+- **v1 scope:** TCP only; both endpoints must be monitored hosts; no process attribution;
+  no service naming/classification.
+- **Agent lockstep (blueeye-agent 0.18.0):** the sFlow/NetFlow collector now emits a
+  capped per-5-tuple `traffic.flows` list (proto + dst_port, already decoded) and reports
+  the host's own IPs via `capabilities.ips` — both additive and backward-compatible
+  (older servers keep using `topTalkers`). Config: `SERVICE_DEP_WINDOW_HOURS` (24),
+  `SERVICE_DEP_TOP_N` (50), `SERVICE_DEP_JOB_INTERVAL_MINUTES` (10). See
+  `docs/service-dependencies.md`.
+
 ## 0.84.2 — Fix: `trigger` reserved word broke migration 065 (deploy hotfix)
 
 `cluster_evidence_snapshots.trigger` (Fase 6) is a **MySQL reserved word** and was

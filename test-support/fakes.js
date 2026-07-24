@@ -640,6 +640,61 @@ function makeLldpNeighborsRepo(overrides = {}) {
   };
 }
 
+// A fake service_dependencies repository (in-memory). Mirrors
+// serviceDependenciesRepository's surface for the graph + dependencies API.
+function makeServiceDependenciesRepo(overrides = {}) {
+  const rows = [];
+  const iso = (v) => (v == null ? null : (v instanceof Date ? v.toISOString() : new Date(v).toISOString()));
+  const key = (r) => `${r.src_host_id}|${r.dst_host_id}|${r.dst_port}`;
+  const mapOut = (r) => ({
+    id: r.id, srcHostId: r.src_host_id, dstHostId: r.dst_host_id, dstPort: r.dst_port,
+    proto: r.proto ?? null, bytes: Number(r.bytes) || 0, packets: Number(r.packets) || 0,
+    connCount: Number(r.conn_count) || 0, firstSeen: iso(r.first_seen), lastSeen: iso(r.last_seen),
+  });
+  const where = (r, hostId, direction) => {
+    if (hostId == null) return true;
+    const id = Number(hostId);
+    if (direction === 'out') return r.src_host_id === id;
+    if (direction === 'in') return r.dst_host_id === id;
+    return r.src_host_id === id || r.dst_host_id === id;
+  };
+  let seq = 0;
+  const repo = {
+    rows,
+    upsert: overrides.upsert || (async ({ srcHostId, dstHostId, dstPort, proto = 'tcp', bytes = 0, packets = 0, connCount = 0, firstSeen, lastSeen }) => {
+      const row = { src_host_id: Number(srcHostId), dst_host_id: Number(dstHostId), dst_port: Number(dstPort), proto, bytes, packets, conn_count: connCount, first_seen: firstSeen || lastSeen || new Date(), last_seen: lastSeen || firstSeen || new Date() };
+      const existing = rows.find((r) => key(r) === key(row));
+      if (existing) {
+        existing.proto = row.proto; existing.bytes = row.bytes; existing.packets = row.packets; existing.conn_count = row.conn_count;
+        existing.last_seen = row.last_seen;
+        if (new Date(row.first_seen) < new Date(existing.first_seen)) existing.first_seen = row.first_seen;
+        return existing;
+      }
+      row.id = (seq += 1); rows.push(row); return row;
+    }),
+    upsertMany: overrides.upsertMany || (async function upsertMany(edges) {
+      let n = 0;
+      for (const e of Array.isArray(edges) ? edges : []) {
+        if (e == null || e.srcHostId == null || e.dstHostId == null || e.dstPort == null) continue;
+        await this.upsert(e); n += 1;
+      }
+      return n;
+    }),
+    ageOut: overrides.ageOut || (async (olderThan) => {
+      const before = rows.length;
+      for (let i = rows.length - 1; i >= 0; i -= 1) if (new Date(rows[i].last_seen) < new Date(olderThan)) rows.splice(i, 1);
+      return before - rows.length;
+    }),
+    listAll: overrides.listAll || (async ({ limit = 100000 } = {}) => [...rows].sort((a, b) => b.bytes - a.bytes).slice(0, limit).map(mapOut)),
+    listForHost: overrides.listForHost || (async ({ hostId, direction = 'both', limit = 50, offset = 0 }) => rows
+      .filter((r) => where(r, hostId, direction))
+      .sort((a, b) => b.bytes - a.bytes || a.id - b.id)
+      .slice(offset, offset + limit).map(mapOut)),
+    countForHost: overrides.countForHost || (async ({ hostId, direction = 'both' }) => rows.filter((r) => where(r, hostId, direction)).length),
+  };
+  return repo;
+}
+
 // A fake verification service (records schedule() calls; no-op sweep by default).
 function makeVerificationService(overrides = {}) {
   const scheduled = [];
@@ -1071,6 +1126,7 @@ function makeFlowsRepo(overrides = {}) {
     selectFlows: overrides.selectFlows || (async () => ({ byAsn: [], byDirection: [], byProto: [], series: [], totals: { bytes: 0, flowCount: 0, records: 0 } })),
     exploreFlows: overrides.exploreFlows || (async () => ({ topTalkers: [], byPort: [], byProto: [], series: [], scans: [], totals: { bytes: 0, packets: 0, flowCount: 0, records: 0 } })),
     topologyEdges: overrides.topologyEdges || (async () => []),
+    tcpServiceFlows: overrides.tcpServiceFlows || (async () => []),
     agentIdsForIp: overrides.agentIdsForIp || (async () => []),
     agentIdsForPort: overrides.agentIdsForPort || (async () => []),
     asnSeries: overrides.asnSeries || (async () => []),
@@ -1838,6 +1894,8 @@ function makeApp(overrides = {}) {
     flowPipeline: overrides.flowPipeline || makeFlowPipeline(),
     flowsRepo: overrides.flowsRepo || makeFlowsRepo(),
     lldpNeighborsRepo: overrides.lldpNeighborsRepo || makeLldpNeighborsRepo(),
+    serviceDependenciesRepo: overrides.serviceDependenciesRepo || makeServiceDependenciesRepo(),
+    serviceDependencyJob: overrides.serviceDependencyJob || null,
     geoTileConfig: overrides.geoTileConfig || { tileUrl: 'https://tiles.example/{z}/{x}/{y}.png', tileAttribution: 'test', tileMaxZoom: 19 },
     geoProvider: overrides.geoProvider || null,
     centroids: overrides.centroids || null,
@@ -1953,6 +2011,7 @@ module.exports = {
   makeVerificationRunsRepo,
   makeVerificationService,
   makeLldpNeighborsRepo,
+  makeServiceDependenciesRepo,
   makeAlertDispatchLogRepo,
   makeEvidenceSnapshotsRepo,
   makeRemediationPlaybooksRepo,

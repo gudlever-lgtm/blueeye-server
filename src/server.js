@@ -59,6 +59,8 @@ const { createIncidentClustersRepository } = require('./repositories/incidentClu
 const { createRunbooksRepository } = require('./repositories/runbooksRepository');
 const { createLldpNeighborsRepository } = require('./repositories/lldpNeighborsRepository');
 const { createLldpGraphService } = require('./topology/lldpGraphService');
+const { createServiceDependenciesRepository } = require('./repositories/serviceDependenciesRepository');
+const { createServiceDependencyJob } = require('./topology/serviceDependencyJob');
 const { createClusterNotifier } = require('./analysis/clusterNotifier');
 const { createClusterNis2Service } = require('./analysis/clusterNis2');
 const { createClusterAlertGate } = require('./analysis/clusterAlertGate');
@@ -446,6 +448,10 @@ function start() {
   // clustering, fed by the existing agent report path (no new SNMP polling).
   const lldpNeighborsRepo = createLldpNeighborsRepository(db);
   const lldpGraphService = createLldpGraphService({ lldpNeighborsRepo, logger });
+  // Service dependency graph — 'service_dep' edges (host↔host TCP dependencies)
+  // recomputed off the ingest hot path by a leader-only job (backgroundJobs).
+  const serviceDependenciesRepo = createServiceDependenciesRepository(db);
+  const serviceDependencyJob = createServiceDependencyJob({ serviceDependenciesRepo, flowsRepo, agentsRepo, logger });
   // Durable alert-dispatch log: lets a cluster alert fire once + reference (not
   // resend) member findings already alerted individually. Passed to the dispatcher
   // (records each send) and the cross-agent service (reads it).
@@ -683,6 +689,9 @@ function start() {
     createIncidentAutoResolveJob({ incidentCasesRepo, auditLogRepo, logger }),
     createCrossAgentClusterJob({ service: crossAgentClusterService, logger }),
     createVerificationJob({ service: verificationService, logger }),
+    // Service dependency graph recompute (rolling 24h TCP edges), off the ingest
+    // hot path — same singleton pattern as the LLDP refresh.
+    serviceDependencyJob,
     // LLDP graph refresh + age-out (default 24h). Self-contained interval so
     // stale neighbors are purged even when clustering is idle.
     (() => {
@@ -753,6 +762,8 @@ function start() {
     verificationRunsRepo,
     verificationService,
     lldpNeighborsRepo,
+    serviceDependenciesRepo,
+    serviceDependencyJob,
     remediationPlaybooksRepo,
     configSnapshotsRepo,
     thresholdsRepo,

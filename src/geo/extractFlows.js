@@ -39,7 +39,7 @@ function extractFlows(agentId, payload, now = () => new Date()) {
   const ts = tsRaw ? new Date(tsRaw) : now();
   const records = [];
 
-  if (Array.isArray(traffic.flows)) {
+  if (Array.isArray(traffic.flows) && traffic.flows.length) {
     for (const f of traffic.flows) {
       if (!f || typeof f !== 'object') continue;
       if (!f.srcIp && !f.dstIp) continue;

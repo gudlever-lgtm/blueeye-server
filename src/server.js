@@ -60,6 +60,7 @@ const { createRunbooksRepository } = require('./repositories/runbooksRepository'
 const { createLldpNeighborsRepository } = require('./repositories/lldpNeighborsRepository');
 const { createLldpGraphService } = require('./topology/lldpGraphService');
 const { createServiceDependenciesRepository } = require('./repositories/serviceDependenciesRepository');
+const { createHostConnectionsRepository } = require('./repositories/hostConnectionsRepository');
 const { createServiceDependencyJob } = require('./topology/serviceDependencyJob');
 const { createBlastRadiusService } = require('./topology/blastRadiusService');
 const { createTopologyChangesRepository } = require('./repositories/topologyChangesRepository');
@@ -463,7 +464,8 @@ function start() {
   // Service dependency graph — 'service_dep' edges (host↔host TCP dependencies)
   // recomputed off the ingest hot path by a leader-only job (backgroundJobs).
   const serviceDependenciesRepo = createServiceDependenciesRepository(db);
-  const serviceDependencyJob = createServiceDependencyJob({ serviceDependenciesRepo, flowsRepo, agentsRepo, logger });
+  const hostConnectionsRepo = createHostConnectionsRepository(db);
+  const serviceDependencyJob = createServiceDependencyJob({ serviceDependenciesRepo, flowsRepo, agentsRepo, hostConnectionsRepo, logger });
   // Blast-radius impact analysis over the unified topology graph (l2_link +
   // service_dep). Used by the incident enrichment + the topology endpoint.
   const blastRadiusService = createBlastRadiusService({ lldpNeighborsRepo, serviceDependenciesRepo, agentsRepo });
@@ -799,6 +801,7 @@ function start() {
     verificationService,
     lldpNeighborsRepo,
     serviceDependenciesRepo,
+    hostConnectionsRepo,
     serviceDependencyJob,
     blastRadiusService,
     topologyChangesRepo,

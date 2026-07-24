@@ -791,6 +791,39 @@ function makeServiceDependenciesRepo(overrides = {}) {
   return repo;
 }
 
+// A fake host_connections repository (in-memory). Mirrors
+// hostConnectionsRepository (migration 070) — agent-reported connection edges.
+function makeHostConnectionsRepo(overrides = {}) {
+  const rows = []; // { agent_id, src_ip, dst_ip, dst_port, conn_count, last_seen }
+  const repo = {
+    rows,
+    replaceForAgent: overrides.replaceForAgent || (async (agentId, edges, { now = new Date() } = {}) => {
+      for (let i = rows.length - 1; i >= 0; i -= 1) if (rows[i].agent_id === Number(agentId)) rows.splice(i, 1);
+      let n = 0;
+      for (const e of Array.isArray(edges) ? edges : []) {
+        const srcIp = typeof e.srcIp === 'string' ? e.srcIp.trim() : '';
+        const dstIp = typeof e.dstIp === 'string' ? e.dstIp.trim() : '';
+        const dstPort = Number(e.dstPort);
+        if (!srcIp || !dstIp || srcIp === dstIp) continue;
+        if (!Number.isInteger(dstPort) || dstPort <= 0 || dstPort > 65535) continue;
+        const cc = Number(e.connCount);
+        rows.push({ agent_id: Number(agentId), src_ip: srcIp, dst_ip: dstIp, dst_port: dstPort, conn_count: Number.isInteger(cc) && cc > 0 ? cc : 1, last_seen: now });
+        n += 1;
+      }
+      return n;
+    }),
+    listAsFlowRows: overrides.listAsFlowRows || (async ({ from, to = new Date() }) => rows
+      .filter((r) => new Date(r.last_seen) >= new Date(from) && new Date(r.last_seen) <= new Date(to))
+      .map((r) => ({ srcIp: r.src_ip, dstIp: r.dst_ip, dstPort: r.dst_port, bytes: 0, packets: 0, connCount: r.conn_count, firstSeen: r.last_seen, lastSeen: r.last_seen }))),
+    purgeOlderThan: overrides.purgeOlderThan || (async (cutoff) => {
+      const before = rows.length;
+      for (let i = rows.length - 1; i >= 0; i -= 1) if (new Date(rows[i].last_seen) < new Date(cutoff)) rows.splice(i, 1);
+      return before - rows.length;
+    }),
+  };
+  return repo;
+}
+
 // A fake flow_pair baselines repository (in-memory). Mirrors
 // flowPairBaselinesRepository (migration 068).
 function makeFlowPairBaselinesRepo(overrides = {}) {
@@ -1997,6 +2030,7 @@ function makeApp(overrides = {}) {
     || createSnapshotService({ evidenceRepo, agentCommander, scheduleRetry: (fn) => { const t = setTimeout(fn, 0); if (t.unref) t.unref(); return t; } });
   const lldpNeighborsRepo = overrides.lldpNeighborsRepo || makeLldpNeighborsRepo();
   const serviceDependenciesRepo = overrides.serviceDependenciesRepo || makeServiceDependenciesRepo();
+  const hostConnectionsRepo = overrides.hostConnectionsRepo || makeHostConnectionsRepo();
   const topologyChangesRepo = overrides.topologyChangesRepo || makeTopologyChangesRepo();
   const flowPairBaselinesRepo = overrides.flowPairBaselinesRepo || makeFlowPairBaselinesRepo();
   // Real topology-change service over the fakes, so change detection + flap
@@ -2049,6 +2083,7 @@ function makeApp(overrides = {}) {
     flowsRepo: overrides.flowsRepo || makeFlowsRepo(),
     lldpNeighborsRepo,
     serviceDependenciesRepo,
+    hostConnectionsRepo,
     serviceDependencyJob: overrides.serviceDependencyJob || null,
     blastRadiusService,
     topologyChangesRepo,
@@ -2174,6 +2209,7 @@ module.exports = {
   makeVerificationService,
   makeLldpNeighborsRepo,
   makeServiceDependenciesRepo,
+  makeHostConnectionsRepo,
   makeTopologyChangesRepo,
   makeFlowPairBaselinesRepo,
   makeDiscoveredDevicesRepo,

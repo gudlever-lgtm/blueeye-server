@@ -28,6 +28,7 @@ function createServiceDependencyJob({
   serviceDependenciesRepo,
   flowsRepo,
   agentsRepo,
+  hostConnectionsRepo = null,
   config = readConfig(),
   logger = null,
   now = () => new Date(),
@@ -44,7 +45,16 @@ function createServiceDependencyJob({
       const agents = await agentsRepo.findAll();
       const resolver = buildHostResolver(agents);
       const flowRows = await flowsRepo.tcpServiceFlows({ from, to });
-      const { edges, stats } = aggregateServiceDependencies(flowRows, resolver, { topN: config.topN });
+      // Second source: agent-reported connection-table edges (for hosts with no
+      // flow exporter). Flow-shaped, byte-less; the aggregator folds them in and
+      // resolves/drops endpoints identically. Best-effort — a failure just omits
+      // this source rather than losing the flow-derived edges.
+      let connRows = [];
+      if (hostConnectionsRepo && typeof hostConnectionsRepo.listAsFlowRows === 'function') {
+        try { connRows = await hostConnectionsRepo.listAsFlowRows({ from, to }); }
+        catch (e) { if (logger && logger.warn) logger.warn(`service-dep: connection-table source failed (${e && e.message})`); }
+      }
+      const { edges, stats } = aggregateServiceDependencies([...flowRows, ...connRows], resolver, { topN: config.topN });
       await serviceDependenciesRepo.upsertMany(edges);
       const aged = await serviceDependenciesRepo.ageOut(from);
       if (logger && typeof logger.info === 'function') {

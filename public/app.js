@@ -5457,7 +5457,19 @@ views.topology = async () => {
         if (!whatIf) { topoState.focus = null; syncTopoUrl(); }
         renderLayers();
       });
-      layerBar.append(el('span', { class: 'spacer' }), whatIfBtn);
+      // Force a fresh service-dependency aggregation (normally a scheduled job),
+      // then reload the graph — operator+ (the recompute endpoint is).
+      const recomputeBtn = el('button', { class: 'small ghost', title: 'Recompute service dependencies now' }, 'Recompute');
+      recomputeBtn.addEventListener('click', async () => {
+        recomputeBtn.disabled = true;
+        try {
+          await api('/api/topology/dependencies/recompute', { method: 'POST' });
+          graphData = null;
+          await drawLayers();
+          toast('Service dependencies recomputed');
+        } catch (e) { toast(errText(e), true); } finally { recomputeBtn.disabled = false; }
+      });
+      layerBar.append(el('span', { class: 'spacer' }), recomputeBtn, whatIfBtn);
     }
 
     if (!graphData) {

@@ -60,6 +60,9 @@ test('GET /system/version reports the signed release version when one is publish
     .get('/system/version').set('Authorization', viewer());
   assert.equal(res.status, 200);
   assert.equal(res.body.agent, '0.4.0'); // release wins over the source bundle's 0.1.0
+  // ...but installer-based agents can only reach the packaged source, exposed
+  // separately so the UI compares Docker/Windows/unmanaged agents against it.
+  assert.equal(res.body.agentSource, '0.1.0');
 });
 
 test('GET /system/version falls back to the source bundle when no release is published', async () => {

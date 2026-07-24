@@ -8263,7 +8263,9 @@ views.logs = async () => {
         el('td', { class: 'muted small nowrap' }, fmtDate(r.ts)),
         el('td', {}, logLevelBadge(r.level)),
         el('td', { class: 'muted small' }, r.source === 'client' ? 'dashboard' : 'server'),
-        el('td', {}, el('div', {}, esc(r.msg)), metaStr ? el('div', { class: 'muted small' }, esc(metaStr)) : null));
+        // el() appends children as text nodes (already XSS-safe), so msg/meta
+        // must NOT be esc()'d — doing so rendered literal &quot; in the meta JSON.
+        el('td', {}, el('div', {}, r.msg), metaStr ? el('div', { class: 'muted small' }, metaStr) : null));
     }));
     if (!status.textContent) status.textContent = `${rows.length} entr${rows.length === 1 ? 'y' : 'ies'} shown`;
     else status.textContent += ` · ${rows.length} shown (local only)`;

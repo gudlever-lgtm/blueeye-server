@@ -1379,6 +1379,18 @@ button.active-btn { outline: 2px solid var(--accent); }
 .nis2-cat { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
 .nis2-cat-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 13px; font-weight: 600; }
 .nis2-cat-sub { font-size: 11px; margin-top: 5px; }
+/* A category card drills into its controls — give it a clickable affordance. */
+.nis2-cat-link { cursor: pointer; transition: border-color .15s ease, box-shadow .15s ease; }
+.nis2-cat-link:hover, .nis2-cat-link:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); outline: none; }
+.nis2-cat-arrow { opacity: 0; margin-left: 2px; font-weight: 700; transition: opacity .15s ease; }
+.nis2-cat-link:hover .nis2-cat-arrow, .nis2-cat-link:focus-visible .nis2-cat-arrow { opacity: .8; }
+
+/* Read-only control list inside the category drill-down modal. */
+.nis2-cat-controls { display: flex; flex-direction: column; gap: 8px; margin: 4px 0 2px; }
+.nis2-cat-control { border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; }
+.nis2-cat-control-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.nis2-cat-control-meta { font-size: 11.5px; margin-top: 4px; }
+.nis2-cat-control-desc { font-size: 12.5px; line-height: 1.5; margin-top: 5px; }
 
 /* Recommended actions + alerts */
 .nis2-actions { margin: 4px 0 0; padding-left: 20px; }

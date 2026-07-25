@@ -11920,12 +11920,21 @@ async function nis2Dashboard() {
     kpi('Controls without evidence', d.controlsWithoutEvidence, d.controlsWithoutEvidence ? 'warn-text' : '',
       'Controls with no evidence reference on file (or marked Missing/Overdue). Evidence is what an auditor asks for — these are what pull the readiness score down.')));
 
-  // Category status grid.
+  // Category status grid. Each card drills into the controls behind its score
+  // (a read-only list) — so the "N control(s) · X%" figure is explorable rather
+  // than a dead end.
   wrap.append(el('h3', { class: 'nis2-h3' }, 'Status by category'));
-  wrap.append(el('div', { class: 'nis2-cats' }, ...d.categories.map((c) => el('div', { class: 'nis2-cat' },
+  wrap.append(el('div', { class: 'nis2-cats' }, ...d.categories.map((c) => el('div', {
+    class: 'nis2-cat nis2-cat-link',
+    role: 'button',
+    tabindex: '0',
+    title: `View the ${c.controlCount} control(s) that make up ${c.category}`,
+    onclick: () => nis2CategoryControlsModal(c.category),
+    onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); nis2CategoryControlsModal(c.category); } },
+  },
     el('div', { class: 'nis2-cat-top' }, el('span', {}, c.category), nbadge(c.status, NIS2_CATSTATUS_CLASS[c.status])),
     el('div', { class: 'nis2-gauge-bar sm' }, el('span', { class: NIS2_CATSTATUS_CLASS[c.status], style: `width:${c.score}%` })),
-    el('div', { class: 'muted nis2-cat-sub' }, `${c.controlCount} control(s) · ${c.score}%`)))));
+    el('div', { class: 'muted nis2-cat-sub' }, `${c.controlCount} control(s) · ${c.score}% `, el('span', { class: 'nis2-cat-arrow' }, '→'))))));
 
   // Top recommended actions.
   wrap.append(el('h3', { class: 'nis2-h3' }, 'Top recommended actions'));
@@ -11938,6 +11947,48 @@ async function nis2Dashboard() {
     el('button', { class: 'small', onclick: () => nis2Print('/api/nis2/export/readiness.html') }, '⤓ Readiness PDF'),
     el('button', { class: 'small', onclick: () => nis2Print('/api/nis2/export/executive.html') }, '⤓ Executive PDF')));
   return wrap;
+}
+
+// Read-only drill-down from a dashboard category card. The dashboard payload
+// only carries per-category counts/scores, so we (re)fetch the controls in this
+// area and list them — name, status, evidence, cadence and description — letting
+// a reader see *which* controls sit behind the "N control(s) · X%" figure and
+// read about them without leaving the dashboard.
+async function nis2CategoryControlsModal(category) {
+  const card = $('#modal-card');
+  card.classList.add('wide');
+  const title = `Controls — ${category}`;
+  const withClose = (...body) => {
+    body.push(el('div', { class: 'form-actions' }, el('button', { class: 'ghost', onclick: closeModal }, 'Close')));
+    card.replaceChildren(...body);
+  };
+  card.replaceChildren(el('h3', {}, title), el('div', { class: 'empty' }, 'Loading…'));
+  $('#modal').classList.remove('hidden');
+  let controls;
+  try {
+    controls = await api(`/api/nis2/controls?area=${encodeURIComponent(category)}`);
+  } catch (err) {
+    withClose(el('h3', {}, title), el('div', { class: 'empty error' }, errText(err)));
+    return;
+  }
+  const body = [
+    el('h3', {}, title),
+    el('p', { class: 'muted' }, 'The controls whose evidence completeness make up this category’s readiness score.'),
+  ];
+  if (!controls.length) {
+    body.push(el('div', { class: 'empty' }, 'No controls recorded in this category yet.'));
+  } else {
+    body.push(el('div', { class: 'nis2-cat-controls' }, ...controls.map((c) => el('div', { class: 'nis2-cat-control' },
+      el('div', { class: 'nis2-cat-control-head' },
+        el('strong', {}, c.controlName),
+        nbadge(c.status, NIS2_CTRL_CLASS[c.status]),
+        c.hasEvidence ? nbadge('evidence', 'ok') : nbadge('no evidence', 'crit')),
+      el('div', { class: 'muted nis2-cat-control-meta' },
+        `Owner: ${c.owner || '–'} · Frequency: ${c.frequency || '–'} · Last: ${c.lastPerformed || '–'} · Next due: ${c.nextDue || '–'}`),
+      c.description ? el('div', { class: 'nis2-cat-control-desc' }, c.description) : null,
+      c.comment ? el('div', { class: 'muted nis2-cat-control-desc' }, c.comment) : null))));
+  }
+  withClose(...body);
 }
 
 // ---- NIS2: Risk Register ---------------------------------------------------

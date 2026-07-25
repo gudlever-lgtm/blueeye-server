@@ -1006,6 +1006,11 @@ th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
 th.sortable:hover { color: var(--text); }
 th.sortable.sorted { color: var(--accent); }
 
+/* Per-column filter row: a second header row of filter controls under the
+   sortable labels, so the header both sorts (click label) and filters. */
+thead tr.filter-row th { padding: 4px 8px 8px; font-weight: 400; vertical-align: top; }
+.col-filter { width: 100%; max-width: 240px; box-sizing: border-box; font: inherit; padding: 3px 6px; }
+
 /* One consistent status palette used everywhere:
    green = ok/healthy, amber = warning/lapsed, red = critical/error, grey = neutral. */
 .badge { padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; }

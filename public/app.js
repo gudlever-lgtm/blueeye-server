@@ -2960,8 +2960,15 @@ function sortableTable(columns, opts = {}) {
     }, c.label)
     : el('th', { class: c.class || '', scope: 'col' }, c.label)));
   const tbody = el('tbody');
-  const table = el('table', { class: opts.className || 'data' },
-    el('thead', {}, el('tr', {}, ...headerEls)), tbody);
+  // Optional second header row of per-column filter controls (columns[i].filter
+  // → a DOM node, or null for no control). Makes the header both sort AND filter.
+  const hasFilters = columns.some((c) => c.filter);
+  const filterRow = hasFilters
+    ? el('tr', { class: 'filter-row' }, ...columns.map((c) => el('th', { class: c.class || '', scope: 'col' }, c.filter || null)))
+    : null;
+  const thead = el('thead', {}, el('tr', {}, ...headerEls));
+  if (filterRow) thead.append(filterRow);
+  const table = el('table', { class: opts.className || 'data' }, thead, tbody);
 
   function sortBy(key) {
     if (sortKey === key) sortDir = sortDir === 'asc' ? 'desc' : 'asc';
@@ -3053,14 +3060,17 @@ views.findings = async () => {
     return s ? `?${s}` : '';
   };
 
-  const hostSelect = el('select', {},
+  // Filter controls live in the table header (a filter row under the sortable
+  // labels), aligned to the Host / Severity / Metric columns — the same
+  // per-column filter+sort model the Incidents table uses.
+  const hostSelect = el('select', { class: 'col-filter' },
     el('option', { value: '' }, 'All hosts'),
     ...agents.map((a) => el('option',
       { value: String(a.id), ...(String(a.id) === findingsState.hostId ? { selected: 'selected' } : {}) },
       a.display_name || a.hostname)));
   hostSelect.addEventListener('change', () => { findingsState.hostId = hostSelect.value; reload(); });
 
-  const sevSelect = el('select', {},
+  const sevSelect = el('select', { class: 'col-filter' },
     el('option', { value: '' }, 'All severities'),
     ...['CRIT', 'WARN', 'INFO'].map((s) => el('option',
       { value: s, ...(s === findingsState.severity ? { selected: 'selected' } : {}) }, s)));
@@ -3068,7 +3078,7 @@ views.findings = async () => {
 
   // Metric options are filled in from the overview (byMetric) once it loads, so
   // the dropdown reflects the metrics that actually have findings.
-  const metricSelect = el('select', {}, el('option', { value: '' }, 'All metrics'));
+  const metricSelect = el('select', { class: 'col-filter' }, el('option', { value: '' }, 'All metrics'));
   metricSelect.addEventListener('change', () => { findingsState.metric = metricSelect.value; loadList(); });
 
   root.append(el('div', { class: 'section-head' },
@@ -3079,10 +3089,7 @@ views.findings = async () => {
       const p = {};
       if (findingsState.hostId) p.hostId = findingsState.hostId;
       return p;
-    }),
-    el('label', { class: 'muted inline' }, 'Host ', hostSelect),
-    el('label', { class: 'muted inline' }, 'Severity ', sevSelect),
-    el('label', { class: 'muted inline' }, 'Metric ', metricSelect)));
+    })));
 
   if (featureEnabled('assistant')) root.append(assistantBox(() => findingsState.hostId));
 
@@ -3094,9 +3101,9 @@ views.findings = async () => {
   // live-WebSocket prepend); the table shell handles header sort + empty states.
   const columns = [
     { label: 'Time', key: 'time', get: (f) => new Date(f.createdAt || 0).getTime() },
-    { label: 'Host', key: 'host', get: (f) => String(agentName(f.hostId) || '').toLowerCase() },
-    { label: 'Metric', key: 'metric', get: (f) => f.metric || '' },
-    { label: 'Severity', key: 'severity', get: (f) => SEVERITY_RANK[f.severity] || 0 },
+    { label: 'Host', key: 'host', get: (f) => String(agentName(f.hostId) || '').toLowerCase(), filter: hostSelect },
+    { label: 'Metric', key: 'metric', get: (f) => f.metric || '', filter: metricSelect },
+    { label: 'Severity', key: 'severity', get: (f) => SEVERITY_RANK[f.severity] || 0, filter: sevSelect },
     { label: 'Deviation', key: 'deviation', get: (f) => (typeof f.deviation === 'number' ? f.deviation : null) },
     { label: 'Explanation', key: null },
     { label: '', key: null },
@@ -3345,8 +3352,6 @@ views.incidents = async () => {
   const wrap = el('div', { class: 'incidents-view' });
   const filters = { status: '', severity: '', device: '' };
 
-  // Sortable columns (client-side, over the fetched page) — mirrors the
-  // Analysis table: click a header to sort, click again to flip direction.
   const incRow = (i) => el('tr', {
     class: 'clickable', tabindex: '0',
     onclick: () => openIncident(i.id), onkeydown: (e) => { if (e.key === 'Enter') openIncident(i.id); },
@@ -3359,11 +3364,27 @@ views.incidents = async () => {
     el('td', { class: 'muted' }, fmtDate(i.lastEventAt)),
     el('td', {}, canWrite() ? el('button', { class: 'pill guide-pill small', title: 'Guided troubleshooting', onclick: (e) => { e.stopPropagation(); guideFromList(i.id); } }, '🧭 Guide') : ''));
 
+  // Filter controls live IN the header (a filter row under the sortable labels),
+  // so each column header both sorts (click the label) and filters — the same
+  // per-column model as the Analysis table. Server-side filters (status/severity/
+  // device) reload; the rest of the columns just sort client-side.
+  const statusSel = el('select', { class: 'col-filter', onchange: (e) => { filters.status = e.target.value; load(); } },
+    el('option', { value: '' }, 'All statuses'),
+    ...Object.keys(INC_STATUS_LABEL).map((s) => el('option', { value: s }, INC_STATUS_LABEL[s])));
+  const sevSel = el('select', { class: 'col-filter', onchange: (e) => { filters.severity = e.target.value; load(); } },
+    el('option', { value: '' }, 'All severities'),
+    ...['INFO', 'WARN', 'CRIT'].map((s) => el('option', { value: s }, s)));
+  const devInput = el('input', {
+    type: 'search', class: 'col-filter', placeholder: 'Device id…',
+    onchange: (e) => { filters.device = e.target.value.trim(); load(); },
+    onkeydown: (e) => { if (e.key === 'Enter') { filters.device = e.target.value.trim(); load(); } },
+  });
+
   const grid = sortableTable([
-    { label: 'Severity', key: 'severity', get: (i) => SEVERITY_RANK[i.severity] || 0 },
-    { label: 'Status', key: 'status', get: (i) => i.status || '' },
+    { label: 'Severity', key: 'severity', get: (i) => SEVERITY_RANK[i.severity] || 0, filter: sevSel },
+    { label: 'Status', key: 'status', get: (i) => i.status || '', filter: statusSel },
     { label: 'Title', key: 'title', get: (i) => String(i.title || '').toLowerCase() },
-    { label: 'Device', key: 'device', get: (i) => String(i.deviceId || '').toLowerCase() },
+    { label: 'Device', key: 'device', get: (i) => String(i.deviceId || '').toLowerCase(), filter: devInput },
     { label: 'First seen', key: 'first', get: (i) => new Date(i.firstEventAt || 0).getTime() },
     { label: 'Last activity', key: 'last', get: (i) => new Date(i.lastEventAt || 0).getTime() },
     { label: '', key: null },
@@ -3389,16 +3410,7 @@ views.incidents = async () => {
     }
   }
 
-  const statusSel = el('select', { onchange: (e) => { filters.status = e.target.value; load(); } },
-    el('option', { value: '' }, 'All statuses'),
-    ...Object.keys(INC_STATUS_LABEL).map((s) => el('option', { value: s }, INC_STATUS_LABEL[s])));
-  const sevSel = el('select', { onchange: (e) => { filters.severity = e.target.value; load(); } },
-    el('option', { value: '' }, 'All severities'),
-    ...['INFO', 'WARN', 'CRIT'].map((s) => el('option', { value: s }, s)));
-  const devInput = el('input', { type: 'text', placeholder: 'Device id', oninput: (e) => { filters.device = e.target.value.trim(); } });
-  const devBtn = el('button', { class: 'small ghost', onclick: () => load() }, 'Filter');
-
-  wrap.append(el('div', { class: 'toolbar' }, statusSel, sevSel, devInput, devBtn), grid.table);
+  wrap.append(grid.table);
   await load();
   return wrap;
 };

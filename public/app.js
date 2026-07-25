@@ -898,7 +898,7 @@ const PAGE_INFO = {
       el('h4', {}, 'Unified mode'),
       el('ul', {},
         el('li', {}, 'Top talkers: the largest conversations (source→destination) by bytes — click any row to filter by that peer.'),
-        el('li', {}, 'Top ports / protocols + a bytes-over-time chart with anomaly findings overlaid as markers.'),
+        el('li', {}, 'Top ports / protocols + a bytes-over-time chart with anomaly findings overlaid as markers. Drag across the chart to zoom into a time range; "Reset zoom" restores the full window.'),
         el('li', {}, 'Scans / fan-out: sources hitting many different ports (port scan) or many hosts (fan-out).'),
         el('li', {}, 'Filters: Peer, Port, Proto, Direction (in/out), Scope (internal/external).')),
       el('h4', {}, 'Bidirectional mode'),
@@ -7526,17 +7526,40 @@ views.flows = async () => {
   let activePreset = '1h';
   const fromI = el('input', { type: 'datetime-local', title: 'From (overrides preset)' });
   const toI = el('input', { type: 'datetime-local', title: 'To (overrides preset)' });
+  // Drag-to-zoom window (ms). When set it overrides the preset/custom inputs so a
+  // brushed selection on the chart narrows the view; cleared by "Reset zoom" or by
+  // picking a preset / typing a custom range. See applyZoom() / windowMs().
+  let zoom = null;
   const presetBtns = presets.map(([val, label]) => {
     const b = el('button', { class: `small ghost${val === activePreset ? ' active' : ''}`, onclick: () => {
       activePreset = val;
       presetBtns.forEach((pb) => pb.classList.toggle('active', pb === b));
-      fromI.value = ''; toI.value = '';
+      fromI.value = ''; toI.value = ''; clearZoom();
       refresh();
     } }, label);
     return b;
   });
+  // Typing a custom range is an explicit intent — drop any active zoom.
+  fromI.addEventListener('change', clearZoom);
+  toI.addEventListener('change', clearZoom);
   const runBtn = el('button', { class: 'flows-inspect' }, 'Inspect');
+  const resetZoomBtn = el('button', { class: 'small ghost flows-reset-zoom', style: 'display:none', title: 'Restore the full time range', onclick: () => { clearZoom(); refresh(); } }, 'Reset zoom');
   const status = el('span', { class: 'muted flows-status' });
+
+  function clearZoom() { zoom = null; resetZoomBtn.style.display = 'none'; }
+
+  // Drag-selected a region on a chart: narrow the window to it and reload. Agents
+  // report at a coarse cadence, so pad very thin selections to a usable minimum.
+  function applyZoom(fromMs, toMs) {
+    if (!Number.isFinite(fromMs) || !Number.isFinite(toMs)) return;
+    let a = Math.min(fromMs, toMs);
+    let b = Math.max(fromMs, toMs);
+    const MIN_MS = 60 * 1000;
+    if (b - a < MIN_MS) { const mid = (a + b) / 2; a = Math.round(mid - MIN_MS / 2); b = Math.round(mid + MIN_MS / 2); }
+    zoom = { fromMs: a, toMs: b };
+    resetZoomBtn.style.display = '';
+    refresh();
+  }
 
   // A labelled control group: a small uppercase caption stacked above its
   // input/select/button-group, so the filter bar reads as discrete fields
@@ -7586,12 +7609,13 @@ views.flows = async () => {
       flowField('Range', '', rangeSeg),
       flowField('From', '', fromI),
       flowField('To', '', toI),
-      el('div', { class: 'flows-field flows-field-action' }, runBtn, status))));
+      el('div', { class: 'flows-field flows-field-action' }, runBtn, resetZoomBtn, status))));
 
   const host = el('div', {});
   root.append(host);
 
   function windowMs() {
+    if (zoom) return { fromMs: zoom.fromMs, toMs: zoom.toMs };
     if (fromI.value && toI.value) return { fromMs: new Date(fromI.value).getTime(), toMs: new Date(toI.value).getTime() };
     const now = Date.now();
     if (activePreset === '15m') return { fromMs: now - 15 * 60000, toMs: now };
@@ -7606,7 +7630,7 @@ views.flows = async () => {
       const pts = data.series.map((s) => ({ t: new Date(s.at).getTime(), y: s.bytes }));
       kids.push(el('div', { class: 'overview-chart' },
         historyChart([{ id: 'b', label: 'Bytes', color, points: pts }],
-          { fromMs: pts[0].t, toMs: pts[pts.length - 1].t, band: robustBand(pts), markers })));
+          { fromMs: pts[0].t, toMs: pts[pts.length - 1].t, band: robustBand(pts), markers, onBrush: applyZoom })));
     } else {
       kids.push(el('div', { class: 'empty' }, 'No flows in window.'));
     }
@@ -7729,7 +7753,8 @@ views.flows = async () => {
       const pts = data.series.map((s) => ({ t: new Date(s.at).getTime(), y: s.bytes }));
       kids.push(el('div', { class: 'overview-chart' },
         historyChart([{ id: 'b', label: 'Bytes', color: '#06b6d4', points: pts }],
-          { fromMs: pts[0].t, toMs: pts[pts.length - 1].t, band: robustBand(pts), markers })));
+          { fromMs: pts[0].t, toMs: pts[pts.length - 1].t, band: robustBand(pts), markers, onBrush: applyZoom })));
+      kids.push(el('p', { class: 'muted flows-chart-hint' }, 'Tip: drag across the chart to zoom into a time range.'));
     }
     kids.push(el('h4', {}, 'Top talkers'));
     if (!data.topTalkers.length) kids.push(el('div', { class: 'empty' }, 'No flows in the window — requires NetFlow/sFlow + geo-pipeline.'));

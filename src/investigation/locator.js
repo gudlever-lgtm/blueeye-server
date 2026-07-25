@@ -129,6 +129,24 @@ function agentLabel(a) {
   return a.display_name || a.hostname || `agent-${a.id}`;
 }
 
+// Human-readable label for the investigated location. The UI submits an id as
+// locationRef.value for agent/site refs (e.g. the agent id "4"), so resolve it
+// to the agent's display name or the site's name for the explanation text.
+// Subnet/interface refs already carry a human-readable identifier (CIDR / iface
+// name), and when nothing resolves we fall back to the raw value.
+function locationLabel(locationRef, localAgents) {
+  const agents = Array.isArray(localAgents) ? localAgents : [];
+  if (locationRef.type === 'agent' && agents.length > 0) {
+    return agentLabel(agents[0]);
+  }
+  if (locationRef.type === 'site') {
+    const named = agents.find((a) => a && a.location_name);
+    if (named) return named.location_name;
+    if (agents.length > 0) return agents.map(agentLabel).join(', ');
+  }
+  return locationRef.value;
+}
+
 /**
  * Creates the investigation engine.
  *
@@ -216,6 +234,8 @@ function createLocator({ agentsRepo, findingStore, locationsRepo = null, flowsRe
 
     const relatedFindingIds = localFindings.map((f) => f.id).filter(Boolean);
     const localEvidence = localFindings.slice(0, 15).map((f) => findingToEvidence(f, 'local'));
+    // Friendly name for the investigated location (resolves ids → agent/site name).
+    const locLabel = locationLabel(locationRef, localAgents);
 
     // --- INSUFFICIENT_DATA: ingen agenter fundet ---
     if (localAgents.length === 0) {
@@ -271,7 +291,7 @@ function createLocator({ agentsRepo, findingStore, locationsRepo = null, flowsRe
           confidence: 0.3,
           explanation:
             `No anomalies found in the time window (${windowMinutes} min) for ` +
-            `${locationRef.type}="${locationRef.value}" or neighbors. ` +
+            `the location "${locLabel}" or its neighbors. ` +
             'The fault is either not measurable yet, is resolved, or falls outside the selected window.',
           evidence: [metaEvidence(toISO)],
           suspectedSegment: null,
@@ -284,14 +304,17 @@ function createLocator({ agentsRepo, findingStore, locationsRepo = null, flowsRe
       }
 
       // Naboer har anomalier men stedet selv er sundt → downstream
-      const neighborNames = [...new Set(neighborFindings.map((f) => f.hostId))].slice(0, 3).join(', ');
+      const neighborNames = [...new Set(neighborFindings.map((f) => f.hostId))]
+        .slice(0, 3)
+        .map((hostId) => agentLabel(neighborAgents.find((a) => String(a.id) === String(hostId)) || { id: hostId }))
+        .join(', ');
       const neighborEvidence = neighborFindings.slice(0, 10).map((f) => findingToEvidence(f, 'downstream-neighbor'));
       return {
         id, locationRef, window,
         classification: 'DOWNSTREAM',
         confidence: 0.6,
         explanation:
-          `The location "${locationRef.value}" is itself healthy, but neighbors (${neighborNames}) show ` +
+          `The location "${locLabel}" is itself healthy, but neighbors (${neighborNames}) show ` +
           `anomalies. The fault appears to lie downstream (after this point).`,
         evidence: neighborEvidence.length > 0 ? neighborEvidence : [metaEvidence(toISO)],
         suspectedSegment: null,

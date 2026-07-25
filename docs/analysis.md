@@ -146,7 +146,8 @@ and re-encrypted on the next save.
 
 | Method | Path | Role | Description |
 | --- | --- | --- | --- |
-| `GET` | `/api/findings?hostId=&since=` | viewer+ | List findings (newest first). `400` on invalid `since`. |
+| `GET` | `/api/findings?hostId=&severity=&metric=&since=` | viewer+ | List findings (newest first). Filters by host, `severity` (INFO/WARN/CRIT) and `metric`. `400` on invalid `since` or `severity`. |
+| `GET` | `/api/findings/summary?hostId=&severity=&metric=&since=` | viewer+ | Aggregate overview over the same filter set: `total`/`acked`/`unacked`, `bySeverity`, and `byMetric` / `byHost` (count + avg/max deviation). Backs the Analysis Overview panel. |
 | `POST` | `/api/findings/:id/ack` | operator+ | Acknowledge a finding. `404` if the ID is unknown. |
 | `POST` | `/api/assistant/explain` | viewer+ | Ask the assistant. `400` empty question, `403` disabled, `500` provider error. |
 | `POST` | `/api/assistant/diagnose-explain` | viewer+ | Explain a flow-pipeline diagnostic snapshot. `400` missing diagnostic, `403` disabled, `500` provider error. |
@@ -160,9 +161,14 @@ separate and token-gated for agents.
 
 ## Dashboard
 
-The **Analysis** tab shows findings (severity, deviation, explanation,
-correlation), lets operators acknowledge them, and contains the AI assistant
-panel. New findings appear live via WebSocket and can also be retrieved via REST.
+The **Analysis** tab opens with an **Overview** panel (`GET /api/findings/summary`)
+— total + unacknowledged counts, a severity breakdown, and per-metric / per-host
+tables (count, avg σ, max σ) aggregated over the current host/severity filter.
+Below it, the findings list (severity, deviation, explanation, correlation) can
+be filtered by host, severity and metric from the header and sorted by clicking
+any column; operators can acknowledge findings. Severity chips and metric rows in
+the overview are clickable filter shortcuts. New findings appear live via
+WebSocket and can also be retrieved via REST.
 
 ## Configuration
 

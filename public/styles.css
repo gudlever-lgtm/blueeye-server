@@ -1006,6 +1006,11 @@ th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
 th.sortable:hover { color: var(--text); }
 th.sortable.sorted { color: var(--accent); }
 
+/* Per-column filter row: a second header row of filter controls under the
+   sortable labels, so the header both sorts (click label) and filters. */
+thead tr.filter-row th { padding: 4px 8px 8px; font-weight: 400; vertical-align: top; }
+.col-filter { width: 100%; max-width: 240px; box-sizing: border-box; font: inherit; padding: 3px 6px; }
+
 /* One consistent status palette used everywhere:
    green = ok/healthy, amber = warning/lapsed, red = critical/error, grey = neutral. */
 .badge { padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; }
@@ -1556,6 +1561,32 @@ button.active-btn { outline: 2px solid var(--accent); }
 .tx-secrets { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0; }
 .tx-legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; margin-top: 6px; }
 .tx-heat text { user-select: none; }
+
+/* ---- Analysis overview panel (findings summary) ---- */
+.findings-summary { margin: 10px 0 4px; }
+.findings-summary-card { width: auto; margin: 0; padding: 14px 18px; }
+.findings-summary-card .fs-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; }
+.findings-summary-card .fs-head h3 { margin: 0; font-size: 15px; }
+.fs-totals { display: flex; gap: 22px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+.fs-total { display: flex; flex-direction: column; line-height: 1.1; }
+.fs-total .fs-n { font-size: 22px; font-weight: 700; }
+.fs-total .fs-l { font-size: 12px; }
+.fs-chips { display: flex; gap: 8px; flex-wrap: wrap; margin-left: auto; }
+.fs-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px; border: 1px solid var(--border, #ddd);
+  border-radius: 999px; background: transparent; cursor: pointer; font: inherit; color: inherit; }
+.fs-chip:hover { border-color: var(--accent, #1565c0); }
+.fs-chip.active { border-color: var(--accent, #1565c0); background: var(--accent-weak, rgba(56,189,248,.12)); }
+.fs-chip .fs-chip-n { font-weight: 700; font-variant-numeric: tabular-nums; }
+.fs-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+.fs-col h4 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+.fs-mini { width: 100%; border-collapse: collapse; font-size: 13px; }
+.fs-mini th, .fs-mini td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--border, #eee); }
+.fs-mini th.num, .fs-mini td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.fs-mini td.num.crit { color: var(--bad, #e5484d); }
+.fs-mini td.num.warn { color: var(--warn, #e67e22); }
+.fs-mini tbody tr.clickable { cursor: pointer; }
+.fs-mini tbody tr.clickable:hover { background: var(--panel-2, #f5f5f5); }
+.fs-mini tbody tr.active { background: var(--accent-weak, rgba(56,189,248,.12)); }
 
 /* ---- Incidents (incident_cases) ---- */
 .incidents-view .toolbar { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }

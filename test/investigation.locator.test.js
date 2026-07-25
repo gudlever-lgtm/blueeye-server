@@ -227,6 +227,51 @@ test('resolves agents by site (location_name match)', async () => {
   assert.ok(result.evidence.length > 0);
 });
 
+// ---- location naming in explanations ---------------------------------------
+
+test('DOWNSTREAM explanation names the agent, not the raw id', async () => {
+  const AGENT_ID = '4';
+  const NEIGHBOR_ID = '1';
+  // Build the finding a few seconds in the past so it lands inside the window.
+  const neighborFinding = fakeFinding(NEIGHBOR_ID, 'probe.latency', 'CRIT', 8, -5000);
+  const locator = createLocator({
+    agentsRepo: makeAgentsRepo({
+      findAll: async () => [
+        { id: AGENT_ID, hostname: 'edge-4', display_name: 'Copenhagen Edge', location_id: 1, status: 'online' },
+        { id: NEIGHBOR_ID, hostname: 'core-1', display_name: 'Core Router', location_id: 2, status: 'online' },
+      ],
+    }),
+    // Local agent (4) is healthy; the neighbor (1) has the anomaly → DOWNSTREAM.
+    findingStore: makeFindingStore({
+      list: async (hostId) => (hostId === NEIGHBOR_ID ? [neighborFinding] : []),
+    }),
+  });
+
+  const result = await locator.runInvestigation({ locationRef: { type: 'agent', value: AGENT_ID } });
+  assert.equal(result.classification, 'DOWNSTREAM');
+  // The friendly name is used, and the bare id is not what labels the location.
+  assert.ok(result.explanation.includes('Copenhagen Edge'), 'uses the agent display name');
+  assert.ok(!result.explanation.includes('location "4"'), 'does not print the raw agent id as the location');
+  // Neighbours are named too, not shown as bare ids.
+  assert.ok(result.explanation.includes('Core Router'), 'names the neighbour');
+});
+
+test('site explanation names the site, not the location id', async () => {
+  const locator = createLocator({
+    agentsRepo: makeAgentsRepo({
+      findAll: async () => [
+        { id: '10', hostname: 'oslo-1', location_id: 7, location_name: 'Oslo DC', status: 'online' },
+      ],
+    }),
+    findingStore: makeFindingStore({ list: async () => [] }),
+  });
+
+  const result = await locator.runInvestigation({ locationRef: { type: 'site', value: '7' } });
+  assert.equal(result.classification, 'INSUFFICIENT_DATA');
+  assert.ok(result.explanation.includes('Oslo DC'), 'resolves the site id to its name');
+  assert.ok(!result.explanation.includes('"7"'), 'does not print the raw site id');
+});
+
 // ---- validation errors -----------------------------------------------------
 
 test('throws on missing locationRef', async () => {

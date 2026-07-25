@@ -37,9 +37,82 @@ test('GET /api/findings filters by hostId', async () => {
   assert.equal(res.body[0].hostId, '9');
 });
 
+test('GET /api/findings filters by severity', async () => {
+  const findingStore = makeFindingStore();
+  findingStore.rows.push(
+    { id: 'a', hostId: '9', severity: 'CRIT', metric: 'cpu', createdAt: new Date() },
+    { id: 'b', hostId: '9', severity: 'WARN', metric: 'cpu', createdAt: new Date() });
+  const res = await request(makeApp({ findingStore })).get('/api/findings?severity=CRIT').set('Authorization', viewer());
+  assert.equal(res.status, 200);
+  assert.equal(res.body.length, 1);
+  assert.equal(res.body[0].severity, 'CRIT');
+});
+
+test('GET /api/findings filters by metric', async () => {
+  const findingStore = makeFindingStore();
+  findingStore.rows.push(
+    { id: 'a', hostId: '9', severity: 'WARN', metric: 'cpu', createdAt: new Date() },
+    { id: 'b', hostId: '9', severity: 'WARN', metric: 'probe.latency', createdAt: new Date() });
+  const res = await request(makeApp({ findingStore })).get('/api/findings?metric=probe.latency').set('Authorization', viewer());
+  assert.equal(res.status, 200);
+  assert.equal(res.body.length, 1);
+  assert.equal(res.body[0].metric, 'probe.latency');
+});
+
+test('GET /api/findings returns 400 for an invalid severity', async () => {
+  const res = await request(makeApp()).get('/api/findings?severity=NOPE').set('Authorization', viewer());
+  assert.equal(res.status, 400);
+});
+
 test('GET /api/findings returns 400 for an invalid since', async () => {
   const res = await request(makeApp()).get('/api/findings?since=not-a-date').set('Authorization', viewer());
   assert.equal(res.status, 400);
+});
+
+// ---- GET /api/findings/summary ---------------------------------------------
+test('GET /api/findings/summary returns an aggregate overview', async () => {
+  const findingStore = makeFindingStore();
+  const now = new Date();
+  findingStore.rows.push(
+    { id: 'a', hostId: '9', severity: 'CRIT', metric: 'cpu', deviation: 6, acked: false, createdAt: now },
+    { id: 'b', hostId: '9', severity: 'WARN', metric: 'cpu', deviation: 4, acked: true, createdAt: now },
+    { id: 'c', hostId: '7', severity: 'WARN', metric: 'probe.latency', deviation: 3, acked: false, createdAt: now });
+  const res = await request(makeApp({ findingStore })).get('/api/findings/summary').set('Authorization', viewer());
+  assert.equal(res.status, 200);
+  assert.equal(res.body.total, 3);
+  assert.equal(res.body.acked, 1);
+  assert.equal(res.body.unacked, 2);
+  assert.deepEqual(res.body.bySeverity, { CRIT: 1, WARN: 2, INFO: 0 });
+  const cpu = res.body.byMetric.find((m) => m.metric === 'cpu');
+  assert.equal(cpu.count, 2);
+  assert.equal(cpu.avgDeviation, 5); // (6 + 4) / 2
+  assert.equal(cpu.maxDeviation, 6);
+  const h9 = res.body.byHost.find((h) => h.hostId === '9');
+  assert.equal(h9.count, 2);
+  assert.equal(h9.crit, 1);
+  assert.equal(h9.warn, 1);
+});
+
+test('GET /api/findings/summary respects the severity filter', async () => {
+  const findingStore = makeFindingStore();
+  const now = new Date();
+  findingStore.rows.push(
+    { id: 'a', hostId: '9', severity: 'CRIT', metric: 'cpu', deviation: 6, createdAt: now },
+    { id: 'b', hostId: '9', severity: 'WARN', metric: 'cpu', deviation: 4, createdAt: now });
+  const res = await request(makeApp({ findingStore })).get('/api/findings/summary?severity=CRIT').set('Authorization', viewer());
+  assert.equal(res.status, 200);
+  assert.equal(res.body.total, 1);
+  assert.deepEqual(res.body.bySeverity, { CRIT: 1, WARN: 0, INFO: 0 });
+});
+
+test('GET /api/findings/summary returns 400 for an invalid severity', async () => {
+  const res = await request(makeApp()).get('/api/findings/summary?severity=NOPE').set('Authorization', viewer());
+  assert.equal(res.status, 400);
+});
+
+test('GET /api/findings/summary without a token returns 401', async () => {
+  const res = await request(makeApp()).get('/api/findings/summary');
+  assert.equal(res.status, 401);
 });
 
 test('GET /api/findings returns 400 for an invalid limit', async () => {

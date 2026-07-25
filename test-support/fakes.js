@@ -1252,13 +1252,62 @@ function makeFindingStore(overrides = {}) {
   return {
     rows,
     save: overrides.save || (async (f) => { const saved = { ...f, id: f.id || `f${rows.length + 1}`, acked: false }; rows.push(saved); return saved; }),
-    list: overrides.list || (async (hostId, since, limit, until) => {
+    list: overrides.list || (async (hostId, since, limit, until, filters = {}) => {
+      const { severity, metric } = filters || {};
       let out = rows.filter((f) => (!hostId || f.hostId === hostId)
+        && (!severity || f.severity === severity)
+        && (!metric || f.metric === metric)
         && (!since || new Date(f.createdAt || 0) >= new Date(since))
         && (!until || new Date(f.createdAt || 0) <= new Date(until)));
       out = out.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0)); // newest-first, like the real store
       if (Number.isInteger(limit) && limit > 0) out = out.slice(0, limit);
       return out;
+    }),
+    summary: overrides.summary || (async ({ hostId, severity, metric, since, until } = {}) => {
+      const match = rows.filter((f) => (!hostId || f.hostId === hostId)
+        && (!severity || f.severity === severity)
+        && (!metric || f.metric === metric)
+        && (!since || new Date(f.createdAt || 0) >= new Date(since))
+        && (!until || new Date(f.createdAt || 0) <= new Date(until)));
+      const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+      const agg = (list) => {
+        const devs = list.map((f) => num(f.deviation)).filter((v) => v != null);
+        return {
+          avgDeviation: devs.length ? devs.reduce((a, b) => a + b, 0) / devs.length : null,
+          maxDeviation: devs.length ? Math.max(...devs) : null,
+        };
+      };
+      const bySeverity = { CRIT: 0, WARN: 0, INFO: 0 };
+      let acked = 0;
+      for (const f of match) {
+        if (f.severity in bySeverity) bySeverity[f.severity] += 1;
+        if (f.acked) acked += 1;
+      }
+      const group = (key) => {
+        const map = new Map();
+        for (const f of match) {
+          const k = f[key];
+          if (!map.has(k)) map.set(k, []);
+          map.get(k).push(f);
+        }
+        return map;
+      };
+      const byMetric = [...group('metric').entries()]
+        .map(([m, list]) => ({ metric: m, count: list.length, ...agg(list) }))
+        .sort((a, b) => b.count - a.count || String(a.metric).localeCompare(String(b.metric)));
+      const byHost = [...group('hostId').entries()]
+        .map(([h, list]) => ({
+          hostId: h,
+          count: list.length,
+          crit: list.filter((f) => f.severity === 'CRIT').length,
+          warn: list.filter((f) => f.severity === 'WARN').length,
+          info: list.filter((f) => f.severity === 'INFO').length,
+          acked: list.filter((f) => f.acked).length,
+          ...agg(list),
+          lastAt: list.reduce((mx, f) => (new Date(f.createdAt || 0) > new Date(mx || 0) ? f.createdAt : mx), null),
+        }))
+        .sort((a, b) => b.count - a.count || String(a.hostId).localeCompare(String(b.hostId)));
+      return { total: match.length, acked, unacked: match.length - acked, bySeverity, byMetric, byHost };
     }),
     listByIncidentCase: overrides.listByIncidentCase || (async (incidentCaseId) => rows
       .filter((f) => f.incidentCaseId === incidentCaseId)

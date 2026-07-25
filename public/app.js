@@ -938,6 +938,8 @@ const PAGE_INFO = {
     title: 'Analysis — errors & anomalies',
     body: () => [
       el('p', {}, 'The server analyses agent measurements locally (no cloud, no ML library) and raises a finding when a metric deviates significantly from its own baseline, flatlines (sensor/agent stop) or correlates with other errors.'),
+      el('h4', {}, 'Overview & filtering'),
+      el('p', {}, 'The page opens with an ', el('strong', {}, 'Overview'), ' — total and unacknowledged counts, a severity breakdown, and per-metric / per-host tables with average and peak deviation (σ). Filter by host, severity or metric from the header (or by clicking a severity chip / metric row in the overview), and click any column header to sort the list.'),
       el('h4', {}, 'Severity'),
       el('ul', {},
         el('li', {}, 'CRIT: large deviation (default ≥ 4σ — adjustable in ', settingsLink('analyse', 'Settings → Analysis'), ').'),
@@ -2930,9 +2932,82 @@ function usageBar(percent) {
   return el('div', { class: 'usagebar' }, el('div', { class: `fill ${cls}`, style: `width:${p}%` }));
 }
 
+// ---- Sortable / filterable tables (shared: Analysis + Incidents) ----------
+// Severity ordering so a "Severity" column sorts by urgency, not alphabetically.
+const SEVERITY_RANK = { CRIT: 3, WARN: 2, INFO: 1 };
+// Format a robust z-score (median/MAD σ) for the overview tables; null → dash.
+const fmtSigma = (v) => (typeof v === 'number' && Number.isFinite(v) ? `${v.toFixed(1)}σ` : '–');
+
+// A reusable client-side sortable table, styled like the Agents table:
+// clickable headers toggle asc/desc with an arrow indicator + aria-sort.
+//   columns: [{ label, key, get(row), class, sortable, } ]
+//     key null / sortable:false → a plain (non-sortable) header (actions etc.).
+//   opts: { className, sortKey, sortDir, emptyText, renderRow(row) }
+// Returns { table, setRows(rows), setLoading(msg), setError(msg), sortKey }.
+// Sorting is stable-ish, numeric-aware, and always sinks null/empty values last.
+function sortableTable(columns, opts = {}) {
+  const isSortable = (c) => c.key && c.sortable !== false;
+  let sortKey = opts.sortKey || (columns.find(isSortable) || {}).key || null;
+  let sortDir = opts.sortDir || 'desc';
+  let rows = [];
+
+  const headerEls = columns.map((c) => (isSortable(c)
+    ? el('th', {
+      class: `sortable${c.class ? ` ${c.class}` : ''}`, scope: 'col', tabindex: '0', 'aria-sort': 'none',
+      title: `Sort by ${c.label}`,
+      onclick: () => sortBy(c.key),
+      onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); sortBy(c.key); } },
+    }, c.label)
+    : el('th', { class: c.class || '', scope: 'col' }, c.label)));
+  const tbody = el('tbody');
+  const table = el('table', { class: opts.className || 'data' },
+    el('thead', {}, el('tr', {}, ...headerEls)), tbody);
+
+  function sortBy(key) {
+    if (sortKey === key) sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+    else { sortKey = key; sortDir = 'desc'; }
+    draw();
+  }
+  function draw() {
+    const col = columns.find((c) => c.key === sortKey);
+    const list = rows.slice();
+    if (col && col.get) {
+      list.sort((x, y) => {
+        const vx = col.get(x); const vy = col.get(y);
+        const nx = vx == null || vx === ''; const ny = vy == null || vy === '';
+        if (nx && ny) return 0;
+        if (nx) return 1; // nulls last, regardless of direction
+        if (ny) return -1;
+        const r = (typeof vx === 'number' && typeof vy === 'number')
+          ? vx - vy : String(vx).localeCompare(String(vy), undefined, { numeric: true });
+        return sortDir === 'asc' ? r : -r;
+      });
+    }
+    tbody.replaceChildren(...(list.length
+      ? list.map((row) => opts.renderRow(row))
+      : [el('tr', {}, el('td', { colspan: String(columns.length), class: 'muted' }, opts.emptyText || 'Nothing to show.'))]));
+    columns.forEach((c, i) => {
+      if (!isSortable(c)) return;
+      const on = sortKey === c.key;
+      headerEls[i].textContent = c.label + (on ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '');
+      headerEls[i].classList.toggle('sorted', on);
+      headerEls[i].setAttribute('aria-sort', on ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none');
+    });
+  }
+  draw();
+  return {
+    table,
+    setRows(next) { rows = Array.isArray(next) ? next : []; draw(); },
+    setLoading(msg) { tbody.replaceChildren(el('tr', {}, el('td', { colspan: String(columns.length), class: 'muted' }, msg || 'Loading…'))); },
+    setError(msg) { tbody.replaceChildren(el('tr', {}, el('td', { colspan: String(columns.length), class: 'error' }, msg))); },
+    get tbody() { return tbody; },
+    get sortKey() { return sortKey; },
+  };
+}
+
 // ---- Analysis (findings + AI assistant) ----------------------------------
 // hostId of a finding is the agent id (the analysis pipeline keys on it).
-const findingsState = { hostId: '', tbody: null, agentName: null };
+const findingsState = { hostId: '', severity: '', metric: '', tbody: null, agentName: null, reloadSummary: null };
 
 // Authenticated download of a server export (CSV/JSON) → triggers a file save.
 async function downloadExport(resource, format, params = {}) {
@@ -2966,51 +3041,176 @@ views.findings = async () => {
   };
   findingsState.agentName = agentName;
 
+  // Build the querystring for the active filters. `omit` lets the summary drop
+  // the metric filter so its per-metric breakdown (and the metric dropdown it
+  // populates) always shows every metric under the host/severity scope.
+  const filterQs = (omit = []) => {
+    const qs = new URLSearchParams();
+    if (findingsState.hostId && !omit.includes('hostId')) qs.set('hostId', findingsState.hostId);
+    if (findingsState.severity && !omit.includes('severity')) qs.set('severity', findingsState.severity);
+    if (findingsState.metric && !omit.includes('metric')) qs.set('metric', findingsState.metric);
+    const s = qs.toString();
+    return s ? `?${s}` : '';
+  };
+
   const hostSelect = el('select', {},
     el('option', { value: '' }, 'All hosts'),
     ...agents.map((a) => el('option',
       { value: String(a.id), ...(String(a.id) === findingsState.hostId ? { selected: 'selected' } : {}) },
       a.display_name || a.hostname)));
-  hostSelect.addEventListener('change', () => { findingsState.hostId = hostSelect.value; loadList(); });
+  hostSelect.addEventListener('change', () => { findingsState.hostId = hostSelect.value; reload(); });
+
+  const sevSelect = el('select', {},
+    el('option', { value: '' }, 'All severities'),
+    ...['CRIT', 'WARN', 'INFO'].map((s) => el('option',
+      { value: s, ...(s === findingsState.severity ? { selected: 'selected' } : {}) }, s)));
+  sevSelect.addEventListener('change', () => { findingsState.severity = sevSelect.value; reload(); });
+
+  // Metric options are filled in from the overview (byMetric) once it loads, so
+  // the dropdown reflects the metrics that actually have findings.
+  const metricSelect = el('select', {}, el('option', { value: '' }, 'All metrics'));
+  metricSelect.addEventListener('change', () => { findingsState.metric = metricSelect.value; loadList(); });
 
   root.append(el('div', { class: 'section-head' },
     el('h2', {}, 'Analysis — errors & anomalies'),
     el('span', { class: 'muted' }, 'computed locally'),
     el('span', { class: 'spacer' }),
-    exportButtons('findings', () => (findingsState.hostId ? { hostId: findingsState.hostId } : {})),
-    el('label', { class: 'muted inline' }, 'Host ', hostSelect)));
+    exportButtons('findings', () => {
+      const p = {};
+      if (findingsState.hostId) p.hostId = findingsState.hostId;
+      return p;
+    }),
+    el('label', { class: 'muted inline' }, 'Host ', hostSelect),
+    el('label', { class: 'muted inline' }, 'Severity ', sevSelect),
+    el('label', { class: 'muted inline' }, 'Metric ', metricSelect)));
 
   if (featureEnabled('assistant')) root.append(assistantBox(() => findingsState.hostId));
 
+  const summaryHost = el('div', { class: 'findings-summary' });
   const listHost = el('div', {});
-  root.append(listHost);
+  root.append(summaryHost, listHost);
+
+  // Sortable detail table. Row rendering stays in findingRow (also reused by the
+  // live-WebSocket prepend); the table shell handles header sort + empty states.
+  const columns = [
+    { label: 'Time', key: 'time', get: (f) => new Date(f.createdAt || 0).getTime() },
+    { label: 'Host', key: 'host', get: (f) => String(agentName(f.hostId) || '').toLowerCase() },
+    { label: 'Metric', key: 'metric', get: (f) => f.metric || '' },
+    { label: 'Severity', key: 'severity', get: (f) => SEVERITY_RANK[f.severity] || 0 },
+    { label: 'Deviation', key: 'deviation', get: (f) => (typeof f.deviation === 'number' ? f.deviation : null) },
+    { label: 'Explanation', key: null },
+    { label: '', key: null },
+  ];
+  const grid = sortableTable(columns, {
+    className: 'findings',
+    sortKey: 'time',
+    sortDir: 'desc',
+    emptyText: 'No findings match the current filter.',
+    renderRow: (f) => findingRow(agentName, f),
+  });
+  findingsState.tbody = grid.tbody;
 
   async function loadList() {
-    listHost.replaceChildren(el('div', { class: 'empty' }, 'Loading…'));
-    let findings;
+    grid.setLoading('Loading…');
+    listHost.replaceChildren(grid.table);
     try {
-      const qs = findingsState.hostId ? `?hostId=${encodeURIComponent(findingsState.hostId)}` : '';
-      findings = await api(`/api/findings${qs}`);
+      const findings = await api(`/api/findings${filterQs()}`);
+      grid.setRows(findings);
     } catch (err) {
-      findingsState.tbody = null;
-      listHost.replaceChildren(el('div', { class: 'empty error' }, err.message));
-      return;
+      grid.setError(err.message);
     }
-    if (!findings.length) {
-      findingsState.tbody = null;
-      listHost.replaceChildren(el('div', { class: 'empty' }, 'No findings yet. When an agent reports abnormal measurements they will appear here.'));
-      return;
-    }
-    const tbody = el('tbody', {}, ...findings.map((f) => findingRow(agentName, f)));
-    findingsState.tbody = tbody;
-    listHost.replaceChildren(el('table', { class: 'findings' },
-      el('thead', {}, el('tr', {}, ...['Time', 'Host', 'Metric', 'Severity', 'Deviation', 'Explanation', ''].map((h) => el('th', {}, h)))),
-      tbody));
   }
 
-  loadList();
+  async function loadSummary() {
+    try {
+      // Overview reflects host + severity (not the metric filter) so it stays a
+      // full breakdown across metrics, and doubles as the metric-dropdown source.
+      const s = await api(`/api/findings/summary${filterQs(['metric'])}`);
+      renderFindingsSummary(summaryHost, s, agentName);
+      syncMetricOptions(metricSelect, s.byMetric);
+    } catch {
+      summaryHost.replaceChildren();
+    }
+  }
+
+  // Called by the summary chips/rows + the filter controls to re-scope both the
+  // overview and the detail list; exposed so a live finding can refresh totals.
+  function reload() { loadSummary(); loadList(); }
+  findingsState.reloadSummary = loadSummary;
+
+  reload();
   return root;
 };
+
+// Keeps the metric dropdown in sync with the metrics that currently have
+// findings, preserving the active selection (even if it briefly has no rows).
+function syncMetricOptions(select, byMetric) {
+  const metrics = (byMetric || []).map((m) => m.metric).filter(Boolean);
+  if (findingsState.metric && !metrics.includes(findingsState.metric)) metrics.push(findingsState.metric);
+  const want = ['', ...metrics.sort((a, b) => String(a).localeCompare(String(b)))];
+  const have = Array.from(select.options).map((o) => o.value);
+  if (want.length === have.length && want.every((v, i) => v === have[i])) return; // unchanged
+  select.replaceChildren(
+    el('option', { value: '' }, 'All metrics'),
+    ...metrics.sort((a, b) => String(a).localeCompare(String(b))).map((m) => el('option', { value: m }, m)));
+  select.value = findingsState.metric || '';
+}
+
+// The overview panel: totals + severity chips + per-metric and per-host
+// breakdowns (count / avg σ / max σ). Chips and metric rows are clickable and
+// drive the same filters as the header controls, so the panel is a fast pivot.
+function renderFindingsSummary(host, s, agentName) {
+  if (!s || !s.total) { host.replaceChildren(); return; }
+
+  const setSeverity = (sev) => {
+    findingsState.severity = findingsState.severity === sev ? '' : sev;
+    if (currentView === 'findings') render();
+  };
+  const setMetric = (m) => {
+    findingsState.metric = findingsState.metric === m ? '' : m;
+    // Re-render to reflect the metric selection in the dropdown + rows + overview.
+    if (currentView === 'findings') render();
+  };
+
+  const sevChip = (sev) => el('button', {
+    class: `fs-chip${findingsState.severity === sev ? ' active' : ''}`,
+    title: `Filter to ${sev}`, onclick: () => setSeverity(sev),
+  }, el('span', { class: `badge ${sev}` }, sev), el('span', { class: 'fs-chip-n' }, String(s.bySeverity[sev] || 0)));
+
+  const totals = el('div', { class: 'fs-totals' },
+    el('div', { class: 'fs-total' }, el('span', { class: 'fs-n' }, String(s.total)), el('span', { class: 'fs-l muted' }, 'findings')),
+    el('div', { class: 'fs-total' }, el('span', { class: 'fs-n' }, String(s.unacked)), el('span', { class: 'fs-l muted' }, 'unacknowledged')),
+    el('div', { class: 'fs-chips' }, sevChip('CRIT'), sevChip('WARN'), sevChip('INFO')));
+
+  const metricTable = el('table', { class: 'fs-mini' },
+    el('thead', {}, el('tr', {}, el('th', {}, 'Metric'), el('th', { class: 'num' }, 'Count'), el('th', { class: 'num' }, 'Avg σ'), el('th', { class: 'num' }, 'Max σ'))),
+    el('tbody', {}, ...s.byMetric.slice(0, 8).map((m) => el('tr', {
+      class: `clickable${findingsState.metric === m.metric ? ' active' : ''}`,
+      title: `Filter to ${m.metric}`, onclick: () => setMetric(m.metric),
+    },
+      el('td', {}, m.metric),
+      el('td', { class: 'num' }, String(m.count)),
+      el('td', { class: 'num' }, fmtSigma(m.avgDeviation)),
+      el('td', { class: 'num' }, fmtSigma(m.maxDeviation))))));
+
+  const hostTable = el('table', { class: 'fs-mini' },
+    el('thead', {}, el('tr', {}, el('th', {}, 'Host'), el('th', { class: 'num' }, 'Total'), el('th', { class: 'num' }, 'CRIT'), el('th', { class: 'num' }, 'WARN'), el('th', { class: 'num' }, 'Avg σ'))),
+    el('tbody', {}, ...s.byHost.slice(0, 8).map((h) => el('tr', {},
+      el('td', {}, esc(agentName(h.hostId))),
+      el('td', { class: 'num' }, String(h.count)),
+      el('td', { class: 'num crit' }, String(h.crit)),
+      el('td', { class: 'num warn' }, String(h.warn)),
+      el('td', { class: 'num' }, fmtSigma(h.avgDeviation))))));
+
+  host.replaceChildren(el('div', { class: 'card findings-summary-card' },
+    el('div', { class: 'fs-head' },
+      el('h3', {}, 'Overview'),
+      el('span', { class: 'muted' }, 'aggregated over the current host/severity filter')),
+    totals,
+    el('div', { class: 'fs-grid' },
+      el('div', { class: 'fs-col' }, el('h4', { class: 'muted' }, 'By metric'), metricTable),
+      el('div', { class: 'fs-col' }, el('h4', { class: 'muted' }, 'By host'), hostTable))));
+}
 
 function findingRow(agentName, f) {
   const dev = typeof f.deviation === 'number' ? `${f.deviation.toFixed(1)}σ` : '–';
@@ -3144,35 +3344,48 @@ PAGE_INFO.incidents = {
 views.incidents = async () => {
   const wrap = el('div', { class: 'incidents-view' });
   const filters = { status: '', severity: '', device: '' };
-  const tbody = el('tbody', {});
-  const table = el('table', { class: 'data' },
-    el('thead', {}, el('tr', {},
-      el('th', {}, 'Severity'), el('th', {}, 'Status'), el('th', {}, 'Title'),
-      el('th', {}, 'Device'), el('th', {}, 'First seen'), el('th', {}, 'Last activity'), el('th', {}, ''))),
-    tbody);
+
+  // Sortable columns (client-side, over the fetched page) — mirrors the
+  // Analysis table: click a header to sort, click again to flip direction.
+  const incRow = (i) => el('tr', {
+    class: 'clickable', tabindex: '0',
+    onclick: () => openIncident(i.id), onkeydown: (e) => { if (e.key === 'Enter') openIncident(i.id); },
+  },
+    el('td', {}, incSevBadge(i.severity)),
+    el('td', {}, incStatusBadge(i.status)),
+    el('td', {}, esc(i.title)),
+    el('td', { class: 'muted' }, esc(i.deviceId)),
+    el('td', { class: 'muted' }, fmtDate(i.firstEventAt)),
+    el('td', { class: 'muted' }, fmtDate(i.lastEventAt)),
+    el('td', {}, canWrite() ? el('button', { class: 'pill guide-pill small', title: 'Guided troubleshooting', onclick: (e) => { e.stopPropagation(); guideFromList(i.id); } }, '🧭 Guide') : ''));
+
+  const grid = sortableTable([
+    { label: 'Severity', key: 'severity', get: (i) => SEVERITY_RANK[i.severity] || 0 },
+    { label: 'Status', key: 'status', get: (i) => i.status || '' },
+    { label: 'Title', key: 'title', get: (i) => String(i.title || '').toLowerCase() },
+    { label: 'Device', key: 'device', get: (i) => String(i.deviceId || '').toLowerCase() },
+    { label: 'First seen', key: 'first', get: (i) => new Date(i.firstEventAt || 0).getTime() },
+    { label: 'Last activity', key: 'last', get: (i) => new Date(i.lastEventAt || 0).getTime() },
+    { label: '', key: null },
+  ], {
+    className: 'data',
+    sortKey: 'last',
+    sortDir: 'desc',
+    emptyText: 'No incidents match.',
+    renderRow: incRow,
+  });
 
   async function load() {
-    tbody.replaceChildren(el('tr', {}, el('td', { colspan: '7', class: 'muted' }, 'Loading…')));
+    grid.setLoading('Loading…');
     const qs = new URLSearchParams();
     if (filters.status) qs.set('status', filters.status);
     if (filters.severity) qs.set('severity', filters.severity);
     if (filters.device) qs.set('device', filters.device);
     try {
       const { incidents } = await api(`/api/incidents${qs.toString() ? `?${qs}` : ''}`);
-      if (!incidents.length) { tbody.replaceChildren(el('tr', {}, el('td', { colspan: '7', class: 'muted' }, 'No incidents match.'))); return; }
-      tbody.replaceChildren(...incidents.map((i) => el('tr', {
-        class: 'clickable', tabindex: '0',
-        onclick: () => openIncident(i.id), onkeydown: (e) => { if (e.key === 'Enter') openIncident(i.id); },
-      },
-        el('td', {}, incSevBadge(i.severity)),
-        el('td', {}, incStatusBadge(i.status)),
-        el('td', {}, esc(i.title)),
-        el('td', { class: 'muted' }, esc(i.deviceId)),
-        el('td', { class: 'muted' }, fmtDate(i.firstEventAt)),
-        el('td', { class: 'muted' }, fmtDate(i.lastEventAt)),
-        el('td', {}, canWrite() ? el('button', { class: 'pill guide-pill small', title: 'Guided troubleshooting', onclick: (e) => { e.stopPropagation(); guideFromList(i.id); } }, '🧭 Guide') : ''))));
+      grid.setRows(incidents);
     } catch (err) {
-      tbody.replaceChildren(el('tr', {}, el('td', { colspan: '7', class: 'error' }, err.message)));
+      grid.setError(err.message);
     }
   }
 
@@ -3185,7 +3398,7 @@ views.incidents = async () => {
   const devInput = el('input', { type: 'text', placeholder: 'Device id', oninput: (e) => { filters.device = e.target.value.trim(); } });
   const devBtn = el('button', { class: 'small ghost', onclick: () => load() }, 'Filter');
 
-  wrap.append(el('div', { class: 'toolbar' }, statusSel, sevSel, devInput, devBtn), table);
+  wrap.append(el('div', { class: 'toolbar' }, statusSel, sevSel, devInput, devBtn), grid.table);
   await load();
   return wrap;
 };
@@ -11748,12 +11961,17 @@ function onLiveFinding(f) {
   const sev = f.severity || 'INFO';
   toast(`New finding: ${f.metric} ${sev}`, sev === 'CRIT' || sev === 'WARN');
   // Live-prepend only when the findings table is actually on screen and the
-  // active host filter matches; otherwise the REST list will show it next time.
+  // active filters match; otherwise the REST list will show it next time.
   if (currentView === 'findings' && findingsState.tbody && findingsState.tbody.isConnected) {
-    if (!findingsState.hostId || String(f.hostId) === String(findingsState.hostId)) {
+    const hostOk = !findingsState.hostId || String(f.hostId) === String(findingsState.hostId);
+    const sevOk = !findingsState.severity || f.severity === findingsState.severity;
+    const metricOk = !findingsState.metric || f.metric === findingsState.metric;
+    if (hostOk && sevOk && metricOk) {
       const name = findingsState.agentName || ((id) => `host ${id}`);
       findingsState.tbody.prepend(findingRow(name, f));
     }
+    // Keep the overview totals honest even when the row is filtered out.
+    if (findingsState.reloadSummary) findingsState.reloadSummary();
   }
 }
 

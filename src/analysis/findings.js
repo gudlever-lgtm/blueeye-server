@@ -11,6 +11,35 @@ const COLUMNS =
 // Hard ceiling on how many findings a single list() call can return.
 const MAX_LIST = 5000;
 
+// Builds the shared WHERE fragment (+ ordered params) used by both list() and
+// summary(), so the aggregate overview and the row list always scope to the
+// exact same filter set. Only defined keys contribute a clause.
+function buildFilter({ hostId, severity, metric, since, until } = {}) {
+  const where = [];
+  const params = [];
+  if (hostId) {
+    where.push('host_id = ?');
+    params.push(hostId);
+  }
+  if (severity) {
+    where.push('severity = ?');
+    params.push(severity);
+  }
+  if (metric) {
+    where.push('metric = ?');
+    params.push(metric);
+  }
+  if (since) {
+    where.push('created_at >= ?');
+    params.push(since instanceof Date ? since : new Date(since));
+  }
+  if (until) {
+    where.push('created_at <= ?');
+    params.push(until instanceof Date ? until : new Date(until));
+  }
+  return { where, params };
+}
+
 function parseJson(value, fallback) {
   if (value === null || value === undefined) return fallback;
   if (typeof value === 'string') {
@@ -111,22 +140,11 @@ class FindingStore {
   // upper bound matters for historical windows: without it, `limit` is applied
   // to [since, now] and a later in-window slice can silently drop rows. `limit`
   // is always bounded so an unfiltered call can never return the whole table; it
-  // defaults to (and is capped at) MAX_LIST.
-  async list(hostId, since, limit, until) {
-    const where = [];
-    const params = [];
-    if (hostId) {
-      where.push('host_id = ?');
-      params.push(hostId);
-    }
-    if (since) {
-      where.push('created_at >= ?');
-      params.push(since instanceof Date ? since : new Date(since));
-    }
-    if (until) {
-      where.push('created_at <= ?');
-      params.push(until instanceof Date ? until : new Date(until));
-    }
+  // defaults to (and is capped at) MAX_LIST. The optional trailing `filters`
+  // object narrows by exact `severity` and/or `metric` (used by the Analysis
+  // page's filterable header) — omitting it keeps the historical 4-arg behaviour.
+  async list(hostId, since, limit, until, filters = {}) {
+    const { where, params } = buildFilter({ hostId, since, until, ...filters });
     const clause = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const n = Number.isInteger(limit) && limit > 0 ? Math.min(limit, MAX_LIST) : MAX_LIST;
     params.push(n);
@@ -135,6 +153,74 @@ class FindingStore {
       params
     );
     return rows.map(mapRow);
+  }
+
+  // Aggregated overview for the Analysis page — counts and robust deviation
+  // stats grouped by severity, by metric and by host, over the SAME filter set
+  // as list() (hostId/severity/metric/since/until). One scan per grouping; all
+  // done in SQL so the dashboard never pulls the raw rows just to total them.
+  // deviation can be NULL (threshold/flatline findings) — AVG/MAX skip NULLs.
+  async summary({ hostId, severity, metric, since, until } = {}) {
+    const { where, params } = buildFilter({ hostId, severity, metric, since, until });
+    const clause = where.length ? `WHERE ${where.join(' AND ')}` : '';
+
+    const [sevRows] = await this.pool.query(
+      `SELECT severity, COUNT(*) AS cnt, SUM(acked = 1) AS acked
+         FROM findings ${clause} GROUP BY severity`,
+      params
+    );
+    const [metricRows] = await this.pool.query(
+      `SELECT metric, COUNT(*) AS cnt, AVG(deviation) AS avg_dev, MAX(deviation) AS max_dev
+         FROM findings ${clause} GROUP BY metric ORDER BY cnt DESC, metric ASC`,
+      params
+    );
+    const [hostRows] = await this.pool.query(
+      `SELECT host_id,
+              COUNT(*) AS cnt,
+              SUM(severity = 'CRIT') AS crit,
+              SUM(severity = 'WARN') AS warn,
+              SUM(severity = 'INFO') AS info,
+              SUM(acked = 1) AS acked,
+              AVG(deviation) AS avg_dev,
+              MAX(deviation) AS max_dev,
+              MAX(created_at) AS last_at
+         FROM findings ${clause} GROUP BY host_id ORDER BY cnt DESC, host_id ASC`,
+      params
+    );
+
+    const bySeverity = { CRIT: 0, WARN: 0, INFO: 0 };
+    let total = 0;
+    let acked = 0;
+    for (const r of sevRows) {
+      const c = Number(r.cnt) || 0;
+      total += c;
+      acked += Number(r.acked) || 0;
+      if (r.severity in bySeverity) bySeverity[r.severity] = c;
+    }
+
+    return {
+      total,
+      acked,
+      unacked: total - acked,
+      bySeverity,
+      byMetric: metricRows.map((r) => ({
+        metric: r.metric,
+        count: Number(r.cnt) || 0,
+        avgDeviation: r.avg_dev == null ? null : Number(r.avg_dev),
+        maxDeviation: r.max_dev == null ? null : Number(r.max_dev),
+      })),
+      byHost: hostRows.map((r) => ({
+        hostId: r.host_id,
+        count: Number(r.cnt) || 0,
+        crit: Number(r.crit) || 0,
+        warn: Number(r.warn) || 0,
+        info: Number(r.info) || 0,
+        acked: Number(r.acked) || 0,
+        avgDeviation: r.avg_dev == null ? null : Number(r.avg_dev),
+        maxDeviation: r.max_dev == null ? null : Number(r.max_dev),
+        lastAt: r.last_at,
+      })),
+    };
   }
 
   // Lists the findings linked to an incident case, oldest-first (chronological),

@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.94.1 — Analysis overview + filterable/sortable tables
+
+Adds an **Overview** panel to the Analysis (findings) page and makes both the
+Analysis and Incidents tables filter/sort from their headers — no new tables,
+no new collection.
+
+**Overview panel.** The Analysis page now opens with an aggregate summary over
+the current filter: total + unacknowledged counts, a severity breakdown, and
+per-metric / per-host tables with count, average σ and peak σ. Backed by a new
+`GET /api/findings/summary` (viewer+) endpoint and `FindingStore.summary()`,
+which computes the aggregates in SQL (`GROUP BY severity|metric|host_id`) over
+the same filter set as the list — one scan per grouping, never pulls raw rows to
+total them. Severity chips and metric rows in the panel are clickable and drive
+the same filters as the header controls.
+
+**Filterable / sortable headers.** The Analysis list gains Severity and Metric
+filters (alongside the existing Host filter; metric options are populated from
+the overview) and click-to-sort column headers. `GET /api/findings` accepts
+`severity` and `metric` query params (400 on an unknown severity). The Incidents
+list keeps its status/severity/device filters and adds the same click-to-sort
+headers. Both reuse a shared `sortableTable` helper (client-side, numeric-aware,
+nulls last), styled like the existing Agents table.
+
 ## 0.90.0 — Per-flow-pair volume baselines + scheduled active discovery
 
 Two features (migrations 068 + 069).

@@ -9,6 +9,28 @@ const { isChangeEvent } = require('../timeline/targetTimeline');
 const DEFAULT_CONTEXT_MINUTES = 30;
 const MAX_CONTEXT_MINUTES = 24 * 60; // cap the look-back at 24h
 const CONTEXT_LIMIT = 500;
+const SEVERITIES = ['INFO', 'WARN', 'CRIT'];
+
+// Parses the shared list/summary filters (hostId/severity/metric/since) off the
+// query string. Returns { filters } on success or { error } (a 400 message) so
+// both endpoints validate identically.
+function parseListFilters(query) {
+  const filters = {};
+  if (query.hostId) filters.hostId = String(query.hostId);
+  if (query.severity !== undefined) {
+    if (!SEVERITIES.includes(query.severity)) {
+      return { error: { severity: `severity must be one of ${SEVERITIES.join(', ')}` } };
+    }
+    filters.severity = String(query.severity);
+  }
+  if (query.metric !== undefined && query.metric !== '') filters.metric = String(query.metric);
+  if (query.since) {
+    const d = new Date(query.since);
+    if (Number.isNaN(d.getTime())) return { error: { since: 'since must be a valid date' } };
+    filters.since = d;
+  }
+  return { filters };
+}
 
 // Analysis findings API (staff, user-JWT). Reuses the existing auth middleware.
 // Mounted at /api/findings. `timelineService` is optional: when absent the
@@ -22,15 +44,11 @@ function createFindingsRouter({ findingStore, timelineService = null }) {
     requireAuth,
     requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN),
     asyncHandler(async (req, res) => {
-      const hostId = req.query.hostId ? String(req.query.hostId) : undefined;
-      let since;
-      if (req.query.since) {
-        const d = new Date(req.query.since);
-        if (Number.isNaN(d.getTime())) {
-          return res.status(400).json({ error: 'Validation failed', details: { since: 'since must be a valid date' } });
-        }
-        since = d;
+      const parsed = parseListFilters(req.query);
+      if (parsed.error) {
+        return res.status(400).json({ error: 'Validation failed', details: parsed.error });
       }
+      const { hostId, since, severity, metric } = parsed.filters;
       let limit = 500;
       if (req.query.limit !== undefined) {
         const n = Number.parseInt(req.query.limit, 10);
@@ -39,7 +57,23 @@ function createFindingsRouter({ findingStore, timelineService = null }) {
         }
         limit = Math.min(n, 500);
       }
-      res.json(await findingStore.list(hostId, since, limit));
+      res.json(await findingStore.list(hostId, since, limit, undefined, { severity, metric }));
+    })
+  );
+
+  // GET /api/findings/summary — aggregated overview (counts + robust deviation
+  // stats) grouped by severity / metric / host, over the same filter set as the
+  // list. Backs the Analysis page's overview panel + its metric filter options.
+  router.get(
+    '/summary',
+    requireAuth,
+    requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN),
+    asyncHandler(async (req, res) => {
+      const parsed = parseListFilters(req.query);
+      if (parsed.error) {
+        return res.status(400).json({ error: 'Validation failed', details: parsed.error });
+      }
+      res.json(await findingStore.summary(parsed.filters));
     })
   );
 

@@ -463,6 +463,11 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 /* Every page spans the full width of the shell; 18px padding keeps a small
    gutter from the viewport edges. */
 main#view { padding: 18px; max-width: 100%; margin: 0 auto; }
+/* The base .card is 320px — sized for the centered login form (which lives in
+   its own #login shell, not here). Inside a page, cards are content panels and
+   must fill the available width instead of sitting in a narrow 320px column
+   (Discovery, Investigation, agent detail, the Overview "Open issues" cards …). */
+main#view .card { width: auto; }
 .section-head { display: flex; align-items: center; gap: 12px; margin: 0 0 14px; }
 .topo-action-bar { display: flex; align-items: center; gap: 8px; margin: 0 0 16px; }
 /* Diagram/Map segmented toggle (the active button is the non-ghost one). */

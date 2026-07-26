@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.96.3 — Fix: traffic map stuck on "Loading…"
+
+The traffic map never rendered — the Overview (and the location page) sat on
+**"Loading…"** indefinitely. A view's DOM is built *before* `render()` mounts
+it, so the card's `/api/flows/map` fetch routinely resolved while its own
+container was still detached; the `if (!root.isConnected) return` guard —
+meant to abandon work after the user navigates away — fired on that race and
+abandoned the *initial* render instead. Whoever won the race decided whether
+the map appeared, so a fast API reliably lost.
+
+Replaced with a `whenConnected(node)` helper that waits for the mount (with a
+15 s cap, so navigating away still abandons cleanly) and polls via
+`setTimeout` rather than `requestAnimationFrame`, which is paused in a hidden
+tab. `drawTrafficMap` now also re-runs `invalidateSize()` + `fitBounds()` once
+its container is actually laid out — Leaflet otherwise sizes to 0×0 and puts
+the arcs off-screen. The Overview's map is a little shorter now so it doesn't
+dominate the page.
+
 ## 0.96.0 — Traffic map (colored flow arrows), location drill-down page
 
 **Traffic map.** Flows get a geographic view: colored arrows between your sites

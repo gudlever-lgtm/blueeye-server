@@ -266,7 +266,7 @@ a { color: var(--accent); }
 .card {
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius);
   padding: 28px;
   width: 320px;
   display: flex;
@@ -463,6 +463,12 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 /* Every page spans the full width of the shell; 18px padding keeps a small
    gutter from the viewport edges. */
 main#view { padding: 18px; max-width: 100%; margin: 0 auto; }
+/* The base .card is 320px with 28px padding — sized for the centered login form
+   (which lives in its own #login shell, not here). Inside a page, cards are
+   content panels: they must fill the available width and share one padding scale
+   with the other panels (.nic-card, .settings-card, …) instead of a much roomier
+   320px column (Discovery, Investigation, agent detail, the Overview cards …). */
+main#view .card { width: auto; padding: 16px 18px; }
 .section-head { display: flex; align-items: center; gap: 12px; margin: 0 0 14px; }
 .topo-action-bar { display: flex; align-items: center; gap: 8px; margin: 0 0 16px; }
 /* Diagram/Map segmented toggle (the active button is the non-ghost one). */
@@ -745,7 +751,7 @@ main#view { padding: 18px; max-width: 100%; margin: 0 auto; }
 
 /* NICs view: firmware-drift card + inventory list. */
 .nics-summary { margin: 0 0 14px; }
-.nic-card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; margin: 0 0 16px; }
+.nic-card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px 18px; margin: 0 0 16px; }
 .nic-card h3 { margin: 0 0 10px; font-size: 15px; }
 .drift-card { border-color: var(--warn, #d97706); }
 .drift-model { padding: 10px 0; border-top: 1px solid var(--border); }
@@ -1502,8 +1508,8 @@ button.active-btn { outline: 2px solid var(--accent); }
 .investigation { display: flex; flex-direction: column; gap: 16px; }
 .inv-form-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; }
 .inv-form-row label { flex: 1 1 160px; min-width: 0; }
-.inv-card { width: auto; max-width: 100%; overflow: hidden; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 20px; display: flex; flex-direction: column; gap: 10px; }
-.inv-form { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 20px; display: flex; flex-direction: column; gap: 12px; }
+.inv-card { width: auto; max-width: 100%; overflow: hidden; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px 18px; display: flex; flex-direction: column; gap: 10px; }
+.inv-form { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px 18px; display: flex; flex-direction: column; gap: 12px; }
 .inv-header { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .inv-badge { font-size: 13px; padding: 3px 10px; }
 .inv-conf { font-size: 13px; }
@@ -1534,7 +1540,7 @@ button.active-btn { outline: 2px solid var(--accent); }
 /* ---- Bidirectional Flow Inspector ---------------------------------------- */
 .flowbidi { display: flex; flex-direction: column; gap: 16px; }
 .flowbidi-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-.flowbidi-panel { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 20px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.flowbidi-panel { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px 18px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .flowbidi-dir { margin: 0 0 4px; font-size: 15px; font-weight: 600; }
 .flowbidi-asym { padding: 10px 16px; border-radius: 8px; font-size: 13px; }
 .flowbidi-asym.warn { background: var(--warn-weak); color: var(--warn); border: 1px solid var(--warn); }
@@ -1593,7 +1599,7 @@ button.active-btn { outline: 2px solid var(--accent); }
 .fs-mini tbody tr.active { background: var(--accent-weak, rgba(56,189,248,.12)); }
 
 /* ---- Incidents (incident_cases) ---- */
-.incidents-view .toolbar { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+.incidents-view .toolbar, .clusters-view .toolbar { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
 .inc-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
 .inc-header h2 { margin: 0 0 4px; }
 .inc-meta { font-size: 13px; }
@@ -1601,7 +1607,7 @@ button.active-btn { outline: 2px solid var(--accent); }
 /* The base .card is a fixed 320px column (the login card). The incident detail
    page stacks several cards, so let them fill the page width like the other
    full-width views instead of rendering as a narrow 320px column. */
-.incident-detail .card { margin-bottom: 14px; width: auto; }
+.incident-detail .card, .cluster-detail .card { margin-bottom: 14px; width: auto; }
 .badge.inc-sev-CRIT { background: #c0392b; color: #fff; }
 .badge.inc-sev-WARN { background: #e67e22; color: #fff; }
 .badge.inc-sev-INFO { background: #7f8c8d; color: #fff; }

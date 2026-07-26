@@ -3436,7 +3436,10 @@ views.incidents = async () => {
     }
   }
 
-  wrap.append(grid.table);
+  wrap.append(
+    el('div', { class: 'section-head' }, el('h2', {}, 'Incidents'),
+      el('span', { class: 'muted' }, 'related anomalies grouped into tracked cases')),
+    grid.table);
   await load();
   return wrap;
 };
@@ -3847,7 +3850,10 @@ views.clusters = async () => {
   const statusSel = el('select', { onchange: (e) => { filters.status = e.target.value; load(); } },
     el('option', { value: '' }, 'All statuses'),
     ...Object.keys(CLUSTER_STATUS_LABEL).map((s) => el('option', { value: s }, CLUSTER_STATUS_LABEL[s])));
-  wrap.append(el('div', { class: 'toolbar' }, statusSel), table);
+  wrap.append(
+    el('div', { class: 'section-head' }, el('h2', {}, 'Situations'),
+      el('span', { class: 'muted' }, 'cross-agent incidents grouped by a suspected common cause')),
+    el('div', { class: 'toolbar' }, statusSel), table);
   await load();
   return wrap;
 };

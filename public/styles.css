@@ -1008,6 +1008,11 @@ th.sortable.sorted { color: var(--accent); }
 thead tr.filter-row th { padding: 4px 8px 8px; font-weight: 400; vertical-align: top; }
 .col-filter { width: 100%; max-width: 240px; box-sizing: border-box; font: inherit; padding: 3px 6px; }
 
+/* Analysis: the Host selector promoted out of the table header to sit directly
+   under the page heading, scoping the whole page (summary + assistant + list). */
+.findings-host-filter { display: flex; align-items: center; gap: 8px; margin: 0 0 14px; }
+.findings-host-filter label { font-weight: 600; }
+
 /* One consistent status palette used everywhere:
    green = ok/healthy, amber = warning/lapsed, red = critical/error, grey = neutral. */
 .badge { padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; }

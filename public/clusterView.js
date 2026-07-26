@@ -105,7 +105,7 @@
     opts = opts || {};
     var head = elem(doc, 'div', 'inc-header');
     var left = elem(doc, 'div');
-    left.appendChild(elem(doc, 'h2', null, 'Incident #' + detail.id));
+    left.appendChild(elem(doc, 'h2', null, 'Situation #' + detail.id));
 
     var meta = elem(doc, 'div', 'inc-meta');
     meta.appendChild(badge(doc, 'inc-status-' + detail.status, statusLabel(detail.status)));

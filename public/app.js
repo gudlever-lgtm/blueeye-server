@@ -13983,9 +13983,48 @@ setupNavGroups();
     if ($('#app').classList.contains('nav-open') && !e.target.closest('.sidebar') && !e.target.closest('#nav-toggle')) closeNav();
   });
 }
+// Collapsing global search: a magnifier button that expands into a search
+// pill. The icon toggles it; ✕, Escape or an outside click collapse it; "/"
+// opens it from anywhere. The typed query survives an outside-click collapse
+// (so re-opening restores it); ✕/Escape clear it.
 {
+  const box = $('#topbar-search');
   const sq = $('#search-q');
-  if (sq) sq.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); globalSearch(sq.value); sq.blur(); } });
+  const toggle = $('#search-toggle');
+  const clear = $('#search-clear');
+  if (box && sq && toggle) {
+    const isOpen = () => box.classList.contains('open');
+    const openSearch = () => {
+      box.classList.add('open');
+      toggle.setAttribute('aria-expanded', 'true');
+      sq.tabIndex = 0; if (clear) clear.tabIndex = 0;
+      sq.focus();
+    };
+    const closeSearch = (clearText) => {
+      box.classList.remove('open');
+      toggle.setAttribute('aria-expanded', 'false');
+      if (clearText) sq.value = '';
+      sq.tabIndex = -1; if (clear) clear.tabIndex = -1;
+      sq.blur();
+    };
+    toggle.addEventListener('click', (e) => { e.stopPropagation(); isOpen() ? closeSearch(false) : openSearch(); });
+    if (clear) clear.addEventListener('click', (e) => { e.stopPropagation(); closeSearch(true); });
+    sq.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); globalSearch(sq.value); }
+      else if (e.key === 'Escape') { e.preventDefault(); closeSearch(true); }
+    });
+    // Outside click collapses the pill (query is kept for next time).
+    document.addEventListener('click', (e) => {
+      if (isOpen() && !e.target.closest('#topbar-search')) closeSearch(false);
+    });
+    // "/" opens search from anywhere — unless the user is already typing.
+    document.addEventListener('keydown', (e) => {
+      if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return;
+      const t = e.target;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+      e.preventDefault(); openSearch();
+    });
+  }
 }
 $('#modal').addEventListener('click', (e) => { if (e.target.id === 'modal') closeModal(); });
 installModalA11y(); // focus management + trap + Escape for every modal flow

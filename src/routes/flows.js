@@ -6,6 +6,7 @@ const { requireAuth, requireRole } = require('../auth/middleware');
 const { ROLES } = require('../auth/roles');
 const { validateTimeRange } = require('../validation/resultsValidation');
 const { listCategories, buildIndex, classifyPort, classifyAsn } = require('../flows/categories');
+const { labelPorts } = require('../flows/services');
 const { parseId } = require('../validation/locationValidation');
 
 // Filter sanitisers for the conversation explorer. Everything is bound as a
@@ -183,6 +184,9 @@ function createFlowsRouter({ resultsRepo, agentsRepo, flowsRepo, getCategories }
       to: new Date(toMs).toISOString(),
       filter: { port: portParsed.value, proto, peer, direction, internal: req.query.internal || null },
       ...data,
+      // Name the traffic type per port (443 -> HTTPS) so the UI shows *what* is
+      // talking, not just the number. Metadata only (static well-known lookup).
+      byPort: labelPorts(data.byPort),
     });
   }));
 
@@ -219,6 +223,10 @@ function createFlowsRouter({ resultsRepo, agentsRepo, flowsRepo, getCategories }
       : Promise.resolve(emptyDir);
 
     const [ingress, egress] = await Promise.all([explore('in'), explore('out')]);
+    // Name the traffic type per port (metadata-only well-known lookup), same as
+    // the explorer, so both directions read as services rather than raw numbers.
+    ingress.byPort = labelPorts(ingress.byPort);
+    egress.byPort = labelPorts(egress.byPort);
 
     const inBytes = ingress.totals.bytes;
     const outBytes = egress.totals.bytes;

@@ -898,7 +898,7 @@ const PAGE_INFO = {
       el('h4', {}, 'Unified mode'),
       el('ul', {},
         el('li', {}, 'Top talkers: the largest conversations (source→destination) by bytes — click any row to filter by that peer.'),
-        el('li', {}, 'Top ports / protocols + a bytes-over-time chart with anomaly findings overlaid as markers. Drag across the chart to zoom into a time range; "Reset zoom" restores the full window.'),
+        el('li', {}, 'Top ports / protocols — the Service column names the traffic type for well-known ports (443 → HTTPS, 53 → DNS, …) from a static port lookup (metadata only, no payload inspection); ephemeral/unknown ports show "–". Plus a bytes-over-time chart with anomaly findings overlaid as markers. Drag across the chart to zoom into a time range; "Reset zoom" restores the full window.'),
         el('li', {}, 'Scans / fan-out: sources hitting many different ports (port scan) or many hosts (fan-out).'),
         el('li', {}, 'Filters: Peer, Port, Proto, Direction (in/out), Scope (internal/external).')),
       el('h4', {}, 'Bidirectional mode'),
@@ -8003,9 +8003,11 @@ views.flows = async () => {
         el('td', { class: 'num muted' }, String(t.flowCount)))))));
 
     const portTable = el('table', {},
-      el('thead', {}, el('tr', {}, ...['Port', 'Proto', 'Bytes', 'Flows'].map((h) => el('th', {}, h)))),
+      el('thead', {}, el('tr', {}, ...['Port', 'Service', 'Proto', 'Bytes', 'Flows'].map((h) => el('th', {}, h)))),
       el('tbody', {}, ...(data.byPort.length ? data.byPort.map((p) => el('tr', {},
-        el('td', {}, String(p.port)), el('td', { class: 'muted' }, p.proto || '–'),
+        el('td', {}, String(p.port)),
+        el('td', {}, p.service ? el('span', { class: 'badge grace' }, p.service) : el('span', { class: 'muted' }, '–')),
+        el('td', { class: 'muted' }, p.proto || '–'),
         el('td', { class: 'num' }, fmtBytes(p.bytes)), el('td', { class: 'num muted' }, String(p.flowCount))))
         : [el('tr', {}, el('td', { class: 'muted' }, '–'))])));
     const protoTable = el('table', {},

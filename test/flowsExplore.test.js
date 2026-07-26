@@ -47,6 +47,8 @@ test('GET /api/flows/explore returns talkers + scans and echoes the filter (200)
   const res = await request(withAgent({ flowsRepo })).get('/api/flows/explore?agentId=9&proto=tcp&peer=10.0.0.5&port=443&direction=out&internal=external').set('Authorization', authHeader('viewer'));
   assert.equal(res.status, 200);
   assert.equal(res.body.topTalkers[0].dstIp, '8.8.8.8');
+  // byPort rows are enriched with a well-known service name (443 -> HTTPS)
+  assert.equal(res.body.byPort[0].service, 'HTTPS');
   assert.equal(res.body.scans[0].kind, 'port-scan');
   assert.equal(res.body.filter.peer, '10.0.0.5');
   assert.equal(res.body.filter.port, 443);

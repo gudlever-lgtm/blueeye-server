@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.96.0 — Traffic map (colored flow arrows), location drill-down page
+
+**Traffic map.** Flows get a geographic view: colored arrows between your sites
+and destination countries, where **color = traffic type** (the existing
+admin-editable categories — DNS, Web, VPN, Facebook, …), **moving dashes =
+direction** (drawn toward the receiving end; solid = both ways) and **width =
+volume**. Backed by a new `GET /api/flows/map` (viewer+) endpoint —
+`flowsRepository.mapFlows` groups public `flow_records` by (agent, country,
+ASN, direction, service port), the route classifies each group into a category
+(ASN match wins over port match) and aggregates to one arc per
+(site, country, category) with an in/out byte split. Destinations are placed at
+country centroids only; internal RFC1918 traffic is never geolocated. Surfaced
+in three places:
+
+- **Flows → Map mode** (third mode next to Unified/Bidirectional): scope to the
+  selected agent, one site or the whole fleet; legend chips toggle categories;
+  a top-flows side panel pans the map.
+- **Overview**: a fleet-wide traffic map below the network path. Clicking an
+  arc (a dataflow) opens Flows → Map scoped to that site; clicking a site pin
+  opens the location page. The **network path shrank to a compact strip**
+  (~25 % less height, capped width) to make room.
+- **Location page**: the site's own scoped map + dataflow list.
+
+**Location drill-down page.** Clicking a location anywhere (the agent page's
+site name, the Locations list, a site pin on a traffic map) opens a full-width
+per-site page: the Overview KPI cards scoped to the site, every agent there
+(connection, health verdict, loss/latency/jitter, throughput, version,
+last-seen — click through to the agent page), and the site's data flows.
+
+**Layout.** The agent page's Config history / CMDB asset / Dependencies cards
+now sit in a responsive grid using the full page width (the global login-card
+`width: 320px` had left them stranded in a narrow column).
+
 ## 0.94.1 — Analysis overview + filterable/sortable tables
 
 Adds an **Overview** panel to the Analysis (findings) page and makes both the

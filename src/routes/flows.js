@@ -34,7 +34,7 @@ const DEFAULT_SPAN_MS = 6 * 60 * 60 * 1000; // last 6h when no range is given
 // ...) come from the agent's `byPort` summary (stored result payloads);
 // organisation categories (Facebook, Google, ...) come from the destination ASN
 // of geo-enriched flows. Both are metadata only — no payload/DPI. viewer+.
-function createFlowsRouter({ resultsRepo, agentsRepo, flowsRepo, getCategories }) {
+function createFlowsRouter({ resultsRepo, agentsRepo, flowsRepo, getCategories, centroids = null }) {
   const router = express.Router();
   // Categories are loaded per request so admin edits (via settings) take effect
   // without a restart. Falls back to the built-in defaults.
@@ -187,6 +187,130 @@ function createFlowsRouter({ resultsRepo, agentsRepo, flowsRepo, getCategories }
       // Name the traffic type per port (443 -> HTTPS) so the UI shows *what* is
       // talking, not just the number. Metadata only (static well-known lookup).
       byPort: labelPorts(data.byPort),
+    });
+  }));
+
+  // GET /api/flows/map?agentId=&locationId=&from=&to=
+  // Traffic-map data: your sites (agent locations) + one "arc" per
+  // (site, destination country, traffic-type category) with in/out byte split,
+  // so the UI can draw colored directional arrows between sites and
+  // destinations. Scope with agentId (one agent), locationId (one site) or
+  // neither (whole fleet). External destinations only — internal RFC1918
+  // traffic is never geolocated (countries are placed at country centroids;
+  // metadata only, no payload). viewer+.
+  router.get('/map', requireAuth, reader, asyncHandler(async (req, res) => {
+    const agentId = req.query.agentId !== undefined && req.query.agentId !== '' ? parseId(req.query.agentId) : null;
+    if (req.query.agentId !== undefined && req.query.agentId !== '' && agentId === null) {
+      return res.status(400).json({ error: 'agentId must be a positive integer' });
+    }
+    const locationId = req.query.locationId !== undefined && req.query.locationId !== '' ? parseId(req.query.locationId) : null;
+    if (req.query.locationId !== undefined && req.query.locationId !== '' && locationId === null) {
+      return res.status(400).json({ error: 'locationId must be a positive integer' });
+    }
+    const { value: range, errors } = validateTimeRange(req.query);
+    if (errors) return res.status(400).json({ error: 'Validation failed', details: errors });
+
+    if (agentId !== null) {
+      const agent = await agentsRepo.findById(agentId);
+      if (!agent) return res.status(404).json({ error: 'Agent not found' });
+    }
+
+    const toMs = range.to ? range.to.getTime() : Date.now();
+    const fromMs = range.from ? range.from.getTime() : toMs - DEFAULT_SPAN_MS;
+    const from = new Date(fromMs);
+    const to = new Date(toMs);
+
+    // Sites = the scope's agents grouped by location (agents without a located
+    // site are kept — their arcs still count, the UI just can't anchor them).
+    const hosts = (await agentsRepo.findForGeo(agentId)) || [];
+    const scopedHosts = locationId !== null ? hosts.filter((h) => h.locationId === locationId) : hosts;
+    const siteKeyFor = (h) => (h.locationId != null ? `l${h.locationId}` : `a${h.hostId}`);
+    const sites = new Map();
+    const siteByHost = new Map();
+    for (const h of scopedHosts) {
+      const key = siteKeyFor(h);
+      const s = sites.get(key) || {
+        key,
+        locationId: h.locationId ?? null,
+        name: h.siteName || `agent ${h.hostId}`,
+        lat: h.lat, lng: h.lng,
+        hostIds: [],
+      };
+      s.hostIds.push(h.hostId);
+      if (s.lat == null && h.lat != null) { s.lat = h.lat; s.lng = h.lng; }
+      sites.set(key, s);
+      siteByHost.set(h.hostId, key);
+    }
+
+    const categories = await loadCategories();
+    const index = buildIndex(categories);
+    const catById = new Map(categories.map((c) => [c.id, c]));
+
+    let rows = [];
+    if (flowsRepo && typeof flowsRepo.mapFlows === 'function') {
+      rows = await flowsRepo.mapFlows({ agentId, locationId, from, to });
+    }
+
+    // Aggregate to (site, country, category); organisation (ASN) categories win
+    // over port categories — they are the more specific attribution.
+    const arcs = new Map();
+    let totalBytes = 0;
+    let totalFlows = 0;
+    const catTotals = new Map();
+    for (const r of rows) {
+      const siteKey = siteByHost.get(r.agentId) || null;
+      if (locationId !== null && siteKey === null) continue; // out of scope
+      const catId = classifyAsn(r.asn, index) || classifyPort(r.port, index) || 'other';
+      const k = `${siteKey || ''}|${r.country}|${catId}`;
+      const point = centroids ? centroids.get(r.country) : null;
+      const a = arcs.get(k) || {
+        siteKey,
+        country: r.country,
+        lat: point ? point.lat : null,
+        lng: point ? point.lng : null,
+        category: catId,
+        label: catId === 'other' ? 'Other' : (catById.get(catId) ? catById.get(catId).label : catId),
+        inBytes: 0, outBytes: 0, bytes: 0, flowCount: 0,
+        asnNames: [],
+      };
+      const bytes = Number(r.bytes) || 0;
+      if (r.direction === 'in') a.inBytes += bytes; else a.outBytes += bytes;
+      a.bytes += bytes;
+      a.flowCount += Number(r.flowCount) || 0;
+      if (r.asnName && !a.asnNames.includes(r.asnName) && a.asnNames.length < 4) a.asnNames.push(r.asnName);
+      arcs.set(k, a);
+      totalBytes += bytes;
+      totalFlows += Number(r.flowCount) || 0;
+      catTotals.set(catId, (catTotals.get(catId) || 0) + bytes);
+    }
+
+    const arcList = [...arcs.values()]
+      .map((a) => {
+        const ratio = a.bytes > 0 ? a.inBytes / a.bytes : 0;
+        // ≥80 % one way reads as one-directional; anything else is both ways.
+        const direction = ratio >= 0.8 ? 'in' : ratio <= 0.2 ? 'out' : 'both';
+        return { ...a, direction };
+      })
+      .sort((x, y) => y.bytes - x.bytes)
+      .slice(0, 200);
+
+    const legend = [...catTotals.entries()]
+      .map(([id, bytes]) => ({
+        id,
+        label: id === 'other' ? 'Other' : (catById.get(id) ? catById.get(id).label : id),
+        kind: catById.get(id) ? catById.get(id).kind : null,
+        bytes,
+      }))
+      .sort((x, y) => y.bytes - x.bytes);
+
+    res.json({
+      agentId, locationId,
+      from: from.toISOString(),
+      to: to.toISOString(),
+      sites: [...sites.values()],
+      arcs: arcList,
+      categories: legend,
+      totals: { bytes: totalBytes, flowCount: totalFlows, destinations: new Set(arcList.map((a) => a.country)).size },
     });
   }));
 

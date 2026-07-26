@@ -101,7 +101,9 @@ test('recompute job (operator+) aggregates flows→edges end to end', async () =
   const serviceDependenciesRepo = makeServiceDependenciesRepo();
   const flowsRepo = makeFlowsRepo({
     tcpServiceFlows: async () => ([
-      { srcIp: '10.0.0.1', dstIp: '10.0.0.2', dstPort: 443, bytes: 1200, packets: 10, connCount: 4, firstSeen: new Date('2026-07-24T09:00:00Z'), lastSeen: new Date('2026-07-24T10:00:00Z') },
+      // Relative timestamps — the job ages out edges older than its rolling
+      // window, so fixed dates here would rot the test as time passes.
+      { srcIp: '10.0.0.1', dstIp: '10.0.0.2', dstPort: 443, bytes: 1200, packets: 10, connCount: 4, firstSeen: new Date(Date.now() - 2 * 3600e3), lastSeen: new Date(Date.now() - 3600e3) },
       { srcIp: '10.0.0.1', dstIp: '8.8.8.8', dstPort: 443, bytes: 999, packets: 9, connCount: 1, firstSeen: new Date(), lastSeen: new Date() }, // dropped: unknown
     ]),
   });

@@ -108,3 +108,16 @@ details on invalid input.
 - [`test/flowCategoriesSettings.test.js`](../test/flowCategoriesSettings.test.js)
   — editing categories (service validation, the settings route, and the flows
   route honouring an edited list).
+
+## Related: per-port service names in the flow explorer
+
+Separate from these *categories* (which bucket many ports into a group like
+"Web"), the flow explorer's **Top ports** table names the individual service for
+each well-known port — 443 → *HTTPS*, 53 → *DNS*, 3389 → *RDP*, … — so operators
+read the traffic *type*, not just a number. The lookup is
+[`src/flows/services.js`](../src/flows/services.js) (`serviceForPort` /
+`labelPorts`), a static well-known-port table (IANA assignments, metadata only —
+no payload inspection). Ephemeral/dynamic and unknown ports are left unnamed
+(the UI shows "–"). `GET /api/flows/explore` and `GET /api/flows/bidirectional`
+add a `service` field to every `byPort` row. Covered by
+[`src/flows/__tests__/services.test.js`](../src/flows/__tests__/services.test.js).

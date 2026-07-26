@@ -3060,9 +3060,10 @@ views.findings = async () => {
     return s ? `?${s}` : '';
   };
 
-  // Filter controls live in the table header (a filter row under the sortable
-  // labels), aligned to the Host / Severity / Metric columns — the same
-  // per-column filter+sort model the Incidents table uses.
+  // Severity / Metric filter controls live in the table header (a filter row
+  // under the sortable labels) — the same per-column filter+sort model the
+  // Incidents table uses. The Host selector is promoted out of the header into
+  // its own bar directly under the page heading (see hostFilterBar below).
   const hostSelect = el('select', { class: 'col-filter' },
     el('option', { value: '' }, 'All hosts'),
     ...agents.map((a) => el('option',
@@ -3091,6 +3092,14 @@ views.findings = async () => {
       return p;
     })));
 
+  // Host selector sits directly under the heading so scoping the whole page to a
+  // single host is the first control you reach (it drives the summary, the
+  // assistant and the detail list). Severity/metric stay as per-column filters.
+  root.append(el('div', { class: 'findings-host-filter' },
+    el('label', { for: 'findings-host-select' }, 'Host'),
+    hostSelect));
+  hostSelect.id = 'findings-host-select';
+
   if (featureEnabled('assistant')) root.append(assistantBox(() => findingsState.hostId));
 
   const summaryHost = el('div', { class: 'findings-summary' });
@@ -3101,7 +3110,7 @@ views.findings = async () => {
   // live-WebSocket prepend); the table shell handles header sort + empty states.
   const columns = [
     { label: 'Time', key: 'time', get: (f) => new Date(f.createdAt || 0).getTime() },
-    { label: 'Host', key: 'host', get: (f) => String(agentName(f.hostId) || '').toLowerCase(), filter: hostSelect },
+    { label: 'Host', key: 'host', get: (f) => String(agentName(f.hostId) || '').toLowerCase() },
     { label: 'Metric', key: 'metric', get: (f) => f.metric || '', filter: metricSelect },
     { label: 'Severity', key: 'severity', get: (f) => SEVERITY_RANK[f.severity] || 0, filter: sevSelect },
     { label: 'Deviation', key: 'deviation', get: (f) => (typeof f.deviation === 'number' ? f.deviation : null) },

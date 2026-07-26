@@ -8220,6 +8220,27 @@ async function trafficTileConfig() {
   return trafficMapCfg;
 }
 
+// Resolves once `node` is actually in the document, or false if it never gets
+// there (the user navigated away). A view's DOM is BUILT before render() mounts
+// it, so anything async started during construction — a traffic map's fetch —
+// finishes while its own container is still detached. Leaflet needs a laid-out
+// container to size itself, so we wait for the mount rather than bail (bailing
+// left the card stuck on "Loading…" whenever the fetch won that race).
+// Polls with setTimeout rather than requestAnimationFrame: rAF is paused in a
+// hidden/background tab, which would strand the map until the tab got focus.
+function whenConnected(node, { timeoutMs = 15000, stepMs = 50 } = {}) {
+  if (node.isConnected) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const started = Date.now();
+    const tick = () => {
+      if (node.isConnected) { resolve(true); return; }
+      if (Date.now() - started > timeoutMs) { resolve(false); return; }
+      setTimeout(tick, stepMs);
+    };
+    setTimeout(tick, stepMs);
+  });
+}
+
 // Samples a quadratic bezier between two latlngs, lifting the control point
 // perpendicular to the chord for a great-circle feel. Returns [ [lat,lng], … ].
 function trafficArcPoints(a, b, steps = 24) {
@@ -8305,8 +8326,15 @@ function drawTrafficMap(hostEl, cfg, data, opts = {}) {
     bounds.push([s.lat, s.lng]);
   }
 
-  if (bounds.length > 1) { try { map.fitBounds(bounds, { padding: [36, 36], maxZoom: 6 }); } catch { /* single point */ } }
-  setTimeout(() => { try { map.invalidateSize(); } catch { /* ignore */ } }, 60);
+  const fit = () => { if (bounds.length > 1) { try { map.fitBounds(bounds, { padding: [36, 36], maxZoom: 6 }); } catch { /* single point */ } } };
+  fit();
+  // The container may only just have been mounted (or still be laying out), so
+  // re-measure and re-fit once it is — otherwise Leaflet sizes to 0×0 and the
+  // arcs render off-screen.
+  whenConnected(hostEl).then((ok) => {
+    if (!ok) return;
+    setTimeout(() => { try { map.invalidateSize(); fit(); } catch { /* ignore */ } }, 60);
+  });
   return {
     map,
     setCategory(catId, visible) {
@@ -8380,7 +8408,8 @@ function trafficMapCard({ scope = {}, title = 'Traffic map', subtitle = 'last 6 
       body.replaceChildren(el('div', { class: 'error' }, errText(e)));
       return;
     }
-    if (!root.isConnected) return; // view was left while loading
+    // Built before the view is mounted — wait for the mount, don't bail.
+    if (!(await whenConnected(root))) return; // view was left while loading
     if (onData) { try { onData(data); } catch { /* consumer's problem */ } }
     statusEl.textContent = `${fmtBytes(data.totals.bytes)} · ${data.totals.destinations} destination${data.totals.destinations === 1 ? '' : 's'}`;
     if (!data.arcs.length) {

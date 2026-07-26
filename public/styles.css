@@ -1787,6 +1787,9 @@ li.guide-step.done .guide-step-title { text-decoration: line-through; opacity: 0
 .tmc-head .tmc-status { margin-left: auto; font-variant-numeric: tabular-nums; }
 .fleet-traffic { margin: 0 0 16px; }
 .fleet-traffic .traffic-card { margin: 0; }
+/* On the Overview the map is one panel among many — keep it shorter than the
+   dedicated Flows/location maps so it doesn't dominate the page. */
+.fleet-traffic .traffic-map { height: 38vh; min-height: 280px; }
 
 /* Traffic-type legend chips — click to hide/show a category's arrows. */
 .traffic-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 10px; }

@@ -460,12 +460,9 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 #whoami .badge.role-operator { background: rgba(34,197,94,.15); color: var(--ok); }
 #whoami .badge.role-viewer { background: rgba(148,163,184,.15); color: var(--muted); }
 
-main#view { padding: 18px; max-width: 95%; margin: 0 auto; }
-/* The lean traffic overview reads best at a comfortable single-column width. */
-main#view:has(.overview) { max-width: 95%; }
-/* The Overview/NOC landing (KPI cards + network path + fleet table + the gated
-   "Open issues" panels) is wider. */
-main#view:has(.fleet) { max-width: 95%; }
+/* Every page spans the full width of the shell; 18px padding keeps a small
+   gutter from the viewport edges. */
+main#view { padding: 18px; max-width: 100%; margin: 0 auto; }
 .section-head { display: flex; align-items: center; gap: 12px; margin: 0 0 14px; }
 .topo-action-bar { display: flex; align-items: center; gap: 8px; margin: 0 0 16px; }
 /* Diagram/Map segmented toggle (the active button is the non-ghost one). */

@@ -344,20 +344,28 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .nav-toggle { display: none; font-size: 16px; line-height: 1; padding: 6px 10px; }
 .spacer { flex: 1; }
 
-/* Global search — the input is borderless; the wrapper carries the pill border,
-   background and focus ring so the magnifier glyph sits inside the field. */
-.topbar-search-wrap {
-  display: inline-flex; align-items: center; gap: 7px;
-  height: 36px; padding: 0 14px;
-  border: 1px solid var(--border); border-radius: 999px;
-  background: var(--panel-2);
-  transition: border-color .15s ease, box-shadow .15s ease, background .15s ease;
+/* Global search — a single round magnifier button that expands into a search
+   pill on click, anchored to the right beside the account menu. The pill grows
+   leftward (overflow-clipped, justified to the icon on the right); the input and
+   its clear ✕ fade + slide in. Collapsing reverses it. See the .open state and
+   the sibling rules further down (.topbar-search-input / -toggle / -clear). */
+.topbar-search {
+  display: inline-flex; align-items: center; justify-content: flex-end;
+  height: 38px; max-width: 38px; padding: 0;
+  border: 1px solid transparent; border-radius: 999px;
+  background: transparent; overflow: hidden;
+  transition: max-width .3s cubic-bezier(.4, 0, .2, 1),
+              background .2s ease, border-color .2s ease, box-shadow .2s ease;
 }
-.topbar-search-wrap:focus-within {
+.topbar-search.open {
+  max-width: min(340px, 46vw);
+  border-color: var(--border); background: var(--panel-2);
+}
+.topbar-search.open:focus-within {
   border-color: var(--accent); background: var(--panel);
   box-shadow: 0 0 0 3px var(--accent-weak);
 }
-.topbar-search-icon { font-size: 13px; line-height: 1; opacity: .55; }
+.topbar-search-icon { font-size: 14px; line-height: 1; }
 
 /* Auto-refresh — a bare sliding on/off switch (no pill), living in the account
    menu's Refresh row. The native checkbox stays (JS reads #autorefresh) but is
@@ -850,11 +858,32 @@ main#view .card { width: auto; padding: 16px 18px; }
 .agent-health .ah-quality { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13px; }
 .dq-flag { color: var(--warn); cursor: help; }
 
-/* Topbar global search + results modal. */
-.topbar-search { width: 220px; max-width: 34vw; padding: 0; border: 0; border-radius: 0;
-  background: transparent; color: var(--text); font: inherit; font-size: 13px; }
-.topbar-search:focus { outline: none; }
-.topbar-search::placeholder { color: var(--muted); }
+/* Topbar global search field + round icon buttons (see the collapsing pill
+   above) + the results modal. */
+.topbar-search-input {
+  flex: 1 1 auto; min-width: 0; width: 100%;
+  padding: 0 2px 0 14px; border: 0; background: transparent;
+  color: var(--text); font: inherit; font-size: 13px;
+  opacity: 0; transition: opacity .2s ease .04s;
+}
+.topbar-search.open .topbar-search-input { opacity: 1; }
+.topbar-search:not(.open) .topbar-search-input { pointer-events: none; }
+.topbar-search-input:focus { outline: none; }
+.topbar-search-input::placeholder { color: var(--muted); }
+/* Toggle (magnifier, always visible) + clear (✕, only while open). */
+.topbar-search-toggle, .topbar-search-clear {
+  flex: 0 0 auto; display: inline-grid; place-items: center;
+  border: 0; border-radius: 999px; background: transparent;
+  color: var(--muted); cursor: pointer; padding: 0; line-height: 1;
+  transition: background .15s ease, color .15s ease, opacity .2s ease, transform .2s ease;
+}
+.topbar-search-toggle { width: 36px; height: 36px; color: var(--text); }
+.topbar-search-toggle:hover, .topbar-search-clear:hover { background: var(--border); color: var(--text); }
+.topbar-search-clear {
+  width: 28px; height: 28px; margin-right: 3px; font-size: 12px;
+  opacity: 0; transform: scale(.6); pointer-events: none;
+}
+.topbar-search.open .topbar-search-clear { opacity: 1; transform: scale(1); pointer-events: auto; }
 .search-list { display: flex; flex-direction: column; gap: 4px; margin: 2px 0 10px; }
 .search-item { display: flex; align-items: center; gap: 10px; justify-content: flex-start; text-align: left;
   background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; cursor: pointer; color: var(--text); }

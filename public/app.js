@@ -775,6 +775,18 @@ const PAGE_INFO = {
       el('p', { class: 'muted' }, 'Health is based on active probes — run a few per agent on ', viewLink('probes'), ' (or schedule them fleet-wide via ', viewLink('tests'), ') for a complete picture; the interface signal comes from ', viewLink('interfaces'), '. Metadata only: targets and timings, never packet contents.'),
     ],
   },
+  location: {
+    hero: 'Everything for one site in one place: its agents with health verdicts, a scoped health summary, and the site\'s data flows on a map — click any flow to inspect it in Flows.',
+    title: 'Location — site drill-down',
+    body: () => [
+      el('p', {}, 'The combined page for one location. Reached by clicking a location on the ', viewLink('locations', 'Locations'), ' list, the site name on an agent page, or a site pin on a traffic map.'),
+      el('ul', {},
+        el('li', {}, el('strong', {}, 'Health summary'), ' — the Overview KPI cards scoped to just this site\'s agents: online count, median latency/jitter, worst packet loss, monitored targets and alerts.'),
+        el('li', {}, el('strong', {}, 'Agents'), ' — every agent at the site with connection state, health verdict, loss/latency/jitter, throughput, agent version and last-seen. Click a row for the agent\'s own page.'),
+        el('li', {}, el('strong', {}, 'Data flows'), ' — the site\'s external traffic as colored directional arrows (color = traffic type, moving dashes = direction, width = volume) plus a top-flows list. Clicking a flow opens ', viewLink('flows', 'Flows'), ' in Map mode scoped to this site.')),
+      el('p', { class: 'muted' }, 'Public destinations are placed at country level; internal (RFC1918) traffic is never geolocated.'),
+    ],
+  },
   agent: {
     hero: 'Everything for one agent in one place: health summary, probes (latency/loss/jitter), interface health and traffic.',
     title: 'Agent — details',
@@ -891,10 +903,15 @@ const PAGE_INFO = {
     ],
   },
   flows: {
-    hero: 'Inspect conversations: who talks to whom, on which ports, and who is scanning. Switch to Bidirectional mode for an ingress/egress split with asymmetry detection.',
-    title: 'Flows — conversations & bidirectional inspector',
+    hero: 'Inspect conversations: who talks to whom, on which ports, and who is scanning. Bidirectional mode splits ingress/egress; Map mode draws the traffic as colored directional arrows on a world map.',
+    title: 'Flows — conversations, bidirectional inspector & traffic map',
     body: () => [
       el('p', {}, 'While ', viewLink('overview', 'Traffic'), ' shows volumes and the ', viewLink('geo', 'Destinations'), ' map shows where it goes, Flows lets you drill into individual conversations (5-tuple metadata from NetFlow/sFlow) for one agent.'),
+      el('h4', {}, 'Map mode'),
+      el('ul', {},
+        el('li', {}, 'Draws each flow as an arrow between your site and the destination country: ', el('strong', {}, 'color = traffic type'), ' (DNS, Web, VPN, … — the same admin-editable categories as the traffic-type breakdown), ', el('strong', {}, 'moving dashes = direction'), ' (solid = both ways), ', el('strong', {}, 'width = volume'), '.'),
+        el('li', {}, 'Scope it to the selected agent, one site, or the whole fleet; click a traffic-type chip to hide/show that category; click a site pin to open its location page.'),
+        el('li', {}, 'Privacy: public destinations are placed at country centroids only; internal (RFC1918) traffic is never geolocated.')),
       el('h4', {}, 'Unified mode'),
       el('ul', {},
         el('li', {}, 'Top talkers: the largest conversations (source→destination) by bytes — click any row to filter by that peer.'),
@@ -6584,6 +6601,11 @@ async function probeRunnerView() {
 let selectedAgentId = null;
 function openAgent(id) { selectedAgentId = id; currentView = 'agent'; render(); }
 
+// Location drill-down (no tab of its own — reached by clicking a location on
+// the agent page, the Locations list or a site pin on a traffic map).
+let selectedLocationId = null;
+function openLocation(id) { selectedLocationId = id; currentView = 'location'; render(); }
+
 // Deep-link into the flow explorer for an agent, optionally pre-filling a
 // peer/port (used by global search). views.flows consumes + clears the prefill.
 let flowsPrefill = null;
@@ -6858,14 +6880,16 @@ function networkPath(data, k, scopeName = null) {
     return e;
   };
   const cls = (base, lvl) => `${base}${lvl === 'warn' ? ' degraded' : lvl === 'bad' ? ' bad' : ''}`;
-  const NW = 120, NH = 58, top = 28, cy = top + NH / 2;
+  // Compact strip: low nodes on one row, the Branch origin tucked underneath —
+  // roughly half the height of the original schematic (see CHANGELOG 0.96.0).
+  const NW = 120, NH = 44, top = 22, cy = top + NH / 2;
   const X = { HQ: 20, ISP: 220, CL: 420, SA: 620 };
   const node = (x, title, sub, lvl, edge, tip) => mk('g', { class: `np-node${edge ? ' edge' : ''}${lvl && lvl !== 'ok' ? ` ${lvl}` : ''}` },
     tip ? mk('title', {}, tip) : null,
-    mk('rect', { x, y: top, width: NW, height: NH, rx: 10 }),
-    mk('circle', { cx: x + 16, cy: top + 18, r: 4, class: 'np-ico' }),
-    mk('text', { x: x + 30, y: top + 23, class: 'np-t' }, title),
-    mk('text', { x: x + 12, y: top + 42, class: 'np-s' }, sub));
+    mk('rect', { x, y: top, width: NW, height: NH, rx: 9 }),
+    mk('circle', { cx: x + 15, cy: top + 14, r: 3.5, class: 'np-ico' }),
+    mk('text', { x: x + 27, y: top + 18, class: 'np-t' }, title),
+    mk('text', { x: x + 12, y: top + 35, class: 'np-s' }, sub));
   const link = (x1, y1, x2, y2, lvl, label, tip) => {
     const g = mk('g', {},
       tip ? mk('title', {}, tip) : null,
@@ -6874,12 +6898,13 @@ function networkPath(data, k, scopeName = null) {
     if (label) g.append(mk('text', { x: (x1 + x2) / 2, y: Math.min(y1, y2) - 7, 'text-anchor': 'middle', class: cls('np-lab', lvl) }, label));
     return g;
   };
-  const Bx = 320, By = 150, BNH = 50;
+  const Bx = 320, By = 108, BNH = 38;
   const overall = worst(originLvl, accessLvl, wanLvl, saasLvl, scoped ? 'ok' : branchLvl);
   const statusTxt = overall === 'bad' ? 'Critical segment' : overall === 'warn' ? 'Degraded segment detected' : 'All segments nominal';
   const ariaLabel = `Network path for ${scoped ? scopeName : 'the whole fleet'} — origin, ISP, cloud, SaaS — ${statusTxt.toLowerCase()}`;
   const branchTip = `Other sites — ${(s.down || 0) + (s.stale || 0)} agent(s) down or stale`;
-  const svg = mk('svg', { viewBox: '0 0 820 214', role: 'img', 'aria-label': ariaLabel },
+  // Scoped views drop the Branch row entirely, so the strip gets even shorter.
+  const svg = mk('svg', { viewBox: `0 0 820 ${scoped ? 78 : 156}`, role: 'img', 'aria-label': ariaLabel },
     link(X.HQ + NW, cy, X.ISP, cy, accessLvl, accessLab, accessTip),
     link(X.ISP + NW, cy, X.CL, cy, wanLvl, wanLab, wanTip),
     link(X.CL + NW, cy, X.SA, cy, saasLvl, saasLab, saasTip),
@@ -6890,10 +6915,10 @@ function networkPath(data, k, scopeName = null) {
     node(X.SA, 'SaaS', targets ? `${targets} target${targets === 1 ? '' : 's'}` : 'Applications', saasLvl, false, saasTip),
     scoped ? null : mk('g', { class: `np-node edge${branchLvl !== 'ok' ? ` ${branchLvl}` : ''}` },
       mk('title', {}, branchTip),
-      mk('rect', { x: Bx, y: By, width: NW, height: BNH, rx: 10 }),
-      mk('circle', { cx: Bx + 16, cy: By + 16, r: 4, class: 'np-ico' }),
-      mk('text', { x: Bx + 30, y: By + 21, class: 'np-t' }, 'Branch'),
-      mk('text', { x: Bx + 12, y: By + 38, class: 'np-s' }, 'Remote sites')));
+      mk('rect', { x: Bx, y: By, width: NW, height: BNH, rx: 9 }),
+      mk('circle', { cx: Bx + 15, cy: By + 13, r: 3.5, class: 'np-ico' }),
+      mk('text', { x: Bx + 27, y: By + 17, class: 'np-t' }, 'Branch'),
+      mk('text', { x: Bx + 12, y: By + 32, class: 'np-s' }, 'Remote sites')));
   return el('div', { class: 'netpath' },
     el('div', { class: 'netpath-head' },
       el('h3', {}, 'Network path'),
@@ -6976,11 +7001,22 @@ views.fleet = async () => {
     el('span', { class: 'muted' }, 'All agents · health from reachability · loss · latency · jitter')));
   const bannerHost = el('div', {});
   const nocHost = el('div', {});
+  // Fleet-wide traffic map (colored directional arrows, below the network
+  // path). Rendered ONCE per view entry — the 10 s poll re-renders nocHost
+  // only, so the Leaflet instance isn't rebuilt under the user.
+  const trafficHost = el('div', { class: 'fleet-traffic' });
   const chipsHost = el('div', { class: 'filter-chips' });   // active-filter chips (self-hides when empty)
   const cardsHost = el('div', { class: 'fleet-cards' });     // four clickable metric cards
   const tableHost = el('div', {});
   const issuesHost = el('div', {}); // gated (dashboard_advanced): incidents + findings
-  root.append(bannerHost, nocHost, chipsHost, cardsHost, tableHost, issuesHost);
+  root.append(bannerHost, nocHost, trafficHost, chipsHost, cardsHost, tableHost, issuesHost);
+  trafficHost.append(trafficMapCard({
+    subtitle: 'all sites · last 6 h · arrows = traffic type + live direction',
+    // Clicking a dataflow opens the Flows page in Map mode scoped to that
+    // site; clicking a site pin opens the location's drill-down page.
+    onArcClick: (a, site) => openFlows(null, { mode: 'map', locationId: site.locationId ?? null }),
+    onSiteClick: (s) => { if (s.locationId != null) openLocation(s.locationId); },
+  }));
 
   // Maintenance banner (viewer-readable) — shown while a window is active now.
   api('/api/settings/maintenance').then((m) => {
@@ -7431,7 +7467,9 @@ views.agent = async () => {
     el('button', { class: 'small ghost', onclick: () => { currentView = 'fleet'; render(); } }, '← Overview'),
     el('h2', {}, esc(agent.display_name || agent.hostname)),
     el('span', { class: `badge ${agent.status}` }, agent.status),
-    agent.location_name ? el('span', { class: 'muted' }, esc(agent.location_name)) : null,
+    agent.location_id != null
+      ? el('button', { class: 'linklike', title: 'Open the location page — agents, health & data flows', onclick: () => openLocation(agent.location_id) }, '📍 ', esc(agent.location_name || `#${agent.location_id}`))
+      : (agent.location_name ? el('span', { class: 'muted' }, esc(agent.location_name)) : null),
     el('button', { class: 'small ghost', onclick: () => { currentView = 'flows'; render(); } }, 'Flows →'),
     el('button', { class: 'small ghost', onclick: () => exportInvestigationMenu(id, agent.display_name || agent.hostname) }, 'Export'),
     canWrite() ? el('button', { class: 'small ghost', onclick: () => runTest(agent) }, 'Run test') : null));
@@ -7440,23 +7478,28 @@ views.agent = async () => {
   const healthHost = el('div', { class: 'agent-health' });
   root.append(healthHost);
 
+  // Config history / CMDB / Dependencies side by side in a responsive grid so
+  // the page uses the full width (the global .card is a fixed 320px otherwise).
+  const cardsWrap = el('div', { class: 'agent-cards' });
+  root.append(cardsWrap);
+
   // Device config history (operator/admin) — masked snapshots + risk-classified
   // diffs from GET /api/devices/:id/config-history. Lazy-loaded.
   if (canWrite()) {
     const cfgHost = el('div', { class: 'card agent-config-history' }, el('h3', {}, 'Config history'), el('div', { class: 'muted' }, 'Loading…'));
-    root.append(cfgHost);
+    cardsWrap.append(cfgHost);
     loadDeviceConfigHistory(id, cfgHost);
   }
 
   // CMDB asset link (viewer sees the linked asset; operator+ can search/link/unlink).
   const cmdbHost = el('div', { class: 'card agent-cmdb' }, el('h3', {}, 'CMDB asset'), el('div', { class: 'muted' }, 'Loading…'));
-  root.append(cmdbHost);
+  cardsWrap.append(cmdbHost);
   loadAgentCmdbLink(id, cmdbHost);
 
   // Service dependencies (viewer+): who this host talks to / who talks to it,
   // ports + volume; each outbound row links to its per-hour baseline band.
   const depsHost = el('div', { class: 'card agent-deps' }, el('h3', {}, 'Dependencies'), el('div', { class: 'muted' }, 'Loading…'));
-  root.append(depsHost);
+  cardsWrap.append(depsHost);
   loadAgentDependencies(id, depsHost);
 
   // Unified activity timeline (findings + probe-outage incidents + connect/
@@ -7744,10 +7787,23 @@ views.flows = async () => {
   const agentSel = el('select', {}, ...agents.map((a) => el('option', { value: String(a.id) }, a.display_name || a.hostname)));
   if (selectedAgentId != null && agents.some((a) => String(a.id) === String(selectedAgentId))) agentSel.value = String(selectedAgentId);
 
-  // Mode toggle: Unified (explore) or Bidirectional (ingress/egress split).
+  // Mode toggle: Unified (explore), Bidirectional (ingress/egress split) or
+  // Map (geographic traffic arrows colored by traffic type).
   let mode = 'unified';
   const modeUnified = el('button', { class: 'small active' }, 'Unified');
   const modeBidi = el('button', { class: 'small ghost' }, 'Bidirectional');
+  const modeMap = el('button', { class: 'small ghost' }, 'Map');
+
+  // Map-mode scope: the selected agent, one site, or the whole fleet. Site
+  // options come from the agents' locations (sites that actually report).
+  const mapScopeSel = el('select', {}, el('option', { value: 'agent' }, 'Selected agent'), el('option', { value: 'fleet' }, 'All sites'));
+  {
+    const seen = new Map();
+    for (const a of agents) if (a.location_id != null && !seen.has(a.location_id)) seen.set(a.location_id, a.location_name || `#${a.location_id}`);
+    for (const [lid, name] of [...seen].sort((x, y) => String(x[1]).localeCompare(String(y[1])))) {
+      mapScopeSel.append(el('option', { value: `l${lid}` }, `Site: ${name}`));
+    }
+  }
 
   const peerInput = el('input', { type: 'text', placeholder: 'IP (src/dst)' });
   const portInput = el('input', { type: 'number', min: '1', max: '65535', placeholder: 'port' });
@@ -7809,41 +7865,61 @@ views.flows = async () => {
       el('span', { class: 'flows-field-label' }, labelText), ...controls);
 
   // Mode + time presets rendered as connected "segmented" controls (one active).
-  const modeSeg = el('div', { class: 'flows-seg' }, modeUnified, modeBidi);
+  const modeSeg = el('div', { class: 'flows-seg' }, modeUnified, modeBidi, modeMap);
   const rangeSeg = el('div', { class: 'flows-seg' }, ...presetBtns);
 
-  // Unified-only filters — hidden when switching to bidirectional mode.
+  // Unified-only filters — hidden when switching to bidirectional/map mode.
   const unifiedControls = el('div', { class: 'flows-row flows-row-filters' },
     flowField('Port', 'flows-field-sm', portInput),
     flowField('Proto', 'flows-field-sm', protoInput),
     flowField('Direction', '', dirSel),
     flowField('Scope', '', scopeSel));
 
-  // Prefill from a deep link (global search → "→ flows").
+  const peerField = flowField('Peer', 'flows-field-grow', peerInput);
+  const mapScopeField = flowField('Map scope', '', mapScopeSel);
+  mapScopeField.style.display = 'none';
+
+  // Prefill from a deep link (global search → "→ flows", or a clicked dataflow
+  // on the Overview / a location page → Map mode scoped to that site).
   if (flowsPrefill) {
     if (flowsPrefill.agentId != null && agents.some((a) => String(a.id) === String(flowsPrefill.agentId))) agentSel.value = String(flowsPrefill.agentId);
     if (flowsPrefill.peer) peerInput.value = flowsPrefill.peer;
     if (flowsPrefill.port) portInput.value = String(flowsPrefill.port);
+    if (flowsPrefill.mode === 'map') {
+      mode = 'map';
+      if (flowsPrefill.locationId != null && [...mapScopeSel.options].some((o) => o.value === `l${flowsPrefill.locationId}`)) {
+        mapScopeSel.value = `l${flowsPrefill.locationId}`;
+      } else if (flowsPrefill.locationId === null) {
+        mapScopeSel.value = 'fleet';
+      }
+    }
     flowsPrefill = null;
   }
 
+  function applyModeUI() {
+    for (const [btn, val] of [[modeUnified, 'unified'], [modeBidi, 'bidi'], [modeMap, 'map']]) {
+      btn.classList.toggle('active', mode === val);
+      btn.classList.toggle('ghost', mode !== val);
+    }
+    unifiedControls.style.display = mode === 'unified' ? '' : 'none';
+    peerField.style.display = mode === 'map' ? 'none' : '';
+    mapScopeField.style.display = mode === 'map' ? '' : 'none';
+  }
   function switchMode(m) {
     mode = m;
-    modeUnified.classList.toggle('active', m === 'unified');
-    modeUnified.classList.toggle('ghost', m !== 'unified');
-    modeBidi.classList.toggle('active', m === 'bidi');
-    modeBidi.classList.toggle('ghost', m !== 'bidi');
-    unifiedControls.style.display = m === 'unified' ? '' : 'none';
+    applyModeUI();
     refresh();
   }
   modeUnified.addEventListener('click', () => switchMode('unified'));
   modeBidi.addEventListener('click', () => switchMode('bidi'));
+  modeMap.addEventListener('click', () => switchMode('map'));
 
   root.append(el('div', { class: 'flows-controls' },
     el('div', { class: 'flows-row' },
       flowField('Agent', 'flows-field-agent', agentSel),
       flowField('Mode', '', modeSeg),
-      flowField('Peer', 'flows-field-grow', peerInput)),
+      peerField,
+      mapScopeField),
     unifiedControls,
     el('div', { class: 'flows-row flows-row-time' },
       flowField('Range', '', rangeSeg),
@@ -7913,6 +7989,7 @@ views.flows = async () => {
     }
     status.textContent = 'Loading…';
     host.replaceChildren();
+    stopTrafficMaps(); // tear down a previous map-mode render
 
     const qp = new URLSearchParams({
       agentId: agentSel.value,
@@ -7920,6 +7997,62 @@ views.flows = async () => {
       to: new Date(toMs).toISOString(),
     });
     const peerVal = peerInput.value.trim();
+
+    // Map mode — /api/flows/map: colored directional arrows between sites and
+    // destination countries (color = traffic type, motion = direction).
+    if (mode === 'map') {
+      if (typeof L === 'undefined') {
+        host.replaceChildren(el('div', { class: 'empty' }, 'Map library (Leaflet) could not be loaded — the traffic map is unavailable offline.'));
+        status.textContent = ''; return;
+      }
+      const scope = mapScopeSel.value;
+      const mqp = new URLSearchParams({ from: new Date(fromMs).toISOString(), to: new Date(toMs).toISOString() });
+      if (scope === 'agent') mqp.set('agentId', agentSel.value);
+      else if (scope.startsWith('l')) mqp.set('locationId', scope.slice(1));
+      let data; let cfg;
+      try {
+        [data, cfg] = await Promise.all([api(`/api/flows/map?${mqp}`), trafficTileConfig()]);
+      } catch (e) {
+        host.replaceChildren(el('div', { class: 'error' }, errText(e)));
+        status.textContent = ''; return;
+      }
+      status.textContent = `${fmtBytes(data.totals.bytes)} · ${data.totals.flowCount} flows · ${data.totals.destinations} destination${data.totals.destinations === 1 ? '' : 's'}`;
+
+      if (!data.arcs.length) {
+        host.replaceChildren(el('div', { class: 'empty' },
+          'No geolocated flows in the window — the map needs NetFlow/sFlow reporting, the geo pipeline (Settings → Map) and a located site for the origin.'));
+        return;
+      }
+
+      const mapEl = el('div', { class: 'map traffic-map' });
+      const chipsHost = el('div', {});
+      const siteByKey = new Map((data.sites || []).map((s) => [s.key, s]));
+      // Top flows side panel — click a row to pan the map to that destination.
+      const flowRows = data.arcs.slice(0, 25).map((a) => {
+        const site = siteByKey.get(a.siteKey);
+        const dirTxt = a.direction === 'in' ? '◂ in' : a.direction === 'both' ? '⇄ both' : 'out ▸';
+        return el('div', {
+          class: 'flowmap-row', role: 'button', tabindex: '0',
+          onclick: () => { if (mapApi && a.lat != null) mapApi.map.setView([a.lat, a.lng], Math.max(mapApi.map.getZoom(), 4)); },
+          onkeydown: (e) => { if (e.key === 'Enter' && mapApi && a.lat != null) mapApi.map.setView([a.lat, a.lng], Math.max(mapApi.map.getZoom(), 4)); },
+        },
+        el('span', { class: 'tc-dot', style: `background:${trafficTypeColor(a.category)}` }),
+        el('span', { class: 'fmr-dst' },
+          el('span', {}, `${esc(site ? site.name : '?')} → ${esc(a.country)}`),
+          el('span', { class: 'muted' }, `${esc(a.label)}${a.asnNames && a.asnNames.length ? ' · ' + esc(a.asnNames[0]) : ''}`)),
+        el('span', { class: 'fmr-vol num' }, fmtBytes(a.bytes), el('span', { class: `fmr-dir dir-${a.direction}` }, dirTxt)));
+      });
+      const side = el('div', { class: 'flowmap-side' },
+        el('div', { class: 'card' }, el('h3', {}, 'Traffic type'), chipsHost),
+        el('div', { class: 'card' }, el('h3', {}, 'Top flows'), el('div', { class: 'flowmap-list' }, ...flowRows)));
+      host.replaceChildren(el('div', { class: 'flowmap-grid' }, el('div', {}, mapEl, trafficMapKey()), side));
+
+      let mapApi = drawTrafficMap(mapEl, cfg, data, {
+        onSiteClick: (s) => { if (s.locationId != null) openLocation(s.locationId); },
+      });
+      chipsHost.replaceChildren(trafficLegendChips(data.categories, () => mapApi));
+      return;
+    }
 
     if (mode === 'bidi') {
       if (peerVal) qp.set('host', peerVal);
@@ -8032,6 +8165,8 @@ views.flows = async () => {
 
   runBtn.addEventListener('click', refresh);
   agentSel.addEventListener('change', refresh);
+  mapScopeSel.addEventListener('change', refresh);
+  applyModeUI(); // a deep link may land directly in Map mode
   await refresh();
   return root;
 };
@@ -8051,6 +8186,213 @@ function createLeafletMap(host, config, { center = [20, 0], zoom = 3 } = {}) {
     attribution: cfg.attribution || '© OpenStreetMap',
   }).addTo(map);
   return map;
+}
+
+// ---- Traffic map (colored directional flow arrows) -------------------------
+// Shared by the Flows page "Map" mode, the Overview and the location page.
+// Draws one arc per (site, destination country, traffic-type category) from
+// GET /api/flows/map: color = traffic type, animated dashes = direction (drawn
+// toward the receiving end; solid = both ways), width = volume. External
+// destinations only — internal RFC1918 traffic is never geolocated.
+const TRAFFIC_COLORS = {
+  web: '#0ea5e9', dns: '#8b5cf6', mail: '#f59e0b', ssh: '#10b981', rdp: '#ef4444',
+  ntp: '#14b8a6', voip: '#eab308', vpn: '#ec4899', facebook: '#3b82f6', google: '#22c55e',
+  netflix: '#e11d48', microsoft: '#6366f1', amazon: '#f97316', apple: '#a3a3a3',
+  cloudflare: '#fb923c', akamai: '#06b6d4', other: '#64748b',
+};
+const TRAFFIC_FALLBACK = ['#0ea5e9', '#8b5cf6', '#f59e0b', '#10b981', '#ec4899', '#eab308', '#ef4444', '#14b8a6'];
+function trafficTypeColor(id) {
+  if (TRAFFIC_COLORS[id]) return TRAFFIC_COLORS[id];
+  let h = 0; for (const c of String(id)) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  return TRAFFIC_FALLBACK[h % TRAFFIC_FALLBACK.length];
+}
+
+// Live traffic-map Leaflet instances — torn down centrally on view switch.
+const trafficMapState = { maps: [] };
+function stopTrafficMaps() {
+  for (const m of trafficMapState.maps.splice(0)) { try { m.remove(); } catch { /* ignore */ } }
+}
+
+// Cached effective tile config (admin-editable; EU/self-hosted).
+let trafficMapCfg = null;
+async function trafficTileConfig() {
+  if (!trafficMapCfg) { try { trafficMapCfg = await api('/api/map/config'); } catch { trafficMapCfg = {}; } }
+  return trafficMapCfg;
+}
+
+// Samples a quadratic bezier between two latlngs, lifting the control point
+// perpendicular to the chord for a great-circle feel. Returns [ [lat,lng], … ].
+function trafficArcPoints(a, b, steps = 24) {
+  const [alat, alng] = a; const [blat, blng] = b;
+  const mlat = (alat + blat) / 2; const mlng = (alng + blng) / 2;
+  const dlat = blat - alat; const dlng = blng - alng;
+  const len = Math.sqrt(dlat * dlat + dlng * dlng) || 1;
+  const lift = Math.min(14, len * 0.18);
+  const clat = mlat + (-dlng / len) * lift;
+  const clng = mlng + (dlat / len) * lift;
+  const pts = [];
+  for (let i = 0; i <= steps; i += 1) {
+    const t = i / steps; const u = 1 - t;
+    pts.push([u * u * alat + 2 * u * t * clat + t * t * blat,
+      u * u * alng + 2 * u * t * clng + t * t * blng]);
+  }
+  return pts;
+}
+
+// Draws sites + arcs + destination markers onto a fresh Leaflet map inside
+// `hostEl`. Returns { map, setCategory(catId, visible) } or null (no Leaflet).
+// opts: { onSiteClick(site), onArcClick(arc, site) } — both optional.
+function drawTrafficMap(hostEl, cfg, data, opts = {}) {
+  const sites = (data.sites || []).filter((s) => s.lat != null && s.lng != null);
+  const siteByKey = new Map((data.sites || []).map((s) => [s.key, s]));
+  const arcs = (data.arcs || []).filter((a) => a.lat != null && a.lng != null && a.siteKey && siteByKey.get(a.siteKey) && siteByKey.get(a.siteKey).lat != null);
+  const center = sites.length ? [sites[0].lat, sites[0].lng] : (arcs.length ? [arcs[0].lat, arcs[0].lng] : [50, 10]);
+  const map = createLeafletMap(hostEl, cfg, { center, zoom: 3 });
+  if (!map) return null;
+  trafficMapState.maps.push(map);
+  const bounds = [];
+  const layersByCat = new Map();
+  const layerFor = (catId) => {
+    let g = layersByCat.get(catId);
+    if (!g) { g = L.layerGroup().addTo(map); layersByCat.set(catId, g); }
+    return g;
+  };
+  const dirGlyph = { in: '⬅ inbound', out: '➡ outbound', both: '⇄ both ways' };
+
+  // Arcs — drawn toward the receiving end so the dash animation (CSS,
+  // .flowarc) always travels in the traffic's direction; 'both' renders solid.
+  const maxBytes = Math.max(1, ...arcs.map((a) => a.bytes));
+  for (const a of arcs) {
+    const site = siteByKey.get(a.siteKey);
+    const from = [site.lat, site.lng]; const to = [a.lat, a.lng];
+    const pts = a.direction === 'in' ? trafficArcPoints(to, from) : trafficArcPoints(from, to);
+    const weight = 1.5 + 4.5 * (Math.log2(1 + a.bytes) / Math.log2(1 + maxBytes));
+    const color = trafficTypeColor(a.category);
+    const line = L.polyline(pts, {
+      color, weight, opacity: a.direction === 'both' ? 0.6 : 0.8,
+      dashArray: a.direction === 'both' ? null : '2 9',
+      className: a.direction === 'both' ? 'flowarc flowarc-bidi' : 'flowarc',
+    });
+    const split = a.direction === 'both' ? ` (↓${fmtBytes(a.inBytes)} / ↑${fmtBytes(a.outBytes)})` : '';
+    line.bindTooltip(`${esc(site.name)} ↔ ${esc(a.country)} · ${esc(a.label)} · ${fmtBytes(a.bytes)} · ${dirGlyph[a.direction] || a.direction}${split}`
+      + (a.asnNames && a.asnNames.length ? `<br><span class="muted">${esc(a.asnNames.join(', '))}</span>` : ''));
+    if (opts.onArcClick) line.on('click', () => opts.onArcClick(a, site));
+    layerFor(a.category).addLayer(line);
+    bounds.push(from, to);
+  }
+
+  // Destination markers — one small circle per country, colored by its
+  // heaviest traffic type there.
+  const byCountry = new Map();
+  for (const a of arcs) {
+    const c = byCountry.get(a.country) || { country: a.country, lat: a.lat, lng: a.lng, bytes: 0, top: a };
+    c.bytes += a.bytes; if (a.bytes > c.top.bytes) c.top = a;
+    byCountry.set(a.country, c);
+  }
+  for (const c of byCountry.values()) {
+    L.circleMarker([c.lat, c.lng], {
+      radius: 4, color: trafficTypeColor(c.top.category), fillColor: trafficTypeColor(c.top.category),
+      fillOpacity: 0.85, weight: 1, className: 'flowdest',
+    }).addTo(map).bindTooltip(`${esc(c.country)} · ${fmtBytes(c.bytes)}`);
+  }
+
+  // Site pins — accent ringed dots; click drills into the site.
+  for (const s of sites) {
+    const m = L.circleMarker([s.lat, s.lng], { radius: 8, color: '#fff', weight: 2, fillColor: '#38bdf8', fillOpacity: 0.95 });
+    m.bindTooltip(`${esc(s.name)} · ${s.hostIds.length} agent${s.hostIds.length === 1 ? '' : 's'}`);
+    if (opts.onSiteClick) m.on('click', () => opts.onSiteClick(s));
+    m.addTo(map);
+    bounds.push([s.lat, s.lng]);
+  }
+
+  if (bounds.length > 1) { try { map.fitBounds(bounds, { padding: [36, 36], maxZoom: 6 }); } catch { /* single point */ } }
+  setTimeout(() => { try { map.invalidateSize(); } catch { /* ignore */ } }, 60);
+  return {
+    map,
+    setCategory(catId, visible) {
+      const g = layersByCat.get(catId);
+      if (!g) return;
+      if (visible) g.addTo(map); else map.removeLayer(g);
+    },
+  };
+}
+
+// Legend chips (one per traffic type present, biggest first) that toggle the
+// matching arc layer on the drawn map. `getMap()` defers to the live instance.
+function trafficLegendChips(categories, getMap) {
+  const off = new Set();
+  return el('div', { class: 'traffic-chips' }, ...(categories || []).map((c) => {
+    const chip = el('button', {
+      class: 'traffic-chip', type: 'button', 'aria-pressed': 'true',
+      title: `${c.label} · ${fmtBytes(c.bytes)} — click to hide/show`,
+      onclick: () => {
+        const mapApi = getMap();
+        const hidden = off.has(c.id);
+        if (hidden) off.delete(c.id); else off.add(c.id);
+        chip.classList.toggle('off', !hidden);
+        chip.setAttribute('aria-pressed', hidden ? 'true' : 'false');
+        if (mapApi) mapApi.setCategory(c.id, hidden);
+      },
+    }, el('span', { class: 'tc-dot', style: `background:${trafficTypeColor(c.id)}` }), `${c.label}`,
+    el('span', { class: 'muted tc-amt' }, ` ${fmtBytes(c.bytes)}`));
+    return chip;
+  }));
+}
+
+// The compact legend line explaining the arrow language (shared).
+function trafficMapKey() {
+  return el('div', { class: 'legend geo-legend' },
+    el('span', {}, el('span', { class: 'dot ring', style: 'background:#38bdf8' }), ' site'),
+    el('span', { class: 'muted' }, '· color = traffic type · moving dashes = direction · solid = both ways · width = volume'),
+    el('span', { class: 'muted' }, '· public destinations at country level — internal traffic is never geolocated'));
+}
+
+// A self-contained traffic-map card for the Overview and location pages.
+// scope: { locationId } | {} (fleet-wide). Data loads lazily; the card renders
+// a friendly empty state when there are no geolocated flows.
+function trafficMapCard({ scope = {}, title = 'Traffic map', subtitle = 'last 6 h · colored arrows = traffic type + direction', onArcClick = null, onSiteClick = null, onData = null } = {}) {
+  const chipsHost = el('div', {});
+  const statusEl = el('span', { class: 'muted tmc-status' }, 'Loading…');
+  const mapHost = el('div', { class: 'map traffic-map' });
+  const body = el('div', {}, mapHost);
+  const root = el('div', { class: 'card traffic-card' },
+    el('div', { class: 'tmc-head' },
+      el('h3', {}, title),
+      el('span', { class: 'muted' }, subtitle),
+      statusEl),
+    chipsHost, body, trafficMapKey());
+  let mapApi = null;
+
+  (async () => {
+    if (typeof L === 'undefined') {
+      statusEl.textContent = '';
+      body.replaceChildren(el('div', { class: 'empty' }, 'Map library (Leaflet) could not be loaded — the traffic map is unavailable offline.'));
+      return;
+    }
+    const qp = new URLSearchParams();
+    if (scope.locationId != null) qp.set('locationId', String(scope.locationId));
+    if (scope.agentId != null) qp.set('agentId', String(scope.agentId));
+    let data; let cfg;
+    try {
+      [data, cfg] = await Promise.all([api(`/api/flows/map?${qp}`), trafficTileConfig()]);
+    } catch (e) {
+      statusEl.textContent = '';
+      body.replaceChildren(el('div', { class: 'error' }, errText(e)));
+      return;
+    }
+    if (!root.isConnected) return; // view was left while loading
+    if (onData) { try { onData(data); } catch { /* consumer's problem */ } }
+    statusEl.textContent = `${fmtBytes(data.totals.bytes)} · ${data.totals.destinations} destination${data.totals.destinations === 1 ? '' : 's'}`;
+    if (!data.arcs.length) {
+      body.replaceChildren(el('div', { class: 'empty' },
+        'No geolocated flows in the window — needs NetFlow/sFlow agents, the geo pipeline and located sites (Settings → Map).'));
+      return;
+    }
+    mapApi = drawTrafficMap(mapHost, cfg, data, { onArcClick, onSiteClick });
+    chipsHost.replaceChildren(trafficLegendChips(data.categories, () => mapApi));
+  })();
+
+  return root;
 }
 
 // Topology map-mode Leaflet instance. The Topology tab defaults to the SVG
@@ -8727,6 +9069,105 @@ async function deleteAgent(a) {
   catch (err) { toast(err.message, true); }
 }
 
+// The per-location drill-down page: every agent at the site with its health
+// verdict + key metrics, a scoped health summary, and the site's outbound
+// dataflows (traffic map + list). Full-width; no tab — reached via
+// openLocation(id). Clicking a dataflow opens the Flows page in Map mode
+// scoped to this location.
+views.location = async () => {
+  const id = selectedLocationId;
+  const root = el('div', { class: 'location-detail' });
+  if (id == null) { root.append(el('div', { class: 'empty' }, 'Pick a location first.')); return root; }
+
+  const [locations, agents, fleet] = await Promise.all([
+    api('/locations').catch(() => []),
+    api('/agents').catch(() => []),
+    api('/api/fleet/health').catch(() => ({ agents: [], summary: {} })),
+  ]);
+  const loc = locations.find((l) => String(l.id) === String(id));
+  if (!loc) { root.append(el('div', { class: 'error' }, 'Location not found.')); return root; }
+  const members = agents.filter((a) => String(a.location_id) === String(id));
+  const fleetById = new Map((fleet.agents || []).map((a) => [a.agentId, a]));
+  const scoped = members.map((m) => fleetById.get(m.id)).filter(Boolean);
+
+  root.append(el('div', { class: 'section-head' },
+    el('button', { class: 'small ghost', onclick: () => { currentView = 'locations'; render(); } }, '← Locations'),
+    el('h2', {}, '📍 ', esc(loc.name)),
+    loc.description ? el('span', { class: 'muted' }, esc(loc.description)) : null,
+    loc.latitude != null ? el('span', { class: 'muted' }, `· ${Number(loc.latitude).toFixed(3)}, ${Number(loc.longitude).toFixed(3)}`) : null,
+    el('span', { class: 'spacer' }),
+    el('button', { class: 'small ghost', onclick: () => openFlows(null, { mode: 'map', locationId: id }) }, 'Flows →'),
+    el('button', { class: 'small ghost', onclick: () => showLocationTraffic(loc) }, 'Live traffic'),
+    featureEnabled('assistant') ? el('button', { class: 'small ghost', onclick: () => showLocationSummary(loc) }, 'AI status') : null,
+    canWrite() ? el('button', { class: 'small ghost', onclick: () => editLocation(loc) }, 'Edit') : null));
+
+  // Health summary for just this site's agents (same KPI language as Overview).
+  const summary = { ok: 0, warn: 0, bad: 0, down: 0, stale: 0, unknown: 0 };
+  for (const a of scoped) if (a.health && a.health.status in summary) summary[a.health.status] += 1;
+  const k = fleetKpis({ agents: scoped, summary });
+  const lossStatus = k.loss == null ? 'accent' : k.loss >= 20 ? 'bad' : k.loss >= 2 ? 'warn' : 'ok';
+  const agStatus = k.total && k.online === 0 ? 'bad' : k.online < k.total ? 'warn' : 'ok';
+  root.append(el('div', { class: 'noc-kpis loc-kpis' },
+    kpiCard('Agents', `${k.online}/${k.total}`, 'online at this site', agStatus),
+    kpiCard('Latency', k.latency == null ? '–' : `${k.latency} ms`, 'median RTT', 'accent'),
+    kpiCard('Packet loss', k.loss == null ? '–' : `${k.loss}%`, 'worst agent', lossStatus),
+    kpiCard('Jitter', k.jitter == null ? '–' : `${k.jitter} ms`, 'median', k.jitter >= 30 ? 'warn' : 'accent'),
+    kpiCard('Test paths', `${k.paths}`, 'monitored targets', 'accent'),
+    kpiCard('Alerts', `${k.alerts}`, k.crit ? `${k.crit} critical` : (k.warn ? `${k.warn} warning` : 'all clear'), k.crit ? 'bad' : (k.warn ? 'warn' : 'ok'))));
+
+  // Agents at this location — the fleet table's columns, scoped. Click → agent page.
+  const agentRow = (m) => {
+    const a = fleetById.get(m.id);
+    const h = a && a.health; const met = (h && h.metrics) || {};
+    return el('tr', { class: 'fleet-row', tabindex: '0', onclick: () => openAgent(m.id), onkeydown: (e) => { if (e.key === 'Enter') openAgent(m.id); } },
+      el('td', {}, el('div', {}, esc(m.display_name || m.hostname)), m.display_name && m.display_name !== m.hostname ? el('div', { class: 'muted' }, esc(m.hostname)) : null),
+      el('td', {}, el('span', { class: `badge ${m.status}` }, m.status)),
+      el('td', {}, h ? healthBadge(h) : el('span', { class: 'muted' }, '–')),
+      el('td', { class: 'num' }, met.lossPct != null ? `${met.lossPct}%` : '–'),
+      el('td', { class: 'num' }, latencyText(met)),
+      el('td', { class: 'num' }, met.jitterMs != null ? `${met.jitterMs} ms` : '–'),
+      el('td', { class: 'num muted' }, met.targets ? `${met.reachable}/${met.targets}` : '–'),
+      el('td', { class: 'num' }, throughputText(a && a.throughput)),
+      el('td', { class: 'muted' }, esc((a && a.quality && a.quality.version) || (m.capabilities && m.capabilities.version) || '–')),
+      el('td', { class: 'muted' }, m.last_seen ? fmtDate(m.last_seen) : '–'));
+  };
+  const agentsCard = el('div', { class: 'card loc-card' }, el('h3', {}, `Agents (${members.length})`));
+  if (!members.length) agentsCard.append(el('div', { class: 'empty' }, 'No agents at this location yet.'));
+  else agentsCard.append(el('table', { class: 'agents-table' },
+    el('thead', {}, el('tr', {}, ...['Agent', 'Connection', 'Health', 'Loss', 'Latency', 'Jitter', 'Targets', 'Throughput', 'Version', 'Last seen'].map((h) => el('th', {}, h)))),
+    el('tbody', {}, ...members.map(agentRow))));
+  root.append(agentsCard);
+
+  // Dataflows: the site's external traffic as colored directional arrows + a
+  // clickable list. Every dataflow row/arc opens Flows → Map for this site.
+  const toFlows = () => openFlows(null, { mode: 'map', locationId: id });
+  const flowsListHost = el('div', { class: 'flowmap-list' }, el('div', { class: 'muted' }, 'Loading…'));
+  const flowsCard = el('div', { class: 'card loc-card' },
+    el('h3', {}, 'Data flows ', el('span', { class: 'muted' }, '· click a flow to inspect it in Flows')),
+    flowsListHost);
+  const mapCard = trafficMapCard({
+    scope: { locationId: id },
+    title: `Traffic map — ${loc.name}`,
+    onArcClick: toFlows,
+    onData: (data) => {
+      const siteByKey = new Map((data.sites || []).map((s) => [s.key, s]));
+      if (!data.arcs.length) { flowsListHost.replaceChildren(el('div', { class: 'empty' }, 'No geolocated flows in the window.')); return; }
+      flowsListHost.replaceChildren(...data.arcs.slice(0, 20).map((a) => {
+        const site = siteByKey.get(a.siteKey);
+        const dirTxt = a.direction === 'in' ? '◂ in' : a.direction === 'both' ? '⇄ both' : 'out ▸';
+        return el('div', { class: 'flowmap-row', role: 'button', tabindex: '0', onclick: toFlows, onkeydown: (e) => { if (e.key === 'Enter') toFlows(); } },
+          el('span', { class: 'tc-dot', style: `background:${trafficTypeColor(a.category)}` }),
+          el('span', { class: 'fmr-dst' },
+            el('span', {}, `${esc(site ? site.name : loc.name)} → ${esc(a.country)}`),
+            el('span', { class: 'muted' }, `${esc(a.label)}${a.asnNames && a.asnNames.length ? ' · ' + esc(a.asnNames[0]) : ''}`)),
+          el('span', { class: 'fmr-vol num' }, fmtBytes(a.bytes), el('span', { class: `fmr-dir dir-${a.direction}` }, dirTxt)));
+      }));
+    },
+  });
+  root.append(el('div', { class: 'loc-grid' }, mapCard, flowsCard));
+  return root;
+};
+
 views.locations = async () => {
   const locations = await api('/locations');
   const root = el('div');
@@ -8737,9 +9178,10 @@ views.locations = async () => {
     el('thead', {}, el('tr', {}, ...['ID', 'Name', 'Description', ''].map((h) => el('th', {}, h)))),
     el('tbody', {}, ...locations.map((l) => el('tr', {},
       el('td', {}, String(l.id)),
-      el('td', {}, l.name),
+      el('td', {}, el('button', { class: 'linklike', title: 'Open the location page — agents, health & data flows', onclick: () => openLocation(l.id) }, esc(l.name))),
       el('td', { class: 'muted' }, l.description || '–'),
       el('td', {}, el('div', { class: 'row-actions' },
+        el('button', { class: 'small ghost', onclick: () => openLocation(l.id) }, 'Open'),
         el('button', { class: 'small ghost', onclick: () => showLocationTraffic(l) }, 'Traffic'),
         el('button', { class: 'small ghost', onclick: () => showLocationHistory(l) }, 'History'),
         featureEnabled('assistant') ? el('button', { class: 'small ghost', onclick: () => showLocationSummary(l) }, 'AI status') : null,
@@ -13318,6 +13760,7 @@ async function render({ silent = false } = {}) {
   if (currentView !== 'geo') stopGeo();
   if (currentView !== 'map') stopMap();
   if (currentView !== 'topology') stopTopoMap();
+  stopTrafficMaps(); // traffic maps always rebuild with their view
 
   // Admin-only tabs (e.g. Users); send non-admins back to agents if needed.
   for (const b of document.querySelectorAll('.tabs button[data-admin]')) {
@@ -13409,7 +13852,7 @@ async function renderSsoOptions() {
   host.classList.remove('hidden');
 }
 renderSsoOptions();
-$('#logout').addEventListener('click', () => { setAutoRefresh(false); stopOverview(); stopFleet(); stopAgent(); stopProbes(); stopIfaces(); stopMap(); stopGeo(); stopTopoMap(); $('#autorefresh').checked = false; logout(); });
+$('#logout').addEventListener('click', () => { setAutoRefresh(false); stopOverview(); stopFleet(); stopAgent(); stopProbes(); stopIfaces(); stopMap(); stopGeo(); stopTopoMap(); stopTrafficMaps(); $('#autorefresh').checked = false; logout(); });
 // Refresh row: the main action does a real, full page reload (not a soft
 // re-render), so it always reflects the freshest server state.
 $('#refresh').addEventListener('click', () => window.location.reload());

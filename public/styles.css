@@ -1338,7 +1338,9 @@ button.active-btn { outline: 2px solid var(--accent); }
 .netpath-legend .ln.normal { background: var(--accent); }
 .netpath-legend .ln.degraded { background: var(--warn); }
 .netpath-legend .ln.bad { background: var(--bad); }
-.netpath svg { width: 100%; height: auto; display: block; font-family: inherit; overflow: visible; }
+/* Compact strip: cap the drawn width so the schematic stays modest and leaves
+   the vertical room to the traffic map below it. */
+.netpath svg { width: 100%; max-width: 900px; height: auto; display: block; margin: 0 auto; font-family: inherit; overflow: visible; }
 .netpath .np-node, .netpath .np-link, .netpath .np-flow { cursor: default; }
 .np-link { fill: none; stroke: var(--accent); stroke-width: 2.5; }
 .np-link.degraded { stroke: var(--warn); stroke-dasharray: 8 5; }
@@ -1739,3 +1741,66 @@ li.guide-step.done .guide-step-title { text-decoration: line-through; opacity: 0
 .docs-table th, .docs-table td { text-align: left; vertical-align: top; padding: 7px 10px; border-bottom: 1px solid var(--border); }
 .docs-table th { color: var(--muted); font-weight: 600; white-space: nowrap; }
 .docs-table code { white-space: nowrap; }
+
+/* ---- Traffic map (colored directional flow arrows) ----------------------- */
+/* Shared by Flows → Map mode, the Overview and the location page. The arcs are
+   Leaflet polylines with .flowarc: the dash pattern travels along the path
+   (drawn toward the receiving end), so motion = traffic direction. */
+.flowarc { animation: flow-dash 1.4s linear infinite; }
+.flowarc-bidi { animation: none; }
+@keyframes flow-dash { to { stroke-dashoffset: -22px; } }
+@media (prefers-reduced-motion: reduce) { .flowarc { animation: none; } }
+
+.traffic-map { height: 52vh; min-height: 340px; }
+.traffic-card { width: auto; margin: 0 0 16px; padding: 14px 16px; box-shadow: var(--shadow); }
+.traffic-card h3 { margin: 0; font-size: 15px; }
+.tmc-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 4px; }
+.tmc-head .tmc-status { margin-left: auto; font-variant-numeric: tabular-nums; }
+.fleet-traffic { margin: 0 0 16px; }
+.fleet-traffic .traffic-card { margin: 0; }
+
+/* Traffic-type legend chips — click to hide/show a category's arrows. */
+.traffic-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 10px; }
+.traffic-chip { display: inline-flex; align-items: center; gap: 6px; font: inherit; font-size: 12px;
+  color: var(--text); background: var(--panel-2); border: 1px solid var(--border);
+  border-radius: 999px; padding: 3px 10px; cursor: pointer; }
+.traffic-chip:hover { border-color: var(--accent); }
+.traffic-chip.off { opacity: .4; }
+.traffic-chip .tc-amt { font-size: 11px; }
+.tc-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; flex: none; }
+
+/* Flows → Map mode layout: map + a side panel (legend & top flows). */
+.flowmap-grid { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 14px; align-items: start; }
+@media (max-width: 960px) { .flowmap-grid { grid-template-columns: 1fr; } }
+.flowmap-side { display: flex; flex-direction: column; gap: 14px; }
+.flowmap-side .card { width: auto; padding: 13px 15px; gap: 0; box-shadow: var(--shadow); }
+.flowmap-side .card h3 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.flowmap-list { display: flex; flex-direction: column; gap: 1px; max-height: 46vh; overflow-y: auto; }
+.flowmap-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 9px; align-items: center;
+  padding: 6px; border-radius: 7px; cursor: pointer; }
+.flowmap-row:hover, .flowmap-row:focus-visible { background: var(--accent-weak); outline: none; }
+.fmr-dst { display: flex; flex-direction: column; min-width: 0; font-size: 12.5px; }
+.fmr-dst > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fmr-dst .muted { font-size: 11px; }
+.fmr-vol { display: flex; flex-direction: column; align-items: flex-end; font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.fmr-dir { font-size: 11px; }
+.fmr-dir.dir-out { color: var(--accent); }
+.fmr-dir.dir-in { color: var(--warn); }
+.fmr-dir.dir-both { color: var(--muted); }
+
+/* ---- Agent page: cards side by side on the full width -------------------- */
+/* The global .card is a fixed 320px (login); inside the agent grid the cards
+   fill their track instead of stranding in a narrow column. */
+.agent-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 14px; align-items: start; margin: 0 0 14px; }
+.agent-cards .card { width: auto; margin: 0; box-shadow: var(--shadow); }
+
+/* ---- Location drill-down page -------------------------------------------- */
+.location-detail .loc-kpis { margin-bottom: 16px; }
+.location-detail .loc-card { width: auto; margin: 0 0 16px; padding: 14px 16px; box-shadow: var(--shadow); }
+.location-detail .loc-card h3 { margin: 0 0 10px; font-size: 15px; }
+.location-detail .loc-card table { width: 100%; }
+.loc-grid { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 14px; align-items: start; }
+@media (max-width: 1020px) { .loc-grid { grid-template-columns: 1fr; } }
+.loc-grid .traffic-card, .loc-grid .loc-card { margin: 0; }
+.location-detail .section-head .spacer { flex: 1; }

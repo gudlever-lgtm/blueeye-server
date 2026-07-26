@@ -1353,6 +1353,7 @@ function makeFlowsRepo(overrides = {}) {
     agentIdsForIp: overrides.agentIdsForIp || (async () => []),
     agentIdsForPort: overrides.agentIdsForPort || (async () => []),
     asnSeries: overrides.asnSeries || (async () => []),
+    mapFlows: overrides.mapFlows || (async () => []),
   };
 }
 

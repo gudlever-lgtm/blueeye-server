@@ -334,6 +334,35 @@ function createFlowsRepository(db) {
     }));
   }
 
+  // Traffic-map input: public flows grouped by (agent, country, asn, direction,
+  // service port) over [from, to). The service port is the well-known end of
+  // the conversation — dst_port for outbound, src_port for inbound (the remote
+  // server's port) — so the caller can classify each group into a traffic-type
+  // category (port kind) or organisation (asn kind). Raw flow_records only,
+  // external destinations only (internal RFC1918 traffic is never geolocated).
+  // All filters are bound parameters; capped + ordered by bytes.
+  async function mapFlows({ agentId = null, locationId = null, from, to, limit = 2000 }) {
+    const where = ['internal = 0', 'country IS NOT NULL', 'ts >= ?', 'ts < ?'];
+    const params = [from, to];
+    if (agentId) { where.push('agent_id = ?'); params.push(agentId); }
+    else if (locationId) { where.push('agent_id IN (SELECT id FROM agents WHERE location_id = ?)'); params.push(locationId); }
+    const lim = Number.isInteger(limit) && limit > 0 && limit <= 10000 ? limit : 2000;
+    const rows = await q(
+      `SELECT agent_id, country, asn, MAX(asn_name) AS asnName, direction,
+              (CASE WHEN direction = 'in' THEN src_port ELSE dst_port END) AS port,
+              SUM(bytes) AS bytes, SUM(flows) AS flowCount
+       FROM flow_records WHERE ${where.join(' AND ')}
+       GROUP BY agent_id, country, asn, direction, port
+       ORDER BY bytes DESC LIMIT ?`,
+      [...params, lim]
+    );
+    return rows.map((r) => ({
+      agentId: r.agent_id, country: r.country, asn: normAsn(r.asn), asnName: r.asnName ?? null,
+      direction: r.direction ?? null, port: r.port != null ? Number(r.port) : null,
+      bytes: numOf(r.bytes), flowCount: numOf(r.flowCount),
+    }));
+  }
+
   // Global-search helpers: which agents have recently seen a given IP / port?
   // Raw flow_records only (the rollup keeps no per-IP/port detail), windowed.
   async function agentIdsForIp({ ip, since, until }) {
@@ -354,7 +383,7 @@ function createFlowsRepository(db) {
     return [...new Set(rows.map((r) => r.agent_id))];
   }
 
-  return { insertMany, aggregateExternalDestinations, destinationExists, agentIdsForDestination, selectFlows, exploreFlows, topologyEdges, tcpServiceFlows, agentIdsForIp, agentIdsForPort, asnSeries };
+  return { insertMany, aggregateExternalDestinations, destinationExists, agentIdsForDestination, selectFlows, exploreFlows, mapFlows, topologyEdges, tcpServiceFlows, agentIdsForIp, agentIdsForPort, asnSeries };
 }
 
 module.exports = { createFlowsRepository, toRow };

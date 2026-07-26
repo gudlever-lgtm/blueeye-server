@@ -108,7 +108,7 @@ Mounted in `src/routes/index.js`. User endpoints use JWT + roles
 | `/api/map` | map.js | viewer+ | effective tile/geocoder config |
 | `/api/settings` | settings.js | admin | editable map / **analysis** / **retention** / **flow-categories** / **AI assistant** (enable + provider + API key + model + custom endpoint) / **alerting** (channels + secrets, write-only) |
 | `/api/export` | export.js | viewer+ | CSV/JSON export + **investigation bundle** (`/investigation`: per-agent health+probes+interfaces+findings+flows, JSON or event-log CSV; print→PDF client-side) |
-| `/api/flows` | flows.js | viewer+ | **traffic-type categories** (`/categories`) + **conversation explorer** (`/explore`: talkers/ports/protos/series + scan/fan-out) |
+| `/api/flows` | flows.js | viewer+ | **traffic-type categories** (`/categories`) + **conversation explorer** (`/explore`: talkers/ports/protos/series + scan/fan-out) + **traffic map** (`/map`: one colored directional arc per site×country×category — agent/location/fleet scope, country centroids, in/out byte split; backs Flows→Map, the Overview map and the location page) |
 | `/api/transactions` | transactions.js | viewer+ read / admin write | **transaction tests** (http/tcp/dns/icmp) — CRUD (secrets write-only, `{{secret:name}}` refs) + `PUT /:id/agents` + `GET /:id/results?from&to&agent_id` + `GET /:id/heatmap?from&to&bucket` (avg_latency/fail_count/sample_count per bucket per agent) + `GET /:id/trend?agent_id&days` (median per day per step). Agents get config + report results over `/ws/agent` (`transaction_config`/`transaction_result`); threshold alerts reuse the alerting dispatcher. Repo `src/repositories/transactionsRepository.js`, validation `src/validation/transactionValidation.js`, alert eval `src/analysis/transactionAlerts.js`, MAD baseline job `src/analysis/transactionBaselines.js` |
 | `/api/probes` | probes.js | viewer+ | **active-probe** results (ping/tcp/dns/traceroute/**http**/**curl**/**pageload**/**transaction**); `/path` → **path-visualisation graph** (hop nodes+links with loss/latency/jitter + GeoIP/ASN + ECMP `branches`, `src/analysis/pathGraph.js`); `/path/metrics` → metric catalogue; `/path/timeseries` → bucketed metric series (per-agent `overlay`, DST-safe, `src/analysis/pathTimeseries.js`) for the shared Path Visualization timeline |
 | `/api/reports` | reports.js | viewer+ / operator+ | **availability** (uptime % from probes) + **incidents** list (viewer+); CSV (`.csv`, gated `reports_csv`) + print-ready HTML→PDF (`.html`, gated `reports_pdf`); **NIS2 draft** (`/nis2-draft/:id`, operator+) |
@@ -189,14 +189,19 @@ categories); fleet health is computed in `src/health/probeHealth.js` from `probe
 A single vanilla-JS SPA. Key building blocks:
 - `el(tag, attrs, ...kids)` — DOM helper. `api(path, opts)` — fetch + bearer + 401 handling.
 - `views.<tab>` — async function per tab returning a node (`fleet` (landing,
-  UI label **“Overview”** — ends with a gated **“Open issues”** rollup
-  (`fleetIssues()`, incidents + findings, `dashboard_advanced`) for Professional+),
+  UI label **“Overview”** — compact `networkPath` strip + a fleet-wide **traffic
+  map** (`trafficMapCard`, colored directional flow arrows; arc click → Flows→Map
+  scoped to the site, pin click → the location page) and ends with a gated
+  **“Open issues”** rollup (`fleetIssues()`, incidents + findings,
+  `dashboard_advanced`) for Professional+),
   `overview`, `map` (UI label **“Sites”** — locations coloured by agent health),
   `geo` (UI label **“Destinations”** — external traffic by country/ASN),
-  `agents`, `interfaces`, `nics` (NIC firmware inventory + drift), `probes`, `flows`, `screening` (**Test area** — admin-only outbound screening), `findings`, `locations`, `enrollment`,
+  `agents`, `interfaces`, `nics` (NIC firmware inventory + drift), `probes`, `flows` (Unified / Bidirectional / **Map** — geographic traffic arrows via `/api/flows/map`), `screening` (**Test area** — admin-only outbound screening), `findings`, `locations`, `enrollment`,
   `docs` (**Documentation** — built-in handbook: getting-started + troubleshooting how-tos for everyone, admin-only setup guides; static, RBAC-gated content),
   `settings`) plus `agent` (the combined per-agent drill-down page, no tab —
-  reached via `openAgent(id)`). Both maps init via the shared `createLeafletMap`
+  reached via `openAgent(id)`) and `location` (the per-site drill-down —
+  agents + scoped health + data flows, reached via `openLocation(id)`).
+  All maps init via the shared `createLeafletMap`
   (server-configured EU/self-hosted tiles).
 - `render()` — mounts the current view + its `hero()`; stops per-view pollers
   (`stopOverview`/`stopProbes`/`stopIfaces`/`stopFleet`/`stopAgent`/`stopGeo`) when leaving.
@@ -232,6 +237,8 @@ A single vanilla-JS SPA. Key building blocks:
 | Geo/ASN enrichment | `src/geo/enricher.js`, `provider.js`; flows in `flowsRepository.js` |
 | Traffic-type categories | `src/flows/categories.js` (editable via Settings→Traffic types) |
 | Flow/conversation explorer | `flowsRepository.exploreFlows` + `src/routes/flows.js` (`/explore`); UI `views.flows` |
+| Traffic map (colored flow arrows) | `flowsRepository.mapFlows` + `src/routes/flows.js` (`/map`, classifies via `src/flows/categories.js`, places via `src/geo/centroids.js`); UI shared helpers `drawTrafficMap`/`trafficMapCard`/`trafficLegendChips` in `public/app.js` — used by Flows→Map mode, the Overview (below the compact `networkPath`) and `views.location` |
+| Location drill-down page | `views.location` in `public/app.js` (`openLocation(id)`, no tab) — scoped KPI cards + agents table + traffic map/dataflows; entry points: agent-page site name, Locations list, traffic-map site pins |
 | Active probes (server) | `src/routes/probes.js`, `probeResultsRepository.js`, `validation/probeValidation.js` (probe types incl. `http` + `curl` + `pageload` + multi-step `transaction`) — agent side in blueeye-agent `src/probes/` |
 | Path visualization (traceroute map) | `src/analysis/pathGraph.js` (`buildPathGraph` — aggregates traceroutes → hop graph, geo/ASN, severity; **`branches`** = additive multi-run ECMP inference + `worstHopIndex`), `GET /api/probes/path`; UI `pathGraph()` in `public/app.js` (traceroute detail) — SVG topology **+ a geographic Leaflet map** (`drawPathMap`/`pathGeoStops`/`renderPathStops`, source anchored at the agent site via `agentsRepo` `location_lat/lng`); also a **path picker in `views.geo`/Destinations** (`drawGeoPath`). Per-hop loss/jitter come from MTR-style agent traceroute. See `docs/path-visualization.md` |
 | Path Visualization shared component (graph + metric timeline) | `pathVisualization(opts)` in `public/app.js` — one reusable component mounted in **Probes** (`probeDetail`), **Topology** (`actionBtns` drawer), **Tests** (`txDetailView`) and **Troubleshooting** (`views.incident` "Affected path"). Path graph (extended `pathGraph()` with ECMP branches, problem-hop ring, click→timeline) + a brushable metric timeline (`pathVizTimeline`/`pvChart`: overview strip + detail, metric selector, per-agent overlay, opt-in "Explain selection" → `/api/assistant/explain`), URL-persisted (`?from&to&metric&overlay`). Backend: pure DST-safe bucketing `src/analysis/pathTimeseries.js` (`METRICS`/`bucketMetric`) + `probeResultsRepository.metricRows`; `GET /api/probes/path/timeseries` + `GET /api/probes/path/metrics` (viewer+). See `docs/path-visualization.md` |

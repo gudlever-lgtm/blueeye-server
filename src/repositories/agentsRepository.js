@@ -77,13 +77,14 @@ function createAgentsRepository(db) {
     if (hostId) { where.push('a.id = ?'); params.push(hostId); }
     const clause = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const [rows] = await pool.query(
-      `SELECT a.id AS hostId, a.status, l.name AS siteName, l.latitude AS lat, l.longitude AS lng
+      `SELECT a.id AS hostId, a.status, a.location_id AS locationId, l.name AS siteName, l.latitude AS lat, l.longitude AS lng
        FROM agents a LEFT JOIN locations l ON l.id = a.location_id
        ${clause} ORDER BY a.id`,
       params
     );
     return rows.map((r) => ({
       hostId: r.hostId,
+      locationId: r.locationId ?? null,
       siteName: r.siteName ?? null,
       lat: r.lat != null ? Number(r.lat) : null,
       lng: r.lng != null ? Number(r.lng) : null,

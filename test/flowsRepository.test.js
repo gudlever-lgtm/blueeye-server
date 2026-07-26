@@ -113,3 +113,29 @@ test('asnSeries buckets bytes per ASN and passes the bucket size as the first pa
       ]);
     });
 });
+
+test('PRIVACY: mapFlows reads external rows only, scoped + capped, service port by direction', async () => {
+  const pool = {
+    queries: [],
+    async query(sql, params) {
+      this.queries.push({ sql, params });
+      return [[
+        { agent_id: 1, country: 'US', asn: '16509', asnName: 'AMAZON-02', direction: 'out', port: '443', bytes: '9000', flowCount: '9' },
+        { agent_id: 1, country: 'DE', asn: null, asnName: null, direction: 'in', port: 53, bytes: 500, flowCount: 5 },
+      ]];
+    },
+  };
+  const repo = createFlowsRepository({ pool });
+  const rows = await repo.mapFlows({ locationId: 10, from: new Date('2026-06-01T00:00:00Z'), to: new Date('2026-06-01T06:00:00Z') });
+  const q = pool.queries[0];
+  assert.match(q.sql, /internal = 0/);
+  assert.match(q.sql, /country IS NOT NULL/);
+  // service port = dst_port outbound, src_port inbound (the remote server's port)
+  assert.match(q.sql, /CASE WHEN direction = 'in' THEN src_port ELSE dst_port END/);
+  assert.match(q.sql, /agent_id IN \(SELECT id FROM agents WHERE location_id = \?\)/);
+  assert.equal(q.params[2], 10);           // locationId bound
+  assert.equal(q.params[q.params.length - 1], 2000); // default cap bound last
+  assert.deepEqual(rows[0], { agentId: 1, country: 'US', asn: 16509, asnName: 'AMAZON-02', direction: 'out', port: 443, bytes: 9000, flowCount: 9 });
+  assert.equal(rows[1].asn, null);
+  assert.equal(rows[1].port, 53);
+});

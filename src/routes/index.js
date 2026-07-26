@@ -281,7 +281,7 @@ function createApiRouter({
     fetchImpl: geocodeFetch,
   }));
   router.use('/api/flows', createFlowsRouter({
-    resultsRepo, agentsRepo, flowsRepo,
+    resultsRepo, agentsRepo, flowsRepo, centroids,
     getCategories: settingsService ? () => settingsService.getFlowCategories() : undefined,
   }));
   // Flow-derived dependency/topology map (who-talks-to-whom from the 5-tuples).

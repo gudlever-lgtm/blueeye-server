@@ -5,7 +5,7 @@
 -- group→role map and the (shared) login-audit trail live in the DB.
 
 -- Maps an OIDC claim value (a group/role name from the id-token `groups` claim,
--- configurable via OIDC_ROLE_CLAIM) to a BlueEye role. On login the user's claim
+-- configurable via OIDC_ROLE_CLAIM) to a BlueEyes role. On login the user's claim
 -- values are looked up and the HIGHEST matching role wins (admin > operator >
 -- viewer). NO match means access is DENIED — there is deliberately no default role.
 CREATE TABLE IF NOT EXISTS oidc_role_map (

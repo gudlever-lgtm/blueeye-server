@@ -184,7 +184,7 @@ function createOidcAuth({
     return [];
   }
 
-  // Maps the claim values to the HIGHEST BlueEye role via oidc_role_map. Returns
+  // Maps the claim values to the HIGHEST BlueEyes role via oidc_role_map. Returns
   // { role, matched } (matched = how many values mapped); role is null when none do.
   async function resolveRole(groups) {
     let maps = [];

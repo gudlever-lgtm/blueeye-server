@@ -1,6 +1,6 @@
-# Deploying the BlueEye TimescaleDB telemetry node
+# Deploying the BlueEyes TimescaleDB telemetry node
 
-`install-timescale.sh` provisions a **dedicated** Ubuntu node for BlueEye
+`install-timescale.sh` provisions a **dedicated** Ubuntu node for BlueEyes
 telemetry, separate from the MySQL server (`192.168.1.140`). It installs
 PostgreSQL 16 + TimescaleDB from the official apt repos, tunes it for
 batch-COPY ingest, applies the schema, wires a daily backup, and verifies the
@@ -111,6 +111,6 @@ rollback is local to this node:
   [`server/db/timescale/README.md`](../server/db/timescale/README.md).
 - **Whole node:** `systemctl disable --now postgresql@16-main`, remove the cron
   file `/etc/cron.d/blueeye-tsdb-backup`, and (optionally)
-  `apt-get purge 'postgresql-16' 'timescaledb-2-postgresql-16'`. BlueEye keeps
+  `apt-get purge 'postgresql-16' 'timescaledb-2-postgresql-16'`. BlueEyes keeps
   writing telemetry to MySQL until the repository-split phase cuts over, so the
   application keeps working throughout.

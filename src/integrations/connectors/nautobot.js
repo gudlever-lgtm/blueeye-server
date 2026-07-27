@@ -4,7 +4,7 @@ const { authHeader, requestJson, DEFAULT_TIMEOUT_MS } = require('../httpClient')
 
 const silentLogger = { info() {}, warn() {}, error() {} };
 
-// Nautobot IPAM/DCIM connector. ONE-WAY push: syncs BlueEye agents as Nautobot
+// Nautobot IPAM/DCIM connector. ONE-WAY push: syncs BlueEyes agents as Nautobot
 // devices (REST API, token auth). Idempotent — it looks a device up by name and
 // PATCHes it, or POSTs a new one. Deletion is NEVER performed unless the
 // integration's config explicitly sets allowDelete:true (the "ingen sletning uden
@@ -12,7 +12,7 @@ const silentLogger = { info() {}, warn() {}, error() {} };
 //
 // Nautobot device creation needs environment-specific required fields (device_type,
 // role, location, status). Those are supplied once in config.deviceDefaults and
-// merged into every create — BlueEye does not guess them.
+// merged into every create — BlueEyes does not guess them.
 function createNautobotConnector({ fetchImpl = globalThis.fetch, logger = silentLogger, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
   const type = 'nautobot';
   const authTypes = ['token'];
@@ -72,7 +72,7 @@ function createNautobotConnector({ fetchImpl = globalThis.fetch, logger = silent
       return { ok: false, status: lookup.status, detail: `lookup failed: ${lookup.detail}`, action: 'lookup' };
     }
     const defaults = (integration.config && integration.config.deviceDefaults) || {};
-    const body = { name, ...defaults, comments: `Synced from BlueEye (agent ${event.agent && event.agent.id})` };
+    const body = { name, ...defaults, comments: `Synced from BlueEyes (agent ${event.agent && event.agent.id})` };
 
     let res;
     let action;

@@ -1,6 +1,6 @@
 # Audit vs. logging
 
-BlueEye keeps two deliberately separate streams. Conflating them is a bug: an
+BlueEyes keeps two deliberately separate streams. Conflating them is a bug: an
 audit record must never depend on the log, and the log must never be the system
 of record for compliance.
 

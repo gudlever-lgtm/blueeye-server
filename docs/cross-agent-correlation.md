@@ -1,6 +1,6 @@
 # Cross-agent pattern correlation (incident clusters)
 
-BlueEye's per-target correlator (`src/analysis/correlator.js`) links findings
+BlueEyes' per-target correlator (`src/analysis/correlator.js`) links findings
 **within one agent** to hint a root cause. The cross-agent correlator groups
 findings across **different agents** that fire in the same time window into a
 single **incident cluster** with a suspected common cause and a confidence tier —
@@ -33,7 +33,7 @@ topology signal.
 ### Topology = shared site only (documented gap)
 
 Signal 2 uses a **shared site** (`agents.location_id`) — the only cross-agent
-adjacency BlueEye has today. **Subnet / VLAN / LLDP-neighbour adjacency does not
+adjacency BlueEyes has today. **Subnet / VLAN / LLDP-neighbour adjacency does not
 exist**: agents don't report it and there's no schema for it. A missing/`null`
 site is treated as "no topology signal" — never faked. Adding subnet/VLAN/LLDP
 would require agent-side collection (a `blueeye-agent` change + redeploy) plus a
@@ -184,7 +184,7 @@ not treated as CRIT (a lookup failure never blocks resolution).
 
 ## Automated read-only evidence snapshot on cluster open (Fase 6)
 
-When a cluster opens, BlueEye captures a **point-in-time, READ-ONLY** diagnostic
+When a cluster opens, BlueEyes captures a **point-in-time, READ-ONLY** diagnostic
 snapshot from each affected target — so an operator opening the incident sees "what
 the network looked like when it fired" without SSHing anywhere. It reuses the
 **existing** authenticated, cert-pinned, audited agent-command path

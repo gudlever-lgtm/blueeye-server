@@ -1,7 +1,7 @@
 'use strict';
 
 // Data-access for `saml_role_map` — maps a SAML attribute value (a group/role
-// name from the configured role attribute, e.g. `groups`) to a BlueEye role. On
+// name from the configured role attribute, e.g. `groups`) to a BlueEyes role. On
 // login the user's attribute values are looked up and the HIGHEST matching role
 // wins (admin > operator > viewer). NO match means access is DENIED — there is
 // deliberately no default role. The `claim_value` column name is shared with the

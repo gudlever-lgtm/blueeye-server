@@ -1,4 +1,4 @@
-# BlueEye telemetry — TimescaleDB schema
+# BlueEyes telemetry — TimescaleDB schema
 
 This directory holds the schema for the **telemetry layer** that moves out of
 MySQL per [`docs/storage-split-audit.md`](../../../docs/storage-split-audit.md).
@@ -93,7 +93,7 @@ DROP TABLE IF EXISTS results, flow_records, probe_results, speedtest_results,
 ```
 
 Retention and continuous-aggregate **policies** are dropped automatically with
-their hypertable / view. Because BlueEye keeps writing telemetry to MySQL until
+their hypertable / view. Because BlueEyes keeps writing telemetry to MySQL until
 the repository-split phase lands, dropping these objects loses only data that
 was mirrored into the TSDB — MySQL remains the source of truth during rollout.
 

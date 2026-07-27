@@ -1,6 +1,6 @@
 # Licensing, plans & feature gating
 
-BlueEye is sold in packages. This document describes the plan model, the
+BlueEyes is sold in packages. This document describes the plan model, the
 features and limits per plan, how a license is activated/changed, and how
 support levels map to plans.
 
@@ -71,7 +71,7 @@ HTTP 403 (never a stack trace):
   "resource": "agents",
   "limit": 5,
   "used": 5,
-  "message": "Your current BlueEye Starter licence allows up to 5 agents. Contact your administrator or upgrade the licence to add more."
+  "message": "Your current BlueEyes Starter licence allows up to 5 agents. Contact your administrator or upgrade the licence to add more."
 }
 ```
 
@@ -110,7 +110,7 @@ if (!check.ok) return res.status(403).json(check.body);
 Denial for a packaged feature returns the documented contract:
 
 ```json
-{ "success": false, "error": "feature_not_available", "message": "This feature requires BlueEye Professional." }
+{ "success": false, "error": "feature_not_available", "message": "This feature requires BlueEyes Professional." }
 ```
 
 ### Read-only endpoints for the UI

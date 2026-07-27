@@ -1,6 +1,6 @@
 'use strict';
 
-// BlueEye server dashboard — dependency-free vanilla JS over the JSON API.
+// BlueEyes server dashboard — dependency-free vanilla JS over the JSON API.
 const TOKEN_KEY = 'blueeye.server.token';
 const ROLE_KEY = 'blueeye.server.role';
 const EMAIL_KEY = 'blueeye.server.email';
@@ -712,10 +712,10 @@ const PAGE_INFO = {
     ],
   },
   screening: {
-    hero: 'Test Settings — one place to verify every outbound integration: send a test email, reach your ITSM/IPAM receivers, check SSO and the other services BlueEye talks to — each with a security check.',
+    hero: 'Test Settings — one place to verify every outbound integration: send a test email, reach your ITSM/IPAM receivers, check SSO and the other services BlueEyes talks to — each with a security check.',
     title: 'Test Settings — connectivity & security screening',
     body: () => [
-      el('p', {}, 'A consolidated, admin-only screening of everything BlueEye reaches OUTWARD to. Each target gets two verdicts: a live connectivity test and a security-posture check (HTTPS vs plaintext, TLS, signed webhooks, authentication, certificate/secret presence, licence state).'),
+      el('p', {}, 'A consolidated, admin-only screening of everything BlueEyes reaches OUTWARD to. Each target gets two verdicts: a live connectivity test and a security-posture check (HTTPS vs plaintext, TLS, signed webhooks, authentication, certificate/secret presence, licence state).'),
       el('div', { class: 'callout' },
         el('strong', {}, 'Running a test sends real traffic: '),
         el('span', {}, 'the email / webhook / syslog tests deliver an actual test message, and an ITSM/IPAM test performs a real (read-only) connectivity call to the receiver. SSO and the other services are probed for reachability.')),
@@ -1007,7 +1007,7 @@ const PAGE_INFO = {
         el('li', {}, 'Codes are short-lived (default 1 hour) and can be bulk (N machines).'),
         el('li', {}, 'The source bundle is always verified against the checksum before building or running.'),
         el('li', {}, 'The cert fingerprint is pinned on the agent (when the server runs behind TLS).')),
-      el('p', { class: 'muted' }, 'The agent runs natively on the target (Node + systemd by default; Docker optional) — no pre-built binaries. Also works on air-gapped networks: the source is served from the BlueEye server itself.'),
+      el('p', { class: 'muted' }, 'The agent runs natively on the target (Node + systemd by default; Docker optional) — no pre-built binaries. Also works on air-gapped networks: the source is served from the BlueEyes server itself.'),
       el('h4', {}, 'Code status vs. the agent'),
       el('ul', {},
         el('li', {}, el('strong', {}, 'active: '), 'still usable — has uses left and has not expired.'),
@@ -3667,7 +3667,7 @@ async function loadGuide(incident, body) {
       return li;
     });
 
-    const freeQ = el('input', { type: 'text', placeholder: 'Ask BlueEye AI about this incident…', class: 'inc-ask-input' });
+    const freeQ = el('input', { type: 'text', placeholder: 'Ask BlueEyes AI about this incident…', class: 'inc-ask-input' });
     const freeBtn = el('button', { class: 'small', onclick: () => { if (freeQ.value.trim()) askAbout(freeQ.value.trim()); } }, 'Ask AI');
     freeQ.addEventListener('keydown', (e) => { if (e.key === 'Enter' && freeQ.value.trim()) askAbout(freeQ.value.trim()); });
 
@@ -3676,7 +3676,7 @@ async function loadGuide(incident, body) {
       progress,
       el('ol', { class: 'guide-steps' }, ...steps),
       el('div', { class: 'guide-ai' },
-        el('p', { class: 'muted' }, 'BlueEye built these steps from this incident. Ask the AI to explain a step or the likely cause — it uses only masked context.'),
+        el('p', { class: 'muted' }, 'BlueEyes built these steps from this incident. Ask the AI to explain a step or the likely cause — it uses only masked context.'),
         el('div', { class: 'inc-ask' }, freeQ, freeBtn), aiOut));
   } catch (err) {
     body.replaceChildren(el('p', { class: err.status === 403 ? 'muted' : 'error' }, err.status === 403 ? 'Guided troubleshooting requires operator/admin.' : err.message));
@@ -3691,7 +3691,7 @@ function incidentGuideCard(incident) {
   const details = el('details', { class: 'card guide-card' },
     el('summary', { class: 'guide-summary' },
       el('span', { class: 'pill guide-pill' }, '🧭 Guide me'),
-      el('span', { class: 'muted' }, ' — step-by-step troubleshooting, BlueEye + AI')),
+      el('span', { class: 'muted' }, ' — step-by-step troubleshooting, BlueEyes + AI')),
     body);
   details.addEventListener('toggle', () => { if (details.open) openAndLoad(); });
   if (guideAutoOpen) { guideAutoOpen = false; details.open = true; openAndLoad(); }
@@ -3821,7 +3821,7 @@ PAGE_INFO.clusters = {
   hero: 'Situations group findings that fired on SEVERAL agents at once into one cross-agent incident — with the change that came just before, a plain-language evidence breakdown, and one merged timeline.',
   title: 'Situations — cross-agent incidents, one common picture',
   body: () => [
-    el('p', {}, 'When a fault hits many agents at the same time, BlueEye clusters their findings into one situation instead of N look-alike alerts. Each situation carries a confidence tier (how independent the grouping signals were) and a suspected common cause.'),
+    el('p', {}, 'When a fault hits many agents at the same time, BlueEyes clusters their findings into one situation instead of N look-alike alerts. Each situation carries a confidence tier (how independent the grouping signals were) and a suspected common cause.'),
     el('p', {}, 'The detail page is the “one common picture”: what changed in the minutes before the first finding, the evidence that drove the grouping, and a single timeline merging findings, agent events, playbook runs and config changes across every affected agent.'),
     el('p', { class: 'muted' }, 'Everyone can view; acknowledging and resolving are operator/admin and are recorded in the audit trail.'),
   ],
@@ -7010,7 +7010,7 @@ async function printInvestigation(id) {
   const e2 = (s) => String(s == null ? '' : s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
   const rows = (arr, cols, cspan) => ((arr && arr.length) ? arr.map((r) => `<tr>${cols.map((c) => `<td>${e2(typeof c === 'function' ? c(r) : r[c])}</td>`).join('')}</tr>`).join('') : `<tr><td colspan="${cspan}" class="muted">None.</td></tr>`);
   const q = b.quality || {}; const h = b.health || { status: '', reason: '' };
-  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>BlueEye investigation — ${e2(b.agent.displayName)}</title>
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>BlueEyes investigation — ${e2(b.agent.displayName)}</title>
 <style>body{font:13px/1.5 system-ui,-apple-system,sans-serif;margin:24px;color:#0f172a}h1{font-size:20px;margin:0 0 4px}h2{font-size:15px;margin:22px 0 6px;border-bottom:1px solid #cbd5e1;padding-bottom:4px}table{border-collapse:collapse;width:100%;margin:6px 0}th,td{border:1px solid #e2e8f0;padding:4px 8px;text-align:left;font-size:12px}.muted{color:#64748b}.badge{padding:1px 7px;border-radius:4px;background:#e2e8f0;font-weight:600}</style>
 </head><body>
 <h1>Investigation — ${e2(b.agent.displayName)}</h1>
@@ -10041,7 +10041,7 @@ function enrollAnsibleBlock(oneLiner) {
     '- hosts: all',
     '  become: true',
     '  tasks:',
-    '    - name: Install BlueEye agent',
+    '    - name: Install BlueEyes agent',
     `      ansible.builtin.shell: "${oneLiner}"`,
     '      args:',
     '        creates: /opt/blueeye-agent/blueeye-agent',
@@ -10245,8 +10245,8 @@ const DOCS = [
   {
     section: 'Getting started', admin: false, articles: [
       {
-        id: 'what-is', title: 'What BlueEye does', body: () => [
-          docsLead('BlueEye is an on-prem network-monitoring server. Lightweight agents run on your machines and report metadata — traffic counters, active-probe results (ping/DNS/HTTP/traceroute), interface health and flow 5-tuples — back to this server, which stores, analyses and visualises it.'),
+        id: 'what-is', title: 'What BlueEyes does', body: () => [
+          docsLead('The BlueEyes Network Resilience System is an on-prem network-monitoring server. Lightweight agents run on your machines and report metadata — traffic counters, active-probe results (ping/DNS/HTTP/traceroute), interface health and flow 5-tuples — back to this server, which stores, analyses and visualises it.'),
           el('p', {}, 'Everything is ', el('strong', {}, 'metadata only'), ' (ports, ASNs, timings, the 5-tuple) — never packet payload or deep inspection. Private (RFC1918) addresses are never geolocated. Analysis runs locally with explainable robust statistics (median + MAD), so every finding carries an explanation and its evidence — there is no cloud and no black-box ML.'),
           el('h4', {}, 'The moving parts'),
           el('ul', {},
@@ -10344,7 +10344,7 @@ const DOCS = [
       },
       {
         id: 'situations', title: 'Situations — one incident across many agents', body: () => [
-          docsLead('When the same fault hits several agents at once, BlueEye groups their findings into one Situation (a cross-agent cluster) instead of N look-alike alerts — so you chase one root cause, not a wall of duplicates.'),
+          docsLead('When the same fault hits several agents at once, BlueEyes groups their findings into one Situation (a cross-agent cluster) instead of N look-alike alerts — so you chase one root cause, not a wall of duplicates.'),
           el('p', {}, ['Open ', viewLink('clusters', 'Situations'), ' (Insights group). Each row is one cross-agent incident with a confidence tier, a suspected common cause and how many findings it groups. It is distinct from an ', viewLink('incidents', 'incident'), ', which groups findings on a ', el('strong', {}, 'single'), ' device.']),
           el('h4', {}, 'How confident is the grouping?'),
           el('p', {}, 'The confidence tier says how independent the signals tying the agents together were — not how severe the fault is:'),
@@ -10404,7 +10404,7 @@ const DOCS = [
       },
       {
         id: 'topology-changes', title: 'Track topology changes', body: () => [
-          docsLead('BlueEye detects LLDP/CDP topology changes between poll cycles and records them — so you can see when a neighbour appeared, vanished, moved ports, or flapped, with an immutable audit trail.'),
+          docsLead('BlueEyes detects LLDP/CDP topology changes between poll cycles and records them — so you can see when a neighbour appeared, vanished, moved ports, or flapped, with an immutable audit trail.'),
           el('p', {}, ['Every agent capabilities report is a “poll”. Each report is diffed against the agent’s previous neighbour snapshot; the differences become change records. Four change types:']),
           docsTable(['Change', 'Means'], [
             [el('strong', {}, 'neighbour_added'), 'A neighbour appeared on a local port that had none.'],
@@ -10428,7 +10428,7 @@ const DOCS = [
       },
       {
         id: 'flow-baselines', title: 'Flow-pair traffic baselines', body: () => [
-          docsLead('Beyond per-metric anomalies (CPU, latency…), BlueEye baselines the traffic volume of each host→host:port flow pair and flags deviations — a database link that suddenly moves 50× its usual bytes, for instance.'),
+          docsLead('Beyond per-metric anomalies (CPU, latency…), BlueEyes baselines the traffic volume of each host→host:port flow pair and flags deviations — a database link that suddenly moves 50× its usual bytes, for instance.'),
           el('p', {}, ['Baselines are ', el('strong', {}, 'day-of-week and hour-of-day aware'), ': a Tuesday 14:00 volume is compared against prior Tuesdays 14:00, not a flat average — so normal business-hours peaks don’t read as anomalies.']),
           docsTable(['Aspect', 'Behaviour'], [
             ['Statistics', 'The same robust median + MAD z-score used everywhere else — explainable, no ML.'],
@@ -10436,7 +10436,7 @@ const DOCS = [
             ['Eligibility', 'A pair needs ≥100 hourly observations before it’s scored — new/sparse pairs are left alone until there’s enough history.'],
             ['Output', 'A deviation becomes an ordinary finding (metric flow.volume) that flows into the correlator and Situations like any other — no separate alert channel.'],
           ]),
-          docsExpect('A steady flow pair produces no findings. A genuine step-change in volume for a specific weekday/hour scores WARN/CRIT and appears in Analysis/Incidents attributed to the source host, with the destination and port in its evidence. This is deviation only — BlueEye never labels traffic “malicious”, it just tells you it changed.'),
+          docsExpect('A steady flow pair produces no findings. A genuine step-change in volume for a specific weekday/hour scores WARN/CRIT and appears in Analysis/Incidents attributed to the source host, with the destination and port in its evidence. This is deviation only — BlueEyes never labels traffic “malicious”, it just tells you it changed.'),
           el('p', { class: 'muted' }, ['Operator+ can inspect a host’s learned baselines at ', el('code', {}, 'GET /api/topology/flow-baselines?host=<id>'), '.']),
         ],
       },
@@ -10477,7 +10477,7 @@ const DOCS = [
       },
       {
         id: 'servicenow', title: 'Connect ServiceNow (ITSM)', body: () => [
-          docsLead('Push BlueEye incidents/anomalies into ServiceNow as Incident records. Configured under Settings → Integrations as a “servicenow” connector. This is the outbound ITSM link; for asset lookup see “Connect a CMDB”.'),
+          docsLead('Push BlueEyes incidents/anomalies into ServiceNow as Incident records. Configured under Settings → Integrations as a “servicenow” connector. This is the outbound ITSM link; for asset lookup see “Connect a CMDB”.'),
           el('h4', {}, 'What you need first (in ServiceNow)'),
           el('ul', {},
             el('li', {}, el('strong', {}, 'Instance URL '), '— e.g. ', el('code', {}, 'https://acme.service-now.com'), ' (HTTPS, no trailing path).'),
@@ -10501,20 +10501,20 @@ const DOCS = [
             [el('code', {}, '403'), 'Authenticated but the account lacks rights on that table (ACL/role).', ['Grant ', el('code', {}, 'itil'), ' / REST access, or point at a table the account can use.']],
             [el('code', {}, '400'), 'Invalid table name or a field the instance rejects.', 'Check the table exists and is spelled correctly.'],
             [el('span', {}, el('code', {}, 'ENOTFOUND'), ' / ', el('code', {}, 'ETIMEDOUT'), ' / TLS error'), 'DNS, firewall/proxy, or a TLS trust problem reaching the instance.', 'Confirm the URL and that this server can egress to it over HTTPS; check any proxy/CA.'],
-            [el('span', {}, el('code', {}, 'lookup failed: …')), 'The idempotency read before a write failed (auth/network) — BlueEye will not blind-create.', 'Resolve the underlying auth/network error above; the write retries next fire.'],
+            [el('span', {}, el('code', {}, 'lookup failed: …')), 'The idempotency read before a write failed (auth/network) — BlueEyes will not blind-create.', 'Resolve the underlying auth/network error above; the write retries next fire.'],
           ]),
           el('p', { class: 'muted' }, 'No secrets are ever returned by the API or shown on the Test Settings page.'),
         ],
       },
       {
         id: 'cmdb', title: 'Connect a CMDB (single source of truth)', body: () => [
-          docsLead('Link agents to their asset in a CMDB so BlueEye can enrich them and keep each agent’s site in sync. One CMDB source at a time: ServiceNow, Nautobot, or a config-driven custom HTTP/JSON source. Configured under Settings → CMDB.'),
+          docsLead('Link agents to their asset in a CMDB so BlueEyes can enrich them and keep each agent’s site in sync. One CMDB source at a time: ServiceNow, Nautobot, or a config-driven custom HTTP/JSON source. Configured under Settings → CMDB.'),
           el('p', {}, ['This is separate from the outbound ITSM integration above — a CMDB connector is ', el('strong', {}, 'read-only'), ' (test + asset search), not a ticket writer. For ServiceNow the asset table defaults to ', el('code', {}, 'cmdb_ci'), '; a service account scoped only to the CMDB (but not to incidents) is enough, because the test reads the CI table, not ', el('code', {}, 'incident'), '.']),
           docsSteps([
             [settingsLink('cmdb', 'Open Settings → CMDB'), ' and choose the source type (ServiceNow / Nautobot / custom).'],
             'Enter the base URL + credentials (encrypted at rest, never returned). For custom, provide the request/JSON mapping the page describes.',
             ['Click ', el('strong', {}, 'Test connection'), ' — a bounded read of the asset table (', el('code', {}, 'sysparm_limit=1'), ' for ServiceNow).'],
-            ['On an agent page, search the CMDB and attach the matching asset. Linking ', el('strong', {}, 'syncs the agent’s location'), ': BlueEye matches a site by the asset’s CMDB location name (creating one if absent).'],
+            ['On an agent page, search the CMDB and attach the matching asset. Linking ', el('strong', {}, 'syncs the agent’s location'), ': BlueEyes matches a site by the asset’s CMDB location name (creating one if absent).'],
           ]),
           docsExpect('A working connection returns ', [el('code', {}, 'reached ServiceNow (200)')], ' (or the equivalent) and asset search returns rows. 401/403/network errors read exactly as in the ServiceNow ITSM table above. The CMDB is also a target in ', [settingsLink('screening', 'Test Settings')], '.'),
         ],
@@ -10536,13 +10536,13 @@ const DOCS = [
       },
       {
         id: 'sso', title: 'Set up SSO & LDAP', body: () => [
-          docsLead('Let staff sign in with your directory/IdP and get a BlueEye role from their group/claim. Three options, each licence-gated (Professional): LDAP/AD, OIDC and SAML.'),
+          docsLead('Let staff sign in with your directory/IdP and get a BlueEyes role from their group/claim. Three options, each licence-gated (Professional): LDAP/AD, OIDC and SAML.'),
           docsTable(['Method', 'Configured in', 'Connection from', 'Maps role by'], [
             ['LDAP/AD', settingsLink('auth', 'Settings → Authentication'), ['env ', el('code', {}, 'LDAP_AUTH_ENABLED'), ' + bind config'], 'directory group → role'],
             ['SSO (OIDC)', settingsLink('auth', 'Settings → Authentication'), ['env ', el('code', {}, 'OIDC_*'), ' (issuer/client)'], 'token claim → role'],
             ['SSO (SAML)', settingsLink('auth', 'Settings → Authentication'), ['env ', el('code', {}, 'SAML_*'), ' (IdP/SP)'], 'assertion attribute → role'],
           ]),
-          el('p', {}, ['The connection itself (bind host, issuer, IdP metadata) comes from server ', el('strong', {}, 'environment variables'), ' — set those on the server. The dashboard tab is where you map groups/claims/attributes to BlueEye roles and read the login audit. Local accounts always remain as a fallback, so you can never lock yourself out.']),
+          el('p', {}, ['The connection itself (bind host, issuer, IdP metadata) comes from server ', el('strong', {}, 'environment variables'), ' — set those on the server. The dashboard tab is where you map groups/claims/attributes to BlueEyes roles and read the login audit. Local accounts always remain as a fallback, so you can never lock yourself out.']),
           docsExpect('Each method has a built-in test: an LDAP bind check, OIDC discovery, and a SAML reachability probe (all also surfaced in Test Settings). A successful test + a correct role map means a directory user lands on the right role on first login (just-in-time provisioning). Failures name the step: bind failed (credentials/DN), discovery failed (issuer/URL), signature/audience mismatch (SAML metadata).'),
         ],
       },
@@ -10557,7 +10557,7 @@ const DOCS = [
       {
         id: 'retention', title: 'Data retention & storage', body: () => [
           docsLead('Control how long raw measurements are kept and how they roll up, plus where data is stored.'),
-          el('p', {}, ['BlueEye down-samples over time (raw → rollups) and purges on a nightly schedule. Tune windows in ', settingsLink('retention', 'Settings → Retention'), '. Config snapshots have their own retention (default 180 days).']),
+          el('p', {}, ['BlueEyes down-samples over time (raw → rollups) and purges on a nightly schedule. Tune windows in ', settingsLink('retention', 'Settings → Retention'), '. Config snapshots have their own retention (default 180 days).']),
           el('p', {}, ['Storage is MySQL, optionally with TimescaleDB for time-series. Status and live sizes are shown in ', settingsLink('database', 'Settings → Database'), ' (read-only — the backends are boot-time infra configured via env + install scripts).']),
           docsExpect('Shorter retention lowers storage but shortens history for baselines and reports; the Database page shows current MySQL/TimescaleDB sizes and an ingest estimate so you can size the trade-off before changing it.'),
         ],
@@ -10673,7 +10673,7 @@ const SETTINGS_FEATURE = {
 function settingsLicensePill(tabKey) {
   const info = SETTINGS_FEATURE[tabKey];
   if (!info) {
-    return el('span', { class: 'badge active', title: 'Included in every BlueEye licence — not a gateable feature.' },
+    return el('span', { class: 'badge active', title: 'Included in every BlueEyes licence — not a gateable feature.' },
       'Licence: included');
   }
   const ok = featureEntitled(info.feature);
@@ -11005,7 +11005,7 @@ function throughputSettingsCard(t) {
 
 // ---- Settings → ITSM (outbound API receivers) -----------------------------
 // Manage outbound API integrations (ServiceNow, Jira/TOPdesk/GLPI or a custom
-// ticket API, generic webhook, Nautobot CMDB/IPAM device sync): push BlueEye
+// ticket API, generic webhook, Nautobot CMDB/IPAM device sync): push BlueEyes
 // events (incidents/anomalies, agent enroll/delete) to external systems.
 // Backend: src/routes/integrations.js (CRUD + /meta + test-fire). Credentials are
 // encrypted at rest (secret box) and never returned. Admin-only.
@@ -11014,7 +11014,7 @@ let integrationsEditing = null; // null = list only · 'new' · <id> being edite
 async function settingsIntegrationsView() {
   const root = el('div');
   root.append(el('p', { class: 'muted settings-intro' },
-    'Push BlueEye events to your ITSM and asset systems — e.g. open a ServiceNow (or Jira / TOPdesk / GLPI, or your own) incident when a CRIT finding fires, or sync agents into Nautobot (CMDB/IPAM). Pick a system to pre-fill its defaults, or “Custom” to inject your own ticket API. Credentials are encrypted at rest and never shown again; changes take effect immediately.'));
+    'Push BlueEyes events to your ITSM and asset systems — e.g. open a ServiceNow (or Jira / TOPdesk / GLPI, or your own) incident when a CRIT finding fires, or sync agents into Nautobot (CMDB/IPAM). Pick a system to pre-fill its defaults, or “Custom” to inject your own ticket API. Credentials are encrypted at rest and never shown again; changes take effect immediately.'));
 
   let meta; let list;
   try {
@@ -11154,7 +11154,7 @@ function integrationConfigFields(type, config) {
       c.headers ? JSON.stringify(c.headers, null, 2) : '');
     rows.push(alertField('Create path', pathI, 'Path appended to the base URL for the ticket create call.'));
     rows.push(alertField('Method', methodSel, 'HTTP method for the create call.'));
-    rows.push(alertField('Field map (JSON)', fieldsI, 'Maps API fields (dotted keys build nesting, e.g. "fields.summary") to BlueEye values: title, explanation, summary, severity, metric, host, correlationId, deviation, observed, baseline, impact, urgency.'));
+    rows.push(alertField('Field map (JSON)', fieldsI, 'Maps API fields (dotted keys build nesting, e.g. "fields.summary") to BlueEyes values: title, explanation, summary, severity, metric, host, correlationId, deviation, observed, baseline, impact, urgency.'));
     rows.push(alertField('Static fields (JSON)', staticI, 'Constant fields merged into every request body (e.g. project/queue/issue type).'));
     rows.push(alertField('Extra headers (JSON)', headersI, 'Optional static headers (the Authorization header is set from the auth type).'));
     rows.push(alertField('Token scheme', schemeI, 'Optional Authorization scheme word for token auth (default: Bearer).'));
@@ -11174,7 +11174,7 @@ function integrationConfigFields(type, config) {
   return { rows, gather };
 }
 
-// Event checkboxes (which BlueEye events the integration reacts to).
+// Event checkboxes (which BlueEyes events the integration reacts to).
 function integrationEventFields(allEvents, selected) {
   const chosen = new Set(selected || []);
   const boxes = (allEvents || []).map((ev) => {
@@ -11184,7 +11184,7 @@ function integrationEventFields(allEvents, selected) {
   const row = el('label', { class: 'set-field' },
     el('span', {}, 'Events'),
     el('div', { class: 'inline-checks' }, ...boxes.map((b) => el('label', { class: 'inline muted small' }, b.cb, el('span', {}, b.ev)))),
-    el('span', { class: 'muted small' }, 'Which BlueEye events this integration reacts to.'));
+    el('span', { class: 'muted small' }, 'Which BlueEyes events this integration reacts to.'));
   return { row, gather: () => boxes.filter((b) => b.cb.checked).map((b) => b.ev) };
 }
 
@@ -11230,7 +11230,7 @@ function integrationEditor(meta, existing) {
     authSel.value = isEdit && conn.authTypes.includes(existing.auth_type) ? existing.auth_type
       : (preset && conn.authTypes.includes(preset.authType) ? preset.authType : conn.authTypes[0]);
     authSel.addEventListener('change', rebuildCreds);
-    authWrap.replaceChildren(alertField('Auth type', authSel, 'How BlueEye authenticates to the target API.'));
+    authWrap.replaceChildren(alertField('Auth type', authSel, 'How BlueEyes authenticates to the target API.'));
     rebuildCreds();
     if (!isEdit) urlI.placeholder = (preset && preset.baseUrlPlaceholder) || 'https://example.service-now.com';
     hintWrap.replaceChildren(...(preset && preset.docsHint ? [el('p', { class: 'muted small cmdb-preset-hint' }, preset.docsHint)] : []));
@@ -11321,7 +11321,7 @@ function cmdbCustomConfigFields(config) {
 async function settingsCmdbView() {
   const root = el('div');
   root.append(el('p', { class: 'muted settings-intro' },
-    'Configure the single CMDB source BlueEye links agents to — ServiceNow, Nautobot, NetBox, i-doit, GLPI, or a Custom HTTP/JSON CMDB you describe yourself. Pick a system to pre-fill its defaults, or “Custom” to inject your own. Credentials are encrypted at rest and never shown again. Use “Test connection” to verify before enabling; linking an agent to an asset also syncs the agent’s site from the asset’s CMDB location.'));
+    'Configure the single CMDB source BlueEyes links agents to — ServiceNow, Nautobot, NetBox, i-doit, GLPI, or a Custom HTTP/JSON CMDB you describe yourself. Pick a system to pre-fill its defaults, or “Custom” to inject your own. Credentials are encrypted at rest and never shown again. Use “Test connection” to verify before enabling; linking an agent to an asset also syncs the agent’s site from the asset’s CMDB location.'));
 
   let cfg; let meta;
   try {
@@ -11378,7 +11378,7 @@ async function settingsCmdbView() {
       : (conn.authTypes.includes(preset.authType) ? preset.authType : conn.authTypes[0]);
     authSel.value = preferredAuth;
     authSel.addEventListener('change', rebuildCreds);
-    authWrap.replaceChildren(alertField('Auth type', authSel, 'How BlueEye authenticates to the CMDB API.'));
+    authWrap.replaceChildren(alertField('Auth type', authSel, 'How BlueEyes authenticates to the CMDB API.'));
     rebuildCreds();
     urlI.placeholder = preset.baseUrlPlaceholder || 'https://example.service-now.com';
     // Only the custom connector needs the free-form config block.
@@ -11658,7 +11658,7 @@ function alertingSyslogCard(channel) {
 }
 
 // ---- Settings → Authentication (LDAP / Active Directory) ------------------
-// Connect BlueEye to an LDAP/AD directory so users sign in with their directory
+// Connect BlueEyes to an LDAP/AD directory so users sign in with their directory
 // account and get a role from their group membership. Backend: src/routes/ldap.js
 // (config CRUD + connectivity test + login audit) and src/auth/ldap.js (the bind
 // + group→role resolution, run from src/routes/auth.js at login). Admin-only and
@@ -11671,7 +11671,7 @@ async function settingsAuthView() {
   const envOn = cfgRes.authEnabledFlag === true;
   const root = el('div');
   root.append(el('p', { class: 'muted settings-intro' },
-    'Let users sign in with their Active Directory / LDAP account. After a successful bind, each user’s BlueEye role is taken from their directory group membership (the highest matching role wins), so access is governed centrally in the directory. Local accounts keep working as a fallback. ',
+    'Let users sign in with their Active Directory / LDAP account. After a successful bind, each user’s BlueEyes role is taken from their directory group membership (the highest matching role wins), so access is governed centrally in the directory. Local accounts keep working as a fallback. ',
     ldapBadge(licensed)));
 
   if (!licensed) {
@@ -11699,7 +11699,7 @@ function ldapBadge(licensed) {
 // writes are refused server-side too, so this explains the missing controls.
 function ldapUnlicensedCard() {
   return el('div', { class: 'settings-card' }, el('h3', {}, 'LDAP / Active Directory'),
-    el('p', { class: 'muted' }, 'Directory login is not included in your licence, so it can’t be configured here. It is part of the BlueEye Professional plan — contact your provider to enable it. ',
+    el('p', { class: 'muted' }, 'Directory login is not included in your licence, so it can’t be configured here. It is part of the BlueEyes Professional plan — contact your provider to enable it. ',
       settingsLink('license', 'See Settings → License'), ' for the full feature matrix.'),
     ldapBadge(false));
 }
@@ -11786,12 +11786,12 @@ function ldapConnectionCard(cfg, bindPasswordSet) {
         el('span', { class: 'muted small' }, 'Save before testing — the test uses the saved settings.'))));
 }
 
-// Group → role mapping: each LDAP/AD group DN maps to a BlueEye role. The change
+// Group → role mapping: each LDAP/AD group DN maps to a BlueEyes role. The change
 // select PUTs immediately; add/delete re-render the tab.
 function ldapRoleMapCard(roleMap) {
   const card = el('div', { class: 'settings-card wide' }, el('h3', {}, 'Group → role mapping'));
   card.append(el('p', { class: 'muted small' },
-    'Map a directory group (by its full DN) to a BlueEye role. A user gets the highest role across all their matched groups; a user in no mapped group is denied access — there is no default role. Roles: viewer < operator < admin.'));
+    'Map a directory group (by its full DN) to a BlueEyes role. A user gets the highest role across all their matched groups; a user in no mapped group is denied access — there is no default role. Roles: viewer < operator < admin.'));
   const err = el('p', { class: 'error' });
   const listEl = el('div', { class: 'tablewrap' });
 
@@ -12188,7 +12188,7 @@ function retentionSettingsCard(r) {
 async function settingsDatabaseView() {
   const root = el('div');
   root.append(el('p', { class: 'muted settings-intro' },
-    'BlueEye keeps inventory, users and configuration in MySQL (always on) and can offload high-volume telemetry (traffic, flows, metrics) to a dedicated TimescaleDB node. Both connections are set in the server environment, not here — a database connection is deploy-time infrastructure, so this tab is read-only status plus how to configure it.'));
+    'BlueEyes keeps inventory, users and configuration in MySQL (always on) and can offload high-volume telemetry (traffic, flows, metrics) to a dedicated TimescaleDB node. Both connections are set in the server environment, not here — a database connection is deploy-time infrastructure, so this tab is read-only status plus how to configure it.'));
 
   let cfg = {}; let storage = {};
   try {
@@ -12382,12 +12382,12 @@ async function settingsApiTokensView() {
   try {
     tokens = await api('/api/api-tokens');
   } catch (err) {
-    if (err.status === 403) return featureUpsell('API access', 'Programmatic API tokens are part of the BlueEye Professional plan and above, so they can’t be managed here.');
+    if (err.status === 403) return featureUpsell('API access', 'Programmatic API tokens are part of the BlueEyes Professional plan and above, so they can’t be managed here.');
     throw err;
   }
 
   root.append(el('p', { class: 'muted settings-intro' },
-    'Issue tokens for programmatic access to the BlueEye API (CI jobs, scripts, integrations). A token authenticates with a fixed role and is sent as ',
+    'Issue tokens for programmatic access to the BlueEyes API (CI jobs, scripts, integrations). A token authenticates with a fixed role and is sent as ',
     el('code', {}, 'Authorization: Bearer <token>'), ' or ', el('code', {}, 'X-API-Key: <token>'), '. The secret is shown only once, on creation.'));
 
   // Banner with the just-created secret (cleared on the next render).
@@ -12732,7 +12732,7 @@ views.license = async () => {
   root.append(el('div', { class: 'cards' },
     stat('Status', el('span', { class: `badge ${s.status}` }, licenseStatusLabel(s.status))),
     stat('Licensed', s.licensed ? 'Yes' : 'No'),
-    plan ? stat('Plan', `BlueEye ${plan.plan_name}`) : stat('Max. agents', String(s.maxAgents)),
+    plan ? stat('Plan', `BlueEyes ${plan.plan_name}`) : stat('Max. agents', String(s.maxAgents)),
     offline ? stat('Validation', 'Offline (local file)') : stat('Server ID', s.serverId || '–'),
     stat('Last validated', fmtDate(s.verifiedAt)),
     stat('License expires', expiryText),
@@ -12747,7 +12747,7 @@ views.license = async () => {
   if (plan) {
     root.append(el('h3', {}, 'Plan overview'));
     root.append(el('div', { class: 'cards' },
-      stat('Plan', `BlueEye ${plan.plan_name}${plan.is_trial ? ' (trial)' : ''}`),
+      stat('Plan', `BlueEyes ${plan.plan_name}${plan.is_trial ? ' (trial)' : ''}`),
       stat('Support level', plan.support_level),
       stat('Max. agents', fmtLimit(plan.limits.max_agents)),
       stat('Max. active test paths', fmtLimit(plan.limits.max_test_paths)),
@@ -13458,7 +13458,7 @@ async function auditModule() {
     let entries;
     try { entries = await api(`/api/audit?${p}`); }
     catch (err) {
-      if (err.status === 403) { body.replaceChildren(featureUpsell('Audit trail', 'The audit trail is part of the BlueEye Professional plan and above, so it isn\'t available here.')); return; }
+      if (err.status === 403) { body.replaceChildren(featureUpsell('Audit trail', 'The audit trail is part of the BlueEyes Professional plan and above, so it isn\'t available here.')); return; }
       body.replaceChildren(el('div', { class: 'empty error' }, err.message)); return;
     }
     if (!entries.length) { body.replaceChildren(el('div', { class: 'empty' }, 'No audited activity yet.')); return; }
@@ -14093,7 +14093,7 @@ let currentView = 'fleet';
 const modalOpen = () => !$('#modal').classList.contains('hidden');
 
 // One-time per session: stamp the sidebar foot with this server's build —
-// "BlueEye server · v<version> · <release date>" — from /system/version.
+// "BlueEyes server · v<version> · <release date>" — from /system/version.
 let footStamped = false;
 async function stampFooter() {
   if (footStamped) return;
@@ -14102,7 +14102,7 @@ async function stampFooter() {
   if (!foot) return;
   try {
     const ver = await api('/system/version');
-    const parts = ['BlueEye server'];
+    const parts = ['BlueEyes server'];
     if (ver && ver.server) parts.push(`v${ver.server}`);
     if (ver && ver.releaseDate) parts.push(ver.releaseDate);
     foot.textContent = parts.join(' · ');
@@ -14152,7 +14152,7 @@ async function render({ silent = false } = {}) {
   $('#whoami').replaceChildren(
     el('span', { class: 'who-email' }, email || '—'),
     el('span', { class: `badge role-${role}` }, role));
-  stampFooter(); // sidebar foot: BlueEye server · version · release date
+  stampFooter(); // sidebar foot: BlueEyes server · version · release date
   // Admin-only, once per session: nudge to set the agent signing key if it's missing.
   maybePromptSigningKey();
 

@@ -1,4 +1,4 @@
--- 049 — raw device-config snapshots (Fase 3). BlueEye does not capture device
+-- 049 — raw device-config snapshots (Fase 3). BlueEyes does not capture device
 -- running-config today, so this is genuinely new storage. One row per captured
 -- config for a device (a device = an agent). Diff-generation between consecutive
 -- rows and correlation to incidents build on top of this table.

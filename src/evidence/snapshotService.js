@@ -80,7 +80,7 @@ function createSnapshotService({
   async function auditCapture(clusterId, target, status) {
     if (!auditLogger || typeof auditLogger.record !== 'function') return;
     try {
-      // Evidence-class action so audits separate "BlueEye looked" from "BlueEye acted".
+      // Evidence-class action so audits separate "BlueEyes looked" from "BlueEyes acted".
       await auditLogger.record(null, {
         category: 'incident', action: 'evidence_snapshot', target: String(clusterId),
         actorEmail: 'system', actorRole: 'system',

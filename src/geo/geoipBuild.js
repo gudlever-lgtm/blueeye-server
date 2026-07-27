@@ -134,7 +134,7 @@ async function writeCsv(outPath, country, asn, source = 'DB-IP Lite (CC-BY-4.0)'
   const ws = fs.createWriteStream(tmp);
   const write = (s) => new Promise((res, rej) => { ws.write(s, (e) => (e ? rej(e) : res())); });
   try {
-    await write(`# BlueEye GeoIP range table — built ${new Date().toISOString()} from ${source}\n`);
+    await write(`# BlueEyes GeoIP range table — built ${new Date().toISOString()} from ${source}\n`);
     await write('# format: start_ip,end_ip,country[,asn[,asn_name]]\n');
     let rows = 0;
     const emit = asn && asn.length ? joinCountryAsn(country, asn) : (function* () { yield* country; })();

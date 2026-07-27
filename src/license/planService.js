@@ -100,7 +100,7 @@ function createPlanService({ licenseManager = null, configPlan = '' } = {}) {
   }
 
   // A user-facing upgrade hint for a feature the active plan lacks, e.g.
-  // "This feature requires BlueEye Professional." Returns null when already
+  // "This feature requires BlueEyes Professional." Returns null when already
   // entitled.
   function upgradeHint(featureKey) {
     if (hasFeature(featureKey)) return null;
@@ -114,7 +114,7 @@ function createPlanService({ licenseManager = null, configPlan = '' } = {}) {
   }
 
   // Which package each legacy module (analysis/assistant/alerting/geo) is sold
-  // under — for UI "Requires BlueEye <plan>" labels only (no enforcement effect;
+  // under — for UI "Requires BlueEyes <plan>" labels only (no enforcement effect;
   // those modules are gated by the signed proof, see plans.js MODULE_PLAN_TIER).
   function moduleRequirements() {
     const out = {};
@@ -124,7 +124,7 @@ function createPlanService({ licenseManager = null, configPlan = '' } = {}) {
       out[moduleKey] = {
         required_plan: p.plan_key,
         required_plan_name: p.plan_name, // short, e.g. "Professional"
-        required_plan_label: planDisplayName(p.plan_key), // full, e.g. "BlueEye Professional"
+        required_plan_label: planDisplayName(p.plan_key), // full, e.g. "BlueEyes Professional"
       };
     }
     return out;

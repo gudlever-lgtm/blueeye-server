@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Deploys the customer BlueEye stack on this host:
+# Deploys the customer BlueEyes stack on this host:
 #   1) updates blueeye-server + blueeye-agent (the agent is served as source) on
 #      the deploy branch,
 #   2) rebuilds + (re)starts the server (and demo agent) in the compose stack, and

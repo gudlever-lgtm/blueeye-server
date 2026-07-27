@@ -1,6 +1,6 @@
 # Analysis module
 
-Local, explainable anomaly detection for the BlueEye server. The module looks at
+Local, explainable anomaly detection for the BlueEyes server. The module looks at
 the measurements agents already report, and raises **findings** when something
 looks abnormal — no cloud, no ML library, only robust statistics that can be
 explained in plain text.
@@ -122,7 +122,7 @@ AI**:
 URL (the save is rejected without one, so neither silently falls back to Mistral).
 
 **Which LLM to use is the admin's decision, not a product constraint.** The
-no-US-vendor rule in `CLAUDE.md` governs BlueEye's *own* dependencies (map tiles,
+no-US-vendor rule in `CLAUDE.md` governs BlueEyes' *own* dependencies (map tiles,
 GeoIP, geocoder, fonts) — not where an admin chooses to send the assistant's
 context. The assistant only ever sends **metadata-derived summaries** (never raw
 data or payload), so the choice is about **data-residency preference**: each

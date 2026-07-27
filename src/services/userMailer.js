@@ -23,7 +23,7 @@ function escapeHtml(s) {
 }
 
 // Pure renderer for the one-time-password email. Bilingual (Danish first, then
-// English) to match BlueEye's da/en convention. The password appears ONLY in the
+// English) to match BlueEyes' da/en convention. The password appears ONLY in the
 // message body — never in the login link — per the security requirements.
 // Exported so it is unit-testable without a transport.
 function renderTempPasswordEmail({ name = '', tempPassword, loginUrl, expiresAt }) {
@@ -31,15 +31,15 @@ function renderTempPasswordEmail({ name = '', tempPassword, loginUrl, expiresAt 
   const expiry = formatExpiry(expiresAt);
   const link = loginUrl || '';
 
-  const subject = 'BlueEye: din adgang / your access';
+  const subject = 'BlueEyes: din adgang / your access';
 
   const text = [
     `Hej${greetingName},`,
     '',
-    'Der er oprettet en BlueEye-konto til dig. Log ind med engangs-adgangskoden',
+    'Der er oprettet en BlueEyes-konto til dig. Log ind med engangs-adgangskoden',
     'nedenfor. Du bliver bedt om at vælge en ny adgangskode ved første login.',
     '',
-    link ? `Login: ${link}` : 'Login: åbn din BlueEye-server i browseren',
+    link ? `Login: ${link}` : 'Login: åbn din BlueEyes-server i browseren',
     `Engangs-adgangskode: ${tempPassword}`,
     expiry ? `Udløber: ${expiry}` : null,
     '',
@@ -49,10 +49,10 @@ function renderTempPasswordEmail({ name = '', tempPassword, loginUrl, expiresAt 
     '',
     `Hi${greetingName},`,
     '',
-    'A BlueEye account has been created for you. Sign in with the one-time',
+    'A BlueEyes account has been created for you. Sign in with the one-time',
     'password below. You will be asked to choose a new password on first login.',
     '',
-    link ? `Login: ${link}` : 'Login: open your BlueEye server in your browser',
+    link ? `Login: ${link}` : 'Login: open your BlueEyes server in your browser',
     `One-time password: ${tempPassword}`,
     expiry ? `Expires: ${expiry}` : null,
     '',
@@ -65,18 +65,18 @@ function renderTempPasswordEmail({ name = '', tempPassword, loginUrl, expiresAt 
   const safeName = escapeHtml(greetingName);
   const html = [
     `<p>Hej${safeName},</p>`,
-    '<p>Der er oprettet en BlueEye-konto til dig. Log ind med engangs-adgangskoden nedenfor. Du bliver bedt om at vælge en ny adgangskode ved første login.</p>',
+    '<p>Der er oprettet en BlueEyes-konto til dig. Log ind med engangs-adgangskoden nedenfor. Du bliver bedt om at vælge en ny adgangskode ved første login.</p>',
     '<ul>',
-    link ? `<li>Login: <a href="${safeLink}">${safeLink}</a></li>` : '<li>Login: åbn din BlueEye-server i browseren</li>',
+    link ? `<li>Login: <a href="${safeLink}">${safeLink}</a></li>` : '<li>Login: åbn din BlueEyes-server i browseren</li>',
     `<li>Engangs-adgangskode: <strong>${safePw}</strong></li>`,
     safeExpiry ? `<li>Udløber: ${safeExpiry}</li>` : '',
     '</ul>',
     '<p>Del ikke denne adgangskode med andre. Den vises kun i denne ene mail.</p>',
     '<hr>',
     `<p>Hi${safeName},</p>`,
-    '<p>A BlueEye account has been created for you. Sign in with the one-time password below. You will be asked to choose a new password on first login.</p>',
+    '<p>A BlueEyes account has been created for you. Sign in with the one-time password below. You will be asked to choose a new password on first login.</p>',
     '<ul>',
-    link ? `<li>Login: <a href="${safeLink}">${safeLink}</a></li>` : '<li>Login: open your BlueEye server in your browser</li>',
+    link ? `<li>Login: <a href="${safeLink}">${safeLink}</a></li>` : '<li>Login: open your BlueEyes server in your browser</li>',
     `<li>One-time password: <strong>${safePw}</strong></li>`,
     safeExpiry ? `<li>Expires: ${safeExpiry}</li>` : '',
     '</ul>',

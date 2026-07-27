@@ -28,7 +28,7 @@ function createLocationsRepository(db) {
   }
 
   // Case-insensitive exact-name lookup — used to resolve a CMDB asset's location
-  // label to an existing BlueEye site before creating a new one. Lowest id wins.
+  // label to an existing BlueEyes site before creating a new one. Lowest id wins.
   async function findByName(name) {
     const [rows] = await pool.query(
       `SELECT ${COLUMNS} FROM locations WHERE LOWER(name) = LOWER(?) ORDER BY id LIMIT 1`,

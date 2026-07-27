@@ -42,7 +42,7 @@ function metricStep(metric, deviceId) {
       title: 'Check the path for latency or rerouting',
       kind: 'action',
       detail: 'Compare latency against the baseline and look for a new hop or an AS-path change (rerouting).',
-      rationale: 'Latency/jitter spikes often come from a path change; BlueEye tracks AS-path changes on the path map.',
+      rationale: 'Latency/jitter spikes often come from a path change; BlueEyes tracks AS-path changes on the path map.',
       action: traceAction,
     };
   }
@@ -106,7 +106,7 @@ function buildIncidentGuide({ incident, anomalies = [], configContext = null, si
       title: 'Review the correlated config change',
       kind: 'check',
       detail: `A device-config change was captured${mins != null ? ` ${mins} min before onset` : ''} (risk: ${risk}${reasons.length ? `, ${reasons.join(', ')}` : ''}). Review the diff — a recent change is the most common root cause.`,
-      rationale: 'BlueEye auto-correlated this change to the incident window; a high-risk change (ACL/routing/interface) is the prime suspect.',
+      rationale: 'BlueEyes auto-correlated this change to the incident window; a high-risk change (ACL/routing/interface) is the prime suspect.',
       action: { label: 'View config context', view: 'config-context', targetId: incident.id },
     });
   }
@@ -144,7 +144,7 @@ function buildIncidentGuide({ incident, anomalies = [], configContext = null, si
     title: 'Document findings and escalate if unresolved',
     kind: 'action',
     detail: 'Move the incident to Investigating, note what you checked, and escalate if it persists. A closed incident can be reopened with a comment.',
-    rationale: 'Keeps the audit trail and hand-off clear; Investigating also lets BlueEye auto-resolve once anomalies stop.',
+    rationale: 'Keeps the audit trail and hand-off clear; Investigating also lets BlueEyes auto-resolve once anomalies stop.',
   });
 
   return { incidentId: incident.id, primaryMetric: primaryMetric || null, steps };

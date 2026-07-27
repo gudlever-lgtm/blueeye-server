@@ -1,4 +1,4 @@
-# BlueEye setup — agent → server → licens
+# BlueEyes setup — agent → server → licens
 
 How the three pieces fit together, and how to set them up. For the one-host
 Docker demo see [DEPLOY.md](DEPLOY.md); this document explains the **flow** and a

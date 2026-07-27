@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 // Generates public/favicon.ico — 32×32 and 16×16 PNG-in-ICO images.
-// Design: BlueEye "◉" motif — navy circle, blue outer ring, blue centre dot.
+// Design: BlueEyes "◉" motif — navy circle, blue outer ring, blue centre dot.
 
 const fs   = require('fs');
 const path = require('path');

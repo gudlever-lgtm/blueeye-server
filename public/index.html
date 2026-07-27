@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="icon" href="/favicon.ico" sizes="32x32 16x16" />
-    <title>BlueEye — Server</title>
+    <title>BlueEyes Network Resilience System — Server</title>
     <!-- Leaflet (open source, BSD) for the locations map. Loaded from the
          official CDN; if it is unavailable (offline/CSP) the map view falls
          back to a location list. Point these at a self-hosted copy for a fully
@@ -21,7 +21,7 @@
     <!-- Login -->
     <main id="login" class="login hidden">
       <form id="login-form" class="card">
-        <h1>BlueEye <span class="muted">server</span></h1>
+        <h1>BlueEyes <span class="muted">Network Resilience System</span></h1>
         <label>Email <input type="email" id="email" value="admin@blueeye.local" required /></label>
         <label>Password <input type="password" id="password" required /></label>
         <button type="submit">Log in</button>
@@ -36,7 +36,7 @@
          one-time password (must_change_password). Blocks the rest of the app. -->
     <main id="force-change" class="login hidden">
       <form id="force-change-form" class="card">
-        <h1>BlueEye <span class="muted">server</span></h1>
+        <h1>BlueEyes <span class="muted">Network Resilience System</span></h1>
         <p class="muted">Vælg en ny adgangskode for at fortsætte. / Choose a new password to continue.</p>
         <label>Nuværende (engangs) adgangskode / Current (one-time) password
           <input type="password" id="fc-current" autocomplete="current-password" required /></label>
@@ -55,7 +55,7 @@
       <aside class="sidebar">
         <div class="brand">
           <span class="brand-mark" aria-hidden="true">◉</span>
-          <span class="brand-name">BlueEye <span class="muted">server</span></span>
+          <span class="brand-name">BlueEyes <span class="muted">server</span></span>
         </div>
         <!-- Navigation is grouped into categories and each item declares the
              minimum role that may use it (data-min-role, default viewer). app.js
@@ -108,7 +108,7 @@
           <button type="button" class="foot-docs" data-view="docs" title="Open the built-in documentation">
             <span class="foot-docs-icon" aria-hidden="true">📖</span> Documentation
           </button>
-          <span id="sidebar-version" class="foot-version">BlueEye server</span>
+          <span id="sidebar-version" class="foot-version">BlueEyes server</span>
         </div>
       </aside>
       <div class="shell">

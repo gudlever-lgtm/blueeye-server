@@ -142,7 +142,7 @@ Node path installs production deps on the target.
 
 `curl … | sh` only needs to reach **this** server, and the source is served by
 this server (not GitHub or a registry). So enrollment works on isolated networks,
-as long as the agent machine can reach BlueEye. (The Docker path still needs its
+as long as the agent machine can reach BlueEyes. (The Docker path still needs its
 base image — pre-load `node:22-alpine` or use a local registry — and the Node
 path needs `npm` reachable; on a fully offline host, pre-stage one of those.)
 
@@ -156,7 +156,7 @@ code, e.g. with Ansible:
 - hosts: all
   become: true
   tasks:
-    - name: Install BlueEye agent
+    - name: Install BlueEyes agent
       ansible.builtin.shell: "curl -sSL https://blueeye.example.dk/enroll/<CODE>/install.sh | sh"
       args:
         creates: /opt/blueeye-agent/current/src/index.js   # idempotent

@@ -88,6 +88,6 @@ like "Download 12 Mbps (below 50)."
 ## Privacy
 
 Metadata only: probe targets and timings, traffic byte/packet counts, speed-test
-byte counts and rates — never payload, consistent with the rest of BlueEye.
+byte counts and rates — never payload, consistent with the rest of BlueEyes.
 Predefined templates use neutral targets (e.g. Quad9 `9.9.9.9`, `example.com`);
-the speed test talks only to the BlueEye server itself.
+the speed test talks only to the BlueEyes server itself.

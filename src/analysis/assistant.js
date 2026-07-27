@@ -243,7 +243,7 @@ function createAssistant({
 
     const findings = await buildContext(hostId);
     const system =
-      'You are a helpful network and operations assistant for BlueEye. Answer briefly and ' +
+      'You are a helpful network and operations assistant for BlueEyes. Answer briefly and ' +
       'concretely in English. Use ONLY the provided context (findings) — do not guess, and ' +
       'if the context is insufficient, say so.';
     const user = JSON.stringify({ question: question.trim(), hostId: hostId ?? null, findings });
@@ -266,7 +266,7 @@ function createAssistant({
 
     const { context, location, agentCount, findingCount } = await buildLocationContext(locationId);
     const system =
-      'You are a network operations assistant for BlueEye. In 2-4 sentences, give a brief, ' +
+      'You are a network operations assistant for BlueEyes. In 2-4 sentences, give a brief, ' +
       'concrete status of THIS location: what looks healthy, what is wrong, and the most likely ' +
       'cause. Use ONLY the provided context (per-agent status, probe-health verdicts and recent ' +
       'findings, each already explained in plain language). If there are no agents or no findings, ' +
@@ -311,7 +311,7 @@ function createAssistant({
     const findings = hostId != null ? await buildContext(hostId) : [];
     const probeHealth = hostId != null ? await probeVerdict(hostId) : null;
     const system =
-      'You are a network operations assistant for BlueEye. In 2-4 sentences, explain what this ' +
+      'You are a network operations assistant for BlueEyes. In 2-4 sentences, explain what this ' +
       "agent's flow-pipeline diagnostic means — the most likely reason flows are or are not " +
       'arriving — then the single most useful next step. The collector receives sFlow/NetFlow ' +
       'datagrams and decodes flow records: 0 datagrams means no exporter is sending to it; ' +
@@ -349,7 +349,7 @@ function createAssistant({
       workaroundHints: Array.isArray(result.workaroundHints) ? result.workaroundHints : [],
     };
     const system =
-      'You are a network operations assistant for BlueEye. Write a short, clear summary in ENGLISH ' +
+      'You are a network operations assistant for BlueEyes. Write a short, clear summary in ENGLISH ' +
       '(3-5 sentences) of this network troubleshooting analysis: what was found, what is the ' +
       'likely cause, and what is the next step. Use ONLY the provided context. ' +
       'Avoid technical jargon that does not appear in the context.';
@@ -450,7 +450,7 @@ function createAssistant({
   async function diagnoseTransaction(facts) {
     if (!currentEnabled()) throw new FeatureDisabledError();
     const system =
-      'You are a network and operations assistant for BlueEye. Formulate a SHORT, ' +
+      'You are a network and operations assistant for BlueEyes. Formulate a SHORT, ' +
       'concrete diagnosis in English (at most 2 sentences) of a failed or deviating ' +
       'transaction test based on the given facts (failure phase, step, cross-check between ' +
       'agents, latency deviation). Do not guess beyond the facts.';
@@ -473,7 +473,7 @@ function createAssistant({
       throw e;
     }
     const system =
-      'You are a network operations assistant for BlueEye, answering a question about ONE specific ' +
+      'You are a network operations assistant for BlueEyes, answering a question about ONE specific ' +
       'incident. Answer briefly and concretely in the language of the question. Use ONLY the provided ' +
       'context (incident, timeline, config changes, similar incidents). NEVER invent facts, causes, ' +
       'hostnames or addresses that are not present in the context. If the context does not contain ' +
@@ -494,7 +494,7 @@ function createAssistant({
   async function suggestRemediation(context) {
     if (!currentEnabled()) throw new FeatureDisabledError();
     const system =
-      'You are a network operations assistant for BlueEye, proposing a remediation for ONE specific ' +
+      'You are a network operations assistant for BlueEyes, proposing a remediation for ONE specific ' +
       'incident. Use ONLY the provided masked context (incident, timeline, config changes, similar ' +
       'incidents). Propose at most a few concrete, actionable steps, in the language of the incident ' +
       'title. This is a SUGGESTION, never verified fact. NEVER invent facts, causes, hostnames, ' +
@@ -534,7 +534,7 @@ function createAssistant({
       findings,
     };
     const system =
-      'You are a network operations assistant for BlueEye, analyzing ONE incident that spans MULTIPLE ' +
+      'You are a network operations assistant for BlueEyes, analyzing ONE incident that spans MULTIPLE ' +
       'agents (a cross-agent cluster). Propose the single most likely COMMON root cause and a few ' +
       'concrete troubleshooting steps, in the language of the findings. Focus on what the agents share ' +
       '(same site, same anomaly type, same time). This is a SUGGESTION, never verified fact. Use ONLY ' +

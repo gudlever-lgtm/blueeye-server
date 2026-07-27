@@ -11,7 +11,7 @@ const silentLogger = { info() {}, warn() {}, error() {} };
 //
 //   path          path appended to base_url for the create call   (default '/')
 //   method        POST or PUT                                       (default POST)
-//   fields        map of API field (dot-path) -> BlueEye event key  (see EVENT_KEYS)
+//   fields        map of API field (dot-path) -> BlueEyes event key  (see EVENT_KEYS)
 //   staticFields  object merged into every request body (nesting allowed)
 //   headers       static extra request headers (name -> value)
 //   tokenScheme   Authorization scheme word for token auth          (default Bearer)
@@ -57,8 +57,8 @@ function createCustomItsmConnector({ fetchImpl = globalThis.fetch, logger = sile
     const metric = f.metric == null ? null : String(f.metric);
     const { impact, urgency } = impactUrgency(sev);
     return {
-      title: `[BlueEye ${sev}] ${metric || 'finding'}${host ? ` on host ${host}` : ''}`,
-      explanation: f.explanation || event.summary || 'BlueEye detected an anomaly.',
+      title: `[BlueEyes ${sev}] ${metric || 'finding'}${host ? ` on host ${host}` : ''}`,
+      explanation: f.explanation || event.summary || 'BlueEyes detected an anomaly.',
       summary: event.summary || f.explanation || '',
       severity: sev,
       metric,

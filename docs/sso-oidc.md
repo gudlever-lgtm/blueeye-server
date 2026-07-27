@@ -1,6 +1,6 @@
 # SSO — OpenID Connect (OIDC)
 
-BlueEye supports **single sign-on via OpenID Connect** (authorization-code flow
+BlueEyes supports **single sign-on via OpenID Connect** (authorization-code flow
 with **PKCE**) as a supplement to local login. It is a **Professional** capability,
 gated behind the licence feature key **`sso_oidc`**. Local username/password login
 always remains available as the fallback.
@@ -26,11 +26,11 @@ that speaks standard OIDC works: Keycloak, Authentik, Zitadel, Kanidm, …
    `nonce`. The signing algorithm is pinned to the asymmetric set (RS*/PS*/ES*) —
    `none`/HS* are rejected to prevent algorithm-confusion attacks.
 5. The user's groups (the `OIDC_ROLE_CLAIM`, default `groups`) are matched against
-   the **role map** (`oidc_role_map`); the **highest** matching BlueEye role wins
+   the **role map** (`oidc_role_map`); the **highest** matching BlueEyes role wins
    (admin > operator > viewer). **No match ⇒ access denied** — there is no default
    role.
 6. A local user is **just-in-time provisioned** (same shared provisioner as
-   LDAP/SAML), a normal BlueEye JWT is issued, and the browser is redirected back
+   LDAP/SAML), a normal BlueEyes JWT is issued, and the browser is redirected back
    with the token in the URL **fragment** (never logged server-side).
 
 ## Configuration (environment variables)

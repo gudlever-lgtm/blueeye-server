@@ -46,7 +46,7 @@ function validateRole(raw, errors) {
 const NAME_MAX = 120;
 
 // Optional display name — used only in the one-time-password email greeting
-// (BlueEye keys users by email; there is no name column). Trimmed; length-capped.
+// (BlueEyes keys users by email; there is no name column). Trimmed; length-capped.
 function validateName(raw, errors) {
   if (raw === undefined || raw === null || raw === '') return undefined;
   if (typeof raw !== 'string') {

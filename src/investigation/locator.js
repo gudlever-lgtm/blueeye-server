@@ -249,7 +249,7 @@ function createLocator({ agentsRepo, findingStore, locationsRepo = null, flowsRe
         suspectedSegment: null,
         relatedFindingIds: [],
         workaroundHints: [
-          `Register a BlueEye agent on ${locationRef.type}="${locationRef.value}" to enable topology diagnosis.`,
+          `Register a BlueEyes agent on ${locationRef.type}="${locationRef.value}" to enable topology diagnosis.`,
           'Verify that the agent is online and reporting to the server.',
         ],
       };

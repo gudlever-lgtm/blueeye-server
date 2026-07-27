@@ -1,4 +1,4 @@
-# BlueEye server — on-prem API + agent WebSocket.
+# BlueEyes server — on-prem API + agent WebSocket.
 FROM node:22-alpine
 
 WORKDIR /app

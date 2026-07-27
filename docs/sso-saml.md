@@ -1,6 +1,6 @@
 # SSO — SAML 2.0
 
-BlueEye supports **SP-initiated SAML 2.0 single sign-on** as a supplement to local
+BlueEyes supports **SP-initiated SAML 2.0 single sign-on** as a supplement to local
 login. It is a **Professional** capability, gated behind the licence feature key
 **`sso_saml`**. Local username/password login always remains as the fallback.
 
@@ -30,10 +30,10 @@ Any IdP that signs assertions works: Keycloak, SimpleSAMLphp, Authentik, ADFS, �
      matches the AuthnRequest we issued (when present).
 5. The `NameID` becomes the email; the configured role attribute's values
    (`SAML_ROLE_ATTRIBUTE`, default `groups`) are matched against the **role map**
-   (`saml_role_map`); the **highest** matching BlueEye role wins. **No match ⇒
+   (`saml_role_map`); the **highest** matching BlueEyes role wins. **No match ⇒
    access denied** — there is no default role.
 6. A local user is **just-in-time provisioned** (shared with LDAP/OIDC), a normal
-   BlueEye JWT is issued, and the browser is redirected back with the token in the
+   BlueEyes JWT is issued, and the browser is redirected back with the token in the
    URL fragment.
 
 ## Configuration (environment variables)

@@ -137,7 +137,7 @@ function createReportsRouter({ probeResultsRepo, incidentsRepo, locationsRepo, f
     if (out.error) return res.status(out.error.status).json(out.error.body);
     await auditExport(req, 'pdf', 'availability', out.range);
     return sendHtml(res, renderReportHtml({
-      title: 'BlueEye — Availability / SLA report',
+      title: 'BlueEyes — Availability / SLA report',
       subtitle: `${out.range.from.toISOString().slice(0, 10)} – ${out.range.to.toISOString().slice(0, 10)}`,
       columns: AVAIL_COLUMNS, rows: out.rows.map(availRow),
     }));
@@ -165,7 +165,7 @@ function createReportsRouter({ probeResultsRepo, incidentsRepo, locationsRepo, f
     if (out.error) return res.status(out.error.status).json(out.error.body);
     await auditExport(req, 'pdf', 'incidents', out.range);
     return sendHtml(res, renderReportHtml({
-      title: 'BlueEye — Incident report',
+      title: 'BlueEyes — Incident report',
       subtitle: `${out.range.from.toISOString().slice(0, 10)} – ${out.range.to.toISOString().slice(0, 10)}`,
       columns: INCIDENT_COLUMNS, rows: out.rows.map(incidentRow),
     }));

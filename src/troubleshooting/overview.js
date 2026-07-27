@@ -305,9 +305,129 @@ function buildTopologyView({ graph = null, agents = [], blastByNode = new Map() 
   };
 }
 
+// ---------------------------------------------------------------------------
+// anomalies[] — per-flow-pair baseline deviations.
+//
+// These are NOT re-derived here. flowPairBaselineJob already scores each
+// (src,dst,port) pair against its day-of-week/hour-of-day median+MAD baseline
+// and persists the result as a normal finding with metric 'flow.volume',
+// carrying the pair in evidence[0].labels. Reading those findings fleet-wide is
+// strictly cheaper and more consistent than fanning out over
+// GET /api/topology/flow-baselines?host= per agent — and it means an anomaly
+// the operator acks on the Analysis page disappears here too.
+//
+//   currentVsBaselinePct — signed percentage change against the baseline:
+//                          ((observed - baseline) / baseline) * 100.
+//                          +150 means "2.5x the usual volume", -80 means the
+//                          pair went nearly silent. null when the baseline is
+//                          zero or absent (no meaningful ratio exists).
+//   since                — the start of the deviating window, falling back to
+//                          when the finding was recorded.
+// ---------------------------------------------------------------------------
+function pairLabels(finding) {
+  const first = asArray(finding && finding.evidence)[0];
+  const labels = (first && first.labels) || {};
+  return {
+    src: labels.src != null ? String(labels.src) : null,
+    dst: labels.dst != null ? String(labels.dst) : null,
+    dstPort: labels.dstPort != null ? Number(labels.dstPort) : null,
+  };
+}
+
+function percentVsBaseline(observed, baseline) {
+  // Guard the nulls BEFORE coercing: Number(null) is 0, which would turn a
+  // missing observation into a confident "-100%" ("the pair went silent").
+  if (observed == null || baseline == null || observed === '' || baseline === '') return null;
+  const o = Number(observed);
+  const b = Number(baseline);
+  if (!Number.isFinite(o) || !Number.isFinite(b) || b === 0) return null;
+  return Math.round(((o - b) / b) * 1000) / 10;
+}
+
+function buildAnomalies(findings) {
+  const out = [];
+  for (const f of asArray(findings)) {
+    if (!f) continue;
+    const { src, dst, dstPort } = pairLabels(f);
+    // Without the pair labels there is no link to name — skip rather than
+    // render an "undefined -> undefined" row.
+    if (!src || !dst) continue;
+    const port = dstPort != null && Number.isFinite(dstPort) ? dstPort : null;
+    const windowFrom = Array.isArray(f.window) ? f.window[0] : null;
+    out.push({
+      linkId: `${src}->${dst}${port != null ? `:${port}` : ''}`,
+      currentVsBaselinePct: percentVsBaseline(f.observed, f.baseline),
+      since: toIso(windowFrom) || toIso(f.createdAt),
+      // --- additive context (deep-link + the evidence behind the number) ---
+      findingId: f.id ?? null,
+      srcHostId: toNodeId(src),
+      dstHostId: toNodeId(dst),
+      dstPort: port,
+      observed: f.observed ?? null,
+      baseline: f.baseline ?? null,
+      deviation: f.deviation ?? null,
+      severity: normalizeSeverity(f.severity),
+      explanation: f.explanation ?? null,
+    });
+  }
+  // Largest absolute swing first — the pair that moved most is the one to look
+  // at, whether it spiked or went silent. Unrateable rows sink to the bottom.
+  out.sort((a, b) => {
+    const av = a.currentVsBaselinePct == null ? -1 : Math.abs(a.currentVsBaselinePct);
+    const bv = b.currentVsBaselinePct == null ? -1 : Math.abs(b.currentVsBaselinePct);
+    if (av !== bv) return bv - av;
+    return new Date(b.since || 0) - new Date(a.since || 0);
+  });
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// summary — the four key-figure cards.
+//
+//   activeFaults   — raw open alarm signals: the member findings behind the
+//                    live root causes. Paired with `rootCauses` this is the
+//                    rollup made visible ("47 alarms -> 3 causes").
+//   affectedDevices— the full impact footprint: every device named by a root
+//                    cause, everything in its blast radius, and every node the
+//                    topology reports as not-ok. Counted once each.
+//   rootCauses     — how many distinct causes those alarms collapse to.
+//   anomalies      — flow-pair baseline deviations.
+// ---------------------------------------------------------------------------
+function buildSummary({ rootCauses = [], topology = null, anomalies = [] } = {}) {
+  const causes = asArray(rootCauses);
+  const devices = new Set();
+  let activeFaults = 0;
+
+  for (const rc of causes) {
+    activeFaults += Number(rc.memberCount) || 0;
+    for (const id of asArray(rc.affectedDeviceIds)) devices.add(id);
+    const blast = rc.blastRadius || {};
+    for (const id of asArray(blast.directlyIsolated)) devices.add(id);
+    for (const id of asArray(blast.dependencyAffected)) devices.add(id);
+  }
+
+  const counts = (topology && topology.counts) || { ok: 0, down: 0, unreachable_downstream: 0 };
+  for (const n of asArray(topology && topology.nodes)) {
+    if (n && n.state && n.state !== NODE_STATE.OK) devices.add(n.id);
+  }
+
+  return {
+    activeFaults,
+    affectedDevices: devices.size,
+    rootCauses: causes.length,
+    anomalies: asArray(anomalies).length,
+    // --- additive breakdown behind `affectedDevices` ---
+    devicesDown: Number(counts.down) || 0,
+    devicesUnreachable: Number(counts.unreachable_downstream) || 0,
+  };
+}
+
 module.exports = {
   buildRootCauses,
   buildTopologyView,
+  buildAnomalies,
+  buildSummary,
+  percentVsBaseline,
   stateFromAgentStatus,
   worseState,
   collateBlastRadius,

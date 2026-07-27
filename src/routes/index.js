@@ -27,6 +27,8 @@ const { createGeocodeRouter } = require('./geocode');
 const { createFlowsRouter } = require('./flows');
 const { createTopologyRouter } = require('./topology');
 const { createDiscoveryRouter } = require('./discovery');
+const { createTroubleshootingRouter } = require('./troubleshooting');
+const { createTroubleshootingOverviewService } = require('../troubleshooting/overviewService');
 const { createProbesRouter } = require('./probes');
 const { createReportsRouter } = require('./reports');
 const { createIncidentsRouter } = require('./incidents');
@@ -288,6 +290,19 @@ function createApiRouter({
   if (discoveredDevicesRepo) router.use('/api/discovery', createDiscoveryRouter({ discoveredDevicesRepo, agentsRepo, discoverySweepJob, agentCommander, auditLogger, auditLogRepo, config: discoveryConfig, getConfig: settingsService ? () => settingsService.getDiscovery() : null, setConfig: settingsService ? (patch) => settingsService.setDiscovery(patch) : null }));
 
   if (flowsRepo || lldpNeighborsRepo || serviceDependenciesRepo || topologyChangesRepo || flowPairBaselinesRepo) router.use('/api/topology', createTopologyRouter({ flowsRepo, agentsRepo, locationsRepo, centroids, lldpNeighborsRepo, serviceDependenciesRepo, serviceDependencyJob, blastRadiusService, topologyChangesRepo, flowPairBaselinesRepo, flowPairBaselineJob }));
+  // Consolidated Troubleshooting Dashboard — a pure READ aggregation over the
+  // five capability domains above (topology rediscovery, dependency mapping,
+  // blast radius, flow-pair baselining, active discovery). Owns no data of its
+  // own; mounted whenever at least one of its sources exists, and degrades to
+  // empty panels for the ones that do not.
+  if (incidentClustersRepo || blastRadiusService || findingStore) {
+    router.use('/api/troubleshooting', createTroubleshootingRouter({
+      overviewService: createTroubleshootingOverviewService({
+        clustersRepo: incidentClustersRepo, findingStore, agentsRepo, blastRadiusService,
+        topologyChangesRepo, auditEventsRepo, discoveredDevicesRepo, logger,
+      }),
+    }));
+  }
   if (probeResultsRepo) router.use('/api/probes', createProbesRouter({ probeResultsRepo, agentsRepo, geoProvider, centroids }));
   if (probeResultsRepo) router.use('/api/fleet', createFleetRouter({ agentsRepo, probeResultsRepo, resultsRepo, speedtestResultsRepo, settingsService, logger }));
   // Overview "open issues" rollup (license feature `dashboard_advanced`,

@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.98.0 — Consolidated Troubleshooting Dashboard
+
+One screen for an outage: **what is failing, what it affects, and when it
+started** — without switching views.
+
+New read endpoint `GET /api/troubleshooting/overview` (operator+) returns the
+whole screen in one request: key figures, the L2/L3 topology with per-node
+state, the correlated root causes with their blast radius, flow-pair baseline
+deviations and a change timeline. New tab **Troubleshooting**.
+
+**It owns no data.** No tables, no migrations — it is a read/aggregation layer
+over five capabilities that already existed (topology rediscovery, service
+dependency mapping, blast radius, flow-pair baselining, active discovery) plus
+the cross-agent correlator, each of which keeps its own page and API.
+
+Decisions worth knowing:
+
+- **The rollup is preserved, not re-derived.** One cluster = one root cause,
+  never one per affected device. The key figures make the collapse legible —
+  "47 alarms → 3 causes" — instead of leaving the operator to divide.
+- **Blast radius counts impact *beyond* the devices a cause already names**, so
+  a root cause cannot inflate itself; L2-isolated hosts are not double-counted
+  as service dependents.
+- **Node state is derived and conservative.** `unreachable_downstream` exists
+  nowhere in the schema; it means "we cannot hear it", which is not a claim that
+  the host is broken — and an unknown agent status maps to `ok`, because we do
+  not invent faults we have no evidence for.
+- **One graph read.** `blastRadiusService.compute()` rebuilds the whole topology
+  graph per call, so the service takes the graph once and runs the pure
+  `computeBlastRadius` per node. A test asserts it.
+- **Aggregating never widens access.** The endpoint adopts operator+, the
+  strictest non-admin level of its sources; admin-only discovery candidates are
+  included for admins only — as an empty list, not a 403 for everyone else.
+- **Fail-closed per panel.** A dead domain lands in `failedSources`, sets
+  `partial: true` and costs that one panel; it never blanks the screen.
+
+Read-only — no agent command is pushed, so no signed command and no audit write.
+
+The older location-driven anomaly view is unchanged and is now labelled
+**Investigate**, which is what it does.
+
+See `docs/troubleshooting-dashboard.md`.
+
 ## 0.96.3 — Fix: traffic map stuck on "Loading…"
 
 The traffic map never rendered — the Overview (and the location page) sat on

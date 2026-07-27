@@ -1,4 +1,4 @@
-# BlueEye — Docker Compose demo & deployment
+# BlueEyes — Docker Compose demo & deployment
 
 Runs the whole stack (MySQL + license server + server + agent) on one host and
 exercises the end-to-end flow: **agent measures traffic → sends to server →

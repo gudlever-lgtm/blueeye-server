@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.98.2 — Rename: BlueEyes Network Resilience System
+
+The product is now the **BlueEyes Network Resilience System**. Every
+user-facing surface was updated — dashboard chrome and login, the built-in
+documentation, plan labels ("BlueEyes Professional"), the one-time-password
+email, ITSM/CMDB/webhook help text, installer and uninstaller output, and the
+READMEs across server, agent and licens. Inline prose uses the short form
+**BlueEyes**; the full name anchors the page titles, login screens, README
+leads and the "What BlueEyes does" article.
+
+Deliberately **not** renamed, because deployed installs and integrations key
+off them: the `X-BlueEye-Signature` and `X-BlueEye-Protocol` HTTP headers, the
+`BlueEyeAgent` Windows service, the `u_source = BlueEye` ServiceNow filter
+tag, `BLUEEYE_*` environment variables, `blueeye_*` database objects, and the
+`blueeye-server` / `blueeye-agent` / `blueeye-licens` package and repository
+names. Renaming any of those would break agents in the field, saved ServiceNow
+views and existing deployment config, so they stay on the old spelling until
+there is a migration path.
+
 ## 0.96.3 — Fix: traffic map stuck on "Loading…"
 
 The traffic map never rendered — the Overview (and the location page) sat on
@@ -208,7 +227,7 @@ was recorded).
 
 ## 0.84.0 — Automated read-only evidence snapshot on cluster open
 
-When a cross-agent cluster opens, BlueEye captures a **READ-ONLY** diagnostic
+When a cross-agent cluster opens, BlueEyes captures a **READ-ONLY** diagnostic
 snapshot from each affected target over the **existing** authenticated, audited
 agent-command path — then references one compressed blob per (cluster, target)
 from the incident timeline. The capture is bounded and best-effort: it never
@@ -319,7 +338,7 @@ ServiceNow worknote append, and the notifications API.
 Adds a minimal, queryable L2 topology so cross-agent clustering can group findings
 by neighbor adjacency when no shared-site (manual) topology applies.
 
-**Audit note:** the brief assumed BlueEye already collects LLDP as part of "L2 loop
+**Audit note:** the brief assumed BlueEyes already collects LLDP as part of "L2 loop
 detection" — it does **not** (no L2 loop detection, no SNMP/BRIDGE-MIB/LLDP
 collection exists; `locator.js`'s "neighbor" means neighbor *agents*). And Fase 1's
 topology signal is **shared-site** (`location_id`), not a manual dependency graph.

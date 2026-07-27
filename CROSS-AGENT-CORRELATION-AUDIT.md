@@ -1,7 +1,7 @@
 # Cross-Agent Pattern Correlation — Step 0 Audit
 
 **Status: AUDIT ONLY — no code changed, no migrations run, nothing pushed.**
-Produced for the "BlueEye — Cross-Agent Pattern Correlation" task, Step 0.
+Produced for the "BlueEyes — Cross-Agent Pattern Correlation" task, Step 0.
 
 > Naming note: the task said "Produce REFACTOR-AUDIT.md", but a `REFACTOR-AUDIT.md`
 > already exists in the repo root — it is an **unrelated** prior security/RBAC/refactor

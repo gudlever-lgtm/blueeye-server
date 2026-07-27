@@ -6,7 +6,7 @@
 -- `sso_login_audit` table (migration 037).
 
 -- Maps a SAML attribute value (a group/role name from the configured role
--- attribute, default `groups`) to a BlueEye role. On login the user's attribute
+-- attribute, default `groups`) to a BlueEyes role. On login the user's attribute
 -- values are looked up and the HIGHEST matching role wins (admin > operator >
 -- viewer). NO match means access is DENIED — there is deliberately no default
 -- role. The column is named `claim_value` to share the generic role-map surface

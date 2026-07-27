@@ -13,7 +13,7 @@ const { maskIps } = require('../config/mask');
 // AI is used.
 
 const NIS2_SEVERITY = { CRIT: 'high', WARN: 'medium', INFO: 'low' };
-const REVIEW_NOTE = 'Automatically generated DRAFT (BlueEye). Requires human review before submission; not submitted automatically.';
+const REVIEW_NOTE = 'Automatically generated DRAFT (BlueEyes). Requires human review before submission; not submitted automatically.';
 
 function nis2Severity(sev) { return NIS2_SEVERITY[String(sev || '').toUpperCase()] || 'medium'; }
 
@@ -36,7 +36,7 @@ function buildClusterNis2Draft(cluster, { members = [], timelineText = null, aiT
     affectedSystems: maskIps(affected),
     businessImpact: maskIps(`Cross-agent incident spanning ${agents.length || cluster.memberCount || 0} monitored system(s); potential service impact under review.`),
     rootCause: maskIps(`${aiText || cause}\n\n${REVIEW_NOTE}${marked ? ' AI-generated content is clearly marked.' : ''}`),
-    actionsTaken: timelineText ? maskIps(String(timelineText)) : 'See the incident timeline in BlueEye.',
+    actionsTaken: timelineText ? maskIps(String(timelineText)) : 'See the incident timeline in BlueEyes.',
     nis2Relevant: false,          // a human assesses NIS2 relevance
     notificationRequired: false,  // NEVER auto-submitted
     status: 'open',

@@ -1,4 +1,4 @@
-# BlueEye feature roadmap & status
+# BlueEyes feature roadmap & status
 
 This is the single human-readable checklist for the commercial **feature matrix**
 shown in **Settings → License**. It mirrors the machine source of truth,

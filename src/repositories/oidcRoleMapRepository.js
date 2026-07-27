@@ -1,7 +1,7 @@
 'use strict';
 
 // Data-access for `oidc_role_map` — maps an OIDC claim value (a group/role name
-// from the id-token `groups` claim) to a BlueEye role. On login the user's claim
+// from the id-token `groups` claim) to a BlueEyes role. On login the user's claim
 // values are looked up and the HIGHEST matching role wins (admin > operator >
 // viewer). NO match means access is DENIED — there is deliberately no default role.
 function createOidcRoleMapRepository(db) {

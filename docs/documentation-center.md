@@ -2,7 +2,7 @@
 
 The **Documentation** tab (`views.docs`, nav item under *Diagnostics*) is an
 in-app handbook: step-by-step troubleshooting how-tos with worked examples for
-everyone, plus admin-only setup guides for the external systems BlueEye connects
+everyone, plus admin-only setup guides for the external systems BlueEyes connects
 to (ServiceNow ITSM/CMDB, alerting, SSO/LDAP, enrollment, retention).
 
 It is intentionally **static, dependency-free content** — the same style as the

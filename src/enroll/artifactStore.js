@@ -19,7 +19,7 @@ function platformFromFilename(name) {
 }
 
 // Scans a local directory for agent binaries and caches each file's SHA-256 at
-// startup, so the binary is always served from the BlueEye server itself (no
+// startup, so the binary is always served from the BlueEyes server itself (no
 // external download — works in air-gapped networks). Reads happen once; call
 // reload() if binaries are published while the server is running.
 //

@@ -28,7 +28,7 @@ full HTTP route table, the data model, the dashboard structure, and a
   `package-lock.json` in sync). Tags aren't pushed from CI here — the version field is
   the source of truth. `npm version` also runs the `version` hook
   (`scripts/stamp-release-date.js`), which stamps `package.json` `releaseDate` with
-  today's date — the dashboard footer shows `BlueEye server · v<version> · <releaseDate>`
+  today's date — the dashboard footer shows `BlueEyes server · v<version> · <releaseDate>`
   (served by `GET /system/version`), so don't hand‑edit the date; let the bump set it.
 
 ## Working in this repo

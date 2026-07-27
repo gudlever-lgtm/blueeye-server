@@ -1,6 +1,6 @@
 # Geo layer (flow records + GeoIP/ASN enrichment)
 
-Phase 7 of BlueEye. The server enriches the flows agents report with **country**
+Phase 7 of BlueEyes. The server enriches the flows agents report with **country**
 and **ASN** for the external (public) peer, and stores them so the map layer
 (Phase 8) can aggregate traffic by destination. Everything is local and
 on-prem: no third-party geo SDK and no network call at runtime — enrichment

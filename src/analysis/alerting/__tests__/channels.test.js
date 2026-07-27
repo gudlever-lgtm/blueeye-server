@@ -56,7 +56,7 @@ test('email sends via the injected transport', async () => {
   const r = await ch.send({ hostId: '9', metric: 'cpu', severity: 'CRIT', explanation: 'high', kind: 'ANOMALY' });
   assert.equal(r.ok, true);
   assert.equal(sent[0].to, 'ops@b');
-  assert.match(sent[0].subject, /BlueEye CRIT/);
+  assert.match(sent[0].subject, /BlueEyes CRIT/);
 });
 
 test('email without a transport or recipient fails cleanly', async () => {

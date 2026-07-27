@@ -139,7 +139,7 @@ function createCmdbAssetsRouter({ cmdbConfigRepo, registry, secretBox }) {
   return router;
 }
 
-// Reconciles the agent's BlueEye site with the linked asset's CMDB location.
+// Reconciles the agent's BlueEyes site with the linked asset's CMDB location.
 // Match is by name so two agents at "Copenhagen DC" converge on ONE location row.
 // Returns { synced, suggestion }:
 //   - synced { id, name }     — the site was set (or already correct).
@@ -195,7 +195,7 @@ function createAgentCmdbLinkRouter({ agentCmdbLinksRepo, agentsRepo, locationsRe
       cmdbAssetLocation: value.cmdbAssetLocation,
       linkedBy: (req.user && req.user.id) || null,
     });
-    // Reconcile the agent's BlueEye site from the asset's CMDB location. Auto-sync
+    // Reconcile the agent's BlueEyes site from the asset's CMDB location. Auto-sync
     // when the agent has no site; when it already has a (manual) one that differs,
     // return a suggestion instead of overwriting (the client confirms + re-links
     // with overwrite_location:true). Best-effort: a failure never fails the link.

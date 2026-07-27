@@ -139,10 +139,10 @@ test('renderUninstallPs1 is a real Windows uninstaller, not a Linux one', () => 
   assert.ok(!/systemctl|launchctl/.test(script));
 });
 
-test('renderUninstallPs1 frees in-use files: kills any BlueEye node, waits, retries removal', () => {
+test('renderUninstallPs1 frees in-use files: kills any BlueEyes node, waits, retries removal', () => {
   const script = renderUninstallPs1();
   // Kill matches any agent node (service or a foreground doctor run), not just index.js.
-  assert.match(script, /CommandLine -like '\*BlueEye\*'/);
+  assert.match(script, /CommandLine -like '\*BlueEyes\*'/);
   assert.match(script, /Start-Sleep/);
   assert.match(script, /for \(\$i = 0; \(\$i -lt 3\)/); // retry loop
   assert.match(script, /could not fully remove/); // clear message if something is still locked

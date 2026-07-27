@@ -1,6 +1,7 @@
 # blueeye-server
 
-On-prem, single-tenant API server for BlueEye. Built on **Node.js + Express**
+On-prem, single-tenant API server for the **BlueEyes Network Resilience System**.
+Built on **Node.js + Express**
 with **MySQL** as the data store. Runs entirely on your own infrastructure —
 no external SaaS, no telemetry.
 

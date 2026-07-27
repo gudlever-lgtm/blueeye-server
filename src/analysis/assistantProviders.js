@@ -7,7 +7,7 @@
 // switching provider is just a base URL + model + key change.
 //
 // Which LLM to use is the ADMIN's decision, not a product constraint: the
-// no-US-vendor rule in CLAUDE.md governs BlueEye's own dependencies (map tiles,
+// no-US-vendor rule in CLAUDE.md governs BlueEyes' own dependencies (map tiles,
 // GeoIP, geocoder, fonts), not where an admin chooses to send the assistant's
 // context. The assistant only ever sends metadata-derived summaries (never raw
 // data or payload), so the choice is about data residency preference. Each

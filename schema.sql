@@ -1,4 +1,4 @@
--- BlueEye server — canonical database schema (full snapshot).
+-- BlueEyes server — canonical database schema (full snapshot).
 --
 -- Two ways to set up a database:
 --   1) Run the migration runner (recommended):   npm run migrate

@@ -5,7 +5,7 @@
 // script, it runs right after `npm version <patch|minor|major>` rewrites the
 // version field — and before any commit — so the bump and the date land together
 // in the same change (works with --no-git-tag-version too). This keeps the
-// dashboard footer's "BlueEye server · v<version> · <release date>" truthful
+// dashboard footer's "BlueEyes server · v<version> · <release date>" truthful
 // without a manual edit, in line with "the version field is the source of truth".
 const fs = require('fs');
 const path = require('path');

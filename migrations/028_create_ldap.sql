@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS ldap_config (
   PRIMARY KEY (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Maps an LDAP/AD group DN to a BlueEye role. On login the user's groups are
+-- Maps an LDAP/AD group DN to a BlueEyes role. On login the user's groups are
 -- looked up and the HIGHEST matching role wins (admin > operator > viewer). NO
 -- match means access is DENIED — there is deliberately no default role.
 CREATE TABLE IF NOT EXISTS ldap_role_map (

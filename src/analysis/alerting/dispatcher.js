@@ -222,7 +222,7 @@ function createDispatcher({ config, channels = {}, licensed = () => true, channe
     if (!channel) return null;
     const finding = {
       id: 'test', hostId: 'test', metric: 'alerting.test', kind: 'TEST', severity: 'WARN',
-      explanation: 'BlueEye alerting testbesked', evidence: [{ test: true }], deviation: 0, createdAt: new Date(),
+      explanation: 'BlueEyes alerting testbesked', evidence: [{ test: true }], deviation: 0, createdAt: new Date(),
     };
     try {
       const r = await channel.send(finding, null);

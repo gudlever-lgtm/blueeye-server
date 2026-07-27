@@ -13,7 +13,7 @@ test('GET / serves the dashboard HTML', async () => {
   const res = await request(makeApp()).get('/');
   assert.equal(res.status, 200);
   assert.match(res.headers['content-type'], /text\/html/);
-  assert.match(res.text, /BlueEye/);
+  assert.match(res.text, /BlueEyes/);
 });
 
 test('GET /app.js serves the dashboard script', async () => {

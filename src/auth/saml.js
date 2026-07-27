@@ -14,7 +14,7 @@ const CLOCK_SKEW_MS = 5 * 60 * 1000; // tolerate 5 minutes of IdP/SP clock drift
 // the HAND-ROLLED, dependency-free XML-DSig verifier (src/auth/samlXml.js) — no
 // US SDK. We validate, in order: signature → referenced element is the Assertion
 // → Issuer → Conditions (NotBefore/NotOnOrAfter) → AudienceRestriction → Subject
-// confirmation expiry. Attributes map to the highest BlueEye role; no match = deny.
+// confirmation expiry. Attributes map to the highest BlueEyes role; no match = deny.
 function createSamlAuth({
   config = {},
   samlRoleMapRepo,
@@ -65,7 +65,7 @@ function createSamlAuth({
     return Number.isNaN(t) ? null : t;
   }
 
-  // Maps SAML attribute values to the HIGHEST BlueEye role via saml_role_map.
+  // Maps SAML attribute values to the HIGHEST BlueEyes role via saml_role_map.
   async function resolveRole(values) {
     let maps = [];
     try { maps = await samlRoleMapRepo.findAll(); } catch { maps = []; }

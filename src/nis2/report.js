@@ -119,7 +119,7 @@ function deltaCell(d) {
 
 // Renders the executive report to a standalone, self-contained HTML document
 // suitable for the browser's "Print → Save as PDF" (no external assets, clean
-// print CSS). Mirrors the BlueEye palette in a light, document-friendly form.
+// print CSS). Mirrors the BlueEyes palette in a light, document-friendly form.
 function renderExecutiveHtml(report, { org = 'Organisation' } = {}) {
   const s = report.sections;
   const cats = s.overallStatus.categories

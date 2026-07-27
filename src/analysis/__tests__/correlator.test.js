@@ -145,7 +145,7 @@ test('a cyclic dependency graph does not hang and still groups', () => {
 });
 
 // ---- shipped graph ---------------------------------------------------------
-test('the shipped dependency-graph.json loads and relates real BlueEye metrics', () => {
+test('the shipped dependency-graph.json loads and relates real BlueEyes metrics', () => {
   const c = createCorrelator(); // default graph from dependency-graph.json
   const load1 = finding({ metric: 'load1', offsetMs: 0 });
   const cpu = finding({ metric: 'cpu', offsetMs: 1000 });

@@ -146,10 +146,10 @@ test('moduleRequirements maps each legacy module to the package it is sold under
   assert.deepEqual(mods.geo, {
     required_plan: 'professional',
     required_plan_name: 'Professional',
-    required_plan_label: 'BlueEye Professional',
+    required_plan_label: 'BlueEyes Professional',
   });
   assert.equal(mods.analysis.required_plan_name, 'Professional');
-  assert.equal(mods.assistant.required_plan_label, 'BlueEye Professional');
+  assert.equal(mods.assistant.required_plan_label, 'BlueEyes Professional');
   // Exposed on the UI summary too.
   assert.deepEqual(ps.summary().modules, mods);
 });
@@ -165,10 +165,10 @@ test('module tiering is display-only — a plan key never GRANTS a legacy module
   assert.equal(ps.hasFeature('geo'), false);
 });
 
-test('upgradeHint names the required BlueEye plan', () => {
+test('upgradeHint names the required BlueEyes plan', () => {
   const ps = createPlanService({ licenseManager: lm({ plan: 'starter' }) });
-  assert.equal(ps.upgradeHint('api_access'), 'This feature requires BlueEye Professional.');
-  assert.equal(ps.upgradeHint('sso_oidc'), 'This feature requires BlueEye Professional.');
+  assert.equal(ps.upgradeHint('api_access'), 'This feature requires BlueEyes Professional.');
+  assert.equal(ps.upgradeHint('sso_oidc'), 'This feature requires BlueEyes Professional.');
   assert.equal(ps.upgradeHint('msp_multitenant'), null); // removed key → no hint
   assert.equal(ps.upgradeHint('reports_basic'), null); // already entitled
   assert.equal(ps.upgradeHint('reports_pdf'), null); // Starter mid-tier already grants it
@@ -191,7 +191,7 @@ test('requirePlanFeature returns the documented 403 contract on denial', () => {
     success: false,
     error: 'feature_not_available',
     feature: 'reports_compliance',
-    message: 'This feature requires BlueEye Professional.',
+    message: 'This feature requires BlueEyes Professional.',
   });
 });
 

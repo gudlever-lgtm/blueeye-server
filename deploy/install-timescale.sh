@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =====================================================================
 # install-timescale.sh — provision a dedicated TimescaleDB node for
-# BlueEye telemetry (separate from the MySQL box at 192.168.1.140).
+# BlueEyes telemetry (separate from the MySQL box at 192.168.1.140).
 #
 # On-prem only. No US cloud. PostgreSQL 16 + TimescaleDB from the official
 # apt repos (pgdg + packagecloud/timescale).
@@ -96,7 +96,7 @@ timescaledb-tune --quiet --yes --pg-config "${PGBIN}/pg_config" || \
   warn "timescaledb-tune returned non-zero (may already be tuned) — continuing"
 
 # --- 5. manual tuning on top of timescaledb-tune -------------------------
-# BlueEye ingests telemetry in large batch COPY transactions (flow_records,
+# BlueEyes ingests telemetry in large batch COPY transactions (flow_records,
 # results). A small max_wal_size forces frequent, expensive checkpoints during
 # those bursts. Raise it so a burst fits between checkpoints -> far less write
 # amplification on the ingest hot path. Written as a conf.d drop-in so
@@ -108,7 +108,7 @@ if ! grep -qE "^\s*include_dir\s*=\s*'conf.d'" "${PGCONF_DIR}/postgresql.conf"; 
   echo "include_dir = 'conf.d'" >> "${PGCONF_DIR}/postgresql.conf"
 fi
 cat > "${PGCONF_DIR}/conf.d/blueeye-tsdb.conf" <<EOF
-# BlueEye telemetry manual tuning (on top of timescaledb-tune). Managed by
+# BlueEyes telemetry manual tuning (on top of timescaledb-tune). Managed by
 # deploy/install-timescale.sh — re-running the installer overwrites this file.
 # Larger WAL between checkpoints for batch-COPY ingest bursts.
 max_wal_size = '${MAX_WAL_SIZE}'
@@ -164,7 +164,7 @@ fi
 install -d -o postgres -g postgres -m 0750 "${BACKUP_DIR}"
 cat > /usr/local/bin/blueeye-tsdb-backup.sh <<EOF
 #!/usr/bin/env bash
-# BlueEye telemetry base backup — installed by deploy/install-timescale.sh.
+# BlueEyes telemetry base backup — installed by deploy/install-timescale.sh.
 set -euo pipefail
 BACKUP_DIR="${BACKUP_DIR}"
 RETENTION_DAYS="${BACKUP_RETENTION_DAYS}"
@@ -180,7 +180,7 @@ chmod 0755 /usr/local/bin/blueeye-tsdb-backup.sh
 chown root:root /usr/local/bin/blueeye-tsdb-backup.sh
 # daily at 02:30, run as postgres (peer replication auth)
 cat > /etc/cron.d/blueeye-tsdb-backup <<'EOF'
-# BlueEye telemetry daily base backup (managed by install-timescale.sh)
+# BlueEyes telemetry daily base backup (managed by install-timescale.sh)
 SHELL=/bin/bash
 PATH=/usr/local/bin:/usr/lib/postgresql/16/bin:/usr/bin:/bin
 30 2 * * * postgres /usr/local/bin/blueeye-tsdb-backup.sh >> /var/log/blueeye-tsdb-backup.log 2>&1
@@ -243,4 +243,4 @@ else
   log "  BLUEEYE_SERVER_URL unset — skipping HTTP 200/404 checks"
 fi
 
-log "done. TimescaleDB node provisioned for BlueEye telemetry."
+log "done. TimescaleDB node provisioned for BlueEyes telemetry."

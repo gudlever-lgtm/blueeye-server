@@ -1,4 +1,4 @@
-# BlueEye stack. Run from this directory with the repos cloned as siblings.
+# BlueEyes stack. Run from this directory with the repos cloned as siblings.
 #
 #   node scripts/dev-bootstrap.js                  # once: generates .env (keys + demo defaults)
 #

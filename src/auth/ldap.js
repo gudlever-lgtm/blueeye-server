@@ -45,7 +45,7 @@ function defaultClientFactory({ url, tlsOptions }) {
 // OpenLDAP — only the configurable filters differ. Flow:
 //   1) service-bind (or anonymous) and search for the user by user_filter
 //   2) re-bind AS the user with the supplied password (the actual authentication)
-//   3) resolve the user's groups to the HIGHEST mapped BlueEye role
+//   3) resolve the user's groups to the HIGHEST mapped BlueEyes role
 //   4) NO mapped group => access denied (there is deliberately no default role)
 // TLS is required off-localhost: a plaintext bind (use_tls=false) to a non-local
 // host is refused before any credential leaves the process.
@@ -83,7 +83,7 @@ function createLdapAuth({
       .replace(/\{\{\s*dn\s*\}\}/g, escapeFilter(dn || ''));
   }
 
-  // Maps a set of group DNs to the highest BlueEye role. Returns { role, matched }
+  // Maps a set of group DNs to the highest BlueEyes role. Returns { role, matched }
   // (matched = how many of the user's groups mapped). role is null when none map.
   async function resolveRole(groupDns) {
     let maps = [];

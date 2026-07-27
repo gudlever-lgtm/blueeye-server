@@ -63,7 +63,7 @@ function createEmailChannel({ config = {}, transport = null, createTransport = n
     }
     if (!config.to) return { ok: false, detail: 'no recipient configured' };
 
-    const subject = `[BlueEye ${finding.severity || 'INFO'}] ${finding.metric || 'finding'} on host ${finding.hostId}`;
+    const subject = `[BlueEyes ${finding.severity || 'INFO'}] ${finding.metric || 'finding'} on host ${finding.hostId}`;
     const text = [
       finding.explanation || '',
       '',

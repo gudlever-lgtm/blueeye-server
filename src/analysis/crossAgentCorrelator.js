@@ -16,7 +16,7 @@
 // investigation/locator.js):
 //   1. TIME proximity — findings from >=2 DISTINCT agents within `windowMs`.
 //   2. TOPOLOGY proximity — those agents share a site (agents.location_id). This is
-//      the only cross-agent adjacency BlueEye has today; subnet/VLAN/LLDP are not
+//      the only cross-agent adjacency BlueEyes has today; subnet/VLAN/LLDP are not
 //      reported by agents (see docs/cross-agent-correlation.md). A missing/`null`
 //      site is treated as "no topology signal", never faked.
 //   3. TYPE similarity — >=2 members share the same finding-type (metric).

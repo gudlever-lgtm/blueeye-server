@@ -1,7 +1,7 @@
 'use strict';
 
 // Canonical audit taxonomy + normalizers — the read-side consolidation of the
-// two general audit stores (see docs/audit-vs-logging.md). BlueEye currently
+// two general audit stores (see docs/audit-vs-logging.md). BlueEyes currently
 // persists audit events in two tables with different shapes:
 //   - `audit_events` (auditEventsRepository) — auto-captured user actions + agent
 //     activity; HTTP method/path/status, dedup `occurrences`, action is dotted

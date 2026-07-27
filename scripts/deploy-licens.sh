@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# VENDOR-ONLY: deploy / update the BlueEye license server (blueeye-licens).
+# VENDOR-ONLY: deploy / update the BlueEyes license server (blueeye-licens).
 #
 # Customers do NOT run this. The general scripts/deploy.sh deploys blueeye-server
 # + blueeye-agent only; the license server is operated by the vendor. This script

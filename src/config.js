@@ -100,7 +100,7 @@ const config = {
     redirectUri: process.env.OIDC_REDIRECT_URI || '',
     scopes: process.env.OIDC_SCOPES || 'openid email profile',
     // The id-token/userinfo claim carrying the user's groups/roles. Its values
-    // are matched against oidc_role_map to resolve the BlueEye role.
+    // are matched against oidc_role_map to resolve the BlueEyes role.
     roleClaim: process.env.OIDC_ROLE_CLAIM || 'groups',
   },
   // SSO via SAML 2.0 (SP-initiated). Supplements local JWT login behind the

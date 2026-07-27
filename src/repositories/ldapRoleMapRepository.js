@@ -1,6 +1,6 @@
 'use strict';
 
-// Data-access for `ldap_role_map` — maps an LDAP/AD group DN to a BlueEye role.
+// Data-access for `ldap_role_map` — maps an LDAP/AD group DN to a BlueEyes role.
 function createLdapRoleMapRepository(db) {
   const { pool } = db;
 

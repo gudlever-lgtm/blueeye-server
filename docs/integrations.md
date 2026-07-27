@@ -1,8 +1,8 @@
 # Outbound API integrations (ITSM / IPAM connectors)
 
-Pushes BlueEye events to external systems through a generic connector framework.
+Pushes BlueEyes events to external systems through a generic connector framework.
 Integrations are configured at runtime (admin), their credentials are encrypted at
-rest, and every fire is audited. This is **outbound only** — BlueEye calls the
+rest, and every fire is audited. This is **outbound only** — BlueEyes calls the
 target's REST API; nothing is pulled back, and nothing is deleted unless a
 connector is explicitly told it may.
 
@@ -27,7 +27,7 @@ fetch is injected (tests run offline) and every call is bounded by a timeout
 (`src/integrations/httpClient.js`).
 
 - **servicenow** — creates/updates a ServiceNow **Incident** (REST Table API) on a
-  NIS2-incident (CRIT finding) or anomaly. Auth Basic or OAuth2 (Bearer). BlueEye
+  NIS2-incident (CRIT finding) or anomaly. Auth Basic or OAuth2 (Bearer). BlueEyes
   severity → impact/urgency (`CRIT→1/1`, `WARN→2/2`, `INFO→3/3`). **Idempotent via
   `correlation_id`**: it looks up an existing incident by correlation id and PATCHes
   it instead of opening a duplicate.
@@ -39,7 +39,7 @@ fetch is injected (tests run offline) and every call is bounded by a timeout
   `credentials.secret`), proof that the interface is open for future targets.
 - **custom** — a **config-driven** "bring your own ITSM" connector
   (`src/integrations/connectors/customItsm.js`). No new code is needed to onboard a
-  ticket API: the request body is built from a `fields` map (API field → BlueEye
+  ticket API: the request body is built from a `fields` map (API field → BlueEyes
   value; dotted keys like `fields.summary` build nesting, so Jira/GLPI shapes are
   expressible), merged over `staticFields` (constants like project/queue), with
   optional static `headers` (e.g. GLPI's `App-Token`). Keys: `path` (create path),

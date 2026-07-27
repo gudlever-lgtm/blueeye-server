@@ -60,7 +60,7 @@ function requireFeature(featureGate, feature) {
 // Express middleware for the NEW packaged feature keys (api_access,
 // reports_compliance, …). On denial it returns the documented
 // contract — HTTP 403 with { success, error, message } — and a precise upgrade
-// hint derived from the active plan ("This feature requires BlueEye Enterprise").
+// hint derived from the active plan ("This feature requires BlueEyes Enterprise").
 // Kept distinct from requireFeature() so the four legacy module endpoints keep
 // their existing 403 shape untouched.
 function requirePlanFeature(deps, feature) {
@@ -70,7 +70,7 @@ function requirePlanFeature(deps, feature) {
     if (featureGate && featureGate.isFeatureEnabled(feature)) return next();
     const hint =
       (planService && typeof planService.upgradeHint === 'function' && planService.upgradeHint(feature)) ||
-      'This feature is not included in your current BlueEye plan.';
+      'This feature is not included in your current BlueEyes plan.';
     return res.status(403).json({
       success: false,
       error: 'feature_not_available',

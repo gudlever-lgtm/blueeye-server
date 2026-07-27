@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.98.0 — Consolidated Troubleshooting Dashboard
+## 0.98.2 — Consolidated Troubleshooting Dashboard
 
 One screen for an outage: **what is failing, what it affects, and when it
 started** — without switching views.

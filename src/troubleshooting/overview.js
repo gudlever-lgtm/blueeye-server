@@ -184,8 +184,132 @@ function buildRootCauses(clusters, { blastByNode = new Map() } = {}) {
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// topology — nodes + links carrying a state, across both layers.
+//
+// The unified graph (buildTopologyGraph) already carries the two edge types:
+//   'l2_link'     -> layer 'l2'  (LLDP adjacency, undirected)
+//   'service_dep' -> layer 'l3'  (observed TCP dependency, directed)
+//
+// Node state is DERIVED, not stored — nothing in the schema records
+// "unreachable_downstream". The derivation:
+//
+//   1. agents.status 'online'  -> ok
+//      agents.status 'offline' -> down            (the fault itself)
+//      unknown / no agent row  -> ok              (see below)
+//   2. every host L2-isolated behind a `down` node, and not itself down,
+//      becomes unreachable_downstream — we cannot hear it, which is NOT the
+//      same claim as "it is broken".
+//
+// An unknown status maps to `ok` deliberately: we will not invent a fault we
+// have no evidence for. A missing agent row means the graph carries an edge to
+// a host we no longer monitor, not that the host failed.
+//
+// Only tier 1 (directly_isolated) greys a node. Tier 2 (dependency_affected) is
+// degraded SERVICE, not lost reachability, and stays on the root-cause panel's
+// blast-radius count where it belongs.
+//
+// Link state is the worse of its two endpoints — no new vocabulary.
+// ---------------------------------------------------------------------------
+const STATE_RANK = Object.freeze({
+  [NODE_STATE.OK]: 0,
+  [NODE_STATE.UNREACHABLE_DOWNSTREAM]: 1,
+  [NODE_STATE.DOWN]: 2,
+});
+
+function stateFromAgentStatus(status) {
+  return String(status || '').toLowerCase() === 'offline' ? NODE_STATE.DOWN : NODE_STATE.OK;
+}
+
+function worseState(a, b) {
+  return (STATE_RANK[b] || 0) > (STATE_RANK[a] || 0) ? b : a;
+}
+
+function buildTopologyView({ graph = null, agents = [], blastByNode = new Map() } = {}) {
+  const nodes = asArray(graph && graph.nodes);
+  const edges = asArray(graph && graph.edges);
+
+  const agentById = new Map();
+  for (const a of asArray(agents)) {
+    const id = toNodeId(a && a.id);
+    if (id !== null) agentById.set(id, a);
+  }
+
+  // --- 1. base state straight from the agent row --------------------------
+  const state = new Map();
+  const out = [];
+  for (const n of nodes) {
+    const id = toNodeId(n && n.id);
+    if (id === null) continue;
+    const agent = agentById.get(id) || null;
+    state.set(id, stateFromAgentStatus(agent && agent.status));
+    out.push({
+      id,
+      label: (n && n.label) || (agent && (agent.display_name || agent.hostname)) || `agent ${id}`,
+      locationId: agent && agent.location_id != null ? Number(agent.location_id) : null,
+      status: (agent && agent.status) || null,
+      lastSeen: toIso(agent && agent.last_seen),
+      state: NODE_STATE.OK, // filled in after the downstream pass
+    });
+  }
+
+  // --- 2. grey out what a `down` node cuts off ----------------------------
+  const lookup = blastByNode instanceof Map
+    ? (id) => blastByNode.get(id)
+    : (id) => (blastByNode && typeof blastByNode === 'object' ? blastByNode[id] : undefined);
+
+  for (const [id, s] of state) {
+    if (s !== NODE_STATE.DOWN) continue;
+    const radius = lookup(id);
+    if (!radius) continue;
+    for (const hit of asArray(radius.directly_isolated)) {
+      const hostId = toNodeId(hit && hit.hostId);
+      if (hostId === null) continue;
+      // Never downgrade a node we already know is down.
+      if (state.get(hostId) === NODE_STATE.DOWN) continue;
+      state.set(hostId, NODE_STATE.UNREACHABLE_DOWNSTREAM);
+    }
+  }
+  for (const node of out) node.state = state.get(node.id) || NODE_STATE.OK;
+
+  // --- 3. links, tagged by layer, state = worse endpoint ------------------
+  const links = [];
+  for (const e of edges) {
+    if (!e) continue;
+    const source = toNodeId(e.source);
+    const target = toNodeId(e.target);
+    if (source === null || target === null) continue;
+    const layer = e.type === 'l2_link' ? 'l2' : 'l3';
+    links.push({
+      layer,
+      type: e.type,
+      directed: Boolean(e.directed),
+      source,
+      target,
+      dstPort: e.dstPort != null ? Number(e.dstPort) : null,
+      state: worseState(state.get(source) || NODE_STATE.OK, state.get(target) || NODE_STATE.OK),
+    });
+  }
+
+  const counts = { ok: 0, down: 0, unreachable_downstream: 0 };
+  for (const node of out) counts[node.state] += 1;
+
+  return {
+    nodes: out.sort((a, b) => a.id - b.id),
+    links,
+    counts,
+    layers: {
+      l2: links.filter((l) => l.layer === 'l2').length,
+      l3: links.filter((l) => l.layer === 'l3').length,
+    },
+  };
+}
+
 module.exports = {
   buildRootCauses,
+  buildTopologyView,
+  stateFromAgentStatus,
+  worseState,
   collateBlastRadius,
   worstSeverity,
   causeText,

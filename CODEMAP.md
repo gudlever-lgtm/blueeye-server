@@ -102,7 +102,7 @@ Mounted in `src/routes/index.js`. User endpoints use JWT + roles
 | `/license` | license.js | viewer+ | license status + features + plan/usage/**matrix** (feature `status`: available/roadmap) |
 | `/api/api-tokens` | apiTokens.js | admin (gated `api_access`) | **API tokens** — mint/list/revoke; secret shown once, hashed at rest |
 | `/api/audit-log` | auditLog.js | admin (gated `audit_log`) | **unified audit log** — auth/user/role/license/report/api_token events; `?category=&user=&limit=` |
-| `/system` | system.js | viewer+ | storage/disk + **MySQL & TimescaleDB** db sizes (split) + ingest estimate |
+| `/system` | system.js | viewer+ / admin | storage/disk + **MySQL & TimescaleDB** db sizes (split) + ingest estimate; `GET /version` (this server + the agent it serves + **`upstream`**: the newest published versions, learned from the signed licence proof — no extra outbound call, see docs/updates.md); `POST /agent-release/publish`, `POST /agent-source/reload` (admin); **`POST|GET /server-update`** (admin — run/follow the host's configured deploy script, opt-in via `SERVER_UPDATE_COMMAND`) |
 | `/api/findings` | findings.js | viewer+ | analysis findings (list filterable by `hostId`/`severity`/`metric`/`since`) + **`GET /summary`** (aggregate overview — counts + avg/max deviation grouped by severity/metric/host, `FindingStore.summary()`, backs the Analysis Overview panel) + ack + **`GET /:id/context`** ("what changed before this": change-type timeline events in a window before the finding's trigger, default 30 min — reuses the target-timeline merge) |
 | `/api/assistant` | assistant.js | viewer+ (gated) | opt-in AI: `/explain` (per-host Q&A) + **`/location-summary`** (per-location "what's going on?") |
 | `/api/geo` | geo.js | gated | geo overview + flow selection |
@@ -240,6 +240,7 @@ A single vanilla-JS SPA. Key building blocks:
 | --- | --- |
 | A new HTTP endpoint | `src/routes/<x>.js` + mount in `routes/index.js` + a fake in `test-support/fakes.js` |
 | A DB table/column | new `migrations/NNN_*.sql` + repository in `src/repositories/` |
+| "Is a newer server/agent published?" | The versions arrive **inside the signed licence proof** — `licenseManager.getAvailableReleases()` (`src/license/licenseManager.js`), compared with `src/lib/version.js` and surfaced on `GET /system/version` (`upstream`). UI: Settings → Updates (`upstreamUpdateSection` in `public/app.js`). Deploying it: `src/services/serverUpdateService.js` + `POST /system/server-update`, opt-in via `SERVER_UPDATE_COMMAND`. See `docs/updates.md`; the publishing side is blueeye-licens `docs/release-tracking.md` |
 | Anomaly thresholds / detection | `src/analysis/detector.js`, `config.js` (editable via Settings→Analysis) |
 | Alert channels | `src/analysis/alerting/channels/*` + `dispatcher.js`; runtime-editable via Settings→Alerting (`settingsService.getAlerting/setAlerting`, `PUT /api/settings/alerting`, UI `settingsAlertingView` in `public/app.js`) — live-applied onto the running `alertingConfig`, secrets write-only |
 | Maintenance windows / silencing | `src/analysis/alerting/maintenance.js` (`createSilencer`) + dispatcher hook; windows in `settingsService` (`maintenance` key), route `/api/settings/maintenance` |

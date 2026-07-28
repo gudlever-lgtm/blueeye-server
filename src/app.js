@@ -90,6 +90,9 @@ function createApp({
   releaseStore,
   releasePublicKey,
   releaseKeyService,
+  // Runs the host's update script from Settings → Updates (opt-in; null unless
+  // SERVER_UPDATE_COMMAND is configured).
+  serverUpdateService = null,
   testPackagesRepo,
   testPackageRunner,
   transactionsRepo,
@@ -254,6 +257,7 @@ function createApp({
       releaseStore,
       releasePublicKey,
       releaseKeyService,
+      serverUpdateService,
       testPackagesRepo,
       testPackageRunner,
       transactionsRepo,

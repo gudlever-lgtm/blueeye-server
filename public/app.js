@@ -11183,13 +11183,151 @@ function settingsAppearanceView() {
   return root;
 }
 
+// "Available from the vendor": the newest server/agent versions, as reported by
+// the license server INSIDE the signed licence proof this server already fetches
+// every few hours. No extra outbound connection, and nothing on the path can
+// fake an update (it would break the signature). Absent = the license server
+// doesn't publish versions; the section then just says so.
+function upstreamUpdateSection(ver) {
+  const up = ver.upstream || { known: false };
+  const box = el('div', { class: 'settings-block' });
+  box.append(el('h4', {}, 'Available from the vendor'));
+
+  if (!up.known) {
+    box.append(el('p', { class: 'muted' },
+      'The license server has not reported any published versions. Newly published versions arrive with the next licence validation (Settings → License → "Re-validate now" fetches one immediately).'));
+    return box;
+  }
+
+  const serverLatest = up.server && up.server.version ? up.server.version : null;
+  const agentLatest = up.agent && up.agent.version ? up.agent.version : null;
+  box.append(el('div', { class: 'cards' },
+    stat('Newest server', serverLatest ? `v${serverLatest}` : '–'),
+    stat('Newest agent', agentLatest ? `v${agentLatest}` : '–'),
+    stat('Reported', up.checkedAt ? fmtDate(up.checkedAt) : '–')));
+
+  if (!up.serverUpdateAvailable && !up.agentUpdateAvailable) {
+    box.append(el('p', { class: 'muted' }, 'This server and the agent source it serves are on the newest published versions.'));
+    return box;
+  }
+
+  if (up.serverUpdateAvailable) {
+    const callout = el('div', { class: 'callout' });
+    callout.append(el('p', {}, el('strong', {},
+      `Server update ready to deploy: v${ver.server} → v${serverLatest}${up.server.releasedAt ? ` (released ${up.server.releasedAt})` : ''}.`)));
+    callout.append(...serverUpdateActions(ver, serverLatest));
+    box.append(callout);
+  }
+
+  if (up.agentUpdateAvailable) {
+    box.append(el('p', {},
+      `A newer agent has been published: v${agentLatest} (this server serves v${ver.agentSource || ver.agent || '–'}). `,
+      'Update the agent source on the server host, then "Reload agent source" below — after that the agents listed here can be updated.'));
+  }
+  return box;
+}
+
+// What an admin can actually DO about a published server update. The button only
+// exists when the installer configured an update command (SERVER_UPDATE_COMMAND)
+// — otherwise this shows the manual route, because the server must never invent
+// a command to run on someone's host.
+function serverUpdateActions(ver, targetVersion) {
+  const update = ver.update || { configured: false };
+  const out = [];
+
+  if (update.lastRun) {
+    const r = update.lastRun;
+    const cls = r.outcome === 'success' ? 'active' : (r.outcome === 'failed' ? 'invalid' : 'warn');
+    out.push(el('p', { class: 'muted' },
+      'Last update run: ', el('span', { class: `badge ${cls}` }, r.outcome),
+      ` started ${fmtDate(r.startedAt)}${r.targetVersion ? ` (target v${r.targetVersion})` : ''}`,
+      r.requestedBy ? ` by ${r.requestedBy}` : '',
+      r.note ? el('span', { class: 'muted' }, ` — ${r.note}`) : ''));
+  }
+
+  if (!update.configured) {
+    out.push(el('p', { class: 'muted' },
+      'To deploy, run the update script on the server host (in the blueeye-server checkout):'));
+    out.push(el('pre', {}, el('code', {}, './scripts/deploy.sh')));
+    out.push(el('p', { class: 'muted' },
+      'To be able to start that from here instead, set ', el('code', {}, 'SERVER_UPDATE_COMMAND'),
+      ' to the script\'s absolute path on the host and restart the server. It is the only command this button can ever run.'));
+    return out;
+  }
+
+  out.push(el('p', { class: 'muted' }, 'Runs on the server host: ', el('code', {}, update.command),
+    '. The server restarts as part of the update, so the dashboard reconnects when it comes back.'));
+
+  if (!canDelete()) {
+    out.push(el('p', { class: 'muted' }, 'Only an admin can start an update.'));
+    return out;
+  }
+
+  const logBox = el('pre', { class: 'log-tail hidden' });
+  const btn = el('button', { class: 'small' }, update.running ? 'Update running…' : `Run update to v${targetVersion}`);
+  btn.disabled = !!update.running;
+  btn.addEventListener('click', async () => {
+    if (!window.confirm(`Run the update script on this server host now?\n\n${update.command}\n\nThe server restarts during the update and the dashboard briefly goes offline.`)) return;
+    btn.disabled = true; btn.textContent = 'Starting…';
+    try {
+      await api('/system/server-update', { method: 'POST' });
+      toast('Update started — following the log.');
+      logBox.classList.remove('hidden');
+      pollServerUpdate(logBox, btn);
+    } catch (err) {
+      btn.disabled = false; btn.textContent = `Run update to v${targetVersion}`;
+      toast(err.message, true);
+    }
+  });
+  out.push(el('div', { class: 'row-actions' }, btn));
+  out.push(logBox);
+  if (update.running) pollServerUpdate(logBox, btn);
+  return out;
+}
+
+// Follows a running update: tails the log until the run ends — or until the
+// server stops answering, which is the NORMAL outcome (the update restarts it).
+// Keep saying so rather than showing an error the operator can't act on.
+function pollServerUpdate(logBox, btn) {
+  logBox.classList.remove('hidden');
+  let misses = 0;
+  const tick = async () => {
+    try {
+      const s = await api('/system/server-update');
+      misses = 0;
+      logBox.textContent = s.log || '(no output yet)';
+      logBox.scrollTop = logBox.scrollHeight;
+      if (s.running) return setTimeout(tick, 3000);
+      const outcome = s.lastRun ? s.lastRun.outcome : 'unknown';
+      btn.disabled = false;
+      btn.textContent = 'Run update';
+      toast(outcome === 'success' ? 'Update finished.' : `Update ${outcome} — see the log.`, outcome === 'failed');
+      return undefined;
+    } catch {
+      // Expected while the server restarts itself mid-update.
+      misses += 1;
+      logBox.textContent = `${logBox.textContent}\n[dashboard] server not answering (restarting?) — retrying…`;
+      if (misses < 40) return setTimeout(tick, 5000);
+      btn.disabled = false;
+      btn.textContent = 'Run update';
+      toast('Lost contact with the server during the update — reload the page to check its version.', true);
+      return undefined;
+    }
+  };
+  setTimeout(tick, 1500);
+}
+
 // Settings -> Updates: the server's version and the agent version it serves, plus
 // which enrolled agents are behind. Admins can push a one-click update to
-// systemd-managed agents from here; checks themselves make no external calls.
+// systemd-managed agents from here. The only external input is what the license
+// server signed into the licence proof this server already fetches — this page
+// itself never calls out.
 async function settingsUpdatesView() {
   const [ver, agents] = await Promise.all([api('/system/version'), api('/agents')]);
   const root = el('div');
-  root.append(el('p', { class: 'muted settings-intro' }, 'Version of this server and the agent it ships, plus which enrolled agents are out of date. Checks are local — no external calls.'));
+  root.append(el('p', { class: 'muted settings-intro' }, 'Version of this server and the agent it ships, plus which enrolled agents are out of date. Newly published versions arrive inside the signed licence proof — no extra outbound connection.'));
+
+  root.append(upstreamUpdateSection(ver));
 
   const offered = ver.agent || null;
   const source = ver.agentSource || offered;

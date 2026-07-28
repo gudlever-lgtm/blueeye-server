@@ -7215,46 +7215,113 @@ function exportInvestigationMenu(id, name) {
   $('#modal').classList.remove('hidden');
 }
 
-// Global search (topbar): agents/hosts/locations + which agents recently saw an
-// IP/port. Results open in a modal; each is a shortcut into the agent/flow views.
+// Global search (topbar): the universal entry point (Fase 1). One field takes
+// whatever the technician knows — an IP, a MAC, a hostname, a site, an agent, a
+// service — and lands them on the right screen.
+//
+// Results are grouped by type and every row shows its SOURCE and its AGE. That
+// is not decoration: a hit built on an ARP entry from three weeks ago and one
+// built on this morning's capabilities report look identical without it, and
+// only one of them is worth driving to a site for.
+//
+// Backed by GET /api/search. Focus shortcut ("/") and the topbar pill already
+// exist — see the #topbar-search wiring at the bottom of this file.
+
+// type -> the i18n key for its group heading.
+const SEARCH_GROUP_ORDER = ['ip', 'mac', 'host', 'device', 'site', 'service', 'asset', 'user'];
+
+// Turns a hit's `target` into a navigation action, or null when the hit is
+// informational only (a CMDB asset has no screen in this product).
+function searchTargetAction(hit) {
+  const t = String(hit.target || '');
+  let m;
+  if ((m = t.match(/^agent:(\d+)$/))) return () => openAgent(Number(m[1]));
+  if ((m = t.match(/^location:(\d+)$/))) return () => openLocation(Number(m[1]));
+  if ((m = t.match(/^flows:port:(\d+)$/))) return () => openFlows(null, { port: Number(m[1]) });
+  if ((m = t.match(/^flows:(\d+):port:(\d+)$/))) return () => openFlows(Number(m[1]), { port: Number(m[2]) });
+  if ((m = t.match(/^flows:(\d+):(.+)$/))) return () => openFlows(Number(m[1]), { peer: m[2] });
+  if (t.startsWith('discovered:')) return () => { currentView = 'discovery'; render(); };
+  return null;
+}
+
+// One result row: name, then the provenance line the whole feature turns on.
+function searchHitEl(hit, onNavigate) {
+  const action = searchTargetAction(hit);
+  const meta = el('span', { class: 'search-meta muted small' },
+    el('span', { class: `search-conf conf-${hit.confidence}` }, t(`search.confidence.${hit.confidence}`)),
+    ' · ',
+    t('search.source', { source: hit.source }),
+    ' · ',
+    hit.last_seen ? t('search.lastSeen', { when: relTime(hit.last_seen) }) : t('search.lastSeenNever'));
+
+  const body = el('span', { class: 'search-item-body' },
+    el('span', { class: 'search-name' }, esc(hit.display_name)),
+    hit.detail ? el('span', { class: 'search-detail muted small' }, esc(hit.detail)) : null,
+    meta);
+
+  // A hit with nowhere to go renders as a non-interactive row rather than a
+  // button that does nothing when clicked.
+  if (!action) return el('div', { class: 'search-item is-static' }, body);
+  return el('button', {
+    class: 'search-item',
+    onclick: () => { if (typeof onNavigate === 'function') onNavigate(); action(); },
+  }, body);
+}
+
 async function globalSearch(q) {
   q = String(q || '').trim();
   if (!q) return;
   const card = $('#modal-card');
-  card.replaceChildren(el('h3', {}, `Search: ${esc(q)}`), el('div', { class: 'muted' }, 'Searching…'));
+  const title = () => el('h3', {}, `${t('search.title')}: ${esc(q)}`);
+  const closeBtn = () => el('div', { class: 'form-actions' },
+    el('button', { class: 'ghost', onclick: closeModal }, t('search.close')));
+
+  card.replaceChildren(title(), el('div', { class: 'muted' }, t('search.loading')));
   $('#modal').classList.remove('hidden');
+
   let data;
-  try { data = await api(`/api/search?q=${encodeURIComponent(q)}`); }
-  catch (e) { card.replaceChildren(el('h3', {}, 'Search'), el('p', { class: 'error' }, e.message), el('div', { class: 'form-actions' }, el('button', { class: 'ghost', onclick: closeModal }, 'Close'))); return; }
-  const item = (label, sub, onclick) => el('button', { class: 'search-item', onclick }, el('span', {}, label), sub || null);
-  const kids = [el('h3', {}, `Search: ${esc(q)}`)];
-  let any = false;
-  if (data.agents.length) {
-    any = true;
-    kids.push(el('h4', {}, 'Agents'));
-    kids.push(el('div', { class: 'search-list' }, ...data.agents.map((a) => item(
-      esc(a.name), el('span', { class: `badge ${a.status === 'online' ? 'online' : 'offline'}` }, a.status || '?'),
-      () => { closeModal(); openAgent(a.id); }))));
+  try {
+    data = await api(`/api/search?q=${encodeURIComponent(q)}`);
+  } catch (e) {
+    // A too-short query is a 400 with a specific message; surface it rather than
+    // a generic failure, so the user knows to keep typing.
+    card.replaceChildren(title(), el('p', { class: 'error' }, t('search.error', { message: errText(e) })), closeBtn());
+    return;
   }
-  if (data.flows && data.flows.ip && data.flows.ip.agents.length) {
-    any = true;
-    kids.push(el('h4', {}, `IP ${esc(data.flows.ip.ip)} `, el('span', { class: 'muted' }, '· set af')));
-    kids.push(el('div', { class: 'search-list' }, ...data.flows.ip.agents.map((a) => item(
-      esc(a.name), el('span', { class: 'muted' }, '→ flows'), () => { closeModal(); openFlows(a.id, { peer: data.flows.ip.ip }); }))));
+
+  const kids = [title()];
+  const hits = data.hits || [];
+
+  if (data.partial && (data.failedSources || []).length) {
+    kids.push(el('p', { class: 'warn small' }, t('search.partial', { sources: data.failedSources.join(', ') })));
   }
-  if (data.flows && data.flows.port && data.flows.port.agents.length) {
-    any = true;
-    kids.push(el('h4', {}, `Port ${data.flows.port.port} `, el('span', { class: 'muted' }, '· set af')));
-    kids.push(el('div', { class: 'search-list' }, ...data.flows.port.agents.map((a) => item(
-      esc(a.name), el('span', { class: 'muted' }, '→ flows'), () => { closeModal(); openFlows(a.id, { port: data.flows.port.port }); }))));
+
+  if (!hits.length) {
+    kids.push(el('div', { class: 'empty' },
+      el('p', {}, t('search.empty', { q: esc(q) })),
+      el('p', { class: 'muted small' }, t('search.emptyHint'))));
+  } else {
+    kids.push(el('p', { class: 'muted small' }, t('search.resultCount', { count: data.total })));
+    // Group in the fixed order above so the layout does not reshuffle between
+    // searches — a moving target is harder to scan under pressure.
+    const byType = new Map();
+    hits.forEach((h) => {
+      if (!byType.has(h.type)) byType.set(h.type, []);
+      byType.get(h.type).push(h);
+    });
+    for (const type of SEARCH_GROUP_ORDER) {
+      const group = byType.get(type);
+      if (!group || !group.length) continue;
+      kids.push(el('h4', {}, t(`search.group.${type}`)));
+      kids.push(el('div', { class: 'search-list' }, ...group.map((h) => searchHitEl(h, closeModal))));
+    }
+    if (data.truncated) {
+      kids.push(el('p', { class: 'muted small' },
+        t('changes.truncated', { shown: hits.length, total: data.total })));
+    }
   }
-  if (data.locations.length) {
-    any = true;
-    kids.push(el('h4', {}, 'Locations'));
-    kids.push(el('div', { class: 'search-list' }, ...data.locations.map((l) => item(esc(l.name), null, () => { closeModal(); currentView = 'map'; render(); }))));
-  }
-  if (!any) kids.push(el('div', { class: 'empty' }, 'No results.'));
-  kids.push(el('div', { class: 'form-actions' }, el('button', { class: 'ghost', onclick: closeModal }, 'Close')));
+
+  kids.push(closeBtn());
   card.replaceChildren(...kids);
 }
 

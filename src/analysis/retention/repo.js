@@ -105,6 +105,13 @@ function createRetentionRepo(db) {
     return deleteInBatches('DELETE FROM config_snapshots WHERE captured_at < ? ORDER BY captured_at LIMIT ?', [ts]);
   }
 
+  // ARP/neighbour entries not re-observed within the window. Deleting one only
+  // costs a search hit that was already stale; the binding is re-learned on the
+  // next capabilities report or evidence capture.
+  async function purgeArpEntriesBefore(ts) {
+    return deleteInBatches('DELETE FROM arp_entries WHERE last_seen < ? ORDER BY last_seen LIMIT ?', [ts]);
+  }
+
   return {
     getRawExternalFlowsBatch,
     insertFlowRollups,
@@ -116,6 +123,7 @@ function createRetentionRepo(db) {
     purgeMetricRollupsBefore,
     purgeAckedFindingsBefore,
     purgeConfigSnapshotsBefore,
+    purgeArpEntriesBefore,
   };
 }
 

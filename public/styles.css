@@ -1933,3 +1933,20 @@ li.guide-step.done .guide-step-title { text-decoration: line-through; opacity: 0
 .wl-kinds legend { padding: 0; font-weight: 600; }
 .wl-kind-choice { display: flex; gap: 8px; align-items: baseline; }
 .wl-note { margin: 10px 0 0; font-style: italic; }
+
+/* --- Universal search results (Fase 1) -------------------------------------- */
+/* Rows are stacked, not inline: each carries a provenance line (confidence,
+   source, age) that is the whole point of the feature, so it needs its own row
+   rather than being squeezed onto the name's line. */
+.search-item-body { display: flex; flex-direction: column; gap: 2px; width: 100%; }
+.search-name { font-weight: 600; }
+.search-detail { display: block; }
+.search-meta { display: block; }
+/* A hit with nowhere to navigate is a plain row, not a dead button. */
+.search-item.is-static { cursor: default; opacity: 0.85; }
+.search-item.is-static:hover { border-color: var(--border); }
+.search-conf { font-weight: 600; }
+.conf-exact { color: var(--ok, var(--accent)); }
+.conf-high { color: var(--accent); }
+.conf-medium { color: var(--muted); }
+.conf-low { color: var(--warn); }

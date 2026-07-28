@@ -45,6 +45,7 @@ const { createFleetRouter } = require('./fleet');
 const { createDashboardRouter } = require('./dashboard');
 const { createForecastRouter } = require('./forecast');
 const { createSearchRouter } = require('./search');
+const { createSearchService } = require('../search/searchService');
 const { createEnrollRouter } = require('./enroll');
 const { publishSignedReleaseFromSource } = require('../enroll/publishSignedRelease');
 const { createEnrollCommandRouter } = require('./enrollCommand');
@@ -53,7 +54,7 @@ const { createTransactionsRouter } = require('./transactions');
 const { createLogsRouter } = require('./logs');
 const { createSpeedtestRouter, createSpeedtestReadRouter } = require('./speedtest');
 const { createIntegrationsRouter } = require('./integrations');
-const { createCmdbSettingsRouter, createCmdbAssetsRouter, createAgentCmdbLinkRouter } = require('./cmdb');
+const { createCmdbSettingsRouter, createCmdbAssetsRouter, createAgentCmdbLinkRouter, makeCmdbSearch } = require('./cmdb');
 const { createDiagnosticsRouter } = require('./diagnostics');
 const { createLdapRouter } = require('./ldap');
 const { createOidcAuthRouter, createOidcAdminRouter } = require('./oidc');
@@ -119,6 +120,7 @@ function createApiRouter({
   flowsRepo,
   lldpNeighborsRepo,
   hostConnectionsRepo,
+  arpEntriesRepo = null,
   serviceDependenciesRepo,
   serviceDependencyJob,
   blastRadiusService,
@@ -190,6 +192,7 @@ function createApiRouter({
   // Brute-force throttle for agent enrollment (login has its own loginThrottle).
   // Default undefined → the router falls back to a no-op (tests stay unthrottled).
   enrollRateLimiter,
+  searchRateLimiter = null,
   // Operational logger, threaded into routers that degrade best-effort (so a
   // swallowed side-effect failure is observable). Defaults to the no-op.
   logger = silentLogger,
@@ -337,7 +340,23 @@ function createApiRouter({
   router.use('/api/interfaces', createInterfacesRouter({ resultsRepo, agentsRepo }));
   // Capacity/trend forecasting (robust Theil–Sen projection + days-to-capacity).
   router.use('/api/forecast', createForecastRouter());
-  router.use('/api/search', createSearchRouter({ agentsRepo, locationsRepo, flowsRepo }));
+  // Universal search. The CMDB resolver is passed as a thunk rather than the
+  // repo, so this router never learns how to decrypt credentials — and so a
+  // deployment without a CMDB simply has no asset resolver instead of a
+  // disabled code path inside the service.
+  router.use('/api/search', createSearchRouter({
+    searchService: createSearchService({
+      agentsRepo,
+      locationsRepo,
+      flowsRepo,
+      arpEntriesRepo,
+      lldpNeighborsRepo,
+      discoveredDevicesRepo,
+      cmdbSearch: makeCmdbSearch({ cmdbConfigRepo, registry: cmdbConnectorRegistry, secretBox }),
+      logger,
+    }),
+    rateLimiter: searchRateLimiter,
+  }));
   if (settingsService) router.use('/api/settings', createSettingsRouter({ settingsService, featureGate, dispatcher, analysisConfig, retentionConfig, releaseKeyService, geoipUpdater, publishRelease: () => publishSignedReleaseFromSource({ sourceStore: agentSourceStore, releaseStore, releaseKeyService }) }));
   // Outbound API integrations (ITSM/IPAM connectors) — admin CRUD + test-fire.
   if (integrationsRepo && connectorRegistry && secretBox) {
@@ -440,7 +459,7 @@ function createApiRouter({
   // Unified audit log (license feature `audit_log`) + API tokens (`api_access`).
   if (auditLogRepo) router.use('/api/audit-log', createAuditLogRouter({ auditLogRepo, featureGate, planService }));
   if (apiTokensRepo) router.use('/api/api-tokens', createApiTokensRouter({ apiTokensRepo, featureGate, planService, auditLogger }));
-  router.use('/agents', createAgentReportsRouter({ agentAuth, resultsRepo, resultsTsdbRepo, agentsRepo, auditEventsRepo, analysisPipeline, flowPipeline, probeResultsRepo, probePipeline, incidentService, installToolService, lldpNeighborsRepo, topologyChangeService, hostConnectionsRepo, discoveredDevicesRepo, auditLogger, logger }));
+  router.use('/agents', createAgentReportsRouter({ agentAuth, resultsRepo, resultsTsdbRepo, agentsRepo, auditEventsRepo, analysisPipeline, flowPipeline, probeResultsRepo, probePipeline, incidentService, installToolService, lldpNeighborsRepo, topologyChangeService, hostConnectionsRepo, arpEntriesRepo, discoveredDevicesRepo, auditLogger, logger }));
   router.use('/agents', createAgentEnrollRouter({ enrollmentStore, notifyDashboard, integrationTrigger: integrationsDispatcher, auditEventsRepo, settingsService, rateLimit: enrollRateLimiter }));
 
   return router;

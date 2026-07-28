@@ -11,6 +11,9 @@ function loadRetentionConfig(env = process.env) {
     rollupRetentionDays: toInt(env.RETENTION_ROLLUP_DAYS, 90), // aggregated kept this long
     findingRetentionDays: toInt(env.RETENTION_FINDING_DAYS, 365), // findings kept longest
     configSnapshotRetentionDays: toInt(env.RETENTION_CONFIG_SNAPSHOT_DAYS, 180), // raw device-config snapshots
+    // ARP/neighbour entries. Short by design: a neighbour table is a snapshot of
+    // a segment, and a stale answer to "where is this MAC" is worse than none.
+    arpRetentionDays: toInt(env.RETENTION_ARP_DAYS, 30),
     rollupIntervalMinutes: toInt(env.RETENTION_ROLLUP_INTERVAL_MINUTES, 60), // bucket granularity
     intervalHours: toInt(env.RETENTION_JOB_INTERVAL_HOURS, 24), // how often the job runs
     batchSize: toInt(env.RETENTION_BATCH_SIZE, 5000), // rows fetched per rollup page

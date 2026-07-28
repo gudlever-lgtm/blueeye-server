@@ -20,7 +20,14 @@ function createPurge({ repo, config, now = () => new Date() }) {
       const configCut = new Date(t - config.configSnapshotRetentionDays * DAY_MS);
       configSnapshots = await repo.purgeConfigSnapshotsBefore(configCut);
     }
-    return { flowRollups, metricRollups, findings, configSnapshots };
+    // ARP/neighbour entries. Guarded like the config snapshots above so older
+    // wiring (or a test repo without the dimension) simply skips it.
+    let arpEntries = 0;
+    if (config.arpRetentionDays && typeof repo.purgeArpEntriesBefore === 'function') {
+      const arpCut = new Date(t - config.arpRetentionDays * DAY_MS);
+      arpEntries = await repo.purgeArpEntriesBefore(arpCut);
+    }
+    return { flowRollups, metricRollups, findings, configSnapshots, arpEntries };
   }
 
   return { purgeExpired };

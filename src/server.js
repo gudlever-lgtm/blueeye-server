@@ -62,6 +62,7 @@ const { createLldpNeighborsRepository } = require('./repositories/lldpNeighborsR
 const { createLldpGraphService } = require('./topology/lldpGraphService');
 const { createServiceDependenciesRepository } = require('./repositories/serviceDependenciesRepository');
 const { createHostConnectionsRepository } = require('./repositories/hostConnectionsRepository');
+const { createArpEntriesRepository } = require('./repositories/arpEntriesRepository');
 const { createServiceDependencyJob } = require('./topology/serviceDependencyJob');
 const { createBlastRadiusService } = require('./topology/blastRadiusService');
 const { createTopologyChangesRepository } = require('./repositories/topologyChangesRepository');
@@ -467,6 +468,7 @@ function start() {
   // recomputed off the ingest hot path by a leader-only job (backgroundJobs).
   const serviceDependenciesRepo = createServiceDependenciesRepository(db);
   const hostConnectionsRepo = createHostConnectionsRepository(db);
+  const arpEntriesRepo = createArpEntriesRepository(db);
   const serviceDependencyJob = createServiceDependencyJob({ serviceDependenciesRepo, flowsRepo, agentsRepo, hostConnectionsRepo, logger });
   // Blast-radius impact analysis over the unified topology graph (l2_link +
   // service_dep). Used by the incident enrichment + the topology endpoint.
@@ -627,6 +629,10 @@ function start() {
     evidenceRepo,
     agentCommander,
     releaseKeyService,
+    // Identity harvest: the arp.table item of each capture is also parsed into
+    // arp_entries, so a MAC/IP search can resolve without waiting for the whole
+    // fleet to run an agent new enough to report ARP on the capabilities cycle.
+    arpEntriesRepo,
     auditLogger,
     publishCluster: (cluster) => (dashboardWs ? dashboardWs.broadcast({ type: 'incident_cluster', payload: cluster }) : 0),
     logger,
@@ -805,6 +811,7 @@ function start() {
     lldpNeighborsRepo,
     serviceDependenciesRepo,
     hostConnectionsRepo,
+    arpEntriesRepo,
     serviceDependencyJob,
     blastRadiusService,
     topologyChangesRepo,
@@ -883,6 +890,16 @@ function start() {
     // Brute-force throttle for agent enrollment by IP (login has its own
     // loginThrottle inside the auth router).
     enrollRateLimiter: createRateLimiter({ windowMs: 15 * 60 * 1000, max: 30 }),
+    // Universal search: a global field on a keyboard shortcut, whose fan-out can
+    // reach the customer's CMDB. Generous enough for real typing (the UI
+    // debounces), tight enough that a stuck client cannot hammer ServiceNow.
+    // Keyed per user rather than per IP so one busy operator behind a shared
+    // proxy egress cannot lock out the rest of the NOC.
+    searchRateLimiter: createRateLimiter({
+      windowMs: 60 * 1000,
+      max: 60,
+      keyFn: (req) => `search:${(req.user && req.user.id) || req.ip || 'anon'}`,
+    }),
     logger,
     logRing,
   });

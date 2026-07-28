@@ -128,10 +128,71 @@ function makeDiscoveredDevicesRepo(overrides = {}) {
     setStatus: overrides.setStatus || (async (id, status, { promotedAgentId = null } = {}) => {
       const r = rows.find((x) => x.id === Number(id)); if (!r) return 0; r.status = status; r.promoted_agent_id = promotedAgentId; return 1;
     }),
+    // Mirrors the real repo: exact on ip, substring on hostname, and 'ignored'
+    // candidates excluded (an operator said they do not care about it).
+    search: overrides.search || (async ({ q, limit = 10 } = {}) => {
+      const needle = String(q == null ? '' : q).trim().toLowerCase();
+      if (!needle) return [];
+      return rows
+        .filter((r) => r.status !== 'ignored'
+          && (String(r.ip).toLowerCase() === needle || String(r.hostname || '').toLowerCase().includes(needle)))
+        .sort((a, b) => (String(b.ip).toLowerCase() === needle) - (String(a.ip).toLowerCase() === needle)
+          || new Date(b.last_seen) - new Date(a.last_seen))
+        .slice(0, limit).map(mapOut);
+    }),
     countByStatus: overrides.countByStatus || (async () => {
       const out = { discovered: 0, promoted: 0, ignored: 0 };
       for (const r of rows) out[r.status] = (out[r.status] || 0) + 1;
       return out;
+    }),
+  };
+}
+
+// In-memory `arp_entries` (migration 073) — the IP<->MAC identity source. One
+// row per (agent, ip); a different MAC on a known ip rewrites it and stamps
+// macChangedAt, exactly as the real ON DUPLICATE KEY UPDATE does.
+function makeArpEntriesRepo(overrides = {}) {
+  const rows = [];
+  let seq = 0;
+  const iso = (v) => (v == null ? null : (v instanceof Date ? v.toISOString() : new Date(v).toISOString()));
+  const mapOut = (r) => ({
+    id: r.id, agentId: r.agent_id, ip: r.ip, mac: r.mac, interface: r.interface ?? null,
+    source: r.source, firstSeen: iso(r.first_seen), lastSeen: iso(r.last_seen), macChangedAt: iso(r.mac_changed_at),
+  });
+  return {
+    rows,
+    upsertMany: overrides.upsertMany || (async (agentId, entries, { source = 'capabilities', at = new Date() } = {}) => {
+      let n = 0;
+      for (const e of entries || []) {
+        const existing = rows.find((r) => r.agent_id === Number(agentId) && r.ip === e.ip);
+        if (existing) {
+          if (existing.mac !== e.mac) existing.mac_changed_at = at;
+          existing.mac = e.mac;
+          if (e.interface) existing.interface = e.interface;
+          existing.source = source;
+          existing.last_seen = at;
+        } else {
+          rows.push({
+            id: (seq += 1), agent_id: Number(agentId), ip: e.ip, mac: e.mac,
+            interface: e.interface || null, source, first_seen: at, last_seen: at, mac_changed_at: null,
+          });
+        }
+        n += 1;
+      }
+      return n;
+    }),
+    findByMac: overrides.findByMac || (async ({ mac, limit = 25 }) => rows
+      .filter((r) => r.mac === mac)
+      .sort((a, b) => new Date(b.last_seen) - new Date(a.last_seen)).slice(0, limit).map(mapOut)),
+    findByIp: overrides.findByIp || (async ({ ip, limit = 25 }) => rows
+      .filter((r) => r.ip === ip)
+      .sort((a, b) => new Date(b.last_seen) - new Date(a.last_seen)).slice(0, limit).map(mapOut)),
+    listForAgent: overrides.listForAgent || (async ({ agentId, limit = 500 }) => rows
+      .filter((r) => r.agent_id === Number(agentId)).slice(0, limit).map(mapOut)),
+    purgeBefore: overrides.purgeBefore || (async (cutoff) => {
+      const before = rows.length;
+      for (let i = rows.length - 1; i >= 0; i -= 1) if (new Date(rows[i].last_seen) < cutoff) rows.splice(i, 1);
+      return before - rows.length;
     }),
   };
 }
@@ -2129,6 +2190,7 @@ function makeApp(overrides = {}) {
   const lldpNeighborsRepo = overrides.lldpNeighborsRepo || makeLldpNeighborsRepo();
   const serviceDependenciesRepo = overrides.serviceDependenciesRepo || makeServiceDependenciesRepo();
   const hostConnectionsRepo = overrides.hostConnectionsRepo || makeHostConnectionsRepo();
+  const arpEntriesRepo = overrides.arpEntriesRepo === undefined ? makeArpEntriesRepo() : overrides.arpEntriesRepo;
   const topologyChangesRepo = overrides.topologyChangesRepo || makeTopologyChangesRepo();
   const flowPairBaselinesRepo = overrides.flowPairBaselinesRepo || makeFlowPairBaselinesRepo();
   // Real topology-change service over the fakes, so change detection + flap
@@ -2183,6 +2245,7 @@ function makeApp(overrides = {}) {
     lldpNeighborsRepo,
     serviceDependenciesRepo,
     hostConnectionsRepo,
+    arpEntriesRepo,
     serviceDependencyJob: overrides.serviceDependencyJob || null,
     blastRadiusService,
     topologyChangesRepo,
@@ -2313,6 +2376,7 @@ module.exports = {
   makeTopologyChangesRepo,
   makeFlowPairBaselinesRepo,
   makeDiscoveredDevicesRepo,
+  makeArpEntriesRepo,
   makeAlertDispatchLogRepo,
   makeEvidenceSnapshotsRepo,
   makeRemediationPlaybooksRepo,

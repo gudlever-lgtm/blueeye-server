@@ -155,6 +155,9 @@ function createApiRouter({
   releasePublicKey,
   releaseKeyService,
   commandSigner = null,
+  // Runs the host's configured update script from Settings → Updates (null =
+  // no SERVER_UPDATE_COMMAND, so the panel only shows the manual command).
+  serverUpdateService = null,
   testPackagesRepo,
   testPackageRunner,
   transactionsRepo,
@@ -275,6 +278,9 @@ function createApiRouter({
   router.use('/system', createSystemRouter({
     systemInfo, agentSourceStore, agentBinaryStore, releaseStore, releaseKeyService,
     publishRelease: () => publishSignedReleaseFromSource({ sourceStore: agentSourceStore, releaseStore, releaseKeyService }),
+    // Update awareness: newest published versions ride in the signed licence
+    // proof, and (opt-in) the host's deploy script can be run from the dashboard.
+    licenseManager, serverUpdateService, auditLogger,
   }));
   // Shared per-target timeline service (Phase 1 merge/fan-out) — powers both the
   // /api/targets timeline and the /api/findings/:id/context change-diff.

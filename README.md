@@ -400,6 +400,18 @@ server never touches them.
 | `LICENSE_GRACE_DAYS` | Offline grace period (default 14) |
 | `LICENSE_VALIDATE_INTERVAL_HOURS` | Validation interval (default 6) |
 
+The same signed proof also carries the **newest published server/agent
+versions**, so Settings → Updates can say "an update is ready to deploy" without
+any additional outbound connection. Deploying it from the dashboard is opt-in
+(see [`docs/updates.md`](docs/updates.md)):
+
+| Variable | Description |
+| --- | --- |
+| `SERVER_UPDATE_COMMAND` | *Optional.* Absolute path to the host's update script (e.g. `…/blueeye-server/scripts/deploy.sh`). Unset (default) = no endpoint can start anything; the dashboard only shows the command to run by hand. |
+| `SERVER_UPDATE_ARGS` | *Optional.* Arguments for that script (whitespace-separated; never passed through a shell) |
+| `SERVER_UPDATE_LOG` / `SERVER_UPDATE_STATE` | *Optional.* Where the run's output and state are written (defaults in the working directory) |
+| `SERVER_UPDATE_CWD` | *Optional.* Working directory for the script (default: the server's working directory) |
+
 The embedded public key comes from `docs/public-key.md` in blueeye-licens. For a
 customer, setting `LICENSE_KEY` alone is enough (see
 [`docs/licensing.md` → *Minimal customer setup*](docs/licensing.md#minimal-customer-setup--license_key-only)).

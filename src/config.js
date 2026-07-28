@@ -198,6 +198,25 @@ const config = {
     // unlicensed fallback). See src/license/plans.js for the valid keys.
     plan: process.env.LICENSE_PLAN || '',
   },
+  // Self-update: the newest published server/agent versions arrive inside the
+  // signed license proof (see docs/updates.md), so the dashboard can say "an
+  // update is ready to deploy". Running the deploy is opt-in and host-specific:
+  // set SERVER_UPDATE_COMMAND to the script that updates THIS install (e.g.
+  // scripts/deploy.sh on the host) and Settings → Updates gains an admin-only
+  // "Run update" button. Unset (the default) = the panel shows the command to
+  // run by hand and no endpoint can start anything.
+  update: {
+    command: (process.env.SERVER_UPDATE_COMMAND || '').trim(),
+    // Extra arguments, whitespace-separated. Kept separate from the command so
+    // nothing is ever passed through a shell.
+    args: (process.env.SERVER_UPDATE_ARGS || '').split(/\s+/).filter(Boolean),
+    // The update script usually restarts this server, so its output goes to a
+    // file the dashboard tails rather than to this process's stdout.
+    logPath: process.env.SERVER_UPDATE_LOG || path.join(process.cwd(), '.server-update.log'),
+    statePath: process.env.SERVER_UPDATE_STATE || path.join(process.cwd(), '.server-update-state.json'),
+    // Working directory for the script; defaults to the repo/install root.
+    cwd: process.env.SERVER_UPDATE_CWD || process.cwd(),
+  },
   // Storage monitoring: the path to statfs for disk usage. Default the server's
   // data dir; point it at the drive holding the DB/Docker volume if different.
   storage: {

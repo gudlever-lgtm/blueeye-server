@@ -1447,6 +1447,10 @@ function makeLicenseManager(overrides = {}) {
     canAcceptNewConnection: overrides.canAcceptNewConnection || (() => true),
     getStatus: overrides.getStatus || status,
     getFeatures: overrides.getFeatures || (() => ({ analysis: true, assistant: true, alerting: true, geo: true })),
+    // Newest versions published by the licens server. null by default = "the
+    // signer told us nothing", the pre-feature behaviour every caller must
+    // still handle; pass { availableReleases } to simulate an update.
+    getAvailableReleases: overrides.getAvailableReleases || (() => overrides.availableReleases || null),
     validateOnce: overrides.validateOnce || (async () => (overrides.getStatus || status)()),
   };
 }
@@ -2405,6 +2409,9 @@ function makeApp(overrides = {}) {
     releaseStore: overrides.releaseStore || makeReleaseStore(),
     releasePublicKey: overrides.releasePublicKey || '',
     releaseKeyService: overrides.releaseKeyService || makeReleaseKeyService(),
+    // Only wired when a test supplies one: with no update command configured the
+    // real server passes an inert service, which is what null models here.
+    serverUpdateService: overrides.serverUpdateService || null,
     auditRepo: overrides.auditRepo || makeAuditRepo(),
     auditEventsRepo: overrides.auditEventsRepo || makeAuditEventsRepo(),
     auditLogRepo,

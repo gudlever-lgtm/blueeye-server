@@ -5,9 +5,20 @@ const { asyncHandler } = require('../middleware/asyncHandler');
 const { requireAuth, requireRole } = require('../auth/middleware');
 const { ROLES } = require('../auth/roles');
 const pkg = require('../../package.json');
+const { isNewer } = require('../lib/version');
 
 // Server storage info (disk free/used + database size). Read-only, viewer+.
-function createSystemRouter({ systemInfo, agentSourceStore, agentBinaryStore, releaseStore, releaseKeyService = null, publishRelease = null } = {}) {
+function createSystemRouter({
+  systemInfo, agentSourceStore, agentBinaryStore, releaseStore, releaseKeyService = null, publishRelease = null,
+  // Newest published versions, learned from the signed license proof (see
+  // licenseManager.getAvailableReleases). null/absent = nothing known, which is
+  // what a server talking to an older licens server sees.
+  licenseManager = null,
+  // Runs the host's update script when an admin asks. Disabled unless
+  // SERVER_UPDATE_COMMAND is configured (see services/serverUpdateService.js).
+  serverUpdateService = null,
+  auditLogger = null,
+} = {}) {
   const router = express.Router();
 
   // The latest SIGNED release the server can push for a one-click Update. When
@@ -44,6 +55,35 @@ function createSystemRouter({ systemInfo, agentSourceStore, agentBinaryStore, re
     return sourceAgentVersion();
   };
 
+  // What the vendor has published, as carried by the signed license proof. The
+  // licence check is an outbound call this server already makes, so "is there a
+  // newer version?" costs no new connection from the customer's network — and
+  // because the versions ride inside the signed payload, nothing on the path can
+  // fabricate an update. Absent/unknown is normal (older licens server, or one
+  // that tracks no releases): the UI then shows nothing rather than guessing.
+  const upstream = () => {
+    const releases =
+      licenseManager && typeof licenseManager.getAvailableReleases === 'function'
+        ? licenseManager.getAvailableReleases()
+        : null;
+    if (!releases) return { known: false, server: null, agent: null, checkedAt: null, serverUpdateAvailable: false, agentUpdateAvailable: false };
+    const serverVersion = releases.server ? releases.server.version : null;
+    const agentVersion = releases.agent ? releases.agent.version : null;
+    return {
+      known: true,
+      server: releases.server,
+      agent: releases.agent,
+      checkedAt: releases.checkedAt,
+      // "Behind" is judged against what this host actually runs / serves. The
+      // agent comparison uses the SOURCE bundle: that is what this server can
+      // offer once its own files are updated, and it is what a `git pull` on the
+      // host moves. A signed release can never be newer than the source it was
+      // signed from.
+      serverUpdateAvailable: isNewer(serverVersion, pkg.version || ''),
+      agentUpdateAvailable: isNewer(agentVersion, sourceAgentVersion() || ''),
+    };
+  };
+
   // Versions, for the Settings "Updates" panel: this server's version and the
   // agent versions it serves (so the UI can flag out-of-date agents). `agent` is
   // what a systemd one-click Update pushes (signed release, else source); when a
@@ -74,7 +114,73 @@ function createSystemRouter({ systemInfo, agentSourceStore, agentBinaryStore, re
         // result — publishing would fail, so the UI shows the config fix instead.
         releaseStoreReady: releaseStoreReady(),
         binaryBuild: agentBinaryStore ? agentBinaryStore.status() : null,
+        // Newest versions the vendor has published (from the signed licence
+        // proof) + whether this host is behind.
+        upstream: upstream(),
+        // Whether an admin can run the host's update script from here, and how
+        // the last run went. `configured:false` = the panel shows the manual
+        // command instead of a button.
+        update: serverUpdateService ? serverUpdateService.status() : { configured: false, command: null, running: false, lastRun: null },
       });
+    })
+  );
+
+  // The update-run status on its own, so the dashboard can poll it while a
+  // deploy is in flight without re-reading every version. Includes the tail of
+  // the update log — admin only, since a deploy log exposes host paths.
+  router.get(
+    '/server-update',
+    requireAuth,
+    requireRole(ROLES.ADMIN),
+    asyncHandler(async (req, res) => {
+      if (!serverUpdateService) {
+        return res.json({ configured: false, command: null, running: false, lastRun: null, log: '' });
+      }
+      res.json({ ...serverUpdateService.status(), log: serverUpdateService.tail(300) });
+    })
+  );
+
+  // Run the host's configured update script ("update ready to deploy → deploy").
+  // admin only, audit-logged, and only ever able to start the ONE command the
+  // installer configured — nothing from this request reaches the command line.
+  //
+  // The script normally restarts this server, so a successful call returns 202
+  // and the dashboard follows the run via GET /system/server-update (and, once
+  // the server comes back, its new version).
+  router.post(
+    '/server-update',
+    requireAuth,
+    requireRole(ROLES.ADMIN),
+    asyncHandler(async (req, res) => {
+      if (!serverUpdateService || !serverUpdateService.isConfigured()) {
+        return res.status(503).json({
+          error: 'No update command is configured on this server. Set SERVER_UPDATE_COMMAND to the deploy script on the host (e.g. /opt/blueeye/blueeye-server/scripts/deploy.sh) and restart, or run that script on the host by hand.',
+          configured: false,
+        });
+      }
+      const up = upstream();
+      const target = up.server ? up.server.version : null;
+      const result = serverUpdateService.start({
+        requestedBy: (req.user && (req.user.email || req.user.id)) || null,
+        targetVersion: target,
+      });
+      if (!result.started) {
+        if (result.reason === 'already_running') {
+          return res.status(409).json({ error: 'An update is already running on this server.', ...serverUpdateService.status() });
+        }
+        if (result.reason === 'log_unwritable') {
+          return res.status(500).json({ error: `The update log could not be written (${result.detail}). Check SERVER_UPDATE_LOG and its directory permissions.` });
+        }
+        return res.status(500).json({ error: `The update script could not be started: ${result.detail || result.reason}` });
+      }
+      if (auditLogger) {
+        await auditLogger.record(req, {
+          category: 'system',
+          action: 'server_update_start',
+          detail: `target=${target || 'unknown'}`,
+        });
+      }
+      res.status(202).json({ ...serverUpdateService.status(), targetVersion: target });
     })
   );
 

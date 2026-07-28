@@ -84,7 +84,7 @@ test('findByCode matches on the hash alone', async () => {
   await repo.findByCode('LOOKUP-ME');
   const { sql, params } = queries[0];
   assert.match(sql, /WHERE e\.code_hash = \?/);
-  // Migration 072 backfilled the hash for pre-existing codes, so there is no
+  // Migration 076 backfilled the hash for pre-existing codes, so there is no
   // cleartext fallback to make — and no dropped column to reference.
   assert.doesNotMatch(sql, /e\.code\b(?!_)/);
   assert.deepEqual(params, [sha256('LOOKUP-ME')]);

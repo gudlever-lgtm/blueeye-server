@@ -166,7 +166,7 @@ code, e.g. with Ansible:
 
 - **Short-lived codes** — default 1 hour (`ENROLLMENT_CODE_TTL_MINUTES`),
   configurable per code; bulk codes are bounded by count *and* time.
-- **Codes are not stored in cleartext** (migration 072) — a code is a credential,
+- **Codes are not stored in cleartext** (migration 076) — a code is a credential,
   so the database holds only its SHA-256 (`code_hash`, what every lookup matches
   on) plus an AES-256-GCM copy (`code_enc`, via secretBox) that only the
   authenticated `GET /api/enroll/command?codeId=…` endpoint decrypts. A database

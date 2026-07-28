@@ -45,6 +45,8 @@ const { createFleetRouter } = require('./fleet');
 const { createDashboardRouter } = require('./dashboard');
 const { createForecastRouter } = require('./forecast');
 const { createSearchRouter } = require('./search');
+const { createChangesRouter } = require('./changes');
+const { createChangesService } = require('../changes/changesService');
 const { createSearchService } = require('../search/searchService');
 const { createEnrollRouter } = require('./enroll');
 const { publishSignedReleaseFromSource } = require('../enroll/publishSignedRelease');
@@ -340,6 +342,31 @@ function createApiRouter({
   router.use('/api/interfaces', createInterfacesRouter({ resultsRepo, agentsRepo }));
   // Capacity/trend forecasting (robust Theil–Sen projection + days-to-capacity).
   router.use('/api/forecast', createForecastRouter());
+  // "What changed since I last looked" — the landing page. A read/aggregation
+  // layer over the sources that ALREADY log transitions; it derives no history
+  // by polling current state (see docs/changes-feed.md for what that costs and
+  // which dimension is still missing).
+  router.use('/api/changes', createChangesRouter({
+    changesService: createChangesService({
+      agentsRepo,
+      auditEventsRepo,
+      findingStore,
+      incidentsRepo,
+      incidentCasesRepo,
+      incidentClustersRepo,
+      topologyChangesRepo,
+      remediationPlaybooksRepo,
+      configSnapshotsRepo,
+      // The agent build THIS server serves — the reference for version skew.
+      serverAgentVersion: agentSourceStore && typeof agentSourceStore.sourceVersion === 'function'
+        ? agentSourceStore.sourceVersion()
+        : null,
+      logger,
+    }),
+    usersRepo,
+    auditLogger,
+  }));
+
   // Universal search. The CMDB resolver is passed as a thunk rather than the
   // repo, so this router never learns how to decrypt credentials — and so a
   // deployment without a CMDB simply has no asset resolver instead of a

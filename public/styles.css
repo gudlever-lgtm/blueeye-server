@@ -1950,3 +1950,15 @@ li.guide-step.done .guide-step-title { text-decoration: line-through; opacity: 0
 .conf-high { color: var(--accent); }
 .conf-medium { color: var(--muted); }
 .conf-low { color: var(--warn); }
+
+/* --- Changes landing page (Fase 2) ------------------------------------------ */
+.chg-controls { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: 10px 0 16px; }
+.chg-group { margin: 18px 0 6px; font-size: 1rem; }
+.chg-group.sev-CRIT { color: var(--bad); }
+.chg-group.sev-WARN { color: var(--warn); }
+.chg-group.sev-INFO { color: var(--muted); }
+.chg-open { margin-left: auto; }
+/* A current-state row is a condition, not a transition — dimmed and badged so it
+   never reads as "this happened inside your window". */
+.chg-current { opacity: 0.85; }
+.chg-current-badge { background: var(--muted); color: var(--bg); margin-left: 8px; }

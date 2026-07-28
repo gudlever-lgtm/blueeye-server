@@ -44,6 +44,11 @@ function makeLocationsRepo(overrides = {}) {
 
 // A fake users repository.
 function makeUsersRepo(overrides = {}) {
+  // The per-user "changes seen up to here" marker (migration 074). Kept in a
+  // closure so a test can POST /api/changes/seen and then read it back, and so
+  // the monotonic rule (a stale tab cannot rewind the marker) is actually
+  // exercised rather than stubbed away.
+  let lastSeenChanges = overrides.initialLastSeenChanges || null;
   return {
     findAll: overrides.findAll || (async () => []),
     findById: overrides.findById || (async () => null),
@@ -65,6 +70,12 @@ function makeUsersRepo(overrides = {}) {
     countByRole: overrides.countByRole || (async () => 1),
     getPreferences: overrides.getPreferences || (async () => ({})),
     updatePreferences: overrides.updatePreferences || (async (id, patch) => ({ ...patch })),
+    getLastSeenChanges: overrides.getLastSeenChanges || (async () => lastSeenChanges),
+    setLastSeenChanges: overrides.setLastSeenChanges || (async (id, at) => {
+      // GREATEST(...) in the real repo — monotonic, never rewinds.
+      if (!lastSeenChanges || new Date(at) > lastSeenChanges) lastSeenChanges = new Date(at);
+      return true;
+    }),
   };
 }
 
@@ -602,6 +613,12 @@ function makeRemediationPlaybooksRepo(overrides = {}) {
       .filter((r) => r.incident_case_id === Number(incidentCaseId))
       .sort((a, b) => new Date(b.ran_at) - new Date(a.ran_at) || b.id - a.id)
       .map(mapRun)),
+    // Fleet-wide runs in a window — what the changes feed asks for.
+    listRunsBetween: overrides.listRunsBetween || (async ({ from = null, to = null, limit = 200 } = {}) => runs
+      .filter((r) => (!from || new Date(r.ran_at) >= new Date(from)) && (!to || new Date(r.ran_at) <= new Date(to)))
+      .sort((a, b) => new Date(b.ran_at) - new Date(a.ran_at) || b.id - a.id)
+      .slice(0, limit)
+      .map(mapRun)),
   };
 }
 
@@ -658,6 +675,15 @@ function makeConfigSnapshotsRepo(overrides = {}) {
         && (!from || new Date(r.captured_at) >= new Date(from))
         && (!to || new Date(r.captured_at) <= new Date(to)))
       .sort((a, b) => before(a, b)) // oldest-first, like the real repo
+      .slice(0, limit)
+      .map((r) => mapOut(r, false))),
+    // Fleet-wide captures in a window, newest-first and metadata only (never
+    // config_text) — the changes feed must be able to say "a configuration
+    // changed here" without loading device configuration into a viewer list.
+    listBetween: overrides.listBetween || (async ({ from = null, to = null, limit = 200 } = {}) => rows
+      .filter((r) => (!from || new Date(r.captured_at) >= new Date(from))
+        && (!to || new Date(r.captured_at) <= new Date(to)))
+      .sort((a, b) => before(b, a))
       .slice(0, limit)
       .map((r) => mapOut(r, false))),
   };

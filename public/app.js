@@ -361,7 +361,7 @@ function applyRoleVisibility() {
   for (const b of document.querySelectorAll('.tabs button[data-min-role]')) {
     const allowed = roleAtLeast(b.dataset.minRole);
     b.classList.toggle('role-hidden', !allowed);
-    if (!allowed && currentView === b.dataset.view) currentView = 'fleet';
+    if (!allowed && currentView === b.dataset.view) currentView = 'changes';
   }
   // Collapse category groups whose items are all hidden (by role or licence).
   // Only nav items count — the category-label button never keeps a group alive.
@@ -722,6 +722,16 @@ function settingsLink(tab, label) {
 }
 
 const PAGE_INFO = {
+  changes: {
+    hero: 'What happened since you last looked — agent and link transitions, new anomalies and incidents, playbook runs and configuration changes, newest first.',
+    title: 'Changes — since you last looked',
+    body: () => [
+      el('p', {}, 'This is the landing page because a dashboard full of green answers a question nobody asked. The shift starts with ', el('strong', {}, 'what happened while I was away'), ' — so this page shows change, not status.'),
+      el('p', {}, 'Pick a window, or leave it on ', el('strong', {}, 'since you last looked'), '. That reference point moves ', el('strong', {}, 'only'), ' when you press “Mark as seen” — never just because you opened the page — so it can still tell you what is new next time.'),
+      el('p', {}, 'Rows marked ', el('strong', {}, 'current state'), ' are conditions rather than transitions. A stale heartbeat or an agent running an old version is something we know is true ', el('em', {}, 'now'), '; neither is recorded as a transition, so we cannot say when it started, and we would rather say that than invent a time.'),
+      el('p', { class: 'muted' }, 'The Fleet page is still the right screen for bulk operations across agents — it just was not the right screen to open on.'),
+    ],
+  },
   docs: {
     hero: 'Documentation & how-to guides — step-by-step troubleshooting walkthroughs with worked examples, plus (for admins) setup guides for integrations like ServiceNow, including what a working connection and a failure look like.',
     title: 'Documentation — guides & how-tos',
@@ -7324,6 +7334,135 @@ async function globalSearch(q) {
   kids.push(closeBtn());
   card.replaceChildren(...kids);
 }
+
+
+// ---- Changes: the landing page (Fase 2) ------------------------------------
+// A status dashboard full of green answers a question nobody asked. The shift
+// starts with "what happened while I was away", so THIS is the default route
+// and the fleet grid moved to its own (it is still the right screen for bulk
+// operations — it was never the right screen to open on).
+//
+// Backed by GET /api/changes. Rows reuse the shared timeline event shape, so
+// they render through TimelineView.renderRow rather than a second row renderer
+// that would drift from the timeline's.
+
+// Window presets offered in the picker, plus the "since I last looked" mode
+// that is the whole point.
+const CHANGES_WINDOWS = ['30m', '6h', '24h', '7d'];
+let changesWindow = '24h';
+let changesSince = 'last_login';
+
+function changesRowEl(event, nameFor) {
+  const row = window.TimelineView.renderRow(document, event, {});
+  // A current-state row must not read as "this happened in your window": we
+  // know the condition, not when it began (heartbeat and agent version are not
+  // transition-logged). Labelling it is the honest option; inferring a start
+  // time would be inventing history.
+  if (event.currentState) {
+    row.classList.add('chg-current');
+    row.append(el('span', { class: 'badge chg-current-badge' }, t('changes.currentState')));
+  }
+  // Deep-link into whatever the row is about.
+  if (event.agentId != null) {
+    row.append(el('button', {
+      class: 'small ghost chg-open',
+      onclick: () => openAgent(Number(event.agentId)),
+    }, nameFor(event.agentId)));
+  } else if (event.kind === 'incident' && event.ref_id != null && event.source === 'incident_case') {
+    row.append(el('button', { class: 'small ghost chg-open', onclick: () => openIncident(Number(event.ref_id)) }, '→'));
+  } else if (event.kind === 'cluster' && event.ref_id != null) {
+    row.append(el('button', { class: 'small ghost chg-open', onclick: () => openCluster(Number(event.ref_id)) }, '→'));
+  }
+  return row;
+}
+
+views.changes = async () => {
+  const root = el('div', { class: 'changes-view' });
+  const head = el('div', { class: 'section-head' },
+    el('h2', {}, t('changes.title')),
+    el('span', { class: 'muted' }, t('changes.subtitle')));
+  const controls = el('div', { class: 'chg-controls' });
+  const body = el('div', {}, el('div', { class: 'muted' }, t('changes.loading')));
+  root.append(head, controls, body);
+
+  let agents = [];
+  try { agents = await api('/agents'); } catch { /* labels are best-effort */ }
+  const nameById = {};
+  (agents || []).forEach((a) => { nameById[a.id] = a.display_name || a.hostname || `agent ${a.id}`; });
+  const nameFor = (id) => nameById[id] || `agent ${id}`;
+
+  async function load() {
+    body.replaceChildren(el('div', { class: 'muted' }, t('changes.loading')));
+    let data;
+    try {
+      const qs = new URLSearchParams({ window: changesWindow });
+      if (changesSince) qs.set('since', changesSince);
+      data = await api(`/api/changes?${qs.toString()}`);
+    } catch (err) {
+      body.replaceChildren(
+        el('p', { class: 'error' }, t('changes.error', { message: errText(err) })),
+        el('button', { class: 'small ghost', onclick: load }, t('common.retry')));
+      return;
+    }
+
+    const kids = [];
+    kids.push(el('p', { class: 'muted small' }, t('changes.since', { when: fmtDate(data.since) })));
+
+    if (data.partial && (data.failedSources || []).length) {
+      kids.push(el('p', { class: 'warn small' }, t('changes.partial', { sources: data.failedSources.join(', ') })));
+    }
+
+    if (!data.events.length) {
+      // A meaningful empty state: the reference time is what makes "no changes"
+      // an answer rather than a blank page.
+      kids.push(el('div', { class: 'empty' },
+        el('p', {}, t('changes.empty', { when: fmtDate(data.since) })),
+        el('p', { class: 'muted small' }, t('changes.emptyHint'))));
+    } else {
+      for (const group of data.groups) {
+        kids.push(el('h3', { class: `chg-group sev-${group.severity}` }, t(`changes.group.${group.severity}`),
+          el('span', { class: 'muted small' }, ` (${group.events.length})`)));
+        const ul = el('ul', { class: 'timeline-list' });
+        group.events.forEach((e) => ul.append(changesRowEl(e, nameFor)));
+        kids.push(ul);
+      }
+      if (data.truncated) {
+        kids.push(el('p', { class: 'muted small' }, t('changes.truncated', { shown: data.returned, total: data.total })));
+      }
+    }
+    body.replaceChildren(...kids);
+  }
+
+  // Window picker + the explicit mark-as-seen. The marker moves ONLY here —
+  // never on a load — so the page can still tell you what is new next time.
+  const winSel = el('select', {
+    onchange: (e) => { changesWindow = e.target.value; load(); },
+  }, ...CHANGES_WINDOWS.map((w) => el('option', {
+    value: w, ...(w === changesWindow ? { selected: 'selected' } : {}),
+  }, w)));
+
+  const seenBtn = el('button', {
+    class: 'small',
+    onclick: async () => {
+      seenBtn.disabled = true;
+      try {
+        await api('/api/changes/seen', { method: 'POST', body: {} });
+        toast(t('changes.marked'));
+        changesSince = 'last_login';
+        await load();
+      } catch (err) { toast(errText(err), true); }
+      finally { seenBtn.disabled = false; }
+    },
+  }, t('changes.markSeen'));
+
+  controls.append(
+    el('label', {}, t('changes.window'), ' ', winSel),
+    seenBtn,
+    el('button', { class: 'small ghost', onclick: () => { currentView = 'fleet'; render(); } }, t('changes.fleetLink')));
+
+  await load();
+  return root;
+};
 
 const fleetState = { timer: null };
 function stopFleet() { if (fleetState.timer) { clearInterval(fleetState.timer); fleetState.timer = null; } }
@@ -14353,7 +14492,10 @@ function txTrendSvg(rows) {
   return wrap;
 }
 
-let currentView = 'fleet';
+// The landing route is the CHANGES page, not the fleet grid: a screen full of
+// green does not tell a shift what happened while they were away. The fleet grid
+// is still the right screen for bulk operations, so it keeps its own route.
+let currentView = 'changes';
 const modalOpen = () => !$('#modal').classList.contains('hidden');
 
 // One-time per session: stamp the sidebar foot with this server's build —

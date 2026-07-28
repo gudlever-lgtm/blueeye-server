@@ -111,6 +111,36 @@ function createCmdbSettingsRouter({ cmdbConfigRepo, registry, secretBox }) {
   return router;
 }
 
+// Builds the CMDB asset-search thunk the universal search field fans out to.
+//
+// Returns `null` when no CMDB can be reached, so the search service simply has
+// no asset resolver rather than a permanently-failing one. Returns [] (not a
+// throw) when a CMDB is configured but disabled or cannot search — a missing
+// optional source is not an error the technician needs to see.
+//
+// This is the ONLY place the search path touches CMDB credentials: it decrypts
+// at call time and hands the connector a ready integration, so neither the
+// search router nor the search service ever learns how.
+//
+// NOTE ON RBAC: /api/cmdb/assets/search is operator+, while the universal search
+// field is viewer+. That difference is preserved deliberately — a viewer's
+// search returns local results only, because widening CMDB access as a side
+// effect of adding a search box would be an access-control change smuggled in as
+// a UI feature. The caller passes `enabled` to express that decision.
+function makeCmdbSearch({ cmdbConfigRepo, registry, secretBox } = {}) {
+  if (!cmdbConfigRepo || !registry || !secretBox) return null;
+  return async function cmdbSearch(q) {
+    const full = await cmdbConfigRepo.getWithSecret();
+    if (!full || !full.enabled) return [];
+    const connector = registry.get(full.type);
+    if (!connector || typeof connector.search !== 'function') return [];
+    const credentials = secretBox.decryptJson(full.credentials_encrypted);
+    const result = await connector.search(toIntegration(full, credentials), q);
+    if (!result || !result.ok) return [];
+    return (result.assets || []).map((a) => ({ ...a, source: full.type }));
+  };
+}
+
 // --- Asset search (operator+) -------------------------------------------------
 // GET /api/cmdb/assets/search?q= — routes to the active connector's search().
 function createCmdbAssetsRouter({ cmdbConfigRepo, registry, secretBox }) {
@@ -219,4 +249,4 @@ function createAgentCmdbLinkRouter({ agentCmdbLinksRepo, agentsRepo, locationsRe
   return router;
 }
 
-module.exports = { createCmdbSettingsRouter, createCmdbAssetsRouter, createAgentCmdbLinkRouter };
+module.exports = { createCmdbSettingsRouter, createCmdbAssetsRouter, createAgentCmdbLinkRouter, makeCmdbSearch };

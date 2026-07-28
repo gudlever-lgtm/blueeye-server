@@ -195,6 +195,26 @@ function createUsersRepository(db) {
     return next;
   }
 
+  // The per-user "changes seen up to here" marker (migration 074). Returns a
+  // Date or null (never marked).
+  async function getLastSeenChanges(id) {
+    const [rows] = await pool.query('SELECT last_seen_changes FROM users WHERE id = ?', [id]);
+    if (!rows[0] || rows[0].last_seen_changes == null) return null;
+    const v = rows[0].last_seen_changes;
+    return v instanceof Date ? v : new Date(v);
+  }
+
+  // Moves the marker forward. Deliberately monotonic: `GREATEST` with the stored
+  // value means a stale tab marking an OLD timestamp as seen can never rewind
+  // someone's position and re-surface changes they already dealt with.
+  async function setLastSeenChanges(id, at) {
+    const [res] = await pool.query(
+      'UPDATE users SET last_seen_changes = GREATEST(COALESCE(last_seen_changes, ?), ?) WHERE id = ?',
+      [at, at, id]
+    );
+    return res.affectedRows > 0;
+  }
+
   return {
     findAll,
     findById,
@@ -208,6 +228,8 @@ function createUsersRepository(db) {
     findRevocations,
     countByRole,
     getPreferences,
+    getLastSeenChanges,
+    setLastSeenChanges,
     updatePreferences,
   };
 }

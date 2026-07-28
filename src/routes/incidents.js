@@ -6,6 +6,7 @@ const { requireAuth, requireRole } = require('../auth/middleware');
 const { ROLES } = require('../auth/roles');
 const { canTransition, requiresComment, isStatus } = require('../incidentCases/stateMachine');
 const { validateStatusPatch } = require('../validation/incidentCaseValidation');
+const { validateIncidentNote } = require('../validation/incidentNoteValidation');
 const { buildTimeline } = require('../incidentCases/timeline');
 const { maskedDiff } = require('../config/configContext');
 const { scoreSimilarIncidents } = require('../incidentCases/similarity');
@@ -50,6 +51,7 @@ function createIncidentsRouter({
   askCache = null,
   remediationPlaybooksRepo = null,
   blastRadiusService = null,
+  incidentNotesRepo = null,
 }) {
   const router = express.Router();
   const reader = requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN);
@@ -480,6 +482,74 @@ function createIncidentsRouter({
     const updated = await incidentCasesRepo.findById(id);
     return res.json({ incident: updated });
   }));
+
+  // --- Work log (shift handover) --------------------------------------------
+  // Only mounted when a notes repo is wired, so an older deployment that has not
+  // run migration 072 keeps serving the rest of the incident API instead of
+  // 500-ing on a missing table.
+  if (incidentNotesRepo) {
+    // GET /api/incidents/:id/notes — the full log plus the ruled-out subset.
+    // viewer+ (reading a handover is not a privileged action).
+    //
+    // `ruledOut` is returned as its own array rather than left for the client to
+    // filter: it is queried separately (indexed) so exclusions can never be the
+    // rows that fall off the `limit`, and the UI pins them above the log.
+    router.get('/:id/notes', requireAuth, reader, asyncHandler(async (req, res) => {
+      const id = parseIncidentId(req.params.id);
+      if (id === null) return res.status(400).json({ error: 'id must be a positive integer' });
+
+      const incident = await incidentCasesRepo.findById(id);
+      if (!incident) return res.status(404).json({ error: 'Incident not found' });
+
+      const [notes, ruledOut, total] = await Promise.all([
+        incidentNotesRepo.listForIncident({ incidentCaseId: id }),
+        incidentNotesRepo.listRuledOut({ incidentCaseId: id }),
+        incidentNotesRepo.countForIncident({ incidentCaseId: id }),
+      ]);
+
+      return res.json({ incidentId: id, notes, ruledOut, total });
+    }));
+
+    // POST /api/incidents/:id/notes — append one entry. operator+ (viewer reads
+    // but does not write, per the RBAC ladder used everywhere else here).
+    //
+    // Append-only: there is deliberately no PATCH/DELETE counterpart, and the
+    // repository exposes no method that could implement one.
+    router.post('/:id/notes', requireAuth, writer, asyncHandler(async (req, res) => {
+      const id = parseIncidentId(req.params.id);
+      if (id === null) return res.status(400).json({ error: 'id must be a positive integer' });
+
+      const { value, errors } = validateIncidentNote(req.body);
+      if (errors) return res.status(400).json({ error: 'Validation failed', details: errors });
+
+      const incident = await incidentCasesRepo.findById(id);
+      if (!incident) return res.status(404).json({ error: 'Incident not found' });
+
+      const note = await incidentNotesRepo.append({
+        incidentCaseId: id,
+        kind: value.kind,
+        text: value.text,
+        authorUserId: (req.user && req.user.id) || null,
+        authorEmail: (req.user && req.user.email) || null,
+        authorRole: (req.user && req.user.role) || null,
+      });
+
+      // Into the hash-chained audit log. The note TEXT is not copied here — the
+      // note row is the record, and duplicating free text into the audit trail
+      // would put operator prose somewhere it can never be corrected. The chain
+      // records that an entry of this kind was appended, and by whom.
+      if (auditLogger) {
+        await auditLogger.record(req, {
+          category: 'incident',
+          action: 'incident_note_append',
+          target: String(id),
+          detail: `${value.kind} note #${note ? note.id : '?'} (${value.text.length} chars)`,
+        });
+      }
+
+      return res.status(201).json({ note });
+    }));
+  }
 
   return router;
 }

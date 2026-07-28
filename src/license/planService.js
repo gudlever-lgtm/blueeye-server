@@ -148,6 +148,7 @@ function createPlanService({ licenseManager = null, configPlan = '' } = {}) {
       modules: moduleRequirements(),
       price_reference_eur: plan.price_reference_eur,
       price_reference_dkk: plan.price_reference_dkk,
+      price_period: plan.price_period ?? null,
       price_from: !!plan.price_from,
     };
   }
@@ -168,6 +169,7 @@ function createPlanService({ licenseManager = null, configPlan = '' } = {}) {
         support_level: p.support_level,
         price_reference_eur: p.price_reference_eur,
         price_reference_dkk: p.price_reference_dkk,
+        price_period: p.price_period ?? null,
         price_from: !!p.price_from,
         features,
       };

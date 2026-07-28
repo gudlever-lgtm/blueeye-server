@@ -4,54 +4,54 @@ const express = require('express');
 const { asyncHandler } = require('../middleware/asyncHandler');
 const { requireAuth, requireRole } = require('../auth/middleware');
 const { ROLES } = require('../auth/roles');
+const { validateQuery } = require('../search/query');
+const { DEFAULT_LIMIT, MAX_LIMIT } = require('../search/searchService');
 
-// Global search across agents/hosts/locations and — when the query looks like an
-// IP or a port — which agents have recently seen that IP/port in their flows.
-// Agent/location matching is done in JS over the (small) full lists; flow lookups
-// hit the DB with a recent window. viewer+.
-function createSearchRouter({ agentsRepo, locationsRepo, flowsRepo }) {
+// Universal search (Fase 1) — one field that takes what the technician actually
+// knows (an IP, a MAC, a hostname, a site, an agent, a service) and lands them
+// on the right screen. viewer+.
+//
+// The resolver fan-out, its priority order and the partial-failure policy live
+// in src/search/searchService.js; this router is the HTTP edge: validate, rate
+// limit, delegate, shape the response.
+//
+// Response:
+//   { query, hits[], total, truncated, partial, failedSources[], unresolved[] }
+// Each hit: { type, display_name, target, confidence, source, last_seen, detail? }
+//
+// `source` and `last_seen` ride on every hit deliberately — the technician must
+// be able to see whether an answer rests on data from yesterday or from three
+// weeks ago before they drive to a site on the strength of it.
+function createSearchRouter({ searchService, rateLimiter = null }) {
   const router = express.Router();
+  const reader = requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN);
 
-  router.get('/', requireAuth, requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN), asyncHandler(async (req, res) => {
-    const q = String(req.query.q || '').trim();
-    if (!q) return res.status(400).json({ error: 'q is required' });
-    if (q.length > 64) return res.status(400).json({ error: 'q is too long (max 64 chars)' });
-    const windowH = Math.min(Math.max(Number(req.query.windowH) || 24, 1), 168);
-    const since = new Date(Date.now() - windowH * 3600 * 1000);
-    const until = new Date();
-    const ql = q.toLowerCase();
+  // Rate limited because this is a global field wired to a keyboard shortcut:
+  // one fan-out touches several tables and (when a CMDB is configured) makes an
+  // outbound HTTP call to the customer's ServiceNow. The UI debounces, but the
+  // endpoint must not depend on the client behaving.
+  const limiter = typeof rateLimiter === 'function' ? rateLimiter : (req, res, next) => next();
 
-    const agentsAll = await agentsRepo.findAll();
-    const agents = agentsAll
-      .filter((a) => String(a.hostname || '').toLowerCase().includes(ql) || String(a.display_name || '').toLowerCase().includes(ql))
-      .slice(0, 10)
-      .map((a) => ({ id: a.id, name: a.display_name || a.hostname, hostname: a.hostname, status: a.status, locationName: a.location_name || null }));
+  router.get('/', requireAuth, reader, limiter, asyncHandler(async (req, res) => {
+    const { value: q, error } = validateQuery(req.query.q);
+    if (error) return res.status(400).json({ error });
 
-    let locations = [];
-    try {
-      const locs = await locationsRepo.findAll();
-      locations = locs.filter((l) => String(l.name || '').toLowerCase().includes(ql)).slice(0, 10).map((l) => ({ id: l.id, name: l.name }));
-    } catch { locations = []; }
-
-    const nameById = new Map(agentsAll.map((a) => [a.id, a.display_name || a.hostname]));
-    const flows = {};
-    const looksIp = /[.:]/.test(q) && /^[0-9a-fA-F.:]+$/.test(q);
-    const isPort = /^\d{1,5}$/.test(q) && Number(q) >= 1 && Number(q) <= 65535;
-
-    if (looksIp && flowsRepo && typeof flowsRepo.agentIdsForIp === 'function') {
-      try {
-        const ids = await flowsRepo.agentIdsForIp({ ip: q, since, until });
-        flows.ip = { ip: q, agents: ids.map((id) => ({ id, name: nameById.get(id) || `#${id}` })) };
-      } catch { /* flows optional */ }
-    }
-    if (isPort && flowsRepo && typeof flowsRepo.agentIdsForPort === 'function') {
-      try {
-        const ids = await flowsRepo.agentIdsForPort({ port: Number(q), since, until });
-        flows.port = { port: Number(q), agents: ids.map((id) => ({ id, name: nameById.get(id) || `#${id}` })) };
-      } catch { /* flows optional */ }
+    // limit is optional; an out-of-range value is a client error rather than
+    // something to silently clamp, so a broken caller finds out.
+    let limit = DEFAULT_LIMIT;
+    if (req.query.limit !== undefined && req.query.limit !== '') {
+      limit = Number(req.query.limit);
+      if (!Number.isInteger(limit) || limit < 1 || limit > MAX_LIMIT) {
+        return res.status(400).json({ error: `limit must be an integer 1..${MAX_LIMIT}` });
+      }
     }
 
-    res.json({ query: q, windowH, agents, locations, flows });
+    const result = await searchService.search(q, { limit });
+
+    // An empty result set is 200 with an empty list, never 404: "nothing matched"
+    // is a successful answer to a search, and a 404 would read to the client as
+    // "the search endpoint is gone".
+    return res.json(result);
   }));
 
   return router;

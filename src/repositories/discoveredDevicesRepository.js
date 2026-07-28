@@ -72,6 +72,30 @@ function createDiscoveredDevicesRepository(db) {
     return res.affectedRows || 0;
   }
 
+  // IP-or-hostname lookup for the universal search field. Exact on the IP,
+  // prefix/substring on the reverse-DNS name — the same matching rule the agent
+  // and site resolvers use, so one search behaves consistently across sources.
+  //
+  // `ignored` candidates are excluded: an operator has explicitly said this is
+  // not a device they care about, and resurfacing it in every search would undo
+  // that decision one result row at a time.
+  async function search({ q, limit = 10 } = {}) {
+    const needle = String(q == null ? '' : q).trim();
+    if (!needle) return [];
+    const lim = Number.isInteger(limit) && limit > 0 && limit <= 100 ? limit : 10;
+    // ESCAPE '\\' so a literal % or _ in the query is matched as itself rather
+    // than as a wildcard.
+    const like = `%${needle.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+    const [rows] = await pool.query(
+      `SELECT ${COLS} FROM discovered_devices
+        WHERE status <> 'ignored' AND (ip = ? OR hostname LIKE ? ESCAPE '\\')
+        ORDER BY (ip = ?) DESC, last_seen DESC, id DESC
+        LIMIT ?`,
+      [needle, like, needle, lim],
+    );
+    return rows.map(mapRow);
+  }
+
   async function countByStatus() {
     const [rows] = await pool.query('SELECT status, COUNT(*) AS n FROM discovered_devices GROUP BY status');
     const out = { discovered: 0, promoted: 0, ignored: 0 };
@@ -79,7 +103,7 @@ function createDiscoveredDevicesRepository(db) {
     return out;
   }
 
-  return { upsertCandidate, list, findById, setStatus, countByStatus };
+  return { upsertCandidate, list, search, findById, setStatus, countByStatus };
 }
 
 module.exports = { createDiscoveredDevicesRepository, mapRow };

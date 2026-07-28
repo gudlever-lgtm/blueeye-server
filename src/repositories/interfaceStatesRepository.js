@@ -4,7 +4,9 @@
 // (migration 075) — the snapshot we diff against, and the history the changes
 // feed reads.
 
-const STATE_COLS = 'id, agent_id, iface, status, oper_status, virtual, first_seen, last_seen';
+// `virtual` is backticked everywhere it appears as an IDENTIFIER: it is a
+// reserved word in MySQL (generated columns), so an unquoted use is a syntax error.
+const STATE_COLS = 'id, agent_id, iface, status, oper_status, `virtual`, first_seen, last_seen';
 const TRANS_COLS = `id, agent_id, iface, from_status, to_status, oper_status, severity,
   summary, flap_count, flapping, detected_at`;
 
@@ -70,12 +72,12 @@ function createInterfaceStatesRepository(db) {
       params.push(agentId, s.iface, s.status, s.operStatus || null, s.virtual ? 1 : 0, at, at);
     }
     const [res] = await pool.query(
-      `INSERT INTO interface_states (agent_id, iface, status, oper_status, virtual, first_seen, last_seen)
+      `INSERT INTO interface_states (agent_id, iface, status, oper_status, \`virtual\`, first_seen, last_seen)
        VALUES ${values.join(', ')}
        ON DUPLICATE KEY UPDATE
          status = VALUES(status),
          oper_status = VALUES(oper_status),
-         virtual = VALUES(virtual),
+         \`virtual\` = VALUES(\`virtual\`),
          last_seen = VALUES(last_seen)`,
       params
     );

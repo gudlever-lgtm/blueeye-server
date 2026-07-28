@@ -913,7 +913,9 @@ const PAGE_INFO = {
         el('li', {}, '”+ New agent” (operator+) opens ', viewLink('enrollment'), ', where you generate a code and a ready-to-run install one-liner.'),
         el('li', {}, '”Run test” asks the agent to measure immediately; “Traffic” shows the measurements.'),
         el('li', {}, '”Edit” sets name, location, notes and traffic source (proc, SNMP, NetFlow or sFlow).'),
-        el('li', {}, '”Upgrade” (admin) rebuilds a systemd-managed agent from the server\'s published source and restarts it — always available for a manual re-deploy; it shows as a highlighted “Update” when the agent is behind. Docker/unmanaged/Windows agents can\'t self-update from here: their version line shows an “update · installer” badge (and an “Installer” button) instead — update those by re-running the installer on the host.')),
+        el('li', {}, '”Upgrade” (admin) rebuilds a systemd-managed agent from the server\'s published source and restarts it — always available for a manual re-deploy; it shows as a highlighted “Update” when the agent is behind.'),
+        el('li', {}, 'A ', el('strong', {}, 'Windows'), ' agent can\'t be upgraded from the server (it runs as a scheduled task). When it is behind, “Update” hands you a PowerShell one-liner to run on that host: it updates the installed agent in place, keeps its token and identity, and never enrolls a second agent — no re-install.'),
+        el('li', {}, 'Docker/unmanaged agents can\'t self-update either: their version line shows an “update · installer” badge (and an “Installer” button) — update those by re-running the installer on the host.')),
       el('p', { class: 'muted' }, 'Group agents by site under ', viewLink('locations'), '; see them all with a single health verdict on ', viewLink('fleet', 'Overview'), '.'),
     ],
   },
@@ -1448,19 +1450,35 @@ function agentVersionLine(a, current) {
   const v = a.capabilities && a.capabilities.agentVersion;
   if (!v) return null;
   if (!agentIsBehind(a, current)) return el('div', { class: 'muted' }, `v${v}`);
+  if (agentSelfUpdatable(a)) {
+    return el('div', { class: 'muted' }, `v${v} `,
+      el('span', { class: 'badge warn', title: `Current agent version is ${current}` }, 'update'));
+  }
+  // A Windows agent isn't stuck: the Update button hands out a one-liner that
+  // updates it in place, so its badge points at that rather than at a reinstall.
+  if (agentIsWindows(a)) {
+    return el('div', { class: 'muted' }, `v${v} `,
+      el('span', { class: 'badge warn', title: t('agentUpdate.win.badgeTitle', { version: current }) }, t('agentUpdate.win.badge')));
+  }
   return el('div', { class: 'muted' }, `v${v} `,
-    agentSelfUpdatable(a)
-      ? el('span', { class: 'badge warn', title: `Current agent version is ${current}` }, 'update')
-      : el('span', { class: 'badge neutral', title: `${agentUpdateHint(a)} (current version is ${current})` }, 'update · installer'));
+    el('span', { class: 'badge neutral', title: `${agentUpdateHint(a)} (current version is ${current})` }, 'update · installer'));
 }
 
 // The row-actions button for pushing an agent onto the current version. Solid
 // "Update" when a systemd agent is behind; a subtle "Upgrade" (manual re-deploy)
 // when it's already current. Docker/unmanaged/Windows agents can't self-update
-// from here, so we don't offer a button that would just decline — a behind one
-// gets an "installer" affordance whose click explains where the update comes
-// from instead.
+// from here, so we don't push a command that would just decline: a behind Windows
+// agent gets an "Update" that hands over the update-in-place one-liner for its
+// host, and any other non-self-updatable one gets an "installer" affordance whose
+// click explains where the update comes from instead.
 function agentUpdateButton(a, current, behind) {
+  if (!agentSelfUpdatable(a) && agentIsWindows(a) && behind) {
+    return el('button', {
+      class: 'small',
+      onclick: () => showWindowsUpdateCommand(a, current),
+      title: t('agentUpdate.win.buttonTitle'),
+    }, t('agentUpdate.win.button'));
+  }
   if (agentSelfUpdatable(a)) {
     return el('button', {
       // Always available to admins as a manual upgrade link; emphasised (solid)
@@ -1509,8 +1527,17 @@ function agentIsBehind(a, current) {
 // a managed-state (a very old agent, pre-capabilities.managed) is treated as
 // updatable so we don't hide an action we're merely unsure about.
 function agentSelfUpdatable(a) {
+  // A Windows agent never self-updates whatever it reports as `managed`: the agent
+  // only accepts the pushed update under systemd, which Windows can't be.
+  if (agentIsWindows(a)) return false;
   const managed = a && a.capabilities && a.capabilities.managed;
   return managed !== 'docker' && managed !== 'unmanaged';
+}
+
+// Windows hosts (the agent reports process.platform, i.e. 'win32'). They update
+// from the host with the update-in-place one-liner, not from the server.
+function agentIsWindows(a) {
+  return !!(a && typeof a.platform === 'string' && /^win/i.test(a.platform));
 }
 
 // The newest version THIS agent can actually reach, so "behind" compares against
@@ -1533,7 +1560,7 @@ function agentUpdateHint(a) {
   const managed = a && a.capabilities && a.capabilities.managed;
   return managed === 'docker'
     ? 'Runs under Docker — update it by re-running the install one-liner on the host (it rebuilds the container there, not from the server).'
-    : "Isn't service-managed (e.g. a Windows or bare-process agent) — update it by re-running the installer on the host.";
+    : "Isn't service-managed (a bare-process agent) — update it by re-running the installer on the host.";
 }
 
 // Health derived from how recently the agent last reported in. online + a fresh
@@ -1780,6 +1807,45 @@ async function updateAgent(a, target) {
     if (r.reason === 'unmanaged') { toast(`${name} isn't service-managed — update it manually (re-run the installer).`, true); return; }
     toast(`${name}: the agent did not accept the update.`, true);
   } catch (err) { toast(`${name}: ${err.message}`, true); }
+}
+
+// A Windows agent can't be upgraded from the server (it runs under a scheduled
+// task, so the pushed update command is declined on the host). Instead of sending
+// a command that would just decline, hand the operator the one-liner that updates
+// that host IN PLACE. It carries no enrollment code, so it can only ever upgrade
+// the agent already on the machine — it never enrolls a second one.
+async function showWindowsUpdateCommand(a, target) {
+  const name = a.display_name || a.hostname;
+  let data;
+  try {
+    data = await api('/api/enroll/update-command?platform=windows-amd64');
+  } catch (err) {
+    toast(t('agentUpdate.win.error', { message: errText(err) }), true);
+    return;
+  }
+  const oneLiner = data.oneLiner;
+  const from = (a.capabilities && a.capabilities.agentVersion) || '?';
+  const to = data.version || target || '?';
+  const card = $('#modal-card');
+  card.classList.add('wide'); // the one-liner is long — closeModal drops this again
+  const manual = el('div', { class: 'enroll-manual hidden' },
+    enrollKv(t('agentUpdate.win.download'), el('code', {}, data.manual.downloadUrl)),
+    enrollKv(t('agentUpdate.win.checksum'), el('code', {}, data.manual.checksum || '–')),
+    data.certFingerprint ? enrollKv('Cert-fingerprint', el('code', {}, data.certFingerprint)) : null);
+  card.replaceChildren(
+    el('h3', {}, t('agentUpdate.win.title', { name, version: to })),
+    el('p', { class: 'muted small' }, t('agentUpdate.win.currentVersion', { from, to })),
+    el('p', {}, t('agentUpdate.win.intro')),
+    el('div', { class: 'enroll-cmd-row' },
+      el('pre', { class: 'enroll-cmd' }, oneLiner),
+      el('button', { class: 'small', onclick: () => { copyText(oneLiner); } }, t('agentUpdate.win.copy'))),
+    el('p', { class: 'muted small' }, t('agentUpdate.win.run', { host: a.hostname })),
+    el('p', { class: 'muted small' }, t('agentUpdate.win.keepsIdentity')),
+    el('div', { class: 'form-actions' },
+      el('button', { class: 'small ghost', onclick: () => manual.classList.toggle('hidden') }, t('agentUpdate.win.manual')),
+      el('button', { class: 'ghost', onclick: closeModal }, t('agentUpdate.close'))),
+    manual);
+  $('#modal').classList.remove('hidden');
 }
 
 // Bulk "update all outdated": rebuild every behind agent from the server's

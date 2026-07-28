@@ -109,8 +109,12 @@ change that:
    `blueeye-agent` checkout — `scripts/deploy.sh` does both repos).
 2. **Settings → Updates → Reload agent source** (or restart the server) so the
    new bundle is packaged and served.
-3. Systemd agents can then be updated one-click from the same panel; Docker /
-   Windows / unmanaged agents re-run their installer on their own host.
+3. Systemd agents can then be updated one-click from the same panel. A **Windows**
+   agent that is behind gets an **Update** button in Agents that hands you a
+   PowerShell one-liner (`irm <server>/enroll/update.ps1 | iex`) to run on that
+   host: it updates the installed agent in place, keeps its token/identity and
+   never enrolls a second agent — see `docs/enrollment.md`. Docker / unmanaged
+   agents re-run their installer on their own host.
 
 The "a newer agent has been published" line in the panel is the trigger for
 step 1 — before, there was nothing to tell an operator that a new agent existed.

@@ -185,3 +185,26 @@ test('GET /enroll/:code/install.ps1 404s for an unknown/expired code', async () 
   const unknown = makeApp({ enrollmentCodesRepo: makeEnrollmentCodesRepo({ findByCode: async () => null }) });
   assert.equal((await request(unknown).get('/enroll/NOPE/install.ps1')).status, 404);
 });
+
+// ---- GET /enroll/update.ps1 (Windows update-in-place) -----------------------
+test('GET /enroll/update.ps1 serves a code-free PowerShell updater (200)', async () => {
+  const store = makeSourceStore({ sha256: 'u'.repeat(64) });
+  const app = makeApp({ agentSourceStore: store, enrollConfig: { publicUrl: 'https://blueeye.acme.dk' } });
+  const res = await request(app).get('/enroll/update.ps1');
+  assert.equal(res.status, 200);
+  assert.match(res.headers['content-type'], /text\/plain/);
+  assert.match(res.text, /\$ServerUrl\s*=\s*'https:\/\/blueeye\.acme\.dk'/);
+  assert.ok(res.text.includes('u'.repeat(64)), 'embeds the agent source checksum');
+  // Update-only: no enrollment code in it, and it refuses a host with no agent —
+  // so it can never enroll a second agent for the same machine.
+  assert.ok(!/\$EnrollCode/.test(res.text));
+  assert.match(res.text, /only UPDATES an existing agent/);
+  assert.ok(!/curl -sSL/.test(res.text));
+});
+
+test('GET /enroll/update.ps1 404s when no agent source is published', async () => {
+  const app = makeApp({ agentSourceStore: makeSourceStore({ present: false }) });
+  const res = await request(app).get('/enroll/update.ps1');
+  assert.equal(res.status, 404);
+  assert.match(res.headers['content-type'], /text\/plain/);
+});

@@ -27,7 +27,18 @@ function createPurge({ repo, config, now = () => new Date() }) {
       const arpCut = new Date(t - config.arpRetentionDays * DAY_MS);
       arpEntries = await repo.purgeArpEntriesBefore(arpCut);
     }
-    return { flowRollups, metricRollups, findings, configSnapshots, arpEntries };
+    // Interface state transitions (history) and the snapshot rows of interfaces
+    // that stopped being reported. Guarded like the dimensions above.
+    let interfaceTransitions = 0;
+    let interfaceStates = 0;
+    if (config.interfaceTransitionRetentionDays && typeof repo.purgeInterfaceTransitionsBefore === 'function') {
+      const cut = new Date(t - config.interfaceTransitionRetentionDays * DAY_MS);
+      interfaceTransitions = await repo.purgeInterfaceTransitionsBefore(cut);
+      if (typeof repo.purgeInterfaceStatesBefore === 'function') {
+        interfaceStates = await repo.purgeInterfaceStatesBefore(cut);
+      }
+    }
+    return { flowRollups, metricRollups, findings, configSnapshots, arpEntries, interfaceTransitions, interfaceStates };
   }
 
   return { purgeExpired };

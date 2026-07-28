@@ -14,6 +14,9 @@ function loadRetentionConfig(env = process.env) {
     // ARP/neighbour entries. Short by design: a neighbour table is a snapshot of
     // a segment, and a stale answer to "where is this MAC" is worse than none.
     arpRetentionDays: toInt(env.RETENTION_ARP_DAYS, 30),
+    // Interface state transitions. Long enough to cover an investigation that
+    // spans several shifts, which is the whole point of recording them.
+    interfaceTransitionRetentionDays: toInt(env.RETENTION_INTERFACE_TRANSITION_DAYS, 90),
     rollupIntervalMinutes: toInt(env.RETENTION_ROLLUP_INTERVAL_MINUTES, 60), // bucket granularity
     intervalHours: toInt(env.RETENTION_JOB_INTERVAL_HOURS, 24), // how often the job runs
     batchSize: toInt(env.RETENTION_BATCH_SIZE, 5000), // rows fetched per rollup page

@@ -63,6 +63,8 @@ const { createLldpGraphService } = require('./topology/lldpGraphService');
 const { createServiceDependenciesRepository } = require('./repositories/serviceDependenciesRepository');
 const { createHostConnectionsRepository } = require('./repositories/hostConnectionsRepository');
 const { createArpEntriesRepository } = require('./repositories/arpEntriesRepository');
+const { createInterfaceStatesRepository } = require('./repositories/interfaceStatesRepository');
+const { createInterfaceStateService } = require('./health/interfaceStateService');
 const { createServiceDependencyJob } = require('./topology/serviceDependencyJob');
 const { createBlastRadiusService } = require('./topology/blastRadiusService');
 const { createTopologyChangesRepository } = require('./repositories/topologyChangesRepository');
@@ -469,6 +471,10 @@ function start() {
   const serviceDependenciesRepo = createServiceDependenciesRepository(db);
   const hostConnectionsRepo = createHostConnectionsRepository(db);
   const arpEntriesRepo = createArpEntriesRepository(db);
+  const interfaceStatesRepo = createInterfaceStatesRepository(db);
+  // Interface transitions are recorded at the results-ingest seam — the one place
+  // that sees every observation — not reconstructed by polling current state.
+  const interfaceStateService = createInterfaceStateService({ interfaceStatesRepo, logger });
   const serviceDependencyJob = createServiceDependencyJob({ serviceDependenciesRepo, flowsRepo, agentsRepo, hostConnectionsRepo, logger });
   // Blast-radius impact analysis over the unified topology graph (l2_link +
   // service_dep). Used by the incident enrichment + the topology endpoint.
@@ -812,6 +818,8 @@ function start() {
     serviceDependenciesRepo,
     hostConnectionsRepo,
     arpEntriesRepo,
+    interfaceStatesRepo,
+    interfaceStateService,
     serviceDependencyJob,
     blastRadiusService,
     topologyChangesRepo,

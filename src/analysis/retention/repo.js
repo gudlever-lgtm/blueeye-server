@@ -112,6 +112,17 @@ function createRetentionRepo(db) {
     return deleteInBatches('DELETE FROM arp_entries WHERE last_seen < ? ORDER BY last_seen LIMIT ?', [ts]);
   }
 
+  // Interface state transitions + the current-state snapshot rows of interfaces
+  // that stopped being reported entirely. The snapshot cutoff is deliberately
+  // longer-lived logic than the history: dropping a state row we still have
+  // transitions for would make the next sighting look like a brand-new interface.
+  async function purgeInterfaceTransitionsBefore(ts) {
+    return deleteInBatches('DELETE FROM interface_state_transitions WHERE detected_at < ? ORDER BY detected_at LIMIT ?', [ts]);
+  }
+  async function purgeInterfaceStatesBefore(ts) {
+    return deleteInBatches('DELETE FROM interface_states WHERE last_seen < ? ORDER BY last_seen LIMIT ?', [ts]);
+  }
+
   return {
     getRawExternalFlowsBatch,
     insertFlowRollups,
@@ -124,6 +135,8 @@ function createRetentionRepo(db) {
     purgeAckedFindingsBefore,
     purgeConfigSnapshotsBefore,
     purgeArpEntriesBefore,
+    purgeInterfaceTransitionsBefore,
+    purgeInterfaceStatesBefore,
   };
 }
 

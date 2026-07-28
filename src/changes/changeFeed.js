@@ -183,6 +183,26 @@ function fromTopologyChanges(rows) {
   }));
 }
 
+// Interface state transitions (migration 075). This is the dimension the feed
+// could not report before interfaces were given a transition log — and the one a
+// technician asks about most.
+function fromInterfaceTransitions(rows, { nameFor = (id) => `agent ${id}` } = {}) {
+  return (rows || []).map((t) => {
+    const agentId = t.agentId != null ? Number(t.agentId) : null;
+    const where = agentId == null ? '' : ` on ${nameFor(agentId)}`;
+    return makeEvent({
+      timestamp: t.detectedAt || t.detected_at,
+      source: 'interface',
+      type: t.flapping ? 'interface.flapping' : `interface.${t.toStatus || t.to_status}`,
+      severity: t.severity,
+      summary: `${t.summary}${where}`,
+      refId: t.id,
+      agentId,
+      kind: 'interface_state',
+    });
+  });
+}
+
 // Remediation playbook runs.
 function fromPlaybookRuns(rows) {
   return (rows || []).map((r) => makeEvent({
@@ -333,6 +353,7 @@ module.exports = {
   fromIncidentCases,
   fromClusters,
   fromTopologyChanges,
+  fromInterfaceTransitions,
   fromPlaybookRuns,
   fromConfigSnapshots,
   agentHealthRows,

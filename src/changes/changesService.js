@@ -8,6 +8,7 @@ const {
   fromIncidentCases,
   fromClusters,
   fromTopologyChanges,
+  fromInterfaceTransitions,
   fromPlaybookRuns,
   fromConfigSnapshots,
   agentHealthRows,
@@ -44,6 +45,7 @@ function createChangesService({
   incidentCasesRepo = null,
   incidentClustersRepo = null,
   topologyChangesRepo = null,
+  interfaceStatesRepo = null,
   remediationPlaybooksRepo = null,
   configSnapshotsRepo = null,
   serverAgentVersion = null,
@@ -92,6 +94,11 @@ function createChangesService({
     return fromTopologyChanges(await topologyChangesRepo.list({ from, to, limit: PER_SOURCE_LIMIT }));
   }
 
+  async function fetchInterfaceTransitions({ from, to }, ctx) {
+    if (!interfaceStatesRepo || typeof interfaceStatesRepo.list !== 'function') return [];
+    return fromInterfaceTransitions(await interfaceStatesRepo.list({ from, to, limit: PER_SOURCE_LIMIT }), ctx);
+  }
+
   async function fetchPlaybookRuns({ from, to }) {
     if (!remediationPlaybooksRepo || typeof remediationPlaybooksRepo.listRunsBetween !== 'function') return [];
     return fromPlaybookRuns(await remediationPlaybooksRepo.listRunsBetween({ from, to, limit: PER_SOURCE_LIMIT }));
@@ -120,6 +127,7 @@ function createChangesService({
       ['incident_cases', () => fetchIncidentCases(window)],
       ['clusters', () => fetchClusters(window)],
       ['topology', () => fetchTopologyChanges(window)],
+      ['interfaces', () => fetchInterfaceTransitions(window, ctx)],
       ['playbooks', () => fetchPlaybookRuns(window)],
       ['config', () => fetchConfigSnapshots(window, ctx)],
     ];

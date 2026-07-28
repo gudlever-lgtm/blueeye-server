@@ -38,6 +38,7 @@ first-time visitor wants their shift, not four years of history.
 | `topology` | `topology_changes` (links appeared/disappeared) | ✅ |
 | `playbook` | `incident_playbook_runs` | ✅ |
 | `config` | `config_snapshots` | ✅ |
+| `interface_state` | `interface_state_transitions` (mig 075) | ✅ |
 | `agent_health` | derived — heartbeat + version skew | ❌ **current state** |
 
 A probe incident contributes **two** events when both ends fall in the window:
@@ -58,15 +59,19 @@ current state is exactly what this page must not do**, so these rows are labelle
 the window. `withinWindow()` exempts them, so a short window does not silently
 drop them either.
 
-## Still missing: interface transitions
+## Interface transitions
 
-Interfaces are **not a persisted entity** in this codebase — interface health is
-computed on the fly from `results.payload`, so only the current state exists.
-There is therefore no interface up/down row in this feed.
+Interfaces are **not a persisted entity** in this codebase — health is computed on
+the fly from `results.payload.traffic`, so only the current state ever existed.
 
-Closing that gap needs a transitions table written from the interface-health
-path, and an agent-side reporting change — a separate piece of work, deliberately
-not faked here by polling.
+That gap is now closed by migration 075, which records transitions **at the
+results-ingest seam** — the one place that sees every observation. Deriving the
+history by polling current state was explicitly ruled out: a poller sees whatever
+is true when it looks, misses everything between two looks, and produces a change
+log that quietly lies about timing.
+
+Flapping interfaces collapse onto **one** row with a count. See
+`docs/interface-transitions.md`.
 
 ## Event shape
 

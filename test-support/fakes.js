@@ -16,6 +16,7 @@ const { createCmdbConnectorRegistry } = require('../src/cmdb/connectors');
 const { createPlanService } = require('../src/license/planService');
 const { createUsageService } = require('../src/services/usageService');
 const { createAuditLogger } = require('../src/services/complianceLogger');
+const { createInterfaceStateService } = require('../src/health/interfaceStateService');
 const { createSnapshotService } = require('../src/evidence/snapshotService');
 const { createBlastRadiusService } = require('../src/topology/blastRadiusService');
 const { createTopologyChangeService } = require('../src/topology/topologyChangeService');
@@ -155,6 +156,92 @@ function makeDiscoveredDevicesRepo(overrides = {}) {
       const out = { discovered: 0, promoted: 0, ignored: 0 };
       for (const r of rows) out[r.status] = (out[r.status] || 0) + 1;
       return out;
+    }),
+  };
+}
+
+// In-memory `interface_states` + `interface_state_transitions` (migration 075).
+// Mirrors the real repo including the flap-collapse update, so the service's
+// suppression logic is exercised rather than stubbed.
+function makeInterfaceStatesRepo(overrides = {}) {
+  const states = [];
+  const transitions = [];
+  let seq = 0;
+  const iso = (v) => (v == null ? null : (v instanceof Date ? v.toISOString() : new Date(v).toISOString()));
+  const mapState = (r) => ({
+    id: r.id, agentId: r.agent_id, iface: r.iface, status: r.status,
+    oper_status: r.oper_status ?? null, virtual: !!r.virtual,
+    firstSeen: iso(r.first_seen), lastSeen: iso(r.last_seen),
+  });
+  const mapTrans = (r) => ({
+    id: r.id, agentId: r.agent_id, iface: r.iface,
+    fromStatus: r.from_status ?? null, toStatus: r.to_status, operStatus: r.oper_status ?? null,
+    severity: r.severity, summary: r.summary,
+    flapCount: Number(r.flap_count || 1), flapping: !!r.flapping,
+    detectedAt: iso(r.detected_at),
+  });
+  return {
+    states,
+    transitions,
+    statesForAgent: overrides.statesForAgent || (async (agentId) => states
+      .filter((r) => r.agent_id === Number(agentId)).map(mapState)),
+    upsertStates: overrides.upsertStates || (async (agentId, rows, { at = new Date() } = {}) => {
+      for (const s of rows || []) {
+        const existing = states.find((r) => r.agent_id === Number(agentId) && r.iface === s.iface);
+        if (existing) {
+          existing.status = s.status; existing.oper_status = s.operStatus || null;
+          existing.virtual = s.virtual ? 1 : 0; existing.last_seen = at;
+        } else {
+          states.push({
+            id: (seq += 1), agent_id: Number(agentId), iface: s.iface, status: s.status,
+            oper_status: s.operStatus || null, virtual: s.virtual ? 1 : 0,
+            first_seen: at, last_seen: at,
+          });
+        }
+      }
+      return (rows || []).length;
+    }),
+    insertTransition: overrides.insertTransition || (async (agentId, t) => {
+      const id = (seq += 1);
+      transitions.push({
+        id, agent_id: Number(agentId), iface: t.iface, from_status: t.fromStatus,
+        to_status: t.toStatus, oper_status: t.operStatus || null, severity: t.severity,
+        summary: t.summary, flap_count: 1, flapping: 0, detected_at: t.detectedAt,
+      });
+      return id;
+    }),
+    latestForIface: overrides.latestForIface || (async ({ agentId, iface, since = null }) => {
+      const hits = transitions
+        .filter((r) => r.agent_id === Number(agentId) && r.iface === iface
+          && (!since || new Date(r.detected_at) >= new Date(since)))
+        .sort((a, b) => new Date(b.detected_at) - new Date(a.detected_at) || b.id - a.id);
+      return hits[0] ? mapTrans(hits[0]) : null;
+    }),
+    markFlapping: overrides.markFlapping || (async (id, { at }) => {
+      const r = transitions.find((x) => x.id === Number(id));
+      if (!r) return false;
+      r.flapping = 1;
+      r.flap_count += 1;
+      r.detected_at = at;
+      r.severity = 'WARN';
+      r.summary = `${String(r.summary).split(' (flapping')[0]} (flapping ${r.flap_count}\u00d7)`;
+      return true;
+    }),
+    list: overrides.list || (async ({ from = null, to = null, agentId = null, limit = 200 } = {}) => transitions
+      .filter((r) => (agentId == null || r.agent_id === Number(agentId))
+        && (!from || new Date(r.detected_at) >= new Date(from))
+        && (!to || new Date(r.detected_at) <= new Date(to)))
+      .sort((a, b) => new Date(b.detected_at) - new Date(a.detected_at) || b.id - a.id)
+      .slice(0, limit).map(mapTrans)),
+    purgeTransitionsBefore: overrides.purgeTransitionsBefore || (async (cutoff) => {
+      const before = transitions.length;
+      for (let i = transitions.length - 1; i >= 0; i -= 1) if (new Date(transitions[i].detected_at) < cutoff) transitions.splice(i, 1);
+      return before - transitions.length;
+    }),
+    purgeStatesBefore: overrides.purgeStatesBefore || (async (cutoff) => {
+      const before = states.length;
+      for (let i = states.length - 1; i >= 0; i -= 1) if (new Date(states[i].last_seen) < cutoff) states.splice(i, 1);
+      return before - states.length;
     }),
   };
 }
@@ -2223,6 +2310,12 @@ function makeApp(overrides = {}) {
   const serviceDependenciesRepo = overrides.serviceDependenciesRepo || makeServiceDependenciesRepo();
   const hostConnectionsRepo = overrides.hostConnectionsRepo || makeHostConnectionsRepo();
   const arpEntriesRepo = overrides.arpEntriesRepo === undefined ? makeArpEntriesRepo() : overrides.arpEntriesRepo;
+  const interfaceStatesRepo = overrides.interfaceStatesRepo === undefined ? makeInterfaceStatesRepo() : overrides.interfaceStatesRepo;
+  // The REAL service over the fake repo, so transition detection + flap collapse
+  // are exercised end-to-end on results ingest rather than stubbed.
+  const interfaceStateService = overrides.interfaceStateService === undefined
+    ? (interfaceStatesRepo ? createInterfaceStateService({ interfaceStatesRepo }) : null)
+    : overrides.interfaceStateService;
   const topologyChangesRepo = overrides.topologyChangesRepo || makeTopologyChangesRepo();
   // `=== undefined` (not `||`) so a test can pass null to exercise the
   // not-wired path — a deployment without migration 068 has no baselines at all.
@@ -2282,6 +2375,8 @@ function makeApp(overrides = {}) {
     serviceDependenciesRepo,
     hostConnectionsRepo,
     arpEntriesRepo,
+    interfaceStatesRepo,
+    interfaceStateService,
     serviceDependencyJob: overrides.serviceDependencyJob || null,
     blastRadiusService,
     topologyChangesRepo,
@@ -2413,6 +2508,7 @@ module.exports = {
   makeFlowPairBaselinesRepo,
   makeDiscoveredDevicesRepo,
   makeArpEntriesRepo,
+  makeInterfaceStatesRepo,
   makeAlertDispatchLogRepo,
   makeEvidenceSnapshotsRepo,
   makeRemediationPlaybooksRepo,

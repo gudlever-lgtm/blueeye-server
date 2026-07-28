@@ -71,7 +71,7 @@ function makeClaimPool({ codeRow }) {
     release() {},
     async query(sql, params) {
       queries.push({ sql, params });
-      if (/FROM enrollment_codes WHERE code = \? FOR UPDATE/.test(sql)) return [[codeRow]];
+      if (/FROM enrollment_codes WHERE code_hash = \?/.test(sql)) return [[codeRow]];
       if (/INSERT INTO agents/.test(sql)) return [{ insertId: 77 }];
       if (/INSERT INTO agent_tokens/.test(sql)) return [{ insertId: 1 }];
       if (/UPDATE enrollment_codes/.test(sql)) return [{ affectedRows: 1 }];
@@ -91,4 +91,15 @@ test('claimAndEnroll records the enrolling code id on the new agent', async () =
   const insert = pool.conn.queries.find((q) => /INSERT INTO agents/.test(q.sql));
   assert.match(insert.sql, /enrollment_code_id/);
   assert.equal(insert.params[4], 42); // linked to the code that enrolled it
+});
+
+test('claimAndEnroll looks the code up by its SHA-256, not its cleartext', async () => {
+  const { pool } = makeClaimPool({ codeRow: { id: 42, location_id: 5, used_at: null, uses_remaining: 1, is_expired: 0 } });
+  const store = createEnrollmentStore({ pool });
+  await store.claimAndEnroll({ code: 'X', hostname: 'h', platform: 'linux', arch: 'x64', tokenHash: 'abc' });
+
+  const select = pool.conn.queries.find((q) => /FROM enrollment_codes/.test(q.sql));
+  const expected = require('node:crypto').createHash('sha256').update('X').digest('hex');
+  assert.equal(select.params[0], expected);
+  assert.match(select.sql, /FOR UPDATE/, 'the row must still be locked for the atomic claim');
 });

@@ -73,12 +73,19 @@ function aggregateFlows(rows, { port = null, protocol = null } = {}) {
 //
 // Agents are created via enrollment (prompt 4) — there is intentionally no
 // manual POST /agents here.
-function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentCommander, agentSourceStore, releaseStore = null, releasePublicKey = '', publishRelease = null, auditRepo = null, integrationTrigger = null, logger = silentLogger, reconnect = {} }) {
+function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentCommander, agentSourceStore, releaseStore = null, releasePublicKey = '', publishRelease = null, auditRepo = null, integrationTrigger = null, commandSigner = null, logger = silentLogger, reconnect = {} }) {
   // How long POST /:id/reconnect waits for the agent to re-dial after the forced
   // close (the agent's first backoff step is ~1 s), and how often it re-checks.
   const reconnectWaitMs = Number.isInteger(reconnect.waitMs) ? reconnect.waitMs : 12000;
   const reconnectPollMs = Number.isInteger(reconnect.pollMs) ? reconnect.pollMs : 250;
   const router = express.Router();
+
+  // Signs a privileged command (upgrade/delete/install-tool) so the agent can
+  // verify the SERVER asked for it, not merely something holding its socket.
+  // A server without a managed signing key returns the command unchanged — the
+  // agent stays lenient by default, so nothing breaks. Must be called LAST, once
+  // auditId is attached: the audit id is part of what gets signed.
+  const signCommand = (agentId, command) => (commandSigner ? commandSigner.sign(agentId, command) : command);
 
   // Response helpers for the error shapes repeated across this router.
   const invalidId = (res) => res.status(400).json({ error: 'Invalid id' });
@@ -284,7 +291,7 @@ function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentComma
       // echoes it back on completion (handled where the agent reports its result).
       const auditId = await recordRequested('upgrade', agent, req, targetVersion);
       if (auditId) command.auditId = auditId;
-      const out = await agentCommander.sendCommandAndWait(id, command, { timeoutMs: 8000 });
+      const out = await agentCommander.sendCommandAndWait(id, signCommand(id, command), { timeoutMs: 8000 });
       if (out.delivered === 0) {
         await markFailed(auditId, 'agent not connected');
         return res.status(409).json({ error: 'Agent not connected', connected: false });
@@ -326,7 +333,7 @@ function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentComma
       const auditId = await recordRequested('delete', agent, req, null);
       const command = { name: 'delete' };
       if (auditId) command.auditId = auditId;
-      const out = await agentCommander.sendCommandAndWait(id, command, { timeoutMs: 8000 });
+      const out = await agentCommander.sendCommandAndWait(id, signCommand(id, command), { timeoutMs: 8000 });
       if (out.delivered === 0) {
         await markFailed(auditId, 'agent not connected');
         return res.status(409).json({ error: 'Agent not connected', connected: false });
@@ -368,7 +375,7 @@ function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentComma
       const auditId = await recordRequested('install-tool', agent, req, tool);
       const command = { name: 'install-tool', tool };
       if (auditId) command.auditId = auditId;
-      const out = await agentCommander.sendCommandAndWait(id, command, { timeoutMs: 8000 });
+      const out = await agentCommander.sendCommandAndWait(id, signCommand(id, command), { timeoutMs: 8000 });
       if (out.delivered === 0) {
         await markFailed(auditId, 'agent not connected');
         return res.status(409).json({ error: 'Agent not connected', connected: false });

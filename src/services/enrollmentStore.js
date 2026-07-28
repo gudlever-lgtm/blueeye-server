@@ -1,5 +1,7 @@
 'use strict';
 
+const crypto = require('crypto');
+
 // Decides the outcome of a claim from a locked code row. Pure + side-effect
 // free so the N-uses / expiry / exhaustion logic is unit-testable without a DB.
 //   row: { used_at, is_expired, uses_remaining } | undefined
@@ -38,10 +40,13 @@ function createEnrollmentStore(db) {
       await conn.beginTransaction();
 
       // Expiry is evaluated in the database to avoid app/DB timezone skew.
+      // Matched on the SHA-256 of the code (migration 072 — codes are no longer
+      // stored in cleartext). The legacy `code` column is still consulted for
+      // rows written before that migration and not yet expired.
       const [rows] = await conn.query(
         `SELECT id, location_id, used_at, uses_remaining, (expires_at <= NOW()) AS is_expired
-         FROM enrollment_codes WHERE code = ? FOR UPDATE`,
-        [code]
+         FROM enrollment_codes WHERE code_hash = ? OR (code_hash IS NULL AND code = ?) FOR UPDATE`,
+        [crypto.createHash('sha256').update(String(code)).digest('hex'), code]
       );
       const row = rows[0];
       const decision = decideOutcome(row);

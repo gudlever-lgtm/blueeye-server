@@ -71,6 +71,13 @@ function createEnrollCommandRouter({ enrollmentCodesRepo, artifactStore, sourceS
         if (row.status === 'used' || (row.uses_remaining != null && row.uses_remaining <= 0)) {
           return res.status(410).json({ error: 'Enrollment code is exhausted' });
         }
+        // The code is decrypted from `code_enc`. It comes back null when the row
+        // predates migration 072 and its cleartext has already been stripped, or
+        // when no secret box is configured — tell the operator to mint a new one
+        // rather than rendering a command with an empty code in it.
+        if (!row.code) {
+          return res.status(409).json({ error: 'This enrollment code can no longer be displayed; generate a new one' });
+        }
         code = row.code;
         expiresAt = row.expires_at;
         maxUses = row.max_uses ?? 1;

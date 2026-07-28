@@ -42,7 +42,10 @@ CREATE TABLE IF NOT EXISTS interface_states (
   -- The status vocabulary of computeInterfaceHealth: ok | warn | bad | down.
   status VARCHAR(16) NOT NULL,
   oper_status VARCHAR(32) NULL DEFAULT NULL,   -- as reported (up/down/dormant/…)
-  virtual TINYINT(1) NOT NULL DEFAULT 0,       -- docker0/veth/tun… (idle, not faulty)
+  -- Backticked: VIRTUAL is a reserved word in MySQL (generated columns), so an
+  -- unquoted identifier is a syntax error and the whole migration — and, since the
+  -- container runs `migrate && server`, the whole server — fails to start.
+  `virtual` TINYINT(1) NOT NULL DEFAULT 0,     -- docker0/veth/tun… (idle, not faulty)
   first_seen DATETIME(3) NOT NULL,
   last_seen DATETIME(3) NOT NULL,
   PRIMARY KEY (id),

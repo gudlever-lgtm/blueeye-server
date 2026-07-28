@@ -1897,3 +1897,14 @@ li.guide-step.done .guide-step-title { text-decoration: line-through; opacity: 0
 .ts-marker.sev-CRIT { stroke: var(--bad); }
 .ts-marker.is-change { stroke-dasharray: 2 2; stroke-width: 3; }
 .ts-events { margin: 10px 0 0; }
+
+/* --- Language picker (Settings -> Appearance) ------------------------------- */
+.lang-picker { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--border); }
+.lang-picker h3 { margin: 0 0 8px; font-size: 1rem; }
+.lang-picker select { min-width: 200px; }
+.lang-picker p { margin: 8px 0 0; }
+/* Visually hidden but announced by screen readers. */
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}

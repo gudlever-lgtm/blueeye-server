@@ -85,6 +85,9 @@ function initTheme() {
   }
 }
 initTheme();
+// Language is applied before the first render (function declarations hoist, so
+// initLocale's definition further down is already available here).
+initLocale();
 const el = (tag, attrs = {}, ...kids) => {
   const node = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
@@ -377,7 +380,40 @@ function featureEnabled(name) {
   return featureEntitled(name);
 }
 
-// The user's saved preferences (currently just the colour theme). Loaded once
+// --- Language (i18n) ---------------------------------------------------------
+// Translation shim over public/i18n.js. NEW UI text goes through t(); the older
+// screens keep their inline English until they are touched. `t` is safe to call
+// before i18n.js has loaded (it degrades to the key), so nothing can crash on it.
+function t(key, params) {
+  return (window.I18n && window.I18n.t) ? window.I18n.t(key, params) : String(key);
+}
+function relTime(value) {
+  return (window.I18n && window.I18n.relativeTime) ? window.I18n.relativeTime(value) : String(value || '');
+}
+// Set once the user explicitly picks a language, so loadProfile()'s one-time
+// server reconcile can't overwrite a fresh choice still in flight (same guard
+// as themeUserChoice).
+let localeUserChoice = false;
+// Applies a locale immediately and persists it to the account. The local apply
+// never waits on the network; a failed save keeps the local choice.
+function setLocale(locale, { persist = true } = {}) {
+  if (!window.I18n) return Promise.resolve();
+  const applied = window.I18n.setLocale(locale);
+  if (persist) {
+    localeUserChoice = true;
+    if (token) return api('/me/preferences', { method: 'PUT', body: { locale: applied } });
+  }
+  return Promise.resolve();
+}
+// Seed from the previous session's cached locale (or the browser language) so
+// the first paint is right without waiting for GET /me.
+function initLocale() {
+  if (!window.I18n) return;
+  const nav = (navigator && navigator.language) || '';
+  window.I18n.setLocale(window.I18n.resolveLocale(window.I18n.storedLocale(), nav));
+}
+
+// The user's saved preferences (colour theme + dashboard language). Loaded once
 // per session; the server value wins over the local cache so the chosen theme
 // follows the user across browsers. Best-effort — a failure keeps the cache.
 let profileLoaded = false;
@@ -386,6 +422,13 @@ async function loadProfile() {
   profileLoaded = true;
   try {
     const me = await api('/me');
+    const locale = me && me.preferences && me.preferences.locale;
+    // Same precedence rule as the theme: a choice made this session wins.
+    if (!localeUserChoice && window.I18n) {
+      // No saved locale on this account → fall back to the browser language
+      // rather than inheriting what another account cached in this browser.
+      window.I18n.setLocale(window.I18n.resolveLocale(locale, (navigator && navigator.language) || ''));
+    }
     const theme = me && me.preferences && me.preferences.theme;
     // The theme belongs to this account. Skip only if the user already chose one
     // this session (e.g. toggled while this request was in flight) — their
@@ -10777,6 +10820,32 @@ function settingsAppearanceView() {
   }
   paint();
   root.append(grid);
+
+  // Language picker. The catalogue in public/i18n.js only covers the newer
+  // screens, so the help text says so rather than promising a fully localised
+  // dashboard. Saved to the account alongside the theme.
+  if (window.I18n) {
+    const langRow = el('div', { class: 'lang-picker' });
+    const select = el('select', {
+      id: 'locale-select',
+      onchange: async (e) => {
+        const next = e.target.value;
+        try { await setLocale(next); }
+        catch (err) { toast(errText(err) || 'Could not save language', true); }
+        render();
+      },
+    }, ...window.I18n.LOCALES.map((code) => el('option', {
+      value: code,
+      ...(code === window.I18n.getLocale() ? { selected: 'selected' } : {}),
+    }, window.I18n.LOCALE_LABELS[code] || code)));
+
+    langRow.append(
+      el('h3', {}, t('settings.language')),
+      el('label', { for: 'locale-select', class: 'sr-only' }, t('settings.language')),
+      select,
+      el('p', { class: 'muted small' }, t('settings.languageHelp')));
+    root.append(langRow);
+  }
   return root;
 }
 

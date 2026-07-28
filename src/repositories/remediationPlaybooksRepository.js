@@ -95,6 +95,31 @@ function createRemediationPlaybooksRepository(db) {
   // this joins through incident_cases in ONE query. Used by the per-target
   // timeline (avoids an N+1 over the host's incident cases) and keeps the
   // (fragile, string-vs-int) host_id join in a single auditable place.
+  // Every playbook run in a window, across all hosts — the changes feed asks
+  // "what was run while I was away", which is not a per-host question. Joined
+  // with the playbook name and the incident's host so the feed can label a row
+  // without an N+1 lookup per run.
+  async function listRunsBetween({ from = null, to = null, limit = 200 } = {}) {
+    const lim = Number.isInteger(limit) && limit > 0 && limit <= 2000 ? limit : 200;
+    const where = [];
+    const params = [];
+    if (from) { where.push('r.ran_at >= ?'); params.push(from); }
+    if (to) { where.push('r.ran_at <= ?'); params.push(to); }
+    params.push(lim);
+    const [rows] = await pool.query(
+      `SELECT r.id, r.incident_case_id, r.playbook_id, r.status, r.result_text, r.ran_by, r.ran_at,
+              p.name AS playbook_name, p.action_type, ic.host_id
+         FROM incident_playbook_runs r
+         JOIN remediation_playbooks p ON p.id = r.playbook_id
+         LEFT JOIN incident_cases ic ON ic.id = r.incident_case_id
+        ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+        ORDER BY r.ran_at DESC, r.id DESC
+        LIMIT ?`,
+      params
+    );
+    return rows.map(mapRun);
+  }
+
   async function listRunsForHost(hostId, { from = null, to = null, limit = 500 } = {}) {
     const lim = Number.isInteger(limit) && limit > 0 && limit <= 500 ? limit : 500;
     const where = ['ic.host_id = ?'];
@@ -128,7 +153,7 @@ function createRemediationPlaybooksRepository(db) {
     return Number(res.insertId);
   }
 
-  return { matchByAnomalyType, findById, list, listRunsForIncident, listRunsForHost, recordRun };
+  return { matchByAnomalyType, findById, list, listRunsForIncident, listRunsForHost, listRunsBetween, recordRun };
 }
 
 module.exports = { createRemediationPlaybooksRepository, mapPlaybook, mapRun };

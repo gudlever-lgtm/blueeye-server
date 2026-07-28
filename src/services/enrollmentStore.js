@@ -40,7 +40,7 @@ function createEnrollmentStore(db) {
       await conn.beginTransaction();
 
       // Expiry is evaluated in the database to avoid app/DB timezone skew.
-      // Matched on the SHA-256 of the code (migration 072 — codes are no longer
+      // Matched on the SHA-256 of the code (migration 076 — codes are no longer
       // stored in cleartext). The legacy `code` column is still consulted for
       // rows written before that migration and not yet expired.
       const [rows] = await conn.query(

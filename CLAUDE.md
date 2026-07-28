@@ -20,6 +20,10 @@ full HTTP route table, the data model, the dashboard structure, and a
   libraries, no cloud. Every finding/result carries an explanation + evidence.
 - **Dependency injection everywhere** — `createX(deps)` factories; `src/server.js` wires
   the real MySQL pool, tests wire fakes from `test-support/fakes.js`.
+- **New UI text goes through the translation layer** — `t('some.key')` via
+  `public/i18n.js` (en/da). The pre-existing screens are still hardcoded English and
+  migrate opportunistically; don't add new hardcoded strings. Add keys to BOTH
+  catalogues (a parity test enforces it, including placeholder parity).
 - **Version every change** — bump `package.json` `version` on each update (patch = fix,
   minor = feature, major = breaking), and bump the agent in lockstep when its code
   changes. The dashboard's **Settings → Updates** panel and the per‑agent "update" badge

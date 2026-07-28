@@ -72,7 +72,7 @@ function createEnrollCommandRouter({ enrollmentCodesRepo, artifactStore, sourceS
           return res.status(410).json({ error: 'Enrollment code is exhausted' });
         }
         // The code is decrypted from `code_enc`. It comes back null when the row
-        // predates migration 072 and its cleartext has already been stripped, or
+        // predates migration 076 and its cleartext has already been stripped, or
         // when no secret box is configured — tell the operator to mint a new one
         // rather than rendering a command with an empty code in it.
         if (!row.code) {

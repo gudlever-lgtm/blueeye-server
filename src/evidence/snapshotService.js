@@ -1,6 +1,7 @@
 'use strict';
 
 const { COMMAND_SET_VERSION, DEFAULT_ITEMS } = require('./commandAllowlist');
+const { parseArpTable } = require('../identity/arpTable');
 
 // Evidence snapshot capture engine (Fase 6). On cluster-open (and on a manual
 // re-snapshot), captures a READ-ONLY diagnostic snapshot from each affected
@@ -27,6 +28,7 @@ function createSnapshotService({
   evidenceRepo,
   agentCommander,
   releaseKeyService = null,
+  arpEntriesRepo = null,
   auditLogger = null,
   publishCluster = () => {},
   timeoutMs = 30 * 1000,
@@ -46,6 +48,33 @@ function createSnapshotService({
     } catch (err) {
       logger.warn(`evidence: could not sign command (${err.message})`);
       return command;
+    }
+  }
+
+  // Harvests the arp.table item out of a captured snapshot into the queryable
+  // arp_entries table (migration 073).
+  //
+  // The snapshot itself stays exactly as it was — an immutable gzip blob of what
+  // the agent said. This just also parses the one item that answers "which host
+  // holds this MAC/IP", because leaving that answer locked inside a blob is why
+  // the search field had no MAC resolver at all.
+  //
+  // Strictly best-effort and never awaited by the capture path: evidence capture
+  // is the job here, and an identity side-benefit must not be able to fail it.
+  async function harvestArp(agentId, replyItems) {
+    if (!arpEntriesRepo || typeof arpEntriesRepo.upsertMany !== 'function') return;
+    try {
+      const item = (Array.isArray(replyItems) ? replyItems : [])
+        .find((it) => it && it.name === 'arp.table' && it.status === OUTCOME.OK);
+      if (!item || item.payload == null) return;
+      const { entries, skipped } = parseArpTable(String(item.payload));
+      if (!entries.length) {
+        if (skipped) logger.warn(`evidence: arp.table from agent ${agentId} yielded no usable entries (${skipped} skipped)`);
+        return;
+      }
+      await arpEntriesRepo.upsertMany(agentId, entries, { source: 'evidence', at: now() });
+    } catch (err) {
+      logger.warn(`evidence: arp harvest failed for agent ${agentId} (${err.message})`);
     }
   }
 
@@ -122,6 +151,9 @@ function createSnapshotService({
     const evidence = out.reply.evidence || {};
     const { status, items, payloadText } = summarize(evidence.items);
     await evidenceRepo.complete(snapshotId, { status, items, payloadText });
+    // Identity harvest — awaited so a test can observe it, but it swallows its
+    // own errors, so it cannot fail the capture it rides along with.
+    await harvestArp(target, evidence.items);
     await auditCapture(clusterId, target, status);
     publishCluster({ id: clusterId, evidence: { snapshotId, target, status } });
   }

@@ -100,9 +100,12 @@ const PRO_FEATURES = [
   'premium_support',
 ];
 
-// The customer-facing packages, in ascending order of capability. `price_from`
-// marks "from" pricing. Prices are REFERENCE figures for the admin UI only —
-// never an enforcement input. Professional is the top tier.
+// The customer-facing packages, in ascending order of capability. Prices are
+// REFERENCE figures for the admin UI only — never an enforcement input.
+// `price_period` states the unit the figure is quoted in: 'per_agent_month' for
+// the paid plans (the reference figure is the monthly price per agent), or
+// 'trial' for Pilot (free during the trial, so the figures are null).
+// `price_from` marks "from" pricing. Professional is the top tier.
 const PLANS = {
   pilot: {
     plan_key: 'pilot',
@@ -115,8 +118,9 @@ const PLANS = {
     is_trial: true,
     trial_days: 60,
     is_enterprise: false,
-    price_reference_eur: 2500,
-    price_reference_dkk: 18500,
+    price_reference_eur: null,
+    price_reference_dkk: null,
+    price_period: 'trial',
     price_from: false,
   },
   starter: {
@@ -130,8 +134,9 @@ const PLANS = {
     is_trial: false,
     trial_days: 0,
     is_enterprise: false,
-    price_reference_eur: 4000,
-    price_reference_dkk: 30000,
+    price_reference_eur: 9,
+    price_reference_dkk: 67,
+    price_period: 'per_agent_month',
     price_from: false,
   },
   professional: {
@@ -145,8 +150,9 @@ const PLANS = {
     is_trial: false,
     trial_days: 0,
     is_enterprise: false,
-    price_reference_eur: 12000,
-    price_reference_dkk: 90000,
+    price_reference_eur: 29,
+    price_reference_dkk: 216,
+    price_period: 'per_agent_month',
     price_from: false,
   },
 };
@@ -179,6 +185,7 @@ const FALLBACK_PLANS = {
     is_enterprise: false,
     price_reference_eur: null,
     price_reference_dkk: null,
+    price_period: null,
     price_from: false,
     internal: true,
   },
@@ -195,6 +202,7 @@ const FALLBACK_PLANS = {
     is_enterprise: false,
     price_reference_eur: null,
     price_reference_dkk: null,
+    price_period: null,
     price_from: false,
     internal: true,
   },

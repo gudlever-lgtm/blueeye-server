@@ -16,6 +16,7 @@ const { createCmdbConnectorRegistry } = require('../src/cmdb/connectors');
 const { createPlanService } = require('../src/license/planService');
 const { createUsageService } = require('../src/services/usageService');
 const { createAuditLogger } = require('../src/services/complianceLogger');
+const { createInterfaceStateService } = require('../src/health/interfaceStateService');
 const { createSnapshotService } = require('../src/evidence/snapshotService');
 const { createBlastRadiusService } = require('../src/topology/blastRadiusService');
 const { createTopologyChangeService } = require('../src/topology/topologyChangeService');
@@ -44,6 +45,11 @@ function makeLocationsRepo(overrides = {}) {
 
 // A fake users repository.
 function makeUsersRepo(overrides = {}) {
+  // The per-user "changes seen up to here" marker (migration 074). Kept in a
+  // closure so a test can POST /api/changes/seen and then read it back, and so
+  // the monotonic rule (a stale tab cannot rewind the marker) is actually
+  // exercised rather than stubbed away.
+  let lastSeenChanges = overrides.initialLastSeenChanges || null;
   return {
     findAll: overrides.findAll || (async () => []),
     findById: overrides.findById || (async () => null),
@@ -65,6 +71,12 @@ function makeUsersRepo(overrides = {}) {
     countByRole: overrides.countByRole || (async () => 1),
     getPreferences: overrides.getPreferences || (async () => ({})),
     updatePreferences: overrides.updatePreferences || (async (id, patch) => ({ ...patch })),
+    getLastSeenChanges: overrides.getLastSeenChanges || (async () => lastSeenChanges),
+    setLastSeenChanges: overrides.setLastSeenChanges || (async (id, at) => {
+      // GREATEST(...) in the real repo — monotonic, never rewinds.
+      if (!lastSeenChanges || new Date(at) > lastSeenChanges) lastSeenChanges = new Date(at);
+      return true;
+    }),
   };
 }
 
@@ -128,10 +140,157 @@ function makeDiscoveredDevicesRepo(overrides = {}) {
     setStatus: overrides.setStatus || (async (id, status, { promotedAgentId = null } = {}) => {
       const r = rows.find((x) => x.id === Number(id)); if (!r) return 0; r.status = status; r.promoted_agent_id = promotedAgentId; return 1;
     }),
+    // Mirrors the real repo: exact on ip, substring on hostname, and 'ignored'
+    // candidates excluded (an operator said they do not care about it).
+    search: overrides.search || (async ({ q, limit = 10 } = {}) => {
+      const needle = String(q == null ? '' : q).trim().toLowerCase();
+      if (!needle) return [];
+      return rows
+        .filter((r) => r.status !== 'ignored'
+          && (String(r.ip).toLowerCase() === needle || String(r.hostname || '').toLowerCase().includes(needle)))
+        .sort((a, b) => (String(b.ip).toLowerCase() === needle) - (String(a.ip).toLowerCase() === needle)
+          || new Date(b.last_seen) - new Date(a.last_seen))
+        .slice(0, limit).map(mapOut);
+    }),
     countByStatus: overrides.countByStatus || (async () => {
       const out = { discovered: 0, promoted: 0, ignored: 0 };
       for (const r of rows) out[r.status] = (out[r.status] || 0) + 1;
       return out;
+    }),
+  };
+}
+
+// In-memory `interface_states` + `interface_state_transitions` (migration 075).
+// Mirrors the real repo including the flap-collapse update, so the service's
+// suppression logic is exercised rather than stubbed.
+function makeInterfaceStatesRepo(overrides = {}) {
+  const states = [];
+  const transitions = [];
+  let seq = 0;
+  const iso = (v) => (v == null ? null : (v instanceof Date ? v.toISOString() : new Date(v).toISOString()));
+  const mapState = (r) => ({
+    id: r.id, agentId: r.agent_id, iface: r.iface, status: r.status,
+    oper_status: r.oper_status ?? null, virtual: !!r.virtual,
+    firstSeen: iso(r.first_seen), lastSeen: iso(r.last_seen),
+  });
+  const mapTrans = (r) => ({
+    id: r.id, agentId: r.agent_id, iface: r.iface,
+    fromStatus: r.from_status ?? null, toStatus: r.to_status, operStatus: r.oper_status ?? null,
+    severity: r.severity, summary: r.summary,
+    flapCount: Number(r.flap_count || 1), flapping: !!r.flapping,
+    detectedAt: iso(r.detected_at),
+  });
+  return {
+    states,
+    transitions,
+    statesForAgent: overrides.statesForAgent || (async (agentId) => states
+      .filter((r) => r.agent_id === Number(agentId)).map(mapState)),
+    upsertStates: overrides.upsertStates || (async (agentId, rows, { at = new Date() } = {}) => {
+      for (const s of rows || []) {
+        const existing = states.find((r) => r.agent_id === Number(agentId) && r.iface === s.iface);
+        if (existing) {
+          existing.status = s.status; existing.oper_status = s.operStatus || null;
+          existing.virtual = s.virtual ? 1 : 0; existing.last_seen = at;
+        } else {
+          states.push({
+            id: (seq += 1), agent_id: Number(agentId), iface: s.iface, status: s.status,
+            oper_status: s.operStatus || null, virtual: s.virtual ? 1 : 0,
+            first_seen: at, last_seen: at,
+          });
+        }
+      }
+      return (rows || []).length;
+    }),
+    insertTransition: overrides.insertTransition || (async (agentId, t) => {
+      const id = (seq += 1);
+      transitions.push({
+        id, agent_id: Number(agentId), iface: t.iface, from_status: t.fromStatus,
+        to_status: t.toStatus, oper_status: t.operStatus || null, severity: t.severity,
+        summary: t.summary, flap_count: 1, flapping: 0, detected_at: t.detectedAt,
+      });
+      return id;
+    }),
+    latestForIface: overrides.latestForIface || (async ({ agentId, iface, since = null }) => {
+      const hits = transitions
+        .filter((r) => r.agent_id === Number(agentId) && r.iface === iface
+          && (!since || new Date(r.detected_at) >= new Date(since)))
+        .sort((a, b) => new Date(b.detected_at) - new Date(a.detected_at) || b.id - a.id);
+      return hits[0] ? mapTrans(hits[0]) : null;
+    }),
+    markFlapping: overrides.markFlapping || (async (id, { at }) => {
+      const r = transitions.find((x) => x.id === Number(id));
+      if (!r) return false;
+      r.flapping = 1;
+      r.flap_count += 1;
+      r.detected_at = at;
+      r.severity = 'WARN';
+      r.summary = `${String(r.summary).split(' (flapping')[0]} (flapping ${r.flap_count}\u00d7)`;
+      return true;
+    }),
+    list: overrides.list || (async ({ from = null, to = null, agentId = null, limit = 200 } = {}) => transitions
+      .filter((r) => (agentId == null || r.agent_id === Number(agentId))
+        && (!from || new Date(r.detected_at) >= new Date(from))
+        && (!to || new Date(r.detected_at) <= new Date(to)))
+      .sort((a, b) => new Date(b.detected_at) - new Date(a.detected_at) || b.id - a.id)
+      .slice(0, limit).map(mapTrans)),
+    purgeTransitionsBefore: overrides.purgeTransitionsBefore || (async (cutoff) => {
+      const before = transitions.length;
+      for (let i = transitions.length - 1; i >= 0; i -= 1) if (new Date(transitions[i].detected_at) < cutoff) transitions.splice(i, 1);
+      return before - transitions.length;
+    }),
+    purgeStatesBefore: overrides.purgeStatesBefore || (async (cutoff) => {
+      const before = states.length;
+      for (let i = states.length - 1; i >= 0; i -= 1) if (new Date(states[i].last_seen) < cutoff) states.splice(i, 1);
+      return before - states.length;
+    }),
+  };
+}
+
+// In-memory `arp_entries` (migration 073) — the IP<->MAC identity source. One
+// row per (agent, ip); a different MAC on a known ip rewrites it and stamps
+// macChangedAt, exactly as the real ON DUPLICATE KEY UPDATE does.
+function makeArpEntriesRepo(overrides = {}) {
+  const rows = [];
+  let seq = 0;
+  const iso = (v) => (v == null ? null : (v instanceof Date ? v.toISOString() : new Date(v).toISOString()));
+  const mapOut = (r) => ({
+    id: r.id, agentId: r.agent_id, ip: r.ip, mac: r.mac, interface: r.interface ?? null,
+    source: r.source, firstSeen: iso(r.first_seen), lastSeen: iso(r.last_seen), macChangedAt: iso(r.mac_changed_at),
+  });
+  return {
+    rows,
+    upsertMany: overrides.upsertMany || (async (agentId, entries, { source = 'capabilities', at = new Date() } = {}) => {
+      let n = 0;
+      for (const e of entries || []) {
+        const existing = rows.find((r) => r.agent_id === Number(agentId) && r.ip === e.ip);
+        if (existing) {
+          if (existing.mac !== e.mac) existing.mac_changed_at = at;
+          existing.mac = e.mac;
+          if (e.interface) existing.interface = e.interface;
+          existing.source = source;
+          existing.last_seen = at;
+        } else {
+          rows.push({
+            id: (seq += 1), agent_id: Number(agentId), ip: e.ip, mac: e.mac,
+            interface: e.interface || null, source, first_seen: at, last_seen: at, mac_changed_at: null,
+          });
+        }
+        n += 1;
+      }
+      return n;
+    }),
+    findByMac: overrides.findByMac || (async ({ mac, limit = 25 }) => rows
+      .filter((r) => r.mac === mac)
+      .sort((a, b) => new Date(b.last_seen) - new Date(a.last_seen)).slice(0, limit).map(mapOut)),
+    findByIp: overrides.findByIp || (async ({ ip, limit = 25 }) => rows
+      .filter((r) => r.ip === ip)
+      .sort((a, b) => new Date(b.last_seen) - new Date(a.last_seen)).slice(0, limit).map(mapOut)),
+    listForAgent: overrides.listForAgent || (async ({ agentId, limit = 500 }) => rows
+      .filter((r) => r.agent_id === Number(agentId)).slice(0, limit).map(mapOut)),
+    purgeBefore: overrides.purgeBefore || (async (cutoff) => {
+      const before = rows.length;
+      for (let i = rows.length - 1; i >= 0; i -= 1) if (new Date(rows[i].last_seen) < cutoff) rows.splice(i, 1);
+      return before - rows.length;
     }),
   };
 }
@@ -228,6 +387,53 @@ function makeIncidentsRepo(overrides = {}) {
 
 // A fake incident_cases repository (in-memory) — the first-class incident entity
 // wrapping findings (migration 047). Mirrors incidentCasesRepository's surface.
+// In-memory `incident_notes` (migration 072). Mirrors the real repository's
+// APPEND-ONLY surface exactly: append + reads, no update, no delete — so a test
+// cannot accidentally exercise a mutation path that production does not have.
+// Reads are oldest-first, matching the repo (a work log reads forward).
+function makeIncidentNotesRepo(overrides = {}) {
+  const rows = [];
+  let seq = 0;
+  const iso = (v) => (v == null ? null : (v instanceof Date ? v.toISOString() : new Date(v).toISOString()));
+  const mapOut = (r) => ({
+    id: r.id,
+    incidentCaseId: r.incident_case_id,
+    kind: r.kind,
+    text: r.text,
+    authorUserId: r.author_user_id ?? null,
+    authorEmail: r.author_email ?? null,
+    authorRole: r.author_role ?? null,
+    author: r.author_email || (r.author_user_id ? `user #${r.author_user_id}` : 'system'),
+    createdAt: iso(r.created_at),
+  });
+  const forCase = (id) => rows
+    .filter((r) => Number(r.incident_case_id) === Number(id))
+    .sort((a, b) => (a.created_at - b.created_at) || (a.id - b.id));
+  return {
+    rows,
+    append: overrides.append || (async ({ incidentCaseId, kind, text, authorUserId = null, authorEmail = null, authorRole = null }) => {
+      const id = (seq += 1);
+      // Monotonic timestamps: several notes appended in the same millisecond
+      // must still sort deterministically, which is what the id tiebreak in
+      // forCase() is for. Spacing them keeps the intent readable in failures.
+      const row = {
+        id, incident_case_id: Number(incidentCaseId), kind, text,
+        author_user_id: authorUserId, author_email: authorEmail, author_role: authorRole,
+        created_at: new Date(Date.UTC(2026, 0, 1) + id * 1000),
+      };
+      rows.push(row);
+      return mapOut(row);
+    }),
+    findById: overrides.findById || (async (id) => {
+      const r = rows.find((x) => x.id === Number(id));
+      return r ? mapOut(r) : null;
+    }),
+    listForIncident: overrides.listForIncident || (async ({ incidentCaseId, limit = 500 }) => forCase(incidentCaseId).slice(0, limit).map(mapOut)),
+    listRuledOut: overrides.listRuledOut || (async ({ incidentCaseId, limit = 200 }) => forCase(incidentCaseId).filter((r) => r.kind === 'ruled_out').slice(0, limit).map(mapOut)),
+    countForIncident: overrides.countForIncident || (async ({ incidentCaseId }) => forCase(incidentCaseId).length),
+  };
+}
+
 function makeIncidentCasesRepo(overrides = {}) {
   const rows = [];
   let seq = 0;
@@ -494,6 +700,12 @@ function makeRemediationPlaybooksRepo(overrides = {}) {
       .filter((r) => r.incident_case_id === Number(incidentCaseId))
       .sort((a, b) => new Date(b.ran_at) - new Date(a.ran_at) || b.id - a.id)
       .map(mapRun)),
+    // Fleet-wide runs in a window — what the changes feed asks for.
+    listRunsBetween: overrides.listRunsBetween || (async ({ from = null, to = null, limit = 200 } = {}) => runs
+      .filter((r) => (!from || new Date(r.ran_at) >= new Date(from)) && (!to || new Date(r.ran_at) <= new Date(to)))
+      .sort((a, b) => new Date(b.ran_at) - new Date(a.ran_at) || b.id - a.id)
+      .slice(0, limit)
+      .map(mapRun)),
   };
 }
 
@@ -550,6 +762,15 @@ function makeConfigSnapshotsRepo(overrides = {}) {
         && (!from || new Date(r.captured_at) >= new Date(from))
         && (!to || new Date(r.captured_at) <= new Date(to)))
       .sort((a, b) => before(a, b)) // oldest-first, like the real repo
+      .slice(0, limit)
+      .map((r) => mapOut(r, false))),
+    // Fleet-wide captures in a window, newest-first and metadata only (never
+    // config_text) — the changes feed must be able to say "a configuration
+    // changed here" without loading device configuration into a viewer list.
+    listBetween: overrides.listBetween || (async ({ from = null, to = null, limit = 200 } = {}) => rows
+      .filter((r) => (!from || new Date(r.captured_at) >= new Date(from))
+        && (!to || new Date(r.captured_at) <= new Date(to)))
+      .sort((a, b) => before(b, a))
       .slice(0, limit)
       .map((r) => mapOut(r, false))),
   };
@@ -859,7 +1080,13 @@ function makeFlowPairBaselinesRepo(overrides = {}) {
       .filter((r) => iso(r.bucket) === iso(bucket))
       .map((r) => ({ srcHostId: r.srcHostId, dstHostId: r.dstHostId, dstPort: r.dstPort, proto: r.proto, bucket: iso(r.bucket), bytes: r.bytes, packets: r.packets, connCount: r.connCount }))),
     upsertBaselines: overrides.upsertBaselines || (async (rows) => {
-      for (const r of Array.isArray(rows) ? rows : []) baselines.set(bkey(r), { ...r });
+      // The real table stamps updated_at ON UPDATE CURRENT_TIMESTAMP and the
+      // repo maps it out; the baseline-context UI reads it for the hover age, so
+      // the fake must produce it too or a test would pass against a shape
+      // production never returns.
+      for (const r of Array.isArray(rows) ? rows : []) {
+        baselines.set(bkey(r), { updatedAt: new Date().toISOString(), ...r });
+      }
       return (rows || []).length;
     }),
     baselinesForSlot: overrides.baselinesForSlot || (async ({ dow, hour }) => [...baselines.values()].filter((b) => b.dow === dow && b.hour === hour)),
@@ -2082,8 +2309,19 @@ function makeApp(overrides = {}) {
   const lldpNeighborsRepo = overrides.lldpNeighborsRepo || makeLldpNeighborsRepo();
   const serviceDependenciesRepo = overrides.serviceDependenciesRepo || makeServiceDependenciesRepo();
   const hostConnectionsRepo = overrides.hostConnectionsRepo || makeHostConnectionsRepo();
+  const arpEntriesRepo = overrides.arpEntriesRepo === undefined ? makeArpEntriesRepo() : overrides.arpEntriesRepo;
+  const interfaceStatesRepo = overrides.interfaceStatesRepo === undefined ? makeInterfaceStatesRepo() : overrides.interfaceStatesRepo;
+  // The REAL service over the fake repo, so transition detection + flap collapse
+  // are exercised end-to-end on results ingest rather than stubbed.
+  const interfaceStateService = overrides.interfaceStateService === undefined
+    ? (interfaceStatesRepo ? createInterfaceStateService({ interfaceStatesRepo }) : null)
+    : overrides.interfaceStateService;
   const topologyChangesRepo = overrides.topologyChangesRepo || makeTopologyChangesRepo();
-  const flowPairBaselinesRepo = overrides.flowPairBaselinesRepo || makeFlowPairBaselinesRepo();
+  // `=== undefined` (not `||`) so a test can pass null to exercise the
+  // not-wired path — a deployment without migration 068 has no baselines at all.
+  const flowPairBaselinesRepo = overrides.flowPairBaselinesRepo === undefined
+    ? makeFlowPairBaselinesRepo()
+    : overrides.flowPairBaselinesRepo;
   // Real topology-change service over the fakes, so change detection + flap
   // suppression + audit-log writes are exercised end-to-end on capabilities ingest.
   const topologyChangeService = overrides.topologyChangeService === undefined
@@ -2108,6 +2346,7 @@ function makeApp(overrides = {}) {
     probeResultsRepo: overrides.probeResultsRepo || makeProbeResultsRepo(),
     incidentsRepo: overrides.incidentsRepo || makeIncidentsRepo(),
     incidentCasesRepo: overrides.incidentCasesRepo || makeIncidentCasesRepo(),
+    incidentNotesRepo: overrides.incidentNotesRepo === undefined ? makeIncidentNotesRepo() : overrides.incidentNotesRepo,
     incidentClustersRepo: overrides.incidentClustersRepo || makeIncidentClustersRepo(),
     alertDispatchLogRepo: overrides.alertDispatchLogRepo || makeAlertDispatchLogRepo(),
     clusterNotifier: overrides.clusterNotifier || null,
@@ -2135,6 +2374,9 @@ function makeApp(overrides = {}) {
     lldpNeighborsRepo,
     serviceDependenciesRepo,
     hostConnectionsRepo,
+    arpEntriesRepo,
+    interfaceStatesRepo,
+    interfaceStateService,
     serviceDependencyJob: overrides.serviceDependencyJob || null,
     blastRadiusService,
     topologyChangesRepo,
@@ -2254,6 +2496,7 @@ module.exports = {
   makeProbeResultsRepo,
   makeIncidentsRepo,
   makeIncidentCasesRepo,
+  makeIncidentNotesRepo,
   makeIncidentClustersRepo,
   makeRunbooksRepo,
   makeVerificationRunsRepo,
@@ -2264,6 +2507,8 @@ module.exports = {
   makeTopologyChangesRepo,
   makeFlowPairBaselinesRepo,
   makeDiscoveredDevicesRepo,
+  makeArpEntriesRepo,
+  makeInterfaceStatesRepo,
   makeAlertDispatchLogRepo,
   makeEvidenceSnapshotsRepo,
   makeRemediationPlaybooksRepo,

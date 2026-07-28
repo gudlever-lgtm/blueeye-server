@@ -1,4 +1,4 @@
--- 072 — stop keeping enrollment codes in cleartext.
+-- 076 — stop keeping enrollment codes in cleartext.
 --
 -- An enrollment code is a credential: whoever holds one can enroll a machine
 -- into the fleet as a trusted agent. Until now it was stored verbatim in

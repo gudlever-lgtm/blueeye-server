@@ -85,6 +85,9 @@ function initTheme() {
   }
 }
 initTheme();
+// Language is applied before the first render (function declarations hoist, so
+// initLocale's definition further down is already available here).
+initLocale();
 const el = (tag, attrs = {}, ...kids) => {
   const node = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
@@ -358,7 +361,7 @@ function applyRoleVisibility() {
   for (const b of document.querySelectorAll('.tabs button[data-min-role]')) {
     const allowed = roleAtLeast(b.dataset.minRole);
     b.classList.toggle('role-hidden', !allowed);
-    if (!allowed && currentView === b.dataset.view) currentView = 'fleet';
+    if (!allowed && currentView === b.dataset.view) currentView = 'changes';
   }
   // Collapse category groups whose items are all hidden (by role or licence).
   // Only nav items count — the category-label button never keeps a group alive.
@@ -377,7 +380,40 @@ function featureEnabled(name) {
   return featureEntitled(name);
 }
 
-// The user's saved preferences (currently just the colour theme). Loaded once
+// --- Language (i18n) ---------------------------------------------------------
+// Translation shim over public/i18n.js. NEW UI text goes through t(); the older
+// screens keep their inline English until they are touched. `t` is safe to call
+// before i18n.js has loaded (it degrades to the key), so nothing can crash on it.
+function t(key, params) {
+  return (window.I18n && window.I18n.t) ? window.I18n.t(key, params) : String(key);
+}
+function relTime(value) {
+  return (window.I18n && window.I18n.relativeTime) ? window.I18n.relativeTime(value) : String(value || '');
+}
+// Set once the user explicitly picks a language, so loadProfile()'s one-time
+// server reconcile can't overwrite a fresh choice still in flight (same guard
+// as themeUserChoice).
+let localeUserChoice = false;
+// Applies a locale immediately and persists it to the account. The local apply
+// never waits on the network; a failed save keeps the local choice.
+function setLocale(locale, { persist = true } = {}) {
+  if (!window.I18n) return Promise.resolve();
+  const applied = window.I18n.setLocale(locale);
+  if (persist) {
+    localeUserChoice = true;
+    if (token) return api('/me/preferences', { method: 'PUT', body: { locale: applied } });
+  }
+  return Promise.resolve();
+}
+// Seed from the previous session's cached locale (or the browser language) so
+// the first paint is right without waiting for GET /me.
+function initLocale() {
+  if (!window.I18n) return;
+  const nav = (navigator && navigator.language) || '';
+  window.I18n.setLocale(window.I18n.resolveLocale(window.I18n.storedLocale(), nav));
+}
+
+// The user's saved preferences (colour theme + dashboard language). Loaded once
 // per session; the server value wins over the local cache so the chosen theme
 // follows the user across browsers. Best-effort — a failure keeps the cache.
 let profileLoaded = false;
@@ -386,6 +422,13 @@ async function loadProfile() {
   profileLoaded = true;
   try {
     const me = await api('/me');
+    const locale = me && me.preferences && me.preferences.locale;
+    // Same precedence rule as the theme: a choice made this session wins.
+    if (!localeUserChoice && window.I18n) {
+      // No saved locale on this account → fall back to the browser language
+      // rather than inheriting what another account cached in this browser.
+      window.I18n.setLocale(window.I18n.resolveLocale(locale, (navigator && navigator.language) || ''));
+    }
     const theme = me && me.preferences && me.preferences.theme;
     // The theme belongs to this account. Skip only if the user already chose one
     // this session (e.g. toggled while this request was in flight) — their
@@ -679,6 +722,16 @@ function settingsLink(tab, label) {
 }
 
 const PAGE_INFO = {
+  changes: {
+    hero: 'What happened since you last looked — agent and link transitions, new anomalies and incidents, playbook runs and configuration changes, newest first.',
+    title: 'Changes — since you last looked',
+    body: () => [
+      el('p', {}, 'This is the landing page because a dashboard full of green answers a question nobody asked. The shift starts with ', el('strong', {}, 'what happened while I was away'), ' — so this page shows change, not status.'),
+      el('p', {}, 'Pick a window, or leave it on ', el('strong', {}, 'since you last looked'), '. That reference point moves ', el('strong', {}, 'only'), ' when you press “Mark as seen” — never just because you opened the page — so it can still tell you what is new next time.'),
+      el('p', {}, 'Rows marked ', el('strong', {}, 'current state'), ' are conditions rather than transitions. A stale heartbeat or an agent running an old version is something we know is true ', el('em', {}, 'now'), '; neither is recorded as a transition, so we cannot say when it started, and we would rather say that than invent a time.'),
+      el('p', { class: 'muted' }, 'The Fleet page is still the right screen for bulk operations across agents — it just was not the right screen to open on.'),
+    ],
+  },
   docs: {
     hero: 'Documentation & how-to guides — step-by-step troubleshooting walkthroughs with worked examples, plus (for admins) setup guides for integrations like ServiceNow, including what a working connection and a failure look like.',
     title: 'Documentation — guides & how-tos',
@@ -3800,8 +3853,136 @@ views.incident = async () => {
     })();
   }
 
-  return el('div', { class: 'incident-detail' }, header, controls, guideCard, anomaliesCard, blastCard, timelineCard, similarCard, pathCard, ...extra);
+  // Work log — the shift handover. Mounted high (right after the status
+  // controls) because "what has already been tried and excluded" is what the
+  // next shift must read before anything else, not a footnote below six cards.
+  const notesCard = incidentNotesCard(id);
+
+  return el('div', { class: 'incident-detail' }, header, controls, notesCard, guideCard, anomaliesCard, blastCard, timelineCard, similarCard, pathCard, ...extra);
 };
+
+// ---- Incident work log (Fase 3) --------------------------------------------
+// Append-only log of observations, actions taken and — the reason this exists —
+// causes that have been RULED OUT. The ruled-out entries render as a separate,
+// pinned list above the chronological log: the next shift's first question is
+// "what has already been disproved?", and they should not have to read a
+// timeline to answer it.
+//
+// The server serves ruledOut as its own array (indexed, never truncated), so
+// this does not client-side filter the log — the exclusions must not be the rows
+// that fall off a cap.
+const NOTE_KINDS = ['observation', 'action', 'ruled_out'];
+
+function noteEntryEl(note) {
+  return el('li', { class: `wl-entry wl-${note.kind}` },
+    el('div', { class: 'wl-entry-head' },
+      el('span', { class: `badge wl-kind-${note.kind}` }, t(`notes.kind.${note.kind}`)),
+      el('span', { class: 'muted small' },
+        t('notes.byline', { author: note.author || '—', when: fmtDate(note.createdAt) }))),
+    el('p', { class: 'wl-text' }, esc(note.text)));
+}
+
+function incidentNotesCard(incidentId) {
+  const card = el('div', { class: 'card work-log' });
+  const body = el('div', {}, el('div', { class: 'muted' }, t('search.loading')));
+  card.append(el('h3', {}, t('notes.title')), body);
+
+  async function load() {
+    let data;
+    try {
+      data = await api(`/api/incidents/${incidentId}/notes`);
+    } catch (err) {
+      body.replaceChildren(
+        el('p', { class: 'error' }, t('notes.loadError', { message: errText(err) })),
+        el('button', { class: 'small ghost', onclick: load }, t('common.retry')));
+      return;
+    }
+
+    const kids = [];
+
+    // Pinned exclusions first — this is the whole point of the panel.
+    const ruledOut = data.ruledOut || [];
+    kids.push(el('div', { class: `wl-ruled-out${ruledOut.length ? '' : ' is-empty'}` },
+      el('h4', {}, t('notes.ruledOutTitle')),
+      el('p', { class: 'muted small' }, t('notes.ruledOutHint')),
+      ruledOut.length
+        ? el('ul', { class: 'wl-list' }, ...ruledOut.map(noteEntryEl))
+        : el('p', { class: 'muted' }, t('notes.ruledOutEmpty'))));
+
+    // Then the full log, chronological (as served).
+    const notes = data.notes || [];
+    kids.push(notes.length
+      ? el('ul', { class: 'wl-list wl-log' }, ...notes.map(noteEntryEl))
+      : el('p', { class: 'empty' }, t('notes.empty')));
+
+    if (canWrite()) kids.push(noteComposer(incidentId, load));
+    else kids.push(el('p', { class: 'muted small' }, t('notes.readOnly')));
+
+    kids.push(el('p', { class: 'muted small wl-note' }, t('notes.appendOnly')));
+    body.replaceChildren(...kids);
+  }
+
+  load();
+  return card;
+}
+
+// The add-entry form. `kind` is an explicit choice with no default selected —
+// the server rejects an omitted kind rather than guessing, and the UI must not
+// paper over that by pre-picking "observation" for someone who meant "ruled out".
+function noteComposer(incidentId, onSaved) {
+  const form = el('form', { class: 'wl-composer' });
+  const textarea = el('textarea', {
+    rows: '3',
+    id: `wl-text-${incidentId}`,
+    placeholder: t('notes.textPlaceholder'),
+    required: 'required',
+  });
+  const errorLine = el('p', { class: 'error hidden' });
+
+  const kindRadios = NOTE_KINDS.map((kind) => el('label', { class: 'wl-kind-choice' },
+    el('input', { type: 'radio', name: `wl-kind-${incidentId}`, value: kind }),
+    el('span', {}, t(`notes.kind.${kind}`)),
+    el('span', { class: 'muted small' }, t(`notes.kind.${kind}.help`))));
+
+  const submit = el('button', { type: 'submit', class: 'small' }, t('notes.submit'));
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    errorLine.classList.add('hidden');
+    const checked = form.querySelector(`input[name="wl-kind-${incidentId}"]:checked`);
+    const text = textarea.value.trim();
+    // Mirror the server's two rules locally so the common mistakes are caught
+    // before a round-trip — the server still enforces both.
+    if (!text || !checked) {
+      errorLine.textContent = !text ? t('notes.text') : t('notes.kind');
+      errorLine.classList.remove('hidden');
+      return;
+    }
+    submit.disabled = true;
+    submit.textContent = t('notes.saving');
+    try {
+      await api(`/api/incidents/${incidentId}/notes`, { method: 'POST', body: { text, kind: checked.value } });
+      textarea.value = '';
+      checked.checked = false;
+      if (typeof onSaved === 'function') await onSaved();
+    } catch (err) {
+      errorLine.textContent = t('notes.error', { message: errText(err) });
+      errorLine.classList.remove('hidden');
+    } finally {
+      submit.disabled = false;
+      submit.textContent = t('notes.submit');
+    }
+  });
+
+  form.append(
+    el('h4', {}, t('notes.add')),
+    el('label', { for: `wl-text-${incidentId}` }, t('notes.text')),
+    textarea,
+    el('fieldset', { class: 'wl-kinds' }, el('legend', {}, t('notes.kind')), ...kindRadios),
+    errorLine,
+    el('div', { class: 'form-actions' }, submit));
+  return form;
+}
 
 // ---- Incident Situation View (cross-agent clusters) ------------------------
 // "ét fælles billede": one page per cluster answering what/where/since-when,
@@ -7044,48 +7225,244 @@ function exportInvestigationMenu(id, name) {
   $('#modal').classList.remove('hidden');
 }
 
-// Global search (topbar): agents/hosts/locations + which agents recently saw an
-// IP/port. Results open in a modal; each is a shortcut into the agent/flow views.
+// Global search (topbar): the universal entry point (Fase 1). One field takes
+// whatever the technician knows — an IP, a MAC, a hostname, a site, an agent, a
+// service — and lands them on the right screen.
+//
+// Results are grouped by type and every row shows its SOURCE and its AGE. That
+// is not decoration: a hit built on an ARP entry from three weeks ago and one
+// built on this morning's capabilities report look identical without it, and
+// only one of them is worth driving to a site for.
+//
+// Backed by GET /api/search. Focus shortcut ("/") and the topbar pill already
+// exist — see the #topbar-search wiring at the bottom of this file.
+
+// type -> the i18n key for its group heading.
+const SEARCH_GROUP_ORDER = ['ip', 'mac', 'host', 'device', 'site', 'service', 'asset', 'user'];
+
+// Turns a hit's `target` into a navigation action, or null when the hit is
+// informational only (a CMDB asset has no screen in this product).
+function searchTargetAction(hit) {
+  const t = String(hit.target || '');
+  let m;
+  if ((m = t.match(/^agent:(\d+)$/))) return () => openAgent(Number(m[1]));
+  if ((m = t.match(/^location:(\d+)$/))) return () => openLocation(Number(m[1]));
+  if ((m = t.match(/^flows:port:(\d+)$/))) return () => openFlows(null, { port: Number(m[1]) });
+  if ((m = t.match(/^flows:(\d+):port:(\d+)$/))) return () => openFlows(Number(m[1]), { port: Number(m[2]) });
+  if ((m = t.match(/^flows:(\d+):(.+)$/))) return () => openFlows(Number(m[1]), { peer: m[2] });
+  if (t.startsWith('discovered:')) return () => { currentView = 'discovery'; render(); };
+  return null;
+}
+
+// One result row: name, then the provenance line the whole feature turns on.
+function searchHitEl(hit, onNavigate) {
+  const action = searchTargetAction(hit);
+  const meta = el('span', { class: 'search-meta muted small' },
+    el('span', { class: `search-conf conf-${hit.confidence}` }, t(`search.confidence.${hit.confidence}`)),
+    ' · ',
+    t('search.source', { source: hit.source }),
+    ' · ',
+    hit.last_seen ? t('search.lastSeen', { when: relTime(hit.last_seen) }) : t('search.lastSeenNever'));
+
+  const body = el('span', { class: 'search-item-body' },
+    el('span', { class: 'search-name' }, esc(hit.display_name)),
+    hit.detail ? el('span', { class: 'search-detail muted small' }, esc(hit.detail)) : null,
+    meta);
+
+  // A hit with nowhere to go renders as a non-interactive row rather than a
+  // button that does nothing when clicked.
+  if (!action) return el('div', { class: 'search-item is-static' }, body);
+  return el('button', {
+    class: 'search-item',
+    onclick: () => { if (typeof onNavigate === 'function') onNavigate(); action(); },
+  }, body);
+}
+
 async function globalSearch(q) {
   q = String(q || '').trim();
   if (!q) return;
   const card = $('#modal-card');
-  card.replaceChildren(el('h3', {}, `Search: ${esc(q)}`), el('div', { class: 'muted' }, 'Searching…'));
+  const title = () => el('h3', {}, `${t('search.title')}: ${esc(q)}`);
+  const closeBtn = () => el('div', { class: 'form-actions' },
+    el('button', { class: 'ghost', onclick: closeModal }, t('search.close')));
+
+  card.replaceChildren(title(), el('div', { class: 'muted' }, t('search.loading')));
   $('#modal').classList.remove('hidden');
+
   let data;
-  try { data = await api(`/api/search?q=${encodeURIComponent(q)}`); }
-  catch (e) { card.replaceChildren(el('h3', {}, 'Search'), el('p', { class: 'error' }, e.message), el('div', { class: 'form-actions' }, el('button', { class: 'ghost', onclick: closeModal }, 'Close'))); return; }
-  const item = (label, sub, onclick) => el('button', { class: 'search-item', onclick }, el('span', {}, label), sub || null);
-  const kids = [el('h3', {}, `Search: ${esc(q)}`)];
-  let any = false;
-  if (data.agents.length) {
-    any = true;
-    kids.push(el('h4', {}, 'Agents'));
-    kids.push(el('div', { class: 'search-list' }, ...data.agents.map((a) => item(
-      esc(a.name), el('span', { class: `badge ${a.status === 'online' ? 'online' : 'offline'}` }, a.status || '?'),
-      () => { closeModal(); openAgent(a.id); }))));
+  try {
+    data = await api(`/api/search?q=${encodeURIComponent(q)}`);
+  } catch (e) {
+    // A too-short query is a 400 with a specific message; surface it rather than
+    // a generic failure, so the user knows to keep typing.
+    card.replaceChildren(title(), el('p', { class: 'error' }, t('search.error', { message: errText(e) })), closeBtn());
+    return;
   }
-  if (data.flows && data.flows.ip && data.flows.ip.agents.length) {
-    any = true;
-    kids.push(el('h4', {}, `IP ${esc(data.flows.ip.ip)} `, el('span', { class: 'muted' }, '· set af')));
-    kids.push(el('div', { class: 'search-list' }, ...data.flows.ip.agents.map((a) => item(
-      esc(a.name), el('span', { class: 'muted' }, '→ flows'), () => { closeModal(); openFlows(a.id, { peer: data.flows.ip.ip }); }))));
+
+  const kids = [title()];
+  const hits = data.hits || [];
+
+  if (data.partial && (data.failedSources || []).length) {
+    kids.push(el('p', { class: 'warn small' }, t('search.partial', { sources: data.failedSources.join(', ') })));
   }
-  if (data.flows && data.flows.port && data.flows.port.agents.length) {
-    any = true;
-    kids.push(el('h4', {}, `Port ${data.flows.port.port} `, el('span', { class: 'muted' }, '· set af')));
-    kids.push(el('div', { class: 'search-list' }, ...data.flows.port.agents.map((a) => item(
-      esc(a.name), el('span', { class: 'muted' }, '→ flows'), () => { closeModal(); openFlows(a.id, { port: data.flows.port.port }); }))));
+
+  if (!hits.length) {
+    kids.push(el('div', { class: 'empty' },
+      el('p', {}, t('search.empty', { q: esc(q) })),
+      el('p', { class: 'muted small' }, t('search.emptyHint'))));
+  } else {
+    kids.push(el('p', { class: 'muted small' }, t('search.resultCount', { count: data.total })));
+    // Group in the fixed order above so the layout does not reshuffle between
+    // searches — a moving target is harder to scan under pressure.
+    const byType = new Map();
+    hits.forEach((h) => {
+      if (!byType.has(h.type)) byType.set(h.type, []);
+      byType.get(h.type).push(h);
+    });
+    for (const type of SEARCH_GROUP_ORDER) {
+      const group = byType.get(type);
+      if (!group || !group.length) continue;
+      kids.push(el('h4', {}, t(`search.group.${type}`)));
+      kids.push(el('div', { class: 'search-list' }, ...group.map((h) => searchHitEl(h, closeModal))));
+    }
+    if (data.truncated) {
+      kids.push(el('p', { class: 'muted small' },
+        t('changes.truncated', { shown: hits.length, total: data.total })));
+    }
   }
-  if (data.locations.length) {
-    any = true;
-    kids.push(el('h4', {}, 'Locations'));
-    kids.push(el('div', { class: 'search-list' }, ...data.locations.map((l) => item(esc(l.name), null, () => { closeModal(); currentView = 'map'; render(); }))));
-  }
-  if (!any) kids.push(el('div', { class: 'empty' }, 'No results.'));
-  kids.push(el('div', { class: 'form-actions' }, el('button', { class: 'ghost', onclick: closeModal }, 'Close')));
+
+  kids.push(closeBtn());
   card.replaceChildren(...kids);
 }
+
+
+// ---- Changes: the landing page (Fase 2) ------------------------------------
+// A status dashboard full of green answers a question nobody asked. The shift
+// starts with "what happened while I was away", so THIS is the default route
+// and the fleet grid moved to its own (it is still the right screen for bulk
+// operations — it was never the right screen to open on).
+//
+// Backed by GET /api/changes. Rows reuse the shared timeline event shape, so
+// they render through TimelineView.renderRow rather than a second row renderer
+// that would drift from the timeline's.
+
+// Window presets offered in the picker, plus the "since I last looked" mode
+// that is the whole point.
+const CHANGES_WINDOWS = ['30m', '6h', '24h', '7d'];
+let changesWindow = '24h';
+let changesSince = 'last_login';
+
+function changesRowEl(event, nameFor) {
+  const row = window.TimelineView.renderRow(document, event, {});
+  // A current-state row must not read as "this happened in your window": we
+  // know the condition, not when it began (heartbeat and agent version are not
+  // transition-logged). Labelling it is the honest option; inferring a start
+  // time would be inventing history.
+  if (event.currentState) {
+    row.classList.add('chg-current');
+    row.append(el('span', { class: 'badge chg-current-badge' }, t('changes.currentState')));
+  }
+  // Deep-link into whatever the row is about.
+  if (event.agentId != null) {
+    row.append(el('button', {
+      class: 'small ghost chg-open',
+      onclick: () => openAgent(Number(event.agentId)),
+    }, nameFor(event.agentId)));
+  } else if (event.kind === 'incident' && event.ref_id != null && event.source === 'incident_case') {
+    row.append(el('button', { class: 'small ghost chg-open', onclick: () => openIncident(Number(event.ref_id)) }, '→'));
+  } else if (event.kind === 'cluster' && event.ref_id != null) {
+    row.append(el('button', { class: 'small ghost chg-open', onclick: () => openCluster(Number(event.ref_id)) }, '→'));
+  }
+  return row;
+}
+
+views.changes = async () => {
+  const root = el('div', { class: 'changes-view' });
+  const head = el('div', { class: 'section-head' },
+    el('h2', {}, t('changes.title')),
+    el('span', { class: 'muted' }, t('changes.subtitle')));
+  const controls = el('div', { class: 'chg-controls' });
+  const body = el('div', {}, el('div', { class: 'muted' }, t('changes.loading')));
+  root.append(head, controls, body);
+
+  let agents = [];
+  try { agents = await api('/agents'); } catch { /* labels are best-effort */ }
+  const nameById = {};
+  (agents || []).forEach((a) => { nameById[a.id] = a.display_name || a.hostname || `agent ${a.id}`; });
+  const nameFor = (id) => nameById[id] || `agent ${id}`;
+
+  async function load() {
+    body.replaceChildren(el('div', { class: 'muted' }, t('changes.loading')));
+    let data;
+    try {
+      const qs = new URLSearchParams({ window: changesWindow });
+      if (changesSince) qs.set('since', changesSince);
+      data = await api(`/api/changes?${qs.toString()}`);
+    } catch (err) {
+      body.replaceChildren(
+        el('p', { class: 'error' }, t('changes.error', { message: errText(err) })),
+        el('button', { class: 'small ghost', onclick: load }, t('common.retry')));
+      return;
+    }
+
+    const kids = [];
+    kids.push(el('p', { class: 'muted small' }, t('changes.since', { when: fmtDate(data.since) })));
+
+    if (data.partial && (data.failedSources || []).length) {
+      kids.push(el('p', { class: 'warn small' }, t('changes.partial', { sources: data.failedSources.join(', ') })));
+    }
+
+    if (!data.events.length) {
+      // A meaningful empty state: the reference time is what makes "no changes"
+      // an answer rather than a blank page.
+      kids.push(el('div', { class: 'empty' },
+        el('p', {}, t('changes.empty', { when: fmtDate(data.since) })),
+        el('p', { class: 'muted small' }, t('changes.emptyHint'))));
+    } else {
+      for (const group of data.groups) {
+        kids.push(el('h3', { class: `chg-group sev-${group.severity}` }, t(`changes.group.${group.severity}`),
+          el('span', { class: 'muted small' }, ` (${group.events.length})`)));
+        const ul = el('ul', { class: 'timeline-list' });
+        group.events.forEach((e) => ul.append(changesRowEl(e, nameFor)));
+        kids.push(ul);
+      }
+      if (data.truncated) {
+        kids.push(el('p', { class: 'muted small' }, t('changes.truncated', { shown: data.returned, total: data.total })));
+      }
+    }
+    body.replaceChildren(...kids);
+  }
+
+  // Window picker + the explicit mark-as-seen. The marker moves ONLY here —
+  // never on a load — so the page can still tell you what is new next time.
+  const winSel = el('select', {
+    onchange: (e) => { changesWindow = e.target.value; load(); },
+  }, ...CHANGES_WINDOWS.map((w) => el('option', {
+    value: w, ...(w === changesWindow ? { selected: 'selected' } : {}),
+  }, w)));
+
+  const seenBtn = el('button', {
+    class: 'small',
+    onclick: async () => {
+      seenBtn.disabled = true;
+      try {
+        await api('/api/changes/seen', { method: 'POST', body: {} });
+        toast(t('changes.marked'));
+        changesSince = 'last_login';
+        await load();
+      } catch (err) { toast(errText(err), true); }
+      finally { seenBtn.disabled = false; }
+    },
+  }, t('changes.markSeen'));
+
+  controls.append(
+    el('label', {}, t('changes.window'), ' ', winSel),
+    seenBtn,
+    el('button', { class: 'small ghost', onclick: () => { currentView = 'fleet'; render(); } }, t('changes.fleetLink')));
+
+  await load();
+  return root;
+};
 
 const fleetState = { timer: null };
 function stopFleet() { if (fleetState.timer) { clearInterval(fleetState.timer); fleetState.timer = null; } }
@@ -10777,6 +11154,32 @@ function settingsAppearanceView() {
   }
   paint();
   root.append(grid);
+
+  // Language picker. The catalogue in public/i18n.js only covers the newer
+  // screens, so the help text says so rather than promising a fully localised
+  // dashboard. Saved to the account alongside the theme.
+  if (window.I18n) {
+    const langRow = el('div', { class: 'lang-picker' });
+    const select = el('select', {
+      id: 'locale-select',
+      onchange: async (e) => {
+        const next = e.target.value;
+        try { await setLocale(next); }
+        catch (err) { toast(errText(err) || 'Could not save language', true); }
+        render();
+      },
+    }, ...window.I18n.LOCALES.map((code) => el('option', {
+      value: code,
+      ...(code === window.I18n.getLocale() ? { selected: 'selected' } : {}),
+    }, window.I18n.LOCALE_LABELS[code] || code)));
+
+    langRow.append(
+      el('h3', {}, t('settings.language')),
+      el('label', { for: 'locale-select', class: 'sr-only' }, t('settings.language')),
+      select,
+      el('p', { class: 'muted small' }, t('settings.languageHelp')));
+    root.append(langRow);
+  }
   return root;
 }
 
@@ -14089,7 +14492,10 @@ function txTrendSvg(rows) {
   return wrap;
 }
 
-let currentView = 'fleet';
+// The landing route is the CHANGES page, not the fleet grid: a screen full of
+// green does not tell a shift what happened while they were away. The fleet grid
+// is still the right screen for bulk operations, so it keeps its own route.
+let currentView = 'changes';
 const modalOpen = () => !$('#modal').classList.contains('hidden');
 
 // One-time per session: stamp the sidebar foot with this server's build —

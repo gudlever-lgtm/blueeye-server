@@ -22,7 +22,7 @@ const STATUS_CASE = `
 
 // An enrollment code is a credential (whoever holds one can enroll a machine as
 // a trusted agent), so it is not kept in cleartext. Two columns split the two
-// jobs, see migration 072:
+// jobs, see migration 076:
 //   code_hash — SHA-256, what every lookup matches on
 //   code_enc  — the code encrypted at rest (secretBox), decrypted only for the
 //               authenticated "rebuild the install command" endpoint
@@ -40,7 +40,7 @@ function createEnrollmentCodesRepository(db, { secretBox = null } = {}) {
   };
 
   // The plaintext of a stored row: the encrypted copy when we have one, else the
-  // legacy cleartext column (rows created before migration 072 that are still
+  // legacy cleartext column (rows created before migration 076 that are still
   // active). Returns null when neither is available — the caller then tells the
   // operator to generate a new code rather than showing a wrong one.
   function decryptCode(row) {
@@ -105,7 +105,7 @@ function createEnrollmentCodesRepository(db, { secretBox = null } = {}) {
 
   // Full row for one code id, INCLUDING the plaintext code — decrypted here for
   // the authenticated command-generation endpoint to rebuild an install command.
-  // `code` is null when the row predates migration 072 and has already been
+  // `code` is null when the row predates migration 076 and has already been
   // stripped, or when no secret box is configured; callers must handle that.
   async function findById(id) {
     const [rows] = await pool.query(`
@@ -125,7 +125,7 @@ function createEnrollmentCodesRepository(db, { secretBox = null } = {}) {
   // reject unknown/expired/exhausted codes before rendering a script).
   async function findByCode(code) {
     // Matched on the hash. The legacy cleartext column is still consulted for
-    // rows written before migration 072 (short-lived, so they drain quickly).
+    // rows written before migration 076 (short-lived, so they drain quickly).
     const [rows] = await pool.query(`
       SELECT e.id, e.location_id, e.expires_at, e.used_at, e.created_at,
              e.max_uses, e.uses_remaining,${STATUS_CASE}

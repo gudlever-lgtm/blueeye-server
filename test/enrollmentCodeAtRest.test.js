@@ -60,7 +60,7 @@ test('findById decrypts the stored code for the install-command endpoint', async
 test('findById falls back to a legacy cleartext row, and yields null when neither is usable', async () => {
   const secretBox = createSecretBox({ key: 'test-key-for-enrollment-codes' });
 
-  // Written before migration 072: cleartext still present, no ciphertext.
+  // Written before migration 076: cleartext still present, no ciphertext.
   const legacy = makePool({ row: { code: 'LEGACY-CODE', code_enc: null } });
   assert.equal((await createEnrollmentCodesRepository({ pool: legacy.pool }, { secretBox }).findById(5)).code, 'LEGACY-CODE');
 

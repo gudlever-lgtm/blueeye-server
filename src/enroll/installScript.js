@@ -14,8 +14,9 @@
 //   4. for native installs (binary or node) lays the agent out in the versioned
 //      releases/<v> + `current` symlink layout (state in /var/lib, logs in
 //      /var/log) so signed self-updates can swap releases atomically with rollback,
-//   5. fetches the release public key from the server and pins it, so SIGNED
-//      self-updates verify with no manual key provisioning,
+//   5. pins the release public key so SIGNED self-updates verify — from
+//      BLUEEYE_RELEASE_PUBLIC_KEY if provisioned out of band, else the key
+//      already pinned on the host, else (trust-on-first-use) the server's,
 //   6. enrolls with the embedded one-time code (pinning the cert fingerprint).
 // It is idempotent (re-running reuses the stored token) and exposes a few env
 // hooks (BLUEEYE_CURL, BLUEEYE_SHA256, BLUEEYE_RUNTIME, BLUEEYE_DRY_RUN) so the
@@ -77,9 +78,40 @@ TOKEN_VOLUME="\${BLUEEYE_TOKEN_VOLUME:-blueeye-agent-data}"
 CURL="\${BLUEEYE_CURL:-curl}"
 SHA256="\${BLUEEYE_SHA256:-}"
 RUNTIME="\${BLUEEYE_RUNTIME:-}"   # force binary|docker|node|none (default: auto)
+UNIT_DIR="\${BLUEEYE_UNIT_DIR:-/etc/systemd/system}"
 
 log()  { printf '[blueeye] %s\\n' "$*"; }
 fail() { printf '[blueeye] ERROR: %s\\n' "$*" >&2; exit 1; }
+
+# Resolves the release trust anchor — the Ed25519 PUBLIC key the agent verifies
+# SIGNED self-updates against. The order below is a security order, not a
+# convenience one:
+#   1. BLUEEYE_RELEASE_PUBLIC_KEY, provisioned out of band. Always wins.
+#   2. a key already pinned on this host. Re-running the installer must never
+#      silently re-anchor an installed agent to a different key — that would
+#      hand a server that is compromised LATER a way to replace the very anchor
+#      that is supposed to detect it.
+#   3. the server. Convenient (no manual provisioning) but trust-on-first-use:
+#      the same host that ships the code hands out the key that authenticates
+#      it, so it only protects against a later compromise. Say so out loud.
+# Prints the key (PEM or base64) on stdout, or nothing when none is available.
+# Callers capture stdout, so every message in here goes to stderr.
+resolve_release_key() {
+  if [ -n "\${BLUEEYE_RELEASE_PUBLIC_KEY:-}" ]; then
+    log "release key: using the provisioned BLUEEYE_RELEASE_PUBLIC_KEY" >&2
+    printf '%s' "$BLUEEYE_RELEASE_PUBLIC_KEY"
+    return 0
+  fi
+  if [ -s "$UNIT_DIR/$SERVICE_NAME.service.d/10-release-key.conf" ]; then
+    log "release key: already pinned on this host — keeping it" >&2
+    return 0
+  fi
+  KEY_FROM_SERVER=$($CURL -fsSL "$SERVER_URL/enroll/agent-release-key" 2>/dev/null || true)
+  if [ -n "$KEY_FROM_SERVER" ]; then
+    log "release key: taken from the server (trust-on-first-use). To anchor it independently, re-install with BLUEEYE_RELEASE_PUBLIC_KEY set from an out-of-band copy." >&2
+  fi
+  printf '%s' "$KEY_FROM_SERVER"
+}
 
 pick_sha_tool() {
   [ -n "$SHA256" ] && return 0
@@ -230,8 +262,8 @@ install_binary() {
   DEST="$RELEASES/\${AGENT_VERSION:-$(date +%Y%m%d%H%M%S)}"
   rm -rf "$DEST"; mv "$STAGE" "$DEST"
 
-  # Fetch the release trust anchor (same as the node install path).
-  RELEASE_KEY=$($CURL -fsSL "$SERVER_URL/enroll/agent-release-key" 2>/dev/null || true)
+  # Resolve the release trust anchor (same as the node install path).
+  RELEASE_KEY=$(resolve_release_key)
 
   # Enroll once (idempotent: skipped when a token already exists).
   FP_ARG=""
@@ -332,10 +364,9 @@ install_node() {
   # is atomic on POSIX), so a later signed update swaps releases the same way.
   point_current "$DEST"
 
-  # Fetch the release trust anchor (Ed25519 public key) from the server so SIGNED
-  # self-updates verify automatically — no manual key provisioning. Not secret;
-  # optional (older server / unconfigured key -> 404 -> empty, unsigned-only).
-  RELEASE_KEY=$($CURL -fsSL "$SERVER_URL/enroll/agent-release-key" 2>/dev/null || true)
+  # Resolve the release trust anchor (Ed25519 public key) so SIGNED self-updates
+  # verify. Not secret; optional (no key anywhere -> empty -> unsigned-only).
+  RELEASE_KEY=$(resolve_release_key)
 
   # Enroll once (idempotent: skipped when a token already exists), writing the
   # token to the SHARED state dir so a release swap never loses it.
@@ -422,7 +453,7 @@ install_service() {
     log "  $EXEC_START"
     return 0
   fi
-  UNIT="/etc/systemd/system/$SERVICE_NAME.service"
+  UNIT="$UNIT_DIR/$SERVICE_NAME.service"
   # Runs from the \`current\` symlink so a signed update can swap the release dir
   # underneath atomically. Token/config/log live OUTSIDE the swappable release dir
   # so updates never touch them.
@@ -451,14 +482,38 @@ Environment=BLUEEYE_CURRENT_LINK=$CURRENT
 Environment=BLUEEYE_RUNTIME=$RUNTIME_TAG
 Environment=BLUEEYE_SERVICE_NAME=$SERVICE_NAME
 
+# Sandboxing — bounds what the (root) agent process can reach, while staying
+# compatible with self-update (tar + npm, then systemctl restart), self-delete
+# (uninstall.sh) and install-tool (host package manager). Kept in sync with
+# blueeye-agent deploy/blueeye-agent.service, which documents why
+# ProtectSystem=, ProcSubset=, CapabilityBoundingSet= and SystemCallFilter= are
+# deliberately absent.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=read-only
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+# AF_NETLINK: \`ss\` (connection table) and \`ethtool\` (NIC inventory). AF_UNIX:
+# the D-Bus call behind systemctl.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+UMask=0077
+LimitCORE=0
+
 [Install]
 WantedBy=multi-user.target
 UNIT_EOF
 
   # Release trust anchor as a drop-in (base64 keeps the multi-line PEM on a single
-  # Environment= line; the agent decodes base64-of-PEM). Only when the server gave
-  # us a key — otherwise signed self-updates need BLUEEYE_RELEASE_PUBLIC_KEY set by hand.
-  if [ -n "$RELEASE_KEY" ] && command -v base64 >/dev/null 2>&1; then
+  # Environment= line; the agent decodes base64-of-PEM). RELEASE_KEY comes from
+  # resolve_release_key, which returns EMPTY when a key is already pinned here —
+  # so a re-install never re-anchors an installed agent to a different key.
+  if [ -z "$RELEASE_KEY" ] && [ -s "$UNIT.d/10-release-key.conf" ]; then
+    log "signed self-updates: keeping the release key already pinned on this host"
+  elif [ -n "$RELEASE_KEY" ] && command -v base64 >/dev/null 2>&1; then
     mkdir -p "$UNIT.d"
     KEY_B64=$(printf '%s' "$RELEASE_KEY" | base64 | tr -d '\\n')
     {
@@ -469,7 +524,7 @@ UNIT_EOF
   elif [ -n "$RELEASE_KEY" ]; then
     log "note: 'base64' missing — set BLUEEYE_RELEASE_PUBLIC_KEY manually for signed self-updates"
   else
-    log "note: server published no release key — signed self-updates need BLUEEYE_RELEASE_PUBLIC_KEY set manually"
+    log "note: no release key available — signed self-updates need BLUEEYE_RELEASE_PUBLIC_KEY set manually"
   fi
 
   systemctl daemon-reload

@@ -26,6 +26,7 @@ const { createIncidentsRepository } = require('./repositories/incidentsRepositor
 const { createIncidentThresholdsRepository } = require('./repositories/incidentThresholdsRepository');
 const { createIncidentService } = require('./incidents/incidentService');
 const { createInstallToolService } = require('./services/installToolService');
+const { createCommandSigner } = require('./services/commandSigner');
 const { createArtifactStore } = require('./enroll/artifactStore');
 const { createAgentSourceStore } = require('./enroll/agentSourceStore');
 const { createAgentBinaryStore } = require('./enroll/agentBinaryStore');
@@ -233,7 +234,14 @@ function start() {
   const auditLogRepo = createAuditLogRepository(db);
   const apiTokensRepo = createApiTokensRepository(db);
   const auditLogger = createAuditLogger({ auditLogRepo, logger });
-  const enrollmentCodesRepo = createEnrollmentCodesRepository(db);
+  // Secret box: AES-256-GCM encryption for secrets stored at rest (enrollment
+  // codes, integration credentials, the LDAP bind password, transaction-test
+  // secrets). Constructed here because the enrollment-codes repository below is
+  // its first consumer. See src/lib/secretBox.js.
+  const secretBox = createSecretBox({ key: config.security.secretKey });
+  // It lets that repository store enrollment codes encrypted at rest and decrypt
+  // one for the authenticated install-command endpoint (migration 076).
+  const enrollmentCodesRepo = createEnrollmentCodesRepository(db, { secretBox });
   const enrollmentStore = createEnrollmentStore(db);
   const agentTokensRepo = createAgentTokensRepository(db);
   const resultsRepo = createResultsRepository(db);
@@ -339,11 +347,6 @@ function start() {
   // Active throughput ("speed test") results reported by agents.
   const speedtestResultsRepo = createSpeedtestResultsRepository(db);
 
-  // Secret box: AES-256-GCM encryption for secrets stored at rest (integration
-  // credentials, the LDAP bind password, transaction-test secrets). See
-  // src/lib/secretBox.js.
-  const secretBox = createSecretBox({ key: config.security.secretKey });
-
   // Transaction tests (http/tcp/dns/icmp journeys): config pushed to agents over
   // WS, results ingested over WS. Secrets (config_secrets) are AES-256-GCM at rest
   // via secretBox. See src/routes/transactions.js + src/ws/agentSocket.js.
@@ -356,6 +359,11 @@ function start() {
   // env/embedded key, so deployments that set AGENT_RELEASE_PUBLIC_KEY keep working.
   const agentReleaseKeyRepo = createAgentReleaseKeyRepository(db);
   const releaseKeyService = createReleaseKeyService({ repo: agentReleaseKeyRepo, secretBox, logger });
+  // Signs the privileged agent commands (upgrade/delete/install-tool) with the
+  // same key that signs releases, so an agent can verify the SERVER asked — not
+  // merely something holding its socket. No managed key => commands go out
+  // unsigned exactly as before.
+  const commandSigner = createCommandSigner({ releaseKeyService, logger });
 
   // Outbound API integrations (ITSM/IPAM connectors). The dispatcher fans domain
   // events (incidents/anomalies, agent enroll/delete) out to enabled targets with
@@ -726,7 +734,7 @@ function start() {
   // pushes an install-tool command when a probe fails because the tool is
   // missing on the host. Threaded into probe ingest below.
   const installToolService = createInstallToolService({
-    agentCommander, auditRepo, auditEventsRepo, agentsRepo, settingsService, logger,
+    agentCommander, auditRepo, auditEventsRepo, agentsRepo, settingsService, commandSigner, logger,
   });
   // Now that settingsService exists, give the dispatcher its maintenance silencer.
   dispatcher.setSilencer(createSilencer({
@@ -850,6 +858,7 @@ function start() {
     thresholdsRepo,
     incidentService,
     installToolService,
+    commandSigner,
     agentCommander,
     systemInfo,
     serverUpdateService,

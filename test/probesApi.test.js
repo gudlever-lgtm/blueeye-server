@@ -485,6 +485,26 @@ test('validateProbeSpec rejects bad transactions (no steps, bad url, bad regex)'
   assert.ok(validateProbeSpec({ type: 'transaction', steps: [{ url: 'https://x/', extract: { name: 'bad name', pattern: 'x' } }] }).errors);
 });
 
+test('validateProbeSpec rejects a transaction step that points curl at a local file', () => {
+  // `curl -H @file` reads request headers from disk and `curl --data @file` reads
+  // the body from disk — on an agent running as root that is an arbitrary file
+  // read, exfiltrated to the step's URL. Neither shape is a valid probe spec.
+  const header = validateProbeSpec({ type: 'transaction', steps: [{ url: 'https://x/', header: '@/etc/shadow' }] });
+  assert.ok(header.errors);
+  assert.match(header.errors['steps[0].header'], /Name: value/);
+
+  const data = validateProbeSpec({ type: 'transaction', steps: [{ url: 'https://x/', method: 'POST', data: '@/etc/shadow' }] });
+  assert.ok(data.errors);
+  assert.match(data.errors['steps[0].data'], /must not start with "@"/);
+
+  // A header that would split the request is rejected for the same reason.
+  assert.ok(validateProbeSpec({ type: 'transaction', steps: [{ url: 'https://x/', header: 'X-A: 1\r\nX-B: 2' }] }).errors);
+  // …while an ordinary field and body still pass.
+  const ok = validateProbeSpec({ type: 'transaction', steps: [{ url: 'https://x/', method: 'POST', header: 'Authorization: Bearer t', data: 'a=1' }] });
+  assert.equal(ok.errors, undefined);
+  assert.equal(ok.value.steps[0].header, 'Authorization: Bearer t');
+});
+
 test('toRow serialises pageload elements to JSON', () => {
   const row = toRow(9, { ts: new Date('2026-06-01T00:00:00Z'), type: 'pageload', target: 'https://x/', ok: true, rttMs: 800, bytes: 9000, elements: [{ url: 'https://x/', kind: 'document', status: 200, bytes: 9000, ms: 800 }] });
   assert.equal(row[2], 'pageload');

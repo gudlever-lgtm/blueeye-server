@@ -3,6 +3,14 @@
 const PROBE_TYPES = ['ping', 'tcp', 'dns', 'traceroute', 'http', 'curl', 'pageload', 'transaction'];
 const HTTP_METHODS = ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'];
 const HEADER_EXPECT_RE = /^[A-Za-z0-9!#$%&'*+.^_`|~-]+(\s*:\s*.{1,200})?$/;
+// A REQUEST header on a transaction step must be a real `Name: value` field.
+// curl reads `-H @file` from the local disk, so a value that isn't a field
+// (notably one starting '@') would turn a probe into an arbitrary file read on
+// the agent host. The agent enforces this independently (src/probes/curlArgs.js);
+// rejecting it here as well keeps the bad spec out of the database and gives the
+// operator a real error instead of a silently failing step. No CR/LF either —
+// that would split the request.
+const HEADER_SEND_RE = /^[A-Za-z0-9!#$%&'*+.^_`|~-]+:[^\r\n]*$/;
 const MAX_RESULTS = 200;
 // Host/IP/hostname must start alphanumeric (so it can never be read as a CLI
 // flag like "-rf") and contain only host-safe characters.
@@ -191,13 +199,18 @@ function validateProbeSpec(body) {
         step.expectBody = eb;
       }
       if (s.header) {
-        const h = String(s.header);
+        const h = String(s.header).trim();
         if (h.length > 256) return { errors: { [`steps[${i}].header`]: 'header must be <=256 chars' } };
+        if (!HEADER_SEND_RE.test(h)) return { errors: { [`steps[${i}].header`]: 'header must be a "Name: value" field (a local-file reference is not accepted)' } };
         step.header = h;
       }
       if (s.data) {
         const d = String(s.data);
         if (d.length > 2048) return { errors: { [`steps[${i}].data`]: 'data must be <=2048 chars' } };
+        // '@' is curl's "read the body from this file" marker. The agent sends
+        // the body with --data-raw so it is never opened, but a spec that only
+        // makes sense as a file read is a mistake (or an attempt) either way.
+        if (d.startsWith('@')) return { errors: { [`steps[${i}].data`]: 'data must not start with "@" (a local-file reference is not accepted)' } };
         step.data = d;
       }
       if (s.extract && typeof s.extract === 'object' && (s.extract.name || s.extract.pattern)) {

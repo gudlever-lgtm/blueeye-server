@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { execFileSync } = require('node:child_process');
+const { execFileSync, spawnSync } = require('node:child_process');
 
 const { renderInstallScript } = require('../src/enroll/installScript');
 
@@ -95,8 +95,9 @@ test('renderInstallScript has empty binary SHAs when no checksums provided', () 
   assert.match(script, /BINARY_SHA_LINUX_ARM64=""/);
 });
 
-// Build a fake `curl` that writes fixed bytes to the -o target, so the script's
-// real SHA-256 verification can be exercised without any network or system writes.
+// Build a fake `curl` that writes fixed bytes to the -o target (or to stdout when
+// there is no -o, as the release-key fetch does), so the script's real SHA-256
+// verification can be exercised without any network or system writes.
 function writeFakeCurl(dir) {
   const p = path.join(dir, 'fake-curl');
   fs.writeFileSync(p, `#!/bin/sh
@@ -107,7 +108,11 @@ while [ $# -gt 0 ]; do
     *) shift ;;
   esac
 done
-printf '%s' "$BLUEEYE_FAKE_BYTES" > "$out"
+if [ -n "$out" ]; then
+  printf '%s' "$BLUEEYE_FAKE_BYTES" > "$out"
+else
+  printf '%s' "$BLUEEYE_FAKE_BYTES"
+fi
 `, { mode: 0o755 });
   fs.chmodSync(p, 0o755);
   return p;
@@ -256,4 +261,83 @@ test('renderInstallScript runs the agent connection self-test (doctor) after ins
   assert.match(script, /run_doctor/);
   assert.match(script, /node "\$CURRENT\/src\/index\.js" doctor/);
   assert.match(script, /docker exec "\$CONTAINER" node src\/index\.js doctor/);
+});
+
+// ---- release trust anchor (resolve_release_key) ---------------------------
+//
+// The installer must never silently re-anchor an installed agent to a different
+// release key: a server compromised AFTER install could otherwise replace the
+// very key that is supposed to detect it. These exercise the real shell function
+// by sourcing the script with its `main "$@"` entry point stripped off.
+
+function sourceAndCall(script, snippet, env = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'blueeye-key-'));
+  const lib = path.join(dir, 'lib.sh');
+  fs.writeFileSync(lib, `${script.replace(/\nmain "\$@"\s*$/, '\n')}\n${snippet}\n`);
+  // The function logs to stderr (its stdout is the key itself), so both streams
+  // are needed to assert on the value AND on what the operator was told.
+  const r = spawnSync('sh', [lib], { env: { ...process.env, ...env }, encoding: 'utf8' });
+  assert.equal(r.status, 0, `snippet failed: ${r.stderr}`);
+  return `${r.stdout}${r.stderr}`;
+}
+
+test('resolve_release_key prefers an out-of-band provisioned key over the server', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'blueeye-curl-'));
+  const curl = writeFakeCurl(dir);
+  const script = renderInstallScript({ serverUrl: 'http://x', code: 'C', sourceSha: SHA });
+  const out = sourceAndCall(script, 'printf "KEY=[%s]\\n" "$(resolve_release_key)"', {
+    BLUEEYE_CURL: curl,
+    BLUEEYE_FAKE_BYTES: 'key-from-server',
+    BLUEEYE_RELEASE_PUBLIC_KEY: 'key-from-operator',
+  });
+  assert.match(out, /KEY=\[key-from-operator\]/);
+  assert.match(out, /provisioned BLUEEYE_RELEASE_PUBLIC_KEY/);
+});
+
+test('resolve_release_key keeps a key already pinned on the host', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'blueeye-curl-'));
+  const curl = writeFakeCurl(dir);
+  const unitDir = fs.mkdtempSync(path.join(os.tmpdir(), 'blueeye-units-'));
+  fs.mkdirSync(path.join(unitDir, 'blueeye-agent.service.d'), { recursive: true });
+  fs.writeFileSync(
+    path.join(unitDir, 'blueeye-agent.service.d', '10-release-key.conf'),
+    '[Service]\nEnvironment=BLUEEYE_RELEASE_PUBLIC_KEY=already-pinned\n'
+  );
+
+  const script = renderInstallScript({ serverUrl: 'http://x', code: 'C', sourceSha: SHA });
+  const out = sourceAndCall(script, 'printf "KEY=[%s]\\n" "$(resolve_release_key)"', {
+    BLUEEYE_CURL: curl,
+    BLUEEYE_FAKE_BYTES: 'key-from-server',
+    BLUEEYE_UNIT_DIR: unitDir,
+  });
+  // Empty return = "leave the pinned drop-in alone"; the server's key is ignored.
+  assert.match(out, /KEY=\[\]/);
+  assert.match(out, /already pinned on this host/);
+  assert.doesNotMatch(out, /key-from-server/);
+});
+
+test('resolve_release_key falls back to the server and says it is trust-on-first-use', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'blueeye-curl-'));
+  const curl = writeFakeCurl(dir);
+  const unitDir = fs.mkdtempSync(path.join(os.tmpdir(), 'blueeye-units-'));
+  const script = renderInstallScript({ serverUrl: 'http://x', code: 'C', sourceSha: SHA });
+  const out = sourceAndCall(script, 'printf "KEY=[%s]\\n" "$(resolve_release_key)"', {
+    BLUEEYE_CURL: curl,
+    BLUEEYE_FAKE_BYTES: 'key-from-server',
+    BLUEEYE_UNIT_DIR: unitDir,
+  });
+  assert.match(out, /KEY=\[key-from-server\]/);
+  assert.match(out, /trust-on-first-use/);
+});
+
+test('the generated systemd unit is sandboxed', () => {
+  const script = renderInstallScript({ serverUrl: 'http://x', code: 'C', sourceSha: SHA });
+  for (const directive of ['NoNewPrivileges=yes', 'PrivateTmp=yes', 'ProtectHome=read-only', 'RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK', 'UMask=0077', 'LimitCORE=0']) {
+    assert.ok(script.includes(directive), `unit is missing ${directive}`);
+  }
+  // ProtectSystem would break install-tool (the package manager writes /usr) and
+  // ProcSubset=pid would hide /proc/net from the proc traffic source. Match on a
+  // directive at the start of a line, so the comment naming them doesn't count.
+  assert.doesNotMatch(script, /^ProtectSystem=/m, 'ProtectSystem must stay off');
+  assert.doesNotMatch(script, /^ProcSubset=/m, 'ProcSubset must stay off');
 });

@@ -11,7 +11,8 @@ const { isAllowedTool, toolForProbeFailure } = require('../agentTools');
 // Everything is best-effort and must never break probe ingestion.
 function createInstallToolService({
   agentCommander = null, auditRepo = null, auditEventsRepo = null,
-  agentsRepo = null, settingsService = null, logger = console, throttleHours = 1,
+  agentsRepo = null, settingsService = null, commandSigner = null,
+  logger = console, throttleHours = 1,
 } = {}) {
   async function autoEnabled() {
     if (!settingsService || typeof settingsService.getAgents !== 'function') return false;
@@ -72,7 +73,10 @@ function createInstallToolService({
 
         const command = { name: 'install-tool', tool };
         if (auditId) command.auditId = auditId;
-        const delivered = agentCommander.sendCommand(agentId, command);
+        // Sign it like the operator-triggered path — an agent configured to
+        // require signed commands must accept the auto-install too. Signed LAST,
+        // once auditId is attached, because the audit id is part of the payload.
+        const delivered = agentCommander.sendCommand(agentId, commandSigner ? commandSigner.sign(agentId, command) : command);
         if (!delivered && auditRepo && typeof auditRepo.complete === 'function' && auditId) {
           try { await auditRepo.complete(auditId, { state: 'failed', resultDetail: 'agent not connected' }); } catch { /* best-effort */ }
         }

@@ -166,6 +166,14 @@ code, e.g. with Ansible:
 
 - **Short-lived codes** — default 1 hour (`ENROLLMENT_CODE_TTL_MINUTES`),
   configurable per code; bulk codes are bounded by count *and* time.
+- **Codes are not stored in cleartext** (migration 076) — a code is a credential,
+  so the database holds only its SHA-256 (`code_hash`, what every lookup matches
+  on) plus an AES-256-GCM copy (`code_enc`, via secretBox) that only the
+  authenticated `GET /api/enroll/command?codeId=…` endpoint decrypts. A database
+  read therefore yields no usable codes, matching how agent tokens have always
+  been stored. A code minted *before* that migration still enrolls (its hash was
+  backfilled), but its one-liner can no longer be re-displayed — that endpoint
+  answers `409` and the operator generates a new code.
 - **Checksum always verified** — the installer aborts before building or running
   anything if the downloaded source bundle's SHA-256 doesn't match the embedded
   value. The manual variant shows the URL + checksum so cautious users can inspect

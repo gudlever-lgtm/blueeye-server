@@ -154,6 +154,7 @@ function createApiRouter({
   releaseStore,
   releasePublicKey,
   releaseKeyService,
+  commandSigner = null,
   // Runs the host's configured update script from Settings → Updates (null =
   // no SERVER_UPDATE_COMMAND, so the panel only shows the manual command).
   serverUpdateService = null,
@@ -494,7 +495,7 @@ function createApiRouter({
   //   - POST /results          — agent token
   //   - POST /enroll           — unauthenticated
   // Requests fall through routers that have no matching route.
-  router.use('/agents', createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentCommander, agentSourceStore, releaseStore, releasePublicKey, publishRelease: () => publishSignedReleaseFromSource({ sourceStore: agentSourceStore, releaseStore, releaseKeyService }), auditRepo, integrationTrigger: integrationsDispatcher, logger, reconnect: agentReconnect }));
+  router.use('/agents', createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentCommander, agentSourceStore, releaseStore, releasePublicKey, publishRelease: () => publishSignedReleaseFromSource({ sourceStore: agentSourceStore, releaseStore, releaseKeyService }), auditRepo, integrationTrigger: integrationsDispatcher, commandSigner, logger, reconnect: agentReconnect }));
   router.use('/audit', createAuditRouter({ auditRepo }));
   // Unified, server-wide audit trail (Reporting → Audit) — admin only.
   if (auditEventsRepo) router.use('/api/audit', createAuditEventsRouter({ auditEventsRepo, auditLogRepo, featureGate }));

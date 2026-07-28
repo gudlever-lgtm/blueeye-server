@@ -60,3 +60,6 @@ full HTTP route table, the data model, the dashboard structure, and a
   Agent-side data changes (e.g. probes, interface errors/discards) require redeploying
   agents (`git pull && ./install.sh`); keep the server backward‑compatible.
 - **blueeye-licens** — signs Ed25519 license proofs that `src/license/` verifies offline.
+  Those proofs also carry the newest **published** server/agent versions, which drive
+  "update available" in Settings → Updates (`docs/updates.md`) — so bumping a version in
+  these repos is what eventually tells customers an update exists.

@@ -2,9 +2,36 @@
 
 const crypto = require('crypto');
 const { verifyProof } = require('./verify');
+const { isValidVersion } = require('../lib/version');
 
 const silentLogger = { info() {}, warn() {}, error() {} };
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+// Normalises one component entry of the proof's `releases` field
+// ({ version, released_at }) into { version, releasedAt }, or null when the
+// signer sent nothing usable. A malformed version is dropped rather than
+// surfaced: a phantom "update available" badge is worse than no badge.
+function normalizeReleaseEntry(entry) {
+  if (!entry || typeof entry !== 'object') return null;
+  const version = typeof entry.version === 'string' ? entry.version.trim() : '';
+  if (!isValidVersion(version)) return null;
+  const releasedAt =
+    typeof entry.released_at === 'string' && entry.released_at.trim() ? entry.released_at.trim() : null;
+  return { version, releasedAt };
+}
+
+// Normalises the whole `releases` object from a verified proof. Returns null
+// when the signer tracks no releases (older signers omit the field entirely),
+// which every caller must treat as "we simply don't know".
+function normalizeReleases(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const server = normalizeReleaseEntry(raw.server);
+  const agent = normalizeReleaseEntry(raw.agent);
+  if (!server && !agent) return null;
+  const checkedAt =
+    typeof raw.checked_at === 'string' && !Number.isNaN(Date.parse(raw.checked_at)) ? raw.checked_at : null;
+  return { server, agent, checkedAt };
+}
 
 // `fetch()` rejects with a generic TypeError('fetch failed') and hides the real
 // network error on `.cause` (and, for happy-eyeballs multi-address attempts, in
@@ -76,6 +103,10 @@ function createLicenseManager({
     verifiedAt: null, // ms timestamp of last successful valid validation
     lastCheckAt: null,
     lastError: null,
+    // Newest component versions the licens server published in the last
+    // signature-verified proof: { server, agent, checkedAt } (see
+    // getAvailableReleases). Update info, NOT entitlement — see the note there.
+    releases: null,
   };
 
   let timer = null;
@@ -118,6 +149,9 @@ function createLicenseManager({
     if (cached && cached.payload && typeof cached.verifiedAt === 'number') {
       state.payload = cached.payload;
       state.verifiedAt = cached.verifiedAt;
+      // The cached proof also carries the release info it was signed with, so an
+      // offline server still knows about the last update it heard about.
+      state.releases = normalizeReleases(cached.payload.releases);
       applyOfflineFallback();
     }
     return state;
@@ -220,6 +254,15 @@ function createLicenseManager({
       return getStatus();
     }
 
+    // The proof is now fully trusted (signature, serverId, nonce, freshness), so
+    // record the release info it carries. Done for a negative proof too: which
+    // versions the vendor has published is not entitlement, and a customer whose
+    // licence lapsed still benefits from seeing that a newer version exists.
+    // A signer that tracks nothing sends null — keep whatever we last knew rather
+    // than forgetting it.
+    const releases = normalizeReleases(payload.releases);
+    if (releases) state.releases = releases;
+
     // Trusted proof.
     if (payload.valid === true) {
       state.payload = payload;
@@ -271,6 +314,27 @@ function createLicenseManager({
     if (!isLicensed()) return '';
     const p = state.payload && state.payload.plan;
     return typeof p === 'string' ? p : '';
+  }
+
+  // The newest server/agent versions the licens server told us about in the last
+  // signature-verified proof:
+  //
+  //   { server: { version, releasedAt } | null,
+  //     agent:  { version, releasedAt } | null,
+  //     checkedAt: ISO-8601 | null }
+  //
+  // or null when we have never been told (an older signer, or one that tracks no
+  // releases). This is UPDATE INFORMATION ONLY — it is deliberately not gated on
+  // isLicensed(): knowing a newer version exists grants no entitlement, and an
+  // expired customer still needs to see it. Trustworthy because it arrives inside
+  // the signed payload, so nothing on the path can invent an update.
+  function getAvailableReleases() {
+    if (!state.releases) return null;
+    return {
+      server: state.releases.server ? { ...state.releases.server } : null,
+      agent: state.releases.agent ? { ...state.releases.agent } : null,
+      checkedAt: state.releases.checkedAt,
+    };
   }
 
   // Whether a new agent connection is allowed given the current connection count.
@@ -325,6 +389,7 @@ function createLicenseManager({
     getMaxAgents,
     getPlan,
     getFeatures,
+    getAvailableReleases,
     canAcceptNewConnection,
     getStatus,
   };

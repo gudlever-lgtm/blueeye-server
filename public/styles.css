@@ -1149,6 +1149,10 @@ pre { padding: 10px; overflow: auto; }
 
 /* Settings: focused-tab intro line + traffic-type category editor. */
 .settings-intro { margin: 0 0 14px; }
+/* Settings → Updates: "available from the vendor" block + live deploy log. */
+.settings-block { margin: 0 0 18px; }
+.settings-block h4 { margin: 0 0 8px; }
+.log-tail { max-height: 320px; overflow: auto; white-space: pre-wrap; font-size: 12px; line-height: 1.45; margin-top: 10px; }
 .settings-card.wide { grid-column: 1 / -1; }
 .tc-list { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
 .tc-row { display: grid; grid-template-columns: 1fr 170px 2fr 34px; gap: 8px; align-items: center; }

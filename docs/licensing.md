@@ -139,6 +139,15 @@ The active plan is resolved (in priority order):
 
 To run a pilot without the license server, set `LICENSE_PLAN=pilot`.
 
+### The proof also carries update info
+
+Besides the licence verdict, a proof may carry the newest **published** server
+and agent versions (`releases`), which `licenseManager.getAvailableReleases()`
+exposes and Settings → Updates surfaces as "an update is ready to deploy". It is
+informational only — it never affects the plan, limits, features or status, and
+it is deliberately readable even when the licence is invalid. Older license
+servers omit it entirely. See [`updates.md`](updates.md).
+
 ### Minimal customer setup — `LICENSE_KEY` only
 
 A customer install needs to configure **just the license key**:

@@ -43,6 +43,7 @@ const { createUsageService } = require('./services/usageService');
 const { createFileCache } = require('./license/licenseCache');
 const { isConfigured } = require('./license/publicKey');
 const { createSystemInfo } = require('./services/systemInfo');
+const { createServerUpdateService } = require('./services/serverUpdateService');
 const { FindingStore } = require('./analysis/findings');
 const { createBaselineStore } = require('./analysis/baselines');
 const { createBaselineFileCache } = require('./analysis/baselineCache');
@@ -419,6 +420,21 @@ function start() {
 
   // Storage info (disk free/used + database size).
   const systemInfo = createSystemInfo({ db, tsdb, diskPath: config.storage.diskPath });
+
+  // One-click deploy of a published server update (Settings → Updates). Inert
+  // unless SERVER_UPDATE_COMMAND names the host's update script — the command
+  // can only come from the environment, never from a request.
+  const serverUpdateService = createServerUpdateService({
+    command: config.update.command,
+    args: config.update.args,
+    logPath: config.update.logPath,
+    statePath: config.update.statePath,
+    cwd: config.update.cwd,
+    logger,
+  });
+  if (config.update.command) {
+    logger.info(`Updates: "${config.update.command}" can be run from the dashboard by an admin.`);
+  }
 
   // Analysis module: findings store + detector pipeline hung off ingest. The
   // detector pushes findings to the UI over the SAME WebSocket (agentWs is
@@ -818,6 +834,7 @@ function start() {
     installToolService,
     agentCommander,
     systemInfo,
+    serverUpdateService,
     licenseManager,
     findingStore,
     analysisPipeline,

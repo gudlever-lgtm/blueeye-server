@@ -228,6 +228,53 @@ function makeIncidentsRepo(overrides = {}) {
 
 // A fake incident_cases repository (in-memory) — the first-class incident entity
 // wrapping findings (migration 047). Mirrors incidentCasesRepository's surface.
+// In-memory `incident_notes` (migration 072). Mirrors the real repository's
+// APPEND-ONLY surface exactly: append + reads, no update, no delete — so a test
+// cannot accidentally exercise a mutation path that production does not have.
+// Reads are oldest-first, matching the repo (a work log reads forward).
+function makeIncidentNotesRepo(overrides = {}) {
+  const rows = [];
+  let seq = 0;
+  const iso = (v) => (v == null ? null : (v instanceof Date ? v.toISOString() : new Date(v).toISOString()));
+  const mapOut = (r) => ({
+    id: r.id,
+    incidentCaseId: r.incident_case_id,
+    kind: r.kind,
+    text: r.text,
+    authorUserId: r.author_user_id ?? null,
+    authorEmail: r.author_email ?? null,
+    authorRole: r.author_role ?? null,
+    author: r.author_email || (r.author_user_id ? `user #${r.author_user_id}` : 'system'),
+    createdAt: iso(r.created_at),
+  });
+  const forCase = (id) => rows
+    .filter((r) => Number(r.incident_case_id) === Number(id))
+    .sort((a, b) => (a.created_at - b.created_at) || (a.id - b.id));
+  return {
+    rows,
+    append: overrides.append || (async ({ incidentCaseId, kind, text, authorUserId = null, authorEmail = null, authorRole = null }) => {
+      const id = (seq += 1);
+      // Monotonic timestamps: several notes appended in the same millisecond
+      // must still sort deterministically, which is what the id tiebreak in
+      // forCase() is for. Spacing them keeps the intent readable in failures.
+      const row = {
+        id, incident_case_id: Number(incidentCaseId), kind, text,
+        author_user_id: authorUserId, author_email: authorEmail, author_role: authorRole,
+        created_at: new Date(Date.UTC(2026, 0, 1) + id * 1000),
+      };
+      rows.push(row);
+      return mapOut(row);
+    }),
+    findById: overrides.findById || (async (id) => {
+      const r = rows.find((x) => x.id === Number(id));
+      return r ? mapOut(r) : null;
+    }),
+    listForIncident: overrides.listForIncident || (async ({ incidentCaseId, limit = 500 }) => forCase(incidentCaseId).slice(0, limit).map(mapOut)),
+    listRuledOut: overrides.listRuledOut || (async ({ incidentCaseId, limit = 200 }) => forCase(incidentCaseId).filter((r) => r.kind === 'ruled_out').slice(0, limit).map(mapOut)),
+    countForIncident: overrides.countForIncident || (async ({ incidentCaseId }) => forCase(incidentCaseId).length),
+  };
+}
+
 function makeIncidentCasesRepo(overrides = {}) {
   const rows = [];
   let seq = 0;
@@ -2108,6 +2155,7 @@ function makeApp(overrides = {}) {
     probeResultsRepo: overrides.probeResultsRepo || makeProbeResultsRepo(),
     incidentsRepo: overrides.incidentsRepo || makeIncidentsRepo(),
     incidentCasesRepo: overrides.incidentCasesRepo || makeIncidentCasesRepo(),
+    incidentNotesRepo: overrides.incidentNotesRepo === undefined ? makeIncidentNotesRepo() : overrides.incidentNotesRepo,
     incidentClustersRepo: overrides.incidentClustersRepo || makeIncidentClustersRepo(),
     alertDispatchLogRepo: overrides.alertDispatchLogRepo || makeAlertDispatchLogRepo(),
     clusterNotifier: overrides.clusterNotifier || null,
@@ -2254,6 +2302,7 @@ module.exports = {
   makeProbeResultsRepo,
   makeIncidentsRepo,
   makeIncidentCasesRepo,
+  makeIncidentNotesRepo,
   makeIncidentClustersRepo,
   makeRunbooksRepo,
   makeVerificationRunsRepo,

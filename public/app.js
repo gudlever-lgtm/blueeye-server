@@ -3843,8 +3843,136 @@ views.incident = async () => {
     })();
   }
 
-  return el('div', { class: 'incident-detail' }, header, controls, guideCard, anomaliesCard, blastCard, timelineCard, similarCard, pathCard, ...extra);
+  // Work log — the shift handover. Mounted high (right after the status
+  // controls) because "what has already been tried and excluded" is what the
+  // next shift must read before anything else, not a footnote below six cards.
+  const notesCard = incidentNotesCard(id);
+
+  return el('div', { class: 'incident-detail' }, header, controls, notesCard, guideCard, anomaliesCard, blastCard, timelineCard, similarCard, pathCard, ...extra);
 };
+
+// ---- Incident work log (Fase 3) --------------------------------------------
+// Append-only log of observations, actions taken and — the reason this exists —
+// causes that have been RULED OUT. The ruled-out entries render as a separate,
+// pinned list above the chronological log: the next shift's first question is
+// "what has already been disproved?", and they should not have to read a
+// timeline to answer it.
+//
+// The server serves ruledOut as its own array (indexed, never truncated), so
+// this does not client-side filter the log — the exclusions must not be the rows
+// that fall off a cap.
+const NOTE_KINDS = ['observation', 'action', 'ruled_out'];
+
+function noteEntryEl(note) {
+  return el('li', { class: `wl-entry wl-${note.kind}` },
+    el('div', { class: 'wl-entry-head' },
+      el('span', { class: `badge wl-kind-${note.kind}` }, t(`notes.kind.${note.kind}`)),
+      el('span', { class: 'muted small' },
+        t('notes.byline', { author: note.author || '—', when: fmtDate(note.createdAt) }))),
+    el('p', { class: 'wl-text' }, esc(note.text)));
+}
+
+function incidentNotesCard(incidentId) {
+  const card = el('div', { class: 'card work-log' });
+  const body = el('div', {}, el('div', { class: 'muted' }, t('search.loading')));
+  card.append(el('h3', {}, t('notes.title')), body);
+
+  async function load() {
+    let data;
+    try {
+      data = await api(`/api/incidents/${incidentId}/notes`);
+    } catch (err) {
+      body.replaceChildren(
+        el('p', { class: 'error' }, t('notes.loadError', { message: errText(err) })),
+        el('button', { class: 'small ghost', onclick: load }, t('common.retry')));
+      return;
+    }
+
+    const kids = [];
+
+    // Pinned exclusions first — this is the whole point of the panel.
+    const ruledOut = data.ruledOut || [];
+    kids.push(el('div', { class: `wl-ruled-out${ruledOut.length ? '' : ' is-empty'}` },
+      el('h4', {}, t('notes.ruledOutTitle')),
+      el('p', { class: 'muted small' }, t('notes.ruledOutHint')),
+      ruledOut.length
+        ? el('ul', { class: 'wl-list' }, ...ruledOut.map(noteEntryEl))
+        : el('p', { class: 'muted' }, t('notes.ruledOutEmpty'))));
+
+    // Then the full log, chronological (as served).
+    const notes = data.notes || [];
+    kids.push(notes.length
+      ? el('ul', { class: 'wl-list wl-log' }, ...notes.map(noteEntryEl))
+      : el('p', { class: 'empty' }, t('notes.empty')));
+
+    if (canWrite()) kids.push(noteComposer(incidentId, load));
+    else kids.push(el('p', { class: 'muted small' }, t('notes.readOnly')));
+
+    kids.push(el('p', { class: 'muted small wl-note' }, t('notes.appendOnly')));
+    body.replaceChildren(...kids);
+  }
+
+  load();
+  return card;
+}
+
+// The add-entry form. `kind` is an explicit choice with no default selected —
+// the server rejects an omitted kind rather than guessing, and the UI must not
+// paper over that by pre-picking "observation" for someone who meant "ruled out".
+function noteComposer(incidentId, onSaved) {
+  const form = el('form', { class: 'wl-composer' });
+  const textarea = el('textarea', {
+    rows: '3',
+    id: `wl-text-${incidentId}`,
+    placeholder: t('notes.textPlaceholder'),
+    required: 'required',
+  });
+  const errorLine = el('p', { class: 'error hidden' });
+
+  const kindRadios = NOTE_KINDS.map((kind) => el('label', { class: 'wl-kind-choice' },
+    el('input', { type: 'radio', name: `wl-kind-${incidentId}`, value: kind }),
+    el('span', {}, t(`notes.kind.${kind}`)),
+    el('span', { class: 'muted small' }, t(`notes.kind.${kind}.help`))));
+
+  const submit = el('button', { type: 'submit', class: 'small' }, t('notes.submit'));
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    errorLine.classList.add('hidden');
+    const checked = form.querySelector(`input[name="wl-kind-${incidentId}"]:checked`);
+    const text = textarea.value.trim();
+    // Mirror the server's two rules locally so the common mistakes are caught
+    // before a round-trip — the server still enforces both.
+    if (!text || !checked) {
+      errorLine.textContent = !text ? t('notes.text') : t('notes.kind');
+      errorLine.classList.remove('hidden');
+      return;
+    }
+    submit.disabled = true;
+    submit.textContent = t('notes.saving');
+    try {
+      await api(`/api/incidents/${incidentId}/notes`, { method: 'POST', body: { text, kind: checked.value } });
+      textarea.value = '';
+      checked.checked = false;
+      if (typeof onSaved === 'function') await onSaved();
+    } catch (err) {
+      errorLine.textContent = t('notes.error', { message: errText(err) });
+      errorLine.classList.remove('hidden');
+    } finally {
+      submit.disabled = false;
+      submit.textContent = t('notes.submit');
+    }
+  });
+
+  form.append(
+    el('h4', {}, t('notes.add')),
+    el('label', { for: `wl-text-${incidentId}` }, t('notes.text')),
+    textarea,
+    el('fieldset', { class: 'wl-kinds' }, el('legend', {}, t('notes.kind')), ...kindRadios),
+    errorLine,
+    el('div', { class: 'form-actions' }, submit));
+  return form;
+}
 
 // ---- Incident Situation View (cross-agent clusters) ------------------------
 // "ét fælles billede": one page per cluster answering what/where/since-when,

@@ -1908,3 +1908,28 @@ li.guide-step.done .guide-step-title { text-decoration: line-through; opacity: 0
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
   overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
 }
+
+/* --- Incident work log (shift handover) ------------------------------------ */
+.work-log h4 { margin: 0 0 4px; font-size: 0.95rem; }
+.wl-list { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 8px; }
+.wl-entry { padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-alt); }
+.wl-entry-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.wl-text { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.wl-kind-observation { background: var(--muted); color: var(--bg); }
+.wl-kind-action { background: var(--accent); color: var(--bg); }
+.wl-kind-ruled_out { background: var(--warn); color: var(--bg); }
+/* The exclusions are pinned above the log and visually separated — the next
+   shift must see them before they read anything else. */
+.wl-ruled-out {
+  margin: 0 0 14px; padding: 10px 12px; border-radius: 8px;
+  border: 1px solid var(--warn); background: color-mix(in srgb, var(--warn) 8%, transparent);
+}
+.wl-ruled-out.is-empty { border-color: var(--border); background: none; }
+.wl-ruled-out .wl-entry { background: var(--bg); }
+.wl-log { margin-top: 4px; }
+.wl-composer { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }
+.wl-composer textarea { width: 100%; resize: vertical; }
+.wl-kinds { border: 0; padding: 0; margin: 10px 0 0; display: grid; gap: 4px; }
+.wl-kinds legend { padding: 0; font-weight: 600; }
+.wl-kind-choice { display: flex; gap: 8px; align-items: baseline; }
+.wl-note { margin: 10px 0 0; font-style: italic; }

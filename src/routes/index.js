@@ -46,6 +46,7 @@ const { createDashboardRouter } = require('./dashboard');
 const { createForecastRouter } = require('./forecast');
 const { createSearchRouter } = require('./search');
 const { createChangesRouter } = require('./changes');
+const { createBaselinesRouter } = require('./baselines');
 const { createChangesService } = require('../changes/changesService');
 const { createSearchService } = require('../search/searchService');
 const { createEnrollRouter } = require('./enroll');
@@ -342,6 +343,11 @@ function createApiRouter({
   router.use('/api/interfaces', createInterfacesRouter({ resultsRepo, agentsRepo }));
   // Capacity/trend forecasting (robust Theil–Sen projection + days-to-capacity).
   router.use('/api/forecast', createForecastRouter());
+  // Read-only baseline context for the dashboard's shared metric component.
+  // viewer+ — see the RBAC note in the router; the operator+ diagnostic route at
+  // /api/topology/flow-baselines is left alone.
+  router.use('/api/baselines', createBaselinesRouter({ flowPairBaselinesRepo, agentsRepo }));
+
   // "What changed since I last looked" — the landing page. A read/aggregation
   // layer over the sources that ALREADY log transitions; it derives no history
   // by polling current state (see docs/changes-feed.md for what that costs and

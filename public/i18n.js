@@ -119,6 +119,17 @@
       'baseline.atNormal': 'Normal for a {weekday} at {hour}',
       'baseline.ageTitle': 'Baseline from {samples} observations, updated {when}',
       'baseline.ageThin': 'Baseline is still building ({samples} observations)',
+      // Weekday names for the baseline slot ("normal for a Tuesday at 14:00").
+      // Here rather than formatted with toLocaleDateString because the slot is a
+      // day-of-week INDEX from the baseline table, not a date — there is no Date
+      // to format, and inventing one to get a name back would be silly.
+      'weekday.0': 'Sunday',
+      'weekday.1': 'Monday',
+      'weekday.2': 'Tuesday',
+      'weekday.3': 'Wednesday',
+      'weekday.4': 'Thursday',
+      'weekday.5': 'Friday',
+      'weekday.6': 'Saturday',
 
       // Shared
       'common.retry': 'Retry',
@@ -217,6 +228,13 @@
       'baseline.atNormal': 'Normal for en {weekday} kl. {hour}',
       'baseline.ageTitle': 'Baseline fra {samples} observationer, opdateret {when}',
       'baseline.ageThin': 'Baseline er stadig ved at bygge ({samples} observationer)',
+      'weekday.0': 'søndag',
+      'weekday.1': 'mandag',
+      'weekday.2': 'tirsdag',
+      'weekday.3': 'onsdag',
+      'weekday.4': 'torsdag',
+      'weekday.5': 'fredag',
+      'weekday.6': 'lørdag',
 
       'common.retry': 'Prøv igen',
       'common.cancel': 'Annullér',

@@ -993,7 +993,13 @@ function makeFlowPairBaselinesRepo(overrides = {}) {
       .filter((r) => iso(r.bucket) === iso(bucket))
       .map((r) => ({ srcHostId: r.srcHostId, dstHostId: r.dstHostId, dstPort: r.dstPort, proto: r.proto, bucket: iso(r.bucket), bytes: r.bytes, packets: r.packets, connCount: r.connCount }))),
     upsertBaselines: overrides.upsertBaselines || (async (rows) => {
-      for (const r of Array.isArray(rows) ? rows : []) baselines.set(bkey(r), { ...r });
+      // The real table stamps updated_at ON UPDATE CURRENT_TIMESTAMP and the
+      // repo maps it out; the baseline-context UI reads it for the hover age, so
+      // the fake must produce it too or a test would pass against a shape
+      // production never returns.
+      for (const r of Array.isArray(rows) ? rows : []) {
+        baselines.set(bkey(r), { updatedAt: new Date().toISOString(), ...r });
+      }
       return (rows || []).length;
     }),
     baselinesForSlot: overrides.baselinesForSlot || (async ({ dow, hour }) => [...baselines.values()].filter((b) => b.dow === dow && b.hour === hour)),
@@ -2218,7 +2224,11 @@ function makeApp(overrides = {}) {
   const hostConnectionsRepo = overrides.hostConnectionsRepo || makeHostConnectionsRepo();
   const arpEntriesRepo = overrides.arpEntriesRepo === undefined ? makeArpEntriesRepo() : overrides.arpEntriesRepo;
   const topologyChangesRepo = overrides.topologyChangesRepo || makeTopologyChangesRepo();
-  const flowPairBaselinesRepo = overrides.flowPairBaselinesRepo || makeFlowPairBaselinesRepo();
+  // `=== undefined` (not `||`) so a test can pass null to exercise the
+  // not-wired path — a deployment without migration 068 has no baselines at all.
+  const flowPairBaselinesRepo = overrides.flowPairBaselinesRepo === undefined
+    ? makeFlowPairBaselinesRepo()
+    : overrides.flowPairBaselinesRepo;
   // Real topology-change service over the fakes, so change detection + flap
   // suppression + audit-log writes are exercised end-to-end on capabilities ingest.
   const topologyChangeService = overrides.topologyChangeService === undefined

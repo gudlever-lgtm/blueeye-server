@@ -1962,3 +1962,13 @@ li.guide-step.done .guide-step-title { text-decoration: line-through; opacity: 0
    never reads as "this happened inside your window". */
 .chg-current { opacity: 0.85; }
 .chg-current-badge { background: var(--muted); color: var(--bg); margin-left: 8px; }
+
+/* --- Metric with baseline context (Fase 4) ---------------------------------- */
+/* The value and its context stack, so the secondary line reads as annotation
+   rather than as a second number competing with the first. */
+.bm { display: inline-flex; flex-direction: column; gap: 1px; }
+.bm-value { font-variant-numeric: tabular-nums; }
+.bm-context { font-size: 0.82em; cursor: help; }
+.bm-above { color: var(--warn); }
+.bm-below { color: var(--accent); }
+.bm-at { color: var(--muted); }

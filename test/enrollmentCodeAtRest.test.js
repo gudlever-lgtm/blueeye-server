@@ -129,3 +129,27 @@ test('migration 076 backfills the hash before dropping the cleartext column', ()
   assert.match(sql, /ADD COLUMN code_enc/);
   assert.match(sql, /CREATE UNIQUE INDEX uq_enrollment_codes_code_hash/);
 });
+
+test('migration 076 is a no-op when it has already been applied', () => {
+  // This migration shipped as 072 and was renumbered when main took that number.
+  // schema_migrations tracks migrations by FILENAME, so any database that ran the
+  // 072 file has no row for 076 and WILL run it again — and the container runs
+  // `migrate && server`, so an unguarded re-run takes the whole server down, not
+  // just the migration. Every step therefore checks information_schema first.
+  const sql = fs.readFileSync(path.join(__dirname, '..', 'migrations', '076_enrollment_code_at_rest.sql'), 'utf8');
+
+  for (const guarded of ['code_hash', 'code_enc', 'code']) {
+    assert.match(
+      sql,
+      new RegExp(`information_schema\\.COLUMNS[\\s\\S]*?COLUMN_NAME = '${guarded}'`),
+      `the ${guarded} step must check whether it already exists`
+    );
+  }
+  assert.match(sql, /information_schema\.STATISTICS[\s\S]*?INDEX_NAME = 'uq_enrollment_codes_code_hash'/);
+
+  // Each guard must actually gate a statement — an IF(...) with a no-op branch —
+  // rather than compute a variable nobody reads.
+  assert.equal((sql.match(/SET @sql := IF\(/g) || []).length, 5, 'all five steps are gated');
+  assert.equal((sql.match(/'DO 0'/g) || []).length, 5, 'each gate has a no-op branch');
+  assert.equal((sql.match(/PREPARE stmt FROM @sql/g) || []).length, 5);
+});

@@ -45,6 +45,10 @@ const { createFleetRouter } = require('./fleet');
 const { createDashboardRouter } = require('./dashboard');
 const { createForecastRouter } = require('./forecast');
 const { createSearchRouter } = require('./search');
+const { createChangesRouter } = require('./changes');
+const { createBaselinesRouter } = require('./baselines');
+const { createChangesService } = require('../changes/changesService');
+const { createSearchService } = require('../search/searchService');
 const { createEnrollRouter } = require('./enroll');
 const { publishSignedReleaseFromSource } = require('../enroll/publishSignedRelease');
 const { createEnrollCommandRouter } = require('./enrollCommand');
@@ -53,7 +57,7 @@ const { createTransactionsRouter } = require('./transactions');
 const { createLogsRouter } = require('./logs');
 const { createSpeedtestRouter, createSpeedtestReadRouter } = require('./speedtest');
 const { createIntegrationsRouter } = require('./integrations');
-const { createCmdbSettingsRouter, createCmdbAssetsRouter, createAgentCmdbLinkRouter } = require('./cmdb');
+const { createCmdbSettingsRouter, createCmdbAssetsRouter, createAgentCmdbLinkRouter, makeCmdbSearch } = require('./cmdb');
 const { createDiagnosticsRouter } = require('./diagnostics');
 const { createLdapRouter } = require('./ldap');
 const { createOidcAuthRouter, createOidcAdminRouter } = require('./oidc');
@@ -92,6 +96,7 @@ function createApiRouter({
   probeResultsRepo,
   incidentsRepo,
   incidentCasesRepo,
+  incidentNotesRepo = null,
   incidentClustersRepo,
   clusterNotifier,
   alertDispatchLogRepo,
@@ -118,6 +123,9 @@ function createApiRouter({
   flowsRepo,
   lldpNeighborsRepo,
   hostConnectionsRepo,
+  arpEntriesRepo = null,
+  interfaceStatesRepo = null,
+  interfaceStateService = null,
   serviceDependenciesRepo,
   serviceDependencyJob,
   blastRadiusService,
@@ -189,6 +197,7 @@ function createApiRouter({
   // Brute-force throttle for agent enrollment (login has its own loginThrottle).
   // Default undefined → the router falls back to a no-op (tests stay unthrottled).
   enrollRateLimiter,
+  searchRateLimiter = null,
   // Operational logger, threaded into routers that degrade best-effort (so a
   // swallowed side-effect failure is observable). Defaults to the no-op.
   logger = silentLogger,
@@ -312,7 +321,7 @@ function createApiRouter({
   if (incidentsRepo && probeResultsRepo) router.use('/api/reports', createReportsRouter({ probeResultsRepo, incidentsRepo, locationsRepo, featureGate, planService, auditLogger }));
   // First-class incidents (incident_cases) wrapping findings — distinct from the
   // probe-outage `incidents` used by /api/reports above.
-  if (incidentCasesRepo && findingStore) router.use('/api/incidents', createIncidentsRouter({ incidentCasesRepo, findingStore, auditLogger, auditEventsRepo, auditLogRepo, configSnapshotsRepo, agentsRepo, assistant, featureGate, askCache: createAskCache(), remediationPlaybooksRepo, blastRadiusService }));
+  if (incidentCasesRepo && findingStore) router.use('/api/incidents', createIncidentsRouter({ incidentCasesRepo, findingStore, auditLogger, auditEventsRepo, auditLogRepo, configSnapshotsRepo, agentsRepo, assistant, featureGate, askCache: createAskCache(), remediationPlaybooksRepo, blastRadiusService, incidentNotesRepo }));
   if (incidentClustersRepo) {
     const clusterTimelineService = createIncidentClusterTimelineService({
       clustersRepo: incidentClustersRepo, findingStore, auditEventsRepo,
@@ -336,7 +345,54 @@ function createApiRouter({
   router.use('/api/interfaces', createInterfacesRouter({ resultsRepo, agentsRepo }));
   // Capacity/trend forecasting (robust Theil–Sen projection + days-to-capacity).
   router.use('/api/forecast', createForecastRouter());
-  router.use('/api/search', createSearchRouter({ agentsRepo, locationsRepo, flowsRepo }));
+  // Read-only baseline context for the dashboard's shared metric component.
+  // viewer+ — see the RBAC note in the router; the operator+ diagnostic route at
+  // /api/topology/flow-baselines is left alone.
+  router.use('/api/baselines', createBaselinesRouter({ flowPairBaselinesRepo, agentsRepo }));
+
+  // "What changed since I last looked" — the landing page. A read/aggregation
+  // layer over the sources that ALREADY log transitions; it derives no history
+  // by polling current state (see docs/changes-feed.md for what that costs and
+  // which dimension is still missing).
+  router.use('/api/changes', createChangesRouter({
+    changesService: createChangesService({
+      agentsRepo,
+      auditEventsRepo,
+      findingStore,
+      incidentsRepo,
+      incidentCasesRepo,
+      incidentClustersRepo,
+      topologyChangesRepo,
+      remediationPlaybooksRepo,
+      configSnapshotsRepo,
+      interfaceStatesRepo,
+      // The agent build THIS server serves — the reference for version skew.
+      serverAgentVersion: agentSourceStore && typeof agentSourceStore.sourceVersion === 'function'
+        ? agentSourceStore.sourceVersion()
+        : null,
+      logger,
+    }),
+    usersRepo,
+    auditLogger,
+  }));
+
+  // Universal search. The CMDB resolver is passed as a thunk rather than the
+  // repo, so this router never learns how to decrypt credentials — and so a
+  // deployment without a CMDB simply has no asset resolver instead of a
+  // disabled code path inside the service.
+  router.use('/api/search', createSearchRouter({
+    searchService: createSearchService({
+      agentsRepo,
+      locationsRepo,
+      flowsRepo,
+      arpEntriesRepo,
+      lldpNeighborsRepo,
+      discoveredDevicesRepo,
+      cmdbSearch: makeCmdbSearch({ cmdbConfigRepo, registry: cmdbConnectorRegistry, secretBox }),
+      logger,
+    }),
+    rateLimiter: searchRateLimiter,
+  }));
   if (settingsService) router.use('/api/settings', createSettingsRouter({ settingsService, featureGate, dispatcher, analysisConfig, retentionConfig, releaseKeyService, geoipUpdater, publishRelease: () => publishSignedReleaseFromSource({ sourceStore: agentSourceStore, releaseStore, releaseKeyService }) }));
   // Outbound API integrations (ITSM/IPAM connectors) — admin CRUD + test-fire.
   if (integrationsRepo && connectorRegistry && secretBox) {
@@ -439,7 +495,7 @@ function createApiRouter({
   // Unified audit log (license feature `audit_log`) + API tokens (`api_access`).
   if (auditLogRepo) router.use('/api/audit-log', createAuditLogRouter({ auditLogRepo, featureGate, planService }));
   if (apiTokensRepo) router.use('/api/api-tokens', createApiTokensRouter({ apiTokensRepo, featureGate, planService, auditLogger }));
-  router.use('/agents', createAgentReportsRouter({ agentAuth, resultsRepo, resultsTsdbRepo, agentsRepo, auditEventsRepo, analysisPipeline, flowPipeline, probeResultsRepo, probePipeline, incidentService, installToolService, lldpNeighborsRepo, topologyChangeService, hostConnectionsRepo, discoveredDevicesRepo, auditLogger, logger }));
+  router.use('/agents', createAgentReportsRouter({ agentAuth, resultsRepo, resultsTsdbRepo, agentsRepo, auditEventsRepo, analysisPipeline, flowPipeline, probeResultsRepo, probePipeline, incidentService, installToolService, lldpNeighborsRepo, topologyChangeService, hostConnectionsRepo, arpEntriesRepo, interfaceStateService, discoveredDevicesRepo, auditLogger, logger }));
   router.use('/agents', createAgentEnrollRouter({ enrollmentStore, notifyDashboard, integrationTrigger: integrationsDispatcher, auditEventsRepo, settingsService, rateLimit: enrollRateLimiter }));
 
   return router;

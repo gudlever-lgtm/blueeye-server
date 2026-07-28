@@ -1897,3 +1897,78 @@ li.guide-step.done .guide-step-title { text-decoration: line-through; opacity: 0
 .ts-marker.sev-CRIT { stroke: var(--bad); }
 .ts-marker.is-change { stroke-dasharray: 2 2; stroke-width: 3; }
 .ts-events { margin: 10px 0 0; }
+
+/* --- Language picker (Settings -> Appearance) ------------------------------- */
+.lang-picker { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--border); }
+.lang-picker h3 { margin: 0 0 8px; font-size: 1rem; }
+.lang-picker select { min-width: 200px; }
+.lang-picker p { margin: 8px 0 0; }
+/* Visually hidden but announced by screen readers. */
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+/* --- Incident work log (shift handover) ------------------------------------ */
+.work-log h4 { margin: 0 0 4px; font-size: 0.95rem; }
+.wl-list { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 8px; }
+.wl-entry { padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-alt); }
+.wl-entry-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.wl-text { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.wl-kind-observation { background: var(--muted); color: var(--bg); }
+.wl-kind-action { background: var(--accent); color: var(--bg); }
+.wl-kind-ruled_out { background: var(--warn); color: var(--bg); }
+/* The exclusions are pinned above the log and visually separated — the next
+   shift must see them before they read anything else. */
+.wl-ruled-out {
+  margin: 0 0 14px; padding: 10px 12px; border-radius: 8px;
+  border: 1px solid var(--warn); background: color-mix(in srgb, var(--warn) 8%, transparent);
+}
+.wl-ruled-out.is-empty { border-color: var(--border); background: none; }
+.wl-ruled-out .wl-entry { background: var(--bg); }
+.wl-log { margin-top: 4px; }
+.wl-composer { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }
+.wl-composer textarea { width: 100%; resize: vertical; }
+.wl-kinds { border: 0; padding: 0; margin: 10px 0 0; display: grid; gap: 4px; }
+.wl-kinds legend { padding: 0; font-weight: 600; }
+.wl-kind-choice { display: flex; gap: 8px; align-items: baseline; }
+.wl-note { margin: 10px 0 0; font-style: italic; }
+
+/* --- Universal search results (Fase 1) -------------------------------------- */
+/* Rows are stacked, not inline: each carries a provenance line (confidence,
+   source, age) that is the whole point of the feature, so it needs its own row
+   rather than being squeezed onto the name's line. */
+.search-item-body { display: flex; flex-direction: column; gap: 2px; width: 100%; }
+.search-name { font-weight: 600; }
+.search-detail { display: block; }
+.search-meta { display: block; }
+/* A hit with nowhere to navigate is a plain row, not a dead button. */
+.search-item.is-static { cursor: default; opacity: 0.85; }
+.search-item.is-static:hover { border-color: var(--border); }
+.search-conf { font-weight: 600; }
+.conf-exact { color: var(--ok, var(--accent)); }
+.conf-high { color: var(--accent); }
+.conf-medium { color: var(--muted); }
+.conf-low { color: var(--warn); }
+
+/* --- Changes landing page (Fase 2) ------------------------------------------ */
+.chg-controls { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: 10px 0 16px; }
+.chg-group { margin: 18px 0 6px; font-size: 1rem; }
+.chg-group.sev-CRIT { color: var(--bad); }
+.chg-group.sev-WARN { color: var(--warn); }
+.chg-group.sev-INFO { color: var(--muted); }
+.chg-open { margin-left: auto; }
+/* A current-state row is a condition, not a transition — dimmed and badged so it
+   never reads as "this happened inside your window". */
+.chg-current { opacity: 0.85; }
+.chg-current-badge { background: var(--muted); color: var(--bg); margin-left: 8px; }
+
+/* --- Metric with baseline context (Fase 4) ---------------------------------- */
+/* The value and its context stack, so the secondary line reads as annotation
+   rather than as a second number competing with the first. */
+.bm { display: inline-flex; flex-direction: column; gap: 1px; }
+.bm-value { font-variant-numeric: tabular-nums; }
+.bm-context { font-size: 0.82em; cursor: help; }
+.bm-above { color: var(--warn); }
+.bm-below { color: var(--accent); }
+.bm-at { color: var(--muted); }

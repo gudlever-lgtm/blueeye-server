@@ -41,12 +41,12 @@ function createEnrollmentStore(db) {
 
       // Expiry is evaluated in the database to avoid app/DB timezone skew.
       // Matched on the SHA-256 of the code (migration 076 — codes are no longer
-      // stored in cleartext). The legacy `code` column is still consulted for
-      // rows written before that migration and not yet expired.
+      // stored in cleartext). Codes minted before that migration still redeem:
+      // it backfilled their hash from the cleartext before dropping the column.
       const [rows] = await conn.query(
         `SELECT id, location_id, used_at, uses_remaining, (expires_at <= NOW()) AS is_expired
-         FROM enrollment_codes WHERE code_hash = ? OR (code_hash IS NULL AND code = ?) FOR UPDATE`,
-        [crypto.createHash('sha256').update(String(code)).digest('hex'), code]
+         FROM enrollment_codes WHERE code_hash = ? FOR UPDATE`,
+        [crypto.createHash('sha256').update(String(code)).digest('hex')]
       );
       const row = rows[0];
       const decision = decideOutcome(row);

@@ -21,8 +21,8 @@ const STATUS_CASE = `
   END AS status`;
 
 // An enrollment code is a credential (whoever holds one can enroll a machine as
-// a trusted agent), so it is not kept in cleartext. Two columns split the two
-// jobs, see migration 076:
+// a trusted agent), so it is never kept in cleartext — migration 076 dropped the
+// column. Two columns split the two jobs:
 //   code_hash — SHA-256, what every lookup matches on
 //   code_enc  — the code encrypted at rest (secretBox), decrypted only for the
 //               authenticated "rebuild the install command" endpoint
@@ -39,16 +39,14 @@ function createEnrollmentCodesRepository(db, { secretBox = null } = {}) {
     try { return secretBox.encrypt(String(code)); } catch { return null; }
   };
 
-  // The plaintext of a stored row: the encrypted copy when we have one, else the
-  // legacy cleartext column (rows created before migration 076 that are still
-  // active). Returns null when neither is available — the caller then tells the
+  // The plaintext of a stored row, decrypted from code_enc. Null when there is
+  // nothing to decrypt (a row predating migration 076, which dropped the
+  // cleartext column) or no secret box is configured — the caller then tells the
   // operator to generate a new code rather than showing a wrong one.
   function decryptCode(row) {
-    if (!row) return null;
-    if (row.code_enc && secretBox && typeof secretBox.decrypt === 'function') {
-      try { return secretBox.decrypt(row.code_enc); } catch { return null; }
-    }
-    return row.code || null;
+    if (!row || !row.code_enc) return null;
+    if (!secretBox || typeof secretBox.decrypt !== 'function') return null;
+    try { return secretBox.decrypt(row.code_enc); } catch { return null; }
   }
 
   // Returns the freshly created row plus the plaintext code IN MEMORY (the caller
@@ -105,11 +103,12 @@ function createEnrollmentCodesRepository(db, { secretBox = null } = {}) {
 
   // Full row for one code id, INCLUDING the plaintext code — decrypted here for
   // the authenticated command-generation endpoint to rebuild an install command.
-  // `code` is null when the row predates migration 076 and has already been
-  // stripped, or when no secret box is configured; callers must handle that.
+  // `code` is null for a row minted before migration 076 (which dropped the
+  // cleartext column), or when no secret box is configured; callers must handle
+  // that. Such a code is still REDEEMABLE — only re-displaying it is lost.
   async function findById(id) {
     const [rows] = await pool.query(`
-      SELECT e.id, e.code, e.code_enc, e.location_id, l.name AS location_name, e.created_by,
+      SELECT e.id, e.code_enc, e.location_id, l.name AS location_name, e.created_by,
              e.expires_at, e.used_at, e.created_at, e.max_uses, e.uses_remaining,${STATUS_CASE}
       FROM enrollment_codes e
       LEFT JOIN locations l ON l.id = e.location_id
@@ -121,16 +120,16 @@ function createEnrollmentCodesRepository(db, { secretBox = null } = {}) {
     return { ...rest, code: decryptCode(row) };
   }
 
-  // Status lookup by plaintext code (used by the public install.sh endpoint to
-  // reject unknown/expired/exhausted codes before rendering a script).
+  // Status lookup by plaintext code — hashed here (used by the public install.sh
+  // endpoint to reject unknown/expired/exhausted codes before rendering a script).
   async function findByCode(code) {
-    // Matched on the hash. The legacy cleartext column is still consulted for
-    // rows written before migration 076 (short-lived, so they drain quickly).
+    // Matched on the hash — including for codes minted before migration 076,
+    // whose hash it backfilled.
     const [rows] = await pool.query(`
       SELECT e.id, e.location_id, e.expires_at, e.used_at, e.created_at,
              e.max_uses, e.uses_remaining,${STATUS_CASE}
       FROM enrollment_codes e
-      WHERE e.code_hash = ? OR (e.code_hash IS NULL AND e.code = ?)`, [hashCode(code), code]);
+      WHERE e.code_hash = ?`, [hashCode(code)]);
     return rows[0] || null;
   }
 

@@ -12,29 +12,36 @@
 --   code_hash — SHA-256, what every LOOKUP matches on (indexed, constant shape)
 --   code_enc  — the code encrypted with secretBox (AES-256-GCM), what the
 --               install-command endpoint decrypts for display
--- and `code` becomes nullable so new rows never write cleartext at all.
 --
--- Backfill: hash every existing row (MySQL's SHA2 produces the same digest the
--- application does), then blank the cleartext of codes that can no longer be
--- used anyway — spent or expired. ACTIVE codes keep their cleartext until they
--- expire, because they have no code_enc to decrypt and the install-command
--- endpoint must keep working for them; the repository falls back to `code` for
--- exactly those rows. Codes are short-lived, so the legacy column drains on its
--- own and a later migration can drop it.
+-- The cleartext column then goes away ENTIRELY, in this migration. Keeping it
+-- for pre-existing rows was tempting — their install command stays displayable —
+-- but nothing in the system ever deletes an enrollment_codes row, so those
+-- cleartext codes would sit in the table for good. That would leave exactly the
+-- exposure this migration exists to remove, and "it drains on its own" is simply
+-- not true here.
+--
+-- What the drop costs, precisely: an enrollment code minted before this
+-- migration STILL WORKS — SHA2() below backfills its hash, and both the claim
+-- path and the public install.sh endpoint match on that hash. The only thing
+-- lost is re-DISPLAYING the one-liner for such a code (the endpoint answers 409
+-- "generate a new one"). Codes are short-lived — the default TTL is an hour — so
+-- that window is small, and minting a new code is one click.
 ALTER TABLE enrollment_codes
   ADD COLUMN code_hash CHAR(64) NULL DEFAULT NULL AFTER code,
-  ADD COLUMN code_enc TEXT NULL DEFAULT NULL AFTER code_hash,
-  MODIFY COLUMN code VARCHAR(64) NULL DEFAULT NULL;
+  ADD COLUMN code_enc TEXT NULL DEFAULT NULL AFTER code_hash;
 
+-- MySQL's SHA2 produces the same digest the application does, so existing codes
+-- stay redeemable. Must run BEFORE the column is dropped.
 UPDATE enrollment_codes
    SET code_hash = SHA2(code, 256)
  WHERE code IS NOT NULL AND code_hash IS NULL;
 
-UPDATE enrollment_codes
-   SET code = NULL
- WHERE code IS NOT NULL
-   AND (uses_remaining <= 0 OR expires_at <= NOW());
-
 -- Lookups go through the hash from here on. Unique for the same reason the old
 -- `code` index was: a code identifies exactly one row.
 CREATE UNIQUE INDEX uq_enrollment_codes_code_hash ON enrollment_codes (code_hash);
+
+-- The cleartext is gone. Dropping the column also drops the unique index over
+-- it (it indexes that column alone), so the index is not named here — one less
+-- thing to get wrong on a deployment whose index name differs.
+ALTER TABLE enrollment_codes
+  DROP COLUMN code;

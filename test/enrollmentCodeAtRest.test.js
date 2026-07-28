@@ -49,7 +49,7 @@ test('creating a code never writes the code itself to the database', async () =>
 
 test('findById decrypts the stored code for the install-command endpoint', async () => {
   const secretBox = createSecretBox({ key: 'test-key-for-enrollment-codes' });
-  const { pool } = makePool({ row: { code: null, code_enc: secretBox.encrypt('ROUND-TRIP-CODE'), status: 'active' } });
+  const { pool } = makePool({ row: { code_enc: secretBox.encrypt('ROUND-TRIP-CODE'), status: 'active' } });
   const repo = createEnrollmentCodesRepository({ pool }, { secretBox });
 
   const row = await repo.findById(5);
@@ -57,36 +57,41 @@ test('findById decrypts the stored code for the install-command endpoint', async
   assert.equal(row.code_enc, undefined, 'the ciphertext must not leak out of the repository');
 });
 
-test('findById falls back to a legacy cleartext row, and yields null when neither is usable', async () => {
+test('findById yields null when there is nothing decryptable, and never reads a cleartext column', async () => {
   const secretBox = createSecretBox({ key: 'test-key-for-enrollment-codes' });
 
-  // Written before migration 076: cleartext still present, no ciphertext.
-  const legacy = makePool({ row: { code: 'LEGACY-CODE', code_enc: null } });
-  assert.equal((await createEnrollmentCodesRepository({ pool: legacy.pool }, { secretBox }).findById(5)).code, 'LEGACY-CODE');
-
-  // Spent/expired legacy row whose cleartext the migration stripped.
-  const stripped = makePool({ row: { code: null, code_enc: null } });
-  assert.equal((await createEnrollmentCodesRepository({ pool: stripped.pool }, { secretBox }).findById(5)).code, null);
+  // A row minted before migration 076: the migration dropped the cleartext, so
+  // there is nothing to show. The code is still redeemable — only re-displaying
+  // the install command is lost, and the endpoint says so rather than guessing.
+  const preMigration = makePool({ row: { code_enc: null } });
+  assert.equal((await createEnrollmentCodesRepository({ pool: preMigration.pool }, { secretBox }).findById(5)).code, null);
 
   // Ciphertext we cannot decrypt (wrong app secret) must not throw.
-  const wrongKey = makePool({ row: { code: null, code_enc: secretBox.encrypt('X') } });
+  const wrongKey = makePool({ row: { code_enc: secretBox.encrypt('X') } });
   const other = createSecretBox({ key: 'a-different-app-secret' });
   assert.equal((await createEnrollmentCodesRepository({ pool: wrongKey.pool }, { secretBox: other }).findById(5)).code, null);
+
+  // The dropped column must not be selected at all.
+  const { pool, queries } = makePool({ row: { code_enc: null } });
+  await createEnrollmentCodesRepository({ pool }, { secretBox }).findById(5);
+  assert.doesNotMatch(queries[0].sql, /e\.code\b(?!_)/, 'the cleartext column no longer exists');
 });
 
-test('findByCode matches on the hash and still finds legacy rows', async () => {
+test('findByCode matches on the hash alone', async () => {
   const { pool, queries } = makePool({ row: {} });
   const repo = createEnrollmentCodesRepository({ pool });
 
   await repo.findByCode('LOOKUP-ME');
   const { sql, params } = queries[0];
   assert.match(sql, /WHERE e\.code_hash = \?/);
-  assert.match(sql, /e\.code_hash IS NULL AND e\.code = \?/, 'legacy rows are still resolvable');
-  assert.equal(params[0], sha256('LOOKUP-ME'));
+  // Migration 072 backfilled the hash for pre-existing codes, so there is no
+  // cleartext fallback to make — and no dropped column to reference.
+  assert.doesNotMatch(sql, /e\.code\b(?!_)/);
+  assert.deepEqual(params, [sha256('LOOKUP-ME')]);
 });
 
 test('without a secret box a code is simply not recoverable (fails safe)', async () => {
-  const { pool, queries } = makePool({ row: { code: null, code_enc: 'v1.gcm.x.y.z' } });
+  const { pool, queries } = makePool({ row: { code_enc: 'v1.gcm.x.y.z' } });
   const repo = createEnrollmentCodesRepository({ pool });
 
   await repo.create({ code: 'NO-BOX-CODE', created_by: 1, expiresInMinutes: 60 });
@@ -94,4 +99,33 @@ test('without a secret box a code is simply not recoverable (fails safe)', async
   assert.equal(queries[0].params[1], null, 'nothing recoverable is stored');
 
   assert.equal((await repo.findById(5)).code, null);
+});
+
+// ---- migration 076 ---------------------------------------------------------
+//
+// The statement ORDER in this migration is load-bearing: the hash is backfilled
+// FROM the cleartext, so dropping the column first would leave every existing
+// code unredeemable — every agent mid-install would fail with "invalid code",
+// and the codes cannot be recovered. Assert the shape so a later edit that
+// reorders or removes the backfill fails here instead of in production.
+
+const fs = require('node:fs');
+const path = require('node:path');
+
+test('migration 076 backfills the hash before dropping the cleartext column', () => {
+  const sql = fs.readFileSync(path.join(__dirname, '..', 'migrations', '076_enrollment_code_at_rest.sql'), 'utf8');
+
+  const addHash = sql.indexOf('ADD COLUMN code_hash');
+  const backfill = sql.search(/UPDATE\s+enrollment_codes\s+SET\s+code_hash\s*=\s*SHA2\(code, 256\)/);
+  const dropColumn = sql.search(/DROP COLUMN code\b/);
+
+  assert.ok(addHash > -1, 'code_hash must be added');
+  assert.ok(backfill > -1, 'the hash must be backfilled from the cleartext');
+  assert.ok(dropColumn > -1, 'the cleartext column must be dropped');
+  assert.ok(addHash < backfill, 'the column must exist before it is backfilled');
+  assert.ok(backfill < dropColumn, 'the backfill must read the cleartext before it is dropped');
+
+  // The encrypted-at-rest column and the lookup index are part of the same step.
+  assert.match(sql, /ADD COLUMN code_enc/);
+  assert.match(sql, /CREATE UNIQUE INDEX uq_enrollment_codes_code_hash/);
 });

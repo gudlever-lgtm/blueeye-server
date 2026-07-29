@@ -93,6 +93,17 @@
       'incidents.deviceUnknown': 'Unknown device',
       'incidents.noLocation': 'No location set',
 
+      // CMDB asset link (per agent)
+      'cmdb.cardTitle': 'CMDB asset',
+      'cmdb.notConnected': 'No CMDB is connected.',
+      'cmdb.openSettings': 'Open Settings → CMDB',
+      'cmdb.notLinkedReadOnly': 'Not linked to a CMDB asset.',
+      'cmdb.pickHint': 'Link this agent to its CMDB asset — search by asset ID, name or location:',
+      'cmdb.searchPlaceholder': 'Asset ID, name or location (min 2 characters)…',
+      'cmdb.searching': 'Searching…',
+      'cmdb.noMatches': 'No matching assets.',
+      'cmdb.noLocation': 'No location in CMDB',
+
       // Changes landing page (Fase 2)
       'changes.title': 'Changes',
       'changes.subtitle': 'What happened since you last looked',
@@ -211,6 +222,16 @@
       'incidents.deviceId': 'enhed {id}',
       'incidents.deviceUnknown': 'Ukendt enhed',
       'incidents.noLocation': 'Ingen lokation angivet',
+
+      'cmdb.cardTitle': 'CMDB-aktiv',
+      'cmdb.notConnected': 'Der er ikke forbundet en CMDB.',
+      'cmdb.openSettings': 'Åbn Indstillinger → CMDB',
+      'cmdb.notLinkedReadOnly': 'Ikke knyttet til et CMDB-aktiv.',
+      'cmdb.pickHint': 'Knyt denne agent til sit CMDB-aktiv — søg på aktiv-id, navn eller lokation:',
+      'cmdb.searchPlaceholder': 'Aktiv-id, navn eller lokation (mindst 2 tegn)…',
+      'cmdb.searching': 'Søger…',
+      'cmdb.noMatches': 'Ingen aktiver matcher.',
+      'cmdb.noLocation': 'Ingen lokation i CMDB',
 
       'changes.title': 'Ændringer',
       'changes.subtitle': 'Hvad er sket siden du sidst kiggede',

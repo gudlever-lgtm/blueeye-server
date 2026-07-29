@@ -1755,8 +1755,20 @@ li.guide-step.done .guide-step-title { text-decoration: line-through; opacity: 0
   padding: 6px 10px; border: 1px solid var(--border); border-radius: 8px;
   background: var(--card); cursor: pointer;
 }
-.cmdb-result:hover { border-color: var(--accent); background: var(--accent-weak); }
+.cmdb-result:hover, .cmdb-result.active { border-color: var(--accent); background: var(--accent-weak); }
 .cmdb-result > span:first-child { font-weight: 600; }
+/* The asset picker: a combobox whose option list is fetched per keystroke. The
+   list floats over the card so the rest of the page does not jump as it grows. */
+.cmdb-picker { position: relative; display: flex; flex-direction: column; gap: 6px; }
+.cmdb-picker-input { width: 100%; }
+.cmdb-picker .cmdb-results {
+  position: absolute; top: 100%; left: 0; right: 0; z-index: 20; margin-top: 4px;
+  padding: 4px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--card); box-shadow: 0 8px 24px rgba(0, 0, 0, .18);
+}
+.cmdb-result-id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+/* Location last and pushed right — it is the field an operator scans down. */
+.cmdb-result-loc { margin-left: auto; }
 .cmdb-cfg-head { margin: 6px 0 2px; font-size: 0.9rem; color: var(--muted); grid-column: 1 / -1; }
 
 /* ---- Documentation (built-in handbook / how-tos) ------------------------- */

@@ -60,8 +60,18 @@ The built-in ServiceNow/Nautobot methods:
   asset surface (ServiceNow `cmdb_ci`, Nautobot `dcim/devices`), so a service
   account scoped to the CMDB (but not to incidents) still passes.
 - `search(integration, query)` → `{ ok, status, assets }`, normalizing each source
-  to `{ id, name, type, location }[]` (ServiceNow `nameLIKE` on the CI table;
-  Nautobot `?q=` over devices).
+  to `{ id, name, type, location }[]`. **One term, three fields** — an operator
+  types whichever of asset id / asset name / location they happen to know:
+  - **ServiceNow** — one encoded query OR-ing `nameLIKE`, `sys_idLIKE`,
+    `asset_tagLIKE` and `location.nameLIKE` on the CI table. `^` and `,` are the
+    query language's own separators, so the term is stripped of them and cannot
+    open a condition of its own.
+  - **Nautobot** — `?q=` (name / asset tag / serial) merged with a second,
+    `?location=` read, deduplicated by id. The location read is **best-effort**:
+    the filter is version-dependent, and a rejected one leaves the `q` results
+    intact rather than failing the search.
+  - **Custom** — one config-driven request (`searchPath` + `queryParam`), so which
+    fields match is whatever the customer's API does with the term.
 
 ## HTTP API
 
@@ -77,7 +87,8 @@ Asset search — **operator+** (`createCmdbAssetsRouter`):
 
 | Method | Path | Notes |
 | --- | --- | --- |
-| GET | `/api/cmdb/assets/search?q=` | `q` min 2 chars. `{ assets }`. **400** (bad `q`) / **404** (no CMDB configured/enabled) / **500** (connector down). Capped at 20 results. |
+| GET | `/api/cmdb/assets/status` | `{ enabled, type }` — is a CMDB connected? Read from the **safe** config (credentials untouched). Configured-but-disabled reports `enabled:false`. Lets the agent page offer asset linking only when there is something to link to. |
+| GET | `/api/cmdb/assets/search?q=` | `q` min 2 chars, matched against asset id / name / location (see above). `{ assets }`. **400** (bad `q`) / **404** (no CMDB configured/enabled) / **500** (connector down). Capped at 20 results. |
 
 Agent link — read **viewer+**, write **operator+** (`createAgentCmdbLinkRouter`):
 
@@ -123,9 +134,16 @@ verified posture) plus a live connectivity test via the connector's
   button that shows the real 200/401/500 result inline. (The test uses a raw
   `fetch`, not `api()`, so an upstream 401 shows inline instead of logging the
   admin out.)
-- **Agent detail** (`loadAgentCmdbLink`): a debounced (min 2 chars) asset search;
-  selecting an asset links it and shows a removable chip with the asset name +
-  location. Viewers see the chip read‑only.
+- **Agent detail** (`loadAgentCmdbLink`): a searchable dropdown (`assetPicker`,
+  a combobox — the option list is fetched per keystroke, debounced, min 2 chars,
+  so it is never bounded by what a `<select>` can hold). Type an **asset id**, an
+  **asset name** or a **location**; every row shows all three plus the asset type,
+  and "No location in CMDB" when the asset has none. ↓/↑ move, Enter picks, Esc
+  closes. Selecting an asset links it and shows a removable chip with the asset
+  name + location. Viewers see the chip read‑only.
+- The card asks `/api/cmdb/assets/status` first: with **no CMDB connected** it says
+  so (and points an admin at Settings → CMDB) instead of offering a search box that
+  could only ever 404.
 
 ## Security notes
 

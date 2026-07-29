@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.108.0 — CMDB asset picker: search by asset ID, name or location
+
+Linking an agent to its CMDB asset was a free-text box that searched asset
+**names** only, and it was shown even when no CMDB was connected.
+
+- **One term, three fields.** ServiceNow ORs `name` / `sys_id` / `asset_tag` /
+  `location.name` in a single encoded query (the term is stripped of `^` and `,`
+  so it cannot open a condition of its own); Nautobot merges its `q=` read with a
+  `location=` read, deduplicated by id and best-effort — a rejected location
+  filter leaves the `q` results intact. The custom connector stays config-driven.
+- **A real dropdown.** The agent page's CMDB card is now a combobox: options are
+  fetched per keystroke (debounced, min 2 chars — a CMDB holds more assets than a
+  `<select>` can), each row shows name, id, type and location ("No location in
+  CMDB" when it has none), and ↓/↑/Enter/Esc work.
+- **New `GET /api/cmdb/assets/status`** (operator+, safe config only) — the card
+  asks first, so with no CMDB connected it says so and points an admin at
+  Settings → CMDB instead of offering a search that can only 404.
+
 ## 0.107.0 — Incidents say where they are (agent + location)
 
 An incident read "WARN probe.latency on 1" and its Device column was empty, so

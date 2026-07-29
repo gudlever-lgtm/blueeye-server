@@ -8061,11 +8061,19 @@ async function loadDeviceConfigHistory(id, card) {
 }
 
 // The per-agent CMDB card: shows the linked asset as a removable chip, or (for
-// operator+) a debounced, min-2-char asset search that links + syncs the site.
+// operator+) a searchable dropdown that links the agent to an asset and syncs
+// the site. The search matches asset id, asset name and CMDB location, so an
+// operator can type whichever of the three they happen to know.
 async function loadAgentCmdbLink(id, host) {
   const writable = canWrite();
   const body = el('div', { class: 'cmdb-body' });
-  host.replaceChildren(el('h3', {}, 'CMDB asset'), body);
+  host.replaceChildren(el('h3', {}, t('cmdb.cardTitle')), body);
+
+  // Ask whether a CMDB is connected at all before offering the picker — an
+  // unconfigured server should say so, not hand out a box that can only 404.
+  let connected = { enabled: false, type: null };
+  try { connected = await api('/api/cmdb/assets/status'); }
+  catch (e) { if (e.status !== 403) connected = { enabled: false, type: null, unknown: true }; }
 
   let link = null;
   try { link = await api(`/api/agents/${id}/cmdb-link`); }
@@ -8109,42 +8117,117 @@ async function loadAgentCmdbLink(id, host) {
   }
 
   function showSearch() {
-    if (!writable) { body.replaceChildren(el('div', { class: 'muted' }, 'Not linked to a CMDB asset.')); return; }
-    const input = el('input', { type: 'search', placeholder: 'Search CMDB assets (min 2 chars)…', autocomplete: 'off' });
-    const results = el('div', { class: 'cmdb-results' });
-    const status = el('div', { class: 'muted small' });
-    let timer = null; let seq = 0;
-    async function run(q) {
-      const my = ++seq;
-      status.textContent = 'Searching…'; results.replaceChildren();
-      try {
-        const data = await api(`/api/cmdb/assets/search?q=${encodeURIComponent(q)}`);
-        if (my !== seq) return;
-        const assets = data.assets || [];
-        status.textContent = assets.length ? '' : 'No matches.';
-        results.replaceChildren(...assets.map((a) => {
-          const row = el('button', { class: 'cmdb-result' },
-            el('span', {}, esc(a.name || a.id)),
-            a.type ? el('span', { class: 'muted small' }, esc(a.type)) : null,
-            a.location ? el('span', { class: 'muted small' }, esc(a.location)) : null);
-          row.addEventListener('click', () => linkTo(a));
-          return row;
-        }));
-      } catch (e) {
-        if (my !== seq) return;
-        status.textContent = e.status === 404 ? 'No CMDB is configured or enabled (Settings → CMDB).' : errText(e);
-      }
+    if (!connected.enabled && !connected.unknown) {
+      // Nothing to link to. Say so once, and point an admin at the setting
+      // instead of leaving a search box that can only fail.
+      body.replaceChildren(el('div', { class: 'muted' }, t('cmdb.notConnected')),
+        isAdmin() ? el('p', { class: 'muted small' }, settingsLink('cmdb', t('cmdb.openSettings'))) : null);
+      return;
     }
-    input.addEventListener('input', () => {
-      const q = input.value.trim();
-      clearTimeout(timer);
-      if (q.length < 2) { status.textContent = ''; results.replaceChildren(); return; }
-      timer = setTimeout(() => run(q), 300);
-    });
-    body.replaceChildren(el('div', { class: 'muted small' }, 'Not linked — search to link an asset:'), input, status, results);
+    if (!writable) { body.replaceChildren(el('div', { class: 'muted' }, t('cmdb.notLinkedReadOnly'))); return; }
+    body.replaceChildren(
+      el('div', { class: 'muted small' }, t('cmdb.pickHint')),
+      assetPicker({ onPick: (a) => linkTo(a) }));
   }
 
   if (link) showLinked(link); else showSearch();
+}
+
+// A searchable dropdown over the connected CMDB's assets. One term is matched
+// server-side against the asset id, the asset name AND the CMDB location, so an
+// operator can type whichever they know — "srv-0142", "core-sw" or "Aarhus".
+//
+// Built as a combobox rather than a <select>: the option list is fetched per
+// keystroke (debounced, min 2 chars) and a CMDB has far more assets than a
+// select can hold. Keyboard: ↓/↑ move, Enter picks, Esc closes.
+function assetPicker({ onPick }) {
+  const listId = `cmdb-opts-${Math.random().toString(36).slice(2, 8)}`;
+  const input = el('input', {
+    type: 'search', class: 'cmdb-picker-input', autocomplete: 'off', role: 'combobox',
+    'aria-expanded': 'false', 'aria-controls': listId, 'aria-autocomplete': 'list',
+    placeholder: t('cmdb.searchPlaceholder'),
+  });
+  const list = el('div', { class: 'cmdb-results', id: listId, role: 'listbox', hidden: 'hidden' });
+  const status = el('div', { class: 'muted small' });
+  const wrap = el('div', { class: 'cmdb-picker' }, input, status, list);
+
+  let options = [];   // the assets currently offered
+  let active = -1;    // index of the highlighted option
+  let timer = null;
+  let seq = 0;        // guards against an older search resolving last
+
+  function close() {
+    list.hidden = true;
+    list.replaceChildren();
+    input.setAttribute('aria-expanded', 'false');
+    options = []; active = -1;
+  }
+
+  function highlight(next) {
+    if (!options.length) return;
+    active = (next + options.length) % options.length;
+    [...list.children].forEach((row, i) => {
+      row.classList.toggle('active', i === active);
+      row.setAttribute('aria-selected', i === active ? 'true' : 'false');
+    });
+    const row = list.children[active];
+    if (row && row.scrollIntoView) row.scrollIntoView({ block: 'nearest' });
+  }
+
+  function pick(i) {
+    const a = options[i];
+    if (!a) return;
+    close();
+    onPick(a);
+  }
+
+  function optionEl(a, i) {
+    // id and location are shown on every row: they are what the operator
+    // searched on, and the id is how the asset is identified in the CMDB.
+    const row = el('div', { class: 'cmdb-result', role: 'option', 'aria-selected': 'false' },
+      el('span', { class: 'cmdb-result-name' }, a.name || a.id),
+      el('span', { class: 'muted small cmdb-result-id' }, a.id),
+      a.type ? el('span', { class: 'muted small' }, a.type) : null,
+      el('span', { class: 'muted small cmdb-result-loc' }, a.location || t('cmdb.noLocation')));
+    row.addEventListener('mousedown', (e) => { e.preventDefault(); pick(i); }); // before blur
+    row.addEventListener('mouseenter', () => highlight(i));
+    return row;
+  }
+
+  async function run(q) {
+    const my = ++seq;
+    status.textContent = t('cmdb.searching');
+    try {
+      const data = await api(`/api/cmdb/assets/search?q=${encodeURIComponent(q)}`);
+      if (my !== seq) return; // a newer keystroke already owns the list
+      options = data.assets || [];
+      status.textContent = options.length ? '' : t('cmdb.noMatches');
+      list.replaceChildren(...options.map(optionEl));
+      list.hidden = options.length === 0;
+      input.setAttribute('aria-expanded', options.length ? 'true' : 'false');
+      active = -1;
+    } catch (e) {
+      if (my !== seq) return;
+      close();
+      status.textContent = e.status === 404 ? t('cmdb.notConnected') : errText(e);
+    }
+  }
+
+  input.addEventListener('input', () => {
+    const q = input.value.trim();
+    clearTimeout(timer);
+    if (q.length < 2) { close(); status.textContent = ''; return; }
+    timer = setTimeout(() => run(q), 300);
+  });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); highlight(active + 1); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); highlight(active - 1); }
+    else if (e.key === 'Enter' && active >= 0) { e.preventDefault(); pick(active); }
+    else if (e.key === 'Escape') { close(); }
+  });
+  input.addEventListener('blur', () => setTimeout(close, 120)); // let a click land
+
+  return wrap;
 }
 
 // Hour-of-day baseline profile chart for one service dependency: the median
@@ -10945,7 +11028,7 @@ const DOCS = [
             [settingsLink('cmdb', 'Open Settings → CMDB'), ' and choose the source type (ServiceNow / Nautobot / custom).'],
             'Enter the base URL + credentials (encrypted at rest, never returned). For custom, provide the request/JSON mapping the page describes.',
             ['Click ', el('strong', {}, 'Test connection'), ' — a bounded read of the asset table (', el('code', {}, 'sysparm_limit=1'), ' for ServiceNow).'],
-            ['On an agent page, search the CMDB and attach the matching asset. Linking ', el('strong', {}, 'syncs the agent’s location'), ': BlueEyes matches a site by the asset’s CMDB location name (creating one if absent).'],
+            ['On an agent page, open the ', el('strong', {}, 'CMDB asset'), ' card and pick the matching asset from the dropdown — type an ', el('strong', {}, 'asset ID'), ', an ', el('strong', {}, 'asset name'), ' or a ', el('strong', {}, 'location'), ' and it searches all three. Linking ', el('strong', {}, 'syncs the agent’s location'), ': BlueEyes matches a site by the asset’s CMDB location name (creating one if absent).'],
           ]),
           docsExpect('A working connection returns ', [el('code', {}, 'reached ServiceNow (200)')], ' (or the equivalent) and asset search returns rows. 401/403/network errors read exactly as in the ServiceNow ITSM table above. The CMDB is also a target in ', [settingsLink('screening', 'Test Settings')], '.'),
         ],

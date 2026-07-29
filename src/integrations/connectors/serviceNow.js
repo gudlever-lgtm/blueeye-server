@@ -168,16 +168,28 @@ function createServiceNowConnector({ fetchImpl = globalThis.fetch, logger = sile
     return { ok: res.ok, status: res.status, detail: res.ok ? `reached ServiceNow (${res.status})` : res.detail };
   }
 
-  // CMDB asset search. Queries the CI table by name (nameLIKE) and normalises the
-  // result to { id, name, type, location }[]. display_value=true resolves the
-  // location reference to a readable string. Returns { ok, status, detail, assets }.
+  // One search term matched against the three things an operator actually types:
+  // the asset NAME, the asset ID (sys_id, and asset_tag where the table has one)
+  // and the LOCATION it stands at. `^OR` is ServiceNow's encoded-query OR; `^`
+  // and `,` are the query language's own separators, so a term carrying one is
+  // stripped of it rather than allowed to rewrite the query.
+  function assetQuery(q) {
+    const term = q.replace(/[\^,]/g, ' ').trim();
+    return ['nameLIKE', 'sys_idLIKE', 'asset_tagLIKE', 'location.nameLIKE']
+      .map((f) => f + term)
+      .join('^OR');
+  }
+
+  // CMDB asset search over name / id / location. Normalises the result to
+  // { id, name, type, location }[]; display_value=true resolves the location
+  // reference to a readable string. Returns { ok, status, detail, assets }.
   async function search(integration, query) {
     const base = String(integration.baseUrl || '').replace(/\/+$/, '');
     const q = String(query || '').trim();
     const res = await requestJson(fetchImpl, {
       method: 'GET',
       url: `${base}/api/now/table/${encodeURIComponent(assetTableOf(integration))}`
-        + `?sysparm_query=${encodeURIComponent('nameLIKE' + q)}`
+        + `?sysparm_query=${encodeURIComponent(assetQuery(q))}`
         + '&sysparm_limit=20&sysparm_display_value=true'
         + '&sysparm_fields=sys_id,name,sys_class_name,location',
       headers: headersFor(integration),

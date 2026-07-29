@@ -198,6 +198,28 @@ test('POST /test with an unreachable base_url -> 500', async () => {
 
 // ---- Phase 3: asset search -------------------------------------------------
 
+test('GET /api/cmdb/assets/status reports no CMDB when none is configured', async () => {
+  const res = await request(makeApp()).get('/api/cmdb/assets/status').set('Authorization', operator());
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body, { enabled: false, type: null });
+});
+
+test('GET /api/cmdb/assets/status reports the connected type, and disabled counts as not connected', async () => {
+  const box = makeSecretBox();
+  const on = await request(makeApp({ cmdbConfigRepo: seededConfig(box), secretBox: box }))
+    .get('/api/cmdb/assets/status').set('Authorization', operator());
+  assert.deepEqual(on.body, { enabled: true, type: 'servicenow' });
+
+  const off = await request(makeApp({ cmdbConfigRepo: seededConfig(box, { enabled: false }), secretBox: box }))
+    .get('/api/cmdb/assets/status').set('Authorization', operator());
+  assert.deepEqual(off.body, { enabled: false, type: null });
+});
+
+test('GET /api/cmdb/assets/status requires operator+ (viewer -> 403)', async () => {
+  const res = await request(makeApp()).get('/api/cmdb/assets/status').set('Authorization', viewer());
+  assert.equal(res.status, 403);
+});
+
 test('GET /api/cmdb/assets/search requires operator+ (viewer -> 403)', async () => {
   const res = await request(makeApp()).get('/api/cmdb/assets/search?q=web').set('Authorization', viewer());
   assert.equal(res.status, 403);

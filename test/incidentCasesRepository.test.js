@@ -58,6 +58,58 @@ test('findById maps a row to the API shape', async () => {
   assert.equal(row.closedBy, null);
 });
 
+test('findById joins the device identity (agent + site) onto the incident', async () => {
+  const pool = fakePool((sql) => {
+    assert.match(sql, /LEFT JOIN agents a ON a\.id = ic\.host_id/);
+    assert.match(sql, /LEFT JOIN locations l ON l\.id = a\.location_id/);
+    return [[{
+      id: 7, host_id: '4', title: 't', status: 'open', severity: 'WARN',
+      primary_finding_id: null, first_event_at: new Date('2026-06-01T08:00:00Z'),
+      last_event_at: new Date('2026-06-01T08:05:00Z'), resolved_at: null,
+      created_by: 'system', closed_by: null, created_at: new Date('2026-06-01T08:00:00Z'),
+      agent_display_name: 'core-sw', agent_hostname: 'sw01.dc1', location_id: 2, location_name: 'Copenhagen HQ',
+    }]];
+  });
+  const row = await createIncidentCasesRepository({ pool }).findById(7);
+  assert.equal(row.agentName, 'core-sw'); // display name wins over the hostname
+  assert.equal(row.agentHostname, 'sw01.dc1');
+  assert.equal(row.locationId, 2);
+  assert.equal(row.locationName, 'Copenhagen HQ');
+});
+
+test('device identity falls back to the hostname and survives a deleted agent / unset site', async () => {
+  const pool = fakePool(() => [[{
+    id: 8, host_id: '4', title: 't', status: 'open', severity: 'WARN',
+    primary_finding_id: null, first_event_at: new Date('2026-06-01T08:00:00Z'),
+    last_event_at: new Date('2026-06-01T08:05:00Z'), resolved_at: null,
+    created_by: 'system', closed_by: null, created_at: new Date('2026-06-01T08:00:00Z'),
+    agent_display_name: null, agent_hostname: 'sw01.dc1', location_id: null, location_name: null,
+  }, {
+    id: 9, host_id: 'gone', title: 't', status: 'open', severity: 'WARN',
+    primary_finding_id: null, first_event_at: new Date('2026-06-01T08:00:00Z'),
+    last_event_at: new Date('2026-06-01T08:05:00Z'), resolved_at: null,
+    created_by: 'system', closed_by: null, created_at: new Date('2026-06-01T08:00:00Z'),
+    agent_display_name: null, agent_hostname: null, location_id: null, location_name: null,
+  }]]);
+  const [named, orphan] = await createIncidentCasesRepository({ pool }).list();
+  assert.equal(named.agentName, 'sw01.dc1');
+  assert.equal(named.locationName, null);
+  assert.equal(orphan.agentName, null); // the LEFT JOIN missed — the id is all we have
+  assert.equal(orphan.hostId, 'gone');
+});
+
+test('the reads that skip the join keep the plain shape (no misleading nulls)', async () => {
+  const pool = fakePool(() => [[{
+    id: 3, host_id: 'core-sw', title: 't', status: 'investigating', severity: 'WARN',
+    primary_finding_id: null, first_event_at: new Date('2026-06-01T08:00:00Z'),
+    last_event_at: new Date('2026-06-01T08:10:00Z'), resolved_at: null,
+    created_by: 'system', closed_by: null, created_at: new Date('2026-06-01T08:00:00Z'),
+  }]]);
+  const r = await createIncidentCasesRepository({ pool }).findOpenByHost('core-sw');
+  assert.equal('agentName' in r, false);
+  assert.equal('locationName' in r, false);
+});
+
 test('findById returns null when no row', async () => {
   const repo = createIncidentCasesRepository({ pool: fakePool(() => [[]]) });
   assert.equal(await repo.findById(9), null);
@@ -96,10 +148,11 @@ test('updateActivity advances last_event_at (GREATEST) and only escalates severi
 
 test('list applies status/severity/host filters and bounds the limit', async () => {
   const pool = fakePool((sql, params) => {
-    assert.match(sql, /status = \?/);
-    assert.match(sql, /severity = \?/);
-    assert.match(sql, /host_id = \?/);
-    assert.match(sql, /ORDER BY last_event_at DESC/);
+    // Qualified: the device join brings in an `agents.status` column of its own.
+    assert.match(sql, /ic\.status = \?/);
+    assert.match(sql, /ic\.severity = \?/);
+    assert.match(sql, /ic\.host_id = \?/);
+    assert.match(sql, /ORDER BY ic\.last_event_at DESC/);
     assert.deepEqual(params, ['open', 'CRIT', 'core-sw', 1000]);
     return [[]];
   });

@@ -110,6 +110,16 @@ test('buildAdvancedDashboard: only open|investigating incident_cases are surface
   assert.deepEqual(out.widgets.incidentCases.recent.map((c) => c.id), [3, 1]); // newest activity first
 });
 
+test('buildAdvancedDashboard: incident_cases rows carry the device and where it stands', () => {
+  const incidentCases = [
+    { id: 1, hostId: '9', agentName: 'core-sw', locationName: 'Copenhagen HQ', title: 'A', severity: 'CRIT', status: 'open', lastEventAt: '2026-06-01T00:00:00.000Z' },
+  ];
+  const [row] = buildAdvancedDashboard({ incidentCases }).widgets.incidentCases.recent;
+  assert.equal(row.deviceId, '9'); // read from the repository's `hostId`
+  assert.equal(row.agentName, 'core-sw');
+  assert.equal(row.locationName, 'Copenhagen HQ');
+});
+
 test('advanced dashboard exposes the incidentCases widget over HTTP (200)', async () => {
   const incidentCasesRepo = { list: async () => [
     { id: 1, deviceId: '9', title: 'CPU on 9', severity: 'CRIT', status: 'investigating', lastEventAt: '2026-06-11T10:00:00.000Z' },

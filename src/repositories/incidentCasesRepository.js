@@ -16,9 +16,35 @@ const OPEN_STATUSES = ['open', 'investigating']; // an incident still absorbing 
 const BASE_COLUMNS = `id, host_id, title, status, severity, primary_finding_id, config_change_id,
   first_event_at, last_event_at, resolved_at, created_by, closed_by, created_at`;
 
+// The same columns, qualified for a query that joins (`ic` is this table).
+const IC_COLUMNS = BASE_COLUMNS.split(',').map((c) => `ic.${c.trim()}`).join(', ');
+
+// "Where is this incident?" — the device label + its site, joined onto every read
+// that a human looks at (list + detail). `host_id` is the agent id as a string,
+// so the join casts; a host_id that is not an agent simply yields NULLs. LEFT
+// JOINs throughout: an incident must still render when the agent was deleted or
+// has no location set.
+const DEVICE_JOIN = `
+  LEFT JOIN agents a ON a.id = ic.host_id
+  LEFT JOIN locations l ON l.id = a.location_id`;
+const DEVICE_COLUMNS = `a.display_name AS agent_display_name, a.hostname AS agent_hostname,
+  a.location_id AS location_id, l.name AS location_name`;
+
 function toIso(v) {
   if (v == null) return null;
   return v instanceof Date ? v.toISOString() : new Date(v).toISOString();
+}
+
+// The human answer to "which machine, and where does it stand?". `agentName`
+// prefers the operator-set display name over the reported hostname; both are
+// null when host_id does not resolve to a (still-existing) agent.
+function deviceIdentity(row) {
+  return {
+    agentName: row.agent_display_name || row.agent_hostname || null,
+    agentHostname: row.agent_hostname ?? null,
+    locationId: row.location_id == null ? null : Number(row.location_id),
+    locationName: row.location_name ?? null,
+  };
 }
 
 // True when severity `a` is strictly more severe than `b` (CRIT > WARN > INFO).
@@ -26,9 +52,13 @@ function isWorse(a, b) {
   return (SEVERITY_RANK[a] ?? -1) > (SEVERITY_RANK[b] ?? -1);
 }
 
-// Maps a DB row to the public API shape (camelCase).
+// Maps a DB row to the public API shape (camelCase). Rows that came from a
+// device-joined query (list/findById/listResolvedClosed) additionally carry the
+// agent + location identity; the internal reads that skip the join keep the
+// plain shape rather than reporting a misleading `agentName: null`.
 function mapRow(row) {
   if (!row) return null;
+  const device = Object.prototype.hasOwnProperty.call(row, 'agent_hostname') ? deviceIdentity(row) : null;
   return {
     id: Number(row.id),
     hostId: row.host_id,
@@ -43,6 +73,7 @@ function mapRow(row) {
     createdBy: row.created_by,
     closedBy: row.closed_by == null ? null : Number(row.closed_by),
     createdAt: toIso(row.created_at),
+    ...(device || {}),
   };
 }
 
@@ -71,7 +102,9 @@ function createIncidentCasesRepository(db) {
 
   async function findById(id) {
     const [rows] = await pool.query(
-      `SELECT ${BASE_COLUMNS} FROM incident_cases WHERE id = ?`,
+      `SELECT ${IC_COLUMNS}, ${DEVICE_COLUMNS}
+       FROM incident_cases ic ${DEVICE_JOIN}
+       WHERE ic.id = ?`,
       [id]
     );
     return mapRow(rows[0]) ?? null;
@@ -154,10 +187,10 @@ function createIncidentCasesRepository(db) {
 
   // Past resolved/closed incidents for the similarity read-model (Fase 4), joined
   // with the primary anomaly type (finding metric), the device platform (a
-  // device-type proxy) and the email of whoever closed it. Newest-resolved first.
+  // device-type proxy), the device identity (agent name + site) and the email of
+  // whoever closed it. Newest-resolved first.
   async function listResolvedClosed({ excludeId = null, limit = 100, statuses = ['resolved', 'closed'] } = {}) {
     const lim = Number.isInteger(limit) && limit > 0 && limit <= 1000 ? limit : 100;
-    const icCols = BASE_COLUMNS.split(',').map((c) => `ic.${c.trim()}`).join(', ');
     // The recommendation read-model passes statuses:['resolved'] (closed-without-
     // resolution is not a "solution"); the similarity endpoint keeps the default.
     const allowed = (Array.isArray(statuses) && statuses.length ? statuses : ['resolved', 'closed'])
@@ -168,11 +201,11 @@ function createIncidentCasesRepository(db) {
     if (excludeId != null) { where.push('ic.id <> ?'); params.push(excludeId); }
     params.push(lim);
     const [rows] = await pool.query(
-      `SELECT ${icCols}, f.metric AS primary_metric, u.email AS closed_by_email, a.platform AS device_platform
-       FROM incident_cases ic
+      `SELECT ${IC_COLUMNS}, ${DEVICE_COLUMNS},
+              f.metric AS primary_metric, u.email AS closed_by_email, a.platform AS device_platform
+       FROM incident_cases ic ${DEVICE_JOIN}
        LEFT JOIN findings f ON f.id = ic.primary_finding_id
        LEFT JOIN users u ON u.id = ic.closed_by
-       LEFT JOIN agents a ON a.id = ic.host_id
        WHERE ${where.join(' AND ')}
        ORDER BY ic.last_event_at DESC, ic.id DESC
        LIMIT ?`,
@@ -191,17 +224,19 @@ function createIncidentCasesRepository(db) {
   async function list({ status = null, severity = null, hostId = null, from = null, to = null, limit = 1000 } = {}) {
     const where = [];
     const params = [];
-    if (status) { where.push('status = ?'); params.push(status); }
-    if (severity) { where.push('severity = ?'); params.push(severity); }
-    if (hostId) { where.push('host_id = ?'); params.push(hostId); }
-    if (from != null) { where.push('last_event_at >= ?'); params.push(from); }
-    if (to != null) { where.push('first_event_at <= ?'); params.push(to); }
+    // Every predicate is qualified: `agents` joins in a `status` column of its own.
+    if (status) { where.push('ic.status = ?'); params.push(status); }
+    if (severity) { where.push('ic.severity = ?'); params.push(severity); }
+    if (hostId) { where.push('ic.host_id = ?'); params.push(hostId); }
+    if (from != null) { where.push('ic.last_event_at >= ?'); params.push(from); }
+    if (to != null) { where.push('ic.first_event_at <= ?'); params.push(to); }
     const lim = Number.isInteger(limit) && limit > 0 && limit <= 5000 ? limit : 1000;
     params.push(lim);
     const [rows] = await pool.query(
-      `SELECT ${BASE_COLUMNS} FROM incident_cases
+      `SELECT ${IC_COLUMNS}, ${DEVICE_COLUMNS}
+       FROM incident_cases ic ${DEVICE_JOIN}
        ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
-       ORDER BY last_event_at DESC, id DESC
+       ORDER BY ic.last_event_at DESC, ic.id DESC
        LIMIT ?`,
       params
     );
@@ -211,4 +246,4 @@ function createIncidentCasesRepository(db) {
   return { create, findById, findOpenByHost, updateActivity, updateStatus, setConfigChange, listStaleInvestigating, listResolvedClosed, list };
 }
 
-module.exports = { createIncidentCasesRepository, mapRow, isWorse, SEVERITY_RANK, OPEN_STATUSES };
+module.exports = { createIncidentCasesRepository, mapRow, deviceIdentity, isWorse, SEVERITY_RANK, OPEN_STATUSES };

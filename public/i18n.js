@@ -84,6 +84,15 @@
       'notes.loadError': 'Could not load the work log: {message}',
       'notes.readOnly': 'You have read-only access to the work log.',
 
+      // Incidents — where a case is (the agent and the site it stands at)
+      'incidents.colDevice': 'Device',
+      'incidents.colLocation': 'Location',
+      'incidents.filterDevice': 'Agent id…',
+      'incidents.filterLocation': 'Location…',
+      'incidents.deviceId': 'device {id}',
+      'incidents.deviceUnknown': 'Unknown device',
+      'incidents.noLocation': 'No location set',
+
       // Changes landing page (Fase 2)
       'changes.title': 'Changes',
       'changes.subtitle': 'What happened since you last looked',
@@ -194,6 +203,14 @@
       'notes.error': 'Noten kunne ikke gemmes: {message}',
       'notes.loadError': 'Arbejdsloggen kunne ikke hentes: {message}',
       'notes.readOnly': 'Du har kun læseadgang til arbejdsloggen.',
+
+      'incidents.colDevice': 'Enhed',
+      'incidents.colLocation': 'Lokation',
+      'incidents.filterDevice': 'Agent-id…',
+      'incidents.filterLocation': 'Lokation…',
+      'incidents.deviceId': 'enhed {id}',
+      'incidents.deviceUnknown': 'Ukendt enhed',
+      'incidents.noLocation': 'Ingen lokation angivet',
 
       'changes.title': 'Ændringer',
       'changes.subtitle': 'Hvad er sket siden du sidst kiggede',

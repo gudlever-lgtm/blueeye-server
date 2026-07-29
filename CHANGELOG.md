@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.107.0 — Incidents say where they are (agent + location)
+
+An incident read "WARN probe.latency on 1" and its Device column was empty, so
+placing a case meant looking the agent id up somewhere else. Every surface that
+names an incident now names the **agent** and the **location** it stands at.
+
+- **The auto-generated title** resolves the agent: "WARN probe.latency on
+  **core-sw (Copenhagen HQ)**". Best-effort — an unknown/deleted agent or a
+  failed lookup falls back to "device 1" and never blocks the incident.
+- **The read API** joins `agents` + `locations` onto `GET /api/incidents`,
+  `GET /api/incidents/:id` and the similarity pool: `agentName`,
+  `agentHostname`, `locationId`, `locationName`. Since it is a join on read, a
+  renamed or relocated agent immediately reads correctly on **old** incidents
+  too — the frozen title is not the only answer.
+- **`explanation.where`** gains `locationId`/`locationName` and a ready-made
+  `summary` ("core-sw (Copenhagen HQ)").
+- **Dashboard**: the Incidents list gains **Device** and **Location** columns
+  (location narrows client-side — incidents are keyed by device, not by site),
+  the detail header names the agent (linked to its page) and its site, and the
+  Overview "open incidents" rollup shows the same agent · site pair the
+  probe-outage rollup already did.
+
+Fixed along the way: the incident device was read as `deviceId` in the dashboard
+and in the Overview rollup, but the repository has always returned `hostId` — so
+the Device column, the detail header and the rollup rendered blank. The
+"Affected path" card and the guide's config-context action were reading the same
+missing field.
+
 ## 0.99.0 — Consolidated Troubleshooting Dashboard
 
 One screen for an outage: **what is failing, what it affects, and when it

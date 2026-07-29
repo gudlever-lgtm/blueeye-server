@@ -70,7 +70,13 @@ function buildAdvancedDashboard({
           .slice(0, 10)
           .map((c) => ({
             id: c.id,
-            deviceId: c.deviceId ?? null,
+            // `hostId` is the repository's field name; `deviceId` was read here
+            // and never existed, so every row showed a blank device.
+            deviceId: c.hostId ?? c.deviceId ?? null,
+            // Which machine, and where it stands — same pair the probe-outage
+            // widget above carries, so both rollups read alike.
+            agentName: c.agentName || null,
+            locationName: c.locationName || null,
             title: c.title,
             severity: c.severity,
             status: c.status,

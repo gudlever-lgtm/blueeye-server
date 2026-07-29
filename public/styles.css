@@ -1636,6 +1636,11 @@ button.active-btn { outline: 2px solid var(--accent); }
 .inc-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
 .inc-header h2 { margin: 0 0 4px; }
 .inc-meta { font-size: 13px; }
+/* "Where is this incident?" — the agent + site pair shown beside a case (list
+   cell, rollup row) and the agent link in the detail header. */
+.inc-where { font-size: 12px; }
+.inc-meta .inc-where-agent { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
+.inc-meta .inc-where-agent:hover { color: var(--accent, #2563eb); }
 .inc-actions { display: flex; gap: 8px; margin: 8px 0 14px; flex-wrap: wrap; }
 /* The base .card is a fixed 320px column (the login card). The incident detail
    page stacks several cards, so let them fill the page width like the other

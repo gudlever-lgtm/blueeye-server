@@ -26,6 +26,31 @@ test('buildExplanation: where = device (+ label from agent)', () => {
   assert.equal(out.where.topology, null); // Fase-6 not incident-scoped yet
 });
 
+test('buildExplanation: where names the site the device stands at', () => {
+  const out = buildExplanation({
+    incident, primaryFinding: finding,
+    agent: { display_name: 'core-sw-1', hostname: 'h1', location_id: 3, location_name: 'Copenhagen HQ' },
+  });
+  assert.equal(out.where.locationId, 3);
+  assert.equal(out.where.locationName, 'Copenhagen HQ');
+  assert.equal(out.where.summary, 'core-sw-1 (Copenhagen HQ)');
+});
+
+test('buildExplanation: where falls back to the identity joined onto the incident', () => {
+  const joined = { ...incident, agentName: 'edge-fw', locationId: 5, locationName: 'Aarhus' };
+  const out = buildExplanation({ incident: joined, primaryFinding: finding });
+  assert.equal(out.where.deviceLabel, 'edge-fw');
+  assert.equal(out.where.locationName, 'Aarhus');
+  assert.equal(out.where.summary, 'edge-fw (Aarhus)');
+});
+
+test('buildExplanation: where degrades to the device id when nothing resolves', () => {
+  const out = buildExplanation({ incident, primaryFinding: finding });
+  assert.equal(out.where.deviceLabel, null);
+  assert.equal(out.where.locationName, null);
+  assert.equal(out.where.summary, 'device 7');
+});
+
 test('buildExplanation: where.interface is pulled from evidence when present', () => {
   const f = { ...finding, evidence: [{ metric: 'if.errors', iface: 'eth0', value: 3, ts: 'x' }] };
   const out = buildExplanation({ incident, primaryFinding: f });

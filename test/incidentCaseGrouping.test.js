@@ -7,7 +7,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
 const { createIncidentCaseService } = require('../src/incidentCases/incidentCaseService');
-const { makeIncidentCasesRepo, makeFindingStore } = require('../test-support/fakes');
+const { makeIncidentCasesRepo, makeFindingStore, makeAgentsRepo } = require('../test-support/fakes');
 
 // Exercises the auto-create/grouping policy against the in-memory fakes (same
 // surface as the real repo + finding store). The default window is the
@@ -100,6 +100,44 @@ test('a new incident is opened as system/open with the finding as primary + a ti
   assert.match(row.title, /core-sw/);
   assert.equal(new Date(row.first_event_at).getTime(), at(0).getTime());
   assert.equal(findingStore.rows.find((x) => x.id === 'a').incidentCaseId, r.incidentCaseId);
+});
+
+// --- The auto-generated title names WHERE the incident is -------------------
+// "WARN probe.latency on 1" cannot be acted on: it names neither the machine nor
+// the site. With an agents repo wired, the title carries both.
+function svcWithAgent(agent) {
+  const incidentCasesRepo = makeIncidentCasesRepo();
+  const findingStore = makeFindingStore();
+  const agentsRepo = makeAgentsRepo({ findById: async (id) => (Number(id) === 14 ? agent : null) });
+  return { svc: createIncidentCaseService({ incidentCasesRepo, findingStore, agentsRepo }), incidentCasesRepo };
+}
+
+test('the title names the agent and its location instead of the bare agent id', async () => {
+  const { svc, incidentCasesRepo } = svcWithAgent({ display_name: 'core-sw', hostname: 'sw01', location_name: 'Copenhagen HQ' });
+  await svc.assignFinding(finding({ id: 'a', hostId: '14', metric: 'probe.latency', createdAt: at(0) }));
+  assert.equal(incidentCasesRepo.rows[0].title, 'WARN probe.latency on core-sw (Copenhagen HQ)');
+});
+
+test('an agent with no location set still gets a named title', async () => {
+  const { svc, incidentCasesRepo } = svcWithAgent({ hostname: 'sw01', location_name: null });
+  await svc.assignFinding(finding({ id: 'a', hostId: '14', metric: 'probe.latency', createdAt: at(0) }));
+  assert.equal(incidentCasesRepo.rows[0].title, 'WARN probe.latency on sw01');
+});
+
+test('an unknown host falls back to the id — and a failing lookup never blocks the incident', async () => {
+  const { svc, incidentCasesRepo } = svcWithAgent({ hostname: 'sw01' });
+  await svc.assignFinding(finding({ id: 'a', hostId: '99', metric: 'cpu', createdAt: at(0) }));
+  assert.equal(incidentCasesRepo.rows[0].title, 'WARN cpu on device 99');
+
+  const incidentCasesRepo2 = makeIncidentCasesRepo();
+  const svc2 = createIncidentCaseService({
+    incidentCasesRepo: incidentCasesRepo2,
+    findingStore: makeFindingStore(),
+    agentsRepo: makeAgentsRepo({ findById: async () => { throw new Error('db down'); } }),
+  });
+  const r = await svc2.assignFinding(finding({ id: 'a', hostId: '14', createdAt: at(0) }));
+  assert.equal(r.created, true);
+  assert.equal(incidentCasesRepo2.rows[0].title, 'WARN cpu on device 14');
 });
 
 test('assignFinding is a no-op (returns null) for a finding with no id or no host', async () => {

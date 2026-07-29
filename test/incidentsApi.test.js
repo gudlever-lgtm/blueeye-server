@@ -32,6 +32,35 @@ test('GET /api/incidents returns the list (viewer+) → 200', async () => {
   assert.equal(res.body.incidents[0].hostId, 'core-sw');
 });
 
+test('GET /api/incidents carries the device identity (agent + site) on every row', async () => {
+  const incidentCasesRepo = makeIncidentCasesRepo({ devices: { 14: { agentName: 'core-sw', locationId: 2, locationName: 'Copenhagen HQ' } } });
+  await incidentCasesRepo.create({
+    host_id: '14', title: 'WARN probe.latency on core-sw (Copenhagen HQ)', severity: 'WARN',
+    first_event_at: new Date('2026-06-01T08:00:00Z'), last_event_at: new Date('2026-06-01T08:00:00Z'),
+  });
+  const app = makeApp({ incidentCasesRepo });
+  const res = await request(app).get('/api/incidents').set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 200);
+  assert.equal(res.body.incidents[0].agentName, 'core-sw');
+  assert.equal(res.body.incidents[0].locationName, 'Copenhagen HQ');
+  assert.equal(res.body.incidents[0].locationId, 2);
+});
+
+test('GET /api/incidents/:id explains WHERE the incident is', async () => {
+  const incidentCasesRepo = makeIncidentCasesRepo({ devices: { 14: { agentName: 'core-sw', locationId: 2, locationName: 'Copenhagen HQ' } } });
+  const id = await incidentCasesRepo.create({
+    host_id: '14', title: 'WARN probe.latency on core-sw (Copenhagen HQ)', severity: 'WARN',
+    first_event_at: new Date('2026-06-01T08:00:00Z'), last_event_at: new Date('2026-06-01T08:00:00Z'),
+  });
+  const app = makeApp({ incidentCasesRepo });
+  const res = await request(app).get(`/api/incidents/${id}`).set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 200);
+  assert.equal(res.body.incident.agentName, 'core-sw');
+  assert.equal(res.body.incident.locationName, 'Copenhagen HQ');
+  assert.equal(res.body.explanation.where.locationName, 'Copenhagen HQ');
+  assert.equal(res.body.explanation.where.summary, 'core-sw (Copenhagen HQ)');
+});
+
 test('GET /api/incidents requires auth → 401', async () => {
   const { app } = await withIncident();
   assert.equal((await request(app).get('/api/incidents')).status, 401);

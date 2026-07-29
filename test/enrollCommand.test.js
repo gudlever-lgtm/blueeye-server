@@ -124,3 +124,49 @@ test('GET /api/enroll/command 500s when code creation throws', async () => {
   const res = await request(makeApp({ enrollmentCodesRepo: repo })).get('/api/enroll/command').set('Authorization', operator());
   assert.equal(res.status, 500);
 });
+
+// ---- GET /api/enroll/update-command (Windows "just update") -----------------
+// The dashboard's Update button for a Windows agent: a one-liner that upgrades the
+// agent already on the host. No enrollment code — so it can't install a new agent.
+test('GET /api/enroll/update-command requires auth (401) and operator+ (403 for viewer)', async () => {
+  assert.equal((await request(makeApp()).get('/api/enroll/update-command')).status, 401);
+  assert.equal((await request(makeApp()).get('/api/enroll/update-command').set('Authorization', authHeader('viewer'))).status, 403);
+});
+
+test('GET /api/enroll/update-command returns the PowerShell update one-liner (200)', async () => {
+  const res = await request(makeApp({ enrollConfig: { publicUrl: 'https://blueeye.acme.dk' } }))
+    .get('/api/enroll/update-command?platform=windows-amd64').set('Authorization', operator());
+  assert.equal(res.status, 200);
+  assert.equal(res.body.os, 'windows');
+  assert.match(res.body.oneLiner, /powershell .*irm https:\/\/blueeye\.acme\.dk\/enroll\/update\.ps1 \| iex/);
+  // Update, not install: no enrollment code anywhere in the command.
+  assert.ok(!/install\.ps1/.test(res.body.oneLiner));
+  assert.match(res.body.oneLiner, /SecurityProtocol -bor 3072/); // TLS-1.2 prelude
+  assert.equal((res.body.oneLiner.match(/"/g) || []).length, 2); // balanced quoting
+  assert.equal(res.body.version, '0.1.0'); // the fake source store's version
+  assert.equal(res.body.manual.checksum, 'c'.repeat(64));
+  assert.match(res.body.manual.downloadUrl, /\/enroll\/agent-source\.tgz$/);
+});
+
+test('GET /api/enroll/update-command pins the self-signed cert when a fingerprint is configured', async () => {
+  const fp = Array.from({ length: 32 }, () => 'ab').join(':');
+  const res = await request(makeApp({ enrollConfig: { certFingerprint: fp } }))
+    .get('/api/enroll/update-command?platform=windows-amd64').set('Authorization', operator());
+  assert.equal(res.status, 200);
+  assert.match(res.body.oneLiner, /ServerCertificateValidationCallback/);
+  assert.equal(res.body.certFingerprint, fp);
+});
+
+test('GET /api/enroll/update-command rejects a non-Windows platform (400) and a malformed one (400)', async () => {
+  const linux = await request(makeApp()).get('/api/enroll/update-command?platform=linux-amd64').set('Authorization', operator());
+  assert.equal(linux.status, 400);
+  assert.equal(linux.body.code, 'UPDATE_COMMAND_UNSUPPORTED');
+  const bad = await request(makeApp()).get('/api/enroll/update-command?platform=Windows%20AMD64').set('Authorization', operator());
+  assert.equal(bad.status, 400);
+});
+
+test('GET /api/enroll/update-command 409s when the server has no agent source published', async () => {
+  const res = await request(makeApp({ agentSourceStore: makeSourceStore({ present: false }) }))
+    .get('/api/enroll/update-command?platform=windows-amd64').set('Authorization', operator());
+  assert.equal(res.status, 409);
+});

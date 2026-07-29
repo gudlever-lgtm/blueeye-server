@@ -4,7 +4,7 @@ const fs = require('fs');
 const express = require('express');
 const { asyncHandler } = require('../middleware/asyncHandler');
 const { renderInstallScript } = require('../enroll/installScript');
-const { renderInstallPs1, renderUninstallPs1 } = require('../enroll/installScriptWin');
+const { renderInstallPs1, renderUpdatePs1, renderUninstallPs1 } = require('../enroll/installScriptWin');
 
 // Only allow a sane host[:port] when deriving the server URL from the request,
 // so a forged Host header can't be reflected into the install script.
@@ -31,6 +31,7 @@ function resolveServerUrl(req, enrollConfig) {
 //   GET /enroll/agent-binary-status    -> build status for operator inspection
 //   GET /enroll/agent/:platform        -> manually-dropped binary (legacy; only if published)
 //   GET /enroll/:code/install.sh       -> the one-line installer for that code
+//   GET /enroll/update.ps1             -> the Windows update-in-place one-liner
 function createEnrollRouter({ artifactStore, sourceStore, binaryStore, releaseStore, enrollmentCodesRepo, enrollConfig = {}, releasePublicKey = '' }) {
   const router = express.Router();
   const certFingerprint = enrollConfig.certFingerprint || '';
@@ -220,6 +221,29 @@ function createEnrollRouter({ artifactStore, sourceStore, binaryStore, releaseSt
     });
     res.status(200).type('text/plain; charset=utf-8').send(script);
   }));
+
+  // The Windows UPDATE one-liner (PowerShell), served at
+  //   irm <server>/enroll/update.ps1 | iex
+  // for a host whose agent is already enrolled. It replaces the agent's CODE in
+  // place and never enrolls, so — unlike install.ps1 — it needs no enrollment code
+  // and cannot produce a second agent: the script aborts on a host with no
+  // installed, enrolled agent. Public for the same reason as install.ps1 (the host
+  // has no dashboard session), and integrity rests on the embedded SHA-256 of the
+  // source bundle plus the pinned TLS fetch. 404 when no agent source is published.
+  router.get('/update.ps1', (req, res) => {
+    const sha = sourceStore ? sourceStore.sha256 : '';
+    if (!sha) {
+      res.status(404).type('text/plain; charset=utf-8');
+      return res.send('# No agent source is published on this server, so there is nothing to update to.\n');
+    }
+    const script = renderUpdatePs1({
+      serverUrl: resolveServerUrl(req, enrollConfig),
+      certFingerprint,
+      sourceSha: sha,
+      agentVersion: sourceStore.sourceVersion ? sourceStore.sourceVersion() : '',
+    });
+    res.status(200).type('text/plain; charset=utf-8').send(script);
+  });
 
   // The Windows uninstaller (PowerShell) — the analogue of uninstall.sh, so a
   // Windows host removes the agent with

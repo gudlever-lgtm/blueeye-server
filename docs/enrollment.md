@@ -77,7 +77,9 @@ Routes (admin): `GET/POST/DELETE /api/settings/agent-release-key` — status / g
 | `GET /enroll/:code/install.ps1` | none | the self-contained **PowerShell** installer for that code (Windows); 404 if unknown/expired/exhausted |
 | `GET /enroll/uninstall.sh` | none | the agent uninstaller (Linux/macOS) — `curl … \| sudo sh` removes the agent from a host (warns + confirms first); 404 if no agent source is configured |
 | `GET /enroll/uninstall.ps1` | none | the **PowerShell** uninstaller (Windows) — `irm … \| iex` stops+unregisters the scheduled task and removes the install/state/log dirs |
+| `GET /enroll/update.ps1` | none | the **PowerShell** updater (Windows) — updates an already-enrolled agent **in place**; no enrollment code, aborts where no enrolled agent exists; 404 if no agent source is published |
 | `GET /api/enroll/command` | operator+ | builds the one-liner + manual/checksum variants (mints or reuses a code) |
+| `GET /api/enroll/update-command` | operator+ | builds the Windows **update** one-liner (no code in it); 400 for a non-Windows platform, 409 if no source is published |
 
 `GET /api/enroll/command` query params: `codeId` (reuse an existing active code),
 `maxUses` + `ttlMinutes` (mint a bulk code), `locationId`. It returns:
@@ -112,8 +114,38 @@ different flags, and there is no `sh`):
   PowerShell. It requires Node.js, verifies the source checksum, and registers a
   **Scheduled Task** (SYSTEM, at boot, restart-on-failure) as the service.
 
-Windows/macOS agents don't self-update (that path is systemd-only) — re-run the
-installer to upgrade.
+Windows/macOS agents don't self-update (that path is systemd-only).
+
+### Updating a Windows agent (no re-install)
+
+A Windows agent runs under a Scheduled Task, so the server's one-click Update is
+declined on the host. When such an agent is behind, the **Update** button in
+Agents hands the operator a copy-paste one-liner instead:
+
+```
+powershell -NoProfile -ExecutionPolicy Bypass -Command "<TLS/pin prelude> irm https://<server>/enroll/update.ps1 | iex"
+```
+
+`GET /api/enroll/update-command?platform=windows-amd64` (operator+) builds it —
+`{ oneLiner, os, platform, version, certFingerprint, manual: { downloadUrl, checksum, command } }`.
+
+`update.ps1` is an **update, not an install**:
+
+- it carries **no enrollment code** and never runs `enroll`, so it cannot create a
+  second agent on the server;
+- it aborts unless the host already has an installed agent *and* a non-empty
+  enrollment token — the message points at **Add agent** instead;
+- it downloads the source bundle, verifies the embedded SHA-256, stops the
+  scheduled task, replaces the code in the install dir, reinstalls production
+  dependencies and starts the task again;
+- the **state dir** (token + `config.json`) is never touched, so the host keeps its
+  identity and reappears in the dashboard on the new version. The existing
+  `run-agent.cmd` launcher is preserved across the swap (it lives in the install
+  dir), and the scheduled task is only re-registered if it has gone missing.
+
+It honours the same `BLUEEYE_INSTALL_DIR` / `_STATE_DIR` / `_LOG_DIR` overrides and
+the same `BLUEEYE_DRY_RUN` (verify-then-stop) hook as the installer. macOS/Docker
+agents still upgrade by re-running their installer on the host.
 
 ## Agent source (no binaries)
 

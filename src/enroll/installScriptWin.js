@@ -23,9 +23,12 @@
 // BLUEEYE_DRY_RUN hook as the shell installer so the download+verify path can be
 // exercised without touching the system.
 //
-// Windows self-update is intentionally NOT wired here: the agent only self-updates
-// under systemd (see blueeye-agent runtime.js), so a Windows install is re-run to
-// upgrade. That keeps this installer small and avoids a half-working update path.
+// Windows self-update is intentionally NOT wired into the agent: it only accepts
+// the server's push-update command under systemd (see blueeye-agent runtime.js).
+// A Windows host upgrades by running the UPDATE one-liner instead — see
+// renderUpdatePs1 below, served at GET /enroll/update.ps1. That script replaces
+// the code of an ALREADY-ENROLLED agent in place; it never enrolls, so it needs
+// no enrollment code and never produces a second agent on the server.
 
 const { normalizeFingerprint } = require('./fingerprint');
 
@@ -51,6 +54,64 @@ function winSecurityPrelude(certFingerprint) {
   const pin = `[Net.ServicePointManager]::ServerCertificateValidationCallback = { param($s,$c,$ch,$e) try { ((([Security.Cryptography.SHA256]::Create().ComputeHash($c.GetRawCertData()) | ForEach-Object { $_.ToString('x2') }) -join '') -eq '${fpHex}') } catch { $false } };`;
   return `${tls} ${pin}`;
 }
+
+// PowerShell shared by the installer and the updater: friendly Info/Fail output,
+// the TLS-1.2 + cert-pinning setup Windows PowerShell 5.1 needs against an on-prem
+// server, and a download helper that explains a failure instead of dumping a .NET
+// stack. Both scripts define $CertFingerprint before including this.
+const PS_COMMON = `function Info([string]$m) { Write-Host "[blueeye] $m" }
+# Write the reason plainly to stderr and exit non-zero. NOT Write-Error: under
+# $ErrorActionPreference='Stop' that throws a WriteErrorException whose type
+# headline hides the actual message — the opposite of a useful indicator.
+function Fail([string]$m) { [Console]::Error.WriteLine("[blueeye] ERROR: $m"); exit 1 }
+
+# Windows PowerShell 5.1 still negotiates TLS 1.0 by default (which a modern
+# server rejects) and refuses a self-signed certificate outright — the two most
+# common on-prem failures. Force TLS 1.2, and when the server's cert fingerprint
+# is known, PIN the self-signed leaf to it (SHA-256 of the DER) instead of
+# disabling validation, so integrity is preserved.
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072
+$FpHex = ($CertFingerprint -replace '[^0-9A-Fa-f]', '').ToLower()
+if ($FpHex) {
+  [Net.ServicePointManager]::ServerCertificateValidationCallback = {
+    param($psender, $cert, $chain, $sslErrors)
+    try {
+      $h = [Security.Cryptography.SHA256]::Create().ComputeHash($cert.GetRawCertData())
+      ((($h | ForEach-Object { $_.ToString('x2') }) -join '') -eq $FpHex)
+    } catch { $false }
+  }
+}
+
+# Turns a raw Invoke-WebRequest failure into an actionable message (an indicator,
+# not a .NET stack): TLS-trust vs unreachable-host vs other.
+function Fetch-Or-Explain([string]$url, [string]$outFile) {
+  try {
+    Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $outFile
+  } catch {
+    $m = $_.Exception.Message
+    if ($m -match 'trust relationship|SSL/TLS|secure channel|certificate') {
+      Fail ("could not verify the server's TLS certificate for $url. On-prem servers usually use a self-signed cert — set its SHA-256 fingerprint on the server (AGENT_CERT_FINGERPRINT) and regenerate the command so this script can pin it. Details: $m")
+    } elseif ($m -match 'Unable to connect|could not be resolved|actively refused|timed out|remote name') {
+      Fail ("cannot reach $url from this host — check DNS/firewall, or set BLUEEYE_PUBLIC_URL on the server to an address this machine can actually reach (a bare hostname often will not resolve). Details: $m")
+    } else {
+      Fail "download failed for $url : $m"
+    }
+  }
+}`;
+
+// Stops a running agent before its code is replaced. On an upgrade the old process
+// keeps the PREVIOUS version loaded and holds file locks in the install dir; a
+// Scheduled Task also ignores a second Start while one instance is live
+// (MultipleInstances = IgnoreNew), so leaving it running means the new code lands
+// on disk but never runs — the dashboard would keep showing the old version.
+const PS_STOP_RUNNING = `Info "stopping any running '$ServiceName' before replacing the code ..."
+try { Stop-ScheduledTask -TaskName $ServiceName -ErrorAction SilentlyContinue | Out-Null } catch {}
+try {
+  Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -and $_.CommandLine -like "*$InstallDir*" } |
+    ForEach-Object { try { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } catch {} }
+} catch {}
+Start-Sleep -Seconds 2`;
 
 function renderInstallPs1({
   serverUrl,
@@ -90,45 +151,7 @@ $LogDir     = if ($env:BLUEEYE_LOG_DIR)     { $env:BLUEEYE_LOG_DIR }     else { 
 $TokenPath  = Join-Path $StateDir 'token'
 $ConfigPath = Join-Path $StateDir 'config.json'
 
-function Info([string]$m) { Write-Host "[blueeye] $m" }
-# Write the reason plainly to stderr and exit non-zero. NOT Write-Error: under
-# $ErrorActionPreference='Stop' that throws a WriteErrorException whose type
-# headline hides the actual message — the opposite of a useful indicator.
-function Fail([string]$m) { [Console]::Error.WriteLine("[blueeye] ERROR: $m"); exit 1 }
-
-# Windows PowerShell 5.1 still negotiates TLS 1.0 by default (which a modern
-# server rejects) and refuses a self-signed certificate outright — the two most
-# common on-prem failures. Force TLS 1.2, and when the server's cert fingerprint
-# is known, PIN the self-signed leaf to it (SHA-256 of the DER) instead of
-# disabling validation, so integrity is preserved.
-[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072
-$FpHex = ($CertFingerprint -replace '[^0-9A-Fa-f]', '').ToLower()
-if ($FpHex) {
-  [Net.ServicePointManager]::ServerCertificateValidationCallback = {
-    param($psender, $cert, $chain, $sslErrors)
-    try {
-      $h = [Security.Cryptography.SHA256]::Create().ComputeHash($cert.GetRawCertData())
-      ((($h | ForEach-Object { $_.ToString('x2') }) -join '') -eq $FpHex)
-    } catch { $false }
-  }
-}
-
-# Turns a raw Invoke-WebRequest failure into an actionable message (an indicator,
-# not a .NET stack): TLS-trust vs unreachable-host vs other.
-function Fetch-Or-Explain([string]$url, [string]$outFile) {
-  try {
-    Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $outFile
-  } catch {
-    $m = $_.Exception.Message
-    if ($m -match 'trust relationship|SSL/TLS|secure channel|certificate') {
-      Fail ("could not verify the server's TLS certificate for $url. On-prem servers usually use a self-signed cert — set its SHA-256 fingerprint on the server (AGENT_CERT_FINGERPRINT) and regenerate the command so the installer can pin it. Details: $m")
-    } elseif ($m -match 'Unable to connect|could not be resolved|actively refused|timed out|remote name') {
-      Fail ("cannot reach $url from this host — check DNS/firewall, or set BLUEEYE_PUBLIC_URL on the server to an address this machine can actually reach (a bare hostname often will not resolve). Details: $m")
-    } else {
-      Fail "download failed for $url : $m"
-    }
-  }
-}
+${PS_COMMON}
 
 if (-not $SourceSha256) {
   Fail 'the BlueEyes server has no agent source published — set AGENT_SOURCE_DIR on the server (see docs/enrollment.md), then retry'
@@ -169,23 +192,8 @@ try {
   # Inspection/test mode: verified, nothing written to the system yet.
   if ($env:BLUEEYE_DRY_RUN) { Info 'dry-run: verified, stopping before install'; exit 0 }
 
-  # Stop any running instance BEFORE replacing the code. On a re-run/upgrade the
-  # old agent process keeps the PREVIOUS version loaded in memory and holds file
-  # locks in the install dir. If it's left running, the new code is written to
-  # disk but never actually runs — a Scheduled Task ignores a second Start while
-  # one instance is live (MultipleInstances = IgnoreNew) — so the agent keeps
-  # reporting the OLD version and the dashboard never advances. Stop the task,
-  # end any stray node still running from the install dir, and give Windows a
-  # moment to release the handles, so the extract is clean and the version we
-  # start is the one we just installed.
-  Info "stopping any running '$ServiceName' before replacing the code ..."
-  try { Stop-ScheduledTask -TaskName $ServiceName -ErrorAction SilentlyContinue | Out-Null } catch {}
-  try {
-    Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" -ErrorAction SilentlyContinue |
-      Where-Object { $_.CommandLine -and $_.CommandLine -like "*$InstallDir*" } |
-      ForEach-Object { try { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } catch {} }
-  } catch {}
-  Start-Sleep -Seconds 2
+  # Stop any running instance BEFORE replacing the code (see PS_STOP_RUNNING).
+  ${PS_STOP_RUNNING.split('\n').join('\n  ')}
 
   # Lay the agent out fresh under the install dir (a re-run replaces the code but
   # keeps the token/config in the separate state dir, so it stays idempotent).
@@ -311,6 +319,203 @@ try {
 `;
 }
 
+// The Windows UPDATER (PowerShell), served at GET /enroll/update.ps1 — what the
+// dashboard's "Update" button hands an operator for a Windows agent that is behind.
+//
+// It upgrades an agent that is ALREADY on this host, in place:
+//   1. refuses to run unless an enrolled agent is present (install dir + a
+//      non-empty token) — so a stray paste can never create a second agent,
+//   2. downloads the agent SOURCE bundle from this server and verifies its
+//      embedded SHA-256 (ABORTS on mismatch),
+//   3. stops the scheduled task, replaces the CODE in the install dir (the state
+//      dir with token/config is never touched — no enrollment, no new code),
+//   4. reinstalls production dependencies and starts the task again.
+// No enrollment code is involved, which is exactly what makes it an update rather
+// than an install: the agent keeps its identity and reappears in the dashboard on
+// the new version. Honours the same BLUEEYE_INSTALL_DIR / _STATE_DIR / _LOG_DIR
+// overrides and the same BLUEEYE_DRY_RUN inspection hook as the installer.
+function renderUpdatePs1({
+  serverUrl,
+  certFingerprint = '',
+  sourceSha = '',
+  serviceName = 'blueeye-agent',
+  agentVersion = '',
+} = {}) {
+  const fp = normalizeFingerprint(certFingerprint);
+  return `#Requires -Version 5.1
+# BlueEyes agent updater (Windows) — generated by blueeye-server. Do not edit by hand.
+#
+# Run from an ELEVATED PowerShell (Administrator) on a host that ALREADY runs the agent:
+#   powershell -NoProfile -ExecutionPolicy Bypass -Command "irm ${psSq(serverUrl)}/enroll/update.ps1 | iex"
+#
+# Updates the installed agent in place. It does NOT enroll and does NOT need an
+# enrollment code: the token and config in the state dir are left untouched, so the
+# host keeps its existing agent identity instead of appearing as a new agent.
+$ErrorActionPreference = 'Stop'
+
+$ServerUrl       = '${psSq(serverUrl)}'
+$CertFingerprint = '${psSq(fp)}'
+$SourceSha256    = '${psSq(sourceSha)}'
+$ServiceName     = '${psSq(serviceName)}'
+$AgentVersion    = '${psSq(agentVersion)}'
+
+$InstallDir = if ($env:BLUEEYE_INSTALL_DIR) { $env:BLUEEYE_INSTALL_DIR } else { Join-Path $env:ProgramData 'BlueEyes\\agent' }
+$StateDir   = if ($env:BLUEEYE_STATE_DIR)   { $env:BLUEEYE_STATE_DIR }   else { Join-Path $env:ProgramData 'BlueEyes\\state' }
+$LogDir     = if ($env:BLUEEYE_LOG_DIR)     { $env:BLUEEYE_LOG_DIR }     else { Join-Path $env:ProgramData 'BlueEyes\\logs' }
+$TokenPath  = Join-Path $StateDir 'token'
+$ConfigPath = Join-Path $StateDir 'config.json'
+
+${PS_COMMON}
+
+if (-not $SourceSha256) {
+  Fail 'the BlueEyes server has no agent source published — set AGENT_SOURCE_DIR on the server (see docs/enrollment.md), then retry'
+}
+
+# UPDATE ONLY. Without an enrolled agent here there is nothing to upgrade, and this
+# script cannot enroll one (it carries no enrollment code) — so say so plainly
+# rather than leaving a half-installed, never-connecting copy behind.
+if (-not (Test-Path (Join-Path $InstallDir 'package.json'))) {
+  Fail ("no BlueEyes agent install was found at $InstallDir — this script only UPDATES an existing agent." + [Environment]::NewLine +
+        "  To install the agent on this host, use 'Add agent' in the dashboard and run the install command it gives you.")
+}
+$tokenOk = (Test-Path $TokenPath) -and ((Get-Item $TokenPath -ErrorAction SilentlyContinue).Length -gt 0)
+if (-not $tokenOk) {
+  Fail ("no enrollment token was found at $TokenPath — this host has an agent directory but is not enrolled, so there is nothing to update." + [Environment]::NewLine +
+        "  Use 'Add agent' in the dashboard and run the install command it gives you.")
+}
+
+$Before = 'unknown'
+try { $Before = (Get-Content (Join-Path $InstallDir 'package.json') -Raw | ConvertFrom-Json).version } catch {}
+Info "found an enrolled agent v$Before at $InstallDir (identity kept: $TokenPath)"
+if ($AgentVersion) { Info "the server publishes v$AgentVersion" }
+
+# Node.js is required (the Windows install runs the agent with native Node).
+$node = Get-Command node -ErrorAction SilentlyContinue
+if (-not $node) {
+  Fail ("Node.js was not found on this host. Install Node.js 18+ from https://nodejs.org/ (or 'winget install OpenJS.NodeJS.LTS'), reopen PowerShell, then re-run:" + [Environment]::NewLine +
+        "  powershell -NoProfile -ExecutionPolicy Bypass -Command ""irm $ServerUrl/enroll/update.ps1 | iex""")
+}
+$NodeExe = $node.Source
+
+$tar = Get-Command tar.exe -ErrorAction SilentlyContinue
+if (-not $tar) {
+  Fail 'tar.exe was not found — Windows 10 1803+ or Server 2019+ is required (it provides the built-in tar used to unpack the agent).'
+}
+
+$Tmp = Join-Path ([System.IO.Path]::GetTempPath()) ('blueeye-update-' + [System.IO.Path]::GetRandomFileName())
+New-Item -ItemType Directory -Force -Path $Tmp | Out-Null
+try {
+  $Tarball = Join-Path $Tmp 'agent-source.tgz'
+  Info "downloading agent source from $ServerUrl/enroll/agent-source.tgz"
+  Fetch-Or-Explain "$ServerUrl/enroll/agent-source.tgz" $Tarball
+
+  $actual = (Get-FileHash -Algorithm SHA256 -Path $Tarball).Hash.ToLower()
+  if ($actual -ne $SourceSha256.ToLower()) {
+    Fail "checksum mismatch (expected $SourceSha256, got $actual) — refusing to update"
+  }
+  Info "checksum OK ($SourceSha256)"
+
+  # Inspection/test mode: verified, nothing on the host has been touched yet.
+  if ($env:BLUEEYE_DRY_RUN) { Info 'dry-run: verified, stopping before the update'; exit 0 }
+
+  ${PS_STOP_RUNNING.split('\n').join('\n  ')}
+
+  # The launcher .cmd carries the environment the scheduled task starts the agent
+  # with, and it lives in the install dir we are about to replace — keep the exact
+  # one this host was installed with, so the update changes the CODE and nothing else.
+  $launcher = Join-Path $InstallDir 'run-agent.cmd'
+  $launcherBackup = $null
+  if (Test-Path $launcher) {
+    $launcherBackup = Join-Path $Tmp 'run-agent.cmd'
+    Copy-Item -Path $launcher -Destination $launcherBackup -Force
+  }
+
+  # Replace the code only. $StateDir (token + config) is a separate directory and
+  # is deliberately left alone — that is what keeps this the SAME agent.
+  New-Item -ItemType Directory -Force -Path $InstallDir, $LogDir | Out-Null
+  Get-ChildItem -Path $InstallDir -Force -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+
+  Info "extracting the new agent source to $InstallDir"
+  & $tar.Source -xzf $Tarball -C $InstallDir
+  if ($LASTEXITCODE -ne 0) { Fail 'could not extract the agent source (tar)' }
+
+  $version = $AgentVersion
+  if (-not $version) {
+    try { $version = (Get-Content (Join-Path $InstallDir 'package.json') -Raw | ConvertFrom-Json).version } catch { $version = 'unknown' }
+  }
+
+  Info "installing dependencies (npm) for v$version ..."
+  Push-Location $InstallDir
+  try {
+    # Via cmd.exe with cmd's own 2>&1 merge: npm writes notices to stderr, and
+    # piping that back into PowerShell under $ErrorActionPreference='Stop' turns the
+    # first notice into a terminating NativeCommandError even on success.
+    $npmOut = & cmd /c 'npm ci --omit=dev 2>&1'
+    if ($LASTEXITCODE -ne 0) { $npmOut = & cmd /c 'npm install --omit=dev 2>&1' }
+    if ($LASTEXITCODE -ne 0) {
+      Info 'npm failed — last lines of its output:'
+      $npmOut | Select-Object -Last 25 | ForEach-Object { Write-Host "  $_" }
+      Fail 'dependency install failed (npm) — see the npm output above'
+    }
+  } finally { Pop-Location }
+
+  $AgentLog = Join-Path $LogDir 'agent.log'
+  if ($launcherBackup) {
+    Copy-Item -Path $launcherBackup -Destination $launcher -Force
+  } else {
+    # No launcher to preserve (a hand-rolled install): write the standard one so the
+    # scheduled task below has something to start, with the same environment the
+    # installer bakes in. The token/config paths still point at the existing state.
+    $launcherLines = @(
+      '@echo off',
+      "set ""BLUEEYE_SERVER_URL=$ServerUrl""",
+      "set ""BLUEEYE_SERVER_CERT_FINGERPRINT=$CertFingerprint""",
+      "set ""BLUEEYE_TOKEN_PATH=$TokenPath""",
+      "set ""BLUEEYE_AGENT_CONFIG=$ConfigPath""",
+      "set ""BLUEEYE_ACTION_LOG=$(Join-Path $LogDir 'actions.log')""",
+      'set "BLUEEYE_RUNTIME=unmanaged"',
+      "cd /d ""$InstallDir""",
+      "echo [%DATE% %TIME%] starting blueeye-agent >> ""$AgentLog""",
+      """$NodeExe"" ""$(Join-Path $InstallDir 'src\\index.js')"" >> ""$AgentLog"" 2>&1"
+    )
+    Set-Content -Path $launcher -Value $launcherLines -Encoding ASCII
+  }
+
+  # The scheduled task normally already exists and points at the launcher — only
+  # (re)register it when it is missing, so an update never rewrites a task an
+  # operator has tuned.
+  $task = Get-ScheduledTask -TaskName $ServiceName -ErrorAction SilentlyContinue
+  if (-not $task) {
+    Info "scheduled task '$ServiceName' was missing — registering it again (runs at boot as SYSTEM) ..."
+    $action    = New-ScheduledTaskAction -Execute $launcher
+    $trigger   = New-ScheduledTaskTrigger -AtStartup
+    $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+    $settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
+    Register-ScheduledTask -TaskName $ServiceName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
+  }
+
+  Info "starting '$ServiceName' on the new code ..."
+  Start-ScheduledTask -TaskName $ServiceName
+
+  # Show what the agent logged right after the restart, so the operator sees it
+  # come back up instead of a bare "updated OK".
+  Start-Sleep -Seconds 4
+  if (Test-Path $AgentLog) {
+    Info 'latest lines from the agent log:'
+    Get-Content $AgentLog -Tail 20 | ForEach-Object { Write-Host "  $_" }
+  } else {
+    Info "the agent has not written a log yet — check $AgentLog in a moment."
+  }
+
+  Info "done — updated from v$Before to v$version (same agent, same enrollment)."
+  Info 'the dashboard shows the new version as soon as the agent reconnects.'
+  Info "live log:  Get-Content '$AgentLog' -Wait -Tail 30"
+} finally {
+  Remove-Item -Recurse -Force $Tmp -ErrorAction SilentlyContinue
+}
+`;
+}
+
 // The Windows uninstaller (PowerShell), served at GET /enroll/uninstall.ps1 — the
 // analogue of the Linux uninstall.sh, so a Windows host is never sent a bash
 // `curl … | sudo sh` to remove the agent. No enrollment code needed. Idempotent
@@ -361,4 +566,4 @@ if ($leftover) {
 `;
 }
 
-module.exports = { renderInstallPs1, winSecurityPrelude, renderUninstallPs1 };
+module.exports = { renderInstallPs1, renderUpdatePs1, winSecurityPrelude, renderUninstallPs1 };

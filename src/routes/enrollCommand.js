@@ -29,6 +29,9 @@ function isExpired(row) {
 //   - codeId given  -> reuse that (active) code.
 //   - codeId absent -> mint a new code via the existing code flow (bulk-capable
 //     via maxUses + ttlMinutes).
+//
+// GET /api/enroll/update-command?platform=windows-amd64 is the sibling for an
+// EXISTING agent: an update-in-place one-liner with no enrollment code in it.
 function createEnrollCommandRouter({ enrollmentCodesRepo, artifactStore, sourceStore, enrollConfig = {}, releaseKeyService = null, defaultTtlMinutes = 120 }) {
   const router = express.Router();
   const certFingerprint = enrollConfig.certFingerprint || '';
@@ -150,6 +153,57 @@ function createEnrollCommandRouter({ enrollmentCodesRepo, artifactStore, sourceS
         maxUses,
         usesRemaining,
         expiresAt: expiresAt instanceof Date ? expiresAt.toISOString() : expiresAt,
+      });
+    })
+  );
+
+  // The UPDATE command for an agent the server cannot upgrade with one click.
+  // Windows agents run under a Scheduled Task (managed 'unmanaged'), so the pushed
+  // `update` command is declined on the host — the operator upgrades from the host
+  // instead. This returns the one-liner to do that: it updates the agent IN PLACE
+  // and carries NO enrollment code, so it can only ever upgrade the agent already
+  // on that machine — never install a second one.
+  //
+  // GET /api/enroll/update-command?platform=windows-amd64
+  //   -> { os, oneLiner, version, manual: { downloadUrl, checksum, command } }
+  // 400 for a non-Windows platform: systemd agents update with one click from the
+  // dashboard and Docker agents are rebuilt by their host, so neither has (or
+  // needs) an update-in-place one-liner.
+  router.get(
+    '/update-command',
+    requireAuth,
+    requireRole(ROLES.OPERATOR, ROLES.ADMIN),
+    asyncHandler(async (req, res) => {
+      const platform = req.query.platform ? String(req.query.platform) : 'windows-amd64';
+      if (!PLATFORM_RE.test(platform)) {
+        return res.status(400).json({ error: 'platform must look like windows-amd64' });
+      }
+      if (!/^windows(-|$)/.test(platform)) {
+        return res.status(400).json({
+          error: 'An update command is only available for Windows agents. systemd agents update with one click from the dashboard; Docker agents are updated by rebuilding on their host.',
+          code: 'UPDATE_COMMAND_UNSUPPORTED',
+        });
+      }
+      const checksum = sourceStore ? sourceStore.sha256 : null;
+      if (!checksum) {
+        return res.status(409).json({ error: 'No agent source is published on this server, so there is nothing to update to.' });
+      }
+      const serverUrl = resolveServerUrl(req, enrollConfig);
+      // Same TLS-1.2 + cert-pinning prelude as the install one-liner, so the
+      // `irm …/update.ps1 | iex` bootstrap works against an on-prem HTTPS server
+      // with a self-signed certificate.
+      const oneLiner = `powershell -NoProfile -ExecutionPolicy Bypass -Command "${winSecurityPrelude(certFingerprint)} irm ${serverUrl}/enroll/update.ps1 | iex"`;
+      res.json({
+        oneLiner,
+        os: 'windows',
+        platform,
+        version: sourceStore && typeof sourceStore.sourceVersion === 'function' ? sourceStore.sourceVersion() : null,
+        certFingerprint: certFingerprint || null,
+        manual: {
+          downloadUrl: `${serverUrl}/enroll/agent-source.tgz`,
+          checksum,
+          command: oneLiner,
+        },
       });
     })
   );

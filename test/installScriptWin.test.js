@@ -3,7 +3,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { renderInstallPs1, winSecurityPrelude, renderUninstallPs1 } = require('../src/enroll/installScriptWin');
+const { renderInstallPs1, renderUpdatePs1, winSecurityPrelude, renderUninstallPs1 } = require('../src/enroll/installScriptWin');
 
 const SHA = 'a'.repeat(64);
 const FP = Array.from({ length: 32 }, () => 'ab').join(':'); // valid 32-byte SHA-256
@@ -192,5 +192,83 @@ test('renderInstallPs1 fails clearly when the server has no source published', (
 test('renderInstallPs1 single-quote-escapes injected values (no injection break-out)', () => {
   const script = renderInstallPs1({ serverUrl: "http://x'; rm -rf /", code: 'C', sourceSha: SHA });
   // The stray quote is doubled inside the single-quoted PS literal, not left raw.
+  assert.match(script, /\$ServerUrl\s*=\s*'http:\/\/x''; rm -rf \/'/);
+});
+
+// ---- renderUpdatePs1 (the Windows "just update" one-liner) ------------------
+// The dashboard's Update button hands this to an operator when a Windows agent is
+// behind: it upgrades the agent that is already on the host and must never turn
+// into a fresh installation (which would enroll a SECOND agent on the server).
+
+test('renderUpdatePs1 carries no enrollment code and never enrolls', () => {
+  const script = renderUpdatePs1({ serverUrl: 'https://blueeye.example.dk', sourceSha: SHA, agentVersion: '1.4.0' });
+  assert.ok(!/\$EnrollCode/.test(script), 'must not embed an enrollment code');
+  assert.ok(!/'enroll', '--code'/.test(script), 'must not run the agent enroll command');
+  // The task normally already exists; it is only re-registered when missing, so an
+  // update never rewrites a task the operator has tuned.
+  assert.match(script, /\$task = Get-ScheduledTask -TaskName \$ServiceName[\s\S]*?if \(-not \$task\) \{[\s\S]*?Register-ScheduledTask/);
+  assert.match(script, /\$ServerUrl\s*=\s*'https:\/\/blueeye\.example\.dk'/);
+  assert.match(script, new RegExp(`\\$SourceSha256\\s*=\\s*'${SHA}'`));
+  assert.match(script, /\$AgentVersion\s*=\s*'1\.4\.0'/);
+  assert.match(script, /enroll\/update\.ps1 \| iex/); // the one-liner it documents
+});
+
+test('renderUpdatePs1 refuses to run where there is no installed, enrolled agent', () => {
+  const script = renderUpdatePs1({ serverUrl: 'http://x', sourceSha: SHA });
+  // No install dir -> stop (this script cannot install one).
+  assert.match(script, /no BlueEyes agent install was found/);
+  assert.match(script, /only UPDATES an existing agent/);
+  // Install dir but no token -> also stop: updating an unenrolled copy would
+  // leave a host that never connects.
+  assert.match(script, /no enrollment token was found/);
+  assert.match(script, /Add agent/); // points at the real install path
+  // Both checks come before anything is downloaded or changed.
+  const tokenIdx = script.indexOf('no enrollment token was found');
+  const downloadIdx = script.indexOf('downloading agent source');
+  assert.ok(tokenIdx !== -1 && downloadIdx !== -1 && tokenIdx < downloadIdx);
+});
+
+test('renderUpdatePs1 keeps the agent identity: the state dir is never touched', () => {
+  const script = renderUpdatePs1({ serverUrl: 'http://x', sourceSha: SHA });
+  // Only the install dir is emptied — the token/config live in the state dir.
+  assert.match(script, /Get-ChildItem -Path \$InstallDir -Force[\s\S]*?Remove-Item -Recurse -Force/);
+  assert.ok(!/Remove-Item[^\n]*\$StateDir/.test(script), 'must never delete the state dir');
+  assert.ok(!/Remove-Item[^\n]*\$TokenPath/.test(script), 'must never delete the token');
+});
+
+test('renderUpdatePs1 verifies the download, stops the agent, then restarts it', () => {
+  const script = renderUpdatePs1({ serverUrl: 'http://x', sourceSha: SHA });
+  assert.match(script, /Invoke-WebRequest -UseBasicParsing/);
+  assert.match(script, /Get-FileHash -Algorithm SHA256/);
+  assert.match(script, /refusing to update/); // checksum mismatch aborts
+  assert.match(script, /BLUEEYE_DRY_RUN/); // same inspection hook as the installer
+  const stopIdx = script.indexOf('Stop-ScheduledTask -TaskName $ServiceName');
+  const extractIdx = script.indexOf('extracting the new agent source');
+  const startIdx = script.indexOf('Start-ScheduledTask -TaskName $ServiceName');
+  assert.ok(stopIdx !== -1 && stopIdx < extractIdx, 'stop the running agent before replacing its code');
+  assert.ok(startIdx !== -1 && extractIdx < startIdx, 'start it again once the new code is in place');
+  // Dependencies are reinstalled through cmd so an npm notice on stderr can't
+  // trip $ErrorActionPreference='Stop'.
+  assert.match(script, /cmd \/c 'npm ci --omit=dev 2>&1'/);
+});
+
+test('renderUpdatePs1 preserves the launcher it is about to delete', () => {
+  const script = renderUpdatePs1({ serverUrl: 'http://x', sourceSha: SHA });
+  // run-agent.cmd lives in the install dir, which is wiped — back it up first and
+  // restore it, so the scheduled task keeps the environment it was installed with.
+  const backupIdx = script.indexOf('$launcherBackup = Join-Path $Tmp');
+  const wipeIdx = script.indexOf('Get-ChildItem -Path $InstallDir -Force');
+  assert.ok(backupIdx !== -1 && backupIdx < wipeIdx, 'the launcher must be copied out before the wipe');
+  assert.match(script, /Copy-Item -Path \$launcherBackup -Destination \$launcher -Force/);
+});
+
+test('renderUpdatePs1 fails clearly when the server has no source published', () => {
+  const script = renderUpdatePs1({ serverUrl: 'http://x', sourceSha: '' });
+  assert.match(script, /no agent source published/);
+});
+
+test('renderUpdatePs1 uses PowerShell idioms and escapes injected values', () => {
+  const script = renderUpdatePs1({ serverUrl: "http://x'; rm -rf /", sourceSha: SHA });
+  assert.ok(!/curl -sSL/.test(script) && !/\|\s*sh\b/.test(script));
   assert.match(script, /\$ServerUrl\s*=\s*'http:\/\/x''; rm -rf \/'/);
 });

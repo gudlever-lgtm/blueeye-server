@@ -133,23 +133,38 @@ function createNautobotConnector({ fetchImpl = globalThis.fetch, logger = silent
     return test(integration);
   }
 
-  // CMDB asset search. Uses Nautobot's general `q` filter over devices and
-  // normalises to { id, name, type, location }[]. Returns { ok, status, detail, assets }.
+  function toAsset(r) {
+    return {
+      id: String(r.id ?? ''),
+      name: r.name || label(r) || '',
+      type: label(r.device_type) || label(r.role) || null,
+      location: label(r.location) || label(r.site) || null,
+    };
+  }
+
+  // CMDB asset search over name / id / location. Nautobot's general `q` filter
+  // covers name, asset tag and serial but NOT the location, so a second, filtered
+  // read (`location=`) is merged in — an operator looking for "everything in
+  // Aarhus" types the site, not a device name. The location read is best-effort:
+  // the filter is version-dependent (name vs slug), and a rejected one must not
+  // sink the results the `q` read already found.
   async function search(integration, query) {
     const base = String(integration.baseUrl || '').replace(/\/+$/, '');
     const q = String(query || '').trim();
-    const res = await requestJson(fetchImpl, {
-      method: 'GET',
-      url: `${base}${devicePath(integration)}/?q=${encodeURIComponent(q)}&limit=20`,
-      headers: headersFor(integration),
-      timeoutMs,
-    });
-    if (!res.ok) return { ok: false, status: res.status, detail: res.detail, assets: [] };
-    const rows = res.json && Array.isArray(res.json.results) ? res.json.results : [];
-    const assets = rows
-      .map((r) => ({ id: String(r.id ?? ''), name: r.name || label(r) || '', type: label(r.device_type) || label(r.role) || null, location: label(r.location) || label(r.site) || null }))
-      .filter((a) => a.id);
-    return { ok: true, status: res.status, assets };
+    const url = (params) => `${base}${devicePath(integration)}/?${params}&limit=20`;
+    const [byTerm, byLocation] = await Promise.all([
+      requestJson(fetchImpl, { method: 'GET', url: url(`q=${encodeURIComponent(q)}`), headers: headersFor(integration), timeoutMs }),
+      requestJson(fetchImpl, { method: 'GET', url: url(`location=${encodeURIComponent(q)}`), headers: headersFor(integration), timeoutMs })
+        .catch(() => ({ ok: false })),
+    ]);
+    if (!byTerm.ok) return { ok: false, status: byTerm.status, detail: byTerm.detail, assets: [] };
+
+    const rowsOf = (res) => (res && res.ok && res.json && Array.isArray(res.json.results) ? res.json.results : []);
+    const seen = new Set();
+    const assets = [...rowsOf(byTerm), ...rowsOf(byLocation)]
+      .map(toAsset)
+      .filter((a) => a.id && !seen.has(a.id) && seen.add(a.id));
+    return { ok: true, status: byTerm.status, assets };
   }
 
   return { type, authTypes, defaultEvents, validateConfig, send, test, testConnection, search };

@@ -454,6 +454,21 @@ function makeIncidentCasesRepo(overrides = {}) {
     closedBy: r.closed_by ?? null,
     createdAt: iso(r.created_at || r.first_event_at),
   });
+  // Device identity, keyed by host_id — the agents/locations join the real repo
+  // does on the reads a human looks at. Pass `devices: { '1': { agentName,
+  // agentHostname, locationId, locationName } }`; an unknown host resolves to
+  // nulls, exactly like the LEFT JOIN misses.
+  const devices = overrides.devices || {};
+  const mapJoined = (r) => {
+    const d = devices[String(r.host_id)] || {};
+    return {
+      ...mapOut(r),
+      agentName: d.agentName ?? d.agentHostname ?? null,
+      agentHostname: d.agentHostname ?? null,
+      locationId: d.locationId ?? null,
+      locationName: d.locationName ?? null,
+    };
+  };
   return {
     rows,
     create: overrides.create || (async (c) => {
@@ -470,7 +485,7 @@ function makeIncidentCasesRepo(overrides = {}) {
       r.config_change_id = configSnapshotId;
       return true;
     }),
-    findById: overrides.findById || (async (id) => { const r = rows.find((x) => x.id === Number(id)); return r ? mapOut(r) : null; }),
+    findById: overrides.findById || (async (id) => { const r = rows.find((x) => x.id === Number(id)); return r ? mapJoined(r) : null; }),
     findOpenByHost: overrides.findOpenByHost || (async (hostId) => {
       const open = rows
         .filter((x) => x.host_id === hostId && (x.status === 'open' || x.status === 'investigating'))
@@ -497,7 +512,7 @@ function makeIncidentCasesRepo(overrides = {}) {
       .filter((r) => (Array.isArray(statuses) && statuses.length ? statuses : ['resolved', 'closed']).includes(r.status) && (excludeId == null || r.id !== Number(excludeId)))
       .sort((a, b) => new Date(b.last_event_at) - new Date(a.last_event_at) || b.id - a.id)
       .slice(0, limit)
-      .map((r) => ({ ...mapOut(r), primaryMetric: r.primary_metric ?? null, closedByEmail: r.closed_by_email ?? null, platform: r.platform ?? null }))),
+      .map((r) => ({ ...mapJoined(r), primaryMetric: r.primary_metric ?? null, closedByEmail: r.closed_by_email ?? null, platform: r.platform ?? null }))),
     listStaleInvestigating: overrides.listStaleInvestigating || (async (olderThan) => rows
       .filter((r) => r.status === 'investigating' && new Date(r.last_event_at) < new Date(olderThan))
       .sort((a, b) => new Date(a.last_event_at) - new Date(b.last_event_at))
@@ -507,7 +522,7 @@ function makeIncidentCasesRepo(overrides = {}) {
         && (!f.severity || r.severity === f.severity)
         && (!f.hostId || r.host_id === f.hostId))
       .sort((a, b) => new Date(b.last_event_at) - new Date(a.last_event_at) || b.id - a.id)
-      .map(mapOut)),
+      .map(mapJoined)),
   };
 }
 

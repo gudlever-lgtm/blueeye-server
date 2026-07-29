@@ -1,6 +1,7 @@
 'use strict';
 
 const { DEFAULT_WINDOW_MS } = require('../analysis/correlator');
+const { formatDeviceLabel } = require('./deviceLabel');
 
 const silentLogger = { info() {}, warn() {}, error() {}, debug() {} };
 
@@ -34,16 +35,40 @@ function createIncidentCaseService({
   // before it; the first such change is linked to the incident.
   configSnapshotsRepo = null,
   configWindowMs = DEFAULT_CONFIG_WINDOW_MS,
+  // Optional device identity. When wired, the auto-generated title names the
+  // agent and its site instead of the bare agent id — "on core-sw
+  // (Copenhagen HQ)" rather than "on 1" — so an incident says where it is
+  // without a lookup. Unwired (or an unknown host) falls back to the id.
+  agentsRepo = null,
   now = () => new Date(),
   logger = silentLogger,
 }) {
+  // The device identity behind a finding's host_id, or null. Best-effort: a
+  // failed lookup costs the title its name, never the incident.
+  async function deviceFor(host) {
+    if (!agentsRepo || typeof agentsRepo.findById !== 'function') return null;
+    const agentId = Number(host);
+    if (!Number.isInteger(agentId)) return null;
+    try {
+      const agent = await agentsRepo.findById(agentId);
+      if (!agent) return null;
+      return {
+        agentName: agent.display_name || agent.hostname || null,
+        locationName: agent.location_name || null,
+      };
+    } catch (err) {
+      logger.warn(`incident-cases: device lookup failed for host ${host} (${err.message})`);
+      return null;
+    }
+  }
+
   // A short, explainable title derived from the primary finding, e.g.
-  // "CRIT interface_errors on core-sw". Bounded to the column width.
-  function titleFor(finding) {
-    const host = finding.hostId == null ? 'unknown device' : String(finding.hostId);
+  // "CRIT interface_errors on core-sw (Copenhagen HQ)". Bounded to the column width.
+  function titleFor(finding, device = null) {
+    const where = formatDeviceLabel({ hostId: finding.hostId, ...(device || {}) });
     const metric = finding.metric || 'anomaly';
     const sev = finding.severity || 'INFO';
-    return `${sev} ${metric} on ${host}`.slice(0, 255);
+    return `${sev} ${metric} on ${where}`.slice(0, 255);
   }
 
   // Correlates a device-config change to an incident: if a config snapshot was
@@ -86,7 +111,7 @@ function createIncidentCaseService({
 
       const id = await incidentCasesRepo.create({
         host_id: host,
-        title: titleFor(finding),
+        title: titleFor(finding, await deviceFor(host)),
         status: 'open',
         severity,
         primary_finding_id: finding.id,

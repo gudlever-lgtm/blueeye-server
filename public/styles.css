@@ -1636,6 +1636,11 @@ button.active-btn { outline: 2px solid var(--accent); }
 .inc-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
 .inc-header h2 { margin: 0 0 4px; }
 .inc-meta { font-size: 13px; }
+/* "Where is this incident?" — the agent + site pair shown beside a case (list
+   cell, rollup row) and the agent link in the detail header. */
+.inc-where { font-size: 12px; }
+.inc-meta .inc-where-agent { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
+.inc-meta .inc-where-agent:hover { color: var(--accent, #2563eb); }
 .inc-actions { display: flex; gap: 8px; margin: 8px 0 14px; flex-wrap: wrap; }
 /* The base .card is a fixed 320px column (the login card). The incident detail
    page stacks several cards, so let them fill the page width like the other
@@ -1750,8 +1755,20 @@ li.guide-step.done .guide-step-title { text-decoration: line-through; opacity: 0
   padding: 6px 10px; border: 1px solid var(--border); border-radius: 8px;
   background: var(--card); cursor: pointer;
 }
-.cmdb-result:hover { border-color: var(--accent); background: var(--accent-weak); }
+.cmdb-result:hover, .cmdb-result.active { border-color: var(--accent); background: var(--accent-weak); }
 .cmdb-result > span:first-child { font-weight: 600; }
+/* The asset picker: a combobox whose option list is fetched per keystroke. The
+   list floats over the card so the rest of the page does not jump as it grows. */
+.cmdb-picker { position: relative; display: flex; flex-direction: column; gap: 6px; }
+.cmdb-picker-input { width: 100%; }
+.cmdb-picker .cmdb-results {
+  position: absolute; top: 100%; left: 0; right: 0; z-index: 20; margin-top: 4px;
+  padding: 4px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--card); box-shadow: 0 8px 24px rgba(0, 0, 0, .18);
+}
+.cmdb-result-id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+/* Location last and pushed right — it is the field an operator scans down. */
+.cmdb-result-loc { margin-left: auto; }
 .cmdb-cfg-head { margin: 6px 0 2px; font-size: 0.9rem; color: var(--muted); grid-column: 1 / -1; }
 
 /* ---- Documentation (built-in handbook / how-tos) ------------------------- */

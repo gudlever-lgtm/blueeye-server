@@ -37,6 +37,25 @@ test('serviceNow.search normalizes CI rows to {id,name,type,location}', async ()
   assert.deepEqual(res.assets, [{ id: 's1', name: 'web01', type: 'cmdb_ci_server', location: 'Copenhagen DC' }]);
 });
 
+test('serviceNow.search matches the term against name, id, asset tag AND location', async () => {
+  let calledUrl = null;
+  const connector = createServiceNowConnector({ fetchImpl: async (url) => { calledUrl = url; return { ok: true, status: 200, json: async () => ({ result: [] }) }; } });
+  await connector.search(SN, 'Aarhus');
+  const query = decodeURIComponent(new URL(calledUrl).searchParams.get('sysparm_query'));
+  assert.equal(query, 'nameLIKEAarhus^ORsys_idLIKEAarhus^ORasset_tagLIKEAarhus^ORlocation.nameLIKEAarhus');
+});
+
+test('serviceNow.search strips the query language’s own separators from the term', async () => {
+  let calledUrl = null;
+  const connector = createServiceNowConnector({ fetchImpl: async (url) => { calledUrl = url; return { ok: true, status: 200, json: async () => ({ result: [] }) }; } });
+  await connector.search(SN, 'web^ORactive=true');
+  const query = decodeURIComponent(new URL(calledUrl).searchParams.get('sysparm_query'));
+  // Still exactly the four conditions we joined — the term's own ^ became a
+  // space instead of opening a fifth, attacker-chosen condition.
+  assert.equal(query.split('^OR').length - 1, 3);
+  assert.match(query, /^nameLIKEweb ORactive=true\^OR/);
+});
+
 test('serviceNow.search surfaces an upstream failure as ok:false', async () => {
   const connector = createServiceNowConnector({ fetchImpl: fetchReturning(500, {}) });
   const res = await connector.search(SN, 'web');
@@ -67,6 +86,39 @@ test('nautobot.search normalizes device rows (nested display refs) to {id,name,t
     { id: 'd1', name: 'sw-core-1', type: 'Catalyst 9300', location: 'Aarhus' },
     { id: 'd2', name: 'sw-core-2', type: 'access', location: 'Odense' },
   ]);
+});
+
+test('nautobot.search also reads by location and merges without duplicating', async () => {
+  const urls = [];
+  const connector = createNautobotConnector({
+    fetchImpl: async (url) => {
+      urls.push(url);
+      const byLocation = url.includes('location=');
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ results: byLocation
+          ? [{ id: 'd1', name: 'sw-core-1' }, { id: 'd9', name: 'sw-aarhus-9', location: { name: 'Aarhus' } }]
+          : [{ id: 'd1', name: 'sw-core-1', location: { name: 'Aarhus' } }] }),
+      };
+    },
+  });
+  const res = await connector.search(NB, 'Aarhus');
+  assert.equal(res.ok, true);
+  assert.equal(urls.some((u) => u.includes('q=Aarhus')), true);
+  assert.equal(urls.some((u) => u.includes('location=Aarhus')), true);
+  assert.deepEqual(res.assets.map((a) => a.id), ['d1', 'd9']); // d1 found twice, listed once
+});
+
+test('nautobot.search keeps the term results when the location filter is rejected', async () => {
+  const connector = createNautobotConnector({
+    fetchImpl: async (url) => (url.includes('location=')
+      ? { ok: false, status: 400, json: async () => ({}) }
+      : { ok: true, status: 200, json: async () => ({ results: [{ id: 'd1', name: 'sw-core-1' }] }) }),
+  });
+  const res = await connector.search(NB, 'sw');
+  assert.equal(res.ok, true);
+  assert.deepEqual(res.assets.map((a) => a.id), ['d1']);
 });
 
 test('nautobot.search surfaces an upstream failure as ok:false', async () => {

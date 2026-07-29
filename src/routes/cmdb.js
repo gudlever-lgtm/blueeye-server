@@ -143,9 +143,20 @@ function makeCmdbSearch({ cmdbConfigRepo, registry, secretBox } = {}) {
 
 // --- Asset search (operator+) -------------------------------------------------
 // GET /api/cmdb/assets/search?q= — routes to the active connector's search().
+// GET /api/cmdb/assets/status    — is a CMDB connected at all?
 function createCmdbAssetsRouter({ cmdbConfigRepo, registry, secretBox }) {
   const router = express.Router();
   router.use(requireAuth, requireRole(ROLES.OPERATOR, ROLES.ADMIN));
+
+  // Whether asset linking can be offered at all. Reads the SAFE config (no
+  // credentials touched) — the agent page asks this before rendering a search
+  // box that could otherwise only ever 404. Deliberately operator+ like the rest
+  // of this router: it says a CMDB exists and of which type, nothing more.
+  router.get('/status', asyncHandler(async (req, res) => {
+    const cfg = await cmdbConfigRepo.get();
+    const enabled = Boolean(cfg && cfg.enabled);
+    res.json({ enabled, type: enabled ? cfg.type : null });
+  }));
 
   router.get('/search', asyncHandler(async (req, res) => {
     const { q, error } = validateAssetSearch(req.query.q);

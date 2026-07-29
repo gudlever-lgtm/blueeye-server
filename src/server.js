@@ -471,7 +471,7 @@ function start() {
   const incidentNotesRepo = createIncidentNotesRepository(db);
   const remediationPlaybooksRepo = createRemediationPlaybooksRepository(db);
   const configSnapshotsRepo = createConfigSnapshotsRepository(db);
-  const incidentCaseService = createIncidentCaseService({ incidentCasesRepo, findingStore, configSnapshotsRepo, logger });
+  const incidentCaseService = createIncidentCaseService({ incidentCasesRepo, findingStore, configSnapshotsRepo, agentsRepo, logger });
 
   // Cross-agent incident clusters: groups findings from DIFFERENT agents that fire
   // in the same time window into one cluster with a suspected common cause +

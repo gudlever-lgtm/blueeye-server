@@ -162,7 +162,7 @@ test('a rejected viewer write leaves the log untouched', async () => {
 test('POST /notes returns 404 for an unknown incident id', async () => {
   const res = await post(appWith(), 'operator', { text: 'x', kind: 'action' }, 9999);
   assert.equal(res.status, 404);
-  assert.equal(res.body.error, 'Incident not found');
+  assert.equal(res.body.error, 'Event not found');
 });
 
 test('POST /notes validates the body before checking the incident exists', async () => {

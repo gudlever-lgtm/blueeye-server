@@ -517,12 +517,21 @@ function makeIncidentCasesRepo(overrides = {}) {
       .filter((r) => r.status === 'investigating' && new Date(r.last_event_at) < new Date(olderThan))
       .sort((a, b) => new Date(a.last_event_at) - new Date(b.last_event_at))
       .map(mapOut)),
+    // Mirrors the real repo: the window bounds OVERLAP (last_event_at >= from AND
+    // first_event_at <= to), so a still-running event that started before the
+    // window is included — and `primaryMetric` comes along (joined off
+    // primary_finding_id there) because the changes feed correlates on the
+    // CONDITION, not on the row id. Set `primary_metric` on a seeded row to
+    // exercise it; absent ⇒ null, exactly like the LEFT JOIN missing.
     list: overrides.list || (async (f = {}) => rows
       .filter((r) => (!f.status || r.status === f.status)
         && (!f.severity || r.severity === f.severity)
-        && (!f.hostId || r.host_id === f.hostId))
+        && (!f.hostId || r.host_id === f.hostId)
+        && (f.from == null || new Date(r.last_event_at) >= new Date(f.from))
+        && (f.to == null || new Date(r.first_event_at) <= new Date(f.to)))
       .sort((a, b) => new Date(b.last_event_at) - new Date(a.last_event_at) || b.id - a.id)
-      .map(mapJoined)),
+      .slice(0, Number.isInteger(f.limit) && f.limit > 0 ? f.limit : rows.length)
+      .map((r) => ({ ...mapJoined(r), primaryMetric: r.primary_metric ?? null }))),
   };
 }
 

@@ -326,9 +326,19 @@ function createApiRouter({
   // on the Overview page; fleet health itself comes from /api/fleet above.
   router.use('/api/dashboard', createDashboardRouter({ incidentsRepo, incidentCasesRepo, findingStore, featureGate, planService }));
   if (incidentsRepo && probeResultsRepo) router.use('/api/reports', createReportsRouter({ probeResultsRepo, incidentsRepo, locationsRepo, featureGate, planService, auditLogger }));
-  // First-class incidents (incident_cases) wrapping findings — distinct from the
-  // probe-outage `incidents` used by /api/reports above.
-  if (incidentCasesRepo && findingStore) router.use('/api/incidents', createIncidentsRouter({ incidentCasesRepo, findingStore, auditLogger, auditEventsRepo, auditLogRepo, configSnapshotsRepo, agentsRepo, assistant, featureGate, askCache: createAskCache(), remediationPlaybooksRepo, blastRadiusService, incidentNotesRepo }));
+  // EVENTS (stored in `incident_cases`) — the operator-facing unit, wrapping the
+  // findings that evidence it. Distinct from the probe-outage `incidents` used by
+  // /api/reports above, and distinct from an ITSM *incident*, which is what a
+  // connected service desk opens FROM one of these (see docs/events.md).
+  //
+  // Mounted twice on purpose: /api/events is canonical, /api/incidents is a
+  // deprecated alias so existing integrations, scripts and bookmarks keep working.
+  // One router instance, so the two paths can never drift.
+  if (incidentCasesRepo && findingStore) {
+    const eventsRouter = createIncidentsRouter({ incidentCasesRepo, findingStore, auditLogger, auditEventsRepo, auditLogRepo, configSnapshotsRepo, agentsRepo, assistant, featureGate, askCache: createAskCache(), remediationPlaybooksRepo, blastRadiusService, incidentNotesRepo });
+    router.use('/api/events', eventsRouter);
+    router.use('/api/incidents', eventsRouter);
+  }
   if (incidentClustersRepo) {
     const clusterTimelineService = createIncidentClusterTimelineService({
       clustersRepo: incidentClustersRepo, findingStore, auditEventsRepo,

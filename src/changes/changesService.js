@@ -5,7 +5,7 @@ const {
   fromAgentEvents,
   fromFindings,
   fromProbeIncidents,
-  fromIncidentCases,
+  fromEvents,
   fromClusters,
   fromTopologyChanges,
   fromInterfaceTransitions,
@@ -79,9 +79,12 @@ function createChangesService({
     return fromProbeIncidents(rows, { from, to, ...ctx });
   }
 
-  async function fetchIncidentCases({ from, to }) {
+  // Events — the operator-facing unit (`incident_cases`). The anomalies these
+  // represent are folded INTO these rows by the read-model's roll-up, so this is
+  // the source that carries a device's story on the feed.
+  async function fetchEvents({ from, to }) {
     if (!incidentCasesRepo || typeof incidentCasesRepo.list !== 'function') return [];
-    return fromIncidentCases(await incidentCasesRepo.list({ from, to, limit: PER_SOURCE_LIMIT }));
+    return fromEvents(await incidentCasesRepo.list({ from, to, limit: PER_SOURCE_LIMIT }));
   }
 
   async function fetchClusters({ from, to }) {
@@ -123,8 +126,8 @@ function createChangesService({
     const sources = [
       ['agents', () => fetchAgentEvents(window, ctx)],
       ['findings', () => fetchFindings(window, ctx)],
-      ['incidents', () => fetchProbeIncidents(window, ctx)],
-      ['incident_cases', () => fetchIncidentCases(window)],
+      ['probes', () => fetchProbeIncidents(window, ctx)],
+      ['events', () => fetchEvents(window)],
       ['clusters', () => fetchClusters(window)],
       ['topology', () => fetchTopologyChanges(window)],
       ['interfaces', () => fetchInterfaceTransitions(window, ctx)],

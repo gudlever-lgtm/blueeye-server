@@ -233,14 +233,20 @@ function createIncidentCasesRepository(db) {
     const lim = Number.isInteger(limit) && limit > 0 && limit <= 5000 ? limit : 1000;
     params.push(lim);
     const [rows] = await pool.query(
-      `SELECT ${IC_COLUMNS}, ${DEVICE_COLUMNS}
+      // The primary anomaly type comes along (same LEFT JOIN as
+      // listResolvedClosed) because the changes feed keys its correlation on the
+      // CONDITION, not on the row id — without a metric, two unrelated events on
+      // one device look like the same recurring problem. NULL when the primary
+      // finding was deleted or never set; the caller degrades, never guesses.
+      `SELECT ${IC_COLUMNS}, ${DEVICE_COLUMNS}, f.metric AS primary_metric
        FROM incident_cases ic ${DEVICE_JOIN}
+       LEFT JOIN findings f ON f.id = ic.primary_finding_id
        ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
        ORDER BY ic.last_event_at DESC, ic.id DESC
        LIMIT ?`,
       params
     );
-    return rows.map(mapRow);
+    return rows.map((row) => ({ ...mapRow(row), primaryMetric: row.primary_metric ?? null }));
   }
 
   return { create, findById, findOpenByHost, updateActivity, updateStatus, setConfigChange, listStaleInvestigating, listResolvedClosed, list };

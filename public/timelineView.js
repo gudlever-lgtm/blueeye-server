@@ -18,9 +18,22 @@
     return SEVERITIES[s] ? s : 'INFO';
   }
 
+  // Source → the chip a row wears. Every source the feeds emit needs an entry:
+  // a miss falls through to the raw key, and a row labelled `incident_case`
+  // is the dashboard leaking a table name at the reader.
+  //
+  // TERMINOLOGY: BlueEyes emits **events**. An event is a correlated condition on
+  // a device (the `incident_cases` table, historically named) — it is what an
+  // ITSM *incident* would be opened FROM, not the incident itself. `probe` is the
+  // active-probe outage record (the `incidents` table, migration 025), and
+  // `cluster` is a Situation: one condition seen across several devices.
   var SOURCE_LABELS = {
-    finding: 'Finding', incident: 'Incident', agent: 'Agent', playbook: 'Playbook',
+    finding: 'Finding', agent: 'Agent', playbook: 'Playbook',
     config: 'Config change', status: 'State change', topology: 'Topology change',
+    event: 'Event', probe: 'Probe outage', cluster: 'Situation', interface: 'Interface',
+    // Legacy source keys, kept so an older cached payload still renders a label
+    // rather than a table name.
+    incident: 'Event', incident_case: 'Event',
   };
   function sourceLabel(source) { return SOURCE_LABELS[source] || String(source == null ? '—' : source); }
 
@@ -79,17 +92,53 @@
     return { state: 'ready', events: events, partial: partial, failedSources: failedSources };
   }
 
+  // The part of a dotted type worth showing next to a source chip that already
+  // says where the row came from. `finding.probe.latency` on a row already chipped
+  // "Anomaly" only needs `probe.latency`; `event.open` only needs `open`.
+  function typeDetail(type, source) {
+    var t = String(type == null ? '' : type);
+    var s = String(source == null ? '' : source);
+    if (s && t.slice(0, s.length + 1) === s + '.') return t.slice(s.length + 1);
+    return t;
+  }
+
+  // Whether the type chip earns its place. Once the source prefix is stripped, a
+  // type the summary already spells out is pure duplication — and it was rendering
+  // as one run-together word ("finding.probe.latencyprobe.latency on core-sw"),
+  // which is worse than merely redundant.
+  //
+  // Matched on WORD BOUNDARIES, not as a bare substring: a short detail like
+  // "open" occurs inside "Copenhagen", and a site name must never be able to
+  // suppress a status chip. Dots are escaped so `probe.latency` matches literally.
+  function typeIsInformative(type, source, summary) {
+    var detail = typeDetail(type, source);
+    if (!detail) return false;
+    var escaped = detail.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return !new RegExp('\\b' + escaped + '\\b').test(String(summary || '').toLowerCase());
+  }
+
   // Map a normalised timeline event to a flat row view-model (what the row
   // renderer needs, already sanitised).
   function rowModel(e) {
     e = e || {};
+    var summary = e.summary || e.type || '';
+    var source = e.source || null;
     return {
       time: e.timestamp || null,
-      source: e.source || null,
-      sourceLabel: sourceLabel(e.source),
+      source: source,
+      sourceLabel: sourceLabel(source),
       type: e.type || '',
+      // What the type chip actually shows, and whether to show it at all.
+      typeDetail: typeDetail(e.type, source),
+      showType: typeIsInformative(e.type, source, summary),
       severity: severityClass(e.severity),
-      summary: e.summary || e.type || '',
+      summary: summary,
+      // Correlation fields (changes feed). Absent on the per-target timelines,
+      // where every row stands for exactly one record.
+      count: Number(e.count) > 1 ? Number(e.count) : 1,
+      firstAt: e.firstAt || null,
+      family: e.family || null,
+      findingCount: Number(e.findingCount) > 0 ? Number(e.findingCount) : 0,
       refId: e.ref_id != null ? e.ref_id : null,
       // The agent this event concerns. Present on cross-agent (cluster) timelines
       // so each row can deep-link to its OWN target; null/absent on single-target
@@ -163,7 +212,7 @@
     li.appendChild(elem(doc, 'span', 'tl-time muted', fmt(m.time)));
     li.appendChild(elem(doc, 'span', 'badge ' + m.severity + ' tl-sev', m.severity));
     li.appendChild(elem(doc, 'span', 'badge tl-src', m.sourceLabel));
-    if (m.type) li.appendChild(elem(doc, 'span', 'tl-type muted', m.type));
+    if (m.showType) li.appendChild(elem(doc, 'span', 'tl-type muted', m.typeDetail));
     li.appendChild(elem(doc, 'span', 'tl-desc', m.summary));
     return li;
   }
@@ -196,6 +245,9 @@
   var apiObj = {
     severityClass: severityClass,
     sourceLabel: sourceLabel,
+    SOURCE_LABELS: SOURCE_LABELS,
+    typeDetail: typeDetail,
+    typeIsInformative: typeIsInformative,
     RANGE_PRESETS: RANGE_PRESETS,
     rangeToWindow: rangeToWindow,
     timelineQuery: timelineQuery,

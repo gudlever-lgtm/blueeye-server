@@ -32,8 +32,8 @@ first-time visitor wants their shift, not four years of history.
 | --- | --- | --- |
 | `agent_state` | `audit_events` (`agent.online`/`offline`/`enrolled`) | ✅ |
 | `finding` | `findings` | ✅ (creation) |
-| `incident` | `incidents` (probe outages) — **open and resolve** | ✅ |
-| `incident` | `incident_cases` | ✅ |
+| `probe` | `incidents` (probe outages) — **degrade and recover** | ✅ |
+| `event` | `incident_cases` | ✅ |
 | `cluster` | `incident_clusters` | ✅ |
 | `topology` | `topology_changes` (links appeared/disappeared) | ✅ |
 | `playbook` | `incident_playbook_runs` | ✅ |
@@ -41,7 +41,11 @@ first-time visitor wants their shift, not four years of history.
 | `interface_state` | `interface_state_transitions` (mig 075) | ✅ |
 | `agent_health` | derived — heartbeat + version skew | ❌ **current state** |
 
-A probe incident contributes **two** events when both ends fall in the window:
+`probe` and `event` used to share the kind `incident`, which is what made one
+row render as the raw string `incident_case`. They are different records: see
+[events.md](events.md) for the vocabulary.
+
+A probe outage contributes **two** events when both ends fall in the window:
 "the link came back" matters to a handover exactly as much as "it went down". A
 recovery is always surfaced at `INFO`, never at the severity of the fault it
 ended, or the page turns red for things that are now fine.
@@ -73,6 +77,43 @@ log that quietly lies about timing.
 Flapping interfaces collapse onto **one** row with a count. See
 `docs/interface-transitions.md`.
 
+## Correlation — fewer rows, and what they indicate
+
+The feed's job is answering "what happened", and a page listing every raw
+occurrence does not answer it. Before ordering, two reductions run:
+
+1. **Roll-up** — an anomaly whose `event` row is also on the feed is folded *into*
+   that event, which then carries `findingCount`. The event exists precisely to
+   represent those anomalies; listing both double-counted one detection, and is
+   why the page read as twice as busy as reality.
+2. **Collapse** — repeats of the same condition on the same device become **one**
+   row carrying `count`, `firstAt` and every `refIds`. A condition that reopened
+   seven times in four hours is one chronic problem; `7× since 07:15` states that
+   where seven separate rows only implied it.
+
+The correlation key is `kind | source | type | agentId | metric | severity`, so a
+fold can never cross a device, a condition, a severity (an escalation stays its
+own row) or a transition direction — "went offline" is never folded into "came
+back online". `currentState` rows and one-off artifacts (config captures, topology
+changes, playbook runs) are never folded: three config pushes are three pushes.
+
+Correlation runs **before** the cap, so the cap's budget is spent on distinct
+conditions instead of on repeats of one — a single flapping link can no longer
+push every other condition off the page. `rawTotal` and `correlated` report what
+was folded, and the page states it: a feed that quietly compressed 120
+occurrences into 14 rows would otherwise read as a suspiciously quiet shift.
+
+Pass `correlate: false` to `buildChangeFeed()` for the raw stream (an export, an
+audit).
+
+Each row also carries a `family` from `src/changes/indications.js` — the condition
+family its metric belongs to (`latency`, `interface`, `saturation`, …) — which the
+dashboard renders as one sentence about what the condition *indicates*. The
+mapping is local, deterministic and regex-on-family: an unrecognised metric yields
+`null` and no sentence, because no interpretation beats a confident wrong one. The
+wording lives in `public/i18n.js` (`changes.indicates.<family>`, en + da), not in
+the server.
+
 ## Event shape
 
 Identical to `src/timeline/targetTimeline.js` and the topology change feed:
@@ -80,6 +121,9 @@ Identical to `src/timeline/targetTimeline.js` and the topology change feed:
 ```
 { timestamp, source, type, severity, summary, ref_id, agentId, kind, currentState }
 ```
+
+plus the correlation fields: `metric`, `family`, `count`, `firstAt`, `refIds`,
+`findingCount`.
 
 Sharing the shape means the dashboard renders these rows through
 `TimelineView.renderRow` instead of growing a second row renderer that drifts
@@ -129,8 +173,10 @@ and every mapper labels from it): that is a 500.
 ## Files
 
 - Migration `migrations/074_add_user_last_seen_changes.sql`
-- Pure read-model `src/changes/changeFeed.js` (mappers, window, ordering, grouping)
+- Pure read-model `src/changes/changeFeed.js` (mappers, window, correlation, ordering, grouping)
+- Condition families `src/changes/indications.js`
 - Fan-out `src/changes/changesService.js`
+- Vocabulary (event vs. incident vs. situation vs. probe outage): [events.md](events.md)
 - Router `src/routes/changes.js`
 - Fleet-wide repo additions: `remediationPlaybooksRepository.listRunsBetween`, `configSnapshotsRepository.listBetween`, `usersRepository.get/setLastSeenChanges`
 - UI `views.changes` + `changesRowEl()` in `public/app.js`, `.chg-*` CSS, `PAGE_INFO.changes`

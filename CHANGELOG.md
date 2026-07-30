@@ -1,5 +1,82 @@
 # Changelog
 
+## 0.109.0 — Events, not incidents; and a feed that correlates instead of counting
+
+Two complaints, one root cause. The changes feed listed an **anomaly** row *and* an
+**event** row for the same detection, then repeated that pair every time the
+condition came back — "Critical (52)" for a handful of actual problems. And the
+row that did the double-counting was labelled `incident_case`, a table name, next
+to a run-together `finding.probe.latencyprobe.latency`.
+
+### Fewer rows, and what they indicate
+
+Two reductions now run in `src/changes/changeFeed.js` **before** ordering and the
+cap, so the cap's budget goes to distinct conditions instead of repeats of one —
+a single flapping link can no longer push everything else off the page.
+
+- **Roll-up.** An anomaly whose event is also on the feed is folded *into* that
+  event, which carries `findingCount`. The event exists precisely to represent
+  those anomalies; listing both double-counted one detection. Matched on
+  `findings.incident_case_id`, with `primary_finding_id` as a second signal so the
+  very first anomaly of a case (whose FK may not be written yet) folds too.
+- **Collapse.** Repeats of one condition on one device become **one** row carrying
+  `count`, `firstAt` and every `refIds`. A condition that reopened seven times in
+  four hours is one chronic problem, and `7× since 07:15` says so where seven rows
+  only implied it. Key: `kind|source|type|agentId|metric|severity` — a fold never
+  crosses a device, a condition, a severity (an escalation stays its own row) or a
+  transition direction, so "went offline" is never folded into "came back online".
+  One-off artifacts (config captures, topology changes, playbook runs) and
+  `currentState` rows are never folded: three config pushes are three pushes.
+- **It says what it folded.** `rawTotal` and `correlated` join `total`, and the
+  page prints them — a feed that quietly compressed 120 occurrences into 14 rows
+  would otherwise read as a suspiciously quiet shift.
+- **"What this indicates."** Each row carries a condition `family` from the new
+  `src/changes/indications.js` (latency, interface, saturation, loss, certificate,
+  routing, resources, …), rendered as one sentence under the row. Local,
+  deterministic, regex-on-family — an unrecognised metric yields `null` and no
+  sentence, because no interpretation beats a confident wrong one. Wording lives in
+  `public/i18n.js` (`changes.indicates.*`, en + da), not in the server.
+- `incidentCasesRepository.list()` now joins the primary anomaly's metric
+  (`primaryMetric`), because correlating on the row id instead of the condition
+  makes two unrelated events on one device look like one recurring problem.
+
+### The rendering bugs behind the screenshot
+
+- The feed renders its rows into `ul.timeline-list`, which never picked up the
+  flex/gap rules `ul.timeline` has — so every chip abutted the next. Both parents
+  are styled now.
+- The type chip drops its source prefix and hides entirely when the summary
+  already spells it out: `finding.probe.latency` beside "probe.latency on core-sw"
+  was duplication twice over. Matched on **word boundaries**, so a site named
+  Copenhagen cannot suppress an `open` status chip by containing the letters.
+- `SOURCE_LABELS` had no entry for `incident_case`, which is why a table name
+  reached the page. Every source a mapper emits now has a label, and a test
+  asserts it.
+
+### Events, not incidents
+
+BlueEyes produces **events**; an **incident** is what a connected ITSM opens from
+one, and it lives there with its own number, SLA and owner. Calling our own row an
+incident made the two indistinguishable and implied BlueEyes does incident
+management, which it deliberately does not. New doc: **`docs/events.md`**.
+
+- The dashboard tab is **Events**; `views.events` / `views.event`, `PAGE_INFO.events`,
+  and the page help now states the boundary outright.
+- **`/api/events/*` is canonical.** `/api/incidents/*` stays mounted as a
+  deprecated alias — the *same router instance*, so the two cannot drift — and
+  every response carries `event`/`events`/`eventId` alongside the old
+  `incident`/`incidents`/`incidentId` keys. Existing integrations keep working.
+- The changes feed's two records that used to share the kind `incident` are now
+  distinct: `event` (`incident_cases`) and `probe` (the probe-outage `incidents`,
+  migration 025), whose transitions read `degraded`/`recovered`.
+- **Unchanged on purpose:** the `incident_cases` / `incidents` / `incident_notes`
+  tables (renaming buys nothing a customer sees and costs a migration on live data
+  with five FKs); the integrations' stored subscription names (`incident`,
+  `anomaly`) — renaming them would silently unsubscribe live integrations, and
+  `incident` there now literally means "the subscription that opens an ITSM
+  incident"; ServiceNow's `incident` table; and **NIS2 incidents**, where
+  "incident" is the word the legislation uses.
+
 ## 0.108.0 — CMDB asset picker: search by asset ID, name or location
 
 Linking an agent to its CMDB asset was a free-text box that searched asset

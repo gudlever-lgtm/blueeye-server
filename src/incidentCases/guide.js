@@ -135,7 +135,7 @@ function buildIncidentGuide({ incident, anomalies = [], configContext = null, si
       kind: 'info',
       detail: `This resembles incident #${top.id}${top.title ? ` (“${top.title}”)` : ''}, resolved${when}${top.closedBy ? ` by ${top.closedBy}` : ''}.`,
       rationale: 'A past resolution of a matching incident is often the fastest path to a known fix.',
-      action: { label: 'Open similar incident', view: 'incident', targetId: top.id },
+      action: { label: 'Open similar event', view: 'event', targetId: top.id },
     });
   }
 

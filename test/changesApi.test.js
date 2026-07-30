@@ -147,9 +147,11 @@ test('the window bounds what is returned', async () => {
 });
 
 test('limit caps the page and truncated reports the overflow', async () => {
+  // Ten DIFFERENT agents: ten disconnects of ONE agent is a flapping agent, which
+  // the feed correctly folds into a single counted row (see the test below).
   const auditEventsRepo = makeAuditEventsRepo({
     findByActor: async () => Array.from({ length: 10 }, (_, i) => ({
-      id: i + 1, action: 'agent.offline', actorId: 7, lastSeenAt: minutesAgo(i + 1).toISOString(),
+      id: i + 1, action: 'agent.offline', actorId: i + 1, lastSeenAt: minutesAgo(i + 1).toISOString(),
     })),
   });
   const res = await get(appWith({ auditEventsRepo }), '?window=6h&limit=3');
@@ -157,6 +159,24 @@ test('limit caps the page and truncated reports the overflow', async () => {
   assert.equal(res.body.returned, 3);
   assert.equal(res.body.total, 10);
   assert.equal(res.body.truncated, true);
+});
+
+test('one agent flapping is ONE counted row, not ten', async () => {
+  // The complaint this answers: a feed of 52 critical rows describing a handful of
+  // conditions. The count is the diagnosis — ten disconnects is a flapping link,
+  // and the row says so instead of leaving the reader to tally rows.
+  const auditEventsRepo = makeAuditEventsRepo({
+    findByActor: async () => Array.from({ length: 10 }, (_, i) => ({
+      id: i + 1, action: 'agent.offline', actorId: 7, lastSeenAt: minutesAgo(i + 1).toISOString(),
+    })),
+  });
+  const res = await get(appWith({ auditEventsRepo }), '?window=6h');
+
+  const rows = res.body.events.filter((e) => e.kind === 'agent_state');
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].count, 10);
+  assert.equal(res.body.rawTotal, 10);
+  assert.equal(res.body.correlated, 9, 'and the response says how many it folded');
 });
 
 test('every event links back to something the UI can open', async () => {
@@ -297,4 +317,114 @@ test('POST /api/changes/seen returns 500 when the write fails', async () => {
 
   assert.equal(res.status, 500);
   assert.equal(res.body.error, 'Internal Server Error');
+});
+
+// -------------------------------------------------- correlation, end to end
+// The complaint that produced this: "Critical (52)" listing an anomaly row AND an
+// event row for the same detection, repeated every time the condition came back —
+// a handful of actual problems presented as fifty-two things to read.
+test('a recurring condition is ONE event row, not an anomaly + event pair per occurrence', async () => {
+  const { makeIncidentCasesRepo } = require('../test-support/fakes');
+
+  // Six occurrences of one condition on agent 7. Each opened its own case (the
+  // previous one having been resolved), and each has its anomaly linked to it —
+  // exactly the shape the screenshot showed.
+  //
+  // One frozen base, so the assertions below compare exact timestamps rather than
+  // racing a fresh Date.now() per helper call.
+  const base = Date.now();
+  const at = (mins) => new Date(base - mins * 60000).toISOString();
+  const occurrences = [15, 45, 75, 105, 135, 165];
+  const cases = occurrences.map((mins, i) => ({
+    id: 100 + i,
+    host_id: '7',
+    title: 'CRIT probe.latency on Core switch (Copenhagen HQ)',
+    status: 'open',
+    severity: 'CRIT',
+    primary_finding_id: `f${i}`,
+    primary_metric: 'probe.latency',
+    first_event_at: at(mins),
+    last_event_at: at(mins),
+    created_by: 'system',
+  }));
+  const incidentCasesRepo = makeIncidentCasesRepo();
+  incidentCasesRepo.rows.push(...cases);
+
+  const findingStore = makeFindingStore();
+  occurrences.forEach((mins, i) => findingStore.rows.push({
+    id: `f${i}`, hostId: '7', metric: 'probe.latency', severity: 'CRIT',
+    createdAt: at(mins), incidentCaseId: 100 + i,
+  }));
+
+  const res = await get(appWith({ incidentCasesRepo, findingStore }), '?window=6h');
+  assert.equal(res.status, 200);
+
+  // Twelve raw occurrences (six anomalies + six events) → one row.
+  assert.equal(res.body.rawTotal, 12);
+  assert.equal(res.body.total, 1, 'one condition, one row');
+  assert.equal(res.body.correlated, 11);
+
+  const [row] = res.body.events;
+  assert.equal(row.kind, 'event', 'the event survives; its anomalies fold into it');
+  assert.equal(row.count, 6, 'and it says how many times the condition came back');
+  assert.equal(row.findingCount, 6, 'and how many anomalies it absorbed');
+  assert.equal(row.firstAt, at(165), 'with the span it happened over');
+  assert.equal(row.timestamp, at(15), 'timestamped by its latest activity');
+  assert.equal(row.family, 'latency', 'which is what the UI turns into "what this indicates"');
+  assert.equal(row.refIds.length, 6, 'every folded record stays drillable');
+
+  // No anomaly row survived beside the event that represents it.
+  assert.equal(res.body.events.filter((e) => e.kind === 'finding').length, 0);
+});
+
+test('two different conditions on one device stay two rows', async () => {
+  const { makeIncidentCasesRepo } = require('../test-support/fakes');
+  const incidentCasesRepo = makeIncidentCasesRepo();
+  incidentCasesRepo.rows.push(
+    { id: 1, host_id: '7', title: 'CRIT probe.latency on Core switch', status: 'open', severity: 'CRIT', primary_metric: 'probe.latency', first_event_at: minutesAgo(30).toISOString(), last_event_at: minutesAgo(30).toISOString(), created_by: 'system' },
+    { id: 2, host_id: '7', title: 'CRIT if.errors on Core switch', status: 'open', severity: 'CRIT', primary_metric: 'if.errors', first_event_at: minutesAgo(20).toISOString(), last_event_at: minutesAgo(20).toISOString(), created_by: 'system' }
+  );
+
+  const res = await get(appWith({ incidentCasesRepo }), '?window=6h');
+  const rows = res.body.events.filter((e) => e.kind === 'event');
+  assert.equal(rows.length, 2, 'latency and interface errors are different problems');
+  assert.deepEqual(rows.map((r) => r.family).sort(), ['interface', 'latency']);
+});
+
+test('an anomaly with no event of its own is still reported', async () => {
+  // Its event fell outside the window, or none exists yet. This row is the only
+  // thing that would report the detection — folding it would lose it.
+  const findingStore = makeFindingStore();
+  findingStore.rows.push({
+    id: 'orphan', hostId: '7', metric: 'cpu', severity: 'WARN',
+    createdAt: minutesAgo(10).toISOString(), incidentCaseId: null,
+  });
+  const res = await get(appWith({ findingStore }), '?window=6h');
+  const rows = res.body.events.filter((e) => e.kind === 'finding');
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].family, 'resources');
+});
+
+test('no feed row ever renders a raw table name as its source', async () => {
+  // `incident_case` was printed verbatim on the page because SOURCE_LABELS had no
+  // entry for it. The source vocabulary is now the feed's contract.
+  const { makeIncidentCasesRepo } = require('../test-support/fakes');
+  const incidentCasesRepo = makeIncidentCasesRepo();
+  incidentCasesRepo.rows.push({
+    id: 1, host_id: '7', title: 'CRIT probe.latency on Core switch', status: 'open', severity: 'CRIT',
+    primary_metric: 'probe.latency', first_event_at: minutesAgo(30).toISOString(), last_event_at: minutesAgo(30).toISOString(), created_by: 'system',
+  });
+  const incidentsRepo = makeIncidentsRepo({
+    list: async () => [{ id: 9, agentId: 8, metric: 'loss', severity: 'critical', affectedTarget: '8.8.8.8', startedAt: minutesAgo(40).toISOString(), resolvedAt: null }],
+  });
+
+  const res = await get(appWith({ incidentCasesRepo, incidentsRepo, auditEventsRepo: agentTransitions() }), '?window=6h');
+  const KNOWN = ['finding', 'event', 'probe', 'cluster', 'agent', 'interface', 'topology', 'playbook', 'config'];
+  for (const e of res.body.events) {
+    assert.ok(KNOWN.includes(e.source), `unlabelled source "${e.source}" would render as a raw key`);
+    assert.ok(!String(e.source).includes('_case'), 'a table name must never reach the page');
+  }
+  // The two records that used to share the kind `incident` are now distinguishable.
+  assert.ok(res.body.events.some((e) => e.kind === 'event'));
+  assert.ok(res.body.events.some((e) => e.kind === 'probe'));
 });

@@ -69,11 +69,63 @@ test('severityClass normalises/falls back to INFO', () => {
   assert.equal(TV.severityClass('WARN'), 'WARN');
 });
 
-test('sourceLabel covers all four sources + fallback', () => {
+test('sourceLabel covers every source the feeds emit + fallback', () => {
   assert.equal(TV.sourceLabel('finding'), 'Finding');
-  assert.equal(TV.sourceLabel('incident'), 'Incident');
   assert.equal(TV.sourceLabel('playbook'), 'Playbook');
   assert.equal(TV.sourceLabel('mystery'), 'mystery');
+  // The operator-facing unit is an EVENT; `probe` is the active-probe outage and
+  // `cluster` is a Situation. Two records that used to share the label "Incident".
+  assert.equal(TV.sourceLabel('event'), 'Event');
+  assert.equal(TV.sourceLabel('probe'), 'Probe outage');
+  assert.equal(TV.sourceLabel('cluster'), 'Situation');
+  // Legacy keys still resolve, so a cached payload never renders a table name.
+  assert.equal(TV.sourceLabel('incident_case'), 'Event');
+  assert.equal(TV.sourceLabel('incident'), 'Event');
+});
+
+// A missing SOURCE_LABELS entry is how `incident_case` ended up printed verbatim
+// on the changes feed. Every source any mapper emits must have a label.
+test('every source the change feed emits has a human label', () => {
+  const emitted = ['finding', 'event', 'probe', 'cluster', 'agent', 'interface', 'topology', 'playbook', 'config'];
+  for (const s of emitted) {
+    assert.ok(
+      Object.prototype.hasOwnProperty.call(TV.SOURCE_LABELS, s),
+      `source "${s}" has no label and would render as a raw key`
+    );
+  }
+});
+
+// ---- type chip -------------------------------------------------------------
+
+test('the type chip drops the source prefix and hides what the summary already says', () => {
+  // The bug this fixes: "finding.probe.latency" rendered next to
+  // "probe.latency on core-sw", with no separator, as one run-together word.
+  const m = TV.rowModel({
+    source: 'finding', type: 'finding.probe.latency', summary: 'probe.latency on core-sw', severity: 'CRIT',
+  });
+  assert.equal(m.typeDetail, 'probe.latency', 'the source prefix is already on the source chip');
+  assert.equal(m.showType, false, 'the summary spells it out — the chip would be pure duplication');
+
+  // A status the summary does NOT carry is worth showing.
+  const ev = TV.rowModel({ source: 'event', type: 'event.investigating', summary: 'CRIT latency on core-sw' });
+  assert.equal(ev.typeDetail, 'investigating');
+  assert.equal(ev.showType, true);
+});
+
+test('rowModel surfaces the correlation fields, defaulted for uncorrelated rows', () => {
+  const plain = TV.rowModel({ source: 'event', type: 'event.open', summary: 'x' });
+  assert.equal(plain.count, 1);
+  assert.equal(plain.findingCount, 0);
+  assert.equal(plain.family, null);
+
+  const folded = TV.rowModel({
+    source: 'event', type: 'event.open', summary: 'x',
+    count: 7, findingCount: 12, family: 'latency', firstAt: '2026-07-30T07:15:00.000Z',
+  });
+  assert.equal(folded.count, 7);
+  assert.equal(folded.findingCount, 12);
+  assert.equal(folded.family, 'latency');
+  assert.equal(folded.firstAt, '2026-07-30T07:15:00.000Z');
 });
 
 // ---- rangeToWindow / timelineQuery ----------------------------------------
@@ -201,6 +253,46 @@ test('renderRow: applies formatTime to the timestamp', () => {
   const doc = newDoc();
   const li = TV.renderRow(doc, { timestamp: '2026-06-01T09:00:00Z', source: 'agent', type: 'agent.online', severity: 'INFO', summary: 'x' }, { formatTime: () => 'FORMATTED' });
   assert.match(li.querySelector('.tl-time').textContent, /FORMATTED/);
+});
+
+test('renderRow: the same metric is never printed twice on one row', () => {
+  // The bug from the field: a CRIT row read
+  //   "finding.probe.latencyprobe.latency on Fellis Agent 007"
+  // — the dotted type chip, the summary repeating it, and (in the changes feed's
+  // <ul>, which never picked up the flex/gap rules) no separator between them.
+  const doc = newDoc();
+  const li = TV.renderRow(doc, {
+    timestamp: 't', source: 'finding', type: 'finding.probe.latency',
+    severity: 'CRIT', summary: 'probe.latency on Fellis Agent 007', ref_id: 'f1',
+  }, {});
+
+  assert.equal(li.querySelectorAll('.tl-type').length, 0, 'the type chip is dropped when the summary says it');
+  const occurrences = li.textContent.split('probe.latency').length - 1;
+  assert.equal(occurrences, 1, `the metric appears once, not ${occurrences} times`);
+  assert.ok(!li.textContent.includes('finding.probe.latency'), 'and never as a raw dotted key');
+});
+
+test('renderRow: an event row is labelled Event, never with a table name', () => {
+  const doc = newDoc();
+  const li = TV.renderRow(doc, {
+    timestamp: 't', source: 'event', type: 'event.open', severity: 'CRIT',
+    summary: 'CRIT probe.latency on core-sw (Copenhagen HQ)', ref_id: 3,
+  }, {});
+  assert.equal(li.querySelector('.tl-src').textContent, 'Event');
+  assert.ok(!li.textContent.includes('incident_case'));
+  // `open` is a status the summary does not carry, so the chip earns its place —
+  // and "Copenhagen" must not suppress it just for containing the letters.
+  assert.equal(li.querySelector('.tl-type').textContent, 'open');
+});
+
+test('a word inside a site or device name never suppresses the type chip', () => {
+  // Matching on bare substrings hid the status chip on every event at a
+  // Copenhagen site. Boundaries, not substrings.
+  assert.equal(TV.typeIsInformative('event.open', 'event', 'CRIT latency on sw1 (Copenhagen HQ)'), true);
+  assert.equal(TV.typeIsInformative('event.open', 'event', 'Event open on sw1'), false);
+  // A dotted metric still matches literally (the dot is not a wildcard).
+  assert.equal(TV.typeIsInformative('finding.probe.latency', 'finding', 'probe.latency on sw1'), false);
+  assert.equal(TV.typeIsInformative('finding.probe.latency', 'finding', 'probeXlatency on sw1'), true);
 });
 
 test('renderRow: summary is inert text, not parsed HTML (no injection)', () => {

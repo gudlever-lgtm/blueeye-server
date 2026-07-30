@@ -214,3 +214,56 @@ test('PATCH surfaces a repo failure as 500', async () => {
     .set('Authorization', authHeader('operator')).send({ status: 'investigating' });
   assert.equal(res.status, 500);
 });
+
+// ---- /api/events is canonical, /api/incidents is the alias ------------------
+// The operator-facing unit is an EVENT; an *incident* is what a connected ITSM
+// opens from one (docs/events.md). Both paths share ONE router instance, so they
+// cannot drift — these tests are what proves the alias is not a second copy.
+
+test('GET /api/events is the canonical path and returns the same list', async () => {
+  const { app } = await withIncident();
+  const res = await request(app).get('/api/events').set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 200);
+  assert.equal(res.body.events.length, 1);
+  assert.equal(res.body.events[0].hostId, 'core-sw');
+});
+
+test('the deprecated /api/incidents alias answers identically', async () => {
+  // Existing integrations, scripts and bookmarks must keep working untouched.
+  const { app } = await withIncident();
+  const [canonical, alias] = await Promise.all([
+    request(app).get('/api/events').set('Authorization', authHeader('viewer')),
+    request(app).get('/api/incidents').set('Authorization', authHeader('viewer')),
+  ]);
+  assert.deepEqual(alias.body, canonical.body);
+});
+
+test('list and detail carry BOTH the new and the deprecated response keys', async () => {
+  const { app, id } = await withIncident();
+  const list = await request(app).get('/api/events').set('Authorization', authHeader('viewer'));
+  assert.deepEqual(list.body.incidents, list.body.events, 'incidents is the alias of events');
+
+  const detail = await request(app).get(`/api/events/${id}`).set('Authorization', authHeader('viewer'));
+  assert.equal(detail.status, 200);
+  assert.deepEqual(detail.body.incident, detail.body.event, 'incident is the alias of event');
+  assert.equal(detail.body.event.id, id);
+});
+
+test('a PATCH through the canonical path returns both keys', async () => {
+  const { app, id } = await withIncident();
+  const res = await request(app).patch(`/api/events/${id}`)
+    .set('Authorization', authHeader('operator'))
+    .send({ status: 'investigating' });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.event.status, 'investigating');
+  assert.deepEqual(res.body.incident, res.body.event);
+});
+
+test('an unknown id is an EVENT that was not found', async () => {
+  // The noun in our own error text is "event" — "incident" would point the reader
+  // at their service desk for a record that only ever existed here.
+  const { app } = await withIncident();
+  const res = await request(app).get('/api/events/99999').set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 404);
+  assert.equal(res.body.error, 'Event not found');
+});

@@ -58,7 +58,9 @@ test('GET /recommendation returns the three ordered sections → 200 (viewer)', 
   const res = await request(app).get(`/api/incidents/${targetId}/recommendation`).set('Authorization', authHeader('viewer'));
   assert.equal(res.status, 200);
   // Section keys present, in order.
-  assert.deepEqual(Object.keys(res.body), ['incidentId', 'matching_playbook', 'historical_matches', 'ai_suggestion']);
+  // `eventId` is canonical; `incidentId` is the deprecated alias kept so existing
+  // integrations keep working (see the router header).
+  assert.deepEqual(Object.keys(res.body), ['eventId', 'incidentId', 'matching_playbook', 'historical_matches', 'ai_suggestion']);
   assert.equal(res.body.matching_playbook, null); // no playbook seeded
   assert.ok(Array.isArray(res.body.historical_matches));
   assert.equal(res.body.ai_suggestion, null);

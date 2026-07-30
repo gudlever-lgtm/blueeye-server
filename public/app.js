@@ -699,7 +699,7 @@ const VIEW_LABELS = {
   fleet: 'Overview', overview: 'Traffic', map: 'Sites', geo: 'Destinations', agents: 'Agents',
   interfaces: 'Interfaces', probes: 'Probes', tests: 'Tests', flows: 'Flows',
   findings: 'Analysis', reporting: 'Reporting', locations: 'Locations', enrollment: 'Enrollment', settings: 'Settings',
-  docs: 'Documentation', investigation: 'Troubleshooting', nics: 'NICs', incidents: 'Incidents',
+  docs: 'Documentation', investigation: 'Troubleshooting', nics: 'NICs', events: 'Events',
 };
 function gotoView(viewKey) {
   closeDrawer();
@@ -836,7 +836,7 @@ const PAGE_INFO = {
       el('h4', {}, 'KPI strip & network path'),
       el('p', {}, 'Above the list, a strip of live KPIs (latency, loss, jitter, active agents, monitored paths, alerts) and a network-path diagram (Origin → ISP → Cloud → SaaS) summarise the selected scope at a glance. The diagram is data-driven: the origin node names the site (or the whole fleet) and its online agents, and each segment\'s colour, label and hover tooltip come from that scope\'s own probe metrics — worst packet loss on the local access link, median RTT and jitter on the WAN uplink, and target reachability on the SaaS leg (the SaaS node shows the real count of monitored targets). A segment turns amber at a warning threshold and red when critical. Both the KPIs and the path summarise ', el('strong', {}, 'all'), ' agents by default; use the ', el('strong', {}, 'Location'), ' selector to scope them to a single site — which recomputes every segment and drops the fleet-only "Branch" origin, so the picture changes with your selection.'),
       el('h4', {}, 'Open issues (Professional+)'),
-      el('p', {}, 'On Professional licences and above, the page ends with an ', el('strong', {}, 'Open issues'), ' rollup: the currently-active ', el('strong', {}, 'incidents'), ' (derived from the probe thresholds — click one to drill into the affected agent) beside the most recent unacknowledged analysis ', viewLink('findings', 'findings'), ', each with its explanation. It is composed from data the server already holds — no new collection — and is gated by the ', el('strong', {}, 'dashboard_advanced'), ' licence feature; below Professional the rollup is simply omitted and the rest of the page is unchanged.'),
+      el('p', {}, 'On Professional licences and above, the page ends with an ', el('strong', {}, 'Open issues'), ' rollup: the currently-active ', el('strong', {}, 'probe outages'), ' (derived from the probe thresholds — click one to drill into the affected agent) beside the most recent unacknowledged analysis ', viewLink('findings', 'findings'), ', each with its explanation. It is composed from data the server already holds — no new collection — and is gated by the ', el('strong', {}, 'dashboard_advanced'), ' licence feature; below Professional the rollup is simply omitted and the rest of the page is unchanged.'),
       el('p', { class: 'muted' }, 'Health is based on active probes — run a few per agent on ', viewLink('probes'), ' (or schedule them fleet-wide via ', viewLink('tests'), ') for a complete picture; the interface signal comes from ', viewLink('interfaces'), '. Metadata only: targets and timings, never packet contents.'),
     ],
   },
@@ -3080,7 +3080,7 @@ function usageBar(percent) {
   return el('div', { class: 'usagebar' }, el('div', { class: `fill ${cls}`, style: `width:${p}%` }));
 }
 
-// ---- Sortable / filterable tables (shared: Analysis + Incidents) ----------
+// ---- Sortable / filterable tables (shared: Analysis + Events) -------------
 // Severity ordering so a "Severity" column sorts by urgency, not alphabetically.
 const SEVERITY_RANK = { CRIT: 3, WARN: 2, INFO: 1 };
 // Format a robust z-score (median/MAD σ) for the overview tables; null → dash.
@@ -3210,7 +3210,7 @@ views.findings = async () => {
 
   // Severity / Metric filter controls live in the table header (a filter row
   // under the sortable labels) — the same per-column filter+sort model the
-  // Incidents table uses. The Host selector is promoted out of the header into
+  // Events table uses. The Host selector is promoted out of the header into
   // its own bar directly under the page heading (see hostFilterBar below).
   const hostSelect = el('select', { class: 'col-filter' },
     el('option', { value: '' }, 'All hosts'),
@@ -3486,9 +3486,14 @@ function assistantBox(getHostId) {
     out);
 }
 
-// ---- Incidents (first-class incident_cases) --------------------------------
+// ---- Events (stored in incident_cases) -------------------------------------
+// An event is a correlated condition on ONE device, wrapping the anomalies that
+// evidence it. It is what a connected ITSM opens an *incident* from — the
+// incident lives there, with its own number and SLA. See docs/events.md.
 let selectedIncidentId = null;
-function openIncident(id) { selectedIncidentId = id; currentView = 'incident'; render(); }
+// Opens the EVENT detail view (the record lives in `incident_cases`; the name is
+// kept on the internal helper so every existing call site stays valid).
+function openIncident(id) { selectedIncidentId = id; currentView = 'event'; render(); }
 
 const INC_STATUS_LABEL = { open: 'Open', investigating: 'Investigating', resolved: 'Resolved', closed: 'Closed' };
 const INC_TRANSITIONS = { open: ['investigating'], investigating: ['resolved'], resolved: ['closed'], closed: ['open'] };
@@ -3513,17 +3518,18 @@ function incidentWhere(i) {
   return `${incAgentLabel(i)} · ${incLocationLabel(i)}`;
 }
 
-PAGE_INFO.incidents = {
-  hero: 'Incidents group related anomalies on the same device into one case you can track from open to closed — with a timeline, the config change that may have triggered it, similar past incidents, and an opt-in AI assistant.',
-  title: 'Incidents — grouped anomalies, tracked end-to-end',
+PAGE_INFO.events = {
+  hero: 'Events group related anomalies on the same device into one thing you can track from open to closed — with a timeline, the config change that may have triggered it, similar past events, and an opt-in AI assistant. A connected ITSM opens its own incident from an event.',
+  title: 'Events — grouped anomalies, tracked end-to-end',
   body: () => [
-    el('p', {}, 'Each incident wraps the analysis findings (anomalies) that fired close together on one device. Status moves open → investigating → resolved → closed; a closed incident can be reopened with a comment (recorded in the audit trail).'),
-    el('p', {}, 'The detail page shows the incident timeline, the device-config change suspected to have triggered it, similar past incidents, and — when the EU AI assistant is enabled — a chat that answers questions using only masked, aggregated context.'),
+    el('p', {}, 'Each event wraps the analysis findings (anomalies) that fired close together on one device. Status moves open → investigating → resolved → closed; a closed event can be reopened with a comment (recorded in the audit trail).'),
+    el('p', {}, 'BlueEyes deliberately stops at the event. An event is a technical observation the monitoring owns; an ', el('strong', {}, 'incident'), ' is a service-desk record with a number, an SLA and an owner, and it belongs in your ITSM. Connect one under Settings → Integrations and an event can open an incident there.'),
+    el('p', {}, 'The detail page shows the event timeline, the device-config change suspected to have triggered it, similar past events, and — when the EU AI assistant is enabled — a chat that answers questions using only masked, aggregated context.'),
     el('p', { class: 'muted' }, 'Status changes, config history and the AI chat are operator/admin only.'),
   ],
 };
 
-views.incidents = async () => {
+views.events = async () => {
   const wrap = el('div', { class: 'incidents-view' });
   const filters = { status: '', severity: '', device: '', location: '' };
 
@@ -3600,7 +3606,7 @@ views.incidents = async () => {
     if (filters.severity) qs.set('severity', filters.severity);
     if (filters.device) qs.set('device', filters.device);
     try {
-      const { incidents } = await api(`/api/incidents${qs.toString() ? `?${qs}` : ''}`);
+      const { events: incidents } = await api(`/api/events${qs.toString() ? `?${qs}` : ''}`);
       loaded = incidents;
       apply();
     } catch (err) {
@@ -3609,7 +3615,7 @@ views.incidents = async () => {
   }
 
   wrap.append(
-    el('div', { class: 'section-head' }, el('h2', {}, 'Incidents'),
+    el('div', { class: 'section-head' }, el('h2', {}, 'Events'),
       el('span', { class: 'muted' }, 'related anomalies grouped into tracked cases')),
     grid.table);
   await load();
@@ -3623,7 +3629,7 @@ async function loadIncidentTimeline(id, card, deviceId) {
   // and, for config, the Config history card). Status changes have no target.
   const canLink = Number.isInteger(devNum);
   try {
-    const { events } = await api(`/api/incidents/${id}/timeline`);
+    const { events } = await api(`/api/events/${id}/timeline`);
     if (!events.length) { card.replaceChildren(head, el('p', { class: 'muted' }, 'No events yet.')); return; }
     card.replaceChildren(head, el('ul', { class: 'timeline' }, ...events.map((e) => {
       const linkable = canLink && (e.type === 'anomaly' || e.type === 'config_change');
@@ -3703,7 +3709,7 @@ function targetTimelineCard(agentId) {
 async function loadIncidentSimilar(id, card) {
   const head = el('h3', {}, 'Similar past incidents');
   try {
-    const { similar } = await api(`/api/incidents/${id}/similar`);
+    const { similar } = await api(`/api/events/${id}/similar`);
     if (!similar.length) { card.replaceChildren(head, el('p', { class: 'muted' }, 'No similar incidents found.')); return; }
     card.replaceChildren(head, el('ul', { class: 'inc-similar' }, ...similar.map((s) => el('li', {
       class: 'clickable', onclick: () => openIncident(s.id),
@@ -3716,7 +3722,7 @@ async function loadIncidentSimilar(id, card) {
 async function loadIncidentConfigContext(id, card) {
   const head = el('h3', {}, 'Config context');
   try {
-    const ctx = await api(`/api/incidents/${id}/config-context`);
+    const ctx = await api(`/api/events/${id}/config-context`);
     if (!ctx.configChangeId) { card.replaceChildren(head, el('p', { class: 'muted' }, 'No correlated config change.')); return; }
     const st = ctx.suspectedTrigger;
     const diff = ctx.diff || {};
@@ -3742,7 +3748,7 @@ function incidentAssistantCard(id) {
     out.textContent = 'Thinking…';
     askBtn.disabled = true;
     try {
-      const res = await api(`/api/incidents/${id}/ask`, { method: 'POST', body: { question: q } });
+      const res = await api(`/api/events/${id}/ask`, { method: 'POST', body: { question: q } });
       out.className = 'assistant-out';
       out.replaceChildren(
         el('div', { class: 'ai-badge' }, '⚠ AI-generated'),
@@ -3752,7 +3758,7 @@ function incidentAssistantCard(id) {
       out.className = 'assistant-out muted';
       out.textContent = err.status === 403
         ? 'The AI assistant is disabled or not licensed. Enable it in Settings → AI.'
-        : (err.status === 404 ? 'Incident not found.' : err.message);
+        : (err.status === 404 ? 'Event not found.' : err.message);
     } finally { askBtn.disabled = false; }
   }
   askBtn.addEventListener('click', ask);
@@ -3772,7 +3778,9 @@ function guideFromList(id) { guideAutoOpen = true; openIncident(id); }
 // Deep-link a guide step's suggested action into the existing tools.
 function guideNavigate(action, incident) {
   if (!action) return;
-  if (action.view === 'incident') { openIncident(action.targetId); return; }
+  // 'event' is what the guide emits now; 'incident' is accepted so a step built by
+  // an older server (or a cached response) still routes.
+  if (action.view === 'event' || action.view === 'incident') { openIncident(action.targetId); return; }
   const dev = Number(action.view === 'config-context' ? incident.hostId : action.targetId);
   if (!Number.isInteger(dev)) return;
   if (action.view === 'flows') { openFlows(dev); return; }
@@ -3781,7 +3789,7 @@ function guideNavigate(action, incident) {
 
 async function loadGuide(incident, body) {
   try {
-    const guide = await api(`/api/incidents/${incident.id}/guide`);
+    const guide = await api(`/api/events/${incident.id}/guide`);
     if (!guide.steps || !guide.steps.length) { body.replaceChildren(el('p', { class: 'muted' }, 'No guidance available for this incident.')); return; }
     const doneKey = `blueeye.guide.${incident.id}`;
     let done = [];
@@ -3797,7 +3805,7 @@ async function loadGuide(incident, body) {
       aiOut.className = 'assistant-out muted';
       aiOut.textContent = 'Thinking…';
       try {
-        const res = await api(`/api/incidents/${incident.id}/ask`, { method: 'POST', body: { question: seed } });
+        const res = await api(`/api/events/${incident.id}/ask`, { method: 'POST', body: { question: seed } });
         aiOut.className = 'assistant-out';
         aiOut.replaceChildren(
           el('div', { class: 'ai-badge' }, '⚠ AI-generated'),
@@ -3858,16 +3866,16 @@ function incidentGuideCard(incident) {
   return details;
 }
 
-views.incident = async () => {
+views.event = async () => {
   const id = selectedIncidentId;
-  const back = el('button', { class: 'small ghost', onclick: () => { currentView = 'incidents'; render(); } }, '← Incidents');
+  const back = el('button', { class: 'small ghost', onclick: () => { currentView = 'events'; render(); } }, '← Events');
   if (id == null) return el('div', { class: 'empty' }, back, el('p', {}, 'No incident selected.'));
 
   let data;
   try {
-    data = await api(`/api/incidents/${id}`);
+    data = await api(`/api/events/${id}`);
   } catch (err) {
-    if (err.status === 404) return el('div', { class: 'empty' }, back, el('p', { class: 'error' }, 'Incident not found.'));
+    if (err.status === 404) return el('div', { class: 'empty' }, back, el('p', { class: 'error' }, 'Event not found.'));
     return el('div', { class: 'empty error' }, back, ' ', err.message);
   }
   const inc = data.incident;
@@ -3903,7 +3911,7 @@ views.incident = async () => {
             if (!comment) return;
           }
           try {
-            await api(`/api/incidents/${id}`, { method: 'PATCH', body: { status: to, ...(comment ? { comment } : {}) } });
+            await api(`/api/events/${id}`, { method: 'PATCH', body: { status: to, ...(comment ? { comment } : {}) } });
             toast(`Incident ${INC_STATUS_LABEL[to].toLowerCase()}`);
             render();
           } catch (err) { toast(errText(err), true); }
@@ -3978,7 +3986,7 @@ views.incident = async () => {
   return el('div', { class: 'incident-detail' }, header, controls, notesCard, guideCard, anomaliesCard, blastCard, timelineCard, similarCard, pathCard, ...extra);
 };
 
-// ---- Incident work log (Fase 3) --------------------------------------------
+// ---- Event work log (Fase 3) -----------------------------------------------
 // Append-only log of observations, actions taken and — the reason this exists —
 // causes that have been RULED OUT. The ruled-out entries render as a separate,
 // pinned list above the chronological log: the next shift's first question is
@@ -4007,7 +4015,7 @@ function incidentNotesCard(incidentId) {
   async function load() {
     let data;
     try {
-      data = await api(`/api/incidents/${incidentId}/notes`);
+      data = await api(`/api/events/${incidentId}/notes`);
     } catch (err) {
       body.replaceChildren(
         el('p', { class: 'error' }, t('notes.loadError', { message: errText(err) })),
@@ -4078,7 +4086,7 @@ function noteComposer(incidentId, onSaved) {
     submit.disabled = true;
     submit.textContent = t('notes.saving');
     try {
-      await api(`/api/incidents/${incidentId}/notes`, { method: 'POST', body: { text, kind: checked.value } });
+      await api(`/api/events/${incidentId}/notes`, { method: 'POST', body: { text, kind: checked.value } });
       textarea.value = '';
       checked.checked = false;
       if (typeof onSaved === 'function') await onSaved();
@@ -4101,7 +4109,7 @@ function noteComposer(incidentId, onSaved) {
   return form;
 }
 
-// ---- Incident Situation View (cross-agent clusters) ------------------------
+// ---- Situation View (one condition across several devices) -----------------
 // "ét fælles billede": one page per cluster answering what/where/since-when,
 // what changed just before, and what the evidence says. Backed by
 // /api/incident-clusters (Fase 1) + /api/incident-clusters/:id/timeline. Page
@@ -7479,16 +7487,46 @@ function changesRowEl(event, nameFor) {
     row.classList.add('chg-current');
     row.append(el('span', { class: 'badge chg-current-badge' }, t('changes.currentState')));
   }
+
+  // How many occurrences this row stands for. A condition that keeps coming back
+  // is a different problem from one that fired once, and the count IS that
+  // diagnosis — so it goes on the row, with the span it happened over, rather
+  // than being implied by rows the reader has to count themselves.
+  const count = Number(event.count) || 1;
+  if (count > 1) {
+    row.classList.add('chg-recurring');
+    row.append(el('span', {
+      class: 'badge chg-count',
+      title: event.firstAt ? t('changes.recurrenceSince', { when: fmtDate(event.firstAt) }) : null,
+    }, t('changes.recurrence', { count })));
+  }
+  // Anomalies folded into this event. Says outright that the detail exists and
+  // where it is, instead of leaving the reader to wonder what the event covers.
+  const folded = Number(event.findingCount) || 0;
+  if (folded > 0) row.append(el('span', { class: 'badge neutral chg-folded' }, t('changes.foldedAnomalies', { count: folded })));
+
   // Deep-link into whatever the row is about.
   if (event.agentId != null) {
     row.append(el('button', {
       class: 'small ghost chg-open',
       onclick: () => openAgent(Number(event.agentId)),
     }, nameFor(event.agentId)));
-  } else if (event.kind === 'incident' && event.ref_id != null && event.source === 'incident_case') {
+  } else if (event.kind === 'event' && event.ref_id != null) {
     row.append(el('button', { class: 'small ghost chg-open', onclick: () => openIncident(Number(event.ref_id)) }, '→'));
   } else if (event.kind === 'cluster' && event.ref_id != null) {
     row.append(el('button', { class: 'small ghost chg-open', onclick: () => openCluster(Number(event.ref_id)) }, '→'));
+  }
+
+  // "What does this indicate?" — one local, deterministic sentence per condition
+  // family (src/changes/indications.js decides the family; the wording lives in
+  // the catalogues). A row with no recognised family simply carries no line,
+  // which is the honest outcome: we do not invent an interpretation.
+  //
+  // Appended INSIDE the <li> (the row is a wrapping flexbox and .chg-indicates
+  // takes a full basis) rather than as a sibling — the feed's parent is a <ul>,
+  // where a bare <div> would be invalid.
+  if (event.family) {
+    row.append(el('div', { class: 'chg-indicates muted small' }, t(`changes.indicates.${event.family}`)));
   }
   return row;
 }
@@ -7524,6 +7562,12 @@ views.changes = async () => {
 
     const kids = [];
     kids.push(el('p', { class: 'muted small' }, t('changes.since', { when: fmtDate(data.since) })));
+
+    // Say what was folded. A page that quietly correlated 120 occurrences into 14
+    // events reads as a suspiciously quiet shift unless it says so outright.
+    if (data.correlated > 0) {
+      kids.push(el('p', { class: 'muted small' }, t('changes.correlated', { rows: data.total, raw: data.rawTotal })));
+    }
 
     if (data.partial && (data.failedSources || []).length) {
       kids.push(el('p', { class: 'warn small' }, t('changes.partial', { sources: data.failedSources.join(', ') })));
@@ -10843,7 +10887,7 @@ const DOCS = [
             [viewLink('fleet', 'Monitoring'), 'Overview (fleet health at a glance), Traffic, Sites (map) and Destinations (external traffic by country/ASN).'],
             [el('strong', {}, 'Fleet'), ['Per-', viewLink('agents', 'Agent'), ' drill-down, ', viewLink('interfaces', 'Interfaces'), ' health and NIC firmware inventory.']],
             [el('strong', {}, 'Diagnostics'), ['Ad-hoc ', viewLink('probes', 'Probes & Tests'), ', ', viewLink('flows', 'Flows'), ', Topology, the ', viewLink('investigation', 'Troubleshooting'), ' investigator — and this Documentation.']],
-            [el('strong', {}, 'Insights'), ['Anomaly ', viewLink('findings', 'Analysis'), ', ', viewLink('incidents', 'Incidents'), ', ', viewLink('clusters', 'Situations'), ' (one incident across many agents) and ', viewLink('reporting', 'Reporting'), ' (incl. NIS2).']],
+            [el('strong', {}, 'Insights'), ['Anomaly ', viewLink('findings', 'Analysis'), ', ', viewLink('events', 'Events'), ', ', viewLink('clusters', 'Situations'), ' (one incident across many agents) and ', viewLink('reporting', 'Reporting'), ' (incl. NIS2).']],
             [el('strong', {}, 'Administration'), ['Locations, Enrollment, Logs and ', viewLink('settings', 'Settings'), '.']],
           ]),
           el('p', {}, 'Every page has a one-line hero at the top and a ', el('strong', {}, 'More info'), ' button that opens a drawer explaining that page in depth. The topbar search jumps to an agent, host, IP or port. The 🌙/☀️ button flips light/dark; pick a colour palette in ', settingsLink('appearance', 'Settings → Appearance'), '.'),
@@ -10911,9 +10955,9 @@ const DOCS = [
       },
       {
         id: 'findings', title: 'Reading findings & incidents', body: () => [
-          docsLead('The Analysis and Incidents pages turn raw metrics into explained problems. Here is how to read them.'),
+          docsLead('The Analysis and Events pages turn raw metrics into explained problems. Here is how to read them.'),
           el('p', {}, ['A ', viewLink('findings', 'finding'), ' is one detected anomaly on one host/metric. Because detection is robust-statistical (median + MAD z-score), each finding states what was ', el('strong', {}, 'observed'), ', the ', el('strong', {}, 'baseline'), ' it deviated from, the ', el('strong', {}, 'deviation'), ', and an evidence array — so you can judge it, not just trust it. Acknowledge a finding to mute repeats.']),
-          el('p', {}, ['An ', viewLink('incidents', 'incident'), ' groups related findings on a device within a correlation window into one case, and auto-correlates a device config change from just before it as the suspected trigger. Open a case for its timeline, a plain-language what/where/why, similar past cases, and a combined recommendation (matching playbook → resolved-case history → optional EU-hosted AI).']),
+          el('p', {}, ['An ', viewLink('events', 'event'), ' groups related findings on a device within a correlation window into one case, and auto-correlates a device config change from just before it as the suspected trigger. Open a case for its timeline, a plain-language what/where/why, similar past cases, and a combined recommendation (matching playbook → resolved-case history → optional EU-hosted AI).']),
           docsTable(['On the page', 'Means'], [
             [el('span', {}, el('strong', {}, 'CRIT'), ' / red'), 'A strong, high-confidence deviation — act now.'],
             [el('span', {}, el('strong', {}, 'WARN'), ' / amber'), 'A moderate deviation — worth a look, may be transient.'],
@@ -10925,7 +10969,7 @@ const DOCS = [
       {
         id: 'situations', title: 'Situations — one incident across many agents', body: () => [
           docsLead('When the same fault hits several agents at once, BlueEyes groups their findings into one Situation (a cross-agent cluster) instead of N look-alike alerts — so you chase one root cause, not a wall of duplicates.'),
-          el('p', {}, ['Open ', viewLink('clusters', 'Situations'), ' (Insights group). Each row is one cross-agent incident with a confidence tier, a suspected common cause and how many findings it groups. It is distinct from an ', viewLink('incidents', 'incident'), ', which groups findings on a ', el('strong', {}, 'single'), ' device.']),
+          el('p', {}, ['Open ', viewLink('clusters', 'Situations'), ' (Insights group). Each row is one cross-agent incident with a confidence tier, a suspected common cause and how many findings it groups. It is distinct from an ', viewLink('events', 'event'), ', which groups findings on a ', el('strong', {}, 'single'), ' device.']),
           el('h4', {}, 'How confident is the grouping?'),
           el('p', {}, 'The confidence tier says how independent the signals tying the agents together were — not how severe the fault is:'),
           docsTable(['Tier', 'What tied the agents together'], [
@@ -10972,7 +11016,7 @@ const DOCS = [
           el('p', {}, ['It is bounded by a configurable ', el('strong', {}, 'depth cap'), ' (default 4 hops) and is cycle-safe, so it always terminates even on looped topologies.']),
           el('h4', {}, 'Where you see it'),
           docsSteps([
-            ['On an ', viewLink('incidents', 'incident'), ': the incident detail carries a ', el('code', {}, 'blastRadius'), ' section computed for the failing device — the downstream hosts and dependent services it puts at risk. It is best-effort: if topology is unavailable the incident still opens.'],
+            ['On an ', viewLink('events', 'event'), ': the incident detail carries a ', el('code', {}, 'blastRadius'), ' section computed for the failing device — the downstream hosts and dependent services it puts at risk. It is best-effort: if topology is unavailable the incident still opens.'],
             ['Ad-hoc for any node (operator+): ', el('code', {}, 'GET /api/topology/blast-radius/<agentId>'), ' — optionally ', el('code', {}, '?depth=N'), '.'],
           ]),
           el('h4', {}, 'Worked example'),

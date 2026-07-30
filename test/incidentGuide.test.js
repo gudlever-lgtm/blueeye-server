@@ -57,7 +57,7 @@ test('a similar past incident adds a resolution step that deep-links to it', () 
   assert.match(sim.detail, /#42/);
   assert.match(sim.detail, /2026-05-01/);
   assert.match(sim.detail, /ops@x/);
-  assert.deepEqual(sim.action, { label: 'Open similar incident', view: 'incident', targetId: 42 });
+  assert.deepEqual(sim.action, { label: 'Open similar event', view: 'event', targetId: 42 });
 });
 
 test('multiple linked anomalies add a "follow the correlated anomalies" step', () => {

@@ -1983,6 +1983,20 @@ li.guide-step.done .guide-step-title { text-decoration: line-through; opacity: 0
    never reads as "this happened inside your window". */
 .chg-current { opacity: 0.85; }
 .chg-current-badge { background: var(--muted); color: var(--bg); margin-left: 8px; }
+/* The changes feed renders TimelineView rows into ul.timeline-list, which never
+   picked up the flex/gap rules that ul.timeline has — so every chip abutted the
+   next and a row read as one run-together word. Same layout, both parents. */
+ul.timeline-list { list-style: none; margin: 0; padding: 0; }
+ul.timeline-list li.tl { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; padding: 4px 0; }
+/* Recurrence: how many occurrences the row stands for, and the anomalies folded
+   into an event. Both are diagnoses, so they read as badges, not footnotes. */
+.chg-count { background: var(--warn); color: var(--bg); }
+.chg-recurring .tl-desc { font-weight: 600; }
+.chg-folded { font-weight: normal; }
+/* "What this indicates" — full-basis so it breaks onto its own line under the
+   row, indented past the timestamp column so it reads as belonging to it. */
+.chg-indicates { flex: 1 0 100%; margin: 1px 0 4px 8.5rem; line-height: 1.35; }
+@media (max-width: 640px) { .chg-indicates { margin-left: 0; } }
 
 /* --- Metric with baseline context (Fase 4) ---------------------------------- */
 /* The value and its context stack, so the secondary line reads as annotation

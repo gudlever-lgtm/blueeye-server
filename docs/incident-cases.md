@@ -1,17 +1,25 @@
-# Incidents (`incident_cases`) — grouped anomalies, tracked end-to-end
+# Events (`incident_cases`) — grouped anomalies, tracked end-to-end
 
+> **Read [events.md](events.md) first** for the vocabulary. Short version: the
+> operator-facing unit is an **event**; an **incident** is what a connected ITSM
+> opens from one and is not stored here. The table keeps the historical name
+> `incident_cases` — renaming it would cost a migration on live data (five FKs)
+> for nothing a customer can see.
+>
 > **Not to be confused with `docs/incidents.md`.** That describes the older
 > *probe-outage* `incidents` table (migration 025) surfaced via `/api/reports`.
-> This document is the **first-class incident entity** (`incident_cases`,
-> migration 047) that wraps analysis **findings** (the system's "anomalies"). The
-> two are independent; the probe-outage table is untouched.
+> The two are independent; the probe-outage table is untouched.
+>
+> **API:** `/api/events/*` is canonical; `/api/incidents/*` stays mounted as a
+> deprecated alias, and responses carry `event`/`events`/`eventId` alongside the
+> old `incident`/`incidents`/`incidentId` keys.
 
 ## What it is
 
-An `incident_case` groups the analysis findings that fire close together on the
-same **device** into one case you can track from `open` to `closed`, with a
-timeline, the device-config change suspected to have triggered it, similar past
-incidents, and an opt-in AI assistant. A "device" is an agent — findings key on
+An event (one `incident_cases` row) groups the analysis findings that fire close
+together on the same **device** into one thing you can track from `open` to
+`closed`, with a timeline, the device-config change suspected to have triggered
+it, similar past events, and an opt-in AI assistant. A "device" is an agent — findings key on
 `host_id`, which the ingest path sets to the agent id, so `incident_cases.host_id`
 == the agent id throughout.
 

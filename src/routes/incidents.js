@@ -30,10 +30,25 @@ function parseDate(v) {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
-// First-class incidents (incident_cases) wrapping analysis findings.
-//   GET   /api/incidents        viewer+   list (filter status/severity/device/time)
-//   GET   /api/incidents/:id    viewer+   one incident + its linked anomalies
-//   PATCH /api/incidents/:id    operator+ status transition (audited, RBAC)
+// EVENTS — the operator-facing unit of "something is wrong on this device",
+// stored in `incident_cases` and wrapping the analysis findings (anomalies) that
+// evidence it.
+//
+//   GET   /api/events        viewer+   list (filter status/severity/device/time)
+//   GET   /api/events/:id    viewer+   one event + its linked anomalies
+//   PATCH /api/events/:id    operator+ status transition (audited, RBAC)
+//
+// TERMINOLOGY. BlueEyes produces *events*; an **incident** is what an ITSM
+// (ServiceNow, TOPdesk, a custom connector) opens FROM an event, and it lives in
+// that system with its own number, SLA and owner. Calling our own row an
+// "incident" made those two indistinguishable — so the noun here is "event", and
+// "incident" is reserved for the ITSM object. See docs/events.md.
+//
+// This router is mounted at BOTH /api/events (canonical) and /api/incidents (a
+// deprecated alias kept so existing integrations and bookmarks keep working), and
+// every response carries the new key alongside the old one for the same reason.
+// The `incident_cases` table keeps its name: renaming it buys nothing a customer
+// can see and costs a migration on live data.
 //
 // Follows the existing RBAC pattern (viewer < operator < admin): reads are
 // viewer+, status changes are operator/admin. Every transition is recorded in
@@ -73,7 +88,8 @@ function createIncidentsRouter({
       from: parseDate(req.query.from),
       to: parseDate(req.query.to),
     });
-    return res.json({ incidents });
+    // `incidents` is the deprecated alias of `events` (see the header).
+    return res.json({ events: incidents, incidents });
   }));
 
   // GET /api/incidents/:id — one incident plus its linked anomalies. viewer+.
@@ -81,7 +97,7 @@ function createIncidentsRouter({
     const id = parseIncidentId(req.params.id);
     if (id === null) return res.status(400).json({ error: 'id must be a positive integer' });
     const incident = await incidentCasesRepo.findById(id);
-    if (!incident) return res.status(404).json({ error: 'Incident not found' });
+    if (!incident) return res.status(404).json({ error: 'Event not found' });
     const anomalies = await findingStore.listByIncidentCase(id);
 
     // Playbook runs recorded against this incident (empty when the subsystem/repo
@@ -109,7 +125,7 @@ function createIncidentsRouter({
       }
     }
 
-    return res.json({ incident, anomalies, playbookRuns, explanation });
+    return res.json({ event: incident, incident, anomalies, playbookRuns, explanation });
   }));
 
   // GET /api/incidents/:id/timeline — a flat, chronological read-model merging
@@ -119,7 +135,7 @@ function createIncidentsRouter({
     const id = parseIncidentId(req.params.id);
     if (id === null) return res.status(400).json({ error: 'id must be a positive integer' });
     const incident = await incidentCasesRepo.findById(id);
-    if (!incident) return res.status(404).json({ error: 'Incident not found' });
+    if (!incident) return res.status(404).json({ error: 'Event not found' });
 
     // Linked anomalies (findings), chronological.
     const anomalies = await findingStore.listByIncidentCase(id);
@@ -145,7 +161,7 @@ function createIncidentsRouter({
     }
 
     const events = buildTimeline({ anomalies, configChanges, statusChanges });
-    return res.json({ incidentId: id, events });
+    return res.json({ eventId: id, incidentId: id, events });
   }));
 
   // GET /api/incidents/:id/config-context — the device-config change suspected to
@@ -156,7 +172,7 @@ function createIncidentsRouter({
     const id = parseIncidentId(req.params.id);
     if (id === null) return res.status(400).json({ error: 'id must be a positive integer' });
     const incident = await incidentCasesRepo.findById(id);
-    if (!incident) return res.status(404).json({ error: 'Incident not found' });
+    if (!incident) return res.status(404).json({ error: 'Event not found' });
 
     const empty = { incidentId: id, configChangeId: incident.configChangeId ?? null, change: null, diff: null, suspectedTrigger: null };
     if (!incident.configChangeId || !configSnapshotsRepo) return res.json(empty);
@@ -229,7 +245,7 @@ function createIncidentsRouter({
     const id = parseIncidentId(req.params.id);
     if (id === null) return res.status(400).json({ error: 'id must be a positive integer' });
     const incident = await incidentCasesRepo.findById(id);
-    if (!incident) return res.status(404).json({ error: 'Incident not found' });
+    if (!incident) return res.status(404).json({ error: 'Event not found' });
 
     const { ranked } = await rankSimilar(incident, id, { limit: 5 });
     const similar = ranked.map((r) => ({
@@ -248,7 +264,7 @@ function createIncidentsRouter({
       playbookSucceeded: null,
     }));
 
-    return res.json({ incidentId: id, similar });
+    return res.json({ eventId: id, incidentId: id, similar });
   }));
 
   // (c) ai_suggestion. Generated ONLY when there is no matching playbook AND no
@@ -307,7 +323,7 @@ function createIncidentsRouter({
     }
 
     const incident = await incidentCasesRepo.findById(id);
-    if (!incident) return res.status(404).json({ error: 'Incident not found' });
+    if (!incident) return res.status(404).json({ error: 'Event not found' });
 
     const primaryFinding = incident.primaryFindingId && findingStore
       ? await findingStore.get(incident.primaryFindingId) : null;
@@ -340,6 +356,7 @@ function createIncidentsRouter({
     const aiSuggestion = await generateAiSuggestion({ id, forceAi, matchingPlaybook, historicalMatches });
 
     return res.json({
+      eventId: id,
       incidentId: id,
       matching_playbook: matchingPlaybook,
       historical_matches: historicalMatches,
@@ -376,7 +393,7 @@ function createIncidentsRouter({
     const id = parseIncidentId(req.params.id);
     if (id === null) return res.status(400).json({ error: 'id must be a positive integer' });
     const incident = await incidentCasesRepo.findById(id);
-    if (!incident) return res.status(404).json({ error: 'Incident not found' });
+    if (!incident) return res.status(404).json({ error: 'Event not found' });
 
     const anomalies = findingStore ? await findingStore.listByIncidentCase(id) : [];
     const configContext = await configContextForGuide(incident);
@@ -406,7 +423,7 @@ function createIncidentsRouter({
     }
 
     const context = await gatherIncidentAskContext(id, { incidentCasesRepo, findingStore, auditEventsRepo, auditLogRepo, configSnapshotsRepo });
-    if (!context) return res.status(404).json({ error: 'Incident not found' });
+    if (!context) return res.status(404).json({ error: 'Event not found' });
 
     // No context at all → the honest fallback, WITHOUT a provider call.
     if (!context.dataAvailability.hasAnyData) {
@@ -452,7 +469,7 @@ function createIncidentsRouter({
     if (errors) return res.status(400).json({ error: 'Validation failed', details: errors });
 
     const existing = await incidentCasesRepo.findById(id);
-    if (!existing) return res.status(404).json({ error: 'Incident not found' });
+    if (!existing) return res.status(404).json({ error: 'Event not found' });
 
     const from = existing.status;
     const to = value.status;
@@ -471,7 +488,7 @@ function createIncidentsRouter({
     });
     if (!ok) {
       // The row's status changed between our read and write (or vanished).
-      return res.status(409).json({ error: 'Incident status changed concurrently; please retry' });
+      return res.status(409).json({ error: 'Event status changed concurrently; please retry' });
     }
 
     if (auditLogger) {
@@ -480,7 +497,7 @@ function createIncidentsRouter({
     }
 
     const updated = await incidentCasesRepo.findById(id);
-    return res.json({ incident: updated });
+    return res.json({ event: updated, incident: updated });
   }));
 
   // --- Work log (shift handover) --------------------------------------------
@@ -499,7 +516,7 @@ function createIncidentsRouter({
       if (id === null) return res.status(400).json({ error: 'id must be a positive integer' });
 
       const incident = await incidentCasesRepo.findById(id);
-      if (!incident) return res.status(404).json({ error: 'Incident not found' });
+      if (!incident) return res.status(404).json({ error: 'Event not found' });
 
       const [notes, ruledOut, total] = await Promise.all([
         incidentNotesRepo.listForIncident({ incidentCaseId: id }),
@@ -507,7 +524,7 @@ function createIncidentsRouter({
         incidentNotesRepo.countForIncident({ incidentCaseId: id }),
       ]);
 
-      return res.json({ incidentId: id, notes, ruledOut, total });
+      return res.json({ eventId: id, incidentId: id, notes, ruledOut, total });
     }));
 
     // POST /api/incidents/:id/notes — append one entry. operator+ (viewer reads
@@ -523,7 +540,7 @@ function createIncidentsRouter({
       if (errors) return res.status(400).json({ error: 'Validation failed', details: errors });
 
       const incident = await incidentCasesRepo.findById(id);
-      if (!incident) return res.status(404).json({ error: 'Incident not found' });
+      if (!incident) return res.status(404).json({ error: 'Event not found' });
 
       const note = await incidentNotesRepo.append({
         incidentCaseId: id,

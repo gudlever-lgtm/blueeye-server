@@ -1,5 +1,51 @@
 # Changelog
 
+## 0.112.1 — The events list says what its columns do not
+
+The Events table repeated itself three times over. The server stores a
+self-contained title — `${SEV} ${metric} on ${device (site)}` — which is right
+where it stands alone (the detail-page heading, an ITSM ticket subject, an alert
+body), but in the list severity, device and location are each already a column:
+
+    CRIT | Open | CRIT probe.latency on Localhost agent test (gnf-server-agent)
+         | Localhost agent test #1 | gnf-server-agent | 31/07/2026, 13:17:30
+
+Three of five columns saying the same thing, with the one piece of information
+unique to the title — `probe.latency` — buried in the middle of it.
+
+The column is now **Condition**, rendering `EventTitle.conditionOf()`
+(`public/eventTitle.js`): the title with a leading severity and a trailing
+` on <device label>` removed. The full stored title is the cell's tooltip, and
+nothing rewrites the stored value.
+
+The trim is deliberately conservative, because a wrong strip silently changes
+what an operator reads:
+
+- the severity comes off only when it matches the row's own badge — a title
+  describing a *different* severity is left alone;
+- the device tail only on an EXACT match against the label that row is
+  displaying, so an agent renamed since the title was stored keeps its full
+  title rather than silently hiding the discrepancy;
+- a metric that legitimately contains " on " is not mistaken for a device tail;
+- a title that would trim away to nothing, or to a bare `on <device>` fragment,
+  is shown as stored;
+- a hand-written title is returned untouched.
+
+### A guard for the wiring
+
+`public/app.js` reaches its helpers through globals they register on `window`;
+there is no build step and no module loader. A helper that is not script-tagged
+in `index.html` is simply `undefined`, and the first row that touches it throws —
+a blank table, no build error, nothing in the tests. A new test asserts every
+`window.*` helper app.js uses is loaded, and that index.html loads no script that
+does not exist. Mutation-checked by removing the tag.
+
+### Not changed
+
+The **location** column showing an agent-like name (`gnf-server-agent`) is not a
+join bug — `list()` reads `locations.name` for the agent's `location_id`. That
+site record is genuinely named that; rename it under Sites.
+
 ## 0.111.1 — One event per condition, and a changes feed you can scan
 
 Two reports, and they turned out to have separate causes.

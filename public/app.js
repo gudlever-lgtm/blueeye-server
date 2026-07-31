@@ -3518,6 +3518,20 @@ function eventWhere(i) {
   return `${incAgentLabel(i)} · ${incLocationLabel(i)}`;
 }
 
+// The device label the SERVER baked into the stored title — formatDeviceLabel's
+// "name (site)". Needed to recognise (and drop) that tail in the events table,
+// where device and location are already columns of their own.
+function incTitleDeviceLabel(i) {
+  const who = (i && i.agentName) || (incHostId(i) != null ? `device ${incHostId(i)}` : 'unknown device');
+  return i && i.locationName ? `${who} (${i.locationName})` : who;
+}
+
+// What the title says that the table's own columns do not. Falls back to the
+// full stored title whenever the pattern is not recognised.
+function incCondition(i) {
+  return window.EventTitle.conditionOf(i && i.title, i && i.severity, incTitleDeviceLabel(i));
+}
+
 PAGE_INFO.events = {
   hero: 'Events group related anomalies on the same device into one thing you can track from open to closed — with a timeline, the config change that may have triggered it, similar past events, and an opt-in AI assistant. A connected ITSM opens its own event from an event.',
   title: 'Events — grouped anomalies, tracked end-to-end',
@@ -3539,7 +3553,11 @@ views.events = async () => {
   },
     el('td', {}, incSevBadge(i.severity)),
     el('td', {}, incStatusBadge(i.status)),
-    el('td', {}, esc(i.title)),
+    // The CONDITION only — severity, device and site are the columns either
+    // side of this one, and the stored title repeats all three. The full title
+    // is still the row's tooltip, and still what the detail page and an ITSM
+    // ticket show.
+    el('td', { title: i.title || '' }, esc(incCondition(i))),
     // Agent + site: "which box, at which site" is the first thing an operator
     // needs to act, and the event id alone answers neither. Inserted as text
     // nodes by el(), so no esc() pass — it would render a site called "R&D" as
@@ -3576,7 +3594,7 @@ views.events = async () => {
   const grid = sortableTable([
     { label: 'Severity', key: 'severity', get: (i) => SEVERITY_RANK[i.severity] || 0, filter: sevSel },
     { label: 'Status', key: 'status', get: (i) => i.status || '', filter: statusSel },
-    { label: 'Title', key: 'title', get: (i) => String(i.title || '').toLowerCase() },
+    { label: t('events.colCondition'), key: 'title', get: (i) => incCondition(i).toLowerCase() },
     { label: t('events.colDevice'), key: 'device', get: (i) => incAgentLabel(i).toLowerCase(), filter: devInput },
     { label: t('events.colLocation'), key: 'location', get: (i) => String(i.locationName || '').toLowerCase(), filter: locInput },
     { label: 'First seen', key: 'first', get: (i) => new Date(i.firstEventAt || 0).getTime() },

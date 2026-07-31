@@ -85,6 +85,7 @@
       'notes.readOnly': 'You have read-only access to the work log.',
 
       // Events — where a case is (the agent and the site it stands at)
+      'events.colCondition': 'Condition',
       'events.colDevice': 'Device',
       'events.colLocation': 'Location',
       'events.filterDevice': 'Agent id…',
@@ -253,6 +254,7 @@
       'notes.loadError': 'Arbejdsloggen kunne ikke hentes: {message}',
       'notes.readOnly': 'Du har kun læseadgang til arbejdsloggen.',
 
+      'events.colCondition': 'Tilstand',
       'events.colDevice': 'Enhed',
       'events.colLocation': 'Lokation',
       'events.filterDevice': 'Agent-id…',

@@ -64,6 +64,31 @@ window is what starts a new event — the honest boundary, because it means the
 condition cleared and came back, and merging across it would misreport when the
 problem started.
 
+### The title, and what the list shows
+
+`titleFor()` stores a self-contained title — `${SEV} ${metric} on ${device
+(site)}` — and that is right for every place it stands alone: the detail-page
+heading, an ITSM ticket subject, an alert body.
+
+In the events **table** it was redundant three times over, because severity,
+device and location are each already a column:
+
+    CRIT | Open | CRIT probe.latency on Localhost agent test (gnf-server-agent)
+         | Localhost agent test #1 | gnf-server-agent | ...
+
+The only information unique to the title there is `probe.latency`. So the table
+renders `EventTitle.conditionOf()` (`public/eventTitle.js`) — the title with a
+leading severity and a trailing ` on <device label>` removed — under the column
+heading **Condition**, with the full stored title as the cell's tooltip. Nothing
+rewrites the stored value.
+
+The trim is deliberately conservative: the severity comes off only when it
+matches the row's own badge, the device tail only on an EXACT match against the
+label that row is displaying (an agent renamed since the title was stored keeps
+its full title rather than silently hiding the discrepancy), and a title that
+would trim away to nothing or to a bare `on <device>` fragment is shown as
+stored. A hand-written title is returned untouched.
+
 ### Where is it? (agent + location)
 
 `host_id` is an agent id, and "WARN probe.latency on 1" names neither the machine

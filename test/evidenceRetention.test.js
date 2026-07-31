@@ -6,7 +6,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
 const { createEvidenceRetention } = require('../src/evidence/evidenceRetention');
-const { makeEvidenceSnapshotsRepo, makeIncidentClustersRepo, makeFindingStore } = require('../test-support/fakes');
+const { makeEvidenceSnapshotsRepo, makeEventClustersRepo, makeFindingStore } = require('../test-support/fakes');
 
 const DAY = 24 * 60 * 60 * 1000;
 const NOW = new Date('2026-07-16T00:00:00Z');
@@ -23,7 +23,7 @@ async function seedSnapshot(evidenceRepo, clusterId, ageDays) {
 
 test('ages out snapshots older than the retention window', async () => {
   const evidenceRepo = makeEvidenceSnapshotsRepo();
-  const clustersRepo = makeIncidentClustersRepo();
+  const clustersRepo = makeEventClustersRepo();
   await seedSnapshot(evidenceRepo, 1, 120); // stale
   await seedSnapshot(evidenceRepo, 2, 10);  // fresh
   const retention = createEvidenceRetention({ evidenceRepo, clustersRepo, findingStore: makeFindingStore(), retentionDays: 90, now: () => NOW });
@@ -34,7 +34,7 @@ test('ages out snapshots older than the retention window', async () => {
 
 test('never deletes evidence on a cluster with an unacknowledged CRIT finding', async () => {
   const evidenceRepo = makeEvidenceSnapshotsRepo();
-  const clustersRepo = makeIncidentClustersRepo();
+  const clustersRepo = makeEventClustersRepo();
   const findingStore = makeFindingStore();
   // Cluster 1: has a stale snapshot AND an unacknowledged CRIT member → protected.
   findingStore.rows.push({ id: 'crit', hostId: '1', severity: 'CRIT', acked: false, metric: 'probe.loss', kind: 'THRESHOLD', explanation: 'x', evidence: [{}], createdAt: NOW });
@@ -56,7 +56,7 @@ test('never deletes evidence on a cluster with an unacknowledged CRIT finding', 
 
 test('run() never throws on a repo failure', async () => {
   const evidenceRepo = makeEvidenceSnapshotsRepo({ clusterIdsWithSnapshotsOlderThan: async () => { throw new Error('db down'); } });
-  const retention = createEvidenceRetention({ evidenceRepo, clustersRepo: makeIncidentClustersRepo(), findingStore: makeFindingStore(), now: () => NOW });
+  const retention = createEvidenceRetention({ evidenceRepo, clustersRepo: makeEventClustersRepo(), findingStore: makeFindingStore(), now: () => NOW });
   const res = await retention.run();
   assert.deepEqual(res, { deleted: 0, protectedClusters: [] });
 });

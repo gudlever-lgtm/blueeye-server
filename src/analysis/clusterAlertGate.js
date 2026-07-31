@@ -60,7 +60,7 @@ function createClusterAlertGate({
     await loading;
   }
 
-  // Sync: the cluster id whose open incident already covers this finding's host,
+  // Sync: the cluster id whose open event already covers this finding's host,
   // or null. Callers suppress the finding's individual alert + ITSM emit when set.
   function suppressedCluster(finding) {
     if (!finding || finding.hostId == null) return null;

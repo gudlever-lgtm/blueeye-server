@@ -3,7 +3,7 @@
 // Leader-only background sweep for post-remediation verification (Fase 3). Every
 // tick it completes any verification run whose settle window has elapsed. Exposes
 // { runOnce, start, stop } so it slots into server.js's backgroundJobs array like
-// the cross-agent cluster / incident auto-resolve jobs.
+// the cross-agent cluster / event auto-resolve jobs.
 //
 // Best-effort: the service swallows its own errors; this wrapper additionally
 // guards so a throw can never crash the scheduler.

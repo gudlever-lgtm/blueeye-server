@@ -8,7 +8,7 @@ const assert = require('node:assert/strict');
 const request = require('supertest');
 
 const {
-  makeApp, makeFindingStore, makeIncidentsRepo, makeAuditEventsRepo,
+  makeApp, makeFindingStore, makeProbeOutagesRepo, makeAuditEventsRepo,
   makeRemediationPlaybooksRepo, authHeader,
 } = require('../test-support/fakes');
 
@@ -37,20 +37,20 @@ function seededApp(over = {}) {
     );
   }
 
-  const incidentsRepo = over.incidentsRepo || makeIncidentsRepo();
-  if (!over.incidentsRepo) {
-    incidentsRepo.rows.push({ id: 1, agent_id: 9, metric: 'reachability', severity: 'critical', started_at: new Date('2026-06-01T07:35:00Z'), resolved_at: null, affected_target: '8.8.8.8' }); // symptom
+  const probeOutagesRepo = over.probeOutagesRepo || makeProbeOutagesRepo();
+  if (!over.probeOutagesRepo) {
+    probeOutagesRepo.rows.push({ id: 1, agent_id: 9, metric: 'reachability', severity: 'critical', started_at: new Date('2026-06-01T07:35:00Z'), resolved_at: null, affected_target: '8.8.8.8' }); // symptom
   }
 
   const remediationPlaybooksRepo = over.remediationPlaybooksRepo || makeRemediationPlaybooksRepo();
 
-  const app = makeApp({ findingStore, auditEventsRepo, incidentsRepo, remediationPlaybooksRepo });
-  return { app, findingStore, auditEventsRepo, incidentsRepo, remediationPlaybooksRepo };
+  const app = makeApp({ findingStore, auditEventsRepo, probeOutagesRepo, remediationPlaybooksRepo });
+  return { app, findingStore, auditEventsRepo, probeOutagesRepo, remediationPlaybooksRepo };
 }
 
 async function seedPlaybook(repo, ranAt) {
   const pbId = await repo.create({ name: 'Restart iface', trigger_condition: 'cpu', action_type: 'manual' });
-  await repo.recordRun({ incidentCaseId: 1, playbookId: pbId, hostId: HOST, status: 'success', ranAt: new Date(ranAt) });
+  await repo.recordRun({ eventCaseId: 1, playbookId: pbId, hostId: HOST, status: 'success', ranAt: new Date(ranAt) });
 }
 
 // ---- 200 with change events (symptoms + out-of-window excluded) ------------
@@ -73,9 +73,9 @@ test('GET /api/findings/:id/context returns only change events before the trigge
   //   07:50 agent.online, 07:45 playbook.success, 07:40 agent.enrolled
   assert.deepEqual(types, ['agent.online', 'playbook.success', 'agent.enrolled']);
 
-  // No symptoms leaked (findings, incidents, offline) and nothing after trigger.
+  // No symptoms leaked (findings, events, offline) and nothing after trigger.
   assert.ok(!res.body.changes.some((c) => c.source === 'finding'));
-  assert.ok(!res.body.changes.some((c) => c.source === 'incident'));
+  assert.ok(!res.body.changes.some((c) => c.source === 'event'));
   assert.ok(!res.body.changes.some((c) => c.type === 'agent.offline'));
   // Descending (closest-to-trigger first).
   const ts = res.body.changes.map((c) => c.timestamp);

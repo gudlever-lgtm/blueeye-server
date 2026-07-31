@@ -60,7 +60,7 @@
       'search.group.asset': 'CMDB assets',
       'search.group.user': 'Users',
 
-      // Incident work log (Fase 3)
+      // Event work log (Fase 3)
       'notes.title': 'Work log',
       'notes.ruledOutTitle': 'Ruled out',
       'notes.ruledOutHint': 'Already investigated and excluded — start after this.',
@@ -84,14 +84,14 @@
       'notes.loadError': 'Could not load the work log: {message}',
       'notes.readOnly': 'You have read-only access to the work log.',
 
-      // Incidents — where a case is (the agent and the site it stands at)
-      'incidents.colDevice': 'Device',
-      'incidents.colLocation': 'Location',
-      'incidents.filterDevice': 'Agent id…',
-      'incidents.filterLocation': 'Location…',
-      'incidents.deviceId': 'device {id}',
-      'incidents.deviceUnknown': 'Unknown device',
-      'incidents.noLocation': 'No location set',
+      // Events — where a case is (the agent and the site it stands at)
+      'events.colDevice': 'Device',
+      'events.colLocation': 'Location',
+      'events.filterDevice': 'Agent id…',
+      'events.filterLocation': 'Location…',
+      'events.deviceId': 'device {id}',
+      'events.deviceUnknown': 'Unknown device',
+      'events.noLocation': 'No location set',
 
       // CMDB asset link (per agent)
       'cmdb.cardTitle': 'CMDB asset',
@@ -252,13 +252,13 @@
       'notes.loadError': 'Arbejdsloggen kunne ikke hentes: {message}',
       'notes.readOnly': 'Du har kun læseadgang til arbejdsloggen.',
 
-      'incidents.colDevice': 'Enhed',
-      'incidents.colLocation': 'Lokation',
-      'incidents.filterDevice': 'Agent-id…',
-      'incidents.filterLocation': 'Lokation…',
-      'incidents.deviceId': 'enhed {id}',
-      'incidents.deviceUnknown': 'Ukendt enhed',
-      'incidents.noLocation': 'Ingen lokation angivet',
+      'events.colDevice': 'Enhed',
+      'events.colLocation': 'Lokation',
+      'events.filterDevice': 'Agent-id…',
+      'events.filterLocation': 'Lokation…',
+      'events.deviceId': 'enhed {id}',
+      'events.deviceUnknown': 'Ukendt enhed',
+      'events.noLocation': 'Ingen lokation angivet',
 
       'cmdb.cardTitle': 'CMDB-aktiv',
       'cmdb.notConnected': 'Der er ikke forbundet en CMDB.',

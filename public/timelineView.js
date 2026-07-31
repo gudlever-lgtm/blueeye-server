@@ -19,20 +19,20 @@
   }
 
   // Source → the chip a row wears. Every source the feeds emit needs an entry:
-  // a miss falls through to the raw key, and a row labelled `incident_case`
+  // a miss falls through to the raw key, and a row labelled `event_case`
   // is the dashboard leaking a table name at the reader.
   //
   // TERMINOLOGY: BlueEyes emits **events**. An event is a correlated condition on
-  // a device (the `incident_cases` table, historically named) — it is what an
-  // ITSM *incident* would be opened FROM, not the incident itself. `probe` is the
-  // active-probe outage record (the `incidents` table, migration 025), and
+  // a device (the `event_cases` table, historically named) — it is what an
+  // ITSM *event* would be opened FROM, not the event itself. `probe` is the
+  // active-probe outage record (the `events` table, migration 025), and
   // `cluster` is a Situation: one condition seen across several devices.
   var SOURCE_LABELS = {
     finding: 'Finding', agent: 'Agent', playbook: 'Playbook',
     config: 'Config change', status: 'State change', topology: 'Topology change',
     event: 'Event', probe: 'Probe outage', cluster: 'Situation', interface: 'Interface',
-    // Legacy source keys, kept so an older cached payload still renders a label
-    // rather than a table name.
+    // Legacy source keys, kept so a payload cached by an older dashboard still
+    // renders a label rather than a raw table name.
     incident: 'Event', incident_case: 'Event',
   };
   function sourceLabel(source) { return SOURCE_LABELS[source] || String(source == null ? '—' : source); }
@@ -149,8 +149,8 @@
 
   // Deep-link target for a row. Every event belongs to one agent, and the agent
   // (device) detail page is the existing view that aggregates its findings,
-  // probes and incidents — so that is the click-through target. (There are no
-  // per-record detail pages for findings/probe-incidents/playbook-runs yet; when
+  // probes and events — so that is the click-through target. (There are no
+  // per-record detail pages for findings/probe-events/playbook-runs yet; when
   // they exist this is where per-source routing would go, keyed off source +
   // refId.)
   function deepLink(event, agentId) {

@@ -141,8 +141,8 @@ function createAuditEventsRepository(db) {
   }
 
   // Oldest-first events for one target (e.g. all activity on a given agent)
-  // within an optional time window. Used by the incident timeline read-model to
-  // surface config-changes on the incident's device. Chronological to match the
+  // within an optional time window. Used by the event timeline read-model to
+  // surface config-changes on the event's device. Chronological to match the
   // timeline's ordering.
   async function findByTarget({
     targetType = null, targetId = null, from = null, to = null, limit = 500,

@@ -7,7 +7,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const request = require('supertest');
 
-const { makeApp, makeProbeResultsRepo, makeIncidentsRepo, makeFeatureGate, authHeader } = require('../test-support/fakes');
+const { makeApp, makeProbeResultsRepo, makeProbeOutagesRepo, makeFeatureGate, authHeader } = require('../test-support/fakes');
 
 const FROM = '2026-06-01T00:00:00Z';
 const TO = '2026-06-02T00:00:00Z';
@@ -16,7 +16,7 @@ const q = `from=${encodeURIComponent(FROM)}&to=${encodeURIComponent(TO)}`;
 const availRepo = () => makeProbeResultsRepo({
   availability: async () => [{ locationId: 7, locationName: 'HQ', agentId: 9, agentName: 'edge-1', total: 10, up: 9, down: 1, uptimePct: 90 }],
 });
-const incRepo = () => makeIncidentsRepo({
+const incRepo = () => makeProbeOutagesRepo({
   list: async () => [{ id: 3, location_id: 7, location_name: 'HQ', agent_id: 9, agent_name: 'edge-1', metric: 'probe.reachability', severity: 'critical', started_at: FROM, resolved_at: null, duration_seconds: null, affected_target: '8.8.8.8' }],
 });
 
@@ -31,12 +31,12 @@ test('availability.csv returns CSV for viewer (reports_csv)', async () => {
   assert.match(res.text, /HQ,edge-1,90/);
 });
 
-test('incidents.csv returns CSV for viewer (reports_csv)', async () => {
-  const res = await request(makeApp({ incidentsRepo: incRepo() }))
-    .get(`/api/reports/incidents.csv?${q}`).set('Authorization', authHeader('viewer'));
+test('probe-outages.csv returns CSV for viewer (reports_csv)', async () => {
+  const res = await request(makeApp({ probeOutagesRepo: incRepo() }))
+    .get(`/api/reports/probe-outages.csv?${q}`).set('Authorization', authHeader('viewer'));
   assert.equal(res.status, 200);
   assert.match(res.text, /probe.reachability/);
-  assert.match(res.text, /\(ongoing\)/); // unresolved incident rendered
+  assert.match(res.text, /\(ongoing\)/); // unresolved event rendered
 });
 
 test('CSV export is gated by reports_csv (403)', async () => {
@@ -61,18 +61,18 @@ test('availability.html returns print-ready HTML (reports_pdf)', async () => {
 
 test('HTML export is gated by reports_pdf (403)', async () => {
   const featureGate = makeFeatureGate({ isFeatureEnabled: (f) => f !== 'reports_pdf' });
-  const res = await request(makeApp({ featureGate, incidentsRepo: incRepo() }))
-    .get(`/api/reports/incidents.html?${q}`).set('Authorization', authHeader('viewer'));
+  const res = await request(makeApp({ featureGate, probeOutagesRepo: incRepo() }))
+    .get(`/api/reports/probe-outages.html?${q}`).set('Authorization', authHeader('viewer'));
   assert.equal(res.status, 403);
   assert.equal(res.body.feature, 'reports_pdf');
 });
 
 test('HTML export escapes report data (no markup injection)', async () => {
-  const incidentsRepo = makeIncidentsRepo({
+  const probeOutagesRepo = makeProbeOutagesRepo({
     list: async () => [{ id: 1, location_name: '<script>x</script>', agent_name: 'a', metric: 'm', severity: 'warning', started_at: FROM, resolved_at: TO, duration_seconds: 5, affected_target: 't' }],
   });
-  const res = await request(makeApp({ incidentsRepo }))
-    .get(`/api/reports/incidents.html?${q}`).set('Authorization', authHeader('viewer'));
+  const res = await request(makeApp({ probeOutagesRepo }))
+    .get(`/api/reports/probe-outages.html?${q}`).set('Authorization', authHeader('viewer'));
   assert.equal(res.status, 200);
   assert.doesNotMatch(res.text, /<script>x<\/script>/);
   assert.match(res.text, /&lt;script&gt;/);

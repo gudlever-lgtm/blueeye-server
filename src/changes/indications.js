@@ -11,7 +11,7 @@
 // Deliberately regex-on-family rather than an exhaustive metric table. Metrics
 // are minted by whatever the agent reports, so an unknown metric MUST degrade to
 // "no interpretation offered" (family `null`) instead of a confident wrong one.
-// The family split mirrors metricStep() in src/incidentCases/guide.js so the feed
+// The family split mirrors metricStep() in src/eventCases/guide.js so the feed
 // and the troubleshooting guide speak one vocabulary — if you add a family here,
 // add the matching guide step there.
 //

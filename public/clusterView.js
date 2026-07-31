@@ -1,4 +1,4 @@
-// public/clusterView.js — pure + injected-DOM helpers for the Incident Situation
+// public/clusterView.js — pure + injected-DOM helpers for the Event Situation
 // View (Fase 2): the per-cluster page ("ét fælles billede"). Follows the same
 // convention as timelineView.js — no build step, dual-exported to
 // window.ClusterView (browser, loaded as a plain <script>) and module.exports
@@ -6,7 +6,7 @@
 // unit-testable under node --test + jsdom, while app.js wires fetch + navigation.
 //
 // The page renders five panels top-to-bottom: header (status/confidence/root
-// cause/agents + ack/resolve actions), "What changed" (pre-incident changes),
+// cause/agents + ack/resolve actions), "What changed" (pre-event changes),
 // Evidence (confidence breakdown, plain language), the merged timeline
 // (filterable by source), and an optional AI advisory. Each panel is an
 // INDEPENDENT failure domain — a missing/failed advisory or timeline never stops
@@ -153,7 +153,7 @@
     var st = whatChangedState(timeline);
     var view = { state: st.state === 'empty' ? 'empty' : 'ready', events: st.events, partial: false, failedSources: [] };
     TV.renderInto(doc, body, view, Object.assign({}, opts, {
-      emptyText: 'No recorded changes in the window — the incident did not follow a tracked change.',
+      emptyText: 'No recorded changes in the window — the event did not follow a tracked change.',
     }));
     card.appendChild(body);
     return card;
@@ -262,8 +262,8 @@
     if (!runbooks.length) {
       card.appendChild(elem(doc, 'p', 'muted',
         types.length
-          ? 'No runbook matches this incident’s finding types (' + types.join(', ') + '). Add one in Settings → Runbooks.'
-          : 'No recommended actions — this incident has no finding-types to match.'));
+          ? 'No runbook matches this event’s finding types (' + types.join(', ') + '). Add one in Settings → Runbooks.'
+          : 'No recommended actions — this event has no finding-types to match.'));
       return card;
     }
 
@@ -335,7 +335,7 @@
     }
     if (st.state === 'none') {
       card.appendChild(elem(doc, 'p', 'muted',
-        'No AI advisory for this incident (the opt-in EU AI assistant is off, or none was generated).'));
+        'No AI advisory for this event (the opt-in EU AI assistant is off, or none was generated).'));
       return card;
     }
     card.appendChild(elem(doc, 'div', 'ai-badge', '⚠ AI-generated'));
@@ -353,7 +353,7 @@
     data = data || {};
     while (container.firstChild) container.removeChild(container.firstChild);
     var detail = data.detail;
-    if (!detail) { container.appendChild(elem(doc, 'div', 'empty error', data.error || 'Incident not found.')); return container; }
+    if (!detail) { container.appendChild(elem(doc, 'div', 'empty error', data.error || 'Event not found.')); return container; }
 
     container.appendChild(renderHeader(doc, detail, opts));
 

@@ -7,7 +7,7 @@ const { parseArpTable } = require('../identity/arpTable');
 // re-snapshot), captures a READ-ONLY diagnostic snapshot from each affected
 // target over the EXISTING authenticated agent-command path (sendCommandAndWait),
 // then stores one compressed blob per (cluster, target), referenced from the
-// incident timeline.
+// event timeline.
 //
 // Bounded + best-effort by contract:
 //   * hard per-target timeout (default 30s) — a slow agent never delays anything;
@@ -15,7 +15,7 @@ const { parseArpTable } = require('../identity/arpTable');
 //   * an offline agent is retried ONCE after 60s, then recorded 'agent-offline';
 //   * partial results are valid — each item's outcome is recorded;
 //   * every method swallows its own errors — capture NEVER blocks clustering,
-//     alerting or the incident page (the trigger is fire-and-forget).
+//     alerting or the event page (the trigger is fire-and-forget).
 //
 // Signing: the evidence command is Ed25519-signed with the existing release key
 // (releaseKeyService) when one is configured, so the agent can verify it — the
@@ -111,7 +111,7 @@ function createSnapshotService({
     try {
       // Evidence-class action so audits separate "BlueEyes looked" from "BlueEyes acted".
       await auditLogger.record(null, {
-        category: 'incident', action: 'evidence_snapshot', target: String(clusterId),
+        category: 'event', action: 'evidence_snapshot', target: String(clusterId),
         actorEmail: 'system', actorRole: 'system',
         detail: `Read-only evidence snapshot of target ${target} → ${status} (${COMMAND_SET_VERSION}).`,
       });

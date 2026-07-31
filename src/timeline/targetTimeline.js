@@ -1,8 +1,8 @@
 'use strict';
 
-// Pure read-model for the per-target (per-agent) incident timeline (Phase 1).
+// Pure read-model for the per-target (per-agent) event timeline (Phase 1).
 // Merges rows already read from existing sources — anomaly findings,
-// probe-outage incidents, agent connect/disconnect (audit_events) and
+// probe-outage spans, agent connect/disconnect (audit_events) and
 // remediation playbook runs — into one flat, chronological event list. No
 // storage, no I/O: callers fetch the rows (see targetTimelineService.js) and
 // hand them here.
@@ -15,17 +15,17 @@
 // Normalised event shape (per the endpoint contract):
 //   { timestamp, source, type, severity, summary, ref_id }
 //     timestamp — ISO-8601 string (the moment the event happened)
-//     source    — one of SOURCES (finding|incident|agent|playbook)
+//     source    — one of SOURCES (finding|probe|agent|playbook)
 //     type      — a dotted sub-type for display/deep-linking (e.g. 'cpu',
-//                 'incident.reachability', 'agent.offline', 'playbook.success')
+//                 'probe.reachability', 'agent.offline', 'playbook.success')
 //     severity  — normalised to INFO|WARN|CRIT across all sources
 //     summary   — one-line human-readable description
 //     ref_id    — id of the ORIGINAL record so the frontend can deep-link back
-//                 (finding uuid, incident id, audit-event id, playbook-run id)
+//                 (finding uuid, probe-outage id, audit-event id, playbook-run id)
 
 const SOURCES = Object.freeze({
   FINDING: 'finding',
-  INCIDENT: 'incident',
+  PROBE: 'probe',
   AGENT: 'agent',
   PLAYBOOK: 'playbook',
   TOPOLOGY: 'topology',
@@ -33,7 +33,7 @@ const SOURCES = Object.freeze({
 
 // Stable tie-break order among events that share a timestamp — keeps the story
 // readable and the output deterministic (important for tests).
-const SOURCE_ORDER = { finding: 0, incident: 1, agent: 2, playbook: 3, topology: 4 };
+const SOURCE_ORDER = { finding: 0, probe: 1, agent: 2, playbook: 3, topology: 4 };
 
 function toIso(v) {
   if (v == null) return null;
@@ -71,31 +71,31 @@ function mapFinding(f) {
   }];
 }
 
-// A probe-outage incident is a span: it opens (started_at) and may later resolve
+// A probe outage is a span: it opens (started_at) and may later resolve
 // (resolved_at). Surface the open event always, and the resolve event too when
-// it falls in the fetched window — both deep-link to the same incident id.
-function mapIncident(i) {
-  if (!i) return [];
+// it falls in the fetched window — both deep-link to the same probe-outage id.
+function mapProbeOutage(o) {
+  if (!o) return [];
   const events = [];
-  const metric = i.metric || 'outage';
-  const target = i.affectedTarget ? ` on ${i.affectedTarget}` : '';
+  const metric = o.metric || 'outage';
+  const target = o.affectedTarget ? ` on ${o.affectedTarget}` : '';
   events.push({
-    timestamp: toIso(i.startedAt),
-    source: SOURCES.INCIDENT,
-    type: `incident.${metric}`,
-    severity: normalizeSeverity(i.severity),
-    summary: `Probe ${metric} incident${target}`,
-    ref_id: i.id,
+    timestamp: toIso(o.startedAt),
+    source: SOURCES.PROBE,
+    type: `probe.${metric}`,
+    severity: normalizeSeverity(o.severity),
+    summary: `Probe ${metric} outage${target}`,
+    ref_id: o.id,
   });
-  if (i.resolvedAt) {
-    const dur = i.durationSeconds != null ? ` after ${i.durationSeconds}s` : '';
+  if (o.resolvedAt) {
+    const dur = o.durationSeconds != null ? ` after ${o.durationSeconds}s` : '';
     events.push({
-      timestamp: toIso(i.resolvedAt),
-      source: SOURCES.INCIDENT,
-      type: `incident.${metric}.resolved`,
+      timestamp: toIso(o.resolvedAt),
+      source: SOURCES.PROBE,
+      type: `probe.${metric}.resolved`,
       severity: 'INFO',
-      summary: `Probe ${metric} incident resolved${dur}${target}`,
-      ref_id: i.id,
+      summary: `Probe ${metric} outage resolved${dur}${target}`,
+      ref_id: o.id,
     });
   }
   return events;
@@ -165,7 +165,7 @@ function mapTopologyChange(c) {
 // the returned events to the most recent N after the merge.
 function buildTargetTimeline({
   findings = [],
-  incidents = [],
+  probeOutages = [],
   agentEvents = [],
   playbookRuns = [],
   topologyChanges = [],
@@ -173,7 +173,7 @@ function buildTargetTimeline({
 } = {}) {
   const events = [];
   for (const f of findings) events.push(...mapFinding(f));
-  for (const i of incidents) events.push(...mapIncident(i));
+  for (const o of probeOutages) events.push(...mapProbeOutage(o));
   for (const e of agentEvents) events.push(...mapAgentEvent(e));
   for (const r of playbookRuns) events.push(...mapPlaybookRun(r));
   for (const c of topologyChanges) events.push(...mapTopologyChange(c));
@@ -196,7 +196,7 @@ function buildTargetTimeline({
 // read (Phase 3). A CHANGE is something that acted on or altered the target — a
 // remediation playbook run, an agent reconnect/restart (agent.online) or an
 // agent enrolment. A SYMPTOM is the problem manifesting — another anomaly
-// finding, a probe-outage incident, or an agent going offline. This is a
+// finding, a probe outage, or an agent going offline. This is a
 // PROPOSED split (per the Phase 3 audit): each membership is a one-line change.
 // Kept here, next to the mappers, so both the timeline and the change-diff share
 // one definition.
@@ -220,7 +220,7 @@ module.exports = {
   isChangeEvent,
   normalizeSeverity,
   mapFinding,
-  mapIncident,
+  mapProbeOutage,
   mapAgentEvent,
   mapPlaybookRun,
   mapTopologyChange,

@@ -1,7 +1,7 @@
 'use strict';
 
-// Pure read-model assembly for the cross-agent incident-cluster REST API. Turns a
-// stored cluster (incidentClustersRepository) plus its hydrated member findings
+// Pure read-model assembly for the cross-agent event-cluster REST API. Turns a
+// stored cluster (eventClustersRepository) plus its hydrated member findings
 // into the detail shape the API returns: members, affected agents/targets, a
 // suspected root-cause LAYER classification, the confidence breakdown and an
 // evidence summary explaining which signals drove the grouping.

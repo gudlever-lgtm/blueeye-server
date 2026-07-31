@@ -36,7 +36,7 @@ const { metricFamily } = require('./indications');
 const SEVERITY_ORDER = ['CRIT', 'WARN', 'INFO'];
 const SEVERITY_RANK = { CRIT: 0, WARN: 1, INFO: 2 };
 
-// Normalises the various severity spellings the sources use. Probe incidents say
+// Normalises the various severity spellings the sources use. Probe events say
 // warning/critical; findings and topology changes say WARN/CRIT.
 function normalizeSeverity(raw) {
   const s = String(raw == null ? '' : raw).toUpperCase();
@@ -78,7 +78,7 @@ function makeEvent({
     firstAt: ts,
     refIds: refId == null ? [] : [refId],
     findingCount,
-    // The incident_case a finding belongs to, when it has one. Internal to the
+    // The event_case a finding belongs to, when it has one. Internal to the
     // roll-up below and stripped before the feed is returned.
     caseId: caseId == null ? null : Number(caseId),
     // A row the technician must NOT read as "this happened in your window".
@@ -117,7 +117,7 @@ function fromAgentEvents(rows, { nameFor = (id) => `agent ${id}` } = {}) {
 }
 
 // New anomaly findings. These are the RAW detections: most of them belong to an
-// event (incident_case) that already represents them, and correlateEvents() folds
+// event (event_case) that already represents them, and correlateEvents() folds
 // those away — `caseId` is the link that makes that possible.
 function fromFindings(rows, { nameFor = (id) => `host ${id}` } = {}) {
   return (rows || []).map((f) => {
@@ -132,15 +132,15 @@ function fromFindings(rows, { nameFor = (id) => `host ${id}` } = {}) {
       agentId,
       kind: 'finding',
       metric: f.metric,
-      caseId: f.incidentCaseId ?? f.incident_case_id ?? null,
+      caseId: f.eventCaseId ?? f.event_case_id ?? null,
     });
   });
 }
 
-// Probe-outage incidents (migration 025). Each row can contribute TWO events —
+// Probe-outage events (migration 025). Each row can contribute TWO events —
 // it opened, and (if resolved in the window) it closed. Both matter: "the link
 // came back" is exactly as relevant to a handover as "the link went down".
-function fromProbeIncidents(rows, { from, to, nameFor = (id) => `agent ${id}` } = {}) {
+function fromProbeEvents(rows, { from, to, nameFor = (id) => `agent ${id}` } = {}) {
   const out = [];
   const fromMs = from ? new Date(from).getTime() : -Infinity;
   const toMs = to ? new Date(to).getTime() : Infinity;
@@ -176,11 +176,11 @@ function fromProbeIncidents(rows, { from, to, nameFor = (id) => `agent ${id}` } 
   return out;
 }
 
-// Events — the operator-facing unit (the `incident_cases` table). One event
+// Events — the operator-facing unit (the `event_cases` table). One event
 // already stands for the anomalies that fired on its device inside a correlation
 // window, which is why correlateEvents() folds those anomalies INTO this row
-// instead of listing them beside it. An event is what an ITSM incident gets
-// opened FROM; it is not itself the incident.
+// instead of listing them beside it. An event is what an ITSM event gets
+// opened FROM; it is not itself the event.
 function fromEvents(rows) {
   return (rows || []).map((c) => makeEvent({
     // The event is timestamped by its LATEST activity, not its first: a feed
@@ -194,7 +194,7 @@ function fromEvents(rows) {
     refId: c.id,
     agentId: Number.isFinite(Number(c.hostId ?? c.host_id)) ? Number(c.hostId ?? c.host_id) : null,
     kind: 'event',
-    // Supplied by incidentCasesRepository.list() (joined off primary_finding_id).
+    // Supplied by eventCasesRepository.list() (joined off primary_finding_id).
     // Absent for a case whose primary finding was deleted — the row still renders,
     // it just carries no "what this indicates" line.
     metric: c.primaryMetric ?? c.primary_metric ?? null,
@@ -564,7 +564,7 @@ module.exports = {
   buildChangeFeed,
   fromAgentEvents,
   fromFindings,
-  fromProbeIncidents,
+  fromProbeEvents,
   fromEvents,
   fromClusters,
   fromTopologyChanges,

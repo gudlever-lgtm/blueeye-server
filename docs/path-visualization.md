@@ -83,10 +83,10 @@ copies:
   (`actionBtns` in `views.topology`), sourced from the chosen agent.
 - **Tests** — a *Network path* section per transaction test (`txDetailView`),
   sourced from the test's first assigned agent to its target.
-- **Troubleshooting** — an *Affected path* card in `views.incident`,
-  pre-filtered to the incident window with the problem hop pre-highlighted.
+- **Troubleshooting** — an *Affected path* card in `views.event`,
+  pre-filtered to the event window with the problem hop pre-highlighted.
 
-Props: `{ sourceId, targetId, probeId?, testId?, incidentId?, timeRange, metric,
+Props: `{ sourceId, targetId, probeId?, testId?, eventId?, timeRange, metric,
 overlay, onSelectionChange }`.
 
 ### Metric timeline

@@ -7,7 +7,7 @@ const assert = require('node:assert/strict');
 
 const { createVerificationService } = require('../src/remediation/verificationService');
 const { makeVerificationRunsRepo, makeFindingStore } = require('../test-support/fakes');
-const { buildIncidentTimeline } = require('../src/timeline/incidentTimeline');
+const { buildEventTimeline } = require('../src/timeline/eventTimeline');
 
 const T = new Date('2026-07-01T12:00:00Z').getTime();
 const at = (ms) => new Date(T + ms);
@@ -111,7 +111,7 @@ test('a completed run is NOT reprocessed on the next sweep', async () => {
 test('verification runs surface as a "verification" timeline source', async () => {
   const passed = { id: 1, clusterId: 7, status: 'passed', executedAt: at(0), completedAt: at(301000), readings: null };
   const failed = { id: 2, clusterId: 7, status: 'failed', executedAt: at(0), completedAt: at(301000), readings: [{ metric: 'cpu' }] };
-  const { events } = buildIncidentTimeline({ memberFindings: [], agentSources: [], verifications: [passed, failed], firstFindingAt: at(0) });
+  const { events } = buildEventTimeline({ memberFindings: [], agentSources: [], verifications: [passed, failed], firstFindingAt: at(0) });
   const vEvents = events.filter((e) => e.source === 'verification');
   assert.equal(vEvents.length, 2);
   assert.ok(vEvents.some((e) => e.type === 'verification.passed' && e.severity === 'INFO' && e.suggestResolve === true));

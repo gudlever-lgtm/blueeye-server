@@ -8,8 +8,8 @@ const assert = require('node:assert/strict');
 const request = require('supertest');
 
 const {
-  makeApp, makeAgentsRepo, makeFindingStore, makeIncidentsRepo,
-  makeAuditEventsRepo, makeIncidentCasesRepo, makeRemediationPlaybooksRepo, authHeader,
+  makeApp, makeAgentsRepo, makeFindingStore, makeProbeOutagesRepo,
+  makeAuditEventsRepo, makeEventCasesRepo, makeRemediationPlaybooksRepo, authHeader,
 } = require('../test-support/fakes');
 const { buildTargetTimeline, classifyEvent } = require('../src/timeline/targetTimeline');
 
@@ -31,9 +31,9 @@ function seededApp(over = {}) {
     });
   }
 
-  const incidentsRepo = over.incidentsRepo || makeIncidentsRepo();
-  if (!over.incidentsRepo) {
-    incidentsRepo.rows.push({
+  const probeOutagesRepo = over.probeOutagesRepo || makeProbeOutagesRepo();
+  if (!over.probeOutagesRepo) {
+    probeOutagesRepo.rows.push({
       id: 1, agent_id: AGENT_ID, metric: 'reachability', severity: 'critical',
       started_at: new Date('2026-06-01T07:00:00Z'), resolved_at: new Date('2026-06-01T07:30:00Z'),
       duration_seconds: 1800, affected_target: '8.8.8.8',
@@ -50,20 +50,20 @@ function seededApp(over = {}) {
     );
   }
 
-  const incidentCasesRepo = over.incidentCasesRepo || makeIncidentCasesRepo();
+  const eventCasesRepo = over.eventCasesRepo || makeEventCasesRepo();
   const remediationPlaybooksRepo = over.remediationPlaybooksRepo || makeRemediationPlaybooksRepo();
 
   const app = makeApp({
-    agentsRepo, findingStore, incidentsRepo, auditEventsRepo,
-    incidentCasesRepo, remediationPlaybooksRepo,
+    agentsRepo, findingStore, probeOutagesRepo, auditEventsRepo,
+    eventCasesRepo, remediationPlaybooksRepo,
   });
-  return { app, agentsRepo, findingStore, incidentsRepo, auditEventsRepo, incidentCasesRepo, remediationPlaybooksRepo };
+  return { app, agentsRepo, findingStore, probeOutagesRepo, auditEventsRepo, eventCasesRepo, remediationPlaybooksRepo };
 }
 
 async function seedPlaybookRun(remediationPlaybooksRepo) {
   const pbId = await remediationPlaybooksRepo.create({ name: 'Restart iface', trigger_condition: 'cpu', action_type: 'manual' });
   await remediationPlaybooksRepo.recordRun({
-    incidentCaseId: 1, playbookId: pbId, hostId: String(AGENT_ID), status: 'success', resultText: 'done',
+    eventCaseId: 1, playbookId: pbId, hostId: String(AGENT_ID), status: 'success', resultText: 'done',
     ranAt: new Date('2026-06-01T08:10:00Z'),
   });
 }
@@ -83,7 +83,7 @@ test('GET /api/targets/:id/timeline merges all sources, newest-first → 200', a
   assert.deepEqual(res.body.failedSources, []);
 
   const ev = res.body.events;
-  // finding + 2×incident(open+resolved) + online + offline + playbook = 6.
+  // finding + 2×event(open+resolved) + online + offline + playbook = 6.
   // The recurring traffic-report row is filtered out.
   assert.equal(ev.length, 6);
 
@@ -97,14 +97,14 @@ test('GET /api/targets/:id/timeline merges all sources, newest-first → 200', a
 
   // Every event carries the normalised contract shape + a deep-link ref_id.
   for (const e of ev) {
-    assert.ok(['finding', 'incident', 'agent', 'playbook'].includes(e.source));
+    assert.ok(['finding', 'probe', 'agent', 'playbook'].includes(e.source));
     assert.ok(['INFO', 'WARN', 'CRIT'].includes(e.severity), `severity ${e.severity}`);
     assert.ok(e.ref_id != null && e.ref_id !== '', 'ref_id present');
     assert.equal(typeof e.summary, 'string');
   }
 
-  // Cross-source severity normalisation: the critical incident → CRIT.
-  const open = ev.find((e) => e.type === 'incident.reachability');
+  // Cross-source severity normalisation: the critical event → CRIT.
+  const open = ev.find((e) => e.type === 'probe.reachability');
   assert.equal(open.severity, 'CRIT');
   assert.equal(open.ref_id, 1);
 
@@ -199,7 +199,7 @@ test('GET /api/targets/:id/timeline flags partial:true when a source fails, keep
   assert.equal(res.status, 200); // NOT a 500 — one bad source must not blank it
   assert.equal(res.body.partial, true);
   assert.ok(res.body.failedSources.includes('findings'));
-  // The surviving sources still produce events (incidents + agent lifecycle).
+  // The surviving sources still produce events (events + agent lifecycle).
   assert.ok(res.body.events.length >= 3);
   assert.ok(!res.body.events.some((e) => e.source === 'finding'));
 });
@@ -265,7 +265,7 @@ test('GET /api/targets/:id/timeline bounds findings by `to` for a past window', 
 test('buildTargetTimeline sorts descending and normalises severity', () => {
   const events = buildTargetTimeline({
     findings: [{ id: 'f1', metric: 'cpu', severity: 'crit', explanation: 'x', createdAt: '2026-06-01T02:00:00Z' }],
-    incidents: [{ id: 1, metric: 'latency', severity: 'warning', affectedTarget: 'x', startedAt: '2026-06-01T01:00:00Z' }],
+    probeOutages: [{ id: 1, metric: 'latency', severity: 'warning', affectedTarget: 'x', startedAt: '2026-06-01T01:00:00Z' }],
     agentEvents: [{ id: 5, action: 'agent.offline', ts: '2026-06-01T03:00:00Z' }],
   });
   assert.equal(events.length, 3);
@@ -275,14 +275,14 @@ test('buildTargetTimeline sorts descending and normalises severity', () => {
   assert.equal(events[2].severity, 'WARN'); // 'warning' → WARN
 });
 
-test('buildTargetTimeline emits open + resolved for a resolved incident', () => {
+test('buildTargetTimeline emits open + resolved for a resolved event', () => {
   const events = buildTargetTimeline({
-    incidents: [{ id: 1, metric: 'reachability', severity: 'critical', affectedTarget: '8.8.8.8', startedAt: '2026-06-01T01:00:00Z', resolvedAt: '2026-06-01T01:30:00Z', durationSeconds: 1800 }],
+    probeOutages: [{ id: 1, metric: 'reachability', severity: 'critical', affectedTarget: '8.8.8.8', startedAt: '2026-06-01T01:00:00Z', resolvedAt: '2026-06-01T01:30:00Z', durationSeconds: 1800 }],
   });
   assert.equal(events.length, 2);
-  assert.equal(events[0].type, 'incident.reachability.resolved');
+  assert.equal(events[0].type, 'probe.reachability.resolved');
   assert.equal(events[0].severity, 'INFO');
-  assert.equal(events[1].type, 'incident.reachability');
+  assert.equal(events[1].type, 'probe.reachability');
   assert.equal(events[1].severity, 'CRIT');
   assert.equal(events[0].ref_id, 1);
 });
@@ -304,9 +304,9 @@ test('classifyEvent splits change vs symptom (Phase 3)', () => {
   assert.equal(classifyEvent({ source: 'playbook', type: 'playbook.success' }), 'change');
   assert.equal(classifyEvent({ source: 'agent', type: 'agent.online' }), 'change');
   assert.equal(classifyEvent({ source: 'agent', type: 'agent.enrolled' }), 'change');
-  // Symptoms: another finding, a probe-outage incident, an agent going offline.
+  // Symptoms: another finding, a probe-outage event, an agent going offline.
   assert.equal(classifyEvent({ source: 'finding', type: 'cpu' }), 'symptom');
-  assert.equal(classifyEvent({ source: 'incident', type: 'incident.reachability' }), 'symptom');
+  assert.equal(classifyEvent({ source: 'probe', type: 'probe.reachability' }), 'symptom');
   assert.equal(classifyEvent({ source: 'agent', type: 'agent.offline' }), 'symptom');
   assert.equal(classifyEvent(null), 'symptom');
 });

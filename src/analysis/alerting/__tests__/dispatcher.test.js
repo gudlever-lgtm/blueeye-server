@@ -150,7 +150,7 @@ test('dispatchCluster fires once per cluster (durable dedup) and records a clust
   const syslog = chan();
   const alertLog = fakeLog();
   const d = createDispatcher({ config: baseConfig(), channels: { syslog }, alertLog, now: () => 0 });
-  const cluster = { clusterId: 7, id: 'cluster:7', hostId: '2 agents', metric: 'incident_cluster', kind: 'CLUSTER', severity: 'CRIT', explanation: 'x', evidence: [{}] };
+  const cluster = { clusterId: 7, id: 'cluster:7', hostId: '2 agents', metric: 'event_cluster', kind: 'CLUSTER', severity: 'CRIT', explanation: 'x', evidence: [{}] };
   const r1 = await d.dispatchCluster(cluster, { memberFindingIds: ['a', 'b'], alreadyAlerted: ['a'] });
   const r2 = await d.dispatchCluster(cluster, { memberFindingIds: ['a', 'b'] });
   assert.equal(r1.dispatched, true);
@@ -166,7 +166,7 @@ test('dispatchCluster fires once per cluster (durable dedup) and records a clust
 test('dispatchCluster is a no-op when alerting is disabled', async () => {
   const syslog = chan();
   const d = createDispatcher({ config: baseConfig({ enabled: false }), channels: { syslog }, alertLog: fakeLog(), now: () => 0 });
-  const r = await d.dispatchCluster({ clusterId: 1, metric: 'incident_cluster', severity: 'CRIT' }, {});
+  const r = await d.dispatchCluster({ clusterId: 1, metric: 'event_cluster', severity: 'CRIT' }, {});
   assert.equal(r.dispatched, false);
   assert.equal(r.reason, 'disabled');
   assert.equal(syslog.calls.length, 0);

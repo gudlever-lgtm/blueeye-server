@@ -10,7 +10,7 @@ function fakePool() {
   const queries = [];
   const row = {
     id: 1, type: 'servicenow', name: 'SN', base_url: 'https://x', auth_type: 'basic',
-    enabled: 1, config_json: '{"table":"incident"}', credentials_encrypted: 'v1.gcm.iv.tag.ct',
+    enabled: 1, config_json: '{"table":"event"}', credentials_encrypted: 'v1.gcm.iv.tag.ct',
     created_at: 'now', updated_at: 'now',
   };
   return {
@@ -55,12 +55,12 @@ test('findByIdWithSecret / findEnabledWithSecret DO include credentials_encrypte
 test('create stores the encrypted blob + JSON config and normalises enabled to 0/1', async () => {
   const pool = fakePool();
   const repo = createIntegrationsRepository({ pool });
-  await repo.create({ type: 'servicenow', name: 'SN', baseUrl: 'https://x', authType: 'basic', credentialsEncrypted: 'v1.gcm.a.b.c', enabled: true, config: { table: 'incident' } });
+  await repo.create({ type: 'servicenow', name: 'SN', baseUrl: 'https://x', authType: 'basic', credentialsEncrypted: 'v1.gcm.a.b.c', enabled: true, config: { table: 'event' } });
   const insert = pool.queries.find((q) => /^INSERT INTO integrations/i.test(q.sql));
   assert.ok(insert);
   assert.equal(insert.params[4], 'v1.gcm.a.b.c'); // credentials_encrypted
   assert.equal(insert.params[5], 1); // enabled -> 1
-  assert.equal(insert.params[6], JSON.stringify({ table: 'incident' }));
+  assert.equal(insert.params[6], JSON.stringify({ table: 'event' }));
 });
 
 test('mapRow returns enabled as a boolean and config_json parsed', async () => {
@@ -68,7 +68,7 @@ test('mapRow returns enabled as a boolean and config_json parsed', async () => {
   const repo = createIntegrationsRepository({ pool });
   const row = await repo.findById(1);
   assert.equal(row.enabled, true);
-  assert.deepEqual(row.config_json, { table: 'incident' });
+  assert.deepEqual(row.config_json, { table: 'event' });
 });
 
 test('update only sets the provided fields', async () => {

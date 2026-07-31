@@ -143,7 +143,7 @@ Filer: `src/routes/ldap.js`, `oidc.js` (admin-del), `saml.js` (admin-del).
 | GET | /api/nis2/dashboard | VIEWER+ | `nis2` | `src/routes/nis2.js` |
 | GET/POST/PUT/DELETE | /api/nis2/risks | VIEWER+/OPERATOR+ | `nis2` | `src/routes/nis2.js` |
 | GET/POST/PUT/DELETE | /api/nis2/controls | VIEWER+/OPERATOR+ | `nis2` | `src/routes/nis2.js` |
-| GET/POST/PUT/DELETE | /api/nis2/incidents | VIEWER+/OPERATOR+ | `nis2` | `src/routes/nis2.js` |
+| GET/POST/PUT/DELETE | /api/nis2/events | VIEWER+/OPERATOR+ | `nis2` | `src/routes/nis2.js` |
 | GET/POST/PUT/DELETE | /api/nis2/evidence | VIEWER+/OPERATOR+ | `nis2` | `src/routes/nis2.js` |
 | POST | /api/nis2/reports/generate | ADMIN | `reports_compliance` | `src/routes/nis2.js` |
 | PUT | /api/nis2/reports/:id/approve | ADMIN | `reports_compliance` | `src/routes/nis2.js` |
@@ -165,7 +165,7 @@ Fil: `src/routes/apiTokens.js`.
 | Metode | Sti | Rolle | Fil |
 |--------|-----|-------|-----|
 | POST | /api/investigation/run | OPERATOR+ | `src/routes/investigation.js` |
-| POST | /api/investigation/from-incident | OPERATOR+ | `src/routes/investigation.js` |
+| POST | /api/investigation/from-event | OPERATOR+ | `src/routes/investigation.js` |
 | GET | /api/investigation | VIEWER+ | `src/routes/investigation.js` |
 | GET | /api/investigation/:id | VIEWER+ | `src/routes/investigation.js` |
 
@@ -347,7 +347,7 @@ To steder læses XFF-headeren direkte, uanset `TRUST_PROXY`-indstillingen:
 
 `req.ip` fra Express respekterer `app.set('trust proxy', ...)` korrekt. Disse raw-header-læsninger gør det ikke. Resultatet: når `TRUST_PROXY=false` (standard) og serveren er direkte eksponeret, kan en angriber sende `X-Forwarded-For: 1.2.3.4` og få den IP registreret i audit-trail for loginanfald — dette skjuler den reelle kilde-IP.
 
-- Risiko: **HØJ** — audit-trail kan vildlede incident-response
+- Risiko: **HØJ** — audit-trail kan vildlede event-response
 - Fix: Erstat raw XFF-læsning med `req.ip` i begge filer; Express håndterer proxy-trust korrekt
 - Diff: 2-3 linjer per fil (~6 linjer i alt)
 
@@ -389,7 +389,7 @@ Sammenlign med `POST /agents/:id/delete` (linje 293-323) som korrekt auditerer v
 
 ### Fund O — Mutationer i investigation uden audit-spor
 `src/routes/investigation.js:109-113` — `investigationsRepo.save(result)` køres uden audit-record og fejl swallowes stille (`catch {}`). Investigations er ikke umiddelbart en sikkerhedskritisk mutation (de er read/derive-operationer), men NIS2-udkast-oprettelse (`nis2IncidentsRepo.create` linje 63) sker uden audit-trail. En AI-genereret NIS2-hændelse oprettes i databasen uden at nogen admin ved det.
-- Risiko: **MID** — NIS2-incident oprettet automatisk uden spor
+- Risiko: **MID** — NIS2-event oprettet automatisk uden spor
 - Fix: Log/audit nis2Draft-oprettelse i `maybeCreateNis2Draft`
 - Diff: ~3 linjer
 

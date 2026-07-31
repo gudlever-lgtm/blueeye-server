@@ -150,7 +150,7 @@ function parseWindowsArp(line, currentInterface) {
   const mac = normalizeMac(f[1]);
   if (!mac) return null;
   // Third column, when present, is dynamic/static — reject anything else so a
-  // coincidentally-shaped line from another format is not mis-parsed here.
+  // coeventally-shaped line from another format is not mis-parsed here.
   if (f[2] && !/^(dynamic|static)$/i.test(f[2])) return null;
   return { ip: f[0], mac, interface: currentInterface || null };
 }

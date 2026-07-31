@@ -17,7 +17,7 @@ Write volume is estimated per agent at the default 60-second report interval.
 | `flow_records` | MySQL | **TSDB** | HIGH — mange rækker/min/agent | Geo-beriget 5-tuple; skalerer med antal flows pr. rapport |
 | `probe_results` | MySQL | **TSDB** | HIGH — ~N rows/min/agent (N = probe-targets) | Aktiv probe-historik (ping/tcp/dns/http/traceroute); aldrig rullet op |
 | `findings` | MySQL | **TSDB** | MEDIUM — debounced 10 s/agent | Anomali-scores (MAD/z-score/flatline); skrevet af analysepipeline ved hvert ingest |
-| `incidents` | MySQL | **TSDB** | MEDIUM — én åben række pr. (agent, metric, target) | Incident-livscyklus startet/afsluttet af proberesultater |
+| `events` | MySQL | **TSDB** | MEDIUM — én åben række pr. (agent, metric, target) | Event-livscyklus startet/afsluttet af proberesultater |
 | `speedtest_results` | MySQL | **TSDB** | LOW — on-demand | Throughput-målinger; lav frekvens men naturlig tidsserie |
 | `flow_rollup` | MySQL | **TSDB** | LOW — nightly batch | Nedsamplingsaggregat af `flow_records`; erstattes af TimescaleDB continuous aggregate |
 | `metric_rollup` | MySQL | **TSDB** | LOW — nightly batch | Nedsamplingsaggregat af `results`; erstattes af TimescaleDB continuous aggregate |
@@ -32,7 +32,7 @@ Write volume is estimated per agent at the default 60-second report interval.
 | `enrollment_codes` | MySQL | MySQL | VERY LOW | Engangsbrugskoder |
 | `app_settings` | MySQL | MySQL | VERY LOW | Nøgle/værdi runtime-config |
 | `test_packages` | MySQL | MySQL | VERY LOW | Probe-pakkekonfiguration |
-| `incident_thresholds` | MySQL | MySQL | VERY LOW | Tærskelkonfiguration |
+| `probe_thresholds` | MySQL | MySQL | VERY LOW | Tærskelkonfiguration |
 | `integrations` | MySQL | MySQL | VERY LOW | ServiceNow/Nautobot-konfiguration (krypterede credentials) |
 | `ldap_config` / `ldap_role_map` | MySQL | MySQL | VERY LOW | LDAP-konfiguration |
 | `oidc_role_map` / `saml_role_map` | MySQL | MySQL | VERY LOW | SSO-rollemapping |
@@ -81,10 +81,10 @@ Agent
                                                          ┌─────────────┤
                                                          │             │
                                                          ▼             ▼
-                                                 probeResultsRepo  incidents/
-                                                 .createMany()     incidentService.js
+                                                 probeResultsRepo  events/
+                                                 .createMany()     probeOutageService.js
                                                  → INSERT probe_results  (debounced 10s)
-                                                                   → INSERT/UPDATE incidents
+                                                                   → INSERT/UPDATE probe_outages
 ```
 
 ### Målflow (MySQL + TimescaleDB)
@@ -120,8 +120,8 @@ Agent
          ├─ [TSDB]    probeResultsRepo.createMany()  ──► TimescaleDB
          │            via batch INSERT
          │
-         └─ [TSDB]    incidentService.processAgent()
-                      → incidentsRepo.*               ──► TimescaleDB
+         └─ [TSDB]    probeOutageService.processAgent()
+                      → probeOutagesRepo.*               ──► TimescaleDB
 ```
 
 ### Berørte moduler ved split
@@ -132,12 +132,12 @@ Agent
 | `src/repositories/flowsRepository.js` | Ny TSDB-variant; `insertMany` → COPY |
 | `src/repositories/probeResultsRepository.js` | Ny TSDB-variant; batch INSERT |
 | `src/repositories/findingsRepository.js` | Ny TSDB-variant; upsert via `ON CONFLICT` |
-| `src/repositories/incidentsRepository.js` | Ny TSDB-variant |
+| `src/repositories/probeOutagesRepository.js` | Ny TSDB-variant |
 | `src/repositories/speedtestResultsRepository.js` | Ny TSDB-variant |
 | `src/repositories/auditEventsRepository.js` | Ny TSDB-variant; dedup via `ON CONFLICT (dedup_key) DO UPDATE` |
 | `src/geo/flowPipeline.js` | Injicér TSDB-flowRepo |
 | `src/analysis/pipeline.js` | Injicér TSDB-findingStore |
-| `src/incidents/incidentService.js` | Injicér TSDB-incidentsRepo |
+| `src/probeOutages/probeOutageService.js` | Injicér TSDB-probeOutagesRepo |
 | `src/routes/agentReports.js` | Injicér begge repo-sæt (MySQL + TSDB) |
 | `src/server.js` (wire-up) | Opret TSDB-pool (pg-klient); injicér i factories |
 | `src/analysis/retention/repo.js` | Rollup-queries → TimescaleDB continuous aggregates |
@@ -164,7 +164,7 @@ Agent
 | `probeResultsRepository.fleetHealth` | `probe_results` | — (agent-grouping i JS) | Fleet health |
 | `flowsRepository.topologyEdges` | `flow_records` | `agents` (subquery) | Topologi-visning |
 | `flowsRepository.selectFlows` / `sumByDest` | `flow_records` + `flow_rollup` | — | Geo-flow-rapporter |
-| `incidentsRepository.list` / `findActive` | `incidents` | `agents`, `locations` | Incident-liste, dashboard |
+| `probeOutagesRepository.list` / `findActive` | `events` | `agents`, `locations` | Event-liste, dashboard |
 | `auditEventsRepository.list` | `audit_events` | `agents` (hostname lookup) | Audit-log UI |
 
 ### Anbefalet mønster efter split: applikationslagsjoin
@@ -318,7 +318,7 @@ GROUP BY agent_id;
 
 ### Hvad flytter til TimescaleDB
 
-`results`, `flow_records`, `probe_results`, `findings`, `incidents`, `speedtest_results`, `audit_events`, `flow_rollup`\*, `metric_rollup`\*
+`results`, `flow_records`, `probe_results`, `findings`, `events`, `speedtest_results`, `audit_events`, `flow_rollup`\*, `metric_rollup`\*
 
 \* Kan erstattes af TimescaleDB continuous aggregates — eliminerernightly retention-job.
 
@@ -334,7 +334,7 @@ Skema-fasen er påbegyndt. Filen er idempotent og validérbar; se
 - **Tidskolonne `ts` (ikke `time`).** Alle hypertabeller bruger `ts
   TIMESTAMPTZ NOT NULL` for at Punkt 3-queryen (`last(payload, ts)`) virker
   uændret. MySQL-kildekolonner mappes: `results.created_at → ts`,
-  `findings.created_at → ts`, `incidents.started_at → ts`; resten har `ts`.
+  `findings.created_at → ts`, `events.started_at → ts`; resten har `ts`.
 - **`metric_rollup` som WIDE continuous aggregate fra `results`.** App-rollup'en
   pivoterer hver JSON-payload til mange `(metric, value)`-rækker via
   `extractSamples()`. En continuous aggregate er én `GROUP BY` og kan ikke
@@ -386,7 +386,7 @@ ekskluderes. **Median latency 23–27 ms** (mål < 50 ms). Reproducér med
 ### Næste skridt (implementeringsfase)
 
 1. ✅ Definér TSDB-skema: `CREATE TABLE` + `create_hypertable(...)` — `server/db/timescale/001_init.sql` (kørt mod real TSDB).
-2. ⏳ Opdel repositories i MySQL- og TSDB-varianter; injicér via DI i `server.js` — **påbegyndt**: `resultsTsdbRepository` + pg-pool + dual-write + `/health` (flagget). Resterende telemetri-repos (flows/probe/findings/incidents/speedtest/audit_events) følger samme skabelon.
+2. ⏳ Opdel repositories i MySQL- og TSDB-varianter; injicér via DI i `server.js` — **påbegyndt**: `resultsTsdbRepository` + pg-pool + dual-write + `/health` (flagget). Resterende telemetri-repos (flows/probe/findings/events/speedtest/audit_events) følger samme skabelon.
 3. ⏳ Implementer applikationslagsjoin i de berørte forespørgsler (trin 3) — læse-shape bevaret; read-cutover afventer produktions-soak af dual-write.
 4. Migrér historiske data (mysqldump → `\COPY` eller ETL-script).
 5. ✅ Kør `EXPLAIN ANALYZE` på latestPerAgent for at bekræfte chunk-exclusion — 4 chunks, kun aktuel tids-chunk.

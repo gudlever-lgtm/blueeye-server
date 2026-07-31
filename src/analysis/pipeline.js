@@ -19,7 +19,7 @@ function createAnalysisPipeline({
   extract = extractSamples,
   correlator = null,
   correlationWindowMs = 60000,
-  incidentCaseService = null,
+  eventCaseService = null,
   dispatcher = null,
   alertingEnabled = false,
   integrationTrigger = null,
@@ -137,16 +137,16 @@ function createAnalysisPipeline({
         }
       }
     }
-    // Incident cases: place each produced finding into an open incident on its
+    // Event cases: place each produced finding into an open event on its
     // device (grouping within the window) or open a new one. Sequential so that
-    // same-batch findings on one host land in the same incident. Best-effort —
+    // same-batch findings on one host land in the same event. Best-effort —
     // an assignment failure never affects ingestion.
-    if (incidentCaseService && produced.length > 0) {
+    if (eventCaseService && produced.length > 0) {
       for (const finding of produced) {
         try {
-          await incidentCaseService.assignFinding(finding);
+          await eventCaseService.assignFinding(finding);
         } catch (err) {
-          logger.warn(`analysis: incident assignment failed for ${finding.id} (${err.message})`);
+          logger.warn(`analysis: event assignment failed for ${finding.id} (${err.message})`);
         }
       }
     }
@@ -172,7 +172,7 @@ function createAnalysisPipeline({
       }
     }
     // Outbound integrations: push each finding to configured ITSM/IPAM targets
-    // (ServiceNow incident, etc.). Fire-and-forget so the dispatcher's own
+    // (ServiceNow event, etc.). Fire-and-forget so the dispatcher's own
     // retry/backoff never slows or breaks ingestion; it is independent of the
     // alerting flag (a customer may push to ServiceNow without local alerting).
     // Cluster-suppressed findings are NOT emitted — the ONE cluster ticket covers them.

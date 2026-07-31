@@ -723,7 +723,7 @@ function settingsLink(tab, label) {
 
 const PAGE_INFO = {
   changes: {
-    hero: 'What happened since you last looked — agent and link transitions, new anomalies and incidents, playbook runs and configuration changes, newest first.',
+    hero: 'What happened since you last looked — agent and link transitions, new anomalies and events, playbook runs and configuration changes, newest first.',
     title: 'Changes — since you last looked',
     body: () => [
       el('p', {}, 'This is the landing page because a dashboard full of green answers a question nobody asked. The shift starts with ', el('strong', {}, 'what happened while I was away'), ' — so this page shows change, not status.'),
@@ -3486,62 +3486,62 @@ function assistantBox(getHostId) {
     out);
 }
 
-// ---- Events (stored in incident_cases) -------------------------------------
+// ---- Events (stored in event_cases) -------------------------------------
 // An event is a correlated condition on ONE device, wrapping the anomalies that
-// evidence it. It is what a connected ITSM opens an *incident* from — the
-// incident lives there, with its own number and SLA. See docs/events.md.
-let selectedIncidentId = null;
-// Opens the EVENT detail view (the record lives in `incident_cases`; the name is
+// evidence it. It is what a connected ITSM opens an *event* from — the
+// event lives there, with its own number and SLA. See docs/events.md.
+let selectedEventId = null;
+// Opens the EVENT detail view (the record lives in `event_cases`; the name is
 // kept on the internal helper so every existing call site stays valid).
-function openIncident(id) { selectedIncidentId = id; currentView = 'event'; render(); }
+function openEvent(id) { selectedEventId = id; currentView = 'event'; render(); }
 
 const INC_STATUS_LABEL = { open: 'Open', investigating: 'Investigating', resolved: 'Resolved', closed: 'Closed' };
 const INC_TRANSITIONS = { open: ['investigating'], investigating: ['resolved'], resolved: ['closed'], closed: ['open'] };
 const incStatusBadge = (s) => el('span', { class: `badge inc-status-${s}` }, INC_STATUS_LABEL[s] || s);
 const incSevBadge = (s) => el('span', { class: `badge inc-sev-${s}` }, s);
 
-// ---- "Where is this incident?" ---------------------------------------------
-// An incident's device is stored as `hostId` (the agent id). On its own it does
+// ---- "Where is this event?" ---------------------------------------------
+// An event's device is stored as `hostId` (the agent id). On its own it does
 // not tell an operator which machine or which site to go to, so every surface
-// that names an incident pairs the agent with its location. The server joins
-// both onto the incident (agentName/locationName); when the agent has been
+// that names an event pairs the agent with its location. The server joins
+// both onto the event (agentName/locationName); when the agent has been
 // deleted or has no site set, the pieces degrade one at a time instead of the
 // row going blank.
-// `hostId` on the incident API, `deviceId` on the Overview rollup — both name
+// `hostId` on the event API, `deviceId` on the Overview rollup — both name
 // the same agent id, and either is better than falling through to "unknown".
 const incHostId = (i) => (i && i.hostId != null && i.hostId !== '' ? i.hostId : (i && i.deviceId != null && i.deviceId !== '' ? i.deviceId : null));
-const incAgentLabel = (i) => (i && i.agentName) || (incHostId(i) != null ? t('incidents.deviceId', { id: incHostId(i) }) : t('incidents.deviceUnknown'));
-const incLocationLabel = (i) => (i && i.locationName) || t('incidents.noLocation');
+const incAgentLabel = (i) => (i && i.agentName) || (incHostId(i) != null ? t('events.deviceId', { id: incHostId(i) }) : t('events.deviceUnknown'));
+const incLocationLabel = (i) => (i && i.locationName) || t('events.noLocation');
 
 // "core-sw · Copenhagen HQ" — one line for compact rows (rollups, list cells).
-function incidentWhere(i) {
+function eventWhere(i) {
   return `${incAgentLabel(i)} · ${incLocationLabel(i)}`;
 }
 
 PAGE_INFO.events = {
-  hero: 'Events group related anomalies on the same device into one thing you can track from open to closed — with a timeline, the config change that may have triggered it, similar past events, and an opt-in AI assistant. A connected ITSM opens its own incident from an event.',
+  hero: 'Events group related anomalies on the same device into one thing you can track from open to closed — with a timeline, the config change that may have triggered it, similar past events, and an opt-in AI assistant. A connected ITSM opens its own event from an event.',
   title: 'Events — grouped anomalies, tracked end-to-end',
   body: () => [
     el('p', {}, 'Each event wraps the analysis findings (anomalies) that fired close together on one device. Status moves open → investigating → resolved → closed; a closed event can be reopened with a comment (recorded in the audit trail).'),
-    el('p', {}, 'BlueEyes deliberately stops at the event. An event is a technical observation the monitoring owns; an ', el('strong', {}, 'incident'), ' is a service-desk record with a number, an SLA and an owner, and it belongs in your ITSM. Connect one under Settings → Integrations and an event can open an incident there.'),
+    el('p', {}, 'BlueEyes deliberately stops at the event. An event is a technical observation the monitoring owns; an ', el('strong', {}, 'event'), ' is a service-desk record with a number, an SLA and an owner, and it belongs in your ITSM. Connect one under Settings → Integrations and an event can open an event there.'),
     el('p', {}, 'The detail page shows the event timeline, the device-config change suspected to have triggered it, similar past events, and — when the EU AI assistant is enabled — a chat that answers questions using only masked, aggregated context.'),
     el('p', { class: 'muted' }, 'Status changes, config history and the AI chat are operator/admin only.'),
   ],
 };
 
 views.events = async () => {
-  const wrap = el('div', { class: 'incidents-view' });
+  const wrap = el('div', { class: 'events-view' });
   const filters = { status: '', severity: '', device: '', location: '' };
 
   const incRow = (i) => el('tr', {
     class: 'clickable', tabindex: '0',
-    onclick: () => openIncident(i.id), onkeydown: (e) => { if (e.key === 'Enter') openIncident(i.id); },
+    onclick: () => openEvent(i.id), onkeydown: (e) => { if (e.key === 'Enter') openEvent(i.id); },
   },
     el('td', {}, incSevBadge(i.severity)),
     el('td', {}, incStatusBadge(i.status)),
     el('td', {}, esc(i.title)),
     // Agent + site: "which box, at which site" is the first thing an operator
-    // needs to act, and the incident id alone answers neither. Inserted as text
+    // needs to act, and the event id alone answers neither. Inserted as text
     // nodes by el(), so no esc() pass — it would render a site called "R&D" as
     // "R&amp;D".
     el('td', {}, incAgentLabel(i),
@@ -3562,14 +3562,14 @@ views.events = async () => {
     el('option', { value: '' }, 'All severities'),
     ...['INFO', 'WARN', 'CRIT'].map((s) => el('option', { value: s }, s)));
   const devInput = el('input', {
-    type: 'search', class: 'col-filter', placeholder: t('incidents.filterDevice'),
+    type: 'search', class: 'col-filter', placeholder: t('events.filterDevice'),
     onchange: (e) => { filters.device = e.target.value.trim(); load(); },
     onkeydown: (e) => { if (e.key === 'Enter') { filters.device = e.target.value.trim(); load(); } },
   });
-  // Location is not a server-side filter (incidents are keyed by device, not by
+  // Location is not a server-side filter (events are keyed by device, not by
   // site), so this one narrows the loaded rows client-side.
   const locInput = el('input', {
-    type: 'search', class: 'col-filter', placeholder: t('incidents.filterLocation'),
+    type: 'search', class: 'col-filter', placeholder: t('events.filterLocation'),
     oninput: (e) => { filters.location = e.target.value.trim().toLowerCase(); apply(); },
   });
 
@@ -3577,8 +3577,8 @@ views.events = async () => {
     { label: 'Severity', key: 'severity', get: (i) => SEVERITY_RANK[i.severity] || 0, filter: sevSel },
     { label: 'Status', key: 'status', get: (i) => i.status || '', filter: statusSel },
     { label: 'Title', key: 'title', get: (i) => String(i.title || '').toLowerCase() },
-    { label: t('incidents.colDevice'), key: 'device', get: (i) => incAgentLabel(i).toLowerCase(), filter: devInput },
-    { label: t('incidents.colLocation'), key: 'location', get: (i) => String(i.locationName || '').toLowerCase(), filter: locInput },
+    { label: t('events.colDevice'), key: 'device', get: (i) => incAgentLabel(i).toLowerCase(), filter: devInput },
+    { label: t('events.colLocation'), key: 'location', get: (i) => String(i.locationName || '').toLowerCase(), filter: locInput },
     { label: 'First seen', key: 'first', get: (i) => new Date(i.firstEventAt || 0).getTime() },
     { label: 'Last activity', key: 'last', get: (i) => new Date(i.lastEventAt || 0).getTime() },
     { label: '', key: null },
@@ -3586,7 +3586,7 @@ views.events = async () => {
     className: 'data',
     sortKey: 'last',
     sortDir: 'desc',
-    emptyText: 'No incidents match.',
+    emptyText: 'No events match.',
     renderRow: incRow,
   });
 
@@ -3606,8 +3606,8 @@ views.events = async () => {
     if (filters.severity) qs.set('severity', filters.severity);
     if (filters.device) qs.set('device', filters.device);
     try {
-      const { events: incidents } = await api(`/api/events${qs.toString() ? `?${qs}` : ''}`);
-      loaded = incidents;
+      const { events: events } = await api(`/api/events${qs.toString() ? `?${qs}` : ''}`);
+      loaded = events;
       apply();
     } catch (err) {
       grid.setError(err.message);
@@ -3622,7 +3622,7 @@ views.events = async () => {
   return wrap;
 };
 
-async function loadIncidentTimeline(id, card, deviceId) {
+async function loadEventTimeline(id, card, deviceId) {
   const head = el('h3', {}, 'Timeline');
   const devNum = Number(deviceId);
   // Anomaly + config-change events link to the device page (its findings/health
@@ -3706,20 +3706,20 @@ function targetTimelineCard(agentId) {
   return card;
 }
 
-async function loadIncidentSimilar(id, card) {
-  const head = el('h3', {}, 'Similar past incidents');
+async function loadEventSimilar(id, card) {
+  const head = el('h3', {}, 'Similar past events');
   try {
     const { similar } = await api(`/api/events/${id}/similar`);
-    if (!similar.length) { card.replaceChildren(head, el('p', { class: 'muted' }, 'No similar incidents found.')); return; }
+    if (!similar.length) { card.replaceChildren(head, el('p', { class: 'muted' }, 'No similar events found.')); return; }
     card.replaceChildren(head, el('ul', { class: 'inc-similar' }, ...similar.map((s) => el('li', {
-      class: 'clickable', onclick: () => openIncident(s.id),
+      class: 'clickable', onclick: () => openEvent(s.id),
     },
       el('span', { class: 'badge' }, `score ${s.score}`), ' ', esc(s.title || `#${s.id}`),
       el('span', { class: 'muted' }, ` · ${(s.matchedOn || []).join(', ')} · resolved ${fmtDate(s.resolvedAt)}${s.closedBy ? ` by ${esc(s.closedBy)}` : ''}`)))));
   } catch (err) { card.replaceChildren(head, el('p', { class: 'error' }, err.message)); }
 }
 
-async function loadIncidentConfigContext(id, card) {
+async function loadEventConfigContext(id, card) {
   const head = el('h3', {}, 'Config context');
   try {
     const ctx = await api(`/api/events/${id}/config-context`);
@@ -3737,8 +3737,8 @@ async function loadIncidentConfigContext(id, card) {
   }
 }
 
-function incidentAssistantCard(id) {
-  const out = el('div', { class: 'assistant-out muted' }, 'Ask a question about this incident.');
+function eventAssistantCard(id) {
+  const out = el('div', { class: 'assistant-out muted' }, 'Ask a question about this event.');
   const input = el('input', { type: 'text', placeholder: 'e.g. what likely triggered this?', class: 'inc-ask-input' });
   const askBtn = el('button', { class: 'small' }, 'Ask AI');
   async function ask() {
@@ -3764,34 +3764,34 @@ function incidentAssistantCard(id) {
   askBtn.addEventListener('click', ask);
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter') ask(); });
   return el('div', { class: 'card' },
-    el('h3', {}, 'Ask AI about this incident'),
-    el('p', { class: 'muted' }, 'Answers use only masked, aggregated context (timeline, config diff, similar incidents). No raw config or secrets are sent.'),
+    el('h3', {}, 'Ask AI about this event'),
+    el('p', { class: 'muted' }, 'Answers use only masked, aggregated context (timeline, config diff, similar events). No raw config or secrets are sent.'),
     el('div', { class: 'inc-ask' }, input, askBtn),
     out);
 }
 
-// The per-incident detail page (no tab — reached via openIncident).
+// The per-event detail page (no tab — reached via openEvent).
 // ---- Guided troubleshooting ("Guide me") -----------------------------------
 let guideAutoOpen = false;
-function guideFromList(id) { guideAutoOpen = true; openIncident(id); }
+function guideFromList(id) { guideAutoOpen = true; openEvent(id); }
 
 // Deep-link a guide step's suggested action into the existing tools.
-function guideNavigate(action, incident) {
+function guideNavigate(action, event) {
   if (!action) return;
-  // 'event' is what the guide emits now; 'incident' is accepted so a step built by
+  // 'event' is what the guide emits now; 'event' is accepted so a step built by
   // an older server (or a cached response) still routes.
-  if (action.view === 'event' || action.view === 'incident') { openIncident(action.targetId); return; }
-  const dev = Number(action.view === 'config-context' ? incident.hostId : action.targetId);
+  if (action.view === 'event' || action.view === 'event') { openEvent(action.targetId); return; }
+  const dev = Number(action.view === 'config-context' ? event.hostId : action.targetId);
   if (!Number.isInteger(dev)) return;
   if (action.view === 'flows') { openFlows(dev); return; }
   openAgent(dev); // agent / interfaces / config-context all live on the device page
 }
 
-async function loadGuide(incident, body) {
+async function loadGuide(event, body) {
   try {
-    const guide = await api(`/api/events/${incident.id}/guide`);
-    if (!guide.steps || !guide.steps.length) { body.replaceChildren(el('p', { class: 'muted' }, 'No guidance available for this incident.')); return; }
-    const doneKey = `blueeye.guide.${incident.id}`;
+    const guide = await api(`/api/events/${event.id}/guide`);
+    if (!guide.steps || !guide.steps.length) { body.replaceChildren(el('p', { class: 'muted' }, 'No guidance available for this event.')); return; }
+    const doneKey = `blueeye.guide.${event.id}`;
     let done = [];
     try { done = JSON.parse(localStorage.getItem(doneKey) || '[]'); } catch { done = []; }
     const progress = el('div', { class: 'guide-progress muted' });
@@ -3805,7 +3805,7 @@ async function loadGuide(incident, body) {
       aiOut.className = 'assistant-out muted';
       aiOut.textContent = 'Thinking…';
       try {
-        const res = await api(`/api/events/${incident.id}/ask`, { method: 'POST', body: { question: seed } });
+        const res = await api(`/api/events/${event.id}/ask`, { method: 'POST', body: { question: seed } });
         aiOut.className = 'assistant-out';
         aiOut.replaceChildren(
           el('div', { class: 'ai-badge' }, '⚠ AI-generated'),
@@ -3825,8 +3825,8 @@ async function loadGuide(incident, body) {
         if (cb.checked) { if (!done.includes(s.id)) done.push(s.id); } else { done = done.filter((x) => x !== s.id); }
         li.classList.toggle('done', cb.checked); save();
       });
-      const actionBtn = s.action ? el('button', { class: 'small ghost', onclick: () => guideNavigate(s.action, incident) }, s.action.label) : null;
-      const askBtn = el('button', { class: 'small ghost', onclick: () => askAbout(`Help me with this troubleshooting step for the incident: "${s.title}". ${s.detail}`) }, 'Ask AI');
+      const actionBtn = s.action ? el('button', { class: 'small ghost', onclick: () => guideNavigate(s.action, event) }, s.action.label) : null;
+      const askBtn = el('button', { class: 'small ghost', onclick: () => askAbout(`Help me with this troubleshooting step for the event: "${s.title}". ${s.detail}`) }, 'Ask AI');
       li.append(
         el('label', { class: 'guide-step-head' }, cb, el('span', { class: 'guide-step-title' }, esc(s.title)), el('span', { class: `badge kind-${s.kind}` }, s.kind)),
         el('p', { class: 'guide-detail' }, esc(s.detail)),
@@ -3835,7 +3835,7 @@ async function loadGuide(incident, body) {
       return li;
     });
 
-    const freeQ = el('input', { type: 'text', placeholder: 'Ask BlueEyes AI about this incident…', class: 'inc-ask-input' });
+    const freeQ = el('input', { type: 'text', placeholder: 'Ask BlueEyes AI about this event…', class: 'inc-ask-input' });
     const freeBtn = el('button', { class: 'small', onclick: () => { if (freeQ.value.trim()) askAbout(freeQ.value.trim()); } }, 'Ask AI');
     freeQ.addEventListener('keydown', (e) => { if (e.key === 'Enter' && freeQ.value.trim()) askAbout(freeQ.value.trim()); });
 
@@ -3844,7 +3844,7 @@ async function loadGuide(incident, body) {
       progress,
       el('ol', { class: 'guide-steps' }, ...steps),
       el('div', { class: 'guide-ai' },
-        el('p', { class: 'muted' }, 'BlueEyes built these steps from this incident. Ask the AI to explain a step or the likely cause — it uses only masked context.'),
+        el('p', { class: 'muted' }, 'BlueEyes built these steps from this event. Ask the AI to explain a step or the likely cause — it uses only masked context.'),
         el('div', { class: 'inc-ask' }, freeQ, freeBtn), aiOut));
   } catch (err) {
     body.replaceChildren(el('p', { class: err.status === 403 ? 'muted' : 'error' }, err.status === 403 ? 'Guided troubleshooting requires operator/admin.' : err.message));
@@ -3852,10 +3852,10 @@ async function loadGuide(incident, body) {
 }
 
 // A collapsible "Guide me" card that lazy-loads the step-by-step guide on open.
-function incidentGuideCard(incident) {
+function eventGuideCard(event) {
   const body = el('div', { class: 'guide-body' }, el('p', { class: 'muted' }, 'Loading…'));
   let loaded = false;
-  const openAndLoad = () => { if (!loaded) { loaded = true; loadGuide(incident, body); } };
+  const openAndLoad = () => { if (!loaded) { loaded = true; loadGuide(event, body); } };
   const details = el('details', { class: 'card guide-card' },
     el('summary', { class: 'guide-summary' },
       el('span', { class: 'pill guide-pill' }, '🧭 Guide me'),
@@ -3867,9 +3867,9 @@ function incidentGuideCard(incident) {
 }
 
 views.event = async () => {
-  const id = selectedIncidentId;
+  const id = selectedEventId;
   const back = el('button', { class: 'small ghost', onclick: () => { currentView = 'events'; render(); } }, '← Events');
-  if (id == null) return el('div', { class: 'empty' }, back, el('p', {}, 'No incident selected.'));
+  if (id == null) return el('div', { class: 'empty' }, back, el('p', {}, 'No event selected.'));
 
   let data;
   try {
@@ -3878,10 +3878,10 @@ views.event = async () => {
     if (err.status === 404) return el('div', { class: 'empty' }, back, el('p', { class: 'error' }, 'Event not found.'));
     return el('div', { class: 'empty error' }, back, ' ', err.message);
   }
-  const inc = data.incident;
+  const inc = data.event;
   const anomalies = data.anomalies || [];
 
-  // Where the incident is, stated before anything else on the page: the agent
+  // Where the event is, stated before anything else on the page: the agent
   // (clickable through to the device) and the site it stands at. Older cases
   // carry a title that names only the agent id, so the header is what makes them
   // placeable too.
@@ -3912,7 +3912,7 @@ views.event = async () => {
           }
           try {
             await api(`/api/events/${id}`, { method: 'PATCH', body: { status: to, ...(comment ? { comment } : {}) } });
-            toast(`Incident ${INC_STATUS_LABEL[to].toLowerCase()}`);
+            toast(`Event ${INC_STATUS_LABEL[to].toLowerCase()}`);
             render();
           } catch (err) { toast(errText(err), true); }
         },
@@ -3929,23 +3929,23 @@ views.event = async () => {
       : el('p', { class: 'muted' }, 'No linked anomalies.'));
 
   const timelineCard = el('div', { class: 'card' }, el('h3', {}, 'Timeline'), el('div', { class: 'muted' }, 'Loading…'));
-  loadIncidentTimeline(id, timelineCard, inc.hostId);
-  const similarCard = el('div', { class: 'card' }, el('h3', {}, 'Similar past incidents'), el('div', { class: 'muted' }, 'Loading…'));
-  loadIncidentSimilar(id, similarCard);
+  loadEventTimeline(id, timelineCard, inc.hostId);
+  const similarCard = el('div', { class: 'card' }, el('h3', {}, 'Similar past events'), el('div', { class: 'muted' }, 'Loading…'));
+  loadEventSimilar(id, similarCard);
 
   const extra = [];
   if (canWrite()) {
     const cfgCard = el('div', { class: 'card' }, el('h3', {}, 'Config context'), el('div', { class: 'muted' }, 'Loading…'));
-    loadIncidentConfigContext(id, cfgCard);
+    loadEventConfigContext(id, cfgCard);
     extra.push(cfgCard);
-    if (featureEnabled('assistant')) extra.push(incidentAssistantCard(id));
+    if (featureEnabled('assistant')) extra.push(eventAssistantCard(id));
   }
 
   // "Guide me" — operator/admin (the guide endpoint + its config/AI steps are).
-  const guideCard = canWrite() ? incidentGuideCard(inc) : null;
+  const guideCard = canWrite() ? eventGuideCard(inc) : null;
 
-  // Affected path — the shared Path Visualization pre-filtered to the incident
-  // window, with the problem hop pre-highlighted. Mounted only when the incident
+  // Affected path — the shared Path Visualization pre-filtered to the event
+  // window, with the problem hop pre-highlighted. Mounted only when the event
   // has a numeric device (agent) and a derivable target (from a linked anomaly).
   let pathCard = null;
   const pathTarget = (anomalies.find((a) => a.target) || {}).target || inc.target || null;
@@ -3955,14 +3955,14 @@ views.event = async () => {
     (async () => {
       const fromMs = inc.firstEventAt ? Date.parse(inc.firstEventAt) : (Date.now() - 24 * 3600 * 1000);
       try {
-        const viz = await pathVisualization({ sourceId: pathSource, targetId: pathTarget, incidentId: id, timeRange: { fromMs, toMs: Date.now() } });
+        const viz = await pathVisualization({ sourceId: pathSource, targetId: pathTarget, eventId: id, timeRange: { fromMs, toMs: Date.now() } });
         pathCard.replaceChildren(el('h3', {}, 'Affected path'), viz);
       } catch (e) { pathCard.replaceChildren(el('h3', {}, 'Affected path'), el('div', { class: 'error' }, errText(e))); }
     })();
   }
 
   // Blast radius — which downstream hosts/services fail if this device goes down
-  // (enrichment already on the incident response). Both tiers with justifying
+  // (enrichment already on the event response). Both tiers with justifying
   // paths; each host links into the topology map focused on it.
   let blastCard = null;
   if (inc.blastRadius) {
@@ -3981,9 +3981,9 @@ views.event = async () => {
   // Work log — the shift handover. Mounted high (right after the status
   // controls) because "what has already been tried and excluded" is what the
   // next shift must read before anything else, not a footnote below six cards.
-  const notesCard = incidentNotesCard(id);
+  const notesCard = eventNotesCard(id);
 
-  return el('div', { class: 'incident-detail' }, header, controls, notesCard, guideCard, anomaliesCard, blastCard, timelineCard, similarCard, pathCard, ...extra);
+  return el('div', { class: 'event-detail' }, header, controls, notesCard, guideCard, anomaliesCard, blastCard, timelineCard, similarCard, pathCard, ...extra);
 };
 
 // ---- Event work log (Fase 3) -----------------------------------------------
@@ -4007,7 +4007,7 @@ function noteEntryEl(note) {
     el('p', { class: 'wl-text' }, esc(note.text)));
 }
 
-function incidentNotesCard(incidentId) {
+function eventNotesCard(eventId) {
   const card = el('div', { class: 'card work-log' });
   const body = el('div', {}, el('div', { class: 'muted' }, t('search.loading')));
   card.append(el('h3', {}, t('notes.title')), body);
@@ -4015,7 +4015,7 @@ function incidentNotesCard(incidentId) {
   async function load() {
     let data;
     try {
-      data = await api(`/api/events/${incidentId}/notes`);
+      data = await api(`/api/events/${eventId}/notes`);
     } catch (err) {
       body.replaceChildren(
         el('p', { class: 'error' }, t('notes.loadError', { message: errText(err) })),
@@ -4040,7 +4040,7 @@ function incidentNotesCard(incidentId) {
       ? el('ul', { class: 'wl-list wl-log' }, ...notes.map(noteEntryEl))
       : el('p', { class: 'empty' }, t('notes.empty')));
 
-    if (canWrite()) kids.push(noteComposer(incidentId, load));
+    if (canWrite()) kids.push(noteComposer(eventId, load));
     else kids.push(el('p', { class: 'muted small' }, t('notes.readOnly')));
 
     kids.push(el('p', { class: 'muted small wl-note' }, t('notes.appendOnly')));
@@ -4054,18 +4054,18 @@ function incidentNotesCard(incidentId) {
 // The add-entry form. `kind` is an explicit choice with no default selected —
 // the server rejects an omitted kind rather than guessing, and the UI must not
 // paper over that by pre-picking "observation" for someone who meant "ruled out".
-function noteComposer(incidentId, onSaved) {
+function noteComposer(eventId, onSaved) {
   const form = el('form', { class: 'wl-composer' });
   const textarea = el('textarea', {
     rows: '3',
-    id: `wl-text-${incidentId}`,
+    id: `wl-text-${eventId}`,
     placeholder: t('notes.textPlaceholder'),
     required: 'required',
   });
   const errorLine = el('p', { class: 'error hidden' });
 
   const kindRadios = NOTE_KINDS.map((kind) => el('label', { class: 'wl-kind-choice' },
-    el('input', { type: 'radio', name: `wl-kind-${incidentId}`, value: kind }),
+    el('input', { type: 'radio', name: `wl-kind-${eventId}`, value: kind }),
     el('span', {}, t(`notes.kind.${kind}`)),
     el('span', { class: 'muted small' }, t(`notes.kind.${kind}.help`))));
 
@@ -4074,7 +4074,7 @@ function noteComposer(incidentId, onSaved) {
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     errorLine.classList.add('hidden');
-    const checked = form.querySelector(`input[name="wl-kind-${incidentId}"]:checked`);
+    const checked = form.querySelector(`input[name="wl-kind-${eventId}"]:checked`);
     const text = textarea.value.trim();
     // Mirror the server's two rules locally so the common mistakes are caught
     // before a round-trip — the server still enforces both.
@@ -4086,7 +4086,7 @@ function noteComposer(incidentId, onSaved) {
     submit.disabled = true;
     submit.textContent = t('notes.saving');
     try {
-      await api(`/api/events/${incidentId}/notes`, { method: 'POST', body: { text, kind: checked.value } });
+      await api(`/api/events/${eventId}/notes`, { method: 'POST', body: { text, kind: checked.value } });
       textarea.value = '';
       checked.checked = false;
       if (typeof onSaved === 'function') await onSaved();
@@ -4101,7 +4101,7 @@ function noteComposer(incidentId, onSaved) {
 
   form.append(
     el('h4', {}, t('notes.add')),
-    el('label', { for: `wl-text-${incidentId}` }, t('notes.text')),
+    el('label', { for: `wl-text-${eventId}` }, t('notes.text')),
     textarea,
     el('fieldset', { class: 'wl-kinds' }, el('legend', {}, t('notes.kind')), ...kindRadios),
     errorLine,
@@ -4112,7 +4112,7 @@ function noteComposer(incidentId, onSaved) {
 // ---- Situation View (one condition across several devices) -----------------
 // "ét fælles billede": one page per cluster answering what/where/since-when,
 // what changed just before, and what the evidence says. Backed by
-// /api/incident-clusters (Fase 1) + /api/incident-clusters/:id/timeline. Page
+// /api/event-clusters (Fase 1) + /api/event-clusters/:id/timeline. Page
 // assembly + panel rendering live in the pure, jsdom-tested public/clusterView.js
 // (window.ClusterView); this wires fetch, navigation and the write actions.
 let selectedClusterId = null;
@@ -4124,8 +4124,8 @@ const clusterStatusBadge = (s) => el('span', { class: `badge inc-status-${s}` },
 const clusterConfBadge = (c) => el('span', { class: `badge conf-${c}` }, `${CLUSTER_CONF_LABEL[c] || c}`);
 
 PAGE_INFO.clusters = {
-  hero: 'Situations group findings that fired on SEVERAL agents at once into one cross-agent incident — with the change that came just before, a plain-language evidence breakdown, and one merged timeline.',
-  title: 'Situations — cross-agent incidents, one common picture',
+  hero: 'Situations group findings that fired on SEVERAL agents at once into one cross-agent event — with the change that came just before, a plain-language evidence breakdown, and one merged timeline.',
+  title: 'Situations — cross-agent events, one common picture',
   body: () => [
     el('p', {}, 'When a fault hits many agents at the same time, BlueEyes clusters their findings into one situation instead of N look-alike alerts. Each situation carries a confidence tier (how independent the grouping signals were) and a suspected common cause.'),
     el('p', {}, 'The detail page is the “one common picture”: what changed in the minutes before the first finding, the evidence that drove the grouping, and a single timeline merging findings, agent events, playbook runs and config changes across every affected agent.'),
@@ -4148,7 +4148,7 @@ views.clusters = async () => {
     const qs = new URLSearchParams();
     if (filters.status) qs.set('status', filters.status);
     try {
-      const { clusters } = await api(`/api/incident-clusters${qs.toString() ? `?${qs}` : ''}`);
+      const { clusters } = await api(`/api/event-clusters${qs.toString() ? `?${qs}` : ''}`);
       if (!clusters.length) { tbody.replaceChildren(el('tr', {}, el('td', { colspan: '6', class: 'muted' }, 'No situations match.'))); return; }
       tbody.replaceChildren(...clusters.map((c) => el('tr', {
         class: 'clickable', tabindex: '0',
@@ -4170,7 +4170,7 @@ views.clusters = async () => {
     ...Object.keys(CLUSTER_STATUS_LABEL).map((s) => el('option', { value: s }, CLUSTER_STATUS_LABEL[s])));
   wrap.append(
     el('div', { class: 'section-head' }, el('h2', {}, 'Situations'),
-      el('span', { class: 'muted' }, 'cross-agent incidents grouped by a suspected common cause')),
+      el('span', { class: 'muted' }, 'cross-agent events grouped by a suspected common cause')),
     el('div', { class: 'toolbar' }, statusSel), table);
   await load();
   return wrap;
@@ -4190,7 +4190,7 @@ views.cluster = async () => {
 
   let detail;
   try {
-    ({ cluster: detail } = await api(`/api/incident-clusters/${id}`));
+    ({ cluster: detail } = await api(`/api/event-clusters/${id}`));
   } catch (err) {
     if (err.status === 404) return el('div', { class: 'empty' }, back, el('p', { class: 'error' }, 'Situation not found.'));
     return el('div', { class: 'empty error' }, back, ' ', err.message);
@@ -4201,33 +4201,33 @@ views.cluster = async () => {
   let timeline = null;
   let timelineError = false;
   try {
-    timeline = await api(`/api/incident-clusters/${id}/timeline`);
+    timeline = await api(`/api/event-clusters/${id}/timeline`);
   } catch { timelineError = true; }
 
   let actions = null;
   let actionsError = false;
   try {
-    actions = await api(`/api/incident-clusters/${id}/recommended-actions`);
+    actions = await api(`/api/event-clusters/${id}/recommended-actions`);
   } catch { actionsError = true; }
 
   const container = el('div', { class: 'cluster-detail' });
 
   // Write actions (operator+), driven through ClusterView's buttons.
   async function doAck() {
-    try { await api(`/api/incident-clusters/${id}/ack`, { method: 'POST' }); toast('Situation acknowledged'); render(); }
+    try { await api(`/api/event-clusters/${id}/ack`, { method: 'POST' }); toast('Situation acknowledged'); render(); }
     catch (err) { toast(errText(err), true); }
   }
   async function doResolve() {
     const note = window.prompt('Resolution note (required):');
     if (!note || !note.trim()) return;
-    try { await api(`/api/incident-clusters/${id}/resolve`, { method: 'POST', body: { note: note.trim() } }); toast('Situation resolved'); render(); }
+    try { await api(`/api/event-clusters/${id}/resolve`, { method: 'POST', body: { note: note.trim() } }); toast('Situation resolved'); render(); }
     catch (err) { toast(errText(err), true); }
   }
-  // Explicit, confirmed, audit-logged playbook execution from the incident page.
+  // Explicit, confirmed, audit-logged playbook execution from the event page.
   async function doRunPlaybook(rb) {
     if (!confirm(`Run playbook "${rb.linkedPlaybookName || rb.title}" against this situation's targets? It will be verified after the settle window.`)) return;
     try {
-      const { verification } = await api(`/api/incident-clusters/${id}/run-playbook`, { method: 'POST', body: { runbookId: rb.id } });
+      const { verification } = await api(`/api/event-clusters/${id}/run-playbook`, { method: 'POST', body: { runbookId: rb.id } });
       const mins = verification ? Math.round((verification.settleSeconds || 300) / 60) : 5;
       toast(`Playbook queued — verification in ~${mins} min`);
       render();
@@ -5031,7 +5031,7 @@ async function drawPathMap(host, stops) {
 // Path Visualization — one shared component (path graph + brushable metric
 // timeline) mounted in Topology (drawer), Probes, Tests and Troubleshooting.
 // Props contract: pathVisualization({ sourceId, targetId, probeId, testId,
-//   incidentId, timeRange:{fromMs,toMs}, metric, overlay, problemHop,
+//   eventId, timeRange:{fromMs,toMs}, metric, overlay, problemHop,
 //   onSelectionChange }). Vanilla JS, no build step — matches the SPA.
 // ==========================================================================
 
@@ -5501,7 +5501,7 @@ function topoGraphSvg(nodes, edges, { label, kindBadge, actionBtns } = {}) {
 
 // Navigate to the Topology map in Layers mode focused on one host — the map
 // reads ?layer/?focus from the URL on load, opens straight into Layers and (for
-// operator+) previews that host's blast radius. Shared by the incident view's
+// operator+) previews that host's blast radius. Shared by the event view's
 // "show on map" links.
 function openTopologyFocus(hostId) {
   try {
@@ -5516,7 +5516,7 @@ function openTopologyFocus(hostId) {
 
 // Reusable blast-radius result panel: the two tiers (directly-isolated L2 +
 // dependency-affected), each host carrying the path that justifies it. Shared by
-// the topology what-if preview and the incident view. `nameFor` resolves a host
+// the topology what-if preview and the event view. `nameFor` resolves a host
 // id → label; `onFocusHost` (optional) makes each host a link (e.g. into the map
 // focused on it).
 function blastRadiusPanel(blast, { nameFor, onFocusHost } = {}) {
@@ -5620,7 +5620,7 @@ function topoLayersSvg(vm, { onNodeClick, focusId } = {}) {
     if (nodeEls.get(id)) nodeEls.get(id).classList.add('selected');
     edgeEls.forEach((x) => x.el.classList.toggle('active', x.from === id || x.to === id));
   }
-  // Blast-radius highlight (what-if / incident): { focus, isolated:Set, affected:Set }.
+  // Blast-radius highlight (what-if / event): { focus, isolated:Set, affected:Set }.
   function setHighlight(sets) {
     if (!sets) { clear(); return; }
     wrap.classList.add('has-selection');
@@ -6593,7 +6593,7 @@ function investigationCard(inv) {
     nis2El = el('details', { class: 'inv-nis2-draft' },
       el('summary', {},
         el('span', { class: 'badge inv-badge INFO' }, 'NIS2'),
-        ` Draft created (${esc(d.incidentId || '?')}) — review before submission`),
+        ` Draft created (${esc(d.eventId || '?')}) — review before submission`),
       el('div', { class: 'inv-nis2-draft-body' },
         el('p', { class: 'muted inv-nis2-notice' },
           'AI-generated draft · Requires human review · Never auto-submitted'),
@@ -7512,7 +7512,7 @@ function changesRowEl(event, nameFor) {
       onclick: () => openAgent(Number(event.agentId)),
     }, nameFor(event.agentId)));
   } else if (event.kind === 'event' && event.ref_id != null) {
-    row.append(el('button', { class: 'small ghost chg-open', onclick: () => openIncident(Number(event.ref_id)) }, '→'));
+    row.append(el('button', { class: 'small ghost chg-open', onclick: () => openEvent(Number(event.ref_id)) }, '→'));
   } else if (event.kind === 'cluster' && event.ref_id != null) {
     row.append(el('button', { class: 'small ghost chg-open', onclick: () => openCluster(Number(event.ref_id)) }, '→'));
   }
@@ -7864,7 +7864,7 @@ function nocDashboard(data, { controls = null, scopeName = null } = {}) {
 }
 
 // Overview "Open issues" section (licence feature dashboard_advanced, Pro+):
-// the active incidents and the most-recent unacknowledged analysis findings,
+// the active events and the most-recent unacknowledged analysis findings,
 // side by side. Composed from data the server already holds (no new collection)
 // and rendered with the compact .panel-grid / .adv-table styling. Rows that map
 // to an agent drill into its combined page.
@@ -7872,9 +7872,9 @@ function fleetIssues(w) {
   if (!w) return el('div', {});
   const count = (n) => el('span', { class: 'muted fi-count' }, n ? ` · ${n}` : '');
 
-  const inc = el('div', { class: 'card' }, el('h3', {}, 'Active incidents', count(w.incidents.active)));
-  if (!w.incidents.recent.length) inc.append(el('p', { class: 'muted' }, 'No active incidents.'));
-  else inc.append(el('table', { class: 'adv-table' }, el('tbody', {}, ...w.incidents.recent.map((i) =>
+  const inc = el('div', { class: 'card' }, el('h3', {}, 'Active events', count(w.events.active)));
+  if (!w.events.recent.length) inc.append(el('p', { class: 'muted' }, 'No active events.'));
+  else inc.append(el('table', { class: 'adv-table' }, el('tbody', {}, ...w.events.recent.map((i) =>
     el('tr', i.agentId ? { class: 'clickable', onclick: () => openAgent(i.agentId) } : {},
       el('td', {}, el('span', { class: `badge ${i.severity === 'critical' ? 'crit' : 'warn'}` }, i.severity)),
       el('td', {}, esc(i.agentName || `agent ${i.agentId}`), i.locationName ? el('span', { class: 'muted' }, ` · ${esc(i.locationName)}`) : null),
@@ -7889,30 +7889,30 @@ function fleetIssues(w) {
       el('td', {}, esc(x.hostId), el('span', { class: 'muted' }, ` · ${esc(x.metric)}`)),
       el('td', { class: 'muted' }, esc(x.explanation || x.kind || '')))))));
 
-  // First-class incidents (incident_cases) — open/investigating cases; click a
+  // First-class events (event_cases) — open/investigating cases; click a
   // row to open its detail page. Guarded for older servers without the widget.
-  const ic = w.incidentCases || { open: 0, recent: [] };
-  const cases = el('div', { class: 'card' }, el('h3', {}, 'Open incidents', count(ic.open)));
-  if (!ic.recent.length) cases.append(el('p', { class: 'muted' }, 'No open incidents.'));
+  const ic = w.eventCases || { open: 0, recent: [] };
+  const cases = el('div', { class: 'card' }, el('h3', {}, 'Open events', count(ic.open)));
+  if (!ic.recent.length) cases.append(el('p', { class: 'muted' }, 'No open events.'));
   else cases.append(el('table', { class: 'adv-table' }, el('tbody', {}, ...ic.recent.map((c) =>
-    el('tr', { class: 'clickable', onclick: () => openIncident(c.id) },
+    el('tr', { class: 'clickable', onclick: () => openEvent(c.id) },
       el('td', {}, el('span', { class: `badge inc-sev-${c.severity}` }, c.severity)),
       el('td', {}, esc(c.title),
         // Where it is — same agent · site pair the probe-outage rollup shows, so
         // a case can be placed without opening it.
-        el('div', { class: 'muted inc-where' }, incidentWhere(c))),
+        el('div', { class: 'muted inc-where' }, eventWhere(c))),
       el('td', {}, el('span', { class: `badge inc-status-${c.status}` }, INC_STATUS_LABEL[c.status] || c.status)),
       el('td', { class: 'muted' }, fmtDate(c.lastEventAt)))))));
 
   return el('section', { class: 'fleet-issues' },
     el('h3', { class: 'fi-head' }, 'Open issues',
-      el('span', { class: 'muted' }, ' · open incidents, probe outages & recent analysis findings')),
+      el('span', { class: 'muted' }, ' · open events, probe outages & recent analysis findings')),
     el('div', { class: 'panel-grid' }, cases, inc, fnd));
 }
 
 // The landing view: all agents with a probe-derived health verdict, worst-first.
 // Click a row to pivot into that agent's combined detail page. For Professional+
-// licences it also surfaces an "Open issues" rollup (incidents + findings).
+// licences it also surfaces an "Open issues" rollup (events + findings).
 views.fleet = async () => {
   const root = el('div', { class: 'fleet' });
   root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Overview'),
@@ -7926,7 +7926,7 @@ views.fleet = async () => {
   const chipsHost = el('div', { class: 'filter-chips' });   // active-filter chips (self-hides when empty)
   const cardsHost = el('div', { class: 'fleet-cards' });     // four clickable metric cards
   const tableHost = el('div', {});
-  const issuesHost = el('div', {}); // gated (dashboard_advanced): incidents + findings
+  const issuesHost = el('div', {}); // gated (dashboard_advanced): events + findings
   root.append(bannerHost, nocHost, trafficHost, chipsHost, cardsHost, tableHost, issuesHost);
   trafficHost.append(trafficMapCard({
     subtitle: 'all sites · last 6 h · arrows = traffic type + live direction',
@@ -8086,7 +8086,7 @@ views.fleet = async () => {
       el('tbody', {}, ...ordered.map(fleetRow)));
     tableHost.replaceChildren(...[countLine, body].filter(Boolean));
   }
-  // Open issues (incidents + findings) — a Professional+ rollup (feature
+  // Open issues (events + findings) — a Professional+ rollup (feature
   // dashboard_advanced). Best-effort + gated: when the licence doesn't include
   // it the panels are simply omitted, so the core Overview always renders.
   async function refreshIssues() {
@@ -8095,7 +8095,7 @@ views.fleet = async () => {
     catch { issuesHost.replaceChildren(); }
   }
   async function refresh() {
-    refreshIssues(); // gated incidents/findings panels, fetched in parallel
+    refreshIssues(); // gated events/findings panels, fetched in parallel
     // Filtering is client-side on the dataset the Overview already holds. Only
     // for a large fleet (>500 agents) do we offload the severity filter to the
     // server as a query param to shrink the payload; the summary stays whole-
@@ -8503,7 +8503,7 @@ views.agent = async () => {
   cardsWrap.append(depsHost);
   loadAgentDependencies(id, depsHost);
 
-  // Unified activity timeline (findings + probe-outage incidents + connect/
+  // Unified activity timeline (findings + probe-outage events + connect/
   // disconnect + playbook runs) — GET /api/targets/:id/timeline.
   root.append(targetTimelineCard(id));
   function renderHealth(h, q, thr) {
@@ -10875,7 +10875,7 @@ const DOCS = [
           el('h4', {}, 'The moving parts'),
           el('ul', {},
             el('li', {}, el('strong', {}, 'Agents '), '— enrolled with a one-time code, then report over a WebSocket + REST. See ', viewLink('agents', 'Agents'), ' and ', viewLink('enrollment', 'Enrollment'), '.'),
-            el('li', {}, el('strong', {}, 'This server '), '— stores measurements, derives health/findings/incidents, and is where you manage the fleet.'),
+            el('li', {}, el('strong', {}, 'This server '), '— stores measurements, derives health/findings/events, and is where you manage the fleet.'),
             el('li', {}, el('strong', {}, 'Integrations '), '— optional outbound links to ITSM/IPAM/CMDB (e.g. ServiceNow), alert channels and SSO — all configured in Settings (admin).')),
           docsExpect('Once an agent is enrolled and connected it turns green on the ', viewLink('fleet', 'Overview'), ' within a minute, and its traffic/probe data starts filling the ', viewLink('overview', 'Traffic'), ' and ', viewLink('probes', 'Probes'), ' pages.'),
         ],
@@ -10887,7 +10887,7 @@ const DOCS = [
             [viewLink('fleet', 'Monitoring'), 'Overview (fleet health at a glance), Traffic, Sites (map) and Destinations (external traffic by country/ASN).'],
             [el('strong', {}, 'Fleet'), ['Per-', viewLink('agents', 'Agent'), ' drill-down, ', viewLink('interfaces', 'Interfaces'), ' health and NIC firmware inventory.']],
             [el('strong', {}, 'Diagnostics'), ['Ad-hoc ', viewLink('probes', 'Probes & Tests'), ', ', viewLink('flows', 'Flows'), ', Topology, the ', viewLink('investigation', 'Troubleshooting'), ' investigator — and this Documentation.']],
-            [el('strong', {}, 'Insights'), ['Anomaly ', viewLink('findings', 'Analysis'), ', ', viewLink('events', 'Events'), ', ', viewLink('clusters', 'Situations'), ' (one incident across many agents) and ', viewLink('reporting', 'Reporting'), ' (incl. NIS2).']],
+            [el('strong', {}, 'Insights'), ['Anomaly ', viewLink('findings', 'Analysis'), ', ', viewLink('events', 'Events'), ', ', viewLink('clusters', 'Situations'), ' (one event across many agents) and ', viewLink('reporting', 'Reporting'), ' (incl. NIS2).']],
             [el('strong', {}, 'Administration'), ['Locations, Enrollment, Logs and ', viewLink('settings', 'Settings'), '.']],
           ]),
           el('p', {}, 'Every page has a one-line hero at the top and a ', el('strong', {}, 'More info'), ' button that opens a drawer explaining that page in depth. The topbar search jumps to an agent, host, IP or port. The 🌙/☀️ button flips light/dark; pick a colour palette in ', settingsLink('appearance', 'Settings → Appearance'), '.'),
@@ -10954,22 +10954,22 @@ const DOCS = [
         ],
       },
       {
-        id: 'findings', title: 'Reading findings & incidents', body: () => [
+        id: 'findings', title: 'Reading findings & events', body: () => [
           docsLead('The Analysis and Events pages turn raw metrics into explained problems. Here is how to read them.'),
           el('p', {}, ['A ', viewLink('findings', 'finding'), ' is one detected anomaly on one host/metric. Because detection is robust-statistical (median + MAD z-score), each finding states what was ', el('strong', {}, 'observed'), ', the ', el('strong', {}, 'baseline'), ' it deviated from, the ', el('strong', {}, 'deviation'), ', and an evidence array — so you can judge it, not just trust it. Acknowledge a finding to mute repeats.']),
           el('p', {}, ['An ', viewLink('events', 'event'), ' groups related findings on a device within a correlation window into one case, and auto-correlates a device config change from just before it as the suspected trigger. Open a case for its timeline, a plain-language what/where/why, similar past cases, and a combined recommendation (matching playbook → resolved-case history → optional EU-hosted AI).']),
           docsTable(['On the page', 'Means'], [
             [el('span', {}, el('strong', {}, 'CRIT'), ' / red'), 'A strong, high-confidence deviation — act now.'],
             [el('span', {}, el('strong', {}, 'WARN'), ' / amber'), 'A moderate deviation — worth a look, may be transient.'],
-            [el('span', {}, el('strong', {}, 'Config change'), ' link'), 'A device config snapshot captured shortly before the incident — the likely cause; open it to see the risk-classified diff.'],
+            [el('span', {}, el('strong', {}, 'Config change'), ' link'), 'A device config snapshot captured shortly before the event — the likely cause; open it to see the risk-classified diff.'],
           ]),
           docsExpect('If a finding looks wrong, read its evidence — a legitimate baseline shift (a planned change, a new service) explains most “false” anomalies. Acknowledge it and, if it recurs by design, tune thresholds in Settings → Analysis.'),
         ],
       },
       {
-        id: 'situations', title: 'Situations — one incident across many agents', body: () => [
+        id: 'situations', title: 'Situations — one event across many agents', body: () => [
           docsLead('When the same fault hits several agents at once, BlueEyes groups their findings into one Situation (a cross-agent cluster) instead of N look-alike alerts — so you chase one root cause, not a wall of duplicates.'),
-          el('p', {}, ['Open ', viewLink('clusters', 'Situations'), ' (Insights group). Each row is one cross-agent incident with a confidence tier, a suspected common cause and how many findings it groups. It is distinct from an ', viewLink('events', 'event'), ', which groups findings on a ', el('strong', {}, 'single'), ' device.']),
+          el('p', {}, ['Open ', viewLink('clusters', 'Situations'), ' (Insights group). Each row is one cross-agent event with a confidence tier, a suspected common cause and how many findings it groups. It is distinct from an ', viewLink('events', 'event'), ', which groups findings on a ', el('strong', {}, 'single'), ' device.']),
           el('h4', {}, 'How confident is the grouping?'),
           el('p', {}, 'The confidence tier says how independent the signals tying the agents together were — not how severe the fault is:'),
           docsTable(['Tier', 'What tied the agents together'], [
@@ -11016,7 +11016,7 @@ const DOCS = [
           el('p', {}, ['It is bounded by a configurable ', el('strong', {}, 'depth cap'), ' (default 4 hops) and is cycle-safe, so it always terminates even on looped topologies.']),
           el('h4', {}, 'Where you see it'),
           docsSteps([
-            ['On an ', viewLink('events', 'event'), ': the incident detail carries a ', el('code', {}, 'blastRadius'), ' section computed for the failing device — the downstream hosts and dependent services it puts at risk. It is best-effort: if topology is unavailable the incident still opens.'],
+            ['On an ', viewLink('events', 'event'), ': the event detail carries a ', el('code', {}, 'blastRadius'), ' section computed for the failing device — the downstream hosts and dependent services it puts at risk. It is best-effort: if topology is unavailable the event still opens.'],
             ['Ad-hoc for any node (operator+): ', el('code', {}, 'GET /api/topology/blast-radius/<agentId>'), ' — optionally ', el('code', {}, '?depth=N'), '.'],
           ]),
           el('h4', {}, 'Worked example'),
@@ -11040,7 +11040,7 @@ const DOCS = [
           el('p', {}, ['A change that reverts within a window (default 300s) does not spam the feed — the pair ', el('strong', {}, 'collapses to a single '), el('code', {}, 'flapping'), el('strong', {}, ' record'), '. So a link bouncing every few seconds shows up once, as flapping, not as hundreds of add/remove events.']),
           el('h4', {}, 'Where changes show up'),
           docsSteps([
-            ['On the device page ', el('strong', {}, 'activity timeline'), ': topology changes appear inline with findings, incidents and agent events, tagged ', el('strong', {}, 'Topology change'), ' — the same feed, one shape.'],
+            ['On the device page ', el('strong', {}, 'activity timeline'), ': topology changes appear inline with findings, events and agent events, tagged ', el('strong', {}, 'Topology change'), ' — the same feed, one shape.'],
             ['Directly (operator+): ', el('code', {}, 'GET /api/topology/changes?host=<agentId>'), ' returns the change events.'],
             ['As evidence: every change is written to the ', el('strong', {}, 'hash-chained audit log'), ' (category ', el('code', {}, 'topology'), ', actor ', el('code', {}, 'system'), '), so the record is tamper-evident.'],
           ]),
@@ -11060,7 +11060,7 @@ const DOCS = [
             ['Eligibility', 'A pair needs ≥100 hourly observations before it’s scored — new/sparse pairs are left alone until there’s enough history.'],
             ['Output', 'A deviation becomes an ordinary finding (metric flow.volume) that flows into the correlator and Situations like any other — no separate alert channel.'],
           ]),
-          docsExpect('A steady flow pair produces no findings. A genuine step-change in volume for a specific weekday/hour scores WARN/CRIT and appears in Analysis/Incidents attributed to the source host, with the destination and port in its evidence. This is deviation only — BlueEyes never labels traffic “malicious”, it just tells you it changed.'),
+          docsExpect('A steady flow pair produces no findings. A genuine step-change in volume for a specific weekday/hour scores WARN/CRIT and appears in Analysis/Events attributed to the source host, with the destination and port in its evidence. This is deviation only — BlueEyes never labels traffic “malicious”, it just tells you it changed.'),
           el('p', { class: 'muted' }, ['Operator+ can inspect a host’s learned baselines at ', el('code', {}, 'GET /api/topology/flow-baselines?host=<id>'), '.']),
         ],
       },
@@ -11101,24 +11101,24 @@ const DOCS = [
       },
       {
         id: 'servicenow', title: 'Connect ServiceNow (ITSM)', body: () => [
-          docsLead('Push BlueEyes incidents/anomalies into ServiceNow as Incident records. Configured under Settings → Integrations as a “servicenow” connector. This is the outbound ITSM link; for asset lookup see “Connect a CMDB”.'),
+          docsLead('Push BlueEyes events/anomalies into ServiceNow as Event records. Configured under Settings → Integrations as a “servicenow” connector. This is the outbound ITSM link; for asset lookup see “Connect a CMDB”.'),
           el('h4', {}, 'What you need first (in ServiceNow)'),
           el('ul', {},
             el('li', {}, el('strong', {}, 'Instance URL '), '— e.g. ', el('code', {}, 'https://acme.service-now.com'), ' (HTTPS, no trailing path).'),
-            el('li', {}, el('strong', {}, 'A service account '), 'with REST Table API access to the target table. For the default ', el('code', {}, 'incident'), ' table it needs to create/read/update incidents — typically the ', el('code', {}, 'itil'), ' role (plus ', el('code', {}, 'web_service_admin'), ' / SOAP access if your instance restricts the REST API).'),
+            el('li', {}, el('strong', {}, 'A service account '), 'with REST Table API access to the target table. For the default ', el('code', {}, 'event'), ' table it needs to create/read/update events — typically the ', el('code', {}, 'itil'), ' role (plus ', el('code', {}, 'web_service_admin'), ' / SOAP access if your instance restricts the REST API).'),
             el('li', {}, el('strong', {}, 'Credentials '), '— Basic auth (username + password) or OAuth2 (a bearer token). Store them in the connector; they are encrypted at rest (AES-256-GCM) and write-only — never shown back.'),
-            el('li', {}, el('strong', {}, 'Table '), '(optional) — defaults to ', el('code', {}, 'incident'), '. Override only to a valid table name (', el('code', {}, '[a-z0-9_]'), ', ≤64 chars).')),
+            el('li', {}, el('strong', {}, 'Table '), '(optional) — defaults to ', el('code', {}, 'event'), '. Override only to a valid table name (', el('code', {}, '[a-z0-9_]'), ', ≤64 chars).')),
           el('h4', {}, 'Set it up'),
           docsSteps([
             [settingsLink('integrations', 'Open Settings → Integrations'), ' and add a connector of type ', el('strong', {}, 'ServiceNow'), '.'],
-            ['Fill in the ', el('strong', {}, 'Base URL'), ', pick the ', el('strong', {}, 'auth type'), ' (basic/oauth2) and enter the credentials. Optionally set the table and which events fire it (', el('code', {}, 'incident'), ', ', el('code', {}, 'anomaly'), ').'],
+            ['Fill in the ', el('strong', {}, 'Base URL'), ', pick the ', el('strong', {}, 'auth type'), ' (basic/oauth2) and enter the credentials. Optionally set the table and which events fire it (', el('code', {}, 'event'), ', ', el('code', {}, 'anomaly'), ').'],
             ['Save, then click ', el('strong', {}, 'Test'), '. The test does a bounded read of the table (', el('code', {}, 'GET /api/now/table/<table>?sysparm_limit=1'), ') — it proves URL + auth + table access without creating anything.'],
             ['Verify end-to-end from ', settingsLink('screening', 'Settings → Test Settings'), ', which screens every outbound integration for connectivity and security posture in one place.'],
           ]),
           el('h4', {}, 'How a fire behaves'),
           el('p', {}, ['When a qualifying event fires, the connector is ', el('strong', {}, 'idempotent by '), el('code', {}, 'correlation_id'), ': it first looks up an existing record with that id and ', el('strong', {}, 'PATCHes'), ' it if found, otherwise ', el('strong', {}, 'POSTs'), ' a new one — so a recurring condition updates one ticket instead of spawning duplicates. Severity maps to impact/urgency: CRIT→1/1, WARN→2/2, else 3/3. Every ticket is tagged ', el('code', {}, 'u_source = BlueEye'), ' so your ServiceNow admins can filter them.']),
           docsExpect(
-            el('div', {}, el('strong', {}, 'Success — '), 'the Test returns ', el('code', {}, 'reached ServiceNow (200)'), '. A real fire returns e.g. ', el('code', {}, 'create incident INC0012345 (201)'), ' or ', el('code', {}, 'update incident INC0012345 (200)'), ', and the per-fire result is recorded in the integration audit.')),
+            el('div', {}, el('strong', {}, 'Success — '), 'the Test returns ', el('code', {}, 'reached ServiceNow (200)'), '. A real fire returns e.g. ', el('code', {}, 'create event INC0012345 (201)'), ' or ', el('code', {}, 'update event INC0012345 (200)'), ', and the per-fire result is recorded in the integration audit.')),
           el('h4', {}, 'When it fails — reading the error'),
           docsTable(['Status / detail', 'Likely cause', 'Fix'], [
             [el('code', {}, '401'), 'Bad username/password or an expired OAuth2 token.', 'Re-enter the credentials; for OAuth2 refresh the token.'],
@@ -11133,7 +11133,7 @@ const DOCS = [
       {
         id: 'cmdb', title: 'Connect a CMDB (single source of truth)', body: () => [
           docsLead('Link agents to their asset in a CMDB so BlueEyes can enrich them and keep each agent’s site in sync. One CMDB source at a time: ServiceNow, Nautobot, or a config-driven custom HTTP/JSON source. Configured under Settings → CMDB.'),
-          el('p', {}, ['This is separate from the outbound ITSM integration above — a CMDB connector is ', el('strong', {}, 'read-only'), ' (test + asset search), not a ticket writer. For ServiceNow the asset table defaults to ', el('code', {}, 'cmdb_ci'), '; a service account scoped only to the CMDB (but not to incidents) is enough, because the test reads the CI table, not ', el('code', {}, 'incident'), '.']),
+          el('p', {}, ['This is separate from the outbound ITSM integration above — a CMDB connector is ', el('strong', {}, 'read-only'), ' (test + asset search), not a ticket writer. For ServiceNow the asset table defaults to ', el('code', {}, 'cmdb_ci'), '; a service account scoped only to the CMDB (but not to events) is enough, because the test reads the CI table, not ', el('code', {}, 'event'), '.']),
           docsSteps([
             [settingsLink('cmdb', 'Open Settings → CMDB'), ' and choose the source type (ServiceNow / Nautobot / custom).'],
             'Enter the base URL + credentials (encrypted at rest, never returned). For custom, provide the request/JSON mapping the page describes.',
@@ -11145,7 +11145,7 @@ const DOCS = [
       },
       {
         id: 'alerting', title: 'Configure alerting', body: () => [
-          docsLead('Deliver findings/incidents to email, a webhook, or syslog. Configured under Settings → Alerting; changes apply live to the running dispatcher.'),
+          docsLead('Deliver findings/events to email, a webhook, or syslog. Configured under Settings → Alerting; changes apply live to the running dispatcher.'),
           el('ul', {},
             el('li', {}, el('strong', {}, 'Email (SMTP) '), '— host, port, TLS, from-address and (optional) credentials. Use a EU/self-hosted relay in keeping with the no-US-vendor rule.'),
             el('li', {}, el('strong', {}, 'Webhook '), '— a receiver URL; sign it with a shared secret so the receiver can verify authenticity. An unsigned webhook is flagged as a warning in Test Settings.'),
@@ -11794,7 +11794,7 @@ function throughputSettingsCard(t) {
 // ---- Settings → ITSM (outbound API receivers) -----------------------------
 // Manage outbound API integrations (ServiceNow, Jira/TOPdesk/GLPI or a custom
 // ticket API, generic webhook, Nautobot CMDB/IPAM device sync): push BlueEyes
-// events (incidents/anomalies, agent enroll/delete) to external systems.
+// events (events/anomalies, agent enroll/delete) to external systems.
 // Backend: src/routes/integrations.js (CRUD + /meta + test-fire). Credentials are
 // encrypted at rest (secret box) and never returned. Admin-only.
 let integrationsEditing = null; // null = list only · 'new' · <id> being edited
@@ -11802,7 +11802,7 @@ let integrationsEditing = null; // null = list only · 'new' · <id> being edite
 async function settingsIntegrationsView() {
   const root = el('div');
   root.append(el('p', { class: 'muted settings-intro' },
-    'Push BlueEyes events to your ITSM and asset systems — e.g. open a ServiceNow (or Jira / TOPdesk / GLPI, or your own) incident when a CRIT finding fires, or sync agents into Nautobot (CMDB/IPAM). Pick a system to pre-fill its defaults, or “Custom” to inject your own ticket API. Credentials are encrypted at rest and never shown again; changes take effect immediately.'));
+    'Push BlueEyes events to your ITSM and asset systems — e.g. open a ServiceNow (or Jira / TOPdesk / GLPI, or your own) event when a CRIT finding fires, or sync agents into Nautobot (CMDB/IPAM). Pick a system to pre-fill its defaults, or “Custom” to inject your own ticket API. Credentials are encrypted at rest and never shown again; changes take effect immediately.'));
 
   let meta; let list;
   try {
@@ -11910,9 +11910,9 @@ function integrationConfigFields(type, config) {
   const rows = [];
   let gather = () => ({});
   if (type === 'servicenow') {
-    const tableI = el('input', { type: 'text', value: c.table || 'incident', placeholder: 'incident' });
-    rows.push(alertField('Table', tableI, 'ServiceNow table to create records in (default: incident).'));
-    gather = () => ({ table: tableI.value.trim() || 'incident' });
+    const tableI = el('input', { type: 'text', value: c.table || 'event', placeholder: 'event' });
+    rows.push(alertField('Table', tableI, 'ServiceNow table to create records in (default: event).'));
+    gather = () => ({ table: tableI.value.trim() || 'event' });
   } else if (type === 'nautobot') {
     const pathI = el('input', { type: 'text', value: c.devicePath || '/api/dcim/devices', placeholder: '/api/dcim/devices' });
     const delI = el('input', { type: 'checkbox' }); delI.checked = !!c.allowDelete;
@@ -12726,12 +12726,12 @@ async function settingsMaintenanceView() {
 }
 
 // Runbooks admin (Fase 3): the static finding-type → recommended-action mapping
-// surfaced on the incident (Situations) page. Admin CRUD; clones the list + modal
+// surfaced on the event (Situations) page. Admin CRUD; clones the list + modal
 // + delete-confirm pattern used elsewhere.
 async function settingsRunbooksView() {
   const { runbooks } = await api('/api/runbooks');
   const root = el('div');
-  root.append(el('p', { class: 'muted settings-intro' }, 'Runbooks map an anomaly finding-type (e.g. cpu, probe.loss) to a concrete recommended action shown on the incident page. Write the action in Markdown; optionally link a remediation playbook so operators can run it (with verification) from the incident.'));
+  root.append(el('p', { class: 'muted settings-intro' }, 'Runbooks map an anomaly finding-type (e.g. cpu, probe.loss) to a concrete recommended action shown on the event page. Write the action in Markdown; optionally link a remediation playbook so operators can run it (with verification) from the event.'));
 
   root.append(el('div', { class: 'section-head' },
     el('h3', {}, `Runbooks (${runbooks.length})`),
@@ -12844,7 +12844,7 @@ function analyseSettingsCard(a) {
       { key: 'warnSigma', label: 'WARN threshold (σ from baseline)', type: 'number', min: 0.5, max: 20, step: 0.1, hint: 'Threshold for WARN — should be lower than CRIT. Typically 3.' },
       { key: 'baselineDays', label: 'Baseline window (days)', type: 'number', min: 1, max: 90, step: 1, hint: 'How many days of history the normal is calculated from.' },
       { key: 'minSamples', label: 'Min. samples before alerting', type: 'number', min: 10, max: 100000, step: 1, hint: 'Number of measurements before a metric is monitored — avoids false alarms right after startup.' },
-      { key: 'verifySettleMinutes', label: 'Verification settle time (min)', type: 'number', min: 0, max: 1440, step: 1, hint: 'After a playbook is run from an incident, how long to wait before re-checking whether the symptoms cleared. Default 5.' },
+      { key: 'verifySettleMinutes', label: 'Verification settle time (min)', type: 'number', min: 0, max: 1440, step: 1, hint: 'After a playbook is run from an event, how long to wait before re-checking whether the symptoms cleared. Default 5.' },
     ],
   });
 }
@@ -13617,7 +13617,7 @@ function connectLive() {
     if (msg.type === 'finding') onLiveFinding(msg.payload);
     else if (msg.type === 'agent-enrolled') onAgentEvent('enrolled', msg.payload);
     else if (msg.type === 'agent-status') onAgentEvent(msg.payload && msg.payload.status, msg.payload);
-    else if (msg.type === 'incident_cluster') onIncidentCluster(msg.payload);
+    else if (msg.type === 'event_cluster') onEventCluster(msg.payload);
   });
   sock.addEventListener('close', () => {
     liveWs = null;
@@ -13639,7 +13639,7 @@ function onAgentEvent(kind, payload) {
 // Live cross-agent cluster events (open/updated/resolved). Toast, and when the
 // Situations list is on screen, refresh it so the new/updated cluster shows;
 // otherwise the next REST fetch will pick it up.
-function onIncidentCluster(c) {
+function onEventCluster(c) {
   if (!c) return;
   if (c.status === 'resolved') toast('Situation resolved');
   else toast(`Cross-agent situation ${c.updated ? 'updated' : 'detected'}${c.confidence ? ` (${c.confidence} confidence)` : ''}`, c.confidence === 'high');
@@ -13667,19 +13667,19 @@ function onLiveFinding(f) {
 
 // ---- NIS2 Reporting Center ------------------------------------------------
 // A self-contained compliance module: readiness dashboard, risk register,
-// control evidence, security incidents, generated management reports and an
+// control evidence, security events, generated management reports and an
 // audit trail. Talks to /api/nis2/*; PDF export opens the server's print-ready
 // HTML in a new window (authed fetch → window.print), CSV downloads as a file.
 
 const NIS2_CATEGORIES = [
-  'Governance', 'Risk Management', 'Incident Response', 'Backup/Recovery', 'Access Control',
+  'Governance', 'Risk Management', 'Event Response', 'Backup/Recovery', 'Access Control',
   'Supplier Management', 'Network Security', 'Logging/Monitoring', 'Vulnerability Management', 'Documentation',
 ];
 const NIS2_RISK_STATUS = ['open', 'mitigating', 'accepted', 'closed'];
 const NIS2_CONTROL_STATUS = ['OK', 'Partial', 'Missing', 'Overdue'];
 const NIS2_FREQ = ['daily', 'weekly', 'monthly', 'quarterly', 'annually', 'ad-hoc'];
 const NIS2_SEVERITY = ['low', 'medium', 'high', 'critical'];
-const NIS2_INCIDENT_STATUS = ['open', 'investigating', 'contained', 'resolved', 'closed'];
+const NIS2_EVENT_STATUS = ['open', 'investigating', 'contained', 'resolved', 'closed'];
 
 const reportingState = { section: 'nis2' }; // 'nis2' (stationary) | 'generator' (custom)
 const nis2State = { tab: 'dashboard' };
@@ -13799,7 +13799,7 @@ async function nis2Dashboard() {
   const wrap = el('div');
 
   // First-run "get started" guide when there is no data yet.
-  if (!d.totals.risks && !d.totals.controls && !d.totals.incidents) {
+  if (!d.totals.risks && !d.totals.controls && !d.totals.events) {
     wrap.append(nis2GetStarted());
   }
 
@@ -13810,7 +13810,7 @@ async function nis2Dashboard() {
       el('div', { class: `nis2-gauge-v ${readinessClass}` }, `${d.readinessScore}%`),
       el('div', { class: 'nis2-gauge-bar' }, el('span', { class: readinessClass, style: `width:${d.readinessScore}%` }))),
     el('div', { class: 'nis2-gauge-label' }, el('strong', {}, 'NIS2 readiness'),
-      el('div', { class: 'muted' }, `${d.totals.controls} controls · ${d.totals.risks} risks · ${d.totals.incidents} incidents`))));
+      el('div', { class: 'muted' }, `${d.totals.controls} controls · ${d.totals.risks} risks · ${d.totals.events} events`))));
 
   wrap.append(nis2Explain(
     'A single self-assessment score for how prepared you are under the NIS2 directive — the mean of the ten risk-management areas below, each scored from how complete its controls’ evidence is.',
@@ -13823,8 +13823,8 @@ async function nis2Dashboard() {
       'Risks in the Critical band (likelihood × impact ≥ 15) still open or only being mitigated — each warrants a documented management decision.'),
     kpi('High/medium findings', d.openHighMediumFindings, '',
       'Open risks in the High or Medium band — the next tier to work down once the critical ones are handled.'),
-    kpi('Incidents (30 days)', d.incidentsLast30Days, '',
-      'Security incidents detected in the last 30 days. Any flagged “notification required” carry a reporting duty to the authority within the NIS2 (Art. 23) deadlines.'),
+    kpi('Events (30 days)', d.eventsLast30Days, '',
+      'Security events detected in the last 30 days. Any flagged “notification required” carry a reporting duty to the authority within the NIS2 (Art. 23) deadlines.'),
     kpi('Controls without evidence', d.controlsWithoutEvidence, d.controlsWithoutEvidence ? 'warn-text' : '',
       'Controls with no evidence reference on file (or marked Missing/Overdue). Evidence is what an auditor asks for — these are what pull the readiness score down.')));
 
@@ -14042,19 +14042,19 @@ async function nis2DeleteControl(c) {
   catch (err) { toast(errText(err), true); }
 }
 
-// ---- NIS2: Incidents -------------------------------------------------------
+// ---- NIS2: Events -------------------------------------------------------
 function nis2IncidentFields(i) {
   i = i || {};
   const dt = (v) => (v ? new Date(v).toISOString().slice(0, 16) : '');
   return [
-    { name: 'title', label: 'Title', value: i.title, hint: 'Short description of the incident.' },
-    selField('severity', 'Severity', NIS2_SEVERITY, i.severity || 'medium', 'Your impact assessment, low → critical. High/critical incidents surface in the Executive report.'),
+    { name: 'title', label: 'Title', value: i.title, hint: 'Short description of the event.' },
+    selField('severity', 'Severity', NIS2_SEVERITY, i.severity || 'medium', 'Your impact assessment, low → critical. High/critical events surface in the Executive report.'),
     selField('status', 'Status', NIS2_INCIDENT_STATUS, i.status || 'open', 'Where the incident is in its lifecycle: open → investigating → contained → resolved → closed.'),
     { name: 'detectedAt', label: 'Detected at', type: 'datetime-local', value: dt(i.detectedAt), hint: 'When you became aware of it — the moment the NIS2 (Art. 23) reporting deadlines start counting from.' },
-    { name: 'startedAt', label: 'Started at', type: 'datetime-local', value: dt(i.startedAt), hint: 'When the incident actually began, if known (may precede detection).' },
+    { name: 'startedAt', label: 'Started at', type: 'datetime-local', value: dt(i.startedAt), hint: 'When the event actually began, if known (may precede detection).' },
     { name: 'resolvedAt', label: 'Resolved at', type: 'datetime-local', value: dt(i.resolvedAt), hint: 'When normal service was restored.' },
-    selField('nis2Relevant', 'NIS2 relevant', yesNo(), String(!!i.nis2Relevant), 'Yes if the incident falls within the scope of the NIS2 directive for your organisation.'),
-    selField('notificationRequired', 'Notification required', yesNo(), String(!!i.notificationRequired), 'Yes if the incident is “significant” and must be reported to the authority/CSIRT. This is the duty that starts the 24-hour early warning / 72-hour notification / one-month final-report clock under NIS2 (Art. 23).'),
+    selField('nis2Relevant', 'NIS2 relevant', yesNo(), String(!!i.nis2Relevant), 'Yes if the event falls within the scope of the NIS2 directive for your organisation.'),
+    selField('notificationRequired', 'Notification required', yesNo(), String(!!i.notificationRequired), 'Yes if the event is “significant” and must be reported to the authority/CSIRT. This is the duty that starts the 24-hour early warning / 72-hour notification / one-month final-report clock under NIS2 (Art. 23).'),
     { name: 'affectedSystems', label: 'Affected systems', type: 'textarea', value: i.affectedSystems, hint: 'Which systems, services or sites were involved.' },
     { name: 'businessImpact', label: 'Business impact', type: 'textarea', value: i.businessImpact, hint: 'What it meant in practice — downtime, users/customers affected, data exposed. Needed for the authority notification.' },
     { name: 'rootCause', label: 'Root cause', type: 'textarea', value: i.rootCause, hint: 'What ultimately caused it, once known — required for the final report.' },
@@ -14081,7 +14081,7 @@ async function nis2Incidents() {
     el('button', { class: 'small ghost', onclick: () => nis2Print('/api/nis2/export/incident.html') }, '⤓ PDF'),
     canWrite() ? el('button', { class: 'small', onclick: () => nis2EditIncident() }, '+ New incident') : null));
   wrap.append(nis2Explain(
-    'Your log of significant security incidents — what happened, when it was detected, the systems and business affected, the root cause and the actions taken. These are incidents you record by hand, distinct from the network incidents derived automatically from probes.',
+    'Your log of significant security incidents — what happened, when it was detected, the systems and business affected, the root cause and the actions taken. These are incidents you record by hand, distinct from the network events BlueEyes derives automatically from probes.',
     'NIS2 (Article 23) makes incident notification a legal duty. Flag “Notification required” for a significant incident: you then owe the national CSIRT/authority an early warning within 24 hours, a full notification within 72 hours, and a final report within one month. Capturing the timeline, impact and root cause here is what lets you produce that report.'));
   if (!incidents.length) { wrap.append(el('div', { class: 'empty' }, 'No incidents recorded yet.')); return wrap; }
   const head = ['Ref', 'Title', 'Severity', 'Detected', 'Status', 'NIS2', 'Notify', ''];
@@ -14117,7 +14117,7 @@ async function nis2DeleteIncident(i) {
 // ---- NIS2: Reports ---------------------------------------------------------
 const NIS2_REPORT_TYPES = [
   ['executive', 'Executive Report'], ['readiness', 'Readiness Report'],
-  ['risk', 'Risk Register Report'], ['control', 'Control Evidence Report'], ['incident', 'Incident Report'],
+  ['risk', 'Risk Register Report'], ['control', 'Control Evidence Report'], ['event', 'Event Report'],
 ];
 async function nis2Reports() {
   const reports = await api('/api/nis2/reports');
@@ -14128,7 +14128,7 @@ async function nis2Reports() {
     canWrite() ? el('button', { class: 'small', onclick: () => nis2GenerateReport() }, '+ Generate report') : null));
 
   wrap.append(nis2Explain(
-    'Point-in-time management reports — Executive, Readiness, Risk, Control or Incident — built from the current data and viewable as a print-ready PDF for the board or the authority.',
+    'Point-in-time management reports — Executive, Readiness, Risk, Control or Event — built from the current data and viewable as a print-ready PDF for the board or the authority.',
     'Each report freezes today’s metrics, so the next report of the same type can show the trend (“since last report”). An admin/compliance role signs a report off by approving the draft — the record that it was reviewed.'));
 
   if (!reports.length) wrap.append(el('div', { class: 'empty' }, 'No reports generated yet.'));
@@ -14152,13 +14152,13 @@ async function nis2Reports() {
   return wrap;
 }
 function nis2PrintReportType(type) {
-  const map = { executive: 'executive', readiness: 'readiness', risk: 'risk', control: 'control', incident: 'incident' };
+  const map = { executive: 'executive', readiness: 'readiness', risk: 'risk', control: 'control', event: 'event' };
   nis2Print(`/api/nis2/export/${map[type] || 'executive'}.html`);
 }
 function nis2GenerateReport() {
   nis2Modal('Generate report', [
     selField('reportType', 'Report type', NIS2_REPORT_TYPES.map((t) => ({ value: t[0], label: t[1] })), 'executive',
-      'Executive = board summary + trend · Readiness = the scorecard · Risk / Control / Incident = the full register for that area.'),
+      'Executive = board summary + trend · Readiness = the scorecard · Risk / Control / Event = the full register for that area.'),
     { name: 'title', label: 'Title (optional)', value: '', hint: 'Leave blank to use a sensible default for the chosen type.' },
   ], async (v) => {
     await api('/api/nis2/reports', { method: 'POST', body: { reportType: v.reportType, title: v.title || undefined } });
@@ -14298,8 +14298,8 @@ function nis2GetStarted() {
         canWrite() ? el('button', { class: 'small', onclick: goto('controls') }, 'Go to Controls') : null),
       step(2, 'Build the risk register', 'Capture risks with likelihood × impact; the score and band are computed for you.',
         canWrite() ? el('button', { class: 'small', onclick: goto('risks') }, 'Go to Risk Register') : null),
-      step(3, 'Log security incidents', 'Record incidents and flag the ones that may carry a NIS2 notification obligation.',
-        canWrite() ? el('button', { class: 'small', onclick: goto('incidents') }, 'Go to Incidents') : null),
+      step(3, 'Log security events', 'Record events and flag the ones that may carry a NIS2 notification obligation.',
+        canWrite() ? el('button', { class: 'small', onclick: goto('events') }, 'Go to Events') : null),
       step(4, 'Generate a report', 'Produce an executive/readiness report (PDF), or build a custom one in the Report Generator.',
         el('button', { class: 'small ghost', onclick: goto('reports') }, 'Go to Reports'))));
   if (canWrite()) {
@@ -14453,19 +14453,19 @@ PAGE_INFO.reporting = {
   body: () => [
     el('p', {}, 'Two ways to report:'),
     el('h4', {}, 'NIS2'),
-    el('p', {}, 'A stationary module with fixed parameters: a readiness dashboard, risk register, control evidence, security incidents, generated management/executive reports and an audit trail.'),
+    el('p', {}, 'A stationary module with fixed parameters: a readiness dashboard, risk register, control evidence, security events, generated management/executive reports and an audit trail.'),
     el('h4', {}, 'Report Generator'),
-    el('p', {}, 'Build your own report from selectable sections (readiness summary, category status, risks, controls, incidents, and — for admins — the audit trail). Set per-section filters and choose the columns, then preview on screen or export as PDF, CSV or JSON.'),
+    el('p', {}, 'Build your own report from selectable sections (readiness summary, category status, risks, controls, events, and — for admins — the audit trail). Set per-section filters and choose the columns, then preview on screen or export as PDF, CSV or JSON.'),
     el('h4', {}, 'Inside NIS2 — Dashboard'),
     el('p', {}, 'A single readiness percentage (the mean of the ten category scores, each derived from its controls’ evidence health), plus headline counts and the top recommended actions.'),
     el('h4', {}, 'Risk register'),
     el('p', {}, 'Your inventory of cyber risks to the systems in scope, each scored likelihood × impact (1–25) and banded Low/Medium/High/Critical, with an owner and treatment status. NIS2 (Article 21) requires risk-based security measures — this register is the evidence that risks are identified, assessed and being treated. Export to CSV or PDF.'),
     el('h4', {}, 'Controls'),
     el('p', {}, 'The recurring technical and organisational security measures you operate (backups, patching, access reviews, logging…), each tied to a NIS2 area with an owner, a cadence and an evidence reference. NIS2 (Article 21) requires these measures to be kept effective; the evidence is what an auditor asks for, so controls lacking it — or marked Missing/Overdue — are flagged.'),
-    el('h4', {}, 'Incidents'),
-    el('p', {}, 'Security incidents you record by hand (distinct from the network incidents derived automatically from probes), with timeline, impact and root cause. Flag “notification required” for a significant incident — NIS2 (Article 23) then obliges you to alert the national CSIRT/authority within 24 hours, file a full notification within 72 hours and a final report within one month.'),
+    el('h4', {}, 'Events'),
+    el('p', {}, 'Security events you record by hand (distinct from the network events derived automatically from probes), with timeline, impact and root cause. Flag “notification required” for a significant event — NIS2 (Article 23) then obliges you to alert the national CSIRT/authority within 24 hours, file a full notification within 72 hours and a final report within one month.'),
     el('h4', {}, 'Reports & audit'),
-    el('p', {}, 'Generate snapshot reports (the frozen metrics let the next report show the trend). Reports are approved by an admin/compliance role. Every change to a risk, control or incident is written to the audit trail.'),
+    el('p', {}, 'Generate snapshot reports (the frozen metrics let the next report show the trend). Reports are approved by an admin/compliance role. Every change to a risk, control or event is written to the audit trail.'),
     el('p', { class: 'muted' }, 'PDF export opens a clean, print-ready document — use your browser’s “Save as PDF”.'),
     el('h4', {}, 'Audit (admin only)'),
     el('p', {}, 'A server-wide audit trail: which user did what (login, and every create/update/delete) and what each agent performed (traffic measurements, probes) — each with when, who and what. Repeated activity such as continuous reporting or scheduled probes is recorded once and annotated “Repeats every …” rather than spamming the log. Visible only to administrators; exportable to CSV.'),

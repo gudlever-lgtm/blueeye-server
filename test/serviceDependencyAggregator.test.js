@@ -114,7 +114,7 @@ test('Top-N is per host, not global', () => {
 test('Top-N counts BOTH directions: a heavy inbound edge survives a busy source', () => {
   // Host 1 (source) has three outbound edges heavier than 1→2, so a source-only
   // Top-2 would drop 1→2. But host 2's ONLY relationship is 1→2, so counting the
-  // destination's incident edges keeps it.
+  // destination's event edges keeps it.
   const agents = [
     { id: 1, capabilities: { ips: ['10.0.0.1'] } },
     { id: 2, capabilities: { ips: ['10.0.0.2'] } },

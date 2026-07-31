@@ -26,10 +26,10 @@ send(integration, event), test(integration) }`, registered in `connectors/index.
 fetch is injected (tests run offline) and every call is bounded by a timeout
 (`src/integrations/httpClient.js`).
 
-- **servicenow** — creates/updates a ServiceNow **Incident** (REST Table API) on a
+- **servicenow** — creates/updates a ServiceNow **Event** (REST Table API) on a
   NIS2-incident (CRIT finding) or anomaly. Auth Basic or OAuth2 (Bearer). BlueEyes
   severity → impact/urgency (`CRIT→1/1`, `WARN→2/2`, `INFO→3/3`). **Idempotent via
-  `correlation_id`**: it looks up an existing incident by correlation id and PATCHes
+  `correlation_id`**: it looks up an existing event by correlation id and PATCHes
   it instead of opening a duplicate.
 - **nautobot** — **one-way** sync of agents → Nautobot **devices** (REST API, token
   auth). Looks a device up by name and PATCHes or POSTs it. Required device fields
@@ -65,8 +65,8 @@ Domain events are emitted here and fanned out to every **enabled** integration w
 connector subscribes to that event type (`config.events` overrides the connector
 default). Events:
 
-- `incident` / `anomaly` — from the analysis + probe pipelines (a CRIT finding is an
-  incident, anything else an anomaly). The `correlation_id` is **stable** per
+- `event` / `anomaly` — from the analysis + probe pipelines (a CRIT finding is an
+  event, anything else an anomaly). The `correlation_id` is **stable** per
   `(host, metric, kind)` so a recurring condition updates one ticket.
 - `agent.enroll` / `agent.delete` — from the enrollment + agent-delete routes.
 

@@ -45,10 +45,10 @@ test('resolveState → surfaces partial + failedSources (empty AND ready)', () =
   assert.equal(empty.partial, true);
   assert.deepEqual(empty.failedSources, ['findings']);
 
-  const ready = TV.resolveState({ data: { events: [{ timestamp: 't' }], partial: true, failedSources: ['incidents'] } });
+  const ready = TV.resolveState({ data: { events: [{ timestamp: 't' }], partial: true, failedSources: ['events'] } });
   assert.equal(ready.state, 'ready');
   assert.equal(ready.partial, true);
-  assert.deepEqual(ready.failedSources, ['incidents']);
+  assert.deepEqual(ready.failedSources, ['events']);
 });
 
 // ---- rowModel + severity/source mapping -----------------------------------
@@ -74,11 +74,12 @@ test('sourceLabel covers every source the feeds emit + fallback', () => {
   assert.equal(TV.sourceLabel('playbook'), 'Playbook');
   assert.equal(TV.sourceLabel('mystery'), 'mystery');
   // The operator-facing unit is an EVENT; `probe` is the active-probe outage and
-  // `cluster` is a Situation. Two records that used to share the label "Incident".
+  // `cluster` is a Situation. Two records that used to share the label "Event".
   assert.equal(TV.sourceLabel('event'), 'Event');
   assert.equal(TV.sourceLabel('probe'), 'Probe outage');
   assert.equal(TV.sourceLabel('cluster'), 'Situation');
-  // Legacy keys still resolve, so a cached payload never renders a table name.
+  // Pre-rename keys still resolve, so a payload cached by an older dashboard
+  // never renders a raw table name.
   assert.equal(TV.sourceLabel('incident_case'), 'Event');
   assert.equal(TV.sourceLabel('incident'), 'Event');
 });
@@ -170,7 +171,7 @@ test('deepLink targets the agent detail view, carrying source + refId', () => {
 // ---- partialNotice --------------------------------------------------------
 
 test('partialNotice names the failed sources and is never empty', () => {
-  assert.match(TV.partialNotice(['findings', 'incidents']), /findings, incidents/);
+  assert.match(TV.partialNotice(['findings', 'events']), /findings, events/);
   assert.match(TV.partialNotice([]), /some sources/);
 });
 
@@ -279,7 +280,7 @@ test('renderRow: an event row is labelled Event, never with a table name', () =>
     summary: 'CRIT probe.latency on core-sw (Copenhagen HQ)', ref_id: 3,
   }, {});
   assert.equal(li.querySelector('.tl-src').textContent, 'Event');
-  assert.ok(!li.textContent.includes('incident_case'));
+  assert.ok(!li.textContent.includes('event_case'));
   // `open` is a status the summary does not carry, so the chip earns its place —
   // and "Copenhagen" must not suppress it just for containing the letters.
   assert.equal(li.querySelector('.tl-type').textContent, 'open');

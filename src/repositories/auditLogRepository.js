@@ -121,13 +121,20 @@ function createAuditLogRepository(db) {
     return distinctCategories(pool);
   }
 
-  // Oldest-first events for one target (e.g. all transitions on an incident),
-  // optionally scoped to a category. Chronological, for the incident timeline
+  // Oldest-first events for one target (e.g. all transitions on an event),
+  // optionally scoped to a category. Chronological, for the event timeline
   // read-model (manual + automatic status changes are recorded here).
+  // `category` accepts a string or an array. An array is how a renamed category
+  // still reads its own history: the rows are hash-chained, so rewriting the old
+  // value is not an option — the read has to match both.
   async function listByTarget({ category = null, target, limit = 200 } = {}) {
     const where = ['target = ?'];
     const params = [String(target).slice(0, 255)];
-    if (category) { where.push('category = ?'); params.push(String(category).slice(0, 32)); }
+    const cats = (Array.isArray(category) ? category : [category])
+      .filter((c) => c != null && c !== '')
+      .map((c) => String(c).slice(0, 32));
+    if (cats.length === 1) { where.push('category = ?'); params.push(cats[0]); }
+    else if (cats.length > 1) { where.push(`category IN (${cats.map(() => '?').join(', ')})`); params.push(...cats); }
     params.push(clampLimit(limit, 200, 2000));
     const [rows] = await pool.query(
       `SELECT ${COLS} FROM audit_log WHERE ${where.join(' AND ')} ORDER BY id ASC LIMIT ?`,

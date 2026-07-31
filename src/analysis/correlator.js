@@ -1,7 +1,7 @@
 'use strict';
 
 // Root-cause hinting. Groups findings that fired close together in time on the
-// same host into a single "incident", and uses a CONFIGURABLE dependency graph
+// same host into a single "event", and uses a CONFIGURABLE dependency graph
 // (src/analysis/dependency-graph.json — never hardcoded here) to pick the most
 // likely upstream cause among them. Everything stays local and explainable: no
 // ML, just time clustering + a directed graph walk, with a plain-English hint.

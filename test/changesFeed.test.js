@@ -15,7 +15,7 @@ const {
   buildChangeFeed,
   fromAgentEvents,
   fromFindings,
-  fromProbeIncidents,
+  fromProbeEvents,
   fromEvents,
   rollUpFindings,
   collapseRecurring,
@@ -32,7 +32,7 @@ const nameFor = (id) => `agent-${id}`;
 
 // ---------------------------------------------------------- severity spelling
 test('normalizeSeverity folds the sources differing spellings together', () => {
-  // Probe incidents say warning/critical; findings say WARN/CRIT.
+  // Probe events say warning/critical; findings say WARN/CRIT.
   assert.equal(normalizeSeverity('critical'), 'CRIT');
   assert.equal(normalizeSeverity('CRIT'), 'CRIT');
   assert.equal(normalizeSeverity('warning'), 'WARN');
@@ -59,9 +59,9 @@ test('fromAgentEvents reports the direction of the transition', () => {
   assert.ok(events.every((e) => e.kind === 'agent_state'));
 });
 
-test('fromProbeIncidents emits BOTH the open and the resolve when each falls in the window', () => {
+test('fromProbeEvents emits BOTH the open and the resolve when each falls in the window', () => {
   // "The link came back" matters to a handover exactly as much as "it went down".
-  const events = fromProbeIncidents([{
+  const events = fromProbeEvents([{
     id: 5, agentId: 7, metric: 'reachability', severity: 'critical',
     affectedTarget: '8.8.8.8',
     startedAt: '2026-07-28T07:00:00.000Z',
@@ -69,7 +69,7 @@ test('fromProbeIncidents emits BOTH the open and the resolve when each falls in 
   }], { from: FROM, to: TO, nameFor });
 
   assert.equal(events.length, 2);
-  // Source/kind is `probe`, not `incident`: this is the active-probe outage
+  // Source/kind is `probe`, not `event`: this is the active-probe outage
   // record, NOT the operator-facing event, and the two used to collide on one
   // label. See docs/events.md.
   assert.ok(events.every((e) => e.kind === 'probe' && e.source === 'probe'));
@@ -80,10 +80,10 @@ test('fromProbeIncidents emits BOTH the open and the resolve when each falls in 
   assert.match(events[1].summary, /recovered/);
 });
 
-test('fromProbeIncidents omits a transition that fell outside the window', () => {
-  // An incident that opened before the window and is still open contributes
+test('fromProbeEvents omits a transition that fell outside the window', () => {
+  // An event that opened before the window and is still open contributes
   // nothing: nothing about it CHANGED while the user was away.
-  const events = fromProbeIncidents([{
+  const events = fromProbeEvents([{
     id: 5, agentId: 7, metric: 'latency', severity: 'warning', affectedTarget: 'x',
     startedAt: '2026-07-01T00:00:00.000Z',
     resolvedAt: null,
@@ -91,8 +91,8 @@ test('fromProbeIncidents omits a transition that fell outside the window', () =>
   assert.deepEqual(events, []);
 });
 
-test('fromProbeIncidents emits only the resolve when the open predates the window', () => {
-  const events = fromProbeIncidents([{
+test('fromProbeEvents emits only the resolve when the open predates the window', () => {
+  const events = fromProbeEvents([{
     id: 5, agentId: 7, metric: 'latency', severity: 'warning', affectedTarget: 'x',
     startedAt: '2026-07-01T00:00:00.000Z',
     resolvedAt: '2026-07-28T08:00:00.000Z',
@@ -132,7 +132,7 @@ test('mappers survive empty and missing input', () => {
     assert.deepEqual(fn(null), []);
     assert.deepEqual(fn([]), []);
   }
-  assert.deepEqual(fromProbeIncidents(null, { from: FROM, to: TO }), []);
+  assert.deepEqual(fromProbeEvents(null, { from: FROM, to: TO }), []);
 });
 
 // ------------------------------------------------------------- current state
@@ -309,7 +309,7 @@ test('rollUpFindings keeps an anomaly whose event is NOT on this feed', () => {
 });
 
 test('rollUpFindings also matches on the primary finding, not just the FK', () => {
-  // The case is created FROM the finding, so findings.incident_case_id can still
+  // The case is created FROM the finding, so findings.event_case_id can still
   // be unwritten on the very first anomaly. primary_finding_id catches that race.
   const rows = rollUpFindings([
     { ...eventEv({ refId: 3 }), primaryFindingId: 'f1' },

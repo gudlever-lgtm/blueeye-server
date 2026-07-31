@@ -69,7 +69,7 @@ test('event subscription: a connector only receives events it subscribes to', as
   const conn = { type: 'svc', defaultEvents: ['incident'], send: async () => { calls += 1; return { ok: true, status: 200 }; } };
   const d = createIntegrationsDispatcher({ integrationsRepo: repoEnabled([integration(box)]), auditRepo: makeIntegrationAuditRepo(), secretBox: box, registry: registryOf({ svc: conn }) });
 
-  await d.emitFinding(critFinding); // -> incident (subscribed)
+  await d.emitFinding(critFinding); // -> event (subscribed)
   await d.emitFinding(warnFinding); // -> anomaly (NOT subscribed)
   assert.equal(calls, 1);
 });
@@ -79,7 +79,7 @@ test('config.events overrides the connector default subscription', async () => {
   let calls = 0;
   const conn = { type: 'svc', defaultEvents: ['incident'], send: async () => { calls += 1; return { ok: true, status: 200 }; } };
   const d = createIntegrationsDispatcher({ integrationsRepo: repoEnabled([integration(box, { config_json: { events: ['anomaly'] } })]), auditRepo: makeIntegrationAuditRepo(), secretBox: box, registry: registryOf({ svc: conn }) });
-  await d.emitFinding(critFinding); // incident — not in override
+  await d.emitFinding(critFinding); // event — not in override
   await d.emitFinding(warnFinding); // anomaly — in override
   assert.equal(calls, 1);
 });

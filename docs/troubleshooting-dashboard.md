@@ -14,7 +14,7 @@ its own API and its own tests:
 | Blast radius | derived — no table | `GET /api/topology/blast-radius/:node` |
 | Flow-pair baselining | `flow_pair_hourly` · `flow_pair_baselines` (mig 068) | `GET /api/topology/flow-baselines` |
 | Active discovery | `discovered_devices` (mig 069) | `GET /api/discovery/candidates` |
-| Cross-agent correlation (the rollup) | `incident_clusters` (mig 057/058/060/064) | `GET /api/incident-clusters` |
+| Cross-agent correlation (the rollup) | `event_clusters` (mig 057/058/060/064) | `GET /api/event-clusters` |
 
 **No new tables, no new migrations.** Everything is computed on read.
 

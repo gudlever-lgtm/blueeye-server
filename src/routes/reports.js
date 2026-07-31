@@ -6,20 +6,20 @@ const { requireAuth, requireRole } = require('../auth/middleware');
 const { requirePlanFeature } = require('../license/features');
 const { ROLES } = require('../auth/roles');
 const { parseId } = require('../validation/locationValidation');
-const { validateReportRange, validateSeverityFilter } = require('../validation/incidentValidation');
-const { nis2Draft } = require('../incidents/nis2');
+const { validateReportRange, validateSeverityFilter } = require('../validation/probeOutageValidation');
+const { nis2Draft } = require('../probeOutages/nis2');
 const { toCsv } = require('../lib/csv');
 const { renderReportHtml } = require('../lib/reportHtml');
 
-// Reporting endpoints over derived incidents + probe availability. All under the
-// existing user-JWT auth: availability + incident listing are viewer+, the NIS2
+// Reporting endpoints over derived probe outages + probe availability. All under the
+// existing user-JWT auth: availability + outage listing are viewer+, the NIS2
 // draft (a regulator-facing document) is operator+.
 //
 // Downloadable exports are licence-gated: CSV behind `reports_csv` and the
 // print-ready HTML (Print → PDF) behind `reports_pdf`. The JSON read endpoints
 // stay ungated as part of "Basic reports". featureGate/planService are optional
 // so a server wired without the plan layer keeps the JSON endpoints working.
-function createReportsRouter({ probeResultsRepo, incidentsRepo, locationsRepo, featureGate = null, planService = null, auditLogger = null }) {
+function createReportsRouter({ probeResultsRepo, probeOutagesRepo, locationsRepo, featureGate = null, planService = null, auditLogger = null }) {
   const router = express.Router();
   const reader = requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN);
   const csvGate = requirePlanFeature({ featureGate, planService }, 'reports_csv');
@@ -49,7 +49,7 @@ function createReportsRouter({ probeResultsRepo, incidentsRepo, locationsRepo, f
     return { range, loc, rows };
   }
 
-  async function loadIncidents(req) {
+  async function loadProbeOutages(req) {
     const { value: range, errors } = validateReportRange(req.query);
     if (errors) return { error: { status: 400, body: { error: 'Validation failed', details: errors } } };
     const sev = validateSeverityFilter(req.query.severity);
@@ -60,7 +60,7 @@ function createReportsRouter({ probeResultsRepo, incidentsRepo, locationsRepo, f
       const location = await locationsRepo.findById(loc.value);
       if (!location) return { error: { status: 404, body: { error: 'Location not found' } } };
     }
-    const rows = await incidentsRepo.list({ from: range.from, to: range.to, severity: sev.value, locationId: loc.value });
+    const rows = await probeOutagesRepo.list({ from: range.from, to: range.to, severity: sev.value, locationId: loc.value });
     return { range, loc, sev, rows };
   }
 
@@ -73,7 +73,7 @@ function createReportsRouter({ probeResultsRepo, incidentsRepo, locationsRepo, f
     { key: 'down', label: 'Down' },
     { key: 'total', label: 'Samples' },
   ];
-  const INCIDENT_COLUMNS = [
+  const PROBE_OUTAGE_COLUMNS = [
     { key: 'id', label: 'ID' },
     { key: 'location_name', label: 'Location' },
     { key: 'agent_name', label: 'Agent' },
@@ -89,7 +89,7 @@ function createReportsRouter({ probeResultsRepo, incidentsRepo, locationsRepo, f
     location_name: r.locationName ?? '(unassigned)', agent_name: r.agentName,
     uptime_pct: r.uptimePct == null ? '' : r.uptimePct, up: r.up, down: r.down, total: r.total,
   });
-  const incidentRow = (r) => ({
+  const probeOutageRow = (r) => ({
     id: r.id, location_name: r.location_name ?? '(unassigned)', agent_name: r.agent_name,
     metric: r.metric, severity: r.severity, started_at: r.started_at, resolved_at: r.resolved_at ?? '(ongoing)',
     duration_seconds: r.duration_seconds ?? '', affected_target: r.affected_target ?? '',
@@ -143,42 +143,44 @@ function createReportsRouter({ probeResultsRepo, incidentsRepo, locationsRepo, f
     }));
   }));
 
-  // ---- Incidents ----------------------------------------------------------
-  // GET /api/reports/incidents?from=&to=&severity=&location_id= — viewer+ (JSON).
-  router.get('/incidents', requireAuth, reader, asyncHandler(async (req, res) => {
-    const out = await loadIncidents(req);
+  // ---- Probe outages ----------------------------------------------------
+  // GET /api/reports/probe-outages?from=&to=&severity=&location_id= — viewer+ (JSON).
+  router.get('/probe-outages', requireAuth, reader, asyncHandler(async (req, res) => {
+    const out = await loadProbeOutages(req);
     if (out.error) return res.status(out.error.status).json(out.error.body);
-    res.json({ from: out.range.from.toISOString(), to: out.range.to.toISOString(), severity: out.sev.value, locationId: out.loc.value, incidents: out.rows });
+    res.json({ from: out.range.from.toISOString(), to: out.range.to.toISOString(), severity: out.sev.value, locationId: out.loc.value, probeOutages: out.rows });
   }));
 
-  // GET /api/reports/incidents.csv — CSV export (reports_csv).
-  router.get('/incidents.csv', requireAuth, reader, csvGate, asyncHandler(async (req, res) => {
-    const out = await loadIncidents(req);
+  // GET /api/reports/probe-outages.csv — CSV export (reports_csv).
+  router.get('/probe-outages.csv', requireAuth, reader, csvGate, asyncHandler(async (req, res) => {
+    const out = await loadProbeOutages(req);
     if (out.error) return res.status(out.error.status).json(out.error.body);
-    await auditExport(req, 'csv', 'incidents', out.range);
-    return sendCsv(res, 'blueeye-incidents', INCIDENT_COLUMNS, out.rows.map(incidentRow));
+    await auditExport(req, 'csv', 'probe-outages', out.range);
+    return sendCsv(res, 'blueeye-probe-outages', PROBE_OUTAGE_COLUMNS, out.rows.map(probeOutageRow));
   }));
 
-  // GET /api/reports/incidents.html — print-ready report → PDF (reports_pdf).
-  router.get('/incidents.html', requireAuth, reader, pdfGate, asyncHandler(async (req, res) => {
-    const out = await loadIncidents(req);
+  // GET /api/reports/probe-outages.html — print-ready report → PDF (reports_pdf).
+  router.get('/probe-outages.html', requireAuth, reader, pdfGate, asyncHandler(async (req, res) => {
+    const out = await loadProbeOutages(req);
     if (out.error) return res.status(out.error.status).json(out.error.body);
-    await auditExport(req, 'pdf', 'incidents', out.range);
+    await auditExport(req, 'pdf', 'probe-outages', out.range);
     return sendHtml(res, renderReportHtml({
-      title: 'BlueEyes — Incident report',
+      title: 'BlueEyes — Probe outage report',
       subtitle: `${out.range.from.toISOString().slice(0, 10)} – ${out.range.to.toISOString().slice(0, 10)}`,
-      columns: INCIDENT_COLUMNS, rows: out.rows.map(incidentRow),
+      columns: PROBE_OUTAGE_COLUMNS, rows: out.rows.map(probeOutageRow),
     }));
   }));
 
-  // GET /api/reports/nis2-draft/:incident_id — one incident as an English CFCS
-  // notification draft. operator+ (regulator-facing document).
-  router.get('/nis2-draft/:incident_id', requireAuth, requireRole(ROLES.OPERATOR, ROLES.ADMIN), asyncHandler(async (req, res) => {
-    const id = parseId(req.params.incident_id);
-    if (id === null) return res.status(400).json({ error: 'incident_id must be a positive integer' });
-    const incident = await incidentsRepo.findById(id);
-    if (!incident) return res.status(404).json({ error: 'Incident not found' });
-    res.json({ incidentId: incident.id, incident, draft: nis2Draft(incident) });
+  // GET /api/reports/nis2-draft/:probe_outage_id — one probe outage as an English
+  // CFCS notification draft. operator+ (regulator-facing document). The draft
+  // itself says "incident" throughout: that is the word the NIS2 directive uses,
+  // and a regulator reads it against that wording.
+  router.get('/nis2-draft/:probe_outage_id', requireAuth, requireRole(ROLES.OPERATOR, ROLES.ADMIN), asyncHandler(async (req, res) => {
+    const id = parseId(req.params.probe_outage_id);
+    if (id === null) return res.status(400).json({ error: 'probe_outage_id must be a positive integer' });
+    const outage = await probeOutagesRepo.findById(id);
+    if (!outage) return res.status(404).json({ error: 'Probe outage not found' });
+    res.json({ probeOutageId: outage.id, probeOutage: outage, draft: nis2Draft(outage) });
   }));
 
   return router;

@@ -97,7 +97,7 @@ function createVerificationService({
     if (auditLogger && typeof auditLogger.record === 'function') {
       try {
         await auditLogger.record(null, {
-          category: 'incident', action, target: String(run.clusterId),
+          category: 'event', action, target: String(run.clusterId),
           actorEmail: 'system', actorRole: 'system', detail,
         });
       } catch (err) { logger.warn(`verification: audit failed (${err.message})`); }

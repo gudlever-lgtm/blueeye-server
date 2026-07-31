@@ -8,7 +8,7 @@ const { ROLES } = require('../auth/roles');
 const { buildAdvancedDashboard } = require('../dashboard/advancedDashboard');
 
 // "Open issues" rollup for the Overview page (license feature
-// `dashboard_advanced`, Professional+): the active incidents and recent
+// `dashboard_advanced`, Professional+): the active events and recent
 // analysis findings, composed from data the server already holds. viewer+,
 // gated end-to-end: below Professional the route returns the documented 403
 // upgrade contract ({ success:false, error:'feature_not_available', feature,
@@ -16,8 +16,8 @@ const { buildAdvancedDashboard } = require('../dashboard/advancedDashboard');
 //
 //   GET /api/dashboard/advanced — the aggregated widget payload.
 function createDashboardRouter({
-  incidentsRepo = null,
-  incidentCasesRepo = null,
+  probeOutagesRepo = null,
+  eventCasesRepo = null,
   findingStore = null,
   featureGate,
   planService,
@@ -32,14 +32,14 @@ function createDashboardRouter({
     gate,
     asyncHandler(async (req, res) => {
       const now = Date.now();
-      // Incidents + findings are best-effort dimensions — a read failure just
+      // Events + findings are best-effort dimensions — a read failure just
       // drops that widget rather than sinking the panel.
-      const [incidents, findings, incidentCases] = await Promise.all([
-        incidentsRepo && incidentsRepo.list ? incidentsRepo.list().catch((err) => { req.log.warn(`dashboard: incidents read failed (${err.message}); dropping widget`); return []; }) : Promise.resolve([]),
+      const [probeOutages, findings, eventCases] = await Promise.all([
+        probeOutagesRepo && probeOutagesRepo.list ? probeOutagesRepo.list().catch((err) => { req.log.warn(`dashboard: probe-outages read failed (${err.message}); dropping widget`); return []; }) : Promise.resolve([]),
         findingStore && findingStore.list ? findingStore.list().catch((err) => { req.log.warn(`dashboard: findings read failed (${err.message}); dropping widget`); return []; }) : Promise.resolve([]),
-        incidentCasesRepo && incidentCasesRepo.list ? incidentCasesRepo.list({ limit: 200 }).catch((err) => { req.log.warn(`dashboard: incident-cases read failed (${err.message}); dropping widget`); return []; }) : Promise.resolve([]),
+        eventCasesRepo && eventCasesRepo.list ? eventCasesRepo.list({ limit: 200 }).catch((err) => { req.log.warn(`dashboard: event-cases read failed (${err.message}); dropping widget`); return []; }) : Promise.resolve([]),
       ]);
-      res.json(buildAdvancedDashboard({ incidents, findings, incidentCases, now }));
+      res.json(buildAdvancedDashboard({ probeOutages, findings, eventCases, now }));
     })
   );
 

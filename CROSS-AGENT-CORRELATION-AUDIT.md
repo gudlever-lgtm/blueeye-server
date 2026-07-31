@@ -18,7 +18,7 @@ Produced for the "BlueEyes — Cross-Agent Pattern Correlation" task, Step 0.
 2. **Existing correlator** — pure, in-memory, **per-host** greedy time-clustering with a
    metric→metric dependency graph. Persists links back onto each finding's
    `correlated_with` JSON; it does **not** create a cluster entity. A parallel
-   **incident_cases** grouping already exists (also per-device). Cross-agent module must
+   **event_cases** grouping already exists (also per-device). Cross-agent module must
    mirror this style, not fork it (see §2).
 3. **Topology proximity (Step 1, signal 2)** — ⚠️ **STOP-AND-REPORT TRIGGER FIRES.**
    Subnet / VLAN / LLDP-adjacency data **does not exist** in the server or in what agents
@@ -28,7 +28,7 @@ Produced for the "BlueEyes — Cross-Agent Pattern Correlation" task, Step 0.
    topology source.** Needs your approval on which way to go (see §3).
 4. **WebSocket push** — findings are broadcast fleet-wide over `/ws/dashboard` via
    `publishFinding(hostId, {type:'finding', payload})`. Cluster events can reuse the exact
-   same channel with a new `type` (e.g. `incident_cluster`) — no new socket (see §4).
+   same channel with a new `type` (e.g. `event_cluster`) — no new socket (see §4).
 5. **Alert dedup (Step 3)** — the dispatcher only keeps an **in-memory** throttle map; it
    has no persistent "which finding-level alerts were already sent" record. Referencing
    already-sent member alerts is possible by listing member finding ids, but a *clean*
@@ -56,15 +56,15 @@ Produced by `src/analysis/detector.js`, mapped for reads in `src/analysis/findin
   explanation:   string,          // REQUIRED non-empty (save() throws otherwise)
   evidence:      Sample[],        // REQUIRED >= 1 (save() throws otherwise); JSON, each has ts
   correlatedWith:string[],        // ids of co-clustered findings (per-host correlator)
-  incidentCaseId:number|null,     // migration 048 FK → incident_cases
+  eventCaseId:number|null,     // migration 048 FK → event_cases
   createdAt:     Date,
   acked:         boolean,
 }
 ```
 
 ### Persistence
-- Table `findings` (migration `009_*`; `048_add_incident_case_to_findings.sql` added the
-  nullable `incident_case_id` FK, `ON DELETE SET NULL`).
+- Table `findings` (migration `009_*`; `048_add_event_case_to_findings.sql` added the
+  nullable `event_case_id` FK, `ON DELETE SET NULL`).
 - Store: `src/analysis/findings.js` → class `FindingStore({ db })` (uses the shared
   `db.pool`, not a new connection). Methods:
   - `save(finding)` — **validates**: `explanation` non-empty string **and** `evidence`
@@ -73,13 +73,13 @@ Produced by `src/analysis/detector.js`, mapped for reads in `src/analysis/findin
   - `list(hostId, since, limit)` — newest-first, capped at `MAX_LIST=5000`. `hostId`
     optional; **omitting it lists across ALL hosts** (this is exactly what a cross-agent
     detector needs).
-  - `listByIncidentCase(id)`, `get(id)`, `ack(id)`, `setCorrelations(id, ids)`,
-    `setIncidentCase(id, caseId)`.
+  - `listByEventCase(id)`, `get(id)`, `ack(id)`, `setCorrelations(id, ids)`,
+    `setEventCase(id, caseId)`.
 - **No mutable lifecycle**: a finding is an append-only event row. The only state you can
-  change is `acked` (operator ack) and its correlation/incident linkage. There is **no
+  change is `acked` (operator ack) and its correlation/event linkage. There is **no
   `resolved`/`cleared` flag and no "finding cleared" event** anywhere. Consequence for
   Step 1 resolution: "when member findings clear/resolve" has to be *derived*
-  (inactivity-based, or off the member findings' `incident_case` status), because findings
+  (inactivity-based, or off the member findings' `event_case` status), because findings
   never emit a clear. See §5.
 
 ### How the correlator reads/writes findings today
@@ -119,18 +119,18 @@ Module: `src/analysis/correlator.js` → `createCorrelator({ graph }).correlate(
   (time→low, time+topology→medium, time+topology+type→high).
 
 ### A second, parallel grouper already exists — do NOT add a third pattern
-`src/incidentCases/incidentCaseService.js` (`assignFinding`) groups findings into the
-persisted **`incident_cases`** entity — but still **per device** (`findOpenByHost(host)`),
+`src/eventCases/eventCaseService.js` (`assignFinding`) groups findings into the
+persisted **`event_cases`** entity — but still **per device** (`findOpenByHost(host)`),
 within the same 60 s window (reuses `DEFAULT_WINDOW_MS`). It:
-- opens/extends an incident per host, escalates severity, advances `last_event_at`;
-- links the finding via `findingStore.setIncidentCase`;
-- is resolved by the **leader-only** `src/incidentCases/autoResolveJob.js` (inactivity →
+- opens/extends an event per host, escalates severity, advances `last_event_at`;
+- links the finding via `findingStore.setEventCase`;
+- is resolved by the **leader-only** `src/eventCases/autoResolveJob.js` (inactivity →
   `investigating→resolved`).
 
 **The cross-agent cluster module is the *same idea one level up* (across hosts).** The
 cleanest fit is: a **pure detector** in `src/analysis/` (mirroring `correlator.js`) + a
-thin **service + repository** (mirroring `incidentCaseService.js` /
-`incidentCasesRepository.js`) + a **leader-only resolve job** (mirroring
+thin **service + repository** (mirroring `eventCaseService.js` /
+`eventCasesRepository.js`) + a **leader-only resolve job** (mirroring
 `autoResolveJob.js`). No new architectural pattern.
 
 ---
@@ -194,8 +194,8 @@ topology, only via type similarity. I recommend the shared-site approach.
   (pipeline.js).
 
 **Reuse plan for cluster events:** broadcast on the **same** `dashboardWs.broadcast` with a
-new discriminator, e.g. `{ type: 'incident_cluster', payload: cluster }` (and/or
-`incident_cluster_resolved`). The browser already holds one `/ws/dashboard` socket and
+new discriminator, e.g. `{ type: 'event_cluster', payload: cluster }` (and/or
+`event_cluster_resolved`). The browser already holds one `/ws/dashboard` socket and
 switches on `message.type`, so no new channel, no new auth path, no new server. The
 detector/service just needs the same injected `publishFinding` (or a `publishCluster`
 alias bound to the same `broadcast`).
@@ -206,26 +206,26 @@ alias bound to the same `broadcast`).
 
 **Where the detector runs.** `createAnalysisPipeline.processResults(hostId, payloads)`
 (pipeline.js) already runs, per ingest batch, in this order: save findings → publish →
-`incidentCaseService.assignFinding` (per-host) → `correlateAndPersist` (per-host) →
+`eventCaseService.assignFinding` (per-host) → `correlateAndPersist` (per-host) →
 alerting → integrations. A cross-agent pass fits **after `correlateAndPersist`**, but note
 it must pull **recent findings across all hosts** (`findingStore.list(undefined, since)`),
 not just the produced hosts. It is triggered by whichever agent's report arrived — that's
 fine; dedup (Step 1) makes re-evaluation idempotent.
 
-**Repository/service/job patterns to mirror** (so the new `incident_clusters` matches house
+**Repository/service/job patterns to mirror** (so the new `event_clusters` matches house
 style):
-- Repo → `src/repositories/incidentCasesRepository.js` (`create` / `findOpenByHost` /
+- Repo → `src/repositories/eventCasesRepository.js` (`create` / `findOpenByHost` /
   `updateActivity` / `updateStatus` guarded-transition / `list` / `listStaleInvestigating`).
-- Service → `src/incidentCases/incidentCaseService.js` (best-effort `assignFinding`,
+- Service → `src/eventCases/eventCaseService.js` (best-effort `assignFinding`,
   window-based grouping, dedup into an existing open row).
 - Migration → numbered `migrations/056_*.sql` (next free number; latest is `055`), tracked
   in `schema_migrations`; add the table to `schema.sql`. Columns per task: `id`,
   `confidence`, `member_finding_ids` (JSON), `suspected_common_cause` (text, nullable),
   `status` default `'open'`, `detected_at` (+ house-style `created_at`, and likely
   `updated_at`/`last_event_at` to support inactivity resolve).
-- Resolve job → `src/incidentCases/autoResolveJob.js` + registration in the
+- Resolve job → `src/eventCases/autoResolveJob.js` + registration in the
   `backgroundJobs` array (server.js:557) so it runs leader-only on one node.
-- Fakes → add an `incident_clusters` repo fake to `test-support/fakes.js` (every repo has a
+- Fakes → add an `event_clusters` repo fake to `test-support/fakes.js` (every repo has a
   fake there).
 
 **The resolution wrinkle (call it out now).** Step 1 says "when member findings
@@ -233,9 +233,9 @@ clear/resolve, close the cluster." But findings have **no clear event** (§1). T
 resolution definitions, both honest:
 - (a) **Inactivity** — close the cluster when no member/related finding has recurred within
   an inactivity window (direct mirror of `autoResolveJob`). Simple, self-contained.
-- (b) **Via incident_cases** — close the cluster when all member findings'
-  `incident_case`s are `resolved/closed`. More "truthful" but couples the cluster to the
-  incident-case lifecycle.
+- (b) **Via event_cases** — close the cluster when all member findings'
+  `event_case`s are `resolved/closed`. More "truthful" but couples the cluster to the
+  event-case lifecycle.
 Recommendation: (a) inactivity-based auto-resolve as the primary mechanism (matches the
 existing pattern and needs no new finding lifecycle), optionally reinforced by (b). Needs a
 one-line confirmation in Step 1 sign-off.
@@ -270,22 +270,22 @@ one-line confirmation in Step 1 sign-off.
 ## 7. Proposed module layout for Step 1 (for approval — not yet built)
 
 ```
-migrations/056_create_incident_clusters.sql   # id, confidence, member_finding_ids JSON,
+migrations/056_create_event_clusters.sql   # id, confidence, member_finding_ids JSON,
                                               # suspected_common_cause TEXT NULL,
                                               # status DEFAULT 'open', detected_at, timestamps
-schema.sql                                    # + incident_clusters snapshot
+schema.sql                                    # + event_clusters snapshot
 src/analysis/crossAgentCorrelator.js          # PURE detector, mirrors correlator.js:
                                               #   weighted signals → {members, confidence,
                                               #   commonType, proximity, cause-hint}
-src/repositories/incidentClustersRepository.js# mirrors incidentCasesRepository.js
-src/analysis/crossAgentClusterService.js      # (or src/incidentCases/…) best-effort
+src/repositories/eventClustersRepository.js# mirrors eventCasesRepository.js
+src/analysis/crossAgentClusterService.js      # (or src/eventCases/…) best-effort
                                               #   detect+dedup+persist+publish, like
-                                              #   incidentCaseService.js
+                                              #   eventCaseService.js
 src/analysis/crossAgentResolveJob.js          # leader-only inactivity resolve, mirrors
                                               #   autoResolveJob.js; added to backgroundJobs
 wiring in src/server.js + src/analysis/pipeline.js  # run after correlateAndPersist;
                                               #   reuse publishFinding broadcast
-test-support/fakes.js                         # + incident_clusters repo fake
+test-support/fakes.js                         # + event_clusters repo fake
 test/… + src/**/__tests__                     # unit tests per task's list
 docs/cross-agent-correlation.md               # feature doc (house convention)
 CODEMAP.md + package.json version bump         # per CLAUDE.md conventions

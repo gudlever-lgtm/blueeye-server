@@ -8,13 +8,13 @@ const assert = require('node:assert/strict');
 
 const { createClusterAlertGate } = require('../src/analysis/clusterAlertGate');
 const { createAnalysisPipeline } = require('../src/analysis/pipeline');
-const { makeIncidentClustersRepo, makeFindingStore, makeDispatcher, makeIntegrationsDispatcher } = require('../test-support/fakes');
+const { makeEventClustersRepo, makeFindingStore, makeDispatcher, makeIntegrationsDispatcher } = require('../test-support/fakes');
 const { loadConfig } = require('../src/analysis/config');
 
 // ---- gate: which hosts are suppressed --------------------------------------
 
 async function gateWith(clusters) {
-  const clustersRepo = makeIncidentClustersRepo();
+  const clustersRepo = makeEventClustersRepo();
   const findingStore = makeFindingStore();
   for (const c of clusters) {
     for (const m of c.members) findingStore.rows.push({ id: m.id, hostId: m.hostId, metric: 'cpu', severity: 'WARN', explanation: 'x', evidence: [{}], createdAt: new Date(), acked: false });

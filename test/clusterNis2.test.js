@@ -6,7 +6,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
 const { buildClusterNis2Draft, createClusterNis2Service } = require('../src/analysis/clusterNis2');
-const { makeNis2IncidentsRepo, makeIncidentClustersRepo, makeAssistant } = require('../test-support/fakes');
+const { makeNis2IncidentsRepo, makeEventClustersRepo, makeAssistant } = require('../test-support/fakes');
 
 const cluster = (over = {}) => ({
   id: 7, clusterId: 7, severity: 'CRIT', confidence: 'high',
@@ -38,7 +38,7 @@ test('buildClusterNis2Draft: AI content is clearly marked', () => {
 
 function svc(over = {}) {
   const nis2IncidentsRepo = over.nis2IncidentsRepo || makeNis2IncidentsRepo();
-  const clustersRepo = over.clustersRepo || makeIncidentClustersRepo();
+  const clustersRepo = over.clustersRepo || makeEventClustersRepo();
   const audits = [];
   const auditLogger = { record: async (req, e) => { audits.push(e); } };
   const service = createClusterNis2Service({ nis2IncidentsRepo, clustersRepo, assistant: over.assistant || null, auditLogger });

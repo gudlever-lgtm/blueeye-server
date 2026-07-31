@@ -103,7 +103,7 @@ each would actually help.
 
 Resolvers are independent and fan out with `Promise.allSettled`. One failing
 source sets `partial: true` and names it in `failedSources`; the rest still
-answer. A technician mid-incident needs the four answers we *can* give, not a 500
+answer. A technician mid-event needs the four answers we *can* give, not a 500
 because the CMDB is unreachable.
 
 The one genuinely fatal failure is loading the agent list — it happens before the

@@ -18,7 +18,7 @@ function createWebhookChannel({ config = {}, fetchImpl = globalThis.fetch, logge
     // finding-level payload shape.
     const isCluster = group && Array.isArray(group.memberFindingIds);
     const body = JSON.stringify({
-      type: isCluster ? 'incident_cluster' : 'finding',
+      type: isCluster ? 'event_cluster' : 'finding',
       sentAt: new Date().toISOString(),
       finding,
       group: group

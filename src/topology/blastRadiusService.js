@@ -5,7 +5,7 @@ const { computeBlastRadius, DEFAULT_MAX_DEPTH } = require('./blastRadius');
 const { loadTopologyConfig } = require('./config');
 
 // Builds the unified topology graph from the persisted edges and computes the
-// blast radius for a node. Shared by the incident enrichment (best-effort) and
+// blast radius for a node. Shared by the event enrichment (best-effort) and
 // the dedicated /api/topology/blast-radius endpoint (surfaces DB errors as 500).
 //
 // The graph is built on demand from the two bounded `listAll` reads — the same

@@ -12,7 +12,7 @@
 //   - Multiple IPs mapping to the same host fold into one edge.
 //   - Top-N edges PER HOST by byte volume, counting a host's edges in BOTH
 //     directions — an edge survives if it ranks within the Top-N heaviest edges
-//     incident to EITHER of its endpoint hosts (heaviest inbound OR outbound
+//     event to EITHER of its endpoint hosts (heaviest inbound OR outbound
 //     relationships), so a busy server keeps the clients that lean on it even
 //     when it is rarely the source. N configurable, default 50.
 //
@@ -63,19 +63,19 @@ function aggregateServiceDependencies(flowRows, resolver, { topN = DEFAULT_TOP_N
   }
 
   // Top-N per host by bytes, in BOTH directions. Index every edge under each of
-  // its two endpoint hosts, rank each host's incident edges by bytes, and keep an
+  // its two endpoint hosts, rank each host's event edges by bytes, and keep an
   // edge if it lands in the Top-N for EITHER endpoint (union).
-  const incident = new Map(); // hostId -> edge[]
-  const addIncident = (hostId, e) => {
-    if (!incident.has(hostId)) incident.set(hostId, []);
-    incident.get(hostId).push(e);
+  const event = new Map(); // hostId -> edge[]
+  const addEvent = (hostId, e) => {
+    if (!event.has(hostId)) event.set(hostId, []);
+    event.get(hostId).push(e);
   };
-  for (const e of byEdge.values()) { addIncident(e.srcHostId, e); addIncident(e.dstHostId, e); }
+  for (const e of byEdge.values()) { addEvent(e.srcHostId, e); addEvent(e.dstHostId, e); }
 
   const byBytesDesc = (a, b) => b.bytes - a.bytes
     || a.srcHostId - b.srcHostId || a.dstHostId - b.dstHostId || a.dstPort - b.dstPort;
   const keep = new Set();
-  for (const list of incident.values()) {
+  for (const list of event.values()) {
     list.sort(byBytesDesc);
     for (const e of list.slice(0, n)) keep.add(e);
   }

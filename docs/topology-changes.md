@@ -34,7 +34,7 @@ changes format:
 ```
 
 - **Device activity timeline** — `GET /api/targets/:id/timeline` merges topology
-  changes with findings/incidents/agent events (source `topology`, rendered
+  changes with findings/events/agent events (source `topology`, rendered
   "Topology change").
 - **Dedicated feed** — `GET /api/topology/changes` (operator+, `?host=<agentId>`):
   400 invalid, 404 unknown host, 500 on store failure.

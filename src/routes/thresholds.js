@@ -5,10 +5,10 @@ const { asyncHandler } = require('../middleware/asyncHandler');
 const { requireAuth, requireRole } = require('../auth/middleware');
 const { ROLES } = require('../auth/roles');
 const { parseId } = require('../validation/locationValidation');
-const { validateThresholdInput } = require('../validation/incidentValidation');
-const { METRICS } = require('../incidents/detection');
+const { validateThresholdInput } = require('../validation/probeOutageValidation');
+const { METRICS } = require('../probeOutages/detection');
 
-// Incident-threshold read/write. Reading is viewer+, writing is admin only.
+// Event-threshold read/write. Reading is viewer+, writing is admin only.
 // /api/thresholds operates on the GLOBAL defaults (location_id IS NULL);
 // /api/thresholds/:location_id operates on a single location's overrides.
 function createThresholdsRouter({ thresholdsRepo, locationsRepo }) {

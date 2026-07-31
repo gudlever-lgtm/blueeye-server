@@ -15,7 +15,7 @@
  *    - agents.location_id (INT FK → locations.id, nullable). Eneste gruppering.
  *    - Interfaces er IKKE persisteret — de er efemere og beregnes fra resultater.
  *    - Nautobot-connector: ét-vejs push (agenter→Nautobot), ingen location-sync.
- *    - ServiceNow-connector: opretter incidents (hostId + metric), ingen lokation.
+ *    - ServiceNow-connector: opretter events (hostId + metric), ingen lokation.
  *    - Ingen IPAM-connector der mapper subnet/site → devices/interfaces.
  *    - Subnet-opslag: bedste indsats via agent-meta, ingen garanteret dækning.
  *

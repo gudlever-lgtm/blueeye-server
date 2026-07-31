@@ -5,11 +5,11 @@ const { classifyRootCauseLayer } = require('./clusterView');
 
 // Cluster notification orchestrator (Fase 5). The cross-agent sweep calls
 // `notify()` on each cluster lifecycle transition (opened / updated / resolved);
-// this fans the ONE incident out to:
+// this fans the ONE event out to:
 //   * alerting  — rollup engine decides opened/update/escalation/resolved, then
 //                 dispatchClusterEvent (per-channel digest) + records alert state;
 //   * ITSM      — one ticket per cluster (create-once, worknote appends);
-//   * NIS2      — one cluster draft when the incident is CRIT.
+//   * NIS2      — one cluster draft when the event is CRIT.
 // Plus it records per-finding alert SUPPRESSION (audit + cluster timeline) so a
 // suppressed member alert is always traceable, honouring the race case (a member
 // already alerted before clustering is noted, not "recalled").
@@ -44,7 +44,7 @@ function createClusterNotifier({
       clusterId: cluster.clusterId ?? cluster.id,
       id: `cluster:${cluster.clusterId ?? cluster.id}`,
       hostId: `${agentCount(cluster)} agents`,
-      metric: 'incident_cluster',
+      metric: 'event_cluster',
       kind: 'CLUSTER',
       severity: cluster.severity || 'WARN',
       explanation: summarize(kind, { ...cluster, agentCount: agentCount(cluster), classification }),
@@ -93,7 +93,7 @@ function createClusterNotifier({
     const payload = {
       clusterId: cluster.clusterId ?? cluster.id, severity: cluster.severity, confidence: cluster.confidence,
       agentCount: agentCount(cluster), classification, memberCount: (cluster.memberFindingIds || []).length,
-      summary: cluster.suspectedCommonCause || 'Cross-agent incident', suspectedCommonCause: cluster.suspectedCommonCause,
+      summary: cluster.suspectedCommonCause || 'Cross-agent event', suspectedCommonCause: cluster.suspectedCommonCause,
     };
     try {
       const out = await integrationTrigger.emitCluster(payload);
@@ -123,7 +123,7 @@ function createClusterNotifier({
       const isRace = raced.has(String(f.id));
       try {
         await auditLogger.record(null, { // eslint-disable-line no-await-in-loop
-          category: 'incident',
+          category: 'event',
           action: isRace ? 'alert_race' : 'alert_suppressed',
           target: String(clusterId),
           actorEmail: 'system', actorRole: 'system',
@@ -135,7 +135,7 @@ function createClusterNotifier({
     }
   }
 
-  // NIS2: one cluster draft when the incident is severe enough (default CRIT).
+  // NIS2: one cluster draft when the event is severe enough (default CRIT).
   async function maybeNis2(cluster, members) {
     if (!nis2Service || typeof nis2Service.generateForCluster !== 'function') return;
     if (cluster.nis2DraftId) return;

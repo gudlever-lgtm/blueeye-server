@@ -158,11 +158,11 @@ CREATE INDEX IF NOT EXISTS idx_findings_host_ts ON findings (host_id, ts DESC);
 CREATE INDEX IF NOT EXISTS idx_findings_id      ON findings (id);
 
 -- ---------------------------------------------------------------------
--- incidents  (MySQL `incidents`; started_at -> ts)
+-- events  (MySQL `events`; started_at -> ts)
 --   MEDIUM volume, governance-relevant -> NO auto-drop. resolved_at is
 --   UPDATEd later; it is a non-partition column so the UPDATE is fine.
 -- ---------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS incidents (
+CREATE TABLE IF NOT EXISTS probe_outages (
   id               BIGINT      NOT NULL,
   location_id      INTEGER,
   agent_id         INTEGER     NOT NULL,
@@ -175,14 +175,14 @@ CREATE TABLE IF NOT EXISTS incidents (
 );
 
 SELECT create_hypertable(
-  'incidents', 'ts',
+  'events', 'ts',
   chunk_time_interval => INTERVAL '30 days',
   if_not_exists       => TRUE
 );
 
-CREATE INDEX IF NOT EXISTS idx_incidents_agent_ts    ON incidents (agent_id, ts DESC);
-CREATE INDEX IF NOT EXISTS idx_incidents_location_ts ON incidents (location_id, ts DESC);
-CREATE INDEX IF NOT EXISTS idx_incidents_open        ON incidents (agent_id, metric, affected_target)
+CREATE INDEX IF NOT EXISTS idx_probe_outages_agent_ts    ON events (agent_id, ts DESC);
+CREATE INDEX IF NOT EXISTS idx_probe_outages_location_ts ON events (location_id, ts DESC);
+CREATE INDEX IF NOT EXISTS idx_probe_outages_open        ON events (agent_id, metric, affected_target)
   WHERE resolved_at IS NULL;
 
 -- ---------------------------------------------------------------------
@@ -262,7 +262,7 @@ CREATE INDEX IF NOT EXISTS idx_audit_dedup_key ON audit_events (dedup_key, ts DE
 --
 --   Raw flow_records, results ......... 30 days
 --   probe_results, speedtest_results .. 90 days
---   findings, incidents, audit_events . NO auto-drop (governance)
+--   findings, events, audit_events . NO auto-drop (governance)
 --
 --   Ordering is safe: the continuous-aggregate policies below run hourly and
 --   materialize the rollups long before the 30-day raw retention drops the
@@ -273,7 +273,7 @@ SELECT add_retention_policy('results',           INTERVAL '30 days', if_not_exis
 SELECT add_retention_policy('flow_records',       INTERVAL '30 days', if_not_exists => TRUE);
 SELECT add_retention_policy('probe_results',      INTERVAL '90 days', if_not_exists => TRUE);
 SELECT add_retention_policy('speedtest_results',  INTERVAL '90 days', if_not_exists => TRUE);
--- findings / incidents / audit_events: intentionally NO add_retention_policy.
+-- findings / events / audit_events: intentionally NO add_retention_policy.
 
 -- =====================================================================
 -- 3. CONTINUOUS AGGREGATES  (replace the application-level rollup job)

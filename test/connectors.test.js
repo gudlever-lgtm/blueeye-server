@@ -30,18 +30,18 @@ const finding = {
   hostId: 'agent-7', metric: 'cpu.load', kind: 'spike', severity: 'CRIT',
   explanation: 'CPU load far above baseline', observed: 95, baseline: 20, deviation: 7.5,
 };
-const incidentEvent = { type: 'incident', severity: 'CRIT', correlationId: 'be-finding-agent-7-cpu.load-spike', finding };
+const eventEvent = { type: 'event', severity: 'CRIT', correlationId: 'be-finding-agent-7-cpu.load-spike', finding };
 
 // ---- ServiceNow -----------------------------------------------------------
 
-test('serviceNow: creates an incident (POST) when none exists, with severity mapping + Basic auth', async () => {
+test('serviceNow: creates an event (POST) when none exists, with severity mapping + Basic auth', async () => {
   const fetchImpl = scriptFetch([
     { status: 200, body: { result: [] } },              // lookup: none
     { status: 201, body: { result: { number: 'INC0001' } } }, // create
   ]);
   const c = createServiceNowConnector({ fetchImpl });
   const integration = { baseUrl: 'https://acme.service-now.com/', authType: 'basic', credentials: { username: 'svc', password: 'pw' }, config: {} };
-  const res = await c.send(integration, incidentEvent);
+  const res = await c.send(integration, eventEvent);
 
   assert.equal(res.ok, true);
   assert.equal(res.status, 201);
@@ -52,18 +52,18 @@ test('serviceNow: creates an incident (POST) when none exists, with severity map
   assert.equal(create.method, 'POST');
   assert.equal(create.body.impact, '1'); // CRIT -> 1/1
   assert.equal(create.body.urgency, '1');
-  assert.equal(create.body.correlation_id, incidentEvent.correlationId);
+  assert.equal(create.body.correlation_id, eventEvent.correlationId);
   assert.match(create.body.short_description, /cpu\.load/);
   assert.equal(create.headers.Authorization, `Basic ${Buffer.from('svc:pw').toString('base64')}`);
 });
 
-test('serviceNow: updates the existing incident (PATCH) for idempotency', async () => {
+test('serviceNow: updates the existing event (PATCH) for idempotency', async () => {
   const fetchImpl = scriptFetch([
     { status: 200, body: { result: [{ sys_id: 'SYS123' }] } }, // lookup: found
     { status: 200, body: { result: { number: 'INC0001' } } },  // update
   ]);
   const c = createServiceNowConnector({ fetchImpl });
-  const res = await c.send({ baseUrl: 'https://x', authType: 'oauth2', credentials: { accessToken: 'tok' }, config: {} }, incidentEvent);
+  const res = await c.send({ baseUrl: 'https://x', authType: 'oauth2', credentials: { accessToken: 'tok' }, config: {} }, eventEvent);
 
   assert.equal(res.ok, true);
   assert.equal(res.action, 'update');
@@ -105,7 +105,7 @@ test('serviceNow: WARN/INFO map to lower impact/urgency', async () => {
 test('serviceNow: a 4xx on create surfaces as ok:false with the status', async () => {
   const fetchImpl = scriptFetch([{ status: 200, body: { result: [] } }, { status: 400, body: { error: 'bad' } }]);
   const c = createServiceNowConnector({ fetchImpl });
-  const res = await c.send({ baseUrl: 'https://x', authType: 'basic', credentials: {}, config: {} }, incidentEvent);
+  const res = await c.send({ baseUrl: 'https://x', authType: 'basic', credentials: {}, config: {} }, eventEvent);
   assert.equal(res.ok, false);
   assert.equal(res.status, 400);
   assert.match(res.detail, /failed/);
@@ -114,7 +114,7 @@ test('serviceNow: a 4xx on create surfaces as ok:false with the status', async (
 test('serviceNow: a failed lookup (401) does not create blindly', async () => {
   const fetchImpl = scriptFetch([{ status: 401, body: {} }]);
   const c = createServiceNowConnector({ fetchImpl });
-  const res = await c.send({ baseUrl: 'https://x', authType: 'basic', credentials: {}, config: {} }, incidentEvent);
+  const res = await c.send({ baseUrl: 'https://x', authType: 'basic', credentials: {}, config: {} }, eventEvent);
   assert.equal(res.ok, false);
   assert.equal(res.status, 401);
   assert.equal(res.action, 'lookup');
@@ -190,12 +190,12 @@ test('webhook: POSTs the event and HMAC-signs the body when a secret is set', as
   const crypto = require('crypto');
   const fetchImpl = scriptFetch([{ status: 200, body: {} }]);
   const c = createWebhookConnector({ fetchImpl });
-  const res = await c.send({ baseUrl: 'https://hook.acme.dk/in', authType: 'none', credentials: { secret: 's3cr3t' }, config: {} }, incidentEvent);
+  const res = await c.send({ baseUrl: 'https://hook.acme.dk/in', authType: 'none', credentials: { secret: 's3cr3t' }, config: {} }, eventEvent);
   assert.equal(res.ok, true);
   const call = fetchImpl.calls[0];
   assert.equal(call.method, 'POST');
-  assert.equal(call.body.event, 'incident');
-  assert.equal(call.body.correlationId, incidentEvent.correlationId);
+  assert.equal(call.body.event, 'event');
+  assert.equal(call.body.correlationId, eventEvent.correlationId);
   const expected = `sha256=${crypto.createHmac('sha256', 's3cr3t').update(JSON.stringify(call.body)).digest('hex')}`;
   assert.equal(call.headers['X-BlueEye-Signature'], expected);
 });

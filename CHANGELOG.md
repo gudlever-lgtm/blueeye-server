@@ -1,5 +1,70 @@
 # Changelog
 
+## 0.111.1 — One event per condition, and a changes feed you can scan
+
+Two reports, and they turned out to have separate causes.
+
+### The Events tab was one event per breach, not one per condition
+
+`eventCaseService` grouped a new anomaly into an open event only if it arrived
+within **60 s** of that event's last activity, while `autoResolveJob` waited
+**15 min** of quiet before calling the condition finished. The gap between those
+two numbers was a bug: for fourteen minutes an event was still **open**, but a
+new anomaly refused to join it and opened a *second* open event on the same
+device. Probes report on a cadence of minutes, so in practice every recurring
+breach spawned its own event — one device with a flapping probe filled the tab
+with near-identical rows.
+
+Both now read one constant, `EVENT_ACTIVITY_WINDOW_MS`
+(`src/eventCases/activityWindow.js`). Grouping and finishing are the same
+judgement — "is this condition still going?" — so they cannot drift apart again;
+a test asserts they agree. The 60 s came from the correlator, which answers a
+different question: it groups findings that fired *simultaneously* into one root
+cause, not a condition tracked over its lifetime.
+
+Recurrence keeps an event alive — each anomaly that groups in advances
+`last_event_at` — so a condition that keeps firing stays **one** event for as
+long as it lasts. A quiet gap longer than the window still starts a new event,
+which is the honest boundary: it means the condition cleared and came back.
+
+**No migration.** This changes only how *new* events are grouped; existing rows
+are untouched.
+
+### The changes feed was hard to read
+
+- **A horizontal scrollbar on the whole page.** `.chg-indicates` combined
+  `flex-basis: 100%` with a left margin, so the line was 100% + 10.5rem wide and
+  overflowed its container. It is padding now (inside the basis, under the global
+  `box-sizing: border-box`).
+- **Raw ISO timestamps** — `2026-07-31T11:05:05.000Z` filled the time column,
+  because three feeds called `TimelineView.renderRow` without `formatTime` while
+  every other timeline passed `fmtDate`. All three pass it now.
+- **Chips marooned at the right edge.** The summary was `flex: 1 1 auto`, so it
+  ate the free width and flung the row's own metadata — recurrence, folded count,
+  device — hard against the right edge with a chasm between a sentence and the
+  chips describing it. The summary now takes only the width it needs; only the
+  device control stays right-aligned, and the list has a max measure so that rail
+  never strands itself on a wide screen.
+- **The severity was printed twice** — a `CRIT` badge next to a summary opening
+  "CRIT probe.latency on…". The leading token is dropped when it matches the
+  badge, and only then.
+- **The same sentence on every row.** "What this indicates" is per *condition
+  family*, so eight latency events repeated it verbatim eight times, doubling the
+  height of the feed to say one thing. It prints once per run of a family now; a
+  row with no family (a situation, an agent transition) does not break the run.
+- Recurrence and folded-count chips read as one family instead of three
+  different fills, and the current-state badge is short with the full sentence on
+  hover.
+
+### Guards for the silent-failure classes these came from
+
+The dashboard has no build step, no CSS linter and no DOM test, so all three of
+these failed quietly. New tests read the source: every `renderRow`/`renderInto`
+caller passing an inline opts object must set `formatTime`; stylesheets must have
+balanced comments and braces (an unclosed comment silently eats the next rule —
+it happened while writing this); and no `flex-basis: 100%` item may carry a left
+margin.
+
 ## 0.110.1 — The incident vocabulary leaves the code and the database
 
 0.109.0 renamed what a customer *sees* — the tab, the API paths, the response

@@ -1674,7 +1674,9 @@ button.active-btn { outline: 2px solid var(--accent); }
 .recaction .md-list { margin: 4px 0; padding-left: 1.2rem; }
 ul.timeline { list-style: none; padding-left: 0; margin: 0; }
 ul.timeline li.tl { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; padding: 3px 0; }
-.tl-time { flex: 0 0 auto; min-width: 8.5rem; font-variant-numeric: tabular-nums; font-size: 12px; }
+/* Wide enough for a full en-GB timestamp ("31/07/2026, 11:05:05") without the
+   next column stepping in and out as the text changes width. */
+.tl-time { flex: 0 0 auto; min-width: 10.5rem; font-variant-numeric: tabular-nums; font-size: 12px; }
 .tl-dot { width: 9px; height: 9px; border-radius: 50%; background: #888; display: inline-block; flex: 0 0 auto; }
 .tl-dot-anomaly { background: #c0392b; }
 .tl-dot-config_change { background: #e67e22; }
@@ -1978,7 +1980,6 @@ li.guide-step.done .guide-step-title { text-decoration: line-through; opacity: 0
 .chg-group.sev-CRIT { color: var(--bad); }
 .chg-group.sev-WARN { color: var(--warn); }
 .chg-group.sev-INFO { color: var(--muted); }
-.chg-open { margin-left: auto; }
 /* A current-state row is a condition, not a transition — dimmed and badged so it
    never reads as "this happened inside your window". */
 .chg-current { opacity: 0.85; }
@@ -1986,17 +1987,41 @@ li.guide-step.done .guide-step-title { text-decoration: line-through; opacity: 0
 /* The changes feed renders TimelineView rows into ul.timeline-list, which never
    picked up the flex/gap rules that ul.timeline has — so every chip abutted the
    next and a row read as one run-together word. Same layout, both parents. */
-ul.timeline-list { list-style: none; margin: 0; padding: 0; }
+/* Cap the measure. Right-aligning the device control is only useful while the
+   rail stays near the text it belongs to — on a 1850px window an uncapped row
+   stranded it 700px away from the sentence, which is the "scattered" look the
+   chips had. Long lines are hard to scan anyway; this bounds both problems. */
+ul.timeline-list { list-style: none; margin: 0; padding: 0; max-width: 1280px; }
 ul.timeline-list li.tl { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; padding: 4px 0; }
+/* The summary must NOT grow here. `.tl-desc { flex: 1 1 auto }` made it eat all
+   the free width, which flung the row's own metadata — recurrence, folded count,
+   device — hard against the right edge with a chasm of empty space between a
+   sentence and the chips describing it. They belong beside the text they
+   annotate, so the summary takes only the width it needs and the chips follow. */
+ul.timeline-list li.tl .tl-desc { flex: 0 1 auto; }
+/* One thing stays right-aligned: the device/deep-link control. It is the same
+   affordance on every row, so a straight column of them is scannable in a way
+   that ragged chips are not. `margin-left: auto` on the FIRST of the trailing
+   group would drag the badges out with it — it belongs on this alone. */
+ul.timeline-list li.tl .chg-open { margin-left: auto; flex: 0 0 auto; }
 /* Recurrence: how many occurrences the row stands for, and the anomalies folded
-   into an event. Both are diagnoses, so they read as badges, not footnotes. */
-.chg-count { background: var(--warn); color: var(--bg); }
+   into an event. Both are diagnoses, so they read as badges, not footnotes —
+   but as ONE family, weighted by which is the finding and which is the detail.
+   Three different fills (amber, grey, outlined) across three adjacent chips was
+   most of what made the row look noisy. */
+.chg-count { background: var(--warn-weak, var(--panel-2)); color: var(--warn); border: 1px solid var(--warn); font-variant-numeric: tabular-nums; }
 .chg-recurring .tl-desc { font-weight: 600; }
-.chg-folded { font-weight: normal; }
+.chg-folded { background: var(--panel-2); color: var(--muted); font-weight: normal; font-variant-numeric: tabular-nums; }
+.chg-current-badge { font-weight: normal; }
 /* "What this indicates" — full-basis so it breaks onto its own line under the
-   row, indented past the timestamp column so it reads as belonging to it. */
-.chg-indicates { flex: 1 0 100%; margin: 1px 0 4px 8.5rem; line-height: 1.35; }
-@media (max-width: 640px) { .chg-indicates { margin-left: 0; } }
+   row, indented past the timestamp column so it reads as belonging to it.
+   Printed once per run of a condition (see changesRowEl), not once per row.
+   The indent is PADDING, not margin: with `flex-basis: 100%` a left margin sits
+   OUTSIDE the basis, making the line 100% + 10.5rem wide and pushing a
+   horizontal scrollbar onto the whole page. Padding is inside the basis under
+   the global `box-sizing: border-box`, so the row stays within its container. */
+.chg-indicates { flex: 1 0 100%; margin: 1px 0 6px; padding-left: 10.5rem; line-height: 1.35; }
+@media (max-width: 900px) { .chg-indicates { padding-left: 0; } }
 
 /* --- Metric with baseline context (Fase 4) ---------------------------------- */
 /* The value and its context stack, so the secondary line reads as annotation

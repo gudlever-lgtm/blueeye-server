@@ -6949,7 +6949,7 @@ views.troubleshooting = async () => {
       box.append(el('div', { class: 'muted' }, 'No recorded change in the 30 minutes before this fault started.'));
     } else {
       const ul = el('ul', { class: 'timeline' });
-      changes.forEach((e) => ul.append(window.TimelineView.renderRow(document, e, {})));
+      changes.forEach((e) => ul.append(window.TimelineView.renderRow(document, e, { formatTime: fmtDate })));
       box.append(el('div', { class: 'muted' }, `${changes.length} change(s) in the 30 minutes before this fault started:`), ul);
     }
     const existing = row.querySelector('.ts-changes');
@@ -7034,7 +7034,7 @@ views.troubleshooting = async () => {
         sel.setAttribute('width', '0');
       }
       const ul = el('ul', { class: 'timeline' });
-      shown.forEach((e) => ul.append(window.TimelineView.renderRow(document, e, {})));
+      shown.forEach((e) => ul.append(window.TimelineView.renderRow(document, e, { formatTime: fmtDate })));
       list.replaceChildren(
         el('div', { class: 'muted' },
           brush ? `${shown.length} of ${all.length} event(s) in the selected window` : `${all.length} event(s)`,
@@ -7477,15 +7477,22 @@ const CHANGES_WINDOWS = ['30m', '6h', '24h', '7d'];
 let changesWindow = '24h';
 let changesSince = 'last_login';
 
-function changesRowEl(event, nameFor) {
-  const row = window.TimelineView.renderRow(document, event, {});
+function changesRowEl(event, nameFor, showIndication = true) {
+  // formatTime: without it renderRow falls back to String(iso) and the column
+  // renders raw `2026-07-31T11:05:05.000Z` — every other timeline passes fmtDate.
+  const row = window.TimelineView.renderRow(document, event, { formatTime: fmtDate });
   // A current-state row must not read as "this happened in your window": we
   // know the condition, not when it began (heartbeat and agent version are not
   // transition-logged). Labelling it is the honest option; inferring a start
   // time would be inventing history.
   if (event.currentState) {
     row.classList.add('chg-current');
-    row.append(el('span', { class: 'badge chg-current-badge' }, t('changes.currentState')));
+    // Short on the row, full sentence on hover: the long form is a whole clause
+    // and reads as a paragraph when it sits inline on every stale-agent row.
+    row.append(el('span', {
+      class: 'badge chg-current-badge',
+      title: t('changes.currentState'),
+    }, t('changes.currentStateShort')));
   }
 
   // How many occurrences this row stands for. A condition that keeps coming back
@@ -7525,7 +7532,11 @@ function changesRowEl(event, nameFor) {
   // Appended INSIDE the <li> (the row is a wrapping flexbox and .chg-indicates
   // takes a full basis) rather than as a sibling — the feed's parent is a <ul>,
   // where a bare <div> would be invalid.
-  if (event.family) {
+  // Only on the FIRST row of a run of the same condition. The sentence is per
+  // FAMILY, not per row, so a group of eight latency events repeated it verbatim
+  // eight times — doubling the height of the feed to say one thing. Printed once
+  // at the head of the run, it still explains every row under it.
+  if (event.family && showIndication) {
     row.append(el('div', { class: 'chg-indicates muted small' }, t(`changes.indicates.${event.family}`)));
   }
   return row;
@@ -7584,7 +7595,15 @@ views.changes = async () => {
         kids.push(el('h3', { class: `chg-group sev-${group.severity}` }, t(`changes.group.${group.severity}`),
           el('span', { class: 'muted small' }, ` (${group.events.length})`)));
         const ul = el('ul', { class: 'timeline-list' });
-        group.events.forEach((e) => ul.append(changesRowEl(e, nameFor)));
+        // A row with no family (a situation, an agent transition) is transparent
+        // here rather than a break in the run — otherwise one such row between
+        // two latency events reprints the identical sentence underneath both.
+        let prevFamily = null;
+        group.events.forEach((e) => {
+          const family = e.family || null;
+          ul.append(changesRowEl(e, nameFor, family !== null && family !== prevFamily));
+          if (family !== null) prevFamily = family;
+        });
         kids.push(ul);
       }
       if (data.truncated) {

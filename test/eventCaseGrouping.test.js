@@ -7,13 +7,16 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
 const { createEventCaseService } = require('../src/eventCases/eventCaseService');
+const { EVENT_ACTIVITY_WINDOW_MS } = require('../src/eventCases/activityWindow');
 const { makeEventCasesRepo, makeFindingStore, makeAgentsRepo } = require('../test-support/fakes');
 
 // Exercises the auto-create/grouping policy against the in-memory fakes (same
-// surface as the real repo + finding store). The default window is the
-// correlator's (60s).
+// surface as the real repo + finding store). The window is
+// EVENT_ACTIVITY_WINDOW_MS — the same span after which autoResolveJob calls the
+// condition finished.
 const T0 = new Date('2026-06-01T08:00:00Z');
 const at = (secs) => new Date(T0.getTime() + secs * 1000);
+const WINDOW_S = EVENT_ACTIVITY_WINDOW_MS / 1000;
 
 function finding(over = {}) {
   return { id: 'f1', hostId: 'core-sw', metric: 'cpu', severity: 'WARN', createdAt: T0, ...over };
@@ -40,7 +43,7 @@ test('two anomalies on the same device WITHIN the window group into ONE event', 
 test('two anomalies on the same device OUTSIDE the window make TWO events', async () => {
   const { svc, eventCasesRepo } = svcWith();
   const r1 = await svc.assignFinding(finding({ id: 'a', createdAt: at(0) }));
-  const r2 = await svc.assignFinding(finding({ id: 'b', createdAt: at(120) })); // +120s > 60s
+  const r2 = await svc.assignFinding(finding({ id: 'b', createdAt: at(WINDOW_S + 60) }));
 
   assert.equal(r1.created, true);
   assert.equal(r2.created, true);
@@ -48,10 +51,40 @@ test('two anomalies on the same device OUTSIDE the window make TWO events', asyn
   assert.equal(eventCasesRepo.rows.length, 2);
 });
 
+// The regression this window exists for. Probes report on a cadence of MINUTES,
+// so with the old 60 s window every recurring breach opened a fresh event while
+// the previous one was still open — the Events tab became a wall of duplicates
+// for one device. Anything inside the window is the same condition, still going.
+test('a probe breaching every few minutes stays ONE event, not one per breach', async () => {
+  const { svc, eventCasesRepo } = svcWith();
+  const first = await svc.assignFinding(finding({ id: 'a', createdAt: at(0) }));
+  // 2 min, then 6 min, then 4 min later — the gaps in the reported screenshot.
+  const later = [120, 480, 720];
+  for (let i = 0; i < later.length; i += 1) {
+    const r = await svc.assignFinding(finding({ id: `f${i}`, createdAt: at(later[i]) }));
+    assert.equal(r.created, false, `breach at +${later[i]}s opened a second event`);
+    assert.equal(r.eventCaseId, first.eventCaseId);
+  }
+  assert.equal(eventCasesRepo.rows.length, 1);
+});
+
+// Recurrence keeps the event alive: each breach advances last_event_at, so a
+// condition firing steadily never ages out mid-run even though the total span
+// far exceeds one window.
+test('recurrence extends the event — a long run of breaches is still ONE event', async () => {
+  const { svc, eventCasesRepo } = svcWith();
+  const step = WINDOW_S - 60; // just inside the window, repeatedly
+  for (let i = 0; i <= 6; i += 1) {
+    await svc.assignFinding(finding({ id: `f${i}`, createdAt: at(i * step) }));
+  }
+  assert.equal(eventCasesRepo.rows.length, 1);
+  assert.ok(6 * step > WINDOW_S * 2, 'the run must span more than one window to be meaningful');
+});
+
 test('a finding exactly at the window boundary still groups (<=)', async () => {
   const { svc, eventCasesRepo } = svcWith();
   await svc.assignFinding(finding({ id: 'a', createdAt: at(0) }));
-  const r2 = await svc.assignFinding(finding({ id: 'b', createdAt: at(60) })); // exactly 60s
+  const r2 = await svc.assignFinding(finding({ id: 'b', createdAt: at(WINDOW_S) }));
   assert.equal(r2.created, false);
   assert.equal(eventCasesRepo.rows.length, 1);
 });
@@ -152,4 +185,26 @@ test('a repository failure is swallowed (never breaks ingestion)', async () => {
   const findingStore = makeFindingStore();
   const svc = createEventCaseService({ eventCasesRepo, findingStore });
   assert.equal(await svc.assignFinding(finding({ id: 'a' })), null);
+});
+
+// The two windows are one judgement — "is this condition still going?" — and
+// when they disagreed there was a dead zone: for the 14 minutes between the old
+// 60 s grouping window and the 15 min auto-resolve window, an event was still
+// OPEN but a new anomaly refused to join it and opened a SECOND open event on
+// the same device. Nothing but this assertion keeps them from drifting apart
+// again.
+test('grouping and auto-resolve read the SAME window (no dead zone)', () => {
+  const { createEventAutoResolveJob } = require('../src/eventCases/autoResolveJob');
+  let listedOlderThan = null;
+  const job = createEventAutoResolveJob({
+    eventCasesRepo: {
+      listStaleInvestigating: async (olderThan) => { listedOlderThan = olderThan; return []; },
+    },
+    now: () => T0.getTime(),
+  });
+  return job.runOnce().then(() => {
+    const inactivityMs = T0.getTime() - listedOlderThan.getTime();
+    assert.equal(inactivityMs, EVENT_ACTIVITY_WINDOW_MS,
+      'auto-resolve must wait exactly as long as grouping will still absorb a new anomaly');
+  });
 });

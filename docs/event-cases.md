@@ -39,9 +39,30 @@ subsystem** in this codebase; playbook-related fields are surfaced as `null`.
 
 `src/eventCases/eventCaseService.js` runs after a finding is produced (wired
 into both analysis pipelines in `src/server.js`). A new finding on the same device
-within the correlator window (60s) of an open event's last activity is grouped
-into it (severity escalated, `last_event_at` advanced); otherwise a new event is
-opened (`status=open`, `created_by=system`). Best-effort — never blocks ingestion.
+within **`EVENT_ACTIVITY_WINDOW_MS`** (15 min, `src/eventCases/activityWindow.js`)
+of an open event's last activity is grouped into it (severity escalated,
+`last_event_at` advanced); otherwise a new event is opened (`status=open`,
+`created_by=system`). Best-effort — never blocks ingestion.
+
+That window is the SAME one `autoResolveJob` treats as "this condition is
+finished", and they share one constant on purpose. They used to differ — grouping
+at the correlator's 60 s, auto-resolve at 15 min — which left a fourteen-minute
+dead zone where an event was still **open** but a new anomaly refused to join it
+and opened a *second* open event on the same device. Probes report on a cadence of
+minutes, so in practice every recurring breach spawned its own event and the
+Events tab filled with near-identical rows for one device.
+
+The correlator's 60 s answers a different question: it groups findings that fired
+*simultaneously* into one root cause. An event is a condition tracked over its
+lifetime, and "is this still going?" is the judgement both the grouper and the
+resolver are making — hence one number.
+
+Recurrence keeps an event alive: every anomaly that groups in advances
+`last_event_at`, so a condition that keeps firing stays **one** event for as long
+as it lasts, however many hours that is. A genuine quiet gap longer than the
+window is what starts a new event — the honest boundary, because it means the
+condition cleared and came back, and merging across it would misreport when the
+problem started.
 
 ### Where is it? (agent + location)
 

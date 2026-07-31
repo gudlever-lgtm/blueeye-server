@@ -302,3 +302,89 @@ test('renderRow: summary is inert text, not parsed HTML (no injection)', () => {
   assert.equal(li.querySelector('.tl-desc img'), null); // rendered as text, no <img> element created
   assert.match(li.querySelector('.tl-desc').textContent, /<img/);
 });
+
+// ---- the severity badge and the summary must not say it twice ---------------
+
+test('rowModel drops a leading severity the badge already shows', () => {
+  const m = TV.rowModel({ severity: 'CRIT', summary: 'CRIT probe.latency on core-sw (HQ)' });
+  assert.equal(m.severity, 'CRIT');
+  assert.equal(m.summary, 'probe.latency on core-sw (HQ)', 'the badge already says CRIT');
+
+  // Long form and separators too.
+  assert.equal(TV.rowModel({ severity: 'WARN', summary: 'WARNING — link flapping' }).summary, 'link flapping');
+  assert.equal(TV.rowModel({ severity: 'INFO', summary: 'INFO: agent enrolled' }).summary, 'agent enrolled');
+});
+
+test('rowModel keeps a severity word that is not the badge, or not leading', () => {
+  // Mismatched: the row is WARN but the sentence is ABOUT a crit threshold.
+  assert.equal(
+    TV.rowModel({ severity: 'WARN', summary: 'CRIT threshold lowered' }).summary,
+    'CRIT threshold lowered'
+  );
+  // Not leading — stripping mid-sentence would mangle the text.
+  assert.equal(
+    TV.rowModel({ severity: 'CRIT', summary: 'escalated to CRIT on core-sw' }).summary,
+    'escalated to CRIT on core-sw'
+  );
+  // Stripping must never empty the row: a bare severity IS the whole summary.
+  assert.equal(TV.rowModel({ severity: 'CRIT', summary: 'CRIT' }).summary, 'CRIT');
+});
+
+// ---- dashboard wiring ------------------------------------------------------
+
+// renderRow falls back to String(iso) when no formatTime is supplied, so a
+// caller that forgets it renders "2026-07-31T11:05:05.000Z" in the time column
+// — which is exactly what the changes feed and two other feeds were doing while
+// every other timeline passed fmtDate. app.js has no build step and no DOM test,
+// so this reads the source: it is the only thing that catches the next one.
+test('every TimelineView.renderRow/renderInto caller in app.js passes formatTime', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
+
+  // Walk the call, balancing brackets, and take its LAST argument — a regex
+  // cannot: `renderInto(document, list, resolveState({ loading: true }), opts)`
+  // has an object literal that is not the opts argument.
+  function lastArgAt(from) {
+    let depth = 0; let i = from; const args = []; let arg = '';
+    for (; i < src.length; i += 1) {
+      const c = src[i];
+      if ('([{'.includes(c)) depth += 1;
+      else if (')]}'.includes(c)) {
+        depth -= 1;
+        if (depth === 0) { args.push(arg); return args[args.length - 1].trim(); }
+      }
+      if (c === ',' && depth === 1) { args.push(arg); arg = ''; continue; }
+      arg += c;
+    }
+    return null;
+  }
+
+  const offenders = [];
+  const call = /TimelineView\.(renderRow|renderInto)\(/g;
+  let m;
+  while ((m = call.exec(src)) !== null) {
+    const opts = lastArgAt(m.index + m[0].length - 1);
+    if (opts == null) continue;
+    // A bare identifier or a helper call (timelineRenderOpts(...)) builds opts
+    // centrally and sets formatTime there; only an inline literal must say it.
+    const isObjectLiteral = opts.startsWith('{');
+    if (!isObjectLiteral || /\bformatTime\b/.test(opts)) continue;
+    offenders.push(`app.js:${src.slice(0, m.index).split('\n').length}`);
+  }
+  assert.deepEqual(offenders, [],
+    `these calls pass an inline opts object with no formatTime, so they render raw ISO timestamps: ${offenders.join(', ')}`);
+});
+
+// The helpers the non-literal callers rely on must actually set it.
+test('the shared timeline opts helpers set formatTime', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
+  for (const helper of ['timelineRenderOpts', 'changeTimelineOpts']) {
+    const at = src.indexOf(`function ${helper}(`);
+    if (at === -1) continue; // helper renamed away — the caller test still covers it
+    const body = src.slice(at, at + 600);
+    assert.match(body, /formatTime/, `${helper} must set formatTime for the callers that delegate to it`);
+  }
+});

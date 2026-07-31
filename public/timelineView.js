@@ -117,11 +117,27 @@
     return !new RegExp('\\b' + escaped + '\\b').test(String(summary || '').toLowerCase());
   }
 
+  // Every row already carries a severity BADGE, so a summary that opens with the
+  // same word says it twice ("CRIT · CRIT probe.latency on core-sw"). Strip the
+  // leading token when — and only when — it matches the badge: a summary that
+  // merely mentions a severity later in the sentence is left alone.
+  function stripLeadingSeverity(summary, severity) {
+    var s = String(summary == null ? '' : summary);
+    var m = /^\s*(CRIT|CRITICAL|WARN|WARNING|INFO)\b[\s:—-]*/i.exec(s);
+    if (!m) return s;
+    var word = m[1].toUpperCase();
+    var norm = word === 'CRITICAL' ? 'CRIT' : (word === 'WARNING' ? 'WARN' : word);
+    if (norm !== severity) return s;
+    var rest = s.slice(m[0].length);
+    // Never strip it away to nothing — a bare severity IS the whole summary then.
+    return rest.trim() ? rest : s;
+  }
+
   // Map a normalised timeline event to a flat row view-model (what the row
   // renderer needs, already sanitised).
   function rowModel(e) {
     e = e || {};
-    var summary = e.summary || e.type || '';
+    var summary = stripLeadingSeverity(e.summary || e.type || '', severityClass(e.severity));
     var source = e.source || null;
     return {
       time: e.timestamp || null,

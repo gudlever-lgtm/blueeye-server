@@ -133,6 +133,7 @@
       'changes.kind.agent_health': 'Agent health',
       'changes.fleetLink': 'Fleet grid',
       'changes.currentState': 'Current state, not a change in this window',
+      'changes.currentStateShort': 'Current state',
       // Correlation: what the feed folded, and what it means.
       'changes.recurrence': 'recurring, {count}×',
       'changes.recurrenceSince': 'First seen {when}',
@@ -298,6 +299,7 @@
       'changes.kind.agent_health': 'Agent-sundhed',
       'changes.fleetLink': 'Fleet-oversigt',
       'changes.currentState': 'Nuværende tilstand, ikke en ændring i dette vindue',
+      'changes.currentStateShort': 'Nuværende tilstand',
       'changes.recurrence': 'gentaget, {count}×',
       'changes.recurrenceSince': 'Først set {when}',
       'changes.foldedAnomalies': '{count} anomalier',

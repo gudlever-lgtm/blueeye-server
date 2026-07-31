@@ -1,6 +1,6 @@
 'use strict';
 
-const { DEFAULT_WINDOW_MS } = require('../analysis/correlator');
+const { EVENT_ACTIVITY_WINDOW_MS } = require('./activityWindow');
 const { formatDeviceLabel } = require('./deviceLabel');
 
 const silentLogger = { info() {}, warn() {}, error() {}, debug() {} };
@@ -14,10 +14,11 @@ const silentLogger = { info() {}, warn() {}, error() {}, debug() {} };
 //     is escalated + last_event_at advanced);
 //   - otherwise a fresh event is opened automatically with status=open.
 //
-// The window reuses the correlator's default (60s) so event grouping and
-// root-cause correlation see the same "same device / same time window". State
-// transitions (investigating/resolved/closed/reopen) and the read API are added
-// separately — this service only opens/extends events.
+// `windowMs` is EVENT_ACTIVITY_WINDOW_MS — the same span autoResolveJob treats
+// as "this condition is finished". Grouping and finishing are one judgement, and
+// splitting them is what produced duplicate open events per device (see
+// ./activityWindow.js). State transitions (investigating/resolved/closed/reopen)
+// and the read API are added separately — this service only opens/extends events.
 //
 // Best-effort by contract: the caller wraps every call so a failure here never
 // affects ingestion.
@@ -29,7 +30,7 @@ const DEFAULT_CONFIG_WINDOW_MS = 30 * 60 * 1000; // 30 min (configurable)
 function createEventCaseService({
   eventCasesRepo,
   findingStore,
-  windowMs = DEFAULT_WINDOW_MS,
+  windowMs = EVENT_ACTIVITY_WINDOW_MS,
   // Optional device-config correlation (Fase 3 pt 4). When wired, a new anomaly
   // is checked against config changes on the same device within configWindowMs
   // before it; the first such change is linked to the event.

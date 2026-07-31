@@ -8,6 +8,8 @@
 // jobs. Best-effort: a failure on one event never stops the rest, and the
 // whole run swallows repo errors so it can never crash the scheduler.
 
+const { EVENT_ACTIVITY_WINDOW_MS } = require('./activityWindow');
+
 const silentLogger = { info() {}, warn() {}, error() {} };
 
 function createEventAutoResolveJob({
@@ -15,7 +17,9 @@ function createEventAutoResolveJob({
   // Optional: record the automatic transition in the hash-chained audit_log,
   // same as manual transitions (actor = system).
   auditLogRepo = null,
-  inactivityMs = 15 * 60 * 1000, // "X minutter" of no new anomalies → auto-resolve
+  // Same window eventCaseService groups within, so an event is never resolved
+  // while a new anomaly would still have joined it (./activityWindow.js).
+  inactivityMs = EVENT_ACTIVITY_WINDOW_MS,
   intervalMs = 60 * 1000, // how often to sweep for stale events
   now = () => Date.now(),
   logger = silentLogger,

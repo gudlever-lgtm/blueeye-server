@@ -53,7 +53,7 @@ function toIso(v) {
   return Number.isNaN(d.getTime()) ? null : d.toISOString();
 }
 
-// Worst severity across a cluster's member findings. `incident_clusters` stores
+// Worst severity across a cluster's member findings. `event_clusters` stores
 // no severity column of its own — the correlator derives it from the members,
 // and so do we (same rule the alert rollup in clusterRollup.js applies).
 function worstSeverity(members) {

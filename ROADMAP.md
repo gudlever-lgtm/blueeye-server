@@ -19,8 +19,8 @@ unlocked by editing local config — the Ed25519 signature would stop matching.
 ## ✅ Available (shipped)
 
 - [x] **Basic dashboard** (`dashboard_basic`) — `public/app.js` SPA.
-- [x] **Advanced dashboard** (`dashboard_advanced`) — "Open issues" rollup (active incidents + recent findings) merged into the Overview (`fleetIssues()` in `views.fleet` + `GET /api/dashboard/advanced`, `src/dashboard/advancedDashboard.js`), gated.
-- [x] **Basic reports** (`reports_basic`) — `src/routes/reports.js` (availability + incidents).
+- [x] **Advanced dashboard** (`dashboard_advanced`) — "Open issues" rollup (active events + recent findings) merged into the Overview (`fleetIssues()` in `views.fleet` + `GET /api/dashboard/advanced`, `src/dashboard/advancedDashboard.js`), gated.
+- [x] **Basic reports** (`reports_basic`) — `src/routes/reports.js` (availability + events).
 - [x] **SLA / availability report** (`reports_sla`) — `src/routes/reports.js` `/availability`.
 - [x] **CSV reports** (`reports_csv`) — `src/routes/reports.js` `*.csv` + `src/routes/export.js`, gated.
 - [x] **PDF reports** (`reports_pdf`) — print-ready HTML report export (`*.html`), gated; print→PDF client-side.

@@ -6,7 +6,7 @@ const { serviceForPort, WELL_KNOWN } = require('../flows/services');
 // The universal search fan-out (Fase 1).
 //
 // Every resolver is independent and may fail on its own backend. One dead source
-// must not blank the field — a technician mid-incident needs the four answers we
+// must not blank the field — a technician mid-event needs the four answers we
 // CAN give, not a 500 because the CMDB is unreachable. So this fans out with
 // Promise.allSettled and reports what it could not reach in `failedSources`,
 // mirroring targetTimelineService's partial-failure policy.

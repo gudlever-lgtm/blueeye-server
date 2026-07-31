@@ -36,10 +36,10 @@ class FeatureDisabledError extends Error {
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
-// The exact answer the incident assistant must return when the context does not
+// The exact answer the event assistant must return when the context does not
 // contain enough information — also used by the route to short-circuit (no data
 // at all → this reply without a provider call).
-const INCIDENT_INSUFFICIENT_ANSWER = 'There is not enough data to reach a conclusion.';
+const EVENT_INSUFFICIENT_ANSWER = 'There is not enough data to reach a conclusion.';
 
 function createAssistant({
   config = {},
@@ -409,7 +409,9 @@ function createAssistant({
   }
 
   // Generates a NIS2 incident draft structure from an InvestigationResult.
-  // Uses a separate Mistral call with a NIS2-focused system prompt.
+  // Uses a separate Mistral call with a NIS2-focused system prompt. The prompt
+  // says "incident" throughout on purpose: this is the word the NIS2 directive
+  // uses, and the draft is read by a regulator against that wording.
   // Throws FeatureDisabled when off, AssistantMisconfigured when not wired,
   // AssistantUpstreamError on provider failure.
   async function generateNis2Draft(result) {
@@ -458,14 +460,14 @@ function createAssistant({
     return answer;
   }
 
-  // Answers a free-text question about a specific incident using ONLY the
+  // Answers a free-text question about a specific event using ONLY the
   // already-masked/aggregated context the caller assembled (askContext). The
   // system prompt forbids inventing anything and pins the exact fallback string
   // when the context is insufficient. Throws FeatureDisabled when off,
   // InvalidQuestion on empty input, AssistantMisconfigured/UpstreamError on
   // provider problems. The context is NOT re-masked here — masking already
   // happened before it reached this method.
-  async function askIncident(question, context) {
+  async function askEvent(question, context) {
     if (!currentEnabled()) throw new FeatureDisabledError();
     if (typeof question !== 'string' || question.trim() === '') {
       const e = new Error('question must be a non-empty string');
@@ -474,17 +476,17 @@ function createAssistant({
     }
     const system =
       'You are a network operations assistant for BlueEyes, answering a question about ONE specific ' +
-      'incident. Answer briefly and concretely in the language of the question. Use ONLY the provided ' +
-      'context (incident, timeline, config changes, similar incidents). NEVER invent facts, causes, ' +
+      'event. Answer briefly and concretely in the language of the question. Use ONLY the provided ' +
+      'context (event, timeline, config changes, similar events). NEVER invent facts, causes, ' +
       'hostnames or addresses that are not present in the context. If the context does not contain ' +
-      `enough information to answer, reply EXACTLY with: "${INCIDENT_INSUFFICIENT_ANSWER}"`;
+      `enough information to answer, reply EXACTLY with: "${EVENT_INSUFFICIENT_ANSWER}"`;
     const user = JSON.stringify({ question: question.trim(), context });
     const answer = await chat(system, user);
     return { answer, model: currentModel() };
   }
 
-  // Proposes a remediation for ONE incident from the SAME already-masked context
-  // askIncident uses (no re-masking here — masking happened before it reached this
+  // Proposes a remediation for ONE event from the SAME already-masked context
+  // askEvent uses (no re-masking here — masking happened before it reached this
   // method). The fallback recommendation surface calls this only after a playbook
   // + historical match both came up empty (or an operator forced it). The system
   // prompt forbids inventing a fix and pins the exact insufficient-context string,
@@ -495,18 +497,18 @@ function createAssistant({
     if (!currentEnabled()) throw new FeatureDisabledError();
     const system =
       'You are a network operations assistant for BlueEyes, proposing a remediation for ONE specific ' +
-      'incident. Use ONLY the provided masked context (incident, timeline, config changes, similar ' +
-      'incidents). Propose at most a few concrete, actionable steps, in the language of the incident ' +
+      'event. Use ONLY the provided masked context (event, timeline, config changes, similar ' +
+      'events). Propose at most a few concrete, actionable steps, in the language of the event ' +
       'title. This is a SUGGESTION, never verified fact. NEVER invent facts, causes, hostnames, ' +
       'addresses or fixes that are not supported by the context. If the context does not contain ' +
-      `enough information to suggest anything concrete, reply EXACTLY with: "${INCIDENT_INSUFFICIENT_ANSWER}"`;
+      `enough information to suggest anything concrete, reply EXACTLY with: "${EVENT_INSUFFICIENT_ANSWER}"`;
     const user = JSON.stringify({ task: 'suggest_remediation', context });
     const answer = await chat(system, user);
     return { answer, model: currentModel() };
   }
 
   // Proposes a likely COMMON root cause + troubleshooting steps for a cross-agent
-  // incident CLUSTER — findings from several agents that fired together. The prompt
+  // event CLUSTER — findings from several agents that fired together. The prompt
   // is built from the cluster's member findings (not a single finding), each already
   // carrying a plain-language explanation; IPs in explanations are masked here before
   // anything leaves the process. Same contract as suggestRemediation: it is a
@@ -534,19 +536,19 @@ function createAssistant({
       findings,
     };
     const system =
-      'You are a network operations assistant for BlueEyes, analyzing ONE incident that spans MULTIPLE ' +
+      'You are a network operations assistant for BlueEyes, analyzing ONE event that spans MULTIPLE ' +
       'agents (a cross-agent cluster). Propose the single most likely COMMON root cause and a few ' +
       'concrete troubleshooting steps, in the language of the findings. Focus on what the agents share ' +
       '(same site, same anomaly type, same time). This is a SUGGESTION, never verified fact. Use ONLY ' +
       'the provided context (per-agent findings, each already explained). NEVER invent facts, causes, ' +
       'hostnames or addresses that are not present in the context. If the context does not contain enough ' +
-      `information to suggest a common cause, reply EXACTLY with: "${INCIDENT_INSUFFICIENT_ANSWER}"`;
+      `information to suggest a common cause, reply EXACTLY with: "${EVENT_INSUFFICIENT_ANSWER}"`;
     const user = JSON.stringify({ task: 'cluster_common_cause', context });
     const answer = await chat(system, user);
     return { answer, model: currentModel(), usedFindings: findings.length };
   }
 
-  return { isEnabled, status, explain, explainDiagnostic, summarizeLocation, narrateInvestigation, generateNis2Draft, diagnoseTransaction, askIncident, suggestRemediation, suggestClusterCause, buildContext, buildLocationContext };
+  return { isEnabled, status, explain, explainDiagnostic, summarizeLocation, narrateInvestigation, generateNis2Draft, diagnoseTransaction, askEvent, suggestRemediation, suggestClusterCause, buildContext, buildLocationContext };
 }
 
-module.exports = { createAssistant, FeatureDisabledError, INCIDENT_INSUFFICIENT_ANSWER };
+module.exports = { createAssistant, FeatureDisabledError, EVENT_INSUFFICIENT_ANSWER };

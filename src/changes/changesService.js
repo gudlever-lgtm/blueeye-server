@@ -4,7 +4,7 @@ const {
   buildChangeFeed,
   fromAgentEvents,
   fromFindings,
-  fromProbeIncidents,
+  fromProbeEvents,
   fromEvents,
   fromClusters,
   fromTopologyChanges,
@@ -41,9 +41,9 @@ function createChangesService({
   agentsRepo,
   auditEventsRepo = null,
   findingStore = null,
-  incidentsRepo = null,
-  incidentCasesRepo = null,
-  incidentClustersRepo = null,
+  probeOutagesRepo = null,
+  eventCasesRepo = null,
+  eventClustersRepo = null,
   topologyChangesRepo = null,
   interfaceStatesRepo = null,
   remediationPlaybooksRepo = null,
@@ -71,25 +71,25 @@ function createChangesService({
     return fromFindings(rows, ctx);
   }
 
-  async function fetchProbeIncidents({ from, to }, ctx) {
-    if (!incidentsRepo || typeof incidentsRepo.list !== 'function') return [];
-    const rows = await incidentsRepo.list({ from, to, limit: PER_SOURCE_LIMIT });
-    // The repo returns incidents OVERLAPPING the window; the mapper decides which
+  async function fetchProbeEvents({ from, to }, ctx) {
+    if (!probeOutagesRepo || typeof probeOutagesRepo.list !== 'function') return [];
+    const rows = await probeOutagesRepo.list({ from, to, limit: PER_SOURCE_LIMIT });
+    // The repo returns events OVERLAPPING the window; the mapper decides which
     // of the open/resolve transitions actually fell inside it.
-    return fromProbeIncidents(rows, { from, to, ...ctx });
+    return fromProbeEvents(rows, { from, to, ...ctx });
   }
 
-  // Events — the operator-facing unit (`incident_cases`). The anomalies these
+  // Events — the operator-facing unit (`event_cases`). The anomalies these
   // represent are folded INTO these rows by the read-model's roll-up, so this is
   // the source that carries a device's story on the feed.
   async function fetchEvents({ from, to }) {
-    if (!incidentCasesRepo || typeof incidentCasesRepo.list !== 'function') return [];
-    return fromEvents(await incidentCasesRepo.list({ from, to, limit: PER_SOURCE_LIMIT }));
+    if (!eventCasesRepo || typeof eventCasesRepo.list !== 'function') return [];
+    return fromEvents(await eventCasesRepo.list({ from, to, limit: PER_SOURCE_LIMIT }));
   }
 
   async function fetchClusters({ from, to }) {
-    if (!incidentClustersRepo || typeof incidentClustersRepo.list !== 'function') return [];
-    return fromClusters(await incidentClustersRepo.list({ from, to, limit: PER_SOURCE_LIMIT }));
+    if (!eventClustersRepo || typeof eventClustersRepo.list !== 'function') return [];
+    return fromClusters(await eventClustersRepo.list({ from, to, limit: PER_SOURCE_LIMIT }));
   }
 
   async function fetchTopologyChanges({ from, to }) {
@@ -126,7 +126,7 @@ function createChangesService({
     const sources = [
       ['agents', () => fetchAgentEvents(window, ctx)],
       ['findings', () => fetchFindings(window, ctx)],
-      ['probes', () => fetchProbeIncidents(window, ctx)],
+      ['probes', () => fetchProbeEvents(window, ctx)],
       ['events', () => fetchEvents(window)],
       ['clusters', () => fetchClusters(window)],
       ['topology', () => fetchTopologyChanges(window)],

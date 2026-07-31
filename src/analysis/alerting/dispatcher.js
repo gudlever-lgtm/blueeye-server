@@ -106,7 +106,7 @@ function createDispatcher({ config, channels = {}, licensed = () => true, channe
     return { dispatched: attempted, results };
   }
 
-  // Fires ONE cluster-level alert (Step 3) for a cross-agent incident cluster, reusing
+  // Fires ONE cluster-level alert (Step 3) for a cross-agent event cluster, reusing
   // the same channels as findings. Deduped DURABLY via the alert log so a cluster
   // alerts at most once even across restarts (the in-memory throttle wouldn't survive
   // a restart). The `cluster` is a finding-shaped object (metric/severity/explanation/
@@ -167,7 +167,7 @@ function createDispatcher({ config, channels = {}, licensed = () => true, channe
       if (!rule || !rule.enabled) continue;
       if (!channelLicensed(name)) { results.push({ channel: name, ok: false, skipped: true, detail: 'channel not licensed' }); continue; }
       if (subjectRank < rank(rule.minSeverity)) { results.push({ channel: name, ok: false, skipped: true, detail: 'below minSeverity' }); continue; }
-      // Digest: 'silent' channels skip mid-incident update noise.
+      // Digest: 'silent' channels skip mid-event update noise.
       if (kind === 'update' && String(rule.digestMode || 'update') === 'silent') {
         results.push({ channel: name, ok: false, skipped: true, detail: 'silent digest' });
         continue;

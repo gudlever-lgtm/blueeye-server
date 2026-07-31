@@ -9,7 +9,7 @@ const request = require('supertest');
 
 const {
   makeApp, makeServiceDependenciesRepo, makeLldpNeighborsRepo, makeAgentsRepo,
-  makeIncidentCasesRepo, makeFindingStore, authHeader,
+  makeEventCasesRepo, makeFindingStore, authHeader,
 } = require('../test-support/fakes');
 
 const AGENTS = [
@@ -90,34 +90,34 @@ test('depth cap is honoured via ?depth', async () => {
   assert.deepEqual(res.body.directly_isolated.map((e) => e.hostId), [2]); // 3 is 2 hops away
 });
 
-// ---- Incident enrichment (one added field, computed on read, viewer+) --------
+// ---- Event enrichment (one added field, computed on read, viewer+) --------
 
-function incidentSetup() {
-  const incidentCasesRepo = makeIncidentCasesRepo({
+function eventSetup() {
+  const eventCasesRepo = makeEventCasesRepo({
     findById: async (id) => (Number(id) === 7 ? { id: 7, hostId: '1', title: 'core down', status: 'open', severity: 'CRIT', primaryFindingId: null } : null),
   });
-  const findingStore = makeFindingStore({ listByIncidentCase: async () => [] });
-  return { incidentCasesRepo, findingStore };
+  const findingStore = makeFindingStore({ listByEventCase: async () => [] });
+  return { eventCasesRepo, findingStore };
 }
 
-test('GET /api/incidents/:id carries a blastRadius enrichment field (viewer+)', async () => {
+test('GET /api/events/:id carries a blastRadius enrichment field (viewer+)', async () => {
   const { lldpNeighborsRepo, serviceDependenciesRepo } = await topology();
-  const { incidentCasesRepo, findingStore } = incidentSetup();
-  const app = makeApp({ lldpNeighborsRepo, serviceDependenciesRepo, agentsRepo: agentsRepo(), incidentCasesRepo, findingStore });
-  const res = await request(app).get('/api/incidents/7').set('Authorization', authHeader('viewer'));
+  const { eventCasesRepo, findingStore } = eventSetup();
+  const app = makeApp({ lldpNeighborsRepo, serviceDependenciesRepo, agentsRepo: agentsRepo(), eventCasesRepo, findingStore });
+  const res = await request(app).get('/api/events/7').set('Authorization', authHeader('viewer'));
   assert.equal(res.status, 200);
-  assert.ok(res.body.incident.blastRadius, 'incident.blastRadius present');
-  assert.equal(res.body.incident.blastRadius.failingNode, 1);
-  assert.deepEqual(res.body.incident.blastRadius.directly_isolated.map((e) => e.hostId).sort(), [2, 3]);
-  assert.deepEqual(res.body.incident.blastRadius.dependency_affected.map((e) => e.hostId), [4]);
+  assert.ok(res.body.event.blastRadius, 'event.blastRadius present');
+  assert.equal(res.body.event.blastRadius.failingNode, 1);
+  assert.deepEqual(res.body.event.blastRadius.directly_isolated.map((e) => e.hostId).sort(), [2, 3]);
+  assert.deepEqual(res.body.event.blastRadius.dependency_affected.map((e) => e.hostId), [4]);
 });
 
-test('incident enrichment is best-effort — a topology DB failure does not break the incident view', async () => {
+test('event enrichment is best-effort — a topology DB failure does not break the event view', async () => {
   const serviceDependenciesRepo = makeServiceDependenciesRepo();
   const lldpNeighborsRepo = makeLldpNeighborsRepo({ listAll: async () => { throw new Error('DB down'); } });
-  const { incidentCasesRepo, findingStore } = incidentSetup();
-  const app = makeApp({ lldpNeighborsRepo, serviceDependenciesRepo, agentsRepo: agentsRepo(), incidentCasesRepo, findingStore });
-  const res = await request(app).get('/api/incidents/7').set('Authorization', authHeader('viewer'));
-  assert.equal(res.status, 200); // NOT 500 — enrichment failed, incident still served
-  assert.equal(res.body.incident.blastRadius, null);
+  const { eventCasesRepo, findingStore } = eventSetup();
+  const app = makeApp({ lldpNeighborsRepo, serviceDependenciesRepo, agentsRepo: agentsRepo(), eventCasesRepo, findingStore });
+  const res = await request(app).get('/api/events/7').set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 200); // NOT 500 — enrichment failed, event still served
+  assert.equal(res.body.event.blastRadius, null);
 });

@@ -20,10 +20,10 @@ function makeFakePool() {
         // only used indirectly by tests via seedPlaybook below (not the repo)
         throw new Error('repo does not insert playbooks');
       }
-      if (/^INSERT INTO incident_playbook_runs/i.test(sql)) {
-        const [incident_case_id, playbook_id, status, result_text, ran_by] = params;
+      if (/^INSERT INTO event_playbook_runs/i.test(sql)) {
+        const [event_case_id, playbook_id, status, result_text, ran_by] = params;
         const id = (runSeq += 1);
-        runs.push({ id, incident_case_id, playbook_id, status, result_text, ran_by, ran_at: new Date('2026-06-01T00:00:00Z') });
+        runs.push({ id, event_case_id, playbook_id, status, result_text, ran_by, ran_at: new Date('2026-06-01T00:00:00Z') });
         return [{ insertId: id }];
       }
       if (/FROM remediation_playbooks\s+WHERE enabled = 1 AND trigger_condition = \?/i.test(sql)) {
@@ -37,10 +37,10 @@ function makeFakePool() {
       if (/FROM remediation_playbooks ORDER BY id DESC/i.test(sql)) {
         return [playbooks.slice().sort((a, b) => b.id - a.id)];
       }
-      if (/FROM incident_playbook_runs r/i.test(sql)) {
-        const [incidentId] = params;
+      if (/FROM event_playbook_runs r/i.test(sql)) {
+        const [eventId] = params;
         const out = runs
-          .filter((r) => r.incident_case_id === incidentId)
+          .filter((r) => r.event_case_id === eventId)
           .sort((a, b) => b.id - a.id)
           .map((r) => {
             const p = playbooks.find((x) => x.id === r.playbook_id);
@@ -85,12 +85,12 @@ test('matchByAnomalyType ignores disabled playbooks', async () => {
   assert.equal(await repo.matchByAnomalyType('cpu'), null);
 });
 
-test('recordRun + listRunsForIncident round-trips a run with the joined playbook name', async () => {
+test('recordRun + listRunsForEvent round-trips a run with the joined playbook name', async () => {
   const pool = makeFakePool();
   const pbId = pool.seedPlaybook({ name: 'PB', trigger_condition: 'cpu', action_type: 'run_probe' });
   const repo = createRemediationPlaybooksRepository({ pool });
-  await repo.recordRun({ incidentCaseId: 42, playbookId: pbId, status: 'succeeded', resultText: 'ok', ranBy: 'op@x' });
-  const runs = await repo.listRunsForIncident(42);
+  await repo.recordRun({ eventCaseId: 42, playbookId: pbId, status: 'succeeded', resultText: 'ok', ranBy: 'op@x' });
+  const runs = await repo.listRunsForEvent(42);
   assert.equal(runs.length, 1);
   assert.equal(runs[0].status, 'succeeded');
   assert.equal(runs[0].resultText, 'ok');

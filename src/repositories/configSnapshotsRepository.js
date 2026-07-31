@@ -2,10 +2,10 @@
 
 // Data-access for `config_snapshots` — raw device-config captures (migration
 // 049). Pure data-access: diff-generation lives in src/config/diff.js, and the
-// risk classification + incident correlation + endpoints build on top of this.
+// risk classification + event correlation + endpoints build on top of this.
 //
 // A "device" is an agent (device_id → agents.id), consistent with how findings /
-// incidents key on the agent. config_text is raw and may contain secrets, so
+// events key on the agent. config_text is raw and may contain secrets, so
 // callers gate reads to operator/admin and mask at the API layer.
 
 const META_COLUMNS = 'id, device_id, captured_at, captured_via, created_at';
@@ -89,7 +89,7 @@ function createConfigSnapshotsRepository(db) {
   }
 
   // All snapshots for a device captured within [from, to], oldest-first — the
-  // config-change events for the incident-cluster timeline read-model. Metadata
+  // config-change events for the event-cluster timeline read-model. Metadata
   // only (no config_text); the timeline just needs the "a change happened" marker
   // + captured_via, not the diff. Bounded like listForDevice.
   // Every config capture in a window, across all devices. Metadata only — the

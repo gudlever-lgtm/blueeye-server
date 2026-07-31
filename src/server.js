@@ -22,9 +22,9 @@ const { createEnrollmentStore } = require('./services/enrollmentStore');
 const { createAgentTokensRepository } = require('./repositories/agentTokensRepository');
 const { createResultsRepository } = require('./repositories/resultsRepository');
 const { createProbeResultsRepository } = require('./repositories/probeResultsRepository');
-const { createIncidentsRepository } = require('./repositories/incidentsRepository');
-const { createIncidentThresholdsRepository } = require('./repositories/incidentThresholdsRepository');
-const { createIncidentService } = require('./incidents/incidentService');
+const { createProbeOutagesRepository } = require('./repositories/probeOutagesRepository');
+const { createProbeThresholdsRepository } = require('./repositories/probeThresholdsRepository');
+const { createProbeOutageService } = require('./probeOutages/probeOutageService');
 const { createInstallToolService } = require('./services/installToolService');
 const { createCommandSigner } = require('./services/commandSigner');
 const { createArtifactStore } = require('./enroll/artifactStore');
@@ -52,13 +52,13 @@ const { createDetector } = require('./analysis/detector');
 const { createAnalysisPipeline } = require('./analysis/pipeline');
 const { createProbePipeline } = require('./analysis/probePipeline');
 const { createCorrelator } = require('./analysis/correlator');
-const { createIncidentCasesRepository } = require('./repositories/incidentCasesRepository');
-const { createIncidentNotesRepository } = require('./repositories/incidentNotesRepository');
+const { createEventCasesRepository } = require('./repositories/eventCasesRepository');
+const { createEventNotesRepository } = require('./repositories/eventNotesRepository');
 const { createRemediationPlaybooksRepository } = require('./repositories/remediationPlaybooksRepository');
 const { createConfigSnapshotsRepository } = require('./repositories/configSnapshotsRepository');
-const { createIncidentCaseService } = require('./incidentCases/incidentCaseService');
-const { createIncidentAutoResolveJob } = require('./incidentCases/autoResolveJob');
-const { createIncidentClustersRepository } = require('./repositories/incidentClustersRepository');
+const { createEventCaseService } = require('./eventCases/eventCaseService');
+const { createEventAutoResolveJob } = require('./eventCases/autoResolveJob');
+const { createEventClustersRepository } = require('./repositories/eventClustersRepository');
 const { createRunbooksRepository } = require('./repositories/runbooksRepository');
 const { createLldpNeighborsRepository } = require('./repositories/lldpNeighborsRepository');
 const { createLldpGraphService } = require('./topology/lldpGraphService');
@@ -249,12 +249,12 @@ function start() {
     ? createResultsTsdbRepository(tsdb, { latestWindowMinutes: config.tsdb.latestWindowMinutes })
     : null;
   const probeResultsRepo = createProbeResultsRepository(db);
-  const incidentsRepo = createIncidentsRepository(db);
-  const thresholdsRepo = createIncidentThresholdsRepository(db);
-  // Derives incidents from active-probe results on ingest (open/resolve), using
+  const probeOutagesRepo = createProbeOutagesRepository(db);
+  const thresholdsRepo = createProbeThresholdsRepository(db);
+  // Derives events from active-probe results on ingest (open/resolve), using
   // per-location thresholds with a global fallback. Best-effort + resilient.
-  const incidentService = createIncidentService({
-    incidentsRepo, thresholdsRepo, agentsRepo, probeResultsRepo, logger,
+  const probeOutageService = createProbeOutageService({
+    probeOutagesRepo, thresholdsRepo, agentsRepo, probeResultsRepo, logger,
   });
 
   // Agent binaries served from a local dir for frictionless enrollment. SHA-256
@@ -366,7 +366,7 @@ function start() {
   const commandSigner = createCommandSigner({ releaseKeyService, logger });
 
   // Outbound API integrations (ITSM/IPAM connectors). The dispatcher fans domain
-  // events (incidents/anomalies, agent enroll/delete) out to enabled targets with
+  // events (events/anomalies, agent enroll/delete) out to enabled targets with
   // debounce + retry/backoff, decrypting credentials only at fire time, and audits
   // every call. fetch is Node's global (mocked in tests).
   const integrationsRepo = createIntegrationsRepository(db);
@@ -409,7 +409,7 @@ function start() {
   const samlAuth = createSamlAuth({ config: config.saml, samlRoleMapRepo, featureGate, logger });
 
   // NIS2 Reporting Center repositories (risk register, control evidence, security
-  // incidents, generated reports, evidence references, and the module audit log).
+  // events, generated reports, evidence references, and the module audit log).
   const nis2RisksRepo = createNis2RisksRepository(db);
   const nis2ControlsRepo = createNis2ControlsRepository(db);
   const nis2IncidentsRepo = createNis2IncidentsRepository(db);
@@ -464,21 +464,21 @@ function start() {
   const detector = createDetector({ baselines, config: analysisConfig });
   const correlator = createCorrelator(); // uses src/analysis/dependency-graph.json
 
-  // Incident cases: first-class incidents wrapping findings. The service groups
-  // each newly-detected finding into an open incident on the same device (within
+  // Event cases: first-class events wrapping findings. The service groups
+  // each newly-detected finding into an open event on the same device (within
   // the correlator window) or opens a new one; wired into both analysis pipelines.
-  const incidentCasesRepo = createIncidentCasesRepository(db);
-  const incidentNotesRepo = createIncidentNotesRepository(db);
+  const eventCasesRepo = createEventCasesRepository(db);
+  const eventNotesRepo = createEventNotesRepository(db);
   const remediationPlaybooksRepo = createRemediationPlaybooksRepository(db);
   const configSnapshotsRepo = createConfigSnapshotsRepository(db);
-  const incidentCaseService = createIncidentCaseService({ incidentCasesRepo, findingStore, configSnapshotsRepo, agentsRepo, logger });
+  const eventCaseService = createEventCaseService({ eventCasesRepo, findingStore, configSnapshotsRepo, agentsRepo, logger });
 
-  // Cross-agent incident clusters: groups findings from DIFFERENT agents that fire
+  // Cross-agent event clusters: groups findings from DIFFERENT agents that fire
   // in the same time window into one cluster with a suspected common cause +
   // confidence (time-only=low, +shared site=medium, +same finding-type=high). Runs
   // as a leader-only sweep (below) — off the ingest hot path — and pushes cluster
   // events over the SAME dashboard WebSocket as findings.
-  const incidentClustersRepo = createIncidentClustersRepository(db);
+  const eventClustersRepo = createEventClustersRepository(db);
   // Fase 3: runbooks (static finding-type → recommended action) + post-remediation
   // verification runs.
   const runbooksRepo = createRunbooksRepository(db);
@@ -501,7 +501,7 @@ function start() {
   const interfaceStateService = createInterfaceStateService({ interfaceStatesRepo, logger });
   const serviceDependencyJob = createServiceDependencyJob({ serviceDependenciesRepo, flowsRepo, agentsRepo, hostConnectionsRepo, logger });
   // Blast-radius impact analysis over the unified topology graph (l2_link +
-  // service_dep). Used by the incident enrichment + the topology endpoint.
+  // service_dep). Used by the event enrichment + the topology endpoint.
   const blastRadiusService = createBlastRadiusService({ lldpNeighborsRepo, serviceDependenciesRepo, agentsRepo });
   // Topology change detection — diffs each LLDP report against the previous
   // snapshot, records changes (reusing the timeline shape) + writes them to the
@@ -576,14 +576,14 @@ function start() {
   // Fase 5: dispatch-time cluster suppression gate — suppresses a finding's
   // individual alert + ITSM emit when its host is already covered by an open
   // medium/high cluster (rolled into the ONE cluster notification).
-  const clusterAlertGate = createClusterAlertGate({ clustersRepo: incidentClustersRepo, findingStore, logger });
+  const clusterAlertGate = createClusterAlertGate({ clustersRepo: eventClustersRepo, findingStore, logger });
 
   const analysisPipeline = createAnalysisPipeline({
     detector,
     findingStore,
     config: analysisConfig,
     correlator,
-    incidentCaseService,
+    eventCaseService,
     dispatcher,
     // Live getter (not a snapshot) so a runtime enable in Settings → Alerting applies.
     alertingEnabled: () => alertingConfig.enabled,
@@ -611,7 +611,7 @@ function start() {
     findingStore,
     config: analysisConfig,
     dispatcher,
-    incidentCaseService,
+    eventCaseService,
     alertingEnabled: () => alertingConfig.enabled,
     integrationTrigger: integrationsDispatcher,
     clusterAlertGate,
@@ -635,19 +635,19 @@ function start() {
   // opt-in assistant is enabled, it also builds a cluster-level Mistral advisory from
   // the member findings (never surfaced without their evidence). Runs as a
   // leader-only sweep (backgroundJobs) — off the ingest hot path.
-  // Fase 5: cluster notification orchestrator — rolls the incident's alerting,
+  // Fase 5: cluster notification orchestrator — rolls the event's alerting,
   // ITSM ticket and NIS2 draft up to the cluster (one each) instead of per finding.
   const clusterNis2Service = createClusterNis2Service({
-    nis2IncidentsRepo, clustersRepo: incidentClustersRepo, assistant, auditLogger, logger,
+    nis2IncidentsRepo, clustersRepo: eventClustersRepo, assistant, auditLogger, logger,
   });
   const clusterNotifier = createClusterNotifier({
     alertDispatcher: dispatcher,
     integrationTrigger: integrationsDispatcher,
     nis2Service: clusterNis2Service,
-    clustersRepo: incidentClustersRepo,
+    clustersRepo: eventClustersRepo,
     alertLog: alertDispatchLogRepo,
     auditLogger,
-    publishCluster: (cluster) => (dashboardWs ? dashboardWs.broadcast({ type: 'incident_cluster', payload: cluster }) : 0),
+    publishCluster: (cluster) => (dashboardWs ? dashboardWs.broadcast({ type: 'event_cluster', payload: cluster }) : 0),
     logger,
   });
 
@@ -664,12 +664,12 @@ function start() {
     // fleet to run an agent new enough to report ARP on the capabilities cycle.
     arpEntriesRepo,
     auditLogger,
-    publishCluster: (cluster) => (dashboardWs ? dashboardWs.broadcast({ type: 'incident_cluster', payload: cluster }) : 0),
+    publishCluster: (cluster) => (dashboardWs ? dashboardWs.broadcast({ type: 'event_cluster', payload: cluster }) : 0),
     logger,
   });
 
   const crossAgentClusterService = createCrossAgentClusterService({
-    clustersRepo: incidentClustersRepo,
+    clustersRepo: eventClustersRepo,
     findingStore,
     agentsRepo,
     assistant,
@@ -678,7 +678,7 @@ function start() {
     topologyGraph: lldpGraphService,
     notifier: clusterNotifier,
     snapshotService,
-    publishCluster: (cluster) => (dashboardWs ? dashboardWs.broadcast({ type: 'incident_cluster', payload: cluster }) : 0),
+    publishCluster: (cluster) => (dashboardWs ? dashboardWs.broadcast({ type: 'event_cluster', payload: cluster }) : 0),
     logger,
   });
 
@@ -690,7 +690,7 @@ function start() {
     verificationRunsRepo,
     findingStore,
     auditLogger,
-    publishCluster: (cluster) => (dashboardWs ? dashboardWs.broadcast({ type: 'incident_cluster', payload: cluster }) : 0),
+    publishCluster: (cluster) => (dashboardWs ? dashboardWs.broadcast({ type: 'event_cluster', payload: cluster }) : 0),
     logger,
   });
 
@@ -750,7 +750,7 @@ function start() {
 
   // Singleton background jobs for this single-node install: retention
   // rollup/purge, the test-package scheduler, GeoIP auto-update, the hourly MAD
-  // baseline recompute for transaction tests, and incident auto-resolve. They
+  // baseline recompute for transaction tests, and event auto-resolve. They
   // are started on boot and stopped on graceful shutdown.
   const backgroundJobs = [
     retentionScheduler,
@@ -758,7 +758,7 @@ function start() {
     // GeoIP exposes startSchedule/stopSchedule; adapt it to the uniform { start, stop }.
     { start: () => geoipUpdater.startSchedule(), stop: () => geoipUpdater.stopSchedule() },
     createTransactionBaselineJob({ repo: transactionsRepo, logger }),
-    createIncidentAutoResolveJob({ incidentCasesRepo, auditLogRepo, logger }),
+    createEventAutoResolveJob({ eventCasesRepo, auditLogRepo, logger }),
     createCrossAgentClusterJob({ service: crossAgentClusterService, logger }),
     createVerificationJob({ service: verificationService, logger }),
     // Service dependency graph recompute (rolling 24h TCP edges), off the ingest
@@ -785,7 +785,7 @@ function start() {
     // Fase 6: evidence-snapshot retention (default 90d) — never deletes evidence
     // on clusters with an unacknowledged CRIT finding. Nightly-ish sweep.
     (() => {
-      const retention = createEvidenceRetention({ evidenceRepo, clustersRepo: incidentClustersRepo, findingStore, retentionDays: Number(process.env.RETENTION_EVIDENCE_DAYS) || 90, logger });
+      const retention = createEvidenceRetention({ evidenceRepo, clustersRepo: eventClustersRepo, findingStore, retentionDays: Number(process.env.RETENTION_EVIDENCE_DAYS) || 90, logger });
       let t = null;
       return {
         start() {
@@ -827,10 +827,10 @@ function start() {
     agentTokensRepo,
     resultsRepo,
     probeResultsRepo,
-    incidentsRepo,
-    incidentCasesRepo,
-    incidentNotesRepo,
-    incidentClustersRepo,
+    probeOutagesRepo,
+    eventCasesRepo,
+    eventNotesRepo,
+    eventClustersRepo,
     clusterNotifier,
     alertDispatchLogRepo,
     evidenceRepo,
@@ -856,7 +856,7 @@ function start() {
     remediationPlaybooksRepo,
     configSnapshotsRepo,
     thresholdsRepo,
-    incidentService,
+    probeOutageService,
     installToolService,
     commandSigner,
     agentCommander,
@@ -1024,7 +1024,7 @@ function start() {
 
   // Start the singleton background jobs — retention rollup/purge, the
   // test-package scheduler, the GeoIP auto-update, the transaction baseline
-  // recompute and incident auto-resolve.
+  // recompute and event auto-resolve.
   startBackgroundJobs();
 
   function shutdown(signal) {

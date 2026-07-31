@@ -57,18 +57,18 @@ function summarize(kind, cluster, prev = {}) {
   const agents = cluster && cluster.agentCount != null ? cluster.agentCount : (cluster && cluster.memberCount) || 0;
   const conf = cluster && cluster.confidence ? `${cluster.confidence} confidence` : '';
   const cls = cluster && cluster.classification ? `, suspected ${cluster.classification}` : '';
-  if (kind === 'opened') return `Cross-agent incident opened — ${agents} affected agent(s), ${conf}${cls}.`;
-  if (kind === 'escalation') return `Incident escalated — severity now ${cluster.severity} across ${agents} agent(s).`;
+  if (kind === 'opened') return `Cross-agent event opened — ${agents} affected agent(s), ${conf}${cls}.`;
+  if (kind === 'escalation') return `Event escalated — severity now ${cluster.severity} across ${agents} agent(s).`;
   if (kind === 'update') {
     const added = (cluster.memberCount || 0) - (prev.alertMemberCount || 0);
-    return `Incident update — ${added} new member finding(s); ${agents} affected agent(s).`;
+    return `Event update — ${added} new member finding(s); ${agents} affected agent(s).`;
   }
   if (kind === 'resolved') {
     const dur = cluster && cluster.durationText ? ` after ${cluster.durationText}` : '';
     const note = cluster && cluster.resolutionNote ? ` — ${cluster.resolutionNote}` : '';
-    return `Cross-agent incident resolved${dur}${note}.`;
+    return `Cross-agent event resolved${dur}${note}.`;
   }
-  return 'Cross-agent incident.';
+  return 'Cross-agent event.';
 }
 
 module.exports = { decideAlert, summarize, DEFAULT_DIGEST_MS, RANK };

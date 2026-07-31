@@ -6,12 +6,12 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
 const { createClusterNotifier } = require('../src/analysis/clusterNotifier');
-const { makeIncidentClustersRepo, makeAlertDispatchLogRepo, makeIntegrationsDispatcher } = require('../test-support/fakes');
+const { makeEventClustersRepo, makeAlertDispatchLogRepo, makeIntegrationsDispatcher } = require('../test-support/fakes');
 
 const now = () => new Date('2026-07-01T12:00:00Z');
 
 function harness(over = {}) {
-  const clustersRepo = over.clustersRepo || makeIncidentClustersRepo();
+  const clustersRepo = over.clustersRepo || makeEventClustersRepo();
   const alertLog = over.alertLog || makeAlertDispatchLogRepo();
   const integrationTrigger = over.integrationTrigger || makeIntegrationsDispatcher();
   const alertEvents = [];

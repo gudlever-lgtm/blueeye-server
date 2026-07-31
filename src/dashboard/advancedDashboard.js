@@ -1,7 +1,7 @@
 'use strict';
 
 // Builds the "open issues" rollup the Overview page shows for Professional+
-// licences (feature `dashboard_advanced`): the active incidents and the most
+// licences (feature `dashboard_advanced`): the active probe outages and the most
 // recent unacknowledged analysis findings, composed from data the server
 // already holds. Pure and dependency-free so it is unit-testable; the route
 // wires the real repositories.
@@ -9,30 +9,30 @@
 // Fleet health and the per-agent "needs attention" list used to live here too,
 // but the Overview already renders those (the NOC KPI strip + status chips +
 // the worst-first agent table from /api/fleet/health), so they were dropped as
-// redundant — this payload is purely the incidents/findings supplement.
+// redundant — this payload is purely the outages/findings supplement.
 //
-//   buildAdvancedDashboard({ incidents, findings, incidentCases })
+//   buildAdvancedDashboard({ probeOutages, findings, eventCases })
 //
-// `incidents`     — probe-outage incident rows (incidentsRepo.list()).
-// `findings`      — analysis findings (findingStore.list()).
-// `incidentCases` — first-class incidents (incidentCasesRepo.list()); the open
-//                   (open|investigating) ones are surfaced as their own widget.
+// `probeOutages` — probe-outage rows (probeOutagesRepo.list()).
+// `findings`     — analysis findings (findingStore.list()).
+// `eventCases`   — first-class events (eventCasesRepo.list()); the open
+//                  (open|investigating) ones are surfaced as their own widget.
 function buildAdvancedDashboard({
-  incidents = [],
+  probeOutages = [],
   findings = [],
-  incidentCases = [],
+  eventCases = [],
   now = Date.now(),
 } = {}) {
-  const activeIncidents = (incidents || []).filter((i) => i && i.status === 'active');
+  const activeOutages = (probeOutages || []).filter((o) => o && o.status === 'active');
   const openFindings = (findings || []).filter((f) => f && !f.acked);
-  const openCases = (incidentCases || []).filter((c) => c && (c.status === 'open' || c.status === 'investigating'));
+  const openCases = (eventCases || []).filter((c) => c && (c.status === 'open' || c.status === 'investigating'));
 
   return {
     generatedAt: new Date(now).toISOString(),
     widgets: {
-      incidents: {
-        active: activeIncidents.length,
-        recent: activeIncidents
+      probeOutages: {
+        active: activeOutages.length,
+        recent: activeOutages
           .slice()
           .sort((a, b) => String(b.startedAt || '').localeCompare(String(a.startedAt || '')))
           .slice(0, 10)
@@ -62,7 +62,7 @@ function buildAdvancedDashboard({
             createdAt: f.createdAt || null,
           })),
       },
-      incidentCases: {
+      eventCases: {
         open: openCases.length,
         recent: openCases
           .slice()

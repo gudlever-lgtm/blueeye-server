@@ -58,7 +58,7 @@ The built-in ServiceNow/Nautobot methods:
 
 - `testConnection(integration)` → `{ ok, status, detail }`. A bounded read of the
   asset surface (ServiceNow `cmdb_ci`, Nautobot `dcim/devices`), so a service
-  account scoped to the CMDB (but not to incidents) still passes.
+  account scoped to the CMDB (but not to events) still passes.
 - `search(integration, query)` → `{ ok, status, assets }`, normalizing each source
   to `{ id, name, type, location }[]`. **One term, three fields** — an operator
   types whichever of asset id / asset name / location they happen to know:

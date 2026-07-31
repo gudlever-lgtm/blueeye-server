@@ -1,10 +1,10 @@
 'use strict';
 
-// Leader-only background sweep for cross-agent incident clusters. Every tick it
+// Leader-only background sweep for cross-agent event clusters. Every tick it
 // (1) runs a detection pass (group findings from >=2 agents in the window into
 // clusters, deduped) and (2) resolves clusters that have gone inactive. Exposes
 // { runOnce, start, stop } so it slots into server.js's backgroundJobs array like
-// the retention / transaction-baseline / incident-auto-resolve jobs.
+// the retention / transaction-baseline / event-auto-resolve jobs.
 //
 // Detection lives in a sweep (not the ingest hot path) so it stays off the
 // per-report critical path and still catches findings from every source (traffic

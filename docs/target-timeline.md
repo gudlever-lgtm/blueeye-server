@@ -1,8 +1,8 @@
-# Per-target incident timeline
+# Per-target event timeline
 
 A unified, **read-only** view that merges the timestamped events already recorded
 for one agent/target into a single chronological list — the backend for the
-"incident timeline" feature. Phase 1 is the endpoint only; the dashboard view is
+"event timeline" feature. Phase 1 is the endpoint only; the dashboard view is
 a later phase.
 
 ## Endpoint
@@ -11,7 +11,7 @@ a later phase.
 GET /api/targets/:id/timeline?from=&to=&limit=
 ```
 
-- **Auth:** `viewer+` (same read convention as `/api/incidents/:id/timeline`).
+- **Auth:** `viewer+` (same read convention as `/api/events/:id/timeline`).
 - **`:id`** is the numeric `agents.id`. Unknown id → **404** (not an empty list).
 - **`from` / `to`** ISO-8601. Omit either → default window **last 24h**. Invalid
   date → **400**; `from` after `to` → **400**.
@@ -41,9 +41,9 @@ lets the frontend deep-link to the original record.
 | `source` | table | `ref_id` | notes |
 |---|---|---|---|
 | `finding` | `findings` | finding uuid | anomaly detections; `type` = the finding metric |
-| `incident` | `incidents` | incident id | probe outages; emits an open event and (if resolved in-window) a `…​.resolved` event |
+| `probe` | `probe_outages` | probe-outage id | probe outages; emits an open event and (if resolved in-window) a `…​.resolved` event |
 | `agent` | `audit_events` | audit-event id | lifecycle only: `agent.online` / `agent.offline` / `agent.enrolled` (recurring activity is skipped) |
-| `playbook` | `incident_playbook_runs` | run id | remediation runs, resolved via the host's `incident_cases` |
+| `playbook` | `event_playbook_runs` | run id | remediation runs, resolved via the host's `event_cases` |
 
 **Severity is normalised to `INFO`/`WARN`/`CRIT` across all sources** so the
 frontend colours the whole timeline from the findings palette (probe-outage
@@ -63,8 +63,8 @@ frontend colours the whole timeline from the findings palette (probe-outage
   not blank the timeline. A real **500** only happens before fan-out (e.g.
   resolving the target).
 - **Target identity.** Every source keys off the agent's numeric id, but stored
-  inconsistently — `String(id)` for findings/incident_cases `host_id`, numeric
-  for incidents `agent_id` and audit_events `actor_id`. The service centralises
+  inconsistently — `String(id)` for findings/event_cases `host_id`, numeric
+  for events `agent_id` and audit_events `actor_id`. The service centralises
   that mapping. See `REFACTOR-AUDIT-timeline.md` for the full identity analysis.
 
 ## "What changed before this" (Phase 3)
@@ -98,7 +98,7 @@ manifesting. Proposed split (one line each to adjust in `targetTimeline.js`):
 | agent reconnect (`agent.online`) | change |
 | agent enrolment (`agent.enrolled`) | change |
 | anomaly finding (`finding.*`) | symptom |
-| probe-outage incident (`incident.*`) | symptom |
+| probe outage (`probe.*`) | symptom |
 | agent offline (`agent.offline`) | symptom |
 
 The frontend surfaces this as an inline **"What changed?"** expander per row on
@@ -110,9 +110,9 @@ reusing the Phase 2 `timelineRowEl` row.
 - Route: `src/routes/targets.js` (mounted `/api/targets` in `routes/index.js`).
 - Merge (pure): `src/timeline/targetTimeline.js`.
 - Fan-out/partial: `src/timeline/targetTimelineService.js`.
-- Read-only repo additions (no schema changes): `incidentsRepository.listForAgent`,
+- Read-only repo additions (no schema changes): `probeOutagesRepository.listForAgent`,
   `auditEventsRepository.findByActor` (accepts an `actions` whitelist so only
   lifecycle rows are fetched), `remediationPlaybooksRepository.listRunsForHost`
-  (single JOIN through `incident_cases` — no N+1), and a `to`/`until` upper bound
+  (single JOIN through `event_cases` — no N+1), and a `to`/`until` upper bound
   on `findingStore.list` (prevents historical-window truncation).
 - Tests: `test/targetTimeline.test.js`.

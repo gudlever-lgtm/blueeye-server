@@ -23,7 +23,7 @@ const {
   makeUsersRepo,
   makeAuditEventsRepo,
   makeFindingStore,
-  makeIncidentsRepo,
+  makeProbeOutagesRepo,
   makeTopologyChangesRepo,
   makeAuditLogRepo,
   authHeader,
@@ -324,7 +324,7 @@ test('POST /api/changes/seen returns 500 when the write fails', async () => {
 // event row for the same detection, repeated every time the condition came back —
 // a handful of actual problems presented as fifty-two things to read.
 test('a recurring condition is ONE event row, not an anomaly + event pair per occurrence', async () => {
-  const { makeIncidentCasesRepo } = require('../test-support/fakes');
+  const { makeEventCasesRepo } = require('../test-support/fakes');
 
   // Six occurrences of one condition on agent 7. Each opened its own case (the
   // previous one having been resolved), and each has its anomaly linked to it —
@@ -347,16 +347,16 @@ test('a recurring condition is ONE event row, not an anomaly + event pair per oc
     last_event_at: at(mins),
     created_by: 'system',
   }));
-  const incidentCasesRepo = makeIncidentCasesRepo();
-  incidentCasesRepo.rows.push(...cases);
+  const eventCasesRepo = makeEventCasesRepo();
+  eventCasesRepo.rows.push(...cases);
 
   const findingStore = makeFindingStore();
   occurrences.forEach((mins, i) => findingStore.rows.push({
     id: `f${i}`, hostId: '7', metric: 'probe.latency', severity: 'CRIT',
-    createdAt: at(mins), incidentCaseId: 100 + i,
+    createdAt: at(mins), eventCaseId: 100 + i,
   }));
 
-  const res = await get(appWith({ incidentCasesRepo, findingStore }), '?window=6h');
+  const res = await get(appWith({ eventCasesRepo, findingStore }), '?window=6h');
   assert.equal(res.status, 200);
 
   // Twelve raw occurrences (six anomalies + six events) → one row.
@@ -378,14 +378,14 @@ test('a recurring condition is ONE event row, not an anomaly + event pair per oc
 });
 
 test('two different conditions on one device stay two rows', async () => {
-  const { makeIncidentCasesRepo } = require('../test-support/fakes');
-  const incidentCasesRepo = makeIncidentCasesRepo();
-  incidentCasesRepo.rows.push(
+  const { makeEventCasesRepo } = require('../test-support/fakes');
+  const eventCasesRepo = makeEventCasesRepo();
+  eventCasesRepo.rows.push(
     { id: 1, host_id: '7', title: 'CRIT probe.latency on Core switch', status: 'open', severity: 'CRIT', primary_metric: 'probe.latency', first_event_at: minutesAgo(30).toISOString(), last_event_at: minutesAgo(30).toISOString(), created_by: 'system' },
     { id: 2, host_id: '7', title: 'CRIT if.errors on Core switch', status: 'open', severity: 'CRIT', primary_metric: 'if.errors', first_event_at: minutesAgo(20).toISOString(), last_event_at: minutesAgo(20).toISOString(), created_by: 'system' }
   );
 
-  const res = await get(appWith({ incidentCasesRepo }), '?window=6h');
+  const res = await get(appWith({ eventCasesRepo }), '?window=6h');
   const rows = res.body.events.filter((e) => e.kind === 'event');
   assert.equal(rows.length, 2, 'latency and interface errors are different problems');
   assert.deepEqual(rows.map((r) => r.family).sort(), ['interface', 'latency']);
@@ -397,7 +397,7 @@ test('an anomaly with no event of its own is still reported', async () => {
   const findingStore = makeFindingStore();
   findingStore.rows.push({
     id: 'orphan', hostId: '7', metric: 'cpu', severity: 'WARN',
-    createdAt: minutesAgo(10).toISOString(), incidentCaseId: null,
+    createdAt: minutesAgo(10).toISOString(), eventCaseId: null,
   });
   const res = await get(appWith({ findingStore }), '?window=6h');
   const rows = res.body.events.filter((e) => e.kind === 'finding');
@@ -406,25 +406,25 @@ test('an anomaly with no event of its own is still reported', async () => {
 });
 
 test('no feed row ever renders a raw table name as its source', async () => {
-  // `incident_case` was printed verbatim on the page because SOURCE_LABELS had no
+  // `event_case` was printed verbatim on the page because SOURCE_LABELS had no
   // entry for it. The source vocabulary is now the feed's contract.
-  const { makeIncidentCasesRepo } = require('../test-support/fakes');
-  const incidentCasesRepo = makeIncidentCasesRepo();
-  incidentCasesRepo.rows.push({
+  const { makeEventCasesRepo } = require('../test-support/fakes');
+  const eventCasesRepo = makeEventCasesRepo();
+  eventCasesRepo.rows.push({
     id: 1, host_id: '7', title: 'CRIT probe.latency on Core switch', status: 'open', severity: 'CRIT',
     primary_metric: 'probe.latency', first_event_at: minutesAgo(30).toISOString(), last_event_at: minutesAgo(30).toISOString(), created_by: 'system',
   });
-  const incidentsRepo = makeIncidentsRepo({
+  const probeOutagesRepo = makeProbeOutagesRepo({
     list: async () => [{ id: 9, agentId: 8, metric: 'loss', severity: 'critical', affectedTarget: '8.8.8.8', startedAt: minutesAgo(40).toISOString(), resolvedAt: null }],
   });
 
-  const res = await get(appWith({ incidentCasesRepo, incidentsRepo, auditEventsRepo: agentTransitions() }), '?window=6h');
+  const res = await get(appWith({ eventCasesRepo, probeOutagesRepo, auditEventsRepo: agentTransitions() }), '?window=6h');
   const KNOWN = ['finding', 'event', 'probe', 'cluster', 'agent', 'interface', 'topology', 'playbook', 'config'];
   for (const e of res.body.events) {
     assert.ok(KNOWN.includes(e.source), `unlabelled source "${e.source}" would render as a raw key`);
     assert.ok(!String(e.source).includes('_case'), 'a table name must never reach the page');
   }
-  // The two records that used to share the kind `incident` are now distinguishable.
+  // The two records that used to share the kind `event` are now distinguishable.
   assert.ok(res.body.events.some((e) => e.kind === 'event'));
   assert.ok(res.body.events.some((e) => e.kind === 'probe'));
 });

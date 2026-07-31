@@ -8,7 +8,7 @@ const assert = require('node:assert/strict');
 const request = require('supertest');
 
 const {
-  makeApp, makeIncidentCasesRepo, makeConfigSnapshotsRepo, makeAgentsRepo, authHeader,
+  makeApp, makeEventCasesRepo, makeConfigSnapshotsRepo, makeAgentsRepo, authHeader,
 } = require('../test-support/fakes');
 
 // ---- GET /api/devices/:id/config-history -----------------------------------
@@ -60,16 +60,16 @@ test('config-history surfaces a repo failure as 500', async () => {
   assert.equal(res.status, 500);
 });
 
-// ---- GET /api/incidents/:id/config-context ---------------------------------
+// ---- GET /api/events/:id/config-context ---------------------------------
 
 test('config-context returns the linked change + suspected-trigger note → 200', async () => {
   const configSnapshotsRepo = makeConfigSnapshotsRepo();
   const prevId = await configSnapshotsRepo.insert({ deviceId: 9, configText: 'hostname r9\n', capturedVia: 'manual', capturedAt: new Date('2026-06-01T07:00:00Z') });
   const changeId = await configSnapshotsRepo.insert({ deviceId: 9, configText: 'hostname r9\nip route 0.0.0.0 0.0.0.0 10.0.0.1\n', capturedVia: 'manual', capturedAt: new Date('2026-06-01T07:45:00Z') });
-  const incidentCasesRepo = makeIncidentCasesRepo();
-  const id = await incidentCasesRepo.create({ host_id: '9', title: 't', status: 'open', severity: 'CRIT', config_change_id: changeId, first_event_at: new Date('2026-06-01T08:00:00Z'), last_event_at: new Date('2026-06-01T08:00:00Z') });
+  const eventCasesRepo = makeEventCasesRepo();
+  const id = await eventCasesRepo.create({ host_id: '9', title: 't', status: 'open', severity: 'CRIT', config_change_id: changeId, first_event_at: new Date('2026-06-01T08:00:00Z'), last_event_at: new Date('2026-06-01T08:00:00Z') });
 
-  const res = await request(makeApp({ incidentCasesRepo, configSnapshotsRepo })).get(`/api/incidents/${id}/config-context`).set('Authorization', authHeader('operator'));
+  const res = await request(makeApp({ eventCasesRepo, configSnapshotsRepo })).get(`/api/events/${id}/config-context`).set('Authorization', authHeader('operator'));
   assert.equal(res.status, 200);
   assert.equal(res.body.configChangeId, changeId);
   assert.equal(res.body.diff.risk, 'high'); // routing change
@@ -81,28 +81,28 @@ test('config-context returns the linked change + suspected-trigger note → 200'
 });
 
 test('config-context returns nulls when nothing is linked → 200', async () => {
-  const incidentCasesRepo = makeIncidentCasesRepo();
-  const id = await incidentCasesRepo.create({ host_id: '9', title: 't', status: 'open', severity: 'WARN', first_event_at: new Date(), last_event_at: new Date() });
-  const res = await request(makeApp({ incidentCasesRepo })).get(`/api/incidents/${id}/config-context`).set('Authorization', authHeader('operator'));
+  const eventCasesRepo = makeEventCasesRepo();
+  const id = await eventCasesRepo.create({ host_id: '9', title: 't', status: 'open', severity: 'WARN', first_event_at: new Date(), last_event_at: new Date() });
+  const res = await request(makeApp({ eventCasesRepo })).get(`/api/events/${id}/config-context`).set('Authorization', authHeader('operator'));
   assert.equal(res.status, 200);
   assert.equal(res.body.configChangeId, null);
   assert.equal(res.body.change, null);
 });
 
 test('config-context is forbidden for a viewer → 403', async () => {
-  const incidentCasesRepo = makeIncidentCasesRepo();
-  const id = await incidentCasesRepo.create({ host_id: '9', title: 't', status: 'open', severity: 'WARN', first_event_at: new Date(), last_event_at: new Date() });
-  const res = await request(makeApp({ incidentCasesRepo })).get(`/api/incidents/${id}/config-context`).set('Authorization', authHeader('viewer'));
+  const eventCasesRepo = makeEventCasesRepo();
+  const id = await eventCasesRepo.create({ host_id: '9', title: 't', status: 'open', severity: 'WARN', first_event_at: new Date(), last_event_at: new Date() });
+  const res = await request(makeApp({ eventCasesRepo })).get(`/api/events/${id}/config-context`).set('Authorization', authHeader('viewer'));
   assert.equal(res.status, 403);
 });
 
-test('config-context is 404 for an unknown incident', async () => {
-  const res = await request(makeApp()).get('/api/incidents/9999/config-context').set('Authorization', authHeader('operator'));
+test('config-context is 404 for an unknown event', async () => {
+  const res = await request(makeApp()).get('/api/events/9999/config-context').set('Authorization', authHeader('operator'));
   assert.equal(res.status, 404);
 });
 
 test('config-context surfaces a repo failure as 500', async () => {
-  const incidentCasesRepo = makeIncidentCasesRepo({ findById: async () => { throw new Error('db down'); } });
-  const res = await request(makeApp({ incidentCasesRepo })).get('/api/incidents/1/config-context').set('Authorization', authHeader('operator'));
+  const eventCasesRepo = makeEventCasesRepo({ findById: async () => { throw new Error('db down'); } });
+  const res = await request(makeApp({ eventCasesRepo })).get('/api/events/1/config-context').set('Authorization', authHeader('operator'));
   assert.equal(res.status, 500);
 });

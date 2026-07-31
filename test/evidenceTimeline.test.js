@@ -5,9 +5,9 @@ process.env.NODE_ENV = 'test';
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { buildIncidentTimeline, mapEvidenceSnapshot } = require('../src/timeline/incidentTimeline');
-const { createIncidentClusterTimelineService } = require('../src/timeline/incidentTimelineService');
-const { makeIncidentClustersRepo, makeFindingStore, makeEvidenceSnapshotsRepo } = require('../test-support/fakes');
+const { buildEventTimeline, mapEvidenceSnapshot } = require('../src/timeline/eventTimeline');
+const { createEventClusterTimelineService } = require('../src/timeline/eventTimelineService');
+const { makeEventClustersRepo, makeFindingStore, makeEvidenceSnapshotsRepo } = require('../test-support/fakes');
 
 test('mapEvidenceSnapshot emits an INFO event for a complete capture, WARN otherwise', () => {
   const [ok] = mapEvidenceSnapshot({ id: 3, target: '5', status: 'complete', items: [{ name: 'agent.state', status: 'ok' }], capturedAt: '2026-07-01T12:05:00Z' });
@@ -23,7 +23,7 @@ test('mapEvidenceSnapshot emits an INFO event for a complete capture, WARN other
 });
 
 test('the evidence source is merged into the cluster timeline', async () => {
-  const clustersRepo = makeIncidentClustersRepo();
+  const clustersRepo = makeEventClustersRepo();
   const findingStore = makeFindingStore();
   const evidenceRepo = makeEvidenceSnapshotsRepo();
   const member = { id: 'a', hostId: '1', metric: 'probe.loss', severity: 'CRIT', kind: 'THRESHOLD', explanation: 'x', evidence: [{}], createdAt: new Date('2026-07-01T12:00:00Z'), acked: false };
@@ -32,7 +32,7 @@ test('the evidence source is merged into the cluster timeline', async () => {
   const sid = await evidenceRepo.create({ clusterId, target: '1', commandSetVersion: 'evidence-v1', capturedAt: new Date('2026-07-01T12:05:00Z'), trigger: 'auto' });
   await evidenceRepo.complete(sid, { status: 'complete', items: [{ name: 'agent.state', status: 'ok' }], payloadText: 'x' });
 
-  const svc = createIncidentClusterTimelineService({ clustersRepo, findingStore, evidenceRepo });
+  const svc = createEventClusterTimelineService({ clustersRepo, findingStore, evidenceRepo });
   const result = await svc.getTimeline(clusterId, { lookbackMinutes: 30 });
   const evidenceEvents = result.events.filter((e) => e.source === 'evidence');
   assert.equal(evidenceEvents.length, 1);
@@ -40,8 +40,8 @@ test('the evidence source is merged into the cluster timeline', async () => {
   assert.equal(result.partial, false);
 });
 
-test('buildIncidentTimeline places evidence events without a source failure', () => {
-  const { events } = buildIncidentTimeline({
+test('buildEventTimeline places evidence events without a source failure', () => {
+  const { events } = buildEventTimeline({
     memberFindings: [],
     evidenceSnapshots: [{ id: 1, target: '2', status: 'partial', items: [{ name: 'agent.state', status: 'ok' }, { name: 'arp.table', status: 'timeout' }], capturedAt: '2026-07-01T12:05:00Z' }],
     firstFindingAt: new Date('2026-07-01T12:00:00Z'),

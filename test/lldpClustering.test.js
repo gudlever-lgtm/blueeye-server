@@ -8,7 +8,7 @@ const assert = require('node:assert/strict');
 const { createCrossAgentCorrelator } = require('../src/analysis/crossAgentCorrelator');
 const { createCrossAgentClusterService } = require('../src/analysis/crossAgentClusterService');
 const { createLldpGraphService } = require('../src/topology/lldpGraphService');
-const { makeLldpNeighborsRepo, makeIncidentClustersRepo, makeFindingStore, makeAgentsRepo } = require('../test-support/fakes');
+const { makeLldpNeighborsRepo, makeEventClustersRepo, makeFindingStore, makeAgentsRepo } = require('../test-support/fakes');
 
 const T = new Date('2026-07-01T12:00:00Z');
 const ago = (ms) => new Date(T.getTime() - ms);
@@ -83,7 +83,7 @@ test('integration: two LLDP-adjacent agents at DIFFERENT sites cluster via the L
   findingStore.rows.push(finding({ id: 'a', hostId: '1', metric: 'cpu', createdAt: ago(90000), acked: false }));
   findingStore.rows.push(finding({ id: 'b', hostId: '2', metric: 'mem', createdAt: ago(30000), acked: false }));
 
-  const clustersRepo = makeIncidentClustersRepo();
+  const clustersRepo = makeEventClustersRepo();
   // Different sites, so the manual/site pass does NOT group them — LLDP must.
   const agentsRepo = makeAgentsRepo({ findAll: async () => [{ id: 1, location_id: 10 }, { id: 2, location_id: 20 }] });
 

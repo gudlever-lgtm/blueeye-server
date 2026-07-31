@@ -31,10 +31,10 @@ hosts cut off with or behind it.
 
 ## Where it surfaces
 
-- **Incident enrichment** (`GET /api/incidents/:id`, viewer+): the incident
+- **Event enrichment** (`GET /api/events/:id`, viewer+): the event
   object carries one added field, `blastRadius`, computed on read for the
-  incident's `host_id` (when it is an agent id). **Best-effort** — a topology/DB
-  hiccup yields `blastRadius: null`, never a failed incident view. No schema
+  event's `host_id` (when it is an agent id). **Best-effort** — a topology/DB
+  hiccup yields `blastRadius: null`, never a failed event view. No schema
   change (nothing is persisted; it is derived from the graph on read).
 - **Ad-hoc endpoint** (`GET /api/topology/blast-radius/:node`, **operator+**):
   compute for any node. `?depth=N` overrides the cap. `404` unknown node, `400`
@@ -68,4 +68,4 @@ GET /api/topology/blast-radius/1
 - Graph build + service: `src/topology/blastRadiusService.js` (reads the two
   bounded `listAll`s, builds `buildTopologyGraph`, runs the traversal).
 - Surfaces: `src/routes/topology.js` (`/blast-radius/:node`) and
-  `src/routes/incidents.js` (`GET /:id` enrichment).
+  `src/routes/events.js` (`GET /:id` enrichment).

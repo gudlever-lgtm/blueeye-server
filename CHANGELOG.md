@@ -1,5 +1,83 @@
 # Changelog
 
+## 0.110.1 — The incident vocabulary leaves the code and the database
+
+0.109.0 renamed what a customer *sees* — the tab, the API paths, the response
+keys — and deliberately stopped at the storage layer. This finishes the job:
+the tables, columns, module directories and audit categories now say what they
+mean, and "incident" is reserved for the two places it is genuinely the right
+word.
+
+**Breaking.** Read the migration note below before upgrading.
+
+### Two things were both called "incident", and they split
+
+Migration **077** renames them, preserving every row:
+
+| Before | After | What it is |
+| --- | --- | --- |
+| `incident_cases` | `event_cases` | Grouped anomalies — the Events tab |
+| `incident_notes` | `event_notes` | The work log |
+| `incident_clusters` | `event_clusters` | Situations (cross-agent) |
+| `incident_playbook_runs` | `event_playbook_runs` | Remediation runs |
+| `findings.incident_case_id` | `findings.event_case_id` | The link from 048 |
+| `incidents` | `probe_outages` | Probe threshold breaches (025) — never an event |
+| `incident_thresholds` | `probe_thresholds` | Their thresholds (024) |
+
+The code follows: `src/incidentCases/` → `src/eventCases/`, `src/incidents/` →
+`src/probeOutages/`, and the matching repositories, validators, routers and
+tests. Every index and foreign key is renamed explicitly — MySQL carries the
+OLD constraint names through a table rename, so otherwise the schema would
+still be full of `fk_incident_*` pointing at `event_*` tables. Indexes InnoDB
+auto-created to back a foreign key are renamed conditionally via
+`information_schema`, because whether they exist depends on the server version
+and a hard `RENAME INDEX` would abort the migration on a database that lacks
+one.
+
+### What deliberately keeps the word
+
+- **NIS2** — `blueeye_nis2_incidents`, `src/nis2/`, the NIS2 tab and the CFCS
+  report text. "Incident" is the word the directive uses, and a regulator reads
+  the generated report against that wording.
+- **ITSM** — ServiceNow's `incident` table, and the stored integration
+  subscription names (`incident`, `anomaly`). Those live in customer configs;
+  renaming them would silently unsubscribe live integrations.
+
+### Breaking changes
+
+- **`/api/incidents/*` is gone.** `/api/events/*` has been the canonical path
+  since 0.109.0; the deprecated alias and the duplicated `incident`/`incidents`/
+  `incidentId` response keys are removed. A test asserts the old paths now 404
+  rather than quietly answering.
+- **Probe-outage reports moved** off the event vocabulary they never belonged
+  to: `/api/reports/incidents[.csv|.html]` → `/api/reports/probe-outages[…]`,
+  the JSON key `incidents` → `probeOutages`, the CSV filename
+  `blueeye-incidents.csv` → `blueeye-probe-outages.csv`, and
+  `/api/reports/nis2-draft/:incident_id` → `/nis2-draft/:probe_outage_id`
+  returning `probeOutageId`/`probeOutage`.
+- **`/api/incident-clusters` → `/api/event-clusters`.**
+- **`GET /api/dashboard/advanced`**: the widget `widgets.incidents` (probe
+  outages) is now `widgets.probeOutages`, distinct from `widgets.eventCases`.
+- **Target timeline**: the `incident` source is now `probe`, and its event types
+  `incident.*` are now `probe.*`.
+- **No compatibility views.** Anything still querying the old table names fails
+  loudly on upgrade instead of silently reading a stale shim.
+
+### The audit trail is read, not rewritten
+
+Audit entries move from category `incident` to `event`. Existing rows are **not**
+migrated: `audit_log` is hash-chained, so rewriting them would break the chain
+and every later verification. The readers match both categories instead, so an
+event opened before the upgrade keeps its full status history. `listByTarget`
+now accepts an array of categories for exactly this.
+
+### Upgrading
+
+Run `npm run migrate`. The migration is data-preserving but **not reversible**,
+and MySQL commits DDL implicitly — a failure part-way leaves a partially
+renamed schema, so take a backup first. Update any external caller of the
+removed paths before upgrading.
+
 ## 0.109.0 — Events, not incidents; and a feed that correlates instead of counting
 
 Two complaints, one root cause. The changes feed listed an **anomaly** row *and* an

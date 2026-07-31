@@ -9,7 +9,7 @@ const request = require('supertest');
 
 const {
   makeApp, makeAgentsRepo, makeFindingStore, makeInvestigationsRepo,
-  makeAssistant, makeIncidentsRepo, authHeader,
+  makeAssistant, makeProbeOutagesRepo, authHeader,
 } = require('../test-support/fakes');
 
 // Auth headers for each role.
@@ -200,40 +200,40 @@ test('GET /api/investigation/:id returns 500 when repo throws', async () => {
   assert.equal(res.status, 500);
 });
 
-// ---- POST /api/investigation/from-incident ----------------------------------
+// ---- POST /api/investigation/from-event ----------------------------------
 
-test('POST /api/investigation/from-incident returns 401 without token', async () => {
-  const res = await request(makeApp()).post('/api/investigation/from-incident')
-    .send({ incidentId: '1' });
+test('POST /api/investigation/from-event returns 401 without token', async () => {
+  const res = await request(makeApp()).post('/api/investigation/from-event')
+    .send({ eventId: '1' });
   assert.equal(res.status, 401);
 });
 
-test('POST /api/investigation/from-incident returns 403 for viewer', async () => {
-  const res = await request(makeApp()).post('/api/investigation/from-incident')
+test('POST /api/investigation/from-event returns 403 for viewer', async () => {
+  const res = await request(makeApp()).post('/api/investigation/from-event')
     .set('Authorization', viewer())
-    .send({ incidentId: '1' });
+    .send({ eventId: '1' });
   assert.equal(res.status, 403);
 });
 
-test('POST /api/investigation/from-incident returns 400 without incidentId', async () => {
-  const res = await request(makeApp()).post('/api/investigation/from-incident')
+test('POST /api/investigation/from-event returns 400 without eventId', async () => {
+  const res = await request(makeApp()).post('/api/investigation/from-event')
     .set('Authorization', operator())
     .send({});
   assert.equal(res.status, 400);
 });
 
-test('POST /api/investigation/from-incident returns 404 for unknown incident', async () => {
-  const incidentsRepo = makeIncidentsRepo();
-  const res = await request(makeApp({ incidentsRepo })).post('/api/investigation/from-incident')
+test('POST /api/investigation/from-event returns 404 for unknown event', async () => {
+  const probeOutagesRepo = makeProbeOutagesRepo();
+  const res = await request(makeApp({ probeOutagesRepo })).post('/api/investigation/from-event')
     .set('Authorization', operator())
-    .send({ incidentId: '9999' });
+    .send({ eventId: '9999' });
   assert.equal(res.status, 404);
 });
 
-test('POST /api/investigation/from-incident returns 200 when incident found', async () => {
-  // Use a pre-shaped fake incident so we control both the ID type and the fields
+test('POST /api/investigation/from-event returns 200 when event found', async () => {
+  // Use a pre-shaped fake event so we control both the ID type and the fields
   // that mapOut would produce (locationId, agentId, metric, severity …).
-  const fakeIncident = {
+  const fakeEvent = {
     id: 'inc-001',
     locationId: 1,
     agentId: '1',
@@ -241,30 +241,30 @@ test('POST /api/investigation/from-incident returns 200 when incident found', as
     severity: 'CRIT',
     status: 'active',
   };
-  const incidentsRepo = makeIncidentsRepo({
-    findById: async (id) => (id === 'inc-001' ? fakeIncident : null),
+  const probeOutagesRepo = makeProbeOutagesRepo({
+    findById: async (id) => (id === 'inc-001' ? fakeEvent : null),
   });
 
   const agentsRepo = makeAgentsRepo({
     findAll: async () => [{ id: '1', hostname: 'host-a', location_id: 1, status: 'online' }],
   });
 
-  const res = await request(makeApp({ agentsRepo, incidentsRepo }))
-    .post('/api/investigation/from-incident')
+  const res = await request(makeApp({ agentsRepo, probeOutagesRepo }))
+    .post('/api/investigation/from-event')
     .set('Authorization', operator())
-    .send({ incidentId: 'inc-001' });
+    .send({ eventId: 'inc-001' });
 
   assert.equal(res.status, 200);
-  assert.ok(res.body.incidentId != null);
+  assert.ok(res.body.eventId != null);
   assert.ok(typeof res.body.investigation === 'object');
   assert.ok(['LOCAL', 'UPSTREAM', 'DOWNSTREAM', 'APP_NOT_NET', 'INSUFFICIENT_DATA'].includes(res.body.investigation.classification));
   assert.ok(typeof res.body.investigation.explanation === 'string' && res.body.investigation.explanation.length > 0);
   assert.ok(Array.isArray(res.body.investigation.evidence) && res.body.investigation.evidence.length > 0);
 });
 
-// ServiceNow connector not configured — from-incident still works gracefully.
-test('POST /api/investigation/from-incident works without ServiceNow connector', async () => {
-  const fakeIncident = {
+// ServiceNow connector not configured — from-event still works gracefully.
+test('POST /api/investigation/from-event works without ServiceNow connector', async () => {
+  const fakeEvent = {
     id: 'inc-002',
     locationId: null,
     agentId: '5',
@@ -272,18 +272,18 @@ test('POST /api/investigation/from-incident works without ServiceNow connector',
     severity: 'WARN',
     status: 'active',
   };
-  const incidentsRepo = makeIncidentsRepo({
-    findById: async (id) => (id === 'inc-002' ? fakeIncident : null),
+  const probeOutagesRepo = makeProbeOutagesRepo({
+    findById: async (id) => (id === 'inc-002' ? fakeEvent : null),
   });
 
   const agentsRepo = makeAgentsRepo({
     findAll: async () => [{ id: '5', hostname: 'host-b', location_id: 2, status: 'online' }],
   });
 
-  const res = await request(makeApp({ agentsRepo, incidentsRepo }))
-    .post('/api/investigation/from-incident')
+  const res = await request(makeApp({ agentsRepo, probeOutagesRepo }))
+    .post('/api/investigation/from-event')
     .set('Authorization', operator())
-    .send({ incidentId: 'inc-002' });
+    .send({ eventId: 'inc-002' });
 
   // Even without a ServiceNow connector the investigation runs fine.
   assert.equal(res.status, 200);

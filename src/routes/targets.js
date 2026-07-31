@@ -19,12 +19,12 @@ function parseDate(v) {
   return Number.isNaN(d.getTime()) ? null : d; // null → invalid (→ 400)
 }
 
-// Per-target (per-agent) incident timeline.
+// Per-target (per-agent) event timeline.
 //   GET /api/targets/:id/timeline?from=&to=&limit=   viewer+
-// Merges anomaly findings, probe-outage incidents, agent connect/disconnect and
+// Merges anomaly findings, probe-outage events, agent connect/disconnect and
 // remediation playbook runs into one chronological (newest-first) list. RBAC
 // follows the existing viewer<operator<admin read convention (same as
-// /api/incidents/:id/timeline). Read-only; no writes, no schema changes.
+// /api/events/:id/timeline). Read-only; no writes, no schema changes.
 function createTargetsRouter({ agentsRepo, timelineService }) {
   const router = express.Router();
   const reader = requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN);

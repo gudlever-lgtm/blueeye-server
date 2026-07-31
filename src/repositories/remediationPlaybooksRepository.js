@@ -1,12 +1,12 @@
 'use strict';
 
-// Data-access for remediation playbooks (migration 055) and their per-incident
+// Data-access for remediation playbooks (migration 055) and their per-event
 // run history. A playbook is a pre-defined response keyed to an anomaly-type:
-// `trigger_condition` is matched EXACTLY against the incident's primary finding
+// `trigger_condition` is matched EXACTLY against the event's primary finding
 // metric — local + explainable, no regex/DSL, consistent with the rest of the
-// analysis stack. `incident_playbook_runs` records that a playbook was executed
-// against a specific incident and the outcome, so the recommendation endpoint
-// (GET /api/incidents/:id/recommendation) can surface the result instead of
+// analysis stack. `event_playbook_runs` records that a playbook was executed
+// against a specific event and the outcome, so the recommendation endpoint
+// (GET /api/events/:id/recommendation) can surface the result instead of
 // re-suggesting the same playbook. Pure data-access — no policy here.
 
 function toIso(v) {
@@ -32,7 +32,7 @@ function mapRun(row) {
   if (!row) return null;
   return {
     id: Number(row.id),
-    incidentCaseId: Number(row.incident_case_id),
+    eventCaseId: Number(row.event_case_id),
     playbookId: Number(row.playbook_id),
     status: row.status,
     resultText: row.result_text ?? null,
@@ -51,7 +51,7 @@ function createRemediationPlaybooksRepository(db) {
 
   // The enabled playbook whose trigger_condition matches an anomaly-type exactly.
   // Newest first when several match; null when none. A null/empty anomaly-type
-  // never matches (an incident with no primary anomaly-type has no playbook).
+  // never matches (an event with no primary anomaly-type has no playbook).
   async function matchByAnomalyType(anomalyType) {
     if (anomalyType == null || anomalyType === '') return null;
     const [rows] = await pool.query(
@@ -73,31 +73,31 @@ function createRemediationPlaybooksRepository(db) {
     return rows.map(mapPlaybook);
   }
 
-  // All runs recorded against an incident, newest first, joined with the
+  // All runs recorded against an event, newest first, joined with the
   // playbook's name + action_type for display. Bounded.
-  async function listRunsForIncident(incidentCaseId, { limit = 50 } = {}) {
+  async function listRunsForEvent(eventCaseId, { limit = 50 } = {}) {
     const lim = Number.isInteger(limit) && limit > 0 && limit <= 500 ? limit : 50;
     const [rows] = await pool.query(
-      `SELECT r.id, r.incident_case_id, r.playbook_id, r.status, r.result_text, r.ran_by, r.ran_at,
+      `SELECT r.id, r.event_case_id, r.playbook_id, r.status, r.result_text, r.ran_by, r.ran_at,
               p.name AS playbook_name, p.action_type AS playbook_action_type
-       FROM incident_playbook_runs r
+       FROM event_playbook_runs r
        LEFT JOIN remediation_playbooks p ON p.id = r.playbook_id
-       WHERE r.incident_case_id = ?
+       WHERE r.event_case_id = ?
        ORDER BY r.ran_at DESC, r.id DESC
        LIMIT ?`,
-      [incidentCaseId, lim]
+      [eventCaseId, lim]
     );
     return rows.map(mapRun);
   }
 
   // All playbook runs for a HOST within [from, to], newest-first. Playbook runs
-  // are not host-keyed directly — they hang off incident_cases (host_id) — so
-  // this joins through incident_cases in ONE query. Used by the per-target
-  // timeline (avoids an N+1 over the host's incident cases) and keeps the
+  // are not host-keyed directly — they hang off event_cases (host_id) — so
+  // this joins through event_cases in ONE query. Used by the per-target
+  // timeline (avoids an N+1 over the host's event cases) and keeps the
   // (fragile, string-vs-int) host_id join in a single auditable place.
   // Every playbook run in a window, across all hosts — the changes feed asks
   // "what was run while I was away", which is not a per-host question. Joined
-  // with the playbook name and the incident's host so the feed can label a row
+  // with the playbook name and the event's host so the feed can label a row
   // without an N+1 lookup per run.
   async function listRunsBetween({ from = null, to = null, limit = 200 } = {}) {
     const lim = Number.isInteger(limit) && limit > 0 && limit <= 2000 ? limit : 200;
@@ -107,11 +107,11 @@ function createRemediationPlaybooksRepository(db) {
     if (to) { where.push('r.ran_at <= ?'); params.push(to); }
     params.push(lim);
     const [rows] = await pool.query(
-      `SELECT r.id, r.incident_case_id, r.playbook_id, r.status, r.result_text, r.ran_by, r.ran_at,
+      `SELECT r.id, r.event_case_id, r.playbook_id, r.status, r.result_text, r.ran_by, r.ran_at,
               p.name AS playbook_name, p.action_type, ic.host_id
-         FROM incident_playbook_runs r
+         FROM event_playbook_runs r
          JOIN remediation_playbooks p ON p.id = r.playbook_id
-         LEFT JOIN incident_cases ic ON ic.id = r.incident_case_id
+         LEFT JOIN event_cases ic ON ic.id = r.event_case_id
         ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
         ORDER BY r.ran_at DESC, r.id DESC
         LIMIT ?`,
@@ -128,10 +128,10 @@ function createRemediationPlaybooksRepository(db) {
     if (to) { where.push('r.ran_at <= ?'); params.push(to); }
     params.push(lim);
     const [rows] = await pool.query(
-      `SELECT r.id, r.incident_case_id, r.playbook_id, r.status, r.result_text, r.ran_by, r.ran_at,
+      `SELECT r.id, r.event_case_id, r.playbook_id, r.status, r.result_text, r.ran_by, r.ran_at,
               p.name AS playbook_name, p.action_type AS playbook_action_type
-       FROM incident_playbook_runs r
-       JOIN incident_cases ic ON ic.id = r.incident_case_id
+       FROM event_playbook_runs r
+       JOIN event_cases ic ON ic.id = r.event_case_id
        LEFT JOIN remediation_playbooks p ON p.id = r.playbook_id
        WHERE ${where.join(' AND ')}
        ORDER BY r.ran_at DESC, r.id DESC
@@ -141,19 +141,19 @@ function createRemediationPlaybooksRepository(db) {
     return rows.map(mapRun);
   }
 
-  // Records a playbook run against an incident and returns the new run id.
+  // Records a playbook run against an event and returns the new run id.
   // Playbook execution is not exposed over HTTP yet (a later phase) — this exists
   // so runs can be seeded/recorded and read back by the recommendation path.
-  async function recordRun({ incidentCaseId, playbookId, status = 'pending', resultText = null, ranBy = null }) {
+  async function recordRun({ eventCaseId, playbookId, status = 'pending', resultText = null, ranBy = null }) {
     const [res] = await pool.query(
-      `INSERT INTO incident_playbook_runs (incident_case_id, playbook_id, status, result_text, ran_by)
+      `INSERT INTO event_playbook_runs (event_case_id, playbook_id, status, result_text, ran_by)
        VALUES (?, ?, ?, ?, ?)`,
-      [incidentCaseId, playbookId, status, resultText, ranBy]
+      [eventCaseId, playbookId, status, resultText, ranBy]
     );
     return Number(res.insertId);
   }
 
-  return { matchByAnomalyType, findById, list, listRunsForIncident, listRunsForHost, listRunsBetween, recordRun };
+  return { matchByAnomalyType, findById, list, listRunsForEvent, listRunsForHost, listRunsBetween, recordRun };
 }
 
 module.exports = { createRemediationPlaybooksRepository, mapPlaybook, mapRun };

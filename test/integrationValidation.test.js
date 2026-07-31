@@ -12,11 +12,11 @@ const base = { type: 'webhook', name: 'Acme', baseUrl: 'https://hooks.acme.dk/in
 test('accepts a normal config + credentials', () => {
   const { value, errors } = validateIntegrationCreate({
     ...base,
-    config: { table: 'incident', events: ['finding'] },
+    config: { table: 'event', events: ['finding'] },
     credentials: { token: 'abc' },
   });
   assert.equal(errors, undefined);
-  assert.equal(value.config.table, 'incident');
+  assert.equal(value.config.table, 'event');
   assert.equal(value.credentials.token, 'abc');
 });
 

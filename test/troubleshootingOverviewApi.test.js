@@ -9,7 +9,7 @@ const request = require('supertest');
 
 const {
   makeApp, makeAgentsRepo, makeLldpNeighborsRepo, makeServiceDependenciesRepo,
-  makeIncidentClustersRepo, makeFindingStore, makeTopologyChangesRepo,
+  makeEventClustersRepo, makeFindingStore, makeTopologyChangesRepo,
   makeDiscoveredDevicesRepo, authHeader,
 } = require('../test-support/fakes');
 
@@ -58,11 +58,11 @@ async function clusterWithMembers(findingStore, clustersRepo) {
 async function fullApp(over = {}) {
   const { lldpNeighborsRepo, serviceDependenciesRepo } = await topologyRepos();
   const findingStore = over.findingStore || makeFindingStore();
-  const incidentClustersRepo = over.incidentClustersRepo || makeIncidentClustersRepo();
-  if (!over.skipCluster) await clusterWithMembers(findingStore, incidentClustersRepo);
+  const eventClustersRepo = over.eventClustersRepo || makeEventClustersRepo();
+  if (!over.skipCluster) await clusterWithMembers(findingStore, eventClustersRepo);
   return makeApp({
     agentsRepo: agentsRepo(over.agents),
-    lldpNeighborsRepo, serviceDependenciesRepo, findingStore, incidentClustersRepo,
+    lldpNeighborsRepo, serviceDependenciesRepo, findingStore, eventClustersRepo,
     ...over.appOverrides,
   });
 }
@@ -135,13 +135,13 @@ test('a dead domain degrades to partial, it does not 500 the screen', async () =
     list: async () => { throw new Error('boom'); },
     get: async () => { throw new Error('boom'); },
   });
-  const clustersRepo = makeIncidentClustersRepo({
+  const clustersRepo = makeEventClustersRepo({
     listOpen: async () => { throw new Error('boom'); },
   });
   const app = makeApp({
     agentsRepo: agentsRepo(),
     findingStore,
-    incidentClustersRepo: {
+    eventClustersRepo: {
       ...clustersRepo,
       listOpen: () => { throw new Error('synchronous explosion'); },
     },

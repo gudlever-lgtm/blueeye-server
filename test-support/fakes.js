@@ -328,10 +328,10 @@ function makeProbeResultsRepo(overrides = {}) {
   };
 }
 
-// A fake incidents repository (in-memory, stateful) — supports the derivation
+// A fake probe-outages repository (in-memory, stateful) — supports the derivation
 // service (findActive/open/resolve) AND the report routes (list/findById). Rows
 // are kept snake_case internally; list/findById return the camelCase API shape.
-function makeIncidentsRepo(overrides = {}) {
+function makeProbeOutagesRepo(overrides = {}) {
   const rows = [];
   let seq = 0;
   const iso = (v) => (v == null ? null : (v instanceof Date ? v.toISOString() : new Date(v).toISOString()));
@@ -385,19 +385,19 @@ function makeIncidentsRepo(overrides = {}) {
   };
 }
 
-// A fake incident_cases repository (in-memory) — the first-class incident entity
-// wrapping findings (migration 047). Mirrors incidentCasesRepository's surface.
-// In-memory `incident_notes` (migration 072). Mirrors the real repository's
+// A fake event_cases repository (in-memory) — the first-class event entity
+// wrapping findings (migration 047). Mirrors eventCasesRepository's surface.
+// In-memory `event_notes` (migration 072). Mirrors the real repository's
 // APPEND-ONLY surface exactly: append + reads, no update, no delete — so a test
 // cannot accidentally exercise a mutation path that production does not have.
 // Reads are oldest-first, matching the repo (a work log reads forward).
-function makeIncidentNotesRepo(overrides = {}) {
+function makeEventNotesRepo(overrides = {}) {
   const rows = [];
   let seq = 0;
   const iso = (v) => (v == null ? null : (v instanceof Date ? v.toISOString() : new Date(v).toISOString()));
   const mapOut = (r) => ({
     id: r.id,
-    incidentCaseId: r.incident_case_id,
+    eventCaseId: r.event_case_id,
     kind: r.kind,
     text: r.text,
     authorUserId: r.author_user_id ?? null,
@@ -407,17 +407,17 @@ function makeIncidentNotesRepo(overrides = {}) {
     createdAt: iso(r.created_at),
   });
   const forCase = (id) => rows
-    .filter((r) => Number(r.incident_case_id) === Number(id))
+    .filter((r) => Number(r.event_case_id) === Number(id))
     .sort((a, b) => (a.created_at - b.created_at) || (a.id - b.id));
   return {
     rows,
-    append: overrides.append || (async ({ incidentCaseId, kind, text, authorUserId = null, authorEmail = null, authorRole = null }) => {
+    append: overrides.append || (async ({ eventCaseId, kind, text, authorUserId = null, authorEmail = null, authorRole = null }) => {
       const id = (seq += 1);
       // Monotonic timestamps: several notes appended in the same millisecond
       // must still sort deterministically, which is what the id tiebreak in
       // forCase() is for. Spacing them keeps the intent readable in failures.
       const row = {
-        id, incident_case_id: Number(incidentCaseId), kind, text,
+        id, event_case_id: Number(eventCaseId), kind, text,
         author_user_id: authorUserId, author_email: authorEmail, author_role: authorRole,
         created_at: new Date(Date.UTC(2026, 0, 1) + id * 1000),
       };
@@ -428,13 +428,13 @@ function makeIncidentNotesRepo(overrides = {}) {
       const r = rows.find((x) => x.id === Number(id));
       return r ? mapOut(r) : null;
     }),
-    listForIncident: overrides.listForIncident || (async ({ incidentCaseId, limit = 500 }) => forCase(incidentCaseId).slice(0, limit).map(mapOut)),
-    listRuledOut: overrides.listRuledOut || (async ({ incidentCaseId, limit = 200 }) => forCase(incidentCaseId).filter((r) => r.kind === 'ruled_out').slice(0, limit).map(mapOut)),
-    countForIncident: overrides.countForIncident || (async ({ incidentCaseId }) => forCase(incidentCaseId).length),
+    listForEvent: overrides.listForEvent || (async ({ eventCaseId, limit = 500 }) => forCase(eventCaseId).slice(0, limit).map(mapOut)),
+    listRuledOut: overrides.listRuledOut || (async ({ eventCaseId, limit = 200 }) => forCase(eventCaseId).filter((r) => r.kind === 'ruled_out').slice(0, limit).map(mapOut)),
+    countForEvent: overrides.countForEvent || (async ({ eventCaseId }) => forCase(eventCaseId).length),
   };
 }
 
-function makeIncidentCasesRepo(overrides = {}) {
+function makeEventCasesRepo(overrides = {}) {
   const rows = [];
   let seq = 0;
   const rank = { INFO: 0, WARN: 1, CRIT: 2 };
@@ -535,9 +535,9 @@ function makeIncidentCasesRepo(overrides = {}) {
   };
 }
 
-// A fake incident_clusters repository (in-memory) — cross-agent clusters
-// (migration 056). Mirrors incidentClustersRepository's surface.
-function makeIncidentClustersRepo(overrides = {}) {
+// A fake event_clusters repository (in-memory) — cross-agent clusters
+// (migration 056). Mirrors eventClustersRepository's surface.
+function makeEventClustersRepo(overrides = {}) {
   const rows = [];
   let seq = 0;
   const iso = (v) => (v == null ? null : (v instanceof Date ? v.toISOString() : new Date(v).toISOString()));
@@ -679,7 +679,7 @@ function makeRemediationPlaybooksRepo(overrides = {}) {
     const pb = playbooks.find((p) => p.id === r.playbook_id);
     return {
       id: r.id,
-      incidentCaseId: r.incident_case_id,
+      eventCaseId: r.event_case_id,
       playbookId: r.playbook_id,
       status: r.status,
       resultText: r.result_text ?? null,
@@ -697,11 +697,11 @@ function makeRemediationPlaybooksRepo(overrides = {}) {
       playbooks.push({ id, auto_trigger: 0, manual_action_text: null, enabled: 1, created_at: new Date(), ...p });
       return id;
     }),
-    recordRun: overrides.recordRun || (async ({ incidentCaseId, playbookId, status = 'pending', resultText = null, ranBy = null, ranAt = null, hostId = null }) => {
+    recordRun: overrides.recordRun || (async ({ eventCaseId, playbookId, status = 'pending', resultText = null, ranBy = null, ranAt = null, hostId = null }) => {
       const id = (runSeq += 1);
       // hostId is a fake-only convenience: the real listRunsForHost joins through
-      // incident_cases, but the fake stores the host on the run so it can filter.
-      runs.push({ id, incident_case_id: incidentCaseId, playbook_id: playbookId, host_id: hostId, status, result_text: resultText, ran_by: ranBy, ran_at: ranAt || new Date() });
+      // event_cases, but the fake stores the host on the run so it can filter.
+      runs.push({ id, event_case_id: eventCaseId, playbook_id: playbookId, host_id: hostId, status, result_text: resultText, ran_by: ranBy, ran_at: ranAt || new Date() });
       return id;
     }),
     listRunsForHost: overrides.listRunsForHost || (async (hostId, { from = null, to = null, limit = 500 } = {}) => runs
@@ -720,8 +720,8 @@ function makeRemediationPlaybooksRepo(overrides = {}) {
     }),
     findById: overrides.findById || (async (id) => { const p = playbooks.find((x) => x.id === Number(id)); return p ? mapPb(p) : null; }),
     list: overrides.list || (async () => playbooks.slice().sort((a, b) => b.id - a.id).map(mapPb)),
-    listRunsForIncident: overrides.listRunsForIncident || (async (incidentCaseId) => runs
-      .filter((r) => r.incident_case_id === Number(incidentCaseId))
+    listRunsForEvent: overrides.listRunsForEvent || (async (eventCaseId) => runs
+      .filter((r) => r.event_case_id === Number(eventCaseId))
       .sort((a, b) => new Date(b.ran_at) - new Date(a.ran_at) || b.id - a.id)
       .map(mapRun)),
     // Fleet-wide runs in a window — what the changes feed asks for.
@@ -733,8 +733,8 @@ function makeRemediationPlaybooksRepo(overrides = {}) {
   };
 }
 
-// A fake incident-case service (records calls; groups nothing by default).
-function makeIncidentCaseService(overrides = {}) {
+// A fake event-case service (records calls; groups nothing by default).
+function makeEventCaseService(overrides = {}) {
   const calls = [];
   return {
     calls,
@@ -1130,9 +1130,9 @@ function makeVerificationService(overrides = {}) {
   };
 }
 
-// A fake incident-thresholds repository (in-memory) seeded with the same global
+// A fake event-thresholds repository (in-memory) seeded with the same global
 // defaults as migration 023, so the derivation service behaves as in production.
-function makeIncidentThresholdsRepo(overrides = {}) {
+function makeProbeThresholdsRepo(overrides = {}) {
   const rows = overrides.rows || [
     { id: 1, location_id: null, metric: 'reachability', warning_value: null, critical_value: null, debounce_count: 3 },
     { id: 2, location_id: null, metric: 'latency', warning_value: 150, critical_value: 300, debounce_count: 3 },
@@ -1159,8 +1159,8 @@ function makeIncidentThresholdsRepo(overrides = {}) {
   };
 }
 
-// A fake incident-derivation service (records calls; derives nothing by default).
-function makeIncidentService(overrides = {}) {
+// A fake event-derivation service (records calls; derives nothing by default).
+function makeProbeOutageService(overrides = {}) {
   const calls = [];
   return {
     calls,
@@ -1362,9 +1362,14 @@ function makeAuditLogRepo(overrides = {}) {
       rows.filter((r) => (!category || r.category === category) && (actorUserId == null || r.actorUserId === actorUserId))
         .slice().reverse().slice(0, limit)),
     categories: overrides.categories || (async () => [...new Set(rows.map((r) => r.category))].sort()),
-    listByTarget: overrides.listByTarget || (async ({ category = null, target, limit = 200 } = {}) => rows
-      .filter((r) => String(r.target) === String(target) && (!category || r.category === category))
-      .slice(0, limit)),
+    // `category` accepts a string or an array, mirroring auditLogRepository —
+    // a renamed category reads its own pre-rename history that way.
+    listByTarget: overrides.listByTarget || (async ({ category = null, target, limit = 200 } = {}) => {
+      const cats = (Array.isArray(category) ? category : [category]).filter((c) => c != null && c !== '');
+      return rows
+        .filter((r) => String(r.target) === String(target) && (cats.length === 0 || cats.includes(r.category)))
+        .slice(0, limit);
+    }),
     verifyChain: overrides.verifyChain || (async () => ({ ok: true, checked: rows.length, brokenAt: null })),
   };
 }
@@ -1564,13 +1569,13 @@ function makeFindingStore(overrides = {}) {
         .sort((a, b) => b.count - a.count || String(a.hostId).localeCompare(String(b.hostId)));
       return { total: match.length, acked, unacked: match.length - acked, bySeverity, byMetric, byHost };
     }),
-    listByIncidentCase: overrides.listByIncidentCase || (async (incidentCaseId) => rows
-      .filter((f) => f.incidentCaseId === incidentCaseId)
+    listByEventCase: overrides.listByEventCase || (async (eventCaseId) => rows
+      .filter((f) => f.eventCaseId === eventCaseId)
       .sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0))),
     get: overrides.get || (async (id) => rows.find((f) => f.id === id) || null),
     ack: overrides.ack || (async (id) => { const f = rows.find((x) => x.id === id); if (!f) return false; f.acked = true; return true; }),
     setCorrelations: overrides.setCorrelations || (async (id, ids) => { const f = rows.find((x) => x.id === id); if (!f) return false; f.correlatedWith = Array.isArray(ids) ? ids : []; return true; }),
-    setIncidentCase: overrides.setIncidentCase || (async (id, incidentCaseId) => { const f = rows.find((x) => x.id === id); if (!f) return false; f.incidentCaseId = incidentCaseId ?? null; return true; }),
+    setEventCase: overrides.setEventCase || (async (id, eventCaseId) => { const f = rows.find((x) => x.id === id); if (!f) return false; f.eventCaseId = eventCaseId ?? null; return true; }),
   };
 }
 
@@ -1736,14 +1741,14 @@ function makeAssistant(overrides = {}) {
     isEnabled: overrides.isEnabled || (() => Boolean(
       overrides.explain || overrides.summarizeLocation ||
       overrides.explainDiagnostic || overrides.narrateInvestigation ||
-      overrides.askIncident || overrides.suggestRemediation || overrides.generateNis2Draft)),
+      overrides.askEvent || overrides.suggestRemediation || overrides.generateNis2Draft)),
     status: overrides.status || (() => ({ enabled: false, configured: false, baseUrl: 'https://api.mistral.ai/v1/chat/completions', model: 'mistral-small-latest' })),
     explain: overrides.explain || (async () => disabled()),
     explainDiagnostic: overrides.explainDiagnostic || (async () => disabled()),
     summarizeLocation: overrides.summarizeLocation || (async () => disabled()),
     narrateInvestigation: overrides.narrateInvestigation || (async () => disabled()),
     generateNis2Draft: overrides.generateNis2Draft || (async () => disabled()),
-    askIncident: overrides.askIncident || (async () => disabled()),
+    askEvent: overrides.askEvent || (async () => disabled()),
     suggestRemediation: overrides.suggestRemediation || (async () => disabled()),
   };
 }
@@ -2207,7 +2212,7 @@ function makeNis2ControlsRepo(overrides = {}) {
   };
 }
 
-// A fake NIS2 incidents repository (in-memory, stateful). Mints INC-YYYY-NNNN.
+// A fake NIS2 events repository (in-memory, stateful). Mints INC-YYYY-NNNN.
 function makeNis2IncidentsRepo(overrides = {}) {
   const rows = [];
   let seq = 0;
@@ -2355,7 +2360,7 @@ function makeApp(overrides = {}) {
   const topologyChangeService = overrides.topologyChangeService === undefined
     ? createTopologyChangeService({ topologyChangesRepo, lldpNeighborsRepo, auditLogger })
     : overrides.topologyChangeService;
-  // Real blast-radius service over the fake topology repos, so the incident
+  // Real blast-radius service over the fake topology repos, so the event
   // enrichment + /api/topology/blast-radius are exercised end-to-end.
   const blastRadiusService = overrides.blastRadiusService === undefined
     ? createBlastRadiusService({ lldpNeighborsRepo, serviceDependenciesRepo, agentsRepo })
@@ -2372,10 +2377,10 @@ function makeApp(overrides = {}) {
     agentTokensRepo: overrides.agentTokensRepo || makeAgentTokensRepo(),
     resultsRepo: overrides.resultsRepo || makeResultsRepo(),
     probeResultsRepo: overrides.probeResultsRepo || makeProbeResultsRepo(),
-    incidentsRepo: overrides.incidentsRepo || makeIncidentsRepo(),
-    incidentCasesRepo: overrides.incidentCasesRepo || makeIncidentCasesRepo(),
-    incidentNotesRepo: overrides.incidentNotesRepo === undefined ? makeIncidentNotesRepo() : overrides.incidentNotesRepo,
-    incidentClustersRepo: overrides.incidentClustersRepo || makeIncidentClustersRepo(),
+    probeOutagesRepo: overrides.probeOutagesRepo || makeProbeOutagesRepo(),
+    eventCasesRepo: overrides.eventCasesRepo || makeEventCasesRepo(),
+    eventNotesRepo: overrides.eventNotesRepo === undefined ? makeEventNotesRepo() : overrides.eventNotesRepo,
+    eventClustersRepo: overrides.eventClustersRepo || makeEventClustersRepo(),
     alertDispatchLogRepo: overrides.alertDispatchLogRepo || makeAlertDispatchLogRepo(),
     clusterNotifier: overrides.clusterNotifier || null,
     evidenceRepo,
@@ -2385,8 +2390,8 @@ function makeApp(overrides = {}) {
     verificationService: overrides.verificationService || makeVerificationService(),
     remediationPlaybooksRepo: overrides.remediationPlaybooksRepo || makeRemediationPlaybooksRepo(),
     configSnapshotsRepo: overrides.configSnapshotsRepo || makeConfigSnapshotsRepo(),
-    thresholdsRepo: overrides.thresholdsRepo || makeIncidentThresholdsRepo(),
-    incidentService: overrides.incidentService || makeIncidentService(),
+    thresholdsRepo: overrides.thresholdsRepo || makeProbeThresholdsRepo(),
+    probeOutageService: overrides.probeOutageService || makeProbeOutageService(),
     installToolService: overrides.installToolService || null,
     licenseManager,
     planService,
@@ -2525,10 +2530,10 @@ module.exports = {
   makeAgentTokensRepo,
   makeResultsRepo,
   makeProbeResultsRepo,
-  makeIncidentsRepo,
-  makeIncidentCasesRepo,
-  makeIncidentNotesRepo,
-  makeIncidentClustersRepo,
+  makeProbeOutagesRepo,
+  makeEventCasesRepo,
+  makeEventNotesRepo,
+  makeEventClustersRepo,
   makeRunbooksRepo,
   makeVerificationRunsRepo,
   makeVerificationService,
@@ -2543,10 +2548,10 @@ module.exports = {
   makeAlertDispatchLogRepo,
   makeEvidenceSnapshotsRepo,
   makeRemediationPlaybooksRepo,
-  makeIncidentCaseService,
+  makeEventCaseService,
   makeConfigSnapshotsRepo,
-  makeIncidentThresholdsRepo,
-  makeIncidentService,
+  makeProbeThresholdsRepo,
+  makeProbeOutageService,
   makeEnrollmentCodesRepo,
   makeEnrollmentStore,
   makeArtifactStore,

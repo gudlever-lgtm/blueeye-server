@@ -31,14 +31,14 @@ const { createTroubleshootingRouter } = require('./troubleshooting');
 const { createTroubleshootingOverviewService } = require('../troubleshooting/overviewService');
 const { createProbesRouter } = require('./probes');
 const { createReportsRouter } = require('./reports');
-const { createIncidentsRouter } = require('./incidents');
-const { createIncidentClustersRouter } = require('./incidentClusters');
+const { createEventsRouter } = require('./events');
+const { createEventClustersRouter } = require('./eventClusters');
 const { createRunbooksRouter } = require('./runbooks');
 const { createTargetsRouter } = require('./targets');
 const { createTargetTimelineService } = require('../timeline/targetTimelineService');
-const { createIncidentClusterTimelineService } = require('../timeline/incidentTimelineService');
+const { createEventClusterTimelineService } = require('../timeline/eventTimelineService');
 const { createDeviceConfigRouter } = require('./deviceConfig');
-const { createAskCache } = require('../incidentCases/askCache');
+const { createAskCache } = require('../eventCases/askCache');
 const { createThresholdsRouter } = require('./thresholds');
 const { createInterfacesRouter } = require('./interfaces');
 const { createFleetRouter } = require('./fleet');
@@ -94,10 +94,10 @@ function createApiRouter({
   agentTokensRepo,
   resultsRepo,
   probeResultsRepo,
-  incidentsRepo,
-  incidentCasesRepo,
-  incidentNotesRepo = null,
-  incidentClustersRepo,
+  probeOutagesRepo,
+  eventCasesRepo,
+  eventNotesRepo = null,
+  eventClustersRepo,
   clusterNotifier,
   alertDispatchLogRepo,
   evidenceRepo,
@@ -108,7 +108,7 @@ function createApiRouter({
   remediationPlaybooksRepo,
   configSnapshotsRepo,
   thresholdsRepo,
-  incidentService,
+  probeOutageService,
   installToolService,
   licenseManager,
   agentCommander,
@@ -285,7 +285,7 @@ function createApiRouter({
   // Shared per-target timeline service (Phase 1 merge/fan-out) — powers both the
   // /api/targets timeline and the /api/findings/:id/context change-diff.
   const targetTimelineService = findingStore
-    ? createTargetTimelineService({ findingStore, incidentsRepo, auditEventsRepo, remediationPlaybooksRepo, topologyChangesRepo })
+    ? createTargetTimelineService({ findingStore, probeOutagesRepo, auditEventsRepo, remediationPlaybooksRepo, topologyChangesRepo })
     : null;
   if (findingStore) router.use('/api/findings', createFindingsRouter({ findingStore, timelineService: targetTimelineService }));
   if (assistant) router.use('/api/assistant', createAssistantRouter({ assistant, featureGate }));
@@ -311,10 +311,10 @@ function createApiRouter({
   // blast radius, flow-pair baselining, active discovery). Owns no data of its
   // own; mounted whenever at least one of its sources exists, and degrades to
   // empty panels for the ones that do not.
-  if (incidentClustersRepo || blastRadiusService || findingStore) {
+  if (eventClustersRepo || blastRadiusService || findingStore) {
     router.use('/api/troubleshooting', createTroubleshootingRouter({
       overviewService: createTroubleshootingOverviewService({
-        clustersRepo: incidentClustersRepo, findingStore, agentsRepo, blastRadiusService,
+        clustersRepo: eventClustersRepo, findingStore, agentsRepo, blastRadiusService,
         topologyChangesRepo, auditEventsRepo, discoveredDevicesRepo, logger,
       }),
     }));
@@ -322,39 +322,36 @@ function createApiRouter({
   if (probeResultsRepo) router.use('/api/probes', createProbesRouter({ probeResultsRepo, agentsRepo, geoProvider, centroids }));
   if (probeResultsRepo) router.use('/api/fleet', createFleetRouter({ agentsRepo, probeResultsRepo, resultsRepo, speedtestResultsRepo, settingsService, logger }));
   // Overview "open issues" rollup (license feature `dashboard_advanced`,
-  // Professional+) — active incidents + recent findings, gated. Surfaced inline
+  // Professional+) — active events + recent findings, gated. Surfaced inline
   // on the Overview page; fleet health itself comes from /api/fleet above.
-  router.use('/api/dashboard', createDashboardRouter({ incidentsRepo, incidentCasesRepo, findingStore, featureGate, planService }));
-  if (incidentsRepo && probeResultsRepo) router.use('/api/reports', createReportsRouter({ probeResultsRepo, incidentsRepo, locationsRepo, featureGate, planService, auditLogger }));
-  // EVENTS (stored in `incident_cases`) — the operator-facing unit, wrapping the
-  // findings that evidence it. Distinct from the probe-outage `incidents` used by
+  router.use('/api/dashboard', createDashboardRouter({ probeOutagesRepo, eventCasesRepo, findingStore, featureGate, planService }));
+  if (probeOutagesRepo && probeResultsRepo) router.use('/api/reports', createReportsRouter({ probeResultsRepo, probeOutagesRepo, locationsRepo, featureGate, planService, auditLogger }));
+  // EVENTS (stored in `event_cases`) — the operator-facing unit, wrapping the
+  // findings that evidence it. Distinct from the `probe_outages` reported by
   // /api/reports above, and distinct from an ITSM *incident*, which is what a
   // connected service desk opens FROM one of these (see docs/events.md).
   //
-  // Mounted twice on purpose: /api/events is canonical, /api/incidents is a
-  // deprecated alias so existing integrations, scripts and bookmarks keep working.
-  // One router instance, so the two paths can never drift.
-  if (incidentCasesRepo && findingStore) {
-    const eventsRouter = createIncidentsRouter({ incidentCasesRepo, findingStore, auditLogger, auditEventsRepo, auditLogRepo, configSnapshotsRepo, agentsRepo, assistant, featureGate, askCache: createAskCache(), remediationPlaybooksRepo, blastRadiusService, incidentNotesRepo });
-    router.use('/api/events', eventsRouter);
-    router.use('/api/incidents', eventsRouter);
+  // /api/events is the only path: the deprecated /api/incidents alias was
+  // removed with the rest of the incident vocabulary (migration 077).
+  if (eventCasesRepo && findingStore) {
+    router.use('/api/events', createEventsRouter({ eventCasesRepo, findingStore, auditLogger, auditEventsRepo, auditLogRepo, configSnapshotsRepo, agentsRepo, assistant, featureGate, askCache: createAskCache(), remediationPlaybooksRepo, blastRadiusService, eventNotesRepo }));
   }
-  if (incidentClustersRepo) {
-    const clusterTimelineService = createIncidentClusterTimelineService({
-      clustersRepo: incidentClustersRepo, findingStore, auditEventsRepo,
-      remediationPlaybooksRepo, incidentsRepo, configSnapshotsRepo, auditLogRepo,
+  if (eventClustersRepo) {
+    const clusterTimelineService = createEventClusterTimelineService({
+      clustersRepo: eventClustersRepo, findingStore, auditEventsRepo,
+      remediationPlaybooksRepo, probeOutagesRepo, configSnapshotsRepo, auditLogRepo,
       verificationRunsRepo, evidenceRepo,
     });
-    router.use('/api/incident-clusters', createIncidentClustersRouter({
-      clustersRepo: incidentClustersRepo, findingStore, auditLogger, timelineService: clusterTimelineService,
+    router.use('/api/event-clusters', createEventClustersRouter({
+      clustersRepo: eventClustersRepo, findingStore, auditLogger, timelineService: clusterTimelineService,
       runbooksRepo, playbooksRepo: remediationPlaybooksRepo, verificationService, settingsService, assistant,
       alertLog: alertDispatchLogRepo, notifier: clusterNotifier,
       evidenceRepo, snapshotService,
     }));
   }
   if (runbooksRepo) router.use('/api/runbooks', createRunbooksRouter({ runbooksRepo, playbooksRepo: remediationPlaybooksRepo }));
-  // Per-target (per-agent) incident timeline — merges findings, probe-outage
-  // incidents, agent connect/disconnect and playbook runs (read-only, viewer+).
+  // Per-target (per-agent) event timeline — merges findings, probe-outage
+  // events, agent connect/disconnect and playbook runs (read-only, viewer+).
   if (agentsRepo && targetTimelineService) router.use('/api/targets', createTargetsRouter({ agentsRepo, timelineService: targetTimelineService }));
   // Device config history (operator/admin, masked) — Fase 3.
   if (configSnapshotsRepo) router.use('/api/devices', createDeviceConfigRouter({ configSnapshotsRepo, agentsRepo, auditLogger }));
@@ -376,9 +373,9 @@ function createApiRouter({
       agentsRepo,
       auditEventsRepo,
       findingStore,
-      incidentsRepo,
-      incidentCasesRepo,
-      incidentClustersRepo,
+      probeOutagesRepo,
+      eventCasesRepo,
+      eventClustersRepo,
       topologyChangesRepo,
       remediationPlaybooksRepo,
       configSnapshotsRepo,
@@ -454,7 +451,7 @@ function createApiRouter({
       ldapConfigRepo, ldapRoleMapRepo, ldapLoginAuditRepo, ldapAuth, secretBox, featureGate, authEnabledFlag: ldapAuthEnabledFlag,
     }));
   }
-  // NIS2 Reporting Center — risk register, control evidence, security incidents,
+  // NIS2 Reporting Center — risk register, control evidence, security events,
   // management reports, evidence references + audit trail. Self-contained module.
   if (nis2RisksRepo && nis2ControlsRepo && nis2IncidentsRepo) {
     router.use('/api/nis2', createNis2Router({
@@ -471,7 +468,7 @@ function createApiRouter({
       investigationsRepo,
       locator,
       assistant: assistant || null,
-      incidentsRepo: incidentsRepo || null,
+      probeOutagesRepo: probeOutagesRepo || null,
       nis2IncidentsRepo: nis2IncidentsRepo || null,
       logger,
     }));
@@ -512,7 +509,7 @@ function createApiRouter({
   // Unified audit log (license feature `audit_log`) + API tokens (`api_access`).
   if (auditLogRepo) router.use('/api/audit-log', createAuditLogRouter({ auditLogRepo, featureGate, planService }));
   if (apiTokensRepo) router.use('/api/api-tokens', createApiTokensRouter({ apiTokensRepo, featureGate, planService, auditLogger }));
-  router.use('/agents', createAgentReportsRouter({ agentAuth, resultsRepo, resultsTsdbRepo, agentsRepo, auditEventsRepo, analysisPipeline, flowPipeline, probeResultsRepo, probePipeline, incidentService, installToolService, lldpNeighborsRepo, topologyChangeService, hostConnectionsRepo, arpEntriesRepo, interfaceStateService, discoveredDevicesRepo, auditLogger, logger }));
+  router.use('/agents', createAgentReportsRouter({ agentAuth, resultsRepo, resultsTsdbRepo, agentsRepo, auditEventsRepo, analysisPipeline, flowPipeline, probeResultsRepo, probePipeline, probeOutageService, installToolService, lldpNeighborsRepo, topologyChangeService, hostConnectionsRepo, arpEntriesRepo, interfaceStateService, discoveredDevicesRepo, auditLogger, logger }));
   router.use('/agents', createAgentEnrollRouter({ enrollmentStore, notifyDashboard, integrationTrigger: integrationsDispatcher, auditEventsRepo, settingsService, rateLimit: enrollRateLimiter }));
 
   return router;

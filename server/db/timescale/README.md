@@ -19,7 +19,7 @@ classified **STATIC** (inventory, auth, config, compliance, the hash-chained
 | `probe_results` | hypertable | `ts` | 1 day | 90 days |
 | `speedtest_results` | hypertable | `ts` | 7 days | 90 days |
 | `findings` | hypertable | `ts` | 7 days | none (governance) |
-| `incidents` | hypertable | `ts` | 30 days | none (governance) |
+| `events` | hypertable | `ts` | 30 days | none (governance) |
 | `audit_events` | hypertable (append-only) | `ts` | 7 days | none (governance) |
 | `flow_rollup` | continuous aggregate ← `flow_records` | `bucket` | 1 h buckets | — |
 | `metric_rollup` | continuous aggregate ← `results` | `bucket` | 1 h buckets | — |
@@ -89,7 +89,7 @@ DROP MATERIALIZED VIEW IF EXISTS metric_rollup;
 DROP MATERIALIZED VIEW IF EXISTS flow_rollup;
 
 DROP TABLE IF EXISTS results, flow_records, probe_results, speedtest_results,
-                     findings, incidents, audit_events CASCADE;
+                     findings, events, audit_events CASCADE;
 ```
 
 Retention and continuous-aggregate **policies** are dropped automatically with
@@ -102,7 +102,7 @@ was mirrored into the TSDB — MySQL remains the source of truth during rollout.
 - **`ts` (not `time`) time column.** The merged Punkt 3 query is
   `last(payload, ts)`; the schema keeps `ts` so that query works verbatim.
   MySQL source columns map as: `results.created_at → ts`,
-  `findings.created_at → ts`, `incidents.started_at → ts`; the rest already
+  `findings.created_at → ts`, `events.started_at → ts`; the rest already
   use `ts`.
 - **`audit_events` is append-only.** A hypertable can't enforce a global
   `UNIQUE(dedup_key)` (unique indexes must include the partition key `ts`), so

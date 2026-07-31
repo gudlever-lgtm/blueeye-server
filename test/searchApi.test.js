@@ -341,7 +341,7 @@ test('limit caps the returned hits and truncated reports the overflow', async ()
 
 // ------------------------------------------------------------ partial failure
 test('one failing resolver degrades to partial rather than failing the search', async () => {
-  // A dead CMDB or ARP table must not blank the field mid-incident — the local
+  // A dead CMDB or ARP table must not blank the field mid-event — the local
   // answers are still worth serving.
   const arpEntriesRepo = makeArpEntriesRepo({ findByMac: throwingAsync('arp table unavailable') });
   const res = await search(appWith({ arpEntriesRepo }), '00:11:22:33:44:55');

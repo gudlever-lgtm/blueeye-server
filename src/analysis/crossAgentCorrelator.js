@@ -3,7 +3,7 @@
 // Cross-agent pattern correlator. The per-target correlator (correlator.js) links
 // findings WITHIN one agent/target; this one links findings ACROSS agents that
 // fire close together in time, so a fault hitting several agents at once surfaces
-// as ONE incident cluster with a suspected common cause instead of N look-alike
+// as ONE event cluster with a suspected common cause instead of N look-alike
 // findings. Everything stays local + explainable: time clustering + a weighted
 // signal score, no ML.
 //
@@ -204,7 +204,7 @@ function createCrossAgentCorrelator({ windowMs = DEFAULT_WINDOW_MS } = {}) {
 
 // Per-signal weights for the explainable confidence breakdown, in the spirit of
 // the L2-loop multi-signal weighting (investigation/locator.js): more independent
-// signal types → higher confidence that this is ONE incident. `time` is the base
+// signal types → higher confidence that this is ONE event. `time` is the base
 // signal (always present in a cluster); topology + type are the corroborating ones.
 const SIGNAL_WEIGHTS = Object.freeze({ time: 0.4, topology: 0.35, type: 0.25 });
 // Single-signal (time-only) baseline — what a cluster scores on time proximity alone.

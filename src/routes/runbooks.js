@@ -7,7 +7,7 @@ const { ROLES } = require('../auth/roles');
 const { validateRunbookInput } = require('../validation/runbookValidation');
 
 // Runbooks admin CRUD (Fase 3): the static finding-type → recommended-action
-// mapping surfaced on the incident (cluster) page. Reads are viewer+ (the incident
+// mapping surfaced on the event (cluster) page. Reads are viewer+ (the event
 // page needs them); writes are admin. A linked playbook, when given, must exist.
 function createRunbooksRouter({ runbooksRepo, playbooksRepo = null }) {
   const router = express.Router();
@@ -28,7 +28,7 @@ function createRunbooksRouter({ runbooksRepo, playbooksRepo = null }) {
     return pb ? null : 'linkedPlaybookId does not reference an existing playbook';
   }
 
-  // GET /api/runbooks — list all. viewer+ (the incident page + admin screen read).
+  // GET /api/runbooks — list all. viewer+ (the event page + admin screen read).
   router.get('/', requireAuth, reader, asyncHandler(async (req, res) => {
     res.json({ runbooks: await runbooksRepo.list() });
   }));

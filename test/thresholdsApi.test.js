@@ -8,7 +8,7 @@ const assert = require('node:assert/strict');
 const request = require('supertest');
 
 const {
-  makeApp, makeIncidentThresholdsRepo, makeLocationsRepo, authHeader, throwingAsync,
+  makeApp, makeProbeThresholdsRepo, makeLocationsRepo, authHeader, throwingAsync,
 } = require('../test-support/fakes');
 
 const withLocation = (overrides = {}) => makeApp({ locationsRepo: makeLocationsRepo({ findById: async (id) => ({ id, name: 'HQ' }) }), ...overrides });
@@ -30,7 +30,7 @@ test('GET /api/thresholds requires auth (401)', async () => {
 // ---- PUT /api/thresholds (global) -----------------------------------------
 
 test('PUT /api/thresholds upserts a global threshold (admin, 200)', async () => {
-  const thresholdsRepo = makeIncidentThresholdsRepo();
+  const thresholdsRepo = makeProbeThresholdsRepo();
   const res = await request(makeApp({ thresholdsRepo })).put('/api/thresholds')
     .set('Authorization', authHeader('admin'))
     .send({ metric: 'latency', warning_value: 100, critical_value: 250, debounce_count: 5 });
@@ -72,7 +72,7 @@ test('GET /api/thresholds/:location_id is 404 for an unknown location and 400 fo
 // ---- PUT /api/thresholds/:location_id (override) --------------------------
 
 test('PUT /api/thresholds/:location_id upserts a location override (admin, 200)', async () => {
-  const thresholdsRepo = makeIncidentThresholdsRepo();
+  const thresholdsRepo = makeProbeThresholdsRepo();
   const res = await request(withLocation({ thresholdsRepo })).put('/api/thresholds/7')
     .set('Authorization', authHeader('admin'))
     .send({ metric: 'packet_loss', warning_value: 1, critical_value: 3, debounce_count: 2 });

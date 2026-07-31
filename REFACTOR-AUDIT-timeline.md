@@ -1,4 +1,4 @@
-# REFACTOR-AUDIT — Incident Timeline (Phase 1)
+# REFACTOR-AUDIT — Event Timeline (Phase 1)
 
 > **Filename note:** the brief asked for `REFACTOR-AUDIT.md`, but that file
 > already exists on `main` and holds an **unrelated, committed** security/RBAC
@@ -31,15 +31,15 @@ today (`db.pool`); only raw `results` has a TSDB dual-write repo
 | # | Table (migration) | Timestamp column(s) | Target identity | Storage today | Per #127 | Brief's source |
 |---|---|---|---|---|---|---|
 | 1 | `findings` (009) | `created_at` (+ `window_from`/`window_to`) | `host_id VARCHAR(255)` = **stringified `agents.id`** | MySQL | TELEMETRY → TSDB | **anomaly findings** ✓ |
-| 2 | `incident_playbook_runs` (055) | `ran_at` | `incident_case_id` → `incident_cases.host_id` (**indirect**) | MySQL | MySQL | **playbook remediation attempts** ✓ |
+| 2 | `event_playbook_runs` (055) | `ran_at` | `event_case_id` → `event_cases.host_id` (**indirect**) | MySQL | MySQL | **playbook remediation attempts** ✓ |
 | 3 | `audit_events` (035) | `ts` / `last_seen_at` | `actor_type='agent'` + `actor_id INT` (= `agents.id`) | MySQL | TELEMETRY → TSDB | **agent connect/disconnect** ✓ (`agent.online`/`agent.offline`) |
-| 4 | `incidents` (025) | `started_at`, `resolved_at` | `agent_id INT` FK → `agents.id` | MySQL | TELEMETRY → TSDB | probe-outage incidents (not named; a real per-target event source) |
+| 4 | `events` (025) | `started_at`, `resolved_at` | `agent_id INT` FK → `agents.id` | MySQL | TELEMETRY → TSDB | probe-outage events (not named; a real per-target event source) |
 | — | **L2 loop events** | — | — | **DOES NOT EXIST** | — | **L2 loop events** ✗ — see §1a |
 
 ### 1a. L2 loop events — the named source does not exist ⚠️
 
 No L2-loop table, finding-metric, probe type, or event stream exists. The only
-trace is a comment in `src/incidentCases/explanation.js`:
+trace is a comment in `src/eventCases/explanation.js`:
 
 > "…No anomaly-type ships a confidence model in this codebase yet (only an
 > **L2-loop model was ever specced, and it is not here**)…"
@@ -57,16 +57,16 @@ Not named in the brief, but timestamped and target-scoped:
 
 | Table (migration) | Timestamp | Identity | Note |
 |---|---|---|---|
-| `config_snapshots` (049) | `captured_at` | `device_id INT` → agents.id | Device-config changes; already incident-correlated. Strong candidate. |
+| `config_snapshots` (049) | `captured_at` | `device_id INT` → agents.id | Device-config changes; already event-correlated. Strong candidate. |
 | `agent_action_audit` (022) | request/complete | `agent_id INT` | Server→agent actions (upgrade/delete/install-tool). |
-| `incident_cases` (047) | `first_event_at`/`last_event_at`/`resolved_at` | `host_id VARCHAR(255)` (= agent id) | A *wrapper* over findings — including it double-counts. Prefer exclude. |
-| `audit_log` (033) | `created_at` | not agent-keyed (incident-keyed) | Hash-chained; incident status changes. |
-| `probe_results` (014) | `ts` | `agent_id INT` | Raw per-probe rows — too granular; already summarised into `incidents`. Exclude. |
+| `event_cases` (047) | `first_event_at`/`last_event_at`/`resolved_at` | `host_id VARCHAR(255)` (= agent id) | A *wrapper* over findings — including it double-counts. Prefer exclude. |
+| `audit_log` (033) | `created_at` | not agent-keyed (event-keyed) | Hash-chained; event status changes. |
+| `probe_results` (014) | `ts` | `agent_id INT` | Raw per-probe rows — too granular; already summarised into `events`. Exclude. |
 | `transaction_results` (046) | `time` | via join table, no FK | TSDB-bound, agent-keyed only through a join. Exclude v1. |
 
-**Prior art to reuse:** `GET /api/incidents/:id/timeline`
-(`src/incidentCases/timeline.js` + `routes/incidents.js`) already merges
-**findings + audit_events + audit_log** for *one incident* into a flat, sorted
+**Prior art to reuse:** `GET /api/events/:id/timeline`
+(`src/eventCases/timeline.js` + `routes/events.js`) already merges
+**findings + audit_events + audit_log** for *one event* into a flat, sorted
 list with `{ ref: { kind, id } }` deep-links — almost exactly the brief's shape
 (`ref_id`). The new endpoint is the **per-target generalisation** of it; reuse
 the pure `buildTimeline` merge/sort helper and its `ref` convention.
@@ -87,23 +87,23 @@ String(agents.id)`.
 |---|---|---|---|
 | `agents` | `id` | `INT UNSIGNED` (PK) | canonical |
 | `findings` | `host_id` | `VARCHAR(255)` | `"9"` (stringified) |
-| `incident_cases` | `host_id` | `VARCHAR(255)` | `"9"` (stringified) |
-| `incidents` | `agent_id` | `INT UNSIGNED` (FK) | `9` |
+| `event_cases` | `host_id` | `VARCHAR(255)` | `"9"` (stringified) |
+| `events` | `agent_id` | `INT UNSIGNED` (FK) | `9` |
 | `audit_events` | `actor_id` | `INT UNSIGNED` | `9` (+ `actor_type='agent'`) |
 | `config_snapshots` | `device_id` | `INT` | `9` |
-| `incident_playbook_runs` | `incident_case_id` | `BIGINT` | **indirect** (via `incident_cases.host_id`) |
+| `event_playbook_runs` | `event_case_id` | `BIGINT` | **indirect** (via `event_cases.host_id`) |
 
 ### Risks
 
-1. **String `host_id` vs int `agent_id`, no FK.** `findings`/`incident_cases`
+1. **String `host_id` vs int `agent_id`, no FK.** `findings`/`event_cases`
    `host_id` are free-text `VARCHAR` with **no foreign key** to `agents`.
    Existing code already leans on MySQL implicit coercion —
-   `incidentCasesRepository.listResolvedClosed` joins
+   `eventCasesRepository.listResolvedClosed` joins
    `LEFT JOIN agents a ON a.id = ic.host_id`. It works, but can't use an int
    index cleanly, and any non-integer `host_id` silently never matches.
 2. **Playbook runs aren't agent-keyed.** "Playbook attempts for target X"
-   requires `agents.id → incident_cases.host_id (string) →
-   incident_playbook_runs.incident_case_id` — two hops, one via the fragile
+   requires `agents.id → event_cases.host_id (string) →
+   event_playbook_runs.event_case_id` — two hops, one via the fragile
    string join.
 3. **No existing read path fetches `audit_events` by `actor_id` + window.**
    `auditEventsRepository.findAll` filters `actorType`/`action`/time but **not**
@@ -112,14 +112,14 @@ String(agents.id)`.
    (e.g. `findByActor({ actorType:'agent', actorId, from, to })`) — pure
    addition, no schema change.
 4. **Forward-compat with the storage split.** Three of the four real sources
-   (`findings`, `incidents`, `audit_events`) are classified TELEMETRY → bound for
+   (`findings`, `events`, `audit_events`) are classified TELEMETRY → bound for
    a *separate* database later. The merge layer should treat each source as an
    independent, possibly-failing backend (see §5).
 
 ### Recommended `:id` resolution
 Resolve `:id` **once** via `agentsRepo.findById(id)` (`null` ⇒ **404**), then fan
 out with the id in each source's required shape: `String(id)` for `host_id`,
-numeric `id` for `agent_id`/`actor_id`, and the `incident_case → host_id` hop for
+numeric `id` for `agent_id`/`actor_id`, and the `event_case → host_id` hop for
 playbook runs. Centralises the messy mapping and yields a clean 404.
 
 ---
@@ -129,16 +129,16 @@ playbook runs. Centralises the messy mapping and yields a clean 404.
 Consistent, **offset-free, `from`/`to` + capped-`limit`**. No cursors anywhere.
 
 - Route layer parses dates with a local `parseDate(v)` → `Date | null` (invalid
-  ⇒ `null`), e.g. `routes/incidents.js:26`; repos take `{ from, to, limit }`.
+  ⇒ `null`), e.g. `routes/events.js:26`; repos take `{ from, to, limit }`.
 - **`limit` clamped in the repo**, never trusted raw: `audit_events`
   `clampLimit(v, 100, 500)`; `FindingStore.list` `Math.min(limit, 5000)`;
-  `incident_cases.list` cap 5000; `listRunsForIncident` default 50 / cap 500.
+  `event_cases.list` cap 5000; `listRunsForEvent` default 50 / cap 500.
 - Ordering `ORDER BY <ts> DESC, id DESC` for list reads.
 - The brief's "default last 24h, cap `limit` at 500" maps directly: reuse
   `parseDate` in the route + a `clampLimit(…, 500)`-style cap.
-- Per-source time column differs: `findings.created_at`, `incidents.started_at`
+- Per-source time column differs: `findings.created_at`, `events.started_at`
   (+ open where `resolved_at IS NULL`), `audit_events.ts`,
-  `incident_playbook_runs.ran_at`.
+  `event_playbook_runs.ran_at`.
 
 ---
 
@@ -151,10 +151,10 @@ const reader = requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN);
 router.get('/:id', requireAuth, reader, asyncHandler(async (req, res) => { … }));
 ```
 
-Confirmed on the closest analogue: `GET /api/incidents/:id` **and**
-`GET /api/incidents/:id/timeline` are both `requireAuth + reader` (viewer+). So
+Confirmed on the closest analogue: `GET /api/events/:id` **and**
+`GET /api/events/:id/timeline` are both `requireAuth + reader` (viewer+). So
 **viewer is enough** — matches the brief. No license gate is applied to the
-incident timeline; recommend the new endpoint stay ungated too (flag if you'd
+event timeline; recommend the new endpoint stay ungated too (flag if you'd
 prefer a plan feature).
 
 **Routing:** there is **no `/api/targets` router today** (`routes/index.js` is
@@ -190,12 +190,12 @@ Per the brief: `{ timestamp, source, type, severity, summary, ref_id }`, sorted
 | source | type | severity | summary | ref_id |
 |---|---|---|---|---|
 | `findings` | `finding.<metric>` / `kind` | `INFO`/`WARN`/`CRIT` | `explanation` | finding `id` (uuid) |
-| `incidents` | `incident.<metric>` (+ `.resolved`) | `warning`/`critical` | target + duration | incident `id` |
+| `events` | `event.<metric>` (+ `.resolved`) | `warning`/`critical` | target + duration | event `id` |
 | `audit_events` | `agent.online` / `agent.offline` | `INFO` | source IP / reason | audit_event `id` |
-| `incident_playbook_runs` | `playbook.<status>` | derived | playbook name + outcome | run `id` |
+| `event_playbook_runs` | `playbook.<status>` | derived | playbook name + outcome | run `id` |
 
 `ref_id` (+ implicit `source`) deep-links back to the original record — the same
-idea as `{ ref: { kind, id } }` in the existing incident timeline.
+idea as `{ ref: { kind, id } }` in the existing event timeline.
 
 ---
 
@@ -206,17 +206,17 @@ Decisions needed before Step 1:
 1. **Filename collision** — `REFACTOR-AUDIT.md` already exists on `main` (an
    unrelated, committed security audit). Options: (a) keep this audit as
    `REFACTOR-AUDIT-timeline.md` (done — nothing destroyed), (b) let me move it
-   into `docs/` (e.g. `docs/incident-timeline-audit.md`), or (c) overwrite the
+   into `docs/` (e.g. `docs/event-timeline-audit.md`), or (c) overwrite the
    existing `REFACTOR-AUDIT.md` (destroys the prior security audit — not
    recommended).
 2. **L2 loop** — confirm we treat it as "arrives as a finding when it exists"
-   and ship against the three real sources + probe-outage incidents (my rec),
+   and ship against the three real sources + probe-outage events (my rec),
    not a stub source.
-3. **Source set** — include probe-outage `incidents` (#4)? (I'd include it.)
+3. **Source set** — include probe-outage `events` (#4)? (I'd include it.)
    Also fold in `config_snapshots` config-changes / `agent_action_audit`? (Hold
    unless you want a fuller view.)
 4. **Partial vs 500** — confirm the `partial: true` approach in §5.
-5. **License gate** — leave viewer+ ungated like the incident timeline (my rec),
+5. **License gate** — leave viewer+ ungated like the event timeline (my rec),
    or gate behind a plan feature?
 
 *AUDIT-ONLY — no production code changed, no migrations run, nothing committed.*

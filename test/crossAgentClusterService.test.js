@@ -7,7 +7,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
 const { createCrossAgentClusterService } = require('../src/analysis/crossAgentClusterService');
-const { makeIncidentClustersRepo, makeFindingStore, makeAgentsRepo, makeDispatcher, makeAlertDispatchLogRepo } = require('../test-support/fakes');
+const { makeEventClustersRepo, makeFindingStore, makeAgentsRepo, makeDispatcher, makeAlertDispatchLogRepo } = require('../test-support/fakes');
 
 const T = new Date('2026-07-01T12:00:00Z');
 const ago = (ms) => new Date(T.getTime() - ms);
@@ -32,7 +32,7 @@ function fakeAssistant({ enabled = true, answer = 'Likely a shared uplink fault 
 
 // Two agents (1,2) in the same site (10) unless overridden.
 function svcWith({ findings = [], agents = [{ id: 1, location_id: 10 }, { id: 2, location_id: 10 }], publishCluster, clustersRepo, assistant, alertDispatcher, alertLog, snapshotService } = {}) {
-  const repo = clustersRepo || makeIncidentClustersRepo();
+  const repo = clustersRepo || makeEventClustersRepo();
   const findingStore = makeFindingStore();
   for (const f of findings) findingStore.rows.push({ ...f, acked: false });
   const agentsRepo = makeAgentsRepo({ findAll: async () => agents });
@@ -66,7 +66,7 @@ test('two agents, same site, same metric in the window -> creates one HIGH clust
   assert.equal(repo.rows[0].confidence, 'high');
   assert.deepEqual(repo.rows[0].member_finding_ids.sort(), ['a', 'b']);
   assert.equal(repo.rows[0].status, 'open');
-  // Cluster event was published (server wraps it as {type:'incident_cluster'}).
+  // Cluster event was published (server wraps it as {type:'event_cluster'}).
   assert.equal(published.length, 1);
   assert.equal(published[0].status, 'open');
 });
@@ -179,7 +179,7 @@ test('a new overlapping finding merges into the existing cluster (member set gro
 // ---- resolution ------------------------------------------------------------
 
 test('resolveStale closes open clusters whose last activity is older than the inactivity window', async () => {
-  const repo = makeIncidentClustersRepo();
+  const repo = makeEventClustersRepo();
   const id = await repo.create({ confidence: 'high', memberFindingIds: ['a', 'b'], suspectedCommonCause: 'x', detectedAt: ago(40 * 60 * 1000) }); // 40 min ago (> 30-min default)
   const { svc, published } = svcWith({ clustersRepo: repo });
   const resolved = await svc.resolveStale();
@@ -189,7 +189,7 @@ test('resolveStale closes open clusters whose last activity is older than the in
 });
 
 test('resolveStale leaves recently-active clusters open', async () => {
-  const repo = makeIncidentClustersRepo();
+  const repo = makeEventClustersRepo();
   await repo.create({ confidence: 'high', memberFindingIds: ['a'], detectedAt: ago(2 * 60 * 1000) }); // 2 min ago
   const { svc } = svcWith({ clustersRepo: repo });
   const resolved = await svc.resolveStale();
@@ -198,7 +198,7 @@ test('resolveStale leaves recently-active clusters open', async () => {
 });
 
 test('resolveStale NEVER auto-closes a cluster with an unacknowledged CRIT member', async () => {
-  const repo = makeIncidentClustersRepo();
+  const repo = makeEventClustersRepo();
   const id = await repo.create({ confidence: 'high', memberFindingIds: ['a', 'b'], detectedAt: ago(40 * 60 * 1000) });
   const { svc } = svcWith({
     clustersRepo: repo,
@@ -213,7 +213,7 @@ test('resolveStale NEVER auto-closes a cluster with an unacknowledged CRIT membe
 });
 
 test('resolveStale DOES auto-close once the CRIT member is acknowledged', async () => {
-  const repo = makeIncidentClustersRepo();
+  const repo = makeEventClustersRepo();
   const id = await repo.create({ confidence: 'high', memberFindingIds: ['a'], detectedAt: ago(40 * 60 * 1000) });
   const { svc, findingStore } = svcWith({
     clustersRepo: repo,
@@ -226,7 +226,7 @@ test('resolveStale DOES auto-close once the CRIT member is acknowledged', async 
 });
 
 test('resolveStale auto-closes an ACKNOWLEDGED (non-CRIT) cluster gone quiet', async () => {
-  const repo = makeIncidentClustersRepo();
+  const repo = makeEventClustersRepo();
   const id = await repo.create({ confidence: 'high', memberFindingIds: ['a'], detectedAt: ago(40 * 60 * 1000) });
   await repo.acknowledge(id, { by: 7, at: ago(35 * 60 * 1000) });
   const { svc } = svcWith({
@@ -340,7 +340,7 @@ test('a medium/high cluster fires exactly ONE cluster-level alert, referencing a
   await svc.detectAndPersist();
   assert.equal(alertDispatcher.clusterCalls.length, 1);
   const { cluster, group } = alertDispatcher.clusterCalls[0];
-  assert.equal(cluster.metric, 'incident_cluster');
+  assert.equal(cluster.metric, 'event_cluster');
   assert.equal(cluster.severity, 'WARN'); // max of the two WARN members
   assert.ok(Array.isArray(cluster.evidence) && cluster.evidence.length === 2);
   assert.deepEqual(group.memberFindingIds.sort(), ['a', 'b']);
@@ -384,7 +384,7 @@ test('a dispatcher failure never breaks the sweep', async () => {
 test('a finding-store failure is swallowed (never throws to the sweep)', async () => {
   const findingStore = makeFindingStore({ list: async () => { throw new Error('db down'); } });
   const svc = createCrossAgentClusterService({
-    clustersRepo: makeIncidentClustersRepo(),
+    clustersRepo: makeEventClustersRepo(),
     findingStore,
     agentsRepo: makeAgentsRepo(),
     now: () => T,

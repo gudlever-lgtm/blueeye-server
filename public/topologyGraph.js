@@ -116,7 +116,7 @@
     return deg;
   }
 
-  // The node ids a layer actually shows: any node incident to a visible edge,
+  // The node ids a layer actually shows: any node event to a visible edge,
   // plus an optional always-kept id (the focus/what-if node) so it never vanishes
   // when it has no edge in the chosen layer. Returned as a plain array (stable by
   // the graph's node order).

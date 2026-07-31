@@ -1,7 +1,7 @@
 'use strict';
 
 const { createCrossAgentCorrelator, DEFAULT_WINDOW_MS } = require('./crossAgentCorrelator');
-const { INCIDENT_INSUFFICIENT_ANSWER } = require('./assistant');
+const { EVENT_INSUFFICIENT_ANSWER } = require('./assistant');
 
 const silentLogger = { info() {}, warn() {}, error() {}, debug() {} };
 
@@ -10,9 +10,9 @@ const ADVISORY_CONFIDENCE = new Set(['medium', 'high']);
 
 // Orchestrates the cross-agent correlator against the live finding store: loads the
 // recent findings across ALL agents, runs the detector, then persists each candidate
-// as an `incident_clusters` row — DEDUPING against still-open clusters so a recurring
+// as an `event_clusters` row — DEDUPING against still-open clusters so a recurring
 // pattern updates one cluster instead of spawning a new one every sweep. Also owns
-// the inactivity-based resolution (mirrors incidentCases/autoResolveJob.js).
+// the inactivity-based resolution (mirrors eventCases/autoResolveJob.js).
 //
 // Best-effort by contract: every method swallows its own errors so a failure here
 // never affects ingestion or the scheduler.
@@ -132,7 +132,7 @@ function createCrossAgentClusterService({
       logger.warn(`cross-agent: advisory generation failed (${err.message})`);
       return null;
     }
-    if (!answer || answer === INCIDENT_INSUFFICIENT_ANSWER) return null; // never surface non-advice
+    if (!answer || answer === EVENT_INSUFFICIENT_ANSWER) return null; // never surface non-advice
 
     try {
       const ok = await clustersRepo.setAdvisory(clusterId, answer);
@@ -169,10 +169,10 @@ function createCrossAgentClusterService({
       clusterId,
       id: `cluster:${clusterId}`,
       hostId: `${Array.isArray(cluster.hostIds) ? cluster.hostIds.length : members.length} agents`,
-      metric: 'incident_cluster',
+      metric: 'event_cluster',
       kind: 'CLUSTER',
       severity: cluster.severity || 'WARN',
-      explanation: cluster.advisory || cluster.suspectedCommonCause || 'Cross-agent incident cluster',
+      explanation: cluster.advisory || cluster.suspectedCommonCause || 'Cross-agent event cluster',
       deviation: null,
       evidence: members.map(evidenceRef),
       createdAt: now(),
@@ -321,7 +321,7 @@ function createCrossAgentClusterService({
   }
 
   // True when a cluster still holds an UNACKNOWLEDGED CRIT member finding — the
-  // existing retention rule that such an incident must never auto-close (a human
+  // existing retention rule that such an event must never auto-close (a human
   // has to acknowledge the CRIT first). Best-effort: an unreadable member is not
   // treated as CRIT (the auto-resolve is not blocked by a lookup failure).
   async function hasUnacknowledgedCrit(memberFindingIds) {

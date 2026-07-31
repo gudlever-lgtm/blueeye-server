@@ -44,7 +44,7 @@ const COLS = `id, incident_id, title, severity, detected_at, started_at, resolve
   notification_required, status, lessons_learned, created_at, updated_at`;
 
 // Data-access for `blueeye_nis2_incidents` (NIS2 security incidents — distinct
-// from the probe-derived network `incidents`). A human reference INC-YYYY-NNNN
+// from the probe-derived network `probe_outages`). A human reference INC-YYYY-NNNN
 // is minted per-year on insert.
 function createNis2IncidentsRepository(db) {
   const { pool } = db;

@@ -388,7 +388,7 @@ at the repo root — keep it and the `status` field in step.
   licence re-validation, report generation and API-token management. Table
   `audit_log` (migration 033), recorder `src/services/auditLogger.js`.
 - **PDF / CSV reports** (`reports_pdf` / `reports_csv`) — `GET
-  /api/reports/{availability,incidents}.{csv,html}`; the print-ready HTML is
+  /api/reports/{availability,events}.{csv,html}`; the print-ready HTML is
   Print→PDF client-side (no PDF library). JSON reads stay ungated (Basic reports).
 - **Compliance report pack** (`reports_compliance`) — NIS2 report
   generation/approval and all `/api/nis2/export/*` artifacts are gated; the

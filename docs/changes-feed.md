@@ -32,17 +32,17 @@ first-time visitor wants their shift, not four years of history.
 | --- | --- | --- |
 | `agent_state` | `audit_events` (`agent.online`/`offline`/`enrolled`) | ✅ |
 | `finding` | `findings` | ✅ (creation) |
-| `probe` | `incidents` (probe outages) — **degrade and recover** | ✅ |
-| `event` | `incident_cases` | ✅ |
-| `cluster` | `incident_clusters` | ✅ |
+| `probe` | `events` (probe outages) — **degrade and recover** | ✅ |
+| `event` | `event_cases` | ✅ |
+| `cluster` | `event_clusters` | ✅ |
 | `topology` | `topology_changes` (links appeared/disappeared) | ✅ |
-| `playbook` | `incident_playbook_runs` | ✅ |
+| `playbook` | `event_playbook_runs` | ✅ |
 | `config` | `config_snapshots` | ✅ |
 | `interface_state` | `interface_state_transitions` (mig 075) | ✅ |
 | `agent_health` | derived — heartbeat + version skew | ❌ **current state** |
 
-`probe` and `event` used to share the kind `incident`, which is what made one
-row render as the raw string `incident_case`. They are different records: see
+`probe` and `event` used to share the kind `event`, which is what made one
+row render as the raw string `event_case`. They are different records: see
 [events.md](events.md) for the vocabulary.
 
 A probe outage contributes **two** events when both ends fall in the window:

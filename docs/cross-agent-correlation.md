@@ -1,10 +1,10 @@
-# Cross-agent pattern correlation (incident clusters)
+# Cross-agent pattern correlation (event clusters)
 
 BlueEyes' per-target correlator (`src/analysis/correlator.js`) links findings
 **within one agent** to hint a root cause. The cross-agent correlator groups
 findings across **different agents** that fire in the same time window into a
-single **incident cluster** with a suspected common cause and a confidence tier —
-so a fault hitting several agents at once surfaces as ONE incident, not N
+single **event cluster** with a suspected common cause and a confidence tier —
+so a fault hitting several agents at once surfaces as ONE event, not N
 look-alike findings.
 
 Local + explainable, like the rest of the analysis stack: time clustering + a
@@ -47,8 +47,8 @@ schema/repository addition; until then this is a known gap, not a bug.
   Fixed-anchor time buckets across all hosts; within each bucket it peels off, in
   decreasing confidence: per-site groups (≥2 agents) → topology clusters, then
   per-metric groups → type-only clusters, then a time-only leftover.
-- **`src/repositories/incidentClustersRepository.js`** — data access for
-  `incident_clusters` (migration 057). `create` / `listOpen` / `updateMembership` /
+- **`src/repositories/eventClustersRepository.js`** — data access for
+  `event_clusters` (migration 057). `create` / `listOpen` / `updateMembership` /
   `updateStatus` (guarded) / `listStaleOpen` / `list`.
 - **`src/analysis/crossAgentClusterService.js`** — orchestration + policy.
   `detectAndPersist()` loads recent findings across ALL agents
@@ -69,7 +69,7 @@ schema/repository addition; until then this is a known gap, not a bug.
   updated (member union, re-evaluated confidence/cause, advanced `detected_at`), so
   a recurring pattern never spawns duplicate clusters.
 - **Resolution**: findings carry no explicit "cleared" event, so resolution is
-  **inactivity-based** (mirrors `incidentCases/autoResolveJob.js`): an open cluster
+  **inactivity-based** (mirrors `eventCases/autoResolveJob.js`): an open cluster
   whose `detected_at` is older than the inactivity window (default 15 min, i.e. no
   member finding refreshed it) is flipped `open → resolved`.
 
@@ -84,7 +84,7 @@ troubleshooting steps** — `assistant.suggestClusterCause(cluster, members)` in
 masked before anything leaves the process, it uses ONLY the provided context, and it
 pins the exact insufficient-context string (which the service treats as "no advice").
 
-The advisory is stored in `incident_clusters.advisory` (migration 058, set once per
+The advisory is stored in `event_clusters.advisory` (migration 058, set once per
 cluster, never regenerated on later sweeps) and **always surfaced with its evidence**:
 the publish payload carries both `advisory` and an `evidence` array (one entry per
 member finding — `findingId`, host, metric, severity, deviation, sample count), so
@@ -123,13 +123,13 @@ is unchanged apart from the best-effort log write.
 
 Cluster events reuse the **existing** dashboard WebSocket (`/ws/dashboard`) — the
 same channel findings use. The service's `publishCluster` is wired in `server.js`
-to `dashboardWs.broadcast({ type: 'incident_cluster', payload })`, so no new socket
+to `dashboardWs.broadcast({ type: 'event_cluster', payload })`, so no new socket
 or auth path is introduced. Payloads carry `status: 'open' | 'resolved'`, and the
 advisory follow-up carries `advisory` + `evidence`.
 
 ## Data model
 
-`incident_clusters` (migration 057): `id`, `confidence` (enum low/medium/high),
+`event_clusters` (migration 057): `id`, `confidence` (enum low/medium/high),
 `member_finding_ids` (JSON array of `findings.id`), `suspected_common_cause` (text,
 nullable), `status`, `detected_at` (last activity), `resolved_at`, timestamps.
 `member_finding_ids` is JSON (not a join table) to mirror how a finding's own
@@ -146,11 +146,11 @@ as **live** for dedup + auto-resolve.
 The clustering engine creates/updates/auto-resolves clusters automatically; on top
 of that, an operator can **acknowledge** and **resolve** a cluster.
 
-`GET /api/incident-clusters` — list, newest activity first. Filters: `status`,
+`GET /api/event-clusters` — list, newest activity first. Filters: `status`,
 `from`/`to` (on `detected_at`), pagination `limit` (default 50, max 200) + `offset`;
 returns `{ clusters, page: { limit, offset, total } }`. **viewer+**.
 
-`GET /api/incident-clusters/:id` — the full cluster: hydrated **members** (each with
+`GET /api/event-clusters/:id` — the full cluster: hydrated **members** (each with
 its evidence-sample count), **affected agents/targets**, a **confidence breakdown**
 (which signals fired, their weights, the summed score vs the single-signal baseline —
 `src/analysis/crossAgentCorrelator.js` `confidenceBreakdown`), a suspected
@@ -159,19 +159,19 @@ L2 `isAppMetric`/`isNetMetric` classifiers from `investigation/locator.js`) and 
 plain-language **evidence summary**. Pure assembly in `src/analysis/clusterView.js`.
 **viewer+**.
 
-`POST /api/incident-clusters/:id/ack` — `open` → `acknowledged` (**operator+**,
+`POST /api/event-clusters/:id/ack` — `open` → `acknowledged` (**operator+**,
 hash-chained audit via `auditLogger`). `409` if not `open`.
 
-`POST /api/incident-clusters/:id/resolve` — requires a **free-text `note`** (`400`
+`POST /api/event-clusters/:id/resolve` — requires a **free-text `note`** (`400`
 without it), `open`/`acknowledged` → `resolved` stamping `resolved_by` + the note
 (**operator+**, audited). `409` on a second resolve / lost race.
 
-> The task specified `/api/incidents` for these, but that path is already the
-> first-class `incident_cases` router (a distinct feature), so clusters mount at
-> **`/api/incident-clusters`** with the same verbs/shapes.
+> The task specified `/api/events` for these, but that path is already the
+> first-class `event_cases` router (a distinct feature), so clusters mount at
+> **`/api/event-clusters`** with the same verbs/shapes.
 
-Router `src/routes/incidentClusters.js`; repo methods `acknowledge`/`resolve`/`list`
-(time-range + pagination)/`count` in `src/repositories/incidentClustersRepository.js`.
+Router `src/routes/eventClusters.js`; repo methods `acknowledge`/`resolve`/`list`
+(time-range + pagination)/`count` in `src/repositories/eventClustersRepository.js`.
 
 ## Retention: never auto-close an unacknowledged CRIT
 
@@ -185,7 +185,7 @@ not treated as CRIT (a lookup failure never blocks resolution).
 ## Automated read-only evidence snapshot on cluster open (Fase 6)
 
 When a cluster opens, BlueEyes captures a **point-in-time, READ-ONLY** diagnostic
-snapshot from each affected target — so an operator opening the incident sees "what
+snapshot from each affected target — so an operator opening the event sees "what
 the network looked like when it fired" without SSHing anywhere. It reuses the
 **existing** authenticated, cert-pinned, audited agent-command path
 (`agentCommander.sendCommandAndWait` over `/ws/agent`) — no new transport.
@@ -216,22 +216,22 @@ concurrency cap (default **4**), and a single **60s** retry for an offline agent
 before recording `agent-offline`. Partial results are valid — each item's outcome
 (`ok`/`timeout`/`refused`/`agent-offline`) is stored. Every path swallows its own
 errors: the trigger is fire-and-forget from the clustering sweep and **never** blocks
-clustering, alerting or the incident page.
+clustering, alerting or the event page.
 
 ### Evidence, not time series
 
 One row per (cluster, target) in `cluster_evidence_snapshots` (migration 065) with a
 **gzip blob** (`payload_gzip`) — not metric rows, and nothing in TimescaleDB.
 `src/repositories/evidenceSnapshotsRepository.js` gzips on write / gunzips on read.
-The incident timeline gains an **`evidence`** source (INFO when complete, WARN for
+The event timeline gains an **`evidence`** source (INFO when complete, WARN for
 partial/offline/failed) linking to the raw-text viewer.
 
 ### API + retention
 
-- `GET /api/incident-clusters/:id/evidence` (viewer+) — snapshots (metadata).
-- `GET /api/incident-clusters/:id/evidence/:sid` (viewer+) — decompressed raw text
+- `GET /api/event-clusters/:id/evidence` (viewer+) — snapshots (metadata).
+- `GET /api/event-clusters/:id/evidence/:sid` (viewer+) — decompressed raw text
   (`text/plain`, no parsing/visualisation).
-- `POST /api/incident-clusters/:id/evidence` (**operator+**) — manual re-snapshot,
+- `POST /api/event-clusters/:id/evidence` (**operator+**) — manual re-snapshot,
   rate-limited (once/min → `429` + `Retry-After`), evidence-class audit-logged.
 
 `src/evidence/evidenceRetention.js` ages out snapshots older than

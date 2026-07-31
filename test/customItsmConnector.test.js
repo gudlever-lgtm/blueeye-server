@@ -19,9 +19,9 @@ function scriptFetch(responses) {
 }
 
 const finding = { hostId: 'agent-7', metric: 'cpu.load', severity: 'CRIT', explanation: 'CPU load far above baseline', observed: 95, baseline: 20, deviation: 7.5 };
-const incidentEvent = { type: 'incident', severity: 'CRIT', correlationId: 'be-agent-7-cpu.load', finding };
+const eventEvent = { type: 'event', severity: 'CRIT', correlationId: 'be-agent-7-cpu.load', finding };
 
-test('customItsm: is registered as the config-driven "custom" type reacting to incidents', () => {
+test('customItsm: is registered as the config-driven "custom" type reacting to events', () => {
   const c = createCustomItsmConnector({ fetchImpl: scriptFetch([]) });
   assert.equal(c.type, 'custom');
   assert.deepEqual(c.defaultEvents, ['incident', 'anomaly']);
@@ -32,7 +32,7 @@ test('customItsm: default field map POSTs short_description/description/correlat
   const fetchImpl = scriptFetch([{ status: 201, body: { id: 42 } }]);
   const c = createCustomItsmConnector({ fetchImpl });
   const integration = { baseUrl: 'https://itsm.example/', authType: 'token', credentials: { token: 'T' }, config: { path: '/tickets' } };
-  const res = await c.send(integration, incidentEvent);
+  const res = await c.send(integration, eventEvent);
   assert.equal(res.ok, true);
   assert.equal(res.status, 201);
   const [call] = fetchImpl.calls;
@@ -52,13 +52,13 @@ test('customItsm: dotted field keys build a nested body (Jira-shaped) and merge 
     config: {
       path: '/rest/api/2/issue', method: 'POST',
       fields: { 'fields.summary': 'title', 'fields.description': 'explanation' },
-      staticFields: { fields: { project: { key: 'OPS' }, issuetype: { name: 'Incident' } } },
+      staticFields: { fields: { project: { key: 'OPS' }, issuetype: { name: 'Event' } } },
     },
   };
-  await c.send(integration, incidentEvent);
+  await c.send(integration, eventEvent);
   const [call] = fetchImpl.calls;
   assert.equal(call.body.fields.project.key, 'OPS');
-  assert.equal(call.body.fields.issuetype.name, 'Incident');
+  assert.equal(call.body.fields.issuetype.name, 'Event');
   assert.match(call.body.fields.summary, /cpu\.load/);
   assert.equal(call.body.fields.description, 'CPU load far above baseline');
 });
@@ -70,7 +70,7 @@ test('customItsm: static headers are sent and never overwrite the auth header', 
     baseUrl: 'https://glpi.example', authType: 'token', credentials: { token: 'usr' },
     config: { path: '/apirest.php/Ticket', tokenScheme: 'user_token', headers: { 'App-Token': 'APP', Authorization: 'ignored' }, fields: { 'input.name': 'title' } },
   };
-  await c.send(integration, incidentEvent);
+  await c.send(integration, eventEvent);
   const [call] = fetchImpl.calls;
   assert.equal(call.headers['App-Token'], 'APP');
   assert.equal(call.headers.Authorization, 'user_token usr'); // auth wins over the static Authorization
@@ -91,7 +91,7 @@ test('customItsm: PUT method + custom testPath GET for the connection test', asy
 test('customItsm: a failed send surfaces the target status and detail', async () => {
   const fetchImpl = scriptFetch([{ status: 403, body: { error: 'nope' } }]);
   const c = createCustomItsmConnector({ fetchImpl });
-  const res = await c.send({ baseUrl: 'https://itsm.example', authType: 'none', credentials: {}, config: { path: '/t' } }, incidentEvent);
+  const res = await c.send({ baseUrl: 'https://itsm.example', authType: 'none', credentials: {}, config: { path: '/t' } }, eventEvent);
   assert.equal(res.ok, false);
   assert.equal(res.status, 403);
   assert.match(res.detail, /POST failed/);
@@ -122,7 +122,7 @@ test('customItsm: every documented event key is resolvable in a body', async () 
   const c = createCustomItsmConnector({ fetchImpl });
   const fields = {};
   for (const k of EVENT_KEYS) fields[k] = k; // target field name == event key for the test
-  await c.send({ baseUrl: 'https://x', authType: 'none', credentials: {}, config: { path: '/t', fields } }, incidentEvent);
+  await c.send({ baseUrl: 'https://x', authType: 'none', credentials: {}, config: { path: '/t', fields } }, eventEvent);
   const [call] = fetchImpl.calls;
   assert.equal(call.body.severity, 'CRIT');
   assert.equal(call.body.impact, '1');

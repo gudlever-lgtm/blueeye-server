@@ -9,14 +9,14 @@ const { silentLogger } = require('../logger');
 // Lokationsdrevet investigation-API. Monteret på /api/investigation.
 // RBAC:
 //   POST /run            — operator+
-//   POST /from-incident  — operator+
+//   POST /from-event  — operator+
 //   GET  /               — viewer+
 //   GET  /:id            — viewer+
 function createInvestigationRouter({
   investigationsRepo,
   locator,
   assistant = null,
-  incidentsRepo = null,
+  probeOutagesRepo = null,
   nis2IncidentsRepo = null,
   logger = silentLogger,
 }) {
@@ -119,36 +119,36 @@ function createInvestigationRouter({
     })
   );
 
-  // POST /api/investigation/from-incident — look up a local incident, resolve
+  // POST /api/investigation/from-event — look up a local event, resolve
   // its agent/location, run an investigation, and optionally write back via
   // ServiceNow (skipped silently when not configured).
   router.post(
-    '/from-incident',
+    '/from-event',
     requireAuth,
     requireRole(ROLES.OPERATOR, ROLES.ADMIN),
     asyncHandler(async (req, res) => {
-      const incidentId = req.body && req.body.incidentId;
-      if (!incidentId) {
-        return res.status(400).json({ error: 'Validation failed', details: 'incidentId is required' });
+      const eventId = req.body && req.body.eventId;
+      if (!eventId) {
+        return res.status(400).json({ error: 'Validation failed', details: 'eventId is required' });
       }
 
-      if (!incidentsRepo || typeof incidentsRepo.findById !== 'function') {
-        return res.status(503).json({ error: 'Incidents repository not available' });
+      if (!probeOutagesRepo || typeof probeOutagesRepo.findById !== 'function') {
+        return res.status(503).json({ error: 'Events repository not available' });
       }
 
-      const incident = await incidentsRepo.findById(String(incidentId));
-      if (!incident) {
-        return res.status(404).json({ error: 'Incident not found', incidentId });
+      const event = await probeOutagesRepo.findById(String(eventId));
+      if (!event) {
+        return res.status(404).json({ error: 'Event not found', eventId });
       }
 
-      // Derive locationRef from the incident: prefer locationId (site), else agentId (agent).
+      // Derive locationRef from the event: prefer locationId (site), else agentId (agent).
       let locationRef;
-      if (incident.locationId != null) {
-        locationRef = { type: 'site', value: String(incident.locationId) };
-      } else if (incident.agentId != null) {
-        locationRef = { type: 'agent', value: String(incident.agentId) };
+      if (event.locationId != null) {
+        locationRef = { type: 'site', value: String(event.locationId) };
+      } else if (event.agentId != null) {
+        locationRef = { type: 'agent', value: String(event.agentId) };
       } else {
-        return res.status(422).json({ error: 'Incident has no resolvable location (no agentId or locationId)' });
+        return res.status(422).json({ error: 'Event has no resolvable location (no agentId or locationId)' });
       }
 
       let result;
@@ -169,7 +169,7 @@ function createInvestigationRouter({
         logger.warn(`investigation: save(${result.id}) failed (${err.message})`);
       }
 
-      res.json({ incidentId, investigation: { ...result, ...nis2 } });
+      res.json({ eventId, investigation: { ...result, ...nis2 } });
     })
   );
 

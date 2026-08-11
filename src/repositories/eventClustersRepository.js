@@ -60,8 +60,46 @@ function mapRow(row) {
 // SQL fragment + params for the LIVE (still-open) statuses — open + acknowledged.
 const LIVE_PLACEHOLDERS = OPEN_STATUSES.map(() => '?').join(', ');
 
+// WHY EVERY SORTED READ BELOW IS SPLIT IN TWO
+//
+// MySQL sorts with "addon fields": each selected column is copied into the sort
+// buffer next to the sort key, and a variable-length column is budgeted at its
+// MAXIMUM width, not its actual one. member_finding_ids is JSON, whose maximum
+// dwarfs the default 256 KB sort_buffer_size, so a single row never fits and the
+// server aborts the query outright — ER_OUT_OF_SORTMEMORY, "Out of sort memory,
+// consider increasing server sort buffer size" — instead of spilling to disk.
+//
+// That took out every read of this table that sorts: the Situations list 500'd,
+// and the clustering engine's own listOpen/listStaleOpen sweeps failed silently
+// (they log and carry on with []), so clusters stopped being deduped or
+// auto-resolved. findById and count survived because neither sorts, which is
+// exactly why the detail page kept working while the list did not.
+//
+// An index does not fix it: listOpen/listStaleOpen match `status IN (open,
+// acknowledged)`, two disjoint ranges that no single index can hand back already
+// ordered by detected_at, so those filesort no matter what is declared. Raising
+// sort_buffer_size is a server-wide setting, and no customer should have to tune
+// my.cnf to open a dashboard tab.
+//
+// So the sort never sees the JSON. Phase 1 orders and pages over narrow columns
+// and yields ids; phase 2 fetches the full rows by primary key, which needs no
+// sort at all; phase 1's order is reapplied in JS.
+
 function createEventClustersRepository(db) {
   const { pool } = db;
+
+  // Phase 2 of every listing: full rows for `ids`, returned in that exact order.
+  // A row that disappeared between the two phases is dropped rather than left as
+  // a hole in the list.
+  async function hydrateByIds(ids) {
+    if (!ids.length) return [];
+    const [rows] = await pool.query(
+      `SELECT ${BASE_COLUMNS} FROM event_clusters WHERE id IN (${ids.map(() => '?').join(', ')})`,
+      ids,
+    );
+    const byId = new Map(rows.map((row) => [String(row.id), mapRow(row)]));
+    return ids.map((id) => byId.get(String(id))).filter(Boolean);
+  }
 
   // Opens a new cluster; returns its new id.
   async function create({ confidence = 'low', memberFindingIds = [], suspectedCommonCause = null, status = 'open', detectedAt }) {
@@ -85,11 +123,11 @@ function createEventClustersRepository(db) {
   async function listOpen(limit = 1000) {
     const lim = Number.isInteger(limit) && limit > 0 && limit <= 5000 ? limit : 1000;
     const [rows] = await pool.query(
-      `SELECT ${BASE_COLUMNS} FROM event_clusters WHERE status IN (${LIVE_PLACEHOLDERS})
+      `SELECT id FROM event_clusters WHERE status IN (${LIVE_PLACEHOLDERS})
        ORDER BY detected_at DESC, id DESC LIMIT ?`,
       [...OPEN_STATUSES, lim],
     );
-    return rows.map(mapRow);
+    return hydrateByIds(rows.map((row) => row.id));
   }
 
   // Re-evaluates a live cluster's membership: rewrites the member set, confidence
@@ -166,12 +204,12 @@ function createEventClustersRepository(db) {
   async function listStaleOpen(olderThan, limit = 500) {
     const lim = Number.isInteger(limit) && limit > 0 && limit <= 5000 ? limit : 500;
     const [rows] = await pool.query(
-      `SELECT ${BASE_COLUMNS} FROM event_clusters
+      `SELECT id FROM event_clusters
        WHERE status IN (${LIVE_PLACEHOLDERS}) AND detected_at < ?
        ORDER BY detected_at ASC LIMIT ?`,
       [...OPEN_STATUSES, olderThan, lim],
     );
-    return rows.map(mapRow);
+    return hydrateByIds(rows.map((row) => row.id));
   }
 
   // Builds the shared WHERE for the read API list/count: optional status filter and
@@ -192,12 +230,12 @@ function createEventClustersRepository(db) {
     const lim = Number.isInteger(limit) && limit > 0 && limit <= 500 ? limit : 50;
     const off = Number.isInteger(offset) && offset > 0 ? offset : 0;
     const [rows] = await pool.query(
-      `SELECT ${BASE_COLUMNS} FROM event_clusters
+      `SELECT id FROM event_clusters
        ${clause}
        ORDER BY detected_at DESC, id DESC LIMIT ? OFFSET ?`,
       [...params, lim, off],
     );
-    return rows.map(mapRow);
+    return hydrateByIds(rows.map((row) => row.id));
   }
 
   // Total matching rows for the same filter — pagination metadata for the read API.

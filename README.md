@@ -84,7 +84,12 @@ All configuration is done via environment variables (see [`.env.example`](.env.e
 ## Database
 
 - [`schema.sql`](schema.sql) — complete schema snapshot. Can be loaded directly
-  into a fresh database: `mysql -u <user> -p <db> < schema.sql`.
+  into a fresh database: `mysql -u <user> -p <db> < schema.sql`. **Generated —
+  don't edit it by hand:** `npm run build-schema` replays `migrations/` into it,
+  and `npm test` fails if the two disagree. (It was hand-maintained once and
+  drifted 23 tables behind, which broke the direct load entirely.) A database
+  loaded this way has an empty `schema_migrations`, so it is already current —
+  seed that table before pointing the migrator at it.
 - [`migrations/`](migrations) — numbered SQL migrations, run in order.
   `migrations/` is the source of truth for incremental changes.
 - [`src/migrate.js`](src/migrate.js) — simple migration runner. Tracks already-run
@@ -454,7 +459,7 @@ blueeye-server/
 │   ├── 003_create_agents.sql
 │   ├── 004_create_enrollment.sql
 │   └── 005_create_results.sql
-├── schema.sql                  # Full schema snapshot
+├── schema.sql                  # Full schema snapshot (generated from migrations/)
 ├── src/
 │   ├── app.js                  # Express app factory (without listen)
 │   ├── server.js               # Entrypoint: wiring + listen + WS + shutdown

@@ -75,9 +75,10 @@ public/                # dependency-free dashboard SPA
 ├── app.js             # the whole SPA: views.*, render(), el() DOM helper, api()
 └── styles.css         # light default + [data-theme=…] palettes (dark, nord, …); hand-written CSS vars
 
-migrations/NNN_*.sql   # numbered, tracked in schema_migrations (schema.sql = full snapshot)
+migrations/NNN_*.sql   # numbered, tracked in schema_migrations; the source of truth
+schema.sql             # full snapshot, GENERATED from migrations/ (npm run build-schema)
 docs/                  # per-feature docs (analysis, geo, alerting, retention, ...)
-scripts/               # seed-superadmin.js, seed-demo.js, dev-bootstrap.js, deploy.sh
+scripts/               # seed-superadmin.js, seed-demo.js, dev-bootstrap.js, deploy.sh, build-schema.js
 test/, test-support/   # node --test specs + fakes (makeApp, makeXRepo, authHeader)
 ```
 

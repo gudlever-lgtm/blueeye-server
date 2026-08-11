@@ -40,6 +40,8 @@ full HTTP route table, the data model, the dashboard structure, and a
 - Run tests: `npm test` (`node --test`; auto-discovers `test/**` and `src/**/__tests__`).
   Test Express endpoints for 400/401/403/404/500; mock outbound calls (LLM/SMTP/geocoder).
 - DB: numbered `migrations/NNN_*.sql` (tracked in `schema_migrations`), run `npm run migrate`.
+  After adding a migration run `npm run build-schema` — `schema.sql` is generated from
+  the migration chain and `npm test` fails when it is stale. Never hand-edit it.
 - Adding a feature usually means: a router in `src/routes/` (mounted in `routes/index.js`),
   a repository in `src/repositories/`, validation in `src/validation/`, a dashboard
   `views.<tab>` in `public/app.js` (+ a `data-view` button in `public/index.html`), a

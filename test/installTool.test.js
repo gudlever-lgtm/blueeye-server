@@ -93,6 +93,26 @@ test('auto-install pushes an install-tool command for a missing-tool probe failu
   assert.deepEqual(ev.detail, { tool: 'traceroute', trigger: 'auto', delivered: true });
 });
 
+test('auto-install offers tcptraceroute when neither trace binary is on the host', async () => {
+  // The probe falls back to `traceroute -T` itself, so it only reports "not
+  // installed" when BOTH are missing — and it names the one this allowlist can fix.
+  let sent = null;
+  const agentCommander = makeAgentCommander({ sendCommand: (id, cmd) => { sent = cmd; return 1; } });
+  const results = [{ type: 'tcptraceroute', target: 'example.com:443', ok: false, execError: 'tcptraceroute not installed' }];
+  await svc({ agentCommander }).maybeAutoInstall(5, results);
+  assert.equal(sent.name, 'install-tool');
+  assert.equal(sent.tool, 'tcptraceroute');
+});
+
+test('auto-install ignores a tcptraceroute that failed for want of root, not a package', async () => {
+  // A raw-socket permission failure is not something installing a package fixes.
+  let sent = 0;
+  const agentCommander = makeAgentCommander({ sendCommand: () => { sent += 1; return 1; } });
+  const results = [{ type: 'tcptraceroute', target: 'example.com:443', ok: false, execError: 'tcptraceroute needs root (raw socket)' }];
+  await svc({ agentCommander }).maybeAutoInstall(5, results);
+  assert.equal(sent, 0);
+});
+
 test('auto-install does nothing when the opt-in is off', async () => {
   let sent = 0;
   const agentCommander = makeAgentCommander({ sendCommand: () => { sent += 1; return 1; } });

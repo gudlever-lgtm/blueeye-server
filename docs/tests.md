@@ -20,7 +20,7 @@ A package (`test_packages`, migration 017) has:
 - **targets** — `{ mode: 'all' | 'agents' | 'location', agentIds, locationIds }`.
 - **items** — an array of:
   - `{ type: 'probe', probe: { type, host, port?, count?, maxHops? } }` — validated
-    by `validateProbeSpec` (ping / tcp / dns / traceroute / http / curl). A `curl`
+    by `validateProbeSpec` (ping / tcp / dns / traceroute / tcptraceroute / http / curl). A `curl`
     probe takes a URL plus optional content expectations
     (`method`, `expectStatus`, `expectBody` substring or `/regex/`, `expectHeader`,
     `minBytes`/`maxBytes`) and verifies the received traffic — the agent inspects

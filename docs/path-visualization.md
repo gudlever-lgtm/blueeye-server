@@ -21,13 +21,32 @@ dashboard Probes tab  ←  GET /api/probes/path  ←  buildPathGraph()  ←─�
    hop carries loss and jitter, not just one RTT. Backward-compatible: `rttMs` is
    still the per-hop average, so older servers keep working.
 
+   **Two probes produce this shape**, and everything downstream treats them the
+   same (`PATH_PROBE_TYPES` in `pathGraph.js`):
+
+   | Probe | Packets | Use it when |
+   | --- | --- | --- |
+   | `traceroute` | ICMP / UDP | the default; nothing is filtering the probes |
+   | `tcptraceroute` | TCP SYN to a port | the plain trace goes dark part-way but the service works — firewalls and transit providers drop or rate-limit ICMP while passing the TCP session the application uses |
+
+   `blueeye-agent/src/probes/tcptraceroute.js` runs `tcptraceroute` (port as a
+   positional argument) and falls back to `traceroute -T -p <port>`, which the
+   traceroute package already provides for the ICMP probe — so on most hosts the
+   TCP trace works with nothing extra installed. When neither binary exists the
+   reported reason names `tcptraceroute`, the one the install-tool allowlist can
+   fix (`src/agentTools.js`). Both need raw sockets: a permission failure is
+   reported as its own reason rather than an empty path.
+
+   A TCP trace stores its target as `host:port`, so the two never collapse into
+   one series.
+
 2. **Ingest** (`src/validation/probeValidation.js`, `probeResultsRepository.js`)
    stores the hop array in the existing `probe_results.hops` JSON column — **no
    migration needed**. Legacy single-sample hops (`{ hop, ip, rttMs }`) are still
    accepted; the extra fields normalise to `null`.
 
 3. **Aggregation** (`src/analysis/pathGraph.js`, `buildPathGraph`): groups the
-   recent traceroutes to one target by TTL position and reduces each hop with the
+   recent traces to one target by TTL position and reduces each hop with the
    **median** (robust — one odd run can't move it). It enriches public hop IPs
    with GeoIP/ASN (`src/geo/`), and classifies every hop against fixed,
    explainable thresholds (loss / jitter / latency), attaching a plain-language
@@ -37,14 +56,22 @@ dashboard Probes tab  ←  GET /api/probes/path  ←  buildPathGraph()  ←─�
    - `links` — one per consecutive pair, weighted with the downstream loss and
      the incremental latency (`rttMs` delta, clamped at 0).
 
-4. **API**: `GET /api/probes/path?agentId=&target=&samples=&from=&to=`
-   (viewer+). `target` defaults to the most recent traceroute target; `samples`
-   (default 10, max 50) caps how many recent runs are aggregated.
+4. **API**: `GET /api/probes/path?agentId=&target=&samples=&probeType=&from=&to=`
+   (viewer+). `target` defaults to the most recent target of that type; `samples`
+   (default 10, max 50) caps how many recent runs are aggregated. `probeType` is
+   `traceroute` (default) or `tcptraceroute` and is echoed back on the response.
+
+   The two types are **never merged into one graph**. An ICMP path that dies at
+   hop 4 beside a TCP path that completes is precisely the comparison an operator
+   is making; averaging them would erase the finding. An unrecognised `probeType`
+   falls back to `traceroute` rather than 400 — the view still renders.
 
 5. **Dashboard** (`public/app.js`, `pathGraph()`): renders an interactive SVG —
    nodes coloured by severity, links labelled with loss/latency. Hover or focus a
    hop to fill the detail panel (full metrics + ASN/country). A hop table sits
-   below. Reached from **Probes → run a traceroute → "Path"**.
+   below, headed by which probe drew the path (ICMP/UDP or TCP SYN) — a hop table
+   with no attribution is a trap once two probes can disagree. Reached from
+   **Probes → run a traceroute or TCP traceroute → "Path"**.
 
 ### Geographic map
 

@@ -79,9 +79,16 @@ function enrichGeo(ip, geoProvider, centroids) {
   };
 }
 
+// The probe types that produce a hop list. Both trace the same kind of path —
+// `traceroute` with ICMP/UDP, `tcptraceroute` with TCP SYNs to a port — and both
+// report the identical per-hop record, so one graph builder serves both. They are
+// never MIXED into one graph: the caller selects a type, because a filtered
+// ICMP path and a working TCP path to the same host are two different findings.
+const PATH_PROBE_TYPES = Object.freeze(['traceroute', 'tcptraceroute']);
+
 function buildPathGraph(results, { geoProvider = null, centroids = null, target = null, origin = null } = {}) {
   const runs = (Array.isArray(results) ? results : [])
-    .filter((r) => r && r.type === 'traceroute' && Array.isArray(r.hops));
+    .filter((r) => r && PATH_PROBE_TYPES.includes(r.type) && Array.isArray(r.hops));
   const tsList = runs.map((r) => (r.ts ? new Date(r.ts).getTime() : null)).filter((n) => n != null);
   const meta = {
     target: target || (runs.length ? runs[runs.length - 1].target : null),
@@ -278,4 +285,4 @@ function buildBranches(runs, byPos, maxPos, { geoProvider = null, centroids = nu
   return { multipath, hops, edges };
 }
 
-module.exports = { buildPathGraph, buildBranches, THRESHOLDS: T };
+module.exports = { buildPathGraph, PATH_PROBE_TYPES, buildBranches, THRESHOLDS: T };

@@ -3,7 +3,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { buildPathGraph } = require('../pathGraph');
+const { buildPathGraph, PATH_PROBE_TYPES } = require('../pathGraph');
 
 // A tiny fake GeoIP provider + centroids, EU-style (no real DB needed).
 const geoProvider = { lookup: (ip) => (ip === '93.184.216.34' ? { country: 'DE', asn: 64500, asnName: 'Example Telco' } : null) };
@@ -164,4 +164,31 @@ test('buildPathGraph derives loss from legacy single-sample hops (rttMs only)', 
   assert.equal(g.nodes[1].lossPct, 0);
   assert.equal(g.nodes[2].lossPct, 100);
   assert.equal(g.nodes[2].unresponsive, true);
+});
+
+test('buildPathGraph accepts a tcptraceroute run — same hop record, same graph', () => {
+  // The TCP trace reports the identical per-hop shape, so one builder serves both.
+  const hops = [
+    { hop: 1, ip: '10.0.0.1', sent: 3, recv: 3, lossPct: 0, rttMs: 1, jitterMs: 0.2 },
+    { hop: 2, ip: '93.184.216.34', sent: 3, recv: 3, lossPct: 0, rttMs: 14, jitterMs: 1 },
+  ];
+  const g = buildPathGraph(
+    [{ type: 'tcptraceroute', target: 'example.com:443', ts: '2026-06-09T10:00:00Z', hops }],
+    { geoProvider, centroids, target: 'example.com:443' },
+  );
+  assert.equal(g.samples, 1);
+  assert.equal(g.nodes.length, 3); // source + 2 hops
+  assert.equal(g.nodes[g.nodes.length - 1].country, 'DE');
+  assert.deepEqual(PATH_PROBE_TYPES, ['traceroute', 'tcptraceroute']);
+});
+
+test('buildPathGraph ignores probe types that carry no path', () => {
+  // A ping row has no hops and must never contribute a node, whatever else is
+  // in the list — the filter is the guard against a mixed result set.
+  const g = buildPathGraph([
+    { type: 'ping', target: 'example.com', ts: '2026-06-09T10:00:00Z', rttMs: 12 },
+    { type: 'curl', target: 'https://example.com', ts: '2026-06-09T10:00:00Z' },
+  ], { target: 'example.com' });
+  assert.deepEqual(g.nodes, []);
+  assert.equal(g.samples, 0);
 });

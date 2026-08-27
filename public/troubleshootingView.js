@@ -105,6 +105,60 @@
     };
   }
 
+  // --- raw fault list ------------------------------------------------------
+  // The rows behind the "Active faults" figure. This list is opt-in: the
+  // overview read does not carry it, GET /api/troubleshooting/faults pages it in
+  // when the operator asks. These helpers keep the mapping and the counter
+  // wording testable; the DOM lives in app.js.
+
+  // One row, joined to the topology's node labels so the operator reads a device
+  // name rather than an agent id. A fault whose finding retention has already
+  // purged still gets a row — the cluster counts it, so hiding it would make the
+  // "x of y" counter unreachable — flagged `missing` and with nothing invented.
+  function faultRowModel(fault, labelById) {
+    var f = fault || {};
+    var labels = labelById || {};
+    var host = f.hostId == null ? null : String(f.hostId);
+    return {
+      findingId: f.findingId == null ? null : f.findingId,
+      clusterId: f.clusterId == null ? null : f.clusterId,
+      severity: severityClass(f.severity),
+      missing: !!f.missing,
+      acked: !!f.acked,
+      hostId: host,
+      deviceLabel: host == null ? '—' : (labels[host] || ('agent ' + host)),
+      metric: f.metric || '—',
+      createdAt: f.createdAt || null,
+      // The cause text is the cluster's, repeated per row on purpose: sorted by
+      // cluster, the repetition is what shows where one cause ends and the next
+      // begins.
+      cause: f.cause || null,
+      explanation: f.explanation || null,
+    };
+  }
+
+  // The loading counter, as an i18n key + params so the caller renders it
+  // through t(). Three honest states: the first page in flight (no total known
+  // yet), a later page in flight (say how far we got), and settled.
+  function faultProgress(state) {
+    var s = state || {};
+    var loaded = Number(s.loaded) || 0;
+    var total = Number(s.total) || 0;
+    if (s.loading && loaded === 0) return { key: 'tshoot.faults.loadingFirst', params: {} };
+    if (s.loading) return { key: 'tshoot.faults.loading', params: { loaded: loaded, total: total } };
+    return { key: 'tshoot.faults.progress', params: { loaded: loaded, total: total } };
+  }
+
+  // How many rows the next page will ask for — the remainder, capped at the page
+  // size, so the button never promises more than is left.
+  function faultsRemaining(state, pageSize) {
+    var s = state || {};
+    var left = (Number(s.total) || 0) - (Number(s.loaded) || 0);
+    if (left <= 0) return 0;
+    var size = Number(pageSize) > 0 ? Number(pageSize) : left;
+    return Math.min(left, size);
+  }
+
   // --- "What changed?" -----------------------------------------------------
   // The change events immediately BEFORE a root cause fired. Change-vs-symptom
   // uses the same split the per-target timeline settled on: a topology change or
@@ -245,6 +299,9 @@
     kpiCards: kpiCards,
     blastRadiusText: blastRadiusText,
     rootCauseModel: rootCauseModel,
+    faultRowModel: faultRowModel,
+    faultProgress: faultProgress,
+    faultsRemaining: faultsRemaining,
     isChangeEvent: isChangeEvent,
     changesBefore: changesBefore,
     timelineBounds: timelineBounds,

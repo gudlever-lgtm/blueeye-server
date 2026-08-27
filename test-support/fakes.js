@@ -1573,6 +1573,24 @@ function makeFindingStore(overrides = {}) {
       .filter((f) => f.eventCaseId === eventCaseId)
       .sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0))),
     get: overrides.get || (async (id) => rows.find((f) => f.id === id) || null),
+    // Bulk read, mirroring FindingStore.listByIds: deduped, in the order of
+    // `ids`, missing ids dropped. `light` drops the evidence/correlation payload
+    // exactly as the narrow projection does, so a caller that wrongly relies on
+    // them fails in tests too.
+    listByIds: overrides.listByIds || (async (ids, { light = false } = {}) => {
+      const seen = new Set();
+      const out = [];
+      for (const id of Array.isArray(ids) ? ids : []) {
+        if (id === null || id === undefined || id === '' || seen.has(String(id))) continue;
+        seen.add(String(id));
+        const f = rows.find((r) => String(r.id) === String(id));
+        if (!f) continue;
+        out.push(light
+          ? { id: f.id, hostId: f.hostId, metric: f.metric, severity: f.severity, kind: f.kind, createdAt: f.createdAt, acked: !!f.acked }
+          : f);
+      }
+      return out;
+    }),
     ack: overrides.ack || (async (id) => { const f = rows.find((x) => x.id === id); if (!f) return false; f.acked = true; return true; }),
     setCorrelations: overrides.setCorrelations || (async (id, ids) => { const f = rows.find((x) => x.id === id); if (!f) return false; f.correlatedWith = Array.isArray(ids) ? ids : []; return true; }),
     setEventCase: overrides.setEventCase || (async (id, eventCaseId) => { const f = rows.find((x) => x.id === id); if (!f) return false; f.eventCaseId = eventCaseId ?? null; return true; }),

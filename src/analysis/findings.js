@@ -11,6 +11,17 @@ const COLUMNS =
 // Hard ceiling on how many findings a single list() call can return.
 const MAX_LIST = 5000;
 
+// Narrow projection for bulk id reads. Deliberately excludes `evidence` and
+// `correlated_with`: those are JSON blobs, and pulling tens of thousands of them
+// back just to count severities is the difference between a few hundred KB and
+// tens of MB on the wire.
+const LIGHT_COLUMNS = 'id, host_id, metric, severity, kind, acked, created_at';
+
+// How many ids go into one IN (...) batch. Keeps the statement (and the
+// prepared-parameter list) inside sane limits while still turning an N+1 into
+// ceil(N/1000) round trips.
+const ID_CHUNK = 1000;
+
 // Builds the shared WHERE fragment (+ ordered params) used by both list() and
 // summary(), so the aggregate overview and the row list always scope to the
 // exact same filter set. Only defined keys contribute a clause.
@@ -74,6 +85,22 @@ function mapRow(row) {
     evidence: reviveEvidence(parseJson(row.evidence, [])),
     correlatedWith: parseJson(row.correlated_with, []) || [],
     eventCaseId: row.event_case_id == null ? null : Number(row.event_case_id),
+    createdAt: row.created_at,
+    acked: row.acked === 1 || row.acked === true,
+  };
+}
+
+// Maps a row read through LIGHT_COLUMNS. Separate from mapRow so the missing
+// columns are an explicit contract rather than a pile of undefineds: a light
+// finding carries no window, explanation, evidence or correlations, and callers
+// that need them must read the full row.
+function mapLightRow(row) {
+  return {
+    id: row.id,
+    hostId: row.host_id,
+    metric: row.metric,
+    severity: row.severity,
+    kind: row.kind,
     createdAt: row.created_at,
     acked: row.acked === 1 || row.acked === true,
   };
@@ -233,6 +260,45 @@ class FindingStore {
     return rows.map(mapRow);
   }
 
+  // Bulk fetch by id — the N+1 killer for callers that already hold a list of
+  // finding ids (cluster member hydration is the big one: a fleet with 100 live
+  // clusters holds tens of thousands of member ids, and one round trip each is
+  // what makes the Troubleshooting screen take half a minute to paint).
+  //
+  // Reads in ID_CHUNK-sized IN (...) batches and returns the rows in the order
+  // of `ids`. An id with no row is simply absent from the result, exactly as the
+  // per-id path dropped it — retention may have purged the finding.
+  //
+  // `light: true` selects LIGHT_COLUMNS: id/host/metric/severity/kind/acked/
+  // created_at, no evidence or correlation JSON. That is everything a
+  // severity/host/metric rollup needs; callers that render a finding (with its
+  // explanation and evidence) must ask for the full row.
+  async listByIds(ids, { light = false } = {}) {
+    const wanted = [];
+    const seen = new Set();
+    for (const id of Array.isArray(ids) ? ids : []) {
+      if (id === null || id === undefined || id === '') continue;
+      const key = String(id);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      wanted.push(id);
+    }
+    if (!wanted.length) return [];
+
+    const columns = light ? LIGHT_COLUMNS : COLUMNS;
+    const map = light ? mapLightRow : mapRow;
+    const byId = new Map();
+    for (let i = 0; i < wanted.length; i += ID_CHUNK) {
+      const chunk = wanted.slice(i, i + ID_CHUNK);
+      const [rows] = await this.pool.query(
+        `SELECT ${columns} FROM findings WHERE id IN (${chunk.map(() => '?').join(', ')})`,
+        chunk
+      );
+      for (const row of rows) byId.set(String(row.id), map(row));
+    }
+    return wanted.map((id) => byId.get(String(id))).filter(Boolean);
+  }
+
   // Fetches one finding by id, or null.
   async get(id) {
     const [rows] = await this.pool.query(`SELECT ${COLUMNS} FROM findings WHERE id = ?`, [id]);
@@ -269,4 +335,4 @@ class FindingStore {
   }
 }
 
-module.exports = { FindingStore };
+module.exports = { FindingStore, ID_CHUNK };

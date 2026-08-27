@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.114.1 — Troubleshooting stops loading 28 000 alarms to draw four numbers
+
+The Troubleshooting tab took the better part of a minute to paint on a busy
+fleet. The cause was one line: for every live root cause it re-read each member
+finding with `findingStore.get(id)`, one query per member. A hundred clusters
+holding 28 574 alarms meant 28 574 round trips queued behind a ten-connection
+pool — to compute four key figures and a severity badge.
+
+Two changes, and the screen is back to one read:
+
+- **The rollup hydrates in bulk, through a narrow projection.**
+  `FindingStore.listByIds(ids, { light: true })` reads members in 1000-id
+  `IN (...)` batches and selects only `id/host_id/metric/severity/kind/acked/
+  created_at` — no `evidence` or `correlated_with` JSON. That is exactly what the
+  severity, affected-device and classification rollups consume, and it is the
+  difference between a few hundred KB and tens of MB on the wire. A store without
+  `listByIds` still works; the per-id path is now the compatibility fallback, not
+  the normal one.
+
+- **The raw alarms are opt-in.** `GET /api/troubleshooting/faults?limit=&offset=
+  &clusterId=` returns the full findings behind the live root causes, paged
+  (1..500 per page, default 100), in the same order the root-cause panel renders.
+  `/overview` never carries them.
+
+On the dashboard, the **Active faults** card now says how many there are and
+offers a link to list them. The figure itself was always free — it is the sum of
+each cluster's stored member ids — so the card costs nothing; the rows behind it
+are fetched only when asked, a page at a time, under a counter that reads
+"Showing 200 of 28 574" while it works. Everything else on the screen is there
+before you ask, as before.
+
+A member whose finding retention has already purged still gets a row, flagged
+`missing`, rather than being dropped: silently short pages would leave that
+counter permanently unable to reach its total.
+
+New strings are in both the en and da catalogues.
+
 ## 0.113.0 — Trace the path the traffic actually takes
 
 Traceroute sends ICMP or UDP. Plenty of firewalls and transit providers drop or

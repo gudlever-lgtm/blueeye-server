@@ -6,21 +6,31 @@ const { requireAuth, requireRole } = require('../auth/middleware');
 const { ROLES } = require('../auth/roles');
 const { validateTimeRange } = require('../validation/resultsValidation');
 const { parseId } = require('../validation/locationValidation');
-const { buildPathGraph } = require('../analysis/pathGraph');
+const { buildPathGraph, PATH_PROBE_TYPES } = require('../analysis/pathGraph');
 const { asGraphFromNodes } = require('../analysis/asPath');
 const { METRICS, getMetric, bucketMetric } = require('../analysis/pathTimeseries');
 
-// Read API for active-probe results (ping/tcp/dns/traceroute). viewer+.
+// Read API for active-probe results (ping/tcp/dns/traceroute/tcptraceroute). viewer+.
 // geoProvider/centroids are optional — when wired, the path graph enriches public
 // hop IPs with GeoIP/ASN; without them the graph is metrics-only.
 function createProbesRouter({ probeResultsRepo, agentsRepo, geoProvider = null, centroids = null }) {
   const router = express.Router();
   const reader = requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN);
 
-  // The most recent traceroute target for an agent, so /path can default to
-  // "show me the latest path" when no target is given.
-  const latestTarget = (rows) => {
-    for (let i = rows.length - 1; i >= 0; i -= 1) if (rows[i].type === 'traceroute') return rows[i].target;
+  // Which kind of trace the path views are showing. `traceroute` (ICMP/UDP) is
+  // the default; `tcptraceroute` traces the same path with TCP SYNs. They are
+  // never merged into one graph — a path that goes dark for ICMP while TCP walks
+  // through is exactly the comparison an operator is making, so the two stay
+  // side by side rather than averaged together.
+  const pathProbeType = (raw) => {
+    const t = String(raw || '').toLowerCase();
+    return PATH_PROBE_TYPES.includes(t) ? t : 'traceroute';
+  };
+
+  // The most recent target of that trace type for an agent, so /path can default
+  // to "show me the latest path" when no target is given.
+  const latestTarget = (rows, type) => {
+    for (let i = rows.length - 1; i >= 0; i -= 1) if (rows[i].type === type) return rows[i].target;
     return null;
   };
 
@@ -59,8 +69,9 @@ function createProbesRouter({ probeResultsRepo, agentsRepo, geoProvider = null, 
     const agent = await agentsRepo.findById(agentId);
     if (!agent) return res.status(404).json({ error: 'Agent not found' });
     const samples = Math.max(1, Math.min(50, Number.parseInt(req.query.samples, 10) || 10));
-    const rows = await probeResultsRepo.findByAgent({ agentId, from: range.from, to: range.to, type: 'traceroute', limit: 500 });
-    const target = req.query.target ? String(req.query.target).slice(0, 255) : latestTarget(rows);
+    const probeType = pathProbeType(req.query.probeType);
+    const rows = await probeResultsRepo.findByAgent({ agentId, from: range.from, to: range.to, type: probeType, limit: 500 });
+    const target = req.query.target ? String(req.query.target).slice(0, 255) : latestTarget(rows, probeType);
     // Newest `samples` runs for that target (rows arrive oldest-first).
     const runs = rows.filter((r) => r.target === target).slice(-samples);
     const origin = {
@@ -69,7 +80,7 @@ function createProbesRouter({ probeResultsRepo, agentsRepo, geoProvider = null, 
       label: agent.display_name || agent.hostname || 'Agent',
     };
     const graph = buildPathGraph(runs, { geoProvider, centroids, target, origin });
-    res.json({ agentId, ...graph, asGraph: asGraphFromNodes(graph.nodes) });
+    res.json({ agentId, probeType, ...graph, asGraph: asGraphFromNodes(graph.nodes) });
   }));
 
   // GET /api/probes/path/metrics — the metric catalogue for the timeline's
@@ -94,11 +105,12 @@ function createProbesRouter({ probeResultsRepo, agentsRepo, geoProvider = null, 
     const agent = await agentsRepo.findById(agentId);
     if (!agent) return res.status(404).json({ error: 'Agent not found' });
 
-    // Default the target to the agent's most recent traceroute, matching /path.
+    // Default the target to the agent's most recent trace of that type, matching /path.
+    const probeType = pathProbeType(req.query.probeType);
     let target = req.query.target ? String(req.query.target).slice(0, 255) : null;
     if (!target) {
-      const recent = await probeResultsRepo.findByAgent({ agentId, from: range.from, to: range.to, type: 'traceroute', limit: 500 });
-      target = latestTarget(recent);
+      const recent = await probeResultsRepo.findByAgent({ agentId, from: range.from, to: range.to, type: probeType, limit: 500 });
+      target = latestTarget(recent, probeType);
     }
     if (!target) return res.json({ agentId, target: null, overlay, metric: metric.id, series: [] });
 

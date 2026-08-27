@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.113.0 — Trace the path the traffic actually takes
+
+Traceroute sends ICMP or UDP. Plenty of firewalls and transit providers drop or
+rate-limit exactly those while passing the TCP session an application uses, so
+the path map goes dark at hop 4 while the service it is tracing works fine. The
+operator is left with a blank map and no way to tell "the path is broken" from
+"the path won't answer *this* probe".
+
+A second trace type answers that: **TCP traceroute** walks the same path with
+TCP SYNs to a port, so it follows the route the real traffic takes.
+
+`tcptraceroute` had been on the agent's installable-tool allowlist since the
+install-tool feature shipped, and nothing used it. It does now
+(`blueeye-agent/src/probes/tcptraceroute.js`), with a fallback: where the binary
+is absent the probe traces with `traceroute -T -p <port>` instead, which the
+traceroute package already provides for the ICMP probe — so on most hosts this
+works with nothing installed. When BOTH are missing the reported reason names
+`tcptraceroute`, because that is what auto-install can actually offer; naming
+the fallback would promise a fix the allowlist cannot apply. Both binaries need
+raw sockets, so a permission failure gets its own reason rather than an empty
+path.
+
+Server side, the two traces are deliberately **kept apart**:
+
+- `GET /api/probes/path` takes `probeType` (`traceroute` default, or
+  `tcptraceroute`) and echoes it back. An unrecognised value falls back to the
+  default rather than 400 — the view still renders.
+- A TCP trace stores its target as `host:port`, so the same host traced two ways
+  stays two series.
+- The hop table names which probe drew the path.
+
+Averaging them would have been the easy default and the wrong one: an ICMP path
+that dies at hop 4 beside a TCP path that completes IS the finding, and merging
+the two erases it.
+
+The hop record is identical either way, so `buildPathGraph`, the geo path
+overlay, the metric timeline and the scheduled test packages all took the new
+type without change.
+
 ## 0.112.1 — The events list says what its columns do not
 
 The Events table repeated itself three times over. The server stores a

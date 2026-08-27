@@ -1,6 +1,6 @@
 'use strict';
 
-const PROBE_TYPES = ['ping', 'tcp', 'dns', 'traceroute', 'http', 'curl', 'pageload', 'transaction'];
+const PROBE_TYPES = ['ping', 'tcp', 'dns', 'traceroute', 'tcptraceroute', 'http', 'curl', 'pageload', 'transaction'];
 const HTTP_METHODS = ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'];
 const HEADER_EXPECT_RE = /^[A-Za-z0-9!#$%&'*+.^_`|~-]+(\s*:\s*.{1,200})?$/;
 // A REQUEST header on a transaction step must be a real `Name: value` field.
@@ -235,12 +235,20 @@ function validateProbeSpec(body) {
       if (!Number.isInteger(port) || port < 1 || port > 65535) return { errors: { port: 'port (1-65535) is required for a tcp probe' } };
       spec.port = port;
     }
-    if (type === 'traceroute' && b.maxHops !== undefined) {
+    if (type === 'tcptraceroute') {
+      // The port is what makes this probe worth running — it is the port the
+      // filtered traffic uses. Optional, but pinned to https here rather than
+      // left to the agent, so the stored spec always says which port was traced.
+      const port = b.port === undefined || b.port === null || b.port === '' ? 443 : Number(b.port);
+      if (!Number.isInteger(port) || port < 1 || port > 65535) return { errors: { port: 'port must be an integer between 1 and 65535' } };
+      spec.port = port;
+    }
+    if ((type === 'traceroute' || type === 'tcptraceroute') && b.maxHops !== undefined) {
       const m = Number(b.maxHops);
       if (!Number.isInteger(m) || m < 1 || m > 40) return { errors: { maxHops: 'maxHops must be an integer between 1 and 40' } };
       spec.maxHops = m;
     }
-    if (type === 'traceroute' && b.queries !== undefined) {
+    if ((type === 'traceroute' || type === 'tcptraceroute') && b.queries !== undefined) {
       const q = Number(b.queries);
       if (!Number.isInteger(q) || q < 1 || q > 10) return { errors: { queries: 'queries must be an integer between 1 and 10' } };
       spec.queries = q;

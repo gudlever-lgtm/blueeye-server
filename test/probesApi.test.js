@@ -212,6 +212,79 @@ test('GET /api/probes/path returns an empty graph when there are no traceroutes'
   assert.equal(res.body.samples, 0);
 });
 
+// ---- tcptraceroute: the same path, traced with TCP SYNs -------------------
+
+const tcpTraceRun = (ts, target = 'example.com:443') => ({
+  id: 2, type: 'tcptraceroute', target, ts,
+  hops: [
+    { hop: 1, ip: '10.0.0.1', sent: 3, recv: 3, lossPct: 0, rttMs: 1, jitterMs: 0.2 },
+    { hop: 2, ip: '93.184.216.34', sent: 3, recv: 3, lossPct: 0, rttMs: 14, jitterMs: 1 },
+  ],
+});
+
+test('POST /agents/probe-results accepts a tcptraceroute result with hops', async () => {
+  let captured;
+  const probeResultsRepo = makeProbeResultsRepo({ createMany: async (agentId, results) => { captured = results; return results.length; } });
+  const res = await request(makeApp({ agentTokensRepo: agentToken(), probeResultsRepo }))
+    .post('/agents/probe-results').set('Authorization', 'Bearer t')
+    .send({ results: [{ type: 'tcptraceroute', target: 'example.com:443', ok: true, hops: tcpTraceRun('x').hops }] });
+  assert.equal(res.status, 201);
+  assert.equal(captured[0].type, 'tcptraceroute');
+  assert.equal(captured[0].target, 'example.com:443');
+  assert.equal(captured[0].hops.length, 2);
+});
+
+test('validateProbeSpec defaults a tcptraceroute to port 443 and rejects a bad one', () => {
+  const { value } = validateProbeSpec({ type: 'tcptraceroute', host: 'example.com' });
+  assert.deepEqual(value, { type: 'tcptraceroute', host: 'example.com', port: 443 });
+  assert.equal(validateProbeSpec({ type: 'tcptraceroute', host: 'example.com', port: 8443 }).value.port, 8443);
+  assert.ok(validateProbeSpec({ type: 'tcptraceroute', host: 'example.com', port: 70000 }).errors);
+  assert.ok(validateProbeSpec({ type: 'tcptraceroute', host: '-rf' }).errors); // option-injection guard
+  // maxHops/queries are shared with the ICMP traceroute, bounds and all.
+  assert.equal(validateProbeSpec({ type: 'tcptraceroute', host: 'example.com', queries: 5 }).value.queries, 5);
+  assert.ok(validateProbeSpec({ type: 'tcptraceroute', host: 'example.com', maxHops: 99 }).errors);
+});
+
+test('GET /api/probes/path?probeType=tcptraceroute builds the graph from the TCP trace', async () => {
+  let askedType = null;
+  const probeResultsRepo = makeProbeResultsRepo({
+    findByAgent: async ({ type }) => { askedType = type; return type === 'tcptraceroute' ? [tcpTraceRun('2026-06-09T10:00:00Z')] : []; },
+  });
+  const res = await request(withAgent({ probeResultsRepo }))
+    .get('/api/probes/path?agentId=9&probeType=tcptraceroute').set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 200);
+  assert.equal(askedType, 'tcptraceroute', 'the query is scoped to the requested trace type');
+  assert.equal(res.body.probeType, 'tcptraceroute');
+  assert.equal(res.body.target, 'example.com:443', 'the port rides along in the target');
+  assert.equal(res.body.nodes.length, 3); // source + 2 hops
+});
+
+test('GET /api/probes/path never mixes the two trace types into one graph', async () => {
+  // An ICMP path that dies at hop 1 and a TCP path that completes is the exact
+  // comparison an operator makes; averaging them would erase the finding.
+  const probeResultsRepo = makeProbeResultsRepo({
+    findByAgent: async ({ type }) => (type === 'traceroute' ? [tracerouteRun('2026-06-09T10:00:00Z')] : [tcpTraceRun('2026-06-09T10:00:00Z')]),
+  });
+  const icmp = await request(withAgent({ probeResultsRepo }))
+    .get('/api/probes/path?agentId=9').set('Authorization', authHeader('viewer'));
+  const tcp = await request(withAgent({ probeResultsRepo }))
+    .get('/api/probes/path?agentId=9&probeType=tcptraceroute').set('Authorization', authHeader('viewer'));
+  assert.equal(icmp.body.probeType, 'traceroute', 'no probeType means the ICMP trace, as before');
+  assert.equal(icmp.body.target, 'example.com');
+  assert.equal(tcp.body.target, 'example.com:443');
+  assert.equal(icmp.body.samples, 1);
+  assert.equal(tcp.body.samples, 1);
+});
+
+test('GET /api/probes/path falls back to the ICMP trace for an unknown probeType', async () => {
+  let askedType = null;
+  const probeResultsRepo = makeProbeResultsRepo({ findByAgent: async ({ type }) => { askedType = type; return []; } });
+  const res = await request(withAgent({ probeResultsRepo }))
+    .get('/api/probes/path?agentId=9&probeType=nonsense').set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 200, 'a bad probeType is a default, not a 400 — the view still renders');
+  assert.equal(askedType, 'traceroute');
+});
+
 // ---- metric timeline: GET /api/probes/path/metrics + /timeseries ----------
 
 test('GET /api/probes/path/metrics lists the metric catalogue (viewer, 200)', async () => {

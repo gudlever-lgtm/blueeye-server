@@ -949,7 +949,7 @@ const PAGE_INFO = {
     ],
   },
   probes: {
-    hero: 'Run a single active check from one agent, right now: ping, TCP-connect, DNS, traceroute, cURL content check or page load — with RTT, loss, path and history.',
+    hero: 'Run a single active check from one agent, right now: ping, TCP-connect, DNS, traceroute, TCP traceroute, cURL content check or page load — with RTT, loss, path and history.',
     title: 'Probes',
     body: () => [
       el('div', { class: 'callout' },
@@ -962,6 +962,7 @@ const PAGE_INFO = {
         el('li', {}, 'TCP-connect: opens host:port and measures connection time (no payload sent).'),
         el('li', {}, 'DNS: time to resolve a name (and which address was returned).'),
         el('li', {}, 'Traceroute: the path (hops) to the target. Each hop is probed several times (set “Queries/hop”), so you get per-hop loss, latency and jitter — rendered as an interactive path map (hover a hop for its metrics + ASN/country) plus a hop table. Repeated traceroutes are aggregated so the verdict is stable.'),
+        el('li', {}, el('strong', {}, 'TCP traceroute: '), 'the same path, traced with TCP SYN packets to a port instead of ICMP/UDP. Reach for it when the ordinary traceroute goes dark part-way but the service itself works: firewalls and transit providers routinely drop or rate-limit ICMP while passing the TCP session the application actually uses, so the SYN trace follows the path the real traffic takes. Same per-hop loss/latency/jitter and the same path map. The two are kept apart — a target is stored as ', el('span', { class: 'mono' }, 'host:port'), ' — because an ICMP path that dies at hop 4 next to a TCP path that completes IS the finding. Needs ', el('span', { class: 'mono' }, 'tcptraceroute'), ' on the host, or falls back to ', el('span', { class: 'mono' }, 'traceroute -T'), ', which the traceroute package already provides; either way it needs root for the raw socket.'),
         el('li', {}, el('strong', {}, 'cURL (content check): '), 'goes beyond “is it up” — the agent runs ', el('span', { class: 'mono' }, 'curl'), ' against an http(s) URL and verifies the received traffic: the HTTP status code, that the response body contains an expected substring or ', el('span', { class: 'mono' }, '/regex/'), ', the received byte count, and a response header. Leave the expectation fields blank for a plain status<400 check. The agent inspects the body locally but reports only metadata — status, byte count, content-type and pass/fail — never the body itself.'),
         el('li', {}, el('strong', {}, 'Page load: '), 'measures how a whole page loads — the agent fetches the URL, then its sub-resources (scripts, stylesheets, images) and reports a per-element waterfall (status · size · load time) plus totals: element count, page weight and total load time. The total load time is charted over time. Browser-free (no JS execution), so it can\'t see real DOM/load events; metadata only — resource URLs, sizes and timings, never contents.'),
         el('li', {}, el('strong', {}, 'Transaction (multi-step): '), 'simulates a user journey or scripted API call — an ordered list of HTTP steps, each with optional status/body assertions. A step can ', el('strong', {}, 'extract'), ' a value (regex capture) that later steps reference as ', el('span', { class: 'mono' }, '{{name}}'), ' in their URL, header or request body — e.g. log in, capture a token, then call an authenticated endpoint. It stops at the first failing step and reports a per-step waterfall plus the total journey time (charted over time). Extracted values stay on the agent and are never reported.')),
@@ -2022,7 +2023,7 @@ function editTestPackage(pkg, agents, locations) {
   const itemsBox = el('div', { class: 'tc-list' });
   const itemRows = [];
   function addItemRow(item) {
-    const typeSel = el('select', {}, ...[['ping', 'Ping'], ['tcp', 'TCP'], ['dns', 'DNS'], ['traceroute', 'Traceroute'], ['curl', 'cURL'], ['pageload', 'Page load'], ['transaction', 'Transaction'], ['run-test', 'Throughput'], ['speedtest', 'Speed test']].map(([v, l]) => el('option', { value: v }, l)));
+    const typeSel = el('select', {}, ...[['ping', 'Ping'], ['tcp', 'TCP'], ['dns', 'DNS'], ['traceroute', 'Traceroute'], ['tcptraceroute', t('probe.tcptraceroute')], ['curl', 'cURL'], ['pageload', 'Page load'], ['transaction', 'Transaction'], ['run-test', 'Throughput'], ['speedtest', 'Speed test']].map(([v, l]) => el('option', { value: v }, l)));
     const host = el('input', { type: 'text', placeholder: 'host / target' });
     const port = el('input', { type: 'number', min: '1', max: '65535', placeholder: 'port' });
     const count = el('input', { type: 'number', min: '1', max: '40', placeholder: 'count' });
@@ -4702,7 +4703,7 @@ function probeLatestTable(rows, onDetail, onInstall = null) {
         el('td', { class: 'muted' }, r.ts ? fmtTimeShort(new Date(r.ts).getTime()) : '–'),
         el('td', {},
           tool ? el('button', { class: 'small', title: `Install ${tool} on the agent host`, onclick: (e) => onInstall(tool, r, e.target) }, `Install ${tool}`) : null,
-          el('button', { class: 'small ghost', onclick: () => onDetail(r) }, r.type === 'traceroute' ? 'Path' : 'History')));
+          el('button', { class: 'small ghost', onclick: () => onDetail(r) }, (r.type === 'traceroute' || r.type === 'tcptraceroute') ? 'Path' : 'History')));
     })));
 }
 
@@ -5249,7 +5250,7 @@ function pathVizSkeleton() {
 // metric catalogue, wires the brush window to a graph refetch, and node clicks to
 // the selection callback.
 async function pathVisualization(opts = {}) {
-  const { sourceId, targetId, probeId, timeRange, onSelectionChange } = opts;
+  const { sourceId, targetId, probeId, probeType, timeRange, onSelectionChange } = opts;
   const root = el('div', { class: 'pathviz' });
   if (sourceId == null || !targetId) {
     root.append(el('div', { class: 'empty' }, 'Select a source agent and a destination to see its path.'));
@@ -5267,14 +5268,17 @@ async function pathVisualization(opts = {}) {
   const overlay = urlp.overlay === 'agents' ? 'agents' : (opts.overlay || 'off');
 
   const graphHost = el('div', { class: 'pv-graphhost' });
-  const probeQ = probeId != null ? `&probeId=${encodeURIComponent(probeId)}` : '';
+  // The graph endpoint filters by trace type: an ICMP path and a TCP path to the
+  // same host are two different measurements and must not be averaged together.
+  const probeQ = (probeId != null ? `&probeId=${encodeURIComponent(probeId)}` : '')
+    + (probeType ? `&probeType=${encodeURIComponent(probeType)}` : '');
 
   async function loadGraph(fromMs, toMs) {
     graphHost.replaceChildren(el('div', { class: 'pv-skel', style: 'height:110px' }));
     try {
       const graph = await api(`/api/probes/path?agentId=${encodeURIComponent(sourceId)}&target=${encodeURIComponent(targetId)}${probeQ}&from=${new Date(fromMs).toISOString()}&to=${new Date(toMs).toISOString()}`);
       if (!graph || (graph.nodes || []).length <= 1) {
-        graphHost.replaceChildren(el('div', { class: 'empty' }, `No path data for ${esc(targetId)} in this window. Run a traceroute from this agent to populate it.`));
+        graphHost.replaceChildren(el('div', { class: 'empty' }, `No path data for ${esc(targetId)} in this window. Run a ${probeType === 'tcptraceroute' ? 'TCP traceroute' : 'traceroute'} from this agent to populate it.`));
         return;
       }
       const onNodeClick = (n) => {
@@ -5304,10 +5308,12 @@ async function pathVisualization(opts = {}) {
   return root;
 }
 
-// Detail node for one probe result: traceroute path map (fetches + aggregates the
-// recent traceroutes into a hop graph) or RTT history (the per-agent time series).
+// Detail node for one probe result: a path map for either trace type (fetches +
+// aggregates that type's recent runs into a hop graph — scoped by probeType, so an
+// ICMP path and a TCP path to the same host stay apart) or RTT history (the
+// per-agent time series).
 async function probeDetail(r, agentId) {
-  if (r.type === 'traceroute') {
+  if (r.type === 'traceroute' || r.type === 'tcptraceroute') {
     const hops = r.hops || [];
     const hopRow = (h) => el('tr', {},
       el('td', { class: 'muted' }, `#${h.hop}`),
@@ -5317,8 +5323,11 @@ async function probeDetail(r, agentId) {
       el('td', { class: 'num' }, h.jitterMs != null ? `${h.jitterMs} ms` : '–'));
     // Full-width shared Path Visualization (path graph + brushable metric timeline)
     // under the probe detail header.
-    const viz = await pathVisualization({ sourceId: agentId, targetId: r.target });
-    return el('details', { class: 'sec', open: true }, el('summary', {}, `Path to ${esc(r.target)} `, el('span', { class: 'muted' }, '· loss · latency · jitter per hop')),
+    const viz = await pathVisualization({ sourceId: agentId, targetId: r.target, probeType: r.type });
+    // Say WHICH probe drew this path — the whole point of having two is that they
+    // can disagree, so a hop table with no attribution is a trap.
+    const how = r.type === 'tcptraceroute' ? t('probe.traceTcp') : t('probe.traceIcmp');
+    return el('details', { class: 'sec', open: true }, el('summary', {}, `Path to ${esc(r.target)} `, el('span', { class: 'muted' }, `· ${t('probe.tracePath')} ${how} · loss · latency · jitter per hop`)),
       viz,
       el('table', { class: 'probe-hops' },
         el('thead', {}, el('tr', {}, ...['Hop', 'IP', 'RTT', 'Loss', 'Jitter'].map((h) => el('th', {}, h)))),
@@ -7192,13 +7201,13 @@ views.probes = async () => {
 
 async function probeRunnerView() {
   const root = el('div', { class: 'probes' });
-  root.append(el('div', { class: 'muted', style: 'margin:2px 0 10px' }, 'Run one check now from a single agent · ping · TCP · DNS · traceroute · cURL · page load · transaction'));
+  root.append(el('div', { class: 'muted', style: 'margin:2px 0 10px' }, 'Run one check now from a single agent · ping · TCP · DNS · traceroute · TCP traceroute · cURL · page load · transaction'));
 
   const agents = await api('/agents').catch(() => []);
   if (!agents.length) { root.append(el('div', { class: 'empty' }, 'No agents yet — enrol an agent first.')); return root; }
 
   const agentSel = el('select', {}, ...agents.map((a) => el('option', { value: String(a.id) }, a.display_name || a.hostname)));
-  const typeSel = el('select', {}, ...[['ping', 'Ping (ICMP)'], ['tcp', 'TCP-connect'], ['dns', 'DNS'], ['traceroute', 'Traceroute'], ['curl', 'cURL (content check)'], ['pageload', 'Page load'], ['transaction', 'Transaction (multi-step)']].map(([v, l]) => el('option', { value: v }, l)));
+  const typeSel = el('select', {}, ...[['ping', 'Ping (ICMP)'], ['tcp', 'TCP-connect'], ['dns', 'DNS'], ['traceroute', 'Traceroute'], ['tcptraceroute', t('probe.tcptraceroute')], ['curl', 'cURL (content check)'], ['pageload', 'Page load'], ['transaction', 'Transaction (multi-step)']].map(([v, l]) => el('option', { value: v }, l)));
   const target = el('input', { type: 'text', placeholder: 'e.g. 1.1.1.1 or example.com' });
   const targetWrap = el('label', { class: 'inline muted' }, 'Target ', target);
   const portInput = el('input', { type: 'number', min: '1', max: '65535', value: '443' });
@@ -7213,15 +7222,23 @@ async function probeRunnerView() {
   const txWrap = el('div', { class: 'tx-wrap' }, el('div', { class: 'muted small' }, 'Steps run in order; a step can extract a value (regex) for later steps as {{name}}. Stops at the first failure.'), tx.node);
   const runBtn = el('button', { class: 'small' }, 'Run probe');
   const status = el('div', { class: 'muted' });
+  // Why an operator would reach for the TCP trace over the plain one.
+  const traceHint = el('div', { class: 'muted small', style: 'flex-basis:100%' }, t('probe.tcptracerouteHint'));
+  // Both trace types take a per-hop probe count ("queries") rather than a count;
+  // shared by the field toggling and the request body, so they cannot drift.
+  const isTraceType = () => typeSel.value === 'traceroute' || typeSel.value === 'tcptraceroute';
   // For traceroute the count is the per-hop probe count ("queries") that MTR-style
   // sampling uses to derive per-hop loss/jitter (server caps it at 10).
   const syncPort = () => {
-    const tr = typeSel.value === 'traceroute';
+    // tcptraceroute also needs a port, because the port IS the question it answers.
+    const isTcpTrace = typeSel.value === 'tcptraceroute';
+    const tr = isTraceType();
     const isCurl = typeSel.value === 'curl';
     const isTx = typeSel.value === 'transaction';
     const isUrl = isCurl || typeSel.value === 'pageload';
     targetWrap.style.display = isTx ? 'none' : '';
-    portWrap.style.display = typeSel.value === 'tcp' ? '' : 'none';
+    portWrap.style.display = (typeSel.value === 'tcp' || isTcpTrace) ? '' : 'none';
+    traceHint.style.display = isTcpTrace ? '' : 'none';
     curl.wrap.style.display = isCurl ? '' : 'none';
     txWrap.style.display = isTx ? '' : 'none';
     countWrap.style.display = (typeSel.value === 'pageload' || isTx) ? 'none' : '';
@@ -7239,7 +7256,7 @@ async function probeRunnerView() {
     portWrap,
     countWrap,
     curl.wrap,
-    runBtn, status), txWrap);
+    runBtn, status, traceHint), txWrap);
 
   const latestHost = el('div', { class: 'probe-latest' });
   const detailHost = el('div', {});
@@ -7257,9 +7274,9 @@ async function probeRunnerView() {
       const host = target.value.trim();
       if (!host) { status.className = 'error'; status.textContent = 'Enter a target.'; return; }
       body = { type: typeSel.value, host };
-      if (typeSel.value === 'tcp') body.port = Number(portInput.value);
+      if (typeSel.value === 'tcp' || typeSel.value === 'tcptraceroute') body.port = Number(portInput.value);
       if (typeSel.value === 'curl') curl.apply(body);
-      if (typeSel.value === 'traceroute' && countInput.value) body.queries = Number(countInput.value);
+      if (isTraceType() && countInput.value) body.queries = Number(countInput.value);
       else if ((typeSel.value === 'ping' || typeSel.value === 'tcp') && countInput.value) body.count = Number(countInput.value);
     }
     status.className = 'muted'; status.textContent = 'Sending…'; runBtn.disabled = true;
@@ -8573,7 +8590,7 @@ views.agent = async () => {
   }
 
   // ---- Probes (this agent) ----
-  const typeSel = el('select', {}, ...[['ping', 'Ping (ICMP)'], ['tcp', 'TCP-connect'], ['dns', 'DNS'], ['traceroute', 'Traceroute'], ['curl', 'cURL (content check)'], ['pageload', 'Page load']].map(([v, l]) => el('option', { value: v }, l)));
+  const typeSel = el('select', {}, ...[['ping', 'Ping (ICMP)'], ['tcp', 'TCP-connect'], ['dns', 'DNS'], ['traceroute', 'Traceroute'], ['tcptraceroute', t('probe.tcptraceroute')], ['curl', 'cURL (content check)'], ['pageload', 'Page load']].map(([v, l]) => el('option', { value: v }, l)));
   const target = el('input', { type: 'text', placeholder: 'e.g. 1.1.1.1 or example.com' });
   const portInput = el('input', { type: 'number', min: '1', max: '65535', value: '443' });
   const portWrap = el('label', { class: 'inline muted' }, 'Port ', portInput);
@@ -8585,7 +8602,8 @@ views.agent = async () => {
   const syncPort = () => {
     const isCurl = typeSel.value === 'curl';
     const isUrl = isCurl || typeSel.value === 'pageload';
-    portWrap.style.display = typeSel.value === 'tcp' ? '' : 'none';
+    // tcptraceroute traces to a PORT, so it needs the same field the tcp probe does.
+    portWrap.style.display = (typeSel.value === 'tcp' || typeSel.value === 'tcptraceroute') ? '' : 'none';
     curl.wrap.style.display = isCurl ? '' : 'none';
     countWrap.style.display = typeSel.value === 'pageload' ? 'none' : '';
     target.placeholder = isUrl ? 'e.g. https://example.com/' : 'e.g. 1.1.1.1 or example.com';
@@ -8605,7 +8623,7 @@ views.agent = async () => {
     const host = target.value.trim();
     if (!host) { probeStatus.className = 'error'; probeStatus.textContent = 'Enter a target.'; return; }
     const body = { type: typeSel.value, host };
-    if (typeSel.value === 'tcp') body.port = Number(portInput.value);
+    if (typeSel.value === 'tcp' || typeSel.value === 'tcptraceroute') body.port = Number(portInput.value);
     if (typeSel.value === 'curl') curl.apply(body);
     if ((typeSel.value === 'ping' || typeSel.value === 'tcp') && countInput.value) body.count = Number(countInput.value);
     probeStatus.className = 'muted'; probeStatus.textContent = 'Sending…'; runBtn.disabled = true;
@@ -9665,6 +9683,7 @@ views.geo = async () => {
     ...agents.map((a) => el('option', { value: String(a.id) }, a.display_name || a.hostname)));
   const pathTargetDl = el('datalist', { id: 'geo-path-targets' });
   const pathTargetInput = el('input', { type: 'text', class: 'small', list: 'geo-path-targets', placeholder: 'Traceroute target…' });
+  const pathTargetTypes = new Map(); // target -> 'traceroute' | 'tcptraceroute'
   const showPathBtn = el('button', { class: 'small' }, 'Show path');
   const clearPathBtn = el('button', { class: 'small ghost' }, 'Clear path');
   async function loadPathTargets() {
@@ -9674,8 +9693,14 @@ views.geo = async () => {
     if (!id) return;
     try {
       const data = await api(`/api/probes/latest?agentId=${encodeURIComponent(id)}`);
-      const targets = [...new Set((data.results || []).filter((r) => r.type === 'traceroute').map((r) => r.target))];
-      for (const t of targets) pathTargetDl.append(el('option', { value: t }));
+      // Remember which probe produced each target: a TCP trace is stored as
+      // host:port and is only found by asking the graph for that type.
+      pathTargetTypes.clear();
+      for (const r of (data.results || [])) {
+        if (r.type !== 'traceroute' && r.type !== 'tcptraceroute') continue;
+        if (!pathTargetTypes.has(r.target)) pathTargetTypes.set(r.target, r.type);
+      }
+      for (const target of pathTargetTypes.keys()) pathTargetDl.append(el('option', { value: target }));
     } catch { /* leave empty */ }
   }
   async function showPath() {
@@ -9687,7 +9712,8 @@ views.geo = async () => {
     showPathBtn.disabled = true;
     let polling = false;
     try {
-      const qs = `agentId=${encodeURIComponent(id)}&target=${encodeURIComponent(target)}`;
+      const probeType = pathTargetTypes.get(target) || 'traceroute';
+      const qs = `agentId=${encodeURIComponent(id)}&target=${encodeURIComponent(target)}&probeType=${encodeURIComponent(probeType)}`;
       const data = await api(`/api/probes/path?${qs}`);
       if (data.nodes && data.nodes.length) {
         drawGeoPath(data);

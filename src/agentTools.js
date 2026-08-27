@@ -20,6 +20,10 @@ function toolForProbeFailure(type, reason) {
   const r = String(reason || '').toLowerCase();
   if (!/not installed/.test(r)) return null;
   if (t === 'traceroute') return 'traceroute';
+  // The tcptraceroute probe falls back to `traceroute -T` on its own, so it only
+  // reports "not installed" when NEITHER binary exists — and it names
+  // tcptraceroute, the one this allowlist can install.
+  if (t === 'tcptraceroute') return 'tcptraceroute';
   return null;
 }
 

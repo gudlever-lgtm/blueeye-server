@@ -22,11 +22,21 @@ const { buildClusterDetail } = require('../analysis/clusterView');
 // reported in `failedSources` with `partial: true`. Only a failure BEFORE
 // fan-out surfaces as a 500.
 //
-// THE ONE PERFORMANCE RULE: blastRadiusService.compute(node) rebuilds the whole
-// topology graph on every call, so calling it once per affected device would
-// mean N full graph loads for N devices. We take the graph ONCE via
-// blastRadiusService.graph() and run the PURE computeBlastRadius against it per
-// node — same engine, same result, one read.
+// THE TWO PERFORMANCE RULES
+//
+// 1. blastRadiusService.compute(node) rebuilds the whole topology graph on every
+//    call, so calling it once per affected device would mean N full graph loads
+//    for N devices. We take the graph ONCE via blastRadiusService.graph() and run
+//    the PURE computeBlastRadius against it per node — same engine, same result,
+//    one read.
+//
+// 2. Cluster members are hydrated in ONE bulk read, not one read per member, and
+//    through the NARROW projection. A fleet with 100 live clusters can hold tens
+//    of thousands of member findings; a round trip each is what made this screen
+//    take half a minute to paint. The overview only needs each member's
+//    host/metric/severity to roll up — the full rows (explanation + evidence) are
+//    the *fault list*, which is a separate, on-demand read (getFaults below) and
+//    is deliberately NOT fetched when the screen loads.
 
 const DEFAULT_WINDOW_MINUTES = 24 * 60;
 const MAX_WINDOW_MINUTES = 7 * 24 * 60;
@@ -34,10 +44,29 @@ const DEFAULT_CLUSTER_LIMIT = 100;
 const DEFAULT_ANOMALY_LIMIT = 200;
 const DEFAULT_TIMELINE_LIMIT = 200;
 const DEFAULT_DISCOVERY_LIMIT = 100;
+// Ceiling on how many member findings the page-load rollup will hydrate. Well
+// above any realistic fleet; it exists so a runaway cluster cannot turn one
+// dashboard read into an unbounded scan. Members past it are not counted in the
+// severity/affected-device rollup — `memberCount` (and therefore the Active
+// faults figure) comes from the cluster row itself and stays exact either way.
+const MAX_HYDRATED_MEMBERS = 20000;
+
+// Defaults for the on-demand fault list (getFaults). One page is small: this is
+// a drill-down an operator opens, paged, not a bulk export.
+const DEFAULT_FAULT_PAGE = 100;
+const MAX_FAULT_PAGE = 500;
 
 // Agent lifecycle actions that count as timeline EVENTS. Whitelisted so the
 // recurring, deduped activity rows never crowd out the limit.
 const AGENT_LIFECYCLE_ACTIONS = ['agent.online', 'agent.offline', 'agent.enrolled'];
+
+// Dates come back from the store as Date (real) or ISO string (fakes); the API
+// contract is ISO or null either way.
+function toIsoOrNull(v) {
+  if (v == null) return null;
+  const d = v instanceof Date ? v : new Date(v);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
 
 function createTroubleshootingOverviewService({
   clustersRepo = null,
@@ -99,15 +128,48 @@ function createTroubleshootingOverviewService({
     return discoveredDevicesRepo.list({ status: 'discovered', limit });
   }
 
-  // Re-reads each cluster's member findings so severity and evidence come from
-  // the findings themselves. Missing members (retention may have purged them)
-  // are dropped, exactly as the cluster detail route does.
-  async function hydrateMembers(memberFindingIds) {
-    if (!findingStore || typeof findingStore.get !== 'function') return [];
-    const fetched = await Promise.all(
-      asArray(memberFindingIds).map((id) => Promise.resolve(findingStore.get(id)).catch(() => null)),
-    );
-    return fetched.filter(Boolean);
+  // Every distinct member id across the live clusters, in cluster order.
+  function memberIdsOf(clusters) {
+    const ids = [];
+    const seen = new Set();
+    for (const c of asArray(clusters)) {
+      for (const id of asArray(c && c.memberFindingIds)) {
+        if (id === null || id === undefined || id === '') continue;
+        const key = String(id);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        ids.push(id);
+      }
+    }
+    return ids;
+  }
+
+  // ONE narrow bulk read for every cluster's members (see performance rule 2),
+  // returned as findingId -> light finding. Missing members (retention may have
+  // purged them) are simply absent, exactly as the per-id path dropped them.
+  //
+  // Falls back to the per-id `get` only for a store that predates listByIds —
+  // the fakes and the real store both have it, so this is a compatibility shim,
+  // not the normal path.
+  async function hydrateMembersBulk(clusters) {
+    const byId = new Map();
+    const ids = memberIdsOf(clusters);
+    if (!ids.length) return byId;
+    const wanted = ids.slice(0, MAX_HYDRATED_MEMBERS);
+    if (wanted.length < ids.length) {
+      logger.warn?.(`troubleshooting: ${ids.length} cluster members exceed the ${MAX_HYDRATED_MEMBERS} hydration cap; rolling up the first ${wanted.length}`);
+    }
+
+    if (findingStore && typeof findingStore.listByIds === 'function') {
+      const rows = await findingStore.listByIds(wanted, { light: true });
+      for (const row of asArray(rows)) if (row && row.id != null) byId.set(String(row.id), row);
+      return byId;
+    }
+    if (findingStore && typeof findingStore.get === 'function') {
+      const fetched = await Promise.all(wanted.map((id) => Promise.resolve(findingStore.get(id)).catch(() => null)));
+      for (const row of fetched) if (row && row.id != null) byId.set(String(row.id), row);
+    }
+    return byId;
   }
 
   // Blast radius for every device named by a root cause, from the single graph.
@@ -170,10 +232,13 @@ function createTroubleshootingOverviewService({
     // --- root causes: hydrate members, then reuse the correlator's read-model
     let clusterDetails = [];
     try {
-      clusterDetails = await Promise.all(asArray(got.clusters).map(async (c) => {
-        const members = await hydrateMembers(c.memberFindingIds);
+      const membersById = await hydrateMembersBulk(got.clusters);
+      clusterDetails = asArray(got.clusters).map((c) => {
+        const members = asArray(c.memberFindingIds)
+          .map((id) => membersById.get(String(id)))
+          .filter(Boolean);
         return buildClusterDetail(c, members);
-      }));
+      });
     } catch (err) {
       // Member hydration reads the SAME store as `anomalies`; if it dies after
       // the cluster list succeeded, drop the root-cause panel, keep the rest.
@@ -242,12 +307,101 @@ function createTroubleshootingOverviewService({
     };
   }
 
-  return { getOverview, DEFAULT_WINDOW_MINUTES, MAX_WINDOW_MINUTES };
+  // -------------------------------------------------------------------------
+  // getFaults — the RAW active-fault list, on demand.
+  //
+  // This is the read the overview deliberately does not do: the full finding
+  // rows (explanation, evidence, deviation) behind every live root cause. On a
+  // fleet carrying tens of thousands of raw alarms that is minutes of scrolling
+  // and megabytes of JSON, so it is never part of painting the screen — the
+  // Active faults figure links to it and the operator asks for it.
+  //
+  // ORDER is the root-cause order the screen already shows (clusters newest
+  // activity first, members in the order the correlator grouped them), so page 2
+  // continues page 1 rather than reshuffling under a stable offset.
+  //
+  // `total` counts the DISTINCT member ids across the live clusters. Clusters do
+  // not share findings in practice, so it matches the Active faults figure the
+  // link carries; if one ever did, the list refuses to show the same alarm twice
+  // and the count says so honestly.
+  //
+  // A member whose finding is gone (retention purged it) is returned as a
+  // placeholder row rather than silently dropped — otherwise a page would come
+  // back short and the "x of y" counter would never reach its total.
+  async function getFaults({ clusterLimit = DEFAULT_CLUSTER_LIMIT, limit = DEFAULT_FAULT_PAGE, offset = 0, clusterId = null } = {}) {
+    const pageSize = Math.min(Math.max(Math.floor(Number(limit)) || DEFAULT_FAULT_PAGE, 1), MAX_FAULT_PAGE);
+    const start = Math.max(Math.floor(Number(offset)) || 0, 0);
+
+    const clusters = await fetchClusters({ limit: clusterLimit });
+    const wanted = clusterId == null
+      ? asArray(clusters)
+      : asArray(clusters).filter((c) => c && Number(c.id) === Number(clusterId));
+
+    // Flatten to (findingId -> owning cluster) refs, deduped, in cluster order.
+    const refs = [];
+    const seen = new Set();
+    for (const c of wanted) {
+      for (const id of asArray(c && c.memberFindingIds)) {
+        if (id === null || id === undefined || id === '') continue;
+        const key = String(id);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        refs.push({ id, clusterId: c.id, cause: c.suspectedCommonCause ?? null });
+      }
+    }
+
+    const page = refs.slice(start, start + pageSize);
+    const byId = new Map();
+    if (page.length && findingStore && typeof findingStore.listByIds === 'function') {
+      const rows = await findingStore.listByIds(page.map((r) => r.id));
+      for (const row of asArray(rows)) if (row && row.id != null) byId.set(String(row.id), row);
+    } else if (page.length && findingStore && typeof findingStore.get === 'function') {
+      const rows = await Promise.all(page.map((r) => Promise.resolve(findingStore.get(r.id)).catch(() => null)));
+      for (const row of rows) if (row && row.id != null) byId.set(String(row.id), row);
+    }
+
+    const faults = page.map((ref) => {
+      const f = byId.get(String(ref.id)) || null;
+      return {
+        findingId: ref.id,
+        clusterId: ref.clusterId,
+        cause: ref.cause,
+        // `missing` is the honest marker for a member whose finding retention
+        // has already purged: the cluster still counts it, we just cannot show
+        // what it said.
+        missing: !f,
+        hostId: f ? (f.hostId ?? null) : null,
+        metric: f ? (f.metric ?? null) : null,
+        severity: f ? (f.severity ?? null) : null,
+        kind: f ? (f.kind ?? null) : null,
+        observed: f ? (f.observed ?? null) : null,
+        baseline: f ? (f.baseline ?? null) : null,
+        deviation: f ? (f.deviation ?? null) : null,
+        acked: f ? Boolean(f.acked) : false,
+        explanation: f ? (f.explanation ?? null) : null,
+        createdAt: f ? toIsoOrNull(f.createdAt) : null,
+      };
+    });
+
+    return {
+      total: refs.length,
+      offset: start,
+      limit: pageSize,
+      returned: faults.length,
+      hasMore: start + faults.length < refs.length,
+      faults,
+    };
+  }
+
+  return { getOverview, getFaults, DEFAULT_WINDOW_MINUTES, MAX_WINDOW_MINUTES };
 }
 
 module.exports = {
   createTroubleshootingOverviewService,
   DEFAULT_WINDOW_MINUTES,
   MAX_WINDOW_MINUTES,
+  MAX_HYDRATED_MEMBERS,
+  DEFAULT_FAULT_PAGE,
+  MAX_FAULT_PAGE,
   AGENT_LIFECYCLE_ACTIONS,
 };

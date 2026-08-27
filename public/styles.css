@@ -1911,6 +1911,24 @@ li.guide-step.done .guide-step-title { text-decoration: line-through; opacity: 0
 .ts-changes { margin: 10px 0 0; padding: 10px; border-top: 1px dashed var(--border); }
 .ts-anoms { width: 100%; }
 
+/* Raw fault list — opt-in, paged. The link lives inside the Active faults KPI
+   because the figure is the doorway: cheap to show, expensive to expand. */
+.ts-faults-link { margin-top: 8px; }
+.kpi .ts-faults-link { width: 100%; }
+.ts-faults-card .ts-panel-head .muted { font-size: 12px; }
+.ts-faults { width: 100%; }
+.ts-faults td, .ts-faults th { vertical-align: top; }
+.ts-faults .badge { white-space: nowrap; }
+/* A member whose finding retention already purged: still counted by its
+   cluster, so still a row — dimmed, never invented. */
+.ts-faults tr.ts-fault-missing td { opacity: .6; font-style: italic; }
+/* The counter. `is-loading` pulses so a long page read reads as progress rather
+   than a frozen number. */
+.ts-fault-counter { font-size: 12px; margin: 0 0 8px; }
+.ts-fault-counter.is-loading { animation: ts-fault-pulse 1.2s ease-in-out infinite; }
+@keyframes ts-fault-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
+@media (prefers-reduced-motion: reduce) { .ts-fault-counter.is-loading { animation: none; } }
+
 /* Timeline brush */
 .ts-brush { width: 100%; height: 60px; display: block; cursor: crosshair; touch-action: none; }
 .ts-axis { stroke: var(--border); stroke-width: 1; }

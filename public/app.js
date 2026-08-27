@@ -750,6 +750,7 @@ const PAGE_INFO = {
       el('p', {}, el('strong', {}, 'Blast radius'), ' under each cause names what is affected ', el('em', {}, 'beyond'), ' the devices already listed — L2-isolated hosts first, then services that depend on them. ', el('strong', {}, 'Show path'), ' highlights that path on the topology graph; ', el('strong', {}, 'What changed?'), ' lists the config pushes, port flaps and new routes recorded in the 30 minutes before the fault started.'),
       el('p', {}, 'On the topology graph, ', el('strong', {}, 'green'), ' is a reporting agent, ', el('strong', {}, 'red'), ' is an agent that is down, and ', el('strong', {}, 'grey'), ' means the host sits behind a down node — we cannot hear it, which is not the same as knowing it is broken. Toggle between L2 adjacencies and L3 service dependencies, or show both.'),
       el('p', {}, el('strong', {}, 'Baseline deviations'), ' are flow pairs off their own weekday/hour median — a pair that normally moves 1 GB at 09:00 on a Monday and today moved 4 GB. Drag across the ', el('strong', {}, 'Timeline'), ' to narrow the event list to a window.'),
+      el('p', {}, el('strong', {}, 'Active faults'), ' counts the raw alarms behind those causes. The figure is cheap; the rows behind it are not — a busy fleet carries tens of thousands — so the page does ', el('strong', {}, 'not'), ' load them. Use the link on the card to list them, one page at a time, with a counter saying how far it has got. Everything else on this screen is there before you ask.'),
       el('p', { class: 'muted' }, 'Operator+ — it aggregates data that is itself operator-gated, so it never widens access. Discovery candidates (addresses seen on the wire but not monitored) are listed for admins only. If one source is unavailable the page says so and keeps the remaining panels rather than failing whole.'),
     ],
   },
@@ -6892,21 +6893,52 @@ views.troubleshooting = async () => {
   const kpiHost = el('div', { class: 'kpi-grid' });
   const topoHost = el('div', { class: 'card ts-topo-card' });
   const causeHost = el('div', { class: 'card ts-cause-card' });
+  const faultsHost = el('div', { class: 'card ts-faults-card', hidden: 'hidden' });
   const timelineHost = el('div', { class: 'card ts-timeline-card' });
-  root.append(kpiHost, el('div', { class: 'ts-split' }, topoHost, causeHost), timelineHost);
+  root.append(kpiHost, el('div', { class: 'ts-split' }, topoHost, causeHost), faultsHost, timelineHost);
 
   let data = null;
   let graphEl = null;
   let brush = null; // { fromMs, toMs } or null
 
+  // --- the raw fault list: opt-in, paged, never part of the page load -------
+  // A fleet can carry tens of thousands of raw alarms behind its root causes.
+  // Fetching them to paint the screen is what made this tab slow, so the
+  // overview read no longer touches them: the Active faults figure links here,
+  // and GET /api/troubleshooting/faults pages them in only once asked.
+  const FAULT_PAGE = 100;
+  const faults = { open: false, rows: [], total: 0, loading: false, error: null, loaded: false };
+
   // --- zone 1: key figures -------------------------------------------------
+  // The Active faults card carries the doorway to the list: the figure is free
+  // (it comes off the cluster rows), the rows behind it are not, so the card
+  // says how many there are and lets the operator decide to pay for them.
+  function faultsAction() {
+    const total = Number(data && data.summary && data.summary.activeFaults) || 0;
+    if (!total) return null;
+    if (faults.open) {
+      return el('button', { class: 'small ghost ts-faults-link', onclick: closeFaults }, t('tshoot.faults.hide'));
+    }
+    const label = faults.loading
+      ? t('tshoot.faults.loading', { loaded: faults.rows.length, total })
+      : (total === 1 ? t('tshoot.faults.linkOne') : t('tshoot.faults.link', { count: total }));
+    return el('button', {
+      class: 'small ghost ts-faults-link',
+      disabled: faults.loading ? 'disabled' : null,
+      onclick: openFaults,
+    }, label);
+  }
+
   function renderKpis() {
     const cards = TV.kpiCards(data.summary);
     const status = (key, value) => {
       if (!value) return 'ok';
       return key === 'rootCauses' || key === 'activeFaults' ? 'bad' : 'warn';
     };
-    kpiHost.replaceChildren(...cards.map((c) => kpiCard(c.label, String(c.value), c.hint, status(c.key, c.value))));
+    kpiHost.replaceChildren(...cards.map((c) => kpiCard(
+      c.label, String(c.value), c.hint, status(c.key, c.value),
+      c.key === 'activeFaults' ? faultsAction() : null,
+    )));
   }
 
   // --- zone 2: topology ----------------------------------------------------
@@ -6943,12 +6975,13 @@ views.troubleshooting = async () => {
     draw();
 
     const discovered = (t.discovered || []).length;
-    topoHost.replaceChildren(
+    topoHost.replaceChildren(...[
       el('div', { class: 'ts-panel-head' }, el('h3', {}, 'Topology'), el('span', { class: 'spacer' }), layerSel),
       graphSlot, legend, detail,
       discovered
         ? el('p', { class: 'muted' }, `${discovered} address${discovered === 1 ? '' : 'es'} seen by active discovery but not yet monitored — promote them under Discovery to place them on this graph.`)
-        : null);
+        : null,
+    ].filter(Boolean));
   }
 
   // --- zone 3: root causes -------------------------------------------------
@@ -7112,17 +7145,130 @@ views.troubleshooting = async () => {
         el('tbody', {}, ...rows)));
   }
 
+  // --- the raw fault list (opt-in) -----------------------------------------
+  // agent id -> device label, so a row reads "sw-acc-a" and not "agent 3". The
+  // topology panel already carries the names; no second lookup.
+  function deviceLabels() {
+    const byId = {};
+    for (const n of ((data && data.topology && data.topology.nodes) || [])) byId[String(n.id)] = n.label;
+    return byId;
+  }
+
+  function faultTable() {
+    const labels = deviceLabels();
+    const rows = faults.rows.map((f) => {
+      const m = TV.faultRowModel(f, labels);
+      return el('tr', { class: m.missing ? 'ts-fault-missing' : null },
+        el('td', {}, el('span', { class: `badge ${m.severity}` }, m.missing ? '—' : m.severity)),
+        el('td', {}, m.deviceLabel),
+        el('td', { class: 'mono' }, m.metric),
+        el('td', {}, m.createdAt ? fmtDate(m.createdAt) : (m.missing ? t('tshoot.faults.purged') : '—')),
+        el('td', { class: 'muted' },
+          m.cause || '—',
+          m.acked ? el('span', { class: 'badge neutral' }, t('tshoot.faults.acked')) : null));
+    });
+    return el('table', { class: 'ts-faults' },
+      el('thead', {}, el('tr', {},
+        el('th', {}, t('tshoot.faults.colSeverity')),
+        el('th', {}, t('tshoot.faults.colHost')),
+        el('th', {}, t('tshoot.faults.colMetric')),
+        el('th', {}, t('tshoot.faults.colWhen')),
+        el('th', {}, t('tshoot.faults.colCause')))),
+      el('tbody', {}, ...rows));
+  }
+
+  function renderFaults() {
+    faultsHost.hidden = !faults.open;
+    if (!faults.open) { faultsHost.replaceChildren(); return; }
+
+    const head = el('div', { class: 'ts-panel-head' },
+      el('h3', {}, t('tshoot.faults.title')),
+      el('span', { class: 'muted' }, t('tshoot.faults.hint')),
+      el('span', { class: 'spacer' }),
+      el('button', { class: 'small ghost', onclick: closeFaults }, t('tshoot.faults.hide')));
+
+    if (faults.error) {
+      faultsHost.replaceChildren(head,
+        el('div', { class: 'error' }, t('tshoot.faults.error', { message: faults.error })),
+        el('button', { class: 'small', onclick: loadFaultPage }, t('tshoot.faults.retry')));
+      return;
+    }
+
+    // The counter is the whole point of the opt-in: a long read has to say how
+    // far it has got, not spin.
+    const progress = TV.faultProgress({ loaded: faults.rows.length, total: faults.total, loading: faults.loading });
+    const counter = el('div', { class: `ts-fault-counter muted${faults.loading ? ' is-loading' : ''}` }, t(progress.key, progress.params));
+
+    const next = TV.faultsRemaining({ loaded: faults.rows.length, total: faults.total }, FAULT_PAGE);
+    const more = next > 0
+      ? el('button', { class: 'small', disabled: faults.loading ? 'disabled' : null, onclick: loadFaultPage }, t('tshoot.faults.loadMore', { count: next }))
+      : null;
+
+    // `el()` skips null kids but a bare replaceChildren(…, null) stringifies it
+    // to the text "null", so filter (same guard as the traceroute panel).
+    if (!faults.rows.length) {
+      faultsHost.replaceChildren(...[head, counter,
+        faults.loading ? null : el('div', { class: 'empty' }, t('tshoot.faults.empty'))].filter(Boolean));
+      return;
+    }
+    faultsHost.replaceChildren(...[head, counter, faultTable(), more].filter(Boolean));
+  }
+
+  // One page at a time, appended. `offset` is the number of rows already held,
+  // and the backend keeps a stable order, so paging never re-reads or skips.
+  async function loadFaultPage() {
+    if (faults.loading) return;
+    faults.loading = true;
+    faults.error = null;
+    renderFaults();
+    renderKpis();
+    try {
+      const page = await api(`/api/troubleshooting/faults?limit=${FAULT_PAGE}&offset=${faults.rows.length}`);
+      faults.total = Number(page.total) || 0;
+      faults.rows = faults.rows.concat(page.faults || []);
+      faults.loaded = true;
+    } catch (err) {
+      faults.error = err.message;
+    } finally {
+      faults.loading = false;
+      renderFaults();
+      renderKpis();
+    }
+  }
+
+  function openFaults() {
+    faults.open = true;
+    renderKpis();
+    renderFaults();
+    if (!faults.loaded) loadFaultPage();
+  }
+
+  function closeFaults() {
+    faults.open = false;
+    renderFaults();
+    renderKpis();
+  }
+
   async function load() {
     statusEl.textContent = 'Loading…';
     refreshBtn.disabled = true;
     try {
       data = await api(`/api/troubleshooting/overview?minutes=${encodeURIComponent(winSel.value)}`);
       brush = null;
+      // The fault set belongs to the rollup we just replaced, so the held pages
+      // are stale. Drop them; if the operator had the list open, page 1 of the
+      // NEW set is fetched rather than silently showing the old one.
+      faults.rows = [];
+      faults.total = 0;
+      faults.loaded = false;
+      faults.error = null;
       renderKpis();
       renderTopology();
       renderRootCauses();
       renderAnomalies();
       renderTimeline();
+      renderFaults();
+      if (faults.open) loadFaultPage();
       // A domain that is down costs its own panel, not the screen — say which.
       statusEl.textContent = data.partial
         ? `Partial data — unavailable: ${data.failedSources.join(', ')}`
@@ -7133,6 +7279,8 @@ views.troubleshooting = async () => {
       topoHost.replaceChildren(el('div', { class: 'empty' }, `Could not load: ${err.message}`));
       causeHost.replaceChildren();
       timelineHost.replaceChildren();
+      faults.open = false;
+      renderFaults();
       statusEl.textContent = '';
     } finally {
       refreshBtn.disabled = false;
@@ -7783,12 +7931,16 @@ function fleetKpis(data) {
     alerts: crit + (s.warn || 0),
   };
 }
-function kpiCard(label, value, sub, status) {
+// `action` is an optional node rendered under the sub-line — used where the
+// figure is a doorway to a heavier read the page does not do on load (the
+// Troubleshooting screen's Active faults list, for one).
+function kpiCard(label, value, sub, status, action) {
   const vCls = status === 'warn' ? ' v-warn' : status === 'bad' ? ' v-bad' : status === 'ok' ? ' v-ok' : '';
   return el('div', { class: `kpi st-${status}` },
     el('div', { class: 'kpi-k' }, label),
     el('div', { class: `kpi-v${vCls}` }, value),
-    el('div', { class: 'kpi-sub muted' }, sub));
+    el('div', { class: 'kpi-sub muted' }, sub),
+    action || null);
 }
 // The path a scoped set of agents' traffic takes to reach its monitored
 // targets, drawn as an SVG: Origin → ISP uplink → Cloud egress → SaaS. Unlike

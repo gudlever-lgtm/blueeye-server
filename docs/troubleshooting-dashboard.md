@@ -71,9 +71,85 @@ One request returns every block the view needs.
 Status codes: `200` · `400` invalid query · `401` unauthenticated · `403` viewer ·
 `404` unknown path · `500` unexpected fault · `503` service not wired.
 
+`/overview` deliberately does **not** carry the raw alarm rows — only the
+`activeFaults` figure. See *The fault list is opt-in* below.
+
+### `GET /api/troubleshooting/faults` — operator+
+
+The rows behind `summary.activeFaults`: the member findings of every live root
+cause, with the evidence the rollup drops (explanation, observed/baseline,
+deviation). Paged, and fetched **only when the operator asks to list them**.
+
+| Query | Default | Notes |
+| --- | --- | --- |
+| `limit` | `100` | 1..500. Outside that range → `400`. |
+| `offset` | `0` | `>= 0`. Rows already held, so paging never re-reads or skips. |
+| `clusterId` | — | Positive integer; narrows the list to one root cause. |
+
+```jsonc
+{
+  "total": 28574,          // distinct member ids across the live clusters
+  "offset": 0,
+  "limit": 100,
+  "returned": 100,
+  "hasMore": true,
+  "faults": [{
+    "findingId": "…", "clusterId": 12, "cause": "Uplink sw-core-1 unreachable",
+    "missing": false,      // true when retention purged the finding (see below)
+    "hostId": "2", "metric": "link.errors", "severity": "CRIT", "kind": "anomaly",
+    "observed": 9, "baseline": 1, "deviation": 8, "acked": false,
+    "explanation": "…", "createdAt": "…"
+  }]
+}
+```
+
+Same RBAC and the same source as the overview, so this widens nothing: it is the
+detail of a number the overview already shows.
+
+**Order** is the root-cause order the screen already renders (clusters by newest
+activity, members in the order the correlator grouped them), which is what makes
+`offset` stable across pages. **`total`** counts *distinct* member ids: clusters do
+not share findings in practice, so it matches `summary.activeFaults`; if one ever
+did, the list shows the alarm once rather than twice.
+
+A member whose finding retention has already purged comes back as a row with
+`missing: true` and nothing invented. Dropping it would leave every page short and
+the dashboard's "x of y" counter permanently short of its total.
+
+Status codes: `200` · `400` invalid query · `401` unauthenticated · `403` viewer ·
+`500` unexpected fault · `503` service not wired.
+
 ---
 
 ## Design decisions
+
+### The fault list is opt-in
+
+`activeFaults` is free: it is the sum of each live cluster's `member_finding_ids`
+length, read straight off the cluster rows. The **rows** behind it are not — a busy
+fleet carries tens of thousands of raw alarms — so painting the screen must never
+pay for them.
+
+Two things follow, and both are load-bearing:
+
+1. **The overview hydrates members through ONE bulk read, in the narrow
+   projection.** It used to call `findingStore.get(id)` once per member: 100 live
+   clusters holding 28 000 members meant 28 000 round trips queued behind a
+   ~10-connection pool, which is what made this tab take half a minute to paint.
+   `FindingStore.listByIds(ids, { light: true })` reads them in 1000-id `IN (...)`
+   batches and selects `id/host_id/metric/severity/kind/acked/created_at` — no
+   `evidence` or `correlated_with` JSON. That is exactly what the severity, affected
+   device and classification rollups need, and it is the difference between a few
+   hundred KB and tens of MB on the wire.
+2. **The rows move to their own endpoint.** `GET /api/troubleshooting/faults` returns
+   the full findings, one page at a time. The dashboard calls it only when the
+   operator clicks the link on the Active faults card, and shows a counter
+   ("Showing 200 of 28 574") as pages arrive, so a long read reads as progress rather
+   than a spinner.
+
+A hydration ceiling (`MAX_HYDRATED_MEMBERS`, 20 000) guards the rollup against a
+runaway cluster. It is well above any realistic fleet, and `activeFaults` stays exact
+either way — the figure comes from the cluster row, not from the hydrated members.
 
 ### The rollup is not re-derived
 
@@ -196,4 +272,5 @@ which is what it does.
 | HTTP | `src/routes/troubleshooting.js` (mounted in `routes/index.js`) |
 | Pure view-model | `public/troubleshootingView.js` |
 | View | `views.troubleshooting` + `tshootTopologySvg` in `public/app.js`; `.ts-*` in `public/styles.css` |
-| Tests | `test/troubleshooting{RootCauses,TopologyState,Anomalies,OverviewService,OverviewApi,ViewModel}.test.js` |
+| Bulk member read | `FindingStore.listByIds()` in `src/analysis/findings.js` |
+| Tests | `test/troubleshooting{RootCauses,TopologyState,Anomalies,OverviewService,OverviewApi,ViewModel,Faults}.test.js` |

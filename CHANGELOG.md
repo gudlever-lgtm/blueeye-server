@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.115.0 — The Windows install command no longer looks like a PowerShell stager
+## 0.115.2 — The Windows install command no longer looks like a PowerShell stager
 
 A customer's IPS fired on their own BlueEyes server:
 

@@ -7,7 +7,7 @@ const { ROLES } = require('../auth/roles');
 const { generateEnrollmentCode } = require('../auth/tokens');
 const { parseId } = require('../validation/locationValidation');
 const { resolveServerUrl } = require('./enroll');
-const { winSecurityPrelude } = require('../enroll/installScriptWin');
+const { winRunSteps } = require('../enroll/installScriptWin');
 
 // Default platform offered when the caller doesn't specify one and we can't
 // infer it from the published artifacts.
@@ -124,14 +124,20 @@ function createEnrollCommandRouter({ enrollmentCodesRepo, artifactStore, sourceS
       const serverUrl = resolveServerUrl(req, enrollConfig);
       // Windows PowerShell cannot run `curl -sSL … | sh` (curl is an alias for
       // Invoke-WebRequest with different flags, and there is no `sh`), so Windows
-      // hosts get a PowerShell one-liner that fetches install.ps1 with `irm … | iex`.
-      // Linux and macOS both have real curl + sh, so they share the sh installer.
+      // hosts get a PowerShell command of their own. Linux and macOS both have real
+      // curl + sh, so they share the sh installer.
       const isWindows = /^windows(-|$)/.test(platform);
-      // The Windows one-liner carries a TLS-1.2 + (when known) cert-pinning prelude
-      // so the `irm …/install.ps1 | iex` bootstrap works against an on-prem HTTPS
-      // server with a self-signed cert (PowerShell 5.1 would otherwise reject it).
-      const oneLiner = isWindows
-        ? `powershell -NoProfile -ExecutionPolicy Bypass -Command "${winSecurityPrelude(certFingerprint)} irm ${serverUrl}/enroll/${code}/install.ps1 | iex"`
+      // The Windows command downloads install.ps1 to a file and runs the file — it
+      // is deliberately not `irm … | iex` (see winRunSteps: that shape is what IPS
+      // and endpoint AV flag as a PowerShell stager, on the wire and on the host).
+      // It carries a TLS-1.2 + (when known) cert-pinning prelude so the download
+      // works against an on-prem HTTPS server with a self-signed cert, which
+      // PowerShell 5.1 would otherwise reject.
+      const winSteps = isWindows
+        ? winRunSteps({ serverUrl, path: `/enroll/${code}/install.ps1`, fileName: 'blueeye-install.ps1', certFingerprint })
+        : null;
+      const oneLiner = winSteps
+        ? winSteps.oneLiner
         : `curl -sSL ${serverUrl}/enroll/${code}/install.sh | sh`;
       // The installer downloads + verifies the agent SOURCE bundle, then builds +
       // runs it (Docker/Node) — no pre-built binary. The manual block lets a
@@ -140,6 +146,10 @@ function createEnrollCommandRouter({ enrollmentCodesRepo, artifactStore, sourceS
 
       res.json({
         oneLiner,
+        // The same command split in two, so the dashboard can show "download" and
+        // "run" as separate steps (and an operator can inspect the script in
+        // between). Windows only — Linux/macOS already have the manual block below.
+        steps: winSteps ? { download: winSteps.download, run: winSteps.run, scriptUrl: winSteps.url, scriptFile: winSteps.file } : null,
         os: isWindows ? 'windows' : (/^darwin(-|$)/.test(platform) ? 'macos' : 'linux'),
         manual: {
           downloadUrl: `${serverUrl}/enroll/agent-source.tgz`,
@@ -189,12 +199,14 @@ function createEnrollCommandRouter({ enrollmentCodesRepo, artifactStore, sourceS
         return res.status(409).json({ error: 'No agent source is published on this server, so there is nothing to update to.' });
       }
       const serverUrl = resolveServerUrl(req, enrollConfig);
-      // Same TLS-1.2 + cert-pinning prelude as the install one-liner, so the
-      // `irm …/update.ps1 | iex` bootstrap works against an on-prem HTTPS server
-      // with a self-signed certificate.
-      const oneLiner = `powershell -NoProfile -ExecutionPolicy Bypass -Command "${winSecurityPrelude(certFingerprint)} irm ${serverUrl}/enroll/update.ps1 | iex"`;
+      // Same download-to-a-file shape (and the same TLS-1.2 + cert-pinning prelude)
+      // as the install command, so the update is not blocked by the IPS/AV rules
+      // that catch a piped-into-iex download.
+      const steps = winRunSteps({ serverUrl, path: '/enroll/update.ps1', fileName: 'blueeye-update.ps1', certFingerprint });
+      const oneLiner = steps.oneLiner;
       res.json({
         oneLiner,
+        steps: { download: steps.download, run: steps.run, scriptUrl: steps.url, scriptFile: steps.file },
         os: 'windows',
         platform,
         version: sourceStore && typeof sourceStore.sourceVersion === 'function' ? sourceStore.sourceVersion() : null,

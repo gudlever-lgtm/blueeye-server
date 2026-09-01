@@ -74,10 +74,10 @@ Routes (admin): `GET/POST/DELETE /api/settings/agent-release-key` — status / g
 | `GET /enroll/agent-release-key` | none | the release trust anchor (PEM) the agent pins to verify **signed self-updates**; 404 if no key is configured |
 | `GET /enroll/agent/:platform` | none | *legacy/optional* pre-built binary, only if one was dropped in the artifacts dir; 404 otherwise |
 | `GET /enroll/:code/install.sh` | none | the self-contained installer for that code (Linux + macOS); 404 if unknown/expired/exhausted |
-| `GET /enroll/:code/install.ps1` | none | the self-contained **PowerShell** installer for that code (Windows); 404 if unknown/expired/exhausted |
+| `GET /enroll/:code/install.ps1` | none | the self-contained **PowerShell** installer for that code (Windows); `?download=1` returns it as a saveable attachment; 404 if unknown/expired/exhausted |
 | `GET /enroll/uninstall.sh` | none | the agent uninstaller (Linux/macOS) — `curl … \| sudo sh` removes the agent from a host (warns + confirms first); 404 if no agent source is configured |
-| `GET /enroll/uninstall.ps1` | none | the **PowerShell** uninstaller (Windows) — `irm … \| iex` stops+unregisters the scheduled task and removes the install/state/log dirs |
-| `GET /enroll/update.ps1` | none | the **PowerShell** updater (Windows) — updates an already-enrolled agent **in place**; no enrollment code, aborts where no enrolled agent exists; 404 if no agent source is published |
+| `GET /enroll/uninstall.ps1` | none | the **PowerShell** uninstaller (Windows) — stops+unregisters the scheduled task and removes the install/state/log dirs; `?download=1` for an attachment |
+| `GET /enroll/update.ps1` | none | the **PowerShell** updater (Windows) — updates an already-enrolled agent **in place**; no enrollment code, aborts where no enrolled agent exists; `?download=1` for an attachment; 404 if no agent source is published |
 | `GET /api/enroll/command` | operator+ | builds the one-liner + manual/checksum variants (mints or reuses a code) |
 | `GET /api/enroll/update-command` | operator+ | builds the Windows **update** one-liner (no code in it); 400 for a non-Windows platform, 409 if no source is published |
 
@@ -89,6 +89,7 @@ Routes (admin): `GET/POST/DELETE /api/settings/agent-release-key` — status / g
   "oneLiner": "curl -sSL https://<server>/enroll/<CODE>/install.sh | sh",
   "manual": { "downloadUrl": "https://<server>/enroll/agent-source.tgz",
               "checksum": "<sha256>", "command": "curl -sSL https://<server>/enroll/<CODE>/install.sh | sh" },
+  "steps": null,
   "code": "<CODE>", "platforms": [],
   "certFingerprint": "<fp|null>", "maxUses": 1, "usesRemaining": 1, "expiresAt": "<ISO>"
 }
@@ -97,7 +98,10 @@ Routes (admin): `GET/POST/DELETE /api/settings/agent-release-key` — status / g
 `serverUrl` comes from `BLUEEYE_PUBLIC_URL` (recommended behind a proxy) or is
 derived from the request; `checksum` is the server's cached hash of the bundle.
 An `os` field (`linux` | `macos` | `windows`) is derived from the requested
-`platform` so the dashboard can label the command.
+`platform` so the dashboard can label the command. `steps` is `null` for
+Linux/macOS; for Windows it is the same command split in two —
+`{ download, run, scriptUrl, scriptFile }` — which the dashboard shows under
+"Run it in two steps".
 
 ### Per-OS install commands
 
@@ -109,12 +113,64 @@ different flags, and there is no `sh`):
   One installer serves both: it detects the kernel, picks a runtime (Linux:
   pre-built binary → Node+systemd → Docker; macOS: Node, service via **launchd**),
   and never mistakes a Linux binary for a macOS host.
-- **Windows** — `powershell -NoProfile -ExecutionPolicy Bypass -Command "irm
-  https://<server>/enroll/<CODE>/install.ps1 | iex"`, run from an **elevated**
-  PowerShell. It requires Node.js, verifies the source checksum, and registers a
+- **Windows** — run from an **elevated PowerShell** (not `cmd.exe`):
+
+  ```
+  <TLS/pin prelude> Invoke-WebRequest -UseBasicParsing -Uri 'https://<server>/enroll/<CODE>/install.ps1' -OutFile "$env:TEMP\blueeye-install.ps1"; Set-ExecutionPolicy Bypass -Scope Process -Force; & "$env:TEMP\blueeye-install.ps1"
+  ```
+
+  It requires Node.js, verifies the source checksum, and registers a
   **Scheduled Task** (SYSTEM, at boot, restart-on-failure) as the service.
+  The command downloads the script to a **file** and runs the file — see
+  [Why not `irm … | iex`](#why-not-irm--iex) below.
 
 Windows/macOS agents don't self-update (that path is systemd-only).
+
+### Why not `irm … | iex`
+
+The Windows command used to be
+`powershell -NoProfile -ExecutionPolicy Bypass -Command "irm <url> | iex"`. That
+is a *download cradle*: fetch a script and pipe it straight into the interpreter,
+behind flags that suppress the profile and the execution policy. Installers do it
+because it is short — and so does every PowerShell stager, which is why security
+tooling treats the pattern as hostile:
+
+- **On the network.** Emerging Threats ships a rule that matches the flag
+  combination in an HTTP response body — *ET ATTACK_RESPONSE PowerShell NoProfile
+  Command Received In Powershell Stagers*. It fires on the command text itself, so
+  it went off on the **dashboard page** that showed an operator the install
+  command, not just on the installer. A customer running BlueEyes over plain HTTP
+  saw an IPS alert accusing their own BlueEyes server of delivering a stager.
+- **On the host.** Endpoint AV/EDR blocks or quarantines the same pattern, so the
+  install dies half-way through with no useful message.
+
+Both are false positives, and both are avoidable, so the generated commands (and
+the comments inside the generated scripts) no longer contain the pattern at all:
+
+- the script is downloaded to a **file** in `%TEMP%` and the file is executed, so
+  AMSI and antivirus can scan it, an operator can read it before running it, and
+  it can be allowlisted by path;
+- the execution policy is relaxed with `Set-ExecutionPolicy Bypass -Scope Process`
+  — this PowerShell process only, no admin rights, machine policy untouched —
+  instead of the `-ExecutionPolicy Bypass` flag;
+- `-NoProfile` is gone. It bought nothing in an elevated admin shell and it is the
+  literal token the IPS rule matches on.
+
+Nothing is encoded, hidden or obfuscated, and the integrity story is unchanged:
+the download is pinned to the server's certificate fingerprint when one is
+configured, and the agent bundle is still verified against the SHA-256 embedded in
+the script.
+
+Two things are worth doing on the customer side as well:
+
+- **Serve the dashboard over HTTPS.** The alert above was only possible because
+  the install command crossed the network in cleartext on `http://…:3000`, where
+  the IPS could read it. Terminate TLS in front of the server and set
+  `BLUEEYE_PUBLIC_URL` (and `AGENT_CERT_FINGERPRINT` for a self-signed cert).
+- **If the host still cannot download the script**, open
+  `https://<server>/enroll/<CODE>/install.ps1?download=1` in a browser, save the
+  file, copy it to the host and run it there. The dashboard shows this fallback
+  under "Run it in two steps".
 
 ### Updating a Windows agent (no re-install)
 
@@ -123,11 +179,11 @@ declined on the host. When such an agent is behind, the **Update** button in
 Agents hands the operator a copy-paste one-liner instead:
 
 ```
-powershell -NoProfile -ExecutionPolicy Bypass -Command "<TLS/pin prelude> irm https://<server>/enroll/update.ps1 | iex"
+<TLS/pin prelude> Invoke-WebRequest -UseBasicParsing -Uri 'https://<server>/enroll/update.ps1' -OutFile "$env:TEMP\blueeye-update.ps1"; Set-ExecutionPolicy Bypass -Scope Process -Force; & "$env:TEMP\blueeye-update.ps1"
 ```
 
 `GET /api/enroll/update-command?platform=windows-amd64` (operator+) builds it —
-`{ oneLiner, os, platform, version, certFingerprint, manual: { downloadUrl, checksum, command } }`.
+`{ oneLiner, steps, os, platform, version, certFingerprint, manual: { downloadUrl, checksum, command } }`.
 
 `update.ps1` is an **update, not an install**:
 

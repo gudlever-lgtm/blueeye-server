@@ -35,23 +35,44 @@ test('GET /api/enroll/command mints a code and returns all three variants (200)'
   assert.ok(Array.isArray(res.body.platforms));
 });
 
-test('GET /api/enroll/command returns a PowerShell one-liner for a Windows platform', async () => {
+test('GET /api/enroll/command returns a PowerShell command for a Windows platform', async () => {
   const repo = makeEnrollmentCodesRepo({ create: async () => ({ id: 7, code: 'WINCODE', expires_at: '2099-01-01T00:00:00.000Z', max_uses: 1, uses_remaining: 1 }) });
   const res = await request(makeApp({ enrollmentCodesRepo: repo })).get('/api/enroll/command?platform=windows-amd64').set('Authorization', operator());
   assert.equal(res.status, 200);
   assert.equal(res.body.os, 'windows');
-  // PowerShell idiom (irm … install.ps1 | iex) — never the POSIX curl … | sh.
-  assert.match(res.body.oneLiner, /powershell .*irm .*\/enroll\/WINCODE\/install\.ps1 \| iex/);
+  // PowerShell, never the POSIX curl … | sh: fetch install.ps1 to a file, run the file.
+  assert.match(res.body.oneLiner, /Invoke-WebRequest .*\/enroll\/WINCODE\/install\.ps1' -OutFile "\$env:TEMP\\blueeye-install\.ps1"/);
+  assert.match(res.body.oneLiner, /& "\$env:TEMP\\blueeye-install\.ps1"$/);
   assert.ok(!/curl -sSL/.test(res.body.oneLiner));
   assert.ok(!/\| sh\b/.test(res.body.oneLiner));
   // Carries the TLS-1.2 prelude so PowerShell 5.1 can reach a modern server.
   assert.match(res.body.oneLiner, /SecurityProtocol -bor 3072/);
-  // Balanced quoting: exactly one pair of double quotes (the -Command argument).
-  assert.equal((res.body.oneLiner.match(/"/g) || []).length, 2);
+  // Execution policy is relaxed for this process only — never machine-wide.
+  assert.match(res.body.oneLiner, /Set-ExecutionPolicy Bypass -Scope Process -Force/);
   assert.equal(res.body.manual.command, res.body.oneLiner);
+  // The same command, split for the dashboard's two-step display.
+  assert.match(res.body.steps.scriptUrl, /\/enroll\/WINCODE\/install\.ps1$/);
+  assert.equal(res.body.steps.scriptFile, '$env:TEMP\\blueeye-install.ps1');
+  assert.equal(`${res.body.steps.download}; ${res.body.steps.run}`, res.body.oneLiner);
 });
 
-test('GET /api/enroll/command pins the self-signed cert in the Windows one-liner when a fingerprint is configured', async () => {
+// Regression guard for the reason this shape was chosen: the old command was
+// `powershell -NoProfile -ExecutionPolicy Bypass -Command "irm … | iex"`, which is
+// the signature of a PowerShell stager. An IPS on the customer's network fires on
+// it as it crosses the wire in the dashboard's own response ("ET ATTACK_RESPONSE
+// PowerShell NoProfile Command Received In Powershell Stagers"), and endpoint AV
+// blocks the same pattern on the host — an install that looks like an intrusion.
+test('the Windows install command is not shaped like a PowerShell stager', async () => {
+  const repo = makeEnrollmentCodesRepo({ create: async () => ({ id: 11, code: 'WINIPS', expires_at: '2099-01-01T00:00:00.000Z', max_uses: 1, uses_remaining: 1 }) });
+  const res = await request(makeApp({ enrollmentCodesRepo: repo })).get('/api/enroll/command?platform=windows-amd64').set('Authorization', operator());
+  for (const cmd of [res.body.oneLiner, res.body.steps.download, res.body.steps.run, res.body.manual.command]) {
+    assert.ok(!/-NoProfile|-NoP\b/i.test(cmd), `no -NoProfile flag in: ${cmd}`);
+    assert.ok(!/\biex\b|Invoke-Expression/i.test(cmd), `never pipe a download into the interpreter: ${cmd}`);
+    assert.ok(!/-EncodedCommand|-enc\b|-w hidden|-WindowStyle Hidden/i.test(cmd), `nothing hidden or encoded: ${cmd}`);
+  }
+});
+
+test('GET /api/enroll/command pins the self-signed cert in the Windows command when a fingerprint is configured', async () => {
   const fp = Array.from({ length: 32 }, () => 'ab').join(':');
   const repo = makeEnrollmentCodesRepo({ create: async () => ({ id: 9, code: 'WINFP', expires_at: '2099-01-01T00:00:00.000Z', max_uses: 1, uses_remaining: 1 }) });
   const res = await request(makeApp({ enrollmentCodesRepo: repo, enrollConfig: { certFingerprint: fp } }))
@@ -59,7 +80,8 @@ test('GET /api/enroll/command pins the self-signed cert in the Windows one-liner
   assert.equal(res.status, 200);
   assert.match(res.body.oneLiner, /ServerCertificateValidationCallback/);
   assert.match(res.body.oneLiner, new RegExp("'" + 'ab'.repeat(32) + "'"));
-  assert.equal((res.body.oneLiner.match(/"/g) || []).length, 2); // still balanced
+  // The pin has to be in place for the DOWNLOAD step, not just somewhere in the line.
+  assert.match(res.body.steps.download, /ServerCertificateValidationCallback/);
 });
 
 test('GET /api/enroll/command keeps the sh one-liner for Linux and macOS', async () => {
@@ -138,11 +160,15 @@ test('GET /api/enroll/update-command returns the PowerShell update one-liner (20
     .get('/api/enroll/update-command?platform=windows-amd64').set('Authorization', operator());
   assert.equal(res.status, 200);
   assert.equal(res.body.os, 'windows');
-  assert.match(res.body.oneLiner, /powershell .*irm https:\/\/blueeye\.acme\.dk\/enroll\/update\.ps1 \| iex/);
+  assert.match(res.body.oneLiner, /Invoke-WebRequest .*'https:\/\/blueeye\.acme\.dk\/enroll\/update\.ps1' -OutFile "\$env:TEMP\\blueeye-update\.ps1"/);
+  assert.match(res.body.oneLiner, /& "\$env:TEMP\\blueeye-update\.ps1"$/);
   // Update, not install: no enrollment code anywhere in the command.
   assert.ok(!/install\.ps1/.test(res.body.oneLiner));
   assert.match(res.body.oneLiner, /SecurityProtocol -bor 3072/); // TLS-1.2 prelude
-  assert.equal((res.body.oneLiner.match(/"/g) || []).length, 2); // balanced quoting
+  // Same non-stager shape as the install command (see the guard above).
+  assert.ok(!/-NoProfile/i.test(res.body.oneLiner));
+  assert.ok(!/\biex\b|Invoke-Expression/i.test(res.body.oneLiner));
+  assert.equal(`${res.body.steps.download}; ${res.body.steps.run}`, res.body.oneLiner);
   assert.equal(res.body.version, '0.1.0'); // the fake source store's version
   assert.equal(res.body.manual.checksum, 'c'.repeat(64));
   assert.match(res.body.manual.downloadUrl, /\/enroll\/agent-source\.tgz$/);

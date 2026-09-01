@@ -111,10 +111,11 @@ change that:
    new bundle is packaged and served.
 3. Systemd agents can then be updated one-click from the same panel. A **Windows**
    agent that is behind gets an **Update** button in Agents that hands you a
-   PowerShell one-liner (`irm <server>/enroll/update.ps1 | iex`) to run on that
-   host: it updates the installed agent in place, keeps its token/identity and
-   never enrolls a second agent — see `docs/enrollment.md`. Docker / unmanaged
-   agents re-run their installer on their own host.
+   PowerShell command to run on that host — it downloads `update.ps1` to a file
+   and runs it (deliberately not piped into `iex`, see "Why not `irm … | iex`" in
+   `docs/enrollment.md`), updates the installed agent in place, keeps its
+   token/identity and never enrolls a second agent. Docker / unmanaged agents
+   re-run their installer on their own host.
 
 The "a newer agent has been published" line in the panel is the trigger for
 step 1 — before, there was nothing to tell an operator that a new agent existed.

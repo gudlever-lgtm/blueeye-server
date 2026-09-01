@@ -203,9 +203,12 @@ function createEnrollRouter({ artifactStore, sourceStore, binaryStore, releaseSt
     res.status(200).type('text/x-shellscript; charset=utf-8').send(script);
   }));
 
-  // The Windows one-line installer (PowerShell). Same contract as install.sh but
-  // for hosts where `curl … | sh` cannot run: fetched with `irm … | iex`. 404 for
-  // an unknown/expired/exhausted code so a bad code never yields a runnable script.
+  // The Windows installer (PowerShell). Same contract as install.sh but for hosts
+  // where `curl … | sh` cannot run. The operator downloads it to a file and runs
+  // the file (see winRunSteps) rather than piping it into `iex`. Served as an
+  // attachment with ?download=1, so it can also be saved straight from a browser
+  // and carried to a host that cannot reach the server. 404 for an
+  // unknown/expired/exhausted code so a bad code never yields a runnable script.
   router.get('/:code/install.ps1', asyncHandler(async (req, res) => {
     const row = await enrollmentCodesRepo.findByCode(req.params.code);
     if (!row || row.status !== 'active') {
@@ -219,12 +222,11 @@ function createEnrollRouter({ artifactStore, sourceStore, binaryStore, releaseSt
       sourceSha: sourceStore ? sourceStore.sha256 : '',
       agentVersion: sourceStore ? sourceStore.sourceVersion() : '',
     });
-    res.status(200).type('text/plain; charset=utf-8').send(script);
+    sendPs1(req, res, script, 'blueeye-install.ps1');
   }));
 
-  // The Windows UPDATE one-liner (PowerShell), served at
-  //   irm <server>/enroll/update.ps1 | iex
-  // for a host whose agent is already enrolled. It replaces the agent's CODE in
+  // The Windows UPDATER (PowerShell), served at GET /enroll/update.ps1 for a host
+  // whose agent is already enrolled. It replaces the agent's CODE in
   // place and never enrolls, so — unlike install.ps1 — it needs no enrollment code
   // and cannot produce a second agent: the script aborts on a host with no
   // installed, enrolled agent. Public for the same reason as install.ps1 (the host
@@ -242,18 +244,29 @@ function createEnrollRouter({ artifactStore, sourceStore, binaryStore, releaseSt
       sourceSha: sha,
       agentVersion: sourceStore.sourceVersion ? sourceStore.sourceVersion() : '',
     });
-    res.status(200).type('text/plain; charset=utf-8').send(script);
+    sendPs1(req, res, script, 'blueeye-update.ps1');
   });
 
   // The Windows uninstaller (PowerShell) — the analogue of uninstall.sh, so a
-  // Windows host removes the agent with
-  //   irm <server>/enroll/uninstall.ps1 | iex
-  // rather than a bash `curl … | sudo sh`. No code needed; static + best-effort.
+  // Windows host removes the agent by downloading and running this script rather
+  // than a bash `curl … | sudo sh`. No code needed; static + best-effort.
   router.get('/uninstall.ps1', (req, res) => {
-    res.status(200).type('text/plain; charset=utf-8').send(renderUninstallPs1());
+    sendPs1(req, res, renderUninstallPs1(), 'blueeye-uninstall.ps1');
   });
 
   return router;
+}
+
+// Send a generated PowerShell script. text/plain by default so it can simply be
+// read in a browser; with ?download=1 it comes back as a named attachment instead,
+// which is how an operator saves it to disk — either to inspect it before running,
+// or to carry it to a host that cannot reach this server itself.
+function sendPs1(req, res, script, fileName) {
+  res.status(200).type('text/plain; charset=utf-8');
+  if (req.query.download) {
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+  }
+  res.send(script);
 }
 
 module.exports = { createEnrollRouter, resolveServerUrl };

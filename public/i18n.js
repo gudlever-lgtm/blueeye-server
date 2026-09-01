@@ -190,6 +190,15 @@
       'agentUpdate.win.error': 'Could not build the update command: {message}',
       'agentUpdate.close': 'Close',
 
+      // Windows install/update: the command downloads the script to a file and
+      // runs the file, rather than piping it into PowerShell.
+      'enroll.win.note': 'The command saves the installer to a file and then runs that file. Nothing is piped straight into PowerShell, so antivirus and network intrusion detection can inspect the script instead of blocking it as a PowerShell stager.',
+      'enroll.win.stepsSummary': 'Run it in two steps (read the script before running it)',
+      'enroll.win.step1': '1. Download the script',
+      'enroll.win.step2': '2. Run it',
+      'enroll.win.copy': 'Copy',
+      'enroll.win.saveHint': 'If the host cannot download it at all, open {url} in a browser, save the file onto the host and run it there.',
+
       // Shared
       'common.retry': 'Retry',
       'common.cancel': 'Cancel',
@@ -374,6 +383,13 @@
       'agentUpdate.win.buttonTitle': 'Hent PowerShell-kommandoen, der opdaterer denne Windows-agent på stedet (uden ny tilmelding)',
       'agentUpdate.win.error': 'Kunne ikke danne opdateringskommandoen: {message}',
       'agentUpdate.close': 'Luk',
+
+      'enroll.win.note': 'Kommandoen gemmer installationsscriptet i en fil og kører derefter filen. Intet sendes direkte videre til PowerShell, så antivirus og netværksovervågning kan nå at kigge scriptet igennem i stedet for at blokere det som en PowerShell-stager.',
+      'enroll.win.stepsSummary': 'Kør den i to trin (læs scriptet, før du kører det)',
+      'enroll.win.step1': '1. Hent scriptet',
+      'enroll.win.step2': '2. Kør det',
+      'enroll.win.copy': 'Kopiér',
+      'enroll.win.saveHint': 'Hvis maskinen slet ikke kan hente det, så åbn {url} i en browser, gem filen på maskinen og kør den derfra.',
 
       'common.retry': 'Prøv igen',
       'common.cancel': 'Annullér',

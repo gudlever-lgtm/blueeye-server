@@ -5,7 +5,8 @@
 // The Windows counterpart of installScript.js. Windows PowerShell cannot run the
 // POSIX `curl -sSL <url>/install.sh | sh` one-liner (`curl` is an alias for
 // Invoke-WebRequest with different flags, and there is no `sh`), so Windows hosts
-// get their own self-contained script fetched with `irm <url>/install.ps1 | iex`.
+// get their own self-contained script, which is downloaded to a file and then run
+// (see winRunSteps for why it is downloaded to a file and not piped into `iex`).
 //
 // Like the shell installer it bakes everything in (server URL, cert fingerprint,
 // one-time code, expected SHA-256 of the agent SOURCE bundle) and:
@@ -25,7 +26,7 @@
 //
 // Windows self-update is intentionally NOT wired into the agent: it only accepts
 // the server's push-update command under systemd (see blueeye-agent runtime.js).
-// A Windows host upgrades by running the UPDATE one-liner instead — see
+// A Windows host upgrades by running the UPDATE command instead — see
 // renderUpdatePs1 below, served at GET /enroll/update.ps1. That script replaces
 // the code of an ALREADY-ENROLLED agent in place; it never enrolls, so it needs
 // no enrollment code and never produces a second agent on the server.
@@ -40,11 +41,11 @@ function psSq(value) {
   return String(value == null ? '' : value).replace(/'/g, "''");
 }
 
-// A single-line PowerShell prelude that makes the `irm …/install.ps1 | iex`
-// bootstrap itself work against an on-prem server: force TLS 1.2 (5.1 defaults to
+// A single-line PowerShell prelude that makes the bootstrap download of
+// install.ps1 work against an on-prem server: force TLS 1.2 (5.1 defaults to
 // TLS 1.0) and, when the cert fingerprint is known, pin the self-signed leaf to
 // it so the bootstrap fetch is authenticated (no MITM of install.ps1) rather than
-// blindly trusted. Contains NO double quotes, so it embeds safely inside a
+// blindly trusted. Contains NO double quotes, so it also embeds safely inside a
 // `powershell -Command "…"` argument. Ends with ';' so a fetch can follow.
 function winSecurityPrelude(certFingerprint) {
   const tls = '[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072;';
@@ -53,6 +54,40 @@ function winSecurityPrelude(certFingerprint) {
   const fpHex = fp.replace(/:/g, '').toLowerCase();
   const pin = `[Net.ServicePointManager]::ServerCertificateValidationCallback = { param($s,$c,$ch,$e) try { ((([Security.Cryptography.SHA256]::Create().ComputeHash($c.GetRawCertData()) | ForEach-Object { $_.ToString('x2') }) -join '') -eq '${fpHex}') } catch { $false } };`;
   return `${tls} ${pin}`;
+}
+
+// How an operator fetches and runs one of this server's PowerShell scripts:
+// download it to a FILE, then run the file.
+//
+// Deliberately NOT `irm <url> | iex`. Piping a downloaded script straight into
+// the interpreter — normally behind `powershell -NoProfile -ExecutionPolicy
+// Bypass -Command` — is the exact shape of a PowerShell stager, so it is what
+// intrusion detection and endpoint AV look for. Emerging Threats ships a rule for
+// the flag combination alone ("ET ATTACK_RESPONSE PowerShell NoProfile Command
+// Received In Powershell Stagers"), and it fires the moment the command text
+// crosses the wire in an HTTP response — including the dashboard page that shows
+// an operator the install command. The customer then sees an intrusion alert
+// naming their own BlueEyes server, and the install itself gets blocked on the
+// host. Both are false positives, and both are avoidable.
+//
+// Downloading to a file gets the same result without the stager shape: the script
+// lands on disk where AMSI and antivirus can scan it, an operator can read it
+// before running it, and it can be allowlisted by path. Nothing is encoded or
+// hidden. The execution policy is relaxed for THIS PowerShell process only
+// (-Scope Process), which needs no admin rights and leaves the machine's policy
+// alone, and -NoProfile is gone: it bought nothing here, and it is the literal
+// token the IPS rule matches on.
+//
+// Returns the two steps separately (for the dashboard, which shows them as two
+// lines) plus the same thing joined into one pasteable line. Both are meant for
+// an ELEVATED PowerShell prompt — unlike the old form they are not wrapped in
+// `powershell -Command "…"`, so cmd.exe is not a supported host for them.
+function winRunSteps({ serverUrl, path, fileName, certFingerprint = '' } = {}) {
+  const url = `${String(serverUrl == null ? '' : serverUrl).replace(/\/+$/, '')}${path}`;
+  const tmp = `"$env:TEMP\\${fileName}"`;
+  const download = `${winSecurityPrelude(certFingerprint)} Invoke-WebRequest -UseBasicParsing -Uri '${psSq(url)}' -OutFile ${tmp}`;
+  const run = `Set-ExecutionPolicy Bypass -Scope Process -Force; & ${tmp}`;
+  return { url, file: `$env:TEMP\\${fileName}`, download, run, oneLiner: `${download}; ${run}` };
 }
 
 // PowerShell shared by the installer and the updater: friendly Info/Fail output,
@@ -122,6 +157,14 @@ function renderInstallPs1({
   agentVersion = '',
 } = {}) {
   const fp = normalizeFingerprint(certFingerprint);
+  // The commands this script prints back to the operator (how it was started, how
+  // to undo it). Built here rather than assembled from $ServerUrl at runtime so
+  // they are byte-for-byte the ones the dashboard shows — and so the script body
+  // itself never carries an `irm … | iex` stager pattern for an IPS to flag on its
+  // way to the host. They go into single-quoted PowerShell literals, so the
+  // $env:TEMP in them stays literal instead of expanding as the line is printed.
+  const installCmd = winRunSteps({ serverUrl, path: `/enroll/${code}/install.ps1`, fileName: 'blueeye-install.ps1', certFingerprint }).oneLiner;
+  const uninstallCmd = winRunSteps({ serverUrl, path: '/enroll/uninstall.ps1', fileName: 'blueeye-uninstall.ps1', certFingerprint }).oneLiner;
   // NB: written to avoid JS template-literal collisions — PowerShell `$var` is
   // fine (only `${` would interpolate in JS, and we never use PS brace-vars), and
   // no backticks are used (PowerShell's line-continuation char clashes with the
@@ -130,7 +173,7 @@ function renderInstallPs1({
 # BlueEyes agent installer (Windows) — generated by blueeye-server. Do not edit by hand.
 #
 # Run from an ELEVATED PowerShell (Administrator):
-#   powershell -NoProfile -ExecutionPolicy Bypass -Command "irm ${psSq(serverUrl)}/enroll/${psSq(code)}/install.ps1 | iex"
+#   ${installCmd}
 #
 # Everything needed is embedded below: the server URL, the certificate fingerprint
 # to pin, your one-time enrollment code and the expected SHA-256 of the agent
@@ -161,7 +204,7 @@ if (-not $SourceSha256) {
 $node = Get-Command node -ErrorAction SilentlyContinue
 if (-not $node) {
   Fail ("Node.js was not found on this host. Install Node.js 18+ from https://nodejs.org/ (or 'winget install OpenJS.NodeJS.LTS'), reopen PowerShell, then re-run:" + [Environment]::NewLine +
-        "  powershell -NoProfile -ExecutionPolicy Bypass -Command ""irm $ServerUrl/enroll/$EnrollCode/install.ps1 | iex""")
+        '  ${psSq(installCmd)}')
 }
 $NodeExe = $node.Source
 
@@ -177,7 +220,7 @@ try {
   # Show how to undo this right up front, so an operator who needs to bail out (a
   # failed/partial install, a wrong host) always has the removal command to hand —
   # without hunting for it at the very end of a long install.
-  Info "to remove the agent at any time, run (elevated):  powershell -NoProfile -ExecutionPolicy Bypass -Command ""irm $ServerUrl/enroll/uninstall.ps1 | iex"""
+  Info ('to remove the agent at any time, run (elevated):  ${psSq(uninstallCmd)}')
 
   $Tarball = Join-Path $Tmp 'agent-source.tgz'
   Info "downloading agent source from $ServerUrl/enroll/agent-source.tgz"
@@ -312,7 +355,7 @@ try {
   # The false literal below is backtick-escaped so PowerShell prints it verbatim:
   # an un-escaped false inside this double-quoted string expands to the word
   # "False", producing a broken "-Confirm:False" the operator cannot run.
-  Info "remove it:  powershell -NoProfile -ExecutionPolicy Bypass -Command ""irm $ServerUrl/enroll/uninstall.ps1 | iex""  (or: Unregister-ScheduledTask -TaskName $ServiceName -Confirm:\`$false ; Remove-Item -Recurse -Force '$InstallDir','$StateDir')"
+  Info ('remove it:  ${psSq(uninstallCmd)}' + "  (or: Unregister-ScheduledTask -TaskName $ServiceName -Confirm:\`$false ; Remove-Item -Recurse -Force '$InstallDir','$StateDir')")
 } finally {
   Remove-Item -Recurse -Force $Tmp -ErrorAction SilentlyContinue
 }
@@ -342,11 +385,12 @@ function renderUpdatePs1({
   agentVersion = '',
 } = {}) {
   const fp = normalizeFingerprint(certFingerprint);
+  const updateCmd = winRunSteps({ serverUrl, path: '/enroll/update.ps1', fileName: 'blueeye-update.ps1', certFingerprint }).oneLiner;
   return `#Requires -Version 5.1
 # BlueEyes agent updater (Windows) — generated by blueeye-server. Do not edit by hand.
 #
 # Run from an ELEVATED PowerShell (Administrator) on a host that ALREADY runs the agent:
-#   powershell -NoProfile -ExecutionPolicy Bypass -Command "irm ${psSq(serverUrl)}/enroll/update.ps1 | iex"
+#   ${updateCmd}
 #
 # Updates the installed agent in place. It does NOT enroll and does NOT need an
 # enrollment code: the token and config in the state dir are left untouched, so the
@@ -393,7 +437,7 @@ if ($AgentVersion) { Info "the server publishes v$AgentVersion" }
 $node = Get-Command node -ErrorAction SilentlyContinue
 if (-not $node) {
   Fail ("Node.js was not found on this host. Install Node.js 18+ from https://nodejs.org/ (or 'winget install OpenJS.NodeJS.LTS'), reopen PowerShell, then re-run:" + [Environment]::NewLine +
-        "  powershell -NoProfile -ExecutionPolicy Bypass -Command ""irm $ServerUrl/enroll/update.ps1 | iex""")
+        '  ${psSq(updateCmd)}')
 }
 $NodeExe = $node.Source
 
@@ -525,7 +569,7 @@ function renderUninstallPs1({ serviceName = 'blueeye-agent' } = {}) {
   return `#Requires -Version 5.1
 # BlueEyes agent uninstaller (Windows) — generated by blueeye-server.
 # Run from an ELEVATED PowerShell (Administrator):
-#   powershell -NoProfile -ExecutionPolicy Bypass -Command "irm <server>/enroll/uninstall.ps1 | iex"
+#   Invoke-WebRequest -UseBasicParsing -Uri '<server>/enroll/uninstall.ps1' -OutFile "$env:TEMP\\blueeye-uninstall.ps1"; Set-ExecutionPolicy Bypass -Scope Process -Force; & "$env:TEMP\\blueeye-uninstall.ps1"
 $ErrorActionPreference = 'Continue'
 
 $ServiceName = '${psSq(serviceName)}'
@@ -566,4 +610,4 @@ if ($leftover) {
 `;
 }
 
-module.exports = { renderInstallPs1, renderUpdatePs1, winSecurityPrelude, renderUninstallPs1 };
+module.exports = { renderInstallPs1, renderUpdatePs1, winSecurityPrelude, winRunSteps, renderUninstallPs1 };

@@ -1,5 +1,61 @@
 # Changelog
 
+## 0.115.0 — The Windows install command no longer looks like a PowerShell stager
+
+A customer's IPS fired on their own BlueEyes server:
+
+```
+IPS Alert 2: Potentially Bad Traffic. Signature ET ATTACK_RESPONSE PowerShell
+NoProfile Command Received In Powershell Stagers.
+From: <server>:3000, to: <operator PC>, protocol: TCP
+```
+
+Nothing was compromised. The Windows install command we handed out was
+`powershell -NoProfile -ExecutionPolicy Bypass -Command "irm <url>/install.ps1 |
+iex"` — a download cradle, which is the shape every PowerShell stager has. The
+Emerging Threats rule matches that flag combination inside an HTTP response body,
+so it went off on the **dashboard response** that showed an operator the command,
+over cleartext `http://…:3000`. On the host the same pattern is what endpoint AV
+blocks, which is the other half of why the agent was hard to get installed.
+
+The command now downloads the script and runs the file:
+
+```
+<TLS/pin prelude> Invoke-WebRequest -UseBasicParsing -Uri '<url>/install.ps1' -OutFile "$env:TEMP\blueeye-install.ps1"; Set-ExecutionPolicy Bypass -Scope Process -Force; & "$env:TEMP\blueeye-install.ps1"
+```
+
+- **The script lands on disk before it runs**, so AMSI and antivirus can scan it,
+  an operator can read it first, and it can be allowlisted by path.
+- **`Set-ExecutionPolicy Bypass -Scope Process`** replaces the
+  `-ExecutionPolicy Bypass` flag: this process only, no admin rights needed, the
+  machine's policy untouched.
+- **`-NoProfile` is gone.** It bought nothing in an elevated admin shell, and it
+  is the literal token the rule matches on.
+- The same applies to the **update** and **uninstall** commands, and to the
+  generated scripts themselves — their own comments and hints used to spell the
+  cradle out, so downloading `install.ps1` tripped the rule a second time.
+
+Nothing is encoded or hidden, and integrity is unchanged: the download is still
+pinned to the server's certificate fingerprint when one is configured, and the
+agent bundle is still verified against the SHA-256 embedded in the script.
+
+Around it:
+
+- `GET /api/enroll/command` and `/api/enroll/update-command` return `steps`
+  (`download` / `run` / `scriptUrl` / `scriptFile`) beside `oneLiner`, and the
+  dashboard offers **"Run it in two steps"** so an operator can read the script
+  in between.
+- `install.ps1`, `update.ps1` and `uninstall.ps1` accept **`?download=1`** and come
+  back as a named attachment — for a host that cannot fetch the script itself and
+  needs it carried over.
+- The command is now meant for an **elevated PowerShell** specifically; it is no
+  longer wrapped in `powershell -Command "…"`, so `cmd.exe` is not a host for it.
+
+If the IPS alert is what you are chasing: also put the dashboard behind TLS. The
+command was only readable on the wire because it crossed the network in cleartext
+on port 3000. `docs/enrollment.md` has the full reasoning under
+**Why not `irm … | iex`**.
+
 ## 0.114.1 — Troubleshooting stops loading 28 000 alarms to draw four numbers
 
 The Troubleshooting tab took the better part of a minute to paint on a busy

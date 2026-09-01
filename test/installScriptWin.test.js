@@ -92,7 +92,7 @@ test('renderInstallPs1 prints the uninstall command up front, not only at the en
   const downloadIdx = lines.findIndex((l) => /downloading agent source/.test(l));
   assert.ok(earlyIdx !== -1, 'must echo an uninstall hint');
   assert.ok(earlyIdx < downloadIdx, 'uninstall hint must come before the download line');
-  assert.match(lines[earlyIdx], /uninstall\.ps1 \| iex/);
+  assert.match(lines[earlyIdx], /uninstall\.ps1'' -OutFile/);
 });
 
 test('renderInstallPs1 makes the SYSTEM service observable — captures the agent log and shows it', () => {
@@ -210,7 +210,7 @@ test('renderUpdatePs1 carries no enrollment code and never enrolls', () => {
   assert.match(script, /\$ServerUrl\s*=\s*'https:\/\/blueeye\.example\.dk'/);
   assert.match(script, new RegExp(`\\$SourceSha256\\s*=\\s*'${SHA}'`));
   assert.match(script, /\$AgentVersion\s*=\s*'1\.4\.0'/);
-  assert.match(script, /enroll\/update\.ps1 \| iex/); // the one-liner it documents
+  assert.match(script, /enroll\/update\.ps1' -OutFile/); // the command it documents
 });
 
 test('renderUpdatePs1 refuses to run where there is no installed, enrolled agent', () => {

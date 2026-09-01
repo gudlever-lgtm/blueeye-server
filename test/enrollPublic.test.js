@@ -179,6 +179,53 @@ test('GET /enroll/:code/install.ps1 returns a PowerShell script for an active co
   assert.ok(!/curl -sSL/.test(res.text));
 });
 
+// The three generated PowerShell scripts travel to the host over HTTP, and their
+// own comments/hints used to spell out `powershell -NoProfile … -Command "irm … |
+// iex"`. That string is what an IPS matches on ("ET ATTACK_RESPONSE PowerShell
+// NoProfile Command Received In Powershell Stagers"), so a customer downloading
+// the installer saw an intrusion alert naming their own BlueEyes server. Keep the
+// stager shape out of the bodies as well as out of the command we hand out.
+test('the generated PowerShell scripts carry no stager pattern in their own text', async () => {
+  const app = makeApp({ agentSourceStore: makeSourceStore({ sha256: 's'.repeat(64) }), enrollmentCodesRepo: activeCode() });
+  for (const url of ['/enroll/GOOD/install.ps1', '/enroll/update.ps1', '/enroll/uninstall.ps1']) {
+    const res = await request(app).get(url);
+    assert.equal(res.status, 200, url);
+    assert.ok(!/-NoProfile/i.test(res.text), `${url} must not spell out -NoProfile`);
+    assert.ok(!/\|\s*iex\b|Invoke-Expression/i.test(res.text), `${url} must not pipe a download into the interpreter`);
+  }
+});
+
+// An operator whose AV blocks the download, or whose host cannot reach the server
+// at all, saves the script from a browser and carries it over.
+test('GET /enroll/:code/install.ps1?download=1 comes back as a named attachment', async () => {
+  const app = makeApp({ agentSourceStore: makeSourceStore({ sha256: 's'.repeat(64) }), enrollmentCodesRepo: activeCode() });
+  const res = await request(app).get('/enroll/GOOD/install.ps1?download=1');
+  assert.equal(res.status, 200);
+  assert.equal(res.headers['content-disposition'], 'attachment; filename="blueeye-install.ps1"');
+  assert.match(res.text, /\$EnrollCode\s*=\s*'GOOD'/);
+  // Without the flag it stays inline, so it can simply be read in a browser.
+  const inline = await request(app).get('/enroll/GOOD/install.ps1');
+  assert.equal(inline.headers['content-disposition'], undefined);
+});
+
+test('GET /enroll/update.ps1 and /enroll/uninstall.ps1 honour ?download=1 too', async () => {
+  const app = makeApp({ agentSourceStore: makeSourceStore({ sha256: 'u'.repeat(64) }) });
+  const upd = await request(app).get('/enroll/update.ps1?download=1');
+  assert.equal(upd.status, 200);
+  assert.equal(upd.headers['content-disposition'], 'attachment; filename="blueeye-update.ps1"');
+  const uni = await request(app).get('/enroll/uninstall.ps1?download=1');
+  assert.equal(uni.status, 200);
+  assert.equal(uni.headers['content-disposition'], 'attachment; filename="blueeye-uninstall.ps1"');
+});
+
+// A 404 must stay a plain 404 — never an attachment, and never a runnable script.
+test('GET /enroll/:code/install.ps1?download=1 still 404s for a bad code', async () => {
+  const app = makeApp({ enrollmentCodesRepo: activeCode() });
+  const res = await request(app).get('/enroll/EXPIRED/install.ps1?download=1');
+  assert.equal(res.status, 404);
+  assert.equal(res.headers['content-disposition'], undefined);
+});
+
 test('GET /enroll/:code/install.ps1 404s for an unknown/expired code', async () => {
   const app = makeApp({ enrollmentCodesRepo: activeCode() });
   assert.equal((await request(app).get('/enroll/EXPIRED/install.ps1')).status, 404);

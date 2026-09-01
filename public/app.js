@@ -1842,7 +1842,9 @@ async function showWindowsUpdateCommand(a, target) {
       el('pre', { class: 'enroll-cmd' }, oneLiner),
       el('button', { class: 'small', onclick: () => { copyText(oneLiner); } }, t('agentUpdate.win.copy'))),
     el('p', { class: 'muted small' }, t('agentUpdate.win.run', { host: a.hostname })),
+    el('p', { class: 'muted small' }, t('enroll.win.note')),
     el('p', { class: 'muted small' }, t('agentUpdate.win.keepsIdentity')),
+    enrollWinStepsBlock(data.steps),
     el('div', { class: 'form-actions' },
       el('button', { class: 'small ghost', onclick: () => manual.classList.toggle('hidden') }, t('agentUpdate.win.manual')),
       el('button', { class: 'ghost', onclick: closeModal }, t('agentUpdate.close'))),
@@ -10851,7 +10853,8 @@ function renderEnrollResult(host, data, cfg, regen) {
   const os = data.os || 'linux';
   let runNote;
   if (os === 'windows') {
-    const bits = ['Run this in an ', el('strong', {}, 'elevated PowerShell (Administrator)'), ' on the Windows host. It forces TLS 1.2 and installs the agent as a scheduled task that starts at boot.'];
+    const bits = ['Run this in an ', el('strong', {}, 'elevated PowerShell (Administrator)'), ' on the Windows host. It forces TLS 1.2 and installs the agent as a scheduled task that starts at boot.',
+      el('br'), el('span', {}, t('enroll.win.note'))];
     // Without a pinned cert fingerprint, Windows PowerShell rejects a self-signed
     // server cert — tell the operator how to make the download trust it.
     if (!data.certFingerprint) {
@@ -10870,7 +10873,30 @@ function renderEnrollResult(host, data, cfg, regen) {
     el('div', { class: 'form-actions' }, manualToggle, regenBtn),
     manual,
     meta,
+    os === 'windows' ? enrollWinStepsBlock(data.steps) : null,
     os === 'linux' ? enrollAnsibleBlock(oneLiner) : null);
+}
+
+// The Windows install shown as the two steps it really is: download the script,
+// then run the file. The one-liner above does both in a single paste; this block
+// lets an operator stop in between and read the script first — and gives them a
+// way through when the scripted download itself is blocked (a proxy, or endpoint
+// AV that will not let PowerShell fetch anything) and the file has to be saved
+// from a browser and carried over. Windows only, and only when the server sent
+// the split steps.
+function enrollWinStepsBlock(steps) {
+  if (!steps || !steps.download || !steps.run) return null;
+  const step = (label, cmd) => el('div', {},
+    el('p', { class: 'muted small' }, label),
+    el('div', { class: 'enroll-cmd-row' },
+      el('pre', { class: 'enroll-cmd' }, cmd),
+      el('button', { class: 'small', onclick: () => copyText(cmd) }, t('enroll.win.copy'))));
+  return el('details', { class: 'enroll-ansible' },
+    el('summary', {}, t('enroll.win.stepsSummary')),
+    step(t('enroll.win.step1'), steps.download),
+    step(t('enroll.win.step2'), steps.run),
+    // ?download=1 so the browser saves the file instead of rendering it as text.
+    el('p', { class: 'muted small' }, t('enroll.win.saveHint', { url: `${steps.scriptUrl}?download=1` })));
 }
 
 // Copy-paste Ansible task running the same one-liner. `creates:` makes it

@@ -293,3 +293,52 @@ test('the generated PowerShell scripts are pure ASCII (5.1 parses BOM-less files
   // The typographic-quote failure mode specifically: no smart quotes anywhere.
   assert.ok(!/[\u2018\u2019\u201c\u201d]/.test(scripts.install));
 });
+
+// A customer ran the installer from a plain (non-admin) PowerShell window: the
+// agent enrolled - consuming the one-time code - and only THEN hit
+// "Register-ScheduledTask: Access is denied", followed by a cascading
+// "Start-ScheduledTask: cannot find the file". The ScheduledTasks cmdlets are a
+// CDXML module with their own $ErrorActionPreference, so the script-level 'Stop'
+// never reached them. Both must be handled: check elevation before anything
+// irreversible, and make a failed registration terminate with a clear message.
+test('renderInstallPs1 refuses a non-elevated session BEFORE enrolling, with the retry command', () => {
+  const script = renderInstallPs1({ serverUrl: 'https://s.example', code: 'CODE', sourceSha: SHA });
+  assert.match(script, /function Assert-Elevated/);
+  assert.match(script, /WindowsBuiltInRole\]::Administrator/);
+  const check = script.indexOf("Assert-Elevated '");
+  assert.ok(check > 0, 'calls Assert-Elevated');
+  assert.ok(check < script.indexOf('agent-source.tgz'), 'elevation is checked before the download');
+  assert.ok(check < script.indexOf('$enrollArgs'), 'elevation is checked before enrollment consumes the code');
+  const call = script.split('\n').find((l) => l.startsWith('Assert-Elevated '));
+  assert.match(call, /install\.ps1/, 'the retry hint is the install one-liner');
+  assert.match(script, /Run as administrator/);
+});
+
+test('renderInstallPs1 makes a denied task registration fail loudly (explicit -ErrorAction Stop, CDXML module)', () => {
+  const script = renderInstallPs1({ serverUrl: 'https://s.example', code: 'CODE', sourceSha: SHA });
+  const reg = script.split('\n').find((l) => /Register-ScheduledTask -TaskName/.test(l));
+  assert.match(reg, /-ErrorAction Stop/);
+  const start = script.split('\n').find((l) => /^\s*Start-ScheduledTask -TaskName \$ServiceName/.test(l));
+  assert.match(start, /-ErrorAction Stop/);
+  assert.match(script, /could not register\/start scheduled task/);
+  // "Access is denied" gets its own diagnosis (elevation state + Task Scheduler service).
+  assert.match(script, /Access is denied/);
+  assert.match(script, /Get-Service -Name Schedule/);
+  // The recovery hint: the token is already stored, so an elevated re-run skips enrollment.
+  assert.match(script, /enrollment is skipped when the token already exists/);
+});
+
+test('renderUpdatePs1 and renderUninstallPs1 refuse a non-elevated session too', () => {
+  const upd = renderUpdatePs1({ serverUrl: 'https://s.example', sourceSha: SHA });
+  const call = upd.split('\n').find((l) => l.startsWith('Assert-Elevated '));
+  assert.ok(call, 'update calls Assert-Elevated');
+  assert.match(call, /update\.ps1/);
+  assert.ok(upd.indexOf("Assert-Elevated '") < upd.indexOf('agent-source.tgz'));
+  for (const l of upd.split('\n').filter((x) => /(Register|Start)-ScheduledTask -TaskName/.test(x))) {
+    assert.match(l, /-ErrorAction Stop/, l);
+  }
+  const uni = renderUninstallPs1();
+  assert.match(uni, /WindowsBuiltInRole\]::Administrator/);
+  assert.ok(uni.indexOf('Administrator') < uni.indexOf('Unregister-ScheduledTask'), 'uninstall checks elevation before removing anything');
+  assert.match(uni, /exit 1/);
+});

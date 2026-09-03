@@ -122,7 +122,10 @@ different flags, and there is no `sh`):
   It requires Node.js, verifies the source checksum, and registers a
   **Scheduled Task** (SYSTEM, at boot, restart-on-failure) as the service.
   The command downloads the script to a **file** and runs the file — see
-  [Why not `irm … | iex`](#why-not-irm--iex) below.
+  [Why not `irm … | iex`](#why-not-irm--iex) below. The served `.ps1` files start
+  with a UTF-8 BOM and contain only ASCII: Windows PowerShell 5.1 reads a BOM-less
+  script in the host's ANSI code page, and a stray UTF-8 em-dash decodes to a `”`
+  that PowerShell treats as a quote — the whole file then fails to parse.
 
 Windows/macOS agents don't self-update (that path is systemd-only).
 

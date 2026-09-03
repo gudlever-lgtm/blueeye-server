@@ -261,12 +261,23 @@ function createEnrollRouter({ artifactStore, sourceStore, binaryStore, releaseSt
 // read in a browser; with ?download=1 it comes back as a named attachment instead,
 // which is how an operator saves it to disk — either to inspect it before running,
 // or to carry it to a host that cannot reach this server itself.
+//
+// The body is prefixed with a UTF-8 BOM. Windows PowerShell 5.1 reads a BOM-less
+// .ps1 in the system ANSI code page (Windows-1252 on a Danish/Western host), so
+// any UTF-8 multi-byte character in the script is mis-decoded — an em-dash comes
+// out as "â€”", whose trailing "”" (U+201D) PowerShell accepts as a closing
+// double quote, and the whole file fails to parse ("Unexpected token", "Missing
+// closing ')'"). The BOM makes 5.1 decode the file as UTF-8 regardless of the
+// host's code page; PowerShell 7 and `Invoke-WebRequest -OutFile` are unaffected
+// by it. The bodies are also kept pure ASCII (see installScriptWin.js), so this
+// is a second line of defence for injected values such as an IDN server URL.
+const UTF8_BOM = '\ufeff';
 function sendPs1(req, res, script, fileName) {
   res.status(200).type('text/plain; charset=utf-8');
   if (req.query.download) {
     res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
   }
-  res.send(script);
+  res.send(UTF8_BOM + script);
 }
 
 module.exports = { createEnrollRouter, resolveServerUrl };

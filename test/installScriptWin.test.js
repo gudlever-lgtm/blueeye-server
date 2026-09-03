@@ -272,3 +272,24 @@ test('renderUpdatePs1 uses PowerShell idioms and escapes injected values', () =>
   assert.ok(!/curl -sSL/.test(script) && !/\|\s*sh\b/.test(script));
   assert.match(script, /\$ServerUrl\s*=\s*'http:\/\/x''; rm -rf \/'/);
 });
+
+// Windows PowerShell 5.1 reads a BOM-less .ps1 in the host's ANSI code page. A
+// UTF-8 em-dash in the script then decodes as "â€”", and U+201D ("”") is a quote
+// character to PowerShell — a customer hit exactly this: "Unexpected token 'set'
+// in expression", "Missing closing ')'", on the Fetch-Or-Explain hint lines.
+// Every generated script must therefore be pure ASCII.
+test('the generated PowerShell scripts are pure ASCII (5.1 parses BOM-less files as ANSI)', () => {
+  const scripts = {
+    install: renderInstallPs1({ serverUrl: 'https://blueeye.example.dk', code: 'CODE', certFingerprint: FP, sourceSha: SHA, agentVersion: '1.2.3' }),
+    installNoSource: renderInstallPs1({ serverUrl: 'https://blueeye.example.dk', code: 'CODE' }),
+    update: renderUpdatePs1({ serverUrl: 'https://blueeye.example.dk', certFingerprint: FP, sourceSha: SHA, agentVersion: '1.2.3' }),
+    updateNoSource: renderUpdatePs1({ serverUrl: 'https://blueeye.example.dk' }),
+    uninstall: renderUninstallPs1(),
+  };
+  for (const [name, script] of Object.entries(scripts)) {
+    const bad = script.match(/[^\x00-\x7f]/g);
+    assert.equal(bad, null, `${name}.ps1 contains non-ASCII characters: ${JSON.stringify(bad)}`);
+  }
+  // The typographic-quote failure mode specifically: no smart quotes anywhere.
+  assert.ok(!/[\u2018\u2019\u201c\u201d]/.test(scripts.install));
+});

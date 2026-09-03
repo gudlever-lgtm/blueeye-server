@@ -195,6 +195,22 @@ test('the generated PowerShell scripts carry no stager pattern in their own text
   }
 });
 
+// Windows PowerShell 5.1 decodes a BOM-less .ps1 in the system ANSI code page,
+// which mangles any UTF-8 multi-byte character and (via U+201D, a PowerShell
+// quote) turned the installer into a parse error on a customer host. A UTF-8 BOM
+// makes 5.1 read the file as UTF-8; the bodies are ASCII on top of that.
+test('the generated PowerShell scripts start with a UTF-8 BOM and are otherwise ASCII', async () => {
+  const app = makeApp({ agentSourceStore: makeSourceStore({ sha256: 's'.repeat(64) }), enrollmentCodesRepo: activeCode() });
+  for (const url of ['/enroll/GOOD/install.ps1', '/enroll/update.ps1', '/enroll/uninstall.ps1', '/enroll/GOOD/install.ps1?download=1']) {
+    const res = await request(app).get(url).buffer(true).parse((r, cb) => { const c = []; r.on('data', (d) => c.push(d)); r.on('end', () => cb(null, Buffer.concat(c))); });
+    assert.equal(res.status, 200, url);
+    const body = res.body;
+    assert.deepEqual([...body.subarray(0, 3)], [0xef, 0xbb, 0xbf], `${url} must start with the UTF-8 BOM`);
+    assert.ok(body.subarray(3).every((b) => b < 0x80), `${url} body must be pure ASCII after the BOM`);
+    assert.match(body.subarray(3, 40).toString('utf8'), /^#Requires -Version 5\.1/, `${url} script starts right after the BOM`);
+  }
+});
+
 // An operator whose AV blocks the download, or whose host cannot reach the server
 // at all, saves the script from a browser and carries it over.
 test('GET /enroll/:code/install.ps1?download=1 comes back as a named attachment', async () => {

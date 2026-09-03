@@ -121,6 +121,12 @@ different flags, and there is no `sh`):
 
   It requires Node.js, verifies the source checksum, and registers a
   **Scheduled Task** (SYSTEM, at boot, restart-on-failure) as the service.
+  All three scripts (install/update/uninstall) check for elevation first and
+  stop with a one-line message if the window is not elevated — before the
+  installer enrolls, so a one-time code is never consumed by a run that cannot
+  register the task. If an older installer got that far (enrolled, then
+  `Register-ScheduledTask: Access is denied`), re-run the same script from an
+  elevated PowerShell: enrollment is skipped when the token already exists.
   The command downloads the script to a **file** and runs the file — see
   [Why not `irm … | iex`](#why-not-irm--iex) below. The served `.ps1` files start
   with a UTF-8 BOM and contain only ASCII: Windows PowerShell 5.1 reads a BOM-less

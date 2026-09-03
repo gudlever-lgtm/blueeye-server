@@ -114,6 +114,21 @@ const PS_COMMON = `function Info([string]$m) { Write-Host "[blueeye] $m" }
 # headline hides the actual message - the opposite of a useful indicator.
 function Fail([string]$m) { [Console]::Error.WriteLine("[blueeye] ERROR: $m"); exit 1 }
 
+# Registering a scheduled task that runs as SYSTEM needs an elevated session.
+# Check it UP FRONT - before the enrollment step consumes the one-time code - so
+# a plain (non-admin) PowerShell window fails in one sentence instead of after
+# "Enrolled as agent N" with Register-ScheduledTask: Access is denied.
+function Assert-Elevated([string]$retry) {
+  $id = [Security.Principal.WindowsIdentity]::GetCurrent()
+  $principal = New-Object Security.Principal.WindowsPrincipal($id)
+  if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    Fail ("this script must run from an ELEVATED PowerShell (Administrator): it registers a scheduled task that runs as SYSTEM. Right-click PowerShell, choose 'Run as administrator', then re-run:" + [Environment]::NewLine + "  $retry")
+  }
+  # Say so in the transcript: when a later step is still denied, this line settles
+  # whether elevation was the problem.
+  Info "running elevated (Administrator): yes, as $($id.Name)"
+}
+
 # Windows PowerShell 5.1 still negotiates TLS 1.0 by default (which a modern
 # server rejects) and refuses a self-signed certificate outright - the two most
 # common on-prem failures. Force TLS 1.2, and when the server's cert fingerprint
@@ -209,6 +224,8 @@ $TokenPath  = Join-Path $StateDir 'token'
 $ConfigPath = Join-Path $StateDir 'config.json'
 
 ${PS_COMMON}
+
+Assert-Elevated '${psSq(installCmd)}'
 
 if (-not $SourceSha256) {
   Fail 'the BlueEyes server has no agent source published - set AGENT_SOURCE_DIR on the server (see docs/enrollment.md), then retry'
@@ -341,8 +358,26 @@ try {
   $trigger   = New-ScheduledTaskTrigger -AtStartup
   $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
   $settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
-  Register-ScheduledTask -TaskName $ServiceName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
-  Start-ScheduledTask -TaskName $ServiceName
+  # -ErrorAction Stop is explicit: the ScheduledTasks cmdlets come from a CDXML
+  # module with its own $ErrorActionPreference, so the script-level 'Stop' does
+  # not reach them and a denied registration would otherwise scroll past while
+  # the script carries on to Start-ScheduledTask ("cannot find the file").
+  try {
+    Register-ScheduledTask -TaskName $ServiceName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force -ErrorAction Stop | Out-Null
+    Start-ScheduledTask -TaskName $ServiceName -ErrorAction Stop
+  } catch {
+    $why = $_.Exception.Message
+    $hint = ''
+    if ($why -match 'Access is denied') {
+      # Elevation was verified above, so a denial here comes from the Task
+      # Scheduler side: its service stopped/disabled, or a policy/ACL on the task
+      # store (C:\Windows\System32\Tasks). Show what can be seen from here.
+      $svc = Get-Service -Name Schedule -ErrorAction SilentlyContinue
+      $svcState = if ($svc) { "$($svc.Status) (StartType $($svc.StartType))" } else { 'not found' }
+      $hint = " This session IS elevated, so the denial comes from Task Scheduler itself: service 'Schedule' is $svcState (it must be Running); a Group Policy or a damaged ACL on C:\Windows\System32\Tasks can also deny task creation - check that folder's permissions for SYSTEM/Administrators, and 'Event Viewer > Microsoft > Windows > TaskScheduler > Operational' for the denied registration."
+    }
+    Fail ("could not register/start scheduled task '$ServiceName': $why.$hint The agent is enrolled (token at $TokenPath) but has no service yet - fix the cause and re-run this script from an ELEVATED PowerShell (Administrator); enrollment is skipped when the token already exists.")
+  }
 
   # Give the agent a moment to boot and show what it logged, so the operator sees
   # right away whether it connected - rather than "installed OK" with no signal.
@@ -424,6 +459,8 @@ $TokenPath  = Join-Path $StateDir 'token'
 $ConfigPath = Join-Path $StateDir 'config.json'
 
 ${PS_COMMON}
+
+Assert-Elevated '${psSq(updateCmd)}'
 
 if (-not $SourceSha256) {
   Fail 'the BlueEyes server has no agent source published - set AGENT_SOURCE_DIR on the server (see docs/enrollment.md), then retry'
@@ -549,11 +586,20 @@ try {
     $trigger   = New-ScheduledTaskTrigger -AtStartup
     $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
     $settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
-    Register-ScheduledTask -TaskName $ServiceName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
+    try {
+      Register-ScheduledTask -TaskName $ServiceName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force -ErrorAction Stop | Out-Null
+    } catch {
+      Fail "could not register scheduled task '$ServiceName': $($_.Exception.Message)"
+    }
   }
 
   Info "starting '$ServiceName' on the new code ..."
-  Start-ScheduledTask -TaskName $ServiceName
+  # -ErrorAction Stop is explicit (CDXML module, own $ErrorActionPreference).
+  try {
+    Start-ScheduledTask -TaskName $ServiceName -ErrorAction Stop
+  } catch {
+    Fail "could not start scheduled task '$ServiceName': $($_.Exception.Message)"
+  }
 
   # Show what the agent logged right after the restart, so the operator sees it
   # come back up instead of a bare "updated OK".
@@ -592,6 +638,15 @@ $StateDir   = if ($env:BLUEEYE_STATE_DIR)   { $env:BLUEEYE_STATE_DIR }   else { 
 $LogDir     = if ($env:BLUEEYE_LOG_DIR)     { $env:BLUEEYE_LOG_DIR }     else { Join-Path $env:ProgramData 'BlueEyes\\logs' }
 
 function Info([string]$m) { Write-Host "[blueeye] $m" }
+
+# Unregistering the SYSTEM task and removing ProgramData dirs needs elevation;
+# every step below is best-effort, so without this check a plain window would
+# "finish" having removed nothing.
+$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+if (-not (New-Object Security.Principal.WindowsPrincipal($identity)).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+  [Console]::Error.WriteLine("[blueeye] ERROR: this script must run from an ELEVATED PowerShell (Administrator). Right-click PowerShell, choose 'Run as administrator', then re-run it.")
+  exit 1
+}
 
 Info "stopping and removing scheduled task '$ServiceName' ..."
 Stop-ScheduledTask -TaskName $ServiceName -ErrorAction SilentlyContinue | Out-Null

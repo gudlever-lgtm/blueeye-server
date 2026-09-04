@@ -34,7 +34,16 @@ const CONFIDENCE = ['exact', 'high', 'medium', 'low'];
 const CONFIDENCE_RANK = { exact: 0, high: 1, medium: 2, low: 3 };
 
 // Result kinds. `type` on a hit; also the UI's grouping key.
-const TYPES = ['ip', 'mac', 'host', 'site', 'service', 'device', 'asset', 'user'];
+const TYPES = ['ip', 'mac', 'host', 'site', 'service', 'device', 'asset', 'event', 'ticket', 'ipam', 'user'];
+
+// A ticket number as ITSM systems mint them: a short letter prefix and a run of
+// digits (INC0012345, CHG000123, RITM0042). Used for confidence, not gating —
+// the ticket resolvers also match words from a title.
+const TICKET_REF_RE = /^[a-z]{2,6}\d{3,}$/i;
+// A partial IPv4 or CIDR ("10.1.", "10.1.0.0/24", "192.168.1.0/2") — not an
+// address (the IP resolvers match exactly, by design) but exactly what an IPAM
+// prefix search answers.
+const IP_PREFIX_RE = /^\d{1,3}(\.\d{1,3}){0,3}\.?(\/\d{1,2})?$/;
 
 // Normalises the raw query: trim, collapse internal whitespace. Returns null for
 // anything unusable so the caller can 400 rather than guess.
@@ -66,6 +75,8 @@ function classify(raw) {
   const agentId = isNumeric ? Number(q) : null;
   const isAgentId = isNumeric && Number.isInteger(agentId) && agentId > 0 && agentId <= 2147483647;
   const isPort = isNumeric && agentId >= 1 && agentId <= 65535;
+  const isTicketRef = TICKET_REF_RE.test(q);
+  const isIpPrefix = !isIpExact && !isNumeric && IP_PREFIX_RE.test(q);
 
   const families = [];
   // Ordered by the spec's resolver priority. The service preserves this order
@@ -76,9 +87,18 @@ function classify(raw) {
   families.push('site');
   if (isAgentId) families.push('agentId');
   if (isPort || /^[a-z0-9+.-]{2,}$/i.test(q)) families.push('service');
+  // Events, tickets and IPAM take free text (a title, a description) as well as
+  // identifiers, so they are always worth asking. The external ones are thunks
+  // that answer [] instantly when nothing is configured.
+  families.push('event');
+  families.push('ticket');
+  families.push('ipam');
   families.push('user');    // stubbed — see resolveUser
 
-  return { q, lower, mac, isMac: Boolean(mac), isIpExact, isAgentId, agentId, isPort, port: isPort ? agentId : null, isNumeric, families };
+  return {
+    q, lower, mac, isMac: Boolean(mac), isIpExact, isIpPrefix, isAgentId, agentId, isPort,
+    port: isPort ? agentId : null, isNumeric, isTicketRef, families,
+  };
 }
 
 // Validates a query for the HTTP layer. Returns { value } or { error }.
@@ -115,7 +135,13 @@ function compareHits(a, b) {
 // resolver produces the same keys — `source` and `last_seen` in particular are
 // required, because the technician must be able to tell an answer from yesterday
 // from one from three weeks ago.
-function makeHit({ type, display_name: displayName, target, confidence, source, last_seen: lastSeen = null, detail = null }) {
+//
+// `url` is optional: a hit that lives in another system (a ServiceNow ticket, a
+// Nautobot prefix) has no screen in this product, so it carries a deep link
+// instead and the UI opens that. Only http(s) links are accepted — a connector
+// must not be able to hand the browser a javascript: URL.
+function makeHit({ type, display_name: displayName, target, confidence, source, last_seen: lastSeen = null, detail = null, url = null }) {
+  const safeUrl = typeof url === 'string' && /^https?:\/\//i.test(url) ? url : null;
   return {
     type,
     display_name: displayName,
@@ -124,6 +150,7 @@ function makeHit({ type, display_name: displayName, target, confidence, source, 
     source,
     last_seen: lastSeen || null,
     ...(detail ? { detail } : {}),
+    ...(safeUrl ? { url: safeUrl } : {}),
   };
 }
 

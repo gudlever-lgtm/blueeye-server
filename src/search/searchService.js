@@ -29,6 +29,10 @@ function createSearchService({
   lldpNeighborsRepo = null,
   discoveredDevicesRepo = null,
   cmdbSearch = null,
+  eventCasesRepo = null,
+  eventClustersRepo = null,
+  ticketSearch = null,
+  ipamSearch = null,
   logger = null,
 } = {}) {
   // Agent list is needed by nearly every resolver (to turn an id into a name and
@@ -348,7 +352,163 @@ function createSearchService({
     }));
   }
 
-  // 9. Username.
+  // 9. Events — event cases (the operator-facing unit) and cross-agent clusters.
+  //
+  // Matches an event's numeric id exactly, words from its title, and the device
+  // it sits on — the last one only for events still OPEN, because "what is going
+  // on with fw-aarhus" wants the live cases, not every resolved one since March.
+  // Reads the same list the Events tab reads (bounded, newest first) and filters
+  // in JS — same known limitation as loadAgents(), same reason.
+  const EVENT_SCAN_LIMIT = 500;
+  const EVENT_HITS_MAX = 10;
+
+  async function resolveEvent(ctx) {
+    const { lower, isNumeric, agentId } = ctx;
+    const hits = [];
+
+    if (eventCasesRepo && typeof eventCasesRepo.list === 'function') {
+      const rows = (await eventCasesRepo.list({ limit: EVENT_SCAN_LIMIT })) || [];
+      for (const ev of rows) {
+        const title = String(ev.title || '').toLowerCase();
+        const device = [ev.agentName, ev.agentHostname].filter(Boolean).map((x) => String(x).toLowerCase());
+        const open = ev.status === 'open' || ev.status === 'investigating';
+        let confidence = null;
+        let via = 'title';
+        if (isNumeric && Number(ev.id) === agentId) confidence = 'exact';
+        else if (title.startsWith(lower)) confidence = 'high';
+        else if (title.includes(lower)) confidence = 'medium';
+        else if (open && device.some((d) => d === lower || d.startsWith(lower))) { confidence = 'medium'; via = 'device'; }
+        if (!confidence) continue;
+        hits.push(makeHit({
+          type: 'event',
+          display_name: `#${ev.id} ${ev.title || ''}`.trim(),
+          target: `event:${ev.id}`,
+          confidence,
+          source: via === 'device' ? 'event_cases (open on this device)' : 'event_cases',
+          last_seen: ev.lastEventAt || ev.firstEventAt || null,
+          detail: [ev.severity, ev.status, ev.agentName || ev.agentHostname || null, ev.locationName || null]
+            .filter(Boolean).join(' · ') || null,
+        }));
+        if (hits.length >= EVENT_HITS_MAX) break;
+      }
+    }
+
+    if (eventClustersRepo && typeof eventClustersRepo.list === 'function') {
+      const rows = (await eventClustersRepo.list({ limit: 200 })) || [];
+      for (const c of rows) {
+        const cause = String(c.suspectedCommonCause || '').toLowerCase();
+        let confidence = null;
+        if (isNumeric && Number(c.id) === agentId) confidence = 'exact';
+        else if (cause && cause.startsWith(lower)) confidence = 'high';
+        else if (cause && cause.includes(lower)) confidence = 'medium';
+        if (!confidence) continue;
+        hits.push(makeHit({
+          type: 'event',
+          display_name: `Situation #${c.id}${c.suspectedCommonCause ? ` — ${c.suspectedCommonCause}` : ''}`,
+          target: `cluster:${c.id}`,
+          confidence,
+          source: 'event_clusters',
+          last_seen: c.alertLastAt || c.detectedAt || null,
+          detail: [c.status, c.alertMemberCount != null ? `${c.alertMemberCount} findings` : null, c.itsmTicketRef || null]
+            .filter(Boolean).join(' · ') || null,
+        }));
+      }
+    }
+
+    return hits;
+  }
+
+  // 10. Tickets — two sources with very different cost.
+  //
+  // (a) LOCAL: the ITSM reference a situation (event cluster) was raised as.
+  //     Typing the ticket number the service desk quoted lands on the situation
+  //     behind it, with a screen to open. Cheap, always current.
+  async function resolveTicketRef(ctx) {
+    if (!eventClustersRepo || typeof eventClustersRepo.list !== 'function') return [];
+    const { lower } = ctx;
+    const rows = (await eventClustersRepo.list({ limit: 200 })) || [];
+    const hits = [];
+    for (const c of rows) {
+      const ref = String(c.itsmTicketRef || '');
+      if (!ref) continue;
+      const r = ref.toLowerCase();
+      let confidence = null;
+      if (r === lower) confidence = 'exact';
+      else if (r.startsWith(lower)) confidence = 'high';
+      else if (r.includes(lower)) confidence = 'medium';
+      if (!confidence) continue;
+      hits.push(makeHit({
+        type: 'ticket',
+        display_name: `${ref} — Situation #${c.id}`,
+        target: `cluster:${c.id}`,
+        confidence,
+        source: 'event_clusters.itsm_ticket_ref',
+        last_seen: c.alertLastAt || c.detectedAt || null,
+        detail: [c.status, c.suspectedCommonCause || null].filter(Boolean).join(' · ') || null,
+      }));
+    }
+    return hits;
+  }
+
+  // (b) REMOTE: the customer's ITSM (ServiceNow) searched live — number, words
+  //     from the short description, and the correlation id BlueEyes stamped on
+  //     tickets it raised. Leaves the building like the CMDB resolver; a dead
+  //     ITSM is a failed source, not a failed search. Tickets have no screen
+  //     here, so each hit carries a deep link.
+  async function resolveItsm(ctx) {
+    if (typeof ticketSearch !== 'function') return [];
+    const { lower } = ctx;
+    const tickets = (await ticketSearch(ctx.q)) || [];
+    return tickets.slice(0, 10).map((t) => {
+      const number = t.number ? String(t.number) : null;
+      const confidence = number && number.toLowerCase() === lower ? 'exact'
+        : number && number.toLowerCase().startsWith(lower) ? 'high'
+          : 'medium';
+      return makeHit({
+        type: 'ticket',
+        display_name: number ? `${number} — ${t.title || ''}`.trim() : (t.title || t.id),
+        target: `ticket:${t.integrationId}:${t.id}`,
+        confidence,
+        source: `itsm:${t.source}${t.integrationName ? ` (${t.integrationName})` : ''}`,
+        last_seen: t.updatedAt || null,
+        detail: [t.state || null, t.priority ? `P${t.priority}` : null].filter(Boolean).join(' · ') || null,
+        url: t.url || null,
+      });
+    });
+  }
+
+  // 11. IPAM — prefixes and addresses from the customer's Nautobot. Answers the
+  //     question none of the local sources can: "which subnet is this, and what
+  //     is it for" — the prefix description is where the network team wrote
+  //     down what the range is. A partial IP ("10.1.") is deliberately routed
+  //     here and nowhere else. Deep-linked like tickets.
+  async function resolveIpam(ctx) {
+    if (typeof ipamSearch !== 'function') return [];
+    const { q, lower } = ctx;
+    const rows = (await ipamSearch(q)) || [];
+    return rows.slice(0, 10).map((x) => {
+      const addr = String(x.address || '');
+      const a = addr.toLowerCase();
+      // "10.1.0.5" against an address row "10.1.0.5/24" is the same host.
+      const bare = a.replace(/\/\d+$/, '');
+      const confidence = a === lower || bare === lower ? 'exact'
+        : a.startsWith(lower) ? 'high'
+          : 'medium';
+      return makeHit({
+        type: 'ipam',
+        display_name: x.description ? `${addr} — ${x.description}` : (x.dnsName ? `${addr} — ${x.dnsName}` : addr),
+        target: `ipam:${x.kind}:${x.id}`,
+        confidence,
+        source: `ipam:${x.source}`,
+        last_seen: x.updatedAt || null,
+        detail: [x.kind === 'prefix' ? 'prefix' : 'address', x.status || null, x.vrf ? `VRF ${x.vrf}` : null, x.location || null]
+          .filter(Boolean).join(' · ') || null,
+        url: x.url || null,
+      });
+    });
+  }
+
+  // 12. Username.
   //
   // NOT IMPLEMENTED — and deliberately left empty rather than approximated.
   //
@@ -385,6 +545,10 @@ function createSearchService({
     { family: 'agentId', name: 'agentId', run: resolveAgentId },
     { family: 'service', name: 'service', run: resolveService },
     { family: 'host', name: 'cmdb', run: resolveAsset },
+    { family: 'event', name: 'event', run: resolveEvent },
+    { family: 'ticket', name: 'ticketRef', run: resolveTicketRef },
+    { family: 'ticket', name: 'itsm', run: resolveItsm },
+    { family: 'ipam', name: 'ipam', run: resolveIpam },
     { family: 'user', name: 'user', run: resolveUser },
   ];
 

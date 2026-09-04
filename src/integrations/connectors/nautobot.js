@@ -167,7 +167,59 @@ function createNautobotConnector({ fetchImpl = globalThis.fetch, logger = silent
     return { ok: true, status: byTerm.status, assets };
   }
 
-  return { type, authTypes, defaultEvents, validateConfig, send, test, testConnection, search };
+  // --- IPAM search (universal search) -----------------------------------------
+  // Nautobot's IPAM objects sit under /api/ipam regardless of where the device
+  // path was pointed; the UI pages mirror the API path minus `/api`.
+  function ipamUrl(base, kind, id) {
+    return `${base}/ipam/${kind === 'prefix' ? 'prefixes' : 'ip-addresses'}/${encodeURIComponent(id)}/`;
+  }
+
+  function toIpamRow(base, kind, r) {
+    // `prefix` on a prefix row, `address` on an ip-address row (both CIDR strings).
+    const address = r.prefix || r.address || null;
+    const id = String(r.id ?? '');
+    return {
+      id,
+      kind,
+      address: address ? String(address) : null,
+      description: r.description ? String(r.description) : null,
+      status: label(r.status),
+      location: label(r.location) || label(r.site) || null,
+      vrf: label(r.vrf),
+      dnsName: r.dns_name ? String(r.dns_name) : null,
+      updatedAt: r.last_updated ? String(r.last_updated) : null,
+      url: id ? ipamUrl(base, kind, id) : null,
+    };
+  }
+
+  // IPAM search: prefixes AND ip-addresses, both through Nautobot's general `q`
+  // filter (prefix/address string, dns_name, description). The two reads are
+  // independent and a rejected one must not sink the other — an IPAM whose
+  // prefix filter is version-shy still answers "which host has 10.1.0.5".
+  // Normalises to { id, kind: 'prefix'|'ip', address, description, status,
+  // location, vrf, dnsName, updatedAt, url }[]. Returns { ok, status, detail, ipam }.
+  async function searchIpam(integration, query) {
+    const base = String(integration.baseUrl || '').replace(/\/+$/, '');
+    const q = String(query || '').trim();
+    const read = (path) => requestJson(fetchImpl, {
+      method: 'GET',
+      url: `${base}/api/ipam/${path}/?q=${encodeURIComponent(q)}&limit=10`,
+      headers: headersFor(integration),
+      timeoutMs,
+    }).catch((err) => ({ ok: false, status: 0, detail: err.message, json: null }));
+    const [prefixes, addresses] = await Promise.all([read('prefixes'), read('ip-addresses')]);
+    if (!prefixes.ok && !addresses.ok) {
+      return { ok: false, status: prefixes.status || addresses.status, detail: prefixes.detail || addresses.detail, ipam: [] };
+    }
+    const rowsOf = (res) => (res && res.ok && res.json && Array.isArray(res.json.results) ? res.json.results : []);
+    const ipam = [
+      ...rowsOf(prefixes).map((r) => toIpamRow(base, 'prefix', r)),
+      ...rowsOf(addresses).map((r) => toIpamRow(base, 'ip', r)),
+    ].filter((x) => x.id);
+    return { ok: true, status: (prefixes.ok ? prefixes : addresses).status, ipam };
+  }
+
+  return { type, authTypes, defaultEvents, validateConfig, send, test, testConnection, search, searchIpam };
 }
 
 module.exports = { createNautobotConnector };

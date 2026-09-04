@@ -49,6 +49,7 @@ const { createChangesRouter } = require('./changes');
 const { createBaselinesRouter } = require('./baselines');
 const { createChangesService } = require('../changes/changesService');
 const { createSearchService } = require('../search/searchService');
+const { makeTicketSearch, makeIpamSearch } = require('../search/externalSources');
 const { createEnrollRouter } = require('./enroll');
 const { publishSignedReleaseFromSource } = require('../enroll/publishSignedRelease');
 const { createEnrollCommandRouter } = require('./enrollCommand');
@@ -403,6 +404,15 @@ function createApiRouter({
       lldpNeighborsRepo,
       discoveredDevicesRepo,
       cmdbSearch: makeCmdbSearch({ cmdbConfigRepo, registry: cmdbConnectorRegistry, secretBox }),
+      // Events + tickets + IPAM (federated sources). The external two are thunks
+      // for the same reason as the CMDB one: credentials decrypt at call time,
+      // inside the thunk, and only there.
+      eventCasesRepo,
+      eventClustersRepo,
+      ticketSearch: makeTicketSearch({ integrationsRepo, registry: connectorRegistry, secretBox, logger }),
+      ipamSearch: makeIpamSearch({
+        cmdbConfigRepo, cmdbRegistry: cmdbConnectorRegistry, integrationsRepo, registry: connectorRegistry, secretBox, logger,
+      }),
       logger,
     }),
     rateLimiter: searchRateLimiter,

@@ -203,7 +203,73 @@ function createServiceNowConnector({ fetchImpl = globalThis.fetch, logger = sile
     return { ok: true, status: res.status, assets };
   }
 
-  return { type, authTypes, defaultEvents, validateConfig, send, test, testConnection, search };
+  // --- Ticket search (universal search) ---------------------------------------
+  // The incident table's numeric state, as the REST API returns it without
+  // display values. Display values would give localised labels AND localised
+  // dates, which the caller cannot parse — so the raw form is read and the
+  // handful of states an operator recognises are named here.
+  const STATE_NAMES = { 1: 'New', 2: 'In Progress', 3: 'On Hold', 6: 'Resolved', 7: 'Closed', 8: 'Cancelled' };
+
+  // sys_updated_on comes back as "YYYY-MM-DD HH:MM:SS" in UTC (glide default when
+  // display values are off). Anything else is reported as undated rather than
+  // parsed into a wrong local time.
+  function glideToIso(v) {
+    const m = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})$/.exec(String(v || ''));
+    return m ? `${m[1]}T${m[2]}.000Z` : null;
+  }
+
+  // One term against the three things a technician knows about a ticket: its
+  // NUMBER (INC0012345), words from its SHORT DESCRIPTION, and the BlueEyes
+  // correlation id (a host id / metric ends up in there, so "fw-aarhus" finds the
+  // tickets this server raised for that host). Same separator stripping as
+  // assetQuery — the term must not be able to open a fifth condition.
+  function ticketQuery(q) {
+    const term = q.replace(/[\^,]/g, ' ').trim();
+    return ['numberLIKE', 'short_descriptionLIKE', 'correlation_idLIKE']
+      .map((f) => f + term)
+      .join('^OR') + '^ORDERBYDESCsys_updated_on';
+  }
+
+  // Deep link into the ServiceNow UI for one record — the hit has no screen in
+  // this product, so the row opens the ticket where it lives.
+  function ticketUrl(base, table, sysId) {
+    return `${base}/nav_to.do?uri=${encodeURIComponent(`${table}.do?sys_id=${sysId}`)}`;
+  }
+
+  // Ticket search over number / short description / correlation id on the
+  // integration's configured table (default `incident`). Normalises to
+  // { id, number, title, state, priority, updatedAt, url }[].
+  // Returns { ok, status, detail, tickets }.
+  async function searchTickets(integration, query) {
+    const base = String(integration.baseUrl || '').replace(/\/+$/, '');
+    const table = tableOf(integration);
+    const q = String(query || '').trim();
+    const res = await requestJson(fetchImpl, {
+      method: 'GET',
+      url: `${base}/api/now/table/${encodeURIComponent(table)}`
+        + `?sysparm_query=${encodeURIComponent(ticketQuery(q))}`
+        + '&sysparm_limit=10'
+        + '&sysparm_fields=sys_id,number,short_description,state,priority,sys_updated_on',
+      headers: headersFor(integration),
+      timeoutMs,
+    });
+    if (!res.ok) return { ok: false, status: res.status, detail: res.detail, tickets: [] };
+    const rows = res.json && Array.isArray(res.json.result) ? res.json.result : [];
+    const tickets = rows
+      .map((r) => ({
+        id: String(r.sys_id ?? ''),
+        number: r.number ? String(r.number) : null,
+        title: r.short_description ? String(r.short_description) : '',
+        state: STATE_NAMES[Number(r.state)] || (r.state == null || r.state === '' ? null : String(r.state)),
+        priority: r.priority == null || r.priority === '' ? null : String(r.priority),
+        updatedAt: glideToIso(r.sys_updated_on),
+        url: r.sys_id ? ticketUrl(base, table, String(r.sys_id)) : null,
+      }))
+      .filter((t) => t.id);
+    return { ok: true, status: res.status, tickets };
+  }
+
+  return { type, authTypes, defaultEvents, validateConfig, send, test, testConnection, search, searchTickets };
 }
 
 module.exports = { createServiceNowConnector };

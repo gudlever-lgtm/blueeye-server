@@ -495,3 +495,12 @@ HTTP+WebSocket server is started in the test). For license validation: valid
 validation, invalid signature, wrong serverId, offline with valid cache, offline
 after grace period expired, agent over limit, and that `canonicalize()` matches
 blueeye-licens byte-for-byte.
+
+### Pre-build gate
+
+`scripts/gate.sh` is the pre-build gate: it runs `test/gate/security.test.js`,
+`test/gate/ui.test.js` and `test/gate/validation.test.js`, then the full suite, and
+exits non-zero if anything fails. It is wired into Claude Code (`.claude/settings.json`
+PreToolUse hook on `git push`), the tracked git `pre-push` hook and the `gate`
+GitHub Actions workflow, so every branch build has passed it. Cached per commit +
+worktree state; `--force` re-runs, `BLUEEYE_SKIP_GATE=1` bypasses (emergency only).

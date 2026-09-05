@@ -80,6 +80,7 @@ schema.sql             # full snapshot, GENERATED from migrations/ (npm run buil
 docs/                  # per-feature docs (analysis, geo, alerting, retention, ...)
 scripts/               # seed-superadmin.js, seed-demo.js, dev-bootstrap.js, deploy.sh, build-schema.js
 test/, test-support/   # node --test specs + fakes (makeApp, makeXRepo, authHeader)
+test/gate/             # pre-build gate: security / ui / validation sweeps (scripts/gate.sh, docs/gate.md)
 ```
 
 ## HTTP API (routers)

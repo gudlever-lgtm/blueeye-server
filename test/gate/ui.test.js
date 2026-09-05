@@ -152,7 +152,10 @@ function fakeFetch(routes, log) {
   };
 }
 
-async function boot({ routes = {}, token = null, role = null } = {}) {
+// Every booted window is closed when its test ends: app.js arms refresh
+// timers and a live-update socket at boot, and an open jsdom window would keep
+// the test process alive after the last assertion.
+async function boot({ routes = {}, token = null, role = null, t = null } = {}) {
   const errors = [];
   const virtualConsole = new VirtualConsole();
   virtualConsole.on('jsdomError', (e) => errors.push(String(e && e.message || e)));
@@ -162,7 +165,10 @@ async function boot({ routes = {}, token = null, role = null } = {}) {
   window.fetch = fakeFetch(routes, log);
   window.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} });
   window.scrollTo = () => {};
+  window.WebSocket = class { constructor() { this.readyState = 3; } close() {} send() {} addEventListener() {} removeEventListener() {} };
+  window.EventSource = window.WebSocket;
   window.addEventListener('error', (e) => errors.push(String(e.message)));
+  if (t) t.after(() => window.close());
   if (token) window.localStorage.setItem('blueeye.server.token', token);
   if (role) window.localStorage.setItem('blueeye.server.role', role);
   const scripts = [...window.document.querySelectorAll('script[src]')].map((s) => s.getAttribute('src')).filter((s) => s.startsWith('/'));
@@ -172,8 +178,8 @@ async function boot({ routes = {}, token = null, role = null } = {}) {
 }
 const hidden = (el) => el.classList.contains('hidden');
 
-test('boot: without a token the login form is shown, the app is hidden and no script throws', async () => {
-  const { doc, errors, log } = await boot({ routes: { 'GET /auth/sso': { methods: [] } } });
+test('boot: without a token the login form is shown, the app is hidden and no script throws', async (t) => {
+  const { doc, errors, log } = await boot({ t, routes: { 'GET /auth/sso': { methods: [] } } });
   assert.deepEqual(errors, []);
   assert.equal(hidden(doc.getElementById('login')), false);
   assert.equal(hidden(doc.getElementById('app')), true);
@@ -181,8 +187,8 @@ test('boot: without a token the login form is shown, the app is hidden and no sc
   assert.ok(!log.some((k) => k.startsWith('GET /api/')), 'no authenticated API call before login');
 });
 
-test('boot: a failed login shows the server message', async () => {
-  const { doc } = await boot({ routes: { 'GET /auth/sso': { methods: [] }, 'POST /auth/login': { status: 401, body: { error: 'Invalid credentials' } } } });
+test('boot: a failed login shows the server message', async (t) => {
+  const { doc } = await boot({ t, routes: { 'GET /auth/sso': { methods: [] }, 'POST /auth/login': { status: 401, body: { error: 'Invalid credentials' } } } });
   doc.getElementById('email').value = 'a@b.dk';
   doc.getElementById('password').value = 'nope';
   doc.getElementById('login-form').dispatchEvent(new doc.defaultView.Event('submit', { cancelable: true }));
@@ -191,10 +197,10 @@ test('boot: a failed login shows the server message', async () => {
   assert.equal(hidden(doc.getElementById('app')), true);
 });
 
-test('boot: with a session the app renders and navigation is role-gated', async () => {
+test('boot: with a session the app renders and navigation is role-gated', async (t) => {
   const me = { id: 1, email: 'x@y.dk', role: 'viewer', preferences: {} };
   for (const role of ['viewer', 'operator', 'admin']) {
-    const { doc, errors } = await boot({ token: 'T', role, routes: { 'GET /me': { ...me, role }, 'GET /auth/sso': { methods: [] }, 'GET /license': { plan: 'professional', features: {} } } });
+    const { doc, errors } = await boot({ t, token: 'T', role, routes: { 'GET /me': { ...me, role }, 'GET /auth/sso': { methods: [] }, 'GET /license': { plan: 'professional', features: {} } } });
     assert.deepEqual(errors, [], `${role}: uncaught error during boot`);
     assert.equal(hidden(doc.getElementById('app')), false, `${role}: app hidden`);
     assert.equal(hidden(doc.getElementById('login')), true, `${role}: login shown`);
@@ -206,15 +212,15 @@ test('boot: with a session the app renders and navigation is role-gated', async 
   }
 });
 
-test('boot: a 401 on an authenticated call tears the session down', async () => {
-  const { doc, window } = await boot({ token: 'T', role: 'admin', routes: { 'GET /me': { status: 401, body: { error: 'Invalid or expired token' } } } });
+test('boot: a 401 on an authenticated call tears the session down', async (t) => {
+  const { doc, window } = await boot({ t, token: 'T', role: 'admin', routes: { 'GET /me': { status: 401, body: { error: 'Invalid or expired token' } } } });
   assert.equal(hidden(doc.getElementById('login')), false);
   assert.equal(window.localStorage.getItem('blueeye.server.token'), null);
 });
 
-test('boot: server-supplied strings are never parsed as HTML in the user menu / views (XSS)', async () => {
+test('boot: server-supplied strings are never parsed as HTML in the user menu / views (XSS)', async (t) => {
   const XSS = '<img src=x onerror="window.__pwned=1">';
-  const { window, doc } = await boot({ token: 'T', role: 'admin', routes: { 'GET /me': { id: 1, email: XSS, role: 'admin', name: XSS, preferences: {} }, 'GET /auth/sso': { methods: [] } } });
+  const { window, doc } = await boot({ t, token: 'T', role: 'admin', routes: { 'GET /me': { id: 1, email: XSS, role: 'admin', name: XSS, preferences: {} }, 'GET /auth/sso': { methods: [] } } });
   assert.equal(window.__pwned, undefined);
   assert.equal(doc.querySelector('#app img[src="x"]'), null, 'payload was parsed as markup');
 });

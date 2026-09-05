@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.116.0 — Pre-build gate: security / UI / validation tests on every branch build
+## 0.117.0 — Pre-build gate: security / UI / validation tests on every branch build
 
 Every branch build now has to pass a gate before it exists. `scripts/gate.sh`
 runs three sweep suites in `test/gate/` and then the full `npm test`:

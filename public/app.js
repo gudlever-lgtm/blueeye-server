@@ -7559,7 +7559,7 @@ function exportInvestigationMenu(id, name) {
 // exist — see the #topbar-search wiring at the bottom of this file.
 
 // type -> the i18n key for its group heading.
-const SEARCH_GROUP_ORDER = ['ip', 'mac', 'host', 'device', 'site', 'service', 'asset', 'user'];
+const SEARCH_GROUP_ORDER = ['ip', 'mac', 'host', 'device', 'site', 'service', 'event', 'ticket', 'ipam', 'asset', 'user'];
 
 // Turns a hit's `target` into a navigation action, or null when the hit is
 // informational only (a CMDB asset has no screen in this product).
@@ -7572,6 +7572,11 @@ function searchTargetAction(hit) {
   if ((m = t.match(/^flows:(\d+):port:(\d+)$/))) return () => openFlows(Number(m[1]), { port: Number(m[2]) });
   if ((m = t.match(/^flows:(\d+):(.+)$/))) return () => openFlows(Number(m[1]), { peer: m[2] });
   if (t.startsWith('discovered:')) return () => { currentView = 'discovery'; render(); };
+  if ((m = t.match(/^event:(\d+)$/))) return () => openEvent(Number(m[1]));
+  if ((m = t.match(/^cluster:(\d+)$/))) return () => openCluster(Number(m[1]));
+  // A hit that lives in another system (ITSM ticket, IPAM prefix) carries a deep
+  // link instead of a screen here. The server only ever emits http(s) urls.
+  if (hit.url && /^https?:\/\//i.test(hit.url)) return () => window.open(hit.url, '_blank', 'noopener');
   return null;
 }
 
@@ -7586,7 +7591,7 @@ function searchHitEl(hit, onNavigate) {
     hit.last_seen ? t('search.lastSeen', { when: relTime(hit.last_seen) }) : t('search.lastSeenNever'));
 
   const body = el('span', { class: 'search-item-body' },
-    el('span', { class: 'search-name' }, esc(hit.display_name)),
+    el('span', { class: 'search-name' }, esc(hit.display_name), hit.url ? ' ↗' : ''),
     hit.detail ? el('span', { class: 'search-detail muted small' }, esc(hit.detail)) : null,
     meta);
 

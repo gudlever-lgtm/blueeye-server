@@ -60,10 +60,44 @@ Only the families a query could possibly belong to are run — `classify()` in
 | 5 | Agent id | exact | `agents.id` |
 | 6 | Service | port exact, name prefix/substring | `src/flows/services.js` + `flow_records` |
 | 7 | CMDB asset | connector's own | ServiceNow / Nautobot / custom |
-| 8 | Username | — | **none — see below** |
+| 8 | Event | id exact, title prefix/substring, device name (open events only) | `event_cases` · `event_clusters` (suspected cause) |
+| 9 | Ticket | ref exact/prefix/substring (local) · number / short description / correlation id (remote) | `event_clusters.itsm_ticket_ref` · **ServiceNow** via every enabled ITSM integration |
+| 10 | IPAM | Nautobot's `q` filter (prefix, address, dns_name, description) | **Nautobot** prefixes + ip-addresses, via the CMDB config and/or enabled integrations |
+| 11 | Username | — | **none — see below** |
 
 A partial IP (`192.168.1.`) is deliberately *not* treated as an address: it is a
 prefix of a name-shaped field, and IP/MAC match exactly by design.
+
+### Federated sources (events, tickets, IPAM)
+
+The three families added on top of Fase 1 are what make the field *federated*:
+one query, answered by BlueEyes' own tables and by the customer's ITSM and IPAM
+at the same time, merged into one ranked list.
+
+- **Events** (`type: event`) — an event case by id or title, an open case by the
+  device it sits on, and a cross-agent situation (cluster) by its suspected
+  common cause. Targets `event:<id>` / `cluster:<id>` open the screen.
+- **Tickets** (`type: ticket`) — the cheap local answer first: the ITSM
+  reference a situation was raised as (`event_clusters.itsm_ticket_ref`), which
+  lands on the situation. Then the customer's ServiceNow, searched live over
+  number, short description and the `correlation_id` BlueEyes stamps on tickets
+  it raises (so a host id finds the tickets opened for that host). Every enabled
+  ServiceNow integration is asked; each hit names which one answered.
+- **IPAM** (`type: ipam`) — Nautobot prefixes and IP addresses. A partial IP or
+  CIDR (`10.1.`, `10.1.0.0/24`) is routed here and nowhere else. Nautobot may be
+  registered as the CMDB and/or as an integration; both are consulted, deduped
+  on base URL.
+
+Remote hits have no screen in this product, so they carry a **`url`** (deep link
+into ServiceNow / Nautobot) and the UI opens that in a new tab. The server only
+emits `http(s)` urls — a connector cannot hand the browser a `javascript:` link.
+
+The external thunks live in `src/search/externalSources.js` and decrypt
+credentials **at call time**, inside the thunk, the same way `makeCmdbSearch()`
+does. A deployment with no ITSM/IPAM configured gets thunks that answer `[]`
+immediately. One unreachable target is dropped and the others still answer; only
+when *every* target of a kind fails is that kind reported in `failedSources`
+(`itsm`, `ipam`).
 
 ### MAC normalisation
 
@@ -136,7 +170,8 @@ a deployment's agent count makes it hurt.
 
 - Pure query analysis `src/search/query.js` (classification, confidence, ordering, dedupe)
 - Fan-out `src/search/searchService.js`
+- External sources (ITSM tickets, IPAM) `src/search/externalSources.js`; connector methods `searchTickets` (ServiceNow) + `searchIpam` (Nautobot)
 - Router `src/routes/search.js`
 - Identity source — see `docs/arp-identity.md`
 - UI `globalSearch()` / `searchHitEl()` in `public/app.js`, `.search-*` CSS
-- Tests `test/searchApi.test.js`, `test/searchQuery.test.js`
+- Tests `test/searchApi.test.js`, `test/searchQuery.test.js`, `test/searchFederated.test.js`

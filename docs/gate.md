@@ -6,12 +6,12 @@ lives in all three repos (`blueeye-server`, `blueeye-agent`, `blueeye-licens`):
 `npm test`, and exits non-zero if anything fails.
 
 ```
-[gate] blueeye-server v0.116.0 — security / ui / validation gate
+[gate] blueeye-server v0.117.0 — security / ui / validation gate
 [gate] ▶ security:   node --test test/gate/security.test.js
 [gate] ▶ ui:         node --test test/gate/ui.test.js
 [gate] ▶ validation: node --test test/gate/validation.test.js
 [gate] ▶ full suite: npm test --silent
-[gate] PASS — blueeye-server v0.116.0 may be built (58s)
+[gate] PASS — blueeye-server v0.117.0 may be built (58s)
 ```
 
 ## Where it runs

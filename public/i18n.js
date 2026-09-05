@@ -34,11 +34,11 @@
     en: {
       // Universal search (Fase 1)
       'search.title': 'Search',
-      'search.placeholder': 'IP, MAC, hostname, site, agent or service…',
+      'search.placeholder': 'IP, MAC, hostname, site, event, ticket, subnet or service…',
       'search.hint': 'Press / to search',
       'search.loading': 'Searching…',
       'search.empty': 'Nothing matched “{q}”.',
-      'search.emptyHint': 'Try an IP address, a MAC, part of a hostname, or a site name.',
+      'search.emptyHint': 'Try an IP address, a MAC, part of a hostname, a site name, an event title, a ticket number or a subnet.',
       'search.error': 'Search failed: {message}',
       'search.tooShort': 'Type at least {min} characters.',
       'search.close': 'Close',
@@ -58,6 +58,9 @@
       'search.group.service': 'Services',
       'search.group.device': 'Discovered devices',
       'search.group.asset': 'CMDB assets',
+      'search.group.event': 'Events & situations',
+      'search.group.ticket': 'Tickets',
+      'search.group.ipam': 'IPAM prefixes & addresses',
       'search.group.user': 'Users',
 
       // Event work log (Fase 3)
@@ -245,11 +248,11 @@
 
     da: {
       'search.title': 'Søg',
-      'search.placeholder': 'IP, MAC, hostnavn, lokation, agent eller tjeneste…',
+      'search.placeholder': 'IP, MAC, hostnavn, lokation, event, ticket, subnet eller tjeneste…',
       'search.hint': 'Tryk / for at søge',
       'search.loading': 'Søger…',
       'search.empty': 'Intet match på “{q}”.',
-      'search.emptyHint': 'Prøv en IP-adresse, en MAC, en del af et hostnavn eller et lokationsnavn.',
+      'search.emptyHint': 'Prøv en IP-adresse, en MAC, en del af et hostnavn, et lokationsnavn, en event-titel, et ticketnummer eller et subnet.',
       'search.error': 'Søgningen fejlede: {message}',
       'search.tooShort': 'Skriv mindst {min} tegn.',
       'search.close': 'Luk',
@@ -269,6 +272,9 @@
       'search.group.service': 'Tjenester',
       'search.group.device': 'Fundne enheder',
       'search.group.asset': 'CMDB-assets',
+      'search.group.event': 'Events og situationer',
+      'search.group.ticket': 'Tickets',
+      'search.group.ipam': 'IPAM-prefixes og -adresser',
       'search.group.user': 'Brugere',
 
       'notes.title': 'Arbejdslog',

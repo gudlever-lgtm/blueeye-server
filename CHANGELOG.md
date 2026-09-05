@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.117.0 — Pre-build gate: security / UI / validation tests on every branch build
+
+Every branch build now has to pass a gate before it exists. `scripts/gate.sh`
+runs three sweep suites in `test/gate/` and then the full `npm test`:
+
+- **security** — enumerates every registered Express route and checks the whole
+  surface: the unauthenticated allowlist is exact, every other route is 401 for
+  no/forged/expired/`alg=none` tokens, viewers can only write where an explicit
+  allowlist says so, operators never reach admin routes, a `mustChangePassword`
+  token is locked to the password-change routes, a missing id is 404 everywhere,
+  a hostile id never 500s, 500s carry no detail in production, malformed/oversized
+  bodies are 400/413, login lockout is 429, static serving cannot escape
+  `public/`, headers + CSP keep the strict directives, and no private key or
+  vendor token is committed.
+- **ui** — parses every `public/*.js` and `*.css`, checks index.html ↔ app.js
+  (`data-view` ↔ `views.<tab>` ↔ `PAGE_INFO`, `data-min-role`/`data-feature`
+  values, every `t()` key present in BOTH locales with placeholder parity, every
+  `api()` path mounted), and boots the real dashboard in jsdom: login screen,
+  session boot, role-gated navigation, 401 teardown, XSS via server strings.
+- **validation** — every `src/validation` module survives garbage input and
+  rejects an empty object where it has required fields, the per-module rules are
+  pinned, and the HTTP layer is swept: no POST/PUT/PATCH 500s on empty /
+  non-object / prototype-polluting bodies, create endpoints answer the
+  `Validation failed` contract, hostile query params never 500, agent ingest
+  validates once the token is accepted, `schema.sql` matches the migrations.
+
+The gate runs from Claude Code (a `PreToolUse` hook on `git push` in
+`.claude/settings.json` — a failing gate blocks the push and feeds the failures
+back), from the tracked git `pre-push` hook, and from the `gate` GitHub Actions
+workflow on every branch push and pull request. Cached per commit + worktree state.
+See `docs/gate.md`.
+
+Found by the gate while wiring it up: the Investigate view had no `PAGE_INFO`
+help entry (added, i18n-backed in en + da), and `parseId` threw on a
+null-prototype input instead of returning null.
+
 ## 0.115.2 — The Windows install command no longer looks like a PowerShell stager
 
 A customer's IPS fired on their own BlueEyes server:

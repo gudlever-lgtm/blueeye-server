@@ -31,7 +31,7 @@ function fakeAssistant({ enabled = true, answer = 'Likely a shared uplink fault 
 }
 
 // Two agents (1,2) in the same site (10) unless overridden.
-function svcWith({ findings = [], agents = [{ id: 1, location_id: 10 }, { id: 2, location_id: 10 }], publishCluster, clustersRepo, assistant, alertDispatcher, alertLog, snapshotService } = {}) {
+function svcWith({ findings = [], agents = [{ id: 1, location_id: 10 }, { id: 2, location_id: 10 }], publishCluster, clustersRepo, assistant, alertDispatcher, alertLog, snapshotService, logger } = {}) {
   const repo = clustersRepo || makeEventClustersRepo();
   const findingStore = makeFindingStore();
   for (const f of findings) findingStore.rows.push({ ...f, acked: false });
@@ -46,6 +46,7 @@ function svcWith({ findings = [], agents = [{ id: 1, location_id: 10 }, { id: 2,
     alertLog,
     snapshotService,
     publishCluster: publishCluster || ((c) => published.push(c)),
+    logger,
     now: () => T,
   });
   return { svc, repo, findingStore, published };
@@ -236,6 +237,85 @@ test('resolveStale auto-closes an ACKNOWLEDGED (non-CRIT) cluster gone quiet', a
   const resolved = await svc.resolveStale();
   assert.equal(resolved, 1);
   assert.equal(repo.rows.find((r) => r.id === id).status, 'resolved');
+});
+
+// ---- resolution logging ----------------------------------------------------
+// The sweep runs every 60s and the retention rule holds the same clusters open
+// until their CRIT member is acknowledged, so per-cluster logging restates the
+// same fact ~1 440 times a day per cluster. A fleet holding 70 of them printed
+// ~100 000 INFO lines a day and buried every other line in the log.
+
+// A logger that records what was written at each level.
+function recordingLogger() {
+  const lines = { debug: [], info: [], warn: [], error: [] };
+  return {
+    lines,
+    debug: (m) => lines.debug.push(m),
+    info: (m) => lines.info.push(m),
+    warn: (m) => lines.warn.push(m),
+    error: (m) => lines.error.push(m),
+  };
+}
+
+// Three stale clusters, each held open by its own unacknowledged CRIT member.
+function heldOpenSvc(logger, count = 3) {
+  const repo = makeEventClustersRepo();
+  const findings = [];
+  for (let i = 0; i < count; i += 1) {
+    repo.rows.push({
+      id: i + 1,
+      confidence: 'high',
+      member_finding_ids: [`c${i}`],
+      status: 'open',
+      detected_at: ago(40 * 60 * 1000),
+      created_at: ago(40 * 60 * 1000),
+    });
+    findings.push(finding({ id: `c${i}`, hostId: String(i + 1), metric: 'probe.loss', severity: 'CRIT' }));
+  }
+  return svcWith({ clustersRepo: repo, findings, logger });
+}
+
+test('resolveStale logs ONE summary line for the clusters it keeps open, not one per cluster', async () => {
+  const logger = recordingLogger();
+  const { svc } = heldOpenSvc(logger, 3);
+  const resolved = await svc.resolveStale();
+
+  assert.equal(resolved, 0); // the retention rule still holds every one of them
+  const kept = logger.lines.info.filter((l) => l.includes('kept open'));
+  assert.equal(kept.length, 1, `one summary line, got: ${JSON.stringify(logger.lines.info)}`);
+  assert.match(kept[0], /3 inactive cluster\(s\) kept open/);
+  // The per-cluster detail is still there for anyone running at debug level.
+  assert.equal(logger.lines.debug.filter((l) => l.includes('kept open')).length, 3);
+});
+
+test('resolveStale does not repeat the summary while the count is unchanged', async () => {
+  const logger = recordingLogger();
+  const { svc } = heldOpenSvc(logger, 3);
+  await svc.resolveStale();
+  await svc.resolveStale();
+  await svc.resolveStale();
+
+  assert.equal(logger.lines.info.filter((l) => l.includes('kept open')).length, 1);
+});
+
+test('resolveStale reports the count again when it moves, and says so once it clears', async () => {
+  const logger = recordingLogger();
+  const { svc, findingStore } = heldOpenSvc(logger, 3);
+  await svc.resolveStale();
+
+  findingStore.rows.find((f) => f.id === 'c0').acked = true; // operator acknowledges one
+  assert.equal(await svc.resolveStale(), 1);
+  const kept = logger.lines.info.filter((l) => l.includes('kept open'));
+  assert.equal(kept.length, 2);
+  assert.match(kept[1], /2 inactive cluster\(s\) kept open/);
+
+  for (const f of findingStore.rows) f.acked = true; // …and then the rest
+  await svc.resolveStale();
+  assert.ok(logger.lines.info.some((l) => l.includes('no inactive clusters are held open any more')));
+  // Still quiet once nothing is held.
+  const before = logger.lines.info.length;
+  await svc.resolveStale();
+  assert.equal(logger.lines.info.length, before);
 });
 
 // ---- simulation ------------------------------------------------------------

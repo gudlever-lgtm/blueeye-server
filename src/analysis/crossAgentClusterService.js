@@ -339,6 +339,15 @@ function createCrossAgentClusterService({
     return false;
   }
 
+  // How many stale clusters the retention rule held open on the previous sweep;
+  // null until the first one runs. The sweep ticks every 60s and the same
+  // clusters stay held until somebody acknowledges their CRIT member, so a line
+  // per cluster per sweep is the same fact restated ~1 440 times a day (a fleet
+  // holding 70 clusters printed ~100 000 INFO lines a day and buried every other
+  // log line, including in the dashboard's Logs view). One INFO line carries the
+  // count, and only when it MOVES; the per-cluster detail drops to debug.
+  let lastKeptOpen = null;
+
   // Resolves live clusters (open + acknowledged) whose last activity (detected_at)
   // is older than the inactivity window — the members stopped recurring, so the
   // pattern has cleared. A cluster that still contains an unacknowledged CRIT
@@ -354,10 +363,12 @@ function createCrossAgentClusterService({
       return 0;
     }
     let resolved = 0;
+    let keptOpen = 0;
     for (const c of stale) {
       try {
         if (await hasUnacknowledgedCrit(c.memberFindingIds)) {
-          logger.info(`cross-agent: cluster ${c.id} kept open — unacknowledged CRIT member.`);
+          keptOpen += 1;
+          logger.debug(`cross-agent: cluster ${c.id} kept open — unacknowledged CRIT member.`);
           continue; // retention rule: never auto-close an unacknowledged CRIT
         }
         // Guard on the cluster's CURRENT status (open or acknowledged) so the
@@ -382,6 +393,14 @@ function createCrossAgentClusterService({
       }
     }
     if (resolved) logger.info(`cross-agent: resolved ${resolved} inactive cluster(s).`);
+    if (keptOpen !== lastKeptOpen) {
+      if (keptOpen) {
+        logger.info(`cross-agent: ${keptOpen} inactive cluster(s) kept open — unacknowledged CRIT member.`);
+      } else if (lastKeptOpen) {
+        logger.info('cross-agent: no inactive clusters are held open any more.');
+      }
+      lastKeptOpen = keptOpen;
+    }
     return resolved;
   }
 

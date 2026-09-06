@@ -182,6 +182,15 @@ is kept open until a human acknowledges the CRIT (the existing retention rule). 
 guard reads member severities via the finding store; a member that can't be read is
 not treated as CRIT (a lookup failure never blocks resolution).
 
+**Logging.** The sweep ticks every 60 s and a held cluster stays held until someone
+acknowledges its CRIT, so the count — not the individual clusters — is the news. One
+INFO line reports how many are held, and only when that number **moves**
+(`N inactive cluster(s) kept open — unacknowledged CRIT member.`, and one line when
+it reaches zero). The per-cluster detail is still written at **debug** level, so
+`LOG_LEVEL=debug` names them. A fleet holding 70 clusters used to print a line per
+cluster per sweep — ~100 000 INFO lines a day, which buried every other log line and
+filled the dashboard's Logs view.
+
 ## Automated read-only evidence snapshot on cluster open (Fase 6)
 
 When a cluster opens, BlueEyes captures a **point-in-time, READ-ONLY** diagnostic

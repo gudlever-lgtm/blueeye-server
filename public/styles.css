@@ -58,6 +58,9 @@
   --card: var(--panel);
   --mono: ui-monospace, 'JetBrains Mono', 'Fira Code', 'SFMono-Regular', Menlo, Consolas, monospace;
   --sidebar-w: 240px;
+  /* One content width for every page (see main#view). Caps the reading
+     measure on wide monitors so no page sprawls edge to edge. */
+  --page-max: 1440px;
   /* Radii — one step per surface size. xs: inline bits (code, swatches),
      sm: controls (buttons, inputs, chips-with-corners), base: panels/cards,
      lg: big containers (graphs, maps, modals), pill: fully round. */
@@ -521,9 +524,12 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 #whoami .badge.role-operator { background: var(--ok-weak); color: var(--ok); }
 #whoami .badge.role-viewer { background: var(--muted-weak); color: var(--muted); }
 
-/* Every page spans the full width of the shell; 18px padding keeps a small
-   gutter from the viewport edges. */
-main#view { padding: 24px 28px 40px; max-width: 100%; margin: 0 auto; }
+/* One page width for every view. #view is a flex item in the .shell column, so
+   `margin: 0 auto` alone would make it shrink to its own content (auto cross-axis
+   margins beat the default stretch) — which is why each page used to come out a
+   different width. `width: 100%` restores the stretch and --page-max caps it on
+   wide screens, so Fleet, Enrollment, Settings and the rest all line up. */
+main#view { width: 100%; max-width: var(--page-max); margin-inline: auto; padding: 24px 28px 40px; box-sizing: border-box; }
 /* The base .card is 320px with 28px padding — sized for the centered login form
    (which lives in its own #login shell, not here). Inside a page, cards are
    content panels: they must fill the available width and share one padding scale
@@ -1080,13 +1086,35 @@ th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: upp
 /* The header row keeps the full-strength border so it reads as a header while
    the body rows are separated by hairlines only. */
 thead th { border-bottom-color: var(--border); }
-/* A top-level table is a surface in its own right. The tables that are drawn
-   transparently inside another surface opt out (see the reset below). */
-table { box-shadow: var(--shadow); }
+/* A top-level table is a surface in its own right — framed like the panels on
+   the Overview page (border + resting elevation) so data never floats on the
+   page background. The tables that are drawn transparently inside another
+   surface opt out (see the reset below). */
+table { border: 1px solid var(--border); box-shadow: var(--shadow); }
 table.kv, .geo-top, .adv-table, .probe-hops, .fs-mini, .pl-waterfall,
 .settings-card table, .geo-panel .mini table, .card table.kv {
-  box-shadow: none;
+  border: 0; box-shadow: none;
 }
+/* Data card — a framed page section (the panel look the Overview page sets):
+   a heading with its actions, an optional note, and a table running flush to
+   the card's edges. The card carries the frame, so the table drops its own. */
+main#view .data-card { padding: 0; overflow: hidden; }
+.data-card > .dc-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
+  padding: 14px 18px 12px; }
+.data-card > .dc-head h3 { margin: 0; font-size: 15px; }
+.data-card > .dc-head .dc-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.data-card > .dc-note { margin: 0; padding: 0 18px 14px; font-size: 13px; }
+.data-card > table, .data-card > .tablewrap > table { border: 0; border-radius: 0; box-shadow: none; }
+.data-card > .tablewrap { border: 0; border-radius: 0; box-shadow: none; background: transparent; }
+.data-card > .empty { padding: 8px 18px 24px; }
+
+/* A horizontally scrolling table carries the frame on the wrapper instead, so
+   the panel edge stays put while the table scrolls inside it. */
+.tablewrap { background: var(--panel); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow); }
+.tablewrap > table { border: 0; border-radius: 0; box-shadow: none; }
+.card .tablewrap, .settings-card .tablewrap, .inv-card .tablewrap {
+  background: transparent; border: 0; box-shadow: none; }
 tr:last-child td { border-bottom: 0; }
 /* Per-row action buttons: right-aligned, uniform width so they line up neatly
    across rows (and wrap as a tidy block instead of one button dropping off). */
@@ -1200,6 +1228,14 @@ tr.acked td { opacity: .55; }
 .stat .k { color: var(--muted); font-size: 12px; }
 .stat .v { font-size: 20px; font-weight: 700; margin-top: 4px; }
 .empty { color: var(--muted); padding: 24px; text-align: center; }
+/* An empty state IS the page's data surface for that view, so it gets the same
+   frame the rows would have had instead of floating on the page background —
+   unless it already sits inside a framed surface, which carries the frame for
+   it. (A browser without :not(complex) support simply keeps the old flat look.) */
+main#view .empty:not(.card .empty):not(.data-card .empty):not(.settings-card .empty):not(.inv-card .empty):not(.enroll-card .empty):not(.traffic-card .empty):not(.netpath .empty):not(.loc-card .empty):not(.geo-panel .empty):not(.tablewrap .empty):not(table .empty):not(.modal-card .empty):not(.drawer .empty) {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow);
+}
 code, pre { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-xs); padding: 1px 6px; }
 pre { padding: 10px; overflow: auto; }
 

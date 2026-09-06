@@ -206,6 +206,13 @@
       'enroll.win.copy': 'Copy',
       'enroll.win.saveHint': 'If the host cannot download it at all, open {url} in a browser, save the file onto the host and run it there.',
 
+      // Enrollment: bulk cleanup of the codes that timed out unused.
+      'enroll.codes.deleteExpired': 'Delete all expired',
+      'enroll.codes.deleteExpiredTitle': 'Delete every code that ran out of time without being used ({n})',
+      'enroll.codes.deleteExpiredConfirm': 'Delete {n} expired code(s)? Codes already used by an agent are kept, and no enrolled agent is disconnected.',
+      'enroll.codes.deleteExpiredDone': '{n} expired code(s) deleted',
+      'enroll.codes.deleteExpiredNone': 'No expired codes to delete',
+
       // Shared
       'common.retry': 'Retry',
       'common.cancel': 'Cancel',
@@ -404,6 +411,12 @@
       'enroll.win.step2': '2. Kør det',
       'enroll.win.copy': 'Kopiér',
       'enroll.win.saveHint': 'Hvis maskinen slet ikke kan hente det, så åbn {url} i en browser, gem filen på maskinen og kør den derfra.',
+
+      'enroll.codes.deleteExpired': 'Slet alle udløbne',
+      'enroll.codes.deleteExpiredTitle': 'Slet alle koder, der er udløbet uden at blive brugt ({n})',
+      'enroll.codes.deleteExpiredConfirm': 'Slet {n} udløbne kode(r)? Koder, en agent allerede har brugt, beholdes, og ingen tilmeldt agent mister forbindelsen.',
+      'enroll.codes.deleteExpiredDone': '{n} udløbne kode(r) slettet',
+      'enroll.codes.deleteExpiredNone': 'Ingen udløbne koder at slette',
 
       'common.retry': 'Prøv igen',
       'common.cancel': 'Annullér',

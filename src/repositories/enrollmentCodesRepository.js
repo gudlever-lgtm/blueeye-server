@@ -138,7 +138,19 @@ function createEnrollmentCodesRepository(db, { secretBox = null } = {}) {
     return result.affectedRows > 0;
   }
 
-  return { create, findAll, findById, findByCode, remove };
+  // Bulk cleanup for the "Delete all expired" button: removes exactly the rows
+  // that read "expired" in the list — ran out of time WITHOUT being used up.
+  // The condition mirrors STATUS_CASE above, so a used code (uses_remaining <= 0)
+  // is never swept up here even though its TTL has long elapsed; deleting the row
+  // an enrolled agent points at is a separate, deliberate act. Returns the count.
+  async function removeExpired() {
+    const [result] = await pool.query(
+      'DELETE FROM enrollment_codes WHERE uses_remaining > 0 AND expires_at <= NOW()'
+    );
+    return result.affectedRows;
+  }
+
+  return { create, findAll, findById, findByCode, remove, removeExpired };
 }
 
 module.exports = { createEnrollmentCodesRepository };

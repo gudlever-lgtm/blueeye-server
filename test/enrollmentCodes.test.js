@@ -177,3 +177,62 @@ test('DELETE /enrollment-codes/:id without a token returns 401', async () => {
   const res = await request(makeApp()).delete('/enrollment-codes/1');
   assert.equal(res.status, 401);
 });
+
+// --------------------------------------------- DELETE /enrollment-codes/expired
+test('DELETE /enrollment-codes/expired reports how many codes it removed (admin)', async () => {
+  let called = 0;
+  const enrollmentCodesRepo = makeEnrollmentCodesRepo({
+    removeExpired: async () => { called += 1; return 7; },
+  });
+  const res = await request(makeApp({ enrollmentCodesRepo }))
+    .delete('/enrollment-codes/expired')
+    .set('Authorization', admin());
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body, { deleted: 7 });
+  assert.equal(called, 1);
+});
+
+test('DELETE /enrollment-codes/expired returns 200 with 0 when nothing is expired', async () => {
+  const res = await request(makeApp()).delete('/enrollment-codes/expired').set('Authorization', admin());
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body, { deleted: 0 });
+});
+
+// "expired" must not fall through to DELETE /:id (which would 400 on the id).
+test('DELETE /enrollment-codes/expired does not hit the single-code delete', async () => {
+  let removeCalls = 0;
+  const enrollmentCodesRepo = makeEnrollmentCodesRepo({
+    remove: async () => { removeCalls += 1; return true; },
+    removeExpired: async () => 2,
+  });
+  const res = await request(makeApp({ enrollmentCodesRepo }))
+    .delete('/enrollment-codes/expired')
+    .set('Authorization', admin());
+  assert.equal(res.status, 200);
+  assert.equal(removeCalls, 0);
+});
+
+test('DELETE /enrollment-codes/expired returns 500 when the repository throws', async () => {
+  const enrollmentCodesRepo = makeEnrollmentCodesRepo({ removeExpired: throwingAsync() });
+  const res = await request(makeApp({ enrollmentCodesRepo }))
+    .delete('/enrollment-codes/expired')
+    .set('Authorization', admin());
+  assert.equal(res.status, 500);
+});
+
+test('DELETE /enrollment-codes/expired as an operator returns 403', async () => {
+  const res = await request(makeApp())
+    .delete('/enrollment-codes/expired')
+    .set('Authorization', operator());
+  assert.equal(res.status, 403);
+});
+
+test('DELETE /enrollment-codes/expired without a token returns 401', async () => {
+  const res = await request(makeApp()).delete('/enrollment-codes/expired');
+  assert.equal(res.status, 401);
+});
+
+test('an unknown enrollment-codes path returns 404', async () => {
+  const res = await request(makeApp()).delete('/enrollment-codes/expired/all').set('Authorization', admin());
+  assert.equal(res.status, 404);
+});

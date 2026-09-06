@@ -1188,6 +1188,8 @@ function makeEnrollmentCodesRepo(overrides = {}) {
     findById: overrides.findById || (async () => null),
     findByCode: overrides.findByCode || (async () => null),
     remove: overrides.remove || (async () => false),
+    // Bulk cleanup of timed-out-unused codes; returns how many rows went.
+    removeExpired: overrides.removeExpired || (async () => 0),
   };
 }
 

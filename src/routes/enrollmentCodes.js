@@ -64,6 +64,19 @@ function createEnrollmentCodesRouter({ enrollmentCodesRepo, locationsRepo }) {
     })
   );
 
+  // DELETE /enrollment-codes/expired — admin only. Bulk cleanup of the codes
+  // that timed out unused. Registered BEFORE /:id so "expired" is read as this
+  // route and not as an id. Deleting nothing is a success (0 deleted), not a 404.
+  router.delete(
+    '/expired',
+    requireAuth,
+    requireRole(ROLES.ADMIN),
+    asyncHandler(async (req, res) => {
+      const deleted = await enrollmentCodesRepo.removeExpired();
+      res.json({ deleted: Number(deleted) || 0 });
+    })
+  );
+
   // DELETE /enrollment-codes/:id — admin only.
   router.delete(
     '/:id',

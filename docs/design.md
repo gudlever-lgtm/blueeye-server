@@ -89,3 +89,16 @@ around nothing.
   `@supports not` block falls back to the solid panel colour.
 - **Content** — `main#view` carries the page gutter (24/28px, tightening to
   14px under 720px). Pages don't add their own outer padding.
+- **One page width** — `main#view` is `width: 100%` capped at `--page-max`
+  (1440px) and centred, so every view lines up: Overview, Enrollment, Settings
+  and the rest are the same width on the same screen. `main#view` is a flex item
+  in the `.shell` column, so `margin: 0 auto` *without* `width: 100%` would make
+  each page shrink to its own content — that is what used to give every page a
+  different width. Don't set a page-specific width.
+- **Data sits in a frame** — a table, a list or an empty state on a page is a
+  surface: panel background, `1px solid var(--border)`, `--shadow`. Nothing
+  reads as data floating on the page background. `table`, `.tablewrap` and
+  standalone `.empty` get this for free; a section with its own heading, actions
+  and note uses `dataCard()` (`.data-card`), where the card carries the frame
+  and the table runs flush to its edges. A surface drawn *inside* another one
+  opts out, as above.

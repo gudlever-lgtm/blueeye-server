@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.117.3 — The cross-agent sweep stops shouting the same fact every minute
+
+A production log looked like this, sixty seconds apart, forever:
+
+```
+INFO cross-agent: cluster 771 kept open — unacknowledged CRIT member.
+INFO cross-agent: cluster 773 kept open — unacknowledged CRIT member.
+INFO cross-agent: cluster 774 kept open — unacknowledged CRIT member.
+… 70 more
+```
+
+The retention rule never auto-closes a cluster that still holds an
+unacknowledged CRIT finding, and the sweep re-checks every 60 seconds — so each
+held cluster restated itself ~1 440 times a day. A fleet holding 70 of them
+produced roughly 100 000 INFO lines a day, which buried every other line in
+`docker compose logs` and filled the dashboard's admin Logs view with one
+repeating sentence.
+
+The count is the news, not the individual clusters:
+
+- **One INFO line reports how many are held, and only when that number moves** —
+  `70 inactive cluster(s) kept open — unacknowledged CRIT member.` — plus a
+  single line when it reaches zero. Steady state is now silent.
+- **The per-cluster detail drops to `debug`**, so `LOG_LEVEL=debug` still names
+  them. Below the configured level the record is dropped before it reaches the
+  log ring, so it costs nothing in production.
+
+This matches how the same sweep already reported the other half of its work
+(`resolved N inactive cluster(s).` has always been one summarised line).
+
+Nothing about the retention rule itself changed: a cluster with an
+unacknowledged CRIT member is still never auto-closed.
+
 ## 0.117.2 — A softer dashboard
 
 The dashboard chrome has been redrawn around one token scale. Nothing moved and

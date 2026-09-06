@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.118.3 — One page width, framed data, and a bulk delete for expired codes
+
+Every page came out a different width. Measured in a browser at 1920px:
+Overview 1134px, Enrollment 1590px, Agents 650px, Settings 1617px — on the same
+screen, in the same session.
+
+`main#view` is a flex item in the `.shell` column, and `margin: 0 auto` there
+beats the default `stretch`, so each page shrank to fit its own content. It is
+now `width: 100%` capped at `--page-max` (1440px) and centred: the same four
+pages all measure 1440px.
+
+Data no longer floats on the page background:
+
+- **A table, a scrolling table wrapper and a standalone empty state are
+  surfaces** — panel background, border, resting elevation, the same treatment
+  the Overview page's panels already had. A table drawn inside another surface
+  still opts out.
+- **`dataCard()`** frames a section that has its own heading, actions and note:
+  the card carries the frame and the table runs flush to its edges. Enrollment's
+  "Active codes" is the first section on it.
+
+Enrollment also gets **Delete all expired (n)**, beside "+ New code":
+
+- Admin-only, and shown only when there is something to clear.
+- It deletes exactly the codes badged `expired` — timed out with uses left — so
+  a `used` code, the one an enrolled agent is listed beside, is never swept up.
+  No agent is disconnected either way: an enrolled agent holds its own permanent
+  token, independent of the code.
+- `DELETE /enrollment-codes/expired` answers `{ deleted: n }`; deleting nothing
+  is a success, not a 404.
+
 ## 0.117.3 — The cross-agent sweep stops shouting the same fact every minute
 
 A production log looked like this, sixty seconds apart, forever:

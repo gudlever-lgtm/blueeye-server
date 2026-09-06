@@ -73,7 +73,8 @@ src/
 public/                # dependency-free dashboard SPA
 ├── index.html         # shell + top tab bar (data-view buttons)
 ├── app.js             # the whole SPA: views.*, render(), el() DOM helper, api()
-└── styles.css         # light default + [data-theme=…] palettes (dark, nord, …); hand-written CSS vars
+└── styles.css         # design tokens (radii/elevation/hairlines) + light default
+                       # + [data-theme=…] palettes (dark, nord, …); see docs/design.md
 
 migrations/NNN_*.sql   # numbered, tracked in schema_migrations; the source of truth
 schema.sql             # full snapshot, GENERATED from migrations/ (npm run build-schema)
@@ -290,6 +291,7 @@ A single vanilla-JS SPA. Key building blocks:
 | A dashboard tab/view | `public/index.html` (button) + `views.<x>` in `public/app.js` + `PAGE_INFO` |
 | Documentation / how-to content (Documentation tab) | `views.docs` + the `DOCS` content array + `docs*` helpers in `public/app.js` (static, no backend); reached from a **Documentation pill in the sidebar footer** (`.foot-docs`, `data-view="docs"`) beside the version line in `public/index.html` — not a nav-rail item; `PAGE_INFO.docs`; `.docs-*` + `.foot-docs` CSS. RBAC: the `Administration & setup` section carries `admin:true` and is dropped for non-admins. Prose guide in `docs/documentation-center.md` |
 | Overview “open issues” rollup (events + findings) | feature `dashboard_advanced` (Professional+): `src/dashboard/advancedDashboard.js` (pure `buildAdvancedDashboard`) + `src/routes/dashboard.js` (`GET /api/dashboard/advanced`, gated by `requirePlanFeature`); UI `fleetIssues()` + `refreshIssues()` inside `views.fleet`, documented in `PAGE_INFO.fleet`. Merged into the Overview — no separate tab; below Professional the rollup is omitted |
+| The look of a panel/card/table (radius, elevation, hairlines) | the token scale in `:root` + the "Soft surface pass" at the bottom of `public/styles.css`; rules of thumb in `docs/design.md`; guarded by `test/dashboardDesignTokens.test.js` |
 | A dashboard colour palette (light+dark) | `PALETTES` + paired `[data-theme=…]` blocks in `public/styles.css`; picker `settingsAppearanceView` in `public/app.js`; per-user persistence via `/me` (`src/routes/me.js`, `usersRepository.get/updatePreferences`) + key whitelist in `src/validation/preferencesValidation.js` |
 | License / feature gating | `src/license/*` (`features.js` = fail-closed gate + `requirePlanFeature` middleware; `plans.js` = plan/feature catalogue incl. `status` available/roadmap; `planService.js` = active-plan resolution + limits) + `src/services/usageService.js` (limit enforcement). Read-only API: `/license/plan`, `/license/usage`, `/license/matrix`. Feature **status & roadmap** tracked in **`ROADMAP.md`** + the Settings → License matrix Roadmap badge. See `docs/licensing.md`. |
 | API tokens (programmatic access) | feature `api_access`: `src/routes/apiTokens.js` (admin CRUD, gated) + `src/repositories/apiTokensRepository.js` + `src/lib/apiToken.js` (mint/hash) + `src/auth/apiTokenAuth.js` (authenticates `X-API-Key`/`Bearer` → `req.user`, mounted in `routes/index.js`); table `api_tokens` (migration 034) |

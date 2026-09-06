@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.117.1 — A softer dashboard
+
+The dashboard chrome has been redrawn around one token scale. Nothing moved and
+nothing was renamed — panels, tables, chips and overlays just share a softer,
+more consistent surface treatment across all 13 palettes.
+
+What changed:
+
+- **Wider radii, hairline dividers, shadows you feel rather than see.** A card
+  is a panel background, a `1px` border and `var(--shadow)`. The line *between*
+  rows inside it is `var(--hairline)` — lighter than the line *around* it, so a
+  long table stops reading as a grid of cages.
+- **One radius scale** — `--radius-xs` … `--radius-pill` (8/10/12/16/999px), one
+  step per surface size. The ~60 hard-coded `border-radius: Npx` declarations
+  now reference it. Literal radii are left only where they describe a shape
+  (status dots, 3px bars).
+- **Three elevation tokens** — resting, lifted, overlay. Interactive cards lift
+  on hover instead of growing a heavier edge. Dark palettes restate the three
+  (and only those), because a light shadow is invisible on a dark panel.
+- **Status colour is derived again.** Badges, alert banners, the enrollment
+  live-pill and the troubleshooting nodes carried literal `rgba(34,197,94,.15)`
+  greens and ambers, which ignored the user's palette. They now use the
+  `--ok-weak` / `--warn-weak` / `--bad-weak` / `--accent-weak` tints, so a theme
+  switch re-tints every status surface.
+- **Chrome**: the sidebar's active item is a soft accent pill (the hard 3px
+  marker bar is gone), the topbar is translucent with a backdrop blur (with a
+  solid fallback), the page gutter grew to 24/28px and tightens on phones, and
+  focus is a soft halo that follows the element's radius instead of a square
+  outline.
+- **Small things that were wrong**: `.fs-chip` was two unrelated components
+  sharing a class name — the Analysis severity chip was silently restyling the
+  Fleet summary chip — now both are scoped to their own parent. Scrollbars are
+  thin and palette-coloured. Inline `code` sits on a tint instead of in a
+  bordered box. A `prefers-reduced-motion` guard turns off transitions.
+
+`docs/design.md` writes down the scale and the rules of thumb for adding a
+surface; `test/dashboardDesignTokens.test.js` fails if a panel radius or a
+status tint is hard-coded again.
+
 ## 0.115.2 — The Windows install command no longer looks like a PowerShell stager
 
 A customer's IPS fired on their own BlueEyes server:

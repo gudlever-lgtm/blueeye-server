@@ -99,7 +99,7 @@ Mounted in `src/routes/index.js`. User endpoints use JWT + roles
 | `/me` | me.js | viewer+ | current user: profile + **personal UI preferences** (colour theme) |
 | `/locations` | locations.js | viewer+/op/admin | sites + per-location live traffic |
 | `/agents` (3 routers) | agents.js · agentReports.js · agentEnroll.js | JWT / agent-token / none | CRUD + run-test + **run-probe** + **install-tool** (operator+, install a missing diagnostic tool on the host — allowlisted, audited). The privileged pushes (upgrade/delete/install-tool) are **signed** with the release key (`services/commandSigner.js`) so the agent can verify the SERVER asked, not merely something holding its socket + **connection** (viewer+, explainable why-is-it-disconnected verdict) + **reconnect** (operator+, force a live agent to re-dial — docs/agent-connection.md); agent self-report (`/results`, `/probe-results`, `/me/config`, `/me/capabilities`); enroll |
-| `/enrollment-codes` | enrollmentCodes.js | operator+ | enrollment codes (single-use or **bulk / multi-use**) |
+| `/enrollment-codes` | enrollmentCodes.js | operator+ / admin | enrollment codes (single-use or **bulk / multi-use**); admin deletes: `DELETE /:id` and **`DELETE /expired`** (bulk cleanup of the codes that timed out unused — `{ deleted: n }`, never touches a `used` code; backs the Enrollment page's "Delete all expired" button) |
 | `/enroll` | enroll.js | none | **frictionless enrollment**: `/config`, `/agent-source.tgz` (agent source bundle + SHA-256, served locally — air-gap-friendly), `/agent-release(.tgz)` (signed release + manifest), `/agent-release-key` (release public key the agent pins for signed self-updates), `/uninstall.sh`, `/agent/:platform` (legacy pre-built binary), `/:code/install.sh` (self-contained installer: verifies the source, then installs natively via Node+systemd by default — Docker opt-in via `BLUEEYE_RUNTIME=docker`), `/:code/install.ps1` + `/uninstall.ps1` + `/update.ps1` (Windows PowerShell: install, remove, and **update-in-place** — the updater carries no enrollment code and aborts unless an enrolled agent is already on the host, so it upgrades that agent instead of creating a new one; all three take `?download=1` to come back as a saveable attachment) |
 | `/api/enroll` | enrollCommand.js | operator+ | **install-command generator** (`/command`: one-liner + manual/checksum; mints or reuses a code) + **update-command generator** (`/update-command`: the Windows update-in-place one-liner, no code in it — what the Agents "Update" button shows for a Windows agent that is behind) |
 | `/license` | license.js | viewer+ | license status + features + plan/usage/**matrix** (feature `status`: available/roadmap) |
@@ -202,6 +202,10 @@ categories); fleet health is computed in `src/health/probeHealth.js` from `probe
 
 A single vanilla-JS SPA. Key building blocks:
 - `el(tag, attrs, ...kids)` — DOM helper. `api(path, opts)` — fetch + bearer + 401 handling.
+- `dataCard(title, { actions, note }, ...body)` — the framed page section every
+  view's data lives in (heading + actions on top, table flush to the card's
+  edges). Page width is one rule for all views: `main#view` is `width: 100%`
+  capped at `--page-max`. See docs/design.md.
 - `views.<tab>` — async function per tab returning a node (`changes` (**the landing
   route** — what happened since you last looked; see docs/changes-feed.md),
   `fleet` (UI label **“Fleet”**, no longer the landing route — still the right

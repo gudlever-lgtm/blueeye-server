@@ -1133,6 +1133,21 @@ function hero(viewKey) {
     el('button', { class: 'ghost small', onclick: () => openDrawer(info.title, info.body) }, 'More info'));
 }
 
+// ---- Framed page section --------------------------------------------------
+// The Overview page sets the pattern every page follows: data lives inside a
+// framed panel with its heading (and its actions) on top, never loose on the
+// page background. `body` is usually a table, which runs flush to the card's
+// edges — the card carries the frame (see .data-card in styles.css).
+function dataCard(title, { actions = null, note = null } = {}, ...body) {
+  const head = el('div', { class: 'dc-head' }, el('h3', {}, title));
+  const acts = (Array.isArray(actions) ? actions : [actions]).filter(Boolean);
+  if (acts.length) head.append(el('div', { class: 'dc-actions' }, ...acts));
+  const card = el('div', { class: 'card data-card' }, head);
+  if (note) card.append(el('p', { class: 'muted dc-note' }, note));
+  card.append(...body.filter(Boolean));
+  return card;
+}
+
 let drawerEls = null;
 function openDrawer(title, bodyFn) {
   closeDrawer();
@@ -10760,11 +10775,28 @@ views.enrollment = async () => {
     }
   }
 
-  root.append(el('div', { class: 'section-head' }, el('h3', {}, 'Active codes'),
-    canWrite() ? el('button', { class: 'small ghost', onclick: () => createCode() }, '+ New code (advanced)') : null));
-  if (!codes.length) { root.append(el('div', { class: 'empty' }, 'No codes yet — use "Add agent" above.')); return root; }
   // Codes are one-time install tickets; the agent's real credential is separate.
-  root.append(el('p', { class: 'muted enroll-note' }, 'Codes are one-time install tickets. Once an agent enrols it stays connected on its own permanent token — independent of the code’s status — so a "used" or "expired" code never disconnects the agent shown beside it.'));
+  const CODES_NOTE = 'Codes are one-time install tickets. Once an agent enrols it stays connected on its own permanent token — independent of the code’s status — so a "used" or "expired" code never disconnects the agent shown beside it.';
+  // "Delete all expired" clears the codes that timed out unused (the ones badged
+  // "expired"); a used code — the one an enrolled agent is listed beside — is
+  // never swept up, so the button can never disconnect anything. Admin-only, and
+  // only offered when there is actually something to clear.
+  const expiredCount = codes.filter((c) => c.status === 'expired').length;
+  const newCodeBtn = canWrite()
+    ? el('button', { class: 'small ghost', onclick: () => createCode() }, '+ New code (advanced)')
+    : null;
+  const deleteExpiredBtn = (canDelete() && expiredCount)
+    ? el('button', {
+      class: 'small danger ghost',
+      title: t('enroll.codes.deleteExpiredTitle', { n: expiredCount }),
+      onclick: () => deleteExpiredCodes(expiredCount),
+    }, `${t('enroll.codes.deleteExpired')} (${expiredCount})`)
+    : null;
+  if (!codes.length) {
+    root.append(dataCard('Active codes', { actions: newCodeBtn },
+      el('div', { class: 'empty' }, 'No codes yet — use "Add agent" above.')));
+    return root;
+  }
   // The agent(s) a code enrolled, each a clickable live online/offline badge.
   const agentsCell = (agents) => ((agents && agents.length)
     ? el('div', { class: 'code-agents' }, ...agents.map((a) => el('span', {
@@ -10774,7 +10806,7 @@ views.enrollment = async () => {
       onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openAgent(a.id); } },
     }, el('span', { class: `badge ${a.online ? 'online' : 'offline'}` }, a.online ? 'online' : 'offline'), esc(a.name))))
     : el('span', { class: 'muted' }, '–'));
-  root.append(el('table', {},
+  root.append(dataCard('Active codes', { actions: [deleteExpiredBtn, newCodeBtn], note: CODES_NOTE }, el('div', { class: 'tablewrap' }, el('table', {},
     el('thead', {}, el('tr', {}, ...['ID', 'Status', 'Uses', 'Agents', 'Location', 'Expires', 'Created', ''].map((h) => el('th', {}, h)))),
     el('tbody', {}, ...codes.map((c) => el('tr', {},
       el('td', {}, String(c.id)),
@@ -10785,7 +10817,7 @@ views.enrollment = async () => {
       el('td', { class: 'muted' }, fmtDate(c.expires_at)),
       el('td', { class: 'muted' }, fmtDate(c.created_at)),
       el('td', {}, canDelete() ? el('button', { class: 'small danger', onclick: () => deleteCode(c) }, 'Delete') : null),
-    )))));
+    )))))));
   return root;
 };
 
@@ -10963,6 +10995,19 @@ async function deleteCode(c) {
   if (!confirm('Delete code?')) return;
   try { await api(`/enrollment-codes/${c.id}`, { method: 'DELETE' }); toast('Deleted'); render(); }
   catch (err) { toast(err.message, true); }
+}
+
+// Bulk cleanup: drop every code badged "expired" (timed out with uses left).
+// The server decides what qualifies — `n` is only what the list showed, used to
+// word the confirmation — and answers with the number it actually deleted.
+async function deleteExpiredCodes(n) {
+  if (!confirm(t('enroll.codes.deleteExpiredConfirm', { n }))) return;
+  try {
+    const res = await api('/enrollment-codes/expired', { method: 'DELETE' });
+    const deleted = (res && Number(res.deleted)) || 0;
+    toast(deleted ? t('enroll.codes.deleteExpiredDone', { n: deleted }) : t('enroll.codes.deleteExpiredNone'));
+    render();
+  } catch (err) { toast(err.message, true); }
 }
 
 // ---- Settings (settings overview: users + license + config) ---------

@@ -48,6 +48,27 @@ test('findAll skips the agents query when there are no codes', async () => {
   assert.equal(pool.queries.length, 1); // only the codes query ran
 });
 
+// ---- enrollmentCodesRepository.removeExpired --------------------------------
+
+// The bulk cleanup behind the "Delete all expired" button. It must delete the
+// SAME rows the list labels "expired" — timed out AND still holding uses —
+// so a used code (whose agent is enrolled and shown beside it) survives.
+test('removeExpired deletes only codes that timed out with uses left', async () => {
+  const queries = [];
+  const pool = { async query(sql, params) { queries.push({ sql, params }); return [{ affectedRows: 3 }]; } };
+  const deleted = await createEnrollmentCodesRepository({ pool }).removeExpired();
+  assert.equal(deleted, 3);
+  const sql = queries[0].sql.replace(/\s+/g, ' ');
+  assert.match(sql, /^DELETE FROM enrollment_codes WHERE /);
+  assert.match(sql, /uses_remaining > 0/); // a used code is never swept up
+  assert.match(sql, /expires_at <= NOW\(\)/);
+});
+
+test('removeExpired returns 0 when nothing matched', async () => {
+  const pool = { async query() { return [{ affectedRows: 0 }]; } };
+  assert.equal(await createEnrollmentCodesRepository({ pool }).removeExpired(), 0);
+});
+
 test('findAll derives status with "used" taking priority over "expired"', async () => {
   const pool = makeListPool({ codes: [{ id: 1, status: 'used' }] });
   await createEnrollmentCodesRepository({ pool }).findAll();

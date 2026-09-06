@@ -259,6 +259,28 @@ code, e.g. with Ansible:
         creates: /opt/blueeye-agent/current/src/index.js   # idempotent
 ```
 
+## Managing codes
+
+The dashboard's Enrollment page lists every code with a derived status —
+`active` (uses left AND time left), `used` (fully consumed) or `expired` (ran
+out of time without being used up). `used` wins over `expired`, so the code an
+agent actually enrolled with keeps reading `used` once its TTL elapses.
+
+| Method & path | Auth | Purpose |
+| --- | --- | --- |
+| `GET /enrollment-codes` | operator+ | list codes with their status and the agent(s) each enrolled |
+| `POST /enrollment-codes` | operator+ | mint a code (returns the plaintext **once**) |
+| `DELETE /enrollment-codes/expired` | admin | **bulk cleanup** — delete every code badged `expired`; answers `{ "deleted": n }` |
+| `DELETE /enrollment-codes/:id` | admin | delete one code (404 if it is gone) |
+
+`DELETE /enrollment-codes/expired` deletes exactly the rows the list badges
+`expired` (`uses_remaining > 0 AND expires_at <= NOW()`), so a `used` code — the
+one an enrolled agent is listed beside — is never swept up. Deleting nothing is
+a success (`{ "deleted": 0 }`), not a 404. It is registered before `/:id` so
+`expired` is not read as an id. The page's **Delete all expired (n)** button
+appears for admins only, and only when there is something to clear; deleting a
+code never disconnects an agent, which holds its own permanent token.
+
 ## Security
 
 - **Short-lived codes** — default 1 hour (`ENROLLMENT_CODE_TTL_MINUTES`),

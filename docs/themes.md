@@ -11,6 +11,11 @@ instantly on load with no flash.
   that override the `:root` CSS variables (`--bg`, `--panel`, `--accent`, …).
   Light is the default (`:root`); every other variant is one opt-in block. Each
   palette has a light and a dark block (e.g. `nord` / `nord-light`).
+  A variant only restates the **eleven palette colours** — the derived tokens
+  (status tints, hairlines, elevation, radii) are computed from them with
+  `color-mix()` and re-theme for free. See [design.md](design.md). The one
+  exception is elevation: dark palettes share a block that restates
+  `--shadow*`, because a light shadow is invisible on a dark panel.
 - **The catalogue** `PALETTES` in `public/app.js` lists each palette's `key`,
   `label` and its `light`/`dark` variants (each `{ key, swatch }`). It's flattened
   into `THEMES` (one entry per variant) carrying `family` (light|dark), `palette`,
@@ -37,7 +42,9 @@ instantly on load with no flash.
 
 Add a light **and** a dark variant, keeping these in sync:
 
-1. two `[data-theme="<key>"]` blocks in `public/styles.css` (all the `--*` vars),
+1. two `[data-theme="<key>"]` blocks in `public/styles.css` (the eleven palette
+   colours only — never the derived or layout tokens); add the dark variant's
+   key to the shared `--shadow*` override block too,
 2. an entry in `PALETTES` in `public/app.js` (`key`, `label`, `light`, `dark`,
    each with its variant `key` + `swatch`),
 3. both variant keys in `THEMES` in `src/validation/preferencesValidation.js`.

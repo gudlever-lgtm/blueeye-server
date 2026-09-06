@@ -65,6 +65,9 @@ function parseCoord(raw, min, max, field, errors) {
 
 // Parses a route :id param into a positive integer, or null if invalid.
 function parseId(raw) {
+  // Only strings and numbers can be ids; anything else (objects, symbols,
+  // null-prototype bodies) is rejected before String() could throw on it.
+  if (typeof raw !== 'string' && typeof raw !== 'number') return null;
   if (!/^\d+$/.test(String(raw))) return null;
   const n = Number(raw);
   return Number.isSafeInteger(n) && n > 0 ? n : null;

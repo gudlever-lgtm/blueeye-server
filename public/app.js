@@ -6664,6 +6664,17 @@ function investigationCard(inv) {
     nis2El);
 }
 
+// Help text for the Investigate view (i18n-backed: the getters re-read the
+// active locale on every render, so a language switch is reflected at once).
+PAGE_INFO.investigation = {
+  get hero() { return t('pageInfo.investigation.hero'); },
+  get title() { return t('pageInfo.investigation.title'); },
+  body: () => [
+    el('p', {}, t('pageInfo.investigation.body1')),
+    el('p', { class: 'muted' }, t('pageInfo.investigation.body2')),
+  ],
+};
+
 views.investigation = async () => {
   const root = el('div', { class: 'investigation' });
 

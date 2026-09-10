@@ -49,6 +49,38 @@ for attempt in 1 2 3 4 5; do
   warn "git pull failed (attempt $attempt); retrying in ${delay}s..."; sleep "$delay"; delay=$((delay * 2))
 done
 
+# --- Is blueeye-server current? --------------------------------------------
+# This script updates blueeye-licens, but the compose file it runs lives in
+# blueeye-server — and `docker compose` interpolates EVERY service in that file,
+# including ones outside the active profile. So a stale blueeye-server checkout
+# makes this deploy fail on a service it was never asked to touch, with an error
+# that names a variable nobody was thinking about.
+#
+# A warning, not a stop: the licens deploy is legitimate with an older server
+# checkout, and an operator who sees this first can read the compose error that
+# may follow for what it is. Best-effort — an unreachable remote is reported as
+# "could not check", never as a reason to refuse.
+check_server_current() {
+  git -C "$SERVER_DIR" rev-parse --git-dir >/dev/null 2>&1 || return 0
+  local branch behind
+  branch="$(git -C "$SERVER_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo '')"
+  [ -n "$branch" ] && [ "$branch" != "HEAD" ] || return 0
+
+  if ! timeout 30 git -C "$SERVER_DIR" fetch --quiet origin "$branch" 2>/dev/null; then
+    warn "Could not check whether blueeye-server is up to date (remote unreachable). Continuing."
+    return 0
+  fi
+  behind="$(git -C "$SERVER_DIR" rev-list --count "HEAD..origin/$branch" 2>/dev/null || echo 0)"
+  [ "$behind" -gt 0 ] 2>/dev/null || return 0
+
+  warn "blueeye-server is $behind commit(s) behind origin/$branch."
+  warn "This script runs docker-compose.yml from blueeye-server, and compose reads every"
+  warn "service in it — so an outdated copy can fail this deploy on an unrelated service."
+  warn "If the next step errors on a missing variable or an unknown service, run:"
+  warn "    git -C \"$SERVER_DIR\" pull --ff-only"
+}
+check_server_current
+
 # --- Rebuild + restart only the licens service -----------------------------
 # licens is a profiled service ("licens"), so it's only ever started here — a
 # plain `docker compose up` (deploy.sh) never touches it.

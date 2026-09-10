@@ -126,6 +126,33 @@ test('no foreign key in the snapshot references a table the snapshot does not cr
   assert.deepEqual(dangling, []);
 });
 
+test('no two foreign keys in the snapshot share a constraint name', () => {
+  // InnoDB constraint names are SCHEMA-global, not per-table. Migration 080
+  // shipped `fk_stc_app` on service_test_certificates while migration 078
+  // already had it on service_test_credentials — both read as "stc" — and the
+  // deploy died on "Duplicate foreign key constraint name". Nothing caught it:
+  // the snapshot is verified structurally because there is no MySQL in the test
+  // run, and a duplicate name is perfectly well-formed SQL until a server tries
+  // to create the second one.
+  //
+  // This is the cheapest possible stand-in for that server: names are global, so
+  // uniqueness is checkable from the file alone.
+  const model = modelFromSql(snapshot());
+  const owners = new Map();
+  for (const table of model.tables.values()) {
+    for (const key of table.keys) {
+      const named = /CONSTRAINT\s+`?(\w+)`?\s+FOREIGN KEY/i.exec(key.def);
+      if (!named) continue;
+      const name = named[1];
+      if (!owners.has(name)) owners.set(name, []);
+      owners.get(name).push(table.name);
+    }
+  }
+  const clashes = [...owners].filter(([, tables]) => tables.length > 1)
+    .map(([name, tables]) => `${name} on ${tables.join(' and ')}`);
+  assert.deepEqual(clashes, [], 'a foreign key constraint name is reused — MySQL refuses the second one');
+});
+
 test('the retired incident_* vocabulary is gone from the snapshot', () => {
   // Migration 077 renamed these; the snapshot must show the renamed world, not
   // the pre-077 one, and its foreign keys must point at the new names.

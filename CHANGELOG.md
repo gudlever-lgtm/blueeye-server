@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.123.5 — migration 080 could not be applied: a duplicate constraint name
+
+The deploy died on the first statement of the migration the last release
+shipped:
+
+```
+Applying migration: 080_create_service_assurance_reactions.sql
+Migration 080 failed: Duplicate foreign key constraint name 'fk_stc_app'
+```
+
+InnoDB foreign key constraint names are **schema-global**, not per-table.
+`service_test_credentials` has carried `fk_stc_app` since migration 078, and
+`service_test_certificates` — also "stc" — asked for it again. MySQL refuses the
+second one, so no table was created, no `schema_migrations` row was written, and
+the server exited 1 before it ever started. Nothing in Service Assurance ran on
+the new release.
+
+The certificate table's keys are `stcert` now (`fk_stcert_app`, `fk_stcert_env`,
+`uq_stcert_target`, `idx_stcert_*`). Migration 080 is corrected in place rather
+than superseded by an 081: it failed on its first statement everywhere it ran, so
+there is no partially-created table to repair and a re-run is clean.
+
+**Why no test caught it.** There is no MySQL in the test run, so `schema.sql` is
+verified structurally — and a duplicate constraint name is perfectly well-formed
+SQL right up until a server tries to create the second one. Constraint names
+being global is exactly what makes this checkable from the file alone, so
+`test/schemaSnapshot.test.js` now sweeps all 73 foreign keys for a reused name.
+It fails on the shipped migration and passes on the corrected one.
+
 ## 0.123.4 — Service Assurance reacts to what it finds
 
 The module recorded and stopped. A scheduled test failed at 02:00, `classify.js`

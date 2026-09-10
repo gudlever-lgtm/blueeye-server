@@ -2011,11 +2011,11 @@ CREATE TABLE IF NOT EXISTS service_test_certificates (
   checked_at DATETIME(3)       DEFAULT NULL,
   created_at DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  UNIQUE KEY uq_stc_target (application_id, host, port),
-  INDEX idx_stc_status (status, valid_to),
-  INDEX idx_stc_checked (checked_at),
-  CONSTRAINT fk_stc_app FOREIGN KEY (application_id) REFERENCES service_test_applications(id) ON DELETE CASCADE,
-  CONSTRAINT fk_stc_env FOREIGN KEY (environment_id) REFERENCES service_test_environments(id) ON DELETE SET NULL
+  UNIQUE KEY uq_stcert_target (application_id, host, port),
+  INDEX idx_stcert_status (status, valid_to),
+  INDEX idx_stcert_checked (checked_at),
+  CONSTRAINT fk_stcert_app FOREIGN KEY (application_id) REFERENCES service_test_applications(id) ON DELETE CASCADE,
+  CONSTRAINT fk_stcert_env FOREIGN KEY (environment_id) REFERENCES service_test_environments(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- ---------------------------------------------------------------- incidents

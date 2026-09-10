@@ -22,6 +22,15 @@
 -- Same rules as migration 078: `service_test_` prefix, no foreign keys across the
 -- module boundary, tenant_id present-but-unused on the query roots, and no
 -- DEFAULT on a JSON column (MySQL 8.4).
+--
+-- The certificate table's keys are prefixed `stcert`, not `stc`. InnoDB foreign
+-- key constraint names are SCHEMA-global, not per-table, and `fk_stc_app` was
+-- already taken by service_test_credentials in migration 078 — this file shipped
+-- once with that collision and failed on its first statement with "Duplicate
+-- foreign key constraint name". Nothing was created and no schema_migrations row
+-- was written, so it is corrected here rather than superseded by an 081 that
+-- would have to repair a table that never existed. test/schemaSnapshot.test.js
+-- now sweeps the whole schema for a repeat.
 
 -- ---------------------------------------------------------------- certificates
 -- One row per (application, host, port). Two environments on the same host share
@@ -55,11 +64,11 @@ CREATE TABLE service_test_certificates (
   checked_at     DATETIME(3)       DEFAULT NULL,
   created_at     DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at     DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  UNIQUE KEY uq_stc_target (application_id, host, port),
-  INDEX idx_stc_status (status, valid_to),
-  INDEX idx_stc_checked (checked_at),
-  CONSTRAINT fk_stc_app FOREIGN KEY (application_id) REFERENCES service_test_applications(id) ON DELETE CASCADE,
-  CONSTRAINT fk_stc_env FOREIGN KEY (environment_id) REFERENCES service_test_environments(id) ON DELETE SET NULL
+  UNIQUE KEY uq_stcert_target (application_id, host, port),
+  INDEX idx_stcert_status (status, valid_to),
+  INDEX idx_stcert_checked (checked_at),
+  CONSTRAINT fk_stcert_app FOREIGN KEY (application_id) REFERENCES service_test_applications(id) ON DELETE CASCADE,
+  CONSTRAINT fk_stcert_env FOREIGN KEY (environment_id) REFERENCES service_test_environments(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- ---------------------------------------------------------------- incidents

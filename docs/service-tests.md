@@ -33,10 +33,14 @@ dependency, and it is confined to the worker process (§7).
 | Need | Reuse |
 | --- | --- |
 | Auth + RBAC | `requireAuth` / `requireRole(ROLES.…)` — `src/auth/middleware.js` |
+| Licence gating | `requirePlanFeature(deps, key)` + `FEATURE_CATALOG` — `src/license/features.js`, `plans.js` |
 | Secret storage | `src/lib/secretBox.js` (AES-256-GCM, `v1.gcm.…`, keyed off `SECRET_ENCRYPTION_KEY`) — already used for integration + LDAP credentials |
 | SSRF blocking | `src/integrations/ssrfGuard.js` (`isBlockedHost`, `baseUrlBlockedReason`) |
+| CIDR maths for the host allowlist | `src/discovery/cidr.js` — `parseCidr`, `totalAddresses` (counts **without** enumerating, so an over-cap range is refused before any allocation), `inScope` |
+| CSV export | `src/lib/csv.js` (`toCsv` — RFC4180 + formula-injection guard) |
 | Audit trail | `auditLogger.record()` + `auditEventsRepo` |
-| Background jobs | The `{ start, stop }` singleton-job contract in `src/server.js`; pacing pattern from `src/services/testPackageScheduler.js` |
+| Artefact retention | the rollup/purge/scheduler pattern in `src/analysis/retention/` |
+| Background jobs | the `{ start, stop }` singleton contract in `src/server.js`; pacing from `src/services/testPackageScheduler.js` |
 | Validation contract | `{ value }` \| `{ errors }` pure validators; HTTP `400 { error:'Validation failed', details }` |
 | Migrations | numbered `migrations/NNN_*.sql` + `npm run build-schema` |
 | DSL/secret-reference precedent | `transaction_tests` (`{{secret:name}}` refs, write-only secrets) — migration 046 |
@@ -55,7 +59,7 @@ and one adapter object — no Service Tests file reaches into a BlueEye internal
 ```
 src/serviceTests/
 ├── index.js          # createServiceTestsModule(ports) → { router, jobs }  ← THE ONLY SEAM
-├── ports.js          # the adapter interfaces: { db, secrets, auth, audit, logger, clock }
+├── ports.js          # the adapter interfaces: { db, secrets, auth, licence, audit, logger, clock }
 ├── engine/           # the neutral DSL — PURE, no Playwright, no DB
 │   ├── dsl.js        #   step catalogue + version 1 schema
 │   ├── validate.js   #   definition → { value | errors }
@@ -70,11 +74,15 @@ src/serviceTests/
 ├── runner/
 │   ├── execute.js    #   PURE dispatch: DSL step → calls on a driver interface
 │   ├── driver.js     #   the Playwright adapter — THE ONLY file that requires playwright
+│   ├── artifacts.js  #   screenshot capture, encoding, masking, retention hooks
 │   └── classify.js   #   PURE: failure → { category, likely_cause, explanation }
 ├── scheduler/
 │   ├── queue.js      #   DB-backed claim/complete over service_test_runs
 │   ├── schedule.js   #   PURE: due-time arithmetic (interval + timezone)
 │   └── worker.js     #   the loop: claim → run → persist → repeat
+├── security/
+│   ├── hostPolicy.js #   the SSRF decision: deny-list ∩ allowlist (§6)
+│   └── allowlistIo.js#   CSV/line-list import + export of allowlist entries
 ├── storage/          # repositories (pool in, plain objects out) — one per table group
 ├── validation/       # HTTP input validators (pure, { value | errors })
 └── api/              # Express routers, one per resource
@@ -82,6 +90,7 @@ src/serviceTests/
 public/serviceTests.js    # the whole UI (window.ServiceTests), loaded by its own <script>
 public/serviceTests.css   # own stylesheet, every selector prefixed .st-
 scripts/service-test-worker.js   # worker entrypoint (separate process)
+docker/Dockerfile.service-test-worker
 ```
 
 `public/app.js` gains **one** function:
@@ -103,7 +112,7 @@ Reconnecting it elsewhere means re-implementing `ports.js` — nothing else.
 
 ## 3. Database — migration `078_create_service_tests.sql`
 
-Twelve tables, all prefixed `service_test_`, all with `id`, `created_at`,
+Fourteen tables, all prefixed `service_test_`, all with `id`, `created_at`,
 `updated_at`, and a **nullable, unused `tenant_id INT NULL`** (spec §27 — forward
 compatibility only; BlueEye has no tenant system and V1 introduces none). No FKs
 to existing BlueEye tables in either direction.
@@ -113,11 +122,11 @@ to existing BlueEye tables in either direction.
 | `service_test_applications` | name, description, `base_url`, enabled |
 | `service_test_environments` | `application_id`, name, `base_url`, type (production/staging/development/test/custom), enabled |
 | `service_test_credentials` | `application_id`, label, username, `secret_encrypted` (AES-256-GCM), never returned |
-| `service_test_allowed_hosts` | per-application host allowlist — the SSRF escape hatch (§6) |
+| `service_test_allowed_hosts` | `application_id`, `entry_type` (`host`/`ip`/`cidr`), `value`, `note`, `created_by` — the SSRF escape hatch (§6) |
 | `service_test_tests` | `application_id`, name, `definition` JSON (the DSL), `version` INT, enabled |
 | `service_test_test_steps` | denormalised step rows for ordering/drag & drop + per-step enable/rename |
 | `service_test_test_versions` | prior `definition` snapshots (spec §38 — rollback later) |
-| `service_test_runs` | **also the job queue**: status, `environment_id`, start/end, duration, `failed_step`, `error_message`, `screenshot_path`, browser, `console_errors`, `network_errors` |
+| `service_test_runs` | **also the job queue**: status, `environment_id`, start/end, duration, `failed_step`, `error_message`, `screenshot_path`, browser, `console_errors`, `network_errors`, `claimed_by`, `claimed_at` |
 | `service_test_run_steps` | per-step status, ms, message, technical detail |
 | `service_test_discoveries` | one crawl: scope, budgets, counters, started/finished |
 | `service_test_discovery_pages` | url, title, status, redirects, timing |
@@ -174,11 +183,17 @@ One line in `src/routes/index.js`:
 if (serviceTests) router.use('/api/service-tests', serviceTests.router);
 ```
 
+The whole mount sits behind `requirePlanFeature(deps, 'service_tests')` (§8), and
+each route additionally carries its role requirement.
+
 | Route | Role |
 | --- | --- |
 | `GET/POST /applications`, `GET/PUT/DELETE /applications/:id` | read viewer+ · write **admin** |
 | `GET/POST/PUT/DELETE /environments…` | read viewer+ · write **admin** |
 | `GET/POST/PUT/DELETE /credentials…` | **admin only**, secret write-only, never returned |
+| `GET/POST/DELETE /applications/:id/allowed-hosts…` | **admin only**, audited per entry |
+| `POST /applications/:id/allowed-hosts/import` (`?dry_run=1`) | **admin only** |
+| `GET /applications/:id/allowed-hosts/export.csv` | **admin only** |
 | `GET/POST/PUT/DELETE /tests…` | read viewer+ · write **operator+** |
 | `POST /tests/:id/run` | **operator+** — enqueues, returns `202 { run_id }` |
 | `GET /runs`, `GET /runs/:id`, `GET /runs/:id/screenshot` | viewer+ |
@@ -188,8 +203,8 @@ if (serviceTests) router.use('/api/service-tests', serviceTests.router);
 
 No route is public. No route is viewer-writable — so neither gate allowlist
 (`PUBLIC_ROUTES`, `VIEWER_WRITE_ALLOWED` in `test/gate/security.test.js`) changes.
-Credential, application and test writes are recorded through `auditLogger` under
-category `service_tests`.
+Credential, application, allowlist and test writes are recorded through
+`auditLogger` under category `service_tests`.
 
 Versioning: the mount path stays `/api/service-tests`; a future `/api/service-tests/v2`
 mounts beside it because the router is built inside the module, not spliced into
@@ -199,29 +214,77 @@ mounts beside it because the router is built inside the module, not spliced into
 
 ## 6. Security
 
-**SSRF (spec §10) — `src/serviceTests/security/hostPolicy.js`.** This module makes
-the server a browser, so it is the one place a bug turns BlueEye into an open
-proxy. The policy wraps the existing `ssrfGuard` and adds what a browser needs:
+### The host policy — `src/serviceTests/security/hostPolicy.js`
 
-1. **Scheme allowlist** — `http:`/`https:` only. `file:`, `ftp:`, `data:`, `blob:`,
-   `ws:` and everything else are refused.
-2. **Host allowlist** — a request is allowed only if its host is the application's
-   base-URL host, an environment base-URL host, or a row in
-   `service_test_allowed_hosts`. Everything else is blocked, external links included.
-3. **Resolved-IP check** — the host is resolved and *every* returned address is run
-   through `ssrfGuard`, closing the DNS-rebinding gap the existing literal-only
-   guard documents. Loopback, RFC1918, link-local (incl. `169.254.169.254`), CGNAT,
-   ULA and `localhost` are refused.
-4. **Enforced at three points** — validation time (base URLs), navigation time
-   (every `open`), and request time via Playwright `page.route()`, which aborts
-   every off-policy request the page itself makes, redirects included.
+This module makes the server a browser, so it is the one place a bug turns
+BlueEye into an open proxy. Every navigation and every sub-request passes two
+**independent** checks, and both must pass:
 
-**The on-prem exception, stated plainly.** BlueEye is on-prem software; the
-applications customers most want to test live on RFC1918. Rule 3 blocks exactly
-those. So `service_test_allowed_hosts` carries an explicit, admin-only, audited
-per-application entry that permits a named private host — that is the "explicit
-enterprise configuration" §10 anticipates, kept secure-by-default: nothing private
-is reachable until an admin names it, one host at a time. No CIDR wildcards in V1.
+**Check 1 — the permanent deny-list.** Refused for everyone, always, and not
+allowlistable at any privilege level:
+
+- non-`http:`/`https:` schemes — `file:`, `ftp:`, `data:`, `blob:`, `ws:`, …
+- loopback (`127.0.0.0/8`, `::1`, `localhost`, `*.localhost`)
+- link-local and the cloud metadata endpoint (`169.254.0.0/16`, incl. `169.254.169.254`)
+- `0.0.0.0/8` and the broadcast address
+
+Loopback and metadata stay permanently closed on purpose. Loopback would let a
+test browser reach BlueEye's own API from the server's own network position;
+metadata endpoints are the classic SSRF pivot. Neither is something an operator
+should be able to unlock by editing a list.
+
+**Check 2 — the per-application allowlist.** A target is permitted only if it
+matches the application's base-URL host, an environment base-URL host, or a row in
+`service_test_allowed_hosts`. Everything else is refused, external links included.
+
+Three entry types:
+
+| `entry_type` | Example | Matching |
+| --- | --- | --- |
+| `host` | `portal.kunde.dk` | exact hostname (case-insensitive), no wildcards |
+| `ip` | `10.20.30.40` | exact address (`parseCidr` treats a bare IP as `/32`) |
+| `cidr` | `10.20.0.0/16` | `inScope()` against the parsed range |
+
+**RFC1918 is allowlistable — that is the whole point.** BlueEye is on-prem
+software and the applications customers want tested live on private ranges. What
+the allowlist opens is *private LAN* addresses; what it can never open is
+*host-local and metadata* addresses. That split is the design.
+
+**Caps on a range.** A CIDR is far more blast radius than a hostname, so:
+
+- prefixes shorter than `/16` are refused outright, whatever the cap
+- total addresses across one application's entries are capped
+  (`SERVICE_TEST_ALLOWLIST_MAX_ADDRESSES`, default 65 536 = one `/16`), counted with
+  `totalAddresses()` so an over-cap list is refused before anything is allocated
+- a range that overlaps the permanent deny-list is refused at write time, rather
+  than silently having holes punched in it at request time
+
+**Hostname entries still get the resolved-IP check.** The host is resolved and
+*every* returned address goes through check 1, which closes the DNS-rebinding gap
+the existing literal-only `ssrfGuard` documents. An allowlisted hostname that
+resolves to `169.254.169.254` is still refused.
+
+**Enforced at three points** — validation time (base URLs and allowlist writes),
+navigation time (every `open`), and request time via Playwright `page.route()`,
+which aborts every off-policy request the page itself makes, redirects included.
+
+### Import / export
+
+Operators arrive with an existing list of hosts or segments, so typing them one at
+a time is not the normal path.
+
+- **Export** — `GET …/allowed-hosts/export.csv`, columns `type,value,note`, built
+  with `src/lib/csv.js` `toCsv` (formula-injection guard included).
+- **Import** — `POST …/allowed-hosts/import`, admin only. Accepts the same CSV or
+  a plain one-entry-per-line list; `entry_type` is inferred when the column is
+  absent. Capped at 1 000 entries / 1 MB. Every row is validated **before**
+  anything is written: on any invalid or over-cap row the whole import is
+  rejected with the standard `400 { error:'Validation failed', details }` naming
+  the offending line numbers. `?dry_run=1` returns exactly what would change
+  without writing, so an operator can check a pasted list first.
+- The import is one audit entry recording the count, plus the per-entry rows.
+
+### The rest
 
 **Budgets** — max pages (100), max depth (5), max requests, per-navigation timeout
 (30 s), total crawl duration (5 min), max steps per test, max run duration. Stored
@@ -234,49 +297,152 @@ pay/send/reset wording, `type=submit` on an unknown form) as
 Contact forms are discovered but never submitted.
 
 **Secrets** — encrypted at rest via `secretBox`, decrypted only inside the worker,
-never in an API response, never in a log line, error, exception, screenshot or
-test definition. A dedicated gate-style test asserts a known credential value
-appears in **no** run artefact.
+never in an API response, log line, error, exception, screenshot or test
+definition. A dedicated gate-style test asserts a known credential value appears in
+**no** run artefact.
 
 ---
 
-## 7. Worker and Playwright (spec §22–23)
+## 7. Browser engine, sovereignty and disk usage
+
+### There is no European alternative that changes the calculus
+
+The binding constraint is the browser engine, not the automation library. Every
+production engine is US-origin: Chromium (Google), Gecko (Mozilla), WebKit
+(Apple). Replacing Playwright still leaves you running one of the three.
+
+| Alternative | Governance | Verdict |
+| --- | --- | --- |
+| Puppeteer | Google (US) | Same category, fewer capabilities |
+| Selenium / WebDriver | Software Freedom Conservancy (US) | The protocol is a W3C standard; the drivers are still Google/Mozilla |
+| WebdriverIO | OpenJS Foundation (US), many European maintainers | Genuinely community-governed, still drives chromedriver/geckodriver |
+| Cypress | Cypress.io (US, commercial) | Worse — commercial coupling |
+| Servo | **Linux Foundation Europe** | The only European-governed engine, and it cannot run real web apps yet |
+| Ladybird | US non-profit, Swedish founder | Independent engine, years away |
+
+**Playwright is not in the category the convention targets.** "No US vendors" in
+CLAUDE.md is about map tiles, GeoIP/ASN, geocoder and fonts — *services called
+over the network at runtime* that send customer data to a US-controlled endpoint.
+Playwright is Apache-2.0 source running locally, with no telemetry and no outbound
+calls. Its one real US dependency is the browser download from Microsoft's CDN at
+install time, and that is exactly what distro Chromium removes.
+
+The durable answer to sovereignty here is the seam, not a different vendor:
+`driver.js` is the only file that touches Playwright and `execute.js` dispatches
+onto an interface. Moving to WebDriver BiDi — the W3C standard the field is
+converging on — later means writing a second driver. Test definitions never change.
+
+### Keeping disk usage down
+
+Two separate problems. Image size is a one-off; artefacts grow without a ceiling.
+
+**Image — approximate, to be verified at build time:**
+
+| | Approx. on disk |
+| --- | --- |
+| `npm i playwright` + all three browsers | 1–1.5 GB |
+| `playwright-core` alone | ~5 MB |
+| Debian `chromium` + libs via apt | ~350–450 MB |
+| `node:22-bookworm-slim` base | ~200 MB |
+| **Worker total** | **~600–700 MB** |
+| Server image today (alpine), **unchanged** | ~150–200 MB |
+
+Levers, in descending order of effect:
+
+1. **The server image does not change.** The worker is a separate image behind a
+   compose profile — the same pattern `docker-compose.yml` already uses for
+   `licens`. A customer who never enables Service Tests pulls nothing extra.
+2. **`playwright-core`, not `playwright`.** The `playwright` package's postinstall
+   downloads browsers; `playwright-core` does not. `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`
+   as belt-and-braces.
+3. **Chromium only.** Firefox/WebKit are prepared architecturally and never
+   installed — that alone is two-thirds of the browser payload.
+4. **Chromium from apt**, not the vendor download: security updates arrive through
+   the normal Debian channel, nothing is fetched from a US CDN at build time, and
+   apt deduplicates the shared libraries. `--no-install-recommends` and
+   `rm -rf /var/lib/apt/lists/*` in the same layer. Playwright is pointed at it via
+   `PLAYWRIGHT_CHROMIUM_PATH` → `executablePath`.
+5. **Copy only what the worker needs** — `src/serviceTests/`, `src/lib/`,
+   `src/db.js`, the worker entrypoint and the package files. Not the whole repo.
+6. **`fonts-liberation`** (~2 MB) and no more. Without fonts, text renders as boxes
+   and screenshots are worthless. These are local font files, not a hosted font
+   service, so the EU-fonts convention is unaffected.
+
+The alternative to lever 4 is Playwright's `chromium-headless-shell`, materially
+smaller than full Chromium but only available down the vendor-download path.
+Distro Chromium costs disk and buys the patching story.
+
+### Artefacts are the real growth risk
+
+A 1280×720 PNG screenshot is 100–300 KB. A test on "every 5 minutes" failing
+across a weekend produces ~576 failures a day — roughly 115 MB/day, for one test.
+So, from day one:
+
+- screenshot **only on failure** (already the spec), viewport rather than full-page
+- WebP or JPEG at quality ~70 instead of PNG — 5–10× smaller
+- a retention policy plugged into the existing `src/analysis/retention/` pattern,
+  with `SERVICE_TEST_SCREENSHOT_RETENTION_DAYS`
+- a per-run artefact cap
+
+Runtime hygiene: reuse one browser process across runs with a fresh `context` per
+run, cap concurrent contexts, and run with `--disable-dev-shm-usage` plus a tmpfs
+on `/dev/shm` — Chromium crashes in containers with a small shm.
+
+### Worker and queue (spec §22–23)
 
 ```
 UI → Express API → service_test_runs (status=queued) → worker claims → Playwright → result rows
 ```
 
 Playwright never runs inside an Express request. `POST /tests/:id/run` inserts a
-`queued` run and returns `202` immediately. The worker (`scripts/service-test-worker.js`,
+`queued` run and returns `202`. The worker (`scripts/service-test-worker.js`,
 `npm run service-test-worker`) claims work with a conditional update —
 `UPDATE … SET status='running', claimed_by=?, claimed_at=? WHERE id=? AND status='queued'` —
 so the claim is atomic and multiple workers are safe from day one. A run stuck in
 `running` past its timeout is reaped back to `error`. `queue.js` is the seam a real
 queue (Redis, NATS) replaces later without touching the runner.
 
-**Deployment, and the one open question.** The server image is `node:22-alpine`,
-which is not a supported Playwright platform, and a full `playwright` install pulls
-~400 MB of browser binaries into an image that is currently ~200 MB. So:
-
-- the server keeps **no** Playwright dependency;
-- the worker declares **`playwright-core`** (Apache-2.0) and gets its Chromium from
-  the distro, via a separate `docker/Dockerfile.service-test-worker` on
-  `node:22-bookworm-slim` + the Debian `chromium` package, wired with
-  `PLAYWRIGHT_CHROMIUM_PATH` → `executablePath`;
-- a new `service-tests-worker` service in `docker-compose.yml`, sharing the DB.
-
-This avoids downloading Microsoft-hosted browser builds and keeps the server image
-unchanged. Playwright itself is Microsoft-authored open source running entirely
-on-prem — no US SaaS, no telemetry, no outbound calls — but it is a US-origin
-project, so it is called out here rather than assumed against the "no US vendors"
-convention, which targets tiles/GeoIP/geocoder/fonts. **Confirm before implementation.**
-
 Without a running worker the UI shows runs as queued with "no worker connected"
 (derived from the newest `claimed_at`), never a silent hang.
 
 ---
 
-## 8. UI (spec §14, §29, §39)
+## 8. Licence and RBAC — two layers
+
+The licence decides **whether the module exists**; RBAC decides **who may do what
+inside it**. A licensed install with a viewer-only user gets a read-only Service
+Tests tab; an unlicensed install gets no tab at all.
+
+- New catalogue key **`service_tests`** in `FEATURE_CATALOG` (`src/license/plans.js`),
+  `minPlan: 'professional'` — the tier where the comparable modules sit.
+- Registered as `status: 'roadmap'` with a matching **ROADMAP.md** entry **before
+  implementation starts**, then flipped to `available` when the module ships. That
+  is the repo's own documented process (ROADMAP.md § "How to mark a roadmap item done").
+- Server side: the whole `/api/service-tests` mount is wrapped in
+  `requirePlanFeature(deps, 'service_tests')`, which returns the documented
+  `403 { success:false, error:'feature_not_available', feature, message }` with an
+  upgrade hint from `planService.upgradeHint()`.
+- UI side: `data-feature="service_tests"` on the nav button, so the tab hides
+  itself on an unlicensed install exactly like the other gated tabs.
+- RBAC inside the module is the table in §5 — viewer reads, operator builds and
+  runs, admin owns applications, credentials and the host allowlist.
+
+Two known touch-points in existing code, both minimal and backward-compatible
+(guardrail 1):
+
+1. `test/gate/ui.test.js` currently checks `data-feature` values against
+   `KNOWN_FEATURES` — the four **legacy proof** keys only, so no plan-catalogue key
+   would pass. The assertion is extended to `KNOWN_FEATURES ∪ ALL_FEATURE_KEYS`.
+   That closes a gap in the sweep rather than loosening it: today a nav button
+   carrying any valid plan key fails the gate.
+2. `test/featureCompletion.test.js` asserts `ROADMAP_FEATURE_KEYS` is empty
+   ("everything catalogued is shipped"). Queuing a roadmap item makes that false by
+   design, so it becomes "the only queued key is `service_tests`", and returns to
+   empty when the module ships.
+
+---
+
+## 9. UI (spec §14, §29, §39)
 
 One nav entry under **Diagnostics**, beside Probes & Tests and Transaktionstests.
 Sub-tabs inside the view: **Applications · Discovery · Suggested tests · Tests ·
@@ -290,6 +456,11 @@ på · Vælg · Vent på · Kontroller* — with selectors, timeouts and the raw
 error folded behind a **Technical details** disclosure. No user path requires
 writing JSON, CSS selectors or code.
 
+The allowlist editor is an admin screen on the application: a table of entries, an
+add row that accepts a hostname, an IP or a CIDR, **Import** (with the dry-run
+preview) and **Export**. Refusals explain themselves — "10.0.0.0/8 covers 16.7
+million addresses; the limit is 65 536" beats a generic validation error.
+
 Failures render as the spec's shape: step number, plain-language cause, HTTP status,
 likely cause, screenshot. All new strings go through `t('serviceTests.*')` and are
 added to **both** `en` and `da` in `public/i18n.js` (the gate enforces key and
@@ -297,32 +468,33 @@ placeholder parity).
 
 ---
 
-## 9. Gate extensions (deliberate, not loosening)
+## 10. Gate extensions (deliberate, not loosening)
 
 | Gate | Extension |
 | --- | --- |
 | `security.test.js` | Nothing to allowlist — no public and no viewer-write routes. Add one rule: no credential value ever appears in a run artefact |
-| `ui.test.js` | Picks up the new `data-view` / `views.serviceTests` / `PAGE_INFO` / `t()` keys automatically. Add `public/serviceTests.js` + `.css` to the parse sweep (automatic — it globs `public/`) |
+| `ui.test.js` | Picks up the new `data-view` / `views.serviceTests` / `PAGE_INFO` / `t()` keys automatically. **Extend the `data-feature` check to `KNOWN_FEATURES ∪ ALL_FEATURE_KEYS`** (§8) |
 | `validation.test.js` | The suite asserts every `src/validation/*.js` module has a named rule. Service Tests validators live in `src/serviceTests/validation/` for the standalone boundary, so **extend the sweep to that directory too** and add the per-module rules |
+| `featureCompletion.test.js` | Roadmap-key assertion, per §8 |
 
 Route-count and validator-count floors only rise.
 
 ---
 
-## 10. Delivery order
+## 11. Delivery order
 
 Each phase is independently testable and leaves `main` green.
 
 | PR | Phase (spec §40) | Contents |
 | --- | --- | --- |
-| 1 | 1–2 | Module skeleton, `ports.js`, migration 078, `schema.sql`, repositories + repo tests |
-| 2 | 3–4 | Applications, Environments, Credentials — routers, validators, RBAC, audit, host policy, UI list/forms |
+| 1 | 1–2 | Feature key registered (`plans.js` + ROADMAP.md + the two test updates in §8), module skeleton, `ports.js`, migration 078, `schema.sql`, repositories + repo tests |
+| 2 | 3–4 | Applications, Environments, Credentials — routers, validators, RBAC, licence gate, audit; host policy + allowlist CRUD/import/export; UI list/forms |
 | 3 | 5 | The DSL: `dsl.js`, `validate.js`, `targeting.js`, `redact.js` — pure, fully unit-tested |
-| 4 | 6 | `driver.js` (Playwright), `execute.js`, `classify.js`, worker + queue, compose service |
+| 4 | 6 | `driver.js` (Playwright), `execute.js`, `classify.js`, `artifacts.js`, worker + queue, worker Dockerfile + compose profile |
 | 5 | 7–8 | Test Designer (drag & drop), run + results + screenshots + logs, failure classification UI |
 | 6 | 9–10 | Discovery (crawl, extract, safety, budgets) + rule-based suggestions + the accept flow |
-| 7 | 11–12 | Scheduler + history (last run, success rate, avg duration, last failure) |
-| 8 | 13–14 | Security hardening pass, gate extensions, `docs/` update, UI polish, i18n sweep |
+| 7 | 11–12 | Scheduler + history (last run, success rate, avg duration, last failure) + artefact retention job |
+| 8 | 13–14 | Security hardening pass, gate extensions, `status: 'available'` flip, docs, UI polish, i18n sweep |
 
 Every PR: `npm test` green, endpoints tested for 400/401/403/404/500, no outbound
 network in tests, `npm version patch|minor --no-git-tag-version`, `CHANGELOG.md` entry.
@@ -332,12 +504,14 @@ end, without writing code.
 
 ---
 
-## 11. Decisions needed before code
+## 12. Decisions taken
 
-1. **Playwright + Chromium via a separate Debian worker image** (§7) — confirm, given
-   the "no US vendors" convention and the image-size cost.
-2. **Per-application private-host allowlist** (§6) — confirm it ships in V1; without
-   it Service Tests cannot reach any on-prem application.
-3. **License gating** — V1 proposes RBAC only, no new feature key, so the nav button
-   carries no `data-feature` (matching Transaction tests). Say if Service Tests should
-   instead be a Professional-tier feature.
+1. **Playwright + distro Chromium in a separate Debian worker image** — agreed.
+   Rationale and the disk-usage plan are §7.
+2. **Host allowlist ships in V1, optional to use** — agreed, and extended: entries
+   may be a hostname, a single IP or a **CIDR segment**, with **CSV import/export**
+   and a dry-run preview (§6). Empty by default, so the module stays
+   secure-by-default; loopback and metadata addresses remain permanently
+   un-allowlistable.
+3. **Licence *and* RBAC** — agreed. `service_tests` is a Professional-tier feature
+   key; once the licence permits the module, access inside it is decided by role (§8).

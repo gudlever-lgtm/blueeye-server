@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.118.5 — Service Tests: the three open decisions, answered
+
+The plan in `docs/service-tests.md` ended with three questions. All three are now
+settled and written into it.
+
+**Browser engine.** There is no European alternative worth switching to: the
+binding constraint is the engine, not the automation library, and Chromium, Gecko
+and WebKit are all US-origin. Servo is the only European-governed engine (Linux
+Foundation Europe) and cannot run real web apps yet. Playwright also sits outside
+what the "no US vendors" convention targets — that rule is about services called
+over the network at runtime, and Playwright is Apache-2.0 source running locally
+with no telemetry. Its one real US dependency is the browser download at install
+time, which distro Chromium removes. The durable protection is the seam:
+`driver.js` is the only file that touches Playwright, so WebDriver BiDi later
+means a second driver, not a rewrite.
+
+**Disk usage** gets its own section. The server image does not change at all — the
+worker is a separate image behind a compose profile, the way `licens` already is.
+`playwright-core` instead of `playwright`, Chromium only, Chromium from apt rather
+than a vendor CDN, and a worker image that copies only what it needs. The section
+also names the growth risk people miss: screenshots, where one five-minute test
+failing across a weekend writes ~115 MB/day. Failure-only capture, WebP, a per-run
+cap and a retention job on the existing `src/analysis/retention/` pattern.
+
+**The host allowlist** stays optional and empty by default, and now accepts whole
+**IP segments** and **host lists**, with CSV import/export and a dry-run preview.
+`src/discovery/cidr.js` already has the maths, including an address count that
+never enumerates. Ranges are capped (nothing shorter than a `/16`, 65 536
+addresses per application by default), and the split that matters is written down:
+RFC1918 is allowlistable because on-prem applications live there, while loopback
+and cloud-metadata addresses can never be unlocked at any privilege level.
+
+**Licence and RBAC, both.** `service_tests` becomes a Professional-tier feature
+key; once the licence permits the module, access inside it is decided by role.
+Two existing tests need a minimal, documented update for that — the UI gate checks
+`data-feature` against the four legacy proof keys only, so no plan-catalogue key
+can currently pass it, and the roadmap-key assertion has to allow a queued item.
+
+Still plan only — no Service Tests code ships in this version.
+
 ## 0.118.4 — Service Tests V1: the integration plan
 
 `docs/service-tests.md` records the agreed design for **Service Tests** — the

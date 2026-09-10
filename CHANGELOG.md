@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.120.2 — deploy-licens.sh says when blueeye-server is the stale one
+
+Deploying the licence server failed on a service it was never asked to touch:
+
+    error while interpolating services.service-assurance-worker.environment.JWT_SECRET:
+    required variable JWT_SECRET is missing a value
+
+`deploy-licens.sh` updates blueeye-licens, but the compose file it runs lives in
+blueeye-server — and `docker compose` interpolates EVERY service in that file,
+including ones outside the active profile. So an out-of-date blueeye-server
+checkout breaks a licens deploy, and the error names a variable belonging to a
+service nobody was deploying. (The variable itself was 0.120.1's fix; this is
+about the operator having no way to tell.)
+
+The script now checks before the compose step whether blueeye-server is behind
+its remote, and if so says how far, why that matters here, and the exact command
+to fix it. It is a warning, not a stop — a licens deploy against an older server
+checkout is legitimate — and an unreachable remote reports "could not check"
+rather than refusing to continue.
+
+`deploy.sh` needs nothing: it pulls blueeye-server itself, so it is never the
+stale one.
+
 ## 0.120.1 — Service Assurance: wire the worker to the stack it actually runs in
 
 Two deployment bugs in the compose wiring from 0.120.0. Both would have failed

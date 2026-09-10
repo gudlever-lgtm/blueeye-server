@@ -23,6 +23,9 @@
     var toast = ctx.toast;
     var isAdmin = ctx.isAdmin;
     var isOperator = ctx.isOperator;
+    // Opens the Documentation article on starting a worker. Optional — a host
+    // that does not supply it simply gets the message without the link.
+    var openDocs = typeof ctx.openDocs === 'function' ? ctx.openDocs : null;
 
     // ---------------------------------------------------------------- state
     var state = {
@@ -68,6 +71,20 @@
       if (!value) return '—';
       var d = new Date(value);
       return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString();
+    }
+
+    // "No worker is connected" told someone to see the documentation without
+    // saying which documentation or where. This says it and takes them there.
+    function noWorkerBanner() {
+      // The article lives in the admin-only Documentation section, so the link
+      // is offered only to someone who can actually open it. An operator is told
+      // who can instead of being sent to a page that would silently show them a
+      // different article.
+      return el('div', { class: 'sa-warn-banner' },
+        el('span', {}, t('sa.test.noWorkerBanner') + ' '),
+        (openDocs && isAdmin())
+          ? el('a', { href: '#', class: 'sa-link', onclick: function (e) { e.preventDefault(); openDocs(); } }, t('sa.test.showMeHow'))
+          : el('span', {}, t('sa.test.askAdmin')));
     }
 
     function statusChip(status) {
@@ -252,7 +269,9 @@
       }
       function reload() { state.applicationId = app.id; draw(); }
       function environmentForm() {
-        var name = el('input', { type: 'text', placeholder: 'Production' });
+        // "Production" alone reads as a value someone already typed. Prefixed,
+        // it reads as the example it is.
+        var name = el('input', { type: 'text', placeholder: t('sa.env.namePlaceholder') });
         var url = acceptPlaceholderOnTab(el('input', { type: 'url', value: app.base_url, placeholder: 'https://' }));
         var type = el('select', {}, ...['production', 'staging', 'development', 'test', 'custom'].map(function (v) {
           return el('option', { value: v }, v);
@@ -332,7 +351,7 @@
       });
 
       function addForm() {
-        var value = el('input', { type: 'text', placeholder: '10.20.0.0/16' });
+        var value = el('input', { type: 'text', placeholder: t('sa.hosts.valuePlaceholder') });
         var note = el('input', { type: 'text' });
         var errors = el('div', { class: 'sa-form-errors' });
         modal(t('sa.hosts.add'), el('div', {},
@@ -378,7 +397,13 @@
         section(t('sa.app.allowedHosts'), [
           el('button', { class: 'ghost small', onclick: addForm }, '+ ' + t('sa.hosts.add')),
           el('button', { class: 'ghost small', onclick: importForm }, t('sa.hosts.import')),
-          el('a', { class: 'ghost small', href: API + '/applications/' + app.id + '/allowed-hosts/export.csv' }, t('sa.hosts.export')),
+          // A download needs a real link, but `ghost small` is styled for
+          // <button> — as an <a> it rendered as a bare blue link beside two
+          // buttons. sa-btn gives it the same shape.
+          el('a', {
+            class: 'ghost small sa-btn',
+            href: API + '/applications/' + app.id + '/allowed-hosts/export.csv',
+          }, t('sa.hosts.export')),
         ]),
         el('p', { class: 'sa-help' }, t('sa.hosts.help')),
         rows.length ? el('table', { class: 'data-table' }, el('tbody', {}, ...rows))
@@ -749,9 +774,9 @@
         var runs = res[0];
         var worker = res[1];
         var head = section(t('sa.tab.runs'), null);
-        var warning = !worker.connected && worker.queued > 0
-          ? el('div', { class: 'sa-warn-banner' }, t('sa.test.noWorker'))
-          : null;
+        // Shown whenever nothing is processing the queue — not only once work
+        // has piled up. Finding out AFTER queueing a test is finding out late.
+        var warning = worker.connected ? null : noWorkerBanner();
 
         if (!runs.length) {
           mount(body, head, warning, el('div', { class: 'sa-empty' }, t('sa.run.noneYet')));
@@ -1036,8 +1061,16 @@
 
     // Renders a server 400 into the form, field by field, so an operator is told
     // which box is wrong rather than being handed a JSON blob.
+    // A 400 from this API carries { error, details } — one message per field.
+    // app.js's api() attaches the parsed body as `e.data`, so that is where the
+    // details live; the other shapes are fallbacks for a standalone host with a
+    // different client. Reading only the fallbacks is how a form came to show a
+    // bare "Validation failed" while the server had said exactly what was wrong.
     function showErrors(node, e) {
-      var details = (e && e.details) || (e && e.body && e.body.details) || null;
+      var details = (e && e.data && e.data.details)
+        || (e && e.details)
+        || (e && e.body && e.body.details)
+        || null;
       if (details && typeof details === 'object') {
         mount(node, ...Object.keys(details).map(function (key) {
           return el('div', { class: 'sa-form-error' }, el('strong', {}, key + ': '), String(details[key]));

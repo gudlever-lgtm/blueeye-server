@@ -168,3 +168,18 @@
   .sa-step-tools { width: 100%; justify-content: flex-end; }
   .sa-stats { gap: 12px; }
 }
+
+/* An inline link inside a warning banner — inherits the banner's colour so it
+   reads as part of the sentence rather than a stray blue link on amber. */
+.sa-warn-banner .sa-link { color: inherit; font-weight: 600; text-decoration: underline; }
+
+/* A download link that sits in a row of buttons. The shared `ghost small` rules
+   target <button>, so an <a> carrying them rendered as a bare link — this gives
+   it the same box without duplicating the palette. */
+.sa-actions a.sa-btn {
+  display: inline-flex; align-items: center;
+  padding: 5px 11px; border: 1px solid var(--hairline, #e5e7eb);
+  border-radius: 6px; font-size: 0.85rem; line-height: 1.4;
+  color: var(--fg, #111827); text-decoration: none; background: var(--panel, #fff);
+}
+.sa-actions a.sa-btn:hover { border-color: var(--accent, #2563eb); color: var(--accent, #2563eb); }

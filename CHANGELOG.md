@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.120.4 — Service Assurance: documentation, and a form that says why
+
+**There was no documentation for Service Assurance at all.** The handbook had an
+article for every other feature and nothing for this one, while the UI told
+people to "see the documentation" without saying which. Two articles now exist:
+
+- **Watch a web service with Service Assurance** (everyone) — the short version
+  of the journey, what Discovery will and will not do, how to read a failure
+  including a symptom/meaning/action table, and how logins are handled.
+- **Starting the Service Assurance worker** (admins) — the compose profile, the
+  standalone command, the two settings that must match this server and what
+  breaks quietly when they do not, and how to tell it is working.
+
+The "no worker" banner now links straight to that article for an administrator,
+and tells an operator who can start one rather than sending them to a page their
+role cannot open. The toast names the article, since a toast cannot carry a link.
+
+**A form said "Validation failed" and stopped there.** The server had sent one
+message per field; the client read `e.details` and `e.body.details` while
+`api()` puts the parsed body on `e.data`. The reason was discarded on arrival.
+Forms now show what the server actually said.
+
+**A placeholder that read as a filled value.** The environment Name field showed
+`Production` as its placeholder, which looks typed — so Save was pressed with an
+empty name, and the resulting error was the bare "Validation failed" above. It
+and the allowed-hosts field now read as examples.
+
+**Export rendered as a bare link.** It sat between two buttons wearing
+`ghost small`, which the shared stylesheet defines for `<button>`. It stays an
+anchor, because it is a download, and now looks like its neighbours.
+
 ## 0.120.3 — Service Assurance: the things using it exposed
 
 Five fixes from a first run through the module.

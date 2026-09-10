@@ -219,8 +219,28 @@ function makeServiceTests(overrides = {}) {
     },
     runs: {
       async findById(id) { const r = t.runs.find(id); return r ? { ...r, steps: [] } : null; },
-      async list({ testId = null, status = null, limit = 50 } = {}) {
-        return t.runs.where((r) => (testId === null || r.test_id === testId) && (status === null || r.status === status)).slice(0, limit);
+      async list({ testId = null, status = null, applicationId = null, limit = 50 } = {}) {
+        // Mirrors the real repository's join: a run carries the names that say
+        // what it was a run OF, so the Runs screen can tell two applications
+        // apart. Missing rows resolve to null, exactly as the LEFT JOINs do.
+        const named = (r) => {
+          const test = t.tests.rows.find((x) => x.id === r.test_id) || null;
+          const app = test ? t.applications.rows.find((x) => x.id === test.application_id) || null : null;
+          const env = r.environment_id ? t.environments.rows.find((x) => x.id === r.environment_id) || null : null;
+          return {
+            ...r,
+            test_name: test ? test.name : null,
+            application_id: test ? test.application_id : null,
+            application_name: app ? app.name : null,
+            environment_name: env ? env.name : null,
+            environment_url: env ? env.base_url : null,
+          };
+        };
+        return t.runs
+          .where((r) => (testId === null || r.test_id === testId) && (status === null || r.status === status))
+          .map(named)
+          .filter((r) => applicationId === null || r.application_id === applicationId)
+          .slice(0, limit);
       },
       async enqueue(input) { return t.runs.insert({ status: 'queued', trigger_source: 'manual', ...input }); },
       async claimNext(workerId) {

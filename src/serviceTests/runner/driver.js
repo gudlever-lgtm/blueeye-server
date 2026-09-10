@@ -255,6 +255,9 @@ function createPlaywrightDriver({
       return (await locator.innerText()).trim();
     },
     currentUrl: async () => page.url(),
+    // The browser tab's text. Read straight off the page rather than through a
+    // locator: `<title>` is in `<head>`, so no element target can reach it.
+    pageTitle: async () => (await page.title()) || '',
     waitFor: async (target) => { await resolve(target); },
     sleep: (ms) => page.waitForTimeout(Math.min(Number(ms) || 0, 60000)),
 

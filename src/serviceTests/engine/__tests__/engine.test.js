@@ -14,7 +14,8 @@ test('the catalogue covers every step type the spec asks for', () => {
     'open', 'back', 'refresh',
     'click', 'fill', 'clear', 'select', 'checkbox', 'upload',
     'assert_exists', 'assert_visible', 'assert_not_visible',
-    'assert_text_contains', 'assert_text_equals', 'assert_url_contains', 'assert_url_equals',
+    'assert_text_contains', 'assert_text_equals', 'assert_title_contains',
+    'assert_url_contains', 'assert_url_equals',
     'wait', 'condition', 'login', 'logout', 'api_request', 'assert_http_status',
   ];
   for (const type of required) assert.ok(STEP_TYPES.includes(type), `missing step type ${type}`);

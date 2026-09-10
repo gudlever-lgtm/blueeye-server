@@ -26,6 +26,7 @@ const { classify, KIND } = require('./classify');
 //   visible(target)                  → boolean
 //   textOf(target)                   → string
 //   currentUrl()                     → string
+//   pageTitle()                      → string   (the browser tab, NOT page text)
 //   waitFor(target, timeoutMs)       → void
 //   sleep(ms)                        → void
 //   apiRequest({method,url,body})    → { status, body }
@@ -70,6 +71,7 @@ function stepLabel(step) {
     case 'assert_not_visible': return `Kontroller at${target} ikke er synlig`;
     case 'assert_text_contains': return `Kontroller at${target} indeholder "${step.value}"`;
     case 'assert_text_equals': return `Kontroller at${target} er "${step.value}"`;
+    case 'assert_title_contains': return `Kontroller at sidetitlen indeholder "${step.value}"`;
     case 'assert_url_contains': return `Kontroller at adressen indeholder "${step.value}"`;
     case 'assert_url_equals': return `Kontroller at adressen er "${step.value}"`;
     case 'wait': return step.ms !== undefined ? `Vent ${step.ms} ms` : `Vent på${target}`;
@@ -139,6 +141,16 @@ async function runStep(step, { driver, credential, ctx }) {
     case 'assert_text_equals': {
       const text = String(await driver.textOf(step.target) ?? '').trim();
       if (text !== step.value) throw assertionFailure(`teksten "${step.value}"`, `"${text.slice(0, 120)}"`);
+      return;
+    }
+    // The page title is read from the document, never located on the page: a
+    // `<title>` is in `<head>` and no element target can ever match it. The
+    // suggested Login test used to assert one as page text and failed every run.
+    case 'assert_title_contains': {
+      const title = String(await titleOf(driver) ?? '');
+      if (!title.includes(step.value)) {
+        throw assertionFailure(`sidetitlen "${step.value}"`, title ? `"${title}"` : 'ingen titel');
+      }
       return;
     }
     case 'assert_url_contains': {
@@ -299,6 +311,15 @@ async function executeDefinition(definition, {
     console_errors: failed ? failed.consoleErrors : [],
     network_errors: failed ? failed.networkErrors : [],
   };
+}
+
+// The page title, from a driver that may predate the method (an older worker
+// against a newer definition). Reported as "no title" rather than crashing with
+// "driver.pageTitle is not a function", which would classify as `unknown` and
+// tell the operator nothing.
+async function titleOf(driver) {
+  if (typeof driver.pageTitle !== 'function') return '';
+  return driver.pageTitle();
 }
 
 // Calls an optional driver method, swallowing a failure — collecting context for

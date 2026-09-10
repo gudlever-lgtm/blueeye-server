@@ -207,9 +207,51 @@ test('screenshot retention finds old artefacts and clears the column in bulk', a
   assert.equal(await repo.clearScreenshots([]), 0, 'an empty list issues no statement');
 });
 
+test('a run says what it was a run OF — the list carries the test and application names', async () => {
+  // The Runs screen lists every test in the install together. Without these
+  // names a row says only "something failed at 21:39", so two applications
+  // failing read as one application failing twice — which is exactly how a
+  // passing run against one site got mistaken for a failure from another.
+  const pool = makeFakePool([
+    [/^SELECT .* FROM service_test_runs r LEFT JOIN/i, () => [[runRow({
+      test_name: 'Customer Login', application_id: 2, application_name: 'Fellis',
+      environment_name: 'Production', environment_url: 'https://fellis.eu',
+    })]]],
+  ]);
+  const [run] = await createRunsRepository({ db: { pool }, now }).list({});
+  assert.equal(run.test_name, 'Customer Login');
+  assert.equal(run.application_name, 'Fellis');
+  assert.equal(run.environment_name, 'Production');
+
+  const [call] = pool.matching(/^SELECT .* FROM service_test_runs r/i);
+  assert.match(call.sql, /LEFT JOIN service_test_tests/i, 'a deleted test must not drop its runs from the list');
+  assert.match(call.sql, /LEFT JOIN service_test_applications/i);
+});
+
+test('the queue paths do not pay for the join the screen needs', async () => {
+  // enqueue/claim/complete run on the worker's hot path and never render a name.
+  const pool = makeFakePool([
+    [/^INSERT INTO service_test_runs/i, () => [{ insertId: 9 }]],
+    [/^SELECT .* FROM service_test_runs WHERE id = \?/i, () => [[runRow({})]]],
+    selectSteps,
+  ]);
+  const run = await createRunsRepository({ db: { pool }, now }).enqueue({ test_id: 1 });
+  assert.equal(run.id, runRow({}).id);
+  assert.equal(run.test_name, null, 'an unjoined read reports the name as absent, not undefined');
+  assert.equal(pool.matching(/LEFT JOIN/i).length, 0);
+});
+
+test('the list can be scoped to one application', async () => {
+  const pool = makeFakePool([[/^SELECT .* FROM service_test_runs r LEFT JOIN/i, () => [[]]]]);
+  await createRunsRepository({ db: { pool }, now }).list({ applicationId: 3, status: 'fail' });
+  const [call] = pool.matching(/^SELECT .* FROM service_test_runs r/i);
+  assert.match(call.sql, /WHERE r\.status = \? AND t\.application_id = \?/);
+  assert.deepEqual(call.params.slice(0, 2), ['fail', 3]);
+});
+
 test('JSON columns come back as arrays whether the driver parsed them or not', async () => {
   const pool = makeFakePool([
-    [/^SELECT .* FROM service_test_runs WHERE id = \?/i, () => [[runRow({
+    [/^SELECT .* FROM service_test_runs r LEFT JOIN .* WHERE r\.id = \?/i, () => [[runRow({
       console_errors: '["TypeError: x is not a function"]',
       network_errors: [{ url: '/api/auth/login', status: 503 }],
     })]]],
@@ -222,7 +264,7 @@ test('JSON columns come back as arrays whether the driver parsed them or not', a
 
 test('a corrupt JSON column degrades to an empty list instead of throwing on a read', async () => {
   const pool = makeFakePool([
-    [/^SELECT .* FROM service_test_runs WHERE id = \?/i, () => [[runRow({ console_errors: '{not json' })]]],
+    [/^SELECT .* FROM service_test_runs r LEFT JOIN .* WHERE r\.id = \?/i, () => [[runRow({ console_errors: '{not json' })]]],
     selectSteps,
   ]);
   const run = await createRunsRepository({ db: { pool }, now }).findById(5);

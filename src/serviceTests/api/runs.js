@@ -24,8 +24,13 @@ function createRunsRouter({ repositories, queue, artifacts, requireRole, roles, 
       status = String(req.query.status);
       if (!STATUSES.includes(status)) return res.status(400).json({ error: 'Invalid status' });
     }
+    let applicationId = null;
+    if (req.query.application_id !== undefined && req.query.application_id !== '') {
+      applicationId = parseId(req.query.application_id);
+      if (applicationId === null) return res.status(400).json({ error: 'Invalid application_id' });
+    }
     const limit = req.query.limit !== undefined ? parseId(req.query.limit) : null;
-    return res.json(await runs.list({ testId, status, limit: limit || 50 }));
+    return res.json(await runs.list({ testId, status, applicationId, limit: limit || 50 }));
   }));
 
   // Whether a worker is processing the queue — the UI shows "no worker

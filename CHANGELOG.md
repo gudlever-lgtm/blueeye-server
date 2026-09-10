@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.123.6 — a suggested test asserted a title that could never be found
+
+Two things went wrong on the same screen, and they compounded.
+
+**The suggested Login test could not pass on any site.** Its last step asserted
+that the page contains the title of the page behind the login — but a title lives
+in `<title>`, in `<head>`, and a text target resolves through `getByText`, which
+only sees the body. The step was hunting the page for a string that is not on it.
+It burned the full 30-second step timeout and failed with
+`teksten "..." blev ikke fundet`, no matter how well the login itself worked. The
+Availability suggestion had the identical step, so every accepted suggestion of
+either kind failed on its last step.
+
+There is a real step for this now: **`assert_title_contains`** reads the document
+title instead of trying to locate it, and both rules use it. Where Discovery
+recorded no title, the Login rule falls back to the address assertion it already
+had. A worker that predates the step reports "no title" rather than crashing with
+`driver.pageTitle is not a function`.
+
+**The Runs screen did not say what each run was a run OF.** It lists every test
+in the install together, and a row showed only a status, a time and an error — so
+four failures from one site and a pass from another read as one service flapping,
+and a test against a completely different host looked like the same failure
+again. Runs now carry the test, application and environment names (one LEFT JOIN
+on the read a human makes; the worker's claim path deliberately still doesn't pay
+for it), and each row shows `Test · Application · Environment · scheduled`.
+
+The "NEXT RUN" column header was also wrong — it labelled the time the run
+STARTED with the schedule's "next run" string. It says Started now.
+
+`GET /api/service-tests/runs` takes `?application_id=` so the list can be scoped
+to one application.
+
 ## 0.123.5 — migration 080 could not be applied: a duplicate constraint name
 
 The deploy died on the first statement of the migration the last release

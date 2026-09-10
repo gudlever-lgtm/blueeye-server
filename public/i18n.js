@@ -411,6 +411,11 @@
       'sa.test.showMeHow': 'How to start one',
       'sa.test.askAdmin': 'An administrator can start one.',
       'sa.test.noWorkerBanner': 'No worker is running, so queued tests will wait. A worker is a separate process that runs the browser.',
+      'sa.run.test': 'Test',
+      'sa.run.started': 'Started',
+      'sa.run.deletedTest': 'A deleted test',
+      'sa.run.bySchedule': 'scheduled',
+      'sa.run.byHand': 'run by hand',
 
       // Service Assurance — the reaction layer (certificates, incidents)
       'sa.tab.health': 'Health',
@@ -815,6 +820,11 @@
       'sa.test.showMeHow': 'Sådan starter du en',
       'sa.test.askAdmin': 'En administrator kan starte en.',
       'sa.test.noWorkerBanner': 'Der kører ingen worker, så tests i kø venter. En worker er en separat proces der kører browseren.',
+      'sa.run.test': 'Test',
+      'sa.run.started': 'Startet',
+      'sa.run.deletedTest': 'En slettet test',
+      'sa.run.bySchedule': 'planlagt',
+      'sa.run.byHand': 'kørt manuelt',
 
       // Service Assurance — reaktionslaget (certifikater, hændelser)
       'sa.tab.health': 'Tilstand',

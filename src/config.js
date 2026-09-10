@@ -8,6 +8,7 @@ const path = require('path');
 const { resolvePublicKey, publicKeySource } = require('./license/publicKey');
 const { resolveServerId } = require('./license/serverIdentity');
 const { normalizeFingerprint } = require('./enroll/fingerprint');
+const { dbConfig, securityConfig } = require('./lib/coreEnv');
 
 // Resolve the license server identity once: LICENSE_SERVER_ID when set, else a
 // stable machine-derived id so a customer only needs to configure LICENSE_KEY.
@@ -34,14 +35,9 @@ const config = {
   // Recommended when running behind a reverse proxy; when unset the enrollment
   // endpoints derive it from the incoming request. No trailing slash.
   publicUrl: (process.env.BLUEEYE_PUBLIC_URL || process.env.PUBLIC_URL || '').replace(/\/+$/, ''),
-  db: {
-    host: process.env.DB_HOST || '127.0.0.1',
-    port: toInt(process.env.DB_PORT, 3306),
-    user: process.env.DB_USER || 'blueeye',
-    password: process.env.DB_PASSWORD || '',
-    database: process.env.DB_NAME || 'blueeye',
-    connectionLimit: toInt(process.env.DB_CONNECTION_LIMIT, 10),
-  },
+  // Shared with the Service Assurance worker via src/lib/coreEnv.js — it reads
+  // the same database and the same secret key without requiring this module.
+  db: dbConfig(),
   // TimescaleDB telemetry store (docs/storage-split-audit.md). Disabled by
   // default: when TSDB_ENABLED is unset the server runs exactly as before with
   // all telemetry in MySQL. When enabled, server.js builds a separate pg pool.
@@ -75,9 +71,7 @@ const config = {
   // JWT_SECRET (server.js) already refuses to boot with the insecure default,
   // which covers this fallback too. Set SECRET_ENCRYPTION_KEY to rotate it
   // independently of the JWT secret.
-  security: {
-    secretKey: process.env.SECRET_ENCRYPTION_KEY || process.env.JWT_SECRET || 'dev-insecure-secret-change-me',
-  },
+  security: securityConfig(),
   // External authentication via LDAP/AD (supplements local JWT login). This env
   // flag is the hard gate (default OFF); even when on, login only tries LDAP once
   // an admin has stored and enabled an ldap_config row. Local JWT login always

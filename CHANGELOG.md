@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.122.1 — the worker image was missing four files it requires
+
+The worker still died at boot on a real deployment, for a second reason the
+local fix could not show: `docker/Dockerfile.service-test-worker` copies a
+hand-picked subset of the repo, and `src/config.js` was in it while the three
+files it requires — `src/license/publicKey.js`, `src/license/serverIdentity.js`,
+`src/enroll/fingerprint.js` (and through it `trustAnchorGuard.js`) — were not.
+Inside the container that is MODULE_NOT_FOUND before the first line of
+`main()`. Outside it, in a full checkout, the same code runs fine, which is why
+it passed every test.
+
+The worker no longer requires the server's config at all. The two things it
+actually needs — the database connection and the secret key — move to
+`src/lib/coreEnv.js`, which `src/config.js` now uses as well, so there is one
+definition and two readers rather than a copy that drifts.
+
+`test/serviceTestWorkerImage.test.js` walks the require graph from the
+entrypoint and fails when a file in it is not covered by a COPY line. It fails
+on the old Dockerfile and passes on the new one. The image's exact file set was
+also run end to end: it reaches "polling for work".
+
 ## 0.122.0 — the Service Assurance worker actually starts
 
 **The worker had never run.** `scripts/service-test-worker.js` did

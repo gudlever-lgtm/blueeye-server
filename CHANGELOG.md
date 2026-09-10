@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.118.4 — Service Tests V1: the integration plan
+
+`docs/service-tests.md` records the agreed design for **Service Tests** — the
+no-code module where an operator registers a web application, runs Discovery,
+accepts suggested tests, builds them with drag & drop, runs them and schedules
+them. Plan only: no Service Tests code ships in this version.
+
+What the plan pins down:
+
+- **One module root** (`src/serviceTests/`) reached through a single factory and
+  an adapter object, so the module can later run standalone. Its footprint in
+  existing UI code is one nav button, one `views.serviceTests` line and one
+  `PAGE_INFO` entry.
+- **A neutral DSL** — the stored test definition never mentions Playwright.
+  `execute.js` dispatches steps onto an injected driver, so the runner is unit
+  tested offline against a fake.
+- **Playwright stays out of the Express request lifecycle.** Runs are queued in
+  `service_test_runs` and claimed atomically by a separate worker process on its
+  own Debian + distro-Chromium image; the server image keeps no browser.
+- **SSRF is the module's central risk** and gets its own policy: scheme
+  allowlist, per-application host allowlist, a resolved-IP check that closes the
+  DNS-rebinding gap, enforced again at request time through `page.route()`.
+  Reaching an on-prem RFC1918 application takes an explicit, audited, admin-only
+  allowlist entry — one host at a time.
+- **Reuse over reinvention** — `secretBox` for credentials, `ssrfGuard` as the
+  policy's base, the existing JWT/role middleware, audit logger and background-job
+  contract. Nothing changes in blueeye-agent or blueeye-licens.
+
+Three decisions are listed for sign-off before code: the Playwright/Chromium
+worker image, the private-host allowlist, and whether Service Tests is licence-gated.
+
 ## 0.118.3 — One page width, framed data, and a bulk delete for expired codes
 
 Every page came out a different width. Measured in a browser at 1920px:

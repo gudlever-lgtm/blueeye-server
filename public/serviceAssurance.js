@@ -38,8 +38,22 @@
     // ---------------------------------------------------------------- utils
     function err(e) { return (e && (e.message || e.error)) || String(e); }
 
+    // Replaces a node's children, dropping the blanks.
+    //
+    // Native replaceChildren() takes (Node | string), so a `null` from a
+    // conditional child — `isAdmin() ? button : null` — is stringified and
+    // renders the literal text "null" on the page. el() already filters those;
+    // this gives replaceChildren the same manners, so a conditional child can be
+    // written the obvious way anywhere.
+    function mount(host, ...children) {
+      host.replaceChildren(...children.filter(function (c) {
+        return c !== null && c !== undefined && c !== false && c !== '';
+      }));
+      return host;
+    }
+
     function fail(node, e) {
-      node.replaceChildren(el('div', { class: 'sa-error' },
+      mount(node, el('div', { class: 'sa-error' },
         el('p', {}, t('sa.error', { message: err(e) })),
         el('button', { class: 'ghost small', onclick: draw }, t('sa.retry'))));
     }
@@ -65,6 +79,28 @@
       return root.confirm(t('sa.confirmDelete', { name: name }));
     }
 
+    // Tab-to-accept for a placeholder that is a real prefix rather than an
+    // example — `https://` is something you WILL type, not a hint about shape.
+    // Pressing Tab in the empty field writes it and leaves the caret at the end,
+    // so the next keystroke continues the address.
+    //
+    // Deliberately narrow: only when the field is empty, and Tab keeps its
+    // normal meaning the moment there is any text, so keyboard navigation is
+    // never taken away from someone who is done with the field.
+    function acceptPlaceholderOnTab(input) {
+      input.addEventListener('keydown', function (e) {
+        if (e.key !== 'Tab' || e.shiftKey || e.altKey || e.ctrlKey || e.metaKey) return;
+        if (input.value !== '' || !input.placeholder) return;
+        e.preventDefault();
+        input.value = input.placeholder;
+        // Caret to the end. A `url` input rejects setSelectionRange in some
+        // browsers, so this is best-effort and the value still lands.
+        try { input.setSelectionRange(input.value.length, input.value.length); } catch (err) { /* value is set either way */ }
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+      return input;
+    }
+
     function field(label, control, help) {
       return el('label', { class: 'sa-field' },
         el('span', { class: 'sa-field-label' }, label),
@@ -85,7 +121,6 @@
         ['tests', t('sa.tab.tests')],
         ['runs', t('sa.tab.runs')],
         ['schedules', t('sa.tab.schedules')],
-        ['settings', t('sa.tab.settings')],
       ];
       return el('div', { class: 'sa-tabs' }, ...tabs.map(function (pair) {
         return el('button', {
@@ -97,7 +132,7 @@
 
     function draw() {
       var body = el('div', { class: 'sa-body' }, el('div', { class: 'sa-loading' }, t('sa.loading')));
-      host.replaceChildren(tabBar(), body);
+      mount(host, tabBar(), body);
       var render = views[state.tab] || views.applications;
       Promise.resolve(render(body)).catch(function (e) { fail(body, e); });
     }
@@ -113,7 +148,7 @@
           : null);
 
         if (!apps.length) {
-          body.replaceChildren(head, el('div', { class: 'sa-empty' }, t('sa.app.empty')));
+          mount(body, head, el('div', { class: 'sa-empty' }, t('sa.app.empty')));
           return;
         }
         var rows = apps.map(function (app) {
@@ -130,7 +165,7 @@
             : t('sa.app.neverDiscovered')),
           el('td', {}, app.enabled ? '' : el('span', { class: 'sa-muted-chip' }, '—')));
         });
-        body.replaceChildren(head, el('table', { class: 'data-table' },
+        mount(body, head, el('table', { class: 'data-table' },
           el('thead', {}, el('tr', {},
             el('th', {}, t('sa.app.name')),
             el('th', {}, t('sa.app.url')),
@@ -144,7 +179,7 @@
 
     function applicationForm(app) {
       var name = el('input', { type: 'text', value: (app && app.name) || '' });
-      var url = el('input', { type: 'url', value: (app && app.base_url) || '', placeholder: 'https://' });
+      var url = acceptPlaceholderOnTab(el('input', { type: 'url', value: (app && app.base_url) || '', placeholder: 'https://' }));
       var desc = el('textarea', { rows: 2 }, (app && app.description) || '');
       var errors = el('div', { class: 'sa-form-errors' });
 
@@ -183,7 +218,7 @@
           ]),
           el('p', { class: 'sa-url' }, el('code', {}, app.base_url)));
 
-        body.replaceChildren(head,
+        mount(body, head,
           discoveryPanel(app),
           environmentsPanel(app),
           credentialsPanel(app),
@@ -208,7 +243,7 @@
               },
             }, t('sa.delete')) : null));
         });
-        wrap.replaceChildren(
+        mount(wrap, 
           section(t('sa.app.environments'), isAdmin()
             ? el('button', { class: 'ghost small', onclick: environmentForm }, '+ ' + t('sa.env.new')) : null),
           rows.length
@@ -218,7 +253,7 @@
       function reload() { state.applicationId = app.id; draw(); }
       function environmentForm() {
         var name = el('input', { type: 'text', placeholder: 'Production' });
-        var url = el('input', { type: 'url', value: app.base_url });
+        var url = acceptPlaceholderOnTab(el('input', { type: 'url', value: app.base_url, placeholder: 'https://' }));
         var type = el('select', {}, ...['production', 'staging', 'development', 'test', 'custom'].map(function (v) {
           return el('option', { value: v }, v);
         }));
@@ -269,7 +304,7 @@
           }).then(reload).catch(function (e) { showErrors(errors, e); throw e; });
         });
       }
-      wrap.replaceChildren(
+      mount(wrap, 
         section(t('sa.app.credentials'), el('button', { class: 'ghost small', onclick: credentialForm }, '+ ' + t('sa.cred.new'))),
         rows.length ? el('table', { class: 'data-table' }, el('tbody', {}, ...rows)) : el('div', { class: 'sa-empty' }, t('sa.none')));
       return wrap;
@@ -323,12 +358,12 @@
           el('button', {
             class: 'ghost small',
             onclick: function () {
-              errors.replaceChildren();
+              mount(errors);
               api(API + '/applications/' + app.id + '/allowed-hosts/import?dry_run=1', { method: 'POST', body: { text: text.value } })
                 .then(function (res) {
-                  preview.replaceChildren(el('p', {}, t('sa.hosts.previewResult', { added: res.added, unchanged: res.unchanged })));
+                  mount(preview, el('p', {}, t('sa.hosts.previewResult', { added: res.added, unchanged: res.unchanged })));
                 })
-                .catch(function (e) { preview.replaceChildren(); showErrors(errors, e); });
+                .catch(function (e) { mount(preview); showErrors(errors, e); });
             },
           }, t('sa.hosts.preview')),
           preview, errors);
@@ -339,7 +374,7 @@
         });
       }
 
-      wrap.replaceChildren(
+      mount(wrap, 
         section(t('sa.app.allowedHosts'), [
           el('button', { class: 'ghost small', onclick: addForm }, '+ ' + t('sa.hosts.add')),
           el('button', { class: 'ghost small', onclick: importForm }, t('sa.hosts.import')),
@@ -355,7 +390,7 @@
     function discoveryPanel(app) {
       var wrap = el('div', { class: 'sa-panel' });
       var last = app.last_discovery;
-      wrap.replaceChildren(
+      mount(wrap, 
         section(t('sa.tab.discovery'), null),
         el('p', { class: 'sa-help' }, t('sa.discovery.help')),
         last
@@ -364,7 +399,9 @@
             stat(t('sa.discovery.forms', { count: last.form_count }), last.form_count),
             stat(t('sa.discovery.logins', { count: last.login_count }), last.login_count),
             stat(t('sa.discovery.elements', { count: last.element_count }), last.element_count))
-          : el('div', { class: 'sa-empty' }, t('sa.discovery.empty')),
+          : el('div', { class: 'sa-empty' },
+            el('p', {}, t('sa.discovery.empty')),
+            el('p', { class: 'muted' }, t('sa.discovery.neverHint'))),
         last ? el('button', {
           class: 'ghost small',
           onclick: function () { state.discoveryId = last.id; showSuggestions(last.id); },
@@ -416,7 +453,7 @@
       return api(API + '/tests').then(function (tests) {
         var head = section(t('sa.tab.tests'), null);
         if (!tests.length) {
-          body.replaceChildren(head, el('div', { class: 'sa-empty' }, t('sa.test.empty')));
+          mount(body, head, el('div', { class: 'sa-empty' }, t('sa.test.empty')));
           return;
         }
         var rows = tests.map(function (test) {
@@ -432,7 +469,7 @@
               onclick: function (e) { e.stopPropagation(); runTest(test); },
             }, t('sa.test.run')) : null));
         });
-        body.replaceChildren(head, el('table', { class: 'data-table' },
+        mount(body, head, el('table', { class: 'data-table' },
           el('thead', {}, el('tr', {},
             el('th', {}, t('sa.app.name')),
             el('th', {}, t('sa.designer.title')),
@@ -479,7 +516,7 @@
             isOperator() ? el('button', { class: 'primary', onclick: function () { runTest(test); } }, t('sa.test.run')) : null,
           ]));
 
-        body.replaceChildren(head,
+        mount(body, head,
           designer(test, catalogue),
           historyPanel(test),
           schedulePanel(test, schedules));
@@ -618,8 +655,8 @@
       }
 
       function renderSteps() {
-        list.replaceChildren(...steps.map(stepCard));
-        if (!steps.length) list.replaceChildren(el('div', { class: 'sa-empty' }, t('sa.designer.empty')));
+        mount(list, ...steps.map(stepCard));
+        if (!steps.length) mount(list, el('div', { class: 'sa-empty' }, t('sa.designer.empty')));
       }
 
       function save() {
@@ -630,7 +667,7 @@
       }
 
       renderSteps();
-      wrap.replaceChildren(
+      mount(wrap, 
         section(t('sa.designer.title'), isOperator() ? [
           el('button', { class: 'ghost small', onclick: addStep }, '+ ' + t('sa.designer.add')),
           el('button', { class: 'primary', onclick: save }, t('sa.save')),
@@ -645,7 +682,7 @@
       var wrap = el('div', { class: 'sa-panel' });
       var history = test.history || {};
       var runs = history.runs || [];
-      wrap.replaceChildren(
+      mount(wrap, 
         section(t('sa.tab.runs'), null),
         runs.length ? el('div', { class: 'sa-stats' },
           stat(t('sa.run.successRate'), history.success_rate !== null ? Math.round(history.success_rate * 100) + '%' : '—'),
@@ -697,7 +734,7 @@
           }, t('sa.delete')) : null));
       });
 
-      wrap.replaceChildren(
+      mount(wrap, 
         section(t('sa.schedule.title'), isOperator() && !rows.length
           ? el('button', { class: 'ghost small', onclick: addForm }, '+ ' + t('sa.schedule.add')) : null),
         rows.length ? el('table', { class: 'data-table' }, el('tbody', {}, ...rows))
@@ -717,7 +754,7 @@
           : null;
 
         if (!runs.length) {
-          body.replaceChildren(head, warning, el('div', { class: 'sa-empty' }, t('sa.run.noRuns')));
+          mount(body, head, warning, el('div', { class: 'sa-empty' }, t('sa.run.noneYet')));
           return;
         }
         var rows = runs.map(function (run) {
@@ -727,7 +764,7 @@
             el('td', {}, ms(run.duration_ms)),
             el('td', {}, run.error_message || ''));
         });
-        body.replaceChildren(head, warning, el('table', { class: 'data-table' },
+        mount(body, head, warning, el('table', { class: 'data-table' },
           el('thead', {}, el('tr', {}, el('th', {}, t('sa.run.status')), el('th', {}, t('sa.schedule.next')),
             el('th', {}, t('sa.run.duration')), el('th', {}, ''))),
           el('tbody', {}, ...rows)));
@@ -781,22 +818,39 @@
             el('td', {}, s.message || ''));
         })));
 
-        body.replaceChildren(head, summary, failure, steps);
+        mount(body, head, summary, failure, steps);
       });
     }
 
     // ------------------------------------------------------------ schedules
     views.schedules = function (body) {
-      return api(API + '/schedules').then(function (schedules) {
-        var head = section(t('sa.schedule.title'), null);
+      return Promise.all([api(API + '/schedules'), api(API + '/tests')]).then(function (res) {
+        var schedules = res[0];
+        var tests = res[1];
+        var byId = {};
+        tests.forEach(function (x) { byId[x.id] = x; });
+
+        var head = section(t('sa.schedule.title'), isOperator()
+          ? el('button', {
+            class: 'primary',
+            onclick: function () { scheduleForm(tests, function () { draw(); }); },
+          }, '+ ' + t('sa.schedule.add'))
+          : null);
+
         if (!schedules.length) {
-          body.replaceChildren(head, el('div', { class: 'sa-empty' }, t('sa.schedule.empty')));
+          mount(body, head, el('div', { class: 'sa-empty' },
+            t(tests.length ? 'sa.schedule.noneYet' : 'sa.schedule.noTests')));
           return;
         }
-        body.replaceChildren(head, el('table', { class: 'data-table' },
-          el('thead', {}, el('tr', {}, el('th', {}, t('sa.schedule.every')), el('th', {}, t('sa.schedule.next')), el('th', {}, ''))),
+        mount(body, head, el('table', { class: 'data-table' },
+          el('thead', {}, el('tr', {},
+            el('th', {}, t('sa.schedule.test')),
+            el('th', {}, t('sa.schedule.every')),
+            el('th', {}, t('sa.schedule.next')),
+            el('th', {}, ''))),
           el('tbody', {}, ...schedules.map(function (s) {
             return el('tr', { class: 'clickable', onclick: function () { state.tab = 'tests'; state.testId = s.test_id; draw(); } },
+              el('td', {}, (byId[s.test_id] && byId[s.test_id].name) || ('#' + s.test_id)),
               el('td', {}, s.description),
               el('td', {}, when(s.next_run_at)),
               el('td', {}, s.missed_intervals > 2 ? el('span', { class: 'sa-warn' }, t('sa.schedule.behind', { count: s.missed_intervals })) : ''));
@@ -804,13 +858,101 @@
       });
     };
 
+    // The schedule form, shared by the global Schedules tab (where a test must be
+    // picked) and a test's own page (where it is already known).
+    function scheduleForm(tests, onSaved, fixedTest) {
+      if (!fixedTest && !tests.length) { toast(t('sa.schedule.noTests'), true); return; }
+      api(API + '/schedules/intervals').then(function (res) {
+        var testSel = fixedTest ? null : el('select', {},
+          ...tests.map(function (x) { return el('option', { value: String(x.id) }, x.name); }));
+        var every = el('select', {}, ...res.intervals.map(function (i) {
+          return el('option', { value: String(i.seconds) }, i.da || i.en);
+        }));
+        var tz = el('input', { type: 'text', value: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' });
+        var errors = el('div', { class: 'sa-form-errors' });
+
+        modal(t('sa.schedule.add'), el('div', {},
+          testSel ? field(t('sa.schedule.test'), testSel) : null,
+          field(t('sa.schedule.every'), every),
+          field(t('sa.schedule.timezone'), tz),
+          errors), function () {
+          return api(API + '/schedules', {
+            method: 'POST',
+            body: {
+              test_id: fixedTest ? fixedTest.id : Number(testSel.value),
+              interval_sec: Number(every.value),
+              timezone: tz.value.trim(),
+            },
+          }).then(onSaved).catch(function (e) { showErrors(errors, e); throw e; });
+        });
+      }).catch(function (e) { toast(err(e), true); });
+    }
+
     // ------------------------------------------------------------ settings
-    views.settings = function (body) {
+    // Rendered in Administration → Settings → Service Assurance, not in this
+    // module's own tab bar: every value here is SYSTEM-WIDE, and BlueEye keeps
+    // system-wide configuration in one place. The per-application settings —
+    // base URL, environments, logins, allowed hosts — stay on the application.
+    //
+    // Fields carry human labels and units. `maxDurationMs` is what the API
+    // calls it; "Stop the whole crawl after — milliseconds" is what an operator
+    // needs to read.
+    // Every label as a LITERAL t() key.
+    //
+    // Concatenating the prefix with the field name would be shorter and worse:
+    // the UI gate verifies each key exists in both catalogues by reading the
+    // literals out of this file, and a computed key defeats that — a typo, or a
+    // field the API adds later, would render as the raw name with nothing to
+    // catch it. Written out, the gate fails the build instead.
+    function settingLabel(key) {
+      var labels = {
+        maxAddressesPerApplication: t('sa.set.maxAddressesPerApplication'),
+        minCidrPrefix: t('sa.set.minCidrPrefix'),
+        maxPages: t('sa.set.maxPages'),
+        maxDepth: t('sa.set.maxDepth'),
+        maxRequests: t('sa.set.maxRequests'),
+        navigationTimeoutMs: t('sa.set.navigationTimeoutMs'),
+        maxDurationMs: t('sa.set.maxDurationMs'),
+        stepTimeoutMs: t('sa.set.stepTimeoutMs'),
+        maxRunDurationMs: t('sa.set.maxRunDurationMs'),
+        maxStepsPerTest: t('sa.set.maxStepsPerTest'),
+        concurrency: t('sa.set.concurrency'),
+        browser: t('sa.set.browser'),
+        screenshotOnFailure: t('sa.set.screenshotOnFailure'),
+        fullPage: t('sa.set.fullPage'),
+        format: t('sa.set.format'),
+        quality: t('sa.set.quality'),
+        maxPerRun: t('sa.set.maxPerRun'),
+        retentionDays: t('sa.set.retentionDays'),
+        claimTimeoutMs: t('sa.set.claimTimeoutMs'),
+        pollIntervalMs: t('sa.set.pollIntervalMs'),
+      };
+      // An unlabelled field still renders — with its raw name, which is the
+      // visible signal that a label is missing.
+      return labels[key] || key;
+    }
+
+    function settingSection(name) {
+      var sections = {
+        discovery: { title: t('sa.set.discovery'), help: t('sa.set.discoveryHelp') },
+        runner: { title: t('sa.set.runner'), help: t('sa.set.runnerHelp') },
+        artifacts: { title: t('sa.set.artifacts'), help: t('sa.set.artifactsHelp') },
+        allowlist: { title: t('sa.set.allowlist'), help: t('sa.set.allowlistHelp') },
+        queue: { title: t('sa.set.queue'), help: t('sa.set.queueHelp') },
+      };
+      return sections[name] || { title: name, help: '' };
+    }
+
+    function settingsPanel(body) {
       return api(API + '/settings').then(function (res) {
-        var head = section(t('sa.settings.title'), null);
-        var sections = Object.keys(res.settings).sort().map(function (name) {
+        var order = ['discovery', 'runner', 'artifacts', 'allowlist', 'queue'];
+        var sections = order.filter(function (k) { return res.settings[k]; });
+
+        var panels = sections.map(function (name) {
           var values = res.settings[name];
           var inputs = {};
+          var errors = el('div', { class: 'sa-form-errors' });
+
           var fields = Object.keys(values).map(function (key) {
             var value = values[key];
             var input;
@@ -824,11 +966,15 @@
             }
             input.disabled = !isAdmin();
             inputs[key] = input;
-            return field(key, input);
+
+            // Units belong beside the number, not buried in the field name.
+            var unit = /Ms$/.test(key) ? t('sa.set.unitMs')
+              : (/Days$/.test(key) ? t('sa.set.unitDays') : null);
+            return field(settingLabel(key), input, unit);
           });
-          var errors = el('div', { class: 'sa-form-errors' });
+
           return el('div', { class: 'sa-panel' },
-            section(name, isAdmin() ? [
+            section(settingSection(name).title, isAdmin() ? [
               el('button', {
                 class: 'primary',
                 onclick: function () {
@@ -838,7 +984,7 @@
                     patch[key] = input.type === 'checkbox' ? input.checked
                       : (input.type === 'number' ? Number(input.value) : input.value);
                   });
-                  errors.replaceChildren();
+                  mount(errors);
                   api(API + '/settings/' + name, { method: 'PUT', body: patch })
                     .then(function () { toast(t('sa.settings.saved')); })
                     .catch(function (e) { showErrors(errors, e); });
@@ -848,16 +994,22 @@
                 class: 'ghost small',
                 onclick: function () {
                   api(API + '/settings/' + name + '/reset', { method: 'POST', body: {} })
-                    .then(function () { toast(t('sa.settings.saved')); draw(); })
+                    .then(function () { toast(t('sa.settings.saved')); settingsPanel(body); })
                     .catch(function (e) { toast(err(e), true); });
                 },
               }, t('sa.settings.reset')),
             ] : null),
+            el('p', { class: 'sa-help' }, settingSection(name).help),
             el('div', { class: 'sa-fields' }, ...fields), errors);
         });
-        body.replaceChildren(head, el('p', { class: 'sa-help' }, t('sa.settings.help')), ...sections);
+
+        mount(body,
+          el('p', { class: 'sa-help' }, t('sa.settings.help')),
+          isAdmin() ? null : el('p', { class: 'sa-help' }, t('sa.set.readOnly')),
+          ...panels);
+        return body;
       });
-    };
+    }
 
     // --------------------------------------------------------------- modal
     function modal(title, content, onSave, saveLabel) {
@@ -887,17 +1039,35 @@
     function showErrors(node, e) {
       var details = (e && e.details) || (e && e.body && e.body.details) || null;
       if (details && typeof details === 'object') {
-        node.replaceChildren(...Object.keys(details).map(function (key) {
+        mount(node, ...Object.keys(details).map(function (key) {
           return el('div', { class: 'sa-form-error' }, el('strong', {}, key + ': '), String(details[key]));
         }));
         return;
       }
-      node.replaceChildren(el('div', { class: 'sa-form-error' }, err(e)));
+      mount(node, el('div', { class: 'sa-form-error' }, err(e)));
+    }
+
+    // Administration → Settings mounts ONLY the settings panel. Drawing the
+    // module's shell there would fetch applications nobody asked for and show a
+    // tab bar inside another screen's tab bar.
+    if (ctx.mode === 'settings') {
+      settingsPanel(host);
+      return host;
     }
 
     draw();
     return host;
   }
 
-  root.ServiceAssurance = { create: create };
+  // Administration → Settings → Service Assurance. The settings are system-wide,
+  // so the shared Settings screen mounts them rather than this module's tab bar.
+  function settingsPanelEntry(ctx) {
+    return create({
+      el: ctx.el, api: ctx.api, t: ctx.t, toast: ctx.toast,
+      isAdmin: ctx.isAdmin, isOperator: ctx.isAdmin,
+      mode: 'settings',
+    });
+  }
+
+  root.ServiceAssurance = { create: create, settingsPanel: settingsPanelEntry };
 }(typeof window !== 'undefined' ? window : this));

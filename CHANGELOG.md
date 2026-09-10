@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.120.3 — Service Assurance: the things using it exposed
+
+Five fixes from a first run through the module.
+
+**The literal word "null" on the page.** `replaceChildren()` is native and takes
+`(Node | string)`, so a conditional child written the obvious way —
+`isAdmin() ? button : null` — was stringified and rendered. `el()` already
+filtered those; a `mount()` helper now gives `replaceChildren` the same manners,
+and all 30 call sites go through it.
+
+**Empty states that described the wrong thing.** The global Runs tab said "This
+test has not run yet" when no test anywhere had run; the global Schedules tab
+said "This test does not run automatically". Both now speak for the whole list
+and say what to do next, and the Discovery card explains what Discover will do
+instead of just reporting absence.
+
+**No way to create a schedule.** A schedule could only be added from inside a
+test. The Schedules tab now has its own create action with a test picker, and
+lists which test each schedule belongs to — a schedule list without the test
+name is unreadable.
+
+**Settings were in the wrong place, under the wrong names.** Every value there is
+system-wide, so they now live in **Administration → Settings → Service
+Assurance** with the rest of BlueEye's global configuration, licence pill and
+all. What is per-application — base URL, environments, logins, allowed hosts —
+stays on the application page. And the fields have human labels with units:
+"Stop the whole crawl after — milliseconds", not `maxDurationMs`.
+
+**Tab accepts a placeholder that is a prefix.** `https://` in an empty address
+field is something you will type, not a hint about shape. Tab writes it and
+leaves the caret at the end. Only when the field is empty — Tab keeps its normal
+meaning the moment there is any text.
+
+Also: the dashboard's live WebSocket no longer retries a refused upgrade forever.
+An expired token makes the server answer 401 and destroy the socket, which a
+browser reports only as a generic "can't establish a connection" — so the client
+retried every four seconds indefinitely, hammering the server and burying the
+real cause (a stale session) under console noise that looks like a proxy fault.
+It now backs off, and after a few refusals asks the REST API who it is, which
+runs the same "Session expired" path every other call uses.
+
 ## 0.120.2 — deploy-licens.sh says when blueeye-server is the stale one
 
 Deploying the licence server failed on a service it was never asked to touch:

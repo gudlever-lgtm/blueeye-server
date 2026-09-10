@@ -11029,7 +11029,7 @@ const SETTINGS_GROUPS = [
   ['Access & security', [['users', 'Users', true], ['auth', 'Authentication', true], ['apitokens', 'API tokens', true], ['agentkey', 'Agent key', true]]],
   ['Detection & alerts', [['analyse', 'Analysis', true], ['alerting', 'Alerting', true], ['runbooks', 'Runbooks', true], ['integrations', 'ITSM', true], ['cmdb', 'CMDB', true], ['ai', 'AI', true], ['maintenance', 'Maintenance', true]]],
   ['Data', [['database', 'Database', true], ['retention', 'Retention', true], ['types', 'Traffic types', true], ['map', 'Map', true]]],
-  ['System', [['updates', 'Updates', true], ['agents', 'Agents', true], ['screening', 'Test Settings', true]]],
+  ['System', [['updates', 'Updates', true], ['agents', 'Agents', true], ['screening', 'Test Settings', true], ['assurance', 'Service Assurance', true]]],
   ['Personal', [['appearance', 'Appearance', false], ['license', 'License', false]]],
 ];
 // ---- Logs (admin-only operational + client-error view) ----------------------
@@ -11572,6 +11572,7 @@ views.settings = async () => {
     auth: settingsAuthView,
     apitokens: settingsApiTokensView,
     screening: () => views.screening(),
+    assurance: settingsAssuranceView,
   };
   let content;
   try {
@@ -11603,7 +11604,23 @@ const SETTINGS_FEATURE = {
   alerting: { feature: 'alerting', label: 'Alerting' },
   ai: { feature: 'assistant', label: 'AI assistant' },
   map: { feature: 'geo', label: 'Destinations / geo' },
+  assurance: { feature: 'service_tests', label: 'Service Assurance' },
 };
+
+// Settings → Service Assurance. These are SYSTEM-WIDE limits — discovery
+// budgets, the allowed-hosts caps, runner timeouts, screenshot retention — so
+// they belong here with the rest of the global configuration rather than inside
+// the feature's own screens. What is per-application (base URL, environments,
+// logins, allowed hosts) stays on the application page.
+//
+// The panel is built by the module and handed the shared helpers, the same seam
+// views.serviceAssurance uses, so nothing about it leaks into app.js.
+async function settingsAssuranceView() {
+  if (!window.ServiceAssurance || typeof window.ServiceAssurance.settingsPanel !== 'function') {
+    return el('div', { class: 'empty' }, 'Service Assurance kunne ikke indlæses.');
+  }
+  return window.ServiceAssurance.settingsPanel({ el, api, t, toast, isAdmin });
+}
 
 // The green/red licence pill shown at the top of every Settings section.
 function settingsLicensePill(tabKey) {
@@ -13915,6 +13932,20 @@ function stat(k, v) {
 // happen. Idempotent connect; auto-reconnects while logged in.
 let liveWs = null;
 let liveReconnect = null;
+// Consecutive attempts that never reached an open socket. Reset on a successful
+// connect, and used both to back off and to decide when to question the session.
+let liveAttempts = 0;
+
+// Schedules the next attempt with exponential backoff, capped at a minute. A
+// fixed short retry is wrong for the two things that actually happen: a server
+// that is down stays down for longer than four seconds, and a refused upgrade
+// costs the server a handshake every time.
+function scheduleLive() {
+  if (!token || liveReconnect) return;
+  const delay = Math.min(4000 * (2 ** Math.max(0, liveAttempts - 1)), 60000);
+  liveReconnect = setTimeout(() => { liveReconnect = null; connectLive(); }, delay);
+}
+
 function connectLive() {
   if (!token) return;
   if (liveWs && (liveWs.readyState === WebSocket.OPEN || liveWs.readyState === WebSocket.CONNECTING)) return;
@@ -13923,6 +13954,12 @@ function connectLive() {
   try { sock = new WebSocket(`${proto}://${location.host}/ws/dashboard?token=${encodeURIComponent(token)}`); }
   catch { return; }
   liveWs = sock;
+  // Whether THIS socket ever opened. A socket that closes without opening means
+  // the upgrade was refused rather than a live connection dropping — and the
+  // browser cannot tell us which, since a rejected upgrade surfaces only as a
+  // generic "can't establish a connection".
+  let opened = false;
+  sock.addEventListener('open', () => { opened = true; liveAttempts = 0; });
   sock.addEventListener('message', (ev) => {
     let msg; try { msg = JSON.parse(ev.data); } catch { return; }
     if (!msg) return;
@@ -13933,13 +13970,32 @@ function connectLive() {
   });
   sock.addEventListener('close', () => {
     liveWs = null;
-    if (token && !liveReconnect) liveReconnect = setTimeout(() => { liveReconnect = null; connectLive(); }, 4000);
+    if (!token || liveReconnect) return;
+
+    // An expired token is the commonest reason an upgrade is refused: the server
+    // answers 401 and destroys the socket (src/ws/dashboardSocket.js). Retrying
+    // that on a timer never succeeds — it just hammers the server and fills the
+    // console with errors that look like a proxy or network fault, which is
+    // exactly the wrong place to send someone looking.
+    //
+    // So after a few refusals, ask the REST API who we are. api() runs the
+    // shared logout() on a 401, which clears `token` — so a dead session ends
+    // here with the same "Session expired" path every other call uses, instead
+    // of reconnecting forever.
+    if (!opened && ++liveAttempts >= 3) {
+      api('/me')
+        .then(() => { liveAttempts = 0; scheduleLive(); })
+        .catch(() => { if (token) scheduleLive(); });
+      return;
+    }
+    scheduleLive();
   });
   sock.addEventListener('error', () => { try { sock.close(); } catch { /* ignore */ } });
 }
 function disconnectLive() {
   if (liveReconnect) { clearTimeout(liveReconnect); liveReconnect = null; }
   if (liveWs) { try { liveWs.close(); } catch { /* ignore */ } liveWs = null; }
+  liveAttempts = 0;
 }
 // Live agent enrollment / online-status events. Surfaces a toast, and (when the
 // enrollment wizard is showing a fresh code) flips its "Waiting for agent…" panel.

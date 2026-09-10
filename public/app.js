@@ -15021,6 +15021,19 @@ views.serviceAssurance = async () => {
     el, api, t, dataCard, toast,
     isAdmin,
     isOperator: canWrite,
+    // An <img src> cannot carry the Authorization header this dashboard
+    // authenticates with, so a screenshot loaded that way arrives anonymous and
+    // answers 401 — which the browser renders as a broken image. Fetched here
+    // with the header and handed over as an object URL, the same way the CSV
+    // export already does it.
+    apiBlob: async (path) => {
+      const res = await fetch(path, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+      if (!res.ok) {
+        let msg; try { msg = (await res.json()).error; } catch { /* non-JSON body */ }
+        throw new Error(msg || `HTTP ${res.status}`);
+      }
+      return URL.createObjectURL(await res.blob());
+    },
     // "No worker is connected" is only useful if it says where to look.
     openDocs: () => gotoDocs('assurance-worker'),
   });

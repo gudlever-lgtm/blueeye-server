@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.123.7 — repairing the tests that already carry the unfindable title step
+
+0.123.6 stopped Discovery from SUGGESTING a title assertion that could never
+pass. It could not do anything about the tests an operator had already accepted,
+which still hold the broken step and still fail every run after the full step
+timeout.
+
+`npm run repair-title-assertions` turns them into the step they meant to be. It
+is a dry run by default and lists what it would change; `-- --apply` writes.
+Every write goes through the repository's own save(), so the old definition is
+snapshotted into `service_test_test_versions` and the version is bumped — the
+repair is auditable and revertable like any other edit, and running it twice is a
+no-op.
+
+It repairs one shape and nothing else: an `assert_text_contains` whose target is
+exactly `{ text: X }` with a non-empty X equal to its own value. That cannot
+collide with a hand-built step — the designer creates every targeted step as
+`target: { text: '' }` and offers no way to edit a target afterwards, while
+`value` is required and rejected when empty — so the shape is reachable only from
+the suggestion generator. Steps nested in a condition block are repaired too.
+
+**The step now reads as a sentence.** It rendered as
+`Kontroller at teksten "X" indeholder "X"` — a tautology that said nothing about
+what was being checked. It reads
+`Kontroller at siden identificeres med titlen "X"`, and a failure says what the
+title actually was.
+
+**The failure screenshot was always a broken image.** It was
+`<img src="/api/service-tests/runs/:id/screenshot">`, and an `<img>` cannot send
+the `Authorization` header this dashboard authenticates with — so the request
+arrived anonymous, answered 401, and the browser drew a broken-image icon. It is
+fetched with the header and shown as an object URL, the way the CSV export
+already worked, and only when the section is actually opened.
+
 ## 0.123.6 — a suggested test asserted a title that could never be found
 
 Two things went wrong on the same screen, and they compounded.

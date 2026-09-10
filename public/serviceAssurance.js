@@ -26,6 +26,10 @@
     // Opens the Documentation article on starting a worker. Optional — a host
     // that does not supply it simply gets the message without the link.
     var openDocs = typeof ctx.openDocs === 'function' ? ctx.openDocs : null;
+    // Fetches a binary endpoint WITH the session header and returns an object
+    // URL. Optional: a host that does not supply it simply gets no screenshot,
+    // which is better than a broken image.
+    var apiBlob = typeof ctx.apiBlob === 'function' ? ctx.apiBlob : null;
 
     // ---------------------------------------------------------------- state
     var state = {
@@ -806,6 +810,40 @@
       ].filter(Boolean).join(' · ');
     }
 
+    // The failure screenshot.
+    //
+    // It used to be `<img src="/api/service-tests/runs/:id/screenshot">`, which
+    // could never load: an <img> cannot send the Authorization header the
+    // dashboard authenticates with, so the request arrived anonymous, answered
+    // 401 and rendered as a broken-image icon. It is fetched with the header and
+    // shown as an object URL instead.
+    function screenshotPanel(run) {
+      var img = el('img', { class: 'sa-screenshot', alt: t('sa.run.screenshot') });
+      var holder = el('div', {}, el('div', { class: 'sa-help' }, t('sa.run.screenshotLoading')));
+      var loaded = false;
+
+      var details = el('details', {}, el('summary', {}, t('sa.run.screenshot')), holder);
+      // Fetched only when the section is opened — a screenshot is the heaviest
+      // thing on the page and most visits never expand it.
+      details.addEventListener('toggle', function () {
+        if (!details.open || loaded) return;
+        loaded = true;
+        if (!apiBlob) { mount(holder, el('div', { class: 'sa-help' }, t('sa.run.screenshotUnavailable'))); return; }
+        apiBlob(API + '/runs/' + run.id + '/screenshot')
+          .then(function (url) {
+            img.src = url;
+            // The object URL is held by the document only while this image is on
+            // screen; releasing it on unload keeps a long session from growing.
+            img.addEventListener('load', function () { root.URL.revokeObjectURL(url); }, { once: true });
+            mount(holder, img);
+          })
+          .catch(function (e) {
+            mount(holder, el('div', { class: 'sa-help' }, t('sa.run.screenshotFailed', { message: err(e) })));
+          });
+      });
+      return details;
+    }
+
     views.runs = function (body) {
       if (state.runId) return runDetail(body, state.runId);
       return Promise.all([api(API + '/runs'), api(API + '/runs/worker-status')]).then(function (res) {
@@ -870,10 +908,7 @@
             classification ? el('p', { class: 'muted' }, classification.explanation) : null,
             classification && classification.http_status
               ? el('p', {}, el('span', { class: 'chip' }, 'HTTP ' + classification.http_status)) : null,
-            run.screenshot_path
-              ? el('details', {}, el('summary', {}, t('sa.run.screenshot')),
-                el('img', { class: 'sa-screenshot', src: API + '/runs/' + run.id + '/screenshot', alt: t('sa.run.screenshot') }))
-              : null,
+            run.screenshot_path ? screenshotPanel(run) : null,
             el('details', {}, el('summary', {}, t('sa.technicalDetails')),
               el('pre', { class: 'sa-pre' }, JSON.stringify({
                 error: run.error_message,

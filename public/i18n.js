@@ -414,6 +414,9 @@
       'sa.run.test': 'Test',
       'sa.run.started': 'Started',
       'sa.run.deletedTest': 'A deleted test',
+      'sa.run.screenshotLoading': 'Loading the screenshot…',
+      'sa.run.screenshotFailed': 'The screenshot could not be loaded: {message}',
+      'sa.run.screenshotUnavailable': 'Screenshots cannot be shown here.',
       'sa.run.bySchedule': 'scheduled',
       'sa.run.byHand': 'run by hand',
 
@@ -823,6 +826,9 @@
       'sa.run.test': 'Test',
       'sa.run.started': 'Startet',
       'sa.run.deletedTest': 'En slettet test',
+      'sa.run.screenshotLoading': 'Henter skærmbilledet…',
+      'sa.run.screenshotFailed': 'Skærmbilledet kunne ikke hentes: {message}',
+      'sa.run.screenshotUnavailable': 'Skærmbilleder kan ikke vises her.',
       'sa.run.bySchedule': 'planlagt',
       'sa.run.byHand': 'kørt manuelt',
 

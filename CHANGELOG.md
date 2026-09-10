@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.122.0 — the Service Assurance worker actually starts
+
+**The worker had never run.** `scripts/service-test-worker.js` did
+`const config = require('../src/config')` where that module exports `{ config }`,
+so `config.db` was undefined and the process died on the first statement of
+`main()`. Docker reports that as `Started`, then restarts it, forever — and the
+dashboard says no worker is connected, which is true and says nothing about why.
+One word, and it made the whole feature inert.
+
+A boot smoke test now spawns the entrypoint against a dead database and requires
+it to reach "polling for work". The rest of the suite drives the worker loop with
+injected fakes and never runs the entrypoint, which is exactly how this survived
+a release. `test/serverBoot.test.js` guards `src/server.js` the same way.
+
+**`scripts/deploy.sh` deploys the worker too.** It sits behind a compose profile,
+so a deploy rebuilt the server and left the worker on old code. The script now
+rebuilds it on any host that already has one and keeps the replica count it finds
+there — three stay three. Opt in the first time with
+`BLUEEYE_SERVICE_ASSURANCE=1`, choose a count with `BLUEEYE_ASSURANCE_WORKERS=n`,
+and `=0` stops them. A deployment that does not use Service Assurance still
+builds nothing extra.
+
 ## 0.121.0 — Service Assurance: the worker can say it is running
 
 **A running worker was reported as missing.** Worker liveness was inferred from

@@ -11450,6 +11450,11 @@ const DOCS = [
           docsCode('COMPOSE_PROFILES=service-assurance docker compose up -d --scale service-assurance-worker=3'),
           el('p', { class: 'muted' }, 'Each worker claims a queued run with a conditional database update, so several never run the same job twice.'),
 
+          el('h4', {}, 'On a deploy'),
+          el('p', {}, [el('code', {}, 'scripts/deploy.sh'), ' rebuilds the worker along with the server on any host that already runs one, and keeps the number you scaled to — so a worker never sits on last week\u2019s code while the server updates. The first time, ask for it:']),
+          docsCode('BLUEEYE_SERVICE_ASSURANCE=1 ./scripts/deploy.sh    # start one\nBLUEEYE_ASSURANCE_WORKERS=3 ./scripts/deploy.sh   # start three\nBLUEEYE_ASSURANCE_WORKERS=0 ./scripts/deploy.sh   # stop them again'),
+          el('p', { class: 'muted' }, 'A deployment that does not use Service Assurance builds nothing extra — the worker image is Debian with Chromium, and it is not part of the default stack.'),
+
           el('h4', {}, 'Outside Docker'),
           el('p', {}, 'On a host with Node and Chromium installed, from the blueeye-server directory:'),
           docsCode('PLAYWRIGHT_CHROMIUM_PATH=/usr/bin/chromium \\\n  SERVICE_TEST_ARTIFACT_ROOT=/var/lib/blueeye/service-assurance \\\n  npm run service-test-worker'),

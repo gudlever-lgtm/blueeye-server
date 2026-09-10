@@ -9,6 +9,21 @@
 #      Done on EVERY deploy (not just when the agent moved this run), because a
 #      server that's already running keeps serving the bundle it cached at its
 #      last boot, even if the agent was bumped in an earlier deploy.
+#   4) rebuilds the Service Assurance worker WHEN THIS HOST RUNS ONE — see below.
+#
+# The Service Assurance worker sits behind the "service-assurance" compose profile,
+# so it is not part of the default stack: a deployment that does not use the
+# feature should never build a Debian+Chromium image it will not run. But a host
+# that HAS one must not be left with a worker running last week's code while the
+# server updates, so this script starts it whenever it finds one already there.
+# The first time, ask for it explicitly:
+#
+#   BLUEEYE_SERVICE_ASSURANCE=1 ./scripts/deploy.sh          # start one worker
+#   BLUEEYE_ASSURANCE_WORKERS=3 ./scripts/deploy.sh          # start three
+#   BLUEEYE_ASSURANCE_WORKERS=0 ./scripts/deploy.sh          # stop and skip them
+#
+# After that the count is remembered — it is read back off the running containers,
+# so a stack scaled to three stays at three.
 #
 # The license server (blueeye-licens) is NOT deployed here — it is vendor-managed.
 # Use scripts/deploy-licens.sh for that. (If a licens container is already running
@@ -19,6 +34,8 @@
 #   BLUEEYE_BRANCH=some-branch ./scripts/deploy.sh   # deploy another branch
 #   BLUEEYE_API_TOKEN=<viewer+ JWT> ./scripts/deploy.sh   # also verify the
 #       offered agent version via /system/version after deploy (optional)
+#   BLUEEYE_SERVICE_ASSURANCE=1 ./scripts/deploy.sh       # also run the Service
+#       Assurance worker (see above; remembered on later deploys)
 #
 # Expects the repos cloned as siblings, e.g.:
 #   /var/www/blueeye.gnf.dk/{blueeye-server,blueeye-agent}
@@ -30,6 +47,13 @@ BRANCH="${BLUEEYE_BRANCH:-main}"
 REPOS=(blueeye-server blueeye-agent)
 # Compose services this script (re)builds. licens is intentionally excluded.
 SERVICES=(server agent)
+# The Service Assurance worker, handled separately: it lives behind a compose
+# profile and is deployed only on hosts that actually run it (see the header).
+ASSURANCE_SERVICE=service-assurance-worker
+ASSURANCE_PROFILE=service-assurance
+# `name: blueeye` at the top of docker-compose.yml, unless the environment
+# overrides it. Used to find this stack's worker containers by label.
+COMPOSE_PROJECT="${COMPOSE_PROJECT_NAME:-blueeye}"
 
 # Resolve paths from the script's own location so it works from any cwd.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -102,6 +126,59 @@ fi
 
 log "Building and starting: ${SERVICES[*]} (licens is left to deploy-licens.sh)"
 "${DC[@]}" up -d --build "${SERVICES[@]}"
+
+# --- Service Assurance worker ---------------------------------------------
+# How many workers this host should end up with:
+#   BLUEEYE_ASSURANCE_WORKERS  — an explicit number, including 0 to stop them
+#   otherwise                  — however many containers are already there, so a
+#                                stack scaled to three stays at three
+#   otherwise                  — 1 when opted in for the first time, else none
+#
+# Counting existing containers by compose label rather than asking compose keeps
+# this correct without activating the profile, and includes STOPPED workers: a
+# host whose worker died is a host that still wants one.
+existing_workers() {
+  command -v docker >/dev/null 2>&1 || { echo 0; return; }
+  docker ps -a -q \
+    --filter "label=com.docker.compose.project=${COMPOSE_PROJECT}" \
+    --filter "label=com.docker.compose.service=${ASSURANCE_SERVICE}" 2>/dev/null \
+    | wc -l | tr -d ' '
+}
+
+# Asked for by hand: the env flag, or a COMPOSE_PROFILES that already names the
+# profile (someone who exports it means it).
+assurance_opted_in() {
+  [ "${BLUEEYE_SERVICE_ASSURANCE:-0}" = "1" ] && return 0
+  case "${COMPOSE_PROFILES:-}" in *"$ASSURANCE_PROFILE"*) return 0 ;; esac
+  return 1
+}
+
+HAVE_WORKERS="$(existing_workers)"
+WANT_WORKERS=0
+if [ -n "${BLUEEYE_ASSURANCE_WORKERS:-}" ]; then
+  case "$BLUEEYE_ASSURANCE_WORKERS" in
+    ''|*[!0-9]*) die "BLUEEYE_ASSURANCE_WORKERS must be a whole number (got '$BLUEEYE_ASSURANCE_WORKERS')." ;;
+    *) WANT_WORKERS="$BLUEEYE_ASSURANCE_WORKERS" ;;
+  esac
+elif [ "$HAVE_WORKERS" -gt 0 ]; then
+  WANT_WORKERS="$HAVE_WORKERS"
+elif assurance_opted_in; then
+  WANT_WORKERS=1
+fi
+
+if [ "$WANT_WORKERS" -gt 0 ]; then
+  log "Building and starting the Service Assurance worker (x$WANT_WORKERS)"
+  # The profile is set for this command only — the rest of the deploy is the
+  # ordinary stack. Building it takes a while the first time: it is a Debian
+  # image with Chromium, which is why it is not in the default set.
+  COMPOSE_PROFILES="$ASSURANCE_PROFILE" "${DC[@]}" up -d --build \
+    --scale "${ASSURANCE_SERVICE}=${WANT_WORKERS}" "$ASSURANCE_SERVICE"
+elif [ "$HAVE_WORKERS" -gt 0 ]; then
+  log "Stopping the Service Assurance worker (BLUEEYE_ASSURANCE_WORKERS=0)"
+  COMPOSE_PROFILES="$ASSURANCE_PROFILE" "${DC[@]}" rm -sf "$ASSURANCE_SERVICE" || true
+else
+  log "Service Assurance worker: not deployed on this host (BLUEEYE_SERVICE_ASSURANCE=1 to start one)"
+fi
 
 log "Stack status"
 "${DC[@]}" ps

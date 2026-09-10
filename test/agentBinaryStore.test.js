@@ -7,6 +7,7 @@ const crypto = require('node:crypto');
 const path = require('node:path');
 
 const { createAgentBinaryStore } = require('../src/enroll/agentBinaryStore');
+const { waitFor } = require('../test-support/waitFor');
 
 const quiet = { info() {}, warn() {} };
 
@@ -92,10 +93,12 @@ test('reports error and no arches when agentDir is missing', async () => {
   const store = createAgentBinaryStore({
     logger: { info() {}, warn(m) { warnings.push(m); } },
   });
-  // Wait for the async build to settle
-  await new Promise((r) => setTimeout(r, 50));
-  const st = store.status();
-  assert.equal(st.topError !== null, true, 'topError should be set');
+  // Wait for the async build to settle — for the thing being asserted, not for
+  // a number of milliseconds someone once measured on their laptop.
+  const st = await waitFor(() => {
+    const s = store.status();
+    return s.topError !== null ? s : null;
+  }, 'the missing-agentDir error to be recorded');
   assert.match(st.topError, /AGENT_SOURCE_DIR/);
   assert.equal(warnings.some((w) => /AGENT_SOURCE_DIR/.test(w)), true);
   assert.equal(store.available('linux-x64'), false);
@@ -116,9 +119,10 @@ test('reports error when @yao-pkg/pkg is not installed', async () => {
     spawnImpl: makeSpawnFailure(),
     logger: { info() {}, warn(m) { warnings.push(m); } },
   });
-  await new Promise((r) => setTimeout(r, 50));
-  const st = store.status();
-  assert.equal(st.topError !== null, true);
+  const st = await waitFor(() => {
+    const s = store.status();
+    return s.topError !== null ? s : null;
+  }, 'the missing-pkg error to be recorded');
   assert.match(st.topError, /@yao-pkg\/pkg/);
 });
 
@@ -145,7 +149,8 @@ test('loads binaries from cache when version matches — no build', async () => 
     logger: quiet,
   });
 
-  await new Promise((r) => setTimeout(r, 100));
+  await waitFor(() => store.available('linux-x64') && store.available('linux-arm64'),
+    'both cached binaries to be loaded');
 
   assert.equal(buildCalled.length, 0, 'should not spawn pkg on cache hit');
   assert.equal(store.available('linux-x64'), true);
@@ -174,10 +179,9 @@ test('builds and caches binaries when cache is stale', async () => {
     logger: quiet,
   });
 
-  await new Promise((r) => setTimeout(r, 200));
+  await waitFor(() => store.available('linux-x64') && store.available('linux-arm64'),
+    'both architectures to finish building');
 
-  assert.equal(store.available('linux-x64'), true);
-  assert.equal(store.available('linux-arm64'), true);
   assert.equal(store.checksums()['linux-x64'], sha);
   // Version stamp should have been written
   const written = fakeFs._files[path.join(cacheDir, '.agent-version')];
@@ -201,9 +205,10 @@ test('marks arch as error when build exits non-zero', async () => {
     logger: quiet,
   });
 
-  await new Promise((r) => setTimeout(r, 200));
-
-  const st = store.status();
+  const st = await waitFor(() => {
+    const s = store.status();
+    return s.arches['linux-x64'] && s.arches['linux-x64'].error ? s : null;
+  }, 'the failed build to be recorded');
   assert.equal(st.arches['linux-x64'].built, false);
   assert.match(st.arches['linux-x64'].error || '', /Cannot resolve module ws/);
   assert.equal(store.available('linux-x64'), false);
@@ -220,6 +225,9 @@ test('status() reflects pending state before build completes', () => {
 
 test('checksums() returns empty object when nothing is ready', async () => {
   const store = createAgentBinaryStore({ logger: quiet });
-  await new Promise((r) => setTimeout(r, 50));
+  // Wait for the build attempt to FINISH (it fails: no agentDir) before checking
+  // that nothing was published — otherwise this asserts against a store that has
+  // simply not started yet, which would pass for the wrong reason.
+  await waitFor(() => store.status().topError !== null, 'the build attempt to finish');
   assert.deepEqual(store.checksums(), {});
 });

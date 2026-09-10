@@ -7,6 +7,7 @@ const os = require('os');
 const path = require('path');
 
 const { createBaselineFileCache } = require('../baselineCache');
+const { waitFor } = require('../../../test-support/waitFor');
 
 function tmpFile() {
   return path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'bl-')), 'baselines.json');
@@ -40,7 +41,9 @@ test('async write eventually lands on disk', async () => {
   const file = tmpFile();
   const cache = createBaselineFileCache(file);
   cache.write({ 'h1|cpu|1': [5] });
-  // Allow the async writeFile to settle.
-  await new Promise((r) => setTimeout(r, 50));
-  assert.deepEqual(createBaselineFileCache(file).read(), { 'h1|cpu|1': [5] });
+  // write() is fire-and-forget (mkdir + writeFile), so "eventually" is the whole
+  // claim — poll for it rather than guessing how long the machine needs.
+  const reader = createBaselineFileCache(file);
+  await waitFor(() => reader.read() !== null, 'the async write to reach disk');
+  assert.deepEqual(reader.read(), { 'h1|cpu|1': [5] });
 });

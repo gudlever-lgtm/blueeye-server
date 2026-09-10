@@ -56,11 +56,23 @@ echo "[gate] $name v$version — security / ui / validation gate"
 start=$(date +%s)
 failed=()
 
+# Each phase's output is kept so a failure can be NAMED at the end. Without it
+# the summary says "1 of 3236 failed" and the name is buried thousands of lines
+# up — which on CI, where the log is read through an API that returns the tail,
+# means the failure cannot be identified at all.
+log_dir="$(mktemp -d)"
+trap 'rm -rf "$log_dir"' EXIT
+
+phase_log() { echo "$log_dir/${1// /-}.log"; }
+
 run_phase() {
   local label="$1"; shift
+  local log; log="$(phase_log "$label")"
   echo
   echo "[gate] ▶ $label: $*"
-  if "$@"; then
+  # tee keeps the live output AND the copy; pipefail (set above) means the
+  # pipeline still reports the command's status, not tee's.
+  if "$@" 2>&1 | tee "$log"; then
     echo "[gate] ✔ $label"
   else
     echo "[gate] ✘ $label FAILED" >&2
@@ -76,6 +88,19 @@ run_phase "full suite" npm test --silent
 echo
 elapsed=$(( $(date +%s) - start ))
 if [ "${#failed[@]}" -gt 0 ]; then
+  # Name the failures. TAP prints a failing leaf indented under its file, so
+  # both shapes are matched; a test whose NAME contains "not ok" does not, since
+  # its own line starts with "ok".
+  for label in "${failed[@]}"; do
+    log="$(phase_log "$label")"
+    [ -f "$log" ] || continue
+    names="$(grep -E '^[[:space:]]*not ok [0-9]+ - ' "$log" | head -40 || true)"
+    [ -n "$names" ] || continue
+    echo >&2
+    echo "[gate] failing tests in $label:" >&2
+    echo "$names" | sed 's/^[[:space:]]*/  /' >&2
+  done
+  echo >&2
   echo "[gate] BLOCKED — $name v$version failed: ${failed[*]} (${elapsed}s)" >&2
   echo "[gate] Fix the failures and re-run scripts/gate.sh before pushing." >&2
   [ -n "$stamp_file" ] && rm -f "$stamp_file"

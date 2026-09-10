@@ -534,9 +534,23 @@ says so rather than hanging.
 # in the stack
 COMPOSE_PROFILES=service-assurance docker compose up --build
 
-# or directly, against the same database and the SAME SECRET_ENCRYPTION_KEY
+# or directly
 npm run service-test-worker
 ```
+
+Two things must match the API server, and both fail quietly rather than loudly
+if they do not:
+
+- **The secret key.** The worker decrypts the credentials the server encrypted,
+  and both derive that AES key from `SECRET_ENCRYPTION_KEY`, falling back to
+  `JWT_SECRET`. A different value means every test with a login fails with
+  "credential unavailable". In the stack both services read the same
+  `SERVER_JWT_SECRET` from `.env`, so there is nothing to keep in step by hand.
+- **The artefact path.** The worker WRITES failure screenshots to
+  `SERVICE_TEST_ARTIFACT_ROOT`; the API server READS them back to serve
+  `/runs/:id/screenshot`. In the stack they share one named volume mounted at the
+  same path. Point them at different places and screenshots are captured that
+  nobody can open.
 
 Scaling out is `--scale service-assurance-worker=3`: the claim is a conditional
 `UPDATE`, so several workers never run the same job twice.

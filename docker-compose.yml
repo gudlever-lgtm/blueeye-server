@@ -93,6 +93,10 @@ services:
       # demo .env (scripts/dev-bootstrap.js) sets gnf-server-1 explicitly to match
       # its seeded demo licence.
       LICENSE_SERVER_ID: ${LICENSE_SERVER_ID:-}
+      # Where Service Assurance failure screenshots live. The worker writes them
+      # here; this server reads them back to serve the run detail page. Must be
+      # the same path the worker uses.
+      SERVICE_TEST_ARTIFACT_ROOT: /var/lib/blueeye/service-assurance
       # Where this server validates its license. Customers set this to the vendor's
       # hosted licens URL. Default keeps the vendor's on-host licens (run with the
       # "licens" profile). The server tolerates outages up to LICENSE_GRACE_DAYS.
@@ -120,6 +124,10 @@ services:
     command: sh -c "node src/migrate.js && node scripts/seed-demo.js && node src/server.js"
     volumes:
       - server-data:/data
+      # Shared with the Service Assurance worker, which WRITES the failure
+      # screenshots this server SERVES at /api/service-tests/runs/:id/screenshot.
+      # Without it the worker captures screenshots nobody can open.
+      - service-assurance-artifacts:/var/lib/blueeye/service-assurance
       # Host machine-id (read-only) so the derived LICENSE_SERVER_ID stays stable
       # across container recreation when LICENSE_SERVER_ID is unset. Without it the
       # server falls back to hostname/MAC, which change on recreate — see
@@ -179,8 +187,13 @@ services:
       DB_USER: ${DB_USER:-blueeye}
       DB_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env (run scripts/dev-bootstrap.js)}
       DB_NAME: ${DB_NAME:-blueeye}
-      # MUST match the server's, or the stored credentials cannot be decrypted.
-      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+      # The SAME variable the server service reads, not a separate one. The
+      # worker decrypts the credentials the server encrypted, and both derive
+      # that AES key from SECRET_ENCRYPTION_KEY falling back to JWT_SECRET. Point
+      # this at a different value and every test with a login fails with
+      # "credential unavailable" — a silent failure, so it is wired to the one
+      # variable that is already correct.
+      JWT_SECRET: ${SERVER_JWT_SECRET:?set SERVER_JWT_SECRET in .env (run scripts/dev-bootstrap.js)}
       SECRET_ENCRYPTION_KEY: ${SECRET_ENCRYPTION_KEY:-}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     volumes:

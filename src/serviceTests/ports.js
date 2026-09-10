@@ -19,6 +19,14 @@
 //     clock     () => Date                injected so schedules/timeouts are testable
 //   }
 //
+// Two OPTIONAL ports belong to the reaction loop (assurance/reactor.js) and are
+// passed the same way:
+//
+//   notify(finding, group) -> Promise    where an incident is sent. BlueEye binds
+//                                        the alerting dispatcher; omitted means
+//                                        incidents are recorded and not sent
+//   certificateChecker { check }         a TLS inspector. Omitted = the real one
+//
 // `auth` and `licence` are deliberately NOT ports. They are Express middleware,
 // so they are passed to the router factory (createServiceTestsModule) rather than
 // held on a long-lived object — the module never decides who may call it, it only

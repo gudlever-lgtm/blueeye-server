@@ -163,7 +163,7 @@ function createRunsRepository({ db, now = () => new Date() }) {
   async function history(testId, limit = 20) {
     const capped = Math.min(200, Math.max(1, Number(limit) || 20));
     const [rows] = await pool.query(
-      `SELECT id,status,duration_ms,failed_step,error_message,started_at,ended_at
+      `SELECT id,status,duration_ms,failed_step,error_message,failure_kind,started_at,ended_at
        FROM service_test_runs
        WHERE test_id = ? AND status NOT IN ('queued','running')
        ORDER BY created_at DESC, id DESC LIMIT ?`,

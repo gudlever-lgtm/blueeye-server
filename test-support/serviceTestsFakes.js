@@ -12,6 +12,7 @@
 const { createServiceTestsApiRouter } = require('../src/serviceTests/api');
 const { createServiceTestSettings } = require('../src/serviceTests/settings');
 const { createQueue } = require('../src/serviceTests/scheduler/queue');
+const { createAssuranceReactor } = require('../src/serviceTests/assurance/reactor');
 const { createSecretBox } = require('../src/lib/secretBox');
 const { requireAuth, requireRole } = require('../src/auth/middleware');
 const { ROLES } = require('../src/auth/roles');
@@ -43,6 +44,36 @@ function makeTable(seed = []) {
       if (i < 0) return false;
       rows.splice(i, 1);
       return true;
+    },
+  };
+}
+
+// A TLS inspector that answers from a table instead of a socket: `seen` maps
+// `host:port` (or `host`) to the row a real handshake would have produced, and
+// anything not listed comes back as a healthy certificate a year out. Every
+// spec that touches certificates goes through here, so the suite never opens a
+// connection.
+function makeCertificateChecker(seen = {}) {
+  return {
+    async check(target) {
+      const key = `${target.host}:${target.port}`;
+      const scripted = seen[key] || seen[target.host] || null;
+      const at = new Date();
+      if (scripted) {
+        return {
+          host: target.host, port: target.port, url: target.url, checked_at: at,
+          subject: null, issuer: null, serial_number: null, fingerprint: null, alt_names: null,
+          valid_from: null, valid_to: null, days_remaining: null, error_message: null,
+          status: 'ok', ...scripted,
+        };
+      }
+      const validTo = new Date(at.getTime() + 365 * 86400000);
+      return {
+        host: target.host, port: target.port, url: target.url, checked_at: at,
+        subject: `CN=${target.host}`, issuer: 'O=Test CA', serial_number: '01', fingerprint: 'AA:BB',
+        alt_names: `DNS:${target.host}`, valid_from: at, valid_to: validTo,
+        days_remaining: 365, status: 'ok', error_message: null,
+      };
     },
   };
 }
@@ -79,6 +110,8 @@ function makeServiceTests(overrides = {}) {
     suggestions: makeTable(overrides.suggestions || []),
     schedules: makeTable(overrides.schedules || []),
     workers: makeTable(overrides.workers || []),
+    certificates: makeTable(overrides.certificates || []),
+    incidents: makeTable(overrides.incidents || []),
   };
 
   const bool = (v) => !!v;
@@ -198,7 +231,13 @@ function makeServiceTests(overrides = {}) {
       async complete(id, result) { return t.runs.update(id, { ...result, steps: undefined }); },
       async reapStale() { return 0; },
       async history(testId, limit = 20) {
-        const rows = t.runs.where((r) => r.test_id === Number(testId) && !['queued', 'running'].includes(r.status)).slice(0, limit);
+        // Newest first, like the real query's `ORDER BY created_at DESC, id DESC`
+        // — the reactor reads the head of this list to count a failure streak,
+        // so the order is part of the contract, not a presentation detail.
+        const rows = t.runs
+          .where((r) => r.test_id === Number(testId) && !['queued', 'running'].includes(r.status))
+          .sort((a, b) => (new Date(b.created_at) - new Date(a.created_at)) || (b.id - a.id))
+          .slice(0, limit);
         const passed = rows.filter((r) => r.status === 'pass').length;
         const durations = rows.map((r) => r.duration_ms).filter(Number.isFinite);
         return {
@@ -277,6 +316,93 @@ function makeServiceTests(overrides = {}) {
       async markRun(id, at) { return t.schedules.update(id, { last_run_at: at }); },
       async remove(id) { return t.schedules.remove(id); },
     },
+    // Certificates: keyed by (application, host, port) like the real unique key,
+    // so a re-check updates the row rather than adding one.
+    certificates: {
+      async record(applicationId, result) {
+        const port = Number(result.port) || 443;
+        const existing = t.certificates.rows.find((r) => r.application_id === applicationId
+          && r.host === result.host && r.port === port);
+        const row = { ...result, application_id: applicationId, port };
+        if (existing) return t.certificates.update(existing.id, row);
+        return t.certificates.insert(row);
+      },
+      async findById(id) { return t.certificates.find(id); },
+      async findByTarget(applicationId, host, port) {
+        const p = Number(port) || 443;
+        const row = t.certificates.rows.find((r) => r.application_id === applicationId && r.host === host && r.port === p);
+        return row ? clone(row) : null;
+      },
+      async list({ applicationId = null, status = null } = {}) {
+        return t.certificates
+          .where((r) => (applicationId === null || r.application_id === applicationId) && (status === null || r.status === status))
+          .sort((a, b) => new Date(a.valid_to || 8640000000000000) - new Date(b.valid_to || 8640000000000000));
+      },
+      async dueForCheck() { return t.certificates.rows.map(clone); },
+      async pruneMissing(applicationId, kept = []) {
+        const keep = new Set(kept.map((k) => `${k.host}:${Number(k.port) || 443}`));
+        const doomed = t.certificates.rows.filter((r) => r.application_id === applicationId && !keep.has(`${r.host}:${r.port}`));
+        doomed.forEach((r) => t.certificates.remove(r.id));
+        return doomed.length;
+      },
+    },
+    // Incidents: one open row per subject_key, exactly as the reactor assumes.
+    incidents: {
+      async findById(id) { return t.incidents.find(id); },
+      async findOpen(subjectKey) {
+        const row = [...t.incidents.rows].reverse().find((r) => r.subject_key === subjectKey && r.status === 'open');
+        return row ? clone(row) : null;
+      },
+      async open(input) {
+        const at = input.at || new Date();
+        return t.incidents.insert({
+          status: 'open', occurrences: 1, opened_at: at, last_seen_at: at,
+          resolved_at: null, resolved_by: null, resolution: null,
+          notified_at: null, notified_severity: null,
+          ...input, evidence: input.evidence || [],
+        });
+      },
+      async touch(id, { severity = null, summary = null, evidence = null, kind = null, at = null } = {}) {
+        const row = t.incidents.rows.find((r) => r.id === Number(id));
+        if (!row) return null;
+        const RANKS = { INFO: 1, WARN: 2, CRIT: 3 };
+        const patch = { occurrences: (row.occurrences || 1) + 1, last_seen_at: at || new Date() };
+        if (severity && (RANKS[severity] || 0) > (RANKS[row.severity] || 0)) patch.severity = severity;
+        if (kind) patch.kind = kind;
+        if (summary !== null) patch.summary = summary;
+        if (evidence !== null) patch.evidence = evidence;
+        return t.incidents.update(id, patch);
+      },
+      async resolve(id, { resolution = 'The next check was healthy', resolvedBy = null, at = null } = {}) {
+        const row = t.incidents.rows.find((r) => r.id === Number(id));
+        if (!row || row.status !== 'open') return row ? clone(row) : null;
+        return t.incidents.update(id, { status: 'resolved', resolved_at: at || new Date(), resolved_by: resolvedBy, resolution });
+      },
+      async markNotified(id, severity, at = null) {
+        return t.incidents.update(id, { notified_at: at || new Date(), notified_severity: severity });
+      },
+      async list({ status = null, applicationId = null, subjectType = null, severity = null, limit = 100 } = {}) {
+        const RANKS = { CRIT: 0, WARN: 1, INFO: 2 };
+        return t.incidents
+          .where((r) => (status === null || r.status === status)
+            && (applicationId === null || r.application_id === applicationId)
+            && (subjectType === null || r.subject_type === subjectType)
+            && (severity === null || r.severity === severity))
+          .sort((a, b) => (a.status === b.status ? 0 : a.status === 'open' ? -1 : 1)
+            || (RANKS[a.severity] - RANKS[b.severity]))
+          .slice(0, limit);
+      },
+      async openCounts() {
+        const out = { CRIT: 0, WARN: 0, INFO: 0, total: 0 };
+        for (const r of t.incidents.rows) {
+          if (r.status !== 'open') continue;
+          if (out[r.severity] !== undefined) out[r.severity] += 1;
+          out.total += 1;
+        }
+        return out;
+      },
+      async purgeResolvedOlderThan() { return 0; },
+    },
     // Worker heartbeats. Keyed by worker id like the real table's primary key,
     // so a repeated heartbeat updates rather than accumulates.
     workers: {
@@ -321,10 +447,25 @@ function makeServiceTests(overrides = {}) {
   const auditEntries = [];
   const audit = { record(req, entry) { auditEntries.push(entry); return Promise.resolve(entry); } };
 
+  // The REAL reactor over the in-memory repositories, with a TLS checker that
+  // answers from a script instead of opening a socket — the repo rule that
+  // outbound calls are mocked applies to a handshake as much as to an HTTP call.
+  const notifications = [];
+  const reactor = createAssuranceReactor({
+    repositories,
+    settings,
+    certificateChecker: overrides.certificateChecker || makeCertificateChecker(overrides.certificates_seen),
+    notify: overrides.notify === null ? null : (finding, group) => {
+      notifications.push({ finding, group });
+      return Promise.resolve({ dispatched: true });
+    },
+  });
+
   const router = createServiceTestsApiRouter({
     repositories,
     settings,
     queue,
+    reactor: overrides.reactor === null ? null : reactor,
     artifacts: overrides.artifacts ?? null,
     audit,
     logger: null,
@@ -334,7 +475,7 @@ function makeServiceTests(overrides = {}) {
     roles: ROLES,
   });
 
-  return { repositories, settings, queue, audit, auditEntries, router, jobs: [], tables: t, secretBox };
+  return { repositories, settings, queue, reactor, notifications, audit, auditEntries, router, jobs: [], tables: t, secretBox };
 }
 
-module.exports = { makeServiceTests, makeTable };
+module.exports = { makeServiceTests, makeTable, makeCertificateChecker };

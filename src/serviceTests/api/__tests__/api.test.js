@@ -414,3 +414,109 @@ test('an oversized body is refused before it reaches a handler', async () => {
     .send({ name: 'X', base_url: 'https://x.example.com', description: 'y'.repeat(2 * 1024 * 1024) });
   assert.ok(res.status >= 400 && res.status < 500, `→ ${res.status}`);
 });
+
+// ------------------------------------------------------------- assurance
+test('assurance reads are viewer+, and every filter refuses a value it does not know', async () => {
+  for (const path of ['/assurance/incidents', '/assurance/certificates', '/assurance/summary']) {
+    assert.equal((await get(path, 'viewer')).status, 200, `GET ${path}`);
+  }
+  const bad = [
+    '/assurance/incidents?status=exploded',
+    '/assurance/incidents?severity=URGENT',
+    '/assurance/incidents?subject_type=router',
+    '/assurance/incidents?application_id=abc',
+    '/assurance/incidents?limit=-1',
+    '/assurance/certificates?status=probably',
+    '/assurance/certificates?application_id=1;drop',
+  ];
+  for (const path of bad) {
+    // eslint-disable-next-line no-await-in-loop
+    assert.equal((await get(path, 'viewer')).status, 400, `GET ${path}`);
+  }
+  // An empty filter is "no filter", not a bad one — that is what a cleared
+  // dropdown sends.
+  assert.equal((await get('/assurance/incidents?status=&application_id=', 'viewer')).status, 200);
+});
+
+test('an incident that does not exist is 404, and a malformed id is 400', async () => {
+  assert.equal((await get('/assurance/incidents/999', 'viewer')).status, 404);
+  assert.equal((await get('/assurance/incidents/not-a-number', 'viewer')).status, 400);
+  for (const role of ['viewer', 'operator', 'admin']) {
+    const res = await request(app()).post(`${BASE}/assurance/incidents/999/resolve`)
+      .set('Authorization', authHeader(role)).send({});
+    assert.equal(res.status, role === 'viewer' ? 403 : 404, `${role} resolve`);
+  }
+});
+
+test('anonymous callers get 401 from every assurance path', async () => {
+  for (const path of ['/assurance/incidents', '/assurance/certificates', '/assurance/summary', '/assurance/incidents/1']) {
+    // eslint-disable-next-line no-await-in-loop
+    assert.equal((await request(app()).get(`${BASE}${path}`)).status, 401, path);
+  }
+  assert.equal((await request(app()).post(`${BASE}/assurance/certificates/check`).send({})).status, 401);
+});
+
+test('the reactor surfaces an expired certificate through the API, and an operator can resolve it', async () => {
+  const st = makeServiceTests({
+    certificates_seen: {
+      'customer.example.com': { status: 'expired', days_remaining: -4, valid_to: new Date(Date.now() - 4 * 86400000), issuer: 'O=Test CA' },
+    },
+  });
+  const scoped = makeApp({ serviceTests: st });
+  const auth = (role) => authHeader(role);
+
+  const check = await request(scoped).post(`${BASE}/assurance/certificates/check`).set('Authorization', auth('operator')).send({});
+  assert.equal(check.status, 200);
+  assert.equal(check.body.checked, 1);
+
+  const certs = await request(scoped).get(`${BASE}/assurance/certificates`).set('Authorization', auth('viewer'));
+  assert.equal(certs.status, 200);
+  assert.equal(certs.body[0].status, 'expired');
+
+  const incidents = await request(scoped).get(`${BASE}/assurance/incidents?status=open`).set('Authorization', auth('viewer'));
+  assert.equal(incidents.body.length, 1);
+  assert.equal(incidents.body[0].kind, 'certificate_expired');
+  assert.equal(incidents.body[0].severity, 'CRIT');
+  assert.match(incidents.body[0].summary, /expired 4 days ago/);
+
+  const summary = await request(scoped).get(`${BASE}/assurance/summary`).set('Authorization', auth('viewer'));
+  assert.equal(summary.body.open.CRIT, 1);
+  assert.equal(summary.body.certificates.broken, 1);
+
+  const id = incidents.body[0].id;
+  assert.equal((await request(scoped).post(`${BASE}/assurance/incidents/${id}/resolve`).set('Authorization', auth('viewer')).send({})).status, 403);
+  const resolved = await request(scoped).post(`${BASE}/assurance/incidents/${id}/resolve`).set('Authorization', auth('operator'))
+    .send({ resolution: 'Renewed this morning' });
+  assert.equal(resolved.status, 200);
+  assert.equal(resolved.body.status, 'resolved');
+  assert.equal(resolved.body.resolution, 'Renewed this morning');
+  // Resolving twice is a 400, not a silent success or a 500.
+  assert.equal((await request(scoped).post(`${BASE}/assurance/incidents/${id}/resolve`).set('Authorization', auth('operator')).send({})).status, 400);
+});
+
+test('a forced check for an unknown application is 404, and a malformed id is 400', async () => {
+  const scoped = makeApp({ serviceTests: makeServiceTests() });
+  const post = (body) => request(scoped).post(`${BASE}/assurance/certificates/check`).set('Authorization', authHeader('operator')).send(body);
+  assert.equal((await post({ application_id: 999 })).status, 404);
+  assert.equal((await post({ application_id: 'x' })).status, 400);
+  assert.equal((await post({ application_id: 1 })).status, 200);
+  assert.equal((await post({})).status, 200);
+});
+
+test('a deployment with no reactor answers 503 rather than 500', async () => {
+  const scoped = makeApp({ serviceTests: makeServiceTests({ reactor: null }) });
+  const res = await request(scoped).post(`${BASE}/assurance/certificates/check`).set('Authorization', authHeader('operator')).send({});
+  assert.equal(res.status, 503);
+});
+
+test('a certificate check that throws is a 502, never an unhandled 500', async () => {
+  const scoped = makeApp({
+    serviceTests: makeServiceTests({
+      certificateChecker: { check: () => Promise.reject(new Error('the network is on fire')) },
+    }),
+  });
+  // The sweep swallows a per-target failure, so this still succeeds — the point
+  // is that a thrown checker never reaches the error handler as a 500.
+  const res = await request(scoped).post(`${BASE}/assurance/certificates/check`).set('Authorization', authHeader('operator')).send({});
+  assert.ok([200, 502].includes(res.status), `→ ${res.status}`);
+});

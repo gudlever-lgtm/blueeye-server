@@ -95,6 +95,8 @@ async function main() {
 
   const worker = createWorker({
     workerId,
+    hostname: os.hostname(),
+    version: require('../package.json').version,
     queue: serviceTests.queue,
     repositories: serviceTests.repositories,
     settings: serviceTests.settings,

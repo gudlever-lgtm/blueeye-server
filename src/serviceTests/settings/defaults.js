@@ -46,6 +46,10 @@ const NUMBER_BOUNDS = {
     // A run left `running` longer than this is reaped back to `error`.
     claimTimeoutMs: [600000, 30000, 7200000],
     pollIntervalMs: [5000, 1000, 60000],
+    // How long a worker's last heartbeat may be before it counts as gone. A
+    // worker writes one every poll tick, so this is a multiple of
+    // pollIntervalMs, not a guess about how long a test takes.
+    workerHeartbeatTimeoutMs: [60000, 5000, 3600000],
   },
 };
 

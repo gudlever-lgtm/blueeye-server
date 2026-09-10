@@ -11462,9 +11462,15 @@ const DOCS = [
           ]),
           el('p', { class: 'muted' }, 'In the Docker stack both are already wired to the same values — there is nothing to keep in step by hand.'),
 
+          el('h4', {}, 'Where the screenshots actually live'),
+          el('p', {}, [el('code', {}, 'SERVICE_TEST_ARTIFACT_ROOT'), ' is a path ', el('strong', {}, 'inside the container'), ', not a path on the Docker host. Both the worker and this server set it to ', el('code', {}, '/var/lib/blueeye/service-assurance'), ' and mount the same named volume there. The shared volume is what makes a screenshot written by the worker readable here — the path string on its own would not.']),
+          el('p', {}, ['Setting ', el('code', {}, 'SERVICE_TEST_ARTIFACT_ROOT'), ' in ', el('code', {}, '.env'), ' has no effect on the Docker stack: the compose file sets the container path explicitly, because it has to stay in step with the mount point. To see where the bytes sit on the host:']),
+          docsCode('docker volume inspect blueeye_service-assurance-artifacts'),
+          el('p', { class: 'muted' }, 'Running the worker outside Docker is the case where you do set it — and there it IS a host path, which must be a directory the worker can write and this server can read.'),
+
           el('h4', {}, 'Checking it works'),
           docsSteps([
-            ['Open ', viewLink('serviceAssurance', 'Service Assurance'), ' → Runs. The warning about no worker disappears once one has claimed a job.'],
+            ['Open ', settingsLink('assurance', 'Settings → Service Assurance'), '. Every running worker is listed under ', el('strong', {}, 'Workers'), ' with its host, version and last heartbeat — a worker appears there within seconds of starting, before it has run anything.'],
             ['Run any test. It should move from queued to running within a few seconds.'],
             ['If it stays queued, check the worker log: ', el('code', {}, 'docker compose logs -f service-assurance-worker'), '. A worker that started cleanly logs "polling for work".'],
           ]),

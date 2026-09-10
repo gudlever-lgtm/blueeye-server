@@ -87,6 +87,32 @@
           : el('span', {}, t('sa.test.askAdmin')));
     }
 
+    // What the server currently sees. A worker writes a heartbeat every few
+    // seconds, so this answers "is my worker running?" without queueing a test
+    // first — which is how the question was asked in practice.
+    function workerPanel(worker) {
+      var count = worker && worker.worker_count ? worker.worker_count : 0;
+      if (!count) {
+        return el('div', { class: 'sa-panel' },
+          section(t('sa.worker.title'), null), noWorkerBanner());
+      }
+      var rows = (worker.workers || []).map(function (w) {
+        return el('tr', {},
+          el('td', {}, w.worker_id || '—'),
+          el('td', {}, w.hostname || '—'),
+          el('td', {}, w.version || '—'),
+          el('td', {}, when(w.last_seen_at)));
+      });
+      return el('div', { class: 'sa-panel' },
+        section(t('sa.worker.title'), null),
+        el('p', { class: 'sa-help' }, t('sa.worker.connected', { count: String(count) })),
+        el('table', { class: 'data-table' },
+          el('thead', {}, el('tr', {},
+            el('th', {}, t('sa.worker.id')), el('th', {}, t('sa.worker.host')),
+            el('th', {}, t('sa.worker.version')), el('th', {}, t('sa.worker.lastSeen')))),
+          el('tbody', {}, ...rows)));
+    }
+
     function statusChip(status) {
       return el('span', { class: 'sa-status sa-status-' + status }, String(status || '').toUpperCase());
     }
@@ -776,7 +802,9 @@
         var head = section(t('sa.tab.runs'), null);
         // Shown whenever nothing is processing the queue — not only once work
         // has piled up. Finding out AFTER queueing a test is finding out late.
-        var warning = worker.connected ? null : noWorkerBanner();
+        var warning = worker.connected
+          ? el('p', { class: 'sa-help' }, t('sa.worker.connected', { count: String(worker.worker_count || 1) }))
+          : noWorkerBanner();
 
         if (!runs.length) {
           mount(body, head, warning, el('div', { class: 'sa-empty' }, t('sa.run.noneYet')));
@@ -951,6 +979,7 @@
         retentionDays: t('sa.set.retentionDays'),
         claimTimeoutMs: t('sa.set.claimTimeoutMs'),
         pollIntervalMs: t('sa.set.pollIntervalMs'),
+        workerHeartbeatTimeoutMs: t('sa.set.workerHeartbeatTimeoutMs'),
       };
       // An unlabelled field still renders — with its raw name, which is the
       // visible signal that a label is missing.
@@ -969,7 +998,15 @@
     }
 
     function settingsPanel(body) {
-      return api(API + '/settings').then(function (res) {
+      // The worker status is fetched with the settings rather than on its own
+      // tab: an admin who opens this page is usually here because something is
+      // not running.
+      return Promise.all([
+        api(API + '/settings'),
+        api(API + '/runs/worker-status').catch(function () { return null; }),
+      ]).then(function (loaded) {
+        var res = loaded[0];
+        var worker = loaded[1];
         var order = ['discovery', 'runner', 'artifacts', 'allowlist', 'queue'];
         var sections = order.filter(function (k) { return res.settings[k]; });
 
@@ -1031,6 +1068,7 @@
         mount(body,
           el('p', { class: 'sa-help' }, t('sa.settings.help')),
           isAdmin() ? null : el('p', { class: 'sa-help' }, t('sa.set.readOnly')),
+          workerPanel(worker),
           ...panels);
         return body;
       });

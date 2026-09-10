@@ -391,7 +391,22 @@ test('a run with no screenshot answers 404 rather than an empty image', async ()
 test('worker status tells the UI whether anything is processing the queue', async () => {
   const res = await get('/runs/worker-status', 'viewer');
   assert.equal(res.status, 200);
-  assert.equal(res.body.connected, false, 'nothing has claimed a run, so no worker is connected');
+  assert.equal(res.body.connected, false, 'nothing is running, so no worker is connected');
+  assert.deepEqual(res.body.workers, []);
+  assert.equal(res.body.worker_count, 0);
+});
+
+test('a worker that has only sent a heartbeat is reported as connected', async () => {
+  // Without this, the dashboard tells an operator to install the worker that is
+  // already running — it just has not been given anything to claim yet.
+  const st = makeServiceTests();
+  await st.queue.heartbeat({ workerId: 'assurance-1-12', hostname: 'assurance-1', version: '0.120.4' });
+  const res = await request(makeApp({ serviceTests: st })).get(`${BASE}/runs/worker-status`)
+    .set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 200);
+  assert.equal(res.body.connected, true);
+  assert.equal(res.body.worker_count, 1);
+  assert.equal(res.body.workers[0].hostname, 'assurance-1');
 });
 
 test('an oversized body is refused before it reaches a handler', async () => {

@@ -117,6 +117,61 @@ test('worker status reports connected once a run has been claimed recently', asy
   assert.ok(status.last_claim_at);
 });
 
+// A queue on the real clock: the heartbeat specs compare stored timestamps
+// against "now", and pinning now to a fixed NOW would make them depend on how
+// close the suite happens to run to that date.
+function makeHeartbeatFixture() {
+  const st = makeServiceTests();
+  const queue = createQueue({
+    runsRepo: st.repositories.runs,
+    discoveryRepo: st.repositories.discovery,
+    schedulesRepo: st.repositories.schedules,
+    workersRepo: st.repositories.workers,
+    settings: st.settings,
+  });
+  return { st, queue };
+}
+
+test('a worker that has never claimed anything still counts as connected', async () => {
+  // The regression this table exists for: a fresh install with an idle worker
+  // used to be told to go and set up the worker it had just started.
+  const { st, queue } = makeHeartbeatFixture();
+  assert.equal((await queue.workerStatus()).connected, false, 'nothing running yet');
+
+  await queue.heartbeat({ workerId: 'worker-1', hostname: 'assurance-1', version: '0.120.4' });
+  const status = await queue.workerStatus();
+  assert.equal(status.connected, true);
+  assert.equal(status.worker_count, 1);
+  assert.equal(status.workers[0].worker_id, 'worker-1');
+  assert.equal(status.workers[0].hostname, 'assurance-1');
+  assert.ok(status.last_seen_at);
+  assert.equal(st.tables.workers.rows.length, 1);
+});
+
+test('a repeated heartbeat updates the worker rather than adding one', async () => {
+  const { st, queue } = makeHeartbeatFixture();
+  await queue.heartbeat({ workerId: 'worker-1', hostname: 'a' });
+  await queue.heartbeat({ workerId: 'worker-1', hostname: 'a' });
+  await queue.heartbeat({ workerId: 'worker-2', hostname: 'b' });
+  assert.equal(st.tables.workers.rows.length, 2);
+  assert.equal((await queue.workerStatus()).worker_count, 2);
+});
+
+test('a worker whose heartbeat has gone stale is not connected', async () => {
+  const { st, queue } = makeHeartbeatFixture();
+  const old = new Date(Date.now() - 10 * 60 * 1000);
+  st.tables.workers.insert({ worker_id: 'gone', hostname: 'h', started_at: old, last_seen_at: old });
+  const status = await queue.workerStatus();
+  assert.equal(status.connected, false);
+  assert.equal(status.worker_count, 0);
+});
+
+test('a heartbeat failure never stops the loop', async () => {
+  const { st, queue } = makeHeartbeatFixture();
+  st.repositories.workers.heartbeat = async () => { throw new Error('db down'); };
+  assert.equal(await queue.heartbeat({ workerId: 'worker-1' }), null);
+});
+
 // ------------------------------------------------------------------ worker
 function makeWorkerFixture(driverOpts = {}, overrides = {}) {
   const st = makeServiceTests();
@@ -124,11 +179,14 @@ function makeWorkerFixture(driverOpts = {}, overrides = {}) {
     runsRepo: st.repositories.runs,
     discoveryRepo: st.repositories.discovery,
     schedulesRepo: st.repositories.schedules,
+    workersRepo: st.repositories.workers,
     settings: st.settings,
   });
   const driver = makeFakeDriver(driverOpts);
   const worker = createWorker({
     workerId: 'test-worker',
+    hostname: 'test-host',
+    version: '0.0.0-test',
     queue,
     repositories: st.repositories,
     settings: st.settings,
@@ -251,4 +309,15 @@ test('a discovery that throws is recorded as failed rather than left running for
 test('an idle queue is not work, so the loop can back off', async () => {
   const { worker } = makeWorkerFixture();
   assert.equal(await worker.tick(), false);
+});
+
+test('an idle tick still records the heartbeat', async () => {
+  // The tick where there is nothing to claim is exactly the tick an operator is
+  // staring at the dashboard during, so the heartbeat comes first.
+  const { st, worker } = makeWorkerFixture();
+  const worked = await worker.tick();
+  assert.equal(worked, false, 'nothing queued');
+  assert.equal(st.tables.workers.rows.length, 1);
+  assert.equal(st.tables.workers.rows[0].worker_id, 'test-worker');
+  assert.equal(st.tables.workers.rows[0].hostname, 'test-host');
 });

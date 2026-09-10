@@ -78,6 +78,7 @@ function makeServiceTests(overrides = {}) {
     elements: makeTable([]),
     suggestions: makeTable(overrides.suggestions || []),
     schedules: makeTable(overrides.schedules || []),
+    workers: makeTable(overrides.workers || []),
   };
 
   const bool = (v) => !!v;
@@ -276,6 +277,25 @@ function makeServiceTests(overrides = {}) {
       async markRun(id, at) { return t.schedules.update(id, { last_run_at: at }); },
       async remove(id) { return t.schedules.remove(id); },
     },
+    // Worker heartbeats. Keyed by worker id like the real table's primary key,
+    // so a repeated heartbeat updates rather than accumulates.
+    workers: {
+      async heartbeat({ workerId, hostname = null, version = null }) {
+        const existing = t.workers.rows.find((r) => r.worker_id === workerId);
+        const at = new Date();
+        if (existing) t.workers.update(existing.id, { hostname, version, last_seen_at: at });
+        else t.workers.insert({ worker_id: workerId, hostname, version, started_at: at, last_seen_at: at });
+        return workerId;
+      },
+      async listAlive(withinMs) {
+        const cutoff = Date.now() - Math.max(1000, Number(withinMs) || 60000);
+        return t.workers.rows
+          .filter((r) => new Date(r.last_seen_at).getTime() >= cutoff)
+          .sort((a, b) => new Date(b.last_seen_at) - new Date(a.last_seen_at));
+      },
+      async list() { return t.workers.rows.slice(); },
+      async prune() { return 0; },
+    },
   };
 
   // The REAL settings service over an in-memory key/value store, so the bounds
@@ -294,6 +314,7 @@ function makeServiceTests(overrides = {}) {
     runsRepo: repositories.runs,
     discoveryRepo: repositories.discovery,
     schedulesRepo: repositories.schedules,
+    workersRepo: repositories.workers,
     settings,
   });
 

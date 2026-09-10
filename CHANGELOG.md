@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.121.0 — Service Assurance: the worker can say it is running
+
+**A running worker was reported as missing.** Worker liveness was inferred from
+the newest claim on the run queue, so a worker that had never been given
+anything to do looked exactly like a worker that was never installed — and the
+dashboard told the operator to go and set up the one they had just started. That
+is the state every new install is in.
+
+Workers now write a heartbeat (`service_test_workers`, migration 079) on every
+poll tick, before anything else in the tick can fail. `worker-status` reports the
+connected workers with host, version and last heartbeat; the claim-derived answer
+stays as the fallback for a worker older than the table. A worker counts as gone
+once its heartbeat is older than `queue.workerHeartbeatTimeoutMs` (60 s,
+adjustable in Settings), and rows unseen for a week are pruned by the same sweep
+that reaps abandoned runs.
+
+**Administration → Settings → Service Assurance now opens with Workers** — the
+list of what the server can actually see, so "is my worker running?" is answered
+where the question gets asked, without queueing a test first. The Runs tab says
+how many are connected instead of only warning when none are.
+
+**`SECRET_ENCRYPTION_KEY` never reached the server container.** The compose file
+passed it to the worker only. Set it in `.env` and the two sides derived
+different keys, so every test with a login would have failed with "credential
+unavailable" — the exact quiet failure the variable is commented as avoiding.
+Both services read it now.
+
+**`SERVICE_TEST_ARTIFACT_ROOT` is documented as what it is:** a path inside the
+container, backed by a named volume mounted at the same path in both the server
+and the worker. Setting it in `.env` does nothing in the Docker stack, because
+the compose file has to keep it in step with the mount point. Outside Docker it
+is yours to set, and there it is a host path. The handbook article and
+`docs/service-assurance.md` both say so, with the `docker volume inspect` command
+for finding where the bytes really are.
+
 ## 0.120.4 — Service Assurance: documentation, and a form that says why
 
 **There was no documentation for Service Assurance at all.** The handbook had an

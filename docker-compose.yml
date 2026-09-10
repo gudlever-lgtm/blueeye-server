@@ -82,6 +82,10 @@ services:
       DB_PASSWORD: ${DB_PASSWORD:-blueeye-pw}
       DB_NAME: blueeye
       JWT_SECRET: ${SERVER_JWT_SECRET:?set SERVER_JWT_SECRET in .env (run scripts/dev-bootstrap.js)}
+      # Must reach BOTH this server and the Service Assurance worker, or the
+      # worker cannot decrypt the logins this server encrypted. Unset is fine
+      # (both then derive the key from JWT_SECRET); set on one side only is not.
+      SECRET_ENCRYPTION_KEY: ${SECRET_ENCRYPTION_KEY:-}
       SEED_ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@blueeye.local}
       # Empty by default → migrate.js generates a random admin password and prints
       # it once. Set ADMIN_PASSWORD only to choose your own.
@@ -93,9 +97,15 @@ services:
       # demo .env (scripts/dev-bootstrap.js) sets gnf-server-1 explicitly to match
       # its seeded demo licence.
       LICENSE_SERVER_ID: ${LICENSE_SERVER_ID:-}
-      # Where Service Assurance failure screenshots live. The worker writes them
-      # here; this server reads them back to serve the run detail page. Must be
-      # the same path the worker uses.
+      # Where Service Assurance failure screenshots live. This is a path INSIDE
+      # the container, not on the host: the `service-assurance-artifacts` named
+      # volume below is mounted there, and the same volume is mounted at the same
+      # path in the worker. The worker writes the screenshots, this server reads
+      # them back to serve the run detail page — so the two paths must match.
+      # Setting SERVICE_TEST_ARTIFACT_ROOT in .env changes nothing here on
+      # purpose: the container path is fixed, and where the data actually lives
+      # on the host is the volume's business (`docker volume inspect
+      # blueeye_service-assurance-artifacts`).
       SERVICE_TEST_ARTIFACT_ROOT: /var/lib/blueeye/service-assurance
       # Where this server validates its license. Customers set this to the vendor's
       # hosted licens URL. Default keeps the vendor's on-host licens (run with the
@@ -196,7 +206,13 @@ services:
       JWT_SECRET: ${SERVER_JWT_SECRET:?set SERVER_JWT_SECRET in .env (run scripts/dev-bootstrap.js)}
       SECRET_ENCRYPTION_KEY: ${SECRET_ENCRYPTION_KEY:-}
       LOG_LEVEL: ${LOG_LEVEL:-info}
+      # A path inside THIS container (see the server service above). The Dockerfile
+      # already sets it; repeated here so both services state the same value in
+      # the same place.
+      SERVICE_TEST_ARTIFACT_ROOT: /var/lib/blueeye/service-assurance
     volumes:
+      # Same named volume, same container path as the server — that is what makes
+      # a screenshot written here readable there.
       - service-assurance-artifacts:/var/lib/blueeye/service-assurance
     # Chromium needs more than a container's default 64 MB of shared memory.
     shm_size: 512mb

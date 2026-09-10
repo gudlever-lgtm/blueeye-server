@@ -11,6 +11,7 @@ const { createDiscoveryRepository } = require('./storage/discoveryRepository');
 const { createSuggestionsRepository } = require('./storage/suggestionsRepository');
 const { createSchedulesRepository } = require('./storage/schedulesRepository');
 const { createServiceTestSettingsRepository } = require('./storage/settingsRepository');
+const { createWorkersRepository } = require('./storage/workersRepository');
 const { createServiceTestSettings } = require('./settings');
 const { createServiceTestsApiRouter } = require('./api');
 const { createQueue } = require('./scheduler/queue');
@@ -50,6 +51,7 @@ function createServiceTestsModule(rawPorts = {}) {
     discovery: createDiscoveryRepository({ db, now: clock }),
     suggestions: createSuggestionsRepository({ db }),
     schedules: createSchedulesRepository({ db, now: clock }),
+    workers: createWorkersRepository({ db, now: clock }),
     settings: settingsRepo,
   };
 
@@ -59,6 +61,7 @@ function createServiceTestsModule(rawPorts = {}) {
     runsRepo: repositories.runs,
     discoveryRepo: repositories.discovery,
     schedulesRepo: repositories.schedules,
+    workersRepo: repositories.workers,
     settings,
     logger,
     now: clock,

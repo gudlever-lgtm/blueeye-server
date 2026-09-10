@@ -20,6 +20,9 @@ const DEFAULT_POLL_MS = 5000;
 
 function createWorker({
   workerId,
+  // Reported with the heartbeat so the dashboard can name what is running.
+  hostname = null,
+  version = null,
   queue,
   repositories,
   settings,
@@ -204,6 +207,10 @@ function createWorker({
   // Returns true when work was done, so the loop can poll faster while there is
   // a backlog and idle politely when there is not.
   async function tick() {
+    // First, before anything can fail: an operator watching the dashboard needs
+    // to see that the worker is alive even on a tick where the queue is empty
+    // or a schedule lookup throws.
+    if (typeof queue.heartbeat === 'function') await queue.heartbeat({ workerId, hostname, version });
     await queue.enqueueDue();
     await queue.reapStale();
     const claimed = await queue.claimNext(workerId);

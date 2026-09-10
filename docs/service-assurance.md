@@ -548,9 +548,40 @@ if they do not:
   `SERVER_JWT_SECRET` from `.env`, so there is nothing to keep in step by hand.
 - **The artefact path.** The worker WRITES failure screenshots to
   `SERVICE_TEST_ARTIFACT_ROOT`; the API server READS them back to serve
-  `/runs/:id/screenshot`. In the stack they share one named volume mounted at the
-  same path. Point them at different places and screenshots are captured that
-  nobody can open.
+  `/runs/:id/screenshot`. Point them at different places and screenshots are
+  captured that nobody can open.
+
+  `SERVICE_TEST_ARTIFACT_ROOT` is a path **inside the container**, not a path on
+  the Docker host. In the stack both services set it to
+  `/var/lib/blueeye/service-assurance` and mount the same named volume
+  (`service-assurance-artifacts`) there — that shared volume, not the path
+  string, is what makes a screenshot written by the worker readable by the
+  server. Setting `SERVICE_TEST_ARTIFACT_ROOT` in `.env` does nothing in the
+  Docker stack: `docker-compose.yml` sets the container path explicitly, and it
+  has to stay in step with the mount point. To find where the bytes actually sit
+  on the host, ask Docker:
+
+  ```bash
+  docker volume inspect blueeye_service-assurance-artifacts
+  ```
+
+  Running the worker **outside** Docker is the case where the variable is yours
+  to set — and then it IS a host path, which must be a directory the worker can
+  write and the server can read (the same machine, or shared storage).
+
+### Is a worker running?
+
+Each worker writes a heartbeat row (`service_test_workers`, migration 079) on
+every poll tick, so the answer does not depend on there being work to do. The
+dashboard reads it at `GET /api/service-tests/runs/worker-status` and shows the
+connected workers under **Administration → Settings → Service Assurance**.
+
+The first cut derived liveness from the newest claim on the run queue, which was
+wrong in exactly the case that mattered: a freshly started worker with an empty
+queue has claimed nothing, so a correct install was told to go and set up the
+worker it had just started. The claim-derived answer survives as a fallback for a
+worker older than the heartbeat table. A worker counts as gone once its last
+heartbeat is older than `queue.workerHeartbeatTimeoutMs` (default 60 s).
 
 Scaling out is `--scale service-assurance-worker=3`: the claim is a conditional
 `UPDATE`, so several workers never run the same job twice.

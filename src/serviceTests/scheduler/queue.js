@@ -7,9 +7,24 @@
 // which schedules should be enqueued now. Keeping them apart means the storage
 // contract can be tested against SQL and the policy against a clock.
 
-function createQueue({ runsRepo, discoveryRepo, schedulesRepo, settings, logger = null, now = () => new Date() }) {
+// A heartbeat row this old belongs to a worker that is never coming back.
+const STALE_WORKER_MS = 7 * 24 * 60 * 60 * 1000;
+
+function createQueue({ runsRepo, discoveryRepo, schedulesRepo, workersRepo = null, settings, logger = null, now = () => new Date() }) {
   async function queueSettings() {
-    try { return await settings.get('queue'); } catch { return { claimTimeoutMs: 600000, pollIntervalMs: 5000 }; }
+    try { return await settings.get('queue'); } catch {
+      return { claimTimeoutMs: 600000, pollIntervalMs: 5000, workerHeartbeatTimeoutMs: 60000 };
+    }
+  }
+
+  // Records that this worker is alive. Called every poll tick, so a worker is
+  // visible from the moment it boots rather than from its first claim.
+  async function heartbeat(worker) {
+    if (!workersRepo) return null;
+    try { return await workersRepo.heartbeat(worker); } catch (err) {
+      if (logger && logger.warn) logger.warn(`service-tests worker: heartbeat failed (${err.message})`);
+      return null;
+    }
   }
 
   // Claims the next unit of work. Runs are preferred over discoveries: a
@@ -31,6 +46,11 @@ function createQueue({ runsRepo, discoveryRepo, schedulesRepo, settings, logger 
     const { claimTimeoutMs } = await queueSettings();
     const runs = await runsRepo.reapStale(claimTimeoutMs);
     const discoveries = discoveryRepo ? await discoveryRepo.reapStale(claimTimeoutMs) : 0;
+    // A recreated container gets a new worker id (hostname-pid), so without this
+    // the heartbeat table grows by one row per restart forever.
+    if (workersRepo) {
+      try { await workersRepo.prune(STALE_WORKER_MS); } catch { /* pruning is housekeeping, never a reason to stop */ }
+    }
     if ((runs || discoveries) && logger && logger.warn) {
       logger.warn(`service-tests: reaped ${runs} abandoned run(s) and ${discoveries} discovery(ies)`);
     }
@@ -68,26 +88,47 @@ function createQueue({ runsRepo, discoveryRepo, schedulesRepo, settings, logger 
     return enqueued;
   }
 
-  // "Is anything actually processing the queue?" — derived from the newest claim
-  // rather than a heartbeat table, so there is no extra state to keep correct.
-  // The UI uses it to say "no worker connected" instead of leaving a run to sit
-  // at `queued` with no explanation.
+  // "Is anything actually processing the queue?" — answered from the worker
+  // heartbeat table, so an idle worker that has never claimed a job still counts
+  // as connected. Deriving it from the newest claim (the first cut) got exactly
+  // one case wrong, and it was the case that mattered: a brand-new install told
+  // the operator to go and set up the worker that was already running.
+  //
+  // The claim-derived answer is kept as the fallback for a deployment whose
+  // worker predates the heartbeat table.
   async function workerStatus() {
-    const { claimTimeoutMs } = await queueSettings();
+    const { claimTimeoutMs, workerHeartbeatTimeoutMs } = await queueSettings();
     const recent = await runsRepo.list({ limit: 20 });
     const claimed = recent.filter((r) => r.claimed_at).map((r) => new Date(r.claimed_at).getTime());
     const queued = recent.filter((r) => r.status === 'queued').length;
     const newest = claimed.length ? Math.max(...claimed) : null;
-    const ageMs = newest ? now().getTime() - newest : null;
+    const claimAgeMs = newest ? now().getTime() - newest : null;
+    const claimConnected = newest !== null && claimAgeMs < claimTimeoutMs;
+
+    let alive = [];
+    if (workersRepo) {
+      try { alive = await workersRepo.listAlive(workerHeartbeatTimeoutMs || 60000); } catch (err) {
+        if (logger && logger.warn) logger.warn(`service-tests: could not read worker heartbeats (${err.message})`);
+      }
+    }
+
     return {
-      // Never claimed anything = we cannot say a worker is connected.
-      connected: newest !== null && ageMs < claimTimeoutMs,
+      connected: alive.length > 0 || claimConnected,
+      workers: alive.map((w) => ({
+        worker_id: w.worker_id,
+        hostname: w.hostname,
+        version: w.version,
+        started_at: w.started_at,
+        last_seen_at: w.last_seen_at,
+      })),
+      worker_count: alive.length,
+      last_seen_at: alive.length ? alive[0].last_seen_at : null,
       last_claim_at: newest ? new Date(newest) : null,
       queued,
     };
   }
 
-  return { claimNext, reapStale, enqueueDue, workerStatus, queueSettings };
+  return { claimNext, reapStale, enqueueDue, heartbeat, workerStatus, queueSettings };
 }
 
 module.exports = { createQueue };

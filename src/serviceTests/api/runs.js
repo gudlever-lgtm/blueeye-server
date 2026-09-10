@@ -31,7 +31,7 @@ function createRunsRouter({ repositories, queue, artifacts, requireRole, roles, 
   // Whether a worker is processing the queue — the UI shows "no worker
   // connected" instead of leaving a queued run unexplained.
   router.get('/worker-status', read, asyncHandler(async (req, res) => {
-    if (!queue) return res.json({ connected: false, queued: 0, last_claim_at: null });
+    if (!queue) return res.json({ connected: false, workers: [], worker_count: 0, queued: 0, last_seen_at: null, last_claim_at: null });
     return res.json(await queue.workerStatus());
   }));
 

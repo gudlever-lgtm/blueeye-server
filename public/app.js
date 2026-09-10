@@ -721,6 +721,15 @@ function settingsLink(tab, label) {
     onclick: (e) => { e.preventDefault(); closeDrawer(); settingsTab = tab; currentView = 'settings'; render(); } }, label);
 }
 
+// Deep-link into a specific Documentation article. Used where a message tells
+// someone to read something: pointing at "the documentation" without saying
+// where is the same as not telling them.
+function docsLink(topicId, label) {
+  return el('a', { href: '#', class: 'drawer-link',
+    onclick: (e) => { e.preventDefault(); closeDrawer(); docsTopic = topicId; currentView = 'docs'; render(); } }, label);
+}
+function gotoDocs(topicId) { closeDrawer(); docsTopic = topicId; currentView = 'docs'; render(); }
+
 const PAGE_INFO = {
   serviceAssurance: {
     hero: 'Know when your digital services stop working — before your users do.',
@@ -11211,6 +11220,42 @@ const DOCS = [
   {
     section: 'Troubleshooting how-tos', admin: false, articles: [
       {
+        id: 'assurance', title: 'Watch a web service with Service Assurance', body: () => [
+          docsLead('Probes tell you a host answers. Service Assurance tells you whether the thing people actually use still works — signing in, looking up a customer, placing an order — by driving a real browser through that journey on a schedule.'),
+          el('p', {}, 'Nothing here needs code. You describe a journey by dragging steps into order and filling in forms; selectors, timeouts and the raw engine error live behind ', el('strong', {}, 'Technical details'), ' and are never needed to build or read a test.'),
+
+          el('h4', {}, 'The short version'),
+          docsSteps([
+            ['Open ', viewLink('serviceAssurance', 'Service Assurance'), ' → Applications and add the web application, with the address people open (', el('code', {}, 'https://…'), ').'],
+            ['Press ', el('strong', {}, 'Discover'), '. It looks around the application without changing anything and reports what it found.'],
+            ['Accept a suggested test — ', el('strong', {}, 'Login'), ' is the usual first one — or build one by hand.'],
+            ['Add a login under the application if the test signs in, then select it on the test.'],
+            ['Press ', el('strong', {}, 'Run'), '. Then set a schedule so it keeps running.'],
+          ]),
+
+          el('h4', {}, 'What Discovery will and will not do'),
+          el('div', { class: 'callout' }, el('strong', {}, 'Read-only by design: '), 'Discovery never submits a form and never clicks anything whose effect it cannot work out. A button it cannot read is recorded and left alone rather than assumed harmless. It stays on the application\u2019s own address — an external link is noted, never followed — and stops at the page, depth, request and time budgets in ', settingsLink('assurance', 'Settings → Service Assurance'), '.'),
+          el('p', {}, 'It reports a ', el('strong', {}, 'possible'), ' login flow, never a certain one, and only when a password field is actually present. A form asking for a new password looks much the same, which is why the wording is careful.'),
+
+          el('h4', {}, 'Reading a failure'),
+          el('p', {}, 'A failed run names the step, says what happened in plain language, and gives the likely cause before any technical detail:'),
+          docsCode('Step 4: Click "Log ind"\nThe service was unavailable.\nLikely cause: the service behind this address\nHTTP 503 from /api/auth/login'),
+          docsTable(['You see', 'It usually means', 'What to do'], [
+            ['A 4xx or 5xx status', 'The server answered and refused. 500 and 502 are the application; 503 is overload, restart or maintenance.', 'The test is fine — the service is not. Check the application itself.'],
+            ['Element was not found', 'None of the ways the step knows to find it matched — the page changed, or an earlier step left the wrong page open.', 'Open the test and check the step still points at something that exists.'],
+            ['The page raised a script error', 'Front-end JavaScript threw, often leaving the page half-rendered.', 'Look at the console errors under Technical details.'],
+            ['That host is not on the allowed list', 'The address is outside what this application may reach.', 'An administrator adds it under the application\u2019s Allowed hosts.'],
+            ['Runs stay queued', 'Nothing is executing the queue.', 'A worker is not running — an administrator starts one.'],
+          ]),
+
+          el('h4', {}, 'Logins'),
+          el('p', {}, 'A password is stored encrypted, never shown again, never written to a log, and masked in the page before any screenshot is taken. A test refers to it as ', el('code', {}, '{{credential.password}}'), ' — the value itself is never part of the test.'),
+          el('p', { class: 'muted' }, 'Use a dedicated test account, not a real person\u2019s. A synthetic test signs in every few minutes, around the clock.'),
+
+          docsExpect('A passing test shows PASS with its step count and duration. A failing one shows which step failed, the likely cause and a screenshot. The strip beside each test — PASS PASS FAIL PASS — is its recent history at a glance.'),
+        ],
+      },
+      {
         id: 'agent-offline', title: 'An agent is offline', body: () => [
           docsLead('An agent shows as disconnected, or dropped off the Overview. Work from the server outward.'),
           docsSteps([
@@ -11392,6 +11437,40 @@ const DOCS = [
   },
   {
     section: 'Administration & setup', admin: true, articles: [
+      {
+        id: 'assurance-worker', title: 'Starting the Service Assurance worker', body: () => [
+          docsLead('Service Assurance queues its work; a separate worker process runs the browser that carries it out. Without a worker, tests and discoveries sit at "queued" and the Runs page says so. This is how you start one.'),
+          el('div', { class: 'callout' }, el('strong', {}, 'Why separate: '), 'a test holds a real browser for seconds to minutes. Running that inside the API server would make the dashboard stutter for everyone, so the worker is its own process — and its own container image, which is why this server carries no browser and did not grow when Service Assurance shipped.'),
+
+          el('h4', {}, 'In the Docker stack'),
+          el('p', {}, 'The worker is behind a compose profile, so it is only built and started when you ask for it:'),
+          docsCode('COMPOSE_PROFILES=service-assurance docker compose up -d --build'),
+          el('p', {}, 'That is the whole thing. It picks up the database connection and the encryption key from the same ', el('code', {}, '.env'), ' the server uses, and stores screenshots in a volume both share.'),
+          el('p', {}, 'To run several at once — useful when tests start queueing behind each other:'),
+          docsCode('COMPOSE_PROFILES=service-assurance docker compose up -d --scale service-assurance-worker=3'),
+          el('p', { class: 'muted' }, 'Each worker claims a queued run with a conditional database update, so several never run the same job twice.'),
+
+          el('h4', {}, 'Outside Docker'),
+          el('p', {}, 'On a host with Node and Chromium installed, from the blueeye-server directory:'),
+          docsCode('PLAYWRIGHT_CHROMIUM_PATH=/usr/bin/chromium \\\n  SERVICE_TEST_ARTIFACT_ROOT=/var/lib/blueeye/service-assurance \\\n  npm run service-test-worker'),
+          el('p', {}, 'It needs ', el('code', {}, 'playwright-core'), ' (', el('code', {}, 'npm install playwright-core'), ') and a Chromium binary. Install Chromium from your distribution — ', el('code', {}, 'apt install chromium'), ' on Debian/Ubuntu — rather than letting Playwright download one; you then get security updates through the normal channel.'),
+
+          el('h4', {}, 'Two things must match the server'),
+          docsTable(['What', 'Why it matters', 'What goes wrong'], [
+            [el('code', {}, 'SECRET_ENCRYPTION_KEY'), 'The worker decrypts the logins this server encrypted. Both fall back to JWT_SECRET when it is unset.', 'Every test with a login fails with "credential unavailable" — and nothing else points at the cause.'],
+            [el('code', {}, 'SERVICE_TEST_ARTIFACT_ROOT'), 'The worker writes failure screenshots there; this server reads them back to show you.', 'Screenshots are captured but the run page says the screenshot is no longer stored.'],
+          ]),
+          el('p', { class: 'muted' }, 'In the Docker stack both are already wired to the same values — there is nothing to keep in step by hand.'),
+
+          el('h4', {}, 'Checking it works'),
+          docsSteps([
+            ['Open ', viewLink('serviceAssurance', 'Service Assurance'), ' → Runs. The warning about no worker disappears once one has claimed a job.'],
+            ['Run any test. It should move from queued to running within a few seconds.'],
+            ['If it stays queued, check the worker log: ', el('code', {}, 'docker compose logs -f service-assurance-worker'), '. A worker that started cleanly logs "polling for work".'],
+          ]),
+          docsExpect('A healthy worker claims a queued run within its poll interval (five seconds by default, adjustable in ', settingsLink('assurance', 'Settings → Service Assurance'), '). A run left running longer than the claim timeout is given back automatically, so a worker that dies mid-test never leaves a test stuck.'),
+        ],
+      },
       {
         id: 'discovery', title: 'Active device discovery', body: () => [
           docsLead('Passive collection (LLDP, sFlow, agents) only sees devices that announce themselves. Active discovery probes an IP range you configure to find the rest — printers, switches, appliances — and lists them as candidates for you to promote.'),
@@ -14931,6 +15010,8 @@ views.serviceAssurance = async () => {
     el, api, t, dataCard, toast,
     isAdmin,
     isOperator: canWrite,
+    // "No worker is connected" is only useful if it says where to look.
+    openDocs: () => gotoDocs('assurance-worker'),
   });
 };
 

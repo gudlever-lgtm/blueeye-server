@@ -16,6 +16,7 @@
     <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
     <script defer src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
     <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/serviceAssurance.css" />
   </head>
   <body>
     <!-- Login -->
@@ -83,6 +84,7 @@
             <button type="button" class="nav-group-label" aria-expanded="false">Diagnostics</button>
             <button data-view="probes">Probes &amp; Tests</button>
             <button data-view="transactions">Transaktionstests</button>
+            <button data-view="serviceAssurance" data-min-role="operator" data-feature="service_tests">Service Assurance</button>
             <button data-view="flows">Flows</button>
             <button data-view="topology">Topology</button>
             <button data-view="delta" data-min-role="operator">Topology delta</button>
@@ -171,6 +173,7 @@
     <script src="/topologyGraph.js"></script>
     <script src="/deltaView.js"></script>
     <script src="/troubleshootingView.js"></script>
+    <script src="/serviceAssurance.js"></script>
     <script src="/app.js"></script>
   </body>
 </html>

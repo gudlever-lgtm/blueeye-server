@@ -1,0 +1,55 @@
+# BlueEye Service Assurance — the browser worker.
+#
+# A SEPARATE image from the server on purpose (docs/service-assurance.md §7):
+#
+#   * The server image stays node:22-alpine at ~150-200 MB and carries NO browser.
+#     A customer who never enables Service Assurance pulls nothing extra.
+#   * Chromium comes from Debian's own package, not from a vendor CDN. Security
+#     updates then arrive through the normal apt channel, and nothing is fetched
+#     from a US-hosted browser download at build time.
+#   * playwright-core, not playwright: the full package's postinstall downloads
+#     ~1-1.5 GB of browser binaries. playwright-core downloads none.
+FROM node:22-bookworm-slim
+
+# --no-install-recommends and the apt-list cleanup in the same layer: without
+# them this image roughly doubles. fonts-liberation is the minimum that keeps
+# text from rendering as boxes — a screenshot of boxes is a useless artefact.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      chromium \
+      fonts-liberation \
+      ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# playwright-core must NOT try to fetch a browser: we supply Chromium above.
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
+    PLAYWRIGHT_CHROMIUM_PATH=/usr/bin/chromium \
+    NODE_ENV=production
+
+COPY package*.json ./
+RUN npm ci --omit=dev --ignore-scripts \
+ && npm install --no-save --ignore-scripts playwright-core@^1.49.0 \
+ && npm cache clean --force
+
+# Only what the worker actually runs. Copying the whole repo would drag the
+# dashboard, the docs and every unrelated router into the image.
+COPY src/serviceTests ./src/serviceTests
+COPY src/lib ./src/lib
+COPY src/discovery ./src/discovery
+COPY src/integrations/ssrfGuard.js ./src/integrations/ssrfGuard.js
+COPY src/db.js src/config.js src/logger.js ./src/
+COPY scripts/service-test-worker.js ./scripts/
+
+# Chromium in a container: the default /dev/shm is 64 MB and Chromium crashes on
+# it. docker-compose mounts a tmpfs; --disable-dev-shm-usage in driver.js is the
+# belt to that braces.
+RUN useradd --create-home --shell /usr/sbin/nologin blueeye \
+ && mkdir -p /var/lib/blueeye/service-assurance \
+ && chown -R blueeye:blueeye /var/lib/blueeye /app
+USER blueeye
+
+ENV SERVICE_TEST_ARTIFACT_ROOT=/var/lib/blueeye/service-assurance
+
+CMD ["node", "scripts/service-test-worker.js"]

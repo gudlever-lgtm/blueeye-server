@@ -157,7 +157,40 @@ services:
         condition: service_healthy
     restart: on-failure
 
+  # BlueEye Service Assurance worker — runs the Playwright browser that executes
+  # tests and discoveries. Behind a profile, like `licens`: a deployment that does
+  # not use Service Assurance never builds or pulls this image.
+  #
+  #   COMPOSE_PROFILES=service-assurance docker compose up --build
+  #
+  # It shares the database with the server and claims queued work from it, so
+  # scaling out is `--scale service-assurance-worker=3`: the claim is a
+  # conditional UPDATE, so several workers never run the same job twice.
+  service-assurance-worker:
+    profiles: ["service-assurance"]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.service-test-worker
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_HOST: db
+      DB_USER: ${DB_USER:-blueeye}
+      DB_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env (run scripts/dev-bootstrap.js)}
+      DB_NAME: ${DB_NAME:-blueeye}
+      # MUST match the server's, or the stored credentials cannot be decrypted.
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+      SECRET_ENCRYPTION_KEY: ${SECRET_ENCRYPTION_KEY:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      - service-assurance-artifacts:/var/lib/blueeye/service-assurance
+    # Chromium needs more than a container's default 64 MB of shared memory.
+    shm_size: 512mb
+    restart: unless-stopped
+
 volumes:
+  service-assurance-artifacts:
   db-data:
   server-data:
   agent-data:

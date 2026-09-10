@@ -11,6 +11,7 @@ const { createLogRing } = require('../src/logger');
 const { issueToken } = require('../src/auth/jwt');
 const { createSettingsService } = require('../src/services/settings');
 const { createSecretBox } = require('../src/lib/secretBox');
+const { makeServiceTests } = require('./serviceTestsFakes');
 const { createConnectorRegistry } = require('../src/integrations/connectors');
 const { createCmdbConnectorRegistry } = require('../src/cmdb/connectors');
 const { createPlanService } = require('../src/license/planService');
@@ -1501,6 +1502,7 @@ function makeFeatureGate(overrides = {}) {
     rbac: true, audit_log: true, api_access: true,
     reports_csv: true, reports_pdf: true, reports_compliance: true,
     alerts_email: true, alerts_webhook: true,
+    service_tests: true,
   };
   return {
     isFeatureEnabled: overrides.isFeatureEnabled || ((f) => enabled[f] === true),
@@ -2346,6 +2348,10 @@ function makeApp(overrides = {}) {
   const agentsRepo = overrides.agentsRepo || makeAgentsRepo();
   const testPackagesRepo = overrides.testPackagesRepo || makeTestPackagesRepo();
   const transactionsRepo = overrides.transactionsRepo || makeTransactionsRepo();
+  // Service Assurance: the REAL router/validators/host-policy over in-memory
+  // repositories, so route specs exercise the whole request path and only the
+  // SQL is substituted. `null` exercises a deployment without the module.
+  const serviceTests = overrides.serviceTests === undefined ? makeServiceTests() : overrides.serviceTests;
   const auditLogRepo = overrides.auditLogRepo || makeAuditLogRepo();
   const apiTokensRepo = overrides.apiTokensRepo || makeApiTokensRepo();
   const auditLogger = overrides.auditLogger || createAuditLogger({ auditLogRepo });
@@ -2453,6 +2459,7 @@ function makeApp(overrides = {}) {
     testPackagesRepo,
     testPackageRunner: overrides.testPackageRunner || makeTestPackageRunner(),
     transactionsRepo,
+    serviceTests,
     logRing: overrides.logRing || makeLogRing(),
     speedtestResultsRepo: overrides.speedtestResultsRepo || makeSpeedtestResultsRepo(),
     releaseStore: overrides.releaseStore || makeReleaseStore(),
@@ -2625,6 +2632,7 @@ module.exports = {
   makeNis2AuditRepo,
   makeInvestigationsRepo,
   makeDb,
+  makeServiceTests,
   makeApp,
   tokenFor,
   authHeader,

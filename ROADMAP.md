@@ -32,6 +32,7 @@ unlocked by editing local config — the Ed25519 signature would stop matching.
 - [x] **API access** (`api_access`) — programmatic API tokens (`src/routes/apiTokens.js`, `api_tokens` table), gated.
 - [x] **LDAP / Active Directory auth** (`sso_ldap`) — `src/auth/ldap.js` + `src/routes/ldap.js`, gated.
 - [x] **SSO (OIDC)** (`sso_oidc`) — OpenID Connect (authorization-code + PKCE, EU/self-hosted IdP), claim→role mapping; `src/auth/oidc.js` + `src/routes/oidc.js`, gated.
+- [x] **Service Assurance** (`service_tests`) — *"Know when your digital services stop working — before your users do."* No-code synthetic monitoring of web applications: register an application, run Discovery, accept rule-based test suggestions, build tests with drag & drop, run them on a Playwright worker, read the failure in plain language, schedule them. Neutral DSL (the stored test never mentions Playwright), two-check SSRF host policy with a CIDR allowlist, browser in its own worker process. `src/serviceTests/`, `migrations/078_create_service_tests.sql`, [docs/service-assurance.md](docs/service-assurance.md).
 - [x] **SSO (SAML)** (`sso_saml`) — SAML 2.0 SP-initiated login, hand-rolled signature/assertion verification, attribute→role mapping; `src/auth/saml.js` + `src/routes/saml.js`, gated.
 - [x] **Premium / priority support** (`premium_support`) — `support_level` carried by the plan (not a software module).
 
@@ -60,8 +61,8 @@ of plan or licence. It is intentionally **not** a sold feature key.
 
 ## 🛣️ Roadmap (not built yet — do one at a time)
 
-_Nothing queued — every catalogued feature is shipped. New roadmap items get added
-here (and as `status: 'roadmap'` in `src/license/plans.js`) before work starts._
+_Nothing queued._ New roadmap items get added here (and as `status: 'roadmap'` in
+`src/license/plans.js`) before work starts._
 
 ## How to mark a roadmap item done
 

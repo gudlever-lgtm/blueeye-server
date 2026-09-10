@@ -25,18 +25,37 @@ const { makeApp, makeAgentTokensRepo, authHeader } = require('../../test-support
 const { listRoutes, hasParam, fill, key } = require('./_routes');
 
 const DIR = path.join(__dirname, '..', '..', 'src', 'validation');
+// Service Assurance keeps its validators inside its own module so the module can
+// be extracted whole (docs/service-assurance.md §2). The sweep follows them
+// there rather than letting a whole feature's input validation go unchecked.
+const MODULE_VALIDATION_DIRS = [
+  path.join(__dirname, '..', '..', 'src', 'serviceTests', 'validation'),
+];
 const NON_OBJECTS = [undefined, null, 'str', 42, true, [], () => {}, Symbol('s'), 1n];
 const rejected = (r, errs) => !!(r === undefined || r === null || (r && (r.errors || r.error)) || (errs && Object.keys(errs).length));
 
 // Validators that legitimately accept {} (every field optional).
-const ACCEPTS_EMPTY = new Set(['validateAgentManagedInput', 'validateCreateCode', 'validateIntegrationUpdate', 'validateTimeRange', 'validateAssetSearch']);
+const ACCEPTS_EMPTY = new Set([
+  'validateAgentManagedInput', 'validateCreateCode', 'validateIntegrationUpdate', 'validateTimeRange', 'validateAssetSearch',
+  // Service Assurance: running a test with no body is the normal case (the
+  // environment falls back to the application's production one), and a settings
+  // patch is checked field-by-field by the settings service, which owns the
+  // bounds — an empty patch is a no-op, not an error.
+  'validateRunRequest', 'validateSettingsPatch',
+]);
 
 test('every exported validator survives garbage input and rejects an empty object where it has required fields', () => {
-  const modules = fs.readdirSync(DIR).filter((f) => f.endsWith('.js'));
-  assert.ok(modules.length >= 20);
+  const modules = [
+    ...fs.readdirSync(DIR).filter((f) => f.endsWith('.js')).map((f) => path.join(DIR, f)),
+    ...MODULE_VALIDATION_DIRS.flatMap((dir) => (fs.existsSync(dir)
+      ? fs.readdirSync(dir).filter((f) => f.endsWith('.js')).map((f) => path.join(dir, f))
+      : [])),
+  ];
+  assert.ok(modules.length >= 21);
   let checked = 0;
-  for (const file of modules) {
-    const mod = require(path.join(DIR, file));
+  for (const full of modules) {
+    const file = path.relative(path.join(__dirname, '..', '..'), full);
+    const mod = require(full);
     for (const [name, fn] of Object.entries(mod)) {
       if (typeof fn !== 'function') continue;
       checked += 1;
@@ -44,7 +63,7 @@ test('every exported validator survives garbage input and rejects an empty objec
         const errs = {};
         assert.doesNotThrow(() => fn(input, errs), `${file}#${name} throws on ${typeof input}`);
       }
-      if (name === 'parseId') continue;
+      if (name === 'parseId' || name === 'validateBaseUrl') continue;
       if (name === 'validateAssetSearch') { assert.ok(rejected(fn({})), `${file}#${name}`); continue; }
       const errs = {};
       const r = fn({}, errs);
@@ -57,6 +76,55 @@ test('every exported validator survives garbage input and rejects an empty objec
 test('every src/validation module is named in this suite', () => {
   const self = fs.readFileSync(__filename, 'utf8');
   for (const f of fs.readdirSync(DIR)) assert.ok(self.includes(f.replace(/\.js$/, '')), `${f} has no dedicated gate rule`);
+});
+
+// ---------------------------------------------------------------- Service Assurance
+test('serviceTests validation: base URLs refuse anything the browser must never reach', () => {
+  const { validateApplication, validateEnvironment } = require('../../src/serviceTests/validation');
+  // Loopback would let a test browser reach BlueEye's own API from the server's
+  // own network position; 169.254.169.254 is the cloud-metadata pivot.
+  for (const url of ['http://127.0.0.1:3000', 'http://localhost/app', 'http://169.254.169.254/latest/meta-data']) {
+    assert.ok(errorsOf(validateApplication({ name: 'X', base_url: url })).includes('base_url'), url);
+  }
+  for (const url of ['file:///etc/passwd', 'ftp://x.dk', 'javascript:alert(1)', 'not a url', '']) {
+    assert.ok(errorsOf(validateApplication({ name: 'X', base_url: url })).includes('base_url'), url);
+  }
+  assert.equal(validateApplication({ name: 'X', base_url: 'https://customer.example.com' }).errors, undefined);
+  assert.ok(errorsOf(validateEnvironment({ application_id: 1, name: 'P', base_url: 'http://127.0.0.1' })).includes('base_url'));
+});
+
+test('serviceTests validation: a credential password must be long enough to be maskable', () => {
+  const { validateCredential } = require('../../src/serviceTests/validation');
+  // A password shorter than the redactor's floor cannot be masked in logs or
+  // screenshots, so it is refused at entry rather than being unmaskable later.
+  assert.ok(errorsOf(validateCredential({ application_id: 1, label: 'L', secret: 'ab' })).includes('secret'));
+  assert.ok(errorsOf(validateCredential({ application_id: 1, label: 'L' })).includes('secret'));
+  assert.equal(validateCredential({ application_id: 1, label: 'L', secret: 'long-enough' }).errors, undefined);
+});
+
+test('serviceTests validation: the DSL refuses a step that could read the worker filesystem', () => {
+  const { validateDefinition } = require('../../src/serviceTests/engine/validate');
+  const upload = (file) => validateDefinition({ version: 1, steps: [{ type: 'upload', target: { id: 'f' }, file }] });
+  for (const bad of ['../../etc/shadow', '/etc/passwd', 'C:\\windows\\system32', 'a/b']) {
+    assert.ok(upload(bad).errors, bad);
+  }
+  assert.equal(upload('faktura.pdf').errors, undefined);
+  // Only http(s) may reach the runner, whatever the host policy would later say.
+  assert.ok(validateDefinition({ version: 1, steps: [{ type: 'open', url: 'file:///etc/passwd' }] }).errors);
+  assert.ok(validateDefinition({ version: 1, steps: [{ type: 'open', url: '//evil.example' }] }).errors);
+  assert.ok(validateDefinition({ version: 1, steps: [] }).errors, 'a test needs at least one step');
+  assert.ok(validateDefinition({ version: 2, steps: [{ type: 'back' }] }).errors, 'an unknown DSL version is refused');
+});
+
+test('serviceTests validation: the host allowlist can never open loopback or metadata, at any setting', () => {
+  const { validateEntry } = require('../../src/serviceTests/security/hostPolicy');
+  // Even with the caps opened as wide as the settings allow.
+  const settings = { minCidrPrefix: 8, maxAddressesPerApplication: 16777216 };
+  for (const entry of ['127.0.0.1', '127.0.0.0/8', 'localhost', '169.254.169.254', '169.254.0.0/16', '0.0.0.0/8']) {
+    assert.ok(validateEntry(entry, null, { settings }).errors, `${entry} must never be allowlistable`);
+  }
+  // RFC1918 IS allowlistable — that is the point of the feature.
+  assert.equal(validateEntry('10.20.0.0/16', null, { settings: { minCidrPrefix: 16, maxAddressesPerApplication: 65536 } }).errors, undefined);
 });
 
 // ---------------------------------------------------------------- per-module rules

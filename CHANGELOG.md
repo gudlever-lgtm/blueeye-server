@@ -1,5 +1,189 @@
 # Changelog
 
+## 0.120.0 — BlueEye Service Assurance
+
+**Know when your digital services stop working — before your users do.**
+
+A new module, reachable from **Service Assurance** in the sidebar. Register the
+web application you depend on, let Discovery look around it, accept the tests it
+suggests, and run them on a schedule from a real browser. Nothing in the normal
+flow requires code: steps are built by dragging them into order and filling in
+forms, and the raw engine error lives behind "Technical details".
+
+**The stored test never mentions Playwright.** A definition is a list of intents
+("fill the field labelled Username"), and the runner decides how to carry them
+out. `driver.js` is the only file in the module that requires `playwright-core`,
+so the whole meaning of a test — step order, credential resolution, conditional
+blocks, stop-at-first-failure — is exercised in the suite with no browser and no
+network anywhere near it. Swapping to WebDriver BiDi later is a second driver,
+not a rewrite, and not a single saved test changes.
+
+**The browser runs in its own process.** `POST /tests/:id/run` queues a row and
+returns 202; the worker (`npm run service-test-worker`, or the
+`service-assurance` compose profile) claims it with a conditional
+`UPDATE … WHERE status = 'queued'`. Several workers are therefore safe from day
+one — `--scale service-assurance-worker=3` and none of them run the same job
+twice. The server image is unchanged and carries no browser: the worker is a
+separate Debian image with Chromium from apt, so nothing is fetched from a vendor
+CDN at build time.
+
+**SSRF gets two independent checks, and both must pass.** A permanent deny-list
+(non-http(s) schemes, loopback, link-local, cloud metadata) that nothing can
+unlock at any permission level, and a per-application allowlist that decides what
+may be targeted. RFC1918 *is* allowlistable — on-prem applications live there —
+and it takes an explicit, audited, admin-only entry naming a host, an address or
+a CIDR range, with CSV import/export and a dry run. Ranges are capped across the
+whole application, so twenty /24s cannot beat a limit a single /19 would hit. An
+allowlisted hostname is resolved and every address it points at is judged again,
+which closes the rebinding gap a literal-only guard leaves open. The policy runs
+again at request time through Playwright's router, so a page cannot pull a
+resource from somewhere it should not.
+
+**Discovery is read-only, and fail-closed about it.** It never submits a form and
+never clicks anything whose effect it cannot determine — an unlabelled button is
+recorded and left alone rather than assumed safe. Suggestions are rule-based, not
+AI, and each carries the reason it was proposed: *"Detected 1 password field, a
+username field, a Login button."* A login flow is only ever claimed when a
+password field is actually present.
+
+**A failure is explained before it is dumped.** Step 4, "Klik på knappen Log
+ind", `HTTP 503 from /api/auth/login`, likely cause: the service behind this
+address. A 503 on the wire outranks the driver's own "timeout", because the
+status is the useful half when both are true. A screenshot is captured on failure
+only, after password fields are masked in the DOM.
+
+**Credentials never surface.** They are encrypted with the existing `secretBox`,
+decrypted only inside the worker, and every string leaving a run passes a
+redactor seeded with the run's own secrets. A password too short to mask safely
+is refused at entry rather than being unmaskable later.
+
+Also: every limit — discovery budgets, the allowlist caps, runner timeouts,
+screenshot retention — is stored in the database and changes from the UI without
+a redeploy. Artefact retention ships with it, because one five-minute test
+failing across a weekend writes ~115 MB/day at PNG sizes.
+
+`service_tests` becomes an available Professional feature. 3221 tests, gate green.
+
+## 0.119.0 — Service Tests, phase 1: the data model and the storage layer
+
+First code for **Service Tests** (docs/service-assurance.md) — the no-code module for
+verifying that critical web services and user journeys actually work. This is the
+foundation only: 15 tables, the repositories over them, and the settings layer.
+No routes, no Playwright, no UI yet.
+
+**Migration 078** adds the `service_test_*` tables. Two things about their shape
+are deliberate. There are **no foreign keys in either direction between these
+tables and the rest of BlueEye** — the module is meant to be liftable out and run
+standalone, and a cross-schema key would nail it down. And `service_test_runs`
+**is the job queue**: a run is inserted `queued` and a worker claims it with a
+conditional `UPDATE … WHERE id = ? AND status = 'queued'`, so two workers racing
+for one row produce one winner and one miss rather than two executions. There is
+no SELECT-then-UPDATE window anywhere in the repository.
+
+**Every Service Tests limit lives in the database**, not in an environment
+variable. `settings/defaults.js` holds the shipped default and the bounds for each
+field; `service_test_settings` holds the override; the effective value is the merge.
+An operator changes a discovery budget, the allowlist address cap, a runner timeout
+or the screenshot retention window from the UI, and it applies without a redeploy.
+A stored row that is unknown or out of bounds is discarded in favour of the
+default, so a bad write can never quietly widen a security control.
+
+**`src/serviceTests/ports.js`** is the module's whole dependency on its host. No
+file under `src/serviceTests/` requires a BlueEye module; db, secrets, audit,
+logger and clock arrive through one object. Extraction later means implementing
+those ports against something else, not hunting for reach-ins.
+
+Credentials are encrypted with the existing `secretBox` and **no read path returns
+the plaintext** — `list()` and `findById()` report only `has_secret`, and a single
+worker-only method decrypts. A rotated key or a tampered row yields null rather
+than a wrong value.
+
+**Licence key registered.** `service_tests` joins the catalogue as a Professional
+feature with `status: 'roadmap'`, per the ROADMAP process of registering a key
+before the work starts. Two existing tests needed a minimal update for that: the
+roadmap-key assertion now names the queued key, and the UI gate's `data-feature`
+check accepted only the four legacy proof keys, so **no plan-catalogue key could
+pass it at all** — it now checks against the real set. That widens the sweep
+rather than loosening it.
+
+51 new specs cover the storage boundary: which statement is issued, with which
+parameters, in which transaction, and how rows are shaped. Suite is 3085 tests.
+
+Nothing is mounted yet, on purpose. Migration 046's first cut shipped tables whose
+repository was never constructed, so no rows were ever written; here the wiring
+lands in the same commit as the routes that use it.
+
+## 0.118.5 — Service Tests: the three open decisions, answered
+
+The plan in `docs/service-assurance.md` ended with three questions. All three are now
+settled and written into it.
+
+**Browser engine.** There is no European alternative worth switching to: the
+binding constraint is the engine, not the automation library, and Chromium, Gecko
+and WebKit are all US-origin. Servo is the only European-governed engine (Linux
+Foundation Europe) and cannot run real web apps yet. Playwright also sits outside
+what the "no US vendors" convention targets — that rule is about services called
+over the network at runtime, and Playwright is Apache-2.0 source running locally
+with no telemetry. Its one real US dependency is the browser download at install
+time, which distro Chromium removes. The durable protection is the seam:
+`driver.js` is the only file that touches Playwright, so WebDriver BiDi later
+means a second driver, not a rewrite.
+
+**Disk usage** gets its own section. The server image does not change at all — the
+worker is a separate image behind a compose profile, the way `licens` already is.
+`playwright-core` instead of `playwright`, Chromium only, Chromium from apt rather
+than a vendor CDN, and a worker image that copies only what it needs. The section
+also names the growth risk people miss: screenshots, where one five-minute test
+failing across a weekend writes ~115 MB/day. Failure-only capture, WebP, a per-run
+cap and a retention job on the existing `src/analysis/retention/` pattern.
+
+**The host allowlist** stays optional and empty by default, and now accepts whole
+**IP segments** and **host lists**, with CSV import/export and a dry-run preview.
+`src/discovery/cidr.js` already has the maths, including an address count that
+never enumerates. Ranges are capped (nothing shorter than a `/16`, 65 536
+addresses per application by default), and the split that matters is written down:
+RFC1918 is allowlistable because on-prem applications live there, while loopback
+and cloud-metadata addresses can never be unlocked at any privilege level.
+
+**Licence and RBAC, both.** `service_tests` becomes a Professional-tier feature
+key; once the licence permits the module, access inside it is decided by role.
+Two existing tests need a minimal, documented update for that — the UI gate checks
+`data-feature` against the four legacy proof keys only, so no plan-catalogue key
+can currently pass it, and the roadmap-key assertion has to allow a queued item.
+
+Still plan only — no Service Tests code ships in this version.
+
+## 0.118.4 — Service Tests V1: the integration plan
+
+`docs/service-assurance.md` records the agreed design for **Service Tests** — the
+no-code module where an operator registers a web application, runs Discovery,
+accepts suggested tests, builds them with drag & drop, runs them and schedules
+them. Plan only: no Service Tests code ships in this version.
+
+What the plan pins down:
+
+- **One module root** (`src/serviceTests/`) reached through a single factory and
+  an adapter object, so the module can later run standalone. Its footprint in
+  existing UI code is one nav button, one `views.serviceTests` line and one
+  `PAGE_INFO` entry.
+- **A neutral DSL** — the stored test definition never mentions Playwright.
+  `execute.js` dispatches steps onto an injected driver, so the runner is unit
+  tested offline against a fake.
+- **Playwright stays out of the Express request lifecycle.** Runs are queued in
+  `service_test_runs` and claimed atomically by a separate worker process on its
+  own Debian + distro-Chromium image; the server image keeps no browser.
+- **SSRF is the module's central risk** and gets its own policy: scheme
+  allowlist, per-application host allowlist, a resolved-IP check that closes the
+  DNS-rebinding gap, enforced again at request time through `page.route()`.
+  Reaching an on-prem RFC1918 application takes an explicit, audited, admin-only
+  allowlist entry — one host at a time.
+- **Reuse over reinvention** — `secretBox` for credentials, `ssrfGuard` as the
+  policy's base, the existing JWT/role middleware, audit logger and background-job
+  contract. Nothing changes in blueeye-agent or blueeye-licens.
+
+Three decisions are listed for sign-off before code: the Playwright/Chromium
+worker image, the private-host allowlist, and whether Service Tests is licence-gated.
+
 ## 0.118.3 — One page width, framed data, and a bulk delete for expired codes
 
 Every page came out a different width. Measured in a browser at 1920px:

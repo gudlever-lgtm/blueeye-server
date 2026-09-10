@@ -4,7 +4,8 @@ const { config } = require('./config');
 const { createLogger, createLogRing } = require('./logger');
 const { createRateLimiter } = require('./middleware/rateLimit');
 const { createRevocationRegistry } = require('./auth/revocation');
-const { setRevocationCheck } = require('./auth/middleware');
+const { setRevocationCheck, requireAuth, requireRole } = require('./auth/middleware');
+const { ROLES } = require('./auth/roles');
 const { createDb } = require('./db');
 const { createTsdb } = require('./tsdb');
 const { createResultsTsdbRepository } = require('./repositories/resultsTsdbRepository');
@@ -111,6 +112,7 @@ const { createSettingsRepository } = require('./repositories/settingsRepository'
 const { createSettingsService } = require('./services/settings');
 const { createTestPackagesRepository } = require('./repositories/testPackagesRepository');
 const { createTransactionsRepository } = require('./repositories/transactionsRepository');
+const { createServiceTestsModule } = require('./serviceTests');
 const { createTransactionBaselineJob } = require('./analysis/transactionBaselines');
 const { createTestPackageRunner } = require('./services/testPackageRunner');
 const { createTestPackageScheduler } = require('./services/testPackageScheduler');
@@ -351,6 +353,29 @@ function start() {
   // WS, results ingested over WS. Secrets (config_secrets) are AES-256-GCM at rest
   // via secretBox. See src/routes/transactions.js + src/ws/agentSocket.js.
   const transactionsRepo = createTransactionsRepository({ db, secretBox });
+
+  // Service Tests — no-code synthetic monitoring of web applications
+  // (docs/service-assurance.md). The module owns its own repositories, settings,
+  // router and jobs; this is the only place BlueEye assembles it, and the ports
+  // below are its ENTIRE dependency on the rest of the server.
+  //
+  // The Playwright runner is deliberately NOT started here: it runs in its own
+  // process (npm run service-test-worker) so a browser session can never share a
+  // process with the API.
+  const serviceTests = createServiceTestsModule({
+    db,
+    secrets: secretBox,
+    audit: auditLogger,
+    logger,
+    // Host middleware — the module declares which guard each route wears, it
+    // never decides who may call it.
+    requireAuth,
+    requireRole,
+    roles: ROLES,
+    // Where failure screenshots are written. Unset = failures are recorded
+    // without images rather than every run failing on a missing directory.
+    artifactRoot: process.env.SERVICE_TEST_ARTIFACT_ROOT || null,
+  });
 
   // Agent-release signing key — generated + managed from Settings (write-once; the
   // private key is encrypted at rest via secretBox). It is the trust anchor for
@@ -768,6 +793,9 @@ function start() {
     flowPairBaselineJob,
     // Scheduled active-discovery sweep (leader-only; no-op unless enabled+scoped).
     discoverySweepJob,
+    // Service Tests artefact retention (screenshots). Empty when no artefact
+    // root is configured, so the spread is a no-op rather than a conditional.
+    ...serviceTests.jobs,
     // LLDP graph refresh + age-out (default 24h). Self-contained interval so
     // stale neighbors are purged even when clustering is idle.
     (() => {
@@ -891,6 +919,7 @@ function start() {
     testPackagesRepo,
     testPackageRunner,
     transactionsRepo,
+    serviceTests,
     speedtestResultsRepo,
     integrationsRepo,
     integrationAuditRepo,

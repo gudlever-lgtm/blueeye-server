@@ -43,6 +43,9 @@ const FEATURE_CATALOG = {
   sso_oidc: { label: 'SSO (OIDC)', minPlan: 'professional', status: 'available' },
   sso_saml: { label: 'SSO (SAML)', minPlan: 'professional', status: 'available' },
   premium_support: { label: 'Premium / priority support', minPlan: 'professional', status: 'available' },
+  // BlueEye Service Assurance (docs/service-assurance.md) — no-code synthetic
+  // monitoring of web applications. Shipped end to end, so `available`.
+  service_tests: { label: 'Service Assurance', minPlan: 'professional', status: 'available' },
 };
 
 const ALL_FEATURE_KEYS = Object.keys(FEATURE_CATALOG);
@@ -98,6 +101,7 @@ const PRO_FEATURES = [
   'sso_oidc',
   'sso_saml',
   'premium_support',
+  'service_tests',
 ];
 
 // The customer-facing packages, in ascending order of capability. Prices are

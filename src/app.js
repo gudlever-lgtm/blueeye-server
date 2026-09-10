@@ -97,6 +97,8 @@ function createApp({
   testPackagesRepo,
   testPackageRunner,
   transactionsRepo,
+  // Service Assurance — the assembled module (src/serviceTests/index.js).
+  serviceTests = null,
   speedtestResultsRepo,
   integrationsRepo,
   integrationAuditRepo,
@@ -263,6 +265,7 @@ function createApp({
       testPackagesRepo,
       testPackageRunner,
       transactionsRepo,
+      serviceTests,
       speedtestResultsRepo,
       integrationsRepo,
       integrationAuditRepo,

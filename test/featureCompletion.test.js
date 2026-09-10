@@ -26,6 +26,7 @@ test('GET /license/matrix marks each feature available|roadmap', async () => {
   assert.equal(byKey.sso_ldap, 'available');
   assert.equal(byKey.sso_oidc, 'available');
   assert.equal(byKey.sso_saml, 'available');
+  assert.equal(byKey.service_tests, 'available'); // Service Assurance — docs/service-assurance.md
   assert.equal(byKey.ha_deployment, undefined); // retired
 });
 

@@ -24,6 +24,13 @@ const { JSDOM, VirtualConsole } = require('jsdom');
 const { makeApp } = require('../../test-support/fakes');
 const I18n = require('../../public/i18n');
 const { KNOWN_FEATURES } = require('../../src/license/features');
+const { ALL_FEATURE_KEYS } = require('../../src/license/plans');
+
+// A nav button may be gated by EITHER a legacy proof feature (analysis/assistant/
+// alerting/geo) or a packaged plan key (api_access, service_tests, …). Checking
+// only KNOWN_FEATURES rejected every plan key, so no plan-gated tab could pass
+// the gate at all — this widens the sweep to the real set, it does not loosen it.
+const GATEABLE_FEATURES = [...new Set([...KNOWN_FEATURES, ...ALL_FEATURE_KEYS])];
 
 const ROOT = path.join(__dirname, '..', '..');
 const PUBLIC = path.join(ROOT, 'public');
@@ -106,7 +113,7 @@ test('every nav view has a PAGE_INFO help entry', () => {
 test('data-min-role and data-feature attributes use known values', () => {
   for (const b of navButtons) {
     if (b.dataset.minRole !== undefined) assert.ok(['operator', 'admin'].includes(b.dataset.minRole), `${b.dataset.view}: data-min-role=${b.dataset.minRole}`);
-    if (b.dataset.feature !== undefined) assert.ok(KNOWN_FEATURES.includes(b.dataset.feature), `${b.dataset.view}: unknown feature ${b.dataset.feature}`);
+    if (b.dataset.feature !== undefined) assert.ok(GATEABLE_FEATURES.includes(b.dataset.feature), `${b.dataset.view}: unknown feature ${b.dataset.feature}`);
   }
   const roleGated = navButtons.filter((b) => b.dataset.minRole).map((b) => b.dataset.view);
   for (const must of ['discovery', 'logs', 'enrollment']) assert.ok(roleGated.includes(must), `${must} lost its role gate`);

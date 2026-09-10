@@ -60,8 +60,18 @@ of plan or licence. It is intentionally **not** a sold feature key.
 
 ## 🛣️ Roadmap (not built yet — do one at a time)
 
-_Nothing queued — every catalogued feature is shipped. New roadmap items get added
-here (and as `status: 'roadmap'` in `src/license/plans.js`) before work starts._
+- [ ] **Service Tests** (`service_tests`) — no-code synthetic monitoring of web
+  applications: register an application, run Discovery, accept rule-based test
+  suggestions, build tests with drag & drop, run them on a Playwright worker, read
+  the failure in plain language, schedule them. The stored test definition is a
+  neutral DSL that never mentions Playwright, and the module is built behind an
+  API/adapter boundary so it can later run standalone. Plan, data model and
+  security design: [docs/service-tests.md](docs/service-tests.md).
+  **In flight — phase 1-2 (data model + storage) landed; routes, engine, worker,
+  discovery, scheduler still to come.**
+
+_New roadmap items get added here (and as `status: 'roadmap'` in
+`src/license/plans.js`) before work starts._
 
 ## How to mark a roadmap item done
 

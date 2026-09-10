@@ -1,8 +1,14 @@
 # Service Tests V1 — implementation plan
 
-> **Status: plan only.** No Service Tests code exists yet. This document is the
-> agreed integration design (guardrail 34) and the file/table/route inventory the
+> **Status: phases 1-2 landed** (migration 078 + `src/serviceTests/` storage and
+> settings). Everything from phase 3 on — routers, DSL, worker, discovery,
+> suggestions, scheduler, UI — is still design. This document is the agreed
+> integration design (guardrail 34) and the file/table/route inventory the
 > implementation follows. Read it with [CODEMAP.md](../CODEMAP.md).
+>
+> Nothing is wired into `src/routes/index.js` or `src/server.js` yet: the module
+> is constructed in the same commit as the first routes that use it, so this
+> never becomes a repeat of migration 046's unmounted first cut.
 
 **What it is:** a no-code module where a non-technical operator registers a web
 application, runs Discovery, accepts suggested tests, builds them with drag &
@@ -487,7 +493,7 @@ Each phase is independently testable and leaves `main` green.
 
 | PR | Phase (spec §40) | Contents |
 | --- | --- | --- |
-| 1 | 1–2 | Feature key registered (`plans.js` + ROADMAP.md + the two test updates in §8), module skeleton, `ports.js`, migration 078, `schema.sql`, repositories + repo tests |
+| 1 ✅ | 1–2 | Feature key registered (`plans.js` + ROADMAP.md + the two test updates in §8), module skeleton, `ports.js`, DB-backed settings, migration 078, `schema.sql`, repositories + 51 repo/settings specs |
 | 2 | 3–4 | Applications, Environments, Credentials — routers, validators, RBAC, licence gate, audit; host policy + allowlist CRUD/import/export; UI list/forms |
 | 3 | 5 | The DSL: `dsl.js`, `validate.js`, `targeting.js`, `redact.js` — pure, fully unit-tested |
 | 4 | 6 | `driver.js` (Playwright), `execute.js`, `classify.js`, `artifacts.js`, worker + queue, worker Dockerfile + compose profile |

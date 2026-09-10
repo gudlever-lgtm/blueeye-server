@@ -1,5 +1,54 @@
 # Changelog
 
+## 0.119.0 — Service Tests, phase 1: the data model and the storage layer
+
+First code for **Service Tests** (docs/service-tests.md) — the no-code module for
+verifying that critical web services and user journeys actually work. This is the
+foundation only: 15 tables, the repositories over them, and the settings layer.
+No routes, no Playwright, no UI yet.
+
+**Migration 078** adds the `service_test_*` tables. Two things about their shape
+are deliberate. There are **no foreign keys in either direction between these
+tables and the rest of BlueEye** — the module is meant to be liftable out and run
+standalone, and a cross-schema key would nail it down. And `service_test_runs`
+**is the job queue**: a run is inserted `queued` and a worker claims it with a
+conditional `UPDATE … WHERE id = ? AND status = 'queued'`, so two workers racing
+for one row produce one winner and one miss rather than two executions. There is
+no SELECT-then-UPDATE window anywhere in the repository.
+
+**Every Service Tests limit lives in the database**, not in an environment
+variable. `settings/defaults.js` holds the shipped default and the bounds for each
+field; `service_test_settings` holds the override; the effective value is the merge.
+An operator changes a discovery budget, the allowlist address cap, a runner timeout
+or the screenshot retention window from the UI, and it applies without a redeploy.
+A stored row that is unknown or out of bounds is discarded in favour of the
+default, so a bad write can never quietly widen a security control.
+
+**`src/serviceTests/ports.js`** is the module's whole dependency on its host. No
+file under `src/serviceTests/` requires a BlueEye module; db, secrets, audit,
+logger and clock arrive through one object. Extraction later means implementing
+those ports against something else, not hunting for reach-ins.
+
+Credentials are encrypted with the existing `secretBox` and **no read path returns
+the plaintext** — `list()` and `findById()` report only `has_secret`, and a single
+worker-only method decrypts. A rotated key or a tampered row yields null rather
+than a wrong value.
+
+**Licence key registered.** `service_tests` joins the catalogue as a Professional
+feature with `status: 'roadmap'`, per the ROADMAP process of registering a key
+before the work starts. Two existing tests needed a minimal update for that: the
+roadmap-key assertion now names the queued key, and the UI gate's `data-feature`
+check accepted only the four legacy proof keys, so **no plan-catalogue key could
+pass it at all** — it now checks against the real set. That widens the sweep
+rather than loosening it.
+
+51 new specs cover the storage boundary: which statement is issued, with which
+parameters, in which transaction, and how rows are shaped. Suite is 3085 tests.
+
+Nothing is mounted yet, on purpose. Migration 046's first cut shipped tables whose
+repository was never constructed, so no rows were ever written; here the wiring
+lands in the same commit as the routes that use it.
+
 ## 0.118.5 — Service Tests: the three open decisions, answered
 
 The plan in `docs/service-tests.md` ended with three questions. All three are now

@@ -53,14 +53,34 @@ src/
 │   ├── assistant.js  config.js constants.js dependency-graph.json types.js
 │   ├── alerting/      # email/webhook/syslog channels + dispatcher (config.js)
 │   └── retention/     # rollup + purge + nightly scheduler (config.js, repo.js)
-├── serviceTests/      # SERVICE TESTS — no-code synthetic monitoring of web apps.
-│                      # Self-contained by design (docs/service-tests.md §2): nothing
-│                      # in here requires a BlueEye module; the host supplies db/
-│                      # secrets/audit/logger through ports.js, and index.js
-│                      # (createServiceTestsModule) is the ONLY thing it constructs.
+├── serviceTests/      # SERVICE ASSURANCE — no-code synthetic monitoring of web apps.
+│                      # "Know when your digital services stop working — before your
+│                      # users do." Self-contained by design (docs/service-assurance.md
+│                      # §2): nothing in here requires a BlueEye module; the host
+│                      # supplies db/secrets/audit/logger through ports.js, and
+│                      # index.js (createServiceTestsModule) is the ONLY thing it
+│                      # constructs. NOTE the naming split: the PRODUCT is Service
+│                      # Assurance (nav, header, licence label); the internal
+│                      # identifiers stay service_test* (dir, tables, API mount, key).
 │   ├── index.js ports.js          # the module factory + the adapter boundary
+│   ├── engine/        # the neutral DSL — dsl.js (22 step types) · validate.js ·
+│   │                  # targeting.js (role→label→text→…→css) · redact.js. PURE:
+│   │                  # a stored test never mentions Playwright.
+│   ├── runner/        # driver.js = THE ONLY file that requires playwright-core;
+│   │                  # execute.js (pure dispatch onto a driver interface) ·
+│   │                  # classify.js (failure → plain language) · artifacts.js ·
+│   │                  # pageSnapshot.js (the read-only script run inside the page)
+│   ├── discovery/     # crawl.js (scope + budgets) · extract.js (pure) ·
+│   │                  # safety.js (fail-closed destructive-action classification)
+│   ├── suggest/       # rules.js — six rule-based proposals, each with its reason. NO AI.
+│   ├── scheduler/     # schedule.js (pure) · queue.js · worker.js (the claim loop)
+│   ├── security/      # hostPolicy.js — the two-check SSRF decision (permanent
+│   │                  # deny-list ∩ per-application allowlist incl. CIDR) +
+│   │                  # allowlistIo.js (CSV import/export)
 │   ├── settings/      # DB-backed limits: defaults.js (catalogue + bounds) + the
 │   │                  # effective-settings service. No env var holds a limit.
+│   ├── validation/    # HTTP input validators (swept by the validation gate)
+│   ├── api/           # the routers mounted at /api/service-tests
 │   └── storage/       # repositories over the service_test_* tables (migration 078)
 ├── troubleshooting/   # consolidated fault view — pure read-model (overview.js) +
 │                      # fan-out (overviewService.js). Aggregation only, no tables.
@@ -126,6 +146,7 @@ Mounted in `src/routes/index.js`. User endpoints use JWT + roles
 | `/api/transactions` | transactions.js | viewer+ read / admin write | **transaction tests** (http/tcp/dns/icmp) — CRUD (secrets write-only, `{{secret:name}}` refs) + `PUT /:id/agents` + `GET /:id/results?from&to&agent_id` + `GET /:id/heatmap?from&to&bucket` (avg_latency/fail_count/sample_count per bucket per agent) + `GET /:id/trend?agent_id&days` (median per day per step). Agents get config + report results over `/ws/agent` (`transaction_config`/`transaction_result`); threshold alerts reuse the alerting dispatcher. Repo `src/repositories/transactionsRepository.js`, validation `src/validation/transactionValidation.js`, alert eval `src/analysis/transactionAlerts.js`, MAD baseline job `src/analysis/transactionBaselines.js` |
 | `/api/probes` | probes.js | viewer+ | **active-probe** results (ping/tcp/dns/traceroute/**tcptraceroute**/**http**/**curl**/**pageload**/**transaction**); `/path?probeType=` → **path-visualisation graph** (hop nodes+links with loss/latency/jitter + GeoIP/ASN + ECMP `branches`, `src/analysis/pathGraph.js`; `probeType` picks `traceroute` (default) or `tcptraceroute` — the TCP-SYN trace that still gets through where ICMP/UDP is filtered. The two are never merged into one graph, and a TCP target is stored as `host:port`); `/path/metrics` → metric catalogue; `/path/timeseries` → bucketed metric series (per-agent `overlay`, DST-safe, `src/analysis/pathTimeseries.js`) for the shared Path Visualization timeline |
 | `/api/reports` | reports.js | viewer+ / operator+ | **availability** (uptime % from probes) + **probe outages** list (`/probe-outages`, viewer+); CSV (`.csv`, gated `reports_csv`) + print-ready HTML→PDF (`.html`, gated `reports_pdf`); **NIS2 draft** (`/nis2-draft/:probe_outage_id`, operator+) |
+| `/api/service-tests` | src/serviceTests/api/ | viewer+ read · operator+ build/run · admin owns apps/credentials/allowlist | **SERVICE ASSURANCE** — applications · environments · credentials (write-only secrets) · **allowed-hosts** (the SSRF allowlist: host/ip/**cidr** + CSV import/export) · tests (+`/run` → 202, queued for the worker) · runs (+`/screenshot`) · discovery · suggestions (+`/accept`) · schedules · settings. Licence-gated as a whole (`service_tests`) behind `requireAuth`, so an anonymous request is 401 not 403 |
 | `/api/thresholds` | thresholds.js | viewer+ read / admin write | **event thresholds** — global defaults + per-location overrides |
 | `/api/event-clusters` | eventClusters.js | viewer+ read / operator+ write | **cross-agent event clusters** (`event_clusters`): `GET /` (filter status + `from`/`to`, paginated `limit`/`offset`) + `GET /:id` (hydrated members + evidence, confidence breakdown, suspected root-cause layer, evidence summary) + `POST /:id/ack` (op+, audited) + `POST /:id/resolve` (op+, required `note`, audited) + **read-only evidence** `GET /:id/evidence` (snapshots), `GET /:id/evidence/:sid` (raw text/plain), `POST /:id/evidence` (op+, manual re-snapshot, rate-limited `429`+`Retry-After`, evidence-class audit). Read-model built by `src/analysis/clusterView.js`; evidence capture in `src/evidence/` (`commandAllowlist.js` `evidence-v1` + `snapshotService.js` + `evidenceRetention.js`), table `cluster_evidence_snapshots` (mig 065). **Distinct** from `event_cases` — the task's `/api/events` path was taken, so clusters mount here. See `docs/cross-agent-correlation.md` |
 | `/api/events` | events.js | viewer+ read / operator+ write | **EVENTS** (`event_cases`, wraps analysis findings) — the operator-facing unit; an *event* is what a connected ITSM opens FROM one (see `docs/events.md`). Responses carry `event`/`events`/`eventId` only — the deprecated `/api/incidents` alias and its duplicated `incident*` keys were removed (migration 077): **`GET /:id/notes`** (viewer+) + **`POST /:id/notes`** (op+) — the append-only **work log** for shift handover (`{text, kind}`, `kind ∈ observation|action|ruled_out`; `ruled_out` served as its own indexed array and pinned in the UI; audited, no PATCH/DELETE exists — see `docs/event-work-log.md`); `GET` (filter status/severity/device/time) + `GET /:id` (+ linked anomalies + a light `explanation` what/where/why). List + detail rows carry the device identity joined from `agents`+`locations` (`agentName`/`agentHostname`/`locationId`/`locationName`) so an event says WHERE it is. Also `GET /:id/timeline` + `GET /:id/config-context` (op+) + `GET /:id/similar` + `GET /:id/recommendation` (combined playbook→history→AI, `?force_ai=true` op+) + `PATCH /:id` (op+, state machine, hash-chained audit) + `POST /:id/ask` (op+, opt-in EU AI over masked/aggregated context). **Distinct** from the `probe_outages` surfaced by `/api/reports`. See `docs/events.md` + `docs/event-cases.md` |
@@ -303,8 +324,10 @@ A single vanilla-JS SPA. Key building blocks:
 | Interface health | `src/health/interfaceHealth.js` (`computeInterfaceHealth`/`interfaceHealthSummary`); HTTP in `src/routes/interfaces.js` — agent side in blueeye-agent |
 | Agent data-quality (drops/skew/version) | `src/health/dataQuality.js` (`computeDataQuality`); surfaced via `/api/fleet/health` + `/api/fleet/agent/:id` — all signals already sent by the agent |
 | Per-agent traffic source (proc/snmp/netflow/sflow) | stored in `agents.monitor_config` (JSON); validated by `validateMonitorConfig` in `src/validation/agentValidation.js`; edited via `PUT /agents/:id` (`editAgent` modal in `public/app.js`); served to the agent by `GET /agents/me/config` (`src/routes/agentReports.js`). **Fleet-wide default** for newly enrolled agents lives in Settings → Agents (`agents` app_settings key: `defaultTrafficSource`/`defaultSflowHsflowd`, `settingsService.getDefaultMonitorConfig`), stamped onto the agent row at enroll (`services/enrollmentStore.js` via `routes/agentEnroll.js`); per-agent Edit always overrides it |
-| Service Tests (anything) | `src/serviceTests/` — one module root behind `createServiceTestsModule(ports)`. Data model: `migrations/078_create_service_tests.sql`. Limits/budgets/caps: `src/serviceTests/settings/defaults.js` (defaults) overridden from `service_test_settings` (DB). Plan + security design: [docs/service-tests.md](docs/service-tests.md) |
+| Service Tests (anything) | `src/serviceTests/` — one module root behind `createServiceTestsModule(ports)`. Data model: `migrations/078_create_service_tests.sql`. Limits/budgets/caps: `src/serviceTests/settings/defaults.js` (defaults) overridden from `service_test_settings` (DB). Plan + security design: [docs/service-assurance.md](docs/service-assurance.md) |
 | A Service Tests limit (discovery budget, allowlist cap, artefact retention) | `settings/defaults.js` holds the DEFAULT and its bounds; the effective value comes from the database via `settings/index.js`. Never add an env var for one |
+| A Service Assurance step type | ONE entry in `src/serviceTests/engine/dsl.js` — validation, the designer's form controls, the runner's dispatch and the plain-language label are all derived from it. Then a case in `runner/execute.js` and a method on the driver |
+| The Service Assurance UI | `public/serviceAssurance.js` (`window.ServiceAssurance`) + `serviceAssurance.css` (all `.sa-` prefixed); mounted by `views.serviceAssurance` in `public/app.js`, which passes the shared helpers in |
 | A dashboard tab/view | `public/index.html` (button) + `views.<x>` in `public/app.js` + `PAGE_INFO` |
 | Documentation / how-to content (Documentation tab) | `views.docs` + the `DOCS` content array + `docs*` helpers in `public/app.js` (static, no backend); reached from a **Documentation pill in the sidebar footer** (`.foot-docs`, `data-view="docs"`) beside the version line in `public/index.html` — not a nav-rail item; `PAGE_INFO.docs`; `.docs-*` + `.foot-docs` CSS. RBAC: the `Administration & setup` section carries `admin:true` and is dropped for non-admins. Prose guide in `docs/documentation-center.md` |
 | Overview “open issues” rollup (events + findings) | feature `dashboard_advanced` (Professional+): `src/dashboard/advancedDashboard.js` (pure `buildAdvancedDashboard`) + `src/routes/dashboard.js` (`GET /api/dashboard/advanced`, gated by `requirePlanFeature`); UI `fleetIssues()` + `refreshIssues()` inside `views.fleet`, documented in `PAGE_INFO.fleet`. Merged into the Overview — no separate tab; below Professional the rollup is omitted |

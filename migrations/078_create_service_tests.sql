@@ -1,11 +1,11 @@
--- Service Tests V1 — data model (docs/service-tests.md, phases 1-2).
+-- Service Tests V1 — data model (docs/service-assurance.md, phases 1-2).
 --
 -- A no-code module: register a web application, run Discovery, accept suggested
 -- tests, build them with drag & drop, run them on a Playwright worker, see why
 -- they failed, schedule them. Every table is prefixed `service_test_` and there
 -- are NO foreign keys in either direction between these tables and the existing
 -- BlueEye schema — the module is designed to be lifted out and run standalone
--- (docs/service-tests.md §2), and a cross-schema FK would nail it down.
+-- (docs/service-assurance.md §2), and a cross-schema FK would nail it down.
 --
 -- Foreign keys WITHIN the module are used and cascade from the owning row, so
 -- deleting an application takes its environments, credentials, allowlist, tests,
@@ -67,7 +67,7 @@ CREATE TABLE service_test_environments (
 -- `secret_encrypted` is an AES-256-GCM blob written by src/lib/secretBox.js. It
 -- is decrypted ONLY inside the worker, at execution time. No read path on the
 -- repository returns it, and no API response, log line or screenshot may contain
--- the plaintext (docs/service-tests.md §6).
+-- the plaintext (docs/service-assurance.md §6).
 CREATE TABLE service_test_credentials (
   id               INT          NOT NULL AUTO_INCREMENT PRIMARY KEY,
   tenant_id        INT              DEFAULT NULL,
@@ -84,7 +84,7 @@ CREATE TABLE service_test_credentials (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- ---------------------------------------------------------------- host allowlist
--- The SSRF escape hatch (docs/service-tests.md §6). Empty by default: nothing
+-- The SSRF escape hatch (docs/service-assurance.md §6). Empty by default: nothing
 -- beyond the application's own base-URL host is reachable until an admin adds a
 -- row. An entry is a hostname, a single IP or a CIDR segment. Loopback,
 -- link-local and cloud-metadata addresses are refused at write time and can

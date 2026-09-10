@@ -64,6 +64,8 @@ const { createLdapRouter } = require('./ldap');
 const { createOidcAuthRouter, createOidcAdminRouter } = require('./oidc');
 const { createSamlAuthRouter, createSamlAdminRouter } = require('./saml');
 const { createNis2Router } = require('./nis2');
+const { requirePlanFeature } = require('../license/features');
+const { requireAuth } = require('../auth/middleware');
 const { createInvestigationRouter } = require('./investigation');
 const { createLocator } = require('../investigation/locator');
 const {
@@ -190,6 +192,10 @@ function createApiRouter({
   samlAuth,
   samlRoleMapRepo,
   ssoLoginAuditRepo,
+  // Service Tests — the whole module arrives as one object built in server.js
+  // (src/serviceTests/index.js). It is mounted, not assembled, here: nothing in
+  // this file knows what it contains beyond `router`.
+  serviceTests = null,
   nis2RisksRepo,
   nis2ControlsRepo,
   nis2IncidentsRepo,
@@ -461,6 +467,22 @@ function createApiRouter({
       ldapConfigRepo, ldapRoleMapRepo, ldapLoginAuditRepo, ldapAuth, secretBox, featureGate, authEnabledFlag: ldapAuthEnabledFlag,
     }));
   }
+  // Service Tests — no-code synthetic monitoring of web applications.
+  // Licence-gated as a whole (`service_tests`, Professional) with RBAC inside;
+  // see docs/service-assurance.md §8. The module builds its own router, so this is
+  // the only line that knows it exists.
+  if (serviceTests && serviceTests.router) {
+    // requireAuth FIRST: an anonymous request must answer 401, not leak the
+    // licence state through a 403. The licence gate then answers for a signed-in
+    // user on an unlicensed install.
+    router.use(
+      '/api/service-tests',
+      requireAuth,
+      requirePlanFeature({ featureGate, planService }, 'service_tests'),
+      serviceTests.router
+    );
+  }
+
   // NIS2 Reporting Center — risk register, control evidence, security events,
   // management reports, evidence references + audit trail. Self-contained module.
   if (nis2RisksRepo && nis2ControlsRepo && nis2IncidentsRepo) {

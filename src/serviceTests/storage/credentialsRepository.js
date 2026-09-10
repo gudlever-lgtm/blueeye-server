@@ -9,7 +9,7 @@ const { intOrNull } = require('./shape');
 // and only the worker calls it, at execution time. That asymmetry is the whole
 // point of the file: there is no code path where an API response, a log line or
 // a screenshot can pick up a plaintext password by accident
-// (docs/service-tests.md §6).
+// (docs/service-assurance.md §6).
 function createCredentialsRepository({ db, secretBox = null }) {
   const { pool } = db;
   const COLS = 'id,tenant_id,application_id,label,username,secret_encrypted,created_by,created_at,updated_at';

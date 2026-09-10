@@ -722,6 +722,16 @@ function settingsLink(tab, label) {
 }
 
 const PAGE_INFO = {
+  serviceAssurance: {
+    hero: 'Know when your digital services stop working — before your users do.',
+    title: 'Service Assurance — synthetic monitoring of your web services',
+    body: () => [
+      el('p', {}, 'Register the web application you depend on, let ', el('strong', {}, 'Discovery'), ' look around it, and accept the tests it suggests. A test is a journey a real user takes — sign in, look up a customer, place an order — run on a schedule from a real browser.'),
+      el('p', {}, 'Nothing here needs code. Steps are built by dragging them into order and filling in forms; selectors, timeouts and the raw engine error live behind ', el('strong', {}, 'Technical details'), ' and are never needed to build or read a test.'),
+      el('p', {}, 'Discovery is ', el('strong', {}, 'read-only'), '. It never submits a form and never clicks anything that could delete, pay or send — anything whose effect it cannot determine is recorded and left alone.'),
+      el('p', { class: 'muted' }, 'Service Assurance only reaches an application\u2019s own address and the hosts an administrator has explicitly allowed. Loopback and cloud-metadata addresses can never be allowed, at any permission level.'),
+    ],
+  },
   changes: {
     hero: 'What happened since you last looked — agent and link transitions, new anomalies and events, playbook runs and configuration changes, newest first.',
     title: 'Changes — since you last looked',
@@ -14854,6 +14864,20 @@ async function txMount(host, builder) {
 }
 
 let txTab = 'list';
+// BlueEye Service Assurance — the module lives in public/serviceAssurance.js and
+// is handed the shared helpers here, so it never reaches into app.js globals.
+// That is the same seam the backend keeps (docs/service-assurance.md §2).
+views.serviceAssurance = async () => {
+  if (!window.ServiceAssurance) {
+    return el('div', { class: 'empty' }, 'Service Assurance kunne ikke indlæses.');
+  }
+  return window.ServiceAssurance.create({
+    el, api, t, dataCard, toast,
+    isAdmin,
+    isOperator: canWrite,
+  });
+};
+
 views.transactions = async () => {
   const root = el('div', { class: 'transactions' });
   const body = el('div', {});

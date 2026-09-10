@@ -1705,7 +1705,7 @@ CREATE TABLE IF NOT EXISTS service_test_environments (
 -- `secret_encrypted` is an AES-256-GCM blob written by src/lib/secretBox.js. It
 -- is decrypted ONLY inside the worker, at execution time. No read path on the
 -- repository returns it, and no API response, log line or screenshot may contain
--- the plaintext (docs/service-tests.md §6).
+-- the plaintext (docs/service-assurance.md §6).
 CREATE TABLE IF NOT EXISTS service_test_credentials (
   id INT          NOT NULL AUTO_INCREMENT PRIMARY KEY,
   tenant_id INT              DEFAULT NULL,
@@ -1722,7 +1722,7 @@ CREATE TABLE IF NOT EXISTS service_test_credentials (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- ---------------------------------------------------------------- host allowlist
--- The SSRF escape hatch (docs/service-tests.md §6). Empty by default: nothing
+-- The SSRF escape hatch (docs/service-assurance.md §6). Empty by default: nothing
 -- beyond the application's own base-URL host is reachable until an admin adds a
 -- row. An entry is a hostname, a single IP or a CIDR segment. Loopback,
 -- link-local and cloud-metadata addresses are refused at write time and can

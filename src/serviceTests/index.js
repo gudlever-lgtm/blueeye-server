@@ -12,20 +12,27 @@ const { createSuggestionsRepository } = require('./storage/suggestionsRepository
 const { createSchedulesRepository } = require('./storage/schedulesRepository');
 const { createServiceTestSettingsRepository } = require('./storage/settingsRepository');
 const { createServiceTestSettings } = require('./settings');
+const { createServiceTestsApiRouter } = require('./api');
+const { createQueue } = require('./scheduler/queue');
+const { createArtifactStore, createArtifactRetention } = require('./runner/artifacts');
 
 // Service Tests — the module factory, and the ONLY thing its host constructs.
 //
-// Phase 1 (this commit) builds the storage layer and the settings service. The
-// HTTP router and the background jobs arrive in later phases; the shape of the
-// return value is fixed now so the mount in src/routes/index.js and the job
-// registration in src/server.js are one line each when they land, rather than a
-// refactor.
+//   const serviceTests = createServiceTestsModule({
+//     db, secrets, audit, logger,
+//     requireAuth, requireRole, requireFeature,   // host middleware
+//     artifactRoot,
+//   });
+//   router.use('/api/service-tests', serviceTests.router);
+//   backgroundJobs.push(...serviceTests.jobs);
 //
-//   const serviceTests = createServiceTestsModule({ db, secrets, audit, logger });
+// Nothing under src/serviceTests/ requires a BlueEye module: db, secrets, audit
+// and logger arrive through ports.js, and the auth/licence middleware is passed
+// in. Extraction means implementing those against something else — not hunting
+// for reach-ins (docs/service-assurance.md §2).
 //
-// Nothing here is wired into BlueEye yet — deliberately. A repository that is
-// never constructed is how migration 046's first cut ended up with dead tables in
-// production, so the wiring lands in the same commit as the routes that use it.
+// The router is built only when the host supplies auth middleware. A caller that
+// wants the storage layer alone (the worker process) simply omits it.
 function createServiceTestsModule(rawPorts = {}) {
   const ports = resolvePorts(rawPorts);
   const { db, secrets, audit, logger, clock } = ports;
@@ -46,15 +53,48 @@ function createServiceTestsModule(rawPorts = {}) {
     settings: settingsRepo,
   };
 
-  return {
-    repositories,
+  // The queue's policy layer. Shared by the API (for "is a worker connected?")
+  // and by the worker process itself, so both agree on what stale means.
+  const queue = createQueue({
+    runsRepo: repositories.runs,
+    discoveryRepo: repositories.discovery,
+    schedulesRepo: repositories.schedules,
     settings,
-    audit,
     logger,
-    // Filled in by later phases: `router` (phase 3-4) and `jobs` (phase 6-11).
-    router: null,
-    jobs: [],
-  };
+    now: clock,
+  });
+
+  // Screenshot storage. Optional: a deployment with no writable artefact root
+  // simply records failures without images rather than failing every run.
+  const artifacts = rawPorts.artifactRoot
+    ? createArtifactStore({ root: rawPorts.artifactRoot, logger })
+    : null;
+
+  const router = rawPorts.requireAuth && rawPorts.requireRole
+    ? createServiceTestsApiRouter({
+      repositories,
+      settings,
+      queue,
+      artifacts,
+      audit,
+      logger,
+      requireAuth: rawPorts.requireAuth,
+      requireRole: rawPorts.requireRole,
+      requireFeature: rawPorts.requireFeature || null,
+      roles: rawPorts.roles,
+    })
+    : null;
+
+  // Background jobs the host starts and stops. The RUNNER is not among them —
+  // it lives in its own process (scripts/service-test-worker.js), because a
+  // Playwright session holds a browser for minutes and must never share a
+  // process with the API (spec §23).
+  const jobs = [];
+  if (artifacts) {
+    jobs.push(createArtifactRetention({ runsRepo: repositories.runs, store: artifacts, settings, logger }));
+  }
+
+  return { repositories, settings, queue, artifacts, audit, logger, router, jobs };
 }
 
 module.exports = { createServiceTestsModule };

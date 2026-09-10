@@ -1,8 +1,72 @@
 # Changelog
 
+## 0.120.0 — BlueEye Service Assurance
+
+**Know when your digital services stop working — before your users do.**
+
+A new module, reachable from **Service Assurance** in the sidebar. Register the
+web application you depend on, let Discovery look around it, accept the tests it
+suggests, and run them on a schedule from a real browser. Nothing in the normal
+flow requires code: steps are built by dragging them into order and filling in
+forms, and the raw engine error lives behind "Technical details".
+
+**The stored test never mentions Playwright.** A definition is a list of intents
+("fill the field labelled Username"), and the runner decides how to carry them
+out. `driver.js` is the only file in the module that requires `playwright-core`,
+so the whole meaning of a test — step order, credential resolution, conditional
+blocks, stop-at-first-failure — is exercised in the suite with no browser and no
+network anywhere near it. Swapping to WebDriver BiDi later is a second driver,
+not a rewrite, and not a single saved test changes.
+
+**The browser runs in its own process.** `POST /tests/:id/run` queues a row and
+returns 202; the worker (`npm run service-test-worker`, or the
+`service-assurance` compose profile) claims it with a conditional
+`UPDATE … WHERE status = 'queued'`. Several workers are therefore safe from day
+one — `--scale service-assurance-worker=3` and none of them run the same job
+twice. The server image is unchanged and carries no browser: the worker is a
+separate Debian image with Chromium from apt, so nothing is fetched from a vendor
+CDN at build time.
+
+**SSRF gets two independent checks, and both must pass.** A permanent deny-list
+(non-http(s) schemes, loopback, link-local, cloud metadata) that nothing can
+unlock at any permission level, and a per-application allowlist that decides what
+may be targeted. RFC1918 *is* allowlistable — on-prem applications live there —
+and it takes an explicit, audited, admin-only entry naming a host, an address or
+a CIDR range, with CSV import/export and a dry run. Ranges are capped across the
+whole application, so twenty /24s cannot beat a limit a single /19 would hit. An
+allowlisted hostname is resolved and every address it points at is judged again,
+which closes the rebinding gap a literal-only guard leaves open. The policy runs
+again at request time through Playwright's router, so a page cannot pull a
+resource from somewhere it should not.
+
+**Discovery is read-only, and fail-closed about it.** It never submits a form and
+never clicks anything whose effect it cannot determine — an unlabelled button is
+recorded and left alone rather than assumed safe. Suggestions are rule-based, not
+AI, and each carries the reason it was proposed: *"Detected 1 password field, a
+username field, a Login button."* A login flow is only ever claimed when a
+password field is actually present.
+
+**A failure is explained before it is dumped.** Step 4, "Klik på knappen Log
+ind", `HTTP 503 from /api/auth/login`, likely cause: the service behind this
+address. A 503 on the wire outranks the driver's own "timeout", because the
+status is the useful half when both are true. A screenshot is captured on failure
+only, after password fields are masked in the DOM.
+
+**Credentials never surface.** They are encrypted with the existing `secretBox`,
+decrypted only inside the worker, and every string leaving a run passes a
+redactor seeded with the run's own secrets. A password too short to mask safely
+is refused at entry rather than being unmaskable later.
+
+Also: every limit — discovery budgets, the allowlist caps, runner timeouts,
+screenshot retention — is stored in the database and changes from the UI without
+a redeploy. Artefact retention ships with it, because one five-minute test
+failing across a weekend writes ~115 MB/day at PNG sizes.
+
+`service_tests` becomes an available Professional feature. 3221 tests, gate green.
+
 ## 0.119.0 — Service Tests, phase 1: the data model and the storage layer
 
-First code for **Service Tests** (docs/service-tests.md) — the no-code module for
+First code for **Service Tests** (docs/service-assurance.md) — the no-code module for
 verifying that critical web services and user journeys actually work. This is the
 foundation only: 15 tables, the repositories over them, and the settings layer.
 No routes, no Playwright, no UI yet.
@@ -51,7 +115,7 @@ lands in the same commit as the routes that use it.
 
 ## 0.118.5 — Service Tests: the three open decisions, answered
 
-The plan in `docs/service-tests.md` ended with three questions. All three are now
+The plan in `docs/service-assurance.md` ended with three questions. All three are now
 settled and written into it.
 
 **Browser engine.** There is no European alternative worth switching to: the
@@ -91,7 +155,7 @@ Still plan only — no Service Tests code ships in this version.
 
 ## 0.118.4 — Service Tests V1: the integration plan
 
-`docs/service-tests.md` records the agreed design for **Service Tests** — the
+`docs/service-assurance.md` records the agreed design for **Service Tests** — the
 no-code module where an operator registers a web application, runs Discovery,
 accepts suggested tests, builds them with drag & drop, runs them and schedules
 them. Plan only: no Service Tests code ships in this version.

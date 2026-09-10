@@ -26,16 +26,12 @@ test('GET /license/matrix marks each feature available|roadmap', async () => {
   assert.equal(byKey.sso_ldap, 'available');
   assert.equal(byKey.sso_oidc, 'available');
   assert.equal(byKey.sso_saml, 'available');
-  assert.equal(byKey.service_tests, 'roadmap'); // in flight — docs/service-tests.md
+  assert.equal(byKey.service_tests, 'available'); // Service Assurance — docs/service-assurance.md
   assert.equal(byKey.ha_deployment, undefined); // retired
 });
 
-test('the only catalogued roadmap key is the one currently being built', () => {
-  // The ROADMAP process registers a feature key BEFORE the work starts, so a key
-  // queued here is expected. `service_tests` is in flight (docs/service-tests.md);
-  // it flips to `available` when the module ships. Anything ELSE appearing in this
-  // list means a feature was catalogued and then forgotten.
-  assert.deepEqual([...ROADMAP_FEATURE_KEYS].sort(), ['service_tests']);
+test('catalogue has no remaining roadmap keys (all shipped)', () => {
+  assert.deepEqual([...ROADMAP_FEATURE_KEYS].sort(), []);
   // Every catalogue entry has a known status.
   for (const meta of Object.values(FEATURE_CATALOG)) {
     assert.ok(meta.status === 'available' || meta.status === 'roadmap');

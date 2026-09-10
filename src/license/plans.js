@@ -43,11 +43,9 @@ const FEATURE_CATALOG = {
   sso_oidc: { label: 'SSO (OIDC)', minPlan: 'professional', status: 'available' },
   sso_saml: { label: 'SSO (SAML)', minPlan: 'professional', status: 'available' },
   premium_support: { label: 'Premium / priority support', minPlan: 'professional', status: 'available' },
-  // Service Tests (docs/service-tests.md). Registered ahead of the build per the
-  // ROADMAP process: `roadmap` until the module ships end-to-end, then flipped to
-  // `available`. The key already grants entitlement below, so the routes can be
-  // gated from the first one that exists — `status` is display-only.
-  service_tests: { label: 'Service Tests', minPlan: 'professional', status: 'roadmap' },
+  // BlueEye Service Assurance (docs/service-assurance.md) — no-code synthetic
+  // monitoring of web applications. Shipped end to end, so `available`.
+  service_tests: { label: 'Service Assurance', minPlan: 'professional', status: 'available' },
 };
 
 const ALL_FEATURE_KEYS = Object.keys(FEATURE_CATALOG);

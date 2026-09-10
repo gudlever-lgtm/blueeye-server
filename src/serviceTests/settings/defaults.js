@@ -4,7 +4,7 @@
 // OVERRIDES live in the database (`service_test_settings`). Nothing in this
 // module reads an environment variable for a limit: an operator changes a budget,
 // a cap or a retention window from the UI and it takes effect without a redeploy
-// (docs/service-tests.md §6, §7).
+// (docs/service-assurance.md §6, §7).
 //
 // Every field is bounded. The bounds are a hard contract — a stored row that
 // falls outside them is ignored in favour of the default, so a bad write (or a

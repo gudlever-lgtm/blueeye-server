@@ -1,0 +1,401 @@
+'use strict';
+
+// HTTP specs for the Service Assurance API. Every endpoint is exercised for the
+// contract the repo requires — 400 / 401 / 403 / 404 and never a 500 — plus the
+// rules that only exist at this layer: the licence gate, RBAC, and the SSRF
+// allowlist decisions that guard what the browser may reach.
+
+process.env.NODE_ENV = 'test';
+process.env.JWT_SECRET = 'test-secret-do-not-use-in-prod';
+
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const request = require('supertest');
+
+const { makeApp, makeFeatureGate, authHeader } = require('../../../../test-support/fakes');
+const { makeServiceTests } = require('../../../../test-support/serviceTestsFakes');
+
+const BASE = '/api/service-tests';
+const app = () => makeApp();
+
+const get = (path, role) => request(app()).get(`${BASE}${path}`).set('Authorization', authHeader(role));
+
+// ------------------------------------------------------------------ licence
+test('the whole module is licence-gated, and an anonymous request is 401 rather than a licence leak', async () => {
+  const unlicensed = makeApp({ featureGate: makeFeatureGate({ isFeatureEnabled: (f) => f !== 'service_tests' }) });
+
+  const anon = await request(unlicensed).get(`${BASE}/applications`);
+  assert.equal(anon.status, 401, 'an anonymous caller must not learn whether the feature is licensed');
+
+  const signedIn = await request(unlicensed).get(`${BASE}/applications`).set('Authorization', authHeader('admin'));
+  assert.equal(signedIn.status, 403);
+  assert.equal(signedIn.body.error, 'feature_not_available');
+  assert.equal(signedIn.body.feature, 'service_tests');
+});
+
+test('a deployment without the module answers 404, not 500', async () => {
+  const without = makeApp({ serviceTests: null });
+  assert.equal((await request(without).get(`${BASE}/applications`).set('Authorization', authHeader('admin'))).status, 404);
+});
+
+// ------------------------------------------------------------------ RBAC
+test('reads are open to viewers; application, credential and allowlist writes are admin-only', async () => {
+  for (const path of ['/applications', '/tests', '/runs', '/schedules', '/settings', '/discovery']) {
+    assert.equal((await get(path, 'viewer')).status, 200, `GET ${path}`);
+  }
+  const writes = [
+    ['post', '/applications', { name: 'X', base_url: 'https://x.example.com' }],
+    ['post', '/environments', { application_id: 1, name: 'E', base_url: 'https://x.example.com' }],
+    ['post', '/credentials', { application_id: 1, label: 'L', secret: 'long-enough' }],
+    ['post', '/applications/1/allowed-hosts', { value: 'portal.kunde.dk' }],
+  ];
+  for (const [method, path, body] of writes) {
+    for (const role of ['viewer', 'operator']) {
+      const res = await request(app())[method](`${BASE}${path}`).set('Authorization', authHeader(role)).send(body);
+      assert.equal(res.status, 403, `${role} ${method} ${path}`);
+    }
+    const ok = await request(app())[method](`${BASE}${path}`).set('Authorization', authHeader('admin')).send(body);
+    assert.equal(ok.status, 201, `admin ${method} ${path} → ${ok.status} ${JSON.stringify(ok.body)}`);
+  }
+});
+
+test('building and running a test is operator work, not admin-only', async () => {
+  const definition = { version: 1, name: 'T', steps: [{ type: 'open', url: '/' }] };
+  const created = await request(app()).post(`${BASE}/tests`).set('Authorization', authHeader('operator'))
+    .send({ application_id: 1, name: 'T', definition });
+  assert.equal(created.status, 201);
+
+  const run = await request(app()).post(`${BASE}/tests/1/run`).set('Authorization', authHeader('operator')).send({});
+  assert.equal(run.status, 202);
+  assert.ok(run.body.run_id);
+  assert.equal(run.body.status, 'queued', 'a run is queued for the worker, never executed in the request');
+});
+
+test('credentials are admin-only even to READ — the list reveals which systems have stored logins', async () => {
+  for (const role of ['viewer', 'operator']) {
+    assert.equal((await get('/credentials', role)).status, 403, role);
+  }
+  assert.equal((await get('/credentials', 'admin')).status, 200);
+});
+
+// ------------------------------------------------------------------ secrets
+test('no response anywhere exposes a stored password', async () => {
+  const created = await request(app()).post(`${BASE}/credentials`).set('Authorization', authHeader('admin'))
+    .send({ application_id: 1, label: 'Portal', username: 'svc', secret: 'hunter2-correct-horse' });
+  assert.equal(created.status, 201);
+  assert.equal(created.body.has_secret, true);
+
+  const responses = [
+    created,
+    await get('/credentials', 'admin'),
+    await get('/credentials/1', 'admin'),
+    await get('/applications/1', 'admin'),
+  ];
+  for (const res of responses) {
+    const body = JSON.stringify(res.body);
+    assert.ok(!body.includes('hunter2-correct-horse'), 'a password reached an API response');
+    assert.ok(!body.includes('secret_encrypted'), 'even the ciphertext must not leave the repository');
+  }
+});
+
+// ------------------------------------------------------------------ 400/404
+test('every :id route answers 400 for a malformed id and 404 for an absent one — never 500', async () => {
+  const paths = [
+    '/applications/:id', '/environments/:id', '/credentials/:id', '/tests/:id',
+    '/runs/:id', '/discovery/:id', '/schedules/:id', '/tests/:id/versions',
+    '/tests/:id/history', '/applications/:id/allowed-hosts', '/runs/:id/screenshot',
+  ];
+  for (const template of paths) {
+    for (const bad of ['abc', '-1', '1.5', '0', '%20']) {
+      const res = await get(template.replace(':id', bad), 'admin');
+      assert.ok([400, 404].includes(res.status), `${template} with "${bad}" → ${res.status}`);
+    }
+    const missing = await get(template.replace(':id', '99999'), 'admin');
+    assert.equal(missing.status, 404, `${template} with an absent id → ${missing.status}`);
+  }
+});
+
+test('create endpoints answer 400 with the documented contract', async () => {
+  const cases = [
+    ['/applications', {}],
+    ['/environments', {}],
+    ['/credentials', {}],
+    ['/tests', {}],
+    ['/schedules', {}],
+    ['/discovery', {}],
+  ];
+  for (const [path, body] of cases) {
+    const res = await request(app()).post(`${BASE}${path}`).set('Authorization', authHeader('admin')).send(body);
+    assert.equal(res.status, 400, `POST ${path}`);
+    assert.equal(res.body.error, 'Validation failed', `POST ${path}`);
+    assert.ok(res.body.details && Object.keys(res.body.details).length, `POST ${path} has no details`);
+  }
+});
+
+test('a hostile query string is a 4xx, never a 500', async () => {
+  const hostile = ['?application_id=abc', '?application_id=1;DROP TABLE', '?status=nope', '?test_id=-1', '?limit=abc'];
+  for (const q of hostile) {
+    for (const path of ['/applications', '/tests', '/runs', '/schedules', '/discovery', '/suggestions']) {
+      const res = await get(`${path}${q}`, 'admin');
+      assert.ok(res.status < 500, `GET ${path}${q} → ${res.status}`);
+    }
+  }
+});
+
+// ------------------------------------------------------------------ SSRF
+test('an application cannot be pointed at an address the browser must never reach', async () => {
+  for (const base_url of ['http://127.0.0.1:3000', 'http://localhost/', 'http://169.254.169.254/', 'file:///etc/passwd']) {
+    const res = await request(app()).post(`${BASE}/applications`).set('Authorization', authHeader('admin'))
+      .send({ name: 'Evil', base_url });
+    assert.equal(res.status, 400, base_url);
+    assert.ok(res.body.details.base_url, base_url);
+  }
+});
+
+test('the allowlist refuses loopback and metadata, caps a range, and accepts a private LAN', async () => {
+  const post = (value) => request(app()).post(`${BASE}/applications/1/allowed-hosts`)
+    .set('Authorization', authHeader('admin')).send({ value });
+
+  for (const blocked of ['127.0.0.1', '127.0.0.0/8', 'localhost', '169.254.169.254', '0.0.0.0/8']) {
+    const res = await post(blocked);
+    assert.equal(res.status, 400, blocked);
+    assert.match(res.body.details.value, /never be allowlisted|permanently blocked/, blocked);
+  }
+  const tooWide = await post('10.0.0.0/8');
+  assert.equal(tooWide.status, 400);
+  assert.match(tooWide.body.details.value, /16,777,216 addresses/);
+
+  // RFC1918 is allowlistable — on-prem applications live there.
+  const ok = await post('10.20.0.0/16');
+  assert.equal(ok.status, 201);
+  assert.equal(ok.body.entry_type, 'cidr');
+});
+
+test('the allowlist address cap counts the whole application, not each entry alone', async () => {
+  const st = makeServiceTests();
+  const scoped = makeApp({ serviceTests: st });
+  const post = (value) => request(scoped).post(`${BASE}/applications/1/allowed-hosts`)
+    .set('Authorization', authHeader('admin')).send({ value });
+
+  assert.equal((await post('10.20.0.0/16')).status, 201);
+  const second = await post('10.30.0.0/16');
+  assert.equal(second.status, 400, 'a second /16 exceeds the 65 536 cap for one application');
+  assert.match(second.body.details.value, /131,072 addresses/);
+});
+
+test('import validates every row before writing anything, and dry-run writes nothing', async () => {
+  const st = makeServiceTests();
+  const scoped = makeApp({ serviceTests: st });
+  const imp = (text, query = '') => request(scoped).post(`${BASE}/applications/1/allowed-hosts/import${query}`)
+    .set('Authorization', authHeader('admin')).send({ text });
+
+  const bad = await imp('portal.kunde.dk\n127.0.0.1\n10.0.0.0/8');
+  assert.equal(bad.status, 400);
+  assert.ok(bad.body.details['line 2'], 'the offending line is named');
+  assert.ok(bad.body.details['line 3']);
+  assert.equal(st.tables.allowedHosts.rows.length, 0, 'one bad row must not leave a half-applied allowlist');
+
+  const dry = await imp('portal.kunde.dk\n10.20.0.0/24', '?dry_run=1');
+  assert.equal(dry.status, 200);
+  assert.equal(dry.body.dry_run, true);
+  assert.equal(dry.body.added, 2);
+  assert.equal(st.tables.allowedHosts.rows.length, 0, 'a dry run writes nothing');
+
+  const real = await imp('portal.kunde.dk\n10.20.0.0/24');
+  assert.equal(real.status, 200);
+  assert.equal(st.tables.allowedHosts.rows.length, 2);
+});
+
+test('the allowlist exports as CSV with the formula-injection guard intact', async () => {
+  const st = makeServiceTests();
+  const scoped = makeApp({ serviceTests: st });
+  await request(scoped).post(`${BASE}/applications/1/allowed-hosts`).set('Authorization', authHeader('admin'))
+    .send({ value: 'portal.kunde.dk', note: '=cmd|calc' });
+
+  const res = await request(scoped).get(`${BASE}/applications/1/allowed-hosts/export.csv`).set('Authorization', authHeader('admin'));
+  assert.equal(res.status, 200);
+  assert.match(res.headers['content-type'], /text\/csv/);
+  assert.match(res.text, /^type,value,note/);
+  assert.ok(res.text.includes("'=cmd|calc"), 'a note starting with = must not execute when the CSV is opened');
+});
+
+// ------------------------------------------------------------------ tests API
+test('a test that signs in cannot be saved without a usable credential', async () => {
+  const definition = {
+    version: 1,
+    name: 'Login',
+    steps: [{ type: 'fill', target: { label: 'Password' }, value: '{{credential.password}}' }],
+  };
+  const noCred = await request(app()).post(`${BASE}/tests`).set('Authorization', authHeader('operator'))
+    .send({ application_id: 1, name: 'Login', definition });
+  assert.equal(noCred.status, 400);
+  assert.ok(noCred.body.details.credential_id);
+
+  const withCred = await request(app()).post(`${BASE}/tests`).set('Authorization', authHeader('operator'))
+    .send({ application_id: 1, name: 'Login', definition, credential_id: 1 });
+  assert.equal(withCred.status, 201, JSON.stringify(withCred.body));
+});
+
+test('a credential from another application is refused', async () => {
+  const st = makeServiceTests();
+  const scoped = makeApp({ serviceTests: st });
+  await request(scoped).post(`${BASE}/applications`).set('Authorization', authHeader('admin'))
+    .send({ name: 'Other', base_url: 'https://other.example.com' });
+
+  const res = await request(scoped).post(`${BASE}/tests`).set('Authorization', authHeader('operator')).send({
+    application_id: 2,
+    name: 'Login',
+    definition: { version: 1, name: 'Login', steps: [{ type: 'login' }] },
+    credential_id: 1,
+  });
+  assert.equal(res.status, 400);
+  assert.match(res.body.details.credential_id, /different application/);
+});
+
+test('saving a test bumps its version', async () => {
+  const st = makeServiceTests();
+  const scoped = makeApp({ serviceTests: st });
+  const res = await request(scoped).put(`${BASE}/tests/1`).set('Authorization', authHeader('operator'))
+    .send({ definition: { version: 1, name: 'Customer Login', steps: [{ type: 'open', url: '/login' }, { type: 'refresh' }] } });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.version, 2);
+});
+
+test('the step catalogue is served rather than duplicated in the browser', async () => {
+  const res = await get('/tests/step-types', 'viewer');
+  assert.equal(res.status, 200);
+  const types = res.body.categories.flatMap((c) => c.steps.map((s) => s.type));
+  for (const required of ['open', 'click', 'fill', 'assert_visible', 'wait', 'condition', 'login', 'api_request']) {
+    assert.ok(types.includes(required), `the catalogue is missing ${required}`);
+  }
+});
+
+test('running a test against another application\'s environment is refused', async () => {
+  const res = await request(app()).post(`${BASE}/tests/1/run`).set('Authorization', authHeader('operator'))
+    .send({ environment_id: 9999 });
+  assert.equal(res.status, 400);
+  assert.ok(res.body.details.environment_id);
+});
+
+// ------------------------------------------------------------------ discovery
+test('a discovery is queued, and its budgets can only be tightened, never widened', async () => {
+  const st = makeServiceTests();
+  const scoped = makeApp({ serviceTests: st });
+  const res = await request(scoped).post(`${BASE}/discovery`).set('Authorization', authHeader('operator'))
+    .send({ application_id: 1, budgets: { maxPages: 999999, maxDepth: 2 } });
+
+  assert.equal(res.status, 202);
+  assert.equal(res.body.status, 'queued');
+  assert.equal(res.body.budgets.maxPages, 100, 'an operator cannot exceed the configured page budget');
+  assert.equal(res.body.budgets.maxDepth, 2, 'but may tighten it');
+});
+
+test('discovery is refused for a viewer', async () => {
+  const res = await request(app()).post(`${BASE}/discovery`).set('Authorization', authHeader('viewer')).send({ application_id: 1 });
+  assert.equal(res.status, 403);
+});
+
+test('accepting a suggestion creates a test through the same validator a hand-built one uses', async () => {
+  const st = makeServiceTests();
+  const scoped = makeApp({ serviceTests: st });
+  await st.repositories.suggestions.createMany(1, 1, [{
+    name: 'Login',
+    confidence: 'high',
+    reason: 'Detected a password field.',
+    proposed_steps: [{ type: 'open', url: '/login' }, { type: 'assert_http_status', status: 200 }],
+  }]);
+
+  const accepted = await request(scoped).post(`${BASE}/suggestions/1/accept`).set('Authorization', authHeader('operator')).send({});
+  assert.equal(accepted.status, 201);
+  assert.equal(accepted.body.test.name, 'Login');
+  assert.equal(accepted.body.suggestion.status, 'accepted');
+
+  const again = await request(scoped).post(`${BASE}/suggestions/1/accept`).set('Authorization', authHeader('operator')).send({});
+  assert.equal(again.status, 409, 'a suggestion must not be accepted into two tests');
+});
+
+test('a suggestion whose proposed steps are invalid is refused rather than creating a broken test', async () => {
+  const st = makeServiceTests();
+  const scoped = makeApp({ serviceTests: st });
+  await st.repositories.suggestions.createMany(1, 1, [{ name: 'Bad', proposed_steps: [{ type: 'open', url: 'file:///etc/passwd' }] }]);
+
+  const res = await request(scoped).post(`${BASE}/suggestions/1/accept`).set('Authorization', authHeader('operator')).send({});
+  assert.equal(res.status, 400);
+  assert.equal(st.tables.tests.rows.length, 1, 'no test was created');
+});
+
+// ------------------------------------------------------------------ schedules
+test('a schedule only accepts the offered cadences', async () => {
+  for (const interval of [42, 1, 0, -300, 'often']) {
+    const res = await request(app()).post(`${BASE}/schedules`).set('Authorization', authHeader('operator'))
+      .send({ test_id: 1, interval_sec: interval });
+    assert.equal(res.status, 400, String(interval));
+  }
+  const ok = await request(app()).post(`${BASE}/schedules`).set('Authorization', authHeader('operator'))
+    .send({ test_id: 1, interval_sec: 300, timezone: 'Europe/Copenhagen' });
+  assert.equal(ok.status, 201);
+  assert.ok(ok.body.next_run_at, 'the response says when it fires next');
+  assert.match(ok.body.description, /5\./);
+});
+
+test('an unrecognised timezone is refused', async () => {
+  const res = await request(app()).post(`${BASE}/schedules`).set('Authorization', authHeader('operator'))
+    .send({ test_id: 1, interval_sec: 300, timezone: 'Mars/Olympus' });
+  assert.equal(res.status, 400);
+  assert.ok(res.body.details.timezone);
+});
+
+// ------------------------------------------------------------------ settings
+test('settings are stored in the database and bounded — a limit cannot be set outside its range', async () => {
+  const st = makeServiceTests();
+  const scoped = makeApp({ serviceTests: st });
+
+  const bad = await request(scoped).put(`${BASE}/settings/allowlist`).set('Authorization', authHeader('admin'))
+    .send({ minCidrPrefix: 4 });
+  assert.equal(bad.status, 400);
+
+  const ok = await request(scoped).put(`${BASE}/settings/discovery`).set('Authorization', authHeader('admin'))
+    .send({ maxPages: 25 });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.body.maxPages, 25);
+  assert.equal((await request(scoped).get(`${BASE}/settings/discovery`).set('Authorization', authHeader('viewer'))).body.maxPages, 25);
+});
+
+test('settings writes are admin-only and an unknown section is 404', async () => {
+  for (const role of ['viewer', 'operator']) {
+    const res = await request(app()).put(`${BASE}/settings/discovery`).set('Authorization', authHeader(role)).send({ maxPages: 10 });
+    assert.equal(res.status, 403, role);
+  }
+  assert.equal((await get('/settings/nosuchsection', 'admin')).status, 404);
+  const res = await request(app()).put(`${BASE}/settings/nosuchsection`).set('Authorization', authHeader('admin')).send({ x: 1 });
+  assert.equal(res.status, 404);
+});
+
+test('a settings reset returns the section to its shipped defaults', async () => {
+  const st = makeServiceTests();
+  const scoped = makeApp({ serviceTests: st });
+  await request(scoped).put(`${BASE}/settings/runner`).set('Authorization', authHeader('admin')).send({ concurrency: 9 });
+  const reset = await request(scoped).post(`${BASE}/settings/runner/reset`).set('Authorization', authHeader('admin')).send({});
+  assert.equal(reset.status, 200);
+  assert.equal(reset.body.concurrency, 2);
+});
+
+// ------------------------------------------------------------------ runs
+test('a run with no screenshot answers 404 rather than an empty image', async () => {
+  const st = makeServiceTests();
+  const scoped = makeApp({ serviceTests: st });
+  await request(scoped).post(`${BASE}/tests/1/run`).set('Authorization', authHeader('operator')).send({});
+  assert.equal((await request(scoped).get(`${BASE}/runs/1/screenshot`).set('Authorization', authHeader('viewer'))).status, 404);
+});
+
+test('worker status tells the UI whether anything is processing the queue', async () => {
+  const res = await get('/runs/worker-status', 'viewer');
+  assert.equal(res.status, 200);
+  assert.equal(res.body.connected, false, 'nothing has claimed a run, so no worker is connected');
+});
+
+test('an oversized body is refused before it reaches a handler', async () => {
+  const res = await request(app()).post(`${BASE}/applications`).set('Authorization', authHeader('admin'))
+    .send({ name: 'X', base_url: 'https://x.example.com', description: 'y'.repeat(2 * 1024 * 1024) });
+  assert.ok(res.status >= 400 && res.status < 500, `→ ${res.status}`);
+});

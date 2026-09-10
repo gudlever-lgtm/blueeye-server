@@ -3,7 +3,7 @@
 // The adapter boundary between Service Tests and its host.
 //
 // Service Tests is built inside BlueEye but must be liftable out and run
-// standalone without a rewrite (docs/service-tests.md §2, spec §32). The way that
+// standalone without a rewrite (docs/service-assurance.md §2, spec §32). The way that
 // is kept true: no file under src/serviceTests/ ever requires a BlueEye module
 // directly. Everything the module needs from its host arrives through the object
 // described here, and BlueEye supplies it in exactly one place (src/server.js).

@@ -1,18 +1,29 @@
-# Service Tests V1 — implementation plan
+# BlueEye Service Assurance — implementation plan
 
-> **Status: phases 1-2 landed** (migration 078 + `src/serviceTests/` storage and
-> settings). Everything from phase 3 on — routers, DSL, worker, discovery,
-> suggestions, scheduler, UI — is still design. This document is the agreed
-> integration design (guardrail 34) and the file/table/route inventory the
-> implementation follows. Read it with [CODEMAP.md](../CODEMAP.md).
+> **Know when your digital services stop working — before your users do.**
+
+> **Status: V1 complete.** All fourteen phases are implemented — data model,
+> applications/environments/credentials, the DSL, the Playwright engine, the Test
+> Designer, runs and results, Discovery, rule-based suggestions, the scheduler,
+> history, the security pass and the UI. The module is mounted in
+> `src/routes/index.js` and assembled in `src/server.js`; the browser worker runs
+> as its own process (`npm run service-test-worker`).
 >
-> Nothing is wired into `src/routes/index.js` or `src/server.js` yet: the module
-> is constructed in the same commit as the first routes that use it, so this
-> never becomes a repeat of migration 046's unmounted first cut.
+> This document remains the design of record. Read it with [CODEMAP.md](../CODEMAP.md).
 
 **What it is:** a no-code module where a non-technical operator registers a web
 application, runs Discovery, accepts suggested tests, builds them with drag &
 drop, runs them, sees why they failed, and schedules them.
+
+### A note on the name
+
+The product is **Service Assurance** — that is the nav entry, the page header,
+the licence label and the word every screen uses. The INTERNAL identifiers stay
+`service_test*`: `src/serviceTests/`, the `service_test_*` tables, the
+`/api/service-tests` mount and the `service_tests` licence key. The tables shipped
+under those names before the product was named, and renaming a schema to match a
+label buys nothing a customer can see. Anywhere a human reads it, it says Service
+Assurance.
 
 **What it is not:** a general QA framework. No AI, no self-healing selectors, no
 visual regression, no CI/CD integration, no arbitrary script execution (spec §33).
@@ -487,30 +498,52 @@ Route-count and validator-count floors only rise.
 
 ---
 
-## 11. Delivery order
+## 11. What shipped
 
-Each phase is independently testable and leaves `main` green.
+| Phase (spec §40) | Where it lives |
+| --- | --- |
+| 1–2 · structure + data model | `migrations/078_create_service_tests.sql` (15 tables), `src/serviceTests/storage/`, `ports.js` |
+| 3–4 · applications + credentials | `api/applications.js`, `validation/`, `security/hostPolicy.js`, `security/allowlistIo.js` |
+| 5 · the DSL | `engine/dsl.js` (22 step types), `validate.js`, `targeting.js`, `redact.js` — all pure |
+| 6 · the engine | `runner/driver.js` (the only Playwright file), `execute.js`, `classify.js`, `artifacts.js` |
+| 7 · Test Designer | `public/serviceAssurance.js` — drag & drop over the HTML5 API, no library |
+| 8 · runs + results | `api/runs.js`, `scheduler/worker.js`, screenshots on failure only |
+| 9 · Discovery | `discovery/crawl.js`, `extract.js`, `safety.js`, `runner/pageSnapshot.js` |
+| 10 · suggestions | `suggest/rules.js` — six rules, each carrying its reason |
+| 11 · scheduler | `scheduler/schedule.js`, `queue.js`, the worker loop |
+| 12 · history | `runsRepository.history()` + the PASS/FAIL strip in the UI |
+| 13 · security | the two-check host policy, redaction, DOM masking before capture, gate extensions |
+| 14 · UI | `public/serviceAssurance.js` + `.css`, `views.serviceAssurance`, 107 i18n keys in en + da |
 
-| PR | Phase (spec §40) | Contents |
-| --- | --- | --- |
-| 1 ✅ | 1–2 | Feature key registered (`plans.js` + ROADMAP.md + the two test updates in §8), module skeleton, `ports.js`, DB-backed settings, migration 078, `schema.sql`, repositories + 51 repo/settings specs |
-| 2 | 3–4 | Applications, Environments, Credentials — routers, validators, RBAC, licence gate, audit; host policy + allowlist CRUD/import/export; UI list/forms |
-| 3 | 5 | The DSL: `dsl.js`, `validate.js`, `targeting.js`, `redact.js` — pure, fully unit-tested |
-| 4 | 6 | `driver.js` (Playwright), `execute.js`, `classify.js`, `artifacts.js`, worker + queue, worker Dockerfile + compose profile |
-| 5 | 7–8 | Test Designer (drag & drop), run + results + screenshots + logs, failure classification UI |
-| 6 | 9–10 | Discovery (crawl, extract, safety, budgets) + rule-based suggestions + the accept flow |
-| 7 | 11–12 | Scheduler + history (last run, success rate, avg duration, last failure) + artefact retention job |
-| 8 | 13–14 | Security hardening pass, gate extensions, `status: 'available'` flip, docs, UI polish, i18n sweep |
+Every endpoint is tested for 400/401/403/404/500, the whole suite runs offline
+(the DNS resolver, the browser and the driver are all injected), and the gate
+sweeps the module's routes and validators alongside the rest of the server.
 
-Every PR: `npm test` green, endpoints tested for 400/401/403/404/500, no outbound
-network in tests, `npm version patch|minor --no-git-tag-version`, `CHANGELOG.md` entry.
+**Definition of done** is spec §41 — the 18-step non-technical user journey, end
+to end, without writing code. The one step that is deliberately incomplete is
+`upload`: a test can declare it, and the runner refuses it honestly rather than
+reading a file off the worker's disk. Attaching a file to a test is the follow-up
+that makes it real.
 
-**Definition of done** is spec §41 — the 18-step non-technical user journey, end to
-end, without writing code.
+## 12. Running the worker
+
+The API queues; the worker executes. Without one, runs sit at `queued` and the UI
+says so rather than hanging.
+
+```
+# in the stack
+COMPOSE_PROFILES=service-assurance docker compose up --build
+
+# or directly, against the same database and the SAME SECRET_ENCRYPTION_KEY
+npm run service-test-worker
+```
+
+Scaling out is `--scale service-assurance-worker=3`: the claim is a conditional
+`UPDATE`, so several workers never run the same job twice.
 
 ---
 
-## 12. Decisions taken
+## 13. Decisions taken
 
 1. **Playwright + distro Chromium in a separate Debian worker image** — agreed.
    Rationale and the disk-usage plan are §7.

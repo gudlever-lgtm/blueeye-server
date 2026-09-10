@@ -71,7 +71,10 @@ function stepLabel(step) {
     case 'assert_not_visible': return `Kontroller at${target} ikke er synlig`;
     case 'assert_text_contains': return `Kontroller at${target} indeholder "${step.value}"`;
     case 'assert_text_equals': return `Kontroller at${target} er "${step.value}"`;
-    case 'assert_title_contains': return `Kontroller at sidetitlen indeholder "${step.value}"`;
+    // Reads as a sentence, because this label IS the run log. The step it
+    // replaced rendered as `Kontroller at teksten "X" indeholder "X"` — a
+    // tautology that told an operator nothing about what was being checked.
+    case 'assert_title_contains': return `Kontroller at siden identificeres med titlen "${step.value}"`;
     case 'assert_url_contains': return `Kontroller at adressen indeholder "${step.value}"`;
     case 'assert_url_equals': return `Kontroller at adressen er "${step.value}"`;
     case 'wait': return step.ms !== undefined ? `Vent ${step.ms} ms` : `Vent på${target}`;
@@ -149,7 +152,7 @@ async function runStep(step, { driver, credential, ctx }) {
     case 'assert_title_contains': {
       const title = String(await titleOf(driver) ?? '');
       if (!title.includes(step.value)) {
-        throw assertionFailure(`sidetitlen "${step.value}"`, title ? `"${title}"` : 'ingen titel');
+        throw assertionFailure(`en side med titlen "${step.value}"`, title ? `titlen "${title}"` : 'ingen titel');
       }
       return;
     }

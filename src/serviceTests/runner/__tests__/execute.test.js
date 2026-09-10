@@ -247,7 +247,7 @@ test('a wrong title fails with what was expected and what was there', async () =
   }, { driver });
 
   assert.equal(result.status, 'fail');
-  assert.match(result.error_message, /sidetitlen "fellis\.eu"/);
+  assert.match(result.error_message, /en side med titlen "fellis\.eu"/);
   assert.match(result.error_message, /Noah ITAM/, 'the operator is told what the title actually was');
 });
 

@@ -96,7 +96,7 @@ const STEPS = {
   // full step timeout.
   assert_title_contains: {
     category: 'validation',
-    label: 'Kontroller sidetitel indeholder',
+    label: 'Kontroller sidens titel',
     fields: { value: { type: 'text', required: true, max: 1024 } },
   },
   assert_url_contains: {

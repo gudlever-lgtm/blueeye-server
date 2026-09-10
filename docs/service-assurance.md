@@ -538,6 +538,19 @@ COMPOSE_PROFILES=service-assurance docker compose up --build
 npm run service-test-worker
 ```
 
+`scripts/deploy.sh` rebuilds the worker with the rest of the stack on any host
+that already runs one, and keeps the replica count it finds — so a worker is
+never left on old code while the server updates. The first time, opt in:
+
+```bash
+BLUEEYE_SERVICE_ASSURANCE=1 ./scripts/deploy.sh     # start one
+BLUEEYE_ASSURANCE_WORKERS=3 ./scripts/deploy.sh     # start three
+BLUEEYE_ASSURANCE_WORKERS=0 ./scripts/deploy.sh     # stop them again
+```
+
+A deployment that does not use Service Assurance builds nothing extra: the
+worker image is Debian + Chromium, and it is not in the default service set.
+
 Two things must match the API server, and both fail quietly rather than loudly
 if they do not:
 

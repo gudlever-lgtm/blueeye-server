@@ -16,14 +16,19 @@ const admin = () => authHeader('admin');
 const operator = () => authHeader('operator');
 const viewer = () => authHeader('viewer');
 
-const VALID = { type: 'servicenow', base_url: 'https://acme.service-now.com', auth_type: 'basic', credentials: { username: 'svc', password: 'pw' }, enabled: true };
+// Long and distinctive on purpose: the encryption-at-rest assertion below looks
+// for the plaintext inside a base64url ciphertext, and a two-character needle
+// like 'pw' turns up there by chance about 2.7% of the time — a correct
+// implementation failing at random, and no real assurance when it passed.
+const PASSWORD = 'correct-horse-battery-staple-9f3c';
+const VALID = { type: 'servicenow', base_url: 'https://acme.service-now.com', auth_type: 'basic', credentials: { username: 'svc', password: PASSWORD }, enabled: true };
 
 // A stored, enabled config row (credentials encrypted with the given box).
 function seededConfig(box, over = {}) {
   return makeCmdbConfigRepo({
     row: {
       id: 1, type: 'servicenow', base_url: 'https://acme.service-now.com', auth_type: 'basic',
-      credentials_encrypted: box.encryptJson({ username: 'svc', password: 'pw' }),
+      credentials_encrypted: box.encryptJson({ username: 'svc', password: PASSWORD }),
       enabled: true, verified_at: null, updated_by: 1,
       created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z',
       ...over,
@@ -57,11 +62,11 @@ test('PUT valid payload -> 200; GET never returns credentials but flags credenti
   assert.equal(put.body.credentials, undefined);
   assert.equal(put.body.credentials_encrypted, undefined);
   assert.equal(put.body.credentialsSet, true);
-  assert.ok(!JSON.stringify(put.body).includes('pw'));
+  assert.ok(!JSON.stringify(put.body).includes(PASSWORD));
   // Stored at rest as an encrypted secret-box token (never plaintext).
   const stored = await repo.getWithSecret();
   assert.ok(stored.credentials_encrypted.startsWith('v1.gcm.'));
-  assert.ok(!stored.credentials_encrypted.includes('pw'));
+  assert.ok(!stored.credentials_encrypted.includes(PASSWORD));
 
   const get = await request(app).get('/api/settings/cmdb').set('Authorization', admin());
   assert.equal(get.status, 200);

@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.123.3 — Service Assurance reacts to what it finds
+## 0.123.4 — Service Assurance reacts to what it finds
 
 The module recorded and stopped. A scheduled test failed at 02:00, `classify.js`
 wrote "The TLS certificate is expired, self-signed, or issued for a different
@@ -42,6 +42,34 @@ certificates now"), the `assurance` settings section, `GET/POST
 The sweep runs in the API process, not the browser worker — it needs no browser,
 and the alerting config lives there. So an install with no worker connected at
 all still gets its certificates watched.
+
+## 0.122.3 — the flaky test, named and fixed
+
+The gate's new failure reporting caught it on the second try. It was not a
+timing flake at all:
+
+```
+not ok 2066 - POST creates an integration; credentials are encrypted at rest
+              and never returned
+  assert.ok(!repo.rows[0].credentials_encrypted.includes('pw'))
+```
+
+The test fixture's password was the two-character string `pw`, and the
+assertion looked for it inside the stored ciphertext. The stored form is
+base64url, so the sequence `pw` turns up in the ciphertext **by chance** —
+measured at 2.7% per encryption over 20,000 samples. Two files did this, so
+roughly one suite run in eighteen failed, on correct code, with a message that
+reads like a credential leak.
+
+It also proved nothing when it passed: two characters of base64 is noise, not
+evidence that a secret is encrypted. The fixtures now use a long, distinctive
+password, which both removes the collision and makes the assertion mean what it
+says. `test/secretBox.test.js` had the same shape with `svc` (one run in 5,000)
+and is fixed with it.
+
+Fixed in `test/integrationsApi.test.js`, `test/cmdbApi.test.js` and
+`test/secretBox.test.js`. No production code changed — the encryption was
+always correct.
 
 ## 0.122.2 — a failing gate now says which test failed
 

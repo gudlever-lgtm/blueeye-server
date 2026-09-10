@@ -795,6 +795,17 @@
     }
 
     // ---------------------------------------------------------------- runs
+    // "Fellis · Production · scheduled" — the application, the environment it ran
+    // against and what started it. Each part is dropped when unknown rather than
+    // rendered as a dash, so the line stays a sentence.
+    function runSubtitle(run) {
+      return [
+        run.application_name,
+        run.environment_name,
+        run.trigger_source === 'schedule' ? t('sa.run.bySchedule') : t('sa.run.byHand'),
+      ].filter(Boolean).join(' · ');
+    }
+
     views.runs = function (body) {
       if (state.runId) return runDetail(body, state.runId);
       return Promise.all([api(API + '/runs'), api(API + '/runs/worker-status')]).then(function (res) {
@@ -811,16 +822,24 @@
           mount(body, head, warning, el('div', { class: 'sa-empty' }, t('sa.run.noneYet')));
           return;
         }
+        // Every test in the install lands in this one list, so a row has to say
+        // WHAT it was a run of. Without it, four failures from one site and a
+        // pass from another read as one service flapping — which is exactly how
+        // a healthy test got mistaken for a failing one.
         var rows = runs.map(function (run) {
           return el('tr', { class: 'clickable', onclick: function () { state.runId = run.id; draw(); } },
             el('td', {}, statusChip(run.status)),
+            el('td', {},
+              el('div', { class: 'sa-run-test' }, run.test_name || t('sa.run.deletedTest')),
+              el('div', { class: 'muted' }, runSubtitle(run))),
             el('td', {}, when(run.started_at || run.created_at)),
             el('td', {}, ms(run.duration_ms)),
             el('td', {}, run.error_message || ''));
         });
         mount(body, head, warning, el('table', { class: 'data-table' },
-          el('thead', {}, el('tr', {}, el('th', {}, t('sa.run.status')), el('th', {}, t('sa.schedule.next')),
-            el('th', {}, t('sa.run.duration')), el('th', {}, ''))),
+          el('thead', {}, el('tr', {},
+            el('th', {}, t('sa.run.status')), el('th', {}, t('sa.run.test')),
+            el('th', {}, t('sa.run.started')), el('th', {}, t('sa.run.duration')), el('th', {}, ''))),
           el('tbody', {}, ...rows)));
       });
     };
@@ -829,7 +848,8 @@
       return api(API + '/runs/' + id).then(function (run) {
         var head = el('div', {},
           el('button', { class: 'ghost small', onclick: function () { state.runId = null; draw(); } }, '← ' + t('sa.back')),
-          section(statusChip(run.status), null));
+          section(run.test_name || t('sa.run.deletedTest'), statusChip(run.status)),
+          el('p', { class: 'sa-help' }, runSubtitle(run)));
 
         var summary = el('div', { class: 'sa-stats' },
           stat(t('sa.run.status'), String(run.status).toUpperCase()),

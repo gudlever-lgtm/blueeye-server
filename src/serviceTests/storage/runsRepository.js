@@ -14,6 +14,20 @@ function createRunsRepository({ db, now = () => new Date() }) {
     duration_ms,failed_step,error_message,failure_kind,screenshot_path,browser,console_errors,network_errors,
     claimed_by,claimed_at,requested_by,created_at,updated_at`;
 
+  // The same columns qualified for a join, plus what a run needs to NAME itself.
+  // A run row on its own says only that something failed at 21:39 — the Runs
+  // screen lists every test in the install together, so without the test and
+  // application names the operator cannot tell which service the failure was
+  // about, and two applications failing look like one failing twice.
+  const JOINED = `${COLS.split(',').map((c) => `r.${c.trim()}`).join(', ')},
+    t.name AS test_name, t.application_id AS application_id,
+    a.name AS application_name,
+    e.name AS environment_name, e.base_url AS environment_url`;
+  const JOIN = `FROM service_test_runs r
+    LEFT JOIN service_test_tests t ON t.id = r.test_id
+    LEFT JOIN service_test_applications a ON a.id = t.application_id
+    LEFT JOIN service_test_environments e ON e.id = r.environment_id`;
+
   function shape(row, steps = []) {
     if (!row) return null;
     return {
@@ -39,6 +53,13 @@ function createRunsRepository({ db, now = () => new Date() }) {
       requested_by: row.requested_by,
       created_at: row.created_at,
       updated_at: row.updated_at,
+      // Present when the row came from a joined read; null on the queue paths,
+      // which deliberately do not pay for a join to claim a job.
+      test_name: row.test_name ?? null,
+      application_id: row.application_id ?? null,
+      application_name: row.application_name ?? null,
+      environment_name: row.environment_name ?? null,
+      environment_url: row.environment_url ?? null,
       steps,
     };
   }
@@ -52,23 +73,35 @@ function createRunsRepository({ db, now = () => new Date() }) {
     return rows.map((r) => ({ ...r, detail: parseJson(r.detail, null) }));
   }
 
-  async function findById(id) {
+  // The plain read, used by the QUEUE paths (enqueue, claim, complete). A worker
+  // claiming a job has no use for the test's display name, and the claim is the
+  // hot path — it must not grow three joins to serve a screen it never renders.
+  async function findRow(id) {
     const [rows] = await pool.query(`SELECT ${COLS} FROM service_test_runs WHERE id = ?`, [id]);
+    if (!rows[0]) return null;
+    return shape(rows[0], await stepsFor(id));
+  }
+
+  // The read a HUMAN gets: the same row, plus the names that say what it was a
+  // run OF. The run detail page opens on this.
+  async function findById(id) {
+    const [rows] = await pool.query(`SELECT ${JOINED} ${JOIN} WHERE r.id = ?`, [id]);
     if (!rows[0]) return null;
     return shape(rows[0], await stepsFor(id));
   }
 
   // Filterable list for the Runs screen and the history strip. `limit` is clamped
   // here rather than trusted from the query string.
-  async function list({ testId = null, status = null, limit = 50 } = {}) {
+  async function list({ testId = null, status = null, applicationId = null, limit = 50 } = {}) {
     const where = [];
     const params = [];
-    if (testId !== null) { where.push('test_id = ?'); params.push(testId); }
-    if (status !== null) { where.push('status = ?'); params.push(status); }
+    if (testId !== null) { where.push('r.test_id = ?'); params.push(testId); }
+    if (status !== null) { where.push('r.status = ?'); params.push(status); }
+    if (applicationId !== null) { where.push('t.application_id = ?'); params.push(applicationId); }
     const clause = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const capped = Math.min(500, Math.max(1, Number(limit) || 50));
     const [rows] = await pool.query(
-      `SELECT ${COLS} FROM service_test_runs ${clause} ORDER BY created_at DESC, id DESC LIMIT ?`,
+      `SELECT ${JOINED} ${JOIN} ${clause} ORDER BY r.created_at DESC, r.id DESC LIMIT ?`,
       [...params, capped]
     );
     return rows.map((r) => shape(r));
@@ -82,7 +115,7 @@ function createRunsRepository({ db, now = () => new Date() }) {
       [input.test_id, intOrNull(input.environment_id), intOrNull(input.test_version),
         input.trigger_source === 'schedule' ? 'schedule' : 'manual', intOrNull(input.requested_by)]
     );
-    return findById(res.insertId);
+    return findRow(res.insertId);
   }
 
   // Atomically claim the oldest queued run for `workerId`. Returns the claimed
@@ -102,7 +135,7 @@ function createRunsRepository({ db, now = () => new Date() }) {
       [String(workerId).slice(0, 120), at, at, id]
     );
     if (!res.affectedRows) return null; // lost the race — the caller polls again
-    return findById(id);
+    return findRow(id);
   }
 
   // Records the outcome and the per-step rows in one transaction, so a result is
@@ -135,7 +168,7 @@ function createRunsRepository({ db, now = () => new Date() }) {
         );
       }
       await conn.commit();
-      return findById(id);
+      return findRow(id);
     } catch (err) {
       await conn.rollback();
       throw err;

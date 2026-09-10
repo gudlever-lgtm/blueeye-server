@@ -221,3 +221,57 @@ test('onStep reports progress and a broken reporter cannot break the run', async
   assert.equal(result.status, 'pass');
   assert.equal(seen.length, 6);
 });
+
+// ------------------------------------------------------ the page title
+test('a title assertion reads the document title, never the page text', async () => {
+  // The whole point of the step: `<title>` lives in `<head>`, so a text target
+  // (which resolves through getByText, body only) can never match it. The
+  // suggested Login test asserted a title as page text and failed every run
+  // after burning the full step timeout.
+  const driver = makeFakeDriver({ title: 'fellis.eu – Connect. Share. Discover' });
+  const result = await executeDefinition({
+    version: 1,
+    steps: [{ type: 'assert_title_contains', value: 'Connect. Share. Discover' }],
+  }, { driver });
+
+  assert.equal(result.status, 'pass');
+  // No locator was ever resolved — the title is read off the document.
+  assert.deepEqual(driver.calls.filter((c) => c.startsWith('waitFor')), []);
+});
+
+test('a wrong title fails with what was expected and what was there', async () => {
+  const driver = makeFakeDriver({ title: 'Noah ITAM' });
+  const result = await executeDefinition({
+    version: 1,
+    steps: [{ type: 'assert_title_contains', value: 'fellis.eu' }],
+  }, { driver });
+
+  assert.equal(result.status, 'fail');
+  assert.match(result.error_message, /sidetitlen "fellis\.eu"/);
+  assert.match(result.error_message, /Noah ITAM/, 'the operator is told what the title actually was');
+});
+
+test('a page with no title says so rather than reporting an empty string', async () => {
+  const driver = makeFakeDriver({ title: '' });
+  const result = await executeDefinition({
+    version: 1,
+    steps: [{ type: 'assert_title_contains', value: 'anything' }],
+  }, { driver });
+  assert.equal(result.status, 'fail');
+  assert.match(result.error_message, /ingen titel/);
+});
+
+test('a driver that predates the step fails honestly instead of throwing TypeError', async () => {
+  // An older worker against a newer definition: without the guard this is
+  // "driver.pageTitle is not a function", which classifies as `unknown` and
+  // tells the operator nothing about their service.
+  const driver = makeFakeDriver({});
+  delete driver.pageTitle;
+  const result = await executeDefinition({
+    version: 1,
+    steps: [{ type: 'assert_title_contains', value: 'x' }],
+  }, { driver });
+  assert.equal(result.status, 'fail');
+  assert.doesNotMatch(result.error_message, /is not a function/);
+  assert.match(result.error_message, /ingen titel/);
+});

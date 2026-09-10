@@ -54,6 +54,7 @@ function makeFakeDriver(opts = {}) {
     async visible(t) { record('visible', key(t)); return visible.has(key(t)); },
     async textOf(t) { record('textOf', key(t)); return texts[key(t)] ?? ''; },
     async currentUrl() { return url; },
+    async pageTitle() { return opts.title ?? ''; },
     async waitFor(t) { record('waitFor', key(t)); },
     async sleep(ms) { record('sleep', ms); },
     async login(cred) { record('login', cred && cred.username, cred && cred.secret); },

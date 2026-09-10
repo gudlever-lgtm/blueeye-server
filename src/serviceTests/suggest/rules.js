@@ -31,9 +31,16 @@ function suggestLogin(result) {
 
   // Something that only appears after signing in is the assertion. A page the
   // crawl reached that is NOT the login page is the best available guess.
+  //
+  // The title is asserted as a TITLE (assert_title_contains), not as page text.
+  // It used to be pushed as `assert_text_contains` against `{ text: title }`,
+  // which is unfindable by construction: a title lives in `<head>` and a text
+  // target resolves through getByText, which only sees the body. Every accepted
+  // Login suggestion therefore failed on its last step, after burning the full
+  // 30-second step timeout, no matter how well the login itself worked.
   const after = (result.pages || []).find((p) => p.url !== login.url && !/login|signin|sign-in/i.test(p.url));
   if (after && after.title) {
-    steps.push({ type: 'assert_text_contains', target: { text: after.title.slice(0, 60) }, value: after.title.slice(0, 60) });
+    steps.push({ type: 'assert_title_contains', value: after.title.slice(0, 60) });
   } else {
     steps.push({ type: 'assert_url_contains', value: '/' });
   }
@@ -157,7 +164,9 @@ function suggestAvailability(result) {
     proposed_steps: [
       { type: 'open', url: pathOf(first.url) },
       { type: 'assert_http_status', status: 200 },
-      ...(first.title ? [{ type: 'assert_text_contains', target: { text: first.title.slice(0, 60) }, value: first.title.slice(0, 60) }] : []),
+      // A title, asserted as a title — see suggestLogin above for why this is
+      // not an `assert_text_contains` on the title string.
+      ...(first.title ? [{ type: 'assert_title_contains', value: first.title.slice(0, 60) }] : []),
     ],
   };
 }

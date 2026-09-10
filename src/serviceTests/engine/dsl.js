@@ -87,6 +87,18 @@ const STEPS = {
     target: 'required',
     fields: { value: { type: 'text', required: true, max: 1024 } },
   },
+  // The page TITLE — what the browser tab says — not text on the page. It gets
+  // its own step because a title cannot be reached any other way: `<title>`
+  // lives in `<head>`, so a text target (which resolves through getByText, body
+  // only) can never match it. Asserting a title as page text was exactly the bug
+  // this step exists to fix: the suggested Login test ended on a title that was
+  // never findable, and every accepted suggestion failed on it after burning the
+  // full step timeout.
+  assert_title_contains: {
+    category: 'validation',
+    label: 'Kontroller sidetitel indeholder',
+    fields: { value: { type: 'text', required: true, max: 1024 } },
+  },
   assert_url_contains: {
     category: 'validation',
     label: 'Kontroller adresse indeholder',

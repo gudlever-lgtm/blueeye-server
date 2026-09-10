@@ -222,6 +222,67 @@ test('the Login suggestion is runnable as-is, built from the targets Discovery r
   assert.ok(login.proposed_steps[1].target.label || login.proposed_steps[1].target.name);
 });
 
+test('a suggested test never asserts a page title as page text', () => {
+  // The bug this pins. Both rules used to end on
+  //   { type: 'assert_text_contains', target: { text: page.title } }
+  // where page.title is document.title — which lives in `<head>`. A text target
+  // resolves through getByText, which only sees the body, so the step could not
+  // match on ANY site: it burned the full 30-second step timeout and failed with
+  // `teksten "..." blev ikke fundet`. Every accepted Login and Availability
+  // suggestion failed on its last step regardless of how well the site worked.
+  const TITLE = 'fellis.eu – Connect. Share. Discover';
+  const suggestions = suggestTests({
+    pages: [
+      { url: 'https://fellis.eu/login', title: 'Log ind', http_status: 200 },
+      { url: 'https://fellis.eu/feed', title: TITLE, http_status: 200 },
+    ],
+    elements: [],
+    logins: [{
+      url: 'https://fellis.eu/login',
+      possible: true,
+      confidence: 'high',
+      reasons: ['a password field'],
+      username_field: { label: 'E-mail' },
+      password_field: { label: 'Kodeord' },
+      submit: { role: 'button', name: 'Log ind' },
+    }],
+  });
+
+  const steps = suggestions.flatMap((s) => s.proposed_steps || []);
+  assert.ok(steps.length > 0);
+  for (const step of steps) {
+    const targetText = step.target && step.target.text;
+    assert.ok(
+      !(targetText && targetText === TITLE),
+      `a ${step.type} step points at the page title as body text — it can never match`,
+    );
+  }
+
+  // And the assertion the Login suggestion actually makes is a TITLE assertion.
+  const login = suggestions.find((s) => s.name === 'Login');
+  const last = login.proposed_steps[login.proposed_steps.length - 1];
+  assert.equal(last.type, 'assert_title_contains');
+  assert.equal(last.value, TITLE.slice(0, 60));
+  assert.equal(last.target, undefined, 'a title is read from the document, not located on the page');
+});
+
+test('with no title to go on, the Login suggestion falls back to the address', () => {
+  const suggestions = suggestTests({
+    pages: [
+      { url: 'https://app.test/login', title: 'Log ind', http_status: 200 },
+      { url: 'https://app.test/feed', http_status: 200 },
+    ],
+    elements: [],
+    logins: [{
+      url: 'https://app.test/login', possible: true, confidence: 'medium', reasons: ['a password field'],
+      username_field: { label: 'User' }, password_field: { label: 'Pass' }, submit: { role: 'button', name: 'Ind' },
+    }],
+  });
+  const login = suggestions.find((s) => s.name === 'Login');
+  const last = login.proposed_steps[login.proposed_steps.length - 1];
+  assert.equal(last.type, 'assert_url_contains');
+});
+
 test('no login flow means no Login suggestion — the rules do not invent one', () => {
   const suggestions = suggestTests({
     pages: [{ url: 'https://app.test/', title: 'Forside', http_status: 200 }],

@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.122.2 — a failing gate now says which test failed
+
+`main` went red after the last merge with `# fail 1` out of 3236 and no name.
+The name is printed thousands of lines earlier in the TAP stream, and CI logs
+are read through an API that returns the tail — so the one thing needed to fix
+it was the one thing not visible. `scripts/gate.sh` now keeps each phase's
+output and prints the failing test names at the end, next to the BLOCKED line.
+
+**And two tests that asserted "eventually" with a fixed sleep.** Both wait for
+an asynchronous thing to finish and then assert the result:
+
+- `baselineCache` — `write()` is fire-and-forget (`mkdir` + `writeFile`) and the
+  test slept 50 ms before reading the file back.
+- `agentBinaryStore` — six waits of 50-200 ms for an async build to settle.
+
+That encodes a guess about how fast the machine is: fine on a laptop, not on a
+loaded CI runner, where it surfaces as one unexplained failure in a few thousand
+that a re-run "fixes". They now poll for the condition with a generous deadline
+via `test-support/waitFor.js` — the same assertion, without the timing
+assumption, and faster on a fast machine.
+
+Left alone: the waits that assert something did NOT happen (a debounce window,
+a dropped result). There is nothing to poll for there, and a slow machine only
+gives the unwanted event more time to appear — it cannot fail falsely.
+
+This is not proof that either test caused the red run; the failure has not been
+reproduced locally in fourteen runs, eight of them under load. It is the
+plausible cause removed, and the reporting that will name the next one.
+
 ## 0.122.1 — the worker image was missing four files it requires
 
 The worker still died at boot on a real deployment, for a second reason the

@@ -156,6 +156,37 @@ const canDelete = () => role === 'admin';
 const isAdmin = () => role === 'admin';
 
 // ---- API helper -----------------------------------------------------------
+// Inline SVG icons for icon-only buttons.
+//
+// One vocabulary across the whole dashboard: a red TRASH CAN deletes, and "×"
+// only ever closes or cancels. The two had drifted into each other — a red "×"
+// removed a transaction step here while the same mark closed a dialog two
+// screens away — and a glyph is whatever the viewer's font decides: different
+// weight per platform and blurry at button size. Stroked in currentColor, so it
+// inherits the button's colour (including .danger red) and stays sharp.
+const ICON_PATHS = {
+  trash: ['M4 7h16', 'M10 4h4', 'M6 7l1 13h10l1-13', 'M10 11v6', 'M14 11v6'],
+};
+
+function icon(name) {
+  const NS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(NS, 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('class', 'icon-glyph');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', '2');
+  svg.setAttribute('stroke-linecap', 'round');
+  svg.setAttribute('stroke-linejoin', 'round');
+  for (const d of ICON_PATHS[name] || []) {
+    const path = document.createElementNS(NS, 'path');
+    path.setAttribute('d', d);
+    svg.append(path);
+  }
+  return svg;
+}
+
 async function api(path, { method = 'GET', body } = {}) {
   const res = await fetch(path, {
     method,
@@ -15114,7 +15145,7 @@ async function txForm(test, host) {
     const exTypeSel = el('select', {}, ...['regex', 'json', 'cookie'].map((t) => el('option', { value: t, ...(s.extract && s.extract.type === t ? { selected: 'selected' } : {}) }, t)));
     const exPatI = el('input', { type: 'text', value: s.extract && s.extract.pattern || '', placeholder: 'pattern / path / cookie' });
     const row = el('div', { class: 'tx-step-row' },
-      el('div', { class: 'tx-step-line' }, methodSel, nameI, urlI, el('button', { type: 'button', class: 'ghost small danger', onclick: () => { row.remove(); } }, '×')),
+      el('div', { class: 'tx-step-line' }, methodSel, nameI, urlI, el('button', { type: 'button', class: 'ghost small danger', title: 'Delete', onclick: () => { row.remove(); } }, icon('trash'))),
       el('div', { class: 'tx-step-line' }, headersI, bodyI),
       el('div', { class: 'tx-step-line' }, statusI, kwI, exNameI, exTypeSel, exPatI));
     row._collect = () => {
@@ -15162,7 +15193,7 @@ async function txForm(test, host) {
   function addSecretRow() {
     const nI = el('input', { type: 'text', placeholder: 'name' });
     const vI = el('input', { type: 'password', placeholder: 'value (write-only)' });
-    const r = el('div', { class: 'tx-secret-row' }, nI, vI, el('button', { type: 'button', class: 'ghost small danger', onclick: () => r.remove() }, '×'));
+    const r = el('div', { class: 'tx-secret-row' }, nI, vI, el('button', { type: 'button', class: 'ghost small danger', title: 'Delete', onclick: () => r.remove() }, icon('trash')));
     r._collect = () => (nI.value.trim() ? { name: nI.value.trim(), value: vI.value } : null);
     newSecHost.append(r);
   }

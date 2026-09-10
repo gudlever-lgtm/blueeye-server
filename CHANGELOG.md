@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.123.8 — one icon vocabulary: a trash can deletes, a × closes
+
+A red "×" removed a step in the test designer while the same mark closed the
+dialog two screens away. Now a red **trash can** is the only delete affordance
+anywhere, and "×" only ever closes or cancels.
+
+The step-row actions are inline SVG instead of font glyphs (✎ ● ⧉ ×). A glyph is
+whatever the viewer's font decides — a different weight on every platform and
+blurry at button size — where a stroked path is sharp at any zoom and inherits
+the button's colour, so a `.danger` button draws a red can without a second rule.
+They are 16px, two pixels larger than what they replaced, which were hard to hit
+and harder to read. Enabled/disabled reads as an eye rather than ● / ○.
+
+The two row-removers in the transaction editor carried the same red "×"; they are
+trash cans too.
+
 ## 0.123.7 — repairing the tests that already carry the unfindable title step
 
 0.123.6 stopped Discovery from SUGGESTING a title assertion that could never

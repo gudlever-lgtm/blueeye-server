@@ -117,6 +117,43 @@
           el('tbody', {}, ...rows)));
     }
 
+    // ---------------------------------------------------------------- icons
+    // Inline SVG rather than the unicode glyphs these buttons used to carry.
+    // A glyph is whatever the viewer's font decides — different weight per
+    // platform, blurry at 12px, and "×" had drifted into meaning DELETE on the
+    // step rows while meaning CLOSE on the modal two screens away.
+    //
+    // One vocabulary, site-wide: a red TRASH CAN deletes, a "×" only ever closes
+    // or cancels. Stroked in currentColor at 16px, so the icon inherits the
+    // button's colour (including .danger red) and stays sharp on any display.
+    var ICON_PATHS = {
+      edit: ['M12 20h9', 'M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z'],
+      // Enabled / skipped, said as "is this step watched or not".
+      shown: ['M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7Z', 'M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z'],
+      hidden: ['M3 3l18 18', 'M10.6 6.2A9.8 9.8 0 0 1 12 5c6.4 0 10 7 10 7a17 17 0 0 1-3.2 4', 'M6.3 8.3A17 17 0 0 0 2 12s3.6 7 10 7a9.6 9.6 0 0 0 4-.9'],
+      duplicate: ['M9 9h10v10H9z', 'M5 15V5h10'],
+      trash: ['M4 7h16', 'M10 4h4', 'M6 7l1 13h10l1-13', 'M10 11v6', 'M14 11v6'],
+    };
+
+    function icon(name) {
+      var NS = 'http://www.w3.org/2000/svg';
+      var svg = document.createElementNS(NS, 'svg');
+      svg.setAttribute('viewBox', '0 0 24 24');
+      svg.setAttribute('class', 'sa-icon');
+      svg.setAttribute('aria-hidden', 'true');
+      svg.setAttribute('fill', 'none');
+      svg.setAttribute('stroke', 'currentColor');
+      svg.setAttribute('stroke-width', '2');
+      svg.setAttribute('stroke-linecap', 'round');
+      svg.setAttribute('stroke-linejoin', 'round');
+      (ICON_PATHS[name] || []).forEach(function (d) {
+        var path = document.createElementNS(NS, 'path');
+        path.setAttribute('d', d);
+        svg.append(path);
+      });
+      return svg;
+    }
+
     function statusChip(status) {
       return el('span', { class: 'sa-status sa-status-' + status }, String(status || '').toUpperCase());
     }
@@ -627,22 +664,22 @@
             el('div', { class: 'sa-step-title' }, el('span', { class: 'sa-step-n' }, String(index + 1)), title),
             detail ? el('div', { class: 'sa-step-detail' }, detail) : null),
           isOperator() ? el('div', { class: 'sa-step-tools' },
-            el('button', { class: 'ghost small', title: t('sa.designer.rename'), onclick: function () { editStep(step, index); } }, '✎'),
+            el('button', { class: 'ghost small', title: t('sa.designer.rename'), onclick: function () { editStep(step, index); } }, icon('edit')),
             el('button', {
               class: 'ghost small',
               title: step.enabled === false ? t('sa.designer.enable') : t('sa.designer.disable'),
               onclick: function () { step.enabled = step.enabled === false ? undefined : false; renderSteps(); },
-            }, step.enabled === false ? '○' : '●'),
+            }, icon(step.enabled === false ? 'hidden' : 'shown')),
             el('button', {
               class: 'ghost small',
               title: t('sa.designer.duplicate'),
               onclick: function () { steps.splice(index + 1, 0, JSON.parse(JSON.stringify(step))); renderSteps(); },
-            }, '⧉'),
+            }, icon('duplicate')),
             el('button', {
               class: 'ghost small danger',
               title: t('sa.delete'),
               onclick: function () { steps.splice(index, 1); renderSteps(); },
-            }, '×')) : null);
+            }, icon('trash'))) : null);
         return card;
       }
 

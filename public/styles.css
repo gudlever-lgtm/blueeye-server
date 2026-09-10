@@ -2257,3 +2257,14 @@ code, pre {
   main#view { padding: 16px 14px 32px; }
   .topbar { padding: 8px 14px; }
 }
+
+/* Icon-only buttons.
+   One vocabulary across the dashboard: a red trash can DELETES, a "×" only ever
+   closes or cancels. Stroked SVG rather than a font glyph — sharp at any zoom,
+   one weight on every platform, and it inherits the button's colour, so a
+   .danger button draws a red can without a second rule. */
+.icon-glyph { width: 16px; height: 16px; display: block; }
+button.ghost.small:has(> .icon-glyph) {
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 5px; line-height: 0;
+}

@@ -120,7 +120,15 @@
   background: var(--hairline, #e5e7eb); font-size: 0.75rem; font-weight: 700;
 }
 .sa-step-detail { font-size: 0.85rem; color: var(--muted, #6b7280); margin-top: 2px; word-break: break-word; }
-.sa-step-tools { display: flex; gap: 2px; }
+.sa-step-tools { display: flex; gap: 2px; align-items: center; }
+
+/* The step-row actions. Stroked SVG at 16px rather than a font glyph: sharp at
+   any zoom, one weight on every platform, and two pixels larger than the glyphs
+   they replaced, which were hard to hit and harder to read. */
+.sa-icon { width: 16px; height: 16px; display: block; }
+.sa-step-tools button { display: inline-flex; align-items: center; justify-content: center; padding: 5px; line-height: 0; }
+/* A trash can is the only delete affordance — never a "×", which closes. */
+.sa-step-tools button.danger { color: var(--danger, #b91c1c); }
 
 /* ---- failures ---- */
 .sa-failure {

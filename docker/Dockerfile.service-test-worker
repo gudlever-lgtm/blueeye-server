@@ -35,11 +35,18 @@ RUN npm ci --omit=dev --ignore-scripts \
 
 # Only what the worker actually runs. Copying the whole repo would drag the
 # dashboard, the docs and every unrelated router into the image.
+#
+# This list must stay CLOSED under require: every file the entrypoint reaches,
+# directly or transitively, has to be here or the container dies at boot with
+# MODULE_NOT_FOUND. test/serviceTestWorkerImage.test.js walks the require graph
+# and fails when it is not — src/config.js was copied here for a release while
+# the licensing files it requires were not, which is exactly that failure.
+# Note what is NOT here: src/config.js. The worker reads src/lib/coreEnv.js.
 COPY src/serviceTests ./src/serviceTests
 COPY src/lib ./src/lib
 COPY src/discovery ./src/discovery
 COPY src/integrations/ssrfGuard.js ./src/integrations/ssrfGuard.js
-COPY src/db.js src/config.js src/logger.js ./src/
+COPY src/db.js src/logger.js ./src/
 COPY scripts/service-test-worker.js ./scripts/
 
 # Chromium in a container: the default /dev/shm is 64 MB and Chromium crashes on

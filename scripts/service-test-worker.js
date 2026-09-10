@@ -22,7 +22,11 @@ const os = require('os');
 const { createDb } = require('../src/db');
 const { createSecretBox } = require('../src/lib/secretBox');
 const { createLogger } = require('../src/logger');
-const { config } = require('../src/config');
+// NOT src/config.js: that module pulls in licensing, the trust anchor and the
+// machine fingerprint, none of which are in the worker image — requiring it kills
+// the process at boot inside the container. coreEnv holds the two things this
+// process actually needs, and the server reads the same function.
+const { dbConfig, securityConfig } = require('../src/lib/coreEnv');
 const { createServiceTestsModule } = require('../src/serviceTests');
 const { createWorker } = require('../src/serviceTests/scheduler/worker');
 const { createPlaywrightDriver, launchBrowser } = require('../src/serviceTests/runner/driver');
@@ -83,8 +87,8 @@ async function main() {
   // Same pool + same secret key as the API: the worker decrypts the credentials
   // the API stored, so a mismatched SECRET_ENCRYPTION_KEY must fail loudly here
   // rather than silently running every test without a login.
-  const db = createDb(config);
-  const secretBox = createSecretBox({ key: config.security.secretKey });
+  const db = createDb({ db: dbConfig() });
+  const secretBox = createSecretBox({ key: securityConfig().secretKey });
 
   const serviceTests = createServiceTestsModule({
     db,

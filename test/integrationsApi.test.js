@@ -13,7 +13,13 @@ const admin = () => authHeader('admin');
 const viewer = () => authHeader('viewer');
 const operator = () => authHeader('operator');
 
-const SN = { type: 'servicenow', name: 'SN', baseUrl: 'https://acme.service-now.com', authType: 'basic', credentials: { username: 'svc', password: 'pw' }, config: { table: 'incident' } };
+// The password is long and distinctive on purpose. The encryption-at-rest test
+// asserts the stored ciphertext does not contain the plaintext, and the stored
+// form is base64url — so a TWO-character needle like 'pw' appears in the
+// ciphertext by chance about 2.7% of the time, failing a correct
+// implementation. It also proved nothing: two characters of base64 is noise.
+const PASSWORD = 'correct-horse-battery-staple-9f3c';
+const SN = { type: 'servicenow', name: 'SN', baseUrl: 'https://acme.service-now.com', authType: 'basic', credentials: { username: 'svc', password: PASSWORD }, config: { table: 'incident' } };
 
 function create(app, body, who = admin) {
   return request(app).post('/api/integrations').set('Authorization', who()).send(body);
@@ -72,10 +78,10 @@ test('POST creates an integration; credentials are encrypted at rest and never r
   // Response carries no credentials of any kind.
   assert.equal(res.body.credentials_encrypted, undefined);
   assert.equal(res.body.credentials, undefined);
-  assert.ok(!JSON.stringify(res.body).includes('pw'));
+  assert.ok(!JSON.stringify(res.body).includes(PASSWORD));
   // ...but the repo stored an encrypted secret-box token (encryption at rest).
   assert.ok(repo.rows[0].credentials_encrypted.startsWith('v1.gcm.'));
-  assert.ok(!repo.rows[0].credentials_encrypted.includes('pw'));
+  assert.ok(!repo.rows[0].credentials_encrypted.includes(PASSWORD));
 });
 
 test('GET list and GET :id never include credentials', async () => {

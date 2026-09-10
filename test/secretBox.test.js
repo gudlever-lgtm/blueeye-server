@@ -15,10 +15,16 @@ test('encrypt/decrypt round-trips a string', () => {
 
 test('encryptJson/decryptJson round-trips an object', () => {
   const box = createSecretBox({ key: 'k' });
-  const token = box.encryptJson({ username: 'svc', password: 'p@ss' });
-  assert.ok(!token.includes('svc'));
-  assert.ok(!token.includes('p@ss'));
-  assert.deepEqual(box.decryptJson(token), { username: 'svc', password: 'p@ss' });
+  // Long, distinctive values: the token is base64url, so a SHORT needle turns up
+  // inside it by chance ('svc' about once in 5,000 runs) and fails a correct
+  // implementation. A leak of a real credential is what this asserts, and a real
+  // credential is not three characters long.
+  const user = 'service-account-7c1e';
+  const password = 'correct-horse-battery-staple-9f3c';
+  const token = box.encryptJson({ username: user, password });
+  assert.ok(!token.includes(user));
+  assert.ok(!token.includes(password));
+  assert.deepEqual(box.decryptJson(token), { username: user, password });
 });
 
 test('each encryption uses a fresh IV (ciphertexts differ)', () => {

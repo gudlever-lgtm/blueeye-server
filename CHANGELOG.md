@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.120.1 — Service Assurance: wire the worker to the stack it actually runs in
+
+Two deployment bugs in the compose wiring from 0.120.0. Both would have failed
+quietly, which is why they are worth a release of their own.
+
+**The worker asked for a variable that does not exist.** Its service read
+`${JWT_SECRET}`, but `.env` carries `SERVER_JWT_SECRET` and `LICENS_JWT_SECRET` —
+one per service. Compose would have refused to start the worker. Worse if someone
+had "fixed" it by inventing a `JWT_SECRET`: the worker decrypts the credentials
+the API server encrypted, and both derive that AES key from
+`SECRET_ENCRYPTION_KEY` falling back to `JWT_SECRET`, so a different value means
+every test with a login fails with "credential unavailable" and nothing says why.
+The worker now reads the same `SERVER_JWT_SECRET` the server service does.
+
+**Screenshots were written where nobody could read them.** The worker mounted the
+artefact volume and the API server did not, so a failure screenshot was captured
+into a volume the process serving `/runs/:id/screenshot` could not see. Both now
+mount the same named volume at the same path, and the server carries
+`SERVICE_TEST_ARTIFACT_ROOT` to match.
+
+`docs/service-assurance.md` now names both couplings explicitly rather than
+leaving them to be discovered.
+
 ## 0.120.0 — BlueEye Service Assurance
 
 **Know when your digital services stop working — before your users do.**

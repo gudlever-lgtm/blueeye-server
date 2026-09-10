@@ -2,10 +2,13 @@
 
 > **Know when your digital services stop working — before your users do.**
 
-> **Status: V1 complete.** All fourteen phases are implemented — data model,
-> applications/environments/credentials, the DSL, the Playwright engine, the Test
-> Designer, runs and results, Discovery, rule-based suggestions, the scheduler,
-> history, the security pass and the UI. The module is mounted in
+> **Status: V1 complete, plus the reaction layer (§14).** All fourteen phases are
+> implemented — data model, applications/environments/credentials, the DSL, the
+> Playwright engine, the Test Designer, runs and results, Discovery, rule-based
+> suggestions, the scheduler, history, the security pass and the UI — and the
+> module now ACTS on what it finds: TLS certificates are watched on their own
+> schedule, failing tests and expiring certificates open incidents, and those
+> incidents go out through the existing alerting channels. The module is mounted in
 > `src/routes/index.js` and assembled in `src/server.js`; the browser worker runs
 > as its own process (`npm run service-test-worker`).
 >
@@ -217,6 +220,10 @@ each route additionally carries its role requirement.
 | `POST /discovery`, `GET /discovery/:id` | **operator+** |
 | `GET /suggestions`, `POST /suggestions/:id/accept`, `POST /suggestions/:id/dismiss` | **operator+** |
 | `GET/POST/PUT/DELETE /schedules…` | read viewer+ · write **operator+** |
+| `GET /assurance/incidents`, `GET /assurance/incidents/:id` | viewer+ |
+| `GET /assurance/certificates`, `GET /assurance/summary` | viewer+ |
+| `POST /assurance/incidents/:id/resolve` | **operator+** — audited |
+| `POST /assurance/certificates/check` | **operator+** — forces a re-read now, audited |
 
 No route is public. No route is viewer-writable — so neither gate allowlist
 (`PUBLIC_ROUTES`, `VIEWER_WRITE_ALLOWED` in `test/gate/security.test.js`) changes.
@@ -514,6 +521,7 @@ Route-count and validator-count floors only rise.
 | 12 · history | `runsRepository.history()` + the PASS/FAIL strip in the UI |
 | 13 · security | the two-check host policy, redaction, DOM masking before capture, gate extensions |
 | 14 · UI | `public/serviceAssurance.js` + `.css`, `views.serviceAssurance`, 107 i18n keys in en + da |
+| 15 · **reacting** (§14 below) | `migrations/080_create_service_assurance_reactions.sql`, `src/serviceTests/assurance/` (certificate watch, incident policy, the sweep), `api/assurance.js`, the Health tab |
 
 Every endpoint is tested for 400/401/403/404/500, the whole suite runs offline
 (the DNS resolver, the browser and the driver are all injected), and the gate
@@ -612,3 +620,97 @@ Scaling out is `--scale service-assurance-worker=3`: the claim is a conditional
    un-allowlistable.
 3. **Licence *and* RBAC** — agreed. `service_tests` is a Professional-tier feature
    key; once the licence permits the module, access inside it is decided by role (§8).
+
+---
+
+## 14. Reacting — certificates and incidents
+
+Until this shipped, the module recorded and stopped. A scheduled test failed at
+02:00, `classify.js` wrote "The TLS certificate is expired, self-signed, or
+issued for a different name" in plain language, and nobody read it until a
+customer called. The module knew and did nothing. Worse, nothing looked at a
+certificate at all until it had already broken a test — which is the day after it
+should have been renewed.
+
+`src/serviceTests/assurance/` closes both gaps. Three files, one loop:
+
+| File | What it owns |
+| --- | --- |
+| `certificates.js` | The TLS handshake and what it reads: subject, issuer, SANs, `notAfter`, days remaining. No HTTP is sent — the socket is destroyed the moment the certificate is in hand |
+| `policy.js` | The decision layer, pure: which failures are the SERVICE failing (DNS, refused, TLS, 5xx → CRIT) and which are the TEST drifting (missing element, failed assertion → WARN, and never worse); when days-remaining becomes a warning and when it becomes critical |
+| `reactor.js` | The sweep, the incident state machine, and the `notify` port |
+
+### Why the checker refuses to trust the certificate
+
+`tls.connect` is called with `rejectUnauthorized: false`, deliberately. A
+connection that refused an expired or self-signed certificate would report
+"unreachable" and lose the exact fact the check exists to find. Nothing is
+trusted as a result: `authorized` / `authorizationError` are read off the socket
+and the verdict is computed from them, so an expired certificate is reported as
+`expired` (the actionable half) rather than as a generic chain failure.
+
+Only https addresses the module already knows — an application's own base URL and
+its enabled environments' — are ever contacted, filtered through the same
+permanent deny-list as everything else (`denyReason`), so this is a refresh, not
+a scanner. Two environments on one host are one certificate and one row.
+
+### The incident, not the observation
+
+An incident is the durable "wrong since when": one open row per `subject_key`
+(`test:<id>` or `certificate:<application_id>:<host>:<port>`). A repeat observation touches that
+row, so a service down all weekend is one incident with 400 occurrences rather
+than 400 incidents. Severity only ever moves UP while an incident is open — a
+service flapping between 503 and a timeout must not quietly downgrade itself out
+of an operator's alert threshold — and the next healthy check resolves it.
+
+`notified_severity` records what was last SENT. That is what makes an alert a
+state change rather than a heartbeat:
+
+| Transition | Alert |
+| --- | --- |
+| nothing → open | yes, at the incident's severity |
+| open → same or lower severity | **no** — it has already been reported |
+| open → higher severity (WARN → CRIT) | yes |
+| open → resolved | yes, at INFO |
+
+### Where the alert goes
+
+Out through the **same dispatcher** as every analysis finding
+(`src/analysis/alerting/`), wired in `src/server.js` as `assuranceNotify`. So an
+operator configures email/webhook/syslog once, and severity floors, cooldowns and
+maintenance windows apply to a certificate expiry exactly as they do to a
+throughput anomaly. It is gated on the `service_tests` licence key as well as
+alerting's, because a plan without Service Assurance should not be able to page
+anyone about it. A channel that throws never stops the sweep: the incident is
+already durable and the next sweep retries.
+
+### Settings (the `assurance` section)
+
+| Field | Default | What it decides |
+| --- | --- | --- |
+| `enabled` | on | The sweep at all |
+| `notify` | on | Whether incidents leave the server. Off = recorded, silent — what you want for the first week |
+| `watchCertificates` / `watchTests` | on | Which half of the loop runs |
+| `sweepIntervalMs` | 5 min | How fast an operator hears |
+| `certificateCheckIntervalMinutes` | 6 h | How often each certificate is re-read |
+| `certificateWarnDays` / `certificateCriticalDays` | 30 / 7 | "Remind me a month out, wake me a week out" |
+| `failureStreak` | 2 | Failing runs in a row before a test opens an incident. One failure is a bad minute |
+| `incidentRetentionDays` | 90 | How long resolved incidents are kept |
+
+Lowering the warning window quiets an incident on the next sweep without waiting
+for the next certificate read: `status` was decided against the window as it was
+then, and days-remaining is re-judged against the window as it is now.
+
+### Where it runs
+
+In the **API process**, as a background job — not in the browser worker. It needs
+no browser, and the alerting configuration and licence gate live here. That has a
+useful consequence: an install with no worker connected at all still gets its
+certificates watched, which is the cheapest useful thing this module can do.
+
+The dashboard's **Health** tab shows the open incidents and every watched
+certificate, with a "Check certificates now" button for operator+. Resolving an
+incident by hand is honest about itself — the confirm says the next check reopens
+it if the problem is still there, because closing a ticket does not renew a
+certificate.
+

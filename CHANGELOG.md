@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.123.4 — Service Assurance reacts to what it finds
+
+The module recorded and stopped. A scheduled test failed at 02:00, `classify.js`
+wrote "The TLS certificate is expired, self-signed, or issued for a different
+name" in plain language, the run row was saved — and nobody read it until a
+customer called. Worse, nothing looked at a certificate at all until it had
+already broken a test, which is the day after it should have been renewed.
+
+Two things changed.
+
+**Certificates are watched on their own schedule.** Every https address you have
+registered — an application's base URL and its enabled environments' — gets a TLS
+handshake every six hours (`assurance.certificateCheckIntervalMinutes`). The
+handshake reads the certificate and nothing else: no HTTP is sent, and the socket
+is dropped the moment the certificate is in hand. `rejectUnauthorized: false` is
+deliberate — refusing an expired certificate would report "unreachable" and lose
+the fact we came for — so the certificate is inspected first and judged second.
+An expiry becomes a warning at 30 days and critical at 7, both configurable.
+
+**Failures and expiries become incidents, and incidents become alerts.** One open
+row per subject (`test:<id>`, `certificate:<app>:<host>:<port>`): opened when the
+condition holds, escalated when it worsens, resolved when the next check is
+healthy. A service down all weekend is one incident with 400 occurrences, not 400
+incidents. An alert goes out on a state CHANGE — opened, escalated WARN→CRIT,
+resolved — never once per observation, and through the same email/webhook/syslog
+dispatcher as every analysis finding, so severity floors, cooldowns and
+maintenance windows already apply.
+
+The policy says what is worth waking someone for: DNS, a refused connection, a
+TLS failure or a 5xx opens CRIT; a missing element or a failed assertion opens
+WARN and never escalates past it, because a renamed button is the test drifting,
+not the service failing. One failing run is a bad minute — two in a row is an
+incident (`assurance.failureStreak`).
+
+New: the **Health** tab (open incidents + every watched certificate, with "Check
+certificates now"), the `assurance` settings section, `GET/POST
+/api/service-tests/assurance/*`, and migration 080
+(`service_test_certificates`, `service_test_incidents`).
+
+The sweep runs in the API process, not the browser worker — it needs no browser,
+and the alerting config lives there. So an install with no worker connected at
+all still gets its certificates watched.
+
 ## 0.122.3 — the flaky test, named and fixed
 
 The gate's new failure reporting caught it on the second try. It was not a

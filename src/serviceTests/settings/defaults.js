@@ -42,6 +42,27 @@ const NUMBER_BOUNDS = {
     maxPerRun: [5, 0, 50],
     retentionDays: [30, 1, 3650],
   },
+  assurance: {
+    // How often the reaction sweep runs: certificates re-checked, failing tests
+    // re-counted, incidents opened/resolved. Cheap — a TLS handshake and a
+    // couple of indexed reads — so this is about how fast an operator hears,
+    // not about load.
+    sweepIntervalMs: [300000, 30000, 3600000],
+    // A certificate is re-read this often. Six hours is far below any renewal
+    // cadence and far above anything a CA would consider rude.
+    certificateCheckIntervalMinutes: [360, 5, 10080],
+    // Days remaining at which an expiry becomes a WARN, and at which it becomes
+    // a CRIT. The default pair says: "start reminding me a month out, wake me a
+    // week out" — which is how a 90-day certificate is actually renewed.
+    certificateWarnDays: [30, 0, 365],
+    certificateCriticalDays: [7, 0, 365],
+    certificateTimeoutMs: [10000, 1000, 60000],
+    // Consecutive failing runs before a test opens an incident. One failure is
+    // a bad minute; two in a row is a service.
+    failureStreak: [2, 1, 20],
+    // Resolved incidents are kept this long as history, then swept.
+    incidentRetentionDays: [90, 1, 3650],
+  },
   queue: {
     // A run left `running` longer than this is reaped back to `error`.
     claimTimeoutMs: [600000, 30000, 7200000],
@@ -61,6 +82,10 @@ const ENUM_FIELDS = {
 
 const BOOLEAN_FIELDS = {
   artifacts: { screenshotOnFailure: true, fullPage: false },
+  // `enabled` off stops the sweep entirely; `notify` off keeps the incidents but
+  // sends nothing, which is what an operator wants for the first week while they
+  // find out how noisy their own estate is.
+  assurance: { enabled: true, notify: true, watchCertificates: true, watchTests: true },
 };
 
 const SECTIONS = [...new Set([

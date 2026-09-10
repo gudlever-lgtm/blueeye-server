@@ -66,6 +66,30 @@
 .sa-status-queued { background: #dbeafe; color: #1e40af; }
 .sa-status-running { background: #dbeafe; color: #1e40af; }
 
+/* Certificate statuses reuse the status chip, so an "expired" reads the same
+   way a "fail" does — one visual vocabulary for one page. */
+.sa-status-ok { background: #dcfce7; color: #166534; }
+.sa-status-expiring { background: #fef3c7; color: #92400e; }
+.sa-status-expired { background: #fee2e2; color: #991b1b; }
+.sa-status-invalid { background: #fee2e2; color: #991b1b; }
+.sa-status-unreachable { background: #e5e7eb; color: #4b5563; }
+
+/* ---- incident severity + days remaining ---- */
+.sa-sev {
+  display: inline-block; padding: 2px 8px; border-radius: 999px;
+  font-size: 0.72rem; font-weight: 700; letter-spacing: 0.03em;
+}
+.sa-sev-crit { background: #fee2e2; color: #991b1b; }
+.sa-sev-warn { background: #fef3c7; color: #92400e; }
+.sa-sev-info { background: #dbeafe; color: #1e40af; }
+
+/* A number alone does not say whether 12 days is fine. The tone does. */
+.sa-days { font-variant-numeric: tabular-nums; font-weight: 600; }
+.sa-days-ok { color: #166534; }
+.sa-days-warn { color: #92400e; }
+.sa-days-bad { color: #991b1b; }
+.sa-days-unknown { color: var(--muted, #6b7280); }
+
 /* The PASS PASS FAIL strip: the whole recent history at a glance. */
 .sa-strip { display: inline-flex; gap: 3px; }
 .sa-strip-dot { width: 10px; height: 16px; border-radius: 2px; display: inline-block; }
@@ -161,6 +185,18 @@
 [data-theme="dark"] .sa-status-running, [data-theme="midnight"] .sa-status-running { background: #1e3a8a; color: #bfdbfe; }
 [data-theme="dark"] .sa-status-skipped, [data-theme="midnight"] .sa-status-skipped { background: #374151; color: #d1d5db; }
 [data-theme="dark"] .sa-warn-banner, [data-theme="midnight"] .sa-warn-banner { background: #78350f; color: #fde68a; }
+[data-theme="dark"] .sa-status-ok, [data-theme="midnight"] .sa-status-ok { background: #14532d; color: #bbf7d0; }
+[data-theme="dark"] .sa-status-expiring, [data-theme="midnight"] .sa-status-expiring { background: #78350f; color: #fde68a; }
+[data-theme="dark"] .sa-status-expired, [data-theme="midnight"] .sa-status-expired,
+[data-theme="dark"] .sa-status-invalid, [data-theme="midnight"] .sa-status-invalid { background: #7f1d1d; color: #fecaca; }
+[data-theme="dark"] .sa-status-unreachable, [data-theme="midnight"] .sa-status-unreachable { background: #374151; color: #d1d5db; }
+[data-theme="dark"] .sa-sev-crit, [data-theme="midnight"] .sa-sev-crit { background: #7f1d1d; color: #fecaca; }
+[data-theme="dark"] .sa-sev-warn, [data-theme="midnight"] .sa-sev-warn { background: #78350f; color: #fde68a; }
+[data-theme="dark"] .sa-sev-info, [data-theme="midnight"] .sa-sev-info { background: #1e3a8a; color: #bfdbfe; }
+[data-theme="dark"] .sa-days-ok, [data-theme="midnight"] .sa-days-ok { color: #bbf7d0; }
+[data-theme="dark"] .sa-days-warn, [data-theme="midnight"] .sa-days-warn { color: #fde68a; }
+[data-theme="dark"] .sa-days-bad, [data-theme="midnight"] .sa-days-bad { color: #fecaca; }
+
 
 /* Phone: the designer's tools wrap under the step rather than squeezing it. */
 @media (max-width: 640px) {

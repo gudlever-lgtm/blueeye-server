@@ -7,6 +7,7 @@ const { createRunsRouter } = require('./runs');
 const { createDiscoveryRouter } = require('./discovery');
 const { createSchedulesRouter } = require('./schedules');
 const { createSettingsRouter } = require('./settings');
+const { createAssuranceRouter } = require('./assurance');
 
 // The Service Tests HTTP surface, mounted at /api/service-tests.
 //
@@ -22,6 +23,10 @@ function createServiceTestsApiRouter({
   repositories,
   settings,
   queue,
+  // The reaction loop. Present in the API process, absent in the worker — so the
+  // router degrades to read-only incident/certificate views rather than failing
+  // to build.
+  reactor = null,
   artifacts = null,
   audit = null,
   logger = null,
@@ -39,7 +44,7 @@ function createServiceTestsApiRouter({
   if (requireAuth) router.use(requireAuth);
   if (requireFeature) router.use(requireFeature);
 
-  const deps = { repositories, settings, queue, artifacts, audit, logger, requireRole, roles };
+  const deps = { repositories, settings, queue, reactor, artifacts, audit, logger, requireRole, roles };
 
   router.use('/applications', createApplicationsRouter(deps));
   router.use('/tests', createTestsRouter(deps));
@@ -48,6 +53,8 @@ function createServiceTestsApiRouter({
   router.use('/suggestions', createDiscoveryRouter.suggestions(deps));
   router.use('/schedules', createSchedulesRouter(deps));
   router.use('/settings', createSettingsRouter(deps));
+  // What is currently wrong, and every certificate the module watches.
+  router.use('/assurance', createAssuranceRouter(deps));
 
   // Environments and credentials are nested under an application in the UI, but
   // a flat list is what the spec's API section asks for, so both exist.

@@ -12,10 +12,13 @@ const { createSuggestionsRepository } = require('./storage/suggestionsRepository
 const { createSchedulesRepository } = require('./storage/schedulesRepository');
 const { createServiceTestSettingsRepository } = require('./storage/settingsRepository');
 const { createWorkersRepository } = require('./storage/workersRepository');
+const { createCertificatesRepository } = require('./storage/certificatesRepository');
+const { createIncidentsRepository } = require('./storage/incidentsRepository');
 const { createServiceTestSettings } = require('./settings');
 const { createServiceTestsApiRouter } = require('./api');
 const { createQueue } = require('./scheduler/queue');
 const { createArtifactStore, createArtifactRetention } = require('./runner/artifacts');
+const { createAssuranceReactor, createAssuranceJob } = require('./assurance/reactor');
 
 // Service Tests — the module factory, and the ONLY thing its host constructs.
 //
@@ -52,6 +55,8 @@ function createServiceTestsModule(rawPorts = {}) {
     suggestions: createSuggestionsRepository({ db }),
     schedules: createSchedulesRepository({ db, now: clock }),
     workers: createWorkersRepository({ db, now: clock }),
+    certificates: createCertificatesRepository({ db, now: clock }),
+    incidents: createIncidentsRepository({ db, now: clock }),
     settings: settingsRepo,
   };
 
@@ -73,11 +78,27 @@ function createServiceTestsModule(rawPorts = {}) {
     ? createArtifactStore({ root: rawPorts.artifactRoot, logger })
     : null;
 
+  // The reaction loop — certificates watched on their own schedule, failing tests
+  // counted into incidents, alerts sent on a state change. Built only where it
+  // can run: the API process wires `notify` to the alerting dispatcher, and the
+  // worker process (which passes no auth middleware) never starts a sweep.
+  const reactor = rawPorts.requireAuth && rawPorts.requireRole
+    ? createAssuranceReactor({
+      repositories,
+      settings,
+      certificateChecker: rawPorts.certificateChecker || null,
+      notify: rawPorts.notify || null,
+      logger,
+      now: clock,
+    })
+    : null;
+
   const router = rawPorts.requireAuth && rawPorts.requireRole
     ? createServiceTestsApiRouter({
       repositories,
       settings,
       queue,
+      reactor,
       artifacts,
       audit,
       logger,
@@ -96,8 +117,11 @@ function createServiceTestsModule(rawPorts = {}) {
   if (artifacts) {
     jobs.push(createArtifactRetention({ runsRepo: repositories.runs, store: artifacts, settings, logger }));
   }
+  // The sweep IS a background job, unlike the runner: it needs no browser, so it
+  // belongs in the API process where the alerting configuration lives.
+  if (reactor) jobs.push(createAssuranceJob({ reactor, settings, logger }));
 
-  return { repositories, settings, queue, artifacts, audit, logger, router, jobs };
+  return { repositories, settings, queue, artifacts, reactor, audit, logger, router, jobs };
 }
 
 module.exports = { createServiceTestsModule };

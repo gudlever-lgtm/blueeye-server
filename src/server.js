@@ -362,11 +362,18 @@ function start() {
   // The Playwright runner is deliberately NOT started here: it runs in its own
   // process (npm run service-test-worker) so a browser session can never share a
   // process with the API.
+  //
+  // `notify` reaches the alerting dispatcher, which is built further down — so it
+  // is a late-bound indirection rather than the dispatcher itself. Until the
+  // dispatcher exists (and while alerting is unlicensed or disabled) the reactor
+  // still opens and resolves incidents; it just sends nothing.
+  let assuranceNotify = null;
   const serviceTests = createServiceTestsModule({
     db,
     secrets: secretBox,
     audit: auditLogger,
     logger,
+    notify: (finding, group) => (assuranceNotify ? assuranceNotify(finding, group) : Promise.resolve(null)),
     // Host middleware — the module declares which guard each route wears, it
     // never decides who may call it.
     requireAuth,
@@ -593,6 +600,17 @@ function start() {
     createTransport: (smtp) => createSmtpTransport(smtp, logger),
     logger,
   });
+
+  // Service Assurance reactions (expired/expiring certificates, tests that keep
+  // failing) go out through the SAME dispatcher as every other finding: one place
+  // decides severity floors, cooldowns and maintenance windows, so an operator
+  // configures their channels once. Gated on the module's own licence key as well
+  // as alerting's, because a plan without Service Assurance should not be able to
+  // page anyone about it.
+  assuranceNotify = (finding, group) => {
+    if (!featureGate.isFeatureEnabled('service_tests')) return Promise.resolve(null);
+    return dispatcher.dispatch(finding, group);
+  };
 
   // Maintenance windows suppress notifications (findings still record). The
   // silencer reads windows from settingsService, which is built further down, so

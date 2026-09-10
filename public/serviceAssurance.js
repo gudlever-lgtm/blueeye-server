@@ -163,6 +163,7 @@
         ['applications', t('sa.tab.applications')],
         ['tests', t('sa.tab.tests')],
         ['runs', t('sa.tab.runs')],
+        ['health', t('sa.tab.health')],
         ['schedules', t('sa.tab.schedules')],
       ];
       return el('div', { class: 'sa-tabs' }, ...tabs.map(function (pair) {
@@ -875,6 +876,122 @@
       });
     }
 
+    // --------------------------------------------------------------- health
+    // What the module has REACTED to: incidents it opened, and the certificate
+    // on every address it watches. This is the screen an operator opens when
+    // they want the one-line answer to "is anything wrong right now?".
+    views.health = function (body) {
+      return Promise.all([
+        api(API + '/assurance/incidents?status=open'),
+        api(API + '/assurance/certificates'),
+        api(API + '/assurance/summary'),
+      ]).then(function (res) {
+        var incidents = res[0];
+        var certificates = res[1];
+        var summary = res[2];
+
+        var head = section(t('sa.tab.health'), isOperator()
+          ? el('button', { class: 'ghost small', onclick: checkCertificatesNow }, t('sa.health.checkNow'))
+          : null);
+
+        var counts = el('div', { class: 'sa-stats' },
+          stat(t('sa.health.openCrit'), (summary.open && summary.open.CRIT) || 0),
+          stat(t('sa.health.openWarn'), (summary.open && summary.open.WARN) || 0),
+          stat(t('sa.health.certsWatched'), (summary.certificates && summary.certificates.total) || 0),
+          stat(t('sa.health.certsExpiring'), (summary.certificates && summary.certificates.expiring) || 0));
+
+        mount(body, head, counts, incidentsPanel(incidents), certificatesPanel(certificates));
+      });
+    };
+
+    function severityChip(severity) {
+      return el('span', { class: 'sa-sev sa-sev-' + String(severity || '').toLowerCase() }, String(severity || ''));
+    }
+
+    // Days remaining, coloured by how much trouble it is. A number on its own
+    // does not say whether 12 is fine — the chip does.
+    function daysChip(days, status) {
+      if (days === null || days === undefined) return el('span', { class: 'sa-days sa-days-unknown' }, '—');
+      var tone = status === 'expired' || days < 0 ? 'bad' : (days <= 7 ? 'bad' : (days <= 30 ? 'warn' : 'ok'));
+      var label = days < 0 ? t('sa.health.expiredDaysAgo', { n: String(Math.abs(days)) }) : t('sa.health.daysLeft', { n: String(days) });
+      return el('span', { class: 'sa-days sa-days-' + tone }, label);
+    }
+
+    function incidentsPanel(incidents) {
+      if (!incidents.length) {
+        return el('div', { class: 'sa-panel' },
+          section(t('sa.health.incidents'), null),
+          el('div', { class: 'sa-empty' }, t('sa.health.allClear')));
+      }
+      var rows = incidents.map(function (incident) {
+        return el('tr', {},
+          el('td', {}, severityChip(incident.severity)),
+          el('td', {}, incident.subject_label || incident.subject_key),
+          el('td', {},
+            el('div', {}, incident.summary || ''),
+            el('div', { class: 'muted' }, incident.likely_cause ? t('sa.run.likelyCause') + ': ' + incident.likely_cause : ''),
+            el('details', {},
+              el('summary', {}, t('sa.technicalDetails')),
+              el('pre', { class: 'sa-pre' }, (incident.evidence || []).join('\n') + (incident.explanation ? '\n\n' + incident.explanation : '')))),
+          el('td', {}, when(incident.opened_at)),
+          el('td', {}, String(incident.occurrences || 1)),
+          el('td', {}, isOperator()
+            ? el('button', { class: 'ghost small', onclick: function () { resolveIncident(incident); } }, t('sa.health.resolve'))
+            : null));
+      });
+      return el('div', { class: 'sa-panel' },
+        section(t('sa.health.incidents'), null),
+        el('table', { class: 'data-table' },
+          el('thead', {}, el('tr', {},
+            el('th', {}, t('sa.health.severity')), el('th', {}, t('sa.health.subject')),
+            el('th', {}, t('sa.health.whatHappened')), el('th', {}, t('sa.health.since')),
+            el('th', {}, t('sa.health.seen')), el('th', {}, ''))),
+          el('tbody', {}, ...rows)));
+    }
+
+    function certificatesPanel(certificates) {
+      if (!certificates.length) {
+        return el('div', { class: 'sa-panel' },
+          section(t('sa.health.certificates'), null),
+          el('div', { class: 'sa-empty' }, t('sa.health.noCertificates')));
+      }
+      var rows = certificates.map(function (cert) {
+        return el('tr', {},
+          el('td', {}, cert.host + (cert.port && cert.port !== 443 ? ':' + cert.port : '')),
+          el('td', {}, cert.issuer || '—'),
+          el('td', {}, cert.valid_to ? when(cert.valid_to) : '—'),
+          el('td', {}, daysChip(cert.days_remaining, cert.status)),
+          el('td', {}, statusChip(cert.status)),
+          el('td', { class: 'muted' }, cert.error_message || ''));
+      });
+      return el('div', { class: 'sa-panel' },
+        section(t('sa.health.certificates'), null),
+        el('p', { class: 'sa-help' }, t('sa.health.certificatesHelp')),
+        el('table', { class: 'data-table' },
+          el('thead', {}, el('tr', {},
+            el('th', {}, t('sa.health.host')), el('th', {}, t('sa.health.issuer')),
+            el('th', {}, t('sa.health.expires')), el('th', {}, t('sa.health.remaining')),
+            el('th', {}, t('sa.run.status')), el('th', {}, ''))),
+          el('tbody', {}, ...rows)));
+    }
+
+    function checkCertificatesNow() {
+      toast(t('sa.health.checking'));
+      api(API + '/assurance/certificates/check', { method: 'POST', body: {} })
+        .then(function (res) { toast(t('sa.health.checked', { n: String((res && res.checked) || 0) })); draw(); })
+        .catch(function (e) { toast(err(e), true); });
+    }
+
+    // Resolving by hand does not fix anything — the next sweep re-opens the
+    // incident if the condition still holds — so the confirm says so rather than
+    // letting an operator think they have silenced it.
+    function resolveIncident(incident) {
+      if (!root.confirm(t('sa.health.confirmResolve', { subject: incident.subject_label || incident.subject_key }))) return;
+      api(API + '/assurance/incidents/' + incident.id + '/resolve', { method: 'POST', body: {} })
+        .then(function () { toast(t('sa.health.resolved')); draw(); })
+        .catch(function (e) { toast(err(e), true); });
+    }
+
     // ------------------------------------------------------------ schedules
     views.schedules = function (body) {
       return Promise.all([api(API + '/schedules'), api(API + '/tests')]).then(function (res) {
@@ -980,6 +1097,17 @@
         claimTimeoutMs: t('sa.set.claimTimeoutMs'),
         pollIntervalMs: t('sa.set.pollIntervalMs'),
         workerHeartbeatTimeoutMs: t('sa.set.workerHeartbeatTimeoutMs'),
+        enabled: t('sa.set.assuranceEnabled'),
+        notify: t('sa.set.assuranceNotify'),
+        watchCertificates: t('sa.set.watchCertificates'),
+        watchTests: t('sa.set.watchTests'),
+        sweepIntervalMs: t('sa.set.sweepIntervalMs'),
+        certificateCheckIntervalMinutes: t('sa.set.certificateCheckIntervalMinutes'),
+        certificateWarnDays: t('sa.set.certificateWarnDays'),
+        certificateCriticalDays: t('sa.set.certificateCriticalDays'),
+        certificateTimeoutMs: t('sa.set.certificateTimeoutMs'),
+        failureStreak: t('sa.set.failureStreak'),
+        incidentRetentionDays: t('sa.set.incidentRetentionDays'),
       };
       // An unlabelled field still renders — with its raw name, which is the
       // visible signal that a label is missing.
@@ -993,6 +1121,7 @@
         artifacts: { title: t('sa.set.artifacts'), help: t('sa.set.artifactsHelp') },
         allowlist: { title: t('sa.set.allowlist'), help: t('sa.set.allowlistHelp') },
         queue: { title: t('sa.set.queue'), help: t('sa.set.queueHelp') },
+        assurance: { title: t('sa.set.assurance'), help: t('sa.set.assuranceHelp') },
       };
       return sections[name] || { title: name, help: '' };
     }
@@ -1007,7 +1136,7 @@
       ]).then(function (loaded) {
         var res = loaded[0];
         var worker = loaded[1];
-        var order = ['discovery', 'runner', 'artifacts', 'allowlist', 'queue'];
+        var order = ['assurance', 'discovery', 'runner', 'artifacts', 'allowlist', 'queue'];
         var sections = order.filter(function (k) { return res.settings[k]; });
 
         var panels = sections.map(function (name) {
@@ -1031,7 +1160,8 @@
 
             // Units belong beside the number, not buried in the field name.
             var unit = /Ms$/.test(key) ? t('sa.set.unitMs')
-              : (/Days$/.test(key) ? t('sa.set.unitDays') : null);
+              : (/Days$/.test(key) ? t('sa.set.unitDays')
+                : (/Minutes$/.test(key) ? t('sa.set.unitMinutes') : null));
             return field(settingLabel(key), input, unit);
           });
 

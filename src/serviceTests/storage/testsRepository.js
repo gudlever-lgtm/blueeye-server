@@ -12,6 +12,14 @@ const { parseJson, bool, intOrNull } = require('./shape');
 function createTestsRepository({ db }) {
   const { pool } = db;
   const COLS = 'id,tenant_id,application_id,name,description,definition,version,credential_id,enabled,created_by,created_at,updated_at';
+  // The same columns qualified, for the reads that join the application in.
+  const T_COLS = COLS.split(',').map((c) => `t.${c}`).join(',');
+  // A test's name is only unique within its application — four applications can
+  // each have a "Login". So every read that feeds a list carries the application
+  // name, joined rather than looked up per row.
+  const WITH_APP = `SELECT ${T_COLS}, a.name AS application_name
+    FROM service_test_tests t
+    LEFT JOIN service_test_applications a ON a.id = t.application_id`;
 
   function shape(row, steps = []) {
     if (!row) return null;
@@ -19,6 +27,8 @@ function createTestsRepository({ db }) {
       id: row.id,
       tenant_id: row.tenant_id,
       application_id: row.application_id,
+      // Present on the joined reads; null on the ones that do not need it.
+      application_name: row.application_name ?? null,
       name: row.name,
       description: row.description,
       definition: parseJson(row.definition, { version: 1, steps: [] }),
@@ -53,15 +63,17 @@ function createTestsRepository({ db }) {
   }
 
   async function list({ applicationId = null } = {}) {
+    // Ordered by application first: a flat alphabetical list puts four unrelated
+    // "Login" tests in a row with nothing to tell them apart.
     const [rows] = applicationId === null
-      ? await pool.query(`SELECT ${COLS} FROM service_test_tests ORDER BY name`)
-      : await pool.query(`SELECT ${COLS} FROM service_test_tests WHERE application_id = ? ORDER BY name`, [applicationId]);
+      ? await pool.query(`${WITH_APP} ORDER BY a.name, t.name`)
+      : await pool.query(`${WITH_APP} WHERE t.application_id = ? ORDER BY t.name`, [applicationId]);
     // List view does not need step rows — the definition carries the step count.
     return rows.map((r) => shape(r));
   }
 
   async function findById(id) {
-    const [rows] = await pool.query(`SELECT ${COLS} FROM service_test_tests WHERE id = ?`, [id]);
+    const [rows] = await pool.query(`${WITH_APP} WHERE t.id = ?`, [id]);
     if (!rows[0]) return null;
     return shape(rows[0], await stepsFor(id));
   }

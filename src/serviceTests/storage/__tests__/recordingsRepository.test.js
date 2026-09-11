@@ -24,7 +24,7 @@ function repo(handlers = []) {
   // below is a fallback rather than a shadow.
   const pool = makeFakePool([
     ...handlers,
-    [/^SELECT .* FROM service_test_recordings WHERE id = \?/i, () => rows([row()])],
+    [/^SELECT .* FROM service_test_recordings r LEFT JOIN service_test_applications .* WHERE r\.id = \?/i, () => rows([row()])],
   ]);
   return { pool, repo: createRecordingsRepository({ db: { pool }, now: () => NOW }) };
 }
@@ -40,11 +40,11 @@ test('the token is stored as a hash, never as itself', async () => {
 });
 
 test('a token only resolves while the recording is live — never for a stopped or expired one', async () => {
-  const { pool, repo: r } = repo([[/^SELECT .* FROM service_test_recordings WHERE token_hash = \?/i, () => rows([row()])]]);
+  const { pool, repo: r } = repo([[/^SELECT .* FROM service_test_recordings r LEFT JOIN .* WHERE r\.token_hash = \?/i, () => rows([row()])]]);
   await r.findByToken('some-token');
-  const select = pool.matching(/WHERE token_hash = \?/i)[0];
-  assert.match(select.sql, /status = 'recording'/, 'a stopped recording must not accept events');
-  assert.match(select.sql, /expires_at > \?/, 'an abandoned recording must not stay open');
+  const select = pool.matching(/WHERE r\.token_hash = \?/i)[0];
+  assert.match(select.sql, /r\.status = 'recording'/, 'a stopped recording must not accept events');
+  assert.match(select.sql, /r\.expires_at > \?/, 'an abandoned recording must not stay open');
   assert.ok(select.params.includes(crypto.createHash('sha256').update('some-token').digest('hex')));
 
   assert.equal(await r.findByToken(''), null);
@@ -54,7 +54,7 @@ test('a token only resolves while the recording is live — never for a stopped 
 test('appending is bounded, so a runaway recorder cannot grow one column without limit', async () => {
   const stored = Array.from({ length: 1990 }, (_, i) => ({ kind: 'click', at: i }));
   const { pool, repo: r } = repo([
-    [/^SELECT .* FROM service_test_recordings WHERE id = \?/i, () => rows([row({ events: JSON.stringify(stored) })])],
+    [/^SELECT .* FROM service_test_recordings r LEFT JOIN service_test_applications .* WHERE r\.id = \?/i, () => rows([row({ events: JSON.stringify(stored) })])],
     [/^UPDATE service_test_recordings SET events/i, () => ok()],
   ]);
   await r.appendEvents(1, Array.from({ length: 100 }, (_, i) => ({ kind: 'click', at: 2000 + i })));
@@ -90,14 +90,15 @@ test('the shaped row never carries the token hash back out', async () => {
   assert.deepEqual(found.events, []);
   // A row whose JSON is unreadable degrades to an empty recording rather than
   // throwing on the way to a screen.
-  const { repo: broken } = repo([[/^SELECT .* WHERE id = \?/i, () => rows([row({ events: '{not json' })])]]);
+  const { repo: broken } = repo([[/^SELECT .* WHERE r\.id = \?/i, () => rows([row({ events: '{not json' })])]]);
   assert.deepEqual((await broken.findById(1)).events, []);
 });
 
 test('the list is bounded and filters do not reach the SQL as text', async () => {
-  const { pool, repo: r } = repo([[/^SELECT .* FROM service_test_recordings (WHERE|ORDER)/i, () => rows([row()])]]);
+  const { pool, repo: r } = repo([[/^SELECT .* FROM service_test_recordings r LEFT JOIN/i, () => rows([row()])]]);
   await r.list({ applicationId: 7, status: 'stopped', limit: 100000 });
-  const select = pool.matching(/ORDER BY created_at DESC/i)[0];
+  const select = pool.matching(/ORDER BY r\.created_at DESC/i)[0];
   assert.match(select.sql, /LIMIT 200/, 'the limit must be clamped');
   assert.deepEqual(select.params, [7, 'stopped'], 'filters must be parameters, not interpolated');
+  assert.match(select.sql, /LEFT JOIN service_test_applications/i, 'the list must name the application');
 });

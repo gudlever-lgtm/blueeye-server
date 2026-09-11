@@ -2282,6 +2282,10 @@ button.ghost.small:has(> .icon-glyph) {
   cursor: grab; user-select: none;
   box-shadow: 0 1px 3px rgba(0, 0, 0, .2);
 }
+/* The brand mark, matching the sidebar's. It rides in the link TEXT rather than
+   as a background image on purpose: a bookmarklet has no origin, so the browser
+   has no favicon to fetch and shows its generic globe whatever we do here — the
+   name is the only part of the bookmarks bar we control. */
 .sa-bookmarklet::before {
   content: ''; width: 9px; height: 9px; border-radius: 50%;
   background: #d03b3b; box-shadow: 0 0 0 2px rgba(255, 255, 255, .35);
@@ -2296,3 +2300,9 @@ button.ghost.small:has(> .icon-glyph) {
   font-size: 11px; letter-spacing: .02em; text-transform: uppercase;
   color: var(--muted, #898781);
 }
+
+/* The application a test runs against. A test name is only unique within its
+   application, so this column is what tells four "Login" rows apart — it reads
+   as context beside the name, not as a second title. */
+.sa-app-cell { color: var(--muted, #52514e); }
+.sa-detail-app { margin: -4px 0 12px; }

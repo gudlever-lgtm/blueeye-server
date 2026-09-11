@@ -566,6 +566,12 @@
         var rows = tests.map(function (test) {
           return el('tr', { class: 'clickable', onclick: function () { state.testId = test.id; draw(); } },
             el('td', {}, el('strong', {}, test.name)),
+            // Which application this runs against. A test name is only unique
+            // within its application — four of them can each have a "Login" —
+            // so without this column the list is four identical rows.
+            el('td', {}, test.application_name
+              ? el('span', { class: 'sa-app-cell' }, test.application_name)
+              : el('span', { class: 'muted' }, '—')),
             el('td', {}, t('sa.test.steps', { count: test.step_count })),
             el('td', {}, historyStrip(test.history)),
             el('td', {}, test.history && test.history.success_rate !== null
@@ -579,6 +585,7 @@
         mount(body, head, recordingsPanel(recordings), el('table', { class: 'data-table' },
           el('thead', {}, el('tr', {},
             el('th', {}, t('sa.app.name')),
+            el('th', {}, t('sa.test.application')),
             el('th', {}, t('sa.designer.title')),
             el('th', {}, t('sa.tab.runs')),
             el('th', {}, t('sa.run.successRate')),
@@ -608,12 +615,16 @@
         el('table', { class: 'data-table' },
           el('thead', {}, el('tr', {},
             el('th', {}, t('sa.app.name')),
+            el('th', {}, t('sa.test.application')),
             el('th', {}, t('sa.record.steps')),
             el('th', {}, t('sa.record.status')),
             el('th', {}, ''))),
           el('tbody', {}, ...open.map(function (rec) {
             return el('tr', {},
               el('td', {}, el('strong', {}, rec.name)),
+              el('td', {}, rec.application_name
+                ? el('span', { class: 'sa-app-cell' }, rec.application_name)
+                : el('span', { class: 'muted' }, '—')),
               el('td', {}, t('sa.test.steps', { count: rec.step_count })),
               el('td', {}, el('span', { class: 'sa-status sa-status-' + (rec.status === 'recording' ? 'running' : 'pending') },
                 t(rec.status === 'recording' ? 'sa.record.live' : 'sa.record.stopped'))),
@@ -673,6 +684,7 @@
         el('div', { class: 'sa-bookmarklet-row' }, link, copied),
         el('p', {}, t('sa.record.step2')),
         el('p', {}, t('sa.record.step3')),
+        el('p', { class: 'sa-help' }, t('sa.record.iconNote')),
         el('p', { class: 'sa-help' }, t('sa.record.reinject')),
         el('p', { class: 'sa-help' }, t('sa.record.cspWarning')),
         el('p', { class: 'sa-help' }, t('sa.record.secretNote')),
@@ -797,7 +809,10 @@
           el('button', { class: 'ghost small', onclick: function () { state.testId = null; draw(); } }, '← ' + t('sa.back')),
           section(test.name, [
             isOperator() ? el('button', { class: 'primary', onclick: function () { runTest(test); } }, t('sa.test.run')) : null,
-          ]));
+          ]),
+          test.application_name
+            ? el('p', { class: 'muted sa-detail-app' }, t('sa.test.runsAgainst', { application: test.application_name }))
+            : null);
 
         mount(body, head,
           designer(test, catalogue),

@@ -61,13 +61,42 @@ element to find it again.
   link to a *different* host is kept whole — rewriting that one would point the
   step at the wrong site.
 
-## When it does not work
+## When it does not work: Content-Security-Policy
 
-Some applications set a strict Content-Security-Policy that refuses to load
-scripts from anywhere but themselves. On those sites the bookmark will do
-nothing, and you will get an alert saying so. That is the site's security policy
-working correctly, not a fault in BlueEyes. Build the test in the designer
-instead — Discovery's suggestions are usually a good starting point.
+Many applications set a Content-Security-Policy — a header that tells the browser
+what the page is allowed to do. It can stop the recorder in two different places,
+and the difference matters because only one of them is fixable.
+
+**`script-src` — not a problem.** This is the one that stops a page loading a
+script from somewhere else. It does not apply to the recorder: the bookmarklet
+carries the whole recorder in itself, and a bookmarklet's code counts as *you
+acting*, not as the page loading something. Browsers exempt it deliberately.
+
+**`connect-src` — the real wall.** This is the one that says which addresses the
+page may send data to. The recorder has to post what it saw back to BlueEyes, and
+a site whose policy allows connections only to itself will block that. No
+bookmarklet can talk its way past it; that is exactly what the policy is for.
+
+**How to tell which one you hit.** Press F12, open **Console**, and click the
+bookmark. A CSP refusal prints the directive by name:
+
+```
+Refused to connect to 'https://blueeye.kunde.dk/api/service-capture/events'
+because it violates the following Content Security Policy directive:
+"connect-src 'self'"
+```
+
+**If it is `connect-src`,** you have three options, cheapest first:
+
+1. **Record on a test or staging environment** that does not set the header, then
+   point the saved test at production. The test is stored as paths, not absolute
+   addresses, so the same test runs against either.
+2. **Ask whoever runs the application to add your BlueEyes address** to
+   `connect-src`. One entry, and only for the recording — the test itself runs
+   from the worker's browser and needs nothing added.
+3. **Build the test in the designer.** Discovery's suggestions are usually a good
+   starting point, and a recorded test and a hand-built one are the same thing
+   once saved.
 
 **After a full page change, click the bookmark again.** A bookmarklet lives in
 the page it was injected into, so a normal page load (as opposed to a
@@ -94,8 +123,9 @@ application's stored logins before saving. They can see which logins exist
 
 ## For the technically curious
 
-The bookmark injects one script tag pointing at this server's `/recorder.js`,
-carrying the capture key on the tag. The recorder posts what it observed to
+The bookmark carries the recorder's own source (about 23 KB) with the capture
+key in front of it. The same code is served at `/recorder.js`, so you can read
+exactly what it does before trusting it. The recorder posts what it observed to
 `/api/service-capture/events`. That path is the one Service Assurance endpoint
 without a login, because its caller is a script on your application's page, which
 has no BlueEyes session. It is bounded accordingly: the key is stored only as a

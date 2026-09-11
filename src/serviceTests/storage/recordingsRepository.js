@@ -12,6 +12,14 @@ function createRecordingsRepository({ db, now = () => new Date() }) {
   const { pool } = db;
   const COLS = `id, application_id, name, status, events, event_count, base_url,
     created_test_id, created_by, expires_at, last_event_at, created_at, updated_at`;
+  const R_COLS = COLS.split(',').map((c) => `r.${c.trim()}`).join(', ');
+  // A recording's name is only unique within its application, like a test's, so
+  // every read that feeds a list carries the application name — joined, not
+  // looked up per row. LEFT, so a recording outlives a deleted application row
+  // in the response rather than vanishing from it.
+  const WITH_APP = `SELECT ${R_COLS}, a.name AS application_name
+    FROM service_test_recordings r
+    LEFT JOIN service_test_applications a ON a.id = r.application_id`;
 
   const hashToken = (token) => crypto.createHash('sha256').update(String(token)).digest('hex');
 
@@ -26,6 +34,7 @@ function createRecordingsRepository({ db, now = () => new Date() }) {
     return {
       id: row.id,
       application_id: row.application_id,
+      application_name: row.application_name ?? null,
       name: row.name,
       status: row.status,
       events: parseJson(row.events, []),
@@ -43,7 +52,7 @@ function createRecordingsRepository({ db, now = () => new Date() }) {
   }
 
   async function findById(id) {
-    const [rows] = await pool.query(`SELECT ${COLS} FROM service_test_recordings WHERE id = ? LIMIT 1`, [id]);
+    const [rows] = await pool.query(`${WITH_APP} WHERE r.id = ? LIMIT 1`, [id]);
     return shape(rows[0]);
   }
 
@@ -69,8 +78,7 @@ function createRecordingsRepository({ db, now = () => new Date() }) {
   async function findByToken(token) {
     if (!token) return null;
     const [rows] = await pool.query(
-      `SELECT ${COLS} FROM service_test_recordings
-       WHERE token_hash = ? AND status = 'recording' AND expires_at > ? LIMIT 1`,
+      `${WITH_APP} WHERE r.token_hash = ? AND r.status = 'recording' AND r.expires_at > ? LIMIT 1`,
       [hashToken(token), now()]
     );
     return shape(rows[0]);
@@ -115,13 +123,13 @@ function createRecordingsRepository({ db, now = () => new Date() }) {
   async function list({ applicationId = null, status = null, limit = 50 } = {}) {
     const where = [];
     const params = [];
-    if (applicationId) { where.push('application_id = ?'); params.push(applicationId); }
-    if (status) { where.push('status = ?'); params.push(status); }
+    if (applicationId) { where.push('r.application_id = ?'); params.push(applicationId); }
+    if (status) { where.push('r.status = ?'); params.push(status); }
     const n = Math.min(Math.max(Number(limit) || 50, 1), 200);
     const [rows] = await pool.query(
-      `SELECT ${COLS} FROM service_test_recordings
+      `${WITH_APP}
        ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
-       ORDER BY created_at DESC LIMIT ${n}`,
+       ORDER BY r.created_at DESC LIMIT ${n}`,
       params
     );
     return rows.map(shape);

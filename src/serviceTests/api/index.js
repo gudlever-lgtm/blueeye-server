@@ -30,6 +30,9 @@ function createServiceTestsApiRouter({
   // to build.
   reactor = null,
   artifacts = null,
+  // Returns public/recorder.js as a string, so the bookmarklet can carry the
+  // recorder inline and survive the target site's Content-Security-Policy.
+  recorderSource = null,
   audit = null,
   logger = null,
   // Middleware supplied by the host.
@@ -46,7 +49,7 @@ function createServiceTestsApiRouter({
   if (requireAuth) router.use(requireAuth);
   if (requireFeature) router.use(requireFeature);
 
-  const deps = { repositories, settings, queue, reactor, artifacts, audit, logger, requireRole, roles };
+  const deps = { repositories, settings, queue, reactor, artifacts, audit, logger, requireRole, roles, recorderSource };
 
   router.use('/applications', createApplicationsRouter(deps));
   router.use('/tests', createTestsRouter(deps));

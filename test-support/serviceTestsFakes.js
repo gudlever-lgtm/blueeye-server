@@ -12,6 +12,7 @@
 const crypto = require('crypto');
 const { createServiceTestsApiRouter } = require('../src/serviceTests/api');
 const { createRecordingsCaptureRouter } = require('../src/serviceTests/api/recordings');
+const { createRecorderSource } = require('../src/serviceTests/recording/bookmarklet');
 const { createServiceTestSettings } = require('../src/serviceTests/settings');
 const { createQueue } = require('../src/serviceTests/scheduler/queue');
 const { bucketKey, sqlFormat } = require('../src/serviceTests/stats/period');
@@ -118,6 +119,9 @@ function makeServiceTests(overrides = {}) {
     recordings: makeTable(overrides.recordings || []),
   };
 
+  // A LEFT JOIN, in JS: a test whose application row is gone still lists.
+  const appNameOf = (id) => { const a = t.applications.find(id); return a ? a.name : null; };
+
   // The format string the API passes back to the bucket shape it stands for —
 // the fake groups in JS, but on the same keys as the SQL.
 const BUCKET_OF_FORMAT = {
@@ -205,13 +209,21 @@ const bool = (v) => !!v;
       },
     },
     tests: {
+      // The SQL repository joins the application in and orders by it, because a
+      // test name is only unique within its application. The fake does the same
+      // in JS so a route spec sees the shape the browser will get.
       async list({ applicationId = null } = {}) {
         return t.tests.where((r) => applicationId === null || r.application_id === applicationId)
-          .map((r) => ({ ...r, enabled: bool(r.enabled), steps: [] }));
+          .map((r) => ({ ...r, enabled: bool(r.enabled), steps: [], application_name: appNameOf(r.application_id) }))
+          .sort((a, b) => String(a.application_name || '').localeCompare(String(b.application_name || ''))
+            || String(a.name || '').localeCompare(String(b.name || '')));
       },
       async findById(id) {
         const r = t.tests.find(id);
-        return r ? { ...r, enabled: bool(r.enabled), steps: (r.definition && r.definition.steps) || [] } : null;
+        return r ? {
+          ...r, enabled: bool(r.enabled), application_name: appNameOf(r.application_id),
+          steps: (r.definition && r.definition.steps) || [],
+        } : null;
       },
       async create(input) {
         const row = t.tests.insert({ version: 1, ...input, enabled: input.enabled === false ? 0 : 1 });
@@ -420,7 +432,10 @@ const bool = (v) => !!v;
     // token back out of the table fails here for the same reason it fails in
     // production.
     recordings: {
-      async findById(id) { return t.recordings.find(id); },
+      async findById(id) {
+        const r = t.recordings.find(id);
+        return r ? { ...r, application_name: appNameOf(r.application_id) } : null;
+      },
       async start({ applicationId, name, baseUrl = null, createdBy = null, ttlMs = 3600000 }) {
         const token = crypto.randomBytes(24).toString('base64url');
         const row = t.recordings.insert({
@@ -429,14 +444,14 @@ const bool = (v) => !!v;
           events: [], event_count: 0, base_url: baseUrl, created_test_id: null, created_by: createdBy,
           expires_at: new Date(Date.now() + ttlMs), last_event_at: null,
         });
-        return { recording: row, token };
+        return { recording: { ...row, application_name: appNameOf(applicationId) }, token };
       },
       async findByToken(token) {
         if (!token) return null;
         const hash = crypto.createHash('sha256').update(String(token)).digest('hex');
         const row = t.recordings.rows.find((r) => r.token_hash === hash
           && r.status === 'recording' && new Date(r.expires_at).getTime() > Date.now());
-        return row ? clone(row) : null;
+        return row ? { ...clone(row), application_name: appNameOf(row.application_id) } : null;
       },
       async appendEvents(id, events, { maxEvents = 2000 } = {}) {
         const row = t.recordings.rows.find((r) => r.id === Number(id));
@@ -457,7 +472,8 @@ const bool = (v) => !!v;
       },
       async list({ applicationId = null, status = null } = {}) {
         return t.recordings.where((r) => (!applicationId || r.application_id === applicationId)
-          && (!status || r.status === status));
+          && (!status || r.status === status))
+          .map((r) => ({ ...r, application_name: appNameOf(r.application_id) }));
       },
       async remove(id) { return t.recordings.remove(id); },
       async purgeExpired() {
@@ -653,6 +669,8 @@ const bool = (v) => !!v;
     requireRole,
     requireFeature: overrides.requireFeature ?? null,
     roles: ROLES,
+    // The real recorder, so a spec sees the bookmarklet the browser gets.
+    recorderSource: createRecorderSource({ path: require('path').join(__dirname, '..', 'public', 'recorder.js') }),
   });
 
   // The ingest half, wired the same way the real module wires it: no session

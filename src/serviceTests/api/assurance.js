@@ -1,7 +1,9 @@
 'use strict';
 
 const express = require('express');
-const { asyncHandler, notFound, invalidId, auditor, userId, parseId } = require('./helpers');
+const { asyncHandler, notFound, invalidId, invalid, auditor, userId, parseId } = require('./helpers');
+const { validateStatsQuery } = require('../validation');
+const { resolvePeriod } = require('../stats/period');
 
 // The reaction layer's HTTP surface: what is currently wrong, and what every
 // certificate looks like.
@@ -10,7 +12,7 @@ const { asyncHandler, notFound, invalidId, auditor, userId, parseId } = require(
 // with, and hiding it behind a role helps nobody. Writes are operator+: resolving
 // an incident by hand and forcing a certificate re-check both change state, and
 // a forced re-check reaches out to the network.
-function createAssuranceRouter({ repositories, reactor = null, audit, requireRole, roles, logger = null }) {
+function createAssuranceRouter({ repositories, reactor = null, audit, requireRole, roles, logger = null, now = () => new Date() }) {
   const router = express.Router();
   const { incidents, certificates, applications } = repositories;
   const read = requireRole(roles.VIEWER, roles.OPERATOR, roles.ADMIN);
@@ -87,6 +89,69 @@ function createAssuranceRouter({ repositories, reactor = null, audit, requireRol
     const resolved = await incidents.resolve(id, { resolution: note, resolvedBy: userId(req) });
     record(req, 'assurance_incident_resolve', id, incident.subject_key);
     return res.json(resolved);
+  }));
+
+  // Which applications gave us the most trouble, over a chosen period.
+  //
+  //   ?period=day|week|month|year   default MONTH — the Health page's question
+  //                                 is "how has this month been", not "today"
+  //   &at=YYYY-MM-DD                any date inside the wanted period
+  //   &tz_offset=-120               the viewer's getTimezoneOffset()
+  //   &severity=CRIT                default CRIT
+  //   &application_ids=1,2,3        narrow to a chosen few; omitted = all
+  //   &limit=10                     default 10
+  //
+  // Shares resolvePeriod() with GET /stats, so "last month" means one thing in
+  // this install and the dashboard's ◀ ▶ buttons never do calendar arithmetic.
+  router.get('/top-applications', read, asyncHandler(async (req, res) => {
+    const { value, errors } = validateStatsQuery(req.query);
+    if (errors) return invalid(res, errors);
+
+    const severity = pick(req.query.severity, SEVERITIES);
+    if (severity === undefined) return res.status(400).json({ error: 'Invalid severity' });
+
+    let limit = 10;
+    if (req.query.limit !== undefined && req.query.limit !== '') {
+      const parsed = parseId(req.query.limit);
+      if (parsed === null || parsed > 50) return res.status(400).json({ error: 'Invalid limit' });
+      limit = parsed;
+    }
+
+    // A comma-separated selection from the multi-select. One bad id fails the
+    // whole request rather than being quietly dropped: a chart that silently
+    // ignores half your filter is worse than an error.
+    let applicationIds = null;
+    if (req.query.application_ids !== undefined) {
+      const raw = String(req.query.application_ids);
+      applicationIds = raw === '' ? [] : raw.split(',').map((part) => parseId(part.trim()));
+      if (applicationIds.some((id) => id === null)) return res.status(400).json({ error: 'Invalid application_ids' });
+    }
+
+    const period = resolvePeriod({
+      period: value.period || 'month',
+      at: value.at,
+      offsetMinutes: value.tz_offset,
+      now: now(),
+    });
+
+    const applications_ranked = await incidents.countByApplication({
+      from: period.from, to: period.to, severity: severity || 'CRIT', applicationIds, limit,
+    });
+
+    return res.json({
+      period: period.period,
+      at: period.at,
+      from: period.from,
+      to: period.to,
+      prev_at: period.prev_at,
+      next_at: period.next_at,
+      has_next: period.has_next,
+      is_current: period.is_current,
+      severity: severity || 'CRIT',
+      limit,
+      applications: applications_ranked,
+      total: applications_ranked.reduce((acc, r) => acc + r.incidents, 0),
+    });
   }));
 
   // ---------------------------------------------------------- certificates

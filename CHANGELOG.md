@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.124.5 — which applications gave us the most trouble
+
+The Health page counted open incidents and listed them. It could not answer the
+question a service owner actually opens it with: *which of my services has been
+the problem this month?*
+
+A ranking of the applications with the most critical incidents, over a chosen
+period — **month by default**, because the Health page's question is "how has
+this month been", not "what happened in the last hour". Day / week / month / year
+with a date picker and ◀ ▶ navigation, reusing the same `resolvePeriod()` the run
+chart already uses, so "last month" means one thing in this install and the
+buttons never do calendar arithmetic of their own.
+
+Counted by when the incident **opened**, not by whether it is still open: a
+problem that was raised and fixed inside the period is part of that period's
+answer.
+
+**A searchable, multiple-choice application filter.** Hand-rolled, because the
+repo ships no UI library and is not about to grow one for a dropdown — and
+deliberately not a native `<select multiple>`, which has no search and asks
+people to ctrl-click to keep a selection. No selection means all; an EMPTY
+selection means none, because "show me none of them" is a legitimate thing for a
+multi-select to say and answering it with everything would be a lie.
+
+Horizontal bars, one hue. Long application names would become rotated stubs on a
+vertical column chart, and the bars reuse `.sa-bar-failed` — the red this page
+already uses for "this is the bad one" — rather than introducing a second red for
+the same concept. Because every bar is that one colour, filtering the list cannot
+repaint the survivors; and with a single series the title carries the identity, so
+there is no legend to read. Every bar is directly labelled: ten is few enough that
+nobody should have to measure a bar against a gridline.
+
+An empty ranking says "no critical incidents in this period" in words. An empty
+chart area reads as broken, which is the opposite of the news.
+
+`GET /api/service-tests/assurance/top-applications` — viewer+, every parameter
+validated rather than coerced.
+
 ## 0.124.4 — which layer failed, and what a reroute cost
 
 Two halves of the same question: when something breaks, *where* did it break?

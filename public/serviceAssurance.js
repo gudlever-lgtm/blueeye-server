@@ -1117,10 +1117,12 @@
         api(API + '/tests/' + id),
         api(API + '/tests/step-types'),
         api(API + '/schedules?test_id=' + id),
+        api(API + '/healing?test_id=' + id + '&status=proposed').catch(function () { return []; }),
       ]).then(function (res) {
         var test = res[0];
         var catalogue = res[1].categories;
         var schedules = res[2];
+        var proposals = res[3] || [];
 
         var head = el('div', {},
           el('button', { class: 'ghost small', onclick: function () { state.testId = null; draw(); } }, '← ' + t('sa.back')),
@@ -1147,10 +1149,58 @@
                   }, j.name));
               }))
             : null,
+          // Before the designer: a step that can no longer find its element is
+          // the reason the operator opened this page, and the proposal is what
+          // they can do about it.
+          proposals.length ? healingPanel(proposals) : null,
           designer(test, catalogue),
           historyPanel(test),
           schedulePanel(test, schedules));
       });
+    }
+
+    // ------------------------------------------------------- self-healing
+    //
+    // The element a step points at is gone, and BlueEyes found one it thinks was
+    // meant. It PROPOSES. Nothing on this screen has already happened — that is
+    // the feature, not a formality: a heal applied without being read would turn
+    // a test green while the service stayed broken.
+    function healingPanel(proposals) {
+      return el('div', { class: 'sa-panel sa-healing' },
+        section(t('sa.heal.title'), null),
+        el('p', { class: 'sa-help' }, t('sa.heal.help')),
+        ...proposals.map(healingCard));
+    }
+
+    function healingCard(p) {
+      var errors = el('div', {});
+      var busy = false;
+      function decide(action) {
+        if (busy) return;
+        busy = true;
+        api(API + '/healing/' + p.id + '/' + action, { method: 'POST', body: {} })
+          .then(function () { toast(t(action === 'accept' ? 'sa.heal.accepted' : 'sa.heal.rejected')); draw(); })
+          .catch(function (e) { busy = false; showErrors(errors, e); });
+      }
+
+      return el('div', { class: 'sa-heal-card sa-conf-' + p.confidence },
+        el('div', { class: 'sa-journey-head' },
+          el('strong', {}, t('sa.heal.stepLabel', { step: p.step_path, type: p.step_type || '' })),
+          el('span', { class: 'chip chip-' + p.confidence }, t('sa.suggest.confidence') + ': ' + p.confidence)),
+        // Both sides, side by side, in the operator's words. A proposal they
+        // cannot check is a proposal they should not accept.
+        el('div', { class: 'sa-heal-compare' },
+          el('div', {}, el('div', { class: 'muted' }, t('sa.heal.original')),
+            el('code', {}, p.original_label || '')),
+          el('div', { class: 'sa-heal-arrow' }, '\u2192'),
+          el('div', {}, el('div', { class: 'muted' }, t('sa.heal.proposed')),
+            el('code', {}, p.proposed_label || ''))),
+        el('p', { class: 'sa-journey-reason' }, p.reason || ''),
+        errors,
+        isOperator() ? el('div', { class: 'sa-heal-actions' },
+          el('button', { class: 'primary small', onclick: function () { decide('accept'); } }, t('sa.heal.accept')),
+          el('button', { class: 'ghost small', onclick: function () { decide('reject'); } }, t('sa.heal.reject')),
+          el('span', { class: 'sa-help' }, t('sa.heal.editHint'))) : null);
     }
 
     // ------------------------------------------------------ test designer

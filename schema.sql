@@ -2173,3 +2173,42 @@ CREATE TABLE IF NOT EXISTS service_test_journey_steps (
   CONSTRAINT fk_stjs_journey FOREIGN KEY (journey_id) REFERENCES service_test_journeys(id) ON DELETE CASCADE,
   CONSTRAINT fk_stjs_test FOREIGN KEY (test_id) REFERENCES service_test_tests(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Self-healing selectors (V2 §5, P2 #7).
+--
+--     Original:   #login-button
+--     Suggested:  button "Log ind"
+--
+-- When a step's target no longer resolves, BlueEyes proposes the element it
+-- thinks the operator meant. It does NOT repoint the test: the spec says
+-- "testen må ikke ændres automatisk uden brugerens accept", and this table is
+-- how that rule is kept honest — a proposal is a row somebody has to act on,
+-- not a change that happened while they were asleep.
+--
+-- It is also the log the spec asks for ("log ændringerne"). The row survives the
+-- decision: `status` records what the operator did, `applied_by` who did it, and
+-- `original_target` what the test used to say. So "why does this test point at a
+-- different button than it did in March" has an answer six months later.
+CREATE TABLE IF NOT EXISTS service_test_healing (
+  id INT           NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  tenant_id INT               DEFAULT NULL,
+  test_id INT           NOT NULL,
+  run_id INT               DEFAULT NULL,
+  step_path VARCHAR(40)   NOT NULL,
+  step_type VARCHAR(40)       DEFAULT NULL,
+  original_target JSON         NOT NULL,
+  proposed_target JSON         NOT NULL,
+  confidence ENUM('high','medium','low') NOT NULL DEFAULT 'low',
+  reason TEXT              DEFAULT NULL,
+  score INT               DEFAULT NULL,
+  status ENUM('proposed','accepted','rejected','stale') NOT NULL DEFAULT 'proposed',
+  applied_by INT               DEFAULT NULL,
+  decided_at DATETIME(3)       DEFAULT NULL,
+  created_at DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  INDEX idx_sth_test (test_id, status),
+  INDEX idx_sth_step (test_id, step_path, status),
+  INDEX idx_sth_run (run_id),
+  CONSTRAINT fk_sth_test FOREIGN KEY (test_id) REFERENCES service_test_tests(id) ON DELETE CASCADE,
+  CONSTRAINT fk_sth_run FOREIGN KEY (run_id) REFERENCES service_test_runs(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

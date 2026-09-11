@@ -37,7 +37,7 @@ function createWorker({
   now = () => new Date(),
   sleep = (ms) => new Promise((r) => { const t = setTimeout(r, ms); if (t.unref) t.unref(); }),
 }) {
-  const { applications, environments, credentials, allowedHosts, tests, runs, discovery, suggestions } = repositories;
+  const { applications, environments, credentials, allowedHosts, tests, runs, discovery, suggestions, healing } = repositories;
   let running = false;
   let stopped = false;
 
@@ -148,6 +148,30 @@ function createWorker({
       steps: result.steps,
       ended_at: now(),
     });
+    // Self-healing (V2 §5): the element was gone and the engine found something
+    // on the page it thinks the operator meant. Recorded as a PROPOSAL — nothing
+    // here changes the test, which is the entire feature. An operator accepts it
+    // from the run, or never does.
+    if (result.healing && healing) {
+      try {
+        await healing.propose({
+          test_id: test.id,
+          run_id: run.id,
+          step_path: result.healing.step_path,
+          step_type: result.healing.step_type,
+          original_target: result.healing.original,
+          proposed_target: result.healing.target,
+          confidence: result.healing.confidence,
+          reason: result.healing.reason,
+          score: result.healing.score,
+        });
+      } catch (err) {
+        // A proposal that cannot be stored must not fail a run that already has
+        // its real result. The failure is reported either way.
+        logger.warn(`service-tests: could not record a healing proposal for run ${run.id} (${err.message})`);
+      }
+    }
+
     logger.info(`service-tests: run ${run.id} (${test.name}) → ${result.status}`);
   }
 

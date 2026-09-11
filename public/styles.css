@@ -2383,3 +2383,21 @@ button.ghost.small:has(> .icon-glyph) {
 .sa-suggest-journey-actions {
   display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-top: 12px;
 }
+
+/* --- Service Assurance · self-healing ----------------------------------- */
+/* A proposal, shown before the designer: a step that cannot find its element is
+   why the operator opened this page. Both sides side by side, because they are
+   being asked to judge a difference, not to trust a verdict. */
+.sa-healing { border-left: 4px solid #fab219; }
+.sa-heal-card { padding: 12px 0; border-top: 1px solid var(--border, rgba(11, 11, 11, .08)); }
+.sa-heal-card:first-of-type { border-top: 0; }
+.sa-heal-compare { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin: 10px 0; }
+.sa-heal-compare code {
+  display: inline-block; padding: 4px 10px; border-radius: var(--radius-sm, 6px);
+  background: var(--surface-2, #f0efec); font-size: 12px;
+}
+.sa-heal-arrow { color: var(--muted, #898781); font-size: 18px; }
+.sa-heal-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
+.sa-conf-high { border-left: 3px solid #0ca30c; padding-left: 12px; }
+.sa-conf-medium { border-left: 3px solid #fab219; padding-left: 12px; }
+.sa-conf-low { border-left: 3px solid #ec835a; padding-left: 12px; }

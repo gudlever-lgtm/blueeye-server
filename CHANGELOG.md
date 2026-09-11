@@ -1,5 +1,61 @@
 # Changelog
 
+## 0.125.9 — self-healing selectors: proposed, never applied
+
+    Original:   #login-button
+    Suggested:  button "Log ind"
+
+Applications change. A button gets a new id, a field is renamed, an `<a>`
+becomes a `<button>` — and the test that was watching it fails in a way that
+looks exactly like the service being broken, which is the one thing it must not
+be confused with. BlueEyes now looks at what IS on the page and says what it
+thinks the step meant.
+
+**It never repoints a test on its own.** Not when it is confident, not when the
+evidence is overwhelming. The spec says *testen må ikke ændres automatisk uden
+brugerens accept*, and nothing in the module can: the repository cannot write a
+definition, and `api/healing.js` is the single place a target is rewritten from
+a proposal.
+
+That rule is not caution for its own sake. A wrong heal is the worst thing this
+feature could do — the test goes green, the dashboard goes green, and nobody
+looks again while the service is broken or the test watches the wrong button. A
+MISSED heal costs somebody five minutes in the designer. Everything is tuned to
+that asymmetry, so nothing is proposed when:
+
+- two candidates are indistinguishable — two buttons both called "Save" is
+  exactly when a guess goes wrong;
+- the evidence is a lone id, because an id is precisely what changes;
+- the proposal equals what the step already says — the element failed for some
+  other reason, and repointing it at itself would hide that.
+
+The weights are the runner's own priority order in numbers (role → label → text
+→ placeholder → name → id → CSS), and a CHANGED kind of element counts against
+rather than being free. Writing it turned up a scoring bug worth keeping:
+`name` was counted twice, because it is the accessible name when a role is
+present and the HTML attribute otherwise — so the same fact was inflating the
+total and printing as two independent pieces of evidence. It now mirrors
+`strategiesFor()` exactly.
+
+Proposals address a step by its flattened PATH (`2.1`), not an index, so a step
+inside a condition block heals like any other. Healing that silently could not
+reach nested steps would fail on exactly the tests complicated enough to break.
+
+Accepting re-checks that the step still exists AND still says what the proposal
+was made against — a stale proposal applied by position would repoint a
+DIFFERENT step. Either check failing marks it stale rather than leaving it to be
+accepted tomorrow. It then goes through the ordinary test save, so a heal gets a
+version bump and a snapshot like any other edit, and the healing row survives the
+decision: "why does this test point at a different button than it did in March"
+is answerable six months later.
+
+The browser side only OBSERVES: up to 200 visible interactive elements, each
+described the way a target is. Every judgement happens on the server in
+`engine/heal.js`, which is pure and tested on its own.
+
+Migration 085. [docs/service-assurance-healing.md](docs/service-assurance-healing.md)
+is the operator's guide.
+
 ## 0.125.8 — Discovery suggests journeys, not just tests
 
 Discovery already proposed tests: "Login", "Search", "Availability". A test

@@ -11,6 +11,7 @@ const { createSettingsRouter } = require('./settings');
 const { createAssuranceRouter } = require('./assurance');
 const { createRecordingsRouter } = require('./recordings');
 const { createJourneysRouter } = require('./journeys');
+const { createHealingRouter } = require('./healing');
 
 // The Service Tests HTTP surface, mounted at /api/service-tests.
 //
@@ -65,6 +66,10 @@ function createServiceTestsApiRouter({
   // route table reads in the order the product does: what the service IS, then
   // how it is found out.
   router.use('/journeys', createJourneysRouter(deps));
+  // Self-healing proposals. A separate mount because deciding one is a
+  // different act from running a test: it CHANGES a test, and the spec insists
+  // that only ever happens with an operator's accept.
+  router.use('/healing', createHealingRouter(deps));
   router.use('/discovery', createDiscoveryRouter(deps));
   // Recording. The INGEST half is not here: it carries no session, so the host
   // mounts it outside this router (src/serviceTests/index.js).

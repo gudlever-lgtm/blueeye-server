@@ -252,7 +252,45 @@ function flattenSteps(definition) {
   return out;
 }
 
+// The step at a flattened path ("0", or "2.1" for the second step inside the
+// block at index 2) — the address flattenSteps hands out, and the only stable
+// way to name a nested step. Null when the path does not lead anywhere.
+function stepAt(definition, path) {
+  const parts = String(path == null ? '' : path).split('.');
+  const steps = (definition && definition.steps) || [];
+  const i = Number(parts[0]);
+  if (!Number.isInteger(i) || !steps[i]) return null;
+  if (parts.length === 1) return steps[i];
+  const block = blockField(steps[i].type);
+  const j = Number(parts[1]);
+  if (!block || !Array.isArray(steps[i][block]) || !Number.isInteger(j)) return null;
+  return steps[i][block][j] || null;
+}
+
+// A COPY of the definition with the step at `path` replaced. Copy rather than
+// mutate: the caller is about to validate it, and a half-applied change to the
+// definition it already holds would survive a validation failure.
+function replaceStepAt(definition, path, step) {
+  const parts = String(path == null ? '' : path).split('.');
+  const steps = ((definition && definition.steps) || []).slice();
+  const i = Number(parts[0]);
+  if (!Number.isInteger(i) || !steps[i]) return null;
+  if (parts.length === 1) {
+    steps[i] = step;
+    return { ...definition, steps };
+  }
+  const block = blockField(steps[i].type);
+  const j = Number(parts[1]);
+  if (!block || !Array.isArray(steps[i][block]) || !steps[i][block][j]) return null;
+  const inner = steps[i][block].slice();
+  inner[j] = step;
+  steps[i] = { ...steps[i], [block]: inner };
+  return { ...definition, steps };
+}
+
 module.exports = {
+  stepAt,
+  replaceStepAt,
   validateDefinition,
   validateStep,
   requiresCredential,

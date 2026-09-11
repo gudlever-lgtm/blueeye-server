@@ -278,6 +278,42 @@ Four deliberate rules:
 The bulk "create selected tests" button refuses a journey rather than building an
 empty test from its (deliberately empty) `proposed_steps`.
 
+### §5 Self-healing selectors — shipped
+
+    Original:   #login-button
+    Suggested:  button "Log ind"
+
+`engine/heal.js` (pure), migration 085, `api/healing.js`, a panel on the test
+page, and [docs/service-assurance-healing.md](service-assurance-healing.md).
+
+**The rule is the feature.** *Testen må ikke ændres automatisk uden brugerens
+accept* — and nothing in the module can, by construction: the repository cannot
+write a definition, and `api/healing.js` is the single place a target is
+rewritten from a proposal. A wrong heal turns the test green while the service
+stays broken and nobody looks again; a missed heal costs five minutes in the
+designer. Everything is tuned to that asymmetry, so it proposes nothing when:
+
+- two candidates are indistinguishable (the wrong-heal case in its purest form);
+- the evidence is a lone id (an id is precisely what changes);
+- the proposal equals what the step already says (the element failed for some
+  other reason, and repointing it at itself would hide that).
+
+The weights are the runner's own priority order in numbers, and a CHANGED role
+counts against rather than being free. `name` is scored once, not twice — it is
+the accessible name when a role is present and the HTML attribute otherwise,
+exactly as `strategiesFor()` treats it, and scoring both inflated the total and
+printed one fact as two.
+
+Proposals address a step by its flattened PATH (`2.1`), not an index, so a step
+inside a condition block heals like any other — healing that silently could not
+reach nested steps would fail on exactly the tests complex enough to break.
+
+Accepting re-checks that the step still exists AND still says what the proposal
+was made against; either failing marks it stale rather than leaving it to be
+accepted tomorrow against a step it no longer describes. It then goes through the
+ordinary test save, so a heal gets a version bump and a definition snapshot like
+any other edit.
+
 ## 3. Build order
 
 Exactly this order, because each step is what makes the next one worth having:

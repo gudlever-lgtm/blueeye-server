@@ -119,6 +119,7 @@ function makeServiceTests(overrides = {}) {
     recordings: makeTable(overrides.recordings || []),
     journeys: makeTable(overrides.journeys || []),
     journeySteps: makeTable(overrides.journeySteps || []),
+    healing: makeTable(overrides.healing || []),
   };
 
   // A LEFT JOIN, in JS: a test whose application row is gone still lists.
@@ -453,6 +454,74 @@ const bool = (v) => !!v;
       },
     },
     // Incidents: one open row per subject_key, exactly as the reactor assumes.
+    // Self-healing proposals. Nothing here can change a test — the same
+    // guarantee the SQL repository makes, for the same reason: a proposal is a
+    // row somebody acts on, never a change that happened on its own.
+    healing: {
+      async findById(id) {
+        const r = t.healing.find(id);
+        if (!r) return null;
+        const test = t.tests.find(r.test_id);
+        return {
+          ...r,
+          test_name: test ? test.name : null,
+          application_id: test ? test.application_id : null,
+          application_name: test ? appNameOf(test.application_id) : null,
+        };
+      },
+      async propose(input) {
+        const stepPath = input.step_path == null ? null : String(input.step_path);
+        if (!input.test_id || !stepPath) return null;
+        const proposed = JSON.stringify(input.proposed_target || null);
+        const open = t.healing.rows.find((r) => r.test_id === Number(input.test_id)
+          && r.step_path === stepPath && r.status === 'proposed'
+          && JSON.stringify(r.proposed_target || null) === proposed);
+        if (open) {
+          t.healing.update(open.id, {
+            run_id: input.run_id ?? null, reason: input.reason ?? null,
+            confidence: input.confidence || 'low', score: input.score ?? null,
+          });
+          return repositories.healing.findById(open.id);
+        }
+        const row = t.healing.insert({
+          test_id: Number(input.test_id), run_id: input.run_id ?? null, step_path: stepPath,
+          step_type: input.step_type ?? null, original_target: input.original_target || null,
+          proposed_target: input.proposed_target || null, confidence: input.confidence || 'low',
+          reason: input.reason ?? null, score: input.score ?? null,
+          status: 'proposed', applied_by: null, decided_at: null,
+        });
+        return repositories.healing.findById(row.id);
+      },
+      async list({ testId = null, status = null } = {}) {
+        const ORDER = { proposed: 0, accepted: 1, rejected: 2, stale: 3 };
+        const rows = t.healing.where((r) => (!testId || r.test_id === Number(testId))
+          && (!status || r.status === status));
+        const out = [];
+        for (const r of rows) out.push(await repositories.healing.findById(r.id));
+        return out.sort((a, b) => (ORDER[a.status] - ORDER[b.status]) || (b.id - a.id));
+      },
+      async decide(id, status, userId = null) {
+        const row = t.healing.find(id);
+        if (!row || row.status !== 'proposed') return null;
+        t.healing.update(id, { status, applied_by: userId, decided_at: new Date() });
+        return repositories.healing.findById(id);
+      },
+      async markOthersStale(testId, stepPath, keepId) {
+        const others = t.healing.rows.filter((r) => r.test_id === Number(testId)
+          && r.step_path === String(stepPath) && r.status === 'proposed' && r.id !== Number(keepId));
+        for (const r of others) t.healing.update(r.id, { status: 'stale' });
+        return others.length;
+      },
+      async openCounts() {
+        const out = new Map();
+        for (const r of t.healing.rows) {
+          if (r.status !== 'proposed') continue;
+          out.set(r.test_id, (out.get(r.test_id) || 0) + 1);
+        }
+        return out;
+      },
+    },
+
     // User journeys. The awkward part the SQL does — each step's LATEST run —
     // is done here the same way: newest id wins, and a test that has never run
     // yields null rather than a default, because the health rollup treats

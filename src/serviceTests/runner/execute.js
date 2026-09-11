@@ -3,6 +3,7 @@
 const { flattenSteps } = require('../engine/validate');
 const { blockField, CREDENTIAL_REF_RE } = require('../engine/dsl');
 const { describeTarget } = require('../engine/targeting');
+const { proposeHealing } = require('../engine/heal');
 const { classify, KIND } = require('./classify');
 
 // The step executor — PURE with respect to browsers.
@@ -286,11 +287,23 @@ async function executeDefinition(definition, {
           ? redact.deep({ classification, technical: message, url })
           : { classification, technical: message, url },
       });
+      // Self-healing (V2 §5). The element was not found, and the driver brought
+      // back what IS on the page — so propose the one the operator probably
+      // meant. PROPOSE: nothing here changes the test, and the whole feature is
+      // that rule (engine/heal.js explains why).
+      let healing = null;
+      if (err && err.notFound && step && step.target) {
+        try {
+          healing = proposeHealing(step.target, err.candidates || []);
+        } catch { /* a heuristic must never turn a failure into a crash */ }
+      }
+
       failed = {
         position,
         label,
         message,
         classification,
+        healing: healing ? { ...healing, step_path: path, step_type: step.type } : null,
         consoleErrors: (consoleErrors || []).map(mask),
         networkErrors: networkErrors || [],
       };
@@ -316,6 +329,12 @@ async function executeDefinition(definition, {
     failed_step: failed ? failed.position : null,
     error_message: failed ? failed.message : null,
     failure_kind: failed ? failed.classification.kind : null,
+    // A proposal, never an applied change. The worker records it; an operator
+    // decides. Null whenever the failure was not "the element is gone", or when
+    // nothing on the page was a confident enough match — silence beats a
+    // plausible-but-wrong heal, which would turn the test green while the
+    // service stays broken.
+    healing: failed ? failed.healing || null : null,
     classification: failed ? failed.classification : null,
     console_errors: failed ? failed.consoleErrors : [],
     network_errors: failed ? failed.networkErrors : [],

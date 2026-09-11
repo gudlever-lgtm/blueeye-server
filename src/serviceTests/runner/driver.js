@@ -197,7 +197,90 @@ function createPlaywrightDriver({
     const err = new Error(`${describeTarget(target)} blev ikke fundet`);
     err.notFound = true;
     err.cause = lastError;
+    // Self-healing (V2 §5): before giving up, look at what IS on the page. The
+    // candidates ride on the error; the runner turns them into a PROPOSAL and
+    // nothing here repoints anything — see engine/heal.js for why that rule is
+    // the whole feature rather than a formality.
+    err.candidates = await collectCandidates();
     throw err;
+  }
+
+  // Every element on the page a step could plausibly have meant, described the
+  // same way a target is: role, accessible name, label, text, placeholder, name,
+  // id. OBSERVATION ONLY — no judgement about which one is right happens here or
+  // anywhere in the browser.
+  //
+  // Bounded hard. This runs on a page that has already failed, in a browser the
+  // operator is waiting on, and an unbounded DOM walk on a big application would
+  // turn one bad step into a timeout.
+  async function collectCandidates({ max = 200 } = {}) {
+    try {
+      return await page.evaluate((limit) => {
+        const cut = (v, n) => (v == null ? '' : String(v).trim().slice(0, n));
+        const roleOf = (el) => {
+          const explicit = el.getAttribute('role');
+          if (explicit) return explicit.trim().toLowerCase();
+          const tag = el.tagName.toUpperCase();
+          if (tag === 'BUTTON') return 'button';
+          if (tag === 'A' && el.getAttribute('href')) return 'link';
+          if (tag === 'SELECT') return 'combobox';
+          if (tag === 'TEXTAREA') return 'textbox';
+          if (/^H[1-4]$/.test(tag)) return 'heading';
+          if (tag === 'INPUT') {
+            const type = (el.type || 'text').toLowerCase();
+            if (type === 'checkbox') return 'checkbox';
+            if (type === 'radio') return 'radio';
+            if (['submit', 'button', 'reset'].includes(type)) return 'button';
+            return 'textbox';
+          }
+          return '';
+        };
+        const nameOf = (el) => {
+          const aria = el.getAttribute('aria-label');
+          if (aria) return cut(aria, 120);
+          if (el.tagName === 'INPUT' && ['submit', 'button'].includes((el.type || '').toLowerCase())) {
+            return cut(el.value, 120);
+          }
+          return cut(el.innerText || el.textContent, 120);
+        };
+        const labelOf = (el) => {
+          if (el.labels && el.labels.length) return cut(el.labels[0].innerText, 120);
+          const wrap = el.closest && el.closest('label');
+          return wrap ? cut(wrap.innerText, 120) : '';
+        };
+
+        const SELECTOR = 'a[href], button, input, select, textarea, [role], summary, [onclick]';
+        const out = [];
+        for (const el of document.querySelectorAll(SELECTOR)) {
+          if (out.length >= limit) break;
+          // Skip what a person could not have pointed at. An invisible element
+          // is not what the step meant, and offering one is how a heal points a
+          // test at something nobody can click.
+          const box = el.getBoundingClientRect();
+          if (!box.width && !box.height) continue;
+          const candidate = {};
+          const role = roleOf(el);
+          if (role) candidate.role = role;
+          const name = nameOf(el);
+          if (name) candidate.name = name;
+          const label = labelOf(el);
+          if (label) candidate.label = label;
+          const text = cut(el.innerText || el.textContent, 120);
+          if (text && text !== name) candidate.text = text;
+          const placeholder = el.getAttribute('placeholder');
+          if (placeholder) candidate.placeholder = cut(placeholder, 120);
+          if (el.name) candidate.name = candidate.name || cut(el.name, 120);
+          if (el.id) candidate.id = cut(el.id, 120);
+          if (Object.keys(candidate).length) out.push(candidate);
+        }
+        return out;
+      }, max);
+    } catch {
+      // A page that will not evaluate (navigated away, closed, cross-origin
+      // frame) simply yields no proposal. Healing is a bonus on top of a
+      // failure that is already being reported properly.
+      return [];
+    }
   }
 
   const act = async (target, fn) => {

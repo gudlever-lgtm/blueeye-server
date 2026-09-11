@@ -409,6 +409,89 @@ test('a worker that has only sent a heartbeat is reported as connected', async (
   assert.equal(res.body.workers[0].hostname, 'assurance-1');
 });
 
+// ------------------------------------------------------------------- stats
+test('the history chart reads runs as buckets, empty ones included', async () => {
+  const st = makeServiceTests();
+  // Two runs on the 11th, one on the 13th, in a week with seven days.
+  st.tables.runs.insert({ test_id: 1, status: 'pass', duration_ms: 1000, started_at: '2026-09-11T08:00:00Z', created_at: '2026-09-11T08:00:00Z' });
+  st.tables.runs.insert({ test_id: 1, status: 'fail', duration_ms: 3000, started_at: '2026-09-11T09:00:00Z', created_at: '2026-09-11T09:00:00Z' });
+  st.tables.runs.insert({ test_id: 1, status: 'pass', duration_ms: 2000, started_at: '2026-09-13T09:00:00Z', created_at: '2026-09-13T09:00:00Z' });
+
+  const res = await request(makeApp({ serviceTests: st }))
+    .get(`${BASE}/stats?period=week&at=2026-09-11&tz_offset=0`)
+    .set('Authorization', authHeader('viewer'));
+
+  assert.equal(res.status, 200);
+  assert.equal(res.body.period, 'week');
+  assert.equal(res.body.bucket, 'day');
+  assert.equal(res.body.at, '2026-09-07');
+  assert.equal(res.body.buckets.length, 7, 'a week is seven bars, however few of them have runs');
+
+  const eleventh = res.body.buckets.find((b) => b.key === '2026-09-11 00:00');
+  assert.equal(eleventh.total, 2);
+  assert.equal(eleventh.pass, 1);
+  assert.equal(eleventh.fail, 1);
+  assert.equal(eleventh.avg_duration_ms, 2000);
+
+  // A day with no runs is a gap the operator needs to see, not a missing bar.
+  const twelfth = res.body.buckets.find((b) => b.key === '2026-09-12 00:00');
+  assert.equal(twelfth.total, 0);
+  assert.equal(twelfth.avg_duration_ms, null);
+
+  assert.equal(res.body.totals.total, 3);
+  assert.equal(res.body.totals.pass, 2);
+  assert.equal(Math.round(res.body.totals.success_rate * 100), 67);
+  assert.equal(res.body.prev_at, '2026-08-31');
+  assert.equal(res.body.next_at, '2026-09-14');
+});
+
+test('an empty period reports no runs rather than a perfect score', async () => {
+  const res = await get('/stats?period=year&at=1999-01-01&tz_offset=0', 'viewer');
+  assert.equal(res.status, 200);
+  assert.equal(res.body.buckets.length, 12);
+  assert.equal(res.body.totals.total, 0);
+  assert.equal(res.body.totals.success_rate, null, '0 of 0 is not 100%');
+  assert.equal(res.body.totals.avg_duration_ms, null);
+});
+
+test('stats narrows to one test, and to one application', async () => {
+  const st = makeServiceTests();
+  st.tables.tests.insert({ application_id: 1, name: 'Second', definition: { version: 1, name: 'Second', steps: [] }, version: 1, enabled: 1 });
+  st.tables.runs.insert({ test_id: 1, status: 'pass', duration_ms: 10, started_at: '2026-09-11T08:00:00Z', created_at: '2026-09-11T08:00:00Z' });
+  st.tables.runs.insert({ test_id: 2, status: 'fail', duration_ms: 20, started_at: '2026-09-11T08:00:00Z', created_at: '2026-09-11T08:00:00Z' });
+  const app = makeApp({ serviceTests: st });
+
+  const one = await request(app).get(`${BASE}/stats?period=day&at=2026-09-11&tz_offset=0&test_id=1`).set('Authorization', authHeader('viewer'));
+  assert.equal(one.body.totals.total, 1);
+  assert.equal(one.body.test_id, 1);
+
+  const both = await request(app).get(`${BASE}/stats?period=day&at=2026-09-11&tz_offset=0&application_id=1`).set('Authorization', authHeader('viewer'));
+  assert.equal(both.body.totals.total, 2, 'both tests belong to application 1');
+});
+
+test('stats answers 400 for a bad query and 404 for a test that does not exist', async () => {
+  const bad = [
+    '?period=decade', '?at=11-09-2026', '?at=garbage', '?tz_offset=9999', '?tz_offset=abc',
+    '?test_id=abc', '?test_id=-1', '?application_id=0',
+  ];
+  for (const q of bad) {
+    const res = await get(`/stats${q}`, 'viewer');
+    assert.equal(res.status, 400, `GET /stats${q} → ${res.status}`);
+    assert.equal(res.body.error, 'Validation failed');
+    assert.ok(res.body.details && Object.keys(res.body.details).length, `GET /stats${q} gave no reason`);
+  }
+  assert.equal((await get('/stats?test_id=99999', 'viewer')).status, 404);
+  assert.equal((await get('/stats?application_id=99999', 'viewer')).status, 404);
+});
+
+test('stats defaults to this week and is readable by a viewer, not by an anonymous caller', async () => {
+  const res = await get('/stats', 'viewer');
+  assert.equal(res.status, 200);
+  assert.equal(res.body.period, 'week');
+  assert.equal(res.body.buckets.length, 7);
+  assert.equal((await request(app()).get(`${BASE}/stats`)).status, 401);
+});
+
 test('an oversized body is refused before it reaches a handler', async () => {
   const res = await request(app()).post(`${BASE}/applications`).set('Authorization', authHeader('admin'))
     .send({ name: 'X', base_url: 'https://x.example.com', description: 'y'.repeat(2 * 1024 * 1024) });

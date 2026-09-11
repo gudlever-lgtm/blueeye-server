@@ -270,3 +270,62 @@ test('a corrupt JSON column degrades to an empty list instead of throwing on a r
   const run = await createRunsRepository({ db: { pool }, now }).findById(5);
   assert.deepEqual(run.console_errors, []);
 });
+
+// ------------------------------------------------------------------- stats
+test('stats aggregates in SQL, bucketed in the viewer\'s time zone', async () => {
+  const pool = makeFakePool([[/^SELECT DATE_FORMAT/i, () => [[
+    { bucket: '2026-09-11 00:00', total: 5, pass: 4, fail: 1, warning: 0, error: 0, skipped: 0, avg_duration_ms: 1200, max_duration_ms: 3000 },
+  ]]]]);
+  const repo = createRunsRepository({ db: { pool }, now });
+
+  const rows = await repo.stats({
+    from: new Date('2026-09-10T22:00:00Z'),
+    to: new Date('2026-09-11T22:00:00Z'),
+    sqlFormat: '%Y-%m-%d 00:00',
+    offsetMinutes: -120,
+  });
+
+  const [call] = pool.matching(/^SELECT DATE_FORMAT/i);
+  // Counting happens in the database: a year of a five-minute schedule is
+  // ~105,000 rows and the chart wants twelve numbers.
+  assert.match(call.sql, /COUNT\(\*\) AS total/i);
+  assert.match(call.sql, /GROUP BY bucket/i);
+  // Unfinished runs are not data points.
+  assert.match(call.sql, /status NOT IN \('queued','running'\)/i);
+  // The offset and the format bind BEFORE the range: they are in the SELECT.
+  assert.deepEqual(call.params, [-120, '%Y-%m-%d 00:00', new Date('2026-09-10T22:00:00Z'), new Date('2026-09-11T22:00:00Z')]);
+
+  assert.deepEqual(rows, [{
+    bucket: '2026-09-11 00:00', total: 5, pass: 4, fail: 1, warning: 0, error: 0, skipped: 0,
+    avg_duration_ms: 1200, max_duration_ms: 3000,
+  }]);
+});
+
+test('stats narrows by test or application, and by neither when asked for the whole install', async () => {
+  const pool = makeFakePool([[/^SELECT DATE_FORMAT/i, () => [[]]]]);
+  const repo = createRunsRepository({ db: { pool }, now });
+  const base = { from: new Date('2026-09-01T00:00:00Z'), to: new Date('2026-10-01T00:00:00Z'), sqlFormat: '%Y-%m-%d 00:00' };
+
+  await repo.stats({ ...base, testId: 7 });
+  await repo.stats({ ...base, applicationId: 3 });
+  await repo.stats(base);
+
+  const [byTest, byApp, all] = pool.matching(/^SELECT DATE_FORMAT/i);
+  assert.match(byTest.sql, /r\.test_id = \?/);
+  assert.equal(byTest.params[4], 7);
+  assert.match(byApp.sql, /t\.application_id = \?/);
+  assert.equal(byApp.params[4], 3);
+  assert.ok(!/test_id = \?|application_id = \?/.test(all.sql), 'no filter means the whole install');
+  assert.equal(all.params.length, 4);
+});
+
+test('stats reads a null average as null rather than 0 — no runs is not "instant"', async () => {
+  const pool = makeFakePool([[/^SELECT DATE_FORMAT/i, () => [[
+    { bucket: '2026-09-11 00:00', total: 2, pass: 0, fail: 0, warning: 0, error: 2, skipped: 0, avg_duration_ms: null, max_duration_ms: null },
+  ]]]]);
+  const repo = createRunsRepository({ db: { pool }, now });
+  const [row] = await repo.stats({ from: new Date(), to: new Date(), sqlFormat: '%Y-%m-%d 00:00' });
+  assert.equal(row.avg_duration_ms, null);
+  assert.equal(row.max_duration_ms, null);
+  assert.equal(row.error, 2);
+});

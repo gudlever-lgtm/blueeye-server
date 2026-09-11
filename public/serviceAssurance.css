@@ -17,7 +17,7 @@
   background: none; border: none; border-bottom: 2px solid transparent;
   padding: 8px 14px; cursor: pointer; color: var(--muted, #6b7280); font: inherit;
 }
-.sa-tab:hover { color: var(--fg, #111827); }
+.sa-tab:hover { color: var(--text, #111827); }
 .sa-tab.active { color: var(--accent, #2563eb); border-bottom-color: var(--accent, #2563eb); }
 
 /* ---- sections + panels ---- */
@@ -44,7 +44,7 @@
 .sa-field input[type="text"], .sa-field input[type="url"], .sa-field input[type="number"],
 .sa-field input[type="password"], .sa-field select, .sa-field textarea {
   padding: 7px 9px; border: 1px solid var(--hairline, #e5e7eb);
-  border-radius: 6px; font: inherit; background: var(--bg, #fff); color: var(--fg, #111827);
+  border-radius: 6px; font: inherit; background: var(--bg, #fff); color: var(--text, #111827);
   width: 100%; box-sizing: border-box;
 }
 .sa-form-errors { margin-top: 8px; }
@@ -224,6 +224,80 @@
   display: inline-flex; align-items: center;
   padding: 5px 11px; border: 1px solid var(--hairline, #e5e7eb);
   border-radius: 6px; font-size: 0.85rem; line-height: 1.4;
-  color: var(--fg, #111827); text-decoration: none; background: var(--panel, #fff);
+  color: var(--text, #111827); text-decoration: none; background: var(--panel, #fff);
 }
 .sa-actions a.sa-btn:hover { border-color: var(--accent, #2563eb); color: var(--accent, #2563eb); }
+
+/* ---------------------------------------------------------------- charts */
+/* Run history. Two charts sharing an x position, never one with two y-axes:
+   "12 runs" and "1.4 s" share no scale, and a second axis is the quickest way
+   to make a chart say something untrue. */
+.sa-chart-panel { padding-bottom: 18px; }
+.sa-chart-svg { width: 100%; height: auto; display: block; }
+.sa-chart-title { margin: 14px 0 4px; font-size: 13px; font-weight: 600; color: var(--muted, #6b7280); }
+.sa-chart-grid { stroke: var(--hairline, #e5e7eb); stroke-width: 1; }
+.sa-chart-axis { fill: var(--muted, #6b7280); font-size: 11px; }
+
+/* The segmented period control: day / week / month / year. */
+.sa-segmented { display: inline-flex; border: 1px solid var(--hairline, #e5e7eb); border-radius: 6px; overflow: hidden; }
+.sa-segment {
+  background: none; border: none; border-right: 1px solid var(--hairline, #e5e7eb);
+  padding: 5px 12px; font: inherit; font-size: 13px; color: var(--text, #111827); cursor: pointer;
+}
+.sa-segment:last-child { border-right: none; }
+.sa-segment:hover { background: var(--panel-2, #f1f1ef); }
+.sa-segment.active { background: var(--accent, #2563eb); color: #fff; }
+
+.sa-chart-nav { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 10px 0 4px; }
+.sa-chart-period { font-weight: 600; min-width: 12ch; }
+.sa-chart-jump { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted, #6b7280); }
+.sa-date-input, .sa-select {
+  padding: 5px 8px; border: 1px solid var(--hairline, #e5e7eb); border-radius: 6px;
+  font: inherit; font-size: 13px; background: var(--bg, #fff); color: var(--text, #111827);
+}
+
+/* Outcome colours. Status, not categories — reserved for state and never reused
+   as "series 4". The light and dark steps are separately chosen and each was
+   checked for colour-vision separation against its own surface, rather than one
+   set being auto-lightened for dark mode. */
+.sa-bar-pass { fill: #15803d; }
+.sa-bar-warning { fill: #f59e0b; }
+.sa-bar-failed { fill: #b91c1c; }
+.sa-bar-skipped { fill: #9ca3af; }
+/* A bucket with no runs. Visible on purpose: a missing bar is ambiguous — "no
+   runs" and "off the edge of the chart" look the same — and "it stopped running
+   on Thursday" is exactly the reading this chart exists for. */
+.sa-bar-empty { fill: var(--muted, #6b7280); opacity: .5; }
+.sa-line-duration { fill: none; stroke: #0284c7; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.sa-dot-duration { fill: #0284c7; stroke: var(--panel, #fff); stroke-width: 2; }
+
+/* A bar is a hit target: the whole column lights up, not the two pixels the
+   pointer is actually over. */
+.sa-chart-bar { cursor: default; }
+.sa-chart-bar:hover rect, .sa-chart-bar:hover path { opacity: 0.78; }
+.sa-chart-bar:hover circle { r: 6; }
+
+.sa-legend { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 8px; font-size: 12px; color: var(--muted, #6b7280); }
+.sa-legend-item { display: inline-flex; align-items: center; gap: 6px; }
+.sa-legend-swatch { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+.sa-legend-swatch.sa-bar-pass { background: #15803d; }
+.sa-legend-swatch.sa-bar-warning { background: #f59e0b; }
+.sa-legend-swatch.sa-bar-failed { background: #b91c1c; }
+.sa-legend-swatch.sa-bar-skipped { background: #9ca3af; }
+
+[data-theme="dark"] .sa-bar-pass, [data-theme="midnight"] .sa-bar-pass { fill: #34d399; }
+[data-theme="dark"] .sa-bar-warning, [data-theme="midnight"] .sa-bar-warning { fill: #fbbf24; }
+[data-theme="dark"] .sa-bar-failed, [data-theme="midnight"] .sa-bar-failed { fill: #f87171; }
+[data-theme="dark"] .sa-bar-skipped, [data-theme="midnight"] .sa-bar-skipped { fill: #94a3b8; }
+[data-theme="dark"] .sa-legend-swatch.sa-bar-pass, [data-theme="midnight"] .sa-legend-swatch.sa-bar-pass { background: #34d399; }
+[data-theme="dark"] .sa-legend-swatch.sa-bar-warning, [data-theme="midnight"] .sa-legend-swatch.sa-bar-warning { background: #fbbf24; }
+[data-theme="dark"] .sa-legend-swatch.sa-bar-failed, [data-theme="midnight"] .sa-legend-swatch.sa-bar-failed { background: #f87171; }
+[data-theme="dark"] .sa-legend-swatch.sa-bar-skipped, [data-theme="midnight"] .sa-legend-swatch.sa-bar-skipped { background: #94a3b8; }
+[data-theme="dark"] .sa-line-duration, [data-theme="midnight"] .sa-line-duration { stroke: #38bdf8; }
+[data-theme="dark"] .sa-dot-duration, [data-theme="midnight"] .sa-dot-duration { fill: #38bdf8; }
+
+/* On a phone the bars stay readable; the controls wrap instead of scrolling. */
+@media (max-width: 640px) {
+  .sa-chart-nav { gap: 6px; }
+  .sa-chart-period { min-width: 0; }
+}

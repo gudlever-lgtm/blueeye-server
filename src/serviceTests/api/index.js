@@ -10,6 +10,7 @@ const { createSchedulesRouter } = require('./schedules');
 const { createSettingsRouter } = require('./settings');
 const { createAssuranceRouter } = require('./assurance');
 const { createRecordingsRouter } = require('./recordings');
+const { createJourneysRouter } = require('./journeys');
 
 // The Service Tests HTTP surface, mounted at /api/service-tests.
 //
@@ -60,6 +61,10 @@ function createServiceTestsApiRouter({
   router.use('/runs', createRunsRouter(deps));
   // Read-only aggregation over the same runs, for the history charts.
   router.use('/stats', createStatsRouter(deps));
+  // User Journeys — the central V2 object. Mounted before discovery so the
+  // route table reads in the order the product does: what the service IS, then
+  // how it is found out.
+  router.use('/journeys', createJourneysRouter(deps));
   router.use('/discovery', createDiscoveryRouter(deps));
   // Recording. The INGEST half is not here: it carries no session, so the host
   // mounts it outside this router (src/serviceTests/index.js).

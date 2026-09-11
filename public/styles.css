@@ -2306,3 +2306,72 @@ button.ghost.small:has(> .icon-glyph) {
    as context beside the name, not as a second title. */
 .sa-app-cell { color: var(--muted, #52514e); }
 .sa-detail-app { margin: -4px 0 12px; }
+
+/* --- Service Assurance · user journeys ---------------------------------- */
+/* A journey is read as a card, not a table row: the verdict, the sentence that
+   explains it, and the per-step outcomes have to sit together, because a status
+   nobody can check is a status nobody trusts. */
+.sa-journeys { display: grid; gap: 12px; }
+.sa-journey {
+  border: 1px solid var(--border, rgba(11, 11, 11, .1));
+  border-left-width: 4px; border-radius: var(--radius-sm, 6px);
+  padding: 14px 16px; background: var(--surface-1, #fcfcfb);
+}
+.sa-journey-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.sa-journey-head > div { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.sa-journey-reason { margin: 8px 0 0; }
+.sa-journey-slow { margin: 6px 0 0; color: #ec835a; font-weight: 600; }
+.sa-journey-meta { margin-top: 10px; font-size: 12px; }
+.sa-journey-summary {
+  display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap;
+  padding: 10px 14px; margin-bottom: 14px;
+  border: 1px solid var(--border, rgba(11, 11, 11, .1)); border-left-width: 4px;
+  border-radius: var(--radius-sm, 6px);
+}
+
+/* The four verdicts. Status colours are reserved and never themed, and each is
+   paired with a word — the colour never carries the meaning on its own. */
+.sa-health-failed { border-left-color: #d03b3b; }
+.sa-health-degraded { border-left-color: #ec835a; }
+.sa-health-healthy { border-left-color: #0ca30c; }
+.sa-health-unknown { border-left-color: #898781; }
+.sa-health-chip {
+  font-size: 11px; font-weight: 700; letter-spacing: .03em; text-transform: uppercase;
+  padding: 3px 9px; border-radius: 999px; color: #fff; white-space: nowrap;
+}
+.sa-health-chip.sa-health-failed { background: #d03b3b; }
+.sa-health-chip.sa-health-degraded { background: #ec835a; }
+.sa-health-chip.sa-health-healthy { background: #0ca30c; }
+.sa-health-chip.sa-health-unknown { background: #898781; }
+
+/* Criticality is the customer's judgement, not a measurement — so it reads as a
+   quiet label beside the name, never as another status light competing with it. */
+.sa-crit {
+  font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 4px;
+  border: 1px solid var(--border, rgba(11, 11, 11, .15)); color: var(--muted, #52514e);
+}
+.sa-crit-critical { border-color: #d03b3b; color: #d03b3b; }
+.sa-crit-high { border-color: #ec835a; color: #ec835a; }
+
+/* The step strip: the whole journey at a glance, each step named. */
+.sa-journey-steps { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 12px; }
+.sa-journey-step {
+  font-size: 12px; padding: 3px 10px; border-radius: 999px;
+  border: 1px solid var(--border, rgba(11, 11, 11, .15));
+  border-left-width: 3px;
+}
+.sa-journey-step.sa-optional { border-style: dashed; }
+.sa-outcome-ok { border-left-color: #0ca30c; }
+.sa-outcome-warning { border-left-color: #fab219; }
+.sa-outcome-broken { border-left-color: #d03b3b; }
+.sa-outcome-pending { border-left-color: #2a78d6; }
+.sa-outcome-unknown { border-left-color: #898781; }
+
+.sa-step-pos {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; border-radius: 50%; flex: 0 0 22px;
+  background: var(--surface-2, #f0efec); font-size: 11px; font-weight: 700;
+}
+.sa-step-main { flex: 1 1 auto; min-width: 0; }
+.sa-step-required { display: flex; align-items: center; gap: 6px; font-size: 12px; white-space: nowrap; }
+.sa-step-actions { display: flex; gap: 4px; }

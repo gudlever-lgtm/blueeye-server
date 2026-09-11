@@ -1,5 +1,61 @@
 # Changelog
 
+## 0.125.6 — user journeys: what the service IS, not which URLs answer
+
+The central V2 object (P1 #1). A test tells you a page answered. A journey tells
+you whether someone can do their job:
+
+```
+Customer lookup                                    FAILED
+  1. Login            ✗   required   HTTP 500 from /api/auth/login
+  2. Search Customer  —   required   never run
+  3. Open Customer    —   required   never run
+  4. Logout           ✓   optional
+
+"Login" is failing, so the user cannot get through.
+```
+
+Not four green ticks — one sentence an operator can act on.
+
+**A journey owns no tests.** This is the decision everything else follows from.
+It ORDERS tests that already exist and has no steps, no definition and no second
+test format — so the designer, recording, the runner, history, screenshots,
+incidents and schedules all work inside a journey the day it is created, without
+one of them being taught what a journey is. The same test can be step 1 of
+several journeys, which is the normal case for "Login" and the reason membership
+is its own table rather than a column. Deleting a journey never deletes the
+tests under it: a journey is a way of READING your monitoring, not its owner.
+And a test now says which journeys depend on it, so nobody deletes one without
+seeing they are about to stop watching a customer login.
+
+**Required vs optional is the whole value.** A broken required step fails the
+journey — the user cannot get through. A broken optional one degrades it: part
+of the service is gone, the journey is not. Logout failing is not Login failing,
+and a system that cannot say so makes its own alerts worthless.
+
+Two rules that look like details and are not:
+
+- **"Not known yet" is not a failure.** A journey nobody has run — or one
+  described but not yet implemented — reports as unknown and says which.
+  Colouring it red would train people to ignore red.
+- **A journey's duration is unknown unless EVERY step was measured.** A partial
+  sum against a whole-journey expectation reads as a SPEED-UP when it is really
+  a missing measurement. Writing this turned up the same bug twice: `Number(null)`
+  is `0` and `Number.isFinite(0)` is true, so a missing duration first counted as
+  measured-and-zero in the rollup, then produced a verdict claiming the journey
+  took 0 ms — comfortably inside any expectation. Missing data must never read as
+  good news.
+
+Criticality (Critical/High/Normal/Low) is the customer's judgement, not a
+severity the system computes, and it orders the list so what matters most is
+read first. The verdict is computed on read, never stored, so it cannot go
+stale — and it always carries the sentence explaining it, because a status
+nobody can check is a status nobody trusts.
+
+Migration 083. `journeys/health.js` is pure and tested on its own;
+[docs/service-assurance-journeys.md](docs/service-assurance-journeys.md) is the
+operator's guide.
+
 ## 0.125.5 — the capture address belongs in Settings, not only in a file
 
 Asked while deploying yesterday's mixed-content fix: does this have to be an

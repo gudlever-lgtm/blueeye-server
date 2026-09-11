@@ -117,10 +117,30 @@ function makeServiceTests(overrides = {}) {
     certificates: makeTable(overrides.certificates || []),
     incidents: makeTable(overrides.incidents || []),
     recordings: makeTable(overrides.recordings || []),
+    journeys: makeTable(overrides.journeys || []),
+    journeySteps: makeTable(overrides.journeySteps || []),
   };
 
   // A LEFT JOIN, in JS: a test whose application row is gone still lists.
   const appNameOf = (id) => { const a = t.applications.find(id); return a ? a.name : null; };
+
+  // A journey step with its test and that test's newest run — the shape the
+  // health rollup reads. Newest = highest id, exactly as the SQL does it.
+  function shapeJourneyStep(s) {
+    const test = t.tests.find(s.test_id);
+    const runs = t.runs.where((r) => r.test_id === Number(s.test_id));
+    const run = runs.length ? runs.reduce((a, b) => (b.id > a.id ? b : a)) : null;
+    return {
+      id: s.id, journey_id: s.journey_id, test_id: s.test_id, position: s.position,
+      label: s.label, required: bool(s.required),
+      test: test ? { id: test.id, name: test.name, enabled: bool(test.enabled) } : null,
+      run: run ? {
+        id: run.id, status: run.status, duration_ms: run.duration_ms ?? null,
+        failure_kind: run.failure_kind ?? null, error_message: run.error_message ?? null,
+        started_at: run.started_at ?? null, ended_at: run.ended_at ?? null,
+      } : null,
+    };
+  }
 
   // The format string the API passes back to the bucket shape it stands for —
 // the fake groups in JS, but on the same keys as the SQL.
@@ -427,6 +447,71 @@ const bool = (v) => !!v;
       },
     },
     // Incidents: one open row per subject_key, exactly as the reactor assumes.
+    // User journeys. The awkward part the SQL does — each step's LATEST run —
+    // is done here the same way: newest id wins, and a test that has never run
+    // yields null rather than a default, because the health rollup treats
+    // "never found out" as different from "failed".
+    journeys: {
+      async findById(id) {
+        const j = t.journeys.find(id);
+        return j ? { ...j, enabled: bool(j.enabled), application_name: appNameOf(j.application_id) } : null;
+      },
+      async list({ applicationId = null, criticality = null, enabledOnly = false } = {}) {
+        const ORDER = { critical: 0, high: 1, normal: 2, low: 3 };
+        return t.journeys.where((j) => (!applicationId || j.application_id === applicationId)
+          && (!criticality || j.criticality === criticality)
+          && (!enabledOnly || j.enabled))
+          .map((j) => ({ ...j, enabled: bool(j.enabled), application_name: appNameOf(j.application_id) }))
+          .sort((a, b) => (ORDER[a.criticality] ?? 9) - (ORDER[b.criticality] ?? 9)
+            || String(a.name || '').localeCompare(String(b.name || '')));
+      },
+      async create(input) {
+        const row = t.journeys.insert({
+          criticality: 'normal', description: null, expected_duration_ms: null,
+          environment_id: null, updated_by: null, ...input,
+          enabled: input.enabled === false ? 0 : 1,
+        });
+        return repositories.journeys.findById(row.id);
+      },
+      async save(id, patch) {
+        if (!t.journeys.find(id)) return null;
+        const p = { ...patch };
+        if (p.enabled !== undefined) p.enabled = p.enabled ? 1 : 0;
+        t.journeys.update(id, p);
+        return repositories.journeys.findById(id);
+      },
+      async remove(id) { return t.journeys.remove(id); },
+      async stepsFor(journeyId) {
+        return t.journeySteps.where((s) => s.journey_id === Number(journeyId))
+          .sort((a, b) => a.position - b.position)
+          .map(shapeJourneyStep);
+      },
+      async stepsForMany(ids) {
+        const out = new Map((ids || []).map((id) => [Number(id), []]));
+        for (const s of t.journeySteps.rows.slice().sort((a, b) => a.position - b.position)) {
+          if (!out.has(s.journey_id)) continue;
+          out.get(s.journey_id).push(shapeJourneyStep(clone(s)));
+        }
+        return out;
+      },
+      async setSteps(journeyId, steps) {
+        for (const s of t.journeySteps.where((r) => r.journey_id === Number(journeyId))) t.journeySteps.remove(s.id);
+        (steps || []).forEach((step, i) => t.journeySteps.insert({
+          journey_id: Number(journeyId), test_id: step.test_id, position: i,
+          label: step.label ?? null, required: step.required === false ? 0 : 1,
+        }));
+        return repositories.journeys.stepsFor(journeyId);
+      },
+      async journeysForTest(testId) {
+        const ids = new Set(t.journeySteps.where((s) => s.test_id === Number(testId)).map((s) => s.journey_id));
+        return t.journeys.where((j) => ids.has(j.id))
+          .map((j) => ({ ...j, enabled: bool(j.enabled), application_name: appNameOf(j.application_id) }));
+      },
+      async testIdsInJourneys() {
+        return [...new Set(t.journeySteps.rows.map((s) => s.test_id))];
+      },
+    },
+
     // Recording sessions. `start` mints a token and stores only its SHA-256,
     // exactly as the SQL repository does — so a spec that tries to read the
     // token back out of the table fails here for the same reason it fails in

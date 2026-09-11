@@ -18,7 +18,7 @@
   // The module's own screens, in the order they are shown. Also the set a host
   // may deep-link into, so an unknown tab name falls back rather than rendering
   // an empty page.
-  var TABS = ['applications', 'tests', 'runs', 'health', 'schedules'];
+  var TABS = ['applications', 'journeys', 'tests', 'runs', 'health', 'schedules'];
 
   function create(ctx) {
     var el = ctx.el;
@@ -44,6 +44,7 @@
       testId: null,
       runId: null,
       discoveryId: null,
+      journeyId: null,
     };
 
     var host = el('div', { class: 'sa' });
@@ -211,6 +212,7 @@
     function tabBar() {
       var tabs = [
         ['applications', t('sa.tab.applications')],
+        ['journeys', t('sa.tab.journeys')],
         ['tests', t('sa.tab.tests')],
         ['runs', t('sa.tab.runs')],
         ['history', t('sa.tab.history')],
@@ -595,6 +597,233 @@
       });
     };
 
+    // Both of these could be one line of string concatenation. They are not, on
+    // purpose: the UI gate sweeps every translation key written as a literal and
+    // checks it exists in both catalogues, and a key built at runtime is a key
+    // the sweep cannot see. Spelling the variants out keeps all eight checked.
+    function healthLabel(status) {
+      if (status === 'failed') return t('sa.journey.health.failed');
+      if (status === 'degraded') return t('sa.journey.health.degraded');
+      if (status === 'healthy') return t('sa.journey.health.healthy');
+      return t('sa.journey.health.unknown');
+    }
+
+    function criticalityLabel(level) {
+      if (level === 'critical') return t('sa.journey.crit.critical');
+      if (level === 'high') return t('sa.journey.crit.high');
+      if (level === 'low') return t('sa.journey.crit.low');
+      return t('sa.journey.crit.normal');
+    }
+
+    // ---------------------------------------------------------- journeys
+    //
+    // The screen the product principle is aimed at: not "the website is up" but
+    // "can a caseworker do their job" — and when they cannot, which part broke.
+    //
+    // So a journey row never shows a colour alone. It shows the verdict, the
+    // sentence explaining it, and the per-step outcomes underneath, because a
+    // status nobody can check is a status nobody trusts.
+    views.journeys = function (body) {
+      if (state.journeyId) return journeyDetail(body, state.journeyId);
+      return api(API + '/journeys').then(function (res) {
+        var head = section(t('sa.tab.journeys'), isOperator()
+          ? [el('button', { class: 'primary', onclick: newJourneyForm }, '+ ' + t('sa.journey.new'))]
+          : null);
+        if (!res.journeys.length) {
+          mount(body, head, el('div', { class: 'sa-empty' },
+            el('p', {}, t('sa.journey.empty')),
+            el('p', { class: 'muted' }, t('sa.journey.emptyHint'))));
+          return;
+        }
+        mount(body, head, summaryBar(res.summary), el('div', { class: 'sa-journeys' },
+          ...res.journeys.map(journeyCard)));
+      });
+    };
+
+    // The application's verdict, as counts. The worst journey decides the word;
+    // the counts say how widespread it is.
+    function summaryBar(summary) {
+      if (!summary || !summary.total) return null;
+      return el('div', { class: 'sa-journey-summary sa-health-' + summary.status },
+        el('strong', {}, healthLabel(summary.status)),
+        el('span', { class: 'muted' }, t('sa.journey.summaryCounts', {
+          failed: summary.failed, degraded: summary.degraded, healthy: summary.healthy, total: summary.total,
+        })));
+    }
+
+    function journeyCard(journey) {
+      var h = journey.health;
+      return el('div', {
+        class: 'sa-journey clickable sa-health-' + h.status,
+        onclick: function () { state.journeyId = journey.id; draw(); },
+      },
+        el('div', { class: 'sa-journey-head' },
+          el('div', {},
+            el('strong', {}, journey.name),
+            el('span', { class: 'sa-crit sa-crit-' + journey.criticality }, criticalityLabel(journey.criticality))),
+          el('span', { class: 'sa-health-chip sa-health-' + h.status }, healthLabel(h.status))),
+        // The reason, always. A verdict without one is the thing this replaces.
+        el('p', { class: 'sa-journey-reason' }, h.reason),
+        journey.duration && journey.duration.slow
+          ? el('p', { class: 'sa-journey-slow' }, t('sa.journey.slow', {
+            duration: ms(journey.duration.duration_ms), expected: ms(journey.duration.expected_ms),
+          }))
+          : null,
+        el('div', { class: 'sa-journey-steps' }, ...h.steps.map(function (step) {
+          return el('span', {
+            class: 'sa-journey-step sa-outcome-' + step.outcome + (step.required ? '' : ' sa-optional'),
+            title: (step.label || '') + ' — ' + (step.status || t('sa.journey.neverRun')),
+          }, step.label || ('#' + step.test_id));
+        })),
+        el('div', { class: 'muted sa-journey-meta' },
+          journey.application_name || '',
+          journey.environment_name ? ' · ' + journey.environment_name : '',
+          ' · ' + t('sa.test.steps', { count: journey.step_count })));
+    }
+
+    function newJourneyForm() {
+      api(API + '/applications').then(function (apps) {
+        if (!apps.length) { toast(t('sa.record.noApps'), true); return; }
+        var pick = el('select', {}, ...apps.map(function (a) { return el('option', { value: String(a.id) }, a.name); }));
+        var name = el('input', { type: 'text', placeholder: t('sa.journey.namePlaceholder') });
+        var desc = el('textarea', { rows: '2' });
+        var crit = el('select', {}, ...['critical', 'high', 'normal', 'low'].map(function (c) {
+          return el('option', { value: c }, criticalityLabel(c));
+        }));
+        crit.value = 'normal';
+        var expected = el('input', { type: 'number', min: '1', placeholder: t('sa.journey.expectedPlaceholder') });
+        var errors = el('div', {});
+        modal(t('sa.journey.new'), el('div', { class: 'sa-form' },
+          field(t('sa.tab.applications'), pick),
+          field(t('sa.app.name'), name, t('sa.journey.nameHelp')),
+          field(t('sa.app.description'), desc),
+          field(t('sa.journey.criticality'), crit, t('sa.journey.criticalityHelp')),
+          field(t('sa.journey.expected'), expected, t('sa.journey.expectedHelp')),
+          errors), function () {
+          return api(API + '/journeys', {
+            method: 'POST',
+            body: {
+              application_id: Number(pick.value),
+              name: name.value,
+              description: desc.value || null,
+              criticality: crit.value,
+              // Typed in seconds because that is how people talk about it; the
+              // API stores milliseconds like every other duration.
+              expected_duration_ms: expected.value ? Math.round(Number(expected.value) * 1000) : null,
+            },
+          }).then(function (created) { state.journeyId = created.id; draw(); })
+            .catch(function (e) { showErrors(errors, e); throw e; });
+        }, t('sa.create'));
+      }).catch(function (e) { toast(err(e), true); });
+    }
+
+    function journeyDetail(body, id) {
+      return Promise.all([
+        api(API + '/journeys/' + id),
+        api(API + '/tests'),
+      ]).then(function (res) {
+        var journey = res[0];
+        var candidates = res[1].filter(function (x) { return x.application_id === journey.application_id; });
+        var h = journey.health;
+
+        mount(body,
+          el('button', { class: 'ghost small', onclick: function () { state.journeyId = null; draw(); } }, '← ' + t('sa.back')),
+          section(journey.name, isOperator() ? [
+            el('button', {
+              class: 'ghost small danger',
+              title: t('sa.delete'),
+              onclick: function () {
+                if (!confirmDelete(journey.name)) return;
+                api(API + '/journeys/' + journey.id, { method: 'DELETE' })
+                  .then(function () { state.journeyId = null; draw(); })
+                  .catch(function (e) { toast(err(e), true); });
+              },
+            }, icon('trash')),
+          ] : null),
+          el('div', { class: 'sa-panel sa-health-' + h.status },
+            el('div', { class: 'sa-journey-head' },
+              el('span', { class: 'sa-health-chip sa-health-' + h.status }, healthLabel(h.status)),
+              el('span', { class: 'sa-crit sa-crit-' + journey.criticality }, criticalityLabel(journey.criticality))),
+            el('p', { class: 'sa-journey-reason' }, h.reason),
+            journey.description ? el('p', { class: 'muted' }, journey.description) : null,
+            journey.duration ? el('p', { class: journey.duration.slow ? 'sa-journey-slow' : 'muted' },
+              t('sa.journey.duration', {
+                duration: ms(journey.duration.duration_ms), expected: ms(journey.duration.expected_ms),
+              })) : null),
+          journeyStepsPanel(journey, candidates));
+      });
+    }
+
+    // The membership editor. Whole-list, because the screen IS a list: "this is
+    // the order now" is the only statement a drag & drop UI can make truthfully.
+    function journeyStepsPanel(journey, candidates) {
+      var steps = journey.health.steps.map(function (s) {
+        return { test_id: s.test_id, label: s.label, required: s.required, outcome: s.outcome, status: s.status };
+      });
+      var list = el('div', { class: 'sa-steps' });
+      var byId = {};
+      candidates.forEach(function (c) { byId[c.id] = c; });
+
+      function save() {
+        return api(API + '/journeys/' + journey.id + '/steps', {
+          method: 'PUT',
+          body: { steps: steps.map(function (s) { return { test_id: s.test_id, label: s.label, required: s.required }; }) },
+        }).then(function () { draw(); }).catch(function (e) { toast(err(e), true); });
+      }
+
+      function render() {
+        mount(list, ...steps.map(function (step, i) {
+          return el('div', { class: 'sa-step sa-outcome-' + (step.outcome || 'unknown') },
+            el('span', { class: 'sa-step-pos' }, String(i + 1)),
+            el('div', { class: 'sa-step-main' },
+              el('strong', {}, step.label || (byId[step.test_id] && byId[step.test_id].name) || ('#' + step.test_id)),
+              el('div', { class: 'muted' }, step.status
+                ? t('sa.journey.lastRun', { status: step.status })
+                : t('sa.journey.neverRun'))),
+            isOperator() ? el('label', { class: 'sa-step-required', title: t('sa.journey.requiredHelp') },
+              (function () {
+                var box = el('input', { type: 'checkbox' });
+                box.checked = step.required;
+                box.addEventListener('change', function () { step.required = box.checked; save(); });
+                return box;
+              }()),
+              el('span', {}, t('sa.journey.required'))) : null,
+            isOperator() ? el('div', { class: 'sa-step-actions' },
+              el('button', {
+                class: 'ghost small', title: t('sa.moveUp'), disabled: i === 0,
+                onclick: function () { steps.splice(i - 1, 0, steps.splice(i, 1)[0]); save(); },
+              }, '↑'),
+              el('button', {
+                class: 'ghost small', title: t('sa.moveDown'), disabled: i === steps.length - 1,
+                onclick: function () { steps.splice(i + 1, 0, steps.splice(i, 1)[0]); save(); },
+              }, '↓'),
+              el('button', {
+                class: 'ghost small danger', title: t('sa.delete'),
+                onclick: function () { steps.splice(i, 1); save(); },
+              }, icon('trash'))) : null);
+        }));
+        if (!steps.length) mount(list, el('div', { class: 'sa-empty' }, t('sa.journey.noSteps')));
+      }
+
+      var unused = candidates.filter(function (c) {
+        return !steps.some(function (s) { return s.test_id === c.id; });
+      });
+      var picker = el('select', {}, el('option', { value: '' }, t('sa.journey.addStep')),
+        ...unused.map(function (c) { return el('option', { value: String(c.id) }, c.name); }));
+      picker.addEventListener('change', function () {
+        if (!picker.value) return;
+        steps.push({ test_id: Number(picker.value), required: true });
+        picker.value = '';
+        save();
+      });
+
+      render();
+      return el('div', { class: 'sa-panel' },
+        section(t('sa.journey.steps'), isOperator() && unused.length ? [picker] : null),
+        el('p', { class: 'sa-help' }, t('sa.journey.stepsHelp')),
+        list);
+    }
+
     // ----------------------------------------------------------- recording
     //
     // The operator performs the journey in their own browser, on the real
@@ -841,6 +1070,21 @@
             : null);
 
         mount(body, head,
+          // What this test is FOR. Shown before the steps, because "which
+          // customer journey breaks if I delete this" is the question an
+          // operator has before they have any question about step 3.
+          test.journeys && test.journeys.length
+            ? el('p', { class: 'muted sa-detail-app' },
+              t('sa.test.partOf'), ' ',
+              ...test.journeys.map(function (j, i) {
+                return el('span', {},
+                  i ? ', ' : '',
+                  el('a', {
+                    class: 'linklike',
+                    onclick: function () { state.testId = null; state.journeyId = j.id; state.tab = 'journeys'; draw(); },
+                  }, j.name));
+              }))
+            : null,
           designer(test, catalogue),
           historyPanel(test),
           schedulePanel(test, schedules));

@@ -157,6 +157,12 @@ function reasonFor({ status, brokenRequired, brokenOptional, counts, lang }) {
 // The tolerance is deliberately generous: a synthetic journey drives a real
 // browser over a real network, and calling 1.1x "slow" would fire constantly.
 function durationVerdict(durationMs, expectedMs, { tolerance = 1.5 } = {}) {
+  // `Number(null)` is 0 and `Number.isFinite(0)` is true, so an UNMEASURED
+  // journey would come back as a verdict claiming it took 0 ms — infinitely
+  // fast, and reported as comfortably inside the expectation. Missing data must
+  // never read as good news, so a missing value yields no verdict at all.
+  const missing = (v) => v === null || v === undefined || v === '';
+  if (missing(durationMs) || missing(expectedMs)) return null;
   const actual = Number(durationMs);
   const expected = Number(expectedMs);
   if (!Number.isFinite(actual) || !Number.isFinite(expected) || expected <= 0) return null;

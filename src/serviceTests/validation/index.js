@@ -17,6 +17,11 @@ const { validateDefinition } = require('../engine/validate');
 // exists, and cannot register one pointed at 169.254.169.254 at all.
 
 const NAME_MAX = 255;
+
+// What a broken journey costs the business. A judgement the customer makes once,
+// NOT a severity the system computes — which is why it is an explicit field with
+// four coarse values rather than a number nobody can calibrate.
+const CRITICALITIES = ['critical', 'high', 'normal', 'low'];
 const DESC_MAX = 4000;
 const URL_MAX = 1024;
 const LABEL_MAX = 255;
@@ -327,6 +332,103 @@ function validateSchedule(body, { partial = false } = {}) {
 }
 
 // ------------------------------------------------------------------ settings
+// ------------------------------------------------------------------ journeys
+// A user journey: the central V2 object (docs/service-assurance-v2.md §2).
+//
+// It owns no steps of its own — membership is validated separately, by
+// validateJourneySteps below — so this checks only what the journey IS.
+function validateJourney(body, { partial = false } = {}) {
+  if (!isPlainObject(body)) return { errors: { _: 'the request body must be an object' } };
+  const errors = {};
+  const value = {};
+
+  if (!partial) {
+    const appId = parseId(body.application_id);
+    if (appId === null) errors.application_id = 'an application is required';
+    else value.application_id = appId;
+  }
+  if (!partial || body.name !== undefined) {
+    const name = trimmed(body.name, NAME_MAX + 1);
+    if (!name) errors.name = 'a name is required';
+    else if (name.length > NAME_MAX) errors.name = `the name is too long (max ${NAME_MAX})`;
+    else value.name = name;
+  }
+  if (body.description !== undefined) {
+    value.description = body.description === null ? null : trimmed(body.description, DESC_MAX);
+  }
+  if (body.criticality !== undefined) {
+    if (!CRITICALITIES.includes(String(body.criticality))) {
+      errors.criticality = `criticality must be one of: ${CRITICALITIES.join(', ')}`;
+    } else {
+      value.criticality = String(body.criticality);
+    }
+  }
+  if (body.expected_duration_ms !== undefined) {
+    if (body.expected_duration_ms === null || body.expected_duration_ms === '') {
+      // Clearing it means "no expectation stated", which is honest and is a
+      // different fact from an expectation of zero.
+      value.expected_duration_ms = null;
+    } else {
+      const ms = Number(body.expected_duration_ms);
+      // One day. Past that the number is a typo, not an expectation — and a
+      // journey that legitimately takes a day is not a synthetic test.
+      if (!Number.isInteger(ms) || ms < 1 || ms > 86400000) {
+        errors.expected_duration_ms = 'the expected duration must be between 1 ms and 24 hours';
+      } else {
+        value.expected_duration_ms = ms;
+      }
+    }
+  }
+  if (body.environment_id !== undefined) {
+    if (body.environment_id === null || body.environment_id === '') value.environment_id = null;
+    else {
+      const envId = parseId(body.environment_id);
+      if (envId === null) errors.environment_id = 'that environment does not look valid';
+      else value.environment_id = envId;
+    }
+  }
+  if (body.enabled !== undefined) {
+    if (typeof body.enabled !== 'boolean') errors.enabled = 'enabled must be true or false';
+    else value.enabled = body.enabled;
+  }
+
+  return Object.keys(errors).length ? { errors } : { value };
+}
+
+// The journey's membership, as the whole ordered list.
+//
+// Whole-list rather than add/remove: the UI is a drag & drop list, so "this is
+// the order now" is the only statement it can make truthfully. An empty list is
+// ALLOWED — a journey you have described but not yet implemented is a real state,
+// and the health rollup reports it as unknown rather than healthy.
+function validateJourneySteps(body, { maxSteps = 50 } = {}) {
+  if (!isPlainObject(body)) return { errors: { _: 'the request body must be an object' } };
+  if (!Array.isArray(body.steps)) return { errors: { steps: 'steps must be a list' } };
+  if (body.steps.length > maxSteps) {
+    return { errors: { steps: `a journey may have at most ${maxSteps} steps` } };
+  }
+  const errors = {};
+  const steps = [];
+  const seen = new Set();
+
+  body.steps.forEach((raw, i) => {
+    if (!isPlainObject(raw)) { errors[`steps.${i}`] = 'each step must be an object'; return; }
+    const testId = parseId(raw.test_id);
+    if (testId === null) { errors[`steps.${i}`] = 'each step must name a test'; return; }
+    // The same test twice in one journey is a mistake every time: the journey
+    // would report one test's result under two names.
+    if (seen.has(testId)) { errors[`steps.${i}`] = 'that test is already a step in this journey'; return; }
+    seen.add(testId);
+    const step = { test_id: testId, required: raw.required === undefined ? true : !!raw.required };
+    if (raw.label !== undefined && raw.label !== null && String(raw.label).trim()) {
+      step.label = trimmed(raw.label, NAME_MAX);
+    }
+    steps.push(step);
+  });
+
+  return Object.keys(errors).length ? { errors } : { value: { steps } };
+}
+
 function validateSettingsPatch(body) {
   if (!isPlainObject(body)) return { errors: { _: 'the request body must be an object' } };
   return { value: body };
@@ -390,10 +492,13 @@ module.exports = {
   validateDiscoveryRequest,
   validateSchedule,
   validateSettingsPatch,
+  validateJourney,
+  validateJourneySteps,
   validateBaseUrl,
   ENV_TYPES,
   ENTRY_TYPES,
   PERIODS,
   INTERVALS,
   NAME_MAX,
+  CRITICALITIES,
 };

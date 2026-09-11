@@ -13,7 +13,7 @@ const { catalogue } = require('../engine/dsl');
 // credentials and its allowlist is not.
 function createTestsRouter({ repositories, settings, queue, audit, requireRole, roles }) {
   const router = express.Router();
-  const { tests, applications, credentials, environments, runs } = repositories;
+  const { tests, applications, credentials, environments, runs, journeys } = repositories;
   const read = requireRole(roles.VIEWER, roles.OPERATOR, roles.ADMIN);
   const write = requireRole(roles.OPERATOR, roles.ADMIN);
   const load = makeLoader(tests, 'Test');
@@ -56,7 +56,14 @@ function createTestsRouter({ repositories, settings, queue, audit, requireRole, 
   router.get('/:id', read, asyncHandler(async (req, res) => {
     const test = await load(req, res);
     if (!test) return undefined;
-    return res.json({ ...test, history: await runs.history(test.id, 20) });
+    return res.json({
+      ...test,
+      history: await runs.history(test.id, 20),
+      // Which journeys depend on this test. A test whose purpose is invisible is
+      // a test nobody dares delete — and one somebody deletes without knowing
+      // they have just stopped watching a customer login.
+      journeys: journeys ? await journeys.journeysForTest(test.id) : [],
+    });
   }));
 
   router.put('/:id', write, asyncHandler(async (req, res) => {

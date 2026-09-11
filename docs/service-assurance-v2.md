@@ -216,6 +216,37 @@ Accepting a recording **clears its raw events**: the test is the artefact now,
 and keeping the capture would keep a copy of everything the operator typed long
 after it stopped being useful.
 
+### §2 User Journeys — shipped
+
+The central object, and the one that changes what the product SAYS. A journey is
+a complete thing a user does; the tests under it are how BlueEyes proves it still
+works. `migrations/083`, `journeys/health.js` (pure), `api/journeys.js`, a
+Journeys tab, and [docs/service-assurance-journeys.md](service-assurance-journeys.md).
+
+The decision that shapes everything else: **a journey owns no tests.** It orders
+tests that already exist and has no steps, no definition, no second test format —
+so the designer, recording, the runner, history, screenshots, incidents and
+schedules all work inside a journey on the day it is created, without one of them
+being taught what a journey is. The same test can be step 1 of several journeys,
+which is the normal case for "Login" and the reason membership is its own table.
+
+**Required vs optional is the whole value.** A broken required step fails the
+journey — the user cannot get through. A broken optional one degrades it: part of
+the service is gone, the journey is not. Logout failing is not Login failing, and
+a system that cannot say so makes its own alerts worthless.
+
+Two rules that look like details and are not:
+
+- **"Not known yet" is not a failure.** A journey nobody has run, or one
+  described but not yet implemented, reports as unknown and says which. Colouring
+  it red would train people to ignore red.
+- **A journey's duration is unknown unless EVERY step was measured.** A partial
+  sum against a whole-journey expectation reads as a speed-up when it is really a
+  missing measurement. Writing this turned up the same bug twice — `Number(null)`
+  is `0` and `Number.isFinite(0)` is true, so a missing duration first counted as
+  measured-and-zero in the rollup, then produced a verdict claiming the journey
+  took 0 ms. Missing data must never read as good news.
+
 ## 3. Build order
 
 Exactly this order, because each step is what makes the next one worth having:

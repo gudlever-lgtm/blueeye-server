@@ -769,6 +769,7 @@ const PAGE_INFO = {
       el('p', {}, 'Register the web application you depend on, let ', el('strong', {}, 'Discovery'), ' look around it, and accept the tests it suggests. A test is a journey a real user takes — sign in, look up a customer, place an order — run on a schedule from a real browser.'),
       el('p', {}, 'Nothing here needs code. Steps are built by dragging them into order and filling in forms; selectors, timeouts and the raw engine error live behind ', el('strong', {}, 'Technical details'), ' and are never needed to build or read a test.'),
       el('p', {}, 'Discovery is ', el('strong', {}, 'read-only'), '. It never submits a form and never clicks anything that could delete, pay or send — anything whose effect it cannot determine is recorded and left alone.'),
+      el('p', {}, el('strong', {}, 'Journeys '), 'are what make a set of tests mean something. A journey is a complete thing a user does \u2014 sign in, look up a customer, open the case \u2014 and the tests under it are how BlueEyes proves it still works. A required step failing means the user cannot get through; an optional one failing means part of the service is gone, but the journey is not. Every verdict comes with the sentence that explains it.'),
       el('p', { class: 'muted' }, 'Service Assurance only reaches an application\u2019s own address and the hosts an administrator has explicitly allowed. Loopback and cloud-metadata addresses can never be allowed, at any permission level.'),
     ],
   },

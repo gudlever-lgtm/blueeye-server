@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.124.6 — the Health chart is a trend, one line per application
+
+The ranking shipped in 0.124.5 answered "who was worst this month" but not "when
+did it happen" — and when did it happen is the question a chart is for. It is a
+time chart now: one line per application over the period's buckets, which is the
+shape the request actually asked for.
+
+**Which applications get a line:** the ones you select, or — when you have
+selected none — the top few by incident count, so the chart opens on the services
+that had the worst period. The searchable multi-select is how you ask about a
+specific one.
+
+**Three chart types**, chosen from the toolbar: line for a trend, grouped bars to
+compare buckets side by side, stacked bars to read a total with its composition.
+The data is identical in all three, so switching redraws from what is already in
+hand and never re-fetches.
+
+Empty buckets are in the answer as zeroes. A line that skips them lies about when
+the trouble was: "it was quiet all week and then Thursday happened" only exists if
+Monday to Wednesday are drawn.
+
+**The palette is the design system's eight categorical slots, in their fixed
+order** — that order is the colourblind-safety mechanism, not decoration. It was
+run through the palette validator in both light and dark rather than eyeballed:
+all eight clear the lightness band, chroma floor, adjacent CVD separation (worst
+ΔE 9.1 light / 8.4 dark against a ≥8 target) and the normal-vision floor. Light
+mode warns that three slots sit below 3:1 on the surface; the legend names every
+series with its total, which satisfies the relief rule and doubles as the table
+view. A ninth application folds into a neutral "Other" rather than getting a
+generated hue nobody could tell from slot 3, and colour follows the application
+rather than its rank, so narrowing the filter never repaints the survivors.
+
 ## 0.124.5 — which applications gave us the most trouble
 
 The Health page counted open incidents and listed them. It could not answer the

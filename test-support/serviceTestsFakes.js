@@ -493,6 +493,31 @@ const bool = (v) => !!v;
           .sort((a, b) => b.incidents - a.incidents || String(a.application_name).localeCompare(b.application_name))
           .slice(0, limit);
       },
+      // Mirrors the real time-series query: one entry per (bucket, application).
+      // The bucket key is derived the same way the period helper cuts them, so
+      // the fake and the real SQL agree about where a day starts.
+      async seriesByApplication({ from, to = new Date(), bucket = 'day', offsetMinutes = 0, severity = 'CRIT', applicationIds = null } = {}) {
+        if (Array.isArray(applicationIds) && !applicationIds.length) return [];
+        const { bucketKey } = require('../src/serviceTests/stats/period');
+        const start = from ? new Date(from).getTime() : 0;
+        const end = to ? new Date(to).getTime() : Date.now();
+        const out = new Map();
+        for (const r of t.incidents.rows) {
+          if (severity && r.severity !== severity) continue;
+          const opened = r.opened_at ? new Date(r.opened_at).getTime() : NaN;
+          if (!Number.isFinite(opened) || opened < start || opened >= end) continue;
+          if (Array.isArray(applicationIds) && !applicationIds.includes(r.application_id)) continue;
+          const app = t.applications.rows.find((a) => a.id === r.application_id);
+          if (!app) continue;
+          const key0 = bucketKey(new Date(opened - (Number(offsetMinutes) || 0) * 60000), bucket);
+          const key = `${key0}|${app.id}`;
+          const row = out.get(key)
+            || { bucket: key0, application_id: app.id, application_name: app.name, incidents: 0 };
+          row.incidents += 1;
+          out.set(key, row);
+        }
+        return [...out.values()].sort((a, b) => String(a.bucket).localeCompare(String(b.bucket)));
+      },
       async openCounts() {
         const out = { CRIT: 0, WARN: 0, INFO: 0, total: 0 };
         for (const r of t.incidents.rows) {

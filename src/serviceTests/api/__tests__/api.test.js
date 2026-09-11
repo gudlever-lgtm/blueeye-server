@@ -699,3 +699,41 @@ test('a period with no criticals is an empty ranking, not an error', async () =>
   assert.deepEqual(res.body.applications, []);
   assert.equal(res.body.total, 0);
 });
+
+test('the ranking also comes back as a line per application, with zero buckets filled in', async () => {
+  // A line that skips its empty buckets lies about when the trouble was: "it
+  // was quiet all week and then Thursday happened" only exists if Monday to
+  // Wednesday are in the answer as zeroes.
+  const scoped = makeApp({ serviceTests: await withRankedIncidents() });
+  const res = await request(scoped).get(`${BASE}${topUrl('?period=month')}`).set('Authorization', authHeader('viewer'));
+
+  assert.equal(res.status, 200);
+  assert.ok(res.body.buckets.length > 20, 'a month of day buckets');
+  assert.ok(res.body.series.length >= 2);
+
+  const [worst] = res.body.series;
+  assert.equal(worst.application_name, 'Customer Portal',
+    'series are ordered by the ranking, so palette slot 1 is the worst offender');
+  assert.equal(worst.total, 3);
+  assert.equal(worst.points.length, res.body.buckets.length, 'one point per bucket, zeroes included');
+  assert.equal(worst.points.reduce((a, b) => a + b, 0), 3);
+  assert.ok(worst.points.some((p) => p === 0), 'the quiet days are in the answer');
+});
+
+test('choosing applications decides which lines are drawn', async () => {
+  const scoped = makeApp({ serviceTests: await withRankedIncidents() });
+  const res = await request(scoped).get(`${BASE}${topUrl('?application_ids=2')}`).set('Authorization', authHeader('viewer'));
+  assert.deepEqual(res.body.series.map((s) => s.application_name), ['Billing']);
+
+  // An empty selection draws nothing — same rule as the ranking.
+  const none = await request(scoped).get(`${BASE}${topUrl('?application_ids=')}`).set('Authorization', authHeader('viewer'));
+  assert.deepEqual(none.body.series, []);
+});
+
+test('a period with nothing in it has buckets but no series', async () => {
+  const scoped = makeApp({ serviceTests: makeServiceTests() });
+  const res = await request(scoped).get(`${BASE}${topUrl('?period=week')}`).set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 200);
+  assert.equal(res.body.buckets.length, 7);
+  assert.deepEqual(res.body.series, []);
+});

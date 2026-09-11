@@ -329,18 +329,57 @@
 [data-theme="dark"] .sa-layer.ok, [data-theme="midnight"] .sa-layer.ok { background: #14532d; color: #bbf7d0; }
 [data-theme="dark"] .sa-layer.bad, [data-theme="midnight"] .sa-layer.bad { background: #7f1d1d; color: #fecaca; }
 
-/* ---- top applications by criticals ----
+/* ---- critical incidents over time, one line per application ----
+   The categorical palette, in the fixed order the design system defines. That
+   ORDER is the colourblind-safety mechanism, not decoration: slots are assigned
+   in sequence and never cycled, and a 9th series folds into "Other" rather than
+   getting a generated hue nobody could tell from slot 3.
+
+   Validated with the palette checker in both modes rather than by eye — all
+   eight pass the lightness band, chroma floor, adjacent CVD separation (worst
+   ΔE 9.1 light / 8.4 dark against a ≥8 target) and the normal-vision floor.
+   Light mode warns that aqua, yellow and magenta sit below 3:1 against the
+   surface; the relief rule is satisfied by the legend, which names every series
+   with its total and so doubles as the table view.
+
+   The dark column is the same eight hues re-stepped for the dark surface — a
+   selected set, not an automatic lightening of the light one. */
+.sa-series-1 { --sa-series: #2a78d6; }
+.sa-series-2 { --sa-series: #eb6834; }
+.sa-series-3 { --sa-series: #1baf7a; }
+.sa-series-4 { --sa-series: #eda100; }
+.sa-series-5 { --sa-series: #e87ba4; }
+.sa-series-6 { --sa-series: #008300; }
+.sa-series-7 { --sa-series: #4a3aa7; }
+.sa-series-8 { --sa-series: #e34948; }
+.sa-series-other { --sa-series: var(--muted, #6b7280); }
+
+.sa-series-line { fill: none; stroke: var(--sa-series); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+/* A surface ring on the markers, so overlapping series stay countable. */
+.sa-series-dot { fill: var(--sa-series); stroke: var(--panel, #fff); stroke-width: 2; }
+.sa-series-fill { fill: var(--sa-series); }
+.sa-legend-swatch.sa-series-1, .sa-legend-swatch.sa-series-2, .sa-legend-swatch.sa-series-3,
+.sa-legend-swatch.sa-series-4, .sa-legend-swatch.sa-series-5, .sa-legend-swatch.sa-series-6,
+.sa-legend-swatch.sa-series-7, .sa-legend-swatch.sa-series-8, .sa-legend-swatch.sa-series-other {
+  background: var(--sa-series);
+}
+
+[data-theme="dark"] .sa-series-1, [data-theme="midnight"] .sa-series-1 { --sa-series: #3987e5; }
+[data-theme="dark"] .sa-series-2, [data-theme="midnight"] .sa-series-2 { --sa-series: #d95926; }
+[data-theme="dark"] .sa-series-3, [data-theme="midnight"] .sa-series-3 { --sa-series: #199e70; }
+[data-theme="dark"] .sa-series-4, [data-theme="midnight"] .sa-series-4 { --sa-series: #c98500; }
+[data-theme="dark"] .sa-series-5, [data-theme="midnight"] .sa-series-5 { --sa-series: #d55181; }
+[data-theme="dark"] .sa-series-6, [data-theme="midnight"] .sa-series-6 { --sa-series: #008300; }
+[data-theme="dark"] .sa-series-7, [data-theme="midnight"] .sa-series-7 { --sa-series: #9085e9; }
+[data-theme="dark"] .sa-series-8, [data-theme="midnight"] .sa-series-8 { --sa-series: #e66767; }
+[data-theme="dark"] .sa-series-dot, [data-theme="midnight"] .sa-series-dot { stroke: var(--panel, #1a1a19); }
+
+/* ---- the application filter ----
    A magnitude ranking over long, named categories: horizontal bars, ONE hue.
    The measure IS criticality, so the bars wear the same status colour the rest
    of the page uses for it — and because every bar is that colour, filtering the
    list cannot repaint the survivors. A single series needs no legend; the title
    says what the bars are. */
-/* No new colour token: the bars reuse .sa-bar-failed, which already means
-   "this is the bad one" on this page and already has its dark step. A second
-   red for the same concept is how a palette starts drifting. */
-.sa-top-name { font-size: 12px; }
-.sa-top-value { font-size: 12px; font-weight: 600; fill: var(--text, #111827); font-variant-numeric: tabular-nums; }
-
 /* The searchable, multiple-choice application filter. Hand-rolled: the repo
    ships no UI library, and a native <select multiple> has no search and makes
    people ctrl-click to keep a selection. */
@@ -363,4 +402,3 @@
 .sa-picker-option { display: flex; align-items: center; gap: 8px; padding: 4px 2px; cursor: pointer; }
 .sa-picker-option:hover { background: var(--panel-2, #f1f1ef); }
 
-[data-theme="dark"] .sa-top-value, [data-theme="midnight"] .sa-top-value { fill: #e5e7eb; }

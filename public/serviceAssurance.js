@@ -693,6 +693,13 @@
 
       var status = el('div', { class: 'muted' }, t('sa.record.waiting'));
       var overlay = modal(t('sa.record.ready'), el('div', { class: 'sa-form' },
+        // An http:// capture address cannot work from an https:// application:
+        // the browser refuses it as mixed active content before the request is
+        // made, and reports that to the console and nobody else. Saying so here
+        // beats handing over a bookmarklet that can only fail.
+        rec.insecure ? el('div', { class: 'sa-form-error' },
+          el('strong', {}, t('sa.record.insecureTitle')), ' ',
+          t('sa.record.insecureBody', { url: rec.capture_url })) : null,
         el('p', {}, t('sa.record.step1')),
         el('div', { class: 'sa-bookmarklet-row' }, link, copied),
         el('p', {}, t('sa.record.step2')),

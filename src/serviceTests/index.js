@@ -122,6 +122,7 @@ function createServiceTestsModule(rawPorts = {}) {
       audit,
       logger,
       recorderSource,
+      publicUrl: rawPorts.publicUrl || null,
       requireAuth: rawPorts.requireAuth,
       requireRole: rawPorts.requireRole,
       requireFeature: rawPorts.requireFeature || null,

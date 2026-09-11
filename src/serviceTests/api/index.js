@@ -33,6 +33,10 @@ function createServiceTestsApiRouter({
   // Returns public/recorder.js as a string, so the bookmarklet can carry the
   // recorder inline and survive the target site's Content-Security-Policy.
   recorderSource = null,
+  // The address a CUSTOMER'S browser must use to reach this server. Not the
+  // address it listens on: behind a proxy those differ, and the bookmarklet
+  // needs the outside one or the recorder cannot call home.
+  publicUrl = null,
   audit = null,
   logger = null,
   // Middleware supplied by the host.
@@ -49,7 +53,7 @@ function createServiceTestsApiRouter({
   if (requireAuth) router.use(requireAuth);
   if (requireFeature) router.use(requireFeature);
 
-  const deps = { repositories, settings, queue, reactor, artifacts, audit, logger, requireRole, roles, recorderSource };
+  const deps = { repositories, settings, queue, reactor, artifacts, audit, logger, requireRole, roles, recorderSource, publicUrl };
 
   router.use('/applications', createApplicationsRouter(deps));
   router.use('/tests', createTestsRouter(deps));

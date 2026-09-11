@@ -28,12 +28,31 @@ const CAPTURE_MOUNT = '/api/service-capture';
 // Same rule, same reason, as the enrollment installer's server URL.
 const SAFE_HOST_RE = /^[a-zA-Z0-9.\-:[\]]+$/;
 
-function serverUrlOf(req) {
-  const configured = req && req.app && req.app.get && req.app.get('publicUrl');
+// The address the CUSTOMER'S BROWSER must use to reach BlueEyes — which is not
+// the address this process is listening on, and the difference is what makes
+// recording work or not.
+//
+// `configured` is the deployment's public URL and always wins. Without one the
+// URL is derived from the request, and then the scheme is the thing that goes
+// wrong: behind a reverse proxy the request arrives over plain HTTP, so
+// `req.protocol` says `http` — and an `http://` capture URL is refused by every
+// HTTPS page as mixed active content, before it is even a CORS or CSP question.
+// That failure cost a real afternoon.
+//
+// So a forwarded scheme UPGRADES http to https, and can do nothing else: it
+// cannot change the host, and it cannot downgrade. The header is attacker-
+// supplied when no trusted proxy is in front, but the only thing a forged one
+// can do here is make an operator's own bookmarklet point at https — which
+// either works or visibly does not.
+function serverUrlOf(req, configuredUrl = null) {
+  const configured = configuredUrl
+    || (req && req.app && typeof req.app.get === 'function' && req.app.get('publicUrl'));
   if (configured) return String(configured).replace(/\/+$/, '');
   const host = (req && typeof req.get === 'function' && req.get('host')) || '';
-  const proto = (req && req.protocol) || 'https';
   if (!SAFE_HOST_RE.test(host)) return '';
+  let proto = (req && req.protocol) || 'https';
+  const forwarded = (req && typeof req.get === 'function' && req.get('x-forwarded-proto')) || '';
+  if (proto === 'http' && /^https\b/i.test(String(forwarded).split(',')[0].trim())) proto = 'https';
   return `${proto}://${host}`;
 }
 
@@ -43,8 +62,8 @@ function serverUrlOf(req) {
 // operator pastes into their own browser on the customer's site.
 const jsString = (value) => JSON.stringify(String(value == null ? '' : value));
 
-function buildBookmarklet({ req, token, recorderSource = '' }) {
-  const base = serverUrlOf(req);
+function buildBookmarklet({ req, token, recorderSource = '', publicUrl = null }) {
+  const base = serverUrlOf(req, publicUrl);
   const captureUrl = `${base}${CAPTURE_MOUNT}`;
   const src = `${base}/recorder.js`;
 
@@ -73,6 +92,11 @@ function buildBookmarklet({ req, token, recorderSource = '' }) {
     capture_url: captureUrl,
     recorder_url: src,
     inline: !!recorderSource,
+    // An http:// capture URL cannot work from an https:// page — the browser
+    // refuses it as mixed active content before the request is made. Almost
+    // every application worth monitoring is https, so this is a near-certain
+    // failure and the dialog warns rather than handing over a dead bookmarklet.
+    insecure: /^http:\/\//i.test(captureUrl),
     // encodeURIComponent so the whole program survives being a URL: a bookmark
     // href is parsed as one, and an unescaped `#` would truncate it.
     bookmarklet: `javascript:${encodeURIComponent(code)}`,

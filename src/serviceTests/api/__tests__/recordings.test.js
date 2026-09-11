@@ -478,3 +478,43 @@ test('the recordings strip offers Stop while a recording is live', () => {
     'a live recording must be stoppable from the dashboard');
   assert.match(ui, /'\/stop', \{ method: 'POST'/, 'the Stop button must call the stop route');
 });
+
+test('the capture URL is the address the customer reaches us on, and never silently http', async () => {
+  const { buildBookmarklet, serverUrlOf } = require('../../recording/bookmarklet');
+  const req = (proto, forwarded) => ({
+    protocol: proto,
+    get: (h) => (h === 'host' ? 'blueeye-server.gnf.dk' : (h === 'x-forwarded-proto' ? forwarded : null)),
+    app: { get: () => null },
+  });
+
+  // The failure this exists to stop: an http:// capture URL is refused by every
+  // https:// page as mixed active content, before the request is made.
+  const plain = buildBookmarklet({ req: req('http'), token: 't' });
+  assert.equal(plain.capture_url, 'http://blueeye-server.gnf.dk/api/service-capture');
+  assert.equal(plain.insecure, true, 'an http capture URL must be flagged, not handed over quietly');
+
+  // Behind a proxy the request arrives as http; the forwarded scheme upgrades it.
+  assert.equal(buildBookmarklet({ req: req('http', 'https'), token: 't' }).insecure, false);
+  assert.equal(buildBookmarklet({ req: req('http', 'https, http'), token: 't' }).capture_url,
+    'https://blueeye-server.gnf.dk/api/service-capture');
+
+  // It can only upgrade. A forged header must not be able to downgrade, or to
+  // move the address somewhere else.
+  assert.equal(serverUrlOf(req('https', 'http')), 'https://blueeye-server.gnf.dk');
+  assert.equal(serverUrlOf({ protocol: 'https', get: (h) => (h === 'host' ? 'evil.dk"><script>' : null) }), '');
+
+  // A configured public URL always wins — it is what the operator actually types.
+  const configured = buildBookmarklet({ req: req('http'), token: 't', publicUrl: 'https://blueeye.kunde.dk/' });
+  assert.equal(configured.capture_url, 'https://blueeye.kunde.dk/api/service-capture');
+  assert.equal(configured.insecure, false);
+});
+
+test('the start dialog warns before handing over a bookmarklet that cannot work', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const ui = fs.readFileSync(path.join(__dirname, '..', '..', '..', '..', 'public', 'serviceAssurance.js'), 'utf8');
+  assert.match(ui, /rec\.insecure \? el\('div', \{ class: 'sa-form-error' \}/,
+    'an http capture address must be called out in the dialog');
+  assert.match(ui, /sa\.record\.insecureBody', \{ url: rec\.capture_url \}/,
+    'the warning must name the address, so the operator can see what is wrong');
+});

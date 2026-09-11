@@ -392,6 +392,10 @@ function start() {
     // The browser-side recorder. The module reads it to build the bookmarklet;
     // it is served from public/ as well, so an operator can read it first.
     recorderScriptPath: path.join(__dirname, '..', 'public', 'recorder.js'),
+    // BLUEEYE_PUBLIC_URL. The bookmarklet runs in a browser on the CUSTOMER'S
+    // site, so it needs the address they reach us on — and it must be https,
+    // or an https page refuses the call as mixed content before making it.
+    publicUrl: config.publicUrl || null,
   });
 
   // Agent-release signing key — generated + managed from Settings (write-once; the

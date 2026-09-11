@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.125.4 — the recorder was handed an address it could never use
+
+`Blocked loading mixed active content "http://blueeye-server…/api/service-capture/events"`.
+
+Not CSP, not CORS. The bookmarklet was built with an **http://** capture
+address, and an HTTPS page refuses a plain-HTTP call as mixed active content
+before it is even attempted. Almost every application worth monitoring is
+HTTPS, so recording could not work anywhere.
+
+Three causes, all mine:
+
+**The configured public URL was never read.** The bookmarklet asked Express for
+an app setting called `publicUrl`. Nothing sets it — the deployment's address
+lives in `config.publicUrl` (`BLUEEYE_PUBLIC_URL`), which the enrollment
+installer has always used. The module is now handed it explicitly, and it wins
+over anything derived from the request.
+
+**Behind a proxy, a derived address is always http.** The request reaches the
+server over plain HTTP from the reverse proxy, so `req.protocol` says `http`
+even when the operator is on HTTPS. A forwarded scheme now UPGRADES http to
+https — and can do nothing else: it cannot change the host and cannot
+downgrade, so a forged header can at worst point an operator's own bookmarklet
+at https, which either works or visibly does not.
+
+**And when it is still http, say so.** The start dialog now refuses to pretend:
+it names the address, explains that an HTTPS application will refuse it, and
+gives the fix (serve BlueEyes over HTTPS, or set `BLUEEYE_PUBLIC_URL` to the
+https address when a proxy already terminates TLS). Handing someone a
+bookmarklet that cannot work, and letting them discover it by performing a
+whole journey, is the failure this feature can least afford.
+
+The empty-recording message and the docs now name mixed content first, since it
+is the failure that comes before CSP can even apply.
+
 ## 0.125.3 — the recorder says when it cannot reach us
 
 Three fixes from watching someone use it.

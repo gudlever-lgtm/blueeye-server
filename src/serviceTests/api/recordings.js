@@ -35,7 +35,7 @@ const { buildBookmarklet, CAPTURE_MOUNT } = require('../recording/bookmarklet');
 //   * no credentials are accepted, so a browser never attaches a cookie: CORS is
 //     opened for the origin, never for the session.
 
-function createRecordingsRouter({ repositories, settings, audit, requireRole, roles, recorderSource = null }) {
+function createRecordingsRouter({ repositories, settings, audit, requireRole, roles, recorderSource = null, publicUrl = null }) {
   const router = express.Router();
   const { recordings, applications, tests, credentials } = repositories;
   const read = requireRole(roles.VIEWER, roles.OPERATOR, roles.ADMIN);
@@ -87,7 +87,7 @@ function createRecordingsRouter({ repositories, settings, audit, requireRole, ro
     return res.status(201).json({
       ...withPreview(recording),
       token,
-      ...buildBookmarklet({ req, token, recorderSource: recorderSource ? recorderSource() : '' }),
+      ...buildBookmarklet({ req, token, publicUrl, recorderSource: recorderSource ? recorderSource() : '' }),
     });
   }));
 

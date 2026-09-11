@@ -61,6 +61,31 @@ element to find it again.
   link to a *different* host is kept whole — rewriting that one would point the
   step at the wrong site.
 
+## When it does not work: check this first
+
+**Is BlueEyes served over HTTPS?** If BlueEyes is on plain `http://` and the
+application you are recording is on `https://`, the browser refuses the
+recorder's call as **mixed active content** — before it is even attempted, and
+before CSP enters into it. Almost every application worth monitoring is HTTPS,
+so this stops recording everywhere.
+
+The start dialog says so rather than handing you a bookmarklet that cannot work.
+The fix is one of:
+
+- serve BlueEyes over HTTPS;
+- if a reverse proxy already terminates TLS in front of it, set
+  `BLUEEYE_PUBLIC_URL` to the `https://` address people actually use. BlueEyes
+  otherwise derives its own address from the incoming request, which arrives over
+  plain HTTP from the proxy and so looks insecure from the outside. Setting
+  `TRUST_PROXY=1` also lets it read the forwarded scheme.
+
+In the console this reads:
+
+```
+Blocked loading mixed active content
+"http://blueeye-server.example.dk/api/service-capture/events"
+```
+
 ## When it does not work: Content-Security-Policy
 
 Many applications set a Content-Security-Policy — a header that tells the browser

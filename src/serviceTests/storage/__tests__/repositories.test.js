@@ -222,8 +222,41 @@ test('suggestions: createMany() stores confidence and the proposed steps', async
   ]);
   assert.deepEqual(ids, [11, 11]);
   const inserts = pool.matching(/^INSERT/i);
-  assert.equal(inserts[0].params[4], 'high');
-  assert.equal(inserts[1].params[4], 'medium', 'an unstated confidence is medium, never high');
+
+  // Read the parameter position out of the statement's own column list rather
+  // than hard-coding an index: adding a column to the INSERT shifts every one
+  // after it, and a spec that pins 4 fails for a reason that has nothing to do
+  // with what it is testing.
+  const columns = inserts[0].sql.match(/\(([^)]*)\)\s*VALUES/i)[1].split(',').map((c) => c.trim());
+  const at = (name) => columns.indexOf(name);
+  assert.ok(at('confidence') >= 0, 'the INSERT no longer names confidence');
+
+  assert.equal(inserts[0].params[at('confidence')], 'high');
+  assert.equal(inserts[1].params[at('confidence')], 'medium', 'an unstated confidence is medium, never high');
+  // A suggestion is a test unless it says otherwise, so an existing caller that
+  // knows nothing about journeys keeps working.
+  assert.equal(inserts[1].params[at('kind')], 'test');
+  assert.equal(inserts[1].params[at('proposed_journey')], null);
+});
+
+test('suggestions: createMany() stores a journey suggestion as one', async () => {
+  const pool = makeFakePool([[/^INSERT INTO service_test_suggestions/i, () => ok({ insertId: 12 })]]);
+  await createSuggestionsRepository({ db: { pool } }).createMany(7, 3, [{
+    kind: 'journey',
+    name: 'Sign in and use the application',
+    confidence: 'medium',
+    proposed_journey: { criticality: 'high', steps: [{ suggestion_name: 'Login', required: true }] },
+  }]);
+  const insert = pool.matching(/^INSERT/i)[0];
+  const columns = insert.sql.match(/\(([^)]*)\)\s*VALUES/i)[1].split(',').map((c) => c.trim());
+  const at = (name) => columns.indexOf(name);
+
+  assert.equal(insert.params[at('kind')], 'journey');
+  const plan = JSON.parse(insert.params[at('proposed_journey')]);
+  assert.equal(plan.criticality, 'high');
+  // Members are named, not referenced: the tests do not exist until the journey
+  // is accepted.
+  assert.deepEqual(plan.steps, [{ suggestion_name: 'Login', required: true }]);
 });
 
 test('suggestions: accepting is one-way — a second accept changes nothing', async () => {

@@ -527,11 +527,64 @@
         .catch(function (e) { toast(err(e), true); });
     }
 
+    // A suggested journey. It shows what accepting it will BUILD — the member
+    // tests, in order, with the optional ones marked — because "accept" here
+    // creates several things at once and the operator should see which.
+    function journeySuggestionCard(s) {
+      var plan = s.proposed_journey || { steps: [] };
+      var accepted = s.status !== 'proposed';
+      var crit = el('select', {}, ...['critical', 'high', 'normal', 'low'].map(function (c) {
+        return el('option', { value: c }, criticalityLabel(c));
+      }));
+      crit.value = plan.criticality || 'normal';
+
+      var accept = el('button', {
+        class: 'primary small',
+        onclick: function () {
+          accept.disabled = true;
+          api(API + '/suggestions/' + s.id + '/accept', {
+            method: 'POST',
+            body: { criticality: crit.value },
+          }).then(function (res) {
+            toast(t('sa.suggest.journeyCreated', { count: res.tests.length }));
+            state.tab = 'journeys';
+            state.journeyId = res.journey.id;
+            draw();
+          }).catch(function (e) { accept.disabled = false; toast(err(e), true); });
+        },
+      }, t('sa.suggest.acceptJourney'));
+
+      return el('div', { class: 'sa-suggestion sa-suggest-journey' },
+        el('div', { class: 'sa-journey-head' },
+          el('strong', {}, s.name),
+          el('span', { class: 'chip chip-' + s.confidence }, t('sa.suggest.confidence') + ': ' + s.confidence)),
+        el('div', { class: 'muted' }, s.description || ''),
+        // What it will build, before it builds it.
+        el('ol', { class: 'sa-record-steps' }, ...(plan.steps || []).map(function (step) {
+          return el('li', {}, step.suggestion_name,
+            step.required === false ? el('span', { class: 'muted' }, ' \u00b7 ' + t('sa.suggest.optional')) : null);
+        })),
+        el('div', { class: 'sa-suggestion-meta' }, el('span', { class: 'muted' }, s.reason || '')),
+        accepted
+          ? el('span', { class: 'chip' }, t('sa.suggest.accepted'))
+          : el('div', { class: 'sa-suggest-journey-actions' },
+            // Criticality is the operator's call. The heuristic proposed one;
+            // this is where they disagree with it, before anything is created.
+            el('label', { class: 'sa-step-required' },
+              el('span', {}, t('sa.journey.criticality')), crit),
+            accept));
+    }
+
     function showSuggestions(discoveryId) {
       api(API + '/suggestions?discovery_id=' + discoveryId).then(function (list) {
         if (!list.length) { toast(t('sa.suggest.empty')); return; }
+        // Journeys are accepted ONE at a time, with their own button: accepting
+        // one creates several tests and the journey that orders them, which is
+        // not what a tick box in a "create the selected tests" list means.
+        var journeys = list.filter(function (s) { return s.kind === 'journey'; });
+        var tests = list.filter(function (s) { return s.kind !== 'journey'; });
         var checks = {};
-        var body = el('div', { class: 'sa-suggestions' }, ...list.map(function (s) {
+        var body = el('div', { class: 'sa-suggestions' }, ...tests.map(function (s) {
           var box = el('input', { type: 'checkbox' });
           if (s.status === 'proposed') { box.checked = true; checks[s.id] = box; }
           return el('div', { class: 'sa-suggestion' },
@@ -543,12 +596,21 @@
               el('span', { class: 'muted' }, s.reason || '')),
             el('div', { class: 'muted' }, t('sa.test.steps', { count: (s.proposed_steps || []).length })));
         }));
-        modal(t('sa.suggest.title'), body, function () {
+        var content = el('div', {},
+          journeys.length ? el('div', { class: 'sa-suggest-journeys' },
+            el('h4', {}, t('sa.suggest.journeysTitle')),
+            el('p', { class: 'sa-help' }, t('sa.suggest.journeysHelp')),
+            ...journeys.map(journeySuggestionCard)) : null,
+          tests.length ? el('div', {},
+            el('h4', {}, t('sa.suggest.testsTitle')),
+            body) : null);
+
+        modal(t('sa.suggest.title'), content, tests.length ? function () {
           var ids = Object.keys(checks).filter(function (id) { return checks[id].checked; }).map(Number);
           if (!ids.length) return Promise.resolve();
           return api(API + '/suggestions/accept-many', { method: 'POST', body: { ids: ids } })
             .then(function (res) { toast(t('sa.suggest.create') + ': ' + res.created.length); state.tab = 'tests'; draw(); });
-        }, t('sa.suggest.create'));
+        } : null, t('sa.suggest.create'));
       }).catch(function (e) { toast(err(e), true); });
     }
 

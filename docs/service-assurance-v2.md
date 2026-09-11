@@ -247,6 +247,37 @@ Two rules that look like details and are not:
   measured-and-zero in the rollup, then produced a verdict claiming the journey
   took 0 ms. Missing data must never read as good news.
 
+### §3 Discovery → Journey suggestions — shipped
+
+Discovery proposed tests. A test suggestion answers "what could we check here";
+it does not answer "what does a user DO here". `suggest/journeys.js` answers the
+second question, and migration 084 gives `service_test_suggestions` a `kind`
+rather than adding a second suggestions table — the accept/dismiss flow, the
+discovery link and the statuses already exist and behave identically for both.
+
+**Journey rules derive from the TEST suggestions, not from the crawl again.** So
+there is exactly one place that knows how to turn a discovered element into a DSL
+step; a journey suggestion only GROUPS what has already been proposed, and names
+its members by name because the tests do not exist until it is accepted.
+
+Accepting one is the spec's chain in a single request: the member tests are
+created (or reused, if the operator accepted one earlier — a second copy of the
+same check splits its history across two rows), then the journey, then the
+ordering. A member that has gone refuses the whole accept BEFORE anything is
+created: half a journey is worse than a clear refusal.
+
+Four deliberate rules:
+
+- **"Availability" never becomes a journey.** "The front page answered" is the
+  sentence journeys exist so the product stops saying.
+- **A journey contained by a bigger one is dropped**, or the operator accepts two
+  journeys watching the same login and then wonders which to delete.
+- **Confidence is the weakest link**, so attention goes to the shakiest member.
+- **Criticality is proposed, never decided.** Overridable in the accept request.
+
+The bulk "create selected tests" button refuses a journey rather than building an
+empty test from its (deliberately empty) `proposed_steps`.
+
 ## 3. Build order
 
 Exactly this order, because each step is what makes the next one worth having:

@@ -81,7 +81,7 @@ function createDiscoveryRouter({ repositories, settings, queue, audit, requireRo
 // ------------------------------------------------------------- suggestions
 createDiscoveryRouter.suggestions = function createSuggestionsRouter({ repositories, settings, audit, requireRole, roles }) {
   const router = express.Router();
-  const { suggestions, tests, discovery } = repositories;
+  const { suggestions, tests, discovery, journeys } = repositories;
   const read = requireRole(roles.VIEWER, roles.OPERATOR, roles.ADMIN);
   const write = requireRole(roles.OPERATOR, roles.ADMIN);
   const load = makeLoader(suggestions, 'Suggestion');
@@ -101,18 +101,29 @@ createDiscoveryRouter.suggestions = function createSuggestionsRouter({ repositor
       }
       filters.status = String(req.query.status);
     }
+    if (req.query.kind !== undefined) {
+      if (!['test', 'journey'].includes(String(req.query.kind))) {
+        return res.status(400).json({ error: 'Invalid kind' });
+      }
+      filters.kind = String(req.query.kind);
+    }
     return res.json(await suggestions.list(filters));
   }));
 
   // Accepting a suggestion creates a real test from its proposed steps. The
   // steps go through the SAME validator a hand-built test does — a heuristic
   // does not get to write something the designer could not.
+  //
+  // A JOURNEY suggestion takes the other branch below: it creates the tests its
+  // members name AND the journey that orders them, which is the spec's chain
+  // (Discovery → suggested journey → accept → tests created → runs → evidence).
   router.post('/:id/accept', write, asyncHandler(async (req, res) => {
     const suggestion = await load(req, res);
     if (!suggestion) return undefined;
     if (suggestion.status !== 'proposed') {
       return res.status(409).json({ error: 'That suggestion has already been handled', status: suggestion.status });
     }
+    if (suggestion.kind === 'journey') return acceptJourney(req, res, suggestion);
 
     const runner = await settings.get('runner');
     const name = (req.body && typeof req.body.name === 'string' && req.body.name.trim())
@@ -144,6 +155,85 @@ createDiscoveryRouter.suggestions = function createSuggestionsRouter({ repositor
     return res.json(updated);
   }));
 
+
+  // Accepting a journey suggestion.
+  //
+  // Its members are named, not referenced — the tests do not exist yet. So this
+  // finds each member's own test suggestion beside it and accepts THAT the
+  // ordinary way, reusing a test already created from it if the operator
+  // accepted it earlier. Then it creates the journey and orders them.
+  //
+  // All or nothing in spirit but not in SQL: a half-built journey is recoverable
+  // (the tests are real and the operator can finish it by hand) while a
+  // transaction spanning several repositories is not something this module's
+  // storage layer offers. What it does guarantee is that the SUGGESTION is only
+  // marked accepted once the journey exists.
+  async function acceptJourney(req, res, suggestion) {
+    const plan = suggestion.proposed_journey;
+    if (!plan || !Array.isArray(plan.steps) || !plan.steps.length) {
+      return invalid(res, { _: 'that journey suggestion has no steps' });
+    }
+    if (!journeys) return res.status(404).json({ error: 'Journeys are not available' });
+
+    // Every member must be resolvable BEFORE anything is created: half a journey
+    // is worse than a clear refusal.
+    const siblings = await suggestions.list({ discoveryId: suggestion.discovery_id, kind: 'test' });
+    const members = [];
+    for (const step of plan.steps) {
+      const sibling = siblings.find((x) => x.name === step.suggestion_name);
+      if (!sibling) {
+        return invalid(res, { steps: `the suggested test "${step.suggestion_name}" is no longer available` });
+      }
+      members.push({ sibling, required: step.required !== false });
+    }
+
+    const runner = await settings.get('runner');
+    const created = [];
+    for (const { sibling, required } of members) {
+      // Already accepted earlier? Reuse that test rather than making a second
+      // copy of the same check under a different id.
+      let test = sibling.created_test_id ? await tests.findById(sibling.created_test_id) : null;
+      if (!test) {
+        const definition = { version: 1, name: sibling.name, steps: sibling.proposed_steps };
+        const { value, errors } = validateDefinition(definition, { maxSteps: runner.maxStepsPerTest });
+        if (errors) return invalid(res, { [sibling.name]: 'the suggested steps are not valid', details: errors });
+        test = await tests.create({
+          application_id: sibling.application_id,
+          name: sibling.name,
+          description: sibling.description,
+          definition: value,
+          credential_id: null,
+          created_by: userId(req),
+        });
+        await suggestions.markAccepted(sibling.id, test.id);
+      }
+      created.push({ test, required });
+    }
+
+    const journey = await journeys.create({
+      application_id: suggestion.application_id,
+      name: (req.body && typeof req.body.name === 'string' && req.body.name.trim())
+        ? req.body.name.trim().slice(0, 255)
+        : suggestion.name,
+      description: suggestion.description,
+      // Proposed by the heuristic, overridable by the operator in the same
+      // request — criticality is their judgement, not the system's.
+      criticality: (req.body && req.body.criticality) || plan.criticality || 'normal',
+      expected_duration_ms: plan.expected_duration_ms ?? null,
+      created_by: userId(req),
+    });
+    await journeys.setSteps(journey.id, created.map(({ test, required }) => ({ test_id: test.id, required })));
+
+    const updated = await suggestions.markAccepted(suggestion.id, null, journey.id);
+    record(req, 'journey_suggestion_accept', suggestion.id,
+      `journey=${journey.id} tests=${created.map((c) => c.test.id).join(',')}`);
+    return res.status(201).json({
+      suggestion: updated,
+      journey: await journeys.findById(journey.id),
+      tests: created.map((c) => c.test),
+    });
+  }
+
   // Accept several at once — the "Create selected tests" button in spec §13.
   router.post('/accept-many', write, asyncHandler(async (req, res) => {
     const ids = Array.isArray(req.body && req.body.ids) ? req.body.ids : null;
@@ -159,6 +249,14 @@ createDiscoveryRouter.suggestions = function createSuggestionsRouter({ repositor
       // eslint-disable-next-line no-await-in-loop
       const suggestion = await suggestions.findById(id);
       if (!suggestion || suggestion.status !== 'proposed') { failed.push({ id, error: 'not available' }); continue; }
+      // A journey creates several tests AND the journey that orders them, which
+      // is not what "create the selected tests" means. It goes through
+      // POST /:id/accept one at a time, so the operator sees what each one
+      // builds rather than having three tests appear from a tick box.
+      if (suggestion.kind === 'journey') {
+        failed.push({ id, error: 'accept a journey suggestion on its own' });
+        continue;
+      }
       const definition = { version: 1, name: suggestion.name, steps: suggestion.proposed_steps };
       const { value, errors } = validateDefinition(definition, { maxSteps: runner.maxStepsPerTest });
       if (errors) { failed.push({ id, error: 'the proposed steps are not valid', details: errors }); continue; }

@@ -329,3 +329,171 @@ test('a test says which journeys depend on it', async () => {
   const orphan = await request(app).get('/api/service-tests/tests/3').set('Authorization', authHeader('viewer'));
   assert.deepEqual(orphan.body.journeys, []);
 });
+
+// ------------------------------------------------ Discovery → journey (V2 §3)
+const SUGGEST = '/api/service-tests/suggestions';
+
+// A discovery that found a login, pages behind it, a logout — and the journey
+// suggestion those add up to.
+function withSuggestions() {
+  const { serviceTests, app } = fixture();
+  const t = serviceTests.tables;
+  t.discoveries.insert({ application_id: 1, status: 'complete' });
+  const step = [{ type: 'open', url: '/login' }];
+  const ids = {};
+  for (const [name, steps] of [['Login', step], ['Authenticated navigation', step], ['Logout', step]]) {
+    ids[name] = t.suggestions.insert({
+      discovery_id: 1, application_id: 1, kind: 'test', name, description: `${name} check`,
+      confidence: 'medium', reason: 'found it', proposed_steps: steps,
+      status: 'proposed', created_test_id: null, created_journey_id: null,
+    }).id;
+  }
+  ids.journey = t.suggestions.insert({
+    discovery_id: 1, application_id: 1, kind: 'journey', name: 'Sign in and use the application',
+    description: 'An ordinary session.', confidence: 'medium', reason: 'found a login flow',
+    proposed_steps: [], status: 'proposed', created_test_id: null, created_journey_id: null,
+    proposed_journey: {
+      criticality: 'high',
+      expected_duration_ms: null,
+      steps: [
+        { suggestion_name: 'Login', required: true },
+        { suggestion_name: 'Authenticated navigation', required: true },
+        { suggestion_name: 'Logout', required: false },
+      ],
+    },
+  }).id;
+  return { serviceTests, app, ids };
+}
+
+test('accepting a journey suggestion creates the tests AND the journey that orders them', async () => {
+  const { serviceTests, app, ids } = withSuggestions();
+  const before = serviceTests.tables.tests.rows.length;
+
+  const res = await request(app).post(`${SUGGEST}/${ids.journey}/accept`)
+    .set('Authorization', authHeader('operator')).send({});
+  assert.equal(res.status, 201);
+
+  // The whole chain the spec asks for: suggestion → tests → journey.
+  assert.equal(res.body.tests.length, 3);
+  assert.equal(serviceTests.tables.tests.rows.length, before + 3);
+  assert.equal(res.body.journey.name, 'Sign in and use the application');
+  assert.equal(res.body.journey.criticality, 'high');
+  assert.equal(res.body.suggestion.status, 'accepted');
+  assert.equal(res.body.suggestion.created_journey_id, res.body.journey.id);
+
+  // In order, with Logout optional — the shape the heuristic proposed.
+  const journey = await request(app).get(`${BASE}/${res.body.journey.id}`).set('Authorization', authHeader('viewer'));
+  assert.deepEqual(journey.body.health.steps.map((s) => s.label),
+    ['Login', 'Authenticated navigation', 'Logout']);
+  assert.deepEqual(journey.body.health.steps.map((s) => s.required), [true, true, false]);
+
+  // Each member's own suggestion is marked accepted too, so it is not offered
+  // again beside the journey that already used it.
+  for (const name of ['Login', 'Authenticated navigation', 'Logout']) {
+    assert.equal(serviceTests.tables.suggestions.find(ids[name]).status, 'accepted');
+  }
+});
+
+test('a member already accepted is reused, never duplicated', async () => {
+  const { serviceTests, app, ids } = withSuggestions();
+
+  // The operator accepted "Login" on its own first — the normal way this goes.
+  const solo = await request(app).post(`${SUGGEST}/${ids.Login}/accept`)
+    .set('Authorization', authHeader('operator')).send({});
+  assert.equal(solo.status, 201);
+  const loginTestId = solo.body.test.id;
+  const after = serviceTests.tables.tests.rows.length;
+
+  const res = await request(app).post(`${SUGGEST}/${ids.journey}/accept`)
+    .set('Authorization', authHeader('operator')).send({});
+  assert.equal(res.status, 201);
+
+  // Two new tests, not three: a second copy of the same check under a different
+  // id is monitoring nobody asked for and history split across two rows.
+  assert.equal(serviceTests.tables.tests.rows.length, after + 2);
+  assert.ok(res.body.tests.some((t) => t.id === loginTestId), 'the existing Login test must be reused');
+  const journey = await request(app).get(`${BASE}/${res.body.journey.id}`).set('Authorization', authHeader('viewer'));
+  assert.equal(journey.body.health.steps[0].test_id, loginTestId);
+});
+
+test('the operator overrides the proposed criticality in the same request', async () => {
+  const { app, ids } = withSuggestions();
+  // Criticality is the customer's judgement — the heuristic only proposes.
+  const res = await request(app).post(`${SUGGEST}/${ids.journey}/accept`)
+    .set('Authorization', authHeader('operator')).send({ name: 'Caseworker session', criticality: 'critical' });
+  assert.equal(res.status, 201);
+  assert.equal(res.body.journey.name, 'Caseworker session');
+  assert.equal(res.body.journey.criticality, 'critical');
+});
+
+test('a journey suggestion is refused rather than half-built', async () => {
+  const { serviceTests, app, ids } = withSuggestions();
+  // A member suggestion that is gone: refuse before anything is created, rather
+  // than leaving the operator a journey missing its middle.
+  serviceTests.tables.suggestions.remove(ids['Authenticated navigation']);
+  const before = serviceTests.tables.tests.rows.length;
+
+  const res = await request(app).post(`${SUGGEST}/${ids.journey}/accept`)
+    .set('Authorization', authHeader('operator')).send({});
+  assert.equal(res.status, 400);
+  assert.match(res.body.details.steps, /no longer available/);
+  assert.equal(serviceTests.tables.tests.rows.length, before, 'nothing may be created on a refusal');
+  assert.equal(serviceTests.tables.suggestions.find(ids.journey).status, 'proposed');
+});
+
+test('accepting twice is a 409, and viewers cannot accept at all', async () => {
+  const { app, ids } = withSuggestions();
+  assert.equal((await request(app).post(`${SUGGEST}/${ids.journey}/accept`)
+    .set('Authorization', authHeader('viewer')).send({})).status, 403);
+
+  assert.equal((await request(app).post(`${SUGGEST}/${ids.journey}/accept`)
+    .set('Authorization', authHeader('operator')).send({})).status, 201);
+  const again = await request(app).post(`${SUGGEST}/${ids.journey}/accept`)
+    .set('Authorization', authHeader('operator')).send({});
+  assert.equal(again.status, 409);
+  assert.equal(again.body.status, 'accepted');
+});
+
+test('suggestions list journeys first and can be filtered by kind', async () => {
+  const { app } = withSuggestions();
+  const all = await request(app).get(SUGGEST).set('Authorization', authHeader('viewer'));
+  assert.equal(all.status, 200);
+  // What the service IS reads before the individual checks that prove it.
+  assert.equal(all.body[0].kind, 'journey');
+
+  const onlyJourneys = await request(app).get(`${SUGGEST}?kind=journey`).set('Authorization', authHeader('viewer'));
+  assert.equal(onlyJourneys.body.length, 1);
+  const onlyTests = await request(app).get(`${SUGGEST}?kind=test`).set('Authorization', authHeader('viewer'));
+  assert.equal(onlyTests.body.length, 3);
+  assert.equal((await request(app).get(`${SUGGEST}?kind=nonsense`).set('Authorization', authHeader('viewer'))).status, 400);
+});
+
+test('a journey suggestion with no steps is refused, not turned into an empty journey', async () => {
+  const { serviceTests, app } = withSuggestions();
+  const empty = serviceTests.tables.suggestions.insert({
+    discovery_id: 1, application_id: 1, kind: 'journey', name: 'Nothing', confidence: 'low',
+    proposed_steps: [], proposed_journey: { criticality: 'normal', steps: [] }, status: 'proposed',
+  }).id;
+  const res = await request(app).post(`${SUGGEST}/${empty}/accept`)
+    .set('Authorization', authHeader('operator')).send({});
+  assert.equal(res.status, 400);
+  assert.match(res.body.details._, /no steps/);
+});
+
+test('the bulk "create selected tests" button refuses a journey rather than mangling it', async () => {
+  const { serviceTests, app, ids } = withSuggestions();
+  const before = serviceTests.tables.tests.rows.length;
+
+  const res = await request(app).post(`${SUGGEST}/accept-many`)
+    .set('Authorization', authHeader('operator'))
+    .send({ ids: [ids.Login, ids.journey] });
+
+  // The test in the batch is created; the journey is reported back, not silently
+  // turned into an empty test from its (deliberately empty) proposed_steps.
+  assert.equal(res.status, 201);
+  assert.equal(res.body.created.length, 1);
+  assert.equal(res.body.failed.length, 1);
+  assert.match(res.body.failed[0].error, /on its own/);
+  assert.equal(serviceTests.tables.tests.rows.length, before + 1);
+  assert.equal(serviceTests.tables.suggestions.find(ids.journey).status, 'proposed');
+});

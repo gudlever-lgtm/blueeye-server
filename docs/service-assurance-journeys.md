@@ -102,6 +102,59 @@ The Journeys screen shows one verdict per application: the **worst** journey
 decides the word, and the counts say how widespread it is. Journeys are listed
 critical-first, so what matters most is read first.
 
+## Discovery suggests journeys, not just tests
+
+Discovery already proposes tests — "Login", "Search", "Availability". A test
+suggestion answers *what could we check here*. It does not answer the question
+the product exists to answer, which is *what does a user actually do here*.
+
+So Discovery now also proposes journeys:
+
+```
+Suggested journeys
+
+  Sign in and use the application            confidence: medium
+    1. Login
+    2. Authenticated navigation
+    3. Logout · optional
+  Reason: Discovery found a login flow and reached pages behind it.
+
+  Sign in and search                         confidence: medium
+    1. Login
+    2. Search
+  Reason: found a search field and a login flow, so the search is probably
+  behind the login.
+```
+
+Rules, not AI — each one is a stated condition over what Discovery found, and
+each carries its reason so you can judge it rather than trust it.
+
+**Accepting a journey builds everything it needs**: the member tests, then the
+journey that orders them. That is the chain the whole feature is for —
+Discovery → suggested journey → you accept → tests created → runs → results
+become evidence. A member you already accepted on its own is **reused**, never
+duplicated, so history does not end up split across two copies of the same check.
+
+If a member suggestion has gone (a newer Discovery replaced it, say), the accept
+is **refused before anything is created** rather than leaving you a journey
+missing its middle.
+
+Four things the rules deliberately do:
+
+- **"Availability" never becomes a journey.** Opening the front page and getting
+  HTTP 200 is the definition of "the website is up" — the exact sentence
+  journeys exist so BlueEyes stops saying. It stays a useful test.
+- **The smaller journey is dropped when a bigger one contains it.** "Sign in"
+  and "Sign in and use the application" both apply whenever there is a login
+  with pages behind it; offering both means accepting two journeys that watch
+  the same login.
+- **Confidence is the weakest link.** A high-confidence login plus a
+  low-confidence search is a low-confidence journey, so your attention goes to
+  the part that might be wrong.
+- **Criticality is proposed, not decided.** The heuristic suggests one; you
+  change it in the same dialog, before anything is created. It is your judgement
+  about your business, and BlueEyes does not get a vote.
+
 ## Who can do what
 
 | | Viewer | Operator | Admin |

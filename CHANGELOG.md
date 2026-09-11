@@ -1,5 +1,63 @@
 # Changelog
 
+## 0.125.8 — Discovery suggests journeys, not just tests
+
+Discovery already proposed tests: "Login", "Search", "Availability". A test
+suggestion answers *what could we check here*. It does not answer the question
+the product exists to answer, which is *what does a user actually do here*.
+
+```
+Suggested journeys
+
+  Sign in and use the application            confidence: medium
+    1. Login
+    2. Authenticated navigation
+    3. Logout · optional
+  Reason: Discovery found a login flow and reached pages behind it.
+```
+
+Rules, not AI — each is a stated condition over what Discovery found, carrying
+the reason it was proposed so an operator judges it rather than trusts it.
+
+**The journey rules read the TEST suggestions, not the crawl again.** So there
+is exactly one place that knows how to turn a discovered element into a DSL
+step; a journey suggestion only GROUPS what has already been proposed, and names
+its members by name because the tests do not exist until it is accepted.
+
+**Accepting one is the whole chain in a single request:** the member tests are
+created, then the journey, then the ordering. A member the operator accepted
+earlier on its own is REUSED — a second copy of the same check splits its
+history across two rows and monitors nothing extra. A member that has gone
+refuses the whole accept *before anything is created*: half a journey is worse
+than a clear refusal.
+
+Four deliberate rules:
+
+- **"Availability" never becomes a journey.** Opening the front page and getting
+  HTTP 200 is the definition of "the website is up" — the exact sentence
+  journeys exist so BlueEyes stops saying. It stays a useful test.
+- **A journey contained by a bigger one is dropped.** "Sign in" and "Sign in and
+  use the application" both apply whenever there is a login with pages behind
+  it; offering both means accepting two journeys that watch the same login.
+- **Confidence is the weakest link.** A high-confidence login plus a
+  low-confidence search is a low-confidence journey, so attention goes to the
+  part that might be wrong.
+- **Criticality is proposed, never decided.** The operator overrides it in the
+  accept dialog, before anything is created. It is their judgement about their
+  business.
+
+The bulk "create selected tests" button refuses a journey rather than building
+an empty test from its deliberately empty `proposed_steps`.
+
+Migration 084 gives `service_test_suggestions` a `kind` rather than adding a
+second suggestions table: the accept/dismiss flow, the discovery link and the
+statuses already exist and behave identically for both.
+
+One spec had to change with it, and the way it changed is the point: it pinned
+`confidence` at parameter index 4, and adding a column shifted everything after
+it. It now reads the position out of the statement's own column list, so the
+next column to be added fails nothing that has nothing to do with it.
+
 ## 0.125.7 — the Number(null) trap, swept out of the whole codebase
 
 `Number(null)` is `0`. `Number('')` is `0`. `Number('   ')` is `0`. `Number([])`

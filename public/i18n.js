@@ -363,6 +363,12 @@
       'sa.test.steps': '{count} steps',
       // --- User Journeys (V2 §2). The central object: what the service IS,
       // from the user's side, rather than which URLs answer.
+      'sa.suggest.journeysTitle': 'Suggested journeys',
+      'sa.suggest.journeysHelp': 'What Discovery thinks your users actually do here. Accepting one builds the tests it needs and the journey that orders them.',
+      'sa.suggest.testsTitle': 'Suggested tests',
+      'sa.suggest.acceptJourney': 'Create this journey',
+      'sa.suggest.journeyCreated': 'Journey created, with {count} tests.',
+      'sa.suggest.optional': 'optional',
       'sa.tab.journeys': 'Journeys',
       'sa.journey.new': 'New journey',
       'sa.journey.empty': 'No journeys yet.',
@@ -897,6 +903,12 @@
       'sa.test.steps': '{count} trin',
       // --- Brugerrejser (V2 §2). Det centrale objekt: hvad servicen ER, set
       // fra brugerens side, frem for hvilke URL'er der svarer.
+      'sa.suggest.journeysTitle': 'Foreslåede brugerrejser',
+      'sa.suggest.journeysHelp': 'Hvad kortlægningen tror jeres brugere rent faktisk gør her. Accepterer du én, bygges de tests den skal bruge, og den rejse der sætter dem i rækkefølge.',
+      'sa.suggest.testsTitle': 'Foreslåede tests',
+      'sa.suggest.acceptJourney': 'Opret denne rejse',
+      'sa.suggest.journeyCreated': 'Brugerrejse oprettet, med {count} tests.',
+      'sa.suggest.optional': 'valgfri',
       'sa.tab.journeys': 'Brugerrejser',
       'sa.journey.new': 'Ny brugerrejse',
       'sa.journey.empty': 'Ingen brugerrejser endnu.',

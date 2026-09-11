@@ -5,6 +5,7 @@ const { createRedactor } = require('../engine/redact');
 const { createHostPolicy } = require('../security/hostPolicy');
 const { crawl } = require('../discovery/crawl');
 const { suggestTests } = require('../suggest/rules');
+const { suggestJourneys } = require('../suggest/journeys');
 
 // The worker loop: claim → run → persist → repeat.
 //
@@ -189,10 +190,24 @@ function createWorker({
       // Rule-based suggestions, generated once per crawl. A re-run creates a NEW
       // discovery with new suggestions and never touches existing tests (§37).
       const proposals = suggestTests(result);
-      if (proposals.length) await suggestions.createMany(job.id, job.application_id, proposals);
+      // And the journeys those tests add up to (V2 §3). Derived FROM the test
+      // suggestions rather than from the crawl again, so there is one place that
+      // knows how to turn a discovered element into a step — a journey
+      // suggestion only groups what has already been proposed.
+      const journeyProposals = suggestJourneys(proposals).map((j) => ({
+        kind: 'journey',
+        name: j.name,
+        description: j.description,
+        confidence: j.confidence,
+        reason: j.reason,
+        proposed_journey: { criticality: j.criticality, expected_duration_ms: null, steps: j.steps },
+      }));
+      const all = [...proposals, ...journeyProposals];
+      if (all.length) await suggestions.createMany(job.id, job.application_id, all);
 
       await discovery.finish(job.id, { status: 'complete', ...result.summary });
-      logger.info(`service-tests: discovery ${job.id} → ${result.summary.page_count} pages, ${proposals.length} suggestions (${result.stopped})`);
+      logger.info(`service-tests: discovery ${job.id} → ${result.summary.page_count} pages, `
+        + `${proposals.length} test + ${journeyProposals.length} journey suggestions (${result.stopped})`);
     } catch (err) {
       await discovery.finish(job.id, { status: 'failed', error_message: String(err && err.message).slice(0, 1000) });
       logger.error(`service-tests: discovery ${job.id} failed (${err && err.message})`);

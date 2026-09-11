@@ -379,21 +379,27 @@ const bool = (v) => !!v;
       async reapStale() { return 0; },
     },
     suggestions: {
-      async findById(id) { return t.suggestions.find(id); },
+      async findById(id) { const r = t.suggestions.find(id); return r ? { kind: 'test', proposed_journey: null, created_journey_id: null, ...r } : null; },
       async list(filters = {}) {
+        // Journeys first, like the SQL: what the service IS reads before the
+        // individual checks that prove it.
         return t.suggestions.where((r) => (filters.discoveryId === undefined || r.discovery_id === filters.discoveryId)
           && (filters.applicationId === undefined || r.application_id === filters.applicationId)
-          && (filters.status === undefined || r.status === filters.status));
+          && (filters.status === undefined || r.status === filters.status)
+          && (filters.kind === undefined || filters.kind === null || (r.kind || 'test') === filters.kind))
+          .map((r) => ({ kind: 'test', proposed_journey: null, created_journey_id: null, ...r }))
+          .sort((a, b) => (a.kind === b.kind ? a.id - b.id : (a.kind === 'journey' ? -1 : 1)));
       },
       async createMany(discoveryId, applicationId, list) {
         return (list || []).map((s) => t.suggestions.insert({
-          discovery_id: discoveryId, application_id: applicationId, status: 'proposed', confidence: 'medium', ...s,
+          discovery_id: discoveryId, application_id: applicationId, status: 'proposed', confidence: 'medium',
+          kind: 'test', proposed_journey: null, created_test_id: null, created_journey_id: null, ...s,
         }).id);
       },
-      async markAccepted(id, testId) {
+      async markAccepted(id, testId, journeyId = null) {
         const row = t.suggestions.find(id);
         if (!row || row.status !== 'proposed') return null;
-        return t.suggestions.update(id, { status: 'accepted', created_test_id: testId });
+        return t.suggestions.update(id, { status: 'accepted', created_test_id: testId, created_journey_id: journeyId });
       },
       async markDismissed(id) {
         const row = t.suggestions.find(id);

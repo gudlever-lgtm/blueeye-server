@@ -2375,3 +2375,11 @@ button.ghost.small:has(> .icon-glyph) {
 .sa-step-main { flex: 1 1 auto; min-width: 0; }
 .sa-step-required { display: flex; align-items: center; gap: 6px; font-size: 12px; white-space: nowrap; }
 .sa-step-actions { display: flex; gap: 4px; }
+
+/* A suggested journey is a proposal, not a row: it shows what accepting it will
+   BUILD, so the operator sees which tests appear before they appear. */
+.sa-suggest-journeys { margin-bottom: 18px; }
+.sa-suggest-journey { border-left: 4px solid var(--accent, #2a78d6); }
+.sa-suggest-journey-actions {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-top: 12px;
+}

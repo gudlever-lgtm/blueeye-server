@@ -1922,20 +1922,25 @@ CREATE TABLE IF NOT EXISTS service_test_suggestions (
   tenant_id INT              DEFAULT NULL,
   discovery_id INT          NOT NULL,
   application_id INT          NOT NULL,
+  kind ENUM('test','journey') NOT NULL DEFAULT 'test',
   name VARCHAR(255) NOT NULL,
   description TEXT             DEFAULT NULL,
   confidence ENUM('low','medium','high') NOT NULL DEFAULT 'medium',
   reason TEXT             DEFAULT NULL,
   proposed_steps JSON         NOT NULL,
+  proposed_journey JSON DEFAULT NULL,
   status ENUM('proposed','accepted','dismissed') NOT NULL DEFAULT 'proposed',
   created_test_id INT             DEFAULT NULL,
+  created_journey_id INT DEFAULT NULL,
   created_at DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   INDEX idx_sts_disc (discovery_id),
   INDEX idx_sts_app_status (application_id, status),
   CONSTRAINT fk_sts_disc FOREIGN KEY (discovery_id) REFERENCES service_test_discoveries(id) ON DELETE CASCADE,
   CONSTRAINT fk_sts_app FOREIGN KEY (application_id) REFERENCES service_test_applications(id) ON DELETE CASCADE,
-  CONSTRAINT fk_sts_test FOREIGN KEY (created_test_id) REFERENCES service_test_tests(id) ON DELETE SET NULL
+  CONSTRAINT fk_sts_test FOREIGN KEY (created_test_id) REFERENCES service_test_tests(id) ON DELETE SET NULL,
+  CONSTRAINT fk_stsug_journey FOREIGN KEY (created_journey_id) REFERENCES service_test_journeys(id) ON DELETE SET NULL,
+  KEY idx_stsug_kind (application_id, kind, status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- ---------------------------------------------------------------- schedules

@@ -82,6 +82,21 @@ services:
       DB_PASSWORD: ${DB_PASSWORD:-blueeye-pw}
       DB_NAME: blueeye
       JWT_SECRET: ${SERVER_JWT_SECRET:?set SERVER_JWT_SECRET in .env (run scripts/dev-bootstrap.js)}
+      # The address people actually reach this server on, from OUTSIDE. Not the
+      # address it listens on: behind a reverse proxy those differ, and several
+      # features hand this URL to something that must call back —
+      #   * the enrollment one-liner an agent runs;
+      #   * the Service Assurance RECORDING bookmarklet, which runs in a browser
+      #     on the CUSTOMER'S own site. That one is unforgiving: an http:// URL
+      #     on an https:// page is refused as mixed active content before the
+      #     call is made, so recording silently does nothing.
+      # Unset = derived from the incoming request, which is right for a direct
+      # HTTP install and wrong behind a TLS-terminating proxy.
+      BLUEEYE_PUBLIC_URL: ${BLUEEYE_PUBLIC_URL:-}
+      # Let Express read X-Forwarded-Proto / -For from the proxy in front, so the
+      # scheme and client IP are the real ones. Only turn this on when something
+      # trusted really is in front: otherwise a client can forge both headers.
+      TRUST_PROXY: ${TRUST_PROXY:-}
       # Must reach BOTH this server and the Service Assurance worker, or the
       # worker cannot decrypt the logins this server encrypted. Unset is fine
       # (both then derive the key from JWT_SECRET); set on one side only is not.

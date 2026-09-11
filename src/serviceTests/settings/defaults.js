@@ -85,6 +85,41 @@ const ENUM_FIELDS = {
   artifacts: { format: ['webp', ['webp', 'jpeg', 'png']] },
 };
 
+// Free-text fields. Each carries its own validator rather than a bound, because
+// "valid" for a string is never a range. An empty string always means "not set"
+// and falls back to whatever the feature did before the setting existed — so a
+// blank field is never a broken one.
+const STRING_FIELDS = {
+  recording: {
+    // The address a CUSTOMER'S browser must use to reach this server, for the
+    // recording bookmarklet. Empty = work it out from the request, which is
+    // right for a direct install and for a proxy that sets X-Forwarded-Proto.
+    //
+    // Here as well as in BLUEEYE_PUBLIC_URL because the two are answered by
+    // different people: the env var needs a redeploy and a shell, this needs a
+    // dashboard and the operator who just watched recording fail. Settings win
+    // over the env var — the more specific, more recent answer.
+    publicUrl: {
+      default: '',
+      max: 512,
+      // http is ACCEPTED, not silently corrected: a BlueEyes genuinely served
+      // over plain HTTP on an internal network is a real deployment, and the
+      // recording dialog already warns that HTTPS applications will refuse it.
+      // Refusing to store the truth would be worse than reporting it.
+      check(raw) {
+        let url;
+        try { url = new URL(raw); } catch { return 'that does not look like a full address (https://host)'; }
+        if (url.protocol !== 'https:' && url.protocol !== 'http:') return 'the address must start with https:// or http://';
+        if (!url.hostname) return 'the address needs a hostname';
+        if (url.search || url.hash) return 'the address must not carry a query or fragment';
+        return null;
+      },
+      // Stored without a trailing slash, so every caller can append a path.
+      clean: (raw) => String(raw).trim().replace(/\/+$/, ''),
+    },
+  },
+};
+
 const BOOLEAN_FIELDS = {
   artifacts: { screenshotOnFailure: true, fullPage: false },
   // `enabled` off stops the sweep entirely; `notify` off keeps the incidents but
@@ -97,6 +132,7 @@ const SECTIONS = [...new Set([
   ...Object.keys(NUMBER_BOUNDS),
   ...Object.keys(ENUM_FIELDS),
   ...Object.keys(BOOLEAN_FIELDS),
+  ...Object.keys(STRING_FIELDS),
 ])].sort();
 
 function isSection(name) {
@@ -118,6 +154,7 @@ function defaultsFor(section) {
   for (const [field, [def]] of Object.entries(NUMBER_BOUNDS[section] || {})) out[field] = def;
   for (const [field, [def]] of Object.entries(ENUM_FIELDS[section] || {})) out[field] = def;
   for (const [field, def] of Object.entries(BOOLEAN_FIELDS[section] || {})) out[field] = def;
+  for (const [field, spec] of Object.entries(STRING_FIELDS[section] || {})) out[field] = spec.default;
   return out;
 }
 
@@ -139,6 +176,7 @@ function validateSection(section, patch) {
   const numbers = NUMBER_BOUNDS[section] || {};
   const enums = ENUM_FIELDS[section] || {};
   const booleans = BOOLEAN_FIELDS[section] || {};
+  const strings = STRING_FIELDS[section] || {};
   const errors = {};
   const value = {};
 
@@ -158,6 +196,22 @@ function validateSection(section, patch) {
     } else if (Object.prototype.hasOwnProperty.call(booleans, field)) {
       if (typeof raw !== 'boolean') errors[field] = `${field} must be true or false`;
       else value[field] = raw;
+    } else if (Object.prototype.hasOwnProperty.call(strings, field)) {
+      const spec = strings[field];
+      if (raw === null || raw === '' || raw === undefined) {
+        // Clearing it is always allowed, and always means "go back to working
+        // it out yourself" rather than "store an empty address".
+        value[field] = '';
+      } else if (typeof raw !== 'string') {
+        errors[field] = `${field} must be text`;
+      } else if (raw.trim().length > spec.max) {
+        errors[field] = `${field} is too long (max ${spec.max})`;
+      } else {
+        const cleaned = spec.clean ? spec.clean(raw) : raw.trim();
+        const problem = spec.check ? spec.check(cleaned) : null;
+        if (problem) errors[field] = problem;
+        else value[field] = cleaned;
+      }
     } else {
       errors[field] = `unknown setting "${label(field)}" for section ${label(section)}`;
     }

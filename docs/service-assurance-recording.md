@@ -79,6 +79,19 @@ The fix is one of:
   plain HTTP from the proxy and so looks insecure from the outside. Setting
   `TRUST_PROXY=1` also lets it read the forwarded scheme.
 
+In the Docker stack both go in the `.env` file beside `docker-compose.yml` — the
+same one holding `DB_PASSWORD` and `SERVER_JWT_SECRET`:
+
+```
+BLUEEYE_PUBLIC_URL=https://blueeye.example.dk
+TRUST_PROXY=1
+```
+
+then `docker compose up -d --build server`. Compose passes both through to the
+container; a variable that is only in `.env` and not in the compose file's
+`environment:` block never reaches the process, which is worth knowing before
+concluding a setting "does not work".
+
 In the console this reads:
 
 ```

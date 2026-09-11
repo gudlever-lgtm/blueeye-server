@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.125.5 — the capture address belongs in Settings, not only in a file
+
+Asked while deploying yesterday's mixed-content fix: does this have to be an
+environment variable? No, and it should not have been.
+
+**Service Assurance → Settings → Recording** now carries the address this server
+is reached on. Blank means what it always meant — work it out from the request,
+which is right for a direct install. It takes precedence over
+`BLUEEYE_PUBLIC_URL`, because the two questions are answered by different
+people: the env var needs a shell and a redeploy, this needs the dashboard and
+the operator who just watched recording fail.
+
+This is the settings catalogue's first free-text field, so it brought a
+`STRING_FIELDS` kind with it. Each entry carries its own validator rather than a
+bound — "valid" for a string is never a range — and an empty value always means
+"not set" and falls back to the previous behaviour, so a blank field is never a
+broken one. The address is parsed, not pattern-matched: `javascript:`,
+`ftp://`, a bare hostname and a URL carrying a query are all refused, and a
+trailing slash is trimmed on the way in so every caller can append a path.
+
+`http://` is **accepted**, deliberately. A BlueEyes served over plain HTTP on an
+internal network is a real deployment, and the recording dialog already warns
+that HTTPS applications will refuse it. Refusing to store the truth would be
+worse than reporting it.
+
+Also fixed while testing it: the Docker stack never passed `BLUEEYE_PUBLIC_URL`
+or `TRUST_PROXY` through to the server container at all. Compose reads `.env`
+for `${VAR}` substitution, but a variable that is not named in the service's
+`environment:` block never reaches the process — so setting either in `.env`
+did nothing, silently. Both are wired now.
+
 ## 0.125.4 — the recorder was handed an address it could never use
 
 `Blocked loading mixed active content "http://blueeye-server…/api/service-capture/events"`.

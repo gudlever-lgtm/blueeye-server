@@ -518,3 +518,51 @@ test('the start dialog warns before handing over a bookmarklet that cannot work'
   assert.match(ui, /sa\.record\.insecureBody', \{ url: rec\.capture_url \}/,
     'the warning must name the address, so the operator can see what is wrong');
 });
+
+test('the capture address can be set from Settings, and Settings beats the env var', async () => {
+  const serviceTests = makeServiceTests();
+  const app = makeApp({ serviceTests });
+
+  // Nothing configured: derived from the request, which is http in the test
+  // harness — and flagged as such rather than handed over quietly.
+  const derived = await startRecording(app);
+  assert.equal(derived.status, 201);
+  assert.match(derived.body.capture_url, /^http:\/\//);
+  assert.equal(derived.body.insecure, true);
+
+  // An admin sets it from the dashboard. No redeploy, no shell.
+  const saved = await request(app).put('/api/service-tests/settings/recording')
+    .set('Authorization', authHeader('admin'))
+    .send({ publicUrl: 'https://blueeye-server.gnf.dk/' });
+  assert.equal(saved.status, 200);
+  assert.equal(saved.body.publicUrl, 'https://blueeye-server.gnf.dk', 'the trailing slash must be trimmed on the way in');
+
+  const configured = await startRecording(app, 'operator', { application_id: 1, name: 'After' });
+  assert.equal(configured.body.capture_url, 'https://blueeye-server.gnf.dk/api/service-capture');
+  assert.equal(configured.body.insecure, false);
+  assert.ok(decodeURIComponent(configured.body.bookmarklet).includes('https://blueeye-server.gnf.dk/api/service-capture'));
+
+  // Clearing it goes back to working it out, rather than storing an empty address.
+  const cleared = await request(app).put('/api/service-tests/settings/recording')
+    .set('Authorization', authHeader('admin')).send({ publicUrl: '' });
+  assert.equal(cleared.status, 200);
+  assert.equal(cleared.body.publicUrl, '');
+  assert.match((await startRecording(app, 'operator', { application_id: 1, name: 'Again' })).body.capture_url, /^http:\/\//);
+});
+
+test('the capture address setting refuses what could not work, and is admin-only', async () => {
+  const { app } = fixture();
+  const put = (body, role) => request(app).put('/api/service-tests/settings/recording')
+    .set('Authorization', authHeader(role || 'admin')).send(body);
+
+  for (const bad of ['blueeye-server.gnf.dk', 'javascript:alert(1)', 'ftp://x.dk', 'https://x.dk/?a=1', 42]) {
+    const res = await put({ publicUrl: bad });
+    assert.equal(res.status, 400, JSON.stringify(bad));
+  }
+  // http IS accepted: a BlueEyes on a plain-HTTP internal network is a real
+  // deployment, and the recording dialog already warns about the consequence.
+  assert.equal((await put({ publicUrl: 'http://blueeye.local:3000' })).status, 200);
+
+  assert.equal((await put({ publicUrl: 'https://x.dk' }, 'operator')).status, 403);
+  assert.equal((await put({ publicUrl: 'https://x.dk' }, 'viewer')).status, 403);
+});

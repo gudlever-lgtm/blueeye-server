@@ -2128,6 +2128,7 @@
     // catch it. Written out, the gate fails the build instead.
     function settingLabel(key) {
       var labels = {
+        publicUrl: t('sa.set.publicUrl'),
         maxAddressesPerApplication: t('sa.set.maxAddressesPerApplication'),
         minCidrPrefix: t('sa.set.minCidrPrefix'),
         maxPages: t('sa.set.maxPages'),
@@ -2174,6 +2175,7 @@
         allowlist: { title: t('sa.set.allowlist'), help: t('sa.set.allowlistHelp') },
         queue: { title: t('sa.set.queue'), help: t('sa.set.queueHelp') },
         assurance: { title: t('sa.set.assurance'), help: t('sa.set.assuranceHelp') },
+        recording: { title: t('sa.set.recording'), help: t('sa.set.recordingHelp') },
       };
       return sections[name] || { title: name, help: '' };
     }
@@ -2188,7 +2190,7 @@
       ]).then(function (loaded) {
         var res = loaded[0];
         var worker = loaded[1];
-        var order = ['assurance', 'discovery', 'runner', 'artifacts', 'allowlist', 'queue'];
+        var order = ['assurance', 'recording', 'discovery', 'runner', 'artifacts', 'allowlist', 'queue'];
         var sections = order.filter(function (k) { return res.settings[k]; });
 
         var panels = sections.map(function (name) {
@@ -2206,14 +2208,18 @@
               input = el('input', { type: 'number', value: String(value) });
             } else {
               input = el('input', { type: 'text', value: String(value) });
+              // An empty address means "work it out from the request", which is
+              // a real setting and not a missing one — the placeholder says so.
+              if (key === 'publicUrl') input.placeholder = t('sa.set.publicUrlPlaceholder');
             }
             input.disabled = !isAdmin();
             inputs[key] = input;
 
             // Units belong beside the number, not buried in the field name.
-            var unit = /Ms$/.test(key) ? t('sa.set.unitMs')
-              : (/Days$/.test(key) ? t('sa.set.unitDays')
-                : (/Minutes$/.test(key) ? t('sa.set.unitMinutes') : null));
+            var unit = key === 'publicUrl' ? t('sa.set.publicUrlHelp')
+              : (/Ms$/.test(key) ? t('sa.set.unitMs')
+                : (/Days$/.test(key) ? t('sa.set.unitDays')
+                  : (/Minutes$/.test(key) ? t('sa.set.unitMinutes') : null)));
             return field(settingLabel(key), input, unit);
           });
 

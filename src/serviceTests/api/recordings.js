@@ -72,6 +72,13 @@ function createRecordingsRouter({ repositories, settings, audit, requireRole, ro
     const app = await applications.findById(value.application_id);
     if (!app) return invalid(res, { application_id: 'that application does not exist' });
 
+    // Precedence: the Settings field, then BLUEEYE_PUBLIC_URL, then the request.
+    // Most specific and most recently answered first — Settings is the one an
+    // operator can change from the screen where they just watched recording
+    // fail, without a shell or a redeploy.
+    const recordingSettings = await settings.get('recording');
+    const configuredUrl = (recordingSettings && recordingSettings.publicUrl) || publicUrl || null;
+
     const { recording, token } = await recordings.start({
       applicationId: app.id,
       name: value.name,
@@ -87,7 +94,7 @@ function createRecordingsRouter({ repositories, settings, audit, requireRole, ro
     return res.status(201).json({
       ...withPreview(recording),
       token,
-      ...buildBookmarklet({ req, token, publicUrl, recorderSource: recorderSource ? recorderSource() : '' }),
+      ...buildBookmarklet({ req, token, publicUrl: configuredUrl, recorderSource: recorderSource ? recorderSource() : '' }),
     });
   }));
 

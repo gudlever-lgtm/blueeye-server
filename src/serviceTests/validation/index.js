@@ -1,5 +1,7 @@
 'use strict';
 
+const { PERIODS } = require('../stats/period');
+
 const { denyReason, REASON } = require('../security/hostPolicy');
 const { validateDefinition } = require('../engine/validate');
 
@@ -330,8 +332,54 @@ function validateSettingsPatch(body) {
   return { value: body };
 }
 
+// --------------------------------------------------------------------- stats
+// The history chart's query string. Every field is optional and every bad value
+// is a 400 rather than a silent default: a chart that quietly shows a different
+// period than the one asked for is worse than an error, because it looks right.
+function validateStatsQuery(query) {
+  if (query !== undefined && query !== null && !isPlainObject(query)) {
+    return { errors: { _: 'the query must be an object' } };
+  }
+  const q = query || {};
+  const errors = {};
+  const value = {};
+
+  if (q.period !== undefined && q.period !== '') {
+    if (!PERIODS.includes(String(q.period))) errors.period = `period must be one of: ${PERIODS.join(', ')}`;
+    else value.period = String(q.period);
+  }
+
+  // Any date inside the wanted period. A day is enough to identify a week, a
+  // month or a year, so there is one format rather than four.
+  if (q.at !== undefined && q.at !== '') {
+    const at = String(q.at);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(at)) errors.at = 'a date must be written as YYYY-MM-DD';
+    else if (Number.isNaN(Date.parse(`${at}T00:00:00Z`))) errors.at = 'that is not a real date';
+    else value.at = at;
+  }
+
+  // The viewer's getTimezoneOffset(): minutes BEHIND UTC, so UTC+2 sends -120.
+  // Bounded to a real offset — ±14h exists (Kiritimati), ±24h does not.
+  if (q.tz_offset !== undefined && q.tz_offset !== '') {
+    const offset = Number(q.tz_offset);
+    if (!Number.isInteger(offset) || offset < -840 || offset > 840) {
+      errors.tz_offset = 'the time-zone offset must be whole minutes between -840 and 840';
+    } else value.tz_offset = offset;
+  }
+
+  for (const [field, key] of [['test_id', 'test_id'], ['application_id', 'application_id']]) {
+    if (q[field] === undefined || q[field] === '') continue;
+    const id = parseId(q[field]);
+    if (id === null) errors[field] = `that ${field.replace('_id', '')} does not look valid`;
+    else value[key] = id;
+  }
+
+  return Object.keys(errors).length ? { errors } : { value };
+}
+
 module.exports = {
   parseId,
+  validateStatsQuery,
   validateApplication,
   validateEnvironment,
   validateCredential,
@@ -345,6 +393,7 @@ module.exports = {
   validateBaseUrl,
   ENV_TYPES,
   ENTRY_TYPES,
+  PERIODS,
   INTERVALS,
   NAME_MAX,
 };

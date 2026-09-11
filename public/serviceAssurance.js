@@ -204,6 +204,7 @@
         ['applications', t('sa.tab.applications')],
         ['tests', t('sa.tab.tests')],
         ['runs', t('sa.tab.runs')],
+        ['history', t('sa.tab.history')],
         ['health', t('sa.tab.health')],
         ['schedules', t('sa.tab.schedules')],
       ];
@@ -772,10 +773,13 @@
 
     // ------------------------------------------------------------ history
     function historyPanel(test) {
-      var wrap = el('div', { class: 'sa-panel' });
+      // Two panels, not one: the chart owns its own (it has its own controls and
+      // reloads in place), and the recent-runs list sits below it.
+      var wrap = el('div', {});
+      var list = el('div', { class: 'sa-panel' });
       var history = test.history || {};
       var runs = history.runs || [];
-      mount(wrap, 
+      mount(list, 
         section(t('sa.tab.runs'), null),
         runs.length ? el('div', { class: 'sa-stats' },
           stat(t('sa.run.successRate'), history.success_rate !== null ? Math.round(history.success_rate * 100) + '%' : '—'),
@@ -789,6 +793,9 @@
             el('td', {}, ms(run.duration_ms)),
             el('td', {}, run.error_message || ''));
         }))) : null);
+      // The shape of a month of runs answers "is this getting better or worse";
+      // the list under it is the detail behind the shape.
+      mount(wrap, historyChart({ testId: test.id }), list);
       return wrap;
     }
 
@@ -832,6 +839,335 @@
           ? el('button', { class: 'ghost small', onclick: addForm }, '+ ' + t('sa.schedule.add')) : null),
         rows.length ? el('table', { class: 'data-table' }, el('tbody', {}, ...rows))
           : el('div', { class: 'sa-empty' }, t('sa.schedule.empty')));
+      return wrap;
+    }
+
+
+    // --------------------------------------------------------------- charts
+    // Run history as a picture: how many ran, how many failed, how long they
+    // took — segmented by day, week, month or year, for any specific one.
+    //
+    // Two charts, never one with two y-axes: "12 runs" and "1.4 s" share no
+    // scale, and a second axis is the fastest way to make a chart lie. They
+    // share the x positions instead, so a spike in the lower chart lines up
+    // with the bar above it.
+    //
+    // The server owns the calendar (src/serviceTests/stats/period.js): it
+    // answers with every bucket in the period, the empty ones included, plus
+    // where previous and next point. This function does no date arithmetic
+    // beyond formatting a label.
+    var SVG_NS = 'http://www.w3.org/2000/svg';
+
+    function svgEl(tag, attrs, children) {
+      var node = document.createElementNS(SVG_NS, tag);
+      Object.keys(attrs || {}).forEach(function (k) { node.setAttribute(k, String(attrs[k])); });
+      (children || []).forEach(function (c) { if (c) node.appendChild(c); });
+      return node;
+    }
+
+    function svgTitle(text) {
+      var title = document.createElementNS(SVG_NS, 'title');
+      title.textContent = text;
+      return title;
+    }
+
+    // A bar with its top two corners rounded — the data end. Radius shrinks on a
+    // thin bar so a one-pixel column does not turn into a lozenge.
+    function barPath(x, y, w, h, r) {
+      var radius = Math.max(0, Math.min(r, w / 2, h));
+      return 'M' + x + ',' + (y + h) +
+        'V' + (y + radius) +
+        'a' + radius + ',' + radius + ' 0 0 1 ' + radius + ',' + -radius +
+        'H' + (x + w - radius) +
+        'a' + radius + ',' + radius + ' 0 0 1 ' + radius + ',' + radius +
+        'V' + (y + h) + 'Z';
+    }
+
+    // Bucket labels. A chart with 31 labels on the x axis has none, so only
+    // every nth is drawn — and the tooltip carries the full date regardless.
+    function bucketLabel(startIso, bucket) {
+      var d = new Date(startIso);
+      if (Number.isNaN(d.getTime())) return '';
+      if (bucket === 'hour') return String(d.getHours()).padStart(2, '0');
+      if (bucket === 'month') return d.toLocaleDateString(undefined, { month: 'short' });
+      return String(d.getDate());
+    }
+
+    function bucketTooltip(b, bucket) {
+      var d = new Date(b.start);
+      var whenText = Number.isNaN(d.getTime()) ? b.key
+        : (bucket === 'hour' ? d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+          : (bucket === 'month' ? d.toLocaleDateString(undefined, { year: 'numeric', month: 'long' })
+            : d.toLocaleDateString(undefined, { dateStyle: 'full' })));
+      if (!b.total) return whenText + ' — ' + t('sa.chart.noRuns');
+      var parts = [t('sa.chart.runs') + ': ' + b.total];
+      if (b.pass) parts.push(t('sa.chart.passed') + ': ' + b.pass);
+      if (b.warning) parts.push(t('sa.chart.warned') + ': ' + b.warning);
+      if (b.fail) parts.push(t('sa.chart.failed') + ': ' + b.fail);
+      if (b.error) parts.push(t('sa.chart.errored') + ': ' + b.error);
+      if (b.skipped) parts.push(t('sa.chart.skipped') + ': ' + b.skipped);
+      if (b.avg_duration_ms !== null && b.avg_duration_ms !== undefined) {
+        parts.push(t('sa.chart.avgDuration') + ': ' + ms(b.avg_duration_ms));
+      }
+      return whenText + ' — ' + parts.join(', ');
+    }
+
+    // The stacked outcome bars. Segments are ordered worst-last so the eye lands
+    // on failures at the top of the column, and carry a 2px gap so two adjacent
+    // segments never melt into one block.
+    function outcomeChart(data) {
+      var W = 1000;
+      var H = 190;
+      var pad = { l: 44, r: 10, t: 12, b: 22 };
+      var buckets = data.buckets || [];
+      var max = Math.max(1, Math.max.apply(null, buckets.map(function (b) { return b.total; }).concat([0])));
+      var plotW = W - pad.l - pad.r;
+      var plotH = H - pad.t - pad.b;
+      var slot = plotW / Math.max(1, buckets.length);
+      var barW = Math.max(2, Math.min(48, slot - 4));
+      var yOf = function (v) { return pad.t + plotH - (v / max) * plotH; };
+
+      var svg = svgEl('svg', {
+        viewBox: '0 0 ' + W + ' ' + H, class: 'sa-chart-svg', preserveAspectRatio: 'none',
+        role: 'img', 'aria-label': t('sa.chart.runsTitle'),
+      });
+
+      // Recessive grid: three lines, whole numbers only — half a run is not a
+      // thing, so a max of 3 gets 0/2/3 rather than 0/1.5/3.
+      [0, 0.5, 1].forEach(function (frac) {
+        var value = Math.round(max * frac);
+        var y = yOf(value);
+        svg.appendChild(svgEl('line', { class: 'sa-chart-grid', x1: pad.l, y1: y, x2: W - pad.r, y2: y }));
+        var label = svgEl('text', { x: pad.l - 8, y: y + 4, class: 'sa-chart-axis', 'text-anchor': 'end' });
+        label.textContent = String(value);
+        svg.appendChild(label);
+      });
+
+      var segments = [
+        ['pass', 'sa-bar-pass'],
+        ['warning', 'sa-bar-warning'],
+        ['skipped', 'sa-bar-skipped'],
+        ['failed', 'sa-bar-failed'],
+      ];
+      var every = Math.ceil(buckets.length / 12);
+
+      buckets.forEach(function (b, i) {
+        var x = pad.l + i * slot + (slot - barW) / 2;
+        var group = svgEl('g', { class: 'sa-chart-bar' }, [svgTitle(bucketTooltip(b, data.bucket))]);
+
+        if (!b.total) {
+          // An empty bucket still gets a mark. A missing bar is ambiguous — it
+          // could be "no runs" or "off the edge of the chart" — and "it stopped
+          // running on Thursday" is exactly the reading this chart is for.
+          group.appendChild(svgEl('rect', { class: 'sa-bar-empty', x: x, y: yOf(0) - 2, width: barW, height: 2 }));
+        } else {
+          // fail and error are both a red column: they differ in WHOSE fault it
+          // was, which the tooltip says, not in whether the service worked.
+          var counts = { pass: b.pass, warning: b.warning, skipped: b.skipped, failed: b.fail + b.error };
+          var cursor = 0;
+          segments.forEach(function (seg, idx) {
+            var value = counts[seg[0]];
+            if (!value) return;
+            var top = yOf(cursor + value);
+            var bottom = yOf(cursor);
+            var height = Math.max(1, bottom - top - (cursor ? 2 : 0));
+            var isTop = segments.slice(idx + 1).every(function (s) { return !counts[s[0]]; });
+            group.appendChild(isTop
+              ? svgEl('path', { class: seg[1], d: barPath(x, top, barW, height, 3) })
+              : svgEl('rect', { class: seg[1], x: x, y: top, width: barW, height: height }));
+            cursor += value;
+          });
+        }
+        svg.appendChild(group);
+
+        if (i % every === 0) {
+          var tick = svgEl('text', { x: x + barW / 2, y: H - 6, class: 'sa-chart-axis', 'text-anchor': 'middle' });
+          tick.textContent = bucketLabel(b.start, data.bucket);
+          svg.appendChild(tick);
+        }
+      });
+
+      return svg;
+    }
+
+    // Average duration per bucket. Its own chart on its own scale — see above.
+    // A bucket with no runs breaks the line rather than being drawn as zero: an
+    // hour nothing ran in is not an hour everything was instant.
+    function durationChart(data) {
+      var W = 1000;
+      var H = 110;
+      var pad = { l: 44, r: 10, t: 10, b: 18 };
+      var buckets = data.buckets || [];
+      var values = buckets.map(function (b) { return b.avg_duration_ms; }).filter(function (v) { return v !== null && v !== undefined; });
+      if (!values.length) return null;
+
+      var max = Math.max.apply(null, values);
+      var plotW = W - pad.l - pad.r;
+      var plotH = H - pad.t - pad.b;
+      var slot = plotW / Math.max(1, buckets.length);
+      var xOf = function (i) { return pad.l + i * slot + slot / 2; };
+      var yOf = function (v) { return pad.t + plotH - (v / Math.max(1, max)) * plotH; };
+
+      var svg = svgEl('svg', {
+        viewBox: '0 0 ' + W + ' ' + H, class: 'sa-chart-svg', preserveAspectRatio: 'none',
+        role: 'img', 'aria-label': t('sa.chart.durationTitle'),
+      });
+      [0, 1].forEach(function (frac) {
+        var y = yOf(max * frac);
+        svg.appendChild(svgEl('line', { class: 'sa-chart-grid', x1: pad.l, y1: y, x2: W - pad.r, y2: y }));
+        var label = svgEl('text', { x: pad.l - 8, y: y + 4, class: 'sa-chart-axis', 'text-anchor': 'end' });
+        label.textContent = ms(Math.round(max * frac));
+        svg.appendChild(label);
+      });
+
+      // One path per unbroken stretch, so a gap stays a gap.
+      var run = [];
+      var flush = function () {
+        if (run.length > 1) svg.appendChild(svgEl('path', { class: 'sa-line-duration', d: run.join(' ') }));
+        run = [];
+      };
+      buckets.forEach(function (b, i) {
+        if (b.avg_duration_ms === null || b.avg_duration_ms === undefined) { flush(); return; }
+        run.push((run.length ? 'L' : 'M') + xOf(i).toFixed(1) + ',' + yOf(b.avg_duration_ms).toFixed(1));
+      });
+      flush();
+
+      buckets.forEach(function (b, i) {
+        if (b.avg_duration_ms === null || b.avg_duration_ms === undefined) return;
+        svg.appendChild(svgEl('g', { class: 'sa-chart-bar' }, [
+          svgTitle(bucketTooltip(b, data.bucket)),
+          svgEl('circle', { class: 'sa-dot-duration', cx: xOf(i).toFixed(1), cy: yOf(b.avg_duration_ms).toFixed(1), r: 4 }),
+        ]));
+      });
+      return svg;
+    }
+
+    function chartLegend(data) {
+      var totals = data.totals || {};
+      var items = [
+        ['sa-bar-pass', t('sa.chart.passed'), totals.pass],
+        ['sa-bar-warning', t('sa.chart.warned'), totals.warning],
+        ['sa-bar-failed', t('sa.chart.failed'), (totals.fail || 0) + (totals.error || 0)],
+        ['sa-bar-skipped', t('sa.chart.skipped'), totals.skipped],
+      ].filter(function (item) { return item[2]; });
+      // One outcome needs no legend — the colour is not carrying an identity
+      // anyone has to look up.
+      if (items.length < 2) return null;
+      return el('div', { class: 'sa-legend' }, ...items.map(function (item) {
+        return el('span', { class: 'sa-legend-item' },
+          el('span', { class: 'sa-legend-swatch ' + item[0] }),
+          item[1] + ' (' + item[2] + ')');
+      }));
+    }
+
+    // The period label, in words: "11 September 2026", "Week of 7 September",
+    // "September 2026", "2026".
+    function periodLabel(data) {
+      var start = new Date(data.from);
+      if (Number.isNaN(start.getTime())) return data.at;
+      // from/to are UTC instants; the label must read in the same local calendar
+      // the buckets were cut in, and the first bucket IS that local start.
+      var local = data.buckets && data.buckets.length ? new Date(data.buckets[0].start) : start;
+      if (data.period === 'day') return local.toLocaleDateString(undefined, { dateStyle: 'full' });
+      if (data.period === 'week') return t('sa.chart.weekOf', { date: local.toLocaleDateString(undefined, { day: 'numeric', month: 'long' }) });
+      if (data.period === 'month') return local.toLocaleDateString(undefined, { year: 'numeric', month: 'long' });
+      return String(local.getFullYear());
+    }
+
+    // The whole panel: controls, totals, both charts, legend. Owns its own
+    // period state and re-fetches in place — changing the segmentation must not
+    // reload the page underneath the operator.
+    function historyChart(opts) {
+      var options = opts || {};
+      var wrap = el('div', { class: 'sa-panel sa-chart-panel' });
+      var stateChart = { period: 'week', at: null };
+
+      function query() {
+        var parts = ['period=' + encodeURIComponent(stateChart.period),
+          'tz_offset=' + encodeURIComponent(String(new Date().getTimezoneOffset()))];
+        if (stateChart.at) parts.push('at=' + encodeURIComponent(stateChart.at));
+        if (options.testId) parts.push('test_id=' + encodeURIComponent(String(options.testId)));
+        if (options.applicationId) parts.push('application_id=' + encodeURIComponent(String(options.applicationId)));
+        return API + '/stats?' + parts.join('&');
+      }
+
+      function load() {
+        return api(query()).then(render).catch(function (e) {
+          mount(wrap, section(t('sa.chart.title'), null), el('p', { class: 'sa-help' }, t('sa.error', { message: err(e) })));
+        });
+      }
+
+      function periodButtons() {
+        return el('div', { class: 'sa-segmented' }, ...[
+          ['day', t('sa.chart.day')], ['week', t('sa.chart.week')],
+          ['month', t('sa.chart.month')], ['year', t('sa.chart.year')],
+        ].map(function (pair) {
+          return el('button', {
+            class: 'sa-segment' + (stateChart.period === pair[0] ? ' active' : ''),
+            onclick: function () {
+              // Keep the anchor date when switching segmentation: looking at
+              // March and clicking Year should show the year March is in, not
+              // jump back to today.
+              stateChart.period = pair[0];
+              load();
+            },
+          }, pair[1]);
+        }));
+      }
+
+      function render(data) {
+        stateChart.at = data.at;
+        var jump = el('input', { type: 'date', class: 'sa-date-input', value: data.at, title: t('sa.chart.jump') });
+        jump.addEventListener('change', function () {
+          if (!jump.value) return;
+          stateChart.at = jump.value;
+          load();
+        });
+
+        var prev = el('button', { class: 'ghost small', onclick: function () { stateChart.at = data.prev_at; load(); } }, '◀');
+        var next = el('button', {
+          class: 'ghost small',
+          onclick: function () { if (data.has_next) { stateChart.at = data.next_at; load(); } },
+        }, '▶');
+        // A period that has not happened yet is not a place you can go.
+        next.disabled = !data.has_next;
+
+        var today = el('button', {
+          class: 'ghost small',
+          onclick: function () { stateChart.at = null; load(); },
+        }, t('sa.chart.now'));
+        today.disabled = !!data.is_current;
+
+        var totals = data.totals || {};
+        var stats = el('div', { class: 'sa-stats' },
+          stat(t('sa.chart.runs'), totals.total),
+          stat(t('sa.run.successRate'), totals.success_rate === null || totals.success_rate === undefined
+            ? '—' : Math.round(totals.success_rate * 100) + '%'),
+          stat(t('sa.chart.failed'), (totals.fail || 0) + (totals.error || 0)),
+          stat(t('sa.run.avgDuration'), ms(totals.avg_duration_ms)));
+
+        mount(wrap,
+          section(t('sa.chart.title'), [periodButtons()]),
+          el('div', { class: 'sa-chart-nav' },
+            prev,
+            el('span', { class: 'sa-chart-period' }, periodLabel(data)),
+            next,
+            today,
+            el('label', { class: 'sa-chart-jump' }, t('sa.chart.jump'), jump)),
+          stats,
+          totals.total
+            ? el('div', {},
+              el('h4', { class: 'sa-chart-title' }, t('sa.chart.runsTitle')),
+              outcomeChart(data),
+              chartLegend(data),
+              durationChart(data)
+                ? el('div', {}, el('h4', { class: 'sa-chart-title' }, t('sa.chart.durationTitle')), durationChart(data))
+                : null)
+            : el('div', { class: 'sa-empty' }, t('sa.chart.empty')));
+      }
+
+      mount(wrap, section(t('sa.chart.title'), null), el('div', { class: 'sa-loading' }, t('sa.loading')));
+      load();
       return wrap;
     }
 
@@ -967,6 +1303,33 @@
         mount(body, head, summary, failure, steps);
       });
     }
+
+    // -------------------------------------------------------------- history
+    // Every run in the install, as a picture. The Runs tab answers "what just
+    // happened"; this one answers "how has it been going", which is the question
+    // a weekly report is written from.
+    views.history = function (body) {
+      // Applications are loaded only to offer the filter — the chart itself is
+      // one request, whatever is selected.
+      return api(API + '/applications').then(function (apps) {
+        var selected = state.chartApplicationId || '';
+        var picker = el('select', { class: 'sa-select' },
+          el('option', { value: '' }, t('sa.chart.allApplications')),
+          ...apps.map(function (a) {
+            var option = el('option', { value: String(a.id) }, a.name);
+            if (String(a.id) === String(selected)) option.selected = true;
+            return option;
+          }));
+        picker.addEventListener('change', function () {
+          state.chartApplicationId = picker.value || null;
+          draw();
+        });
+
+        mount(body,
+          section(t('sa.tab.history'), [el('label', { class: 'sa-chart-jump' }, t('sa.chart.application'), picker)]),
+          historyChart({ applicationId: state.chartApplicationId || null }));
+      });
+    };
 
     // --------------------------------------------------------------- health
     // What the module has REACTED to: incidents it opened, and the certificate

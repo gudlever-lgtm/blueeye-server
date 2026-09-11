@@ -4,6 +4,7 @@ const express = require('express');
 const { createApplicationsRouter } = require('./applications');
 const { createTestsRouter } = require('./tests');
 const { createRunsRouter } = require('./runs');
+const { createStatsRouter } = require('./stats');
 const { createDiscoveryRouter } = require('./discovery');
 const { createSchedulesRouter } = require('./schedules');
 const { createSettingsRouter } = require('./settings');
@@ -49,6 +50,8 @@ function createServiceTestsApiRouter({
   router.use('/applications', createApplicationsRouter(deps));
   router.use('/tests', createTestsRouter(deps));
   router.use('/runs', createRunsRouter(deps));
+  // Read-only aggregation over the same runs, for the history charts.
+  router.use('/stats', createStatsRouter(deps));
   router.use('/discovery', createDiscoveryRouter(deps));
   router.use('/suggestions', createDiscoveryRouter.suggestions(deps));
   router.use('/schedules', createSchedulesRouter(deps));

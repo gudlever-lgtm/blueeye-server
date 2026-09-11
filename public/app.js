@@ -11279,6 +11279,17 @@ const DOCS = [
             ['Runs stay queued', 'Nothing is executing the queue.', 'A worker is not running — an administrator starts one.'],
           ]),
 
+          el('h4', {}, 'History: how has it been going?'),
+          el('p', {}, ['The ', el('strong', {}, 'History'), ' tab charts the runs instead of listing them — how many ran, how many failed, and how long they took. Pick the segmentation (', el('strong', {}, 'Day'), ', ', el('strong', {}, 'Week'), ', ', el('strong', {}, 'Month'), ' or ', el('strong', {}, 'Year'), '), then step through with ◀ ▶ or jump straight to a date. The same chart sits on each test\u2019s own History, scoped to that test.']),
+          docsTable(['Segmentation', 'One bar is', 'What it answers'], [
+            ['Day', 'an hour', 'which hour of the night it started failing'],
+            ['Week', 'a day (Monday first)', 'how the working week went'],
+            ['Month', 'a day', 'whether this month is worse than the last'],
+            ['Year', 'a month', 'the trend a report quotes'],
+          ]),
+          el('p', {}, 'A gap in the bars means nothing ran in that bucket — usually a schedule that stopped, or a worker that was down. It is drawn as a gap on purpose, because that is a different fact from "everything passed".'),
+          el('p', { class: 'muted' }, 'Days are cut in your own time zone, not the server\u2019s, so "Tuesday" means your Tuesday.'),
+
           el('h4', {}, 'Logins'),
           el('p', {}, 'A password is stored encrypted, never shown again, never written to a log, and masked in the page before any screenshot is taken. A test refers to it as ', el('code', {}, '{{credential.password}}'), ' — the value itself is never part of the test.'),
           el('p', { class: 'muted' }, 'Use a dedicated test account, not a real person\u2019s. A synthetic test signs in every few minutes, around the clock.'),

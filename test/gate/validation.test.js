@@ -41,7 +41,9 @@ const ACCEPTS_EMPTY = new Set([
   // environment falls back to the application's production one), and a settings
   // patch is checked field-by-field by the settings service, which owns the
   // bounds — an empty patch is a no-op, not an error.
-  'validateRunRequest', 'validateSettingsPatch',
+  // A chart query is optional in every field: no query at all means "this week,
+  // everything, in my time zone", which is the view the History tab opens on.
+  'validateRunRequest', 'validateSettingsPatch', 'validateStatsQuery',
 ]);
 
 test('every exported validator survives garbage input and rejects an empty object where it has required fields', () => {
@@ -114,6 +116,27 @@ test('serviceTests validation: the DSL refuses a step that could read the worker
   assert.ok(validateDefinition({ version: 1, steps: [{ type: 'open', url: '//evil.example' }] }).errors);
   assert.ok(validateDefinition({ version: 1, steps: [] }).errors, 'a test needs at least one step');
   assert.ok(validateDefinition({ version: 2, steps: [{ type: 'back' }] }).errors, 'an unknown DSL version is refused');
+});
+
+test('serviceTests validation: a chart query cannot ask for a period that does not exist', () => {
+  const { validateStatsQuery, PERIODS } = require('../../src/serviceTests/validation');
+  // The four segmentations are the contract the chart and the server share. A
+  // fifth one accepted here would reach resolvePeriod, silently fall back to a
+  // week, and draw a week under a heading that says something else.
+  assert.deepEqual(PERIODS, ['day', 'week', 'month', 'year']);
+  for (const period of PERIODS) assert.ok(validateStatsQuery({ period }).value, period);
+  for (const period of ['hour', 'decade', 'quarter', 'WEEK', '../../etc/passwd', 1]) {
+    assert.ok(validateStatsQuery({ period }).errors, `period=${period} was accepted`);
+  }
+  // A date is a date, not a format string or an expression.
+  for (const at of ['11-09-2026', '2026-9-1', 'today', "2026-09-11'; DROP TABLE", '%Y-%m-%d']) {
+    assert.ok(validateStatsQuery({ at }).errors, `at=${at} was accepted`);
+  }
+  // The offset reaches SQL as an INTERVAL — it is bounded to real time zones.
+  for (const tz of [-841, 841, 99999, 1.5, 'abc', '-- 0']) {
+    assert.ok(validateStatsQuery({ tz_offset: tz }).errors, `tz_offset=${tz} was accepted`);
+  }
+  for (const tz of [0, -120, 840, -840]) assert.ok(validateStatsQuery({ tz_offset: tz }).value, String(tz));
 });
 
 test('serviceTests validation: the host allowlist can never open loopback or metadata, at any setting', () => {

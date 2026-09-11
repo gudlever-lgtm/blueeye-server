@@ -2268,3 +2268,31 @@ button.ghost.small:has(> .icon-glyph) {
   display: inline-flex; align-items: center; justify-content: center;
   padding: 5px; line-height: 0;
 }
+
+/* --- Service Assurance · recording ------------------------------------- */
+/* The bookmarklet is the one control on the dashboard that is meant to be
+   dragged rather than clicked, so it is drawn as a draggable object: a chip
+   with a grab cursor, not a button. */
+.sa-bookmarklet-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.sa-bookmarklet {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 8px 16px; border-radius: 999px;
+  background: var(--accent, #2a78d6); color: #fff;
+  font-weight: 600; font-size: 13px; text-decoration: none;
+  cursor: grab; user-select: none;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .2);
+}
+.sa-bookmarklet::before {
+  content: ''; width: 9px; height: 9px; border-radius: 50%;
+  background: #d03b3b; box-shadow: 0 0 0 2px rgba(255, 255, 255, .35);
+}
+.sa-bookmarklet:active { cursor: grabbing; }
+
+/* The review list: read-only, so it is a list rather than the designer's cards. */
+.sa-record-steps { margin: 12px 0 0; padding-left: 22px; display: grid; gap: 6px; }
+.sa-record-steps li { line-height: 1.5; }
+.sa-record-steps code {
+  display: inline-block; min-width: 62px;
+  font-size: 11px; letter-spacing: .02em; text-transform: uppercase;
+  color: var(--muted, #898781);
+}

@@ -14,11 +14,14 @@ const { createServiceTestSettingsRepository } = require('./storage/settingsRepos
 const { createWorkersRepository } = require('./storage/workersRepository');
 const { createCertificatesRepository } = require('./storage/certificatesRepository');
 const { createIncidentsRepository } = require('./storage/incidentsRepository');
+const { createRecordingsRepository } = require('./storage/recordingsRepository');
 const { createServiceTestSettings } = require('./settings');
 const { createServiceTestsApiRouter } = require('./api');
 const { createQueue } = require('./scheduler/queue');
 const { createArtifactStore, createArtifactRetention } = require('./runner/artifacts');
 const { createAssuranceReactor, createAssuranceJob } = require('./assurance/reactor');
+const { createRecordingsCaptureRouter } = require('./api/recordings');
+const { createRecordingRetention } = require('./recording/retention');
 
 // Service Tests — the module factory, and the ONLY thing its host constructs.
 //
@@ -57,6 +60,7 @@ function createServiceTestsModule(rawPorts = {}) {
     workers: createWorkersRepository({ db, now: clock }),
     certificates: createCertificatesRepository({ db, now: clock }),
     incidents: createIncidentsRepository({ db, now: clock }),
+    recordings: createRecordingsRepository({ db, now: clock }),
     settings: settingsRepo,
   };
 
@@ -93,6 +97,15 @@ function createServiceTestsModule(rawPorts = {}) {
     })
     : null;
 
+  // The ingest half of Recording. It wears NO session middleware — the capture
+  // token is its whole authority (src/serviceTests/api/recordings.js explains
+  // why that is the design and not a gap) — so the host mounts it outside the
+  // authenticated mount. Built only where the authenticated half is, because a
+  // capture token can only exist if an operator started a recording there.
+  const captureRouter = rawPorts.requireAuth && rawPorts.requireRole
+    ? createRecordingsCaptureRouter({ repositories, logger, rateLimit: rawPorts.captureRateLimit || null })
+    : null;
+
   const router = rawPorts.requireAuth && rawPorts.requireRole
     ? createServiceTestsApiRouter({
       repositories,
@@ -120,8 +133,11 @@ function createServiceTestsModule(rawPorts = {}) {
   // The sweep IS a background job, unlike the runner: it needs no browser, so it
   // belongs in the API process where the alerting configuration lives.
   if (reactor) jobs.push(createAssuranceJob({ reactor, settings, logger }));
+  // Abandoned recordings are swept rather than kept: an expired one is dead
+  // weight, and it is whatever the operator typed before they wandered off.
+  if (captureRouter) jobs.push(createRecordingRetention({ recordingsRepo: repositories.recordings, logger }));
 
-  return { repositories, settings, queue, artifacts, reactor, audit, logger, router, jobs };
+  return { repositories, settings, queue, artifacts, reactor, audit, logger, router, captureRouter, jobs };
 }
 
 module.exports = { createServiceTestsModule };

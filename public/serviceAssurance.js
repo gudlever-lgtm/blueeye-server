@@ -139,6 +139,9 @@
       hidden: ['M3 3l18 18', 'M10.6 6.2A9.8 9.8 0 0 1 12 5c6.4 0 10 7 10 7a17 17 0 0 1-3.2 4', 'M6.3 8.3A17 17 0 0 0 2 12s3.6 7 10 7a9.6 9.6 0 0 0 4-.9'],
       duplicate: ['M9 9h10v10H9z', 'M5 15V5h10'],
       trash: ['M4 7h16', 'M10 4h4', 'M6 7l1 13h10l1-13', 'M10 11v6', 'M14 11v6'],
+      // Recording: the universal filled dot, drawn as two rings so it reads at
+      // 16px without a fill (every icon here is stroke-only).
+      record: ['M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z', 'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z'],
     };
 
     function icon(name) {
@@ -550,10 +553,14 @@
     // --------------------------------------------------------------- tests
     views.tests = function (body) {
       if (state.testId) return testDetail(body, state.testId);
-      return api(API + '/tests').then(function (tests) {
-        var head = section(t('sa.tab.tests'), null);
+      return Promise.all([api(API + '/tests'), api(API + '/recordings')]).then(function (res) {
+        var tests = res[0];
+        var recordings = res[1];
+        var head = section(t('sa.tab.tests'), isOperator()
+          ? [el('button', { class: 'ghost small', onclick: startRecordingFlow }, icon('record'), t('sa.record.start'))]
+          : null);
         if (!tests.length) {
-          mount(body, head, el('div', { class: 'sa-empty' }, t('sa.test.empty')));
+          mount(body, head, recordingsPanel(recordings), el('div', { class: 'sa-empty' }, t('sa.test.empty')));
           return;
         }
         var rows = tests.map(function (test) {
@@ -569,7 +576,7 @@
               onclick: function (e) { e.stopPropagation(); runTest(test); },
             }, t('sa.test.run')) : null));
         });
-        mount(body, head, el('table', { class: 'data-table' },
+        mount(body, head, recordingsPanel(recordings), el('table', { class: 'data-table' },
           el('thead', {}, el('tr', {},
             el('th', {}, t('sa.app.name')),
             el('th', {}, t('sa.designer.title')),
@@ -580,6 +587,182 @@
           el('tbody', {}, ...rows)));
       });
     };
+
+    // ----------------------------------------------------------- recording
+    //
+    // The operator performs the journey in their own browser, on the real
+    // application, signed in as themselves. BlueEye watches through a small
+    // script the bookmarklet injects and writes the test from what it saw.
+    //
+    // What the screen has to make obvious, because the alternative is a support
+    // call: the recording is live NOW, it expires, and the bookmarklet is shown
+    // once. Everything below is in service of those three facts.
+
+    // Unfinished recordings, shown above the test list so a session the operator
+    // walked away from is visible rather than a row that quietly expires.
+    function recordingsPanel(recordings) {
+      var open = (recordings || []).filter(function (r) { return r.status !== 'accepted'; });
+      if (!open.length) return null;
+      return el('div', { class: 'sa-panel' },
+        el('h4', {}, t('sa.record.open')),
+        el('table', { class: 'data-table' },
+          el('thead', {}, el('tr', {},
+            el('th', {}, t('sa.app.name')),
+            el('th', {}, t('sa.record.steps')),
+            el('th', {}, t('sa.record.status')),
+            el('th', {}, ''))),
+          el('tbody', {}, ...open.map(function (rec) {
+            return el('tr', {},
+              el('td', {}, el('strong', {}, rec.name)),
+              el('td', {}, t('sa.test.steps', { count: rec.step_count })),
+              el('td', {}, el('span', { class: 'sa-status sa-status-' + (rec.status === 'recording' ? 'running' : 'pending') },
+                t(rec.status === 'recording' ? 'sa.record.live' : 'sa.record.stopped'))),
+              el('td', { class: 'sa-row-actions' },
+                el('button', { class: 'ghost small', onclick: function () { reviewRecording(rec.id); } }, t('sa.record.review')),
+                el('button', {
+                  class: 'ghost small danger',
+                  title: t('sa.delete'),
+                  onclick: function () {
+                    if (!confirmDelete(rec.name)) return;
+                    api(API + '/recordings/' + rec.id, { method: 'DELETE' })
+                      .then(draw).catch(function (e) { toast(err(e), true); });
+                  },
+                }, icon('trash'))));
+          }))));
+    }
+
+    function startRecordingFlow() {
+      api(API + '/applications').then(function (apps) {
+        if (!apps.length) { toast(t('sa.record.noApps'), true); return; }
+        var name = el('input', { type: 'text', placeholder: t('sa.record.namePlaceholder') });
+        var pick = el('select', {}, ...apps.map(function (a) {
+          return el('option', { value: String(a.id) }, a.name);
+        }));
+        var errors = el('div', {});
+        modal(t('sa.record.start'), el('div', { class: 'sa-form' },
+          field(t('sa.tab.applications'), pick),
+          field(t('sa.app.name'), name, t('sa.record.nameHelp')),
+          errors), function () {
+          return api(API + '/recordings', {
+            method: 'POST',
+            body: { application_id: Number(pick.value), name: name.value },
+          }).then(showBookmarklet).catch(function (e) { showErrors(errors, e); throw e; });
+        }, t('sa.record.start'));
+      }).catch(function (e) { toast(err(e), true); });
+    }
+
+    // The one screen where the capture token exists. It is not stored anywhere
+    // this page can read it back from, so leaving without taking the bookmarklet
+    // means starting over — which the copy says plainly rather than letting the
+    // operator discover it.
+    function showBookmarklet(rec) {
+      var link = el('a', { class: 'sa-bookmarklet', title: t('sa.record.dragHint') }, t('sa.record.bookmarkName'));
+      // Set with setAttribute rather than the `href` property: a javascript:
+      // URL assigned through the property is what a linter flags, and this one
+      // is the product — the operator drags it to their own bookmarks bar.
+      link.setAttribute('href', rec.bookmarklet);
+      link.addEventListener('click', function (e) { e.preventDefault(); });
+
+      var copied = el('button', { class: 'ghost small', onclick: function () {
+        if (navigator.clipboard) navigator.clipboard.writeText(rec.bookmarklet).then(function () { toast(t('sa.record.copied')); });
+      } }, t('sa.record.copy'));
+
+      var status = el('div', { class: 'muted' }, t('sa.record.waiting'));
+      var overlay = modal(t('sa.record.ready'), el('div', { class: 'sa-form' },
+        el('p', {}, t('sa.record.step1')),
+        el('div', { class: 'sa-bookmarklet-row' }, link, copied),
+        el('p', {}, t('sa.record.step2')),
+        el('p', {}, t('sa.record.step3')),
+        el('p', { class: 'sa-help' }, t('sa.record.reinject')),
+        el('p', { class: 'sa-help' }, t('sa.record.cspWarning')),
+        el('p', { class: 'sa-help' }, t('sa.record.secretNote')),
+        status), function () {
+        return reviewRecording(rec.id);
+      }, t('sa.record.review'));
+
+      // Poll while the modal is open, so the operator sees the step count climb
+      // and knows the recorder actually reached us. Stops with the modal — a
+      // timer outliving its screen is how a dashboard ends up polling forever.
+      var poll = setInterval(function () {
+        if (!overlay.isConnected) { clearInterval(poll); return; }
+        api(API + '/recordings/' + rec.id).then(function (live) {
+          status.textContent = live.status === 'recording'
+            ? t('sa.record.captured', { count: live.step_count })
+            : t('sa.record.stopped');
+        }).catch(function () { clearInterval(poll); });
+      }, 3000);
+    }
+
+    // Review: the recorded steps as the DSL the designer already edits, so what
+    // the operator approves is exactly what will be saved. Nothing here is a
+    // recording-specific test format — that is the whole point.
+    function reviewRecording(id) {
+      return api(API + '/recordings/' + id).then(function (rec) {
+        // A journey that signs in carries {{credential.password}}, and the
+        // server refuses to save it without a login — so the picker is here,
+        // where the operator can answer, rather than as a 400 they have to
+        // interpret.
+        // Read through the application rather than the flat /credentials list:
+        // that one is admin-only, while GET /applications/:id is open to every
+        // viewer and already carries the same logins (label + username, never a
+        // secret). An operator reviewing their own recording must not need an
+        // administrator to find out which login to attach.
+        return (rec.requires_credential
+          ? api(API + '/applications/' + rec.application_id).then(function (app) { return app.credentials || []; })
+            .catch(function () { return []; })
+          : Promise.resolve([])).then(function (logins) { return [rec, logins]; });
+      }).then(function (pair) {
+        var rec = pair[0];
+        var logins = pair[1];
+        var steps = (rec.definition && rec.definition.steps) || [];
+        var name = el('input', { type: 'text', value: rec.name });
+        var errors = el('div', {});
+        var credential = rec.requires_credential
+          ? el('select', {}, el('option', { value: '' }, '—'), ...logins.map(function (c) {
+            return el('option', { value: String(c.id) }, c.label + ' (' + c.username + ')');
+          }))
+          : null;
+        var list = steps.length
+          ? el('ol', { class: 'sa-record-steps' }, ...steps.map(function (step) {
+            return el('li', {}, el('code', {}, step.type), ' ', el('span', {}, recordedStepText(step)));
+          }))
+          : el('div', { class: 'sa-empty' }, t('sa.record.nothing'));
+
+        modal(t('sa.record.review'), el('div', { class: 'sa-form' },
+          field(t('sa.app.name'), name),
+          credential ? field(t('sa.app.credentials'), credential, t('sa.record.credentialNote')) : null,
+          list,
+          errors),
+        // A recording with no steps cannot become a test, so the save button
+        // says so instead of failing on the server and looking like a bug.
+        steps.length ? function () {
+          return api(API + '/recordings/' + id + '/accept', {
+            method: 'POST',
+            body: { name: name.value, credential_id: credential && credential.value ? Number(credential.value) : null },
+          })
+            .then(function (test) { toast(t('sa.record.saved')); state.testId = test.id; state.tab = 'tests'; draw(); })
+            .catch(function (e) { showErrors(errors, e); throw e; });
+        } : function () { toast(t('sa.record.nothing'), true); return Promise.reject(new Error('empty')); },
+        t('sa.record.save'));
+      }).catch(function (e) { toast(err(e), true); });
+    }
+
+    // A recorded step in one line of plain language. The value is shown as it
+    // will be saved — so a credential reference reads as a reference, and the
+    // operator can see at a glance that no password was written down.
+    //
+    // Named apart from the designer's own describeStep on purpose: that one
+    // renders an editable card, this one renders a read-only review line, and a
+    // shared name across two scopes is how the wrong one gets called.
+    function recordedStepText(step) {
+      var where = step.target ? (step.target.name || step.target.label || step.target.text
+        || step.target.placeholder || step.target.id || step.target.css || '') : '';
+      if (step.type === 'open') return step.url;
+      if (step.type === 'fill') return where + ' = ' + (step.value || '');
+      if (step.type === 'checkbox') return where + ' = ' + (step.checked ? '✓' : '✗');
+      if (step.type === 'select') return where + ' = ' + (step.value || '');
+      return where;
+    }
 
     // PASS PASS PASS FAIL PASS — the whole history in one glance (spec §24).
     function historyStrip(history) {

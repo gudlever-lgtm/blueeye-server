@@ -9,6 +9,7 @@ const { createDiscoveryRouter } = require('./discovery');
 const { createSchedulesRouter } = require('./schedules');
 const { createSettingsRouter } = require('./settings');
 const { createAssuranceRouter } = require('./assurance');
+const { createRecordingsRouter } = require('./recordings');
 
 // The Service Tests HTTP surface, mounted at /api/service-tests.
 //
@@ -53,6 +54,9 @@ function createServiceTestsApiRouter({
   // Read-only aggregation over the same runs, for the history charts.
   router.use('/stats', createStatsRouter(deps));
   router.use('/discovery', createDiscoveryRouter(deps));
+  // Recording. The INGEST half is not here: it carries no session, so the host
+  // mounts it outside this router (src/serviceTests/index.js).
+  router.use('/recordings', createRecordingsRouter(deps));
   router.use('/suggestions', createDiscoveryRouter.suggestions(deps));
   router.use('/schedules', createSchedulesRouter(deps));
   router.use('/settings', createSettingsRouter(deps));

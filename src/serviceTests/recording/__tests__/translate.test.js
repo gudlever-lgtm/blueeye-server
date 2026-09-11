@@ -191,3 +191,25 @@ test('an over-long name is bounded rather than rejected', () => {
   const { definition } = translateRecording([], { name: 'n'.repeat(500) });
   assert.equal(definition.name.length, 255);
 });
+
+test('a navigation that followed a click becomes an assertion, not a second open', () => {
+  const { definition } = translateRecording([
+    { kind: 'navigate', at: 1, url: 'https://portal.kunde.dk/login' },
+    { kind: 'click', at: 2, target: { role: 'button', name: 'Log ind' }, tagName: 'BUTTON' },
+    { kind: 'navigate', at: 3, url: 'https://portal.kunde.dk/dashboard' },
+  ], { baseUrl: 'https://portal.kunde.dk' });
+
+  assert.deepEqual(definition.steps.map((s) => s.type), ['open', 'click', 'assert_url_contains']);
+  assert.equal(definition.steps[2].value, '/dashboard');
+  // Replaying it as `open` would make the test navigate straight to /dashboard
+  // and pass whether or not the login that was supposed to take it there worked.
+  assert.ok(!definition.steps.slice(1).some((s) => s.type === 'open'), 'a consequence was replayed as an instruction');
+});
+
+test('a navigation the operator performed is still an open', () => {
+  const { definition } = translateRecording([
+    { kind: 'navigate', at: 1, url: 'https://portal.kunde.dk/a' },
+    { kind: 'navigate', at: 2, url: 'https://portal.kunde.dk/b' },
+  ], { baseUrl: 'https://portal.kunde.dk' });
+  assert.deepEqual(definition.steps.map((s) => s.type), ['open', 'open']);
+});

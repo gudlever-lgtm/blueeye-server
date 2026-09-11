@@ -12,6 +12,7 @@
 const { createServiceTestsApiRouter } = require('../src/serviceTests/api');
 const { createServiceTestSettings } = require('../src/serviceTests/settings');
 const { createQueue } = require('../src/serviceTests/scheduler/queue');
+const { bucketKey, sqlFormat } = require('../src/serviceTests/stats/period');
 const { createAssuranceReactor } = require('../src/serviceTests/assurance/reactor');
 const { createSecretBox } = require('../src/lib/secretBox');
 const { requireAuth, requireRole } = require('../src/auth/middleware');
@@ -114,7 +115,15 @@ function makeServiceTests(overrides = {}) {
     incidents: makeTable(overrides.incidents || []),
   };
 
-  const bool = (v) => !!v;
+  // The format string the API passes back to the bucket shape it stands for —
+// the fake groups in JS, but on the same keys as the SQL.
+const BUCKET_OF_FORMAT = {
+  [sqlFormat('hour')]: 'hour',
+  [sqlFormat('day')]: 'day',
+  [sqlFormat('month')]: 'month',
+};
+
+const bool = (v) => !!v;
 
   const repositories = {
     applications: {
@@ -268,6 +277,42 @@ function makeServiceTests(overrides = {}) {
           avg_duration_ms: durations.length ? Math.round(durations.reduce((a, b) => a + b, 0) / durations.length) : null,
           last_failure: rows.find((r) => r.status === 'fail' || r.status === 'error') || null,
         };
+      },
+      // The history chart's aggregation, in memory. Buckets with the SAME keys
+      // the real DATE_FORMAT produces (stats/period.js owns both), so the API's
+      // merge of rows onto empty buckets is exercised for real.
+      async stats({ from, to, sqlFormat: format, offsetMinutes = 0, testId = null, applicationId = null } = {}) {
+        const bucket = BUCKET_OF_FORMAT[format] || 'day';
+        const appOf = (run) => {
+          const test = t.tests.find(run.test_id);
+          return test ? test.application_id : null;
+        };
+        const rows = t.runs.rows.filter((r) => {
+          if (['queued', 'running'].includes(r.status)) return false;
+          const at = new Date(r.started_at || r.created_at);
+          if (!(at >= new Date(from) && at < new Date(to))) return false;
+          if (testId !== null && r.test_id !== Number(testId)) return false;
+          if (applicationId !== null && appOf(r) !== Number(applicationId)) return false;
+          return true;
+        });
+        const acc = new Map();
+        for (const r of rows) {
+          const at = new Date(r.started_at || r.created_at);
+          const key = bucketKey(new Date(at.getTime() - offsetMinutes * 60000), bucket);
+          const cur = acc.get(key) || { bucket: key, total: 0, pass: 0, fail: 0, warning: 0, error: 0, skipped: 0, _ms: [], max_duration_ms: null };
+          cur.total += 1;
+          if (cur[r.status] !== undefined) cur[r.status] += 1;
+          if (Number.isFinite(r.duration_ms)) {
+            cur._ms.push(r.duration_ms);
+            cur.max_duration_ms = Math.max(cur.max_duration_ms ?? 0, r.duration_ms);
+          }
+          acc.set(key, cur);
+        }
+        return [...acc.values()].sort((a, b) => a.bucket.localeCompare(b.bucket)).map((b) => ({
+          ...b,
+          avg_duration_ms: b._ms.length ? Math.round(b._ms.reduce((x, y) => x + y, 0) / b._ms.length) : null,
+          _ms: undefined,
+        }));
       },
       async screenshotsOlderThan() { return []; },
       async clearScreenshots() { return 0; },

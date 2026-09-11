@@ -228,6 +228,58 @@ function createRunsRepository({ db, now = () => new Date() }) {
     return rows;
   }
 
+  // Per-bucket outcome counts for the history charts.
+  //
+  // Aggregated in SQL rather than by loading runs and counting in JS: a year of
+  // a five-minute schedule is ~105,000 rows, and the chart wants twelve numbers.
+  //
+  // `offsetMinutes` is the viewer's `getTimezoneOffset()` (minutes BEHIND UTC).
+  // Timestamps are stored in UTC and shifted before they are bucketed, because
+  // a person asking for "Tuesday" means their Tuesday — bucketing in UTC files
+  // the first two hours of a Copenhagen day under Monday.
+  //
+  // Queued and running rows are excluded: a run with no outcome yet is not a
+  // data point, and counting it as neither pass nor fail would make the bars add
+  // up to more than the total.
+  async function stats({ from, to, sqlFormat, offsetMinutes = 0, testId = null, applicationId = null } = {}) {
+    // The bucket expression's two placeholders come FIRST: they sit in the
+    // SELECT list, which MySQL binds before the WHERE clause.
+    const params = [Number(offsetMinutes) || 0, String(sqlFormat), from, to];
+    const where = ["r.status NOT IN ('queued','running')", 'COALESCE(r.started_at, r.created_at) >= ?', 'COALESCE(r.started_at, r.created_at) < ?'];
+    if (testId !== null && testId !== undefined) { where.push('r.test_id = ?'); params.push(testId); }
+    if (applicationId !== null && applicationId !== undefined) { where.push('t.application_id = ?'); params.push(applicationId); }
+
+    const [rows] = await pool.query(
+      `SELECT DATE_FORMAT(DATE_SUB(COALESCE(r.started_at, r.created_at), INTERVAL ? MINUTE), ?) AS bucket,
+              COUNT(*) AS total,
+              SUM(r.status = 'pass') AS pass,
+              SUM(r.status = 'fail') AS fail,
+              SUM(r.status = 'warning') AS warning,
+              SUM(r.status = 'error') AS error,
+              SUM(r.status = 'skipped') AS skipped,
+              ROUND(AVG(r.duration_ms)) AS avg_duration_ms,
+              MAX(r.duration_ms) AS max_duration_ms
+       FROM service_test_runs r
+       LEFT JOIN service_test_tests t ON t.id = r.test_id
+       WHERE ${where.join(' AND ')}
+       GROUP BY bucket
+       ORDER BY bucket`,
+      params
+    );
+
+    return rows.map((row) => ({
+      bucket: row.bucket,
+      total: Number(row.total) || 0,
+      pass: Number(row.pass) || 0,
+      fail: Number(row.fail) || 0,
+      warning: Number(row.warning) || 0,
+      error: Number(row.error) || 0,
+      skipped: Number(row.skipped) || 0,
+      avg_duration_ms: row.avg_duration_ms === null ? null : Number(row.avg_duration_ms),
+      max_duration_ms: row.max_duration_ms === null ? null : Number(row.max_duration_ms),
+    }));
+  }
+
   async function clearScreenshots(ids) {
     if (!ids || !ids.length) return 0;
     const [res] = await pool.query('UPDATE service_test_runs SET screenshot_path = NULL WHERE id IN (?)', [ids]);
@@ -235,7 +287,7 @@ function createRunsRepository({ db, now = () => new Date() }) {
   }
 
   return {
-    findById, list, enqueue, claimNext, complete, reapStale, history,
+    findById, list, enqueue, claimNext, complete, reapStale, history, stats,
     screenshotsOlderThan, clearScreenshots,
   };
 }

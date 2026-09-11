@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.123.9 — concurrency is a real dial, and a failure says what was observed
+## 0.124.2 — concurrency is a real dial, and a failure says what was observed
 
 **`runner.concurrency` did nothing.** It was stored, validated and shown in
 Settings, and read by no code: the worker loop claimed exactly one job per tick
@@ -37,6 +37,45 @@ because its script is waiting on a lookup that will never return.
 Diagnostics. It is a module with five screens, and "are my public services
 working?" is not the question the network diagnostics tools answer. Each entry
 deep-links into the module's own tab.
+## 0.124.0 — Service Assurance: run history as a chart
+
+A new **History** tab, and the same chart on each test's own history. It answers
+the question the Runs list cannot: how has this been going.
+
+**Segmented by day, week, month or year**, and you pick the specific one — ◀ ▶
+step through periods, or jump straight to a date. One bar is an hour on a day, a
+day on a week or a month, a month on a year. A period that has not happened yet
+is not offered.
+
+Two charts sharing the x positions: outcomes as stacked bars, average duration
+as a line. Never one chart with two y-axes — "12 runs" and "1.4 s" share no
+scale, and a second axis is the quickest way to make a chart say something
+untrue.
+
+**A gap stays a gap.** An empty bucket is drawn with a baseline tick and the
+duration line breaks over it, because "it stopped running on Thursday" is
+exactly the reading this chart exists for — and an hour nothing ran in is not an
+hour everything was instant.
+
+**Days are cut in the viewer's time zone.** The browser sends its
+`getTimezoneOffset()` and the query shifts timestamps before grouping. Bucketing
+in UTC files the first two hours of a Copenhagen day under the day before, and
+"Tuesday" has to mean the operator's Tuesday.
+
+`GET /api/service-tests/stats?period=&at=&tz_offset=&test_id=&application_id=`
+aggregates in SQL — a year of a five-minute schedule is ~105,000 rows and the
+chart wants twelve numbers — and answers with every bucket in the period plus
+where previous and next point, so the browser does no calendar arithmetic. The
+calendar lives in one place, `src/serviceTests/stats/period.js`: a month is not
+30 days and a DST day is not 24 hours.
+
+The outcome colours were checked for colour-vision separation against the light
+and the dark surface separately, rather than one set being auto-lightened for
+dark mode.
+
+**Also:** the module's CSS asked for `--fg`, which no theme defines — so every
+input in Service Assurance rendered near-black text on a dark background. It is
+`--text`, like the rest of the dashboard.
 
 ## 0.123.8 — one icon vocabulary: a trash can deletes, a × closes
 

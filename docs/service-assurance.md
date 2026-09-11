@@ -618,6 +618,48 @@ if they do not:
   to set — and then it IS a host path, which must be a directory the worker can
   write and the server can read (the same machine, or shared storage).
 
+## Run history charts
+
+The Runs tab answers "what just happened". **History** answers "how has it been
+going" — the question a weekly report is written from.
+
+`GET /api/service-tests/stats` returns one row per bucket:
+
+| period | buckets | what you see |
+|---|---|---|
+| `day` | 24 hours | which hour of the night it started failing |
+| `week` | 7 days (Monday first, ISO) | the working week |
+| `month` | 28-31 days | the calendar month, whatever its length |
+| `year` | 12 months | the trend a report quotes |
+
+`at=YYYY-MM-DD` picks the specific one — any date inside the period identifies
+it, so one parameter covers all four. `test_id` or `application_id` narrow it;
+omit both for the whole install. The response carries `prev_at`, `next_at` and
+`has_next`, so the dashboard's ◀ ▶ buttons do no calendar arithmetic of their
+own and a period that has not happened yet is not offered.
+
+**Three decisions worth knowing:**
+
+- **The calendar lives on the server** (`src/serviceTests/stats/period.js`). A
+  month is not 30 days and a DST day is not 24 hours; one implementation is
+  enough to get that right.
+- **Aggregation happens in SQL.** A year of a five-minute schedule is ~105,000
+  rows and the chart wants twelve numbers.
+- **Buckets are cut in the viewer's time zone.** The browser sends its
+  `getTimezoneOffset()` and the query shifts timestamps before grouping —
+  bucketing in UTC files the first two hours of a Copenhagen day under the day
+  before, and "Tuesday" has to mean the operator's Tuesday.
+
+Empty buckets are part of the answer. A day with no runs is drawn as a gap with
+a baseline tick, because "it stopped running on Thursday" is exactly the reading
+the chart exists for, and a missing bar could equally mean "off the edge of the
+chart".
+
+Two charts share the x positions — outcomes as stacked bars, average duration as
+a line — and never one chart with two y-axes: "12 runs" and "1.4 s" share no
+scale. The line breaks over an empty bucket rather than dropping to zero; an hour
+nothing ran in is not an hour everything was instant.
+
 ### Is a worker running?
 
 Each worker writes a heartbeat row (`service_test_workers`, migration 079) on

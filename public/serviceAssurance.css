@@ -227,3 +227,12 @@
   color: var(--fg, #111827); text-decoration: none; background: var(--panel, #fff);
 }
 .sa-actions a.sa-btn:hover { border-color: var(--accent, #2563eb); color: var(--accent, #2563eb); }
+
+/* The observed evidence behind a classification. It sits in the open, above
+   "Technical details": the conclusion ("the server rejected the request") is
+   useless without the observation that produced it (WHICH request, and what
+   the allowed-hosts policy refused along the way). */
+.sa-evidence { margin-top: 10px; }
+.sa-evidence h5 { margin: 0 0 4px; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted, #6b7280); }
+.sa-evidence ul { margin: 0; padding-left: 18px; }
+.sa-evidence li { margin: 2px 0; line-height: 1.45; }

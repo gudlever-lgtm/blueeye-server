@@ -15,6 +15,10 @@
   'use strict';
 
   var API = '/api/service-tests';
+  // The module's own screens, in the order they are shown. Also the set a host
+  // may deep-link into, so an unknown tab name falls back rather than rendering
+  // an empty page.
+  var TABS = ['applications', 'tests', 'runs', 'health', 'schedules'];
 
   function create(ctx) {
     var el = ctx.el;
@@ -33,7 +37,9 @@
 
     // ---------------------------------------------------------------- state
     var state = {
-      tab: 'applications',
+      // The host can deep-link into a screen (its nav has an entry per tab);
+      // absent, the module opens where it always did.
+      tab: TABS.indexOf(ctx.tab) >= 0 ? ctx.tab : 'applications',
       applicationId: null,
       testId: null,
       runId: null,
@@ -945,6 +951,16 @@
             classification ? el('p', { class: 'muted' }, classification.explanation) : null,
             classification && classification.http_status
               ? el('p', {}, el('span', { class: 'chip' }, 'HTTP ' + classification.http_status)) : null,
+            // What was actually OBSERVED, in the operator's words. The classifier
+            // has always collected this — which request returned which status,
+            // which addresses the policy refused — and the page used to throw it
+            // away and show only the generic one-liner, leaving "The server
+            // rejected the request" with no way to find out WHICH request.
+            classification && (classification.evidence || []).length
+              ? el('div', { class: 'sa-evidence' },
+                el('h5', {}, t('sa.run.whatWeSaw')),
+                el('ul', {}, ...classification.evidence.map(function (line) { return el('li', {}, line); })))
+              : null,
             run.screenshot_path ? screenshotPanel(run) : null,
             el('details', {}, el('summary', {}, t('sa.technicalDetails')),
               el('pre', { class: 'sa-pre' }, JSON.stringify({

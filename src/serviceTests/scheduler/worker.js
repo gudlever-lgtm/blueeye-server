@@ -202,24 +202,14 @@ function createWorker({
     }
   }
 
-  // ------------------------------------------------------------------ loop
-  // One iteration: enqueue what is due, reap what was abandoned, take one job.
-  // Returns true when work was done, so the loop can poll faster while there is
-  // a backlog and idle politely when there is not.
-  async function tick() {
-    // First, before anything can fail: an operator watching the dashboard needs
-    // to see that the worker is alive even on a tick where the queue is empty
-    // or a schedule lookup throws.
-    if (typeof queue.heartbeat === 'function') await queue.heartbeat({ workerId, hostname, version });
-    await queue.enqueueDue();
-    await queue.reapStale();
-    const claimed = await queue.claimNext(workerId);
-    if (!claimed) return false;
+  // Runs ONE claimed job to completion. A job that blows up outside its own
+  // handler must not kill the loop or leave the row stuck at `running` — the
+  // queue would only free it when the claim times out, minutes later.
+  async function runJob(claimed) {
     try {
       if (claimed.kind === 'run') await processRun(claimed.job);
       else await processDiscovery(claimed.job);
     } catch (err) {
-      // A job that blew up outside its own handler must not kill the loop.
       logger.error(`service-tests worker: ${claimed.kind} ${claimed.job.id} threw (${err && err.message})`);
       if (claimed.kind === 'run') {
         await runs.complete(claimed.job.id, { status: 'error', error_message: 'The worker failed while running this test', steps: [] })
@@ -229,6 +219,58 @@ function createWorker({
           .catch(() => {});
       }
     }
+  }
+
+  // ------------------------------------------------------------------ loop
+  // One iteration: enqueue what is due, reap what was abandoned, then take up to
+  // `runner.concurrency` jobs and run them side by side.
+  //
+  // The setting used to be stored, validated, shown in Settings — and read by
+  // nothing: the loop claimed exactly one job per tick whatever it said. It is
+  // the dial it looks like now. Each job builds its own browser through
+  // browserFactory (per-job already, so a crashed page can never poison the
+  // next), which is also why the number matters: every extra lane is another
+  // Chromium, and the bound belongs in the operator's hands rather than in a
+  // constant.
+  //
+  // Claiming is a conditional UPDATE, so N lanes on one worker race each other
+  // exactly as N workers do — the same guarantee, no new locking.
+  //
+  // The tick AWAITS every job it started. A fire-and-forget lane would make the
+  // loop faster to write and impossible to reason about: no back-pressure, no
+  // deterministic shutdown, and a spec could not assert that a run finished.
+  // Returns true when work was done, so the loop can poll faster while there is
+  // a backlog and idle politely when there is not.
+  async function tick() {
+    // First, before anything can fail: an operator watching the dashboard needs
+    // to see that the worker is alive even on a tick where the queue is empty
+    // or a schedule lookup throws.
+    if (typeof queue.heartbeat === 'function') await queue.heartbeat({ workerId, hostname, version });
+    await queue.enqueueDue();
+    await queue.reapStale();
+
+    // Read per tick, not per boot: raising the dial in Settings takes effect on
+    // the next tick rather than on a restart. A settings read that fails must
+    // not stop the worker from working — one lane is the safe floor.
+    let limit = 1;
+    try {
+      const runnerSettings = await settings.get('runner');
+      if (runnerSettings && Number.isFinite(runnerSettings.concurrency)) limit = runnerSettings.concurrency;
+    } catch (err) {
+      logger.warn(`service-tests worker: could not read concurrency (${err && err.message}) — running one job`);
+    }
+    limit = Math.max(1, limit);
+
+    const claimed = [];
+    while (claimed.length < limit && !stopped) {
+      // eslint-disable-next-line no-await-in-loop
+      const next = await queue.claimNext(workerId);
+      if (!next) break;
+      claimed.push(next);
+    }
+    if (!claimed.length) return false;
+    if (claimed.length > 1) logger.info(`service-tests worker: running ${claimed.length} jobs in parallel`);
+    await Promise.all(claimed.map(runJob));
     return true;
   }
 

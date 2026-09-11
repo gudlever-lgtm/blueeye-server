@@ -1421,50 +1421,129 @@
     // Because every bar is that same colour, filtering the list cannot repaint
     // the survivors, and a single series needs no legend: the title says what
     // the bars are.
-    function barPathRight(x, y, w, h, r) {
-      // The data end is the RIGHT end here, so the rounded corners move with it.
-      var radius = Math.max(0, Math.min(r, w, h / 2));
-      return 'M' + x + ',' + y +
-        'H' + (x + w - radius) +
-        'a' + radius + ',' + radius + ' 0 0 1 ' + radius + ',' + radius +
-        'V' + (y + h - radius) +
-        'a' + radius + ',' + radius + ' 0 0 1 ' + -radius + ',' + radius +
-        'H' + x + 'Z';
+    // The categorical palette, in the order the design system fixes. The order
+    // IS the colourblind-safety mechanism, not decoration, so slots are assigned
+    // in sequence and NEVER cycled: a ninth series folds into "Other" rather
+    // than getting a generated hue that nobody can tell from slot 3.
+    //
+    // Colour follows the APPLICATION, not its rank in the current filter, so
+    // narrowing the picker cannot repaint the lines that survive.
+    var SERIES_SLOTS = 8;
+
+    function seriesClass(i) {
+      return i >= SERIES_SLOTS ? 'sa-series-other' : 'sa-series-' + (i + 1);
     }
 
-    function topApplicationsSvg(rows) {
-      var ROW = 26;          // bar band
-      var GAP = 6;           // >= 2px surface gap between bars
-      var LABEL_W = 190;     // room for an application name
-      var VALUE_W = 46;      // room for the direct label
-      var W = 720;
-      var H = rows.length * (ROW + GAP) + 8;
-      var plotW = W - LABEL_W - VALUE_W;
-      var max = rows.reduce(function (m, r) { return Math.max(m, r.incidents); }, 0) || 1;
+    // Nice round axis maximum, so the gridlines land on numbers a person reads.
+    function niceMax(value) {
+      if (value <= 5) return Math.max(1, value);
+      var pow = Math.pow(10, Math.floor(Math.log10(value)));
+      return Math.ceil(value / (pow / 2)) * (pow / 2);
+    }
+
+    // One chart, three forms. The DATA is the same in all of them — counts per
+    // bucket per application — so the choice is about what the reader is doing:
+    // a line reads a trend, grouped bars compare buckets, stacked bars read a
+    // total with its composition.
+    function incidentChart(data, form) {
+      var series = data.series || [];
+      var buckets = data.buckets || [];
+      if (!series.length || !buckets.length) return null;
+
+      var W = 760;
+      var H = 300;
+      var PAD = { top: 12, right: 16, bottom: 28, left: 40 };
+      var plotW = W - PAD.left - PAD.right;
+      var plotH = H - PAD.top - PAD.bottom;
+
+      var stacked = form === 'stacked';
+      var perBucket = buckets.map(function (_, i) {
+        return series.reduce(function (acc, ser) { return acc + (ser.points[i] || 0); }, 0);
+      });
+      var peak = stacked
+        ? perBucket.reduce(function (m, v) { return Math.max(m, v); }, 0)
+        : series.reduce(function (m, ser) {
+          return Math.max(m, ser.points.reduce(function (n, v) { return Math.max(n, v); }, 0));
+        }, 0);
+      var max = niceMax(peak || 1);
+
+      var xOf = function (i) {
+        return buckets.length === 1
+          ? PAD.left + plotW / 2
+          : PAD.left + (i / (buckets.length - 1)) * plotW;
+      };
+      var yOf = function (v) { return PAD.top + plotH - (v / max) * plotH; };
 
       var svg = svgEl('svg', {
         class: 'sa-chart-svg', viewBox: '0 0 ' + W + ' ' + H,
         role: 'img', 'aria-label': t('sa.top.title'),
       });
 
-      rows.forEach(function (row, i) {
-        var y = i * (ROW + GAP) + 4;
-        var w = Math.max(2, Math.round((row.incidents / max) * plotW));
-        svg.appendChild(svgEl('g', { class: 'sa-chart-bar' }, [
-          svgTitle(t('sa.top.tooltip', { app: row.application_name, n: String(row.incidents) })),
-          // The name, right-aligned against the bar so the bars share a baseline.
-          svgEl('text', {
-            class: 'sa-chart-axis sa-top-name', x: LABEL_W - 10, y: y + ROW / 2 + 4, 'text-anchor': 'end',
-          }, [document.createTextNode(row.application_name)]),
-          svgEl('path', { class: 'sa-bar-failed', d: barPathRight(LABEL_W, y, w, ROW, 4) }),
-          // Direct label. Ten bars is few enough that every value can carry one,
-          // and a reader should never have to measure a bar against a gridline.
-          svgEl('text', {
-            class: 'sa-chart-axis sa-top-value', x: LABEL_W + w + 8, y: y + ROW / 2 + 4,
-          }, [document.createTextNode(String(row.incidents))]),
-        ]));
+      // Recessive grid + y labels.
+      [0, 0.25, 0.5, 0.75, 1].forEach(function (f) {
+        var v = max * f;
+        var y = yOf(v);
+        svg.appendChild(svgEl('line', { class: 'sa-chart-grid', x1: PAD.left, x2: W - PAD.right, y1: y.toFixed(1), y2: y.toFixed(1) }));
+        svg.appendChild(svgEl('text', {
+          class: 'sa-chart-axis', x: PAD.left - 8, y: (y + 4).toFixed(1), 'text-anchor': 'end',
+        }, [document.createTextNode(String(Math.round(v)))]));
       });
+
+      // X labels: only as many as fit, the tooltip carries the rest.
+      var every = Math.max(1, Math.ceil(buckets.length / 12));
+      buckets.forEach(function (b, i) {
+        if (i % every) return;
+        svg.appendChild(svgEl('text', {
+          class: 'sa-chart-axis', x: xOf(i).toFixed(1), y: H - 8, 'text-anchor': 'middle',
+        }, [document.createTextNode(bucketLabel(b.start, data.bucket))]));
+      });
+
+      if (form === 'line') {
+        series.forEach(function (ser, si) {
+          var d = ser.points.map(function (v, i) { return (i ? 'L' : 'M') + xOf(i).toFixed(1) + ',' + yOf(v).toFixed(1); }).join('');
+          svg.appendChild(svgEl('path', { class: 'sa-series-line ' + seriesClass(si), d: d }));
+          ser.points.forEach(function (v, i) {
+            svg.appendChild(svgEl('g', { class: 'sa-chart-bar' }, [
+              svgTitle(t('sa.top.point', { app: ser.application_name, n: String(v), when: bucketLabel(buckets[i].start, data.bucket) })),
+              svgEl('circle', { class: 'sa-series-dot ' + seriesClass(si), cx: xOf(i).toFixed(1), cy: yOf(v).toFixed(1), r: 4 }),
+            ]));
+          });
+        });
+      } else {
+        // Grouped or stacked columns. A 2px surface gap between fills either way.
+        var slot = plotW / Math.max(1, buckets.length);
+        var groupW = Math.max(4, slot * 0.7);
+        var barW = stacked ? groupW : Math.max(2, (groupW / series.length) - 2);
+        buckets.forEach(function (b, i) {
+          var x0 = xOf(i) - groupW / 2;
+          var stackTop = PAD.top + plotH;
+          series.forEach(function (ser, si) {
+            var v = ser.points[i] || 0;
+            if (!v) return;
+            var h = (v / max) * plotH;
+            var x = stacked ? x0 : x0 + si * (barW + 2);
+            var y = stacked ? (stackTop - h) : yOf(v);
+            if (stacked) stackTop -= h + 2; // the surface gap between segments
+            svg.appendChild(svgEl('g', { class: 'sa-chart-bar' }, [
+              svgTitle(t('sa.top.point', { app: ser.application_name, n: String(v), when: bucketLabel(b.start, data.bucket) })),
+              svgEl('path', { class: 'sa-series-fill ' + seriesClass(si), d: barPath(x, y, barW, Math.max(1, h), 4) }),
+            ]));
+          });
+        });
+      }
       return svg;
+    }
+
+    // The legend. Always present for two or more series — identity must never be
+    // carried by colour alone — and it doubles as the totals table, so the
+    // ranking the operator asked for is readable as numbers too.
+    function incidentLegend(series) {
+      if (!series.length) return null;
+      return el('div', { class: 'sa-legend' }, ...series.map(function (ser, i) {
+        return el('span', { class: 'sa-legend-item' },
+          el('span', { class: 'sa-legend-swatch ' + seriesClass(i) }),
+          ser.application_name + ' (' + ser.total + ')');
+      }));
     }
 
     // A searchable, multiple-choice application filter.
@@ -1535,7 +1614,9 @@
       var wrap = el('div', { class: 'sa-panel sa-chart-panel' });
       // Month by default: the Health page's question is "how has this month
       // been", not "what happened in the last hour".
-      var st = { period: 'month', at: null, apps: [] };
+      // Month and a line chart by default: the Health page's question is "how
+      // has this month been", and a trend is what a line answers.
+      var st = { period: 'month', at: null, apps: [], form: 'line' };
       var allApps = [];
 
       function query() {
@@ -1570,6 +1651,22 @@
         }));
       }
 
+      // The chart type. Same data in all three — counts per bucket per
+      // application — so the choice is about what the reader is doing: a line
+      // reads a trend, grouped bars compare buckets side by side, stacked bars
+      // read a total with its composition. Switching redraws from the data
+      // already in hand; it never re-fetches.
+      function formButtons(data) {
+        return el('div', { class: 'sa-segmented' }, ...[
+          ['line', t('sa.top.formLine')], ['bars', t('sa.top.formBars')], ['stacked', t('sa.top.formStacked')],
+        ].map(function (pair) {
+          return el('button', {
+            class: 'sa-segment' + (st.form === pair[0] ? ' active' : ''),
+            onclick: function () { st.form = pair[0]; render(data); },
+          }, pair[1]);
+        }));
+      }
+
       function render(data) {
         st.at = data.at;
         var jump = el('input', { type: 'date', class: 'sa-date-input', value: data.at, title: t('sa.chart.jump') });
@@ -1580,7 +1677,7 @@
         var now = el('button', { class: 'ghost small', onclick: function () { st.at = null; load(); } }, t('sa.chart.now'));
         now.disabled = !!data.is_current;
 
-        var rows = data.applications || [];
+        var series = data.series || [];
         mount(wrap,
           section(t('sa.top.title'), null),
           el('p', { class: 'sa-help' }, t('sa.top.help')),
@@ -1589,13 +1686,18 @@
             el('button', { class: 'ghost small', onclick: function () { st.at = data.prev_at; load(); } }, '◀'),
             el('span', { class: 'sa-chart-period' }, periodLabel(Object.assign({ buckets: [] }, data))),
             next, now,
-            el('span', { class: 'sa-chart-jump' }, t('sa.chart.jump'), jump)),
+            el('span', { class: 'sa-chart-jump' }, t('sa.chart.jump'), jump),
+            formButtons(data)),
           applicationPicker(allApps, st.apps, function () { load(); }),
-          // An empty ranking is GOOD NEWS and has to read as good news — an
-          // empty chart area reads as "broken", which is the opposite.
-          rows.length
-            ? topApplicationsSvg(rows)
-            : el('div', { class: 'sa-empty' }, t('sa.top.none')));
+          // An empty chart is GOOD NEWS and has to read as good news — an empty
+          // plot area reads as "broken", which is the opposite.
+          series.length
+            ? incidentChart(data, st.form)
+            : el('div', { class: 'sa-empty' }, t('sa.top.none')),
+          series.length ? incidentLegend(series) : null,
+          series.length > SERIES_SLOTS
+            ? el('p', { class: 'sa-help' }, t('sa.top.tooMany', { n: String(SERIES_SLOTS) }))
+            : null);
       }
 
       load();

@@ -213,6 +213,47 @@ function createIncidentsRepository({ db, now = () => new Date() }) {
     }));
   }
 
+  // The same ranking, but over TIME: one row per (bucket, application), so the
+  // Health chart can draw a line per application instead of a single total.
+  //
+  // The bucket expression matches runs.stats() exactly — same DATE_FORMAT, same
+  // offset placeholder order (the SELECT list binds before the WHERE) — so the
+  // two charts on the page cut their buckets identically. Two charts that
+  // disagree about where Tuesday starts is a bug nobody ever reports and
+  // everybody notices.
+  async function seriesByApplication({
+    from, to = new Date(), sqlFormat, offsetMinutes = 0, severity = 'CRIT', applicationIds = null,
+  } = {}) {
+    if (Array.isArray(applicationIds) && !applicationIds.length) return [];
+    const start = from ? new Date(from) : new Date(0);
+    const end = to ? new Date(to) : new Date();
+
+    const params = [Number(offsetMinutes) || 0, String(sqlFormat), start, end];
+    const where = ['i.opened_at >= ?', 'i.opened_at < ?', 'i.application_id IS NOT NULL'];
+    if (severity) { where.push('i.severity = ?'); params.push(severity); }
+    if (Array.isArray(applicationIds)) {
+      where.push(`i.application_id IN (${applicationIds.map(() => '?').join(',')})`);
+      params.push(...applicationIds);
+    }
+
+    const [rows] = await pool.query(
+      `SELECT DATE_FORMAT(DATE_SUB(i.opened_at, INTERVAL ? MINUTE), ?) AS bucket,
+              i.application_id, a.name AS application_name, COUNT(*) AS incidents
+       FROM service_test_incidents i
+       JOIN service_test_applications a ON a.id = i.application_id
+       WHERE ${where.join(' AND ')}
+       GROUP BY bucket, i.application_id, a.name
+       ORDER BY bucket`,
+      params
+    );
+    return rows.map((r) => ({
+      bucket: r.bucket,
+      application_id: r.application_id,
+      application_name: r.application_name,
+      incidents: Number(r.incidents) || 0,
+    }));
+  }
+
   // Open incidents by severity — the badge on the nav entry, in one query.
   async function openCounts() {
     const [rows] = await pool.query(
@@ -243,7 +284,7 @@ function createIncidentsRepository({ db, now = () => new Date() }) {
     return res.affectedRows || 0;
   }
 
-  return { findById, findOpen, open, touch, resolve, markNotified, list, listBetween, countByApplication, openCounts, purgeResolvedOlderThan };
+  return { findById, findOpen, open, touch, resolve, markNotified, list, listBetween, countByApplication, seriesByApplication, openCounts, purgeResolvedOlderThan };
 }
 
 module.exports = { createIncidentsRepository };

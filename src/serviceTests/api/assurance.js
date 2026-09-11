@@ -138,7 +138,56 @@ function createAssuranceRouter({ repositories, reactor = null, audit, requireRol
       from: period.from, to: period.to, severity: severity || 'CRIT', applicationIds, limit,
     });
 
+    // One line per application, over the period's buckets.
+    //
+    // WHICH applications get a line: the ones the operator selected, or — when
+    // they have selected none — the top `limit` by incident count. So the chart
+    // always opens on the services that had the worst period, and the picker is
+    // how you ask about a specific one.
+    const chosen = Array.isArray(applicationIds) && applicationIds.length
+      ? applicationIds
+      : applications_ranked.map((r) => r.application_id);
+
+    const points = chosen.length
+      ? await incidents.seriesByApplication({
+        from: period.from,
+        to: period.to,
+        sqlFormat: period.sql_format,
+        bucket: period.bucket,
+        offsetMinutes: period.offset_minutes,
+        severity: severity || 'CRIT',
+        applicationIds: chosen,
+      })
+      : [];
+
+    // Every bucket in the period, zeroes included. A line that skips its empty
+    // buckets is a line that lies about when the trouble was: "it was quiet all
+    // week and then Thursday happened" only exists if Monday to Wednesday are
+    // in the answer as zeroes.
+    const byApp = new Map();
+    for (const p of points) {
+      const row = byApp.get(p.application_id)
+        || { application_id: p.application_id, application_name: p.application_name, counts: new Map() };
+      row.counts.set(p.bucket, p.incidents);
+      byApp.set(p.application_id, row);
+    }
+    // Ordered by the ranking, so slot 1 of the palette is the worst offender
+    // rather than whichever application happens to sort first.
+    const order = new Map(applications_ranked.map((r, i) => [r.application_id, i]));
+    const series = [...byApp.values()]
+      .sort((a, b) => (order.has(a.application_id) ? order.get(a.application_id) : 1e9)
+        - (order.has(b.application_id) ? order.get(b.application_id) : 1e9))
+      .map((row) => ({
+        application_id: row.application_id,
+        application_name: row.application_name,
+        total: [...row.counts.values()].reduce((acc, n) => acc + n, 0),
+        points: period.buckets.map((b) => row.counts.get(b.key) || 0),
+      }));
+
     return res.json({
+      bucket: period.bucket,
+      buckets: period.buckets.map((b) => ({ start: b.start, key: b.key })),
+      series,
       period: period.period,
       at: period.at,
       from: period.from,

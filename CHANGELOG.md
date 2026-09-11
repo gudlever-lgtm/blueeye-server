@@ -1,5 +1,75 @@
 # Changelog
 
+## 0.124.7 — recording: the translation to the existing DSL
+
+The first half of V2 §1. A captured browser session becomes a definition —
+`{ version, name, steps }`, the same object the designer edits, the validator
+checks and the runner executes. That is the guardrail the spec states outright:
+recording must not introduce a second test model, and a spec pins it by running
+the output through `validateDefinition()` and asserting every emitted step type
+is one the DSL already knows.
+
+Every decision about what an observation MEANS lives here, pure and testable, so
+the browser-side recorder can stay dumb and only observe:
+
+- **A recorded password is never a literal.** It becomes
+  `{{credential.password}}`, and a username field becomes
+  `{{credential.username}}`. A real password in a definition would reach the
+  database, the version history, the audit log and the designer's screen — and
+  pin the test to one person's account. The field is recognised by input type OR
+  by name/autocomplete, because a login form that uses `type="text"` is common
+  and would otherwise leak.
+- **Typing collapses** to one `fill` with the final value. Nobody wants a test
+  that types a, ad, adm, admi, admin.
+- **The focusing click is dropped** — clicking into a box and typing produces a
+  click and an input on the same element, and the fill already implies reaching
+  it. A click on a real control is never dropped.
+- **Addresses become paths**, so a recorded test runs against whichever
+  environment it is pointed at. Another host is kept whole rather than silently
+  rewritten to point at the wrong site.
+- **It never throws.** A recording arrives from a browser — truncated, out of
+  order, carrying events from a version that did not exist when it started. Four
+  good steps beat an error.
+
+Not yet built: how the browser captures. The recorder has to run on the target
+site, and the three ways of doing that (bookmarklet, extension, headful remote
+browser) differ enough in infrastructure and attack surface to be a decision
+rather than a detail — see docs/service-assurance-v2.md §1, which sets out the
+trade-offs. The translation layer is identical under all three, which is why it
+is built first and separately.
+
+## 0.124.6 — the Health chart is a trend, one line per application
+
+The ranking shipped in 0.124.5 answered "who was worst this month" but not "when
+did it happen" — and when did it happen is the question a chart is for. It is a
+time chart now: one line per application over the period's buckets, which is the
+shape the request actually asked for.
+
+**Which applications get a line:** the ones you select, or — when you have
+selected none — the top few by incident count, so the chart opens on the services
+that had the worst period. The searchable multi-select is how you ask about a
+specific one.
+
+**Three chart types**, chosen from the toolbar: line for a trend, grouped bars to
+compare buckets side by side, stacked bars to read a total with its composition.
+The data is identical in all three, so switching redraws from what is already in
+hand and never re-fetches.
+
+Empty buckets are in the answer as zeroes. A line that skips them lies about when
+the trouble was: "it was quiet all week and then Thursday happened" only exists if
+Monday to Wednesday are drawn.
+
+**The palette is the design system's eight categorical slots, in their fixed
+order** — that order is the colourblind-safety mechanism, not decoration. It was
+run through the palette validator in both light and dark rather than eyeballed:
+all eight clear the lightness band, chroma floor, adjacent CVD separation (worst
+ΔE 9.1 light / 8.4 dark against a ≥8 target) and the normal-vision floor. Light
+mode warns that three slots sit below 3:1 on the surface; the legend names every
+series with its total, which satisfies the relief rule and doubles as the table
+view. A ninth application folds into a neutral "Other" rather than getting a
+generated hue nobody could tell from slot 3, and colour follows the application
+rather than its rank, so narrowing the filter never repaints the survivors.
+
 ## 0.124.5 — which applications gave us the most trouble
 
 The Health page counted open incidents and listed them. It could not answer the

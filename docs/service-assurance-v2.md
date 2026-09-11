@@ -104,6 +104,47 @@ the hop sequence to a target legitimately differs run to run, so a hop-diff alar
 would fire constantly and be switched off within a week. The AS-path is the level
 at which a change means something happened.
 
+### §1 Recording — the translation layer (built); the capture transport (open)
+
+`recording/translate.js` turns a captured session into the **existing** DSL:
+`{ version, name, steps }`, the same object the designer edits, the validator
+checks and the runner executes. That is the guardrail the spec asks for in as
+many words — recording must not introduce a second test model — and it is pinned
+by a spec that runs the output through `validateDefinition()` and asserts every
+emitted step type is one the DSL already knows.
+
+What it decides, so the browser-side recorder can stay dumb and only observe:
+
+- **A password is never a literal.** It becomes `{{credential.password}}`, and a
+  username field becomes `{{credential.username}}`. Recording a real password
+  into a definition would put it in the database, the version history, the audit
+  log and the designer's screen — and pin the test to one person's account. The
+  field is recognised by input type OR by name/autocomplete, because a login form
+  that uses `type="text"` is common and would otherwise leak.
+- **Typing collapses.** Consecutive input on one element becomes a single `fill`
+  with the final value; nobody wants a test that types a, ad, adm, admi, admin.
+- **The focusing click is dropped.** Clicking into a box and typing produces a
+  click AND an input on the same element; the fill already implies reaching it.
+  A click on a real control is never dropped.
+- **Addresses become paths**, so the test runs against whichever environment it
+  is pointed at — except on another host, which is kept whole rather than
+  silently rewritten to point at the wrong site.
+- **It never throws.** A recording arrives from a browser: truncated, out of
+  order, carrying events from a version that did not exist when it started. Four
+  good steps beat an error.
+
+**Still to decide: how the browser captures.** The recorder has to run in a
+browser ON the target site, and there are only three ways, with real trade-offs:
+
+| | How | Cost |
+| --- | --- | --- |
+| **Bookmarklet** | a script this server serves, injected by the operator into their own browser on their own site | no new infrastructure; the operator must paste/click a bookmarklet, and the page's CSP can refuse it |
+| **Browser extension** | a signed extension per browser | best capture fidelity; a new artifact to build, sign and distribute per browser |
+| **Headful remote browser** | a non-headless Playwright on the worker, streamed to the dashboard | nothing to install for the operator; needs a remote display service (VNC/noVNC), new dependencies and a new attack surface — against "no new frameworks without a concrete technical need" |
+
+The translation layer above is the same under all three, which is why it is built
+first and separately: whichever transport is chosen, it feeds this.
+
 ## 3. Build order
 
 Exactly this order, because each step is what makes the next one worth having:

@@ -1,5 +1,81 @@
 # Changelog
 
+## 0.125.1 — recording: the bookmarklet, the capture path, and the review screen
+
+The other half of V2 §1. The operator drags a bookmark to their bookmarks bar,
+opens the real application, signs in as themselves and performs the journey.
+BlueEye watches and writes the test.
+
+**Why a bookmarklet.** The alternatives were a signed browser extension (better
+capture, a new artifact to build and sign per browser, forever) and a headful
+remote browser streamed to the dashboard (nothing to install, but BlueEye would
+hold a live session with the customer's real traffic passing through it — the
+opposite of the privacy rule, plus VNC as a new attack surface). The bookmarklet
+needs no new infrastructure and records where it matters: the real application,
+the real login, the operator's own machine.
+
+The limit is stated rather than discovered: a site with a strict `script-src`
+CSP refuses to load the recorder and the bookmark does nothing there. That is the
+site's policy working correctly. The bookmarklet says so in an `onerror` alert,
+the UI says so before the operator tries, and the fallback is the designer.
+
+**The capture path is the one Service Assurance route with no session**, because
+its caller is a script on the customer's own site which has no BlueEye session
+and cannot get one. So the surface is split — `/api/service-tests/recordings`
+keeps the licence gate, `requireAuth` and RBAC; `/api/service-capture` has the
+capture token and nothing else. What keeps that from being a hole:
+
+- a token exists only because an authorised operator on a licensed install
+  started a recording;
+- it is stored as SHA-256, never as itself, and shown exactly once;
+- it resolves only while the recording is live and unexpired (30 minutes by
+  default, capped at 240) — an abandoned session is not a capture endpoint left
+  open on the internet, and a background job deletes it;
+- it reaches exactly one row, append-only: no read, no list, no way to name
+  another recording;
+- missing, unknown, expired and stopped all answer the same `401 Unauthorized`,
+  so the endpoint never tells a caller holding a guess which part was right;
+- CORS allows the origin and never credentials, so a browser attaches no cookie;
+- the ingest is bounded at every level — 200 events per batch, 2000 per
+  recording, 512 bytes per field — and an unrecognised key is dropped rather
+  than stored.
+
+**The password rule is now enforced twice, from one definition.** The recorder
+sends `value: null` for a password field, but it runs on a page the customer
+controls, so trusting it would be trusting the wrong side of the boundary; the
+server scrubs again on arrival. Writing the second check turned up a real gap in
+the first: the two copies of "what is a password field" had drifted, and only one
+of them looked at the element's visible LABEL — so a field labelled
+"Adgangskode" with an innocuous `id` kept its value. Both sides now read
+`recording/secrets.js`. The match is deliberately generous: a false positive
+costs one step the operator corrects in the designer; a false negative puts a
+real password in the database, the version history and the audit log.
+
+Accepting a recording clears its raw events. The test is the artefact now, and
+keeping the capture would keep a copy of everything the operator typed long after
+it stopped being useful.
+
+The translation learned one more thing while this was being tested end to end:
+a navigation that FOLLOWED a click is a consequence, not an instruction. It now
+becomes `assert_url_contains`. Replaying it as `open` was actively harmful — the
+test would navigate straight to `/dashboard` and pass whether or not the login
+that was supposed to take it there worked.
+
+The ingest carries a rate limiter of its own (120 requests a minute), like the
+other session-less endpoints. Generous on purpose: a real recording flushes
+every two seconds for hours, and cutting an operator off mid-journey would be a
+worse failure than the volume it guards against — which is also why a 429 backs
+the recorder off (doubling its interval, up to 30 s) and re-queues the batch
+rather than ending the recording. Only a 401 is terminal.
+
+Two bookmarklet limits are documented rather than discovered: a strict
+`script-src` CSP refuses to load the recorder at all, and a full page load
+removes it — clicking the bookmark again resumes the *same* recording, and the
+re-injection records the new page as the next step. Single-page applications
+need one click for the whole journey.
+
+Migration 082 adds `service_test_recordings`.
+
 ## 0.124.7 — recording: the translation to the existing DSL
 
 The first half of V2 §1. A captured browser session becomes a definition —

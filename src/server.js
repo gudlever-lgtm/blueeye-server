@@ -382,6 +382,12 @@ function start() {
     // Where failure screenshots are written. Unset = failures are recorded
     // without images rather than every run failing on a missing directory.
     artifactRoot: process.env.SERVICE_TEST_ARTIFACT_ROOT || null,
+    // The recording ingest is the one Service Assurance path without a session,
+    // so it gets a limiter like the other session-less endpoints (enrollment,
+    // login). Generous on purpose: a real recording flushes every two seconds
+    // for up to four hours, and cutting off an operator mid-journey would be a
+    // worse failure than the volume this is guarding against.
+    captureRateLimit: createRateLimiter({ windowMs: 60 * 1000, max: 120 }),
   });
 
   // Agent-release signing key — generated + managed from Settings (write-once; the

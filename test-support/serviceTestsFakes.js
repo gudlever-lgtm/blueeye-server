@@ -9,7 +9,9 @@
 //
 //   const app = makeApp({ serviceTests: makeServiceTests() });
 
+const crypto = require('crypto');
 const { createServiceTestsApiRouter } = require('../src/serviceTests/api');
+const { createRecordingsCaptureRouter } = require('../src/serviceTests/api/recordings');
 const { createServiceTestSettings } = require('../src/serviceTests/settings');
 const { createQueue } = require('../src/serviceTests/scheduler/queue');
 const { bucketKey, sqlFormat } = require('../src/serviceTests/stats/period');
@@ -113,6 +115,7 @@ function makeServiceTests(overrides = {}) {
     workers: makeTable(overrides.workers || []),
     certificates: makeTable(overrides.certificates || []),
     incidents: makeTable(overrides.incidents || []),
+    recordings: makeTable(overrides.recordings || []),
   };
 
   // The format string the API passes back to the bucket shape it stands for —
@@ -412,6 +415,57 @@ const bool = (v) => !!v;
       },
     },
     // Incidents: one open row per subject_key, exactly as the reactor assumes.
+    // Recording sessions. `start` mints a token and stores only its SHA-256,
+    // exactly as the SQL repository does — so a spec that tries to read the
+    // token back out of the table fails here for the same reason it fails in
+    // production.
+    recordings: {
+      async findById(id) { return t.recordings.find(id); },
+      async start({ applicationId, name, baseUrl = null, createdBy = null, ttlMs = 3600000 }) {
+        const token = crypto.randomBytes(24).toString('base64url');
+        const row = t.recordings.insert({
+          application_id: applicationId, name: String(name || 'Recorded test').slice(0, 255),
+          status: 'recording', token_hash: crypto.createHash('sha256').update(token).digest('hex'),
+          events: [], event_count: 0, base_url: baseUrl, created_test_id: null, created_by: createdBy,
+          expires_at: new Date(Date.now() + ttlMs), last_event_at: null,
+        });
+        return { recording: row, token };
+      },
+      async findByToken(token) {
+        if (!token) return null;
+        const hash = crypto.createHash('sha256').update(String(token)).digest('hex');
+        const row = t.recordings.rows.find((r) => r.token_hash === hash
+          && r.status === 'recording' && new Date(r.expires_at).getTime() > Date.now());
+        return row ? clone(row) : null;
+      },
+      async appendEvents(id, events, { maxEvents = 2000 } = {}) {
+        const row = t.recordings.rows.find((r) => r.id === Number(id));
+        if (!row || row.status !== 'recording') return row ? clone(row) : null;
+        const merged = [...(row.events || []), ...(Array.isArray(events) ? events : [])].slice(-maxEvents);
+        return t.recordings.update(id, { events: merged, event_count: merged.length, last_event_at: new Date() });
+      },
+      async stop(id) {
+        const row = t.recordings.rows.find((r) => r.id === Number(id));
+        if (!row) return null;
+        if (row.status !== 'recording') return clone(row);
+        return t.recordings.update(id, { status: 'stopped' });
+      },
+      async accept(id, testId) {
+        const row = t.recordings.rows.find((r) => r.id === Number(id));
+        if (!row) return null;
+        return t.recordings.update(id, { status: 'accepted', created_test_id: testId, events: [] });
+      },
+      async list({ applicationId = null, status = null } = {}) {
+        return t.recordings.where((r) => (!applicationId || r.application_id === applicationId)
+          && (!status || r.status === status));
+      },
+      async remove(id) { return t.recordings.remove(id); },
+      async purgeExpired() {
+        const gone = t.recordings.rows.filter((r) => r.status === 'recording' && new Date(r.expires_at).getTime() < Date.now());
+        for (const r of gone) t.recordings.remove(r.id);
+        return gone.length;
+      },
+    },
     incidents: {
       async findById(id) { return t.incidents.find(id); },
       async findOpen(subjectKey) {
@@ -601,7 +655,14 @@ const bool = (v) => !!v;
     roles: ROLES,
   });
 
-  return { repositories, settings, queue, reactor, notifications, audit, auditEntries, router, jobs: [], tables: t, secretBox };
+  // The ingest half, wired the same way the real module wires it: no session
+  // middleware, the capture token as the only authority.
+  const captureRouter = createRecordingsCaptureRouter({ repositories, logger: null });
+
+  return {
+    repositories, settings, queue, reactor, notifications, audit, auditEntries,
+    router, captureRouter, jobs: [], tables: t, secretBox,
+  };
 }
 
 module.exports = { makeServiceTests, makeTable, makeCertificateChecker };

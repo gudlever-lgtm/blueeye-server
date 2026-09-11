@@ -104,7 +104,7 @@ the hop sequence to a target legitimately differs run to run, so a hop-diff alar
 would fire constantly and be switched off within a week. The AS-path is the level
 at which a change means something happened.
 
-### §1 Recording — the translation layer (built); the capture transport (open)
+### §1 Recording — shipped
 
 `recording/translate.js` turns a captured session into the **existing** DSL:
 `{ version, name, steps }`, the same object the designer edits, the validator
@@ -129,21 +129,92 @@ What it decides, so the browser-side recorder can stay dumb and only observe:
 - **Addresses become paths**, so the test runs against whichever environment it
   is pointed at — except on another host, which is kept whole rather than
   silently rewritten to point at the wrong site.
+- **A navigation that followed a click is a consequence, not an instruction.**
+  It becomes `assert_url_contains`, because replaying it as `open` would be
+  actively harmful: the test would navigate straight to `/dashboard` and pass
+  whether or not the login that was supposed to take it there worked.
 - **It never throws.** A recording arrives from a browser: truncated, out of
   order, carrying events from a version that did not exist when it started. Four
   good steps beat an error.
 
-**Still to decide: how the browser captures.** The recorder has to run in a
-browser ON the target site, and there are only three ways, with real trade-offs:
+**The transport: a bookmarklet.** Chosen over the two alternatives, and the
+reasoning is worth keeping because it will be asked again:
 
 | | How | Cost |
 | --- | --- | --- |
-| **Bookmarklet** | a script this server serves, injected by the operator into their own browser on their own site | no new infrastructure; the operator must paste/click a bookmarklet, and the page's CSP can refuse it |
-| **Browser extension** | a signed extension per browser | best capture fidelity; a new artifact to build, sign and distribute per browser |
+| **Bookmarklet** ✅ | a script this server serves, injected by the operator into their own browser on their own site | no new infrastructure; the operator must drag a bookmark once, and the page's CSP can refuse it |
+| **Browser extension** | a signed extension per browser | best capture fidelity; a new artifact to build, sign and distribute per browser, per release |
 | **Headful remote browser** | a non-headless Playwright on the worker, streamed to the dashboard | nothing to install for the operator; needs a remote display service (VNC/noVNC), new dependencies and a new attack surface — against "no new frameworks without a concrete technical need" |
 
-The translation layer above is the same under all three, which is why it is built
-first and separately: whichever transport is chosen, it feeds this.
+The bookmarklet wins on the thing that matters most here: the operator records on
+the **real** application, signed in as themselves, from their own machine. The
+extension would capture marginally better and cost a signed release per browser
+forever. The remote browser would mean BlueEye holding a live session with the
+customer's real traffic passing through it — the opposite of the privacy rule.
+
+**The other limit:** a bookmarklet lives in the page it was injected into, so a
+full page load removes it. Clicking the bookmark again resumes the same
+recording — the token is still valid and the events keep accumulating — and the
+re-injection records the new page as the next step, which is what you want
+anyway. Single-page applications need one click for the whole journey.
+
+**The limit, stated up front:** a site with a strict `script-src` CSP will refuse
+to load the recorder, and the bookmarklet will do nothing there. That is the
+site's policy working correctly. The bookmarklet says so in an `onerror` alert
+and the UI says so before the operator tries; the fallback is the designer.
+
+### The capture path, and why it is not a hole
+
+Recording is the ONE Service Assurance path that carries no session. It has to
+be: the caller is a script on the customer's own site, in the operator's browser,
+which has no BlueEye session and cannot get one. So the surface is split:
+
+| Mount | Guards | Who calls it |
+| --- | --- | --- |
+| `/api/service-tests/recordings` | licence + `requireAuth` + RBAC (operator writes, viewer reads) | the dashboard |
+| `/api/service-capture/{events,stop}` | the capture token, and nothing else | the recorder on the customer's site |
+
+What keeps the second row honest:
+
+- A capture token exists **only** because an authorised operator on a licensed
+  install started a recording. An unlicensed or unauthenticated install has no
+  valid token anywhere, so every request there is 401.
+- The token is stored as **SHA-256**, never as itself (`token_hash CHAR(64)`).
+  It is shown once, in the bookmarklet. If the table leaks, what leaks is a hash
+  of a credential that already expired.
+- It resolves only while the recording is `status='recording'` **and** not past
+  `expires_at` (default 30 minutes, capped at 240). An abandoned session is not a
+  capture endpoint left open on the internet; a background job deletes it.
+- It reaches exactly **one row**, append-only. There is no read, no list, and no
+  way to name another recording.
+- Missing, unknown, expired and stopped all answer the same `401 Unauthorized`,
+  so the endpoint does not tell a caller holding a guess which part was right.
+- CORS allows the origin (`*`) and **never** credentials, so a browser attaches
+  no cookie and the token stays the only authority on the request.
+- The ingest is bounded at every level: 200 events per batch, 2000 per recording,
+  512 bytes per field, and only recognised keys survive — an unknown key is
+  dropped rather than stored.
+
+### The password rule, enforced twice
+
+The recorder is written to send `value: null` for a password field. That is not
+what makes it safe: the recorder runs on a page the customer controls, so
+trusting it would be trusting the wrong side of the boundary. The rule is
+enforced **again on the server**, in `recording/validate.js`, where it holds even
+if the browser-side script is replaced entirely.
+
+`recording/secrets.js` is the single definition both sides read. It used to be a
+copy each, and the copies drifted — one looked at the element's visible LABEL and
+the other did not, so a field labelled "Adgangskode" with an innocuous `id` had
+its value stored. The visible label is usually the strongest signal a human has
+that a field is a password, so it is the one a scrubber can least afford to skip.
+The match is deliberately generous: a false positive costs one step the operator
+corrects in the designer; a false negative puts a real password in the database,
+the version history and the audit log.
+
+Accepting a recording **clears its raw events**: the test is the artefact now,
+and keeping the capture would keep a copy of everything the operator typed long
+after it stopped being useful.
 
 ## 3. Build order
 

@@ -2,6 +2,7 @@
 
 const { normalizeTarget } = require('../engine/targeting');
 const { STEP_TYPES } = require('../engine/dsl');
+const { isSecretField, isUsernameField } = require('./secrets');
 
 // Recording → the EXISTING DSL (docs/service-assurance-v2.md §1).
 //
@@ -35,28 +36,10 @@ function sameTarget(a, b) {
   return JSON.stringify(normalizeTarget(a) || {}) === JSON.stringify(normalizeTarget(b) || {});
 }
 
-// A password field's value is a CREDENTIAL, never a recorded literal. It becomes
-// the reference the DSL already has, so the saved test carries no secret at all
-// and the runner resolves it from the application's stored credential. Recording
-// a real password into a definition would put it in the database, the version
-// history, the audit log and the designer's screen.
-function isSecretField(event) {
-  if (!event) return false;
-  if (String(event.inputType || '').toLowerCase() === 'password') return true;
-  const hints = `${event.autocomplete || ''} ${(event.target && event.target.name) || ''} ${(event.target && event.target.id) || ''}`.toLowerCase();
-  return /(^|[^a-z])(password|passwd|pwd|kodeord|adgangskode)([^a-z]|$)/.test(hints);
-}
-
-// Does this look like the username beside a password? Recording it as a literal
-// would pin the test to one person's account; the credential reference lets the
-// application's stored login drive it.
-function isUsernameField(event) {
-  if (!event) return false;
-  const type = String(event.inputType || '').toLowerCase();
-  if (type === 'email') return true;
-  const hints = `${event.autocomplete || ''} ${(event.target && event.target.name) || ''} ${(event.target && event.target.id) || ''} ${(event.target && event.target.label) || ''}`.toLowerCase();
-  return /(^|[^a-z])(user|username|login|email|e-mail|brugernavn|bruger)([^a-z]|$)/.test(hints);
-}
+// What counts as a password field, and what counts as the username beside it,
+// live in ./secrets.js — shared with the server-side scrubber so the two cannot
+// disagree about which fields are secret. They did once, and a field labelled
+// "Adgangskode" got its value stored because of it.
 
 // A path, not an absolute URL: the test must run against whichever environment
 // it is pointed at, and a recorded absolute URL would pin it to the one the
@@ -143,6 +126,18 @@ function translateRecording(events, { name = 'Recorded test', baseUrl = null } =
     if (step.type === 'open' && steps.length && steps[steps.length - 1].type === 'open'
       && steps[steps.length - 1].url === step.url) continue;
 
+    // A navigation that FOLLOWED a click is a consequence, not an instruction.
+    // Replaying it as `open` would be actively harmful: the test would navigate
+    // straight to /dashboard and pass whether or not the login that was supposed
+    // to take it there worked. So it becomes the assertion it actually is —
+    // "after clicking Log ind we should end up on /dashboard" — which is the
+    // step the operator would have written by hand.
+    if (step.type === 'open' && steps.length && steps[steps.length - 1].type === 'click') {
+      steps.push({ type: 'assert_url_contains', value: step.url });
+      lastInput = null;
+      continue;
+    }
+
     steps.push(step);
     lastInput = step.type === 'fill' ? steps.length - 1 : null;
   }
@@ -157,7 +152,7 @@ function translateRecording(events, { name = 'Recorded test', baseUrl = null } =
 // Every step type a recording can produce. Used by the spec to prove the output
 // stays inside the DSL the designer and runner already know — a recorder that
 // invented a step type would be the second test model this is written to avoid.
-const RECORDED_STEP_TYPES = ['open', 'click', 'fill', 'select', 'checkbox'];
+const RECORDED_STEP_TYPES = ['open', 'click', 'fill', 'select', 'checkbox', 'assert_url_contains'];
 
 module.exports = {
   translateRecording, stepFor, pathOf, isSecretField, isUsernameField, sameTarget,

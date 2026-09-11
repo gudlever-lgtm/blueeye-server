@@ -500,6 +500,19 @@ function createApiRouter({
       serviceTests.router
     );
   }
+  // Recording ingest — the ONE Service Assurance path that carries no session.
+  // Its caller is the recorder script running on the CUSTOMER'S site, in the
+  // operator's own browser, which has no BlueEye session and cannot get one; the
+  // capture token is its whole authority. Mounted outside `requireAuth` for that
+  // reason, and outside the licence gate because that gate reads `req.user`.
+  //
+  // Not a hole: a capture token exists only because an authorised operator on a
+  // licensed install started a recording, it is stored as a hash, it matches for
+  // minutes, and it reaches exactly one row — append-only. Every other token
+  // answers 401. See src/serviceTests/api/recordings.js.
+  if (serviceTests && serviceTests.captureRouter) {
+    router.use('/api/service-capture', serviceTests.captureRouter);
+  }
 
   // NIS2 Reporting Center — risk register, control evidence, security events,
   // management reports, evidence references + audit trail. Self-contained module.

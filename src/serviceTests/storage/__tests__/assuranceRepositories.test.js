@@ -125,6 +125,31 @@ test('resolving is a no-op on an already-resolved incident', async () => {
   assert.equal(row.status, 'resolved');
 });
 
+test('the window query asks what HAPPENED, not what is wrong now', async () => {
+  // The Changes feed's question. An incident opened before the window and still
+  // open is deliberately absent: it did not happen during the shift being
+  // reviewed, and the Health tab is where standing problems live.
+  const pool = makeFakePool([[/^SELECT .* FROM service_test_incidents\s+WHERE \(opened_at BETWEEN/i, () => rows([INCIDENT_ROW])]]);
+  const repo = createIncidentsRepository({ db: { pool }, now });
+  const from = new Date('2026-09-11T00:00:00.000Z');
+  const to = new Date('2026-09-11T12:00:00.000Z');
+  const out = await repo.listBetween({ from, to });
+
+  const [call] = pool.matching(/^SELECT .* FROM service_test_incidents WHERE \(opened_at/i);
+  assert.match(call.sql, /opened_at BETWEEN \? AND \?/);
+  assert.match(call.sql, /resolved_at IS NOT NULL AND resolved_at BETWEEN \? AND \?/,
+    'an incident that ENDED in the window is news too');
+  assert.deepEqual(call.params, [from, to, from, to]);
+  assert.equal(out[0].id, INCIDENT_ROW.id);
+});
+
+test('the window query is capped however large a limit it is handed', async () => {
+  const pool = makeFakePool([[/^SELECT .* FROM service_test_incidents WHERE \(opened_at/i, () => rows([])]]);
+  const repo = createIncidentsRepository({ db: { pool }, now });
+  await repo.listBetween({ from: new Date(0), limit: 99999 });
+  assert.match(pool.matching(/^SELECT/i)[0].sql, /LIMIT 1000/);
+});
+
 test('the open counts answer the nav badge in one query', async () => {
   const pool = makeFakePool([[/^SELECT severity, COUNT\(\*\)/i, () => rows([{ severity: 'CRIT', n: 2 }, { severity: 'WARN', n: 5 }])]]);
   const repo = createIncidentsRepository({ db: { pool }, now });

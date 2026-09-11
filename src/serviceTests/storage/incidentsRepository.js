@@ -149,6 +149,24 @@ function createIncidentsRepository({ db, now = () => new Date() }) {
     return rows.map(shape);
   }
 
+  // Incidents that OPENED or RESOLVED inside a window — the Changes feed's
+  // question ("what happened while I was away"), which is not the same as the
+  // list's ("what is wrong now"). An incident opened before the window and still
+  // open is deliberately absent: it did not happen during the shift being
+  // reviewed, and the Health tab is where standing problems live.
+  async function listBetween({ from, to = new Date(), limit = 500 } = {}) {
+    const start = from ? new Date(from) : new Date(0);
+    const end = to ? new Date(to) : new Date();
+    const n = Math.min(Math.max(Number(limit) || 500, 1), 1000);
+    const [rows] = await pool.query(
+      `SELECT ${COLS} FROM service_test_incidents
+       WHERE (opened_at BETWEEN ? AND ?) OR (resolved_at IS NOT NULL AND resolved_at BETWEEN ? AND ?)
+       ORDER BY last_seen_at DESC LIMIT ${n}`,
+      [start, end, start, end]
+    );
+    return rows.map(shape);
+  }
+
   // Open incidents by severity — the badge on the nav entry, in one query.
   async function openCounts() {
     const [rows] = await pool.query(
@@ -179,7 +197,7 @@ function createIncidentsRepository({ db, now = () => new Date() }) {
     return res.affectedRows || 0;
   }
 
-  return { findById, findOpen, open, touch, resolve, markNotified, list, openCounts, purgeResolvedOlderThan };
+  return { findById, findOpen, open, touch, resolve, markNotified, list, listBetween, openCounts, purgeResolvedOlderThan };
 }
 
 module.exports = { createIncidentsRepository };

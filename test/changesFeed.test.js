@@ -21,6 +21,7 @@ const {
   collapseRecurring,
   correlateEvents,
   fromTopologyChanges,
+  fromServiceAssuranceIncidents,
   fromPlaybookRuns,
   fromConfigSnapshots,
   agentHealthRows,
@@ -437,4 +438,101 @@ test('correlateEvents rolls up before it collapses', () => {
   assert.equal(rows.length, 1);
   assert.equal(rows[0].count, 2, 'two events for one recurring condition');
   assert.equal(rows[0].findingCount, 2, 'carrying both anomalies');
+});
+
+// ------------------------------------------- Service Assurance incidents
+// The dimension the feed was missing: every other source answers a question
+// about the network or the fleet, and none of them notices that the customer
+// portal has been refusing logins since 02:00.
+
+const WINDOW = { from: '2026-09-11T00:00:00.000Z', to: '2026-09-11T12:00:00.000Z' };
+
+const incident = (over = {}) => ({
+  id: 7,
+  subject_label: 'Customer Portal — portal.kunde.dk',
+  subject_key: 'certificate:1:portal.kunde.dk:443',
+  kind: 'certificate_expiring',
+  severity: 'WARN',
+  summary: 'The certificate for portal.kunde.dk expires in 5 days.',
+  opened_at: '2026-09-11T02:00:00.000Z',
+  resolved_at: null,
+  ...over,
+});
+
+test('fromServiceAssuranceIncidents carries the incident\'s own sentence, not a generic label', () => {
+  const [e] = fromServiceAssuranceIncidents([incident()], WINDOW);
+  assert.equal(e.severity, 'WARN');
+  assert.equal(e.summary, 'The certificate for portal.kunde.dk expires in 5 days.');
+  assert.equal(e.kind, 'service_assurance');
+  assert.equal(e.source, 'service_assurance');
+  assert.equal(e.type, 'service_assurance.certificate_expiring');
+  assert.equal(e.ref_id, 7);
+});
+
+test('an incident emits BOTH the open and the resolve when each falls in the window', () => {
+  const events = fromServiceAssuranceIncidents(
+    [incident({ severity: 'CRIT', resolved_at: '2026-09-11T06:00:00.000Z' })],
+    WINDOW,
+  );
+  assert.equal(events.length, 2);
+  assert.equal(events[0].severity, 'CRIT');
+  assert.equal(events[1].type, 'service_assurance.recovered');
+  assert.match(events[1].summary, /recovered/);
+  assert.equal(events[1].severity, 'INFO',
+    'a recovery at CRIT would turn the page red for something that is now fine');
+});
+
+test('only the half that falls inside the window is emitted', () => {
+  // Opened before the shift, resolved during it: the handover cares that it
+  // ended, and reporting the open again would date it wrongly.
+  const resolvedOnly = fromServiceAssuranceIncidents(
+    [incident({ opened_at: '2026-09-10T20:00:00.000Z', resolved_at: '2026-09-11T03:00:00.000Z' })],
+    WINDOW,
+  );
+  assert.equal(resolvedOnly.length, 1);
+  assert.equal(resolvedOnly[0].type, 'service_assurance.recovered');
+
+  // Opened during it and still open: one event, no invented resolution.
+  const openOnly = fromServiceAssuranceIncidents([incident()], WINDOW);
+  assert.equal(openOnly.length, 1);
+  assert.equal(openOnly[0].type, 'service_assurance.certificate_expiring');
+
+  // Entirely outside.
+  assert.deepEqual(
+    fromServiceAssuranceIncidents([incident({ opened_at: '2026-09-01T00:00:00.000Z' })], WINDOW),
+    [],
+  );
+});
+
+test('a row with no label still says something an operator can read', () => {
+  const [e] = fromServiceAssuranceIncidents([incident({ subject_label: null, summary: null })], WINDOW);
+  assert.match(e.summary, /certificate:1:portal\.kunde\.dk:443/);
+  assert.ok(e.summary.length > 0);
+});
+
+test('garbage rows never break the feed', () => {
+  for (const rows of [undefined, null, [], [null], [{}], [42]]) {
+    assert.doesNotThrow(() => fromServiceAssuranceIncidents(rows, WINDOW));
+  }
+  assert.deepEqual(fromServiceAssuranceIncidents([{}], WINDOW), [], 'a row with no timestamps contributes nothing');
+});
+
+test('a service that flaps collapses instead of burying every other source', () => {
+  // The reason this maps incidents rather than failing runs — and the reason
+  // the kind is collapsible: a page full of one service is a page that answers
+  // no other question.
+  const rows = [];
+  for (let i = 0; i < 12; i += 1) {
+    rows.push(incident({
+      id: 100 + i,
+      kind: 'http_503',
+      severity: 'CRIT',
+      summary: '"Customer Login" has failed 2 runs in a row: The service was unavailable.',
+      opened_at: new Date(Date.parse(WINDOW.from) + i * 600000).toISOString(),
+      resolved_at: null,
+    }));
+  }
+  const feed = buildChangeFeed(fromServiceAssuranceIncidents(rows, WINDOW), WINDOW);
+  assert.ok(feed.events.length < rows.length, `${rows.length} incidents collapsed to ${feed.events.length}`);
+  assert.ok(feed.correlated > 0);
 });

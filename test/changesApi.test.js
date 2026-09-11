@@ -428,3 +428,70 @@ test('no feed row ever renders a raw table name as its source', async () => {
   assert.ok(res.body.events.some((e) => e.kind === 'event'));
   assert.ok(res.body.events.some((e) => e.kind === 'probe'));
 });
+
+// ------------------------------------------- Service Assurance incidents
+// The feed answers "what happened while I was away". A customer-facing service
+// that stopped working is exactly that, and it used to be the one dimension
+// missing — visible only in a module nobody opens at the start of a shift.
+
+const { makeServiceTests } = require('../test-support/serviceTestsFakes');
+const { makeFeatureGate } = require('../test-support/fakes');
+
+async function withIncident(over = {}) {
+  const st = makeServiceTests();
+  await st.repositories.incidents.open({
+    application_id: 1,
+    subject_type: 'certificate',
+    subject_key: 'certificate:1:portal.kunde.dk:443',
+    subject_label: 'Customer Portal — portal.kunde.dk',
+    kind: 'certificate_expired',
+    severity: 'CRIT',
+    summary: 'The certificate for portal.kunde.dk expired 2 days ago.',
+    at: minutesAgo(30),
+    ...over,
+  });
+  return st;
+}
+
+test('an incident opened in the window reaches the changes feed', async () => {
+  const st = await withIncident();
+  const res = await get(appWith({ serviceTests: st }), '?window=24h');
+  assert.equal(res.status, 200);
+
+  const row = res.body.events.find((e) => e.kind === 'service_assurance');
+  assert.ok(row, `no service_assurance row in ${res.body.events.map((e) => e.kind).join(', ')}`);
+  assert.equal(row.severity, 'CRIT');
+  assert.match(row.summary, /expired 2 days ago/);
+  assert.ok(!res.body.failedSources.includes('service_assurance'));
+});
+
+test('an unlicensed install never sees the module in its feed', async () => {
+  // The sweep runs regardless of plan, so incidents exist either way — the feed
+  // must not surface a feature the customer has not bought. Gated at call time,
+  // so a licence that changes takes effect without a restart.
+  const st = await withIncident();
+  const res = await get(appWith({
+    serviceTests: st,
+    featureGate: makeFeatureGate({ isFeatureEnabled: (f) => f !== 'service_tests' }),
+  }), '?window=24h');
+
+  assert.equal(res.status, 200);
+  assert.equal(res.body.events.filter((e) => e.kind === 'service_assurance').length, 0);
+  assert.ok(!res.body.partial, 'a gated source is empty, not failed');
+});
+
+test('a deployment without the module still serves the feed', async () => {
+  const res = await get(appWith({ serviceTests: null }), '?window=24h');
+  assert.equal(res.status, 200);
+  assert.ok(!res.body.failedSources.includes('service_assurance'));
+});
+
+test('an incident source that throws degrades to partial rather than blanking the page', async () => {
+  const st = await withIncident();
+  st.repositories.incidents.listBetween = throwingAsync('the database went away');
+  const res = await get(appWith({ serviceTests: st }), '?window=24h');
+
+  assert.equal(res.status, 200, 'one dead source must not cost the whole shift handover');
+  assert.equal(res.body.partial, true);
+  assert.deepEqual(res.body.failedSources, ['service_assurance']);
+});

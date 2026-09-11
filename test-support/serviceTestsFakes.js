@@ -457,6 +457,19 @@ const bool = (v) => !!v;
             || (RANKS[a.severity] - RANKS[b.severity]))
           .slice(0, limit);
       },
+      // Mirrors the real window query: what OPENED or RESOLVED inside the
+      // window, which is the Changes feed's question — not "what is wrong now".
+      async listBetween({ from, to = new Date(), limit = 500 } = {}) {
+        const start = from ? new Date(from).getTime() : 0;
+        const end = to ? new Date(to).getTime() : Date.now();
+        const inWindow = (v) => {
+          const t = v ? new Date(v).getTime() : NaN;
+          return Number.isFinite(t) && t >= start && t <= end;
+        };
+        return t.incidents
+          .where((r) => inWindow(r.opened_at) || (r.resolved_at && inWindow(r.resolved_at)))
+          .slice(0, limit);
+      },
       async openCounts() {
         const out = { CRIT: 0, WARN: 0, INFO: 0, total: 0 };
         for (const r of t.incidents.rows) {

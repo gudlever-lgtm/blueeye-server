@@ -260,6 +260,67 @@ function fromInterfaceTransitions(rows, { nameFor = (id) => `agent ${id}` } = {}
   });
 }
 
+// Service Assurance incidents (migration 080) — a registered web service that
+// stopped working, or a TLS certificate running out.
+//
+// This is the dimension the feed was missing entirely: every other source
+// answers a question about the network or the fleet, and none of them notices
+// that the customer portal has been refusing logins since 02:00. A shift that
+// starts here should not have to open a separate module to find that out.
+//
+// Like a probe outage, one incident can contribute TWO events — it opened, and
+// (if it resolved inside the window) it closed. Incidents rather than failing
+// runs on purpose: a test failing every five minutes all weekend is ONE thing
+// that happened, and the raw runs would bury every other source on the page.
+function fromServiceAssuranceIncidents(rows, { from, to } = {}) {
+  const out = [];
+  const fromMs = from ? new Date(from).getTime() : -Infinity;
+  const toMs = to ? new Date(to).getTime() : Infinity;
+  const inWindow = (v) => {
+    const t = v ? new Date(v).getTime() : NaN;
+    return Number.isFinite(t) && t >= fromMs && t <= toMs;
+  };
+
+  for (const i of rows || []) {
+    // One malformed row must not cost the operator every other source on the
+    // page — the same reason the fan-out treats a dead source as partial.
+    if (!i || typeof i !== 'object') continue;
+    const what = i.subject_label || i.subject_key || 'a service';
+    const opened = i.opened_at || i.openedAt;
+    const resolved = i.resolved_at || i.resolvedAt;
+
+    if (inWindow(opened)) {
+      out.push(makeEvent({
+        timestamp: opened,
+        source: 'service_assurance',
+        type: `service_assurance.${i.kind || 'incident'}`,
+        severity: i.severity,
+        // The incident's own sentence, which already says what an operator needs
+        // first ("The certificate for portal.kunde.dk expires in 5 days").
+        summary: i.summary || `${what} needs attention`,
+        refId: i.id,
+        kind: 'service_assurance',
+        metric: i.kind || null,
+      }));
+    }
+    if (inWindow(resolved)) {
+      out.push(makeEvent({
+        timestamp: resolved,
+        source: 'service_assurance',
+        type: 'service_assurance.recovered',
+        // A recovery is good news — never surfaced at the severity of the fault
+        // it ended, exactly as a probe recovery is not.
+        severity: 'INFO',
+        summary: `${what} recovered`,
+        refId: i.id,
+        kind: 'service_assurance',
+        metric: i.kind || null,
+      }));
+    }
+  }
+  return out;
+}
+
 // Remediation playbook runs.
 function fromPlaybookRuns(rows) {
   return (rows || []).map((r) => makeEvent({
@@ -452,7 +513,7 @@ function correlationKey(e) {
 // summary. Everything else (a config capture, a topology change, a playbook run)
 // is a distinct artifact each time it happens and is never folded — you would be
 // hiding three separate pushes behind one row.
-const COLLAPSIBLE_KINDS = new Set(['event', 'finding', 'probe', 'interface_state', 'agent_state']);
+const COLLAPSIBLE_KINDS = new Set(['event', 'finding', 'probe', 'interface_state', 'agent_state', 'service_assurance']);
 
 // Step 2. Folds repeats of one condition into a single newest-first row.
 //
@@ -568,6 +629,7 @@ module.exports = {
   fromEvents,
   fromClusters,
   fromTopologyChanges,
+  fromServiceAssuranceIncidents,
   fromInterfaceTransitions,
   fromPlaybookRuns,
   fromConfigSnapshots,

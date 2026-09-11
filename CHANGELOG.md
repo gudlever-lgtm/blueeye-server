@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.124.3 — a service that stopped working reaches the Changes page
+
+The Changes feed merges ten sources under one premise: *what happened while I was
+away*. Service Assurance was not among them, so the customer portal refusing
+logins since 02:00 was visible only in a module nobody opens at the start of a
+shift — while an LLDP neighbour disappearing was on the landing page.
+
+Incidents are now a source. One incident can contribute two rows — it opened,
+and (if it resolved inside the window) it closed — exactly as a probe outage
+does, and a recovery is reported at INFO rather than at the severity of the fault
+it ended.
+
+**Incidents rather than failing runs**, deliberately: a test failing every five
+minutes all weekend is ONE thing that happened, and the raw runs would bury every
+other source on the page. The kind is collapsible for the same reason, so a
+flapping service folds instead of filling the feed.
+
+The source is **licence-gated at call time**, not at wiring time. The sweep runs
+whatever the plan says, so incidents exist on an unlicensed install too, and the
+feed must not surface a feature the customer has not bought — checked per request
+so a licence that changes needs no restart. A deployment without the module, or
+with an older one that has no window query, contributes nothing rather than
+failing the source and marking the whole page partial.
+
+Also: **[docs/service-assurance-v2.md](docs/service-assurance-v2.md)** — the V2
+scope (recording, journeys, self-healing selectors, API correlation, failure
+intelligence, baselines, service map, visual regression, accessibility) as the
+design of record, with its build order. V1's "what it is not" list said no
+self-healing selectors and no visual regression; V2 reverses both, and §0 records
+that rather than leaving two documents disagreeing with each other.
+
 ## 0.124.2 — concurrency is a real dial, and a failure says what was observed
 
 **`runner.concurrency` did nothing.** It was stored, validated and shown in

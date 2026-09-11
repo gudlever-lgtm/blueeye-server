@@ -2401,3 +2401,32 @@ button.ghost.small:has(> .icon-glyph) {
 .sa-conf-high { border-left: 3px solid #0ca30c; padding-left: 12px; }
 .sa-conf-medium { border-left: 3px solid #fab219; padding-left: 12px; }
 .sa-conf-low { border-left: 3px solid #ec835a; padding-left: 12px; }
+
+/* --- Service Assurance · performance, evidence, service map ------------- */
+.sa-perf { padding: 10px 14px; border-radius: var(--radius-sm, 6px); border-left: 4px solid; margin: 12px 0; }
+.sa-perf-slow { border-left-color: #ec835a; background: rgba(236, 131, 90, .07); }
+.sa-perf-fast { border-left-color: #fab219; background: rgba(250, 178, 25, .07); }
+.sa-perf-normal { border-left-color: #0ca30c; background: rgba(12, 163, 12, .05); }
+
+.sa-evidence-section { margin-bottom: 20px; }
+.sa-evidence-section h4 { margin: 0 0 8px; }
+.sa-evidence-url { word-break: break-all; font-size: 12px; max-width: 420px; }
+.sa-kv { display: grid; gap: 6px; }
+.sa-kv-row { display: flex; gap: 12px; }
+.sa-kv-row > span:first-child { flex: 0 0 130px; }
+.sa-pre { background: var(--surface-2, #f0efec); padding: 10px; border-radius: var(--radius-sm, 6px); overflow-x: auto; font-size: 12px; }
+.sa-row-bad td { color: #d03b3b; }
+
+/* The map is nested lists, not a graph: a force-directed picture of forty
+   endpoints looks impressive and answers nothing. */
+.sa-map { display: grid; gap: 4px; }
+.sa-map-node { padding: 2px 0; }
+.sa-map-children { margin-left: 18px; padding-left: 12px; border-left: 1px solid var(--border, rgba(11, 11, 11, .12)); }
+.sa-map-label { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 3px 0; }
+.sa-map-kind {
+  font-size: 10px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+  color: var(--muted, #898781); flex: 0 0 auto; min-width: 70px;
+}
+.sa-map-endpoint .sa-map-label strong { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.sa-map-failing { color: #d03b3b; font-weight: 600; font-size: 12px; }
+.sa-map-counts { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; font-size: 13px; }

@@ -263,7 +263,13 @@ const bool = (v) => !!v;
       async remove(id) { return t.tests.remove(id); },
     },
     runs: {
-      async findById(id) { const r = t.runs.find(id); return r ? { ...r, steps: [] } : null; },
+      // The real repository returns the run's STEP ROWS. The fake used to hand
+      // back an empty list, which quietly made every reader that depends on
+      // them — evidence, the service map — look correct while testing nothing.
+      async findById(id) {
+        const r = t.runs.find(id);
+        return r ? { ...r, steps: Array.isArray(r.steps) ? r.steps : [] } : null;
+      },
       async list({ testId = null, status = null, applicationId = null, limit = 50 } = {}) {
         // Mirrors the real repository's join: a run carries the names that say
         // what it was a run OF, so the Runs screen can tell two applications
@@ -295,6 +301,19 @@ const bool = (v) => !!v;
       },
       async complete(id, result) { return t.runs.update(id, { ...result, steps: undefined }); },
       async reapStale() { return 0; },
+      // The durations a baseline is built from: this test's own recent PASSING
+      // runs, with the run being judged excluded from the history it is judged
+      // against.
+      async baselineSamples(testId, { limit = 50, excludeRunId = null } = {}) {
+        const rows = t.runs.where((r) => r.test_id === Number(testId) && r.status === 'pass'
+          && (!excludeRunId || r.id !== Number(excludeRunId)))
+          .sort((a, b) => b.id - a.id)
+          .slice(0, limit);
+        return {
+          runs: rows.map((r) => ({ id: r.id, duration_ms: r.duration_ms ?? null })),
+          steps: rows.map((r) => (Array.isArray(r.steps) ? r.steps : [])),
+        };
+      },
       async history(testId, limit = 20) {
         // Newest first, like the real query's `ORDER BY created_at DESC, id DESC`
         // — the reactor reads the head of this list to count a failure streak,

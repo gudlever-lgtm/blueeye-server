@@ -12,6 +12,7 @@ const { createAssuranceRouter } = require('./assurance');
 const { createRecordingsRouter } = require('./recordings');
 const { createJourneysRouter } = require('./journeys');
 const { createHealingRouter } = require('./healing');
+const { createMapRouter } = require('./map');
 
 // The Service Tests HTTP surface, mounted at /api/service-tests.
 //
@@ -70,6 +71,10 @@ function createServiceTestsApiRouter({
   // different act from running a test: it CHANGES a test, and the spec insists
   // that only ever happens with an operator's accept.
   router.use('/healing', createHealingRouter(deps));
+  // The service map: application → journey → page → API → endpoint, computed on
+  // read from what runs observed. Read-only — the moment it can be edited it is
+  // a CMDB, which is exactly what the spec says it must not become.
+  router.use('/map', createMapRouter(deps));
   router.use('/discovery', createDiscoveryRouter(deps));
   // Recording. The INGEST half is not here: it carries no session, so the host
   // mounts it outside this router (src/serviceTests/index.js).

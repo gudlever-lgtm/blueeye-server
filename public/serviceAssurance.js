@@ -318,6 +318,7 @@
         mount(body, head,
           discoveryPanel(app),
           environmentsPanel(app),
+          serviceMapPanel(app),
           credentialsPanel(app),
           allowedHostsPanel(app));
       });
@@ -367,6 +368,72 @@
       }
       render();
       return wrap;
+    }
+
+    // --------------------------------------------------------- service map
+    //
+    //     Application → Journey → Page → API → Endpoint
+    //
+    // Drawn as nested lists rather than a graph, deliberately. A force-directed
+    // picture of forty endpoints looks impressive and answers nothing; a list
+    // answers "which endpoints does this journey depend on, and which of them
+    // have failed", which is the question people actually bring to a map.
+    //
+    // Everything shown was OBSERVED by a run. Nothing is inferred and nothing
+    // can be added by hand — the moment it can, it is a CMDB.
+    function serviceMapPanel(app) {
+      var wrap = el('div', { class: 'sa-panel' });
+      var body = el('div', {}, el('p', { class: 'muted' }, t('sa.map.loading')));
+      mount(wrap, section(t('sa.map.title'), null), el('p', { class: 'sa-help' }, t('sa.map.help')), body);
+
+      api(API + '/map?application_id=' + app.id).then(function (map) {
+        if (!map.nodes.length) {
+          mount(body, el('div', { class: 'sa-empty' }, t('sa.map.empty')));
+          return;
+        }
+        var byId = {};
+        map.nodes.forEach(function (n) { byId[n.id] = n; });
+        var out = function (from, kind) {
+          return map.edges.filter(function (e) { return e.from === from && (!kind || e.kind === kind); })
+            .map(function (e) { return byId[e.to]; }).filter(Boolean);
+        };
+        var appNode = map.nodes.find(function (n) { return n.kind === 'application'; });
+
+        mount(body,
+          el('div', { class: 'sa-map-counts' },
+            el('span', {}, t('sa.map.counts', {
+              journeys: map.counts.journeys, tests: map.counts.tests,
+              pages: map.counts.pages, endpoints: map.counts.endpoints,
+            })),
+            map.counts.failing_endpoints
+              ? el('span', { class: 'sa-map-failing' }, t('sa.map.failing', { count: map.counts.failing_endpoints }))
+              : null),
+          el('div', { class: 'sa-map' }, ...(appNode ? out(appNode.id) : []).map(function (node) {
+            return mapBranch(node, out);
+          })));
+      }).catch(function (e) { mount(body, el('div', { class: 'sa-form-error' }, err(e))); });
+    }
+
+    function mapBranch(node, out) {
+      var children = out(node.id);
+      return el('div', { class: 'sa-map-node sa-map-' + node.kind },
+        el('div', { class: 'sa-map-label' },
+          el('span', { class: 'sa-map-kind' }, mapKindLabel(node.kind)),
+          el('strong', {}, node.label),
+          node.criticality ? el('span', { class: 'sa-crit sa-crit-' + node.criticality }, criticalityLabel(node.criticality)) : null,
+          node.health ? el('span', { class: 'sa-health-chip sa-health-' + node.health }, healthLabel(node.health)) : null,
+          node.ungrouped ? el('span', { class: 'muted' }, ' \u00b7 ' + t('sa.map.ungrouped')) : null,
+          (node.methods && node.methods.length) ? el('span', { class: 'muted' }, ' ' + node.methods.join(' ')) : null,
+          node.failures ? el('span', { class: 'sa-map-failing' }, ' ' + t('sa.map.failedTimes', { count: node.failures })) : null),
+        children.length ? el('div', { class: 'sa-map-children' }, ...children.map(function (c) { return mapBranch(c, out); })) : null);
+    }
+
+    function mapKindLabel(kind) {
+      if (kind === 'journey') return t('sa.map.kind.journey');
+      if (kind === 'test') return t('sa.map.kind.test');
+      if (kind === 'page') return t('sa.map.kind.page');
+      if (kind === 'endpoint') return t('sa.map.kind.endpoint');
+      return t('sa.map.kind.application');
     }
 
     // -------------------------------------------------------- credentials
@@ -1899,17 +1966,92 @@
       });
     };
 
+    // ---------------------------------------------------------- evidence
+    //
+    // Everything the run OBSERVED, in one place (V2 §10): the page, the calls it
+    // made, the steps and what each pointed at. Nothing here concludes anything
+    // — the likely cause belongs to the failure panel, and keeping the two apart
+    // is the rule that a probable cause is never presented as a fact.
+    function showEvidence(runId) {
+      api(API + '/runs/' + runId + '/evidence').then(function (e) {
+        var api_ = e.api || { calls: [] };
+        modal(t('sa.evidence.title'), el('div', {},
+          el('p', { class: 'sa-help' }, t('sa.evidence.help')),
+
+          evidenceSection(t('sa.evidence.page'), el('div', { class: 'sa-kv' },
+            kv(t('sa.evidence.url'), e.page.url || '—'),
+            kv(t('sa.evidence.duration'), e.timings.total_label || '—'),
+            e.timings.slowest_step
+              ? kv(t('sa.evidence.slowestStep'), e.timings.slowest_step.label + ' · ' + ms(e.timings.slowest_step.duration_ms))
+              : null,
+            e.page.error_message ? kv(t('sa.evidence.error'), e.page.error_message) : null)),
+
+          api_.calls.length ? evidenceSection(
+            t('sa.evidence.api', { total: api_.total, failed: api_.failed }),
+            el('table', { class: 'data-table' },
+              el('thead', {}, el('tr', {},
+                el('th', {}, t('sa.evidence.method')),
+                el('th', {}, t('sa.evidence.url')),
+                el('th', {}, t('sa.evidence.status')),
+                el('th', {}, t('sa.evidence.time')))),
+              el('tbody', {}, ...api_.calls.slice(0, 50).map(function (c) {
+                return el('tr', { class: c.status === 0 || c.status >= 400 ? 'sa-row-bad' : '' },
+                  el('td', {}, c.method || '—'),
+                  el('td', { class: 'sa-evidence-url' }, c.url || '—'),
+                  // Status 0 means it never completed, which reads as "fine" to
+                  // anyone scanning for 4xx and 5xx — so it gets said in words.
+                  el('td', {}, c.status === 0 ? t('sa.evidence.noResponse') : String(c.status == null ? '—' : c.status)),
+                  el('td', {}, ms(c.duration_ms)));
+              }))) ) : null,
+
+          e.steps.length ? evidenceSection(t('sa.evidence.steps'),
+            el('ol', { class: 'sa-record-steps' }, ...e.steps.map(function (st) {
+              return el('li', { class: 'sa-outcome-' + (st.status === 'pass' ? 'ok' : (st.status === 'fail' ? 'broken' : 'unknown')) },
+                el('strong', {}, st.label || st.step_type), ' ',
+                st.target_label ? el('span', { class: 'muted' }, '\u2192 ' + st.target_label) : null,
+                el('span', { class: 'muted' }, ' \u00b7 ' + ms(st.duration_ms)));
+            }))) : null,
+
+          (e.page.console_errors || []).length ? evidenceSection(t('sa.evidence.console'),
+            el('pre', { class: 'sa-pre' }, e.page.console_errors.join('\n'))) : null),
+        null, t('sa.close'));
+      }).catch(function (err_) { toast(err(err_), true); });
+    }
+
+    function evidenceSection(title, content) {
+      return el('div', { class: 'sa-evidence-section' }, el('h4', {}, title), content);
+    }
+
+    function kv(label, value) {
+      return el('div', { class: 'sa-kv-row' },
+        el('span', { class: 'muted' }, label), el('span', {}, String(value)));
+    }
+
     function runDetail(body, id) {
       return api(API + '/runs/' + id).then(function (run) {
         var head = el('div', {},
           el('button', { class: 'ghost small', onclick: function () { state.runId = null; draw(); } }, '← ' + t('sa.back')),
-          section(run.test_name || t('sa.run.deletedTest'), statusChip(run.status)),
+          section(run.test_name || t('sa.run.deletedTest'), [
+            statusChip(run.status),
+            // Everything this run observed, in one place (V2 §10).
+            el('button', { class: 'ghost small', onclick: function () { showEvidence(run.id); } }, t('sa.evidence.open')),
+          ]),
           el('p', { class: 'sa-help' }, runSubtitle(run)));
 
         var summary = el('div', { class: 'sa-stats' },
           stat(t('sa.run.status'), String(run.status).toUpperCase()),
           stat(t('sa.run.steps'), (run.steps || []).length),
           stat(t('sa.run.duration'), ms(run.duration_ms)));
+
+        // Performance as metadata on the result (V2 §9), not a separate screen.
+        // Absent when there is not enough history to say what normal is — which
+        // is an answer, and must not be dressed up as "normal".
+        var perf = run.performance && run.performance.verdict !== 'unknown'
+          ? el('div', { class: 'sa-perf sa-perf-' + run.performance.verdict },
+            el('strong', {}, t(run.performance.verdict === 'slow' ? 'sa.perf.slow'
+              : (run.performance.verdict === 'fast' ? 'sa.perf.fast' : 'sa.perf.normal'))),
+            el('span', {}, ' ' + run.performance.reason))
+          : (run.performance ? el('p', { class: 'muted' }, run.performance.reason) : null);
 
         // The failure, in plain language first and technical detail behind a
         // disclosure — spec §36.
@@ -1958,7 +2100,7 @@
             el('td', {}, s.message || ''));
         })));
 
-        mount(body, head, summary, failure, steps);
+        mount(body, head, summary, perf, failure, steps);
       });
     }
 

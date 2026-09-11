@@ -2,6 +2,8 @@
 
 const express = require('express');
 const { asyncHandler, notFound, makeLoader, parseId } = require('./helpers');
+const { baselineFrom, compare } = require('../analysis/baseline');
+const { evidenceFor } = require('../analysis/evidence');
 
 // Runs and their results. Read-only over HTTP: a run is created by POSTing to a
 // test (or by the scheduler), and only the worker writes an outcome.
@@ -42,8 +44,34 @@ function createRunsRouter({ repositories, queue, artifacts, requireRole, roles, 
 
   router.get('/:id', read, asyncHandler(async (req, res) => {
     const run = await load(req, res);
-    return run ? res.json(run) : undefined;
+    if (!run) return undefined;
+    // Performance as metadata on the result (V2 §9), not a separate system: the
+    // run was already timed, and this only says what the number means against
+    // this test's own history.
+    return res.json({ ...run, performance: await performanceFor(run) });
   }));
+
+  // The evidence this run produced (V2 §10) — URL, method, status, timings,
+  // failed requests, selector and page information, error messages, screenshot.
+  //
+  // Assembled from what is already stored and nothing else. The runner masks
+  // secrets on the way IN, so there is no new source here to forget to scrub —
+  // which is a stronger guarantee than scrubbing on the way out.
+  router.get('/:id/evidence', read, asyncHandler(async (req, res) => {
+    const run = await load(req, res);
+    if (!run) return undefined;
+    const performance = await performanceFor(run);
+    return res.json(evidenceFor(run, { baseline: performance }));
+  }));
+
+  // This test's own normal, from its own recent SUCCESSFUL runs, with the run
+  // being judged excluded from the history it is judged against.
+  async function performanceFor(run) {
+    if (!runs.baselineSamples || !run || !run.test_id) return null;
+    const samples = await runs.baselineSamples(run.test_id, { excludeRunId: run.id });
+    const baseline = baselineFrom((samples.runs || []).map((r) => r.duration_ms));
+    return compare(run.duration_ms, baseline);
+  }
 
   // The failure screenshot. Streamed from the artefact store rather than the
   // database, and refused when the stored path escapes the root.

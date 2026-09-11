@@ -1,5 +1,75 @@
 # Changelog
 
+## 0.125.10 — performance baselines, evidence, and the service map
+
+The last three of V2's P2 list, and the end of V2.
+
+### Performance is metadata on a result, not a system (§9)
+
+Nothing new is measured. The runner already times every step and every run;
+`analysis/baseline.js` only says what those numbers mean against the same test's
+own history. Median + MAD, like every statistic here — a mean and a standard
+deviation let one 30-second timeout drag "normal" up until nothing ever looks
+slow again, which is the failure mode of every naive latency alarm. Verified: a
+30-second outlier moves the median by 5 ms.
+
+Four rules, three to stop it crying wolf and one to stop it lying:
+
+- fewer than five successful runs is **unknown**, never "normal";
+- a failing run never enters a baseline — a timeout burns the whole step budget
+  and a crash finishes instantly, so either makes "normal" a description of how
+  the test BREAKS rather than how it works;
+- the run being judged is excluded from the history it is judged against;
+- slow needs to be outside the band AND at least 25% slower, so a test that is
+  consistently 400 ms ±2 ms does not scream at 420.
+
+Unexpectedly FAST is reported too, and is not good news by default: a run that
+finishes in a fifth of the usual time is often a page that stopped loading
+something.
+
+### Evidence stores nothing new (§10)
+
+URL, method, status, timings, failed requests, selector information, page
+information, error messages, screenshots — all of it was already recorded.
+`analysis/evidence.js` gathers it into one shape and `GET /runs/:id/evidence`
+serves it, so "what did we see" is one request rather than four screens.
+
+The secrets rule holds structurally: it assembles only from columns the runner
+masked on the way IN, and adds no new source — there is nothing here to forget to
+scrub. A spec asserts the whole assembled record against a forbidden-key list
+anyway, because a guarantee nobody checks is folklore.
+
+Status 0 is treated as a failure throughout. It means the request never completed
+— DNS, a refused connection, a blocked host — and it reads as "fine" to anything
+comparing with >= 400.
+
+### The service map is computed on read, never stored (§11)
+
+That is the line between it and the CMDB the spec warns against: a stored map is
+a claim somebody has to maintain and that quietly rots. This one can only show
+what runs observed, and a relation that stops being observed stops being drawn.
+Read-only by design — there is no route to add, edit or annotate a node, because
+the moment one exists the map has opinions of its own.
+
+URLs collapse to ENDPOINTS (`/customers/4711/cases` → `/customers/{id}/cases`),
+which turns ten thousand observed URLs into a readable handful, and the query
+string is dropped entirely: it is where identifiers and secrets live, and a
+filter does not make a different endpoint. A test nobody has grouped into a
+journey still appears — hiding it would make the map lie by omission.
+
+Drawn as nested lists rather than a graph, deliberately. A force-directed picture
+of forty endpoints looks impressive and answers nothing; a list answers "which
+endpoints does this journey depend on, and which have failed".
+
+### Also
+
+The fake runs repository returned `steps: []` from `findById`, discarding the
+step rows the real one returns. Every reader that depends on them — evidence, the
+service map — would have looked correct while testing nothing. Found by a spec
+that expected a page URL and got null.
+
+No migration: all three read data that already existed.
+
 ## 0.125.9 — self-healing selectors: proposed, never applied
 
     Original:   #login-button

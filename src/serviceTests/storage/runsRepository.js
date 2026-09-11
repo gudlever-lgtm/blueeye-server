@@ -218,6 +218,44 @@ function createRunsRepository({ db, now = () => new Date() }) {
     };
   }
 
+  // The durations a performance baseline is built from: this test's own recent
+  // SUCCESSFUL runs.
+  //
+  // Successful only, and that is the whole trick. A failing run's duration is
+  // the duration of a failure — a timeout burns the full step budget, an early
+  // crash finishes in milliseconds — and letting either into the baseline makes
+  // "normal" a description of how the test breaks rather than how it works.
+  //
+  // `excludeRunId` keeps the run being judged out of the history it is judged
+  // against, or every run is compared with a set that already contains it.
+  async function baselineSamples(testId, { limit = 50, excludeRunId = null } = {}) {
+    const capped = Math.min(200, Math.max(1, Number(limit) || 50));
+    const params = [testId];
+    let exclude = '';
+    if (excludeRunId) { exclude = 'AND id <> ?'; params.push(excludeRunId); }
+    const [rows] = await pool.query(
+      `SELECT id, duration_ms FROM service_test_runs
+        WHERE test_id = ? AND status = 'pass' ${exclude}
+        ORDER BY id DESC LIMIT ${capped}`,
+      params
+    );
+    if (!rows.length) return { runs: [], steps: [] };
+
+    const ids = rows.map((r) => r.id);
+    const [stepRows] = await pool.query(
+      `SELECT run_id, position, step_type, status, duration_ms
+         FROM service_test_run_steps
+        WHERE run_id IN (${ids.map(() => '?').join(',')})
+        ORDER BY run_id, position`,
+      ids
+    );
+    const byRun = new Map(ids.map((id) => [id, []]));
+    for (const r of stepRows) {
+      if (byRun.has(r.run_id)) byRun.get(r.run_id).push(r);
+    }
+    return { runs: rows, steps: [...byRun.values()] };
+  }
+
   // Artefact retention: screenshot paths for runs older than `days`, so the
   // retention job can unlink the files before clearing the column.
   async function screenshotsOlderThan(days) {
@@ -289,7 +327,7 @@ function createRunsRepository({ db, now = () => new Date() }) {
 
   return {
     findById, list, enqueue, claimNext, complete, reapStale, history, stats,
-    screenshotsOlderThan, clearScreenshots,
+    baselineSamples, screenshotsOlderThan, clearScreenshots,
   };
 }
 

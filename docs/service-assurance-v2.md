@@ -314,6 +314,56 @@ accepted tomorrow against a step it no longer describes. It then goes through th
 ordinary test save, so a heal gets a version bump and a definition snapshot like
 any other edit.
 
+### §9 Performance baselines, §10 Evidence, §11 Service map — shipped
+
+**Performance is metadata on a result, not a system.** Nothing new is measured:
+the runner already times every step and every run, and `analysis/baseline.js`
+only says what those numbers mean against the same test's own history. Median +
+MAD, like every other statistic here — a mean and a standard deviation let one
+30-second timeout drag "normal" up until nothing ever looks slow again, which is
+the failure mode of every naive latency alarm. Verified: a 30-second outlier
+moves the median by 5 ms.
+
+Three rules stop it crying wolf, and one stops it lying:
+
+- fewer than five successful runs is **unknown**, never "normal";
+- a failing run never enters a baseline — a timeout burns the whole step budget
+  and a crash finishes instantly, so either makes "normal" a description of how
+  the test BREAKS;
+- the run being judged is excluded from the history it is judged against;
+- slow needs to be outside the band AND ≥25% slower, so a test that is
+  consistently 400 ms ±2 ms does not scream at 420.
+
+Unexpectedly FAST is reported too, and is not treated as good news: a run that
+finishes in a fifth of the usual time is often a page that stopped loading
+something.
+
+**Evidence stores nothing new.** URL, method, status, timings, failed requests,
+selector information, page information, error messages, screenshots — all of it
+was already recorded. `analysis/evidence.js` gathers it into one shape and
+`GET /runs/:id/evidence` serves it. The secrets rule holds structurally: it
+assembles only from columns the runner masked on the way IN, and adds no new
+source, so there is nothing here to forget to scrub. A spec asserts the whole
+assembled record against a forbidden-key list anyway, because a guarantee nobody
+checks is folklore.
+
+**The service map is computed on read, never stored.** That is the line between
+it and the CMDB the spec warns against: a stored map is a claim somebody has to
+maintain and that quietly rots. This one can only show what runs observed, and a
+relation that stops being observed stops being drawn. Read-only by design — there
+is no route to add, edit or annotate a node, because the moment one exists the
+map has opinions of its own.
+
+URLs collapse to ENDPOINTS (`/customers/4711/cases` → `/customers/{id}/cases`),
+which is what turns ten thousand observed URLs into a readable handful, and the
+query string is dropped entirely: it is where identifiers and secrets live. A
+test nobody has grouped into a journey still appears — hiding it would make the
+map lie by omission.
+
+Drawn as nested lists rather than a graph, deliberately: a force-directed picture
+of forty endpoints looks impressive and answers nothing, while a list answers
+"which endpoints does this journey depend on, and which have failed".
+
 ## 3. Build order
 
 Exactly this order, because each step is what makes the next one worth having:

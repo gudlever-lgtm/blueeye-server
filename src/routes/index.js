@@ -387,6 +387,24 @@ function createApiRouter({
       remediationPlaybooksRepo,
       configSnapshotsRepo,
       interfaceStatesRepo,
+      // Service Assurance incidents — a registered web service that stopped
+      // working, or a certificate running out. Gated on the licence at CALL
+      // time, not at wiring time: the module's sweep runs regardless of plan,
+      // so an unlicensed install must not see a feature it does not have, and
+      // the gate must follow a licence that changes without a restart.
+      serviceAssuranceIncidentsRepo: serviceTests && serviceTests.repositories
+        ? {
+          listBetween: (opts) => {
+            if (!featureGate || !featureGate.isFeatureEnabled('service_tests')) return Promise.resolve([]);
+            // A host wiring an older module (no window query) contributes
+            // nothing rather than failing the source and marking the whole
+            // page partial.
+            const repo = serviceTests.repositories.incidents;
+            if (!repo || typeof repo.listBetween !== 'function') return Promise.resolve([]);
+            return repo.listBetween(opts);
+          },
+        }
+        : null,
       // The agent build THIS server serves — the reference for version skew.
       serverAgentVersion: agentSourceStore && typeof agentSourceStore.sourceVersion === 'function'
         ? agentSourceStore.sourceVersion()

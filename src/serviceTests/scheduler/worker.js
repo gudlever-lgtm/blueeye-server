@@ -143,6 +143,7 @@ function createWorker({
       browser: runnerSettings.browser,
       console_errors: result.console_errors,
       network_errors: result.network_errors,
+      api_calls: result.api_calls,
       steps: result.steps,
       ended_at: now(),
     });

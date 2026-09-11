@@ -28,8 +28,13 @@ under those names before the product was named, and renaming a schema to match a
 label buys nothing a customer can see. Anywhere a human reads it, it says Service
 Assurance.
 
-**What it is not:** a general QA framework. No AI, no self-healing selectors, no
-visual regression, no CI/CD integration, no arbitrary script execution (spec §33).
+**What it is not:** a general QA framework. No AI, no CI/CD integration, no
+arbitrary script execution (spec §33).
+
+> Self-healing selectors and visual regression were on that list too, and are
+> now in scope for V2 — see [service-assurance-v2.md](service-assurance-v2.md)
+> §0, which records the reversal rather than leaving two documents disagreeing
+> with each other. Everything else on the list still holds, V2 included.
 
 ---
 

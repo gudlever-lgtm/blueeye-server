@@ -149,6 +149,70 @@ function createIncidentsRepository({ db, now = () => new Date() }) {
     return rows.map(shape);
   }
 
+  // Incidents that OPENED or RESOLVED inside a window — the Changes feed's
+  // question ("what happened while I was away"), which is not the same as the
+  // list's ("what is wrong now"). An incident opened before the window and still
+  // open is deliberately absent: it did not happen during the shift being
+  // reviewed, and the Health tab is where standing problems live.
+  async function listBetween({ from, to = new Date(), limit = 500 } = {}) {
+    const start = from ? new Date(from) : new Date(0);
+    const end = to ? new Date(to) : new Date();
+    const n = Math.min(Math.max(Number(limit) || 500, 1), 1000);
+    const [rows] = await pool.query(
+      `SELECT ${COLS} FROM service_test_incidents
+       WHERE (opened_at BETWEEN ? AND ?) OR (resolved_at IS NOT NULL AND resolved_at BETWEEN ? AND ?)
+       ORDER BY last_seen_at DESC LIMIT ${n}`,
+      [start, end, start, end]
+    );
+    return rows.map(shape);
+  }
+
+  // Which applications had the most incidents of a given severity in a window —
+  // the Health page's ranking.
+  //
+  // Counted by the incident's OPENED time, not by whether it is still open: the
+  // question is "which services gave us trouble last month", and an incident
+  // that was opened and fixed in March is part of March's answer.
+  //
+  // Applications are joined in so the answer carries a name; an incident whose
+  // application was deleted is dropped rather than charted as "null", because a
+  // bar nobody can act on is worse than a shorter chart.
+  async function countByApplication({ from, to = new Date(), severity = 'CRIT', applicationIds = null, limit = 10 } = {}) {
+    const start = from ? new Date(from) : new Date(0);
+    const end = to ? new Date(to) : new Date();
+    const n = Math.min(Math.max(Number(limit) || 10, 1), 50);
+
+    const where = ['i.opened_at BETWEEN ? AND ?', 'i.application_id IS NOT NULL'];
+    const params = [start, end];
+    if (severity) { where.push('i.severity = ?'); params.push(severity); }
+    // An explicit, non-empty selection narrows it. An EMPTY selection is not the
+    // same as no selection — "show me none of them" is a legitimate thing for a
+    // multi-select to say, and answering it with everything would be a lie.
+    if (Array.isArray(applicationIds)) {
+      if (!applicationIds.length) return [];
+      where.push(`i.application_id IN (${applicationIds.map(() => '?').join(',')})`);
+      params.push(...applicationIds);
+    }
+
+    const [rows] = await pool.query(
+      `SELECT i.application_id, a.name AS application_name, COUNT(*) AS incidents,
+              MAX(i.last_seen_at) AS last_seen_at
+       FROM service_test_incidents i
+       JOIN service_test_applications a ON a.id = i.application_id
+       WHERE ${where.join(' AND ')}
+       GROUP BY i.application_id, a.name
+       ORDER BY incidents DESC, a.name ASC
+       LIMIT ${n}`,
+      params
+    );
+    return rows.map((r) => ({
+      application_id: r.application_id,
+      application_name: r.application_name,
+      incidents: Number(r.incidents) || 0,
+      last_seen_at: r.last_seen_at,
+    }));
+  }
+
   // Open incidents by severity — the badge on the nav entry, in one query.
   async function openCounts() {
     const [rows] = await pool.query(
@@ -179,7 +243,7 @@ function createIncidentsRepository({ db, now = () => new Date() }) {
     return res.affectedRows || 0;
   }
 
-  return { findById, findOpen, open, touch, resolve, markNotified, list, openCounts, purgeResolvedOlderThan };
+  return { findById, findOpen, open, touch, resolve, markNotified, list, listBetween, countByApplication, openCounts, purgeResolvedOlderThan };
 }
 
 module.exports = { createIncidentsRepository };

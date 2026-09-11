@@ -32,6 +32,7 @@ const { classify, KIND } = require('./classify');
 //   apiRequest({method,url,body})    → { status, body }
 //   consoleErrors()                  → string[]
 //   networkErrors()                  → [{url,status}]
+//   apiCalls()                       → [{method,url,status,duration_ms,resource_type}]
 //   screenshot()                     → Buffer|null
 //
 // Every driver method may throw; a throw is a step failure, classified by
@@ -303,6 +304,11 @@ async function executeDefinition(definition, {
   const durationMs = now() - startedAt;
   const status = failed ? 'fail' : (results.length ? 'pass' : 'skipped');
 
+  // Collected for EVERY run, not only a failing one. A test that passes while a
+  // background call answers 503 is a service that is half-broken, and the run
+  // that proves it is the one nobody would think to open.
+  const apiCalls = await safeCall(driver.apiCalls, driver, []);
+
   return {
     status,
     duration_ms: durationMs,
@@ -313,6 +319,7 @@ async function executeDefinition(definition, {
     classification: failed ? failed.classification : null,
     console_errors: failed ? failed.consoleErrors : [],
     network_errors: failed ? failed.networkErrors : [],
+    api_calls: (apiCalls || []).map((c) => ({ ...c, url: mask(c.url) })),
   };
 }
 

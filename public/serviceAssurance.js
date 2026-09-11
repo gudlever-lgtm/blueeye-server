@@ -1223,6 +1223,64 @@
       return details;
     }
 
+    // The layer verdict + the calls behind it (docs/service-assurance-v2.md §5).
+    //
+    // Computed in the browser from the stored calls rather than persisted: it is
+    // a READING of the evidence, and a reading that lives in the database gets
+    // stale the moment the rule behind it improves.
+    function layerVerdict(run) {
+      var calls = run.api_calls || [];
+      if (!calls.length) return null;
+
+      var documents = calls.filter(function (c) { return c.resource_type === 'document'; });
+      var apis = calls.filter(function (c) { return c.resource_type !== 'document'; });
+      var bad = function (c) { return c.status === 0 || (typeof c.status === 'number' && c.status >= 400); };
+      var failedApi = apis.filter(bad).sort(function (a, b) { return (b.status || 0) - (a.status || 0); })[0] || null;
+      var failedDoc = documents.filter(bad)[0] || null;
+      var started = run.failure_kind === 'worker_misconfigured';
+
+      var layers = [
+        [t('sa.run.layerBrowser'), !started],
+        [t('sa.run.layerPage'), !started && !failedDoc && !(run.console_errors || []).length],
+        [t('sa.run.layerApi'), !started && !failedApi],
+      ];
+      var status = (failedApi && failedApi.status) || (failedDoc && failedDoc.status) || null;
+
+      return el('div', { class: 'sa-layers' },
+        el('div', { class: 'sa-layer-row' }, ...layers.map(function (pair) {
+          return el('span', { class: 'sa-layer ' + (pair[1] ? 'ok' : 'bad') },
+            el('span', { class: 'sa-layer-name' }, pair[0]),
+            el('span', { class: 'sa-layer-mark' }, pair[1] ? '✓' : '✗'));
+        }), status ? el('span', { class: 'chip' }, 'HTTP ' + status) : null),
+        apiCallsTable(calls));
+    }
+
+    // Only the calls worth reading: everything that failed, and the slowest of
+    // the rest. A passing run's forty successful requests answer no question.
+    function apiCallsTable(calls) {
+      var bad = calls.filter(function (c) { return c.status === 0 || c.status >= 400; });
+      var slowest = calls.filter(function (c) { return !(c.status === 0 || c.status >= 400); })
+        .sort(function (a, b) { return (b.duration_ms || 0) - (a.duration_ms || 0); })
+        .slice(0, 5);
+      var shown = bad.concat(slowest);
+      if (!shown.length) return null;
+
+      return el('details', { class: 'sa-api-calls' },
+        el('summary', {}, t('sa.run.apiCalls', { n: String(calls.length) })),
+        el('table', { class: 'data-table' },
+          el('thead', {}, el('tr', {},
+            el('th', {}, t('sa.run.method')), el('th', {}, t('sa.run.address')),
+            el('th', {}, t('sa.run.status')), el('th', {}, t('sa.run.duration')))),
+          el('tbody', {}, ...shown.map(function (c) {
+            var failed = c.status === 0 || c.status >= 400;
+            return el('tr', { class: failed ? 'sa-api-bad' : '' },
+              el('td', {}, c.method || '—'),
+              el('td', { class: 'sa-api-url' }, c.url || '—'),
+              el('td', {}, c.error ? c.error : (c.status ? String(c.status) : '—')),
+              el('td', {}, ms(c.duration_ms)));
+          }))));
+    }
+
     views.runs = function (body) {
       if (state.runId) return runDetail(body, state.runId);
       return Promise.all([api(API + '/runs'), api(API + '/runs/worker-status')]).then(function (res) {
@@ -1292,6 +1350,10 @@
             // which addresses the policy refused — and the page used to throw it
             // away and show only the generic one-liner, leaving "The server
             // rejected the request" with no way to find out WHICH request.
+            // Browser ✓ · Page ✓ · API ✗ · HTTP 503 — three answers, not one.
+            // "The test failed" is what the operator already knows; WHICH layer
+            // failed is what they came for.
+            layerVerdict(run),
             classification && (classification.evidence || []).length
               ? el('div', { class: 'sa-evidence' },
                 el('h5', {}, t('sa.run.whatWeSaw')),
@@ -1347,6 +1409,199 @@
       });
     };
 
+    // ------------------------------------------ top applications by criticals
+    //
+    // "Which services gave us the most trouble this period" — a magnitude
+    // ranking over long, named categories, which is a HORIZONTAL bar chart and
+    // nothing else. Vertical columns would turn ten application names into
+    // rotated stubs, and a pie of ten slices answers no question at all.
+    //
+    // ONE hue, not a palette — and not a NEW hue either: the bars reuse
+    // .sa-bar-failed, the red this page already uses for "this is the bad one".
+    // Because every bar is that same colour, filtering the list cannot repaint
+    // the survivors, and a single series needs no legend: the title says what
+    // the bars are.
+    function barPathRight(x, y, w, h, r) {
+      // The data end is the RIGHT end here, so the rounded corners move with it.
+      var radius = Math.max(0, Math.min(r, w, h / 2));
+      return 'M' + x + ',' + y +
+        'H' + (x + w - radius) +
+        'a' + radius + ',' + radius + ' 0 0 1 ' + radius + ',' + radius +
+        'V' + (y + h - radius) +
+        'a' + radius + ',' + radius + ' 0 0 1 ' + -radius + ',' + radius +
+        'H' + x + 'Z';
+    }
+
+    function topApplicationsSvg(rows) {
+      var ROW = 26;          // bar band
+      var GAP = 6;           // >= 2px surface gap between bars
+      var LABEL_W = 190;     // room for an application name
+      var VALUE_W = 46;      // room for the direct label
+      var W = 720;
+      var H = rows.length * (ROW + GAP) + 8;
+      var plotW = W - LABEL_W - VALUE_W;
+      var max = rows.reduce(function (m, r) { return Math.max(m, r.incidents); }, 0) || 1;
+
+      var svg = svgEl('svg', {
+        class: 'sa-chart-svg', viewBox: '0 0 ' + W + ' ' + H,
+        role: 'img', 'aria-label': t('sa.top.title'),
+      });
+
+      rows.forEach(function (row, i) {
+        var y = i * (ROW + GAP) + 4;
+        var w = Math.max(2, Math.round((row.incidents / max) * plotW));
+        svg.appendChild(svgEl('g', { class: 'sa-chart-bar' }, [
+          svgTitle(t('sa.top.tooltip', { app: row.application_name, n: String(row.incidents) })),
+          // The name, right-aligned against the bar so the bars share a baseline.
+          svgEl('text', {
+            class: 'sa-chart-axis sa-top-name', x: LABEL_W - 10, y: y + ROW / 2 + 4, 'text-anchor': 'end',
+          }, [document.createTextNode(row.application_name)]),
+          svgEl('path', { class: 'sa-bar-failed', d: barPathRight(LABEL_W, y, w, ROW, 4) }),
+          // Direct label. Ten bars is few enough that every value can carry one,
+          // and a reader should never have to measure a bar against a gridline.
+          svgEl('text', {
+            class: 'sa-chart-axis sa-top-value', x: LABEL_W + w + 8, y: y + ROW / 2 + 4,
+          }, [document.createTextNode(String(row.incidents))]),
+        ]));
+      });
+      return svg;
+    }
+
+    // A searchable, multiple-choice application filter.
+    //
+    // Hand-rolled because the repo ships no UI library and is not about to grow
+    // one for a dropdown. Deliberately NOT a native <select multiple>: that has
+    // no search, and ctrl-clicking to keep a selection is the kind of thing
+    // people get wrong once and then distrust.
+    //
+    // No selection means ALL — the honest default for a filter nobody has
+    // touched. Clearing the last chip returns to that rather than to an empty
+    // chart.
+    function applicationPicker(apps, selected, onChange) {
+      var open = false;
+      var wrap = el('div', { class: 'sa-picker' });
+      var search = el('input', { type: 'text', class: 'sa-date-input sa-picker-search', placeholder: t('sa.top.searchApps') });
+      var list = el('div', { class: 'sa-picker-list' });
+
+      function draw() {
+        var q = search.value.trim().toLowerCase();
+        var matches = apps.filter(function (a) { return !q || a.name.toLowerCase().indexOf(q) >= 0; });
+        mount(list, ...(matches.length ? matches.map(function (a) {
+          var box = el('input', { type: 'checkbox' });
+          box.checked = selected.indexOf(a.id) >= 0;
+          box.addEventListener('change', function () {
+            if (box.checked) { if (selected.indexOf(a.id) < 0) selected.push(a.id); }
+            else selected.splice(selected.indexOf(a.id), 1);
+            onChange();
+            chips();
+          });
+          return el('label', { class: 'sa-picker-option' }, box, el('span', {}, a.name));
+        }) : [el('div', { class: 'sa-help' }, t('sa.top.noMatch'))]));
+      }
+
+      var chipRow = el('div', { class: 'sa-picker-chips' });
+      function chips() {
+        mount(chipRow, ...(selected.length ? selected.map(function (id) {
+          var app = apps.find(function (a) { return a.id === id; });
+          return el('span', { class: 'sa-chip' },
+            el('span', {}, app ? app.name : String(id)),
+            el('button', {
+              class: 'sa-chip-x', title: t('sa.top.clearOne'),
+              onclick: function () { selected.splice(selected.indexOf(id), 1); onChange(); chips(); draw(); },
+            }, '×'));
+        }).concat([el('button', {
+          class: 'ghost small',
+          onclick: function () { selected.length = 0; onChange(); chips(); draw(); },
+        }, t('sa.top.clearAll'))]) : [el('span', { class: 'sa-help' }, t('sa.top.allApps'))]));
+      }
+
+      var toggle = el('button', {
+        class: 'ghost small',
+        onclick: function () { open = !open; panel.hidden = !open; if (open) search.focus(); },
+      }, t('sa.top.chooseApps'));
+
+      var panel = el('div', { class: 'sa-picker-panel' }, search, list);
+      panel.hidden = true;
+      search.addEventListener('input', draw);
+
+      draw();
+      chips();
+      mount(wrap, el('div', { class: 'sa-picker-head' }, toggle, chipRow), panel);
+      return wrap;
+    }
+
+    // The panel: period controls + application filter + the ranking.
+    function topApplicationsPanel() {
+      var wrap = el('div', { class: 'sa-panel sa-chart-panel' });
+      // Month by default: the Health page's question is "how has this month
+      // been", not "what happened in the last hour".
+      var st = { period: 'month', at: null, apps: [] };
+      var allApps = [];
+
+      function query() {
+        var parts = ['period=' + encodeURIComponent(st.period),
+          'tz_offset=' + encodeURIComponent(String(new Date().getTimezoneOffset()))];
+        if (st.at) parts.push('at=' + encodeURIComponent(st.at));
+        if (st.apps.length) parts.push('application_ids=' + encodeURIComponent(st.apps.join(',')));
+        return API + '/assurance/top-applications?' + parts.join('&');
+      }
+
+      function load() {
+        return Promise.all([
+          api(query()),
+          allApps.length ? Promise.resolve(allApps) : api(API + '/applications'),
+        ]).then(function (res) {
+          allApps = res[1] || [];
+          render(res[0]);
+        }).catch(function (e) {
+          mount(wrap, section(t('sa.top.title'), null), el('p', { class: 'sa-help' }, t('sa.error', { message: err(e) })));
+        });
+      }
+
+      function periodButtons() {
+        return el('div', { class: 'sa-segmented' }, ...[
+          ['day', t('sa.chart.day')], ['week', t('sa.chart.week')],
+          ['month', t('sa.chart.month')], ['year', t('sa.chart.year')],
+        ].map(function (pair) {
+          return el('button', {
+            class: 'sa-segment' + (st.period === pair[0] ? ' active' : ''),
+            onclick: function () { st.period = pair[0]; load(); },
+          }, pair[1]);
+        }));
+      }
+
+      function render(data) {
+        st.at = data.at;
+        var jump = el('input', { type: 'date', class: 'sa-date-input', value: data.at, title: t('sa.chart.jump') });
+        jump.addEventListener('change', function () { if (jump.value) { st.at = jump.value; load(); } });
+
+        var next = el('button', { class: 'ghost small', onclick: function () { if (data.has_next) { st.at = data.next_at; load(); } } }, '▶');
+        next.disabled = !data.has_next;
+        var now = el('button', { class: 'ghost small', onclick: function () { st.at = null; load(); } }, t('sa.chart.now'));
+        now.disabled = !!data.is_current;
+
+        var rows = data.applications || [];
+        mount(wrap,
+          section(t('sa.top.title'), null),
+          el('p', { class: 'sa-help' }, t('sa.top.help')),
+          el('div', { class: 'sa-chart-nav' },
+            periodButtons(),
+            el('button', { class: 'ghost small', onclick: function () { st.at = data.prev_at; load(); } }, '◀'),
+            el('span', { class: 'sa-chart-period' }, periodLabel(Object.assign({ buckets: [] }, data))),
+            next, now,
+            el('span', { class: 'sa-chart-jump' }, t('sa.chart.jump'), jump)),
+          applicationPicker(allApps, st.apps, function () { load(); }),
+          // An empty ranking is GOOD NEWS and has to read as good news — an
+          // empty chart area reads as "broken", which is the opposite.
+          rows.length
+            ? topApplicationsSvg(rows)
+            : el('div', { class: 'sa-empty' }, t('sa.top.none')));
+      }
+
+      load();
+      return wrap;
+    }
+
     // --------------------------------------------------------------- health
     // What the module has REACTED to: incidents it opened, and the certificate
     // on every address it watches. This is the screen an operator opens when
@@ -1371,7 +1626,7 @@
           stat(t('sa.health.certsWatched'), (summary.certificates && summary.certificates.total) || 0),
           stat(t('sa.health.certsExpiring'), (summary.certificates && summary.certificates.expiring) || 0));
 
-        mount(body, head, counts, incidentsPanel(incidents), certificatesPanel(certificates));
+        mount(body, head, counts, topApplicationsPanel(), incidentsPanel(incidents), certificatesPanel(certificates));
       });
     };
 

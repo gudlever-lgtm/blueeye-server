@@ -457,6 +457,42 @@ const bool = (v) => !!v;
             || (RANKS[a.severity] - RANKS[b.severity]))
           .slice(0, limit);
       },
+      // Mirrors the real window query: what OPENED or RESOLVED inside the
+      // window, which is the Changes feed's question — not "what is wrong now".
+      async listBetween({ from, to = new Date(), limit = 500 } = {}) {
+        const start = from ? new Date(from).getTime() : 0;
+        const end = to ? new Date(to).getTime() : Date.now();
+        const inWindow = (v) => {
+          const t = v ? new Date(v).getTime() : NaN;
+          return Number.isFinite(t) && t >= start && t <= end;
+        };
+        return t.incidents
+          .where((r) => inWindow(r.opened_at) || (r.resolved_at && inWindow(r.resolved_at)))
+          .slice(0, limit);
+      },
+      // Mirrors the real GROUP BY: counted by opened_at, joined to an
+      // application (an incident whose application is gone is dropped), and an
+      // EMPTY selection means none rather than all.
+      async countByApplication({ from, to = new Date(), severity = 'CRIT', applicationIds = null, limit = 10 } = {}) {
+        if (Array.isArray(applicationIds) && !applicationIds.length) return [];
+        const start = from ? new Date(from).getTime() : 0;
+        const end = to ? new Date(to).getTime() : Date.now();
+        const counts = new Map();
+        for (const r of t.incidents.rows) {
+          if (severity && r.severity !== severity) continue;
+          const opened = r.opened_at ? new Date(r.opened_at).getTime() : NaN;
+          if (!Number.isFinite(opened) || opened < start || opened > end) continue;
+          if (Array.isArray(applicationIds) && !applicationIds.includes(r.application_id)) continue;
+          const app = t.applications.rows.find((a) => a.id === r.application_id);
+          if (!app) continue;
+          const row = counts.get(app.id) || { application_id: app.id, application_name: app.name, incidents: 0, last_seen_at: null };
+          row.incidents += 1;
+          counts.set(app.id, row);
+        }
+        return [...counts.values()]
+          .sort((a, b) => b.incidents - a.incidents || String(a.application_name).localeCompare(b.application_name))
+          .slice(0, limit);
+      },
       async openCounts() {
         const out = { CRIT: 0, WARN: 0, INFO: 0, total: 0 };
         for (const r of t.incidents.rows) {

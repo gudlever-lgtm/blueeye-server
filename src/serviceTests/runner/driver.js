@@ -2,6 +2,8 @@
 
 const { strategiesFor, describeTarget } = require('../engine/targeting');
 const { explainReason } = require('../security/hostPolicy');
+const { createApiLog } = require('./apiLog');
+const { createRedactor } = require('../engine/redact');
 
 // The Playwright adapter — THE ONLY file in Service Tests that knows Playwright
 // exists (docs/service-assurance.md §2, §4).
@@ -94,6 +96,14 @@ function createPlaywrightDriver({
   const consoleErrors = [];
   const networkErrors = [];
   const blocked = [];
+  // Every xhr/fetch/document the page asked for, with a method and a timing —
+  // what turns "the server rejected the request" into "POST /api/auth/session
+  // answered 401 in 1.2 s" (docs/service-assurance-v2.md §5).
+  //
+  // The same redactor the rest of the run uses, so a credential that reached a
+  // URL is masked on the way INTO the log rather than at render time, where one
+  // forgotten template would leak it.
+  const apiLog = createApiLog({ redact: createRedactor(secrets) });
   let lastStatus;
 
   // --- observation -----------------------------------------------------------
@@ -101,13 +111,21 @@ function createPlaywrightDriver({
     if (msg.type() === 'error') consoleErrors.push(String(msg.text()).slice(0, 500));
   });
   page.on('pageerror', (err) => consoleErrors.push(String(err && err.message).slice(0, 500)));
+  // Playwright gives no request id, and the Request object itself is the stable
+  // identity across the request/response/failure events — so it is the key.
+  page.on('request', (req) => {
+    apiLog.start(req, { method: req.method(), url: req.url(), resourceType: req.resourceType() });
+  });
   page.on('response', (res) => {
     const status = res.status();
+    apiLog.finish(res.request(), { status });
     if (status >= 400) networkErrors.push({ url: String(res.url()).slice(0, 512), status });
   });
   page.on('requestfailed', (req) => {
     const failure = req.failure();
-    networkErrors.push({ url: String(req.url()).slice(0, 512), status: 0, error: failure ? failure.errorText : 'request failed' });
+    const message = failure ? failure.errorText : 'request failed';
+    apiLog.fail(req, { error: message });
+    networkErrors.push({ url: String(req.url()).slice(0, 512), status: 0, error: message });
   });
 
   // --- the request-time host policy -----------------------------------------
@@ -283,6 +301,7 @@ function createPlaywrightDriver({
     // ---- diagnostics
     consoleErrors: async () => consoleErrors.slice(0, 50),
     networkErrors: async () => [...networkErrors, ...blocked.map((b) => ({ url: b.url, status: 0, error: b.reason }))].slice(0, 50),
+    apiCalls: async () => apiLog.calls(),
     blockedRequests: () => blocked.slice(0, 50),
 
     async screenshot({ fullPage = false, type = 'jpeg', quality = 70 } = {}) {

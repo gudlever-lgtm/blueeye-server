@@ -8,6 +8,7 @@ const {
   fromEvents,
   fromClusters,
   fromTopologyChanges,
+  fromServiceAssuranceIncidents,
   fromInterfaceTransitions,
   fromPlaybookRuns,
   fromConfigSnapshots,
@@ -47,6 +48,9 @@ function createChangesService({
   topologyChangesRepo = null,
   interfaceStatesRepo = null,
   remediationPlaybooksRepo = null,
+  // Service Assurance incidents. Optional like every other source — a
+  // deployment without the module simply contributes nothing.
+  serviceAssuranceIncidentsRepo = null,
   configSnapshotsRepo = null,
   serverAgentVersion = null,
   heartbeatStaleMs = DEFAULT_HEARTBEAT_STALE_MS,
@@ -102,6 +106,12 @@ function createChangesService({
     return fromInterfaceTransitions(await interfaceStatesRepo.list({ from, to, limit: PER_SOURCE_LIMIT }), ctx);
   }
 
+  async function fetchServiceAssuranceIncidents({ from, to }) {
+    if (!serviceAssuranceIncidentsRepo || typeof serviceAssuranceIncidentsRepo.listBetween !== 'function') return [];
+    const rows = await serviceAssuranceIncidentsRepo.listBetween({ from, to, limit: PER_SOURCE_LIMIT });
+    return fromServiceAssuranceIncidents(rows, { from, to });
+  }
+
   async function fetchPlaybookRuns({ from, to }) {
     if (!remediationPlaybooksRepo || typeof remediationPlaybooksRepo.listRunsBetween !== 'function') return [];
     return fromPlaybookRuns(await remediationPlaybooksRepo.listRunsBetween({ from, to, limit: PER_SOURCE_LIMIT }));
@@ -131,6 +141,7 @@ function createChangesService({
       ['clusters', () => fetchClusters(window)],
       ['topology', () => fetchTopologyChanges(window)],
       ['interfaces', () => fetchInterfaceTransitions(window, ctx)],
+      ['service_assurance', () => fetchServiceAssuranceIncidents(window)],
       ['playbooks', () => fetchPlaybookRuns(window)],
       ['config', () => fetchConfigSnapshots(window, ctx)],
     ];

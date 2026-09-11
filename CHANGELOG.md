@@ -1,5 +1,117 @@
 # Changelog
 
+## 0.124.5 — which applications gave us the most trouble
+
+The Health page counted open incidents and listed them. It could not answer the
+question a service owner actually opens it with: *which of my services has been
+the problem this month?*
+
+A ranking of the applications with the most critical incidents, over a chosen
+period — **month by default**, because the Health page's question is "how has
+this month been", not "what happened in the last hour". Day / week / month / year
+with a date picker and ◀ ▶ navigation, reusing the same `resolvePeriod()` the run
+chart already uses, so "last month" means one thing in this install and the
+buttons never do calendar arithmetic of their own.
+
+Counted by when the incident **opened**, not by whether it is still open: a
+problem that was raised and fixed inside the period is part of that period's
+answer.
+
+**A searchable, multiple-choice application filter.** Hand-rolled, because the
+repo ships no UI library and is not about to grow one for a dropdown — and
+deliberately not a native `<select multiple>`, which has no search and asks
+people to ctrl-click to keep a selection. No selection means all; an EMPTY
+selection means none, because "show me none of them" is a legitimate thing for a
+multi-select to say and answering it with everything would be a lie.
+
+Horizontal bars, one hue. Long application names would become rotated stubs on a
+vertical column chart, and the bars reuse `.sa-bar-failed` — the red this page
+already uses for "this is the bad one" — rather than introducing a second red for
+the same concept. Because every bar is that one colour, filtering the list cannot
+repaint the survivors; and with a single series the title carries the identity, so
+there is no legend to read. Every bar is directly labelled: ten is few enough that
+nobody should have to measure a bar against a gridline.
+
+An empty ranking says "no critical incidents in this period" in words. An empty
+chart area reads as broken, which is the opposite of the news.
+
+`GET /api/service-tests/assurance/top-applications` — viewer+, every parameter
+validated rather than coerced.
+
+## 0.124.4 — which layer failed, and what a reroute cost
+
+Two halves of the same question: when something breaks, *where* did it break?
+
+**API correlation (V2 §5).** The runner watched every request the page made and
+kept only the failures — no method, no timing. So "The server rejected the
+request" could never be resolved into *which* request. Every `xhr`/`fetch`/
+`document` call is now recorded with method, masked URL, status and duration, and
+the run page reads as `Browser ✓ · Page ✓ · API ✗ · HTTP 503` over a table of
+what failed and what was slowest. Three answers rather than one: "the test
+failed" is what the operator already knows.
+
+Not stored, on purpose: bodies, headers, cookies. URLs keep their sensitive query
+values masked (`token`, `api_key`, `session`, …) and userinfo credentials
+dropped — masked on the way IN, so a secret that never enters the column cannot
+leave it through a template someone forgot to scrub. Images, fonts and
+stylesheets are not recorded at all: a page load is a hundred of them and none
+says whether the service works. Migration 081 adds `service_test_runs.api_calls`.
+
+Collected on every run, not only a failing one — a test that passes while a
+background call answers 503 is a service that is half-broken, and that run is the
+one nobody would think to open.
+
+**A reroute now says what it cost (V2 §6).** BlueEye already detected AS-path
+changes; it could not say what the change did to the latency, and "the path
+changed" is a fact an operator can do nothing with. A path-change finding carries
+the round-trip time either side of it, and a reroute that measurably hurt is a
+**WARN even when the origin AS is unchanged** — the case the old severity rule
+could not see, because it only looked at the control plane.
+
+The two sides are not symmetric, and the code says so rather than pretending.
+A change is detected on the tick it happens, so the baseline is the **median** of
+the runs on the old path — where noise protection is both needed and available —
+while the new path usually has exactly one run. The sample counts are printed
+("median of 1 run on the new path vs 12 on the old") instead of hidden, and a
+shift counts only when it is material both relatively (≥25%) and absolutely
+(≥10 ms): 15 ms on a 12 ms path is a different event from 15 ms on a 400 ms path.
+
+Hop-level route-change detection is deliberately NOT added. ECMP means the hop
+sequence legitimately differs run to run, so a hop-diff alarm would fire
+constantly and be switched off within a week. The AS-path is the level at which a
+change means something happened.
+
+## 0.124.3 — a service that stopped working reaches the Changes page
+
+The Changes feed merges ten sources under one premise: *what happened while I was
+away*. Service Assurance was not among them, so the customer portal refusing
+logins since 02:00 was visible only in a module nobody opens at the start of a
+shift — while an LLDP neighbour disappearing was on the landing page.
+
+Incidents are now a source. One incident can contribute two rows — it opened,
+and (if it resolved inside the window) it closed — exactly as a probe outage
+does, and a recovery is reported at INFO rather than at the severity of the fault
+it ended.
+
+**Incidents rather than failing runs**, deliberately: a test failing every five
+minutes all weekend is ONE thing that happened, and the raw runs would bury every
+other source on the page. The kind is collapsible for the same reason, so a
+flapping service folds instead of filling the feed.
+
+The source is **licence-gated at call time**, not at wiring time. The sweep runs
+whatever the plan says, so incidents exist on an unlicensed install too, and the
+feed must not surface a feature the customer has not bought — checked per request
+so a licence that changes needs no restart. A deployment without the module, or
+with an older one that has no window query, contributes nothing rather than
+failing the source and marking the whole page partial.
+
+Also: **[docs/service-assurance-v2.md](docs/service-assurance-v2.md)** — the V2
+scope (recording, journeys, self-healing selectors, API correlation, failure
+intelligence, baselines, service map, visual regression, accessibility) as the
+design of record, with its build order. V1's "what it is not" list said no
+self-healing selectors and no visual regression; V2 reverses both, and §0 records
+that rather than leaving two documents disagreeing with each other.
+
 ## 0.124.2 — concurrency is a real dial, and a failure says what was observed
 
 **`runner.concurrency` did nothing.** It was stored, validated and shown in

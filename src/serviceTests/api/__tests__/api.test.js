@@ -603,3 +603,99 @@ test('a certificate check that throws is a 502, never an unhandled 500', async (
   const res = await request(scoped).post(`${BASE}/assurance/certificates/check`).set('Authorization', authHeader('operator')).send({});
   assert.ok([200, 502].includes(res.status), `→ ${res.status}`);
 });
+
+// --------------------------------------- top applications by critical count
+// The Health page's ranking: "which services gave us the most trouble this
+// period", over a chosen window, optionally narrowed to chosen applications.
+
+async function withRankedIncidents() {
+  const st = makeServiceTests({
+    applications: [
+      { name: 'Customer Portal', base_url: 'https://portal.example.com', enabled: 1 },
+      { name: 'Billing', base_url: 'https://billing.example.com', enabled: 1 },
+      { name: 'Quiet App', base_url: 'https://quiet.example.com', enabled: 1 },
+    ],
+  });
+  const open = (applicationId, severity, at) => st.repositories.incidents.open({
+    application_id: applicationId,
+    subject_type: 'test',
+    subject_key: `test:${applicationId}:${Math.random()}`,
+    subject_label: 'x',
+    kind: 'http_503',
+    severity,
+    summary: 'down',
+    at,
+  });
+  const now = new Date();
+  for (let i = 0; i < 3; i += 1) await open(1, 'CRIT', now);
+  await open(2, 'CRIT', now);
+  await open(2, 'WARN', now);       // a WARN must not rank as a critical
+  await open(3, 'WARN', now);       // and an app with only WARNs must not appear
+  return st;
+}
+
+const topUrl = (qs = '') => `/assurance/top-applications${qs}`;
+
+test('the ranking is by critical count, descending, and WARNs do not count', async () => {
+  const scoped = makeApp({ serviceTests: await withRankedIncidents() });
+  const res = await request(scoped).get(`${BASE}${topUrl('?period=month')}`).set('Authorization', authHeader('viewer'));
+
+  assert.equal(res.status, 200);
+  assert.equal(res.body.period, 'month');
+  assert.deepEqual(res.body.applications.map((a) => [a.application_name, a.incidents]),
+    [['Customer Portal', 3], ['Billing', 1]]);
+  assert.equal(res.body.total, 4);
+  assert.ok(!res.body.applications.some((a) => a.application_name === 'Quiet App'),
+    'an application with only warnings is not in a criticals ranking');
+});
+
+test('the default period is a month — the question the Health page asks', async () => {
+  const scoped = makeApp({ serviceTests: await withRankedIncidents() });
+  const res = await request(scoped).get(`${BASE}${topUrl()}`).set('Authorization', authHeader('viewer'));
+  assert.equal(res.body.period, 'month');
+  assert.ok(res.body.from && res.body.to && res.body.prev_at, 'the window and its neighbours come from the server');
+});
+
+test('the selection narrows the ranking, and an EMPTY selection means none', async () => {
+  const scoped = makeApp({ serviceTests: await withRankedIncidents() });
+  const one = await request(scoped).get(`${BASE}${topUrl('?application_ids=2')}`).set('Authorization', authHeader('viewer'));
+  assert.deepEqual(one.body.applications.map((a) => a.application_name), ['Billing']);
+
+  // "Show me none of them" is a legitimate thing for a multi-select to say, and
+  // answering it with everything would be a lie.
+  const none = await request(scoped).get(`${BASE}${topUrl('?application_ids=')}`).set('Authorization', authHeader('viewer'));
+  assert.equal(none.status, 200);
+  assert.deepEqual(none.body.applications, []);
+});
+
+test('every query parameter is validated rather than coerced', async () => {
+  const scoped = makeApp({ serviceTests: await withRankedIncidents() });
+  const bad = [
+    '?period=fortnight', '?at=last-tuesday', '?at=2026-13-45', '?tz_offset=9999',
+    '?severity=URGENT', '?limit=0', '?limit=abc', '?limit=999',
+    '?application_ids=1,abc', '?application_ids=-1',
+  ];
+  for (const qs of bad) {
+    const res = await request(scoped).get(`${BASE}${topUrl(qs)}`).set('Authorization', authHeader('viewer'));
+    assert.equal(res.status, 400, `${qs} → ${res.status}`);
+  }
+});
+
+test('the ranking is viewer-readable and never anonymous', async () => {
+  const scoped = makeApp({ serviceTests: await withRankedIncidents() });
+  assert.equal((await request(scoped).get(`${BASE}${topUrl()}`)).status, 401);
+  for (const role of ['viewer', 'operator', 'admin']) {
+    const res = await request(scoped).get(`${BASE}${topUrl()}`).set('Authorization', authHeader(role));
+    assert.equal(res.status, 200, role);
+  }
+});
+
+test('a period with no criticals is an empty ranking, not an error', async () => {
+  // Good news has to be representable: an empty list is the answer, and the UI
+  // says so in words rather than drawing an empty chart area.
+  const scoped = makeApp({ serviceTests: makeServiceTests() });
+  const res = await request(scoped).get(`${BASE}${topUrl('?period=year')}`).set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body.applications, []);
+  assert.equal(res.body.total, 0);
+});

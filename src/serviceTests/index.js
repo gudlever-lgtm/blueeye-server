@@ -22,6 +22,7 @@ const { createArtifactStore, createArtifactRetention } = require('./runner/artif
 const { createAssuranceReactor, createAssuranceJob } = require('./assurance/reactor');
 const { createRecordingsCaptureRouter } = require('./api/recordings');
 const { createRecordingRetention } = require('./recording/retention');
+const { createRecorderSource } = require('./recording/bookmarklet');
 
 // Service Tests — the module factory, and the ONLY thing its host constructs.
 //
@@ -106,6 +107,11 @@ function createServiceTestsModule(rawPorts = {}) {
     ? createRecordingsCaptureRouter({ repositories, logger, rateLimit: rawPorts.captureRateLimit || null })
     : null;
 
+  // The browser-side recorder's source, read from the path the host gives us.
+  // The bookmarklet carries it INLINE, because a bookmarklet's own code is
+  // exempt from the target site's CSP while a <script src> it appends is not.
+  const recorderSource = createRecorderSource({ path: rawPorts.recorderScriptPath || null, logger });
+
   const router = rawPorts.requireAuth && rawPorts.requireRole
     ? createServiceTestsApiRouter({
       repositories,
@@ -115,6 +121,7 @@ function createServiceTestsModule(rawPorts = {}) {
       artifacts,
       audit,
       logger,
+      recorderSource,
       requireAuth: rawPorts.requireAuth,
       requireRole: rawPorts.requireRole,
       requireFeature: rawPorts.requireFeature || null,

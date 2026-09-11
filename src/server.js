@@ -1,5 +1,6 @@
 'use strict';
 
+const path = require('path');
 const { config } = require('./config');
 const { createLogger, createLogRing } = require('./logger');
 const { createRateLimiter } = require('./middleware/rateLimit');
@@ -388,6 +389,9 @@ function start() {
     // for up to four hours, and cutting off an operator mid-journey would be a
     // worse failure than the volume this is guarding against.
     captureRateLimit: createRateLimiter({ windowMs: 60 * 1000, max: 120 }),
+    // The browser-side recorder. The module reads it to build the bookmarklet;
+    // it is served from public/ as well, so an operator can read it first.
+    recorderScriptPath: path.join(__dirname, '..', 'public', 'recorder.js'),
   });
 
   // Agent-release signing key — generated + managed from Settings (write-once; the

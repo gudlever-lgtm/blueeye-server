@@ -22,10 +22,25 @@
   'use strict';
   if (window.__blueeyeRecorder) return;
 
-  var script = document.currentScript;
-  if (!script || !script.dataset || !script.dataset.endpoint || !script.dataset.token) return;
-  var ENDPOINT = script.dataset.endpoint;
-  var TOKEN = script.dataset.token;
+  // Two ways in, because one of them has to survive a Content-Security-Policy:
+  //
+  //   * INLINE — the bookmarklet carries this whole file and sets the config
+  //     object first. A bookmarklet's own code is the user acting, not the page
+  //     loading a script, so `script-src` does not apply to it.
+  //   * SCRIPT TAG — the bookmarklet appends <script src="…/recorder.js">, which
+  //     IS subject to `script-src` and is refused by sites that set one.
+  //
+  // The inline path is what the bookmarklet uses. The tag path stays because
+  // /recorder.js is still served, and reading it in a browser is the easiest way
+  // to check what this thing actually does before trusting it.
+  var cfg = window.__blueeyeRecorderConfig || null;
+  if (!cfg) {
+    var script = document.currentScript;
+    if (script && script.dataset) cfg = { endpoint: script.dataset.endpoint, token: script.dataset.token };
+  }
+  if (!cfg || !cfg.endpoint || !cfg.token) return;
+  var ENDPOINT = cfg.endpoint;
+  var TOKEN = cfg.token;
 
   var queue = [];
   var stopped = false;

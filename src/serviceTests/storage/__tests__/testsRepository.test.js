@@ -35,7 +35,7 @@ function testRow(over = {}) {
   };
 }
 
-const selectTest = (over = {}) => [/^SELECT .* FROM service_test_tests WHERE id = \?/i, () => [[testRow(over)]]];
+const selectTest = (over = {}) => [/^SELECT .* FROM service_test_tests t LEFT JOIN service_test_applications .* WHERE t\.id = \?/i, () => [[testRow(over)]]];
 const selectSteps = [/^SELECT id,test_id,position.* FROM service_test_test_steps/i, () => [[]]];
 
 test('create() writes the definition, the step rows and version 1 in one transaction', async () => {
@@ -138,7 +138,7 @@ test('findById() parses the definition and returns null for an unknown id', asyn
   assert.equal(t.definition.steps.length, 4);
   assert.equal(t.enabled, true);
 
-  const missing = makeFakePool([[/^SELECT .* FROM service_test_tests WHERE id = \?/i, () => [[]]]]);
+  const missing = makeFakePool([[/^SELECT .* FROM service_test_tests t LEFT JOIN service_test_applications .* WHERE t\.id = \?/i, () => [[]]]]);
   assert.equal(await createTestsRepository({ db: { pool: missing } }).findById(999), null);
 });
 
@@ -163,4 +163,28 @@ test('versions() returns newest first with parsed definitions', async () => {
 test('remove() reports whether a row was deleted', async () => {
   const pool = makeFakePool([[/^DELETE FROM service_test_tests/i, () => ok({ affectedRows: 0 })]]);
   assert.equal(await createTestsRepository({ db: { pool } }).remove(4), false);
+});
+
+test('the list carries the application name and groups by it', async () => {
+  // A test name is only unique within its application: four applications can
+  // each have a "Login", and a flat alphabetical list puts them in a row with
+  // nothing to tell them apart.
+  const pool = makeFakePool([[/^SELECT .* FROM service_test_tests t LEFT JOIN service_test_applications/i, () => [[
+    testRow({ id: 1, application_id: 3, name: 'Login', application_name: 'Customer Portal' }),
+    testRow({ id: 2, application_id: 7, name: 'Login', application_name: 'Partner Portal' }),
+  ]]]]);
+  const list = await createTestsRepository({ db: { pool } }).list();
+  assert.deepEqual(list.map((t) => t.application_name), ['Customer Portal', 'Partner Portal']);
+
+  const sql = pool.matching(/LEFT JOIN service_test_applications/i)[0].sql;
+  assert.match(sql, /ORDER BY a\.name, t\.name/, 'tests must group under their application');
+  assert.match(sql, /LEFT JOIN/, 'a test whose application row is missing must still list');
+});
+
+test('a test scoped to one application is filtered in SQL, not in JS', async () => {
+  const pool = makeFakePool([[/^SELECT .* FROM service_test_tests t LEFT JOIN service_test_applications/i, () => [[testRow()]]]]);
+  await createTestsRepository({ db: { pool } }).list({ applicationId: 3 });
+  const call = pool.matching(/LEFT JOIN service_test_applications/i)[0];
+  assert.match(call.sql, /WHERE t\.application_id = \?/);
+  assert.deepEqual(call.params, [3]);
 });

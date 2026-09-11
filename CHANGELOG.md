@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.125.2 — the application a test runs against, and a bookmarklet CSP cannot refuse
+
+**The Tests list now names the application.** A test name is only unique within
+its application, so four applications each with a "Login" produced four
+identical rows with nothing to tell them apart. The list and the detail read
+join the application in (LEFT, so a test whose application row is gone still
+lists) and order by application first, so tests group under the service they
+watch. The recordings strip does the same, for the same reason.
+
+**The bookmarklet carries the recorder inline.** The first version did the tidy
+thing — one `<script src>` served from here, fixable server-side without anyone
+re-dragging a bookmark — and was refused by the first real site it met.
+
+The distinction that matters: a bookmarklet's own code is THE USER ACTING, and
+browsers exempt it from the page's Content-Security-Policy. A `<script src>` it
+appends is THE PAGE LOADING A SCRIPT, and `script-src` refuses it. So the whole
+recorder (about 23 KB encoded) now rides in the bookmarklet. Nothing was lost by
+inlining: the capture token expires in minutes, so every recording needs a fresh
+bookmark anyway and there is no stale copy to keep current. `/recorder.js` is
+still served, so an operator can read what it does before trusting it, and the
+recorder takes its config from either source.
+
+**The wall this does not climb, now documented instead of discovered:**
+`connect-src`. The recorder has to post what it saw back to BlueEyes, and a site
+whose policy allows connections only to itself blocks that — no bookmarklet can
+talk its way past it. The docs and the UI now say which directive to look for in
+the console and give the three real options: record on an environment without
+the header (the test stores paths, so it still runs against production), ask for
+the BlueEyes address to be added to `connect-src`, or build the test in the
+designer.
+
+**The bookmark's icon.** A `javascript:` bookmark has no origin, so the browser
+has no favicon to fetch and shows its generic globe whatever we do. The name is
+the part we control, so the BlueEyes mark (◉) rides there, and the UI says why
+rather than leaving it looking broken.
+
 ## 0.125.1 — recording: the bookmarklet, the capture path, and the review screen
 
 The other half of V2 §1. The operator drags a bookmark to their bookmarks bar,

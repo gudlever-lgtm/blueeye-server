@@ -352,3 +352,65 @@ test('the capture ingest can be rate limited, and the limiter runs before the to
   const preflight = await request(limited).options('/api/service-capture/events');
   assert.equal(preflight.status, 204);
 });
+
+test('the list names the application each recording belongs to', async () => {
+  const { app } = fixture();
+  await startRecording(app);
+  const list = await request(app).get(BASE).set('Authorization', authHeader('viewer'));
+  assert.equal(list.status, 200);
+  // Without this, four recordings called "Login" are four identical rows.
+  assert.equal(list.body[0].application_name, 'Customer Portal');
+});
+
+test('the tests list names the application each test runs against', async () => {
+  const serviceTests = makeServiceTests({
+    applications: [
+      { name: 'Customer Portal', base_url: 'https://customer.example.com', enabled: 1 },
+      { name: 'Partner Portal', base_url: 'https://partner.example.com', enabled: 1 },
+    ],
+    tests: [
+      { application_id: 2, name: 'Login', definition: { version: 1, steps: [{ type: 'open', url: '/login' }] }, version: 1, enabled: 1 },
+      { application_id: 1, name: 'Login', definition: { version: 1, steps: [{ type: 'open', url: '/login' }] }, version: 1, enabled: 1 },
+    ],
+  });
+  const app = makeApp({ serviceTests });
+  const res = await request(app).get('/api/service-tests/tests').set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 200);
+
+  // Two tests called "Login" are indistinguishable without this.
+  assert.deepEqual(res.body.map((t) => t.application_name), ['Customer Portal', 'Partner Portal']);
+  assert.deepEqual(res.body.map((t) => t.name), ['Login', 'Login']);
+
+  // And the detail read names it too — the same question, one screen deeper.
+  const detail = await request(app).get(`/api/service-tests/tests/${res.body[0].id}`).set('Authorization', authHeader('viewer'));
+  assert.equal(detail.body.application_name, 'Customer Portal');
+});
+
+test('the bookmarklet carries the recorder inline, so a strict script-src cannot refuse it', async () => {
+  const { app } = fixture();
+  const started = await startRecording(app);
+  assert.equal(started.status, 201);
+  const code = decodeURIComponent(started.body.bookmarklet.replace(/^javascript:/, ''));
+
+  assert.equal(started.body.inline, true);
+  // A <script src> would be the page loading a script, which `script-src`
+  // refuses. The bookmarklet's own code is the user acting, which it does not.
+  assert.ok(!/createElement\("script"\)/.test(code), 'the bookmarklet still appends a script tag');
+  assert.ok(code.includes('__blueeyeRecorderConfig'), 'the config the inline recorder reads is missing');
+  assert.ok(code.includes('BlueEyes Service Assurance'), 'the recorder source is not in the bookmarklet');
+  assert.ok(code.includes(started.body.token), 'the capture token must reach the recorder');
+
+  // It is still a URL a browser will accept as a bookmark.
+  assert.ok(started.body.bookmarklet.length < 200000, `bookmarklet too long: ${started.body.bookmarklet.length}`);
+  assert.doesNotThrow(() => new URL(started.body.bookmarklet));
+});
+
+test('without a recorder source the bookmarklet degrades to the script tag rather than failing', async () => {
+  const { createRecordingsRouter } = require('../recordings');
+  assert.equal(typeof createRecordingsRouter, 'function');
+  const { buildBookmarklet } = require('../../recording/bookmarklet');
+  const req = { protocol: 'https', get: () => 'blueeye.kunde.dk', app: { get: () => null } };
+  const built = buildBookmarklet({ req, token: 'abc', recorderSource: '' });
+  assert.equal(built.inline, false);
+  assert.match(decodeURIComponent(built.bookmarklet), /createElement\("script"\)/);
+});

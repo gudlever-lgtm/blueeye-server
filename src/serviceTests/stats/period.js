@@ -1,5 +1,7 @@
 'use strict';
 
+const { numOrNull } = require('../storage/shape');
+
 // Period maths for the run-history charts: "this week", "March", "2026" — and
 // the buckets a period is drawn in.
 //
@@ -119,7 +121,11 @@ function bucketStarts(startLocal, endLocal, bucket) {
 // (including the empty ones), and where "previous" and "next" point.
 function resolvePeriod({ period = 'week', at = null, offsetMinutes = 0, now = new Date() } = {}) {
   const chosen = isPeriod(period) ? period : 'week';
-  const offset = Number.isFinite(Number(offsetMinutes)) ? Math.max(-1440, Math.min(1440, Number(offsetMinutes))) : 0;
+  // 0 is the right default here (UTC), so the Number(null) trap is harmless —
+  // written with numOrNull anyway so the pattern does not sit in the codebase
+  // looking like an example worth copying.
+  const raw = numOrNull(offsetMinutes);
+  const offset = raw === null ? 0 : Math.max(-1440, Math.min(1440, raw));
   const bucket = BUCKET_FOR[chosen];
 
   const anchor = parseAt(at, offset, now);

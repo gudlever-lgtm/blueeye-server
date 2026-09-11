@@ -1,5 +1,7 @@
 'use strict';
 
+const { numOrNull } = require('../storage/shape');
+
 const { classifyElement } = require('./safety');
 
 // Turns a raw page snapshot into the structured record Discovery stores.
@@ -138,10 +140,14 @@ function extractPage(snapshot = {}, depth = 0) {
   return {
     url: trim(s.url, 1024) || '',
     title: trim(s.title, 512),
-    http_status: Number.isFinite(Number(s.status)) ? Number(s.status) : null,
+    // Not `Number(s.status)`: that turns a missing status into 0, and 0 is a
+    // REAL value here — apiLog uses it for "the request never completed".
+    http_status: numOrNull(s.status),
     redirected_to: s.redirectedTo && s.redirectedTo !== s.url ? trim(s.redirectedTo, 1024) : null,
     depth,
-    load_ms: Number.isFinite(Number(s.loadMs)) ? Number(s.loadMs) : null,
+    // Same trap, worse consequence: an unmeasured page would report as having
+    // loaded in 0 ms — the fastest page in the estate.
+    load_ms: numOrNull(s.loadMs),
     console_errors: (s.consoleErrors || []).slice(0, 50).map((e) => trim(e, 500)),
     failed_requests: failed.slice(0, 50).map((r) => ({ url: trim(r.url, 512), status: Number(r.status) || 0 })),
   };

@@ -1,5 +1,57 @@
 # Changelog
 
+## 0.125.7 — the Number(null) trap, swept out of the whole codebase
+
+`Number(null)` is `0`. `Number('')` is `0`. `Number('   ')` is `0`. `Number([])`
+is `0`. And `Number.isFinite(0)` is `true` — so the careful-looking guard
+
+    Number.isFinite(Number(row.duration_ms)) ? Number(row.duration_ms) : null
+
+turns a MISSING value into a real-looking zero. Zero is never neutral here: it
+is "instant", "0 Mbps", "no latency" — always the good end of whatever scale it
+lands on. Missing data then reads as good news, which is the one direction
+monitoring must never err in.
+
+It had bitten three times before this sweep, twice in the journeys work that
+found it. A full pass over the codebase turned up four more:
+
+**`throughputHealth` — the worst.** A speed-test row with no figure became
+`0 Mbps`, which is below every floor an admin can set, so the agent was flagged
+**BAD** with "Download 0 Mbps". An outage invented out of absence.
+
+**`discovery/extract`** — an unmeasured page reported `load_ms: 0`, the fastest
+page in the estate; and a missing HTTP status became `0`, which is a REAL value
+elsewhere in the module (apiLog uses it for "the request never completed").
+
+**`recording/validate`** — an event without a timestamp became epoch 0, and the
+translation sorts by timestamp, so it was sorted to the front of the journey.
+
+**`changeFeed`** — a finding with no host id became `agent 0`, a host the row
+could not name, which `agentId == null` checks downstream would then miss.
+
+Also hardened: `apiLog`'s duration, which is the arithmetic cousin —
+`5 - null` is `5`, so a missing start would have reported the absolute clock
+value as an elapsed time.
+
+The fix is `numOrNull` in `src/lib/num.js`, mirrored in
+`src/serviceTests/storage/shape.js` because nothing under `src/serviceTests/`
+may reach into its host. Absence — `null`, `undefined`, `''`, whitespace, `[]`,
+`{}`, booleans — comes back as null; a genuine `0` comes back as `0`. Writing
+the spec for it caught a gap in my own first version: `'   '` coerces to 0 too,
+and a padded CHAR column is absence.
+
+`test/numberCoercion.test.js` is the guard that keeps it from rotting: the two
+copies of the helper are asserted to agree (two copies that drifted is exactly
+how the password-field rule broke), and a `git grep` sweep refuses new
+occurrences of the pattern outside a two-entry allowlist that must state its
+reason — with a second test that fails if an allowlist entry outlives the line
+it excuses. The sweep was verified by introducing a regression and watching it
+fail.
+
+The sister repos were checked and are clean of this specific trap: the agent's
+`|| 0` cases are `/proc` counters where zero is the right default, and its link
+speed read is already guarded by `> 0`.
+
 ## 0.125.6 — user journeys: what the service IS, not which URLs answer
 
 The central V2 object (P1 #1). A test tells you a page answered. A journey tells

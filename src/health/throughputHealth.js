@@ -8,8 +8,12 @@
 // so nothing is flagged until an admin sets a floor (Settings → Analysis).
 // Pure + dependency-free for direct unit testing.
 
-const round1 = (n) => (n == null || !Number.isFinite(Number(n)) ? null : Math.round(Number(n) * 10) / 10);
-const numOr0 = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
+const { numOrNull } = require('../lib/num');
+
+const round1 = (n) => (numOrNull(n) === null ? null : Math.round(numOrNull(n) * 10) / 10);
+// Thresholds are the OPPOSITE case and 0 is correct here: an unset floor means
+// "do not flag on this", and every use below is guarded by `> 0`.
+const numOr0 = (v) => { const n = numOrNull(v); return n === null ? 0 : n; };
 
 // `latest` is a speedtest_results row ({ ts, ok, down_mbps, up_mbps }) or null.
 // `thr` is { enabled, downWarnMbps, downBadMbps, upWarnMbps, upBadMbps }.
@@ -17,8 +21,11 @@ const numOr0 = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; 
 // when disabled or there is no measurement.
 function throughputHealthSummary(latest, thr = {}) {
   if (!thr || !thr.enabled || !latest) return null;
-  const down = Number.isFinite(Number(latest.down_mbps)) ? Number(latest.down_mbps) : null;
-  const up = Number.isFinite(Number(latest.up_mbps)) ? Number(latest.up_mbps) : null;
+  // A MISSING reading must stay null. `Number(null)` is 0, and 0 Mbps is below
+  // every floor an admin can set — so a speed-test row with no figure used to
+  // flag the agent BAD for "Download 0 Mbps", an outage invented out of absence.
+  const down = numOrNull(latest.down_mbps);
+  const up = numOrNull(latest.up_mbps);
   const ok = latest.ok === 1 || latest.ok === true;
   const ts = latest.ts || null;
 

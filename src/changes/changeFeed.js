@@ -1,5 +1,7 @@
 'use strict';
 
+const { numOrNull } = require('../lib/num');
+
 // Pure read-model for the "what changed since I last looked" landing page
 // (Fase 2). No I/O, no clock, no database — it takes already-fetched rows from
 // each source and produces one ordered, grouped feed.
@@ -121,7 +123,9 @@ function fromAgentEvents(rows, { nameFor = (id) => `agent ${id}` } = {}) {
 // those away — `caseId` is the link that makes that possible.
 function fromFindings(rows, { nameFor = (id) => `host ${id}` } = {}) {
   return (rows || []).map((f) => {
-    const agentId = Number.isFinite(Number(f.hostId ?? f.host_id)) ? Number(f.hostId ?? f.host_id) : null;
+    // `Number(null)` is 0, and agent 0 does not exist — the row would claim a
+    // host it cannot name, and `agentId == null` checks downstream would miss it.
+    const agentId = numOrNull(f.hostId ?? f.host_id);
     return makeEvent({
       timestamp: f.createdAt || f.created_at,
       source: 'finding',
@@ -192,7 +196,7 @@ function fromEvents(rows) {
     severity: c.severity,
     summary: c.title,
     refId: c.id,
-    agentId: Number.isFinite(Number(c.hostId ?? c.host_id)) ? Number(c.hostId ?? c.host_id) : null,
+    agentId: numOrNull(c.hostId ?? c.host_id),
     kind: 'event',
     // Supplied by eventCasesRepository.list() (joined off primary_finding_id).
     // Absent for a case whose primary finding was deleted — the row still renders,

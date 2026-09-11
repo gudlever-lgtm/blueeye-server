@@ -10,6 +10,8 @@
 // produced it, and the evidence is the per-step outcomes an operator can read
 // without opening anything.
 //
+const { numOrNull } = require('../storage/shape');
+
 // PURE: steps and their latest runs in, a verdict out. No database, no clock.
 // Every rule below is one an operator can check against the screen.
 
@@ -79,14 +81,10 @@ function journeyHealth(steps, { lang = 'en' } = {}) {
     const required = step.required !== false;
     if (outcome === 'broken' && required && !brokenRequired) brokenRequired = step;
     if (outcome === 'broken' && !required && !brokenOptional) brokenOptional = step;
-    // `Number(null)` is 0 and `Number.isFinite(0)` is true, so a null duration
-    // would count as measured and contribute nothing — the journey then looks
-    // FASTER for missing data, which is the one direction this must never err in.
-    const ms = step.run == null ? null : step.run.duration_ms;
-    if (ms !== null && ms !== undefined && ms !== '' && Number.isFinite(Number(ms))) {
-      total += Number(ms);
-      timed += 1;
-    }
+    // numOrNull, not Number(): a null duration would otherwise count as measured
+    // and contribute nothing, so the journey looks FASTER for missing data.
+    const ms = step.run == null ? null : numOrNull(step.run.duration_ms);
+    if (ms !== null) { total += ms; timed += 1; }
     detail.push({
       test_id: step.test_id,
       position: step.position,
@@ -157,15 +155,12 @@ function reasonFor({ status, brokenRequired, brokenOptional, counts, lang }) {
 // The tolerance is deliberately generous: a synthetic journey drives a real
 // browser over a real network, and calling 1.1x "slow" would fire constantly.
 function durationVerdict(durationMs, expectedMs, { tolerance = 1.5 } = {}) {
-  // `Number(null)` is 0 and `Number.isFinite(0)` is true, so an UNMEASURED
-  // journey would come back as a verdict claiming it took 0 ms — infinitely
-  // fast, and reported as comfortably inside the expectation. Missing data must
-  // never read as good news, so a missing value yields no verdict at all.
-  const missing = (v) => v === null || v === undefined || v === '';
-  if (missing(durationMs) || missing(expectedMs)) return null;
-  const actual = Number(durationMs);
-  const expected = Number(expectedMs);
-  if (!Number.isFinite(actual) || !Number.isFinite(expected) || expected <= 0) return null;
+  // An UNMEASURED journey must yield no verdict at all. With a bare Number() it
+  // came back claiming 0 ms — infinitely fast, and comfortably inside whatever
+  // was expected. Missing data must never read as good news.
+  const actual = numOrNull(durationMs);
+  const expected = numOrNull(expectedMs);
+  if (actual === null || expected === null || expected <= 0) return null;
   const ratio = actual / expected;
   return {
     expected_ms: expected,

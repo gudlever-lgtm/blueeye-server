@@ -1,5 +1,7 @@
 'use strict';
 
+const { numOrNull } = require('../storage/shape');
+
 // The API calls behind a run — what the page asked the service for, and what it
 // got back (V2 §5, API correlation).
 //
@@ -102,6 +104,14 @@ function verdictOf({ calls = [], consoleErrors = [], failedToStart = false } = {
 //   log.calls()  ->  [{ method, url, status, duration_ms, resource_type, error }]
 //
 // `now` is injected so a spec can assert a duration without sleeping.
+// Milliseconds between two instants, or null when either is not a real instant.
+function durationBetween(startedAt, endedAt) {
+  const a = numOrNull(startedAt);
+  const b = numOrNull(endedAt);
+  if (a === null || b === null) return null;
+  return Math.max(0, Math.round(b - a));
+}
+
 function createApiLog({ now = () => Date.now(), max = MAX_CALLS, redact = null } = {}) {
   const open = new Map();
   const done = [];
@@ -127,7 +137,11 @@ function createApiLog({ now = () => Date.now(), max = MAX_CALLS, redact = null }
     const { startedAt, ...rest } = started;
     done.push({
       ...rest,
-      duration_ms: Number.isFinite(at - startedAt) ? Math.max(0, Math.round(at - startedAt)) : null,
+      // Subtraction is the arithmetic cousin of the Number(null) trap: `5 - null`
+      // is 5, so a missing startedAt would report the absolute clock value as a
+      // duration. startedAt is always set by open(), but the guard is explicit
+      // rather than relying on that staying true.
+      duration_ms: durationBetween(startedAt, at),
       ...patch,
     });
     // Keep the NEWEST: a failure is at the end of a run, and the first hundred

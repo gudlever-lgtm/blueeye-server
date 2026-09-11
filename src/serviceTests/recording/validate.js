@@ -21,6 +21,7 @@
 // operator just performed.
 
 const { isSecretField } = require('./secrets');
+const { numOrNull } = require('../storage/shape');
 
 const MAX_EVENTS_PER_BATCH = 200;
 const MAX_STRING = 512;
@@ -62,7 +63,11 @@ function cleanEvent(raw) {
   const kind = str(raw.kind, 32);
   if (!kind || !EVENT_KINDS.has(kind)) return null;
 
-  const event = { kind, at: Number.isFinite(Number(raw.at)) ? Number(raw.at) : Date.now() };
+  // `Number(null)` is 0, which is 1970 — and the translation sorts by `at`, so a
+  // recorder that omitted a timestamp would have that event sorted to the front
+  // of the journey. Absent means "now", not "the beginning of time".
+  const at = numOrNull(raw.at);
+  const event = { kind, at: at === null ? Date.now() : at };
   const url = str(raw.url, MAX_URL);
   if (url) event.url = url;
   const target = cleanTarget(raw.target);

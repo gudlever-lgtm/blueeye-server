@@ -1,0 +1,23 @@
+-- Service Assurance — the API calls behind a run (V2 §5, API correlation).
+--
+-- A browser test that fails says the journey broke. It does not say WHERE, and
+-- the operator's next question is always the same: was it the browser, the page,
+-- or the service behind it? The runner already watched every request the page
+-- made; it kept only the failures, without a method and without a timing, so
+-- "The server rejected the request" could never be resolved into "POST
+-- /api/auth/session answered 401 in 1.2 s".
+--
+-- Stored as JSON on the run beside `console_errors` and `network_errors`, which
+-- are the same kind of per-run diagnostic payload: read with the run, never
+-- queried across runs, and gone when the run is purged. A table would buy
+-- cross-run queries nobody asks for and an extra join on the one read that
+-- matters.
+--
+-- WHAT IS NOT STORED is the point of the column: no request or response bodies,
+-- no headers, no cookies. A URL is kept with its sensitive query parameters
+-- masked (see runner/apiLog.js) — a token in a query string is a credential, and
+-- this column is shown in a UI and read by support.
+--
+-- MySQL 8.4 note: JSON columns must NOT carry a non-NULL DEFAULT.
+ALTER TABLE service_test_runs
+  ADD COLUMN api_calls JSON DEFAULT NULL AFTER network_errors;

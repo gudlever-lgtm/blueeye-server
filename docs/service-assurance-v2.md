@@ -69,6 +69,41 @@ credentials, secret masking, audit logging, execution timeouts, resource limits.
 | 9 | **Accessibility** | Basic checks — missing labels, buttons with no accessible name, images without alt, fields without labels, heading structure, keyboard access on key elements. Reported **separately from functional failures**. |
 | 10 | **Dashboard** | Applications, journeys, tests, runs, failures, warnings, performance — with critical journeys listed by name and verdict. |
 
+## 2b. Shipped so far
+
+**§5 API correlation.** The runner watched every request the page made and kept
+only the failures, with no method and no timing — so "The server rejected the
+request" could never be resolved into *which* request. `runner/apiLog.js` records
+every `xhr`/`fetch`/`document` call with method, masked URL, status and duration;
+the run page reads it as `Browser ✓ · Page ✓ · API ✗ · HTTP 503` (§13's shape)
+over a table of what failed and what was slowest. Migration 081 adds
+`service_test_runs.api_calls`.
+
+What is deliberately NOT stored: request or response bodies, headers, cookies.
+URLs keep their sensitive query values masked (`token`, `api_key`, `session`, …)
+and userinfo credentials dropped — masked on the way IN, so a secret that never
+enters the column cannot leave it through a template someone forgot to scrub.
+Images, fonts and stylesheets are not recorded: a page load is a hundred of them
+and none says whether the service works.
+
+**§6, the path half.** BlueEye already detected AS-path changes. It could not say
+what the reroute COST: "the path changed" is a fact an operator can do nothing
+with. A path-change finding now carries the latency either side of it, and a
+reroute that measurably hurt is a WARN even when the origin AS is unchanged —
+the case the old rule could not see, because it only looked at the control plane.
+
+The two sides are not symmetric and the code says so: a change is detected on the
+tick it happens, so the baseline is the **median** of the runs on the old path
+(where noise protection is both needed and possible) while the new path usually
+has one run. The sample counts are printed rather than hidden, and a shift counts
+only when it is material both relatively (≥25%) and absolutely (≥10 ms) — 15 ms
+on a 12 ms path is a different event from 15 ms on a 400 ms path.
+
+**Not done, and not by accident: hop-level route change detection.** ECMP means
+the hop sequence to a target legitimately differs run to run, so a hop-diff alarm
+would fire constantly and be switched off within a week. The AS-path is the level
+at which a change means something happened.
+
 ## 3. Build order
 
 Exactly this order, because each step is what makes the next one worth having:

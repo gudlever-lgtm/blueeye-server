@@ -11,7 +11,7 @@ const { parseJson, intOrNull } = require('./shape');
 function createRunsRepository({ db, now = () => new Date() }) {
   const { pool } = db;
   const COLS = `id,tenant_id,test_id,environment_id,test_version,status,trigger_source,started_at,ended_at,
-    duration_ms,failed_step,error_message,failure_kind,screenshot_path,browser,console_errors,network_errors,
+    duration_ms,failed_step,error_message,failure_kind,screenshot_path,browser,console_errors,network_errors,api_calls,
     claimed_by,claimed_at,requested_by,created_at,updated_at`;
 
   // The same columns qualified for a join, plus what a run needs to NAME itself.
@@ -48,6 +48,7 @@ function createRunsRepository({ db, now = () => new Date() }) {
       browser: row.browser,
       console_errors: parseJson(row.console_errors, []),
       network_errors: parseJson(row.network_errors, []),
+      api_calls: parseJson(row.api_calls, []),
       claimed_by: row.claimed_by,
       claimed_at: row.claimed_at,
       requested_by: row.requested_by,
@@ -148,12 +149,12 @@ function createRunsRepository({ db, now = () => new Date() }) {
       await conn.query(
         `UPDATE service_test_runs SET status = ?, ended_at = ?, duration_ms = ?, failed_step = ?,
            error_message = ?, failure_kind = ?, screenshot_path = ?, browser = ?,
-           console_errors = ?, network_errors = ?
+           console_errors = ?, network_errors = ?, api_calls = ?
          WHERE id = ?`,
         [result.status, endedAt, intOrNull(result.duration_ms), intOrNull(result.failed_step),
           result.error_message ?? null, result.failure_kind ?? null, result.screenshot_path ?? null,
           result.browser ?? null, JSON.stringify(result.console_errors || []),
-          JSON.stringify(result.network_errors || []), id]
+          JSON.stringify(result.network_errors || []), JSON.stringify(result.api_calls || []), id]
       );
       await conn.query('DELETE FROM service_test_run_steps WHERE run_id = ?', [id]);
       const steps = result.steps || [];

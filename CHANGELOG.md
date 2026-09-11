@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.124.4 — which layer failed, and what a reroute cost
+
+Two halves of the same question: when something breaks, *where* did it break?
+
+**API correlation (V2 §5).** The runner watched every request the page made and
+kept only the failures — no method, no timing. So "The server rejected the
+request" could never be resolved into *which* request. Every `xhr`/`fetch`/
+`document` call is now recorded with method, masked URL, status and duration, and
+the run page reads as `Browser ✓ · Page ✓ · API ✗ · HTTP 503` over a table of
+what failed and what was slowest. Three answers rather than one: "the test
+failed" is what the operator already knows.
+
+Not stored, on purpose: bodies, headers, cookies. URLs keep their sensitive query
+values masked (`token`, `api_key`, `session`, …) and userinfo credentials
+dropped — masked on the way IN, so a secret that never enters the column cannot
+leave it through a template someone forgot to scrub. Images, fonts and
+stylesheets are not recorded at all: a page load is a hundred of them and none
+says whether the service works. Migration 081 adds `service_test_runs.api_calls`.
+
+Collected on every run, not only a failing one — a test that passes while a
+background call answers 503 is a service that is half-broken, and that run is the
+one nobody would think to open.
+
+**A reroute now says what it cost (V2 §6).** BlueEye already detected AS-path
+changes; it could not say what the change did to the latency, and "the path
+changed" is a fact an operator can do nothing with. A path-change finding carries
+the round-trip time either side of it, and a reroute that measurably hurt is a
+**WARN even when the origin AS is unchanged** — the case the old severity rule
+could not see, because it only looked at the control plane.
+
+The two sides are not symmetric, and the code says so rather than pretending.
+A change is detected on the tick it happens, so the baseline is the **median** of
+the runs on the old path — where noise protection is both needed and available —
+while the new path usually has exactly one run. The sample counts are printed
+("median of 1 run on the new path vs 12 on the old") instead of hidden, and a
+shift counts only when it is material both relatively (≥25%) and absolutely
+(≥10 ms): 15 ms on a 12 ms path is a different event from 15 ms on a 400 ms path.
+
+Hop-level route-change detection is deliberately NOT added. ECMP means the hop
+sequence legitimately differs run to run, so a hop-diff alarm would fire
+constantly and be switched off within a week. The AS-path is the level at which a
+change means something happened.
+
 ## 0.124.3 — a service that stopped working reaches the Changes page
 
 The Changes feed merges ten sources under one premise: *what happened while I was

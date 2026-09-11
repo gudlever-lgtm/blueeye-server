@@ -1223,6 +1223,64 @@
       return details;
     }
 
+    // The layer verdict + the calls behind it (docs/service-assurance-v2.md §5).
+    //
+    // Computed in the browser from the stored calls rather than persisted: it is
+    // a READING of the evidence, and a reading that lives in the database gets
+    // stale the moment the rule behind it improves.
+    function layerVerdict(run) {
+      var calls = run.api_calls || [];
+      if (!calls.length) return null;
+
+      var documents = calls.filter(function (c) { return c.resource_type === 'document'; });
+      var apis = calls.filter(function (c) { return c.resource_type !== 'document'; });
+      var bad = function (c) { return c.status === 0 || (typeof c.status === 'number' && c.status >= 400); };
+      var failedApi = apis.filter(bad).sort(function (a, b) { return (b.status || 0) - (a.status || 0); })[0] || null;
+      var failedDoc = documents.filter(bad)[0] || null;
+      var started = run.failure_kind === 'worker_misconfigured';
+
+      var layers = [
+        [t('sa.run.layerBrowser'), !started],
+        [t('sa.run.layerPage'), !started && !failedDoc && !(run.console_errors || []).length],
+        [t('sa.run.layerApi'), !started && !failedApi],
+      ];
+      var status = (failedApi && failedApi.status) || (failedDoc && failedDoc.status) || null;
+
+      return el('div', { class: 'sa-layers' },
+        el('div', { class: 'sa-layer-row' }, ...layers.map(function (pair) {
+          return el('span', { class: 'sa-layer ' + (pair[1] ? 'ok' : 'bad') },
+            el('span', { class: 'sa-layer-name' }, pair[0]),
+            el('span', { class: 'sa-layer-mark' }, pair[1] ? '✓' : '✗'));
+        }), status ? el('span', { class: 'chip' }, 'HTTP ' + status) : null),
+        apiCallsTable(calls));
+    }
+
+    // Only the calls worth reading: everything that failed, and the slowest of
+    // the rest. A passing run's forty successful requests answer no question.
+    function apiCallsTable(calls) {
+      var bad = calls.filter(function (c) { return c.status === 0 || c.status >= 400; });
+      var slowest = calls.filter(function (c) { return !(c.status === 0 || c.status >= 400); })
+        .sort(function (a, b) { return (b.duration_ms || 0) - (a.duration_ms || 0); })
+        .slice(0, 5);
+      var shown = bad.concat(slowest);
+      if (!shown.length) return null;
+
+      return el('details', { class: 'sa-api-calls' },
+        el('summary', {}, t('sa.run.apiCalls', { n: String(calls.length) })),
+        el('table', { class: 'data-table' },
+          el('thead', {}, el('tr', {},
+            el('th', {}, t('sa.run.method')), el('th', {}, t('sa.run.address')),
+            el('th', {}, t('sa.run.status')), el('th', {}, t('sa.run.duration')))),
+          el('tbody', {}, ...shown.map(function (c) {
+            var failed = c.status === 0 || c.status >= 400;
+            return el('tr', { class: failed ? 'sa-api-bad' : '' },
+              el('td', {}, c.method || '—'),
+              el('td', { class: 'sa-api-url' }, c.url || '—'),
+              el('td', {}, c.error ? c.error : (c.status ? String(c.status) : '—')),
+              el('td', {}, ms(c.duration_ms)));
+          }))));
+    }
+
     views.runs = function (body) {
       if (state.runId) return runDetail(body, state.runId);
       return Promise.all([api(API + '/runs'), api(API + '/runs/worker-status')]).then(function (res) {
@@ -1292,6 +1350,10 @@
             // which addresses the policy refused — and the page used to throw it
             // away and show only the generic one-liner, leaving "The server
             // rejected the request" with no way to find out WHICH request.
+            // Browser ✓ · Page ✓ · API ✗ · HTTP 503 — three answers, not one.
+            // "The test failed" is what the operator already knows; WHICH layer
+            // failed is what they came for.
+            layerVerdict(run),
             classification && (classification.evidence || []).length
               ? el('div', { class: 'sa-evidence' },
                 el('h5', {}, t('sa.run.whatWeSaw')),

@@ -309,3 +309,22 @@
   .sa-chart-nav { gap: 6px; }
   .sa-chart-period { min-width: 0; }
 }
+
+/* ---- the layer verdict: Browser ✓ · Page ✓ · API ✗ ----
+   Three answers rather than one. "The test failed" is what the operator already
+   knows; which layer failed is what they came for. */
+.sa-layers { margin: 10px 0; }
+.sa-layer-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.sa-layer {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 10px; border-radius: 999px; font-size: 0.8rem; font-weight: 600;
+}
+.sa-layer.ok { background: #dcfce7; color: #166534; }
+.sa-layer.bad { background: #fee2e2; color: #991b1b; }
+.sa-layer-mark { font-weight: 700; }
+.sa-api-calls { margin-top: 10px; }
+.sa-api-url { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.8rem; word-break: break-all; }
+.sa-api-bad td { color: var(--danger, #b91c1c); }
+
+[data-theme="dark"] .sa-layer.ok, [data-theme="midnight"] .sa-layer.ok { background: #14532d; color: #bbf7d0; }
+[data-theme="dark"] .sa-layer.bad, [data-theme="midnight"] .sa-layer.bad { background: #7f1d1d; color: #fecaca; }

@@ -629,6 +629,19 @@
               el('td', {}, el('span', { class: 'sa-status sa-status-' + (rec.status === 'recording' ? 'running' : 'pending') },
                 t(rec.status === 'recording' ? 'sa.record.live' : 'sa.record.stopped'))),
               el('td', { class: 'sa-row-actions' },
+                // Stopping from HERE, not only from the badge on the page.
+                // The badge's stop is a request FROM the customer's site, so a
+                // site that blocks the recorder's connection also blocks its
+                // goodbye — and the recording sat at "Recording" with nobody
+                // able to end it. The dashboard's own connection always works.
+                rec.status === 'recording' && isOperator() ? el('button', {
+                  class: 'ghost small',
+                  onclick: function () {
+                    api(API + '/recordings/' + rec.id + '/stop', { method: 'POST', body: {} })
+                      .then(function () { toast(t('sa.record.stoppedToast')); draw(); })
+                      .catch(function (e) { toast(err(e), true); });
+                  },
+                }, t('sa.record.stop')) : null,
                 el('button', { class: 'ghost small', onclick: function () { reviewRecording(rec.id); } }, t('sa.record.review')),
                 el('button', {
                   class: 'ghost small danger',
@@ -698,9 +711,13 @@
       var poll = setInterval(function () {
         if (!overlay.isConnected) { clearInterval(poll); return; }
         api(API + '/recordings/' + rec.id).then(function (live) {
-          status.textContent = live.status === 'recording'
+          if (live.status !== 'recording') { status.textContent = t('sa.record.stopped'); return; }
+          // Nothing has arrived yet. Say what that means while the operator is
+          // still on the page and can act on it, rather than letting them
+          // perform the whole journey and find an empty recording.
+          status.textContent = live.step_count
             ? t('sa.record.captured', { count: live.step_count })
-            : t('sa.record.stopped');
+            : t('sa.record.nothingYet');
         }).catch(function () { clearInterval(poll); });
       }, 3000);
     }
@@ -738,15 +755,17 @@
           ? el('ol', { class: 'sa-record-steps' }, ...steps.map(function (step) {
             return el('li', {}, el('code', {}, step.type), ' ', el('span', {}, recordedStepText(step)));
           }))
-          : el('div', { class: 'sa-empty' }, t('sa.record.nothing'));
+          : el('div', { class: 'sa-empty' },
+            el('p', {}, t('sa.record.nothing')),
+            el('p', { class: 'muted' }, t('sa.record.nothingWhy')));
 
         modal(t('sa.record.review'), el('div', { class: 'sa-form' },
           field(t('sa.app.name'), name),
           credential ? field(t('sa.app.credentials'), credential, t('sa.record.credentialNote')) : null,
           list,
           errors),
-        // A recording with no steps cannot become a test, so the save button
-        // says so instead of failing on the server and looking like a bug.
+        // A recording with no steps cannot become a test — so there is no save
+        // button at all, rather than one that fails when pressed.
         steps.length ? function () {
           return api(API + '/recordings/' + id + '/accept', {
             method: 'POST',
@@ -754,7 +773,7 @@
           })
             .then(function (test) { toast(t('sa.record.saved')); state.testId = test.id; state.tab = 'tests'; draw(); })
             .catch(function (e) { showErrors(errors, e); throw e; });
-        } : function () { toast(t('sa.record.nothing'), true); return Promise.reject(new Error('empty')); },
+        } : null,
         t('sa.record.save'));
       }).catch(function (e) { toast(err(e), true); });
     }
@@ -2231,23 +2250,29 @@
     }
 
     // --------------------------------------------------------------- modal
+    // `onSave` null means there is nothing to save, and the dialog says so by
+    // NOT having the button: an enabled button that only produces an error when
+    // pressed tells the operator they did something wrong, when the truth is
+    // that there was never anything there to press it for.
     function modal(title, content, onSave, saveLabel) {
       var overlay = el('div', { class: 'sa-modal-overlay' });
       function close() { overlay.remove(); document.removeEventListener('keydown', onKey); }
       function onKey(e) { if (e.key === 'Escape') close(); }
       document.addEventListener('keydown', onKey);
 
-      var save = el('button', { class: 'primary', onclick: function () {
+      var save = onSave ? el('button', { class: 'primary', onclick: function () {
         save.disabled = true;
         Promise.resolve(onSave()).then(close).catch(function () { save.disabled = false; });
-      } }, saveLabel || t('sa.save'));
+      } }, saveLabel || t('sa.save')) : null;
 
       overlay.append(el('div', { class: 'sa-modal' },
         el('div', { class: 'sa-modal-head' }, el('h3', {}, title),
           el('button', { class: 'ghost small', onclick: close }, '×')),
         el('div', { class: 'sa-modal-body' }, content),
         el('div', { class: 'sa-modal-foot' },
-          el('button', { class: 'ghost', onclick: close }, t('sa.cancel')), save)));
+          // With no save there is nothing to cancel — the only thing left to do
+          // is close the dialog, so the button says that instead.
+          el('button', { class: 'ghost', onclick: close }, save ? t('sa.cancel') : t('sa.close')), save)));
       overlay.addEventListener('click', function (e) { if (e.target === overlay) close(); });
       document.body.append(overlay);
       return overlay;

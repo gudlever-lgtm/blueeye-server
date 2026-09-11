@@ -77,8 +77,14 @@ page may send data to. The recorder has to post what it saw back to BlueEyes, an
 a site whose policy allows connections only to itself will block that. No
 bookmarklet can talk its way past it; that is exactly what the policy is for.
 
-**How to tell which one you hit.** Press F12, open **Console**, and click the
-bookmark. A CSP refusal prints the directive by name:
+**The badge tells you first.** If the recorder cannot send what it sees back to
+BlueEyes, the badge turns amber and says so rather than counting up into a void.
+Two failed attempts, not one — a single dropped packet is not worth alarming you
+about. It distinguishes two cases: *never reached* (it was never going to work
+from this page) and *connection lost* (it was working and stopped).
+
+**How to tell which directive you hit.** Press F12, open **Console**, and click
+the bookmark. A CSP refusal prints the directive by name:
 
 ```
 Refused to connect to 'https://blueeye.kunde.dk/api/service-capture/events'

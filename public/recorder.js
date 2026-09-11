@@ -268,6 +268,11 @@
       keepalive: path === '/stop',
     }).then(function (res) {
       flushing = false;
+      // A response at all — any status — means we REACHED BlueEyes. A 429 is the
+      // server talking to us, not an unreachable server, and must not read on
+      // the badge as "cannot connect".
+      failures = 0;
+      delivered = true;
       // 401 is terminal: the recording expired or was stopped, and nothing the
       // recorder does will change that.
       if (res.status === 401) { teardown('expired'); return null; }
@@ -277,6 +282,8 @@
       if (res.status === 429) { requeue(batch); backOff(); return null; }
       return res.json().catch(function () { return null; });
     }).then(function (body) {
+      // Repaint: the reset above may have cleared a "cannot reach" state.
+      paint();
       // Stopped from the dashboard — the operator is done, even though they are
       // still on this page.
       if (body && body.status && body.status !== 'recording') teardown('stopped');
@@ -285,6 +292,15 @@
       flushing = false;
       // Put the batch back: a flaky network must not silently lose the journey.
       requeue(batch);
+      // And SAY so. A blocked fetch used to be silent: the badge kept counting
+      // what it had seen locally, so the operator performed the whole journey
+      // believing it was being recorded and found an empty recording waiting for
+      // them. The commonest cause is the site's own Content-Security-Policy
+      // refusing the connection — which the browser reports to the console and
+      // to nobody else, since a CSP refusal is indistinguishable from a network
+      // error here.
+      failures += 1;
+      paint();
     });
   }
 
@@ -321,8 +337,29 @@
 
 
   var counted = 0;
+  // Consecutive failed flushes, and whether ANY flush has ever succeeded. The
+  // second one changes the message: never delivered reads as "this was never
+  // going to work"; delivered then stopped reads as "something broke just now".
+  var failures = 0;
+  var delivered = false;
+  // Two failures rather than one: a single flush can lose to a dropped Wi-Fi
+  // packet, and flashing a scary message at the operator for that would be its
+  // own kind of lying.
   function paint() {
+    // Once stopped the badge carries its final message; a flush still in flight
+    // must not overwrite it with a live-recording one.
+    if (stopped) return;
     counted = Math.max(counted, 0);
+    if (failures >= 2) {
+      dot.style.background = '#fab219';
+      label.textContent = delivered
+        ? 'BlueEyes: forbindelsen er afbrudt · ' + counted
+        : 'BlueEyes når ikke frem — se konsollen (F12)';
+      badge.title = 'Optageren kan ikke sende data til BlueEyes. Tryk F12 og se Console:'
+        + ' nævner den connect-src, blokerer sitets Content-Security-Policy forbindelsen.';
+      return;
+    }
+    dot.style.background = '#d03b3b';
     label.textContent = 'BlueEyes optager · ' + counted;
   }
 

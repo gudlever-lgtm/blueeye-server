@@ -414,3 +414,67 @@ test('without a recorder source the bookmarklet degrades to the script tag rathe
   assert.equal(built.inline, false);
   assert.match(decodeURIComponent(built.bookmarklet), /createElement\("script"\)/);
 });
+
+test('the review dialog offers no save for an empty recording, and the server refuses one anyway', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const ui = fs.readFileSync(path.join(__dirname, '..', '..', '..', '..', 'public', 'serviceAssurance.js'), 'utf8');
+
+  // An enabled button that only produces an error when pressed tells the
+  // operator they did something wrong, when there was never anything to press
+  // it for. `modal(..., null, ...)` is how the dialog says that.
+  assert.match(ui, /steps\.length \? function \(\) \{[\s\S]*?\} : null,/,
+    'the review dialog must pass a null save handler when there are no steps');
+  assert.ok(!/toast\(t\('sa\.record\.nothing'\), true\)/.test(ui),
+    'the empty case must not be a toast fired by a button that should not exist');
+
+  // And the modal helper has to honour it, or the null handler throws on click.
+  assert.match(ui, /var save = onSave \? el\('button'/, 'modal() must omit the save button when there is nothing to save');
+  assert.match(ui, /save \? t\('sa\.cancel'\) : t\('sa\.close'\)/, 'with no save there is nothing to cancel');
+});
+
+test('the recorder says when it cannot reach BlueEyes instead of counting into a void', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const recorder = fs.readFileSync(path.join(__dirname, '..', '..', '..', '..', 'public', 'recorder.js'), 'utf8');
+
+  // The failure this guards: a blocked fetch used to be silent, so the badge
+  // kept counting what it saw locally and the operator performed a whole
+  // journey believing it was recorded.
+  assert.match(recorder, /failures \+= 1;/, 'a failed flush must be counted');
+  assert.match(recorder, /if \(failures >= 2\)/, 'two failures, not one — a single dropped packet is not a story');
+  // Any HTTP response means BlueEyes was reached; a 429 must not read as "cannot connect".
+  assert.match(recorder, /failures = 0;\s*\n\s*delivered = true;/, 'a response must clear the failure state');
+  assert.match(recorder, /if \(stopped\) return;/, 'a flush in flight must not overwrite the final badge message');
+});
+
+test('a recording can be stopped from the dashboard, not only from the page', async () => {
+  const { serviceTests, app } = fixture();
+  const started = await startRecording(app);
+  const { id, token } = started.body;
+
+  // The badge's stop is a request FROM the customer's site. A site that blocks
+  // the recorder's connection blocks its goodbye too, so the row would sit at
+  // "Recording" with nobody able to end it. The dashboard's own connection is
+  // never subject to the customer's policy.
+  const stopped = await request(app).post(`${BASE}/${id}/stop`).set('Authorization', authHeader('operator')).send({});
+  assert.equal(stopped.status, 200);
+  assert.equal(serviceTests.tables.recordings.find(id).status, 'stopped');
+
+  // And that really does end it: the capture token stops working.
+  assert.equal((await request(app).post(`${CAPTURE}/events`).send({ token, events: [] })).status, 401);
+
+  // Stopping an already-stopped one is not an error — the operator pressing a
+  // button twice must not see a failure.
+  assert.equal((await request(app).post(`${BASE}/${id}/stop`).set('Authorization', authHeader('operator')).send({})).status, 200);
+  assert.equal((await request(app).post(`${BASE}/${id}/stop`).set('Authorization', authHeader('viewer')).send({})).status, 403);
+});
+
+test('the recordings strip offers Stop while a recording is live', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const ui = fs.readFileSync(path.join(__dirname, '..', '..', '..', '..', 'public', 'serviceAssurance.js'), 'utf8');
+  assert.match(ui, /rec\.status === 'recording' && isOperator\(\) \? el\('button'/,
+    'a live recording must be stoppable from the dashboard');
+  assert.match(ui, /'\/stop', \{ method: 'POST'/, 'the Stop button must call the stop route');
+});

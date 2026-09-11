@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.125.3 — the recorder says when it cannot reach us
+
+Three fixes from watching someone use it.
+
+**A recording could not be stopped from the dashboard.** The only Stop was the
+badge on the customer's page — which stops by POSTing to BlueEyes. So a site
+that blocks the recorder's connection blocks its goodbye too, and the row sat at
+"Recording" with nobody able to end it: pressing Stop appeared to do nothing,
+because from BlueEyes' side nothing happened. The route existed and was tested;
+there was simply no button on it. The recordings strip now has one, and the
+dashboard's own connection is never subject to the customer's policy.
+
+**An empty recording offered a "Save as test" button** that could only fail. The
+server refuses a stepless test, correctly — but the dialog put an enabled button
+in front of the operator anyway, so pressing it produced an error that read as
+"you did something wrong" when the truth was there had never been anything to
+press it for. There is now no save button in that case, and the remaining button
+says Close rather than Cancel, because there is nothing to cancel.
+
+**A blocked flush was silent.** The badge counted what the recorder saw locally,
+so an operator could perform an entire journey believing it was being recorded
+and find an empty recording waiting for them. That is the worst possible failure
+for this feature: it wastes the one thing recording is supposed to save.
+
+The badge now turns amber after two consecutive failed flushes — two, not one,
+because a single dropped packet is not a story worth alarming anyone about — and
+distinguishes *never reached* from *connection lost*. Any HTTP response clears
+it, including a 429: the server answering is not an unreachable server.
+
+The commonest cause is the site's own `connect-src` policy refusing the
+connection, which the browser reports to the console and to nobody else — a CSP
+refusal is indistinguishable from a network error to the script it blocks. So
+the badge, the empty-recording message and the docs all point at F12 → Console
+and name the directive to look for.
+
 ## 0.125.2 — the application a test runs against, and a bookmarklet CSP cannot refuse
 
 **The Tests list now names the application.** A test name is only unique within

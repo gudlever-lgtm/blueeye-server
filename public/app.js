@@ -11062,6 +11062,9 @@ async function deleteExpiredCodes(n) {
 
 // ---- Settings (settings overview: users + license + config) ---------
 let settingsTab = null;
+// Which Service Assurance screen the nav last asked for. The module owns its own
+// tab bar; this is only how a nav entry deep-links into one of its tabs.
+let serviceAssuranceTab = null;
 // Settings are organised into labelled sections rather than one long row of tabs,
 // so related controls sit together and the page stays scannable as it grows. Each
 // tab is [key, label, adminOnly]; non-admins only ever see the personal section.
@@ -15063,6 +15066,8 @@ views.serviceAssurance = async () => {
     el, api, t, dataCard, toast,
     isAdmin,
     isOperator: canWrite,
+    // Which of the module's screens the nav entry asked for.
+    tab: serviceAssuranceTab,
     // An <img src> cannot carry the Authorization header this dashboard
     // authenticates with, so a screenshot loaded that way arrives anonymous and
     // answers 401 — which the browser renders as a broken image. Fetched here
@@ -15493,7 +15498,13 @@ async function render({ silent = false } = {}) {
     b.classList.toggle('hidden', role !== 'admin');
   }
   if (currentView === 'users' && role !== 'admin') currentView = 'overview';
-  for (const b of document.querySelectorAll('.tabs button[data-view], #sidebar-foot button[data-view]')) b.classList.toggle('active', b.dataset.view === currentView);
+  for (const b of document.querySelectorAll('.tabs button[data-view], #sidebar-foot button[data-view]')) {
+    // Several entries can share one data-view when they deep-link to different
+    // sub-tabs; the sub-tab is what tells them apart.
+    const active = b.dataset.view === currentView
+      && (!b.dataset.saTab || b.dataset.saTab === serviceAssuranceTab);
+    b.classList.toggle('active', active);
+  }
 
   const view = $('#view');
   if (!silent) view.replaceChildren(el('div', { class: 'empty' }, 'Loading…'));
@@ -15623,6 +15634,10 @@ for (const b of document.querySelectorAll('.tabs button[data-view], #sidebar-foo
       settingsTab = 'license'; currentView = 'settings'; render();
       return;
     }
+    // A nav entry may deep-link into a sub-tab of the view it opens (Service
+    // Assurance has five screens of its own). Recorded before render so the view
+    // opens where the operator clicked rather than on its default tab.
+    if (b.dataset.saTab) serviceAssuranceTab = b.dataset.saTab;
     currentView = b.dataset.view; render();
   });
 }

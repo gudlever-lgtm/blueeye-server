@@ -533,6 +533,34 @@ to end, without writing code. The one step that is deliberately incomplete is
 reading a file off the worker's disk. Attaching a file to a test is the follow-up
 that makes it real.
 
+### How many jobs at once
+
+Two dials, and they are not the same one:
+
+| | What it adds | Where |
+| --- | --- | --- |
+| `runner.concurrency` | Jobs run side by side **inside one worker** | Settings → Service Assurance → Runner |
+| worker replicas | More worker **processes/containers** | `docker compose --scale service-assurance-worker=N` |
+
+Each lane builds its own browser (`browserFactory` is per-job, so a crashed page
+can never poison the next), so concurrency is a memory dial as much as a
+throughput one — budget a few hundred MB per lane. The setting is read once per
+tick, so raising it takes effect on the next poll rather than on a restart.
+
+Claiming is a conditional UPDATE either way, so N lanes on one worker race each
+other exactly as N workers do: the same guarantee, no lock server, and no job
+ever runs twice.
+
+The worker count itself is deliberately NOT settable from the dashboard. A worker
+is a separate container; for the server to start one it would need the Docker
+socket, and anyone who compromised the dashboard could then start arbitrary
+containers on the host. How many machines run is the orchestrator's business.
+
+Leave `SERVICE_TEST_WORKER_ID` unset when scaling: the worker falls back to
+`hostname-pid`, and each container has its own hostname. Pin it and every replica
+shares one identity, overwriting each other's heartbeat row — the dashboard would
+show one worker where three are running.
+
 ## 12. Running the worker
 
 The API queues; the worker executes. Without one, runs sit at `queued` and the UI

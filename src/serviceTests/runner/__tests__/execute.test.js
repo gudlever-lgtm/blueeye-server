@@ -275,3 +275,37 @@ test('a driver that predates the step fails honestly instead of throwing TypeErr
   assert.doesNotMatch(result.error_message, /is not a function/);
   assert.match(result.error_message, /ingen titel/);
 });
+
+// ------------------------------------------------- blocked-host evidence
+test('a request the allowed-hosts policy refused is named, without becoming the verdict', async () => {
+  // The line an operator cannot work out alone: the address is not one they
+  // registered — the page asked for it — so a blocked call otherwise surfaces as
+  // an unexplained failure somewhere else entirely.
+  const { classify } = require('../classify');
+  const c = classify({
+    error: { message: 'teksten "fellis.eu" blev ikke fundet' },
+    networkErrors: [
+      { url: 'https://ipapi.co/json/', error: 'net::ERR_BLOCKED_BY_CLIENT.Inspector', status: 0 },
+      { url: 'https://fellis.eu/api/auth/session', status: 401 },
+      { url: 'https://ipapi.co/json/', error: 'host_not_allowlisted', status: 0 },
+    ],
+  });
+  assert.equal(c.kind, 'http_4xx', 'a blocked third-party call never decides the verdict');
+  assert.deepEqual(c.blocked_hosts, ['ipapi.co'], 'named once, not once per refused request');
+  assert.match(c.evidence.join('\n'), /HTTP 401 from https:\/\/fellis\.eu\/api\/auth\/session/);
+  assert.match(c.evidence.join('\n'), /ipapi\.co/);
+  assert.match(c.evidence.join('\n'), /allowed-hosts policy/);
+});
+
+test('nothing blocked means no blocked-host line at all', () => {
+  const { classify } = require('../classify');
+  const c = classify({ httpStatus: 500, networkErrors: [{ url: 'https://app.test/api', status: 500 }] });
+  assert.deepEqual(c.blocked_hosts, []);
+  assert.doesNotMatch(c.evidence.join('\n'), /allowed-hosts/);
+});
+
+test('an unparseable URL in the network log never breaks the failure report', () => {
+  const { classify } = require('../classify');
+  const c = classify({ networkErrors: [{ url: 'not a url', error: 'host_not_allowlisted' }, { url: null, error: 'host_not_allowlisted' }] });
+  assert.deepEqual(c.blocked_hosts, [], 'an address we cannot read is dropped rather than printed raw');
+});

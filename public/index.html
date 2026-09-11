@@ -84,12 +84,24 @@
             <button type="button" class="nav-group-label" aria-expanded="false">Diagnostics</button>
             <button data-view="probes">Probes &amp; Tests</button>
             <button data-view="transactions">Transaktionstests</button>
-            <button data-view="serviceAssurance" data-min-role="operator" data-feature="service_tests">Service Assurance</button>
             <button data-view="flows">Flows</button>
             <button data-view="topology">Topology</button>
             <button data-view="delta" data-min-role="operator">Topology delta</button>
             <button data-view="troubleshooting" data-min-role="operator">Troubleshooting</button>
             <button data-view="investigation" data-min-role="operator">Investigate</button>
+          </div>
+          <!-- Service Assurance is its own section rather than one entry under
+               Diagnostics: it is a module with five screens of its own, and the
+               question it answers — "are my public services working?" — is not
+               the same question the diagnostics tools answer about the network.
+               Every entry deep-links into the module's own tab. -->
+          <div class="nav-group collapsed" data-category="Service Assurance">
+            <button type="button" class="nav-group-label" aria-expanded="false">Service Assurance</button>
+            <button data-view="serviceAssurance" data-sa-tab="health" data-min-role="operator" data-feature="service_tests">Health</button>
+            <button data-view="serviceAssurance" data-sa-tab="applications" data-min-role="operator" data-feature="service_tests">Applications</button>
+            <button data-view="serviceAssurance" data-sa-tab="tests" data-min-role="operator" data-feature="service_tests">Tests</button>
+            <button data-view="serviceAssurance" data-sa-tab="runs" data-min-role="operator" data-feature="service_tests">Runs</button>
+            <button data-view="serviceAssurance" data-sa-tab="schedules" data-min-role="operator" data-feature="service_tests">Schedules</button>
           </div>
           <div class="nav-group collapsed" data-category="Insights">
             <button type="button" class="nav-group-label" aria-expanded="false">Insights</button>

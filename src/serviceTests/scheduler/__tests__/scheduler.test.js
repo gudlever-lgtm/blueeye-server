@@ -321,3 +321,94 @@ test('an idle tick still records the heartbeat', async () => {
   assert.equal(st.tables.workers.rows[0].worker_id, 'test-worker');
   assert.equal(st.tables.workers.rows[0].hostname, 'test-host');
 });
+
+// ------------------------------------------------------------ concurrency
+// `runner.concurrency` was stored, validated and shown in Settings, and read by
+// nothing: the loop claimed exactly one job per tick whatever it said. These pin
+// it as a real dial.
+
+test('one tick takes at most `runner.concurrency` jobs, and the default takes two', async () => {
+  const { st, worker } = makeWorkerFixture();
+  for (let i = 0; i < 5; i += 1) await st.repositories.runs.enqueue({ test_id: 1 });
+
+  assert.equal(await worker.tick(), true);
+  const afterFirst = await st.repositories.runs.list({});
+  assert.equal(afterFirst.filter((r) => r.status === 'pass').length, 2, 'the shipped default is two lanes');
+  assert.equal(afterFirst.filter((r) => r.status === 'queued').length, 3);
+
+  await worker.tick();
+  assert.equal((await st.repositories.runs.list({})).filter((r) => r.status === 'queued').length, 1);
+});
+
+test('raising the dial takes effect on the next tick, without a restart', async () => {
+  const { st, worker } = makeWorkerFixture();
+  for (let i = 0; i < 6; i += 1) await st.repositories.runs.enqueue({ test_id: 1 });
+
+  await st.settings.set('runner', { concurrency: 5 });
+  await worker.tick();
+  const runs = await st.repositories.runs.list({});
+  assert.equal(runs.filter((r) => r.status === 'pass').length, 5);
+  assert.equal(runs.filter((r) => r.status === 'queued').length, 1);
+});
+
+test('concurrency 1 behaves exactly as the loop always did', async () => {
+  const { st, worker } = makeWorkerFixture();
+  await st.settings.set('runner', { concurrency: 1 });
+  for (let i = 0; i < 3; i += 1) await st.repositories.runs.enqueue({ test_id: 1 });
+
+  await worker.tick();
+  assert.equal((await st.repositories.runs.list({})).filter((r) => r.status === 'queued').length, 2);
+});
+
+test('the jobs in a tick really do overlap rather than running one after another', async () => {
+  // Without this the implementation could claim three and still await them in
+  // series, which would satisfy every count above and deliver no parallelism.
+  const st = makeServiceTests();
+  const queue = createQueue({
+    runsRepo: st.repositories.runs, discoveryRepo: st.repositories.discovery,
+    schedulesRepo: st.repositories.schedules, workersRepo: st.repositories.workers, settings: st.settings,
+  });
+  let inFlight = 0;
+  let peak = 0;
+  const worker = createWorker({
+    workerId: 'w', queue, repositories: st.repositories, settings: st.settings,
+    browserFactory: async () => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      await new Promise((r) => setTimeout(r, 10));
+      return {
+        driver: makeFakeDriver({}),
+        crawler: { visit: async (url) => ({ url, status: 200, links: [], buttons: [], inputs: [], forms: [] }) },
+        close: async () => { inFlight -= 1; },
+      };
+    },
+    resolve: async () => ['93.184.216.34'],
+    logger: { info() {}, warn() {}, error() {} },
+  });
+
+  await st.settings.set('runner', { concurrency: 3 });
+  for (let i = 0; i < 3; i += 1) await st.repositories.runs.enqueue({ test_id: 1 });
+  await worker.tick();
+  assert.equal(peak, 3, `three lanes claimed but only ${peak} browser(s) were ever open at once`);
+});
+
+test('a settings read that fails leaves the worker working, one job at a time', async () => {
+  const st = makeServiceTests();
+  const queue = createQueue({
+    runsRepo: st.repositories.runs, discoveryRepo: st.repositories.discovery,
+    schedulesRepo: st.repositories.schedules, workersRepo: st.repositories.workers, settings: st.settings,
+  });
+  const worker = createWorker({
+    workerId: 'w',
+    queue,
+    repositories: st.repositories,
+    settings: { get: async (section) => { if (section === 'runner') throw new Error('the database went away'); return st.settings.get(section); } },
+    browserFactory: async () => ({ driver: makeFakeDriver({}), crawler: { visit: async () => ({}) }, close: async () => {} }),
+    resolve: async () => ['93.184.216.34'],
+    logger: { info() {}, warn() {}, error() {} },
+  });
+  await st.repositories.runs.enqueue({ test_id: 1 });
+  await st.repositories.runs.enqueue({ test_id: 1 });
+  assert.equal(await worker.tick(), true, 'an unreadable dial must not stop the queue');
+  assert.equal((await st.repositories.runs.list({})).filter((r) => r.status === 'queued').length, 1);
+});

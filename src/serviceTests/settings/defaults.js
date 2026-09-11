@@ -32,6 +32,11 @@ const NUMBER_BOUNDS = {
     stepTimeoutMs: [30000, 1000, 300000],
     maxRunDurationMs: [300000, 10000, 3600000],
     maxStepsPerTest: [100, 1, 500],
+    // How many jobs ONE worker runs side by side. Each lane builds its own
+    // browser, so this is a memory dial as much as a throughput one: budget a
+    // few hundred MB per lane and keep it under what the container can carry.
+    // More workers (docker compose --scale) adds machines; this adds lanes on
+    // the machine you have.
     concurrency: [2, 1, 16],
   },
   artifacts: {

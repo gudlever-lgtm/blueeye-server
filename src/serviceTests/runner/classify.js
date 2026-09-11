@@ -125,6 +125,13 @@ const EXPLANATION = {
   },
 };
 
+// The host part of a URL, for naming a blocked address without printing the
+// whole query string back at an operator. Returns null for anything unparseable
+// rather than throwing inside a failure report.
+function hostOf(url) {
+  try { return new URL(String(url)).host; } catch { return null; }
+}
+
 function fromHttpStatus(status) {
   const n = Number(status);
   if (!Number.isFinite(n)) return null;
@@ -220,6 +227,26 @@ function classify(evidence = {}) {
 
   if (!kind) kind = KIND.UNKNOWN;
 
+  // Requests the page made that the allowed-hosts policy refused. Recorded as
+  // EVIDENCE, never as the kind: a page calling a third-party analytics or
+  // geo-IP service is normally irrelevant to whether the service works, and
+  // guessing that it caused the failure would be inventing a conclusion.
+  //
+  // But it is the one line an operator cannot work out for themselves. The
+  // address is not one they registered — the page asked for it — so without
+  // naming it, a blocked call shows up as an unexplained failure somewhere else
+  // (a login that never completes because its script is waiting on a lookup
+  // that will never return), and the operator has no reason to connect the two.
+  const blocked = (Array.isArray(e.networkErrors) ? e.networkErrors : [])
+    .filter((n) => n && typeof n.error === 'string' && /allowlist|BLOCKED_BY_CLIENT/i.test(n.error))
+    .map((n) => hostOf(n.url))
+    .filter(Boolean);
+  const blockedHosts = [...new Set(blocked)];
+  if (blockedHosts.length) {
+    reasons.push(`The page's own requests to ${blockedHosts.join(', ')} were refused by this application's allowed-hosts policy. `
+      + 'That is this test\'s security setting, not the service failing — allow the address if the page needs it to work.');
+  }
+
   const explanation = EXPLANATION[kind] || EXPLANATION[KIND.UNKNOWN];
   return {
     kind,
@@ -230,6 +257,7 @@ function classify(evidence = {}) {
     // than trusted.
     evidence: reasons,
     http_status: observedStatus,
+    blocked_hosts: blockedHosts,
   };
 }
 

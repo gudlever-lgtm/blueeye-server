@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.124.2 — concurrency is a real dial, and a failure says what was observed
+
+**`runner.concurrency` did nothing.** It was stored, validated and shown in
+Settings, and read by no code: the worker loop claimed exactly one job per tick
+whatever it said — a throughput dial that wasn't one. A tick now claims up to
+`concurrency` jobs and runs them side by side. Each lane builds its own browser
+(`browserFactory` is per-job already, so a crashed page can never poison the
+next), which is also why the number matters: every extra lane is another
+Chromium. The setting is read per tick, so raising it takes effect on the next
+poll rather than on a restart, and a settings read that fails falls back to one
+lane instead of stopping the queue. Claiming is a conditional UPDATE, so N lanes
+on one worker race each other exactly as N workers do.
+
+Two dials, not one: `concurrency` adds lanes on the machine you have,
+`docker compose --scale service-assurance-worker=N` adds machines. The worker
+count stays deliberately un-settable from the dashboard — a worker is a separate
+container, and for the server to start one it would need the Docker socket.
+
+**A failure now shows what was actually observed.** The classifier has always
+collected which request returned which status; the run page threw it away and
+showed only the generic one-liner, so "The server rejected the request" gave an
+operator no way to find out WHICH request. The observations are rendered above
+"Technical details", in the operator's words.
+
+And a request the **allowed-hosts policy refused** is named there. It is recorded
+as evidence, never as the verdict — a page calling a third-party analytics or
+geo-IP service is usually irrelevant to whether the service works, and guessing
+that it caused the failure would be inventing a conclusion. But it is the one
+line an operator cannot work out for themselves: the address is not one they
+registered, the page asked for it, so a blocked call otherwise surfaces as an
+unexplained failure somewhere else entirely — a login that never completes
+because its script is waiting on a lookup that will never return.
+
+**Service Assurance has its own nav section**, rather than one entry under
+Diagnostics. It is a module with five screens, and "are my public services
+working?" is not the question the network diagnostics tools answer. Each entry
+deep-links into the module's own tab.
 ## 0.124.0 — Service Assurance: run history as a chart
 
 A new **History** tab, and the same chart on each test's own history. It answers

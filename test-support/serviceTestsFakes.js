@@ -374,18 +374,44 @@ const bool = (v) => !!v;
       async clearScreenshots() { return 0; },
     },
     discovery: {
-      async findById(id) { return t.discoveries.find(id); },
+      // Mirrors the real repository's shaping. `authenticated` arrives from
+      // MySQL as 0/1 and is published as a boolean, and the worker writes it as
+      // 0/1 — a fake that stored the raw value would let a caller that treats
+      // `authenticated` as a boolean pass here and be wrong in production.
+      shape(row) {
+        if (!row) return null;
+        return {
+          detected_login: null,
+          login_test_id: null,
+          credential_id: null,
+          session_lost_at_page: null,
+          auth_note: null,
+          ...row,
+          authenticated: row.authenticated === 1 || row.authenticated === true,
+          authenticated_page_count: row.authenticated_page_count ?? 0,
+        };
+      },
+      async findById(id) { return repositories.discovery.shape(t.discoveries.find(id)); },
       async list({ applicationId = null, limit = 20 } = {}) {
-        return t.discoveries.where((r) => applicationId === null || r.application_id === applicationId).slice(0, limit);
+        return t.discoveries.where((r) => applicationId === null || r.application_id === applicationId)
+          .slice(0, limit).map(repositories.discovery.shape);
       },
       async latestForApplication(applicationId) {
-        return t.discoveries.where((r) => r.application_id === applicationId && r.status === 'complete').pop() || null;
+        const row = t.discoveries.where((r) => r.application_id === applicationId && r.status === 'complete').pop();
+        return repositories.discovery.shape(row) || null;
       },
-      async enqueue(input) { return t.discoveries.insert({ status: 'queued', ...input }); },
+      // The login form the last COMPLETED discovery found — what lets a
+      // rediscover sign in with nothing but a stored credential.
+      async lastDetectedLogin(applicationId) {
+        const row = t.discoveries.where((r) => Number(r.application_id) === Number(applicationId)
+          && r.status === 'complete' && r.detected_login).pop();
+        return row ? row.detected_login : null;
+      },
+      async enqueue(input) { return repositories.discovery.shape(t.discoveries.insert({ status: 'queued', ...input })); },
       async claimNext(workerId) {
         const row = t.discoveries.rows.find((r) => r.status === 'queued');
         if (!row) return null;
-        return t.discoveries.update(row.id, { status: 'running', claimed_by: workerId, claimed_at: new Date() });
+        return repositories.discovery.shape(t.discoveries.update(row.id, { status: 'running', claimed_by: workerId, claimed_at: new Date() }));
       },
       async addPage(discoveryId, page) { return t.pages.insert({ discovery_id: discoveryId, ...page }).id; },
       async addElements(discoveryId, elements) {
@@ -396,7 +422,7 @@ const bool = (v) => !!v;
       async elements(discoveryId, { kind = null } = {}) {
         return t.elements.where((r) => r.discovery_id === Number(discoveryId) && (kind === null || r.kind === kind));
       },
-      async finish(id, summary) { return t.discoveries.update(id, summary); },
+      async finish(id, summary) { return repositories.discovery.shape(t.discoveries.update(id, summary)); },
       async reapStale() { return 0; },
     },
     suggestions: {

@@ -7,6 +7,7 @@ const {
   validateAllowedHost, validateAllowlistImport,
 } = require('../validation');
 const { validateEntry } = require('../security/hostPolicy');
+const { signInStepsFromDetectedLogin, canSignInWith } = require('../discovery/authenticate');
 const { validateImport, toCsvExport } = require('../security/allowlistIo');
 
 // Applications, their environments, their credentials, and the host allowlist.
@@ -54,6 +55,21 @@ function createApplicationsRouter({ repositories, settings, audit, requireRole, 
       credentials: await credentials.list({ applicationId: app.id }),
       allowed_hosts: await allowedHosts.listForApplication(app.id),
       last_discovery: await discovery.latestForApplication(app.id),
+      // Whether an earlier crawl found a login form good enough to fill in.
+      //
+      // This is what the Discover dialog needs to know before it offers "sign in
+      // with a stored login": without a form on record there is nothing to fill
+      // in, and the operator should be told that in the dialog rather than half
+      // an hour later by a public-site map with a note on it. A boolean, not the
+      // detection — the field descriptions are of no use to a screen.
+      login_form_found: Boolean(signInStepsFromDetectedLogin(await discovery.lastDetectedLogin(app.id))),
+      // The tests discovery could replay to sign in, decided by the SAME check
+      // the discovery route enforces — so the dialog offers exactly what will be
+      // accepted rather than a list the operator picks a refusal out of. Name
+      // and id only: the dialog is a picker, not a test browser.
+      login_tests: (await tests.list({ applicationId: app.id }))
+        .filter((x) => canSignInWith(x, { applicationId: app.id }).ok)
+        .map((x) => ({ id: x.id, name: x.name })),
     });
   }));
 

@@ -325,7 +325,7 @@
         var head = el('div', {},
           el('button', { class: 'ghost small', onclick: function () { state.applicationId = null; draw(); } }, '← ' + t('sa.back')),
           section(app.name, [
-            isOperator() ? el('button', { class: 'primary', onclick: function () { startDiscovery(app); } }, t('sa.discovery.start')) : null,
+            isOperator() ? el('button', { class: 'primary', onclick: function () { discoveryForm(app); } }, t('sa.discovery.start')) : null,
             isAdmin() ? el('button', { class: 'ghost small', onclick: function () { applicationForm(app); } }, t('sa.edit')) : null,
             isAdmin() ? el('button', {
               class: 'ghost small danger',
@@ -598,6 +598,7 @@
           : el('div', { class: 'sa-empty' },
             el('p', {}, t('sa.discovery.empty')),
             el('p', { class: 'muted' }, t('sa.discovery.neverHint'))),
+        last ? authNote(last) : null,
         last ? el('button', {
           class: 'ghost small',
           onclick: function () { state.discoveryId = last.id; showSuggestions(last.id); },
@@ -605,17 +606,98 @@
       return wrap;
     }
 
+    // What happened about signing in, on the discovery that just ran.
+    //
+    // It is the one thing about an authenticated crawl a person has to be able
+    // to see: a discovery that asked to sign in and could not is a map of the
+    // PUBLIC site, and nothing downstream can tell the difference. So the note
+    // is shown next to the counts it qualifies, not buried in the record.
+    function authNote(last) {
+      if (!last.auth_note) return null;
+      var good = last.authenticated && last.session_lost_at_page === null;
+      return el('div', { class: 'sa-auth-note ' + (good ? 'ok' : 'warn') },
+        el('span', { class: 'sa-auth-icon', 'aria-hidden': 'true' }, good ? '\u2713' : '\u26a0'),
+        el('span', {}, last.auth_note));
+    }
+
     function stat(label, value) {
       return el('div', { class: 'sa-stat' }, el('div', { class: 'sa-stat-value' }, String(value)), el('div', { class: 'sa-stat-label' }, label));
     }
 
-    function startDiscovery(app) {
-      api(API + '/discovery', { method: 'POST', body: { application_id: app.id } })
-        .then(function (res) {
-          toast(res.worker && res.worker.connected ? t('sa.discovery.running') : t('sa.test.noWorker'));
-          draw();
-        })
-        .catch(function (e) { toast(err(e), true); });
+    // The Discover dialog.
+    //
+    // Discovery used to crawl what a logged-out visitor sees and nothing else,
+    // so it was a button with no options. It can now sign in first, which needs
+    // a choice — and the choice has to be made HERE, because the two routes fail
+    // for reasons an operator can fix in the dialog and cannot fix afterwards.
+    //
+    // Two routes, never both (the server refuses both, and so does this):
+    //   - replay a LOGIN TEST, which already encodes how to sign into this
+    //     application, quirks included;
+    //   - fill in the login form an earlier crawl FOUND, using a stored login.
+    //     Needs no test, which is what makes the first authenticated discovery
+    //     possible on a brand new application.
+    function discoveryForm(app) {
+      var errors = el('div', { class: 'sa-form-errors' });
+      var mode = 'anonymous';
+
+      var env = el('select', {},
+        el('option', { value: '' }, t('sa.discovery.envDefault')),
+        ...(app.environments || []).map(function (e) { return el('option', { value: String(e.id) }, e.name); }));
+
+      // Only the tests the server will actually accept. It decides — the same
+      // check the discovery route runs — so the dialog never offers a choice
+      // that comes back as a refusal.
+      var loginTests = app.login_tests || [];
+      var testPick = el('select', {}, ...loginTests.map(function (x) {
+        return el('option', { value: String(x.id) }, x.name);
+      }));
+      var credPick = el('select', {}, ...(app.credentials || []).map(function (c) {
+        return el('option', { value: String(c.id) }, c.label + (c.username ? ' (' + c.username + ')' : ''));
+      }));
+
+      var slot = el('div', {});
+      function renderSlot() {
+        slot.textContent = '';
+        if (mode === 'test') {
+          mount(slot, loginTests.length
+            ? field(t('sa.discovery.loginTest'), testPick, t('sa.discovery.loginTestHelp'))
+            : el('p', { class: 'sa-help' }, t('sa.discovery.noLoginTest')));
+        } else if (mode === 'credential') {
+          mount(slot, !(app.credentials || []).length
+            ? el('p', { class: 'sa-help' }, t('sa.discovery.noCredential'))
+            : !app.login_form_found
+              ? el('p', { class: 'sa-help' }, t('sa.discovery.noLoginForm'))
+              : field(t('sa.discovery.credential'), credPick, t('sa.discovery.credentialHelp')));
+        }
+      }
+
+      var picker = segmented([
+        ['anonymous', t('sa.discovery.signInNone')],
+        ['test', t('sa.discovery.signInTest')],
+        ['credential', t('sa.discovery.signInCredential')],
+      ], mode, function (next) { mode = next; renderSlot(); }, t('sa.discovery.signIn'));
+      renderSlot();
+
+      var body = el('div', {},
+        el('p', { class: 'sa-help' }, t('sa.discovery.help')),
+        field(t('sa.discovery.environment'), env),
+        field(t('sa.discovery.signIn'), picker, t('sa.discovery.signInHelp')),
+        slot,
+        errors);
+
+      modal(t('sa.discovery.start'), body, function () {
+        var payload = { application_id: app.id };
+        if (env.value) payload.environment_id = Number(env.value);
+        if (mode === 'test' && testPick.value) payload.login_test_id = Number(testPick.value);
+        if (mode === 'credential' && credPick.value) payload.credential_id = Number(credPick.value);
+        return api(API + '/discovery', { method: 'POST', body: payload })
+          .then(function (res) {
+            toast(res.worker && res.worker.connected ? t('sa.discovery.running') : t('sa.test.noWorker'));
+            draw();
+          })
+          .catch(function (e) { showErrors(errors, e); throw e; });
+      }, t('sa.discovery.start'));
     }
 
     // A suggested journey. It shows what accepting it will BUILD — the member

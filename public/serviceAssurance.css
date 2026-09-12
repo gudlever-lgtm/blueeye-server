@@ -484,3 +484,18 @@
 .sa-visual-chip-resized { background: var(--panel-2, #f1f1ef); color: var(--text, #17171a); }
 .sa-visual-chip-uncomparable { background: var(--panel-2, #f1f1ef); color: var(--muted, #6d6d73); }
 .sa-visual-changed, .sa-visual-resized { border-left: 3px solid var(--muted, #6d6d73); }
+
+/* What happened about signing in, on a discovery that asked to.
+   A discovery that could not sign in is a map of the PUBLIC site — so the
+   note that says so has to read as a warning, not as a caption. */
+.sa-auth-note {
+  display: flex; gap: 8px; align-items: flex-start;
+  margin: 12px 0; padding: 10px 12px;
+  border: 1px solid var(--hairline); border-left-width: 3px; border-radius: 8px;
+  background: var(--panel-2); font-size: 0.9em; line-height: 1.45;
+}
+.sa-auth-note.ok { border-left-color: var(--ok, #2e7d5b); }
+.sa-auth-note.warn { border-left-color: var(--warn, #b8860b); }
+.sa-auth-icon { flex: none; font-weight: 700; }
+.sa-auth-note.ok .sa-auth-icon { color: var(--ok, #2e7d5b); }
+.sa-auth-note.warn .sa-auth-icon { color: var(--warn, #b8860b); }

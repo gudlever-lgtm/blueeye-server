@@ -605,20 +605,63 @@
       }));
       crit.value = plan.criticality || 'normal';
 
+      function landOn(res) {
+        toast(res.merged
+          ? t('sa.suggest.journeyMerged', { count: res.added_steps })
+          : t('sa.suggest.journeyCreated', { count: res.tests.length }));
+        state.tab = 'journeys';
+        state.journeyId = res.journey.id;
+        draw();
+      }
+
+      function send(extra) {
+        var body = { criticality: crit.value };
+        Object.keys(extra || {}).forEach(function (k) { body[k] = extra[k]; });
+        return api(API + '/suggestions/' + s.id + '/accept', { method: 'POST', body })
+          .then(landOn)
+          .catch(function (e) {
+            accept.disabled = false;
+            // 409: this application already has a journey covering some of these
+            // steps. Not an error — a question only the operator can answer,
+            // which is why the server refuses once and says what it found
+            // rather than picking for them.
+            if (e && e.status === 409 && e.data && e.data.overlaps) overlapChoice(e.data.overlaps);
+            else toast(err(e), true);
+          });
+      }
+
+      // The choice, with the facts next to it: what each existing journey
+      // already covers and what accepting would add. A "duplicate?" warning with
+      // no detail is one people click past.
+      function overlapChoice(overlaps) {
+        modal(t('sa.suggest.overlapTitle'), el('div', {},
+          el('p', { class: 'sa-help' }, t('sa.suggest.overlapHelp')),
+          ...overlaps.map(function (o) {
+            return el('div', { class: 'sa-suggestion' },
+              el('div', { class: 'sa-journey-head' },
+                el('strong', {}, o.name),
+                el('span', { class: 'muted' }, t('sa.test.steps', { count: o.step_count }))),
+              el('p', { class: 'muted' }, t('sa.suggest.overlapCovers', { steps: o.already_covers.join(', ') })),
+              o.would_add.length
+                ? el('p', {}, t('sa.suggest.overlapAdds', { steps: o.would_add.join(', ') }))
+                : el('p', { class: 'muted' }, t('sa.suggest.overlapAddsNothing')),
+              o.would_add.length
+                ? el('button', {
+                  class: 'primary small',
+                  onclick: function () { send({ merge_into_journey_id: o.journey_id }); },
+                }, t('sa.suggest.overlapMerge'))
+                : null);
+          }),
+          el('p', { class: 'sa-help' }, t('sa.suggest.overlapAnywayHelp')),
+          el('button', {
+            class: 'ghost small',
+            onclick: function () { send({ confirm: true }); },
+          }, t('sa.suggest.overlapAnyway'))));
+      }
+
       var accept = el('button', {
         class: 'primary small',
-        onclick: function () {
-          accept.disabled = true;
-          api(API + '/suggestions/' + s.id + '/accept', {
-            method: 'POST',
-            body: { criticality: crit.value },
-          }).then(function (res) {
-            toast(t('sa.suggest.journeyCreated', { count: res.tests.length }));
-            state.tab = 'journeys';
-            state.journeyId = res.journey.id;
-            draw();
-          }).catch(function (e) { accept.disabled = false; toast(err(e), true); });
-        },
+        onclick: function () { accept.disabled = true; send({}); },
       }, t('sa.suggest.acceptJourney'));
 
       return el('div', { class: 'sa-suggestion sa-suggest-journey' },
@@ -846,6 +889,68 @@
       }).catch(function (e) { toast(err(e), true); });
     }
 
+    // Everything about a journey EXCEPT its steps — the same gap the test page
+    // had: name, description, criticality and the expected duration were set
+    // once at creation and unreachable after, so a journey whose importance
+    // changed could never say so.
+    //
+    // `application_id` is not editable, for the same reason it is not on a test:
+    // a journey is about ONE service, and moving it would leave every step
+    // pointing at another application's tests.
+    function journeyForm(journey) {
+      var name = el('input', { type: 'text', value: journey.name || '' });
+      var desc = el('textarea', { rows: '2' }, journey.description || '');
+      var crit = el('select', {}, ...['critical', 'high', 'normal', 'low'].map(function (c) {
+        return el('option', { value: c }, criticalityLabel(c));
+      }));
+      crit.value = journey.criticality || 'normal';
+      // Seconds in the box because that is how people talk about it; the API
+      // stores milliseconds like every other duration here.
+      var expected = el('input', {
+        type: 'number', min: '1', placeholder: t('sa.journey.expectedPlaceholder'),
+        value: journey.expected_duration_ms ? String(Math.round(journey.expected_duration_ms / 1000)) : '',
+      });
+      var errors = el('div', {});
+
+      modal(t('sa.journey.edit'), el('div', { class: 'sa-form' },
+        field(t('sa.app.name'), name, t('sa.journey.nameHelp')),
+        field(t('sa.app.description'), desc),
+        field(t('sa.journey.criticality'), crit, t('sa.journey.criticalityHelp')),
+        field(t('sa.journey.expected'), expected, t('sa.journey.expectedHelp')),
+        errors), function () {
+        return api(API + '/journeys/' + journey.id, {
+          method: 'PUT',
+          body: {
+            name: name.value,
+            description: desc.value || null,
+            criticality: crit.value,
+            // Cleared means "no expectation stated", which is honest and a
+            // different fact from an expectation of zero.
+            expected_duration_ms: expected.value ? Math.round(Number(expected.value) * 1000) : null,
+          },
+        }).then(function () { toast(t('sa.settings.saved')); draw(); })
+          .catch(function (e) { showErrors(errors, e); throw e; });
+      });
+    }
+
+    // Running a journey is running its member tests — one queued run each, in
+    // order. There is no third kind of run: the worker picks these up the way it
+    // picks up any other, and the journey's verdict is computed from them as it
+    // always was.
+    function runJourney(journey) {
+      api(API + '/journeys/' + journey.id + '/run', { method: 'POST', body: {} })
+        .then(function (res) {
+          var connected = res.worker && res.worker.connected;
+          toast(connected
+            ? t('sa.journey.queued', { count: (res.runs || []).length })
+            : t('sa.test.noWorker'), !connected);
+          state.journeyId = null;
+          state.tab = 'runs';
+          draw();
+        })
+        .catch(function (e) { toast(err(e), true); });
+    }
+
     function journeyDetail(body, id) {
       return Promise.all([
         api(API + '/journeys/' + id),
@@ -858,6 +963,13 @@
         mount(body,
           el('button', { class: 'ghost small', onclick: function () { state.journeyId = null; draw(); } }, '← ' + t('sa.back')),
           section(journey.name, isOperator() ? [
+            // Only offered when there is something to run. A button that can
+            // only answer "this journey has no steps yet" is a button that
+            // should not be there.
+            journey.step_count
+              ? el('button', { class: 'primary', onclick: function () { runJourney(journey); } }, t('sa.journey.run'))
+              : null,
+            el('button', { class: 'ghost small', onclick: function () { journeyForm(journey); } }, t('sa.edit')),
             el('button', {
               class: 'ghost small danger',
               title: t('sa.delete'),

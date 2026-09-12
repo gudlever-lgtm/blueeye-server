@@ -205,12 +205,92 @@ createDiscoveryRouter.suggestions = function createSuggestionsRouter({ repositor
       members.push({ sibling, required: step.required !== false });
     }
 
+    // Does this application already have a journey covering the same ground?
+    //
+    // Accepting a suggestion has always created a NEW journey. When the operator
+    // has already built one by hand for the same flow — which is exactly what
+    // happens the first time someone runs discovery on a service they already
+    // monitor — that silently produced a near-duplicate, with the same tests in
+    // it, both reporting on the same thing, and nothing said so.
+    //
+    // Matched by the tests themselves where they exist (a sibling already
+    // accepted carries created_test_id) and by NAME where they do not, scoped to
+    // this application. Name matching across the estate would be meaningless —
+    // "Login" is the commonest test name there is — but inside one application
+    // it is the same check a person would make.
+    const wantedNames = new Set(members.map(({ sibling }) => sibling.name));
+    const wantedTestIds = new Set(members.map(({ sibling }) => sibling.created_test_id).filter(Boolean));
+    const existing = await journeys.list({ applicationId: suggestion.application_id });
+    const stepsByJourney = await journeys.stepsForMany(existing.map((j) => j.id));
+    const overlaps = existing.map((j) => {
+      const steps = stepsByJourney.get(j.id) || [];
+      const covered = [...new Set(steps
+        .filter((st) => wantedTestIds.has(st.test_id) || (st.test && wantedNames.has(st.test.name)))
+        .map((st) => (st.test ? st.test.name : st.label))
+        .filter(Boolean))];
+      return { journey: j, steps, covered };
+    }).filter((o) => o.covered.length);
+
+    const mergeInto = req.body && req.body.merge_into_journey_id !== undefined
+      ? parseId(req.body.merge_into_journey_id) : null;
+    if (req.body && req.body.merge_into_journey_id !== undefined && mergeInto === null) {
+      return invalid(res, { merge_into_journey_id: 'that journey does not look valid' });
+    }
+
+    // Reported, never decided for them. Which journey is the real one is a
+    // judgement about their service, so the request is refused once with
+    // everything needed to make it — and repeating it with `confirm` or
+    // `merge_into_journey_id` says what they chose.
+    if (overlaps.length && mergeInto === null && !(req.body && req.body.confirm === true)) {
+      return res.status(409).json({
+        error: 'This application already has a journey covering some of these steps',
+        overlaps: overlaps.map(({ journey: j, steps, covered }) => ({
+          journey_id: j.id,
+          name: j.name,
+          step_count: steps.length,
+          already_covers: covered,
+          would_add: members
+            .map(({ sibling }) => sibling.name)
+            .filter((n) => !covered.includes(n)),
+        })),
+        note: 'Send { "merge_into_journey_id": <id> } to add the missing steps to that journey, '
+          + 'or { "confirm": true } to create a second journey anyway.',
+      });
+    }
+
+    let target = null;
+    if (mergeInto !== null) {
+      target = await journeys.findById(mergeInto);
+      if (!target) return notFound(res, 'Journey not found');
+      // A journey is about ONE service. Merging into another application's would
+      // make its verdict a statement about something else entirely.
+      if (target.application_id !== suggestion.application_id) {
+        return invalid(res, { merge_into_journey_id: 'that journey belongs to a different application' });
+      }
+    }
+
+    // What the target journey already has, by test id and by name. A member the
+    // overlap report just called "already covered" must not then be created a
+    // second time under the same name: that was the whole complaint.
+    const targetSteps = target ? await journeys.stepsFor(target.id) : [];
+    const targetByName = new Map(targetSteps
+      .filter((st) => st.test && st.test.name)
+      .map((st) => [st.test.name, st.test.id]));
+
     const runner = await settings.get('runner');
     const created = [];
     for (const { sibling, required } of members) {
       // Already accepted earlier? Reuse that test rather than making a second
       // copy of the same check under a different id.
       let test = sibling.created_test_id ? await tests.findById(sibling.created_test_id) : null;
+      // Merging into a journey that already has a step of this name reuses THAT
+      // test. Only inside the target journey, and only by exact name — a
+      // same-named test elsewhere in the application may be checking something
+      // else entirely, and silently wiring a suggestion to it would be a
+      // surprise nobody asked for.
+      if (!test && targetByName.has(sibling.name)) {
+        test = await tests.findById(targetByName.get(sibling.name));
+      }
       if (!test) {
         const definition = { version: 1, name: sibling.name, steps: sibling.proposed_steps };
         const { value, errors } = validateDefinition(definition, { maxSteps: runner.maxStepsPerTest });
@@ -226,6 +306,31 @@ createDiscoveryRouter.suggestions = function createSuggestionsRouter({ repositor
         await suggestions.markAccepted(sibling.id, test.id);
       }
       created.push({ test, required });
+    }
+
+    // Merging: append only the steps this journey does not already have, in the
+    // suggestion's order, after what is there. Rewriting the operator's ordering
+    // to match a heuristic's would be a different and much ruder act.
+    if (target) {
+      const before = targetSteps;
+      const have = new Set(before.map((st) => st.test_id));
+      const added = created
+        .filter(({ test }) => !have.has(test.id))
+        .map(({ test, required }) => ({ test_id: test.id, required }));
+      const steps = await journeys.setSteps(target.id, [
+        ...before.map((st) => ({ test_id: st.test_id, label: st.label, required: st.required })),
+        ...added,
+      ]);
+      const updatedSuggestion = await suggestions.markAccepted(suggestion.id, null, target.id);
+      record(req, 'journey_suggestion_merge', suggestion.id,
+        `journey=${target.id} added=${added.length}`);
+      return res.status(200).json({
+        suggestion: updatedSuggestion,
+        journey: { ...(await journeys.findById(target.id)), step_count: steps.length },
+        tests: created.map((c) => c.test),
+        merged: true,
+        added_steps: added.length,
+      });
     }
 
     const journey = await journeys.create({

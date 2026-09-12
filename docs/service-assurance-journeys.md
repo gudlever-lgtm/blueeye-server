@@ -139,6 +139,51 @@ If a member suggestion has gone (a newer Discovery replaced it, say), the accept
 is **refused before anything is created** rather than leaving you a journey
 missing its middle.
 
+### When you already have a journey for that flow
+
+The first time anyone runs Discovery on a service they already monitor, the
+suggestion will describe a journey they built by hand months ago. Accepting used
+to create a second one silently — same tests in it, both reporting on the same
+service, nothing saying so.
+
+Now the accept is **refused once, with 409**, and says what it found:
+
+```json
+{
+  "error": "This application already has a journey covering some of these steps",
+  "overlaps": [{
+    "journey_id": 4,
+    "name": "Fellis run for About Fellis",
+    "step_count": 2,
+    "already_covers": ["Login"],
+    "would_add": ["Authenticated navigation"]
+  }]
+}
+```
+
+Two ways to answer, and the operator picks — which journey is the real one is a
+judgement about their service, not something a heuristic gets to decide:
+
+| Send | What happens |
+| --- | --- |
+| `{ "merge_into_journey_id": 4 }` | the **missing** steps are appended to journey 4, in the suggestion's order, after what is already there |
+| `{ "confirm": true }` | a separate journey is created, as before |
+
+Merging never re-orders what you built — appending is the only change it makes,
+because rewriting your ordering to match a heuristic's would be a much ruder act
+than suggesting one. And a member the overlap report called *already covered*
+reuses that journey's existing test rather than creating a second one under the
+same name; that duplicate was the complaint in the first place.
+
+Matching is by the tests themselves where they exist, and by **name** where they
+do not (a suggested test does not exist until something accepts it), scoped to
+the one application. Name matching across an estate would be meaningless —
+"Login" is the commonest test name there is — but inside one application it is
+the same check a person would make.
+
+With no overlapping journey, nothing changes: the accept creates the journey
+without asking anything.
+
 Four things the rules deliberately do:
 
 - **"Availability" never becomes a journey.** Opening the front page and getting
@@ -174,7 +219,18 @@ the same kind of work as building the tests under them, done by the same people.
 | `GET /api/service-tests/journeys/:id` | one journey, its verdict and its steps |
 | `PUT /api/service-tests/journeys/:id` | rename, re-rate, set the expectation |
 | `PUT /api/service-tests/journeys/:id/steps` | replace the membership, in order |
+| `POST /api/service-tests/journeys/:id/run` | run the whole journey now — one queued run per step |
 | `DELETE /api/service-tests/journeys/:id` | delete the journey (never its tests) |
+
+Running a journey is running its member tests: one queued run each, in the
+journey's order, using the journey's environment unless the request names
+another. There is no third kind of run and no new worker protocol — the worker
+picks these up the way it picks up any other run, and the verdict is computed
+from their results as it always was. The response lists every run it queued, so
+"it is running" is a list of things you can open rather than a spinner, and it
+carries the worker status so a queued journey with no worker reads as a
+configuration problem rather than a hang. A journey with no steps is refused
+rather than answered with an empty list.
 
 Steps are sent as a **whole list** rather than added and removed one at a time,
 because the screen is a drag & drop list: "this is the order now" is the only

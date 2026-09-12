@@ -2,7 +2,7 @@
 
 const express = require('express');
 const { asyncHandler, invalid, notFound, makeLoader, auditor, userId, parseId } = require('./helpers');
-const { validateJourney, validateJourneySteps } = require('../validation');
+const { validateJourney, validateJourneySteps, validateRunRequest } = require('../validation');
 const { journeyHealth, applicationHealth, durationVerdict } = require('../journeys/health');
 
 // User Journeys / Business Transactions — the central V2 object
@@ -16,9 +16,9 @@ const { journeyHealth, applicationHealth, durationVerdict } = require('../journe
 // RBAC matches tests, deliberately: viewer reads, OPERATOR builds. Describing
 // the journeys your service is made of is the same kind of work as building the
 // tests under them, done by the same people.
-function createJourneysRouter({ repositories, audit, requireRole, roles }) {
+function createJourneysRouter({ repositories, queue, audit, requireRole, roles }) {
   const router = express.Router();
-  const { journeys, applications, tests, environments } = repositories;
+  const { journeys, applications, tests, environments, runs } = repositories;
   const read = requireRole(roles.VIEWER, roles.OPERATOR, roles.ADMIN);
   const write = requireRole(roles.OPERATOR, roles.ADMIN);
   const load = makeLoader(journeys, 'Journey');
@@ -114,6 +114,68 @@ function createJourneysRouter({ repositories, audit, requireRole, roles }) {
     const steps = await journeys.setSteps(journey.id, value.steps);
     record(req, 'journey_steps', journey.id, `steps=${steps.length}`);
     return res.json(withHealth(journey, steps));
+  }));
+
+  // Run the whole journey now.
+  //
+  // A journey owns no steps of its own, so running one is running its member
+  // tests — one queued run each, in the journey's order. There is no third kind
+  // of run to invent, and no new worker protocol: the worker picks these up the
+  // same way it picks up any other run, and the journey's verdict is computed
+  // from their results as it always was.
+  //
+  // It answers with every run it queued, so "it is running" is a list of things
+  // you can open rather than a spinner.
+  router.post('/:id/run', write, asyncHandler(async (req, res) => {
+    const journey = await load(req, res);
+    if (!journey) return undefined;
+    if (!runs) return notFound(res, 'Runs are not available on this server');
+    const { value, errors } = validateRunRequest(req.body);
+    if (errors) return invalid(res, errors);
+
+    // The journey's own environment is the default, so "run it" means the same
+    // thing here as it does on a schedule. An explicit one in the request wins.
+    const environmentId = value.environment_id ?? journey.environment_id ?? null;
+    if (environmentId) {
+      const env = await environments.findById(environmentId);
+      if (!env || env.application_id !== journey.application_id) {
+        return invalid(res, { environment_id: 'that environment does not belong to this application' });
+      }
+    }
+
+    const steps = await journeys.stepsFor(journey.id);
+    if (!steps.length) {
+      return invalid(res, { _: 'this journey has no steps yet, so there is nothing to run' });
+    }
+
+    // Every member is resolved BEFORE anything is queued. Half a journey run is
+    // worse than a clear refusal: the verdict would be computed from a partial
+    // set and read as a statement about the whole thing.
+    const members = [];
+    for (const step of steps) {
+      const test = await tests.findById(step.test_id);
+      if (!test) return invalid(res, { steps: `"${step.label || step.test_id}" no longer exists` });
+      members.push(test);
+    }
+
+    const queued = [];
+    for (const test of members) {
+      const run = await runs.enqueue({
+        test_id: test.id,
+        environment_id: environmentId,
+        test_version: test.version,
+        trigger_source: 'manual',
+        requested_by: userId(req),
+      });
+      queued.push({ run_id: run.id, test_id: test.id, test_name: test.name, status: run.status });
+    }
+    record(req, 'journey_run', journey.id, `runs=${queued.length}`);
+
+    // Same as a single test run: say whether anything is actually going to pick
+    // these up, so a queued journey with no worker reads as a configuration
+    // problem rather than a hang.
+    const worker = queue ? await queue.workerStatus().catch(() => null) : null;
+    return res.status(202).json({ journey_id: journey.id, runs: queued, worker });
   }));
 
   router.delete('/:id', write, asyncHandler(async (req, res) => {

@@ -526,3 +526,194 @@ test('accepting a journey never reaches into another application\'s suggestions'
   assert.equal(serviceTests.tables.tests.rows.filter((x) => x.application_id === 2).length, 1,
     'no test may be created in the other application');
 });
+
+// ------------------------------------------------------------------ run
+test('running a journey queues one run per step, in order', async () => {
+  const { serviceTests, app } = fixture();
+  const id = (await newJourney(app)).body.id;
+  await request(app).put(`${BASE}/${id}/steps`).set('Authorization', authHeader('operator'))
+    .send({ steps: [{ test_id: 1, required: true }, { test_id: 2, required: false }, { test_id: 3, required: true }] });
+
+  const res = await request(app).post(`${BASE}/${id}/run`).set('Authorization', authHeader('operator')).send({});
+  assert.equal(res.status, 202);
+  // A journey owns no steps of its own, so running one is running its members.
+  // There is no third kind of run to invent and no new worker protocol.
+  assert.deepEqual(res.body.runs.map((r) => r.test_id), [1, 2, 3]);
+  assert.deepEqual(res.body.runs.map((r) => r.status), ['queued', 'queued', 'queued']);
+  assert.equal(serviceTests.tables.runs.rows.length, 3);
+  // Named, so "it is running" is a list of things you can open rather than
+  // three opaque ids.
+  assert.deepEqual(res.body.runs.map((r) => r.test_name), ['Login', 'Search Customer', 'Logout']);
+  assert.ok('worker' in res.body, 'a queued run with no worker must read as configuration, not a hang');
+});
+
+test('a journey run uses the journey\'s own environment unless told otherwise', async () => {
+  const { serviceTests, app } = fixture();
+  const id = (await newJourney(app, { environment_id: 1 })).body.id;
+  await request(app).put(`${BASE}/${id}/steps`).set('Authorization', authHeader('operator'))
+    .send({ steps: [{ test_id: 1, required: true }] });
+
+  await request(app).post(`${BASE}/${id}/run`).set('Authorization', authHeader('operator')).send({});
+  assert.equal(serviceTests.tables.runs.rows[0].environment_id, 1, 'the journey\'s environment was ignored');
+});
+
+test('running a journey answers 400/403/404 and never 500', async () => {
+  const { app } = fixture();
+  const empty = (await newJourney(app, { name: 'Nothing in it' })).body.id;
+
+  // A journey with no steps has nothing to run, and says so rather than
+  // answering 202 with an empty list.
+  const none = await request(app).post(`${BASE}/${empty}/run`).set('Authorization', authHeader('operator')).send({});
+  assert.equal(none.status, 400);
+  assert.match(none.body.details._, /nothing to run/);
+
+  await request(app).put(`${BASE}/${empty}/steps`).set('Authorization', authHeader('operator'))
+    .send({ steps: [{ test_id: 1, required: true }] });
+
+  for (const bad of ['abc', '-1', '0', '1.5']) {
+    const res = await request(app).post(`${BASE}/${bad}/run`).set('Authorization', authHeader('operator')).send({});
+    assert.ok([400, 404].includes(res.status), `${bad} → ${res.status}`);
+  }
+  assert.equal((await request(app).post(`${BASE}/99999/run`).set('Authorization', authHeader('operator')).send({})).status, 404);
+
+  // Another application's environment would make the run a statement about the
+  // wrong service.
+  const wrongEnv = await request(app).post(`${BASE}/${empty}/run`)
+    .set('Authorization', authHeader('operator')).send({ environment_id: 2 });
+  assert.equal(wrongEnv.status, 400);
+  assert.match(wrongEnv.body.details.environment_id, /does not belong to this application/);
+
+  assert.equal((await request(app).post(`${BASE}/${empty}/run`).set('Authorization', authHeader('viewer')).send({})).status, 403);
+  assert.equal((await request(app).post(`${BASE}/${empty}/run`).send({})).status, 401);
+});
+
+// ------------------------------------------------------------------ edit
+test('a journey can be renamed and re-graded after it exists', async () => {
+  const { app } = fixture();
+  const id = (await newJourney(app, { criticality: 'normal' })).body.id;
+  const res = await request(app).put(`${BASE}/${id}`).set('Authorization', authHeader('operator'))
+    .send({ name: 'Caseworker sign-in', description: 'They cannot work without it', criticality: 'critical', expected_duration_ms: 8000 });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.name, 'Caseworker sign-in');
+  assert.equal(res.body.criticality, 'critical');
+  assert.equal(res.body.expected_duration_ms, 8000);
+
+  // Cleared means "no expectation stated" — a different fact from an
+  // expectation of zero, so no duration verdict is produced at all.
+  const cleared = await request(app).put(`${BASE}/${id}`).set('Authorization', authHeader('operator'))
+    .send({ expected_duration_ms: null });
+  assert.equal(cleared.body.expected_duration_ms, null);
+  assert.equal(cleared.body.duration, null);
+});
+
+// ------------------------------------------------ accepting over a duplicate
+// Seeds an application-1 journey suggestion whose members are "Login" and
+// "Authenticated navigation", plus the test suggestions it names.
+function seedJourneySuggestion(serviceTests, names = ['Login', 'Authenticated navigation']) {
+  const t = serviceTests.tables;
+  for (const name of names) {
+    t.suggestions.insert({
+      discovery_id: 1, application_id: 1, kind: 'test', name,
+      confidence: 'high', proposed_steps: [{ type: 'open', url: '/login' }],
+      status: 'proposed', created_test_id: null, created_journey_id: null,
+    });
+  }
+  return t.suggestions.insert({
+    discovery_id: 1, application_id: 1, kind: 'journey', name: 'Sign in and use the application',
+    confidence: 'medium', proposed_steps: [], status: 'proposed',
+    proposed_journey: { criticality: 'high', steps: names.map((n) => ({ suggestion_name: n, required: true })) },
+  }).id;
+}
+
+test('accepting a suggestion that duplicates an existing journey refuses once and says what it found', async () => {
+  const { serviceTests, app } = fixture();
+  // The operator already built this by hand — which is exactly what has
+  // happened the first time anyone runs discovery on a service they monitor.
+  const mine = (await newJourney(app, { name: 'Fellis run for About Fellis' })).body.id;
+  await request(app).put(`${BASE}/${mine}/steps`).set('Authorization', authHeader('operator'))
+    .send({ steps: [{ test_id: 1, required: true }] }); // test 1 is named "Login"
+
+  const sid = seedJourneySuggestion(serviceTests);
+  const res = await request(app).post(`${SUGGEST}/${sid}/accept`)
+    .set('Authorization', authHeader('operator')).send({});
+
+  assert.equal(res.status, 409);
+  const [overlap] = res.body.overlaps;
+  assert.equal(overlap.journey_id, mine);
+  assert.deepEqual(overlap.already_covers, ['Login']);
+  assert.deepEqual(overlap.would_add, ['Authenticated navigation']);
+  // Refused means refused: nothing was built while the question is open.
+  assert.equal(serviceTests.tables.journeys.rows.length, 1, 'a journey was created despite the refusal');
+});
+
+test('merging adds only the missing steps, and keeps the operator\'s ordering', async () => {
+  const { serviceTests, app } = fixture();
+  const mine = (await newJourney(app, { name: 'Mine' })).body.id;
+  await request(app).put(`${BASE}/${mine}/steps`).set('Authorization', authHeader('operator'))
+    .send({ steps: [{ test_id: 3, required: true }, { test_id: 1, required: true }] }); // Logout, then Login
+
+  const sid = seedJourneySuggestion(serviceTests);
+  const res = await request(app).post(`${SUGGEST}/${sid}/accept`)
+    .set('Authorization', authHeader('operator')).send({ merge_into_journey_id: mine });
+
+  assert.equal(res.status, 200);
+  assert.equal(res.body.merged, true);
+  assert.equal(res.body.added_steps, 1);
+  assert.equal(serviceTests.tables.journeys.rows.length, 1, 'merging must not also create a journey');
+
+  const after = (await request(app).get(`${BASE}/${mine}`).set('Authorization', authHeader('viewer'))).body;
+  // The operator's order is preserved and the new step appended. Re-sorting
+  // their journey to match a heuristic's idea would be a much ruder act.
+  assert.deepEqual(after.health.steps.map((s) => s.label), ['Logout', 'Login', 'Authenticated navigation']);
+
+  // The suggestion is now handled, and points at the journey it was folded into.
+  const suggestion = serviceTests.tables.suggestions.find(sid);
+  assert.equal(suggestion.status, 'accepted');
+  assert.equal(suggestion.created_journey_id, mine);
+});
+
+test('confirming creates the second journey deliberately', async () => {
+  const { serviceTests, app } = fixture();
+  const mine = (await newJourney(app, { name: 'Mine' })).body.id;
+  await request(app).put(`${BASE}/${mine}/steps`).set('Authorization', authHeader('operator'))
+    .send({ steps: [{ test_id: 1, required: true }] });
+
+  const sid = seedJourneySuggestion(serviceTests);
+  const res = await request(app).post(`${SUGGEST}/${sid}/accept`)
+    .set('Authorization', authHeader('operator')).send({ confirm: true });
+
+  assert.equal(res.status, 201);
+  assert.equal(serviceTests.tables.journeys.rows.length, 2);
+  assert.notEqual(res.body.journey.id, mine);
+});
+
+test('with no overlapping journey the accept is unchanged — no confirmation asked for', async () => {
+  const { serviceTests, app } = fixture();
+  const sid = seedJourneySuggestion(serviceTests);
+  const res = await request(app).post(`${SUGGEST}/${sid}/accept`)
+    .set('Authorization', authHeader('operator')).send({});
+  assert.equal(res.status, 201, 'a first journey must not have to be confirmed');
+  assert.equal(res.body.tests.length, 2);
+});
+
+test('merging validates its target: 400 for junk, 404 for absent, 400 across applications', async () => {
+  const { serviceTests, app } = fixture();
+  const mine = (await newJourney(app, { name: 'Mine' })).body.id;
+  await request(app).put(`${BASE}/${mine}/steps`).set('Authorization', authHeader('operator'))
+    .send({ steps: [{ test_id: 1, required: true }] });
+  const other = (await post(app, { application_id: 2, name: 'Partner journey' })).body.id;
+
+  const send = (body) => request(app).post(`${SUGGEST}/${seedJourneySuggestion(serviceTests)}/accept`)
+    .set('Authorization', authHeader('operator')).send(body);
+
+  for (const bad of ['abc', -1, 0, 1.5]) {
+    const res = await send({ merge_into_journey_id: bad });
+    assert.equal(res.status, 400, `${bad} → ${res.status}`);
+  }
+  assert.equal((await send({ merge_into_journey_id: 99999 })).status, 404);
+  // A journey is about ONE service; merging across applications would make its
+  // verdict a statement about something else.
+  const cross = await send({ merge_into_journey_id: other });
+  assert.equal(cross.status, 400);
+  assert.match(cross.body.details.merge_into_journey_id, /different application/);
+});

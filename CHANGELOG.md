@@ -1,5 +1,67 @@
 # Changelog
 
+## 0.126.3 — a journey you can run and edit, and one that knows it is a duplicate
+
+### Run a journey
+
+A journey had no Run button. You could run each of its tests one at a time and
+then read the verdict, which is the wrong way round — the journey is the thing
+you care about.
+
+Running one queues its member tests, one run each, in the journey's order, using
+the journey's environment unless the request names another. There is no third
+kind of run and no new worker protocol: the worker picks these up the way it
+picks up any other, and the verdict is computed from their results as it always
+was.
+
+The response lists every run it queued, named, so "it is running" is a list of
+things you can open rather than a spinner — and it carries the worker status, so
+a queued journey with no worker reads as a configuration problem rather than a
+hang. Every member is resolved before anything is queued: half a journey run is
+worse than a clear refusal, because the verdict would be computed from a partial
+set and read as a statement about the whole thing. A journey with no steps is
+refused rather than answered with an empty list, and the button is not offered
+at all.
+
+### Edit a journey
+
+Name, description, criticality and expected duration were set once at creation
+and unreachable after — the same gap the test page had until yesterday. So a
+journey whose importance changed could never say so.
+
+The application is deliberately not editable, for the reason it is not on a test:
+a journey is about one service, and moving it would leave every step pointing at
+another application's tests.
+
+### Discovery no longer duplicates a journey you already built
+
+The first time anyone runs Discovery on a service they already monitor, the
+suggestion describes a journey they built by hand months ago. Accepting it
+created a second one silently — the same tests in it, both reporting on the same
+service, and nothing saying so.
+
+The accept is now refused once, with 409, naming each overlapping journey, what
+it already covers, and what accepting would add. Two ways to answer:
+`{ "merge_into_journey_id": N }` appends the missing steps to that journey, or
+`{ "confirm": true }` creates a separate one deliberately. Which journey is the
+real one is a judgement about your service, so it is reported and never decided
+for you — and nothing is built while the question is open.
+
+Merging appends and never re-orders: rewriting your ordering to match a
+heuristic's would be a much ruder act than suggesting one. A member the overlap
+report called "already covered" reuses that journey's existing test rather than
+creating a second under the same name — that duplicate was the complaint in the
+first place.
+
+Matching is by the tests themselves where they exist and by name where they do
+not (a suggested test does not exist until something accepts it), scoped to one
+application. Name matching across an estate would be meaningless — "Login" is the
+commonest test name there is — but inside one application it is the same check a
+person would make.
+
+With no overlapping journey nothing changes: the accept creates the journey
+without asking anything.
+
 ## 0.126.2 — the severity-rules screen, tested in a real DOM
 
 Fourteen tests that drive the dashboard the way a person does: click the nav

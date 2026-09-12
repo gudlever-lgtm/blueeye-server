@@ -1,5 +1,71 @@
 # Changelog
 
+## 0.127.0 — accessibility checks (V2 §9)
+
+BlueEyes already drives a real browser through a real journey. While it is there
+it can answer a second question at almost no cost: can everybody use this?
+
+### A finding never fails a run
+
+The spec says these are reported separately from functional failures, and that is
+not a presentation detail. An image with no alt text is not the service being
+down. Mixing the two costs you both: the run status stops meaning "the journey
+works", and the accessibility report becomes the thing people switch off to get a
+green build — and a switched-off check protects nobody.
+
+So the findings ride beside the result. `status` is decided before the audit runs
+and nothing in the audit can touch it; a test asserts every conclusion a run
+reaches is identical with and without one. On screen they sit below the steps in
+their own panel, with no red and no status chip — nothing that can be mistaken
+for the verdict. They carry impact (serious / moderate / minor) rather than
+severity, so nobody reads a finding as an incident and the two can never be
+summed into one misleading number.
+
+### What is checked
+
+Controls a screen reader announces as just "button", fields with nothing saying
+what belongs in them, a field identified only by its placeholder, images with no
+alt attribute, a missing h1, a skipped heading level, things clickable with a
+mouse and unreachable with a keyboard, a positive tabindex, a page that does not
+say what language it is in, and a page with no title.
+
+### What is deliberately not flagged
+
+A report earns its reputation on its false positives; a noisy one is switched off
+within a week.
+
+`alt=""` is correct and is never a finding — it is how you say "this picture
+carries no information", and flagging it pushes people into writing noise for a
+screen reader to read out. Absent and empty are different facts and the collector
+keeps them apart rather than flattening both to falsy. Hidden elements are not
+problems: `aria-hidden`, `hidden` and `display:none` are how carousels, drawers
+and off-screen menus are built. Going back up a heading level is just the next
+section, so only downward jumps count. A placeholder alongside a real label is
+good practice, not a fault.
+
+### What it does not claim
+
+These are basic checks, not an audit, and the panel says so rather than implying
+a page with no findings is accessible. Hand-written rules rather than a library,
+matching the repo's local-and-explainable rule: no cloud, no heavyweight
+dependency, and no third-party auditor injected into a customer's page under
+test.
+
+One honest limit: a click handler added with `addEventListener` is invisible to
+any script, so the keyboard check finds the common case and does not pretend to
+find all of them.
+
+"Not collected" is never rendered as "clean". A null report — an older worker, a
+page that would not evaluate, the check turned off — shows nothing at all rather
+than a reassuring empty panel, and a zero-finding report carries what it looked
+at, so a clean page can be told apart from one nobody looked at.
+
+The rules are pure and live in `a11y/rules.js`; the in-page collector gathers
+facts and judges nothing. The collector needs a DOM and so cannot be unit-tested,
+which is exactly why it must contain nothing worth arguing about.
+
+Migration 087, `docs/service-assurance-accessibility.md`.
+
 ## 0.126.4 — journey Run and Edit tested in a real DOM, and a segmented control that is not ragged
 
 ### The dashboard half of journey Run and Edit

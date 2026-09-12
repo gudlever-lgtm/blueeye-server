@@ -448,3 +448,28 @@
 .sa-picker-option { display: flex; align-items: center; gap: 8px; padding: 4px 2px; cursor: pointer; }
 .sa-picker-option:hover { background: var(--panel-2, #f1f1ef); }
 
+
+/* ---- accessibility findings (V2 §9) ----
+   Deliberately NOT the failure vocabulary. No red, no status chip, nothing that
+   can be mistaken for the run's verdict — the spec reports these separately from
+   functional failures, and a panel that looks like a failure is one people
+   switch off to get a green build. */
+.sa-a11y { border-left: 3px solid var(--muted-weak, #e5e7eb); }
+.sa-a11y-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.sa-a11y-counts { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+.sa-a11y-chip {
+  display: inline-block; padding: 2px 8px; border-radius: 999px;
+  font-size: 0.72rem; font-weight: 600; letter-spacing: 0.02em;
+}
+/* Impact, not severity: three weights of the same neutral, so the ordering is
+   readable without borrowing the colours that mean "this service is down". */
+.sa-a11y-serious  { background: var(--panel-2, #f1f1ef); color: var(--text, #17171a); }
+.sa-a11y-moderate { background: var(--panel-2, #f1f1ef); color: var(--muted, #6d6d73); }
+.sa-a11y-minor    { background: var(--panel-2, #f1f1ef); color: var(--muted, #6d6d73); }
+.sa-a11y-list { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+.sa-a11y-item { padding: 10px 12px; border: 1px solid var(--hairline, #e5e7eb); border-radius: 8px; }
+.sa-a11y-item.sa-a11y-serious { border-left: 3px solid var(--muted, #6d6d73); }
+.sa-a11y-item-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.sa-a11y-why { font-size: 0.88rem; color: var(--muted, #6d6d73); margin: 6px 0 6px; }
+.sa-a11y-where { font-size: 0.82rem; word-break: break-word; }
+.sa-a11y-where code { background: var(--code-bg, #f9fafb); padding: 1px 5px; border-radius: 4px; }

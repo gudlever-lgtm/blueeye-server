@@ -122,6 +122,11 @@ const STRING_FIELDS = {
 
 const BOOLEAN_FIELDS = {
   artifacts: { screenshotOnFailure: true, fullPage: false },
+  // The accessibility check (V2 §9). On by default: it is one read-only evaluate
+  // at the end of a run, it can never change the outcome, and a check nobody
+  // turns on finds nothing. The switch exists so a customer with a page it
+  // chokes on can stop collecting without losing the test.
+  runner: { accessibility: true },
   // `enabled` off stops the sweep entirely; `notify` off keeps the incidents but
   // sends nothing, which is what an operator wants for the first week while they
   // find out how noisy their own estate is.

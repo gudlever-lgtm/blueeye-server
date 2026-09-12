@@ -97,7 +97,10 @@ function createWorker({
         timeoutMs: runnerSettings.stepTimeoutMs,
         secrets: [credential && credential.secret].filter(Boolean),
       });
-      result = await executeDefinition(test.definition, { driver: browser.driver, credential, redact });
+      result = await executeDefinition(test.definition, {
+        driver: browser.driver, credential, redact,
+        accessibilityEnabled: runnerSettings.accessibility !== false,
+      });
 
       // A screenshot only on failure, and only when the settings allow it —
       // artefacts are the module's growth risk, not the image size.

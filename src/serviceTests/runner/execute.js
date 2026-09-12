@@ -5,6 +5,7 @@ const { blockField, CREDENTIAL_REF_RE } = require('../engine/dsl');
 const { describeTarget } = require('../engine/targeting');
 const { proposeHealing } = require('../engine/heal');
 const { classify, KIND } = require('./classify');
+const { audit } = require('../a11y/rules');
 
 // The step executor — PURE with respect to browsers.
 //
@@ -217,6 +218,11 @@ async function executeDefinition(definition, {
   redact = null,
   now = () => Date.now(),
   onStep = null,
+  // Defaults ON. The spec calls these basic checks, they cost one read-only
+  // evaluate at the end of a run, and a check nobody turns on finds nothing.
+  // The setting exists so a customer with a page it chokes on can switch it off
+  // without losing the test.
+  accessibilityEnabled = true,
 } = {}) {
   const mask = redact && typeof redact.text === 'function' ? redact.text : (s) => s;
   const flat = flattenSteps(definition);
@@ -322,6 +328,18 @@ async function executeDefinition(definition, {
   // that proves it is the one nobody would think to open.
   const apiCalls = await safeCall(driver.apiCalls, driver, []);
 
+  // The accessibility check (V2 §9), on the page the run ended on.
+  //
+  // It CANNOT change the outcome. `status` was decided above and nothing below
+  // this line touches it — an image with no alt text is not the service being
+  // down, and a check that can turn a build red is one people switch off, which
+  // protects nobody.
+  //
+  // Null when it was not collected (an older driver, a page that would not
+  // evaluate, the check turned off). Null is not the same as "clean", and the
+  // report keeps them apart rather than showing a reassuring empty list.
+  const accessibility = accessibilityEnabled ? await auditPage(driver) : null;
+
   return {
     status,
     duration_ms: durationMs,
@@ -339,7 +357,30 @@ async function executeDefinition(definition, {
     console_errors: failed ? failed.consoleErrors : [],
     network_errors: failed ? failed.networkErrors : [],
     api_calls: (apiCalls || []).map((c) => ({ ...c, url: mask(c.url) })),
+    accessibility,
   };
+}
+
+// Collects and audits, or answers null. Never throws: an accessibility report is
+// the last thing that should be able to take a run down with it.
+async function auditPage(driver) {
+  if (typeof driver.accessibilitySnapshot !== 'function') return null;
+  try {
+    const snapshot = await driver.accessibilitySnapshot();
+    if (!snapshot) return null;
+    const result = audit(snapshot);
+    return {
+      ...result,
+      // Which page this is about. A run visits several, and a finding with no
+      // address is one nobody can go and look at.
+      url: (snapshot.document && snapshot.document.url) || null,
+      // Surfaced rather than swallowed: a collection that hit its own ceiling
+      // did not see the whole page, and a reader has to be able to tell.
+      collection_truncated: Boolean(snapshot.truncated),
+    };
+  } catch {
+    return null;
+  }
 }
 
 // The page title, from a driver that may predate the method (an older worker

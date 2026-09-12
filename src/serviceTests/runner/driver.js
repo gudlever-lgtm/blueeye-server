@@ -3,6 +3,7 @@
 const { strategiesFor, describeTarget } = require('../engine/targeting');
 const { explainReason } = require('../security/hostPolicy');
 const { createApiLog } = require('./apiLog');
+const { collectAccessibilityScript } = require('../a11y/collect');
 const { createRedactor } = require('../engine/redact');
 
 // The Playwright adapter — THE ONLY file in Service Tests that knows Playwright
@@ -385,6 +386,22 @@ function createPlaywrightDriver({
     consoleErrors: async () => consoleErrors.slice(0, 50),
     networkErrors: async () => [...networkErrors, ...blocked.map((b) => ({ url: b.url, status: 0, error: b.reason }))].slice(0, 50),
     apiCalls: async () => apiLog.calls(),
+
+    // Reads the page for the accessibility check (V2 §9). Read-only: the script
+    // inspects and returns, it never clicks, focuses or writes — auditing a page
+    // must not alter the page being audited.
+    //
+    // Returns null rather than throwing on a page that will not evaluate
+    // (navigated away, closed, cross-origin). Null then means "not collected",
+    // which the report distinguishes from "collected and clean" — a page nobody
+    // looked at is not a page that passed.
+    accessibilitySnapshot: async () => {
+      try {
+        return await page.evaluate(`(${collectAccessibilityScript.toString()})()`);
+      } catch {
+        return null;
+      }
+    },
     blockedRequests: () => blocked.slice(0, 50),
 
     async screenshot({ fullPage = false, type = 'jpeg', quality = 70 } = {}) {

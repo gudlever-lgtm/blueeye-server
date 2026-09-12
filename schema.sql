@@ -1825,6 +1825,7 @@ CREATE TABLE IF NOT EXISTS service_test_runs (
   console_errors JSON             DEFAULT NULL,
   network_errors JSON             DEFAULT NULL,
   api_calls JSON DEFAULT NULL,
+  accessibility JSON DEFAULT NULL,
   claimed_by VARCHAR(120)     DEFAULT NULL,
   claimed_at DATETIME(3)      DEFAULT NULL,
   requested_by INT              DEFAULT NULL,

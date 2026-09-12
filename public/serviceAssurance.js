@@ -2366,8 +2366,75 @@
             el('td', {}, s.message || ''));
         })));
 
-        mount(body, head, summary, perf, failure, steps);
+        mount(body, head, summary, perf, failure, steps, accessibilityPanel(run));
       });
+    }
+
+    // Accessibility (V2 §9).
+    //
+    // Below the steps and visually apart from the failure block, because the
+    // spec says these are reported SEPARATELY from functional failures and means
+    // it. An image with no alt text is not the service being down. Mixing the two
+    // makes both useless: the run status stops meaning "the journey works", and
+    // the accessibility report becomes the thing people switch off to get a green
+    // build.
+    //
+    // So: no red, no status chip, nothing that can be mistaken for the verdict.
+    function accessibilityPanel(run) {
+      var a = run.accessibility;
+      // Not collected is NOT the same as clean, and a reassuring empty panel
+      // would be a lie about a page nobody looked at. Nothing is shown at all.
+      if (!a) return null;
+
+      var counts = a.counts || {};
+      var findings = a.findings || [];
+
+      var head = el('div', { class: 'sa-a11y-head' },
+        el('strong', {}, t('sa.a11y.title')),
+        el('span', { class: 'sa-a11y-counts' },
+          ...['serious', 'moderate', 'minor'].map(function (impact) {
+            if (!counts[impact]) return null;
+            return el('span', { class: 'sa-a11y-chip sa-a11y-' + impact },
+              counts[impact] + ' ' + impactLabel(impact));
+          })));
+
+      if (!findings.length) {
+        return el('div', { class: 'sa-panel sa-a11y' }, head,
+          // Says what it looked at, so "nothing found" can be read for what it
+          // is: these checks found nothing, not "this page is accessible".
+          el('p', { class: 'sa-help' }, t('sa.a11y.clean', {
+            elements: (a.checked && a.checked.elements) || 0,
+          })));
+      }
+
+      return el('div', { class: 'sa-panel sa-a11y' }, head,
+        el('p', { class: 'sa-help' }, t('sa.a11y.help')),
+        a.collection_truncated || a.truncated
+          ? el('p', { class: 'sa-warn' }, t('sa.a11y.truncated', { shown: findings.length, total: counts.total || findings.length }))
+          : null,
+        el('div', { class: 'sa-a11y-list' }, ...findings.map(a11yFinding)));
+    }
+
+    function impactLabel(impact) {
+      if (impact === 'serious') return t('sa.a11y.serious');
+      if (impact === 'moderate') return t('sa.a11y.moderate');
+      return t('sa.a11y.minor');
+    }
+
+    function a11yFinding(f) {
+      var element = f.element || {};
+      return el('div', { class: 'sa-a11y-item sa-a11y-' + f.impact },
+        el('div', { class: 'sa-a11y-item-head' },
+          el('span', { class: 'sa-a11y-chip sa-a11y-' + f.impact }, impactLabel(f.impact)),
+          el('strong', {}, f.message)),
+        // WHY it matters, in the operator's words. A rule code is a finding
+        // nobody acts on.
+        el('p', { class: 'sa-a11y-why' }, f.why),
+        // Enough to go and find it. A finding you cannot locate is one you
+        // cannot fix.
+        el('div', { class: 'sa-a11y-where' },
+          element.selector ? el('code', {}, element.selector) : null,
+          element.text ? el('span', { class: 'muted' }, ' \u2014 \u201c' + element.text + '\u201d') : null));
     }
 
     // -------------------------------------------------------------- history

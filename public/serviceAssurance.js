@@ -1199,7 +1199,7 @@
             // — its name, what it is for, which login it uses, whether it runs
             // at all — was only settable at creation and unreachable after,
             // which is how a test ends up named "Untitled" forever.
-            isOperator() ? el('button', { class: 'ghost small', onclick: function () { testForm(test); } }, t('sa.edit')) : null,
+            isOperator() ? el('button', { class: 'ghost small', onclick: function () { testForm(test, schedules); } }, t('sa.edit')) : null,
             isOperator() ? el('button', {
               class: 'ghost small danger',
               onclick: function () { deleteTest(test); },
@@ -1242,7 +1242,13 @@
     // application would leave every step pointing at the old one's pages, its
     // history describing a service it no longer tests, and its journeys quietly
     // spanning two applications. Delete and rebuild is the honest path.
-    function testForm(test) {
+    //
+    // How often it runs is here too. It used to live only in the Automatic runs
+    // panel, where the only way to change "every hour" to "every 15 minutes" was
+    // to delete the schedule and add it back — and where a test with no schedule
+    // gave no hint that it would never run again on its own. "What is this test
+    // and when does it run" is one question, so it is one dialog.
+    function testForm(test, schedules) {
       var name = el('input', { type: 'text', value: test.name || '' });
       var desc = el('textarea', { rows: 2 }, test.description || '');
       var enabled = el('input', { type: 'checkbox' });
@@ -1250,14 +1256,45 @@
       var credential = el('select', {}, el('option', { value: '' }, t('sa.test.noLogin')));
       var errors = el('div', { class: 'sa-form-errors' });
 
+      // At most one schedule per test today, which is what the panel's
+      // "+ Add only when there are none" already assumed. Reading [0] rather
+      // than assuming it exists keeps a test with none working.
+      var schedule = (schedules || [])[0] || null;
+      var every = el('select', {}, el('option', { value: '' }, t('sa.schedule.never')));
+      var tz = el('input', {
+        type: 'text',
+        value: (schedule && schedule.timezone)
+          || (Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'),
+      });
+
       var body = el('div', {},
         field(t('sa.app.name'), name),
         field(t('sa.app.description'), desc, t('sa.test.descriptionHelp')),
         field(t('sa.test.login'), credential, t('sa.test.loginHelp')),
+        field(t('sa.schedule.every'), every, t('sa.schedule.everyHelp')),
+        field(t('sa.schedule.timezone'), tz),
         el('label', { class: 'sa-field sa-field-inline' }, enabled,
           el('span', {}, t('sa.test.enabled'))),
         el('p', { class: 'sa-help' }, t('sa.test.enabledHelp')),
         errors);
+
+      // The intervals the server accepts, asked for rather than hardcoded — a
+      // list duplicated in the browser is one that drifts. If the read fails the
+      // dropdown is left showing only what the test already has, so saving
+      // cannot silently unschedule it.
+      var intervalsLoaded = api(API + '/schedules/intervals').then(function (res) {
+        (res.intervals || []).forEach(function (i) {
+          var opt = el('option', { value: String(i.seconds) }, i.da || i.en);
+          if (schedule && Number(schedule.interval_sec) === Number(i.seconds)) opt.selected = true;
+          every.append(opt);
+        });
+      }).catch(function () {
+        if (schedule) {
+          every.append(el('option', { value: String(schedule.interval_sec), selected: 'selected' },
+            schedule.description || String(schedule.interval_sec) + 's'));
+          every.disabled = true;
+        }
+      });
 
       // The logins belong to the application, so they are read through it
       // rather than from a flat list that would show every application's.
@@ -1285,9 +1322,40 @@
             credential_id: credential.value ? Number(credential.value) : null,
             enabled: enabled.checked,
           },
-        }).then(function () { toast(t('sa.settings.saved')); draw(); })
+        })
+          // The test is saved first and the schedule second, deliberately. If
+          // the schedule call fails the name change still stands and the dialog
+          // says what went wrong — the alternative is losing both to one error.
+          .then(function () { return saveSchedule(); })
+          .then(function () { toast(t('sa.settings.saved')); draw(); })
           .catch(function (e) { showErrors(errors, e); throw e; });
       });
+
+      // Four cases, spelled out rather than inferred: add one, change one,
+      // remove one, or leave it alone. "Leave it alone" matters — a PUT on every
+      // save would reset next_run_at each time somebody fixed a typo in the
+      // name, quietly pushing the next run an hour into the future.
+      function saveSchedule() {
+        return intervalsLoaded.then(function () {
+          var wanted = every.value ? Number(every.value) : null;
+          var zone = tz.value.trim();
+          if (!schedule && wanted === null) return null;
+          if (!schedule) {
+            return api(API + '/schedules', {
+              method: 'POST',
+              body: { test_id: test.id, interval_sec: wanted, timezone: zone },
+            });
+          }
+          if (wanted === null) {
+            return api(API + '/schedules/' + schedule.id, { method: 'DELETE' });
+          }
+          if (Number(schedule.interval_sec) === wanted && (schedule.timezone || '') === zone) return null;
+          return api(API + '/schedules/' + schedule.id, {
+            method: 'PUT',
+            body: { interval_sec: wanted, timezone: zone },
+          });
+        });
+      }
     }
 
     // Deleting a test is not only deleting a test.
@@ -1537,23 +1605,6 @@
       var wrap = el('div', { class: 'sa-panel' });
       function reload() { state.testId = test.id; draw(); }
 
-      function addForm() {
-        api(API + '/schedules/intervals').then(function (res) {
-          var select = el('select', {}, ...res.intervals.map(function (i) {
-            return el('option', { value: String(i.seconds) }, i.da || i.en);
-          }));
-          var tz = el('input', { type: 'text', value: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' });
-          var errors = el('div', { class: 'sa-form-errors' });
-          modal(t('sa.schedule.add'), el('div', {},
-            field(t('sa.schedule.every'), select), field(t('sa.schedule.timezone'), tz), errors), function () {
-            return api(API + '/schedules', {
-              method: 'POST',
-              body: { test_id: test.id, interval_sec: Number(select.value), timezone: tz.value.trim() },
-            }).then(reload).catch(function (e) { showErrors(errors, e); throw e; });
-          });
-        });
-      }
-
       var rows = (schedules || []).map(function (s) {
         return el('tr', {},
           el('td', {}, s.description),
@@ -1567,9 +1618,13 @@
           }, t('sa.delete')) : null));
       });
 
-      mount(wrap, 
-        section(t('sa.schedule.title'), isOperator() && !rows.length
-          ? el('button', { class: 'ghost small', onclick: addForm }, '+ ' + t('sa.schedule.add')) : null),
+      // This panel SHOWS when the test next runs and whether it is falling
+      // behind. Setting how often is one field in Edit test, not a second form
+      // here that could disagree with it.
+      mount(wrap,
+        section(t('sa.schedule.title'), isOperator()
+          ? el('button', { class: 'ghost small', onclick: function () { testForm(test, schedules); } },
+            rows.length ? t('sa.schedule.change') : '+ ' + t('sa.schedule.add')) : null),
         rows.length ? el('table', { class: 'data-table' }, el('tbody', {}, ...rows))
           : el('div', { class: 'sa-empty' }, t('sa.schedule.empty')));
       return wrap;

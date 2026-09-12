@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.126.2 — the severity-rules screen, tested in a real DOM
+
+Fourteen tests that drive the dashboard the way a person does: click the nav
+button, click the sub-tab, fill the form, submit it. Nothing calls app.js
+internals, because a test that calls the function directly passes with the
+button wired to nothing. Two of them found real bugs rather than confirming what
+was written.
+
+**Switching the source in "New rule" did nothing.** Picking Service Assurance
+left the finding fields — metric, kind, agent — on screen, and submitting posted
+`match_host_id`, which the server correctly refuses. A 400 the person could do
+nothing about, on a form that looked fine. The form now rebuilds when the source
+changes, carrying across whatever has already been typed; only the fields the new
+source also has survive, since the rest could not have meant anything there.
+
+**A half-typed rule lost its severity and reason.** They were read from the
+stored rule only, so they were dropped whenever the form was reopened with a
+prefill — including from the button on a finding.
+
+The rest of the suite pins the behaviour that matters: the back-fill counts
+before it changes anything and says "412 open events" in the confirm; the delete
+confirm says plainly that it does not put the changed events back; an edit sends
+a PUT and keeps the source the rule was created with; a downgraded finding says
+"was CRIT" on screen while an untouched one claims no rule; a viewer sees the
+provenance but no control that writes a rule.
+
+### How often a test runs is part of editing the test
+
+It used to live only in the Automatic runs panel, where changing "every hour" to
+"every 15 minutes" meant deleting the schedule and adding it back, and where a
+test with no schedule gave no hint that it would never run on its own. "What is
+this test and when does it run" is one question, so it is one dialog.
+
+The panel still shows the next run and whether the test is falling behind — that
+is what a panel is for. Its button now opens the same dialog rather than a second
+form that could disagree with it.
+
+The save spells out four cases rather than inferring them: add a schedule, change
+one, remove one, or leave it alone. Leaving it alone matters — a PUT on every
+save would reset `next_run_at` each time somebody fixed a typo in the name,
+quietly pushing the next run an hour into the future. The test is saved before
+the schedule, so a failure on the second does not lose the first.
+
 ## 0.126.1 — severity rules, and a test you can rename or delete
 
 ### "This is a warning for us, not a critical"

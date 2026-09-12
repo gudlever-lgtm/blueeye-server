@@ -13321,14 +13321,16 @@ async function editSeverityRule(r, prefill) {
       hint: t('sev.field.sourceHint'),
     }]),
     ...scopeFields,
-    { name: 'severity', label: t('sev.field.severity'), type: 'select', value: (r && r.severity) || 'WARN',
+    { name: 'severity', label: t('sev.field.severity'), type: 'select', value: v('severity') || 'WARN',
       options: ['INFO', 'WARN', 'CRIT'].map((x) => ({ value: x, label: x })) },
-    { name: 'reason', label: t('sev.field.reason'), type: 'textarea', value: (r && r.reason) || '',
+    { name: 'reason', label: t('sev.field.reason'), type: 'textarea', value: v('reason'),
       hint: t('sev.field.reasonHint') },
-    { name: 'enabled', label: t('sev.field.state'), type: 'select', value: (r && r.enabled === false) ? 'false' : 'true',
+    { name: 'enabled', label: t('sev.field.state'), type: 'select',
+      value: ((r && r.enabled === false) || (prefill && prefill.enabled === 'false')) ? 'false' : 'true',
       options: [{ value: 'true', label: t('sev.on') }, { value: 'false', label: t('sev.off') }] },
   ];
 
+  const modalFields = fields;
   openModal(editing ? t('sev.editTitle') : t('sev.newTitle'), fields, async (vals) => {
     const body = {
       source: editing ? r.source : vals.source,
@@ -13346,6 +13348,28 @@ async function editSeverityRule(r, prefill) {
     toast(t('sev.saved'));
     render();
   });
+
+  // Switching the source rebuilds the form, because the fields below it BELONG
+  // to the source: a Service Assurance rule has no agent, and a finding has no
+  // application. Left as it was, the dialog would offer an agent box on a
+  // Service Assurance rule and post a match field the server refuses — a 400
+  // the person could do nothing about, on a form that looked fine.
+  //
+  // What has already been typed is carried across. Only the fields the new
+  // source also has survive; the rest could not have meant anything there.
+  if (!editing) {
+    const card = $('#modal-card');
+    const picker = card.querySelector('select');
+    if (picker) {
+      const nodes = [...card.querySelectorAll('form input, form select, form textarea')];
+      picker.addEventListener('change', () => {
+        const typed = {};
+        modalFields.forEach((f, i) => { if (nodes[i]) typed[f.name] = nodes[i].value; });
+        typed.source = picker.value;
+        editSeverityRule(null, typed);
+      });
+    }
+  }
 }
 
 // Counts first, always. "412 events" before it happens rather than after.

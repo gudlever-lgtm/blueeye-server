@@ -3361,6 +3361,7 @@
         notify: t('sa.set.assuranceNotify'),
         watchCertificates: t('sa.set.watchCertificates'),
         watchTests: t('sa.set.watchTests'),
+        groupAlerts: t('sa.set.groupAlerts'),
         sweepIntervalMs: t('sa.set.sweepIntervalMs'),
         certificateCheckIntervalMinutes: t('sa.set.certificateCheckIntervalMinutes'),
         certificateWarnDays: t('sa.set.certificateWarnDays'),

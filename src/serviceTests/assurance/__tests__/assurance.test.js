@@ -392,3 +392,191 @@ test('the background job re-reads its cadence and stops cleanly', async () => {
   assert.equal(sweeps, 0, 'stopping before the first delay means nothing ran');
   assert.doesNotThrow(() => job.stop());
 });
+
+// ------------------------------------------------------ grouped alerting
+//
+// One cause producing several symptoms is one alert. The reactor already dedups
+// per SUBJECT — one open incident per thing, however often it fails. This is the
+// layer above: several DIFFERENT subjects failing for one reason.
+//
+// A sweep that opens five incidents for one cause and sends five messages is
+// what teaches whoever is carrying the phone to stop reading them.
+
+function reactorWith(mod, { notify, dependenciesFor = null, certificate = null } = {}) {
+  return createAssuranceReactor({
+    repositories: mod.repositories,
+    settings: mod.settings,
+    certificateChecker: {
+      check: async (target) => certificate || {
+        host: target.host, port: target.port, status: 'ok', days_remaining: 400, checked_at: new Date(),
+      },
+    },
+    notify,
+    dependenciesFor,
+  });
+}
+
+// Three tests of one application, all failing the same way, all on /api/auth.
+async function seedThreeFailingOn(mod, url) {
+  const sent = [];
+  for (const name of ['Sign in', 'Find customer', 'Place order']) {
+    // eslint-disable-next-line no-await-in-loop
+    const test = await mod.repositories.tests.create({
+      application_id: 1, name, definition: { version: 1, name, steps: [] }, created_by: 1,
+    });
+    for (let i = 0; i < 3; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      const run = await mod.repositories.runs.enqueue({ test_id: test.id });
+      // eslint-disable-next-line no-await-in-loop
+      await mod.repositories.runs.complete(run.id, {
+        status: 'fail',
+        failure_kind: 'http_500',
+        error_message: `GET ${url} → HTTP 500`,
+        steps: [],
+        api_calls: [{ url, method: 'GET', status: 500 }],
+      });
+    }
+  }
+  return sent;
+}
+
+test('a sweep that opens three incidents for one cause sends ONE alert', async () => {
+  const mod = makeServiceTests();
+  const sent = [];
+  const reactor = reactorWith(mod, {
+    notify: async (finding, group) => { sent.push({ finding, group }); },
+    dependenciesFor: async () => ({ failing: [{ label: '/api/auth', journey_count: 3 }] }),
+  });
+
+  await seedThreeFailingOn(mod, 'https://customer.example.com/api/auth');
+  const result = await reactor.sweep();
+
+  const open = await mod.repositories.incidents.list({ status: 'open' });
+  assert.equal(open.length, 3, 'three subjects are three incidents — that does not change');
+  assert.equal(sent.length, 1, `three incidents produced ${sent.length} alerts`);
+  assert.equal(result.alerts.alerts, 1);
+  assert.equal(result.alerts.folded, 2);
+});
+
+test('every incident folded into an alert is named in it', async () => {
+  // One page instead of three, never two problems nobody was told about.
+  const mod = makeServiceTests();
+  const sent = [];
+  const reactor = reactorWith(mod, {
+    notify: async (finding, group) => { sent.push({ finding, group }); },
+    dependenciesFor: async () => ({ failing: [{ label: '/api/auth', journey_count: 3 }] }),
+  });
+  await seedThreeFailingOn(mod, 'https://customer.example.com/api/auth');
+  await reactor.sweep();
+
+  const { finding, group: context } = sent[0];
+  const everything = `${finding.explanation}\n${(finding.evidence || []).join('\n')}`;
+  for (const name of ['Sign in', 'Find customer', 'Place order']) {
+    assert.match(everything, new RegExp(name), `${name} disappeared into the group`);
+  }
+  // The group rides on the notify CONTEXT — the second argument — so a receiver
+  // can see this was several incidents and which, without parsing the prose.
+  assert.equal(context.group.incident_ids.length, 3, 'the receiver cannot see which incidents this was');
+  assert.ok(context.group.link_reason, 'and why they are one problem');
+});
+
+test('every incident in a sent group is stamped as notified, so none is re-sent', async () => {
+  const mod = makeServiceTests();
+  const reactor = reactorWith(mod, {
+    notify: async () => {},
+    dependenciesFor: async () => ({ failing: [{ label: '/api/auth', journey_count: 3 }] }),
+  });
+  await seedThreeFailingOn(mod, 'https://customer.example.com/api/auth');
+  await reactor.sweep();
+
+  const open = await mod.repositories.incidents.list({ status: 'open' });
+  for (const incident of open) {
+    assert.ok(incident.notified_at, `incident ${incident.id} was sent but not stamped`);
+  }
+});
+
+test('a notification that fails leaves every incident unstamped and visible', async () => {
+  // The spec's rule: a failing notification system must never hide the incident.
+  const mod = makeServiceTests();
+  const reactor = reactorWith(mod, {
+    notify: () => Promise.reject(new Error('SMTP is down')),
+    dependenciesFor: async () => ({ failing: [{ label: '/api/auth', journey_count: 3 }] }),
+  });
+  await seedThreeFailingOn(mod, 'https://customer.example.com/api/auth');
+  const result = await reactor.sweep();
+
+  const open = await mod.repositories.incidents.list({ status: 'open' });
+  assert.equal(open.length, 3, 'the incidents are durable even when the alert is not');
+  for (const incident of open) {
+    assert.equal(incident.notified_at, null, 'and every one will be retried');
+  }
+  assert.ok(result.alerts, 'the sweep still reported what it tried to do');
+});
+
+test('unrelated failures are still separate alerts', async () => {
+  // Over-grouping is the dangerous direction: it hides a real outage inside
+  // somebody else's and nobody ever finds out.
+  const mod = makeServiceTests();
+  const sent = [];
+  const reactor = reactorWith(mod, { notify: async (f) => { sent.push(f); } });
+
+  for (const [name, kind] of [['Sign in', 'element_not_found'], ['Nightly report', 'timeout']]) {
+    // eslint-disable-next-line no-await-in-loop
+    const test = await mod.repositories.tests.create({
+      application_id: 1, name, definition: { version: 1, name, steps: [] }, created_by: 1,
+    });
+    for (let i = 0; i < 3; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      const run = await mod.repositories.runs.enqueue({ test_id: test.id });
+      // eslint-disable-next-line no-await-in-loop
+      await mod.repositories.runs.complete(run.id, { status: 'fail', failure_kind: kind, steps: [], api_calls: [] });
+    }
+  }
+  const result = await reactor.sweep();
+  assert.equal(result.alerts.alerts, 2, 'two unrelated outages were folded into one');
+  assert.equal(sent.length, 2);
+});
+
+test('a sweep that throws halfway does not leak its batch into the next one', async () => {
+  // The batch is opened by the sweep and closed in a finally. Leaving it open
+  // would make the next sweep send this one's alerts as well as its own.
+  const mod = makeServiceTests();
+  const sent = [];
+  const broken = createAssuranceReactor({
+    repositories: { ...mod.repositories, tests: { list: () => Promise.reject(new Error('the database went away')) } },
+    settings: mod.settings,
+    certificateChecker: { check: async () => ({ host: 'x', port: 443, status: 'ok', days_remaining: 400 }) },
+    notify: async (f) => { sent.push(f); },
+  });
+  await assert.rejects(() => broken.sweep(), /database went away/);
+
+  const healthy = reactorWith(mod, { notify: async (f) => { sent.push(f); } });
+  await healthy.sweep();
+  assert.deepEqual(sent, [], 'nothing was pending, and nothing was sent');
+});
+
+test('grouping can be turned off, and then every incident alerts on its own', async () => {
+  const mod = makeServiceTests();
+  const sent = [];
+  await mod.settings.set('assurance', { groupAlerts: false });
+  const reactor = reactorWith(mod, {
+    notify: async (f) => { sent.push(f); },
+    dependenciesFor: async () => ({ failing: [{ label: '/api/auth', journey_count: 3 }] }),
+  });
+  await seedThreeFailingOn(mod, 'https://customer.example.com/api/auth');
+  await reactor.sweep();
+  assert.equal(sent.length, 3, 'the switch did nothing');
+});
+
+test('a single apply() outside a sweep behaves exactly as it always did', async () => {
+  // The batch only exists while a sweep is running. Every spec above this line
+  // drives the reactor that way, and none of them should have changed.
+  const mod = makeServiceTests();
+  const sent = [];
+  const reactor = reactorWith(mod, {
+    notify: async (f) => { sent.push(f); },
+    certificate: { host: 'portal.kunde.dk', port: 443, status: 'expired', days_remaining: -5, checked_at: new Date() },
+  });
+  await reactor.sweepCertificates({ force: true });
+  assert.equal(sent.length, 1, 'a bare sweepCertificates still sends immediately');
+});

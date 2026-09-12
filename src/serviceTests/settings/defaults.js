@@ -130,7 +130,14 @@ const BOOLEAN_FIELDS = {
   // `enabled` off stops the sweep entirely; `notify` off keeps the incidents but
   // sends nothing, which is what an operator wants for the first week while they
   // find out how noisy their own estate is.
-  assurance: { enabled: true, notify: true, watchCertificates: true, watchTests: true },
+  // `enabled` off stops the sweep entirely; `notify` off keeps the incidents but
+  // sends nothing. `groupAlerts` off sends one message per incident instead of
+  // one per problem — the behaviour before V3, kept as a switch because an
+  // operator who does not trust the grouping should be able to see everything
+  // rather than turn alerting off altogether.
+  assurance: {
+    enabled: true, notify: true, watchCertificates: true, watchTests: true, groupAlerts: true,
+  },
 };
 
 const SECTIONS = [...new Set([

@@ -24,6 +24,9 @@ const { createServiceTestsApiRouter } = require('./api');
 const { createQueue } = require('./scheduler/queue');
 const { createArtifactStore, createArtifactRetention } = require('./runner/artifacts');
 const { createAssuranceReactor, createAssuranceJob } = require('./assurance/reactor');
+const { buildServiceMap } = require('./analysis/serviceMap');
+const { analyseDependencies } = require('./dependencies/dependencies');
+const { journeyHealth } = require('./journeys/health');
 const { createRecordingsCaptureRouter } = require('./api/recordings');
 const { createRecordingRetention } = require('./recording/retention');
 const { createRecorderSource } = require('./recording/bookmarklet');
@@ -93,6 +96,45 @@ function createServiceTestsModule(rawPorts = {}) {
     ? createArtifactStore({ root: rawPorts.artifactRoot, logger })
     : null;
 
+  // The failing shared dependencies of one application, for alert grouping.
+  //
+  // Read from the same map the Service Map screen draws, so the picture and the
+  // alert can never disagree about what depends on what. Deliberately shallow —
+  // a handful of runs per test, not a history — because this decides how to
+  // PHRASE a message, and a sweep must not stall on it.
+  async function dependenciesForApplication(applicationId) {
+    if (!applicationId) return null;
+    const application = await repositories.applications.findById(applicationId);
+    if (!application) return null;
+    const journeyList = await repositories.journeys.list({ applicationId });
+    const stepsByJourney = journeyList.length
+      ? await repositories.journeys.stepsForMany(journeyList.map((j) => j.id))
+      : new Map();
+    const allTests = (await repositories.tests.list({ applicationId })).slice(0, 100);
+    const runsByTest = new Map();
+    for (const test of allTests) {
+      // eslint-disable-next-line no-await-in-loop
+      const list = await repositories.runs.list({ testId: test.id, limit: 5 });
+      runsByTest.set(test.id, list.map((r) => ({ ...r, test_name: test.name })));
+    }
+    const map = buildServiceMap({
+      application: { id: application.id, name: application.name },
+      journeys: journeyList.map((j) => ({
+        id: j.id,
+        name: j.name,
+        criticality: j.criticality,
+        health: journeyHealth(stepsByJourney.get(j.id) || []),
+        steps: (stepsByJourney.get(j.id) || []).map((step) => ({
+          test_id: step.test_id,
+          label: step.label || (step.test && step.test.name) || null,
+          required: step.required,
+        })),
+      })),
+      runsByTest,
+    });
+    return analyseDependencies({ map, baseUrl: application.base_url });
+  }
+
   // The reaction loop — certificates watched on their own schedule, failing tests
   // counted into incidents, alerts sent on a state change. Built only where it
   // can run: the API process wires `notify` to the alerting dispatcher, and the
@@ -104,6 +146,11 @@ function createServiceTestsModule(rawPorts = {}) {
       certificateChecker: rawPorts.certificateChecker || null,
       severityRules: rawPorts.severityRules || null,
       notify: rawPorts.notify || null,
+      // What a service is observed to depend on — the strongest link the alert
+      // grouping has. Bounded on purpose: a sweep runs on a schedule and must
+      // not walk the whole estate to decide how to phrase one message. Without
+      // it, grouping still works on the host-level and same-layer links.
+      dependenciesFor: (applicationId) => dependenciesForApplication(applicationId),
       logger,
       now: clock,
     })

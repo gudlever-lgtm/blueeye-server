@@ -32,6 +32,7 @@ const MODULES = {
   'history/recurrence': require('../src/serviceTests/history/recurrence'),
   'dependencies/dependencies': require('../src/serviceTests/dependencies/dependencies'),
   'anomaly/anomalies': require('../src/serviceTests/anomaly/anomalies'),
+  'alerts/grouping': require('../src/serviceTests/alerts/grouping'),
   'analysis/baseline': require('../src/serviceTests/analysis/baseline'),
 };
 

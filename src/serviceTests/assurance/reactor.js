@@ -31,6 +31,8 @@ const {
 // to be connected — an install with no worker at all still gets its certificates
 // watched, which is the cheapest useful thing this module can do.
 
+const { groupAlerts } = require('../alerts/grouping');
+
 const silentLogger = { info() {}, warn() {}, error() {} };
 
 // Non-terminal statuses never count towards or against a failure streak: a
@@ -51,6 +53,11 @@ function createAssuranceReactor({
   // rules rather than a copy that drifts. Shape: { decide(event) -> decision }.
   // Optional — without it every incident keeps the severity policy.js judged.
   severityRules = null,
+  // What a service is known to depend on, for grouping. Optional and injected:
+  // computing it needs the service map, which is expensive, and without it
+  // grouping still works on the host-level and same-layer links.
+  // Shape: (applicationId) => Promise<{ failing: [...] }>.
+  dependenciesFor = null,
   logger = silentLogger,
   now = () => new Date(),
 }) {
@@ -83,10 +90,28 @@ function createAssuranceReactor({
     };
   }
 
+  // While a sweep is running this is an array; outside one it is null.
+  //
+  // A sweep can open five incidents for one cause, and sending five alerts about
+  // it is what teaches whoever is carrying the phone to stop reading them. So a
+  // sweep COLLECTS what it would have sent and groups it at the end. Outside a
+  // sweep — a single apply(), which is how the specs drive this — nothing is
+  // deferred and the behaviour is exactly what it was.
+  let batch = null;
+
   async function send(incident, { recovered = false } = {}) {
     if (typeof notify !== 'function') return false;
     const cfg = await config();
     if (cfg.notify === false) return false;
+    // A recovery is per-subject news and is never grouped: "this is working
+    // again" is about one thing, and folding three recoveries into one message
+    // would leave two services that nobody was told had come back.
+    if (batch && !recovered && cfg.groupAlerts !== false) {
+      batch.push(incident);
+      // Deliberately false: it has NOT been sent, so the caller must not stamp
+      // it as notified. The flush does that, after it actually goes out.
+      return false;
+    }
     try {
       await notify(findingFor(incident, { recovered }), {
         source: 'service-assurance',
@@ -339,16 +364,106 @@ function createAssuranceReactor({
   }
 
   // ------------------------------------------------------------------ sweep
+  // One alert per PROBLEM, not per incident.
+  //
+  // Everything the sweep would have sent, grouped by what observably links it,
+  // and one message per group. Every incident in a group is named in that
+  // message — the point is one page instead of five, never four problems nobody
+  // was told about.
+  async function flush(pending, at) {
+    if (!pending.length) return { alerts: 0, folded: 0 };
+
+    let dependencies = null;
+    if (typeof dependenciesFor === 'function') {
+      const applicationId = pending.map((i) => i.application_id).find((id) => id != null) ?? null;
+      // A dependency lookup that fails costs the strongest grouping link, never
+      // the alert. Ungrouped and sent beats grouped and lost.
+      try { dependencies = applicationId === null ? null : await dependenciesFor(applicationId); } catch { dependencies = null; }
+    }
+
+    const grouped = groupAlerts({ incidents: pending, dependencies, now: at });
+    for (const group of grouped.groups) {
+      // eslint-disable-next-line no-await-in-loop
+      const sent = await deliverGroup(group);
+      if (!sent) continue;
+      for (const member of group.incidents) {
+        // eslint-disable-next-line no-await-in-loop
+        await incidents.markNotified(member.id, group.severity, at)
+          .catch((err) => logger.warn(`service-assurance: could not stamp incident ${member.id} as notified (${err && err.message})`));
+      }
+    }
+    if (grouped.folded) {
+      logger.info(`service-assurance: ${grouped.would_have_been} incidents sent as ${grouped.alerts} alert(s)`);
+    }
+    return { alerts: grouped.alerts, folded: grouped.folded };
+  }
+
+  // One group, as a finding the existing channels already know how to render.
+  async function deliverGroup(group) {
+    if (typeof notify !== 'function') return false;
+    const primary = group.primary;
+    const finding = findingFor(primary);
+    if (group.symptoms.length) {
+      finding.explanation = `${group.summary}\n\n${finding.explanation}`.trim();
+      // Rule 2, in the message itself: everything folded in is listed, so
+      // nothing disappears into a group.
+      finding.evidence = [
+        ...(finding.evidence || []),
+        ...group.symptoms.map((s) => `Also failing: ${s.subject_label || s.subject_key} — ${s.summary || s.kind}`),
+      ];
+      finding.severity = group.severity;
+    }
+    try {
+      await notify(finding, {
+        source: 'service-assurance',
+        incidentId: primary.id,
+        subject: primary.subject_key,
+        likelyCause: primary.likely_cause,
+        // So a receiver can see this was several incidents, and which.
+        group: {
+          key: group.key,
+          linked_by: group.linked_by,
+          link_reason: group.link_reason,
+          incident_ids: group.incidents.map((i) => i.id),
+        },
+      });
+      return true;
+    } catch (err) {
+      // A channel that will not send must never stop the sweep: the incidents
+      // are already durable and unnotified, so the next sweep tries again. This
+      // is the spec's rule — a failing notification system must never hide the
+      // incident.
+      logger.warn(`service-assurance: notify failed for ${group.key} (${err && err.message})`);
+      return false;
+    }
+  }
+
   async function sweep() {
     const cfg = await config();
     if (cfg.enabled === false) return { skipped: 'disabled' };
-    const certs = await sweepCertificates();
-    const testResults = await sweepTests();
+    const at = now();
+    // Opened here and closed in `finally`: a sweep that throws halfway must not
+    // leave the batch open, or the next one would send this one's alerts too.
+    batch = [];
+    let certs;
+    let testResults;
+    let alerts = { alerts: 0, folded: 0 };
+    try {
+      certs = await sweepCertificates();
+      testResults = await sweepTests();
+    } finally {
+      const pending = batch;
+      batch = null;
+      alerts = await flush(pending, at).catch((err) => {
+        logger.warn(`service-assurance: could not send grouped alerts (${err && err.message})`);
+        return { alerts: 0, folded: 0 };
+      });
+    }
     if (cfg.incidentRetentionDays) {
       await incidents.purgeResolvedOlderThan(cfg.incidentRetentionDays)
         .catch((err) => logger.warn(`service-assurance: incident purge failed (${err && err.message})`));
     }
-    return { certificates: certs, tests: testResults };
+    return { certificates: certs, tests: testResults, alerts };
   }
 
   return {

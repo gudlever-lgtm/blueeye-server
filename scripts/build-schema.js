@@ -110,6 +110,78 @@ function splitTopLevel(text) {
 
 const unquote = (s) => s.trim().replace(/^`(.*)`$/, '$1');
 
+const isForeignKey = (def) => /\bFOREIGN\s+KEY\b/i.test(def || '');
+
+// The first parenthesised list in a key definition — the columns it is over.
+// A constraint's REFERENCES clause has a second list naming the OTHER table's
+// columns, and rewriting that would corrupt it.
+function firstList(def) {
+  const open = String(def || '').indexOf('(');
+  if (open === -1) return null;
+  let depth = 0;
+  for (let i = open; i < def.length; i += 1) {
+    if (def[i] === '(') depth += 1;
+    else if (def[i] === ')') { depth -= 1; if (depth === 0) return { open, close: i, parts: splitTopLevel(def.slice(open + 1, i)) }; }
+  }
+  return null;
+}
+
+// The bare column name out of one entry in that list. An indexed column may
+// carry a prefix length or a direction — `name(20)`, `created_at DESC`.
+const columnOf = (part) => unquote(String(part).replace(/\s*\(\d+\)\s*/, '').replace(/\s+(ASC|DESC)$/i, '').trim());
+
+const rebuild = (def, list, parts) => `${def.slice(0, list.open + 1)}${parts.join(', ')}${def.slice(list.close)}`;
+
+// One index with a column renamed inside it.
+function renameColumnIn(key, from, to) {
+  const list = firstList(key.def);
+  if (!list) return key;
+  let touched = false;
+  const parts = list.parts.map((part) => {
+    if (columnOf(part).toLowerCase() !== from.toLowerCase()) return part;
+    touched = true;
+    // The suffix is preserved: a prefix length or a direction is part of the
+    // index, not of the name.
+    return part.replace(new RegExp(`\`?${from}\`?`, 'i'), to);
+  });
+  return touched ? { ...key, def: rebuild(key.def, list, parts) } : key;
+}
+
+// The index a dropped foreign key leaves behind, or null when it leaves none.
+//
+// InnoDB only creates an index for a constraint when no existing one can serve
+// it — an index whose LEADING columns are the constraint's columns. So if
+// something else already covers them, the drop leaves nothing new.
+function implicitIndexLeftBy(table, dropped) {
+  if (!dropped || !isForeignKey(dropped.def) || !dropped.name) return null;
+  const list = firstList(dropped.def);
+  if (!list || !list.parts.length) return null;
+  const cols = list.parts.map((part) => columnOf(part).toLowerCase());
+
+  const covered = table.keys.some((k) => {
+    const other = firstList(k.def);
+    if (!other) return false;
+    const otherCols = other.parts.map((part) => columnOf(part).toLowerCase());
+    return cols.every((c, i) => otherCols[i] === c);
+  });
+  if (covered) return null;
+  return { name: dropped.name, def: `KEY ${dropped.name} (${cols.join(', ')})` };
+}
+
+// One index, with a dropped column taken out of it. Null when nothing is left
+// of it — the single-column case, which is the common one.
+//
+// Only the FIRST parenthesised list is touched: `KEY x (a, b)` has one, but a
+// constraint's REFERENCES clause has a second that names the OTHER table's
+// columns, and rewriting that would corrupt it.
+function withoutColumn(key, column) {
+  const list = firstList(key.def);
+  if (!list) return key;
+  const kept = list.parts.filter((part) => columnOf(part).toLowerCase() !== column.toLowerCase());
+  if (!kept.length) return null;
+  return { ...key, def: rebuild(key.def, list, kept) };
+}
+
 // Name of the index/constraint an item declares, for DROP/RENAME lookups.
 function keyName(def) {
   let m = /^CONSTRAINT\s+`?(\w+)`?/i.exec(def);
@@ -241,9 +313,40 @@ function applyAlterClause(model, table, clause) {
   }
   if ((m = /^DROP\s+(?:COLUMN\s+)?`?(\w+)`?$/i.exec(clause)) && model.hasColumn(table.name, m[1])) {
     table.columns = table.columns.filter((c) => c.name.toLowerCase() !== m[1].toLowerCase());
+    // MySQL drops the indexes over a dropped column with it. Migration 076 says
+    // so in its own comment — "dropping the column also drops the unique index
+    // over it" — and relies on it, naming no index. The model did not, so the
+    // snapshot kept `UNIQUE KEY uq_enrollment_codes_code (code)` on a column
+    // that no longer existed, and the file stopped loading there.
+    //
+    // Single-column indexes go. Composite ones lose that column and survive,
+    // which is what MySQL does. A FOREIGN KEY over the dropped column would
+    // have had to be dropped by the migration first — MySQL refuses the DROP
+    // COLUMN otherwise — so one appearing here is a migration that cannot have
+    // run, and it is left alone rather than silently repaired.
+    table.keys = table.keys
+      .map((k) => (isForeignKey(k.def) ? k : withoutColumn(k, m[1])))
+      .filter(Boolean);
     return;
   }
-  if ((m = /^DROP\s+(?:FOREIGN\s+KEY|INDEX|KEY)\s+`?(\w+)`?$/i.exec(clause))) {
+  if ((m = /^DROP\s+FOREIGN\s+KEY\s+`?(\w+)`?$/i.exec(clause))) {
+    const dropped = table.keys.find((k) => (k.name || '').toLowerCase() === m[1].toLowerCase());
+    table.keys = table.keys.filter((k) => k !== dropped);
+    // Dropping a foreign key in MySQL removes the CONSTRAINT and leaves the
+    // index behind. When InnoDB had to create that index itself — because
+    // nothing declared covered the column — it is named after the constraint,
+    // and it survives the drop under that name.
+    //
+    // Migration 077 depends on this and says so: it drops three constraints and
+    // then renames the indexes they leave, "so the new constraints adopt an
+    // index that is no longer called fk_incident_*". The model deleted both, so
+    // the rename found nothing, and a database built from the snapshot ended up
+    // with InnoDB's default name where a real one has the renamed index.
+    const left = implicitIndexLeftBy(table, dropped);
+    if (left) table.keys.push(left);
+    return;
+  }
+  if ((m = /^DROP\s+(?:INDEX|KEY)\s+`?(\w+)`?$/i.exec(clause))) {
     table.keys = table.keys.filter((k) => (k.name || '').toLowerCase() !== m[1].toLowerCase());
     return;
   }
@@ -264,6 +367,14 @@ function applyAlterClause(model, table, clause) {
     const { def, position } = splitPosition(m[3]);
     col.name = m[2];
     col.def = def;
+    // MySQL carries a rename into every index over the column — migration 077
+    // relies on exactly that, renaming the INDEX but never restating its column
+    // list. The model renamed only the column, so the snapshot kept
+    // `KEY idx_findings_event_case (incident_case_id)` naming a column that no
+    // longer existed. Foreign keys are rewritten too: for those the first
+    // parenthesised list is the LOCAL column, and the REFERENCES list after it
+    // belongs to the other table and is left alone.
+    table.keys = table.keys.map((k) => renameColumnIn(k, m[1], m[2]));
     if (position) {
       table.columns = table.columns.filter((c) => c !== col);
       addColumn(table, col.name, col.def, position);
@@ -345,8 +456,13 @@ function applyStatement(model, stmt, comment, ctx) {
   if (/^DEALLOCATE\s+PREPARE\s+\w+$/i.test(head)) { ctx.prepared = null; return undefined; }
   if (/^DO\s+0$/i.test(head)) return undefined;
 
-  // Seed/backfill data and DML are not part of a structural snapshot.
-  if (/^(INSERT|UPDATE|DELETE|SET\s+NAMES)\b/i.test(head)) return undefined;
+  // Seed/backfill data and DML are not part of a structural snapshot. Nor are
+  // the session settings the snapshot wraps itself in — SET NAMES, and the
+  // FOREIGN_KEY_CHECKS pair that lets it load in migration order. They have to
+  // be named here rather than ignored generally: this parser throws on anything
+  // it does not recognise, which is what stops a new statement form from being
+  // silently dropped out of the snapshot.
+  if (/^(INSERT|UPDATE|DELETE|SET\s+NAMES|SET\s+FOREIGN_KEY_CHECKS)\b/i.test(head)) return undefined;
 
   throw new Error(`unsupported statement: ${head.slice(0, 120)}`);
 }
@@ -358,14 +474,15 @@ function evalExpression(model, expr, ctx) {
   if (/^DATABASE\(\)$/i.test(text)) return 'blueeye';
   if (/^'.*'$/.test(text)) return text.slice(1, -1);
 
-  // (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE ... COLUMN_NAME = 'x')
-  let m = /information_schema\.COLUMNS\b[\s\S]*TABLE_NAME\s*=\s*'(\w+)'[\s\S]*COLUMN_NAME\s*=\s*'(\w+)'/i.exec(text);
-  if (m) return model.hasColumn(m[1], m[2]) ? 1 : 0;
-  m = /information_schema\.STATISTICS\b[\s\S]*(?:TABLE_NAME|table_name)\s*=\s*'(\w+)'[\s\S]*(?:INDEX_NAME|index_name)\s*=\s*'(\w+)'/i.exec(text);
-  if (m) return model.hasIndex(m[1], m[2]) ? 1 : 0;
-
   // IF(<cond>, '<sql>', '<sql>')  — including IF(EXISTS(<subquery>), ...)
-  m = /^IF\s*\(([\s\S]+)\)$/i.exec(text);
+  //
+  // FIRST, and that is load-bearing. The information_schema patterns below
+  // match anywhere in the text, so an `IF(EXISTS(SELECT ... STATISTICS ...))`
+  // matched one of them and the whole conditional collapsed to a 1 or a 0. The
+  // PREPARE that followed then got a number instead of SQL and EXECUTE quietly
+  // did nothing — migration 077's four guarded index renames were never applied
+  // to the snapshot, and nothing said so.
+  let m = /^IF\s*\(([\s\S]+)\)$/i.exec(text);
   if (m) {
     const parts = splitTopLevel(m[1]);
     if (parts.length !== 3) throw new Error(`unparsed IF(): ${text.slice(0, 120)}`);
@@ -373,6 +490,12 @@ function evalExpression(model, expr, ctx) {
       ? evalExpression(model, parts[1], ctx)
       : evalExpression(model, parts[2], ctx);
   }
+
+  // (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE ... COLUMN_NAME = 'x')
+  m = /information_schema\.COLUMNS\b[\s\S]*TABLE_NAME\s*=\s*'(\w+)'[\s\S]*COLUMN_NAME\s*=\s*'(\w+)'/i.exec(text);
+  if (m) return model.hasColumn(m[1], m[2]) ? 1 : 0;
+  m = /information_schema\.STATISTICS\b[\s\S]*(?:TABLE_NAME|table_name)\s*=\s*'(\w+)'[\s\S]*(?:INDEX_NAME|index_name)\s*=\s*'(\w+)'/i.exec(text);
+  if (m) return model.hasIndex(m[1], m[2]) ? 1 : 0;
 
   throw new Error(`unsupported expression: ${text.slice(0, 120)}`);
 }
@@ -470,6 +593,15 @@ const HEADER = `-- BlueEyes server — canonical database schema (full snapshot)
 
 SET NAMES utf8mb4;
 
+-- Tables are emitted in the order the migrations created them, and that order
+-- does NOT satisfy foreign keys: migration 004 can reference a table migration
+-- 012 creates, because by then it existed. Loading the snapshot top to bottom
+-- therefore hits references to tables that are still to come. Deferring the
+-- checks for the length of the load is what mysqldump does for the same reason;
+-- they are turned back on at the end, and the constraints themselves are
+-- created exactly as written.
+SET FOREIGN_KEY_CHECKS = 0;
+
 -- Bookkeeping table used by the migration runner (src/migrate.js).
 CREATE TABLE IF NOT EXISTS schema_migrations (
   id INT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -480,20 +612,36 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 `;
 
+// Identifiers are emitted QUOTED, always.
+//
+// The model stores names unquoted, so a column the migration had to backtick —
+// `trigger`, a MySQL reserved word — came out of here bare and turned the whole
+// snapshot into a syntax error from that line on. It had been broken since
+// migration 065 and nothing noticed, because nothing loaded the file.
+//
+// Quoting only the names that need it would mean carrying MySQL's ~260 reserved
+// words and keeping them current. Quoting all of them is what mysqldump does,
+// is correct for every name there will ever be, and costs one pair of
+// backticks.
+const q = (name) => `\`${String(name).replace(/`/g, '``')}\``;
+
+const FOOTER = '\nSET FOREIGN_KEY_CHECKS = 1;\n';
+
 function render(model) {
   const chunks = [HEADER];
   for (const table of model.tables.values()) {
     if (table.name === 'schema_migrations') continue;
     const items = [
-      ...table.columns.map((c) => `  ${c.name} ${c.def}`),
+      ...table.columns.map((c) => `  ${q(c.name)} ${c.def}`),
       ...table.keys.map((k) => `  ${k.def.replace(/\s+/g, ' ')}`),
     ];
     chunks.push(
-      `\n${table.comment ? `${table.comment}\n` : ''}CREATE TABLE IF NOT EXISTS ${table.name} (\n`
+      `\n${table.comment ? `${table.comment}\n` : ''}CREATE TABLE IF NOT EXISTS ${q(table.name)} (\n`
       + `${items.join(',\n')}\n`
       + `) ${table.options || 'ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'};\n`,
     );
   }
+  chunks.push(FOOTER);
   return chunks.join('');
 }
 

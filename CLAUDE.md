@@ -42,6 +42,14 @@ full HTTP route table, the data model, the dashboard structure, and a
 - DB: numbered `migrations/NNN_*.sql` (tracked in `schema_migrations`), run `npm run migrate`.
   After adding a migration run `npm run build-schema` — `schema.sql` is generated from
   the migration chain and `npm test` fails when it is stale. Never hand-edit it.
+  `npm test` only checks the snapshot against the MODEL in `scripts/build-schema.js`;
+  whether that model agrees with MySQL is a different question, and `npm run
+  verify-schema` is what answers it (`DB_HOST`/`DB_PORT`/`DB_USER`/`DB_PASSWORD`,
+  a server it may create and drop scratch databases on). It applies the chain
+  twice — a migration that is not re-runnable takes the server down on the next
+  deploy, because the container runs `migrate && server` — loads `schema.sql`
+  into a second database, and diffs every column, index and foreign key.
+  `.github/workflows/schema.yml` runs it against MySQL 8.4 on every push.
 - Adding a feature usually means: a router in `src/routes/` (mounted in `routes/index.js`),
   a repository in `src/repositories/`, validation in `src/validation/`, a dashboard
   `views.<tab>` in `public/app.js` (+ a `data-view` button in `public/index.html`), a

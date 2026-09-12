@@ -1,0 +1,54 @@
+# Verifies the schema against a REAL MySQL, which the gate cannot do.
+#
+# `npm test` checks that schema.sql matches the MODEL in scripts/build-schema.js.
+# That model is a theory about what MySQL does, and it was wrong in five places
+# at once — a reserved-word column emitted unquoted, indexes left behind on
+# dropped columns, renames not carried into indexes, an index MySQL leaves
+# behind on DROP FOREIGN KEY, and a guarded ALTER read as a number instead of as
+# SQL. Every one of them was invisible without a server: the snapshot had not
+# loaded into an empty database since migration 065 and nothing said so.
+#
+# So this job runs the migration chain and schema.sql into two real databases
+# and compares what MySQL actually built. It is separate from the gate because
+# the gate must run with no services.
+name: schema
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  schema:
+    name: migrations + schema.sql against MySQL
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      mysql:
+        # The version the product is deployed on.
+        image: mysql:8.4
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: 'yes'
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: Apply every migration, twice, and compare schema.sql with the result
+        env:
+          DB_HOST: 127.0.0.1
+          DB_PORT: '3306'
+          DB_USER: root
+          DB_PASSWORD: ''
+          JWT_SECRET: ci-only-not-a-real-secret
+        run: node scripts/verify-schema-against-mysql.js

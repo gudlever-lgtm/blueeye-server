@@ -3119,13 +3119,18 @@
     // they want the one-line answer to "is anything wrong right now?".
     views.health = function (body) {
       return Promise.all([
+        // Every ACTIVE state, not just `open`. An incident somebody picked up is
+        // still wrong, and it is the one most likely to be looked at next —
+        // filtering to `open` made it vanish from the screen it belongs on.
         api(API + '/assurance/incidents?status=open'),
+        api(API + '/assurance/incidents?status=investigating'),
+        api(API + '/assurance/incidents?status=identified'),
         api(API + '/assurance/certificates'),
         api(API + '/assurance/summary'),
       ]).then(function (res) {
-        var incidents = res[0];
-        var certificates = res[1];
-        var summary = res[2];
+        var incidents = res[0].concat(res[1]).concat(res[2]);
+        var certificates = res[3];
+        var summary = res[4];
 
         var head = section(t('sa.tab.health'), isOperator()
           ? el('button', { class: 'ghost small', onclick: checkCertificatesNow }, t('sa.health.checkNow'))
@@ -3162,6 +3167,14 @@
       }
       var rows = incidents.map(function (incident) {
         return el('tr', {},
+          el('td', {},
+            el('button', {
+              class: 'ghost small',
+              onclick: function () { incidentDetail(incident.id); },
+            }, t('sa.incident.open')),
+            // The state it is in, which used to be invisible because the list
+            // only ever showed one.
+            el('div', { class: 'chip' }, statusWord(incident.status))),
           el('td', {}, severityChip(incident.severity),
             // A severity a rule changed says so. A downgraded critical that
             // looks exactly like a detected warning is how a dashboard goes
@@ -3202,10 +3215,138 @@
         section(t('sa.health.incidents'), null),
         el('table', { class: 'data-table' },
           el('thead', {}, el('tr', {},
+            el('th', {}, ''),
             el('th', {}, t('sa.health.severity')), el('th', {}, t('sa.health.subject')),
             el('th', {}, t('sa.health.whatHappened')), el('th', {}, t('sa.health.since')),
             el('th', {}, t('sa.health.seen')), el('th', {}, ''))),
           el('tbody', {}, ...rows)));
+    }
+
+    // One incident, in full: what happened, when, how long, what it costs, and
+    // what can be done about it next.
+    //
+    // The timeline is built from ACTUAL EVENTS — a run that failed, a
+    // correlation that concluded, a person who picked it up. Not a narrative
+    // written afterwards from the row, which is what a "history" assembled at
+    // render time would be.
+    function incidentDetail(id) {
+      var body = el('div', {}, el('p', { class: 'muted' }, t('sa.loading')));
+      var overlay = modal(t('sa.incident.title'), body, null);
+
+      function load() {
+        api(API + '/assurance/incidents/' + id).then(function (incident) {
+          body.textContent = '';
+          mount(body,
+            el('div', { class: 'sa-incident-head' },
+              el('code', { class: 'sa-incident-ref' }, incident.reference || ''),
+              severityChip(incident.severity),
+              el('span', { class: 'chip' }, statusWord(incident.status))),
+            el('h4', {}, incident.subject_label || incident.subject_key),
+            el('p', {}, incident.summary || ''),
+            el('div', { class: 'sa-stats' },
+              stat(t('sa.incident.duration'), incident.duration
+                ? (incident.duration.ongoing
+                  ? t('sa.incident.ongoing', { minutes: String(incident.duration.minutes) })
+                  : t('sa.incident.lasted', { minutes: String(incident.duration.minutes) }))
+                : '—'),
+              stat(t('sa.incident.seen'), String(incident.occurrences || 1)),
+              // Where the number of affected users is not known it says Unknown.
+              // It is never invented.
+              stat(t('sa.incident.users'), incident.impact && incident.impact.affected_users === 'unknown'
+                ? t('sa.incident.unknown') : String((incident.impact || {}).affected_users))),
+            incident.impact
+              ? el('p', { class: 'sa-help' }, incident.impact.reason || '')
+              : null,
+            // What the correlation engine concluded AT THE TIME. Stored, not
+            // recomputed: recomputing against today's data would rewrite what
+            // the operator was told during the outage.
+            incident.correlated_layer
+              ? el('p', {},
+                el('strong', {}, t('sa.incident.concluded') + ': '),
+                incident.correlated_layer,
+                incident.confidence === null || incident.confidence === undefined
+                  ? null
+                  : el('span', { class: 'muted' }, ' (' + incident.confidence + '%)'))
+              : null,
+            timelineList(incident.timeline),
+            recurrencePanel(incident.id),
+            isOperator() ? moveButtons(incident, load) : null);
+        }).catch(function (e) {
+          body.textContent = '';
+          mount(body, el('p', { class: 'sa-error' }, err(e)));
+        });
+      }
+      load();
+      return overlay;
+    }
+
+    function statusWord(status) {
+      if (status === 'investigating') return t('sa.incident.investigating');
+      if (status === 'identified') return t('sa.incident.identified');
+      if (status === 'resolved') return t('sa.incident.resolved');
+      if (status === 'closed') return t('sa.incident.closed');
+      return t('sa.incident.openState');
+    }
+
+    // Built from actual events. An incident with nothing on its timeline says so
+    // rather than having one assembled from the row it is attached to.
+    function timelineList(events) {
+      if (!events || !events.length) {
+        return el('p', { class: 'sa-help' }, t('sa.incident.noTimeline'));
+      }
+      return el('div', {},
+        el('h5', {}, t('sa.incident.timeline')),
+        el('ol', { class: 'sa-timeline' }, ...events.map(function (event) {
+          return el('li', { class: 'sa-timeline-event sa-source-' + event.source },
+            el('span', { class: 'sa-timeline-when' }, when(event.occurred_at)),
+            el('span', { class: 'sa-timeline-what' }, event.summary),
+            // A person acknowledging an incident and a sweep observing a
+            // recovery are both real events, and the timeline must not present
+            // one as the other.
+            el('span', { class: 'chip' }, sourceWord(event.source)));
+        })));
+    }
+
+    function sourceWord(source) {
+      if (source === 'person') return t('sa.incident.byPerson');
+      if (source === 'correlation') return t('sa.incident.byCorrelation');
+      if (source === 'sweep') return t('sa.incident.bySweep');
+      if (source === 'rule') return t('sa.incident.byRule');
+      if (source === 'notification') return t('sa.incident.byNotification');
+      return t('sa.incident.byRun');
+    }
+
+    // Has this happened before, and did anybody ever fix it?
+    function recurrencePanel(id) {
+      var wrap = el('div', {});
+      api(API + '/analysis/incidents/' + id + '/recurrence').then(function (data) {
+        if (!data.recurrence) return;
+        var r = data.recurrence;
+        mount(wrap,
+          el('h5', {}, t('sa.incident.recurrence')),
+          el('p', { class: 'sa-recurrence' }, r.summary),
+          r.rhythm && r.rhythm.confident
+            ? el('p', { class: 'sa-help' }, t('sa.incident.rhythm', { detail: r.rhythm.detail }))
+            : null);
+      }).catch(function () { /* a recurrence nobody could load is not a finding */ });
+      return wrap;
+    }
+
+    // Exactly the moves the API will accept, taken from the incident itself —
+    // a button that comes back refused is worse than no button.
+    function moveButtons(incident, reload) {
+      var moves = incident.can_move_to || [];
+      if (!moves.length) return null;
+      return el('div', { class: 'sa-actions sa-incident-actions' }, ...moves.map(function (to) {
+        return el('button', {
+          class: to === 'resolved' ? 'primary' : 'ghost small',
+          onclick: function () {
+            api(API + '/assurance/incidents/' + incident.id + '/status', { method: 'POST', body: { status: to } })
+              .then(function () { toast(t('sa.incident.moved', { status: statusWord(to) })); reload(); draw(); })
+              .catch(function (e) { toast(err(e), true); });
+          },
+        }, statusWord(to));
+      }));
     }
 
     function certificatesPanel(certificates) {

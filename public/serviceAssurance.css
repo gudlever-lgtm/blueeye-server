@@ -599,3 +599,27 @@
   .sa-health-part-reason { grid-column: 1 / -1; }
   .sa-health-head { flex-wrap: wrap; }
 }
+
+/* ------------------------------------------------------------ incident detail
+   The timeline is built from actual events, and each entry says WHAT CAUSED IT.
+   A person acknowledging an incident and a sweep observing a recovery are both
+   real, and presenting one as the other makes the whole thing unreadable. */
+.sa-incident-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+.sa-incident-ref { font-weight: 600; letter-spacing: 0.02em; }
+.sa-timeline { list-style: none; margin: 8px 0 16px; padding: 0 0 0 4px; }
+.sa-timeline-event {
+  display: grid; gap: 2px 10px; align-items: baseline;
+  grid-template-columns: auto 1fr auto;
+  padding: 7px 0 7px 12px; border-left: 2px solid var(--hairline);
+}
+.sa-timeline-when { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.sa-timeline-what { }
+/* A person's action reads differently from a machine's, because it is. */
+.sa-source-person { border-left-color: var(--accent); }
+.sa-source-correlation { border-left-style: dashed; }
+.sa-recurrence { font-weight: 600; margin: 4px 0; }
+.sa-incident-actions { margin-top: 14px; display: flex; gap: 8px; flex-wrap: wrap; }
+
+@media (max-width: 560px) {
+  .sa-timeline-event { grid-template-columns: 1fr; }
+}

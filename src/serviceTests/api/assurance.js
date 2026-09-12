@@ -4,6 +4,7 @@ const express = require('express');
 const { asyncHandler, notFound, invalidId, invalid, auditor, userId, parseId } = require('./helpers');
 const { validateStatsQuery } = require('../validation');
 const { resolvePeriod } = require('../stats/period');
+const { STATUS, ACTIVE, TRANSITIONS, referenceFor, assessImpact, durationOf } = require('../incidents/lifecycle');
 
 // The reaction layer's HTTP surface: what is currently wrong, and what every
 // certificate looks like.
@@ -19,7 +20,9 @@ function createAssuranceRouter({ repositories, reactor = null, audit, requireRol
   const write = requireRole(roles.OPERATOR, roles.ADMIN);
   const record = auditor(audit);
 
-  const STATUSES = ['open', 'resolved'];
+  // Every state migration 090 defined, not the two V2 had. A filter that only
+  // knows open and resolved cannot show an operator the incident they picked up.
+  const STATUSES = Object.keys(TRANSITIONS);
   const SEVERITIES = ['INFO', 'WARN', 'CRIT'];
   const SUBJECTS = ['test', 'certificate'];
   const CERT_STATUSES = ['ok', 'expiring', 'expired', 'invalid', 'unreachable'];
@@ -73,7 +76,72 @@ function createAssuranceRouter({ repositories, reactor = null, audit, requireRol
     const id = parseId(req.params.id);
     if (id === null) return invalidId(res);
     const incident = await incidents.findById(id);
-    return incident ? res.json(incident) : notFound(res, 'Incident not found');
+    if (!incident) return notFound(res, 'Incident not found');
+
+    // The timeline, built from actual events — never a narrative written after
+    // the fact. Empty is a real answer for an incident opened before this
+    // shipped, and it says so rather than inventing entries from the row.
+    const timeline = typeof incidents.timeline === 'function'
+      ? await incidents.timeline(incident.id).catch(() => [])
+      : [];
+
+    return res.json({
+      ...incident,
+      // INC-2026-00042. Derived from the id rather than counted, so there is no
+      // counter to get out of step with the rows.
+      reference: referenceFor(incident),
+      timeline,
+      duration: durationOf(incident, now()),
+      // Technical failure, service impact and business impact are three
+      // different things. This is the middle one, and where the number of
+      // affected users is not known it says Unknown rather than inventing it.
+      impact: assessImpact(incident),
+      // Which moves this incident can make from where it is, so the screen
+      // offers exactly those rather than guessing and being refused.
+      can_move_to: TRANSITIONS[incident.status] || [],
+    });
+  }));
+
+  // Move an incident through its lifecycle: open → investigating → identified →
+  // resolved → closed, with the backward paths the pure module allows.
+  //
+  // The transition is conditional on the status the caller was shown, inside the
+  // repository, so two people in two browsers cannot silently undo each other.
+  // A refusal is a 409 with a sentence, not a 500.
+  router.post('/incidents/:id/status', write, asyncHandler(async (req, res) => {
+    const id = parseId(req.params.id);
+    if (id === null) return invalidId(res);
+    const to = String((req.body && req.body.status) || '');
+    if (!STATUSES.includes(to)) {
+      return invalid(res, { status: `status must be one of ${STATUSES.join(', ')}` });
+    }
+    if (typeof incidents.transition !== 'function') {
+      return res.status(404).json({ error: 'This deployment cannot move incidents yet' });
+    }
+
+    const note = req.body && req.body.note ? String(req.body.note).slice(0, 255) : null;
+    const outcome = await incidents.transition(id, to, { by: userId(req), note });
+    if (!outcome.incident) return notFound(res, 'Incident not found');
+    if (!outcome.ok) return res.status(409).json({ error: outcome.reason, incident: outcome.incident });
+
+    // The move is itself an event on the timeline. A person acknowledging an
+    // incident and a sweep observing a recovery are both real, and the timeline
+    // must not present one as the other — hence `source: 'person'`.
+    if (typeof incidents.addEvent === 'function' && !outcome.unchanged) {
+      await incidents.addEvent(id, {
+        kind: `status_${to}`,
+        summary: note || `Moved to ${to}`,
+        source: 'person',
+        actor_id: userId(req),
+        occurred_at: now(),
+      }).catch((err) => {
+        // A timeline entry that cannot be written must not undo a state change
+        // that already happened.
+        if (logger && logger.warn) logger.warn(`service-assurance: could not record the move of incident ${id} (${err && err.message})`);
+      });
+    }
+    record(req, 'assurance_incident_status', id, `${outcome.incident.subject_key} → ${to}`);
+    return res.json(outcome.incident);
   }));
 
   // Manual resolve — "I fixed it, stop telling me". The reactor will re-open the
@@ -84,7 +152,12 @@ function createAssuranceRouter({ repositories, reactor = null, audit, requireRol
     if (id === null) return invalidId(res);
     const incident = await incidents.findById(id);
     if (!incident) return notFound(res, 'Incident not found');
-    if (incident.status !== 'open') return res.status(400).json({ error: 'That incident is already resolved' });
+    // The ACTIVE set, not `open`. Migration 090 added investigating and
+    // identified, and an incident somebody had PICKED UP could no longer be
+    // resolved — the one thing they were most likely to want to do next.
+    if (!ACTIVE.includes(incident.status)) {
+      return res.status(400).json({ error: `That incident is already ${incident.status}` });
+    }
     const note = String((req.body && req.body.resolution) || 'Resolved by an operator').slice(0, 255);
     const resolved = await incidents.resolve(id, { resolution: note, resolvedBy: userId(req) });
     record(req, 'assurance_incident_resolve', id, incident.subject_key);

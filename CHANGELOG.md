@@ -1,5 +1,76 @@
 # Changelog
 
+## 0.132.0 — Discovery can sign in
+
+Discovery has always crawled what a logged-out visitor sees. It detected the
+login form and stopped — so everything behind the sign-in, which is where the
+actual user journeys live, was invisible.
+
+### The chicken-and-egg, and the way out
+
+On a brand new application there is no login test yet, so "sign in with this
+test" cannot be the only route. The anonymous pass was ALREADY detecting the
+login form — the password field, the username field, the page, a confidence —
+and throwing it away, keeping only a count. It is now persisted, so:
+
+| Route | Needs | When |
+| --- | --- | --- |
+| `login_test_id` | an existing test | Most reliable — it encodes this application's quirks |
+| `credential_id` | just a stored credential | The first time. Uses the form the anonymous pass found |
+
+First discovery finds the door, the second opens it. The API refuses clearly
+rather than failing half an hour later in a worker: asking for a credential with
+no login form on record answers "no login form has been found on this application
+yet — run a discovery without a login first, then try again".
+
+### Losing the session stops the crawl
+
+The failure this feature lives or dies on. A crawl that gets logged out halfway
+would carry on mapping the PUBLIC site and hand back a result everything
+downstream treats as a map of the authenticated application — and nothing could
+tell the difference afterwards.
+
+It now checks every page and stops with `session_lost`, reporting how far it got.
+Half a private map, labelled as half, is worth having; a public map labelled as
+private is not. The page that PROVES the session went is not itself counted as
+private, because the check runs before the page is counted.
+
+The detection is deliberately conservative: a password field where there was
+none, or a URL back at the sign-in path. A "Log in" link in a header is not a
+lost session. A false "lost" merely stops a crawl early and says why; a false
+"still fine" produces a map of the wrong thing.
+
+### What it refuses
+
+**A test that does more than sign in.** Discovery only reads, and replaying a
+test with an `api_request` step would leave data behind on every crawl.
+
+**A test that never actually signs in.** It would "succeed", leave the crawl
+anonymous, and the discovery would be reported as authenticated — silent and
+completely wrong.
+
+**A weak detection.** A speculative sign-in against a form that is not a login
+form types a username into somebody's search box and presses enter.
+
+### Safety and secrets
+
+`safety.js` already blocks destructive verbs and paths. Anonymous those were
+mostly unreachable; signed in, "Delete" actually deletes, so that allowlist stops
+being belt-and-braces and becomes the thing standing between Discovery and real
+data.
+
+The sign-in runs in the SAME browser as the crawl — a separate context would
+leave its cookies there and the crawl still anonymous, which would look like it
+worked. The credential is decrypted in the worker and nowhere else, seeds the
+redactor before a step runs, and never reaches the discovery record. The stored
+login form carries field DESCRIPTIONS only, never a value.
+
+`authenticated` records whether it got IN, not whether it was asked to. A
+discovery that requested a sign-in and could not is never readable as a map of
+the private site.
+
+Migration 091.
+
 ## 0.131.0 — V3 Phase 1 complete: the incident lifecycle and its timeline
 
 Extends the V2 incident rather than creating a second one. The spec is explicit —

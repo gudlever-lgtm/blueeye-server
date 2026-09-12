@@ -13,7 +13,8 @@ const { parseJson, bool, intOrNull } = require('./shape');
 function createDiscoveryRepository({ db, now = () => new Date() }) {
   const { pool } = db;
   const COLS = `id,tenant_id,application_id,environment_id,status,scope_url,budgets,page_count,form_count,
-    element_count,request_count,login_count,error_message,started_at,ended_at,claimed_by,claimed_at,
+    element_count,request_count,login_count,detected_login,login_test_id,credential_id,authenticated,
+    authenticated_page_count,session_lost_at_page,auth_note,error_message,started_at,ended_at,claimed_by,claimed_at,
     requested_by,created_at,updated_at`;
 
   function shape(row) {
@@ -31,6 +32,16 @@ function createDiscoveryRepository({ db, now = () => new Date() }) {
       element_count: row.element_count,
       request_count: row.request_count,
       login_count: row.login_count,
+      // Field descriptions only — never a value and never a credential.
+      detected_login: parseJson(row.detected_login, null),
+      login_test_id: row.login_test_id ?? null,
+      credential_id: row.credential_id ?? null,
+      // Whether it got IN, not whether it was asked to. A discovery that
+      // requested a sign-in and could not must never read as a private-site map.
+      authenticated: row.authenticated === 1 || row.authenticated === true,
+      authenticated_page_count: row.authenticated_page_count ?? 0,
+      session_lost_at_page: row.session_lost_at_page ?? null,
+      auth_note: row.auth_note ?? null,
       error_message: row.error_message,
       started_at: row.started_at,
       ended_at: row.ended_at,
@@ -71,10 +82,13 @@ function createDiscoveryRepository({ db, now = () => new Date() }) {
 
   async function enqueue(input) {
     const [res] = await pool.query(
-      `INSERT INTO service_test_discoveries (application_id, environment_id, scope_url, budgets, status, requested_by)
-       VALUES (?, ?, ?, ?, 'queued', ?)`,
+      `INSERT INTO service_test_discoveries
+         (application_id, environment_id, scope_url, budgets, status, login_test_id, credential_id, requested_by)
+       VALUES (?, ?, ?, ?, 'queued', ?, ?, ?)`,
       [input.application_id, intOrNull(input.environment_id), input.scope_url,
-        JSON.stringify(input.budgets || {}), intOrNull(input.requested_by)]
+        JSON.stringify(input.budgets || {}),
+        intOrNull(input.login_test_id), intOrNull(input.credential_id),
+        intOrNull(input.requested_by)]
     );
     return findById(res.insertId);
   }
@@ -157,14 +171,39 @@ function createDiscoveryRepository({ db, now = () => new Date() }) {
     await pool.query(
       `UPDATE service_test_discoveries
          SET status = ?, ended_at = ?, page_count = ?, form_count = ?, element_count = ?,
-             request_count = ?, login_count = ?, error_message = ?
+             request_count = ?, login_count = ?, detected_login = ?,
+             login_test_id = ?, credential_id = ?, authenticated = ?,
+             authenticated_page_count = ?, session_lost_at_page = ?, auth_note = ?,
+             error_message = ?
        WHERE id = ?`,
       [summary.status || 'complete', summary.ended_at || now(), intOrNull(summary.page_count) ?? 0,
         intOrNull(summary.form_count) ?? 0, intOrNull(summary.element_count) ?? 0,
         intOrNull(summary.request_count) ?? 0, intOrNull(summary.login_count) ?? 0,
+        summary.detected_login ? JSON.stringify(summary.detected_login) : null,
+        intOrNull(summary.login_test_id), intOrNull(summary.credential_id),
+        summary.authenticated ? 1 : 0,
+        intOrNull(summary.authenticated_page_count) ?? 0,
+        intOrNull(summary.session_lost_at_page),
+        summary.auth_note ?? null,
         summary.error_message ?? null, id]
     );
     return findById(id);
+  }
+
+  // The login form the last COMPLETED discovery of this application found.
+  //
+  // This is what lets a rediscover sign in with nothing but a stored credential:
+  // the anonymous pass found the door, and this is how the next one opens it.
+  // The most recent wins — a site that moved its login has moved it, and the
+  // older detection is wrong rather than merely older.
+  async function lastDetectedLogin(applicationId) {
+    const [rows] = await pool.query(
+      `SELECT detected_login FROM service_test_discoveries
+        WHERE application_id = ? AND status = 'complete' AND detected_login IS NOT NULL
+        ORDER BY id DESC LIMIT 1`,
+      [intOrNull(applicationId)]
+    );
+    return rows.length ? parseJson(rows[0].detected_login, null) : null;
   }
 
   async function reapStale(claimTimeoutMs) {
@@ -180,7 +219,7 @@ function createDiscoveryRepository({ db, now = () => new Date() }) {
 
   return {
     findById, list, latestForApplication, enqueue, claimNext,
-    addPage, addElements, pages, elements, finish, reapStale,
+    addPage, addElements, pages, elements, finish, reapStale, lastDetectedLogin,
   };
 }
 

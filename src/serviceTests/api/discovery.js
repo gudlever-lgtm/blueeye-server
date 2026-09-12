@@ -4,6 +4,7 @@ const express = require('express');
 const { asyncHandler, invalid, notFound, makeLoader, auditor, userId, parseId } = require('./helpers');
 const { validateDiscoveryRequest } = require('../validation');
 const { validateDefinition } = require('../engine/validate');
+const { canSignInWith, signInStepsFromDetectedLogin } = require('../discovery/authenticate');
 
 // Discovery and the suggestions it produces.
 //
@@ -11,7 +12,7 @@ const { validateDefinition } = require('../engine/validate');
 // read-only, but still traffic someone will see in their logs.
 function createDiscoveryRouter({ repositories, settings, queue, audit, requireRole, roles }) {
   const router = express.Router();
-  const { discovery, applications, environments } = repositories;
+  const { discovery, applications, environments, credentials, tests } = repositories;
   const read = requireRole(roles.VIEWER, roles.OPERATOR, roles.ADMIN);
   const write = requireRole(roles.OPERATOR, roles.ADMIN);
   const load = makeLoader(discovery, 'Discovery');
@@ -51,11 +52,38 @@ function createDiscoveryRouter({ repositories, settings, queue, audit, requireRo
       if (configured[key] !== undefined) budgets[key] = Math.min(configured[key], val);
     }
 
+    // Signing in is checked HERE, before anything is queued. A discovery that
+    // fails to authenticate falls back to an anonymous crawl, so a mistake the
+    // operator could have fixed in the dialog would instead turn up half an hour
+    // later as a public-site map with a note on it.
+    if (value.login_test_id) {
+      const loginTest = await tests.findById(value.login_test_id);
+      const usable = canSignInWith(loginTest, { applicationId: app.id });
+      if (!usable.ok) return invalid(res, { login_test_id: usable.reason });
+    }
+    if (value.credential_id) {
+      const credential = await credentials.findById(value.credential_id);
+      if (!credential || credential.application_id !== app.id) {
+        return invalid(res, { credential_id: 'that login does not belong to this application' });
+      }
+      // Without a login form from an earlier pass there is nothing to fill in,
+      // and this is the common first-run case — so it is said plainly rather
+      // than discovered later.
+      const detected = await discovery.lastDetectedLogin(app.id);
+      if (!signInStepsFromDetectedLogin(detected)) {
+        return invalid(res, {
+          credential_id: 'no login form has been found on this application yet — run a discovery without a login first, then try again',
+        });
+      }
+    }
+
     const job = await discovery.enqueue({
       application_id: app.id,
       environment_id: value.environment_id ?? null,
       scope_url: scopeUrl,
       budgets,
+      login_test_id: value.login_test_id ?? null,
+      credential_id: value.credential_id ?? null,
       requested_by: userId(req),
     });
     record(req, 'discovery_start', app.id, `discovery=${job.id} scope=${scopeUrl}`);

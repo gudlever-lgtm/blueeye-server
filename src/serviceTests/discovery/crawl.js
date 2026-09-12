@@ -2,6 +2,7 @@
 
 const { extractPage, extractElements } = require('./extract');
 const { isFollowable } = require('./safety');
+const { sessionLost } = require('./authenticate');
 
 // The crawler. Drives an injected browser port, so this file — the orchestration,
 // the budgets, the scope rule — is testable without Playwright.
@@ -24,6 +25,10 @@ const STOP = {
   MAX_DEPTH: 'max_depth',
   MAX_REQUESTS: 'max_requests',
   TIMEOUT: 'max_duration',
+  // The crawl was signed in and got logged out. Its own stop reason, because
+  // "the crawl ended" and "the crawl ended because it stopped being trusted"
+  // are different facts and only one of them makes the result partial.
+  SESSION_LOST: 'session_lost',
 };
 
 // Normalises a URL for the visited set: drops the fragment (same page) and the
@@ -51,6 +56,12 @@ async function crawl({
   now = () => Date.now(),
   onPage = null,
   logger = null,
+  // Set when the crawler was signed in before this crawl. Turns on the
+  // session-loss check: a crawl that gets logged out halfway would otherwise map
+  // the PUBLIC site and report it as the authenticated application, which is
+  // worse than not having the feature because the map would be trusted.
+  signedIn = false,
+  loginUrl = null,
 } = {}) {
   const maxPages = budgets.maxPages ?? 100;
   const maxDepth = budgets.maxDepth ?? 5;
@@ -69,6 +80,9 @@ async function crawl({
   const logins = [];
   let requestCount = 0;
   let stopped = STOP.COMPLETE;
+  let authenticatedPages = 0;
+  let sessionLostAtPage = null;
+  let sessionLostReason = null;
 
   while (queue.length) {
     if (pages.length >= maxPages) { stopped = STOP.MAX_PAGES; break; }
@@ -104,6 +118,24 @@ async function crawl({
     const { elements: found, login } = extractElements(snapshot);
     for (const el of found) elements.push({ ...el, pageUrl: page.url });
     if (login.possible) logins.push({ url: page.url, ...login });
+
+    // Still signed in? Checked BEFORE the page is counted as authenticated, so
+    // the page that proves the session went is not itself claimed as private.
+    //
+    // The crawl stops rather than carrying on anonymously. Half a private map,
+    // labelled as half, is worth having; a public map labelled as private is
+    // not — and nothing downstream could tell the difference.
+    if (signedIn) {
+      const lost = sessionLost(snapshot, { loginUrl });
+      if (lost.lost) {
+        sessionLostAtPage = pages.length - 1;
+        sessionLostReason = lost.reason;
+        stopped = STOP.SESSION_LOST;
+        break;
+      }
+      authenticatedPages += 1;
+      page.authenticated = true;
+    }
 
     if (typeof onPage === 'function') {
       try { onPage(page, found); } catch { /* a reporter must never stop a crawl */ }
@@ -142,14 +174,42 @@ async function crawl({
     stopped,
     requestCount,
     durationMs: now() - startedAt,
+    // Which page the session went on, and why. Null when it held (or when the
+    // crawl was never signed in at all).
+    sessionLostAtPage,
+    sessionLostReason,
     summary: {
       page_count: pages.length,
       form_count: elements.filter((e) => e.kind === 'form').length,
       element_count: elements.length,
       request_count: requestCount,
       login_count: logins.length,
+      // Pages reachable ONLY once signed in — the number that says whether
+      // authenticating was worth it.
+      authenticated_page_count: authenticatedPages,
+      // The best login form found, kept so the NEXT discovery can sign in with
+      // nothing but a credential. Highest confidence wins; field descriptions
+      // only, never a value.
+      detected_login: bestLogin(logins),
     },
   };
 }
 
-module.exports = { crawl, canonical, sameHost, STOP };
+// The login form most worth keeping: the most confident one. A site with three
+// detected forms usually has one real login and two password-change boxes.
+function bestLogin(logins) {
+  const rank = { low: 0, medium: 1, high: 2 };
+  const best = (logins || [])
+    .filter((l) => l && l.possible)
+    .sort((a, b) => (rank[b.confidence] ?? -1) - (rank[a.confidence] ?? -1))[0];
+  if (!best) return null;
+  return {
+    url: best.url,
+    confidence: best.confidence,
+    usernameField: best.usernameField || null,
+    passwordField: best.passwordField || null,
+    submitLabel: best.submitLabel || null,
+  };
+}
+
+module.exports = { crawl, canonical, sameHost, bestLogin, STOP };

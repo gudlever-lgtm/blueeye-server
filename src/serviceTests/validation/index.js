@@ -268,6 +268,25 @@ function validateDiscoveryRequest(body) {
     if (envId === null) errors.environment_id = 'that environment does not look valid';
     else value.environment_id = envId;
   }
+  // Sign in before crawling (authenticated discovery). Two routes, and never
+  // both at once: a login test already encodes how to sign into this
+  // application, while a bare credential asks discovery to fill in the login
+  // form it found on an earlier pass. Accepting both would leave it ambiguous
+  // which one actually got used, on the one record that has to be trustworthy.
+  const hasTest = body.login_test_id !== undefined && body.login_test_id !== null && body.login_test_id !== '';
+  const hasCredential = body.credential_id !== undefined && body.credential_id !== null && body.credential_id !== '';
+  if (hasTest && hasCredential) {
+    errors.login_test_id = 'choose either a login test or a login, not both';
+  } else if (hasTest) {
+    const testId = parseId(body.login_test_id);
+    if (testId === null) errors.login_test_id = 'that test does not look valid';
+    else value.login_test_id = testId;
+  } else if (hasCredential) {
+    const credId = parseId(body.credential_id);
+    if (credId === null) errors.credential_id = 'that login does not look valid';
+    else value.credential_id = credId;
+  }
+
   // Per-run budget overrides, each bounded by the DB-backed settings at the
   // route. Only the fields an operator can sensibly tighten are accepted.
   if (body.budgets !== undefined && body.budgets !== null) {

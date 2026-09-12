@@ -1860,14 +1860,21 @@ CREATE TABLE IF NOT EXISTS service_test_discoveries (
   tenant_id INT              DEFAULT NULL,
   application_id INT          NOT NULL,
   environment_id INT              DEFAULT NULL,
+  login_test_id INT DEFAULT NULL,
+  credential_id INT DEFAULT NULL,
+  authenticated TINYINT(1) NOT NULL DEFAULT 0,
+  session_lost_at_page INT DEFAULT NULL,
+  auth_note VARCHAR(512) DEFAULT NULL,
   status ENUM('queued','running','complete','failed') NOT NULL DEFAULT 'queued',
   scope_url VARCHAR(1024) NOT NULL,
   budgets JSON         NOT NULL,
   page_count INT          NOT NULL DEFAULT 0,
+  authenticated_page_count INT NOT NULL DEFAULT 0,
   form_count INT          NOT NULL DEFAULT 0,
   element_count INT          NOT NULL DEFAULT 0,
   request_count INT          NOT NULL DEFAULT 0,
   login_count INT          NOT NULL DEFAULT 0,
+  detected_login JSON DEFAULT NULL,
   error_message TEXT             DEFAULT NULL,
   started_at DATETIME(3)      DEFAULT NULL,
   ended_at DATETIME(3)      DEFAULT NULL,
@@ -1879,7 +1886,8 @@ CREATE TABLE IF NOT EXISTS service_test_discoveries (
   INDEX idx_std_app_created (application_id, created_at),
   INDEX idx_std_status (status, created_at),
   CONSTRAINT fk_std_app FOREIGN KEY (application_id) REFERENCES service_test_applications(id) ON DELETE CASCADE,
-  CONSTRAINT fk_std_env FOREIGN KEY (environment_id) REFERENCES service_test_environments(id) ON DELETE SET NULL
+  CONSTRAINT fk_std_env FOREIGN KEY (environment_id) REFERENCES service_test_environments(id) ON DELETE SET NULL,
+  KEY idx_std_login_test (login_test_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS service_test_discovery_pages (

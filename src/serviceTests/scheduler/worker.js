@@ -4,6 +4,7 @@ const { executeDefinition } = require('../runner/execute');
 const { createRedactor } = require('../engine/redact');
 const { createHostPolicy } = require('../security/hostPolicy');
 const { crawl } = require('../discovery/crawl');
+const { canSignInWith, signInStepsFromDetectedLogin, describeAuthentication } = require('../discovery/authenticate');
 const { suggestTests } = require('../suggest/rules');
 const { suggestJourneys } = require('../suggest/journeys');
 
@@ -210,6 +211,72 @@ function createWorker({
     logger.info(`service-tests: run ${run.id} (${test.name}) → ${result.status}`);
   }
 
+  // Signs the crawler in before a discovery, if the job asked for it.
+  //
+  // Never throws and never fails the discovery: a public-site map is still worth
+  // having. It returns what happened so the record can say so plainly, because
+  // the one unacceptable outcome is reporting the public site as the
+  // authenticated one.
+  async function signIn(job, browser) {
+    const requested = Boolean(job.login_test_id || job.credential_id);
+    if (!requested) return { requested: false, authenticated: false, note: null, loginUrl: null };
+
+    try {
+      let steps = null;
+      let credentialId = job.credential_id ?? null;
+      let loginUrl = null;
+
+      if (job.login_test_id) {
+        // The reliable route: an existing test already encodes how to sign into
+        // THIS application, quirks included.
+        const test = await tests.findById(job.login_test_id);
+        const usable = canSignInWith(test, { applicationId: job.application_id });
+        if (!usable.ok) return { requested, authenticated: false, note: usable.reason, loginUrl: null };
+        steps = test.definition.steps;
+        credentialId = test.credential_id;
+      } else {
+        // No test yet — which is the normal state of a brand new application.
+        // The anonymous pass found the login form; this fills it in.
+        const detected = await discovery.lastDetectedLogin(job.application_id);
+        steps = signInStepsFromDetectedLogin(detected);
+        if (!steps) {
+          return {
+            requested,
+            authenticated: false,
+            note: 'no login form has been found on this application yet — run a discovery without a login first',
+            loginUrl: null,
+          };
+        }
+        loginUrl = detected.url;
+      }
+
+      const credential = credentialId ? await credentials.findByIdWithSecret(credentialId) : null;
+      if (!credential) return { requested, authenticated: false, note: 'that login could not be read', loginUrl };
+
+      // Same seam a test run uses: the credential is decrypted here and NOWHERE
+      // else, and its values seed the redactor before a single step runs. None
+      // of it reaches the discovery record.
+      const redact = createRedactor([credential.secret].filter(Boolean));
+      // The SAME browser the crawl will use. A sign-in in a separate context
+      // would leave its cookies there and the crawl still anonymous — the
+      // feature would appear to work and map the public site.
+      const outcome = await executeDefinition({ version: 1, name: 'sign in', steps }, {
+        driver: browser.driver,
+        credential,
+        redact,
+        // A sign-in is not the thing being measured, so none of the V2 checks
+        // run against it.
+        accessibilityEnabled: false,
+      });
+      if (outcome.status !== 'pass') {
+        return { requested, authenticated: false, note: redact.text(outcome.error_message || 'the sign-in did not complete'), loginUrl };
+      }
+      return { requested, authenticated: true, note: null, loginUrl };
+    } catch (err) {
+      return { requested, authenticated: false, note: String(err && err.message).slice(0, 400), loginUrl: null };
+    }
+  }
+
   // ------------------------------------------------------------ a discovery
   async function processDiscovery(job) {
     const { app, envs, policy } = await policyFor(job.application_id, [job.scope_url]);
@@ -225,6 +292,19 @@ function createWorker({
     let browser = null;
     try {
       browser = await browserFactory({ policy, baseUrl: startUrl, timeoutMs: discoverySettings.navigationTimeoutMs });
+
+      // Sign in first, if asked to.
+      //
+      // Discovery has always crawled what a logged-out visitor sees. Everything
+      // behind the login — where the actual user journeys live — was invisible.
+      // Two ways in, because on a brand new application there is no login test
+      // yet: replay an existing one, or fill in the login form the anonymous
+      // pass already found.
+      //
+      // A failure here does NOT fail the discovery. It falls back to an
+      // anonymous crawl and says so — a public-site map is still worth having,
+      // and it must never be reported as the authenticated one.
+      const auth = await signIn(job, browser);
       const result = await crawl({
         browser: browser.crawler,
         startUrl,
@@ -236,6 +316,10 @@ function createWorker({
           maxDurationMs: budgets.maxDurationMs,
         },
         logger,
+        // So the crawl can notice it has been logged out and stop rather than
+        // mapping the public site while reporting it as authenticated.
+        signedIn: auth.authenticated,
+        loginUrl: auth.loginUrl || null,
       });
 
       // Pages first, so elements can reference the page row they were found on.
@@ -264,7 +348,26 @@ function createWorker({
       const all = [...proposals, ...journeyProposals];
       if (all.length) await suggestions.createMany(job.id, job.application_id, all);
 
-      await discovery.finish(job.id, { status: 'complete', ...result.summary });
+      await discovery.finish(job.id, {
+        status: 'complete',
+        ...result.summary,
+        // What actually happened about signing in. `authenticated` is whether it
+        // got IN, not whether it was asked to — a discovery that requested a
+        // sign-in and could not must never be read as a map of the private site.
+        login_test_id: job.login_test_id ?? null,
+        credential_id: job.credential_id ?? null,
+        authenticated: auth.authenticated ? 1 : 0,
+        authenticated_page_count: result.summary.authenticated_page_count ?? 0,
+        session_lost_at_page: result.sessionLostAtPage ?? null,
+        auth_note: describeAuthentication({
+          requested: auth.requested,
+          authenticated: auth.authenticated,
+          note: auth.note,
+          pages: result.pages.length,
+          authenticatedPages: result.summary.authenticated_page_count ?? 0,
+          sessionLostAtPage: result.sessionLostAtPage ?? null,
+        }),
+      });
       logger.info(`service-tests: discovery ${job.id} → ${result.summary.page_count} pages, `
         + `${proposals.length} test + ${journeyProposals.length} journey suggestions (${result.stopped})`);
     } catch (err) {

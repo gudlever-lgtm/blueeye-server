@@ -1516,6 +1516,22 @@ function makeFindingStore(overrides = {}) {
   return {
     rows,
     save: overrides.save || (async (f) => { const saved = { ...f, id: f.id || `f${rows.length + 1}`, acked: false }; rows.push(saved); return saved; }),
+    // The explicit backfill. Matches the real store: unacknowledged findings
+    // only, because one somebody has already read and acted on is history.
+    applySeverityRule: overrides.applySeverityRule || (async (rule, { dryRun = true } = {}) => {
+      const hits = rows.filter((f) => !f.acked && f.severity !== rule.severity
+        && (!rule.match_metric || f.metric === rule.match_metric)
+        && (!rule.match_kind || f.kind === rule.match_kind)
+        && (!rule.match_host_id || f.hostId === rule.match_host_id));
+      if (!dryRun) {
+        for (const f of hits) {
+          f.originalSeverity = f.originalSeverity ?? f.severity;
+          f.severity = rule.severity;
+          f.severityRuleId = rule.id;
+        }
+      }
+      return { matched: hits.length, changed: hits.length };
+    }),
     list: overrides.list || (async (hostId, since, limit, until, filters = {}) => {
       const { severity, metric } = filters || {};
       let out = rows.filter((f) => (!hostId || f.hostId === hostId)
@@ -2340,6 +2356,54 @@ function makeInvestigationsRepo(overrides = {}) {
   };
 }
 
+// Severity rules, in memory. The real repository caches `active()` and counts
+// how often a rule fires; both matter to the write path, so both are here.
+function makeSeverityRulesRepo(seed = []) {
+  let nextId = seed.length + 1;
+  const rows = seed.map((r, i) => ({
+    id: i + 1, enabled: true, applied_count: 0, last_applied_at: null,
+    match_metric: null, match_kind: null, match_host_id: null, match_application_id: null,
+    reason: null, created_by: null, created_at: new Date(), updated_at: new Date(), ...r,
+  }));
+  const clone = (r) => (r ? JSON.parse(JSON.stringify(r)) : null);
+  return {
+    rows,
+    async active() { return rows.filter((r) => r.enabled).map(clone); },
+    async findById(id) { return clone(rows.find((r) => r.id === Number(id))) || null; },
+    async list({ source = null, enabledOnly = false } = {}) {
+      return rows.filter((r) => (!source || r.source === source) && (!enabledOnly || r.enabled)).map(clone);
+    },
+    async create(input) {
+      const row = {
+        id: nextId, enabled: true, applied_count: 0, last_applied_at: null,
+        match_metric: null, match_kind: null, match_host_id: null, match_application_id: null,
+        created_at: new Date(), updated_at: new Date(), ...input,
+        enabled: input.enabled === false ? false : true,
+      };
+      nextId += 1;
+      rows.push(row);
+      return clone(row);
+    },
+    async save(id, patch) {
+      const row = rows.find((r) => r.id === Number(id));
+      if (!row) return null;
+      Object.assign(row, patch, { updated_at: new Date() });
+      return clone(row);
+    },
+    async remove(id) {
+      const i = rows.findIndex((r) => r.id === Number(id));
+      if (i < 0) return false;
+      rows.splice(i, 1);
+      return true;
+    },
+    async recordApplied(id) {
+      const row = rows.find((r) => r.id === Number(id));
+      if (row) { row.applied_count += 1; row.last_applied_at = new Date(); }
+    },
+    invalidate() {},
+  };
+}
+
 function makeApp(overrides = {}) {
   // Resolve the deps the plan/usage services build on, so the (real) services
   // can wrap them. Default plan resolution lands on the internal 'licensed'
@@ -2426,6 +2490,7 @@ function makeApp(overrides = {}) {
     agentReconnect: overrides.agentReconnect || { waitMs: 200, pollMs: 10 },
     systemInfo: overrides.systemInfo || makeSystemInfo(),
     findingStore: overrides.findingStore || makeFindingStore(),
+    severityRulesRepo: overrides.severityRulesRepo === undefined ? makeSeverityRulesRepo() : overrides.severityRulesRepo,
     analysisPipeline: overrides.analysisPipeline || makeAnalysisPipeline(),
     probePipeline: overrides.probePipeline || makeProbePipeline(),
     flowPipeline: overrides.flowPipeline || makeFlowPipeline(),
@@ -2550,6 +2615,7 @@ const throwingAsync = (message = 'simulated database failure') => async () => {
 };
 
 module.exports = {
+  makeSeverityRulesRepo,
   makeLocationsRepo,
   makeUsersRepo,
   makeUserMailer,

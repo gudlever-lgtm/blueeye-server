@@ -261,6 +261,53 @@ test('saving a test bumps its version', async () => {
   assert.equal(res.body.version, 2);
 });
 
+// The dashboard's Edit dialog. Until it existed the designer only ever PUT
+// { definition }, so a test's name, description, login and enabled flag were
+// set once at creation and unreachable forever after — which is how a test ends
+// up called "Untitled" with nobody able to say what it is for.
+test('a test can be renamed, re-described, re-credentialled and turned off', async () => {
+  const st = makeServiceTests();
+  const scoped = makeApp({ serviceTests: st });
+  const res = await request(scoped).put(`${BASE}/tests/1`).set('Authorization', authHeader('operator'))
+    .send({ name: 'Customer login', description: 'Checkout breaks without it', credential_id: null, enabled: false });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.name, 'Customer login');
+  assert.equal(res.body.description, 'Checkout breaks without it');
+  assert.equal(res.body.credential_id, null);
+  assert.equal(res.body.enabled, false);
+  // The steps are the designer's business and must survive an edit that never
+  // mentioned them.
+  assert.ok(res.body.definition && res.body.definition.steps.length);
+});
+
+test('editing and deleting a test answer 400/404 and never 500', async () => {
+  const scoped = makeApp({ serviceTests: makeServiceTests() });
+  const h = authHeader('operator');
+  for (const bad of ['abc', '-1', '0', '1.5']) {
+    const put = await request(scoped).put(`${BASE}/tests/${bad}`).set('Authorization', h).send({ name: 'x' });
+    assert.ok([400, 404].includes(put.status), `PUT ${bad} → ${put.status}`);
+    const del = await request(scoped).delete(`${BASE}/tests/${bad}`).set('Authorization', h);
+    assert.ok([400, 404].includes(del.status), `DELETE ${bad} → ${del.status}`);
+  }
+  assert.equal((await request(scoped).put(`${BASE}/tests/99999`).set('Authorization', h).send({ name: 'x' })).status, 404);
+  assert.equal((await request(scoped).delete(`${BASE}/tests/99999`).set('Authorization', h)).status, 404);
+
+  // An empty name is refused rather than stored: a test with no name is one
+  // nobody can find again.
+  const blank = await request(scoped).put(`${BASE}/tests/1`).set('Authorization', h).send({ name: '   ' });
+  assert.equal(blank.status, 400);
+  assert.ok(blank.body.details.name);
+
+  assert.equal((await request(scoped).delete(`${BASE}/tests/1`).set('Authorization', h)).status, 204);
+  assert.equal((await request(scoped).get(`${BASE}/tests/1`).set('Authorization', h)).status, 404);
+});
+
+test('deleting a test is operator-only', async () => {
+  const scoped = makeApp({ serviceTests: makeServiceTests() });
+  assert.equal((await request(scoped).delete(`${BASE}/tests/1`).set('Authorization', authHeader('viewer'))).status, 403);
+  assert.equal((await request(scoped).delete(`${BASE}/tests/1`)).status, 401);
+});
+
 test('the step catalogue is served rather than duplicated in the browser', async () => {
   const res = await get('/tests/step-types', 'viewer');
   assert.equal(res.status, 200);

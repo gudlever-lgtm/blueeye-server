@@ -1,5 +1,87 @@
 # Changelog
 
+## 0.126.1 — severity rules, and a test you can rename or delete
+
+### "This is a warning for us, not a critical"
+
+BlueEyes decides severity at detection: the analyser from a median + MAD z-score,
+Service Assurance from the kind of failure. Both are reasonable defaults and
+neither knows your business — the packet loss that pages one customer at 3am is
+the wifi at another one's warehouse.
+
+A **severity rule** says: events matching this get that severity, from now on.
+It covers both event sources — analysis findings and Service Assurance incidents
+— through one rule set, one screen and one piece of logic.
+
+The most specific matching rule wins, so `packet_loss on gw-core → CRIT` beats
+`packet_loss → WARN` and a general rule stays safe to write. A tie goes to the
+newest rule, because two equally specific rules matching the same event is a
+person changing their mind.
+
+Rules are applied where events are **stored**, not where they are read. Alerting
+reads the stored severity, so a read-time rule would still page at 3am — and a
+rule written today must not silently rewrite what you thought last March.
+
+Two things a rule deliberately cannot do:
+
+- **It cannot make an event disappear.** INFO is the floor. Something that
+  silently deletes events is a different and far more dangerous control, and it
+  is not going to hide behind this one.
+- **It cannot change an event without saying so.** Every event a rule touched
+  carries `original_severity` and `severity_rule_id`, and the row shows "was
+  CRIT" next to the badge. A machine that quietly downgrades criticals is one
+  where the dashboard goes green and nobody looks again.
+
+Writing a rule does not touch events that already exist. Applying one backwards
+is a separate action that counts first — "412 open events would be set to WARN"
+— and changes nothing until it is confirmed. Deleting a rule does not un-decide
+what it decided: the provenance goes to NULL and the stored severity stands.
+
+Admin, not operator. A rule quietly changes what wakes people at 3am, across the
+whole estate and indefinitely.
+
+The entry point is the event itself: a "Severity rule…" button on each finding
+and each incident opens the form already describing that event, because the
+thought happens while looking at it, not in Settings an hour later. The full list
+lives at Settings → Severity rules, with each rule's match count and when it last
+fired — a rule nobody can tell is dead is a rule nobody dares delete.
+
+A rule set that cannot be read leaves the detector's judgement alone: the cache
+returns the last known set rather than an empty one, so a database hiccup cannot
+silently turn every rule off and start paging on everything the operator muted.
+
+`docs/severity-rules.md`, migration 086.
+
+### A service test can be renamed, re-described and deleted
+
+The designer only ever saved the STEPS. A test's name, description, login and
+enabled flag were set once at creation and unreachable forever after, which is
+how a test ends up called "Untitled" with nobody able to say what it is for. The
+test page now has Edit and Delete.
+
+Deleting a test removes it from every journey that used it — the step row
+cascades — so the journey quietly gets shorter and keeps reporting healthy while
+the thing it was watching is no longer watched. The confirm names those journeys
+before it happens rather than after.
+
+The application a test belongs to is deliberately NOT editable: moving a test
+would leave its steps pointing at another application's pages and its history
+describing a service it no longer tests.
+
+### Fixed
+
+- **A severity rule could not be edited.** `PUT` validates the stored rule merged
+  with the patch, and a stored row carries every column — including the other
+  source's, sitting at NULL. The wrong-source check refused those nulls, so every
+  edit came back 400. Only match fields that carry a value are refused now.
+- **Findings never reported a ruled severity.** The provenance columns were
+  written but not selected, so `original_severity` never reached the dashboard —
+  a downgraded critical would have looked exactly like a detected warning. Same
+  fix on the Service Assurance incident shape.
+- **The findings test fake mapped INSERT parameters positionally.** Adding two
+  columns shifted every value one place and the failures surfaced three tests
+  away. It reads the column names out of the statement now.
+
 ## 0.125.11 — a sweep of the V2 code, and two real bugs
 
 Looked for the same class of trap as `Number(null) === 0`. The number coercion

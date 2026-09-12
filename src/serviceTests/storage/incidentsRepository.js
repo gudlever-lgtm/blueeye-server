@@ -10,7 +10,8 @@
 function createIncidentsRepository({ db, now = () => new Date() }) {
   const { pool } = db;
   const COLS = `id, application_id, environment_id, test_id, subject_type, subject_key, subject_label,
-    kind, severity, status, summary, likely_cause, explanation, evidence, occurrences,
+    kind, severity, original_severity, severity_rule_id,
+    status, summary, likely_cause, explanation, evidence, occurrences,
     opened_at, last_seen_at, resolved_at, resolved_by, resolution, notified_at, notified_severity`;
 
   // MySQL returns a JSON column as an object on 8.x and as a string on some
@@ -33,6 +34,11 @@ function createIncidentsRepository({ db, now = () => new Date() }) {
       subject_label: row.subject_label,
       kind: row.kind,
       severity: row.severity,
+      // Non-null only when a severity rule changed this. It travels with the
+      // incident so a downgraded critical says on screen that it was
+      // downgraded, and by which rule.
+      original_severity: row.original_severity == null ? null : row.original_severity,
+      severity_rule_id: row.severity_rule_id == null ? null : Number(row.severity_rule_id),
       status: row.status,
       summary: row.summary,
       likely_cause: row.likely_cause,
@@ -284,7 +290,38 @@ function createIncidentsRepository({ db, now = () => new Date() }) {
     return res.affectedRows || 0;
   }
 
-  return { findById, findOpen, open, touch, resolve, markNotified, list, listBetween, countByApplication, seriesByApplication, openCounts, purgeResolvedOlderThan };
+  // The explicit backfill for open incidents. Same posture as findings: only
+  // OPEN ones, because a resolved incident is a record of what was decided at
+  // the time, and rewriting it would make history a function of today's config.
+  async function applySeverityRule(rule, { dryRun = true } = {}) {
+    const where = ["status = 'open'", 'severity <> ?'];
+    const params = [rule.severity];
+    if (rule.match_kind) { where.push('kind = ?'); params.push(rule.match_kind); }
+    if (rule.match_application_id) { where.push('application_id = ?'); params.push(rule.match_application_id); }
+
+    const [counted] = await pool.query(
+      `SELECT COUNT(*) AS n FROM service_test_incidents WHERE ${where.join(' AND ')}`,
+      params
+    );
+    const matched = Number(counted[0] ? counted[0].n : 0);
+    if (dryRun) return { matched, changed: matched };
+
+    const [res] = await pool.query(
+      `UPDATE service_test_incidents
+          SET original_severity = COALESCE(original_severity, severity),
+              severity = ?,
+              severity_rule_id = ?
+        WHERE ${where.join(' AND ')}`,
+      [rule.severity, rule.id, ...params]
+    );
+    return { matched, changed: res.affectedRows || 0 };
+  }
+
+  return {
+    findById, findOpen, open, touch, resolve, markNotified, list, listBetween,
+    countByApplication, seriesByApplication, openCounts, purgeResolvedOlderThan,
+    applySeverityRule,
+  };
 }
 
 module.exports = { createIncidentsRepository };

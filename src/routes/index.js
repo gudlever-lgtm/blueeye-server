@@ -31,6 +31,7 @@ const { createTroubleshootingRouter } = require('./troubleshooting');
 const { createTroubleshootingOverviewService } = require('../troubleshooting/overviewService');
 const { createProbesRouter } = require('./probes');
 const { createReportsRouter } = require('./reports');
+const { createSeverityRulesRouter } = require('./severityRules');
 const { createEventsRouter } = require('./events');
 const { createEventClustersRouter } = require('./eventClusters');
 const { createRunbooksRouter } = require('./runbooks');
@@ -120,6 +121,9 @@ function createApiRouter({
   agentReconnect = {},
   systemInfo,
   findingStore,
+  // The operator's own severity rules (migration 086). Absent = every event
+  // keeps the severity it was detected with, which is what BlueEyes did before.
+  severityRulesRepo = null,
   analysisPipeline,
   probePipeline,
   flowPipeline,
@@ -485,6 +489,19 @@ function createApiRouter({
       ldapConfigRepo, ldapRoleMapRepo, ldapLoginAuditRepo, ldapAuth, secretBox, featureGate, authEnabledFlag: ldapAuthEnabledFlag,
     }));
   }
+  // Severity rules — the operator's own judgement about what counts as
+  // critical, applied where severity is decided rather than where it is read.
+  // ADMIN-only inside the router: a rule changes what wakes people at 3am.
+  if (severityRulesRepo) {
+    router.use('/api/severity-rules', createSeverityRulesRouter({
+      severityRulesRepo,
+      findingStore,
+      serviceTestIncidentsRepo: serviceTests && serviceTests.repositories
+        ? serviceTests.repositories.incidents : null,
+      auditLogger,
+    }));
+  }
+
   // Service Tests — no-code synthetic monitoring of web applications.
   // Licence-gated as a whole (`service_tests`, Professional) with RBAC inside;
   // see docs/service-assurance.md §8. The module builds its own router, so this is

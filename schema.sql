@@ -141,6 +141,8 @@ CREATE TABLE IF NOT EXISTS findings (
   host_id VARCHAR(255) NOT NULL,
   metric VARCHAR(255) NOT NULL,
   severity ENUM('INFO', 'WARN', 'CRIT') NOT NULL,
+  original_severity ENUM('INFO','WARN','CRIT') DEFAULT NULL,
+  severity_rule_id INT DEFAULT NULL,
   kind ENUM('ANOMALY', 'THRESHOLD', 'FLATLINE', 'CORRELATED') NOT NULL,
   observed DOUBLE NULL DEFAULT NULL,
   baseline DOUBLE NULL DEFAULT NULL,
@@ -157,7 +159,8 @@ CREATE TABLE IF NOT EXISTS findings (
   KEY idx_findings_host_created (host_id, created_at),
   KEY idx_findings_created (created_at),
   KEY idx_findings_event_case (incident_case_id),
-  CONSTRAINT fk_findings_event_case FOREIGN KEY (event_case_id) REFERENCES event_cases (id) ON DELETE SET NULL
+  CONSTRAINT fk_findings_event_case FOREIGN KEY (event_case_id) REFERENCES event_cases (id) ON DELETE SET NULL,
+  CONSTRAINT fk_findings_severity_rule FOREIGN KEY (severity_rule_id) REFERENCES event_severity_rules(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- 010 — geo-enriched flow records. One row per reported flow. The external
@@ -2046,6 +2049,8 @@ CREATE TABLE IF NOT EXISTS service_test_incidents (
   subject_label VARCHAR(255)     DEFAULT NULL,
   kind VARCHAR(60)  NOT NULL,
   severity ENUM('INFO','WARN','CRIT') NOT NULL DEFAULT 'WARN',
+  original_severity ENUM('INFO','WARN','CRIT') DEFAULT NULL,
+  severity_rule_id INT DEFAULT NULL,
   status ENUM('open','resolved') NOT NULL DEFAULT 'open',
   summary TEXT             DEFAULT NULL,
   likely_cause VARCHAR(255)     DEFAULT NULL,
@@ -2065,7 +2070,8 @@ CREATE TABLE IF NOT EXISTS service_test_incidents (
   INDEX idx_sti_status (status, severity, last_seen_at),
   INDEX idx_sti_app (application_id, status),
   CONSTRAINT fk_sti_app FOREIGN KEY (application_id) REFERENCES service_test_applications(id) ON DELETE CASCADE,
-  CONSTRAINT fk_sti_test FOREIGN KEY (test_id) REFERENCES service_test_tests(id) ON DELETE CASCADE
+  CONSTRAINT fk_sti_test FOREIGN KEY (test_id) REFERENCES service_test_tests(id) ON DELETE CASCADE,
+  CONSTRAINT fk_sti_severity_rule FOREIGN KEY (severity_rule_id) REFERENCES event_severity_rules(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- Service Assurance — recorded sessions (V2 §1).
@@ -2211,4 +2217,48 @@ CREATE TABLE IF NOT EXISTS service_test_healing (
   INDEX idx_sth_run (run_id),
   CONSTRAINT fk_sth_test FOREIGN KEY (test_id) REFERENCES service_test_tests(id) ON DELETE CASCADE,
   CONSTRAINT fk_sth_run FOREIGN KEY (run_id) REFERENCES service_test_runs(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Severity rules — "this kind of event is a warning for us, not a critical".
+--
+-- BlueEyes decides severity at detection time: the analysis detector from a MAD
+-- z-score, Service Assurance from the kind of failure. Both are reasonable
+-- defaults and neither knows your business. A packet-loss anomaly that pages one
+-- customer at 3am is background noise to another.
+--
+-- So a rule says: events matching THIS get THAT severity, from now on.
+--
+-- WHAT THIS IS NOT: a mute button. A rule can move an event to INFO; it can
+-- never make one disappear. Something that silently deletes events is a
+-- different and far more dangerous control, and it is not going to hide behind
+-- this one.
+--
+-- Applied at STORE time, not at read time. That is deliberate:
+--
+--   * alerting reads the stored severity, and not paging on it is the whole
+--     point of the feature;
+--   * history stays a record of what was decided AT THE TIME. With read-time
+--     rules, a rule written today would silently rewrite what you thought last
+--     March, and "why did nobody act on this" becomes unanswerable.
+--
+-- Existing open events are therefore NOT touched by writing a rule. Applying one
+-- backwards is a separate, explicit action with its own count and audit entry.
+CREATE TABLE IF NOT EXISTS event_severity_rules (
+  id INT           NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  tenant_id INT               DEFAULT NULL,
+  source ENUM('finding','service_assurance') NOT NULL,
+  match_metric VARCHAR(255)      DEFAULT NULL,
+  match_kind VARCHAR(60)       DEFAULT NULL,
+  match_host_id VARCHAR(255)      DEFAULT NULL,
+  match_application_id INT         DEFAULT NULL,
+  severity ENUM('INFO','WARN','CRIT') NOT NULL,
+  reason TEXT              DEFAULT NULL,
+  enabled TINYINT(1)    NOT NULL DEFAULT 1,
+  applied_count INT           NOT NULL DEFAULT 0,
+  last_applied_at DATETIME(3)      DEFAULT NULL,
+  created_by INT               DEFAULT NULL,
+  created_at DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  INDEX idx_esr_source (source, enabled),
+  CONSTRAINT fk_esr_application FOREIGN KEY (match_application_id) REFERENCES service_test_applications(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

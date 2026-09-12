@@ -69,6 +69,10 @@ const VIEWER_WRITE_ALLOWED = new Set([
   'POST /api/nis2/custom-reports/preview',
   'POST /api/nis2/custom-reports/export',
   'POST /api/logs/client',
+  // A POST because it takes a rule and an event in the body, but it stores
+  // nothing and reads nothing a viewer cannot already see — it answers "what
+  // would this rule do to this event". Writing the rule is still admin-only.
+  'POST /api/severity-rules/preview',
   'POST /agents/:id/ping',
   'POST /agents/:id/diagnose',
 ]);

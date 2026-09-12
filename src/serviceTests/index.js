@@ -96,6 +96,7 @@ function createServiceTestsModule(rawPorts = {}) {
       repositories,
       settings,
       certificateChecker: rawPorts.certificateChecker || null,
+      severityRules: rawPorts.severityRules || null,
       notify: rawPorts.notify || null,
       logger,
       now: clock,

@@ -26,6 +26,12 @@
 //                                        the alerting dispatcher; omitted means
 //                                        incidents are recorded and not sent
 //   certificateChecker { check }         a TLS inspector. Omitted = the real one
+//   severityRules { decide(event) }      the operator's own severity rules
+//                                        ("cert_expiring is an INFO for us").
+//                                        A port rather than an import so the
+//                                        matcher has one implementation on the
+//                                        host side; omitted means every incident
+//                                        keeps the severity policy.js judged
 //
 // `auth` and `licence` are deliberately NOT ports. They are Express middleware,
 // so they are passed to the router factory (createServiceTestsModule) rather than

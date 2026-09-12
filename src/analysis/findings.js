@@ -1,11 +1,13 @@
 'use strict';
 
 const crypto = require('crypto');
+const { applySeverity } = require('../events/severityRules');
 const { Severity, FindingKind } = require('./constants');
 
 // Columns selected when reading findings back.
 const COLUMNS =
-  'id, host_id, metric, severity, kind, observed, baseline, deviation, ' +
+  'id, host_id, metric, severity, original_severity, severity_rule_id, kind, ' +
+  'observed, baseline, deviation, ' +
   'window_from, window_to, explanation, evidence, correlated_with, event_case_id, acked, created_at';
 
 // Hard ceiling on how many findings a single list() call can return.
@@ -76,6 +78,11 @@ function mapRow(row) {
     hostId: row.host_id,
     metric: row.metric,
     severity: row.severity,
+    // Non-null only when a severity rule changed this. The pair travels with
+    // every finding because a downgraded critical that does not say it was
+    // downgraded is exactly the event nobody ever looks at again.
+    originalSeverity: row.original_severity == null ? null : row.original_severity,
+    severityRuleId: row.severity_rule_id == null ? null : Number(row.severity_rule_id),
     kind: row.kind,
     observed: row.observed,
     baseline: row.baseline,
@@ -110,11 +117,14 @@ function mapLightRow(row) {
 // (db.pool) — it does NOT open a new connection. Construct with the same `db`
 // object the rest of the server uses: new FindingStore({ db }).
 class FindingStore {
-  constructor({ db }) {
+  // `severityRules` is optional: without it every finding is stored exactly as
+  // the detector judged it, which is what BlueEyes did before rules existed.
+  constructor({ db, severityRules = null }) {
     if (!db || !db.pool) {
       throw new Error('FindingStore requires the server db handle ({ db: { pool } })');
     }
     this.pool = db.pool;
+    this.severityRules = severityRules;
   }
 
   // Validates and persists a finding. A finding MUST carry a non-empty
@@ -135,16 +145,33 @@ class FindingStore {
     const createdAt = finding.createdAt instanceof Date ? finding.createdAt : new Date();
     const win = Array.isArray(finding.window) ? finding.window : [null, null];
 
+    // Severity rules (migration 086). Applied HERE, at store time, because this
+    // is the single point every finding passes through — and because alerting
+    // reads the stored severity, which is the whole point of not paging on it.
+    //
+    // Store time rather than read time is also what keeps history honest: a
+    // rule written today must not silently rewrite what you thought last March.
+    const decision = await this.decideSeverity({
+      source: 'finding',
+      severity: finding.severity || Severity.INFO,
+      metric: finding.metric,
+      kind: finding.kind || FindingKind.ANOMALY,
+      host_id: finding.hostId,
+    });
+
     await this.pool.query(
       `INSERT INTO findings
-         (id, host_id, metric, severity, kind, observed, baseline, deviation,
+         (id, host_id, metric, severity, original_severity, severity_rule_id, kind,
+          observed, baseline, deviation,
           window_from, window_to, explanation, evidence, correlated_with, acked, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         finding.hostId,
         finding.metric,
-        finding.severity || Severity.INFO,
+        decision.severity,
+        decision.original_severity,
+        decision.severity_rule_id,
         finding.kind || FindingKind.ANOMALY,
         finding.observed ?? null,
         finding.baseline ?? null,
@@ -159,7 +186,65 @@ class FindingStore {
       ]
     );
 
-    return { ...finding, id, createdAt, acked: Boolean(finding.acked) };
+    return {
+      ...finding,
+      id,
+      createdAt,
+      severity: decision.severity,
+      originalSeverity: decision.original_severity,
+      severityRuleId: decision.severity_rule_id,
+      acked: Boolean(finding.acked),
+    };
+  }
+
+  // The severity this finding should be stored with. Never throws and never
+  // blocks: a rule set that cannot be read leaves the detector's own judgement
+  // in place, which is the safe direction — the alternative is silently losing
+  // the downgrade AND silently losing the finding.
+  async decideSeverity(event) {
+    if (!this.severityRules) return { severity: event.severity, original_severity: null, severity_rule_id: null };
+    try {
+      const rules = await this.severityRules.active();
+      const decision = applySeverity(rules, event);
+      if (decision.changed && typeof this.severityRules.recordApplied === 'function') {
+        // Not awaited: a statistic is not worth delaying a finding for.
+        Promise.resolve(this.severityRules.recordApplied(decision.severity_rule_id)).catch(() => {});
+      }
+      return decision;
+    } catch {
+      return { severity: event.severity, original_severity: null, severity_rule_id: null };
+    }
+  }
+
+  // Applies a rule to findings that ALREADY exist — the explicit backfill, never
+  // something writing a rule does on its own.
+  //
+  // Scoped to findings that are not yet acknowledged: a finding somebody has
+  // already read and acted on is history, and rewriting its severity after the
+  // fact would change the record of what they were looking at.
+  async applySeverityRule(rule, { dryRun = true } = {}) {
+    const where = ['acked = 0', 'severity <> ?'];
+    const params = [rule.severity];
+    if (rule.match_metric) { where.push('metric = ?'); params.push(rule.match_metric); }
+    if (rule.match_kind) { where.push('kind = ?'); params.push(rule.match_kind); }
+    if (rule.match_host_id) { where.push('host_id = ?'); params.push(rule.match_host_id); }
+
+    const [counted] = await this.pool.query(
+      `SELECT COUNT(*) AS n FROM findings WHERE ${where.join(' AND ')}`,
+      params
+    );
+    const matched = Number(counted[0] ? counted[0].n : 0);
+    if (dryRun) return { matched, changed: matched };
+
+    const [res] = await this.pool.query(
+      `UPDATE findings
+          SET original_severity = COALESCE(original_severity, severity),
+              severity = ?,
+              severity_rule_id = ?
+        WHERE ${where.join(' AND ')}`,
+      [rule.severity, rule.id, ...params]
+    );
+    return { matched, changed: res.affectedRows || 0 };
   }
 
   // Lists findings, newest first. Optionally filters by hostId, a `since` lower

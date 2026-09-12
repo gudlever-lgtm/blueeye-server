@@ -45,6 +45,12 @@ function createAssuranceReactor({
   // (finding, group) => Promise. Bound to the alerting dispatcher in server.js;
   // omitted (or unlicensed) simply means incidents are recorded and not sent.
   notify = null,
+  // Severity rules — "cert_expiring is an INFO for us". A PORT, not an import:
+  // nothing under src/serviceTests/ may reach into its host (ports.js), and the
+  // matcher lives on the host side so there is exactly one implementation of the
+  // rules rather than a copy that drifts. Shape: { decide(event) -> decision }.
+  // Optional — without it every incident keeps the severity policy.js judged.
+  severityRules = null,
   logger = silentLogger,
   now = () => new Date(),
 }) {
@@ -97,6 +103,20 @@ function createAssuranceReactor({
     }
   }
 
+  // The severity this incident should be stored with. Never throws: a rule set
+  // that cannot be read leaves policy.js's own judgement in place, which is the
+  // safe direction — the alternative is losing the downgrade AND the incident.
+  async function decideSeverity(event) {
+    const asDetected = { severity: event.severity, original_severity: null, severity_rule_id: null };
+    if (!severityRules || typeof severityRules.decide !== 'function') return asDetected;
+    try {
+      const decision = await severityRules.decide(event);
+      return decision && decision.severity ? decision : asDetected;
+    } catch {
+      return asDetected;
+    }
+  }
+
   // ------------------------------------------------------------- incidents
   // The single place an observation becomes state. `reaction` is null when the
   // subject is healthy, which is how an incident gets resolved.
@@ -113,6 +133,16 @@ function createAssuranceReactor({
     }
 
     const detail = explain(reaction.kind);
+    // The operator's own judgement, applied before the incident is stored — the
+    // same chokepoint rule as findings, for the same two reasons: alerting reads
+    // the stored severity, and history must say what was decided AT THE TIME.
+    const decision = await decideSeverity({
+      source: 'service_assurance',
+      severity: reaction.severity,
+      kind: reaction.kind,
+      application_id: applicationId,
+    });
+
     if (!existing) {
       const opened = await incidents.open({
         application_id: applicationId,
@@ -122,7 +152,9 @@ function createAssuranceReactor({
         subject_key: subjectKey,
         subject_label: subjectLabel,
         kind: reaction.kind,
-        severity: reaction.severity,
+        severity: decision.severity,
+        original_severity: decision.original_severity,
+        severity_rule_id: decision.severity_rule_id,
         summary: summary || detail.summary,
         likely_cause: detail.cause,
         explanation: detail.detail,
@@ -135,7 +167,7 @@ function createAssuranceReactor({
     }
 
     const touched = await incidents.touch(existing.id, {
-      severity: reaction.severity,
+      severity: decision.severity,
       kind: reaction.kind,
       summary: summary || detail.summary,
       evidence,

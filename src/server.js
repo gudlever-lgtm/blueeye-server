@@ -114,6 +114,8 @@ const { createSettingsService } = require('./services/settings');
 const { createTestPackagesRepository } = require('./repositories/testPackagesRepository');
 const { createTransactionsRepository } = require('./repositories/transactionsRepository');
 const { createServiceTestsModule } = require('./serviceTests');
+const { createSeverityRulesRepository } = require('./repositories/severityRulesRepository');
+const { applySeverity } = require('./events/severityRules');
 const { createTransactionBaselineJob } = require('./analysis/transactionBaselines');
 const { createTestPackageRunner } = require('./services/testPackageRunner');
 const { createTestPackageScheduler } = require('./services/testPackageScheduler');
@@ -368,6 +370,26 @@ function start() {
   // is a late-bound indirection rather than the dispatcher itself. Until the
   // dispatcher exists (and while alerting is unlicensed or disabled) the reactor
   // still opens and resolves incidents; it just sends nothing.
+  // Severity rules (migration 086) — the operator's own judgement about what
+  // counts as critical, applied where severity is DECIDED rather than where it
+  // is read. See src/events/severityRules.js for why store-time is the honest
+  // choice: a rule written today must not silently rewrite what you thought
+  // last March.
+  const severityRulesRepo = createSeverityRulesRepository({ db });
+  // The adapter Service Assurance sees. A port rather than an import, so the
+  // module keeps its extraction boundary and the matcher stays in one place.
+  const severityRulesPort = {
+    async decide(event) {
+      const rules = await severityRulesRepo.active();
+      const decision = applySeverity(rules, event);
+      if (decision.changed) {
+        // Not awaited: a statistic is never worth delaying an incident for.
+        Promise.resolve(severityRulesRepo.recordApplied(decision.severity_rule_id)).catch(() => {});
+      }
+      return decision;
+    },
+  };
+
   let assuranceNotify = null;
   const serviceTests = createServiceTestsModule({
     db,
@@ -389,6 +411,7 @@ function start() {
     // for up to four hours, and cutting off an operator mid-journey would be a
     // worse failure than the volume this is guarding against.
     captureRateLimit: createRateLimiter({ windowMs: 60 * 1000, max: 120 }),
+    severityRules: severityRulesPort,
     // The browser-side recorder. The module reads it to build the bookmarklet;
     // it is served from public/ as well, so an operator can read it first.
     recorderScriptPath: path.join(__dirname, '..', 'public', 'recorder.js'),
@@ -498,7 +521,7 @@ function start() {
   // detector pushes findings to the UI over the SAME WebSocket (agentWs is
   // assigned just below; the closure runs later, at ingest time).
   const analysisConfig = loadAnalysisConfig();
-  const findingStore = new FindingStore({ db });
+  const findingStore = new FindingStore({ db, severityRules: severityRulesRepo });
   const investigationsRepo = createInvestigationsRepository(db);
   const baselineCache = createBaselineFileCache(config.analysis.baselineCachePath);
   const baselines = createBaselineStore({
@@ -952,6 +975,7 @@ function start() {
     testPackageRunner,
     transactionsRepo,
     serviceTests,
+    severityRulesRepo,
     speedtestResultsRepo,
     integrationsRepo,
     integrationAuditRepo,

@@ -15,10 +15,17 @@ function makeFakePool() {
     rows,
     async query(sql, params = []) {
       if (/^INSERT INTO findings/i.test(sql)) {
-        const [id, host_id, metric, severity, kind, observed, baseline, deviation,
-          window_from, window_to, explanation, evidence, correlated_with, acked, created_at] = params;
-        rows.push({ id, host_id, metric, severity, kind, observed, baseline, deviation,
-          window_from, window_to, explanation, evidence, correlated_with, acked, created_at });
+        // The column names are read out of the statement rather than being
+        // listed here. A positional list silently maps every value to the wrong
+        // column the day a column is added, and the tests then fail somewhere
+        // else entirely — which is exactly what happened when `original_severity`
+        // and `severity_rule_id` arrived.
+        const cols = sql.slice(sql.indexOf('(') + 1, sql.indexOf(')'))
+          .split(',').map((c) => c.trim()).filter(Boolean);
+        assert.equal(cols.length, params.length, 'INSERT column count matches its parameters');
+        const row = {};
+        cols.forEach((c, i) => { row[c] = params[i]; });
+        rows.push(row);
         return [{ affectedRows: 1 }];
       }
       if (/^SELECT .* FROM findings WHERE id = \?/i.test(sql)) {

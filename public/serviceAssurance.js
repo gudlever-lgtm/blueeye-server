@@ -1195,6 +1195,15 @@
           el('button', { class: 'ghost small', onclick: function () { state.testId = null; draw(); } }, '← ' + t('sa.back')),
           section(test.name, [
             isOperator() ? el('button', { class: 'primary', onclick: function () { runTest(test); } }, t('sa.test.run')) : null,
+            // The designer below saves the STEPS. Everything else about a test
+            // — its name, what it is for, which login it uses, whether it runs
+            // at all — was only settable at creation and unreachable after,
+            // which is how a test ends up named "Untitled" forever.
+            isOperator() ? el('button', { class: 'ghost small', onclick: function () { testForm(test); } }, t('sa.edit')) : null,
+            isOperator() ? el('button', {
+              class: 'ghost small danger',
+              onclick: function () { deleteTest(test); },
+            }, t('sa.delete')) : null,
           ]),
           test.application_name
             ? el('p', { class: 'muted sa-detail-app' }, t('sa.test.runsAgainst', { application: test.application_name }))
@@ -1224,6 +1233,77 @@
           historyPanel(test),
           schedulePanel(test, schedules));
       });
+    }
+
+    // Everything about a test EXCEPT its steps. The steps have the designer
+    // below; these fields had no way in at all once the test existed.
+    //
+    // `application_id` is not here on purpose. Moving a test to another
+    // application would leave every step pointing at the old one's pages, its
+    // history describing a service it no longer tests, and its journeys quietly
+    // spanning two applications. Delete and rebuild is the honest path.
+    function testForm(test) {
+      var name = el('input', { type: 'text', value: test.name || '' });
+      var desc = el('textarea', { rows: 2 }, test.description || '');
+      var enabled = el('input', { type: 'checkbox' });
+      enabled.checked = test.enabled !== false;
+      var credential = el('select', {}, el('option', { value: '' }, t('sa.test.noLogin')));
+      var errors = el('div', { class: 'sa-form-errors' });
+
+      var body = el('div', {},
+        field(t('sa.app.name'), name),
+        field(t('sa.app.description'), desc, t('sa.test.descriptionHelp')),
+        field(t('sa.test.login'), credential, t('sa.test.loginHelp')),
+        el('label', { class: 'sa-field sa-field-inline' }, enabled,
+          el('span', {}, t('sa.test.enabled'))),
+        el('p', { class: 'sa-help' }, t('sa.test.enabledHelp')),
+        errors);
+
+      // The logins belong to the application, so they are read through it
+      // rather than from a flat list that would show every application's.
+      // If that read fails the dialog still opens — the select simply keeps
+      // whatever the test already has, rather than silently offering to clear it.
+      api(API + '/applications/' + test.application_id).then(function (app) {
+        (app.credentials || []).forEach(function (c) {
+          var opt = el('option', { value: String(c.id) }, c.username ? c.name + ' (' + c.username + ')' : c.name);
+          if (Number(test.credential_id) === Number(c.id)) opt.selected = true;
+          credential.append(opt);
+        });
+      }).catch(function () {
+        if (test.credential_id) {
+          credential.append(el('option', { value: String(test.credential_id), selected: 'selected' }, t('sa.test.loginUnreadable')));
+          credential.disabled = true;
+        }
+      });
+
+      modal(t('sa.test.edit'), body, function () {
+        return api(API + '/tests/' + test.id, {
+          method: 'PUT',
+          body: {
+            name: name.value.trim(),
+            description: desc.value.trim() || null,
+            credential_id: credential.value ? Number(credential.value) : null,
+            enabled: enabled.checked,
+          },
+        }).then(function () { toast(t('sa.settings.saved')); draw(); })
+          .catch(function (e) { showErrors(errors, e); throw e; });
+      });
+    }
+
+    // Deleting a test is not only deleting a test.
+    //
+    // A test that belongs to a journey is removed from that journey by the
+    // database (the step row cascades), so a journey silently gets shorter and
+    // keeps reporting healthy while the thing it was watching is no longer
+    // watched. That is worth one extra sentence before the confirm, naming the
+    // journeys, rather than finding out months later.
+    function deleteTest(test) {
+      var names = (test.journeys || []).map(function (j) { return j.name; });
+      if (names.length && !root.confirm(t('sa.test.deleteJourneyWarn', { journeys: names.join(', ') }))) return;
+      if (!confirmDelete(test.name)) return;
+      api(API + '/tests/' + test.id, { method: 'DELETE' })
+        .then(function () { state.testId = null; toast(t('sa.delete')); draw(); })
+        .catch(function (e) { toast(err(e), true); });
     }
 
     // ------------------------------------------------------- self-healing
@@ -2475,7 +2555,13 @@
       }
       var rows = incidents.map(function (incident) {
         return el('tr', {},
-          el('td', {}, severityChip(incident.severity)),
+          el('td', {}, severityChip(incident.severity),
+            // A severity a rule changed says so. A downgraded critical that
+            // looks exactly like a detected warning is how a dashboard goes
+            // green without anyone deciding it should.
+            incident.original_severity
+              ? el('div', { class: 'muted' }, t('sa.health.wasSeverity', { severity: incident.original_severity }))
+              : null),
           el('td', {}, incident.subject_label || incident.subject_key),
           el('td', {},
             el('div', {}, incident.summary || ''),
@@ -2485,9 +2571,25 @@
               el('pre', { class: 'sa-pre' }, (incident.evidence || []).join('\n') + (incident.explanation ? '\n\n' + incident.explanation : '')))),
           el('td', {}, when(incident.opened_at)),
           el('td', {}, String(incident.occurrences || 1)),
-          el('td', {}, isOperator()
-            ? el('button', { class: 'ghost small', onclick: function () { resolveIncident(incident); } }, t('sa.health.resolve'))
-            : null));
+          el('td', {},
+            isOperator()
+              ? el('button', { class: 'ghost small', onclick: function () { resolveIncident(incident); } }, t('sa.health.resolve'))
+              : null,
+            // Only when the host dashboard offers the form. The module does not
+            // own the severity-rule screens and will not grow a second copy.
+            (isAdmin() && ctx.editSeverityRule)
+              ? el('button', {
+                class: 'ghost small',
+                title: t('sa.health.severityRuleHelp'),
+                onclick: function () {
+                  ctx.editSeverityRule({
+                    source: 'service_assurance',
+                    match_kind: incident.kind,
+                    match_application_id: incident.application_id,
+                  });
+                },
+              }, t('sa.health.severityRule'))
+              : null));
       });
       return el('div', { class: 'sa-panel' },
         section(t('sa.health.incidents'), null),

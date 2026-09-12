@@ -3454,16 +3454,34 @@ function findingRow(agentName, f) {
   const action = f.acked
     ? el('span', { class: 'muted' }, 'acknowledged')
     : (canWrite() ? el('button', { class: 'small ghost', onclick: (e) => ackFinding(f, e.target) }, 'Acknowledge') : null);
+  // A severity a rule changed says so, next to the badge. A downgraded critical
+  // that looks exactly like a warning somebody detected is how an estate goes
+  // quiet without anyone deciding it should.
+  const ruled = f.originalSeverity
+    ? el('span', {
+      class: 'muted severity-ruled',
+      title: t('sev.ruledHelp', { detected: f.originalSeverity, stored: f.severity }),
+    }, ' · ' + t('sev.was', { severity: f.originalSeverity }))
+    : null;
   const tr = el('tr', { class: f.acked ? 'acked' : '' },
     el('td', { class: 'muted' }, fmtDate(f.createdAt)),
     el('td', {}, agentName(f.hostId)),
     el('td', {}, f.metric),
     el('td', {}, el('span', { class: `badge ${esc(f.severity || 'INFO')}` }, f.severity || 'INFO'),
-      f.kind === 'FLATLINE' ? el('span', { class: 'muted' }, ' flatline') : null),
+      f.kind === 'FLATLINE' ? el('span', { class: 'muted' }, ' flatline') : null, ruled),
     el('td', {}, dev),
     el('td', {}, el('div', {}, f.explanation || '–'), corr),
     el('td', {}, action, action ? ' ' : null,
-      el('button', { class: 'small ghost', title: 'What changed on this device just before the anomaly', onclick: (e) => toggleFindingContext(f, e.target) }, 'What changed?')));
+      el('button', { class: 'small ghost', title: 'What changed on this device just before the anomaly', onclick: (e) => toggleFindingContext(f, e.target) }, 'What changed?'),
+      // The thought "this should be a warning for us" happens HERE, looking at
+      // the event — not in Settings, later, trying to remember what it said.
+      isAdmin() ? el('button', {
+        class: 'small ghost',
+        title: t('sev.fromEventHelp'),
+        onclick: () => editSeverityRule(null, {
+          source: 'finding', match_metric: f.metric, match_kind: f.kind, match_host_id: f.hostId,
+        }),
+      }, t('sev.fromEvent')) : null));
   tr.dataset.findingId = f.id;
   return tr;
 }
@@ -11071,7 +11089,7 @@ let serviceAssuranceTab = null;
 // tab is [key, label, adminOnly]; non-admins only ever see the personal section.
 const SETTINGS_GROUPS = [
   ['Access & security', [['users', 'Users', true], ['auth', 'Authentication', true], ['apitokens', 'API tokens', true], ['agentkey', 'Agent key', true]]],
-  ['Detection & alerts', [['analyse', 'Analysis', true], ['alerting', 'Alerting', true], ['runbooks', 'Runbooks', true], ['integrations', 'ITSM', true], ['cmdb', 'CMDB', true], ['ai', 'AI', true], ['maintenance', 'Maintenance', true]]],
+  ['Detection & alerts', [['analyse', 'Analysis', true], ['alerting', 'Alerting', true], ['severity', 'Severity rules', true], ['runbooks', 'Runbooks', true], ['integrations', 'ITSM', true], ['cmdb', 'CMDB', true], ['ai', 'AI', true], ['maintenance', 'Maintenance', true]]],
   ['Data', [['database', 'Database', true], ['retention', 'Retention', true], ['types', 'Traffic types', true], ['map', 'Map', true]]],
   ['System', [['updates', 'Updates', true], ['agents', 'Agents', true], ['screening', 'Test Settings', true], ['assurance', 'Service Assurance', true]]],
   ['Personal', [['appearance', 'Appearance', false], ['license', 'License', false]]],
@@ -11703,6 +11721,7 @@ views.settings = async () => {
     types: settingsTypesView,
     analyse: settingsAnalyseView,
     alerting: settingsAlertingView,
+    severity: settingsSeverityRulesView,
     runbooks: settingsRunbooksView,
     integrations: settingsIntegrationsView,
     cmdb: settingsCmdbView,
@@ -13200,6 +13219,156 @@ async function settingsMaintenanceView() {
 // Runbooks admin (Fase 3): the static finding-type → recommended-action mapping
 // surfaced on the event (Situations) page. Admin CRUD; clones the list + modal
 // + delete-confirm pattern used elsewhere.
+// Settings → Severity rules.
+//
+// BlueEyes decides severity at detection — the analyser from a MAD z-score,
+// Service Assurance from the kind of failure. Both are reasonable defaults and
+// neither knows your business: the packet loss that pages one customer at 3am is
+// the wifi at another one's warehouse.
+//
+// A rule says "events matching this get that severity, from now on". It applies
+// when an event is STORED, so alerting reads it and history records what was
+// actually decided at the time. It never applies backwards on its own — that is
+// the separate, counted, confirmed action on each row.
+const SEVERITY_RULE_SOURCES = ['finding', 'service_assurance'];
+
+// Spelled out rather than built from the value, because the UI gate sweeps
+// literal t() keys and a key assembled at runtime is a key nobody can find.
+function severityRuleSourceLabel(source) {
+  return source === 'service_assurance' ? t('sev.source.serviceAssurance') : t('sev.source.finding');
+}
+
+function severityRuleScope(r) {
+  const parts = [];
+  if (r.match_metric) parts.push(t('sev.scope.metric', { value: r.match_metric }));
+  if (r.match_kind) parts.push(t('sev.scope.kind', { value: r.match_kind }));
+  if (r.match_host_id) parts.push(t('sev.scope.agent', { value: r.match_host_id }));
+  if (r.match_application_id) parts.push(t('sev.scope.application', { value: r.match_application_id }));
+  // Never reachable through the form (a rule with nothing pinned down is
+  // refused server-side), but said plainly rather than shown as an empty cell
+  // if one ever arrives from an older row or the API.
+  return parts.length ? parts.join(' · ') : t('sev.scope.everything');
+}
+
+async function settingsSeverityRulesView() {
+  const rules = await api('/api/severity-rules');
+  const root = el('div');
+  root.append(el('p', { class: 'muted settings-intro' }, t('sev.intro')));
+
+  root.append(el('div', { class: 'section-head' },
+    el('h3', {}, t('sev.title', { count: rules.length })),
+    isAdmin() ? el('button', { class: 'small', onclick: () => editSeverityRule() }, t('sev.new')) : null));
+
+  if (!rules.length) {
+    root.append(el('div', { class: 'empty' }, t('sev.empty')));
+    return root;
+  }
+
+  const rows = rules.map((r) => el('tr', { class: r.enabled ? '' : 'acked' },
+    el('td', { class: 'muted' }, severityRuleSourceLabel(r.source)),
+    el('td', {}, severityRuleScope(r)),
+    el('td', {}, el('span', { class: `badge ${esc(r.severity)}` }, r.severity)),
+    el('td', {}, r.reason || '—'),
+    // A rule nobody can tell is dead is a rule nobody dares delete.
+    el('td', { class: 'muted' }, r.applied_count
+      ? t('sev.usedCount', { count: r.applied_count, when: fmtDate(r.last_applied_at) })
+      : t('sev.neverUsed')),
+    el('td', {}, r.enabled
+      ? el('span', { class: 'badge active' }, t('sev.on'))
+      : el('span', { class: 'badge' }, t('sev.off'))),
+    el('td', {}, isAdmin() ? el('div', { class: 'row-actions' },
+      el('button', { class: 'small ghost', onclick: () => editSeverityRule(r) }, t('sev.edit')),
+      el('button', { class: 'small ghost', onclick: () => applySeverityRuleToOpen(r) }, t('sev.applyToOpen')),
+      el('button', { class: 'small ghost', onclick: () => deleteSeverityRule(r) }, t('sev.delete'))) : null)));
+
+  root.append(el('div', { class: 'tablewrap' }, el('table', {},
+    el('thead', {}, el('tr', {},
+      el('th', {}, t('sev.col.source')), el('th', {}, t('sev.col.matches')),
+      el('th', {}, t('sev.col.severity')), el('th', {}, t('sev.col.why')),
+      el('th', {}, t('sev.col.used')), el('th', {}, t('sev.col.state')), el('th', {}, ''))),
+    el('tbody', {}, ...rows))));
+  return root;
+}
+
+// `prefill` lets an event open this form already describing itself, so writing
+// a rule is one click from the event that prompted it rather than a trip to
+// Settings and a guess at what to type.
+async function editSeverityRule(r, prefill) {
+  const editing = r && r.id;
+  const source = (r && r.source) || (prefill && prefill.source) || 'finding';
+  const v = (name) => (r && r[name] != null ? String(r[name]) : ((prefill && prefill[name] != null) ? String(prefill[name]) : ''));
+
+  // Only the fields that belong to this source. Offering the others would let
+  // someone write a rule that matches far more than they believe — the server
+  // refuses them, but a form should not be able to ask for one.
+  const scopeFields = source === 'finding'
+    ? [
+      { name: 'match_metric', label: t('sev.field.metric'), type: 'text', value: v('match_metric') },
+      { name: 'match_kind', label: t('sev.field.kind'), type: 'text', value: v('match_kind') },
+      { name: 'match_host_id', label: t('sev.field.agent'), type: 'text', value: v('match_host_id') },
+    ]
+    : [
+      { name: 'match_kind', label: t('sev.field.saKind'), type: 'text', value: v('match_kind') },
+      { name: 'match_application_id', label: t('sev.field.application'), type: 'text', value: v('match_application_id') },
+    ];
+
+  const fields = [
+    // The source decides which fields mean anything, so it is fixed once the
+    // rule exists rather than silently orphaning the ones already filled in.
+    ...(editing ? [] : [{
+      name: 'source', label: t('sev.field.source'), type: 'select', value: source,
+      options: SEVERITY_RULE_SOURCES.map((value) => ({ value, label: severityRuleSourceLabel(value) })),
+      hint: t('sev.field.sourceHint'),
+    }]),
+    ...scopeFields,
+    { name: 'severity', label: t('sev.field.severity'), type: 'select', value: (r && r.severity) || 'WARN',
+      options: ['INFO', 'WARN', 'CRIT'].map((x) => ({ value: x, label: x })) },
+    { name: 'reason', label: t('sev.field.reason'), type: 'textarea', value: (r && r.reason) || '',
+      hint: t('sev.field.reasonHint') },
+    { name: 'enabled', label: t('sev.field.state'), type: 'select', value: (r && r.enabled === false) ? 'false' : 'true',
+      options: [{ value: 'true', label: t('sev.on') }, { value: 'false', label: t('sev.off') }] },
+  ];
+
+  openModal(editing ? t('sev.editTitle') : t('sev.newTitle'), fields, async (vals) => {
+    const body = {
+      source: editing ? r.source : vals.source,
+      severity: vals.severity,
+      reason: vals.reason,
+      enabled: vals.enabled === 'true',
+    };
+    // A blank box means "any", which the API spells as null. Sending '' would
+    // be a rule that matches the empty string and therefore nothing.
+    for (const f of scopeFields) body[f.name] = vals[f.name].trim() || null;
+    await api(editing ? `/api/severity-rules/${r.id}` : '/api/severity-rules', {
+      method: editing ? 'PUT' : 'POST', body,
+    });
+    closeModal();
+    toast(t('sev.saved'));
+    render();
+  });
+}
+
+// Counts first, always. "412 events" before it happens rather than after.
+async function applySeverityRuleToOpen(r) {
+  let dry;
+  try { dry = await api(`/api/severity-rules/${r.id}/apply-to-open`, { method: 'POST', body: {} }); }
+  catch (err) { toast(errText(err), true); return; }
+  if (!dry.changed) { toast(t('sev.applyNone')); return; }
+  if (!confirm(`${dry.note}\n\n${t('sev.applyConfirm')}`)) return;
+  try {
+    const done = await api(`/api/severity-rules/${r.id}/apply-to-open`, { method: 'POST', body: { confirm: true } });
+    toast(done.note);
+    render();
+  } catch (err) { toast(errText(err), true); }
+}
+
+async function deleteSeverityRule(r) {
+  // Said plainly: deleting the rule does not un-decide what it already decided.
+  if (!confirm(t('sev.deleteConfirm'))) return;
+  try { await api(`/api/severity-rules/${r.id}`, { method: 'DELETE' }); toast(t('sev.deleted')); render(); }
+  catch (err) { toast(errText(err), true); }
+}
+
 async function settingsRunbooksView() {
   const { runbooks } = await api('/api/runbooks');
   const root = el('div');
@@ -15091,6 +15260,11 @@ views.serviceAssurance = async () => {
     },
     // "No worker is connected" is only useful if it says where to look.
     openDocs: () => gotoDocs('assurance-worker'),
+    // "This should be a warning for us" is a thought people have while looking
+    // at the incident, not while sitting in Settings later trying to remember
+    // what it said. The module describes the incident; the form lives here with
+    // the rest of the severity-rule screens.
+    editSeverityRule: (prefill) => editSeverityRule(null, prefill),
   });
 };
 

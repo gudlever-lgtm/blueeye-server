@@ -41,6 +41,9 @@
 .sa-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
 .sa-field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
 .sa-field-label { font-size: 0.85rem; font-weight: 600; }
+/* A checkbox and its words read as one line, not as a label stacked above a box. */
+.sa-field-inline { flex-direction: row; align-items: center; gap: 8px; margin-bottom: 4px; }
+.sa-field-inline input[type="checkbox"] { width: auto; margin: 0; }
 .sa-field input[type="text"], .sa-field input[type="url"], .sa-field input[type="number"],
 .sa-field input[type="password"], .sa-field select, .sa-field textarea {
   padding: 7px 9px; border: 1px solid var(--hairline, #e5e7eb);

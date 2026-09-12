@@ -1,5 +1,82 @@
 # Changelog
 
+## 0.129.0 — V3 Phase 1: the observation model and Service Health 2.0
+
+The first two pieces of `docs/service-assurance-v3.md`. Nothing in V1 or V2
+changes; these are read by what comes next.
+
+### Observations
+
+An observation is one typed fact with a layer and a source — browser, page, API,
+application, server, network, infrastructure, assurance. Everything V3 reasons
+over reads these rather than re-parsing screenshots, error strings and prose. A
+run already KNEW all of this; it was scattered across four columns in three
+shapes and had to be re-interpreted by every reader.
+
+Three rules the rest of V3 depends on:
+
+**`unknown` never collapses into `ok`.** "We did not look" and "we looked and it
+was fine" are different answers. The whole value of saying "the network was
+healthy" is that somebody checked, and a layer nobody observed is reported as
+unknown rather than quietly passing.
+
+**An observation states what was SEEN, never what it means.** "HTTP 500 from
+/api/customer/search" is an observation; "the Customer API is broken" is a
+conclusion, and conclusions belong to the correlation engine.
+
+**A request that never completed is a NETWORK fact, not an API one.** Status 0
+means nothing answered. Reading it as "the API answered 0" would put a network
+fault on the API's record and send correlation the wrong way.
+
+Accessibility findings and visual differences are observed but never counted as
+faults — the V2 rule does not bend here. Correlation should be able to SEE that
+the page also changed shape on the run where it broke, without weighing it as a
+failure.
+
+It is a table rather than another JSON column on the run because correlation asks
+questions ACROSS runs — "has this endpoint failed before", "did the network look
+fine every time" — which a per-run blob cannot answer without reading every row.
+Observations cascade with their run, so retention keeps the table from becoming
+the module's growth risk.
+
+### Service Health 2.0
+
+One assessment of a service, from journey verdicts weighted by criticality, what
+the layers observed, performance against a baseline, and whether the same thing
+keeps happening.
+
+A CRITICAL journey failing is the service failing — no number of healthy
+low-criticality journeys makes up for "a caseworker cannot sign in". A normal one
+failing degrades it. Slow is DEGRADED and never FAILED, because a slow service
+still works and a latency spike does not belong in the same box as an outage.
+Repetition degrades but never fails on its own: it says a problem is persistent,
+not how bad it is.
+
+**UNKNOWN is a real state.** A service nothing has run against is not a service
+that works, and reporting it green is the most dangerous thing a health screen
+can do. But unknown also loses to every real verdict, so one newly-added journey
+cannot grey out a service with three passing ones.
+
+**The score is never a black box.** 0-100 in four published parts — functional,
+availability, API, performance — with published weights. An unknown part is left
+OUT and the weights re-normalised over what is known, rather than scored zero:
+punishing a service for a check nobody ran would be a lie about the service.
+"Why is it 82?" always has an answer on screen.
+
+### Fixed
+
+- `assessService(null)` threw. A default parameter only covers `undefined`, and a
+  health assessment that throws is one that takes a dashboard down with it.
+- **The `Number(null)` sweep caught this commit's own new code**, and it was
+  right. Both new modules guarded measurements with
+  `Number.isFinite(Number(value))`, which lets `''` and `'   '` through as a
+  measurement of **zero** — so a run nobody timed would have read as a service
+  that answered instantly, and the health score would have called it infinitely
+  fast. Both now use `numOrNull`, and there are tests pinning that a missing
+  timing produces no measurement at all while a genuine zero still does.
+
+Migration 089.
+
 ## 0.128.0 — visual regression (V2 §8), and the V3 specification
 
 ### The problem this feature usually fails at

@@ -2307,3 +2307,48 @@ CREATE TABLE IF NOT EXISTS service_test_baselines (
   CONSTRAINT fk_stbase_run FOREIGN KEY (source_run_id) REFERENCES service_test_runs(id) ON DELETE SET NULL,
   CONSTRAINT fk_stbase_user FOREIGN KEY (accepted_by) REFERENCES users(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- V3 Phase 1: the observation model (docs/service-assurance-v3.md).
+--
+-- An OBSERVATION is one typed fact a run produced, with a source. Everything
+-- V3 reasons over — correlation, root cause, incidents, health — reads
+-- observations rather than re-parsing screenshots, error strings and prose.
+--
+-- Why a table rather than another JSON column on the run: correlation asks
+-- questions ACROSS runs ("has this API failed before", "did the network look
+-- fine every time"), and a JSON blob per run cannot be queried that way without
+-- reading every row. This is the first thing in the module that is genuinely
+-- relational.
+--
+-- Written by the run, never by a person. An observation is what was seen; if it
+-- can be edited it is an opinion, and the whole point is that the evidence
+-- underneath a conclusion is not editable.
+CREATE TABLE IF NOT EXISTS service_observations (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  run_id INT DEFAULT NULL,
+  test_id INT DEFAULT NULL,
+  journey_id INT DEFAULT NULL,
+  application_id INT DEFAULT NULL,
+  environment_id INT DEFAULT NULL,
+  layer ENUM('browser','page','api','application','server','network','infrastructure','assurance')
+    NOT NULL,
+  kind VARCHAR(64) NOT NULL,
+  subject VARCHAR(512) DEFAULT NULL,
+  outcome ENUM('ok','bad','unknown') NOT NULL DEFAULT 'unknown',
+  value DOUBLE DEFAULT NULL,
+  unit VARCHAR(32) DEFAULT NULL,
+  summary VARCHAR(512) DEFAULT NULL,
+  detail JSON DEFAULT NULL,
+  observed_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_obs_app_time (application_id, observed_at),
+  KEY idx_obs_layer (application_id, layer, outcome, observed_at),
+  KEY idx_obs_subject (application_id, kind, subject(191), observed_at),
+  KEY idx_obs_run (run_id),
+  KEY idx_obs_journey (journey_id, observed_at),
+  CONSTRAINT fk_obs_run FOREIGN KEY (run_id) REFERENCES service_test_runs(id) ON DELETE CASCADE,
+  CONSTRAINT fk_obs_test FOREIGN KEY (test_id) REFERENCES service_test_tests(id) ON DELETE CASCADE,
+  CONSTRAINT fk_obs_journey FOREIGN KEY (journey_id) REFERENCES service_test_journeys(id) ON DELETE SET NULL,
+  CONSTRAINT fk_obs_app FOREIGN KEY (application_id) REFERENCES service_test_applications(id) ON DELETE CASCADE,
+  CONSTRAINT fk_obs_env FOREIGN KEY (environment_id) REFERENCES service_test_environments(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

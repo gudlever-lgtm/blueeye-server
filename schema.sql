@@ -2304,8 +2304,7 @@ CREATE TABLE IF NOT EXISTS service_test_baselines (
   KEY idx_stbase_test (test_id, enabled),
   CONSTRAINT fk_stbase_test FOREIGN KEY (test_id) REFERENCES service_test_tests(id) ON DELETE CASCADE,
   CONSTRAINT fk_stbase_env FOREIGN KEY (environment_id) REFERENCES service_test_environments(id) ON DELETE CASCADE,
-  CONSTRAINT fk_stbase_run FOREIGN KEY (source_run_id) REFERENCES service_test_runs(id) ON DELETE SET NULL,
-  CONSTRAINT fk_stbase_user FOREIGN KEY (accepted_by) REFERENCES users(id) ON DELETE SET NULL
+  CONSTRAINT fk_stbase_run FOREIGN KEY (source_run_id) REFERENCES service_test_runs(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- V3 Phase 1: the observation model (docs/service-assurance-v3.md).

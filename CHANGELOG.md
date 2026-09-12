@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.130.1 — fix: the server container would not start
+
+Migration 088 could never apply. `service_test_baselines.accepted_by` was
+declared `INT` with a foreign key to `users(id)`, which is `INT UNSIGNED`. MySQL
+requires a foreign key column to match the referenced column exactly, signedness
+included, so `CREATE TABLE` failed with errno 3780, `node src/migrate.js` exited
+1, and the container died before the server ever started.
+
+`INT` and `INT UNSIGNED` look identical at a glance. They are not the same type.
+
+The foreign key is removed rather than the column retyped, for two reasons.
+It was the ONLY foreign key to `users(id)` anywhere in the schema — every other
+table stores a user id as a plain column — and `ON DELETE SET NULL` would have
+erased who accepted a baseline the moment that person left, losing exactly the
+provenance the column exists to keep.
+
+### Why nothing caught it
+
+The suite runs against fakes and never applies the SQL, so a migration MySQL
+rejects passes every test and fails on the deployment, with the site down. Two
+gate tests now close that gap:
+
+- **every foreign key matches the exact type of the column it references** —
+  parsed out of `schema.sql`, normalising away display width and keeping
+  signedness, which is the part that bites.
+- **foreign key constraint names are unique across the whole schema** — InnoDB
+  constraint names are schema-global rather than per-table, which is a separate
+  way to fail a migration on a deployment and nowhere else.
+
+The first was verified by putting the bug back and watching it fail. A guard that
+does not fail on the real defect is worth nothing.
+
 ## 0.130.0 — V3 Phase 1: the correlation engine
 
 Observations are facts. Correlation relates them into a picture:

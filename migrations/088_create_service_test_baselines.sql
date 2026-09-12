@@ -48,6 +48,12 @@ CREATE TABLE IF NOT EXISTS service_test_baselines (
 
   -- Who decided this is what the page should look like, and when. A baseline
   -- nobody will admit to accepting is one nobody dares replace.
+  --
+  -- No foreign key to `users`, deliberately, and for two reasons. It matches
+  -- every other user reference in this module (`created_by`, `updated_by`,
+  -- `resolved_by` are all plain columns), and ON DELETE SET NULL would ERASE
+  -- who accepted a baseline the moment that person left — losing exactly the
+  -- provenance this column exists to keep.
   accepted_by INT DEFAULT NULL,
   accepted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   -- The run the image was taken from, so the baseline can be traced back to the
@@ -68,9 +74,7 @@ CREATE TABLE IF NOT EXISTS service_test_baselines (
   CONSTRAINT fk_stbase_env FOREIGN KEY (environment_id)
     REFERENCES service_test_environments(id) ON DELETE CASCADE,
   CONSTRAINT fk_stbase_run FOREIGN KEY (source_run_id)
-    REFERENCES service_test_runs(id) ON DELETE SET NULL,
-  CONSTRAINT fk_stbase_user FOREIGN KEY (accepted_by)
-    REFERENCES users(id) ON DELETE SET NULL
+    REFERENCES service_test_runs(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- The comparison outcome for a run, beside `accessibility` and for the same

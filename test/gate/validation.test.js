@@ -365,3 +365,69 @@ test('the generated schema.sql is in sync with the migration chain (npm run buil
   assert.ok(typeof out === 'string');
   assert.equal(fs.readFileSync(path.join(root, 'schema.sql'), 'utf8'), before, 'schema.sql changed on rebuild — run npm run build-schema and commit');
 });
+
+// A foreign key whose column type does not EXACTLY match the column it
+// references is rejected by MySQL at CREATE TABLE time — errno 3780 — and the
+// container then exits 1 on `node src/migrate.js` before the server ever starts.
+//
+// Nothing in the test suite catches it, because the suite runs against fakes and
+// never applies the SQL. It is found on the deployment, by a person, with the
+// site down. That is exactly what happened with `service_test_baselines`:
+// `accepted_by INT` referencing `users(id)`, which is INT UNSIGNED.
+//
+// Signedness is the trap: `INT` and `INT UNSIGNED` look identical at a glance
+// and are not the same type.
+test('every foreign key matches the exact type of the column it references', () => {
+  const schema = fs.readFileSync(path.join(__dirname, '..', '..', 'schema.sql'), 'utf8');
+
+  // column definitions per table, and the primary/unique keys a FK can target
+  const tables = new Map();
+  for (const block of schema.split(/CREATE TABLE (?:IF NOT EXISTS )?/).slice(1)) {
+    const name = (block.match(/^`?([A-Za-z0-9_]+)`?\s*\(/) || [])[1];
+    if (!name) continue;
+    const columns = new Map();
+    for (const line of block.split('\n')) {
+      const m = line.match(/^\s+`?([a-z_][a-z0-9_]*)`?\s+((?:BIG|SMALL|TINY|MEDIUM)?INT(?:\(\d+\))?(?:\s+UNSIGNED)?|CHAR\(\d+\)|VARCHAR\(\d+\)|BIGINT)/i);
+      if (!m) continue;
+      // Normalised: display width is cosmetic, signedness is not.
+      columns.set(m[1], m[2].toUpperCase().replace(/\(\d+\)/, '').replace(/\s+/g, ' ').trim());
+    }
+    tables.set(name, columns);
+  }
+
+  const mismatches = [];
+  for (const block of schema.split(/CREATE TABLE (?:IF NOT EXISTS )?/).slice(1)) {
+    const table = (block.match(/^`?([A-Za-z0-9_]+)`?\s*\(/) || [])[1];
+    if (!table) continue;
+    const own = tables.get(table) || new Map();
+    const fkRe = /FOREIGN KEY\s*\(\s*`?([a-z_][a-z0-9_]*)`?\s*\)\s*REFERENCES\s+`?([A-Za-z0-9_]+)`?\s*\(\s*`?([a-z_][a-z0-9_]*)`?\s*\)/gi;
+    for (const m of block.matchAll(fkRe)) {
+      const [, column, targetTable, targetColumn] = m;
+      const mine = own.get(column);
+      const theirs = (tables.get(targetTable) || new Map()).get(targetColumn);
+      // A type this parser does not understand is skipped rather than guessed
+      // at — a false failure here would block every build.
+      if (!mine || !theirs) continue;
+      if (mine !== theirs) {
+        mismatches.push(`${table}.${column} is ${mine} but ${targetTable}.${targetColumn} is ${theirs}`);
+      }
+    }
+  }
+  assert.deepEqual(mismatches, [],
+    'MySQL refuses these foreign keys (errno 3780) and the server container exits 1 on migrate');
+});
+
+// ALTER TABLE ... ADD CONSTRAINT with a name that already exists anywhere in the
+// schema fails too: InnoDB constraint names are schema-global, not per-table.
+test('foreign key constraint names are unique across the whole schema', () => {
+  const schema = fs.readFileSync(path.join(__dirname, '..', '..', 'schema.sql'), 'utf8');
+  const seen = new Map();
+  const dupes = [];
+  for (const m of schema.matchAll(/CONSTRAINT\s+`?([A-Za-z0-9_]+)`?\s+FOREIGN KEY/gi)) {
+    const name = m[1];
+    if (seen.has(name)) dupes.push(name);
+    seen.set(name, true);
+  }
+  assert.deepEqual([...new Set(dupes)], [],
+    'InnoDB constraint names are schema-global — a duplicate fails the migration');
+});

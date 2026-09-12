@@ -6,7 +6,9 @@ const { intOrNull } = require('./shape');
 // Data-access for `service_test_incidents` (migration 080) — the durable record
 // of "something is wrong here, and here is since when".
 //
-// The dedup identity is `subject_key` (`test:<id>`, `certificate:<host>:<port>`)
+// The dedup identity is `subject_key` (`test:<id>`,
+// `certificate:<application_id>:<host>:<port>` — two applications on one host
+// keep their own certificate row, so they keep their own incident)
 // and there is at most ONE open row per subject at a time. A repeat observation
 // touches that row instead of writing another, so a service that has been down
 // all weekend is one incident with 400 occurrences rather than 400 incidents.

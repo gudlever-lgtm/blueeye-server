@@ -1,5 +1,7 @@
 # Recording a user journey
 
+> **New to Service Assurance?** Read [the guide](service-assurance-guide.md) first — it is written to be read front to back. This document is a design of record.
+
 BlueEyes can write a test by watching you perform the journey. You open the real
 application in your own browser, sign in as yourself, click through what you want
 monitored — and BlueEyes turns that into a test you can review, edit and schedule

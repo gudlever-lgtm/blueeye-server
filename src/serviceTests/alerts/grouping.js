@@ -113,9 +113,25 @@ function endpointsOf(rawIncident) {
 function hostOf(rawIncident) {
   const incident = (rawIncident && typeof rawIncident === 'object') ? rawIncident : {};
   const key = text(incident.subject_key);
-  // `certificate:portal.kunde.dk:443` — the reactor's own shape.
-  const cert = /^certificate:([^:]+)/.exec(key);
-  if (cert) return cert[1].toLowerCase();
+  // The reactor writes `certificate:<application_id>:<host>:<port>`.
+  //
+  // This read the SECOND segment and got the application id. Two certificates on
+  // different hosts of the same application both came back as "1", and with the
+  // same kind they grouped into one alert reading "the same certificate_expiring
+  // on 1" — over-grouping, which is the dangerous direction, plus a message that
+  // means nothing.
+  //
+  // The spec that was supposed to catch it used `certificate:portal.kunde.dk:443`
+  // as its fixture — a shape nothing produces — so it confirmed the wrong parser
+  // against invented data. The fixture now comes from the reactor.
+  //
+  // Segments are searched for one that looks like a host rather than counted,
+  // because a positional read is what broke here and would break again the next
+  // time the key gains a part.
+  if (/^certificate:/.test(key)) {
+    const host = key.split(':').slice(1).find((part) => /^[a-z0-9.-]+\.[a-z]{2,}$/i.test(part));
+    return host ? host.toLowerCase() : null;
+  }
   for (const line of (Array.isArray(incident.evidence) ? incident.evidence : [])) {
     const url = text(typeof line === 'string' ? line : (line && line.summary)).match(/https?:\/\/([^/\s"')]+)/);
     if (url) return url[1].toLowerCase();

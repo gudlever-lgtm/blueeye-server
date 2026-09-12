@@ -1,5 +1,7 @@
 # When a test can no longer find something
 
+> **New to Service Assurance?** Read [the guide](service-assurance-guide.md) first — it is written to be read front to back. This document is a design of record.
+
 Applications change. A button gets a new id, a field gets renamed, a developer
 swaps a `<a>` for a `<button>`. The test that was watching it stops working —
 and the failure looks exactly like the service being broken, which is the one

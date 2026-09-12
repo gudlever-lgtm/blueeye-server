@@ -1,5 +1,7 @@
 # Visual regression
 
+> **New to Service Assurance?** Read [the guide](service-assurance-guide.md) first — it is written to be read front to back. This document is a design of record.
+
 *Spec: `docs/service-assurance-v2.md` §8.*
 
 Opt-in screenshot baselines on chosen steps: accept one, compare against it,

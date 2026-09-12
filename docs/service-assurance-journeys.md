@@ -1,5 +1,7 @@
 # User journeys
 
+> **New to Service Assurance?** Read [the guide](service-assurance-guide.md) first — it is written to be read front to back. This document is a design of record.
+
 A test tells you a page answered. A **journey** tells you whether someone can
 actually do their job.
 

@@ -14,6 +14,12 @@ const {
 } = require('../grouping');
 
 const AT = (iso) => new Date(iso);
+
+// The certificate subject_key EXACTLY as the reactor writes it, taken from the
+// reactor rather than retyped. The fixture used to be `certificate:<host>:<port>`
+// — a shape nothing produces — and the parser under test read the wrong segment
+// and agreed with it.
+const CERT_KEY = (applicationId, host, port) => `certificate:${applicationId}:${host}:${port}`;
 const BASE_TIME = '2026-09-12T09:00:00Z';
 
 let nextId = 0;
@@ -149,11 +155,55 @@ test('a different layer is never a link, however close in time', () => {
   assert.equal(result.alerts, 2);
 });
 
+test('the certificate subject_key this file assumes is the one the reactor writes', async () => {
+  // The bug this pins: the fixture said `certificate:<host>:<port>` and the
+  // reactor writes `certificate:<application_id>:<host>:<port>`. The parser read
+  // the second segment, got the application id, and every spec here agreed with
+  // it — because every spec used the same invented shape.
+  //
+  // So the shape is taken from the reactor, by running one. A key format that
+  // changes now fails here instead of silently making the grouping wrong.
+  const { createAssuranceReactor } = require('../../assurance/reactor');
+  const { makeServiceTests } = require('../../../../test-support/serviceTestsFakes');
+  const mod = makeServiceTests();
+  const reactor = createAssuranceReactor({
+    repositories: mod.repositories,
+    settings: mod.settings,
+    certificateChecker: {
+      check: async (target) => ({
+        host: target.host, port: target.port, status: 'expired', days_remaining: -5, checked_at: new Date(),
+      }),
+    },
+  });
+  await reactor.sweepCertificates({ force: true });
+  const [opened] = await mod.repositories.incidents.list({ status: 'open' });
+  assert.ok(opened, 'the reactor opened no certificate incident, so this spec proves nothing');
+
+  const parts = String(opened.subject_key).split(':');
+  assert.equal(parts[0], 'certificate');
+  assert.equal(parts.length, 4, `the key shape changed: ${opened.subject_key}`);
+  // And the parser finds the host in it — which is the thing that was broken.
+  assert.equal(hostOf(opened), parts[2].toLowerCase(), `hostOf read the wrong segment of ${opened.subject_key}`);
+  assert.ok(/\./.test(hostOf(opened)), 'hostOf returned something that is not a host name');
+});
+
+test('two certificates on DIFFERENT hosts of one application are two problems', () => {
+  // What the wrong parser produced: both came back as the application id, so
+  // they grouped into one alert reading "the same certificate_expiring on 1".
+  const result = groupAlerts({
+    incidents: [
+      incident({ subject_key: CERT_KEY(1, 'portal.kunde.dk', 443), kind: 'certificate_expiring' }),
+      incident({ subject_key: CERT_KEY(1, 'api.anden.dk', 443), kind: 'certificate_expiring' }),
+    ],
+  });
+  assert.equal(result.alerts, 2, 'two unrelated certificates were folded into one alert');
+});
+
 test('the same host with a DIFFERENT fault is not one problem', () => {
   const result = groupAlerts({
     incidents: [
-      incident({ subject_key: 'certificate:portal.kunde.dk:443', kind: 'certificate_expiring' }),
-      incident({ subject_key: 'certificate:portal.kunde.dk:443', kind: 'dns_failure' }),
+      incident({ subject_key: CERT_KEY(1, 'portal.kunde.dk', 443), kind: 'certificate_expiring' }),
+      incident({ subject_key: CERT_KEY(1, 'portal.kunde.dk', 443), kind: 'dns_failure' }),
     ],
   });
   assert.equal(result.alerts, 2, 'an expiring certificate and a DNS failure are two problems');
@@ -162,8 +212,8 @@ test('the same host with a DIFFERENT fault is not one problem', () => {
 test('the same fault on the same host IS one problem', () => {
   const result = groupAlerts({
     incidents: [
-      incident({ subject_key: 'certificate:portal.kunde.dk:443', kind: 'certificate_expiring' }),
-      incident({ subject_key: 'certificate:portal.kunde.dk:8443', kind: 'certificate_expiring' }),
+      incident({ subject_key: CERT_KEY(1, 'portal.kunde.dk', 443), kind: 'certificate_expiring' }),
+      incident({ subject_key: CERT_KEY(1, 'portal.kunde.dk', 8443), kind: 'certificate_expiring' }),
     ],
   });
   assert.equal(result.alerts, 1);
@@ -291,7 +341,7 @@ test('neither function throws, whatever it is handed', () => {
 });
 
 test('the helpers read what the incident RECORDED, not today’s data', () => {
-  assert.equal(hostOf(incident({ subject_key: 'certificate:portal.kunde.dk:443' })), 'portal.kunde.dk');
+  assert.equal(hostOf(incident({ subject_key: CERT_KEY(1, 'portal.kunde.dk', 443) })), 'portal.kunde.dk');
   assert.equal(hostOf(incident({ evidence: failedOn('https://api.kunde.dk/x') })), 'api.kunde.dk');
   assert.equal(hostOf(incident({ subject_key: 'test:4' })), null);
   assert.ok([...endpointsOf(incident({ evidence: failedOn('https://x.dk/api/a') }))].length);

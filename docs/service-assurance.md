@@ -1,5 +1,7 @@
 # BlueEye Service Assurance — implementation plan
 
+> **New to Service Assurance?** Read [the guide](service-assurance-guide.md) first — it is written to be read front to back. This document is a design of record.
+
 > **Know when your digital services stop working — before your users do.**
 
 > **Status: V1 complete, plus the reaction layer (§14).** All fourteen phases are
@@ -196,7 +198,7 @@ screenshot is captured.
 
 `execute.js` is pure: it takes a `driver` interface and dispatches steps onto it.
 `driver.js` is the only file that requires Playwright, so **every runner test runs
-offline against a fake driver** (`test-support/serviceTestFakes.js`).
+offline against a fake driver** (`test-support/serviceTestsFakes.js`).
 
 ---
 
@@ -747,6 +749,15 @@ state change rather than a heartbeat:
 | open → same or lower severity | **no** — it has already been reported |
 | open → higher severity (WARN → CRIT) | yes |
 | open → resolved | yes, at INFO |
+
+**V3 changed the unit of an alert, not this table.** A sweep still decides per
+incident whether something is worth SENDING; what changed is that everything one
+sweep would have sent is grouped by what observably links it, and one message
+goes out per problem rather than per incident — see
+`docs/service-assurance-v3.md` §"one alert per problem". Every incident folded
+into a group is named in that group's message, so nothing is suppressed
+silently, and `Settings → Reactions → groupAlerts` turns it off for an operator
+who would rather see all of them.
 
 ### Where the alert goes
 

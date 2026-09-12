@@ -1,5 +1,7 @@
 # BlueEye Service Assurance V2 — design of record
 
+> **New to Service Assurance?** Read [the guide](service-assurance-guide.md) first — it is written to be read front to back. This document is a design of record.
+
 > V1 answers **“the website is up.”**
 > V2 has to answer **“the service works”** — and when it does not:
 > *this is what failed, where it failed, and what is most likely causing it.*
@@ -220,7 +222,7 @@ after it stopped being useful.
 
 The central object, and the one that changes what the product SAYS. A journey is
 a complete thing a user does; the tests under it are how BlueEyes proves it still
-works. `migrations/083`, `journeys/health.js` (pure), `api/journeys.js`, a
+works. `migrations/083_create_service_test_journeys.sql`, `journeys/health.js` (pure), `api/journeys.js`, a
 Journeys tab, and [docs/service-assurance-journeys.md](service-assurance-journeys.md).
 
 The decision that shapes everything else: **a journey owns no tests.** It orders

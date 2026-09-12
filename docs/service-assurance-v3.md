@@ -1,5 +1,7 @@
 # Service Assurance V3 — the specification
 
+> **New to Service Assurance?** Read [the guide](service-assurance-guide.md) first — it is written to be read front to back. This document is a design of record.
+
 *V1 and V2 are in `docs/service-assurance.md` and `docs/service-assurance-v2.md`.
 Everything here builds on them; nothing here replaces them.*
 

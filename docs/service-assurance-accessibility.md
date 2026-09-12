@@ -1,5 +1,7 @@
 # Accessibility checks
 
+> **New to Service Assurance?** Read [the guide](service-assurance-guide.md) first — it is written to be read front to back. This document is a design of record.
+
 *Spec: `docs/service-assurance-v2.md` §9.*
 
 BlueEyes already drives a real browser through a real journey. While it is there,

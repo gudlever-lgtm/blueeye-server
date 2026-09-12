@@ -227,3 +227,13 @@ test('a repository failure is a 500 with no detail, not a leak', async () => {
     process.env.NODE_ENV = prev;
   }
 });
+
+test('the map says so when it is not the whole picture', async () => {
+  const { app } = fixture();
+  const res = await request(app).get(`${MAP}?application_id=1`).set('Authorization', authHeader('viewer'));
+  assert.equal(res.body.observed_from.truncated, false);
+  assert.equal(res.body.observed_from.tests_total, res.body.observed_from.tests);
+  // A map that quietly shows two thirds of an estate is worse than one that
+  // says it was cut short.
+  assert.equal(typeof res.body.observed_from.tests_total, 'number');
+});

@@ -1,7 +1,7 @@
 {
   "name": "blueeye-server",
-  "version": "0.125.10",
-  "releaseDate": "2026-09-11",
+  "version": "0.125.11",
+  "releaseDate": "2026-09-12",
   "private": true,
   "description": "BlueEyes Network Resilience System — on-prem, single-tenant API server (Node/Express + MySQL).",
   "license": "MIT",

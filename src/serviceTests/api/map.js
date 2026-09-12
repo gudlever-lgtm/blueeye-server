@@ -17,6 +17,11 @@ const { journeyHealth } = require('../journeys/health');
 //
 // Read-only by design. There is no route here to add, edit or annotate a node —
 // the moment one exists, the map has opinions of its own and the rot starts.
+
+// How many tests one map walks. Beyond this the picture is unreadable anyway,
+// and the response says it was truncated rather than pretending otherwise.
+const MAX_TESTS = 200;
+
 function createMapRouter({ repositories, requireRole, roles }) {
   const router = express.Router();
   const { applications, journeys, runs, tests } = repositories;
@@ -58,8 +63,13 @@ function createMapRouter({ repositories, requireRole, roles }) {
     // still appear. Hiding them because nobody got round to grouping them would
     // make the map lie by omission — they are monitoring that exists.
     const allTests = await tests.list({ applicationId });
+    // One query per test, so it is bounded rather than open-ended: an
+    // application with three hundred tests would otherwise hold a connection
+    // while it made three hundred round trips, and the map is a page somebody
+    // opens while something is already wrong.
+    const walked = allTests.slice(0, MAX_TESTS);
     const runsByTest = new Map();
-    for (const test of allTests) {
+    for (const test of walked) {
       const list = await runs.list({ testId: test.id, limit: perTest });
       // The test's name rides along so an ungrouped node can be labelled.
       runsByTest.set(test.id, list.map((r) => ({ ...r, test_name: test.name })));
@@ -78,7 +88,11 @@ function createMapRouter({ repositories, requireRole, roles }) {
       // a map like this is "is this everything".
       observed_from: {
         runs_per_test: perTest,
-        tests: allTests.length,
+        tests: walked.length,
+        // Said out loud when the map is not the whole picture. A map that
+        // quietly shows two thirds of an estate is worse than one that says so.
+        tests_total: allTests.length,
+        truncated: allTests.length > walked.length,
         note: 'Built only from what runs observed. Nothing here is inferred or entered by hand.',
       },
     });

@@ -67,8 +67,18 @@ function createHealingRepository({ db, now = () => new Date() }) {
     const [existing] = await pool.query(
       `SELECT id FROM service_test_healing
         WHERE test_id = ? AND step_path = ? AND status = 'proposed'
-          AND CAST(proposed_target AS CHAR) = CAST(? AS CHAR)
+          AND proposed_target = CAST(? AS JSON)
         LIMIT 1`,
+      // Compared as JSON, not as text. MySQL stores a JSON column in its own
+      // canonical form — object keys SORTED, and a space after each colon — so
+      // `CAST(proposed_target AS CHAR) = ?` compares
+      //     {"name": "Log ind", "role": "button"}
+      // against JSON.stringify's
+      //     {"role":"button","name":"Log ind"}
+      // and never matches. The dedup below would then never fire, and a test
+      // failing every five minutes would pile up three hundred identical
+      // proposals a day — exactly what this block exists to prevent, failing
+      // silently because "no row found" is also what a first proposal looks like.
       [testId, stepPath, proposed]
     );
     if (existing[0]) {

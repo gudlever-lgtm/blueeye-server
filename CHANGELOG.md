@@ -1,5 +1,58 @@
 # Changelog
 
+## 0.125.11 — a sweep of the V2 code, and two real bugs
+
+Looked for the same class of trap as `Number(null) === 0`. The number coercion
+itself came back clean — the sweep test holds and no new occurrence appeared —
+but two comparisons were wrong in ways that would never have announced
+themselves.
+
+**Healing proposals were never deduplicated.** The check for an existing open
+proposal compared `CAST(proposed_target AS CHAR)` against a JS `JSON.stringify`.
+MySQL stores a JSON column in its OWN canonical form — object keys sorted, and a
+space after each colon — so it was comparing
+
+    {"name": "Log ind", "role": "button"}
+
+against
+
+    {"role":"button","name":"Log ind"}
+
+and could never match. The dedup existed precisely so a test failing every five
+minutes would not pile up three hundred identical proposals a day, and it was
+failing silently, because "no row found" is also exactly what a first proposal
+looks like. Now compared as JSON (`= CAST(? AS JSON)`), which is key-order
+agnostic.
+
+The same trap does NOT apply to the three JS-side comparisons: all of them put
+both operands through `normalizeTarget()` first, which rebuilds the bag in a
+fixed key order. Verified rather than assumed.
+
+**Accepting a journey suggestion could reach into another application.** The
+member lookup passed `discoveryId: suggestion.discovery_id`, and a null there
+applies no discovery filter at all — so a journey suggestion without one would
+have matched its members by NAME against every test suggestion in the database.
+"Login" is the commonest suggestion there is. The test would then have been
+created in whichever application that stray suggestion belonged to, and hung off
+this journey. Now scoped by application as well, with an explicit per-member
+check behind it.
+
+**Also hardened:** evidence array-checks `console_errors` and `network_errors`
+rather than only null-checking them — they are JSON columns, and a non-array in
+one would turn "show me what happened" into a 500 on the one screen an operator
+opens when something is already wrong. And the service map bounds how many tests
+it walks (200) and says in the response when it was truncated: a map that quietly
+shows two thirds of an estate is worse than one that admits it.
+
+Checked and found clean: no unawaited repository calls, no `sort()` on a shared
+array (every one operates on a freshly built list), no `parseInt` without a
+radix, no SQL interpolation from anything but a fixed column allowlist, and no
+`filter(Boolean)` that could drop a legitimate zero — `Boolean("0")` is true, so
+the path-segment filter drops only empty segments.
+
+The agent is bumped to 0.24.1 in lockstep. No agent code changed — V2 is entirely
+server-side.
+
 ## 0.125.10 — performance baselines, evidence, and the service map
 
 The last three of V2's P2 list, and the end of V2.

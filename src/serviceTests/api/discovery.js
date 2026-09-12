@@ -177,12 +177,30 @@ createDiscoveryRouter.suggestions = function createSuggestionsRouter({ repositor
 
     // Every member must be resolvable BEFORE anything is created: half a journey
     // is worse than a clear refusal.
-    const siblings = await suggestions.list({ discoveryId: suggestion.discovery_id, kind: 'test' });
+    //
+    // Scoped by APPLICATION as well as by discovery. `discoveryId: null` applies
+    // no discovery filter at all, so a journey suggestion without one would have
+    // matched its members by NAME against every test suggestion in the database
+    // — and "Login" is the commonest suggestion there is. The test would then
+    // have been created in whichever application that stray suggestion belonged
+    // to, and attached to this journey.
+    const siblings = await suggestions.list({
+      discoveryId: suggestion.discovery_id,
+      applicationId: suggestion.application_id,
+      kind: 'test',
+    });
     const members = [];
     for (const step of plan.steps) {
       const sibling = siblings.find((x) => x.name === step.suggestion_name);
       if (!sibling) {
         return invalid(res, { steps: `the suggested test "${step.suggestion_name}" is no longer available` });
+      }
+      // Belt and braces: the filter above should make this unreachable, and it
+      // is the check that actually matters — a journey is about ONE service, and
+      // a member from another one makes its verdict a statement about something
+      // else entirely.
+      if (sibling.application_id !== suggestion.application_id) {
+        return invalid(res, { steps: `"${step.suggestion_name}" belongs to a different application` });
       }
       members.push({ sibling, required: step.required !== false });
     }

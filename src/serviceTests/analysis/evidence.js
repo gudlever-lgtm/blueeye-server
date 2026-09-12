@@ -80,8 +80,11 @@ function evidenceFor(run, { baseline = null, lang = 'en' } = {}) {
       url: pageUrlOf(run, failedStep),
       failure_kind: run.failure_kind || null,
       error_message: run.error_message || null,
-      console_errors: (run.console_errors || []).slice(0, 20),
-      network_errors: (run.network_errors || []).slice(0, 20),
+      // Array-checked, not just null-checked: these are JSON columns, and a
+      // non-array in one would turn "show me what happened" into a 500 on the
+      // one screen an operator opens when something is already wrong.
+      console_errors: (Array.isArray(run.console_errors) ? run.console_errors : []).slice(0, 20),
+      network_errors: (Array.isArray(run.network_errors) ? run.network_errors : []).slice(0, 20),
     },
 
     // What the test was pointing at, in words AND as the hint bag — the bag is

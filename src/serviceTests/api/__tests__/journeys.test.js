@@ -497,3 +497,32 @@ test('the bulk "create selected tests" button refuses a journey rather than mang
   assert.equal(serviceTests.tables.tests.rows.length, before + 1);
   assert.equal(serviceTests.tables.suggestions.find(ids.journey).status, 'proposed');
 });
+
+test('accepting a journey never reaches into another application\'s suggestions', async () => {
+  const { serviceTests, app } = fixture();
+  const t = serviceTests.tables;
+  // A journey suggestion with NO discovery — `discoveryId: null` applies no
+  // discovery filter, so the member lookup would otherwise match by name across
+  // the whole table, and "Login" is the commonest suggestion there is.
+  t.suggestions.insert({
+    discovery_id: 99, application_id: 2, kind: 'test', name: 'Login',
+    description: 'Partner Portal login', confidence: 'high', proposed_steps: [{ type: 'open', url: '/partner' }],
+    status: 'proposed', created_test_id: null, created_journey_id: null,
+  });
+  const orphan = t.suggestions.insert({
+    discovery_id: null, application_id: 1, kind: 'journey', name: 'Sign in',
+    confidence: 'medium', proposed_steps: [], status: 'proposed',
+    proposed_journey: { criticality: 'high', steps: [{ suggestion_name: 'Login', required: true }] },
+  }).id;
+
+  const res = await request(app).post(`${SUGGEST}/${orphan}/accept`)
+    .set('Authorization', authHeader('operator')).send({});
+
+  // Refused: application 1 has no "Login" test suggestion of its own. The only
+  // one in the table belongs to application 2, and borrowing it would create a
+  // test in the wrong application and hang it off this journey.
+  assert.equal(res.status, 400);
+  assert.match(res.body.details.steps, /no longer available/);
+  assert.equal(serviceTests.tables.tests.rows.filter((x) => x.application_id === 2).length, 1,
+    'no test may be created in the other application');
+});

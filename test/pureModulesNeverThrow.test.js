@@ -28,6 +28,11 @@ const MODULES = {
   'a11y/rules': require('../src/serviceTests/a11y/rules'),
   'visual/compare': require('../src/serviceTests/visual/compare'),
   'journeys/health': require('../src/serviceTests/journeys/health'),
+  'rootcause/rootCause': require('../src/serviceTests/rootcause/rootCause'),
+  'history/recurrence': require('../src/serviceTests/history/recurrence'),
+  'dependencies/dependencies': require('../src/serviceTests/dependencies/dependencies'),
+  'anomaly/anomalies': require('../src/serviceTests/anomaly/anomalies'),
+  'analysis/baseline': require('../src/serviceTests/analysis/baseline'),
 };
 
 // The shapes that have actually caused this. `null` is the one that bites —

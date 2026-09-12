@@ -38,10 +38,14 @@ const MIN_SPREAD_MS = 250;
 // test is a real change; 250 ms on a 30-second journey is nothing.
 const MIN_RATIO = 1.25;
 
+// Takes an ALREADY SORTED array. Exported, so it is called by things this file
+// does not control, and `sorted.length` on a null throws — which loses the page
+// rather than the statistic.
 function median(sorted) {
-  if (!sorted.length) return null;
-  const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+  const list = Array.isArray(sorted) ? sorted : [];
+  if (!list.length) return null;
+  const mid = Math.floor(list.length / 2);
+  return list.length % 2 ? list[mid] : (list[mid - 1] + list[mid]) / 2;
 }
 
 // The baseline this test's own successful runs describe.
@@ -50,7 +54,10 @@ function median(sorted) {
 //
 // Null when there is not enough history. Null is the honest answer, and the
 // caller must not turn it into "normal".
-function baselineFrom(durations, { minSamples = MIN_SAMPLES, k = K, minSpreadMs = MIN_SPREAD_MS } = {}) {
+function baselineFrom(durations, rawOptions = {}) {
+  // A default parameter covers `undefined` and nothing else — `baselineFrom(x,
+  // null)` sails past it and throws on the first property read.
+  const { minSamples = MIN_SAMPLES, k = K, minSpreadMs = MIN_SPREAD_MS } = (rawOptions && typeof rawOptions === 'object') ? rawOptions : {};
   // numOrNull, not Number(): an unmeasured run must not enter the baseline as a
   // zero and drag the normal band down towards "instant".
   const values = (Array.isArray(durations) ? durations : [])
@@ -84,7 +91,8 @@ function baselineFrom(durations, { minSamples = MIN_SAMPLES, k = K, minSpreadMs 
 //
 // `slow` is a WARNING, never a failure: a slow service is not a broken one, and
 // a performance signal that can fail a test would make people delete the test.
-function compare(durationMs, baseline, { lang = 'en', minRatio = MIN_RATIO } = {}) {
+function compare(durationMs, baseline, rawOptions = {}) {
+  const { lang = 'en', minRatio = MIN_RATIO } = (rawOptions && typeof rawOptions === 'object') ? rawOptions : {};
   const current = numOrNull(durationMs);
   const base = baseline || {};
 

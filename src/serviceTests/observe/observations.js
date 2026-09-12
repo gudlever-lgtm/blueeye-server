@@ -140,7 +140,23 @@ function fromNetworkErrors(run) {
 // answering perfectly while its own JavaScript is broken.
 function fromConsole(run) {
   const errors = Array.isArray(run.console_errors) ? run.console_errors : [];
-  if (!errors.length) return [];
+  if (!errors.length) {
+    // An empty list is only "the page was fine" when the errors were actually
+    // COLLECTED, and V2 collects them on failure. On a passing run the column
+    // is empty because nobody looked, which is a different fact — recording it
+    // as ok would manufacture evidence that the page was checked.
+    const collected = run.status === 'fail' || run.status === 'error';
+    if (!collected) return [];
+    return [observation({
+      layer: 'page',
+      kind: KIND.PAGE_CONSOLE,
+      outcome: 'ok',
+      value: 0,
+      unit: 'errors',
+      summary: 'The page reported no script errors',
+      observedAt: run.ended_at || null,
+    })];
+  }
   return [observation({
     layer: 'page',
     kind: KIND.PAGE_CONSOLE,

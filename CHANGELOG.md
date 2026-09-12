@@ -1,5 +1,87 @@
 # Changelog
 
+## 0.130.0 — V3 Phase 1: the correlation engine
+
+Observations are facts. Correlation relates them into a picture:
+
+    Customer Search FAILED
+      → POST /api/customer/search
+      → HTTP 500
+      → network reachable — /api/auth/session answered
+      → a server answered
+      → the same failure has happened 6 times
+      → Likely an application or API problem (85% confident)
+      → infrastructure, application were not checked
+
+### Confidence comes from what was ruled OUT
+
+This is the whole design. "It is the API, 92% confident" is only honest if
+something actually established that the network and the server were fine. If
+nothing did, the API is merely the layer we happened to look at, and a high
+number would be inventing certainty out of ignorance.
+
+So every layer nobody looked at LOWERS confidence, by name, and the result says
+which ones they were — on screen, not buried in a field. An operator reading the
+chain should be able to see the hole in it.
+
+The arithmetic is itemised. "Why 85%?" always has an answer:
+
+    +45  api failed, and it was observed directly
+    +36  page was checked and looked healthy; network, server must be working,
+         because other requests answered
+    +10  1 other API call answered normally
+    +10  the same failure happened 6 times
+    -16  infrastructure, application were not checked
+
+### Observed and inferred are said differently
+
+A browser test never probes the network — it drives a page. But an HTTP 200 from
+anywhere is real evidence: the name resolved, the network carried the request,
+and something answered. That is how a person reasons about an outage, and
+refusing the inference would leave every correlation saying "network not checked"
+forever, which is useless.
+
+So the inference is made and then LABELLED as one. "The network was checked" and
+"the network must be working, because other requests answered" are different
+claims, and only the second is true when a browser test is all that ran. The
+chain and the arithmetic both say which it was.
+
+### Three rules
+
+**A conclusion is an assessment, never a fact.** It says "likely", carries its
+confidence, and always shows the evidence underneath. Confidence is capped at 92
+— a rule-based inference over a sample is not certain, and a number claiming
+otherwise would be the one thing on screen nobody should trust.
+
+**Nothing is concluded from nothing.** A passing run produces no correlation at
+all. A correlation reporting "everything is fine" is noise; silence is the honest
+answer when nothing failed.
+
+**The symptom is never the conclusion.** The browser failing is what prompted the
+question. Concluding "the browser is at fault" because the test failed would be
+circular, so the browser layer is recorded as a fact and excluded from the
+conclusion.
+
+A journey that broke with nothing underneath it says exactly that — a missing
+element, a changed page, a test that needs updating are all common and real, and
+inventing a technical cause would be worse than saying so. There is no confidence
+number in that case, because there is no conclusion to be confident about.
+
+Two failing layers at once LOWER confidence rather than the engine picking one:
+the picture is genuinely ambiguous and the number should say so.
+
+### Also
+
+- A run that failed and reported no console errors now records "the page was
+  fine" as an observation. V2 collects console errors only on failure, so an
+  empty list on a PASSING run means nobody looked — recording that as healthy
+  would manufacture evidence that the page was checked.
+- `correlate(null)` threw, the same default-parameter trap as `assessService`.
+  Correlation runs on a dashboard, where throwing takes the page down instead of
+  the analysis — and an operator looking at an outage is the worst possible
+  moment for the page that explains it to go blank. Junk observations in the list
+  are filtered rather than trusted, for the same reason.
+
 ## 0.129.0 — V3 Phase 1: the observation model and Service Health 2.0
 
 The first two pieces of `docs/service-assurance-v3.md`. Nothing in V1 or V2

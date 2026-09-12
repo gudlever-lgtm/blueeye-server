@@ -499,3 +499,103 @@
 .sa-auth-icon { flex: none; font-weight: 700; }
 .sa-auth-note.ok .sa-auth-icon { color: var(--ok, #2e7d5b); }
 .sa-auth-note.warn .sa-auth-icon { color: var(--warn, #b8860b); }
+
+/* ---------------------------------------------------------- V3: why it failed
+   The chain is the evidence, and the three outcomes have to be tellable apart
+   at a glance: something failed, something was checked and was fine, and
+   something nobody looked at. The third is the one that is usually left off a
+   screen like this, and it is the one that says how much the conclusion is
+   worth. */
+.sa-why-conclusion { font-size: 1.05em; font-weight: 600; margin: 0 0 12px; }
+.sa-chain { list-style: none; margin: 0 0 18px; padding: 0; }
+.sa-chain-link {
+  display: flex; align-items: baseline; gap: 8px;
+  padding: 6px 0 6px 2px; border-left: 2px solid var(--hairline); padding-left: 12px;
+}
+.sa-chain-mark { flex: none; width: 1em; font-weight: 700; }
+.sa-chain-bad { border-left-color: var(--crit, #c0392b); }
+.sa-chain-bad .sa-chain-mark { color: var(--crit, #c0392b); }
+.sa-chain-ok { border-left-color: var(--ok, #2e7d5b); }
+.sa-chain-ok .sa-chain-mark { color: var(--ok, #2e7d5b); }
+/* Deliberately faint. "Nobody looked" is a gap, not a finding, and it must not
+   read as either good news or bad. */
+.sa-chain-unknown { border-left-style: dashed; }
+.sa-chain-unknown .sa-chain-step, .sa-chain-unknown .sa-chain-mark { color: var(--muted); }
+.sa-chain-step { flex: 1; }
+
+.sa-causes { margin-top: 8px; }
+.sa-why-verdict { margin: 0 0 12px; }
+.sa-cause-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 14px; }
+.sa-cause {
+  padding: 12px 14px; border: 1px solid var(--hairline); border-radius: 10px;
+  background: var(--panel-2);
+}
+.sa-cause.top { border-color: var(--accent); }
+.sa-cause-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.sa-cause-label { font-weight: 600; }
+.sa-cause-pct { margin-left: auto; font-variant-numeric: tabular-nums; font-weight: 600; }
+/* How the cause is KNOWN, which is not the same as how likely it is. A watched
+   TLS failure and a supposed database sit at the same percentage and are not
+   the same kind of claim. */
+.sa-cause-basis {
+  font-size: 0.78em; text-transform: uppercase; letter-spacing: 0.04em;
+  padding: 1px 7px; border-radius: 999px; border: 1px solid var(--hairline); color: var(--muted);
+}
+.sa-basis-observed { color: var(--ok, #2e7d5b); border-color: currentColor; }
+.sa-basis-inferred { color: var(--muted); }
+.sa-basis-unobservable { color: var(--warn, #b8860b); border-color: currentColor; border-style: dashed; }
+.sa-cause-bar { height: 4px; border-radius: 2px; background: var(--hairline); margin: 8px 0; overflow: hidden; }
+.sa-cause-fill { height: 100%; background: var(--accent); }
+.sa-cause-why { margin: 0 0 8px; padding-left: 18px; color: var(--muted); font-size: 0.92em; }
+.sa-cause-next { margin: 0; font-size: 0.92em; }
+
+/* ------------------------------------------------------------- health score
+   The number is only useful beside its parts. A part nobody measured says so
+   rather than showing a zero — zero is the bad end of the scale, so an
+   unmeasured part rendered as 0 reads as a broken service. */
+.sa-health-head { display: flex; align-items: center; gap: 18px; margin-bottom: 14px; }
+.sa-health-score {
+  display: flex; align-items: baseline; gap: 2px; flex: none;
+  padding: 10px 16px; border-radius: 12px; border: 1px solid var(--hairline); background: var(--panel-2);
+}
+.sa-health-number { font-size: 2em; font-weight: 700; font-variant-numeric: tabular-nums; }
+.sa-health-of { color: var(--muted); font-size: 0.9em; }
+.sa-health-status { font-weight: 600; letter-spacing: 0.03em; }
+.sa-health-reason { margin: 2px 0 0; color: var(--muted); }
+.sa-health-failed .sa-health-number { color: var(--crit, #c0392b); }
+.sa-health-degraded .sa-health-number { color: var(--warn, #b8860b); }
+.sa-health-healthy .sa-health-number { color: var(--ok, #2e7d5b); }
+.sa-health-unknown .sa-health-number { color: var(--muted); }
+
+.sa-health-parts { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.sa-health-part {
+  display: grid; gap: 2px 10px; align-items: baseline;
+  grid-template-columns: minmax(90px, auto) auto 1fr auto;
+  padding: 8px 10px; border-radius: 8px; background: var(--panel-2);
+  border-left: 3px solid var(--hairline);
+}
+.sa-health-part.sa-health-failed { border-left-color: var(--crit, #c0392b); }
+.sa-health-part.sa-health-degraded { border-left-color: var(--warn, #b8860b); }
+.sa-health-part.sa-health-healthy { border-left-color: var(--ok, #2e7d5b); }
+.sa-health-part-name { font-weight: 600; }
+.sa-health-part-score { font-variant-numeric: tabular-nums; color: var(--muted); }
+.sa-health-part-reason { color: var(--muted); font-size: 0.92em; }
+.sa-health-weight { color: var(--muted); font-size: 0.82em; white-space: nowrap; }
+
+/* --------------------------------------------------- shared dependencies */
+.sa-dep-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.sa-dep {
+  padding: 10px 12px; border: 1px solid var(--hairline); border-radius: 10px;
+  background: var(--panel-2); border-left-width: 3px;
+}
+.sa-dep-failing { border-left-color: var(--crit, #c0392b); }
+.sa-dep-healthy { border-left-color: var(--ok, #2e7d5b); }
+.sa-dep-unknown { border-left-color: var(--hairline); border-left-style: dashed; }
+.sa-dep-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.sa-dep-why { margin: 6px 0 0; color: var(--muted); font-size: 0.92em; }
+
+@media (max-width: 560px) {
+  .sa-health-part { grid-template-columns: 1fr auto; }
+  .sa-health-part-reason { grid-column: 1 / -1; }
+  .sa-health-head { flex-wrap: wrap; }
+}

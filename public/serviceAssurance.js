@@ -340,9 +340,11 @@
           el('p', { class: 'sa-url' }, el('code', {}, app.base_url)));
 
         mount(body, head,
+          healthPanel(app),
           discoveryPanel(app),
           environmentsPanel(app),
           serviceMapPanel(app),
+          dependenciesPanel(app),
           credentialsPanel(app),
           allowedHostsPanel(app));
       });
@@ -579,6 +581,117 @@
         el('p', { class: 'sa-help' }, t('sa.hosts.help')),
         rows.length ? el('table', { class: 'data-table' }, el('tbody', {}, ...rows))
           : el('div', { class: 'sa-empty' }, t('sa.hosts.empty')));
+      return wrap;
+    }
+
+    // Written out rather than assembled, because a key built at run time is a key
+    // the catalogue sweep cannot see — and the gate refuses them for that reason.
+    // Functions, not strings: the catalogue is read at call time so the labels
+    // follow a language change.
+    var PART_LABEL = {
+      functional: function () { return t('sa.score.functional'); },
+      availability: function () { return t('sa.score.availability'); },
+      api: function () { return t('sa.score.api'); },
+      performance: function () { return t('sa.score.performance'); },
+    };
+
+    function blastLabel(blast) {
+      if (blast === 'critical') return t('sa.deps.blastCritical');
+      if (blast === 'high') return t('sa.deps.blastHigh');
+      if (blast === 'moderate') return t('sa.deps.blastModerate');
+      return t('sa.deps.blastLow');
+    }
+
+    // ------------------------------------------------------- service health
+    //
+    // A number, 0-100, broken into the four parts it is made of. The parts are
+    // the feature: an operator has to be able to see WHY it is 82, and a
+    // black-box score is worse than no score.
+    //
+    // A part nobody has measured reads UNKNOWN and is left OUT of the number
+    // rather than counted as zero — an unmeasured part scored as zero is a
+    // service reported as broken because nobody looked at it.
+    function healthPanel(app) {
+      var wrap = el('div', { class: 'sa-panel' });
+      mount(wrap, section(t('sa.score.title'), null), el('p', { class: 'muted' }, t('sa.loading')));
+
+      api(API + '/analysis/applications/' + app.id + '/health').then(function (h) {
+        wrap.textContent = '';
+        var parts = h.parts || {};
+        mount(wrap,
+          section(t('sa.score.title'), null),
+          el('div', { class: 'sa-health-head' },
+            el('div', { class: 'sa-health-score sa-health-' + String(h.status).toLowerCase() },
+              // Null, not 0. "Nothing has been measured" and "everything is
+              // broken" must never look the same on a screen.
+              el('span', { class: 'sa-health-number' }, h.score === null ? '—' : String(h.score)),
+              el('span', { class: 'sa-health-of' }, h.score === null ? '' : '/100')),
+            el('div', {},
+              el('div', { class: 'sa-health-status' }, String(h.status)),
+              el('p', { class: 'sa-health-reason' }, h.reason))),
+          el('ul', { class: 'sa-health-parts' }, ...['functional', 'availability', 'api', 'performance']
+            .filter(function (key) { return parts[key]; })
+            .map(function (key) {
+              var part = parts[key];
+              return el('li', { class: 'sa-health-part sa-health-' + String(part.status).toLowerCase() },
+                el('span', { class: 'sa-health-part-name' }, PART_LABEL[key]()),
+                el('span', { class: 'sa-health-part-score' },
+                  part.score === null || part.score === undefined ? t('sa.score.notMeasured') : part.score + '%'),
+                el('span', { class: 'sa-health-part-reason' }, part.reason),
+                // The weight each part carries, shown because the number is
+                // otherwise unarguable — and a number nobody can question is
+                // worth no more than no number.
+                el('span', { class: 'sa-health-weight' },
+                  t('sa.score.weight', { pct: Math.round((h.weights && h.weights[key] ? h.weights[key] : 0) * 100) })));
+            })),
+          h.open_incidents
+            ? el('p', { class: 'sa-help' }, t('sa.score.openIncidents', { count: h.open_incidents }))
+            : null,
+          el('p', { class: 'sa-help' }, t('sa.score.window', { hours: h.observed_from.window_hours })));
+      }).catch(function () {
+        wrap.textContent = '';
+        mount(wrap, section(t('sa.score.title'), null), el('p', { class: 'muted' }, t('sa.score.unavailable')));
+      });
+      return wrap;
+    }
+
+    // -------------------------------------------------- dependency intelligence
+    //
+    // The service map draws journey → test → endpoint. One endpoint under five
+    // journeys is the most important thing on that picture and is invisible in
+    // it — just another box with more lines going in. This is the reading.
+    function dependenciesPanel(app) {
+      var wrap = el('div', { class: 'sa-panel' });
+      mount(wrap, section(t('sa.deps.title'), null), el('p', { class: 'muted' }, t('sa.loading')));
+
+      api(API + '/analysis/applications/' + app.id + '/dependencies').then(function (d) {
+        wrap.textContent = '';
+        mount(wrap,
+          section(t('sa.deps.title'), null),
+          el('p', { class: 'sa-help' }, d.summary),
+          d.shared.length
+            ? el('ul', { class: 'sa-dep-list' }, ...d.shared.map(function (dep) {
+              return el('li', { class: 'sa-dep sa-dep-' + dep.status },
+                el('div', { class: 'sa-dep-head' },
+                  el('code', {}, dep.label),
+                  el('span', { class: 'chip sa-blast-' + dep.blast }, blastLabel(dep.blast)),
+                  // Only when we were told the application's own address.
+                  // Guessing an unfamiliar host is third-party is how a service
+                  // gets blamed on its CDN.
+                  dep.third_party === true ? el('span', { class: 'chip' }, t('sa.deps.thirdParty')) : null,
+                  dep.status === 'failing' ? el('span', { class: 'chip crit' }, t('sa.deps.failing')) : null),
+                el('p', { class: 'sa-dep-why' }, dep.summary));
+            }))
+            : null,
+          d.unobserved_journeys.length
+            ? el('p', { class: 'sa-help' }, t('sa.deps.unobserved', {
+              names: d.unobserved_journeys.map(function (j) { return j.label; }).join(', '),
+            }))
+            : null);
+      }).catch(function () {
+        wrap.textContent = '';
+        mount(wrap, section(t('sa.deps.title'), null), el('p', { class: 'muted' }, t('sa.deps.unavailable')));
+      });
       return wrap;
     }
 
@@ -2448,8 +2561,102 @@
             el('td', {}, s.message || ''));
         })));
 
-        mount(body, head, summary, perf, failure, steps, visualPanel(run), accessibilityPanel(run));
+        mount(body, head, summary, perf, failure, whyPanel(run), steps, visualPanel(run), accessibilityPanel(run));
       });
+    }
+
+    // "Why did this fail?" — the V3 intelligence layer, on the run it explains.
+    //
+    // Loaded separately and lazily. It is a second request against a second
+    // analysis, and the run screen must not sit blank waiting for it: the
+    // result, the steps and the failure are already on the page by the time
+    // this arrives, or does not.
+    //
+    // Only on a run that failed. A correlation of a passing run would be a
+    // finding nobody asked for, and the API refuses to draw one anyway.
+    function whyPanel(run) {
+      if (run.status !== 'fail' && run.status !== 'error') return null;
+      var wrap = el('div', { class: 'sa-panel sa-why' });
+      mount(wrap, section(t('sa.why.title'), null), el('p', { class: 'muted' }, t('sa.loading')));
+
+      api(API + '/analysis/runs/' + run.id).then(function (data) {
+        wrap.textContent = '';
+        if (!data.correlation) {
+          mount(wrap, section(t('sa.why.title'), null), el('p', { class: 'muted' }, t('sa.why.nothing')));
+          return;
+        }
+        mount(wrap,
+          section(t('sa.why.title'), null),
+          el('p', { class: 'sa-why-conclusion' }, data.correlation_summary),
+          chainList(data.correlation),
+          rootCauseList(data.root_cause),
+          // Said out loud when the analysis was rebuilt from the run row rather
+          // than read from what the worker recorded. The two can differ if the
+          // observation model has changed since, and a reader should know which
+          // they are looking at.
+          data.observations_from === 'derived'
+            ? el('p', { class: 'sa-help' }, t('sa.why.derived'))
+            : null);
+      }).catch(function () {
+        wrap.textContent = '';
+        mount(wrap, section(t('sa.why.title'), null), el('p', { class: 'muted' }, t('sa.why.unavailable')));
+      });
+      return wrap;
+    }
+
+    // The chain: what failed, what was checked and found fine, and what nobody
+    // looked at. The third is the part that makes the rest worth anything — a
+    // conclusion drawn while the network was never checked has a hole in it, and
+    // the hole is on the screen rather than in a footnote.
+    function chainList(correlation) {
+      var MARK = { bad: '\u2717', ok: '\u2713', unknown: '?' };
+      return el('ul', { class: 'sa-chain' }, ...(correlation.chain || []).map(function (link) {
+        return el('li', { class: 'sa-chain-link sa-chain-' + link.outcome },
+          el('span', { class: 'sa-chain-mark', 'aria-hidden': 'true' }, MARK[link.outcome] || '?'),
+          el('span', { class: 'sa-chain-step' }, link.step),
+          link.layer ? el('span', { class: 'chip' }, link.layer) : null);
+      }));
+    }
+
+    // The ranked causes.
+    //
+    // Two things are on the screen that a bare ranking would leave off, and both
+    // are the point of the feature:
+    //
+    //   * HOW each cause is known. A TLS failure was watched happening; a
+    //     database is a place to go and look. Showing 40% beside 40% with no
+    //     other difference says they are the same kind of claim, and they are
+    //     not.
+    //   * That a close second exists. A leader four points clear is an artefact
+    //     of the arithmetic, and the summary says so rather than presenting it
+    //     as the answer.
+    function rootCauseList(rootCause) {
+      if (!rootCause || !rootCause.candidates || !rootCause.candidates.length) return null;
+      return el('div', { class: 'sa-causes' },
+        el('h4', {}, t('sa.why.causes')),
+        el('p', { class: 'sa-why-verdict' }, rootCause.summary),
+        el('ul', { class: 'sa-cause-list' }, ...rootCause.candidates.map(function (c, i) {
+          return el('li', { class: 'sa-cause' + (i === 0 ? ' top' : '') },
+            el('div', { class: 'sa-cause-head' },
+              el('span', { class: 'sa-cause-label' }, c.label),
+              el('span', { class: 'sa-cause-basis sa-basis-' + c.basis }, basisLabel(c.basis)),
+              el('span', { class: 'sa-cause-pct' }, c.likelihood + '%')),
+            el('div', { class: 'sa-cause-bar' },
+              el('div', { class: 'sa-cause-fill', style: 'width:' + c.likelihood + '%' })),
+            el('ul', { class: 'sa-cause-why' }, ...(c.why || []).map(function (line) {
+              return el('li', {}, line);
+            })),
+            el('p', { class: 'sa-cause-next' }, el('strong', {}, t('sa.why.next') + ': '), c.next_step));
+        })),
+        (rootCause.not_checked || []).length
+          ? el('p', { class: 'sa-help' }, t('sa.why.notChecked', { layers: rootCause.not_checked.join(', ') }))
+          : null);
+    }
+
+    function basisLabel(basis) {
+      if (basis === 'observed') return t('sa.why.observed');
+      if (basis === 'inferred') return t('sa.why.inferred');
+      return t('sa.why.unobservable');
     }
 
     // Visual regression (V2 §8).

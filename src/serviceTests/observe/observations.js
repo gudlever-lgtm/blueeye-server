@@ -56,10 +56,12 @@ const KIND = {
 // A single observation, in one shape. Everything optional is explicitly null
 // rather than absent: a reader that has to distinguish "missing" from
 // "undefined" is a reader that will get it wrong once.
-function observation({
-  layer, kind, subject = null, outcome = 'unknown',
-  value = null, unit = null, summary = null, detail = null, observedAt = null,
-}) {
+function observation(raw) {
+  const input = (raw && typeof raw === 'object' && !Array.isArray(raw)) ? raw : {};
+  const {
+    layer, kind, subject = null, outcome = 'unknown',
+    value = null, unit = null, summary = null, detail = null, observedAt = null,
+  } = input;
   return {
     layer: LAYERS.includes(layer) ? layer : 'application',
     kind,

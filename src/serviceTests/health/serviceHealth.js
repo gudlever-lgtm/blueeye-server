@@ -144,7 +144,8 @@ function performanceHealth(performance) {
 // A single number invites people to watch the number instead of the service, so
 // it always travels with its parts and their weights. Nobody should have to
 // guess why it is 82.
-function scoreOf({ functional, availability, api, performance } = {}) {
+function scoreOf(raw = {}) {
+  const { functional, availability, api, performance } = (raw && typeof raw === 'object' && !Array.isArray(raw)) ? raw : {};
   const part = (status) => {
     if (status === HEALTH.HEALTHY) return 100;
     if (status === HEALTH.DEGRADED) return 60;

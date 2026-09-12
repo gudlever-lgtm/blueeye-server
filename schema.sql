@@ -2053,9 +2053,15 @@ CREATE TABLE IF NOT EXISTS service_test_incidents (
   severity ENUM('INFO','WARN','CRIT') NOT NULL DEFAULT 'WARN',
   original_severity ENUM('INFO','WARN','CRIT') DEFAULT NULL,
   severity_rule_id INT DEFAULT NULL,
-  status ENUM('open','resolved') NOT NULL DEFAULT 'open',
+  status ENUM('open','investigating','identified','resolved','closed')
+    NOT NULL DEFAULT 'open',
   summary TEXT             DEFAULT NULL,
   likely_cause VARCHAR(255)     DEFAULT NULL,
+  correlated_layer VARCHAR(32) DEFAULT NULL,
+  confidence TINYINT UNSIGNED DEFAULT NULL,
+  impact ENUM('low','medium','high','critical') DEFAULT NULL,
+  impact_reason VARCHAR(512) DEFAULT NULL,
+  affected_journeys JSON DEFAULT NULL,
   explanation TEXT             DEFAULT NULL,
   evidence JSON             DEFAULT NULL,
   occurrences INT          NOT NULL DEFAULT 1,
@@ -2063,6 +2069,8 @@ CREATE TABLE IF NOT EXISTS service_test_incidents (
   last_seen_at DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   resolved_at DATETIME(3)      DEFAULT NULL,
   resolved_by INT              DEFAULT NULL,
+  acknowledged_at DATETIME(3) DEFAULT NULL,
+  acknowledged_by INT DEFAULT NULL,
   resolution VARCHAR(255)     DEFAULT NULL,
   notified_at DATETIME(3)      DEFAULT NULL,
   notified_severity ENUM('INFO','WARN','CRIT') DEFAULT NULL,
@@ -2350,4 +2358,28 @@ CREATE TABLE IF NOT EXISTS service_observations (
   CONSTRAINT fk_obs_journey FOREIGN KEY (journey_id) REFERENCES service_test_journeys(id) ON DELETE SET NULL,
   CONSTRAINT fk_obs_app FOREIGN KEY (application_id) REFERENCES service_test_applications(id) ON DELETE CASCADE,
   CONSTRAINT fk_obs_env FOREIGN KEY (environment_id) REFERENCES service_test_environments(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- The timeline.
+--
+-- Built from events that ACTUALLY HAPPENED, each with the time it happened —
+-- not a narrative composed afterwards. That is the whole requirement: an
+-- operator reading "14:07 service marked DEGRADED" must be able to trust that
+-- something marked it degraded at 14:07.
+--
+-- Append-only in practice: rows are written as things occur and never edited.
+-- A timeline that can be rewritten is a timeline nobody can rely on during a
+-- post-mortem, which is exactly when it is read.
+CREATE TABLE IF NOT EXISTS service_incident_events (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  incident_id INT NOT NULL,
+  kind VARCHAR(64) NOT NULL,
+  summary VARCHAR(512) NOT NULL,
+  detail JSON DEFAULT NULL,
+  source ENUM('run','sweep','correlation','rule','person','notification') NOT NULL DEFAULT 'run',
+  actor_id INT DEFAULT NULL,
+  occurred_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_sie_incident (incident_id, occurred_at, id),
+  CONSTRAINT fk_sie_incident FOREIGN KEY (incident_id) REFERENCES service_test_incidents(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

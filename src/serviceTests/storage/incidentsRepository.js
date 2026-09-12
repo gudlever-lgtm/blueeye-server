@@ -1,5 +1,7 @@
 'use strict';
 
+const { ACTIVE } = require('../incidents/lifecycle');
+
 // Data-access for `service_test_incidents` (migration 080) — the durable record
 // of "something is wrong here, and here is since when".
 //
@@ -7,6 +9,12 @@
 // and there is at most ONE open row per subject at a time. A repeat observation
 // touches that row instead of writing another, so a service that has been down
 // all weekend is one incident with 400 occurrences rather than 400 incidents.
+// "Not resolved", spelled once. V2 had five queries testing `status = 'open'`,
+// which was the same thing while 'open' was the only active state. Migration 090
+// added investigating and identified, and an incident somebody had picked up
+// would have disappeared from the dashboard it most needs to be on.
+const ACTIVE_SQL = `status IN (${ACTIVE.map(() => '?').join(', ')})`;
+
 function createIncidentsRepository({ db, now = () => new Date() }) {
   const { pool } = db;
   const COLS = `id, application_id, environment_id, test_id, subject_type, subject_key, subject_label,
@@ -64,8 +72,8 @@ function createIncidentsRepository({ db, now = () => new Date() }) {
 
   async function findOpen(subjectKey) {
     const [rows] = await pool.query(
-      `SELECT ${COLS} FROM service_test_incidents WHERE subject_key = ? AND status = 'open' ORDER BY id DESC LIMIT 1`,
-      [String(subjectKey || '').slice(0, 190)]
+      `SELECT ${COLS} FROM service_test_incidents WHERE subject_key = ? AND ${ACTIVE_SQL} ORDER BY id DESC LIMIT 1`,
+      [String(subjectKey || '').slice(0, 190), ...ACTIVE]
     );
     return shape(rows[0]);
   }
@@ -121,8 +129,8 @@ function createIncidentsRepository({ db, now = () => new Date() }) {
   async function resolve(id, { resolution = 'The next check was healthy', resolvedBy = null, at = null } = {}) {
     await pool.query(
       `UPDATE service_test_incidents SET status = 'resolved', resolved_at = ?, resolved_by = ?, resolution = ?
-       WHERE id = ? AND status = 'open'`,
-      [at || now(), resolvedBy, cut(resolution, 255), id]
+       WHERE id = ? AND ${ACTIVE_SQL}`,
+      [at || now(), resolvedBy, cut(resolution, 255), id, ...ACTIVE]
     );
     return findById(id);
   }
@@ -148,9 +156,11 @@ function createIncidentsRepository({ db, now = () => new Date() }) {
     const [rows] = await pool.query(
       `SELECT ${COLS} FROM service_test_incidents
        ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
-       ORDER BY (status = 'open') DESC, FIELD(severity, 'CRIT','WARN','INFO'), last_seen_at DESC
+       ORDER BY (${ACTIVE_SQL}) DESC, FIELD(severity, 'CRIT','WARN','INFO'), last_seen_at DESC
        LIMIT ${n}`,
-      params
+      // The ORDER BY carries its own placeholders, and they bind AFTER the
+      // WHERE ones because that is the order they appear in the statement.
+      [...params, ...ACTIVE]
     );
     return rows.map(shape);
   }
@@ -263,7 +273,7 @@ function createIncidentsRepository({ db, now = () => new Date() }) {
   // Open incidents by severity — the badge on the nav entry, in one query.
   async function openCounts() {
     const [rows] = await pool.query(
-      "SELECT severity, COUNT(*) AS n FROM service_test_incidents WHERE status = 'open' GROUP BY severity"
+      `SELECT severity, COUNT(*) AS n FROM service_test_incidents WHERE ${ACTIVE_SQL} GROUP BY severity`, ACTIVE
     );
     const out = { CRIT: 0, WARN: 0, INFO: 0, total: 0 };
     for (const row of rows) {
@@ -294,8 +304,8 @@ function createIncidentsRepository({ db, now = () => new Date() }) {
   // OPEN ones, because a resolved incident is a record of what was decided at
   // the time, and rewriting it would make history a function of today's config.
   async function applySeverityRule(rule, { dryRun = true } = {}) {
-    const where = ["status = 'open'", 'severity <> ?'];
-    const params = [rule.severity];
+    const where = [ACTIVE_SQL, 'severity <> ?'];
+    const params = [...ACTIVE, rule.severity];
     if (rule.match_kind) { where.push('kind = ?'); params.push(rule.match_kind); }
     if (rule.match_application_id) { where.push('application_id = ?'); params.push(rule.match_application_id); }
 

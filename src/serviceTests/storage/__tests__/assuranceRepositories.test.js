@@ -96,7 +96,12 @@ test('the open lookup is per subject and never returns a resolved row', async ()
   const repo = createIncidentsRepository({ db: { pool }, now });
   const found = await repo.findOpen('certificate:portal.kunde.dk:443');
   const [call] = pool.matching(/^SELECT .* FROM service_test_incidents WHERE subject_key/i);
-  assert.match(call.sql, /status = 'open'/);
+  // The ACTIVE set, not `status = 'open'`. Migration 090 added investigating
+  // and identified, and an incident somebody had picked up must still be the
+  // one a repeat failure attaches to — otherwise it opens a second incident for
+  // a problem already being worked on.
+  assert.match(call.sql, /status IN \(\?, \?, \?\)/);
+  assert.deepEqual(call.params.slice(1), ['open', 'investigating', 'identified']);
   assert.deepEqual(found.evidence, ['Days remaining: 12'], 'a JSON column arrives as a string on some servers and an object on others');
 });
 
@@ -121,7 +126,10 @@ test('resolving is a no-op on an already-resolved incident', async () => {
   const repo = createIncidentsRepository({ db: { pool }, now });
   const row = await repo.resolve(9, { resolvedBy: 3 });
   const [call] = pool.matching(/^UPDATE service_test_incidents SET status = 'resolved'/i);
-  assert.match(call.sql, /AND status = 'open'/);
+  // Guarded on the ACTIVE set: an incident under investigation is still
+  // resolvable, and a closed one is not reopened by a passing check.
+  assert.match(call.sql, /AND status IN \(\?, \?, \?\)/);
+  assert.ok(call.params.includes('investigating'));
   assert.equal(row.status, 'resolved');
 });
 

@@ -55,7 +55,10 @@ function outcomeOf(run) {
 // A journey with no steps is `unknown` and says why: an empty journey is a
 // statement of intent nobody has implemented, and reporting it as healthy would
 // be the most misleading thing this file could do.
-function journeyHealth(steps, { lang = 'en' } = {}) {
+function journeyHealth(steps, rawOpts = {}) {
+  // A default parameter only covers `undefined`, and this is called from a
+  // dashboard where a throw loses the page rather than the verdict.
+  const { lang = 'en' } = (rawOpts && typeof rawOpts === 'object') ? rawOpts : {};
   const list = Array.isArray(steps) ? steps.filter((s) => s && typeof s === 'object') : [];
   if (!list.length) {
     return {

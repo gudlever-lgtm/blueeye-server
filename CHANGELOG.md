@@ -1,5 +1,75 @@
 # Changelog
 
+## 0.131.0 — V3 Phase 1 complete: the incident lifecycle and its timeline
+
+Extends the V2 incident rather than creating a second one. The spec is explicit —
+reuse V1/V2 tables, avoid duplicate data models — and a parallel table that also
+meant "something is wrong" would drift apart from this one within a month.
+
+### The lifecycle
+
+`open → investigating → identified → resolved → closed`, with two deliberate
+backward paths. Identified can go back to investigating, because being wrong
+about a cause is ordinary and a lifecycle that cannot say "we thought we knew, we
+were wrong" pushes people into closing and reopening, which destroys the
+timeline. A resolved incident can reopen, because a fix that did not hold is the
+same incident — forcing a new one hides the recurrence that recurrence detection
+exists to surface. Closed is the end: something that comes back is genuinely new.
+
+**The dangerous part of widening the enum.** Six V2 queries tested
+`status = 'open'` to mean "not resolved", which was the same thing while open was
+the only active state. An incident somebody had picked up would have vanished
+from the dashboard it most needs to be on — and a repeat failure would have
+opened a *second* incident for a problem already being worked on. All six now ask
+for the active set by name, spelled once so they cannot drift apart again.
+
+### The timeline
+
+Built from events that actually happened, each carrying the time it happened. An
+operator reading "14:07 service marked DEGRADED" must be able to trust that
+something marked it degraded at 14:07, or the timeline is worthless at exactly
+the moment it is read — during the post-mortem.
+
+An event with no timestamp is kept and shown last rather than dropped or
+back-filled with "now": a gap that is visible can be investigated, and a guessed
+one cannot. Repetition is its own event, because "it happened again" is what
+turns a blip into an outage and a timeline showing only the first failure hides
+it.
+
+### Impact is not severity
+
+Severity is how bad the technical fault is; impact is what it costs. A CRIT on a
+page nobody uses is not a high-impact incident, and conflating the two is how
+alert fatigue starts. Impact follows the worst affected journey's criticality.
+
+An unknown impact is reported as unknown, never as low — "no journey information"
+and "low impact" are different facts. And the number of affected users is always
+`unknown`: BlueEyes watches journeys, not people, so there is no column to hold a
+number it cannot observe.
+
+The incident reference (`INC-2026-00124`) is derived from the id and the year
+rather than stored, because a per-year counter is exactly what produces two
+incidents with the same number the first time two workers open one at once.
+
+### A guard for a bug that shipped three times
+
+`function f({ a } = {})` looks like it defaults its input, and does — for
+`undefined` only. `f(null)` sails past and throws on the first property read. The
+same bug appeared in three separate modules in one afternoon.
+
+`test/pureModulesNeverThrow.test.js` now calls every export of every pure
+analysis module with null, a string, a number, an array and an empty object. It
+immediately found three more instances, including one in V2's `journeys/health`
+that predates this work.
+
+These modules run on dashboards and in the alerting path. A throw there does not
+lose the analysis, it loses the PAGE — and an operator looking at an outage is
+the worst possible moment for the screen that explains it to go blank. The test
+also asserts that the trap still behaves the way it assumes, so the guard cannot
+quietly stop guarding.
+
+Migration 090.
+
 ## 0.130.1 — fix: the server container would not start
 
 Migration 088 could never apply. `service_test_baselines.accepted_by` was

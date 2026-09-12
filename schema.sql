@@ -2405,4 +2405,38 @@ CREATE TABLE IF NOT EXISTS `service_incident_events` (
   CONSTRAINT fk_sie_incident FOREIGN KEY (incident_id) REFERENCES service_test_incidents(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- 092 — AI analyses (V3 Phase 4, docs/service-assurance-v3.md §"AI").
+--
+-- One row per answer a provider gave, kept with THE EXACT CONTEXT it was given.
+--
+-- That second half is the point of the table. An AI answer is a suggestion, and
+-- a suggestion nobody can check is one that gets believed. "Why did it say
+-- that?" has to be answerable next month, when the incident has been resolved,
+-- the runs have aged out and the service has been fixed twice — so the context
+-- is stored verbatim rather than as a pointer at data that will have moved on.
+--
+-- What is NOT here, deliberately:
+--   * no provider key, and no provider URL — those live in app_settings, and
+--     copying them per row would put a credential in the history of every
+--     analysis;
+--   * no prompt template — it is code, it is in git, and storing it per row
+--     would make this table the place people edit prompts;
+--   * no raw incident. The context column holds what src/serviceTests/ai/
+--     context.js allowed through, which is an allowlist, never a copy.
+CREATE TABLE IF NOT EXISTS `service_ai_analyses` (
+  `id` BIGINT AUTO_INCREMENT PRIMARY KEY,
+  `incident_id` INT DEFAULT NULL,
+  `application_id` INT DEFAULT NULL,
+  `kind` VARCHAR(64) NOT NULL,
+  `answer` TEXT NOT NULL,
+  `model` VARCHAR(120) DEFAULT NULL,
+  `context` JSON DEFAULT NULL,
+  `duration_ms` INT DEFAULT NULL,
+  `requested_by` INT DEFAULT NULL,
+  `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  KEY idx_ai_incident (incident_id, created_at),
+  KEY idx_ai_application (application_id, created_at),
+  KEY idx_ai_created (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 SET FOREIGN_KEY_CHECKS = 1;

@@ -296,3 +296,52 @@ Where V3's incident model supersedes it, it is migrated rather than duplicated.
 Every V3 feature is reachable over REST, versioned under `/api/v1/...`:
 services, journeys, runs, observations, incidents, correlations, health, alerts,
 notifications, AI analysis.
+
+---
+
+## Phase 4 as built — the AI layer
+
+**No provider is named in Service Assurance core.** The provider arrives as the
+`ai` port (`isEnabled` / `status` / `analyse`), satisfied in `src/server.js` by a
+thin adapter over the existing assistant. Mistral, a local model or an
+enterprise LLM are configuration on the host side, and nothing under
+`src/serviceTests/` can tell which it is talking to — a spec asserts that the
+module's own source names none of them.
+
+**Having no provider is the normal state**, not a failure. Every route answers
+200 either way, the screen shows `Rule-based analysis: available` beside
+`AI: unavailable`, and the reason is on the page — "switched off" and "no key
+set" are different problems for whoever has to fix them.
+
+**What a provider may see is an allowlist** (`src/serviceTests/ai/context.js`),
+and that is the whole security argument rather than an implementation detail.
+The obvious design — take an incident and strip what looks like a secret —
+loses the first time a gateway puts a token in an error message in a format
+nobody wrote a pattern for, and it loses silently. So every field is chosen by
+name from a typed source; there is no spread anywhere in the file and a test
+fails the build if one appears. A canary planted in every source object must not
+turn up in the context.
+
+Left out by name: `subject_key` (it encodes a host and port), host names
+anywhere including inside free text, `actor_id` (which person picked an incident
+up), and an observation's open `detail` column — two fields are taken out of it
+individually. URLs are reduced to a path shape with identifiers collapsed.
+
+The pattern scrub over free text is **defence in depth, never the first
+control**. It caught a real bug in its own first draft: the Authorization rule
+matched `\S+`, which ate the word "Bearer" and left the token after the mask.
+The spec that asserted a mask was *present* passed on that happily; the one that
+asserts the secret is *absent* is what found it. Every case in that spec now
+pairs an input with the secret in it.
+
+**An answer is a suggestion, and it is stored with the exact context it was
+given** (migration 092). Not a pointer at today's data, which will have moved
+on — "why did it say that" has to be answerable next month. The screen labels it
+a suggestion, shows it *below* the rule-based conclusion, and lets the evidence
+be inspected.
+
+**It changes nothing.** There is no path from the layer to a test, a selector, a
+setting or a shell, and a spec asserts the service exposes no function that
+could create one. Asking is operator+ and audited: it sends a customer's data to
+a third party, and who did that is answerable later. Reading an answer is open
+to anyone who can see the incident.

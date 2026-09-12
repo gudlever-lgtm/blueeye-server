@@ -623,3 +623,16 @@
 @media (max-width: 560px) {
   .sa-timeline-event { grid-template-columns: 1fr; }
 }
+
+/* ------------------------------------------------------------- AI assistance
+   An answer is a SUGGESTION and sits below the rule-based conclusion, never
+   above it. The conclusion with evidence under it is the one to read first, and
+   a screen that puts prose on top quietly reverses that. */
+.sa-ai { margin-top: 16px; }
+.sa-ai-state { display: flex; gap: 8px; flex-wrap: wrap; margin: 4px 0 8px; }
+.sa-ai-answer {
+  border: 1px solid var(--hairline); border-left: 3px solid var(--warn, #b8860b);
+  border-radius: 8px; padding: 10px 12px; background: var(--panel-2); margin: 8px 0;
+}
+.sa-ai-label { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; font-size: 0.85em; }
+.sa-ai-text { margin: 8px 0 0; white-space: pre-wrap; }

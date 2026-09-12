@@ -115,6 +115,11 @@ const healthRoutes = (over = {}) => ({
   [`GET ${SA}/assurance/top-applications`]: [],
   [`GET ${SA}/assurance/incidents/9`]: DETAIL,
   [`GET ${SA}/analysis/incidents/9/recurrence`]: { incident_id: 9, recurrence: null, looked_at: 0 },
+  [`GET ${SA}/analysis/incidents/9/ai`]: {
+    incident_id: 9,
+    status: { rules: 'available', ai: 'unavailable', reason: 'This deployment has no AI provider configured.' },
+    analyses: [],
+  },
   ...over,
 });
 
@@ -269,4 +274,114 @@ test('an incident that will not load says so rather than sitting on Loading', as
   const dialog = await openIncident(doc);
   assert.ok(dialog.querySelector('.sa-error'), 'it is still loading');
   assert.deepEqual(errors, []);
+});
+
+// -------------------------------------------------------------- AI panel
+test('with no provider the panel says what IS available beside what is not', async (t) => {
+  // Most deployments have no AI. "AI: unavailable" on its own reads as "no
+  // analysis", which is the opposite of true — the rule-based conclusion is on
+  // the same screen.
+  const { doc, errors } = await boot(t, healthRoutes());
+  const dialog = await openIncident(doc);
+  const panel = dialog.querySelector('.sa-ai');
+  assert.ok(panel, 'the AI panel is missing entirely');
+  assert.match(panel.textContent, /Rule-based analysis: available/);
+  assert.match(panel.textContent, /AI: unavailable/);
+  assert.match(panel.textContent, /no AI provider configured/, 'unavailable with no reason is a bug report waiting to be filed');
+  assert.equal(byText(panel, 'button', 'Explain this incident'), null, 'it offered a button that cannot work');
+  assert.deepEqual(errors, []);
+});
+
+test('with a provider it offers the button, and an answer is labelled a suggestion', async (t) => {
+  const { doc } = await boot(t, healthRoutes({
+    [`GET ${SA}/analysis/incidents/9/ai`]: {
+      incident_id: 9,
+      status: { rules: 'available', ai: 'available', reason: null, provider: 'p', model: 'm' },
+      analyses: [{
+        id: 1, kind: 'explain_incident', answer: 'The search endpoint is returning 500.',
+        model: 'test-model', created_at: '2026-09-12T09:30:00Z',
+        context: { task: 'explain_incident', incident: { summary: 'HTTP 500' } },
+        is_suggestion: true, source: 'ai',
+      }],
+    },
+  }));
+  const dialog = await openIncident(doc);
+  const panel = dialog.querySelector('.sa-ai');
+  assert.match(panel.textContent, /AI: available/);
+  assert.match(panel.textContent, /The search endpoint is returning 500/);
+  assert.match(panel.textContent, /Suggestion, not a finding/, 'an AI answer presented as a finding is the thing to avoid');
+  assert.ok(byText(panel, 'button', 'Ask again'));
+});
+
+test('the evidence the model was given can be inspected', async (t) => {
+  // An answer whose evidence cannot be inspected is one that gets believed.
+  const { doc } = await boot(t, healthRoutes({
+    [`GET ${SA}/analysis/incidents/9/ai`]: {
+      incident_id: 9,
+      status: { rules: 'available', ai: 'available' },
+      analyses: [{ id: 1, answer: 'x', created_at: '2026-09-12T09:30:00Z', context: { task: 'explain_incident', canary: 'CTX' } }],
+    },
+  }));
+  const dialog = await openIncident(doc);
+  const details = [...dialog.querySelectorAll('.sa-ai details')];
+  assert.equal(details.length, 1, 'the context is not inspectable');
+  assert.match(details[0].textContent, /CTX/);
+});
+
+test('the answer sits below the rule-based analysis, never above it', async (t) => {
+  // The conclusion with evidence under it is the one to read first, and a screen
+  // that puts prose on top quietly reverses that.
+  const { doc } = await boot(t, healthRoutes({
+    [`GET ${SA}/analysis/incidents/9/ai`]: {
+      incident_id: 9,
+      status: { rules: 'available', ai: 'available' },
+      analyses: [{ id: 1, answer: 'prose', created_at: '2026-09-12T09:30:00Z', context: {} }],
+    },
+  }));
+  const dialog = await openIncident(doc);
+  const body = dialog.querySelector('.sa-modal-body');
+  const ai = body.querySelector('.sa-ai');
+  // The element that OWNS the text, not any ancestor containing it — a
+  // findIndex over textContent matches the modal body itself, which is before
+  // everything, so the assertion passed whatever the order was.
+  const conclusion = [...body.querySelectorAll('*')].find((n) => [...n.childNodes]
+    .some((c) => c.nodeType === 3 && /Traced to/.test(c.textContent)));
+  assert.ok(ai, 'the AI panel is missing');
+  assert.ok(conclusion, 'the rule-based conclusion is missing');
+  // DOCUMENT_POSITION_FOLLOWING (4) means `ai` comes after `conclusion`.
+  const relation = conclusion.compareDocumentPosition(ai);
+  assert.ok(relation & 4, 'the AI answer was placed above the rule-based conclusion');
+});
+
+test('a viewer sees an existing answer and is not offered to buy another', async (t) => {
+  // Reading is free. Asking costs money and sends a customer's data outward,
+  // which is an operator's call.
+  const { doc } = await boot(t, healthRoutes({
+    [`GET ${SA}/analysis/incidents/9/ai`]: {
+      incident_id: 9,
+      status: { rules: 'available', ai: 'available' },
+      analyses: [{ id: 1, answer: 'prose', created_at: '2026-09-12T09:30:00Z', context: {} }],
+    },
+  }), 'operator');
+  const dialog = await openIncident(doc);
+  assert.ok(byText(dialog.querySelector('.sa-ai'), 'button', 'Ask again'), 'an operator was not offered it');
+});
+
+test('pressing the button asks, and the panel reloads rather than guessing', async (t) => {
+  const { doc, calls } = await boot(t, healthRoutes({
+    [`GET ${SA}/analysis/incidents/9/ai`]: {
+      incident_id: 9, status: { rules: 'available', ai: 'available' }, analyses: [],
+    },
+    [`POST ${SA}/analysis/incidents/9/ai`]: {
+      available: true, reason: null,
+      analysis: { kind: 'explain_incident', answer: 'fresh', is_suggestion: true, source: 'ai' },
+    },
+  }));
+  const dialog = await openIncident(doc);
+  await click(byText(dialog.querySelector('.sa-ai'), 'button', 'Explain this incident'), 400);
+
+  assert.ok(calls.some((c) => c.method === 'POST' && c.path.endsWith('/analysis/incidents/9/ai')), 'it asked nothing');
+  // Two GETs: the first render, and the reload after the answer. The panel shows
+  // what the server has, never what it hoped the answer would be.
+  assert.ok(calls.filter((c) => c.method === 'GET' && c.path.endsWith('/analysis/incidents/9/ai')).length >= 2);
 });

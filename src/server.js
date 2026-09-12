@@ -391,6 +391,26 @@ function start() {
   };
 
   let assuranceNotify = null;
+  // Service Assurance's AI port.
+  //
+  // Late-bound, like `assuranceNotify` above and for the same reason: the
+  // assistant is built further down this file. The module holds this object for
+  // the life of the process and asks it on every call, so an assistant that is
+  // reconfigured at runtime (Settings → AI applies without a restart) is picked
+  // up without rebuilding anything.
+  //
+  // NEUTRAL on purpose. `isEnabled/status/analyse` is the whole contract, and
+  // the module cannot tell from it which provider is behind it — which is the
+  // spec's rule that no provider is named in Service Assurance core.
+  let aiAssistant = null;
+  const serviceAssuranceAi = {
+    isEnabled: () => Boolean(aiAssistant && aiAssistant.isEnabled()),
+    status: () => (aiAssistant ? aiAssistant.status() : { enabled: false, configured: false, provider: null, model: null }),
+    analyse: (task, context) => {
+      if (!aiAssistant) throw new Error('the assistant is not available');
+      return aiAssistant.analyseServiceAssurance(task, context);
+    },
+  };
   const serviceTests = createServiceTestsModule({
     db,
     secrets: secretBox,
@@ -412,6 +432,7 @@ function start() {
     // worse failure than the volume this is guarding against.
     captureRateLimit: createRateLimiter({ windowMs: 60 * 1000, max: 120 }),
     severityRules: severityRulesPort,
+    ai: serviceAssuranceAi,
     // The browser-side recorder. The module reads it to build the bookmarklet;
     // it is served from public/ as well, so an operator can read it first.
     recorderScriptPath: path.join(__dirname, '..', 'public', 'recorder.js'),
@@ -707,6 +728,11 @@ function start() {
   const assistant = createAssistant({
     config: analysisConfig, findingStore, agentsRepo, locationsRepo, probeResultsRepo, logger,
   });
+  // Closes the late binding declared beside createServiceTestsModule above.
+  // Until this line Service Assurance reports AI as unavailable, which is the
+  // correct answer during boot and the same answer it gives on a deployment
+  // that never configures one.
+  aiAssistant = assistant;
 
   // Cross-agent cluster service (repo created above). Groups findings from DIFFERENT
   // agents in the same window into one cluster with a suspected common cause +

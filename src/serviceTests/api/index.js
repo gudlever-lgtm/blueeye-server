@@ -34,6 +34,10 @@ function createServiceTestsApiRouter({
   // router degrades to read-only incident/certificate views rather than failing
   // to build.
   reactor = null,
+  // The AI assistance layer. Always present as an object; `null` would make
+  // every call site test for it, and the layer already answers "unavailable,
+  // because…" for the deployments that have no provider — which is most of them.
+  aiAnalysis = null,
   artifacts = null,
   // Returns public/recorder.js as a string, so the bookmarklet can carry the
   // recorder inline and survive the target site's Content-Security-Policy.
@@ -58,7 +62,7 @@ function createServiceTestsApiRouter({
   if (requireAuth) router.use(requireAuth);
   if (requireFeature) router.use(requireFeature);
 
-  const deps = { repositories, settings, queue, reactor, artifacts, audit, logger, requireRole, roles, recorderSource, publicUrl };
+  const deps = { repositories, settings, queue, reactor, aiAnalysis, artifacts, audit, logger, requireRole, roles, recorderSource, publicUrl };
 
   router.use('/applications', createApplicationsRouter(deps));
   router.use('/tests', createTestsRouter(deps));

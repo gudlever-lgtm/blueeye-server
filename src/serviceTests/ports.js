@@ -26,6 +26,21 @@
 //                                        the alerting dispatcher; omitted means
 //                                        incidents are recorded and not sent
 //   certificateChecker { check }         a TLS inspector. Omitted = the real one
+//   ai { isEnabled, status, analyse }    an AI provider, as a NEUTRAL interface.
+//                                        A port rather than an import for the
+//                                        usual reason and one more: the spec
+//                                        requires that no provider is named in
+//                                        Service Assurance core, so Mistral, a
+//                                        local model and an enterprise LLM are
+//                                        all configuration on the host side.
+//                                        Omitted means the module runs with no
+//                                        AI at all, which is the default and a
+//                                        fully supported state — every screen
+//                                        says "rules: available, AI:
+//                                        unavailable" and nothing else changes.
+//                                          isEnabled() -> boolean
+//                                          status()    -> { enabled, configured, provider, model }
+//                                          analyse(task, context) -> { answer, model }
 //   severityRules { decide(event) }      the operator's own severity rules
 //                                        ("cert_expiring is an INFO for us").
 //                                        A port rather than an import so the

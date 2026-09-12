@@ -39,6 +39,7 @@ const DB = `be_repo_${Date.now().toString(36)}${Math.floor(Math.random() * 1e6).
 
 const { createObservationsRepository } = require(path.join(ROOT, 'src/serviceTests/storage/observationsRepository'));
 const { createIncidentsRepository } = require(path.join(ROOT, 'src/serviceTests/storage/incidentsRepository'));
+const { createAiAnalysesRepository } = require(path.join(ROOT, 'src/serviceTests/storage/aiAnalysesRepository'));
 
 const checks = [];
 const check = (name, fn) => checks.push({ name, fn });
@@ -148,6 +149,41 @@ check('incidents: the aggregate queries all run', async (pool) => {
   assert.ok(typeof counts.total === 'number');
   assert.ok(Array.isArray(await repo.countByApplication()) || typeof await repo.countByApplication() === 'object');
   assert.strictEqual(typeof await repo.purgeResolvedOlderThan(90), 'number');
+});
+
+check('ai analyses: an answer is written with its context and read back', async (pool) => {
+  const incidents = createIncidentsRepository({ db: { pool } });
+  const repo = createAiAnalysesRepository({ db: { pool } });
+  const incident = await incidents.open({
+    application_id: 1, subject_type: 'test', subject_key: 'test:ai', subject_label: 'Search',
+    kind: 'http_500', severity: 'CRIT', summary: 'x', explanation: 'y', evidence: [],
+  });
+
+  const stored = await repo.record({
+    incident_id: incident.id,
+    application_id: 1,
+    kind: 'explain_incident',
+    answer: 'The search endpoint is returning 500 while its neighbours answer.',
+    model: 'test-model',
+    context: { task: 'explain_incident', incident: { summary: 'x' }, observations: [] },
+    duration_ms: 812,
+    requested_by: 1,
+  });
+  assert.ok(stored.id, 'nothing was written');
+  assert.strictEqual(stored.is_suggestion, true, 'every row in this table is a suggestion');
+  assert.deepStrictEqual(stored.context.incident, { summary: 'x' }, 'a JSON column must survive the round trip');
+
+  const back = await repo.forIncident(incident.id);
+  assert.strictEqual(back.length, 1);
+  assert.strictEqual(back[0].model, 'test-model');
+  assert.strictEqual(typeof await repo.purgeOlderThan(180), 'number');
+
+  // The incident goes; the analysis stays. Losing the record of what a provider
+  // was told because somebody purged an old incident is what this table exists
+  // to prevent, so there is deliberately no foreign key.
+  await pool.query('DELETE FROM service_test_incidents WHERE id = ?', [incident.id]);
+  const orphan = await repo.findById(stored.id);
+  assert.ok(orphan, 'the analysis went with the incident it explained');
 });
 
 async function main() {

@@ -3270,6 +3270,7 @@
               : null,
             timelineList(incident.timeline),
             recurrencePanel(incident.id),
+            aiPanel(incident.id),
             isOperator() ? moveButtons(incident, load) : null);
         }).catch(function (e) {
           body.textContent = '';
@@ -3329,6 +3330,86 @@
             ? el('p', { class: 'sa-help' }, t('sa.incident.rhythm', { detail: r.rhythm.detail }))
             : null);
       }).catch(function () { /* a recurrence nobody could load is not a finding */ });
+      return wrap;
+    }
+
+    // The AI assistance layer, on the incident it explains.
+    //
+    // Two things this panel has to get right, and they pull in the same
+    // direction:
+    //
+    //   * WITHOUT A PROVIDER IT MUST NOT LOOK BROKEN. Most deployments have no
+    //     AI at all, and that is a supported state, not a missing feature. So it
+    //     says what IS available beside what is not — the rule-based analysis is
+    //     right there on the same screen.
+    //   * AN ANSWER IS A SUGGESTION. It is labelled as one and shown BELOW the
+    //     rule-based conclusion, never above it, because the conclusion with
+    //     evidence under it is the one to read first.
+    function aiPanel(incidentId) {
+      var wrap = el('div', { class: 'sa-ai' });
+
+      function render(data) {
+        wrap.textContent = '';
+        var available = data.status && data.status.ai === 'available';
+        var existing = (data.analyses || [])[0];
+        mount(wrap,
+          el('h5', {}, t('sa.ai.title')),
+          // The spec's own picture: rules available, AI whatever it is. Saying
+          // only the second reads as "no analysis", which is the opposite of true.
+          el('p', { class: 'sa-ai-state' },
+            el('span', { class: 'chip ok' }, t('sa.ai.rulesAvailable')),
+            el('span', { class: 'chip ' + (available ? 'ok' : '') },
+              available ? t('sa.ai.available') : t('sa.ai.unavailable'))),
+          !available && data.status && data.status.reason
+            ? el('p', { class: 'sa-help' }, data.status.reason)
+            : null,
+          existing ? answerBlock(existing) : null,
+          available && isOperator()
+            ? el('button', {
+              class: 'ghost small',
+              onclick: function (e) { ask(e.target); },
+            }, existing ? t('sa.ai.again') : t('sa.ai.ask'))
+            : null);
+      }
+
+      function answerBlock(analysis) {
+        return el('div', { class: 'sa-ai-answer' },
+          // Said on the answer itself, not once at the top of the panel: this
+          // is a suggestion, and the rule-based conclusion above it is the one
+          // with evidence under it.
+          el('div', { class: 'sa-ai-label' },
+            el('span', { class: 'chip warn' }, t('sa.ai.suggestion')),
+            analysis.model ? el('span', { class: 'muted' }, analysis.model) : null,
+            el('span', { class: 'muted' }, when(analysis.created_at))),
+          el('p', { class: 'sa-ai-text' }, analysis.answer),
+          // What it was told. An answer whose evidence cannot be inspected is
+          // one that gets believed.
+          analysis.context
+            ? el('details', {}, el('summary', {}, t('sa.ai.evidence')),
+              el('pre', { class: 'sa-pre' }, JSON.stringify(analysis.context, null, 2)))
+            : null);
+      }
+
+      function ask(button) {
+        if (button) button.disabled = true;
+        api(API + '/analysis/incidents/' + incidentId + '/ai', { method: 'POST', body: {} })
+          .then(function (res) {
+            if (!res.available) { toast(res.reason || t('sa.ai.unavailable'), true); load(); return; }
+            load();
+          })
+          .catch(function (e) { toast(err(e), true); })
+          .then(function () { if (button) button.disabled = false; });
+      }
+
+      function load() {
+        api(API + '/analysis/incidents/' + incidentId + '/ai')
+          .then(render)
+          .catch(function () {
+            wrap.textContent = '';
+            mount(wrap, el('h5', {}, t('sa.ai.title')), el('p', { class: 'muted' }, t('sa.ai.unavailable')));
+          });
+      }
+      load();
       return wrap;
     }
 

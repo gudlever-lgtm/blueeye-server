@@ -1,11 +1,12 @@
 'use strict';
 
 const express = require('express');
-const { asyncHandler, notFound, invalidId, parseId } = require('./helpers');
+const { asyncHandler, notFound, invalidId, parseId, auditor, userId } = require('./helpers');
 const { observationsFromRun, layerSummary } = require('../observe/observations');
 const { correlate, describeCorrelation } = require('../correlate/correlate');
 const { analyseRootCause } = require('../rootcause/rootCause');
 const { findRecurrence } = require('../history/recurrence');
+const { referenceFor } = require('../incidents/lifecycle');
 const { analyseDependencies } = require('../dependencies/dependencies');
 const { detectAnomalies } = require('../anomaly/anomalies');
 const { assessService } = require('../health/serviceHealth');
@@ -38,12 +39,16 @@ const INCIDENTS_FOR_RECURRENCE = 200;
 const RUNS_PER_TEST_FOR_MAP = 10;
 const MAX_TESTS_FOR_MAP = 200;
 
-function createAnalysisRouter({ repositories, requireRole, roles }) {
+function createAnalysisRouter({ repositories, requireRole, roles, aiAnalysis = null, audit = null }) {
   const router = express.Router();
   const {
-    runs, tests, applications, journeys, incidents, observations, certificates,
+    runs, tests, applications, journeys, incidents, observations, certificates, aiAnalyses,
   } = repositories;
   const read = requireRole(roles.VIEWER, roles.OPERATOR, roles.ADMIN);
+  // Asking a provider costs money and sends data outward. That is an operator's
+  // decision, not a viewer's, even though the ANSWER is readable by anyone.
+  const write = requireRole(roles.OPERATOR, roles.ADMIN);
+  const record = auditor(audit);
 
   // ------------------------------------------------------------- one run
   //
@@ -263,6 +268,116 @@ function createAnalysisRouter({ repositories, requireRole, roles }) {
       }),
     });
   }));
+
+  // ------------------------------------------------------------------- AI
+  //
+  // Every route here answers 200 whether or not a provider is configured. "AI is
+  // switched off" is not an error — it is the default state of the product, and
+  // a 4xx would make every screen treat the normal case as a failure.
+
+  router.get('/ai/status', read, asyncHandler(async (req, res) => {
+    // The spec's own picture, as a response:
+    //     Rule-based analysis:  AVAILABLE
+    //     AI analysis:          UNAVAILABLE
+    // The first line is why the second is not alarming.
+    return res.json(aiAnalysis ? aiAnalysis.status()
+      : { rules: 'available', ai: 'unavailable', reason: 'This deployment has no AI provider configured.', provider: null, model: null });
+  }));
+
+  // What a provider has already said about this incident. Read separately from
+  // asking, so a screen shows an existing answer rather than buying another.
+  router.get('/incidents/:id/ai', read, asyncHandler(async (req, res) => {
+    const id = parseId(req.params.id);
+    if (id === null) return invalidId(res);
+    const incident = await incidents.findById(id);
+    if (!incident) return notFound(res, 'Incident not found');
+    const analyses = aiAnalyses ? await aiAnalyses.forIncident(incident.id) : [];
+    return res.json({
+      incident_id: incident.id,
+      status: aiAnalysis ? aiAnalysis.status() : { rules: 'available', ai: 'unavailable', reason: null },
+      analyses,
+    });
+  }));
+
+  // Ask for one.
+  //
+  // Synchronous from the caller's point of view — a button press waits for an
+  // answer — but NOTHING else waits on this: no run, no sweep, no incident and
+  // no alert reaches this route. That is what the spec means by asynchronous:
+  // the analysis is off the critical path, not that the HTTP call returns early
+  // and leaves the operator watching a spinner with nothing behind it.
+  router.post('/incidents/:id/ai', write, asyncHandler(async (req, res) => {
+    const id = parseId(req.params.id);
+    if (id === null) return invalidId(res);
+    const incident = await incidents.findById(id);
+    if (!incident) return notFound(res, 'Incident not found');
+    if (!aiAnalysis) {
+      return res.json({ available: false, reason: 'This deployment has no AI provider configured.', analysis: null });
+    }
+
+    // Everything the rule layer already worked out, gathered here and handed to
+    // the allowlist. The model explains what the operator was shown; it is not
+    // given a second, different view of the same incident to form its own
+    // opinion from.
+    const application = incident.application_id ? await applications.findById(incident.application_id) : null;
+    const timeline = typeof incidents.timeline === 'function'
+      ? await incidents.timeline(incident.id).catch(() => [])
+      : [];
+    const facts = observations && incident.test_id
+      ? await observations.list({ testId: incident.test_id, limit: 100 }).catch(() => [])
+      : [];
+    const history = await incidents.list({ limit: INCIDENTS_FOR_RECURRENCE }).catch(() => []);
+
+    const correlation = correlate({ observations: facts, history: { sameFailureCount: incident.occurrences || 0 } });
+    const result = await aiAnalysis.explainIncident({
+      incident: { ...incidentFacts(incident), reference: referenceFor(incident) },
+      applicationName: application ? application.name : null,
+      applicationId: incident.application_id ?? null,
+      correlation,
+      rootCause: analyseRootCause({
+        correlation,
+        observations: facts,
+        baseUrl: application ? application.base_url : null,
+      }),
+      recurrence: findRecurrence({ incident, history }),
+      timeline,
+      observations: facts,
+    });
+
+    // Audited: an AI request sends a customer's data to a third party, and who
+    // asked for it is the sort of thing somebody will need to answer later.
+    record(req, 'service_ai_analysis', incident.id, `${incident.subject_key} → ${result.available ? 'answered' : 'unavailable'}`);
+    return res.json(result);
+  }));
+
+  // The incident's fields, by name.
+  //
+  // Not a security control — context.js is, and it would strip a spread here
+  // just as well; a mutation that replaced this with `{...incident}` leaked
+  // nothing, which is the allowlist doing its job. What this buys is legibility:
+  // the route says on its face what it hands outward, so a reviewer reading the
+  // diff that sends data to a third party can see the payload without opening a
+  // second file.
+  function incidentFacts(incident) {
+    return {
+      id: incident.id,
+      subject_label: incident.subject_label,
+      subject_type: incident.subject_type,
+      kind: incident.kind,
+      severity: incident.severity,
+      status: incident.status,
+      summary: incident.summary,
+      likely_cause: incident.likely_cause,
+      explanation: incident.explanation,
+      correlated_layer: incident.correlated_layer,
+      confidence: incident.confidence,
+      impact: incident.impact,
+      impact_reason: incident.impact_reason,
+      occurrences: incident.occurrences,
+      opened_at: incident.opened_at,
+      evidence: incident.evidence,
+    };
+  }
 
   // ------------------------------------------------------------- plumbing
   async function loadApplication(req, res) {

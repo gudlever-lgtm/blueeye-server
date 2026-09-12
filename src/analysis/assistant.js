@@ -548,7 +548,38 @@ function createAssistant({
     return { answer, model: currentModel(), usedFindings: findings.length };
   }
 
-  return { isEnabled, status, explain, explainDiagnostic, summarizeLocation, narrateInvestigation, generateNis2Draft, diagnoseTransaction, askEvent, suggestRemediation, suggestClusterCause, buildContext, buildLocationContext };
+  // Service Assurance's AI port (docs/service-assurance-v3.md §"AI").
+  //
+  // A single neutral entry point, because the module on the other side must not
+  // know which provider or which method it is reaching: `analyse(task, context)`
+  // is the whole contract, and the prompt for each task lives here, on the host
+  // side, with the rest of the provider-specific text.
+  //
+  // The context arrives ALREADY through the module's allowlist
+  // (src/serviceTests/ai/context.js) — no masking is done or needed here, and
+  // doing a second pass would suggest the first was not trusted.
+  async function analyseServiceAssurance(task, context) {
+    if (!currentEnabled()) throw new FeatureDisabledError();
+    const system = task === 'suggest_tests'
+      ? 'You are a service-monitoring assistant for BlueEyes. Propose a few user journeys worth '
+        + 'monitoring for this service, based ONLY on the provided context (existing journeys, '
+        + 'discovered pages, failing endpoints). Do not propose what already exists. These are '
+        + 'SUGGESTIONS for a person to approve — never state that anything has been created. '
+        + 'NEVER invent pages, endpoints or features that are not in the context.'
+      : 'You are a service-monitoring assistant for BlueEyes, explaining ONE incident to an '
+        + 'operator. Use ONLY the provided context. BlueEyes has already reached a rule-based '
+        + 'conclusion: your job is to explain it in plain language and say what to check next, '
+        + 'NOT to reach a different one. Each candidate cause carries a "basis": "observed" means '
+        + 'BlueEyes saw it, "inferred" means it was deduced, and "unobservable" means BlueEyes '
+        + 'cannot see it at all and it is only a place to look — never present an unobservable '
+        + 'cause as a finding. Mention what was NOT checked when the context says so. NEVER invent '
+        + 'causes, hosts, addresses or evidence that are not in the context.';
+    const user = JSON.stringify({ task, context });
+    const answer = await chat(system, user);
+    return { answer, model: currentModel() };
+  }
+
+  return { isEnabled, status, explain, explainDiagnostic, summarizeLocation, narrateInvestigation, generateNis2Draft, diagnoseTransaction, askEvent, suggestRemediation, suggestClusterCause, buildContext, buildLocationContext, analyseServiceAssurance };
 }
 
 module.exports = { createAssistant, FeatureDisabledError, EVENT_INSUFFICIENT_ANSWER };

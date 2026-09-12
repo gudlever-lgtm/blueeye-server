@@ -33,6 +33,7 @@ const MODULES = {
   'dependencies/dependencies': require('../src/serviceTests/dependencies/dependencies'),
   'anomaly/anomalies': require('../src/serviceTests/anomaly/anomalies'),
   'alerts/grouping': require('../src/serviceTests/alerts/grouping'),
+  'ai/context': require('../src/serviceTests/ai/context'),
   'analysis/baseline': require('../src/serviceTests/analysis/baseline'),
 };
 

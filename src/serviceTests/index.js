@@ -15,6 +15,8 @@ const { createWorkersRepository } = require('./storage/workersRepository');
 const { createCertificatesRepository } = require('./storage/certificatesRepository');
 const { createIncidentsRepository } = require('./storage/incidentsRepository');
 const { createObservationsRepository } = require('./storage/observationsRepository');
+const { createAiAnalysesRepository } = require('./storage/aiAnalysesRepository');
+const { createAiAnalysis } = require('./ai/analyse');
 const { createRecordingsRepository } = require('./storage/recordingsRepository');
 const { createJourneysRepository } = require('./storage/journeysRepository');
 const { createHealingRepository } = require('./storage/healingRepository');
@@ -75,6 +77,8 @@ function createServiceTestsModule(rawPorts = {}) {
     // V3: the typed facts every run produces, and what the intelligence layer
     // reads instead of re-parsing four columns in three shapes.
     observations: createObservationsRepository({ db, now: clock }),
+    // V3 Phase 4: what a provider answered, with the evidence it was given.
+    aiAnalyses: createAiAnalysesRepository({ db, now: clock }),
     settings: settingsRepo,
   };
 
@@ -135,6 +139,16 @@ function createServiceTestsModule(rawPorts = {}) {
     return analyseDependencies({ map, baseUrl: application.base_url });
   }
 
+  // The AI assistance layer. Built whatever the host wired: with no `ai` port it
+  // reports itself unavailable and everything else carries on, which is the
+  // default state of every deployment and not an error path.
+  const aiAnalysis = createAiAnalysis({
+    ai: rawPorts.ai || null,
+    store: repositories.aiAnalyses,
+    logger,
+    now: clock,
+  });
+
   // The reaction loop — certificates watched on their own schedule, failing tests
   // counted into incidents, alerts sent on a state change. Built only where it
   // can run: the API process wires `notify` to the alerting dispatcher, and the
@@ -176,6 +190,7 @@ function createServiceTestsModule(rawPorts = {}) {
       settings,
       queue,
       reactor,
+      aiAnalysis,
       artifacts,
       audit,
       logger,

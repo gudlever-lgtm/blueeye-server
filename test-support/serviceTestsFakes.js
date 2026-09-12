@@ -17,6 +17,7 @@ const { createServiceTestSettings } = require('../src/serviceTests/settings');
 const { createQueue } = require('../src/serviceTests/scheduler/queue');
 const { bucketKey, sqlFormat } = require('../src/serviceTests/stats/period');
 const { createAssuranceReactor } = require('../src/serviceTests/assurance/reactor');
+const { createAiAnalysis } = require('../src/serviceTests/ai/analyse');
 const { ACTIVE: INCIDENT_ACTIVE, canTransition: incidentCanTransition } = require('../src/serviceTests/incidents/lifecycle');
 const { createSecretBox } = require('../src/lib/secretBox');
 const { requireAuth, requireRole } = require('../src/auth/middleware');
@@ -119,6 +120,7 @@ function makeServiceTests(overrides = {}) {
     incidents: makeTable(overrides.incidents || []),
     incidentEvents: makeTable(overrides.incidentEvents || []),
     observations: makeTable(overrides.observations || []),
+    aiAnalyses: makeTable(overrides.aiAnalyses || []),
     baselines: makeTable(overrides.baselines || []),
     recordings: makeTable(overrides.recordings || []),
     journeys: makeTable(overrides.journeys || []),
@@ -476,6 +478,40 @@ const bool = (v) => !!v;
         const cutoff = new Date(Date.now() - window * 86400000);
         const doomed = t.observations.where((r) => new Date(r.observed_at) < cutoff);
         for (const row of doomed) t.observations.remove(row.id);
+        return doomed.length;
+      },
+    },
+    // What a provider answered, with the exact context it was given. Every read
+    // carries `is_suggestion` whether or not anybody asked, like the real one:
+    // a reader who has to remember an answer is a suggestion is one who forgets.
+    aiAnalyses: {
+      async record(input) {
+        const row = (input && typeof input === 'object') ? input : {};
+        return repositories.aiAnalyses.shape(t.aiAnalyses.insert({
+          incident_id: row.incident_id ?? null,
+          application_id: row.application_id ?? null,
+          kind: row.kind || 'unknown',
+          answer: String(row.answer ?? ''),
+          model: row.model ?? null,
+          context: row.context ?? null,
+          duration_ms: row.duration_ms ?? null,
+          requested_by: row.requested_by ?? null,
+          created_at: row.created_at instanceof Date ? row.created_at : new Date(),
+        }));
+      },
+      shape(row) { return row ? { ...row, is_suggestion: true, source: 'ai' } : null; },
+      async findById(id) { return repositories.aiAnalyses.shape(t.aiAnalyses.find(id)); },
+      async forIncident(incidentId, { limit = 10 } = {}) {
+        return t.aiAnalyses.where((r) => r.incident_id === Number(incidentId))
+          .sort((a, b) => new Date(b.created_at) - new Date(a.created_at) || b.id - a.id)
+          .slice(0, limit)
+          .map(repositories.aiAnalyses.shape);
+      },
+      async purgeOlderThan(days) {
+        const window = Number(days) > 0 ? Number(days) : 180;
+        const cutoff = new Date(Date.now() - window * 86400000);
+        const doomed = t.aiAnalyses.where((r) => new Date(r.created_at) < cutoff);
+        for (const row of doomed) t.aiAnalyses.remove(row.id);
         return doomed.length;
       },
     },
@@ -1053,6 +1089,14 @@ const bool = (v) => !!v;
     settings,
     queue,
     reactor: overrides.reactor === null ? null : reactor,
+    // The AI layer, built over whatever provider the spec supplies. With none —
+    // which is the default, and the state of most real deployments — it reports
+    // itself unavailable and every route still answers 200.
+    aiAnalysis: createAiAnalysis({
+      ai: overrides.ai ?? null,
+      store: repositories.aiAnalyses,
+      now: () => new Date(),
+    }),
     artifacts: overrides.artifacts ?? null,
     audit,
     logger: null,

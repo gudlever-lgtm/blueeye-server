@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.126.4 — journey Run and Edit tested in a real DOM, and a segmented control that is not ragged
+
+### The dashboard half of journey Run and Edit
+
+Eight tests that boot the whole dashboard and navigate it the way a person does
+— Service Assurance, Journeys, the journey itself — so the module is mounted by
+app.js with its real helpers rather than a hand-rolled stand-in that could
+disagree with what ships.
+
+They pin down what matters: Run reaches the API and lands on Runs, a failed run
+does not pretend it went there, a journey with no steps is not offered the button
+at all, the Edit dialog opens loaded rather than blank (a form that opens empty
+silently offers to erase what is there), a cleared expected duration sends null
+rather than zero, and a rejected save shows the server's message with the dialog
+still open.
+
+One of them was written wrong and passed anyway. It looked for the segmented
+control, returned early when it could not find one, and reported green — for the
+wrong endpoint name. A test that quietly returns when it cannot find the thing it
+is about passes forever while the thing is broken. It asserts now.
+
+### The Day / Week / Month / Year control
+
+It looked ragged, and the cause was a missing line rather than bad taste: the
+global `button` rule gives every button `border-radius: var(--radius-sm)`, and
+the segment rule set `border: none` but never touched the radius. Four 10px chips
+inside a 6px container with `overflow: hidden` clipping them — separators landing
+at odd places, the active pill floating.
+
+Rebuilt as what it is: a recessed track with one raised pill. The container owns
+its geometry (outer radius = inner radius + padding, so the pill nests
+concentrically), inactive segments are muted because they label somewhere you are
+not, and the active one uses the app's own resting-elevation shadow rather than a
+hand-rolled one — the token scale is deliberately soft and a heavier shadow made
+the pill look like it was poking out of the track.
+
+The three copies of the markup are now one `segmented()` helper, which also fixed
+something invisible: it looked like a toggle group and announced itself as four
+unrelated buttons. A screen reader heard "Day, Week, Month, Year" and no answer to
+the only question that matters. It carries `role="group"`, a name saying what is
+being chosen, and `aria-pressed` on each segment.
+
 ## 0.126.3 — a journey you can run and edit, and one that knows it is a duplicate
 
 ### Run a journey

@@ -249,15 +249,58 @@
 .sa-chart-grid { stroke: var(--hairline, #e5e7eb); stroke-width: 1; }
 .sa-chart-axis { fill: var(--muted, #6b7280); font-size: 11px; }
 
-/* The segmented period control: day / week / month / year. */
-.sa-segmented { display: inline-flex; border: 1px solid var(--hairline, #e5e7eb); border-radius: 6px; overflow: hidden; }
-.sa-segment {
-  background: none; border: none; border-right: 1px solid var(--hairline, #e5e7eb);
-  padding: 5px 12px; font: inherit; font-size: 13px; color: var(--text, #111827); cursor: pointer;
+/* The segmented control: day / week / month / year, and the chart form picker.
+   A recessed track with one raised pill in it, rather than four bordered
+   buttons in a box.
+
+   The reset on the first line is the whole reason this used to look wrong. The
+   global `button` rule gives every button `border-radius: var(--radius-sm)` and
+   a 1px border; the old rule set `border: none` but never touched the radius,
+   so each segment kept its own 10px corners inside a 6px container that clipped
+   them. Four rounded chips, ragged edges, separators landing at odd places. A
+   segmented control has to own its own geometry. */
+.sa-segmented {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--panel-2, #f1f1ef);
+  border: 1px solid var(--hairline, #e5e7eb);
+  /* Outer radius = inner radius + the padding, so the pill nests concentrically
+     instead of leaving a crescent of track in each corner. */
+  border-radius: 10px;
 }
-.sa-segment:last-child { border-right: none; }
-.sa-segment:hover { background: var(--panel-2, #f1f1ef); }
-.sa-segment.active { background: var(--accent, #2563eb); color: #fff; }
+.sa-segment {
+  background: none;
+  border: none;
+  border-radius: 8px;
+  padding: 5px 14px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.35;
+  /* Inactive segments are labels for somewhere you are not. Muted, so the one
+     you ARE on is the only thing with full contrast. */
+  color: var(--muted, #6b7280);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background .15s var(--ease, ease), color .15s var(--ease, ease);
+}
+.sa-segment:hover:not(.active) { background: var(--panel, #fff); color: var(--text, #111827); }
+.sa-segment.active {
+  background: var(--accent, #2563eb);
+  color: var(--btn-fg, #fff);
+  font-weight: 600;
+  /* The app's resting elevation, not a hand-rolled shadow: the token scale is
+     deliberately soft ("shadows you feel rather than see"), and a heavier one
+     here made the pill look like it was poking out of the track. */
+  box-shadow: var(--shadow, 0 1px 2px rgb(15 23 42 / 0.06));
+}
+/* The shared focus halo, inside the track rather than around the whole group,
+   so tabbing through says which segment is focused. */
+.sa-segment:focus-visible { outline: none; box-shadow: var(--ring, 0 0 0 3px rgb(37 99 235 / 0.35)); }
+.sa-segment.active:focus-visible {
+  box-shadow: var(--shadow, 0 1px 2px rgb(15 23 42 / 0.06)), var(--ring, 0 0 0 3px rgb(37 99 235 / 0.35));
+}
 
 .sa-chart-nav { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 10px 0 4px; }
 .sa-chart-period { font-weight: 600; min-width: 12ch; }

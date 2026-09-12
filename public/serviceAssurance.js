@@ -195,6 +195,30 @@
       return input;
     }
 
+    // A segmented control: one choice out of a few, shown as a track with the
+    // chosen one raised.
+    //
+    // It LOOKED like a toggle group and announced itself as four unrelated
+    // buttons — nothing said which one was on, so a screen reader heard "Day,
+    // Week, Month, Year" and no answer to the only question that matters.
+    // `aria-pressed` says it, and the group carries a name so the reader knows
+    // what is being chosen.
+    function segmented(options, selected, onPick, label) {
+      var group = el('div', { class: 'sa-segmented', role: 'group' });
+      if (label) group.setAttribute('aria-label', label);
+      options.forEach(function (pair) {
+        var on = selected === pair[0];
+        var b = el('button', {
+          type: 'button',
+          class: 'sa-segment' + (on ? ' active' : ''),
+          onclick: function () { onPick(pair[0]); },
+        }, pair[1]);
+        b.setAttribute('aria-pressed', on ? 'true' : 'false');
+        group.append(b);
+      });
+      return group;
+    }
+
     function field(label, control, help) {
       return el('label', { class: 'sa-field' },
         el('span', { class: 'sa-field-label' }, label),
@@ -1998,21 +2022,16 @@
       }
 
       function periodButtons() {
-        return el('div', { class: 'sa-segmented' }, ...[
+        return segmented([
           ['day', t('sa.chart.day')], ['week', t('sa.chart.week')],
           ['month', t('sa.chart.month')], ['year', t('sa.chart.year')],
-        ].map(function (pair) {
-          return el('button', {
-            class: 'sa-segment' + (stateChart.period === pair[0] ? ' active' : ''),
-            onclick: function () {
-              // Keep the anchor date when switching segmentation: looking at
-              // March and clicking Year should show the year March is in, not
-              // jump back to today.
-              stateChart.period = pair[0];
-              load();
-            },
-          }, pair[1]);
-        }));
+        ], stateChart.period, function (value) {
+          // Keep the anchor date when switching segmentation: looking at March
+          // and clicking Year should show the year March is in, not jump back
+          // to today.
+          stateChart.period = value;
+          load();
+        }, t('sa.chart.periodGroup'));
       }
 
       function render(data) {
@@ -2609,15 +2628,10 @@
       }
 
       function periodButtons() {
-        return el('div', { class: 'sa-segmented' }, ...[
+        return segmented([
           ['day', t('sa.chart.day')], ['week', t('sa.chart.week')],
           ['month', t('sa.chart.month')], ['year', t('sa.chart.year')],
-        ].map(function (pair) {
-          return el('button', {
-            class: 'sa-segment' + (st.period === pair[0] ? ' active' : ''),
-            onclick: function () { st.period = pair[0]; load(); },
-          }, pair[1]);
-        }));
+        ], st.period, function (value) { st.period = value; load(); }, t('sa.chart.periodGroup'));
       }
 
       // The chart type. Same data in all three — counts per bucket per
@@ -2626,14 +2640,9 @@
       // read a total with its composition. Switching redraws from the data
       // already in hand; it never re-fetches.
       function formButtons(data) {
-        return el('div', { class: 'sa-segmented' }, ...[
+        return segmented([
           ['line', t('sa.top.formLine')], ['bars', t('sa.top.formBars')], ['stacked', t('sa.top.formStacked')],
-        ].map(function (pair) {
-          return el('button', {
-            class: 'sa-segment' + (st.form === pair[0] ? ' active' : ''),
-            onclick: function () { st.form = pair[0]; render(data); },
-          }, pair[1]);
-        }));
+        ], st.form, function (value) { st.form = value; render(data); }, t('sa.top.formGroup'));
       }
 
       function render(data) {

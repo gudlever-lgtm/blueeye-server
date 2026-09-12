@@ -57,6 +57,43 @@ function createArtifactStore({ root, fsImpl = fs, logger = null } = {}) {
     return fsImpl.readFile(full);
   }
 
+  // Baselines (V2 §8) live OUTSIDE the run shards, under baselines/<test>/.
+  //
+  // Deliberately not in a run directory: retention deletes old runs, and a
+  // baseline that vanished when the run it came from aged out would stop
+  // watching the page without anybody being told. A baseline is a decision
+  // somebody made, not an artefact of one execution.
+  //
+  // Stored as PNG whatever the run screenshot format is — a JPEG baseline would
+  // make every comparison fight its own compression artefacts.
+  function baselineDir(testId) {
+    const id = String(testId);
+    if (!SAFE_SEGMENT.test(id)) throw new Error('unsafe test id');
+    return path.join(root, 'baselines', id);
+  }
+
+  async function saveBaseline(testId, buffer, { stepIndex = 0, environmentId = null } = {}) {
+    if (!buffer || !buffer.length) return null;
+    const dir = baselineDir(testId);
+    await fsImpl.mkdir(dir, { recursive: true });
+    const env = environmentId === null || environmentId === undefined ? 'any' : String(environmentId);
+    if (!SAFE_SEGMENT.test(env)) throw new Error('unsafe environment id');
+    const name = `step-${Number(stepIndex) || 0}-env-${env}.png`;
+    const full = path.join(dir, name);
+    await fsImpl.writeFile(full, buffer);
+    return path.relative(root, full);
+  }
+
+  async function removeBaselines(testId) {
+    try {
+      await fsImpl.rm(baselineDir(testId), { recursive: true, force: true });
+      return true;
+    } catch (err) {
+      if (logger && logger.warn) logger.warn(`service-tests: could not remove baselines for test ${testId} (${err.message})`);
+      return false;
+    }
+  }
+
   async function removeRun(runId) {
     try {
       await fsImpl.rm(runDir(runId), { recursive: true, force: true });
@@ -67,7 +104,7 @@ function createArtifactStore({ root, fsImpl = fs, logger = null } = {}) {
     }
   }
 
-  return { saveScreenshot, readScreenshot, removeRun, runDir, root };
+  return { saveScreenshot, readScreenshot, saveBaseline, removeBaselines, baselineDir, removeRun, runDir, root };
 }
 
 // The retention job: deletes screenshots older than the configured window and

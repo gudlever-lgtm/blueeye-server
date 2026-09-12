@@ -1826,6 +1826,7 @@ CREATE TABLE IF NOT EXISTS service_test_runs (
   network_errors JSON             DEFAULT NULL,
   api_calls JSON DEFAULT NULL,
   accessibility JSON DEFAULT NULL,
+  visual JSON DEFAULT NULL,
   claimed_by VARCHAR(120)     DEFAULT NULL,
   claimed_at DATETIME(3)      DEFAULT NULL,
   requested_by INT              DEFAULT NULL,
@@ -2263,3 +2264,46 @@ CREATE TABLE IF NOT EXISTS event_severity_rules (
   INDEX idx_esr_source (source, enabled),
   CONSTRAINT fk_esr_application FOREIGN KEY (match_application_id) REFERENCES service_test_applications(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Visual regression baselines (V2 §8).
+--
+-- A baseline is "this is what this step is supposed to look like". One per
+-- (test, step, environment): the same journey against staging and production
+-- legitimately looks different, and one shared baseline would report that
+-- difference forever.
+--
+-- The IMAGE lives on disk beside the run screenshots, under the same root, the
+-- same retention plumbing and the same cleanup. Only the path is stored here.
+-- A few hundred baselines as MySQL blobs would turn every dump into hundreds of
+-- megabytes and slow every backup, to solve a problem the artifact store already
+-- solves.
+--
+-- Opt-in per step, per the spec. Nothing is compared until somebody accepts a
+-- baseline, because a baseline captured automatically on first sight is a
+-- baseline of whatever the page happened to look like that day — including
+-- broken.
+CREATE TABLE IF NOT EXISTS service_test_baselines (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  test_id INT NOT NULL,
+  step_index INT NOT NULL,
+  step_label VARCHAR(255) DEFAULT NULL,
+  environment_id INT DEFAULT NULL,
+  image_path VARCHAR(512) NOT NULL,
+  width INT DEFAULT NULL,
+  height INT DEFAULT NULL,
+  ignore_regions JSON DEFAULT NULL,
+  tolerance INT DEFAULT NULL,
+  threshold_pct DECIMAL(5,2) DEFAULT NULL,
+  enabled TINYINT(1) NOT NULL DEFAULT 1,
+  accepted_by INT DEFAULT NULL,
+  accepted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  source_run_id INT DEFAULT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_stbase_step (test_id, step_index, environment_id),
+  KEY idx_stbase_test (test_id, enabled),
+  CONSTRAINT fk_stbase_test FOREIGN KEY (test_id) REFERENCES service_test_tests(id) ON DELETE CASCADE,
+  CONSTRAINT fk_stbase_env FOREIGN KEY (environment_id) REFERENCES service_test_environments(id) ON DELETE CASCADE,
+  CONSTRAINT fk_stbase_run FOREIGN KEY (source_run_id) REFERENCES service_test_runs(id) ON DELETE SET NULL,
+  CONSTRAINT fk_stbase_user FOREIGN KEY (accepted_by) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

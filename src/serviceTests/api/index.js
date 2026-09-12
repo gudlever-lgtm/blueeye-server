@@ -13,6 +13,7 @@ const { createRecordingsRouter } = require('./recordings');
 const { createJourneysRouter } = require('./journeys');
 const { createHealingRouter } = require('./healing');
 const { createMapRouter } = require('./map');
+const { createBaselinesRouter } = require('./baselines');
 
 // The Service Tests HTTP surface, mounted at /api/service-tests.
 //
@@ -71,6 +72,10 @@ function createServiceTestsApiRouter({
   // different act from running a test: it CHANGES a test, and the spec insists
   // that only ever happens with an operator's accept.
   router.use('/healing', createHealingRouter(deps));
+  // Visual regression baselines. Accepting one is an ACT — a picture captured
+  // automatically on first sight would be a baseline of whatever the page
+  // happened to look like that day, including broken.
+  router.use('/baselines', createBaselinesRouter(deps));
   // The service map: application → journey → page → API → endpoint, computed on
   // read from what runs observed. Read-only — the moment it can be edited it is
   // a CMDB, which is exactly what the spec says it must not become.

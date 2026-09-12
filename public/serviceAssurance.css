@@ -473,3 +473,14 @@
 .sa-a11y-why { font-size: 0.88rem; color: var(--muted, #6d6d73); margin: 6px 0 6px; }
 .sa-a11y-where { font-size: 0.82rem; word-break: break-word; }
 .sa-a11y-where code { background: var(--code-bg, #f9fafb); padding: 1px 5px; border-radius: 4px; }
+
+/* ---- visual regression (V2 §8) ----
+   Shares the accessibility panel's restraint and for the same reason: a visual
+   difference is reported beside the result, never as it. A moved button is not
+   an outage, so nothing here borrows the colours that mean one. */
+.sa-visual { border-left: 3px solid var(--muted-weak, #e5e7eb); }
+.sa-visual-chip-match { background: var(--panel-2, #f1f1ef); color: var(--muted, #6d6d73); }
+.sa-visual-chip-changed { background: var(--panel-2, #f1f1ef); color: var(--text, #17171a); }
+.sa-visual-chip-resized { background: var(--panel-2, #f1f1ef); color: var(--text, #17171a); }
+.sa-visual-chip-uncomparable { background: var(--panel-2, #f1f1ef); color: var(--muted, #6d6d73); }
+.sa-visual-changed, .sa-visual-resized { border-left: 3px solid var(--muted, #6d6d73); }

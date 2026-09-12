@@ -6,6 +6,7 @@ const { describeTarget } = require('../engine/targeting');
 const { proposeHealing } = require('../engine/heal');
 const { classify, KIND } = require('./classify');
 const { audit } = require('../a11y/rules');
+const { compareScreenshots, describeComparison } = require('../visual/compare');
 
 // The step executor — PURE with respect to browsers.
 //
@@ -223,12 +224,79 @@ async function executeDefinition(definition, {
   // The setting exists so a customer with a page it chokes on can switch it off
   // without losing the test.
   accessibilityEnabled = true,
+  // The step positions that have a baseline, and what to compare each shot
+  // against. Empty means nothing is photographed — visual checking costs a
+  // screenshot per step and is never paid for a test nobody opted in.
+  visualBaselines = [],
+  // How to fetch a baseline's bytes. Injected rather than imported: nothing
+  // under src/serviceTests/runner may reach the artifact store directly, and a
+  // test wires a function that returns a buffer.
+  readBaseline = async () => { throw new Error('no baseline reader was wired'); },
 } = {}) {
   const mask = redact && typeof redact.text === 'function' ? redact.text : (s) => s;
   const flat = flattenSteps(definition);
   const results = [];
   const ctx = { lastStatus: undefined };
   const startedAt = now();
+
+  // Visual regression (V2 §8), indexed by step position.
+  const baselineByStep = new Map(
+    (Array.isArray(visualBaselines) ? visualBaselines : [])
+      .filter((b) => b && Number.isInteger(Number(b.step_index)))
+      .map((b) => [Number(b.step_index), b])
+  );
+  const visualSteps = new Set(baselineByStep.keys());
+  const visualResults = [];
+
+  // Photographs one step and compares it with its baseline.
+  //
+  // Never throws and never touches the run. A screenshot that could not be
+  // taken, a baseline that could not be read, a PNG that could not be decoded —
+  // each is reported as what it is, because "could not be compared" is a real
+  // answer and a very different one from "nothing changed". Reporting an
+  // unreadable baseline as a match would mean a step silently stops being
+  // watched.
+  async function captureFor(position, label) {
+    const baseline = baselineByStep.get(position);
+    if (!baseline || typeof driver.screenshot !== 'function') return;
+    let shot = null;
+    try {
+      // PNG, always. A JPEG baseline would make every comparison fight its own
+      // compression artefacts.
+      shot = await driver.screenshot({ type: 'png', fullPage: false });
+    } catch (e) {
+      visualResults.push({
+        step_index: position, step_label: label, baseline_id: baseline.id ?? null,
+        status: 'uncomparable', reason: `the screenshot could not be taken: ${e.message}`,
+      });
+      return;
+    }
+    let previous = null;
+    try {
+      previous = await readBaseline(baseline);
+    } catch (e) {
+      visualResults.push({
+        step_index: position, step_label: label, baseline_id: baseline.id ?? null,
+        status: 'uncomparable', reason: `the baseline image could not be read: ${e.message}`,
+      });
+      return;
+    }
+    const result = compareScreenshots(previous, shot, {
+      tolerance: baseline.tolerance ?? undefined,
+      thresholdPct: baseline.threshold_pct ?? undefined,
+      ignoreRegions: baseline.ignore_regions || [],
+    });
+    visualResults.push({
+      step_index: position,
+      step_label: label,
+      baseline_id: baseline.id ?? null,
+      ...result,
+      explanation: describeComparison(result),
+      // Kept only when there is something to look at, and handed to the caller
+      // rather than stored here: the buffer is the worker's to persist or drop.
+      image: result.status === 'changed' || result.status === 'resized' ? shot : null,
+    });
+  }
 
   let failed = null;
   // Positions whose condition did not match — their nested steps are skipped.
@@ -271,6 +339,12 @@ async function executeDefinition(definition, {
 
       await runStep(step, { driver, credential, ctx });
       results.push({ ...base, status: STEP_STATUS.PASS, duration_ms: now() - stepStart });
+      // Visual regression (V2 §8). A screenshot only where somebody accepted a
+      // baseline — opt-in per step, per the spec — and only after the step
+      // PASSED. Photographing a page mid-failure would compare the error state
+      // against the working one and call it a visual change, which is a second
+      // wrong answer on top of the real failure.
+      if (visualSteps.has(position)) await captureFor(position, label);
     } catch (err) {
       const consoleErrors = await safeCall(driver.consoleErrors, driver, []);
       const networkErrors = await safeCall(driver.networkErrors, driver, []);
@@ -358,6 +432,9 @@ async function executeDefinition(definition, {
     network_errors: failed ? failed.networkErrors : [],
     api_calls: (apiCalls || []).map((c) => ({ ...c, url: mask(c.url) })),
     accessibility,
+    // Null when nothing was opted in, so "no baselines" stays distinguishable
+    // from "everything matched" — an empty array would read as the latter.
+    visual: visualResults.length ? visualResults : null,
   };
 }
 

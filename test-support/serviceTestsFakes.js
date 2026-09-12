@@ -116,6 +116,7 @@ function makeServiceTests(overrides = {}) {
     workers: makeTable(overrides.workers || []),
     certificates: makeTable(overrides.certificates || []),
     incidents: makeTable(overrides.incidents || []),
+    baselines: makeTable(overrides.baselines || []),
     recordings: makeTable(overrides.recordings || []),
     journeys: makeTable(overrides.journeys || []),
     journeySteps: makeTable(overrides.journeySteps || []),
@@ -476,6 +477,70 @@ const bool = (v) => !!v;
     // Self-healing proposals. Nothing here can change a test — the same
     // guarantee the SQL repository makes, for the same reason: a proposal is a
     // row somebody acts on, never a change that happened on its own.
+    // Visual regression baselines (V2 §8). Mirrors the SQL repository's one
+    // guarantee that a test could get wrong: accepting REPLACES whatever was
+    // there for that (test, step, environment) rather than adding a second row.
+    // Two baselines for one step would mean the comparison picks one
+    // arbitrarily, and which it picked would decide the answer.
+    baselines: {
+      // Shaped like the SQL repository, not like the row. `enabled` is a
+      // boolean there and a TINYINT here; a fake that hands back 0 where the
+      // real one hands back false lets a test pass against a lie.
+      shape(row) {
+        if (!row) return null;
+        return {
+          ...row,
+          enabled: row.enabled === 1 || row.enabled === true,
+          ignore_regions: row.ignore_regions || [],
+          tolerance: row.tolerance ?? null,
+          threshold_pct: row.threshold_pct === null || row.threshold_pct === undefined
+            ? null : Number(row.threshold_pct),
+        };
+      },
+      async findById(id) { return this.shape(t.baselines.find(id)); },
+      async listForTest(testId, { enabledOnly = false } = {}) {
+        return t.baselines
+          .where((b) => b.test_id === Number(testId) && (!enabledOnly || b.enabled !== 0))
+          .sort((a, b) => a.step_index - b.step_index)
+          .map((b) => this.shape(b));
+      },
+      async forRun(testId, environmentId) {
+        const rows = t.baselines.where((b) => b.test_id === Number(testId) && b.enabled !== 0
+          && (b.environment_id === null || b.environment_id === undefined
+            || Number(b.environment_id) === Number(environmentId)));
+        const byStep = new Map();
+        // An environment-specific baseline wins over the environment-less one.
+        for (const row of rows.sort((a, b) => (a.environment_id === null ? 1 : 0) - (b.environment_id === null ? 1 : 0))) {
+          if (!byStep.has(row.step_index)) byStep.set(row.step_index, this.shape(row));
+        }
+        return [...byStep.values()];
+      },
+      async accept(input) {
+        const existing = t.baselines.rows.find((b) => b.test_id === Number(input.test_id)
+          && b.step_index === Number(input.step_index)
+          && (b.environment_id ?? null) === (input.environment_id ?? null));
+        const row = {
+          ...input,
+          test_id: Number(input.test_id),
+          step_index: Number(input.step_index),
+          environment_id: input.environment_id ?? null,
+          ignore_regions: input.ignore_regions || [],
+          tolerance: input.tolerance ?? null,
+          threshold_pct: input.threshold_pct ?? null,
+          enabled: 1,
+          accepted_at: new Date(),
+        };
+        return this.shape(existing ? t.baselines.update(existing.id, row) : t.baselines.insert(row));
+      },
+      async save(id, patch) {
+        const row = t.baselines.find(id);
+        if (!row) return null;
+        const next = { ...patch };
+        if (next.enabled !== undefined) next.enabled = next.enabled ? 1 : 0;
+        return this.shape(t.baselines.update(id, next));
+      },
+      async remove(id) { return t.baselines.remove(id); },
+    },
     healing: {
       async findById(id) {
         const r = t.healing.find(id);

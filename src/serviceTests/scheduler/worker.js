@@ -37,7 +37,7 @@ function createWorker({
   now = () => new Date(),
   sleep = (ms) => new Promise((r) => { const t = setTimeout(r, ms); if (t.unref) t.unref(); }),
 }) {
-  const { applications, environments, credentials, allowedHosts, tests, runs, discovery, suggestions, healing } = repositories;
+  const { applications, environments, credentials, allowedHosts, tests, runs, discovery, suggestions, healing, baselines } = repositories;
   let running = false;
   let stopped = false;
 
@@ -97,10 +97,42 @@ function createWorker({
         timeoutMs: runnerSettings.stepTimeoutMs,
         secrets: [credential && credential.secret].filter(Boolean),
       });
+      // Visual regression (V2 §8): only the steps somebody accepted a baseline
+      // for, and only when the artifact store is wired — the comparison needs to
+      // read the baseline image off disk.
+      let visualBaselines = [];
+      if (artifacts && baselines) {
+        try {
+          visualBaselines = await baselines.forRun(test.id, run.environment_id ?? null);
+        } catch {
+          // A baseline lookup that fails costs the visual check, never the run.
+          visualBaselines = [];
+        }
+      }
+
       result = await executeDefinition(test.definition, {
         driver: browser.driver, credential, redact,
         accessibilityEnabled: runnerSettings.accessibility !== false,
+        visualBaselines,
+        readBaseline: (baseline) => artifacts.readScreenshot(baseline.image_path),
       });
+
+      // The picture of anything that changed, so a person can look at it and
+      // decide. Stored under the RUN, so retention sweeps it with everything
+      // else from that execution — the baseline it was compared against lives
+      // elsewhere and is not touched.
+      if (artifacts && Array.isArray(result.visual)) {
+        for (const visual of result.visual) {
+          if (!visual.image) continue;
+          try {
+            // eslint-disable-next-line no-await-in-loop
+            visual.image_path = await artifacts.saveScreenshot(run.id, visual.image, {
+              format: 'png', index: `visual-${visual.step_index}`,
+            });
+          } catch { /* a stored picture is a convenience, never the finding */ }
+          delete visual.image;
+        }
+      }
 
       // A screenshot only on failure, and only when the settings allow it —
       // artefacts are the module's growth risk, not the image size.

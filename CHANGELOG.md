@@ -1,5 +1,90 @@
 # Changelog
 
+## 0.128.0 — visual regression (V2 §8), and the V3 specification
+
+### The problem this feature usually fails at
+
+The spec warns that visual regression "must not turn small dynamic differences
+into false failures". Every tool of this kind that ends up switched off is
+switched off for the same reason: a clock, a carousel or one pixel of
+antialiasing turns the build red once too often, somebody adds the flag that
+skips it, and nobody looks at it again. A check nobody looks at watches nothing.
+
+So this one is deliberately reluctant, with four defences in order: a per-pixel
+colour tolerance so antialiasing is not a difference, ignore regions drawn over
+the parts you know move, a percentage threshold so a handful of pixels is not a
+report, and — the one that matters — a difference is never a failure.
+
+The comparison is per-channel rather than a Euclidean distance. A red button
+turning green moves two channels a long way, and averaging would dilute it below
+the threshold; the thing a person would obviously call different must not be
+what the maths smooths away.
+
+### Accepting a baseline is an act
+
+Nothing is compared until somebody accepts one. A picture captured automatically
+on first sight would be a baseline of whatever the page looked like that day —
+including broken — and every later comparison would be against that. The row
+records who accepted it and when, because a baseline nobody will admit to
+accepting is one nobody dares replace. The image always comes from a run, never
+an upload.
+
+One baseline per step per environment: the same journey against staging and
+production legitimately looks different, and one shared baseline would report
+that difference forever.
+
+### Four answers, and none of them is "fail"
+
+`match`, `changed`, `resized` and `uncomparable`. A page that changed SIZE is not
+"3.4% different" — it is a different shape, and a percentage over the overlap
+answers a question nobody asked. And `uncomparable` is never reported as a match:
+an unreadable baseline read as "nothing changed" would mean a step silently stops
+being watched, which is the worst failure mode this feature has, because
+everything keeps reporting green.
+
+### A PNG decoder, written rather than installed
+
+Comparing encoded bytes is useless — two encoders produce different bytes for an
+identical picture — so the pixels have to be decoded. PNG is inflate plus five
+filter types and zlib is in the standard library, so that is about two hundred
+lines instead of an image dependency with native bindings in a product whose
+pitch is that it runs on your own machine with nothing phoning home.
+
+It decodes what Playwright emits and refuses everything else by name. A decoder
+that quietly mis-read a 16-bit image would produce a difference that looks real
+and is not, which is far worse than a clear "cannot read this".
+
+### Where the pictures live
+
+Baselines are stored under the artifact root at `baselines/<test>/` and
+deliberately NOT in a run directory. Retention deletes old runs; a baseline that
+vanished when the run it came from aged out would stop watching the page without
+anybody being told. There is a test asserting that deleting a run never touches
+one.
+
+A step that failed is never photographed: comparing the error state against the
+working one would call it a visual change, a second wrong answer on top of the
+real failure.
+
+### Fixed, found by its own tests
+
+- **An ignore region drawn off the page became a valid box at the origin.** The
+  origin was clamped and then the extent added, so a rectangle entirely outside
+  the page collapsed onto 0,0 and silently excluded a corner nobody selected.
+  Both edges are clamped now, so an off-page rectangle collapses and is dropped.
+- **The test fake returned `enabled: 0` where the repository returns a boolean.**
+  A fake that lies about its shape lets a test pass against something that does
+  not ship.
+
+### The V3 specification
+
+`docs/service-assurance-v3.md` — the move from synthetic testing to service
+assurance intelligence: the observation model, a correlation engine, root cause
+analysis, incidents with a timeline built from real events, service health,
+impact, alert deduplication, anomaly detection, and AI as an assistance layer
+that can always be switched off. Written down before any of it is built, so what
+V3 deliberately does NOT do is on the record too.
+
 ## 0.127.0 — accessibility checks (V2 §9)
 
 BlueEyes already drives a real browser through a real journey. While it is there

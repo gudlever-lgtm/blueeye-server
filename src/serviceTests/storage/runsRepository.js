@@ -11,7 +11,7 @@ const { parseJson, intOrNull } = require('./shape');
 function createRunsRepository({ db, now = () => new Date() }) {
   const { pool } = db;
   const COLS = `id,tenant_id,test_id,environment_id,test_version,status,trigger_source,started_at,ended_at,
-    duration_ms,failed_step,error_message,failure_kind,screenshot_path,browser,console_errors,network_errors,api_calls,accessibility,
+    duration_ms,failed_step,error_message,failure_kind,screenshot_path,browser,console_errors,network_errors,api_calls,accessibility,visual,
     claimed_by,claimed_at,requested_by,created_at,updated_at`;
 
   // The same columns qualified for a join, plus what a run needs to NAME itself.
@@ -54,6 +54,9 @@ function createRunsRepository({ db, now = () => new Date() }) {
       // an empty object would destroy.
       accessibility: row.accessibility === null || row.accessibility === undefined
         ? null : parseJson(row.accessibility, null),
+      // Null until a run compares something. Same reasoning as accessibility:
+      // "nothing was compared" and "everything matched" are different facts.
+      visual: row.visual === null || row.visual === undefined ? null : parseJson(row.visual, null),
       claimed_by: row.claimed_by,
       claimed_at: row.claimed_at,
       requested_by: row.requested_by,
@@ -154,13 +157,14 @@ function createRunsRepository({ db, now = () => new Date() }) {
       await conn.query(
         `UPDATE service_test_runs SET status = ?, ended_at = ?, duration_ms = ?, failed_step = ?,
            error_message = ?, failure_kind = ?, screenshot_path = ?, browser = ?,
-           console_errors = ?, network_errors = ?, api_calls = ?, accessibility = ?
+           console_errors = ?, network_errors = ?, api_calls = ?, accessibility = ?, visual = ?
          WHERE id = ?`,
         [result.status, endedAt, intOrNull(result.duration_ms), intOrNull(result.failed_step),
           result.error_message ?? null, result.failure_kind ?? null, result.screenshot_path ?? null,
           result.browser ?? null, JSON.stringify(result.console_errors || []),
           JSON.stringify(result.network_errors || []), JSON.stringify(result.api_calls || []),
-          result.accessibility ? JSON.stringify(result.accessibility) : null, id]
+          result.accessibility ? JSON.stringify(result.accessibility) : null,
+          result.visual ? JSON.stringify(result.visual) : null, id]
       );
       await conn.query('DELETE FROM service_test_run_steps WHERE run_id = ?', [id]);
       const steps = result.steps || [];

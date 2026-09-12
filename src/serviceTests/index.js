@@ -17,6 +17,7 @@ const { createIncidentsRepository } = require('./storage/incidentsRepository');
 const { createRecordingsRepository } = require('./storage/recordingsRepository');
 const { createJourneysRepository } = require('./storage/journeysRepository');
 const { createHealingRepository } = require('./storage/healingRepository');
+const { createBaselinesRepository } = require('./storage/baselinesRepository');
 const { createServiceTestSettings } = require('./settings');
 const { createServiceTestsApiRouter } = require('./api');
 const { createQueue } = require('./scheduler/queue');
@@ -66,6 +67,7 @@ function createServiceTestsModule(rawPorts = {}) {
     recordings: createRecordingsRepository({ db, now: clock }),
     journeys: createJourneysRepository({ db, now: clock }),
     healing: createHealingRepository({ db, now: clock }),
+    baselines: createBaselinesRepository({ db, now: clock }),
     settings: settingsRepo,
   };
 

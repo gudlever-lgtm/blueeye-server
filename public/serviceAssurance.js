@@ -2366,8 +2366,83 @@
             el('td', {}, s.message || ''));
         })));
 
-        mount(body, head, summary, perf, failure, steps, accessibilityPanel(run));
+        mount(body, head, summary, perf, failure, steps, visualPanel(run), accessibilityPanel(run));
       });
+    }
+
+    // Visual regression (V2 §8).
+    //
+    // Like accessibility, and for the same reason: a difference is reported
+    // BESIDE the result, never as it. A moved button is not an outage, and a
+    // check that can turn a build red is a check people switch off — at which
+    // point it watches nothing.
+    function visualPanel(run) {
+      var results = run.visual;
+      // Nothing was compared. Not the same as "everything matched", so nothing
+      // is shown rather than a reassuring empty panel.
+      if (!results || !results.length) return null;
+
+      return el('div', { class: 'sa-panel sa-visual' },
+        el('div', { class: 'sa-a11y-head' },
+          el('strong', {}, t('sa.visual.title')),
+          el('span', { class: 'sa-help' }, t('sa.visual.neverFails'))),
+        el('div', { class: 'sa-a11y-list' }, ...results.map(function (v) { return visualItem(run, v); })));
+    }
+
+    function visualItem(run, v) {
+      var body = el('div', {});
+      if (v.status === 'match') {
+        mount(body, el('p', { class: 'muted' }, v.explanation || t('sa.visual.match')));
+      } else if (v.status === 'uncomparable') {
+        // Said plainly. "Could not be compared" is a real answer and a very
+        // different one from "nothing changed" — reported as a match it would
+        // mean a step silently stopped being watched.
+        mount(body, el('p', { class: 'sa-warn' }, v.reason || t('sa.visual.uncomparable')));
+      } else {
+        mount(body,
+          el('p', {}, v.explanation || ''),
+          // What changed and where, in numbers a person can check.
+          el('p', { class: 'muted' }, t('sa.visual.numbers', {
+            changed: v.changed_pixels || 0,
+            compared: v.compared_pixels || 0,
+            ignored: v.ignored_pixels || 0,
+          })),
+          v.image_path
+            ? el('details', {}, el('summary', {}, t('sa.visual.seeIt')),
+              el('p', { class: 'sa-help' }, t('sa.visual.seeItHelp')))
+            : null,
+          // Accepting is an ACT and says so: this becomes what the page should
+          // look like from now on, for every later run.
+          isOperator()
+            ? el('button', {
+              class: 'ghost small',
+              onclick: function () { acceptBaseline(run, v); },
+            }, t('sa.visual.accept'))
+            : null);
+      }
+
+      return el('div', { class: 'sa-a11y-item sa-visual-' + v.status },
+        el('div', { class: 'sa-a11y-item-head' },
+          el('span', { class: 'sa-a11y-chip sa-visual-chip-' + v.status }, visualStatusLabel(v.status)),
+          el('strong', {}, v.step_label || ('#' + v.step_index))),
+        body);
+    }
+
+    function visualStatusLabel(status) {
+      if (status === 'match') return t('sa.visual.statusMatch');
+      if (status === 'changed') return t('sa.visual.statusChanged');
+      if (status === 'resized') return t('sa.visual.statusResized');
+      return t('sa.visual.statusUncomparable');
+    }
+
+    function acceptBaseline(run, v) {
+      if (!root.confirm(t('sa.visual.acceptConfirm', { step: v.step_label || ('#' + v.step_index) }))) return;
+      api(API + '/baselines', {
+        method: 'POST',
+        body: { run_id: run.id, step_index: v.step_index },
+      })
+        .then(function () { toast(t('sa.visual.accepted')); draw(); })
+        .catch(function (e) { toast(err(e), true); });
     }
 
     // Accessibility (V2 §9).

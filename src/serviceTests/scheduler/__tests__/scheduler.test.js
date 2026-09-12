@@ -261,6 +261,55 @@ test('the credential is decrypted for the run and its value never reaches the st
   assert.ok(!JSON.stringify(finished).includes('hunter2-correct-horse'), 'and the stored result carries none of it');
 });
 
+// ------------------------------------------------------- V3 observations
+test('a finished run leaves its typed facts behind, not just its verdict', async () => {
+  // The observation model is what every V3 reader uses instead of re-parsing
+  // four columns in three shapes. It only exists if the worker writes it, and
+  // until this spec nothing did.
+  const { st, worker } = makeWorkerFixture({ present: ['Dashboard'], visible: ['Dashboard'] });
+  const run = await st.repositories.runs.enqueue({ test_id: 1 });
+  await worker.tick();
+
+  const facts = await st.repositories.observations.forRun(run.id);
+  assert.ok(facts.length, 'the run produced no observations at all');
+  assert.ok(facts.some((o) => o.kind === 'run.outcome'), 'the run\u2019s own verdict is a fact too');
+  for (const fact of facts) {
+    assert.equal(fact.run_id, run.id);
+    assert.equal(fact.test_id, 1);
+    assert.equal(fact.application_id, 1, 'without the application the health and dependency screens cannot find it');
+  }
+});
+
+test('an observation store that is broken costs the analysis, never the run', async () => {
+  // The run already has its real result. A table that cannot be written is a
+  // degraded dashboard, not a monitoring outage.
+  const { st, worker } = makeWorkerFixture({ present: ['Dashboard'], visible: ['Dashboard'] });
+  st.repositories.observations.recordMany = async () => { throw new Error('the table is gone'); };
+  const run = await st.repositories.runs.enqueue({ test_id: 1 });
+  await worker.tick();
+  assert.equal((await st.repositories.runs.findById(run.id)).status, 'pass');
+});
+
+test('a worker wired without an observation store still runs', async () => {
+  // A deployment that has not migrated yet must keep monitoring rather than
+  // failing every run on a missing table.
+  const st = makeServiceTests();
+  const { observations, ...withoutObservations } = st.repositories;
+  const queue = createQueue({
+    runsRepo: st.repositories.runs, discoveryRepo: st.repositories.discovery,
+    schedulesRepo: st.repositories.schedules, settings: st.settings,
+  });
+  const worker = createWorker({
+    workerId: 'w', queue, repositories: withoutObservations, settings: st.settings,
+    browserFactory: async () => ({ driver: makeFakeDriver({}), crawler: { visit: async () => ({}) }, close: async () => {} }),
+    resolve: async () => ['93.184.216.34'],
+    logger: { info() {}, warn() {}, error() {} },
+  });
+  const run = await st.repositories.runs.enqueue({ test_id: 1 });
+  await worker.tick();
+  assert.equal((await st.repositories.runs.findById(run.id)).status, 'pass');
+});
+
 test('a discovery job crawls, stores pages and elements, and generates suggestions', async () => {
   const site = {
     'https://customer.example.com/': {

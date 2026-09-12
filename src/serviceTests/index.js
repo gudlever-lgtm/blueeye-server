@@ -14,6 +14,7 @@ const { createServiceTestSettingsRepository } = require('./storage/settingsRepos
 const { createWorkersRepository } = require('./storage/workersRepository');
 const { createCertificatesRepository } = require('./storage/certificatesRepository');
 const { createIncidentsRepository } = require('./storage/incidentsRepository');
+const { createObservationsRepository } = require('./storage/observationsRepository');
 const { createRecordingsRepository } = require('./storage/recordingsRepository');
 const { createJourneysRepository } = require('./storage/journeysRepository');
 const { createHealingRepository } = require('./storage/healingRepository');
@@ -68,6 +69,9 @@ function createServiceTestsModule(rawPorts = {}) {
     journeys: createJourneysRepository({ db, now: clock }),
     healing: createHealingRepository({ db, now: clock }),
     baselines: createBaselinesRepository({ db, now: clock }),
+    // V3: the typed facts every run produces, and what the intelligence layer
+    // reads instead of re-parsing four columns in three shapes.
+    observations: createObservationsRepository({ db, now: clock }),
     settings: settingsRepo,
   };
 

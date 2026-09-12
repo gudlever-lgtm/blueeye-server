@@ -13,6 +13,7 @@ const { createRecordingsRouter } = require('./recordings');
 const { createJourneysRouter } = require('./journeys');
 const { createHealingRouter } = require('./healing');
 const { createMapRouter } = require('./map');
+const { createAnalysisRouter } = require('./analysis');
 const { createBaselinesRouter } = require('./baselines');
 
 // The Service Tests HTTP surface, mounted at /api/service-tests.
@@ -80,6 +81,11 @@ function createServiceTestsApiRouter({
   // read from what runs observed. Read-only — the moment it can be edited it is
   // a CMDB, which is exactly what the spec says it must not become.
   router.use('/map', createMapRouter(deps));
+  // The V3 intelligence layer: why a run failed, whether an incident is new,
+  // what a service depends on, how healthy it is, what looks out of the
+  // ordinary. Computed on read — none of it is stored, so an analysis can never
+  // be more stale than its evidence.
+  router.use('/analysis', createAnalysisRouter(deps));
   router.use('/discovery', createDiscoveryRouter(deps));
   // Recording. The INGEST half is not here: it carries no session, so the host
   // mounts it outside this router (src/serviceTests/index.js).

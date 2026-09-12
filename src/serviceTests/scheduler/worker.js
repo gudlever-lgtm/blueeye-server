@@ -5,6 +5,7 @@ const { createRedactor } = require('../engine/redact');
 const { createHostPolicy } = require('../security/hostPolicy');
 const { crawl } = require('../discovery/crawl');
 const { canSignInWith, signInStepsFromDetectedLogin, describeAuthentication } = require('../discovery/authenticate');
+const { observationsFromRun } = require('../observe/observations');
 const { suggestTests } = require('../suggest/rules');
 const { suggestJourneys } = require('../suggest/journeys');
 
@@ -38,7 +39,13 @@ function createWorker({
   now = () => new Date(),
   sleep = (ms) => new Promise((r) => { const t = setTimeout(r, ms); if (t.unref) t.unref(); }),
 }) {
-  const { applications, environments, credentials, allowedHosts, tests, runs, discovery, suggestions, healing, baselines } = repositories;
+  const {
+    applications, environments, credentials, allowedHosts, tests, runs, discovery,
+    suggestions, healing, baselines,
+    // V3: the typed facts a run produced. Optional, so a deployment that has not
+    // migrated yet keeps running rather than failing every run on a missing table.
+    observations = null,
+  } = repositories;
   let running = false;
   let stopped = false;
 
@@ -184,6 +191,35 @@ function createWorker({
       steps: result.steps,
       ended_at: now(),
     });
+    // The typed facts this run observed (V3 Phase 1). Derived from the result
+    // that was just stored, not from a second pass over the browser — the run
+    // already knows all of it, and until now it was scattered across four
+    // columns in three shapes for every reader to re-interpret.
+    //
+    // A failure here costs the ANALYSIS, never the run. The run has its real
+    // result already, and an observation table that cannot be written is a
+    // degraded dashboard rather than a monitoring outage.
+    if (observations) {
+      try {
+        const facts = observationsFromRun({
+          ...result,
+          id: run.id,
+          test_id: test.id,
+          test_name: test.name,
+          ended_at: now(),
+          started_at: startedAt,
+        });
+        await observations.recordMany({
+          run_id: run.id,
+          test_id: test.id,
+          application_id: test.application_id,
+          environment_id: run.environment_id ?? null,
+        }, facts);
+      } catch (err) {
+        logger.warn(`service-tests: could not record observations for run ${run.id} (${redact.text(err.message)})`);
+      }
+    }
+
     // Self-healing (V2 §5): the element was gone and the engine found something
     // on the page it thinks the operator meant. Recorded as a PROPOSAL — nothing
     // here changes the test, which is the entire feature. An operator accepts it

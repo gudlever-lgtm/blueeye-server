@@ -17,6 +17,7 @@ const { createServiceTestSettings } = require('../src/serviceTests/settings');
 const { createQueue } = require('../src/serviceTests/scheduler/queue');
 const { bucketKey, sqlFormat } = require('../src/serviceTests/stats/period');
 const { createAssuranceReactor } = require('../src/serviceTests/assurance/reactor');
+const { ACTIVE: INCIDENT_ACTIVE, canTransition: incidentCanTransition } = require('../src/serviceTests/incidents/lifecycle');
 const { createSecretBox } = require('../src/lib/secretBox');
 const { requireAuth, requireRole } = require('../src/auth/middleware');
 const { ROLES } = require('../src/auth/roles');
@@ -116,6 +117,8 @@ function makeServiceTests(overrides = {}) {
     workers: makeTable(overrides.workers || []),
     certificates: makeTable(overrides.certificates || []),
     incidents: makeTable(overrides.incidents || []),
+    incidentEvents: makeTable(overrides.incidentEvents || []),
+    observations: makeTable(overrides.observations || []),
     baselines: makeTable(overrides.baselines || []),
     recordings: makeTable(overrides.recordings || []),
     journeys: makeTable(overrides.journeys || []),
@@ -424,6 +427,57 @@ const bool = (v) => !!v;
       },
       async finish(id, summary) { return repositories.discovery.shape(t.discoveries.update(id, summary)); },
       async reapStale() { return 0; },
+    },
+    // The typed facts a run produced. Shaped like the real repository: an
+    // unknown layer or outcome lands on a valid one rather than being stored as
+    // written, because both columns are ENUMs and one typo must not cost the
+    // other fifty-nine observations of the run.
+    observations: {
+      async recordMany(context, list) {
+        const ctx = (context && typeof context === 'object') ? context : {};
+        const rows = (Array.isArray(list) ? list : []).filter((o) => o && typeof o === 'object');
+        const LAYERS = ['browser', 'page', 'api', 'application', 'server', 'network', 'infrastructure', 'assurance'];
+        for (const o of rows) {
+          t.observations.insert({
+            run_id: ctx.run_id ?? null,
+            test_id: ctx.test_id ?? null,
+            journey_id: ctx.journey_id ?? null,
+            application_id: ctx.application_id ?? null,
+            environment_id: ctx.environment_id ?? null,
+            layer: LAYERS.includes(o.layer) ? o.layer : 'application',
+            kind: String(o.kind || 'unknown').slice(0, 64),
+            subject: o.subject ?? null,
+            outcome: ['ok', 'bad', 'unknown'].includes(o.outcome) ? o.outcome : 'unknown',
+            value: o.value ?? null,
+            unit: o.unit ?? null,
+            summary: o.summary ?? null,
+            detail: o.detail ?? null,
+            observed_at: o.observed_at instanceof Date ? o.observed_at : new Date(),
+          });
+        }
+        return rows.length;
+      },
+      async forRun(runId) {
+        return t.observations.where((r) => r.run_id === Number(runId))
+          .sort((a, b) => (new Date(a.observed_at) - new Date(b.observed_at)) || (a.id - b.id));
+      },
+      async list({ applicationId = null, testId = null, layer = null, outcome = null, since = null, limit = 500 } = {}) {
+        return t.observations
+          .where((r) => (applicationId === null || r.application_id === Number(applicationId))
+            && (testId === null || r.test_id === Number(testId))
+            && (layer === null || r.layer === layer)
+            && (outcome === null || r.outcome === outcome)
+            && (since === null || new Date(r.observed_at) >= new Date(since)))
+          .sort((a, b) => new Date(b.observed_at) - new Date(a.observed_at))
+          .slice(0, Math.min(2000, limit));
+      },
+      async purgeOlderThan(days) {
+        const window = Number(days) > 0 ? Number(days) : 30;
+        const cutoff = new Date(Date.now() - window * 86400000);
+        const doomed = t.observations.where((r) => new Date(r.observed_at) < cutoff);
+        for (const row of doomed) t.observations.remove(row.id);
+        return doomed.length;
+      },
     },
     suggestions: {
       async findById(id) { const r = t.suggestions.find(id); return r ? { kind: 'test', proposed_journey: null, created_journey_id: null, ...r } : null; },
@@ -754,8 +808,14 @@ const bool = (v) => !!v;
     },
     incidents: {
       async findById(id) { return t.incidents.find(id); },
+      // The ACTIVE set, like the real repository. This said `status === 'open'`,
+      // which was the same thing until migration 090 added investigating and
+      // identified — after which an incident somebody had picked up would have
+      // had a SECOND one opened beside it for the same problem, and no spec
+      // written against this fake could have seen it.
       async findOpen(subjectKey) {
-        const row = [...t.incidents.rows].reverse().find((r) => r.subject_key === subjectKey && r.status === 'open');
+        const row = [...t.incidents.rows].reverse()
+          .find((r) => r.subject_key === subjectKey && INCIDENT_ACTIVE.includes(r.status));
         return row ? clone(row) : null;
       },
       async open(input) {
@@ -763,6 +823,9 @@ const bool = (v) => !!v;
         return t.incidents.insert({
           status: 'open', occurrences: 1, opened_at: at, last_seen_at: at,
           resolved_at: null, resolved_by: null, resolution: null,
+          acknowledged_at: null, acknowledged_by: null,
+          correlated_layer: null, confidence: null,
+          impact: null, impact_reason: null, affected_journeys: [],
           notified_at: null, notified_severity: null,
           ...input, evidence: input.evidence || [],
         });
@@ -780,8 +843,66 @@ const bool = (v) => !!v;
       },
       async resolve(id, { resolution = 'The next check was healthy', resolvedBy = null, at = null } = {}) {
         const row = t.incidents.rows.find((r) => r.id === Number(id));
-        if (!row || row.status !== 'open') return row ? clone(row) : null;
+        // Guarded on the ACTIVE set, like the real one: an incident under
+        // investigation is still resolvable, and a closed one is not reopened by
+        // a passing check.
+        if (!row || !INCIDENT_ACTIVE.includes(row.status)) return row ? clone(row) : null;
         return t.incidents.update(id, { status: 'resolved', resolved_at: at || new Date(), resolved_by: resolvedBy, resolution });
+      },
+      // The lifecycle states migration 090 added. Guarded by the same pure
+      // module the real repository uses, so the two cannot drift on the rules.
+      async transition(id, to, { by = null, at = null, note = null } = {}) {
+        const row = t.incidents.rows.find((r) => r.id === Number(id));
+        if (!row) return { ok: false, reason: 'that incident no longer exists', incident: null };
+        if (row.status === to) return { ok: true, reason: null, incident: clone(row), unchanged: true };
+        const allowed = incidentCanTransition(row.status, to);
+        if (!allowed || !allowed.ok) return { ok: false, reason: (allowed && allowed.reason) || 'not allowed', incident: clone(row) };
+        const when = at || new Date();
+        const patch = { status: to };
+        if (to === 'resolved') {
+          patch.resolved_at = when;
+          patch.resolved_by = by;
+          if (note !== null) patch.resolution = note;
+        }
+        if (to === 'investigating' && !row.acknowledged_at) {
+          patch.acknowledged_at = when;
+          patch.acknowledged_by = by;
+        }
+        return { ok: true, reason: null, incident: t.incidents.update(id, patch) };
+      },
+      async recordAssessment(id, { correlatedLayer = null, confidence = null, impact = null,
+        impactReason = null, affectedJourneys = null, likelyCause = null } = {}) {
+        const patch = {};
+        if (correlatedLayer !== null) patch.correlated_layer = correlatedLayer;
+        if (confidence !== null) patch.confidence = Math.max(0, Math.min(100, Math.round(Number(confidence) || 0)));
+        if (impact !== null) patch.impact = impact;
+        if (impactReason !== null) patch.impact_reason = impactReason;
+        if (affectedJourneys !== null) patch.affected_journeys = affectedJourneys;
+        if (likelyCause !== null) patch.likely_cause = likelyCause;
+        if (!Object.keys(patch).length) return t.incidents.find(id);
+        return t.incidents.update(id, patch);
+      },
+      async addEvents(incidentId, events) {
+        const list = (Array.isArray(events) ? events : []).filter((e) => e && typeof e === 'object');
+        for (const e of list) {
+          t.incidentEvents.insert({
+            incident_id: Number(incidentId),
+            kind: e.kind || 'note',
+            summary: e.summary || '',
+            detail: e.detail || null,
+            source: ['run', 'sweep', 'correlation', 'rule', 'person', 'notification'].includes(e.source) ? e.source : 'run',
+            actor_id: e.actor_id ?? e.actorId ?? null,
+            occurred_at: e.occurred_at instanceof Date ? e.occurred_at : (e.at instanceof Date ? e.at : new Date()),
+          });
+        }
+        return list.length;
+      },
+      async addEvent(incidentId, event) { return repositories.incidents.addEvents(incidentId, [event]); },
+      async timeline(incidentId, { limit = 500 } = {}) {
+        return t.incidentEvents
+          .where((r) => r.incident_id === Number(incidentId))
+          .sort((a, b) => (new Date(a.occurred_at) - new Date(b.occurred_at)) || (a.id - b.id))
+          .slice(0, limit);
       },
       async markNotified(id, severity, at = null) {
         return t.incidents.update(id, { notified_at: at || new Date(), notified_severity: severity });

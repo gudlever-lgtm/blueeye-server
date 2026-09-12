@@ -227,6 +227,21 @@ tenant → service → journey → run → evidence → incident → AI analysis
 
 No cross-tenant data, anywhere.
 
+> **As built, this is a statement of intent and not of fact, and it is written
+> down here so nobody reads it as fact.** BlueEyes is single-tenant on-prem —
+> `README.md` and `docs/service-assurance.md` both say so. Fourteen tables carry
+> a nullable `tenant_id` for forward compatibility and **no query anywhere
+> filters on it**; the V3 tables (`service_observations`,
+> `service_incident_events`, `service_ai_analyses`) do not carry the column at
+> all, which is consistent with every other child table in the module.
+>
+> The isolation boundary today is the DEPLOYMENT. Whoever can authenticate sees
+> the whole installation, which is correct for an on-prem product bought by the
+> organisation whose services it watches. Making the sentence above true would
+> mean a tenant clause on every read in the module, and that is a decision to
+> take deliberately if multi-tenancy ever arrives — not something to assume is
+> already in place.
+
 Collect only what is necessary.
 
 ## Observability
@@ -345,3 +360,42 @@ setting or a shell, and a spec asserts the service exposes no function that
 could create one. Asking is operator+ and audited: it sends a customer's data to
 a third party, and who did that is answerable later. Reading an answer is open
 to anyone who can see the incident.
+
+---
+
+## Phase 5 as built — hardening
+
+Four things came out of it that were not documentation.
+
+**A credential could reach the database through `network_errors`.** The
+redactor is meant to be the single chokepoint every string passes through before
+it is stored, and it was not: `console_errors` were masked and `api_calls` URLs
+were masked, while `network_errors` — which carry a URL, and a URL is exactly
+where a credential ends up when an application puts one in a query string — went
+out raw. The value landed in `service_test_runs.network_errors` and, since V3,
+in `service_observations` as well. Fixed at the source in `runner/execute.js`,
+and `test/redactionChokepoint.test.js` now sweeps the WHOLE result rather than
+the field that was wrong, so a field added later that forgets the redactor fails
+the build.
+
+**The service map made one query per test.** At the map's own cap of 200 tests
+that was 200 serialised round trips on a page somebody opens while something is
+already wrong, and the alert grouping did the same walk on every sweep. The
+obvious fix — one statement with `ROW_NUMBER() OVER (PARTITION BY test_id)` —
+was measured against 468,000 observations and is WORSE: to number the rows the
+window has to read every run of every test, 40,000 rows scanned and filesorted
+to return 2,000, against ten index-perfect rows per query the other way. So the
+queries stayed and only their serialisation went (`runs.recentForTests`, a
+bounded fan-out). Dependencies 364 ms → 131 ms; the reactor's per-sweep work
+150 ms → 58 ms, on a local socket where latency is nearly zero.
+
+**The V3 routes were already inside the security gate's sweep** — it enumerates
+every registered route rather than the ones somebody remembered, so 401-without-
+credentials, the viewer-write allowlist, missing-id 404 and non-numeric-id
+no-500 all covered them from the day they were mounted. Worth checking rather
+than assuming, which is what this pass did.
+
+**Migrations and repositories are verified against a real MySQL**, not only
+against the model: `npm run verify-schema` and `npm run verify-repositories`, in
+CI on every push. The chain is applied twice, because a migration that is not
+re-runnable takes the server down on the next deploy.

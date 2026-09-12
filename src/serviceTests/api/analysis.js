@@ -421,11 +421,13 @@ function createAnalysisRouter({ repositories, requireRole, roles, aiAnalysis = n
 
     const allTests = await tests.list({ applicationId: application.id });
     const walked = allTests.slice(0, MAX_TESTS_FOR_MAP);
+    // ONE statement, not one per test. This was a loop, and at the cap above it
+    // was 200 round trips on a page somebody opens while something is already
+    // wrong.
+    const byTest = await runs.recentForTests(walked.map((t) => t.id), { perTest: RUNS_PER_TEST_FOR_MAP });
     const runsByTest = new Map();
     for (const test of walked) {
-      // eslint-disable-next-line no-await-in-loop
-      const list = await runs.list({ testId: test.id, limit: RUNS_PER_TEST_FOR_MAP });
-      runsByTest.set(test.id, list.map((r) => ({ ...r, test_name: test.name })));
+      runsByTest.set(test.id, (byTest.get(test.id) || []).map((r) => ({ ...r, test_name: test.name })));
     }
     return buildServiceMap({
       application: { id: application.id, name: application.name },

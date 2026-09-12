@@ -234,6 +234,7 @@ async function executeDefinition(definition, {
   readBaseline = async () => { throw new Error('no baseline reader was wired'); },
 } = {}) {
   const mask = redact && typeof redact.text === 'function' ? redact.text : (s) => s;
+  const maskDeep = redact && typeof redact.deep === 'function' ? redact.deep : (v) => v;
   const flat = flattenSteps(definition);
   const results = [];
   const ctx = { lastStatus: undefined };
@@ -385,7 +386,19 @@ async function executeDefinition(definition, {
         classification,
         healing: healing ? { ...healing, step_path: path, step_type: step.type } : null,
         consoleErrors: (consoleErrors || []).map(mask),
-        networkErrors: networkErrors || [],
+        // Through the redactor like everything else that leaves here.
+        //
+        // These went out RAW while the console errors beside them and the
+        // api_calls below them were both masked — and a network error carries a
+        // URL, which is exactly where a credential ends up when an application
+        // puts one in a query string. The value then landed in
+        // service_test_runs.network_errors and, since V3, in
+        // service_observations as well.
+        //
+        // `deep` rather than `mask`: these are objects, not strings, and the
+        // secret can be in the url, the error text or a field a driver adds
+        // later.
+        networkErrors: maskDeep(networkErrors || []),
       };
     }
 

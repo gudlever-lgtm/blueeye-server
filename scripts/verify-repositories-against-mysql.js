@@ -40,6 +40,7 @@ const DB = `be_repo_${Date.now().toString(36)}${Math.floor(Math.random() * 1e6).
 const { createObservationsRepository } = require(path.join(ROOT, 'src/serviceTests/storage/observationsRepository'));
 const { createIncidentsRepository } = require(path.join(ROOT, 'src/serviceTests/storage/incidentsRepository'));
 const { createAiAnalysesRepository } = require(path.join(ROOT, 'src/serviceTests/storage/aiAnalysesRepository'));
+const { createRunsRepository } = require(path.join(ROOT, 'src/serviceTests/storage/runsRepository'));
 
 const checks = [];
 const check = (name, fn) => checks.push({ name, fn });
@@ -184,6 +185,50 @@ check('ai analyses: an answer is written with its context and read back', async 
   await pool.query('DELETE FROM service_test_incidents WHERE id = ?', [incident.id]);
   const orphan = await repo.findById(stored.id);
   assert.ok(orphan, 'the analysis went with the incident it explained');
+});
+
+check('runs: the batched read returns each test\'s own newest runs', async (pool) => {
+  const repo = createRunsRepository({ db: { pool } });
+
+  // Two tests, so a batch that returned one test's runs for both — the bug a
+  // fan-out invites — is visible.
+  await pool.query("INSERT INTO service_test_tests (id, application_id, name, definition, version, enabled, created_by) VALUES (2, 1, 'Second', '{\"version\":1,\"steps\":[]}', 1, 1, 1)");
+  const made = { 1: [], 2: [] };
+  for (const testId of [1, 2]) {
+    for (let i = 0; i < 4; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      const run = await repo.enqueue({ test_id: testId });
+      made[testId].push(run.id);
+    }
+  }
+
+  const byTest = await repo.recentForTests([1, 2], { perTest: 2 });
+  assert.strictEqual(byTest.get(1).length, 2, 'the per-test cap was not applied');
+  assert.strictEqual(byTest.get(2).length, 2);
+  for (const testId of [1, 2]) {
+    for (const run of byTest.get(testId)) {
+      assert.strictEqual(run.test_id, testId, `test ${testId} was given another test's runs`);
+      assert.ok(made[testId].includes(run.id));
+    }
+  }
+  // Newest first, like list().
+  assert.ok(byTest.get(1)[0].id > byTest.get(1)[1].id, 'not ordered newest first');
+
+  // A test with no runs is an empty list, not undefined — a caller that indexes
+  // straight into the result must not get a crash for an unused test.
+  const withEmpty = await repo.recentForTests([1, 999999], { perTest: 2 });
+  assert.deepStrictEqual(withEmpty.get(999999), []);
+
+  // Nothing asked for, nothing read.
+  for (const input of [[], null, undefined, 'no', [null, 'x']]) {
+    // eslint-disable-next-line no-await-in-loop
+    const empty = await repo.recentForTests(input, {});
+    assert.strictEqual(empty.size, 0, `${JSON.stringify(input)} produced rows`);
+  }
+
+  // Duplicates collapse rather than fanning out twice.
+  const deduped = await repo.recentForTests([1, 1, 1], { perTest: 2 });
+  assert.strictEqual(deduped.size, 1);
 });
 
 async function main() {

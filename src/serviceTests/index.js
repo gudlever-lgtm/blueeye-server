@@ -115,11 +115,12 @@ function createServiceTestsModule(rawPorts = {}) {
       ? await repositories.journeys.stepsForMany(journeyList.map((j) => j.id))
       : new Map();
     const allTests = (await repositories.tests.list({ applicationId })).slice(0, 100);
+    // One statement. The reactor runs this on EVERY sweep, so a round trip per
+    // test is a cost the whole estate pays on a schedule.
+    const byTest = await repositories.runs.recentForTests(allTests.map((t) => t.id), { perTest: 5 });
     const runsByTest = new Map();
     for (const test of allTests) {
-      // eslint-disable-next-line no-await-in-loop
-      const list = await repositories.runs.list({ testId: test.id, limit: 5 });
-      runsByTest.set(test.id, list.map((r) => ({ ...r, test_name: test.name })));
+      runsByTest.set(test.id, (byTest.get(test.id) || []).map((r) => ({ ...r, test_name: test.name })));
     }
     const map = buildServiceMap({
       application: { id: application.id, name: application.name },

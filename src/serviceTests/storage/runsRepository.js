@@ -116,6 +116,50 @@ function createRunsRepository({ db, now = () => new Date() }) {
     return rows.map((r) => shape(r));
   }
 
+  // The N most recent runs of EACH of several tests.
+  //
+  // The service map needs this, and it used to be `list({ testId })` awaited in
+  // a loop: one round trip per test, in series. At the map's own cap of 200
+  // tests that is 200 serialised round trips on a page somebody opens while
+  // something is already wrong.
+  //
+  // The obvious fix — ONE statement with ROW_NUMBER() OVER (PARTITION BY
+  // test_id) — was measured and is WORSE. To number the rows the window has to
+  // read every run of every test: 40,000 rows scanned and filesorted to return
+  // 2,000, against 10 index-perfect rows per query the other way. It came out
+  // slower on a local socket and it would stay slower on a loaded server, where
+  // rows read is the cost that matters.
+  //
+  // So the queries stay as they were and only their SERIALISATION goes. Each is
+  // already a ten-row lookup on idx_str_test_created; what was wasteful was
+  // waiting for each one before starting the next. Bounded, because "all 200 at
+  // once" would exhaust the pool and starve every other request on the server —
+  // which is the failure mode that makes people distrust concurrency.
+  const FANOUT = 8;
+
+  async function recentForTests(testIds, { perTest = 10, concurrency = FANOUT } = {}) {
+    const ids = [...new Set((Array.isArray(testIds) ? testIds : [])
+      .map((id) => intOrNull(id))
+      .filter((id) => id !== null))];
+    const out = new Map(ids.map((id) => [id, []]));
+    if (!ids.length) return out;
+
+    const capped = Math.min(50, Math.max(1, Number(perTest) || 10));
+    const lanes = Math.min(16, Math.max(1, Number(concurrency) || FANOUT));
+    let next = 0;
+    async function worker() {
+      for (;;) {
+        const i = next;
+        next += 1;
+        if (i >= ids.length) return;
+        // eslint-disable-next-line no-await-in-loop
+        out.set(ids[i], await list({ testId: ids[i], limit: capped }));
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(lanes, ids.length) }, worker));
+    return out;
+  }
+
   // Enqueue. Returns the queued run; the worker picks it up on its next poll.
   async function enqueue(input) {
     const [res] = await pool.query(
@@ -336,7 +380,7 @@ function createRunsRepository({ db, now = () => new Date() }) {
   }
 
   return {
-    findById, list, enqueue, claimNext, complete, reapStale, history, stats,
+    findById, list, recentForTests, enqueue, claimNext, complete, reapStale, history, stats,
     baselineSamples, screenshotsOlderThan, clearScreenshots,
   };
 }

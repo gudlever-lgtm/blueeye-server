@@ -63,16 +63,18 @@ function createMapRouter({ repositories, requireRole, roles }) {
     // still appear. Hiding them because nobody got round to grouping them would
     // make the map lie by omission — they are monitoring that exists.
     const allTests = await tests.list({ applicationId });
-    // One query per test, so it is bounded rather than open-ended: an
-    // application with three hundred tests would otherwise hold a connection
-    // while it made three hundred round trips, and the map is a page somebody
-    // opens while something is already wrong.
+    // Capped at MAX_TESTS: beyond it the picture is unreadable anyway, and the
+    // response says it was truncated rather than pretending otherwise.
     const walked = allTests.slice(0, MAX_TESTS);
+    // One statement for every test's recent runs. This was a loop, and the
+    // comment above it said the loop was "bounded rather than open-ended" — it
+    // was, at 200 round trips, which is bounded and still 200 round trips on the
+    // page somebody opens during an outage.
+    const byTest = await runs.recentForTests(walked.map((t) => t.id), { perTest });
     const runsByTest = new Map();
     for (const test of walked) {
-      const list = await runs.list({ testId: test.id, limit: perTest });
       // The test's name rides along so an ungrouped node can be labelled.
-      runsByTest.set(test.id, list.map((r) => ({ ...r, test_name: test.name })));
+      runsByTest.set(test.id, (byTest.get(test.id) || []).map((r) => ({ ...r, test_name: test.name })));
     }
 
     const map = buildServiceMap({

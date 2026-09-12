@@ -276,6 +276,21 @@ const bool = (v) => !!v;
         const r = t.runs.find(id);
         return r ? { ...r, steps: Array.isArray(r.steps) ? r.steps : [] } : null;
       },
+      // The batched read the service map uses. Mirrors the real one's contract:
+      // a Map keyed by test id, every id asked for present, empty list for a
+      // test with no runs — a caller that indexes straight in must not crash on
+      // an unused test.
+      async recentForTests(testIds, { perTest = 10 } = {}) {
+        const ids = [...new Set((Array.isArray(testIds) ? testIds : [])
+          .map((id) => Number(id))
+          .filter((id) => Number.isFinite(id)))];
+        const out = new Map(ids.map((id) => [id, []]));
+        for (const id of ids) {
+          // eslint-disable-next-line no-await-in-loop
+          out.set(id, await repositories.runs.list({ testId: id, limit: perTest }));
+        }
+        return out;
+      },
       async list({ testId = null, status = null, applicationId = null, limit = 50 } = {}) {
         // Mirrors the real repository's join: a run carries the names that say
         // what it was a run OF, so the Runs screen can tell two applications

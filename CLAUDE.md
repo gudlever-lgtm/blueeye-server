@@ -49,7 +49,10 @@ full HTTP route table, the data model, the dashboard structure, and a
   twice — a migration that is not re-runnable takes the server down on the next
   deploy, because the container runs `migrate && server` — loads `schema.sql`
   into a second database, and diffs every column, index and foreign key.
-  `.github/workflows/schema.yml` runs it against MySQL 8.4 on every push.
+  `.github/workflows/schema.yml` runs it against MySQL 8.4 on every push, along
+  with `npm run verify-repositories` — the repository specs use a scripted pool,
+  which asserts the statement and its parameters but can never say whether the
+  SQL is valid.
 - Adding a feature usually means: a router in `src/routes/` (mounted in `routes/index.js`),
   a repository in `src/repositories/`, validation in `src/validation/`, a dashboard
   `views.<tab>` in `public/app.js` (+ a `data-view` button in `public/index.html`), a

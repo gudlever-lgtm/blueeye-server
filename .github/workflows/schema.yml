@@ -52,3 +52,17 @@ jobs:
           DB_PASSWORD: ''
           JWT_SECRET: ci-only-not-a-real-secret
         run: node scripts/verify-schema-against-mysql.js
+
+      # The repository specs use a scripted pool: they assert the statement and
+      # its parameters, which is the contract and needs no server. What they
+      # cannot catch is whether the SQL is VALID — a renamed column, a
+      # placeholder count that disagrees with the parameter list, an ENUM value
+      # the table does not have. All three pass a scripted pool.
+      - name: Run the repositories against the real database
+        env:
+          DB_HOST: 127.0.0.1
+          DB_PORT: '3306'
+          DB_USER: root
+          DB_PASSWORD: ''
+          JWT_SECRET: ci-only-not-a-real-secret
+        run: node scripts/verify-repositories-against-mysql.js

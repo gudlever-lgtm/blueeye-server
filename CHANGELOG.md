@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.144.2 — Logs, split into System Logs and User Logs
+## 0.144.3 — Logs, split into System Logs and User Logs
 
 One nav entry called **Logs** showed the server's own diagnostic stream and
 nothing else. The record of what PEOPLE did existed — two audit stores, one of

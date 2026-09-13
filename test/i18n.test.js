@@ -128,3 +128,56 @@ test('relativeTime accepts a Date instance', () => {
 test('storedLocale returns null when there is no localStorage (node)', () => {
   assert.equal(I18n.storedLocale(), null);
 });
+
+// --- plural() ---------------------------------------------------------------
+// "1 agent(s) are connected" is what a product writes when nobody owns the
+// words. The catalogue carries both forms and plural() picks one.
+
+test('plural() picks the .one form for exactly one, .other for everything else', () => {
+  I18n.setLocale('en');
+  assert.equal(I18n.plural('guide.tests.count', 1), 'One test exists.');
+  assert.equal(I18n.plural('guide.tests.count', 2), '2 tests exist.');
+  assert.equal(I18n.plural('guide.tests.count', 0), '0 tests exist.');
+});
+
+test('plural() fills {count} without being passed it, and keeps other params', () => {
+  I18n.setLocale('en');
+  assert.equal(
+    I18n.plural('guide.allow.bare', 3, { names: 'Selvbetjening, Intranet' }),
+    '3 applications have no allowed hosts: Selvbetjening, Intranet.'
+  );
+  assert.equal(
+    I18n.plural('guide.allow.bare', 1, { names: 'Selvbetjening' }),
+    'One application has no allowed hosts: Selvbetjening.'
+  );
+});
+
+test('plural() follows the active locale', () => {
+  I18n.setLocale('da');
+  assert.equal(I18n.plural('guide.tests.count', 1), 'Der findes én test.');
+  assert.equal(I18n.plural('guide.tests.count', 4), 'Der findes 4 tests.');
+  I18n.setLocale('en');
+});
+
+test('plural() falls back to the bare key when no variants exist', () => {
+  // A half-migrated string stays visible rather than rendering as the key.
+  I18n.setLocale('en');
+  assert.equal(I18n.plural('common.never', 2), I18n.t('common.never'));
+  assert.equal(I18n.plural('no.such.key.at.all', 2), 'no.such.key.at.all');
+});
+
+test('every plural key in the catalogue has both forms in both locales', () => {
+  const forms = new Map();
+  for (const locale of I18n.LOCALES) {
+    for (const key of Object.keys(I18n.STRINGS[locale])) {
+      const m = /^(.*)\.(one|other)$/.exec(key);
+      if (!m) continue;
+      const id = `${locale}:${m[1]}`;
+      forms.set(id, (forms.get(id) || new Set()).add(m[2]));
+    }
+  }
+  assert.ok(forms.size > 0, 'no plural keys found at all');
+  for (const [id, set] of forms) {
+    assert.deepEqual([...set].sort(), ['one', 'other'], `${id} is missing a form`);
+  }
+});

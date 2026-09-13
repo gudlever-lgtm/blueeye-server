@@ -155,9 +155,11 @@ async function walk(doc) {
 // What the non-assurance guides read: the agents, the sites, and (for an admin)
 // the server settings.
 const GENERAL_ROUTES = {
+  // Shaped like agentsRepository.mapRow: there is no `version` column — the
+  // version an agent reports arrives inside its capabilities payload.
   'GET /agents': [
-    { id: 1, hostname: 'core-sw', status: 'online', version: '1.4.0', location_id: 1, monitor_config: { source: 'netflow' } },
-    { id: 2, hostname: 'branch-01', status: 'offline', version: '1.3.0', location_id: null, monitor_config: { source: 'proc' } },
+    { id: 1, hostname: 'core-sw', display_name: 'core-sw', status: 'online', location_id: 1, location_name: 'Copenhagen HQ', capabilities: { agentVersion: '1.4.0', sources: ['proc'] }, monitor_config: { source: 'netflow' } },
+    { id: 2, hostname: 'branch-01', display_name: 'branch-01', status: 'offline', location_id: null, location_name: null, capabilities: { agentVersion: '1.3.0', sources: ['proc'] }, monitor_config: { source: 'proc' } },
   ],
   'GET /locations': [{ id: 1, name: 'Copenhagen HQ', latitude: 55.6, longitude: 12.5 }],
   'GET /api/settings': {
@@ -433,4 +435,128 @@ test('the values the general guides quote are the code’s values', async (t) =>
   const iface = fs.readFileSync(path.join(__dirname, '..', 'src', 'health', 'interfaceHealth.js'), 'utf8');
   assert.ok(iface.includes(`utilPct >= ${th.IFACE_UTIL_BAD}`), `an interface is "bad" at some other utilization than ${th.IFACE_UTIL_BAD}%`);
   assert.ok(iface.includes(`utilPct >= ${th.IFACE_UTIL_WARN}`), `an interface is "warn" at some other utilization than ${th.IFACE_UTIL_WARN}%`);
+});
+
+
+// ------------------------------------------------- the audit pass (v0.144)
+test('the version line reads the version agents actually report', async (t) => {
+  // agentsRepository has no version column; `capabilities.agentVersion` is
+  // where it lives. Reading the wrong field made this line dead on every
+  // install — and dead in a way nothing but a real payload would show.
+  const { doc } = await boot(t, { ...fullRoutes(), ...GENERAL_ROUTES });
+  await openGuide(doc, 'fleet');
+  const rail = [...doc.querySelectorAll('#view .guide-stepper-btn')];
+  await click(rail[5], 150); // → Keeping agents current
+  const text = doc.querySelector('#view .guide-step').textContent;
+  assert.match(text, /1\.4\.0/, 'the reported agent version is not on the page');
+  assert.match(text, /1\.3\.0/, 'the second version is not named');
+  assert.ok(doc.querySelector('#view .guide-pill-warn'), 'two versions did not raise a warning');
+});
+
+test('one version across the fleet reads as done', async (t) => {
+  const same = GENERAL_ROUTES['GET /agents'].map((a) => ({ ...a, status: 'online', capabilities: { agentVersion: '1.4.0' } }));
+  const { doc } = await boot(t, { ...fullRoutes(), ...GENERAL_ROUTES, 'GET /agents': same });
+  await openGuide(doc, 'fleet');
+  await click([...doc.querySelectorAll('#view .guide-stepper-btn')][5], 150);
+  const text = doc.querySelector('#view .guide-step').textContent;
+  assert.match(text, /1\.4\.0/);
+  assert.equal(doc.querySelectorAll('#view .guide-pill-warn').length, 0, 'a uniform fleet raised a warning');
+});
+
+test('a step never offers a screen the reader cannot open', async (t) => {
+  // Enrollment, Troubleshooting, Investigate and Topology delta are operator+.
+  // A viewer gets the screen named and greyed with the reason, not a button
+  // that would land them somewhere else.
+  const { doc } = await boot(t, { ...fullRoutes(), ...GENERAL_ROUTES }, 'viewer');
+
+  await openGuide(doc, 'fleet');
+  await click([...doc.querySelectorAll('#view .guide-stepper-btn')][1], 150); // → Add an agent
+  let labels = [...doc.querySelectorAll('#view .guide-actions button')].map((b) => b.textContent);
+  assert.ok(!labels.some((l) => /Enrollment/.test(l)), `a viewer was offered Enrollment: ${labels.join(' | ')}`);
+  assert.ok([...doc.querySelectorAll('#view .guide-unavailable')].some((n) => /Enrollment/.test(n.textContent)),
+    'Enrollment is not named at all for a viewer');
+  assert.equal(doc.querySelectorAll('#view .guide-actions button').length, 0, 'a viewer was offered an admin Settings tab');
+
+  await openGuide(doc, 'diagnostics');
+  await click([...doc.querySelectorAll('#view .guide-stepper-btn')][4], 150); // → When it is a real outage
+  labels = [...doc.querySelectorAll('#view .guide-actions button')].map((b) => b.textContent);
+  assert.deepEqual(labels, [], `a viewer was offered an operator-only screen: ${labels.join(' | ')}`);
+  assert.equal(doc.querySelectorAll('#view .guide-unavailable').length, 2, 'the two operator-only screens are not both named');
+});
+
+test('an admin is offered those same screens as buttons', async (t) => {
+  const { doc } = await boot(t, { ...fullRoutes(), ...GENERAL_ROUTES }, 'admin');
+  await openGuide(doc, 'diagnostics');
+  await click([...doc.querySelectorAll('#view .guide-stepper-btn')][4], 150);
+  assert.equal(doc.querySelectorAll('#view .guide-unavailable').length, 0, 'an admin was refused a screen');
+  assert.equal(doc.querySelectorAll('#view .guide-actions button').length, 2);
+});
+
+test('the Overview guide lists every verdict the health code can produce', async (t) => {
+  // A table of colours that omits one is a reader who meets an undocumented
+  // state during an outage.
+  const { TIER } = (() => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'health', 'probeHealth.js'), 'utf8');
+    const m = /const TIER = \{([^}]+)\}/.exec(src);
+    assert.ok(m, 'probeHealth no longer declares TIER');
+    return { TIER: m[1].split(',').map((p) => p.split(':')[0].trim()).filter(Boolean) };
+  })();
+
+  const { doc } = await boot(t, { ...fullRoutes(), ...GENERAL_ROUTES });
+  await openGuide(doc, 'monitoring');
+  await click([...doc.querySelectorAll('#view .guide-stepper-btn')][2], 150);
+  const codes = [...doc.querySelectorAll('#view .guide-table code')].map((n) => n.textContent);
+  for (const status of TIER) {
+    assert.ok(codes.includes(status), `the guide does not explain the "${status}" verdict`);
+  }
+});
+
+test('the counted lines read right for exactly one of a thing', async (t) => {
+  // "1 test(s) exist" is the shape this catches. Every counted line in the
+  // guides goes through plural(), including the keys handed to countStatus as
+  // plain strings — which the gate's sweep cannot see.
+  const src = fs.readFileSync(path.join(PUBLIC, 'guides.js'), 'utf8');
+  const handed = [...src.matchAll(/countStatus\([^,]+,\s*'([^']+)'/g)].map((m) => m[1]);
+  assert.ok(handed.length >= 2, `only ${handed.length} countStatus keys found`);
+  for (const key of handed) {
+    for (const form of ['one', 'other']) {
+      for (const locale of I18n.LOCALES) {
+        assert.ok(I18n.has(`${key}.${form}`, locale), `${key}.${form} missing from ${locale}`);
+      }
+    }
+  }
+
+  // And the rendering: one application, one test, one journey, one run.
+  const one = fullRoutes({
+    [`GET ${SA}/journeys`]: { journeys: [{ id: 4, name: 'Find a customer' }], summary: {} },
+  });
+  const { doc } = await boot(t, { ...one, ...GENERAL_ROUTES });
+  await openGuide(doc, 'assurance');
+  const seen = [];
+  const rail = [...doc.querySelectorAll('#view .guide-stepper-btn')];
+  for (let i = 0; i < rail.length; i += 1) {
+    await click([...doc.querySelectorAll('#view .guide-stepper-btn')][i], 40);
+    for (const n of doc.querySelectorAll('#view .guide-status-text')) seen.push(n.textContent);
+  }
+  const joined = seen.join(' | ');
+  assert.ok(!/\(s\)/.test(joined), `a counted line still carries "(s)": ${joined}`);
+  assert.ok(/One application registered\./.test(joined), `the singular application line is wrong: ${joined}`);
+  assert.ok(/One test exists\./.test(joined), `the singular test line is wrong: ${joined}`);
+  assert.ok(/One journey defined\./.test(joined), `the singular journey line is wrong: ${joined}`);
+});
+
+test('no guide line ships an unfilled {placeholder}', async (t) => {
+  // A parameter passed to the wrong cell renders as "{samples} samples" and
+  // nothing but reading every step catches it.
+  for (const track of TRACKS) {
+    const { doc } = await boot(t, { ...fullRoutes(), ...GENERAL_ROUTES });
+    await openGuide(doc, track);
+    const total = doc.querySelectorAll('#view .guide-stepper-btn').length;
+    for (let i = 0; i < total; i += 1) {
+      await click([...doc.querySelectorAll('#view .guide-stepper-btn')][i], 40);
+      const text = doc.querySelector('#view .guide-step').textContent;
+      const stray = text.match(/\{[a-zA-Z]+\}/g);
+      assert.equal(stray, null, `${track} step ${i + 1} shows ${stray && stray.join(', ')}`);
+    }
+  }
 });

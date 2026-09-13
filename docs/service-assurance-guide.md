@@ -434,6 +434,7 @@ an administrator set here.
 | [service-assurance-healing.md](service-assurance-healing.md) | Self-healing selectors: how a proposal is scored, and why it stays a proposal. |
 | [service-assurance-accessibility.md](service-assurance-accessibility.md) | The accessibility check, and why it can never change a verdict. |
 | [service-assurance-visual.md](service-assurance-visual.md) | Visual regression and baselines. |
+| [guides.md](guides.md) | **The in-app guides.** This journey, and four more, as next-next walkthroughs inside the dashboard (nav group *Guides*) — with the values read from the running system. That document is how they are built. |
 | [CODEMAP.md](../CODEMAP.md) | Where the code is. Start here for a change rather than a question. |
 
 **Read them in that order if you are new to the module.** The V1 document assumes

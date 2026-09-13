@@ -13,6 +13,18 @@ const { parseCidr } = require('../discovery/cidr');
 // blanket default.
 const DEFAULT_SOURCE_CHOICES = MONITOR_SOURCES.filter((s) => s !== 'snmp');
 
+// The shipped analysis + retention defaults. At module scope, and exported,
+// because the dashboard's Insights guide prints them as the "Default" column
+// and test/guides.test.js pins that column to these objects — a default that
+// moves here fails the build rather than quietly making a guide untrue.
+const MODULE_ANALYSIS_DEFAULTS = {
+  analysisEnabled: true, assistantEnabled: false,
+  critSigma: 4.0, warnSigma: 3.0, baselineDays: 7, minSamples: 200, verifySettleMinutes: 5,
+};
+const MODULE_RETENTION_DEFAULTS = {
+  enabled: true, rawRetentionDays: 7, rollupRetentionDays: 90, findingRetentionDays: 365, rollupIntervalMinutes: 60,
+};
+
 // Parses a list of integers, keeping only unique values within [min, max].
 // Returns null if the result is empty or the cap is exceeded.
 function uniqInts(arr, min, max, cap) {
@@ -314,8 +326,9 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
 
   // ---- Analysis thresholds (Settings → Analysis) ----------------------
   // Editable subset of the analysis config; the AI assistant + secrets stay
-  // env-only. Defaults mirror src/analysis/config.js.
-  const ANALYSIS_DEFAULTS = { analysisEnabled: true, assistantEnabled: false, critSigma: 4.0, warnSigma: 3.0, baselineDays: 7, minSamples: 200, verifySettleMinutes: 5 };
+  // env-only. Defaults mirror src/analysis/config.js and live at module scope
+  // (below) so the dashboard's Insights guide can be pinned to them.
+  const ANALYSIS_DEFAULTS = MODULE_ANALYSIS_DEFAULTS;
 
   function num(patch, key, min, max, isInt, errors, value) {
     if (patch[key] === undefined) return;
@@ -364,7 +377,7 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
   }
 
   // ---- Retention windows (Settings → Retention) ----------------------
-  const RETENTION_DEFAULTS = { enabled: true, rawRetentionDays: 7, rollupRetentionDays: 90, findingRetentionDays: 365, rollupIntervalMinutes: 60 };
+  const RETENTION_DEFAULTS = MODULE_RETENTION_DEFAULTS;
 
   function validateRetention(patch) {
     const p = patch && typeof patch === 'object' ? patch : {};
@@ -1021,4 +1034,8 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
   };
 }
 
-module.exports = { createSettingsService };
+module.exports = {
+  createSettingsService,
+  ANALYSIS_DEFAULTS: MODULE_ANALYSIS_DEFAULTS,
+  RETENTION_DEFAULTS: MODULE_RETENTION_DEFAULTS,
+};

@@ -430,6 +430,9 @@ let localeUserChoice = false;
 function setLocale(locale, { persist = true } = {}) {
   if (!window.I18n) return Promise.resolve();
   const applied = window.I18n.setLocale(locale);
+  // Keep the account-menu switch in step, wherever the change came from
+  // (the menu itself, or Settings → Appearance).
+  renderLangSwitch();
   if (persist) {
     localeUserChoice = true;
     if (token) return api('/me/preferences', { method: 'PUT', body: { locale: applied } });
@@ -459,6 +462,7 @@ async function loadProfile() {
       // No saved locale on this account → fall back to the browser language
       // rather than inheriting what another account cached in this browser.
       window.I18n.setLocale(window.I18n.resolveLocale(locale, (navigator && navigator.language) || ''));
+      renderLangSwitch();
     }
     const theme = me && me.preferences && me.preferences.theme;
     // The theme belongs to this account. Skip only if the user already chose one
@@ -731,6 +735,7 @@ const VIEW_LABELS = {
   interfaces: 'Interfaces', probes: 'Probes', tests: 'Tests', flows: 'Flows',
   findings: 'Analysis', reporting: 'Reporting', locations: 'Locations', enrollment: 'Enrollment', settings: 'Settings',
   docs: 'Documentation', investigation: 'Troubleshooting', nics: 'NICs', events: 'Events',
+  serviceAssurance: 'Service Assurance', guide: 'User guide',
 };
 function gotoView(viewKey) {
   closeDrawer();
@@ -762,6 +767,20 @@ function docsLink(topicId, label) {
 function gotoDocs(topicId) { closeDrawer(); docsTopic = topicId; currentView = 'docs'; render(); }
 
 const PAGE_INFO = {
+  // The only PAGE_INFO entry written through t() from the start: the guide is new
+  // text, and new UI text goes through the translation layer (CLAUDE.md). The
+  // older entries below are still hardcoded English and migrate opportunistically.
+  guide: {
+    // Getters, not strings: the catalogue is read when the hero is drawn, so the
+    // page follows a language switch without a reload.
+    get hero() { return t('guide.info.hero'); },
+    get title() { return t('guide.info.title'); },
+    body: () => [
+      el('p', {}, t('guide.info.p1')),
+      el('p', {}, t('guide.info.p2')),
+      el('p', { class: 'muted' }, t('guide.info.p3')),
+    ],
+  },
   serviceAssurance: {
     hero: 'Know when your digital services stop working — before your users do.',
     title: 'Service Assurance — synthetic monitoring of your web services',
@@ -11084,6 +11103,8 @@ let settingsTab = null;
 // Which Service Assurance screen the nav last asked for. The module owns its own
 // tab bar; this is only how a nav entry deep-links into one of its tabs.
 let serviceAssuranceTab = null;
+// Which guide the Guides nav group asked for (data-guide). Null opens the first.
+let guideTrack = null;
 // Settings are organised into labelled sections rather than one long row of tabs,
 // so related controls sit together and the page stays scannable as it grows. Each
 // tab is [key, label, adminOnly]; non-admins only ever see the personal section.
@@ -15292,6 +15313,32 @@ views.serviceAssurance = async () => {
   });
 };
 
+// The in-app guides (nav group: Guides).
+//
+// Five next-next walkthroughs — Monitoring, Fleet, Diagnostics, Service
+// Assurance, Insights — of what to do, in what order, and which VALUES to put
+// in each field. Their own module in public/guides.js, handed the same shared
+// helpers Service Assurance itself gets, plus the deep links it needs so every
+// step can open the screen it is describing.
+views.guide = async () => {
+  if (!window.Guides) {
+    return el('div', { class: 'empty' }, t('guide.unavailable'));
+  }
+  return window.Guides.create({
+    el, api, t, toast,
+    isAdmin,
+    isOperator: canWrite,
+    // Which of the five guides the nav entry asked for.
+    track: guideTrack,
+    // Every step can open the screen it is describing. A plain view, a Service
+    // Assurance sub-tab, a Settings sub-tab, or a handbook article.
+    openView: (viewKey) => gotoView(viewKey),
+    openTab: (tab) => { serviceAssuranceTab = tab; currentView = 'serviceAssurance'; render(); },
+    openSettings: (tab) => { settingsTab = tab; currentView = 'settings'; render(); },
+    openDocs: (topic) => gotoDocs(topic),
+  });
+};
+
 views.transactions = async () => {
   const root = el('div', { class: 'transactions' });
   const body = el('div', {});
@@ -15708,7 +15755,8 @@ async function render({ silent = false } = {}) {
     // Several entries can share one data-view when they deep-link to different
     // sub-tabs; the sub-tab is what tells them apart.
     const active = b.dataset.view === currentView
-      && (!b.dataset.saTab || b.dataset.saTab === serviceAssuranceTab);
+      && (!b.dataset.saTab || b.dataset.saTab === serviceAssuranceTab)
+      && (!b.dataset.guide || b.dataset.guide === guideTrack);
     b.classList.toggle('active', active);
   }
 
@@ -15814,9 +15862,37 @@ $('#autorefresh').addEventListener('change', (e) => {
   if (cb) cb.checked = autoOn;
   setAutoRefresh(autoOn);
 }
+// The language switch in the account menu. One button per locale, the active one
+// marked — two locales make a segmented pair, and a select would be a dropdown
+// inside a dropdown. Picking one applies it immediately, saves it to the account
+// (setLocale) and re-renders; the panel stays open, like the theme toggle, so the
+// effect is visible where the click happened.
+function renderLangSwitch() {
+  const host = $('#lang-switch');
+  if (!host || !window.I18n) return;
+  const label = $('#lang-label');
+  if (label) label.textContent = t('settings.language');
+  const active = window.I18n.getLocale();
+  host.replaceChildren(...window.I18n.LOCALES.map((code) => el('button', {
+    type: 'button',
+    class: `lang-switch-btn${code === active ? ' active' : ''}`,
+    role: 'menuitemradio',
+    'aria-checked': code === active ? 'true' : 'false',
+    title: window.I18n.LOCALE_LABELS[code] || code,
+    onclick: async (e) => {
+      e.stopPropagation();
+      if (code === window.I18n.getLocale()) return;
+      try { await setLocale(code); }
+      catch (err) { toast(errText(err) || 'Could not save language', true); }
+      render();
+    },
+  }, code.toUpperCase())));
+}
+
 // Account menu: click the trigger to open/close; closes on outside-click and
 // Escape. Item clicks that reload/navigate (refresh, auto toggle, log out) tear
-// the panel down on their own; theme toggle intentionally leaves it open.
+// the panel down on their own; theme and language toggles intentionally leave it
+// open.
 {
   const menu = $('#user-menu');
   const trigger = $('#user-menu-trigger');
@@ -15828,6 +15904,7 @@ $('#autorefresh').addEventListener('change', (e) => {
     trigger.addEventListener('click', (e) => { e.stopPropagation(); isOpen() ? close() : open(); });
     document.addEventListener('click', (e) => { if (isOpen() && !menu.contains(e.target)) close(); });
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && isOpen()) { close(); trigger.focus(); } });
+    renderLangSwitch();
   }
 }
 function closeNav() { $('#app').classList.remove('nav-open'); }
@@ -15844,6 +15921,7 @@ for (const b of document.querySelectorAll('.tabs button[data-view], #sidebar-foo
     // Assurance has five screens of its own). Recorded before render so the view
     // opens where the operator clicked rather than on its default tab.
     if (b.dataset.saTab) serviceAssuranceTab = b.dataset.saTab;
+    if (b.dataset.guide) guideTrack = b.dataset.guide;
     currentView = b.dataset.view; render();
   });
 }

@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.144.1 — Logs, split into System Logs and User Logs
+## 0.144.2 — Logs, split into System Logs and User Logs
 
 One nav entry called **Logs** showed the server's own diagnostic stream and
 nothing else. The record of what PEOPLE did existed — two audit stores, one of
@@ -44,8 +44,17 @@ export can never disagree about why something was flagged. Filter by user, by
 "flagged only", or by free text; export the rows as filtered with the flag level
 and its reasons as columns.
 
-Without the `audit_log` licence the view still works from the auto-captured
-store alone and says what is missing, rather than quietly showing less.
+### User Logs is the audit log, on every plan
+
+Reading it is deliberately not licence-gated. An audit list that silently drops
+rows depending on what you bought is one nobody can trust — an admin asking
+"what did people do here" must not be handed a list with the failed sign-ins and
+licence actions removed. The rows were always written on every install
+(`services/complianceLogger.js` records unconditionally); what the `audit_log`
+feature sells is the tamper-evident compliance API over the same rows — chain
+verification, the category/actor query surface — not an administrator's ability
+to see their own users' activity. `/api/audit/all` and `/api/audit-log` are
+unchanged and still respect the plan.
 
 ### Users have names now
 

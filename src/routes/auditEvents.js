@@ -26,17 +26,24 @@ function parseQuery(q) {
   return filters;
 }
 
-// The unified, server-wide audit trail (Reporting → Audit). Admin only — this
-// is the RBAC gate: only admins can see who did what on the server. Read-only;
-// writes happen via the audit middleware (user actions) and on ingest (agent
-// activity).
+// The unified, server-wide audit trail (Reporting → Audit) plus the User Logs
+// read model (Administration → User Logs). Admin only — this is the RBAC gate:
+// only admins can see who did what on the server. Read-only; writes happen via
+// the audit middleware (user actions) and on ingest (agent activity).
+//
+// One asymmetry worth knowing about: `/all` respects the `audit_log` licence,
+// `/users` does not. See the comment on the `logs` read in loadUserActivity.
 function createAuditEventsRouter({ auditEventsRepo, auditLogRepo = null, featureGate = null, usersRepo = null }) {
   const router = express.Router();
   const admin = requireRole(ROLES.ADMIN);
 
-  // True when the licensed, hash-chained `audit_log` may be read as well.
-  function auditLogReadable() {
-    if (!auditLogRepo || typeof auditLogRepo.list !== 'function') return false;
+  // Is the hash-chained `audit_log` store there at all?
+  const auditLogPresent = () => Boolean(auditLogRepo && typeof auditLogRepo.list === 'function');
+
+  // True when the LICENSED compliance API may read `audit_log`. This gates
+  // `/all` (and `/api/audit-log`), not User Logs — see below.
+  function auditLogLicensed() {
+    if (!auditLogPresent()) return false;
     if (!featureGate || typeof featureGate.isFeatureEnabled !== 'function') return true;
     return featureGate.isFeatureEnabled('audit_log');
   }
@@ -61,7 +68,15 @@ function createAuditEventsRouter({ auditEventsRepo, auditLogRepo = null, feature
     const filters = parseQuery(req.query);
     const pageLimit = filters.limit;
     const events = auditEventsRepo ? await auditEventsRepo.findAll({ ...filters, actorType: 'user', limit: 500, offset: 0 }) : [];
-    const logs = auditLogReadable() ? await auditLogRepo.list({ limit: 500 }) : [];
+    // NOT licence-gated, unlike `/all` and `/api/audit-log`. User Logs IS the
+    // audit record of who did what, and a security record that is incomplete
+    // by plan is a security record nobody can trust: an admin asking "what did
+    // people do here" must not be shown a list with the failed sign-ins and
+    // licence actions quietly removed. What `audit_log` sells is the
+    // TAMPER-EVIDENT compliance API on top of the same rows — the chain
+    // verification, the category/actor query surface — not the fact that an
+    // administrator can see their own users' activity.
+    const logs = auditLogPresent() ? await auditLogRepo.list({ limit: 500 }) : [];
     const merged = mergeTrail(
       events.map(fromAuditEvent),
       logs.map(fromAuditLog),
@@ -90,20 +105,23 @@ function createAuditEventsRouter({ auditEventsRepo, auditLogRepo = null, feature
 
   // GET /api/audit/users — User Logs. Admin only, same as the rest of the trail.
   router.get('/users', requireAuth, admin, asyncHandler(async (req, res) => {
-    if (!auditEventsRepo && !auditLogReadable()) return res.status(503).json({ error: 'Audit log not available' });
+    if (!auditEventsRepo && !auditLogPresent()) return res.status(503).json({ error: 'Audit log not available' });
     const result = await loadUserActivity(req);
     if (result.badRequest) return res.status(400).json({ error: result.badRequest });
     res.json({
       entries: result.rows,
       summary: result.summary,
       total: result.total,
-      auditLogLicensed: auditLogReadable(),
+      // Which stores this list was drawn from — so the view can say what it is
+      // reading rather than leaving the operator to guess. Both are always read
+      // when present; this is not a licence signal.
+      sources: { events: Boolean(auditEventsRepo), log: auditLogPresent() },
     });
   }));
 
   // GET /api/audit/users/export.csv — the same rows, same filters, as a file.
   router.get('/users/export.csv', requireAuth, admin, asyncHandler(async (req, res) => {
-    if (!auditEventsRepo && !auditLogReadable()) return res.status(503).json({ error: 'Audit log not available' });
+    if (!auditEventsRepo && !auditLogPresent()) return res.status(503).json({ error: 'Audit log not available' });
     const result = await loadUserActivity(req);
     if (result.badRequest) return res.status(400).json({ error: result.badRequest });
     const rows = result.rows.map((r) => ({
@@ -145,7 +163,7 @@ function createAuditEventsRouter({ auditEventsRepo, auditLogRepo = null, feature
     const events = auditEventsRepo ? await auditEventsRepo.findAll({ ...filters, limit: 500 }) : [];
 
     let logs = [];
-    if (auditLogReadable()) {
+    if (auditLogLicensed()) {
       logs = await auditLogRepo.list({ limit: 500 });
     }
 

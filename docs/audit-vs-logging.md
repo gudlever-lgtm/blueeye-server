@@ -75,7 +75,7 @@ already was:
 | Nav | View | Reads | Answers |
 | --- | --- | --- | --- |
 | **System Logs** | `views.logs` | `GET /api/logs` — the in-memory ring buffer, merged with dashboard errors | *Is the server healthy?* Cleared on restart. |
-| **User Logs** | `views.userLogs` | `GET /api/audit/users` | *What did people do here?* Durable. |
+| **User Logs** | `views.userLogs` | `GET /api/audit/users` | *What did people do here?* Durable. **This is the audit log.** |
 
 Both are admin-only (`data-min-role="admin"`).
 
@@ -85,6 +85,16 @@ Both are admin-only (`data-min-role="admin"`).
 `actor.type === 'user'`, resolves each actor against the live users table, and
 annotates every row. The module is **pure** — canonical entries in, rows out — so
 the view and the CSV export can never disagree about why something is flagged.
+
+**It is deliberately NOT licence-gated**, unlike `/api/audit/all` and
+`/api/audit-log`. User Logs *is* the audit record of who did what, and a security
+record that is incomplete by plan is one nobody can trust: an admin asking "what
+did people do here" must not be handed a list with the failed sign-ins and licence
+actions silently removed. What the `audit_log` feature sells is the tamper-evident
+compliance API over the same rows — `verifyChain()`, the category/actor query
+surface — not an administrator's ability to see their own users' activity. Writes
+were never gated either (`services/complianceLogger.js` records unconditionally),
+so the rows are present on every install; only those two reads check the plan.
 
 A row carries `{ ts, userId, name, email, role, action, actionLabel, outcome,
 target, status, ip, flagLevel, flags[] }`. `name` comes from `users.name`
@@ -109,9 +119,9 @@ wrong", and it always says why:
 
 Filters (`?user=`, `?flagged=1`, `?q=`, `?from=`/`?to=`, `?limit=`) apply to the
 assembled rows; `GET /api/audit/users/export.csv` takes the same query and adds
-`flagLevel` + `flagReasons` columns. Without the `audit_log` licence the view
-still works from `audit_events` alone and says so (`auditLogLicensed: false`)
-rather than quietly showing less.
+`flagLevel` + `flagReasons` columns. The response's `sources` says which stores
+the list was drawn from (`{events, log}`) — a statement of fact about this
+install, not a licence signal.
 
 **Names.** `users.name` is display-only: never an identifier, never unique, never
 used to look a user up. Admins set it in Settings → Users (or when inviting).

@@ -126,26 +126,46 @@ test('rows survive a users table that cannot be read — names just go missing',
   assert.equal(res.body.entries[0].deletedUser, false, 'an unreadable directory is not proof the user is gone');
 });
 
-test('the licensed audit_log is merged in when the plan includes it', async () => {
+test('the hash-chained audit_log is merged in', async () => {
   const auditLogRepo = makeAuditLogRepo();
   await auditLogRepo.record({ category: 'auth', action: 'auth_login', outcome: 'failure', actorUserId: 7, actorEmail: 'lars@example.dk', ip: '203.0.113.4' });
   const app = makeApp({ auditEventsRepo: await seeded(), auditLogRepo, usersRepo: usersRepo() });
   const res = await request(app).get('/api/audit/users').set('Authorization', admin());
   assert.equal(res.status, 200);
-  assert.equal(res.body.auditLogLicensed, true);
+  assert.deepEqual(res.body.sources, { events: true, log: true });
   assert.ok(res.body.entries.some((e) => e.action === 'auth_login' && e.flagLevel === 'warn'));
 });
 
-test('without the audit_log licence the view still works from audit_events alone', async () => {
+// The point of the whole view: User Logs IS the audit record, so it is NOT
+// licence-gated. An admin on any plan sees every action, failed sign-ins
+// included — an audit list that silently drops rows by plan is worse than none.
+test('the audit_log rows are shown even when the plan does not include audit_log', async () => {
+  const auditLogRepo = makeAuditLogRepo();
+  await auditLogRepo.record({ category: 'auth', action: 'auth_login', outcome: 'failure', actorUserId: 7, actorEmail: 'lars@example.dk', ip: '203.0.113.4' });
   const app = makeApp({
     auditEventsRepo: await seeded(),
+    auditLogRepo,
     usersRepo: usersRepo(),
     featureGate: { isFeatureEnabled: (key) => key !== 'audit_log', requireFeature: () => (req, res, next) => next() },
   });
   const res = await request(app).get('/api/audit/users').set('Authorization', admin());
   assert.equal(res.status, 200);
-  assert.equal(res.body.auditLogLicensed, false);
-  assert.equal(res.body.entries.length, 2);
+  assert.ok(res.body.entries.some((e) => e.action === 'auth_login'), 'a failed sign-in was withheld by licence');
+  assert.equal(res.body.entries.length, 3);
+});
+
+test('the licensed compliance read (/api/audit/all) stays gated', async () => {
+  const auditLogRepo = makeAuditLogRepo();
+  await auditLogRepo.record({ category: 'auth', action: 'auth_login', outcome: 'failure', actorUserId: 7, actorEmail: 'lars@example.dk' });
+  const app = makeApp({
+    auditEventsRepo: await seeded(),
+    auditLogRepo,
+    usersRepo: usersRepo(),
+    featureGate: { isFeatureEnabled: (key) => key !== 'audit_log', requireFeature: () => (req, res, next) => next() },
+  });
+  const res = await request(app).get('/api/audit/all').set('Authorization', admin());
+  assert.equal(res.status, 200);
+  assert.equal(res.body.sources.log, 0, 'the unified compliance read must still respect the licence');
 });
 
 // ---- CSV -------------------------------------------------------------------

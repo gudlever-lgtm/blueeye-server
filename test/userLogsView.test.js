@@ -59,7 +59,7 @@ const userLogRoutes = (over = {}) => ({
     entries: [USER_ROW],
     summary: { total: 1, critical: 0, warn: 0, notice: 1, flagged: 1, users: 1 },
     total: 1,
-    auditLogLicensed: true,
+    sources: { events: true, log: true },
     ...over,
   },
   'GET /users': [{ id: 7, email: 'lars@example.dk', name: 'Lars Hansen', role: 'admin' }],
@@ -180,10 +180,12 @@ test('"flagged only" is sent to the server, not filtered away in the browser', a
   assert.ok(calls.some((c) => c.path === '/api/audit/users' && c.url.includes('flagged=1')));
 });
 
-test('an unlicensed audit_log is said out loud, not hidden', async (t) => {
-  const { doc } = await boot(t, userLogRoutes({ auditLogLicensed: false }));
+test('the page says it is the audit log, with no upgrade wall on it', async (t) => {
+  const { doc } = await boot(t, userLogRoutes());
   await click(navButton(doc, 'userLogs'), 250);
-  assert.match(doc.querySelector('#view').textContent, /Professional plan/);
+  const text = doc.querySelector('#view').textContent;
+  assert.match(text, /audit log/i);
+  assert.doesNotMatch(text, /Professional plan/, 'User Logs must not gate the audit record behind a plan');
 });
 
 test('a failing audit endpoint shows the error instead of an empty page', async (t) => {

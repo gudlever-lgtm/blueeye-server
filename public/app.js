@@ -11231,13 +11231,14 @@ views.logs = async () => {
 };
 
 // ---- User Logs (admin-only "who did what", with flags) ---------------------
-// The other half of the Logs split. System Logs answers "is the server
-// healthy?"; this answers "what did people do here?" — one row per action a
-// PERSON performed, with the account behind it (id, name, e-mail), when, what,
-// and a flag when the row deserves a second look. The flag rules and their
-// explanations live server-side in src/audit/userActivity.js; this view only
-// renders them, so the dashboard and a CSV export can never disagree about why
-// something was flagged.
+// The other half of the Logs split, and THE audit log: System Logs answers "is
+// the server healthy?", this answers "what did people do here?" — one row per
+// action a PERSON performed, with the account behind it (id, name, e-mail),
+// when, what, and a flag when the row deserves a second look. It reads both
+// audit stores unconditionally: an audit record that is incomplete by plan is
+// one nobody can trust. The flag rules and their explanations live server-side
+// in src/audit/userActivity.js; this view only renders them, so the dashboard
+// and a CSV export can never disagree about why something was flagged.
 let userLogsFilter = { user: '', flagged: false, q: '' };
 
 // crit = red, warn = amber, neutral = grey. An unflagged row gets NO badge at
@@ -11313,12 +11314,10 @@ views.userLogs = async () => {
       summary.replaceChildren();
       return;
     }
+    // A load that worked clears whatever the last failure left on screen.
+    notice.replaceChildren();
     const entries = data.entries || [];
     const s = data.summary || { total: 0, users: 0, flagged: 0 };
-
-    notice.replaceChildren(...(data.auditLogLicensed === false
-      ? [el('div', { class: 'callout' }, t('logs.user.unlicensed'))]
-      : []));
 
     summary.replaceChildren(
       el('span', {}, t('logs.user.summary.users', { count: s.users })),
@@ -15369,13 +15368,13 @@ PAGE_INFO.logs = {
 };
 
 PAGE_INFO.userLogs = {
-  hero: 'User Logs — every action a person performed on this server: which account, when, what was done, and a flag on anything that looks wrong.',
-  title: 'User Logs — who did what',
+  hero: 'User Logs — the audit log: every action a person performed on this server, which account, when, and a flag on anything that looks wrong.',
+  title: 'User Logs — the audit log: who did what',
   body: () => [
-    el('p', {}, 'The durable record of human activity on this server. One row per action, with the account behind it (', el('strong', {}, 'user id'), ', name and e-mail), the ', el('strong', {}, 'time'), ' it happened, and the ', el('strong', {}, 'action'), ' in plain language with the raw action key and the request underneath it.'),
+    el('p', {}, 'The durable record of human activity on this server \u2014 this is the audit log. One row per action, with the account behind it (', el('strong', {}, 'user id'), ', name and e-mail), the ', el('strong', {}, 'time'), ' it happened, and the ', el('strong', {}, 'action'), ' in plain language with the raw action key and the request underneath it.'),
     el('p', {}, el('strong', {}, 'This is not the system log. '), 'The server\u2019s own diagnostic stream lives in ', viewLink('logs', 'System Logs'), ' and is cleared on restart. This view is drawn from the audit stores and survives restarts.'),
     el('h4', {}, 'Where the rows come from'),
-    el('p', {}, 'Two stores, merged: the automatic capture of every state-changing request (login, and each create/update/delete), and \u2014 on Professional and above \u2014 the hash-chained audit log that also records sign-ins, licence actions and API-token management. Without that licence the view still works; a note at the top says what is missing rather than quietly showing less.'),
+    el('p', {}, 'Two stores, merged: the automatic capture of every state-changing request (login, and each create/update/delete), and the hash-chained trail that also records sign-ins, licence actions and API-token management. Both are read on every plan \u2014 an audit list that drops rows depending on what you bought is one nobody can trust. What the Professional licence adds is the compliance API on top of the same rows (chain verification and the category/actor query surface), not permission to see your own users\u2019 activity.'),
     el('h4', {}, 'The flags'),
     el('p', {}, 'A flag means \u201cworth a look\u201d, not \u201csomeone did wrong\u201d. Each one states its own reason on the row, so nothing is marked for a rule you cannot read:'),
     el('ul', {},

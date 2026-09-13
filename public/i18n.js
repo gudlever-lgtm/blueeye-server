@@ -1509,7 +1509,7 @@
       'logs.system.title': 'System Logs',
       'logs.system.lead': 'Live server diagnostics + your dashboard errors · in-memory (cleared on restart)',
       'logs.user.title': 'User Logs',
-      'logs.user.lead': 'Every action performed by a user — who, when, what, and whether it needs a second look.',
+      'logs.user.lead': 'The audit log: every action performed by a user — who, when, what, and whether it needs a second look.',
       'logs.user.col.when': 'When',
       'logs.user.col.userId': 'User ID',
       'logs.user.col.name': 'Name',
@@ -1536,7 +1536,6 @@
       'logs.user.flag.none': 'OK',
       'logs.user.deletedUser': 'account deleted since',
       'logs.user.noName': 'No name on the account',
-      'logs.user.unlicensed': 'Sign-ins and licence actions are missing from this list: the hash-chained audit log is part of the Professional plan and above.',
       'logs.user.about': 'Every action a person performed on this server: the account (id, name, e-mail), when, what was done, and — where something looks wrong — a flag saying why.',
     },
 
@@ -2997,7 +2996,7 @@
       'logs.system.title': 'Systemlog',
       'logs.system.lead': 'Live serverdiagnostik + dine dashboardfejl · i hukommelsen (ryddes ved genstart)',
       'logs.user.title': 'Brugerlog',
-      'logs.user.lead': 'Alle handlinger udført af en bruger — hvem, hvornår, hvad, og om det kræver et nærmere kig.',
+      'logs.user.lead': 'Revisionsloggen: alle handlinger udført af en bruger — hvem, hvornår, hvad, og om det kræver et nærmere kig.',
       'logs.user.col.when': 'Hvornår',
       'logs.user.col.userId': 'Bruger-ID',
       'logs.user.col.name': 'Navn',
@@ -3024,7 +3023,6 @@
       'logs.user.flag.none': 'OK',
       'logs.user.deletedUser': 'kontoen er slettet siden',
       'logs.user.noName': 'Intet navn på kontoen',
-      'logs.user.unlicensed': 'Logins og licenshandlinger mangler i listen: den hash-kædede revisionslog er en del af Professional-planen og opefter.',
       'logs.user.about': 'Alle handlinger en person har udført på denne server: kontoen (id, navn, e-mail), hvornår, hvad der blev gjort, og — hvor noget ser forkert ud — en markering der siger hvorfor.',
     },
   };

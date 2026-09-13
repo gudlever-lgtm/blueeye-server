@@ -97,6 +97,10 @@
                Every entry deep-links into the module's own tab. -->
           <div class="nav-group collapsed" data-category="Service Assurance">
             <button type="button" class="nav-group-label" aria-expanded="false">Service Assurance</button>
+            <!-- The guide is the module's first entry on purpose: a next-next
+                 walkthrough of the whole workflow AND the values to put in, for
+                 somebody opening Service Assurance for the first time. -->
+            <button data-view="guide" data-min-role="operator" data-feature="service_tests">User guide</button>
             <button data-view="serviceAssurance" data-sa-tab="health" data-min-role="operator" data-feature="service_tests">Health</button>
             <button data-view="serviceAssurance" data-sa-tab="journeys" data-min-role="operator" data-feature="service_tests">Journeys</button>
             <button data-view="serviceAssurance" data-sa-tab="applications" data-min-role="operator" data-feature="service_tests">Applications</button>
@@ -161,6 +165,15 @@
                   <span class="ar-switch" aria-hidden="true"></span>
                 </label>
               </div>
+              <!-- Language. The picker also lives in Settings → Appearance, but a
+                   dashboard you cannot switch to your own language from the top
+                   bar is one people assume is English-only. Filled in by app.js
+                   from I18n.LOCALES (no inline script: CSP). -->
+              <div class="user-menu-item user-menu-lang">
+                <span class="menu-ico" aria-hidden="true">🌐</span>
+                <span class="user-menu-lang-label" id="lang-label">Language</span>
+                <div class="lang-switch" id="lang-switch" role="group" aria-label="Language"></div>
+              </div>
               <button type="button" class="user-menu-item" id="theme" role="menuitem" title="Toggle light/dark theme">
                 <span class="menu-ico" aria-hidden="true">🌙</span> Dark mode
               </button>
@@ -187,6 +200,7 @@
     <script src="/deltaView.js"></script>
     <script src="/troubleshootingView.js"></script>
     <script src="/serviceAssurance.js"></script>
+    <script src="/serviceAssuranceGuide.js"></script>
     <script src="/app.js"></script>
   </body>
 </html>

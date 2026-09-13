@@ -429,6 +429,7 @@ an administrator set here.
 | [service-assurance.md](service-assurance.md) | **V1 design of record.** The engine, the designer, discovery, the scheduler, the security pass, the reaction layer. The longest and the most precise. |
 | [service-assurance-v2.md](service-assurance-v2.md) | **V2 spec.** Journeys, recording, self-healing, the service map, performance baselines. |
 | [service-assurance-v3.md](service-assurance-v3.md) | **V3 spec + what was actually built.** Observations, correlation, root cause, incidents and their timeline, alert grouping, the AI layer, and the hardening pass. Each phase has an "as built" section saying what differs from the spec and why. |
+| [service-assurance-user-guide.md](service-assurance-user-guide.md) | **The in-app guide.** The same journey as a next-next walkthrough inside the dashboard (Service Assurance → User guide), with the values read from the running system. This document is how it is built. |
 | [service-assurance-journeys.md](service-assurance-journeys.md) | Journeys in depth. |
 | [service-assurance-recording.md](service-assurance-recording.md) | The bookmarklet recorder, and what it refuses to record. |
 | [service-assurance-healing.md](service-assurance-healing.md) | Self-healing selectors: how a proposal is scored, and why it stays a proposal. |

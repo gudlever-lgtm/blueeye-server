@@ -58,7 +58,7 @@ full HTTP route table, the data model, the dashboard structure, and a
   `views.<tab>` in `public/app.js` (+ a `data-view` button in `public/index.html`), a
   `PAGE_INFO` help entry, and tests + a fake in `test-support/fakes.js`.
 - Per-feature docs live in `docs/` (analysis, geo, alerting, retention, traffic-types, …).
-  Service Assurance has nine: start at
+  Service Assurance has ten: start at
   [docs/service-assurance-guide.md](docs/service-assurance-guide.md), which is the
   entry point and indexes the rest. `test/guideAccuracy.test.js` pins the numbers
   it quotes to the code, so a default that moves fails the build with the line to

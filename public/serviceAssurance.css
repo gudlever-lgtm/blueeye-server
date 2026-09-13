@@ -636,3 +636,84 @@
 }
 .sa-ai-label { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; font-size: 0.85em; }
 .sa-ai-text { margin: 8px 0 0; white-space: pre-wrap; }
+
+/* =========================================================================
+   Service Assurance — the user guide (public/serviceAssuranceGuide.js)
+
+   A document, not a dashboard: one column of readable width with a step rail
+   beside it. The rail is the progress bar — a bar that only fills tells you
+   how far you are, not what is left, and "what is left" is the question
+   somebody setting a module up actually has. */
+.guide { display: flex; flex-direction: column; gap: 16px; max-width: 1100px; }
+.guide-head { display: flex; flex-direction: column; gap: 2px; }
+.guide-title { margin: 0; font-size: 1.2rem; }
+.guide-sub { margin: 0; color: var(--muted); }
+.guide-stale { margin: 0; }
+
+.guide-layout { display: grid; grid-template-columns: 230px minmax(0, 1fr); gap: 20px; align-items: start; }
+
+/* The rail. Numbered, clickable, and never disabled: a guide that refuses to
+   let you skip ahead is a wizard, and this is for people who already have half
+   of it set up. */
+.guide-stepper { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
+.guide-stepper-item { margin: 0; }
+.guide-stepper-btn {
+  display: flex; align-items: baseline; gap: 8px; width: 100%; text-align: left;
+  padding: 6px 8px; border: 0; border-left: 2px solid transparent; border-radius: 0 6px 6px 0;
+  background: transparent; color: var(--muted); font: inherit; font-size: 0.85rem; cursor: pointer;
+}
+.guide-stepper-btn:hover { background: var(--panel-2); color: var(--text); }
+.guide-stepper-btn.seen { color: var(--text); }
+.guide-stepper-btn.active { background: var(--panel-2); color: var(--text); font-weight: 600; border-left-color: var(--accent); }
+.guide-stepper-n { font-variant-numeric: tabular-nums; opacity: 0.7; min-width: 1.4em; }
+.guide-stepper-label { flex: 1 1 auto; }
+
+/* The step itself. */
+.guide-step { border: 1px solid var(--hairline); border-radius: 10px; padding: 16px 20px; background: var(--panel); }
+.guide-step-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 6px; }
+.guide-step-num { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 0.85rem; }
+.guide-step-title { margin: 0; font-size: 1.05rem; }
+.guide-lead { margin: 0 0 10px; font-size: 1rem; }
+.guide-p { margin: 8px 0; }
+.guide-h4 { margin: 16px 0 6px; font-size: 0.9rem; }
+.guide-todo { margin: 10px 0; }
+.guide-code { margin: 6px 0 10px; white-space: pre-wrap; }
+.guide-note, .guide-watch { margin: 12px 0; }
+.guide-watch { border-left-color: var(--warn, #b8860b); }
+.guide-values { margin: 14px 0; }
+.guide-table td:first-child { white-space: nowrap; }
+.guide-empty { padding: 12px; color: var(--muted); }
+/* A value that is no longer the shipped default is the one worth reading. */
+.guide-changed { font-weight: 600; color: var(--accent); }
+
+/* One live-state line per step: a pill and a sentence, in the module's own
+   status colours so "done" here and "pass" on a run read the same. */
+.guide-status { display: flex; align-items: baseline; gap: 8px; margin: 8px 0; }
+.guide-status-text { color: var(--muted); }
+.guide-pill {
+  display: inline-block; padding: 1px 8px; border-radius: 999px;
+  font-size: 0.75rem; font-weight: 600; white-space: nowrap;
+}
+.guide-pill-done { background: #dcfce7; color: #166534; }
+.guide-pill-todo { background: #e5e7eb; color: #4b5563; }
+.guide-pill-warn { background: #fef3c7; color: #92400e; }
+.guide-pill-unknown { background: #e5e7eb; color: #4b5563; }
+
+.guide-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.guide-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.guide-count { color: var(--muted); font-variant-numeric: tabular-nums; }
+
+[data-theme="dark"] .guide-pill-done, [data-theme="midnight"] .guide-pill-done { background: #14532d; color: #bbf7d0; }
+[data-theme="dark"] .guide-pill-warn, [data-theme="midnight"] .guide-pill-warn { background: #78350f; color: #fde68a; }
+[data-theme="dark"] .guide-pill-todo, [data-theme="midnight"] .guide-pill-todo,
+[data-theme="dark"] .guide-pill-unknown, [data-theme="midnight"] .guide-pill-unknown { background: #374151; color: #d1d5db; }
+
+/* Narrow: the rail becomes a horizontal strip above the step. */
+@media (max-width: 860px) {
+  .guide-layout { grid-template-columns: 1fr; }
+  .guide-stepper { flex-direction: row; flex-wrap: wrap; gap: 4px; }
+  .guide-stepper-btn { width: auto; border-left: 0; border-bottom: 2px solid transparent; border-radius: 6px; }
+  .guide-stepper-btn.active { border-left-color: transparent; border-bottom-color: var(--accent); }
+  .guide-stepper-label { display: none; }
+  .guide-stepper-n { min-width: 0; }
+}

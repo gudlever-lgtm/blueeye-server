@@ -11103,6 +11103,8 @@ let settingsTab = null;
 // Which Service Assurance screen the nav last asked for. The module owns its own
 // tab bar; this is only how a nav entry deep-links into one of its tabs.
 let serviceAssuranceTab = null;
+// Which guide the Guides nav group asked for (data-guide). Null opens the first.
+let guideTrack = null;
 // Settings are organised into labelled sections rather than one long row of tabs,
 // so related controls sit together and the page stays scannable as it grows. Each
 // tab is [key, label, adminOnly]; non-admins only ever see the personal section.
@@ -15311,22 +15313,26 @@ views.serviceAssurance = async () => {
   });
 };
 
-// Service Assurance — the user guide (nav: Service Assurance → User guide).
+// The in-app guides (nav group: Guides).
 //
-// A next-next walkthrough of the module: what to do, in what order, and which
-// VALUES to put in each field. Its own module in public/serviceAssuranceGuide.js,
-// handed the same shared helpers Service Assurance itself gets, plus the deep
-// links it needs so every step can open the screen it is describing.
+// Five next-next walkthroughs — Monitoring, Fleet, Diagnostics, Service
+// Assurance, Insights — of what to do, in what order, and which VALUES to put
+// in each field. Their own module in public/guides.js, handed the same shared
+// helpers Service Assurance itself gets, plus the deep links it needs so every
+// step can open the screen it is describing.
 views.guide = async () => {
-  if (!window.ServiceAssuranceGuide) {
+  if (!window.Guides) {
     return el('div', { class: 'empty' }, t('guide.unavailable'));
   }
-  return window.ServiceAssuranceGuide.create({
+  return window.Guides.create({
     el, api, t, toast,
     isAdmin,
     isOperator: canWrite,
-    // "Open Applications" has to land on Applications, not on whichever screen
-    // Service Assurance last showed.
+    // Which of the five guides the nav entry asked for.
+    track: guideTrack,
+    // Every step can open the screen it is describing. A plain view, a Service
+    // Assurance sub-tab, a Settings sub-tab, or a handbook article.
+    openView: (viewKey) => gotoView(viewKey),
     openTab: (tab) => { serviceAssuranceTab = tab; currentView = 'serviceAssurance'; render(); },
     openSettings: (tab) => { settingsTab = tab; currentView = 'settings'; render(); },
     openDocs: (topic) => gotoDocs(topic),
@@ -15749,7 +15755,8 @@ async function render({ silent = false } = {}) {
     // Several entries can share one data-view when they deep-link to different
     // sub-tabs; the sub-tab is what tells them apart.
     const active = b.dataset.view === currentView
-      && (!b.dataset.saTab || b.dataset.saTab === serviceAssuranceTab);
+      && (!b.dataset.saTab || b.dataset.saTab === serviceAssuranceTab)
+      && (!b.dataset.guide || b.dataset.guide === guideTrack);
     b.classList.toggle('active', active);
   }
 
@@ -15914,6 +15921,7 @@ for (const b of document.querySelectorAll('.tabs button[data-view], #sidebar-foo
     // Assurance has five screens of its own). Recorded before render so the view
     // opens where the operator clicked rather than on its default tab.
     if (b.dataset.saTab) serviceAssuranceTab = b.dataset.saTab;
+    if (b.dataset.guide) guideTrack = b.dataset.guide;
     currentView = b.dataset.view; render();
   });
 }

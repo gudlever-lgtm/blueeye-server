@@ -1,33 +1,44 @@
-// BlueEye Service Assurance — the user guide.
+// BlueEye — the in-app guides.
 //
-//   From an empty screen to a service that tells you when it breaks.
+//   From an empty screen to a dashboard you know how to read.
 //
-// A next-next walkthrough: one step per thing you actually do, in the order the
-// module needs them done, and — the part a handbook never gets right — the
-// VALUES to put in. Every number it quotes about the running system is read from
-// that system (GET /settings returns the effective values AND the defaults), so
-// a default that moves cannot leave this screen lying about it.
+// Five next-next walkthroughs, one per section of the product: Monitoring,
+// Fleet, Diagnostics, Service Assurance and Insights. Each is one step per
+// thing you actually do, in the order the product needs them done, and — the
+// part a handbook never gets right — the VALUES to put in.
 //
-// Loaded as its own classic script (no build step, repo convention) and mounted
-// by views.guide in app.js, which passes the shared helpers in rather than this
-// file reaching into app.js globals — the same seam views.serviceAssurance uses.
+// Every number a guide quotes about the running system is read from that
+// system (the settings endpoints return the effective values AND the
+// defaults), so a default that moves cannot leave these screens lying about
+// it.
+//
+// Loaded as its own classic script (no build step, repo convention) and
+// mounted by views.guide in app.js, which passes the shared helpers in rather
+// than this file reaching into app.js globals — the same seam
+// views.serviceAssurance uses.
 //
 // It reads and never writes. Every probe it makes is wrapped: a 403 (no
-// licence), a 404 (an endpoint that moved) or a 500 must not take the guidance
-// down with it, because the guidance is the point and the live state is the
-// garnish.
+// licence or not an admin), a 404 (an endpoint that moved) or a 500 must not
+// take the guidance down with it, because the guidance is the point and the
+// live state is the garnish.
 
 (function (root) {
   'use strict';
 
   var API = '/api/service-tests';
-  // Where the reader got to, remembered per browser. A guide that starts from
-  // the top every time you come back is one nobody finishes.
-  var STORAGE_KEY = 'blueeye.sa.guide.step';
+  // The five guides, in the order the nav lists them — which is the order
+  // somebody meets the product in: what changed, the machines behind it, the
+  // tools for when one misbehaves, the services on top, and what all of it
+  // adds up to.
+  var TRACKS = ['monitoring', 'fleet', 'diagnostics', 'assurance', 'insights'];
+  // Where the reader got to in EACH guide, remembered per browser. One key per
+  // track: somebody halfway through Diagnostics who opens Insights should not
+  // find it starting at step 5.
+  var STORAGE_KEY = 'blueeye.guide.step.';
 
   // The health score's weights. Hardcoded here because nothing serves them, and
   // pinned to src/serviceTests/health/serviceHealth.js by
-  // test/serviceAssuranceGuide.test.js — so this table cannot drift from the
+  // test/guides.test.js — so this table cannot drift from the
   // arithmetic it describes without failing the build.
   var HEALTH_WEIGHTS = [
     ['functional', '45%'],
@@ -60,19 +71,51 @@
     ['artifacts', 'retentionDays', 'guide.values.row.artifactRetention'],
   ];
 
+  // The analysis + retention settings the Insights guide prints. The default
+  // column is written here and pinned to ANALYSIS_DEFAULTS / RETENTION_DEFAULTS
+  // (src/services/settings.js) by test/guides.test.js — the live column is read
+  // from GET /api/settings, which only an administrator may call.
+  var ANALYSIS_VALUES = [
+    ['warnSigma', '3', 'guide.ins.row.warnSigma'],
+    ['critSigma', '4', 'guide.ins.row.critSigma'],
+    ['baselineDays', '7', 'guide.ins.row.baselineDays'],
+    ['minSamples', '200', 'guide.ins.row.minSamples'],
+    ['verifySettleMinutes', '5', 'guide.ins.row.verifySettle'],
+  ];
+  var RETENTION_VALUES = [
+    ['rawRetentionDays', '7', 'guide.ins.row.rawRetention'],
+    ['rollupRetentionDays', '90', 'guide.ins.row.rollupRetention'],
+    ['findingRetentionDays', '365', 'guide.ins.row.findingRetention'],
+    ['rollupIntervalMinutes', '60', 'guide.ins.row.rollupInterval'],
+  ];
+
+  // Fleet health verdicts come from src/health/probeHealth.js THRESHOLDS, and
+  // interface verdicts from src/health/interfaceHealth.js. Both are quoted by the
+  // Monitoring and Fleet guides and pinned by test/guides.test.js.
+  var HEALTH_THRESHOLDS = {
+    LOSS_WARN: '2', LOSS_BAD: '20', JITTER_WARN: '30', JITTER_BAD: '100',
+    Z_WARN: '3', Z_BAD: '6', MIN_BASELINE: '8', STALE_MIN: '15',
+    IFACE_UTIL_WARN: '75', IFACE_UTIL_BAD: '90',
+  };
+
   function create(ctx) {
     var el = ctx.el;
     var api = ctx.api;
     var t = ctx.t;
     var isOperator = typeof ctx.isOperator === 'function' ? ctx.isOperator : function () { return false; };
-    // Deep links into the module's own screens, Settings and the handbook. All
-    // optional: a host that does not supply one simply gets no button, which is
-    // better than a button that does nothing.
+    var isAdmin = typeof ctx.isAdmin === 'function' ? ctx.isAdmin : function () { return false; };
+    // Which guide the nav entry asked for; an unknown name opens the first
+    // rather than rendering an empty page.
+    var track = TRACKS.indexOf(ctx.track) >= 0 ? ctx.track : TRACKS[0];
+    // Deep links into the dashboard's own screens, Settings and the handbook.
+    // All optional: a host that does not supply one simply gets no button,
+    // which is better than a button that does nothing.
+    var openView = typeof ctx.openView === 'function' ? ctx.openView : null;
     var openTab = typeof ctx.openTab === 'function' ? ctx.openTab : null;
     var openSettings = typeof ctx.openSettings === 'function' ? ctx.openSettings : null;
     var openDocs = typeof ctx.openDocs === 'function' ? ctx.openDocs : null;
 
-    var host = el('div', { class: 'guide' });
+    var host = el('div', { class: 'guide guide-' + track });
     // Everything the live checks need, loaded once when the view is mounted.
     // `null` on any member means "we could not read this" — never "it is empty".
     var data = null;
@@ -82,13 +125,13 @@
     // ------------------------------------------------------------- utilities
     function readStep() {
       try {
-        var raw = root.localStorage.getItem(STORAGE_KEY);
+        var raw = root.localStorage.getItem(STORAGE_KEY + track);
         var n = parseInt(raw, 10);
         return isFinite(n) && n >= 0 ? n : 0;
       } catch (e) { return 0; }
     }
     function writeStep(n) {
-      try { root.localStorage.setItem(STORAGE_KEY, String(n)); } catch (e) { /* private mode */ }
+      try { root.localStorage.setItem(STORAGE_KEY + track, String(n)); } catch (e) { /* private mode */ }
     }
     function errText(e) { return (e && (e.message || e.error)) || String(e); }
     // Every probe is optional. One endpoint answering 403/404/500 costs its own
@@ -172,31 +215,14 @@
     }
     function mono(text) { return el('code', {}, text); }
 
-    // The four parts of the score, and the fourteen step titles. Both spelled out
-    // for the same reason as statusLabel above.
+    // The four parts of the score, spelled out for the same reason as
+    // statusLabel below: a catalogue key is always a literal in a t() call.
     function healthPart(id) {
       if (id === 'functional') return [t('guide.health.part.functional'), t('guide.health.part.functional.w')];
       if (id === 'availability') return [t('guide.health.part.availability'), t('guide.health.part.availability.w')];
       if (id === 'api') return [t('guide.health.part.api'), t('guide.health.part.api.w')];
       return [t('guide.health.part.performance'), t('guide.health.part.performance.w')];
     }
-    function stepTitle(id) {
-      if (id === 'intro') return t('guide.step.intro');
-      if (id === 'prereq') return t('guide.step.prereq');
-      if (id === 'application') return t('guide.step.application');
-      if (id === 'allowlist') return t('guide.step.allowlist');
-      if (id === 'discovery') return t('guide.step.discovery');
-      if (id === 'tests') return t('guide.step.tests');
-      if (id === 'journeys') return t('guide.step.journeys');
-      if (id === 'schedules') return t('guide.step.schedules');
-      if (id === 'run') return t('guide.step.run');
-      if (id === 'health') return t('guide.step.health');
-      if (id === 'incidents') return t('guide.step.incidents');
-      if (id === 'alerts') return t('guide.step.alerts');
-      if (id === 'values') return t('guide.step.values');
-      return t('guide.step.done');
-    }
-
     // One live-state line: a pill and a sentence. `state` is one of
     // done / todo / warn / unknown.
     // The four states, spelled out rather than composed: every catalogue key in
@@ -231,6 +257,17 @@
         class: 'ghost small',
         onclick: function () { openTab(tab); },
       }, t('guide.openTab', { tab: tabLabel(tab) }));
+    }
+    // A button that opens one of the dashboard's own screens. The label is passed
+    // in rather than built from the view key, so every string stays a literal.
+    function viewButton(viewKey, label) {
+      if (!openView) return null;
+      return el('button', { class: 'ghost small', onclick: function () { openView(viewKey); } },
+        t('guide.openTab', { tab: label }));
+    }
+    function settingsTabButton(tab, label) {
+      if (!openSettings) return null;
+      return el('button', { class: 'ghost small', onclick: function () { openSettings(tab); } }, label);
     }
     function settingsButton() {
       if (!openSettings) return null;
@@ -280,9 +317,568 @@
     // ------------------------------------------------------------- the steps
     // Each step: { id, icon, title(), body() }. `id` is stable — it is what the
     // stepper and the remembered position are keyed on.
-    var STEPS = [
+    // ------------------------------------------------- live state (general)
+    // The four non-assurance guides share one small bundle: the agents, the
+    // locations, and (for an admin) the server settings. Every line below says
+    // what was read — never what it assumed.
+    function agentList() { return Array.isArray(data && data.agents) ? data.agents : null; }
+    function locationList() { return Array.isArray(data && data.locations) ? data.locations : null; }
+    function serverSetting(section, field) {
+      var s = data && data.serverSettings;
+      var sec = s && s[section] && typeof s[section] === 'object' ? s[section] : null;
+      return sec && Object.prototype.hasOwnProperty.call(sec, field) ? sec[field] : undefined;
+    }
+    function agentsStatus() {
+      var agents = agentList();
+      if (!agents) return status('unknown', t('guide.state.unknown'));
+      if (!agents.length) return status('todo', t('guide.mon.noAgents'));
+      var offline = agents.filter(function (a) { return a && a.status !== 'online'; });
+      if (offline.length) {
+        return status('warn', t('guide.mon.agentsOffline', {
+          count: String(offline.length), total: String(agents.length),
+        }));
+      }
+      return status('done', t('guide.mon.agentsOnline', { count: String(agents.length) }));
+    }
+    function locationsStatus() {
+      var locations = locationList();
+      var agents = agentList();
+      if (!locations) return status('unknown', t('guide.state.unknown'));
+      if (!locations.length) return status('todo', t('guide.mon.noLocations'));
+      var placed = locations.filter(function (l) { return l && l.latitude != null && l.longitude != null; });
+      var homeless = (agents || []).filter(function (a) { return a && !a.location_id; });
+      if (placed.length < locations.length) {
+        return status('warn', t('guide.mon.locationsUnplaced', {
+          count: String(locations.length - placed.length), total: String(locations.length),
+        }));
+      }
+      if (homeless.length) return status('warn', t('guide.mon.agentsNoSite', { count: String(homeless.length) }));
+      return status('done', t('guide.mon.locationsOk', { count: String(locations.length) }));
+    }
+    // Which traffic source each agent is on — the setting that decides whether
+    // Flows and Topology have anything to draw at all.
+    function trafficSourceStatus() {
+      var agents = agentList();
+      if (!agents) return status('unknown', t('guide.state.unknown'));
+      if (!agents.length) return status('todo', t('guide.mon.noAgents'));
+      var flowCapable = agents.filter(function (a) {
+        var src = a && a.monitor_config && a.monitor_config.source;
+        return src === 'netflow' || src === 'sflow';
+      });
+      if (!flowCapable.length) return status('todo', t('guide.mon.noFlowSource', { total: String(agents.length) }));
+      return status('done', t('guide.mon.flowSource', {
+        count: String(flowCapable.length), total: String(agents.length),
+      }));
+    }
+    function versionStatus() {
+      var agents = agentList();
+      if (!agents) return status('unknown', t('guide.state.unknown'));
+      var versions = {};
+      agents.forEach(function (a) { if (a && a.version) versions[a.version] = true; });
+      var list = Object.keys(versions);
+      if (!list.length) return status('todo', t('guide.fleet.noVersions'));
+      if (list.length === 1) return status('done', t('guide.fleet.oneVersion', { version: list[0] }));
+      return status('warn', t('guide.fleet.manyVersions', { count: String(list.length), versions: list.join(', ') }));
+    }
+    // The analysis + retention tables, live where the reader may read them.
+    function serverValuesTable(section, rows) {
+      var admin = isAdmin();
+      var readable = !!(data && data.serverSettings && data.serverSettings[section]);
+      return table([t('guide.col.setting'), t('guide.col.default'), t('guide.col.current'), t('guide.col.meaning')],
+        rows.map(function (row) {
+          var live = serverSetting(section, row[0]);
+          var changed = live !== undefined && String(live) !== row[1];
+          return [
+            mono(section + '.' + row[0]),
+            row[1],
+            admin && readable
+              ? el('span', { class: changed ? 'guide-changed' : '' }, String(live))
+              : el('span', { class: 'guide-muted' }, t('guide.ins.adminOnly')),
+            t(row[2]),
+          ];
+        }));
+    }
+
+    // ------------------------------------------------------------- Monitoring
+    function monitoringSteps() { return [
       {
         id: 'intro',
+        title: function () { return t('guide.mon.step.intro'); },
+        body: function () {
+          return [
+            lead(t('guide.mon.intro.lead')),
+            para(t('guide.mon.intro.order')),
+            todo([t('guide.mon.intro.do1'), t('guide.mon.intro.do2'), t('guide.mon.intro.do3')]),
+            note(t('guide.mon.intro.note')),
+            actions(viewButton('changes', t('guide.view.changes'))),
+          ];
+        },
+      },
+      {
+        id: 'changes',
+        title: function () { return t('guide.mon.step.changes'); },
+        body: function () {
+          return [
+            lead(t('guide.mon.changes.lead')),
+            todo([t('guide.mon.changes.do1'), t('guide.mon.changes.do2'), t('guide.mon.changes.do3')]),
+            values([
+              [t('guide.mon.changes.r1.f'), t('guide.mon.changes.r1.v'), t('guide.mon.changes.r1.w')],
+              [t('guide.mon.changes.r2.f'), t('guide.mon.changes.r2.v'), t('guide.mon.changes.r2.w')],
+              [t('guide.mon.changes.r3.f'), t('guide.mon.changes.r3.v'), t('guide.mon.changes.r3.w')],
+            ]),
+            watch(t('guide.mon.changes.watch')),
+            actions(viewButton('changes', t('guide.view.changes'))),
+          ];
+        },
+      },
+      {
+        id: 'fleet',
+        title: function () { return t('guide.mon.step.fleet'); },
+        body: function () {
+          return [
+            lead(t('guide.mon.fleet.lead')),
+            el('h4', { class: 'guide-h4' }, t('guide.mon.fleet.verdictTitle')),
+            table([t('guide.col.verdict'), t('guide.col.means')], [
+              [mono('ok'), t('guide.mon.fleet.v.ok')],
+              [mono('warn'), t('guide.mon.fleet.v.warn', { loss: HEALTH_THRESHOLDS.LOSS_WARN, jitter: HEALTH_THRESHOLDS.JITTER_WARN, z: HEALTH_THRESHOLDS.Z_WARN })],
+              [mono('bad'), t('guide.mon.fleet.v.bad', { loss: HEALTH_THRESHOLDS.LOSS_BAD, jitter: HEALTH_THRESHOLDS.JITTER_BAD, z: HEALTH_THRESHOLDS.Z_BAD })],
+              [mono('stale'), t('guide.mon.fleet.v.stale', { minutes: HEALTH_THRESHOLDS.STALE_MIN })],
+              [mono('unknown'), t('guide.mon.fleet.v.unknown', { samples: HEALTH_THRESHOLDS.MIN_BASELINE })],
+            ]),
+            values([
+              [t('guide.mon.fleet.r1.f'), t('guide.mon.fleet.r1.v'), t('guide.mon.fleet.r1.w')],
+              [t('guide.mon.fleet.r2.f'), t('guide.mon.fleet.r2.v'), t('guide.mon.fleet.r2.w')],
+            ]),
+            agentsStatus(),
+            note(t('guide.mon.fleet.note')),
+            actions(viewButton('fleet', t('guide.view.fleet'))),
+          ];
+        },
+      },
+      {
+        id: 'traffic',
+        title: function () { return t('guide.mon.step.traffic'); },
+        body: function () {
+          return [
+            lead(t('guide.mon.traffic.lead')),
+            todo([t('guide.mon.traffic.do1'), t('guide.mon.traffic.do2'), t('guide.mon.traffic.do3')]),
+            el('h4', { class: 'guide-h4' }, t('guide.mon.traffic.sourceTitle')),
+            table([t('guide.col.field'), t('guide.col.means')], [
+              [mono('proc'), t('guide.mon.traffic.src.proc')],
+              [mono('snmp'), t('guide.mon.traffic.src.snmp')],
+              [mono('netflow'), t('guide.mon.traffic.src.netflow')],
+              [mono('sflow'), t('guide.mon.traffic.src.sflow')],
+            ]),
+            trafficSourceStatus(),
+            note(t('guide.mon.traffic.note')),
+            actions(viewButton('overview', t('guide.view.overview')),
+              settingsTabButton('agents', t('guide.mon.traffic.settingsBtn'))),
+          ];
+        },
+      },
+      {
+        id: 'sites',
+        title: function () { return t('guide.mon.step.sites'); },
+        body: function () {
+          return [
+            lead(t('guide.mon.sites.lead')),
+            todo([t('guide.mon.sites.do1'), t('guide.mon.sites.do2'), t('guide.mon.sites.do3')]),
+            values([
+              [t('guide.mon.sites.r1.f'), t('guide.mon.sites.r1.v'), t('guide.mon.sites.r1.w')],
+              [t('guide.mon.sites.r2.f'), t('guide.mon.sites.r2.v'), t('guide.mon.sites.r2.w')],
+              [t('guide.mon.sites.r3.f'), t('guide.mon.sites.r3.v'), t('guide.mon.sites.r3.w')],
+            ]),
+            locationsStatus(),
+            note(t('guide.mon.sites.note')),
+            actions(viewButton('locations', t('guide.view.locations')), viewButton('map', t('guide.view.map'))),
+          ];
+        },
+      },
+      {
+        id: 'destinations',
+        title: function () { return t('guide.mon.step.destinations'); },
+        body: function () {
+          return [
+            lead(t('guide.mon.dest.lead')),
+            values([
+              [t('guide.mon.dest.r1.f'), t('guide.mon.dest.r1.v'), t('guide.mon.dest.r1.w')],
+              [t('guide.mon.dest.r2.f'), t('guide.mon.dest.r2.v'), t('guide.mon.dest.r2.w')],
+              [t('guide.mon.dest.r3.f'), t('guide.mon.dest.r3.v'), t('guide.mon.dest.r3.w')],
+            ]),
+            watch(t('guide.mon.dest.watch')),
+            note(t('guide.mon.dest.note')),
+            actions(viewButton('geo', t('guide.view.geo')),
+              settingsTabButton('map', t('guide.mon.dest.settingsBtn'))),
+          ];
+        },
+      },
+      {
+        id: 'done',
+        title: function () { return t('guide.mon.step.done'); },
+        body: function () {
+          return [
+            lead(t('guide.mon.done.lead')),
+            el('h4', { class: 'guide-h4' }, t('guide.done.weeklyTitle')),
+            todo([t('guide.mon.done.w1'), t('guide.mon.done.w2'), t('guide.mon.done.w3')]),
+            note(t('guide.mon.done.note')),
+            actions(viewButton('changes', t('guide.view.changes')), docsButton('tour')),
+          ];
+        },
+      },
+    ]; }
+
+    // ------------------------------------------------------------------ Fleet
+    function fleetSteps() { return [
+      {
+        id: 'intro',
+        title: function () { return t('guide.fleet.step.intro'); },
+        body: function () {
+          return [
+            lead(t('guide.fleet.intro.lead')),
+            para(t('guide.fleet.intro.order')),
+            agentsStatus(),
+            note(t('guide.fleet.intro.note')),
+            actions(viewButton('agents', t('guide.view.agents'))),
+          ];
+        },
+      },
+      {
+        id: 'enroll',
+        title: function () { return t('guide.fleet.step.enroll'); },
+        body: function () {
+          return [
+            lead(t('guide.fleet.enroll.lead')),
+            todo([t('guide.fleet.enroll.do1'), t('guide.fleet.enroll.do2'), t('guide.fleet.enroll.do3'), t('guide.fleet.enroll.do4')]),
+            values([
+              [t('guide.fleet.enroll.r1.f'), t('guide.fleet.enroll.r1.v'), t('guide.fleet.enroll.r1.w')],
+              [t('guide.fleet.enroll.r2.f'), t('guide.fleet.enroll.r2.v'), t('guide.fleet.enroll.r2.w')],
+              [t('guide.fleet.enroll.r3.f'), t('guide.fleet.enroll.r3.v'), t('guide.fleet.enroll.r3.w')],
+            ]),
+            watch(t('guide.fleet.enroll.watch')),
+            actions(viewButton('enrollment', t('guide.view.enrollment')),
+              settingsTabButton('agentkey', t('guide.fleet.enroll.keyBtn'))),
+          ];
+        },
+      },
+      {
+        id: 'agents',
+        title: function () { return t('guide.fleet.step.agents'); },
+        body: function () {
+          return [
+            lead(t('guide.fleet.agents.lead')),
+            todo([t('guide.fleet.agents.do1'), t('guide.fleet.agents.do2'), t('guide.fleet.agents.do3')]),
+            values([
+              [t('guide.fleet.agents.r1.f'), t('guide.fleet.agents.r1.v'), t('guide.fleet.agents.r1.w')],
+              [t('guide.fleet.agents.r2.f'), t('guide.fleet.agents.r2.v'), t('guide.fleet.agents.r2.w')],
+              [t('guide.fleet.agents.r3.f'), t('guide.fleet.agents.r3.v'), t('guide.fleet.agents.r3.w')],
+            ]),
+            agentsStatus(),
+            note(t('guide.fleet.agents.note')),
+            actions(viewButton('agents', t('guide.view.agents'))),
+          ];
+        },
+      },
+      {
+        id: 'interfaces',
+        title: function () { return t('guide.fleet.step.interfaces'); },
+        body: function () {
+          return [
+            lead(t('guide.fleet.iface.lead')),
+            el('h4', { class: 'guide-h4' }, t('guide.fleet.iface.verdictTitle')),
+            table([t('guide.col.verdict'), t('guide.col.means')], [
+              [mono('down'), t('guide.fleet.iface.v.down')],
+              [mono('bad'), t('guide.fleet.iface.v.bad', { util: HEALTH_THRESHOLDS.IFACE_UTIL_BAD })],
+              [mono('warn'), t('guide.fleet.iface.v.warn', { util: HEALTH_THRESHOLDS.IFACE_UTIL_WARN })],
+              [mono('ok'), t('guide.fleet.iface.v.ok')],
+            ]),
+            values([
+              [t('guide.fleet.iface.r1.f'), t('guide.fleet.iface.r1.v'), t('guide.fleet.iface.r1.w')],
+              [t('guide.fleet.iface.r2.f'), t('guide.fleet.iface.r2.v'), t('guide.fleet.iface.r2.w')],
+              [t('guide.fleet.iface.r3.f'), t('guide.fleet.iface.r3.v'), t('guide.fleet.iface.r3.w')],
+            ]),
+            note(t('guide.fleet.iface.note')),
+            actions(viewButton('interfaces', t('guide.view.interfaces')), viewButton('delta', t('guide.view.delta'))),
+          ];
+        },
+      },
+      {
+        id: 'nics',
+        title: function () { return t('guide.fleet.step.nics'); },
+        body: function () {
+          return [
+            lead(t('guide.fleet.nics.lead')),
+            values([
+              [t('guide.fleet.nics.r1.f'), t('guide.fleet.nics.r1.v'), t('guide.fleet.nics.r1.w')],
+              [t('guide.fleet.nics.r2.f'), t('guide.fleet.nics.r2.v'), t('guide.fleet.nics.r2.w')],
+            ]),
+            note(t('guide.fleet.nics.note')),
+            actions(viewButton('nics', t('guide.view.nics'))),
+          ];
+        },
+      },
+      {
+        id: 'updates',
+        title: function () { return t('guide.fleet.step.updates'); },
+        body: function () {
+          return [
+            lead(t('guide.fleet.updates.lead')),
+            todo([t('guide.fleet.updates.do1'), t('guide.fleet.updates.do2'), t('guide.fleet.updates.do3')]),
+            versionStatus(),
+            watch(t('guide.fleet.updates.watch')),
+            actions(settingsTabButton('updates', t('guide.fleet.updates.btn')), viewButton('agents', t('guide.view.agents'))),
+          ];
+        },
+      },
+      {
+        id: 'done',
+        title: function () { return t('guide.fleet.step.done'); },
+        body: function () {
+          return [
+            lead(t('guide.fleet.done.lead')),
+            el('h4', { class: 'guide-h4' }, t('guide.done.weeklyTitle')),
+            todo([t('guide.fleet.done.w1'), t('guide.fleet.done.w2'), t('guide.fleet.done.w3')]),
+            note(t('guide.fleet.done.note')),
+            actions(viewButton('fleet', t('guide.view.fleet'))),
+          ];
+        },
+      },
+    ]; }
+
+    // ------------------------------------------------------------ Diagnostics
+    function diagnosticsSteps() { return [
+      {
+        id: 'intro',
+        title: function () { return t('guide.diag.step.intro'); },
+        body: function () {
+          return [
+            lead(t('guide.diag.intro.lead')),
+            table([t('guide.diag.intro.toolCol'), t('guide.diag.intro.qCol')], [
+              [t('guide.diag.intro.t1.f'), t('guide.diag.intro.t1.v')],
+              [t('guide.diag.intro.t2.f'), t('guide.diag.intro.t2.v')],
+              [t('guide.diag.intro.t3.f'), t('guide.diag.intro.t3.v')],
+              [t('guide.diag.intro.t4.f'), t('guide.diag.intro.t4.v')],
+            ]),
+            note(t('guide.diag.intro.note')),
+            actions(viewButton('probes', t('guide.view.probes'))),
+          ];
+        },
+      },
+      {
+        id: 'probes',
+        title: function () { return t('guide.diag.step.probes'); },
+        body: function () {
+          return [
+            lead(t('guide.diag.probes.lead')),
+            todo([t('guide.diag.probes.do1'), t('guide.diag.probes.do2'), t('guide.diag.probes.do3')]),
+            el('h4', { class: 'guide-h4' }, t('guide.diag.probes.pickTitle')),
+            table([t('guide.diag.probes.symptomCol'), t('guide.diag.probes.probeCol'), t('guide.col.why')], [
+              [t('guide.diag.probes.s1.f'), mono('ping'), t('guide.diag.probes.s1.w')],
+              [t('guide.diag.probes.s2.f'), mono('tcp'), t('guide.diag.probes.s2.w')],
+              [t('guide.diag.probes.s3.f'), mono('dns'), t('guide.diag.probes.s3.w')],
+              [t('guide.diag.probes.s4.f'), mono('traceroute'), t('guide.diag.probes.s4.w')],
+              [t('guide.diag.probes.s5.f'), mono('curl'), t('guide.diag.probes.s5.w')],
+              [t('guide.diag.probes.s6.f'), mono('page load'), t('guide.diag.probes.s6.w')],
+            ]),
+            note(t('guide.diag.probes.note')),
+            actions(viewButton('probes', t('guide.view.probes'))),
+          ];
+        },
+      },
+      {
+        id: 'tests',
+        title: function () { return t('guide.diag.step.tests'); },
+        body: function () {
+          return [
+            lead(t('guide.diag.tests.lead')),
+            todo([t('guide.diag.tests.do1'), t('guide.diag.tests.do2'), t('guide.diag.tests.do3'), t('guide.diag.tests.do4')]),
+            values([
+              [t('guide.diag.tests.r1.f'), t('guide.diag.tests.r1.v'), t('guide.diag.tests.r1.w')],
+              [t('guide.diag.tests.r2.f'), t('guide.diag.tests.r2.v'), t('guide.diag.tests.r2.w')],
+              [t('guide.diag.tests.r3.f'), t('guide.diag.tests.r3.v'), t('guide.diag.tests.r3.w')],
+              [t('guide.diag.tests.r4.f'), t('guide.diag.tests.r4.v'), t('guide.diag.tests.r4.w')],
+            ]),
+            note(t('guide.diag.tests.note')),
+            actions(viewButton('tests', t('guide.view.tests')), viewButton('transactions', t('guide.view.transactions'))),
+          ];
+        },
+      },
+      {
+        id: 'flows',
+        title: function () { return t('guide.diag.step.flows'); },
+        body: function () {
+          return [
+            lead(t('guide.diag.flows.lead')),
+            todo([t('guide.diag.flows.do1'), t('guide.diag.flows.do2'), t('guide.diag.flows.do3')]),
+            values([
+              [t('guide.diag.flows.r1.f'), t('guide.diag.flows.r1.v'), t('guide.diag.flows.r1.w')],
+              [t('guide.diag.flows.r2.f'), t('guide.diag.flows.r2.v'), t('guide.diag.flows.r2.w')],
+            ]),
+            trafficSourceStatus(),
+            watch(t('guide.diag.flows.watch')),
+            actions(viewButton('flows', t('guide.view.flows')), viewButton('topology', t('guide.view.topology'))),
+          ];
+        },
+      },
+      {
+        id: 'outage',
+        title: function () { return t('guide.diag.step.outage'); },
+        body: function () {
+          return [
+            lead(t('guide.diag.outage.lead')),
+            todo([t('guide.diag.outage.do1'), t('guide.diag.outage.do2'), t('guide.diag.outage.do3'), t('guide.diag.outage.do4')]),
+            el('h4', { class: 'guide-h4' }, t('guide.diag.outage.colourTitle')),
+            table([t('guide.col.field'), t('guide.col.means')], [
+              [t('guide.diag.outage.c1.f'), t('guide.diag.outage.c1.v')],
+              [t('guide.diag.outage.c2.f'), t('guide.diag.outage.c2.v')],
+              [t('guide.diag.outage.c3.f'), t('guide.diag.outage.c3.v')],
+            ]),
+            note(t('guide.diag.outage.note')),
+            actions(viewButton('troubleshooting', t('guide.view.troubleshooting')),
+              viewButton('investigation', t('guide.view.investigation'))),
+          ];
+        },
+      },
+      {
+        id: 'done',
+        title: function () { return t('guide.diag.step.done'); },
+        body: function () {
+          return [
+            lead(t('guide.diag.done.lead')),
+            el('h4', { class: 'guide-h4' }, t('guide.done.troubleTitle')),
+            table([t('guide.col.see'), t('guide.col.means')], [
+              [t('guide.diag.done.p1.f'), t('guide.diag.done.p1.v')],
+              [t('guide.diag.done.p2.f'), t('guide.diag.done.p2.v')],
+              [t('guide.diag.done.p3.f'), t('guide.diag.done.p3.v')],
+              [t('guide.diag.done.p4.f'), t('guide.diag.done.p4.v')],
+            ]),
+            note(t('guide.diag.done.note')),
+            actions(viewButton('troubleshooting', t('guide.view.troubleshooting')), docsButton('assurance')),
+          ];
+        },
+      },
+    ]; }
+
+    // --------------------------------------------------------------- Insights
+    function insightsSteps() { return [
+      {
+        id: 'intro',
+        title: function () { return t('guide.ins.step.intro'); },
+        body: function () {
+          return [
+            lead(t('guide.ins.intro.lead')),
+            el('h4', { class: 'guide-h4' }, t('guide.ins.intro.vocabTitle')),
+            table([t('guide.col.field'), t('guide.col.means')], [
+              [t('guide.ins.intro.v1.f'), t('guide.ins.intro.v1.v')],
+              [t('guide.ins.intro.v2.f'), t('guide.ins.intro.v2.v')],
+              [t('guide.ins.intro.v3.f'), t('guide.ins.intro.v3.v')],
+              [t('guide.ins.intro.v4.f'), t('guide.ins.intro.v4.v')],
+            ]),
+            note(t('guide.ins.intro.note')),
+            actions(viewButton('findings', t('guide.view.findings'))),
+          ];
+        },
+      },
+      {
+        id: 'analysis',
+        title: function () { return t('guide.ins.step.analysis'); },
+        body: function () {
+          return [
+            lead(t('guide.ins.analysis.lead')),
+            para(t('guide.ins.analysis.how')),
+            serverValuesTable('analysis', ANALYSIS_VALUES),
+            note(t('guide.ins.analysis.note')),
+            actions(viewButton('findings', t('guide.view.findings')),
+              settingsTabButton('analyse', t('guide.ins.analysis.btn'))),
+          ];
+        },
+      },
+      {
+        id: 'events',
+        title: function () { return t('guide.ins.step.events'); },
+        body: function () {
+          return [
+            lead(t('guide.ins.events.lead')),
+            todo([t('guide.ins.events.do1'), t('guide.ins.events.do2'), t('guide.ins.events.do3')]),
+            values([
+              [t('guide.ins.events.r1.f'), t('guide.ins.events.r1.v'), t('guide.ins.events.r1.w')],
+              [t('guide.ins.events.r2.f'), t('guide.ins.events.r2.v'), t('guide.ins.events.r2.w')],
+              [t('guide.ins.events.r3.f'), t('guide.ins.events.r3.v'), t('guide.ins.events.r3.w')],
+            ]),
+            note(t('guide.ins.events.note')),
+            actions(viewButton('events', t('guide.view.events')), viewButton('clusters', t('guide.view.clusters'))),
+          ];
+        },
+      },
+      {
+        id: 'alerting',
+        title: function () { return t('guide.ins.step.alerting'); },
+        body: function () {
+          return [
+            lead(t('guide.ins.alerting.lead')),
+            todo([t('guide.ins.alerting.do1'), t('guide.ins.alerting.do2'), t('guide.ins.alerting.do3')]),
+            values([
+              [t('guide.ins.alerting.r1.f'), t('guide.ins.alerting.r1.v'), t('guide.ins.alerting.r1.w')],
+              [t('guide.ins.alerting.r2.f'), t('guide.ins.alerting.r2.v'), t('guide.ins.alerting.r2.w')],
+              [t('guide.ins.alerting.r3.f'), t('guide.ins.alerting.r3.v'), t('guide.ins.alerting.r3.w')],
+            ]),
+            note(t('guide.ins.alerting.note')),
+            actions(settingsTabButton('alerting', t('guide.openAlerting')),
+              settingsTabButton('severity', t('guide.ins.alerting.sevBtn')),
+              settingsTabButton('maintenance', t('guide.ins.alerting.maintBtn'))),
+          ];
+        },
+      },
+      {
+        id: 'retention',
+        title: function () { return t('guide.ins.step.retention'); },
+        body: function () {
+          return [
+            lead(t('guide.ins.retention.lead')),
+            serverValuesTable('retention', RETENTION_VALUES),
+            watch(t('guide.ins.retention.watch')),
+            actions(settingsTabButton('retention', t('guide.ins.retention.btn')),
+              settingsTabButton('database', t('guide.ins.retention.dbBtn'))),
+          ];
+        },
+      },
+      {
+        id: 'reporting',
+        title: function () { return t('guide.ins.step.reporting'); },
+        body: function () {
+          return [
+            lead(t('guide.ins.reporting.lead')),
+            todo([t('guide.ins.reporting.do1'), t('guide.ins.reporting.do2'), t('guide.ins.reporting.do3')]),
+            values([
+              [t('guide.ins.reporting.r1.f'), t('guide.ins.reporting.r1.v'), t('guide.ins.reporting.r1.w')],
+              [t('guide.ins.reporting.r2.f'), t('guide.ins.reporting.r2.v'), t('guide.ins.reporting.r2.w')],
+            ]),
+            note(t('guide.ins.reporting.note')),
+            actions(viewButton('reporting', t('guide.view.reporting'))),
+          ];
+        },
+      },
+      {
+        id: 'done',
+        title: function () { return t('guide.ins.step.done'); },
+        body: function () {
+          return [
+            lead(t('guide.ins.done.lead')),
+            el('h4', { class: 'guide-h4' }, t('guide.done.weeklyTitle')),
+            todo([t('guide.ins.done.w1'), t('guide.ins.done.w2'), t('guide.ins.done.w3')]),
+            note(t('guide.ins.done.note')),
+            actions(viewButton('findings', t('guide.view.findings')), docsButton('what-is')),
+          ];
+        },
+      },
+    ]; }
+
+    // ---------------------------------------------------------------- tracks
+    // One array per guide. A step is { id, title(), body() } — it carries its
+    // own title so adding a step never means editing a lookup somewhere else.
+    function assuranceSteps() { return [
+      {
+        id: 'intro',
+        title: function () { return t('guide.step.intro'); },
         body: function () {
           return [
             lead(t('guide.intro.lead')),
@@ -295,6 +891,7 @@
       },
       {
         id: 'prereq',
+        title: function () { return t('guide.step.prereq'); },
         body: function () {
           return [
             lead(t('guide.prereq.lead')),
@@ -312,6 +909,7 @@
       },
       {
         id: 'application',
+        title: function () { return t('guide.step.application'); },
         body: function () {
           return [
             lead(t('guide.app.lead')),
@@ -330,6 +928,7 @@
       },
       {
         id: 'allowlist',
+        title: function () { return t('guide.step.allowlist'); },
         body: function () {
           var cap = quote('allowlist', 'maxAddressesPerApplication');
           var prefix = quote('allowlist', 'minCidrPrefix');
@@ -359,6 +958,7 @@
       },
       {
         id: 'discovery',
+        title: function () { return t('guide.step.discovery'); },
         body: function () {
           var pages = quote('discovery', 'maxPages');
           var depth = quote('discovery', 'maxDepth');
@@ -384,6 +984,7 @@
       },
       {
         id: 'tests',
+        title: function () { return t('guide.step.tests'); },
         body: function () {
           var stepMs = quote('runner', 'stepTimeoutMs');
           var runMs = quote('runner', 'maxRunDurationMs');
@@ -408,6 +1009,7 @@
       },
       {
         id: 'journeys',
+        title: function () { return t('guide.step.journeys'); },
         body: function () {
           return [
             lead(t('guide.journeys.lead')),
@@ -433,6 +1035,7 @@
       },
       {
         id: 'schedules',
+        title: function () { return t('guide.step.schedules'); },
         body: function () {
           return [
             lead(t('guide.schedules.lead')),
@@ -452,6 +1055,7 @@
       },
       {
         id: 'run',
+        title: function () { return t('guide.step.run'); },
         body: function () {
           var streakFloor = quote('assurance', 'failureStreak');
           return [
@@ -478,6 +1082,7 @@
       },
       {
         id: 'health',
+        title: function () { return t('guide.step.health'); },
         body: function () {
           return [
             lead(t('guide.health.lead')),
@@ -497,6 +1102,7 @@
       },
       {
         id: 'incidents',
+        title: function () { return t('guide.step.incidents'); },
         body: function () {
           var streak = quote('assurance', 'failureStreak');
           var warnDays = quote('assurance', 'certificateWarnDays');
@@ -521,6 +1127,7 @@
       },
       {
         id: 'alerts',
+        title: function () { return t('guide.step.alerts'); },
         body: function () {
           var notify = setting('assurance', 'notify');
           var group = setting('assurance', 'groupAlerts');
@@ -547,6 +1154,7 @@
       },
       {
         id: 'values',
+        title: function () { return t('guide.step.values'); },
         body: function () {
           return [
             lead(t('guide.values.lead')),
@@ -559,6 +1167,7 @@
       },
       {
         id: 'done',
+        title: function () { return t('guide.step.done'); },
         body: function () {
           return [
             lead(t('guide.done.lead')),
@@ -580,7 +1189,7 @@
           ];
         },
       },
-    ];
+    ]; }
 
     // --------------------------------------------------- step-specific checks
     function allowlistStatus() {
@@ -685,6 +1294,31 @@
     }
 
     // ------------------------------------------------------------------ shell
+    // Which steps, and what the guide calls itself. Five literal branches
+    // rather than a built key, for the reason statusLabel gives.
+    function stepsForTrack() {
+      if (track === 'monitoring') return monitoringSteps();
+      if (track === 'fleet') return fleetSteps();
+      if (track === 'diagnostics') return diagnosticsSteps();
+      if (track === 'insights') return insightsSteps();
+      return assuranceSteps();
+    }
+    function trackTitle() {
+      if (track === 'monitoring') return t('guide.title.monitoring');
+      if (track === 'fleet') return t('guide.title.fleet');
+      if (track === 'diagnostics') return t('guide.title.diagnostics');
+      if (track === 'insights') return t('guide.title.insights');
+      return t('guide.title.assurance');
+    }
+    function trackSubtitle() {
+      if (track === 'monitoring') return t('guide.sub.monitoring');
+      if (track === 'fleet') return t('guide.sub.fleet');
+      if (track === 'diagnostics') return t('guide.sub.diagnostics');
+      if (track === 'insights') return t('guide.sub.insights');
+      return t('guide.sub.assurance');
+    }
+    var STEPS = stepsForTrack();
+
     function clamp(n) { return Math.max(0, Math.min(STEPS.length - 1, n)); }
     function go(n) {
       step = clamp(n);
@@ -704,7 +1338,7 @@
           'aria-current': i === step ? 'step' : null,
           onclick: function () { go(i); },
         }, el('span', { class: 'guide-stepper-n' }, String(i + 1)),
-        el('span', { class: 'guide-stepper-label' }, stepTitle(s.id))));
+        el('span', { class: 'guide-stepper-label' }, s.title())));
       }));
     }
 
@@ -726,7 +1360,7 @@
       var body = el('div', { class: 'guide-step' });
       body.append(el('div', { class: 'guide-step-head' },
         el('span', { class: 'guide-step-num' }, String(step + 1) + '/' + String(STEPS.length)),
-        el('h3', { class: 'guide-step-title' }, stepTitle(current.id))));
+        el('h3', { class: 'guide-step-title' }, current.title())));
       var kids;
       try { kids = current.body(); } catch (e) { kids = [el('div', { class: 'guide-empty' }, errText(e))]; }
       kids.filter(Boolean).forEach(function (node) { body.append(node); });
@@ -735,8 +1369,9 @@
       // so the conditional banner is filtered out rather than handed over.
       host.replaceChildren.apply(host, [
         el('div', { class: 'guide-head' },
-          el('h2', { class: 'guide-title' }, t('guide.title')),
-          el('p', { class: 'guide-sub' }, t('guide.subtitle', { total: String(STEPS.length) }))),
+          el('h2', { class: 'guide-title' }, trackTitle()),
+          el('p', { class: 'guide-sub' }, trackSubtitle()),
+          el('p', { class: 'guide-sub guide-sub-count' }, t('guide.subtitle', { total: String(STEPS.length) }))),
         loadError ? el('div', { class: 'callout guide-stale' }, t('guide.stateUnavailable', { message: loadError })) : null,
         el('div', { class: 'guide-layout' }, stepper(), body),
         footer(),
@@ -749,8 +1384,33 @@
     draw();
     load();
 
+    // Each guide reads only what its own steps can show. A guide that fetches
+    // the whole product to colour one line is a guide that is slow for no
+    // reason — and every probe below is one the reader's role can already make.
     function load() {
-      Promise.all([
+      if (track !== 'assurance') return loadGeneral();
+      return loadAssurance();
+    }
+
+    // Monitoring / Fleet / Diagnostics / Insights. `GET /api/settings` is
+    // admin-only, so it is asked for only by an admin: a 403 nobody could have
+    // avoided is noise in the banner.
+    function loadGeneral() {
+      return Promise.all([
+        probe('/agents'),
+        probe('/locations'),
+        isAdmin() ? probe('/api/settings') : Promise.resolve(null),
+      ]).then(function (res) {
+        data = { agents: res[0], locations: res[1], serverSettings: res[2] };
+        draw();
+      }).catch(function (e) {
+        loadError = loadError || errText(e);
+        draw();
+      });
+    }
+
+    function loadAssurance() {
+      return Promise.all([
         probe(API + '/runs/worker-status'),
         probe(API + '/applications'),
         probe(API + '/tests'),
@@ -787,5 +1447,9 @@
     return host;
   }
 
-  root.ServiceAssuranceGuide = { create: create, HEALTH_WEIGHTS: HEALTH_WEIGHTS, VALUE_ROWS: VALUE_ROWS };
+  root.Guides = {
+    create: create, TRACKS: TRACKS, HEALTH_WEIGHTS: HEALTH_WEIGHTS, VALUE_ROWS: VALUE_ROWS,
+    ANALYSIS_VALUES: ANALYSIS_VALUES, RETENTION_VALUES: RETENTION_VALUES,
+    HEALTH_THRESHOLDS: HEALTH_THRESHOLDS,
+  };
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -97,10 +97,6 @@
                Every entry deep-links into the module's own tab. -->
           <div class="nav-group collapsed" data-category="Service Assurance">
             <button type="button" class="nav-group-label" aria-expanded="false">Service Assurance</button>
-            <!-- The guide is the module's first entry on purpose: a next-next
-                 walkthrough of the whole workflow AND the values to put in, for
-                 somebody opening Service Assurance for the first time. -->
-            <button data-view="guide" data-min-role="operator" data-feature="service_tests">User guide</button>
             <button data-view="serviceAssurance" data-sa-tab="health" data-min-role="operator" data-feature="service_tests">Health</button>
             <button data-view="serviceAssurance" data-sa-tab="journeys" data-min-role="operator" data-feature="service_tests">Journeys</button>
             <button data-view="serviceAssurance" data-sa-tab="applications" data-min-role="operator" data-feature="service_tests">Applications</button>
@@ -114,6 +110,20 @@
             <button data-view="events" data-feature="analysis">Events</button>
             <button data-view="clusters" data-feature="analysis">Situations</button>
             <button data-view="reporting">Reporting</button>
+          </div>
+          <!-- Guides: a next-next walkthrough per section of the product. Each
+               entry opens the same view with a different track — the workflow
+               AND the values to put in, for somebody meeting that section for
+               the first time. Viewer+: reading how a thing works is not the
+               same permission as doing it, and the guides say so where a step
+               needs a role the reader has not got. -->
+          <div class="nav-group collapsed" data-category="Guides">
+            <button type="button" class="nav-group-label" aria-expanded="false">Guides</button>
+            <button data-view="guide" data-guide="monitoring">Monitoring</button>
+            <button data-view="guide" data-guide="fleet">Fleet</button>
+            <button data-view="guide" data-guide="diagnostics">Diagnostics</button>
+            <button data-view="guide" data-guide="assurance" data-feature="service_tests">Service Assurance</button>
+            <button data-view="guide" data-guide="insights">Insights</button>
           </div>
           <div class="nav-group collapsed" data-category="Administration">
             <button type="button" class="nav-group-label" aria-expanded="false">Administration</button>
@@ -200,7 +210,7 @@
     <script src="/deltaView.js"></script>
     <script src="/troubleshootingView.js"></script>
     <script src="/serviceAssurance.js"></script>
-    <script src="/serviceAssuranceGuide.js"></script>
+    <script src="/guides.js"></script>
     <script src="/app.js"></script>
   </body>
 </html>

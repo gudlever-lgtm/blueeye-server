@@ -1,12 +1,12 @@
 'use strict';
 
-// The Service Assurance user guide, driven in a real DOM.
+// The five in-app guides, driven in a real DOM.
 //
 // Two things are being checked, and they are different claims:
 //
-//   1. It works as a walkthrough — the nav entry mounts it, every one of its
-//      steps renders, Next and Back move between them, and the live-state lines
-//      say what the API actually answered.
+//   1. They work as walkthroughs — each nav entry mounts its own guide, every
+//      one of its steps renders, Next and Back move between them, and the
+//      live-state lines say what the API actually answered.
 //   2. It is TRUE — the numbers it quotes are the code's numbers. A guide is
 //      worth having only while it is true (the same reason
 //      test/guideAccuracy.test.js exists for the written one), except that this
@@ -130,14 +130,41 @@ async function boot(t, routes = {}, role = 'admin') {
 
 const click = async (node, ms) => { node.click(); await tick(ms); };
 
-async function openGuide(doc) {
-  const nav = doc.querySelector('.tabs button[data-view="guide"]');
-  assert.ok(nav, 'no User guide nav button');
+async function openGuide(doc, track = 'assurance') {
+  const nav = doc.querySelector(`.tabs button[data-view="guide"][data-guide="${track}"]`);
+  assert.ok(nav, `no nav button for the ${track} guide`);
   await click(nav, 200);
   const guide = doc.querySelector('#view .guide');
-  assert.ok(guide, 'the guide did not render');
+  assert.ok(guide, `the ${track} guide did not render`);
   return guide;
 }
+
+// Walks a guide end to end, returning its step titles.
+async function walk(doc) {
+  const total = doc.querySelectorAll('#view .guide-stepper-btn').length;
+  const titles = [];
+  for (let i = 0; i < total; i += 1) {
+    const title = stepTitle(doc);
+    assert.ok(title.trim(), `step ${i + 1} rendered without a title`);
+    titles.push(title);
+    if (i < total - 1) await click(nextBtn(doc), 50);
+  }
+  return titles;
+}
+
+// What the non-assurance guides read: the agents, the sites, and (for an admin)
+// the server settings.
+const GENERAL_ROUTES = {
+  'GET /agents': [
+    { id: 1, hostname: 'core-sw', status: 'online', version: '1.4.0', location_id: 1, monitor_config: { source: 'netflow' } },
+    { id: 2, hostname: 'branch-01', status: 'offline', version: '1.3.0', location_id: null, monitor_config: { source: 'proc' } },
+  ],
+  'GET /locations': [{ id: 1, name: 'Copenhagen HQ', latitude: 55.6, longitude: 12.5 }],
+  'GET /api/settings': {
+    analysis: { ...require('../src/services/settings').ANALYSIS_DEFAULTS, warnSigma: 5 },
+    retention: { ...require('../src/services/settings').RETENTION_DEFAULTS },
+  },
+};
 
 const stepTitle = (doc) => (doc.querySelector('#view .guide-step-title') || {}).textContent || '';
 const nextBtn = (doc) => doc.querySelector('#view .guide-foot button.primary');
@@ -238,7 +265,7 @@ test('a changed setting is shown against its default, and marked', async (t) => 
 for (const status of [403, 404, 500]) {
   test(`every state probe answering ${status} leaves the guidance intact`, async (t) => {
     const dead = {};
-    for (const key of Object.keys(fullRoutes())) dead[key] = { status, body: { error: `HTTP ${status}` } };
+    for (const key of Object.keys({ ...fullRoutes(), ...GENERAL_ROUTES })) dead[key] = { status, body: { error: `HTTP ${status}` } };
     const { doc, errors } = await boot(t, dead);
     await openGuide(doc);
     await tick(120);
@@ -259,11 +286,21 @@ for (const status of [403, 404, 500]) {
   });
 }
 
-test('the guide is operator+, like the rest of the module', async (t) => {
-  const { doc } = await boot(t, fullRoutes(), 'viewer');
-  const nav = doc.querySelector('.tabs button[data-view="guide"]');
-  assert.ok(nav, 'the nav entry is gone');
-  assert.ok(nav.classList.contains('role-hidden'), 'a viewer can see the guide entry');
+test('a viewer may read every guide, and is told where their role stops', async (t) => {
+  // Reading how a thing works is not the same permission as doing it. The
+  // guides are viewer+; the Service Assurance one still follows the licence,
+  // because a guide to a module you have not bought is a sales brochure.
+  const { doc } = await boot(t, { ...fullRoutes(), ...GENERAL_ROUTES }, 'viewer');
+  const nav = [...doc.querySelectorAll('.tabs button[data-view="guide"]')];
+  assert.equal(nav.length, 5, 'the nav lost a guide');
+  for (const b of nav) {
+    assert.ok(!b.classList.contains('role-hidden'), `a viewer cannot see the ${b.dataset.guide} guide`);
+  }
+  assert.equal(nav.find((b) => b.dataset.guide === 'assurance').dataset.feature, 'service_tests');
+
+  await openGuide(doc, 'assurance');
+  await click(nextBtn(doc), 120); // → Before you start
+  assert.ok(doc.querySelector('#view .guide-pill-warn'), 'a viewer was not told their role cannot create anything');
 });
 
 // ------------------------------------------------------------- it is TRUE
@@ -271,7 +308,7 @@ test('the guide is operator+, like the rest of the module', async (t) => {
 test('the guide module quotes the code’s own numbers', async (t) => {
   const { window, doc } = await boot(t, fullRoutes());
   await openGuide(doc);
-  const mod = window.ServiceAssuranceGuide;
+  const mod = window.Guides;
   assert.ok(mod, 'the module did not publish itself');
 
   // Health weights: what the table prints has to be what the score computes.
@@ -295,11 +332,105 @@ test('the guide module quotes the code’s own numbers', async (t) => {
 test('the step titles and the shell exist in both catalogues', () => {
   // The module builds no keys, so the gate sweep covers the rest; these are the
   // ones the gate cannot see because they are reached through a lookup.
-  const src = fs.readFileSync(path.join(PUBLIC, 'serviceAssuranceGuide.js'), 'utf8');
+  const src = fs.readFileSync(path.join(PUBLIC, 'guides.js'), 'utf8');
   const keys = [...src.matchAll(/t\('(guide\.[a-zA-Z0-9_.]+)'/g)].map((m) => m[1]);
   assert.ok(keys.length > 100, `only ${keys.length} guide keys used`);
   for (const key of new Set(keys)) {
     for (const locale of I18n.LOCALES) assert.ok(I18n.has(key, locale), `${key} missing from ${locale}`);
   }
   assert.ok(!/t\('guide\.[a-zA-Z0-9_.]*' *\+/.test(src), 'a catalogue key is being built by concatenation');
+});
+
+
+// --------------------------------------------------------------- every guide
+const TRACKS = ['monitoring', 'fleet', 'diagnostics', 'assurance', 'insights'];
+
+test('the Guides nav group has one entry per guide, and each mounts its own', async (t) => {
+  const { doc, errors } = await boot(t, { ...fullRoutes(), ...GENERAL_ROUTES });
+  const nav = [...doc.querySelectorAll('.tabs button[data-view="guide"]')].map((b) => b.dataset.guide);
+  assert.deepEqual(nav, TRACKS, 'the nav does not list the five guides in order');
+
+  const seen = new Set();
+  for (const track of TRACKS) {
+    await openGuide(doc, track);
+    const titles = await walk(doc);
+    assert.ok(titles.length >= 5, `${track}: only ${titles.length} steps`);
+    assert.equal(new Set(titles).size, titles.length, `${track}: two steps share a title`);
+    const heading = doc.querySelector('#view .guide-title').textContent;
+    assert.ok(heading.trim(), `${track}: no heading`);
+    assert.ok(!seen.has(heading), `${track}: reuses the heading "${heading}"`);
+    seen.add(heading);
+  }
+  assert.deepEqual(errors, [], 'an uncaught error while walking the guides');
+});
+
+test('each guide remembers its own position', async (t) => {
+  const { doc, window } = await boot(t, { ...fullRoutes(), ...GENERAL_ROUTES });
+  await openGuide(doc, 'monitoring');
+  await click(nextBtn(doc), 60);
+  await click(nextBtn(doc), 60);
+  const monitoringStep = doc.querySelector('#view .guide-count').textContent;
+
+  await openGuide(doc, 'insights');
+  assert.match(doc.querySelector('#view .guide-count').textContent, /\b1\b/, 'a fresh guide did not start at step 1');
+
+  await openGuide(doc, 'monitoring');
+  assert.equal(doc.querySelector('#view .guide-count').textContent, monitoringStep, 'the monitoring guide lost its place');
+  assert.ok(window.localStorage.getItem('blueeye.guide.step.monitoring'), 'the position is not persisted per track');
+});
+
+test('the general guides read the fleet and say what they found', async (t) => {
+  const { doc } = await boot(t, { ...fullRoutes(), ...GENERAL_ROUTES });
+  await openGuide(doc, 'monitoring');
+  const rail = [...doc.querySelectorAll('#view .guide-stepper-btn')];
+  await click(rail[2], 150); // → the Overview step
+  const text = doc.querySelector('#view .guide-step').textContent;
+  assert.match(text, /1(?!\d)/, 'the offline agent count is not on the page');
+  assert.ok(doc.querySelector('#view .guide-pill-warn'), 'an offline agent did not raise a warning');
+});
+
+test('an admin sees the live analysis settings; everyone else is told why not', async (t) => {
+  const admin = await boot(t, { ...fullRoutes(), ...GENERAL_ROUTES }, 'admin');
+  await openGuide(admin.doc, 'insights');
+  await click(admin.doc.querySelectorAll('#view .guide-stepper-btn')[1], 150);
+  const shown = admin.doc.querySelector('#view .guide-step').textContent;
+  assert.match(shown, /analysis\.warnSigma/);
+  assert.ok(admin.doc.querySelector('#view .guide-changed'), 'a changed sigma is not marked');
+
+  const viewer = await boot(t, { ...fullRoutes(), ...GENERAL_ROUTES }, 'viewer');
+  await openGuide(viewer.doc, 'insights');
+  await click(viewer.doc.querySelectorAll('#view .guide-stepper-btn')[1], 150);
+  const text = viewer.doc.querySelector('#view .guide-step').textContent;
+  assert.match(text, /analysis\.warnSigma/, 'a viewer lost the values table');
+  assert.equal(viewer.doc.querySelectorAll('#view .guide-changed').length, 0, 'a viewer was shown live settings');
+  assert.ok(!viewer.calls.includes('GET /api/settings'), 'a viewer was made to call an admin-only endpoint');
+});
+
+test('the values the general guides quote are the code’s values', async (t) => {
+  const { window } = await boot(t, { ...fullRoutes(), ...GENERAL_ROUTES });
+  const mod = window.Guides;
+  const { ANALYSIS_DEFAULTS, RETENTION_DEFAULTS } = require('../src/services/settings');
+  const { THRESHOLDS } = require('../src/health/probeHealth');
+
+  for (const [field, shown] of mod.ANALYSIS_VALUES.map((r) => [r[0], r[1]])) {
+    assert.equal(shown, String(ANALYSIS_DEFAULTS[field]), `analysis.${field} is quoted as ${shown}`);
+  }
+  for (const [field, shown] of mod.RETENTION_VALUES.map((r) => [r[0], r[1]])) {
+    assert.equal(shown, String(RETENTION_DEFAULTS[field]), `retention.${field} is quoted as ${shown}`);
+  }
+  const th = mod.HEALTH_THRESHOLDS;
+  assert.equal(th.LOSS_WARN, String(THRESHOLDS.LOSS_WARN));
+  assert.equal(th.LOSS_BAD, String(THRESHOLDS.LOSS_BAD));
+  assert.equal(th.JITTER_WARN, String(THRESHOLDS.JITTER_WARN));
+  assert.equal(th.JITTER_BAD, String(THRESHOLDS.JITTER_BAD));
+  assert.equal(th.Z_WARN, String(THRESHOLDS.Z_WARN));
+  assert.equal(th.Z_BAD, String(THRESHOLDS.Z_BAD));
+  assert.equal(th.MIN_BASELINE, String(THRESHOLDS.MIN_BASELINE));
+  assert.equal(th.STALE_MIN, String(THRESHOLDS.STALE_MS / 60000));
+
+  // The interface verdicts are computed inline rather than from a named export,
+  // so the guide's two percentages are pinned to the rule itself.
+  const iface = fs.readFileSync(path.join(__dirname, '..', 'src', 'health', 'interfaceHealth.js'), 'utf8');
+  assert.ok(iface.includes(`utilPct >= ${th.IFACE_UTIL_BAD}`), `an interface is "bad" at some other utilization than ${th.IFACE_UTIL_BAD}%`);
+  assert.ok(iface.includes(`utilPct >= ${th.IFACE_UTIL_WARN}`), `an interface is "warn" at some other utilization than ${th.IFACE_UTIL_WARN}%`);
 });

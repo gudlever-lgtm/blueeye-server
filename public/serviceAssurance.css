@@ -648,6 +648,9 @@
 .guide-head { display: flex; flex-direction: column; gap: 2px; }
 .guide-title { margin: 0; font-size: 1.2rem; }
 .guide-sub { margin: 0; color: var(--muted); }
+/* The step count sits under the guide's own one-liner, quieter than it. */
+.guide-sub-count { font-size: 0.85rem; opacity: 0.8; }
+.guide-muted { color: var(--muted); }
 .guide-stale { margin: 0; }
 
 .guide-layout { display: grid; grid-template-columns: 230px minmax(0, 1fr); gap: 20px; align-items: start; }

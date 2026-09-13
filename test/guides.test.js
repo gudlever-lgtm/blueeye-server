@@ -560,3 +560,174 @@ test('no guide line ships an unfilled {placeholder}', async (t) => {
     }
   }
 });
+
+
+// =================================================== guided actions (v0.145)
+// A step that does the thing has to be held to more than "it renders": it
+// writes to a production system, so what it sends, what it refuses to send,
+// and what it does with a 400 are all part of the contract.
+
+const withAction = (over = {}) => ({ ...fullRoutes(), ...GENERAL_ROUTES, ...over });
+
+// Walks to the step carrying an action card and returns its pieces.
+async function openAction(doc, track, stepIndex) {
+  await openGuide(doc, track);
+  await click([...doc.querySelectorAll('#view .guide-stepper-btn')][stepIndex], 150);
+  const card = doc.querySelector('#view .guide-action');
+  assert.ok(card, `${track} step ${stepIndex + 1} has no action card`);
+  return {
+    card,
+    button: card.querySelector('.guide-action-go'),
+    inputs: [...card.querySelectorAll('.guide-action-input')],
+    result: card.querySelector('.guide-action-result'),
+    failure: card.querySelector('.guide-action-failure'),
+    errors: [...card.querySelectorAll('.guide-action-error')],
+  };
+}
+
+test('the Sites step creates a site through the same endpoint the screen uses', async (t) => {
+  const { doc, calls } = await boot(t, withAction({
+    'POST /locations': { status: 201, body: { id: 9, name: 'Aarhus', address: 'Åboulevarden 1' } },
+  }));
+  const a = await openAction(doc, 'monitoring', 4);
+  a.inputs[0].value = 'Aarhus';
+  a.inputs[1].value = 'Åboulevarden 1';
+  await click(a.button, 150);
+
+  const post = calls.find((c) => c === 'POST /locations');
+  assert.ok(post, `no POST went out: ${calls.join(' | ')}`);
+  assert.equal(a.result.hidden, false, 'nothing confirmed the site was created');
+  assert.match(a.result.textContent, /Aarhus/);
+  assert.equal(a.failure.hidden, true);
+  // The live state is re-read, so the status line above stops saying "not yet".
+  assert.ok(calls.filter((c) => c === 'GET /locations').length >= 2, 'the state was not re-read after the write');
+});
+
+test('a 400 lands on the field that caused it, with the server’s own message', async (t) => {
+  const { doc } = await boot(t, withAction({
+    'POST /locations': { status: 400, body: { error: 'Validation failed', details: { name: 'name is required' } } },
+  }));
+  const a = await openAction(doc, 'monitoring', 4);
+  await click(a.button, 150);
+  assert.equal(a.errors[0].hidden, false, 'the field error is not shown');
+  assert.equal(a.errors[0].textContent, 'name is required', 'the server message was replaced');
+  assert.equal(a.result.hidden, true, 'a failed write reported success');
+  assert.equal(a.button.disabled, false, 'the button stayed disabled after a failure');
+});
+
+test('a validation error on a field the card does not have still reaches the reader', async (t) => {
+  const { doc } = await boot(t, withAction({
+    'POST /locations': { status: 400, body: { error: 'Validation failed', details: { latitude: 'latitude is out of range' } } },
+  }));
+  const a = await openAction(doc, 'monitoring', 4);
+  await click(a.button, 150);
+  assert.equal(a.failure.hidden, false);
+  assert.match(a.failure.textContent, /latitude is out of range/);
+});
+
+test('a 500 is reported on the card rather than thrown', async (t) => {
+  const { doc, errors } = await boot(t, withAction({
+    'POST /locations': { status: 500, body: { error: 'Internal error' } },
+  }));
+  const a = await openAction(doc, 'monitoring', 4);
+  a.inputs[0].value = 'Aarhus';
+  await click(a.button, 150);
+  assert.deepEqual(errors, [], 'a failed write threw');
+  assert.equal(a.failure.hidden, false);
+  assert.match(a.failure.textContent, /Internal error/);
+});
+
+test('the Fleet step generates an enrollment code and shows it', async (t) => {
+  const { doc, calls } = await boot(t, withAction({
+    'POST /enrollment-codes': { status: 201, body: { id: 3, code: 'ABC-123', expires_at: '2026-09-13T13:00:00Z' } },
+  }));
+  const a = await openAction(doc, 'fleet', 1);
+  await click(a.button, 150);
+  assert.ok(calls.includes('POST /enrollment-codes'));
+  assert.match(a.result.textContent, /ABC-123/);
+});
+
+test('the Diagnostics step runs a ping from the agent the reader picks', async (t) => {
+  const { doc, calls } = await boot(t, withAction({
+    'POST /agents/2/probe': { status: 202, body: { queued: true } },
+  }));
+  const a = await openAction(doc, 'diagnostics', 1);
+  a.inputs[0].value = '2';          // the offline agent, deliberately: the picker offers every agent
+  a.inputs[1].value = '1.1.1.1';
+  await click(a.button, 150);
+  assert.ok(calls.includes('POST /agents/2/probe'), `no probe was queued: ${calls.join(' | ')}`);
+  assert.equal(a.failure.hidden, true);
+});
+
+test('with no agents at all, the probe card says so instead of offering an empty picker', async (t) => {
+  const { doc } = await boot(t, withAction({ 'GET /agents': [] }));
+  await openGuide(doc, 'diagnostics');
+  await click([...doc.querySelectorAll('#view .guide-stepper-btn')][1], 150);
+  const card = doc.querySelector('#view .guide-action-blocked');
+  assert.ok(card, 'no card at all');
+  assert.equal(card.querySelector('.guide-action-go'), null, 'an empty picker was offered anyway');
+});
+
+test('Service Assurance: the application and the allowlist entry are created from the guide', async (t) => {
+  const { doc, calls } = await boot(t, withAction({
+    [`POST ${SA}/applications`]: { status: 201, body: { id: 7, name: 'Selvbetjening' } },
+    [`POST ${SA}/applications/1/allowed-hosts`]: { status: 201, body: { id: 2, value: 'api.example.dk' } },
+  }));
+  const app = await openAction(doc, 'assurance', 2);
+  app.inputs[0].value = 'Selvbetjening';
+  app.inputs[1].value = 'https://app.example.dk';
+  await click(app.button, 150);
+  assert.ok(calls.includes(`POST ${SA}/applications`));
+  assert.match(app.result.textContent, /Selvbetjening/);
+
+  const allow = await openAction(doc, 'assurance', 3);
+  allow.inputs[1].value = 'api.example.dk';
+  await click(allow.button, 150);
+  assert.ok(calls.includes(`POST ${SA}/applications/1/allowed-hosts`), `no allowlist write: ${calls.join(' | ')}`);
+  assert.match(allow.result.textContent, /api\.example\.dk/);
+});
+
+test('an action never offers a button the reader’s role cannot press', async (t) => {
+  // Sites and the probe are operator+; the Service Assurance writes are admin.
+  const viewer = await boot(t, withAction(), 'viewer');
+  for (const [track, step] of [['monitoring', 4], ['fleet', 1], ['diagnostics', 1], ['assurance', 2], ['assurance', 3]]) {
+    await openGuide(viewer.doc, track);
+    await click([...viewer.doc.querySelectorAll('#view .guide-stepper-btn')][step], 120);
+    const go = viewer.doc.querySelector('#view .guide-action-go');
+    assert.equal(go, null, `a viewer was offered the ${track} action on step ${step + 1}`);
+    assert.ok(viewer.doc.querySelector('#view .guide-action-blocked'), `${track}: the action vanished instead of explaining itself`);
+  }
+
+  const operator = await boot(t, withAction(), 'operator');
+  await openGuide(operator.doc, 'assurance');
+  await click([...operator.doc.querySelectorAll('#view .guide-stepper-btn')][2], 120);
+  assert.equal(operator.doc.querySelector('#view .guide-action-go'), null, 'an operator was offered an admin-only write');
+  assert.ok(/admin/i.test(operator.doc.querySelector('#view .guide-action-blocked').textContent));
+
+  // And the admin gets all five.
+  const admin = await boot(t, withAction(), 'admin');
+  let offered = 0;
+  for (const [track, step] of [['monitoring', 4], ['fleet', 1], ['diagnostics', 1], ['assurance', 2], ['assurance', 3]]) {
+    await openGuide(admin.doc, track);
+    await click([...admin.doc.querySelectorAll('#view .guide-stepper-btn')][step], 120);
+    if (admin.doc.querySelector('#view .guide-action-go')) offered += 1;
+  }
+  assert.equal(offered, 5, 'an admin was refused an action');
+});
+
+test('every endpoint the guides call is mounted on the server', async () => {
+  // The gate sweeps app.js for this; guides.js is its own file and was not
+  // covered, which is how a guide could ship a button that answers 404.
+  const routesIndex = fs.readFileSync(path.join(__dirname, '..', 'src', 'routes', 'index.js'), 'utf8');
+  // Service Assurance is mounted across several lines (requireAuth and the
+  // licence gate sit between), so the path is not on the router.use( line.
+  const mounted = [...routesIndex.matchAll(/router\.use\(\s*'(\/[\w/-]+)'/g)].map((m) => m[1]);
+  const src = fs.readFileSync(path.join(PUBLIC, 'guides.js'), 'utf8');
+  const called = [...new Set([...src.matchAll(/api\((?:API \+ )?'(\/[a-zA-Z0-9/_-]*)/g)].map((m) => m[1]))];
+  assert.ok(called.length >= 5, `only ${called.length} api() calls found`);
+  for (const raw of called) {
+    const full = raw.startsWith('/api/') || raw.startsWith('/agents') || raw.startsWith('/locations')
+      || raw.startsWith('/enrollment') ? raw : `/api/service-tests${raw}`;
+    assert.ok(mounted.some((m) => full === m || full.startsWith(`${m}/`)), `${full} is not mounted`);
+  }
+});

@@ -88,12 +88,48 @@ literal `plural('…')` call; the keys handed to `countStatus` as plain strings
 are checked by `test/guides.test.js` instead, which also walks every step of
 every guide asserting no `{placeholder}` survives to the screen.
 
+## Doing the thing, not just describing it
+
+Six steps carry an **action card**: a small form that creates the thing the step
+is about, so "Applications → New, fill in two fields, come back" becomes one
+button.
+
+| Guide | Step | What it does | Endpoint | Role |
+| --- | --- | --- | --- | --- |
+| Monitoring | Sites | creates a site | `POST /locations` | operator |
+| Fleet | Add an agent | generates an enrollment code | `POST /enrollment-codes` | operator |
+| Diagnostics | Probes | runs one ping from a chosen agent | `POST /agents/:id/probe` | operator |
+| Service Assurance | Register the application | creates the application | `POST /api/service-tests/applications` | admin |
+| Service Assurance | Allow the addresses | adds one allowlist entry | `POST …/applications/:id/allowed-hosts` | admin |
+| Service Assurance | Tests | creates a two-step test (open + assert the title) | `POST /api/service-tests/tests` | operator |
+
+The rules they follow, because a guide that writes to a production system has to
+be more careful than one that only talks:
+
+- it writes **only** when the reader presses the button, and the button says
+  exactly what it will create;
+- it calls **the same endpoint the real screen calls**, so the same validation,
+  the same RBAC and the same audit entry apply — there is no second, laxer way
+  in through the guide;
+- a 400 comes back **on the field that caused it**, with the server's own
+  message rather than a friendlier guess;
+- a reader whose role cannot do it is told so instead of being handed a button
+  that answers 403;
+- on success the live state is re-read, so the step's status line stops saying
+  "not yet" while the thing sits there created.
+
+`test/dashboardSmoke.test.js` exercises these end to end — the guide's button,
+through the real router, into the module's own list — because a hand-written
+fake that answers 201 to anything cannot prove the payload is one the validator
+accepts.
+
 ## RBAC and licence
 
 Viewer+ for all five. The Service Assurance track follows `service_tests` like
 the module it describes, and its step 2 tells a viewer in as many words that
-their role can read the guide but not create anything. The module **reads and
-never writes**.
+their role can read the guide but not create anything. Reading a guide never
+writes; the action cards above are the only writes, and each is gated at the
+role its endpoint requires.
 
 ## Adding or changing a step
 

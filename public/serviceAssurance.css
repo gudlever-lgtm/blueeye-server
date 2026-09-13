@@ -726,3 +726,30 @@
   .guide-stepper-label { display: none; }
   .guide-stepper-n { min-width: 0; }
 }
+
+/* ---------------------------------------------------------- guided actions
+   A step that does the thing rather than describing it. Set apart from the
+   prose by a solid border and the accent, because pressing something here
+   writes to a production system and that should never look like body text. */
+.guide-action {
+  margin: 16px 0; padding: 12px 14px;
+  border: 1px solid var(--hairline, #e5e7eb); border-left: 3px solid var(--accent, #2563eb);
+  border-radius: 8px; background: var(--panel-2);
+}
+.guide-action .guide-h4 { margin-top: 0; }
+.guide-action-blocked { border-left-color: var(--muted, #6b7280); opacity: 0.85; }
+.guide-action-fields { display: flex; flex-wrap: wrap; gap: 12px; margin: 10px 0; }
+.guide-action-field { display: flex; flex-direction: column; gap: 4px; flex: 1 1 220px; min-width: 0; }
+.guide-action-label { font-size: 0.85rem; font-weight: 600; }
+.guide-action-input {
+  padding: 6px 8px; border: 1px solid var(--hairline, #e5e7eb); border-radius: 6px;
+  background: var(--panel); color: var(--text); font: inherit; min-width: 0;
+}
+.guide-action-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.guide-action-error { margin: 0; font-size: 0.8rem; color: var(--danger, #b91c1c); }
+.guide-action-failure { margin: 0; font-size: 0.85rem; color: var(--danger, #b91c1c); }
+.guide-action-result { margin: 0; font-size: 0.85rem; color: var(--ok, #166534); }
+
+[data-theme="dark"] .guide-action-result, [data-theme="midnight"] .guide-action-result { color: #bbf7d0; }
+[data-theme="dark"] .guide-action-error, [data-theme="midnight"] .guide-action-error,
+[data-theme="dark"] .guide-action-failure, [data-theme="midnight"] .guide-action-failure { color: #fecaca; }

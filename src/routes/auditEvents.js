@@ -6,6 +6,8 @@ const { requireAuth, requireRole } = require('../auth/middleware');
 const { ROLES } = require('../auth/roles');
 const { toCsv } = require('../lib/csv');
 const { CANONICAL_CATEGORIES, fromAuditEvent, fromAuditLog, mergeTrail } = require('../audit/categories');
+const { buildUserActivity, summarize } = require('../audit/userActivity');
+const { parseId } = require('../validation/locationValidation');
 
 const ACTOR_TYPES = new Set(['user', 'agent', 'system']);
 
@@ -28,9 +30,104 @@ function parseQuery(q) {
 // is the RBAC gate: only admins can see who did what on the server. Read-only;
 // writes happen via the audit middleware (user actions) and on ingest (agent
 // activity).
-function createAuditEventsRouter({ auditEventsRepo, auditLogRepo = null, featureGate = null }) {
+function createAuditEventsRouter({ auditEventsRepo, auditLogRepo = null, featureGate = null, usersRepo = null }) {
   const router = express.Router();
   const admin = requireRole(ROLES.ADMIN);
+
+  // True when the licensed, hash-chained `audit_log` may be read as well.
+  function auditLogReadable() {
+    if (!auditLogRepo || typeof auditLogRepo.list !== 'function') return false;
+    if (!featureGate || typeof featureGate.isFeatureEnabled !== 'function') return true;
+    return featureGate.isFeatureEnabled('audit_log');
+  }
+
+  // id → { name, email, role } for the accounts that exist RIGHT NOW. Used only
+  // to put a human name next to a row; a failure here must never take the log
+  // down, so it degrades to "no names" rather than an error.
+  async function userDirectory() {
+    if (!usersRepo || typeof usersRepo.findAll !== 'function') return null;
+    try {
+      const users = await usersRepo.findAll();
+      const out = {};
+      for (const u of users || []) out[Number(u.id)] = { name: u.name || null, email: u.email || null, role: u.role || null };
+      return out;
+    } catch { return null; }
+  }
+
+  // The User Logs read model: every action a PERSON performed, resolved to
+  // { userId, name, email }, described in plain language, and flagged when it
+  // deserves a second look (see src/audit/userActivity.js).
+  async function loadUserActivity(req) {
+    const filters = parseQuery(req.query);
+    const pageLimit = filters.limit;
+    const events = auditEventsRepo ? await auditEventsRepo.findAll({ ...filters, actorType: 'user', limit: 500, offset: 0 }) : [];
+    const logs = auditLogReadable() ? await auditLogRepo.list({ limit: 500 }) : [];
+    const merged = mergeTrail(
+      events.map(fromAuditEvent),
+      logs.map(fromAuditLog),
+      { actorType: 'user', limit: 1000, offset: 0 }
+    );
+    let rows = buildUserActivity(merged, { directory: await userDirectory() });
+
+    // Post-filters that only make sense on the assembled rows.
+    if (req.query.user !== undefined && req.query.user !== '') {
+      const userId = parseId(req.query.user);
+      if (userId === null) return { badRequest: 'Invalid user id' };
+      rows = rows.filter((r) => r.userId === userId);
+    }
+    if (req.query.flagged === '1' || req.query.flagged === 'true') {
+      rows = rows.filter((r) => r.flagLevel && r.flagLevel !== 'none');
+    }
+    if (typeof req.query.q === 'string' && req.query.q.trim()) {
+      const q = req.query.q.trim().toLowerCase();
+      rows = rows.filter((r) => [r.name, r.email, r.action, r.actionLabel, r.target, r.ip, r.path]
+        .some((v) => v && String(v).toLowerCase().includes(q)));
+    }
+    const summary = summarize(rows);
+    const offset = filters.offset || 0;
+    return { rows: rows.slice(offset, offset + pageLimit), summary, total: rows.length };
+  }
+
+  // GET /api/audit/users — User Logs. Admin only, same as the rest of the trail.
+  router.get('/users', requireAuth, admin, asyncHandler(async (req, res) => {
+    if (!auditEventsRepo && !auditLogReadable()) return res.status(503).json({ error: 'Audit log not available' });
+    const result = await loadUserActivity(req);
+    if (result.badRequest) return res.status(400).json({ error: result.badRequest });
+    res.json({
+      entries: result.rows,
+      summary: result.summary,
+      total: result.total,
+      auditLogLicensed: auditLogReadable(),
+    });
+  }));
+
+  // GET /api/audit/users/export.csv — the same rows, same filters, as a file.
+  router.get('/users/export.csv', requireAuth, admin, asyncHandler(async (req, res) => {
+    if (!auditEventsRepo && !auditLogReadable()) return res.status(503).json({ error: 'Audit log not available' });
+    const result = await loadUserActivity(req);
+    if (result.badRequest) return res.status(400).json({ error: result.badRequest });
+    const rows = result.rows.map((r) => ({
+      ts: r.ts,
+      userId: r.userId,
+      name: r.name,
+      email: r.email,
+      role: r.role,
+      action: r.action,
+      actionLabel: r.actionLabel,
+      outcome: r.outcome,
+      target: r.target,
+      status: r.status,
+      ip: r.ip,
+      flagLevel: r.flagLevel === 'none' ? '' : r.flagLevel,
+      flagReasons: r.flags.map((f) => f.message).join(' | '),
+    }));
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="user-logs.csv"');
+    res.send(toCsv(
+      ['ts', 'userId', 'name', 'email', 'role', 'action', 'actionLabel', 'outcome', 'target', 'status', 'ip', 'flagLevel', 'flagReasons'],
+      rows
+    ));
+  }));
 
   router.get('/', requireAuth, admin, asyncHandler(async (req, res) => {
     if (!auditEventsRepo) return res.status(503).json({ error: 'Audit log not available' });
@@ -47,9 +144,8 @@ function createAuditEventsRouter({ auditEventsRepo, auditLogRepo = null, feature
     const category = typeof req.query.category === 'string' ? req.query.category.slice(0, 32) : null;
     const events = auditEventsRepo ? await auditEventsRepo.findAll({ ...filters, limit: 500 }) : [];
 
-    const logLicensed = !featureGate || typeof featureGate.isFeatureEnabled !== 'function' || featureGate.isFeatureEnabled('audit_log');
     let logs = [];
-    if (auditLogRepo && typeof auditLogRepo.list === 'function' && logLicensed) {
+    if (auditLogReadable()) {
       logs = await auditLogRepo.list({ limit: 500 });
     }
 

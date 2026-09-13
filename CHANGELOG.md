@@ -1,5 +1,62 @@
 # Changelog
 
+## 0.144.1 — Logs, split into System Logs and User Logs
+
+One nav entry called **Logs** showed the server's own diagnostic stream and
+nothing else. The record of what PEOPLE did existed — two audit stores, one of
+them hash-chained — but it lived under Reporting → Audit, where nobody looked
+for it. The menu now says what the split already was:
+
+| Nav | Answers | Store |
+| --- | --- | --- |
+| **System Logs** | Is the server healthy? | the in-memory ring buffer, cleared on restart |
+| **User Logs** | What did people do here? | the audit stores, durable |
+
+### User Logs
+
+One row per action a person performed, with the account behind it — **user id,
+name and e-mail** — the **time**, and the **action** in plain language
+("Deleted agent") with the raw key and the request underneath it. Agent and
+system activity is not user activity and is not shown.
+
+`GET /api/audit/users` merges the same two stores as the unified trail, keeps
+the user-caused rows, and resolves each one against the live users table. The
+name is read as it is **now** and the e-mail as it was **at the time**: a
+renamed user reads correctly, and a deleted one still shows the address that
+acted, marked "account deleted since". Deleting a user must not erase what they
+did.
+
+### Flags, and why each one says its reason
+
+A flag means *worth a look*, not *someone did wrong* — a delete is flagged
+because it cannot be undone, not because it was a mistake. Seven checks, each a
+fact about the row or about that account's other rows in the same view, each
+carrying its own sentence on the row it marks. No score, no threshold to tune:
+
+| | Fires when |
+| --- | --- |
+| **Needs attention** | the role did not allow it (denied / 403), or three failed sign-ins for one account within fifteen minutes |
+| **Did not work** | the server rejected it (4xx) or failed while doing it (5xx — the one to check twice, since the action may be half-applied) |
+| **Worth a look** | it worked, and it was irreversible (delete/reset/revoke) or changed access and trust (accounts, roles, tokens, licence, SSO/LDAP); also a sign-in from an address the account has not used elsewhere in the view |
+
+The rules are pure (`src/audit/userActivity.js`), so the table and the CSV
+export can never disagree about why something was flagged. Filter by user, by
+"flagged only", or by free text; export the rows as filtered with the flag level
+and its reasons as columns.
+
+Without the `audit_log` licence the view still works from the auto-captured
+store alone and says what is missing, rather than quietly showing less.
+
+### Users have names now
+
+`users.name` (migration 093) — display only: never an identifier, never unique,
+never used to look a user up. The e-mail stays the key, NULL means no name, and
+every reader falls back to the address. Set it in Settings → Users or when
+inviting someone; the invite flow already accepted a name for its e-mail
+greeting and then threw it away. Federated (LDAP/OIDC/SAML) users have no name
+until an admin sets one — the directory's own display name is not imported.
+
+
 ## 0.132.0 — Discovery can sign in
 
 Discovery has always crawled what a logged-out visitor sees. It detected the

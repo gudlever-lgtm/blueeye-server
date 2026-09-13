@@ -61,6 +61,7 @@ function makeUsersRepo(overrides = {}) {
       (async (input) => ({
         id: 1,
         email: input.email,
+        name: input.name ?? null,
         role: input.role,
         created_at: '2026-01-01T00:00:00.000Z',
         updated_at: '2026-01-01T00:00:00.000Z',

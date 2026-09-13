@@ -102,6 +102,15 @@
     var el = ctx.el;
     var api = ctx.api;
     var t = ctx.t;
+    // Counted lines ("one agent" vs "3 agents") go through plural(), which picks
+    // the .one/.other catalogue entry. A host that does not supply it falls back
+    // to t(), which then renders the plural form — wrong for exactly one item,
+    // rather than broken.
+    var plural = typeof ctx.plural === 'function' ? ctx.plural : function (key, n, params) {
+      var merged = { count: String(n) };
+      if (params) for (var k in params) merged[k] = params[k];
+      return t(key, merged);
+    };
     var isOperator = typeof ctx.isOperator === 'function' ? ctx.isOperator : function () { return false; };
     var isAdmin = typeof ctx.isAdmin === 'function' ? ctx.isAdmin : function () { return false; };
     // Which guide the nav entry asked for; an unknown name opens the first
@@ -258,27 +267,34 @@
         onclick: function () { openTab(tab); },
       }, t('guide.openTab', { tab: tabLabel(tab) }));
     }
+    // A screen the reader's role or licence hides. Shown, greyed, with the
+    // reason — the same manners as the help drawers' viewLink, which degrades
+    // to plain text rather than offering a dead end. Saying nothing would be
+    // worse: the guide would describe a screen and quietly omit the way to it.
+    function unavailable(label, reason) {
+      return el('span', { class: 'guide-unavailable', title: reason }, label + ' · ' + reason);
+    }
     // A button that opens one of the dashboard's own screens. The label is passed
     // in rather than built from the view key, so every string stays a literal.
     function viewButton(viewKey, label) {
       if (!openView) return null;
+      // canOpenView mirrors the nav: hidden by role, or locked by licence.
+      var why = typeof ctx.viewBlockedReason === 'function' ? ctx.viewBlockedReason(viewKey) : null;
+      if (why === 'role') return unavailable(label, t('guide.needsOperator'));
+      if (why === 'licence') return unavailable(label, t('guide.needsLicence'));
       return el('button', { class: 'ghost small', onclick: function () { openView(viewKey); } },
         t('guide.openTab', { tab: label }));
     }
+    // Every Settings tab a guide links to is administrator-only, so for anybody
+    // else the button is a promise the app cannot keep — Settings would open on
+    // whichever tab their role can see instead.
     function settingsTabButton(tab, label) {
       if (!openSettings) return null;
+      if (!isAdmin()) return unavailable(label, t('guide.needsAdmin'));
       return el('button', { class: 'ghost small', onclick: function () { openSettings(tab); } }, label);
     }
-    function settingsButton() {
-      if (!openSettings) return null;
-      return el('button', { class: 'ghost small', onclick: function () { openSettings('assurance'); } },
-        t('guide.openSettings'));
-    }
-    function alertingButton() {
-      if (!openSettings) return null;
-      return el('button', { class: 'ghost small', onclick: function () { openSettings('alerting'); } },
-        t('guide.openAlerting'));
-    }
+    function settingsButton() { return settingsTabButton('assurance', t('guide.openSettings')); }
+    function alertingButton() { return settingsTabButton('alerting', t('guide.openAlerting')); }
     function docsButton(topic) {
       if (!openDocs) return null;
       return el('button', { class: 'ghost small', onclick: function () { openDocs(topic); } },
@@ -311,7 +327,7 @@
     function countStatus(list, doneKey, noneKey) {
       if (!Array.isArray(list)) return status('unknown', t('guide.state.unknown'));
       if (!list.length) return status('todo', t(noneKey));
-      return status('done', t(doneKey, { count: String(list.length) }));
+      return status('done', plural(doneKey, list.length));
     }
 
     // ------------------------------------------------------------- the steps
@@ -334,11 +350,9 @@
       if (!agents.length) return status('todo', t('guide.mon.noAgents'));
       var offline = agents.filter(function (a) { return a && a.status !== 'online'; });
       if (offline.length) {
-        return status('warn', t('guide.mon.agentsOffline', {
-          count: String(offline.length), total: String(agents.length),
-        }));
+        return status('warn', plural('guide.mon.agentsOffline', offline.length, { total: String(agents.length) }));
       }
-      return status('done', t('guide.mon.agentsOnline', { count: String(agents.length) }));
+      return status('done', plural('guide.mon.agentsOnline', agents.length));
     }
     function locationsStatus() {
       var locations = locationList();
@@ -348,12 +362,11 @@
       var placed = locations.filter(function (l) { return l && l.latitude != null && l.longitude != null; });
       var homeless = (agents || []).filter(function (a) { return a && !a.location_id; });
       if (placed.length < locations.length) {
-        return status('warn', t('guide.mon.locationsUnplaced', {
-          count: String(locations.length - placed.length), total: String(locations.length),
-        }));
+        return status('warn', plural('guide.mon.locationsUnplaced', locations.length - placed.length,
+          { total: String(locations.length) }));
       }
-      if (homeless.length) return status('warn', t('guide.mon.agentsNoSite', { count: String(homeless.length) }));
-      return status('done', t('guide.mon.locationsOk', { count: String(locations.length) }));
+      if (homeless.length) return status('warn', plural('guide.mon.agentsNoSite', homeless.length));
+      return status('done', plural('guide.mon.locationsOk', locations.length));
     }
     // Which traffic source each agent is on — the setting that decides whether
     // Flows and Topology have anything to draw at all.
@@ -365,16 +378,20 @@
         var src = a && a.monitor_config && a.monitor_config.source;
         return src === 'netflow' || src === 'sflow';
       });
-      if (!flowCapable.length) return status('todo', t('guide.mon.noFlowSource', { total: String(agents.length) }));
-      return status('done', t('guide.mon.flowSource', {
-        count: String(flowCapable.length), total: String(agents.length),
-      }));
+      if (!flowCapable.length) return status('todo', plural('guide.mon.noFlowSource', agents.length, { total: String(agents.length) }));
+      return status('done', plural('guide.mon.flowSource', flowCapable.length, { total: String(agents.length) }));
     }
     function versionStatus() {
       var agents = agentList();
       if (!agents) return status('unknown', t('guide.state.unknown'));
       var versions = {};
-      agents.forEach(function (a) { if (a && a.version) versions[a.version] = true; });
+      // The version an agent reports lives in its capabilities payload
+      // (`capabilities.agentVersion`) — the agents row itself has no version
+      // column, so reading `a.version` finds nothing on every install.
+      agents.forEach(function (a) {
+        var v = a && a.capabilities && a.capabilities.agentVersion;
+        if (v) versions[v] = true;
+      });
       var list = Object.keys(versions);
       if (!list.length) return status('todo', t('guide.fleet.noVersions'));
       if (list.length === 1) return status('done', t('guide.fleet.oneVersion', { version: list[0] }));
@@ -442,10 +459,12 @@
               [mono('ok'), t('guide.mon.fleet.v.ok')],
               [mono('warn'), t('guide.mon.fleet.v.warn', { loss: HEALTH_THRESHOLDS.LOSS_WARN, jitter: HEALTH_THRESHOLDS.JITTER_WARN, z: HEALTH_THRESHOLDS.Z_WARN })],
               [mono('bad'), t('guide.mon.fleet.v.bad', { loss: HEALTH_THRESHOLDS.LOSS_BAD, jitter: HEALTH_THRESHOLDS.JITTER_BAD, z: HEALTH_THRESHOLDS.Z_BAD })],
+              [mono('down'), t('guide.mon.fleet.v.down')],
               [mono('stale'), t('guide.mon.fleet.v.stale', { minutes: HEALTH_THRESHOLDS.STALE_MIN })],
-              [mono('unknown'), t('guide.mon.fleet.v.unknown', { samples: HEALTH_THRESHOLDS.MIN_BASELINE })],
+              [mono('unknown'), t('guide.mon.fleet.v.unknown')],
             ]),
             values([
+              [t('guide.mon.fleet.r0.f'), t('guide.mon.fleet.r0.v', { samples: HEALTH_THRESHOLDS.MIN_BASELINE }), t('guide.mon.fleet.r0.w')],
               [t('guide.mon.fleet.r1.f'), t('guide.mon.fleet.r1.v'), t('guide.mon.fleet.r1.w')],
               [t('guide.mon.fleet.r2.f'), t('guide.mon.fleet.r2.v'), t('guide.mon.fleet.r2.w')],
             ]),
@@ -463,7 +482,7 @@
             lead(t('guide.mon.traffic.lead')),
             todo([t('guide.mon.traffic.do1'), t('guide.mon.traffic.do2'), t('guide.mon.traffic.do3')]),
             el('h4', { class: 'guide-h4' }, t('guide.mon.traffic.sourceTitle')),
-            table([t('guide.col.field'), t('guide.col.means')], [
+            table([t('guide.col.source'), t('guide.col.means')], [
               [mono('proc'), t('guide.mon.traffic.src.proc')],
               [mono('snmp'), t('guide.mon.traffic.src.snmp')],
               [mono('netflow'), t('guide.mon.traffic.src.netflow')],
@@ -518,7 +537,7 @@
         body: function () {
           return [
             lead(t('guide.mon.done.lead')),
-            el('h4', { class: 'guide-h4' }, t('guide.done.weeklyTitle')),
+            el('h4', { class: 'guide-h4' }, t('guide.mon.done.listTitle')),
             todo([t('guide.mon.done.w1'), t('guide.mon.done.w2'), t('guide.mon.done.w3')]),
             note(t('guide.mon.done.note')),
             actions(viewButton('changes', t('guide.view.changes')), docsButton('tour')),
@@ -677,7 +696,7 @@
               [t('guide.diag.probes.s3.f'), mono('dns'), t('guide.diag.probes.s3.w')],
               [t('guide.diag.probes.s4.f'), mono('traceroute'), t('guide.diag.probes.s4.w')],
               [t('guide.diag.probes.s5.f'), mono('curl'), t('guide.diag.probes.s5.w')],
-              [t('guide.diag.probes.s6.f'), mono('page load'), t('guide.diag.probes.s6.w')],
+              [t('guide.diag.probes.s6.f'), mono('pageload'), t('guide.diag.probes.s6.w')],
             ]),
             note(t('guide.diag.probes.note')),
             actions(viewButton('probes', t('guide.view.probes'))),
@@ -727,7 +746,7 @@
             lead(t('guide.diag.outage.lead')),
             todo([t('guide.diag.outage.do1'), t('guide.diag.outage.do2'), t('guide.diag.outage.do3'), t('guide.diag.outage.do4')]),
             el('h4', { class: 'guide-h4' }, t('guide.diag.outage.colourTitle')),
-            table([t('guide.col.field'), t('guide.col.means')], [
+            table([t('guide.col.colour'), t('guide.col.means')], [
               [t('guide.diag.outage.c1.f'), t('guide.diag.outage.c1.v')],
               [t('guide.diag.outage.c2.f'), t('guide.diag.outage.c2.v')],
               [t('guide.diag.outage.c3.f'), t('guide.diag.outage.c3.v')],
@@ -744,7 +763,6 @@
         body: function () {
           return [
             lead(t('guide.diag.done.lead')),
-            el('h4', { class: 'guide-h4' }, t('guide.done.troubleTitle')),
             table([t('guide.col.see'), t('guide.col.means')], [
               [t('guide.diag.done.p1.f'), t('guide.diag.done.p1.v')],
               [t('guide.diag.done.p2.f'), t('guide.diag.done.p2.v')],
@@ -767,7 +785,7 @@
           return [
             lead(t('guide.ins.intro.lead')),
             el('h4', { class: 'guide-h4' }, t('guide.ins.intro.vocabTitle')),
-            table([t('guide.col.field'), t('guide.col.means')], [
+            table([t('guide.col.word'), t('guide.col.means')], [
               [t('guide.ins.intro.v1.f'), t('guide.ins.intro.v1.v')],
               [t('guide.ins.intro.v2.f'), t('guide.ins.intro.v2.v')],
               [t('guide.ins.intro.v3.f'), t('guide.ins.intro.v3.v')],
@@ -1200,11 +1218,9 @@
       var bare = details.filter(function (d) {
         return d && (!Array.isArray(d.allowed_hosts) || d.allowed_hosts.length === 0);
       });
-      if (!bare.length) return status('done', t('guide.allow.ok', { count: String(details.length) }));
-      return status('warn', t('guide.allow.bare', {
-        count: String(bare.length),
-        names: bare.map(function (d) { return d.name; }).join(', '),
-      }));
+      if (!bare.length) return status('done', plural('guide.allow.ok', details.length));
+      return status('warn', plural('guide.allow.bare', bare.length,
+        { names: bare.map(function (d) { return d.name; }).join(', ') }));
     }
     function discoveryStatus() {
       var apps = data && data.apps;
@@ -1212,7 +1228,7 @@
       if (!apps.length) return status('todo', t('guide.allow.noApps'));
       var done = apps.filter(function (a) { return a && a.last_discovery; });
       if (!done.length) return status('todo', t('guide.discovery.none'));
-      return status('done', t('guide.discovery.count', { count: String(done.length), total: String(apps.length) }));
+      return status('done', plural('guide.discovery.count', done.length, { total: String(apps.length) }));
     }
     function stepTypeLine() {
       var cat = data && data.stepTypes && data.stepTypes.categories;
@@ -1227,25 +1243,23 @@
       var j = data && data.journeys;
       if (!j || !Array.isArray(j.journeys)) return status('unknown', t('guide.state.unknown'));
       if (!j.journeys.length) return status('todo', t('guide.journeys.none'));
-      return status('done', t('guide.journeys.count', { count: String(j.journeys.length) }));
+      return status('done', plural('guide.journeys.count', j.journeys.length));
     }
     function scheduleStatus() {
       var list = data && data.schedules;
       if (!Array.isArray(list)) return status('unknown', t('guide.state.unknown'));
       if (!list.length) return status('todo', t('guide.schedules.none'));
       var on = list.filter(function (s) { return s && s.enabled !== false; });
-      if (!on.length) return status('warn', t('guide.schedules.allOff', { count: String(list.length) }));
-      return status('done', t('guide.schedules.count', { count: String(on.length) }));
+      if (!on.length) return status('warn', plural('guide.schedules.allOff', list.length));
+      return status('done', plural('guide.schedules.count', on.length));
     }
     function runStatus() {
       var runs = data && data.runs;
       if (!Array.isArray(runs)) return status('unknown', t('guide.state.unknown'));
       if (!runs.length) return status('todo', t('guide.run.none'));
       var last = runs[0];
-      return status('done', t('guide.run.count', {
-        count: String(runs.length),
-        status: String((last && (last.status || last.verdict)) || '—'),
-      }));
+      return status('done', plural('guide.run.count', runs.length,
+        { status: String((last && (last.status || last.verdict)) || '—') }));
     }
     function incidentStatus() {
       var sum = data && data.summary;
@@ -1260,7 +1274,7 @@
         }, 0);
       }
       if (!open) return status('done', t('guide.incidents.clear'));
-      return status('warn', t('guide.incidents.open', { count: String(open) }));
+      return status('warn', plural('guide.incidents.open', open));
     }
     function settingsTable() {
       var s = data && data.settings;
@@ -1287,10 +1301,8 @@
         return pair.value !== undefined && pair.def !== undefined && pair.value !== pair.def;
       });
       if (!changed.length) return status('done', t('guide.values.allDefault'));
-      return status('done', t('guide.values.changed', {
-        count: String(changed.length),
-        names: changed.map(function (row) { return row[0] + '.' + row[1]; }).join(', '),
-      }));
+      return status('done', plural('guide.values.changed', changed.length,
+        { names: changed.map(function (row) { return row[0] + '.' + row[1]; }).join(', ') }));
     }
 
     // ------------------------------------------------------------------ shell

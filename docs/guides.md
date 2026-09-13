@@ -71,6 +71,23 @@ The two bundles a guide loads:
   banner. A non-admin sees the default column and "admin only" where the live
   value would be.
 
+## Two details the first audit pass added
+
+**A link the reader cannot follow is worse than no link.** `viewBlockedReason`
+(in `app.js`, shared with the help drawers' `viewLink`) reads the nav: hidden by
+role, locked by licence, or open. A step that names Enrollment or
+Troubleshooting for a viewer renders it greyed with the reason rather than a
+button that would land them on a different screen, and every Settings tab the
+guides link to is administrator-only, so for anybody else those are greyed too.
+
+**Counted lines carry both forms.** `I18n.plural(key, n, params)` picks
+`key.one` or `key.other` and fills `{count}` itself, so a guide says "One test
+exists" and "4 tests exist" rather than "1 test(s)". The gate sweep
+(`test/gate/ui.test.js`) checks both forms exist in both locales for every
+literal `plural('…')` call; the keys handed to `countStatus` as plain strings
+are checked by `test/guides.test.js` instead, which also walks every step of
+every guide asserting no `{placeholder}` survives to the screen.
+
 ## RBAC and licence
 
 Viewer+ for all five. The Service Assurance track follows `service_tests` like

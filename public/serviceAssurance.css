@@ -702,7 +702,13 @@
 .guide-pill-warn { background: #fef3c7; color: #92400e; }
 .guide-pill-unknown { background: #e5e7eb; color: #4b5563; }
 
-.guide-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.guide-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; align-items: center; }
+/* A screen the reader's role or licence hides: named, greyed, with the reason —
+   never a button that would land them somewhere else. */
+.guide-unavailable {
+  display: inline-block; padding: 3px 8px; border: 1px dashed var(--hairline, #e5e7eb);
+  border-radius: 6px; color: var(--muted, #6b7280); font-size: 0.85rem;
+}
 .guide-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .guide-count { color: var(--muted); font-variant-numeric: tabular-nums; }
 

@@ -127,6 +127,16 @@ test('every t() key used by the dashboard exists in BOTH locales, and the catalo
     for (const m of src.matchAll(/\bt\('([a-zA-Z0-9_.-]+)'/g)) {
       for (const locale of I18n.LOCALES) if (!I18n.has(m[1], locale)) missing.push(`${f}: ${m[1]} (${locale})`);
     }
+    // A counted line carries two catalogue entries — `key.one` and `key.other` —
+    // and plural() picks between them. Both have to exist in both locales, or
+    // the sentence renders as the key on whichever count nobody tested.
+    for (const m of src.matchAll(/\bplural\('([a-zA-Z0-9_.-]+)'/g)) {
+      for (const form of ['one', 'other']) {
+        for (const locale of I18n.LOCALES) {
+          if (!I18n.has(`${m[1]}.${form}`, locale)) missing.push(`${f}: ${m[1]}.${form} (${locale})`);
+        }
+      }
+    }
   }
   assert.deepEqual(uniq(missing), []);
   for (const locale of I18n.LOCALES) assert.deepEqual(I18n.missingKeys(locale), [], `${locale} catalogue incomplete`);

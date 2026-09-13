@@ -735,7 +735,7 @@ const VIEW_LABELS = {
   interfaces: 'Interfaces', probes: 'Probes', tests: 'Tests', flows: 'Flows',
   findings: 'Analysis', reporting: 'Reporting', locations: 'Locations', enrollment: 'Enrollment', settings: 'Settings',
   docs: 'Documentation', investigation: 'Troubleshooting', nics: 'NICs', events: 'Events',
-  serviceAssurance: 'Service Assurance', guide: 'User guide',
+  serviceAssurance: 'Service Assurance', guide: 'Guides',
 };
 function gotoView(viewKey) {
   closeDrawer();
@@ -745,10 +745,21 @@ function gotoView(viewKey) {
   currentView = viewKey;
   render();
 }
+// Why a nav entry cannot be opened: 'role' (above the user's role), 'licence'
+// (not in this licence) or null (it can). One reading of the nav, used by the
+// help drawers' viewLink and by the guides, so a link is never offered where
+// the tab itself is hidden.
+function viewBlockedReason(viewKey) {
+  const tab = document.querySelector(`.tabs button[data-view="${viewKey}"]`);
+  if (!tab) return null;
+  if (tab.classList.contains('locked')) return 'licence';
+  if (tab.classList.contains('role-hidden')) return 'role';
+  if (tab.classList.contains('hidden')) return 'role';
+  return null;
+}
 function viewLink(viewKey, label) {
   const text = label || VIEW_LABELS[viewKey] || viewKey;
-  const tab = document.querySelector(`.tabs button[data-view="${viewKey}"]`);
-  if (tab && (tab.classList.contains('hidden') || tab.classList.contains('locked'))) return document.createTextNode(text);
+  if (viewBlockedReason(viewKey)) return document.createTextNode(text);
   return el('a', { href: '#', class: 'drawer-link', onclick: (e) => { e.preventDefault(); gotoView(viewKey); } }, text);
 }
 // Deep-link into a specific Settings sub-tab (Analysis, Retention, Traffic types…).
@@ -15326,10 +15337,15 @@ views.guide = async () => {
   }
   return window.Guides.create({
     el, api, t, toast,
+    // Counted lines pick their own singular/plural form.
+    plural: (key, n, params) => (window.I18n && window.I18n.plural ? window.I18n.plural(key, n, params) : t(key, { count: String(n), ...(params || {}) })),
     isAdmin,
     isOperator: canWrite,
     // Which of the five guides the nav entry asked for.
     track: guideTrack,
+    // A step that names a screen the reader cannot open says so, rather than
+    // offering a button that lands them somewhere else.
+    viewBlockedReason,
     // Every step can open the screen it is describing. A plain view, a Service
     // Assurance sub-tab, a Settings sub-tab, or a handbook article.
     openView: (viewKey) => gotoView(viewKey),

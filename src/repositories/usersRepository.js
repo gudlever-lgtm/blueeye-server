@@ -2,7 +2,7 @@
 
 // Columns safe to return to API clients — never includes password_hash.
 const PUBLIC_COLUMNS =
-  'id, email, role, protected, must_change_password, temp_password_expires_at, temp_password_created_by, created_at, updated_at';
+  'id, email, name, role, protected, must_change_password, temp_password_expires_at, temp_password_created_by, created_at, updated_at';
 
 function mapRow(row) {
   if (!row) return null;
@@ -64,6 +64,7 @@ function createUsersRepository(db) {
 
   async function create({
     email,
+    name = null,
     passwordHash,
     role,
     protected: isProtected = false,
@@ -72,9 +73,10 @@ function createUsersRepository(db) {
     tempPasswordCreatedBy = null,
   }) {
     const [result] = await pool.query(
-      'INSERT INTO users (email, password_hash, role, protected, must_change_password, temp_password_expires_at, temp_password_created_by) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO users (email, name, password_hash, role, protected, must_change_password, temp_password_expires_at, temp_password_created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
       [
         email,
+        name,
         passwordHash,
         role,
         isProtected ? 1 : 0,
@@ -86,8 +88,9 @@ function createUsersRepository(db) {
     return findById(result.insertId);
   }
 
-  // Patch may contain `email`, `role` and/or `passwordHash`. Returns the updated
-  // row, or null if no user with that id exists.
+  // Patch may contain `email`, `name`, `role` and/or `passwordHash`. Returns the
+  // updated row, or null if no user with that id exists. `name` is display text:
+  // an empty string clears it back to NULL rather than storing a blank label.
   async function update(id, patch) {
     const existing = await findById(id);
     if (!existing) return null;
@@ -97,6 +100,10 @@ function createUsersRepository(db) {
     if (patch.email !== undefined) {
       fields.push('email = ?');
       params.push(patch.email);
+    }
+    if (patch.name !== undefined) {
+      fields.push('name = ?');
+      params.push(patch.name === null || patch.name === '' ? null : patch.name);
     }
     if (patch.role !== undefined) {
       fields.push('role = ?');

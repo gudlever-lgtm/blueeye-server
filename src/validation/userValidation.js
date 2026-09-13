@@ -45,10 +45,13 @@ function validateRole(raw, errors) {
 
 const NAME_MAX = 120;
 
-// Optional display name — used only in the one-time-password email greeting
-// (BlueEyes keys users by email; there is no name column). Trimmed; length-capped.
+// Optional display name (migration 093, users.name). Display only: the email
+// stays the identity, this is what the user activity log and the one-time-password
+// email greeting show instead of an address. Trimmed; length-capped. An empty
+// string is a deliberate "clear it" and is returned as null.
 function validateName(raw, errors) {
-  if (raw === undefined || raw === null || raw === '') return undefined;
+  if (raw === undefined) return undefined;
+  if (raw === null || raw === '') return null;
   if (typeof raw !== 'string') {
     errors.name = 'name must be a string';
     return undefined;
@@ -58,7 +61,7 @@ function validateName(raw, errors) {
     errors.name = `name must be at most ${NAME_MAX} characters`;
     return undefined;
   }
-  return name || undefined;
+  return name || null;
 }
 
 // POST /users — email, password and role are all required.
@@ -70,6 +73,8 @@ function validateUserCreate(body) {
   value.email = validateEmail(input.email, errors);
   value.password = validatePassword(input.password, errors);
   value.role = validateRole(input.role, errors);
+  const name = validateName(input.name, errors);
+  if (name !== undefined) value.name = name;
 
   return Object.keys(errors).length > 0 ? { errors } : { value };
 }
@@ -87,6 +92,8 @@ function validateUserUpdate(body) {
   if (input.password !== undefined) {
     value.password = validatePassword(input.password, errors);
   }
+  const name = validateName(input.name, errors);
+  if (name !== undefined) value.name = name;
 
   return Object.keys(errors).length > 0 ? { errors } : { value };
 }

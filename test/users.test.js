@@ -188,6 +188,68 @@ test('PUT /users/:id updates the email (normalised, in the patch) and returns 20
   assert.equal(patch.email, 'new@blueeye.local');
 });
 
+// ---- display name (migration 093) -----------------------------------------
+
+test('PUT /users/:id sets the display name and returns 200', async () => {
+  let patch;
+  const usersRepo = makeUsersRepo({
+    findById: async () => ({ id: 3, email: 'a@blueeye.local', role: 'viewer', name: null }),
+    update: async (id, p) => { patch = p; return { id, email: 'a@blueeye.local', role: p.role, name: p.name }; },
+  });
+
+  const res = await request(makeApp({ usersRepo }))
+    .put('/users/3')
+    .set('Authorization', admin())
+    .send({ role: 'viewer', name: '  Lars Hansen  ' });
+
+  assert.equal(res.status, 200);
+  assert.equal(patch.name, 'Lars Hansen'); // trimmed
+  assert.equal(res.body.name, 'Lars Hansen');
+});
+
+test('PUT /users/:id clears the name with an empty string, and leaves it alone when absent', async () => {
+  let patch;
+  const usersRepo = makeUsersRepo({
+    findById: async () => ({ id: 3, email: 'a@blueeye.local', role: 'viewer', name: 'Lars' }),
+    update: async (id, p) => { patch = p; return { id, ...p }; },
+  });
+  const app = makeApp({ usersRepo });
+
+  const cleared = await request(app).put('/users/3').set('Authorization', admin()).send({ role: 'viewer', name: '' });
+  assert.equal(cleared.status, 200);
+  assert.equal(patch.name, null);
+
+  patch = undefined;
+  const untouched = await request(app).put('/users/3').set('Authorization', admin()).send({ role: 'viewer' });
+  assert.equal(untouched.status, 200);
+  assert.equal('name' in patch, false, 'a body without a name must not clear the stored one');
+});
+
+test('PUT /users/:id returns 400 for an over-long name', async () => {
+  const usersRepo = makeUsersRepo({ findById: async () => ({ id: 3, email: 'a@blueeye.local', role: 'viewer' }) });
+  const res = await request(makeApp({ usersRepo }))
+    .put('/users/3')
+    .set('Authorization', admin())
+    .send({ role: 'viewer', name: 'x'.repeat(121) });
+  assert.equal(res.status, 400);
+  assert.match(res.body.details.name, /120 characters/);
+});
+
+test('POST /users stores the display name given at creation', async () => {
+  let created;
+  const usersRepo = makeUsersRepo({
+    findByEmail: async () => null,
+    create: async (input) => { created = input; return { id: 4, email: input.email, name: input.name, role: input.role }; },
+  });
+  const res = await request(makeApp({ usersRepo }))
+    .post('/users')
+    .set('Authorization', admin())
+    .send({ email: 'new@blueeye.local', name: 'Mette Sørensen', password: 'Str0ng-passw0rd!', role: 'viewer' });
+
+  assert.equal(res.status, 201);
+  assert.equal(created.name, 'Mette Sørensen');
+});
+
 test('PUT /users/:id returns 409 when the new email belongs to another user', async () => {
   const usersRepo = makeUsersRepo({
     findById: async () => ({ id: 3, email: 'old@blueeye.local', role: 'viewer' }),

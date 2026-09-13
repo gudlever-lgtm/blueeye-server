@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS `locations` (
 CREATE TABLE IF NOT EXISTS `users` (
   `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
   `email` VARCHAR(255) NOT NULL,
+  `name` VARCHAR(120) NULL DEFAULT NULL,
   `password_hash` VARCHAR(255) NOT NULL,
   `password_changed_at` DATETIME NULL DEFAULT NULL,
   `role` ENUM('admin', 'operator', 'viewer') NOT NULL DEFAULT 'viewer',

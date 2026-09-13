@@ -93,6 +93,7 @@ function createUsersRouter({
       const passwordHash = await hashPassword(value.password);
       const created = await usersRepo.create({
         email: value.email,
+        name: value.name ?? null,
         passwordHash,
         role: value.role,
       });
@@ -144,6 +145,7 @@ function createUsersRouter({
 
       const created = await usersRepo.create({
         email: value.email,
+        name: value.name ?? null,
         passwordHash,
         role: value.role,
         mustChangePassword: true,
@@ -215,7 +217,8 @@ function createUsersRouter({
     })
   );
 
-  // PUT /users/:id — updates the role and, optionally, the email and password.
+  // PUT /users/:id — updates the role and, optionally, the email, display name
+  // and password.
   router.put(
     '/:id',
     rbacGate,
@@ -269,8 +272,11 @@ function createUsersRouter({
       if (value.password !== undefined) {
         patch.passwordHash = await hashPassword(value.password);
       }
+      // Display name. `null` is an explicit clear, so only `undefined` (absent
+      // from the body) leaves the stored name alone.
+      if (value.name !== undefined) patch.name = value.name;
       const updated = await usersRepo.update(id, patch);
-      if (auditLogger) await auditLogger.record(req, { category: 'user', action: 'user_update', target: existing.email, detail: `role=${patch.role}${patch.email ? `, email=${patch.email}` : ''}${patch.passwordHash ? ', password reset' : ''}` });
+      if (auditLogger) await auditLogger.record(req, { category: 'user', action: 'user_update', target: existing.email, detail: `role=${patch.role}${patch.email ? `, email=${patch.email}` : ''}${patch.name !== undefined ? ', name changed' : ''}${patch.passwordHash ? ', password reset' : ''}` });
       res.json(updated);
     })
   );

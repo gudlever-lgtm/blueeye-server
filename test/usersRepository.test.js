@@ -126,15 +126,36 @@ test('create persists the one-time-password columns', async () => {
   assert.match(ins.sql, /must_change_password/);
   assert.match(ins.sql, /temp_password_expires_at/);
   assert.match(ins.sql, /temp_password_created_by/);
-  // protected=0, must_change=1, expiry + creator threaded through.
-  assert.deepEqual(ins.params, ['u@blueeye.local', 'h', 'operator', 0, 1, expires, 1]);
+  // name (none given) → NULL, protected=0, must_change=1, expiry + creator threaded through.
+  assert.deepEqual(ins.params, ['u@blueeye.local', null, 'h', 'operator', 0, 1, expires, 1]);
 });
 
 test('create defaults to a normal (non-temp) user', async () => {
   const pool = makeInsertPool();
   await createUsersRepository({ pool }).create({ email: 'a@b.c', passwordHash: 'h', role: 'viewer' });
   const ins = pool.queries.find((q) => /^INSERT INTO users/i.test(q.sql));
-  assert.deepEqual(ins.params, ['a@b.c', 'h', 'viewer', 0, 0, null, null]);
+  assert.deepEqual(ins.params, ['a@b.c', null, 'h', 'viewer', 0, 0, null, null]);
+});
+
+test('create stores the display name when one is given', async () => {
+  const pool = makeInsertPool();
+  await createUsersRepository({ pool }).create({ email: 'a@b.c', name: 'Lars Hansen', passwordHash: 'h', role: 'viewer' });
+  const ins = pool.queries.find((q) => /^INSERT INTO users/i.test(q.sql));
+  assert.match(ins.sql, /INSERT INTO users \(email, name,/);
+  assert.equal(ins.params[1], 'Lars Hansen');
+});
+
+test('update writes the name, and an empty name clears it back to NULL', async () => {
+  const pool = makeInsertPool(3, { id: 3 });
+  await createUsersRepository({ pool }).update(3, { role: 'viewer', name: 'Mette' });
+  let upd = pool.queries.find((q) => /^UPDATE users\b/i.test(q.sql));
+  assert.match(upd.sql, /name = \?/);
+  assert.ok(upd.params.includes('Mette'));
+
+  const pool2 = makeInsertPool(3, { id: 3 });
+  await createUsersRepository({ pool: pool2 }).update(3, { name: '' });
+  upd = pool2.queries.find((q) => /^UPDATE users\b/i.test(q.sql));
+  assert.deepEqual(upd.params, [null, 3]);
 });
 
 test('setTempPassword sets the hash, flag, expiry, creator and revokes tokens', async () => {

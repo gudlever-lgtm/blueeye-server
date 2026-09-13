@@ -64,3 +64,67 @@ its feature is licensed.
 > physically reconcile the two tables behind a migration. The taxonomy + unified
 > read above are the foundation; the hash-chain on `audit_log` must be preserved
 > by any such merge.
+
+## The Logs menu, split in two (dashboard)
+
+The two streams above used to arrive in the dashboard as one nav entry called
+**Logs**, which showed only the operational stream — the durable trail lived in
+Reporting → Audit, where nobody looked for it. The menu now says what the split
+already was:
+
+| Nav | View | Reads | Answers |
+| --- | --- | --- | --- |
+| **System Logs** | `views.logs` | `GET /api/logs` — the in-memory ring buffer, merged with dashboard errors | *Is the server healthy?* Cleared on restart. |
+| **User Logs** | `views.userLogs` | `GET /api/audit/users` | *What did people do here?* Durable. **This is the audit log.** |
+
+Both are admin-only (`data-min-role="admin"`).
+
+### User Logs (`src/audit/userActivity.js`)
+
+`GET /api/audit/users` merges the same two stores as `/api/audit/all`, keeps only
+`actor.type === 'user'`, resolves each actor against the live users table, and
+annotates every row. The module is **pure** — canonical entries in, rows out — so
+the view and the CSV export can never disagree about why something is flagged.
+
+**It is deliberately NOT licence-gated**, unlike `/api/audit/all` and
+`/api/audit-log`. User Logs *is* the audit record of who did what, and a security
+record that is incomplete by plan is one nobody can trust: an admin asking "what
+did people do here" must not be handed a list with the failed sign-ins and licence
+actions silently removed. What the `audit_log` feature sells is the tamper-evident
+compliance API over the same rows — `verifyChain()`, the category/actor query
+surface — not an administrator's ability to see their own users' activity. Writes
+were never gated either (`services/complianceLogger.js` records unconditionally),
+so the rows are present on every install; only those two reads check the plan.
+
+A row carries `{ ts, userId, name, email, role, action, actionLabel, outcome,
+target, status, ip, flagLevel, flags[] }`. `name` comes from `users.name`
+(migration 093) as it is **now**, while `email` is the address recorded **at the
+time**: a renamed user reads correctly, a deleted one still shows the address that
+acted and is marked `deletedUser`.
+
+**The flag rules.** Each returns a `{ code, level, message }` or nothing, and the
+row takes the highest level that fired while keeping every reason. There is no
+score and no tunable threshold — a flag means "worth a look", not "someone did
+wrong", and it always says why:
+
+| Code | Level | Fires when |
+| --- | --- | --- |
+| `denied` | critical | outcome `denied`, or HTTP 403 — the role did not allow it |
+| `failed-login-burst` | critical | 3 failed sign-ins for one account within 15 minutes |
+| `server-error` | warn | HTTP 5xx — the action may be half-applied |
+| `rejected` | warn | HTTP 4xx, or outcome `failure` |
+| `destructive` | notice | a successful delete/remove/purge/revoke/reset/wipe |
+| `privileged` | notice | a successful action touching accounts, roles, tokens, licence, SSO/LDAP or secrets |
+| `new-address` | notice | a sign-in from an IP the account has not used elsewhere in the same view — never the first row for that account |
+
+Filters (`?user=`, `?flagged=1`, `?q=`, `?from=`/`?to=`, `?limit=`) apply to the
+assembled rows; `GET /api/audit/users/export.csv` takes the same query and adds
+`flagLevel` + `flagReasons` columns. The response's `sources` says which stores
+the list was drawn from (`{events, log}`) — a statement of fact about this
+install, not a licence signal.
+
+**Names.** `users.name` is display-only: never an identifier, never unique, never
+used to look a user up. Admins set it in Settings → Users (or when inviting).
+Federated (LDAP/OIDC/SAML) users have no name until an admin sets one — the
+directory's own display name is not imported, so those rows fall back to the
+email.

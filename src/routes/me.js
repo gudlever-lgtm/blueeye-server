@@ -14,13 +14,22 @@ function createMeRouter({ usersRepo }) {
   router.use(requireAuth);
 
   // GET /me — the signed-in user's identity plus saved UI preferences.
+  // `name` (migration 093) is display text and lives in the row, not the JWT —
+  // an admin renaming someone must not require them to sign in again — so it is
+  // read alongside the preferences. Null when the account has no name set.
   router.get(
     '/',
     asyncHandler(async (req, res) => {
       const preferences = await usersRepo.getPreferences(req.user.id);
+      let name = null;
+      try {
+        const row = await usersRepo.findById(req.user.id);
+        name = (row && row.name) || null;
+      } catch { /* identity must survive a name lookup that fails */ }
       res.json({
         id: req.user.id,
         email: req.user.email,
+        name,
         role: req.user.role,
         preferences: preferences || {},
       });

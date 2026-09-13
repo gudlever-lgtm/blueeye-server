@@ -736,6 +736,7 @@ const VIEW_LABELS = {
   findings: 'Analysis', reporting: 'Reporting', locations: 'Locations', enrollment: 'Enrollment', settings: 'Settings',
   docs: 'Documentation', investigation: 'Troubleshooting', nics: 'NICs', events: 'Events',
   serviceAssurance: 'Service Assurance', guide: 'Guides',
+  logs: 'System Logs', userLogs: 'User Logs',
 };
 function gotoView(viewKey) {
   closeDrawer();
@@ -11151,8 +11152,8 @@ function mergeLogEntries(serverEntries) {
 views.logs = async () => {
   const root = el('div');
   root.append(el('div', { class: 'section-head' },
-    el('h2', {}, 'Logs'),
-    el('span', { class: 'muted' }, 'Live server diagnostics + your dashboard errors · in-memory (cleared on restart)')));
+    el('h2', {}, t('logs.system.title')),
+    el('span', { class: 'muted' }, t('logs.system.lead'))));
 
   const LEVEL_OPTS = [['', 'All levels'], ['debug', 'Debug+'], ['info', 'Info+'], ['warn', 'Warn+'], ['error', 'Errors only']];
   const SOURCE_OPTS = [['', 'All sources'], ['server', 'Server'], ['client', 'Dashboard']];
@@ -11237,6 +11238,154 @@ views.logs = async () => {
     el('label', { class: 'inline muted' }, 'Search ', qInput),
     refreshBtn, el('span', { class: 'spacer' }), status));
   root.append(host);
+  await load();
+  return root;
+};
+
+// ---- User Logs (admin-only "who did what", with flags) ---------------------
+// The other half of the Logs split, and THE audit log: System Logs answers "is
+// the server healthy?", this answers "what did people do here?" — one row per
+// action a PERSON performed, with the account behind it (id, name, e-mail),
+// when, what, and a flag when the row deserves a second look. It reads both
+// audit stores unconditionally: an audit record that is incomplete by plan is
+// one nobody can trust. The flag rules and their explanations live server-side
+// in src/audit/userActivity.js; this view only renders them, so the dashboard
+// and a CSV export can never disagree about why something was flagged.
+let userLogsFilter = { user: '', flagged: false, q: '' };
+
+// crit = red, warn = amber, neutral = grey. An unflagged row gets NO badge at
+// all: a green "OK" on every line is noise, and the flags only mean anything if
+// they are rare enough to notice.
+const USER_LOG_FLAG_CLASS = { critical: 'crit', warn: 'warn', notice: 'neutral' };
+
+// The badge for one row. `title` carries every reason, so hovering a flag
+// explains it even before the reasons are read below the action.
+function userLogFlagBadge(level, flags) {
+  if (!level || level === 'none') return el('span', { class: 'muted small', title: t('logs.user.flag.none') }, '\u2013');
+  const reasons = (flags || []).map((f) => f.message).join(' ');
+  return el('span', { class: `badge ${USER_LOG_FLAG_CLASS[level] || 'neutral'}`, title: reasons || '' }, t(`logs.user.flag.${level}`));
+}
+
+views.userLogs = async () => {
+  const root = el('div');
+  root.append(el('div', { class: 'section-head' },
+    el('h2', {}, t('logs.user.title')),
+    el('span', { class: 'muted' }, t('logs.user.lead'))));
+
+  const userSel = el('select', {});
+  const qInput = el('input', { type: 'search', placeholder: t('logs.user.filter.searchPlaceholder'), value: userLogsFilter.q });
+  const flaggedBox = el('input', { type: 'checkbox', ...(userLogsFilter.flagged ? { checked: 'checked' } : {}) });
+  const refreshBtn = el('button', { class: 'small ghost' }, `\u27f3 ${t('logs.user.refresh')}`);
+  const exportBtn = el('button', { class: 'small ghost' }, `\u2913 ${t('logs.user.export')}`);
+  const status = el('span', { class: 'muted small' });
+  const summary = el('div', { class: 'muted small' });
+  const notice = el('div', {});
+
+  const tbody = el('tbody');
+  const table = el('table', { class: 'tests-table logs-table' },
+    el('thead', {}, el('tr', {}, ...[
+      t('logs.user.col.when'), t('logs.user.col.userId'), t('logs.user.col.name'),
+      t('logs.user.col.action'), t('logs.user.col.target'), t('logs.user.col.flag'),
+    ].map((h) => el('th', {}, h)))),
+    tbody);
+  const host = el('div', { style: 'overflow-x:auto' }, table);
+
+  // The user dropdown lists the accounts that exist now, so an admin can pick a
+  // colleague even when that person has no rows in the current window.
+  async function fillUsers() {
+    const opts = [el('option', { value: '' }, t('logs.user.filter.allUsers'))];
+    try {
+      const users = await api('/users');
+      for (const u of users) {
+        opts.push(el('option', { value: String(u.id), ...(String(u.id) === userLogsFilter.user ? { selected: 'selected' } : {}) },
+          `${u.name ? `${u.name} · ` : ''}${u.email} (#${u.id})`));
+      }
+    } catch { /* the log itself is what matters — a missing dropdown is not fatal */ }
+    userSel.replaceChildren(...opts);
+    userSel.value = userLogsFilter.user;
+  }
+
+  function query() {
+    const p = new URLSearchParams();
+    if (userLogsFilter.user) p.set('user', userLogsFilter.user);
+    if (userLogsFilter.flagged) p.set('flagged', '1');
+    if (userLogsFilter.q) p.set('q', userLogsFilter.q);
+    p.set('limit', '300');
+    return p.toString();
+  }
+
+  async function load() {
+    userLogsFilter = { user: userSel.value, flagged: flaggedBox.checked, q: qInput.value.trim() };
+    let data;
+    try {
+      data = await api(`/api/audit/users?${query()}`);
+    } catch (err) {
+      tbody.replaceChildren();
+      notice.replaceChildren(el('div', { class: 'empty error' }, t('logs.user.error', { message: errText(err) })));
+      status.textContent = '';
+      summary.replaceChildren();
+      return;
+    }
+    // A load that worked clears whatever the last failure left on screen.
+    notice.replaceChildren();
+    const entries = data.entries || [];
+    const s = data.summary || { total: 0, users: 0, flagged: 0 };
+
+    summary.replaceChildren(
+      el('span', {}, t('logs.user.summary.users', { count: s.users })),
+      el('span', {}, ' · '),
+      s.flagged
+        ? el('span', { class: 'badge warn' }, t('logs.user.summary.flagged', { count: s.flagged }))
+        : el('span', { class: 'badge ok' }, t('logs.user.summary.clean')));
+
+    if (!entries.length) {
+      tbody.replaceChildren(el('tr', {}, el('td', { colspan: '6', class: 'muted' },
+        userLogsFilter.user || userLogsFilter.flagged || userLogsFilter.q ? t('logs.user.emptyFiltered') : t('logs.user.empty'))));
+      status.textContent = t('logs.user.count', { shown: 0, total: data.total ?? 0 });
+      return;
+    }
+
+    tbody.replaceChildren(...entries.map((e) => {
+      const reasons = (e.flags || []).map((f) => f.message).join(' ');
+      const detailBits = [];
+      if (e.method && e.path) detailBits.push(`${e.method} ${e.path}`);
+      if (e.status != null) detailBits.push(`HTTP ${e.status}`);
+      if (e.ip) detailBits.push(e.ip);
+      if (typeof e.detail === 'string' && e.detail) detailBits.push(e.detail);
+      else if (e.detail && typeof e.detail === 'object' && Object.keys(e.detail).length) detailBits.push(JSON.stringify(e.detail));
+      return el('tr', { class: e.flagLevel === 'critical' ? 'log-row-error' : '' },
+        el('td', { class: 'muted small nowrap' }, fmtDate(e.ts)),
+        el('td', { class: 'mono small' }, e.userId == null ? '\u2013' : `#${e.userId}`),
+        el('td', {},
+          el('div', {}, e.name || el('span', { class: 'muted' }, t('logs.user.noName'))),
+          el('div', { class: 'muted small' }, e.email || '\u2013',
+            e.deletedUser ? el('span', { class: 'muted' }, ` \u00b7 ${t('logs.user.deletedUser')}`) : null)),
+        el('td', {},
+          el('div', {}, e.actionLabel || e.action),
+          el('div', { class: 'muted small' }, e.action),
+          detailBits.length ? el('div', { class: 'muted small' }, detailBits.join(' \u00b7 ')) : null),
+        el('td', { class: 'small' }, e.target || '\u2013'),
+        el('td', {},
+          userLogFlagBadge(e.flagLevel, e.flags),
+          reasons ? el('div', { class: 'muted small' }, reasons) : null));
+    }));
+    status.textContent = t('logs.user.count', { shown: entries.length, total: data.total ?? entries.length });
+  }
+
+  userSel.addEventListener('change', load);
+  flaggedBox.addEventListener('change', load);
+  qInput.addEventListener('input', load);
+  refreshBtn.addEventListener('click', load);
+  exportBtn.addEventListener('click', () => nis2Download(`/api/audit/users/export.csv?${query()}`, 'user-logs.csv'));
+
+  root.append(el('div', { class: 'history-controls' },
+    el('label', { class: 'inline muted' }, `${t('logs.user.filter.user')} `, userSel),
+    el('label', { class: 'inline muted' }, flaggedBox, ` ${t('logs.user.filter.flaggedOnly')}`),
+    el('label', { class: 'inline muted' }, `${t('logs.user.filter.search')} `, qInput),
+    refreshBtn, exportBtn, el('span', { class: 'spacer' }), summary, status));
+  root.append(notice);
+  root.append(host);
+  await fillUsers();
   await load();
   return root;
 };
@@ -14059,16 +14208,20 @@ views.users = async () => {
     headBtns.unshift(el('button', { class: 'small', onclick: () => createLocalUser() }, '+ Invite user (one-time password)'));
   }
   root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Users'), ...headBtns));
-  root.append(el('p', { class: 'muted' }, 'Roles: viewer (read), operator (create/edit), admin (all). Only admins see this tab.'));
+  root.append(el('p', { class: 'muted' }, ['Roles: viewer (read), operator (create/edit), admin (all). Only admins see this tab. A name is optional and display-only — it is what ', viewLink('userLogs', 'User Logs'), ' shows next to each action instead of an email address.']));
   if (!avail.available && avail.ssoActive) {
     root.append(el('p', { class: 'muted' }, 'Local user invitations are disabled while SSO/LDAP is active — manage users in your directory.'));
   } else if (!avail.available && !avail.mailerReady) {
     root.append(el('p', { class: 'muted' }, ['One-time-password invitations need SMTP configured in ', settingsLink('alerting', 'Settings → Alerting'), '.']));
   }
   root.append(el('table', {},
-    el('thead', {}, el('tr', {}, ...['ID', 'Email', 'Role', 'Status', 'Created', ''].map((h) => el('th', {}, h)))),
+    el('thead', {}, el('tr', {}, ...['ID', 'Name', 'Email', 'Role', 'Status', 'Created', ''].map((h) => el('th', {}, h)))),
     el('tbody', {}, ...users.map((u) => el('tr', {},
       el('td', {}, String(u.id)),
+      // The name is display only — the email stays the identity. It is what
+      // User Logs shows next to an action, so an unnamed account is worth
+      // pointing out here rather than leaving blank.
+      el('td', {}, u.name || el('span', { class: 'muted' }, '—')),
       el('td', {}, u.email),
       el('td', {}, el('span', { class: 'badge' }, u.role),
         u.protected ? el('span', { class: 'badge', title: 'Superadmin — cannot be changed/deleted, password only', style: 'margin-left:6px' }, 'superadmin') : null),
@@ -14125,10 +14278,12 @@ function editUser(u) {
     // Update: email, role + optional password reset.
     openModal(`Edit ${u.email}`, [
       { name: 'email', label: 'Email', type: 'email', value: u.email },
+      { name: 'name', label: 'Name (optional — shown in User Logs)', type: 'text', optional: true, value: u.name || '' },
       { name: 'role', label: 'Role', type: 'select', value: u.role, options: ROLE_OPTIONS },
       { name: 'password', label: 'New password (optional — leave blank to keep)', type: 'password-strength', optional: true, value: '' },
     ], async (v) => {
-      const body = { email: v.email, role: v.role };
+      // '' is sent as null on purpose: clearing the field clears the name.
+      const body = { email: v.email, role: v.role, name: v.name ? v.name : null };
       if (v.password) {
         if (!evaluatePassword(v.password).meetsPolicy) throw new Error('Password does not meet the requirements below');
         body.password = v.password;
@@ -14139,11 +14294,12 @@ function editUser(u) {
   } else {
     openModal('New user', [
       { name: 'email', label: 'Email', type: 'email', value: '' },
+      { name: 'name', label: 'Name (optional — shown in User Logs)', type: 'text', optional: true, value: '' },
       { name: 'password', label: 'Password', type: 'password-strength', value: '' },
       { name: 'role', label: 'Role', type: 'select', value: 'viewer', options: ROLE_OPTIONS },
     ], async (v) => {
       if (!evaluatePassword(v.password).meetsPolicy) throw new Error('Password does not meet the requirements below');
-      await api('/users', { method: 'POST', body: { email: v.email, password: v.password, role: v.role } });
+      await api('/users', { method: 'POST', body: { email: v.email, name: v.name || undefined, password: v.password, role: v.role } });
       closeModal(); toast('User created'); render();
     });
   }
@@ -15209,17 +15365,41 @@ PAGE_INFO.reporting = {
 };
 
 PAGE_INFO.logs = {
-  hero: 'Logs — the live server diagnostic stream (agent connects, WebSocket/DB errors, HTTP failures) merged with the dashboard errors you were shown. In-memory: cleared when the server restarts.',
-  title: 'Logs — operational diagnostics',
+  hero: 'System Logs — the live server diagnostic stream (agent connects, WebSocket/DB errors, HTTP failures) merged with the dashboard errors you were shown. In-memory: cleared when the server restarts.',
+  title: 'System Logs — operational diagnostics',
   body: () => [
     el('p', {}, 'This is the operational/diagnostic stream — the same lines the server writes to its console (', el('code', {}, 'docker compose logs'), ') — kept in an in-memory ring buffer (the most recent ~1000 records) so you can read them here without shell access. It is merged with client-side failures: any error a dashboard action showed you (e.g. “Agent not connected”) is captured here too, so a toast that flashed past can still be found.'),
-    el('p', {}, el('strong', {}, 'This is not the audit trail. '), 'For the durable “who did what” security record (logins, create/update/delete), see ', viewLink('reporting', 'Reporting → Audit'), '. Logs here are ephemeral and reset on restart.'),
+    el('p', {}, el('strong', {}, 'This is the system half of the Logs menu. '), 'What people did — logins, create/update/delete, and anything that looks wrong — is the other half: ', viewLink('userLogs', 'User Logs'), '. That record is durable; this one is ephemeral and resets on restart.'),
     el('h4', {}, 'Filters'),
     el('ul', {},
       el('li', {}, el('strong', {}, 'Level '), '— show a minimum severity (Errors only, Warn+, …).'),
       el('li', {}, el('strong', {}, 'Source '), '— Server (the diagnostic stream) or Dashboard (browser-side action failures).'),
       el('li', {}, el('strong', {}, 'Search '), '— free-text match over the message and its structured detail.')),
     el('p', { class: 'muted' }, 'Admin-only: operational logs can contain internal detail (hostnames, error messages, request ids).'),
+  ],
+};
+
+PAGE_INFO.userLogs = {
+  hero: 'User Logs — the audit log: every action a person performed on this server, which account, when, and a flag on anything that looks wrong.',
+  title: 'User Logs — the audit log: who did what',
+  body: () => [
+    el('p', {}, 'The durable record of human activity on this server \u2014 this is the audit log. One row per action, with the account behind it (', el('strong', {}, 'user id'), ', name and e-mail), the ', el('strong', {}, 'time'), ' it happened, and the ', el('strong', {}, 'action'), ' in plain language with the raw action key and the request underneath it.'),
+    el('p', {}, el('strong', {}, 'This is not the system log. '), 'The server\u2019s own diagnostic stream lives in ', viewLink('logs', 'System Logs'), ' and is cleared on restart. This view is drawn from the audit stores and survives restarts.'),
+    el('h4', {}, 'Where the rows come from'),
+    el('p', {}, 'Two stores, merged: the automatic capture of every state-changing request (login, and each create/update/delete), and the hash-chained trail that also records sign-ins, licence actions and API-token management. Both are read on every plan \u2014 an audit list that drops rows depending on what you bought is one nobody can trust. What the Professional licence adds is the compliance API on top of the same rows (chain verification and the category/actor query surface), not permission to see your own users\u2019 activity.'),
+    el('h4', {}, 'The flags'),
+    el('p', {}, 'A flag means \u201cworth a look\u201d, not \u201csomeone did wrong\u201d. Each one states its own reason on the row, so nothing is marked for a rule you cannot read:'),
+    el('ul', {},
+      el('li', {}, el('span', { class: 'badge crit' }, 'Needs attention'), ' \u2014 the action was refused because the role did not allow it, or the account failed to sign in three times inside fifteen minutes.'),
+      el('li', {}, el('span', { class: 'badge warn' }, 'Did not work'), ' \u2014 the server rejected it (4xx) or failed while doing it (5xx). A 5xx is the one to check twice: the action may be half-applied.'),
+      el('li', {}, el('span', { class: 'badge neutral' }, 'Worth a look'), ' \u2014 it worked, and it was either irreversible (a delete, a reset, a revoke) or it changed access and trust (accounts, roles, tokens, licence, sign-in configuration). Also a sign-in from an address the account has not used elsewhere in the list.')),
+    el('h4', {}, 'Filters and export'),
+    el('ul', {},
+      el('li', {}, el('strong', {}, 'User '), '\u2014 one account. The dropdown lists every account that exists now, so you can pick someone with no rows in view.'),
+      el('li', {}, el('strong', {}, 'Flagged only '), '\u2014 drop everything that ran cleanly.'),
+      el('li', {}, el('strong', {}, 'Search '), '\u2014 free text over the name, e-mail, action, target and address.'),
+      el('li', {}, el('strong', {}, 'CSV '), '\u2014 the rows as filtered, flag level and reasons included, for a review that has to leave the product.')),
+    el('p', { class: 'muted' }, 'Admin-only. Names come from the account as it is now, while the e-mail is the one recorded at the time \u2014 so a renamed user reads correctly and a deleted one still shows the address that acted, marked \u201caccount deleted since\u201d. Set names in Settings \u2192 Users.'),
   ],
 };
 

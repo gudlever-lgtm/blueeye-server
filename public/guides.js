@@ -306,6 +306,275 @@
       return el('div', { class: 'guide-actions' }, kids);
     }
 
+
+    // ------------------------------------------------------------------ doing
+    // A step can DO the thing it describes. "Click here →" rather than "go to
+    // Applications, press New, fill in two fields and come back".
+    //
+    // The rules this follows, because a guide that writes to a production system
+    // has to be more careful than one that only talks:
+    //
+    //   * it writes ONLY when the reader presses the button, and the button says
+    //     exactly what it will create;
+    //   * it calls the same endpoint the real screen calls, so the same
+    //     validation, the same RBAC and the same audit entry apply — there is no
+    //     second, laxer way in through the guide;
+    //   * a 400 comes back on the field that caused it. The server's message is
+    //     shown verbatim rather than replaced by a friendlier guess;
+    //   * a reader whose role cannot do it is told so instead of being given a
+    //     button that answers 403;
+    //   * on success the live state is re-read, so the step's own status line
+    //     stops saying "not yet" while the thing sits there created.
+    function canDo(role) {
+      if (role === 'admin') return isAdmin();
+      return isOperator();
+    }
+    function actionField(spec) {
+      var input;
+      if (spec.type === 'select') {
+        input = el('select', { class: 'guide-action-input', name: spec.name },
+          (spec.options || []).map(function (opt) {
+            return el('option', { value: String(opt.value) }, opt.label);
+          }));
+      } else {
+        input = el('input', {
+          class: 'guide-action-input',
+          type: spec.type === 'url' ? 'url' : 'text',
+          name: spec.name,
+          placeholder: spec.placeholder || '',
+        });
+      }
+      var error = el('p', { class: 'guide-action-error', hidden: 'hidden' });
+      var row = el('label', { class: 'guide-action-field' },
+        el('span', { class: 'guide-action-label' }, spec.label),
+        input, error);
+      return { spec: spec, node: row, input: input, error: error };
+    }
+
+    // opts: { id, role, title, help, fields, submit(values) → Promise, success(result) → string }
+    function actionCard(opts) {
+      if (!canDo(opts.role)) {
+        return el('div', { class: 'guide-action guide-action-blocked' },
+          el('h4', { class: 'guide-h4' }, opts.title),
+          el('p', { class: 'guide-p' }, opts.help),
+          unavailable(t('guide.do.cannot'), opts.role === 'admin' ? t('guide.needsAdmin') : t('guide.needsOperator')));
+      }
+      var fields = (opts.fields || []).map(actionField);
+      var result = el('p', { class: 'guide-action-result', hidden: 'hidden' });
+      var failure = el('p', { class: 'guide-action-failure', hidden: 'hidden' });
+      var button = el('button', { class: 'primary guide-action-go', type: 'button' }, opts.button || t('guide.do.go'));
+
+      function clearErrors() {
+        fields.forEach(function (f) { f.error.textContent = ''; f.error.hidden = true; });
+        failure.textContent = ''; failure.hidden = true;
+      }
+      // A 400 from any of these routes is { error, details: { field: why } }.
+      // Put each message on its own field; anything unattributed goes on the
+      // card, because a validation error nobody can see is a button that
+      // silently does nothing.
+      function showErrors(e) {
+        var details = e && e.data && e.data.details;
+        var shown = false;
+        if (details && typeof details === 'object') {
+          fields.forEach(function (f) {
+            var msg = details[f.spec.name];
+            if (msg) { f.error.textContent = String(msg); f.error.hidden = false; shown = true; }
+          });
+          var rest = Object.keys(details).filter(function (k) {
+            return !fields.some(function (f) { return f.spec.name === k; });
+          });
+          if (rest.length) {
+            failure.textContent = rest.map(function (k) { return details[k]; }).join(' · ');
+            failure.hidden = false; shown = true;
+          }
+        }
+        if (!shown) { failure.textContent = errText(e); failure.hidden = false; }
+      }
+
+      button.addEventListener('click', function () {
+        clearErrors();
+        result.hidden = true;
+        var values = {};
+        fields.forEach(function (f) { values[f.spec.name] = f.input.value; });
+        button.disabled = true;
+        Promise.resolve()
+          .then(function () { return opts.submit(values); })
+          .then(function (created) {
+            result.textContent = opts.success ? opts.success(created) : t('guide.do.done');
+            result.hidden = false;
+            fields.forEach(function (f) { if (f.spec.type !== 'select') f.input.value = ''; });
+            // The status line above this card is now out of date.
+            return load();
+          })
+          .catch(showErrors)
+          .then(function () { button.disabled = false; });
+      });
+
+      return el('div', { class: 'guide-action' },
+        el('h4', { class: 'guide-h4' }, opts.title),
+        el('p', { class: 'guide-p' }, opts.help),
+        el('div', { class: 'guide-action-fields' }, fields.map(function (f) { return f.node; })),
+        el('div', { class: 'guide-action-foot' }, button, result, failure));
+    }
+
+    // The applications a Service Assurance action can target. Empty until the
+    // reader has created one, which is why the card says so rather than
+    // rendering a picker with nothing in it.
+    function applicationOptions() {
+      var apps = Array.isArray(data && data.apps) ? data.apps : [];
+      return apps.map(function (a) { return { value: a.id, label: a.name }; });
+    }
+    function agentOptions() {
+      var agents = agentList() || [];
+      return agents.map(function (a) {
+        return { value: a.id, label: a.display_name || a.hostname || ('#' + a.id) };
+      });
+    }
+
+    // ---- the five actions ---------------------------------------------------
+    function createSiteAction() {
+      return actionCard({
+        role: 'operator',
+        title: t('guide.do.site.title'),
+        help: t('guide.do.site.help'),
+        button: t('guide.do.site.go'),
+        fields: [
+          { name: 'name', label: t('guide.do.site.name'), placeholder: t('guide.do.site.namePh') },
+          { name: 'address', label: t('guide.do.site.address'), placeholder: t('guide.do.site.addressPh') },
+        ],
+        submit: function (v) {
+          return api('/locations', {
+            method: 'POST',
+            body: { name: v.name, address: v.address ? v.address : null },
+          });
+        },
+        success: function (created) { return t('guide.do.site.ok', { name: (created && created.name) || '' }); },
+      });
+    }
+
+    function enrollmentCodeAction() {
+      return actionCard({
+        role: 'operator',
+        title: t('guide.do.code.title'),
+        help: t('guide.do.code.help'),
+        button: t('guide.do.code.go'),
+        fields: [],
+        submit: function () { return api('/enrollment-codes', { method: 'POST', body: {} }); },
+        success: function (created) { return t('guide.do.code.ok', { code: (created && created.code) || '' }); },
+      });
+    }
+
+    function runProbeAction() {
+      var agents = agentOptions();
+      if (!agents.length) {
+        return el('div', { class: 'guide-action guide-action-blocked' },
+          el('h4', { class: 'guide-h4' }, t('guide.do.probe.title')),
+          el('p', { class: 'guide-p' }, t('guide.do.probe.noAgents')));
+      }
+      return actionCard({
+        role: 'operator',
+        title: t('guide.do.probe.title'),
+        help: t('guide.do.probe.help'),
+        button: t('guide.do.probe.go'),
+        fields: [
+          { name: 'agent', label: t('guide.do.probe.agent'), type: 'select', options: agents },
+          { name: 'host', label: t('guide.do.probe.host'), placeholder: '1.1.1.1' },
+        ],
+        submit: function (v) {
+          return api('/agents/' + encodeURIComponent(v.agent) + '/probe', {
+            method: 'POST', body: { type: 'ping', host: v.host },
+          });
+        },
+        success: function () { return t('guide.do.probe.ok'); },
+      });
+    }
+
+    function createApplicationAction() {
+      return actionCard({
+        role: 'admin',
+        title: t('guide.do.app.title'),
+        help: t('guide.do.app.help'),
+        button: t('guide.do.app.go'),
+        fields: [
+          { name: 'name', label: t('guide.do.app.name'), placeholder: t('guide.do.app.namePh') },
+          { name: 'base_url', label: t('guide.do.app.url'), type: 'url', placeholder: 'https://app.example.dk' },
+        ],
+        submit: function (v) {
+          return api(API + '/applications', { method: 'POST', body: { name: v.name, base_url: v.base_url } });
+        },
+        success: function (created) { return t('guide.do.app.ok', { name: (created && created.name) || '' }); },
+      });
+    }
+
+    // The first test somebody should have: open the front page and check the
+    // title. Two steps, which is a real test rather than a placeholder — and it
+    // is built through the same POST the designer uses, so the same DSL
+    // validation applies. Everything past this is the designer's job; a guide
+    // that tried to be a step editor would be a worse step editor.
+    function createTestAction() {
+      var apps = applicationOptions();
+      if (!apps.length) {
+        return el('div', { class: 'guide-action guide-action-blocked' },
+          el('h4', { class: 'guide-h4' }, t('guide.do.test.title')),
+          el('p', { class: 'guide-p' }, t('guide.do.test.noApps')));
+      }
+      return actionCard({
+        role: 'operator',
+        title: t('guide.do.test.title'),
+        help: t('guide.do.test.help'),
+        button: t('guide.do.test.go'),
+        fields: [
+          { name: 'application', label: t('guide.do.test.app'), type: 'select', options: apps },
+          { name: 'name', label: t('guide.do.test.name'), placeholder: t('guide.do.test.namePh') },
+          { name: 'path', label: t('guide.do.test.path'), placeholder: '/' },
+          { name: 'title', label: t('guide.do.test.title_contains'), placeholder: t('guide.do.test.titlePh') },
+        ],
+        submit: function (v) {
+          var steps = [{ type: 'open', url: v.path ? v.path : '/' }];
+          // The assertion is optional: opening the page IS a test (it fails on a
+          // 5xx, a TLS error or a timeout), and a reader who has not decided what
+          // the title should say must not be forced to invent one.
+          if (v.title) steps.push({ type: 'assert_title_contains', value: v.title });
+          return api(API + '/tests', {
+            method: 'POST',
+            body: {
+              application_id: Number(v.application),
+              name: v.name,
+              definition: { version: 1, name: v.name, steps: steps },
+            },
+          });
+        },
+        success: function (created) { return t('guide.do.test.ok', { name: (created && created.name) || '' }); },
+      });
+    }
+
+    function allowHostAction() {
+      var apps = applicationOptions();
+      if (!apps.length) {
+        return el('div', { class: 'guide-action guide-action-blocked' },
+          el('h4', { class: 'guide-h4' }, t('guide.do.allow.title')),
+          el('p', { class: 'guide-p' }, t('guide.do.allow.noApps')));
+      }
+      return actionCard({
+        role: 'admin',
+        title: t('guide.do.allow.title'),
+        help: t('guide.do.allow.help'),
+        button: t('guide.do.allow.go'),
+        fields: [
+          { name: 'application', label: t('guide.do.allow.app'), type: 'select', options: apps },
+          { name: 'value', label: t('guide.do.allow.value'), placeholder: 'api.example.dk' },
+        ],
+        submit: function (v) {
+          return api(API + '/applications/' + encodeURIComponent(v.application) + '/allowed-hosts', {
+            method: 'POST', body: { value: v.value },
+          });
+        },
+        success: function (created) {
+          return t('guide.do.allow.ok', { value: (created && created.value) || '' });
+        },
+      });
+    }
+
     // ------------------------------------------------------------ live checks
     // Each returns a node or null. They read `data`, which may be half-empty.
     function workerStatus() {
@@ -508,6 +777,7 @@
               [t('guide.mon.sites.r3.f'), t('guide.mon.sites.r3.v'), t('guide.mon.sites.r3.w')],
             ]),
             locationsStatus(),
+            createSiteAction(),
             note(t('guide.mon.sites.note')),
             actions(viewButton('locations', t('guide.view.locations')), viewButton('map', t('guide.view.map'))),
           ];
@@ -574,6 +844,7 @@
               [t('guide.fleet.enroll.r3.f'), t('guide.fleet.enroll.r3.v'), t('guide.fleet.enroll.r3.w')],
             ]),
             watch(t('guide.fleet.enroll.watch')),
+            enrollmentCodeAction(),
             actions(viewButton('enrollment', t('guide.view.enrollment')),
               settingsTabButton('agentkey', t('guide.fleet.enroll.keyBtn'))),
           ];
@@ -698,6 +969,7 @@
               [t('guide.diag.probes.s5.f'), mono('curl'), t('guide.diag.probes.s5.w')],
               [t('guide.diag.probes.s6.f'), mono('pageload'), t('guide.diag.probes.s6.w')],
             ]),
+            runProbeAction(),
             note(t('guide.diag.probes.note')),
             actions(viewButton('probes', t('guide.view.probes'))),
           ];
@@ -939,6 +1211,7 @@
               [t('guide.app.r4.f'), t('guide.app.r4.v'), t('guide.app.r4.w')],
             ]),
             countStatus(data && data.apps, 'guide.app.count', 'guide.app.none'),
+            createApplicationAction(),
             note(t('guide.app.note')),
             actions(tabButton('applications')),
           ];
@@ -969,6 +1242,7 @@
               [t('guide.allow.deny.broadcast.f'), t('guide.allow.deny.broadcast')],
             ]),
             allowlistStatus(),
+            allowHostAction(),
             note(t('guide.allow.note')),
             actions(tabButton('applications')),
           ];
@@ -1020,6 +1294,7 @@
               browser === null ? null : [mono('runner.browser'), String(browser), t('guide.tests.r4.w')],
             ]),
             countStatus(data && data.tests, 'guide.tests.count', 'guide.tests.none'),
+            createTestAction(),
             note(t('guide.tests.note')),
             actions(tabButton('tests')),
           ];

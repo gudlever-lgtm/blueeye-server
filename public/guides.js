@@ -59,6 +59,9 @@
     ['assurance', 'certificateWarnDays', 'guide.values.row.certWarn'],
     ['assurance', 'certificateCriticalDays', 'guide.values.row.certCrit'],
     ['assurance', 'incidentRetentionDays', 'guide.values.row.incidentRetention'],
+    ['monitors', 'minIntervalSec', 'guide.values.row.minInterval'],
+    ['monitors', 'mailRecipientDomains', 'guide.values.row.mailDomains'],
+    ['monitors', 'resultRetentionDays', 'guide.values.row.monitorRetention'],
     ['runner', 'concurrency', 'guide.values.row.concurrency'],
     ['runner', 'browser', 'guide.values.row.browser'],
     ['runner', 'accessibility', 'guide.values.row.accessibility'],
@@ -258,6 +261,7 @@
       if (tab === 'tests') return t('sa.tab.tests');
       if (tab === 'runs') return t('sa.tab.runs');
       if (tab === 'schedules') return t('sa.tab.schedules');
+      if (tab === 'monitors') return t('sa.tab.monitors');
       return t('sa.tab.health');
     }
     function tabButton(tab) {
@@ -503,6 +507,44 @@
           return api(API + '/applications', { method: 'POST', body: { name: v.name, base_url: v.base_url } });
         },
         success: function (created) { return t('guide.do.app.ok', { name: (created && created.name) || '' }); },
+      });
+    }
+
+    // The first monitor somebody should have: does our mail actually arrive.
+    //
+    // Deliberately the send-only depth — it needs one server and one account,
+    // and it is the half that works without a second mailbox. The round trip is
+    // a checkbox on the monitor afterwards, and the step says so.
+    function createMonitorAction() {
+      return actionCard({
+        role: 'operator',
+        title: t('guide.do.monitor.title'),
+        help: t('guide.do.monitor.help'),
+        button: t('guide.do.monitor.go'),
+        fields: [
+          { name: 'name', label: t('guide.do.monitor.name'), placeholder: t('guide.do.monitor.namePh') },
+          { name: 'smtp_host', label: t('guide.do.monitor.host'), placeholder: 'smtp.example.dk' },
+          { name: 'from_address', label: t('guide.do.monitor.from'), placeholder: 'assurance@example.dk' },
+          { name: 'to_address', label: t('guide.do.monitor.to'), placeholder: 'mailprobe@example.dk' },
+        ],
+        // The field names are the CONFIG's, so a 400 from the server lands on
+        // the box that caused it: the card matches `details` by field name, and
+        // the server answers `config.smtp_host`.
+        submit: function (v) {
+          return api(API + '/monitors', {
+            method: 'POST',
+            body: {
+              name: v.name,
+              type: 'mail',
+              config: {
+                smtp_host: v.smtp_host,
+                from_address: v.from_address,
+                to_address: v.to_address,
+              },
+            },
+          });
+        },
+        success: function (created) { return t('guide.do.monitor.ok', { name: (created && created.name) || '' }); },
       });
     }
 
@@ -1419,6 +1461,41 @@
         },
       },
       {
+        id: 'monitors',
+        title: function () { return t('guide.step.monitors'); },
+        body: function () {
+          var types = Array.isArray(data && data.monitorTypes) ? data.monitorTypes : [];
+          var floor = quote('monitors', 'minIntervalSec');
+          var domains = setting('monitors', 'mailRecipientDomains');
+          return [
+            lead(t('guide.monitors.lead')),
+            para(t('guide.monitors.what')),
+            todo([t('guide.monitors.do1'), t('guide.monitors.do2'), t('guide.monitors.do3'), t('guide.monitors.do4')]),
+            // The catalogue is read from the server rather than listed here, so
+            // a check type that ships later appears in the guide without an
+            // edit — and the guide can never name one the server does not have.
+            types.length
+              ? table([t('guide.monitors.col.check'), t('guide.monitors.col.measures')],
+                types.map(function (x) { return [x.label, x.measures ? x.measures.label : '—']; }))
+              : null,
+            values([
+              [t('guide.monitors.r1.f'), t('guide.monitors.r1.v'), t('guide.monitors.r1.w')],
+              [t('guide.monitors.r2.f'), t('guide.monitors.r2.v'), t('guide.monitors.r2.w')],
+              floor === null ? null : [mono('monitors.minIntervalSec'), t('guide.unit.seconds', { n: String(floor) }), t('guide.monitors.r3.w')],
+            ]),
+            countStatus(data && data.monitors, 'guide.monitors.count', 'guide.monitors.none'),
+            // Empty means "any address", which is worth saying out loud on a
+            // screen that sends real mail.
+            domains.value === undefined ? null : status(domains.value ? 'done' : 'warn',
+              domains.value ? t('guide.monitors.domainsSet', { domains: String(domains.value) }) : t('guide.monitors.domainsOpen')),
+            createMonitorAction(),
+            watch(t('guide.monitors.watch')),
+            note(t('guide.monitors.note')),
+            actions(tabButton('monitors'), docsButton('assurance-monitors'), settingsButton()),
+          ];
+        },
+      },
+      {
         id: 'alerts',
         title: function () { return t('guide.step.alerts'); },
         body: function () {
@@ -1707,10 +1784,13 @@
         probe(API + '/settings'),
         probe(API + '/assurance/summary'),
         probe(API + '/tests/step-types'),
+        probe(API + '/monitors'),
+        probe(API + '/monitors/types'),
       ]).then(function (res) {
         data = {
           worker: res[0], apps: res[1], tests: res[2], journeys: res[3], schedules: res[4],
           runs: res[5], settings: res[6], summary: res[7], stepTypes: res[8], appDetails: null,
+          monitors: res[9], monitorTypes: res[10] && res[10].types,
         };
         // The allowlist check needs the per-application detail, and only for a
         // handful — a fleet of fifty applications is not worth fifty calls to

@@ -26,7 +26,9 @@ const path = require('path');
 const { JSDOM, VirtualConsole } = require('jsdom');
 
 const { SCORE_WEIGHTS } = require('../src/serviceTests/health/serviceHealth');
-const { NUMBER_BOUNDS, BOOLEAN_FIELDS, ENUM_FIELDS } = require('../src/serviceTests/settings/defaults');
+const {
+  NUMBER_BOUNDS, BOOLEAN_FIELDS, ENUM_FIELDS, allDefaults, defaultsFor,
+} = require('../src/serviceTests/settings/defaults');
 const I18n = require('../public/i18n');
 
 const PUBLIC = path.join(__dirname, '..', 'public');
@@ -44,19 +46,11 @@ const BASE_ROUTES = {
 
 // Effective settings + defaults, the shape GET /settings returns.
 function settingsPayload(overrides = {}) {
-  const defaults = {};
-  for (const [section, fields] of Object.entries(NUMBER_BOUNDS)) {
-    defaults[section] = {};
-    for (const [field, bounds] of Object.entries(fields)) defaults[section][field] = bounds[0];
-  }
-  for (const [section, fields] of Object.entries(BOOLEAN_FIELDS)) {
-    defaults[section] = { ...(defaults[section] || {}) };
-    for (const [field, value] of Object.entries(fields)) defaults[section][field] = value;
-  }
-  for (const [section, fields] of Object.entries(ENUM_FIELDS)) {
-    defaults[section] = { ...(defaults[section] || {}) };
-    for (const [field, spec] of Object.entries(fields)) defaults[section][field] = spec[0];
-  }
+  // The module's own defaults, rather than three of its four tables rebuilt
+  // here: a settings section can also carry a text field (the mail-probe
+  // recipient allowlist is one), and a fixture that silently lacks it makes the
+  // guide's "Yours" column read as unset for a setting the server does send.
+  const defaults = allDefaults();
   const settings = JSON.parse(JSON.stringify(defaults));
   for (const [section, fields] of Object.entries(overrides)) {
     settings[section] = { ...(settings[section] || {}), ...fields };
@@ -82,11 +76,17 @@ function fullRoutes(over = {}) {
   };
 }
 
-function recordingFetch(routes, calls) {
+function recordingFetch(routes, calls, bodies = {}) {
   return async (url, opts = {}) => {
     const p = String(url).split('?')[0];
     const method = (opts.method || 'GET').toUpperCase();
     calls.push(`${method} ${p}`);
+    // What was SENT, not only that something was: an action card that posts the
+    // wrong shape still records the call, and "it called the endpoint" is not
+    // the thing worth asserting about a card that writes.
+    if (opts.body !== undefined && opts.body !== null) {
+      try { bodies[`${method} ${p}`] = JSON.parse(String(opts.body)); } catch { bodies[`${method} ${p}`] = String(opts.body); }
+    }
     const hit = routes[`${method} ${p}`];
     const status = hit === undefined ? 404 : (hit.status || 200);
     const payload = hit === undefined
@@ -111,7 +111,8 @@ async function boot(t, routes = {}, role = 'admin') {
   const dom = new JSDOM(html, { url: 'http://server.test/', runScripts: 'outside-only', pretendToBeVisual: true, virtualConsole });
   const { window } = dom;
   const calls = [];
-  window.fetch = recordingFetch({ ...BASE_ROUTES, ...routes }, calls);
+  const bodies = {};
+  window.fetch = recordingFetch({ ...BASE_ROUTES, ...routes }, calls, bodies);
   window.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} });
   window.scrollTo = () => {};
   window.confirm = () => true;
@@ -125,7 +126,7 @@ async function boot(t, routes = {}, role = 'admin') {
     if (s.startsWith('/')) window.eval(fs.readFileSync(path.join(PUBLIC, s.split('?')[0]), 'utf8'));
   }
   await tick();
-  return { window, doc: window.document, errors, calls };
+  return { window, doc: window.document, errors, calls, bodies };
 }
 
 const click = async (node, ms) => { node.click(); await tick(ms); };
@@ -323,9 +324,9 @@ test('the guide module quotes the code’s own numbers', async (t) => {
   // Every settings row names a real section and field, so the "Yours" column can
   // never be silently empty.
   for (const [section, field, why] of mod.VALUE_ROWS) {
-    const known = (NUMBER_BOUNDS[section] && NUMBER_BOUNDS[section][field] !== undefined)
-      || (BOOLEAN_FIELDS[section] && BOOLEAN_FIELDS[section][field] !== undefined)
-      || (ENUM_FIELDS[section] && ENUM_FIELDS[section][field] !== undefined);
+    // Read through defaultsFor, which is the union of every field kind the
+    // settings catalogue has — numbers, enums, booleans AND text.
+    const known = Object.prototype.hasOwnProperty.call(defaultsFor(section), field);
     assert.ok(known, `${section}.${field} is in the guide and not in the settings catalogue`);
     for (const locale of I18n.LOCALES) assert.ok(I18n.has(why, locale), `${why} missing from the ${locale} catalogue`);
   }
@@ -685,6 +686,31 @@ test('Service Assurance: the application and the allowlist entry are created fro
   await click(allow.button, 150);
   assert.ok(calls.includes(`POST ${SA}/applications/1/allowed-hosts`), `no allowlist write: ${calls.join(' | ')}`);
   assert.match(allow.result.textContent, /api\.example\.dk/);
+});
+
+test('Service Assurance: the mail check is created from the guide, as an operator', async (t) => {
+  const { doc, calls, bodies } = await boot(t, withAction({
+    [`POST ${SA}/monitors`]: { status: 201, body: { id: 3, name: 'Kundemail', type: 'mail' } },
+  }), 'operator');
+  // The monitors step sits after incidents: index 11 of the assurance track.
+  const card = await openAction(doc, 'assurance', 11);
+  assert.ok(card.button, 'an operator was not offered the monitor card');
+  card.inputs[0].value = 'Kundemail';
+  card.inputs[1].value = 'smtp.example.dk';
+  card.inputs[2].value = 'assurance@example.dk';
+  card.inputs[3].value = 'mailprobe@example.dk';
+  await click(card.button, 150);
+
+  assert.ok(calls.includes(`POST ${SA}/monitors`), `no monitor write: ${calls.join(' | ')}`);
+  // The guide creates the send-only depth through the same endpoint the screen
+  // uses, with the config shape the server validates.
+  const sent = bodies[`POST ${SA}/monitors`];
+  assert.ok(sent, 'the card posted nothing');
+  assert.equal(sent.type, 'mail');
+  assert.equal(sent.config.smtp_host, 'smtp.example.dk');
+  assert.equal(sent.config.from_address, 'assurance@example.dk');
+  assert.equal(sent.config.to_address, 'mailprobe@example.dk');
+  assert.match(card.result.textContent, /Kundemail/);
 });
 
 test('an action never offers a button the reader’s role cannot press', async (t) => {

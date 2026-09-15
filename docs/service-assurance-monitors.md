@@ -281,6 +281,15 @@ so the two halves of the reaction layer are tuned in one place.
 | UI | `public/serviceAssurance.js` (`views.monitors`), nav tab **Monitors** |
 | Schema | `migrations/094_create_service_monitors.sql` |
 
+## Where an operator is told about this
+
+* **Service Assurance → Monitors** — the screen itself.
+* **The Service Assurance guide** (Guides → Service Assurance), step *Monitors*:
+  what the checks are, the two mail depths, the recipient allowlist, and an
+  action card that creates the mail check through this same API.
+* **Documentation → "Check that mail arrives (and the other silent failures)"** —
+  the in-app handbook article, viewer+.
+
 ## The suites that keep it honest
 
 Beyond the per-check specs:

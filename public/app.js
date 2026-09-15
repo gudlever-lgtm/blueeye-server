@@ -11508,6 +11508,50 @@ const DOCS = [
         ],
       },
       {
+        id: 'assurance-monitors', title: 'Check that mail arrives (and the other silent failures)', body: () => [
+          docsLead('Some things break without anybody being told. Mail is accepted by the server and then quietly dropped. Somebody edits DNS and the SPF record loses a sender. The sending address lands on a blacklist. These are discovered when a customer says they never got the invoice — days late. A monitor asks one of those questions on an interval, so you hear it first.'),
+          el('p', {}, ['A monitor is not a test: a test drives a browser through a journey, a monitor is one protocol exchange. They live side by side under ', viewLink('serviceAssurance', 'Service Assurance'), ' → ', el('strong', {}, 'Monitors'), ', and a monitor needs no worker — it runs in the server itself.']),
+
+          el('h4', {}, 'What you can measure'),
+          docsTable(['Check', 'It measures', 'The failure it catches'], [
+            ['Mail delivery', 'seconds from send to arrival', 'mail accepted by the server and never delivered'],
+            ['DNS record', 'the record still says what it should', 'SPF/DKIM/DMARC/MX gone or weakened after a DNS edit'],
+            ['Blacklist (RBL)', 'how many lists name the address', 'your sending address blocked at every recipient'],
+            ['Directory bind (LDAP)', 'time to bind and read', 'nobody can sign in'],
+            ['Database connection', 'connect + one SELECT', 'a rotated password, a connection limit, a dead replica'],
+            ['Clock offset (NTP)', 'how far the clock is out', 'drift that presents as failed logins and unmatched codes'],
+            ['Certificate on a port', 'days remaining', 'the certificate on 465/636/993 nobody has a reminder for'],
+            ['TCP port', 'connect time, and the greeting', 'a port that is open without the service being up'],
+          ]),
+
+          el('h4', {}, 'Set up the mail check'),
+          docsSteps([
+            ['Open ', viewLink('serviceAssurance', 'Service Assurance'), ' → ', el('strong', {}, 'Monitors'), ' → ', el('strong', {}, 'New monitor'), ' and pick ', el('strong', {}, 'Mail delivery'), '.'],
+            ['Fill in the mail server, the port (', el('code', {}, '587'), ' with STARTTLS is the usual pair), and the account the probe sends as. The password is stored encrypted and never shown again.'],
+            ['Set the sender and the recipient. Use a mailbox you own for the recipient — this sends a real message, every interval, forever.'],
+            ['Save it and press ', el('strong', {}, 'Check now'), '. You get the answer in seconds, with the time each phase took.'],
+          ]),
+          el('div', { class: 'callout' }, el('strong', {}, 'Accepted is not delivered: '), 'left alone, the check measures whether the server took the message. Turn on ', el('strong', {}, 'roundtrip'), ' and give it the IMAP mailbox the message goes to, and it measures the whole way: the probe puts a unique token in the message, watches the mailbox until it turns up, and reports the delivery time from the receiving server\u2019s own clock. It deletes the message afterwards. That is the only setting that answers "does our mail actually arrive".'),
+
+          el('h4', {}, 'Reading the answer'),
+          docsTable(['Status', 'What it means', 'Whose problem'], [
+            ['OK', 'the question was answered and the answer was good', '—'],
+            ['SLOW', 'it worked, and took longer than your limit', 'load somewhere on the path'],
+            ['FAILED', 'the check ran and the answer was bad', 'the monitored service'],
+            ['UNREACHABLE', 'nothing answered, so there is nothing to judge', 'the host, the network or a firewall'],
+            ['MISCONFIGURED', 'the monitor itself cannot run', 'ours — a credential, a mailbox, a missing driver'],
+          ]),
+          el('p', {}, ['The phase is the diagnosis. "Accepted in 140 ms, delivered after 90 s" is a backed-up queue; "authenticated after 4 s" is a different fault entirely, and the row shows both. A refused login on the probe\u2019s own account is reported as ', el('strong', {}, 'misconfigured'), ' and never pages anybody: it says nothing about whether real mail is flowing.']),
+          el('p', {}, 'One bad check is not an outage — a failure has to repeat before an incident opens. A certificate expiring, a record that is gone or an address that is listed opens one straight away: those do not become more true by being checked twice.'),
+
+          el('h4', {}, 'What it will not let you do'),
+          el('p', {}, ['A monitor can never point at ', el('code', {}, '127.0.0.1'), ', a link-local address or a cloud metadata endpoint, whatever you type — use the host\u2019s LAN address instead. A database monitor runs a single ', el('code', {}, 'SELECT'), ' and refuses anything else. An administrator can bound the mail check further under Settings → Service Assurance by listing the domains a probe may send to; leave it empty and any address is allowed.']),
+
+          docsExpect('A working mail round trip reads "Delivered to … in 4.1 s (accepted in 142 ms)" and the monitor shows 100% available over 24 hours. A silently lost message reads "accepted the message (250) but it never reached …" and opens a critical incident, which is the one nothing else in your stack will ever tell you.'),
+          el('p', { class: 'muted' }, 'A mail probe sends a real message on a schedule: 15 minutes is a sensible interval, one minute is the floor, and the mailbox cleans itself up as long as round-trip is on.'),
+        ],
+      },
+      {
         id: 'agent-offline', title: 'An agent is offline', body: () => [
           docsLead('An agent shows as disconnected, or dropped off the Overview. Work from the server outward.'),
           docsSteps([

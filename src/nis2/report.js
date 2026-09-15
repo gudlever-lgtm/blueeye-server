@@ -1,6 +1,8 @@
 'use strict';
 
 const { riskBand } = require('./constants');
+const { createT } = require('./i18n');
+const { actionText } = require('./dashboard');
 
 // Minimal HTML escape for the server-rendered, print-to-PDF report document.
 function esc(s) {
@@ -33,27 +35,31 @@ function deltaFrom(previousSnapshot, current) {
 }
 
 // Plain-language management conclusion derived from the readiness score + the
-// most pressing exposures. Deliberately short and non-technical.
-function managementConclusion(dashboard) {
+// most pressing exposures. Deliberately short and non-technical. `locale`
+// defaults to English, which is also what POST /reports freezes onto the stored
+// record — the stored summary is one language by definition, and the live
+// export re-renders it in whichever the reader asked for.
+function managementConclusion(dashboard, locale) {
+  const t = createT(locale);
   const s = dashboard.readinessScore;
   let posture;
-  if (s >= 80) posture = 'broadly in good shape';
-  else if (s >= 60) posture = 'progressing but with gaps that need management attention';
-  else if (s >= 40) posture = 'only partially prepared, with material gaps';
-  else posture = 'at an early stage of NIS2 readiness, with significant gaps';
+  if (s >= 80) posture = t('concl.posture.good');
+  else if (s >= 60) posture = t('concl.posture.gaps');
+  else if (s >= 40) posture = t('concl.posture.partial');
+  else posture = t('concl.posture.early');
 
-  const parts = [`Overall NIS2 readiness stands at ${s}%, meaning the organisation is ${posture}.`];
+  const parts = [t('concl.headline', { score: s, posture })];
   if (dashboard.openCriticalRisks > 0) {
-    parts.push(`${dashboard.openCriticalRisks} critical risk(s) remain open and warrant a documented management decision.`);
+    parts.push(t('concl.criticalRisks', { n: dashboard.openCriticalRisks }));
   }
   if (dashboard.controlsWithoutEvidence > 0) {
-    parts.push(`${dashboard.controlsWithoutEvidence} control(s) lack current evidence and should be prioritised.`);
+    parts.push(t('concl.noEvidence', { n: dashboard.controlsWithoutEvidence }));
   }
   if (dashboard.incidentsLast30Days > 0) {
-    parts.push(`${dashboard.incidentsLast30Days} security incident(s) were recorded in the last 30 days; any with a notification obligation must be reviewed promptly.`);
+    parts.push(t('concl.incidents', { n: dashboard.incidentsLast30Days }));
   }
   if (dashboard.openCriticalRisks === 0 && dashboard.controlsWithoutEvidence === 0) {
-    parts.push('No critical risks are open and all controls carry evidence — focus can shift to sustaining and auditing the programme.');
+    parts.push(t('concl.clean'));
   }
   return parts.join(' ');
 }
@@ -61,7 +67,8 @@ function managementConclusion(dashboard) {
 // Builds the structured executive report (a plain object of sections) from the
 // computed dashboard + the underlying records, plus the previous report for the
 // trend section. The router persists `snapshot` and renders `sections` to HTML.
-function buildExecutiveReport({ dashboard, risks = [], controls = [], incidents = [], previous = null }) {
+function buildExecutiveReport({ dashboard, risks = [], controls = [], incidents = [], previous = null, locale }) {
+  const t = createT(locale);
   const snapshot = buildSnapshot(dashboard);
   const delta = deltaFrom(previous && previous.snapshot, snapshot);
 
@@ -78,10 +85,11 @@ function buildExecutiveReport({ dashboard, risks = [], controls = [], incidents 
     .filter((c) => !c.hasEvidence || c.status === 'Missing' || c.status === 'Overdue');
 
   return {
-    title: 'NIS2 Executive Report',
+    locale: t.locale,
+    title: t('title.executive'),
     generatedAt: dashboard.generatedAt,
     snapshot,
-    summary: managementConclusion(dashboard),
+    summary: managementConclusion(dashboard, t.locale),
     sections: {
       overallStatus: {
         readinessScore: dashboard.readinessScore,
@@ -97,15 +105,15 @@ function buildExecutiveReport({ dashboard, risks = [], controls = [], incidents 
       missingControls,
       development: delta,
       recommendedDecisions: dashboard.topActions,
-      conclusion: managementConclusion(dashboard),
+      conclusion: managementConclusion(dashboard, t.locale),
     },
   };
 }
 
 // ---- Print-ready HTML -----------------------------------------------------
 
-function table(headers, rows) {
-  if (!rows.length) return '<p class="muted">None.</p>';
+function table(headers, rows, t = createT('en')) {
+  if (!rows.length) return `<p class="muted">${esc(t('doc.none'))}</p>`;
   const head = headers.map((h) => `<th>${esc(h)}</th>`).join('');
   const body = rows.map((r) => `<tr>${r.map((c) => `<td>${esc(c)}</td>`).join('')}</tr>`).join('');
   return `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
@@ -120,35 +128,42 @@ function deltaCell(d) {
 // Renders the executive report to a standalone, self-contained HTML document
 // suitable for the browser's "Print → Save as PDF" (no external assets, clean
 // print CSS). Mirrors the BlueEyes palette in a light, document-friendly form.
-function renderExecutiveHtml(report, { org = 'Organisation' } = {}) {
+function renderExecutiveHtml(report, { org, locale } = {}) {
+  // The report object already knows the language it was built in; an explicit
+  // `locale` only overrides it when a caller renders a stored report in another.
+  const t = createT(locale || report.locale);
+  const orgName = org || t('doc.org');
+  const dash = t('doc.dash');
   const s = report.sections;
   const cats = s.overallStatus.categories
-    .map((c) => [c.category, c.controlCount, `${c.score}%`, c.status]);
+    .map((c) => [t.enum('cat', c.category), c.controlCount, `${c.score}%`, t.enum('catStatus', c.status)]);
   const risks = s.riskOverview.topRisks
-    .map((r) => [r.title, r.category, riskBand(r.riskScore), r.riskScore, r.owner || '—', r.status]);
+    .map((r) => [r.title, t.enum('cat', r.category), t.enum('band', riskBand(r.riskScore)), r.riskScore, r.owner || dash, t.enum('riskStatus', r.status)]);
   const incidents = s.significantIncidents
-    .map((i) => [i.incidentId, i.title, i.severity, i.status, i.nis2Relevant ? 'yes' : 'no', i.notificationRequired ? 'yes' : 'no']);
+    .map((i) => [i.incidentId, i.title, t.enum('severity', i.severity), t.enum('incidentStatus', i.status), t.yesNo(i.nis2Relevant), t.yesNo(i.notificationRequired)]);
   const controls = s.missingControls
-    .map((c) => [c.controlName, c.nis2Area, c.status, c.hasEvidence ? 'yes' : 'no', c.owner || '—']);
-  const decisions = s.recommendedDecisions.map((a) => `<li><strong>[${esc(a.priority)}]</strong> ${esc(a.text)}</li>`).join('');
+    .map((c) => [c.controlName, t.enum('cat', c.nis2Area), t.enum('controlStatus', c.status), t.yesNo(c.hasEvidence), c.owner || dash]);
+  const decisions = s.recommendedDecisions
+    .map((a) => `<li><strong>[${esc(t.enum('priority', a.priority))}]</strong> ${esc(actionText(a, t))}</li>`).join('');
 
-  let developmentHtml = '<p class="muted">No previous report to compare against — this is the baseline.</p>';
+  let developmentHtml = `<p class="muted">${esc(t('exec.noBaseline'))}</p>`;
   if (s.development) {
     const d = s.development;
     developmentHtml = table(
-      ['Metric', 'Change'],
+      [t('col.metric'), t('col.change')],
       [
-        ['Readiness score', deltaCell(d.readinessScore)],
-        ['Open critical risks', deltaCell(d.openCriticalRisks)],
-        ['Open high/medium findings', deltaCell(d.openHighMediumFindings)],
-        ['Incidents (30d)', deltaCell(d.incidentsLast30Days)],
-        ['Controls without evidence', deltaCell(d.controlsWithoutEvidence)],
-      ]
+        [t('metric.readiness'), deltaCell(d.readinessScore)],
+        [t('metric.criticalRisks'), deltaCell(d.openCriticalRisks)],
+        [t('metric.findings'), deltaCell(d.openHighMediumFindings)],
+        [t('metric.incidents30short'), deltaCell(d.incidentsLast30Days)],
+        [t('metric.noEvidence'), deltaCell(d.controlsWithoutEvidence)],
+      ],
+      t
     );
   }
 
   return `<!DOCTYPE html>
-<html lang="en"><head><meta charset="utf-8"/>
+<html lang="${esc(t.htmlLang)}"><head><meta charset="utf-8"/>
 <title>${esc(report.title)}</title>
 <style>
   :root { --ink:#1a2230; --muted:#5b6675; --line:#d7dde6; --accent:#2563a8; --bg:#fff; }
@@ -171,42 +186,42 @@ function renderExecutiveHtml(report, { org = 'Organisation' } = {}) {
 </style></head>
 <body>
   <h1>${esc(report.title)}</h1>
-  <div class="meta">${esc(org)} · Generated ${esc(new Date(report.generatedAt).toLocaleString('en-GB'))}</div>
+  <div class="meta">${esc(orgName)} · ${esc(t('doc.generated', { when: new Date(report.generatedAt).toLocaleString(t.htmlLang) }))}</div>
 
-  <h2>1. Overall status</h2>
+  <h2>${esc(t('exec.s1'))}</h2>
   <div class="kpis">
-    <div class="kpi"><span class="muted">Readiness</span><b>${s.overallStatus.readinessScore}%</b></div>
-    <div class="kpi"><span class="muted">Open critical risks</span><b>${s.riskOverview.openCriticalRisks}</b></div>
-    <div class="kpi"><span class="muted">High/medium findings</span><b>${s.riskOverview.openHighMediumFindings}</b></div>
-    <div class="kpi"><span class="muted">Controls w/o evidence</span><b>${s.missingControls.length}</b></div>
+    <div class="kpi"><span class="muted">${esc(t('exec.kpi.readiness'))}</span><b>${s.overallStatus.readinessScore}%</b></div>
+    <div class="kpi"><span class="muted">${esc(t('exec.kpi.criticalRisks'))}</span><b>${s.riskOverview.openCriticalRisks}</b></div>
+    <div class="kpi"><span class="muted">${esc(t('exec.kpi.findings'))}</span><b>${s.riskOverview.openHighMediumFindings}</b></div>
+    <div class="kpi"><span class="muted">${esc(t('exec.kpi.noEvidence'))}</span><b>${s.missingControls.length}</b></div>
   </div>
-  ${table(['Category', 'Controls', 'Score', 'Status'], cats)}
+  ${table([t('col.category'), t('col.controls'), t('col.score'), t('col.status')], cats, t)}
 
-  <h2>2. Risk overview</h2>
-  ${table(['Risk', 'Category', 'Band', 'Score', 'Owner', 'Status'], risks)}
+  <h2>${esc(t('exec.s2'))}</h2>
+  ${table([t('col.risk'), t('col.category'), t('col.band'), t('col.score'), t('col.owner'), t('col.status')], risks, t)}
 
-  <h2>3. Significant incidents</h2>
-  ${table(['Ref', 'Title', 'Severity', 'Status', 'NIS2', 'Notify'], incidents)}
+  <h2>${esc(t('exec.s3'))}</h2>
+  ${table([t('col.ref'), t('col.title'), t('col.severity'), t('col.status'), t('col.nis2'), t('col.notify')], incidents, t)}
 
-  <h2>4. Missing controls</h2>
-  ${table(['Control', 'Area', 'Status', 'Evidence', 'Owner'], controls)}
+  <h2>${esc(t('exec.s4'))}</h2>
+  ${table([t('col.control'), t('col.area'), t('col.status'), t('col.evidence'), t('col.owner')], controls, t)}
 
-  <h2>5. Development since last report</h2>
+  <h2>${esc(t('exec.s5'))}</h2>
   ${developmentHtml}
 
-  <h2>6. Recommended management decisions</h2>
-  ${decisions ? `<ul>${decisions}</ul>` : '<p class="muted">No outstanding actions.</p>'}
+  <h2>${esc(t('exec.s6'))}</h2>
+  ${decisions ? `<ul>${decisions}</ul>` : `<p class="muted">${esc(t('exec.noActions'))}</p>`}
 
-  <h2>7. Conclusion</h2>
+  <h2>${esc(t('exec.s7'))}</h2>
   <p class="summary">${esc(s.conclusion)}</p>
 </body></html>`;
 }
 
 // Shared print-ready document chrome (same palette/print CSS as the executive
 // report) wrapping arbitrary body HTML — used by the register/readiness PDFs.
-function renderDocument(title, org, bodyHtml) {
+function renderDocument(title, org, bodyHtml, t = createT('en')) {
   return `<!DOCTYPE html>
-<html lang="en"><head><meta charset="utf-8"/>
+<html lang="${esc(t.htmlLang)}"><head><meta charset="utf-8"/>
 <title>${esc(title)}</title>
 <style>
   :root { --ink:#1a2230; --muted:#5b6675; --line:#d7dde6; --accent:#2563a8; --bg:#fff; }
@@ -223,7 +238,7 @@ function renderDocument(title, org, bodyHtml) {
 </style></head>
 <body>
   <h1>${esc(title)}</h1>
-  <div class="meta">${esc(org)} · Generated ${esc(new Date().toLocaleString('en-GB'))}</div>
+  <div class="meta">${esc(org)} · ${esc(t('doc.generated', { when: new Date().toLocaleString(t.htmlLang) }))}</div>
   ${bodyHtml}
 </body></html>`;
 }
@@ -231,12 +246,13 @@ function renderDocument(title, org, bodyHtml) {
 // Renders a multi-section table report (risk register / control evidence /
 // incident register / readiness) into a print-ready HTML document. Each section
 // is { heading, headers, rows } where rows is an array of cell-value arrays.
-function renderRegisterHtml(title, sections, { org = 'Organisation' } = {}) {
+function renderRegisterHtml(title, sections, { org, locale } = {}) {
+  const t = createT(locale);
   const body = sections.map((sec) => {
     const intro = sec.intro ? `<p class="muted">${esc(sec.intro)}</p>` : '';
-    return `<h2>${esc(sec.heading)}</h2>${intro}${table(sec.headers, sec.rows)}`;
+    return `<h2>${esc(sec.heading)}</h2>${intro}${table(sec.headers, sec.rows, t)}`;
   }).join('\n');
-  return renderDocument(title, org, body);
+  return renderDocument(title, org || t('doc.org'), body, t);
 }
 
 module.exports = {

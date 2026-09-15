@@ -146,11 +146,37 @@ test('every t() key used by the dashboard exists in BOTH locales, and the catalo
   }
 });
 
+test('the static sidebar is fully translatable: every nav control carries a data-i18n key that exists in BOTH locales', () => {
+  const doc = dom0.window.document;
+  // The rail is static markup — render() never rewrites it, so anything without
+  // a data-i18n attribute stays in whichever language it was typed in. (That is
+  // how "Transaktionstests" once sat in the English menu.) Sweep every control
+  // in .tabs, not just the ones somebody remembered to key.
+  const unkeyed = [...doc.querySelectorAll('.tabs button')]
+    .filter((b) => !b.dataset.i18n)
+    .map((b) => b.dataset.view || b.textContent.trim());
+  assert.deepEqual(unkeyed, [], 'nav controls with no data-i18n key');
+
+  // Every key the markup names — text and the two attribute forms — has to
+  // resolve in both locales, or the rail renders the key itself.
+  const ATTRS = [['data-i18n', 'i18n'], ['data-i18n-title', 'i18nTitle'], ['data-i18n-aria-label', 'i18nAriaLabel']];
+  const missing = [];
+  for (const [attr, prop] of ATTRS) {
+    for (const node of doc.querySelectorAll(`[${attr}]`)) {
+      const key = node.dataset[prop];
+      for (const locale of I18n.LOCALES) if (!I18n.has(key, locale)) missing.push(`${attr}=${key} (${locale})`);
+    }
+  }
+  assert.deepEqual(uniq(missing), []);
+});
+
 test('every API path app.js calls is mounted on the server', () => {
   const routesIndex = fs.readFileSync(path.join(ROOT, 'src', 'routes', 'index.js'), 'utf8');
   const mounted = [...routesIndex.matchAll(/router\.use\('(\/[\w/-]+)'/g)].map((m) => m[1]);
   assert.ok(mounted.length >= 50);
-  const called = uniq([...appJs.matchAll(/api\((?:`|')(\/[a-zA-Z0-9/_-]+)/g)].map((m) => m[1]));
+  // withLocale() wraps the path for the server-rendered NIS2 documents, so the
+  // sweep has to look through it as well as at a bare api('/…') call.
+  const called = uniq([...appJs.matchAll(/api\((?:withLocale\()?(?:`|')(\/[a-zA-Z0-9/_-]+)/g)].map((m) => m[1]));
   assert.ok(called.length >= 100, `found ${called.length} api() calls`);
   const unmounted = called.filter((p) => !mounted.some((m) => p === m || p.startsWith(`${m}/`)));
   assert.deepEqual(unmounted, []);
@@ -227,6 +253,34 @@ test('boot: with a session the app renders and navigation is role-gated', async 
       assert.equal(b.classList.contains('role-hidden'), shouldHide, `${role}: tab ${b.dataset.view} (min ${b.dataset.minRole})`);
     }
   }
+});
+
+test('boot: switching the language relabels the static sidebar, and the nav-group identities survive it', async (t) => {
+  const me = { id: 1, email: 'x@y.dk', role: 'admin', preferences: {} };
+  const { doc, window } = await boot({
+    t, token: 'T', role: 'admin',
+    routes: { 'GET /me': me, 'GET /auth/sso': { methods: [] }, 'GET /license': { plan: 'professional', features: {} }, 'PUT /me/preferences': { ok: true } },
+  });
+  const btn = (view) => doc.querySelector(`.tabs button[data-view="${view}"]`);
+  assert.equal(btn('changes').textContent, I18n.STRINGS.en['nav.view.changes']);
+  assert.equal(btn('transactions').textContent, 'Transaction tests', 'the English menu must not carry a Danish label');
+
+  // Drive the real control, not the helper: the account menu's DA button is
+  // what a user presses, and it is the wiring (setLocale → the static rail)
+  // that regressed before, not the lookup.
+  const da = [...doc.querySelectorAll('#lang-switch button')].find((b) => b.textContent === 'DA');
+  assert.ok(da, 'no DA button in the language switch');
+  da.dispatchEvent(new window.Event('click', { bubbles: true }));
+  await new Promise((r) => setTimeout(r, 40));
+  assert.equal(window.I18n.getLocale(), 'da');
+  assert.equal(btn('changes').textContent, I18n.STRINGS.da['nav.view.changes']);
+  assert.equal(btn('settings').textContent, I18n.STRINGS.da['nav.view.settings']);
+  assert.equal(doc.querySelector('#nav-toggle').getAttribute('aria-label'), I18n.STRINGS.da['nav.toggle']);
+
+  // data-category is the stable identity setupNavGroups remembers collapsed
+  // state under. Translating the visible label must not move it.
+  const cats = [...doc.querySelectorAll('.tabs .nav-group')].map((g) => g.dataset.category);
+  assert.deepEqual(cats, ['Monitoring', 'Fleet', 'Diagnostics', 'Service Assurance', 'Insights', 'Guides', 'Administration']);
 });
 
 test('boot: a 401 on an authenticated call tears the session down', async (t) => {

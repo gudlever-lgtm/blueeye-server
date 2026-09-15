@@ -13,11 +13,12 @@ const {
   validateRiskInput, validateControlInput, validateIncidentInput,
   validateEvidenceInput, validateReportRequest, validateCustomReportSpec,
 } = require('../validation/nis2Validation');
-const { computeDashboard } = require('../nis2/dashboard');
+const { computeDashboard, actionText } = require('../nis2/dashboard');
 const { computeIncidentDeadlines, withDeadlines, deadlineOverview } = require('../nis2/deadlines');
 const { buildExecutiveReport, buildSnapshot, managementConclusion, renderExecutiveHtml, renderRegisterHtml } = require('../nis2/report');
 const { CATEGORIES } = require('../nis2/constants');
 const { SOURCE_KEYS, sourcesFor, buildCustomReport, customReportToCsv } = require('../nis2/reportBuilder');
+const { createT, resolveLocale } = require('../nis2/i18n');
 
 // NIS2 Reporting Center API. Mounted at /api/nis2. Reads are viewer+, mutations
 // to the register/controls/incidents/evidence are operator+, report approval and
@@ -52,7 +53,17 @@ function createNis2Router({
     } catch { /* audit is non-fatal */ }
   }
 
-  const orgOf = (req) => (typeof req.query.org === 'string' && req.query.org.trim() ? req.query.org.trim().slice(0, 120) : 'Organisation');
+  // The language a report document is rendered in. `?locale=` wins (the
+  // dashboard passes the user's chosen language); otherwise Accept-Language, so
+  // a scripted export — the compliance pack is fetched by more than the UI —
+  // gets a sensible document without having to know about the parameter.
+  // Anything unrecognised resolves to English rather than failing the export.
+  const localeOf = (req) => resolveLocale(
+    (typeof req.query.locale === 'string' && req.query.locale) || req.get('accept-language') || ''
+  );
+  const orgOf = (req) => (typeof req.query.org === 'string' && req.query.org.trim()
+    ? req.query.org.trim().slice(0, 120)
+    : createT(localeOf(req))('doc.org'));
   // Query filters must be plain strings before they reach a `col = ?` binding:
   // Express parses ?x=a&x=b into an array (and ?x[y]=1 into an object), which
   // mysql2 expands into invalid/shifted SQL. Anything non-string → no filter.
@@ -299,12 +310,16 @@ function createNis2Router({
     const data = await loadAll();
     const dashboard = computeDashboard(data);
     const snapshot = buildSnapshot(dashboard);
+    // A stored report is frozen text, so it is written once in the language the
+    // creator was working in — the live /export documents re-render in whatever
+    // the reader asks for.
+    const t = createT(localeOf(req));
     const defaultTitles = {
-      readiness: 'NIS2 Readiness Report', executive: 'NIS2 Executive Report',
-      risk: 'NIS2 Risk Register Report', control: 'NIS2 Control Evidence Report',
-      incident: 'NIS2 Incident Report',
+      readiness: t('title.readiness'), executive: t('title.executive'),
+      risk: t('title.risk'), control: t('title.control'),
+      incident: t('title.incident'),
     };
-    const summary = managementConclusion(dashboard);
+    const summary = managementConclusion(dashboard, t.locale);
     const created = await nis2ReportsRepo.create({
       reportType: value.reportType,
       title: value.title || defaultTitles[value.reportType],
@@ -421,7 +436,7 @@ function createNis2Router({
   // The source catalogue the UI builds its selectors from (admin-only sources
   // hidden from non-admins).
   router.get('/custom-reports/sources', requireAuth, reader, (req, res) => {
-    res.json({ sources: sourcesFor(isAdmin(req)) });
+    res.json({ sources: sourcesFor(isAdmin(req), localeOf(req)) });
   });
 
   // Loads exactly the data the requested sections need, then builds the report.
@@ -440,7 +455,7 @@ function createNis2Router({
     const dashboard = needDashboard ? computeDashboard({ risks, controls, incidents }) : null;
     const admin = isAdmin(req);
     const audit = admin && sources.has('audit') ? await nis2AuditRepo.findAll({ limit: 500 }) : [];
-    return buildCustomReport(spec, { risks, controls, incidents, dashboard, audit }, { isAdmin: admin });
+    return buildCustomReport(spec, { risks, controls, incidents, dashboard, audit }, { isAdmin: admin, locale: localeOf(req) });
   }
 
   // On-screen preview (JSON). Rows are capped per section so a huge register
@@ -474,7 +489,7 @@ function createNis2Router({
       return res.send(JSON.stringify(report, null, 2));
     }
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    return res.send(renderRegisterHtml(report.title, report.sections, { org: report.org }));
+    return res.send(renderRegisterHtml(report.title, report.sections, { org: report.org, locale: report.locale }));
   }));
 
   // ---- CSV / PDF export -----------------------------------------------------
@@ -522,7 +537,7 @@ function createNis2Router({
     const data = await loadAll();
     const dashboard = computeDashboard(data);
     const previous = await nis2ReportsRepo.findLatest('executive');
-    const report = buildExecutiveReport({ ...data, dashboard, previous });
+    const report = buildExecutiveReport({ ...data, dashboard, previous, locale: localeOf(req) });
     sendHtml(res, renderExecutiveHtml(report, { org: orgOf(req) }));
   }));
 
@@ -530,49 +545,60 @@ function createNis2Router({
   router.get('/export/readiness.html', requireAuth, reader, asyncHandler(async (req, res) => {
     const data = await loadAll();
     const d = computeDashboard(data);
-    sendHtml(res, renderRegisterHtml('NIS2 Readiness Report', [
+    const t = createT(localeOf(req));
+    sendHtml(res, renderRegisterHtml(t('title.readiness'), [
       {
-        heading: `Overall readiness: ${d.readinessScore}%`,
-        intro: `Readiness is the mean of the ten NIS2 category scores, each derived from how complete its controls' evidence is (OK = 100, Partial = 50, Missing/Overdue = 0) — a self-assessment aid, not a certificate. Open critical risks: ${d.openCriticalRisks} · High/medium findings: ${d.openHighMediumFindings} · Incidents (30d): ${d.incidentsLast30Days} · Controls without evidence: ${d.controlsWithoutEvidence}`,
-        headers: ['Category', 'Controls', 'Score', 'Status'],
-        rows: d.categories.map((c) => [c.category, c.controlCount, `${c.score}%`, c.status]),
+        heading: t('readiness.heading', { score: d.readinessScore }),
+        intro: t('readiness.intro', {
+          criticalRisks: d.openCriticalRisks, findings: d.openHighMediumFindings,
+          incidents: d.incidentsLast30Days, noEvidence: d.controlsWithoutEvidence,
+        }),
+        headers: [t('col.category'), t('col.controls'), t('col.score'), t('col.status')],
+        rows: d.categories.map((c) => [t.enum('cat', c.category), c.controlCount, `${c.score}%`, t.enum('catStatus', c.status)]),
       },
       {
-        heading: 'Top recommended actions',
-        headers: ['Priority', 'Action'],
-        rows: d.topActions.map((a) => [a.priority, a.text]),
+        heading: t('readiness.actions'),
+        headers: [t('col.priority'), t('col.action')],
+        rows: d.topActions.map((a) => [t.enum('priority', a.priority), actionText(a, t)]),
       },
-    ], { org: orgOf(req) }));
+    ], { org: orgOf(req), locale: t.locale }));
   }));
 
   router.get('/export/risk.html', requireAuth, reader, asyncHandler(async (req, res) => {
     const rows = await nis2RisksRepo.findAll();
-    sendHtml(res, renderRegisterHtml('NIS2 Risk Register Report', [{
-      heading: `Risk register (${rows.length})`,
-      intro: 'Risks to the systems and services in scope, each scored likelihood × impact (1–25, columns L and I) and banded Low–Critical. Maintaining this register — with an owner, a treatment status and, where a risk is tolerated, explicit management acceptance — is how the risk-management duty under NIS2 (Article 21) is evidenced.',
-      headers: ['ID', 'Title', 'Category', 'Asset', 'L', 'I', 'Score', 'Band', 'Owner', 'Status', 'Due'],
-      rows: rows.map((r) => [r.id, r.title, r.category, r.affectedAsset || '—', r.likelihood, r.impact, r.riskScore, r.band, r.owner || '—', r.status, r.dueDate || '—']),
-    }], { org: orgOf(req) }));
+    const t = createT(localeOf(req));
+    const dash = t('doc.dash');
+    sendHtml(res, renderRegisterHtml(t('title.risk'), [{
+      heading: t('risk.heading', { n: rows.length }),
+      intro: t('risk.intro'),
+      headers: [t('col.id'), t('col.title'), t('col.category'), t('col.asset'), t('col.l'), t('col.i'), t('col.score'), t('col.band'), t('col.owner'), t('col.status'), t('col.due')],
+      rows: rows.map((r) => [r.id, r.title, t.enum('cat', r.category), r.affectedAsset || dash, r.likelihood, r.impact, r.riskScore, t.enum('band', r.band), r.owner || dash, t.enum('riskStatus', r.status), r.dueDate || dash]),
+    }], { org: orgOf(req), locale: t.locale }));
   }));
 
   router.get('/export/control.html', requireAuth, reader, asyncHandler(async (req, res) => {
     const rows = await nis2ControlsRepo.findAll();
-    sendHtml(res, renderRegisterHtml('NIS2 Control Evidence Report', [{
-      heading: `Controls (${rows.length})`,
-      intro: 'The technical and organisational security measures in operation (e.g. backups, patching, access reviews, logging), each tied to a NIS2 area with an owner and a recurring cadence. NIS2 (Article 21) requires these measures to be implemented and kept effective; the "Evidence" column shows whether a reference proving the control was performed is on file — controls without evidence, or marked Missing/Overdue, are the gaps to close.',
-      headers: ['ID', 'Control', 'Area', 'Owner', 'Frequency', 'Last performed', 'Next due', 'Evidence', 'Status'],
-      rows: rows.map((c) => [c.id, c.controlName, c.nis2Area, c.owner || '—', c.frequency, c.lastPerformed || '—', c.nextDue || '—', c.hasEvidence ? 'yes' : 'no', c.status]),
-    }], { org: orgOf(req) }));
+    const t = createT(localeOf(req));
+    const dash = t('doc.dash');
+    sendHtml(res, renderRegisterHtml(t('title.control'), [{
+      heading: t('control.heading', { n: rows.length }),
+      intro: t('control.intro'),
+      headers: [t('col.id'), t('col.control'), t('col.area'), t('col.owner'), t('col.frequency'), t('col.lastPerformed'), t('col.nextDue'), t('col.evidence'), t('col.status')],
+      rows: rows.map((c) => [c.id, c.controlName, t.enum('cat', c.nis2Area), c.owner || dash, t.enum('frequency', c.frequency), c.lastPerformed || dash, c.nextDue || dash, t.yesNo(c.hasEvidence), t.enum('controlStatus', c.status)]),
+    }], { org: orgOf(req), locale: t.locale }));
   }));
 
   router.get('/export/incident.html', requireAuth, reader, asyncHandler(async (req, res) => {
     const rows = await nis2IncidentsRepo.findAll();
-    sendHtml(res, renderRegisterHtml('NIS2 Incident Report', [{
-      heading: `Incidents (${rows.length})`,
-      intro: 'Security incidents recorded for NIS2 — what happened, when it was detected and resolved, and the impact. "Notify" marks incidents judged significant, which trigger the reporting duty to the national CSIRT/authority under NIS2 (Article 23): an early warning within 24 hours, a full incident notification within 72 hours, and a final report within one month. "NIS2" flags incidents in scope of the directive.',
-      headers: ['Ref', 'Title', 'Severity', 'Detected', 'Resolved', 'Status', 'NIS2', 'Notify'],
-      rows: rows.map((i) => [i.incidentId, i.title, i.severity, i.detectedAt ? new Date(i.detectedAt).toLocaleString('en-GB') : '—', i.resolvedAt ? new Date(i.resolvedAt).toLocaleString('en-GB') : '—', i.status, i.nis2Relevant ? 'yes' : 'no', i.notificationRequired ? 'yes' : 'no']),
-    }], { org: orgOf(req) }));
+    const t = createT(localeOf(req));
+    const dash = t('doc.dash');
+    const when = (v) => (v ? new Date(v).toLocaleString(t.htmlLang) : dash);
+    sendHtml(res, renderRegisterHtml(t('title.incident'), [{
+      heading: t('incident.heading', { n: rows.length }),
+      intro: t('incident.intro'),
+      headers: [t('col.ref'), t('col.title'), t('col.severity'), t('col.detected'), t('col.resolved'), t('col.status'), t('col.nis2'), t('col.notify')],
+      rows: rows.map((i) => [i.incidentId, i.title, t.enum('severity', i.severity), when(i.detectedAt), when(i.resolvedAt), t.enum('incidentStatus', i.status), t.yesNo(i.nis2Relevant), t.yesNo(i.notificationRequired)]),
+    }], { org: orgOf(req), locale: t.locale }));
   }));
 
   return router;

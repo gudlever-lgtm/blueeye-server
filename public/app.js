@@ -421,6 +421,21 @@ function t(key, params) {
 function relTime(value) {
   return (window.I18n && window.I18n.relativeTime) ? window.I18n.relativeTime(value) : String(value || '');
 }
+// The sidebar, the nav toggle and the footer are static markup in index.html —
+// render() never touches them, so a language switch would leave the whole rail
+// in the previous language. These walk the shipped attributes instead:
+//   data-i18n            → textContent
+//   data-i18n-title      → title
+//   data-i18n-aria-label → aria-label
+// The markup keeps its English text as the fallback, so the rail reads
+// correctly even if i18n.js failed to load.
+function applyStaticTranslations(root = document) {
+  if (!window.I18n) return;
+  for (const node of root.querySelectorAll('[data-i18n]')) node.textContent = t(node.dataset.i18n);
+  for (const node of root.querySelectorAll('[data-i18n-title]')) node.title = t(node.dataset.i18nTitle);
+  for (const node of root.querySelectorAll('[data-i18n-aria-label]')) node.setAttribute('aria-label', t(node.dataset.i18nAriaLabel));
+}
+
 // Set once the user explicitly picks a language, so loadProfile()'s one-time
 // server reconcile can't overwrite a fresh choice still in flight (same guard
 // as themeUserChoice).
@@ -430,9 +445,10 @@ let localeUserChoice = false;
 function setLocale(locale, { persist = true } = {}) {
   if (!window.I18n) return Promise.resolve();
   const applied = window.I18n.setLocale(locale);
-  // Keep the account-menu switch in step, wherever the change came from
-  // (the menu itself, or Settings → Appearance).
+  // Keep the account-menu switch and the static sidebar in step, wherever the
+  // change came from (the menu itself, or Settings → Appearance).
   renderLangSwitch();
+  applyStaticTranslations();
   if (persist) {
     localeUserChoice = true;
     if (token) return api('/me/preferences', { method: 'PUT', body: { locale: applied } });
@@ -445,6 +461,7 @@ function initLocale() {
   if (!window.I18n) return;
   const nav = (navigator && navigator.language) || '';
   window.I18n.setLocale(window.I18n.resolveLocale(window.I18n.storedLocale(), nav));
+  applyStaticTranslations();
 }
 
 // The user's saved preferences (colour theme + dashboard language). Loaded once
@@ -463,6 +480,7 @@ async function loadProfile() {
       // rather than inheriting what another account cached in this browser.
       window.I18n.setLocale(window.I18n.resolveLocale(locale, (navigator && navigator.language) || ''));
       renderLangSwitch();
+      applyStaticTranslations();
     }
     const theme = me && me.preferences && me.preferences.theme;
     // The theme belongs to this account. Skip only if the user already chose one
@@ -14657,6 +14675,8 @@ function nis2Modal(title, fields, onSubmit) {
 // Authenticated file download (CSV) — fetch with the bearer token, save a blob.
 async function nis2Download(path, filename) {
   try {
+    // No locale here: /export/*.csv is a raw register dump keyed by the stored
+    // column names, meant to be re-read by a spreadsheet, not by a person.
     const res = await fetch(path, { headers: { Authorization: `Bearer ${token}` } });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const blob = await res.blob();
@@ -14667,11 +14687,21 @@ async function nis2Download(path, filename) {
   } catch (err) { toast(`Export failed: ${err.message}`, true); }
 }
 
+// The NIS2 report documents are rendered server-side, so the server has to be
+// told which language to render in — it cannot see the dashboard's choice. A
+// NIS2 report goes to management and, for an Article 23 notification, to an
+// authority; it is the one export where the language is not cosmetic.
+function withLocale(path) {
+  const loc = window.I18n && window.I18n.getLocale ? window.I18n.getLocale() : null;
+  if (!loc) return path;
+  return `${path}${path.includes('?') ? '&' : '?'}locale=${encodeURIComponent(loc)}`;
+}
+
 // Authenticated print: fetch the server's print-ready HTML and open it in a new
 // window for the browser's "Save as PDF". The document carries its own print CSS.
 async function nis2Print(path) {
   try {
-    const res = await fetch(path, { headers: { Authorization: `Bearer ${token}` } });
+    const res = await fetch(withLocale(path), { headers: { Authorization: `Bearer ${token}` } });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const html = await res.text();
     const w = window.open('', '_blank');
@@ -15263,7 +15293,7 @@ async function nis2Seed() {
 
 // ---- Report Generator (custom, selector-driven) ---------------------------
 async function reportGenerator() {
-  const { sources } = await api('/api/nis2/custom-reports/sources');
+  const { sources } = await api(withLocale('/api/nis2/custom-reports/sources'));
   const wrap = el('div', { class: 'rg' });
   wrap.append(el('p', { class: 'muted nis2-note' },
     'Build your own report: pick the sections to include, set filters and columns, then preview or export as PDF, CSV or JSON.'));
@@ -15340,7 +15370,7 @@ async function reportGenerator() {
     if (!spec.sections.length) { toast('Select at least one section', true); return; }
     preview.replaceChildren(el('div', { class: 'empty' }, 'Building preview…'));
     try {
-      const report = await api('/api/nis2/custom-reports/preview', { method: 'POST', body: spec });
+      const report = await api(withLocale('/api/nis2/custom-reports/preview'), { method: 'POST', body: spec });
       preview.replaceChildren(renderRgPreview(report));
     } catch (err) { preview.replaceChildren(el('div', { class: 'empty error' }, errText(err))); }
   }
@@ -15349,7 +15379,7 @@ async function reportGenerator() {
     const spec = buildSpec();
     if (!spec.sections.length) { toast('Select at least one section', true); return; }
     try {
-      const res = await fetch('/api/nis2/custom-reports/export', {
+      const res = await fetch(withLocale('/api/nis2/custom-reports/export'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify(spec),

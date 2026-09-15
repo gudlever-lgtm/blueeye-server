@@ -112,7 +112,50 @@ Low / Medium / High / Critical (`riskBand` in `src/nis2/constants.js`).
 renders to a standalone, self-contained HTML document with its own print CSS —
 the dashboard fetches it with the bearer token and opens it in a new window for
 the browser's *Save as PDF*. CSV export uses the shared, injection-safe
-`src/lib/csv.js`.
+`src/lib/csv.js`. The document's language comes from `?locale=` — see
+[Report language](#report-language-en--da).
+
+## Report language (en / da)
+
+The report documents are rendered **server-side**, so the server has to be told
+which language to use — it cannot see the dashboard's choice. Every
+`/export/*.html`, `POST /reports` and the Report Generator endpoints take an
+optional **`?locale=`** (`en` | `da`); without it the request's
+`Accept-Language` is used, and anything unrecognised falls back to English
+rather than failing the export. The dashboard appends the user's active language
+(`withLocale()` in `public/app.js`), so the PDF comes out in whatever the screen
+is in.
+
+The catalogue is **`src/nis2/i18n.js`**, separate from the dashboard's
+`public/i18n.js` for two reasons: the browser module keeps one *active* locale in
+module state, which would let one request's language leak into another's
+document, and the report strings have no business being shipped to the browser.
+Here the locale is a parameter — `createT(locale)` returns a bound lookup and
+nothing is stored between calls.
+
+Where the line falls on **record values**:
+
+| | Headings, labels, prose | Enum values (`open`, `Overdue`, the ten NIS2 areas) |
+| --- | --- | --- |
+| Executive + register documents (`/export/*.html`) | translated | **translated** — they are read by management and, for an Article 23 notification, by an authority |
+| Report Generator (`/custom-reports/*`) | translated | **verbatim** — it is an extraction tool, and a column the user picked comes back as the register holds it |
+
+A generated `yes`/`no` is computed rather than stored, so it is translated in
+both. Filter *options* translate their label and keep their raw value, so
+choosing "under håndtering" still filters on `mitigating`. An enum value with no
+translation renders as itself, never as a catalogue key — a row written before a
+status existed here still prints.
+
+`dashboard.js` recommended actions carry `code` + `params` next to the English
+`text` they have always returned: `text` is what `GET /dashboard` and the
+dashboard screen use, and the reports render from the code so a Danish report
+does not end up with an English sentence baked into the scoring module. Adding a
+sentence means adding an `action.*` key in **both** locales —
+`test/nis2ReportI18n.test.js` enforces the parity, including placeholders.
+
+A **stored** report (`POST /reports`) freezes its title and summary in the
+language it was created in; the live exports re-render in whatever the reader
+asks for.
 
 ## Audit trail
 
@@ -132,9 +175,9 @@ binary, so the module needs no object store.
 ## Where things live
 
 - Router: `src/routes/nis2.js` (mounted in `src/routes/index.js`)
-- Scoring: `src/nis2/dashboard.js` · Reports/HTML: `src/nis2/report.js` · Enums: `src/nis2/constants.js`
+- Scoring: `src/nis2/dashboard.js` · Reports/HTML: `src/nis2/report.js` · Enums: `src/nis2/constants.js` · Report translations: `src/nis2/i18n.js`
 - Repositories: `src/repositories/nis2{Risks,Controls,Incidents,Reports,Evidence,Audit}Repository.js`
 - Validation: `src/validation/nis2Validation.js`
 - Schema: `migrations/031_create_nis2.sql`
 - Dashboard UI: `views.nis2` + `PAGE_INFO.nis2` in `public/app.js`; styles under `/* NIS2 */` in `public/styles.css`
-- Tests: `test/nis2Dashboard.test.js` (pure scoring/report) + `test/nis2Api.test.js` (routes/RBAC); fakes in `test-support/fakes.js`
+- Tests: `test/nis2Dashboard.test.js` (pure scoring/report) + `test/nis2Api.test.js` (routes/RBAC) + `test/nis2ReportI18n.test.js` (report language); fakes in `test-support/fakes.js`

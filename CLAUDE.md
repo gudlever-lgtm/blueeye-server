@@ -24,6 +24,12 @@ full HTTP route table, the data model, the dashboard structure, and a
   `public/i18n.js` (en/da). The pre-existing screens are still hardcoded English and
   migrate opportunistically; don't add new hardcoded strings. Add keys to BOTH
   catalogues (a parity test enforces it, including placeholder parity).
+  The **sidebar** is static markup `render()` never touches, so it carries
+  `data-i18n` (and `data-i18n-title` / `data-i18n-aria-label`) attributes that
+  `applyStaticTranslations()` walks — a new nav entry needs a `nav.*` key or the
+  UI gate fails. **Server-rendered** text is a different catalogue:
+  `src/nis2/i18n.js` for the NIS2 report documents, where the locale is a
+  per-request parameter rather than module state (see `docs/nis2.md`).
 - **Version every change** — bump `package.json` `version` on each update (patch = fix,
   minor = feature, major = breaking), and bump the agent in lockstep when its code
   changes. The dashboard's **Settings → Updates** panel and the per‑agent "update" badge

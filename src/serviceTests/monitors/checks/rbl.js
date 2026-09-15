@@ -39,15 +39,24 @@ function createRblCheck({ resolver = null, now = () => Date.now() } = {}) {
     const started = now();
     const listed = [];
     const errors = [];
+    // One row per list, in the order they were asked, with what each answered
+    // and what it cost. A summary saying "listed on 2 of 9" cannot tell an
+    // operator that four of the other seven never answered at all — and a list
+    // that times out every time is a lookup nobody is getting an answer from.
+    const lookups = [];
     let answered = 0;
 
     for (const list of lists) {
       const name = `${reversed}.${list}`;
+      const at = now();
       try {
         // eslint-disable-next-line no-await-in-loop
         const a = await dns.resolve(name, 'A', { server: cfg.resolver || null, timeoutMs: cfg.timeout_ms || 5000 });
         answered += 1;
-        if (!a.answers.length) continue;
+        if (!a.answers.length) {
+          lookups.push({ list, listed: false, ms: now() - at });
+          continue;
+        }
         let reason = null;
         try {
           // The TXT alongside the listing is the human reason ("Spamhaus SBL
@@ -57,13 +66,23 @@ function createRblCheck({ resolver = null, now = () => Date.now() } = {}) {
           reason = txt.answers[0] || null;
         } catch { reason = null; }
         listed.push({ list, codes: a.answers, reason });
+        lookups.push({ list, listed: true, codes: a.answers.join(', '), reason, ms: now() - at });
       } catch (err) {
-        errors.push({ list, error: (err && err.message) || String(err) });
+        const message = (err && err.message) || String(err);
+        errors.push({ list, error: message });
+        lookups.push({ list, listed: null, error: message, ms: now() - at });
       }
     }
 
     const ms = now() - started;
-    const detail = { ip: cfg.ip, lists, listed, errors };
+    const detail = { ip: cfg.ip, lists, listed, errors, lookups };
+    // The lists are asked one after another, so the sum IS the check — a
+    // waterfall of them reads as "this one list is what takes nine seconds".
+    const timings = lookups.reduce(function (acc, l) {
+      acc[l.list] = l.ms;
+      return acc;
+    }, {});
+    timings.total = ms;
 
     if (listed.length) {
       const names = listed.map((l) => l.list).join(', ');
@@ -72,6 +91,7 @@ function createRblCheck({ resolver = null, now = () => Date.now() } = {}) {
         value: listed.length,
         unit: 'count',
         durationMs: ms,
+        timings,
         detail,
       });
     }
@@ -82,6 +102,7 @@ function createRblCheck({ resolver = null, now = () => Date.now() } = {}) {
         summary: `None of the ${lists.length} blacklist(s) could be queried.`,
         error: errors.length ? errors[0].error : null,
         durationMs: ms,
+        timings,
         detail,
       });
     }
@@ -90,6 +111,7 @@ function createRblCheck({ resolver = null, now = () => Date.now() } = {}) {
       value: 0,
       unit: 'count',
       durationMs: ms,
+      timings,
       detail,
     });
   }

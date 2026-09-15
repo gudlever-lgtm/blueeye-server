@@ -29,7 +29,12 @@ function createTlsPortCheck({ checker = null, now = () => Date.now() } = {}) {
     const criticalDays = numOrNull(cfg.critical_days) === null ? 7 : numOrNull(cfg.critical_days);
     const use = checker || createCertificateChecker({ timeoutMs: cfg.timeout_ms || 10000, now: () => new Date(now()) });
 
+    const at = now();
     const cert = await use.check({ host, port, url: null }, { warnDays });
+    // The check measures DAYS, which is the right measurement and says nothing
+    // about the service being reachable at a useful speed. The handshake time is
+    // the other half, and it is free to record.
+    const timings = { handshake: Math.max(0, now() - at) };
     const days = cert.days_remaining;
     const detail = {
       host,
@@ -45,6 +50,7 @@ function createTlsPortCheck({ checker = null, now = () => Date.now() } = {}) {
       return unreachable({
         summary: `No TLS handshake with ${host}:${port}${cert.error_message ? ` (${cert.error_message})` : ''}.`,
         error: cert.error_message,
+        timings,
         detail,
       });
     }
@@ -55,6 +61,7 @@ function createTlsPortCheck({ checker = null, now = () => Date.now() } = {}) {
           : `The certificate on ${host}:${port} has expired.`,
         value: Number.isFinite(days) ? days : null,
         unit: 'days',
+        timings,
         detail,
       });
     }
@@ -64,6 +71,7 @@ function createTlsPortCheck({ checker = null, now = () => Date.now() } = {}) {
         error: cert.error_message,
         value: Number.isFinite(days) ? days : null,
         unit: 'days',
+        timings,
         detail,
       });
     }
@@ -77,6 +85,7 @@ function createTlsPortCheck({ checker = null, now = () => Date.now() } = {}) {
           : `The certificate on ${host}:${port} expires in ${days} day(s).`,
         value: days,
         unit: 'days',
+        timings,
         detail: { ...detail, critical_days: criticalDays },
       });
     }
@@ -84,6 +93,7 @@ function createTlsPortCheck({ checker = null, now = () => Date.now() } = {}) {
       summary: `The certificate on ${host}:${port} is valid for another ${days} day(s).`,
       value: Number.isFinite(days) ? days : null,
       unit: 'days',
+      timings,
       detail,
     });
   }

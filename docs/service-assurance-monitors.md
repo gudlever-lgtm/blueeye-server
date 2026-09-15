@@ -166,10 +166,25 @@ Four things are recorded:
 * **Per-phase timings** (`timings`) — `connect`, `greeting`, `ehlo`, `tls`,
   `auth`, `envelope`, `data`, `delivery`, plus `total`. Drawn as a waterfall in
   the order the exchange happens: a check slow in `data` and one slow in `auth`
-  are different faults, and the shape is what tells them apart. Across checks
-  they are drawn as one line per phase, so "it got slower" can be answered with
-  *which part* got slower. The scale is a choice — a 15 ms `auth` is a flat line
-  on the floor next to a 4.5 s `delivery`, so the chart defaults to logarithmic.
+  are different faults, and the shape is what tells them apart.
+
+  Across checks they are charted, so "it got slower" can be answered with *which
+  part* got slower. **One panel per step by default**, each scaled to its own
+  range: six phases on one axis is six magnitudes on one axis, and no scale
+  shows a 13 ms greeting and a 5.2 s delivery at once — linear flattens the
+  small one onto the floor, logarithmic compresses the big one until its
+  movement disappears. The panels share an x-axis, so two steps moving together
+  line up vertically. The overlaid view is still there behind **Logarithmic** /
+  **Linear** for when the absolute scale is the point.
+
+  Under the chart, the pairs that **move together** are named: rank correlation
+  (Spearman, over the checks where both phases were measured) at ±0.8 or
+  stronger, strongest first, each with the sentence that says what it means. It
+  is ranks rather than values for the same reason the rest of this product uses
+  median and MAD — one 30-second check would drag a Pearson correlation to
+  whatever that check did, and a monitor's history is mostly outliers. A phase
+  that never varied has no variation to correlate and is reported as no answer,
+  never as a correlation of 1 with everything.
 * **The SMTP conversation** (`detail.transcript`) — every command, the code and
   line the server answered with, and what each took. This is what turns "it
   failed in envelope" into `550 5.7.1 sender address rejected: not allowed`. On
@@ -186,6 +201,25 @@ Four things are recorded:
 * **Every look in the mailbox** (`detail.polls`) — a message found on the first
   poll and one found after four minutes are the same "delivered" and very
   different facts.
+
+#### Every check type, not just mail
+
+The trace panel is generic on purpose — a renderer per check type is eight
+renderers that drift, and the ninth check type would arrive with its findings
+invisible. Three parts are drawn from whatever a check happened to record:
+
+* the **waterfall**, from `timings` — any check that recorded phases gets one
+  (`bind`/`search` for LDAP, `connect`/`query` for a database, `connect` for a
+  TCP port, `handshake` for a certificate, `query` for DNS, and one bar per
+  blacklist for an RBL check, which is asked list by list and is exactly where
+  "this one list is what takes five seconds" hides);
+* the **lists**, from any array on `detail` — the DNS records that actually came
+  back next to the ones the monitor expects, every blacklist it asked and what
+  each answered. These were recorded from the start and had nowhere to be shown;
+* the **facts**, from the scalars — the queue id, the mailbox, the resolver, the
+  issuer. Small things, and each of them is what somebody greps a log for.
+
+Only the conversation, the delivery path and the mailbox polls are mail's own.
 
 **A credential never reaches the transcript.** `AUTH PLAIN <base64>` is recorded
 as `AUTH PLAIN ***`, and AUTH LOGIN's two bare base64 lines as `***` — the

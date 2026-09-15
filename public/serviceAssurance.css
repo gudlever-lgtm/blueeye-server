@@ -823,6 +823,30 @@
 .sa-phase-key {
   display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px;
   border: 1px solid var(--hairline, #e5e7eb); border-radius: 999px;
-  background: var(--panel, #fff); font-size: 0.78rem; cursor: pointer;
+  /* The base `button` rule paints white on the accent colour. A legend that
+     inherits it is a row of dots with invisible names next to them. */
+  background: var(--panel, #fff); color: var(--text, #111827);
+  font-size: 0.78rem; font-weight: 500; cursor: pointer;
 }
+.sa-phase-key:hover { border-color: var(--border-strong, #9ca3af); }
 .sa-phase-key.off { opacity: 0.4; text-decoration: line-through; }
+
+/* The lists a check recorded — DNS answers, the blacklists it asked. */
+.sa-detail-list { margin: 0; padding-left: 20px; font-size: 0.82rem; }
+.sa-detail-list code { word-break: break-all; }
+.sa-detail-table td, .sa-detail-table th { font-size: 0.8rem; }
+
+/* Which lines move together, said in words under the chart that draws them. */
+.sa-corr { margin-top: 10px; }
+.sa-corr-list { margin: 4px 0 0; padding-left: 0; list-style: none; font-size: 0.85rem; }
+.sa-corr-list li { padding: 6px 0; border-top: 1px solid var(--hairline, #e5e7eb); }
+.sa-corr-list .muted { font-size: 0.8rem; }
+
+/* One panel per step, each scaled to itself — the readable answer to six
+   magnitudes on one axis. The panels share an x-axis, so two lines that rise
+   and fall together line up vertically. */
+.sa-split { display: flex; flex-direction: column; gap: 2px; }
+.sa-split-row { border-top: 1px solid var(--hairline, #e5e7eb); padding-top: 4px; }
+.sa-split-row:first-child { border-top: none; }
+.sa-split-head { display: flex; align-items: center; gap: 4px; font-size: 0.78rem; }
+.sa-split-svg { display: block; width: 100%; height: 42px; }

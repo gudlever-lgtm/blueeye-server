@@ -147,3 +147,80 @@ test('INTERNALDATE is read from the FETCH, and a malformed one is null rather th
   assert.equal(internalDateFrom(['* 1 FETCH (UID 4 INTERNALDATE "not a date")']), null);
   assert.equal(internalDateFrom(['a1 OK']), null);
 });
+
+// --------------------------------------------------------- the delivery path
+//
+// Every relay that touched the message prepended a `Received:` header, so the
+// chain is the route it took — mail's own traceroute. It is stored newest-first
+// and written by clocks we do not own, which is where both of the interesting
+// bugs live.
+test('the Received chain is read back as the route the message travelled', async () => {
+  const headers = [
+    'Received: from mx.migadu.com (mx.migadu.com [1.2.3.4])',
+    '\tby mail.dulmens.dk (Postfix) with ESMTPS id DDD',
+    '\tfor <gud@dulmens.dk>; Tue, 15 Sep 2026 19:20:21 +0000',
+    'Received: from smtp.migadu.com (smtp.migadu.com [5.6.7.8])',
+    '\tby mx.migadu.com (Postfix) with ESMTP id CCC; Tue, 15 Sep 2026 19:20:17 +0000',
+  ].join('\r\n');
+  const socket = makeSocket([
+    ...LOGIN_OK,
+    '* SEARCH 41\r\n%TAG% OK SEARCH completed\r\n',
+    `* 3 FETCH (UID 41 INTERNALDATE "15-Sep-2026 21:20:21 +0200" BODY[HEADER.FIELDS (RECEIVED)] {${headers.length}}\r\n${headers}\r\n)\r\n%TAG% OK FETCH completed\r\n`,
+    '%TAG% OK STORE completed\r\n',
+    '* 3 EXPUNGE\r\n%TAG% OK EXPUNGE completed\r\n',
+    '%TAG% OK LOGOUT\r\n',
+  ]);
+  const api = createImapClient({ secureConnect: () => socket });
+  const found = await api.findToken({ host: 'imap.example.com', username: 'probe', password: 'pw', token: 'abc123', timeoutMs: 2000 });
+
+  assert.equal(found.found, true);
+  // Asked for with PEEK: looking at the probe message must not mark it read in
+  // somebody's mailbox.
+  assert.match(socket.written.join(''), /BODY\.PEEK\[HEADER\.FIELDS \(RECEIVED\)\]/);
+
+  // Oldest first — the order it travelled, not the order it is stored.
+  assert.equal(found.hops.length, 2);
+  assert.equal(found.hops[0].by, 'mx.migadu.com');
+  assert.equal(found.hops[0].from, 'smtp.migadu.com');
+  assert.equal(found.hops[1].by, 'mail.dulmens.dk');
+  assert.equal(found.hops[1].with, 'ESMTPS');
+  // And what the leg between them cost: 19:20:17 → 19:20:21.
+  assert.equal(found.hops[0].ms, null, 'the first hop has nothing to be measured from');
+  assert.equal(found.hops[1].ms, 4000);
+});
+
+test('a leg computed from two disagreeing clocks is unknown, never negative', async () => {
+  const headers = [
+    'Received: from a.example (a.example [1.1.1.1]) by b.example with ESMTP id B; Tue, 15 Sep 2026 19:20:10 +0000',
+    'Received: from c.example (c.example [2.2.2.2]) by a.example with ESMTP id A; Tue, 15 Sep 2026 19:20:30 +0000',
+  ].join('\r\n');
+  const socket = makeSocket([
+    ...LOGIN_OK,
+    '* SEARCH 9\r\n%TAG% OK SEARCH completed\r\n',
+    `* 1 FETCH (UID 9 INTERNALDATE "15-Sep-2026 21:20:10 +0200" BODY[HEADER.FIELDS (RECEIVED)] {${headers.length}}\r\n${headers}\r\n)\r\n%TAG% OK FETCH completed\r\n`,
+    '%TAG% OK STORE completed\r\n',
+    '* 1 EXPUNGE\r\n%TAG% OK EXPUNGE completed\r\n',
+    '%TAG% OK LOGOUT\r\n',
+  ]);
+  const api = createImapClient({ secureConnect: () => socket });
+  const found = await api.findToken({ host: 'imap.example.com', username: 'probe', password: 'pw', token: 'abc', timeoutMs: 2000 });
+  assert.equal(found.hops.length, 2);
+  // a.example stamped 19:20:30, b.example stamped 19:20:10 afterwards. One of
+  // them is wrong, and "-20 s in transit" is not an answer.
+  assert.equal(found.hops[1].ms, null);
+});
+
+test('a message with no Received headers is still a delivery, with no path', async () => {
+  const socket = makeSocket([
+    ...LOGIN_OK,
+    '* SEARCH 5\r\n%TAG% OK SEARCH completed\r\n',
+    '* 1 FETCH (UID 5 INTERNALDATE "15-Sep-2026 21:20:10 +0200")\r\n%TAG% OK FETCH completed\r\n',
+    '%TAG% OK STORE completed\r\n',
+    '* 1 EXPUNGE\r\n%TAG% OK EXPUNGE completed\r\n',
+    '%TAG% OK LOGOUT\r\n',
+  ]);
+  const api = createImapClient({ secureConnect: () => socket });
+  const found = await api.findToken({ host: 'imap.example.com', username: 'probe', password: 'pw', token: 'abc', timeoutMs: 2000 });
+  assert.equal(found.found, true);
+  assert.deepEqual(found.hops, []);
+});

@@ -181,3 +181,148 @@ test('the probe message says what it is and carries the token twice', () => {
   assert.match(message.text, /Token: tok/);
   assert.match(message.text, /deleted automatically/);
 });
+
+// ------------------------------------------------------------- the transcript
+//
+// A phase name says where the exchange stopped. The transcript says what the
+// server actually answered, which is the difference between "it failed in auth"
+// and "550 5.7.1 sender address rejected: not allowed" — and it is the only
+// place that difference is written down.
+//
+// The hard requirement is the second test: AUTH carries the password, and a
+// transcript that leaked it would put a plaintext credential in the database and
+// on an operator's screen.
+function starttlsPair(script) {
+  const plain = makeSocket(script.slice(0, 3));
+  const upgraded = new EventEmitter();
+  upgraded.written = [];
+  upgraded.destroyed = false;
+  upgraded.destroy = () => { upgraded.destroyed = true; };
+  const rest = script.slice(3);
+  upgraded.write = (data) => {
+    upgraded.written.push(String(data));
+    const next = rest.shift();
+    if (next) setImmediate(() => upgraded.emit('data', Buffer.from(next)));
+    return true;
+  };
+  const api = createSmtpClient({
+    connect: () => plain,
+    upgrade: () => { setImmediate(() => upgraded.emit('secureConnect')); return upgraded; },
+  });
+  return { api, plain, upgraded };
+}
+
+const SEND = {
+  host: 'mail.example.com', port: 587, security: 'starttls',
+  username: 'probe', password: 'hunter2-correct-horse', from: 'a@example.com', to: 'b@example.com',
+  token: 'abc123', timeoutMs: 2000,
+};
+
+test('a successful send comes back with the whole conversation, in order', async () => {
+  const { api } = starttlsPair(OK_SCRIPT);
+  const sent = await api.send(SEND);
+
+  const phases = sent.transcript.map((s) => s.phase);
+  assert.deepEqual(phases, ['connect', 'greeting', 'ehlo', 'tls', 'tls', 'ehlo', 'auth', 'envelope', 'envelope', 'data', 'data']);
+
+  const connect = sent.transcript[0];
+  assert.equal(connect.command, 'tcp://mail.example.com:587');
+  assert.ok(Number.isInteger(connect.ms));
+
+  const greeting = sent.transcript[1];
+  assert.equal(greeting.code, 220);
+  assert.match(greeting.response, /ESMTP ready/);
+
+  // The envelope is two commands, and which of them was refused is the whole
+  // question when a sender is rejected — so they are two rows.
+  const envelope = sent.transcript.filter((s) => s.phase === 'envelope');
+  assert.match(envelope[0].command, /^MAIL FROM:<a@example\.com>$/);
+  assert.match(envelope[1].command, /^RCPT TO:<b@example\.com>$/);
+
+  const accepted = sent.transcript[sent.transcript.length - 1];
+  assert.equal(accepted.code, 250);
+  assert.match(accepted.command, /^<message> \(\d+ bytes\)$/, 'the message body is summarised, never transcribed');
+  assert.match(accepted.response, /queued as 4bXk2Z/);
+});
+
+test('the transcript never carries the password, on any AUTH method', async () => {
+  const { api } = starttlsPair(OK_SCRIPT);
+  const sent = await api.send(SEND);
+  const serialised = JSON.stringify(sent.transcript);
+  assert.ok(!serialised.includes('hunter2-correct-horse'), 'the password is in the transcript in plain text');
+  // AUTH PLAIN's argument is base64, which is not encryption.
+  assert.ok(!serialised.includes(Buffer.from('\0probe\0hunter2-correct-horse').toString('base64')));
+  const auth = sent.transcript.find((s) => s.phase === 'auth');
+  assert.equal(auth.command, 'AUTH PLAIN ***', `the credential survived as: ${auth.command}`);
+  assert.equal(auth.code, 235, 'and the ANSWER is still there, which is the part worth keeping');
+});
+
+test('AUTH LOGIN sends two bare base64 lines, and none of them is recorded', async () => {
+  const script = [
+    '220 ready\r\n',
+    '250-mail\r\n250-STARTTLS\r\n250 AUTH LOGIN\r\n',
+    '220 go ahead\r\n',
+    '250-mail\r\n250 AUTH LOGIN\r\n',
+    '334 VXNlcm5hbWU6\r\n',   // AUTH LOGIN
+    '334 UGFzc3dvcmQ6\r\n',   // the username
+    '235 authenticated\r\n',  // the password
+    '250 ok\r\n', '250 ok\r\n', '354 go\r\n', '250 queued as Z9\r\n',
+  ];
+  const { api } = starttlsPair(script);
+  const sent = await api.send(SEND);
+  const serialised = JSON.stringify(sent.transcript);
+  assert.ok(!serialised.includes('hunter2-correct-horse'));
+  assert.ok(!serialised.includes(Buffer.from('hunter2-correct-horse').toString('base64')), 'the base64 password was recorded');
+  assert.ok(!serialised.includes(Buffer.from('probe').toString('base64')));
+  const auth = sent.transcript.filter((s) => s.phase === 'auth');
+  assert.equal(auth.length, 3);
+  // The method is worth keeping; its two arguments are the credential.
+  assert.deepEqual(auth.map((s) => s.command), ['AUTH LOGIN', '***', '***']);
+});
+
+test('a refused send carries the conversation up to the refusal on the error', async () => {
+  const script = [
+    '220 ready\r\n',
+    '250-mail\r\n250-STARTTLS\r\n250 AUTH PLAIN\r\n',
+    '220 go ahead\r\n',
+    '250-mail\r\n250 AUTH PLAIN\r\n',
+    '235 authenticated\r\n',
+    '550 5.7.1 sender address rejected: not allowed\r\n',
+  ];
+  const { api } = starttlsPair(script);
+  await assert.rejects(() => api.send(SEND), (err) => {
+    assert.ok(err instanceof SmtpError);
+    assert.equal(err.phase, 'envelope');
+    assert.equal(err.code, 550);
+    // Everything up to and including the refusal — the refusal is the last row,
+    // which is what makes the transcript readable as "it got this far".
+    const last = err.transcript[err.transcript.length - 1];
+    assert.equal(last.phase, 'envelope');
+    assert.equal(last.command, 'MAIL FROM:<a@example.com>');
+    assert.equal(last.code, 550);
+    assert.match(last.response, /sender address rejected/);
+    assert.ok(err.transcript.some((s) => s.phase === 'connect'));
+    assert.ok(!JSON.stringify(err.transcript).includes('hunter2-correct-horse'));
+    return true;
+  });
+});
+
+test('a server that goes silent leaves the phase it went silent in, with the error', async () => {
+  const script = [
+    '220 ready\r\n',
+    '250-mail\r\n250-STARTTLS\r\n250 AUTH PLAIN\r\n',
+    '220 go ahead\r\n',
+    '250-mail\r\n250 AUTH PLAIN\r\n',
+    '235 authenticated\r\n',
+    '250 ok\r\n',
+    null, // RCPT TO is never answered
+  ];
+  const { api } = starttlsPair(script);
+  await assert.rejects(() => api.send({ ...SEND, timeoutMs: 60 }), (err) => {
+    const last = err.transcript[err.transcript.length - 1];
+    assert.equal(last.command, 'RCPT TO:<b@example.com>');
+    assert.equal(last.code, undefined, 'a silence has no code');
+    assert.match(last.error, /no answer within/);
+    return true;
+  });
+});

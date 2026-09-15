@@ -134,10 +134,65 @@ function internalDateFrom(lines) {
   return null;
 }
 
+// The delivery path, read off the message itself.
+//
+// Every relay that handled a message prepends a `Received:` header, so the chain
+// IS the route it took — the closest thing mail has to a traceroute. They are
+// stored newest-first, which is the reverse of the order the message travelled,
+// so this reverses them and works out what each leg cost from the timestamps the
+// relays stamped themselves.
+//
+// The times are other people's clocks. A leg computed from two machines that
+// disagree can come out negative, and a negative leg is reported as unknown
+// rather than as a number nobody should trust.
+const HOP_MAX = 25;
+
+// Header folding: a line starting with whitespace continues the one before it.
+function unfold(lines) {
+  const out = [];
+  for (const raw of lines) {
+    const line = String(raw).replace(/\r$/, '');
+    if (/^[ \t]/.test(line) && out.length) out[out.length - 1] += ' ' + line.trim();
+    else out.push(line);
+  }
+  return out;
+}
+
+function receivedHopsFrom(lines) {
+  const headers = unfold(lines)
+    .filter((line) => /^Received:/i.test(line.trim()))
+    .map((line) => line.trim().replace(/^Received:\s*/i, ''))
+    .slice(0, HOP_MAX);
+
+  // Oldest first — the order the message actually travelled.
+  const hops = headers.reverse().map((value) => {
+    const at = (value.match(/;\s*([^;]+)$/) || [])[1];
+    const when = at ? new Date(at.trim()) : null;
+    return {
+      from: (value.match(/\bfrom\s+([^\s;(]+)/i) || [])[1] || null,
+      by: (value.match(/\bby\s+([^\s;(]+)/i) || [])[1] || null,
+      with: (value.match(/\bwith\s+([A-Za-z0-9]+)/i) || [])[1] || null,
+      id: (value.match(/\bid\s+([^\s;]+)/i) || [])[1] || null,
+      at: when && !Number.isNaN(when.getTime()) ? when.toISOString() : null,
+      raw: value.slice(0, 500),
+      ms: null,
+    };
+  });
+
+  for (let i = 1; i < hops.length; i += 1) {
+    const previous = hops[i - 1].at ? Date.parse(hops[i - 1].at) : null;
+    const current = hops[i].at ? Date.parse(hops[i].at) : null;
+    if (previous === null || current === null) continue;
+    const delta = current - previous;
+    hops[i].ms = delta >= 0 ? delta : null;
+  }
+  return hops;
+}
+
 function createImapClient({ secureConnect = null, now = () => Date.now() } = {}) {
   const open = typeof secureConnect === 'function' ? secureConnect : (opts) => tls.connect(opts);
 
-  // One look in the mailbox. Resolves { found, uid, internal_date, ms } — `found:
+  // One look in the mailbox. Resolves { found, uid, internal_date, hops, ms } — `found:
   // false` is a normal answer, not an error: the message may simply still be in
   // flight, and the caller decides when to stop asking.
   async function findToken({
@@ -197,13 +252,21 @@ function createImapClient({ secureConnect = null, now = () => Date.now() } = {})
 
       if (!uids.length) {
         await send('LOGOUT', 'logout', { tolerate: true });
-        return { found: false, uid: null, internal_date: null, ms: now() - started };
+        return { found: false, uid: null, internal_date: null, hops: [], ms: now() - started };
       }
 
       const uid = uids[uids.length - 1];
       let internalDate = null;
-      const fetched = await send(`UID FETCH ${uid} (INTERNALDATE)`, 'fetch', { tolerate: true });
-      if (fetched.status === 'OK') internalDate = internalDateFrom(fetched.lines);
+      let hops = [];
+      // The Received chain comes back with the date: it is the route the message
+      // took and what each leg of it cost, which is the question "where did the
+      // time go" actually needs answering. PEEK, so looking does not mark the
+      // probe message as read in somebody's mailbox.
+      const fetched = await send(`UID FETCH ${uid} (INTERNALDATE BODY.PEEK[HEADER.FIELDS (RECEIVED)])`, 'fetch', { tolerate: true });
+      if (fetched.status === 'OK') {
+        internalDate = internalDateFrom(fetched.lines);
+        hops = receivedHopsFrom(fetched.lines);
+      }
 
       if (cleanup) {
         // Best-effort: a mailbox that will not let us delete is a mailbox we
@@ -212,7 +275,7 @@ function createImapClient({ secureConnect = null, now = () => Date.now() } = {})
         await send('EXPUNGE', 'cleanup', { tolerate: true });
       }
       await send('LOGOUT', 'logout', { tolerate: true });
-      return { found: true, uid, internal_date: internalDate, ms: now() - started };
+      return { found: true, uid, internal_date: internalDate, hops, ms: now() - started };
     } finally {
       try { if (socket && !socket.destroyed) socket.destroy(); } catch { /* answered already */ }
     }
@@ -221,4 +284,8 @@ function createImapClient({ secureConnect = null, now = () => Date.now() } = {})
   return { findToken };
 }
 
+// `receivedHopsFrom` is deliberately NOT exported: it is only ever fed the lines
+// a FETCH came back with, and the suite drives it through `findToken` over a
+// scripted socket — which is the same thing, plus the proof that the command
+// asking for those headers is the one actually sent.
 module.exports = { createImapClient, uidsFrom, internalDateFrom, quoted };

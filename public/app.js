@@ -11553,9 +11553,18 @@ const DOCS = [
 
           el('div', { class: 'callout' }, el('strong', {}, 'It does not start until it works once: '), 'a new monitor is saved but not yet watching — it says so on its own page. Press Check now; the first check that works puts it on its schedule. That way a typo in the setup cannot page anybody at two in the morning. If the service is down right now and you want it watched anyway, ', el('strong', {}, 'Start watching'), ' schedules it regardless.'),
 
+          el('h4', {}, 'How a monitor is scheduled'),
+          el('p', {}, ['It is not scheduled on the ', el('strong', {}, 'Schedules'), ' tab — that tab is for browser tests. A monitor carries its own cadence in one field: ', el('strong', {}, 'Check every (seconds)'), '. Once the first check has worked, the server runs it on that interval, day and night, and it never stops on its own. The Schedules tab lists the monitors read-only so the answer is where the question gets asked.']),
+          el('p', {}, ['Two things stop it: ', el('strong', {}, 'Pause'), ' on the monitor\u2019s page, which keeps the history, the settings and the incidents and can be resumed on the same interval — and ', el('strong', {}, 'Delete'), ', which takes the history with it. Setting the interval to 0 is not one of them: the minimum is 60 seconds, or whatever an administrator raised it to under Settings → Service Assurance, and the dialog shows the number it will accept.']),
+
           el('h4', {}, 'Is it getting worse?'),
           el('p', {}, ['Each monitor has a ', el('strong', {}, 'History'), ' chart: how available it was per hour, day or month, and what it measured inside that period. Step through with ◀ ▶ or jump to a date, the same way the run history works.']),
           el('p', {}, '100% available with a delivery time that tripled over a week is the reading worth having, and no single number can show it. A gap in the bars means nothing was checked in that period — drawn as a gap on purpose, because that is a different fact from "everything failed".'),
+
+          el('h4', {}, 'Where did it break?'),
+          el('p', {}, ['Click any check in the list to open its trace. You get the exchange as a waterfall — which leg cost the time, in the order it happened — the conversation with the mail server line by line, and, for a round trip, the route the message took, read off its own ', el('code', {}, 'Received'), ' headers: which relay handed it to which, and what each leg cost. The newest failing check opens itself, because that is the one you came to look at.']),
+          el('p', {}, ['Above the list, the same phases are charted against each other, one coloured line per step of the exchange. That is how "it got slower" becomes "the ', el('strong', {}, 'data'), ' phase got slower and nothing else did". Small steps vanish next to big ones on a linear axis, so the chart defaults to logarithmic and you can switch it; click a step in the legend to take its line out of the way.']),
+          el('div', { class: 'callout' }, el('strong', {}, 'Passwords are never in the trace: '), 'the AUTH exchange is recorded as having happened, with the answer it got. The credential itself is replaced with ', el('code', {}, '***'), ' before anything is stored — base64 is not encryption, and a transcript that kept it would put a plaintext password in the database and on this screen.'),
 
           el('h4', {}, 'Reading the answer'),
           docsTable(['Status', 'What it means', 'Whose problem'], [

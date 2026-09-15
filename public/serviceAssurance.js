@@ -220,11 +220,20 @@
       return group;
     }
 
-    function field(label, control, help) {
-      return el('label', { class: 'sa-field' },
+    // `name` is the key the SERVER uses for this field in a validation reply
+    // (`interval_sec`, `config.smtp_host`). Stamping it here is what lets a
+    // rejected save mark the field that was rejected instead of printing a key
+    // into a box at the bottom of the dialog.
+    function field(label, control, help, name) {
+      var node = el('label', { class: 'sa-field' },
         el('span', { class: 'sa-field-label' }, label),
         control,
         help ? el('span', { class: 'sa-help' }, help) : null);
+      if (name) {
+        node.setAttribute('data-field', name);
+        node.setAttribute('data-field-label', String(label).replace(/\s*\*$/, ''));
+      }
+      return node;
     }
 
     function section(title, actions) {
@@ -2274,6 +2283,261 @@
       return svg;
     }
 
+    // ------------------------------------------------- where the time went
+    //
+    // "auth 16 ms · data 4.2 s · total 4.4 s" is a true sentence nobody can read
+    // — six numbers in no order, with the one that matters buried in the middle.
+    // The same six numbers drawn as a waterfall answer the question they were
+    // collected for: WHICH leg of the exchange cost the 4.4 seconds.
+    //
+    // The order is the order the exchange happens in, not alphabetical and not
+    // by size: a mail check that is slow in `data` and one that is slow in
+    // `auth` are different faults, and the shape is what tells them apart at a
+    // glance.
+    var PHASE_ORDER = ['connect', 'greeting', 'ehlo', 'tls', 'auth', 'envelope', 'data', 'delivery'];
+    var PHASE_COLOURS = ['#2563eb', '#0891b2', '#059669', '#65a30d', '#d97706', '#db2777', '#7c3aed', '#dc2626'];
+
+    // One colour per phase, everywhere: the bar in a row's waterfall and the
+    // line in the chart above it are the same colour for the same phase.
+    function phaseColour(phase) {
+      var at = PHASE_ORDER.indexOf(phase);
+      if (at >= 0) return PHASE_COLOURS[at % PHASE_COLOURS.length];
+      var hash = 0;
+      for (var i = 0; i < phase.length; i += 1) hash = (hash * 31 + phase.charCodeAt(i)) % 997;
+      return PHASE_COLOURS[hash % PHASE_COLOURS.length];
+    }
+
+    // `Number(null)` is 0 and `Number('')` is 0, and a phase that did not happen
+    // must never read as one that took no time — the repo has a rule about this
+    // (`src/lib/num.js`), and a chart is exactly where a fake zero does its
+    // damage: it draws a line on the floor where there should be a gap.
+    function numOrNull(v) {
+      if (v === null || v === undefined || v === '') return null;
+      var n = Number(v);
+      return Number.isFinite(n) ? n : null;
+    }
+
+    function orderedPhases(keys) {
+      var known = PHASE_ORDER.filter(function (p) { return keys.indexOf(p) >= 0; });
+      var rest = keys.filter(function (k) { return k !== 'total' && PHASE_ORDER.indexOf(k) < 0; }).sort();
+      return known.concat(rest);
+    }
+
+    // The phases of ONE check, laid end to end. `total` is drawn as the ruler
+    // rather than as a bar: it is the sum, and a bar for it would be a bar the
+    // length of every other bar put together.
+    function phaseWaterfall(timings) {
+      if (!timings || typeof timings !== 'object') return null;
+      var phases = orderedPhases(Object.keys(timings)).filter(function (p) {
+        return numOrNull(timings[p]) !== null;
+      });
+      if (!phases.length) return null;
+
+      var sum = phases.reduce(function (acc, p) { return acc + Math.max(0, numOrNull(timings[p]) || 0); }, 0);
+      var scale = Math.max(sum, numOrNull(timings.total) || 0) || 1;
+      var at = 0;
+      return el('div', { class: 'sa-waterfall' }, ...phases.map(function (phase) {
+        var value = Math.max(0, numOrNull(timings[phase]) || 0);
+        var left = (at / scale) * 100;
+        at += value;
+        return el('div', { class: 'sa-wf-row' },
+          el('span', { class: 'sa-wf-name' }, phase),
+          el('span', { class: 'sa-wf-track' },
+            el('span', {
+              class: 'sa-wf-bar',
+              style: 'margin-left:' + left.toFixed(2) + '%;width:' + Math.max(0.6, (value / scale) * 100).toFixed(2) + '%;background:' + phaseColour(phase),
+              title: phase + ' — ' + ms(value),
+            })),
+          el('span', { class: 'sa-wf-ms' }, ms(value)));
+      }));
+    }
+
+    // The conversation, as it happened. This is the part that turns "it failed
+    // in envelope" into "550 5.7.1 sender address rejected" — and the reason
+    // the client records it at all.
+    function transcriptTable(steps) {
+      if (!Array.isArray(steps) || !steps.length) return null;
+      return el('table', { class: 'data-table sa-transcript' },
+        el('thead', {}, el('tr', {},
+          el('th', {}, t('sa.trace.phase')),
+          el('th', {}, t('sa.trace.sent')),
+          el('th', {}, t('sa.trace.answer')),
+          el('th', {}, t('sa.trace.took')))),
+        el('tbody', {}, ...steps.map(function (step) {
+          var bad = step.error || (step.code && Math.floor(step.code / 100) > 3);
+          return el('tr', { class: bad ? 'sa-trace-bad' : null },
+            el('td', {}, el('span', { class: 'sa-phase-dot', style: 'background:' + phaseColour(step.phase) }), ' ' + step.phase),
+            el('td', {}, el('code', {}, step.command || '—')),
+            el('td', {}, step.error
+              ? el('span', { class: 'sa-trace-error' }, step.error)
+              : el('span', {}, (step.code ? step.code + ' ' : '') + (step.response || ''))),
+            el('td', {}, step.ms === undefined || step.ms === null ? '—' : ms(step.ms)));
+        })));
+    }
+
+    // The route the message actually took, off its own Received headers — the
+    // closest thing mail has to a traceroute. Oldest hop first, because that is
+    // the direction it travelled.
+    function hopTrail(hops) {
+      if (!Array.isArray(hops) || !hops.length) return null;
+      return el('ol', { class: 'sa-hops' }, ...hops.map(function (hop) {
+        // The raw header is the last word on a routing argument, so it is kept
+        // on the row rather than thrown away — as a tooltip, because nobody
+        // wants twenty-five of them on the screen at once.
+        return el('li', { title: hop.raw || null },
+          el('span', { class: 'sa-hop-by' }, hop.by || '—'),
+          hop.from ? el('span', { class: 'muted' }, ' ' + t('sa.trace.from', { host: hop.from })) : null,
+          hop.with ? el('span', { class: 'sa-hop-with' }, ' ' + hop.with) : null,
+          hop.ms === null || hop.ms === undefined
+            ? null
+            : el('span', { class: 'sa-hop-ms' }, ' +' + ms(hop.ms)),
+          hop.at ? el('div', { class: 'muted' }, new Date(hop.at).toLocaleString()) : null);
+      }));
+    }
+
+    // Every look in the mailbox. A message found on the first poll and one found
+    // after four minutes of looking are the same "delivered" and very different
+    // facts.
+    function pollTrail(polls) {
+      if (!Array.isArray(polls) || !polls.length) return null;
+      var found = polls.filter(function (p) { return p.found; }).length;
+      return el('div', { class: 'sa-polls' },
+        el('div', { class: 'muted' }, t('sa.trace.polls', { count: polls.length, found: found })),
+        el('div', { class: 'sa-poll-dots' }, ...polls.map(function (p) {
+          return el('span', {
+            class: 'sa-poll-dot' + (p.found ? ' found' : (p.error ? ' error' : '')),
+            title: t('sa.trace.pollAt', { sec: p.at }) + (p.error ? ' — ' + p.error : ''),
+          });
+        })));
+    }
+
+    // Everything a single result knows, opened under its row.
+    function resultTrace(r) {
+      var detail = r.detail || {};
+      var parts = [
+        phaseWaterfall(r.timings),
+        detail.hops && detail.hops.length
+          ? el('div', {}, el('h5', {}, t('sa.trace.route')), hopTrail(detail.hops))
+          : null,
+        pollTrail(detail.polls),
+        detail.transcript && detail.transcript.length
+          ? el('div', {}, el('h5', {}, t('sa.trace.conversation')), transcriptTable(detail.transcript))
+          : null,
+        r.error_message ? el('div', { class: 'sa-trace-error' }, r.error_message) : null,
+        facts(detail),
+      ].filter(Boolean);
+      if (!parts.length) return el('div', { class: 'muted' }, t('sa.trace.nothing'));
+      return el('div', { class: 'sa-trace' }, ...parts);
+    }
+
+    // The scalar leftovers — queue id, message id, the mailbox, the token. Small
+    // things, and each of them is the one somebody greps a mail log for.
+    var FACT_SKIP = { transcript: 1, hops: 1, polls: 1 };
+    function facts(detail) {
+      var keys = Object.keys(detail || {}).filter(function (k) {
+        return !FACT_SKIP[k] && detail[k] !== null && detail[k] !== undefined && typeof detail[k] !== 'object';
+      });
+      if (!keys.length) return null;
+      return el('dl', { class: 'sa-facts' }, ...keys.map(function (k) {
+        return el('div', {}, el('dt', {}, k.replace(/_/g, ' ')), el('dd', {}, String(detail[k])));
+      }));
+    }
+
+    // ----------------------------------------------- the phases, side by side
+    //
+    // One line per phase across the recent checks, each in the colour its bar
+    // has in the waterfall below. This is the chart that answers "it got slower
+    // — which part of it got slower", which no single duration can.
+    //
+    // A linear axis is the honest default and a useless one here: `auth` is 15
+    // ms next to a `delivery` of 4.5 s, so every phase but the biggest is a flat
+    // line on the floor. The scale is therefore a choice the reader makes.
+    function phaseChart(results, opts) {
+      var rows = (results || []).filter(function (r) { return r.timings && typeof r.timings === 'object'; });
+      if (rows.length < 2) return null;
+      var scale = (opts && opts.scale) || 'linear';
+      var hidden = (opts && opts.hidden) || {};
+
+      // Oldest on the left: a chart people read as "over time" must run the way
+      // time does, and the API answers newest-first.
+      var series = rows.slice().reverse();
+      var keys = orderedPhases(Object.keys(series.reduce(function (acc, r) {
+        Object.keys(r.timings).forEach(function (k) { acc[k] = 1; });
+        return acc;
+      }, {}))).filter(function (k) { return !hidden[k]; });
+      if (!keys.length) return null;
+
+      var W = 1000;
+      var H = 150;
+      var pad = { l: 56, r: 10, t: 10, b: 18 };
+      var plotW = W - pad.l - pad.r;
+      var plotH = H - pad.t - pad.b;
+      var values = [];
+      series.forEach(function (r) {
+        keys.forEach(function (k) {
+          var v = numOrNull(r.timings[k]);
+          if (v !== null && v > 0) values.push(v);
+        });
+      });
+      if (!values.length) return null;
+      var max = Math.max.apply(null, values);
+      var min = Math.min.apply(null, values);
+
+      var xOf = function (i) { return pad.l + (series.length < 2 ? plotW / 2 : (i / (series.length - 1)) * plotW); };
+      var yOf = function (v) {
+        if (scale === 'log') {
+          var lo = Math.log10(Math.max(0.5, min));
+          var hi = Math.log10(Math.max(lo + 0.3, max));
+          var here = Math.log10(Math.max(0.5, v));
+          return pad.t + plotH - ((here - lo) / (hi - lo)) * plotH;
+        }
+        return pad.t + plotH - (v / max) * plotH;
+      };
+
+      var svg = svgEl('svg', {
+        viewBox: '0 0 ' + W + ' ' + H, class: 'sa-chart-svg', preserveAspectRatio: 'none',
+        role: 'img', 'aria-label': t('sa.trace.phaseChart'),
+      });
+      [0, 0.5, 1].forEach(function (frac) {
+        var v = scale === 'log'
+          ? Math.pow(10, Math.log10(Math.max(0.5, min)) + frac * (Math.log10(Math.max(1, max)) - Math.log10(Math.max(0.5, min))))
+          : max * frac;
+        var y = yOf(v);
+        svg.appendChild(svgEl('line', { class: 'sa-chart-grid', x1: pad.l, y1: y, x2: W - pad.r, y2: y }));
+        var label = svgEl('text', { x: pad.l - 8, y: y + 4, class: 'sa-chart-axis', 'text-anchor': 'end' });
+        label.textContent = ms(Math.round(v));
+        svg.appendChild(label);
+      });
+
+      keys.forEach(function (key) {
+        var run = [];
+        var flush = function () {
+          if (run.length > 1) {
+            svg.appendChild(svgEl('path', { class: 'sa-phase-line', d: run.join(' '), stroke: phaseColour(key), fill: 'none' }));
+          }
+          run = [];
+        };
+        series.forEach(function (r, i) {
+          var v = numOrNull(r.timings[key]);
+          // A phase that did not happen in this check is a GAP, not a zero: a
+          // failed exchange never reached `data`, and drawing that as 0 ms would
+          // read as instant.
+          if (v === null) { flush(); return; }
+          run.push((run.length ? 'L' : 'M') + xOf(i).toFixed(1) + ',' + yOf(v).toFixed(1));
+        });
+        flush();
+        series.forEach(function (r, i) {
+          var v = numOrNull(r.timings[key]);
+          if (v === null) return;
+          svg.appendChild(svgEl('g', { class: 'sa-chart-bar' }, [
+            svgTitle(key + ' — ' + ms(v) + '\n' + new Date(r.checked_at).toLocaleString()),
+            svgEl('circle', { cx: xOf(i).toFixed(1), cy: yOf(v).toFixed(1), r: 3, fill: phaseColour(key) }),
+          ]));
+        });
+      });
+      return svg;
+    }
+
     function monitorBucketTooltip(b, data) {
       var d = new Date(b.start);
       var whenText = Number.isNaN(d.getTime()) ? b.key
@@ -3670,9 +3934,19 @@
 
     // ------------------------------------------------------------ schedules
     views.schedules = function (body) {
-      return Promise.all([api(API + '/schedules'), api(API + '/tests')]).then(function (res) {
+      // Monitors are read alongside the tests because this screen is where
+      // somebody looks for "when does that run again" — and a monitor carries
+      // its own interval rather than a schedule row, so without them listed here
+      // the honest answer ("it is not on this screen") is one nobody can find.
+      return Promise.all([
+        api(API + '/schedules'),
+        api(API + '/tests'),
+        api(API + '/monitors').catch(function () { return []; }),
+        loadMonitorTypes().catch(function () { return []; }),
+      ]).then(function (res) {
         var schedules = res[0];
         var tests = res[1];
+        var monitors = Array.isArray(res[2]) ? res[2] : [];
         var byId = {};
         tests.forEach(function (x) { byId[x.id] = x; });
 
@@ -3683,42 +3957,116 @@
           }, '+ ' + t('sa.schedule.add'))
           : null);
 
-        if (!schedules.length) {
-          mount(body, head, el('div', { class: 'sa-empty' },
-            t(tests.length ? 'sa.schedule.noneYet' : 'sa.schedule.noTests')));
-          return;
-        }
-        mount(body, head, el('table', { class: 'data-table' },
-          el('thead', {}, el('tr', {},
-            el('th', {}, t('sa.schedule.test')),
-            el('th', {}, t('sa.schedule.every')),
-            el('th', {}, t('sa.schedule.next')),
-            el('th', {}, ''))),
-          el('tbody', {}, ...schedules.map(function (s) {
-            return el('tr', { class: 'clickable', onclick: function () { state.tab = 'tests'; state.testId = s.test_id; draw(); } },
-              el('td', {}, (byId[s.test_id] && byId[s.test_id].name) || ('#' + s.test_id)),
-              el('td', {}, s.description),
-              el('td', {}, when(s.next_run_at)),
-              el('td', {}, s.missed_intervals > 2 ? el('span', { class: 'sa-warn' }, t('sa.schedule.behind', { count: s.missed_intervals })) : ''));
-          }))));
+        var testTable = schedules.length
+          ? el('table', { class: 'data-table' },
+            el('thead', {}, el('tr', {},
+              el('th', {}, t('sa.schedule.test')),
+              el('th', {}, t('sa.schedule.application')),
+              el('th', {}, t('sa.schedule.every')),
+              el('th', {}, t('sa.schedule.next')),
+              el('th', {}, ''))),
+            el('tbody', {}, ...schedules.map(function (s) {
+              var test = byId[s.test_id];
+              return el('tr', { class: 'clickable', onclick: function () { state.tab = 'tests'; state.testId = s.test_id; draw(); } },
+                // The name first, because that is what somebody came looking
+                // for; a deleted test still says which id it was.
+                el('td', {}, el('strong', {}, (test && test.name) || ('#' + s.test_id)),
+                  test && test.description ? el('div', { class: 'muted' }, test.description) : null),
+                // Four unrelated tests called "Login" are four different things,
+                // and the application is what tells them apart.
+                el('td', {}, (test && test.application_name) || el('span', { class: 'muted' }, '—')),
+                el('td', {}, s.description),
+                el('td', {}, when(s.next_run_at)),
+                el('td', {}, s.missed_intervals > 2 ? el('span', { class: 'sa-warn' }, t('sa.schedule.behind', { count: s.missed_intervals })) : ''));
+            })))
+          : el('div', { class: 'sa-empty' }, t(tests.length ? 'sa.schedule.noneYet' : 'sa.schedule.noTests'));
+
+        mount(body, head, testTable, monitorCadences(monitors));
       });
     };
+
+    // When a monitor runs next, from its own interval. A monitor that has never
+    // run is due on the next sweep; one that is still pending is not due at all,
+    // and says so rather than showing a time that will not happen.
+    function monitorNextRun(m) {
+      if (m.pending) return null;
+      if (!m.last_run_at) return new Date();
+      var last = new Date(m.last_run_at).getTime();
+      if (Number.isNaN(last)) return null;
+      return new Date(last + (m.interval_sec || 900) * 1000);
+    }
+
+    // The monitors, read-only, on the screen where people look for cadences.
+    //
+    // Deliberately NOT editable here: a monitor's interval lives on the monitor,
+    // and a second place to change it is a second place for the two to disagree.
+    // The row opens the monitor, which is where it is changed.
+    function monitorCadences(monitors) {
+      if (!monitors.length) return null;
+      return el('div', { class: 'sa-panel' },
+        section(t('sa.schedule.monitorTitle'), null),
+        el('p', { class: 'sa-help' }, t('sa.schedule.monitorHelp')),
+        el('table', { class: 'data-table' },
+          el('thead', {}, el('tr', {},
+            el('th', {}, t('sa.monitor.name')),
+            el('th', {}, t('sa.monitor.type')),
+            el('th', {}, t('sa.monitor.target')),
+            el('th', {}, t('sa.schedule.every')),
+            el('th', {}, t('sa.schedule.next')))),
+          el('tbody', {}, ...monitors.map(function (m) {
+            var next = monitorNextRun(m);
+            return el('tr', {
+              class: 'clickable',
+              onclick: function () { state.tab = 'monitors'; state.monitorId = m.id; draw(); },
+            },
+            el('td', {}, el('strong', {}, m.name)),
+            el('td', {}, monitorTypeLabel(m.type)),
+            el('td', {}, el('code', {}, m.target)),
+            el('td', {}, t('sa.monitor.seconds', { count: m.interval_sec })),
+            el('td', {}, m.pending
+              ? el('span', { class: 'sa-muted-chip' }, t('sa.monitor.pending'))
+              : (m.enabled ? when(next) : el('span', { class: 'sa-muted-chip' }, t('sa.monitor.paused')))));
+          }))));
+    }
+
+    // Test options, grouped under their application. A test whose application is
+    // gone (or was never joined) lands in its own group rather than silently
+    // disappearing from a picker.
+    function groupedTestOptions(tests) {
+      var groups = [];
+      var byApp = {};
+      tests.forEach(function (x) {
+        var label = x.application_name || t('sa.schedule.noApplication');
+        if (!byApp[label]) { byApp[label] = []; groups.push(label); }
+        byApp[label].push(x);
+      });
+      return groups.map(function (label) {
+        return el('optgroup', { label: label }, ...byApp[label].map(function (x) {
+          // The application is in the option text too: a <optgroup> label is not
+          // read out by every screen reader, and the closed select shows only
+          // the option.
+          return el('option', { value: String(x.id) }, x.application_name ? x.application_name + ' — ' + x.name : x.name);
+        }));
+      });
+    }
 
     // The schedule form, shared by the global Schedules tab (where a test must be
     // picked) and a test's own page (where it is already known).
     function scheduleForm(tests, onSaved, fixedTest) {
       if (!fixedTest && !tests.length) { toast(t('sa.schedule.noTests'), true); return; }
       api(API + '/schedules/intervals').then(function (res) {
-        var testSel = fixedTest ? null : el('select', {},
-          ...tests.map(function (x) { return el('option', { value: String(x.id) }, x.name); }));
+        // Grouped by application, and each option says which application it is
+        // in. Four tests called "Login" in a flat list are four indistinguishable
+        // rows, and picking the wrong one schedules the wrong service.
+        var testSel = fixedTest ? null : el('select', {}, ...groupedTestOptions(tests));
         var every = el('select', {}, ...res.intervals.map(function (i) {
           return el('option', { value: String(i.seconds) }, i.da || i.en);
         }));
         var tz = el('input', { type: 'text', value: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' });
         var errors = el('div', { class: 'sa-form-errors' });
 
-        modal(t('sa.schedule.add'), el('div', {},
-          testSel ? field(t('sa.schedule.test'), testSel) : null,
+        modal(fixedTest ? t('sa.schedule.addFor', { name: fixedTest.name }) : t('sa.schedule.add'), el('div', {},
+          testSel ? field(t('sa.schedule.test'), testSel, t('sa.schedule.testHelp')) : null,
           field(t('sa.schedule.every'), every),
           field(t('sa.schedule.timezone'), tz),
           errors), function () {
@@ -3743,11 +4091,15 @@
     // about it — and, more to the point, the field list and its bounds have one
     // definition instead of two that drift.
     var monitorTypes = null;
+    var monitorLimits = { min_interval_sec: 60, max_interval_sec: 86400, recipient_domains: [] };
 
     function loadMonitorTypes() {
       if (monitorTypes) return Promise.resolve(monitorTypes);
       return api(API + '/monitors/types').then(function (res) {
         monitorTypes = res.types || [];
+        // The floor is a SETTING, so the form asks the server for it rather than
+        // carrying a second copy that goes stale the day somebody raises it.
+        monitorLimits = res.limits || monitorLimits;
         return monitorTypes;
       });
     }
@@ -3841,6 +4193,24 @@
             },
           }, t('sa.monitor.checkNow')) : null,
           isOperator() ? el('button', { class: 'ghost', onclick: function () { monitorForm(m); } }, t('sa.monitor.edit')) : null,
+          // The stop button. A monitor that has been activated runs on its own
+          // interval and never stops on its own, and until this existed the only
+          // way to make it stop was to delete it — which throws the history away
+          // with it. Pausing keeps everything and stops the sweep.
+          isOperator() ? el('button', {
+            class: 'ghost',
+            title: m.enabled ? t('sa.monitor.pauseHelp') : t('sa.monitor.resumeHelp'),
+            onclick: function (e) {
+              var button = e.target;
+              button.disabled = true;
+              api(API + '/monitors/' + id, { method: 'PATCH', body: { enabled: !m.enabled } })
+                .then(function () {
+                  toast(m.enabled ? t('sa.monitor.pausedToast') : t('sa.monitor.resumedToast'));
+                  draw();
+                })
+                .catch(function (e0) { toast(err(e0), true); button.disabled = false; });
+            },
+          }, m.enabled ? t('sa.monitor.pause') : t('sa.monitor.resume')) : null,
           isAdmin() ? el('button', {
             class: 'ghost danger',
             onclick: function () {
@@ -3861,27 +4231,99 @@
             ? '—' : monitorValue({ value: summary.avg_value, unit: (m.recent[0] && m.recent[0].unit) || 'ms' })),
           stat(t('sa.monitor.every'), t('sa.monitor.seconds', { count: m.interval_sec })));
 
+        // A row is a summary; the trace under it is the answer. Clicking opens
+        // it in place rather than navigating: comparing the failed check with
+        // the two around it is the whole diagnostic move, and a page that
+        // replaces itself makes that impossible.
         var recent = (m.recent || []).length
-          ? el('table', { class: 'data-table' },
+          ? el('table', { class: 'data-table sa-results' },
             el('thead', {}, el('tr', {},
               el('th', {}, t('sa.monitor.status')),
               el('th', {}, t('sa.monitor.what')),
               el('th', {}, t('sa.monitor.measured')),
               el('th', {}, t('sa.monitor.checked')))),
-            el('tbody', {}, ...m.recent.map(function (r) {
-              return el('tr', {},
-                el('td', {}, statusChip(r.status)),
+            el('tbody', {}, ...m.recent.reduce(function (rows, r, index) {
+              var trace = el('tr', { class: 'sa-trace-row', hidden: true },
+                el('td', { colspan: '4' }, resultTrace(r)));
+              var row = el('tr', {
+                class: 'sa-result-row',
+                tabindex: '0',
+                title: t('sa.trace.open'),
+                onclick: function () { toggle(); },
+                onkeydown: function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } },
+              },
+                el('td', {}, el('span', { class: 'sa-disclosure' }, '▸'), statusChip(r.status)),
                 el('td', {}, r.summary || r.error_message || '',
-                  // The phase timings are the diagnosis — "accepted in 140 ms,
-                  // delivered after 90 s" is a different fault from "accepted
-                  // after 90 s" — so they are shown, not buried in the row.
-                  r.timings ? el('div', { class: 'muted' }, Object.keys(r.timings).map(function (k) {
+                  // The phase timings stay on the closed row — the shape of the
+                  // check is worth seeing without opening anything. What the
+                  // flat list could never say is WHICH phase the time went to,
+                  // and that is what opening the row draws.
+                  r.timings ? el('div', { class: 'muted' }, orderedPhases(Object.keys(r.timings)).concat(
+                    numOrNull(r.timings.total) === null ? [] : ['total']
+                  ).map(function (k) {
                     return k + ' ' + ms(r.timings[k]);
                   }).join(' · ')) : null),
                 el('td', {}, monitorValue(r)),
                 el('td', {}, when(r.checked_at)));
-            })))
+              function toggle() {
+                trace.hidden = !trace.hidden;
+                row.classList.toggle('open', !trace.hidden);
+                row.querySelector('.sa-disclosure').textContent = trace.hidden ? '▸' : '▾';
+              }
+              // The newest failure is the one somebody came to look at.
+              if (index === 0 && r.status !== 'ok') toggle();
+              rows.push(row, trace);
+              return rows;
+            }, [])))
           : el('div', { class: 'sa-empty' }, t('sa.monitor.noResults'));
+
+        // The phases of every recent check on one pair of axes. Drawn once, and
+        // redrawn in place when the scale changes — a linear axis buries a 15 ms
+        // auth under a 4.5 s delivery, and a log one buries nothing.
+        var phasePanel = null;
+        var phaseScale = 'log';
+        var phaseHolder = el('div', {});
+        var phaseHidden = {};
+        function drawPhases() {
+          var chart = phaseChart(m.recent, { scale: phaseScale, hidden: phaseHidden });
+          mount(phaseHolder, chart || el('div', { class: 'sa-empty' }, t('sa.trace.phaseNone')));
+        }
+        if (phaseChart(m.recent, { scale: 'linear' })) {
+          var phaseKeys = orderedPhases(Object.keys((m.recent || []).reduce(function (acc, r) {
+            Object.keys(r.timings || {}).forEach(function (k) { acc[k] = 1; });
+            return acc;
+          }, {})));
+          var legend = el('div', { class: 'sa-phase-legend' }, ...phaseKeys.map(function (key) {
+            var button = el('button', {
+              type: 'button',
+              class: 'sa-phase-key',
+              onclick: function () {
+                phaseHidden[key] = !phaseHidden[key];
+                button.classList.toggle('off', !!phaseHidden[key]);
+                button.setAttribute('aria-pressed', phaseHidden[key] ? 'false' : 'true');
+                drawPhases();
+              },
+            }, el('span', { class: 'sa-phase-dot', style: 'background:' + phaseColour(key) }), key);
+            button.setAttribute('aria-pressed', 'true');
+            return button;
+          }));
+          var scalePicker = el('div', {});
+          var drawScale = function () {
+            mount(scalePicker, segmented(
+              [['log', t('sa.trace.scaleLog')], ['linear', t('sa.trace.scaleLinear')]],
+              phaseScale,
+              function (pick) { phaseScale = pick; drawScale(); drawPhases(); },
+              t('sa.trace.scale')
+            ));
+          };
+          drawScale();
+          phasePanel = el('div', { class: 'sa-panel' },
+            section(t('sa.trace.phaseChart'), scalePicker),
+            el('p', { class: 'sa-help' }, t('sa.trace.phaseHelp')),
+            phaseHolder,
+            legend);
+          drawPhases();
+        }
 
         mount(body,
           back,
@@ -3895,10 +4337,25 @@
               el('strong', {}, t('sa.monitor.pendingTitle') + ' '),
               t('sa.monitor.pendingBody'))
             : null,
+          // Paused is a state somebody chose, and a screen full of stale results
+          // with no explanation reads as a broken monitor. It says which it is.
+          !m.pending && !m.enabled
+            ? el('div', { class: 'callout sa-paused' },
+              el('strong', {}, t('sa.monitor.pausedTitle') + ' '),
+              t('sa.monitor.pausedBody'))
+            : null,
+          // Once it is watching, it keeps watching — said where the interval is
+          // shown, because "does this run by itself?" is the question the screen
+          // was not answering.
+          !m.pending && m.enabled
+            ? el('div', { class: 'sa-help' }, t('sa.monitor.runningHelp', { count: m.interval_sec }))
+            : null,
           stats,
           // A monitor that has never been scheduled has nothing to chart yet.
           m.pending ? null : monitorChart(id),
+          phasePanel,
           el('h4', {}, t('sa.monitor.recent')),
+          el('p', { class: 'sa-help' }, t('sa.trace.rowHelp')),
           recent);
       });
     }
@@ -3912,7 +4369,15 @@
           ? types.filter(function (x) { return x.type === monitor.type; })[0]
           : types[0];
         var name = el('input', { type: 'text', value: monitor ? monitor.name : '' });
-        var interval = el('input', { type: 'number', min: '60', value: String(monitor ? monitor.interval_sec : chosen.default_interval_sec) });
+        var floor = Number(monitorLimits.min_interval_sec) || 60;
+        var ceiling = Number(monitorLimits.max_interval_sec) || 86400;
+        var interval = el('input', {
+          type: 'number',
+          min: String(floor),
+          max: String(ceiling),
+          step: '1',
+          value: String(monitor ? monitor.interval_sec : chosen.default_interval_sec),
+        });
         var warn = el('input', { type: 'number', value: monitor && monitor.warn_ms ? String(monitor.warn_ms) : '' });
         var crit = el('input', { type: 'number', value: monitor && monitor.crit_ms ? String(monitor.crit_ms) : '' });
         var errors = el('div', { class: 'sa-form-errors' });
@@ -3983,7 +4448,7 @@
             } else {
               control = el('input', { type: 'text', value: stored === undefined ? (f.default === null ? '' : String(f.default)) : String(stored) });
             }
-            var node = field(f.field + (f.required ? ' *' : ''), control);
+            var node = field(f.field + (f.required ? ' *' : ''), control, f.help || null, 'config.' + f.field);
             inputs[f.field] = { control: control, spec: f, node: node };
             // Any field can be the one another field waits on, so every control
             // re-runs the rules rather than only the ones we happen to know are
@@ -3996,11 +4461,15 @@
         renderFields();
 
         modal(monitor ? t('sa.monitor.edit') : t('sa.monitor.add'), el('div', {},
-          field(t('sa.monitor.name'), name),
-          field(t('sa.monitor.type'), typeSel),
-          field(t('sa.monitor.every'), interval),
-          field(t('sa.monitor.warnMs'), warn),
-          field(t('sa.monitor.critMs'), crit),
+          field(t('sa.monitor.name'), name, null, 'name'),
+          field(t('sa.monitor.type'), typeSel, null, 'type'),
+          // The one field people misread: it is not "how long to wait before the
+          // next manual check", it is the monitor running on its own, forever.
+          // So it says so, with the bounds it will actually be judged against.
+          field(t('sa.monitor.every'), interval,
+            t('sa.monitor.everyHelp', { min: floor, max: ceiling }), 'interval_sec'),
+          field(t('sa.monitor.warnMs'), warn, t('sa.monitor.warnHelp'), 'warn_ms'),
+          field(t('sa.monitor.critMs'), crit, t('sa.monitor.critHelp'), 'crit_ms'),
           fields,
           errors), function () {
           var config = {};
@@ -4232,18 +4701,102 @@
     // details live; the other shapes are fallbacks for a standalone host with a
     // different client. Reading only the fallbacks is how a form came to show a
     // bare "Validation failed" while the server had said exactly what was wrong.
+    // A rejected save used to print `interval_sec: must be at least 60 seconds`
+    // into a box at the BOTTOM of a dialog that scrolls for two screens: what an
+    // operator actually saw was the Save button flicker and nothing else. So the
+    // reasons are still listed — but the field that was rejected is now marked
+    // where it stands, the first one is scrolled to and focused, and the message
+    // sits under the input rather than out of sight.
+    //
+    // The link between the two is `data-field`: the key the server used
+    // (`interval_sec`, `config.smtp_host`) stamped on the field by `field()`.
+    // A form that has not stamped its fields still gets the box, scrolled into
+    // view — the improvement is never worse than what it replaces.
+    function formOf(node) {
+      if (!node || !node.closest) return node && node.parentNode;
+      return node.closest('.sa-modal-body') || node.closest('.sa-form') || node.parentNode;
+    }
+
+    function fieldNodes(node) {
+      var form = formOf(node);
+      var out = {};
+      if (form && form.querySelectorAll) {
+        [].forEach.call(form.querySelectorAll('[data-field]'), function (n) {
+          out[n.getAttribute('data-field')] = n;
+        });
+      }
+      return out;
+    }
+
+    function unmarkField(target) {
+      target.classList.remove('sa-field-invalid');
+      var msg = target.querySelector('.sa-field-error');
+      if (msg) msg.remove();
+    }
+
+    function clearFieldErrors(node) {
+      var fields = fieldNodes(node);
+      Object.keys(fields).forEach(function (key) { unmarkField(fields[key]); });
+    }
+
+    function markField(target, message) {
+      unmarkField(target);
+      target.classList.add('sa-field-invalid');
+      target.append(el('span', { class: 'sa-field-error' }, message));
+      var control = target.querySelector('input, select, textarea');
+      // Typing is the operator saying "I am fixing that one" — the mark goes as
+      // soon as they do, rather than sitting there until the next save.
+      if (control && !control.getAttribute('data-sa-clears')) {
+        control.setAttribute('data-sa-clears', '1');
+        var clear = function () { unmarkField(target); };
+        control.addEventListener('input', clear);
+        control.addEventListener('change', clear);
+      }
+      return control;
+    }
+
+    function fieldLabelFor(key, target) {
+      if (target && target.getAttribute('data-field-label')) return target.getAttribute('data-field-label');
+      // `config.smtp_host` is the wire key, "smtp host" is the closest thing to
+      // a sentence we can make of it without the field being on the screen.
+      return String(key).replace(/^config\./, '').replace(/_/g, ' ');
+    }
+
     function showErrors(node, e) {
       var details = (e && e.data && e.data.details)
         || (e && e.details)
         || (e && e.body && e.body.details)
         || null;
-      if (details && typeof details === 'object') {
-        mount(node, ...Object.keys(details).map(function (key) {
-          return el('div', { class: 'sa-form-error' }, el('strong', {}, key + ': '), String(details[key]));
-        }));
+      node.setAttribute('role', 'alert');
+      clearFieldErrors(node);
+
+      if (details && typeof details === 'object' && Object.keys(details).length) {
+        var fields = fieldNodes(node);
+        var firstControl = null;
+        var firstField = null;
+        var lines = Object.keys(details).map(function (key) {
+          var target = fields[key] || fields['config.' + key] || null;
+          if (target) {
+            var control = markField(target, String(details[key]));
+            if (!firstField) { firstField = target; firstControl = control; }
+          }
+          // `_` is the form as a whole ("at most 200 monitors"), not a field.
+          return el('div', { class: 'sa-form-error' },
+            key === '_' ? null : el('strong', {}, fieldLabelFor(key, target) + ': '),
+            String(details[key]));
+        });
+        mount(node,
+          el('div', { class: 'sa-form-error-title' }, t('sa.form.notSaved', { count: lines.length })),
+          ...lines);
+        var focus = firstField || node;
+        if (focus.scrollIntoView) focus.scrollIntoView({ block: 'center' });
+        if (firstControl && firstControl.focus) firstControl.focus();
         return;
       }
-      mount(node, el('div', { class: 'sa-form-error' }, err(e)));
+      mount(node,
+        el('div', { class: 'sa-form-error-title' }, t('sa.form.notSavedOne')),
+        el('div', { class: 'sa-form-error' }, err(e)));
+      if (node.scrollIntoView) node.scrollIntoView({ block: 'center' });
     }
 
     // Administration → Settings mounts ONLY the settings panel. Drawing the

@@ -17,6 +17,7 @@ const { createServiceTestSettings } = require('../src/serviceTests/settings');
 const { createQueue } = require('../src/serviceTests/scheduler/queue');
 const { bucketKey, sqlFormat } = require('../src/serviceTests/stats/period');
 const { createAssuranceReactor } = require('../src/serviceTests/assurance/reactor');
+const { secretFields: monitorSecretFields } = require('../src/serviceTests/monitors/types');
 const { createAiAnalysis } = require('../src/serviceTests/ai/analyse');
 const { ACTIVE: INCIDENT_ACTIVE, canTransition: incidentCanTransition } = require('../src/serviceTests/incidents/lifecycle');
 const { createSecretBox } = require('../src/lib/secretBox');
@@ -84,6 +85,35 @@ function makeCertificateChecker(seen = {}) {
   };
 }
 
+// A monitor runner that answers from a table instead of opening a socket: `seen`
+// maps a monitor's name (or its type) to the result the check would have
+// produced, and anything not listed comes back healthy. Every spec that touches
+// monitors goes through here, so no test ever sends a mail or resolves a name.
+function makeMonitorRunner(seen = {}) {
+  return {
+    async run(monitor) {
+      const scripted = seen[monitor.name] || seen[monitor.type] || null;
+      if (scripted) {
+        return {
+          status: 'ok', kind: null, summary: null, value: null, unit: null,
+          duration_ms: 12, timings: null, detail: null, error_message: null, ...scripted,
+        };
+      }
+      return {
+        status: 'ok',
+        kind: null,
+        summary: `${monitor.type} ${monitor.target} answered.`,
+        value: 12,
+        unit: 'ms',
+        duration_ms: 12,
+        timings: null,
+        detail: { faked: true },
+        error_message: null,
+      };
+    },
+  };
+}
+
 function makeServiceTests(overrides = {}) {
   const secretBox = createSecretBox({ key: 'service-tests-fake-key' });
   const t = {
@@ -118,6 +148,8 @@ function makeServiceTests(overrides = {}) {
     workers: makeTable(overrides.workers || []),
     certificates: makeTable(overrides.certificates || []),
     incidents: makeTable(overrides.incidents || []),
+    monitors: makeTable(overrides.monitors || []),
+    monitorResults: makeTable(overrides.monitorResults || []),
     incidentEvents: makeTable(overrides.incidentEvents || []),
     observations: makeTable(overrides.observations || []),
     aiAnalyses: makeTable(overrides.aiAnalyses || []),
@@ -1060,6 +1092,138 @@ const bool = (v) => !!v;
       async list() { return t.workers.rows.slice(); },
       async prune() { return 0; },
     },
+
+    // ------------------------------------------------------------- monitors
+    // The checks that are not a browser. Same contract as the real repository,
+    // secrets included: `list`/`findById` report WHICH secrets are stored and
+    // never what they are, and only findByIdWithSecrets hands them back — so a
+    // spec that asserts a password never leaves the server is asserting against
+    // the same asymmetry production has.
+    monitors: {
+      shape(row) {
+        if (!row) return null;
+        const stored = row.secrets || {};
+        const has = {};
+        for (const field of monitorSecretFields(row.type)) has[field] = !!stored[field];
+        const { secrets, ...rest } = row;
+        return {
+          ...clone(rest),
+          config: clone(row.config) || {},
+          has_secrets: has,
+          enabled: bool(row.enabled),
+          consecutive_failures: row.consecutive_failures || 0,
+        };
+      },
+      async list({ applicationId = null, type = null, enabled = null } = {}) {
+        return t.monitors.rows
+          .filter((r) => (applicationId ? r.application_id === applicationId : true))
+          .filter((r) => (type ? r.type === type : true))
+          .filter((r) => (enabled === null || enabled === undefined ? true : bool(r.enabled) === enabled))
+          .map((r) => repositories.monitors.shape(r));
+      },
+      async findById(id) { return repositories.monitors.shape(t.monitors.rows.find((r) => r.id === Number(id))); },
+      async findByIdWithSecrets(id) {
+        const row = t.monitors.rows.find((r) => r.id === Number(id));
+        if (!row) return null;
+        return { ...repositories.monitors.shape(row), secrets: clone(row.secrets) || {} };
+      },
+      async create(input) {
+        const row = t.monitors.insert({
+          ...input,
+          secrets: input.secrets || {},
+          enabled: input.enabled === false ? 0 : 1,
+          interval_sec: input.interval_sec || 900,
+          consecutive_failures: 0,
+          last_run_at: null,
+          last_status: null,
+        });
+        return repositories.monitors.shape(t.monitors.rows.find((r) => r.id === row.id));
+      },
+      async update(id, patch) {
+        const row = t.monitors.rows.find((r) => r.id === Number(id));
+        if (!row) return null;
+        const { secrets, ...rest } = patch;
+        if (secrets) {
+          const merged = { ...(row.secrets || {}) };
+          for (const [k, v] of Object.entries(secrets)) {
+            if (v === '' || v === null) delete merged[k];
+            else merged[k] = v;
+          }
+          row.secrets = merged;
+        }
+        Object.assign(row, rest, { enabled: rest.enabled === undefined ? row.enabled : (rest.enabled ? 1 : 0) });
+        return repositories.monitors.shape(row);
+      },
+      async remove(id) { return t.monitors.remove(id); },
+      async dueForCheck({ limit = 100 } = {}) {
+        const at = Date.now();
+        return t.monitors.rows
+          .filter((r) => bool(r.enabled))
+          .filter((r) => !r.last_run_at || (at - new Date(r.last_run_at).getTime()) >= (r.interval_sec || 900) * 1000)
+          .slice(0, limit)
+          .map((r) => repositories.monitors.shape(r));
+      },
+      async recordRun(id, { status, summary = null, durationMs = null, at = null, failed = false }) {
+        const row = t.monitors.rows.find((r) => r.id === Number(id));
+        if (!row) return null;
+        row.last_run_at = at || new Date();
+        row.last_status = status;
+        row.last_summary = summary;
+        row.last_duration_ms = durationMs;
+        row.consecutive_failures = failed ? (row.consecutive_failures || 0) + 1 : 0;
+        return repositories.monitors.shape(row);
+      },
+    },
+
+    monitorResults: {
+      async record(monitorId, result, { triggerSource = 'schedule', requestedBy = null, at = null } = {}) {
+        return t.monitorResults.insert({
+          monitor_id: monitorId,
+          status: result.status,
+          kind: result.kind || null,
+          duration_ms: result.duration_ms ?? null,
+          value: result.value ?? null,
+          unit: result.unit || null,
+          summary: result.summary || null,
+          error_message: result.error_message || null,
+          timings: result.timings || null,
+          detail: result.detail || null,
+          trigger_source: triggerSource,
+          requested_by: requestedBy,
+          checked_at: at || new Date(),
+        });
+      },
+      async findById(id) { return t.monitorResults.find(id); },
+      async list({ monitorId = null, status = null, limit = 100 } = {}) {
+        return t.monitorResults.rows
+          .filter((r) => (monitorId ? r.monitor_id === Number(monitorId) : true))
+          .filter((r) => (status ? r.status === status : true))
+          .slice()
+          .sort((a, b) => new Date(b.checked_at) - new Date(a.checked_at))
+          .slice(0, limit)
+          .map(clone);
+      },
+      async summary(monitorId, { hours = 24 } = {}) {
+        const cutoff = Date.now() - hours * 3600000;
+        const rows = t.monitorResults.rows.filter((r) => r.monitor_id === Number(monitorId)
+          && new Date(r.checked_at).getTime() >= cutoff);
+        const okCount = rows.filter((r) => r.status === 'ok').length;
+        const slow = rows.filter((r) => r.status === 'slow').length;
+        const bad = rows.filter((r) => r.status === 'failed' || r.status === 'unreachable').length;
+        const values = rows.map((r) => r.value).filter((v) => Number.isFinite(v));
+        return {
+          checks: rows.length,
+          ok: okCount,
+          slow,
+          bad,
+          availability: rows.length ? (okCount + slow) / rows.length : null,
+          avg_value: values.length ? values.reduce((a, b) => a + b, 0) / values.length : null,
+          max_value: values.length ? Math.max(...values) : null,
+          since: rows.length ? rows[rows.length - 1].checked_at : null,
+        };
+      },
+      async purgeOlderThan() { return 0; },
+    },
   };
 
   // The REAL settings service over an in-memory key/value store, so the bounds
@@ -1089,9 +1253,11 @@ const bool = (v) => !!v;
   // answers from a script instead of opening a socket — the repo rule that
   // outbound calls are mocked applies to a handshake as much as to an HTTP call.
   const notifications = [];
+  const monitorRunner = overrides.monitorRunner || makeMonitorRunner(overrides.monitor_results);
   const reactor = createAssuranceReactor({
     repositories,
     settings,
+    monitorRunner,
     certificateChecker: overrides.certificateChecker || makeCertificateChecker(overrides.certificates_seen),
     notify: overrides.notify === null ? null : (finding, group) => {
       notifications.push({ finding, group });
@@ -1128,9 +1294,9 @@ const bool = (v) => !!v;
   const captureRouter = createRecordingsCaptureRouter({ repositories, logger: null });
 
   return {
-    repositories, settings, queue, reactor, notifications, audit, auditEntries,
+    repositories, settings, queue, reactor, notifications, audit, auditEntries, monitorRunner,
     router, captureRouter, jobs: [], tables: t, secretBox,
   };
 }
 
-module.exports = { makeServiceTests, makeTable, makeCertificateChecker };
+module.exports = { makeServiceTests, makeTable, makeCertificateChecker, makeMonitorRunner };

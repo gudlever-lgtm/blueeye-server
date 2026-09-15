@@ -2068,7 +2068,7 @@ CREATE TABLE IF NOT EXISTS `service_test_incidents` (
   `application_id` INT              DEFAULT NULL,
   `environment_id` INT              DEFAULT NULL,
   `test_id` INT              DEFAULT NULL,
-  `subject_type` ENUM('test','certificate') NOT NULL,
+  `subject_type` ENUM('test','certificate','monitor') NOT NULL,
   `subject_key` VARCHAR(190) NOT NULL,
   `subject_label` VARCHAR(255)     DEFAULT NULL,
   `kind` VARCHAR(60)  NOT NULL,
@@ -2439,5 +2439,93 @@ CREATE TABLE IF NOT EXISTS `service_ai_analyses` (
   KEY idx_ai_application (application_id, created_at),
   KEY idx_ai_created (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ------------------------------------------------------------------ monitors
+-- `type` is a plain VARCHAR rather than an ENUM on purpose: the catalogue lives
+-- in src/serviceTests/monitors/types.js, and a new check type must be able to
+-- ship without a migration. The validator refuses anything not in the catalogue,
+-- so the openness is at the storage layer only.
+--
+-- `target` is the one address the check is ABOUT — the mail server, the domain,
+-- the directory host. It is denormalised out of `config` so the list screen and
+-- the incident subject can name it without parsing JSON.
+--
+-- `consecutive_failures` is kept on the row instead of counted from the results
+-- table on every sweep. The sweep asks the question for every monitor on every
+-- pass; a COUNT over history per monitor per pass is a scan we would pay for
+-- forever to learn a number the write already knew.
+CREATE TABLE IF NOT EXISTS `service_monitors` (
+  `id` INT           NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  `tenant_id` INT               DEFAULT NULL,
+  `application_id` INT               DEFAULT NULL,
+  `environment_id` INT               DEFAULT NULL,
+  `name` VARCHAR(255)  NOT NULL,
+  `type` VARCHAR(32)   NOT NULL,
+  `target` VARCHAR(255)  NOT NULL,
+  `description` TEXT              DEFAULT NULL,
+  `config` JSON          NOT NULL,
+  `secrets_encrypted` TEXT           DEFAULT NULL,
+  `interval_sec` INT           NOT NULL DEFAULT 900,
+  `warn_ms` INT               DEFAULT NULL,
+  `crit_ms` INT               DEFAULT NULL,
+  `enabled` TINYINT(1)    NOT NULL DEFAULT 1,
+  `last_run_at` DATETIME(3)       DEFAULT NULL,
+  `last_status` VARCHAR(24)       DEFAULT NULL,
+  `last_summary` VARCHAR(512)      DEFAULT NULL,
+  `last_duration_ms` INT             DEFAULT NULL,
+  `consecutive_failures` INT     NOT NULL DEFAULT 0,
+  `created_by` INT               DEFAULT NULL,
+  `created_at` DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_smon_name (name),
+  INDEX idx_smon_due (enabled, last_run_at),
+  INDEX idx_smon_app (application_id),
+  INDEX idx_smon_type (type),
+  CONSTRAINT fk_smon_app FOREIGN KEY (application_id) REFERENCES service_test_applications(id) ON DELETE SET NULL,
+  CONSTRAINT fk_smon_env FOREIGN KEY (environment_id) REFERENCES service_test_environments(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- ------------------------------------------------------------------- results
+-- `status` is the verdict vocabulary EVERY check type shares, so one list screen
+-- and one policy can read them all:
+--   ok            — the question was answered and the answer was good
+--   slow          — good, but over the operator's warning threshold
+--   failed        — the check ran and the answer was bad (mail rejected, record
+--                   missing, address listed, bind refused)
+--   unreachable   — nothing answered; there is no answer to judge
+--   misconfigured — the MONITOR cannot run (missing credential, absent driver).
+--                   Ours to fix, never the monitored service's, and policy.js
+--                   never escalates it past WARN for exactly that reason
+--   unknown       — a verdict could not be formed
+--
+-- `kind` is the finer-grained reason an incident carries (mail_undelivered,
+-- dns_record_missing, …). Same split as runs: status is what a list shows, kind
+-- is what the reaction layer decides on.
+--
+-- `timings` holds the per-phase milliseconds (connect / tls / auth / accept /
+-- delivery). The phase is the diagnosis: "accepted in 140 ms, delivered after
+-- 90 s" says the queue is backed up, and a single total would not.
+CREATE TABLE IF NOT EXISTS `service_monitor_results` (
+  `id` BIGINT        NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  `tenant_id` INT               DEFAULT NULL,
+  `monitor_id` INT           NOT NULL,
+  `status` ENUM('ok','slow','failed','unreachable','misconfigured','unknown')
+                 NOT NULL DEFAULT 'unknown',
+  `kind` VARCHAR(48)       DEFAULT NULL,
+  `duration_ms` INT               DEFAULT NULL,
+  `value` DOUBLE            DEFAULT NULL,
+  `unit` VARCHAR(16)       DEFAULT NULL,
+  `summary` VARCHAR(512)      DEFAULT NULL,
+  `error_message` TEXT              DEFAULT NULL,
+  `timings` JSON              DEFAULT NULL,
+  `detail` JSON              DEFAULT NULL,
+  `trigger_source` ENUM('schedule','manual') NOT NULL DEFAULT 'schedule',
+  `requested_by` INT               DEFAULT NULL,
+  `checked_at` DATETIME(3)   NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `created_at` DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_smonr_monitor (monitor_id, checked_at),
+  INDEX idx_smonr_status (status, checked_at),
+  CONSTRAINT fk_smonr_monitor FOREIGN KEY (monitor_id) REFERENCES service_monitors(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 SET FOREIGN_KEY_CHECKS = 1;

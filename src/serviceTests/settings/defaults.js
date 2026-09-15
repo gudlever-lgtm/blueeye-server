@@ -68,6 +68,28 @@ const NUMBER_BOUNDS = {
     // Resolved incidents are kept this long as history, then swept.
     incidentRetentionDays: [90, 1, 3650],
   },
+  monitors: {
+    // How often the monitor sweep looks for due checks. This is NOT how often a
+    // monitor runs — each one carries its own interval — it is how finely the
+    // sweep can honour them, so a minute is enough for a five-minute check and
+    // costs one indexed read.
+    sweepIntervalMs: [60000, 30000, 3600000],
+    // The floor under a monitor's own interval. A mail probe sends a real
+    // message to a real mailbox; letting one be scheduled every five seconds
+    // would turn this product into the thing the blacklist monitor warns about.
+    minIntervalSec: [60, 60, 86400],
+    maxMonitors: [200, 1, 5000],
+    // Checks run side by side within one sweep. A mail round-trip waits minutes
+    // for delivery, and running those one after another would mean a sweep that
+    // never finishes; each lane is a socket and a timer, not a browser.
+    concurrency: [4, 1, 32],
+    // A check that has not finished by here is abandoned and reported as
+    // unknown, so one hung socket cannot hold the sweep open forever. Above the
+    // longest mail deadline (30 min) on purpose.
+    hardCapMs: [1800000, 10000, 3600000],
+    // Results are history and grow forever without this.
+    resultRetentionDays: [90, 1, 3650],
+  },
   queue: {
     // A run left `running` longer than this is reaped back to `error`.
     claimTimeoutMs: [600000, 30000, 7200000],
@@ -90,6 +112,27 @@ const ENUM_FIELDS = {
 // and falls back to whatever the feature did before the setting existed — so a
 // blank field is never a broken one.
 const STRING_FIELDS = {
+  monitors: {
+    // Which domains a mail monitor may send its probe to, comma-separated.
+    //
+    // Empty means no restriction, which is the right default for an install
+    // whose first monitor is its own mailbox — but an operator who fills this in
+    // has bounded what this server can be made to send mail to, and that is the
+    // whole point of the field. Stored as text rather than a list because the
+    // settings contract has no list type, and one comma-separated line is what
+    // the operator types anyway.
+    mailRecipientDomains: {
+      default: '',
+      max: 512,
+      check(raw) {
+        const parts = String(raw).split(',').map((s) => s.trim()).filter(Boolean);
+        if (parts.length > 20) return 'at most 20 domains';
+        const bad = parts.find((d) => !/^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)+$/.test(d));
+        return bad ? `"${bad}" is not a domain name` : null;
+      },
+      clean: (raw) => String(raw).split(',').map((s) => s.trim().toLowerCase()).filter(Boolean).join(','),
+    },
+  },
   recording: {
     // The address a CUSTOMER'S browser must use to reach this server, for the
     // recording bookmarklet. Empty = work it out from the request, which is
@@ -138,6 +181,9 @@ const BOOLEAN_FIELDS = {
   assurance: {
     enabled: true, notify: true, watchCertificates: true, watchTests: true, groupAlerts: true,
   },
+  // Same pair, for the monitor sweep: `enabled` off stops it, `notify` off keeps
+  // the incidents and sends nothing.
+  monitors: { enabled: true, notify: true },
 };
 
 const SECTIONS = [...new Set([

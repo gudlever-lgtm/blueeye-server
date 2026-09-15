@@ -32,6 +32,8 @@ const {
 // watched, which is the cheapest useful thing this module can do.
 
 const { groupAlerts } = require('../alerts/grouping');
+const { createMonitorRunner, observationFor } = require('../monitors/registry');
+const { monitorReaction, monitorSummary, monitorEvidence, isFailure } = require('../monitors/policy');
 
 const silentLogger = { info() {}, warn() {}, error() {} };
 
@@ -58,10 +60,17 @@ function createAssuranceReactor({
   // grouping still works on the host-level and same-layer links.
   // Shape: (applicationId) => Promise<{ failing: [...] }>.
   dependenciesFor = null,
+  // Runs one monitor (mail, DNS, LDAP, …) and hands back a result. Injected so
+  // the suite never opens a socket; production leaves it unset and gets the
+  // real registry.
+  monitorRunner = null,
   logger = silentLogger,
   now = () => new Date(),
 }) {
   const { applications, environments, tests, runs, certificates, incidents } = repositories;
+  const monitorsRepo = repositories.monitors || null;
+  const monitorResultsRepo = repositories.monitorResults || null;
+  const observationsRepo = repositories.observations || null;
 
   async function config() {
     const s = await settings.get('assurance');
@@ -126,6 +135,37 @@ function createAssuranceReactor({
       logger.warn(`service-assurance: notify failed for incident ${incident.id} (${err && err.message})`);
       return false;
     }
+  }
+
+  // Opens an alert batch for the duration of `fn`, flushing it afterwards.
+  //
+  // Two sweeps can be in flight at once — certificates/tests on one cadence and
+  // monitors on another — and a second batch would either lose the first one's
+  // pending alerts or send them twice. So a sweep that finds a batch already
+  // open joins it, and only the outermost one flushes.
+  // Resolves { result, alerts }: what `fn` returned, and what the flush sent.
+  // A nested call reports `alerts: null` rather than zero — it did not flush, and
+  // saying "no alerts" about work somebody else is going to send would be a lie
+  // in a return value.
+  async function withBatch(fn) {
+    if (batch) return { result: await fn(), alerts: null };
+    const at = now();
+    batch = [];
+    let result;
+    let sent = { alerts: 0, folded: 0 };
+    try {
+      result = await fn();
+    } finally {
+      // Closed here rather than after the call: a sweep that throws halfway must
+      // not leave the batch open, or the next one would send this one's alerts.
+      const pending = batch;
+      batch = null;
+      sent = await flush(pending, at).catch((err) => {
+        logger.warn(`service-assurance: could not send grouped alerts (${err && err.message})`);
+        return { alerts: 0, folded: 0 };
+      });
+    }
+    return { result, alerts: sent };
   }
 
   // The severity this incident should be stored with. Never throws: a rule set
@@ -363,6 +403,137 @@ function createAssuranceReactor({
     return { evaluated, changed };
   }
 
+  // --------------------------------------------------------------- monitors
+  // The checks that are not a browser: mail delivery, DNS records, blacklists,
+  // directory binds, clocks, certificates on other ports, databases.
+  //
+  // The shape is deliberately the same as a certificate check — observe, store,
+  // react — because the reaction layer should not care what produced the
+  // observation. What differs is that a monitor result is HISTORY (one row per
+  // check, so "it took four seconds yesterday and ninety today" is answerable)
+  // while a certificate is state.
+  async function monitorsConfig() {
+    const s = await settings.get('monitors');
+    return s || {};
+  }
+
+  function runnerFor(cfg) {
+    return monitorRunner || createMonitorRunner({
+      now: () => now().getTime(),
+      hardCapMs: cfg.hardCapMs,
+      logger,
+    });
+  }
+
+  // Runs one monitor and reacts to what it found. Used by the sweep and by the
+  // "Check now" button, which is why it takes an id rather than a row: a manual
+  // check must read the CURRENT definition, not one a screen had open.
+  async function checkMonitor(id, { trigger = 'schedule', requestedBy = null, cfg = null } = {}) {
+    if (!monitorsRepo || !monitorResultsRepo) throw new Error('monitors are not wired in this process');
+    const config0 = cfg || await monitorsConfig();
+    const monitor = await monitorsRepo.findByIdWithSecrets(id);
+    if (!monitor) return { skipped: 'missing' };
+
+    const result = await runnerFor(config0).run(monitor);
+    const at = now();
+    const failed = isFailure(result);
+    // The streak the reaction is judged on INCLUDES this result: the row still
+    // holds the count from before the check.
+    const streak = failed ? (monitor.consecutive_failures || 0) + 1 : 0;
+
+    const stored = await monitorResultsRepo.record(monitor.id, result, {
+      triggerSource: trigger === 'manual' ? 'manual' : 'schedule',
+      requestedBy,
+      at,
+    });
+    const updated = await monitorsRepo.recordRun(monitor.id, {
+      status: result.status,
+      summary: result.summary,
+      durationMs: result.duration_ms,
+      at,
+      failed,
+    });
+
+    // One typed fact for the observation store, so the correlation layer reads a
+    // monitor the same way it reads a run. Best-effort: losing the observation
+    // must never lose the result.
+    if (observationsRepo) {
+      const observation = observationFor(monitor, result);
+      if (observation) {
+        await observationsRepo.recordMany(
+          { application_id: monitor.application_id || null, environment_id: monitor.environment_id || null },
+          [observation]
+        ).catch((err) => logger.warn(`service-assurance: could not store observation for monitor ${monitor.id} (${err && err.message})`));
+      }
+    }
+
+    const assurance = await config();
+    const reaction = monitorReaction(result, {
+      failureStreak: assurance.failureStreak,
+      streak,
+      criticalDays: (monitor.config && monitor.config.critical_days) || assurance.certificateCriticalDays,
+    });
+
+    const outcome = await apply({
+      subjectType: 'monitor',
+      subjectKey: `monitor:${monitor.id}`,
+      subjectLabel: monitor.name,
+      applicationId: monitor.application_id || null,
+      environmentId: monitor.environment_id || null,
+      reaction,
+      summary: reaction ? monitorSummary(monitor, result, streak) : null,
+      evidence: reaction ? monitorEvidence(monitor, result, streak) : [],
+    });
+
+    return { monitor: updated, result: stored || result, streak, ...outcome };
+  }
+
+  // One pass over every monitor whose interval has elapsed.
+  //
+  // Checks run in lanes rather than one after another: a mail round-trip waits
+  // minutes for delivery, and a serial sweep would mean a monitor set to five
+  // minutes runs whenever the slow one lets it. Each lane is a socket and a
+  // timer, so the concurrency dial is small and honest.
+  async function sweepMonitors({ force = false, limit = null } = {}) {
+    if (!monitorsRepo) return { checked: 0, changed: 0, skipped: 'unavailable' };
+    const cfg = await monitorsConfig();
+    if (!force && cfg.enabled === false) return { checked: 0, changed: 0, skipped: 'disabled' };
+
+    const due = force
+      ? (await monitorsRepo.list({ enabled: true })).slice(0, limit || 500)
+      : await monitorsRepo.dueForCheck({ limit: limit || 100 });
+    if (!due.length) return { checked: 0, changed: 0 };
+
+    const lanes = Math.max(1, Math.min(Number(cfg.concurrency) || 4, 32));
+    const queue = [...due];
+    let checked = 0;
+    let changed = 0;
+
+    const worker = async () => {
+      for (;;) {
+        const next = queue.shift();
+        if (!next) return;
+        checked += 1;
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          const outcome = await checkMonitor(next.id, { cfg });
+          if (outcome && outcome.changed) changed += 1;
+        } catch (err) {
+          logger.warn(`service-assurance: monitor ${next.id} (${next.type}) failed to run (${err && err.message})`);
+        }
+      }
+    };
+    await withBatch(async () => {
+      await Promise.all(Array.from({ length: Math.min(lanes, queue.length) }, worker));
+    });
+
+    if (monitorResultsRepo && cfg.resultRetentionDays) {
+      await monitorResultsRepo.purgeOlderThan(cfg.resultRetentionDays)
+        .catch((err) => logger.warn(`service-assurance: monitor result purge failed (${err && err.message})`));
+    }
+    return { checked, changed };
+  }
+
   // ------------------------------------------------------------------ sweep
   // One alert per PROBLEM, not per incident.
   //
@@ -441,35 +612,27 @@ function createAssuranceReactor({
   async function sweep() {
     const cfg = await config();
     if (cfg.enabled === false) return { skipped: 'disabled' };
-    const at = now();
-    // Opened here and closed in `finally`: a sweep that throws halfway must not
-    // leave the batch open, or the next one would send this one's alerts too.
-    batch = [];
     let certs;
     let testResults;
-    let alerts = { alerts: 0, folded: 0 };
-    try {
+    // The batch is opened and flushed around BOTH halves, so one sweep sends one
+    // grouped alert rather than one per half.
+    const { alerts } = await withBatch(async () => {
       certs = await sweepCertificates();
       testResults = await sweepTests();
-    } finally {
-      const pending = batch;
-      batch = null;
-      alerts = await flush(pending, at).catch((err) => {
-        logger.warn(`service-assurance: could not send grouped alerts (${err && err.message})`);
-        return { alerts: 0, folded: 0 };
-      });
-    }
+    });
     if (cfg.incidentRetentionDays) {
       await incidents.purgeResolvedOlderThan(cfg.incidentRetentionDays)
         .catch((err) => logger.warn(`service-assurance: incident purge failed (${err && err.message})`));
     }
-    return { certificates: certs, tests: testResults, alerts };
+    return { certificates: certs, tests: testResults, alerts: alerts || { alerts: 0, folded: 0 } };
   }
 
   return {
     sweep,
     sweepCertificates,
     sweepTests,
+    sweepMonitors,
+    checkMonitor,
     checkTarget,
     targetsForApplication,
     streakOf,
@@ -519,4 +682,49 @@ function createAssuranceJob({ reactor, settings, logger = silentLogger }) {
   };
 }
 
-module.exports = { createAssuranceReactor, createAssuranceJob };
+// The monitor sweep's own job.
+//
+// Separate from the assurance job rather than folded into it, because the two
+// have genuinely different cadences and durations: a certificate handshake takes
+// a moment and is re-read every six hours, while a mail round-trip can wait five
+// minutes for delivery. Sharing a timer would mean either certificates on the
+// mail probe's schedule or the mail probe on the certificates'. Each job
+// re-reads its interval from settings on every tick and re-arms only after the
+// tick finishes, so two sweeps never overlap.
+function createMonitorsJob({ reactor, settings, logger = silentLogger }) {
+  let timer = null;
+  let stopped = true;
+
+  async function tick() {
+    try {
+      await reactor.sweepMonitors();
+    } catch (err) {
+      logger.error(`service-assurance: monitor sweep failed (${err && err.message})`);
+    }
+    if (stopped) return;
+    let intervalMs = 60000;
+    try {
+      const cfg = await settings.get('monitors');
+      if (cfg && Number.isFinite(cfg.sweepIntervalMs)) intervalMs = cfg.sweepIntervalMs;
+    } catch { /* the default cadence is a fine fallback */ }
+    timer = setTimeout(tick, intervalMs);
+    if (timer.unref) timer.unref();
+  }
+
+  return {
+    start() {
+      if (!stopped) return;
+      stopped = false;
+      // Twenty seconds after boot: after the assurance job's first sweep, so a
+      // restart does not open every socket the product owns at once.
+      timer = setTimeout(tick, 20000);
+      if (timer.unref) timer.unref();
+    },
+    stop() {
+      stopped = true;
+      if (timer) { clearTimeout(timer); timer = null; }
+    },
+  };
+}
+
+module.exports = { createAssuranceReactor, createAssuranceJob, createMonitorsJob };

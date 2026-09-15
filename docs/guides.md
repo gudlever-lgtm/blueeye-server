@@ -36,7 +36,7 @@ learning the product has a browser open on the screen they are stuck on.
 | `monitoring` | 7 | Changes and what "mark as seen" really does, the Overview's verdicts, Traffic and the per-agent traffic source, Sites, Destinations |
 | `fleet` | 7 | Enrolment and the signing key, the agent page, interface verdicts, NIC firmware drift, keeping agents current |
 | `diagnostics` | 6 | Which tool answers which question, which probe for which symptom, saved tests and transaction tests, Flows/Topology, the outage screen |
-| `assurance` | 14 | The Service Assurance module end to end: application, allowlist, discovery, tests, journeys, schedules, runs, health, incidents, alerts, every setting |
+| `assurance` | 15 | The Service Assurance module end to end: application, allowlist, discovery, tests, journeys, schedules, runs, health, incidents, **monitors** (mail delivery, DNS, blacklists, directory, clocks, certificates on other ports), alerts, every setting |
 | `insights` | 7 | The vocabulary (finding / event / situation / report), how a finding is made, events and situations, alerting, retention, reporting |
 
 ## Two design rules
@@ -102,6 +102,7 @@ button.
 | Service Assurance | Register the application | creates the application | `POST /api/service-tests/applications` | admin |
 | Service Assurance | Allow the addresses | adds one allowlist entry | `POST …/applications/:id/allowed-hosts` | admin |
 | Service Assurance | Tests | creates a two-step test (open + assert the title) | `POST /api/service-tests/tests` | operator |
+| Service Assurance | Monitors | creates the mail delivery check (send-only; round-trip is a checkbox on the monitor afterwards) | `POST /api/service-tests/monitors` | operator |
 
 The rules they follow, because a guide that writes to a production system has to
 be more careful than one that only talks:

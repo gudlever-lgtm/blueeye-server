@@ -2,6 +2,9 @@
 
 const { KIND, EXPLANATION } = require('../runner/classify');
 const { STATUS } = require('./certificates');
+// The monitors' own explanations, so one lookup covers every incident kind this
+// module can open — a failing run, a certificate, or a monitor.
+const { EXPLANATION: MONITOR_EXPLANATION } = require('../monitors/policy');
 
 // What Service Assurance DOES about what it found — the decision layer, pure.
 //
@@ -78,9 +81,12 @@ const CERT_EXPLANATION = {
   },
 };
 
-// The plain-language record for any incident kind, whichever side it came from.
+// The plain-language record for any incident kind, whichever side it came from:
+// a failing run, a certificate, or one of the monitors (mail, DNS, directory,
+// clock). One lookup, because the reactor stores the same three sentences on
+// every incident and does not care which half produced it.
 function explain(kind) {
-  return CERT_EXPLANATION[kind] || EXPLANATION[kind] || EXPLANATION[KIND.UNKNOWN];
+  return CERT_EXPLANATION[kind] || MONITOR_EXPLANATION[kind] || EXPLANATION[kind] || EXPLANATION[KIND.UNKNOWN];
 }
 
 // ------------------------------------------------------------- certificates

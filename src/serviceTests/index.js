@@ -14,6 +14,8 @@ const { createServiceTestSettingsRepository } = require('./storage/settingsRepos
 const { createWorkersRepository } = require('./storage/workersRepository');
 const { createCertificatesRepository } = require('./storage/certificatesRepository');
 const { createIncidentsRepository } = require('./storage/incidentsRepository');
+const { createMonitorsRepository } = require('./storage/monitorsRepository');
+const { createMonitorResultsRepository } = require('./storage/monitorResultsRepository');
 const { createObservationsRepository } = require('./storage/observationsRepository');
 const { createAiAnalysesRepository } = require('./storage/aiAnalysesRepository');
 const { createAiAnalysis } = require('./ai/analyse');
@@ -25,7 +27,7 @@ const { createServiceTestSettings } = require('./settings');
 const { createServiceTestsApiRouter } = require('./api');
 const { createQueue } = require('./scheduler/queue');
 const { createArtifactStore, createArtifactRetention } = require('./runner/artifacts');
-const { createAssuranceReactor, createAssuranceJob } = require('./assurance/reactor');
+const { createAssuranceReactor, createAssuranceJob, createMonitorsJob } = require('./assurance/reactor');
 const { buildServiceMap } = require('./analysis/serviceMap');
 const { analyseDependencies } = require('./dependencies/dependencies');
 const { journeyHealth } = require('./journeys/health');
@@ -70,6 +72,11 @@ function createServiceTestsModule(rawPorts = {}) {
     workers: createWorkersRepository({ db, now: clock }),
     certificates: createCertificatesRepository({ db, now: clock }),
     incidents: createIncidentsRepository({ db, now: clock }),
+    // The checks that are not a browser, and their history. The definitions
+    // carry secrets (an SMTP password, a bind password), so the repository takes
+    // the same secretBox the credentials one does.
+    monitors: createMonitorsRepository({ db, secretBox: secrets, now: clock }),
+    monitorResults: createMonitorResultsRepository({ db, now: clock }),
     recordings: createRecordingsRepository({ db, now: clock }),
     journeys: createJourneysRepository({ db, now: clock }),
     healing: createHealingRepository({ db, now: clock }),
@@ -161,6 +168,9 @@ function createServiceTestsModule(rawPorts = {}) {
       certificateChecker: rawPorts.certificateChecker || null,
       severityRules: rawPorts.severityRules || null,
       notify: rawPorts.notify || null,
+      // Left unset in production: the reactor builds the real check registry.
+      // The suite injects one so no monitor ever opens a socket in a test.
+      monitorRunner: rawPorts.monitorRunner || null,
       // What a service is observed to depend on — the strongest link the alert
       // grouping has. Bounded on purpose: a sweep runs on a schedule and must
       // not walk the whole estate to decide how to phrase one message. Without
@@ -215,6 +225,9 @@ function createServiceTestsModule(rawPorts = {}) {
   // The sweep IS a background job, unlike the runner: it needs no browser, so it
   // belongs in the API process where the alerting configuration lives.
   if (reactor) jobs.push(createAssuranceJob({ reactor, settings, logger }));
+  // The monitor sweep runs on its own cadence — see createMonitorsJob for why it
+  // is not folded into the assurance sweep.
+  if (reactor) jobs.push(createMonitorsJob({ reactor, settings, logger }));
   // Abandoned recordings are swept rather than kept: an expired one is dead
   // weight, and it is whatever the operator typed before they wandered off.
   if (captureRouter) jobs.push(createRecordingRetention({ recordingsRepo: repositories.recordings, logger }));

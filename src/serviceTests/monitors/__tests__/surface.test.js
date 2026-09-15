@@ -112,6 +112,26 @@ test('every catalogue entry is complete, and every declaration has a reader', ()
         assert.ok((meta.hostFields || []).includes(name), `${type}: "${name}" is a host field but is not in hostFields`);
       }
     }
+    // `showWhen` is a DISPLAY rule the form obeys: it hides a field that does
+    // not apply (a DKIM selector on an SPF check). A rule that points at a field
+    // that does not exist, or at a value that field can never hold, hides
+    // nothing — or hides it forever, which is worse because the field then
+    // cannot be filled in at all.
+    for (const [name, spec] of Object.entries(meta.fields)) {
+      if (!spec.showWhen) continue;
+      const controller = meta.fields[spec.showWhen.field];
+      assert.ok(controller, `${type}.${name}: showWhen points at "${spec.showWhen.field}", which is not a field`);
+      assert.ok(Array.isArray(spec.showWhen.in) && spec.showWhen.in.length, `${type}.${name}: showWhen has no values`);
+      for (const value of spec.showWhen.in) {
+        if (controller.type === 'enum') {
+          assert.ok(controller.values.includes(value), `${type}.${name}: showWhen waits for ${spec.showWhen.field}=${value}, which it can never be`);
+        } else if (controller.type === 'boolean') {
+          assert.equal(typeof value, 'boolean', `${type}.${name}: showWhen compares a boolean field to ${JSON.stringify(value)}`);
+        }
+      }
+      assert.ok(!spec.required, `${type}.${name}: a field that is sometimes hidden cannot be required`);
+    }
+
     // Defaults must be inside the bounds they are declared with, or the form
     // opens on a value the validator refuses.
     for (const [name, spec] of Object.entries(meta.fields)) {
@@ -139,6 +159,12 @@ test('the catalogue the API serves says the same thing as the catalogue the code
     assert.equal(entry.target, meta.target);
     assert.deepEqual(entry.secrets, secretFields(entry.type));
     assert.deepEqual(entry.fields.map((f) => f.field), Object.keys(meta.fields));
+    // The form cannot hide what it is not told about.
+    for (const field of entry.fields) {
+      const spec = meta.fields[field.field];
+      if (spec.showWhen) assert.deepEqual(field.show_when, { field: spec.showWhen.field, in: spec.showWhen.in });
+      else assert.equal(field.show_when, null);
+    }
     // Nothing in the served catalogue may be a function or undefined: it is
     // JSON on the wire, and a function silently becomes nothing.
     assert.doesNotThrow(() => JSON.parse(JSON.stringify(entry)));

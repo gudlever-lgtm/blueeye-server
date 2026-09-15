@@ -148,7 +148,12 @@ function makeServiceTests(overrides = {}) {
     workers: makeTable(overrides.workers || []),
     certificates: makeTable(overrides.certificates || []),
     incidents: makeTable(overrides.incidents || []),
-    monitors: makeTable(overrides.monitors || []),
+    monitors: makeTable((overrides.monitors || []).map((m) => (
+      // Seeded monitors are ALREADY activated unless the fixture says otherwise,
+      // so the specs that are about sweeping, incidents and alerts do not each
+      // have to open the gate first. The gate has its own spec.
+      Object.prototype.hasOwnProperty.call(m, 'activated_at') ? m : { ...m, activated_at: new Date() }
+    ))),
     monitorResults: makeTable(overrides.monitorResults || []),
     incidentEvents: makeTable(overrides.incidentEvents || []),
     observations: makeTable(overrides.observations || []),
@@ -1111,6 +1116,8 @@ const bool = (v) => !!v;
           config: clone(row.config) || {},
           has_secrets: has,
           enabled: bool(row.enabled),
+          activated_at: row.activated_at || null,
+          pending: !row.activated_at,
           consecutive_failures: row.consecutive_failures || 0,
         };
       },
@@ -1154,11 +1161,21 @@ const bool = (v) => !!v;
         Object.assign(row, rest, { enabled: rest.enabled === undefined ? row.enabled : (rest.enabled ? 1 : 0) });
         return repositories.monitors.shape(row);
       },
+      async activate(id, at = null) {
+        const row = t.monitors.rows.find((r) => r.id === Number(id));
+        if (!row) return null;
+        // Idempotent, like the real one: the first activation is the date that
+        // "watching since" means.
+        if (!row.activated_at) row.activated_at = at || new Date();
+        return repositories.monitors.shape(row);
+      },
       async remove(id) { return t.monitors.remove(id); },
       async dueForCheck({ limit = 100 } = {}) {
         const at = Date.now();
         return t.monitors.rows
           .filter((r) => bool(r.enabled))
+          // The activation gate: a monitor that has never worked is not swept.
+          .filter((r) => !!r.activated_at)
           .filter((r) => !r.last_run_at || (at - new Date(r.last_run_at).getTime()) >= (r.interval_sec || 900) * 1000)
           .slice(0, limit)
           .map((r) => repositories.monitors.shape(r));
@@ -1221,6 +1238,39 @@ const bool = (v) => !!v;
           max_value: values.length ? Math.max(...values) : null,
           since: rows.length ? rows[rows.length - 1].checked_at : null,
         };
+      },
+      async series({ monitorId, from, to }) {
+        // Bucketed by the hour, which is what every period the specs use asks
+        // for; the real one lets SQL do it with the period's own format.
+        const rows = t.monitorResults.rows.filter((r) => r.monitor_id === Number(monitorId)
+          && new Date(r.checked_at) >= new Date(from) && new Date(r.checked_at) < new Date(to));
+        const byBucket = new Map();
+        for (const row of rows) {
+          const d = new Date(row.checked_at);
+          const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')} ${String(d.getUTCHours()).padStart(2, '0')}:00`;
+          const bucket = byBucket.get(key)
+            || { bucket: key, checks: 0, ok: 0, slow: 0, bad: 0, misconfigured: 0, unknown: 0, values: [] };
+          bucket.checks += 1;
+          if (row.status === 'ok') bucket.ok += 1;
+          else if (row.status === 'slow') bucket.slow += 1;
+          else if (row.status === 'failed' || row.status === 'unreachable') bucket.bad += 1;
+          else if (row.status === 'misconfigured') bucket.misconfigured += 1;
+          else bucket.unknown += 1;
+          if (Number.isFinite(row.value)) bucket.values.push(row.value);
+          byBucket.set(key, bucket);
+        }
+        return [...byBucket.values()].sort((a, b) => a.bucket.localeCompare(b.bucket)).map((b) => {
+          const good = b.ok + b.slow;
+          const judged = good + b.bad + b.misconfigured;
+          const { values, ...rest } = b;
+          return {
+            ...rest,
+            availability: judged ? good / judged : null,
+            avg_value: values.length ? Math.round(values.reduce((x, y) => x + y, 0) / values.length) : null,
+            max_value: values.length ? Math.max(...values) : null,
+            min_value: values.length ? Math.min(...values) : null,
+          };
+        });
       },
       async purgeOlderThan() { return 0; },
     },

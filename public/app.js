@@ -11551,6 +11551,12 @@ const DOCS = [
           ]),
           el('div', { class: 'callout' }, el('strong', {}, 'Accepted is not delivered: '), 'left alone, the check measures whether the server took the message. Turn on ', el('strong', {}, 'roundtrip'), ' and give it the IMAP mailbox the message goes to, and it measures the whole way: the probe puts a unique token in the message, watches the mailbox until it turns up, and reports the delivery time from the receiving server\u2019s own clock. It deletes the message afterwards. That is the only setting that answers "does our mail actually arrive".'),
 
+          el('div', { class: 'callout' }, el('strong', {}, 'It does not start until it works once: '), 'a new monitor is saved but not yet watching — it says so on its own page. Press Check now; the first check that works puts it on its schedule. That way a typo in the setup cannot page anybody at two in the morning. If the service is down right now and you want it watched anyway, ', el('strong', {}, 'Start watching'), ' schedules it regardless.'),
+
+          el('h4', {}, 'Is it getting worse?'),
+          el('p', {}, ['Each monitor has a ', el('strong', {}, 'History'), ' chart: how available it was per hour, day or month, and what it measured inside that period. Step through with ◀ ▶ or jump to a date, the same way the run history works.']),
+          el('p', {}, '100% available with a delivery time that tripled over a week is the reading worth having, and no single number can show it. A gap in the bars means nothing was checked in that period — drawn as a gap on purpose, because that is a different fact from "everything failed".'),
+
           el('h4', {}, 'Reading the answer'),
           docsTable(['Status', 'What it means', 'Whose problem'], [
             ['OK', 'the question was answered and the answer was good', '—'],

@@ -2469,6 +2469,7 @@ CREATE TABLE IF NOT EXISTS `service_monitors` (
   `warn_ms` INT               DEFAULT NULL,
   `crit_ms` INT               DEFAULT NULL,
   `enabled` TINYINT(1)    NOT NULL DEFAULT 1,
+  `activated_at` DATETIME(3) NULL DEFAULT NULL,
   `last_run_at` DATETIME(3)       DEFAULT NULL,
   `last_status` VARCHAR(24)       DEFAULT NULL,
   `last_summary` VARCHAR(512)      DEFAULT NULL,

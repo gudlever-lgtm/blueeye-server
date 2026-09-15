@@ -113,6 +113,61 @@ function createMonitorResultsRepository({ db, now = () => new Date() }) {
     };
   }
 
+  // The history as a CHART rather than a list: availability per bucket, and the
+  // measurement's shape inside it.
+  //
+  // Same bucketing as the run-history charts (stats/period.js decides what a
+  // period and a bucket are, and hands the SQL format down), so "this week" means
+  // the same thing on both screens and is cut in the VIEWER's time zone — bucketing
+  // in UTC would put the first hours of a Copenhagen day in the previous one.
+  //
+  // `unknown` counts towards neither available nor unavailable: it is the outcome
+  // that says nobody managed to look, and folding it into either would be
+  // inventing a fact. It stays in `checks` so a bucket's numbers still add up.
+  async function series({ monitorId, from, to, sqlFormat, offsetMinutes = 0 } = {}) {
+    // The bucket expression's placeholders come FIRST: they sit in the SELECT
+    // list, which MySQL binds before the WHERE clause.
+    const params = [Number(offsetMinutes) || 0, String(sqlFormat), monitorId, from, to];
+    const [rows] = await pool.query(
+      `SELECT DATE_FORMAT(DATE_SUB(checked_at, INTERVAL ? MINUTE), ?) AS bucket,
+              COUNT(*) AS checks,
+              SUM(status = 'ok') AS ok_count,
+              SUM(status = 'slow') AS slow_count,
+              SUM(status IN ('failed','unreachable')) AS bad_count,
+              SUM(status = 'misconfigured') AS misconfigured_count,
+              SUM(status = 'unknown') AS unknown_count,
+              ROUND(AVG(value)) AS avg_value,
+              MAX(value) AS max_value,
+              MIN(value) AS min_value
+         FROM service_monitor_results
+        WHERE monitor_id = ? AND checked_at >= ? AND checked_at < ?
+        GROUP BY bucket
+        ORDER BY bucket`,
+      params
+    );
+    return rows.map((row) => {
+      const checks = Number(row.checks) || 0;
+      const good = (Number(row.ok_count) || 0) + (Number(row.slow_count) || 0);
+      const bad = (Number(row.bad_count) || 0) + (Number(row.misconfigured_count) || 0);
+      const judged = good + bad;
+      return {
+        bucket: row.bucket,
+        checks,
+        ok: Number(row.ok_count) || 0,
+        slow: Number(row.slow_count) || 0,
+        bad: Number(row.bad_count) || 0,
+        misconfigured: Number(row.misconfigured_count) || 0,
+        unknown: Number(row.unknown_count) || 0,
+        // null when nothing was judged in this bucket — a bar that is not drawn,
+        // which is a different statement from a bar at zero.
+        availability: judged ? good / judged : null,
+        avg_value: numOrNull(row.avg_value),
+        max_value: numOrNull(row.max_value),
+        min_value: numOrNull(row.min_value),
+      };
+    });
+  }
+
   async function purgeOlderThan(days) {
     const keep = Math.min(Math.max(Number(days) || 90, 1), 3650);
     const [res] = await pool.query(
@@ -122,7 +177,7 @@ function createMonitorResultsRepository({ db, now = () => new Date() }) {
     return res.affectedRows || 0;
   }
 
-  return { record, findById, list, summary, purgeOlderThan };
+  return { record, findById, list, summary, series, purgeOlderThan };
 }
 
 module.exports = { createMonitorResultsRepository };

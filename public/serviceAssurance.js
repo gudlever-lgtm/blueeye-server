@@ -220,11 +220,20 @@
       return group;
     }
 
-    function field(label, control, help) {
-      return el('label', { class: 'sa-field' },
+    // `name` is the key the SERVER uses for this field in a validation reply
+    // (`interval_sec`, `config.smtp_host`). Stamping it here is what lets a
+    // rejected save mark the field that was rejected instead of printing a key
+    // into a box at the bottom of the dialog.
+    function field(label, control, help, name) {
+      var node = el('label', { class: 'sa-field' },
         el('span', { class: 'sa-field-label' }, label),
         control,
         help ? el('span', { class: 'sa-help' }, help) : null);
+      if (name) {
+        node.setAttribute('data-field', name);
+        node.setAttribute('data-field-label', String(label).replace(/\s*\*$/, ''));
+      }
+      return node;
     }
 
     function section(title, actions) {
@@ -3670,9 +3679,19 @@
 
     // ------------------------------------------------------------ schedules
     views.schedules = function (body) {
-      return Promise.all([api(API + '/schedules'), api(API + '/tests')]).then(function (res) {
+      // Monitors are read alongside the tests because this screen is where
+      // somebody looks for "when does that run again" — and a monitor carries
+      // its own interval rather than a schedule row, so without them listed here
+      // the honest answer ("it is not on this screen") is one nobody can find.
+      return Promise.all([
+        api(API + '/schedules'),
+        api(API + '/tests'),
+        api(API + '/monitors').catch(function () { return []; }),
+        loadMonitorTypes().catch(function () { return []; }),
+      ]).then(function (res) {
         var schedules = res[0];
         var tests = res[1];
+        var monitors = Array.isArray(res[2]) ? res[2] : [];
         var byId = {};
         tests.forEach(function (x) { byId[x.id] = x; });
 
@@ -3683,42 +3702,116 @@
           }, '+ ' + t('sa.schedule.add'))
           : null);
 
-        if (!schedules.length) {
-          mount(body, head, el('div', { class: 'sa-empty' },
-            t(tests.length ? 'sa.schedule.noneYet' : 'sa.schedule.noTests')));
-          return;
-        }
-        mount(body, head, el('table', { class: 'data-table' },
-          el('thead', {}, el('tr', {},
-            el('th', {}, t('sa.schedule.test')),
-            el('th', {}, t('sa.schedule.every')),
-            el('th', {}, t('sa.schedule.next')),
-            el('th', {}, ''))),
-          el('tbody', {}, ...schedules.map(function (s) {
-            return el('tr', { class: 'clickable', onclick: function () { state.tab = 'tests'; state.testId = s.test_id; draw(); } },
-              el('td', {}, (byId[s.test_id] && byId[s.test_id].name) || ('#' + s.test_id)),
-              el('td', {}, s.description),
-              el('td', {}, when(s.next_run_at)),
-              el('td', {}, s.missed_intervals > 2 ? el('span', { class: 'sa-warn' }, t('sa.schedule.behind', { count: s.missed_intervals })) : ''));
-          }))));
+        var testTable = schedules.length
+          ? el('table', { class: 'data-table' },
+            el('thead', {}, el('tr', {},
+              el('th', {}, t('sa.schedule.test')),
+              el('th', {}, t('sa.schedule.application')),
+              el('th', {}, t('sa.schedule.every')),
+              el('th', {}, t('sa.schedule.next')),
+              el('th', {}, ''))),
+            el('tbody', {}, ...schedules.map(function (s) {
+              var test = byId[s.test_id];
+              return el('tr', { class: 'clickable', onclick: function () { state.tab = 'tests'; state.testId = s.test_id; draw(); } },
+                // The name first, because that is what somebody came looking
+                // for; a deleted test still says which id it was.
+                el('td', {}, el('strong', {}, (test && test.name) || ('#' + s.test_id)),
+                  test && test.description ? el('div', { class: 'muted' }, test.description) : null),
+                // Four unrelated tests called "Login" are four different things,
+                // and the application is what tells them apart.
+                el('td', {}, (test && test.application_name) || el('span', { class: 'muted' }, '—')),
+                el('td', {}, s.description),
+                el('td', {}, when(s.next_run_at)),
+                el('td', {}, s.missed_intervals > 2 ? el('span', { class: 'sa-warn' }, t('sa.schedule.behind', { count: s.missed_intervals })) : ''));
+            })))
+          : el('div', { class: 'sa-empty' }, t(tests.length ? 'sa.schedule.noneYet' : 'sa.schedule.noTests'));
+
+        mount(body, head, testTable, monitorCadences(monitors));
       });
     };
+
+    // When a monitor runs next, from its own interval. A monitor that has never
+    // run is due on the next sweep; one that is still pending is not due at all,
+    // and says so rather than showing a time that will not happen.
+    function monitorNextRun(m) {
+      if (m.pending) return null;
+      if (!m.last_run_at) return new Date();
+      var last = new Date(m.last_run_at).getTime();
+      if (Number.isNaN(last)) return null;
+      return new Date(last + (m.interval_sec || 900) * 1000);
+    }
+
+    // The monitors, read-only, on the screen where people look for cadences.
+    //
+    // Deliberately NOT editable here: a monitor's interval lives on the monitor,
+    // and a second place to change it is a second place for the two to disagree.
+    // The row opens the monitor, which is where it is changed.
+    function monitorCadences(monitors) {
+      if (!monitors.length) return null;
+      return el('div', { class: 'sa-panel' },
+        section(t('sa.schedule.monitorTitle'), null),
+        el('p', { class: 'sa-help' }, t('sa.schedule.monitorHelp')),
+        el('table', { class: 'data-table' },
+          el('thead', {}, el('tr', {},
+            el('th', {}, t('sa.monitor.name')),
+            el('th', {}, t('sa.monitor.type')),
+            el('th', {}, t('sa.monitor.target')),
+            el('th', {}, t('sa.schedule.every')),
+            el('th', {}, t('sa.schedule.next')))),
+          el('tbody', {}, ...monitors.map(function (m) {
+            var next = monitorNextRun(m);
+            return el('tr', {
+              class: 'clickable',
+              onclick: function () { state.tab = 'monitors'; state.monitorId = m.id; draw(); },
+            },
+            el('td', {}, el('strong', {}, m.name)),
+            el('td', {}, monitorTypeLabel(m.type)),
+            el('td', {}, el('code', {}, m.target)),
+            el('td', {}, t('sa.monitor.seconds', { count: m.interval_sec })),
+            el('td', {}, m.pending
+              ? el('span', { class: 'sa-muted-chip' }, t('sa.monitor.pending'))
+              : (m.enabled ? when(next) : el('span', { class: 'sa-muted-chip' }, t('sa.monitor.paused')))));
+          }))));
+    }
+
+    // Test options, grouped under their application. A test whose application is
+    // gone (or was never joined) lands in its own group rather than silently
+    // disappearing from a picker.
+    function groupedTestOptions(tests) {
+      var groups = [];
+      var byApp = {};
+      tests.forEach(function (x) {
+        var label = x.application_name || t('sa.schedule.noApplication');
+        if (!byApp[label]) { byApp[label] = []; groups.push(label); }
+        byApp[label].push(x);
+      });
+      return groups.map(function (label) {
+        return el('optgroup', { label: label }, ...byApp[label].map(function (x) {
+          // The application is in the option text too: a <optgroup> label is not
+          // read out by every screen reader, and the closed select shows only
+          // the option.
+          return el('option', { value: String(x.id) }, x.application_name ? x.application_name + ' — ' + x.name : x.name);
+        }));
+      });
+    }
 
     // The schedule form, shared by the global Schedules tab (where a test must be
     // picked) and a test's own page (where it is already known).
     function scheduleForm(tests, onSaved, fixedTest) {
       if (!fixedTest && !tests.length) { toast(t('sa.schedule.noTests'), true); return; }
       api(API + '/schedules/intervals').then(function (res) {
-        var testSel = fixedTest ? null : el('select', {},
-          ...tests.map(function (x) { return el('option', { value: String(x.id) }, x.name); }));
+        // Grouped by application, and each option says which application it is
+        // in. Four tests called "Login" in a flat list are four indistinguishable
+        // rows, and picking the wrong one schedules the wrong service.
+        var testSel = fixedTest ? null : el('select', {}, ...groupedTestOptions(tests));
         var every = el('select', {}, ...res.intervals.map(function (i) {
           return el('option', { value: String(i.seconds) }, i.da || i.en);
         }));
         var tz = el('input', { type: 'text', value: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' });
         var errors = el('div', { class: 'sa-form-errors' });
 
-        modal(t('sa.schedule.add'), el('div', {},
-          testSel ? field(t('sa.schedule.test'), testSel) : null,
+        modal(fixedTest ? t('sa.schedule.addFor', { name: fixedTest.name }) : t('sa.schedule.add'), el('div', {},
+          testSel ? field(t('sa.schedule.test'), testSel, t('sa.schedule.testHelp')) : null,
           field(t('sa.schedule.every'), every),
           field(t('sa.schedule.timezone'), tz),
           errors), function () {
@@ -3743,11 +3836,15 @@
     // about it — and, more to the point, the field list and its bounds have one
     // definition instead of two that drift.
     var monitorTypes = null;
+    var monitorLimits = { min_interval_sec: 60, max_interval_sec: 86400, recipient_domains: [] };
 
     function loadMonitorTypes() {
       if (monitorTypes) return Promise.resolve(monitorTypes);
       return api(API + '/monitors/types').then(function (res) {
         monitorTypes = res.types || [];
+        // The floor is a SETTING, so the form asks the server for it rather than
+        // carrying a second copy that goes stale the day somebody raises it.
+        monitorLimits = res.limits || monitorLimits;
         return monitorTypes;
       });
     }
@@ -3841,6 +3938,24 @@
             },
           }, t('sa.monitor.checkNow')) : null,
           isOperator() ? el('button', { class: 'ghost', onclick: function () { monitorForm(m); } }, t('sa.monitor.edit')) : null,
+          // The stop button. A monitor that has been activated runs on its own
+          // interval and never stops on its own, and until this existed the only
+          // way to make it stop was to delete it — which throws the history away
+          // with it. Pausing keeps everything and stops the sweep.
+          isOperator() ? el('button', {
+            class: 'ghost',
+            title: m.enabled ? t('sa.monitor.pauseHelp') : t('sa.monitor.resumeHelp'),
+            onclick: function (e) {
+              var button = e.target;
+              button.disabled = true;
+              api(API + '/monitors/' + id, { method: 'PATCH', body: { enabled: !m.enabled } })
+                .then(function () {
+                  toast(m.enabled ? t('sa.monitor.pausedToast') : t('sa.monitor.resumedToast'));
+                  draw();
+                })
+                .catch(function (e0) { toast(err(e0), true); button.disabled = false; });
+            },
+          }, m.enabled ? t('sa.monitor.pause') : t('sa.monitor.resume')) : null,
           isAdmin() ? el('button', {
             class: 'ghost danger',
             onclick: function () {
@@ -3895,6 +4010,19 @@
               el('strong', {}, t('sa.monitor.pendingTitle') + ' '),
               t('sa.monitor.pendingBody'))
             : null,
+          // Paused is a state somebody chose, and a screen full of stale results
+          // with no explanation reads as a broken monitor. It says which it is.
+          !m.pending && !m.enabled
+            ? el('div', { class: 'callout sa-paused' },
+              el('strong', {}, t('sa.monitor.pausedTitle') + ' '),
+              t('sa.monitor.pausedBody'))
+            : null,
+          // Once it is watching, it keeps watching — said where the interval is
+          // shown, because "does this run by itself?" is the question the screen
+          // was not answering.
+          !m.pending && m.enabled
+            ? el('div', { class: 'sa-help' }, t('sa.monitor.runningHelp', { count: m.interval_sec }))
+            : null,
           stats,
           // A monitor that has never been scheduled has nothing to chart yet.
           m.pending ? null : monitorChart(id),
@@ -3912,7 +4040,15 @@
           ? types.filter(function (x) { return x.type === monitor.type; })[0]
           : types[0];
         var name = el('input', { type: 'text', value: monitor ? monitor.name : '' });
-        var interval = el('input', { type: 'number', min: '60', value: String(monitor ? monitor.interval_sec : chosen.default_interval_sec) });
+        var floor = Number(monitorLimits.min_interval_sec) || 60;
+        var ceiling = Number(monitorLimits.max_interval_sec) || 86400;
+        var interval = el('input', {
+          type: 'number',
+          min: String(floor),
+          max: String(ceiling),
+          step: '1',
+          value: String(monitor ? monitor.interval_sec : chosen.default_interval_sec),
+        });
         var warn = el('input', { type: 'number', value: monitor && monitor.warn_ms ? String(monitor.warn_ms) : '' });
         var crit = el('input', { type: 'number', value: monitor && monitor.crit_ms ? String(monitor.crit_ms) : '' });
         var errors = el('div', { class: 'sa-form-errors' });
@@ -3983,7 +4119,7 @@
             } else {
               control = el('input', { type: 'text', value: stored === undefined ? (f.default === null ? '' : String(f.default)) : String(stored) });
             }
-            var node = field(f.field + (f.required ? ' *' : ''), control);
+            var node = field(f.field + (f.required ? ' *' : ''), control, f.help || null, 'config.' + f.field);
             inputs[f.field] = { control: control, spec: f, node: node };
             // Any field can be the one another field waits on, so every control
             // re-runs the rules rather than only the ones we happen to know are
@@ -3996,11 +4132,15 @@
         renderFields();
 
         modal(monitor ? t('sa.monitor.edit') : t('sa.monitor.add'), el('div', {},
-          field(t('sa.monitor.name'), name),
-          field(t('sa.monitor.type'), typeSel),
-          field(t('sa.monitor.every'), interval),
-          field(t('sa.monitor.warnMs'), warn),
-          field(t('sa.monitor.critMs'), crit),
+          field(t('sa.monitor.name'), name, null, 'name'),
+          field(t('sa.monitor.type'), typeSel, null, 'type'),
+          // The one field people misread: it is not "how long to wait before the
+          // next manual check", it is the monitor running on its own, forever.
+          // So it says so, with the bounds it will actually be judged against.
+          field(t('sa.monitor.every'), interval,
+            t('sa.monitor.everyHelp', { min: floor, max: ceiling }), 'interval_sec'),
+          field(t('sa.monitor.warnMs'), warn, t('sa.monitor.warnHelp'), 'warn_ms'),
+          field(t('sa.monitor.critMs'), crit, t('sa.monitor.critHelp'), 'crit_ms'),
           fields,
           errors), function () {
           var config = {};
@@ -4232,18 +4372,102 @@
     // details live; the other shapes are fallbacks for a standalone host with a
     // different client. Reading only the fallbacks is how a form came to show a
     // bare "Validation failed" while the server had said exactly what was wrong.
+    // A rejected save used to print `interval_sec: must be at least 60 seconds`
+    // into a box at the BOTTOM of a dialog that scrolls for two screens: what an
+    // operator actually saw was the Save button flicker and nothing else. So the
+    // reasons are still listed — but the field that was rejected is now marked
+    // where it stands, the first one is scrolled to and focused, and the message
+    // sits under the input rather than out of sight.
+    //
+    // The link between the two is `data-field`: the key the server used
+    // (`interval_sec`, `config.smtp_host`) stamped on the field by `field()`.
+    // A form that has not stamped its fields still gets the box, scrolled into
+    // view — the improvement is never worse than what it replaces.
+    function formOf(node) {
+      if (!node || !node.closest) return node && node.parentNode;
+      return node.closest('.sa-modal-body') || node.closest('.sa-form') || node.parentNode;
+    }
+
+    function fieldNodes(node) {
+      var form = formOf(node);
+      var out = {};
+      if (form && form.querySelectorAll) {
+        [].forEach.call(form.querySelectorAll('[data-field]'), function (n) {
+          out[n.getAttribute('data-field')] = n;
+        });
+      }
+      return out;
+    }
+
+    function unmarkField(target) {
+      target.classList.remove('sa-field-invalid');
+      var msg = target.querySelector('.sa-field-error');
+      if (msg) msg.remove();
+    }
+
+    function clearFieldErrors(node) {
+      var fields = fieldNodes(node);
+      Object.keys(fields).forEach(function (key) { unmarkField(fields[key]); });
+    }
+
+    function markField(target, message) {
+      unmarkField(target);
+      target.classList.add('sa-field-invalid');
+      target.append(el('span', { class: 'sa-field-error' }, message));
+      var control = target.querySelector('input, select, textarea');
+      // Typing is the operator saying "I am fixing that one" — the mark goes as
+      // soon as they do, rather than sitting there until the next save.
+      if (control && !control.getAttribute('data-sa-clears')) {
+        control.setAttribute('data-sa-clears', '1');
+        var clear = function () { unmarkField(target); };
+        control.addEventListener('input', clear);
+        control.addEventListener('change', clear);
+      }
+      return control;
+    }
+
+    function fieldLabelFor(key, target) {
+      if (target && target.getAttribute('data-field-label')) return target.getAttribute('data-field-label');
+      // `config.smtp_host` is the wire key, "smtp host" is the closest thing to
+      // a sentence we can make of it without the field being on the screen.
+      return String(key).replace(/^config\./, '').replace(/_/g, ' ');
+    }
+
     function showErrors(node, e) {
       var details = (e && e.data && e.data.details)
         || (e && e.details)
         || (e && e.body && e.body.details)
         || null;
-      if (details && typeof details === 'object') {
-        mount(node, ...Object.keys(details).map(function (key) {
-          return el('div', { class: 'sa-form-error' }, el('strong', {}, key + ': '), String(details[key]));
-        }));
+      node.setAttribute('role', 'alert');
+      clearFieldErrors(node);
+
+      if (details && typeof details === 'object' && Object.keys(details).length) {
+        var fields = fieldNodes(node);
+        var firstControl = null;
+        var firstField = null;
+        var lines = Object.keys(details).map(function (key) {
+          var target = fields[key] || fields['config.' + key] || null;
+          if (target) {
+            var control = markField(target, String(details[key]));
+            if (!firstField) { firstField = target; firstControl = control; }
+          }
+          // `_` is the form as a whole ("at most 200 monitors"), not a field.
+          return el('div', { class: 'sa-form-error' },
+            key === '_' ? null : el('strong', {}, fieldLabelFor(key, target) + ': '),
+            String(details[key]));
+        });
+        mount(node,
+          el('div', { class: 'sa-form-error-title' }, t('sa.form.notSaved', { count: lines.length })),
+          ...lines);
+        var focus = firstField || node;
+        if (focus.scrollIntoView) focus.scrollIntoView({ block: 'center' });
+        if (firstControl && firstControl.focus) firstControl.focus();
         return;
       }
-      mount(node, el('div', { class: 'sa-form-error' }, err(e)));
+      mount(node,
+        el('div', { class: 'sa-form-error-title' }, t('sa.form.notSavedOne')),
+        el('div', { class: 'sa-form-error' }, err(e)));
+      if (node.scrollIntoView) node.scrollIntoView({ block: 'center' });
     }
 
     // Administration → Settings mounts ONLY the settings panel. Drawing the

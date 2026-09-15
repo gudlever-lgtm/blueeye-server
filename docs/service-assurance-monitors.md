@@ -136,6 +136,25 @@ On upgrade, every monitor that had already run keeps running (migration 095) —
 upgrade that silently paused an estate's monitoring would be the worst possible
 reading of this.
 
+### Starting it, and stopping it
+
+There is no "run once" monitor. `interval_sec` **is** the monitor: once the gate
+has opened, the sweep takes it every interval, day and night, and nothing stops
+it on its own. Two things stop it, and the screen names both:
+
+* **Pause** — `PATCH /monitors/:id { "enabled": false }`. The sweep skips it
+  (`dueForCheck` filters on `enabled = 1`); the history, the settings and the
+  incidents all stay. Resume puts it back on the same interval. This is the
+  button to reach for; it was missing at first, and the only way to stop a
+  monitor was to delete it, which throws the history away with it.
+* **Delete** — the monitor and its results go.
+
+Lowering the interval to zero is not one of them: the floor is
+`monitors.minIntervalSec` (60 by default, never lower), and
+`GET /monitors/types` serves it as `limits.min_interval_sec` so the dialog can
+put it on the input and say it in the help text rather than let the operator
+discover it by being rejected.
+
 ### What pages, and what does not
 
 * **One bad check is not an outage.** A failure waits for the operator's failure
@@ -181,7 +200,7 @@ viewer+, writes operator+.
 
 | Method | Path | Role | Answers |
 | --- | --- | --- | --- |
-| `GET` | `/monitors/types` | viewer+ | the catalogue the UI builds its form from |
+| `GET` | `/monitors/types` | viewer+ | the catalogue the UI builds its form from, plus `limits` (`min_interval_sec`, `max_interval_sec`, `max_ms`, `max_monitors`, `recipient_domains`) |
 | `GET` | `/monitors` | viewer+ | list (filters: `application_id`, `type`, `enabled`) |
 | `POST` | `/monitors` | operator+ | 201, or 400 `{ error: 'Validation failed', details }` |
 | `GET` | `/monitors/:id` | viewer+ | the monitor + its last 20 results + a 24h summary |

@@ -51,10 +51,28 @@
   width: 100%; box-sizing: border-box;
 }
 .sa-form-errors { margin-top: 8px; }
+.sa-form-errors:empty { display: none; }
+.sa-form-error-title {
+  color: var(--danger, #b91c1c); font-weight: 700; font-size: 0.9rem; margin-bottom: 6px;
+}
 .sa-form-error {
   color: var(--danger, #b91c1c); font-size: 0.85rem;
   padding: 6px 8px; border-left: 3px solid var(--danger, #b91c1c); margin-bottom: 4px;
 }
+
+/* A rejected field says so where it stands. The box at the bottom lists the
+   same reasons, but a long dialog scrolls and the input does not move. */
+.sa-field-invalid input, .sa-field-invalid select, .sa-field-invalid textarea {
+  border-color: var(--danger, #b91c1c) !important;
+  box-shadow: 0 0 0 2px rgba(185, 28, 28, 0.12);
+}
+.sa-field-invalid .sa-field-label { color: var(--danger, #b91c1c); }
+.sa-field-error {
+  display: block; color: var(--danger, #b91c1c); font-size: 0.82rem; margin-top: 2px;
+}
+/* Paused reuses the pending callout's shape — one visual vocabulary for "this
+   is not running right now, and here is why". */
+.sa-paused { border-left: 3px solid var(--muted, #6b7280); }
 
 /* ---- status ---- */
 .sa-status {

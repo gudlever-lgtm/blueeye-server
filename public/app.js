@@ -11553,6 +11553,10 @@ const DOCS = [
 
           el('div', { class: 'callout' }, el('strong', {}, 'It does not start until it works once: '), 'a new monitor is saved but not yet watching — it says so on its own page. Press Check now; the first check that works puts it on its schedule. That way a typo in the setup cannot page anybody at two in the morning. If the service is down right now and you want it watched anyway, ', el('strong', {}, 'Start watching'), ' schedules it regardless.'),
 
+          el('h4', {}, 'How a monitor is scheduled'),
+          el('p', {}, ['It is not scheduled on the ', el('strong', {}, 'Schedules'), ' tab — that tab is for browser tests. A monitor carries its own cadence in one field: ', el('strong', {}, 'Check every (seconds)'), '. Once the first check has worked, the server runs it on that interval, day and night, and it never stops on its own. The Schedules tab lists the monitors read-only so the answer is where the question gets asked.']),
+          el('p', {}, ['Two things stop it: ', el('strong', {}, 'Pause'), ' on the monitor\u2019s page, which keeps the history, the settings and the incidents and can be resumed on the same interval — and ', el('strong', {}, 'Delete'), ', which takes the history with it. Setting the interval to 0 is not one of them: the minimum is 60 seconds, or whatever an administrator raised it to under Settings → Service Assurance, and the dialog shows the number it will accept.']),
+
           el('h4', {}, 'Is it getting worse?'),
           el('p', {}, ['Each monitor has a ', el('strong', {}, 'History'), ' chart: how available it was per hour, day or month, and what it measured inside that period. Step through with ◀ ▶ or jump to a date, the same way the run history works.']),
           el('p', {}, '100% available with a delivery time that tripled over a week is the reading worth having, and no single number can show it. A gap in the bars means nothing was checked in that period — drawn as a gap on purpose, because that is a different fact from "everything failed".'),

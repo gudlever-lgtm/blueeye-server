@@ -91,6 +91,32 @@ test('the type catalogue describes every check, its fields and its secrets', asy
   assert.equal(field.default, 587);
 });
 
+// The dialog has to be able to say what it will accept BEFORE the operator is
+// rejected. "50" used to be refused with a message the form printed below the
+// fold; the bound now travels with the catalogue, so the input carries it.
+test('the catalogue carries the bounds the form is judged against', async () => {
+  const { app } = fixture();
+  const res = await get(app, '/types');
+  assert.equal(res.status, 200);
+  assert.equal(res.body.limits.min_interval_sec, 60);
+  assert.equal(res.body.limits.max_interval_sec, 86400);
+  assert.ok(Array.isArray(res.body.limits.recipient_domains));
+});
+
+test('a floor raised in settings is the floor the form is told about', async () => {
+  const serviceTests = makeServiceTests();
+  await serviceTests.settings.set('monitors', { minIntervalSec: 600 }, 1);
+  const app = makeApp({ serviceTests });
+  const res = await get(app, '/types');
+  assert.equal(res.body.limits.min_interval_sec, 600);
+
+  // And the two agree: what the catalogue promises is what the validator does.
+  const rejected = await request(app).post(BASE).set('Authorization', authHeader('operator'))
+    .send({ name: 'Too eager', type: 'tcp_port', interval_sec: 300, config: { host: 'mail.example.com', port: 25 } });
+  assert.equal(rejected.status, 400);
+  assert.match(String(rejected.body.details.interval_sec), /600/);
+});
+
 // ---------------------------------------------------------------------- 400
 test('creating a monitor validates the type, the name and every config field (400, never 500)', async () => {
   const { app } = fixture();

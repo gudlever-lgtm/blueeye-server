@@ -322,4 +322,9 @@ function validateMonitor(body, { partial = false, recipientDomains = [], existin
 // calls every exported function with garbage — an export whose contract is
 // "always called with a spec" would be a false failure there and a misleading
 // API here.
-module.exports = { validateMonitor };
+// The bounds the form has to agree with. The dialog used to hard-code its own
+// `min`, so a floor raised in settings was a rejection the operator could only
+// discover by being rejected.
+const MONITOR_LIMITS = { MIN_INTERVAL_SEC, MAX_INTERVAL_SEC, MAX_MS };
+
+module.exports = { validateMonitor, MONITOR_LIMITS };

@@ -2,7 +2,7 @@
 
 const express = require('express');
 const { asyncHandler, notFound, invalidId, invalid, auditor, userId, parseId } = require('./helpers');
-const { validateMonitor } = require('../validation/monitors');
+const { validateMonitor, MONITOR_LIMITS } = require('../validation/monitors');
 const { validateStatsQuery } = require('../validation');
 const { resolvePeriod } = require('../stats/period');
 const { catalogue, TYPE_NAMES, isType } = require('../monitors/types');
@@ -44,7 +44,24 @@ function createMonitorsRouter({ repositories, settings, reactor = null, audit, r
   // ------------------------------------------------------------------ types
   // The catalogue the UI builds its form from. Ahead of /:id so a literal path
   // is never read as an id.
-  router.get('/types', read, asyncHandler(async (req, res) => res.json({ types: catalogue() })));
+  // The bounds travel WITH the catalogue. The form cannot tell an operator what
+  // it will accept unless it is told, and a `min` typed into the dialog by hand
+  // is a second copy of a number settings can change.
+  router.get('/types', read, asyncHandler(async (req, res) => {
+    const { minIntervalSec, maxMonitors, recipientDomains } = await limits();
+    return res.json({
+      types: catalogue(),
+      limits: {
+        min_interval_sec: Math.max(MONITOR_LIMITS.MIN_INTERVAL_SEC, Number(minIntervalSec) || MONITOR_LIMITS.MIN_INTERVAL_SEC),
+        max_interval_sec: MONITOR_LIMITS.MAX_INTERVAL_SEC,
+        max_ms: MONITOR_LIMITS.MAX_MS,
+        max_monitors: maxMonitors,
+        // Not a secret: it is the rule an operator is about to be judged
+        // against, and saying it up front beats a rejection that says it after.
+        recipient_domains: recipientDomains,
+      },
+    });
+  }));
 
   // ------------------------------------------------------------------- list
   router.get('/', read, asyncHandler(async (req, res) => {

@@ -34,6 +34,7 @@ function row(over = {}) {
     warn_ms: null,
     crit_ms: null,
     enabled: 1,
+    activated_at: new Date('2026-09-01T10:00:00Z'),
     last_run_at: null,
     last_status: null,
     last_summary: null,
@@ -136,6 +137,27 @@ test('the due list asks the database for the arithmetic, not the process', async
   const sql = pool.matching(/WHERE enabled = 1/i)[0].sql;
   assert.match(sql, /last_run_at IS NULL OR last_run_at <= DATE_SUB\(\?, INTERVAL interval_sec SECOND\)/);
   assert.match(sql, /LIMIT 50/);
+  // The activation gate is part of the QUERY, not a filter afterwards: a
+  // pending monitor must never be in the sweep's work list at all.
+  assert.match(sql, /activated_at IS NOT NULL/);
+});
+
+test('a monitor reports whether it is pending, and activation only ever stamps once', async () => {
+  const pending = makeFakePool([[/^SELECT .* FROM service_monitors WHERE id = \?/i, () => [[row({ activated_at: null })]]]]);
+  const waiting = await createMonitorsRepository({ db: { pool: pending }, secretBox }).findById(1);
+  assert.equal(waiting.pending, true);
+  assert.equal(waiting.activated_at, null);
+
+  const live = await createMonitorsRepository({ db: { pool: makeFakePool([selectOne]) }, secretBox }).findById(1);
+  assert.equal(live.pending, false);
+
+  const pool = makeFakePool([[/^UPDATE service_monitors SET activated_at/i, () => ok()], selectOne]);
+  const repo = createMonitorsRepository({ db: { pool }, now: () => new Date('2026-09-15T12:00:00Z') });
+  await repo.activate(1);
+  const sql = pool.matching(/^UPDATE service_monitors SET activated_at/i).at(-1).sql;
+  // `AND activated_at IS NULL` is what makes it idempotent in SQL rather than in
+  // a read-then-write the sweep could race with.
+  assert.match(sql, /WHERE id = \? AND activated_at IS NULL/);
 });
 
 test('recordRun stamps the outcome and moves the streak in one statement', async () => {
@@ -186,6 +208,41 @@ test('a measurement nobody took reads back as null, never as zero', async () => 
   const shaped = await repo.record(1, { status: 'unreachable', kind: 'monitor_unreachable', summary: 'nothing answered', error_message: 'ECONNREFUSED' });
   assert.equal(shaped.value, null);
   assert.equal(shaped.duration_ms, null);
+});
+
+test('the series buckets in the database, in the viewer\u2019s time zone', async () => {
+  const pool = makeFakePool([[/^SELECT DATE_FORMAT/i, () => [[{
+    bucket: '2026-09-15 08:00', checks: 10, ok_count: 8, slow_count: 1, bad_count: 1,
+    misconfigured_count: 0, unknown_count: 0, avg_value: 4200, max_value: 9000, min_value: 120,
+  }]]]]);
+  const repo = createMonitorResultsRepository({ db: { pool } });
+  const rows = await repo.series({
+    monitorId: 7, from: new Date('2026-09-15T00:00:00Z'), to: new Date('2026-09-16T00:00:00Z'),
+    sqlFormat: '%Y-%m-%d %H:00', offsetMinutes: -120,
+  });
+
+  const call = pool.matching(/^SELECT DATE_FORMAT/i)[0];
+  // The offset and the format are the FIRST two parameters: they sit in the
+  // SELECT list, which MySQL binds before the WHERE clause.
+  assert.deepEqual(call.params.slice(0, 3), [-120, '%Y-%m-%d %H:00', 7]);
+  assert.match(call.sql, /GROUP BY bucket/);
+
+  assert.equal(rows[0].checks, 10);
+  assert.equal(rows[0].availability, 0.9, 'slow counts as available — it worked');
+  assert.equal(rows[0].avg_value, 4200);
+});
+
+test('a bucket where nobody managed to look has no availability, rather than zero', async () => {
+  const pool = makeFakePool([[/^SELECT DATE_FORMAT/i, () => [[{
+    bucket: '2026-09-15 09:00', checks: 2, ok_count: 0, slow_count: 0, bad_count: 0,
+    misconfigured_count: 0, unknown_count: 2, avg_value: null, max_value: null, min_value: null,
+  }]]]]);
+  const rows = await createMonitorResultsRepository({ db: { pool } }).series({
+    monitorId: 7, from: new Date(), to: new Date(), sqlFormat: '%Y-%m-%d %H:00',
+  });
+  assert.equal(rows[0].checks, 2, 'the unknown checks still count as checks');
+  assert.equal(rows[0].availability, null);
+  assert.equal(rows[0].avg_value, null);
 });
 
 test('the summary answers availability over a window, and null when nothing was measured', async () => {

@@ -304,6 +304,12 @@
 
 .sa-chart-nav { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 10px 0 4px; }
 .sa-chart-period { font-weight: 600; min-width: 12ch; }
+/* The sub-heading between a monitor's two charts — availability above, what it
+   measured below. Quiet, because the charts are the content. */
+.sa-chart-sub { margin: 12px 0 2px; font-size: 13px; color: var(--muted, #6b7280); }
+/* A monitor that is saved and not watching yet. Amber rather than red: nothing
+   is broken, it just has not proved it works. */
+.sa-pending { border-left: 3px solid var(--warn, #d97706); }
 .sa-chart-jump { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted, #6b7280); }
 .sa-date-input, .sa-select {
   padding: 5px 8px; border: 1px solid var(--hairline, #e5e7eb); border-radius: 6px;

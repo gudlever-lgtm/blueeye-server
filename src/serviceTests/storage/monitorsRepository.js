@@ -14,8 +14,8 @@ const { secretFields } = require('../monitors/types');
 function createMonitorsRepository({ db, secretBox = null, now = () => new Date() }) {
   const { pool } = db;
   const COLS = `id, tenant_id, application_id, environment_id, name, type, target, description,
-    config, secrets_encrypted, interval_sec, warn_ms, crit_ms, enabled, last_run_at, last_status,
-    last_summary, last_duration_ms, consecutive_failures, created_by, created_at, updated_at`;
+    config, secrets_encrypted, interval_sec, warn_ms, crit_ms, enabled, activated_at, last_run_at,
+    last_status, last_summary, last_duration_ms, consecutive_failures, created_by, created_at, updated_at`;
 
   const encrypt = (obj) => {
     const keys = Object.keys(obj || {});
@@ -56,6 +56,10 @@ function createMonitorsRepository({ db, secretBox = null, now = () => new Date()
       warn_ms: row.warn_ms,
       crit_ms: row.crit_ms,
       enabled: !!row.enabled,
+      activated_at: row.activated_at,
+      // PENDING: saved, visible, checkable by hand — and not swept. It becomes
+      // scheduled on its first working check (migration 095).
+      pending: !row.activated_at,
       last_run_at: row.last_run_at,
       last_status: row.last_status,
       last_summary: row.last_summary,
@@ -170,6 +174,7 @@ function createMonitorsRepository({ db, secretBox = null, now = () => new Date()
     const [rows] = await pool.query(
       `SELECT ${COLS} FROM service_monitors
         WHERE enabled = 1
+          AND activated_at IS NOT NULL
           AND (last_run_at IS NULL OR last_run_at <= DATE_SUB(?, INTERVAL interval_sec SECOND))
         ORDER BY last_run_at IS NOT NULL, last_run_at ASC
         LIMIT ${Math.min(Math.max(Number(limit) || 100, 1), 500)}`,
@@ -192,7 +197,19 @@ function createMonitorsRepository({ db, secretBox = null, now = () => new Date()
     return findById(id);
   }
 
-  return { list, findById, findByIdWithSecrets, create, update, remove, dueForCheck, recordRun };
+  // Opens the gate. Idempotent by design — a monitor that is already scheduled
+  // stays scheduled with the time it was FIRST activated, because that is the
+  // date "watching since" means; re-stamping it on every later success would
+  // make it read as "watching since the last time it worked".
+  async function activate(id, at = null) {
+    await pool.query(
+      'UPDATE service_monitors SET activated_at = ? WHERE id = ? AND activated_at IS NULL',
+      [at || now(), id]
+    );
+    return findById(id);
+  }
+
+  return { list, findById, findByIdWithSecrets, create, update, remove, dueForCheck, recordRun, activate };
 }
 
 module.exports = { createMonitorsRepository };

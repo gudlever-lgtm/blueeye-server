@@ -11561,6 +11561,11 @@ const DOCS = [
           el('p', {}, ['Each monitor has a ', el('strong', {}, 'History'), ' chart: how available it was per hour, day or month, and what it measured inside that period. Step through with ◀ ▶ or jump to a date, the same way the run history works.']),
           el('p', {}, '100% available with a delivery time that tripled over a week is the reading worth having, and no single number can show it. A gap in the bars means nothing was checked in that period — drawn as a gap on purpose, because that is a different fact from "everything failed".'),
 
+          el('h4', {}, 'Where did it break?'),
+          el('p', {}, ['Click any check in the list to open its trace. You get the exchange as a waterfall — which leg cost the time, in the order it happened — the conversation with the mail server line by line, and, for a round trip, the route the message took, read off its own ', el('code', {}, 'Received'), ' headers: which relay handed it to which, and what each leg cost. The newest failing check opens itself, because that is the one you came to look at.']),
+          el('p', {}, ['Above the list, the same phases are charted against each other, one coloured line per step of the exchange. That is how "it got slower" becomes "the ', el('strong', {}, 'data'), ' phase got slower and nothing else did". Small steps vanish next to big ones on a linear axis, so the chart defaults to logarithmic and you can switch it; click a step in the legend to take its line out of the way.']),
+          el('div', { class: 'callout' }, el('strong', {}, 'Passwords are never in the trace: '), 'the AUTH exchange is recorded as having happened, with the answer it got. The credential itself is replaced with ', el('code', {}, '***'), ' before anything is stored — base64 is not encryption, and a transcript that kept it would put a plaintext password in the database and on this screen.'),
+
           el('h4', {}, 'Reading the answer'),
           docsTable(['Status', 'What it means', 'Whose problem'], [
             ['OK', 'the question was answered and the answer was good', '—'],

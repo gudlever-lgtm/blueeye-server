@@ -777,3 +777,52 @@
 [data-theme="dark"] .guide-action-result, [data-theme="midnight"] .guide-action-result { color: #bbf7d0; }
 [data-theme="dark"] .guide-action-error, [data-theme="midnight"] .guide-action-error,
 [data-theme="dark"] .guide-action-failure, [data-theme="midnight"] .guide-action-failure { color: #fecaca; }
+
+/* ---- the trace: where the time went, under the row that spent it ---- */
+.sa-result-row { cursor: pointer; }
+.sa-result-row:hover { background: var(--hover, #f9fafb); }
+.sa-result-row.open { background: var(--hover, #f3f4f6); }
+.sa-disclosure { display: inline-block; width: 14px; color: var(--muted, #6b7280); }
+.sa-trace-row > td { background: var(--panel, #fff); padding: 12px 16px; }
+.sa-trace { display: flex; flex-direction: column; gap: 14px; }
+.sa-trace h5 { margin: 0 0 6px; font-size: 0.85rem; }
+
+/* The waterfall: one bar per step, laid end to end in the order they happen. */
+.sa-waterfall { display: flex; flex-direction: column; gap: 3px; }
+.sa-wf-row { display: grid; grid-template-columns: 90px 1fr 70px; align-items: center; gap: 8px; font-size: 0.82rem; }
+.sa-wf-name { color: var(--muted, #6b7280); }
+.sa-wf-track { display: block; background: var(--hairline, #e5e7eb); border-radius: 3px; height: 12px; }
+.sa-wf-bar { display: block; height: 12px; border-radius: 3px; }
+.sa-wf-ms { text-align: right; font-variant-numeric: tabular-nums; }
+
+.sa-transcript td { font-size: 0.82rem; vertical-align: top; }
+.sa-transcript code { font-size: 0.8rem; word-break: break-all; }
+.sa-trace-bad td { background: #fef2f2; }
+.sa-trace-error { color: var(--danger, #b91c1c); }
+.sa-phase-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; vertical-align: middle; }
+
+/* The delivery path, oldest relay first. */
+.sa-hops { margin: 0; padding-left: 20px; font-size: 0.85rem; }
+.sa-hops li { margin-bottom: 6px; }
+.sa-hop-by { font-weight: 600; }
+.sa-hop-with { color: var(--muted, #6b7280); font-size: 0.78rem; }
+.sa-hop-ms { font-variant-numeric: tabular-nums; font-weight: 600; }
+
+.sa-poll-dots { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 4px; }
+.sa-poll-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--hairline, #d1d5db); }
+.sa-poll-dot.found { background: #16a34a; }
+.sa-poll-dot.error { background: var(--danger, #b91c1c); }
+
+.sa-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; margin: 0; font-size: 0.82rem; }
+.sa-facts dt { color: var(--muted, #6b7280); }
+.sa-facts dd { margin: 0; word-break: break-all; }
+
+/* One line per step across the recent checks, in the waterfall's colours. */
+.sa-phase-line { stroke-width: 1.6; fill: none; }
+.sa-phase-legend { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.sa-phase-key {
+  display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px;
+  border: 1px solid var(--hairline, #e5e7eb); border-radius: 999px;
+  background: var(--panel, #fff); font-size: 0.78rem; cursor: pointer;
+}
+.sa-phase-key.off { opacity: 0.4; text-decoration: line-through; }

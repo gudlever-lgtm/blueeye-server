@@ -179,3 +179,119 @@ test('a monitor missing its own essentials reports misconfigured without sending
   assert.equal(noMailbox.status, 'misconfigured');
   assert.match(noMailbox.summary, /not configured/);
 });
+
+// -------------------------------------------------- what the result KEEPS
+//
+// A verdict says whether the mail arrived. These say where it went and where it
+// stopped — the part an operator needs at 02:00, and the part that is worthless
+// if it is not written down at the moment it happened.
+const TRANSCRIPT = [
+  { phase: 'connect', command: 'tcp://smtp.example.com:587', ms: 20 },
+  { phase: 'greeting', code: 220, response: 'smtp.example.com ESMTP', ms: 5 },
+  { phase: 'auth', command: 'AUTH PLAIN ***', code: 235, ms: 30 },
+  { phase: 'data', command: '<message> (412 bytes)', code: 250, response: 'queued as 4bXk2Z', ms: 60 },
+];
+
+test('an accepted message keeps the conversation that accepted it', async () => {
+  const smtp = sender({ transcript: TRANSCRIPT });
+  const check = createMailCheck({ smtp, imap: { async findToken() { throw new Error('must not look'); } } });
+  const result = await check.check(monitor());
+  assert.deepEqual(result.detail.transcript, TRANSCRIPT);
+});
+
+test('a refusal keeps the conversation up to the refusal — that IS the diagnosis', async () => {
+  const partial = TRANSCRIPT.slice(0, 3).concat([
+    { phase: 'envelope', command: 'MAIL FROM:<assurance@example.com>', code: 550, response: '5.7.1 sender address rejected: not allowed', ms: 12 },
+  ]);
+  const smtp = {
+    async send() {
+      const err = new SmtpError('550 5.7.1 sender address rejected: not allowed', { phase: 'envelope', code: 550 });
+      err.transcript = partial;
+      throw err;
+    },
+  };
+  const check = createMailCheck({ smtp, imap: { async findToken() { throw new Error('must not look'); } } });
+  const result = await check.check(monitor());
+
+  assert.equal(result.status, 'failed');
+  assert.equal(result.detail.phase, 'envelope');
+  assert.equal(result.detail.code, 550);
+  // The summary is one line. The transcript is the rest of the answer.
+  assert.deepEqual(result.detail.transcript, partial);
+});
+
+test('an unreachable server keeps the little it got — a connect and nothing after it', async () => {
+  const smtp = {
+    async send() {
+      const err = new SmtpError('connect ECONNREFUSED', { phase: 'connect' });
+      err.transcript = [];
+      throw err;
+    },
+  };
+  const check = createMailCheck({ smtp, imap: { async findToken() { throw new Error('must not look'); } } });
+  const result = await check.check(monitor());
+  assert.equal(result.status, 'unreachable');
+  // An empty conversation is stored as nothing rather than as an empty list:
+  // the screen then has one case to draw, not two.
+  assert.equal(result.detail.transcript, null);
+});
+
+test('a delivered message keeps the route it took and what each leg cost', async () => {
+  const clock = makeClock();
+  const hops = [
+    { from: 'assurance.local', by: 'smtp.example.com', with: 'ESMTPSA', id: 'AAA', at: '2023-11-14T22:13:20.000Z', ms: null, raw: '…' },
+    { from: 'smtp.example.com', by: 'mx.example.com', with: 'ESMTPS', id: 'BBB', at: '2023-11-14T22:13:24.000Z', ms: 4000, raw: '…' },
+  ];
+  const imap = {
+    async findToken() {
+      return { found: true, uid: 9, internal_date: new Date(clock.now() + 1000), hops };
+    },
+  };
+  const check = createMailCheck({
+    smtp: sender({ transcript: TRANSCRIPT }), imap, now: clock.now, sleep: async (ms) => clock.advance(ms), pollIntervalMs: 5000,
+  });
+  const result = await check.check(monitor({ config: { roundtrip: true, imap_host: 'imap.example.com', imap_username: 'probe' } }));
+
+  assert.equal(result.status, 'ok');
+  assert.deepEqual(result.detail.hops, hops);
+  // And every look in the mailbox, so "found on the first poll" and "found after
+  // four minutes of looking" are not the same row.
+  assert.equal(result.detail.polls.length, 1);
+  assert.equal(result.detail.polls[0].found, true);
+});
+
+test('a message that never arrives keeps every look that failed to find it', async () => {
+  const clock = makeClock();
+  const imap = { async findToken() { return { found: false, uid: null, internal_date: null, hops: [] }; } };
+  const check = createMailCheck({
+    smtp: sender(), imap, now: clock.now, sleep: async (ms) => clock.advance(ms), pollIntervalMs: 60000,
+  });
+  const result = await check.check(monitor({
+    config: { roundtrip: true, imap_host: 'imap.example.com', imap_username: 'probe', deadline_sec: 180 },
+  }));
+
+  assert.equal(result.status, 'failed');
+  assert.equal(result.kind, 'mail_undelivered');
+  assert.ok(result.detail.polls.length >= 3, `only ${result.detail.polls.length} looks recorded`);
+  assert.ok(result.detail.polls.every((p) => p.found === false));
+  // Seconds since the send: the shape of "we kept looking for three minutes".
+  assert.equal(result.detail.polls[0].at, 0);
+  assert.ok(result.detail.polls[result.detail.polls.length - 1].at >= 120);
+});
+
+test('a mailbox that cannot be opened records the error against the look', async () => {
+  const clock = makeClock();
+  const imap = {
+    async findToken() {
+      const err = new Error('LOGIN failed: authentication failed');
+      err.phase = 'login';
+      throw err;
+    },
+  };
+  const check = createMailCheck({ smtp: sender(), imap, now: clock.now, sleep: async (ms) => clock.advance(ms) });
+  const result = await check.check(monitor({ config: { roundtrip: true, imap_host: 'imap.example.com', imap_username: 'probe' } }));
+
+  assert.equal(result.status, 'misconfigured');
+  assert.equal(result.detail.polls.length, 1);
+  assert.match(result.detail.polls[0].error, /authentication failed/);
+});

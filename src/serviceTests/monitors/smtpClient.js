@@ -29,12 +29,15 @@ const CRLF = '\r\n';
 // what the server said, and the code it said it with. The phase is the
 // diagnosis — "auth" and "data" are different outages.
 class SmtpError extends Error {
-  constructor(message, { phase = null, code = null, response = null } = {}) {
+  constructor(message, { phase = null, code = null, response = null, transcript = null } = {}) {
     super(message);
     this.name = 'SmtpError';
     this.phase = phase;
     this.code = code;
     this.response = response;
+    // Everything said up to the failure. "It broke in auth" is a phase name;
+    // the line the server answered with is the diagnosis.
+    this.transcript = transcript;
   }
 }
 
@@ -121,6 +124,34 @@ function createReader(socket) {
       buffer = '';
       return rest;
     },
+  };
+}
+
+// The conversation, kept as it happens — the closest thing to a traceroute an
+// SMTP exchange has. Each step is what we said, what came back, and how long the
+// answer took, so a slow AUTH and a slow DATA are different rows rather than one
+// "4.4 s total".
+//
+// A credential must never reach it. AUTH carries the password in the command
+// itself (PLAIN) or in the two bare base64 lines after it (LOGIN), so those are
+// recorded as the fact that they happened and nothing more.
+const TRANSCRIPT_MAX = 60;
+const RESPONSE_MAX = 300;
+
+function createTranscript() {
+  const steps = [];
+  return {
+    step(entry) {
+      if (steps.length >= TRANSCRIPT_MAX) return entry;
+      const out = { phase: entry.phase, command: entry.command || null };
+      if (entry.code !== undefined && entry.code !== null) out.code = entry.code;
+      if (entry.response) out.response = String(entry.response).replace(/\s+$/, '').slice(0, RESPONSE_MAX);
+      if (entry.ms !== undefined && entry.ms !== null) out.ms = Math.round(entry.ms);
+      if (entry.error) out.error = String(entry.error).slice(0, RESPONSE_MAX);
+      steps.push(out);
+      return out;
+    },
+    steps() { return steps; },
   };
 }
 
@@ -211,15 +242,30 @@ function createSmtpClient({ connect = null, secureConnect = null, upgrade = null
     const started = now();
     const timings = {};
     const mark = (phase, from0) => { timings[phase] = Math.max(0, now() - from0); };
+    const transcript = createTranscript();
 
     let socket = null;
     let reader = null;
     let quit = null;
 
-    const say = async (line, phase, expect) => {
+    // `secret` is for AUTH: the exchange is recorded, the credential is not.
+    const say = async (line, phase, expect, { secret = false } = {}) => {
       const at = now();
+      // "AUTH PLAIN <base64 of the password>" keeps its method and loses its
+      // argument; the two bare base64 lines of AUTH LOGIN have no method to
+      // keep, so they are recorded as having happened and nothing else.
+      const shown = secret
+        ? (/^AUTH\s+\S+/i.test(line) ? String(line).replace(/^(AUTH\s+\S+).*$/i, '$1 ***') : '***')
+        : line;
       socket.write(line + CRLF);
-      const reply = await withTimeout(reader.read(), timeoutMs, phase);
+      let reply;
+      try {
+        reply = await withTimeout(reader.read(), timeoutMs, phase);
+      } catch (err) {
+        transcript.step({ phase, command: shown, ms: now() - at, error: err && err.message });
+        throw err;
+      }
+      transcript.step({ phase, command: shown, code: reply.code, response: reply.text, ms: now() - at });
       if (expect && !expect.includes(Math.floor(reply.code / 100))) {
         throw new SmtpError(reply.text || `unexpected ${reply.code}`, { phase, code: reply.code, response: reply.text });
       }
@@ -240,12 +286,18 @@ function createSmtpClient({ connect = null, secureConnect = null, upgrade = null
         socket.once('error', (err) => reject(new SmtpError(err && err.message ? err.message : 'connection failed', { phase: 'connect' })));
       }), timeoutMs, 'connect');
       mark('connect', connectAt);
+      transcript.step({
+        phase: 'connect',
+        command: `${security === 'tls' ? 'tls' : 'tcp'}://${host}:${port}`,
+        ms: now() - connectAt,
+      });
 
       reader = createReader(socket);
 
       // ------------------------------------------------------------- greeting
       const greetAt = now();
       const greeting = await withTimeout(reader.read(), timeoutMs, 'greeting');
+      transcript.step({ phase: 'greeting', code: greeting.code, response: greeting.text, ms: now() - greetAt });
       if (Math.floor(greeting.code / 100) !== 2) {
         throw new SmtpError(greeting.text || 'the server refused the connection', { phase: 'greeting', code: greeting.code, response: greeting.text });
       }
@@ -272,6 +324,7 @@ function createSmtpClient({ connect = null, secureConnect = null, upgrade = null
         }), timeoutMs, 'tls');
         reader = createReader(socket);
         mark('tls', tlsAt);
+        transcript.step({ phase: 'tls', command: 'TLS handshake', ms: now() - tlsAt });
         // RFC 3207: everything the server said before the upgrade is discarded,
         // so the capabilities are asked for again rather than assumed.
         ehlo = await say(`EHLO ${me}`, 'ehlo', [2]);
@@ -282,11 +335,11 @@ function createSmtpClient({ connect = null, secureConnect = null, upgrade = null
       if (username) {
         const authAt = now();
         if (capabilities.includes('AUTH') && capabilities.includes('PLAIN')) {
-          await say(`AUTH PLAIN ${b64(`\0${username}\0${password || ''}`)}`, 'auth', [2]);
+          await say(`AUTH PLAIN ${b64(`\0${username}\0${password || ''}`)}`, 'auth', [2], { secret: true });
         } else if (capabilities.includes('AUTH') && capabilities.includes('LOGIN')) {
           await say('AUTH LOGIN', 'auth', [3]);
-          await say(b64(username), 'auth', [3]);
-          await say(b64(password || ''), 'auth', [2]);
+          await say(b64(username), 'auth', [3], { secret: true });
+          await say(b64(password || ''), 'auth', [2], { secret: true });
         } else {
           throw new SmtpError('the server offers no authentication method this probe can use', { phase: 'auth', response: ehlo.text });
         }
@@ -305,6 +358,13 @@ function createSmtpClient({ connect = null, secureConnect = null, upgrade = null
       const message = buildMessage({ from, to, subject, token, date: new Date(), body });
       socket.write(`${message.headers.join(CRLF)}${CRLF}${CRLF}${stuff(message.text)}${CRLF}.${CRLF}`);
       const accepted = await withTimeout(reader.read(), timeoutMs, 'data');
+      transcript.step({
+        phase: 'data',
+        command: `<message> (${message.text.length} bytes)`,
+        code: accepted.code,
+        response: accepted.text,
+        ms: now() - dataAt,
+      });
       if (Math.floor(accepted.code / 100) !== 2) {
         throw new SmtpError(accepted.text || `the server refused the message (${accepted.code})`, {
           phase: 'data', code: accepted.code, response: accepted.text,
@@ -321,7 +381,13 @@ function createSmtpClient({ connect = null, secureConnect = null, upgrade = null
         token,
         message_id: message.messageId,
         timings,
+        transcript: transcript.steps(),
       };
+    } catch (err) {
+      // The conversation is most useful on the path where it FAILED, so it is
+      // attached to the error rather than lost with the stack.
+      if (err && !err.transcript) err.transcript = transcript.steps();
+      throw err;
     } finally {
       try {
         if (socket && !socket.destroyed) {

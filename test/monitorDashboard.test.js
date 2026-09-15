@@ -286,6 +286,200 @@ test('a pause that fails leaves the button usable and says why', async (t) => {
   assert.match(doc.body.textContent, /database is on fire/);
 });
 
+// ------------------------------------------------------------------ the trace
+//
+// "auth 16 ms · data 4.2 s · total 4.4 s · connect 133 ms" is six numbers in no
+// order, and the one that matters is buried in the middle. Clicking the row
+// opens what the check actually recorded: which leg spent the time, what the
+// server answered, and — for a round trip — the route the message took.
+const TRACED = {
+  id: 91,
+  status: 'failed',
+  kind: 'mail_rejected',
+  summary: 'The mail server refused the message (550): 5.7.1 sender address rejected',
+  value: null,
+  unit: 'ms',
+  duration_ms: 240,
+  checked_at: '2026-09-15T19:14:38.000Z',
+  error_message: '550 5.7.1 sender address rejected: not allowed',
+  timings: { connect: 133, greeting: 14, auth: 16, envelope: 29, total: 240 },
+  detail: {
+    phase: 'envelope',
+    code: 550,
+    queue_id: null,
+    transcript: [
+      { phase: 'connect', command: 'tcp://smtp.migadu.com:587', ms: 133 },
+      { phase: 'greeting', code: 220, response: 'smtp.migadu.com ESMTP ready', ms: 14 },
+      { phase: 'auth', command: 'AUTH PLAIN ***', code: 235, response: '2.7.0 Authentication successful', ms: 16 },
+      { phase: 'envelope', command: 'MAIL FROM:<lars@gnf.dk>', code: 550, response: '5.7.1 sender address rejected: not allowed', ms: 29 },
+    ],
+  },
+};
+
+const DELIVERED = {
+  id: 92,
+  status: 'ok',
+  summary: 'Delivered to gud@dulmens.dk in 4.5 s (accepted in 142 ms).',
+  value: 4546,
+  unit: 'ms',
+  duration_ms: 4546,
+  checked_at: '2026-09-15T19:17:37.000Z',
+  error_message: null,
+  timings: { connect: 59, greeting: 16, auth: 17, envelope: 37, data: 4200, delivery: 4546, total: 4300 },
+  detail: {
+    measured: 'delivery',
+    queue_id: '4bXk2Z',
+    mailbox: 'INBOX',
+    polls: [{ at: 0, found: false }, { at: 5, found: true, ms: 120 }],
+    hops: [
+      { from: 'assurance.local', by: 'smtp.migadu.com', with: 'ESMTPSA', id: 'AAA', at: '2026-09-15T19:17:33.000Z', ms: null, raw: '…' },
+      { from: 'smtp.migadu.com', by: 'mx.dulmens.dk', with: 'ESMTPS', id: 'BBB', at: '2026-09-15T19:17:37.000Z', ms: 4000, raw: '…' },
+    ],
+  },
+};
+
+const traced = (recent) => ({ ...MONITOR, type: 'mail', recent });
+
+test('a check opens in place to show which leg of the exchange spent the time', async (t) => {
+  const { doc } = await openMonitor(t, {
+    [`GET ${SA}/monitors/7`]: traced([DELIVERED]),
+    [`GET ${SA}/monitors`]: [{ ...MONITOR, type: 'mail' }],
+  });
+
+  const row = [...doc.querySelectorAll('.sa-result-row')][0];
+  assert.ok(row, 'no result row');
+  // An OK check opens on demand — nothing is hidden, and nothing is forced open.
+  const trace = row.nextElementSibling;
+  assert.equal(trace.hidden, true, 'a healthy check opened itself at somebody');
+  await click(row, 60);
+  assert.equal(trace.hidden, false);
+
+  // The waterfall: one bar per step, in the order the exchange happens, not
+  // alphabetically and not by size.
+  const names = [...trace.querySelectorAll('.sa-wf-name')].map((n) => n.textContent);
+  assert.deepEqual(names, ['connect', 'greeting', 'auth', 'envelope', 'data', 'delivery']);
+  assert.equal(trace.querySelectorAll('.sa-wf-bar').length, 6);
+  // `total` is the ruler, not a bar the length of all the others put together.
+  assert.ok(!names.includes('total'));
+});
+
+test('the route the message took is drawn oldest hop first, with what each leg cost', async (t) => {
+  const { doc } = await openMonitor(t, {
+    [`GET ${SA}/monitors/7`]: traced([DELIVERED]),
+    [`GET ${SA}/monitors`]: [{ ...MONITOR, type: 'mail' }],
+  });
+  await click(doc.querySelector('.sa-result-row'), 60);
+  const hops = [...doc.querySelectorAll('.sa-hops li')];
+  assert.equal(hops.length, 2);
+  assert.match(hops[0].textContent, /smtp\.migadu\.com/);
+  assert.match(hops[1].textContent, /mx\.dulmens\.dk/);
+  assert.match(hops[1].textContent, /\+4\.0 s/, `the leg cost is missing: ${hops[1].textContent}`);
+  // Every look in the mailbox, so "found at once" and "found after four minutes"
+  // are not the same row.
+  assert.equal(doc.querySelectorAll('.sa-poll-dot').length, 2);
+  assert.equal(doc.querySelectorAll('.sa-poll-dot.found').length, 1);
+});
+
+test('the newest failure opens itself, with what the server actually said', async (t) => {
+  const { doc } = await openMonitor(t, {
+    [`GET ${SA}/monitors/7`]: traced([TRACED, DELIVERED]),
+    [`GET ${SA}/monitors`]: [{ ...MONITOR, type: 'mail' }],
+  });
+  const rows = [...doc.querySelectorAll('.sa-result-row')];
+  assert.equal(rows[0].nextElementSibling.hidden, false, 'the failure somebody came to look at is closed');
+  assert.equal(rows[1].nextElementSibling.hidden, true, 'everything opened at once');
+
+  const trace = rows[0].nextElementSibling;
+  const steps = [...trace.querySelectorAll('.sa-transcript tbody tr')];
+  assert.equal(steps.length, 4);
+  // The refusal is the last line, which is what makes it readable as "it got
+  // this far".
+  const last = steps[3];
+  assert.match(last.textContent, /MAIL FROM:<lars@gnf\.dk>/);
+  assert.match(last.textContent, /550 5\.7\.1 sender address rejected/);
+  assert.ok(last.classList.contains('sa-trace-bad'), 'the line that failed looks like the ones that did not');
+});
+
+test('a password never reaches the screen, whatever the check recorded', async (t) => {
+  const { doc } = await openMonitor(t, {
+    [`GET ${SA}/monitors/7`]: traced([TRACED]),
+    [`GET ${SA}/monitors`]: [{ ...MONITOR, type: 'mail' }],
+  });
+  const text = doc.querySelector('#view').textContent;
+  assert.match(text, /AUTH PLAIN \*\*\*/);
+  assert.doesNotMatch(text, /hunter/i);
+});
+
+test('a check with nothing recorded says so rather than opening empty', async (t) => {
+  const bare = { id: 5, status: 'ok', summary: 'Connected in 12 ms.', value: 12, unit: 'ms', checked_at: '2026-09-15T19:00:00.000Z', timings: null, detail: null, error_message: null };
+  const { doc } = await openMonitor(t, { [`GET ${SA}/monitors/7`]: { ...MONITOR, recent: [bare] } });
+  await click(doc.querySelector('.sa-result-row'), 60);
+  assert.match(doc.querySelector('.sa-trace-row').textContent, /recorded no detail/);
+});
+
+// ------------------------------------------------- the phases, side by side
+test('the phases are charted against each other, one coloured line each', async (t) => {
+  const { doc } = await openMonitor(t, {
+    [`GET ${SA}/monitors/7`]: traced([TRACED, DELIVERED, { ...DELIVERED, id: 93, checked_at: '2026-09-15T19:01:37.000Z' }]),
+    [`GET ${SA}/monitors`]: [{ ...MONITOR, type: 'mail' }],
+  });
+  const view = doc.querySelector('#view');
+  assert.match(view.textContent, /Where the time goes, check by check/);
+
+  const lines = [...view.querySelectorAll('.sa-phase-line')];
+  assert.ok(lines.length >= 4, `only ${lines.length} phases charted`);
+  // Each line is its own colour, or they are one unreadable tangle.
+  const colours = new Set(lines.map((l) => l.getAttribute('stroke')));
+  assert.equal(colours.size, lines.length);
+
+  // And the colour a phase has in the chart is the colour it has in the bar.
+  await click([...doc.querySelectorAll('.sa-result-row')][1], 60);
+  const connectBar = [...doc.querySelectorAll('.sa-wf-row')]
+    .find((r) => r.querySelector('.sa-wf-name').textContent === 'connect')
+    .querySelector('.sa-wf-bar').getAttribute('style');
+  const connectDot = [...doc.querySelectorAll('.sa-phase-key')]
+    .find((b) => b.textContent.trim() === 'connect')
+    .querySelector('.sa-phase-dot').getAttribute('style');
+  assert.equal(connectBar.split('background:')[1], connectDot.split('background:')[1]);
+});
+
+test('the scale is the reader\'s choice — a 15 ms step is a flat line next to a 4.5 s one', async (t) => {
+  const { doc } = await openMonitor(t, {
+    [`GET ${SA}/monitors/7`]: traced([TRACED, DELIVERED]),
+    [`GET ${SA}/monitors`]: [{ ...MONITOR, type: 'mail' }],
+  });
+  const picker = [...doc.querySelectorAll('.sa-segment')].filter((b) => /Logarithmic|Linear/.test(b.textContent));
+  assert.equal(picker.length, 2, 'there is no way to change the scale');
+  const log = picker.find((b) => /Logarithmic/.test(b.textContent));
+  assert.equal(log.getAttribute('aria-pressed'), 'true', 'the default buries every small step');
+
+  const before = doc.querySelector('.sa-phase-line').getAttribute('d');
+  await click(picker.find((b) => /Linear/.test(b.textContent)), 80);
+  const after = doc.querySelector('.sa-phase-line').getAttribute('d');
+  assert.notEqual(before, after, 'the chart did not change with the scale');
+});
+
+test('a phase can be hidden, and the chart redraws without it', async (t) => {
+  const { doc } = await openMonitor(t, {
+    [`GET ${SA}/monitors/7`]: traced([TRACED, DELIVERED]),
+    [`GET ${SA}/monitors`]: [{ ...MONITOR, type: 'mail' }],
+  });
+  const before = doc.querySelectorAll('.sa-phase-line').length;
+  const key = [...doc.querySelectorAll('.sa-phase-key')].find((b) => b.textContent.trim() === 'connect');
+  await click(key, 80);
+  assert.equal(key.getAttribute('aria-pressed'), 'false');
+  assert.equal(doc.querySelectorAll('.sa-phase-line').length, before - 1);
+});
+
+test('one check is not a chart, and does not pretend to be', async (t) => {
+  const { doc } = await openMonitor(t, {
+    [`GET ${SA}/monitors/7`]: traced([DELIVERED]),
+    [`GET ${SA}/monitors`]: [{ ...MONITOR, type: 'mail' }],
+  });
+  assert.equal(doc.querySelectorAll('.sa-phase-line').length, 0);
+  assert.doesNotMatch(doc.querySelector('#view').textContent, /Where the time goes/);
+});
+
 // The whole module is operator+ in the sidebar (`data-min-role="operator"` on
 // every Service Assurance tab), so there is no viewer to test the buttons
 // against — the role gate is one screen further out. What IS worth pinning is

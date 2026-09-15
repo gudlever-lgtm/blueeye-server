@@ -2283,6 +2283,261 @@
       return svg;
     }
 
+    // ------------------------------------------------- where the time went
+    //
+    // "auth 16 ms · data 4.2 s · total 4.4 s" is a true sentence nobody can read
+    // — six numbers in no order, with the one that matters buried in the middle.
+    // The same six numbers drawn as a waterfall answer the question they were
+    // collected for: WHICH leg of the exchange cost the 4.4 seconds.
+    //
+    // The order is the order the exchange happens in, not alphabetical and not
+    // by size: a mail check that is slow in `data` and one that is slow in
+    // `auth` are different faults, and the shape is what tells them apart at a
+    // glance.
+    var PHASE_ORDER = ['connect', 'greeting', 'ehlo', 'tls', 'auth', 'envelope', 'data', 'delivery'];
+    var PHASE_COLOURS = ['#2563eb', '#0891b2', '#059669', '#65a30d', '#d97706', '#db2777', '#7c3aed', '#dc2626'];
+
+    // One colour per phase, everywhere: the bar in a row's waterfall and the
+    // line in the chart above it are the same colour for the same phase.
+    function phaseColour(phase) {
+      var at = PHASE_ORDER.indexOf(phase);
+      if (at >= 0) return PHASE_COLOURS[at % PHASE_COLOURS.length];
+      var hash = 0;
+      for (var i = 0; i < phase.length; i += 1) hash = (hash * 31 + phase.charCodeAt(i)) % 997;
+      return PHASE_COLOURS[hash % PHASE_COLOURS.length];
+    }
+
+    // `Number(null)` is 0 and `Number('')` is 0, and a phase that did not happen
+    // must never read as one that took no time — the repo has a rule about this
+    // (`src/lib/num.js`), and a chart is exactly where a fake zero does its
+    // damage: it draws a line on the floor where there should be a gap.
+    function numOrNull(v) {
+      if (v === null || v === undefined || v === '') return null;
+      var n = Number(v);
+      return Number.isFinite(n) ? n : null;
+    }
+
+    function orderedPhases(keys) {
+      var known = PHASE_ORDER.filter(function (p) { return keys.indexOf(p) >= 0; });
+      var rest = keys.filter(function (k) { return k !== 'total' && PHASE_ORDER.indexOf(k) < 0; }).sort();
+      return known.concat(rest);
+    }
+
+    // The phases of ONE check, laid end to end. `total` is drawn as the ruler
+    // rather than as a bar: it is the sum, and a bar for it would be a bar the
+    // length of every other bar put together.
+    function phaseWaterfall(timings) {
+      if (!timings || typeof timings !== 'object') return null;
+      var phases = orderedPhases(Object.keys(timings)).filter(function (p) {
+        return numOrNull(timings[p]) !== null;
+      });
+      if (!phases.length) return null;
+
+      var sum = phases.reduce(function (acc, p) { return acc + Math.max(0, numOrNull(timings[p]) || 0); }, 0);
+      var scale = Math.max(sum, numOrNull(timings.total) || 0) || 1;
+      var at = 0;
+      return el('div', { class: 'sa-waterfall' }, ...phases.map(function (phase) {
+        var value = Math.max(0, numOrNull(timings[phase]) || 0);
+        var left = (at / scale) * 100;
+        at += value;
+        return el('div', { class: 'sa-wf-row' },
+          el('span', { class: 'sa-wf-name' }, phase),
+          el('span', { class: 'sa-wf-track' },
+            el('span', {
+              class: 'sa-wf-bar',
+              style: 'margin-left:' + left.toFixed(2) + '%;width:' + Math.max(0.6, (value / scale) * 100).toFixed(2) + '%;background:' + phaseColour(phase),
+              title: phase + ' — ' + ms(value),
+            })),
+          el('span', { class: 'sa-wf-ms' }, ms(value)));
+      }));
+    }
+
+    // The conversation, as it happened. This is the part that turns "it failed
+    // in envelope" into "550 5.7.1 sender address rejected" — and the reason
+    // the client records it at all.
+    function transcriptTable(steps) {
+      if (!Array.isArray(steps) || !steps.length) return null;
+      return el('table', { class: 'data-table sa-transcript' },
+        el('thead', {}, el('tr', {},
+          el('th', {}, t('sa.trace.phase')),
+          el('th', {}, t('sa.trace.sent')),
+          el('th', {}, t('sa.trace.answer')),
+          el('th', {}, t('sa.trace.took')))),
+        el('tbody', {}, ...steps.map(function (step) {
+          var bad = step.error || (step.code && Math.floor(step.code / 100) > 3);
+          return el('tr', { class: bad ? 'sa-trace-bad' : null },
+            el('td', {}, el('span', { class: 'sa-phase-dot', style: 'background:' + phaseColour(step.phase) }), ' ' + step.phase),
+            el('td', {}, el('code', {}, step.command || '—')),
+            el('td', {}, step.error
+              ? el('span', { class: 'sa-trace-error' }, step.error)
+              : el('span', {}, (step.code ? step.code + ' ' : '') + (step.response || ''))),
+            el('td', {}, step.ms === undefined || step.ms === null ? '—' : ms(step.ms)));
+        })));
+    }
+
+    // The route the message actually took, off its own Received headers — the
+    // closest thing mail has to a traceroute. Oldest hop first, because that is
+    // the direction it travelled.
+    function hopTrail(hops) {
+      if (!Array.isArray(hops) || !hops.length) return null;
+      return el('ol', { class: 'sa-hops' }, ...hops.map(function (hop) {
+        // The raw header is the last word on a routing argument, so it is kept
+        // on the row rather than thrown away — as a tooltip, because nobody
+        // wants twenty-five of them on the screen at once.
+        return el('li', { title: hop.raw || null },
+          el('span', { class: 'sa-hop-by' }, hop.by || '—'),
+          hop.from ? el('span', { class: 'muted' }, ' ' + t('sa.trace.from', { host: hop.from })) : null,
+          hop.with ? el('span', { class: 'sa-hop-with' }, ' ' + hop.with) : null,
+          hop.ms === null || hop.ms === undefined
+            ? null
+            : el('span', { class: 'sa-hop-ms' }, ' +' + ms(hop.ms)),
+          hop.at ? el('div', { class: 'muted' }, new Date(hop.at).toLocaleString()) : null);
+      }));
+    }
+
+    // Every look in the mailbox. A message found on the first poll and one found
+    // after four minutes of looking are the same "delivered" and very different
+    // facts.
+    function pollTrail(polls) {
+      if (!Array.isArray(polls) || !polls.length) return null;
+      var found = polls.filter(function (p) { return p.found; }).length;
+      return el('div', { class: 'sa-polls' },
+        el('div', { class: 'muted' }, t('sa.trace.polls', { count: polls.length, found: found })),
+        el('div', { class: 'sa-poll-dots' }, ...polls.map(function (p) {
+          return el('span', {
+            class: 'sa-poll-dot' + (p.found ? ' found' : (p.error ? ' error' : '')),
+            title: t('sa.trace.pollAt', { sec: p.at }) + (p.error ? ' — ' + p.error : ''),
+          });
+        })));
+    }
+
+    // Everything a single result knows, opened under its row.
+    function resultTrace(r) {
+      var detail = r.detail || {};
+      var parts = [
+        phaseWaterfall(r.timings),
+        detail.hops && detail.hops.length
+          ? el('div', {}, el('h5', {}, t('sa.trace.route')), hopTrail(detail.hops))
+          : null,
+        pollTrail(detail.polls),
+        detail.transcript && detail.transcript.length
+          ? el('div', {}, el('h5', {}, t('sa.trace.conversation')), transcriptTable(detail.transcript))
+          : null,
+        r.error_message ? el('div', { class: 'sa-trace-error' }, r.error_message) : null,
+        facts(detail),
+      ].filter(Boolean);
+      if (!parts.length) return el('div', { class: 'muted' }, t('sa.trace.nothing'));
+      return el('div', { class: 'sa-trace' }, ...parts);
+    }
+
+    // The scalar leftovers — queue id, message id, the mailbox, the token. Small
+    // things, and each of them is the one somebody greps a mail log for.
+    var FACT_SKIP = { transcript: 1, hops: 1, polls: 1 };
+    function facts(detail) {
+      var keys = Object.keys(detail || {}).filter(function (k) {
+        return !FACT_SKIP[k] && detail[k] !== null && detail[k] !== undefined && typeof detail[k] !== 'object';
+      });
+      if (!keys.length) return null;
+      return el('dl', { class: 'sa-facts' }, ...keys.map(function (k) {
+        return el('div', {}, el('dt', {}, k.replace(/_/g, ' ')), el('dd', {}, String(detail[k])));
+      }));
+    }
+
+    // ----------------------------------------------- the phases, side by side
+    //
+    // One line per phase across the recent checks, each in the colour its bar
+    // has in the waterfall below. This is the chart that answers "it got slower
+    // — which part of it got slower", which no single duration can.
+    //
+    // A linear axis is the honest default and a useless one here: `auth` is 15
+    // ms next to a `delivery` of 4.5 s, so every phase but the biggest is a flat
+    // line on the floor. The scale is therefore a choice the reader makes.
+    function phaseChart(results, opts) {
+      var rows = (results || []).filter(function (r) { return r.timings && typeof r.timings === 'object'; });
+      if (rows.length < 2) return null;
+      var scale = (opts && opts.scale) || 'linear';
+      var hidden = (opts && opts.hidden) || {};
+
+      // Oldest on the left: a chart people read as "over time" must run the way
+      // time does, and the API answers newest-first.
+      var series = rows.slice().reverse();
+      var keys = orderedPhases(Object.keys(series.reduce(function (acc, r) {
+        Object.keys(r.timings).forEach(function (k) { acc[k] = 1; });
+        return acc;
+      }, {}))).filter(function (k) { return !hidden[k]; });
+      if (!keys.length) return null;
+
+      var W = 1000;
+      var H = 150;
+      var pad = { l: 56, r: 10, t: 10, b: 18 };
+      var plotW = W - pad.l - pad.r;
+      var plotH = H - pad.t - pad.b;
+      var values = [];
+      series.forEach(function (r) {
+        keys.forEach(function (k) {
+          var v = numOrNull(r.timings[k]);
+          if (v !== null && v > 0) values.push(v);
+        });
+      });
+      if (!values.length) return null;
+      var max = Math.max.apply(null, values);
+      var min = Math.min.apply(null, values);
+
+      var xOf = function (i) { return pad.l + (series.length < 2 ? plotW / 2 : (i / (series.length - 1)) * plotW); };
+      var yOf = function (v) {
+        if (scale === 'log') {
+          var lo = Math.log10(Math.max(0.5, min));
+          var hi = Math.log10(Math.max(lo + 0.3, max));
+          var here = Math.log10(Math.max(0.5, v));
+          return pad.t + plotH - ((here - lo) / (hi - lo)) * plotH;
+        }
+        return pad.t + plotH - (v / max) * plotH;
+      };
+
+      var svg = svgEl('svg', {
+        viewBox: '0 0 ' + W + ' ' + H, class: 'sa-chart-svg', preserveAspectRatio: 'none',
+        role: 'img', 'aria-label': t('sa.trace.phaseChart'),
+      });
+      [0, 0.5, 1].forEach(function (frac) {
+        var v = scale === 'log'
+          ? Math.pow(10, Math.log10(Math.max(0.5, min)) + frac * (Math.log10(Math.max(1, max)) - Math.log10(Math.max(0.5, min))))
+          : max * frac;
+        var y = yOf(v);
+        svg.appendChild(svgEl('line', { class: 'sa-chart-grid', x1: pad.l, y1: y, x2: W - pad.r, y2: y }));
+        var label = svgEl('text', { x: pad.l - 8, y: y + 4, class: 'sa-chart-axis', 'text-anchor': 'end' });
+        label.textContent = ms(Math.round(v));
+        svg.appendChild(label);
+      });
+
+      keys.forEach(function (key) {
+        var run = [];
+        var flush = function () {
+          if (run.length > 1) {
+            svg.appendChild(svgEl('path', { class: 'sa-phase-line', d: run.join(' '), stroke: phaseColour(key), fill: 'none' }));
+          }
+          run = [];
+        };
+        series.forEach(function (r, i) {
+          var v = numOrNull(r.timings[key]);
+          // A phase that did not happen in this check is a GAP, not a zero: a
+          // failed exchange never reached `data`, and drawing that as 0 ms would
+          // read as instant.
+          if (v === null) { flush(); return; }
+          run.push((run.length ? 'L' : 'M') + xOf(i).toFixed(1) + ',' + yOf(v).toFixed(1));
+        });
+        flush();
+        series.forEach(function (r, i) {
+          var v = numOrNull(r.timings[key]);
+          if (v === null) return;
+          svg.appendChild(svgEl('g', { class: 'sa-chart-bar' }, [
+            svgTitle(key + ' — ' + ms(v) + '\n' + new Date(r.checked_at).toLocaleString()),
+            svgEl('circle', { cx: xOf(i).toFixed(1), cy: yOf(v).toFixed(1), r: 3, fill: phaseColour(key) }),
+          ]));
+        });
+      });
+      return svg;
+    }
+
     function monitorBucketTooltip(b, data) {
       var d = new Date(b.start);
       var whenText = Number.isNaN(d.getTime()) ? b.key
@@ -3976,27 +4231,99 @@
             ? '—' : monitorValue({ value: summary.avg_value, unit: (m.recent[0] && m.recent[0].unit) || 'ms' })),
           stat(t('sa.monitor.every'), t('sa.monitor.seconds', { count: m.interval_sec })));
 
+        // A row is a summary; the trace under it is the answer. Clicking opens
+        // it in place rather than navigating: comparing the failed check with
+        // the two around it is the whole diagnostic move, and a page that
+        // replaces itself makes that impossible.
         var recent = (m.recent || []).length
-          ? el('table', { class: 'data-table' },
+          ? el('table', { class: 'data-table sa-results' },
             el('thead', {}, el('tr', {},
               el('th', {}, t('sa.monitor.status')),
               el('th', {}, t('sa.monitor.what')),
               el('th', {}, t('sa.monitor.measured')),
               el('th', {}, t('sa.monitor.checked')))),
-            el('tbody', {}, ...m.recent.map(function (r) {
-              return el('tr', {},
-                el('td', {}, statusChip(r.status)),
+            el('tbody', {}, ...m.recent.reduce(function (rows, r, index) {
+              var trace = el('tr', { class: 'sa-trace-row', hidden: true },
+                el('td', { colspan: '4' }, resultTrace(r)));
+              var row = el('tr', {
+                class: 'sa-result-row',
+                tabindex: '0',
+                title: t('sa.trace.open'),
+                onclick: function () { toggle(); },
+                onkeydown: function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } },
+              },
+                el('td', {}, el('span', { class: 'sa-disclosure' }, '▸'), statusChip(r.status)),
                 el('td', {}, r.summary || r.error_message || '',
-                  // The phase timings are the diagnosis — "accepted in 140 ms,
-                  // delivered after 90 s" is a different fault from "accepted
-                  // after 90 s" — so they are shown, not buried in the row.
-                  r.timings ? el('div', { class: 'muted' }, Object.keys(r.timings).map(function (k) {
+                  // The phase timings stay on the closed row — the shape of the
+                  // check is worth seeing without opening anything. What the
+                  // flat list could never say is WHICH phase the time went to,
+                  // and that is what opening the row draws.
+                  r.timings ? el('div', { class: 'muted' }, orderedPhases(Object.keys(r.timings)).concat(
+                    numOrNull(r.timings.total) === null ? [] : ['total']
+                  ).map(function (k) {
                     return k + ' ' + ms(r.timings[k]);
                   }).join(' · ')) : null),
                 el('td', {}, monitorValue(r)),
                 el('td', {}, when(r.checked_at)));
-            })))
+              function toggle() {
+                trace.hidden = !trace.hidden;
+                row.classList.toggle('open', !trace.hidden);
+                row.querySelector('.sa-disclosure').textContent = trace.hidden ? '▸' : '▾';
+              }
+              // The newest failure is the one somebody came to look at.
+              if (index === 0 && r.status !== 'ok') toggle();
+              rows.push(row, trace);
+              return rows;
+            }, [])))
           : el('div', { class: 'sa-empty' }, t('sa.monitor.noResults'));
+
+        // The phases of every recent check on one pair of axes. Drawn once, and
+        // redrawn in place when the scale changes — a linear axis buries a 15 ms
+        // auth under a 4.5 s delivery, and a log one buries nothing.
+        var phasePanel = null;
+        var phaseScale = 'log';
+        var phaseHolder = el('div', {});
+        var phaseHidden = {};
+        function drawPhases() {
+          var chart = phaseChart(m.recent, { scale: phaseScale, hidden: phaseHidden });
+          mount(phaseHolder, chart || el('div', { class: 'sa-empty' }, t('sa.trace.phaseNone')));
+        }
+        if (phaseChart(m.recent, { scale: 'linear' })) {
+          var phaseKeys = orderedPhases(Object.keys((m.recent || []).reduce(function (acc, r) {
+            Object.keys(r.timings || {}).forEach(function (k) { acc[k] = 1; });
+            return acc;
+          }, {})));
+          var legend = el('div', { class: 'sa-phase-legend' }, ...phaseKeys.map(function (key) {
+            var button = el('button', {
+              type: 'button',
+              class: 'sa-phase-key',
+              onclick: function () {
+                phaseHidden[key] = !phaseHidden[key];
+                button.classList.toggle('off', !!phaseHidden[key]);
+                button.setAttribute('aria-pressed', phaseHidden[key] ? 'false' : 'true');
+                drawPhases();
+              },
+            }, el('span', { class: 'sa-phase-dot', style: 'background:' + phaseColour(key) }), key);
+            button.setAttribute('aria-pressed', 'true');
+            return button;
+          }));
+          var scalePicker = el('div', {});
+          var drawScale = function () {
+            mount(scalePicker, segmented(
+              [['log', t('sa.trace.scaleLog')], ['linear', t('sa.trace.scaleLinear')]],
+              phaseScale,
+              function (pick) { phaseScale = pick; drawScale(); drawPhases(); },
+              t('sa.trace.scale')
+            ));
+          };
+          drawScale();
+          phasePanel = el('div', { class: 'sa-panel' },
+            section(t('sa.trace.phaseChart'), scalePicker),
+            el('p', { class: 'sa-help' }, t('sa.trace.phaseHelp')),
+            phaseHolder,
+            legend);
+          drawPhases();
+        }
 
         mount(body,
           back,
@@ -4026,7 +4353,9 @@
           stats,
           // A monitor that has never been scheduled has nothing to chart yet.
           m.pending ? null : monitorChart(id),
+          phasePanel,
           el('h4', {}, t('sa.monitor.recent')),
+          el('p', { class: 'sa-help' }, t('sa.trace.rowHelp')),
           recent);
       });
     }

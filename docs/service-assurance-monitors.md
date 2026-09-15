@@ -155,6 +155,44 @@ Lowering the interval to zero is not one of them: the floor is
 put it on the input and say it in the help text rather than let the operator
 discover it by being rejected.
 
+### Where the time went — the trace
+
+A verdict says whether the mail arrived. The trace says where it went, and where
+it stopped. Every check stores it, and the monitor's page opens it under the row
+when you click one (the newest failing check opens itself).
+
+Four things are recorded:
+
+* **Per-phase timings** (`timings`) — `connect`, `greeting`, `ehlo`, `tls`,
+  `auth`, `envelope`, `data`, `delivery`, plus `total`. Drawn as a waterfall in
+  the order the exchange happens: a check slow in `data` and one slow in `auth`
+  are different faults, and the shape is what tells them apart. Across checks
+  they are drawn as one line per phase, so "it got slower" can be answered with
+  *which part* got slower. The scale is a choice — a 15 ms `auth` is a flat line
+  on the floor next to a 4.5 s `delivery`, so the chart defaults to logarithmic.
+* **The SMTP conversation** (`detail.transcript`) — every command, the code and
+  line the server answered with, and what each took. This is what turns "it
+  failed in envelope" into `550 5.7.1 sender address rejected: not allowed`. On
+  a failure it is attached to the error, so the conversation *up to* the refusal
+  is kept.
+* **The delivery path** (`detail.hops`, round trip only) — parsed from the
+  message's own `Received:` headers, which is the closest thing mail has to a
+  traceroute: which relay handed it to which, with what, and what each leg cost.
+  The headers are stored newest-first and stamped by clocks we do not own, so
+  the chain is reversed into travel order and a leg computed from two
+  disagreeing clocks is reported as unknown rather than as a negative number.
+  The headers are fetched with `BODY.PEEK`, so looking does not mark the probe
+  message as read.
+* **Every look in the mailbox** (`detail.polls`) — a message found on the first
+  poll and one found after four minutes are the same "delivered" and very
+  different facts.
+
+**A credential never reaches the transcript.** `AUTH PLAIN <base64>` is recorded
+as `AUTH PLAIN ***`, and AUTH LOGIN's two bare base64 lines as `***` — the
+exchange and its answer are kept, the argument is not. Base64 is not encryption,
+and a transcript that kept it would put a plaintext password in the database and
+on an operator's screen. The suite asserts this on both methods.
+
 ### What pages, and what does not
 
 * **One bad check is not an outage.** A failure waits for the operator's failure

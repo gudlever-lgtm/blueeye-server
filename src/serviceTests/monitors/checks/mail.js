@@ -37,20 +37,25 @@ function classifySmtpError(err) {
   const phase = (err && err.phase) || null;
   const code = (err && err.code) || null;
   const message = (err && err.message) || 'the send failed';
+  // The conversation up to the failure. A phase name says where it stopped; the
+  // transcript says what the server actually answered, which is the difference
+  // between "auth failed" and "550 5.7.1 sender address rejected".
+  const transcript = (err && Array.isArray(err.transcript) && err.transcript.length) ? err.transcript : null;
+  const detail = { phase, code, transcript };
   if (phase === 'connect' || phase === 'greeting' || phase === 'tls') {
-    return unreachable({ summary: `Could not reach the mail server (${phase}): ${message}`, error: message, detail: { phase, code } });
+    return unreachable({ summary: `Could not reach the mail server (${phase}): ${message}`, error: message, detail });
   }
   if (phase === 'auth') {
     return failed(KIND.MAIL_AUTH_FAILED, {
       summary: `The mail server refused the credentials: ${message}`,
       error: message,
-      detail: { phase, code },
+      detail,
     });
   }
   return failed(KIND.MAIL_REJECTED, {
     summary: code ? `The mail server refused the message (${code}): ${message}` : `The mail server refused the message: ${message}`,
     error: message,
-    detail: { phase, code },
+    detail,
   });
 }
 
@@ -94,6 +99,7 @@ function createMailCheck({ smtp = null, imap = null, sleep = sleeper, now = () =
       message_id: sent.message_id,
       token,
       recipient: cfg.to_address,
+      transcript: sent.transcript || null,
     };
 
     // ------------------------------------------------------------ send only
@@ -119,6 +125,11 @@ function createMailCheck({ smtp = null, imap = null, sleep = sleeper, now = () =
     const until = sentAt + deadlineMs;
     let attempts = 0;
     let lastError = null;
+    // Every look in the mailbox, with the second it happened at. A message that
+    // turned up on the fourth poll and one that never turned up at all look the
+    // same in a total; the polls are how an operator tells them apart.
+    const polls = [];
+    const poll = (entry) => { if (polls.length < 40) polls.push(entry); };
 
     // Poll rather than IDLE: one connection per look, closed each time. A probe
     // that holds an IMAP session open for five minutes is a probe that shows up
@@ -137,6 +148,7 @@ function createMailCheck({ smtp = null, imap = null, sleep = sleeper, now = () =
           cleanup: cfg.cleanup !== false,
           timeoutMs: cfg.timeout_ms || 15000,
         });
+        poll({ at: Math.round((now() - sentAt) / 1000), found: !!(found && found.found), ms: found ? found.ms : null });
         if (found && found.found) {
           // INTERNALDATE is the receiving server's own clock, so it is the
           // honest end of the measurement — but only when it is sane. A server
@@ -158,6 +170,10 @@ function createMailCheck({ smtp = null, imap = null, sleep = sleeper, now = () =
               mailbox: cfg.imap_mailbox || 'INBOX',
               internal_date: found.internal_date ? found.internal_date.toISOString() : null,
               clock_skew: found.internal_date && found.internal_date.getTime() < sentAt,
+              polls,
+              // The route the message took, read off its own Received headers:
+              // which relay handed it to which, and what each leg cost.
+              hops: Array.isArray(found.hops) ? found.hops : [],
             },
           });
         }
@@ -166,11 +182,12 @@ function createMailCheck({ smtp = null, imap = null, sleep = sleeper, now = () =
         // reported as such rather than as an undelivered message, which would
         // page somebody about a working mail system.
         lastError = (err && err.message) || String(err);
+        poll({ at: Math.round((now() - sentAt) / 1000), found: false, error: lastError });
         if (err && (err.phase === 'login' || err.phase === 'select')) {
           return misconfigured({
             summary: `The probe mailbox could not be opened (${err.phase}): ${lastError}`,
             error: lastError,
-            detail: { ...baseDetail, attempts },
+            detail: { ...baseDetail, attempts, polls },
           });
         }
       }
@@ -188,7 +205,7 @@ function createMailCheck({ smtp = null, imap = null, sleep = sleeper, now = () =
       durationMs: now() - sentAt,
       timings: sent.timings,
       error: lastError,
-      detail: { ...baseDetail, measured: 'delivery', attempts, waited_sec: waited },
+      detail: { ...baseDetail, measured: 'delivery', attempts, waited_sec: waited, polls },
     });
   }
 

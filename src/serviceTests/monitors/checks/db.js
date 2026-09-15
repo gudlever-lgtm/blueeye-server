@@ -150,4 +150,4 @@ function createDbCheck({ connector = defaultConnector, now = () => Date.now() } 
   return { check };
 }
 
-module.exports = { createDbCheck, isReadOnly, defaultConnector };
+module.exports = { createDbCheck, isReadOnly };

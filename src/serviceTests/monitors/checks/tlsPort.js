@@ -1,5 +1,6 @@
 'use strict';
 
+const { numOrNull } = require('../../storage/shape');
 const { createCertificateChecker, STATUS: CERT_STATUS } = require('../../assurance/certificates');
 const { ok, failed, unreachable, KIND } = require('../result');
 
@@ -21,8 +22,11 @@ function createTlsPortCheck({ checker = null, now = () => Date.now() } = {}) {
     const cfg = monitor.config || {};
     const host = cfg.host;
     const port = cfg.port || 443;
-    const warnDays = Number.isFinite(Number(cfg.warn_days)) ? Number(cfg.warn_days) : 30;
-    const criticalDays = Number.isFinite(Number(cfg.critical_days)) ? Number(cfg.critical_days) : 7;
+    // numOrNull, not Number(): `Number(null)` is 0, so a monitor with no warning
+    // window would warn zero days ahead — i.e. never, which is the opposite of
+    // what an unset field should mean.
+    const warnDays = numOrNull(cfg.warn_days) === null ? 30 : numOrNull(cfg.warn_days);
+    const criticalDays = numOrNull(cfg.critical_days) === null ? 7 : numOrNull(cfg.critical_days);
     const use = checker || createCertificateChecker({ timeoutMs: cfg.timeout_ms || 10000, now: () => new Date(now()) });
 
     const cert = await use.check({ host, port, url: null }, { warnDays });

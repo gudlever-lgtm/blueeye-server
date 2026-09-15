@@ -158,4 +158,4 @@ function createNtpCheck({ createSocket = null, now = () => Date.now() } = {}) {
   return { check };
 }
 
-module.exports = { createNtpCheck, offsetFrom, readTimestamp, writeTimestamp, requestPacket, NTP_EPOCH_OFFSET };
+module.exports = { createNtpCheck, offsetFrom, writeTimestamp, requestPacket };

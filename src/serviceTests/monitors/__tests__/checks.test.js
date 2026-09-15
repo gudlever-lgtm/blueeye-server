@@ -13,6 +13,7 @@ const assert = require('node:assert/strict');
 const { EventEmitter } = require('events');
 
 const { createDnsCheck } = require('../checks/dns');
+const { flatten } = require('../dnsResolve');
 const { createRblCheck, reverseIpv4 } = require('../checks/rbl');
 const { createLdapCheck, isCredentialFailure } = require('../checks/ldap');
 const { createNtpCheck, offsetFrom, requestPacket, writeTimestamp } = require('../checks/ntp');
@@ -54,6 +55,19 @@ test('the DNS presets ask the right question without the operator knowing where 
   assert.deepEqual(resolver.calls.map((c) => `${c.record} ${c.name}`), [
     'TXT example.com', 'TXT _dmarc.example.com', 'TXT sel1._domainkey.example.com', 'MX example.com',
   ]);
+});
+
+test('every record type flattens to the strings a check can look inside', () => {
+  // The one that matters: a long TXT record is chunked into 255-byte strings on
+  // the wire, and comparing them one at a time finds nothing. They are joined
+  // with no separator, which is what every mail server does with them.
+  assert.deepEqual(flatten('TXT', [['v=spf1 include:', '_spf.example.net -all']]), ['v=spf1 include:_spf.example.net -all']);
+  assert.deepEqual(flatten('MX', [{ priority: 10, exchange: 'mx1.example.com' }]), ['10 mx1.example.com']);
+  assert.deepEqual(flatten('SRV', [{ priority: 0, weight: 5, port: 5060, name: 'sip.example.com' }]), ['0 5 5060 sip.example.com']);
+  assert.deepEqual(flatten('SOA', [{ nsname: 'ns1.example.com', hostmaster: 'hostmaster.example.com', serial: 7 }]), ['ns1.example.com hostmaster.example.com 7']);
+  assert.deepEqual(flatten('A', ['203.0.113.7']), ['203.0.113.7']);
+  // A single answer that is not an array still flattens rather than throwing.
+  assert.deepEqual(flatten('A', '203.0.113.7'), ['203.0.113.7']);
 });
 
 test('a missing record and a resolver that will not answer are different verdicts', async () => {

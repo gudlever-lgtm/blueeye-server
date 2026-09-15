@@ -335,4 +335,4 @@ function createSmtpClient({ connect = null, secureConnect = null, upgrade = null
   return { send };
 }
 
-module.exports = { createSmtpClient, SmtpError, buildMessage, queueIdFrom, stuff, createReader };
+module.exports = { createSmtpClient, SmtpError, buildMessage, queueIdFrom, stuff };

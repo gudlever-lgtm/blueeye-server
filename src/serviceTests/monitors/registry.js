@@ -113,4 +113,4 @@ function observationFor(monitor, result) {
   };
 }
 
-module.exports = { createCheckers, createMonitorRunner, observationFor };
+module.exports = { createMonitorRunner, observationFor };

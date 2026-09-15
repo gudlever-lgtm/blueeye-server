@@ -115,4 +115,4 @@ function createLdapCheck({ clientFactory = defaultClientFactory, now = () => Dat
   return { check };
 }
 
-module.exports = { createLdapCheck, defaultClientFactory, isCredentialFailure };
+module.exports = { createLdapCheck, isCredentialFailure };

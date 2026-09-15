@@ -1,7 +1,7 @@
 'use strict';
 
 const { denyReason, REASON } = require('../security/hostPolicy');
-const { isType, typeMeta, TYPE_NAMES, defaultsFor, secretFields } = require('../monitors/types');
+const { isType, typeMeta, TYPE_NAMES, defaultsFor, secretFields, hostFields } = require('../monitors/types');
 const { isReadOnly } = require('../monitors/checks/db');
 
 // HTTP input validation for monitors. Pure: { value } or { errors }, never both,
@@ -51,6 +51,11 @@ function validateField(name, spec, raw, errors, prefix = 'config') {
   }
   switch (spec.type) {
     case 'int': {
+      // A form posts "587", so a string of digits is accepted — but only that.
+      // `Number(true)` is 1 and `Number('1e3')` is 1000, and both would store a
+      // port nobody typed.
+      if (typeof raw !== 'number' && typeof raw !== 'string') { errors[key] = 'must be a whole number'; return undefined; }
+      if (typeof raw === 'string' && !/^-?\d+$/.test(raw.trim())) { errors[key] = 'must be a whole number'; return undefined; }
       const n = Number(raw);
       if (!Number.isInteger(n)) { errors[key] = 'must be a whole number'; return undefined; }
       if (spec.min !== undefined && n < spec.min) { errors[key] = `must be at least ${spec.min}`; return undefined; }
@@ -76,12 +81,17 @@ function validateField(name, spec, raw, errors, prefix = 'config') {
       return items;
     }
     case 'email': {
+      if (typeof raw !== 'string') { errors[key] = 'must be text'; return undefined; }
       const v = trimmed(raw, spec.max || 255);
       if (!EMAIL_RE.test(v)) { errors[key] = 'that is not a valid email address'; return undefined; }
       return v;
     }
     case 'host':
     case 'domain': {
+      // `42` is a syntactically valid hostname label, so a number sent here
+      // would be accepted as the host "42" and checked on a schedule forever.
+      // Text fields take text.
+      if (typeof raw !== 'string') { errors[key] = 'must be text'; return undefined; }
       const v = trimmed(raw, spec.max || 255);
       if (!HOST_RE.test(v)) { errors[key] = 'that is not a valid host or domain name'; return undefined; }
       if (denyReason(v) === REASON.DENIED_ADDRESS) {
@@ -93,6 +103,9 @@ function validateField(name, spec, raw, errors, prefix = 'config') {
     case 'secret':
     case 'text':
     default: {
+      // A secret especially: an object here stringifies to "[object Object]",
+      // which encrypts and stores perfectly and is not anybody's password.
+      if (typeof raw !== 'string') { errors[key] = 'must be text'; return undefined; }
       const v = trimmed(raw, (spec.max || 1024) + 1);
       if (spec.max && v.length > spec.max) { errors[key] = `too long (max ${spec.max})`; return undefined; }
       return v;
@@ -151,6 +164,31 @@ function validateTypeRules(type, config, errors, { recipientDomains = [] } = {})
   }
 }
 
+// The second pass over every field the catalogue marks as holding a host.
+//
+// Field-type validation already deny-lists anything typed `host` or `domain`.
+// This exists for the fields that are NOT typed that way and still carry one —
+// `ldap_bind.url` is the current example, and the next check type with a URL
+// would otherwise arrive unprotected because nobody remembered to write a rule
+// for it. The catalogue says which fields hold a host; this makes that
+// declaration enforceable rather than a comment.
+function denyListHostFields(type, config, errors) {
+  for (const field of hostFields(type)) {
+    const raw = str(config[field]).trim();
+    if (!raw) continue;
+    const key = `config.${field}`;
+    if (errors[key]) continue;
+    let host = raw;
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) {
+      try { host = new URL(raw).hostname; } catch { host = ''; }
+    }
+    if (!host) continue;
+    if (denyReason(host) === REASON.DENIED_ADDRESS) {
+      errors[key] = 'loopback, link-local and metadata addresses can never be monitored';
+    }
+  }
+}
+
 // The whole request body.
 //
 // `partial` is a PATCH: only the fields present are validated, EXCEPT config,
@@ -178,13 +216,22 @@ function validateMonitor(body, { partial = false, recipientDomains = [], existin
   const meta = typeMeta(type);
 
   if (!partial || body.name !== undefined) {
-    const name = trimmed(body.name, NAME_MAX + 1);
-    if (!name) errors.name = 'a name is required';
-    else if (name.length > NAME_MAX) errors.name = `the name is too long (max ${NAME_MAX})`;
-    else value.name = name;
+    // An object here stringifies to "[object Object]", which is a perfectly
+    // valid-looking name nobody typed. Text fields take text — the same rule as
+    // the config fields below.
+    if (body.name !== undefined && typeof body.name !== 'string') {
+      errors.name = 'the name must be text';
+    } else {
+      const name = trimmed(body.name, NAME_MAX + 1);
+      if (!name) errors.name = 'a name is required';
+      else if (name.length > NAME_MAX) errors.name = `the name is too long (max ${NAME_MAX})`;
+      else value.name = name;
+    }
   }
   if (body.description !== undefined) {
-    value.description = body.description === null ? null : trimmed(body.description, DESC_MAX);
+    if (body.description === null) value.description = null;
+    else if (typeof body.description !== 'string') errors.description = 'the description must be text';
+    else value.description = trimmed(body.description, DESC_MAX);
   }
   if (body.application_id !== undefined) {
     if (body.application_id === null) value.application_id = null;
@@ -226,8 +273,14 @@ function validateMonitor(body, { partial = false, recipientDomains = [], existin
   }
 
   // ------------------------------------------------------------------ config
-  const rawConfig = body.config === undefined ? (partial ? null : {}) : body.config;
-  if (rawConfig !== null) {
+  //
+  // ABSENT and NULL are different. On a PATCH an absent config means "leave it
+  // alone"; `config: null` means the caller sent something, and sending nothing
+  // where an object belongs is an error rather than a create with no
+  // configuration at all — which is what it used to be.
+  const configAbsent = body.config === undefined;
+  if (!configAbsent || !partial) {
+    const rawConfig = configAbsent ? {} : body.config;
     if (!isPlainObject(rawConfig)) {
       errors.config = 'the configuration must be an object';
       return { errors };
@@ -249,6 +302,7 @@ function validateMonitor(body, { partial = false, recipientDomains = [], existin
       if (isPlainObject(rawConfig) && rawConfig[name] === '') secrets[name] = '';
     }
     validateTypeRules(type, { ...config, ...secrets }, errors, { recipientDomains });
+    denyListHostFields(type, config, errors);
 
     const target = config[meta.target];
     if (!target) {
@@ -268,4 +322,4 @@ function validateMonitor(body, { partial = false, recipientDomains = [], existin
 // calls every exported function with garbage — an export whose contract is
 // "always called with a spec" would be a false failure there and a misleading
 // API here.
-module.exports = { validateMonitor, EMAIL_RE, HOST_RE, MIN_INTERVAL_SEC, MAX_INTERVAL_SEC };
+module.exports = { validateMonitor };

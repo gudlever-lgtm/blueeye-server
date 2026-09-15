@@ -62,4 +62,4 @@ function createResolver({ Resolver = dns.promises.Resolver, now = () => Date.now
   return { resolve };
 }
 
-module.exports = { createResolver, flatten, RECORD_ERRORS };
+module.exports = { createResolver, flatten };

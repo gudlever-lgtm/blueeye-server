@@ -133,7 +133,9 @@ const TYPES = {
     kind: 'dns.record',
     measures: { unit: 'ms', label: 'Lookup time' },
     defaultIntervalSec: 3600,
-    hostFields: ['resolver'],
+    // Every field that names something resolvable, so the validator deny-lists
+    // all three rather than only the one somebody remembered.
+    hostFields: ['domain', 'name', 'resolver'],
     secrets: [],
     fields: {
       domain: { type: 'domain', required: true, max: 255 },
@@ -166,7 +168,10 @@ const TYPES = {
     kind: 'mail.rbl',
     measures: { unit: 'count', label: 'Lists' },
     defaultIntervalSec: 3600,
-    hostFields: [],
+    // `lists` is deliberately NOT here: those are blacklist ZONE names, queried
+    // as `4.3.2.1.zen.spamhaus.org`, and deny-listing them would refuse nothing
+    // an attacker could reach and every list an operator wants.
+    hostFields: ['ip'],
     secrets: [],
     fields: {
       // The sending address to look up. Deliberately an IP: an RBL is indexed by
@@ -335,8 +340,12 @@ function catalogue() {
   });
 }
 
+// Exports are the surface OTHER files use. `TYPES`, `CATEGORIES`, `FIELD_TYPES`
+// and `DNS_RECORDS` stay internal on purpose: the catalogue is read through
+// typeMeta()/catalogue(), and an exported table invites a second reader that
+// reaches past those and drifts. test/…/surface.test.js fails the build on an
+// export nothing uses, which is how that stays true.
 module.exports = {
-  TYPES, TYPE_NAMES, CATEGORIES, FIELD_TYPES, STATUS, KIND,
-  DNS_PRESETS, DNS_RECORDS,
+  TYPE_NAMES, STATUS, KIND, DNS_PRESETS,
   isType, typeMeta, defaultsFor, secretFields, hostFields, catalogue,
 };

@@ -195,4 +195,4 @@ function createMailCheck({ smtp = null, imap = null, sleep = sleeper, now = () =
   return { check };
 }
 
-module.exports = { createMailCheck, classifySmtpError };
+module.exports = { createMailCheck };

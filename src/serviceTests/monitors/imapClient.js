@@ -221,4 +221,4 @@ function createImapClient({ secureConnect = null, now = () => Date.now() } = {})
   return { findToken };
 }
 
-module.exports = { createImapClient, ImapError, uidsFrom, internalDateFrom, quoted };
+module.exports = { createImapClient, uidsFrom, internalDateFrom, quoted };

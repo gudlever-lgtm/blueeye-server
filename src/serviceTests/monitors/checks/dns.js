@@ -1,5 +1,6 @@
 'use strict';
 
+const { numOrNull } = require('../../storage/shape');
 const { createResolver } = require('../dnsResolve');
 const { DNS_PRESETS } = require('../types');
 const { ok, failed, unreachable, misconfigured, KIND } = require('../result');
@@ -32,7 +33,10 @@ function question(cfg) {
     // operator adds is required on top of it, never instead of it.
     contains: [preset.contains, cfg.expect_contains].filter(Boolean),
     absent: cfg.expect_absent ? [cfg.expect_absent] : [],
-    minAnswers: Number.isFinite(Number(cfg.min_answers)) ? Math.max(1, Number(cfg.min_answers)) : 1,
+    // numOrNull, not Number(): `Number(null)` and `Number('')` are both 0, and
+    // "no minimum given" would then mean "zero answers will do" — which is the
+    // one value that makes the check pass on a record that is gone.
+    minAnswers: numOrNull(cfg.min_answers) === null ? 1 : Math.max(1, numOrNull(cfg.min_answers)),
   };
 }
 
@@ -108,7 +112,7 @@ function createDnsCheck({ resolver = null, now = () => Date.now() } = {}) {
     });
   }
 
-  return { check, question };
+  return { check };
 }
 
-module.exports = { createDnsCheck, question };
+module.exports = { createDnsCheck };

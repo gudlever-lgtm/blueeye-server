@@ -211,6 +211,18 @@ through the same `secretBox` the credentials table uses. `list()` and
 only `findByIdWithSecrets()` decrypts, and only the checker calls it. On an
 update an absent secret is left alone, a value replaces it, and `''` clears it.
 
+**Types are checked, not coerced.** Text fields take text: a number sent as
+`smtp_host` would be accepted as the host `"42"` and an object as
+`"[object Object]"`, and both would then be monitored on a schedule forever. An
+integer field accepts the digits a browser form posts (`"587"`) and nothing else
+— `Number(true)` is `1` and `Number('1e3')` is `1000`, and neither is a port
+anybody typed. `config: null` on a create is an empty configuration, not an
+absent one. Unknown keys in `config` are dropped: the config is a declared shape
+from the catalogue, not a bag, so `__proto__` and friends never reach storage.
+A default is read with `numOrNull`, never `Number()` — `Number(null)` is `0`,
+which would turn "no warning window set" into "warn zero days ahead", i.e.
+never.
+
 Interval floor: 60 s by default (`monitors.minIntervalSec`), and at most
 `monitors.maxMonitors` (200) monitors. A mail probe sends a real message to a
 real mailbox; both limits exist so this feature cannot be turned into the thing
@@ -268,3 +280,19 @@ so the two halves of the reaction layer are tuned in one place.
 | The sweep + the job | `src/serviceTests/assurance/reactor.js` (`sweepMonitors`, `createMonitorsJob`) |
 | UI | `public/serviceAssurance.js` (`views.monitors`), nav tab **Monitors** |
 | Schema | `migrations/094_create_service_monitors.sql` |
+
+## The suites that keep it honest
+
+Beyond the per-check specs:
+
+* `monitors/__tests__/surface.test.js` — sweeps the module's own source: every
+  export must have a caller (dead code fails the build), every catalogue entry
+  must be complete (a declared secret must be a secret field, a declared host
+  field must exist, and every field typed as a host must be declared — that last
+  one is what caught `hostFields` being decorative), every default must be inside
+  its own bounds, every failure kind must be classified AND explained, and the
+  status vocabulary the checkers return must be one the database column accepts.
+* `api/__tests__/monitorsHostile.test.js` — every wrong shape at every route
+  (strings where objects belong and objects where strings belong), both GETs
+  swept with hostile query parameters, and each repository method made to throw
+  so the 500 path is a clean error rather than a crash.

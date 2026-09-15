@@ -34,6 +34,10 @@ const {
 const { groupAlerts } = require('../alerts/grouping');
 const { createMonitorRunner, observationFor } = require('../monitors/registry');
 const { monitorReaction, monitorSummary, monitorEvidence, isFailure } = require('../monitors/policy');
+const { STATUS: MONITOR_STATUS } = require('../monitors/types');
+
+const STATUS_OK = MONITOR_STATUS.OK;
+const STATUS_SLOW = MONITOR_STATUS.SLOW;
 
 const silentLogger = { info() {}, warn() {}, error() {} };
 
@@ -467,6 +471,25 @@ function createAssuranceReactor({
       }
     }
 
+    // ------------------------------------------------------------ activation
+    // A monitor is PENDING until it has worked once (migration 095). The first
+    // check that comes back `ok` or `slow` opens the gate: the exchange
+    // completed, and `slow` only means it was over a threshold.
+    let activated = updated;
+    const works = result.status === STATUS_OK || result.status === STATUS_SLOW;
+    if (monitor.pending && works) {
+      activated = await monitorsRepo.activate(monitor.id, at);
+      logger.info(`service-assurance: monitor ${monitor.id} (${monitor.name}) activated — first successful check`);
+    }
+
+    // Still pending means this check FAILED during setup. That is the operator's
+    // own configuration, watched by nobody yet, and opening an incident for it
+    // would page somebody about a monitor that has never worked. The result row
+    // is stored and says why; nothing else happens.
+    if (!activated || activated.pending) {
+      return { monitor: activated, result: stored || result, streak, changed: false, state: 'pending' };
+    }
+
     const assurance = await config();
     const reaction = monitorReaction(result, {
       failureStreak: assurance.failureStreak,
@@ -485,7 +508,7 @@ function createAssuranceReactor({
       evidence: reaction ? monitorEvidence(monitor, result, streak) : [],
     });
 
-    return { monitor: updated, result: stored || result, streak, ...outcome };
+    return { monitor: activated, result: stored || result, streak, ...outcome };
   }
 
   // One pass over every monitor whose interval has elapsed.

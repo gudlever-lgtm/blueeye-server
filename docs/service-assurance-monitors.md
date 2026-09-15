@@ -112,6 +112,30 @@ kind has a plain-language explanation — what it means, the likely cause, and w
 it costs — stored on the incident, because an operator woken at 02:00 deserves a
 sentence rather than an identifier.
 
+### Nothing watches until it has worked once
+
+A monitor is created **pending**: saved, listed, checkable by hand — and not
+swept. The first check that comes back `ok` or `slow` stamps `activated_at`, and
+from that moment it runs on its interval like anything else.
+
+The reason is the failure this feature would otherwise cause: before the gate, a
+new monitor was due the moment it was saved, so a mistyped mail server failed
+every interval and opened an incident. An operator would find out about their own
+typo as an outage, at two in the morning, from an alert.
+
+**While pending, a failing check opens no incident and sends no alert.** The
+result rows are stored — they are how the operator sees *why* it will not start —
+and nothing else happens.
+
+**`POST /monitors/:id/activate` is the override**, and the gate needs one: when
+the service is genuinely down at the moment you create the monitor, watching it
+is exactly what you want. Activation is idempotent and keeps the date it first
+started watching, because that is what "watching since" means.
+
+On upgrade, every monitor that had already run keeps running (migration 095) — an
+upgrade that silently paused an estate's monitoring would be the worst possible
+reading of this.
+
 ### What pages, and what does not
 
 * **One bad check is not an outage.** A failure waits for the operator's failure
@@ -165,9 +189,36 @@ viewer+, writes operator+.
 | `DELETE` | `/monitors/:id` | operator+ | 204 / 404 |
 | `POST` | `/monitors/:id/check` | operator+ | runs it NOW — 200, or 409 while one is already running |
 | `GET` | `/monitors/:id/results` | viewer+ | history + summary (`limit`, `hours`) |
+| `GET` | `/monitors/:id/series` | viewer+ | availability per bucket for the chart (`period`, `at`, `tz_offset`) |
+| `POST` | `/monitors/:id/activate` | operator+ | the activation override — 200 (idempotent) / 400 / 404 |
 
 A manual check answers 409 rather than queueing: two probes racing for one
 mailbox delete each other's message and both report "undelivered".
+
+### The series
+
+`GET /monitors/:id/series?period=day|week|month|year&at=&tz_offset=` answers the
+question the 24-hour number cannot: **is it getting worse?** A mail monitor at
+100% whose delivery time tripled over a week is the finding, and no single
+percentage shows it.
+
+It reuses `stats/period.js` — the same calendar the run-history charts use, cut
+in the VIEWER's time zone, so "this week" means one thing across the product.
+Every bucket in the period is returned, empty ones included: a gap is the reading
+an operator needs ("it stopped checking on Thursday"), and it only exists if the
+empty buckets are in the answer.
+
+Two rules in the numbers:
+
+* `ok` and `slow` are **available** (the exchange worked); `failed`,
+  `unreachable` and `misconfigured` are not.
+* `unknown` counts towards neither. It is the outcome that says nobody managed to
+  look, and folding it into either side would invent a fact. It stays in `checks`
+  so a bucket still adds up.
+
+A bucket where nothing was judged reports `availability: null`, never `0` — the
+screen draws that as a gap rather than as a bar at the bottom, because "nothing
+ran" and "everything failed" are different statements.
 
 ### Result shape
 
@@ -210,6 +261,13 @@ through the same `secretBox` the credentials table uses. `list()` and
 `findById()` report `has_secrets: { smtp_password: true }` and never the value;
 only `findByIdWithSecrets()` decrypts, and only the checker calls it. On an
 update an absent secret is left alone, a value replaces it, and `''` clears it.
+
+**The form only shows what applies.** A field can declare `showWhen` in the
+catalogue — a DKIM selector belongs to the DKIM preset, the mailbox fields belong
+to a mail check with round-trip on — and the form hides the rest. It is a display
+rule, not a validation one: a hidden field keeps its value, so switching the
+preset back does not lose what was typed, and a sometimes-hidden field can never
+be required (the surface sweep asserts both).
 
 **Types are checked, not coerced.** Text fields take text: a number sent as
 `smtp_host` would be accepted as the host `"42"` and an object as

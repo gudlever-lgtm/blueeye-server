@@ -2163,6 +2163,199 @@
       return svg;
     }
 
+    // ----------------------------------------------------- monitor charts
+    // Availability per bucket, as a full column split good/bad.
+    //
+    // A ratio bounded at 0 and 100 is drawn full-height on purpose: the eye
+    // compares the RED, and a 3% bad hour is a sliver rather than a bar that
+    // looks like a third of something. Empty buckets keep the 2px mark the run
+    // chart uses — "nothing was checked then" is a reading, and a missing column
+    // would be ambiguous with "it was fine".
+    function availabilityChart(data) {
+      var W = 1000;
+      var H = 170;
+      var pad = { l: 44, r: 10, t: 12, b: 22 };
+      var buckets = data.buckets || [];
+      var plotW = W - pad.l - pad.r;
+      var plotH = H - pad.t - pad.b;
+      var slot = plotW / Math.max(1, buckets.length);
+      var barW = Math.max(2, Math.min(48, slot - 4));
+
+      var svg = svgEl('svg', {
+        viewBox: '0 0 ' + W + ' ' + H, class: 'sa-chart-svg', preserveAspectRatio: 'none',
+        role: 'img', 'aria-label': t('sa.monitor.chart.availabilityTitle'),
+      });
+      [0, 0.5, 1].forEach(function (frac) {
+        var y = pad.t + plotH - frac * plotH;
+        svg.appendChild(svgEl('line', { class: 'sa-chart-grid', x1: pad.l, y1: y, x2: W - pad.r, y2: y }));
+        var label = svgEl('text', { x: pad.l - 8, y: y + 4, class: 'sa-chart-axis', 'text-anchor': 'end' });
+        label.textContent = Math.round(frac * 100) + '%';
+        svg.appendChild(label);
+      });
+
+      var every = Math.ceil(buckets.length / 12);
+      buckets.forEach(function (b, i) {
+        var x = pad.l + i * slot + (slot - barW) / 2;
+        var group = svgEl('g', { class: 'sa-chart-bar' }, [svgTitle(monitorBucketTooltip(b, data))]);
+        if (b.availability === null || b.availability === undefined) {
+          group.appendChild(svgEl('rect', { class: 'sa-bar-empty', x: x, y: pad.t + plotH - 2, width: barW, height: 2 }));
+        } else {
+          var goodH = Math.max(0, plotH * b.availability);
+          var badH = Math.max(0, plotH - goodH);
+          if (badH > 0) {
+            group.appendChild(svgEl('path', { class: 'sa-bar-failed', d: barPath(x, pad.t, barW, badH, 3) }));
+          }
+          if (goodH > 0) {
+            group.appendChild(badH > 0
+              ? svgEl('rect', { class: 'sa-bar-pass', x: x, y: pad.t + badH, width: barW, height: goodH })
+              : svgEl('path', { class: 'sa-bar-pass', d: barPath(x, pad.t, barW, goodH, 3) }));
+          }
+        }
+        svg.appendChild(group);
+        if (i % every === 0) {
+          var tick = svgEl('text', { x: x + barW / 2, y: H - 6, class: 'sa-chart-axis', 'text-anchor': 'middle' });
+          tick.textContent = bucketLabel(b.start, data.bucket);
+          svg.appendChild(tick);
+        }
+      });
+      return svg;
+    }
+
+    // What the check MEASURED, on its own scale. 100% available while the
+    // delivery time triples over a week is the finding neither a single number
+    // nor the bars above can show.
+    function measurementChart(data) {
+      var W = 1000;
+      var H = 110;
+      var pad = { l: 52, r: 10, t: 10, b: 18 };
+      var buckets = data.buckets || [];
+      var values = buckets.map(function (b) { return b.avg_value; }).filter(function (v) { return v !== null && v !== undefined; });
+      if (!values.length) return null;
+
+      var max = Math.max.apply(null, values);
+      var plotW = W - pad.l - pad.r;
+      var plotH = H - pad.t - pad.b;
+      var slot = plotW / Math.max(1, buckets.length);
+      var xOf = function (i) { return pad.l + i * slot + slot / 2; };
+      var yOf = function (v) { return pad.t + plotH - (v / Math.max(1, max)) * plotH; };
+
+      var svg = svgEl('svg', {
+        viewBox: '0 0 ' + W + ' ' + H, class: 'sa-chart-svg', preserveAspectRatio: 'none',
+        role: 'img', 'aria-label': t('sa.monitor.chart.measurementTitle'),
+      });
+      [0, 1].forEach(function (frac) {
+        var y = yOf(max * frac);
+        svg.appendChild(svgEl('line', { class: 'sa-chart-grid', x1: pad.l, y1: y, x2: W - pad.r, y2: y }));
+        var label = svgEl('text', { x: pad.l - 8, y: y + 4, class: 'sa-chart-axis', 'text-anchor': 'end' });
+        label.textContent = monitorValue({ value: Math.round(max * frac), unit: data.unit });
+        svg.appendChild(label);
+      });
+
+      // One path per unbroken stretch, so a gap stays a gap: an hour nothing was
+      // checked in is not an hour the answer was instant.
+      var run = [];
+      var flush = function () {
+        if (run.length > 1) svg.appendChild(svgEl('path', { class: 'sa-line-duration', d: run.join(' ') }));
+        run = [];
+      };
+      buckets.forEach(function (b, i) {
+        if (b.avg_value === null || b.avg_value === undefined) { flush(); return; }
+        run.push((run.length ? 'L' : 'M') + xOf(i).toFixed(1) + ',' + yOf(b.avg_value).toFixed(1));
+      });
+      flush();
+
+      buckets.forEach(function (b, i) {
+        if (b.avg_value === null || b.avg_value === undefined) return;
+        svg.appendChild(svgEl('g', { class: 'sa-chart-bar' }, [
+          svgTitle(monitorBucketTooltip(b, data)),
+          svgEl('circle', { class: 'sa-dot-duration', cx: xOf(i).toFixed(1), cy: yOf(b.avg_value).toFixed(1), r: 4 }),
+        ]));
+      });
+      return svg;
+    }
+
+    function monitorBucketTooltip(b, data) {
+      var d = new Date(b.start);
+      var whenText = Number.isNaN(d.getTime()) ? b.key
+        : (data.bucket === 'hour' ? d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+          : (data.bucket === 'month' ? d.toLocaleDateString(undefined, { year: 'numeric', month: 'long' })
+            : d.toLocaleDateString(undefined, { dateStyle: 'full' })));
+      if (!b.checks) return whenText + ' — ' + t('sa.monitor.chart.noChecks');
+      var parts = [t('sa.monitor.chart.checks') + ': ' + b.checks];
+      if (b.availability !== null && b.availability !== undefined) {
+        parts.push(t('sa.monitor.availability') + ': ' + Math.round(b.availability * 100) + '%');
+      }
+      if (b.bad) parts.push(t('sa.monitor.chart.bad') + ': ' + b.bad);
+      if (b.misconfigured) parts.push(t('sa.monitor.chart.misconfigured') + ': ' + b.misconfigured);
+      if (b.unknown) parts.push(t('sa.monitor.chart.unknown') + ': ' + b.unknown);
+      if (b.avg_value !== null && b.avg_value !== undefined) {
+        parts.push(t('sa.monitor.chart.average') + ': ' + monitorValue({ value: b.avg_value, unit: data.unit }));
+      }
+      return whenText + ' — ' + parts.join(', ');
+    }
+
+    // The monitor's own history panel: the same controls, calendar and gaps as
+    // the run-history chart, over `GET /monitors/:id/series`.
+    function monitorChart(monitorId) {
+      var wrap = el('div', { class: 'sa-panel sa-chart-panel' });
+      var stateChart = { period: 'week', at: null };
+
+      function load() {
+        var parts = ['period=' + encodeURIComponent(stateChart.period),
+          'tz_offset=' + encodeURIComponent(String(new Date().getTimezoneOffset()))];
+        if (stateChart.at) parts.push('at=' + encodeURIComponent(stateChart.at));
+        return api(API + '/monitors/' + monitorId + '/series?' + parts.join('&'))
+          .then(render)
+          .catch(function (e) {
+            mount(wrap, section(t('sa.monitor.chart.title'), null), el('p', { class: 'sa-help' }, t('sa.error', { message: err(e) })));
+          });
+      }
+
+      function render(data) {
+        stateChart.at = data.at;
+        var jump = el('input', { type: 'date', class: 'sa-date-input', value: data.at, title: t('sa.chart.jump') });
+        jump.addEventListener('change', function () {
+          if (!jump.value) return;
+          stateChart.at = jump.value;
+          load();
+        });
+        var prev = el('button', { class: 'ghost small', onclick: function () { stateChart.at = data.prev_at; load(); } }, '◀');
+        var next = el('button', {
+          class: 'ghost small',
+          onclick: function () { if (data.has_next) { stateChart.at = data.next_at; load(); } },
+        }, '▶');
+        next.disabled = !data.has_next;
+        var today = el('button', { class: 'ghost small', onclick: function () { stateChart.at = null; load(); } }, t('sa.chart.now'));
+        today.disabled = !!data.is_current;
+
+        var totals = data.total || {};
+        var measurement = measurementChart(data);
+        mount(wrap,
+          section(t('sa.monitor.chart.title'), [
+            segmented([
+              ['day', t('sa.chart.day')], ['week', t('sa.chart.week')],
+              ['month', t('sa.chart.month')], ['year', t('sa.chart.year')],
+            ], stateChart.period, function (value) { stateChart.period = value; load(); }, t('sa.chart.periodGroup')),
+            prev, today, next, jump,
+          ]),
+          el('p', { class: 'sa-chart-period' }, periodLabel(data)),
+          el('div', { class: 'sa-stats' },
+            stat(t('sa.monitor.availability'), totals.availability === null || totals.availability === undefined
+              ? '—' : Math.round(totals.availability * 100) + '%'),
+            stat(t('sa.monitor.chart.checks'), String(totals.checks || 0)),
+            stat(t('sa.monitor.average'), totals.avg_value === null || totals.avg_value === undefined
+              ? '—' : monitorValue({ value: totals.avg_value, unit: data.unit })),
+            stat(t('sa.monitor.chart.worst'), totals.max_value === null || totals.max_value === undefined
+              ? '—' : monitorValue({ value: totals.max_value, unit: data.unit }))),
+          availabilityChart(data),
+          measurement ? el('p', { class: 'sa-chart-sub' }, t('sa.monitor.chart.measurementTitle')) : null,
+          measurement);
+      }
+
+      load();
+      return wrap;
+    }
+
     function chartLegend(data) {
       var totals = data.totals || {};
       var items = [
@@ -3601,7 +3794,12 @@
               el('td', {}, el('strong', {}, m.name), m.description ? el('div', { class: 'muted' }, m.description) : null),
               el('td', {}, monitorTypeLabel(m.type)),
               el('td', {}, el('code', {}, m.target)),
-              el('td', {}, m.last_status ? statusChip(m.last_status) : el('span', { class: 'muted' }, t('sa.monitor.never'))),
+              el('td', {}, m.pending
+                // A pending monitor's last status is about a check that opened
+                // no incident and started no schedule. Saying "FAILED" there
+                // would read as an outage nobody is watching.
+                ? el('span', { class: 'sa-muted-chip' }, t('sa.monitor.pending'))
+                : (m.last_status ? statusChip(m.last_status) : el('span', { class: 'muted' }, t('sa.monitor.never')))),
               el('td', {}, m.last_duration_ms === null || m.last_duration_ms === undefined ? '' : ms(m.last_duration_ms)),
               el('td', {}, m.last_run_at ? when(m.last_run_at) : ''),
               el('td', {}, m.enabled ? '' : el('span', { class: 'sa-muted-chip' }, t('sa.monitor.paused'))));
@@ -3614,6 +3812,15 @@
         var m = res[0];
         var back = el('button', { class: 'ghost small', onclick: function () { state.monitorId = null; draw(); } }, '← ' + t('sa.back'));
         var actions = el('div', { class: 'sa-actions' },
+          isOperator() && m.pending ? el('button', {
+            class: 'ghost',
+            title: t('sa.monitor.activateHelp'),
+            onclick: function () {
+              api(API + '/monitors/' + id + '/activate', { method: 'POST' })
+                .then(function () { toast(t('sa.monitor.activated')); draw(); })
+                .catch(function (e) { toast(err(e), true); });
+            },
+          }, t('sa.monitor.activate')) : null,
           isOperator() ? el('button', {
             class: 'primary',
             onclick: function (e) {
@@ -3680,7 +3887,17 @@
           back,
           section(m.name + ' — ' + monitorTypeLabel(m.type), actions),
           el('div', { class: 'muted' }, m.target),
+          // The whole point of the gate, said in one sentence where the operator
+          // is looking: it is saved, it is not watching yet, and Check now is
+          // what starts it.
+          m.pending
+            ? el('div', { class: 'callout sa-pending' },
+              el('strong', {}, t('sa.monitor.pendingTitle') + ' '),
+              t('sa.monitor.pendingBody'))
+            : null,
           stats,
+          // A monitor that has never been scheduled has nothing to chart yet.
+          m.pending ? null : monitorChart(id),
           el('h4', {}, t('sa.monitor.recent')),
           recent);
       });
@@ -3713,6 +3930,29 @@
         }));
         if (monitor) typeSel.disabled = true;
 
+        // A field can declare that it only applies when another field has one of
+        // a few values (`show_when` in the catalogue): a DKIM selector on an SPF
+        // check, the mailbox on a mail check that is not a round trip. The value
+        // is KEPT while hidden — switching the preset back must not lose what
+        // was typed — so this is visibility, never a reset.
+        function currentValue(field) {
+          var entry = inputs[field];
+          if (!entry) return undefined;
+          if (entry.spec.type === 'boolean') return !!entry.control.checked;
+          if (entry.spec.type === 'int') return entry.control.value === '' ? undefined : Number(entry.control.value);
+          return entry.control.value;
+        }
+
+        function applyVisibility() {
+          Object.keys(inputs).forEach(function (field) {
+            var rule = inputs[field].spec.show_when;
+            if (!rule) return;
+            var value = currentValue(rule.field);
+            var shown = rule.in.some(function (candidate) { return candidate === value; });
+            inputs[field].node.hidden = !shown;
+          });
+        }
+
         function renderFields() {
           inputs = {};
           mount(fields, ...chosen.fields.map(function (f) {
@@ -3743,9 +3983,15 @@
             } else {
               control = el('input', { type: 'text', value: stored === undefined ? (f.default === null ? '' : String(f.default)) : String(stored) });
             }
-            inputs[f.field] = { control: control, spec: f };
-            return field(f.field + (f.required ? ' *' : ''), control);
+            var node = field(f.field + (f.required ? ' *' : ''), control);
+            inputs[f.field] = { control: control, spec: f, node: node };
+            // Any field can be the one another field waits on, so every control
+            // re-runs the rules rather than only the ones we happen to know are
+            // controllers today.
+            control.addEventListener('change', applyVisibility);
+            return node;
           }));
+          applyVisibility();
         }
         renderFields();
 

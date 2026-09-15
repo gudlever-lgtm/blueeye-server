@@ -295,6 +295,14 @@ test('a failing check opens an incident once the streak is met, and recovery res
     },
   });
   const created = await create(app);
+  // A new monitor is PENDING until it has worked once, and a pending monitor
+  // opens nothing. This spec is about what happens AFTER that gate, so it uses
+  // the operator's override — which is also the path somebody takes when the
+  // service is already down at the moment they start watching it.
+  const activated = await request(app).post(`${BASE}/${created.id}/activate`).set('Authorization', authHeader('operator'));
+  assert.equal(activated.status, 200);
+  assert.equal(activated.body.pending, false);
+
   const check = () => request(app).post(`${BASE}/${created.id}/check`).set('Authorization', authHeader('operator'));
 
   const first = await check();

@@ -25,6 +25,13 @@
 //   kind         the observation kind the result is stored as
 //   hostFields   config fields holding a host that must clear the deny-list
 //
+// A field may also carry `showWhen: { field, in: [...] }` — it applies only when
+// another field has one of those values. The form hides the rest: a DNS check on
+// the SPF preset has no use for a DKIM selector, and a mail check that is not a
+// round trip has no mailbox to configure. It is a DISPLAY rule, not a validation
+// one — a hidden field that still holds a value keeps it, so switching the preset
+// back does not lose what was typed.
+//
 // Field types: text | host | domain | email | int | boolean | enum | list | secret
 
 const FIELD_TYPES = ['text', 'host', 'domain', 'email', 'int', 'boolean', 'enum', 'list', 'secret'];
@@ -111,16 +118,16 @@ const TYPES = {
       // is a real but weaker answer: a queue that silently drops mail accepts it
       // first. With it, the check reads the mailbox back and measures delivery.
       roundtrip: { type: 'boolean', default: false },
-      imap_host: { type: 'host', max: 255 },
-      imap_port: { type: 'int', min: 1, max: 65535, default: 993 },
-      imap_username: { type: 'text', max: 255 },
-      imap_password: { type: 'secret', max: 512 },
-      imap_mailbox: { type: 'text', max: 255, default: 'INBOX' },
+      imap_host: { type: 'host', max: 255, showWhen: { field: 'roundtrip', in: [true] } },
+      imap_port: { type: 'int', min: 1, max: 65535, default: 993, showWhen: { field: 'roundtrip', in: [true] } },
+      imap_username: { type: 'text', max: 255, showWhen: { field: 'roundtrip', in: [true] } },
+      imap_password: { type: 'secret', max: 512, showWhen: { field: 'roundtrip', in: [true] } },
+      imap_mailbox: { type: 'text', max: 255, default: 'INBOX', showWhen: { field: 'roundtrip', in: [true] } },
       // How long to keep looking before calling it undelivered.
-      deadline_sec: { type: 'int', min: 10, max: 1800, default: 300 },
+      deadline_sec: { type: 'int', min: 10, max: 1800, default: 300, showWhen: { field: 'roundtrip', in: [true] } },
       // Delete the probe message once it has been seen. Default on: a mailbox
       // that collects one message every 15 minutes forever is a fault we caused.
-      cleanup: { type: 'boolean', default: true },
+      cleanup: { type: 'boolean', default: true, showWhen: { field: 'roundtrip', in: [true] } },
     },
   },
 
@@ -140,11 +147,13 @@ const TYPES = {
     fields: {
       domain: { type: 'domain', required: true, max: 255 },
       preset: { type: 'enum', values: Object.keys(DNS_PRESETS), default: 'spf' },
-      // Only for preset=dkim.
-      selector: { type: 'text', max: 120 },
-      // Only for preset=custom.
-      name: { type: 'domain', max: 255 },
-      record: { type: 'enum', values: DNS_RECORDS },
+      // Only for preset=dkim — the selector is half of where a DKIM key lives
+      // (`<selector>._domainkey.<domain>`), and means nothing for SPF or DMARC.
+      selector: { type: 'text', max: 120, showWhen: { field: 'preset', in: ['dkim'] } },
+      // Only for preset=custom: every other preset works out the name and the
+      // record type itself, which is the entire point of having presets.
+      name: { type: 'domain', max: 255, showWhen: { field: 'preset', in: ['custom'] } },
+      record: { type: 'enum', values: DNS_RECORDS, showWhen: { field: 'preset', in: ['custom'] } },
       // The answer must contain this string. For SPF/DMARC/DKIM the preset
       // supplies one; an operator can pin more ("include:mailgun.org").
       expect_contains: { type: 'text', max: 255 },
@@ -335,6 +344,8 @@ function catalogue() {
         max: spec.max ?? null,
         values: spec.values || null,
         default: spec.default ?? null,
+        // When this field applies at all. The form reads it; nothing else does.
+        show_when: spec.showWhen ? { field: spec.showWhen.field, in: [...spec.showWhen.in] } : null,
       })),
     };
   });

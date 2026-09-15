@@ -443,20 +443,47 @@ test('the phases are charted against each other, one coloured line each', async 
   assert.equal(connectBar.split('background:')[1], connectDot.split('background:')[1]);
 });
 
-test('the scale is the reader\'s choice — a 15 ms step is a flat line next to a 4.5 s one', async (t) => {
+test('six magnitudes do not share one axis by default — each step gets its own panel', async (t) => {
   const { doc } = await openMonitor(t, {
     [`GET ${SA}/monitors/7`]: traced([TRACED, DELIVERED]),
     [`GET ${SA}/monitors`]: [{ ...MONITOR, type: 'mail' }],
   });
-  const picker = [...doc.querySelectorAll('.sa-segment')].filter((b) => /Logarithmic|Linear/.test(b.textContent));
-  assert.equal(picker.length, 2, 'there is no way to change the scale');
-  const log = picker.find((b) => /Logarithmic/.test(b.textContent));
-  assert.equal(log.getAttribute('aria-pressed'), 'true', 'the default buries every small step');
+  const picker = [...doc.querySelectorAll('.sa-segment')];
+  const labels = picker.map((b) => b.textContent.trim());
+  assert.deepEqual(labels.slice(-3), ['Per step', 'Logarithmic', 'Linear']);
 
+  const split = picker.find((b) => b.textContent.trim() === 'Per step');
+  assert.equal(split.getAttribute('aria-pressed'), 'true', 'the overlaid view is the default again');
+
+  // One panel per step, each labelled with the range it was scaled against —
+  // the panel drops the absolute axis, so the numbers go in the label.
+  const rows = [...doc.querySelectorAll('.sa-split-row')];
+  assert.ok(rows.length >= 4, `only ${rows.length} panels`);
+  assert.match(rows[0].querySelector('.sa-split-head').textContent, /connect/);
+  assert.match(doc.querySelector('.sa-split').textContent, /\d+ ms – /, 'a panel does not say what it was scaled against');
+  // Shared x-axis: the panels are the same width, so shapes line up vertically.
+  const widths = new Set([...doc.querySelectorAll('.sa-split-svg')].map((n) => n.getAttribute('viewBox')));
+  assert.equal(widths.size, 1);
+});
+
+test('the overlaid view is still there, and the scale is the reader\'s choice', async (t) => {
+  const { doc } = await openMonitor(t, {
+    [`GET ${SA}/monitors/7`]: traced([TRACED, DELIVERED]),
+    [`GET ${SA}/monitors`]: [{ ...MONITOR, type: 'mail' }],
+  });
+  const picker = () => [...doc.querySelectorAll('.sa-segment')];
+  await click(picker().find((b) => /Logarithmic/.test(b.textContent)), 80);
+  assert.equal(doc.querySelectorAll('.sa-split-row').length, 0, 'the panels stayed');
   const before = doc.querySelector('.sa-phase-line').getAttribute('d');
-  await click(picker.find((b) => /Linear/.test(b.textContent)), 80);
+
+  await click(picker().find((b) => /Linear/.test(b.textContent)), 80);
   const after = doc.querySelector('.sa-phase-line').getAttribute('d');
   assert.notEqual(before, after, 'the chart did not change with the scale');
+
+  // And the sentence under it changes too — the two views are read differently.
+  assert.match(doc.querySelector('#view').textContent, /One line per step/);
+  await click(picker().find((b) => /Per step/.test(b.textContent)), 80);
+  assert.match(doc.querySelector('#view').textContent, /One panel per step/);
 });
 
 test('a phase can be hidden, and the chart redraws without it', async (t) => {
@@ -478,6 +505,203 @@ test('one check is not a chart, and does not pretend to be', async (t) => {
   });
   assert.equal(doc.querySelectorAll('.sa-phase-line').length, 0);
   assert.doesNotMatch(doc.querySelector('#view').textContent, /Where the time goes/);
+});
+
+// ------------------------------------------------- do the lines move together
+//
+// Six lines rising and falling in step is the thing people misread, in both
+// directions: they see a pattern where there is noise, and they miss one fault
+// showing up in two phases. So it is computed and said in a sentence.
+//
+// The maths is Spearman on purpose — these are timings, and one 20-second check
+// would drag a Pearson correlation to whatever that check did.
+function walk(count, shape) {
+  return Array.from({ length: count }, (_, i) => ({
+    id: 100 + i,
+    status: 'ok',
+    summary: 'ok',
+    value: 1,
+    unit: 'ms',
+    checked_at: new Date(Date.UTC(2026, 8, 15, 8, i)).toISOString(),
+    error_message: null,
+    detail: null,
+    timings: shape(i),
+  }));
+}
+
+test('two steps that rise and fall together are named as one fault', async (t) => {
+  // `data` and `delivery` move in lockstep; `auth` wanders on its own.
+  const recent = walk(8, (i) => ({
+    connect: 50,
+    auth: [14, 19, 12, 20, 13, 18, 15, 11][i],
+    data: 1000 + i * 400,
+    delivery: 1200 + i * 420,
+  }));
+  const { doc } = await openMonitor(t, {
+    [`GET ${SA}/monitors/7`]: { ...MONITOR, type: 'mail', recent },
+    [`GET ${SA}/monitors`]: [{ ...MONITOR, type: 'mail' }],
+  });
+
+  const corr = doc.querySelector('.sa-corr');
+  assert.ok(corr, 'the lines are drawn and never read');
+  const rows = [...corr.querySelectorAll('.sa-corr-list li')].map((li) => li.textContent);
+  const pair = rows.find((r) => /data/.test(r) && /delivery/.test(r));
+  assert.ok(pair, `data and delivery move in lockstep and were not reported: ${JSON.stringify(rows)}`);
+  assert.match(pair, /moves with/);
+  assert.match(pair, /\+1\.00/, `a perfect rank correlation did not come out as +1.00: ${pair}`);
+  assert.match(pair, /over 8 checks/);
+  // And the explanation, which is the point of saying it at all.
+  assert.match(pair, /same host, the same connection, the same queue/);
+
+  // `connect` never varied — "no variation" is no answer, not a correlation
+  // of 1 with everything. (Matched on the NAMES, not the row text: the
+  // explanation says "the same connection".)
+  const named = [...corr.querySelectorAll('.sa-corr-list strong')].map((n) => n.textContent.trim());
+  assert.ok(!named.includes('connect'), `a flat line was correlated with something: ${named.join(', ')}`);
+});
+
+test('steps that vary on their own are reported as exactly that', async (t) => {
+  const recent = walk(8, (i) => ({
+    auth: [14, 19, 12, 20, 13, 18, 15, 11][i],
+    // Rank correlation of these two against `auth` is +0.24 — noise. (The
+    // obvious-looking scramble is not: an ascending `auth` against a jumbled
+    // `data` came out at -0.91, which the sweep correctly reported as a
+    // pattern, and the fixture was what was wrong.)
+    data: [640, 900, 180, 210, 770, 450, 990, 320][i],
+  }));
+  const { doc } = await openMonitor(t, {
+    [`GET ${SA}/monitors/7`]: { ...MONITOR, type: 'mail', recent },
+    [`GET ${SA}/monitors`]: [{ ...MONITOR, type: 'mail' }],
+  });
+  assert.match(doc.querySelector('#view').textContent, /varying on their own/);
+  assert.equal(doc.querySelector('.sa-corr-list'), null, 'noise was reported as a pattern');
+});
+
+test('one slow check does not invent a pattern — the ranks absorb it', async (t) => {
+  // Seven checks of noise, then one 30-second outlier in both phases. Pearson
+  // would read that single point as near-perfect correlation.
+  const auth = [14, 19, 12, 20, 13, 18, 15, 30000];
+  const data = [900, 210, 640, 180, 770, 320, 450, 30000];
+  const { doc } = await openMonitor(t, {
+    [`GET ${SA}/monitors/7`]: { ...MONITOR, type: 'mail', recent: walk(8, (i) => ({ auth: auth[i], data: data[i] })) },
+    [`GET ${SA}/monitors`]: [{ ...MONITOR, type: 'mail' }],
+  });
+  assert.equal(doc.querySelector('.sa-corr-list'), null, 'a single outlier was read as a relationship');
+});
+
+test('a step taken off the chart is taken out of the reading too', async (t) => {
+  const recent = walk(8, (i) => ({ data: 1000 + i * 400, delivery: 1200 + i * 420 }));
+  const { doc } = await openMonitor(t, {
+    [`GET ${SA}/monitors/7`]: { ...MONITOR, type: 'mail', recent },
+    [`GET ${SA}/monitors`]: [{ ...MONITOR, type: 'mail' }],
+  });
+  assert.ok(doc.querySelector('.sa-corr-list'), 'nothing was reported to begin with');
+  const key = [...doc.querySelectorAll('.sa-phase-key')].find((b) => b.textContent.trim() === 'delivery');
+  await click(key, 80);
+  assert.equal(doc.querySelector('.sa-corr-list'), null, 'an explanation named a line the reader had hidden');
+});
+
+test('three checks are not enough to claim a pattern, and it says so', async (t) => {
+  const recent = walk(3, (i) => ({ data: 1000 + i * 400, delivery: 1200 + i * 420 }));
+  const { doc } = await openMonitor(t, {
+    [`GET ${SA}/monitors/7`]: { ...MONITOR, type: 'mail', recent },
+    [`GET ${SA}/monitors`]: [{ ...MONITOR, type: 'mail' }],
+  });
+  assert.match(doc.querySelector('#view').textContent, /Four checks are needed/);
+});
+
+// ----------------------------------------- the trace for the other check types
+//
+// The waterfall, the facts and the lists are generic on purpose: a renderer per
+// check type is eight renderers that drift, and the ninth check type would
+// arrive with its findings invisible.
+test('a DNS check shows the records it actually got back', async (t) => {
+  const result = {
+    id: 40,
+    status: 'failed',
+    summary: 'The TXT record at example.dk no longer contains "include:migadu.com".',
+    value: 2,
+    unit: 'count',
+    checked_at: '2026-09-15T19:00:00.000Z',
+    error_message: null,
+    timings: { query: 24 },
+    detail: {
+      name: 'example.dk',
+      record: 'TXT',
+      resolver: '9.9.9.9',
+      answers: ['v=spf1 include:_spf.google.com ~all', 'google-site-verification=abc'],
+      expected_contains: ['v=spf1', 'include:migadu.com'],
+    },
+  };
+  const { doc } = await openMonitor(t, {
+    [`GET ${SA}/monitors`]: [{ ...MONITOR, type: 'dns_record' }],
+    [`GET ${SA}/monitors/7`]: { ...MONITOR, type: 'dns_record', recent: [result] },
+  });
+  const trace = doc.querySelector('.sa-trace-row');
+  assert.ok(trace, 'the failing DNS check did not open');
+  // The records it got — the thing an operator compares against by eye, and
+  // which used to be stored and never shown.
+  assert.match(trace.textContent, /include:_spf\.google\.com/);
+  assert.match(trace.textContent, /include:migadu\.com/);
+  // A lookup time is still a measurement, so there is still a waterfall.
+  assert.equal(trace.querySelector('.sa-wf-name').textContent, 'query');
+  // And the scalars.
+  assert.match(trace.textContent, /9\.9\.9\.9/);
+});
+
+test('an RBL check shows every list it asked, and which one did not answer', async (t) => {
+  const result = {
+    id: 41,
+    status: 'failed',
+    summary: '1.2.3.4 is listed on 1 of 3 blacklist(s): zen.spamhaus.org.',
+    value: 1,
+    unit: 'count',
+    checked_at: '2026-09-15T19:00:00.000Z',
+    error_message: null,
+    timings: { 'zen.spamhaus.org': 40, 'bl.spamcop.net': 5000, 'b.barracudacentral.org': 12, total: 5052 },
+    detail: {
+      ip: '1.2.3.4',
+      lookups: [
+        { list: 'zen.spamhaus.org', listed: true, codes: '127.0.0.4', reason: 'SBL CSS', ms: 40 },
+        { list: 'bl.spamcop.net', listed: null, error: 'query timed out', ms: 5000 },
+        { list: 'b.barracudacentral.org', listed: false, ms: 12 },
+      ],
+    },
+  };
+  const { doc } = await openMonitor(t, {
+    [`GET ${SA}/monitors`]: [{ ...MONITOR, type: 'rbl' }],
+    [`GET ${SA}/monitors/7`]: { ...MONITOR, type: 'rbl', recent: [result] },
+  });
+  const rows = [...doc.querySelectorAll('.sa-detail-table tbody tr')];
+  assert.equal(rows.length, 3, 'the per-list answers are not on the screen');
+  assert.match(rows[0].textContent, /SBL CSS/);
+  // The list that never answered is the one the summary cannot mention: "not
+  // listed on 2" quietly counts a timeout as a clean result.
+  assert.ok(rows[1].classList.contains('sa-trace-bad'), 'a list that timed out reads like one that answered');
+  assert.match(rows[1].textContent, /query timed out/);
+  assert.match(rows[2].textContent, /✗/, 'a clean list is not marked as clean');
+  // Each list is a bar, so "this one list is what takes five seconds" is visible.
+  const bars = [...doc.querySelectorAll('.sa-wf-name')].map((n) => n.textContent);
+  assert.ok(bars.includes('bl.spamcop.net'), `no per-list waterfall: ${bars.join(', ')}`);
+});
+
+test('a TCP check with one phase still draws it, rather than drawing nothing', async (t) => {
+  const result = {
+    id: 42,
+    status: 'ok',
+    summary: 'Connected to mail.example.dk:25 in 18 ms.',
+    value: 18,
+    unit: 'ms',
+    checked_at: '2026-09-15T19:00:00.000Z',
+    error_message: null,
+    timings: { connect: 18 },
+    detail: { host: 'mail.example.dk', port: 25, banner: '220 mail.example.dk ESMTP' },
+  };
+  const { doc } = await openMonitor(t, { [`GET ${SA}/monitors/7`]: { ...MONITOR, recent: [result] } });
+  await click(doc.querySelector('.sa-result-row'), 60);
+  const trace = doc.querySelector('.sa-trace-row');
+  assert.equal(trace.querySelectorAll('.sa-wf-row').length, 1);
+  assert.match(trace.textContent, /220 mail\.example\.dk ESMTP/, 'the greeting the port gave is not shown');
 });
 
 // The whole module is operator+ in the sidebar (`data-min-role="operator"` on

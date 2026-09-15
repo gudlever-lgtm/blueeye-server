@@ -2411,6 +2411,57 @@
         })));
     }
 
+    // The lists a check recorded — the DNS records it actually got back, the
+    // blacklist it asked and what each one answered, the names a certificate is
+    // valid for. Every check type stores something like this and none of them
+    // had anywhere to put it, so it was written to the database and never shown.
+    //
+    // Drawn generically, on purpose: a renderer per check type is eight
+    // renderers that drift, and a new check type would arrive with its findings
+    // invisible until somebody remembered to write the ninth.
+    var LIST_SKIP = { transcript: 1, hops: 1, polls: 1 };
+
+    function scalarKeys(rows) {
+      var seen = [];
+      rows.forEach(function (row) {
+        Object.keys(row || {}).forEach(function (k) {
+          if (seen.indexOf(k) < 0 && (row[k] === null || typeof row[k] !== 'object')) seen.push(k);
+        });
+      });
+      return seen;
+    }
+
+    function detailList(key, rows) {
+      var heading = el('h5', {}, key.replace(/_/g, ' '));
+      // A list of plain values — DNS answers, the domains a check expects.
+      if (rows.every(function (row) { return row === null || typeof row !== 'object'; })) {
+        return el('div', {}, heading, el('ul', { class: 'sa-detail-list' }, ...rows.map(function (row) {
+          return el('li', {}, el('code', {}, String(row)));
+        })));
+      }
+      var columns = scalarKeys(rows);
+      if (!columns.length) return null;
+      return el('div', {}, heading, el('table', { class: 'data-table sa-detail-table' },
+        el('thead', {}, el('tr', {}, ...columns.map(function (c) { return el('th', {}, c.replace(/_/g, ' ')); }))),
+        el('tbody', {}, ...rows.map(function (row) {
+          // A row that carries an error is the row somebody is looking for.
+          return el('tr', { class: row && row.error ? 'sa-trace-bad' : null }, ...columns.map(function (c) {
+            var value = row ? row[c] : null;
+            if (value === null || value === undefined) return el('td', {}, '—');
+            if (typeof value === 'boolean') return el('td', {}, value ? '✓' : '✗');
+            if (c === 'ms') return el('td', {}, ms(value));
+            return el('td', {}, String(value));
+          }));
+        }))));
+    }
+
+    function detailLists(detail) {
+      return Object.keys(detail || {})
+        .filter(function (k) { return !LIST_SKIP[k] && Array.isArray(detail[k]) && detail[k].length; })
+        .map(function (k) { return detailList(k, detail[k]); })
+        .filter(Boolean);
+    }
+
     // Everything a single result knows, opened under its row.
     function resultTrace(r) {
       var detail = r.detail || {};
@@ -2424,18 +2475,18 @@
           ? el('div', {}, el('h5', {}, t('sa.trace.conversation')), transcriptTable(detail.transcript))
           : null,
         r.error_message ? el('div', { class: 'sa-trace-error' }, r.error_message) : null,
-        facts(detail),
-      ].filter(Boolean);
+      ].concat(detailLists(detail)).concat([facts(detail)]).filter(Boolean);
       if (!parts.length) return el('div', { class: 'muted' }, t('sa.trace.nothing'));
       return el('div', { class: 'sa-trace' }, ...parts);
     }
 
     // The scalar leftovers — queue id, message id, the mailbox, the token. Small
     // things, and each of them is the one somebody greps a mail log for.
-    var FACT_SKIP = { transcript: 1, hops: 1, polls: 1 };
     function facts(detail) {
       var keys = Object.keys(detail || {}).filter(function (k) {
-        return !FACT_SKIP[k] && detail[k] !== null && detail[k] !== undefined && typeof detail[k] !== 'object';
+        // Arrays and objects have their own renderers above; this is the
+        // scalars, which are the things somebody greps a log for.
+        return !LIST_SKIP[k] && detail[k] !== null && detail[k] !== undefined && typeof detail[k] !== 'object';
       });
       if (!keys.length) return null;
       return el('dl', { class: 'sa-facts' }, ...keys.map(function (k) {
@@ -2452,20 +2503,95 @@
     // A linear axis is the honest default and a useless one here: `auth` is 15
     // ms next to a `delivery` of 4.5 s, so every phase but the biggest is a flat
     // line on the floor. The scale is therefore a choice the reader makes.
-    function phaseChart(results, opts) {
+    // Oldest on the left: a chart people read as "over time" must run the way
+    // time does, and the API answers newest-first.
+    function phaseSeries(results, hidden) {
       var rows = (results || []).filter(function (r) { return r.timings && typeof r.timings === 'object'; });
       if (rows.length < 2) return null;
-      var scale = (opts && opts.scale) || 'linear';
-      var hidden = (opts && opts.hidden) || {};
-
-      // Oldest on the left: a chart people read as "over time" must run the way
-      // time does, and the API answers newest-first.
       var series = rows.slice().reverse();
       var keys = orderedPhases(Object.keys(series.reduce(function (acc, r) {
         Object.keys(r.timings).forEach(function (k) { acc[k] = 1; });
         return acc;
-      }, {}))).filter(function (k) { return !hidden[k]; });
+      }, {}))).filter(function (k) { return !(hidden || {})[k]; });
       if (!keys.length) return null;
+      return { series: series, keys: keys };
+    }
+
+    // One panel per step, each scaled to ITSELF.
+    //
+    // Six lines on one axis is six magnitudes on one axis: a 13 ms greeting and
+    // a 5.2 s delivery, and no scale makes both of those readable at once —
+    // linear flattens the small one onto the floor, log compresses the big one
+    // until its movement disappears. Reading that is not a skill anybody is
+    // missing; it is a chart asking for something it cannot give.
+    //
+    // Stacked panels sharing one x-axis fix it the way charts have always fixed
+    // it: each line gets its own y-range, so its SHAPE is legible, and the
+    // shapes line up vertically — which is exactly how you see two steps moving
+    // together.
+    function phaseSplitChart(results, opts) {
+      var prepared = phaseSeries(results, (opts && opts.hidden) || {});
+      if (!prepared) return null;
+      var series = prepared.series;
+      var W = 1000;
+      var H = 42;
+      var pad = { l: 4, r: 4, t: 6, b: 6 };
+      var plotH = H - pad.t - pad.b;
+      var xOf = function (i) { return pad.l + (series.length < 2 ? (W - pad.l - pad.r) / 2 : (i / (series.length - 1)) * (W - pad.l - pad.r)); };
+
+      var panels = prepared.keys.map(function (key) {
+        var values = series.map(function (r) { return numOrNull(r.timings[key]); }).filter(function (v) { return v !== null; });
+        if (!values.length) return null;
+        var max = Math.max.apply(null, values);
+        var min = Math.min.apply(null, values);
+        // A step that never varies is a flat line in the middle rather than one
+        // pinned to the top or the bottom, which would read as a value.
+        var span = max - min;
+        var yOf = function (v) { return span === 0 ? pad.t + plotH / 2 : pad.t + plotH - ((v - min) / span) * plotH; };
+
+        var svg = svgEl('svg', {
+          viewBox: '0 0 ' + W + ' ' + H, class: 'sa-split-svg', preserveAspectRatio: 'none',
+          role: 'img', 'aria-label': key,
+        });
+        var run = [];
+        var flush = function () {
+          if (run.length > 1) svg.appendChild(svgEl('path', { class: 'sa-phase-line', d: run.join(' '), stroke: phaseColour(key), fill: 'none' }));
+          run = [];
+        };
+        series.forEach(function (r, i) {
+          var v = numOrNull(r.timings[key]);
+          if (v === null) { flush(); return; }
+          run.push((run.length ? 'L' : 'M') + xOf(i).toFixed(1) + ',' + yOf(v).toFixed(1));
+        });
+        flush();
+        series.forEach(function (r, i) {
+          var v = numOrNull(r.timings[key]);
+          if (v === null) return;
+          svg.appendChild(svgEl('g', { class: 'sa-chart-bar' }, [
+            svgTitle(key + ' — ' + ms(v) + '\n' + new Date(r.checked_at).toLocaleString()),
+            svgEl('circle', { cx: xOf(i).toFixed(1), cy: yOf(v).toFixed(1), r: 2.5, fill: phaseColour(key) }),
+          ]));
+        });
+
+        return el('div', { class: 'sa-split-row' },
+          el('div', { class: 'sa-split-head' },
+            el('span', { class: 'sa-phase-dot', style: 'background:' + phaseColour(key) }),
+            el('strong', {}, ' ' + key),
+            // Its own range, said out loud: the panel deliberately drops the
+            // absolute scale, so the numbers it dropped go in the label.
+            el('span', { class: 'muted' }, ' ' + (span === 0 ? ms(min) : ms(min) + ' – ' + ms(max)))),
+          svg);
+      }).filter(Boolean);
+      if (!panels.length) return null;
+      return el('div', { class: 'sa-split' }, ...panels);
+    }
+
+    function phaseChart(results, opts) {
+      var prepared = phaseSeries(results, (opts && opts.hidden) || {});
+      if (!prepared) return null;
+      var scale = (opts && opts.scale) || 'linear';
+      var series = prepared.series;
+      var keys = prepared.keys;
 
       var W = 1000;
       var H = 150;
@@ -2536,6 +2662,122 @@
         });
       });
       return svg;
+    }
+
+    // ------------------------------------------------- do the lines move together
+    //
+    // Two phases that rise and fall in step are one fault, not two — a delivery
+    // time that tracks the data phase exactly means the time is in the message
+    // transfer and nothing else moved. Eyeballing six lines for that is exactly
+    // what people get wrong, so it is computed and said in a sentence.
+    //
+    // SPEARMAN, not Pearson: these are timings, one slow check drags a Pearson
+    // correlation to whatever that check did, and a monitor's history is mostly
+    // outliers. Ranking first is the same robust-statistics line the rest of
+    // this product takes (median + MAD, never the mean).
+    function ranks(values) {
+      var order = values.map(function (v, i) { return { v: v, i: i }; })
+        .sort(function (a, b) { return a.v - b.v; });
+      var out = new Array(values.length);
+      var at = 0;
+      while (at < order.length) {
+        var end = at;
+        // Ties share the average of the ranks they span, or a run of identical
+        // timings would invent an ordering it does not have.
+        while (end + 1 < order.length && order[end + 1].v === order[at].v) end += 1;
+        var shared = (at + end) / 2 + 1;
+        for (var k = at; k <= end; k += 1) out[order[k].i] = shared;
+        at = end + 1;
+      }
+      return out;
+    }
+
+    function spearman(a, b) {
+      if (a.length !== b.length || a.length < 4) return null;
+      var ra = ranks(a);
+      var rb = ranks(b);
+      var n = ra.length;
+      var mean = (n + 1) / 2;
+      var num = 0;
+      var da = 0;
+      var db = 0;
+      for (var i = 0; i < n; i += 1) {
+        var x = ra[i] - mean;
+        var y = rb[i] - mean;
+        num += x * y;
+        da += x * x;
+        db += y * y;
+      }
+      // A phase that was identical on every check has no variation to correlate
+      // — that is "no answer", not "no relationship".
+      if (da === 0 || db === 0) return null;
+      return num / Math.sqrt(da * db);
+    }
+
+    // Only the checks where BOTH phases were measured: a pair is compared over
+    // the exchanges that actually had both, never over a zero standing in for a
+    // phase that never ran.
+    function pairedSeries(results, a, b) {
+      var xs = [];
+      var ys = [];
+      results.forEach(function (r) {
+        var x = numOrNull((r.timings || {})[a]);
+        var y = numOrNull((r.timings || {})[b]);
+        if (x === null || y === null) return;
+        xs.push(x);
+        ys.push(y);
+      });
+      return { xs: xs, ys: ys };
+    }
+
+    var TOGETHER = 0.8;
+    var OPPOSITE = -0.8;
+
+    function phasePairs(results, hidden) {
+      var rows = (results || []).filter(function (r) { return r.timings && typeof r.timings === 'object'; });
+      if (rows.length < 4) return [];
+      var keys = orderedPhases(Object.keys(rows.reduce(function (acc, r) {
+        Object.keys(r.timings).forEach(function (k) { acc[k] = 1; });
+        return acc;
+      }, {}))).filter(function (k) { return !(hidden || {})[k]; });
+
+      var pairs = [];
+      for (var i = 0; i < keys.length; i += 1) {
+        for (var j = i + 1; j < keys.length; j += 1) {
+          var both = pairedSeries(rows, keys[i], keys[j]);
+          var r = spearman(both.xs, both.ys);
+          if (r === null) continue;
+          if (r >= TOGETHER || r <= OPPOSITE) {
+            pairs.push({ a: keys[i], b: keys[j], r: r, n: both.xs.length });
+          }
+        }
+      }
+      // Strongest first, and only a handful: a list of every pair is the same
+      // unreadable thing as the six lines it was meant to explain.
+      return pairs.sort(function (x, y) { return Math.abs(y.r) - Math.abs(x.r); }).slice(0, 4);
+    }
+
+    function phaseCorrelation(results, hidden) {
+      var rows = (results || []).filter(function (r) { return r.timings && typeof r.timings === 'object'; });
+      if (rows.length < 4) return el('p', { class: 'sa-help' }, t('sa.trace.corrTooFew'));
+      var pairs = phasePairs(results, hidden);
+      if (!pairs.length) return el('p', { class: 'sa-help' }, t('sa.trace.corrNone'));
+      return el('div', { class: 'sa-corr' },
+        el('div', { class: 'sa-help' }, t('sa.trace.corrLead')),
+        el('ul', { class: 'sa-corr-list' }, ...pairs.map(function (p) {
+          var together = p.r > 0;
+          return el('li', {},
+            el('span', { class: 'sa-phase-dot', style: 'background:' + phaseColour(p.a) }),
+            el('strong', {}, ' ' + p.a),
+            ' ' + (together ? t('sa.trace.corrWith') : t('sa.trace.corrAgainst')) + ' ',
+            el('span', { class: 'sa-phase-dot', style: 'background:' + phaseColour(p.b) }),
+            el('strong', {}, ' ' + p.b),
+            el('span', { class: 'muted' }, ' — ' + t('sa.trace.corrScore', {
+              r: (p.r >= 0 ? '+' : '') + p.r.toFixed(2),
+              count: p.n,
+            })),
+            el('div', { class: 'muted' }, together ? t('sa.trace.corrTogetherWhy') : t('sa.trace.corrOppositeWhy')));
+        })));
     }
 
     function monitorBucketTooltip(b, data) {
@@ -4281,12 +4523,27 @@
         // redrawn in place when the scale changes — a linear axis buries a 15 ms
         // auth under a 4.5 s delivery, and a log one buries nothing.
         var phasePanel = null;
-        var phaseScale = 'log';
+        // Per-step panels by default: one shared axis cannot show a 13 ms step
+        // and a 5.2 s one at the same time, whatever the scale, and the overlaid
+        // view is the one that has to be asked for.
+        var phaseScale = 'split';
         var phaseHolder = el('div', {});
         var phaseHidden = {};
+        var correlationHolder = el('div', {});
+        var phaseHelp = el('p', { class: 'sa-help' });
         function drawPhases() {
-          var chart = phaseChart(m.recent, { scale: phaseScale, hidden: phaseHidden });
+          var chart = phaseScale === 'split'
+            ? phaseSplitChart(m.recent, { hidden: phaseHidden })
+            : phaseChart(m.recent, { scale: phaseScale, hidden: phaseHidden });
           mount(phaseHolder, chart || el('div', { class: 'sa-empty' }, t('sa.trace.phaseNone')));
+          // The two views are read differently, so the sentence under the
+          // control changes with it rather than describing whichever one
+          // happened to be the default.
+          mount(phaseHelp, t(phaseScale === 'split' ? 'sa.trace.phaseHelpSplit' : 'sa.trace.phaseHelp'));
+          // Hiding a line hides it from the reading too: an explanation that
+          // names a line the reader took off the chart is an explanation of
+          // something they cannot see.
+          mount(correlationHolder, phaseCorrelation(m.recent, phaseHidden));
         }
         if (phaseChart(m.recent, { scale: 'linear' })) {
           var phaseKeys = orderedPhases(Object.keys((m.recent || []).reduce(function (acc, r) {
@@ -4310,7 +4567,11 @@
           var scalePicker = el('div', {});
           var drawScale = function () {
             mount(scalePicker, segmented(
-              [['log', t('sa.trace.scaleLog')], ['linear', t('sa.trace.scaleLinear')]],
+              [
+                ['split', t('sa.trace.scaleSplit')],
+                ['log', t('sa.trace.scaleLog')],
+                ['linear', t('sa.trace.scaleLinear')],
+              ],
               phaseScale,
               function (pick) { phaseScale = pick; drawScale(); drawPhases(); },
               t('sa.trace.scale')
@@ -4319,9 +4580,10 @@
           drawScale();
           phasePanel = el('div', { class: 'sa-panel' },
             section(t('sa.trace.phaseChart'), scalePicker),
-            el('p', { class: 'sa-help' }, t('sa.trace.phaseHelp')),
+            phaseHelp,
             phaseHolder,
-            legend);
+            legend,
+            correlationHolder);
           drawPhases();
         }
 

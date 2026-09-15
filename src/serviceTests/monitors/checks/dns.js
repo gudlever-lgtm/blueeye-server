@@ -52,6 +52,7 @@ function createDnsCheck({ resolver = null, now = () => Date.now() } = {}) {
       return misconfigured({ summary: 'The monitor does not say which record to look up (a DKIM check needs a selector; a custom one needs a name and a type).' });
     }
 
+    const asked = now();
     let answer;
     try {
       answer = await dns.resolve(q.name, q.record, { server: cfg.resolver || null, timeoutMs: cfg.timeout_ms || 5000 });
@@ -59,9 +60,14 @@ function createDnsCheck({ resolver = null, now = () => Date.now() } = {}) {
       return unreachable({
         summary: `DNS did not answer for ${q.name} (${(err && err.code) || 'no code'}).`,
         error: (err && err.message) || String(err),
+        // Even a lookup that failed took time, and how long it took before it
+        // gave up is the difference between "that resolver is gone" and "that
+        // resolver is slow enough to be gone".
+        timings: { query: Math.max(0, now() - asked) },
         detail: { name: q.name, record: q.record, resolver: cfg.resolver || null },
       });
     }
+    const timings = { query: answer.ms };
 
     const detail = {
       name: q.name,
@@ -80,6 +86,7 @@ function createDnsCheck({ resolver = null, now = () => Date.now() } = {}) {
         value: answer.answers.length,
         unit: 'count',
         durationMs: answer.ms,
+        timings,
         detail,
       });
     }
@@ -89,6 +96,7 @@ function createDnsCheck({ resolver = null, now = () => Date.now() } = {}) {
         return failed(KIND.DNS_RECORD_MISMATCH, {
           summary: `The ${q.record} record at ${q.name} no longer contains "${needle}".`,
           durationMs: answer.ms,
+          timings,
           detail,
         });
       }
@@ -98,6 +106,7 @@ function createDnsCheck({ resolver = null, now = () => Date.now() } = {}) {
         return failed(KIND.DNS_UNEXPECTED_RECORD, {
           summary: `The ${q.record} record at ${q.name} contains "${needle}", which this monitor requires it not to.`,
           durationMs: answer.ms,
+          timings,
           detail,
         });
       }
@@ -108,6 +117,7 @@ function createDnsCheck({ resolver = null, now = () => Date.now() } = {}) {
       value: answer.ms,
       unit: 'ms',
       durationMs: answer.ms,
+      timings,
       detail,
     });
   }

@@ -1470,7 +1470,7 @@
           return [
             lead(t('guide.monitors.lead')),
             para(t('guide.monitors.what')),
-            todo([t('guide.monitors.do1'), t('guide.monitors.do2'), t('guide.monitors.do3'), t('guide.monitors.do4'), t('guide.monitors.do5')]),
+            todo([t('guide.monitors.do1'), t('guide.monitors.do2'), t('guide.monitors.do3'), t('guide.monitors.do4'), t('guide.monitors.do5'), t('guide.monitors.do6')]),
             // The catalogue is read from the server rather than listed here, so
             // a check type that ships later appears in the guide without an
             // edit — and the guide can never name one the server does not have.

@@ -9,6 +9,7 @@ const { createDiscoveryRouter } = require('./discovery');
 const { createSchedulesRouter } = require('./schedules');
 const { createSettingsRouter } = require('./settings');
 const { createAssuranceRouter } = require('./assurance');
+const { createMonitorsRouter } = require('./monitors');
 const { createRecordingsRouter } = require('./recordings');
 const { createJourneysRouter } = require('./journeys');
 const { createHealingRouter } = require('./healing');
@@ -99,6 +100,11 @@ function createServiceTestsApiRouter({
   router.use('/settings', createSettingsRouter(deps));
   // What is currently wrong, and every certificate the module watches.
   router.use('/assurance', createAssuranceRouter(deps));
+  // The checks that are not a browser: mail delivery, DNS records, blacklists,
+  // directory binds, clocks, certificates on other ports, databases. A separate
+  // mount because a monitor is not a test — it runs in this process on its own
+  // interval and the worker never sees it.
+  router.use('/monitors', createMonitorsRouter(deps));
 
   // Environments and credentials are nested under an application in the UI, but
   // a flat list is what the spec's API section asks for, so both exist.

@@ -18,7 +18,7 @@
   // The module's own screens, in the order they are shown. Also the set a host
   // may deep-link into, so an unknown tab name falls back rather than rendering
   // an empty page.
-  var TABS = ['applications', 'journeys', 'tests', 'runs', 'health', 'schedules'];
+  var TABS = ['applications', 'journeys', 'tests', 'runs', 'health', 'schedules', 'monitors'];
 
   function create(ctx) {
     var el = ctx.el;
@@ -45,6 +45,7 @@
       runId: null,
       discoveryId: null,
       journeyId: null,
+      monitorId: null,
     };
 
     var host = el('div', { class: 'sa' });
@@ -242,11 +243,12 @@
         ['history', t('sa.tab.history')],
         ['health', t('sa.tab.health')],
         ['schedules', t('sa.tab.schedules')],
+        ['monitors', t('sa.tab.monitors')],
       ];
       return el('div', { class: 'sa-tabs' }, ...tabs.map(function (pair) {
         return el('button', {
           class: 'sa-tab' + (state.tab === pair[0] ? ' active' : ''),
-          onclick: function () { state.tab = pair[0]; state.applicationId = null; state.testId = null; draw(); },
+          onclick: function () { state.tab = pair[0]; state.applicationId = null; state.testId = null; state.monitorId = null; draw(); },
         }, pair[1]);
       }));
     }
@@ -3535,6 +3537,262 @@
               timezone: tz.value.trim(),
             },
           }).then(onSaved).catch(function (e) { showErrors(errors, e); throw e; });
+        });
+      }).catch(function (e) { toast(err(e), true); });
+    }
+
+    // ------------------------------------------------------------ monitors
+    // The checks that are not a browser: mail delivery, DNS records, blacklists,
+    // directory binds, clocks, certificates on other ports, databases.
+    //
+    // The form is built from the server's catalogue rather than hard-coded here.
+    // A new check type then appears in this screen the moment the server knows
+    // about it — and, more to the point, the field list and its bounds have one
+    // definition instead of two that drift.
+    var monitorTypes = null;
+
+    function loadMonitorTypes() {
+      if (monitorTypes) return Promise.resolve(monitorTypes);
+      return api(API + '/monitors/types').then(function (res) {
+        monitorTypes = res.types || [];
+        return monitorTypes;
+      });
+    }
+
+    function monitorTypeLabel(type) {
+      var meta = (monitorTypes || []).filter(function (x) { return x.type === type; })[0];
+      return meta ? meta.label : type;
+    }
+
+    // The measurement, with the unit the check reported it in. A monitor that
+    // measures days (a certificate) and one that measures milliseconds (a mail
+    // round trip) must not both render as a bare number.
+    function monitorValue(row) {
+      if (row.value === null || row.value === undefined) return '';
+      if (row.unit === 'ms') return ms(row.value);
+      if (row.unit === 'days') return t('sa.monitor.days', { count: Math.round(row.value) });
+      return String(Math.round(row.value));
+    }
+
+    views.monitors = function (body) {
+      if (state.monitorId) return monitorDetail(body, state.monitorId);
+      return Promise.all([api(API + '/monitors'), loadMonitorTypes()]).then(function (res) {
+        var monitors = res[0];
+        var head = section(t('sa.tab.monitors'), isOperator()
+          ? el('button', { class: 'primary', onclick: function () { monitorForm(null); } }, '+ ' + t('sa.monitor.add'))
+          : null);
+        var intro = el('p', { class: 'sa-intro' }, t('sa.monitor.intro'));
+
+        if (!monitors.length) {
+          mount(body, head, intro, el('div', { class: 'sa-empty' }, t('sa.monitor.empty')));
+          return;
+        }
+        mount(body, head, intro, el('table', { class: 'data-table' },
+          el('thead', {}, el('tr', {},
+            el('th', {}, t('sa.monitor.name')),
+            el('th', {}, t('sa.monitor.type')),
+            el('th', {}, t('sa.monitor.target')),
+            el('th', {}, t('sa.monitor.status')),
+            el('th', {}, t('sa.monitor.measured')),
+            el('th', {}, t('sa.monitor.checked')),
+            el('th', {}, ''))),
+          el('tbody', {}, ...monitors.map(function (m) {
+            return el('tr', { class: 'clickable', onclick: function () { state.monitorId = m.id; draw(); } },
+              el('td', {}, el('strong', {}, m.name), m.description ? el('div', { class: 'muted' }, m.description) : null),
+              el('td', {}, monitorTypeLabel(m.type)),
+              el('td', {}, el('code', {}, m.target)),
+              el('td', {}, m.last_status ? statusChip(m.last_status) : el('span', { class: 'muted' }, t('sa.monitor.never'))),
+              el('td', {}, m.last_duration_ms === null || m.last_duration_ms === undefined ? '' : ms(m.last_duration_ms)),
+              el('td', {}, m.last_run_at ? when(m.last_run_at) : ''),
+              el('td', {}, m.enabled ? '' : el('span', { class: 'sa-muted-chip' }, t('sa.monitor.paused'))));
+          }))));
+      });
+    };
+
+    function monitorDetail(body, id) {
+      return Promise.all([api(API + '/monitors/' + id), loadMonitorTypes()]).then(function (res) {
+        var m = res[0];
+        var back = el('button', { class: 'ghost small', onclick: function () { state.monitorId = null; draw(); } }, '← ' + t('sa.back'));
+        var actions = el('div', { class: 'sa-actions' },
+          isOperator() ? el('button', {
+            class: 'primary',
+            onclick: function (e) {
+              var button = e.target;
+              button.disabled = true;
+              // A manual check is a real check: it sends a real message and
+              // opens a real connection, so the button says what it is doing
+              // and stays disabled until the server answers.
+              button.textContent = t('sa.monitor.checking');
+              api(API + '/monitors/' + id + '/check', { method: 'POST' }).then(function (out) {
+                toast(out.result && out.result.summary ? out.result.summary : t('sa.monitor.checked'));
+                draw();
+              }).catch(function (err0) {
+                toast(err(err0), true);
+                button.disabled = false;
+                button.textContent = t('sa.monitor.checkNow');
+              });
+            },
+          }, t('sa.monitor.checkNow')) : null,
+          isOperator() ? el('button', { class: 'ghost', onclick: function () { monitorForm(m); } }, t('sa.monitor.edit')) : null,
+          isAdmin() ? el('button', {
+            class: 'ghost danger',
+            onclick: function () {
+              if (!confirmDelete(m.name)) return;
+              api(API + '/monitors/' + id, { method: 'DELETE' }).then(function () {
+                state.monitorId = null;
+                draw();
+              }).catch(function (e) { toast(err(e), true); });
+            },
+          }, t('sa.delete')) : null);
+
+        var summary = m.summary || {};
+        var stats = el('div', { class: 'sa-stats' },
+          stat(t('sa.monitor.availability'), summary.availability === null || summary.availability === undefined
+            ? '—' : Math.round(summary.availability * 100) + '%'),
+          stat(t('sa.monitor.checks24h'), String(summary.checks || 0)),
+          stat(t('sa.monitor.average'), summary.avg_value === null || summary.avg_value === undefined
+            ? '—' : monitorValue({ value: summary.avg_value, unit: (m.recent[0] && m.recent[0].unit) || 'ms' })),
+          stat(t('sa.monitor.every'), t('sa.monitor.seconds', { count: m.interval_sec })));
+
+        var recent = (m.recent || []).length
+          ? el('table', { class: 'data-table' },
+            el('thead', {}, el('tr', {},
+              el('th', {}, t('sa.monitor.status')),
+              el('th', {}, t('sa.monitor.what')),
+              el('th', {}, t('sa.monitor.measured')),
+              el('th', {}, t('sa.monitor.checked')))),
+            el('tbody', {}, ...m.recent.map(function (r) {
+              return el('tr', {},
+                el('td', {}, statusChip(r.status)),
+                el('td', {}, r.summary || r.error_message || '',
+                  // The phase timings are the diagnosis — "accepted in 140 ms,
+                  // delivered after 90 s" is a different fault from "accepted
+                  // after 90 s" — so they are shown, not buried in the row.
+                  r.timings ? el('div', { class: 'muted' }, Object.keys(r.timings).map(function (k) {
+                    return k + ' ' + ms(r.timings[k]);
+                  }).join(' · ')) : null),
+                el('td', {}, monitorValue(r)),
+                el('td', {}, when(r.checked_at)));
+            })))
+          : el('div', { class: 'sa-empty' }, t('sa.monitor.noResults'));
+
+        mount(body,
+          back,
+          section(m.name + ' — ' + monitorTypeLabel(m.type), actions),
+          el('div', { class: 'muted' }, m.target),
+          stats,
+          el('h4', {}, t('sa.monitor.recent')),
+          recent);
+      });
+    }
+
+    // The create/edit form, rendered from the catalogue. Secrets are write-only:
+    // an existing one shows as "stored" and is left untouched unless the operator
+    // types a new value, and clearing the box removes it.
+    function monitorForm(monitor) {
+      loadMonitorTypes().then(function (types) {
+        var chosen = monitor
+          ? types.filter(function (x) { return x.type === monitor.type; })[0]
+          : types[0];
+        var name = el('input', { type: 'text', value: monitor ? monitor.name : '' });
+        var interval = el('input', { type: 'number', min: '60', value: String(monitor ? monitor.interval_sec : chosen.default_interval_sec) });
+        var warn = el('input', { type: 'number', value: monitor && monitor.warn_ms ? String(monitor.warn_ms) : '' });
+        var crit = el('input', { type: 'number', value: monitor && monitor.crit_ms ? String(monitor.crit_ms) : '' });
+        var errors = el('div', { class: 'sa-form-errors' });
+        var fields = el('div', {});
+        var inputs = {};
+
+        var typeSel = el('select', {
+          onchange: function () {
+            chosen = types.filter(function (x) { return x.type === typeSel.value; })[0];
+            interval.value = String(chosen.default_interval_sec);
+            renderFields();
+          },
+        }, ...types.map(function (x) {
+          return el('option', { value: x.type, selected: x.type === chosen.type ? 'selected' : null }, x.label);
+        }));
+        if (monitor) typeSel.disabled = true;
+
+        function renderFields() {
+          inputs = {};
+          mount(fields, ...chosen.fields.map(function (f) {
+            var stored = monitor && monitor.config ? monitor.config[f.field] : undefined;
+            var control;
+            if (f.type === 'boolean') {
+              control = el('input', { type: 'checkbox' });
+              control.checked = stored === undefined ? !!f.default : !!stored;
+            } else if (f.type === 'enum') {
+              control = el('select', {}, ...f.values.map(function (v) {
+                var selected = (stored === undefined ? f.default : stored) === v;
+                return el('option', { value: v, selected: selected ? 'selected' : null }, v);
+              }));
+            } else if (f.type === 'list') {
+              control = el('input', {
+                type: 'text',
+                value: (stored || f.default || []).join(', '),
+                placeholder: 'zen.spamhaus.org, bl.spamcop.net',
+              });
+            } else if (f.type === 'secret') {
+              control = el('input', {
+                type: 'password',
+                placeholder: monitor && monitor.has_secrets && monitor.has_secrets[f.field]
+                  ? t('sa.monitor.secretStored') : '',
+              });
+            } else if (f.type === 'int') {
+              control = el('input', { type: 'number', value: stored === undefined ? (f.default === null ? '' : String(f.default)) : String(stored) });
+            } else {
+              control = el('input', { type: 'text', value: stored === undefined ? (f.default === null ? '' : String(f.default)) : String(stored) });
+            }
+            inputs[f.field] = { control: control, spec: f };
+            return field(f.field + (f.required ? ' *' : ''), control);
+          }));
+        }
+        renderFields();
+
+        modal(monitor ? t('sa.monitor.edit') : t('sa.monitor.add'), el('div', {},
+          field(t('sa.monitor.name'), name),
+          field(t('sa.monitor.type'), typeSel),
+          field(t('sa.monitor.every'), interval),
+          field(t('sa.monitor.warnMs'), warn),
+          field(t('sa.monitor.critMs'), crit),
+          fields,
+          errors), function () {
+          var config = {};
+          Object.keys(inputs).forEach(function (key) {
+            var entry = inputs[key];
+            var control = entry.control;
+            if (entry.spec.type === 'boolean') { config[key] = !!control.checked; return; }
+            if (entry.spec.type === 'list') {
+              config[key] = control.value.split(',').map(function (v) { return v.trim(); }).filter(Boolean);
+              return;
+            }
+            if (entry.spec.type === 'int') {
+              if (control.value !== '') config[key] = Number(control.value);
+              return;
+            }
+            if (entry.spec.type === 'secret') {
+              // Untouched means untouched: an empty box on an edit leaves the
+              // stored secret alone rather than clearing it by accident.
+              if (control.value !== '') config[key] = control.value;
+              return;
+            }
+            if (control.value !== '') config[key] = control.value;
+          });
+          var payload = {
+            name: name.value.trim(),
+            interval_sec: Number(interval.value),
+            warn_ms: warn.value === '' ? null : Number(warn.value),
+            crit_ms: crit.value === '' ? null : Number(crit.value),
+            config: config,
+          };
+          if (!monitor) payload.type = typeSel.value;
+          return api(API + '/monitors' + (monitor ? '/' + monitor.id : ''), {
+            method: monitor ? 'PATCH' : 'POST',
+            body: payload,
+          }).then(function (saved) {
+            state.monitorId = monitor ? monitor.id : saved.id;
+            draw();
+          }).catch(function (e) { showErrors(errors, e); throw e; });
         });
       }).catch(function (e) { toast(err(e), true); });
     }

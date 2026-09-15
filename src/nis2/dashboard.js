@@ -1,6 +1,7 @@
 'use strict';
 
 const { CATEGORIES, CONTROL_SCORE, riskBand } = require('./constants');
+const { createT } = require('./i18n');
 
 // Risk statuses that still count as "open" exposure (not accepted/closed).
 const OPEN_RISK = new Set(['open', 'mitigating']);
@@ -86,44 +87,65 @@ function computeDashboard({ risks = [], controls = [], incidents = [] } = {}, no
 // Ranks the most impactful next actions across risks/controls/incidents and
 // returns the top five, each with a short reason + a priority weight so the UI
 // can colour them. Higher weight = more urgent.
+//
+// Each action carries BOTH a rendered English `text` and the `code` + `params`
+// it was rendered from. `text` is what GET /dashboard has always returned and
+// what the dashboard screen shows; the reports use `code`/`params` so a Danish
+// report does not end up with an English sentence baked in here. Adding a
+// sentence means adding an `action.*` key to src/nis2/i18n.js in both locales.
 function recommendedActions({ risks, controls, incidents, categories }, now) {
   const actions = [];
+  const en = createT('en');
+  const add = (weight, priority, kind, code, params) => {
+    actions.push({ weight, priority, kind, code, params, text: en(code, params) });
+  };
 
   for (const r of risks) {
     if (!OPEN_RISK.has(r.status)) continue;
     const band = riskBand(r.riskScore);
     if (band === 'Critical' && !r.mitigationPlan) {
-      actions.push({ weight: 100, priority: 'critical', kind: 'risk', text: `Define a mitigation plan for critical risk "${r.title}"` });
+      add(100, 'critical', 'risk', 'action.risk.planCritical', { title: r.title });
     } else if (band === 'Critical') {
-      actions.push({ weight: 80, priority: 'critical', kind: 'risk', text: `Progress mitigation of critical risk "${r.title}"` });
+      add(80, 'critical', 'risk', 'action.risk.progressCritical', { title: r.title });
     } else if (band === 'High' && !r.mitigationPlan) {
-      actions.push({ weight: 60, priority: 'high', kind: 'risk', text: `Define a mitigation plan for high risk "${r.title}"` });
+      add(60, 'high', 'risk', 'action.risk.planHigh', { title: r.title });
     }
   }
 
   for (const c of controls) {
     if (c.status === 'Overdue') {
-      actions.push({ weight: 90, priority: 'high', kind: 'control', text: `Perform the overdue control "${c.controlName}" (${c.nis2Area})` });
+      add(90, 'high', 'control', 'action.control.overdue', { name: c.controlName, area: c.nis2Area });
     } else if (c.status === 'Missing') {
-      actions.push({ weight: 70, priority: 'high', kind: 'control', text: `Establish and evidence the control "${c.controlName}" (${c.nis2Area})` });
+      add(70, 'high', 'control', 'action.control.missing', { name: c.controlName, area: c.nis2Area });
     } else if (!c.hasEvidence) {
-      actions.push({ weight: 40, priority: 'medium', kind: 'control', text: `Attach evidence to the control "${c.controlName}" (${c.nis2Area})` });
+      add(40, 'medium', 'control', 'action.control.noEvidence', { name: c.controlName, area: c.nis2Area });
     }
   }
 
   for (const i of incidents) {
     if (i.notificationRequired && OPEN_INCIDENT.has(i.status)) {
-      actions.push({ weight: 95, priority: 'critical', kind: 'incident', text: `Assess NIS2 notification obligation for incident ${i.incidentId} "${i.title}"` });
+      add(95, 'critical', 'incident', 'action.incident.notify', { ref: i.incidentId, title: i.title });
     }
   }
 
   for (const cat of categories) {
     if (cat.controlCount === 0) {
-      actions.push({ weight: 50, priority: 'medium', kind: 'category', text: `Define controls for ${cat.category} — no controls recorded yet` });
+      add(50, 'medium', 'category', 'action.category.empty', { category: cat.category });
     }
   }
 
   return actions.sort((a, b) => b.weight - a.weight).slice(0, 5);
 }
 
-module.exports = { computeDashboard, recommendedActions };
+// Renders one action in the requested language. The `{category}` and `{area}`
+// params are NIS2 area names, so they are translated too — an otherwise Danish
+// sentence must not end "... for Access Control".
+function actionText(action, t) {
+  if (!action || !action.code) return (action && action.text) || '';
+  const params = { ...(action.params || {}) };
+  if (params.category) params.category = t.enum('cat', params.category);
+  if (params.area) params.area = t.enum('cat', params.area);
+  return t(action.code, params);
+}
+
+module.exports = { computeDashboard, recommendedActions, actionText };

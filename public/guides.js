@@ -738,7 +738,7 @@
             para(t('guide.mon.intro.order')),
             todo([t('guide.mon.intro.do1'), t('guide.mon.intro.do2'), t('guide.mon.intro.do3')]),
             note(t('guide.mon.intro.note')),
-            actions(viewButton('changes', t('guide.view.changes'))),
+            actions(viewButton('changes', t('nav.view.changes'))),
           ];
         },
       },
@@ -755,7 +755,7 @@
               [t('guide.mon.changes.r3.f'), t('guide.mon.changes.r3.v'), t('guide.mon.changes.r3.w')],
             ]),
             watch(t('guide.mon.changes.watch')),
-            actions(viewButton('changes', t('guide.view.changes'))),
+            actions(viewButton('changes', t('nav.view.changes'))),
           ];
         },
       },
@@ -781,7 +781,7 @@
             ]),
             agentsStatus(),
             note(t('guide.mon.fleet.note')),
-            actions(viewButton('fleet', t('guide.view.fleet'))),
+            actions(viewButton('fleet', t('nav.view.fleet'))),
           ];
         },
       },
@@ -801,7 +801,7 @@
             ]),
             trafficSourceStatus(),
             note(t('guide.mon.traffic.note')),
-            actions(viewButton('overview', t('guide.view.overview')),
+            actions(viewButton('overview', t('nav.view.overview')),
               settingsTabButton('agents', t('guide.mon.traffic.settingsBtn'))),
           ];
         },
@@ -821,7 +821,7 @@
             locationsStatus(),
             createSiteAction(),
             note(t('guide.mon.sites.note')),
-            actions(viewButton('locations', t('guide.view.locations')), viewButton('map', t('guide.view.map'))),
+            actions(viewButton('locations', t('nav.view.locations')), viewButton('map', t('nav.view.map'))),
           ];
         },
       },
@@ -838,7 +838,7 @@
             ]),
             watch(t('guide.mon.dest.watch')),
             note(t('guide.mon.dest.note')),
-            actions(viewButton('geo', t('guide.view.geo')),
+            actions(viewButton('geo', t('nav.view.geo')),
               settingsTabButton('map', t('guide.mon.dest.settingsBtn'))),
           ];
         },
@@ -852,7 +852,7 @@
             el('h4', { class: 'guide-h4' }, t('guide.mon.done.listTitle')),
             todo([t('guide.mon.done.w1'), t('guide.mon.done.w2'), t('guide.mon.done.w3')]),
             note(t('guide.mon.done.note')),
-            actions(viewButton('changes', t('guide.view.changes')), docsButton('tour')),
+            actions(viewButton('changes', t('nav.view.changes')), docsButton('tour')),
           ];
         },
       },
@@ -869,7 +869,7 @@
             para(t('guide.fleet.intro.order')),
             agentsStatus(),
             note(t('guide.fleet.intro.note')),
-            actions(viewButton('agents', t('guide.view.agents'))),
+            actions(viewButton('agents', t('nav.view.agents'))),
           ];
         },
       },
@@ -887,7 +887,7 @@
             ]),
             watch(t('guide.fleet.enroll.watch')),
             enrollmentCodeAction(),
-            actions(viewButton('enrollment', t('guide.view.enrollment')),
+            actions(viewButton('enrollment', t('nav.view.enrollment')),
               settingsTabButton('agentkey', t('guide.fleet.enroll.keyBtn'))),
           ];
         },
@@ -906,7 +906,7 @@
             ]),
             agentsStatus(),
             note(t('guide.fleet.agents.note')),
-            actions(viewButton('agents', t('guide.view.agents'))),
+            actions(viewButton('agents', t('nav.view.agents'))),
           ];
         },
       },
@@ -929,7 +929,7 @@
               [t('guide.fleet.iface.r3.f'), t('guide.fleet.iface.r3.v'), t('guide.fleet.iface.r3.w')],
             ]),
             note(t('guide.fleet.iface.note')),
-            actions(viewButton('interfaces', t('guide.view.interfaces')), viewButton('delta', t('guide.view.delta'))),
+            actions(viewButton('interfaces', t('nav.view.interfaces')), viewButton('delta', t('nav.view.delta'))),
           ];
         },
       },
@@ -944,7 +944,7 @@
               [t('guide.fleet.nics.r2.f'), t('guide.fleet.nics.r2.v'), t('guide.fleet.nics.r2.w')],
             ]),
             note(t('guide.fleet.nics.note')),
-            actions(viewButton('nics', t('guide.view.nics'))),
+            actions(viewButton('nics', t('nav.view.nics'))),
           ];
         },
       },
@@ -957,7 +957,7 @@
             todo([t('guide.fleet.updates.do1'), t('guide.fleet.updates.do2'), t('guide.fleet.updates.do3')]),
             versionStatus(),
             watch(t('guide.fleet.updates.watch')),
-            actions(settingsTabButton('updates', t('guide.fleet.updates.btn')), viewButton('agents', t('guide.view.agents'))),
+            actions(settingsTabButton('updates', t('guide.fleet.updates.btn')), viewButton('agents', t('nav.view.agents'))),
           ];
         },
       },
@@ -970,7 +970,7 @@
             el('h4', { class: 'guide-h4' }, t('guide.done.weeklyTitle')),
             todo([t('guide.fleet.done.w1'), t('guide.fleet.done.w2'), t('guide.fleet.done.w3')]),
             note(t('guide.fleet.done.note')),
-            actions(viewButton('fleet', t('guide.view.fleet'))),
+            actions(viewButton('fleet', t('nav.view.fleet'))),
           ];
         },
       },
@@ -991,7 +991,7 @@
               [t('guide.diag.intro.t4.f'), t('guide.diag.intro.t4.v')],
             ]),
             note(t('guide.diag.intro.note')),
-            actions(viewButton('probes', t('guide.view.probes'))),
+            actions(viewButton('probes', t('nav.view.probes'))),
           ];
         },
       },
@@ -1013,7 +1013,7 @@
             ]),
             runProbeAction(),
             note(t('guide.diag.probes.note')),
-            actions(viewButton('probes', t('guide.view.probes'))),
+            actions(viewButton('probes', t('nav.view.probes'))),
           ];
         },
       },
@@ -1031,7 +1031,7 @@
               [t('guide.diag.tests.r4.f'), t('guide.diag.tests.r4.v'), t('guide.diag.tests.r4.w')],
             ]),
             note(t('guide.diag.tests.note')),
-            actions(viewButton('tests', t('guide.view.tests')), viewButton('transactions', t('guide.view.transactions'))),
+            actions(viewButton('tests', t('nav.view.tests')), viewButton('transactions', t('nav.view.transactions'))),
           ];
         },
       },
@@ -1048,7 +1048,7 @@
             ]),
             trafficSourceStatus(),
             watch(t('guide.diag.flows.watch')),
-            actions(viewButton('flows', t('guide.view.flows')), viewButton('topology', t('guide.view.topology'))),
+            actions(viewButton('flows', t('nav.view.flows')), viewButton('topology', t('nav.view.topology'))),
           ];
         },
       },
@@ -1066,8 +1066,8 @@
               [t('guide.diag.outage.c3.f'), t('guide.diag.outage.c3.v')],
             ]),
             note(t('guide.diag.outage.note')),
-            actions(viewButton('troubleshooting', t('guide.view.troubleshooting')),
-              viewButton('investigation', t('guide.view.investigation'))),
+            actions(viewButton('troubleshooting', t('nav.view.troubleshooting')),
+              viewButton('investigation', t('nav.view.investigation'))),
           ];
         },
       },
@@ -1084,7 +1084,7 @@
               [t('guide.diag.done.p4.f'), t('guide.diag.done.p4.v')],
             ]),
             note(t('guide.diag.done.note')),
-            actions(viewButton('troubleshooting', t('guide.view.troubleshooting')), docsButton('assurance')),
+            actions(viewButton('troubleshooting', t('nav.view.troubleshooting')), docsButton('assurance')),
           ];
         },
       },
@@ -1106,7 +1106,7 @@
               [t('guide.ins.intro.v4.f'), t('guide.ins.intro.v4.v')],
             ]),
             note(t('guide.ins.intro.note')),
-            actions(viewButton('findings', t('guide.view.findings'))),
+            actions(viewButton('findings', t('nav.view.findings'))),
           ];
         },
       },
@@ -1119,7 +1119,7 @@
             para(t('guide.ins.analysis.how')),
             serverValuesTable('analysis', ANALYSIS_VALUES),
             note(t('guide.ins.analysis.note')),
-            actions(viewButton('findings', t('guide.view.findings')),
+            actions(viewButton('findings', t('nav.view.findings')),
               settingsTabButton('analyse', t('guide.ins.analysis.btn'))),
           ];
         },
@@ -1137,7 +1137,7 @@
               [t('guide.ins.events.r3.f'), t('guide.ins.events.r3.v'), t('guide.ins.events.r3.w')],
             ]),
             note(t('guide.ins.events.note')),
-            actions(viewButton('events', t('guide.view.events')), viewButton('clusters', t('guide.view.clusters'))),
+            actions(viewButton('events', t('nav.view.events')), viewButton('clusters', t('nav.view.clusters'))),
           ];
         },
       },
@@ -1185,7 +1185,7 @@
               [t('guide.ins.reporting.r2.f'), t('guide.ins.reporting.r2.v'), t('guide.ins.reporting.r2.w')],
             ]),
             note(t('guide.ins.reporting.note')),
-            actions(viewButton('reporting', t('guide.view.reporting'))),
+            actions(viewButton('reporting', t('nav.view.reporting'))),
           ];
         },
       },
@@ -1198,7 +1198,7 @@
             el('h4', { class: 'guide-h4' }, t('guide.done.weeklyTitle')),
             todo([t('guide.ins.done.w1'), t('guide.ins.done.w2'), t('guide.ins.done.w3')]),
             note(t('guide.ins.done.note')),
-            actions(viewButton('findings', t('guide.view.findings')), docsButton('what-is')),
+            actions(viewButton('findings', t('nav.view.findings')), docsButton('what-is')),
           ];
         },
       },

@@ -106,3 +106,48 @@ test('GET /api/interfaces surfaces a repo failure as 500', async () => {
   const res = await request(withAgent({ resultsRepo })).get('/api/interfaces?agentId=9').set('Authorization', authHeader('viewer'));
   assert.equal(res.status, 500);
 });
+
+// --- late collisions (EtherLike-MIB, SNMP only) -----------------------------
+// The counter that NAMES a duplex mismatch rather than merely being consistent
+// with one. Its absence is the interesting case: zero late collisions is what
+// rules the fault out, so a source that cannot count them must not be read as
+// having counted none.
+
+test('late collisions become a per-second rate, and absence stays absent', () => {
+  const { computeInterfaceHealth } = require('../src/health/interfaceHealth');
+  const [counted, none, cannot, proc] = computeInterfaceHealth({
+    elapsedSec: 10,
+    interfaces: [
+      { iface: 'eth0', lateCollisions: 30 },
+      { iface: 'eth1', lateCollisions: 0 },
+      { iface: 'eth2', lateCollisions: null },
+      { iface: 'eth3' },
+    ],
+  });
+  assert.equal(counted.lateCollPerSec, 3);
+  assert.equal(none.lateCollPerSec, 0, 'a device that counted none reports zero');
+  assert.equal(cannot.lateCollPerSec, null, 'a device that cannot count them reports nothing');
+  assert.equal(proc.lateCollPerSec, null, 'a /proc sample never has this counter');
+});
+
+test('a junk late-collision value is treated as absent, not as zero', () => {
+  const { computeInterfaceHealth } = require('../src/health/interfaceHealth');
+  // `[]` is the one that matters: Number([]) is 0, and 0 is precisely the value
+  // that rules this fault out. A coercion that turns junk into the most
+  // consequential answer available is worse than no reading at all.
+  for (const bad of ['lots', '7', {}, [], NaN, Infinity, -1, undefined, true]) {
+    const [i] = computeInterfaceHealth({ elapsedSec: 1, interfaces: [{ iface: 'eth0', lateCollisions: bad }] });
+    assert.equal(i.lateCollPerSec, null, JSON.stringify(bad));
+  }
+});
+
+test('late collisions do not change an interface status on their own', () => {
+  // The status vocabulary (down/bad/warn/ok) feeds fleet health, and a duplex
+  // mismatch is a diagnosis rather than a severity. Whatever this counter says,
+  // the row's status is still decided by errors, discards and utilisation.
+  const { computeInterfaceHealth } = require('../src/health/interfaceHealth');
+  const [withLate] = computeInterfaceHealth({ elapsedSec: 1, interfaces: [{ iface: 'eth0', lateCollisions: 99, operStatus: 'up' }] });
+  const [without] = computeInterfaceHealth({ elapsedSec: 1, interfaces: [{ iface: 'eth0', operStatus: 'up' }] });
+  assert.equal(withLate.status, without.status);
+  assert.equal(withLate.status, 'ok');
+});

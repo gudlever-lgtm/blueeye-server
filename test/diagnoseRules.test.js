@@ -58,8 +58,8 @@ const CASES = {
     open: { ping: { loss_pct: 6 } },
   },
   duplex_mismatch: {
-    confirm: { iface: { err_per_sec: 2, util_pct: 40 } },
-    rule_out: { iface: { err_per_sec: 0, speed_mbps: 10000 } },
+    confirm: { iface: { late_coll_per_sec: 3 } },
+    rule_out: { iface: { late_coll_per_sec: 0, err_per_sec: 0 } },
     open: { ping: { loss_pct: 4 } },
   },
 };
@@ -296,4 +296,42 @@ test('the session lists what is confirmed, then what is open, then what is elimi
   assert.equal(r.causes[r.causes.length - 1].verdict, VERDICTS.RULED_OUT);
   assert.equal(r.counts.confirmed, 1);
   assert.ok(r.missingFacts.length > 0, 'the session says what would settle the rest');
+});
+
+// --- late collisions: the counter that NAMES this fault ----------------------
+
+test('late collisions confirm a duplex mismatch outright', () => {
+  // A collision detected after the first 64 bytes have gone out is far too late
+  // to be ordinary contention. On a switched link it is a duplex mismatch almost
+  // by definition, which is why this rule needs nothing alongside it.
+  const r = evaluatePlaybook(pb('duplex_mismatch'), { iface: { late_coll_per_sec: 0.5 } });
+  assert.equal(r.verdict, VERDICTS.CONFIRMED);
+  assert.ok(r.decidedBy.includes('late_collisions'));
+});
+
+test('a source that CANNOT count late collisions never rules the fault out on that basis', () => {
+  // The whole reason the agent reports null rather than 0. A /proc sample and a
+  // switch with no EtherLike-MIB both look like this, and "we did not measure
+  // it" must not become "there were none" — which is the verdict that would send
+  // somebody to look somewhere else.
+  const cannotCount = { iface: { util_pct: 40, drop_per_sec: 0 } };
+  const r = evaluatePlaybook(pb('duplex_mismatch'), cannotCount);
+  assert.ok(!r.decidedBy.includes('no_late_collisions'), 'ruled out on a counter nobody read');
+  const lateRule = r.evidence.find((e) => e.ruleId === 'late_collisions');
+  assert.equal(lateRule.result, null, 'unknown, not false');
+  assert.deepEqual(lateRule.missing, ['iface.late_coll_per_sec']);
+});
+
+test('a measured zero DOES rule it out — that is the difference', () => {
+  const r = evaluatePlaybook(pb('duplex_mismatch'), { iface: { late_coll_per_sec: 0, err_per_sec: 0 } });
+  assert.equal(r.verdict, VERDICTS.RULED_OUT);
+  assert.ok(r.decidedBy.includes('no_late_collisions'));
+});
+
+test('the fact only exists when the interface layer could produce it', () => {
+  const { computeInterfaceHealth } = require('../src/health/interfaceHealth');
+  const facts = (interfaces) => buildFacts({ interfaces: computeInterfaceHealth({ elapsedSec: 10, interfaces }) });
+  assert.equal(facts([{ iface: 'eth0', lateCollisions: 50 }]).iface.late_coll_per_sec, 5);
+  assert.equal(facts([{ iface: 'eth0', lateCollisions: 0 }]).iface.late_coll_per_sec, 0);
+  assert.equal(facts([{ iface: 'eth0' }]).iface.late_coll_per_sec, undefined, 'absent, so a rule reads unknown');
 });

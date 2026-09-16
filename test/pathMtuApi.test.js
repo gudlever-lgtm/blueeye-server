@@ -166,6 +166,98 @@ test('400: an empty, non-object or garbage body is never a 500', async () => {
   }
 });
 
+// ------------------------------------------------------------------- IPv6
+test('an IPv6 literal selects IPv6 and moves the size floor to 1280', async () => {
+  let sent;
+  const agentCommander = makeAgentCommander({ sendCommand: (id, cmd) => { sent = cmd; return 1; } });
+  const res = await request(withAgent({ agentCommander })).post('/agents/9/probe')
+    .set('Authorization', authHeader('operator')).send({ type: 'path_mtu', host: '2001:db8::40' });
+  assert.equal(res.status, 202);
+  assert.equal(sent.probe.ip_version, 6, 'the literal names its own family');
+  assert.equal(sent.probe.min_size, 1280, 'RFC 8200, not the IPv4 576');
+
+  // And a size legal on IPv4 is rejected on IPv6, with the right bound quoted.
+  const low = await request(withAgent({ agentCommander })).post('/agents/9/probe')
+    .set('Authorization', authHeader('operator')).send({ type: 'path_mtu', host: '2001:db8::40', min_size: 600 });
+  assert.equal(low.status, 400);
+  assert.match(low.body.details.min_size, /1280/);
+});
+
+test('an IPv6 literal beginning with a colon is accepted without loosening the flag guard', async () => {
+  const agentCommander = makeAgentCommander({ sendCommand: () => 1 });
+  for (const host of ['::1', '::ffff:192.0.2.1', '2001:db8::40']) {
+    // eslint-disable-next-line no-await-in-loop
+    const ok = await request(withAgent({ agentCommander })).post('/agents/9/probe')
+      .set('Authorization', authHeader('operator')).send({ type: 'path_mtu', host });
+    assert.equal(ok.status, 202, host);
+  }
+  // A leading `-` is still refused — that is what the guard is for.
+  for (const host of ['-rf', '--flood', '-6']) {
+    // eslint-disable-next-line no-await-in-loop
+    const bad = await request(withAgent({ agentCommander })).post('/agents/9/probe')
+      .set('Authorization', authHeader('operator')).send({ type: 'path_mtu', host });
+    assert.equal(bad.status, 400, host);
+  }
+});
+
+test('an explicit ip_version overrides the literal, and anything else is 400', async () => {
+  let sent;
+  const agentCommander = makeAgentCommander({ sendCommand: (_id, cmd) => { sent = cmd; return 1; } });
+  await request(withAgent({ agentCommander })).post('/agents/9/probe')
+    .set('Authorization', authHeader('operator')).send({ type: 'path_mtu', host: '2001:db8::40', ip_version: 4 });
+  assert.equal(sent.probe.ip_version, 4);
+
+  for (const v of [5, 0, -1, 'six', 4.5]) {
+    // eslint-disable-next-line no-await-in-loop
+    const res = await request(withAgent({ agentCommander })).post('/agents/9/probe')
+      .set('Authorization', authHeader('operator')).send({ type: 'path_mtu', host: 'example.com', ip_version: v });
+    assert.equal(res.status, 400, String(v));
+    assert.ok(res.body.details.ip_version, String(v));
+  }
+});
+
+test('the trace probes carry the family too, so a stored spec can be re-run', async () => {
+  let sent;
+  const agentCommander = makeAgentCommander({ sendCommand: (_id, cmd) => { sent = cmd; return 1; } });
+  for (const type of ['traceroute', 'tcptraceroute']) {
+    // eslint-disable-next-line no-await-in-loop
+    const res = await request(withAgent({ agentCommander })).post('/agents/9/probe')
+      .set('Authorization', authHeader('operator')).send({ type, host: '2001:db8::40' });
+    assert.equal(res.status, 202, type);
+    assert.equal(sent.probe.ip_version, 6, type);
+  }
+  // An IPv4 trace keeps the shape it had — no new field where none is needed.
+  await request(withAgent({ agentCommander })).post('/agents/9/probe')
+    .set('Authorization', authHeader('operator')).send({ type: 'traceroute', host: 'example.com' });
+  assert.equal('ip_version' in sent.probe, false);
+});
+
+test('an IPv6 result stores its hops and subtracts 60 for the MSS', async () => {
+  let stored;
+  const probeResultsRepo = makeProbeResultsRepo({ createMany: async (_a, rows) => { stored = rows; return rows.length; } });
+  const res = await request(makeApp({ agentTokensRepo: agentToken(), probeResultsRepo }))
+    .post('/agents/probe-results').set('Authorization', 'Bearer t')
+    .send({
+      results: [{
+        ...RESULT,
+        target: '2001:db8::40',
+        ip_version: 6,
+        path_mtu: 1400,
+        mtu_drop_at_hop: 3,
+        hops: [
+          { hop: 1, ip: '2001:db8::1', max_mtu: 1500, status: 'ok' },
+          { hop: 3, ip: '2001:db8:beef::7', max_mtu: 1400, status: 'blackhole' },
+        ],
+      }],
+    });
+  assert.equal(res.status, 201);
+  assert.equal(stored[0].mtu.ipVersion, 6);
+  assert.equal(stored[0].mtu.recommendedMss, 1340);
+  // A 39-character IPv6 address must survive the column width unchanged.
+  assert.equal(stored[0].hops[1].ip, '2001:db8:beef::7');
+  assert.equal(stored[0].hops[1].maxMtu, 1400);
+});
+
 // -------------------------------------------------------------------- 500
 test('500: a database failure is JSON with no stack trace, and gives up its detail in production', async () => {
   const probeResultsRepo = makeProbeResultsRepo({ findByAgent: throwingAsync('probe_results is on fire at 10.0.0.5:3306') });

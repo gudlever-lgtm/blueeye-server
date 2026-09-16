@@ -60,7 +60,7 @@ from being reported as a blackhole.
 | Parameter | Type | Default | Notes |
 |---|---|---|---|
 | `target` / `host` | string | – | Hostname or IP. Validated on both sides; never reaches a shell. |
-| `ip_version` | 4 \| 6 | 4 | See the IPv6 limits below. |
+| `ip_version` | 4 \| 6 | from the target | An IPv6 literal selects 6 on its own; a hostname defaults to 4. |
 | `min_size` | int | 576 (v4) / 1280 (v6) | Whole IP packet size, not payload. |
 | `max_size` | int | 1500 | Up to 9216 for jumbo frames. |
 | `per_hop` | bool | true | Measure each hop from the traceroute, not just end to end. |
@@ -80,9 +80,15 @@ stored beside it.
 
 | OS | DF | Size | TTL | Per-probe timeout |
 |---|---|---|---|---|
-| Linux | `-M do` | `-s` | `-t` | `-W` (seconds) |
-| macOS | `-D` | `-s` | `-m` | `-t` (seconds, whole run) |
-| Windows | `-f` | `-l` | `-i` | `-w` (milliseconds) |
+| Linux (v4 + v6) | `-M do` | `-s` | `-t` | `-W` (seconds) |
+| macOS `ping` (v4) | `-D` | `-s` | `-m` | `-t` (seconds, whole run) |
+| macOS `ping6` (v6) | — none needed | `-s` | `-h` | `-W` (milliseconds) |
+| Windows | `-f` (v4 only) | `-l` | `-i` | `-w` (milliseconds) |
+
+All of this lives in one module, `blueeye-agent/src/probes/ipFamily.js` — header
+sizes, minimum packet sizes, address parsing and the argv for every
+platform/family combination. The probes consume it; none of them knows the
+difference on its own.
 
 macOS `-t` is a **timeout** while Linux `-t` is a **TTL**. Copying one command
 line to the other platform measures a different thing and reports it as a path
@@ -95,19 +101,47 @@ exactly as a Linux one does.
 
 No root is required: `ping` with DF works unprivileged everywhere.
 
+### IPv6
+
+Fully supported, per hop, on all three platforms.
+
+**There is no don't-fragment bit in IPv6.** RFC 8200 forbids routers from
+fragmenting in transit, so "don't fragment" is the permanent behaviour and every
+OS's DF flag is IPv4-only. A packet too large for a link comes back as **ICMPv6
+Packet Too Big (type 2)** — the exact analogue of IPv4's "fragmentation needed
+and DF set" (type 3 code 4). Both carry the next-hop MTU, both are filtered by
+the same careless firewall rule, and a filtered one is a PMTUD blackhole either
+way. Everything this probe concludes transfers unchanged; only the argv and the
+message wording differ.
+
+Two practical differences the module handles:
+
+- **IPv6 tracing is split across two binaries** and which one exists depends on
+  the distribution: `traceroute -6` on most modern Linux, the separate
+  `traceroute6` on macOS and on older installs. Both are tried, in the order
+  that is right for the platform.
+- **The size floor is 1280, not 576** (RFC 8200 §5). A `min_size` legal on IPv4
+  is rejected on IPv6, with the correct bound quoted.
+
+An IPv6 literal target selects IPv6 on its own — on the server, so the stored
+spec says which family actually ran, and so the size floor is validated against
+the right one. `ip_version` is only needed to force a family for a hostname that
+has both records.
+
+A literal beginning with a colon (`::1`, `::ffff:192.0.2.1`) is accepted by the
+server's host guard via `net.isIPv6`, not by loosening the leading-alphanumeric
+rule — a string `isIPv6` accepts can never be read as a CLI flag, and a leading
+`-` is still refused.
+
 ### Known limits
 
-- **IPv6 is end-to-end only.** The shared traceroute parser reads IPv4 hop
-  addresses, so an IPv6 trace would return anonymous hops and every one of them
-  would be reported `no_response`. An honest end-to-end number beats a hop list
-  that is wrong. Extending the parser would change the `traceroute` and
-  `tcptraceroute` probes too and belongs in its own change.
-- **IPv6 on macOS is refused outright**, with a reason. `-D` is IPv4-only there
-  and the `ping6` flags have not been verified against a real macOS host;
-  guessing them would silently measure something else.
 - **A local "message too long"** means this host's own interface could not emit
   the packet — nothing reached the wire. It re-bases the run's ceiling instead
   of being blamed on a hop.
+- **The macOS `ping6` flags come from its man page, not from a run on macOS
+  hardware.** They are pinned by a test that compares the argv, so a correction
+  is a one-line change in `ipFamily.js` — but this is the one part of the
+  platform table that has not been exercised against the real tool.
 
 ## The MSS check (Linux only)
 

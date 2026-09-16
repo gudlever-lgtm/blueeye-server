@@ -1,5 +1,7 @@
 'use strict';
 
+const net = require('net');
+
 const PROBE_TYPES = ['ping', 'tcp', 'dns', 'traceroute', 'tcptraceroute', 'http', 'curl', 'pageload', 'transaction', 'path_mtu'];
 // How many payload sizes one ping sweep may carry, and how large each may be.
 // Each size is its own `ping` invocation on the agent, so the first bounds the
@@ -32,6 +34,22 @@ const MAX_RESULTS = 200;
 // flag like "-rf") and contain only host-safe characters.
 const HOST_RE = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,254}$/;
 
+// An IPv6 literal may legally begin with a colon (`::1`, `::ffff:192.0.2.1`),
+// which HOST_RE's leading-alphanumeric rule rejects. That rule exists to stop a
+// target being read as a CLI flag, and a string `net.isIPv6` accepts can never
+// be one — so a verified literal is admitted without loosening the guard for
+// anything else.
+// Not exported: this is an internal guard, not a validator. The gate sweeps
+// everything `src/validation` exports as a validator — same signature, same
+// `{value}|{errors}` contract — and a boolean predicate in that namespace would
+// either fail the sweep or force the sweep to grow an exception, which is how a
+// gate stops meaning anything.
+function isSafeHost(host) {
+  if (typeof host !== 'string') return false;
+  const s = host.trim();
+  return s.length > 0 && s.length <= 255 && (HOST_RE.test(s) || net.isIPv6(s));
+}
+
 function numOrNull(v) {
   if (v === null || v === undefined) return null;
   const n = Number(v);
@@ -42,6 +60,17 @@ function intOrNull(v) {
   if (v === null || v === undefined) return null;
   const n = Number(v);
   return Number.isInteger(n) ? n : null;
+}
+
+// The IP family a probe will actually run as: an explicit request wins, a
+// literal target names itself, and a hostname means IPv4. Returns null for a
+// request that is neither 4 nor 6, which the caller turns into a 400.
+function familyOf(requested, host) {
+  if (requested === undefined || requested === null || requested === '') {
+    return net.isIPv6(host) ? 6 : 4;
+  }
+  const n = Number(requested);
+  return n === 4 || n === 6 ? n : null;
 }
 
 // A packet size, rejected outright when it is outside anything an IP network
@@ -319,11 +348,15 @@ function validateProbeSpec(body) {
     // reason instead of a probe that silently clamps and reports a number they
     // did not ask for.
     const host = String(b.host || b.target || '').trim();
-    if (!HOST_RE.test(host)) return { errors: { host: 'host/target is required and must be a valid hostname or IP' } };
+    if (!isSafeHost(host)) return { errors: { host: 'host/target is required and must be a valid hostname or IP' } };
     spec.host = host;
-    const ipVersion = b.ip_version === undefined || b.ip_version === null || b.ip_version === ''
-      ? 4 : Number(b.ip_version);
-    if (ipVersion !== 4 && ipVersion !== 6) return { errors: { ip_version: 'ip_version must be 4 or 6' } };
+    // An IPv6 literal names its own family, so an operator who types an address
+    // gets IPv6 without also remembering a parameter — and, more importantly, the
+    // size floor below is then checked against 1280 rather than 576. Resolving it
+    // HERE rather than leaving it to the agent means the stored spec says what
+    // will actually run.
+    const ipVersion = familyOf(b.ip_version, host);
+    if (ipVersion === null) return { errors: { ip_version: 'ip_version must be 4 or 6' } };
     spec.ip_version = ipVersion;
 
     const floor = MIN_PACKET_SIZE[ipVersion];
@@ -362,8 +395,16 @@ function validateProbeSpec(body) {
     }
   } else {
     const host = String(b.host || b.target || '').trim();
-    if (!HOST_RE.test(host)) return { errors: { host: 'host/target is required and must be a valid hostname or IP' } };
+    if (!isSafeHost(host)) return { errors: { host: 'host/target is required and must be a valid hostname or IP' } };
     spec.host = host;
+    // The trace probes carry the family too: an IPv6 path is traced by a
+    // different binary, and a stored spec that does not say which family it ran
+    // as cannot be re-run to the same answer.
+    if (type === 'traceroute' || type === 'tcptraceroute') {
+      const v = familyOf(b.ip_version, host);
+      if (v === null) return { errors: { ip_version: 'ip_version must be 4 or 6' } };
+      if (b.ip_version !== undefined || v === 6) spec.ip_version = v;
+    }
     if (type === 'ping' && b.sizes !== undefined) {
       // A size sweep: the same target asked at several payload sizes with
       // don't-fragment set. This is what separates "the path is lossy" from

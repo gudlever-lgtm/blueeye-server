@@ -299,7 +299,16 @@ A single vanilla-JS SPA. Key building blocks:
 - `render()` — mounts the current view + its `hero()`; stops per-view pollers
   (`stopOverview`/`stopProbes`/`stopIfaces`/`stopFleet`/`stopAgent`/`stopGeo`) when leaving.
 - Shared renderers `interfaceTable()` / `probeLatestTable()` / `probeDetail()` back both
-  the standalone tabs and the combined agent page.
+  the standalone tabs and the combined agent page. `probeLatestTable()` carries ONE
+  adaptive **Measured** column (`probeMeasured()` — latency+loss for a ping, hop count
+  for a trace, packet size + recommended MSS for a path-MTU check) rather than the fixed
+  RTT/Loss/Jitter triple that fitted ping and left four of the nine types blank. A row
+  opens its detail IN PLACE, using the same disclosure mechanics as the Service Assurance
+  monitor results table (`sa-result-row` / `sa-trace-row`): one open at a time, because two
+  open traces would each mount a `pathVisualization` and those persist the brush window to
+  the URL. The detail is fetched once per row and the 5 s refresh pauses while a row is
+  open — replacing the tbody would close it — and the pause is stated, not silent.
+  `probeDetail()` stays callable standalone for the topology "Show route" modal.
 - `PAGE_INFO` — per-page hero line + "Mere info" drawer text.
 - Charts are hand-rolled SVG: `multiChart` (live, area + time ticks + brush) and
   `historyChart` (time-axis; optional `band` = robust normal-range shading via

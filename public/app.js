@@ -964,7 +964,7 @@ const PAGE_INFO = {
         el('li', {}, el('strong', {}, 'Data quality '), '(OK / WARN / BAD) — a separate verdict on whether the agent\'s readings can be trusted: collector packet drops, clock skew vs. the server, and agent version. This is why you can see CRITICAL up top and “Data quality: OK” just below — the first judges the network, the second judges the measurement.')),
       el('h4', {}, 'Data sources'),
       el('ul', {},
-        el('li', {}, el('strong', {}, 'Probes: '), 'run ping/TCP/DNS/traceroute/path-MTU against a target and see RTT/loss/jitter — click “History” for RTT over time, “Path” for traceroute hops or “Path MTU” for the per-hop packet-size verdict.'),
+        el('li', {}, el('strong', {}, 'Probes: '), 'run ping/TCP/DNS/traceroute/path-MTU against a target. Each result says what IT measured — latency and loss for a ping, hop count for a trace, packet size for a path-MTU check — and clicking the row opens its detail in place: history, path map, or per-hop verdict.'),
         el('li', {}, el('strong', {}, 'Interfaces: '), 'per-interface utilization, errors, discards and link status from the latest measurement. A virtual/idle port that is simply down (docker0, veth…, tunnels) shows a neutral IDLE — only a real link down reads DOWN.'),
         el('li', {}, el('strong', {}, 'Traffic: '), 'current bandwidth — most useful here when you are already investigating a specific agent.')),
       el('p', { class: 'muted' }, 'Return to the fleet overview with “← Overview”. Fleet-wide views of the same data sources: ', viewLink('probes'), ' · ', viewLink('interfaces'), ' · ', viewLink('overview', 'Traffic'), '.'),
@@ -4818,34 +4818,160 @@ function transactionStepsEditor(initial) {
   return { node, collect };
 }
 
-// `onInstall(tool, row)` is optional; when provided, a failed probe that names a
-// missing installable tool gets an "Install <tool>" button.
-function probeLatestTable(rows, onDetail, onInstall = null) {
+// What a result actually MEASURED, in that probe type's own terms.
+//
+// The table used to carry three fixed columns — RTT, Loss, Jitter — which fit
+// ping and nothing else. Four of the nine types (traceroute, tcptraceroute,
+// path_mtu, and any probe that failed to run) left all three empty, and two
+// more put a number in the RTT column that is not an RTT: pageload reports a
+// whole-page load time there, transaction the total time across every step. So
+// half the table was blank and part of the rest was mislabelled.
+//
+// One column that says what this probe measures is both narrower and more
+// honest. Returns a plain string; `null` means there is genuinely nothing to
+// report, which renders as an em dash rather than an invented zero.
+function probeMeasured(r) {
+  const ms = (v) => `${v} ms`;
+  const loss = r.lossPct != null && r.lossPct > 0 ? ` · ${r.lossPct}% loss` : '';
+  switch (r.type) {
+    case 'path_mtu': {
+      const m = r.mtu || {};
+      if (m.pathMtu == null) return null;
+      // The recommended MSS is the number an operator acts on, so it travels
+      // with the MTU rather than waiting behind a click.
+      return `${m.pathMtu} B${m.recommendedMss != null ? ` · MSS ${m.recommendedMss}` : ''}`;
+    }
+    case 'traceroute':
+    case 'tcptraceroute': {
+      const hops = Array.isArray(r.hops) ? r.hops : [];
+      if (!hops.length) return null;
+      const worst = hops.reduce((w, h) => (h.lossPct != null && (w == null || h.lossPct > w) ? h.lossPct : w), null);
+      return `${hops.length} hops${worst ? ` · ${worst}% worst hop loss` : ''}`;
+    }
+    case 'pageload':
+      return r.rttMs == null ? null
+        : `${ms(r.rttMs)} load${r.bytes != null ? ` · ${fmtBytes(r.bytes)}` : ''}`;
+    case 'transaction': {
+      const steps = Array.isArray(r.elements) ? r.elements.length : 0;
+      return r.rttMs == null ? null : `${ms(r.rttMs)} total${steps ? ` · ${steps} steps` : ''}`;
+    }
+    case 'curl':
+      return r.rttMs == null ? null
+        : `${ms(r.rttMs)}${r.status != null ? ` · ${r.status}` : ''}${r.bytes != null ? ` · ${fmtBytes(r.bytes)}` : ''}`;
+    case 'http':
+      return r.rttMs == null ? null : `${ms(r.rttMs)}${r.status != null ? ` · ${r.status}` : ''}`;
+    default:
+      // ping / tcp / dns — the three the old columns were built for.
+      if (r.rttMs == null) return r.lossPct != null ? `${r.lossPct}% loss` : null;
+      return `${ms(r.rttMs)}${loss}${r.jitterMs != null ? ` · ${r.jitterMs} ms jitter` : ''}`;
+  }
+}
+
+// The sub-lines under the target: what happened, in the probe's own words.
+function probeWhat(r) {
+  const lines = [];
+  // curl/http carry a verification/cert explanation; a probe that could not RUN
+  // carries its reason ("traceroute not installed", "ping failed: …").
+  if (r.detail) lines.push(el('div', { class: 'muted small' }, esc(r.detail)));
+  if (r.type === 'curl' && r.contentType) {
+    lines.push(el('div', { class: 'muted small' }, esc(r.contentType)));
+  }
+  // A blackhole is the one finding that must not wait behind a click: it is the
+  // reason this probe type exists, and a row that hides it is a row that gets
+  // scrolled past.
+  if (r.type === 'path_mtu' && r.mtu && r.mtu.blackholeDetected) {
+    lines.push(el('div', { class: 'error small' }, t('probe.mtu.status.blackhole')));
+  }
+  return lines;
+}
+
+// The latest-results table: one row per (type, target), each opening its own
+// detail in place.
+//
+// IN PLACE, not below the table, because comparing a result with the ones
+// around it is the diagnostic move, and a detail pane that replaces itself
+// somewhere else makes that impossible — the same reasoning as the Monitors
+// results table, whose disclosure mechanics this copies.
+//
+// `loadDetail(r)` returns a Promise of the detail node. It is a callback rather
+// than a direct probeDetail() call because probeDetail also renders standalone
+// (the topology "Show route" modal), and because the caller owns the agent id.
+// `onOpenChange(isOpen)` lets the caller pause its refresh loop — replacing the
+// tbody under an open row would close it.
+function probeLatestTable(rows, loadDetail, onInstall = null, onOpenChange = null) {
   if (!rows.length) return el('div', { class: 'muted' }, 'No probe results yet — run one above.');
-  return el('table', {},
-    el('thead', {}, el('tr', {}, ...['Type', 'Target', 'Status', 'RTT', 'Loss', 'Jitter', 'Time', ''].map((h) => el('th', {}, h)))),
-    el('tbody', {}, ...rows.map((r) => {
-      const tool = onInstall ? missingToolOf(r) : null;
-      return el('tr', {},
-        el('td', {}, r.type),
-        el('td', {}, esc(r.target),
-          // curl/http carry a verification/cert explanation; a failed probe carries
-          // its reason (e.g. "traceroute not installed"). Surface it inline.
-          r.detail ? el('div', { class: 'muted small' }, esc(r.detail)) : null,
-          (r.type === 'curl' && r.contentType) ? el('div', { class: 'muted small' }, `${esc(r.contentType)}${r.bytes != null ? ` · ${r.bytes} B` : ''}`) : null,
-          (r.type === 'path_mtu' && r.mtu) ? el('div', { class: r.mtu.blackholeDetected ? 'error small' : 'muted small' },
-            `${r.mtu.pathMtu != null ? `${r.mtu.pathMtu} B` : '–'}${r.mtu.blackholeDetected ? ` · ${t('probe.mtu.status.blackhole')}` : ''}`) : null),
-        el('td', {}, el('span', { class: `badge ${r.ok ? 'online' : 'offline'}`, title: !r.ok && r.detail ? r.detail : null }, r.ok ? 'ok' : 'error')),
-        el('td', { class: 'num' }, r.rttMs != null ? `${r.rttMs} ms` : '–'),
-        el('td', { class: 'num' }, r.lossPct != null ? `${r.lossPct}%` : '–'),
-        el('td', { class: 'num' }, r.jitterMs != null ? `${r.jitterMs} ms` : '–'),
-        el('td', { class: 'muted' }, r.ts ? fmtTimeShort(new Date(r.ts).getTime()) : '–'),
-        el('td', {},
-          tool ? el('button', { class: 'small', title: `Install ${tool} on the agent host`, onclick: (e) => onInstall(tool, r, e.target) }, `Install ${tool}`) : null,
-          el('button', { class: 'small ghost', onclick: () => onDetail(r) },
-            (r.type === 'traceroute' || r.type === 'tcptraceroute') ? 'Path'
-              : r.type === 'path_mtu' ? t('probe.mtu.pathMtu') : 'History')));
-    })));
+  const COLS = 6;
+  // One open at a time. Two open traceroutes would each mount a path
+  // visualisation, and those write the brush window to the URL — the second
+  // would overwrite the first's, silently.
+  let openRow = null;
+  const announce = () => { if (onOpenChange) onOpenChange(!!openRow); };
+
+  const body = el('tbody');
+  for (const r of rows) {
+    const tool = onInstall ? missingToolOf(r) : null;
+    const measured = probeMeasured(r);
+    const detailCell = el('td', { colspan: String(COLS) });
+    const detail = el('tr', { class: 'probe-detail-row', hidden: true }, detailCell);
+    const caret = el('span', { class: 'sa-disclosure' }, '▸');
+    let loaded = false;
+    let loading = false;
+
+    async function open() {
+      row.classList.add('open');
+      caret.textContent = '▾';
+      detail.hidden = false;
+      // Fetched once and kept: re-opening a row should not re-run two or three
+      // HTTP calls, and the guard is what stops a double click from starting a
+      // second fetch while the first is still in flight.
+      if (loaded || loading) return;
+      loading = true;
+      detailCell.replaceChildren(el('div', { class: 'pv-skel', style: 'height:120px' }));
+      try {
+        detailCell.replaceChildren(await loadDetail(r));
+        loaded = true;
+      } catch (e) {
+        detailCell.replaceChildren(el('div', { class: 'error' }, errText(e)));
+      } finally { loading = false; }
+    }
+    function close() {
+      row.classList.remove('open');
+      caret.textContent = '▸';
+      detail.hidden = true;
+    }
+    function toggle() {
+      if (openRow === entry) { close(); openRow = null; announce(); return; }
+      if (openRow) openRow.close();
+      openRow = entry;
+      announce();
+      open();
+    }
+
+    const row = el('tr', {
+      class: 'probe-result-row',
+      tabindex: '0',
+      title: t('probe.row.open'),
+      onclick: (e) => { if (!e.target.closest('button')) toggle(); },
+      onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } },
+    },
+      el('td', {}, caret, el('span', { class: `badge ${r.ok ? 'online' : 'offline'}`, title: !r.ok && r.detail ? r.detail : null }, r.ok ? 'ok' : 'error')),
+      el('td', {}, r.type),
+      el('td', {}, esc(r.target), ...probeWhat(r)),
+      el('td', { class: 'num' }, measured == null ? '–' : measured),
+      el('td', { class: 'muted' }, r.ts ? fmtTimeShort(new Date(r.ts).getTime()) : '–'),
+      el('td', {}, tool
+        ? el('button', { class: 'small', title: `Install ${tool} on the agent host`, onclick: (e) => { e.stopPropagation(); onInstall(tool, r, e.target); } }, `Install ${tool}`)
+        : null));
+    const entry = { close };
+    body.append(row, detail);
+  }
+
+  return el('table', { class: 'probe-results' },
+    el('thead', {}, el('tr', {}, ...[
+      t('probe.col.status'), t('probe.col.type'), t('probe.col.target'),
+      t('probe.col.measured'), t('probe.col.time'), '',
+    ].map((h) => el('th', {}, h)))),
+    body);
 }
 
 // Posts an install-tool request for one agent and reflects the outcome on the
@@ -7982,9 +8108,15 @@ async function probeRunnerView() {
     runBtn, status, traceHint, mtuHint), mtuWrap, txWrap);
 
   const latestHost = el('div', { class: 'probe-latest' });
-  const detailHost = el('div', {});
-  root.append(el('details', { class: 'sec', open: true }, el('summary', {}, 'Latest results ', el('span', { class: 'muted' }, '· most recent per target')), latestHost));
-  root.append(detailHost);
+  // The refresh loop replaces the whole tbody, which would close an open row
+  // every five seconds. Pausing is the smallest fix — but a table that has
+  // quietly stopped updating is its own trap, so the pause SAYS so rather than
+  // leaving the operator to wonder why the timestamps stopped moving.
+  let detailOpen = false;
+  const pauseNote = el('div', { class: 'muted small', hidden: true }, t('probe.row.paused'));
+  root.append(el('details', { class: 'sec', open: true },
+    el('summary', {}, 'Latest results ', el('span', { class: 'muted' }, '· most recent per target')),
+    el('div', { class: 'muted small' }, t('probe.row.rowHelp')), pauseNote, latestHost));
 
   async function run() {
     const id = agentSel.value;
@@ -8025,11 +8157,12 @@ async function probeRunnerView() {
     let data;
     try { data = await api(`/api/probes/latest?agentId=${encodeURIComponent(id)}`); } catch { return; }
     const rows = data.results || [];
-    latestHost.replaceChildren(probeLatestTable(rows, showDetail, (tool, r, btn) => requestToolInstall(agentSel.value, tool, btn)));
-  }
-
-  async function showDetail(r) {
-    detailHost.replaceChildren(await probeDetail(r, agentSel.value));
+    latestHost.replaceChildren(probeLatestTable(
+      rows,
+      (r) => probeDetail(r, agentSel.value),
+      (tool, r, btn) => requestToolInstall(agentSel.value, tool, btn),
+      (isOpen) => { detailOpen = isOpen; pauseNote.hidden = !isOpen; },
+    ));
   }
 
   refreshLatest();
@@ -8038,7 +8171,7 @@ async function probeRunnerView() {
   // above, render() already cleared the timer — self-clear instead of leaking.
   probeState.timer = setInterval(() => {
     if (currentView !== 'probes') { stopProbes(); return; }
-    if (!modalOpen()) refreshLatest();
+    if (!modalOpen() && !detailOpen) refreshLatest();
   }, 5000);
   return root;
 };
@@ -9355,7 +9488,6 @@ views.agent = async () => {
     curl.wrap,
     runBtn, probeStatus);
   const probeLatestHost = el('div', { class: 'probe-latest' });
-  const probeDetailHost = el('div', {});
 
   async function runProbe() {
     const host = target.value.trim();
@@ -9378,7 +9510,7 @@ views.agent = async () => {
   async function refreshProbes() {
     let data;
     try { data = await api(`/api/probes/latest?agentId=${encodeURIComponent(id)}`); } catch { return; }
-    probeLatestHost.replaceChildren(probeLatestTable(data.results || [], async (r) => { probeDetailHost.replaceChildren(await probeDetail(r, id)); }, (tool, r, btn) => requestToolInstall(id, tool, btn)));
+    probeLatestHost.replaceChildren(probeLatestTable(data.results || [], (r) => probeDetail(r, id), (tool, r, btn) => requestToolInstall(id, tool, btn)));
   }
 
   // ---- Interfaces ----
@@ -9419,7 +9551,7 @@ views.agent = async () => {
   const nicSummary = el('span', { class: 'muted' }, nics.length ? `· ${nics.length} interface(s)` : '· none reported');
 
   root.append(
-    el('details', { class: 'sec', open: true }, el('summary', {}, 'Probes ', el('span', { class: 'muted' }, '· ping · TCP · DNS · traceroute · cURL')), probeForm, probeLatestHost, probeDetailHost),
+    el('details', { class: 'sec', open: true }, el('summary', {}, 'Probes ', el('span', { class: 'muted' }, '· ping · TCP · DNS · traceroute · cURL')), probeForm, probeLatestHost),
     el('details', { class: 'sec', open: true }, el('summary', {}, 'Interfaces ', ifaceStatus), ifaceHost),
     el('details', { class: 'sec' }, el('summary', {}, 'NIC firmware ', nicSummary), nicTable(nics)),
     el('details', { class: 'sec' }, el('summary', {}, 'Traffic ', el('span', { class: 'muted' }, '· recent bandwidth')), trafficHost));

@@ -103,14 +103,16 @@ async function boot(t, routes = {}, role = 'operator') {
   return { window, doc: window.document, errors, calls };
 }
 
-// Opens Probes & Tests and clicks the detail button on the single result row.
+// Opens Probes & Tests and clicks the result row open. The detail used to sit
+// behind a per-row button rendered below the table; it now opens in place, so
+// the row itself is the control.
 async function openMtuDetail(t, row, role = 'operator') {
   const ctx = await boot(t, { 'GET /api/probes/latest': { agentId: 9, results: [row] } }, role);
   ctx.doc.querySelector('button[data-view="probes"]').click();
   await tick(250);
-  const btn = [...ctx.doc.querySelectorAll('.probe-latest button')].find((b) => /path mtu/i.test(b.textContent));
-  assert.ok(btn, `no detail button: ${ctx.doc.querySelector('.probe-latest').textContent}`);
-  btn.click();
+  const tr = ctx.doc.querySelector('.probe-result-row');
+  assert.ok(tr, `no result row: ${ctx.doc.querySelector('.probe-latest').textContent}`);
+  tr.click();
   await tick(200);
   return ctx;
 }
@@ -282,7 +284,11 @@ test('the results row shows the measured MTU rather than three empty metrics', a
   const ctx = await boot(t, { 'GET /api/probes/latest': { agentId: 9, results: [mtuRow()] } });
   ctx.doc.querySelector('button[data-view="probes"]').click();
   await tick(250);
-  const row = ctx.doc.querySelector('.probe-latest tbody tr').textContent;
-  assert.match(row, /1420 B/);
-  assert.match(row, /blackhole/i);
+  const row = ctx.doc.querySelector('.probe-result-row').textContent;
+  assert.match(row, /1420 B/, 'the MTU is in the Measured column, not behind a click');
+  assert.match(row, /MSS 1380/, 'so is the number the operator will type into a router');
+  assert.match(row, /blackhole/i, 'and the finding this probe exists for is not hidden');
+  // The three columns that fit ping and nothing else are gone.
+  const heads = [...ctx.doc.querySelectorAll('.probe-results th')].map((h) => h.textContent.trim());
+  assert.deepEqual(heads, ['Status', 'Type', 'Target', 'Measured', 'Time', '']);
 });

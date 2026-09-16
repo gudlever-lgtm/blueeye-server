@@ -850,3 +850,16 @@
 .sa-split-row:first-child { border-top: none; }
 .sa-split-head { display: flex; align-items: center; gap: 4px; font-size: 0.78rem; }
 .sa-split-svg { display: block; width: 100%; height: 42px; }
+
+/* Column widths for the SMTP conversation. Without them the browser hands SENT
+   a narrow share (ANSWERED carries the long text) and `word-break: break-all`
+   then chops mid-token — `tls://smtp.migadu.c` / `om:465`, `MAIL FROM:<lars@gn`
+   / `f.dk>`. A command split across a line break is not a command anyone can
+   copy, read back, or match against a log. */
+.sa-transcript { table-layout: fixed; width: 100%; }
+.sa-transcript th:nth-child(1), .sa-transcript td:nth-child(1) { width: 92px; white-space: nowrap; }
+.sa-transcript th:nth-child(2), .sa-transcript td:nth-child(2) { width: 30%; }
+.sa-transcript th:nth-child(4), .sa-transcript td:nth-child(4) { width: 72px; white-space: nowrap; text-align: right; font-variant-numeric: tabular-nums; }
+/* Break between words, and only inside a token when one genuinely cannot fit —
+   which keeps a long address on one line and lets a 200-character header wrap. */
+.sa-transcript code { word-break: normal; overflow-wrap: anywhere; }

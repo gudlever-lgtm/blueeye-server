@@ -199,6 +199,39 @@ test('a non-Linux agent shows the MSS as unavailable, not as zero', async (t) =>
   assert.equal(doc.querySelectorAll('.mtu-verdict.warn').length, 0, 'no clamp warning without a reading');
 });
 
+// ------------------------------------------------------------- not measured
+test('a run that measured nothing says so, instead of announcing a clean path', async (t) => {
+  // The bug this pins: with no path MTU the panel fell through to the good
+  // branch and rendered "No MTU restriction found ... ? bytes" — the most
+  // confident possible way to say nothing was learned.
+  const row = mtuRow({
+    detail: 'ping failed: socket: Operation not permitted',
+    hops: [],
+    mtu: {
+      ipVersion: 4, pathMtu: null, blackholeDetected: false, icmpFragNeededSeen: false,
+      mtuDropAtHop: null, mssSupported: false, mssObserved: null, recommendedMss: null, durationMs: 40,
+    },
+  });
+  const { doc } = await openMtuDetail(t, row);
+  const panel = doc.querySelector('.mtu-verdict');
+  assert.ok(panel.classList.contains('unknown'), `verdict is "${panel.className}"`);
+  assert.match(panel.textContent, /not measured/i);
+  assert.match(panel.textContent, /Operation not permitted/, 'the reason the agent gave is shown');
+  assert.doesNotMatch(panel.textContent, /No MTU restriction found/i);
+  assert.equal(doc.querySelectorAll('.mtu-verdict.good').length, 0);
+});
+
+test('with no reason from the agent it still refuses to claim a clean path', async (t) => {
+  const row = mtuRow({
+    detail: null,
+    hops: [],
+    mtu: { ...mtuRow().mtu, pathMtu: null, blackholeDetected: false, icmpFragNeededSeen: false, mtuDropAtHop: null, recommendedMss: null },
+  });
+  const { doc } = await openMtuDetail(t, row);
+  assert.ok(doc.querySelector('.mtu-verdict').classList.contains('unknown'));
+  assert.match(doc.querySelector('.mtu-verdict').textContent, /No size got an answer/i);
+});
+
 // ---------------------------------------------------------------- the form
 test('Path MTU is offered in the probe form and posts the size window', async (t) => {
   const ctx = await boot(t, { 'GET /api/probes/latest': { agentId: 9, results: [] }, 'POST /agents/9/probe': { delivered: 1 } });

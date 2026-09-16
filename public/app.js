@@ -5514,9 +5514,18 @@ function mtuDetail(r) {
   const where = dropHop && dropHop.ip ? `hop ${dropAt} (${dropHop.ip})` : (dropAt != null ? `hop ${dropAt}` : '—');
   const mss = m.recommendedMss ?? null;
 
-  // The headline. Three mutually exclusive states, in the order of how much
-  // they should worry somebody.
-  const verdict = m.blackholeDetected
+  // The headline. Four mutually exclusive states, in the order of how much they
+  // should worry somebody.
+  //
+  // "Not measured" comes first because it is not a verdict at all. Without it a
+  // run that never got an answer fell through to the good branch and announced
+  // "No MTU restriction found" over a path nothing had been learned about —
+  // the most confident possible way to say nothing.
+  const verdict = pathMtu == null
+    ? el('div', { class: 'mtu-verdict unknown' },
+      el('h4', {}, t('probe.mtu.unmeasuredTitle')),
+      el('p', {}, r.detail ? t('probe.mtu.unmeasuredReason', { reason: esc(r.detail) }) : t('probe.mtu.unmeasuredBody')))
+    : m.blackholeDetected
     ? el('div', { class: 'mtu-verdict bad' },
       el('h4', {}, t('probe.mtu.blackholeTitle')),
       el('p', {}, t('probe.mtu.blackholeBody', { mtu: pathMtu ?? '?', where })),

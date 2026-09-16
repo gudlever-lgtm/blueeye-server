@@ -148,6 +148,20 @@ test('GET /api/probes/latest returns the latest per target (200)', async () => {
   assert.equal(res.body.results[0].target, 'x:443');
 });
 
+// /latest is what the Probes screen's results table (and every per-row detail
+// opened from it) is built from, so its error codes are the screen's error codes.
+test('GET /api/probes/latest requires agentId (400) and a real agent (404)', async () => {
+  assert.equal((await request(withAgent()).get('/api/probes/latest').set('Authorization', authHeader('viewer'))).status, 400);
+  assert.equal((await request(withAgent()).get('/api/probes/latest?agentId=abc').set('Authorization', authHeader('viewer'))).status, 400);
+  assert.equal((await request(makeApp()).get('/api/probes/latest?agentId=9').set('Authorization', authHeader('viewer'))).status, 404);
+});
+
+test('GET /api/probes/latest surfaces a repo failure as 500', async () => {
+  const probeResultsRepo = makeProbeResultsRepo({ latestByAgent: throwingAsync('db down') });
+  const res = await request(withAgent({ probeResultsRepo })).get('/api/probes/latest?agentId=9').set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 500);
+});
+
 test('GET /api/probes surfaces a repo failure as 500', async () => {
   const probeResultsRepo = makeProbeResultsRepo({ findByAgent: throwingAsync('db down') });
   const res = await request(withAgent({ probeResultsRepo })).get('/api/probes?agentId=9').set('Authorization', authHeader('viewer'));

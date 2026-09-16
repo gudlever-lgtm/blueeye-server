@@ -4929,7 +4929,11 @@ function probeLatestTable(rows, loadDetail, onInstall = null, onOpenChange = nul
       detailCell.replaceChildren(el('div', { class: 'pv-skel', style: 'height:120px' }));
       try {
         detailCell.replaceChildren(await loadDetail(r));
-        loaded = true;
+        // probeDetail renders a failed history fetch as an error NODE rather than
+        // throwing, so "it resolved" is not the same as "it loaded". A cached
+        // error is a dead end — the row stays unloaded and tries again on the
+        // next open, which is what a person does after a blip anyway.
+        loaded = !detailCell.querySelector('.error');
       } catch (e) {
         detailCell.replaceChildren(el('div', { class: 'error' }, errText(e)));
       } finally { loading = false; }

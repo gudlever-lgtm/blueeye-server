@@ -47,6 +47,10 @@ const FACT_SCHEMA = [
   // The interface the agent sits behind.
   'iface.err_per_sec', 'iface.drop_per_sec', 'iface.util_pct', 'iface.speed_mbps',
   'iface.link_down', 'iface.busy_port_count',
+  // Late collisions — the counter that NAMES a duplex mismatch rather than
+  // merely being consistent with one. SNMP only (EtherLike-MIB), so it is
+  // absent far more often than it is zero, and the two must stay apart.
+  'iface.late_coll_per_sec',
   // The same measurements taken from the FAR end, for the faults that only show
   // up when you ask the question in both directions.
   'reverse.ping.ok', 'reverse.ping.loss_pct', 'reverse.ping.rtt_ms',
@@ -222,6 +226,11 @@ function ifaceFacts(interfaces) {
     util_pct: num(worst.utilPct),
     speed_mbps: num(worst.speedMbps),
     link_down: typeof worst.linkDown === 'boolean' ? worst.linkDown : undefined,
+    // Only present when something could actually count them. A /proc sample
+    // never can and many switches do not implement the MIB; leaving it out means
+    // a rule over it reads `unknown`, which is the honest answer, instead of an
+    // all-clear that would rule the fault out on no evidence at all.
+    late_coll_per_sec: num(worst.lateCollPerSec),
     // How many ports are busy AT ONCE. One busy port is a file transfer; several
     // unrelated ones at the same moment is what a broadcast storm looks like from
     // the outside, and no single interface can show you that.

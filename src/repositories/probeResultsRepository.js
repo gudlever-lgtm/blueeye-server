@@ -3,13 +3,15 @@
 // Probe types that measure the PATH rather than the target's availability.
 // `path_mtu` is a diagnostic somebody runs on purpose, in the middle of an
 // outage, against whatever they are chasing — often a host that is already
-// down. Counting it as a reachability sample would let an investigation move
-// the SLA number it is investigating, so uptime and fleet health leave it out.
-// It is still stored, still read, still charted; it just does not vote on
-// "is this agent healthy".
+// down. The probe itself reports ok:true even when it finds a blackhole (the
+// finding is about the path, not the agent), so nothing else stops it counting
+// as a reachability sample. Counting it would let an investigation move the SLA
+// number it is investigating, so uptime and fleet health leave it out. It is
+// still stored, still read, still charted; it just does not vote on "is this
+// agent healthy".
 const DIAGNOSTIC_TYPES = ['path_mtu'];
 
-const COLUMNS = ['agent_id', 'ts', 'type', 'target', 'ok', 'rtt_ms', 'min_ms', 'max_ms', 'jitter_ms', 'loss_pct', 'status', 'cert_expiry_days', 'bytes', 'content_type', 'elements', 'hops', 'sizes', 'mtu', 'detail'];
+const COLUMNS = ['agent_id', 'ts', 'type', 'target', 'ok', 'rtt_ms', 'min_ms', 'max_ms', 'jitter_ms', 'loss_pct', 'status', 'cert_expiry_days', 'bytes', 'content_type', 'elements', 'hops', 'mtu', 'sizes', 'detail'];
 
 function toRow(agentId, r) {
   const ts = r.ts instanceof Date ? r.ts : (r.ts ? new Date(r.ts) : new Date());
@@ -30,13 +32,18 @@ function toRow(agentId, r) {
     r.contentType != null ? String(r.contentType).slice(0, 120) : null,
     Array.isArray(r.elements) ? JSON.stringify(r.elements) : null,
     Array.isArray(r.hops) ? JSON.stringify(r.hops) : null,
-    Array.isArray(r.sizes) ? JSON.stringify(r.sizes) : null,
+    // The path-MTU verdict, written whole (migration 096). Only `path_mtu` rows
+    // carry one; every other probe type stores null here.
     r.mtu && typeof r.mtu === 'object' ? JSON.stringify(r.mtu) : null,
+    Array.isArray(r.sizes) ? JSON.stringify(r.sizes) : null,
     r.detail != null ? String(r.detail).slice(0, 255) : null,
   ];
 }
 
-function parseHops(v) {
+// mysql2 hands back JSON columns already parsed on some driver versions and as a
+// string on others, so both are accepted. A column that will not parse reads as
+// absent rather than taking the whole query down.
+function parseJson(v) {
   if (v == null) return null;
   if (typeof v === 'string') { try { return JSON.parse(v); } catch { return null; } }
   return v;
@@ -60,14 +67,14 @@ function fromRow(row) {
     certExpiryDays: row.cert_expiry_days ?? null,
     bytes: row.bytes ?? null,
     contentType: row.content_type ?? null,
-    elements: parseHops(row.elements),
-    hops: parseHops(row.hops),
-    // The ping size sweep and everything path_mtu found (migration 096). NULL on
-    // every row an agent older than 0.25 wrote, which is the normal case while a
-    // fleet is still updating — a reader must treat absent as "not measured",
-    // never as "no problem".
-    sizes: parseHops(row.sizes),
-    mtu: parseHops(row.mtu),
+    elements: parseJson(row.elements),
+    hops: parseJson(row.hops),
+    mtu: parseJson(row.mtu),
+    // The ping don't-fragment size sweep (migration 097). NULL on every row an
+    // agent older than 0.25 wrote, which is normal while a fleet is still
+    // updating — a reader must treat absent as "not measured", never as
+    // "no problem".
+    sizes: parseJson(row.sizes),
     detail: row.detail,
   };
 }
@@ -213,4 +220,4 @@ function createProbeResultsRepository(db) {
   return { createMany, findByAgent, metricRows, latestByAgent, fleetHealth, availability };
 }
 
-module.exports = { createProbeResultsRepository, DIAGNOSTIC_TYPES, toRow, fromRow };
+module.exports = { createProbeResultsRepository, DIAGNOSTIC_TYPES, COLUMNS, toRow, fromRow };

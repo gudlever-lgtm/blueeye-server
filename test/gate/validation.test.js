@@ -151,6 +151,12 @@ test('diagnose catalogue: every shipped playbook parses, and a bad one stops the
     ['no rule that can confirm it', (d) => { d.rules = d.rules.filter((r) => r.effect !== 'confirm'); }],
     ['two rules with the same id', (d) => { d.rules[1].id = d.rules[0].id; }],
     ['an unexplained test', (d) => { delete d.tests[0].why; }],
+    // The one that actually bit: a probe renamed its parameter and the playbook
+    // kept the old spelling. An unrecognised key is DROPPED at dispatch, not
+    // rejected, so the plan would have run a narrower test than it promised and
+    // nothing would have said so.
+    ['a param the probe does not take', (d) => { d.tests[1].params = { perHop: true }; }],
+    ['a param outside the probe\'s bounds', (d) => { d.tests[1].params = { max_size: 999999 }; }],
   ];
   for (const [what, mutate] of broken) {
     const doc = JSON.parse(JSON.stringify(base));

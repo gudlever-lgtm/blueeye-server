@@ -207,8 +207,13 @@ test('running dispatches each test to its agent as an ordinary run-probe command
   assert.deepEqual(ping.command.probe.sizes, [64, 1472]);
   assert.equal(ping.command.probe.df, true);
   const pmtu = hub.sent.find((s) => s.command.probe.type === 'path_mtu');
-  assert.equal(pmtu.command.probe.perHop, true);
   assert.equal(pmtu.command.probe.host, 'mail.example.com');
+  // The probe's OWN parameter names. A playbook asking for `perHop` when the
+  // probe takes `per_hop` would have it dropped at dispatch and measure
+  // something narrower than the plan promised; the catalogue now refuses that
+  // at boot, and this is the other end of the same guarantee.
+  assert.equal(pmtu.command.probe.per_hop, true);
+  assert.equal(pmtu.command.probe.probes_per_size, 3, 'several probes per size, so ordinary loss is not read as an MTU ceiling');
 });
 
 test('an agent that is not connected is a recorded failure, never a stuck test', async () => {
@@ -247,7 +252,8 @@ test('a full run confirms the cause and hands back the fix with the numbers in i
     },
     {
       id: 12, agent_id: 1, type: 'path_mtu', target: 'mail.example.com', ts: new Date(now.getTime() + 2000), ok: 1,
-      mtu: JSON.stringify({ path_mtu: 1400, blackhole_detected: true, icmp_frag_needed_seen: false, recommended_mss: 1360, mtu_drop_at_hop: 3, ip_version: 4, mss_supported: true, mss_observed: 1460, hops: [] }),
+      mtu: JSON.stringify({ pathMtu: 1400, blackholeDetected: true, icmpFragNeededSeen: false, recommendedMss: 1360, mtuDropAtHop: 3, mssSupported: true, mssObserved: 1460 }),
+      hops: JSON.stringify([{ hop: 3, ip: '10.0.0.3', maxMtu: 1400, status: 'blackhole' }]),
     },
   ];
   const repo = makeDiagnoseSessionsRepo({ probeRows });

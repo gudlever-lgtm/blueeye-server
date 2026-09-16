@@ -32,7 +32,7 @@ const FACT_SCHEMA = [
   // field whose two names can drift apart silently.
   'path_mtu.ok', 'path_mtu.path_mtu', 'path_mtu.blackhole_detected',
   'path_mtu.icmp_frag_needed_seen', 'path_mtu.recommended_mss', 'path_mtu.mtu_drop_at_hop',
-  'path_mtu.ip_version', 'path_mtu.mss_supported', 'path_mtu.mss_observed',
+  'path_mtu.mss_observed', 'path_mtu.blackhole_hop_count',
   // Derived, not reported: is the kernel still negotiating an MSS the path
   // cannot carry? That is the direct evidence that clamping is missing, and it
   // is the difference between "the path is narrow" and "nothing told the sender".
@@ -67,8 +67,7 @@ function isKnownFactPath(path) {
 const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
 
 // What a TCP segment loses to headers before any payload: IP + TCP, 20 + 20 for
-// IPv4 and 40 + 20 for IPv6. Used to turn a measured path MTU into the MSS the
-// path can actually carry.
+// IPv4. Used to turn a measured path MTU into the MSS the path can carry.
 const MSS_HEADERS = { 4: 40, 6: 60 };
 // Drops the keys that were never measured, so a rule sees "missing" rather than
 // a default. Object.fromEntries on the surviving pairs keeps the call sites flat.
@@ -106,30 +105,48 @@ function pingFacts(r) {
   return out;
 }
 
+// The path_mtu verdict. The server stores it camelCase in `probe_results.mtu`
+// (migration 096 translates the agent's snake_case at that one boundary); the
+// per-hop numbers ride in the ordinary `hops` column alongside the traceroute
+// ones, with the latency fields null and `maxMtu`/`status` filled in.
+//
+// Hop statuses, and why the distinction is the whole point:
+//   ok           carries what it was handed
+//   reduced      narrows the path AND says so (ICMP frag-needed) — normal
+//   blackhole    narrows it in silence — the one that breaks applications
+//   no_response  answers no ICMP at all. NOT a fault, and never read as one
+//   skipped      past the probe's time budget — reported, never dropped
 function pathMtuFacts(r) {
   const m = r.mtu && typeof r.mtu === 'object' ? r.mtu : {};
-  const pathMtu = num(m.path_mtu);
-  const mssObserved = num(m.mss_observed);
+  const pathMtu = num(m.pathMtu);
+  const mssObserved = num(m.mssObserved);
+  const hops = Array.isArray(r.hops) ? r.hops : [];
+  const blackholeHop = hops.find((h) => h && h.status === 'blackhole');
   return defined({
     ok: typeof r.ok === 'boolean' ? r.ok : undefined,
     path_mtu: pathMtu,
-    // Only a run that got far enough to have an opinion may state one. The flag
-    // is false by default in storage, and a probe that measured no MTU has not
-    // ruled a blackhole out — it has not looked.
-    blackhole_detected: pathMtu != null ? m.blackhole_detected === true : undefined,
-    icmp_frag_needed_seen: pathMtu != null ? m.icmp_frag_needed_seen === true : undefined,
-    recommended_mss: num(m.recommended_mss),
-    mtu_drop_at_hop: num(m.mtu_drop_at_hop),
-    ip_version: num(m.ip_version),
-    mss_supported: typeof m.mss_supported === 'boolean' ? m.mss_supported : undefined,
+    // Only a run that measured an MTU may state a verdict. `ok` cannot be the
+    // gate: the probe reports ok:true even when it finds a blackhole, because
+    // the finding is about the path and not the agent. A run with no MTU did
+    // not look, and reading its `false` default as an all-clear is how a real
+    // fault gets marked "ruled out".
+    blackhole_detected: pathMtu != null ? m.blackholeDetected === true : undefined,
+    // Did anything volunteer its MTU? A path that is small and SAYS so is a
+    // different finding from one that swallows the packets.
+    icmp_frag_needed_seen: pathMtu != null ? m.icmpFragNeededSeen === true : undefined,
+    recommended_mss: num(m.recommendedMss),
+    mtu_drop_at_hop: num(m.mtuDropAtHop) ?? (blackholeHop ? num(blackholeHop.hop) : undefined),
     mss_observed: mssObserved,
     // The kernel is still offering a segment the path will not carry. Only
-    // answerable when BOTH numbers exist: `mss_supported:false` means the agent
-    // could not look, which is not the same as nothing to report, and a rule
-    // must not read the absence as an all-clear.
+    // answerable when BOTH numbers exist: `mssSupported:false` means the agent
+    // could not look (it is a Linux-only read), which is not the same as
+    // nothing to report, so a rule must not take the absence for an all-clear.
     mss_exceeds_path: (mssObserved != null && pathMtu != null)
-      ? mssObserved > pathMtu - MSS_HEADERS[m.ip_version === 6 ? 6 : 4]
+      ? mssObserved > pathMtu - MSS_HEADERS[4]
       : undefined,
+    // How many hops narrowed the path in silence. Zero is a real answer here —
+    // it means the hops were measured and none of them was a blackhole.
+    blackhole_hop_count: hops.length ? hops.filter((h) => h && h.status === 'blackhole').length : undefined,
   });
 }
 

@@ -41,7 +41,8 @@ function mtuProbeRows(atMs) {
     },
     {
       id: 12, agent_id: 1, type: 'path_mtu', target: 'mail.example.com', ts: new Date(atMs + 2000), ok: 1,
-      mtu: JSON.stringify({ path_mtu: 1400, blackhole_detected: true, icmp_frag_needed_seen: false, recommended_mss: 1360, mtu_drop_at_hop: 3, ip_version: 4, mss_supported: true, mss_observed: 1460, hops: [] }),
+      mtu: JSON.stringify({ pathMtu: 1400, blackholeDetected: true, icmpFragNeededSeen: false, recommendedMss: 1360, mtuDropAtHop: 3, mssSupported: true, mssObserved: 1460 }),
+      hops: JSON.stringify([{ hop: 3, ip: '10.0.0.3', maxMtu: 1400, status: 'blackhole' }]),
     },
   ];
 }

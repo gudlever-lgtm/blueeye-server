@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.151.0 — Diagnose: from a sentence to a confirmed cause
+## 0.152.0 — Diagnose: from a sentence to a confirmed cause
 
 A technician writes what is wrong in their own words:
 
@@ -112,12 +112,21 @@ capped at 1000 characters before it can leave the building.
 
 ### Migrations
 
-- **096** — `probe_results.sizes` / `.mtu`, nullable, so an agent that has not
-  updated simply leaves them NULL.
-- **097** — `diagnose_sessions` / `diagnose_session_tests`. The per-test rows
+- **097** — `probe_results.sizes`, the ping don't-fragment size sweep. (096
+  already gave `path_mtu` its own column.) Nullable, so an agent that has not
+  updated simply leaves it NULL.
+- **098** — `diagnose_sessions` / `diagnose_session_tests`. The per-test rows
   carry the correlation this module needed and could not otherwise have:
   `probe_results` has no run id, so a session finds its own results by
   `(agent, type, target, ts >= dispatched_at)`.
+
+### A playbook's test parameters are checked against the real probe
+
+`tests[].params` are run through `validateProbeSpec` at load and every key must
+survive. An unrecognised key is **dropped** at dispatch rather than rejected, so
+a playbook asking for `perHop` when the probe takes `per_hop` would quietly run
+a narrower test than the plan promised, and nothing anywhere would say so. That
+happened once while this was being built. It now fails the boot.
 
 
 ## 0.144.3 — Logs, split into System Logs and User Logs

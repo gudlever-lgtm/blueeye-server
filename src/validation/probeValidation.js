@@ -1,12 +1,22 @@
 'use strict';
 
 const PROBE_TYPES = ['ping', 'tcp', 'dns', 'traceroute', 'tcptraceroute', 'http', 'curl', 'pageload', 'transaction', 'path_mtu'];
-// Payload sizes a ping sweep may carry, and how many. The agent enforces the
-// same bounds independently (blueeye-agent src/probes/ping.js); rejecting them
-// here as well keeps a bad spec out of the database and gives the operator a
-// real error instead of a probe that silently measures nothing.
+// How many payload sizes one ping sweep may carry, and how large each may be.
+// Each size is its own `ping` invocation on the agent, so the first bounds the
+// RUN, not just the packet.
 const MAX_PING_SIZES = 6;
 const MAX_PAYLOAD_BYTES = 65500;
+// What a path-MTU probe may report per hop. An unrecognised status is dropped
+// rather than stored: the dashboard colours and the root-cause rules both switch
+// on this value, and a status neither of them knows would render as nothing at
+// all while looking like data.
+const MTU_HOP_STATUSES = ['ok', 'reduced', 'blackhole', 'no_response', 'skipped'];
+// Jumbo frames. Above this there is no Ethernet to carry it, so a larger
+// `max_size` is a typo, not a request.
+const MAX_PACKET_SIZE = 9216;
+// Below these an IP stack is not required to work, so a smaller floor tests
+// nothing. RFC 791 / RFC 8200 minimums.
+const MIN_PACKET_SIZE = { 4: 576, 6: 1280 };
 const HTTP_METHODS = ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'];
 const HEADER_EXPECT_RE = /^[A-Za-z0-9!#$%&'*+.^_`|~-]+(\s*:\s*.{1,200})?$/;
 // A REQUEST header on a transaction step must be a real `Name: value` field.
@@ -32,6 +42,40 @@ function intOrNull(v) {
   if (v === null || v === undefined) return null;
   const n = Number(v);
   return Number.isInteger(n) ? n : null;
+}
+
+// A packet size, rejected outright when it is outside anything an IP network
+// could carry. Storing a nonsense size would put a nonsense recommended MSS in
+// front of an operator, which is worse than storing nothing.
+function sizeOrNull(v) {
+  const n = intOrNull(v);
+  return n != null && n > 0 && n <= MAX_PACKET_SIZE ? n : null;
+}
+
+function mtuStatusOf(v) {
+  const s = v == null ? '' : String(v).toLowerCase();
+  return MTU_HOP_STATUSES.includes(s) ? s : null;
+}
+
+// The path-MTU verdict, field by field from a typed source. Nothing is spread:
+// a key the agent invents must not reach the database because a future version
+// of the agent added it.
+function mtuBlock(r) {
+  const pathMtu = sizeOrNull(r.path_mtu ?? r.pathMtu);
+  const ipVersion = Number(r.ip_version ?? r.ipVersion) === 6 ? 6 : 4;
+  return {
+    ipVersion,
+    pathMtu,
+    blackholeDetected: (r.blackhole_detected ?? r.blackholeDetected) === true,
+    icmpFragNeededSeen: (r.icmp_frag_needed_seen ?? r.icmpFragNeededSeen) === true,
+    mtuDropAtHop: intOrNull(r.mtu_drop_at_hop ?? r.mtuDropAtHop),
+    mssSupported: (r.mss_supported ?? r.mssSupported) === true,
+    mssObserved: sizeOrNull(r.mss_observed ?? r.mssObserved),
+    // Recomputed, never taken on trust: it is the number an operator will type
+    // into a router, and it has to agree with the path MTU stored beside it.
+    recommendedMss: pathMtu != null ? pathMtu - (ipVersion === 6 ? 60 : 40) : null,
+    durationMs: intOrNull(r.duration_ms ?? r.durationMs),
+  };
 }
 
 // Normalizes an http-probe target to a canonical http(s) URL string (defaulting
@@ -86,29 +130,6 @@ function validateProbeResults(body) {
         ms: numOrNull(e && e.ms),
       }));
     }
-    // The ping size sweep: one entry per payload size the agent sent with
-    // don't-fragment set. The row's own rtt/loss columns describe the SMALLEST
-    // size, so this is the only place the size dependence lives.
-    let sizes = null;
-    if (r.sizes != null) {
-      if (!Array.isArray(r.sizes) || r.sizes.length > MAX_PING_SIZES) return { errors: { [`results[${i}].sizes`]: `sizes must be an array (<=${MAX_PING_SIZES})` } };
-      sizes = r.sizes.map((s0) => ({
-        bytes: intOrNull(s0 && s0.bytes),
-        sent: intOrNull(s0 && s0.sent),
-        recv: intOrNull(s0 && s0.recv),
-        lossPct: numOrNull(s0 && s0.lossPct),
-        rttMs: numOrNull(s0 && s0.rttMs),
-        minMs: numOrNull(s0 && s0.minMs),
-        maxMs: numOrNull(s0 && s0.maxMs),
-        jitterMs: numOrNull(s0 && s0.jitterMs),
-        mtuHint: intOrNull(s0 && s0.mtuHint),
-        // Did the probe MEASURE this size, or did it never leave the host? A
-        // payload the local interface refuses is not 100% loss on the path, and
-        // reading it as such would point the diagnosis at the wrong end.
-        measured: s0 ? s0.measured !== false : false,
-        error: s0 && s0.error != null ? String(s0.error).slice(0, 200) : null,
-      }));
-    }
     let hops = null;
     if (r.hops != null) {
       if (!Array.isArray(r.hops) || r.hops.length > 64) return { errors: { [`results[${i}].hops`]: 'hops must be an array (<=64)' } };
@@ -125,66 +146,34 @@ function validateProbeResults(body) {
         lossPct: numOrNull(h && h.lossPct),
         sent: intOrNull(h && h.sent),
         recv: intOrNull(h && h.recv),
+        // path_mtu adds the largest packet that reached this hop and what that
+        // means. Null on a traceroute row, exactly as the latency fields above
+        // are null on a path_mtu one — one hop shape, two kinds of measurement.
+        maxMtu: sizeOrNull(h && (h.max_mtu ?? h.maxMtu)),
+        status: mtuStatusOf(h && h.status),
       }));
     }
-    // path_mtu reports FLAT and in snake_case (blueeye-agent src/probes/pathmtu.js).
-    // It is stored as one object because these fields only ever belong to this
-    // one probe type, and a column each on a table every probe writes to would
-    // be columns nobody else can use.
-    //
-    // The agent's own vocabulary is kept rather than re-cased on the way in.
-    // Renaming a field in transit means a reader holding the agent's output and
-    // a reader holding this row are looking at two different names for the same
-    // measurement, and the one place that has to translate becomes the one place
-    // a typo is silent.
-    let mtu = null;
-    if (type === 'path_mtu') {
-      // Per-hop MTU, and why each hop reads the way it does. A DIFFERENT
-      // measurement from the traceroute latency the `hops` column holds, so it
-      // lives in here rather than there.
-      //
-      //   ok           carries what it was handed
-      //   reduced      narrows the path AND says so (ICMP frag-needed) — normal
-      //   blackhole    narrows it in silence — the one that breaks applications
-      //   no_response  answers no ICMP at all. NOT a fault, and never counted as
-      //                one: a router that ignores echo looks identical to one
-      //                dropping oversized packets, and naming the wrong hop sends
-      //                somebody to the wrong firewall
-      //   skipped      past the probe's time budget — reported, never dropped
-      const HOP_STATUS = ['ok', 'reduced', 'blackhole', 'no_response', 'skipped'];
-      const mtuHops = Array.isArray(r.hops)
-        ? r.hops.slice(0, 64).map((h0) => ({
-          hop: intOrNull(h0 && h0.hop),
-          ip: h0 && h0.ip ? String(h0.ip).slice(0, 45) : null,
-          max_mtu: intOrNull(h0 && h0.max_mtu),
-          // An unrecognised status is not silently coerced into a good one: a
-          // newer agent inventing a state must not have it read as `ok`.
-          status: HOP_STATUS.includes(h0 && h0.status) ? h0.status : null,
-        }))
-        : [];
-      mtu = {
-        path_mtu: intOrNull(r.path_mtu),
-        // Only a run that reached a verdict may state one.
-        blackhole_detected: r.blackhole_detected === true,
-        // Whether any router volunteered its MTU. A path that is small and SAYS
-        // so is a different finding from one that swallows the packets.
-        icmp_frag_needed_seen: r.icmp_frag_needed_seen === true,
-        mtu_drop_at_hop: intOrNull(r.mtu_drop_at_hop),
-        recommended_mss: intOrNull(r.recommended_mss),
-        ip_version: r.ip_version === 6 || r.ip_version === '6' ? 6 : 4,
-        // The negotiated MSS the kernel actually used, where the agent could read
-        // it (Linux `ss -tin`). An observed MSS above the measured path is the
-        // direct evidence that clamping is missing. `supported:false` means the
-        // agent could not look, which is not the same as "nothing to report".
-        mss_supported: r.mss_supported === true,
-        mss_observed: intOrNull(r.mss_observed),
-        duration_ms: intOrNull(r.duration_ms),
-        hops: mtuHops,
-      };
-      // The traceroute `hops` column is for traceroute. A path_mtu row's hops
-      // are already inside `mtu`; leaving them in both would invite a reader to
-      // take per-hop MTU for per-hop latency.
-      hops = null;
+    // The ping size sweep. The row's own rtt/loss columns describe the SMALLEST
+    // size, so this is the only place the size dependence lives.
+    let sizes = null;
+    if (r.sizes != null) {
+      if (!Array.isArray(r.sizes) || r.sizes.length > MAX_PING_SIZES) return { errors: { [`results[${i}].sizes`]: `sizes must be an array (<=${MAX_PING_SIZES})` } };
+      sizes = r.sizes.map((s0) => ({
+        bytes: intOrNull(s0 && s0.bytes),
+        sent: intOrNull(s0 && s0.sent),
+        recv: intOrNull(s0 && s0.recv),
+        lossPct: numOrNull(s0 && s0.lossPct),
+        rttMs: numOrNull(s0 && s0.rttMs),
+        minMs: numOrNull(s0 && s0.minMs),
+        maxMs: numOrNull(s0 && s0.maxMs),
+        jitterMs: numOrNull(s0 && s0.jitterMs),
+        mtuHint: intOrNull(s0 && s0.mtuHint),
+        // Did the probe MEASURE this size, or did it never leave the host? A
+        // payload the local interface refused is not 100% loss on the path, and
+        // reading it as such would point the diagnosis at the wrong end.
+        measured: s0 ? s0.measured !== false : false,
+        error: s0 && s0.error != null ? String(s0.error).slice(0, 200) : null,
+      }));
     }
     out.push({
       ts, type, target, ok: r.ok === true,
@@ -195,9 +184,15 @@ function validateProbeResults(body) {
       // design: the agent reports only the received byte count + content-type,
       // never the response body itself.
       bytes: intOrNull(r.bytes), contentType: r.contentType != null ? String(r.contentType).slice(0, 120) : null,
-      elements, sizes, mtu,
-      // A ping sweep also says whether don't-fragment was set; without it the
-      // sizes mean nothing, because the path would simply have fragmented them.
+      elements,
+      // The path-MTU verdict. The agent reports it in the wire shape documented
+      // for the probe (snake_case); this is the one place it is translated to
+      // the camelCase the repository, the root-cause rules and the dashboard
+      // use, the same way rtt_ms became rttMs above. Only path_mtu rows carry it.
+      mtu: type === 'path_mtu' ? mtuBlock(r) : null,
+      sizes,
+      // A sweep also says whether don't-fragment was set; without it the sizes
+      // mean nothing, because the path would simply have fragmented them.
       df: r.df === true,
       detail: r.detail != null ? String(r.detail).slice(0, 255) : (r.error != null ? String(r.error).slice(0, 255) : null),
       // The agent sets `error` only when it could not RUN the probe at all
@@ -317,6 +312,54 @@ function validateProbeSpec(body) {
     spec.steps = steps;
     spec.host = steps[0].url.slice(0, 255); // target/display column
     if (b.name) spec.name = String(b.name).slice(0, 120);
+  } else if (type === 'path_mtu') {
+    // Sizes are IP PACKET sizes, which is what an MTU is — the agent subtracts
+    // the header overhead before handing a payload length to `ping`. Validating
+    // the same bounds the agent enforces means an operator gets a 400 with a
+    // reason instead of a probe that silently clamps and reports a number they
+    // did not ask for.
+    const host = String(b.host || b.target || '').trim();
+    if (!HOST_RE.test(host)) return { errors: { host: 'host/target is required and must be a valid hostname or IP' } };
+    spec.host = host;
+    const ipVersion = b.ip_version === undefined || b.ip_version === null || b.ip_version === ''
+      ? 4 : Number(b.ip_version);
+    if (ipVersion !== 4 && ipVersion !== 6) return { errors: { ip_version: 'ip_version must be 4 or 6' } };
+    spec.ip_version = ipVersion;
+
+    const floor = MIN_PACKET_SIZE[ipVersion];
+    const maxSize = b.max_size === undefined || b.max_size === null || b.max_size === '' ? 1500 : Number(b.max_size);
+    if (!Number.isInteger(maxSize) || maxSize < floor || maxSize > MAX_PACKET_SIZE) {
+      return { errors: { max_size: `max_size must be an integer between ${floor} and ${MAX_PACKET_SIZE}` } };
+    }
+    const minSize = b.min_size === undefined || b.min_size === null || b.min_size === '' ? floor : Number(b.min_size);
+    if (!Number.isInteger(minSize) || minSize < floor || minSize > MAX_PACKET_SIZE) {
+      return { errors: { min_size: `min_size must be an integer between ${floor} and ${MAX_PACKET_SIZE}` } };
+    }
+    // Checked as a PAIR, after both are individually sound. Silently swapping
+    // them would run a search over an inverted range and report its floor as
+    // the path MTU.
+    if (minSize > maxSize) return { errors: { min_size: 'min_size must not be greater than max_size' } };
+    spec.min_size = minSize;
+    spec.max_size = maxSize;
+
+    if (b.per_hop !== undefined) spec.per_hop = b.per_hop === true || b.per_hop === 'true';
+    if (b.probes_per_size !== undefined) {
+      const n = Number(b.probes_per_size);
+      if (!Number.isInteger(n) || n < 1 || n > 10) return { errors: { probes_per_size: 'probes_per_size must be an integer between 1 and 10' } };
+      spec.probes_per_size = n;
+    }
+    if (b.timeout_ms !== undefined) {
+      const n = Number(b.timeout_ms);
+      if (!Number.isInteger(n) || n < 100 || n > 10000) return { errors: { timeout_ms: 'timeout_ms must be an integer between 100 and 10000' } };
+      spec.timeout_ms = n;
+    }
+    // Optional MSS check. null/'' means "don't", which is the default — it opens
+    // a real TCP connection to the target, and that is the operator's call.
+    if (b.tcp_port !== undefined && b.tcp_port !== null && b.tcp_port !== '') {
+      const port = Number(b.tcp_port);
+      if (!Number.isInteger(port) || port < 1 || port > 65535) return { errors: { tcp_port: 'tcp_port must be an integer between 1 and 65535' } };
+      spec.tcp_port = port;
+    }
   } else {
     const host = String(b.host || b.target || '').trim();
     if (!HOST_RE.test(host)) return { errors: { host: 'host/target is required and must be a valid hostname or IP' } };
@@ -324,8 +367,10 @@ function validateProbeSpec(body) {
     if (type === 'ping' && b.sizes !== undefined) {
       // A size sweep: the same target asked at several payload sizes with
       // don't-fragment set. This is what separates "the path is lossy" from
-      // "the path has an MTU nobody told the sender about" — 64 bytes through
-      // and 1472 bytes gone is not loss, it is an MTU.
+      // "the path has an MTU nobody told the sender about". The agent enforces
+      // the same bounds independently (blueeye-agent src/probes/ping.js);
+      // rejecting them here too keeps a bad spec out of the database and gives
+      // the operator a real error instead of a probe that measures nothing.
       if (!Array.isArray(b.sizes) || b.sizes.length === 0) return { errors: { sizes: 'sizes must be a non-empty array of payload byte counts' } };
       if (b.sizes.length > MAX_PING_SIZES) return { errors: { sizes: `too many sizes (max ${MAX_PING_SIZES})` } };
       const sizes = [];
@@ -337,31 +382,6 @@ function validateProbeSpec(body) {
       spec.sizes = sizes.sort((x, y) => x - y);
     }
     if (type === 'ping' && b.df !== undefined) spec.df = b.df === true || b.df === 'true';
-    if (type === 'path_mtu') {
-      // The search bounds, in PAYLOAD bytes. 1472 is a 1500-byte Ethernet frame,
-      // which is what a client assumes until something tells it otherwise; 548 is
-      // a 576-byte datagram, the smallest every IPv4 host must accept. Below that
-      // the answer is not "small MTU", it is "broken path".
-      if (b.high !== undefined) {
-        const h = Number(b.high);
-        if (!Number.isInteger(h) || h < 1 || h > MAX_PAYLOAD_BYTES) return { errors: { high: `high must be an integer between 1 and ${MAX_PAYLOAD_BYTES}` } };
-        spec.high = h;
-      }
-      if (b.low !== undefined) {
-        const l = Number(b.low);
-        if (!Number.isInteger(l) || l < 0 || l > MAX_PAYLOAD_BYTES) return { errors: { low: `low must be an integer between 0 and ${MAX_PAYLOAD_BYTES}` } };
-        if (spec.high !== undefined && l > spec.high) return { errors: { low: 'low must not exceed high' } };
-        spec.low = l;
-      }
-      // Per-hop localisation costs a traceroute plus two pings per hop, so it is
-      // opt-in rather than the default.
-      if (b.perHop !== undefined) spec.perHop = b.perHop === true || b.perHop === 'true';
-      if (b.maxHops !== undefined) {
-        const m = Number(b.maxHops);
-        if (!Number.isInteger(m) || m < 1 || m > 40) return { errors: { maxHops: 'maxHops must be an integer between 1 and 40' } };
-        spec.maxHops = m;
-      }
-    }
     if (type === 'tcp') {
       const port = Number(b.port);
       if (!Number.isInteger(port) || port < 1 || port > 65535) return { errors: { port: 'port (1-65535) is required for a tcp probe' } };
@@ -394,4 +414,4 @@ function validateProbeSpec(body) {
   return { value: spec };
 }
 
-module.exports = { validateProbeResults, validateProbeSpec, PROBE_TYPES, MAX_PING_SIZES, MAX_PAYLOAD_BYTES };
+module.exports = { validateProbeResults, validateProbeSpec, PROBE_TYPES, MAX_PING_SIZES, MAX_PAYLOAD_BYTES, MTU_HOP_STATUSES, MAX_PACKET_SIZE };

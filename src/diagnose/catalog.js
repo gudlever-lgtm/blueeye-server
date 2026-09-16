@@ -27,7 +27,7 @@ const PLAYBOOK_DIR = path.join(__dirname, 'playbooks');
 // A test a playbook may ask for must be a probe the agent can actually run.
 // Imported rather than restated: the day a probe type is added or removed, this
 // list moves with it instead of drifting away from it.
-const { PROBE_TYPES } = require('../validation/probeValidation');
+const { PROBE_TYPES, validateProbeSpec } = require('../validation/probeValidation');
 
 // Dashboard views a playbook may deep-link to. Deliberately a short allowlist
 // rather than "any string": a link that goes nowhere is worse than no link,
@@ -140,7 +140,24 @@ function parsePlaybook(file, raw) {
     }
     // A test nobody can explain is a test nobody should run.
     const why = i18nString(file, `tests[${i}].why`, t.why);
-    return { type: t.type, params: t.params ? { ...t.params } : {}, why };
+    const params = t.params ? { ...t.params } : {};
+    // Run the params through the REAL probe validator, with a placeholder host,
+    // and insist that every one of them survives. A key the validator does not
+    // recognise is DROPPED at dispatch rather than rejected, so a playbook
+    // asking for `perHop` when the probe takes `per_hop` would run a plan that
+    // silently measured something narrower than it promised — and nothing
+    // anywhere would say so. This is the check that catches a rename in the
+    // probe on the day it lands, instead of in an outage months later.
+    const probe = validateProbeSpec({ type: t.type, host: 'example.test', url: 'https://example.test', ...params });
+    if (probe.errors) {
+      throw new CatalogError(file, `tests[${i}] params are not valid for a ${t.type} probe: ${Object.entries(probe.errors).map(([k, v]) => `${k}: ${v}`).join('; ')}`);
+    }
+    for (const key of Object.keys(params)) {
+      if (!Object.prototype.hasOwnProperty.call(probe.value, key)) {
+        throw new CatalogError(file, `tests[${i}] passes "${key}", which a ${t.type} probe does not take — it would be dropped silently and the test would measure something narrower than this playbook promises`);
+      }
+    }
+    return { type: t.type, params, why };
   });
 
   // --- views ---------------------------------------------------------------

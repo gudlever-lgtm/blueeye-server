@@ -2453,6 +2453,45 @@ button.ghost.small:has(> .icon-glyph) {
 .sa-map-failing { color: #d03b3b; font-weight: 600; font-size: 12px; }
 .sa-map-counts { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; font-size: 13px; }
 
+/* ---------------------------------------------------------------- Path MTU
+   The verdict block leads the panel, because an operator who reads only the
+   first line should still learn whether this is a fault. Colour is never the
+   only signal: every bar has its number beside it and every hop its worded
+   status, and the hop where the path narrows carries a text marker as well as
+   the row tint. */
+.mtu-verdict { border-left: 3px solid var(--border); padding: 8px 12px; margin: 8px 0; border-radius: 4px; }
+.mtu-verdict h4 { margin: 0 0 4px; font-size: 14px; }
+.mtu-verdict p { margin: 0 0 4px; font-size: 13px; line-height: 1.5; }
+.mtu-verdict.bad { border-left-color: var(--bad); background: var(--bad-weak); }
+.mtu-verdict.warn { border-left-color: var(--warn); background: var(--warn-weak); }
+.mtu-verdict.good { border-left-color: var(--ok); background: var(--ok-weak); }
+.mtu-fix { font-weight: 600; }
+
+.mtu-stats { display: flex; gap: 20px; flex-wrap: wrap; margin: 10px 0; font-size: 13px; }
+.mtu-stat { display: flex; flex-direction: column; gap: 2px; }
+.mtu-stat .k { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.mtu-stat .v { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+.mtu-inputs { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; margin: 6px 0 4px; }
+.mtu-inputs input[type="number"] { width: 82px; }
+
+/* Bars are scaled against the largest MTU measured on THIS path, not against
+   1500 — a jumbo-frame path would otherwise render as identical full bars. */
+.mtu-hops .mtu-bar-cell { width: 45%; min-width: 120px; }
+.mtu-bar { background: var(--border); border-radius: 3px; height: 10px; overflow: hidden; display: inline-block; width: calc(100% - 16px); vertical-align: middle; }
+.mtu-bar-fill { height: 100%; border-radius: 3px; }
+.mtu-bar-fill.good { background: var(--ok); }
+.mtu-bar-fill.warn { background: var(--warn); }
+.mtu-bar-fill.bad { background: var(--bad); }
+.mtu-bar-fill.unknown { background: var(--muted); }
+.mtu-drop-marker { color: var(--bad); margin-left: 4px; font-size: 11px; }
+.mtu-hops tr.mtu-drop { background: var(--bad-weak); }
+.badge.mtu-good { background: var(--ok-weak); color: var(--ok); }
+.badge.mtu-warn { background: var(--warn-weak); color: var(--warn); }
+.badge.mtu-bad { background: var(--bad-weak); color: var(--bad); }
+.badge.mtu-unknown { background: transparent; color: var(--muted); }
+
+.pv-actions { display: flex; gap: 10px; align-items: center; }
 /* --- Diagnose: symptom-first troubleshooting ------------------------------- */
 /* Built from the same tokens as every other screen, so a theme switch carries
    it without a second palette. The one thing this view does that others do not

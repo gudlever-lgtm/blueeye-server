@@ -116,11 +116,13 @@
     {
       "type": "path_mtu",
       "params": {
-        "perHop": true
+        "per_hop": true,
+        "max_size": 1500,
+        "probes_per_size": 3
       },
       "why": {
-        "en": "Finds the largest packet the path carries, and whether any router admits to the limit.",
-        "da": "Finder den største pakke stien kan bære, og om nogen router overhovedet melder grænsen."
+        "en": "Finds the largest packet the path carries, per hop, and whether any router admits to the limit. Three probes per size so ordinary packet loss is not read as an MTU ceiling.",
+        "da": "Finder den største pakke stien bærer, pr. hop, og om nogen router overhovedet melder grænsen. Tre målinger pr. størrelse, så almindeligt pakketab ikke læses som et MTU-loft."
       }
     }
   ],

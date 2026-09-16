@@ -1,0 +1,28 @@
+-- 097 — the ping don't-fragment size sweep (blueeye-agent 0.25.x).
+--
+-- Migration 096 gave path_mtu its own `mtu` column. This is the other half of
+-- seeing an MTU fault, and it is a different measurement: the SAME target asked
+-- at several payload sizes with don't-fragment set, in one run. 64 bytes through
+-- and 1472 gone is not loss — it is an MTU, and no single-size probe can tell
+-- the two apart.
+--
+--   [{ "bytes": 64,   "sent": 4, "recv": 4, "lossPct": 0,   "rttMs": 5,
+--      "measured": true,  "mtuHint": null },
+--    { "bytes": 1472, "sent": 4, "recv": 0, "lossPct": 100, "rttMs": null,
+--      "measured": true,  "mtuHint": 1400 }]
+--
+-- `measured` is the field that keeps this honest. A payload the LOCAL stack
+-- refused never reached the wire, so its 100% is not loss on the path; storing
+-- it as loss would point the diagnosis at the wrong end. `mtuHint` is the MTU a
+-- router volunteered in an ICMP fragmentation-needed, when one came back.
+--
+-- The row's OWN rtt/loss columns describe the SMALLEST size in the sweep. That
+-- is deliberate and load-bearing: those columns feed probe outages, fleet health
+-- and the anomaly detector, and a 1472-byte DF packet that a tunnel drops must
+-- not read as "this host is down" on every screen in the product. Only this
+-- column carries the size dependence.
+--
+-- Nullable and backward-compatible: an ordinary ping, and every result from an
+-- agent that has not been upgraded, simply leaves it NULL.
+ALTER TABLE probe_results
+  ADD COLUMN sizes JSON NULL DEFAULT NULL AFTER mtu;

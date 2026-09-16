@@ -176,25 +176,49 @@ test('a size the local stack refused is not reported as loss on the path', () =>
 });
 
 test('a path_mtu run that measured no MTU does not rule a blackhole in or out', () => {
-  // `blackhole_detected` is false by default in storage. A probe that measured
-  // nothing has not looked, and reading its default as an all-clear is how a
-  // real fault gets marked "ruled out".
-  const facts = buildFacts({ results: [{ type: 'path_mtu', ok: false, mtu: { path_mtu: null, blackhole_detected: false, mss_supported: false } }] });
+  // `blackholeDetected` is false by default in storage, and the probe reports
+  // ok:true even when it FINDS a blackhole — the finding is about the path, not
+  // the agent — so `ok` cannot be the gate. The measured MTU is: no MTU means
+  // it did not look, and reading the default as an all-clear is how a real
+  // fault gets marked "ruled out".
+  const facts = buildFacts({ results: [{ type: 'path_mtu', ok: true, mtu: { pathMtu: null, blackholeDetected: false, mssSupported: false } }] });
   assert.equal(facts.path_mtu.blackhole_detected, undefined);
   assert.equal(facts.path_mtu.icmp_frag_needed_seen, undefined);
   assert.equal(facts.path_mtu.mss_exceeds_path, undefined, 'the agent could not read the MSS — that is not "nothing to report"');
+  assert.equal(facts.path_mtu.path_mtu, undefined);
   assert.equal(evaluatePlaybook(pb('mtu_blackhole'), facts).verdict, VERDICTS.INCONCLUSIVE);
 });
 
 test('the negotiated MSS is only compared with the path when BOTH numbers exist', () => {
-  const both = buildFacts({ results: [{ type: 'path_mtu', ok: true, mtu: { path_mtu: 1400, mss_supported: true, mss_observed: 1460, ip_version: 4 } }] });
-  assert.equal(both.path_mtu.mss_exceeds_path, true, '1460 will not fit a 1400-byte path');
-  const clamped = buildFacts({ results: [{ type: 'path_mtu', ok: true, mtu: { path_mtu: 1400, mss_supported: true, mss_observed: 1360, ip_version: 4 } }] });
-  assert.equal(clamped.path_mtu.mss_exceeds_path, false, 'clamped to exactly what the path carries');
-  const v6 = buildFacts({ results: [{ type: 'path_mtu', ok: true, mtu: { path_mtu: 1400, mss_supported: true, mss_observed: 1340, ip_version: 6 } }] });
-  assert.equal(v6.path_mtu.mss_exceeds_path, false, 'IPv6 loses 60 bytes to headers, not 40');
-  const notRead = buildFacts({ results: [{ type: 'path_mtu', ok: true, mtu: { path_mtu: 1400, mss_supported: false } }] });
-  assert.equal(notRead.path_mtu.mss_exceeds_path, undefined);
+  const at = (mtu) => buildFacts({ results: [{ type: 'path_mtu', ok: true, mtu }] }).path_mtu;
+  assert.equal(at({ pathMtu: 1400, mssSupported: true, mssObserved: 1460 }).mss_exceeds_path, true, '1460 will not fit a 1400-byte path');
+  assert.equal(at({ pathMtu: 1400, mssSupported: true, mssObserved: 1360 }).mss_exceeds_path, false, 'clamped to exactly what the path carries');
+  // `mssSupported:false` means the agent could not look — a Linux-only read.
+  // That is not "nothing to report", so the derived fact stays absent.
+  assert.equal(at({ pathMtu: 1400, mssSupported: false }).mss_exceeds_path, undefined);
+  assert.equal(at({ pathMtu: null, mssSupported: true, mssObserved: 1460 }).mss_exceeds_path, undefined);
+});
+
+test('the hop that swallows the packets is named, from the hops the probe measured', () => {
+  const f = buildFacts({ results: [{
+    type: 'path_mtu', ok: true, mtu: { pathMtu: 1400, blackholeDetected: true },
+    hops: [
+      { hop: 1, ip: 'a', maxMtu: 1500, status: 'ok' },
+      { hop: 2, ip: 'b', maxMtu: null, status: 'no_response' },
+      { hop: 3, ip: 'c', maxMtu: 1400, status: 'blackhole' },
+    ],
+  }] });
+  assert.equal(f.path_mtu.mtu_drop_at_hop, 3);
+  assert.equal(f.path_mtu.blackhole_hop_count, 1);
+  // A hop that answers no ICMP at all is not a fault and is never counted as
+  // one — it looks identical to a hop dropping oversized packets, and naming
+  // the wrong one sends somebody to the wrong firewall.
+  const quiet = buildFacts({ results: [{
+    type: 'path_mtu', ok: true, mtu: { pathMtu: 1400 },
+    hops: [{ hop: 1, ip: 'a', status: 'no_response' }, { hop: 2, ip: 'b', status: 'reduced', maxMtu: 1400 }],
+  }] });
+  assert.equal(quiet.path_mtu.blackhole_hop_count, 0);
+  assert.equal(quiet.path_mtu.mtu_drop_at_hop, undefined);
 });
 
 test('the observed MSS above the path confirms the missing clamp on its own', () => {

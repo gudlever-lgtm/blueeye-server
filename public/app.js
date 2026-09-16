@@ -2742,15 +2742,52 @@ function historyChart(seriesList, { fromMs, toMs, onBrush, height = 300, band = 
     const d = s.points.map((p, i) => `${i ? 'L' : 'M'}${xOf(p.t).toFixed(1)},${yOf(p.y).toFixed(1)}`).join(' ');
     svg.append(mk('path', { d, fill: 'none', stroke: s.color, 'stroke-width': 2 }));
   }
-  // Event markers (drawn on top).
-  if (Array.isArray(markers)) {
+  // Event markers (drawn on top), CLUSTERED by position.
+  //
+  // One line per marker is fine for a handful and ruinous past that. An ongoing
+  // problem raises a finding every cooldown window — roughly one every half hour
+  // per (metric, target) — so a ten-day view of a target that has been unhappy
+  // carries several hundred. Drawn individually they cover every pixel column:
+  // the chart becomes a red hatch with the data line somewhere underneath, and
+  // the triangles merge into a solid strip along the axis. That is not a dense
+  // chart, it is a destroyed one.
+  //
+  // The answer is not to draw fewer and pretend. Markers closer together than a
+  // triangle is wide collapse into ONE marker that carries the count and the
+  // worst severity among them, so the chart says "forty events here, worst
+  // CRIT" instead of drawing forty indistinguishable lines or hiding
+  // thirty-nine. The number of marks is then bounded by the chart's width, which
+  // is the only bound that actually holds.
+  if (Array.isArray(markers) && markers.length) {
     const colOf = (k) => (k === 'CRIT' ? '#dc2626' : k === 'WARN' ? '#d97706' : k === 'probe' ? '#dc2626' : '#64748b');
+    // Severity wins over recency when a cluster is summarised: a CRIT hidden
+    // inside a run of INFOs is the one thing somebody is looking for.
+    const RANK = { CRIT: 4, probe: 3, WARN: 2, INFO: 1 };
+    const rank = (k) => RANK[k] || 1;
+    const SLOT = 8; // the triangle is 8px wide; anything closer cannot be told apart
+    const clusters = new Map();
     for (const m of markers) {
       if (!Number.isFinite(m.t) || m.t < fromMs || m.t > toMs) continue;
-      const xx = xOf(m.t); const col = colOf(m.kind);
-      svg.append(mk('line', { x1: xx, y1: pad.t, x2: xx, y2: H - pad.b, stroke: col, 'stroke-opacity': '0.55', 'stroke-dasharray': '3 3', 'stroke-width': 1 }));
-      const tri = mk('path', { d: `M${xx - 4},${H - pad.b} L${xx + 4},${H - pad.b} L${xx},${H - pad.b - 7} Z`, fill: col });
-      const title = mk('title', {}); title.textContent = m.label || ''; tri.append(title);
+      const xx = xOf(m.t);
+      const key = Math.round(xx / SLOT);
+      let c = clusters.get(key);
+      if (!c) { c = { x: xx, n: 0, kind: 'INFO', labels: [] }; clusters.set(key, c); }
+      c.n += 1;
+      if (rank(m.kind) > rank(c.kind)) c.kind = m.kind;
+      if (c.labels.length < 4 && m.label) c.labels.push(m.label);
+    }
+    for (const c of clusters.values()) {
+      const col = colOf(c.kind);
+      svg.append(mk('line', { x1: c.x, y1: pad.t, x2: c.x, y2: H - pad.b, stroke: col, 'stroke-opacity': '0.45', 'stroke-dasharray': '3 3', 'stroke-width': 1 }));
+      // A cluster is drawn a little taller than a single event, so "a lot
+      // happened here" is legible without opening the tooltip.
+      const h = c.n > 1 ? 10 : 7;
+      const tri = mk('path', { class: 'chart-marker', d: `M${c.x - 4},${H - pad.b} L${c.x + 4},${H - pad.b} L${c.x},${H - pad.b - h} Z`, fill: col });
+      const title = mk('title', {});
+      title.textContent = c.n > 1
+        ? `${c.n} events${c.labels.length ? `\n${c.labels.join('\n')}` : ''}${c.n > c.labels.length ? `\n+${c.n - c.labels.length} more` : ''}`
+        : (c.labels[0] || '');
+      tri.append(title);
       svg.append(tri);
     }
   }

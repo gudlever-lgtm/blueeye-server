@@ -148,7 +148,7 @@ one file: `FACT_SCHEMA` (every path a playbook may name) and `buildFacts()`
 | `path_mtu.*` | the path_mtu probe |
 | `traceroute.*` | hop count, branch count (ECMP), sustained loss, worst hop |
 | `dns.*`, `http.*`, `tcp.*` | the other probes |
-| `iface.*` | `computeInterfaceHealth()` for the session's agent |
+| `iface.*` | `computeInterfaceHealth()` for the session's agent, including `late_coll_per_sec` (EtherLike-MIB, SNMP only) |
 | `reverse.*` | the same measurements taken from the FAR end |
 | `path_compare.*` | whether the two directions traverse the same hops |
 
@@ -167,6 +167,17 @@ Three judgements worth knowing about:
 - **`busy_port_count`** counts ports busy *at once*. One busy port is a
   transfer; several unrelated ones together is what a broadcast storm looks like
   from outside, and no single interface can show you that.
+- **`late_coll_per_sec`** is the counter that *names* a duplex mismatch rather
+  than merely being consistent with one, and it is the sharpest illustration of
+  the absent-is-not-zero rule in the whole module. It comes from the EtherLike-MIB
+  over SNMP; a `/proc` sample never has it and plenty of switches omit the MIB.
+  Since **zero** late collisions is what rules the fault *out*, a source that
+  cannot count them reports `null` all the way from the agent
+  (`snmpMonitor.js`) through `computeInterfaceHealth()` to here, where it is
+  simply left out — so the rule reads `unknown` rather than an all-clear.
+  The interface layer is deliberately **strict** about it where it coerces the
+  other counters: `Number([])` is 0, and a coercion that turns junk into the most
+  consequential answer available is worse than no reading at all.
 
 ---
 

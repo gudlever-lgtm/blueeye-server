@@ -58,6 +58,19 @@ function computeInterfaceHealth(traffic) {
     const txErrors = Number(i.txErrors) || 0;
     const rxDrop = Number(i.rxDrop) || 0;
     const txDrop = Number(i.txDrop) || 0;
+    // Late collisions (EtherLike-MIB, SNMP only). NULL when the source cannot
+    // report them — a /proc sample never can, and plenty of switches omit the
+    // MIB — and that is deliberately NOT folded into 0: zero late collisions is
+    // what rules a duplex mismatch out, so a device that cannot answer must not
+    // be read as answering "none".
+    // Strict on purpose, where the other counters above coerce: `Number([])` is
+    // 0, and 0 is precisely the value that RULES THIS FAULT OUT. A counter whose
+    // absence is meaningful cannot be read through a coercion that turns junk
+    // into the most consequential answer available. A number, or nothing.
+    const lateCollisions = typeof i.lateCollisions === 'number' && Number.isFinite(i.lateCollisions) && i.lateCollisions >= 0
+      ? i.lateCollisions
+      : null;
+    const lateCollPerSec = lateCollisions === null ? null : round2(lateCollisions / elapsed);
     const errPerSec = round2((rxErrors + txErrors) / elapsed);
     const dropPerSec = round2((rxDrop + txDrop) / elapsed);
     const operStatus = i.operStatus || null;
@@ -72,7 +85,7 @@ function computeInterfaceHealth(traffic) {
     return {
       iface: i.iface, operStatus, speedMbps, virtual, linkDown,
       rxBytesPerSec, txBytesPerSec, utilPct,
-      errPerSec, dropPerSec, rxErrors, txErrors, rxDrop, txDrop, status,
+      errPerSec, dropPerSec, rxErrors, txErrors, rxDrop, txDrop, lateCollPerSec, status,
     };
   });
 }

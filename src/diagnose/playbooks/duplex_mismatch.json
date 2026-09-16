@@ -42,7 +42,10 @@
       "10mbit",
       "100mbit",
       "mismatch",
-      "hardcoded"
+      "hardcoded",
+      "late collisions",
+      "collision",
+      "half duplex"
     ],
     "da": [
       "duplex",
@@ -59,7 +62,10 @@
       "100mbit",
       "mismatch",
       "hårdkodet",
-      "fejl stiger"
+      "fejl stiger",
+      "late collisions",
+      "kollision",
+      "halv duplex"
     ]
   },
   "tests": [
@@ -79,8 +85,8 @@
       "view": "interfaces",
       "params": {},
       "look_for": {
-        "en": "Errors climbing WITH utilisation, and a negotiated speed below what the port should do. Late collisions are the specific signature — BlueEyes does not collect that counter yet, so read it on the switch.",
-        "da": "Fejl der stiger MED forbruget, og en forhandlet hastighed under hvad porten burde kunne. Late collisions er den præcise signatur — BlueEyes henter ikke den tæller endnu, så læs den på switchen."
+        "en": "Late collisions above zero is the specific signature, and BlueEyes now reads it over SNMP. Beside it, errors climbing WITH utilisation and a negotiated speed below what the port should do.",
+        "da": "Late collisions over nul er den præcise signatur, og BlueEyes læser den nu over SNMP. Ved siden af den: fejl der stiger MED forbruget, og en forhandlet hastighed under hvad porten burde kunne."
       }
     },
     {
@@ -93,6 +99,15 @@
     }
   ],
   "rules": [
+    {
+      "id": "late_collisions",
+      "when": "iface.late_coll_per_sec > 0",
+      "effect": "confirm",
+      "because": {
+        "en": "Late collisions are being counted. On a switched link that is a duplex mismatch almost by definition — a collision detected after the first 64 bytes is far too late to be ordinary contention — and it is only ever counted on the half-duplex end, which is the end you are looking at.",
+        "da": "Der tælles late collisions. På et switchet link er det næsten per definition en duplex mismatch — en kollision opdaget efter de første 64 bytes er alt for sent til at være almindelig kontention — og den tælles kun i halv-duplex-enden, hvilket er den ende du kigger på."
+      }
+    },
     {
       "id": "errors_with_load",
       "when": "iface.err_per_sec > 0 && iface.util_pct >= 20",
@@ -119,12 +134,25 @@
         "en": "The port is at gigabit or better with no errors, so both ends agree.",
         "da": "Porten kører gigabit eller bedre uden fejl, så begge ender er enige."
       }
+    },
+    {
+      "id": "no_late_collisions",
+      "when": "iface.late_coll_per_sec == 0 && iface.err_per_sec == 0",
+      "effect": "rule_out",
+      "because": {
+        "en": "The interface counted no late collisions and no errors. This only rules the fault out because a device that cannot report the counter reports nothing rather than zero — so a zero here is a measurement, not an absence.",
+        "da": "Interfacet talte ingen late collisions og ingen fejl. Det udelukker kun fejlen, fordi en enhed der ikke kan rapportere tælleren rapporterer ingenting frem for nul — så et nul her er en måling, ikke et fravær."
+      }
     }
   ],
   "fixes": [
     {
       "en": "Set both ends the same way. Autonegotiation on both is right; hardcoded on both is acceptable; one of each is the fault.",
       "da": "Sæt begge ender ens. Autoforhandling i begge er rigtigt; hårdkodet i begge er acceptabelt; én af hver er fejlen."
+    },
+    {
+      "en": "Late collisions are counted on the HALF-duplex end, so the port reporting them is the one to change — or its partner, depending on which of the two is wrong.",
+      "da": "Late collisions tælles i HALV-duplex-enden, så den port der rapporterer dem er den, der skal rettes — eller dens modpart, alt efter hvilken af de to der er forkert."
     },
     {
       "en": "Check the switch port for late collisions — that counter is the proof, and it is only visible on the half-duplex end.",

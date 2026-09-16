@@ -1,0 +1,199 @@
+{
+  "id": "mtu_blackhole",
+  "title": {
+    "en": "MTU / PMTUD blackhole",
+    "da": "MTU/PMTUD-blackhole"
+  },
+  "summary": {
+    "en": "The connection opens and then stops the moment real data flows.",
+    "da": "Forbindelsen oprettes og stopper så i det øjeblik, der sendes rigtige data."
+  },
+  "explanation": {
+    "en": "The handshake and the commands are small packets and get through. The large ones exceed the MTU somewhere on the path, and the ICMP 'fragmentation needed' that would have told the sender to send smaller is being filtered. Nothing reports an error; the connection simply stops.",
+    "da": "Handshake og kommandoer er små pakker og kommer igennem. De store overstiger MTU et sted på stien, og den ICMP 'fragmentation needed', der skulle have bedt afsenderen sende mindre, bliver blokeret. Ingenting melder fejl; forbindelsen stopper bare."
+  },
+  "symptoms": {
+    "en": [
+      "connects but data is lost",
+      "small packets work, large ones fail",
+      "vpn hangs",
+      "mail times out when sending",
+      "ssh works but scp hangs",
+      "file transfer stalls at the start",
+      "the handshake completes and then nothing"
+    ],
+    "da": [
+      "forbinder men data går tabt",
+      "små pakker virker, store fejler",
+      "vpn hænger",
+      "mail timeout ved afsendelse",
+      "ssh virker men scp hænger",
+      "filoverførsel går i stå med det samme",
+      "mail kan forbinde men mister pakker når der sendes data",
+      "forbindelsen afbrydes når der sendes data"
+    ]
+  },
+  "keywords": {
+    "en": [
+      "mtu",
+      "mss",
+      "fragment",
+      "fragmentation",
+      "tunnel",
+      "ipsec",
+      "gre",
+      "vpn",
+      "wireguard",
+      "timeout",
+      "disconnect",
+      "starttls",
+      "smtp",
+      "mail",
+      "scp",
+      "sftp",
+      "stall",
+      "hang",
+      "large",
+      "upload",
+      "attachment",
+      "data",
+      "loss",
+      "packet",
+      "packets",
+      "lost",
+      "drop"
+    ],
+    "da": [
+      "mtu",
+      "mss",
+      "fragment",
+      "fragmentering",
+      "tunnel",
+      "ipsec",
+      "gre",
+      "vpn",
+      "wireguard",
+      "timeout",
+      "afbrydes",
+      "afbrudt",
+      "starttls",
+      "smtp",
+      "mail",
+      "scp",
+      "sftp",
+      "hænger",
+      "stort",
+      "store",
+      "upload",
+      "vedhæftet",
+      "data",
+      "sendes",
+      "mistes",
+      "tab",
+      "pakker",
+      "pakke",
+      "pakketab",
+      "mister",
+      "tabt"
+    ]
+  },
+  "tests": [
+    {
+      "type": "ping",
+      "params": {
+        "sizes": [
+          64,
+          1472
+        ],
+        "df": true,
+        "count": 4
+      },
+      "why": {
+        "en": "The same target at two sizes with don't-fragment set. 64 through and 1472 gone is not loss — it is an MTU.",
+        "da": "Samme mål i to størrelser med don't-fragment sat. 64 igennem og 1472 væk er ikke tab — det er en MTU."
+      }
+    },
+    {
+      "type": "path_mtu",
+      "params": {
+        "perHop": true
+      },
+      "why": {
+        "en": "Finds the largest packet the path carries, and whether any router admits to the limit.",
+        "da": "Finder den største pakke stien kan bære, og om nogen router overhovedet melder grænsen."
+      }
+    }
+  ],
+  "views": [
+    {
+      "view": "probes",
+      "params": {},
+      "look_for": {
+        "en": "The path_mtu result: pathMtu below 1500, and whether blackholeDetected is true.",
+        "da": "path_mtu-resultatet: pathMtu under 1500, og om blackholeDetected er true."
+      }
+    },
+    {
+      "view": "probes",
+      "params": {
+        "tab": "path"
+      },
+      "look_for": {
+        "en": "The hop where the tunnel starts — a latency jump or a change of provider.",
+        "da": "Det hop hvor tunnelen starter — et latensspring eller et skift af udbyder."
+      }
+    }
+  ],
+  "rules": [
+    {
+      "id": "loss_size_dependent",
+      "when": "ping.size_64.loss_pct == 0 && ping.size_1472.loss_pct >= 50",
+      "effect": "confirm",
+      "because": {
+        "en": "Small packets pass and large ones do not. That is an MTU, not a lossy link.",
+        "da": "Små pakker kommer igennem, store gør ikke. Det er en MTU, ikke en dårlig linje."
+      }
+    },
+    {
+      "id": "pmtu_blackhole",
+      "when": "path_mtu.blackhole_detected == true",
+      "effect": "confirm",
+      "because": {
+        "en": "Oversized packets vanish and no router sends back the ICMP that would explain it.",
+        "da": "For store pakker forsvinder, og ingen router sender den ICMP tilbage, der ville forklare det."
+      }
+    },
+    {
+      "id": "pmtu_reported",
+      "when": "path_mtu.blackhole_detected == false && path_mtu.path_mtu < 1500",
+      "effect": "confirm",
+      "because": {
+        "en": "The path is smaller than 1500 bytes — but it says so, so hosts that listen to ICMP will cope on their own.",
+        "da": "Stien er mindre end 1500 bytes — men den siger det, så værter der lytter til ICMP klarer sig selv."
+      }
+    },
+    {
+      "id": "all_sizes_ok",
+      "when": "ping.size_1472.loss_pct == 0 && path_mtu.path_mtu >= 1500",
+      "effect": "rule_out",
+      "because": {
+        "en": "A full 1500-byte packet reaches the target with don't-fragment set, so nothing on the path is clamping.",
+        "da": "En fuld 1500-bytes pakke når målet med don't-fragment sat, så intet på stien klemmer den."
+      }
+    }
+  ],
+  "fixes": [
+    {
+      "en": "Allow ICMP type 3 code 4 (fragmentation needed) through the firewall at or after hop {path_mtu.mtu_drop_at_hop} — without it, no sender can discover the limit.",
+      "da": "Tillad ICMP type 3 code 4 (fragmentation needed) i firewallen på eller efter hop {path_mtu.mtu_drop_at_hop} — uden den kan ingen afsender opdage grænsen."
+    },
+    {
+      "en": "Clamp MSS on the tunnel router to {path_mtu.recommended_mss}.",
+      "da": "MSS clamping på tunnel-routeren til {path_mtu.recommended_mss}."
+    },
+    {
+      "en": "Make the MTU the same along the whole path — {path_mtu.path_mtu} bytes is what it currently carries.",
+      "da": "Ret MTU så den er ens på hele stien — {path_mtu.path_mtu} bytes er hvad den bærer i dag."
+    }
+  ]
+}

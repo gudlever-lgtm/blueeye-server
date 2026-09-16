@@ -28,6 +28,8 @@ const { createFlowsRouter } = require('./flows');
 const { createTopologyRouter } = require('./topology');
 const { createDiscoveryRouter } = require('./discovery');
 const { createTroubleshootingRouter } = require('./troubleshooting');
+const { createDiagnoseRouter } = require('./diagnose');
+const { loadCatalog } = require('../diagnose/catalog');
 const { createTroubleshootingOverviewService } = require('../troubleshooting/overviewService');
 const { createProbesRouter } = require('./probes');
 const { createReportsRouter } = require('./reports');
@@ -82,6 +84,11 @@ const { silentLogger } = require('../logger');
 function createApiRouter({
   db,
   tsdb = null,
+  // The playbook catalogue is repo data, loaded once. Injectable so a test can
+  // hand in a two-playbook catalogue instead of the nine real ones, and so the
+  // server can fail its BOOT on a malformed playbook rather than a request.
+  diagnoseCatalog = loadCatalog(),
+  diagnoseSessionsRepo = null,
   resultsTsdbRepo = null,
   locationsRepo,
   usersRepo,
@@ -330,6 +337,19 @@ function createApiRouter({
       }),
     }));
   }
+  // Symptom-first diagnosis — "describe the problem" → a plan → verdicts.
+  // Mounted at /api rather than one prefix because it owns two: /api/diagnose
+  // (the sessions) and /api/playbooks (the catalogue behind them). Always
+  // mounted: the catalogue is repo data, so the playbook endpoints answer even
+  // on an install with no database behind them, and the session endpoints say
+  // 503 rather than pretending. Loading the catalogue here means a malformed
+  // playbook fails the BOOT, which is the whole reason it is validated at all.
+  router.use('/api', createDiagnoseRouter({
+    catalog: diagnoseCatalog,
+    sessionsRepo: diagnoseSessionsRepo,
+    agentsRepo, resultsRepo, probeResultsRepo, agentCommander,
+    assistant, auditLogger, logger,
+  }));
   if (probeResultsRepo) router.use('/api/probes', createProbesRouter({ probeResultsRepo, agentsRepo, geoProvider, centroids }));
   if (probeResultsRepo) router.use('/api/fleet', createFleetRouter({ agentsRepo, probeResultsRepo, resultsRepo, speedtestResultsRepo, settingsService, logger }));
   // Overview "open issues" rollup (license feature `dashboard_advanced`,

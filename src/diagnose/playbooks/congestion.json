@@ -1,0 +1,157 @@
+{
+  "id": "congestion",
+  "title": {
+    "en": "Congestion",
+    "da": "Overbelastning"
+  },
+  "summary": {
+    "en": "It is only bad when the link is busy.",
+    "da": "Det er kun skidt når linjen er belastet."
+  },
+  "explanation": {
+    "en": "The link runs out of capacity and the queue overflows. Discards rise with utilisation and latency grows before anything is lost at all.",
+    "da": "Linjen løber tør for kapacitet, og køen løber over. Discards stiger med forbruget, og latensen vokser før der overhovedet mistes noget."
+  },
+  "symptoms": {
+    "en": [
+      "we lose packets at peak hours",
+      "loss at peak hours",
+      "slow in the morning and fine at night",
+      "it gets bad when everyone is working",
+      "high latency under load",
+      "the link is full"
+    ],
+    "da": [
+      "vi mister pakker ved spidsbelastning",
+      "tab ved spidsbelastning",
+      "langsomt om morgenen og fint om natten",
+      "det bliver dårligt når alle arbejder",
+      "høj latens under belastning",
+      "linjen er fyldt"
+    ]
+  },
+  "keywords": {
+    "en": [
+      "congestion",
+      "peak",
+      "busy",
+      "saturation",
+      "saturated",
+      "full",
+      "utilisation",
+      "utilization",
+      "bandwidth",
+      "slow",
+      "queue",
+      "discard",
+      "buffer",
+      "morning",
+      "load",
+      "loss",
+      "packet",
+      "packets",
+      "lose"
+    ],
+    "da": [
+      "overbelastning",
+      "spidsbelastning",
+      "travlt",
+      "mætning",
+      "fyldt",
+      "forbrug",
+      "båndbredde",
+      "langsom",
+      "langsomt",
+      "kø",
+      "discard",
+      "buffer",
+      "morgen",
+      "belastning",
+      "tab",
+      "pakker",
+      "mister",
+      "pakketab"
+    ]
+  },
+  "tests": [
+    {
+      "type": "ping",
+      "params": {
+        "count": 20
+      },
+      "why": {
+        "en": "Latency and loss right now — run it again at the quiet hour and compare.",
+        "da": "Latens og tab lige nu — kør den igen i en stille time og sammenlign."
+      }
+    }
+  ],
+  "views": [
+    {
+      "view": "interfaces",
+      "params": {},
+      "look_for": {
+        "en": "Discards (not errors) rising together with utilisation. Discards are a full queue; errors are a broken wire.",
+        "da": "Discards (ikke fejl) der stiger sammen med forbruget. Discards er en fuld kø; fejl er en defekt ledning."
+      }
+    },
+    {
+      "view": "flows",
+      "params": {},
+      "look_for": {
+        "en": "Who is using the capacity — the top talkers and the traffic categories during the bad window.",
+        "da": "Hvem der bruger kapaciteten — de største talere og trafiktyperne i det dårlige tidsrum."
+      }
+    },
+    {
+      "view": "overview",
+      "params": {},
+      "look_for": {
+        "en": "The traffic timeline: does the trouble line up with the daily peak?",
+        "da": "Trafik-tidslinjen: falder problemet sammen med den daglige spids?"
+      }
+    }
+  ],
+  "rules": [
+    {
+      "id": "discards_under_load",
+      "when": "iface.drop_per_sec > 0 && iface.util_pct >= 75",
+      "effect": "confirm",
+      "because": {
+        "en": "The queue is overflowing on a link that is running near capacity.",
+        "da": "Køen løber over på en linje der kører tæt på kapaciteten."
+      }
+    },
+    {
+      "id": "saturated",
+      "when": "iface.util_pct >= 90",
+      "effect": "confirm",
+      "because": {
+        "en": "The link is effectively full.",
+        "da": "Linjen er reelt fyldt."
+      }
+    },
+    {
+      "id": "quiet_link",
+      "when": "iface.util_pct < 50 && iface.drop_per_sec == 0",
+      "effect": "rule_out",
+      "because": {
+        "en": "The link is not busy and nothing is being queued away.",
+        "da": "Linjen er ikke belastet, og der bliver ikke smidt noget væk i køen."
+      }
+    }
+  ],
+  "fixes": [
+    {
+      "en": "Add capacity, or shape the traffic that does not need to be there at the peak.",
+      "da": "Køb mere kapacitet, eller shape den trafik der ikke behøver ligge i spidsen."
+    },
+    {
+      "en": "Put QoS on the traffic that matters so a bulk transfer stops hurting interactive sessions.",
+      "da": "Sæt QoS på den trafik der betyder noget, så en stor overførsel holder op med at skade interaktive sessioner."
+    },
+    {
+      "en": "Move the backup or sync job that shows up in the flows out of the working day.",
+      "da": "Flyt det backup- eller synkroniseringsjob, der dukker op i flows, uden for arbejdstiden."
+    }
+  ]
+}

@@ -1,0 +1,149 @@
+{
+  "id": "ecmp_member_link",
+  "title": {
+    "en": "One ECMP member is broken",
+    "da": "Ét ECMP-medlem er i stykker"
+  },
+  "summary": {
+    "en": "Some connections fail and some succeed, in a suspiciously round number.",
+    "da": "Nogle forbindelser fejler og nogle virker, i et mistænkeligt rundt forhold."
+  },
+  "explanation": {
+    "en": "Traffic is spread over several equal-cost paths and one of them is broken. Which path a connection takes is decided by a hash of its five-tuple, so the failure rate lands near a fraction — half, a third, a quarter — and a retry from a new source port often succeeds.",
+    "da": "Trafikken fordeles over flere ligeværdige stier, og én af dem er i stykker. Hvilken sti en forbindelse tager afgøres af et hash over dens 5-tuple, så fejlraten lander tæt på en brøkdel — halvdelen, en tredjedel, en fjerdedel — og et nyt forsøg fra en ny kildeport lykkes ofte."
+  },
+  "symptoms": {
+    "en": [
+      "some connections fail and some work",
+      "about half of the flows fail",
+      "fails every other attempt",
+      "retry usually works",
+      "random failures to the same server"
+    ],
+    "da": [
+      "nogle forbindelser fejler og nogle virker",
+      "cirka halvdelen af flows fejler",
+      "fejler hver anden gang",
+      "det virker når man prøver igen",
+      "tilfældige fejl mod samme server",
+      "delvis fejl"
+    ]
+  },
+  "keywords": {
+    "en": [
+      "ecmp",
+      "load balance",
+      "lag",
+      "bond",
+      "port-channel",
+      "half",
+      "random",
+      "sometimes",
+      "retry",
+      "intermittent",
+      "some",
+      "flows"
+    ],
+    "da": [
+      "ecmp",
+      "load balance",
+      "lag",
+      "bond",
+      "port-channel",
+      "halvdelen",
+      "tilfældig",
+      "nogle gange",
+      "prøv igen",
+      "periodisk",
+      "nogle",
+      "flows",
+      "delvis"
+    ]
+  },
+  "tests": [
+    {
+      "type": "traceroute",
+      "params": {
+        "queries": 10,
+        "maxHops": 30
+      },
+      "why": {
+        "en": "Many probes reveal the parallel paths; the path graph draws them as branches.",
+        "da": "Mange målinger afslører de parallelle stier; path-grafen tegner dem som grene."
+      }
+    },
+    {
+      "type": "ping",
+      "params": {
+        "count": 20
+      },
+      "why": {
+        "en": "A loss percentage near a simple fraction is the signature.",
+        "da": "En tabsprocent tæt på en simpel brøkdel er signaturen."
+      }
+    }
+  ],
+  "views": [
+    {
+      "view": "probes",
+      "params": {
+        "tab": "path"
+      },
+      "look_for": {
+        "en": "Branches in the path graph. One branch with loss and the others clean is the broken member.",
+        "da": "Grene i path-grafen. Én gren med tab og resten rene er det ødelagte medlem."
+      }
+    },
+    {
+      "view": "flows",
+      "params": {},
+      "look_for": {
+        "en": "Whether the failing conversations share a source port range.",
+        "da": "Om de fejlende samtaler deler et kildeport-interval."
+      }
+    }
+  ],
+  "rules": [
+    {
+      "id": "branching_path_with_loss",
+      "when": "traceroute.branch_count > 1 && ping.loss_pct >= 10",
+      "effect": "confirm",
+      "because": {
+        "en": "The path forks and packets are being lost — one of the parallel members is dropping them.",
+        "da": "Stien deler sig, og der mistes pakker — ét af de parallelle medlemmer smider dem væk."
+      }
+    },
+    {
+      "id": "fractional_loss",
+      "when": "ping.loss_pct >= 20 && ping.loss_pct <= 60 && traceroute.branch_count > 1",
+      "effect": "confirm",
+      "because": {
+        "en": "Loss near a simple fraction over a branching path is what one bad ECMP member looks like.",
+        "da": "Tab tæt på en simpel brøkdel over en forgrenet sti er præcis hvordan ét dårligt ECMP-medlem ser ud."
+      }
+    },
+    {
+      "id": "single_path",
+      "when": "traceroute.branch_count == 1",
+      "effect": "rule_out",
+      "because": {
+        "en": "There is only one path, so there is no member to be broken.",
+        "da": "Der er kun én sti, så der er ikke noget medlem at være i stykker."
+      }
+    }
+  ],
+  "fixes": [
+    {
+      "en": "Find the member link that loses packets and take it out of the bundle until it is fixed.",
+      "da": "Find det medlemslink der mister pakker, og tag det ud af bundtet indtil det er repareret."
+    },
+    {
+      "en": "Check the interface counters on every member of the bundle, not just the aggregate.",
+      "da": "Tjek interface-tællere på hvert medlem af bundtet, ikke kun på aggregatet."
+    },
+    {
+      "en": "Confirm both ends agree on the hashing policy — a mismatch sends traffic down a member the other end is not expecting.",
+      "da": "Bekræft at begge ender er enige om hash-politikken — uenighed sender trafik ned ad et medlem, den anden ende ikke forventer."
+    }
+  ]
+}

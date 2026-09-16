@@ -1,6 +1,15 @@
 'use strict';
 
-const COLUMNS = ['agent_id', 'ts', 'type', 'target', 'ok', 'rtt_ms', 'min_ms', 'max_ms', 'jitter_ms', 'loss_pct', 'status', 'cert_expiry_days', 'bytes', 'content_type', 'elements', 'hops', 'detail'];
+// Probe types that measure the PATH rather than the target's availability.
+// `path_mtu` is a diagnostic somebody runs on purpose, in the middle of an
+// outage, against whatever they are chasing — often a host that is already
+// down. Counting it as a reachability sample would let an investigation move
+// the SLA number it is investigating, so uptime and fleet health leave it out.
+// It is still stored, still read, still charted; it just does not vote on
+// "is this agent healthy".
+const DIAGNOSTIC_TYPES = ['path_mtu'];
+
+const COLUMNS = ['agent_id', 'ts', 'type', 'target', 'ok', 'rtt_ms', 'min_ms', 'max_ms', 'jitter_ms', 'loss_pct', 'status', 'cert_expiry_days', 'bytes', 'content_type', 'elements', 'hops', 'sizes', 'mtu', 'detail'];
 
 function toRow(agentId, r) {
   const ts = r.ts instanceof Date ? r.ts : (r.ts ? new Date(r.ts) : new Date());
@@ -21,6 +30,8 @@ function toRow(agentId, r) {
     r.contentType != null ? String(r.contentType).slice(0, 120) : null,
     Array.isArray(r.elements) ? JSON.stringify(r.elements) : null,
     Array.isArray(r.hops) ? JSON.stringify(r.hops) : null,
+    Array.isArray(r.sizes) ? JSON.stringify(r.sizes) : null,
+    r.mtu && typeof r.mtu === 'object' ? JSON.stringify(r.mtu) : null,
     r.detail != null ? String(r.detail).slice(0, 255) : null,
   ];
 }
@@ -51,6 +62,12 @@ function fromRow(row) {
     contentType: row.content_type ?? null,
     elements: parseHops(row.elements),
     hops: parseHops(row.hops),
+    // The ping size sweep and everything path_mtu found (migration 096). NULL on
+    // every row an agent older than 0.25 wrote, which is the normal case while a
+    // fleet is still updating — a reader must treat absent as "not measured",
+    // never as "no problem".
+    sizes: parseHops(row.sizes),
+    mtu: parseHops(row.mtu),
     detail: row.detail,
   };
 }
@@ -95,8 +112,8 @@ function createProbeResultsRepository(db) {
     const since = new Date(Date.now() - win);
     const [rows] = await pool.query(
       `SELECT agent_id, ts, type, target, ok, rtt_ms, jitter_ms, loss_pct
-       FROM probe_results WHERE ts >= ? ORDER BY ts DESC LIMIT ?`,
-      [since, lim]
+       FROM probe_results WHERE ts >= ? AND type NOT IN (?) ORDER BY ts DESC LIMIT ?`,
+      [since, DIAGNOSTIC_TYPES, lim]
     );
     return rows.map((row) => ({
       agentId: row.agent_id,
@@ -115,8 +132,8 @@ function createProbeResultsRepository(db) {
   // carrying its location, optionally filtered to one location. Agents with no
   // probes in the window are omitted (no data ⇒ no uptime to report).
   async function availability({ from, to, locationId = null }) {
-    const where = ['pr.ts >= ?', 'pr.ts <= ?'];
-    const params = [from, to];
+    const where = ['pr.ts >= ?', 'pr.ts <= ?', 'pr.type NOT IN (?)'];
+    const params = [from, to, DIAGNOSTIC_TYPES];
     if (locationId != null) { where.push('a.location_id = ?'); params.push(locationId); }
     const [rows] = await pool.query(
       `SELECT a.location_id, l.name AS location_name, a.id AS agent_id,
@@ -196,4 +213,4 @@ function createProbeResultsRepository(db) {
   return { createMany, findByAgent, metricRows, latestByAgent, fleetHealth, availability };
 }
 
-module.exports = { createProbeResultsRepository, toRow, fromRow };
+module.exports = { createProbeResultsRepository, DIAGNOSTIC_TYPES, toRow, fromRow };

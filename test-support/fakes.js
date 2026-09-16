@@ -330,6 +330,67 @@ function makeProbeResultsRepo(overrides = {}) {
   };
 }
 
+// A fake diagnose-sessions repository (in-memory, stateful). Mirrors the real
+// one closely enough for the route tests AND the gate sweeps: `findById` returns
+// null for an unknown id so a missing session is a real 404 rather than the 503
+// an unwired repo would give, and `findResultFor` honours the same
+// (agent, type, target, dispatched_at) correlation the real query does — the
+// part of this feature most likely to be got wrong.
+function makeDiagnoseSessionsRepo(overrides = {}) {
+  const sessions = new Map();
+  const tests = [];
+  const probeRows = overrides.probeRows || [];
+  let nextSession = 1;
+  let nextTest = 1;
+  const repo = {
+    sessions, tests, probeRows,
+    create: overrides.create || (async ({ tests: rows = [], ...s }) => {
+      const id = nextSession; nextSession += 1;
+      sessions.set(id, {
+        id, status: 'planned', evaluation: null, entities: null, target: null,
+        agentId: null, peerAgentId: null, locale: 'en', matchedBy: 'keywords',
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+        ...s,
+      });
+      for (const t of rows) {
+        tests.push({
+          id: nextTest, sessionId: id, status: 'pending', dispatchedAt: null,
+          probeResultId: null, detail: null, direction: 'forward', params: null, ...t,
+        });
+        nextTest += 1;
+      }
+      return id;
+    }),
+    findById: overrides.findById || (async (id) => sessions.get(Number(id)) || null),
+    list: overrides.list || (async ({ limit = 50 } = {}) => [...sessions.values()].reverse().slice(0, limit)),
+    listTests: overrides.listTests || (async (id) => tests.filter((t) => t.sessionId === Number(id))),
+    markDispatched: overrides.markDispatched || (async (testId, { at = new Date(), agentId = null } = {}) => {
+      const t = tests.find((x) => x.id === testId);
+      if (t) { t.status = 'dispatched'; t.dispatchedAt = at instanceof Date ? at.toISOString() : at; if (agentId != null) t.agentId = agentId; t.detail = null; }
+    }),
+    markFailed: overrides.markFailed || (async (testId, detail) => {
+      const t = tests.find((x) => x.id === testId);
+      if (t) { t.status = 'failed'; t.detail = detail; }
+    }),
+    attachResult: overrides.attachResult || (async (testId, resultId) => {
+      const t = tests.find((x) => x.id === testId);
+      if (t) { t.status = 'complete'; t.probeResultId = resultId; }
+    }),
+    setStatus: overrides.setStatus || (async (id, status) => { const s2 = sessions.get(Number(id)); if (s2) s2.status = status; }),
+    saveEvaluation: overrides.saveEvaluation || (async (id, ev) => { const s2 = sessions.get(Number(id)); if (s2) { s2.evaluation = ev; s2.status = 'evaluated'; } }),
+    findResultFor: overrides.findResultFor || (async (t, { windowMs = 10 * 60 * 1000 } = {}) => {
+      if (!t || !t.dispatchedAt || t.agentId == null) return null;
+      const from = new Date(t.dispatchedAt).getTime();
+      const hit = probeRows
+        .filter((r) => r.agent_id === t.agentId && r.type === t.probeType && r.target === t.target)
+        .filter((r) => { const ts = new Date(r.ts).getTime(); return ts >= from && ts <= from + windowMs; })
+        .sort((a, b) => new Date(a.ts) - new Date(b.ts));
+      return hit[0] || null;
+    }),
+  };
+  return repo;
+}
+
 // A fake probe-outages repository (in-memory, stateful) — supports the derivation
 // service (findActive/open/resolve) AND the report routes (list/findById). Rows
 // are kept snake_case internally; list/findById return the camelCase API shape.
@@ -2468,6 +2529,7 @@ function makeApp(overrides = {}) {
     agentTokensRepo: overrides.agentTokensRepo || makeAgentTokensRepo(),
     resultsRepo: overrides.resultsRepo || makeResultsRepo(),
     probeResultsRepo: overrides.probeResultsRepo || makeProbeResultsRepo(),
+    diagnoseSessionsRepo: overrides.diagnoseSessionsRepo === null ? null : (overrides.diagnoseSessionsRepo || makeDiagnoseSessionsRepo()),
     probeOutagesRepo: overrides.probeOutagesRepo || makeProbeOutagesRepo(),
     eventCasesRepo: overrides.eventCasesRepo || makeEventCasesRepo(),
     eventNotesRepo: overrides.eventNotesRepo === undefined ? makeEventNotesRepo() : overrides.eventNotesRepo,
@@ -2616,6 +2678,7 @@ const throwingAsync = (message = 'simulated database failure') => async () => {
 };
 
 module.exports = {
+  makeDiagnoseSessionsRepo,
   makeSeverityRulesRepo,
   makeLocationsRepo,
   makeUsersRepo,

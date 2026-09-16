@@ -1,5 +1,124 @@
 # Changelog
 
+## 0.151.0 — Diagnose: from a sentence to a confirmed cause
+
+A technician writes what is wrong in their own words:
+
+> *"Mail kan forbinde, men når der sendes data, mistes pakker eller
+> forbindelsen afbrydes."*
+
+BlueEyes answers with a plan — the likely causes ranked, the tests to run with
+their parameters already filled in, the screens to open and what to look for in
+each, and what each answer would mean. Run the tests, and every cause comes back
+**confirmed**, **ruled out** or **open**, with the rule and the measurement that
+decided it.
+
+Nav: **Diagnostics → Diagnose**. Full documentation in
+[docs/diagnose.md](docs/diagnose.md).
+
+### The knowledge is data
+
+Everything BlueEyes knows about network faults lives in
+`src/diagnose/playbooks/*.json` — one file per fault, carrying its symptoms,
+keywords, the tests that tell it apart, the rules for reading them, and the
+fixes. **Adding a playbook is adding a file.** Nine ship: MTU blackhole, hop
+packet loss, asymmetric routing, a broken ECMP member, physical errors,
+congestion, name resolution, an L2 loop and duplex mismatch.
+
+Every human-readable string is `{ en, da }` and both are required. The catalogue
+is the matcher's input, so a playbook with no Danish keywords cannot be found by
+anybody describing the fault in Danish — and it would fail silently. It now
+fails at boot instead.
+
+### It works with AI switched off
+
+That is not a fallback kept around for emergencies; it is the product. A local
+keyword and symptom matcher picks the candidates, in both languages, with Danish
+inflection handled (*mister* / *mistes* / *pakkerne*) and generic words like
+"loss" discounted against specific ones like "starttls".
+
+When the AI assistant is enabled it may only **choose from the catalogue**. It
+maps the sentence onto playbook ids and fills in entities; anything it returns
+that is not in the catalogue is discarded — not corrected into its nearest
+neighbour, which would hand the operator a hallucination wearing a real name.
+A timeout, a bad key, a provider outage or an unparseable answer all fall back
+to keyword matching, and the screen says which matcher produced the plan.
+
+### Verdicts are decided in code
+
+The reading rules are evaluated by a small expression evaluator with a
+hand-written parser — **no `eval`, no `new Function`**, no calls, no indexing,
+nothing outside a six-comparison grammar. Everything else is rejected at boot.
+
+It is deliberately three-valued. A test that has not run has no value, and a rule
+over a value nobody measured must not decide anything, so a missing measurement
+is `unknown` rather than `false`. Only an outright match fires a rule, and the
+missing fields come back with the result — so "open" is never a shrug:
+
+| Reason | Means |
+| --- | --- |
+| `missing_data` | the tests it needs have not run — and it names them |
+| `no_rule_matched` | they ran, and this cause is not showing its signature |
+| `conflicting_evidence` | something both confirmed and ruled it out; neither claim is safe |
+
+A ruled-out cause is handed no fixes. A fix's placeholders are filled from the
+measurements (`MSS clamping to 1360`, `after hop 3`); one nothing measured says
+so rather than putting braces on an operator's screen.
+
+### Two new probes, because one playbook could never be confirmed
+
+`mtu_blackhole` could be proposed before and never proved: no probe sent a
+packet big enough to fail.
+
+- **`ping` now takes `sizes` and `df`** — the same target at several payload
+  sizes with don't-fragment set. 64 bytes through and 1472 gone is not loss; it
+  is an MTU. The result's top-level metrics deliberately describe the
+  **smallest** size, so a blocked 1472-byte packet never reads as "this host is
+  down" to availability, fleet health or the anomaly detector.
+- **`path_mtu`** binary-searches the largest DF packet the path carries and says
+  which world you are in. A router that answers `frag needed (mtu = 1400)` is a
+  path that is small and **says so**; packets that vanish in silence are the
+  blackhole that breaks applications, and the fix is a firewall rule or MSS
+  clamping rather than a smaller MTU on the client. `perHop` traceroutes and
+  asks each responding hop the same question small and large, so the drop is
+  located — and a hop that ignores ICMP echo altogether is never blamed, because
+  naming the wrong hop sends somebody to the wrong firewall.
+
+`path_mtu` is excluded from uptime and fleet health. It is something an operator
+runs on purpose, mid-outage, against a host that may already be down; an
+investigation must not move the SLA number it is investigating.
+
+Requires **blueeye-agent 0.25.x**. An older agent answers "unknown probe type",
+the facts stay missing, and the cause reads *open — waiting on* rather than
+confirmed or ruled out.
+
+### Roles, audit and the errors
+
+Reading a plan is viewer+ — a POST only because a description is a paragraph.
+Running the tests and evaluating them are operator+: one makes the network do
+something, the other can send context to a third party. Creation, runs and
+evaluations are written to the hash-chained audit log under category
+`diagnose`.
+
+400 for an empty description, one over 1000 characters, a target that is not a
+host, or an evaluation before anything ran. 403 for a viewer reaching for
+`/run`. 404 for an unknown session, playbook or agent. 500 answers JSON with no
+stack trace.
+
+The user's description is **data**: it travels as a JSON value alongside the
+catalogue the model must choose from, never concatenated into instructions, and
+capped at 1000 characters before it can leave the building.
+
+### Migrations
+
+- **096** — `probe_results.sizes` / `.mtu`, nullable, so an agent that has not
+  updated simply leaves them NULL.
+- **097** — `diagnose_sessions` / `diagnose_session_tests`. The per-test rows
+  carry the correlation this module needed and could not otherwise have:
+  `probe_results` has no run id, so a session finds its own results by
+  `(agent, type, target, ts >= dispatched_at)`.
+
+
 ## 0.144.3 — Logs, split into System Logs and User Logs
 
 One nav entry called **Logs** showed the server's own diagnostic stream and

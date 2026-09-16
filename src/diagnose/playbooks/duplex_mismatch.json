@@ -1,0 +1,138 @@
+{
+  "id": "duplex_mismatch",
+  "title": {
+    "en": "Duplex mismatch",
+    "da": "Duplex mismatch"
+  },
+  "summary": {
+    "en": "Slow, and it gets worse the more you send.",
+    "da": "Langsomt, og det bliver værre jo mere du sender."
+  },
+  "explanation": {
+    "en": "One end is running full duplex and the other half. The full-duplex end transmits whenever it likes; the half-duplex end sees that as a collision. Nothing is wrong until traffic flows in both directions at once, and then everything is.",
+    "da": "Den ene ende kører fuld duplex og den anden halv. Fuld-duplex-enden sender når den vil; halv-duplex-enden opfatter det som en kollision. Intet er galt før der er trafik i begge retninger samtidig, og så er alt galt."
+  },
+  "symptoms": {
+    "en": [
+      "slow and errors increase with traffic",
+      "fine when idle and terrible under load",
+      "late collisions",
+      "the link negotiated but performs badly",
+      "transfers are far slower than the link speed"
+    ],
+    "da": [
+      "langsomt og fejl stiger med trafik",
+      "fint i tomgang og elendigt under belastning",
+      "late collisions",
+      "linjen forhandlede men yder dårligt",
+      "overførsler er langt langsommere end linjehastigheden"
+    ]
+  },
+  "keywords": {
+    "en": [
+      "duplex",
+      "half",
+      "full",
+      "collision",
+      "collisions",
+      "negotiate",
+      "autoneg",
+      "speed",
+      "slow",
+      "10mbit",
+      "100mbit",
+      "mismatch",
+      "hardcoded"
+    ],
+    "da": [
+      "duplex",
+      "halv",
+      "fuld",
+      "kollision",
+      "kollisioner",
+      "forhandling",
+      "autoneg",
+      "hastighed",
+      "langsom",
+      "langsomt",
+      "10mbit",
+      "100mbit",
+      "mismatch",
+      "hårdkodet",
+      "fejl stiger"
+    ]
+  },
+  "tests": [
+    {
+      "type": "ping",
+      "params": {
+        "count": 20
+      },
+      "why": {
+        "en": "Loss and latency that get worse the more is in flight.",
+        "da": "Tab og latens der bliver værre jo mere der er undervejs."
+      }
+    }
+  ],
+  "views": [
+    {
+      "view": "interfaces",
+      "params": {},
+      "look_for": {
+        "en": "Errors climbing WITH utilisation, and a negotiated speed below what the port should do. Late collisions are the specific signature — BlueEyes does not collect that counter yet, so read it on the switch.",
+        "da": "Fejl der stiger MED forbruget, og en forhandlet hastighed under hvad porten burde kunne. Late collisions er den præcise signatur — BlueEyes henter ikke den tæller endnu, så læs den på switchen."
+      }
+    },
+    {
+      "view": "nics",
+      "params": {},
+      "look_for": {
+        "en": "The NIC's negotiated speed and duplex against what the other end thinks.",
+        "da": "NIC'ens forhandlede hastighed og duplex mod hvad den anden ende tror."
+      }
+    }
+  ],
+  "rules": [
+    {
+      "id": "errors_with_load",
+      "when": "iface.err_per_sec > 0 && iface.util_pct >= 20",
+      "effect": "confirm",
+      "because": {
+        "en": "Errors rise together with traffic, which is the mismatch showing itself only when both ends transmit.",
+        "da": "Fejl stiger sammen med trafikken, og det er netop mismatchet der kun viser sig når begge ender sender."
+      }
+    },
+    {
+      "id": "slow_link",
+      "when": "iface.speed_mbps <= 100 && iface.err_per_sec > 0",
+      "effect": "confirm",
+      "because": {
+        "en": "A port negotiated down to 100 Mbit or less AND showing errors is the classic failed-autonegotiation pair.",
+        "da": "En port der er forhandlet ned til 100 Mbit eller mindre OG viser fejl er det klassiske par efter mislykket autoforhandling."
+      }
+    },
+    {
+      "id": "clean_at_speed",
+      "when": "iface.err_per_sec == 0 && iface.speed_mbps >= 1000",
+      "effect": "rule_out",
+      "because": {
+        "en": "The port is at gigabit or better with no errors, so both ends agree.",
+        "da": "Porten kører gigabit eller bedre uden fejl, så begge ender er enige."
+      }
+    }
+  ],
+  "fixes": [
+    {
+      "en": "Set both ends the same way. Autonegotiation on both is right; hardcoded on both is acceptable; one of each is the fault.",
+      "da": "Sæt begge ender ens. Autoforhandling i begge er rigtigt; hårdkodet i begge er acceptabelt; én af hver er fejlen."
+    },
+    {
+      "en": "Check the switch port for late collisions — that counter is the proof, and it is only visible on the half-duplex end.",
+      "da": "Tjek switchporten for late collisions — den tæller er beviset, og den ses kun i halv-duplex-enden."
+    },
+    {
+      "en": "After changing it, bounce the port: duplex is negotiated at link-up, not on the fly.",
+      "da": "Bounce porten bagefter: duplex forhandles ved link-up, ikke undervejs."
+    }
+  ]
+}

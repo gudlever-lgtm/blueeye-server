@@ -1,0 +1,388 @@
+'use strict';
+
+const express = require('express');
+const { asyncHandler } = require('../middleware/asyncHandler');
+const { requireAuth, requireRole } = require('../auth/middleware');
+const { ROLES } = require('../auth/roles');
+const { validateDiagnoseRequest } = require('../validation/diagnoseValidation');
+const { validateProbeSpec } = require('../validation/probeValidation');
+const { matchPlaybooks } = require('../diagnose/match');
+const { selectPlaybooks } = require('../diagnose/llm');
+const { buildPlan } = require('../diagnose/plan');
+const { buildFacts } = require('../diagnose/facts');
+const { evaluateSession } = require('../diagnose/evaluate');
+const { localize, DEFAULT_LOCALE } = require('../diagnose/catalog');
+const { computeInterfaceHealth } = require('../health/interfaceHealth');
+const { silentLogger } = require('../logger');
+
+// Symptom-first diagnosis. Mounted at /api/diagnose and /api/playbooks.
+//
+// The operator writes what is wrong in their own words and gets back a plan:
+// the likely causes ranked, the tests to run with their parameters already
+// filled in, the views to open and what to look for in each, and the possible
+// fixes. Run the tests, ask for an evaluation, and every cause comes back
+// confirmed, ruled out or still open — with the rule and the measurement that
+// decided it.
+//
+// RBAC, and the line it draws:
+//   viewer+    read a plan, read the catalogue, read a session
+//   operator+  RUN the tests and EVALUATE
+// Running a test pushes a command to an agent and evaluation can send context to
+// a third party, so both are writes even though neither changes a record. A
+// viewer may read every conclusion; they may not make the network do something.
+//
+// NOT /api/diagnostics — that is the admin-only outbound-connectivity test area
+// and has been since long before this. The names sit uncomfortably close and the
+// two are unrelated; this one is the technician's, that one is the installer's.
+function createDiagnoseRouter({
+  catalog,
+  sessionsRepo = null,
+  agentsRepo = null,
+  resultsRepo = null,
+  probeResultsRepo = null,
+  agentCommander = null,
+  assistant = null,
+  auditLogger = null,
+  logger = silentLogger,
+} = {}) {
+  const router = express.Router();
+  const reader = requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN);
+  const writer = requireRole(ROLES.OPERATOR, ROLES.ADMIN);
+
+  const notFound = (res, what) => res.status(404).json({ error: `${what} not found` });
+  const unavailable = (res) => res.status(503).json({ error: 'Diagnosis sessions are not available' });
+
+  function parseId(raw) {
+    const n = Number(raw);
+    return Number.isInteger(n) && n > 0 ? n : null;
+  }
+
+  // ---------------------------------------------------------------- catalogue
+
+  // GET /api/playbooks — the catalogue, in one locale.
+  router.get('/playbooks', requireAuth, reader, asyncHandler(async (req, res) => {
+    const locale = req.query.locale || DEFAULT_LOCALE;
+    res.json({
+      playbooks: catalog.list().map((pb) => {
+        const v = localize(pb, locale);
+        return { id: v.id, title: v.title, summary: v.summary, explanation: v.explanation, symptoms: v.symptoms, testTypes: [...new Set(v.tests.map((t) => t.type))] };
+      }),
+    });
+  }));
+
+  // GET /api/playbooks/:id — one playbook, whole.
+  router.get('/playbooks/:id', requireAuth, reader, asyncHandler(async (req, res) => {
+    const pb = catalog.get(req.params.id);
+    if (!pb) return notFound(res, 'Playbook');
+    res.json({ playbook: localize(pb, req.query.locale || DEFAULT_LOCALE) });
+  }));
+
+  // ----------------------------------------------------------------- sessions
+
+  // POST /api/diagnose — describe the problem, get a plan.
+  //   400 empty / too long / bad target · 404 unknown agent · 503 no storage
+  router.post('/diagnose', requireAuth, reader, asyncHandler(async (req, res) => {
+    const { value, errors } = validateDiagnoseRequest(req.body);
+    if (errors) return res.status(400).json({ errors });
+    if (!sessionsRepo) return unavailable(res);
+
+    // An agent that does not exist is a 404, not a plan built around nothing.
+    for (const [field, id] of [['agentId', value.agentId], ['peerAgentId', value.peerAgentId]]) {
+      if (id == null) continue;
+      if (!agentsRepo) return unavailable(res);
+      // eslint-disable-next-line no-await-in-loop
+      const agent = await agentsRepo.findById(id);
+      if (!agent) return notFound(res, field === 'agentId' ? 'Agent' : 'Peer agent');
+    }
+
+    const locale = value.locale;
+    // The AI may narrow the choice; the keyword matcher is what guarantees there
+    // is one. Run the local matcher FIRST so the fallback is already in hand and
+    // a slow provider costs latency rather than an answer.
+    const keywordMatches = matchPlaybooks(value.description, catalog, { locale });
+
+    let matches = keywordMatches;
+    let matchedBy = 'keywords';
+    let entities = null;
+    if (value.useAi !== false && assistant) {
+      const ai = await selectPlaybooks({ assistant, catalog, description: value.description, locale, logger });
+      if (ai && ai.playbooks.length) {
+        matches = ai.playbooks;
+        matchedBy = 'llm';
+        entities = ai.entities;
+      }
+    }
+
+    if (matches.length === 0) {
+      // Nothing matched, and saying so is better than a plan built from the
+      // three playbooks that happened to sort first.
+      return res.status(200).json({
+        session: null,
+        matchedBy: 'keywords',
+        usedAi: false,
+        causes: [],
+        message: 'Nothing in the playbook catalogue matches that description. Try naming the protocol, the symptom or what changed.',
+      });
+    }
+
+    const target = value.target ?? (entities && entities.target) ?? null;
+    const plan = buildPlan({
+      matches, catalog, target,
+      agentId: value.agentId ?? null,
+      peerAgentId: value.peerAgentId ?? null,
+      locale, matchedBy,
+    });
+
+    const id = await sessionsRepo.create({
+      description: value.description,
+      locale, matchedBy,
+      agentId: value.agentId ?? null,
+      peerAgentId: value.peerAgentId ?? null,
+      target, entities, plan,
+      createdBy: (req.user && req.user.email) || null,
+      // Only dispatchable tests become rows. A plan with no target is still a
+      // useful plan — it says what to run — but there is nothing to run yet.
+      tests: target ? plan.tests.map((t) => ({
+        playbookId: t.playbookId, agentId: t.agentId, direction: t.direction,
+        probeType: t.probeType, target, params: t.params,
+      })) : [],
+    });
+
+    if (auditLogger) {
+      await auditLogger.record(req, {
+        category: 'diagnose', action: 'session_created', target: String(id),
+        detail: `Diagnosis plan for "${value.description.slice(0, 120)}" — ${plan.causes.map((c) => c.id).join(', ')} (matched by ${matchedBy})`,
+      });
+    }
+
+    res.status(201).json({ sessionId: id, ...plan });
+  }));
+
+  // GET /api/diagnose/:id — the plan, what each test is doing, and the last
+  // evaluation if there is one.
+  router.get('/diagnose/:id', requireAuth, reader, asyncHandler(async (req, res) => {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(400).json({ error: 'id must be a positive integer' });
+    if (!sessionsRepo) return unavailable(res);
+    const session = await sessionsRepo.findById(id);
+    if (!session) return notFound(res, 'Diagnosis session');
+    const tests = await sessionsRepo.listTests(id);
+    res.json({ session: { ...session, tests } });
+  }));
+
+  // GET /api/diagnose — recent sessions.
+  router.get('/diagnose', requireAuth, reader, asyncHandler(async (req, res) => {
+    if (!sessionsRepo) return unavailable(res);
+    const limit = req.query.limit === undefined ? 50 : Number(req.query.limit);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 200) return res.status(400).json({ error: 'limit must be 1..200' });
+    const sessions = await sessionsRepo.list({ limit });
+    // The plan is large and nobody reads it in a list; the detail endpoint has it.
+    res.json({ sessions: sessions.map(({ plan, evaluation, ...s }) => ({ ...s, causeCount: (plan && plan.causes ? plan.causes.length : 0), evaluated: !!evaluation })) });
+  }));
+
+  // POST /api/diagnose/:id/run — push the plan's tests to their agents.
+  //   403 viewer · 404 unknown session · 409 nothing to run
+  router.post('/diagnose/:id/run', requireAuth, writer, asyncHandler(async (req, res) => {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(400).json({ error: 'id must be a positive integer' });
+    if (!sessionsRepo) return unavailable(res);
+    const session = await sessionsRepo.findById(id);
+    if (!session) return notFound(res, 'Diagnosis session');
+    const tests = await sessionsRepo.listTests(id);
+    if (tests.length === 0) {
+      return res.status(409).json({ error: 'This plan has no tests to run — it needs a target and an agent first' });
+    }
+
+    let dispatched = 0;
+    const results = [];
+    for (const t of tests) {
+      // Re-validated here rather than trusted from storage. The spec was built
+      // from the catalogue, but it has been through the database since, and a
+      // probe spec ends up in an agent's argv.
+      const { value: spec, errors } = validateProbeSpec({ type: t.probeType, host: t.target, ...(t.params || {}) });
+      if (errors) {
+        // eslint-disable-next-line no-await-in-loop
+        await sessionsRepo.markFailed(t.id, `invalid probe spec: ${Object.values(errors)[0]}`);
+        results.push({ testId: t.id, status: 'failed', detail: Object.values(errors)[0] });
+        continue;
+      }
+      if (t.agentId == null) {
+        // eslint-disable-next-line no-await-in-loop
+        await sessionsRepo.markFailed(t.id, 'no agent assigned to this test');
+        results.push({ testId: t.id, status: 'failed', detail: 'no agent assigned' });
+        continue;
+      }
+      const delivered = agentCommander ? agentCommander.sendCommand(t.agentId, { name: 'run-probe', probe: spec }) : 0;
+      if (delivered === 0) {
+        // eslint-disable-next-line no-await-in-loop
+        await sessionsRepo.markFailed(t.id, 'agent is not connected');
+        results.push({ testId: t.id, status: 'failed', detail: 'agent is not connected' });
+        continue;
+      }
+      // eslint-disable-next-line no-await-in-loop
+      await sessionsRepo.markDispatched(t.id, { at: new Date(), agentId: t.agentId });
+      dispatched += 1;
+      results.push({ testId: t.id, status: 'dispatched', probeType: t.probeType, agentId: t.agentId, direction: t.direction });
+    }
+
+    if (dispatched > 0) await sessionsRepo.setStatus(id, 'running');
+    if (auditLogger) {
+      await auditLogger.record(req, {
+        category: 'diagnose', action: 'tests_run', target: String(id),
+        detail: `Dispatched ${dispatched}/${tests.length} test(s) to ${new Set(results.filter((r) => r.status === 'dispatched').map((r) => r.agentId)).size} agent(s)`,
+      });
+    }
+    res.status(202).json({ sessionId: id, dispatched, total: tests.length, tests: results });
+  }));
+
+  // POST /api/diagnose/:id/evaluate — read the results, apply the reading rules,
+  // and mark every cause.
+  //   400 nothing has been run yet · 403 viewer · 404 unknown session
+  router.post('/diagnose/:id/evaluate', requireAuth, writer, asyncHandler(async (req, res) => {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(400).json({ error: 'id must be a positive integer' });
+    if (!sessionsRepo) return unavailable(res);
+    const session = await sessionsRepo.findById(id);
+    if (!session) return notFound(res, 'Diagnosis session');
+    const tests = await sessionsRepo.listTests(id);
+    const dispatched = tests.filter((t) => t.dispatchedAt);
+    if (dispatched.length === 0) {
+      // Evaluating before anything ran would produce a page of "inconclusive"
+      // that looks like a verdict. It is not; it is an empty form.
+      return res.status(400).json({ error: 'No tests have been run for this session yet — run them first' });
+    }
+
+    // Collect each dispatched test's result, newest first per direction.
+    const forward = [];
+    const reverse = [];
+    for (const t of dispatched) {
+      // eslint-disable-next-line no-await-in-loop
+      const row = await sessionsRepo.findResultFor(t);
+      if (!row) continue;
+      // Link the evidence permanently the first time we find it, so the next
+      // evaluation is a read rather than another search.
+      if (t.probeResultId == null && row.id != null) {
+        // eslint-disable-next-line no-await-in-loop
+        await sessionsRepo.attachResult(t.id, row.id);
+      }
+      const shaped = shapeResult(row);
+      (t.direction === 'reverse' ? reverse : forward).push(shaped);
+    }
+
+    const interfaces = await loadInterfaces(session.agentId);
+    const branchCounts = countBranches(forward);
+    const facts = buildFacts({ results: forward, reverse, interfaces, branchCounts });
+
+    const playbooks = (session.plan && Array.isArray(session.plan.causes) ? session.plan.causes : [])
+      .map((c) => catalog.get(c.id))
+      .filter(Boolean);
+    const evaluated = evaluateSession(playbooks, facts, { locale: session.locale || DEFAULT_LOCALE });
+
+    const summary = await maybeSummarize(session, evaluated, facts);
+    const evaluation = {
+      ...evaluated,
+      facts,
+      summary,
+      resultsSeen: forward.length + reverse.length,
+      testsDispatched: dispatched.length,
+      evaluatedAt: new Date().toISOString(),
+    };
+    await sessionsRepo.saveEvaluation(id, evaluation);
+
+    if (auditLogger) {
+      await auditLogger.record(req, {
+        category: 'diagnose', action: 'evaluated', target: String(id),
+        detail: `${evaluated.counts.confirmed} confirmed, ${evaluated.counts.ruled_out} ruled out, ${evaluated.counts.inconclusive} inconclusive`,
+      });
+    }
+    res.json({ sessionId: id, ...evaluation });
+  }));
+
+  // --- helpers ---------------------------------------------------------------
+
+  // A probe_results row in the shape buildFacts() reads. The repository's own
+  // mapper is not used here because this endpoint reads raw rows straight out of
+  // the correlation query.
+  function shapeResult(row) {
+    const parse = (v) => {
+      if (v == null) return null;
+      if (typeof v === 'string') { try { return JSON.parse(v); } catch { return null; } }
+      return v;
+    };
+    return {
+      id: row.id,
+      type: row.type,
+      target: row.target,
+      ok: !!row.ok,
+      rttMs: row.rtt_ms, minMs: row.min_ms, maxMs: row.max_ms,
+      jitterMs: row.jitter_ms, lossPct: row.loss_pct, status: row.status,
+      hops: parse(row.hops), sizes: parse(row.sizes), mtu: parse(row.mtu),
+      detail: row.detail,
+    };
+  }
+
+  // Interface health for the agent the session runs from. Best effort: an
+  // interface read that fails must not take the whole evaluation down, because
+  // the probe results are the main evidence and they are already in hand.
+  async function loadInterfaces(agentId) {
+    if (agentId == null || !resultsRepo || typeof resultsRepo.findByAgentId !== 'function') return null;
+    try {
+      const rows = await resultsRepo.findByAgentId(agentId, { limit: 1 });
+      const traffic = rows && rows[0] && rows[0].payload && rows[0].payload.traffic;
+      return traffic ? computeInterfaceHealth(traffic) : null;
+    } catch (err) {
+      logger.warn(`diagnose: could not read interface health for agent ${agentId} (${err.message})`);
+      return null;
+    }
+  }
+
+  // How many parallel paths a trace saw, for the ECMP rules. Counted from the
+  // distinct hop IPs observed at each position: two different addresses at the
+  // same distance is a fork.
+  function countBranches(results) {
+    const out = {};
+    for (const r of results) {
+      if (!Array.isArray(r.hops) || r.hops.length === 0) continue;
+      const byPos = new Map();
+      for (const h of r.hops) {
+        if (!h || h.ip == null || h.hop == null) continue;
+        if (!byPos.has(h.hop)) byPos.set(h.hop, new Set());
+        byPos.get(h.hop).add(h.ip);
+      }
+      const widest = [...byPos.values()].reduce((max, s) => Math.max(max, s.size), 1);
+      out[r.type] = widest;
+    }
+    return out;
+  }
+
+  // The RCA paragraph. Optional in every sense: no assistant, assistant off, or
+  // a provider that does not answer all give null, and the verdicts above are
+  // unaffected — they were decided in code before this was called, and this is
+  // told so in its own prompt.
+  async function maybeSummarize(session, evaluated, facts) {
+    if (!assistant || typeof assistant.analyseDiagnose !== 'function') return null;
+    try {
+      if (typeof assistant.isEnabled === 'function' && !assistant.isEnabled()) return null;
+      const answer = await assistant.analyseDiagnose('summarize', {
+        description: session.description,
+        locale: session.locale || DEFAULT_LOCALE,
+        target: session.target,
+        causes: evaluated.causes.map((c) => ({
+          id: c.playbookId, title: c.title, verdict: c.verdict, reason: c.reason,
+          decidedBy: c.decidedBy,
+          evidence: c.evidence.filter((e) => e.result === true).map((e) => e.because),
+          missing: c.missingFacts,
+        })),
+        measurements: facts,
+      });
+      return { text: (answer && answer.answer) || null, model: (answer && answer.model) || null };
+    } catch (err) {
+      logger.warn(`diagnose: RCA summary unavailable (${err && err.message})`);
+      return null;
+    }
+  }
+
+  return router;
+}
+
+module.exports = { createDiagnoseRouter };

@@ -1,0 +1,153 @@
+{
+  "id": "dns_resolution",
+  "title": {
+    "en": "Name resolution",
+    "da": "Navneopslag"
+  },
+  "summary": {
+    "en": "The site does not work by name, but the IP does.",
+    "da": "Siden virker ikke på navn, men IP-adressen virker."
+  },
+  "explanation": {
+    "en": "The name does not resolve, resolves slowly, or resolves to the wrong address. Everything above it fails in ways that look like the network.",
+    "da": "Navnet kan ikke slås op, slås langsomt op, eller peger på den forkerte adresse. Alt ovenover fejler på måder der ligner netværket."
+  },
+  "symptoms": {
+    "en": [
+      "the site does not work but the ip does",
+      "cannot resolve the name",
+      "works by ip address",
+      "server not found",
+      "nxdomain",
+      "dns is slow"
+    ],
+    "da": [
+      "siden virker ikke men ip virker",
+      "kan ikke slå navnet op",
+      "virker på ip-adresse",
+      "server ikke fundet",
+      "nxdomain",
+      "dns er langsom"
+    ]
+  },
+  "keywords": {
+    "en": [
+      "dns",
+      "resolve",
+      "resolution",
+      "name",
+      "nxdomain",
+      "hostname",
+      "lookup",
+      "resolver",
+      "domain",
+      "servfail",
+      "cache"
+    ],
+    "da": [
+      "dns",
+      "opslag",
+      "navneopslag",
+      "navn",
+      "nxdomain",
+      "værtsnavn",
+      "resolver",
+      "domæne",
+      "servfail",
+      "cache",
+      "hjemmeside",
+      "siden"
+    ]
+  },
+  "tests": [
+    {
+      "type": "dns",
+      "params": {
+        "count": 4
+      },
+      "why": {
+        "en": "Does the name resolve from this agent, and how long does it take.",
+        "da": "Kan navnet slås op fra denne agent, og hvor lang tid tager det."
+      }
+    },
+    {
+      "type": "http",
+      "params": {},
+      "why": {
+        "en": "By name.",
+        "da": "På navn."
+      }
+    },
+    {
+      "type": "ping",
+      "params": {
+        "count": 4
+      },
+      "why": {
+        "en": "Against the IP the name should resolve to — if this works and the name does not, the answer is DNS.",
+        "da": "Mod den IP navnet burde pege på — hvis den virker og navnet ikke gør, er svaret DNS."
+      }
+    }
+  ],
+  "views": [
+    {
+      "view": "probes",
+      "params": {},
+      "look_for": {
+        "en": "The DNS probe: whether it resolved at all, what it resolved to, and how long it took.",
+        "da": "DNS-proben: om den overhovedet slog op, hvad den slog op til, og hvor lang tid det tog."
+      }
+    },
+    {
+      "view": "serviceAssurance",
+      "params": {},
+      "look_for": {
+        "en": "A DNS-record monitor on the zone — SPF/DKIM/DMARC/MX presets live there.",
+        "da": "En DNS-record monitor på zonen — SPF/DKIM/DMARC/MX-presets ligger dér."
+      }
+    }
+  ],
+  "rules": [
+    {
+      "id": "resolution_fails",
+      "when": "dns.ok == false",
+      "effect": "confirm",
+      "because": {
+        "en": "The name did not resolve from this agent.",
+        "da": "Navnet kunne ikke slås op fra denne agent."
+      }
+    },
+    {
+      "id": "resolution_slow",
+      "when": "dns.rtt_ms >= 1000",
+      "effect": "confirm",
+      "because": {
+        "en": "Resolution takes over a second, which every application above it will experience as the network being broken.",
+        "da": "Opslaget tager over et sekund, hvilket enhver applikation ovenover vil opleve som at netværket er i stykker."
+      }
+    },
+    {
+      "id": "resolves_fine",
+      "when": "dns.ok == true && dns.rtt_ms < 200",
+      "effect": "rule_out",
+      "because": {
+        "en": "The name resolves promptly.",
+        "da": "Navnet slås op prompte."
+      }
+    }
+  ],
+  "fixes": [
+    {
+      "en": "Check the resolver this host is configured to use, and whether it can reach the authoritative servers.",
+      "da": "Tjek hvilken resolver denne vært er sat op til at bruge, og om den kan nå de autoritative servere."
+    },
+    {
+      "en": "Compare the answer against a second resolver — two different answers is a stale cache or a split-horizon zone.",
+      "da": "Sammenlign svaret med en anden resolver — to forskellige svar er en forældet cache eller en split-horizon-zone."
+    },
+    {
+      "en": "If resolution is merely slow, look at whether the first resolver in the list is dead and the client is waiting for it to time out.",
+      "da": "Hvis opslaget bare er langsomt, så se om den første resolver på listen er død, og klienten venter på at den timer ud."
+    }
+  ]
+}

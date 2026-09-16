@@ -1,6 +1,12 @@
 'use strict';
 
-const PROBE_TYPES = ['ping', 'tcp', 'dns', 'traceroute', 'tcptraceroute', 'http', 'curl', 'pageload', 'transaction'];
+const PROBE_TYPES = ['ping', 'tcp', 'dns', 'traceroute', 'tcptraceroute', 'http', 'curl', 'pageload', 'transaction', 'path_mtu'];
+// Payload sizes a ping sweep may carry, and how many. The agent enforces the
+// same bounds independently (blueeye-agent src/probes/ping.js); rejecting them
+// here as well keeps a bad spec out of the database and gives the operator a
+// real error instead of a probe that silently measures nothing.
+const MAX_PING_SIZES = 6;
+const MAX_PAYLOAD_BYTES = 65500;
 const HTTP_METHODS = ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'];
 const HEADER_EXPECT_RE = /^[A-Za-z0-9!#$%&'*+.^_`|~-]+(\s*:\s*.{1,200})?$/;
 // A REQUEST header on a transaction step must be a real `Name: value` field.
@@ -80,6 +86,29 @@ function validateProbeResults(body) {
         ms: numOrNull(e && e.ms),
       }));
     }
+    // The ping size sweep: one entry per payload size the agent sent with
+    // don't-fragment set. The row's own rtt/loss columns describe the SMALLEST
+    // size, so this is the only place the size dependence lives.
+    let sizes = null;
+    if (r.sizes != null) {
+      if (!Array.isArray(r.sizes) || r.sizes.length > MAX_PING_SIZES) return { errors: { [`results[${i}].sizes`]: `sizes must be an array (<=${MAX_PING_SIZES})` } };
+      sizes = r.sizes.map((s0) => ({
+        bytes: intOrNull(s0 && s0.bytes),
+        sent: intOrNull(s0 && s0.sent),
+        recv: intOrNull(s0 && s0.recv),
+        lossPct: numOrNull(s0 && s0.lossPct),
+        rttMs: numOrNull(s0 && s0.rttMs),
+        minMs: numOrNull(s0 && s0.minMs),
+        maxMs: numOrNull(s0 && s0.maxMs),
+        jitterMs: numOrNull(s0 && s0.jitterMs),
+        mtuHint: intOrNull(s0 && s0.mtuHint),
+        // Did the probe MEASURE this size, or did it never leave the host? A
+        // payload the local interface refuses is not 100% loss on the path, and
+        // reading it as such would point the diagnosis at the wrong end.
+        measured: s0 ? s0.measured !== false : false,
+        error: s0 && s0.error != null ? String(s0.error).slice(0, 200) : null,
+      }));
+    }
     let hops = null;
     if (r.hops != null) {
       if (!Array.isArray(r.hops) || r.hops.length > 64) return { errors: { [`results[${i}].hops`]: 'hops must be an array (<=64)' } };
@@ -98,6 +127,50 @@ function validateProbeResults(body) {
         recv: intOrNull(h && h.recv),
       }));
     }
+    // path_mtu reports flat; it is STORED as one object because these six
+    // numbers only ever belong to this one probe type, and six sparse columns on
+    // a table every probe writes to would be six columns nobody else can use.
+    let mtu = null;
+    if (type === 'path_mtu') {
+      const probes = Array.isArray(r.probes)
+        ? r.probes.slice(0, 32).map((p0) => ({
+          bytes: intOrNull(p0 && p0.bytes),
+          packetBytes: intOrNull(p0 && p0.packetBytes),
+          ok: !!(p0 && p0.ok),
+          lossPct: numOrNull(p0 && p0.lossPct),
+          rttMs: numOrNull(p0 && p0.rttMs),
+          mtuHint: intOrNull(p0 && p0.mtuHint),
+        }))
+        : [];
+      // Per-hop MTU reachability — a DIFFERENT measurement from the traceroute
+      // latency the `hops` column holds, so it lives in here rather than there.
+      const mtuHops = Array.isArray(r.hops)
+        ? r.hops.slice(0, 40).map((h0) => ({
+          hop: intOrNull(h0 && h0.hop),
+          ip: h0 && h0.ip ? String(h0.ip).slice(0, 45) : null,
+          respondsSmall: !!(h0 && h0.respondsSmall),
+          // null, not false: a hop that never answered a small packet was never
+          // asked the large one, and claiming otherwise blames the wrong router.
+          okAtLarge: h0 && h0.okAtLarge === null ? null : !!(h0 && h0.okAtLarge),
+        }))
+        : [];
+      mtu = {
+        pathMtu: intOrNull(r.pathMtu),
+        blackholeDetected: r.blackholeDetected === true,
+        recommendedMss: intOrNull(r.recommendedMss),
+        mtuHint: intOrNull(r.mtuHint),
+        mtuDropAtHop: intOrNull(r.mtuDropAtHop),
+        low: intOrNull(r.low),
+        high: intOrNull(r.high),
+        overheadBytes: intOrNull(r.overheadBytes),
+        probes,
+        hops: mtuHops,
+      };
+      // The traceroute `hops` column is for traceroute. A path_mtu row's hops
+      // are already inside `mtu`; leaving them in both would invite a reader to
+      // take per-hop MTU reachability for per-hop latency.
+      hops = null;
+    }
     out.push({
       ts, type, target, ok: r.ok === true,
       rttMs: numOrNull(r.rttMs), minMs: numOrNull(r.minMs), maxMs: numOrNull(r.maxMs),
@@ -107,7 +180,10 @@ function validateProbeResults(body) {
       // design: the agent reports only the received byte count + content-type,
       // never the response body itself.
       bytes: intOrNull(r.bytes), contentType: r.contentType != null ? String(r.contentType).slice(0, 120) : null,
-      elements,
+      elements, sizes, mtu,
+      // A ping sweep also says whether don't-fragment was set; without it the
+      // sizes mean nothing, because the path would simply have fragmented them.
+      df: r.df === true,
       detail: r.detail != null ? String(r.detail).slice(0, 255) : (r.error != null ? String(r.error).slice(0, 255) : null),
       // The agent sets `error` only when it could not RUN the probe at all
       // (binary missing, tool timed out, unknown type) — distinct from ordinary
@@ -230,6 +306,47 @@ function validateProbeSpec(body) {
     const host = String(b.host || b.target || '').trim();
     if (!HOST_RE.test(host)) return { errors: { host: 'host/target is required and must be a valid hostname or IP' } };
     spec.host = host;
+    if (type === 'ping' && b.sizes !== undefined) {
+      // A size sweep: the same target asked at several payload sizes with
+      // don't-fragment set. This is what separates "the path is lossy" from
+      // "the path has an MTU nobody told the sender about" — 64 bytes through
+      // and 1472 bytes gone is not loss, it is an MTU.
+      if (!Array.isArray(b.sizes) || b.sizes.length === 0) return { errors: { sizes: 'sizes must be a non-empty array of payload byte counts' } };
+      if (b.sizes.length > MAX_PING_SIZES) return { errors: { sizes: `too many sizes (max ${MAX_PING_SIZES})` } };
+      const sizes = [];
+      for (const raw of b.sizes) {
+        const n = Number(raw);
+        if (!Number.isInteger(n) || n < 0 || n > MAX_PAYLOAD_BYTES) return { errors: { sizes: `each size must be an integer between 0 and ${MAX_PAYLOAD_BYTES}` } };
+        if (!sizes.includes(n)) sizes.push(n);
+      }
+      spec.sizes = sizes.sort((x, y) => x - y);
+    }
+    if (type === 'ping' && b.df !== undefined) spec.df = b.df === true || b.df === 'true';
+    if (type === 'path_mtu') {
+      // The search bounds, in PAYLOAD bytes. 1472 is a 1500-byte Ethernet frame,
+      // which is what a client assumes until something tells it otherwise; 548 is
+      // a 576-byte datagram, the smallest every IPv4 host must accept. Below that
+      // the answer is not "small MTU", it is "broken path".
+      if (b.high !== undefined) {
+        const h = Number(b.high);
+        if (!Number.isInteger(h) || h < 1 || h > MAX_PAYLOAD_BYTES) return { errors: { high: `high must be an integer between 1 and ${MAX_PAYLOAD_BYTES}` } };
+        spec.high = h;
+      }
+      if (b.low !== undefined) {
+        const l = Number(b.low);
+        if (!Number.isInteger(l) || l < 0 || l > MAX_PAYLOAD_BYTES) return { errors: { low: `low must be an integer between 0 and ${MAX_PAYLOAD_BYTES}` } };
+        if (spec.high !== undefined && l > spec.high) return { errors: { low: 'low must not exceed high' } };
+        spec.low = l;
+      }
+      // Per-hop localisation costs a traceroute plus two pings per hop, so it is
+      // opt-in rather than the default.
+      if (b.perHop !== undefined) spec.perHop = b.perHop === true || b.perHop === 'true';
+      if (b.maxHops !== undefined) {
+        const m = Number(b.maxHops);
+        if (!Number.isInteger(m) || m < 1 || m > 40) return { errors: { maxHops: 'maxHops must be an integer between 1 and 40' } };
+        spec.maxHops = m;
+      }
+    }
     if (type === 'tcp') {
       const port = Number(b.port);
       if (!Number.isInteger(port) || port < 1 || port > 65535) return { errors: { port: 'port (1-65535) is required for a tcp probe' } };
@@ -262,4 +379,4 @@ function validateProbeSpec(body) {
   return { value: spec };
 }
 
-module.exports = { validateProbeResults, validateProbeSpec, PROBE_TYPES };
+module.exports = { validateProbeResults, validateProbeSpec, PROBE_TYPES, MAX_PING_SIZES, MAX_PAYLOAD_BYTES };

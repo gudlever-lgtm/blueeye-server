@@ -83,41 +83,57 @@ test('a hostile or oversized sizes array is refused rather than truncated silent
   assert.ok(errsOf(one({ type: 'ping', target: 'h', sizes: new Array(9).fill({ bytes: 1 }) })).length);
 });
 
-test('path_mtu collapses into one stored object, and its hops stay out of the traceroute column', () => {
+test('path_mtu is stored as one object, in the agent\'s own vocabulary', () => {
   const { value } = one({
-    type: 'path_mtu', target: 'h', ok: true,
-    pathMtu: 1400, blackholeDetected: true, recommendedMss: 1360, mtuDropAtHop: 3,
-    low: 548, high: 1472, overheadBytes: 28,
-    probes: [{ bytes: 548, packetBytes: 576, ok: true }, { bytes: 1472, packetBytes: 1500, ok: false }],
+    type: 'path_mtu', target: 'h', ok: true, ip_version: 4,
+    path_mtu: 1400, blackhole_detected: true, icmp_frag_needed_seen: false,
+    mtu_drop_at_hop: 3, recommended_mss: 1360,
+    mss_supported: true, mss_observed: 1460, duration_ms: 4210,
     hops: [
-      { hop: 1, ip: '10.0.0.1', respondsSmall: true, okAtLarge: true },
-      { hop: 2, ip: '10.0.0.2', respondsSmall: true, okAtLarge: false },
-      { hop: 3, ip: '10.0.0.3', respondsSmall: false, okAtLarge: null },
+      { hop: 1, ip: '10.0.0.1', max_mtu: 1500, status: 'ok' },
+      { hop: 2, ip: '10.0.0.2', max_mtu: 1400, status: 'blackhole' },
+      { hop: 3, ip: null, max_mtu: null, status: 'no_response' },
+      { hop: 4, ip: '10.0.0.4', max_mtu: null, status: 'skipped' },
     ],
   });
   const r = value.results[0];
-  assert.equal(r.mtu.pathMtu, 1400);
-  assert.equal(r.mtu.blackholeDetected, true);
-  assert.equal(r.mtu.recommendedMss, 1360);
-  assert.equal(r.mtu.mtuDropAtHop, 3);
-  assert.equal(r.mtu.probes.length, 2);
-  // A hop that never answered a small packet was never asked the large one.
-  assert.equal(r.mtu.hops[2].okAtLarge, null);
-  assert.equal(r.mtu.hops[1].okAtLarge, false);
-  // Per-hop MTU reachability is not per-hop latency, so it does not go in `hops`.
+  assert.equal(r.mtu.path_mtu, 1400);
+  assert.equal(r.mtu.blackhole_detected, true);
+  assert.equal(r.mtu.icmp_frag_needed_seen, false);
+  assert.equal(r.mtu.recommended_mss, 1360);
+  assert.equal(r.mtu.mtu_drop_at_hop, 3);
+  assert.equal(r.mtu.mss_observed, 1460);
+  assert.equal(r.mtu.hops.length, 4);
+  assert.deepEqual(r.mtu.hops.map((h) => h.status), ['ok', 'blackhole', 'no_response', 'skipped']);
+  // Per-hop MTU is not per-hop latency, so it does not go in the `hops` column.
   assert.equal(r.hops, null);
 });
 
-test('a blackhole is only claimed by a run that got far enough to have an opinion', () => {
-  const { value } = one({ type: 'path_mtu', target: 'h', ok: false, blackholeDetected: false, error: 'no answer' });
-  assert.equal(value.results[0].mtu.pathMtu, null);
-  assert.equal(value.results[0].mtu.blackholeDetected, false);
-  // and facts.js is what refuses to hand that to a rule — see diagnoseRules.
+test('a hop status the server does not recognise is never coerced into a good one', () => {
+  // A newer agent inventing a state must not have it read as "ok" — that would
+  // turn an unknown into an all-clear, which is the direction that hurts.
+  const { value } = one({
+    type: 'path_mtu', target: 'h', ok: true,
+    hops: [{ hop: 1, ip: '10.0.0.1', max_mtu: 1500, status: 'quantum' }, { hop: 2, ip: '10.0.0.2', status: 'ok' }],
+  });
+  assert.equal(value.results[0].mtu.hops[0].status, null);
+  assert.equal(value.results[0].mtu.hops[1].status, 'ok');
+});
+
+test('a blackhole is only claimed by a run that measured an MTU', () => {
+  // The agent reports ok:true even when it finds a blackhole — the finding is
+  // about the path, not the agent — so `ok` cannot be the gate. The measured
+  // MTU is: no MTU means it did not look.
+  const { value } = one({ type: 'path_mtu', target: 'h', ok: true, path_mtu: null, blackhole_detected: false, mss_supported: false });
+  assert.equal(value.results[0].mtu.path_mtu, null);
+  const { buildFacts } = require('../src/diagnose/facts');
+  const facts = buildFacts({ results: [{ type: 'path_mtu', ok: true, mtu: value.results[0].mtu }] });
+  assert.equal(facts.path_mtu.blackhole_detected, undefined, 'absent must not read as "no blackhole"');
 });
 
 test('the new columns round-trip through the repository mapper', () => {
   const sizes = [{ bytes: 64, lossPct: 0, measured: true }];
-  const mtu = { pathMtu: 1400, blackholeDetected: true, probes: [], hops: [] };
+  const mtu = { path_mtu: 1400, blackhole_detected: true, hops: [] };
   const row = toRow(7, { type: 'ping', target: 'h', ok: true, ts: new Date(0), sizes, mtu });
   const back = fromRow({
     id: 1, agent_id: 7, ts: new Date(0), type: 'ping', target: 'h', ok: 1,

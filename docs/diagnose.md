@@ -255,30 +255,71 @@ it to break.
 
 ## The two probes this module needed
 
-`mtu_blackhole` could be *proposed* before, and never *confirmed*. Both gaps are
-now closed in **blueeye-agent 0.25.x** (keep the server and agent in lockstep):
+`mtu_blackhole` could be *proposed* before, and never *confirmed*: no probe sent
+a packet big enough to fail.
 
-- **`ping` with `sizes` + `df`** — the same target at several payload sizes with
-  don't-fragment set. 64 bytes through and 1472 gone is not loss; it is an MTU.
-  The result's top-level metrics deliberately describe the **smallest** size, so
-  a blocked 1472-byte packet never reads as an outage to availability, fleet
-  health or the anomaly detector. Only `sizes[]` carries the size dependence.
-- **`path_mtu`** — binary-searches the largest DF packet the path carries and
-  reports which world you are in. `blackholeDetected: false` means a router
-  answered with its MTU: PMTUD works, and any host that listens to ICMP copes on
-  its own. `blackholeDetected: true` means large packets vanish in silence,
-  which is the one that breaks applications; the fix is a firewall rule or MSS
-  clamping, not a smaller MTU on the client. `perHop: true` traceroutes and then
-  asks each responding hop the same question small and large, so
-  `mtuDropAtHop` names where it stops — and a hop that ignores ICMP echo
-  altogether is never blamed, because naming the wrong hop sends somebody to the
-  wrong firewall.
+- **`ping` with `sizes` + `df`** (blueeye-agent `src/probes/ping.js`) — the same
+  target at several payload sizes with don't-fragment set. 64 bytes through and
+  1472 gone is not loss; it is an MTU. The result's top-level metrics
+  deliberately describe the **smallest** size, so a blocked 1472-byte packet
+  never reads as an outage to availability, fleet health or the anomaly
+  detector. Only `sizes[]` carries the size dependence.
+- **`path_mtu`** (blueeye-agent `src/probes/pathmtu.js`) — the largest packet the
+  path carries, **per hop**. A hop is measured by pinging the *target* with the
+  TTL limited to that hop rather than by pinging the hop itself, so the packet
+  crosses exactly the links up to it and the measured MTU is monotonic along the
+  path — which is what makes `mtu_drop_at_hop` name the router that narrows it
+  rather than the first one that happens to answer.
+
+### The four things that look alike from outside
+
+This is the distinction the whole playbook rests on, and the probe reports it
+per hop as `status`:
+
+| | Means | Is it the fault? |
+| --- | --- | --- |
+| `ok` | carries what it was handed | no |
+| `reduced` | narrows the path **and says so** (ICMP frag-needed) | no — tunnels do this and PMTUD copes |
+| `blackhole` | narrows it in silence | **yes** — the sender is never told, so the connection establishes and stalls on its first full-size segment |
+| `no_response` | answers no ICMP at all | no, and never counted as one |
+| `skipped` | past the probe's time budget | reported, never dropped |
+
+Ordinary packet loss is the fourth thing that must not be read as an MTU
+ceiling; the probe sends several packets per size so a single drop cannot be
+taken for the limit.
+
+`icmp_frag_needed_seen` is what separates the second row from the third at the
+whole-path level, and it is a fact in its own right rather than something
+inferred from a boolean's absence.
+
+### The MSS evidence
+
+On Linux the probe also reads the **negotiated MSS** off its own socket
+(`ss -tin`, matched on the probe's local port). `mss_exceeds_path` — derived in
+`facts.js`, only when *both* numbers exist — is the direct evidence that
+clamping is missing: the kernel is still offering a segment the path will not
+carry, and nothing has told it otherwise.
+
+`mss_supported: false` means the agent could not look. That is not the same as
+nothing to report, so the derived fact is left **absent** rather than false, and
+a rule reading it gets `unknown` instead of an all-clear.
+
+### Field names
+
+The agent reports `path_mtu`, `blackhole_detected`, `icmp_frag_needed_seen`,
+`mtu_drop_at_hop`, `recommended_mss`, `mss_observed` — **snake_case, and stored
+under exactly those names.** A field renamed in transit means a reader holding
+the agent's output and a reader holding the row are looking at two different
+names for one measurement, and the single place that translates becomes the
+single place a typo is silent.
 
 Stored in `probe_results.sizes` and `probe_results.mtu` (migration 096).
 **`path_mtu` is excluded from uptime and fleet health** (`DIAGNOSTIC_TYPES`): it
 is something somebody runs on purpose, mid-outage, against a host that may
 already be down, and an investigation must not move the SLA number it is
-investigating.
+investigating. The probe itself reports `ok: true` even when it finds a
+blackhole — the finding is about the path, not the agent — so the exclusion is
+what keeps the two decisions independent.
 
 ### An agent that has not updated
 
@@ -287,8 +328,6 @@ Answers `unknown probe type "path_mtu"`, which becomes an `execError` and an
 cause reads `inconclusive` / `missing_data` rather than confirmed or ruled out.
 That is the correct answer — but it does mean an un-updated fleet cannot confirm
 an MTU blackhole.
-
----
 
 ## The starter catalogue
 

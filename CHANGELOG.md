@@ -75,14 +75,15 @@ packet big enough to fail.
   is an MTU. The result's top-level metrics deliberately describe the
   **smallest** size, so a blocked 1472-byte packet never reads as "this host is
   down" to availability, fleet health or the anomaly detector.
-- **`path_mtu`** binary-searches the largest DF packet the path carries and says
-  which world you are in. A router that answers `frag needed (mtu = 1400)` is a
-  path that is small and **says so**; packets that vanish in silence are the
-  blackhole that breaks applications, and the fix is a firewall rule or MSS
-  clamping rather than a smaller MTU on the client. `perHop` traceroutes and
-  asks each responding hop the same question small and large, so the drop is
-  located — and a hop that ignores ICMP echo altogether is never blamed, because
-  naming the wrong hop sends somebody to the wrong firewall.
+- **`path_mtu`** measures the largest packet the path carries **per hop**, by
+  pinging the target with the TTL limited to each hop — so the measured MTU is
+  monotonic along the path and `mtu_drop_at_hop` names the router that narrows
+  it. It separates four things that look alike from outside: a hop that carries
+  what it was handed, one that narrows the path **and says so** (normal — PMTUD
+  copes), one that narrows it in silence (the fault), and one that simply does
+  not answer ICMP (never counted as a fault). On Linux it also reads the
+  negotiated MSS off its own socket, which is the direct evidence that clamping
+  is missing.
 
 `path_mtu` is excluded from uptime and fleet health. It is something an operator
 runs on purpose, mid-outage, against a host that may already be down; an

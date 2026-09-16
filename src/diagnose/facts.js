@@ -27,9 +27,16 @@ const FACT_SCHEMA = [
   'ping.ok', 'ping.loss_pct', 'ping.rtt_ms', 'ping.min_ms', 'ping.max_ms', 'ping.jitter_ms',
   // The don't-fragment size sweep. One namespace per payload size asked for.
   'ping.df', 'ping.size_*.loss_pct', 'ping.size_*.rtt_ms', 'ping.size_*.ok', 'ping.size_*.measured', 'ping.size_*.mtu_hint',
-  // What the path will actually carry.
-  'path_mtu.ok', 'path_mtu.path_mtu', 'path_mtu.blackhole_detected', 'path_mtu.recommended_mss',
-  'path_mtu.mtu_hint', 'path_mtu.mtu_drop_at_hop', 'path_mtu.low', 'path_mtu.high',
+  // What the path will actually carry. Named as the agent names it
+  // (blueeye-agent src/probes/pathmtu.js) — a field renamed in transit is a
+  // field whose two names can drift apart silently.
+  'path_mtu.ok', 'path_mtu.path_mtu', 'path_mtu.blackhole_detected',
+  'path_mtu.icmp_frag_needed_seen', 'path_mtu.recommended_mss', 'path_mtu.mtu_drop_at_hop',
+  'path_mtu.ip_version', 'path_mtu.mss_supported', 'path_mtu.mss_observed',
+  // Derived, not reported: is the kernel still negotiating an MSS the path
+  // cannot carry? That is the direct evidence that clamping is missing, and it
+  // is the difference between "the path is narrow" and "nothing told the sender".
+  'path_mtu.mss_exceeds_path',
   // The path itself.
   'traceroute.ok', 'traceroute.hop_count', 'traceroute.branch_count',
   'traceroute.sustained_loss_from_hop', 'traceroute.worst_hop_loss_pct',
@@ -58,6 +65,11 @@ function isKnownFactPath(path) {
 }
 
 const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
+
+// What a TCP segment loses to headers before any payload: IP + TCP, 20 + 20 for
+// IPv4 and 40 + 20 for IPv6. Used to turn a measured path MTU into the MSS the
+// path can actually carry.
+const MSS_HEADERS = { 4: 40, 6: 60 };
 // Drops the keys that were never measured, so a rule sees "missing" rather than
 // a default. Object.fromEntries on the surviving pairs keeps the call sites flat.
 const defined = (obj) => Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined));
@@ -96,18 +108,28 @@ function pingFacts(r) {
 
 function pathMtuFacts(r) {
   const m = r.mtu && typeof r.mtu === 'object' ? r.mtu : {};
+  const pathMtu = num(m.path_mtu);
+  const mssObserved = num(m.mss_observed);
   return defined({
     ok: typeof r.ok === 'boolean' ? r.ok : undefined,
-    path_mtu: num(m.pathMtu),
-    // Only a run that got far enough to have an opinion may state one: the flag
-    // is false by default in storage, and a probe that never reached the target
-    // has not ruled a blackhole out.
-    blackhole_detected: r.ok === true && m.pathMtu != null ? m.blackholeDetected === true : undefined,
-    recommended_mss: num(m.recommendedMss),
-    mtu_hint: num(m.mtuHint),
-    mtu_drop_at_hop: num(m.mtuDropAtHop),
-    low: num(m.low),
-    high: num(m.high),
+    path_mtu: pathMtu,
+    // Only a run that got far enough to have an opinion may state one. The flag
+    // is false by default in storage, and a probe that measured no MTU has not
+    // ruled a blackhole out — it has not looked.
+    blackhole_detected: pathMtu != null ? m.blackhole_detected === true : undefined,
+    icmp_frag_needed_seen: pathMtu != null ? m.icmp_frag_needed_seen === true : undefined,
+    recommended_mss: num(m.recommended_mss),
+    mtu_drop_at_hop: num(m.mtu_drop_at_hop),
+    ip_version: num(m.ip_version),
+    mss_supported: typeof m.mss_supported === 'boolean' ? m.mss_supported : undefined,
+    mss_observed: mssObserved,
+    // The kernel is still offering a segment the path will not carry. Only
+    // answerable when BOTH numbers exist: `mss_supported:false` means the agent
+    // could not look, which is not the same as nothing to report, and a rule
+    // must not read the absence as an all-clear.
+    mss_exceeds_path: (mssObserved != null && pathMtu != null)
+      ? mssObserved > pathMtu - MSS_HEADERS[m.ip_version === 6 ? 6 : 4]
+      : undefined,
   });
 }
 

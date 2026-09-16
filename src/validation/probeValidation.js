@@ -127,48 +127,63 @@ function validateProbeResults(body) {
         recv: intOrNull(h && h.recv),
       }));
     }
-    // path_mtu reports flat; it is STORED as one object because these six
-    // numbers only ever belong to this one probe type, and six sparse columns on
-    // a table every probe writes to would be six columns nobody else can use.
+    // path_mtu reports FLAT and in snake_case (blueeye-agent src/probes/pathmtu.js).
+    // It is stored as one object because these fields only ever belong to this
+    // one probe type, and a column each on a table every probe writes to would
+    // be columns nobody else can use.
+    //
+    // The agent's own vocabulary is kept rather than re-cased on the way in.
+    // Renaming a field in transit means a reader holding the agent's output and
+    // a reader holding this row are looking at two different names for the same
+    // measurement, and the one place that has to translate becomes the one place
+    // a typo is silent.
     let mtu = null;
     if (type === 'path_mtu') {
-      const probes = Array.isArray(r.probes)
-        ? r.probes.slice(0, 32).map((p0) => ({
-          bytes: intOrNull(p0 && p0.bytes),
-          packetBytes: intOrNull(p0 && p0.packetBytes),
-          ok: !!(p0 && p0.ok),
-          lossPct: numOrNull(p0 && p0.lossPct),
-          rttMs: numOrNull(p0 && p0.rttMs),
-          mtuHint: intOrNull(p0 && p0.mtuHint),
-        }))
-        : [];
-      // Per-hop MTU reachability — a DIFFERENT measurement from the traceroute
-      // latency the `hops` column holds, so it lives in here rather than there.
+      // Per-hop MTU, and why each hop reads the way it does. A DIFFERENT
+      // measurement from the traceroute latency the `hops` column holds, so it
+      // lives in here rather than there.
+      //
+      //   ok           carries what it was handed
+      //   reduced      narrows the path AND says so (ICMP frag-needed) — normal
+      //   blackhole    narrows it in silence — the one that breaks applications
+      //   no_response  answers no ICMP at all. NOT a fault, and never counted as
+      //                one: a router that ignores echo looks identical to one
+      //                dropping oversized packets, and naming the wrong hop sends
+      //                somebody to the wrong firewall
+      //   skipped      past the probe's time budget — reported, never dropped
+      const HOP_STATUS = ['ok', 'reduced', 'blackhole', 'no_response', 'skipped'];
       const mtuHops = Array.isArray(r.hops)
-        ? r.hops.slice(0, 40).map((h0) => ({
+        ? r.hops.slice(0, 64).map((h0) => ({
           hop: intOrNull(h0 && h0.hop),
           ip: h0 && h0.ip ? String(h0.ip).slice(0, 45) : null,
-          respondsSmall: !!(h0 && h0.respondsSmall),
-          // null, not false: a hop that never answered a small packet was never
-          // asked the large one, and claiming otherwise blames the wrong router.
-          okAtLarge: h0 && h0.okAtLarge === null ? null : !!(h0 && h0.okAtLarge),
+          max_mtu: intOrNull(h0 && h0.max_mtu),
+          // An unrecognised status is not silently coerced into a good one: a
+          // newer agent inventing a state must not have it read as `ok`.
+          status: HOP_STATUS.includes(h0 && h0.status) ? h0.status : null,
         }))
         : [];
       mtu = {
-        pathMtu: intOrNull(r.pathMtu),
-        blackholeDetected: r.blackholeDetected === true,
-        recommendedMss: intOrNull(r.recommendedMss),
-        mtuHint: intOrNull(r.mtuHint),
-        mtuDropAtHop: intOrNull(r.mtuDropAtHop),
-        low: intOrNull(r.low),
-        high: intOrNull(r.high),
-        overheadBytes: intOrNull(r.overheadBytes),
-        probes,
+        path_mtu: intOrNull(r.path_mtu),
+        // Only a run that reached a verdict may state one.
+        blackhole_detected: r.blackhole_detected === true,
+        // Whether any router volunteered its MTU. A path that is small and SAYS
+        // so is a different finding from one that swallows the packets.
+        icmp_frag_needed_seen: r.icmp_frag_needed_seen === true,
+        mtu_drop_at_hop: intOrNull(r.mtu_drop_at_hop),
+        recommended_mss: intOrNull(r.recommended_mss),
+        ip_version: r.ip_version === 6 || r.ip_version === '6' ? 6 : 4,
+        // The negotiated MSS the kernel actually used, where the agent could read
+        // it (Linux `ss -tin`). An observed MSS above the measured path is the
+        // direct evidence that clamping is missing. `supported:false` means the
+        // agent could not look, which is not the same as "nothing to report".
+        mss_supported: r.mss_supported === true,
+        mss_observed: intOrNull(r.mss_observed),
+        duration_ms: intOrNull(r.duration_ms),
         hops: mtuHops,
       };
       // The traceroute `hops` column is for traceroute. A path_mtu row's hops
       // are already inside `mtu`; leaving them in both would invite a reader to
-      // take per-hop MTU reachability for per-hop latency.
+      // take per-hop MTU for per-hop latency.
       hops = null;
     }
     out.push({

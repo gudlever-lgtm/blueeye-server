@@ -98,10 +98,11 @@ test('measurements that ran and simply do not match say so, distinctly from miss
   // Everything mtu_blackhole reads is present; none of its patterns fit.
   const facts = {
     ping: { size_64: { loss_pct: 0 }, size_1472: { loss_pct: 10 } },
-    path_mtu: { blackhole_detected: false, path_mtu: 1400 },
+    path_mtu: { blackhole_detected: false, icmp_frag_needed_seen: true, path_mtu: 1400 },
   };
   const r = evaluatePlaybook(pb('mtu_blackhole'), facts);
-  // 1400 < 1500 with PMTUD working is a confirm on its own — a real answer.
+  // 1400 < 1500 with a router that SAID so is a confirm on its own — a real
+  // answer, and a different one from the blackhole.
   assert.equal(r.verdict, VERDICTS.CONFIRMED);
   // 1% end-to-end loss with a clean per-hop trace fits nothing: it is below the
   // threshold that confirms loss and above the zero that rules it out. That is
@@ -122,7 +123,7 @@ test('evidence that both confirms and rules out is inconclusive, not a coin toss
   // silently preferring one would hide that the data disagrees with itself.
   const facts = {
     ping: { size_64: { loss_pct: 0 }, size_1472: { loss_pct: 0 } },
-    path_mtu: { blackhole_detected: true, path_mtu: 1500 },
+    path_mtu: { blackhole_detected: true, icmp_frag_needed_seen: false, path_mtu: 1500 },
   };
   const r = evaluatePlaybook(pb('mtu_blackhole'), facts);
   assert.equal(r.verdict, VERDICTS.INCONCLUSIVE);
@@ -174,10 +175,33 @@ test('a size the local stack refused is not reported as loss on the path', () =>
   assert.equal(facts.ping.size_9000.loss_pct, undefined, 'an unmeasured size contributes no loss');
 });
 
-test('a path_mtu run that never reached the target does not rule a blackhole in or out', () => {
-  const facts = buildFacts({ results: [{ type: 'path_mtu', ok: false, mtu: { pathMtu: null, blackholeDetected: false } }] });
+test('a path_mtu run that measured no MTU does not rule a blackhole in or out', () => {
+  // `blackhole_detected` is false by default in storage. A probe that measured
+  // nothing has not looked, and reading its default as an all-clear is how a
+  // real fault gets marked "ruled out".
+  const facts = buildFacts({ results: [{ type: 'path_mtu', ok: false, mtu: { path_mtu: null, blackhole_detected: false, mss_supported: false } }] });
   assert.equal(facts.path_mtu.blackhole_detected, undefined);
+  assert.equal(facts.path_mtu.icmp_frag_needed_seen, undefined);
+  assert.equal(facts.path_mtu.mss_exceeds_path, undefined, 'the agent could not read the MSS — that is not "nothing to report"');
   assert.equal(evaluatePlaybook(pb('mtu_blackhole'), facts).verdict, VERDICTS.INCONCLUSIVE);
+});
+
+test('the negotiated MSS is only compared with the path when BOTH numbers exist', () => {
+  const both = buildFacts({ results: [{ type: 'path_mtu', ok: true, mtu: { path_mtu: 1400, mss_supported: true, mss_observed: 1460, ip_version: 4 } }] });
+  assert.equal(both.path_mtu.mss_exceeds_path, true, '1460 will not fit a 1400-byte path');
+  const clamped = buildFacts({ results: [{ type: 'path_mtu', ok: true, mtu: { path_mtu: 1400, mss_supported: true, mss_observed: 1360, ip_version: 4 } }] });
+  assert.equal(clamped.path_mtu.mss_exceeds_path, false, 'clamped to exactly what the path carries');
+  const v6 = buildFacts({ results: [{ type: 'path_mtu', ok: true, mtu: { path_mtu: 1400, mss_supported: true, mss_observed: 1340, ip_version: 6 } }] });
+  assert.equal(v6.path_mtu.mss_exceeds_path, false, 'IPv6 loses 60 bytes to headers, not 40');
+  const notRead = buildFacts({ results: [{ type: 'path_mtu', ok: true, mtu: { path_mtu: 1400, mss_supported: false } }] });
+  assert.equal(notRead.path_mtu.mss_exceeds_path, undefined);
+});
+
+test('the observed MSS above the path confirms the missing clamp on its own', () => {
+  const facts = { path_mtu: { mss_exceeds_path: true } };
+  const r = evaluatePlaybook(pb('mtu_blackhole'), facts);
+  assert.equal(r.verdict, VERDICTS.CONFIRMED);
+  assert.ok(r.decidedBy.includes('mss_above_path'));
 });
 
 test('virtual interfaces are kept out of the interface facts', () => {
@@ -211,7 +235,7 @@ test('comparing two paths says whether the question was asked at all', () => {
 // --- fixes -------------------------------------------------------------------
 
 test('a fix fills its placeholders from the measurements', () => {
-  const facts = { path_mtu: { recommended_mss: 1360, mtu_drop_at_hop: 3, path_mtu: 1400 } };
+  const facts = { path_mtu: { recommended_mss: 1360, mtu_drop_at_hop: 3, path_mtu: 1400, mss_observed: 1460 } };
   const r = evaluatePlaybook(pb('mtu_blackhole'), { ...facts, path_mtu: { ...facts.path_mtu, blackhole_detected: true } }, { locale: 'da' });
   const mss = r.fixes.find((f) => f.text.includes('1360'));
   assert.ok(mss, `no fix carried the MSS: ${r.fixes.map((f) => f.text).join(' | ')}`);

@@ -231,6 +231,36 @@ test('a failing detail shows the error in the row instead of leaving it blank', 
   const detail = ctx.doc.querySelector('.probe-detail-row');
   assert.equal(detail.hidden, false);
   assert.ok(detail.textContent.trim().length > 0, 'an open row that shows nothing is worse than a closed one');
+  assert.ok(detail.querySelector('.error'), 'the row does not say the detail failed');
+});
+
+// The "fetched once and kept" rule must not keep a FAILURE. probeDetail answers
+// a failed history fetch with an error node rather than by throwing, so the
+// promise resolves and the naive version marks the row loaded — leaving the
+// error frozen in place for as long as the row exists, even once the server is
+// answering again.
+test('a detail that failed is retried on the next open, not cached', async (t) => {
+  let history = undefined; // 404 from the fake
+  const ctx = await boot(t, [row({ type: 'ping', target: '1.1.1.1', rttMs: 12 })]);
+  // Re-point /api/probes at the switchable value, keeping the rest of the fake.
+  const inner = ctx.window.fetch;
+  ctx.window.fetch = async (url, opts) => {
+    if (String(url).split('?')[0] === '/api/probes' && history === undefined) {
+      return { ok: false, status: 500, headers: { get: () => 'application/json' }, json: async () => ({ error: 'db down' }), text: async () => '{}' };
+    }
+    return inner(url, opts);
+  };
+
+  const tr = ctx.doc.querySelector('.probe-result-row');
+  tr.click();
+  await tick(300);
+  assert.ok(ctx.doc.querySelector('.probe-detail-row .error'), 'the first open should have failed');
+
+  history = { agentId: 9, results: [] };
+  tr.click(); await tick(50);
+  tr.click(); await tick(300);
+  assert.ok(!ctx.doc.querySelector('.probe-detail-row .error'),
+    'the row cached the error and never tried again');
 });
 
 // ----------------------------------------------------------------- refresh

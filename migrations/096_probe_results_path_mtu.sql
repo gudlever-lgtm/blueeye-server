@@ -1,0 +1,38 @@
+-- 096 — path-MTU results.
+--
+-- The `path_mtu` probe answers a question no other probe asks: how BIG a packet
+-- can the path carry. Everything already stored on probe_results is measured
+-- with small packets — RTT, loss, jitter, hop latency — and every one of them
+-- comes back clean on a path that is silently discarding full-size packets.
+-- That is precisely the fault this probe exists to find, so its verdict needs
+-- somewhere to live rather than being squeezed into a metric that means
+-- something else.
+--
+-- ONE JSON COLUMN, not seven. The per-probe-type precedent on this table is
+-- exactly this: `elements` was added for the page-load waterfall, `hops` for the
+-- traceroute path. A path-MTU verdict is a small, fixed object read as a whole
+-- (the dashboard panel and the root-cause rules both want all of it or none of
+-- it), and it is present on well under one row in a thousand — seven nullable
+-- columns would be seven nulls on every ping, tcp, dns and http row in the
+-- table.
+--
+--   {
+--     "ipVersion": 4,              -- 4 or 6
+--     "pathMtu": 1420,             -- largest packet the path carried
+--     "blackholeDetected": true,   -- large packets dropped with no ICMP
+--     "icmpFragNeededSeen": false, -- did anything send type 3 code 4
+--     "mtuDropAtHop": 5,           -- first hop carrying less than the one before
+--     "mssSupported": true,        -- was the TCP MSS check possible (Linux only)
+--     "mssObserved": 1460,         -- MSS the kernel negotiated, if checked
+--     "recommendedMss": 1380       -- pathMtu - 40 (IPv4) / - 60 (IPv6)
+--   }
+--
+-- The per-hop numbers ride in the EXISTING `hops` column, which already carries
+-- one object per hop for the traceroute probes; a path-MTU row adds `maxMtu` and
+-- `status` to that object and leaves the latency fields null. Keeping both trace
+-- kinds and this one in the same column is what lets the dashboard's hop table
+-- render a path-MTU result without a second code path.
+--
+-- Metadata only, unchanged: packet SIZES and hop addresses, never payload.
+ALTER TABLE probe_results
+  ADD COLUMN mtu JSON NULL DEFAULT NULL AFTER hops;

@@ -73,7 +73,7 @@ function aggregateFlows(rows, { port = null, protocol = null } = {}) {
 //
 // Agents are created via enrollment (prompt 4) — there is intentionally no
 // manual POST /agents here.
-function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentCommander, agentSourceStore, releaseStore = null, releasePublicKey = '', publishRelease = null, auditRepo = null, integrationTrigger = null, commandSigner = null, logger = silentLogger, reconnect = {} }) {
+function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentCommander, agentSourceStore, releaseStore = null, releasePublicKey = '', publishRelease = null, auditRepo = null, auditLogger = null, integrationTrigger = null, commandSigner = null, logger = silentLogger, reconnect = {} }) {
   // How long POST /:id/reconnect waits for the agent to re-dial after the forced
   // close (the agent's first backoff step is ~1 s), and how often it re-checks.
   const reconnectWaitMs = Number.isInteger(reconnect.waitMs) ? reconnect.waitMs : 12000;
@@ -439,6 +439,24 @@ function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentComma
       const delivered = agentCommander ? agentCommander.sendCommand(id, { name: 'run-probe', probe }) : 0;
       if (delivered === 0) {
         return res.status(409).json({ error: 'Agent not connected', delivered: 0 });
+      }
+      // Starting a probe is an operator action against a customer network, so it
+      // goes in the HASH-CHAINED compliance trail, not only in the activity feed
+      // the audit middleware writes. The feed answers "what has been happening";
+      // this answers "prove nobody edited the record of who ran what, when" —
+      // which is the question asked after an incident, and the one an
+      // append-only, tamper-evident chain exists for. Best-effort by design: the
+      // logger swallows its own failures, so an audit outage never costs the
+      // operator the probe they asked for.
+      if (auditLogger && typeof auditLogger.record === 'function') {
+        await auditLogger.record(req, {
+          category: 'agent',
+          action: 'probe_start',
+          target: `agent:${id}`,
+          // Metadata only, and only the fields that say WHAT was asked for —
+          // enough to reproduce the request, nothing that could carry a secret.
+          detail: JSON.stringify({ type: probe.type, target: probe.host, port: probe.port ?? null }),
+        });
       }
       res.status(202).json({ delivered, agentId: id, probe });
     })

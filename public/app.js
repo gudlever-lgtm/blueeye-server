@@ -964,7 +964,7 @@ const PAGE_INFO = {
         el('li', {}, el('strong', {}, 'Data quality '), '(OK / WARN / BAD) — a separate verdict on whether the agent\'s readings can be trusted: collector packet drops, clock skew vs. the server, and agent version. This is why you can see CRITICAL up top and “Data quality: OK” just below — the first judges the network, the second judges the measurement.')),
       el('h4', {}, 'Data sources'),
       el('ul', {},
-        el('li', {}, el('strong', {}, 'Probes: '), 'run ping/TCP/DNS/traceroute against a target and see RTT/loss/jitter — click “History” for RTT over time or “Path” for traceroute hops.'),
+        el('li', {}, el('strong', {}, 'Probes: '), 'run ping/TCP/DNS/traceroute/path-MTU against a target and see RTT/loss/jitter — click “History” for RTT over time, “Path” for traceroute hops or “Path MTU” for the per-hop packet-size verdict.'),
         el('li', {}, el('strong', {}, 'Interfaces: '), 'per-interface utilization, errors, discards and link status from the latest measurement. A virtual/idle port that is simply down (docker0, veth…, tunnels) shows a neutral IDLE — only a real link down reads DOWN.'),
         el('li', {}, el('strong', {}, 'Traffic: '), 'current bandwidth — most useful here when you are already investigating a specific agent.')),
       el('p', { class: 'muted' }, 'Return to the fleet overview with “← Overview”. Fleet-wide views of the same data sources: ', viewLink('probes'), ' · ', viewLink('interfaces'), ' · ', viewLink('overview', 'Traffic'), '.'),
@@ -1050,7 +1050,7 @@ const PAGE_INFO = {
     ],
   },
   probes: {
-    hero: 'Run a single active check from one agent, right now: ping, TCP-connect, DNS, traceroute, TCP traceroute, cURL content check or page load — with RTT, loss, path and history.',
+    hero: 'Run a single active check from one agent, right now: ping, TCP-connect, DNS, traceroute, TCP traceroute, path MTU, cURL content check or page load — with RTT, loss, path and history.',
     title: 'Probes',
     body: () => [
       el('div', { class: 'callout' },
@@ -1063,6 +1063,7 @@ const PAGE_INFO = {
         el('li', {}, 'TCP-connect: opens host:port and measures connection time (no payload sent).'),
         el('li', {}, 'DNS: time to resolve a name (and which address was returned).'),
         el('li', {}, 'Traceroute: the path (hops) to the target. Each hop is probed several times (set “Queries/hop”), so you get per-hop loss, latency and jitter — rendered as an interactive path map (hover a hop for its metrics + ASN/country) plus a hop table. Repeated traceroutes are aggregated so the verdict is stable.'),
+        el('li', {}, el('strong', {}, 'Path MTU: '), 'the largest packet the path will carry, hop by hop. Reach for it when a service connects and then loses data — a mail server that opens a session and stalls mid-message is the classic case. Every other test here uses small packets, which is exactly why they all come back clean. It searches by packet size with the don\u2019t-fragment bit set and separates three things that look identical from the outside: a ', el('strong', {}, 'reduced'), ' MTU where the router sends ICMP \u201cfragmentation needed\u201d (normal \u2014 tunnels do this and Path MTU Discovery copes), a ', el('strong', {}, 'blackhole'), ' where large packets vanish with no ICMP at all (the fault \u2014 the sender is never told to send less), and a hop that simply does not answer ICMP (neither, and never counted as one). Ordinary packet loss is told apart by probing each size several times. The result names the hop the path narrows at and the TCP MSS to clamp to; on Linux it can also open a connection to a port and read the MSS actually negotiated, which shows a missing clamp directly.'),
         el('li', {}, el('strong', {}, 'TCP traceroute: '), 'the same path, traced with TCP SYN packets to a port instead of ICMP/UDP. Reach for it when the ordinary traceroute goes dark part-way but the service itself works: firewalls and transit providers routinely drop or rate-limit ICMP while passing the TCP session the application actually uses, so the SYN trace follows the path the real traffic takes. Same per-hop loss/latency/jitter and the same path map. The two are kept apart — a target is stored as ', el('span', { class: 'mono' }, 'host:port'), ' — because an ICMP path that dies at hop 4 next to a TCP path that completes IS the finding. Needs ', el('span', { class: 'mono' }, 'tcptraceroute'), ' on the host, or falls back to ', el('span', { class: 'mono' }, 'traceroute -T'), ', which the traceroute package already provides; either way it needs root for the raw socket.'),
         el('li', {}, el('strong', {}, 'cURL (content check): '), 'goes beyond “is it up” — the agent runs ', el('span', { class: 'mono' }, 'curl'), ' against an http(s) URL and verifies the received traffic: the HTTP status code, that the response body contains an expected substring or ', el('span', { class: 'mono' }, '/regex/'), ', the received byte count, and a response header. Leave the expectation fields blank for a plain status<400 check. The agent inspects the body locally but reports only metadata — status, byte count, content-type and pass/fail — never the body itself.'),
         el('li', {}, el('strong', {}, 'Page load: '), 'measures how a whole page loads — the agent fetches the URL, then its sub-resources (scripts, stylesheets, images) and reports a per-element waterfall (status · size · load time) plus totals: element count, page weight and total load time. The total load time is charted over time. Browser-free (no JS execution), so it can\'t see real DOM/load events; metadata only — resource URLs, sizes and timings, never contents.'),
@@ -4831,7 +4832,9 @@ function probeLatestTable(rows, onDetail, onInstall = null) {
           // curl/http carry a verification/cert explanation; a failed probe carries
           // its reason (e.g. "traceroute not installed"). Surface it inline.
           r.detail ? el('div', { class: 'muted small' }, esc(r.detail)) : null,
-          (r.type === 'curl' && r.contentType) ? el('div', { class: 'muted small' }, `${esc(r.contentType)}${r.bytes != null ? ` · ${r.bytes} B` : ''}`) : null),
+          (r.type === 'curl' && r.contentType) ? el('div', { class: 'muted small' }, `${esc(r.contentType)}${r.bytes != null ? ` · ${r.bytes} B` : ''}`) : null,
+          (r.type === 'path_mtu' && r.mtu) ? el('div', { class: r.mtu.blackholeDetected ? 'error small' : 'muted small' },
+            `${r.mtu.pathMtu != null ? `${r.mtu.pathMtu} B` : '–'}${r.mtu.blackholeDetected ? ` · ${t('probe.mtu.status.blackhole')}` : ''}`) : null),
         el('td', {}, el('span', { class: `badge ${r.ok ? 'online' : 'offline'}`, title: !r.ok && r.detail ? r.detail : null }, r.ok ? 'ok' : 'error')),
         el('td', { class: 'num' }, r.rttMs != null ? `${r.rttMs} ms` : '–'),
         el('td', { class: 'num' }, r.lossPct != null ? `${r.lossPct}%` : '–'),
@@ -4839,7 +4842,9 @@ function probeLatestTable(rows, onDetail, onInstall = null) {
         el('td', { class: 'muted' }, r.ts ? fmtTimeShort(new Date(r.ts).getTime()) : '–'),
         el('td', {},
           tool ? el('button', { class: 'small', title: `Install ${tool} on the agent host`, onclick: (e) => onInstall(tool, r, e.target) }, `Install ${tool}`) : null,
-          el('button', { class: 'small ghost', onclick: () => onDetail(r) }, (r.type === 'traceroute' || r.type === 'tcptraceroute') ? 'Path' : 'History')));
+          el('button', { class: 'small ghost', onclick: () => onDetail(r) },
+            (r.type === 'traceroute' || r.type === 'tcptraceroute') ? 'Path'
+              : r.type === 'path_mtu' ? t('probe.mtu.pathMtu') : 'History')));
     })));
 }
 
@@ -5440,15 +5445,137 @@ async function pathVisualization(opts = {}) {
     onWindow: (f, t) => loadGraph(f, t), // brush is the single source of truth
   });
 
-  root.replaceChildren(graphHost, timeline);
+  // "Test MTU on this path" — the shortest route from "this path looks wrong"
+  // to the measurement that says whether it is. It starts the probe against the
+  // SAME target the path is drawn for, from the same agent, so the answer lands
+  // beside the picture that raised the question. Operator+ only: a viewer's
+  // request would come back 403, so the button is not offered to one.
+  if (canWrite()) root.replaceChildren(graphHost, timeline, mtuShortcut(sourceId, targetId));
+  else root.replaceChildren(graphHost, timeline);
   return root;
+}
+
+// A path target is stored as `host:port` when the path was traced with TCP, and
+// the MTU probe takes a host. Stripping a trailing `:<digits>` unconditionally
+// is wrong: `2001:db8::1` ends in `:1` and would become `2001:db8:`. So a port
+// is only recognised in the two forms that unambiguously carry one — a
+// bracketed IPv6 literal, and a name or IPv4 address with exactly one colon.
+function hostOfPathTarget(target) {
+  const s = String(target == null ? '' : target).trim();
+  const bracketed = s.match(/^\[(.+)\](?::\d+)?$/);
+  if (bracketed) return bracketed[1];
+  if (s.split(':').length === 2 && /:\d+$/.test(s)) return s.slice(0, s.lastIndexOf(':'));
+  return s;
+}
+
+// The shortcut button plus its own status line. Kept next to pathVisualization
+// because it only makes sense there — everywhere else the Probes view's form is
+// the right way in.
+function mtuShortcut(agentId, target) {
+  const status = el('span', { class: 'muted small' });
+  const btn = el('button', { class: 'small ghost', onclick: async () => {
+    btn.disabled = true;
+    status.className = 'muted small';
+    status.textContent = '…';
+    try {
+      await api(`/agents/${encodeURIComponent(agentId)}/probe`, {
+        method: 'POST',
+        body: { type: 'path_mtu', host: hostOfPathTarget(target), per_hop: true },
+      });
+      status.textContent = 'Sent — open Probes & Tests for the result.';
+    } catch (e) {
+      status.className = 'error small';
+      status.textContent = e.status === 409 ? 'The agent is not connected right now.' : errText(e);
+    } finally { btn.disabled = false; }
+  } }, t('probe.mtu.testThisPath'));
+  return el('div', { class: 'pv-actions' }, btn, status);
 }
 
 // Detail node for one probe result: a path map for either trace type (fetches +
 // aggregates that type's recent runs into a hop graph — scoped by probeType, so an
 // ICMP path and a TCP path to the same host stay apart) or RTT history (the
 // per-agent time series).
+// Path-MTU detail: the verdict first, then the per-hop bar chart.
+//
+// The verdict leads because it is the answer — an operator who reads only the
+// top line should still learn whether this is a fault. The bars exist to show
+// WHERE, which a column of numbers does badly: an MTU that steps down at one
+// hop and stays there is a shape, and a shape is read faster than it is parsed.
+//
+// Bars are scaled against the largest MTU measured anywhere on the path, not
+// against 1500, so a jumbo-frame path does not render as four identical
+// full-width bars.
+function mtuDetail(r) {
+  const m = r.mtu || {};
+  const hops = Array.isArray(r.hops) ? r.hops : [];
+  const pathMtu = m.pathMtu ?? null;
+  const dropAt = m.mtuDropAtHop ?? null;
+  const dropHop = dropAt != null ? hops.find((h) => h.hop === dropAt) : null;
+  const where = dropHop && dropHop.ip ? `hop ${dropAt} (${dropHop.ip})` : (dropAt != null ? `hop ${dropAt}` : '—');
+  const mss = m.recommendedMss ?? null;
+
+  // The headline. Three mutually exclusive states, in the order of how much
+  // they should worry somebody.
+  const verdict = m.blackholeDetected
+    ? el('div', { class: 'mtu-verdict bad' },
+      el('h4', {}, t('probe.mtu.blackholeTitle')),
+      el('p', {}, t('probe.mtu.blackholeBody', { mtu: pathMtu ?? '?', where })),
+      mss != null ? el('p', { class: 'mtu-fix' }, t('probe.mtu.blackholeFix', { mss })) : null)
+    : (m.icmpFragNeededSeen && dropAt != null)
+      ? el('div', { class: 'mtu-verdict warn' },
+        el('h4', {}, t('probe.mtu.reducedTitle')),
+        el('p', {}, t('probe.mtu.reducedBody', { mtu: pathMtu ?? '?', where, mss: mss ?? '?' })))
+      : el('div', { class: 'mtu-verdict good' },
+        el('h4', {}, t('probe.mtu.okTitle')),
+        el('p', {}, t('probe.mtu.okBody', { mtu: pathMtu ?? '?' })));
+
+  const stat = (label, value) => el('div', { class: 'mtu-stat' },
+    el('span', { class: 'k' }, label), el('span', { class: 'v' }, value));
+  const stats = el('div', { class: 'mtu-stats' },
+    stat(t('probe.mtu.pathMtu'), pathMtu != null ? `${pathMtu} B` : '–'),
+    stat(t('probe.mtu.recommendedMss'), mss != null ? `${mss} B` : '–'),
+    stat(t('probe.mtu.observedMss'), m.mssSupported
+      ? (m.mssObserved != null ? `${m.mssObserved} B` : '–')
+      : el('span', { class: 'muted', title: t('probe.mtu.noMss') }, '–')),
+    stat(dropAt != null ? t('probe.mtu.dropAt', { hop: dropAt }) : t('probe.mtu.noDrop'), ''));
+
+  // An MSS above what the path carries is its own warning: the path can be
+  // entirely well-behaved and the sender still be building segments that cannot
+  // arrive whole.
+  const clamp = (m.mssSupported && m.mssObserved != null && mss != null && m.mssObserved > mss)
+    ? el('div', { class: 'mtu-verdict warn' }, el('p', {}, t('probe.mtu.clampWarning', { observed: m.mssObserved, recommended: mss })))
+    : null;
+
+  const scale = hops.reduce((max, h) => Math.max(max, h.maxMtu || 0), pathMtu || 1) || 1;
+  const hopRow = (h) => {
+    const measured = h.maxMtu != null;
+    const pct = measured ? Math.max(2, Math.round((h.maxMtu / scale) * 100)) : 0;
+    const cls = h.status === 'blackhole' ? 'bad' : h.status === 'reduced' ? 'warn'
+      : h.status === 'ok' ? 'good' : 'unknown';
+    return el('tr', { class: h.hop === dropAt ? 'mtu-drop' : null },
+      el('td', { class: 'muted' }, `#${h.hop}`),
+      el('td', { class: 'mono' }, h.ip || '* * *'),
+      el('td', { class: 'mtu-bar-cell' },
+        el('div', { class: 'mtu-bar' }, el('div', { class: `mtu-bar-fill ${cls}`, style: `width:${pct}%` })),
+        // The hop the path narrows at is marked in text as well as colour —
+        // colour alone is not a label.
+        h.hop === dropAt ? el('span', { class: 'mtu-drop-marker' }, '▼') : null),
+      el('td', { class: 'num' }, measured ? `${h.maxMtu} B` : '–'),
+      el('td', {}, el('span', { class: `badge mtu-${cls}` }, t(`probe.mtu.status.${h.status || 'skipped'}`))));
+  };
+
+  const table = el('table', { class: 'probe-hops mtu-hops' },
+    el('thead', {}, el('tr', {}, ...[t('probe.mtu.hop'), 'IP', '', t('probe.mtu.maxMtu'), t('probe.mtu.status')].map((h) => el('th', {}, h)))),
+    el('tbody', {}, ...(hops.length ? hops.map(hopRow)
+      : [el('tr', {}, el('td', { class: 'muted', colspan: '5' }, t('probe.mtu.noHops')))])));
+
+  return el('details', { class: 'sec', open: true },
+    el('summary', {}, t('probe.mtu.title', { target: esc(r.target) })),
+    verdict, clamp, stats, table);
+}
+
 async function probeDetail(r, agentId) {
+  if (r.type === 'path_mtu') return mtuDetail(r);
   if (r.type === 'traceroute' || r.type === 'tcptraceroute') {
     const hops = r.hops || [];
     const hopRow = (h) => el('tr', {},
@@ -7495,13 +7622,13 @@ views.probes = async () => {
 
 async function probeRunnerView() {
   const root = el('div', { class: 'probes' });
-  root.append(el('div', { class: 'muted', style: 'margin:2px 0 10px' }, 'Run one check now from a single agent · ping · TCP · DNS · traceroute · TCP traceroute · cURL · page load · transaction'));
+  root.append(el('div', { class: 'muted', style: 'margin:2px 0 10px' }, 'Run one check now from a single agent · ping · TCP · DNS · traceroute · TCP traceroute · path MTU · cURL · page load · transaction'));
 
   const agents = await api('/agents').catch(() => []);
   if (!agents.length) { root.append(el('div', { class: 'empty' }, 'No agents yet — enrol an agent first.')); return root; }
 
   const agentSel = el('select', {}, ...agents.map((a) => el('option', { value: String(a.id) }, a.display_name || a.hostname)));
-  const typeSel = el('select', {}, ...[['ping', 'Ping (ICMP)'], ['tcp', 'TCP-connect'], ['dns', 'DNS'], ['traceroute', 'Traceroute'], ['tcptraceroute', t('probe.tcptraceroute')], ['curl', 'cURL (content check)'], ['pageload', 'Page load'], ['transaction', 'Transaction (multi-step)']].map(([v, l]) => el('option', { value: v }, l)));
+  const typeSel = el('select', {}, ...[['ping', 'Ping (ICMP)'], ['tcp', 'TCP-connect'], ['dns', 'DNS'], ['traceroute', 'Traceroute'], ['tcptraceroute', t('probe.tcptraceroute')], ['path_mtu', t('probe.pathMtu')], ['curl', 'cURL (content check)'], ['pageload', 'Page load'], ['transaction', 'Transaction (multi-step)']].map(([v, l]) => el('option', { value: v }, l)));
   const target = el('input', { type: 'text', placeholder: 'e.g. 1.1.1.1 or example.com' });
   const targetWrap = el('label', { class: 'inline muted' }, 'Target ', target);
   const portInput = el('input', { type: 'number', min: '1', max: '65535', value: '443' });
@@ -7511,6 +7638,18 @@ async function probeRunnerView() {
   const countWrap = el('label', { class: 'inline muted' }, countLabelText, countInput);
   // cURL content-verification inputs — only shown for the curl type. They let the
   // operator assert that the received traffic is correct, not just reachable.
+  // Path-MTU inputs. Sizes are IP PACKET sizes — what an MTU is — and the same
+  // bounds the server validates, so a typo is caught before it is a round trip.
+  const minSize = el('input', { type: 'number', min: '576', max: '9216', value: '576' });
+  const maxSize = el('input', { type: 'number', min: '576', max: '9216', value: '1500' });
+  const perHop = el('input', { type: 'checkbox', checked: 'checked' });
+  const mssPort = el('input', { type: 'number', min: '1', max: '65535', placeholder: 'off' });
+  const mtuWrap = el('div', { class: 'mtu-inputs' },
+    el('label', { class: 'inline muted' }, `${t('probe.mtu.minSize')} `, minSize),
+    el('label', { class: 'inline muted' }, `${t('probe.mtu.maxSize')} `, maxSize),
+    el('label', { class: 'inline muted' }, perHop, ` ${t('probe.mtu.perHop')}`),
+    el('label', { class: 'inline muted' }, `${t('probe.mtu.tcpPort')} `, mssPort));
+  const mtuHint = el('div', { class: 'muted small', style: 'flex-basis:100%' }, t('probe.pathMtuHint'));
   const curl = curlInputs();
   const tx = transactionStepsEditor([]);
   const txWrap = el('div', { class: 'tx-wrap' }, el('div', { class: 'muted small' }, 'Steps run in order; a step can extract a value (regex) for later steps as {{name}}. Stops at the first failure.'), tx.node);
@@ -7530,12 +7669,17 @@ async function probeRunnerView() {
     const isCurl = typeSel.value === 'curl';
     const isTx = typeSel.value === 'transaction';
     const isUrl = isCurl || typeSel.value === 'pageload';
+    const isMtu = typeSel.value === 'path_mtu';
+    mtuWrap.style.display = isMtu ? '' : 'none';
+    mtuHint.style.display = isMtu ? '' : 'none';
     targetWrap.style.display = isTx ? 'none' : '';
     portWrap.style.display = (typeSel.value === 'tcp' || isTcpTrace) ? '' : 'none';
     traceHint.style.display = isTcpTrace ? '' : 'none';
     curl.wrap.style.display = isCurl ? '' : 'none';
     txWrap.style.display = isTx ? '' : 'none';
-    countWrap.style.display = (typeSel.value === 'pageload' || isTx) ? 'none' : '';
+    // A path-MTU run has no "count": its repetition knob is probes-per-size,
+    // which the agent defaults sensibly and the form does not need to expose.
+    countWrap.style.display = (typeSel.value === 'pageload' || isTx || isMtu) ? 'none' : '';
     target.placeholder = isUrl ? 'e.g. https://example.com/' : 'e.g. 1.1.1.1 or example.com';
     countLabelText.textContent = tr ? 'Queries/hop ' : 'Count ';
     countInput.max = tr ? '10' : (isCurl ? '10' : '20');
@@ -7550,7 +7694,7 @@ async function probeRunnerView() {
     portWrap,
     countWrap,
     curl.wrap,
-    runBtn, status, traceHint), txWrap);
+    runBtn, status, traceHint, mtuHint), mtuWrap, txWrap);
 
   const latestHost = el('div', { class: 'probe-latest' });
   const detailHost = el('div', {});
@@ -7570,6 +7714,12 @@ async function probeRunnerView() {
       body = { type: typeSel.value, host };
       if (typeSel.value === 'tcp' || typeSel.value === 'tcptraceroute') body.port = Number(portInput.value);
       if (typeSel.value === 'curl') curl.apply(body);
+      if (typeSel.value === 'path_mtu') {
+        if (minSize.value) body.min_size = Number(minSize.value);
+        if (maxSize.value) body.max_size = Number(maxSize.value);
+        body.per_hop = perHop.checked;
+        if (mssPort.value) body.tcp_port = Number(mssPort.value);
+      }
       if (isTraceType() && countInput.value) body.queries = Number(countInput.value);
       else if ((typeSel.value === 'ping' || typeSel.value === 'tcp') && countInput.value) body.count = Number(countInput.value);
     }

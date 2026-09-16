@@ -369,7 +369,7 @@ test('GET /api/fleet/agent/:id returns one agent verdict (200) and validates id 
 });
 
 test('probeResultsRepository.fleetHealth selects a recent window, newest-first, capped', async () => {
-  const { createProbeResultsRepository } = require('../src/repositories/probeResultsRepository');
+  const { createProbeResultsRepository, DIAGNOSTIC_TYPES } = require('../src/repositories/probeResultsRepository');
   let captured;
   const pool = {
     async query(sql, params) {
@@ -379,10 +379,28 @@ test('probeResultsRepository.fleetHealth selects a recent window, newest-first, 
   };
   const repo = createProbeResultsRepository({ pool });
   const rows = await repo.fleetHealth({ windowMs: 3600000, limit: 100 });
-  assert.match(captured.sql, /WHERE ts >= \? ORDER BY ts DESC LIMIT \?/);
+  assert.match(captured.sql, /WHERE ts >= \? AND type NOT IN \(\?\) ORDER BY ts DESC LIMIT \?/);
   assert.ok(captured.params[0] instanceof Date);
-  assert.equal(captured.params[1], 100);
+  assert.deepEqual(captured.params[1], DIAGNOSTIC_TYPES);
+  assert.equal(captured.params[2], 100);
   assert.deepEqual(rows[0], { agentId: 9, ts: '2026-06-02T11:59:00.000Z', type: 'ping', target: 'x', ok: true, rttMs: 12, jitterMs: 1, lossPct: 0 });
+});
+
+// path_mtu is something an operator runs on purpose, in the middle of an
+// outage, against a host that may already be down. If it voted on health or
+// uptime, an investigation would move the number it is investigating.
+test('fleet health and uptime exclude the on-demand diagnostic probes', async () => {
+  const { createProbeResultsRepository, DIAGNOSTIC_TYPES: types } = require('../src/repositories/probeResultsRepository');
+  assert.deepEqual(types, ['path_mtu']);
+  const seen = [];
+  const pool = { async query(sql, params) { seen.push({ sql, params }); return [[]]; } };
+  const repo = createProbeResultsRepository({ pool });
+  await repo.fleetHealth({});
+  await repo.availability({ from: new Date(0), to: new Date() });
+  for (const q of seen) {
+    assert.match(q.sql, /type NOT IN/, 'every health/uptime read must exclude diagnostics');
+    assert.ok(q.params.some((p) => Array.isArray(p) && p.includes('path_mtu')));
+  }
 });
 
 test('GET /api/fleet/health passes a windowMin through to the repo', async () => {

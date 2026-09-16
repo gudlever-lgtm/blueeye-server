@@ -2492,3 +2492,57 @@ button.ghost.small:has(> .icon-glyph) {
 .badge.mtu-unknown { background: transparent; color: var(--muted); }
 
 .pv-actions { display: flex; gap: 10px; align-items: center; }
+/* --- Diagnose: symptom-first troubleshooting ------------------------------- */
+/* Built from the same tokens as every other screen, so a theme switch carries
+   it without a second palette. The one thing this view does that others do not
+   is colour a VERDICT, and those three colours have to survive both themes —
+   hence var() with a literal fallback rather than a hardcoded hex. */
+.diagnose .card { width: auto; margin: 0 0 14px; padding: 14px 16px; box-shadow: var(--shadow); }
+.diagnose .field { display: block; margin-bottom: 6px; }
+.diagnose .field > span { display: block; margin-bottom: 4px; font-weight: 600; }
+.diagnose textarea { width: 100%; box-sizing: border-box; font: inherit; padding: 8px 10px;
+  border: 1px solid var(--hairline, #ddd); border-radius: var(--radius-sm, 6px);
+  background: var(--input-bg, transparent); color: inherit; resize: vertical; }
+.diag-examples { margin: 8px 0; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 13px; }
+.diag-scope { display: flex; flex-wrap: wrap; gap: 12px; margin: 10px 0 4px; }
+.diag-scope .inline { display: inline-flex; align-items: center; gap: 6px; }
+.diag-actions { display: flex; align-items: center; gap: 10px; margin-top: 12px; flex-wrap: wrap; }
+.diag-status.error { color: var(--crit, #d03b3b); }
+
+/* Which matcher produced the plan. Stated, not hinted: a plan is worth a
+   different amount depending on the answer. */
+.diag-matched { font-size: 13px; padding: 8px 12px; margin-bottom: 12px;
+  border-radius: var(--radius-sm, 6px); border: 1px solid var(--hairline, #ddd); }
+.diag-matched.local { color: var(--muted, #898781); }
+.diag-matched.ai { border-color: var(--accent, #4a7ebb); }
+.diag-counts { font-size: 13px; margin-bottom: 10px; color: var(--muted, #898781); }
+
+.diag-cause { padding: 12px 0; border-top: 1px solid var(--hairline, #eee); }
+.diag-cause:first-of-type { border-top: 0; }
+.diag-cause-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+.diag-cause-body > p { margin: 4px 0 10px; }
+.diagnose h4 { margin: 12px 0 6px; font-size: 13px; text-transform: uppercase;
+  letter-spacing: .04em; color: var(--muted, #898781); }
+.diag-view-row { display: flex; gap: 10px; align-items: baseline; margin-bottom: 6px; flex-wrap: wrap; }
+.diag-view-row .muted { flex: 1 1 300px; }
+
+/* One rule per row, with whether it matched. `unknown` is deliberately the
+   quietest of the three: "not measured" is not a finding, it is a gap. */
+.diag-rule { padding: 6px 0 6px 10px; border-left: 3px solid transparent; margin-bottom: 4px; }
+.diag-rule code { font-size: 12px; }
+.diag-rule.fired { border-left-color: var(--crit, #d03b3b); }
+.diag-rule.notFired { border-left-color: var(--ok, #3f8f5f); }
+.diag-rule.unknown { border-left-color: var(--hairline, #ddd); opacity: .75; }
+
+.diag-fix { padding: 6px 0; }
+.diag-fix.partial { font-style: italic; }
+.diag-test { padding: 8px 0; border-top: 1px solid var(--hairline, #eee); }
+.diag-test:first-of-type { border-top: 0; }
+.diag-test code { font-size: 12px; }
+.diag-summary p { margin: 6px 0; }
+
+@media (max-width: 640px) {
+  .diag-scope { flex-direction: column; gap: 8px; }
+  .diag-scope .inline { width: 100%; }
+  .diag-scope select, .diag-scope input { flex: 1; min-width: 0; }
+}

@@ -3,6 +3,11 @@
 const net = require('net');
 
 const PROBE_TYPES = ['ping', 'tcp', 'dns', 'traceroute', 'tcptraceroute', 'http', 'curl', 'pageload', 'transaction', 'path_mtu'];
+// How many payload sizes one ping sweep may carry, and how large each may be.
+// Each size is its own `ping` invocation on the agent, so the first bounds the
+// RUN, not just the packet.
+const MAX_PING_SIZES = 6;
+const MAX_PAYLOAD_BYTES = 65500;
 // What a path-MTU probe may report per hop. An unrecognised status is dropped
 // rather than stored: the dashboard colours and the root-cause rules both switch
 // on this value, and a status neither of them knows would render as nothing at
@@ -177,6 +182,28 @@ function validateProbeResults(body) {
         status: mtuStatusOf(h && h.status),
       }));
     }
+    // The ping size sweep. The row's own rtt/loss columns describe the SMALLEST
+    // size, so this is the only place the size dependence lives.
+    let sizes = null;
+    if (r.sizes != null) {
+      if (!Array.isArray(r.sizes) || r.sizes.length > MAX_PING_SIZES) return { errors: { [`results[${i}].sizes`]: `sizes must be an array (<=${MAX_PING_SIZES})` } };
+      sizes = r.sizes.map((s0) => ({
+        bytes: intOrNull(s0 && s0.bytes),
+        sent: intOrNull(s0 && s0.sent),
+        recv: intOrNull(s0 && s0.recv),
+        lossPct: numOrNull(s0 && s0.lossPct),
+        rttMs: numOrNull(s0 && s0.rttMs),
+        minMs: numOrNull(s0 && s0.minMs),
+        maxMs: numOrNull(s0 && s0.maxMs),
+        jitterMs: numOrNull(s0 && s0.jitterMs),
+        mtuHint: intOrNull(s0 && s0.mtuHint),
+        // Did the probe MEASURE this size, or did it never leave the host? A
+        // payload the local interface refused is not 100% loss on the path, and
+        // reading it as such would point the diagnosis at the wrong end.
+        measured: s0 ? s0.measured !== false : false,
+        error: s0 && s0.error != null ? String(s0.error).slice(0, 200) : null,
+      }));
+    }
     out.push({
       ts, type, target, ok: r.ok === true,
       rttMs: numOrNull(r.rttMs), minMs: numOrNull(r.minMs), maxMs: numOrNull(r.maxMs),
@@ -192,6 +219,10 @@ function validateProbeResults(body) {
       // the camelCase the repository, the root-cause rules and the dashboard
       // use, the same way rtt_ms became rttMs above. Only path_mtu rows carry it.
       mtu: type === 'path_mtu' ? mtuBlock(r) : null,
+      sizes,
+      // A sweep also says whether don't-fragment was set; without it the sizes
+      // mean nothing, because the path would simply have fragmented them.
+      df: r.df === true,
       detail: r.detail != null ? String(r.detail).slice(0, 255) : (r.error != null ? String(r.error).slice(0, 255) : null),
       // The agent sets `error` only when it could not RUN the probe at all
       // (binary missing, tool timed out, unknown type) — distinct from ordinary
@@ -374,6 +405,24 @@ function validateProbeSpec(body) {
       if (v === null) return { errors: { ip_version: 'ip_version must be 4 or 6' } };
       if (b.ip_version !== undefined || v === 6) spec.ip_version = v;
     }
+    if (type === 'ping' && b.sizes !== undefined) {
+      // A size sweep: the same target asked at several payload sizes with
+      // don't-fragment set. This is what separates "the path is lossy" from
+      // "the path has an MTU nobody told the sender about". The agent enforces
+      // the same bounds independently (blueeye-agent src/probes/ping.js);
+      // rejecting them here too keeps a bad spec out of the database and gives
+      // the operator a real error instead of a probe that measures nothing.
+      if (!Array.isArray(b.sizes) || b.sizes.length === 0) return { errors: { sizes: 'sizes must be a non-empty array of payload byte counts' } };
+      if (b.sizes.length > MAX_PING_SIZES) return { errors: { sizes: `too many sizes (max ${MAX_PING_SIZES})` } };
+      const sizes = [];
+      for (const raw of b.sizes) {
+        const n = Number(raw);
+        if (!Number.isInteger(n) || n < 0 || n > MAX_PAYLOAD_BYTES) return { errors: { sizes: `each size must be an integer between 0 and ${MAX_PAYLOAD_BYTES}` } };
+        if (!sizes.includes(n)) sizes.push(n);
+      }
+      spec.sizes = sizes.sort((x, y) => x - y);
+    }
+    if (type === 'ping' && b.df !== undefined) spec.df = b.df === true || b.df === 'true';
     if (type === 'tcp') {
       const port = Number(b.port);
       if (!Number.isInteger(port) || port < 1 || port > 65535) return { errors: { port: 'port (1-65535) is required for a tcp probe' } };
@@ -406,4 +455,4 @@ function validateProbeSpec(body) {
   return { value: spec };
 }
 
-module.exports = { validateProbeResults, validateProbeSpec, PROBE_TYPES, MTU_HOP_STATUSES, MAX_PACKET_SIZE };
+module.exports = { validateProbeResults, validateProbeSpec, PROBE_TYPES, MAX_PING_SIZES, MAX_PAYLOAD_BYTES, MTU_HOP_STATUSES, MAX_PACKET_SIZE };

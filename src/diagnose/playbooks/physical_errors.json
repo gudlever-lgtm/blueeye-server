@@ -1,0 +1,139 @@
+{
+  "id": "physical_errors",
+  "title": {
+    "en": "Physical layer errors",
+    "da": "Fysiske fejl"
+  },
+  "summary": {
+    "en": "Packets are lost without the link being busy.",
+    "da": "Pakker mistes uden at linjen er belastet."
+  },
+  "explanation": {
+    "en": "A failing cable, optic or port corrupts frames. The counters rise whether or not the link is busy, which is what separates this from congestion.",
+    "da": "Et defekt kabel, en defekt optik eller port ødelægger frames. Tællerne stiger uanset om linjen er belastet, og det er præcis det, der adskiller den her fra overbelastning."
+  },
+  "symptoms": {
+    "en": [
+      "loss without high traffic",
+      "errors on the interface",
+      "crc errors",
+      "the link drops packets when it is idle",
+      "flapping port"
+    ],
+    "da": [
+      "tab uden høj trafik",
+      "fejl på interfacet",
+      "crc-fejl",
+      "linjen taber pakker når den er i tomgang",
+      "porten flapper"
+    ]
+  },
+  "keywords": {
+    "en": [
+      "crc",
+      "error",
+      "errors",
+      "physical",
+      "cable",
+      "sfp",
+      "optic",
+      "fiber",
+      "fibre",
+      "port",
+      "flap",
+      "l1",
+      "layer 1",
+      "idle",
+      "counter"
+    ],
+    "da": [
+      "crc",
+      "fejl",
+      "fysisk",
+      "kabel",
+      "sfp",
+      "optik",
+      "fiber",
+      "port",
+      "flap",
+      "l1",
+      "lag 1",
+      "tomgang",
+      "tæller",
+      "uden trafik"
+    ]
+  },
+  "tests": [
+    {
+      "type": "ping",
+      "params": {
+        "count": 20
+      },
+      "why": {
+        "en": "Confirms packets are actually being lost right now.",
+        "da": "Bekræfter at der faktisk mistes pakker lige nu."
+      }
+    }
+  ],
+  "views": [
+    {
+      "view": "interfaces",
+      "params": {},
+      "look_for": {
+        "en": "rxErrors / txErrors climbing while utilisation stays low. Errors without load is layer 1.",
+        "da": "rxErrors / txErrors der stiger mens forbruget er lavt. Fejl uden belastning er lag 1."
+      }
+    },
+    {
+      "view": "findings",
+      "params": {},
+      "look_for": {
+        "en": "Whether the anomaly detector has flagged the interface against its own baseline.",
+        "da": "Om anomalidetektionen har markeret interfacet mod dets egen baseline."
+      }
+    }
+  ],
+  "rules": [
+    {
+      "id": "errors_without_load",
+      "when": "iface.err_per_sec > 0 && iface.util_pct < 50",
+      "effect": "confirm",
+      "because": {
+        "en": "The interface is corrupting frames while it is not busy — that is the cable, the optic or the port.",
+        "da": "Interfacet ødelægger frames mens det ikke er belastet — det er kablet, optikken eller porten."
+      }
+    },
+    {
+      "id": "link_down",
+      "when": "iface.link_down == true",
+      "effect": "confirm",
+      "because": {
+        "en": "The link is down.",
+        "da": "Linjen er nede."
+      }
+    },
+    {
+      "id": "clean_counters",
+      "when": "iface.err_per_sec == 0 && iface.drop_per_sec == 0",
+      "effect": "rule_out",
+      "because": {
+        "en": "No errors and no discards on the interface.",
+        "da": "Ingen fejl og ingen discards på interfacet."
+      }
+    }
+  ],
+  "fixes": [
+    {
+      "en": "Replace the cable, then the optic, then the port — in that order, because that is the order of likelihood and of cost.",
+      "da": "Skift kablet, så optikken, så porten — i den rækkefølge, for det er rækkefølgen efter både sandsynlighed og pris."
+    },
+    {
+      "en": "Clean the fibre connectors and re-seat the optic before replacing anything.",
+      "da": "Rens fiberkonnektorerne og sæt optikken ordentligt i, før du skifter noget."
+    },
+    {
+      "en": "Check the same counters at the FAR end: errors are counted where the damaged frame arrives, not where it was damaged.",
+      "da": "Tjek de samme tællere i den ANDEN ende: fejl tælles dér hvor den beskadigede frame ankommer, ikke hvor den blev beskadiget."
+    }
+  ]
+}

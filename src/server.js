@@ -24,6 +24,7 @@ const { createEnrollmentStore } = require('./services/enrollmentStore');
 const { createAgentTokensRepository } = require('./repositories/agentTokensRepository');
 const { createResultsRepository } = require('./repositories/resultsRepository');
 const { createProbeResultsRepository } = require('./repositories/probeResultsRepository');
+const { createDiagnoseSessionsRepository } = require('./repositories/diagnoseSessionsRepository');
 const { createProbeOutagesRepository } = require('./repositories/probeOutagesRepository');
 const { createProbeThresholdsRepository } = require('./repositories/probeThresholdsRepository');
 const { createProbeOutageService } = require('./probeOutages/probeOutageService');
@@ -254,6 +255,7 @@ function start() {
     ? createResultsTsdbRepository(tsdb, { latestWindowMinutes: config.tsdb.latestWindowMinutes })
     : null;
   const probeResultsRepo = createProbeResultsRepository(db);
+  const diagnoseSessionsRepo = createDiagnoseSessionsRepository(db);
   const probeOutagesRepo = createProbeOutagesRepository(db);
   const thresholdsRepo = createProbeThresholdsRepository(db);
   // Derives events from active-probe results on ingest (open/resolve), using
@@ -936,6 +938,7 @@ function start() {
     agentTokensRepo,
     resultsRepo,
     probeResultsRepo,
+    diagnoseSessionsRepo,
     probeOutagesRepo,
     eventCasesRepo,
     eventNotesRepo,

@@ -17,7 +17,7 @@ const {
   makeApp, makeAgentTokensRepo, makeAgentsRepo, makeProbeResultsRepo, makeAgentCommander,
   makeAuditLogRepo, authHeader, throwingAsync,
 } = require('../test-support/fakes');
-const { toRow } = require('../src/repositories/probeResultsRepository');
+const { toRow, COLUMNS } = require('../src/repositories/probeResultsRepository');
 
 const agentToken = () => makeAgentTokensRepo({ findActiveByHash: async () => ({ id: 1, agent_id: 9 }) });
 const withAgent = (overrides = {}) => makeApp({
@@ -358,9 +358,11 @@ test('a path-MTU result survives ingest, storage and read-back intact', async ()
   assert.deepEqual(stored[0].hops.map((h) => [h.hop, h.maxMtu, h.status]),
     [[4, 1500, 'ok'], [5, 1420, 'blackhole']]);
 
-  // And it lands in the row the repository actually writes.
+  // And it lands in the row the repository actually writes. Located by NAME:
+  // a position is only correct until the next column is added, and `sizes`
+  // (migration 097) is the one that proved it.
   const row = toRow(9, stored[0]);
-  assert.equal(JSON.parse(row[row.length - 2]).pathMtu, 1420);
+  assert.equal(JSON.parse(row[COLUMNS.indexOf('mtu')]).pathMtu, 1420);
 });
 
 test('the agent cannot overrule the recommended MSS', async () => {

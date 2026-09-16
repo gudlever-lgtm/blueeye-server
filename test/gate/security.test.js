@@ -75,6 +75,13 @@ const VIEWER_WRITE_ALLOWED = new Set([
   'POST /api/severity-rules/preview',
   'POST /agents/:id/ping',
   'POST /agents/:id/diagnose',
+  // "Describe the problem" → a plan. A POST because the description is a
+  // paragraph and paragraphs do not belong in a query string, and it does record
+  // the question so the plan can be reopened and audited. What it cannot do is
+  // touch the network: running the plan's tests and evaluating them are
+  // operator+ on separate endpoints, and a viewer calling those gets 403. Being
+  // able to ASK what is wrong is the point of a viewer account.
+  'POST /api/diagnose',
 ]);
 
 const WRITE = new Set(['post', 'put', 'patch', 'delete']);

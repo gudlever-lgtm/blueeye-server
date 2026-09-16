@@ -80,6 +80,91 @@ test('every src/validation module is named in this suite', () => {
   for (const f of fs.readdirSync(DIR)) assert.ok(self.includes(f.replace(/\.js$/, '')), `${f} has no dedicated gate rule`);
 });
 
+test('diagnoseValidation: a description is bounded, and a target can never be read as a CLI flag', () => {
+  const { validateDiagnoseRequest, MAX_DESCRIPTION } = require('../../src/validation/diagnoseValidation');
+  // The bound is the limit on what can be sent to a third-party model, not just
+  // a column width, so it is enforced at the edge rather than by truncation.
+  assert.ok(errorsOf(validateDiagnoseRequest({ description: 'x'.repeat(MAX_DESCRIPTION + 1) })).includes('description'));
+  assert.equal(validateDiagnoseRequest({ description: 'x'.repeat(MAX_DESCRIPTION) }).errors, undefined);
+  for (const empty of ['', '   ', undefined, null, 42, {}, []]) {
+    assert.ok(rejected(validateDiagnoseRequest({ description: empty })), JSON.stringify(empty));
+  }
+  // A target reaches an agent's argv. Anything that a system tool could parse as
+  // an option, or that is not a host at all, is refused here.
+  for (const bad of ['-rf', '--flood', 'a b', 'a;rm -rf /', '$(whoami)', '`id`', 'a|b', '../etc', 'x'.repeat(300)]) {
+    assert.ok(errorsOf(validateDiagnoseRequest({ description: 'loss', target: bad })).includes('target'), bad);
+  }
+  for (const ok of ['10.0.0.1', 'mail.example.com', 'fe80::1', 'host-1_x'.replace('_', '-')]) {
+    assert.equal(validateDiagnoseRequest({ description: 'loss', target: ok }).errors, undefined, ok);
+  }
+  // The AI is an ADMIN setting. A caller may switch it off for one request and
+  // may not switch it on, so a truthy useAi never grants anything by itself.
+  assert.equal(validateDiagnoseRequest({ description: 'loss', useAi: false }).value.useAi, false);
+  assert.equal(validateDiagnoseRequest({ description: 'loss' }).value.useAi, undefined);
+  // Locale is a closed set: it selects a stored catalogue, never a lookup path.
+  assert.ok(errorsOf(validateDiagnoseRequest({ description: 'loss', locale: '../../etc' })).includes('locale'));
+  assert.ok(errorsOf(validateDiagnoseRequest({ description: 'loss', locale: 'de' })).includes('locale'));
+  // Ids must be positive integers, and the far end must be a different device.
+  for (const bad of [0, -1, 1.5, 'abc', '1; DROP']) {
+    assert.ok(errorsOf(validateDiagnoseRequest({ description: 'loss', agentId: bad })).includes('agentId'), String(bad));
+  }
+  assert.ok(errorsOf(validateDiagnoseRequest({ description: 'loss', agentId: 3, peerAgentId: 3 })).includes('peerAgentId'));
+});
+
+test('diagnose rules: the expression evaluator accepts the rule language and nothing else', () => {
+  const { compile, ExprError } = require('../../src/diagnose/expr');
+  // Everything a playbook is allowed to say.
+  assert.equal(compile('a.b == 1 && (c.d >= 2 || !e.f)').run({ a: { b: 1 }, c: { d: 5 } }).value, true);
+  // Everything it is not. A playbook is data, and data that reaches an
+  // interpreter is an interpreter that must not be able to do anything.
+  for (const bad of [
+    'process.exit()', 'a()', 'a[0]', 'a["b"]', '__proto__.x == 1', 'constructor.name == 1',
+    'a.prototype.b == 1', 'a = 1', '1 + 1', 'a ? b : c', 'require("fs")', 'a => 1',
+    '`${a}`', 'a; b', 'a & b', 'a | b', 'a < b < c', 'new Date()', '', '   ', 'x'.repeat(600),
+  ]) {
+    assert.throws(() => compile(bad), ExprError, `compiled: ${bad}`);
+  }
+  for (const bad of [undefined, null, 42, {}, [], true]) assert.throws(() => compile(bad), ExprError);
+  // A missing measurement is unknown, never false: a rule over a test that did
+  // not run must not decide anything.
+  assert.equal(compile('a.b == 1').run({}).value, null);
+  assert.deepEqual(compile('a.b == 1').run({}).missing, ['a.b']);
+  assert.equal(compile('a.b == 1 && c.d == 9').run({ a: { b: 2 } }).value, false, 'a definite false still wins');
+  // A prototype-chain field is not a measurement, however it is reached.
+  assert.equal(compile('a.toString == 1').run({ a: {} }).value, null);
+});
+
+test('diagnose catalogue: every shipped playbook parses, and a bad one stops the server', () => {
+  const { loadCatalog, parsePlaybook, CatalogError } = require('../../src/diagnose/catalog');
+  const catalog = loadCatalog();
+  assert.ok(catalog.size >= 9, `only ${catalog.size} playbooks`);
+  // A malformed playbook must fail LOUDLY at load, because load is startup. The
+  // alternative is a rule that quietly never fires on the one day it matters.
+  const base = JSON.parse(JSON.stringify(require('../../src/diagnose/playbooks/mtu_blackhole.json')));
+  const broken = [
+    ['a rule outside the grammar', (d) => { d.rules[0].when = 'process.exit()'; }],
+    ['a fact nothing measures', (d) => { d.rules[0].when = 'ping.nonsense == 1'; }],
+    ['a probe type that does not exist', (d) => { d.tests[0].type = 'telepathy'; }],
+    ['a view that is not a screen', (d) => { d.views[0].view = 'nowhere'; }],
+    ['a placeholder nothing can fill', (d) => { d.fixes[0].en = 'clamp to {ping.imaginary}'; }],
+    ['a missing Danish string', (d) => { delete d.title.da; }],
+    ['no rule that can confirm it', (d) => { d.rules = d.rules.filter((r) => r.effect !== 'confirm'); }],
+    ['two rules with the same id', (d) => { d.rules[1].id = d.rules[0].id; }],
+    ['an unexplained test', (d) => { delete d.tests[0].why; }],
+    // The one that actually bit: a probe renamed its parameter and the playbook
+    // kept the old spelling. An unrecognised key is DROPPED at dispatch, not
+    // rejected, so the plan would have run a narrower test than it promised and
+    // nothing would have said so.
+    ['a param the probe does not take', (d) => { d.tests[1].params = { perHop: true }; }],
+    ['a param outside the probe\'s bounds', (d) => { d.tests[1].params = { max_size: 999999 }; }],
+  ];
+  for (const [what, mutate] of broken) {
+    const doc = JSON.parse(JSON.stringify(base));
+    mutate(doc);
+    assert.throws(() => parsePlaybook('x.json', JSON.stringify(doc)), CatalogError, `accepted ${what}`);
+  }
+});
+
 // ---------------------------------------------------------------- Service Assurance
 test('serviceTests validation: base URLs refuse anything the browser must never reach', () => {
   const { validateApplication, validateEnvironment } = require('../../src/serviceTests/validation');

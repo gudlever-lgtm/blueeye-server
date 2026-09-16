@@ -1,0 +1,154 @@
+{
+  "id": "hop_packet_loss",
+  "title": {
+    "en": "Packet loss at a specific hop",
+    "da": "Pakketab ved et bestemt hop"
+  },
+  "summary": {
+    "en": "Traffic between two points loses packets and nobody knows where.",
+    "da": "Trafik mellem to punkter mister pakker, og ingen ved hvor."
+  },
+  "explanation": {
+    "en": "Loss somewhere on the path between the two ends. A per-hop trace localises it; the trick is telling real loss from a router that simply rate-limits its own replies.",
+    "da": "Tab et sted på stien mellem de to ender. Et trace pr. hop lokaliserer det; kunsten er at skelne reelt tab fra en router, der blot rate-limiter sine egne svar."
+  },
+  "symptoms": {
+    "en": [
+      "packets are lost between a and b",
+      "loss but we do not know where",
+      "intermittent drops on the link",
+      "retransmits between sites",
+      "slow and unreliable between two offices"
+    ],
+    "da": [
+      "trafik mellem a og b mister pakker",
+      "tab mellem a og b men vi ved ikke hvor",
+      "pakketab men vi ved ikke hvor",
+      "periodiske drops på linjen",
+      "retransmissioner mellem lokationer",
+      "langsomt og ustabilt mellem to kontorer"
+    ]
+  },
+  "keywords": {
+    "en": [
+      "loss",
+      "drop",
+      "packet",
+      "retransmit",
+      "hop",
+      "path",
+      "between",
+      "site",
+      "wan",
+      "unreliable",
+      "intermittent",
+      "traceroute",
+      "where"
+    ],
+    "da": [
+      "tab",
+      "mister",
+      "mistes",
+      "pakker",
+      "pakketab",
+      "retransmission",
+      "hop",
+      "sti",
+      "mellem",
+      "lokation",
+      "site",
+      "wan",
+      "ustabil",
+      "periodisk",
+      "traceroute",
+      "hvor",
+      "trafik"
+    ]
+  },
+  "tests": [
+    {
+      "type": "ping",
+      "params": {
+        "count": 20
+      },
+      "why": {
+        "en": "Enough samples for a loss percentage to mean something.",
+        "da": "Nok målinger til at en tabsprocent betyder noget."
+      }
+    },
+    {
+      "type": "traceroute",
+      "params": {
+        "queries": 5,
+        "maxHops": 30
+      },
+      "why": {
+        "en": "Per-hop loss and latency along the whole path.",
+        "da": "Tab og latens pr. hop hele vejen."
+      }
+    }
+  ],
+  "views": [
+    {
+      "view": "probes",
+      "params": {
+        "tab": "path"
+      },
+      "look_for": {
+        "en": "The first hop where loss starts AND continues to every hop after it. That is where the loss is.",
+        "da": "Det første hop hvor tab starter OG fortsætter til alle hop efter det. Dér sidder tabet."
+      }
+    },
+    {
+      "view": "clusters",
+      "params": {},
+      "look_for": {
+        "en": "Whether other agents lost packets at the same time — shared loss is one cause, not several.",
+        "da": "Om andre agenter mistede pakker samtidig — fælles tab er én årsag, ikke flere."
+      }
+    }
+  ],
+  "rules": [
+    {
+      "id": "end_to_end_loss",
+      "when": "ping.loss_pct >= 2",
+      "effect": "confirm",
+      "because": {
+        "en": "The target itself is losing packets end to end.",
+        "da": "Målet mister pakker ende til ende."
+      }
+    },
+    {
+      "id": "sustained_hop_loss",
+      "when": "traceroute.sustained_loss_from_hop > 0",
+      "effect": "confirm",
+      "because": {
+        "en": "Loss starts at one hop and continues to the target — that is real loss, and it is at that hop.",
+        "da": "Tab starter ved ét hop og fortsætter til målet — det er reelt tab, og det sidder ved det hop."
+      }
+    },
+    {
+      "id": "clean_path",
+      "when": "ping.loss_pct == 0 && traceroute.sustained_loss_from_hop == 0",
+      "effect": "rule_out",
+      "because": {
+        "en": "No loss end to end and no hop loses packets all the way to the target.",
+        "da": "Intet tab ende til ende, og intet hop mister pakker hele vejen til målet."
+      }
+    }
+  ],
+  "fixes": [
+    {
+      "en": "Loss begins at hop {traceroute.sustained_loss_from_hop} and continues to the target — take it up with whoever owns that hop.",
+      "da": "Tabet begynder ved hop {traceroute.sustained_loss_from_hop} og fortsætter til målet — tag den med den, der ejer det hop."
+    },
+    {
+      "en": "Ignore a single mid-path hop that loses packets without the loss continuing: that is ICMP rate limiting on the router's control plane, not forwarding loss.",
+      "da": "Ignorér et enkelt hop midt på stien der mister pakker uden at tabet fortsætter: det er ICMP rate limiting på routerens control plane, ikke tab i forwarding."
+    },
+    {
+      "en": "Check the interface counters at both ends of the affected link before escalating to the carrier.",
+      "da": "Tjek interface-tællere i begge ender af den berørte linje, før du eskalerer til udbyderen."
+    }
+  ]
+}

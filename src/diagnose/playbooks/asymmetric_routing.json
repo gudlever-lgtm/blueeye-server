@@ -1,0 +1,145 @@
+{
+  "id": "asymmetric_routing",
+  "title": {
+    "en": "Asymmetric routing",
+    "da": "Asymmetrisk routing"
+  },
+  "summary": {
+    "en": "It works one way and fails the other.",
+    "da": "Det virker den ene vej og fejler den anden."
+  },
+  "explanation": {
+    "en": "The path out and the path back are not the same. A stateful firewall on the return path never saw the outbound connection, so it drops the reply.",
+    "da": "Vejen ud og vejen tilbage er ikke den samme. En stateful firewall på returvejen har aldrig set den udgående forbindelse og smider derfor svaret væk."
+  },
+  "symptoms": {
+    "en": [
+      "works one way fails the other",
+      "a can reach b but b cannot reach a",
+      "one direction only",
+      "return traffic never arrives",
+      "the firewall drops the reply"
+    ],
+    "da": [
+      "virker én vej fejler den anden",
+      "a kan nå b men b kan ikke nå a",
+      "kun den ene retning",
+      "returtrafik kommer aldrig frem",
+      "firewallen smider svaret væk"
+    ]
+  },
+  "keywords": {
+    "en": [
+      "asymmetric",
+      "one way",
+      "direction",
+      "return",
+      "reply",
+      "firewall",
+      "state",
+      "stateful",
+      "route",
+      "reverse",
+      "rpf"
+    ],
+    "da": [
+      "asymmetrisk",
+      "én vej",
+      "en vej",
+      "retning",
+      "retur",
+      "svar",
+      "firewall",
+      "stateful",
+      "rute",
+      "routing",
+      "omvendt",
+      "rpf"
+    ]
+  },
+  "tests": [
+    {
+      "type": "ping",
+      "params": {
+        "count": 10
+      },
+      "why": {
+        "en": "From this end.",
+        "da": "Fra denne ende."
+      }
+    },
+    {
+      "type": "traceroute",
+      "params": {
+        "queries": 3
+      },
+      "why": {
+        "en": "The outbound path. Run the same pair from the agent at the far end to see the return path.",
+        "da": "Den udgående sti. Kør samme par fra agenten i den anden ende for at se returvejen."
+      }
+    }
+  ],
+  "views": [
+    {
+      "view": "probes",
+      "params": {
+        "tab": "path"
+      },
+      "look_for": {
+        "en": "Run the path from BOTH agents and compare the hop lists. Different hops in each direction is the finding.",
+        "da": "Kør stien fra BEGGE agenter og sammenlign hop-listerne. Forskellige hop i hver retning er fundet."
+      }
+    },
+    {
+      "view": "topology",
+      "params": {},
+      "look_for": {
+        "en": "Whether both ends sit behind different gateways.",
+        "da": "Om de to ender sidder bag hver sin gateway."
+      }
+    }
+  ],
+  "rules": [
+    {
+      "id": "reverse_fails",
+      "when": "reverse.ping.loss_pct >= 50 && ping.loss_pct < 50",
+      "effect": "confirm",
+      "because": {
+        "en": "This end reaches the far end, and the far end does not reach back.",
+        "da": "Denne ende når den anden, og den anden når ikke tilbage."
+      }
+    },
+    {
+      "id": "paths_differ",
+      "when": "path_compare.same_hops == false && path_compare.compared == true",
+      "effect": "confirm",
+      "because": {
+        "en": "The two directions traverse different hops.",
+        "da": "De to retninger går gennem forskellige hop."
+      }
+    },
+    {
+      "id": "both_directions_ok",
+      "when": "reverse.ping.loss_pct == 0 && ping.loss_pct == 0",
+      "effect": "rule_out",
+      "because": {
+        "en": "Both directions work.",
+        "da": "Begge retninger virker."
+      }
+    }
+  ],
+  "fixes": [
+    {
+      "en": "Make the return path match the outbound one, or make the firewall on the return path stateless for this traffic.",
+      "da": "Få returvejen til at følge den udgående, eller gør firewallen på returvejen stateless for denne trafik."
+    },
+    {
+      "en": "Check for unicast reverse-path forwarding (uRPF) dropping the packets that arrive on the 'wrong' interface.",
+      "da": "Tjek om unicast reverse-path forwarding (uRPF) smider de pakker væk, der ankommer på det 'forkerte' interface."
+    },
+    {
+      "en": "If both paths are intentional, put the stateful device where it sees both directions.",
+      "da": "Hvis begge veje er tilsigtede, så placér den stateful enhed, hvor den ser begge retninger."
+    }
+  ]
+}

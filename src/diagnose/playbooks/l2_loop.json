@@ -1,0 +1,145 @@
+{
+  "id": "l2_loop",
+  "title": {
+    "en": "Layer 2 loop or broadcast storm",
+    "da": "L2-loop eller broadcast-storm"
+  },
+  "summary": {
+    "en": "Everything goes slow at once, in bursts, across many ports.",
+    "da": "Alt bliver langsomt på én gang, i bølger, på mange porte."
+  },
+  "explanation": {
+    "en": "A forwarding loop makes broadcast traffic circulate forever. It multiplies across every port in the broadcast domain, so the symptom is the whole site degrading at once rather than one path misbehaving.",
+    "da": "En forwarding-loop får broadcast-trafik til at cirkulere i det uendelige. Den multipliceres over hver port i broadcast-domænet, så symptomet er at hele lokationen bliver dårlig på én gang, ikke at én sti opfører sig forkert."
+  },
+  "symptoms": {
+    "en": [
+      "everything is slow periodically",
+      "broadcast storm",
+      "the whole site goes slow at the same time",
+      "switches are at 100 percent",
+      "it comes and goes every few minutes"
+    ],
+    "da": [
+      "periodisk alt langsomt",
+      "broadcast-storm",
+      "hele lokationen bliver langsom samtidig",
+      "switchene kører 100 procent",
+      "det kommer og går hvert par minutter"
+    ]
+  },
+  "keywords": {
+    "en": [
+      "loop",
+      "broadcast",
+      "storm",
+      "spanning",
+      "stp",
+      "flood",
+      "switch",
+      "vlan",
+      "everything",
+      "whole site",
+      "periodic",
+      "burst",
+      "mac"
+    ],
+    "da": [
+      "loop",
+      "broadcast",
+      "storm",
+      "spanning",
+      "stp",
+      "flood",
+      "switch",
+      "vlan",
+      "alt",
+      "hele lokationen",
+      "periodisk",
+      "bølger",
+      "mac",
+      "langsomt"
+    ]
+  },
+  "tests": [
+    {
+      "type": "ping",
+      "params": {
+        "count": 20
+      },
+      "why": {
+        "en": "Latency and loss that swing wildly, rather than sitting at a steady bad value.",
+        "da": "Latens og tab der svinger vildt, i stedet for at ligge stabilt dårligt."
+      }
+    }
+  ],
+  "views": [
+    {
+      "view": "overview",
+      "params": {},
+      "look_for": {
+        "en": "Traffic spiking on many interfaces at the same moment. One port busy is a transfer; every port busy together is a loop.",
+        "da": "Trafikspidser på mange interfaces i samme øjeblik. Én travl port er en overførsel; alle porte travle samtidig er en loop."
+      }
+    },
+    {
+      "view": "interfaces",
+      "params": {},
+      "look_for": {
+        "en": "Utilisation high across unrelated ports, with discards rather than errors.",
+        "da": "Højt forbrug på porte der ikke har med hinanden at gøre, med discards frem for fejl."
+      }
+    },
+    {
+      "view": "clusters",
+      "params": {},
+      "look_for": {
+        "en": "Whether several agents at the same site went bad in the same minute.",
+        "da": "Om flere agenter på samme lokation blev dårlige i samme minut."
+      }
+    }
+  ],
+  "rules": [
+    {
+      "id": "wild_latency",
+      "when": "ping.jitter_ms >= 100 && ping.loss_pct > 0",
+      "effect": "confirm",
+      "because": {
+        "en": "Latency swinging by more than 100 ms with loss is a network fighting itself, not a slow link.",
+        "da": "Latens der svinger over 100 ms sammen med tab er et netværk der kæmper mod sig selv, ikke en langsom linje."
+      }
+    },
+    {
+      "id": "many_ports_busy",
+      "when": "iface.busy_port_count >= 3 && iface.util_pct >= 75",
+      "effect": "confirm",
+      "because": {
+        "en": "Several unrelated ports are saturated at once, which is what circulating broadcast traffic looks like.",
+        "da": "Flere urelaterede porte er mættede samtidig, og det er præcis hvordan cirkulerende broadcast-trafik ser ud."
+      }
+    },
+    {
+      "id": "steady_path",
+      "when": "ping.jitter_ms < 20 && iface.busy_port_count <= 1",
+      "effect": "rule_out",
+      "because": {
+        "en": "Latency is steady and no more than one port is busy.",
+        "da": "Latensen er stabil, og højst én port er travl."
+      }
+    }
+  ],
+  "fixes": [
+    {
+      "en": "Find the loop: two ports on the same switch showing the same MAC addresses is the give-away.",
+      "da": "Find loopen: to porte på samme switch der viser de samme MAC-adresser er afsløringen."
+    },
+    {
+      "en": "Turn spanning tree on where it is off, and make sure BPDU guard is enabled on access ports.",
+      "da": "Slå spanning tree til hvor det er slået fra, og sørg for at BPDU guard er aktiveret på access-porte."
+    },
+    {
+      "en": "Storm control on access ports limits the damage next time, but it is a seatbelt, not a fix.",
+      "da": "Storm control på access-porte begrænser skaden næste gang, men det er en sikkerhedssele, ikke en løsning."
+    }
+  ]
+}

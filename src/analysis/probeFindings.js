@@ -5,6 +5,7 @@ const { Severity, FindingKind } = require('./constants');
 const { computeAgentHealth } = require('../health/probeHealth');
 const { extractAsPath, diffAsPath } = require('./asPath');
 const { median } = require('./baselines');
+const { evaluateMtuFindings } = require('./mtuFindings');
 
 // TLS-certificate expiry thresholds (days). A site can be perfectly reachable
 // while its certificate is about to lapse, so this is judged independently of
@@ -43,6 +44,11 @@ function evaluateProbeFindings(agentId, rows, { now = () => new Date(), geoProvi
 
   for (const c of certFindings(hostId, rows, at)) out.push(c);
   for (const c of asPathFindings(hostId, rows, at, geoProvider)) out.push(c);
+  // Path-MTU verdicts are judged on their own terms, not against the
+  // median+MAD health model above: a blackhole is a fact about packet SIZE, and
+  // the loss/latency statistics that drive every other finding here are
+  // measured with small packets that sail straight through it.
+  for (const c of evaluateMtuFindings(hostId, rows, at)) out.push(c);
   return out;
 }
 

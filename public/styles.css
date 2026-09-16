@@ -2546,3 +2546,7 @@ button.ghost.small:has(> .icon-glyph) {
   .diag-scope .inline { width: 100%; }
   .diag-scope select, .diag-scope input { flex: 1; min-width: 0; }
 }
+
+/* A path MTU that was never measured is not a good result. Muted and
+   background-free so it reads as an absence, not a fourth severity. */
+.mtu-verdict.unknown { border-left-color: var(--muted); background: transparent; }

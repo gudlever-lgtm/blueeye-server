@@ -47,6 +47,14 @@
           : (deps.wantsLayers() ? 'layers' : 'diagram');
       }
       if (!state.sort) state.sort = { deps: { key: 'bytes', dir: 'desc' }, hosts: { key: 'in', dir: 'desc' } };
+      // The deep link seeds the layer ONCE; after that the operator's choice is
+      // the only source. `params` is a snapshot taken at render, and parseParams
+      // always fills `layer` (defaulting to 'both'), so a `params.layer ||
+      // state.layer` read could never see a change: picking L2 or Dependencies
+      // set state, synced the URL, redrew — and read 'both' back out of the
+      // stale snapshot. The dropdown looked broken because it was.
+      if (state.layer == null) state.layer = params.layer || 'both';
+      if (state.focus === undefined) state.focus = params.focus == null ? null : params.focus;
 
       var page = ui.page();
       var toolbarHost = el('div', {});
@@ -209,8 +217,8 @@
           children: [host],
         }));
         deps.drawLayers(host, {
-          layer: params.layer || state.layer || 'both',
-          focus: state.focus == null ? params.focus : state.focus,
+          layer: state.layer || 'both',
+          focus: state.focus,
           whatIf: !!state.whatIf && deps.canWrite(),
           onFocus: function (id) { state.focus = id; deps.syncParams({ focus: id }); },
         });
@@ -218,7 +226,7 @@
 
       function layerActions() {
         var acts = [ui.select({
-          label: t('topo.layer'), value: params.layer || state.layer || 'both',
+          label: t('topo.layer'), value: state.layer || 'both',
           options: [
             ['both', t('topo.layer.both')], ['l2', t('topo.layer.l2')], ['dep', t('topo.layer.dep')],
           ],

@@ -1605,7 +1605,9 @@ li.guide-step.done .guide-step-title { text-decoration: line-through; opacity: 0
 .wl-composer textarea { width: 100%; resize: vertical; }
 .wl-kinds { border: 0; padding: 0; margin: 10px 0 0; display: grid; gap: 4px; }
 .wl-kinds legend { padding: 0; font-weight: 600; }
-.wl-kind-choice { display: flex; gap: 8px; align-items: baseline; }
+/* A radio and its two lines read across, not down — the global `label` rule
+   sets flex-direction: column, which this has to undo. */
+.wl-kind-choice { display: flex; flex-direction: row; gap: 8px; align-items: baseline; }
 .wl-note { margin: 10px 0 0; font-style: italic; }
 
 /* --- Universal search results (Fase 1) -------------------------------------- */

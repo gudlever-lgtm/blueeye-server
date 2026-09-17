@@ -1268,3 +1268,41 @@ copy, since `nicTable` is exported for exactly that reason.
 `.nic-card`, `.drift-card`, `.drift-model`, `.fw-row`, `.nic-chips`,
 `.nic-model-row`, `.nic-agent-row`, `.nics-controls`, `.nic-filter`, `.seg` and
 `.seg-btn` are all gone from `styles.css`.
+
+
+**Event** is the first DetailPage (template D) in phase 3, and it fixed a shell
+defect that had been true of every record page in the app.
+
+The heading was `.inc-header`: an `<h2>`, a row of badges, and a run of `· `
+separators, with "← Events" floated beside it. It is a PageHeader — the title,
+the severity in template D's `status` slot beside it, the where as the lead,
+and Back as an action. The status transitions were bare `.small` buttons in an
+`.inc-actions` div; there is exactly one move from any state, so it is the
+page's single primary ("Mark investigating", "Reopen").
+
+`.inc-status-<state>` and `.inc-sev-<level>` were two more severity
+vocabularies, one of them keyed on whatever word the server sent. Both are
+Badges on the app's tones.
+
+Eight `.card` blocks, each with an `<h3>` that four separate loaders rebuilt on
+every fill, are Panels. The loaders fill a body and the panel keeps its title.
+Three of the bodies — the work log, the guide and the assistant — draw their own
+card, so the page does not put a panel around them; that is the same rule
+Settings' sections follow.
+
+**Every record page marked nothing in the rail.** `agent`, `location`, `event`
+and `cluster` have no nav entry of their own — they are reached from a list — so
+the sidebar highlighted nothing anywhere on the screen, and the breadcrumb
+printed the raw view key at the reader: `event / #11`. A `DETAIL_OF` map beside
+`PREVIEW_OF` points each record at its list, so the crumb reads
+`Insights / Events / #11` and the Insights group unfolds with Events marked. One
+shell change, four screens.
+
+**A 404 offers no Retry.** Asking the same question again gets the same answer;
+it names the id it could not find and keeps the way back to the list.
+
+Two smaller things this screen surfaced: the work log's radio choices stacked
+their label under the input, because the global `label { flex-direction: column }`
+rule was never overridden by `.wl-kind-choice`; and the affected-path panel is
+drawn only when there is a path to draw, rather than as a panel that is
+permanently empty for events with no target.

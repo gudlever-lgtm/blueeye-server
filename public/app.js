@@ -1359,6 +1359,7 @@ const CONTRACT_VIEWS = new Map([
   ['agents', 'agents'],
   ['interfaces', 'interfaces'],
   ['nics', 'nics'],
+  ['event', 'event'],
 ]);
 
 function hero(viewKey) {
@@ -4013,124 +4014,121 @@ function eventGuideCard(event) {
   return details;
 }
 
-views.event = async () => {
-  const id = selectedEventId;
-  const back = el('button', { class: 'small ghost', onclick: () => { currentView = 'events'; render(); } }, '← Events');
-  if (id == null) return el('div', { class: 'empty' }, back, el('p', {}, 'No event selected.'));
-
-  let data;
-  try {
-    data = await api(`/api/events/${id}`);
-  } catch (err) {
-    if (err.status === 404) return el('div', { class: 'empty' }, back, el('p', { class: 'error' }, 'Event not found.'));
-    return el('div', { class: 'empty error' }, back, ' ', err.message);
-  }
-  const inc = data.event;
-  const anomalies = data.anomalies || [];
-
-  // Where the event is, stated before anything else on the page: the agent
-  // (clickable through to the device) and the site it stands at. Older cases
-  // carry a title that names only the agent id, so the header is what makes them
-  // placeable too.
-  const devNum = Number.parseInt(inc.hostId, 10);
-  const agentEl = Number.isInteger(devNum) && devNum > 0
-    ? el('a', { class: 'inc-where-agent', href: '#', onclick: (e) => { e.preventDefault(); openAgent(devNum); } }, incAgentLabel(inc))
-    : el('span', {}, incAgentLabel(inc));
-
-  const header = el('div', { class: 'inc-header' },
-    el('div', {},
-      el('h2', {}, inc.title),
-      el('div', { class: 'inc-meta' }, incSevBadge(inc.severity), ' ', incStatusBadge(inc.status),
-        el('span', { class: 'muted' }, ' · '), agentEl,
-        el('span', { class: 'muted' }, ` · ${incLocationLabel(inc)} · opened ${fmtDate(inc.firstEventAt)}`))),
-    back);
-
-  const controls = el('div', { class: 'inc-actions' });
-  if (canWrite()) {
-    for (const to of (INC_TRANSITIONS[inc.status] || [])) {
-      const label = to === 'open' ? 'Reopen' : `Mark ${INC_STATUS_LABEL[to]}`;
-      controls.append(el('button', {
-        class: 'small',
-        onclick: async () => {
-          let comment;
-          if (inc.status === 'closed' && to === 'open') {
-            comment = window.prompt('Reason for reopening (required):');
-            if (!comment) return;
-          }
-          try {
-            await api(`/api/events/${id}`, { method: 'PATCH', body: { status: to, ...(comment ? { comment } : {}) } });
-            toast(`Event ${INC_STATUS_LABEL[to].toLowerCase()}`);
-            render();
-          } catch (err) { toast(errText(err), true); }
-        },
-      }, label));
-    }
-  }
-
-  const anomaliesCard = el('div', { class: 'card' },
-    el('h3', {}, `Anomalies (${anomalies.length})`),
-    anomalies.length
-      ? el('ul', { class: 'inc-anoms' }, ...anomalies.map((a) => el('li', {},
-          incSevBadge(a.severity), ' ', el('strong', {}, a.metric), ' — ', a.explanation || '',
-          el('span', { class: 'muted' }, ` (${fmtDate(a.createdAt)})`))))
-      : el('p', { class: 'muted' }, 'No linked anomalies.'));
-
-  const timelineCard = el('div', { class: 'card' }, el('h3', {}, 'Timeline'), el('div', { class: 'muted' }, 'Loading…'));
-  loadEventTimeline(id, timelineCard, inc.hostId);
-  const similarCard = el('div', { class: 'card' }, el('h3', {}, 'Similar past events'), el('div', { class: 'muted' }, 'Loading…'));
-  loadEventSimilar(id, similarCard);
-
-  const extra = [];
-  if (canWrite()) {
-    const cfgCard = el('div', { class: 'card' }, el('h3', {}, 'Config context'), el('div', { class: 'muted' }, 'Loading…'));
-    loadEventConfigContext(id, cfgCard);
-    extra.push(cfgCard);
-    if (featureEnabled('assistant')) extra.push(eventAssistantCard(id));
-  }
-
-  // "Guide me" — operator/admin (the guide endpoint + its config/AI steps are).
-  const guideCard = canWrite() ? eventGuideCard(inc) : null;
-
-  // Affected path — the shared Path Visualization pre-filtered to the event
-  // window, with the problem hop pre-highlighted. Mounted only when the event
-  // has a numeric device (agent) and a derivable target (from a linked anomaly).
-  let pathCard = null;
-  const pathTarget = (anomalies.find((a) => a.target) || {}).target || inc.target || null;
-  const pathSource = devNum;
-  if (pathTarget && Number.isInteger(pathSource) && pathSource > 0) {
-    pathCard = el('div', { class: 'card' }, el('h3', {}, 'Affected path'), el('div', { class: 'muted' }, 'Loading…'));
-    (async () => {
-      const fromMs = inc.firstEventAt ? Date.parse(inc.firstEventAt) : (Date.now() - 24 * 3600 * 1000);
+// ---- Event detail (MIGRATED — see public/views/event.js)
+// The panel bodies stay here: the work log, the guide, the blast radius, the
+// path visualisation and the assistant are each their own machinery. The page
+// wraps them; the loaders below fill a body rather than rebuilding a card.
+let eventPage = null;
+function getEventPage() {
+  if (eventPage) return eventPage;
+  if (typeof window === 'undefined' || !window.EventPage || !ui) return null;
+  eventPage = window.EventPage.create({
+    el, t, ui, errText,
+    canWrite,
+    id: () => selectedEventId,
+    transitions: (status) => INC_TRANSITIONS[status],
+    openList: () => { currentView = 'events'; render(); },
+    rerender: () => render(),
+    fetchEvent: (id) => api(`/api/events/${id}`),
+    agentLink: (inc) => {
+      const devNum = Number.parseInt(inc.hostId, 10);
+      // Older cases carry a title naming only the agent id, so the header is
+      // what makes them placeable at all.
+      return Number.isInteger(devNum) && devNum > 0
+        ? ui.hostLink(incAgentLabel(inc), () => openAgent(devNum))
+        : el('span', {}, incAgentLabel(inc));
+    },
+    locationLabel: incLocationLabel,
+    helpBody: () => [
+      el('p', {}, t('ev.info.p1')),
+      el('p', {}, t('ev.info.p2')),
+      el('p', { class: 'muted' }, t('ev.info.p3')),
+    ],
+    setStatus: async (id, from, to) => {
+      let comment;
+      // Reopening a closed case is the one transition that has to be justified:
+      // it says the previous shift's conclusion was wrong.
+      if (from === 'closed' && to === 'open') {
+        comment = window.prompt(t('ev.reopenReason'));
+        if (!comment) return;
+      }
       try {
-        const viz = await pathVisualization({ sourceId: pathSource, targetId: pathTarget, eventId: id, timeRange: { fromMs, toMs: Date.now() } });
-        pathCard.replaceChildren(el('h3', {}, 'Affected path'), viz);
-      } catch (e) { pathCard.replaceChildren(el('h3', {}, 'Affected path'), el('div', { class: 'error' }, errText(e))); }
-    })();
-  }
+        await api(`/api/events/${id}`, { method: 'PATCH', body: { status: to, ...(comment ? { comment } : {}) } });
+        toast(t('ev.marked', { state: (INC_STATUS_LABEL[to] || to).toLowerCase() }));
+        render();
+      } catch (err) { toast(errText(err), true); }
+    },
+    panels: (inc, anomalies, id) => {
+      const out = [];
+      // The work log is first because "what has already been tried and ruled
+      // out" is what the next shift must read before anything else.
+      // These three draw their own card, so the page does not put a panel
+      // around them — a box inside a box with the same name on both.
+      out.push({ key: 'notes', wrap: false, node: eventNotesCard(id) });
+      if (canWrite()) out.push({ key: 'guide', wrap: false, node: eventGuideCard(inc) });
+      out.push({ key: 'anomalies' });
 
-  // Blast radius — which downstream hosts/services fail if this device goes down
-  // (enrichment already on the event response). Both tiers with justifying
-  // paths; each host links into the topology map focused on it.
-  let blastCard = null;
-  if (inc.blastRadius) {
-    blastCard = el('div', { class: 'card' }, el('h3', {}, 'Blast radius'), el('div', { class: 'muted' }, 'Loading…'));
-    (async () => {
-      let agents = [];
-      try { agents = await api('/agents'); } catch { /* labels best-effort */ }
-      const nameById = {};
-      (agents || []).forEach((a) => { nameById[a.id] = a.display_name || a.hostname || `host ${a.id}`; });
-      const nameFor = (hid) => nameById[hid] || `host ${hid}`;
-      blastCard.replaceChildren(el('h3', {}, 'Blast radius'),
-        blastRadiusPanel(inc.blastRadius, { nameFor, onFocusHost: (hid) => openTopologyFocus(hid) }));
-    })();
-  }
+      if (inc.blastRadius) {
+        const body = el('div', { class: 'muted' }, t('common.loading'));
+        (async () => {
+          let agents = [];
+          try { agents = await api('/agents'); } catch { /* labels are best-effort */ }
+          const nameById = {};
+          (agents || []).forEach((a) => { nameById[a.id] = a.display_name || a.hostname || `host ${a.id}`; });
+          body.replaceChildren(blastRadiusPanel(inc.blastRadius, {
+            nameFor: (hid) => nameById[hid] || `host ${hid}`,
+            onFocusHost: (hid) => openTopologyFocus(hid),
+          }));
+        })();
+        out.push({ key: 'blast', title: t('ev.blast'), node: body });
+      }
 
-  // Work log — the shift handover. Mounted high (right after the status
-  // controls) because "what has already been tried and excluded" is what the
-  // next shift must read before anything else, not a footnote below six cards.
-  const notesCard = eventNotesCard(id);
+      const timeline = el('div', { class: 'muted' }, t('common.loading'));
+      loadEventTimeline(id, timeline, inc.hostId);
+      out.push({ key: 'timeline', title: t('ev.timeline'), node: timeline });
 
-  return el('div', { class: 'event-detail' }, header, controls, notesCard, guideCard, anomaliesCard, blastCard, timelineCard, similarCard, pathCard, ...extra);
+      const similar = el('div', { class: 'muted' }, t('common.loading'));
+      loadEventSimilar(id, similar);
+      out.push({ key: 'similar', title: t('ev.similar'), node: similar });
+
+      // The affected path needs both a numeric device and a target to draw
+      // between; without one it is not a panel that could be empty, it is a
+      // panel that does not apply.
+      const devNum = Number.parseInt(inc.hostId, 10);
+      const pathTarget = (anomalies.find((a) => a.target) || {}).target || inc.target || null;
+      if (pathTarget && Number.isInteger(devNum) && devNum > 0) {
+        const body = el('div', { class: 'muted' }, t('common.loading'));
+        (async () => {
+          const fromMs = inc.firstEventAt ? Date.parse(inc.firstEventAt) : (Date.now() - 24 * 3600 * 1000);
+          try {
+            body.replaceChildren(await pathVisualization({
+              sourceId: devNum, targetId: pathTarget, eventId: id, timeRange: { fromMs, toMs: Date.now() },
+            }));
+          } catch (e) { body.replaceChildren(el('div', { class: 'error' }, errText(e))); }
+        })();
+        out.push({ key: 'path', title: t('ev.path'), node: body });
+      }
+
+      if (canWrite()) {
+        const cfg = el('div', { class: 'muted' }, t('common.loading'));
+        loadEventConfigContext(id, cfg);
+        out.push({ key: 'config', title: t('ev.config'), node: cfg });
+        if (featureEnabled('assistant')) {
+          out.push({ key: 'assistant', wrap: false, node: eventAssistantCard(id) });
+        }
+      }
+      return out;
+    },
+  });
+  return eventPage;
+}
+
+views.event = async () => {
+  const v = getEventPage();
+  if (!v) return el('div', { class: 'empty error' }, t('ev.err.title'));
+  // The record is re-read per entry, so the page is rebuilt with it.
+  eventPage = null;
+  return v.view();
 };
 
 // ---- Event work log (Fase 3) -----------------------------------------------
@@ -15354,6 +15352,12 @@ const Routes = (typeof window !== 'undefined' && window.AppRoutes) || null;
 // The screen a preview route stands in for: it has no rail entry of its own, so
 // without this the sidebar marks nothing and the breadcrumb prints a view key.
 const PREVIEW_OF = { uiPreviewChanges: 'changes', uiPreviewProbes: 'probes' };
+// A record's own page has no rail entry — it is reached from the list. Without
+// this the sidebar marks nothing (no "you are here" anywhere on the screen) and
+// the crumb prints the raw view key at the reader: "event / #11".
+const DETAIL_OF = {
+  agent: 'agents', location: 'locations', event: 'events', cluster: 'clusters',
+};
 // A screen with no rail entry at all still needs a name in the crumb, or the
 // topbar prints a view key at the reader.
 const CRUMB_ONLY = { kitchenSink: 'route.crumb.kitchenSink' };
@@ -15468,7 +15472,7 @@ function syncCrumb() {
     host.replaceChildren(el('span', { class: 'crumb-here' }, t(CRUMB_ONLY[currentView])));
     return;
   }
-  const marks = PREVIEW_OF[currentView] || currentView;
+  const marks = PREVIEW_OF[currentView] || DETAIL_OF[currentView] || currentView;
   const tab = routeTabFor(currentView);
   const btn = [...document.querySelectorAll(NAV_BUTTONS)].find((b) => b.dataset.view === marks
     && (!b.dataset.saTab || b.dataset.saTab === tab)
@@ -15678,7 +15682,7 @@ async function render({ silent = false } = {}) {
   for (const b of document.querySelectorAll(NAV_BUTTONS)) {
     // Several entries can share one data-view when they deep-link to different
     // sub-tabs; the sub-tab is what tells them apart.
-    const marks = PREVIEW_OF[currentView] || currentView;
+    const marks = PREVIEW_OF[currentView] || DETAIL_OF[currentView] || currentView;
     const active = b.dataset.view === marks
       && (!b.dataset.saTab || b.dataset.saTab === serviceAssuranceTab)
       && (!b.dataset.guide || b.dataset.guide === guideTrack);

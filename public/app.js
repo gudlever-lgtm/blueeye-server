@@ -1349,6 +1349,7 @@ const CONTRACT_VIEWS = new Map([
   ['events', 'events'],
   ['clusters', 'situations'],
   ['reporting', 'reporting'],
+  ['guide', 'guides'],
 ]);
 
 function hero(viewKey) {
@@ -15218,10 +15219,11 @@ views.serviceAssurance = async () => {
 // in each field. Their own module in public/guides.js, handed the same shared
 // helpers Service Assurance itself gets, plus the deep links it needs so every
 // step can open the screen it is describing.
-views.guide = async () => {
-  if (!window.Guides) {
-    return el('div', { class: 'empty' }, t('guide.unavailable'));
-  }
+// ---- Guides (SHELL MIGRATED — see public/views/guides.js)
+// The five walkthroughs stay in public/guides.js, which ships standalone; the
+// page they sit on is the contract's.
+function mountGuides() {
+  if (!window.Guides) return null;
   return window.Guides.create({
     el, api, t, toast,
     // Counted lines pick their own singular/plural form.
@@ -15239,7 +15241,26 @@ views.guide = async () => {
     openTab: (tab) => { serviceAssuranceTab = tab; currentView = 'serviceAssurance'; render(); },
     openSettings: (tab) => { settingsTab = tab; currentView = 'settings'; render(); },
     openDocs: (topic) => gotoDocs(topic),
+    // The host draws the heading, the state advisory and the Back/Next row.
+    mode: 'embedded',
   });
+}
+
+views.guide = async () => {
+  if (typeof window === 'undefined' || !window.GuidesPage || !ui) {
+    return el('div', { class: 'empty error' }, t('guide.unavailable'));
+  }
+  const v = window.GuidesPage.create({
+    el, t, ui,
+    mount: mountGuides,
+    help: () => {
+      const info = PAGE_INFO.guide || {};
+      return { title: info.title || t('guide.title.monitoring'), body: info.body || (() => []) };
+    },
+  });
+  // Each entry builds a fresh module (it holds the track and the step), so the
+  // page is built fresh too.
+  return v.view() || el('div', { class: 'empty error' }, t('guide.unavailable'));
 };
 
 // About (account menu → About).

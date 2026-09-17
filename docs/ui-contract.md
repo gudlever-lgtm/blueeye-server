@@ -888,3 +888,26 @@ not try it again.
 own second-level tab strip), the report generator, the schedules panel and the
 audit trail. The nested strip is the one place in the app with two levels of
 tabs; it stays until the NIS2 module migrates, which is its own commit.
+
+
+**Guides** is the fifth shell migration, and the one where the contract's
+deletion of info banners does the most work. The screen opened with a hero
+banner explaining what a guide is, above a heading whose own lead line said the
+same thing, above a third line counting the steps — three paragraphs before the
+first step. It is a PageHeader with one lead and the (?) popover; the footer
+already reads "Step 3 of 7", so the count needed no line of its own.
+
+"The live state could not be read" was a callout sitting in the document flow
+between the heading and the steps. It is an advisory about the data, so it is
+an inline note. The guidance never depended on that state — a 404 or a 500 on
+one endpoint costs its own status line and nothing else — and the page proves
+it: the seven steps are all still there.
+
+Back and Next were `.ghost` and `.primary`, the legacy button classes. They are
+contract buttons in a form-actions row, and Back is a secondary the reader can
+see rather than a borderless one that disappears when disabled.
+
+**Not migrated, passed in whole:** the stepper and the step bodies. They are
+the document, and they are `public/guides.js`, which ships standalone — so
+`mode: 'embedded'` is opt-in there, the same arrangement Service Assurance
+uses. Without it the module still draws its own heading, banner and footer.

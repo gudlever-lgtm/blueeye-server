@@ -1334,3 +1334,39 @@ agrees with it.
 That inconsistency was invisible until the header moved onto the contract and
 put the two badges on the same screen — which is the argument for migrating a
 screen and its detail page together.
+
+
+**Agent** is the third DetailPage and the seventh shell migration. The heading
+was a `.section-head` with **six things in one flex row**: a Back button, the
+name, a status badge, a location link with a 📍 glued to its front, and three
+more buttons. It is a PageHeader — the name, the status in template D's slot,
+the platform and the location as the lead, and the actions where actions go,
+with "Run test" as the one primary.
+
+The location was `.linklike` with an emoji in it; it is a HostLink, which is
+what the contract has for "a place you can open".
+
+**Three card titles were written twice.** The health résumé, the config
+history, the CMDB asset and the dependencies were `.card` divs whose `<h3>`
+each loader rebuilt on every fill — so once the cards became Panels, every one
+of them said its own name in the panel head and again two lines below it. The
+loaders write the body now and the panel keeps the title. The activity
+timeline draws its own card with a range picker in the head, so the page
+appends it as it is rather than framing it twice.
+
+Dropping a heading from a `replaceChildren(head, …)` call by setting
+`head = null` printed the literal word **null** into the panel: that is the
+third time this exact trap has bitten in this migration, so the argument is
+removed rather than nulled.
+
+**Not migrated, passed in whole:** the four `<details class="sec">` folds —
+Probes, Interfaces, NIC firmware and Traffic. Each owns a form, a poller or a
+chart, and on a page this long the fold is doing real work; the contract has no
+accordion, and inventing one to hold four things is not the trade. The live
+half now lives in `agentDetailFolds()` + `agentDetailStart()`, so the page can
+own the health host and the poller can still fill it.
+
+Also fixed here, in the test rather than the app: the boot helper these suites
+share read `hit.status` as the HTTP status, and an agent payload carries its own
+`status: 'online'` — so every load answered "HTTP online". An envelope is
+`{ status, body }` now; anything else is the body.

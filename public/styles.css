@@ -1527,11 +1527,6 @@ li.guide-step.done .guide-step-title { text-decoration: line-through; opacity: 0
 .fmr-dir.dir-both { color: var(--muted); }
 
 /* ---- Agent page: cards side by side on the full width -------------------- */
-/* The global .card is a fixed 320px (login); inside the agent grid the cards
-   fill their track instead of stranding in a narrow column. */
-.agent-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-  gap: 14px; align-items: start; margin: 0 0 14px; }
-.agent-cards .card { width: auto; margin: 0; box-shadow: var(--shadow); }
 
 /* ---- Location drill-down page -------------------------------------------- */
 .location-detail .loc-kpis { margin-bottom: 16px; }

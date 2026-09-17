@@ -1361,6 +1361,7 @@ const CONTRACT_VIEWS = new Map([
   ['nics', 'nics'],
   ['event', 'event'],
   ['cluster', 'situation'],
+  ['agent', 'agent'],
 ]);
 
 function hero(viewKey) {
@@ -3882,7 +3883,7 @@ async function loadEventConfigContext(id, card) {
         ? el('pre', { class: 'config-diff' }, diff.changedLines.map((l) => `${l.op} ${l.text}`).join('\n'))
         : null);
   } catch (err) {
-    card.replaceChildren(head, el('p', { class: err.status === 403 ? 'muted' : 'error' }, err.status === 403 ? 'Requires operator/admin.' : err.message));
+    card.replaceChildren(el('p', { class: err.status === 403 ? 'muted' : 'error' }, err.status === 403 ? 'Requires operator/admin.' : err.message));
   }
 }
 
@@ -8479,13 +8480,15 @@ function configIngestForm(id, onAdded) {
       el('div', { class: 'cfg-ingest-actions' }, el('label', { class: 'inline muted' }, 'Via ', via), submit, status)));
 }
 
+// The panel that holds this owns the title (see public/views/agent.js), so the
+// fill no longer writes one of its own — it used to print "Config history"
+// inside a panel already headed "Config history".
 async function loadDeviceConfigHistory(id, card) {
-  const head = el('h3', {}, 'Config history');
   const form = configIngestForm(id, () => loadDeviceConfigHistory(id, card));
   try {
     const { snapshots, diffs } = await api(`/api/devices/${id}/config-history`);
     if (!snapshots || !snapshots.length) {
-      card.replaceChildren(head, form, el('p', { class: 'muted' }, 'No config snapshots captured for this device yet.'));
+      card.replaceChildren(form, el('p', { class: 'muted' }, 'No config snapshots captured for this device yet.'));
       return;
     }
     const diffEls = (diffs || []).map((d) => el('details', { class: 'cfg-diff' },
@@ -8493,11 +8496,11 @@ async function loadDeviceConfigHistory(id, card) {
         el('span', { class: `badge risk-${d.risk}` }, d.risk),
         el('span', { class: 'muted' }, ` +${(d.stats && d.stats.added) || 0}/-${(d.stats && d.stats.removed) || 0}${(d.riskReasons || []).length ? ` · ${d.riskReasons.join(', ')}` : ''}`)),
       el('pre', { class: 'config-diff' }, (d.changedLines || []).map((l) => `${l.op} ${l.text}`).join('\n'))));
-    card.replaceChildren(head, form,
+    card.replaceChildren(form,
       el('p', { class: 'muted' }, `${snapshots.length} snapshot(s); ${(diffs || []).length} change(s). Secrets are masked.`),
       (diffs || []).length ? el('div', { class: 'cfg-diffs' }, ...diffEls) : el('p', { class: 'muted' }, 'No changes between snapshots.'));
   } catch (err) {
-    card.replaceChildren(head, el('p', { class: err.status === 403 ? 'muted' : 'error' }, err.status === 403 ? 'Requires operator/admin.' : err.message));
+    card.replaceChildren(el('p', { class: err.status === 403 ? 'muted' : 'error' }, err.status === 403 ? 'Requires operator/admin.' : err.message));
   }
 }
 
@@ -8508,7 +8511,8 @@ async function loadDeviceConfigHistory(id, card) {
 async function loadAgentCmdbLink(id, host) {
   const writable = canWrite();
   const body = el('div', { class: 'cmdb-body' });
-  host.replaceChildren(el('h3', {}, t('cmdb.cardTitle')), body);
+  // The panel owns the title (see public/views/agent.js).
+  host.replaceChildren(body);
 
   // Ask whether a CMDB is connected at all before offering the picker — an
   // unconfigured server should say so, not hand out a box that can only 404.
@@ -8720,7 +8724,7 @@ async function loadAgentDependencies(id, host) {
       api('/agents').catch(() => []),
     ]);
   } catch (e) {
-    host.replaceChildren(el('h3', {}, 'Dependencies'), el('div', { class: 'error' }, errText(e)));
+    host.replaceChildren(el('div', { class: 'error' }, errText(e)));
     return;
   }
   const nameById = {};
@@ -8729,7 +8733,7 @@ async function loadAgentDependencies(id, host) {
   const { outbound, inbound } = TopologyGraph.splitDependencies(data.edges || [], id);
 
   if (!outbound.length && !inbound.length) {
-    host.replaceChildren(el('h3', {}, 'Dependencies'),
+    host.replaceChildren(
       el('div', { class: 'empty' }, 'No service dependencies observed for this host yet. Dependency edges are aggregated from TCP flows (NetFlow/sFlow) by a scheduled job.'));
     return;
   }
@@ -8782,61 +8786,73 @@ async function loadAgentDependencies(id, host) {
           : null);
     })));
 
-  const children = [el('h3', {}, 'Dependencies')];
+  const children = [];
   if (outbound.length) children.push(el('h4', { class: 'sub' }, `Talks to (${outbound.length})`), depTable(outbound, 'out'));
   if (inbound.length) children.push(el('h4', { class: 'sub' }, `Talked to by (${inbound.length})`), depTable(inbound, 'in'));
   host.replaceChildren(...children);
 }
 
+// ---- Agent detail (SHELL MIGRATED — see public/views/agent.js)
+// The four <details class="sec"> folds — Probes, Interfaces, NIC firmware and
+// Traffic — carry their own forms, pollers and charts, and stay here.
+let agentPage = null;
+function getAgentPage() {
+  if (agentPage) return agentPage;
+  if (typeof window === 'undefined' || !window.AgentPage || !ui) return null;
+  agentPage = window.AgentPage.create({
+    el, t, ui, errText,
+    canWrite,
+    id: () => selectedAgentId,
+    openFleet: () => { currentView = 'fleet'; render(); },
+    openFlows: () => { currentView = 'flows'; render(); },
+    openLocation,
+    exportInvestigation: exportInvestigationMenu,
+    runTest,
+    rerender: () => render(),
+    helpBody: () => [
+      el('p', {}, t('ad.info.p1')),
+      el('p', {}, t('ad.info.p2')),
+      el('p', { class: 'muted' }, t('ad.info.p3')),
+    ],
+    fetchAgent: (id) => api(`/agents/${id}`),
+    cards: (id) => {
+      const out = [];
+      // Config history is operator+: masked snapshots, risk-classified diffs.
+      if (canWrite()) {
+        const cfg = el('div', { class: 'agent-config-history' }, el('div', { class: 'muted' }, t('common.loading')));
+        loadDeviceConfigHistory(id, cfg);
+        out.push({ title: t('ad.configHistory'), node: cfg });
+      }
+      const cmdb = el('div', { class: 'agent-cmdb' }, el('div', { class: 'muted' }, t('common.loading')));
+      loadAgentCmdbLink(id, cmdb);
+      out.push({ title: t('ad.cmdb'), node: cmdb });
+
+      const dep = el('div', { class: 'agent-deps' }, el('div', { class: 'muted' }, t('common.loading')));
+      loadAgentDependencies(id, dep);
+      out.push({ title: t('ad.dependencies'), node: dep });
+      return out;
+    },
+    timeline: (id) => targetTimelineCard(id),
+    folds: (id, agent) => agentDetailFolds(id, agent),
+    start: (id, healthHost) => agentDetailStart(healthHost),
+  });
+  return agentPage;
+}
+
 views.agent = async () => {
-  const id = selectedAgentId;
-  const root = el('div', { class: 'agent-detail' });
-  if (id == null) { root.append(el('div', { class: 'empty' }, 'Select an agent in the overview.')); return root; }
-  let agent;
-  try { agent = await api(`/agents/${id}`); } catch (e) { root.append(el('div', { class: 'error' }, e.message)); return root; }
+  const v = getAgentPage();
+  if (!v) return el('div', { class: 'empty error' }, t('ad.err.title'));
+  // The record is re-read per entry, so the page is rebuilt with it.
+  agentPage = null;
+  return v.view();
+};
 
-  root.append(el('div', { class: 'section-head' },
-    el('button', { class: 'small ghost', onclick: () => { currentView = 'fleet'; render(); } }, '← Overview'),
-    el('h2', {}, agent.display_name || agent.hostname),
-    el('span', { class: `badge ${agent.status}` }, agent.status),
-    agent.location_id != null
-      ? el('button', { class: 'linklike', title: 'Open the location page — agents, health & data flows', onclick: () => openLocation(agent.location_id) }, '📍 ', agent.location_name || `#${agent.location_id}`)
-      : (agent.location_name ? el('span', { class: 'muted' }, agent.location_name) : null),
-    el('button', { class: 'small ghost', onclick: () => { currentView = 'flows'; render(); } }, 'Flows →'),
-    el('button', { class: 'small ghost', onclick: () => exportInvestigationMenu(id, agent.display_name || agent.hostname) }, 'Export'),
-    canWrite() ? el('button', { class: 'small ghost', onclick: () => runTest(agent) }, 'Run test') : null));
-
-  // Health résumé (the headline + the metrics that drove it).
-  const healthHost = el('div', { class: 'agent-health' });
-  root.append(healthHost);
-
-  // Config history / CMDB / Dependencies side by side in a responsive grid so
-  // the page uses the full width (the global .card is a fixed 320px otherwise).
-  const cardsWrap = el('div', { class: 'agent-cards' });
-  root.append(cardsWrap);
-
-  // Device config history (operator/admin) — masked snapshots + risk-classified
-  // diffs from GET /api/devices/:id/config-history. Lazy-loaded.
-  if (canWrite()) {
-    const cfgHost = el('div', { class: 'card agent-config-history' }, el('h3', {}, 'Config history'), el('div', { class: 'muted' }, 'Loading…'));
-    cardsWrap.append(cfgHost);
-    loadDeviceConfigHistory(id, cfgHost);
-  }
-
-  // CMDB asset link (viewer sees the linked asset; operator+ can search/link/unlink).
-  const cmdbHost = el('div', { class: 'card agent-cmdb' }, el('h3', {}, 'CMDB asset'), el('div', { class: 'muted' }, 'Loading…'));
-  cardsWrap.append(cmdbHost);
-  loadAgentCmdbLink(id, cmdbHost);
-
-  // Service dependencies (viewer+): who this host talks to / who talks to it,
-  // ports + volume; each outbound row links to its per-hour baseline band.
-  const depsHost = el('div', { class: 'card agent-deps' }, el('h3', {}, 'Dependencies'), el('div', { class: 'muted' }, 'Loading…'));
-  cardsWrap.append(depsHost);
-  loadAgentDependencies(id, depsHost);
-
-  // Unified activity timeline (findings + probe-outage events + connect/
-  // disconnect + playbook runs) — GET /api/targets/:id/timeline.
-  root.append(targetTimelineCard(id));
+// The live half of the agent page: the four folds, their pollers, and the
+// health résumé they refresh alongside. Kept here because each fold owns a
+// form, a poller or a chart that has not been migrated.
+let agentDetailRefresh = null;
+function agentDetailFolds(id, agent) {
+  let healthHost = null;
   function renderHealth(h, q, thr) {
     const m = h.metrics;
     const kv = (k, v, cls) => el('div', { class: 'ah-kv' }, el('span', { class: 'ah-k' }, k), el('span', { class: `ah-v${cls ? ' ' + cls : ''}` }, v));
@@ -8863,7 +8879,7 @@ views.agent = async () => {
     } else if (q && q.version) {
       children.push(el('div', { class: 'ah-quality muted' }, `agent v${q.version}`));
     }
-    healthHost.replaceChildren(...children);
+    if (healthHost) healthHost.replaceChildren(...children);
   }
 
   // ---- Probes (this agent) ----
@@ -8956,21 +8972,32 @@ views.agent = async () => {
   const nics = agent.capabilities && Array.isArray(agent.capabilities.nic) ? agent.capabilities.nic : [];
   const nicSummary = el('span', { class: 'muted' }, nics.length ? `· ${nics.length} interface(s)` : '· none reported');
 
-  root.append(
+  const folds = [
     el('details', { class: 'sec', open: true }, el('summary', {}, 'Probes ', el('span', { class: 'muted' }, '· ping · TCP · DNS · traceroute · cURL')), probeForm, probeLatestHost),
     el('details', { class: 'sec', open: true }, el('summary', {}, 'Interfaces ', ifaceStatus), ifaceHost),
     el('details', { class: 'sec' }, el('summary', {}, 'NIC firmware ', nicSummary), nicTable(nics)),
-    el('details', { class: 'sec' }, el('summary', {}, 'Traffic ', el('span', { class: 'muted' }, '· recent bandwidth')), trafficHost));
+    el('details', { class: 'sec' }, el('summary', {}, 'Traffic ', el('span', { class: 'muted' }, '· recent bandwidth')), trafficHost),
+  ];
+  agentDetailRefresh = async (host) => {
+    healthHost = host || healthHost;
+    await Promise.all([refreshHealth(), refreshProbes(), refreshIfaces(), refreshTraffic()]);
+  };
+  return folds;
+}
 
-  async function refreshAll() { await Promise.all([refreshHealth(), refreshProbes(), refreshIfaces(), refreshTraffic()]); }
-  await refreshAll();
+// Runs the first fill and starts the poller. Separate from building the folds
+// so the page can hand over the health host it owns.
+function agentDetailStart(healthHost) {
+  if (!agentDetailRefresh) return;
+  const tick = agentDetailRefresh;
+  tick(healthHost);
   stopAgent();
   agentState.timer = setInterval(() => {
     if (currentView !== 'agent') { stopAgent(); return; }
-    if (!modalOpen()) refreshAll();
+    if (!modalOpen()) tick(healthHost);
   }, 7000);
-  return root;
-};
+}
+
 
 // Fleet NIC inventory + firmware-drift detection. Groups identical NIC models
 // across all agents and surfaces firmware-version outliers — the "47 units on

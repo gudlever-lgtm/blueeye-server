@@ -1352,6 +1352,10 @@ const CONTRACT_VIEWS = new Map([
   ['guide', 'guides'],
   ['locations', 'locations'],
   ['enrollment', 'enrollment'],
+  ['discovery', 'discovery'],
+  ['logs', 'systemLogs'],
+  ['userLogs', 'userLogs'],
+  ['settings', 'settings'],
 ]);
 
 function hero(viewKey) {
@@ -6395,183 +6399,50 @@ PAGE_INFO.discovery = {
   ],
 };
 
-const DISCOVERY_STATUS_BADGE = { discovered: 'warn', promoted: 'online', ignored: 'muted' };
+// ---- Discovery (MIGRATED — see public/views/discovery.js)
+let discoveryPage = null;
+const discoveryPageState = {};
+function getDiscoveryPage() {
+  if (discoveryPage) return discoveryPage;
+  if (typeof window === 'undefined' || !window.DiscoveryPage || !ui) return null;
+  discoveryPage = window.DiscoveryPage.create({
+    el, t, ui, errText,
+    state: discoveryPageState,
+    confirm: (msg) => window.confirm(msg),
+    // The agent sweeps on its own clock, so its candidates arrive after the
+    // request does.
+    later: (fn) => setTimeout(fn, 4000),
+    help: () => ({ title: t('disc.info.title'), body: () => [
+      el('p', {}, t('disc.info.p1')),
+      el('p', {}, t('disc.info.p2')),
+      el('p', { class: 'muted' }, t('disc.info.p3')),
+    ] }),
+    fetchBoot: async () => {
+      const [cfg, agents] = await Promise.all([
+        api('/api/discovery/config'),
+        api('/agents').catch(() => []),
+      ]);
+      return { cfg, agents };
+    },
+    saveConfig: (body) => api('/api/discovery/config', { method: 'PUT', body }),
+    // The server validates per field; a 400 carries `details` keyed by field.
+    fieldErrors: (e) => (e && e.data && e.data.details
+      ? Object.entries(e.data.details).map(([k, v]) => `${k}: ${v}`).join(' · ')
+      : null),
+    scan: (agentId) => api('/api/discovery/scan', { method: 'POST', body: agentId ? { agentId } : {} }),
+    fetchCandidates: (status) => api(`/api/discovery/candidates${status ? `?status=${status}` : ''}`),
+    fetchSweeps: () => api('/api/discovery/sweeps?limit=50'),
+    promote: (c) => api(`/api/discovery/candidates/${c.id}/promote`, { method: 'POST' }),
+    ignore: (c) => api(`/api/discovery/candidates/${c.id}/ignore`, { method: 'POST' }),
+    openAgent,
+  });
+  return discoveryPage;
+}
 
 views.discovery = async () => {
-  const root = el('div', { class: 'discovery-view' });
-  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Discovery'), el('span', { class: 'muted' }, 'Active discovery scope + candidates')));
-
-  const cfgHost = el('div', { class: 'card' }, el('h3', {}, 'Scan scope'), el('div', { class: 'muted' }, 'Loading…'));
-  const scanHost = el('div', { class: 'card' });
-  const candHost = el('div', { class: 'card' }, el('h3', {}, 'Candidates'), el('div', { class: 'muted' }, 'Loading…'));
-  const sweepHost = el('div', { class: 'card' }, el('h3', {}, 'Sweep history'), el('div', { class: 'muted' }, 'Loading…'));
-  root.append(cfgHost, scanHost, candHost, sweepHost);
-  let agents = []; // for the "sweep from agent" picker + found-by resolution
-  const agentNameById = {};
-
-  function renderConfig(cfg) {
-    const enabledBadge = el('span', { class: `badge ${cfg.enabled ? 'online' : 'muted'}` }, cfg.enabled ? 'Scheduled sweep ON' : 'Scheduled sweep OFF (env)');
-    const cidrs = el('textarea', { class: 'mono', rows: '4', placeholder: '10.0.0.0/24\n192.168.1.0/24' }, (cfg.cidrs || []).join('\n'));
-    const ports = el('input', { type: 'text', class: 'mono', value: (cfg.ports || []).join(', '), placeholder: '22, 80, 161, 443, 3389' });
-    const rate = el('input', { type: 'number', min: '1', max: '10000', value: String(cfg.rateLimit ?? 50) });
-    const cap = el('input', { type: 'number', min: '1', max: '16777216', value: String(cfg.addressCap ?? 65536) });
-    const interval = el('input', { type: 'number', min: '1', max: '10080', value: String(cfg.intervalMinutes ?? 360) });
-    const status = el('span', { class: 'muted' });
-    const saveBtn = el('button', { class: 'small' }, 'Save scope');
-    const field = (label, node, hint) => el('label', { class: 'field' }, el('span', {}, label), node, hint ? el('span', { class: 'muted small' }, hint) : null);
-
-    saveBtn.addEventListener('click', async () => {
-      const body = {
-        cidrs: cidrs.value.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean),
-        ports: ports.value.split(/[\s,]+/).map(Number).filter((n) => Number.isInteger(n) && n > 0),
-        rateLimit: Number(rate.value), addressCap: Number(cap.value), intervalMinutes: Number(interval.value),
-      };
-      saveBtn.disabled = true; status.className = 'muted'; status.textContent = 'Saving…';
-      try {
-        const r = await api('/api/discovery/config', { method: 'PUT', body });
-        status.className = ''; status.textContent = 'Saved.';
-        renderConfig(r.config);
-      } catch (e) {
-        status.className = 'error';
-        status.textContent = e.data && e.data.details ? Object.entries(e.data.details).map(([k, v]) => `${k}: ${v}`).join(' · ') : errText(e);
-      } finally { saveBtn.disabled = false; }
-    });
-
-    const children = [el('h3', {}, 'Scan scope'), el('div', { class: 'discovery-cfg-head' }, enabledBadge,
-      cfg.scopeConfigured ? null : el('span', { class: 'badge warn' }, 'Scope not configured — sweeps refuse to run'))];
-    if (cfg.editable === false) {
-      children.push(el('div', { class: 'muted' }, 'Scope is read-only (env-managed): CIDRs ', el('span', { class: 'mono' }, (cfg.cidrs || []).join(', ') || '—'),
-        ' · ports ', el('span', { class: 'mono' }, (cfg.ports || []).join(', '))));
-    } else {
-      children.push(el('div', { class: 'discovery-form' },
-        field('CIDR ranges (one per line)', cidrs),
-        el('div', { class: 'discovery-form-row' },
-          field('Ports', ports, 'TCP-connect targets'),
-          field('Rate (probes/sec)', rate),
-          field('Address cap', cap),
-          field('Sweep interval (min)', interval, 'applies on restart')),
-        el('div', { class: 'form-actions' }, saveBtn, status)));
-    }
-    cfgHost.replaceChildren(...children);
-  }
-
-  function renderScan() {
-    const status = el('span', { class: 'muted' });
-    // Choose where the sweep runs FROM: the server (its own vantage) or a
-    // connected agent (the segment it sits on — empty scope ⇒ the agent's own
-    // subnet). Only online agents can be sent a command.
-    const online = agents.filter((a) => a.status === 'online');
-    const fromSel = el('select', { class: 'small' },
-      el('option', { value: '' }, 'Server (default vantage)'),
-      ...online.map((a) => el('option', { value: String(a.id) }, `Agent · ${a.display_name || a.hostname}`)));
-    const btn = el('button', { class: 'small' }, 'Run a sweep now');
-    btn.addEventListener('click', async () => {
-      btn.disabled = true; status.className = 'muted'; status.textContent = 'Scanning…';
-      try {
-        const body = fromSel.value ? { agentId: Number(fromSel.value) } : {};
-        const r = await api('/api/discovery/scan', { method: 'POST', body });
-        if (r.mode === 'agent') {
-          status.className = '';
-          status.textContent = `Requested — the agent is sweeping; candidates will appear here shortly.`;
-          setTimeout(() => { loadCandidates(); loadSweeps(); }, 4000);
-        } else {
-          status.className = r.refused ? 'error' : '';
-          status.textContent = r.refused ? `Refused: ${r.reason}` : `Swept ${r.addresses ?? '?'} addresses · ${r.found ?? 0} candidate(s).`;
-          loadCandidates(); loadSweeps();
-        }
-      } catch (e) {
-        status.className = 'error';
-        status.textContent = e.status === 409 ? 'That agent is not connected right now.' : errText(e);
-      } finally { btn.disabled = false; }
-    });
-    scanHost.replaceChildren(el('h3', {}, 'Manual sweep'),
-      el('div', { class: 'form-actions' }, el('label', { class: 'inline muted' }, 'From ', fromSel), btn, status),
-      el('p', { class: 'muted small' }, 'Sweeping from an agent reaches segments the server can’t; leave the CIDR scope blank to scan that agent’s own subnet.'));
-  }
-
-  const statusFilter = el('select', { class: 'small' },
-    ...[['', 'All'], ['discovered', 'Discovered'], ['promoted', 'Promoted'], ['ignored', 'Ignored']].map(([v, l]) => el('option', { value: v }, l)));
-  statusFilter.addEventListener('change', loadCandidates);
-
-  async function loadCandidates() {
-    let data;
-    try {
-      const qs = statusFilter.value ? `?status=${statusFilter.value}` : '';
-      data = await api(`/api/discovery/candidates${qs}`);
-    } catch (e) {
-      candHost.replaceChildren(el('h3', {}, 'Candidates'), el('div', { class: 'error' }, errText(e)));
-      return;
-    }
-    const counts = data.counts || {};
-    const countLine = el('span', { class: 'muted' }, `discovered ${counts.discovered || 0} · promoted ${counts.promoted || 0} · ignored ${counts.ignored || 0}`);
-    const head = el('div', { class: 'discovery-cand-head' }, el('h3', {}, 'Candidates'), el('label', { class: 'inline muted' }, 'Status ', statusFilter), countLine);
-    if (!(data.candidates || []).length) {
-      candHost.replaceChildren(head, el('div', { class: 'empty' }, 'No candidates. Configure a scope and run a sweep.'));
-      return;
-    }
-    const foundByCell = (c) => (c.foundByAgentId
-      ? el('button', { class: 'linklike', onclick: () => openAgent(c.foundByAgentId) }, agentNameById[c.foundByAgentId] || `agent ${c.foundByAgentId}`)
-      : el('span', { class: 'muted' }, 'server'));
-    const rowEl = (c) => el('tr', {},
-      el('td', { class: 'mono' }, c.ip),
-      el('td', {}, c.hostname || '—'),
-      el('td', { class: 'mono' }, (c.openPorts || c.open_ports || []).join(', ')),
-      el('td', {}, foundByCell(c)),
-      el('td', {}, el('span', { class: `badge ${DISCOVERY_STATUS_BADGE[c.status] || 'muted'}` }, c.status)),
-      el('td', {}, c.status === 'discovered'
-        ? el('div', { class: 'row-actions' },
-            el('button', { class: 'small', onclick: () => promote(c) }, 'Promote'),
-            el('button', { class: 'small ghost', onclick: () => ignore(c) }, 'Dismiss'))
-        : (c.status === 'promoted' && c.promotedAgentId ? el('button', { class: 'linklike', onclick: () => openAgent(c.promotedAgentId) }, `agent ${c.promotedAgentId}`) : '—')));
-    candHost.replaceChildren(head, el('table', { class: 'agents-table' },
-      el('thead', {}, el('tr', {}, ...['IP', 'Hostname', 'Open ports', 'Found by', 'Status', ''].map((h) => el('th', { scope: 'col' }, h)))),
-      el('tbody', {}, ...(data.candidates || []).map(rowEl))));
-  }
-
-  async function promote(c) {
-    if (!window.confirm(`Promote ${c.ip} to a monitored SNMP device?`)) return;
-    try { const r = await api(`/api/discovery/candidates/${c.id}/promote`, { method: 'POST' }); toast(`Promoted → agent ${r.agentId}`); loadCandidates(); }
-    catch (e) { toast(errText(e), true); }
-  }
-  async function ignore(c) {
-    try { await api(`/api/discovery/candidates/${c.id}/ignore`, { method: 'POST' }); toast('Dismissed'); loadCandidates(); }
-    catch (e) { toast(errText(e), true); }
-  }
-
-  async function loadSweeps() {
-    let data;
-    try { data = await api('/api/discovery/sweeps?limit=50'); }
-    catch (e) { sweepHost.replaceChildren(el('h3', {}, 'Sweep history'), el('div', { class: 'error' }, errText(e))); return; }
-    if (!(data.sweeps || []).length) {
-      sweepHost.replaceChildren(el('h3', {}, 'Sweep history'), el('div', { class: 'empty' }, 'No sweeps recorded yet.'));
-      return;
-    }
-    sweepHost.replaceChildren(el('h3', {}, 'Sweep history'), el('table', { class: 'agents-table' },
-      el('thead', {}, el('tr', {}, ...['Time', 'Result', 'Detail'].map((h) => el('th', { scope: 'col' }, h)))),
-      el('tbody', {}, ...(data.sweeps || []).map((s) => el('tr', {},
-        el('td', {}, s.createdAt ? fmtDate(s.createdAt) : '—'),
-        el('td', {}, el('span', { class: `badge ${s.action === 'discovery_sweep_refused' ? 'warn' : 'online'}` }, s.action === 'discovery_sweep_refused' ? 'refused' : 'swept')),
-        el('td', { class: 'muted' }, s.detail || ''))))));
-  }
-
-  // Initial load — a 403 means the caller isn't an admin (nav should hide it).
-  try {
-    const [cfg, ag] = await Promise.all([
-      api('/api/discovery/config'),
-      api('/agents').catch(() => []),
-    ]);
-    agents = ag || [];
-    agents.forEach((a) => { agentNameById[a.id] = a.display_name || a.hostname || `agent ${a.id}`; });
-    renderConfig(cfg);
-    renderScan();
-  } catch (e) {
-    root.replaceChildren(el('div', { class: 'section-head' }, el('h2', {}, 'Discovery')),
-      el('div', { class: e.status === 403 ? 'empty' : 'error' }, e.status === 403 ? 'Discovery is available to administrators only.' : errText(e)));
-    return root;
-  }
-  loadCandidates();
-  loadSweeps();
-  return root;
+  const v = getDiscoveryPage();
+  if (!v) return el('div', { class: 'empty error' }, t('disc.err.config'));
+  return v.view();
 };
 
 // ---- Troubleshooting (location-driven investigation) ------------------------
@@ -10813,13 +10684,7 @@ const SETTINGS_GROUPS = [
 // errors, HTTP failures) merged with client-side action failures. A live
 // diagnostic aid — cleared on server restart. Distinct from Reporting → Audit
 // (the durable "who did what" trail).
-const LOG_LEVEL_ORDER = { debug: 0, info: 1, warn: 2, error: 3 };
 let logsFilter = { level: '', source: '', q: '' };
-
-function logLevelBadge(level) {
-  const cls = level === 'error' ? 'danger' : (level === 'warn' ? 'warn' : (level === 'debug' ? 'neutral' : 'active'));
-  return el('span', { class: `badge ${cls}` }, level);
-}
 
 function mergeLogEntries(serverEntries) {
   // Server ring already contains client errors shipped from any session (id
@@ -10830,97 +10695,45 @@ function mergeLogEntries(serverEntries) {
   return [...serverEntries, ...localOnly].sort((a, b) => String(b.ts).localeCompare(String(a.ts)));
 }
 
-views.logs = async () => {
-  const root = el('div');
-  root.append(el('div', { class: 'section-head' },
-    el('h2', {}, t('logs.system.title')),
-    el('span', { class: 'muted' }, t('logs.system.lead'))));
-
-  const LEVEL_OPTS = [['', 'All levels'], ['debug', 'Debug+'], ['info', 'Info+'], ['warn', 'Warn+'], ['error', 'Errors only']];
-  const SOURCE_OPTS = [['', 'All sources'], ['server', 'Server'], ['client', 'Dashboard']];
-  // Rebuild a select's options, appending a per-option match count (e.g.
-  // "Errors only (3)") when counts are supplied, and preserving the selection.
-  const fillOptions = (sel, opts, selected, counts) => {
-    sel.replaceChildren(...opts.map(([v, l]) => el('option',
-      { value: v, ...(selected === v ? { selected: 'selected' } : {}) },
-      counts ? `${l} (${counts[v] ?? 0})` : l)));
-    sel.value = selected;
-  };
-  const levelSel = el('select', {});
-  const sourceSel = el('select', {});
-  fillOptions(levelSel, LEVEL_OPTS, logsFilter.level);
-  fillOptions(sourceSel, SOURCE_OPTS, logsFilter.source);
-  const qInput = el('input', { type: 'search', placeholder: 'Filter text…', value: logsFilter.q });
-  const refreshBtn = el('button', { class: 'small ghost' }, '⟳ Refresh');
-  const status = el('span', { class: 'muted small' });
-
-  const tbody = el('tbody');
-  const table = el('table', { class: 'tests-table logs-table' },
-    el('thead', {}, el('tr', {}, ...['Time', 'Level', 'Source', 'Message'].map((h) => el('th', {}, h)))),
-    tbody);
-  const host = el('div', { style: 'overflow-x:auto' }, table);
-
-  async function load() {
-    logsFilter = { level: levelSel.value, source: sourceSel.value, q: qInput.value.trim() };
-    let serverEntries = [];
-    try {
+// ---- System Logs (MIGRATED — see public/views/systemLogs.js)
+let systemLogsPage = null;
+function getSystemLogsPage() {
+  if (systemLogsPage) return systemLogsPage;
+  if (typeof window === 'undefined' || !window.SystemLogsPage || !ui) return null;
+  systemLogsPage = window.SystemLogsPage.create({
+    el, t, ui,
+    state: logsFilter,
+    // Typing must not fire a request per keystroke.
+    debounce: (fn) => setTimeout(fn, 250),
+    help: () => ({ title: t('logs.info.title'), body: () => [
+      el('p', {}, t('logs.info.p1')),
+      el('p', {}, t('logs.info.p2')),
+      el('p', { class: 'muted' }, t('logs.info.p3')),
+    ] }),
+    // Level is filtered in the view so the Level dropdown can count over the
+    // full, search-filtered set — only q and limit go to the server. A server
+    // ring that cannot be read is reported, never thrown: the local client
+    // errors are still worth showing, and a toast here would re-enter
+    // recordClientLog.
+    fetchLogs: async (q) => {
       const p = new URLSearchParams();
-      // Level is filtered client-side (below) so the Level dropdown can show a
-      // per-level count over the full, search-filtered set — not just the rows
-      // that survive the currently selected level. Only q/limit go to the server.
-      if (logsFilter.q) p.set('q', logsFilter.q);
+      if (q) p.set('q', q);
       p.set('limit', '500');
-      const resp = await api(`/api/logs?${p.toString()}`);
-      serverEntries = resp.entries || [];
-    } catch (e) {
-      // Non-fatal: still show the local client errors even if the server ring
-      // is unreachable. (Don't toast — that would re-enter recordClientLog.)
-      status.textContent = `server logs unavailable: ${errText(e)}`;
-    }
-    const lvl = (r) => LOG_LEVEL_ORDER[r.level] ?? 1;
-    let base = mergeLogEntries(serverEntries);
-    if (logsFilter.q) { const s = logsFilter.q.toLowerCase(); base = base.filter((r) => r.msg.toLowerCase().includes(s) || JSON.stringify(r.meta || {}).toLowerCase().includes(s)); }
+      try {
+        const resp = await api(`/api/logs?${p.toString()}`);
+        return { entries: mergeLogEntries(resp.entries || []), error: null };
+      } catch (e) {
+        return { entries: mergeLogEntries([]), error: errText(e) };
+      }
+    },
+  });
+  return systemLogsPage;
+}
 
-    // Faceted counts: each dropdown counts over the set narrowed by the OTHER
-    // active filter, so a selection in one still shows meaningful tallies in it.
-    const bySource = logsFilter.source ? base.filter((r) => r.source === logsFilter.source) : base;
-    const byLevel = logsFilter.level ? base.filter((r) => lvl(r) >= LOG_LEVEL_ORDER[logsFilter.level]) : base;
-    const levelCounts = { '': bySource.length };
-    for (const [v] of LEVEL_OPTS) if (v) levelCounts[v] = bySource.filter((r) => lvl(r) >= LOG_LEVEL_ORDER[v]).length;
-    const sourceCounts = { '': byLevel.length, server: byLevel.filter((r) => r.source === 'server').length, client: byLevel.filter((r) => r.source === 'client').length };
-    fillOptions(levelSel, LEVEL_OPTS, logsFilter.level, levelCounts);
-    fillOptions(sourceSel, SOURCE_OPTS, logsFilter.source, sourceCounts);
-
-    let rows = bySource;
-    if (logsFilter.level) rows = rows.filter((r) => lvl(r) >= LOG_LEVEL_ORDER[logsFilter.level]);
-
-    tbody.replaceChildren(...rows.map((r) => {
-      const metaStr = r.meta && Object.keys(r.meta).length ? JSON.stringify(r.meta) : '';
-      return el('tr', { class: r.level === 'error' ? 'log-row-error' : '' },
-        el('td', { class: 'muted small nowrap' }, fmtDate(r.ts)),
-        el('td', {}, logLevelBadge(r.level)),
-        el('td', { class: 'muted small' }, r.source === 'client' ? 'dashboard' : 'server'),
-        // el() appends children as text nodes (already XSS-safe), so msg/meta
-        // must NOT be 'd — doing so rendered literal &quot; in the meta JSON.
-        el('td', {}, el('div', {}, r.msg), metaStr ? el('div', { class: 'muted small' }, metaStr) : null));
-    }));
-    if (!status.textContent) status.textContent = `${rows.length} entr${rows.length === 1 ? 'y' : 'ies'} shown`;
-    else status.textContent += ` · ${rows.length} shown (local only)`;
-  }
-
-  levelSel.addEventListener('change', () => { status.textContent = ''; load(); });
-  sourceSel.addEventListener('change', () => { status.textContent = ''; load(); });
-  qInput.addEventListener('input', () => { status.textContent = ''; load(); });
-  refreshBtn.addEventListener('click', () => { status.textContent = ''; load(); });
-
-  root.append(el('div', { class: 'history-controls' },
-    el('label', { class: 'inline muted' }, 'Level ', levelSel),
-    el('label', { class: 'inline muted' }, 'Source ', sourceSel),
-    el('label', { class: 'inline muted' }, 'Search ', qInput),
-    refreshBtn, el('span', { class: 'spacer' }), status));
-  root.append(host);
-  await load();
-  return root;
+views.logs = async () => {
+  const v = getSystemLogsPage();
+  if (!v) return el('div', { class: 'empty error' }, t('logs.system.title'));
+  return v.view();
 };
 
 // ---- User Logs (admin-only "who did what", with flags) ---------------------
@@ -10934,144 +10747,42 @@ views.logs = async () => {
 // and a CSV export can never disagree about why something was flagged.
 let userLogsFilter = { user: '', flagged: false, q: '' };
 
-// crit = red, warn = amber, neutral = grey. An unflagged row gets NO badge at
-// all: a green "OK" on every line is noise, and the flags only mean anything if
-// they are rare enough to notice.
-const USER_LOG_FLAG_CLASS = { critical: 'crit', warn: 'warn', notice: 'neutral' };
-
-// The badge for one row. `title` carries every reason, so hovering a flag
-// explains it even before the reasons are read below the action.
-function userLogFlagBadge(level, flags) {
-  if (!level || level === 'none') return el('span', { class: 'muted small', title: t('logs.user.flag.none') }, '\u2013');
-  const reasons = (flags || []).map((f) => f.message).join(' ');
-  return el('span', { class: `badge ${USER_LOG_FLAG_CLASS[level] || 'neutral'}`, title: reasons || '' }, t(`logs.user.flag.${level}`));
+// ---- User Logs (MIGRATED — see public/views/userLogs.js)
+// The flag rules and their explanations live server-side in
+// src/audit/userActivity.js, so the dashboard and the CSV export can never
+// disagree about why a row was flagged.
+let userLogsPage = null;
+function getUserLogsPage() {
+  if (userLogsPage) return userLogsPage;
+  if (typeof window === 'undefined' || !window.UserLogsPage || !ui) return null;
+  const query = (f) => {
+    const p = new URLSearchParams();
+    if (f.user) p.set('user', f.user);
+    if (f.flagged) p.set('flagged', '1');
+    if (f.q) p.set('q', f.q);
+    p.set('limit', '300');
+    return p.toString();
+  };
+  userLogsPage = window.UserLogsPage.create({
+    el, t, ui, errText,
+    state: userLogsFilter,
+    debounce: (fn) => setTimeout(fn, 250),
+    help: () => ({ title: t('logs.user.info.title'), body: () => [
+      el('p', {}, t('logs.user.info.p1')),
+      el('p', {}, t('logs.user.info.p2')),
+      el('p', { class: 'muted' }, t('logs.user.info.p3')),
+    ] }),
+    fetchLog: (f) => api(`/api/audit/users?${query(f)}`),
+    fetchUsers: () => api('/users'),
+    exportCsv: (f) => nis2Download(`/api/audit/users/export.csv?${query(f)}`, 'user-logs.csv'),
+  });
+  return userLogsPage;
 }
 
 views.userLogs = async () => {
-  const root = el('div');
-  root.append(el('div', { class: 'section-head' },
-    el('h2', {}, t('logs.user.title')),
-    el('span', { class: 'muted' }, t('logs.user.lead'))));
-
-  const userSel = el('select', {});
-  const qInput = el('input', { type: 'search', placeholder: t('logs.user.filter.searchPlaceholder'), value: userLogsFilter.q });
-  const flaggedBox = el('input', { type: 'checkbox', ...(userLogsFilter.flagged ? { checked: 'checked' } : {}) });
-  const refreshBtn = el('button', { class: 'small ghost' }, `\u27f3 ${t('logs.user.refresh')}`);
-  const exportBtn = el('button', { class: 'small ghost' }, `\u2913 ${t('logs.user.export')}`);
-  const status = el('span', { class: 'muted small' });
-  const summary = el('div', { class: 'muted small' });
-  const notice = el('div', {});
-
-  const tbody = el('tbody');
-  const table = el('table', { class: 'tests-table logs-table' },
-    el('thead', {}, el('tr', {}, ...[
-      t('logs.user.col.when'), t('logs.user.col.userId'), t('logs.user.col.name'),
-      t('logs.user.col.action'), t('logs.user.col.target'), t('logs.user.col.flag'),
-    ].map((h) => el('th', {}, h)))),
-    tbody);
-  const host = el('div', { style: 'overflow-x:auto' }, table);
-
-  // The user dropdown lists the accounts that exist now, so an admin can pick a
-  // colleague even when that person has no rows in the current window.
-  async function fillUsers() {
-    const opts = [el('option', { value: '' }, t('logs.user.filter.allUsers'))];
-    try {
-      const users = await api('/users');
-      for (const u of users) {
-        opts.push(el('option', { value: String(u.id), ...(String(u.id) === userLogsFilter.user ? { selected: 'selected' } : {}) },
-          `${u.name ? `${u.name} · ` : ''}${u.email} (#${u.id})`));
-      }
-    } catch { /* the log itself is what matters — a missing dropdown is not fatal */ }
-    userSel.replaceChildren(...opts);
-    userSel.value = userLogsFilter.user;
-  }
-
-  function query() {
-    const p = new URLSearchParams();
-    if (userLogsFilter.user) p.set('user', userLogsFilter.user);
-    if (userLogsFilter.flagged) p.set('flagged', '1');
-    if (userLogsFilter.q) p.set('q', userLogsFilter.q);
-    p.set('limit', '300');
-    return p.toString();
-  }
-
-  async function load() {
-    userLogsFilter = { user: userSel.value, flagged: flaggedBox.checked, q: qInput.value.trim() };
-    let data;
-    try {
-      data = await api(`/api/audit/users?${query()}`);
-    } catch (err) {
-      tbody.replaceChildren();
-      notice.replaceChildren(el('div', { class: 'empty error' }, t('logs.user.error', { message: errText(err) })));
-      status.textContent = '';
-      summary.replaceChildren();
-      return;
-    }
-    // A load that worked clears whatever the last failure left on screen.
-    notice.replaceChildren();
-    const entries = data.entries || [];
-    const s = data.summary || { total: 0, users: 0, flagged: 0 };
-
-    summary.replaceChildren(
-      el('span', {}, t('logs.user.summary.users', { count: s.users })),
-      el('span', {}, ' · '),
-      s.flagged
-        ? el('span', { class: 'badge warn' }, t('logs.user.summary.flagged', { count: s.flagged }))
-        : el('span', { class: 'badge ok' }, t('logs.user.summary.clean')));
-
-    if (!entries.length) {
-      tbody.replaceChildren(el('tr', {}, el('td', { colspan: '6', class: 'muted' },
-        userLogsFilter.user || userLogsFilter.flagged || userLogsFilter.q ? t('logs.user.emptyFiltered') : t('logs.user.empty'))));
-      status.textContent = t('logs.user.count', { shown: 0, total: data.total ?? 0 });
-      return;
-    }
-
-    tbody.replaceChildren(...entries.map((e) => {
-      const reasons = (e.flags || []).map((f) => f.message).join(' ');
-      const detailBits = [];
-      if (e.method && e.path) detailBits.push(`${e.method} ${e.path}`);
-      if (e.status != null) detailBits.push(`HTTP ${e.status}`);
-      if (e.ip) detailBits.push(e.ip);
-      if (typeof e.detail === 'string' && e.detail) detailBits.push(e.detail);
-      else if (e.detail && typeof e.detail === 'object' && Object.keys(e.detail).length) detailBits.push(JSON.stringify(e.detail));
-      return el('tr', { class: e.flagLevel === 'critical' ? 'log-row-error' : '' },
-        el('td', { class: 'muted small nowrap' }, fmtDate(e.ts)),
-        el('td', { class: 'mono small' }, e.userId == null ? '\u2013' : `#${e.userId}`),
-        // The name is optional, so an account without one is not a finding: show
-        // the e-mail as the identity line rather than repeating "No name on the
-        // account" down every row of the log.
-        el('td', {},
-          e.name ? el('div', {}, e.name) : null,
-          el('div', { class: e.name ? 'muted small' : '' }, e.email || '\u2013',
-            e.deletedUser ? el('span', { class: 'muted' }, ` \u00b7 ${t('logs.user.deletedUser')}`) : null)),
-        el('td', {},
-          el('div', {}, e.actionLabel || e.action),
-          el('div', { class: 'muted small' }, e.action),
-          detailBits.length ? el('div', { class: 'muted small' }, detailBits.join(' \u00b7 ')) : null),
-        el('td', { class: 'small' }, e.target || '\u2013'),
-        el('td', {},
-          userLogFlagBadge(e.flagLevel, e.flags),
-          reasons ? el('div', { class: 'muted small' }, reasons) : null));
-    }));
-    status.textContent = t('logs.user.count', { shown: entries.length, total: data.total ?? entries.length });
-  }
-
-  userSel.addEventListener('change', load);
-  flaggedBox.addEventListener('change', load);
-  qInput.addEventListener('input', load);
-  refreshBtn.addEventListener('click', load);
-  exportBtn.addEventListener('click', () => nis2Download(`/api/audit/users/export.csv?${query()}`, 'user-logs.csv'));
-
-  root.append(el('div', { class: 'history-controls' },
-    el('label', { class: 'inline muted' }, `${t('logs.user.filter.user')} `, userSel),
-    el('label', { class: 'inline muted' }, flaggedBox, ` ${t('logs.user.filter.flaggedOnly')}`),
-    el('label', { class: 'inline muted' }, `${t('logs.user.filter.search')} `, qInput),
-    refreshBtn, exportBtn, el('span', { class: 'spacer' }), summary, status));
-  root.append(notice);
-  root.append(host);
-  await fillUsers();
-  await load();
-  return root;
+  const v = getUserLogsPage();
+  if (!v) return el('div', { class: 'empty error' }, t('logs.user.err.title'));
+  return v.view();
 };
 
 // ---- Documentation (built-in handbook / how-tos) ---------------------------
@@ -11618,58 +11329,76 @@ views.docs = async () => {
   return root;
 };
 
-views.settings = async () => {
-  const root = el('div');
-  // Drop admin-only tabs for non-admins, then drop any section left empty.
-  const groups = SETTINGS_GROUPS
+// ---- Settings (SHELL MIGRATED — see public/views/settings.js)
+// The twenty-two section bodies stay here; the page they sit on is the
+// contract's.
+let settingsPage = null;
+const SETTINGS_SECTIONS = {
+  users: () => views.users(),
+  license: () => views.license(),
+  appearance: settingsAppearanceView,
+  database: settingsDatabaseView,
+  map: settingsMapView,
+  types: settingsTypesView,
+  analyse: settingsAnalyseView,
+  alerting: settingsAlertingView,
+  severity: settingsSeverityRulesView,
+  runbooks: settingsRunbooksView,
+  integrations: settingsIntegrationsView,
+  cmdb: settingsCmdbView,
+  ai: settingsAiView,
+  maintenance: settingsMaintenanceView,
+  updates: settingsUpdatesView,
+  agentkey: settingsAgentKeyView,
+  agents: settingsAgentsView,
+  retention: settingsRetentionView,
+  auth: settingsAuthView,
+  apitokens: settingsApiTokensView,
+  screening: () => views.screening(),
+  assurance: settingsAssuranceView,
+};
+
+function settingsGroups() {
+  // Drop admin-only sections for non-admins, then drop any group left empty.
+  return SETTINGS_GROUPS
     .map(([label, tabs]) => [label, tabs.filter(([, , adminOnly]) => isAdmin() || !adminOnly)])
     .filter(([, tabs]) => tabs.length > 0);
-  const allKeys = groups.flatMap(([, tabs]) => tabs.map(([k]) => k));
-  if (!settingsTab || !allKeys.includes(settingsTab)) settingsTab = allKeys[0];
-
-  const nav = el('div', { class: 'settings-nav' }, ...groups.map(([label, tabs]) =>
-    el('div', { class: 'settings-nav-group' },
-      el('span', { class: 'settings-nav-label' }, label),
-      el('div', { class: 'navlist' }, ...tabs.map(([k, lbl]) =>
-        el('button', { class: `small ghost${k === settingsTab ? ' active' : ''}`, onclick: () => { settingsTab = k; render(); } }, lbl))))));
-  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Settings')), nav);
-  // Per-section licence pill (green = included in this licence, red = not).
-  // Needs the feature + plan maps; both are cached, so this is usually instant.
-  await Promise.all([loadFeatures(), loadPlan()]);
-  root.append(el('div', { class: 'settings-license-row' }, settingsLicensePill(settingsTab)));
-
-  const views2 = {
-    users: () => views.users(),
-    license: () => views.license(),
-    appearance: settingsAppearanceView,
-    database: settingsDatabaseView,
-    map: settingsMapView,
-    types: settingsTypesView,
-    analyse: settingsAnalyseView,
-    alerting: settingsAlertingView,
-    severity: settingsSeverityRulesView,
-    runbooks: settingsRunbooksView,
-    integrations: settingsIntegrationsView,
-    cmdb: settingsCmdbView,
-    ai: settingsAiView,
-    maintenance: settingsMaintenanceView,
-    updates: settingsUpdatesView,
-    agentkey: settingsAgentKeyView,
-    agents: settingsAgentsView,
-    retention: settingsRetentionView,
-    auth: settingsAuthView,
-    apitokens: settingsApiTokensView,
-    screening: () => views.screening(),
-    assurance: settingsAssuranceView,
-  };
-  let content;
-  try {
-    content = await (views2[settingsTab] || settingsAnalyseView)();
-  } catch (err) {
-    content = el('div', { class: 'empty error' }, err.message);
+}
+function settingsLabel(key) {
+  for (const [, tabs] of SETTINGS_GROUPS) {
+    for (const [k, label] of tabs) if (k === key) return label;
   }
-  root.append(content);
-  return root;
+  return key;
+}
+
+function getSettingsPage() {
+  if (settingsPage) return settingsPage;
+  if (typeof window === 'undefined' || !window.SettingsPage || !ui) return null;
+  settingsPage = window.SettingsPage.create({
+    el, t, ui, errText,
+    groups: settingsGroups,
+    label: settingsLabel,
+    tab: () => settingsTab,
+    setTab: (k) => { settingsTab = k; syncLocation(); },
+    licence: settingsLicence,
+    help: () => ({ title: t('set.info.title'), body: () => [
+      el('p', {}, t('set.info.p1')),
+      el('p', {}, t('set.info.p2')),
+      el('p', { class: 'muted' }, t('set.info.p3')),
+    ] }),
+    render: (key) => (SETTINGS_SECTIONS[key] || settingsAnalyseView)(),
+  });
+  return settingsPage;
+}
+
+views.settings = async () => {
+  const v = getSettingsPage();
+  if (!v) return el('div', { class: 'empty error' }, t('set.title'));
+  // The licence pill on each section reads the cached feature + plan maps.
+  await Promise.all([loadFeatures(), loadPlan()]);
+  // A section holds its own open form, so the page is rebuilt per entry.
+  settingsPage = null;
+  return v.view();
 };
 
 // A small "Licence: <feature> yes/no" badge so each feature tab shows whether the
@@ -11711,16 +11440,19 @@ async function settingsAssuranceView() {
 }
 
 // The green/red licence pill shown at the top of every Settings section.
-function settingsLicensePill(tabKey) {
+// What the licence says about one Settings section. A section not in
+// SETTINGS_FEATURE is baseline — always included, never gateable. The view
+// renders this as a contract Badge on the section's own panel head, so the
+// answer sits with the thing it is about.
+function settingsLicence(tabKey) {
   const info = SETTINGS_FEATURE[tabKey];
-  if (!info) {
-    return el('span', { class: 'badge active', title: 'Included in every BlueEyes licence — not a gateable feature.' },
-      'Licence: included');
-  }
+  if (!info) return { ok: true, text: t('set.lic.included'), title: t('set.lic.baseline') };
   const ok = featureEntitled(info.feature);
-  const title = ok ? `${info.label} is included in your licence.` : lockedHint(info.label, info.feature);
-  return el('span', { class: `badge ${ok ? 'active' : 'bad'}`, title },
-    `Licence: ${info.label} — ${ok ? 'included' : 'not in licence'}`);
+  return {
+    ok,
+    text: ok ? t('set.lic.on', { label: info.label }) : t('set.lic.off', { label: info.label }),
+    title: ok ? t('set.lic.onHint', { label: info.label }) : lockedHint(info.label, info.feature),
+  };
 }
 
 // Settings → Agent key: generate / show / delete the agent-release SIGNING key.
@@ -11766,7 +11498,15 @@ async function settingsAgentKeyView() {
     if (status.source === 'managed') {
       root.append(el('div', { class: 'form-actions' }, el('button', { class: 'danger', onclick: () => removeKey() }, 'Delete signing key')));
     } else {
-      root.append(el('p', { class: 'muted' }, 'This key comes from the server environment — manage it there.'));
+      root.append(el('p', { class: 'muted' }, 'This key comes from the server environment (', el('code', {}, 'AGENT_RELEASE_PUBLIC_KEY'), ') — the public half only, so this server can verify releases but never sign one.'));
+      // Without this button a verify-only deployment had no way out from the
+      // dashboard at all: "configured" hid the Generate button, and the env key
+      // can never sign. A managed key can be generated alongside it and takes
+      // precedence — the agents then have to be re-pinned to it.
+      root.append(el('div', { class: 'form-actions' },
+        el('button', { onclick: () => genKey() }, 'Generate a managed signing key')));
+      root.append(el('p', { class: 'muted small' },
+        'Generating stores a key pair on this server and uses it in place of the environment key. Agents pinned to the environment key must be re-pinned afterwards (Updates panel → “Show the re-pin command”), or they will refuse the releases it signs.'));
     }
   } else {
     root.append(el('div', { class: 'section-head' }, el('h3', {}, 'Agent signing key'), el('span', { class: 'badge offline' }, 'Not set')));
@@ -15920,6 +15660,9 @@ function syncCrumb() {
 // A sub-tab's own label. Falls back to the segment itself, which is already the
 // word in the URL, so an untranslated tab reads as its address rather than blank.
 function crumbTabLabel(view, tab) {
+  // Settings' twenty-two section labels already live in SETTINGS_GROUPS, so
+  // they are read from there rather than copied into both catalogues.
+  if (view === 'settings') return settingsLabel(tab);
   const key = `route.tab.${view}.${tab}`;
   const label = t(key);
   return label === key ? tab : label;
@@ -16167,7 +15910,7 @@ $('#force-change-form').addEventListener('submit', async (e) => {
   const currentPassword = $('#fc-current').value;
   const newPassword = $('#fc-new').value;
   const confirm = $('#fc-confirm').value;
-  if (newPassword !== confirm) { errEl.textContent = 'De to nye adgangskoder er ikke ens. / New passwords do not match.'; return; }
+  if (newPassword !== confirm) { errEl.textContent = t('auth.fc.mismatch'); return; }
   try {
     const data = await api('/auth/change-password', { method: 'POST', body: { currentPassword, newPassword } });
     token = data.token;
@@ -16177,7 +15920,7 @@ $('#force-change-form').addEventListener('submit', async (e) => {
     localStorage.setItem(ROLE_KEY, role);
     localStorage.setItem(EMAIL_KEY, email);
     $('#force-change-form').reset();
-    toast('Adgangskode skiftet / Password changed');
+    toast(t('auth.fc.done'));
     render();
   } catch (err) {
     errEl.textContent = errText(err);
@@ -16191,16 +15934,16 @@ $('#fc-logout').addEventListener('click', () => logout());
 async function renderSsoOptions() {
   const host = $('#sso-options');
   if (!host) return;
-  if (ssoLoginError) $('#login-error').textContent = `Single sign-on failed: ${ssoLoginError}`;
+  if (ssoLoginError) $('#login-error').textContent = t('auth.sso.failed', { message: ssoLoginError });
   let sso = null;
   try { sso = await (await fetch('/auth/sso')).json(); } catch { sso = null; }
   const methods = [];
-  if (sso && sso.oidc && sso.oidc.enabled) methods.push({ label: 'Sign in with SSO (OIDC)', url: sso.oidc.loginUrl });
-  if (sso && sso.saml && sso.saml.enabled) methods.push({ label: 'Sign in with SSO (SAML)', url: sso.saml.loginUrl });
+  if (sso && sso.oidc && sso.oidc.enabled) methods.push({ label: t('auth.sso.oidc'), url: sso.oidc.loginUrl });
+  if (sso && sso.saml && sso.saml.enabled) methods.push({ label: t('auth.sso.saml'), url: sso.saml.loginUrl });
   if (!methods.length) { host.classList.add('hidden'); return; }
   host.replaceChildren(
-    el('div', { class: 'sso-divider' }, el('span', {}, 'or')),
-    ...methods.map((m) => el('a', { class: 'sso-button', href: m.url }, m.label)));
+    el('div', { class: 'sso-divider' }, el('span', {}, t('auth.sso.or'))),
+    ...methods.map((m) => el('a', { class: 'btn btn-secondary auth-submit', href: m.url }, m.label)));
   host.classList.remove('hidden');
 }
 renderSsoOptions();

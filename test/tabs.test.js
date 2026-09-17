@@ -141,14 +141,27 @@ test('activating a tab switches the view and moves the selection', async (t) => 
   assert.ok(doc.querySelector('.connection-test'), 'the second tab did not open its screen');
 });
 
-test('a rail of destinations is not a tab strip, and says so', async (t) => {
+test('Settings picks its section with two levels of SubTabs', async (t) => {
+  // This reverses an earlier decision. The rail used to be twenty-two `.ghost`
+  // buttons in five wrapped clusters, on the reasoning that they were
+  // "destinations, not tabs". The addresses say otherwise — they are
+  // /settings/<section>, one screen with sections — and selecting one swaps the
+  // panel below it, which is what a tablist is. The contract
+  // (docs/ui-contract.md) forbids buttons-as-tabs outright, so they are SubTabs:
+  // the five groups, then the sections of the group you are in. Twenty-two in
+  // one row is what made them wrap in the first place.
   const { doc } = await boot(t);
   doc.querySelector('.tabs button[data-view="settings"]').click();
   await tick(400);
-  const rail = doc.querySelector('.settings-nav .navlist');
-  assert.ok(rail, 'the settings rail is missing');
-  assert.equal(rail.getAttribute('role'), null, 'a rail of separate screens must not claim to be a tablist');
-  assert.equal(doc.querySelector('.settings-nav .subtabs'), null, 'the settings rail is still using the tab class');
-  // It keeps the quiet-chip look on purpose — these are destinations, not tabs.
-  assert.ok([...rail.querySelectorAll('button')].every((b) => b.classList.contains('ghost')));
+  assert.equal(doc.querySelector('.settings-nav'), null, 'the button clusters survived');
+  const strips = [...doc.querySelectorAll('#view .ui-page > div > [role="tablist"]')];
+  assert.equal(strips.length, 2, 'Settings does not have exactly two strips');
+  for (const strip of strips) {
+    assert.ok(strip.classList.contains('subtabs'), 'a strip is not the shared component');
+    const tabs = [...strip.querySelectorAll('.subtab')];
+    assert.ok(tabs.length > 0);
+    assert.equal(tabs.filter((b) => b.getAttribute('aria-selected') === 'true').length, 1);
+    // One stop in the tab order; the arrows move within.
+    assert.equal(tabs.filter((b) => b.tabIndex === 0).length, 1);
+  }
 });

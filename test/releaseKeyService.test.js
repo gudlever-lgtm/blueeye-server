@@ -86,3 +86,49 @@ test('falls back to the env public key (verify-only) when no managed key is stor
   assert.equal(status.canSign, false); // public-only: can verify, cannot sign
   assert.match(svc.getPublicKey(), /BEGIN PUBLIC KEY/);
 });
+
+test('a stored key that cannot be decrypted reports WHY instead of looking configured', async () => {
+  // The state behind "update sent UNSIGNED" on a server that shows "Created ✓":
+  // the key row survives, but SECRET_ENCRYPTION_KEY / JWT_SECRET changed, so the
+  // private half no longer decrypts. It used to be one warn line at startup.
+  const repo = fakeRepo();
+  await svcWith(repo).generate({ userId: 1 });
+
+  const seen = [];
+  const svc = createReleaseKeyService({
+    repo,
+    secretBox: { encrypt: (v) => v, decrypt: () => { throw new Error('unrecognized token format'); } },
+    env: {},
+    logger: { warn() {}, info() {} },
+    onKeyError: (e) => seen.push(e),
+  });
+  await svc.load();
+
+  const status = svc.status();
+  assert.equal(status.configured, true, 'the public key is still usable for verification');
+  assert.equal(status.canSign, false);
+  assert.equal(status.signBlocked, 'undecryptable');
+  assert.match(status.keyError, /cannot be decrypted/);
+  assert.equal(seen.length, 1, 'the fault must reach the system log, not just a startup warn');
+  assert.equal(seen[0].reason, 'undecryptable');
+  assert.throws(() => svc.sign({ version: '1.0.0' }), /No release signing key/);
+});
+
+test('signBlockedReason separates "no key" from "public key only"', async () => {
+  const pub = crypto.generateKeyPairSync('ed25519').publicKey.export({ type: 'spki', format: 'pem' }).toString();
+
+  const none = svcWith(fakeRepo());
+  await none.load();
+  assert.equal(none.signBlockedReason(), 'no-key');
+  assert.equal(none.status().signBlocked, 'no-key');
+
+  const envOnly = svcWith(fakeRepo(), { AGENT_RELEASE_PUBLIC_KEY: pub });
+  await envOnly.load();
+  assert.equal(envOnly.isConfigured(), true, 'agents can still pin it, so enrollment is not blocked');
+  assert.equal(envOnly.signBlockedReason(), 'verify-only');
+  assert.equal(envOnly.status().signBlocked, 'verify-only');
+
+  const signing = svcWith(fakeRepo());
+  await signing.generate({});
+  assert.equal(signing.signBlockedReason(), '');
+});

@@ -110,6 +110,9 @@
 .ui .btn-danger { background: var(--bad); color: var(--panel); }
 .ui .btn:disabled { opacity: 0.45; cursor: not-allowed; }
 .ui .btn-icon { width: var(--control-h); padding: 0; }
+/* A link that is a button (the SSO sign-in options) is a button, underline and
+   all — the global anchor rule would put one back. */
+.ui a.btn { text-decoration: none; }
 .ui .btn-xs { height: 24px; padding: 0 var(--s-2); font-size: var(--fs-xs); }
 .ui .btn-xs.btn-icon { width: 24px; padding: 0; }
 
@@ -476,3 +479,24 @@
 .ui .panel-body + .panel-body { padding-top: 0; }
 .ui .ts-events { margin-top: var(--s-3); }
 .ui .ts-events-head { display: flex; align-items: center; gap: var(--s-3); margin-bottom: var(--s-2); }
+
+/* ---- Auth (login + forced password change) -------------------------------
+   Two static screens in index.html that render() never touches. They are on the
+   contract's tokens and controls, but not on a page template — there is no
+   shell around them yet, and a sidebar the reader cannot use would be a lie. */
+.ui.ui-auth { min-height: 100vh; display: grid; place-items: center; padding: var(--s-5); }
+.ui .auth-card { display: flex; flex-direction: column; gap: var(--s-4);
+  width: min(360px, 100%); padding: var(--s-6); background: var(--surface);
+  border: 1px solid var(--border); border-radius: var(--r-panel); box-shadow: var(--shadow-md); }
+.ui .auth-brand { margin: 0 0 var(--s-1); font-size: var(--fs-xl); font-weight: 700; }
+.ui .auth-sub { display: block; font-size: var(--fs-sm); font-weight: 500; color: var(--text-muted); }
+.ui .auth-card input { height: var(--control-h); padding: 0 var(--s-3); background: var(--surface-alt);
+  border: 1px solid var(--border); border-radius: var(--r-btn); color: var(--text); font: inherit;
+  font-size: var(--fs-sm); }
+.ui .auth-card input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ui .auth-submit { width: 100%; }
+/* Empty until something goes wrong, so it must not hold a line of space. */
+.ui .auth-card .field-error { margin: 0; font-size: var(--fs-sm); color: var(--sev-crit); }
+.ui .auth-card .field-error:empty { display: none; }
+.ui .auth-card .meta { margin: 0; }
+.ui .auth-card #fc-logout { align-self: flex-start; }

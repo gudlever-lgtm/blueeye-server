@@ -1163,3 +1163,497 @@ underline the global anchor rule would otherwise put back.
 **Not a page template.** These two are on the contract's components but on no
 page template: there is no shell around them, and a sidebar the reader cannot
 use would be a lie.
+
+
+**Agents** carried **nine** buttons in every row's last cell — Traffic, Flows,
+Ping, Diagnose, Speed, Run test, Edit, Update, Delete — with Delete at the end
+of the run. The row opens the agent, "Run test" is the row's action, and the
+rest are in the ⋯ menu, grouped: the six checks that only look, then the two
+that change something, then Delete alone behind a separator.
+
+The table sorted itself by rewriting `th.textContent` with a ▲ or ▼ glued to the
+label and setting `aria-sort` by hand. That is the DataTable's job.
+
+**Two columns went, and the table stopped overflowing.** Nine fixed widths came
+to 1196px; at 1280 "Last reported" and the whole action column were past the
+right edge.
+
+- **Status** was redundant *by construction*: Health is derived from it —
+  `status !== 'online'` **is** `down` — so the two columns said the same thing,
+  one of them less precisely. Health keeps the distinction Status could not
+  make: an agent that is connected and has gone quiet.
+- **ID** went with it. The row opens the agent, and the id is in that address.
+- **Platform** went too. It changes once in an agent's life, and the one
+  decision it drove — whether an update is one click or an installer job — is on
+  the version badge. The filter still matches it, so "windows" still finds the
+  Windows agents.
+- The **version** got a column of its own instead of a second line under the
+  platform. It is what "Update outdated (3)" in the header is about, and sorting
+  by it puts the stragglers first rather than sorting version strings
+  alphabetically.
+
+What is left is six columns, only three of them pinned — the badge, the
+timestamp and the actions. Pinning all of them squeezed the agent's own name,
+the point of the row, down to a hundred pixels and truncated it.
+
+The status chip was `.badge <status> clickable` — a chip you could click, which
+is a button wearing a badge. The connection diagnosis is a menu entry now, with
+the other checks. The source cell's capability list and hsflowd state moved to
+the agent page, where the detail lives.
+
+`agentHealthCell` and `agentHealthRank` are gone from `app.js`: two copies of
+the same rule, one for the cell and one for the sort, on a screen that no longer
+draws either.
+
+
+**Interfaces** is a ListPage, and its table is **exported as well as drawn**:
+the agent detail page renders the same interfaces, and two copies of one table
+would drift. `app.js`'s `interfaceTable()` reads it off the view module now,
+and `IFACE_RANK`, `ifaceStatusBadge` and `ifaceLinkText` are gone with the copy
+they served.
+
+`.history-controls` is a Toolbar. `source: proc · measured 14:02` was a grey
+span at the end of that control row; it is the panel's note, beside the table it
+describes.
+
+The status chip was `.badge online|warn|error|down|grace` reading OK / WARN /
+ERR / DOWN / IDLE — a fifth vocabulary for severity. It is a Badge on the app's
+tones. Errors and discards carry a tone on the **number**, not a badge: a count
+is not a state, so `.num-crit` / `.num-warn` say a port is dropping frames
+without pretending the figure is a status.
+
+**An idle virtual port used to sort to the very top.** `docker0` and a handful
+of veths are `status: down`, which ranked them first — above the port that was
+actually erroring. They read IDLE, which is not a fault, so they rank below OK
+as well.
+
+**The flow-source empty state keeps every word.** An agent on sflow or netflow
+reports sampled conversations, not per-interface counters, so this table is
+*always* empty for it however healthy Diagnose looks. Telling that reader "no
+data yet" sends them to update an agent that is working. It says what its source
+does, which two sources would fill this table, and which screens do use what
+this agent reports — and it now offers the button that changes the setting.
+
+
+**NICs** is a DashboardPage, and it cleared three forbidden things in one
+screen.
+
+The Models / Agents switch was a `.seg` segmented control — two buttons with an
+`.on` class, which is exactly the "buttons as tabs" the contract forbids. It is
+SubTabs, and the choice is in the URL (`/nics/agents`), so a link to the agent
+inventory opens the agent inventory.
+
+The machines running a given firmware were `.chip ghost small` buttons: chips
+carrying an action **and** a host name, which the contract forbids twice over.
+They are HostLinks.
+
+`style: 'margin-left:.4rem'` on the drift badge was the last inline style here.
+A DataTable's `<col width>` is the one exemption, and a test asserts nothing
+else survives.
+
+The summary was grey prose with one word going red — "12 agent(s) reporting ·
+31 NIC(s) · 3 model(s) with firmware drift". It is a StatStrip, and **clicking
+the drift count filters to the models that have it** — which also hides the full
+inventory, because "what is mismatched" and "what is deployed" are different
+questions. Drift is a property of a model, so the filter moves you to the tab
+that can answer it.
+
+Firmware drift was a card of nested blocks: a model, then a row per firmware,
+then a row of chips. It is one table, one row per (model, firmware), with the
+outlier badged. The **Agents** view stacked one table per agent all the way
+down the page, each with its own heading; it is one table of agents, and the
+cards open in a Drawer — which is also where the agent detail page gets its
+copy, since `nicTable` is exported for exactly that reason.
+
+`.nic-card`, `.drift-card`, `.drift-model`, `.fw-row`, `.nic-chips`,
+`.nic-model-row`, `.nic-agent-row`, `.nics-controls`, `.nic-filter`, `.seg` and
+`.seg-btn` are all gone from `styles.css`.
+
+
+**Event** is the first DetailPage (template D) in phase 3, and it fixed a shell
+defect that had been true of every record page in the app.
+
+The heading was `.inc-header`: an `<h2>`, a row of badges, and a run of `· `
+separators, with "← Events" floated beside it. It is a PageHeader — the title,
+the severity in template D's `status` slot beside it, the where as the lead,
+and Back as an action. The status transitions were bare `.small` buttons in an
+`.inc-actions` div; there is exactly one move from any state, so it is the
+page's single primary ("Mark investigating", "Reopen").
+
+`.inc-status-<state>` and `.inc-sev-<level>` were two more severity
+vocabularies, one of them keyed on whatever word the server sent. Both are
+Badges on the app's tones.
+
+Eight `.card` blocks, each with an `<h3>` that four separate loaders rebuilt on
+every fill, are Panels. The loaders fill a body and the panel keeps its title.
+Three of the bodies — the work log, the guide and the assistant — draw their own
+card, so the page does not put a panel around them; that is the same rule
+Settings' sections follow.
+
+**Every record page marked nothing in the rail.** `agent`, `location`, `event`
+and `cluster` have no nav entry of their own — they are reached from a list — so
+the sidebar highlighted nothing anywhere on the screen, and the breadcrumb
+printed the raw view key at the reader: `event / #11`. A `DETAIL_OF` map beside
+`PREVIEW_OF` points each record at its list, so the crumb reads
+`Insights / Events / #11` and the Insights group unfolds with Events marked. One
+shell change, four screens.
+
+**A 404 offers no Retry.** Asking the same question again gets the same answer;
+it names the id it could not find and keeps the way back to the list.
+
+Two smaller things this screen surfaced: the work log's radio choices stacked
+their label under the input, because the global `label { flex-direction: column }`
+rule was never overridden by `.wl-kind-choice`; and the affected-path panel is
+drawn only when there is a path to draw, rather than as a panel that is
+permanently empty for events with no target.
+
+
+**Situation** is the second DetailPage and the sixth shell migration: the five
+panels — what changed, the evidence, the recommended actions, the advisory and
+the timeline — stay in `public/clusterView.js`, which ships standalone, so
+`embedded` is opt-in there the same way it is for Service Assurance and Guides.
+
+The heading was `.inc-header`: an `<h2>` reading "Situation #14", **three badges
+from three different vocabularies** (`.inc-status-*`, `.conf-*`, `.rc-*`), a run
+of `· ` separators, Back floated beside it, and an `.inc-actions` bar
+underneath. It is a PageHeader whose **title is the suspected cause** — the id
+is already in the address, and "Network layer" is what the reader came for.
+
+Acknowledge and Resolve were two `.small` buttons in a row. Resolve is the move
+that closes the story, so it is the primary; Acknowledge, which only records
+that somebody saw it, is the secondary beside it.
+
+**Confidence is not severity.** `.badge.conf-high` rendered in `--sev-crit` —
+so the Evidence panel badged high confidence in red, two inches under the
+header's green "High confidence", the same value answered two ways on one
+screen. Confidence says how much to trust the grouping: high reads ok, low
+reads muted, and a low-confidence situation is a hypothesis rather than an
+alarm. The Situations list (3.17) already used that scale; `styles.css` now
+agrees with it.
+
+That inconsistency was invisible until the header moved onto the contract and
+put the two badges on the same screen — which is the argument for migrating a
+screen and its detail page together.
+
+
+**Agent** is the third DetailPage and the seventh shell migration. The heading
+was a `.section-head` with **six things in one flex row**: a Back button, the
+name, a status badge, a location link with a 📍 glued to its front, and three
+more buttons. It is a PageHeader — the name, the status in template D's slot,
+the platform and the location as the lead, and the actions where actions go,
+with "Run test" as the one primary.
+
+The location was `.linklike` with an emoji in it; it is a HostLink, which is
+what the contract has for "a place you can open".
+
+**Three card titles were written twice.** The health résumé, the config
+history, the CMDB asset and the dependencies were `.card` divs whose `<h3>`
+each loader rebuilt on every fill — so once the cards became Panels, every one
+of them said its own name in the panel head and again two lines below it. The
+loaders write the body now and the panel keeps the title. The activity
+timeline draws its own card with a range picker in the head, so the page
+appends it as it is rather than framing it twice.
+
+Dropping a heading from a `replaceChildren(head, …)` call by setting
+`head = null` printed the literal word **null** into the panel: that is the
+third time this exact trap has bitten in this migration, so the argument is
+removed rather than nulled.
+
+**Not migrated, passed in whole:** the four `<details class="sec">` folds —
+Probes, Interfaces, NIC firmware and Traffic. Each owns a form, a poller or a
+chart, and on a page this long the fold is doing real work; the contract has no
+accordion, and inventing one to hold four things is not the trade. The live
+half now lives in `agentDetailFolds()` + `agentDetailStart()`, so the page can
+own the health host and the poller can still fill it.
+
+Also fixed here, in the test rather than the app: the boot helper these suites
+share read `hit.status` as the HTTP status, and an agent payload carries its own
+`status: 'online'` — so every load answered "HTTP online". An envelope is
+`{ status, body }` now; anything else is the body.
+
+
+**Location** is the fourth DetailPage and the last of the record pages. The
+heading was a `.section-head` with eight things in it: Back, an `<h2>` with a 📍
+glued to the name, the description, the coordinates, a spacer, and four buttons.
+It is a PageHeader — name, description + coordinates as the lead, Edit as the
+one primary, Live traffic / AI status / Back beside it. "Flows →" is gone: every
+arc on the map and every row in the flow list already opens Flows for this site,
+so the header does not need a fifth way in.
+
+The six `kpiCard`s are a StatStrip. Each card carried a label *and* a sub-line
+("Agents" over "online at this site"); a stat has one label, so the two folded
+into one — **Agents online**, **Median latency**, **Worst packet loss**.
+
+The agents table had **ten columns**. Three went:
+
+* **Connection** — the socket, next to **Health**, which is derived from it.
+  `down` and `offline` were the same fact printed twice on the same row;
+* **Targets** and **Version** — both are on the agent's own page, and the row
+  opens it.
+
+**The denominator was wrong.** "Agents online" read `k.online/k.total` where
+both came from the fleet-health payload, so an agent enrolled a minute ago — or
+a health read that failed — shrank the site itself: two agents at a site with a
+500 on `/api/fleet/health` reported `0/0` rather than `0/2`. The roster comes
+from the site's own members now; only the numerator is the health read's.
+
+"No agents at this location yet" was a grey sentence in a card. A site with
+nobody at it is what every site looks like the minute after somebody adds one,
+so it is an EmptyState that offers the enrollment screen.
+
+**Not migrated:** the traffic map and the data-flow list. The map carries the
+reader's pan and zoom across a re-render, and the flow rows use the traffic-type
+colour ramp; both are passed in whole and sit side by side in a panel grid.
+
+
+**About** is the first screen reached from the account menu rather than the
+rail, and it splits in two: `public/about.js` is the history — 81 dated entries
+in two languages — and `public/views/about.js` is the ListPage that draws it. A
+hundred data rows in the middle of a view module is how a view module stops
+being readable.
+
+Three stacked blocks of chrome became one PageHeader. The `.section-head`, the
+accent-bordered `.about-build` box and a lead paragraph each said something
+about the page before the page started; the header says it once, with the build
+this host runs as the lead — product, version, release date. `about.subtitle`
+went: "This build, and what the product grew into" is what the title and the
+lead already say. `about.lead` moved into the (?) popover, which is where page
+background belongs.
+
+The area filters were seven `.chip`s carrying a count each. **A count you click
+to filter by is a StatStrip** — that is what the contract has for it, and it is
+the same move Discovery, Events and Situations made. The "Everything" chip went
+with them: clicking the active card clears the filter, which is the gesture
+every other strip already uses.
+
+`.about-month` was a hand-rolled section heading with its own rule, its own
+letter-spacing and a `:first-of-type` margin override. A month is a Panel, and
+the number of entries in it is the panel note — so `.about-count`, a loose line
+of grey text under the filters, went too.
+
+The version was a `.badge`. A version is metadata, not a state.
+
+One layout note: six areas in the shared auto-fit strip lay out 5 + 1 at a desk
+width, and a card alone on its own row reads as a mistake. The About strip is
+three columns, so it fills two rows evenly, and one column on a phone.
+
+
+**Documentation** is the eighth shell migration and the last screen that still
+carried the pre-3.24 Settings markup: `.settings-nav` with three groups of
+`.small ghost` buttons, twenty-three of them, in a rail between the heading and
+the article. It is the same two levels of SubTabs Settings has — the three
+sections, then the articles of the section you are in — and the same recorded
+deviation applies: one strip cannot hold twenty-three tabs.
+
+`.section-head` with an `<h2>` and a grey subtitle is a PageHeader; the hero
+banner's text is behind (?).
+
+**An article had no address.** Every one of the twenty-three was `/docs`, so a
+link to "a site looks unhealthy" was a link to "Documentation, scroll down and
+click". They are `/docs/<topic>` now, and the section above is derived from the
+article, so a bare `/docs` still opens the first one. The route list in
+`public/routes.js` is pinned to `DOCS` by `test/docsPage.test.js`: an article
+added without a route fails the build rather than becoming unlinkable, which is
+the same bargain `test/guideAccuracy.test.js` makes with the guides.
+
+An article whose `body()` threw used to paint a red `.empty error` box over the
+page. It is an ErrorState inside the panel, with the article still selected and
+a Retry.
+
+**Fixed for every screen, found here:** `.ui .subtabs` had `gap: var(--s-5)` in
+both directions, so a strip that wraps — thirteen how-tos, or Settings' longest
+group — put 24px between the wrapped rows and they read as three separate
+strips. The row gap is `--s-3` now; a strip that fits one row is unchanged.
+
+**Not migrated:** the article bodies. They are prose built by `docsLead` /
+`docsSteps` / `docsTable` / `docsCode` / `docsExpect`, and they are hardcoded
+English — a translation job, not a layout one.
+
+One thing this surfaced that is content rather than layout: **"Troubleshooting
+how-tos" holds thirteen of the twenty-three articles** and wraps to four rows
+while "Getting started" holds two. The strip is as tight as it can be made; the
+section is genuinely overfull, and splitting it is an editorial call, not one
+this migration should make.
+
+
+**Users** is the first of the three screens that answer at two addresses: `/users`
+and Settings → Users. `mode: 'embedded'` is what the second one passes — the
+Settings strip has already said "Users", so the page drops its own PageHeader
+there and the two actions move into a Toolbar. Same seam Service Assurance,
+Guides and Situations use.
+
+The `.section-head` held the `<h2>` and both buttons in one flex row, with the
+explanation and up to two preconditions as loose grey paragraphs under it. It is
+a PageHeader with the explanation as the lead, "New user" as the one primary,
+and each precondition as an **InlineNote** — "invitations are off while SSO/LDAP
+is active" is the answer to "where is the invite button", so it belongs where
+the button would be rather than in the same grey as everything else.
+
+**Three badges in two columns were not states.** `viewer` / `operator` / `admin`
+is what the account *is* and `superadmin` is a kind of account; both are
+metadata, so both are text. "pending first login" and "Active" are states, so
+that column keeps its Badge — one badge per row instead of three.
+
+The `ID` column went: it is a database key, and nothing on this screen or any
+other asks the reader for it. The three buttons in `.row-actions` are rowActions
+— Edit on hover, Resend password and Delete behind the ⋯.
+
+**A hidden button still holds its width.** The hover primary read "Change
+password" on the protected account and "Edit" on the rest, so the action column
+had to fit the longer label on every row — and the space came out of Email, the
+one column on this screen that is an identity. The primary is "Edit" everywhere;
+editing the superadmin *is* setting its password, and the dialog says so.
+
+**Fixed for three screens, found here:** `/users`, `/license` and
+`/test-settings` are Settings sections that also answer at an address of their
+own. The rail has no entry for them, so the sidebar marked nothing and the
+breadcrumb printed the view key — a bare lowercase "users" at the reader.
+`SECTION_OF` maps them onto Settings, the same way `DETAIL_OF` maps a record
+page onto its list, and the crumb reads "Administration / Settings / Users".
+
+
+**Test Settings** is the second of the three two-address screens (`/test-settings`
+and Settings → Screening) and the last unmigrated one in Administration.
+
+The summary was four `.badge`s reading "Targets: 31", "OK: 24", "Warnings: 5",
+"Critical: 2" — **a strip of counts wearing a state's clothes**, which is the
+exact case the Badge rule is about. It is a StatStrip, and because a StatStrip
+filters, clicking Critical now shows the two rather than leaving the reader to
+find them in thirty-one rows.
+
+A group was a `.settings-card` holding `.screen-row`s three lines tall: a badge,
+a name, a mono detail, a wrapped row of `.screen-chip`s, a result line, and two
+controls stacked at the right edge. A group is a Panel and a target is one
+DataTable row; the per-check verdicts and the full result move into the Drawer
+the row opens.
+
+`.screen-chip` read "TLS: OK", "Auth: Warning" — a label and a verdict in a
+pill, with the sentence that says *what to do about it* hidden in a `title=`
+tooltip. In the drawer they are key/values: the label is the key, the verdict is
+a Badge, and **the note is readable text** instead of something you have to
+hover to find.
+
+Two things the migration changed rather than moved:
+
+* **the endpoint is on the row.** It was the mono `.screen-row-detail` under the
+  name; on a screen about outbound dependencies, *which host* is the question,
+  and two webhook targets are the same row without it. It has a column;
+* **"Configuration screened only — no live test for this target"** was a
+  fifty-eight character sentence in a cell. The cell says "No live test"; the
+  drawer says it in full.
+
+"Loading…" was a grey word and a failed catalogue read was red text on the page;
+they are a LoadingState and an ErrorState with a Retry. A failed *run* keeps the
+catalogue and says what happened in a toast — it used to leave the button
+reading "Running…" when the error came back.
+
+
+**License** is the last of the three two-address screens and the last screen in
+Administration. It is a DashboardPage, not a list: the question is "what are we
+entitled to, and how close to the edge are we".
+
+The `.section-head` was an `<h2>` and a button; the licence's own state now sits
+in **template D's status slot** beside the title. The state is the whole subject
+of the page — it does not belong in the first cell of a grid below it.
+
+Three `.cards` rows of `stat()` divs, each under a loose `<h3>`, held sixteen
+figures with no order of importance: the licence status next to the server id
+next to the support level. The four an administrator acts on — **agents, test
+paths, history, expiry** — are a StatStrip, with the usage bars under the two
+that are a fraction of a limit. Everything else is one Panel of KeyValues, which
+is what a reference block is.
+
+`.alert-banner sev-WARN` was a page-local banner. The trust-anchor warning is an
+InlineNote and says the same thing: a misconfigured anchor makes every proof
+fail verification the way a bad proof would, so "Re-validate now" keeps
+answering 200 while sitting on the cache — which reads as "revalidation is
+broken" rather than "we are verifying against the wrong key".
+
+The feature matrix was `table.matrix` with `.active` shading the current plan's
+column. It is a DataTable: unentitled rows are `dimmed` (which the component
+already has) and **the current plan is named in the panel note** — a shaded
+column in a table that already dims rows is two colours saying two things, and
+"Professional (current)" is a header that clips at any plan name longer than a
+word. A tick is not a state, so `✓` is text; "Roadmap" is one, so it is a Badge.
+
+**Fixed for every screen, found here:** `keyValues` was styled only under
+`.ui-drawer`, so the same contract component rendered as a browser-default `<dl>`
+— key on one line, value indented below — anywhere else. A component that looks
+like itself in one container and not in another is not a component. The rules
+are scoped to `.ui` now, and a KeyValues sitting directly in a Panel brings its
+own padding, since a Panel supplies none (a DataTable runs flush to its edges).
+
+Also added: `ui.fmt.date` — a calendar date with no clock, for a licence expiry
+or a release date, where a minute reads as precision the value does not have.
+The contract had `abs`, `short`, `clock`, `rel` and `duration`; this is the
+sixth and the family is now complete.
+
+
+---
+
+## Phase 4 — verification
+
+Every screen the dashboard has is on the contract. `views` in `public/app.js`
+defines 42 entries; 37 of them are in `CONTRACT_VIEWS`, and the five that are
+not are the two answers *about* an address (`notFound`, `forbidden`) and the
+component reference (`kitchenSink`) — none of which is a screen the product
+navigates to.
+
+Two things could therefore go:
+
+* **`/ui-preview/changes` and `/ui-preview/probes`.** They existed to show the
+  ListPage and the FormPage before Changes and Probes were migrated. Both
+  screens have been on their real routes since phase 3.1 and 3.2, and both have
+  their own suites, so the preview module, its routes, its 74 catalogue keys ×2
+  and its seven boot tests are gone. `/ui-kitchen-sink` stays: it is the visual
+  reference for this document and the surface the component tests read. The
+  fifteen keys it shared with the preview are now its own, under `ks.*`;
+* **the hero banner.** `hero(viewKey)` returned `null` for anything in
+  `CONTRACT_VIEWS` — which, as of 3.38, is every screen. It could no longer
+  render, so the function, its call site in `render()` and its six CSS rules are
+  gone. The `hero` getters stay on the `PAGE_INFO` entries: several migrated
+  screens pass one as their PageHeader lead.
+
+### The sweep, before and after
+
+Measured across every `public/**/*.js` the dashboard ships, from the commit
+before phase 1 (`48c0647`) to here.
+
+| | before | after |
+|---|---|---|
+| colour literals outside `css/tokens.css` | 625 | **0** |
+| `.hero` (the info banner) | 2 | **0** |
+| `.seg-btn` / `.fs-chip` / `.chip-det` | 4 | **0** |
+| hand-built `.subtabs` strips | 7 | **1** (`tabStrip()` itself) |
+| `.section-head` | 57 | 19 |
+| inline `style:` in a view | 76 | 56 |
+| `public/styles.css` | 2656 lines | 2140 lines |
+
+`npm run ui:check` reports **clean across 39 migrated files and 5 stylesheets**,
+and it runs in the gate on every push.
+
+### What the remaining numbers are
+
+The 19 `.section-head`, the 22 `.settings-card` and most of the inline styles
+are in **bodies behind a shell migration**, not on a page:
+
+* Settings' twenty-two section bodies (3.24 migrated the page they sit on);
+* the NIS2 Reporting sections — Risks, Controls, Incidents, Reports (3.19);
+* Service Assurance's eight tab bodies (3.15) and the Transaction detail (3.14);
+* Documentation's twenty-three articles (3.35), which are prose, and Guides'
+  stepper (3.20);
+* the Agent page's four `<details>` folds (3.32) and Situation's five panels
+  (3.31).
+
+Every one of them is reached through a page that *is* on the contract, so the
+reader still finds the title, the actions, the tabs and the data where the other
+screens put them. Migrating a body is a change to that feature's screen, not to
+the page template, and each is worth doing on its own terms rather than as part
+of this pass.
+
+### Not verified here
+
+`ui:check` reads the source; it cannot see a rendered page. Every screen in
+phases 3.23–3.38 was also rendered at 1280 and 1440 and read for clipping,
+which is how the column widths on Agents, System Logs, User Logs, Discovery,
+Location, Users and Test Settings were found — none of them failed a test.

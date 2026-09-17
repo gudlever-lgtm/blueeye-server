@@ -1356,19 +1356,20 @@ const CONTRACT_VIEWS = new Map([
   ['logs', 'systemLogs'],
   ['userLogs', 'userLogs'],
   ['settings', 'settings'],
+  ['agents', 'agents'],
+  ['interfaces', 'interfaces'],
+  ['nics', 'nics'],
+  ['event', 'event'],
+  ['cluster', 'situation'],
+  ['agent', 'agent'],
+  ['location', 'location'],
+  ['about', 'about'],
+  ['docs', 'docs'],
+  ['users', 'users'],
+  ['screening', 'screening'],
+  ['license', 'license'],
 ]);
 
-function hero(viewKey) {
-  if (CONTRACT_VIEWS.has(viewKey)) return null;
-  // Probes & Tests is one view with two sub-tabs; show the matching help for each.
-  let info = PAGE_INFO[viewKey];
-  if (viewKey === 'probes' && probesTab === 'packages') info = PAGE_INFO.tests;
-  if (viewKey === 'probes' && probesTab === 'connection') info = PAGE_INFO.connectionTest;
-  if (!info) return null;
-  return el('div', { class: 'hero' },
-    el('div', { class: 'hero-text' }, info.hero),
-    el('button', { class: 'ghost small', onclick: () => openDrawer(info.title, info.body) }, 'More info'));
-}
 
 // ---- Framed page section --------------------------------------------------
 // The Overview page sets the pattern every page follows: data lives inside a
@@ -1433,266 +1434,102 @@ function screenSetupLink(t) {
   return settingsLink(tab, 'Set up →');
 }
 
-views.screening = async () => {
-  const root = el('div');
-  let catalog = [];
-  let groupOrder = [];
-  const results = new Map(); // target id -> last run result
-
-  const runAllBtn = el('button', {}, 'Run full screening');
-  root.append(el('div', { class: 'section-head' },
-    el('h2', {}, 'Test Settings'),
-    el('span', { class: 'spacer' }),
-    runAllBtn));
-
-  const summaryBar = el('div', { class: 'screen-summary' });
-  const bodyEl = el('div', { class: 'empty' }, 'Loading…');
-  root.append(summaryBar, bodyEl);
-
-  const chip = (label, n, cls) => el('span', { class: `badge ${cls || ''}`.trim() }, `${label}: ${n}`);
-
-  function renderSummary() {
-    const counts = { ok: 0, info: 0, warn: 0, bad: 0 };
-    for (const t of catalog) {
-      const r = results.get(t.id);
-      counts[(r ? r.severity : t.posture)] += 1;
-    }
-    summaryBar.replaceChildren(
-      chip('Targets', catalog.length, ''),
-      chip('OK', counts.ok, 'ok'),
-      chip('Warnings', counts.warn, 'warn'),
-      chip('Critical', counts.bad, 'bad'));
-  }
-
-  function targetRow(t) {
-    const r = results.get(t.id);
-    const sev = r ? r.severity : t.posture;
-    const statusBadge = el('span', { class: SCREEN_SEV_BADGE[sev] || 'badge' }, SCREEN_SEV_LABEL[sev] || sev);
-
-    const checks = el('div', { class: 'screen-checks' },
-      ...(t.security || []).map((c) => el('span',
-        { class: `screen-chip ${c.status}`, title: c.note || '' },
-        `${c.label}: ${SCREEN_SEV_LABEL[c.status] || c.status}`)));
-
-    const detailLine = el('div', { class: 'screen-detail muted' });
-    if (r) detailLine.textContent = `${r.ran ? (r.ok ? '✓ ' : '✗ ') : ''}${r.detail || ''}${r.ran && r.durationMs != null ? ` · ${r.durationMs} ms` : ''}`;
-    else if (!t.runnable) detailLine.textContent = 'Configuration screened only — no live test for this target.';
-
-    const runBtn = el('button', { class: 'small ghost' }, 'Run');
-    if (t.licensed === false) { runBtn.disabled = true; runBtn.textContent = 'Not licensed'; }
-    else if (!t.runnable) runBtn.disabled = true;
-    else runBtn.addEventListener('click', () => runTargets([t.id], runBtn));
-
-    return el('div', { class: 'screen-row' },
-      el('div', { class: 'screen-row-main' },
-        el('div', { class: 'screen-row-head' },
-          statusBadge,
-          el('strong', {}, t.name),
-          el('span', { class: 'muted screen-row-detail' }, t.detail)),
-        checks,
-        detailLine),
-      el('div', { class: 'screen-row-actions' }, runBtn, screenSetupLink(t)));
-  }
-
-  function renderBody() {
-    if (!catalog.length) { bodyEl.className = 'empty'; bodyEl.replaceChildren('No targets to screen.'); return; }
-    const byGroup = new Map();
-    for (const t of catalog) { if (!byGroup.has(t.group)) byGroup.set(t.group, []); byGroup.get(t.group).push(t); }
-    const order = groupOrder.length ? groupOrder.map((g) => g.label) : [...byGroup.keys()];
-    const cards = [];
-    for (const label of order) {
-      const items = byGroup.get(label);
-      if (!items || !items.length) continue;
-      cards.push(el('div', { class: 'settings-card' },
-        el('h3', {}, label),
-        el('div', { class: 'screen-list' }, ...items.map(targetRow))));
-    }
-    bodyEl.className = 'screen-groups';
-    bodyEl.replaceChildren(...cards);
-    renderSummary();
-  }
-
-  async function runTargets(ids, btn) {
-    const all = !ids;
-    const restore = btn ? btn.textContent : null;
-    if (btn) { btn.disabled = true; btn.textContent = 'Running…'; }
-    try {
-      const data = await api('/api/diagnostics/run', { method: 'POST', body: all ? {} : { targets: ids } });
-      for (const t of data.targets || []) results.set(t.id, t.result);
-      renderBody();
-      if (all) toast(`Screening complete — ${data.summary.bad || 0} critical, ${data.summary.warn || 0} warning(s)`, (data.summary.bad || 0) > 0);
-    } catch (e) {
-      toast(errText(e), true);
-      if (btn) { btn.disabled = false; btn.textContent = restore || 'Run'; }
-    }
-  }
-
-  runAllBtn.addEventListener('click', async () => {
-    runAllBtn.disabled = true; runAllBtn.textContent = 'Running…';
-    await runTargets(null, null);
-    runAllBtn.disabled = false; runAllBtn.textContent = 'Run full screening';
+// ---- Test Settings (MIGRATED — see public/views/screening.js)
+// Reached at /test-settings and as the Screening section inside Settings; the
+// second passes mode 'embedded'.
+let screeningPage = null;
+let screeningEmbedded = false;
+function getScreeningPage() {
+  if (screeningPage) return screeningPage;
+  if (typeof window === 'undefined' || !window.ScreeningPage || !ui) return null;
+  screeningPage = window.ScreeningPage.create({
+    el, t, ui, errText, toast,
+    mode: () => (screeningEmbedded ? 'embedded' : 'standalone'),
+    help: () => ({ title: t('scr.info.title'), body: () => [
+      el('p', {}, t('scr.info.p1')),
+      el('p', {}, t('scr.info.p2')),
+      el('p', { class: 'muted' }, t('scr.info.p3')),
+    ] }),
+    fetchAll: () => api('/api/diagnostics/targets'),
+    // `null` runs the lot; an array runs those targets.
+    run: (ids) => api('/api/diagnostics/run', { method: 'POST', body: ids ? { targets: ids } : {} }),
+    setupLink: screenSetupLink,
+    rerender: () => render(),
   });
+  return screeningPage;
+}
 
-  try {
-    const data = await api('/api/diagnostics/targets');
-    catalog = data.targets || [];
-    groupOrder = data.groups || [];
-    renderBody();
-  } catch (e) {
-    bodyEl.className = 'empty error';
-    bodyEl.replaceChildren(errText(e));
-  }
-  return root;
+views.screening = async (opts) => {
+  const v = getScreeningPage();
+  if (!v) return el('div', { class: 'empty error' }, t('scr.err.title'));
+  screeningEmbedded = !!(opts && opts.embedded);
+  // The catalogue is re-read per entry, so the page is rebuilt with it.
+  screeningPage = null;
+  return getScreeningPage().view();
 };
+
+// ---- Agents (MIGRATED — see public/views/agents.js)
+// The panels the row menu opens (traffic, flows, ping, the flow-pipeline
+// self-check, the speed test, the edit form and the three update flows) stay
+// here — each is a modal with its own machinery.
+let agentsPage = null;
+const agentsPageState = {};
+function getAgentsPage() {
+  if (agentsPage) return agentsPage;
+  if (typeof window === 'undefined' || !window.AgentsPage || !ui) return null;
+  agentsPage = window.AgentsPage.create({
+    el, t, ui, errText,
+    state: agentsPageState,
+    canWrite, canDelete,
+    help: () => ({ title: t('ag.info.title'), body: () => [
+      el('p', {}, t('ag.info.p1')),
+      el('p', {}, t('ag.info.p2')),
+      el('p', { class: 'muted' }, t('ag.info.p3')),
+    ] }),
+    fetchAll: async () => {
+      const [agents, locations, ver] = await Promise.all([
+        api('/agents'), api('/locations'), api('/system/version').catch(() => null),
+      ]);
+      locationCache = locations;
+      // Two served versions: `offered` is what a systemd one-click Update pushes
+      // (a signed release, else the source bundle); `source` is what
+      // installer-based agents can reach. They diverge when a signed release is
+      // newer than the packaged source, so each agent is judged against the one
+      // IT can actually reach — an installer-only agent on the newest
+      // installable build is not flagged as forever behind.
+      const offered = ver && ver.agent ? ver.agent : null;
+      return { agents, versions: { offered, source: (ver && ver.agentSource) || offered } };
+    },
+    // Version arithmetic stays in app.js, where the update flows read it too.
+    selfUpdatable: agentSelfUpdatable,
+    isWindows: agentIsWindows,
+    isBehind: agentIsBehind,
+    updateTarget: agentUpdateTarget,
+    versionLine: agentVersionLine,
+    sourceCell: agentSourceCell,
+    open: openAgent,
+    newAgent,
+    runTest,
+    edit: editAgent,
+    remove: deleteAgent,
+    update: updateAgent,
+    windowsUpdate: showWindowsUpdateCommand,
+    bulkUpdate: bulkUpdateAgents,
+    showResults,
+    showFlows: showAgentFlows,
+    showConnection,
+    ping: pingAgent,
+    diagnose: diagnoseAgent,
+    speedtest: showSpeedtest,
+  });
+  return agentsPage;
+}
 
 views.agents = async () => {
-  const [agents, locations, ver] = await Promise.all([api('/agents'), api('/locations'), api('/system/version').catch(() => null)]);
-  // Two served versions: `offered` is what a systemd one-click Update pushes (a
-  // signed release, else the source bundle); `source` is what installer-based
-  // agents can reach (always the source bundle). They diverge when a signed
-  // release is newer than the packaged source — each agent is judged against the
-  // one IT can actually reach (agentUpdateTarget), so an installer-only agent
-  // that's on the newest installable build isn't flagged as forever "behind".
-  const offered = ver && ver.agent ? ver.agent : null;
-  const versions = { offered, source: (ver && ver.agentSource) || offered };
-  locationCache = locations;
-  // Only systemd agents can be rebuilt-and-restarted from here; Docker/unmanaged/
-  // Windows agents would just decline, so the bulk action targets (and counts)
-  // the self-updatable ones — the rest are flagged with an "installer" badge.
-  const outdated = agents.filter((a) => agentSelfUpdatable(a) && agentIsBehind(a, agentUpdateTarget(a, versions)));
-  const root = el('div');
-  const countLabel = el('span', { class: 'muted' }, `${agents.length} total`);
-  root.append(el('div', { class: 'section-head' },
-    el('h2', {}, 'Agents'),
-    countLabel,
-    canWrite() ? el('button', { class: 'small', onclick: () => newAgent() }, '+ New agent') : null,
-    (canDelete() && outdated.length)
-      ? el('button', { class: 'small', onclick: () => bulkUpdateAgents(outdated, offered), title: 'Rebuild every self-updatable (systemd) outdated agent from the server source, one at a time' }, `Update outdated (${outdated.length})`)
-      : null));
-  if (!agents.length) { root.append(el('div', { class: 'empty' }, 'No agents yet. Click "+ New agent" to get an enrollment code for installation.')); return root; }
-
-  // Client-side filter + sort over the already-loaded agents (no refetch).
-  let filter = '';
-  let sortKey = 'id';
-  let sortDir = 'asc';
-
-  // Columns: { label, key, get }. key:null = not sortable (Source, actions).
-  const columns = [
-    { label: 'ID', key: 'id', get: (a) => a.id },
-    { label: 'Name / hostname', key: 'name', get: (a) => (a.display_name || a.hostname || '').toLowerCase() },
-    { label: 'Platform', key: 'platform', get: (a) => `${a.platform}/${a.arch}`.toLowerCase() },
-    { label: 'Status', key: 'status', get: (a) => a.status || '' },
-    { label: 'Health', key: 'health', get: agentHealthRank },
-    { label: 'Location', key: 'location', get: (a) => (a.location_name || '').toLowerCase() },
-    { label: 'Source', key: null },
-    { label: 'Last reported', key: 'last', get: (a) => (a.last_report_at ? new Date(a.last_report_at).getTime() : 0) },
-    { label: '', key: null },
-  ];
-
-  const search = el('input', {
-    type: 'search', class: 'table-filter',
-    placeholder: 'Filter agents — name, IP, platform, location, source…',
-    oninput: (e) => { filter = e.target.value.trim().toLowerCase(); update(); },
-  });
-  root.append(el('div', { class: 'table-toolbar' }, search));
-
-  const headerEls = columns.map((c) => (c.key
-    ? el('th', {
-      class: 'sortable', scope: 'col', tabindex: '0', 'aria-sort': 'none',
-      title: `Sort by ${c.label}`,
-      onclick: () => sortBy(c.key),
-      onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); sortBy(c.key); } },
-    })
-    : el('th', { scope: 'col' }, c.label)));
-  const tbody = el('tbody');
-  root.append(el('table', { class: 'agents-table' },
-    el('thead', {}, el('tr', {}, ...headerEls)),
-    tbody));
-
-  function sortBy(key) {
-    if (sortKey === key) sortDir = sortDir === 'asc' ? 'desc' : 'asc';
-    else { sortKey = key; sortDir = 'asc'; }
-    update();
-  }
-  function matchesFilter(a) {
-    if (!filter) return true;
-    return [a.id, a.display_name, a.hostname, a.platform, a.arch, a.status,
-      a.location_name, a.monitor_config && a.monitor_config.source,
-      a.capabilities && a.capabilities.agentVersion]
-      .filter((v) => v != null).join(' ').toLowerCase().includes(filter);
-  }
-  function update() {
-    const col = columns.find((c) => c.key === sortKey) || columns[0];
-    const list = agents.filter(matchesFilter).sort((x, y) => {
-      const vx = col.get(x);
-      const vy = col.get(y);
-      const r = (typeof vx === 'number' && typeof vy === 'number')
-        ? vx - vy
-        : String(vx).localeCompare(String(vy));
-      return sortDir === 'asc' ? r : -r;
-    });
-    tbody.replaceChildren(...(list.length
-      ? list.map((a) => agentRow(a, versions))
-      : [el('tr', {}, el('td', { colspan: String(columns.length), class: 'muted' }, 'No agents match your filter.'))]));
-    columns.forEach((c, i) => {
-      if (!c.key) return;
-      const on = sortKey === c.key;
-      headerEls[i].textContent = c.label + (on ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '');
-      headerEls[i].classList.toggle('sorted', on);
-      headerEls[i].setAttribute('aria-sort', on ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none');
-    });
-    countLabel.textContent = filter ? `${list.length} of ${agents.length}` : `${agents.length} total`;
-  }
-
-  update();
-  return root;
+  const v = getAgentsPage();
+  if (!v) return el('div', { class: 'empty error' }, t('ag.err.title'));
+  return v.view();
 };
-
-// One agent table row (extracted so the agents view can re-render on filter/sort).
-function agentRow(a, versions) {
-  const target = agentUpdateTarget(a, versions);
-  const behind = agentIsBehind(a, target);
-  return el('tr', {},
-    el('td', {}, String(a.id)),
-    el('td', {}, el('div', {}, a.display_name || a.hostname), a.display_name ? el('div', { class: 'muted' }, a.hostname) : null),
-    el('td', {}, `${a.platform} / ${a.arch}`, agentVersionLine(a, target)),
-    el('td', {}, el('span', {
-      class: `badge ${a.status} clickable`,
-      role: 'button',
-      tabindex: '0',
-      title: 'Connection diagnosis — why this agent is online/offline, with a reconnect option',
-      onclick: () => showConnection(a),
-      onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); showConnection(a); } },
-    }, a.status)),
-    el('td', {}, agentHealthCell(a)),
-    el('td', {}, a.location_name || '–'),
-    el('td', {}, agentSourceCell(a)),
-    el('td', { class: 'muted' }, fmtDate(a.last_report_at)),
-    el('td', {}, el('div', { class: 'row-actions' },
-      el('button', { class: 'small ghost', onclick: () => showResults(a) }, 'Traffic'),
-      (a.monitor_config && (a.monitor_config.source === 'netflow' || a.monitor_config.source === 'sflow'))
-        ? el('button', { class: 'small ghost', onclick: () => showAgentFlows(a) }, 'Flows')
-        : null,
-      el('button', { class: 'small ghost', onclick: () => pingAgent(a), title: 'Confirm the live connection to this agent' }, 'Ping'),
-      el('button', { class: 'small ghost', onclick: () => diagnoseAgent(a), title: 'Flow-pipeline self-check: source, collector counters, exporter state' }, 'Diagnose'),
-      el('button', { class: 'small ghost', onclick: () => showSpeedtest(a), title: 'Active download/upload speed test to the server' }, 'Speed'),
-      canWrite() ? el('button', { class: 'small', onclick: () => runTest(a) }, 'Run test') : null,
-      canWrite() ? el('button', { class: 'small ghost', onclick: () => editAgent(a) }, 'Edit') : null,
-      canDelete() ? agentUpdateButton(a, target, behind) : null,
-      canDelete() ? el('button', { class: 'small danger', onclick: () => deleteAgent(a) }, 'Delete') : null,
-    )),
-  );
-}
-
-// Health ordering for sorting: healthy(0) < delayed / no-data(1) < down(2).
-// Mirrors agentHealthCell so the column sorts the way it reads.
-function agentHealthRank(a) {
-  const last = a.last_report_at ? new Date(a.last_report_at).getTime() : 0;
-  const ageMs = last ? Date.now() - last : Infinity;
-  if (a.status !== 'online') return 2;
-  if (ageMs <= 5 * 60 * 1000) return 0;
-  return 1;
-}
 
 // Small "v<x>" line under the platform, with an "update" badge when the agent is
 // behind the version the server currently serves. Version comes from the agent's
@@ -1815,21 +1652,6 @@ function agentUpdateHint(a) {
   return managed === 'docker'
     ? 'Runs under Docker — update it by re-running the install one-liner on the host (it rebuilds the container there, not from the server).'
     : "Isn't service-managed (a bare-process agent) — update it by re-running the installer on the host.";
-}
-
-// Health derived from how recently the agent last reported in. online + a fresh
-// report = healthy; online but stale (or never reported) = degraded; offline = down.
-function agentHealthCell(a) {
-  const last = a.last_report_at ? new Date(a.last_report_at).getTime() : 0;
-  const ageMs = last ? Date.now() - last : Infinity;
-  const FRESH = 5 * 60 * 1000; // 5 min
-  let cls;
-  let label;
-  if (a.status !== 'online') { cls = 'offline'; label = 'down'; }
-  else if (ageMs <= FRESH) { cls = 'online'; label = 'healthy'; }
-  else { cls = 'grace'; label = last ? 'delayed' : 'no data'; }
-  const title = last ? `Last reported ${fmtDate(a.last_report_at)}` : 'Has not reported yet';
-  return el('span', { class: `badge ${cls}`, title }, label);
 }
 
 // "+ New agent" jumps to the Enrollment screen, where the wizard generates a code
@@ -3978,7 +3800,7 @@ async function loadEventConfigContext(id, card) {
         ? el('pre', { class: 'config-diff' }, diff.changedLines.map((l) => `${l.op} ${l.text}`).join('\n'))
         : null);
   } catch (err) {
-    card.replaceChildren(head, el('p', { class: err.status === 403 ? 'muted' : 'error' }, err.status === 403 ? 'Requires operator/admin.' : err.message));
+    card.replaceChildren(el('p', { class: err.status === 403 ? 'muted' : 'error' }, err.status === 403 ? 'Requires operator/admin.' : err.message));
   }
 }
 
@@ -4111,124 +3933,121 @@ function eventGuideCard(event) {
   return details;
 }
 
-views.event = async () => {
-  const id = selectedEventId;
-  const back = el('button', { class: 'small ghost', onclick: () => { currentView = 'events'; render(); } }, '← Events');
-  if (id == null) return el('div', { class: 'empty' }, back, el('p', {}, 'No event selected.'));
-
-  let data;
-  try {
-    data = await api(`/api/events/${id}`);
-  } catch (err) {
-    if (err.status === 404) return el('div', { class: 'empty' }, back, el('p', { class: 'error' }, 'Event not found.'));
-    return el('div', { class: 'empty error' }, back, ' ', err.message);
-  }
-  const inc = data.event;
-  const anomalies = data.anomalies || [];
-
-  // Where the event is, stated before anything else on the page: the agent
-  // (clickable through to the device) and the site it stands at. Older cases
-  // carry a title that names only the agent id, so the header is what makes them
-  // placeable too.
-  const devNum = Number.parseInt(inc.hostId, 10);
-  const agentEl = Number.isInteger(devNum) && devNum > 0
-    ? el('a', { class: 'inc-where-agent', href: '#', onclick: (e) => { e.preventDefault(); openAgent(devNum); } }, incAgentLabel(inc))
-    : el('span', {}, incAgentLabel(inc));
-
-  const header = el('div', { class: 'inc-header' },
-    el('div', {},
-      el('h2', {}, inc.title),
-      el('div', { class: 'inc-meta' }, incSevBadge(inc.severity), ' ', incStatusBadge(inc.status),
-        el('span', { class: 'muted' }, ' · '), agentEl,
-        el('span', { class: 'muted' }, ` · ${incLocationLabel(inc)} · opened ${fmtDate(inc.firstEventAt)}`))),
-    back);
-
-  const controls = el('div', { class: 'inc-actions' });
-  if (canWrite()) {
-    for (const to of (INC_TRANSITIONS[inc.status] || [])) {
-      const label = to === 'open' ? 'Reopen' : `Mark ${INC_STATUS_LABEL[to]}`;
-      controls.append(el('button', {
-        class: 'small',
-        onclick: async () => {
-          let comment;
-          if (inc.status === 'closed' && to === 'open') {
-            comment = window.prompt('Reason for reopening (required):');
-            if (!comment) return;
-          }
-          try {
-            await api(`/api/events/${id}`, { method: 'PATCH', body: { status: to, ...(comment ? { comment } : {}) } });
-            toast(`Event ${INC_STATUS_LABEL[to].toLowerCase()}`);
-            render();
-          } catch (err) { toast(errText(err), true); }
-        },
-      }, label));
-    }
-  }
-
-  const anomaliesCard = el('div', { class: 'card' },
-    el('h3', {}, `Anomalies (${anomalies.length})`),
-    anomalies.length
-      ? el('ul', { class: 'inc-anoms' }, ...anomalies.map((a) => el('li', {},
-          incSevBadge(a.severity), ' ', el('strong', {}, a.metric), ' — ', a.explanation || '',
-          el('span', { class: 'muted' }, ` (${fmtDate(a.createdAt)})`))))
-      : el('p', { class: 'muted' }, 'No linked anomalies.'));
-
-  const timelineCard = el('div', { class: 'card' }, el('h3', {}, 'Timeline'), el('div', { class: 'muted' }, 'Loading…'));
-  loadEventTimeline(id, timelineCard, inc.hostId);
-  const similarCard = el('div', { class: 'card' }, el('h3', {}, 'Similar past events'), el('div', { class: 'muted' }, 'Loading…'));
-  loadEventSimilar(id, similarCard);
-
-  const extra = [];
-  if (canWrite()) {
-    const cfgCard = el('div', { class: 'card' }, el('h3', {}, 'Config context'), el('div', { class: 'muted' }, 'Loading…'));
-    loadEventConfigContext(id, cfgCard);
-    extra.push(cfgCard);
-    if (featureEnabled('assistant')) extra.push(eventAssistantCard(id));
-  }
-
-  // "Guide me" — operator/admin (the guide endpoint + its config/AI steps are).
-  const guideCard = canWrite() ? eventGuideCard(inc) : null;
-
-  // Affected path — the shared Path Visualization pre-filtered to the event
-  // window, with the problem hop pre-highlighted. Mounted only when the event
-  // has a numeric device (agent) and a derivable target (from a linked anomaly).
-  let pathCard = null;
-  const pathTarget = (anomalies.find((a) => a.target) || {}).target || inc.target || null;
-  const pathSource = devNum;
-  if (pathTarget && Number.isInteger(pathSource) && pathSource > 0) {
-    pathCard = el('div', { class: 'card' }, el('h3', {}, 'Affected path'), el('div', { class: 'muted' }, 'Loading…'));
-    (async () => {
-      const fromMs = inc.firstEventAt ? Date.parse(inc.firstEventAt) : (Date.now() - 24 * 3600 * 1000);
+// ---- Event detail (MIGRATED — see public/views/event.js)
+// The panel bodies stay here: the work log, the guide, the blast radius, the
+// path visualisation and the assistant are each their own machinery. The page
+// wraps them; the loaders below fill a body rather than rebuilding a card.
+let eventPage = null;
+function getEventPage() {
+  if (eventPage) return eventPage;
+  if (typeof window === 'undefined' || !window.EventPage || !ui) return null;
+  eventPage = window.EventPage.create({
+    el, t, ui, errText,
+    canWrite,
+    id: () => selectedEventId,
+    transitions: (status) => INC_TRANSITIONS[status],
+    openList: () => { currentView = 'events'; render(); },
+    rerender: () => render(),
+    fetchEvent: (id) => api(`/api/events/${id}`),
+    agentLink: (inc) => {
+      const devNum = Number.parseInt(inc.hostId, 10);
+      // Older cases carry a title naming only the agent id, so the header is
+      // what makes them placeable at all.
+      return Number.isInteger(devNum) && devNum > 0
+        ? ui.hostLink(incAgentLabel(inc), () => openAgent(devNum))
+        : el('span', {}, incAgentLabel(inc));
+    },
+    locationLabel: incLocationLabel,
+    helpBody: () => [
+      el('p', {}, t('ev.info.p1')),
+      el('p', {}, t('ev.info.p2')),
+      el('p', { class: 'muted' }, t('ev.info.p3')),
+    ],
+    setStatus: async (id, from, to) => {
+      let comment;
+      // Reopening a closed case is the one transition that has to be justified:
+      // it says the previous shift's conclusion was wrong.
+      if (from === 'closed' && to === 'open') {
+        comment = window.prompt(t('ev.reopenReason'));
+        if (!comment) return;
+      }
       try {
-        const viz = await pathVisualization({ sourceId: pathSource, targetId: pathTarget, eventId: id, timeRange: { fromMs, toMs: Date.now() } });
-        pathCard.replaceChildren(el('h3', {}, 'Affected path'), viz);
-      } catch (e) { pathCard.replaceChildren(el('h3', {}, 'Affected path'), el('div', { class: 'error' }, errText(e))); }
-    })();
-  }
+        await api(`/api/events/${id}`, { method: 'PATCH', body: { status: to, ...(comment ? { comment } : {}) } });
+        toast(t('ev.marked', { state: (INC_STATUS_LABEL[to] || to).toLowerCase() }));
+        render();
+      } catch (err) { toast(errText(err), true); }
+    },
+    panels: (inc, anomalies, id) => {
+      const out = [];
+      // The work log is first because "what has already been tried and ruled
+      // out" is what the next shift must read before anything else.
+      // These three draw their own card, so the page does not put a panel
+      // around them — a box inside a box with the same name on both.
+      out.push({ key: 'notes', wrap: false, node: eventNotesCard(id) });
+      if (canWrite()) out.push({ key: 'guide', wrap: false, node: eventGuideCard(inc) });
+      out.push({ key: 'anomalies' });
 
-  // Blast radius — which downstream hosts/services fail if this device goes down
-  // (enrichment already on the event response). Both tiers with justifying
-  // paths; each host links into the topology map focused on it.
-  let blastCard = null;
-  if (inc.blastRadius) {
-    blastCard = el('div', { class: 'card' }, el('h3', {}, 'Blast radius'), el('div', { class: 'muted' }, 'Loading…'));
-    (async () => {
-      let agents = [];
-      try { agents = await api('/agents'); } catch { /* labels best-effort */ }
-      const nameById = {};
-      (agents || []).forEach((a) => { nameById[a.id] = a.display_name || a.hostname || `host ${a.id}`; });
-      const nameFor = (hid) => nameById[hid] || `host ${hid}`;
-      blastCard.replaceChildren(el('h3', {}, 'Blast radius'),
-        blastRadiusPanel(inc.blastRadius, { nameFor, onFocusHost: (hid) => openTopologyFocus(hid) }));
-    })();
-  }
+      if (inc.blastRadius) {
+        const body = el('div', { class: 'muted' }, t('common.loading'));
+        (async () => {
+          let agents = [];
+          try { agents = await api('/agents'); } catch { /* labels are best-effort */ }
+          const nameById = {};
+          (agents || []).forEach((a) => { nameById[a.id] = a.display_name || a.hostname || `host ${a.id}`; });
+          body.replaceChildren(blastRadiusPanel(inc.blastRadius, {
+            nameFor: (hid) => nameById[hid] || `host ${hid}`,
+            onFocusHost: (hid) => openTopologyFocus(hid),
+          }));
+        })();
+        out.push({ key: 'blast', title: t('ev.blast'), node: body });
+      }
 
-  // Work log — the shift handover. Mounted high (right after the status
-  // controls) because "what has already been tried and excluded" is what the
-  // next shift must read before anything else, not a footnote below six cards.
-  const notesCard = eventNotesCard(id);
+      const timeline = el('div', { class: 'muted' }, t('common.loading'));
+      loadEventTimeline(id, timeline, inc.hostId);
+      out.push({ key: 'timeline', title: t('ev.timeline'), node: timeline });
 
-  return el('div', { class: 'event-detail' }, header, controls, notesCard, guideCard, anomaliesCard, blastCard, timelineCard, similarCard, pathCard, ...extra);
+      const similar = el('div', { class: 'muted' }, t('common.loading'));
+      loadEventSimilar(id, similar);
+      out.push({ key: 'similar', title: t('ev.similar'), node: similar });
+
+      // The affected path needs both a numeric device and a target to draw
+      // between; without one it is not a panel that could be empty, it is a
+      // panel that does not apply.
+      const devNum = Number.parseInt(inc.hostId, 10);
+      const pathTarget = (anomalies.find((a) => a.target) || {}).target || inc.target || null;
+      if (pathTarget && Number.isInteger(devNum) && devNum > 0) {
+        const body = el('div', { class: 'muted' }, t('common.loading'));
+        (async () => {
+          const fromMs = inc.firstEventAt ? Date.parse(inc.firstEventAt) : (Date.now() - 24 * 3600 * 1000);
+          try {
+            body.replaceChildren(await pathVisualization({
+              sourceId: devNum, targetId: pathTarget, eventId: id, timeRange: { fromMs, toMs: Date.now() },
+            }));
+          } catch (e) { body.replaceChildren(el('div', { class: 'error' }, errText(e))); }
+        })();
+        out.push({ key: 'path', title: t('ev.path'), node: body });
+      }
+
+      if (canWrite()) {
+        const cfg = el('div', { class: 'muted' }, t('common.loading'));
+        loadEventConfigContext(id, cfg);
+        out.push({ key: 'config', title: t('ev.config'), node: cfg });
+        if (featureEnabled('assistant')) {
+          out.push({ key: 'assistant', wrap: false, node: eventAssistantCard(id) });
+        }
+      }
+      return out;
+    },
+  });
+  return eventPage;
+}
+
+views.event = async () => {
+  const v = getEventPage();
+  if (!v) return el('div', { class: 'empty error' }, t('ev.err.title'));
+  // The record is re-read per entry, so the page is rebuilt with it.
+  eventPage = null;
+  return v.view();
 };
 
 // ---- Event work log (Fase 3) -----------------------------------------------
@@ -4415,61 +4234,82 @@ function clusterRenderOpts(extra) {
   return Object.assign({ formatTime: fmtDate, onOpen: (agentId) => { const n = Number(agentId); if (Number.isInteger(n)) openAgent(n); } }, extra || {});
 }
 
+// ---- Situation detail (SHELL MIGRATED — see public/views/situation.js)
+// The five panels stay in public/clusterView.js, which ships standalone; the
+// page they sit on is the contract's.
+let situationPage = null;
+function getSituationPage() {
+  if (situationPage) return situationPage;
+  if (typeof window === 'undefined' || !window.SituationPage || !ui || !window.ClusterView) return null;
+  const CV = window.ClusterView;
+  situationPage = window.SituationPage.create({
+    el, t, ui, errText,
+    id: () => selectedClusterId,
+    openList: () => { currentView = 'clusters'; render(); },
+    rerender: () => render(),
+    statusLabel: CV.statusLabel,
+    confLabel: CV.confLabel,
+    causeLabel: CV.rootCauseLabel,
+    actions: (status) => CV.availableActions(status, canWrite()),
+    helpBody: () => [
+      el('p', {}, t('sit.info.p1')),
+      el('p', {}, t('sit.info.p2')),
+      el('p', { class: 'muted' }, t('sit.info.p3')),
+    ],
+    fetchDetail: async (id) => (await api(`/api/event-clusters/${id}`)).cluster,
+    ack: async (id) => {
+      try { await api(`/api/event-clusters/${id}/ack`, { method: 'POST' }); toast(t('sit.acked')); render(); }
+      catch (err) { toast(errText(err), true); }
+    },
+    resolve: async (id) => {
+      // Resolving closes the story, so it carries the note that says how.
+      const note = window.prompt(t('sit.resolveNote'));
+      if (!note || !note.trim()) return;
+      try {
+        await api(`/api/event-clusters/${id}/resolve`, { method: 'POST', body: { note: note.trim() } });
+        toast(t('sit.resolved'));
+        render();
+      } catch (err) { toast(errText(err), true); }
+    },
+    // The timeline and the recommended actions are INDEPENDENT fetches: their
+    // failure must not blank the page, so each renders its own error state.
+    mount: (detail) => {
+      const id = selectedClusterId;
+      const container = el('div', { class: 'cluster-detail' });
+      (async () => {
+        let timeline = null;
+        let timelineError = false;
+        try { timeline = await api(`/api/event-clusters/${id}/timeline`); } catch { timelineError = true; }
+        let actions = null;
+        let actionsError = false;
+        try { actions = await api(`/api/event-clusters/${id}/recommended-actions`); } catch { actionsError = true; }
+        CV.renderPage(document, container, { detail, timeline, timelineError, actions, actionsError },
+          clusterRenderOpts({
+            embedded: true,
+            canWrite: canWrite(),
+            onRunPlaybook: async (rb) => {
+              if (!confirm(t('sit.playbookConfirm', { name: rb.linkedPlaybookName || rb.title }))) return;
+              try {
+                const { verification } = await api(`/api/event-clusters/${id}/run-playbook`, { method: 'POST', body: { runbookId: rb.id } });
+                const mins = verification ? Math.round((verification.settleSeconds || 300) / 60) : 5;
+                toast(t('sit.playbookQueued', { mins }));
+                render();
+              } catch (err) { toast(errText(err), true); }
+            },
+          }));
+      })();
+      return container;
+    },
+  });
+  return situationPage;
+}
+
 views.cluster = async () => {
-  const id = selectedClusterId;
-  const back = el('button', { class: 'small ghost', onclick: () => { currentView = 'clusters'; render(); } }, '← Situations');
-  if (id == null) return el('div', { class: 'empty' }, back, el('p', {}, 'No situation selected.'));
-
-  let detail;
-  try {
-    ({ cluster: detail } = await api(`/api/event-clusters/${id}`));
-  } catch (err) {
-    if (err.status === 404) return el('div', { class: 'empty' }, back, el('p', { class: 'error' }, 'Situation not found.'));
-    return el('div', { class: 'empty error' }, back, ' ', err.message);
-  }
-
-  // The timeline + recommended actions are INDEPENDENT fetches — their failure
-  // must not blank the page (each renders its own error state).
-  let timeline = null;
-  let timelineError = false;
-  try {
-    timeline = await api(`/api/event-clusters/${id}/timeline`);
-  } catch { timelineError = true; }
-
-  let actions = null;
-  let actionsError = false;
-  try {
-    actions = await api(`/api/event-clusters/${id}/recommended-actions`);
-  } catch { actionsError = true; }
-
-  const container = el('div', { class: 'cluster-detail' });
-
-  // Write actions (operator+), driven through ClusterView's buttons.
-  async function doAck() {
-    try { await api(`/api/event-clusters/${id}/ack`, { method: 'POST' }); toast('Situation acknowledged'); render(); }
-    catch (err) { toast(errText(err), true); }
-  }
-  async function doResolve() {
-    const note = window.prompt('Resolution note (required):');
-    if (!note || !note.trim()) return;
-    try { await api(`/api/event-clusters/${id}/resolve`, { method: 'POST', body: { note: note.trim() } }); toast('Situation resolved'); render(); }
-    catch (err) { toast(errText(err), true); }
-  }
-  // Explicit, confirmed, audit-logged playbook execution from the event page.
-  async function doRunPlaybook(rb) {
-    if (!confirm(`Run playbook "${rb.linkedPlaybookName || rb.title}" against this situation's targets? It will be verified after the settle window.`)) return;
-    try {
-      const { verification } = await api(`/api/event-clusters/${id}/run-playbook`, { method: 'POST', body: { runbookId: rb.id } });
-      const mins = verification ? Math.round((verification.settleSeconds || 300) / 60) : 5;
-      toast(`Playbook queued — verification in ~${mins} min`);
-      render();
-    } catch (err) { toast(errText(err), true); }
-  }
-
-  ClusterView.renderPage(document, container, { detail, timeline, timelineError, actions, actionsError }, clusterRenderOpts({
-    canWrite: canWrite(), back, onAck: doAck, onResolve: doResolve, onRunPlaybook: doRunPlaybook,
-  }));
-  return container;
+  const v = getSituationPage();
+  if (!v) return el('div', { class: 'empty error' }, t('sit.err.detail'));
+  // The record is re-read per entry, so the page is rebuilt with it.
+  situationPage = null;
+  return v.view();
 };
 
 // ---- Traffic (MIGRATED — see public/views/traffic.js) -----------------------
@@ -4583,61 +4423,6 @@ function stopIfaces() { if (ifaceState.timer) { clearInterval(ifaceState.timer);
 // ---- Shared probe + interface renderers -----------------------------------
 // Used by the per-agent tabs (Interfaces, Probes) AND the combined agent page,
 // so there is one source of truth for each table.
-
-const IFACE_RANK = { down: 0, bad: 1, warn: 2, ok: 3 };
-function ifaceStatusBadge(i) {
-  // Accepts an interface object (preferred) or a bare status string.
-  const iface = i && typeof i === 'object' ? i : null;
-  const s = iface ? iface.status : i;
-  // A virtual/idle port that is merely down (docker0, veth…, VPN tunnels) is not
-  // a fault — show a neutral IDLE chip rather than a red DOWN.
-  if (iface && iface.virtual && iface.linkDown) {
-    return el('span', { class: 'badge grace', title: 'Virtual/idle interface — link down is expected, not a fault' }, 'IDLE');
-  }
-  // Severity palette: bad/down read red (consistent with the rest of the UI).
-  const map = { ok: ['online', 'OK'], warn: ['warn', 'WARN'], bad: ['error', 'ERR'], down: ['down', 'DOWN'] };
-  const [cls, label] = map[s] || ['grace', s];
-  return el('span', { class: `badge ${cls}` }, label);
-}
-function ifaceLinkText(i) {
-  if (!i.speedMbps && !i.operStatus) return '–';
-  const sp = i.speedMbps ? (i.speedMbps >= 1000 ? `${i.speedMbps / 1000} Gb/s` : `${i.speedMbps} Mb/s`) : '';
-  return [sp, i.operStatus].filter(Boolean).join(' · ');
-}
-// Interface health table (worst first). Empty-state when there is no data;
-// `source` (the agent's traffic source) tailors that message.
-function interfaceTable(interfaces, source = null) {
-  const ifs = (interfaces || []).slice().sort((a, b) => (IFACE_RANK[a.status] - IFACE_RANK[b.status]) || ((b.rxBytesPerSec + b.txBytesPerSec) - (a.rxBytesPerSec + a.txBytesPerSec)));
-  if (!ifs.length) {
-    // Flow sources (sflow/netflow) report sampled flow records (5-tuple
-    // conversations), not per-interface byte-rates/errors/discards — so this
-    // table is ALWAYS empty for them, however healthy the flow pipeline looks
-    // on Diagnose. Say so plainly instead of implying an agent update would
-    // help (it won't), and point to the source switch + the views that do use
-    // the flow data this agent reports.
-    if (source === 'sflow' || source === 'netflow') {
-      return el('div', { class: 'empty' },
-        `This agent's traffic source is “${source}”, which reports sampled flow records (conversations) — not per-interface counters, so there is nothing to show here even when the flow pipeline is healthy. `,
-        'Per-interface health (utilisation / errors / discards / link) needs a ',
-        el('b', {}, 'proc'), ' or ', el('b', {}, 'snmp'),
-        ' source — switch it under ', el('b', {}, 'Agents → Edit → Traffic source'),
-        '. The flow data this agent does report appears on the ',
-        viewLink('overview', 'Traffic'), ', ', viewLink('flows'), ' and ', viewLink('geo', 'Destinations'), ' pages.');
-    }
-    return el('div', { class: 'empty' }, 'No interface data yet — requires an agent measurement (update the agent for errors/discards/link).');
-  }
-  return el('table', { class: 'iface-table' },
-    el('thead', {}, el('tr', {}, ...['Interface', 'Status', 'Link', 'Utilization', '↓ RX', '↑ TX', 'Errors/s', 'Discards/s'].map((h) => el('th', {}, h)))),
-    el('tbody', {}, ...ifs.map((i) => el('tr', {},
-      el('td', {}, i.iface),
-      el('td', {}, ifaceStatusBadge(i)),
-      el('td', { class: 'muted' }, ifaceLinkText(i)),
-      el('td', {}, i.utilPct != null ? el('div', { class: 'util' }, usageBar(i.utilPct), el('span', { class: 'muted num' }, `${i.utilPct}%`)) : el('span', { class: 'muted' }, '–')),
-      el('td', { class: 'num' }, `${fmtBytes(i.rxBytesPerSec)}/s`),
-      el('td', { class: 'num' }, `${fmtBytes(i.txBytesPerSec)}/s`),
-      el('td', { class: `num${i.errPerSec > 0 ? ' bad-text' : ''}` }, String(i.errPerSec)),
-      el('td', { class: `num${i.dropPerSec > 0 ? ' warn-text' : ''}` }, String(i.dropPerSec))))));
-}
 
 // Latest probe results (newest per target). onDetail(r) fires from each row.
 // Diagnostic tools the agent can install on request (mirrors the server's
@@ -6979,38 +6764,48 @@ views.troubleshooting = async () => {
 
 // Interface health per agent (utilisation, errors, discards, link state/speed)
 // derived from the agent's latest measurement. Worst interfaces first.
+// ---- Interfaces (MIGRATED — see public/views/interfaces.js)
+// The table is the view module's and is shared with the agent detail page —
+// two copies of it would drift.
+let interfacesPage = null;
+const interfacesPageState = {};
+function getInterfacesPage() {
+  if (interfacesPage) return interfacesPage;
+  if (typeof window === 'undefined' || !window.InterfacesPage || !ui) return null;
+  interfacesPage = window.InterfacesPage.create({
+    el, t, ui, errText, usageBar, fmtBytes, viewLink,
+    state: interfacesPageState,
+    help: () => ({ title: t('iface.info.title'), body: () => [
+      el('p', {}, t('iface.info.p1')),
+      el('p', {}, t('iface.info.p2')),
+      el('p', { class: 'muted' }, t('iface.info.p3')),
+    ] }),
+    fetchAgents: () => api('/agents').catch(() => []),
+    fetchInterfaces: (id) => api(`/api/interfaces?agentId=${encodeURIComponent(id)}`),
+    openAgents: () => gotoView('agents'),
+    startPolling: (fn) => {
+      stopIfaces();
+      ifaceState.timer = setInterval(() => {
+        if (currentView !== 'interfaces') { stopIfaces(); return; }
+        if (!modalOpen()) fn();
+      }, 5000);
+    },
+  });
+  return interfacesPage;
+}
+
+// The agent detail page draws the same interfaces; it reads the table from the
+// view module rather than keeping a second copy.
+function interfaceTable(interfaces, source = null) {
+  const v = getInterfacesPage();
+  if (!v) return el('div', { class: 'empty error' }, t('iface.err.title'));
+  return v.table(interfaces, source);
+}
+
 views.interfaces = async () => {
-  const root = el('div', { class: 'interfaces' });
-  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Interfaces'),
-    el('span', { class: 'muted' }, 'Health per interface · utilisation · errors · discards · link')));
-
-  const agents = await api('/agents').catch(() => []);
-  if (!agents.length) { root.append(el('div', { class: 'empty' }, 'No agents yet.')); return root; }
-
-  const agentSel = el('select', {}, ...agents.map((a) => el('option', { value: String(a.id) }, a.display_name || a.hostname)));
-  const status = el('span', { class: 'muted' });
-  agentSel.addEventListener('change', () => refresh());
-  root.append(el('div', { class: 'history-controls' },
-    el('label', { class: 'inline muted' }, 'Agent ', agentSel),
-    el('button', { class: 'small ghost', onclick: () => refresh() }, 'Refresh'), status));
-  const host = el('div', {});
-  root.append(host);
-
-  async function refresh() {
-    const id = agentSel.value;
-    let data;
-    try { data = await api(`/api/interfaces?agentId=${encodeURIComponent(id)}`); } catch (e) { host.replaceChildren(el('div', { class: 'error' }, e.message)); return; }
-    status.textContent = data.ts ? `source: ${data.source} · measured ${fmtTimeShort(new Date(data.ts).getTime())}` : 'no measurements yet';
-    host.replaceChildren(interfaceTable(data.interfaces, data.source));
-  }
-
-  refresh();
-  stopIfaces();
-  ifaceState.timer = setInterval(() => {
-    if (currentView !== 'interfaces') { stopIfaces(); return; }
-    if (!modalOpen()) refresh();
-  }, 5000);
-  return root;
+  const v = getInterfacesPage();
+  if (!v) return el('div', { class: 'empty error' }, t('iface.err.title'));
+  return v.view();
 };
 
 // Active probes: trigger ping/tcp/dns/traceroute from an agent and watch the
@@ -8602,13 +8397,15 @@ function configIngestForm(id, onAdded) {
       el('div', { class: 'cfg-ingest-actions' }, el('label', { class: 'inline muted' }, 'Via ', via), submit, status)));
 }
 
+// The panel that holds this owns the title (see public/views/agent.js), so the
+// fill no longer writes one of its own — it used to print "Config history"
+// inside a panel already headed "Config history".
 async function loadDeviceConfigHistory(id, card) {
-  const head = el('h3', {}, 'Config history');
   const form = configIngestForm(id, () => loadDeviceConfigHistory(id, card));
   try {
     const { snapshots, diffs } = await api(`/api/devices/${id}/config-history`);
     if (!snapshots || !snapshots.length) {
-      card.replaceChildren(head, form, el('p', { class: 'muted' }, 'No config snapshots captured for this device yet.'));
+      card.replaceChildren(form, el('p', { class: 'muted' }, 'No config snapshots captured for this device yet.'));
       return;
     }
     const diffEls = (diffs || []).map((d) => el('details', { class: 'cfg-diff' },
@@ -8616,11 +8413,11 @@ async function loadDeviceConfigHistory(id, card) {
         el('span', { class: `badge risk-${d.risk}` }, d.risk),
         el('span', { class: 'muted' }, ` +${(d.stats && d.stats.added) || 0}/-${(d.stats && d.stats.removed) || 0}${(d.riskReasons || []).length ? ` · ${d.riskReasons.join(', ')}` : ''}`)),
       el('pre', { class: 'config-diff' }, (d.changedLines || []).map((l) => `${l.op} ${l.text}`).join('\n'))));
-    card.replaceChildren(head, form,
+    card.replaceChildren(form,
       el('p', { class: 'muted' }, `${snapshots.length} snapshot(s); ${(diffs || []).length} change(s). Secrets are masked.`),
       (diffs || []).length ? el('div', { class: 'cfg-diffs' }, ...diffEls) : el('p', { class: 'muted' }, 'No changes between snapshots.'));
   } catch (err) {
-    card.replaceChildren(head, el('p', { class: err.status === 403 ? 'muted' : 'error' }, err.status === 403 ? 'Requires operator/admin.' : err.message));
+    card.replaceChildren(el('p', { class: err.status === 403 ? 'muted' : 'error' }, err.status === 403 ? 'Requires operator/admin.' : err.message));
   }
 }
 
@@ -8631,7 +8428,8 @@ async function loadDeviceConfigHistory(id, card) {
 async function loadAgentCmdbLink(id, host) {
   const writable = canWrite();
   const body = el('div', { class: 'cmdb-body' });
-  host.replaceChildren(el('h3', {}, t('cmdb.cardTitle')), body);
+  // The panel owns the title (see public/views/agent.js).
+  host.replaceChildren(body);
 
   // Ask whether a CMDB is connected at all before offering the picker — an
   // unconfigured server should say so, not hand out a box that can only 404.
@@ -8843,7 +8641,7 @@ async function loadAgentDependencies(id, host) {
       api('/agents').catch(() => []),
     ]);
   } catch (e) {
-    host.replaceChildren(el('h3', {}, 'Dependencies'), el('div', { class: 'error' }, errText(e)));
+    host.replaceChildren(el('div', { class: 'error' }, errText(e)));
     return;
   }
   const nameById = {};
@@ -8852,7 +8650,7 @@ async function loadAgentDependencies(id, host) {
   const { outbound, inbound } = TopologyGraph.splitDependencies(data.edges || [], id);
 
   if (!outbound.length && !inbound.length) {
-    host.replaceChildren(el('h3', {}, 'Dependencies'),
+    host.replaceChildren(
       el('div', { class: 'empty' }, 'No service dependencies observed for this host yet. Dependency edges are aggregated from TCP flows (NetFlow/sFlow) by a scheduled job.'));
     return;
   }
@@ -8905,61 +8703,73 @@ async function loadAgentDependencies(id, host) {
           : null);
     })));
 
-  const children = [el('h3', {}, 'Dependencies')];
+  const children = [];
   if (outbound.length) children.push(el('h4', { class: 'sub' }, `Talks to (${outbound.length})`), depTable(outbound, 'out'));
   if (inbound.length) children.push(el('h4', { class: 'sub' }, `Talked to by (${inbound.length})`), depTable(inbound, 'in'));
   host.replaceChildren(...children);
 }
 
+// ---- Agent detail (SHELL MIGRATED — see public/views/agent.js)
+// The four <details class="sec"> folds — Probes, Interfaces, NIC firmware and
+// Traffic — carry their own forms, pollers and charts, and stay here.
+let agentPage = null;
+function getAgentPage() {
+  if (agentPage) return agentPage;
+  if (typeof window === 'undefined' || !window.AgentPage || !ui) return null;
+  agentPage = window.AgentPage.create({
+    el, t, ui, errText,
+    canWrite,
+    id: () => selectedAgentId,
+    openFleet: () => { currentView = 'fleet'; render(); },
+    openFlows: () => { currentView = 'flows'; render(); },
+    openLocation,
+    exportInvestigation: exportInvestigationMenu,
+    runTest,
+    rerender: () => render(),
+    helpBody: () => [
+      el('p', {}, t('ad.info.p1')),
+      el('p', {}, t('ad.info.p2')),
+      el('p', { class: 'muted' }, t('ad.info.p3')),
+    ],
+    fetchAgent: (id) => api(`/agents/${id}`),
+    cards: (id) => {
+      const out = [];
+      // Config history is operator+: masked snapshots, risk-classified diffs.
+      if (canWrite()) {
+        const cfg = el('div', { class: 'agent-config-history' }, el('div', { class: 'muted' }, t('common.loading')));
+        loadDeviceConfigHistory(id, cfg);
+        out.push({ title: t('ad.configHistory'), node: cfg });
+      }
+      const cmdb = el('div', { class: 'agent-cmdb' }, el('div', { class: 'muted' }, t('common.loading')));
+      loadAgentCmdbLink(id, cmdb);
+      out.push({ title: t('ad.cmdb'), node: cmdb });
+
+      const dep = el('div', { class: 'agent-deps' }, el('div', { class: 'muted' }, t('common.loading')));
+      loadAgentDependencies(id, dep);
+      out.push({ title: t('ad.dependencies'), node: dep });
+      return out;
+    },
+    timeline: (id) => targetTimelineCard(id),
+    folds: (id, agent) => agentDetailFolds(id, agent),
+    start: (id, healthHost) => agentDetailStart(healthHost),
+  });
+  return agentPage;
+}
+
 views.agent = async () => {
-  const id = selectedAgentId;
-  const root = el('div', { class: 'agent-detail' });
-  if (id == null) { root.append(el('div', { class: 'empty' }, 'Select an agent in the overview.')); return root; }
-  let agent;
-  try { agent = await api(`/agents/${id}`); } catch (e) { root.append(el('div', { class: 'error' }, e.message)); return root; }
+  const v = getAgentPage();
+  if (!v) return el('div', { class: 'empty error' }, t('ad.err.title'));
+  // The record is re-read per entry, so the page is rebuilt with it.
+  agentPage = null;
+  return v.view();
+};
 
-  root.append(el('div', { class: 'section-head' },
-    el('button', { class: 'small ghost', onclick: () => { currentView = 'fleet'; render(); } }, '← Overview'),
-    el('h2', {}, agent.display_name || agent.hostname),
-    el('span', { class: `badge ${agent.status}` }, agent.status),
-    agent.location_id != null
-      ? el('button', { class: 'linklike', title: 'Open the location page — agents, health & data flows', onclick: () => openLocation(agent.location_id) }, '📍 ', agent.location_name || `#${agent.location_id}`)
-      : (agent.location_name ? el('span', { class: 'muted' }, agent.location_name) : null),
-    el('button', { class: 'small ghost', onclick: () => { currentView = 'flows'; render(); } }, 'Flows →'),
-    el('button', { class: 'small ghost', onclick: () => exportInvestigationMenu(id, agent.display_name || agent.hostname) }, 'Export'),
-    canWrite() ? el('button', { class: 'small ghost', onclick: () => runTest(agent) }, 'Run test') : null));
-
-  // Health résumé (the headline + the metrics that drove it).
-  const healthHost = el('div', { class: 'agent-health' });
-  root.append(healthHost);
-
-  // Config history / CMDB / Dependencies side by side in a responsive grid so
-  // the page uses the full width (the global .card is a fixed 320px otherwise).
-  const cardsWrap = el('div', { class: 'agent-cards' });
-  root.append(cardsWrap);
-
-  // Device config history (operator/admin) — masked snapshots + risk-classified
-  // diffs from GET /api/devices/:id/config-history. Lazy-loaded.
-  if (canWrite()) {
-    const cfgHost = el('div', { class: 'card agent-config-history' }, el('h3', {}, 'Config history'), el('div', { class: 'muted' }, 'Loading…'));
-    cardsWrap.append(cfgHost);
-    loadDeviceConfigHistory(id, cfgHost);
-  }
-
-  // CMDB asset link (viewer sees the linked asset; operator+ can search/link/unlink).
-  const cmdbHost = el('div', { class: 'card agent-cmdb' }, el('h3', {}, 'CMDB asset'), el('div', { class: 'muted' }, 'Loading…'));
-  cardsWrap.append(cmdbHost);
-  loadAgentCmdbLink(id, cmdbHost);
-
-  // Service dependencies (viewer+): who this host talks to / who talks to it,
-  // ports + volume; each outbound row links to its per-hour baseline band.
-  const depsHost = el('div', { class: 'card agent-deps' }, el('h3', {}, 'Dependencies'), el('div', { class: 'muted' }, 'Loading…'));
-  cardsWrap.append(depsHost);
-  loadAgentDependencies(id, depsHost);
-
-  // Unified activity timeline (findings + probe-outage events + connect/
-  // disconnect + playbook runs) — GET /api/targets/:id/timeline.
-  root.append(targetTimelineCard(id));
+// The live half of the agent page: the four folds, their pollers, and the
+// health résumé they refresh alongside. Kept here because each fold owns a
+// form, a poller or a chart that has not been migrated.
+let agentDetailRefresh = null;
+function agentDetailFolds(id, agent) {
+  let healthHost = null;
   function renderHealth(h, q, thr) {
     const m = h.metrics;
     const kv = (k, v, cls) => el('div', { class: 'ah-kv' }, el('span', { class: 'ah-k' }, k), el('span', { class: `ah-v${cls ? ' ' + cls : ''}` }, v));
@@ -8986,7 +8796,7 @@ views.agent = async () => {
     } else if (q && q.version) {
       children.push(el('div', { class: 'ah-quality muted' }, `agent v${q.version}`));
     }
-    healthHost.replaceChildren(...children);
+    if (healthHost) healthHost.replaceChildren(...children);
   }
 
   // ---- Probes (this agent) ----
@@ -9079,151 +8889,73 @@ views.agent = async () => {
   const nics = agent.capabilities && Array.isArray(agent.capabilities.nic) ? agent.capabilities.nic : [];
   const nicSummary = el('span', { class: 'muted' }, nics.length ? `· ${nics.length} interface(s)` : '· none reported');
 
-  root.append(
+  const folds = [
     el('details', { class: 'sec', open: true }, el('summary', {}, 'Probes ', el('span', { class: 'muted' }, '· ping · TCP · DNS · traceroute · cURL')), probeForm, probeLatestHost),
     el('details', { class: 'sec', open: true }, el('summary', {}, 'Interfaces ', ifaceStatus), ifaceHost),
     el('details', { class: 'sec' }, el('summary', {}, 'NIC firmware ', nicSummary), nicTable(nics)),
-    el('details', { class: 'sec' }, el('summary', {}, 'Traffic ', el('span', { class: 'muted' }, '· recent bandwidth')), trafficHost));
+    el('details', { class: 'sec' }, el('summary', {}, 'Traffic ', el('span', { class: 'muted' }, '· recent bandwidth')), trafficHost),
+  ];
+  agentDetailRefresh = async (host) => {
+    healthHost = host || healthHost;
+    await Promise.all([refreshHealth(), refreshProbes(), refreshIfaces(), refreshTraffic()]);
+  };
+  return folds;
+}
 
-  async function refreshAll() { await Promise.all([refreshHealth(), refreshProbes(), refreshIfaces(), refreshTraffic()]); }
-  await refreshAll();
+// Runs the first fill and starts the poller. Separate from building the folds
+// so the page can hand over the health host it owns.
+function agentDetailStart(healthHost) {
+  if (!agentDetailRefresh) return;
+  const tick = agentDetailRefresh;
+  tick(healthHost);
   stopAgent();
   agentState.timer = setInterval(() => {
     if (currentView !== 'agent') { stopAgent(); return; }
-    if (!modalOpen()) refreshAll();
+    if (!modalOpen()) tick(healthHost);
   }, 7000);
-  return root;
-};
-
-// Renders one agent's reported NIC inventory (capabilities.nic): per-interface
-// driver / driver version / firmware / bus. Used on the agent page.
-function nicTable(nics) {
-  if (!Array.isArray(nics) || !nics.length) return el('div', { class: 'empty' }, 'No NIC inventory reported yet (needs an agent that runs ethtool on Linux).');
-  const head = el('tr', {}, ...['Interface', 'Driver', 'Driver ver.', 'Firmware', 'Bus'].map((h) => el('th', {}, h)));
-  const rows = nics.map((n) => el('tr', {},
-    el('td', {}, n.iface || '—'),
-    el('td', {}, n.driver || '—'),
-    el('td', { class: 'muted' }, n.driverVersion || '—'),
-    el('td', {}, n.firmwareVersion || '—'),
-    el('td', { class: 'muted' }, n.busInfo || n.pciId || '—')));
-  return el('table', { class: 'iface-table' }, el('thead', {}, head), el('tbody', {}, ...rows));
 }
+
 
 // Fleet NIC inventory + firmware-drift detection. Groups identical NIC models
 // across all agents and surfaces firmware-version outliers — the "47 units on
 // firmware X, 3 on Y" case — so a Wi-Fi issue traced to a firmware mismatch is
 // obvious. Reads capabilities.nic; no probes, no new storage.
+// ---- NICs (MIGRATED — see public/views/nics.js)
+// The per-agent NIC table is the view module's and is shared with the agent
+// detail page — two copies of it would drift.
+let nicsPage = null;
+const nicsPageState = {};
+let nicsTab = 'models'; // 'models' | 'agents'
+function getNicsPage() {
+  if (nicsPage) return nicsPage;
+  if (typeof window === 'undefined' || !window.NicsPage || !ui) return null;
+  nicsPage = window.NicsPage.create({
+    el, t, ui, errText,
+    state: nicsPageState,
+    tab: () => nicsTab,
+    setTab: (k) => { nicsTab = k; syncLocation(); },
+    help: () => ({ title: t('nic.info.title'), body: () => [
+      el('p', {}, t('nic.info.p1')),
+      el('p', {}, t('nic.info.p2')),
+      el('p', { class: 'muted' }, t('nic.info.p3')),
+    ] }),
+    fetchInventory: () => api('/api/fleet/nics'),
+    openAgent,
+  });
+  return nicsPage;
+}
+
+// The agent detail page lists the same cards.
+function nicTable(nics) {
+  const v = getNicsPage();
+  if (!v) return el('div', { class: 'empty error' }, t('nic.err.title'));
+  return v.nicTable(nics);
+}
+
 views.nics = async () => {
-  const root = el('div', { class: 'nics-view' });
-  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'NICs'),
-    el('span', { class: 'muted' }, 'Driver & firmware inventory · firmware-drift detection')));
-
-  let inv;
-  try { inv = await api('/api/fleet/nics'); } catch (e) { root.append(el('div', { class: 'error' }, e.message)); return root; }
-
-  root.append(el('div', { class: 'nics-summary muted' },
-    `${inv.agents} agent(s) reporting NIC data · ${inv.totalNics} NIC(s) · `,
-    el('span', { class: inv.drift.length ? 'bad-text' : '' }, `${inv.drift.length} model(s) with firmware drift`)));
-
-  if (!inv.agents) {
-    root.append(el('div', { class: 'empty' },
-      'No NIC inventory yet. Agents collect driver/firmware via ', el('code', {}, 'ethtool -i'),
-      ' on Linux and report it with their capabilities — redeploy/upgrade agents to populate this.'));
-    return root;
-  }
-
-  // A chip per agent on a given firmware; click to open that agent.
-  const agentChips = (agents) => el('div', { class: 'nic-chips' }, ...agents.map((a) =>
-    el('button', { class: 'chip ghost small', title: a.location ? `${a.name} · ${a.location}` : a.name, onclick: () => openAgent(a.id) },
-      a.name, a.iface ? el('span', { class: 'muted' }, ` (${a.iface})`) : null)));
-
-  // Group-by toggle: aggregate by NIC model (drift-first) or list every agent
-  // with its NIC specs. Defaults to models — the firmware-drift lens. A search box
-  // filters within the active group (model/driver/firmware, or agent/location/nic).
-  const body = el('div', { class: 'nics-body' });
-  let nicMode = 'models';
-  const filterInput = el('input', { type: 'search', class: 'nic-filter', placeholder: 'Filter…' });
-  const q = () => filterInput.value.trim().toLowerCase();
-  const renderBody = () => {
-    filterInput.placeholder = nicMode === 'agents'
-      ? 'Filter agent / location / driver / firmware…'
-      : 'Filter model / firmware…';
-    body.replaceChildren(nicMode === 'agents' ? renderByAgent(q()) : renderByModel(q()));
-  };
-  const seg = el('div', { class: 'seg' });
-  const setMode = (mode) => {
-    nicMode = mode;
-    for (const b of seg.children) b.classList.toggle('on', b.dataset.mode === mode);
-    renderBody();
-  };
-  for (const [mode, label] of [['models', 'Models'], ['agents', 'Agents']]) {
-    seg.append(el('button', { class: 'seg-btn', 'data-mode': mode, onclick: () => setMode(mode) }, label));
-  }
-  filterInput.addEventListener('input', renderBody);
-  root.append(el('div', { class: 'nics-controls' },
-    el('span', { class: 'muted' }, 'Group by'), seg,
-    el('span', { class: 'spacer' }),
-    filterInput), body);
-
-  const has = (v, needle) => String(v == null ? '' : v).toLowerCase().includes(needle);
-
-  // ---- Models view: firmware drift first, then the full model inventory. ----
-  function renderByModel(needle) {
-    const modelMatch = (m) => !needle || has(m.label, needle) || (m.firmwares || []).some((f) => has(f.firmwareVersion, needle));
-    const wrap = el('div', {});
-    const drift = inv.drift.filter(modelMatch);
-    if (drift.length) {
-      const driftCard = el('div', { class: 'nic-card drift-card' }, el('h3', {}, '⚠ Firmware drift'));
-      for (const model of drift) {
-        const block = el('div', { class: 'drift-model' },
-          el('div', { class: 'drift-head' }, el('strong', {}, model.label), el('span', { class: 'muted' }, ` · ${model.count} unit(s)`)));
-        for (const f of model.firmwares) {
-          block.append(el('div', { class: `fw-row${f.isOutlier ? ' fw-outlier' : ''}` },
-            el('span', { class: `badge ${f.isOutlier ? 'warn' : 'online'}` }, f.isOutlier ? 'outlier' : 'majority'),
-            el('span', { class: 'fw-ver' }, f.firmwareVersion),
-            el('span', { class: 'muted' }, ` — ${f.count} unit(s)`),
-            agentChips(f.agents)));
-        }
-        driftCard.append(block);
-      }
-      wrap.append(driftCard);
-    }
-    const models = inv.drivers.filter(modelMatch);
-    const invCard = el('div', { class: 'nic-card' }, el('h3', {}, needle ? `NIC models (${models.length} of ${inv.drivers.length})` : 'All NIC models'));
-    if (!models.length) invCard.append(el('div', { class: 'empty' }, needle ? 'No NIC models match the filter.' : 'No NIC models.'));
-    for (const model of models) {
-      const fwSummary = model.firmwares.map((f) => `${f.firmwareVersion} ×${f.count}`).join(' · ');
-      invCard.append(el('div', { class: 'nic-model-row' },
-        el('div', {}, el('strong', {}, model.label), model.hasDrift ? el('span', { class: 'badge warn', style: 'margin-left:.4rem' }, 'drift') : null),
-        el('div', { class: 'muted' }, `${model.count} unit(s) · ${fwSummary}`)));
-    }
-    wrap.append(invCard);
-    return wrap;
-  }
-
-  // ---- Agents view: each agent that reports NIC data + its NIC specs. ----
-  function renderByAgent(needle) {
-    const nicMatch = (n) => !needle || [n.iface, n.driver, n.driverVersion, n.firmwareVersion, n.busInfo, n.pciId].some((v) => has(v, needle));
-    const agentMatch = (a) => !needle || has(a.name, needle) || has(a.location, needle) || a.nics.some(nicMatch);
-    const agents = inv.byAgent.filter(agentMatch);
-    const card = el('div', { class: 'nic-card' }, el('h3', {}, `Agents reporting NIC data (${needle ? `${agents.length} of ${inv.byAgent.length}` : agents.length})`));
-    if (!agents.length) card.append(el('div', { class: 'empty' }, 'No agents match the filter.'));
-    for (const a of agents) {
-      // If the filter matched a NIC, show only the matching NICs; if it matched
-      // the agent's name/location, keep all of its interfaces.
-      const nics = needle && a.nics.some(nicMatch) ? a.nics.filter(nicMatch) : a.nics;
-      card.append(el('div', { class: 'nic-agent-row' },
-        el('div', { class: 'nic-agent-head' },
-          el('button', { class: 'linklike', onclick: () => openAgent(a.id) }, a.name),
-          a.location ? el('span', { class: 'muted' }, ` · ${a.location}`) : null,
-          el('span', { class: 'muted' }, ` · ${a.nics.length} interface(s)`)),
-        nicTable(nics)));
-    }
-    return card;
-  }
-
-  setMode('models');
-  return root;
+  const v = getNicsPage();
+  if (!v) return el('div', { class: 'empty error' }, t('nic.err.title'));
+  return v.view();
 };
 
 // Flow Explorer — merged conversation explorer + bidirectional inspector.
@@ -10127,98 +9859,96 @@ async function deleteAgent(a) {
 // dataflows (traffic map + list). Full-width; no tab — reached via
 // openLocation(id). Clicking a dataflow opens the Flows page in Map mode
 // scoped to this location.
-views.location = async () => {
-  const id = selectedLocationId;
-  const root = el('div', { class: 'location-detail' });
-  if (id == null) { root.append(el('div', { class: 'empty' }, 'Pick a location first.')); return root; }
-
-  const [locations, agents, fleet] = await Promise.all([
-    api('/locations').catch(() => []),
-    api('/agents').catch(() => []),
-    api('/api/fleet/health').catch(() => ({ agents: [], summary: {} })),
-  ]);
-  const loc = locations.find((l) => String(l.id) === String(id));
-  if (!loc) { root.append(el('div', { class: 'error' }, 'Location not found.')); return root; }
-  const members = agents.filter((a) => String(a.location_id) === String(id));
-  const fleetById = new Map((fleet.agents || []).map((a) => [a.agentId, a]));
-  const scoped = members.map((m) => fleetById.get(m.id)).filter(Boolean);
-
-  root.append(el('div', { class: 'section-head' },
-    el('button', { class: 'small ghost', onclick: () => { currentView = 'locations'; render(); } }, '← Locations'),
-    el('h2', {}, '📍 ', loc.name),
-    loc.description ? el('span', { class: 'muted' }, loc.description) : null,
-    loc.latitude != null ? el('span', { class: 'muted' }, `· ${Number(loc.latitude).toFixed(3)}, ${Number(loc.longitude).toFixed(3)}`) : null,
-    el('span', { class: 'spacer' }),
-    el('button', { class: 'small ghost', onclick: () => openFlows(null, { mode: 'map', locationId: id }) }, 'Flows →'),
-    el('button', { class: 'small ghost', onclick: () => showLocationTraffic(loc) }, 'Live traffic'),
-    featureEnabled('assistant') ? el('button', { class: 'small ghost', onclick: () => showLocationSummary(loc) }, 'AI status') : null,
-    canWrite() ? el('button', { class: 'small ghost', onclick: () => editLocation(loc) }, 'Edit') : null));
-
-  // Health summary for just this site's agents (same KPI language as Overview).
-  const summary = { ok: 0, warn: 0, bad: 0, down: 0, stale: 0, unknown: 0 };
-  for (const a of scoped) if (a.health && a.health.status in summary) summary[a.health.status] += 1;
-  const k = fleetKpis({ agents: scoped, summary });
-  const lossStatus = k.loss == null ? 'accent' : k.loss >= 20 ? 'bad' : k.loss >= 2 ? 'warn' : 'ok';
-  const agStatus = k.total && k.online === 0 ? 'bad' : k.online < k.total ? 'warn' : 'ok';
-  root.append(el('div', { class: 'noc-kpis loc-kpis' },
-    kpiCard('Agents', `${k.online}/${k.total}`, 'online at this site', agStatus),
-    kpiCard('Latency', k.latency == null ? '–' : `${k.latency} ms`, 'median RTT', 'accent'),
-    kpiCard('Packet loss', k.loss == null ? '–' : `${k.loss}%`, 'worst agent', lossStatus),
-    kpiCard('Jitter', k.jitter == null ? '–' : `${k.jitter} ms`, 'median', k.jitter >= 30 ? 'warn' : 'accent'),
-    kpiCard('Test paths', `${k.paths}`, 'monitored targets', 'accent'),
-    kpiCard('Alerts', `${k.alerts}`, k.crit ? `${k.crit} critical` : (k.warn ? `${k.warn} warning` : 'all clear'), k.crit ? 'bad' : (k.warn ? 'warn' : 'ok'))));
-
-  // Agents at this location — the fleet table's columns, scoped. Click → agent page.
-  const agentRow = (m) => {
-    const a = fleetById.get(m.id);
-    const h = a && a.health; const met = (h && h.metrics) || {};
-    return el('tr', { class: 'fleet-row', tabindex: '0', onclick: () => openAgent(m.id), onkeydown: (e) => { if (e.key === 'Enter') openAgent(m.id); } },
-      el('td', {}, el('div', {}, m.display_name || m.hostname), m.display_name && m.display_name !== m.hostname ? el('div', { class: 'muted' }, m.hostname) : null),
-      el('td', {}, el('span', { class: `badge ${m.status}` }, m.status)),
-      el('td', {}, h ? healthBadge(h) : el('span', { class: 'muted' }, '–')),
-      el('td', { class: 'num' }, met.lossPct != null ? `${met.lossPct}%` : '–'),
-      el('td', { class: 'num' }, latencyText(met)),
-      el('td', { class: 'num' }, met.jitterMs != null ? `${met.jitterMs} ms` : '–'),
-      el('td', { class: 'num muted' }, met.targets ? `${met.reachable}/${met.targets}` : '–'),
-      el('td', { class: 'num' }, throughputText(a && a.throughput)),
-      el('td', { class: 'muted' }, (a && a.quality && a.quality.version) || (m.capabilities && m.capabilities.version) || '–'),
-      el('td', { class: 'muted' }, m.last_seen ? fmtDate(m.last_seen) : '–'));
-  };
-  const agentsCard = el('div', { class: 'card loc-card' }, el('h3', {}, `Agents (${members.length})`));
-  if (!members.length) agentsCard.append(el('div', { class: 'empty' }, 'No agents at this location yet.'));
-  else agentsCard.append(el('table', { class: 'agents-table' },
-    el('thead', {}, el('tr', {}, ...['Agent', 'Connection', 'Health', 'Loss', 'Latency', 'Jitter', 'Targets', 'Throughput', 'Version', 'Last seen'].map((h) => el('th', {}, h)))),
-    el('tbody', {}, ...members.map(agentRow))));
-  root.append(agentsCard);
-
-  // Dataflows: the site's external traffic as colored directional arrows + a
-  // clickable list. Every dataflow row/arc opens Flows → Map for this site.
-  const toFlows = () => openFlows(null, { mode: 'map', locationId: id });
-  const flowsListHost = el('div', { class: 'flowmap-list' }, el('div', { class: 'muted' }, 'Loading…'));
-  const flowsCard = el('div', { class: 'card loc-card' },
-    el('h3', {}, 'Data flows ', el('span', { class: 'muted' }, '· click a flow to inspect it in Flows')),
-    flowsListHost);
-  const mapCard = trafficMapCard({
-    scope: { locationId: id },
-    title: `Traffic map — ${loc.name}`,
-    onArcClick: toFlows,
-    onData: (data) => {
-      const siteByKey = new Map((data.sites || []).map((s) => [s.key, s]));
-      if (!data.arcs.length) { flowsListHost.replaceChildren(el('div', { class: 'empty' }, 'No geolocated flows in the window.')); return; }
-      flowsListHost.replaceChildren(...data.arcs.slice(0, 20).map((a) => {
-        const site = siteByKey.get(a.siteKey);
-        const dirTxt = a.direction === 'in' ? '◂ in' : a.direction === 'both' ? '⇄ both' : 'out ▸';
-        return el('div', { class: 'flowmap-row', role: 'button', tabindex: '0', onclick: toFlows, onkeydown: (e) => { if (e.key === 'Enter') toFlows(); } },
-          el('span', { class: 'tc-dot', style: `background:${trafficTypeColor(a.category)}` }),
-          el('span', { class: 'fmr-dst' },
-            el('span', {}, `${site ? site.name : loc.name} → ${a.country}`),
-            el('span', { class: 'muted' }, `${a.label}${a.asnNames && a.asnNames.length ? ' · ' + a.asnNames[0] : ''}`)),
-          el('span', { class: 'fmr-vol num' }, fmtBytes(a.bytes), el('span', { class: `fmr-dir dir-${a.direction}` }, dirTxt)));
-      }));
+// ---- Location detail (MIGRATED — see public/views/location.js)
+// The traffic map and the data-flow list stay here: the map carries the
+// reader's pan and zoom, and the flow rows use the traffic-type colour ramp.
+let locationPage = null;
+function getLocationPage() {
+  if (locationPage) return locationPage;
+  if (typeof window === 'undefined' || !window.LocationPage || !ui) return null;
+  locationPage = window.LocationPage.create({
+    el, t, ui, errText,
+    canWrite,
+    hasAssistant: () => featureEnabled('assistant'),
+    id: () => selectedLocationId,
+    openList: () => { currentView = 'locations'; render(); },
+    openAgent,
+    openEnrollment: () => { currentView = 'enrollment'; render(); },
+    rerender: () => render(),
+    edit: editLocation,
+    traffic: showLocationTraffic,
+    summary: showLocationSummary,
+    latencyText,
+    throughputText,
+    helpBody: () => [
+      el('p', {}, t('ld.info.p1')),
+      el('p', {}, t('ld.info.p2')),
+      el('p', { class: 'muted' }, t('ld.info.p3')),
+    ],
+    fetchAll: async (id) => {
+      const [locations, agents, fleet] = await Promise.all([
+        api('/locations').catch(() => []),
+        api('/agents').catch(() => []),
+        api('/api/fleet/health').catch(() => ({ agents: [], summary: {} })),
+      ]);
+      const location = locations.find((l) => String(l.id) === String(id));
+      if (!location) { const e = new Error('Not Found'); e.status = 404; throw e; }
+      const members = agents.filter((a) => String(a.location_id) === String(id));
+      const byId = new Map((fleet.agents || []).map((a) => [a.agentId, a]));
+      return { location, members, byId, scoped: members.map((m) => byId.get(m.id)).filter(Boolean) };
+    },
+    // The same KPI arithmetic the Overview uses, scoped to this site's agents.
+    kpis: (scoped) => {
+      const summary = { ok: 0, warn: 0, bad: 0, down: 0, stale: 0, unknown: 0 };
+      for (const a of scoped) if (a.health && a.health.status in summary) summary[a.health.status] += 1;
+      return fleetKpis({ agents: scoped, summary });
+    },
+    flows: (loc, id) => {
+      // Every arc and every row opens Flows → Map for this site, so the header
+      // does not also need a "Flows →" button.
+      const toFlows = () => openFlows(null, { mode: 'map', locationId: id });
+      const listHost = el('div', { class: 'flowmap-list' }, el('div', { class: 'muted' }, t('common.loading')));
+      const map = trafficMapCard({
+        scope: { locationId: id },
+        title: t('ld.map', { name: loc.name }),
+        onArcClick: toFlows,
+        onData: (data) => {
+          const siteByKey = new Map((data.sites || []).map((s) => [s.key, s]));
+          if (!data.arcs.length) {
+            listHost.replaceChildren(el('div', { class: 'empty' }, t('ld.noFlows')));
+            return;
+          }
+          listHost.replaceChildren(...data.arcs.slice(0, 20).map((a) => {
+            const site = siteByKey.get(a.siteKey);
+            const dirTxt = a.direction === 'in' ? '◂ in' : a.direction === 'both' ? '⇄ both' : 'out ▸';
+            return el('div', { class: 'flowmap-row', role: 'button', tabindex: '0', onclick: toFlows, onkeydown: (e) => { if (e.key === 'Enter') toFlows(); } },
+              trafficTypeDot(a.category),
+              el('span', { class: 'fmr-dst' },
+                el('span', {}, `${site ? site.name : loc.name} → ${a.country}`),
+                el('span', { class: 'muted' }, `${a.label}${a.asnNames && a.asnNames.length ? ' · ' + a.asnNames[0] : ''}`)),
+              el('span', { class: 'fmr-vol num' }, fmtBytes(a.bytes), el('span', { class: `fmr-dir dir-${a.direction}` }, dirTxt)));
+          }));
+        },
+      });
+      return [
+        map,
+        ui.panel({
+          title: t('ld.dataflows'),
+          note: t('ld.dataflowsHint'),
+          children: [el('div', { class: 'panel-body' }, listHost)],
+        }),
+      ];
     },
   });
-  root.append(el('div', { class: 'loc-grid' }, mapCard, flowsCard));
-  return root;
+  return locationPage;
+}
+
+views.location = async () => {
+  const v = getLocationPage();
+  if (!v) return el('div', { class: 'empty error' }, t('ld.err.title'));
+  // The record is re-read per entry, so the page is rebuilt with it.
+  locationPage = null;
+  return v.view();
 };
 
 // ---- Locations (MIGRATED — see public/views/locations.js)
@@ -11371,33 +11101,40 @@ const DOCS = [
   },
 ];
 
-views.docs = async () => {
-  const root = el('div');
-  // Drop the admin-only section for non-admins (RBAC: admin has full access).
-  const sections = DOCS.filter((s) => !s.admin || isAdmin());
-  const allIds = sections.flatMap((s) => s.articles.map((a) => a.id));
-  if (!docsTopic || !allIds.includes(docsTopic)) docsTopic = allIds[0];
+// ---- Documentation (SHELL MIGRATED — see public/views/docs.js)
+// The twenty-three article bodies stay here; the page they sit on is the
+// contract's.
+let docsPage = null;
+function getDocsPage() {
+  if (docsPage) return docsPage;
+  if (typeof window === 'undefined' || !window.DocsPage || !ui) return null;
+  docsPage = window.DocsPage.create({
+    el, t, ui, errText,
+    // The admin-only section is dropped for everybody else (RBAC: admin has
+    // full access), so an article they cannot reach is not in the strip.
+    sections: () => DOCS.filter((s) => !s.admin || isAdmin()),
+    topic: () => docsTopic,
+    setTopic: (id) => { docsTopic = id; syncLocation(); },
+    help: () => ({ title: t('docs.info.title'), body: () => [
+      el('p', {}, t('docs.info.p1')),
+      el('p', {}, t('docs.info.p2')),
+      el('p', { class: 'muted' }, t('docs.info.p3')),
+    ] }),
+  });
+  return docsPage;
+}
 
-  // Left rail: grouped topic list (mirrors the Settings nav).
-  const nav = el('div', { class: 'settings-nav docs-nav' }, ...sections.map((s) =>
-    el('div', { class: 'settings-nav-group' },
-      el('span', { class: 'settings-nav-label' }, s.section),
-      el('div', { class: 'navlist docs-navlist' }, ...s.articles.map((a) =>
-        el('button', { class: `small ghost${a.id === docsTopic ? ' active' : ''}`, onclick: () => { docsTopic = a.id; render(); } }, a.title))))));
-
-  root.append(el('div', { class: 'section-head' },
-    el('h2', {}, 'Documentation'),
-    el('span', { class: 'muted' }, 'Guides, how-tos & setup — with worked examples')), nav);
-
-  const article = sections.flatMap((s) => s.articles).find((a) => a.id === docsTopic);
-  const body = el('article', { class: 'docs-article' });
-  if (article) {
-    body.append(el('h3', { class: 'docs-title' }, article.title));
-    try { body.append(...article.body()); }
-    catch (err) { body.append(el('div', { class: 'empty error' }, err.message)); }
+function docsLabel(id) {
+  for (const s of DOCS) {
+    for (const a of s.articles) if (a.id === id) return a.title;
   }
-  root.append(body);
-  return root;
+  return id;
+}
+
+views.docs = async () => {
+  const v = getDocsPage();
+  if (!v) return el('div', { class: 'empty error' }, t('docs.title'));
+  return v.view();
 };
 
 // ---- Settings (SHELL MIGRATED — see public/views/settings.js)
@@ -11405,8 +11142,8 @@ views.docs = async () => {
 // contract's.
 let settingsPage = null;
 const SETTINGS_SECTIONS = {
-  users: () => views.users(),
-  license: () => views.license(),
+  users: () => views.users({ embedded: true }),
+  license: () => views.license({ embedded: true }),
   appearance: settingsAppearanceView,
   database: settingsDatabaseView,
   map: settingsMapView,
@@ -11425,7 +11162,7 @@ const SETTINGS_SECTIONS = {
   retention: settingsRetentionView,
   auth: settingsAuthView,
   apitokens: settingsApiTokensView,
-  screening: () => views.screening(),
+  screening: () => views.screening({ embedded: true }),
   assurance: settingsAssuranceView,
 };
 
@@ -13786,48 +13523,50 @@ function geoipSettingsCard(geoip) {
       el('div', { class: 'form-actions' }, btn, updateBtn)));
 }
 
-views.users = async () => {
-  const [users, avail] = await Promise.all([
-    api('/users'),
-    api('/users/local-availability').catch(() => ({ available: false, ssoActive: false, mailerReady: false })),
-  ]);
-  const root = el('div');
-  const headBtns = [el('button', { class: 'small', onclick: () => editUser() }, '+ New user')];
-  // Local user creation with a one-time password — only offered when no SSO/LDAP
-  // is active. The server enforces the same rule (403); this just hides the UI.
-  if (avail.available) {
-    headBtns.unshift(el('button', { class: 'small', onclick: () => createLocalUser() }, '+ Invite user (one-time password)'));
-  }
-  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Users'), ...headBtns));
-  root.append(el('p', { class: 'muted' }, ['Roles: viewer (read), operator (create/edit), admin (all). Only admins see this tab. A name is optional and display-only — it is what ', viewLink('userLogs', 'User Logs'), ' shows next to each action instead of an email address.']));
-  if (!avail.available && avail.ssoActive) {
-    root.append(el('p', { class: 'muted' }, 'Local user invitations are disabled while SSO/LDAP is active — manage users in your directory.'));
-  } else if (!avail.available && !avail.mailerReady) {
-    root.append(el('p', { class: 'muted' }, ['One-time-password invitations need SMTP configured in ', settingsLink('alerting', 'Settings → Alerting'), '.']));
-  }
-  root.append(el('table', {},
-    el('thead', {}, el('tr', {}, ...['ID', 'Name', 'Email', 'Role', 'Status', 'Created', ''].map((h) => el('th', {}, h)))),
-    el('tbody', {}, ...users.map((u) => el('tr', {},
-      el('td', {}, String(u.id)),
-      // The name is display only — the email stays the identity. It is what
-      // User Logs shows next to an action, so an unnamed account is worth
-      // pointing out here rather than leaving blank.
-      el('td', {}, u.name || el('span', { class: 'muted' }, '—')),
-      el('td', {}, u.email),
-      el('td', {}, el('span', { class: 'badge' }, u.role),
-        u.protected ? el('span', { class: 'badge', title: 'Superadmin — cannot be changed/deleted, password only', style: 'margin-left:6px' }, 'superadmin') : null),
-      el('td', {}, u.must_change_password
-        ? el('span', { class: 'badge', title: u.temp_password_expires_at ? `One-time password expires ${fmtDate(u.temp_password_expires_at)}` : 'Awaiting first password change' }, 'pending first login')
-        : el('span', { class: 'badge active', title: 'Account active — first-login password change completed' }, 'Active')),
-      el('td', { class: 'muted' }, fmtDate(u.created_at)),
-      el('td', {}, el('div', { class: 'row-actions' },
-        (avail.available && u.must_change_password)
-          ? el('button', { class: 'small ghost', title: 'Generate and email a new one-time password', onclick: () => resendTempPassword(u) }, 'Resend password')
-          : null,
-        el('button', { class: 'small ghost', onclick: () => editUser(u) }, u.protected ? 'Change password' : 'Edit'),
-        u.protected ? null : el('button', { class: 'small danger', onclick: () => deleteUser(u) }, 'Delete'))),
-    )))));
-  return root;
+// ---- Users (MIGRATED — see public/views/users.js)
+// Reached at /users and as the Users section inside Settings; the second one
+// passes mode 'embedded', which drops the PageHeader the Settings strip has
+// already said.
+let usersPage = null;
+let usersEmbedded = false;
+function getUsersPage() {
+  if (usersPage) return usersPage;
+  if (typeof window === 'undefined' || !window.UsersPage || !ui) return null;
+  usersPage = window.UsersPage.create({
+    el, t, ui, errText,
+    settingsLink,
+    mode: () => (usersEmbedded ? 'embedded' : 'standalone'),
+    help: () => ({ title: t('usr.info.title'), body: () => [
+      el('p', {}, t('usr.info.p1')),
+      el('p', {}, t('usr.info.p2')),
+      el('p', { class: 'muted' }, t('usr.info.p3')),
+    ] }),
+    fetchAll: async () => {
+      const [users, availability] = await Promise.all([
+        api('/users'),
+        // Local user creation with a one-time password is only offered when no
+        // SSO/LDAP is active. The server enforces the same rule (403); this
+        // decides what the screen shows.
+        api('/users/local-availability').catch(() => ({ available: false, ssoActive: false, mailerReady: false })),
+      ]);
+      return { users, availability };
+    },
+    invite: createLocalUser,
+    edit: editUser,
+    resend: resendTempPassword,
+    remove: deleteUser,
+    rerender: () => render(),
+  });
+  return usersPage;
+}
+
+views.users = async (opts) => {
+  const v = getUsersPage();
+  if (!v) return el('div', { class: 'empty error' }, t('usr.err.title'));
+  usersEmbedded = !!(opts && opts.embedded);
+  // The list is re-read per entry, so the page is rebuilt with it.
+  usersPage = null;
+  return getUsersPage().view();
 };
 
 // Invite a local user: the server generates a one-time password and emails it;
@@ -13901,132 +13640,53 @@ async function deleteUser(u) {
   catch (err) { toast(err.message, true); }
 }
 
-// Formats a plan limit for display: null/undefined means "unlimited".
-const fmtLimit = (v) => (v === null || v === undefined ? 'Unlimited' : String(v));
 // "used / max (pct%)" plus a usage bar; unlimited limits show just the count.
-function limitStat(label, used, max) {
-  if (max === null || max === undefined) return stat(label, `${used} / ∞`);
-  const pct = max > 0 ? Math.round((used / max) * 100) : 0;
-  return stat(label, el('div', {}, el('div', {}, `${used} / ${max} (${pct}%)`), usageBar(pct)));
+
+
+// ---- License (MIGRATED — see public/views/license.js)
+// Reached at /license and as the License section inside Settings; the second
+// passes mode 'embedded'.
+let licensePage = null;
+let licenseEmbedded = false;
+function getLicensePage() {
+  if (licensePage) return licensePage;
+  if (typeof window === 'undefined' || !window.LicensePage || !ui) return null;
+  licensePage = window.LicensePage.create({
+    el, t, ui, errText,
+    canWrite,
+    // The usage bar writes its own width, which a migrated view may not — so
+    // it is passed in, the way topology's graph renderer is.
+    usageBar,
+    mode: () => (licenseEmbedded ? 'embedded' : 'standalone'),
+    help: () => ({ title: t('lic.info.title'), body: () => [
+      el('p', {}, t('lic.info.p1')),
+      el('p', {}, t('lic.info.p2')),
+      el('p', { class: 'muted' }, t('lic.info.p3')),
+    ] }),
+    fetchAll: async () => {
+      const status = await api('/license/status');
+      // Plan, usage and matrix are best-effort: a server without the plan layer
+      // (or a 503 from it) must still render the status the page is named for.
+      const [plan, usage, matrix] = await Promise.all([
+        api('/license/plan').catch(() => null),
+        api('/license/usage').catch(() => null),
+        api('/license/matrix').catch(() => null),
+      ]);
+      return { status, plan, usage, matrix };
+    },
+    refresh: refreshLicense,
+    rerender: () => render(),
+  });
+  return licensePage;
 }
 
-// Human labels for the licence status badge (the raw status still drives the
-// badge colour via its CSS class). 'expired' reads as a clear, distinct state
-// rather than the catch-all 'invalid'.
-const LICENSE_STATUS_LABELS = {
-  valid: 'Valid',
-  grace: 'Valid (grace)',
-  expired: 'License expired',
-  not_yet_valid: 'Not yet valid',
-  invalid: 'Invalid',
-  unlicensed: 'Unlicensed',
-  unknown: 'Unknown',
-};
-const licenseStatusLabel = (status) => LICENSE_STATUS_LABELS[status] || status;
-
-views.license = async () => {
-  const s = await api('/license/status');
-  // Plan / usage / matrix are best-effort — a server without the plan layer (or
-  // a 503) must still render the classic status block.
-  let plan = null;
-  let usage = null;
-  let matrix = null;
-  try { plan = await api('/license/plan'); } catch { /* optional */ }
-  try { usage = await api('/license/usage'); } catch { /* optional */ }
-  try { matrix = await api('/license/matrix'); } catch { /* optional */ }
-
-  const root = el('div');
-  root.append(el('div', { class: 'section-head' },
-    el('h2', {}, 'License status'),
-    canWrite() ? el('button', { class: 'small', onclick: refreshLicense }, 'Re-validate now') : null));
-  // A misconfigured trust anchor makes every proof fail signature verification
-  // (reason: 'invalid_signature') the same way a genuinely bad proof would —
-  // "Re-validate now" then keeps returning 200 while silently sitting on
-  // whatever was last cached, which looks like "revalidation doesn't pick up
-  // license changes" rather than "verifying against the wrong public key".
-  // Say so plainly instead of letting that look like a stuck refresh.
-  const trust = s.publicKeyTrust;
-  if (trust && (trust.source === 'blocked' || !trust.configured)) {
-    root.append(el('div', { class: 'alert-banner sev-WARN' },
-      el('span', { class: 'alert-ic' }, '⚠'),
-      el('span', {},
-        el('strong', {}, 'License verification is misconfigured. '),
-        !trust.configured
-          ? 'The embedded public key in src/license/publicKey.js is still the placeholder — no proof can ever verify, so "Re-validate now" will never reflect changes made on the license server. '
-          : 'LICENSE_PUBLIC_KEY is set but ignored in production (no TRUST_ANCHOR_OVERRIDE_ACK) — verification falls back to the embedded key instead. ',
-        'See docs/licensing.md.')));
-  }
-  // Offline mode reports a different evidence trail (a local signed file with a
-  // validity window) instead of the online grace window.
-  const offline = s.mode === 'offline';
-  // The licence's own expiry, shown for both modes. null = perpetual / none.
-  const expiryText = s.validUntil ? fmtDate(s.validUntil) : (s.licensed ? 'No expiry' : '–');
-  root.append(el('div', { class: 'cards' },
-    stat('Status', el('span', { class: `badge ${s.status}` }, licenseStatusLabel(s.status))),
-    stat('Licensed', s.licensed ? 'Yes' : 'No'),
-    plan ? stat('Plan', `BlueEyes ${plan.plan_name}`) : stat('Max. agents', String(s.maxAgents)),
-    offline ? stat('Validation', 'Offline (local file)') : stat('Server ID', s.serverId || '–'),
-    stat('Last validated', fmtDate(s.verifiedAt)),
-    stat('License expires', expiryText),
-    // Grace is an online-only concept (running on a cached proof while offline).
-    offline ? null : stat('Grace expires', fmtDate(s.graceUntil)),
-  ));
-  if (offline && s.organizationId) root.append(el('p', { class: 'muted' }, `Organization: ${s.organizationId}`));
-  if (offline && !s.licensed) root.append(el('p', { class: 'muted' }, 'Restricted mode — the local licence is missing, expired or invalid. Install a valid licence file and press "Re-validate now".'));
-  if (s.reason) root.append(el('p', { class: 'muted' }, `Note: ${s.reason}`));
-
-  // ---- License overview (active plan limits + support) --------------------
-  if (plan) {
-    root.append(el('h3', {}, 'Plan overview'));
-    root.append(el('div', { class: 'cards' },
-      stat('Plan', `BlueEyes ${plan.plan_name}${plan.is_trial ? ' (trial)' : ''}`),
-      stat('Support level', plan.support_level),
-      stat('Max. agents', fmtLimit(plan.limits.max_agents)),
-      stat('Max. active test paths', fmtLimit(plan.limits.max_test_paths)),
-      stat('History retention', plan.limits.history_days === null ? 'Unlimited' : `${plan.limits.history_days} days`),
-    ));
-  }
-
-  // ---- Usage overview -----------------------------------------------------
-  if (usage) {
-    root.append(el('h3', {}, 'Usage'));
-    root.append(el('div', { class: 'cards' },
-      limitStat('Agents', usage.agents.used, usage.agents.max),
-      limitStat('Active test paths', usage.test_paths.used, usage.test_paths.max),
-      stat('History limit', usage.history_days === null ? 'Unlimited' : `${usage.history_days} days`),
-      stat('Last validation', fmtDate(usage.lastValidation)),
-    ));
-  }
-
-  // ---- Feature matrix (active plan + upgrade hints) -----------------------
-  if (matrix) {
-    root.append(el('h3', {}, 'Feature matrix'));
-    const active = matrix.activePlan;
-    const head = el('tr', {}, el('th', {}, 'Feature'),
-      ...matrix.plans.map((p) => el('th', { class: p.plan_key === active ? 'active' : '' }, p.plan_name)));
-    const body = matrix.features.map((f) => {
-      const roadmap = f.status === 'roadmap';
-      const cells = matrix.plans.map((p) => {
-        const on = p.features[f.key];
-        // A roadmap feature is priced into the plan but not built yet: show
-        // "Roadmap" where the tier would include it, never a tick.
-        const mark = on ? (roadmap ? el('span', { class: 'badge roadmap' }, 'Roadmap') : '✓') : '–';
-        return el('td', { class: p.plan_key === active ? 'active' : '' }, mark);
-      });
-      const activePlan = matrix.plans.find((p) => p.plan_key === active);
-      const entitled = activePlan && activePlan.features[f.key];
-      const label = roadmap
-        ? el('td', {}, f.label, ' ', el('span', { class: 'badge roadmap' }, 'Roadmap'))
-        : el('td', {}, f.label);
-      return el('tr', { class: (entitled && !roadmap) ? '' : 'muted' }, label, ...cells);
-    });
-    root.append(el('div', { class: 'tablewrap' },
-      el('table', { class: 'matrix' }, el('thead', {}, head), el('tbody', {}, ...body))));
-    root.append(el('p', { class: 'muted' }, 'Features not included in your plan are greyed out — contact your administrator or upgrade the licence to enable them. Rows marked ', el('span', { class: 'badge roadmap' }, 'Roadmap'), ' are planned and not available yet (tracked in ROADMAP.md).'));
-  }
-
-  root.append(el('p', { class: 'muted' }, 'License renewal is done with the provider. Once renewed, press "Re-validate now" to fetch the updated status immediately (otherwise it is checked automatically every 6 hours).'));
-  return root;
+views.license = async (opts) => {
+  const v = getLicensePage();
+  if (!v) return el('div', { class: 'empty error' }, t('lic.err.title'));
+  licenseEmbedded = !!(opts && opts.embedded);
+  // The status is re-read per entry, so the page is rebuilt with it.
+  licensePage = null;
+  return getLicensePage().view();
 };
 
 async function refreshLicense() {
@@ -15210,23 +14870,32 @@ views.guide = async () => {
 PAGE_INFO.about = {
   get hero() { return t('about.info.hero'); },
   get title() { return t('about.info.title'); },
+  // `about.lead` used to be a paragraph on the page. It is background about
+  // the product rather than the page's own subject, which is what the (?)
+  // popover is for.
   body: () => [
+    el('p', {}, t('about.lead')),
     el('p', {}, t('about.info.p1')),
     el('p', {}, t('about.info.p2')),
     el('p', { class: 'muted' }, t('about.info.p3')),
   ],
 };
 
+// The history is data (public/about.js); the screen that draws it is
+// public/views/about.js, on the contract like every other page.
 views.about = async () => {
-  if (!window.About) return el('div', { class: 'empty' }, t('about.unavailable'));
+  if (!window.AboutPage || !window.About || !ui) return el('div', { class: 'empty' }, t('about.unavailable'));
   const ver = await api('/system/version').catch(() => null);
-  return window.About.create({
+  return window.AboutPage.create({
     el,
     t,
+    ui,
+    data: window.About,
     plural: (key, n, params) => (window.I18n && window.I18n.plural ? window.I18n.plural(key, n, params) : t(key, { count: String(n), ...(params || {}) })),
     locale: window.I18n ? window.I18n.getLocale() : 'en',
     version: ver && ver.server ? ver.server : null,
     releaseDate: ver && ver.releaseDate ? ver.releaseDate : null,
+    help: () => ({ title: PAGE_INFO.about.title, body: PAGE_INFO.about.body }),
   });
 };
 
@@ -15583,9 +15252,17 @@ let currentView = 'changes';
 // (fleet ?severity, topology ?layer, delta ?changeTypes) and all of them
 // preserve window.location.pathname, so paths and filters do not collide.
 const Routes = (typeof window !== 'undefined' && window.AppRoutes) || null;
-// The screen a preview route stands in for: it has no rail entry of its own, so
-// without this the sidebar marks nothing and the breadcrumb prints a view key.
-const PREVIEW_OF = { uiPreviewChanges: 'changes', uiPreviewProbes: 'probes' };
+// A record's own page has no rail entry — it is reached from the list. Without
+// this the sidebar marks nothing (no "you are here" anywhere on the screen) and
+// the crumb prints the raw view key at the reader: "event / #11".
+const DETAIL_OF = {
+  agent: 'agents', location: 'locations', event: 'events', cluster: 'clusters',
+};
+// Three Settings sections that also answer at an address of their own
+// (/users, /license, /test-settings). The rail has no entry for them — they are
+// reached through Settings — so the sidebar marked nothing and the crumb
+// printed the view key: a bare lowercase "users" at the reader.
+const SECTION_OF = { users: 'settings', license: 'settings', screening: 'settings' };
 // A screen with no rail entry at all still needs a name in the crumb, or the
 // topbar prints a view key at the reader.
 const CRUMB_ONLY = { kitchenSink: 'route.crumb.kitchenSink' };
@@ -15608,7 +15285,9 @@ function routeTabFor(view) {
     case 'serviceAssurance': return serviceAssuranceTab;
     case 'settings': return settingsTab;
     case 'guide': return guideTrack;
+    case 'nics': return nicsTab;
     case 'reporting': return reportingState.section;
+    case 'docs': return docsTopic;
     default: return null;
   }
 }
@@ -15628,7 +15307,9 @@ function setRouteTab(view, tab) {
   else if (view === 'serviceAssurance') serviceAssuranceTab = tab;
   else if (view === 'settings') settingsTab = tab;
   else if (view === 'guide') guideTrack = tab;
+  else if (view === 'nics') nicsTab = tab;
   else if (view === 'reporting') reportingState.section = tab;
+  else if (view === 'docs') docsTopic = tab;
 }
 function setRouteId(view, id) {
   if (id == null) return;
@@ -15698,7 +15379,7 @@ function syncCrumb() {
     host.replaceChildren(el('span', { class: 'crumb-here' }, t(CRUMB_ONLY[currentView])));
     return;
   }
-  const marks = PREVIEW_OF[currentView] || currentView;
+  const marks = DETAIL_OF[currentView] || SECTION_OF[currentView] || currentView;
   const tab = routeTabFor(currentView);
   const btn = [...document.querySelectorAll(NAV_BUTTONS)].find((b) => b.dataset.view === marks
     && (!b.dataset.saTab || b.dataset.saTab === tab)
@@ -15711,8 +15392,8 @@ function syncCrumb() {
   parts.push(btn ? btn.textContent.trim() : (VIEW_LABELS[currentView] || currentView));
   // A sub-page the rail does not name: the open record, or a tab of its own.
   const id = routeIdFor(currentView);
-  if (PREVIEW_OF[currentView]) parts.push(t('uip.crumb'));
-  else if (id != null) parts.push(`#${id}`);
+  if (id != null) parts.push(`#${id}`);
+  else if (SECTION_OF[currentView]) parts.push(settingsLabel(currentView));
   else if (tab && !(btn && (btn.dataset.saTab || btn.dataset.guide))) parts.push(crumbTabLabel(currentView, tab));
 
   const kids = [];
@@ -15730,6 +15411,10 @@ function crumbTabLabel(view, tab) {
   // Settings' twenty-two section labels already live in SETTINGS_GROUPS, so
   // they are read from there rather than copied into both catalogues.
   if (view === 'settings') return settingsLabel(tab);
+  // Same for the twenty-three article titles: DOCS already carries them, and a
+  // breadcrumb reading "Documentation / agent-offline" names the id, not the
+  // article.
+  if (view === 'docs') return docsLabel(tab);
   const key = `route.tab.${view}.${tab}`;
   const label = t(key);
   return label === key ? tab : label;
@@ -15792,16 +15477,6 @@ const ui = (typeof window !== 'undefined' && window.Ui)
   })
   : null;
 
-const uiPreview = (typeof window !== 'undefined' && window.UiPreview && ui)
-  ? window.UiPreview.create({ el, api, t, plural, errText, openAgent, gotoView, ui })
-  : null;
-views.uiPreviewChanges = async () => (uiPreview
-  ? uiPreview.changes()
-  : el('div', { class: 'empty' }, t('uip.unavailable')));
-views.uiPreviewProbes = async () => (uiPreview
-  ? uiPreview.probes()
-  : el('div', { class: 'empty' }, t('uip.unavailable')));
-
 // ---- Component reference ----------------------------------------------------
 // /ui-kitchen-sink, admin only. Every component in every state, built from the
 // same ui.js a migrated screen uses. Stays after the migration: it is the visual
@@ -15811,7 +15486,7 @@ const kitchenSink = (typeof window !== 'undefined' && window.KitchenSink && ui)
   : null;
 views.kitchenSink = async () => (kitchenSink
   ? kitchenSink.view()
-  : el('div', { class: 'empty' }, t('uip.unavailable')));
+  : el('div', { class: 'empty' }, t('ks.unavailable')));
 
 // Every control that navigates: the sidebar rail, the rail's foot (Documentation)
 // and the account menu (About). One selector, so a new home for a nav entry is
@@ -15885,10 +15560,9 @@ async function render({ silent = false } = {}) {
   maybePromptSigningKey();
 
   // Stop the overview poller when leaving that view (it restarts itself when shown).
-  // The preview screens own their drawer, popover and row menu; they are
-  // appended to <body>, so leaving the view does not remove them.
-  if (ui && currentView !== 'uiPreviewChanges' && currentView !== 'uiPreviewProbes'
-    && currentView !== 'kitchenSink') ui.closeOverlays();
+  // The kitchen sink owns its drawer, popover and row menu; they are appended
+  // to <body>, so leaving the view does not remove them.
+  if (ui && currentView !== 'kitchenSink') ui.closeOverlays();
   if (currentView !== 'overview') stopOverview();
   if (currentView !== 'probes') stopProbes();
   if (currentView !== 'interfaces') stopIfaces();
@@ -15908,7 +15582,7 @@ async function render({ silent = false } = {}) {
   for (const b of document.querySelectorAll(NAV_BUTTONS)) {
     // Several entries can share one data-view when they deep-link to different
     // sub-tabs; the sub-tab is what tells them apart.
-    const marks = PREVIEW_OF[currentView] || currentView;
+    const marks = DETAIL_OF[currentView] || SECTION_OF[currentView] || currentView;
     const active = b.dataset.view === marks
       && (!b.dataset.saTab || b.dataset.saTab === serviceAssuranceTab)
       && (!b.dataset.guide || b.dataset.guide === guideTrack);
@@ -15935,8 +15609,7 @@ async function render({ silent = false } = {}) {
   if (!silent) view.replaceChildren(el('div', { class: 'empty' }, 'Loading…'));
   try {
     const node = await views[currentView]();
-    const h = hero(currentView);
-    view.replaceChildren(...(h ? [h, node] : [node]));
+    view.replaceChildren(node);
     // On user navigation (not the silent auto-refresh) move focus to the new
     // content, so keyboard/screen-reader users land on it instead of being left
     // on the nav button. #view has tabindex="-1" to be programmatically focusable.

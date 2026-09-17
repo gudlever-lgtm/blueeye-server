@@ -45,6 +45,13 @@
           day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
         });
       },
+      // A calendar date, no clock: a licence expiry, a release date — anything
+      // where a minute would read as precision the value does not have.
+      date: function (value) {
+        var d = asDate(value);
+        if (!d) return '—';
+        return d.toLocaleDateString(tag(), { year: 'numeric', month: '2-digit', day: '2-digit' });
+      },
       // Clock only: a series of readings inside one day.
       clock: function (value) {
         var d = asDate(value);

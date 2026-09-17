@@ -76,12 +76,12 @@ test('no entry claims a version newer than this build', () => {
 });
 
 test('every area label the page can print exists in BOTH locales', () => {
-  const keys = ['about.filter.all'].concat(About.AREAS.map((a) => About.AREA_KEYS[a]));
+  const keys = About.AREAS.map((a) => About.AREA_KEYS[a]);
   for (const key of keys) {
     assert.ok(key, 'an area has no catalogue key');
     for (const locale of I18n.LOCALES) assert.ok(I18n.has(key, locale), `${key} missing in ${locale}`);
   }
-  // Every area is actually used; an empty filter chip is a dead control.
+  // Every area is actually used; an empty stat card is a dead control.
   for (const area of About.AREAS) {
     assert.ok(About.RELEASES.some((e) => e.area === area), `no entry in area ${area}`);
   }
@@ -153,32 +153,48 @@ test('the account menu opens About, and the menu closes behind it', async (t) =>
   const { doc, errors } = await boot(t, { 'GET /system/version': { server: pkg.version, releaseDate: pkg.releaseDate } });
   await openAbout(doc);
   assert.deepEqual(errors, []);
-  const page = doc.querySelector('#view .about');
-  assert.ok(page, 'the About page did not render');
+  const page = doc.querySelector('#view .ui.ui-page.about');
+  assert.ok(page, 'the About page is not on the contract');
+  assert.equal(doc.querySelectorAll('#view .section-head').length, 0, 'the old heading row survived');
   assert.ok(doc.querySelector('#user-menu-panel').classList.contains('hidden'), 'the account menu stayed open over the page it opened');
   assert.equal(doc.querySelector('#user-menu-trigger').getAttribute('aria-expanded'), 'false');
   assert.equal(doc.querySelectorAll('#view .about-item').length, About.RELEASES.length);
-  assert.equal(doc.querySelectorAll('#view .about-month').length, About.byMonth(About.RELEASES).length);
-  assert.match(doc.querySelector('#view .about-build-ver').textContent, new RegExp(`v${pkg.version.replace(/\./g, '\\.')}`));
-  assert.ok(doc.querySelector('#view .about-build').textContent.includes(pkg.releaseDate), 'the release date is not shown');
-  // The page carries its own help hero, like every other view.
-  const hero = doc.querySelector('#view .hero');
-  assert.ok(hero, 'no help hero for the About page');
-  assert.equal(hero.querySelector('.hero-text').textContent, I18n.STRINGS.en['about.info.hero']);
+  // A month is a Panel now, titled with the month.
+  assert.equal(doc.querySelectorAll('#view .panel-ui').length, About.byMonth(About.RELEASES).length);
+  // The build this host runs leads the page instead of sitting in a box of its own.
+  const lead = doc.querySelector('#view .page-head p');
+  assert.match(lead.textContent, new RegExp(`v${pkg.version.replace(/\./g, '\\.')}`));
+  assert.ok(lead.textContent.includes(pkg.releaseDate), 'the release date is not shown');
+  // The help is behind (?), not in a banner over the page.
+  assert.equal(doc.querySelectorAll('#view .hero').length, 0, 'the info banner survived');
+  assert.ok(doc.querySelector('#view .page-head .help-btn'), 'no (?) help control');
 });
 
-test('a filter chip narrows the list to one area and the count follows', async (t) => {
+test('a stat card narrows the list to one area, and clicking it again clears', async (t) => {
   const { doc } = await boot(t, { 'GET /system/version': { server: pkg.version, releaseDate: pkg.releaseDate } });
   await openAbout(doc);
-  const chips = [...doc.querySelectorAll('#view .about-filters .chip')];
-  assert.equal(chips.length, About.AREAS.length + 1, 'one chip per area, plus "everything"');
-  const idx = About.AREAS.indexOf('assurance') + 1;
-  chips[idx].click();
-  await tick(30);
+  const cards = () => [...doc.querySelectorAll('#view .statstrip .stat-card')];
+  // One card per area — the "Everything" chip went: clicking the active card
+  // clears the filter, which is the gesture every other strip uses.
+  assert.equal(cards().length, About.AREAS.length);
   const expected = About.RELEASES.filter((e) => e.area === 'assurance').length;
+  const idx = About.AREAS.indexOf('assurance');
+  assert.equal(cards()[idx].querySelector('.stat-n').textContent, String(expected));
+
+  cards()[idx].click();
+  await tick(30);
   assert.equal(doc.querySelectorAll('#view .about-item').length, expected);
-  assert.equal(doc.querySelector('#view .about-filters .chip.active').getAttribute('aria-pressed'), 'true');
-  assert.match(doc.querySelector('#view .about-count').textContent, new RegExp(String(expected)));
+  assert.equal(cards()[idx].getAttribute('aria-pressed'), 'true');
+  assert.equal(cards().filter((c) => c.getAttribute('aria-pressed') === 'true').length, 1);
+  // The count moved onto the month panel it belongs to.
+  const notes = [...doc.querySelectorAll('#view .panel-head .meta-xs')];
+  assert.ok(notes.length, 'a month panel carries no count');
+  assert.equal(notes.reduce((n, x) => n + Number(x.textContent.replace(/\D+/g, '')), 0), expected);
+
+  cards()[idx].click();
+  await tick(30);
+  assert.equal(doc.querySelectorAll('#view .about-item').length, About.RELEASES.length, 'the filter did not clear');
+  assert.equal(cards().filter((c) => c.getAttribute('aria-pressed') === 'true').length, 0);
 });
 
 // The version lookup is the garnish. 403 (no role), 404 (an endpoint that
@@ -189,7 +205,7 @@ for (const status of [403, 404, 500]) {
     await openAbout(doc);
     assert.deepEqual(errors, []);
     assert.equal(doc.querySelectorAll('#view .about-item').length, About.RELEASES.length, `${status} took the history down`);
-    assert.equal(doc.querySelector('#view .about-build-ver').textContent, '—', `${status}: a version was invented`);
+    assert.match(doc.querySelector('#view .page-head p').textContent, /·\s*—\s*·/, `${status}: a version was invented`);
   });
 }
 
@@ -208,7 +224,7 @@ test('the page follows the language switch', async (t) => {
   assert.equal(doc.querySelector('#user-menu-panel button[data-view="about"] [data-i18n]').textContent, I18n.STRINGS.da['nav.about']);
   // The page chrome follows too — the history is data, the frame around it is
   // the catalogue, and half a translated page is the bug worth catching.
-  assert.equal(doc.querySelector('#view .about-filters .chip').textContent.replace(/\d+$/, '').trim(), I18n.STRINGS.da['about.filter.all']);
-  assert.equal(doc.querySelector('#view .section-head h2').textContent, I18n.STRINGS.da['about.title']);
-  assert.match(doc.querySelector('#view .about-month').textContent.toLowerCase(), /september 2026/);
+  assert.equal(doc.querySelector('#view .statstrip .stat-l').textContent, I18n.STRINGS.da[About.AREA_KEYS[About.AREAS[0]]]);
+  assert.equal(doc.querySelector('#view .page-head h1').textContent.replace(/\?$/, ''), I18n.STRINGS.da['about.title']);
+  assert.match(doc.querySelector('#view .panel-head h2').textContent.toLowerCase(), /september 2026/);
 });

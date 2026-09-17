@@ -1135,3 +1135,31 @@ section's slot, with the section still selected, so Retry has something to
 retry.
 
 **Not migrated, passed in whole:** all twenty-two section bodies.
+
+
+**Login and the forced password change** are the last two screens of phase 3,
+and the only two that are static markup in `index.html` rather than a view
+module. `render()` never touches them, so — like the sidebar — they carry
+`data-i18n` attributes that `applyStaticTranslations()` walks.
+
+They were `.login` + `.card`: a 340px box with `<label>Email <input></label>`
+inside it, one unstyled `<button>`, and `<p class="error">`. They are on the
+contract's tokens and controls now, under a `.ui.ui-auth` scope with an
+`.auth-card` — the two labelled fields are `.f`, the submit is one
+`.btn-primary`, and the error is the same `.field-error` a form field uses,
+with `role="alert"` and `:empty { display: none }` so it holds no line until
+something goes wrong.
+
+**The forced-change screen read both languages at once.** Every line of it was
+hardcoded `Ny adgangskode / New password` — Danish, a slash, English — because
+it predates the translation layer and nobody wanted to pick. It goes through
+`t()` now, and a test walks both screens asserting that no visible string is
+hardcoded and that neither carries ` / `.
+
+The SSO sign-in options were `.sso-button`, a hand-rolled link that looked
+almost like a button. They are `a.btn.btn-secondary`, and `.ui a.btn` drops the
+underline the global anchor rule would otherwise put back.
+
+**Not a page template.** These two are on the contract's components but on no
+page template: there is no shell around them, and a sidebar the reader cannot
+use would be a lie.

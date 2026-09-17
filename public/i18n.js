@@ -3150,6 +3150,24 @@
       'set.info.p1': 'Twenty-two sections in five groups: who may do what, how detection and alerting behave, what data is kept and for how long, how the system runs itself, and the two that are yours alone.',
       'set.info.p2': 'Each section says whether your licence covers it. A section outside the licence is still readable — you can see what it would do — but it will not run.',
       'set.info.p3': 'Almost everything here is admin-only. Appearance and License are the exceptions: they are per-account, so everyone has them.',
+
+      // Auth — the login and forced-password-change screens (index.html)
+      'auth.product': 'Network Resilience System',
+      'auth.email': 'Email',
+      'auth.password': 'Password',
+      'auth.login': 'Log in',
+      'auth.logout': 'Log out',
+      'auth.fc.lead': 'Choose a new password to continue.',
+      'auth.fc.current': 'Current (one-time) password',
+      'auth.fc.new': 'New password',
+      'auth.fc.confirm': 'Repeat new password',
+      'auth.fc.submit': 'Change password',
+      'auth.fc.mismatch': 'The two new passwords are not the same.',
+      'auth.fc.done': 'Password changed',
+      'auth.sso.or': 'or',
+      'auth.sso.oidc': 'Sign in with SSO (OIDC)',
+      'auth.sso.saml': 'Sign in with SSO (SAML)',
+      'auth.sso.failed': 'Single sign-on failed: {message}',
     },
 
     da: {
@@ -6278,6 +6296,24 @@
       'set.info.p1': 'To og tyve afsnit i fem grupper: hvem må hvad, hvordan detektion og alarmering opfører sig, hvilke data der gemmes og hvor længe, hvordan systemet kører sig selv, og de to der kun er dine.',
       'set.info.p2': 'Hvert afsnit siger, om din licens dækker det. Et afsnit uden for licensen kan stadig læses — du kan se hvad det ville gøre — men det kører ikke.',
       'set.info.p3': 'Naesten alt her er kun for administratorer. Udseende og Licens er undtagelserne: de er per konto, så alle har dem.',
+
+      // Auth — the login and forced-password-change screens (index.html)
+      'auth.product': 'Network Resilience System',
+      'auth.email': 'E-mail',
+      'auth.password': 'Adgangskode',
+      'auth.login': 'Log ind',
+      'auth.logout': 'Log ud',
+      'auth.fc.lead': 'Vælg en ny adgangskode for at fortsætte.',
+      'auth.fc.current': 'Nuværende (engangs) adgangskode',
+      'auth.fc.new': 'Ny adgangskode',
+      'auth.fc.confirm': 'Gentag ny adgangskode',
+      'auth.fc.submit': 'Skift adgangskode',
+      'auth.fc.mismatch': 'De to nye adgangskoder er ikke ens.',
+      'auth.fc.done': 'Adgangskode skiftet',
+      'auth.sso.or': 'eller',
+      'auth.sso.oidc': 'Log ind med SSO (OIDC)',
+      'auth.sso.saml': 'Log ind med SSO (SAML)',
+      'auth.sso.failed': 'Single sign-on mislykkedes: {message}',
     },
   };
 

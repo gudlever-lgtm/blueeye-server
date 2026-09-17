@@ -15741,7 +15741,7 @@ $('#force-change-form').addEventListener('submit', async (e) => {
   const currentPassword = $('#fc-current').value;
   const newPassword = $('#fc-new').value;
   const confirm = $('#fc-confirm').value;
-  if (newPassword !== confirm) { errEl.textContent = 'De to nye adgangskoder er ikke ens. / New passwords do not match.'; return; }
+  if (newPassword !== confirm) { errEl.textContent = t('auth.fc.mismatch'); return; }
   try {
     const data = await api('/auth/change-password', { method: 'POST', body: { currentPassword, newPassword } });
     token = data.token;
@@ -15751,7 +15751,7 @@ $('#force-change-form').addEventListener('submit', async (e) => {
     localStorage.setItem(ROLE_KEY, role);
     localStorage.setItem(EMAIL_KEY, email);
     $('#force-change-form').reset();
-    toast('Adgangskode skiftet / Password changed');
+    toast(t('auth.fc.done'));
     render();
   } catch (err) {
     errEl.textContent = errText(err);
@@ -15765,16 +15765,16 @@ $('#fc-logout').addEventListener('click', () => logout());
 async function renderSsoOptions() {
   const host = $('#sso-options');
   if (!host) return;
-  if (ssoLoginError) $('#login-error').textContent = `Single sign-on failed: ${ssoLoginError}`;
+  if (ssoLoginError) $('#login-error').textContent = t('auth.sso.failed', { message: ssoLoginError });
   let sso = null;
   try { sso = await (await fetch('/auth/sso')).json(); } catch { sso = null; }
   const methods = [];
-  if (sso && sso.oidc && sso.oidc.enabled) methods.push({ label: 'Sign in with SSO (OIDC)', url: sso.oidc.loginUrl });
-  if (sso && sso.saml && sso.saml.enabled) methods.push({ label: 'Sign in with SSO (SAML)', url: sso.saml.loginUrl });
+  if (sso && sso.oidc && sso.oidc.enabled) methods.push({ label: t('auth.sso.oidc'), url: sso.oidc.loginUrl });
+  if (sso && sso.saml && sso.saml.enabled) methods.push({ label: t('auth.sso.saml'), url: sso.saml.loginUrl });
   if (!methods.length) { host.classList.add('hidden'); return; }
   host.replaceChildren(
-    el('div', { class: 'sso-divider' }, el('span', {}, 'or')),
-    ...methods.map((m) => el('a', { class: 'sso-button', href: m.url }, m.label)));
+    el('div', { class: 'sso-divider' }, el('span', {}, t('auth.sso.or'))),
+    ...methods.map((m) => el('a', { class: 'btn btn-secondary auth-submit', href: m.url }, m.label)));
   host.classList.remove('hidden');
 }
 renderSsoOptions();

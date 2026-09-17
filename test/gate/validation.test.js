@@ -306,6 +306,57 @@ test('testPackageValidation: schedule floor/ceiling, item cap, target modes', ()
   assert.ok(rejected(v.validateTestPackageInput({ ...base, items: [] })));
   assert.ok(rejected(v.validateTestPackageInput({ ...base, items: Array.from({ length: v.MAX_ITEMS + 1 }, () => base.items[0]) })));
   assert.ok(rejected(v.validateTestPackageInput({ ...base, items: [{ type: 'shell', cmd: 'id' }] })));
+  // A calendar recurrence is the other kind of schedule, and it takes over from
+  // the interval rather than sitting beside it.
+  const daily = { period: 'daily', every: 6, at: '08:00' };
+  const withSpec = v.validateTestPackageInput({ ...base, schedule_ms: 60_000, schedule_spec: daily });
+  assert.deepEqual(withSpec.value.schedule_spec, daily);
+  assert.equal(withSpec.value.schedule_ms, 0, 'a spec must not leave an interval running beside it');
+  assert.ok(rejected(v.validateTestPackageInput({ ...base, schedule_spec: { period: 'fortnightly' } })));
+});
+
+test('connectionTestValidation: the target is a probe target, the checks are a closed set, a run is bounded', () => {
+  const { validateConnectionTestRun, validateConnectionTestSchedule, MAX_ROUNDS } = require('../../src/validation/connectionTestValidation');
+  const { CHECK_IDS } = require('../../src/connectionTest/checks');
+  const { MAX_ITEMS } = require('../../src/validation/testPackageValidation');
+  assert.ok(MAX_ROUNDS <= 20);
+
+  const base = { agentId: 1, host: 'example.com', checks: ['ping'] };
+  assert.deepEqual(validateConnectionTestRun(base).errors, undefined);
+  // The host reaches an agent's argv, so it is held to the probe-target rule.
+  for (const bad of ['-rf', '--flood', 'a b', 'a;rm -rf /', '$(whoami)', '`id`', 'a|b', 'x'.repeat(300), '', '   ']) {
+    assert.ok(errorsOf(validateConnectionTestRun({ ...base, host: bad })).includes('host'), bad);
+  }
+  for (const ok of ['10.0.0.1', 'mail.example.com', 'fe80::1']) {
+    assert.deepEqual(validateConnectionTestRun({ ...base, host: ok }).errors, undefined, ok);
+  }
+  // Checks are ids from the catalogue and nothing else — never a free string
+  // that could become a probe type.
+  assert.ok(errorsOf(validateConnectionTestRun({ ...base, checks: ['ping', 'shell'] })).includes('checks'));
+  assert.ok(errorsOf(validateConnectionTestRun({ ...base, checks: [] })).includes('checks'));
+  assert.ok(errorsOf(validateConnectionTestRun({ ...base, checks: 'ping' })).includes('checks'));
+  assert.deepEqual(validateConnectionTestRun({ ...base, checks: CHECK_IDS }).errors, undefined);
+  assert.ok(errorsOf(validateConnectionTestRun({ ...base, agentId: 0 })).includes('agentId'));
+
+  // A schedule adds a recurrence, and one scheduled run may not exceed what a
+  // test package can carry.
+  const rec = { period: 'daily', every: 6, at: '08:00' };
+  assert.deepEqual(validateConnectionTestSchedule({ ...base, recurrence: rec }).errors, undefined);
+  assert.ok(errorsOf(validateConnectionTestSchedule(base)).includes('recurrence'));
+  assert.ok(errorsOf(validateConnectionTestSchedule({ ...base, recurrence: { period: 'hourly', every: 999 } })).includes('recurrence'));
+  assert.ok(errorsOf(validateConnectionTestSchedule({ ...base, checks: CHECK_IDS.slice(0, 5), runs: MAX_ITEMS, recurrence: rec })).includes('runs'));
+  assert.ok(errorsOf(validateConnectionTestSchedule({ ...base, runs: 0, recurrence: rec })).includes('runs'));
+});
+
+test('recurrence: a schedule that cannot be parsed is never due, and none may burst the agents', () => {
+  const { validateRecurrence, nextRunAt, MIN_SPACING_MS } = require('../../src/schedule/recurrence');
+  assert.ok(MIN_SPACING_MS >= 5 * 60 * 1000);
+  for (const bad of [undefined, null, 'daily', 42, [], {}, { period: 'yearly' }, { period: 'hourly', every: 61 }]) {
+    assert.ok(rejected(validateRecurrence(bad)), JSON.stringify(bad));
+    assert.equal(nextRunAt(bad, Date.now()), null, JSON.stringify(bad));
+  }
+  const next = nextRunAt({ period: 'daily', every: 1, at: '08:00' }, Date.now());
+  assert.ok(next > Date.now(), 'the next run is always in the future');
 });
 
 test('transactionValidation: type enum, name required, agent assignment is an id array', () => {

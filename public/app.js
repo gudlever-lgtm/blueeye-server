@@ -418,6 +418,14 @@ function featureEnabled(name) {
 function t(key, params) {
   return (window.I18n && window.I18n.t) ? window.I18n.t(key, params) : String(key);
 }
+// Counted lines pick their own singular/plural form from `key.one` / `key.other`
+// — "1 test" and "3 tests" are different sentences, and a catalogue that only
+// carries the plural gets the singular wrong in every language.
+function plural(key, n, params) {
+  return (window.I18n && window.I18n.plural)
+    ? window.I18n.plural(key, n, params)
+    : t(key, { count: String(n), ...(params || {}) });
+}
 function relTime(value) {
   return (window.I18n && window.I18n.relativeTime) ? window.I18n.relativeTime(value) : String(value || '');
 }
@@ -1072,6 +1080,23 @@ const PAGE_INFO = {
       el('p', { class: 'muted' }, 'To run the same probes on a schedule across many agents, use ', viewLink('tests'), '; probe results also drive the health verdict on ', viewLink('fleet', 'Overview'), '. Metadata only: targets, timings and content verdicts — never packet or response contents.'),
     ],
   },
+  connectionTest: {
+    hero: 'One address, the whole battery: type an IP or a DNS name and run every check at once — resolution, ICMP, the ports, the path and the packet size — once, a number of times, or on a repeat.',
+    title: 'Connection test',
+    body: () => [
+      el('div', { class: 'callout' },
+        el('strong', {}, 'Probe · Connection test · Test package: '),
+        el('span', {}, 'A ', viewLink('probes', 'probe'), ' answers one question about one target. A connection test asks all of them at once, from one agent, against one address — the screen you reach for when somebody says “I cannot reach X”. A ', viewLink('tests', 'test package'), ' is the same thing saved: named, aimed at many agents, and repeating.')),
+      el('p', {}, 'Type the address, press Run, and each selected check is pushed to the agent in one request. The number in the button is how many ROUNDS to run: every selected check, that many times, one round after the other — useful when a fault comes and goes and a single sample proves nothing.'),
+      el('h4', {}, 'What gets run'),
+      el('p', {}, 'The arrow opens the list. Everything the agent can run is selected by default; clear what you do not want. Two rows are always disabled: ', el('strong', {}, 'reverse DNS'), ' and the ', el('strong', {}, 'TLS certificate'), ' check are catalogue entries the agent cannot run yet, and they are shown rather than hidden so the list says what a connection test will cover. A ', el('strong', {}, 'DNS lookup'), ' is disabled when the target is an IP address — there is nothing to resolve, and a green tick for a question nobody asked is worse than no row at all.'),
+      el('h4', {}, 'Stop'),
+      el('p', {}, 'Stop ends the run: no further rounds are sent. A check already handed to the agent finishes on the agent — nothing can call it back — so its result may still arrive a moment later.'),
+      el('h4', {}, 'Repeat'),
+      el('p', {}, 'Repeat saves the same test as a scheduled ', viewLink('tests', 'test package'), ': a period (hourly / daily / weekly / monthly), how often to repeat inside that period, when it starts, and how many times the battery runs per scheduled run. The dialog writes the schedule out as a sentence before you save it. Times are the server\u2019s clock. Edit or delete it afterwards on the Test packages tab — closing this page does not stop it.'),
+      el('p', { class: 'muted' }, 'Every check is an ordinary probe, so the full result — path map, per-hop measurement, history — opens on the Run-a-probe tab, and the same results drive the health verdict on ', viewLink('fleet', 'Overview'), ' and availability in ', viewLink('reporting', 'Reporting'), '. Metadata only: targets and timings, never packet contents.'),
+    ],
+  },
   flows: {
     hero: 'Inspect conversations: who talks to whom, on which ports, and who is scanning. Bidirectional mode splits ingress/egress; Map mode draws the traffic as colored directional arrows on a world map.',
     title: 'Flows — conversations, bidirectional inspector & traffic map',
@@ -1228,6 +1253,7 @@ function hero(viewKey) {
   // Probes & Tests is one view with two sub-tabs; show the matching help for each.
   let info = PAGE_INFO[viewKey];
   if (viewKey === 'probes' && probesTab === 'packages') info = PAGE_INFO.tests;
+  if (viewKey === 'probes' && probesTab === 'connection') info = PAGE_INFO.connectionTest;
   if (!info) return null;
   return el('div', { class: 'hero' },
     el('div', { class: 'hero-text' }, info.hero),
@@ -8061,16 +8087,406 @@ views.interfaces = async () => {
 // (probeRunnerView) and reusable scheduled packages (testPackagesView). probesTab
 // persists the active sub-tab across re-renders; gotoView('tests') deep-links here
 // onto the packages tab (the old standalone Tests page).
-let probesTab = 'run'; // 'run' | 'packages'
+let probesTab = 'run'; // 'run' | 'connection' | 'packages'
 views.probes = async () => {
   const root = el('div');
   const tab = (key, label) => el('button', { class: `small ghost${probesTab === key ? ' active' : ''}`,
     onclick: () => { if (probesTab === key) return; if (key !== 'run') stopProbes(); probesTab = key; render(); } }, label);
   root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Probes & Tests'),
-    el('div', { class: 'subtabs' }, tab('run', 'Run a probe'), tab('packages', 'Test packages'))));
-  root.append(await (probesTab === 'packages' ? testPackagesView() : probeRunnerView()));
+    el('div', { class: 'subtabs' }, tab('run', 'Run a probe'), tab('connection', t('ct.tab')), tab('packages', 'Test packages'))));
+  const sub = probesTab === 'packages' ? testPackagesView
+    : (probesTab === 'connection' ? connectionTestView : probeRunnerView);
+  root.append(await sub());
   return root;
 };
+
+// ---- Connection test ------------------------------------------------------
+// One address, the whole battery. The Run-a-probe tab above asks one question
+// at a time; this asks all of them at once — type an IP or a DNS name, press
+// Run, and every selected check is pushed to the agent in one request.
+//
+// The catalogue is the SERVER's (GET /api/connection-test/checks): what exists,
+// what the agent can actually run, and what applies to this particular target
+// (a DNS lookup of 1.1.1.1 answers nothing). The screen renders what it is
+// served rather than keeping its own list, so a check offered here is always a
+// check the server can dispatch.
+//
+// Everything a run produces is an ordinary probe result, so the full detail —
+// path map, per-hop measurement, history — opens on the Run-a-probe tab and
+// feeds fleet health exactly as a hand-run probe does.
+const CT_MAX_ROUNDS = 20;
+// How long the agent is given to report back, and how often we look. A probe
+// round-trips in a second or two; a traceroute takes longer, so the last look
+// is late enough to catch it without the screen sitting still in between.
+const CT_POLL_MS = [2200, 4200, 7000];
+
+async function connectionTestView() {
+  const root = el('div', { class: 'probes connection-test' });
+  root.append(el('div', { class: 'muted', style: 'margin:2px 0 10px' }, t('ct.lead')));
+
+  const agents = await api('/agents').catch(() => []);
+  if (!agents.length) { root.append(el('div', { class: 'empty' }, t('ct.noAgents'))); return root; }
+
+  // Declared up here because the list rendering reads them: the Run button is
+  // disabled while a run is in flight as much as when nothing is selected.
+  let running = false;
+  let stopRequested = false;
+  let catalogue = [];
+  try { catalogue = (await api('/api/connection-test/checks')).checks || []; }
+  catch (e) { root.append(el('div', { class: 'error' }, errText(e))); return root; }
+
+  const agentSel = el('select', {}, ...agents.map((a) => el('option', { value: String(a.id) }, a.display_name || a.hostname)));
+  const target = el('input', { type: 'text', placeholder: t('ct.targetPlaceholder'), spellcheck: 'false' });
+  const countInput = el('input', { type: 'number', min: '1', max: String(CT_MAX_ROUNDS), value: '1', class: 'run-count' });
+  const runBtn = el('button', { class: 'small run-btn' });
+  const stopBtn = el('button', { class: 'small ghost', disabled: 'disabled' }, t('ct.stop'));
+  const repeatBtn = el('button', { class: 'small ghost' }, t('ct.repeat'));
+  const status = el('span', { class: 'muted small' });
+  const scheduleChip = el('span', { class: 'ct-chip', hidden: true });
+
+  // The run count lives INSIDE the button — "Run [3] tests" is one control, and
+  // the label follows the number so it never reads "Run 3 test".
+  function syncRunLabel() {
+    const n = Math.max(1, Math.min(CT_MAX_ROUNDS, Number(countInput.value) || 1));
+    runBtn.replaceChildren(t('ct.run.prefix'), ' ', countInput, ' ', plural('ct.run.suffix', n));
+  }
+  countInput.addEventListener('input', syncRunLabel);
+  // The number field is inside the button, so a click on it would also fire the
+  // button. Stop that here rather than moving the field out of the label.
+  countInput.addEventListener('click', (e) => e.stopPropagation());
+  syncRunLabel();
+
+  // --- the check list ------------------------------------------------------
+  // Everything the agent can run starts selected, which is what an operator who
+  // typed one address and pressed Run expects. A check that cannot run is shown
+  // disabled with the reason, never quietly dropped.
+  const selected = new Set(catalogue.filter((c) => c.available).map((c) => c.id));
+  const rows = new Map(); // id -> { node, state }
+  const listBody = el('div', { class: 'ct-rows' });
+  const selectAll = el('input', { type: 'checkbox', checked: 'checked' });
+  const counter = el('span', { class: 'muted small' });
+  const listWrap = el('div', { class: 'ct-list', hidden: true },
+    el('div', { class: 'ct-list-head' },
+      el('label', { class: 'inline' }, selectAll, ' ', t('ct.selectAll')),
+      el('span', { class: 'spacer' }),
+      el('span', { class: 'muted small' }, t('ct.defaultOn'))),
+    listBody);
+
+  const toggle = el('button', { class: 'small ghost ct-toggle', 'aria-expanded': 'false' },
+    el('span', { class: 'ct-arrow' }, '▼'), ' ', t('ct.toggle'));
+  toggle.addEventListener('click', () => {
+    const open = toggle.getAttribute('aria-expanded') === 'true';
+    toggle.setAttribute('aria-expanded', String(!open));
+    listWrap.hidden = open;
+  });
+
+  function why(c) {
+    if (!c.available) return t('ct.why.notSupported');
+    if (!c.applies) return t('ct.why.notApplicable');
+    return null;
+  }
+
+  function setState(id, kind, label) {
+    const row = rows.get(id);
+    if (!row) return;
+    row.state.className = `ct-state ${kind}`;
+    row.state.textContent = label;
+  }
+
+  function renderRows() {
+    rows.clear();
+    listBody.replaceChildren(...catalogue.map((c) => {
+      const blocked = why(c);
+      const cb = el('input', {
+        type: 'checkbox',
+        ...(selected.has(c.id) && !blocked ? { checked: 'checked' } : {}),
+        ...(blocked ? { disabled: 'disabled' } : {}),
+      });
+      cb.addEventListener('change', () => {
+        if (cb.checked) selected.add(c.id); else selected.delete(c.id);
+        syncCounter();
+      });
+      const state = el('span', { class: 'ct-state' }, '–');
+      const node = el('div', { class: `ct-row${blocked ? ' blocked' : ''}` },
+        cb,
+        el('div', {},
+          el('div', { class: 'ct-name' }, t(`ct.check.${c.id}`),
+            c.port ? el('span', { class: 'ct-param' }, `port ${c.port}`) : null),
+          el('div', { class: 'ct-desc' }, blocked || t(`ct.check.${c.id}.desc`))),
+        state);
+      rows.set(c.id, { node, state });
+      return node;
+    }));
+    syncCounter();
+  }
+
+  function syncCounter() {
+    const runnable = catalogue.filter((c) => !why(c));
+    const on = runnable.filter((c) => selected.has(c.id)).length;
+    counter.textContent = t('ct.selected', { n: String(on), total: String(runnable.length) });
+    selectAll.checked = on > 0 && on === runnable.length;
+    selectAll.indeterminate = on > 0 && on < runnable.length;
+    runBtn.disabled = on === 0 || running;
+  }
+
+  selectAll.addEventListener('change', () => {
+    for (const c of catalogue) {
+      if (why(c)) continue;
+      if (selectAll.checked) selected.add(c.id); else selected.delete(c.id);
+    }
+    renderRows();
+  });
+
+  // The catalogue's "does this apply" answer depends on the target, so it is
+  // re-asked when the target changes — an IP literal greys the DNS row out with
+  // the reason, rather than running a lookup that answers nothing.
+  let lastHost = '';
+  async function refreshCatalogue() {
+    const host = target.value.trim();
+    if (host === lastHost) return;
+    lastHost = host;
+    try {
+      const q = host ? `?host=${encodeURIComponent(host)}` : '';
+      catalogue = (await api(`/api/connection-test/checks${q}`)).checks || catalogue;
+      renderRows();
+    } catch { /* keep the catalogue we have — the target is checked again on run */ }
+  }
+  target.addEventListener('change', refreshCatalogue);
+
+  root.append(el('div', { class: 'history-controls' },
+    el('label', { class: 'inline muted' }, t('ct.agent'), ' ', agentSel),
+    el('label', { class: 'inline muted ct-target' }, t('ct.target'), ' ', target)));
+  root.append(el('div', { class: 'history-controls ct-actions' },
+    runBtn, stopBtn, canWrite() ? repeatBtn : null, scheduleChip, status));
+  root.append(el('div', { class: 'ct-toggle-row' }, toggle, counter), listWrap,
+    el('div', { class: 'muted small ct-note' }, t('ct.stopNote'), ' ', t('ct.resultsNote')));
+  renderRows();
+
+  // --- running -------------------------------------------------------------
+  const say = (text, bad = false) => { status.className = bad ? 'error small' : 'muted small'; status.textContent = text; };
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  // Match a probe result row to the check that asked for it. A TCP probe stores
+  // its target as host:port, which is also what keeps the :80 and :443 rows
+  // apart — without it they would both show the same measurement.
+  function resultFor(results, check, host) {
+    const withPort = check.port ? `${host}:${check.port}` : null;
+    return results.find((r) => r.type === check.type && (r.target === withPort || (!check.port && r.target === host))) || null;
+  }
+
+  function measured(r) {
+    if (!r.ok) return { kind: 'failed', label: t('ct.state.failed') };
+    if (r.rttMs != null) return { kind: 'ok', label: `${Math.round(r.rttMs)} ms` };
+    return { kind: 'ok', label: t('ct.state.ok') };
+  }
+
+  async function collectResults(agentId, host, ids, since) {
+    let results;
+    try { results = (await api(`/api/probes/latest?agentId=${encodeURIComponent(agentId)}`)).results || []; }
+    catch { return; }
+    for (const id of ids) {
+      const check = catalogue.find((c) => c.id === id);
+      const r = check ? resultFor(results, check, host) : null;
+      // Only a result from THIS run may claim a row; an older one for the same
+      // target would otherwise report a fresh green tick for a probe that has
+      // not come back yet.
+      if (!r || (since && r.ts && new Date(r.ts).getTime() < since)) continue;
+      const m = measured(r);
+      setState(id, m.kind, m.label);
+    }
+  }
+
+  async function run() {
+    const host = target.value.trim();
+    if (!host) { say(t('ct.status.noTarget'), true); return; }
+    const ids = catalogue.filter((c) => !why(c) && selected.has(c.id)).map((c) => c.id);
+    if (!ids.length) { say(t('ct.status.noChecks'), true); return; }
+    const rounds = Math.max(1, Math.min(CT_MAX_ROUNDS, Number(countInput.value) || 1));
+    const agentId = agentSel.value;
+
+    running = true; stopRequested = false;
+    runBtn.disabled = true; stopBtn.disabled = false;
+    if (listWrap.hidden) toggle.click();
+    for (const c of catalogue) setState(c.id, selected.has(c.id) && !why(c) ? '' : 'skipped', selected.has(c.id) && !why(c) ? t('ct.state.waiting') : t('ct.state.skipped'));
+
+    let completed = 0;
+    for (let round = 1; round <= rounds && !stopRequested; round += 1) {
+      const startedAt = Date.now() - 1000; // a second of slack for clock skew
+      say(t('ct.status.round', { round: String(round), rounds: String(rounds), host }));
+      for (const id of ids) setState(id, 'running', t('ct.state.running'));
+      let res;
+      try {
+        res = await api('/api/connection-test/run', { method: 'POST', body: { agentId: Number(agentId), host, checks: ids } });
+      } catch (e) {
+        say(e.status === 409 ? t('ct.status.notConnected') : errText(e), true);
+        break;
+      }
+      for (const d of res.dispatched || []) setState(d.id, 'running', t('ct.state.sent'));
+      for (const s of res.skipped || []) setState(s.id, 'skipped', t('ct.state.skipped'));
+      const dispatchedIds = (res.dispatched || []).map((d) => d.id);
+      for (const wait of CT_POLL_MS) {
+        if (stopRequested) break;
+        await sleep(wait - (CT_POLL_MS[CT_POLL_MS.indexOf(wait) - 1] || 0));
+        await collectResults(agentId, host, dispatchedIds, startedAt);
+      }
+      completed = round;
+    }
+
+    running = false;
+    stopBtn.disabled = true;
+    if (stopRequested) {
+      for (const [id, row] of rows) {
+        if (['', 'ct-state', 'ct-state running'].includes(row.state.className) || row.state.textContent === t('ct.state.waiting')) {
+          setState(id, 'skipped', t('ct.state.stopped'));
+        }
+      }
+      say(t('ct.status.stopped'));
+    } else if (completed) {
+      say(t('ct.status.done', { rounds: String(completed), checks: String(ids.length), host }));
+    }
+    syncCounter();
+  }
+
+  runBtn.addEventListener('click', () => { if (!running) run(); });
+  stopBtn.addEventListener('click', () => {
+    stopRequested = true;
+    stopBtn.disabled = true;
+    say(t('ct.status.stopped'));
+  });
+
+  repeatBtn.addEventListener('click', () => {
+    const host = target.value.trim();
+    if (!host) { say(t('ct.status.noTarget'), true); return; }
+    const ids = catalogue.filter((c) => !why(c) && selected.has(c.id)).map((c) => c.id);
+    if (!ids.length) { say(t('ct.status.noChecks'), true); return; }
+    openRepeatModal({
+      agentId: Number(agentSel.value),
+      host,
+      checks: ids,
+      onSaved: (pkg, summary) => {
+        scheduleChip.hidden = false;
+        scheduleChip.replaceChildren('↻ ', summary, ' · ',
+          el('button', { class: 'link', onclick: () => gotoView('tests') }, pkg.name));
+        toast(t('ct.repeat.saved', { name: pkg.name }));
+      },
+    });
+  });
+
+  return root;
+}
+
+// How many runs inside one period the Repeat dialog offers, per period. The
+// server accepts any divisor down to a five-minute floor; these are the ones
+// worth a menu entry, and each is rendered as the GAP it produces ("every 4
+// hours") rather than as the number it is, because that is the question the
+// operator is actually answering.
+const CT_WITHIN = {
+  hourly: [1, 2, 4, 12],
+  daily: [1, 2, 3, 4, 6, 12, 24],
+  weekly: [1, 7, 14],
+  monthly: [1, 2, 4],
+};
+const CT_PERIOD_MINUTES = { hourly: 60, daily: 1440, weekly: 10080, monthly: 40320 };
+
+// "every 6" is not an answer anybody recognises — this turns it into the gap.
+function ctWithinLabel(period, every) {
+  if (every === 1) return t(`ct.every.oncePer.${period}`);
+  const minutes = CT_PERIOD_MINUTES[period] / every;
+  if (minutes < 60) return t('ct.every.minutes', { n: String(Math.round(minutes)) });
+  if (minutes < 1440) {
+    const hours = Math.round(minutes / 60);
+    return hours === 1 ? t('ct.every.hour') : t('ct.every.hours', { n: String(hours) });
+  }
+  const days = Math.round(minutes / 1440);
+  return days === 1 ? t('ct.every.day') : t('ct.every.days', { n: String(days) });
+}
+
+// The recurrence in one sentence, in the operator's language. Shown live in the
+// dialog and kept beside the buttons afterwards — a schedule nobody can read
+// back is a schedule nobody trusts.
+function ctSummary(spec, runs) {
+  const within = ctWithinLabel(spec.period, spec.every);
+  const runsText = plural('ct.perRun', runs, { n: String(runs) });
+  if (spec.period === 'hourly') return t('ct.summary.hourly', { within, runs: runsText });
+  if (spec.period === 'daily') return t('ct.summary.daily', { at: spec.at, within, runs: runsText });
+  if (spec.period === 'weekly') return t('ct.summary.weekly', { weekday: t(`ct.weekday.${spec.weekday}`), at: spec.at, within, runs: runsText });
+  return t('ct.summary.monthly', { dom: String(spec.dayOfMonth), at: spec.at, within, runs: runsText });
+}
+
+// The Repeat dialog: period, how often inside that period, when it starts, and
+// how many times the whole battery runs per scheduled run. Saved as an ordinary
+// test package (POST /api/connection-test/schedule), so it survives this page
+// being closed and is managed on the Test packages tab like everything else.
+function openRepeatModal({ agentId, host, checks, onSaved }) {
+  const card = $('#modal-card');
+  const periodSel = el('select', {}, ...['hourly', 'daily', 'weekly', 'monthly']
+    .map((p) => el('option', { value: p, ...(p === 'daily' ? { selected: 'selected' } : {}) }, t(`ct.period.${p}`))));
+  const withinSel = el('select', {});
+  const atInput = el('input', { type: 'time', value: '08:00' });
+  const weekdaySel = el('select', {}, ...[1, 2, 3, 4, 5, 6, 7].map((d) => el('option', { value: String(d) }, t(`ct.weekday.${d}`))));
+  const domInput = el('input', { type: 'number', min: '1', max: '28', value: '1' });
+  const runsInput = el('input', { type: 'number', min: '1', max: '20', value: '1' });
+  const summary = el('div', { class: 'ct-summary' });
+  const err = el('p', { class: 'error' });
+  const saveBtn = el('button', { type: 'button' }, t('ct.repeat.save'));
+
+  const atWrap = el('label', {}, t('ct.repeat.at'), atInput);
+  const weekdayWrap = el('label', {}, t('ct.repeat.weekday'), weekdaySel);
+  const domWrap = el('label', {}, t('ct.repeat.dayOfMonth'), domInput);
+
+  function spec() {
+    const period = periodSel.value;
+    const out = { period, every: Number(withinSel.value) || 1 };
+    if (period !== 'hourly') out.at = atInput.value || '08:00';
+    if (period === 'weekly') out.weekday = Number(weekdaySel.value);
+    if (period === 'monthly') out.dayOfMonth = Number(domInput.value) || 1;
+    return out;
+  }
+
+  function syncWithin() {
+    const period = periodSel.value;
+    const keep = Number(withinSel.value);
+    withinSel.replaceChildren(...CT_WITHIN[period].map((n) => el('option', { value: String(n), ...(n === keep ? { selected: 'selected' } : {}) }, ctWithinLabel(period, n))));
+    atWrap.hidden = period === 'hourly';
+    weekdayWrap.hidden = period !== 'weekly';
+    domWrap.hidden = period !== 'monthly';
+    syncSummary();
+  }
+  function syncSummary() { summary.textContent = ctSummary(spec(), Number(runsInput.value) || 1); }
+
+  periodSel.addEventListener('change', syncWithin);
+  for (const node of [withinSel, atInput, weekdaySel, domInput, runsInput]) node.addEventListener('change', syncSummary);
+  runsInput.addEventListener('input', syncSummary);
+
+  saveBtn.addEventListener('click', async () => {
+    err.textContent = '';
+    saveBtn.disabled = true;
+    const runs = Math.max(1, Number(runsInput.value) || 1);
+    try {
+      const pkg = await api('/api/connection-test/schedule', {
+        method: 'POST',
+        body: { agentId, host, checks, runs, recurrence: spec() },
+      });
+      closeModal();
+      if (onSaved) onSaved(pkg, ctSummary(spec(), runs));
+    } catch (e) { err.textContent = errText(e); saveBtn.disabled = false; }
+  });
+
+  card.replaceChildren(
+    el('h3', {}, t('ct.repeat.title')),
+    el('div', { class: 'form-grid' },
+      el('label', {}, t('ct.repeat.period'), periodSel),
+      el('label', {}, t('ct.repeat.within'), withinSel),
+      el('div', { class: 'ct-two' }, atWrap, weekdayWrap, domWrap, el('label', {}, t('ct.repeat.runs'), runsInput)),
+      summary,
+      el('p', { class: 'muted small' }, t('ct.repeat.hint')),
+      err,
+      el('div', { class: 'form-actions' },
+        el('button', { type: 'button', class: 'ghost', onclick: closeModal }, t('ct.repeat.cancel')),
+        saveBtn)));
+  syncWithin();
+  $('#modal').classList.remove('hidden');
+}
 
 async function probeRunnerView() {
   const root = el('div', { class: 'probes' });

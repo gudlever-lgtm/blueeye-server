@@ -5,6 +5,7 @@
 // item reuses validateProbeSpec so the same host/port/count rules apply.
 
 const { validateProbeSpec } = require('./probeValidation');
+const { validateRecurrence } = require('../schedule/recurrence');
 
 const NAME_MAX = 255;
 const MAX_ITEMS = 20;
@@ -115,6 +116,18 @@ function validateTestPackageInput(body) {
     }
   }
   value.schedule_ms = schedule;
+
+  // schedule_spec: the calendar alternative to the interval ("daily at 08:00",
+  // "Mondays", "twice a month"). A package has one or the other — a spec wins
+  // and zeroes the interval, so the scheduler never has to decide between two
+  // answers to the same question.
+  value.schedule_spec = null;
+  const spec = input.schedule_spec;
+  if (spec !== undefined && spec !== null) {
+    const { value: rec, errors: re } = validateRecurrence(spec);
+    if (re) errors.schedule_spec = Object.values(re).join('; ');
+    else { value.schedule_spec = rec; value.schedule_ms = 0; }
+  }
 
   const targets = validateTargets(input.targets, errors);
   if (targets !== undefined) value.targets = targets;

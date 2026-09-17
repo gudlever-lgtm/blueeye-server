@@ -300,6 +300,7 @@ CREATE TABLE IF NOT EXISTS `test_packages` (
   `name` VARCHAR(255) NOT NULL,
   `enabled` TINYINT(1) NOT NULL DEFAULT 1,
   `schedule_ms` BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  `schedule_spec` JSON NULL DEFAULT NULL,
   `targets` JSON NOT NULL,
   `items` JSON NOT NULL,
   `created_by` VARCHAR(255) NULL DEFAULT NULL,

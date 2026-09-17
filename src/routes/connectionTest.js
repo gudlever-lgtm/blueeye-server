@@ -1,0 +1,157 @@
+'use strict';
+
+// Connection Test — one address, the whole battery of checks.
+//
+// The Run-a-probe tab asks one question at a time. This asks all of them at
+// once: give it an IP or a DNS name and it pushes every selected check from
+// src/connectionTest/checks.js to one agent. Nothing new is stored — each check
+// is an ordinary probe, so the results land in probe_results and appear on the
+// same screens (latest results, path visualisation, fleet health, availability)
+// as any other probe.
+//
+//   GET  /api/connection-test/checks   viewer+   the catalogue (per target)
+//   POST /api/connection-test/run      operator+ dispatch the selection now
+//   POST /api/connection-test/schedule operator+ save it as a recurring package
+//
+// Why a router of its own rather than a loop in the browser: the catalogue then
+// exists once, on the server. The dashboard renders what /checks serves and a
+// run builds its probe specs from the same entries, so a check the screen
+// offers is always a check the server can dispatch — and one operator action is
+// one audit record, not nine.
+
+const express = require('express');
+const { asyncHandler } = require('../middleware/asyncHandler');
+const { requireAuth, requireRole } = require('../auth/middleware');
+const { ROLES } = require('../auth/roles');
+const { catalogue, specsFor } = require('../connectionTest/checks');
+const {
+  validateConnectionTestRun,
+  validateConnectionTestSchedule,
+} = require('../validation/connectionTestValidation');
+const { validateTestPackageInput } = require('../validation/testPackageValidation');
+
+function createConnectionTestRouter({ agentsRepo, agentCommander, testPackagesRepo = null, usageService = null, auditLogger = null }) {
+  const router = express.Router();
+  const validationError = (res, details) => res.status(400).json({ error: 'Validation failed', details });
+
+  // The catalogue. `?host=` is optional: with one, each entry also says whether
+  // it APPLIES to that target (a DNS lookup of an IP literal does not), so the
+  // screen can grey a row out with a reason instead of running a check that
+  // answers nothing.
+  router.get(
+    '/checks',
+    requireAuth,
+    requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN),
+    asyncHandler(async (req, res) => {
+      const host = typeof req.query.host === 'string' && req.query.host.trim() ? req.query.host.trim() : null;
+      res.json({ host, checks: catalogue(host) });
+    })
+  );
+
+  // Run the selection now, against one agent. 202 with what was dispatched —
+  // the agent reports each result back through the normal probe-results path,
+  // so the caller polls /api/probes/latest exactly as the probe tab does.
+  router.post(
+    '/run',
+    requireAuth,
+    requireRole(ROLES.OPERATOR, ROLES.ADMIN),
+    asyncHandler(async (req, res) => {
+      const { value, errors } = validateConnectionTestRun(req.body);
+      if (errors) return validationError(res, errors);
+
+      const agent = await agentsRepo.findById(value.agentId);
+      if (!agent) return res.status(404).json({ error: 'Agent not found' });
+
+      const { specs, skipped } = specsFor(value.host, value.checks);
+      if (!specs.length) {
+        return res.status(400).json({
+          error: 'Validation failed',
+          details: { checks: 'none of the selected checks can run against this target' },
+          skipped,
+        });
+      }
+
+      let delivered = 0;
+      const dispatched = [];
+      for (const s of specs) {
+        const n = agentCommander ? agentCommander.sendCommand(value.agentId, { name: 'run-probe', probe: s.probe }) : 0;
+        if (n > 0) { delivered += n; dispatched.push({ id: s.id, type: s.probe.type, port: s.probe.port || null }); }
+      }
+      // Nothing reached the agent: it is not connected. Reported as such rather
+      // than as an empty success, so the screen says why nothing is happening.
+      if (delivered === 0) return res.status(409).json({ error: 'Agent not connected', delivered: 0 });
+
+      // One operator action, one record in the hash-chained compliance trail —
+      // the same treatment a single hand-run probe gets, because this is the
+      // same act against a customer network, nine times over. Metadata only.
+      if (auditLogger && typeof auditLogger.record === 'function') {
+        await auditLogger.record(req, {
+          category: 'agent',
+          action: 'probe_start',
+          target: `agent:${value.agentId}`,
+          detail: JSON.stringify({ connectionTest: true, target: value.host, checks: dispatched.map((d) => d.id) }),
+        });
+      }
+
+      res.status(202).json({ agentId: value.agentId, host: value.host, delivered, dispatched, skipped });
+    })
+  );
+
+  // Save the same test as a recurring test package, so it survives the tab
+  // being closed and shows up beside every other scheduled test. `runs` repeats
+  // the whole selection within one scheduled run (the dialog's "tests per run").
+  router.post(
+    '/schedule',
+    requireAuth,
+    requireRole(ROLES.OPERATOR, ROLES.ADMIN),
+    asyncHandler(async (req, res) => {
+      if (!testPackagesRepo) return res.status(503).json({ error: 'Test packages are not available' });
+      const { value, errors } = validateConnectionTestSchedule(req.body);
+      if (errors) return validationError(res, errors);
+
+      const agent = await agentsRepo.findById(value.agentId);
+      if (!agent) return res.status(404).json({ error: 'Agent not found' });
+
+      // A scheduled connection test is an enabled test package, so it consumes
+      // an active-test-path slot like any other — the same graceful 403 as
+      // POST /api/test-packages, rather than a way around the plan.
+      if (usageService) {
+        const check = await usageService.assertWithinLimit('test_paths');
+        if (!check.ok) return res.status(403).json(check.body);
+      }
+
+      const { specs, skipped } = specsFor(value.host, value.checks);
+      if (!specs.length) {
+        return res.status(400).json({
+          error: 'Validation failed',
+          details: { checks: 'none of the selected checks can run against this target' },
+          skipped,
+        });
+      }
+
+      const items = [];
+      for (let round = 0; round < value.runs; round += 1) {
+        for (const s of specs) items.push({ type: 'probe', probe: s.probe });
+      }
+
+      // Built here, then put through the ordinary package validator — a
+      // connection-test package is a test package, and it has to satisfy the
+      // same contract as one an operator builds by hand.
+      const { value: pkg, errors: pe } = validateTestPackageInput({
+        name: value.name || `Connection test — ${value.host}`,
+        enabled: true,
+        schedule_spec: value.recurrence,
+        targets: { mode: 'agents', agentIds: [value.agentId] },
+        items,
+      });
+      if (pe) return validationError(res, pe);
+
+      const created = await testPackagesRepo.create({ ...pkg, created_by: req.user ? req.user.id : null });
+      res.status(201).json({ ...created, skipped });
+    })
+  );
+
+  return router;
+}
+
+module.exports = { createConnectionTestRouter };

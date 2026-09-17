@@ -57,6 +57,7 @@ const { createEnrollRouter } = require('./enroll');
 const { publishSignedReleaseFromSource } = require('../enroll/publishSignedRelease');
 const { createEnrollCommandRouter } = require('./enrollCommand');
 const { createTestPackagesRouter } = require('./testPackages');
+const { createConnectionTestRouter } = require('./connectionTest');
 const { createTransactionsRouter } = require('./transactions');
 const { createLogsRouter } = require('./logs');
 const { createSpeedtestRouter, createSpeedtestReadRouter } = require('./speedtest');
@@ -574,6 +575,12 @@ function createApiRouter({
     }));
   }
   if (testPackagesRepo) router.use('/api/test-packages', createTestPackagesRouter({ repo: testPackagesRepo, runner: testPackageRunner, usageService }));
+  // Connection Test — one address, every check, from one agent (Probes & Tests).
+  if (agentsRepo) {
+    router.use('/api/connection-test', createConnectionTestRouter({
+      agentsRepo, agentCommander, testPackagesRepo: testPackagesRepo || null, usageService, auditLogger,
+    }));
+  }
   if (transactionsRepo) {
     router.use('/api/transactions', createTransactionsRouter({
       repo: transactionsRepo,

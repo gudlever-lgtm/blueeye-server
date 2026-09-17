@@ -1186,9 +1186,53 @@ tr.acked td { opacity: .55; }
 .export-btns { display: inline-flex; align-items: center; gap: 6px; }
 .export-btns .muted { font-size: 12px; }
 
+/* ---- Tabs ----------------------------------------------------------------
+   A tab is not a button. The dashboard used to draw a tab strip as a row of
+   quiet buttons whose selected one had a slightly different background — which
+   is exactly what a form's own buttons look like, often on the same screen, so
+   nothing said which row switched a view and which row did something.
+
+   The tab strip is a strip: no button chrome, muted labels, and the selected
+   tab carrying the accent underline ON the strip's own rule (the -1px margin is
+   what makes the two meet). It reads as a place you are, not a control you
+   press. Built by tabStrip() in public/app.js, which also gives it the keyboard
+   and screen-reader behaviour a row of buttons cannot have.
+
+   A grouped rail of destinations (Settings, Documentation) is NOT this — see
+   .navlist below. */
+.subtabs {
+  display: inline-flex; flex-wrap: wrap; gap: 2px; max-width: 100%;
+  border-bottom: 1px solid var(--hairline);
+}
+.subtabs .subtab, .subtabs > button {
+  background: none; border: 0; border-bottom: 2px solid transparent;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  margin-bottom: -1px; padding: 8px 14px;
+  font: inherit; font-size: 13px; font-weight: 500; line-height: 1.45;
+  color: var(--muted); cursor: pointer;
+  transition: color .15s var(--ease), border-color .15s var(--ease), background .15s var(--ease);
+}
+.subtabs .subtab:hover:not(.active), .subtabs > button:hover:not(.active) {
+  color: var(--text); background: var(--hover);
+}
+.subtabs .subtab.active, .subtabs > button.active {
+  color: var(--text-accent); border-bottom-color: var(--accent); font-weight: 600; background: none;
+}
+/* The strip is one stop in the tab order, so the ring has to be unmissable on
+   the tab that has focus. */
+.subtabs .subtab:focus-visible, .subtabs > button:focus-visible {
+  outline: none; box-shadow: var(--ring); border-radius: var(--radius-sm);
+}
+.subtabs .subtab:disabled { opacity: .5; cursor: not-allowed; }
+
+/* A grouped list of destinations under a label (Settings, Documentation). It
+   keeps the quiet-chip look on purpose: these are not tabs over one view, they
+   are a rail of separate screens, and drawing them as a tab strip would claim a
+   relationship between them that is not there. */
+.navlist { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.navlist button.active { background: var(--panel-2); color: var(--text); border-color: var(--accent); }
+
 /* Settings overview */
-.subtabs { display: inline-flex; flex-wrap: wrap; gap: 4px; }
-.subtabs button.active { background: var(--panel-2); color: var(--text); }
 /* Grouped settings nav: labelled sections instead of one long row of tabs. */
 .settings-nav { display: flex; flex-wrap: wrap; gap: 10px 22px; margin: 0 0 18px; padding: 0 0 14px; border-bottom: 1px solid var(--border); }
 .settings-nav-group { display: flex; flex-direction: column; gap: 5px; }
@@ -1520,7 +1564,6 @@ button.active-btn { outline: 2px solid var(--accent); }
 
 /* ---- NIS2 Reporting Center ----------------------------------------------- */
 .nis2-subtabs { flex-wrap: wrap; }
-.nis2-subtabs button.active { background: var(--panel-2); color: var(--text); border-color: var(--accent); }
 .nis2-h3 { margin: 18px 0 10px; font-size: 15px; }
 .nis2-body { margin-top: 8px; }
 .crit-text { color: var(--bad); }
@@ -1904,8 +1947,8 @@ li.guide-step.done .guide-step-title { text-decoration: line-through; opacity: 0
 /* ---- Documentation (built-in handbook / how-tos) ------------------------- */
 /* Two-pane doc browser: reuses .settings-nav for the grouped topic rail and
    renders the selected article in a readable, measured column. */
-.docs-nav .docs-subtabs { flex-direction: column; align-items: flex-start; }
-.docs-nav .docs-subtabs button { text-align: left; white-space: normal; }
+.docs-nav .docs-navlist { flex-direction: column; align-items: flex-start; }
+.docs-nav .docs-navlist button { text-align: left; white-space: normal; }
 .docs-article { max-width: 760px; }
 .docs-title { margin: 0 0 12px; font-size: 20px; }
 .docs-article h4 { margin: 20px 0 6px; font-size: 14px; }

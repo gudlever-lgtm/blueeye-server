@@ -415,11 +415,25 @@
     }
 
     // ---- States --------------------------------------------------------------
+    // Three different nothings, which must not look alike:
+    //
+    //   kind 'ok'     — nothing to report and that IS the good news (no open
+    //                   findings, no topology changes). A tick is earned here.
+    //   kind 'nodata' — a query came back empty: this window, this agent, this
+    //                   filter. Not success and not a fault — the reader's next
+    //                   move is to widen the search, so it says so.
+    //   default       — an absence with nothing to suggest. Quiet dash.
+    //
+    // The tick used to be the DEFAULT, which is how "No flows in this window"
+    // came to be reported with the same glyph as "everything is fine".
+    var STATE_ICON = { ok: '✓', nodata: '–' };
     function emptyState(o) {
-      return el('div', { class: 'state' },
-        el('div', { class: 'state-ico' }, o.icon || '✓'),
+      var kind = o.kind || 'none';
+      var body = o.body || (kind === 'nodata' ? t('ui.empty.widen') : null);
+      return el('div', { class: 'state is-' + kind },
+        el('div', { class: 'state-ico' }, o.icon || STATE_ICON[kind] || '–'),
         el('h3', {}, o.title),
-        o.body ? el('p', {}, o.body) : null,
+        body ? el('p', {}, body) : null,
         o.action || null);
     }
     function errorState(o) {
@@ -448,31 +462,108 @@
     }
 
     // ---- Toast ---------------------------------------------------------------
+    // Top right, stacked. A confirmation goes after 5 s; an error is given
+    // longer (15 s) rather than forever — a stack of errors nobody dismissed
+    // ends up covering the page it is complaining about. The countdown pauses
+    // while the pointer is over the stack or the focus is inside it, so an
+    // error being read is never pulled away mid-sentence, and the ✕ still
+    // closes one on demand.
+    var TOAST_MS = { ok: 5000, err: 15000 };
+    var TOAST_MAX = 4;
+    var toastPaused = false;
+    var liveToasts = [];
+
+    function armToast(entry) {
+      clearTimeout(entry.timer);
+      if (toastPaused) return;
+      var left = entry.dueAt - Date.now();
+      entry.timer = setTimeout(function () { closeToast(entry); }, left > 0 ? left : 0);
+    }
+    function closeToast(entry) {
+      clearTimeout(entry.timer);
+      var i = liveToasts.indexOf(entry);
+      if (i >= 0) liveToasts.splice(i, 1);
+      entry.node.remove();
+    }
+    function pauseToasts(paused) {
+      toastPaused = paused;
+      liveToasts.forEach(function (entry) {
+        if (paused) {
+          clearTimeout(entry.timer);
+          entry.remaining = Math.max(0, entry.dueAt - Date.now());
+        } else {
+          entry.dueAt = Date.now() + (entry.remaining === undefined ? entry.life : entry.remaining);
+          entry.remaining = undefined;
+          armToast(entry);
+        }
+      });
+    }
     function toastHost() {
       var host = document.getElementById('ui-toasts');
       if (!host) {
         host = el('div', {
           class: 'ui ui-toasts', id: 'ui-toasts', role: 'status', 'aria-live': 'polite',
+          onmouseenter: function () { pauseToasts(true); },
+          onmouseleave: function () { pauseToasts(false); },
+          onfocusin: function () { pauseToasts(true); },
+          onfocusout: function () { pauseToasts(false); },
         });
         document.body.append(host);
       }
       return host;
     }
-    // Top right, stacked, 5 s. An error stays until it is dismissed: a failure
-    // that vanishes before it is read is a failure nobody can act on.
+
+    // `opts.focus` is the form field the message is about: clicking "Run" with
+    // no agent chosen should put the cursor IN the agent picker, not leave the
+    // operator hunting for which of six controls the toast means. The field is
+    // focused and ringed until it is touched.
+    function markField(field) {
+      if (!field || typeof field.focus !== 'function') return;
+      field.classList.add('is-asked');
+      var clear = function () {
+        field.classList.remove('is-asked');
+        field.removeEventListener('input', clear);
+        field.removeEventListener('change', clear);
+        field.removeEventListener('blur', clear);
+      };
+      field.addEventListener('input', clear);
+      field.addEventListener('change', clear);
+      field.addEventListener('blur', clear);
+      if (typeof field.scrollIntoView === 'function') {
+        try { field.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (e) { field.scrollIntoView(); }
+      }
+      try { field.focus({ preventScroll: true }); } catch (e) { field.focus(); }
+    }
+
     function toast(title, detail, opts) {
       var o = opts || {};
       var bad = !!o.bad;
+      var key = (bad ? 'err' : 'ok') + '\u0000' + String(title) + '\u0000' + String(detail || '');
+      markField(o.focus);
+      // The same message twice is one message. Clicking a disabled-by-validation
+      // button four times should not build a four-high stack of the same line.
+      var dup = liveToasts.filter(function (e) { return e.key === key; })[0];
+      if (dup) {
+        dup.life = o.ttlMs || (bad ? TOAST_MS.err : TOAST_MS.ok);
+        dup.dueAt = Date.now() + dup.life;
+        dup.remaining = undefined;
+        armToast(dup);
+        return dup.node;
+      }
       var node = el('div', { class: 'ui-toast ' + (bad ? 'err' : 'ok') },
         el('div', { class: 'toast-tx' },
           el('div', { class: 'toast-title' }, title),
           detail ? el('div', { class: 'toast-detail' }, detail) : null),
         el('button', {
           class: 'btn btn-ghost btn-icon btn-xs', type: 'button',
-          'aria-label': t('ui.close'), onclick: function () { node.remove(); },
+          'aria-label': t('ui.close'), onclick: function () { closeToast(entry); },
         }, '✕'));
+      var life = o.ttlMs || (bad ? TOAST_MS.err : TOAST_MS.ok);
+      var entry = { key: key, node: node, life: life, dueAt: Date.now() + life, timer: null };
+      liveToasts.push(entry);
       toastHost().append(node);
-      if (!bad) setTimeout(function () { node.remove(); }, 5000);
+      while (liveToasts.length > TOAST_MAX) closeToast(liveToasts[0]);
+      armToast(entry);
       return node;
     }
 
@@ -517,7 +608,7 @@
     function chart(opts) {
       var series = (opts.series || []).filter(function (s) { return s && (s.points || []).length; });
       if (!series.length) {
-        return emptyState({ icon: '—', title: opts.emptyTitle || t('ui.chart.empty') });
+        return emptyState({ kind: 'nodata', title: opts.emptyTitle || t('ui.chart.empty') });
       }
       var labels = opts.labels || series[0].points.map(function (p, i) { return p.label != null ? p.label : String(i); });
       var count = Math.max.apply(null, series.map(function (s) { return s.points.length; }));

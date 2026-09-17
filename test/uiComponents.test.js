@@ -265,6 +265,22 @@ test('states: Empty, Loading and Error are the same three everywhere', () => {
   assert.equal(retried, 1);
 });
 
+// ------------------------------------------------------- Empty state kinds
+test('EmptyState: "no data" is a red minus with a way out, not a green tick', () => {
+  const { ui } = mount();
+  const none = ui.emptyState({ kind: 'nodata', title: 'No flows' });
+  assert.ok(none.classList.contains('is-nodata'));
+  assert.notEqual(none.querySelector('.state-ico').textContent, '✓',
+    'an empty result is not an achievement — a tick reads as "all good"');
+  assert.match(none.textContent, /time range|agent/i,
+    'an empty result must say what to try next');
+
+  // A tick is still right where empty IS the good news.
+  const ok = ui.emptyState({ kind: 'ok', title: 'No faults found' });
+  assert.equal(ok.querySelector('.state-ico').textContent, '✓');
+  assert.ok(ok.classList.contains('is-ok'));
+});
+
 // ---------------------------------------------------------------- Toast
 test('Toast: top right, stacked, and an error stays until it is dismissed', async () => {
   const { ui, doc } = mount();
@@ -276,6 +292,39 @@ test('Toast: top right, stacked, and an error stays until it is dismissed', asyn
   assert.equal(host.querySelectorAll('.ui-toast.err').length, 1);
   host.querySelector('.ui-toast.err .btn').click();
   assert.equal(host.querySelectorAll('.ui-toast.err').length, 0);
+});
+
+test('Toast: the same message twice is one message, not a growing stack', () => {
+  const { ui, doc } = mount();
+  for (let i = 0; i < 5; i++) ui.toast('Pick an agent', null, { bad: true });
+  const host = doc.getElementById('ui-toasts');
+  assert.equal(host.querySelectorAll('.ui-toast').length, 1,
+    'clicking a button five times must not stack five identical complaints');
+  ui.toast('Pick a target', null, { bad: true });
+  assert.equal(host.querySelectorAll('.ui-toast').length, 2, 'a DIFFERENT message is still its own toast');
+});
+
+test('Toast: an error goes away on its own, and never buries the page', async () => {
+  const { ui, doc } = mount();
+  const host = () => doc.getElementById('ui-toasts');
+  ui.toast('Failed', 'one', { bad: true, ttlMs: 20 });
+  await new Promise((r) => setTimeout(r, 60));
+  assert.equal(host().querySelectorAll('.ui-toast').length, 0,
+    'an error that nobody dismissed must not sit on the page forever');
+
+  for (let i = 0; i < 7; i++) ui.toast(`Failed ${i}`, null, { bad: true });
+  assert.ok(host().querySelectorAll('.ui-toast').length <= 4, 'the stack is capped');
+});
+
+test('Toast: a "pick something" alert focuses and rings the field it means', () => {
+  const { ui, doc } = mount();
+  const field = doc.createElement('select');
+  doc.body.append(field);
+  ui.toast('Pick an agent', null, { bad: true, focus: field });
+  assert.equal(doc.activeElement, field, 'the alert did not put the cursor in the field');
+  assert.ok(field.classList.contains('is-asked'), 'the field is not marked');
+  field.dispatchEvent(new doc.defaultView.Event('change'));
+  assert.ok(!field.classList.contains('is-asked'), 'the ring must clear once the field is touched');
 });
 
 // ---------------------------------------------------------------- Chart

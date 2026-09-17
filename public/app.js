@@ -1878,7 +1878,7 @@ const CONNECTION_STATE_BADGES = {
 function renderConnectionModal(a, d) {
   const card = $('#modal-card');
   const name = a.display_name || a.hostname;
-  const body = [el('h3', {}, `Connection — ${esc(name)}`)];
+  const body = [el('h3', {}, `Connection — ${name}`)];
   body.push(el('p', {}, el('span', { class: CONNECTION_STATE_BADGES[d.state] || 'badge' }, d.state), ' ', d.explanation));
   if (d.hints && d.hints.length) {
     body.push(el('p', { class: 'muted' }, 'What to do:'));
@@ -1977,7 +1977,7 @@ function diagnoseVerdict(d) {
 // Modal: the agent's flow-pipeline snapshot + verdict (from POST /diagnose).
 function showDiagnostic(a, d) {
   const card = $('#modal-card');
-  const body = [el('h3', {}, `Diagnose — ${esc(a.display_name || a.hostname)}`)];
+  const body = [el('h3', {}, `Diagnose — ${a.display_name || a.hostname}`)];
   if (!d) {
     body.push(el('p', { class: 'muted' }, 'The agent did not return a diagnostic.'));
   } else {
@@ -2020,7 +2020,7 @@ function showDiagnostic(a, d) {
         aiOut.className = 'assistant-out';
         aiOut.replaceChildren(
           el('div', {}, res.answer || '(empty response)'),
-          el('div', { class: 'assistant-meta muted' }, `${esc(res.model || '')} · ${res.usedFindings ?? 0} findings in context`));
+          el('div', { class: 'assistant-meta muted' }, `${res.model || ''} · ${res.usedFindings ?? 0} findings in context`));
       } catch (err) {
         aiOut.className = 'assistant-out muted';
         aiOut.textContent = err.status === 403
@@ -2178,7 +2178,7 @@ async function testPackagesView() {
 
 function testPackageRow(p, agents, locations) {
   return el('tr', {},
-    el('td', {}, el('div', {}, p.name), p.created_by ? el('div', { class: 'muted' }, `by ${esc(String(p.created_by))}`) : null),
+    el('td', {}, el('div', {}, p.name), p.created_by ? el('div', { class: 'muted' }, `by ${String(p.created_by)}`) : null),
     el('td', {}, testItemsSummary(p.items)),
     el('td', {}, testTargetsSummary(p.targets, agents, locations)),
     el('td', {}, testScheduleLabel(p)),
@@ -2433,7 +2433,7 @@ function checkedValues(box) {
 // a "Run speed test now" button (operator+). Results come from /api/speedtest.
 async function showSpeedtest(a) {
   const card = $('#modal-card');
-  const title = `Speed test — ${esc(a.display_name || a.hostname)}`;
+  const title = `Speed test — ${a.display_name || a.hostname}`;
   const host = el('div', {}, el('p', { class: 'muted' }, 'Loading…'));
   card.replaceChildren(el('h3', {}, title), host);
   $('#modal').classList.remove('hidden');
@@ -2497,7 +2497,7 @@ async function showResults(a) {
   try {
     const results = await api(`/agents/${a.id}/results`);
     const card = $('#modal-card');
-    const body = [el('h3', {}, `Traffic — ${esc(a.display_name || a.hostname)}`)];
+    const body = [el('h3', {}, `Traffic — ${a.display_name || a.hostname}`)];
     if (!results.length) {
       body.push(el('p', { class: 'muted' }, 'No results yet. Click "Run test".'));
     } else {
@@ -2674,7 +2674,7 @@ function showAgentFlows(a) {
   }
 
   card.replaceChildren(
-    el('h3', {}, `Flows — ${esc(a.display_name || a.hostname)}`),
+    el('h3', {}, `Flows — ${a.display_name || a.hostname}`),
     el('div', { class: 'form-grid' },
       el('label', {}, 'Port (optional)', portInput),
       el('label', {}, 'Protocol (optional)', protoInput),
@@ -3335,15 +3335,15 @@ function storeSection(opts) {
   }
   if (info.error || info.available === false) {
     col.append(el('div', { class: 'storage-row' }, el('span', { class: 'k' }, 'Size'), el('span', { class: 'v muted' }, 'unavailable')));
-    if (info.error) col.append(el('div', { class: 'small muted' }, esc(info.error)));
+    if (info.error) col.append(el('div', { class: 'small muted' }, info.error));
     return col;
   }
   const biggest = (info.tables && info.tables[0]) || null;
   const counts = [`${info.tableCount} tables`];
   if (kind === 'tsdb' && info.hypertableCount) counts.push(`${info.hypertableCount} hypertables`);
   col.append(
-    el('div', { class: 'storage-row' }, el('span', { class: 'k' }, `Database ${esc(info.name || '')}`), el('span', { class: 'v' }, fmtBytes(info.totalBytes))),
-    el('div', { class: 'small muted' }, `${counts.join(' · ')}${biggest ? ` · largest: ${esc(biggest.name)} (${fmtBytes(biggest.bytes)})` : ''}`));
+    el('div', { class: 'storage-row' }, el('span', { class: 'k' }, `Database ${info.name || ''}`), el('span', { class: 'v' }, fmtBytes(info.totalBytes))),
+    el('div', { class: 'small muted' }, `${counts.join(' · ')}${biggest ? ` · largest: ${biggest.name} (${fmtBytes(biggest.bytes)})` : ''}`));
   return col;
 }
 
@@ -3362,7 +3362,7 @@ function storageCards(s) {
   // Disk (shared physical drive under both stores in a single-host deploy).
   if (d.available) {
     card.append(
-      el('div', { class: 'storage-row' }, el('span', { class: 'k' }, `Drive ${esc(d.path || '')}`), el('span', { class: 'v' }, `${fmtBytes(d.freeBytes)} free`)),
+      el('div', { class: 'storage-row' }, el('span', { class: 'k' }, `Drive ${d.path || ''}`), el('span', { class: 'v' }, `${fmtBytes(d.freeBytes)} free`)),
       usageBar(d.usedPercent),
       el('div', { class: 'small muted' }, `${fmtBytes(d.usedBytes)} used of ${fmtBytes(d.totalBytes)} (${d.usedPercent}%)`));
   } else {
@@ -3577,7 +3577,7 @@ function assistantBox(getHostId) {
       out.className = 'assistant-out';
       out.replaceChildren(
         el('div', {}, res.answer || '(empty response)'),
-        el('div', { class: 'assistant-meta muted' }, `${esc(res.model || '')} · ${res.usedFindings ?? 0} findings in context`));
+        el('div', { class: 'assistant-meta muted' }, `${res.model || ''} · ${res.usedFindings ?? 0} findings in context`));
     } catch (err) {
       out.className = 'assistant-out muted';
       out.textContent = err.status === 403
@@ -3665,10 +3665,10 @@ views.events = async () => {
     // side of this one, and the stored title repeats all three. The full title
     // is still the row's tooltip, and still what the detail page and an ITSM
     // ticket show.
-    el('td', { title: i.title || '' }, esc(incCondition(i))),
+    el('td', { title: i.title || '' }, incCondition(i)),
     // Agent + site: "which box, at which site" is the first thing an operator
     // needs to act, and the event id alone answers neither. Inserted as text
-    // nodes by el(), so no esc() pass — it would render a site called "R&D" as
+    // nodes by el(), so no  pass — it would render a site called "R&D" as
     // "R&amp;D".
     el('td', {}, incAgentLabel(i),
       i.agentName && incHostId(i) != null ? el('span', { class: 'muted inc-where' }, ` #${incHostId(i)}`) : null),
@@ -3765,7 +3765,7 @@ async function loadEventTimeline(id, card, deviceId) {
       },
         el('span', { class: 'tl-time muted' }, fmtDate(e.timestamp)),
         el('span', { class: `tl-dot tl-dot-${e.type}` }),
-        el('span', { class: 'tl-desc' }, esc(e.description || e.type),
+        el('span', { class: 'tl-desc' }, e.description || e.type,
           e.severity ? el('span', { class: 'muted' }, ` [${e.severity}]`) : null,
           e.status ? el('span', { class: 'muted' }, ` [${e.status}]`) : null));
     })));
@@ -3840,8 +3840,8 @@ async function loadEventSimilar(id, card) {
     card.replaceChildren(head, el('ul', { class: 'inc-similar' }, ...similar.map((s) => el('li', {
       class: 'clickable', onclick: () => openEvent(s.id),
     },
-      el('span', { class: 'badge' }, `score ${s.score}`), ' ', esc(s.title || `#${s.id}`),
-      el('span', { class: 'muted' }, ` · ${(s.matchedOn || []).join(', ')} · resolved ${fmtDate(s.resolvedAt)}${s.closedBy ? ` by ${esc(s.closedBy)}` : ''}`)))));
+      el('span', { class: 'badge' }, `score ${s.score}`), ' ', s.title || `#${s.id}`,
+      el('span', { class: 'muted' }, ` · ${(s.matchedOn || []).join(', ')} · resolved ${fmtDate(s.resolvedAt)}${s.closedBy ? ` by ${s.closedBy}` : ''}`)))));
   } catch (err) { card.replaceChildren(head, el('p', { class: 'error' }, err.message)); }
 }
 
@@ -3853,8 +3853,8 @@ async function loadEventConfigContext(id, card) {
     const st = ctx.suspectedTrigger;
     const diff = ctx.diff || {};
     card.replaceChildren(head,
-      st ? el('p', { class: 'callout' }, `⚠ ${esc(st.note)}`) : null,
-      el('p', { class: 'muted' }, `Risk: ${diff.risk || 'n/a'}${(diff.riskReasons || []).length ? ` (${diff.riskReasons.join(', ')})` : ''} · +${(diff.stats && diff.stats.added) || 0}/-${(diff.stats && diff.stats.removed) || 0} lines · captured ${fmtDate(ctx.change && ctx.change.capturedAt)} (${esc((ctx.change && ctx.change.capturedVia) || '')})`),
+      st ? el('p', { class: 'callout' }, `⚠ ${st.note}`) : null,
+      el('p', { class: 'muted' }, `Risk: ${diff.risk || 'n/a'}${(diff.riskReasons || []).length ? ` (${diff.riskReasons.join(', ')})` : ''} · +${(diff.stats && diff.stats.added) || 0}/-${(diff.stats && diff.stats.removed) || 0} lines · captured ${fmtDate(ctx.change && ctx.change.capturedAt)} (${(ctx.change && ctx.change.capturedVia) || ''})`),
       diff.changedLines && diff.changedLines.length
         ? el('pre', { class: 'config-diff' }, diff.changedLines.map((l) => `${l.op} ${l.text}`).join('\n'))
         : null);
@@ -3879,7 +3879,7 @@ function eventAssistantCard(id) {
       out.replaceChildren(
         el('div', { class: 'ai-badge' }, '⚠ AI-generated'),
         el('div', {}, res.answer || '(empty response)'),
-        el('div', { class: 'assistant-meta muted' }, `${esc(res.model || 'no provider call')}${res.cached ? ' · cached' : ''}${res.dataAvailable === false ? ' · insufficient context' : ''}`));
+        el('div', { class: 'assistant-meta muted' }, `${res.model || 'no provider call'}${res.cached ? ' · cached' : ''}${res.dataAvailable === false ? ' · insufficient context' : ''}`));
     } catch (err) {
       out.className = 'assistant-out muted';
       out.textContent = err.status === 403
@@ -3936,7 +3936,7 @@ async function loadGuide(event, body) {
         aiOut.replaceChildren(
           el('div', { class: 'ai-badge' }, '⚠ AI-generated'),
           el('div', {}, res.answer || '(empty response)'),
-          el('div', { class: 'assistant-meta muted' }, `${esc(res.model || 'no provider call')}${res.dataAvailable === false ? ' · insufficient context' : ''}`));
+          el('div', { class: 'assistant-meta muted' }, `${res.model || 'no provider call'}${res.dataAvailable === false ? ' · insufficient context' : ''}`));
       } catch (err) {
         aiOut.className = 'assistant-out muted';
         aiOut.textContent = err.status === 403 ? 'The AI assistant is disabled or not licensed (Settings → AI).' : err.message;
@@ -3954,9 +3954,9 @@ async function loadGuide(event, body) {
       const actionBtn = s.action ? el('button', { class: 'small ghost', onclick: () => guideNavigate(s.action, event) }, s.action.label) : null;
       const askBtn = el('button', { class: 'small ghost', onclick: () => askAbout(`Help me with this troubleshooting step for the event: "${s.title}". ${s.detail}`) }, 'Ask AI');
       li.append(
-        el('label', { class: 'guide-step-head' }, cb, el('span', { class: 'guide-step-title' }, esc(s.title)), el('span', { class: `badge kind-${s.kind}` }, s.kind)),
-        el('p', { class: 'guide-detail' }, esc(s.detail)),
-        el('p', { class: 'guide-rationale muted' }, '↳ ', esc(s.rationale)),
+        el('label', { class: 'guide-step-head' }, cb, el('span', { class: 'guide-step-title' }, s.title), el('span', { class: `badge kind-${s.kind}` }, s.kind)),
+        el('p', { class: 'guide-detail' }, s.detail),
+        el('p', { class: 'guide-rationale muted' }, '↳ ', s.rationale),
         el('div', { class: 'guide-actions' }, actionBtn, askBtn));
       return li;
     });
@@ -4018,7 +4018,7 @@ views.event = async () => {
 
   const header = el('div', { class: 'inc-header' },
     el('div', {},
-      el('h2', {}, esc(inc.title)),
+      el('h2', {}, inc.title),
       el('div', { class: 'inc-meta' }, incSevBadge(inc.severity), ' ', incStatusBadge(inc.status),
         el('span', { class: 'muted' }, ' · '), agentEl,
         el('span', { class: 'muted' }, ` · ${incLocationLabel(inc)} · opened ${fmtDate(inc.firstEventAt)}`))),
@@ -4050,7 +4050,7 @@ views.event = async () => {
     el('h3', {}, `Anomalies (${anomalies.length})`),
     anomalies.length
       ? el('ul', { class: 'inc-anoms' }, ...anomalies.map((a) => el('li', {},
-          incSevBadge(a.severity), ' ', el('strong', {}, esc(a.metric)), ' — ', esc(a.explanation || ''),
+          incSevBadge(a.severity), ' ', el('strong', {}, a.metric), ' — ', a.explanation || '',
           el('span', { class: 'muted' }, ` (${fmtDate(a.createdAt)})`))))
       : el('p', { class: 'muted' }, 'No linked anomalies.'));
 
@@ -4130,7 +4130,7 @@ function noteEntryEl(note) {
       el('span', { class: `badge wl-kind-${note.kind}` }, t(`notes.kind.${note.kind}`)),
       el('span', { class: 'muted small' },
         t('notes.byline', { author: note.author || '—', when: fmtDate(note.createdAt) }))),
-    el('p', { class: 'wl-text' }, esc(note.text)));
+    el('p', { class: 'wl-text' }, note.text));
 }
 
 function eventNotesCard(eventId) {
@@ -4283,7 +4283,7 @@ views.clusters = async () => {
         el('td', {}, clusterConfBadge(c.confidence)),
         el('td', {}, clusterStatusBadge(c.status)),
         el('td', { class: 'muted' }, String((c.memberFindingIds || []).length)),
-        el('td', { class: 'muted' }, esc(c.suspectedCommonCause || '—')),
+        el('td', { class: 'muted' }, c.suspectedCommonCause || '—'),
         el('td', { class: 'muted' }, fmtDate(c.createdAt)),
         el('td', { class: 'muted' }, fmtDate(c.detectedAt)))));
     } catch (err) {
@@ -4523,7 +4523,7 @@ function interfaceTable(interfaces, source = null) {
   return el('table', { class: 'iface-table' },
     el('thead', {}, el('tr', {}, ...['Interface', 'Status', 'Link', 'Utilization', '↓ RX', '↑ TX', 'Errors/s', 'Discards/s'].map((h) => el('th', {}, h)))),
     el('tbody', {}, ...ifs.map((i) => el('tr', {},
-      el('td', {}, esc(i.iface)),
+      el('td', {}, i.iface),
       el('td', {}, ifaceStatusBadge(i)),
       el('td', { class: 'muted' }, ifaceLinkText(i)),
       el('td', {}, i.utilPct != null ? el('div', { class: 'util' }, usageBar(i.utilPct), el('span', { class: 'muted num' }, `${i.utilPct}%`)) : el('span', { class: 'muted' }, '–')),
@@ -4690,9 +4690,9 @@ function probeWhat(r) {
   const lines = [];
   // curl/http carry a verification/cert explanation; a probe that could not RUN
   // carries its reason ("traceroute not installed", "ping failed: …").
-  if (r.detail) lines.push(el('div', { class: 'muted small' }, esc(r.detail)));
+  if (r.detail) lines.push(el('div', { class: 'muted small' }, r.detail));
   if (r.type === 'curl' && r.contentType) {
-    lines.push(el('div', { class: 'muted small' }, esc(r.contentType)));
+    lines.push(el('div', { class: 'muted small' }, r.contentType));
   }
   // A blackhole is the one finding that must not wait behind a click: it is the
   // reason this probe type exists, and a row that hides it is a row that gets
@@ -4778,7 +4778,7 @@ function probeLatestTable(rows, loadDetail, onInstall = null, onOpenChange = nul
     },
       el('td', {}, caret, el('span', { class: `badge ${r.ok ? 'online' : 'offline'}`, title: !r.ok && r.detail ? r.detail : null }, r.ok ? 'ok' : 'error')),
       el('td', {}, r.type),
-      el('td', {}, esc(r.target), ...probeWhat(r)),
+      el('td', {}, r.target, ...probeWhat(r)),
       el('td', { class: 'num' }, measured == null ? '–' : measured),
       el('td', { class: 'muted' }, r.ts ? fmtTimeShort(new Date(r.ts).getTime()) : '–'),
       el('td', {}, tool
@@ -4844,7 +4844,7 @@ function pathGraph(graph, pgOpts = {}) {
         el('strong', {}, n.kind === 'source' ? 'Agent (origin)' : (n.kind === 'dest' ? `Destination · hop ${n.hop}` : `Hop ${n.hop}`)),
         el('span', { class: 'mono' }, n.ip || (n.unresponsive ? '* * * (silent)' : '–'))),
       el('div', { class: 'muted' }, n.explain),
-      loc ? el('div', {}, esc(loc)) : (n.private ? el('div', { class: 'muted' }, 'Private / RFC1918 — not geolocated') : null),
+      loc ? el('div', {}, loc) : (n.private ? el('div', { class: 'muted' }, 'Private / RFC1918 — not geolocated') : null),
       el('div', { class: 'pg-stats' },
         stat('Latency', fmtMs(n.rttMs)),
         stat('Loss', fmtPct(n.lossPct)),
@@ -4980,8 +4980,8 @@ function pathGraph(graph, pgOpts = {}) {
         el('span', { class: `pg-dot ${n.severity}` }),
         el('strong', {}, n.kind === 'source' ? 'Agent (origin)' : (n.kind === 'dest' ? 'Destination AS' : 'Transit AS')),
         el('span', { class: 'mono' }, n.asn != null ? `AS${n.asn}` : '—')),
-      n.asnName ? el('div', {}, esc(n.asnName)) : null,
-      n.country ? el('div', { class: 'muted' }, esc(n.country)) : null,
+      n.asnName ? el('div', {}, n.asnName) : null,
+      n.country ? el('div', { class: 'muted' }, n.country) : null,
       el('div', { class: 'pg-stats' },
         stat('Hops', n.hops && n.hops.length ? `#${n.hops.join(', #')}` : '–'),
         stat('Latency', fmtMs(n.rttMs)),
@@ -5317,7 +5317,7 @@ function pathVizTimeline({ agentId, target, metrics, metric, overlay, fullFromMs
     const question = `For the path to ${target} between ${pvFmtTime(state.from)} and ${pvFmtTime(state.to)}, the ${def.label || state.metric} was — ${agg || 'no samples'}. What is the likely cause and what should I check?`;
     try {
       const res = await api('/api/assistant/explain', { method: 'POST', body: { question, hostId: agentId } });
-      explainHost.replaceChildren(el('div', { class: 'pv-explain-head' }, 'Advisor'), el('div', {}, esc(res.answer || res.text || 'No answer.')));
+      explainHost.replaceChildren(el('div', { class: 'pv-explain-head' }, 'Advisor'), el('div', {}, res.answer || res.text || 'No answer.'));
     } catch (e) {
       explainHost.replaceChildren(el('div', { class: 'muted' }, e.status === 403 ? 'The AI advisor is disabled. An administrator can enable it under Settings → AI.' : `Advisor error: ${e.message}`));
     }
@@ -5367,7 +5367,7 @@ async function pathVisualization(opts = {}) {
     try {
       const graph = await api(`/api/probes/path?agentId=${encodeURIComponent(sourceId)}&target=${encodeURIComponent(targetId)}${probeQ}&from=${new Date(fromMs).toISOString()}&to=${new Date(toMs).toISOString()}`);
       if (!graph || (graph.nodes || []).length <= 1) {
-        graphHost.replaceChildren(el('div', { class: 'empty' }, `No path data for ${esc(targetId)} in this window. Run a ${probeType === 'tcptraceroute' ? 'TCP traceroute' : 'traceroute'} from this agent to populate it.`));
+        graphHost.replaceChildren(el('div', { class: 'empty' }, `No path data for ${targetId} in this window. Run a ${probeType === 'tcptraceroute' ? 'TCP traceroute' : 'traceroute'} from this agent to populate it.`));
         return;
       }
       const onNodeClick = (n) => {
@@ -5472,7 +5472,7 @@ function mtuDetail(r) {
   const verdict = pathMtu == null
     ? el('div', { class: 'mtu-verdict unknown' },
       el('h4', {}, t('probe.mtu.unmeasuredTitle')),
-      el('p', {}, r.detail ? t('probe.mtu.unmeasuredReason', { reason: esc(r.detail) }) : t('probe.mtu.unmeasuredBody')))
+      el('p', {}, r.detail ? t('probe.mtu.unmeasuredReason', { reason: r.detail }) : t('probe.mtu.unmeasuredBody')))
     : m.blackholeDetected
     ? el('div', { class: 'mtu-verdict bad' },
       el('h4', {}, t('probe.mtu.blackholeTitle')),
@@ -5527,7 +5527,7 @@ function mtuDetail(r) {
       : [el('tr', {}, el('td', { class: 'muted', colspan: '5' }, t('probe.mtu.noHops')))])));
 
   return el('details', { class: 'sec', open: true },
-    el('summary', {}, t('probe.mtu.title', { target: esc(r.target) })),
+    el('summary', {}, t('probe.mtu.title', { target: r.target })),
     verdict, clamp, stats, table);
 }
 
@@ -5573,7 +5573,7 @@ function tlsDetail(r) {
   if (c.fingerprint256) kv(t('probe.tls.fingerprint'), el('span', { class: 'mono small' }, c.fingerprint256));
 
   return el('details', { class: 'sec', open: true },
-    el('summary', {}, t('probe.tls.title', { target: esc(r.target) })),
+    el('summary', {}, t('probe.tls.title', { target: r.target })),
     el('table', { class: 'kv tls-detail' }, el('tbody', {}, ...rows)));
 }
 
@@ -5596,7 +5596,7 @@ function rdnsDetail(r) {
       d.forwardConfirmed ? null : 'error');
   }
   return el('details', { class: 'sec', open: true },
-    el('summary', {}, t('probe.rdns.title', { target: esc(r.target) })),
+    el('summary', {}, t('probe.rdns.title', { target: r.target })),
     el('table', { class: 'kv' }, el('tbody', {}, ...rows)),
     el('p', { class: 'muted small' }, t('probe.rdns.why')));
 }
@@ -5622,7 +5622,7 @@ async function probeDetail(r, agentId) {
     // Say WHICH probe drew this path — the whole point of having two is that they
     // can disagree, so a hop table with no attribution is a trap.
     const how = r.type === 'tcptraceroute' ? t('probe.traceTcp') : t('probe.traceIcmp');
-    return el('details', { class: 'sec', open: true }, el('summary', {}, `Path to ${esc(r.target)} `, el('span', { class: 'muted' }, `· ${t('probe.tracePath')} ${how} · loss · latency · jitter per hop`)),
+    return el('details', { class: 'sec', open: true }, el('summary', {}, `Path to ${r.target} `, el('span', { class: 'muted' }, `· ${t('probe.tracePath')} ${how} · loss · latency · jitter per hop`)),
       viz,
       el('table', { class: 'probe-hops' },
         el('thead', {}, el('tr', {}, ...['Hop', 'IP', 'RTT', 'Loss', 'Jitter'].map((h) => el('th', {}, h)))),
@@ -5647,11 +5647,11 @@ async function probeDetail(r, agentId) {
   const isTx = r.type === 'transaction';
   const metricLabel = isPageload ? 'Load time (ms)' : isTx ? 'Total time (ms)' : 'RTT (ms)';
   const histTitle = isPageload ? 'Load-time history' : isTx ? 'Transaction-time history' : 'RTT history';
-  const chart = el('details', { class: 'sec', open: true }, el('summary', {}, `${histTitle} — ${r.type} → ${esc(r.target)} `, el('span', { class: 'muted' }, '· band = normal range (median±MAD)')),
+  const chart = el('details', { class: 'sec', open: true }, el('summary', {}, `${histTitle} — ${r.type} → ${r.target} `, el('span', { class: 'muted' }, '· band = normal range (median±MAD)')),
     el('div', { class: 'overview-chart' }, pts.length ? historyChart([{ id: 'rtt', label: metricLabel, color: '#06b6d4', points: pts }], { fromMs, toMs, band, markers }) : el('div', { class: 'empty' }, 'No history yet — run a few measurements.')));
   if (!isPageload && !isTx) return chart;
   return el('div', {},
-    el('details', { class: 'sec', open: true }, el('summary', {}, `${isTx ? 'Steps' : 'Page elements'} — ${esc(r.target)} `, el('span', { class: 'muted' }, isTx ? '· per-step status · size · time' : '· per-resource status · size · load time')), pageloadWaterfall(r)),
+    el('details', { class: 'sec', open: true }, el('summary', {}, `${isTx ? 'Steps' : 'Page elements'} — ${r.target} `, el('span', { class: 'muted' }, isTx ? '· per-step status · size · time' : '· per-resource status · size · load time')), pageloadWaterfall(r)),
     chart);
 }
 
@@ -6479,11 +6479,11 @@ views.discovery = async () => {
       return;
     }
     const foundByCell = (c) => (c.foundByAgentId
-      ? el('button', { class: 'linklike', onclick: () => openAgent(c.foundByAgentId) }, esc(agentNameById[c.foundByAgentId] || `agent ${c.foundByAgentId}`))
+      ? el('button', { class: 'linklike', onclick: () => openAgent(c.foundByAgentId) }, agentNameById[c.foundByAgentId] || `agent ${c.foundByAgentId}`)
       : el('span', { class: 'muted' }, 'server'));
     const rowEl = (c) => el('tr', {},
-      el('td', { class: 'mono' }, esc(c.ip)),
-      el('td', {}, esc(c.hostname || '—')),
+      el('td', { class: 'mono' }, c.ip),
+      el('td', {}, c.hostname || '—'),
       el('td', { class: 'mono' }, (c.openPorts || c.open_ports || []).join(', ')),
       el('td', {}, foundByCell(c)),
       el('td', {}, el('span', { class: `badge ${DISCOVERY_STATUS_BADGE[c.status] || 'muted'}` }, c.status)),
@@ -6520,7 +6520,7 @@ views.discovery = async () => {
       el('tbody', {}, ...(data.sweeps || []).map((s) => el('tr', {},
         el('td', {}, s.createdAt ? fmtDate(s.createdAt) : '—'),
         el('td', {}, el('span', { class: `badge ${s.action === 'discovery_sweep_refused' ? 'warn' : 'online'}` }, s.action === 'discovery_sweep_refused' ? 'refused' : 'swept')),
-        el('td', { class: 'muted' }, esc(s.detail || '')))))));
+        el('td', { class: 'muted' }, s.detail || ''))))));
   }
 
   // Initial load — a 403 means the caller isn't an admin (nav should hide it).
@@ -6599,24 +6599,24 @@ function investigationCard(inv) {
     nis2El = el('details', { class: 'inv-nis2-draft' },
       el('summary', {},
         el('span', { class: 'badge inv-badge INFO' }, 'NIS2'),
-        ` Draft created (${esc(d.eventId || '?')}) — review before submission`),
+        ` Draft created (${d.eventId || '?'}) — review before submission`),
       el('div', { class: 'inv-nis2-draft-body' },
         el('p', { class: 'muted inv-nis2-notice' },
           'AI-generated draft · Requires human review · Never auto-submitted'),
         el('dl', { class: 'inv-nis2-dl' },
-          el('dt', {}, 'Title'), el('dd', {}, esc(d.title || '–')),
+          el('dt', {}, 'Title'), el('dd', {}, d.title || '–'),
           el('dt', {}, 'Severity'), el('dd', {},
             el('span', { class: `badge inv-badge ${sevCls}` }, d.severity || '–')),
           el('dt', {}, 'Detected'), el('dd', {}, d.detectedAt ? fmtDate(new Date(d.detectedAt).getTime()) : '–'),
-          el('dt', {}, 'Affected systems'), el('dd', {}, esc(d.affectedSystems || '–')),
-          el('dt', {}, 'Description'), el('dd', {}, esc(d.businessImpact || '–'))),
+          el('dt', {}, 'Affected systems'), el('dd', {}, d.affectedSystems || '–'),
+          el('dt', {}, 'Description'), el('dd', {}, d.businessImpact || '–')),
         el('p', { class: 'muted' },
           'Edit the draft under ',
           el('a', { href: '#', onclick: (ev) => { ev.preventDefault(); switchView('reporting'); } },
             'Reporting → NIS2 Incidents'), '.')));
   } else if (inv.nis2DraftError) {
     nis2El = el('div', { class: 'inv-nis2-error muted' },
-      `NIS2 draft could not be created: ${esc(inv.nis2DraftError)}`);
+      `NIS2 draft could not be created: ${inv.nis2DraftError}`);
   }
 
   return el('div', { class: 'inv-card' },
@@ -7969,7 +7969,7 @@ ${(b.flows && b.flows.scans && b.flows.scans.length) ? `<h2>Scans / fan-out</h2>
 function exportInvestigationMenu(id, name) {
   const card = $('#modal-card');
   card.replaceChildren(
-    el('h3', {}, `Export investigation — ${esc(name)}`),
+    el('h3', {}, `Export investigation — ${name}`),
     el('p', { class: 'muted' }, 'A snapshot of the last 24 hours: health, data quality, interfaces, latest probes, findings and top talkers.'),
     el('div', { class: 'form-actions' },
       el('button', { onclick: () => downloadAuthed(`/api/export/investigation?agentId=${encodeURIComponent(id)}&format=json`, `investigation-${id}.json`) }, 'JSON'),
@@ -8024,8 +8024,8 @@ function searchHitEl(hit, onNavigate) {
     hit.last_seen ? t('search.lastSeen', { when: relTime(hit.last_seen) }) : t('search.lastSeenNever'));
 
   const body = el('span', { class: 'search-item-body' },
-    el('span', { class: 'search-name' }, esc(hit.display_name), hit.url ? ' ↗' : ''),
-    hit.detail ? el('span', { class: 'search-detail muted small' }, esc(hit.detail)) : null,
+    el('span', { class: 'search-name' }, hit.display_name, hit.url ? ' ↗' : ''),
+    hit.detail ? el('span', { class: 'search-detail muted small' }, hit.detail) : null,
     meta);
 
   // A hit with nowhere to go renders as a non-interactive row rather than a
@@ -8041,7 +8041,7 @@ async function globalSearch(q) {
   q = String(q || '').trim();
   if (!q) return;
   const card = $('#modal-card');
-  const title = () => el('h3', {}, `${t('search.title')}: ${esc(q)}`);
+  const title = () => el('h3', {}, `${t('search.title')}: ${q}`);
   const closeBtn = () => el('div', { class: 'form-actions' },
     el('button', { class: 'ghost', onclick: closeModal }, t('search.close')));
 
@@ -8067,7 +8067,7 @@ async function globalSearch(q) {
 
   if (!hits.length) {
     kids.push(el('div', { class: 'empty' },
-      el('p', {}, t('search.empty', { q: esc(q) })),
+      el('p', {}, t('search.empty', { q: q })),
       el('p', { class: 'muted small' }, t('search.emptyHint'))));
   } else {
     kids.push(el('p', { class: 'muted small' }, t('search.resultCount', { count: data.total })));
@@ -8488,8 +8488,8 @@ function fleetIssues(w) {
   else inc.append(el('table', { class: 'adv-table' }, el('tbody', {}, ...w.events.recent.map((i) =>
     el('tr', i.agentId ? { class: 'clickable', onclick: () => openAgent(i.agentId) } : {},
       el('td', {}, el('span', { class: `badge ${i.severity === 'critical' ? 'crit' : 'warn'}` }, i.severity)),
-      el('td', {}, esc(i.agentName || `agent ${i.agentId}`), i.locationName ? el('span', { class: 'muted' }, ` · ${esc(i.locationName)}`) : null),
-      el('td', {}, esc(i.metric)),
+      el('td', {}, i.agentName || `agent ${i.agentId}`, i.locationName ? el('span', { class: 'muted' }, ` · ${i.locationName}`) : null),
+      el('td', {}, i.metric),
       el('td', { class: 'muted' }, fmtDate(i.startedAt)))))));
 
   const fnd = el('div', { class: 'card' }, el('h3', {}, 'Recent findings', count(w.findings.open)));
@@ -8497,8 +8497,8 @@ function fleetIssues(w) {
   else fnd.append(el('table', { class: 'adv-table' }, el('tbody', {}, ...w.findings.recent.map((x) =>
     el('tr', {},
       el('td', {}, el('span', { class: `badge ${x.severity === 'CRIT' ? 'crit' : x.severity === 'WARN' ? 'warn' : 'grace'}` }, x.severity)),
-      el('td', {}, esc(x.hostId), el('span', { class: 'muted' }, ` · ${esc(x.metric)}`)),
-      el('td', { class: 'muted' }, esc(x.explanation || x.kind || '')))))));
+      el('td', {}, x.hostId, el('span', { class: 'muted' }, ` · ${x.metric}`)),
+      el('td', { class: 'muted' }, x.explanation || x.kind || ''))))));
 
   // First-class events (event_cases) — open/investigating cases; click a
   // row to open its detail page. Guarded for older servers without the widget.
@@ -8508,7 +8508,7 @@ function fleetIssues(w) {
   else cases.append(el('table', { class: 'adv-table' }, el('tbody', {}, ...ic.recent.map((c) =>
     el('tr', { class: 'clickable', onclick: () => openEvent(c.id) },
       el('td', {}, el('span', { class: `badge inc-sev-${c.severity}` }, c.severity)),
-      el('td', {}, esc(c.title),
+      el('td', {}, c.title,
         // Where it is — same agent · site pair the probe-outage rollup shows, so
         // a case can be placed without opening it.
         el('div', { class: 'muted inc-where' }, eventWhere(c))),
@@ -8673,8 +8673,8 @@ async function loadAgentCmdbLink(id, host) {
   }
 
   function showLinked(l) {
-    const kids = [el('span', { class: 'cmdb-chip-name' }, esc(l.cmdb_asset_name || l.cmdb_asset_id))];
-    if (l.cmdb_asset_location) kids.push(el('span', { class: 'muted small' }, `· ${esc(l.cmdb_asset_location)}`));
+    const kids = [el('span', { class: 'cmdb-chip-name' }, l.cmdb_asset_name || l.cmdb_asset_id)];
+    if (l.cmdb_asset_location) kids.push(el('span', { class: 'muted small' }, `· ${l.cmdb_asset_location}`));
     if (writable) {
       const x = el('button', { class: 'cmdb-chip-x', title: 'Remove link' }, '×');
       x.addEventListener('click', unlink);
@@ -8896,7 +8896,7 @@ async function loadAgentDependencies(id, host) {
       chartHost.replaceChildren(baselineBandChart(slots, { title: `Baseline → ${peerLabel}:${dstPort}` }));
     };
     card.replaceChildren(
-      el('h3', {}, `Baseline · ${esc(peerLabel)}:${dstPort}`),
+      el('h3', {}, `Baseline · ${peerLabel}:${dstPort}`),
       el('div', { class: 'history-controls' }, el('label', { class: 'inline muted' }, 'Day ', dowSel)),
       chartHost,
       el('div', { class: 'form-actions' }, el('button', { class: 'ghost', onclick: closeModal }, 'Close')));
@@ -8922,7 +8922,7 @@ async function loadAgentDependencies(id, host) {
     el('tbody', {}, ...rows.map((e) => {
       const peerId = dir === 'out' ? e.dstHostId : e.srcHostId;
       return el('tr', {},
-        el('td', {}, el('button', { class: 'linklike', onclick: () => openAgent(peerId) }, esc(nameFor(peerId)))),
+        el('td', {}, el('button', { class: 'linklike', onclick: () => openAgent(peerId) }, nameFor(peerId))),
         el('td', { class: 'num' }, String(e.dstPort)),
         el('td', { class: 'num' }, fmtBytes(e.bytes)),
         el('td', { class: 'num' }, String(e.connCount)),
@@ -8947,11 +8947,11 @@ views.agent = async () => {
 
   root.append(el('div', { class: 'section-head' },
     el('button', { class: 'small ghost', onclick: () => { currentView = 'fleet'; render(); } }, '← Overview'),
-    el('h2', {}, esc(agent.display_name || agent.hostname)),
+    el('h2', {}, agent.display_name || agent.hostname),
     el('span', { class: `badge ${agent.status}` }, agent.status),
     agent.location_id != null
-      ? el('button', { class: 'linklike', title: 'Open the location page — agents, health & data flows', onclick: () => openLocation(agent.location_id) }, '📍 ', esc(agent.location_name || `#${agent.location_id}`))
-      : (agent.location_name ? el('span', { class: 'muted' }, esc(agent.location_name)) : null),
+      ? el('button', { class: 'linklike', title: 'Open the location page — agents, health & data flows', onclick: () => openLocation(agent.location_id) }, '📍 ', agent.location_name || `#${agent.location_id}`)
+      : (agent.location_name ? el('span', { class: 'muted' }, agent.location_name) : null),
     el('button', { class: 'small ghost', onclick: () => { currentView = 'flows'; render(); } }, 'Flows →'),
     el('button', { class: 'small ghost', onclick: () => exportInvestigationMenu(id, agent.display_name || agent.hostname) }, 'Export'),
     canWrite() ? el('button', { class: 'small ghost', onclick: () => runTest(agent) }, 'Run test') : null));
@@ -9128,11 +9128,11 @@ function nicTable(nics) {
   if (!Array.isArray(nics) || !nics.length) return el('div', { class: 'empty' }, 'No NIC inventory reported yet (needs an agent that runs ethtool on Linux).');
   const head = el('tr', {}, ...['Interface', 'Driver', 'Driver ver.', 'Firmware', 'Bus'].map((h) => el('th', {}, h)));
   const rows = nics.map((n) => el('tr', {},
-    el('td', {}, esc(n.iface || '—')),
-    el('td', {}, esc(n.driver || '—')),
-    el('td', { class: 'muted' }, esc(n.driverVersion || '—')),
-    el('td', {}, esc(n.firmwareVersion || '—')),
-    el('td', { class: 'muted' }, esc(n.busInfo || n.pciId || '—'))));
+    el('td', {}, n.iface || '—'),
+    el('td', {}, n.driver || '—'),
+    el('td', { class: 'muted' }, n.driverVersion || '—'),
+    el('td', {}, n.firmwareVersion || '—'),
+    el('td', { class: 'muted' }, n.busInfo || n.pciId || '—')));
   return el('table', { class: 'iface-table' }, el('thead', {}, head), el('tbody', {}, ...rows));
 }
 
@@ -9162,7 +9162,7 @@ views.nics = async () => {
   // A chip per agent on a given firmware; click to open that agent.
   const agentChips = (agents) => el('div', { class: 'nic-chips' }, ...agents.map((a) =>
     el('button', { class: 'chip ghost small', title: a.location ? `${a.name} · ${a.location}` : a.name, onclick: () => openAgent(a.id) },
-      esc(a.name), a.iface ? el('span', { class: 'muted' }, ` (${esc(a.iface)})`) : null)));
+      a.name, a.iface ? el('span', { class: 'muted' }, ` (${a.iface})`) : null)));
 
   // Group-by toggle: aggregate by NIC model (drift-first) or list every agent
   // with its NIC specs. Defaults to models — the firmware-drift lens. A search box
@@ -9203,11 +9203,11 @@ views.nics = async () => {
       const driftCard = el('div', { class: 'nic-card drift-card' }, el('h3', {}, '⚠ Firmware drift'));
       for (const model of drift) {
         const block = el('div', { class: 'drift-model' },
-          el('div', { class: 'drift-head' }, el('strong', {}, esc(model.label)), el('span', { class: 'muted' }, ` · ${model.count} unit(s)`)));
+          el('div', { class: 'drift-head' }, el('strong', {}, model.label), el('span', { class: 'muted' }, ` · ${model.count} unit(s)`)));
         for (const f of model.firmwares) {
           block.append(el('div', { class: `fw-row${f.isOutlier ? ' fw-outlier' : ''}` },
             el('span', { class: `badge ${f.isOutlier ? 'warn' : 'online'}` }, f.isOutlier ? 'outlier' : 'majority'),
-            el('span', { class: 'fw-ver' }, esc(f.firmwareVersion)),
+            el('span', { class: 'fw-ver' }, f.firmwareVersion),
             el('span', { class: 'muted' }, ` — ${f.count} unit(s)`),
             agentChips(f.agents)));
         }
@@ -9221,8 +9221,8 @@ views.nics = async () => {
     for (const model of models) {
       const fwSummary = model.firmwares.map((f) => `${f.firmwareVersion} ×${f.count}`).join(' · ');
       invCard.append(el('div', { class: 'nic-model-row' },
-        el('div', {}, el('strong', {}, esc(model.label)), model.hasDrift ? el('span', { class: 'badge warn', style: 'margin-left:.4rem' }, 'drift') : null),
-        el('div', { class: 'muted' }, `${model.count} unit(s) · ${esc(fwSummary)}`)));
+        el('div', {}, el('strong', {}, model.label), model.hasDrift ? el('span', { class: 'badge warn', style: 'margin-left:.4rem' }, 'drift') : null),
+        el('div', { class: 'muted' }, `${model.count} unit(s) · ${fwSummary}`)));
     }
     wrap.append(invCard);
     return wrap;
@@ -9241,8 +9241,8 @@ views.nics = async () => {
       const nics = needle && a.nics.some(nicMatch) ? a.nics.filter(nicMatch) : a.nics;
       card.append(el('div', { class: 'nic-agent-row' },
         el('div', { class: 'nic-agent-head' },
-          el('button', { class: 'linklike', onclick: () => openAgent(a.id) }, esc(a.name)),
-          a.location ? el('span', { class: 'muted' }, ` · ${esc(a.location)}`) : null,
+          el('button', { class: 'linklike', onclick: () => openAgent(a.id) }, a.name),
+          a.location ? el('span', { class: 'muted' }, ` · ${a.location}`) : null,
           el('span', { class: 'muted' }, ` · ${a.nics.length} interface(s)`)),
         nicTable(nics)));
     }
@@ -10132,8 +10132,8 @@ views.location = async () => {
 
   root.append(el('div', { class: 'section-head' },
     el('button', { class: 'small ghost', onclick: () => { currentView = 'locations'; render(); } }, '← Locations'),
-    el('h2', {}, '📍 ', esc(loc.name)),
-    loc.description ? el('span', { class: 'muted' }, esc(loc.description)) : null,
+    el('h2', {}, '📍 ', loc.name),
+    loc.description ? el('span', { class: 'muted' }, loc.description) : null,
     loc.latitude != null ? el('span', { class: 'muted' }, `· ${Number(loc.latitude).toFixed(3)}, ${Number(loc.longitude).toFixed(3)}`) : null,
     el('span', { class: 'spacer' }),
     el('button', { class: 'small ghost', onclick: () => openFlows(null, { mode: 'map', locationId: id }) }, 'Flows →'),
@@ -10160,7 +10160,7 @@ views.location = async () => {
     const a = fleetById.get(m.id);
     const h = a && a.health; const met = (h && h.metrics) || {};
     return el('tr', { class: 'fleet-row', tabindex: '0', onclick: () => openAgent(m.id), onkeydown: (e) => { if (e.key === 'Enter') openAgent(m.id); } },
-      el('td', {}, el('div', {}, esc(m.display_name || m.hostname)), m.display_name && m.display_name !== m.hostname ? el('div', { class: 'muted' }, esc(m.hostname)) : null),
+      el('td', {}, el('div', {}, m.display_name || m.hostname), m.display_name && m.display_name !== m.hostname ? el('div', { class: 'muted' }, m.hostname) : null),
       el('td', {}, el('span', { class: `badge ${m.status}` }, m.status)),
       el('td', {}, h ? healthBadge(h) : el('span', { class: 'muted' }, '–')),
       el('td', { class: 'num' }, met.lossPct != null ? `${met.lossPct}%` : '–'),
@@ -10168,7 +10168,7 @@ views.location = async () => {
       el('td', { class: 'num' }, met.jitterMs != null ? `${met.jitterMs} ms` : '–'),
       el('td', { class: 'num muted' }, met.targets ? `${met.reachable}/${met.targets}` : '–'),
       el('td', { class: 'num' }, throughputText(a && a.throughput)),
-      el('td', { class: 'muted' }, esc((a && a.quality && a.quality.version) || (m.capabilities && m.capabilities.version) || '–')),
+      el('td', { class: 'muted' }, (a && a.quality && a.quality.version) || (m.capabilities && m.capabilities.version) || '–'),
       el('td', { class: 'muted' }, m.last_seen ? fmtDate(m.last_seen) : '–'));
   };
   const agentsCard = el('div', { class: 'card loc-card' }, el('h3', {}, `Agents (${members.length})`));
@@ -10198,8 +10198,8 @@ views.location = async () => {
         return el('div', { class: 'flowmap-row', role: 'button', tabindex: '0', onclick: toFlows, onkeydown: (e) => { if (e.key === 'Enter') toFlows(); } },
           el('span', { class: 'tc-dot', style: `background:${trafficTypeColor(a.category)}` }),
           el('span', { class: 'fmr-dst' },
-            el('span', {}, `${esc(site ? site.name : loc.name)} → ${esc(a.country)}`),
-            el('span', { class: 'muted' }, `${esc(a.label)}${a.asnNames && a.asnNames.length ? ' · ' + esc(a.asnNames[0]) : ''}`)),
+            el('span', {}, `${site ? site.name : loc.name} → ${a.country}`),
+            el('span', { class: 'muted' }, `${a.label}${a.asnNames && a.asnNames.length ? ' · ' + a.asnNames[0] : ''}`)),
           el('span', { class: 'fmr-vol num' }, fmtBytes(a.bytes), el('span', { class: `fmr-dir dir-${a.direction}` }, dirTxt)));
       }));
     },
@@ -10218,7 +10218,7 @@ views.locations = async () => {
     el('thead', {}, el('tr', {}, ...['ID', 'Name', 'Description', ''].map((h) => el('th', {}, h)))),
     el('tbody', {}, ...locations.map((l) => el('tr', {},
       el('td', {}, String(l.id)),
-      el('td', {}, el('button', { class: 'linklike', title: 'Open the location page — agents, health & data flows', onclick: () => openLocation(l.id) }, esc(l.name))),
+      el('td', {}, el('button', { class: 'linklike', title: 'Open the location page — agents, health & data flows', onclick: () => openLocation(l.id) }, l.name)),
       el('td', { class: 'muted' }, l.description || '–'),
       el('td', {}, el('div', { class: 'row-actions' },
         el('button', { class: 'small ghost', onclick: () => openLocation(l.id) }, 'Open'),
@@ -10239,7 +10239,7 @@ async function showLocationSummary(l) {
   const out = el('div', { class: 'assistant-out muted' }, 'Thinking…');
   const close = el('button', { class: 'ghost', onclick: closeModal }, 'Close');
   card.replaceChildren(
-    el('h3', {}, `AI status — ${esc(l.name)}`),
+    el('h3', {}, `AI status — ${l.name}`),
     el('p', { class: 'muted' }, 'Based on the latest probe-health verdicts and findings for this location.'),
     out,
     el('div', { class: 'form-actions' }, close));
@@ -10249,7 +10249,7 @@ async function showLocationSummary(l) {
     out.className = 'assistant-out';
     out.replaceChildren(
       el('div', {}, res.answer || '(empty response)'),
-      el('div', { class: 'assistant-meta muted' }, `${esc(res.model || '')} · ${res.agents ?? 0} agent(s) · ${res.findings ?? 0} finding(s) in context`));
+      el('div', { class: 'assistant-meta muted' }, `${res.model || ''} · ${res.agents ?? 0} agent(s) · ${res.findings ?? 0} finding(s) in context`));
   } catch (err) {
     out.className = 'assistant-out muted';
     out.textContent = err.status === 403
@@ -10276,7 +10276,7 @@ function showLocationTraffic(l) {
       data = await api(`/locations/${l.id}/traffic`);
     } catch (err) {
       card.replaceChildren(
-        el('h3', {}, `Traffic — ${esc(l.name)}`),
+        el('h3', {}, `Traffic — ${l.name}`),
         el('p', { class: 'error' }, err.message),
         el('div', { class: 'form-actions' }, el('button', { class: 'ghost', onclick: close }, 'Close')));
       stop();
@@ -10293,7 +10293,7 @@ function showLocationTraffic(l) {
       el('td', { class: 'muted' }, a.at ? fmtDate(a.at) : '–'),
     ));
     card.replaceChildren(
-      el('h3', {}, `Traffic — ${esc(l.name)}`),
+      el('h3', {}, `Traffic — ${l.name}`),
       el('div', { class: 'cards' },
         stat('Agents', String(data.agentCount)),
         stat('Reporting', String(data.reportingCount)),
@@ -10311,7 +10311,7 @@ function showLocationTraffic(l) {
       el('div', { class: 'form-actions' }, el('button', { class: 'ghost', onclick: close }, 'Close')));
   }
 
-  card.replaceChildren(el('h3', {}, `Traffic — ${esc(l.name)}`), el('div', { class: 'empty' }, 'Loading…'));
+  card.replaceChildren(el('h3', {}, `Traffic — ${l.name}`), el('div', { class: 'empty' }, 'Loading…'));
   $('#modal').classList.remove('hidden');
   // Stop polling if the modal is dismissed by backdrop click / Escape path.
   const modal = $('#modal');
@@ -10364,7 +10364,7 @@ function showLocationHistory(l) {
   }
 
   card.replaceChildren(
-    el('h3', {}, `History — ${esc(l.name)}`),
+    el('h3', {}, `History — ${l.name}`),
     el('div', { class: 'form-grid' },
       el('label', {}, 'From', fromInput),
       el('label', {}, 'To', toInput),
@@ -10566,7 +10566,7 @@ views.enrollment = async () => {
       title: `${a.online ? 'Online' : 'Offline'} — open agent`,
       onclick: () => openAgent(a.id),
       onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openAgent(a.id); } },
-    }, el('span', { class: `badge ${a.online ? 'online' : 'offline'}` }, a.online ? 'online' : 'offline'), esc(a.name))))
+    }, el('span', { class: `badge ${a.online ? 'online' : 'offline'}` }, a.online ? 'online' : 'offline'), a.name)))
     : el('span', { class: 'muted' }, '–'));
   root.append(dataCard('Active codes', { actions: [deleteExpiredBtn, newCodeBtn], note: CODES_NOTE }, el('div', { class: 'tablewrap' }, el('table', {},
     el('thead', {}, el('tr', {}, ...['ID', 'Status', 'Uses', 'Agents', 'Location', 'Expires', 'Created', ''].map((h) => el('th', {}, h)))),
@@ -10746,7 +10746,7 @@ function createCode() {
     card.replaceChildren(
       el('h3', {}, 'Code created'),
       el('p', { class: 'muted' }, 'Copy the code now — it is only shown this once:'),
-      el('pre', {}, esc(created.code)),
+      el('pre', {}, created.code),
       created.max_uses > 1 ? el('p', { class: 'muted small' }, `Bulk code: can be used ${created.max_uses} times.`) : null,
       el('div', { class: 'form-actions' }, el('button', {}, 'Close')));
     card.querySelector('button').addEventListener('click', () => { closeModal(); render(); });
@@ -10882,7 +10882,7 @@ views.logs = async () => {
         el('td', {}, logLevelBadge(r.level)),
         el('td', { class: 'muted small' }, r.source === 'client' ? 'dashboard' : 'server'),
         // el() appends children as text nodes (already XSS-safe), so msg/meta
-        // must NOT be esc()'d — doing so rendered literal &quot; in the meta JSON.
+        // must NOT be 'd — doing so rendered literal &quot; in the meta JSON.
         el('td', {}, el('div', {}, r.msg), metaStr ? el('div', { class: 'muted small' }, metaStr) : null));
     }));
     if (!status.textContent) status.textContent = `${rows.length} entr${rows.length === 1 ? 'y' : 'ies'} shown`;
@@ -11974,17 +11974,23 @@ async function settingsUpdatesView() {
   const offered = ver.agent || null;
   const source = ver.agentSource || offered;
   const versions = { offered, source };
-  // When a signed release is newer than the packaged source, the "one-click"
-  // (release) and "installer" (source) targets diverge — show both so it's clear
-  // why an installer-only agent stops at the older number.
-  const diverged = offered && source && compareVersions(offered, source) !== 0;
+  // The "one-click" (release) and "installer" (source) targets can diverge in
+  // EITHER direction, and the two cases need opposite advice — so the copy is
+  // chosen from the comparison instead of asserting one of them. The old text
+  // always read "a signed release is newer than the packaged source", which on
+  // a host whose agent checkout had moved ahead printed a sentence with the two
+  // numbers the wrong way round and no hint of what was actually wrong.
+  const drift = offered && source ? compareVersions(offered, source) : 0;
   root.append(el('div', { class: 'cards' },
     stat('Server', ver.server ? `v${ver.server}` : '–'),
     stat('Agent (one-click)', offered ? `v${offered}` : '–'),
-    diverged ? stat('Agent (installer)', `v${source}`) : null));
-  if (diverged) {
+    drift !== 0 ? stat('Agent (installer)', `v${source}`) : null));
+  if (drift > 0) {
     root.append(el('p', { class: 'muted' },
       `A signed release (v${offered}) is newer than the packaged source (v${source}). Systemd agents one-click-update to v${offered}; Docker/Windows/unmanaged agents re-run their installer and reach v${source}. To lift the installer target, pull the new agent source on the server host and "Reload agent source" below.`));
+  } else if (drift < 0) {
+    root.append(el('p', { class: 'warn-note' },
+      `The agent source on this host (v${source}) is newer than the newest SIGNED release (v${offered}) — the signed bundle was never re-signed after the source moved. One-click Update pushes v${source} and falls back to an unsigned bundle when this server has no release signing key, which an agent pinned to a key will refuse. Fix it with "Reload agent source" below (it re-signs), or generate a signing key under Settings → License.`));
   }
 
   // Re-read the agent source from disk so a freshly-pulled version is served
@@ -11997,7 +12003,14 @@ async function settingsUpdatesView() {
         onclick: async () => {
           try {
             const r = await api('/system/agent-source/reload', { method: 'POST' });
-            toast(r && r.version ? `Agent source reloaded — now serving v${r.version}.` : 'Agent source reloaded.');
+            // A reload that packaged the new source but could NOT re-sign it is
+            // a half-success: one-click Update still pushes the old signed
+            // release (or an unsigned bundle a pinned agent refuses). Say so
+            // rather than reporting a plain "reloaded".
+            const note = r && r.releaseNote;
+            const head = r && r.version ? `Agent source reloaded — now serving v${r.version}.` : 'Agent source reloaded.';
+            if (note) toast(`${head} ${note}`, true);
+            else toast(r && r.releaseVersion ? `${head} Signed release v${r.releaseVersion} published.` : head);
             render();
           } catch (err) { toast(err.message, true); }
         },
@@ -13039,11 +13052,11 @@ function ldapAuditCard() {
       el('thead', {}, el('tr', {}, ...['When', 'Username', 'Result', 'Role', 'Groups', 'Source IP'].map((h) => el('th', {}, h)))),
       el('tbody', {}, ...rows.map((r) => el('tr', {},
         el('td', { class: 'muted' }, fmtDate(r.created_at)),
-        el('td', {}, esc(r.username || '–')),
-        el('td', {}, r.ok ? el('span', { class: 'badge ok' }, 'ok') : el('span', { class: 'badge bad' }, esc(r.reason || 'failed'))),
-        el('td', {}, esc(r.granted_role || '–')),
+        el('td', {}, r.username || '–'),
+        el('td', {}, r.ok ? el('span', { class: 'badge ok' }, 'ok') : el('span', { class: 'badge bad' }, r.reason || 'failed')),
+        el('td', {}, r.granted_role || '–'),
         el('td', { class: 'muted' }, String(r.groups_matched ?? 0)),
-        el('td', { class: 'muted' }, esc(r.source_ip || '–'))))))));
+        el('td', { class: 'muted' }, r.source_ip || '–')))))));
   }
   refresh.addEventListener('click', load);
   load();
@@ -13076,7 +13089,7 @@ async function settingsMaintenanceView() {
     listHost.replaceChildren(el('table', {},
       el('thead', {}, el('tr', {}, ...['Name', 'Scope', 'From', 'To', '', ''].map((h) => el('th', {}, h)))),
       el('tbody', {}, ...windows.map((w) => el('tr', {},
-        el('td', {}, esc(w.name)),
+        el('td', {}, w.name),
         el('td', { class: 'muted' }, scopeText(w)),
         el('td', { class: 'muted' }, fmtDate(w.from)),
         el('td', { class: 'muted' }, fmtDate(w.to)),
@@ -13171,7 +13184,7 @@ async function settingsSeverityRulesView() {
   const rows = rules.map((r) => el('tr', { class: r.enabled ? '' : 'acked' },
     el('td', { class: 'muted' }, severityRuleSourceLabel(r.source)),
     el('td', {}, severityRuleScope(r)),
-    el('td', {}, el('span', { class: `badge ${esc(r.severity)}` }, r.severity)),
+    el('td', {}, el('span', { class: `badge ${r.severity}` }, r.severity)),
     el('td', {}, r.reason || '—'),
     // A rule nobody can tell is dead is a rule nobody dares delete.
     el('td', { class: 'muted' }, r.applied_count
@@ -13311,9 +13324,9 @@ async function settingsRunbooksView() {
     return root;
   }
   const rows = runbooks.map((r) => el('tr', {},
-    el('td', {}, el('span', { class: 'badge rc-type' }, esc(r.findingType))),
-    el('td', {}, el('strong', {}, esc(r.title))),
-    el('td', { class: 'muted' }, r.linkedPlaybookName ? esc(r.linkedPlaybookName) : '—'),
+    el('td', {}, el('span', { class: 'badge rc-type' }, r.findingType)),
+    el('td', {}, el('strong', {}, r.title)),
+    el('td', { class: 'muted' }, r.linkedPlaybookName ? r.linkedPlaybookName : '—'),
     el('td', {}, el('div', { class: 'row-actions' },
       el('button', { class: 'small ghost', onclick: () => editRunbook(r) }, 'Edit'),
       el('button', { class: 'small ghost', onclick: () => deleteRunbook(r) }, 'Delete')))));
@@ -13862,8 +13875,8 @@ function geoipSettingsCard(geoip) {
     status.replaceChildren(
       el('span', ok ? { style: 'color:var(--ok);font-weight:600' } : { class: 'warn-text' },
         ok ? `Loaded ${s.ranges} IP range${s.ranges === 1 ? '' : 's'}` : 'Not configured — geo enrichment disabled'),
-      s && s.source ? el('span', { class: 'muted' }, ` · source: ${esc(s.source)}`) : null,
-      s && s.error ? el('span', { class: 'warn-text' }, ` · ${esc(s.error)}`) : null);
+      s && s.source ? el('span', { class: 'muted' }, ` · source: ${s.source}`) : null,
+      s && s.error ? el('span', { class: 'warn-text' }, ` · ${s.error}`) : null);
     const b = s && s.lastBuild;
     built.textContent = b ? `Last downloaded: ${b.month || '?'} · ${b.ranges} ranges · ${fmtDate(b.builtAt)}` : '';
     if (s && typeof s.dbPath === 'string' && s.dbPath !== path.value) path.value = s.dbPath;

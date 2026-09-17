@@ -286,6 +286,7 @@
           note: t('analysis.rowCount', { n: rows.length }),
           children: [
             rows.length ? table() : ui.emptyState({
+              kind: 'ok',
               title: t('analysis.empty'),
               body: t('analysis.emptyHint'),
               action: (state.hostId || state.severity || state.metric)

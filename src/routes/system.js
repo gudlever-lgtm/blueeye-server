@@ -6,6 +6,7 @@ const { requireAuth, requireRole } = require('../auth/middleware');
 const { ROLES } = require('../auth/roles');
 const pkg = require('../../package.json');
 const { isNewer } = require('../lib/version');
+const { silentLogger } = require('../logger');
 
 // Server storage info (disk free/used + database size). Read-only, viewer+.
 function createSystemRouter({
@@ -46,13 +47,22 @@ function createSystemRouter({
   const sourceAgentVersion = () =>
     (agentSourceStore && typeof agentSourceStore.sourceVersion === 'function' ? agentSourceStore.sourceVersion() : null);
 
-  // The agent version the server currently offers: a signed, uploaded release
-  // takes precedence over the startup-packaged source bundle, so "is this agent
-  // out of date?" tracks what a systemd one-click Update would actually push.
+  // The agent version the server currently offers: the NEWER of the signed
+  // release and the packaged source.
+  //
+  // This used to hand the signed release precedence outright, on the assumption
+  // that "a signed release can never be newer than the source it was signed
+  // from". A release that was signed and then never re-signed breaks that: the
+  // host pulled the agent to v0.27.0, the store still held a signed v0.24.0,
+  // and every one-click Update went on pushing v0.24.0 while the dashboard
+  // reported the agents up to date. A stale signature must not pin the fleet
+  // backwards, so the comparison is explicit.
   const offeredAgentVersion = () => {
     const rel = releaseStore && typeof releaseStore.latest === 'function' ? releaseStore.latest() : null;
-    if (rel && rel.version) return rel.version;
-    return sourceAgentVersion();
+    const src = sourceAgentVersion();
+    if (!rel || !rel.version) return src;
+    if (!src) return rel.version;
+    return isNewer(src, rel.version) ? src : rel.version;
   };
 
   // What the vendor has published, as carried by the signed license proof. The
@@ -245,14 +255,40 @@ function createSystemRouter({
       // one-click Update tracks the new version instead of pushing an unsigned
       // (and therefore refused) bundle. Best-effort + no-op without a signing
       // key — reloading source must still succeed.
+      //
+      // The re-sign is best-effort, but it is NOT silent. Swallowing it meant a
+      // reload that packaged a new source and failed to sign it answered "OK",
+      // and the fleet went on being offered the old signed release with nothing
+      // anywhere saying why. The reason now comes back with the response.
       let released = null;
-      if (typeof publishRelease === 'function' && canSignReleases()) {
-        try { const meta = await publishRelease(); released = meta && meta.version ? meta.version : null; } catch { /* keep reload successful */ }
+      let releaseNote = null;
+      if (typeof publishRelease !== 'function') {
+        releaseNote = 'This server cannot publish signed releases.';
+      } else if (!keyConfigured()) {
+        releaseNote = 'No release signing key is configured, so the new source is served unsigned.';
+      } else if (!canSignReleases()) {
+        releaseNote = 'The release signing key is configured but unusable (locked or unreadable), so the new source is served unsigned.';
+      } else if (!releaseStoreReady()) {
+        releaseNote = 'No writable release directory (AGENT_RELEASE_DIR), so the signed release could not be stored.';
+      } else {
+        try {
+          const meta = await publishRelease();
+          released = meta && meta.version ? meta.version : null;
+          if (!released) releaseNote = 'The source bundle could not be signed (nothing to sign).';
+        } catch (err) {
+          releaseNote = `Signing the new source failed: ${err.message}`;
+          (req.log || silentLogger).warn(`system: re-signing the reloaded agent source failed (${err.message}).`);
+        }
       }
+      const sourceVersion = typeof agentSourceStore.sourceVersion === 'function' ? agentSourceStore.sourceVersion() : null;
+      // The one thing an operator must not be left guessing about: what a
+      // one-click Update will actually push after this reload.
       res.json({
-        version: typeof agentSourceStore.sourceVersion === 'function' ? agentSourceStore.sourceVersion() : null,
+        version: sourceVersion,
         available: typeof agentSourceStore.available === 'function' ? agentSourceStore.available() : false,
         releaseVersion: released,
+        releaseNote,
+        offered: offeredAgentVersion(),
       });
     })
   );

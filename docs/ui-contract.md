@@ -170,6 +170,47 @@ with a legacy rule in `styles.css` (`.badge`, `.panel`, `.toolbar` all exist
 there) while pages migrate one at a time. When the last page is migrated the
 marker moves to the shell and the legacy rules go.
 
+### The layer scale
+
+Anything that paints over the page takes its `z-index` from one ordered scale in
+[`public/css/tokens.css`](../public/css/tokens.css). A hand-picked number is a
+finding (`ui:check`, rule `z-index`), and `test/layerScale.test.js` pins the
+order.
+
+| Token | Layer |
+| --- | --- |
+| `--z-sticky` | sticky table head, inside its panel |
+| `--z-inline` | inline suggestion list, anchored to its input |
+| `--z-topbar` | sticky page topbar |
+| `--z-sidebar` | nav rail (its mobile scrim one below) |
+| `--z-popover` | help popover, dropdown menu |
+| `--z-rowmenu` | row action menu |
+| `--z-scrim` | modal / drawer backdrop |
+| `--z-modal` | modal card, drawer panel |
+| `--z-toast` | toast — always on top, so one raised from a modal is readable |
+
+Hand-picked numbers produced three separate bugs: the sidebar (60) painted over
+the slide-in drawer (51); the legacy `.modal` had **no** `z-index` at all and
+went under the sticky page chrome; and Leaflet numbers its own panes from 400 up,
+which without a stacking context of their own landed in the ROOT one and covered
+the drawer, the modal and the toast — "the map covers the Destination details".
+`.leaflet-container { isolation: isolate }` clamps the map's panes to the map.
+
+### Toasts
+
+Top right, stacked, capped at four. A confirmation clears after 5 s; an **error
+after 15 s**, not never — a stack of undismissed errors ends up covering the page
+it is complaining about. The countdown pauses while the pointer is over the stack
+or focus is inside it, so an error being read is not pulled away mid-sentence,
+and ✕ closes one on demand. The same title+detail twice is one toast with its
+timer restarted, so clicking a button that fails validation five times does not
+build a five-high stack of the same line.
+
+`opts.focus` takes the form field the message is about: the field is scrolled to,
+focused and ringed (`.is-asked`, cleared on the first input/change/blur). "Pick
+an agent first" should put the cursor in the agent picker, not leave the operator
+guessing which of six controls it means.
+
 ```js
 const view = ui.page(
   ui.pageHeader({ title, lead, help, actions: [secondary, primary] }),

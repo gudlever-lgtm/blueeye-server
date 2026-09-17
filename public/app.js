@@ -1366,6 +1366,7 @@ const CONTRACT_VIEWS = new Map([
   ['about', 'about'],
   ['docs', 'docs'],
   ['users', 'users'],
+  ['screening', 'screening'],
 ]);
 
 function hero(viewKey) {
@@ -1443,116 +1444,38 @@ function screenSetupLink(t) {
   return settingsLink(tab, 'Set up →');
 }
 
-views.screening = async () => {
-  const root = el('div');
-  let catalog = [];
-  let groupOrder = [];
-  const results = new Map(); // target id -> last run result
-
-  const runAllBtn = el('button', {}, 'Run full screening');
-  root.append(el('div', { class: 'section-head' },
-    el('h2', {}, 'Test Settings'),
-    el('span', { class: 'spacer' }),
-    runAllBtn));
-
-  const summaryBar = el('div', { class: 'screen-summary' });
-  const bodyEl = el('div', { class: 'empty' }, 'Loading…');
-  root.append(summaryBar, bodyEl);
-
-  const chip = (label, n, cls) => el('span', { class: `badge ${cls || ''}`.trim() }, `${label}: ${n}`);
-
-  function renderSummary() {
-    const counts = { ok: 0, info: 0, warn: 0, bad: 0 };
-    for (const t of catalog) {
-      const r = results.get(t.id);
-      counts[(r ? r.severity : t.posture)] += 1;
-    }
-    summaryBar.replaceChildren(
-      chip('Targets', catalog.length, ''),
-      chip('OK', counts.ok, 'ok'),
-      chip('Warnings', counts.warn, 'warn'),
-      chip('Critical', counts.bad, 'bad'));
-  }
-
-  function targetRow(t) {
-    const r = results.get(t.id);
-    const sev = r ? r.severity : t.posture;
-    const statusBadge = el('span', { class: SCREEN_SEV_BADGE[sev] || 'badge' }, SCREEN_SEV_LABEL[sev] || sev);
-
-    const checks = el('div', { class: 'screen-checks' },
-      ...(t.security || []).map((c) => el('span',
-        { class: `screen-chip ${c.status}`, title: c.note || '' },
-        `${c.label}: ${SCREEN_SEV_LABEL[c.status] || c.status}`)));
-
-    const detailLine = el('div', { class: 'screen-detail muted' });
-    if (r) detailLine.textContent = `${r.ran ? (r.ok ? '✓ ' : '✗ ') : ''}${r.detail || ''}${r.ran && r.durationMs != null ? ` · ${r.durationMs} ms` : ''}`;
-    else if (!t.runnable) detailLine.textContent = 'Configuration screened only — no live test for this target.';
-
-    const runBtn = el('button', { class: 'small ghost' }, 'Run');
-    if (t.licensed === false) { runBtn.disabled = true; runBtn.textContent = 'Not licensed'; }
-    else if (!t.runnable) runBtn.disabled = true;
-    else runBtn.addEventListener('click', () => runTargets([t.id], runBtn));
-
-    return el('div', { class: 'screen-row' },
-      el('div', { class: 'screen-row-main' },
-        el('div', { class: 'screen-row-head' },
-          statusBadge,
-          el('strong', {}, t.name),
-          el('span', { class: 'muted screen-row-detail' }, t.detail)),
-        checks,
-        detailLine),
-      el('div', { class: 'screen-row-actions' }, runBtn, screenSetupLink(t)));
-  }
-
-  function renderBody() {
-    if (!catalog.length) { bodyEl.className = 'empty'; bodyEl.replaceChildren('No targets to screen.'); return; }
-    const byGroup = new Map();
-    for (const t of catalog) { if (!byGroup.has(t.group)) byGroup.set(t.group, []); byGroup.get(t.group).push(t); }
-    const order = groupOrder.length ? groupOrder.map((g) => g.label) : [...byGroup.keys()];
-    const cards = [];
-    for (const label of order) {
-      const items = byGroup.get(label);
-      if (!items || !items.length) continue;
-      cards.push(el('div', { class: 'settings-card' },
-        el('h3', {}, label),
-        el('div', { class: 'screen-list' }, ...items.map(targetRow))));
-    }
-    bodyEl.className = 'screen-groups';
-    bodyEl.replaceChildren(...cards);
-    renderSummary();
-  }
-
-  async function runTargets(ids, btn) {
-    const all = !ids;
-    const restore = btn ? btn.textContent : null;
-    if (btn) { btn.disabled = true; btn.textContent = 'Running…'; }
-    try {
-      const data = await api('/api/diagnostics/run', { method: 'POST', body: all ? {} : { targets: ids } });
-      for (const t of data.targets || []) results.set(t.id, t.result);
-      renderBody();
-      if (all) toast(`Screening complete — ${data.summary.bad || 0} critical, ${data.summary.warn || 0} warning(s)`, (data.summary.bad || 0) > 0);
-    } catch (e) {
-      toast(errText(e), true);
-      if (btn) { btn.disabled = false; btn.textContent = restore || 'Run'; }
-    }
-  }
-
-  runAllBtn.addEventListener('click', async () => {
-    runAllBtn.disabled = true; runAllBtn.textContent = 'Running…';
-    await runTargets(null, null);
-    runAllBtn.disabled = false; runAllBtn.textContent = 'Run full screening';
+// ---- Test Settings (MIGRATED — see public/views/screening.js)
+// Reached at /test-settings and as the Screening section inside Settings; the
+// second passes mode 'embedded'.
+let screeningPage = null;
+let screeningEmbedded = false;
+function getScreeningPage() {
+  if (screeningPage) return screeningPage;
+  if (typeof window === 'undefined' || !window.ScreeningPage || !ui) return null;
+  screeningPage = window.ScreeningPage.create({
+    el, t, ui, errText, toast,
+    mode: () => (screeningEmbedded ? 'embedded' : 'standalone'),
+    help: () => ({ title: t('scr.info.title'), body: () => [
+      el('p', {}, t('scr.info.p1')),
+      el('p', {}, t('scr.info.p2')),
+      el('p', { class: 'muted' }, t('scr.info.p3')),
+    ] }),
+    fetchAll: () => api('/api/diagnostics/targets'),
+    // `null` runs the lot; an array runs those targets.
+    run: (ids) => api('/api/diagnostics/run', { method: 'POST', body: ids ? { targets: ids } : {} }),
+    setupLink: screenSetupLink,
+    rerender: () => render(),
   });
+  return screeningPage;
+}
 
-  try {
-    const data = await api('/api/diagnostics/targets');
-    catalog = data.targets || [];
-    groupOrder = data.groups || [];
-    renderBody();
-  } catch (e) {
-    bodyEl.className = 'empty error';
-    bodyEl.replaceChildren(errText(e));
-  }
-  return root;
+views.screening = async (opts) => {
+  const v = getScreeningPage();
+  if (!v) return el('div', { class: 'empty error' }, t('scr.err.title'));
+  screeningEmbedded = !!(opts && opts.embedded);
+  // The catalogue is re-read per entry, so the page is rebuilt with it.
+  screeningPage = null;
+  return getScreeningPage().view();
 };
 
 // ---- Agents (MIGRATED — see public/views/agents.js)
@@ -11249,7 +11172,7 @@ const SETTINGS_SECTIONS = {
   retention: settingsRetentionView,
   auth: settingsAuthView,
   apitokens: settingsApiTokensView,
-  screening: () => views.screening(),
+  screening: () => views.screening({ embedded: true }),
   assurance: settingsAssuranceView,
 };
 

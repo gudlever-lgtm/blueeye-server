@@ -1510,3 +1510,39 @@ own. The rail has no entry for them, so the sidebar marked nothing and the
 breadcrumb printed the view key — a bare lowercase "users" at the reader.
 `SECTION_OF` maps them onto Settings, the same way `DETAIL_OF` maps a record
 page onto its list, and the crumb reads "Administration / Settings / Users".
+
+
+**Test Settings** is the second of the three two-address screens (`/test-settings`
+and Settings → Screening) and the last unmigrated one in Administration.
+
+The summary was four `.badge`s reading "Targets: 31", "OK: 24", "Warnings: 5",
+"Critical: 2" — **a strip of counts wearing a state's clothes**, which is the
+exact case the Badge rule is about. It is a StatStrip, and because a StatStrip
+filters, clicking Critical now shows the two rather than leaving the reader to
+find them in thirty-one rows.
+
+A group was a `.settings-card` holding `.screen-row`s three lines tall: a badge,
+a name, a mono detail, a wrapped row of `.screen-chip`s, a result line, and two
+controls stacked at the right edge. A group is a Panel and a target is one
+DataTable row; the per-check verdicts and the full result move into the Drawer
+the row opens.
+
+`.screen-chip` read "TLS: OK", "Auth: Warning" — a label and a verdict in a
+pill, with the sentence that says *what to do about it* hidden in a `title=`
+tooltip. In the drawer they are key/values: the label is the key, the verdict is
+a Badge, and **the note is readable text** instead of something you have to
+hover to find.
+
+Two things the migration changed rather than moved:
+
+* **the endpoint is on the row.** It was the mono `.screen-row-detail` under the
+  name; on a screen about outbound dependencies, *which host* is the question,
+  and two webhook targets are the same row without it. It has a column;
+* **"Configuration screened only — no live test for this target"** was a
+  fifty-eight character sentence in a cell. The cell says "No live test"; the
+  drawer says it in full.
+
+"Loading…" was a grey word and a failed catalogue read was red text on the page;
+they are a LoadingState and an ErrorState with a Retry. A failed *run* keeps the
+catalogue and says what happened in a toast — it used to leave the button
+reading "Running…" when the error came back.

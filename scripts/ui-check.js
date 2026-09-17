@@ -49,6 +49,7 @@ const MIGRATED = [
   // Phase 3, in the order docs/ui-contract.md sets out.
   'views/changes.js',
   'views/probes.js',
+  'views/analysis.js',
 ];
 
 // Classes the contract replaced. A migrated file may not use them.

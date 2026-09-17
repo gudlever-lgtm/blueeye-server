@@ -1325,7 +1325,14 @@ const PAGE_INFO = {
 // one above them — two copies of the same paragraph, one of which the contract
 // deleted. The gate reads this set too: a migrated view is allowed to have no
 // PAGE_INFO entry precisely because its module carries the help instead.
-const CONTRACT_VIEWS = new Set(['changes', 'probes']);
+// view key -> the module in public/views/ that draws it. Usually the same word;
+// Analysis is the exception, because the view key is `findings` (the records it
+// lists) while the product calls the screen Analysis.
+const CONTRACT_VIEWS = new Map([
+  ['changes', 'changes'],
+  ['probes', 'probes'],
+  ['findings', 'analysis'],
+]);
 
 function hero(viewKey) {
   if (CONTRACT_VIEWS.has(viewKey)) return null;
@@ -3466,7 +3473,7 @@ function sortableTable(columns, opts = {}) {
 
 // ---- Analysis (findings + AI assistant) ----------------------------------
 // hostId of a finding is the agent id (the analysis pipeline keys on it).
-const findingsState = { hostId: '', severity: '', metric: '', tbody: null, agentName: null, reloadSummary: null };
+const findingsState = { hostId: '', severity: '', metric: '', sort: { key: 'time', dir: 'desc' } };
 
 // Authenticated download of a server export (CSV/JSON) → triggers a file save.
 async function downloadExport(resource, format, params = {}) {
@@ -3491,288 +3498,54 @@ function exportButtons(resource, getParams) {
     el('button', { class: 'small ghost', onclick: () => downloadExport(resource, 'json', getParams ? getParams() : {}) }, 'JSON'));
 }
 
-views.findings = async () => {
-  const root = el('div');
-  const agents = await api('/agents').catch(() => []);
-  const agentName = (id) => {
-    const a = agents.find((x) => String(x.id) === String(id));
-    return a ? (a.display_name || a.hostname) : `host ${id}`;
-  };
-  findingsState.agentName = agentName;
-
-  // Build the querystring for the active filters. `omit` lets the summary drop
-  // the metric filter so its per-metric breakdown (and the metric dropdown it
-  // populates) always shows every metric under the host/severity scope.
-  const filterQs = (omit = []) => {
-    const qs = new URLSearchParams();
-    if (findingsState.hostId && !omit.includes('hostId')) qs.set('hostId', findingsState.hostId);
-    if (findingsState.severity && !omit.includes('severity')) qs.set('severity', findingsState.severity);
-    if (findingsState.metric && !omit.includes('metric')) qs.set('metric', findingsState.metric);
-    const s = qs.toString();
-    return s ? `?${s}` : '';
-  };
-
-  // Severity / Metric filter controls live in the table header (a filter row
-  // under the sortable labels) — the same per-column filter+sort model the
-  // Events table uses. The Host selector is promoted out of the header into
-  // its own bar directly under the page heading (see hostFilterBar below).
-  const hostSelect = el('select', { class: 'col-filter' },
-    el('option', { value: '' }, 'All hosts'),
-    ...agents.map((a) => el('option',
-      { value: String(a.id), ...(String(a.id) === findingsState.hostId ? { selected: 'selected' } : {}) },
-      a.display_name || a.hostname)));
-  hostSelect.addEventListener('change', () => { findingsState.hostId = hostSelect.value; reload(); });
-
-  const sevSelect = el('select', { class: 'col-filter' },
-    el('option', { value: '' }, 'All severities'),
-    ...['CRIT', 'WARN', 'INFO'].map((s) => el('option',
-      { value: s, ...(s === findingsState.severity ? { selected: 'selected' } : {}) }, s)));
-  sevSelect.addEventListener('change', () => { findingsState.severity = sevSelect.value; reload(); });
-
-  // Metric options are filled in from the overview (byMetric) once it loads, so
-  // the dropdown reflects the metrics that actually have findings.
-  const metricSelect = el('select', { class: 'col-filter' }, el('option', { value: '' }, 'All metrics'));
-  metricSelect.addEventListener('change', () => { findingsState.metric = metricSelect.value; loadList(); });
-
-  root.append(el('div', { class: 'section-head' },
-    el('h2', {}, 'Analysis — errors & anomalies'),
-    el('span', { class: 'muted' }, 'computed locally'),
-    el('span', { class: 'spacer' }),
-    exportButtons('findings', () => {
-      const p = {};
-      if (findingsState.hostId) p.hostId = findingsState.hostId;
-      return p;
-    })));
-
-  // Host selector sits directly under the heading so scoping the whole page to a
-  // single host is the first control you reach (it drives the summary, the
-  // assistant and the detail list). Severity/metric stay as per-column filters.
-  root.append(el('div', { class: 'findings-host-filter' },
-    el('label', { for: 'findings-host-select' }, 'Host'),
-    hostSelect));
-  hostSelect.id = 'findings-host-select';
-
-  if (featureEnabled('assistant')) root.append(assistantBox(() => findingsState.hostId));
-
-  const summaryHost = el('div', { class: 'findings-summary' });
-  const listHost = el('div', {});
-  root.append(summaryHost, listHost);
-
-  // Sortable detail table. Row rendering stays in findingRow (also reused by the
-  // live-WebSocket prepend); the table shell handles header sort + empty states.
-  const columns = [
-    { label: 'Time', key: 'time', get: (f) => new Date(f.createdAt || 0).getTime() },
-    { label: 'Host', key: 'host', get: (f) => String(agentName(f.hostId) || '').toLowerCase() },
-    { label: 'Metric', key: 'metric', get: (f) => f.metric || '', filter: metricSelect },
-    { label: 'Severity', key: 'severity', get: (f) => SEVERITY_RANK[f.severity] || 0, filter: sevSelect },
-    { label: 'Deviation', key: 'deviation', get: (f) => (typeof f.deviation === 'number' ? f.deviation : null) },
-    { label: 'Explanation', key: null },
-    { label: '', key: null },
-  ];
-  const grid = sortableTable(columns, {
-    className: 'findings',
-    sortKey: 'time',
-    sortDir: 'desc',
-    emptyText: 'No findings match the current filter.',
-    renderRow: (f) => findingRow(agentName, f),
-  });
-  findingsState.tbody = grid.tbody;
-
-  async function loadList() {
-    grid.setLoading('Loading…');
-    listHost.replaceChildren(grid.table);
-    try {
-      const findings = await api(`/api/findings${filterQs()}`);
-      grid.setRows(findings);
-    } catch (err) {
-      grid.setError(err.message);
-    }
-  }
-
-  async function loadSummary() {
-    try {
-      // Overview reflects host + severity (not the metric filter) so it stays a
-      // full breakdown across metrics, and doubles as the metric-dropdown source.
-      const s = await api(`/api/findings/summary${filterQs(['metric'])}`);
-      renderFindingsSummary(summaryHost, s, agentName);
-      syncMetricOptions(metricSelect, s.byMetric);
-    } catch {
-      summaryHost.replaceChildren();
-    }
-  }
-
-  // Called by the summary chips/rows + the filter controls to re-scope both the
-  // overview and the detail list; exposed so a live finding can refresh totals.
-  function reload() { loadSummary(); loadList(); }
-  findingsState.reloadSummary = loadSummary;
-
-  reload();
-  return root;
-};
-
-// Keeps the metric dropdown in sync with the metrics that currently have
-// findings, preserving the active selection (even if it briefly has no rows).
-function syncMetricOptions(select, byMetric) {
-  const metrics = (byMetric || []).map((m) => m.metric).filter(Boolean);
-  if (findingsState.metric && !metrics.includes(findingsState.metric)) metrics.push(findingsState.metric);
-  const want = ['', ...metrics.sort((a, b) => String(a).localeCompare(String(b)))];
-  const have = Array.from(select.options).map((o) => o.value);
-  if (want.length === have.length && want.every((v, i) => v === have[i])) return; // unchanged
-  select.replaceChildren(
-    el('option', { value: '' }, 'All metrics'),
-    ...metrics.sort((a, b) => String(a).localeCompare(String(b))).map((m) => el('option', { value: m }, m)));
-  select.value = findingsState.metric || '';
-}
-
-// The overview panel: totals + severity chips + per-metric and per-host
-// breakdowns (count / avg σ / max σ). Chips and metric rows are clickable and
-// drive the same filters as the header controls, so the panel is a fast pivot.
-function renderFindingsSummary(host, s, agentName) {
-  if (!s || !s.total) { host.replaceChildren(); return; }
-
-  const setSeverity = (sev) => {
-    findingsState.severity = findingsState.severity === sev ? '' : sev;
-    if (currentView === 'findings') render();
-  };
-  const setMetric = (m) => {
-    findingsState.metric = findingsState.metric === m ? '' : m;
-    // Re-render to reflect the metric selection in the dropdown + rows + overview.
-    if (currentView === 'findings') render();
-  };
-
-  const sevChip = (sev) => el('button', {
-    class: `fs-chip${findingsState.severity === sev ? ' active' : ''}`,
-    title: `Filter to ${sev}`, onclick: () => setSeverity(sev),
-  }, el('span', { class: `badge ${sev}` }, sev), el('span', { class: 'fs-chip-n' }, String(s.bySeverity[sev] || 0)));
-
-  const totals = el('div', { class: 'fs-totals' },
-    el('div', { class: 'fs-total' }, el('span', { class: 'fs-n' }, String(s.total)), el('span', { class: 'fs-l muted' }, 'findings')),
-    el('div', { class: 'fs-total' }, el('span', { class: 'fs-n' }, String(s.unacked)), el('span', { class: 'fs-l muted' }, 'unacknowledged')),
-    el('div', { class: 'fs-chips' }, sevChip('CRIT'), sevChip('WARN'), sevChip('INFO')));
-
-  const metricTable = el('table', { class: 'fs-mini' },
-    el('thead', {}, el('tr', {}, el('th', {}, 'Metric'), el('th', { class: 'num' }, 'Count'), el('th', { class: 'num' }, 'Avg σ'), el('th', { class: 'num' }, 'Max σ'))),
-    el('tbody', {}, ...s.byMetric.slice(0, 8).map((m) => el('tr', {
-      class: `clickable${findingsState.metric === m.metric ? ' active' : ''}`,
-      title: `Filter to ${m.metric}`, onclick: () => setMetric(m.metric),
+// ---- Analysis (MIGRATED — see public/views/analysis.js) ---------------------
+// Built lazily: `ui` is declared far down this file and is in the temporal dead
+// zone up here. app.js keeps the filter state (it outlives the view, so leaving
+// the page and coming back does not silently widen the scope somebody set) and
+// the live-finding subscription.
+let analysisView = null;
+let onLiveFindingRow = null;
+function getAnalysisView() {
+  if (analysisView) return analysisView;
+  if (typeof window === 'undefined' || !window.AnalysisView || !ui) return null;
+  analysisView = window.AnalysisView.create({
+    el, api, t, errText, ui, openAgent,
+    state: findingsState,
+    isAdmin: () => isAdmin(),
+    help: () => {
+      const info = PAGE_INFO.findings || {};
+      return { lead: info.hero || '', title: info.title || t('analysis.title'), body: info.body || (() => []) };
     },
-      el('td', {}, m.metric),
-      el('td', { class: 'num' }, String(m.count)),
-      el('td', { class: 'num' }, fmtSigma(m.avgDeviation)),
-      el('td', { class: 'num' }, fmtSigma(m.maxDeviation))))));
-
-  const hostTable = el('table', { class: 'fs-mini' },
-    el('thead', {}, el('tr', {}, el('th', {}, 'Host'), el('th', { class: 'num' }, 'Total'), el('th', { class: 'num' }, 'CRIT'), el('th', { class: 'num' }, 'WARN'), el('th', { class: 'num' }, 'Avg σ'))),
-    el('tbody', {}, ...s.byHost.slice(0, 8).map((h) => el('tr', {},
-      el('td', {}, esc(agentName(h.hostId))),
-      el('td', { class: 'num' }, String(h.count)),
-      el('td', { class: 'num crit' }, String(h.crit)),
-      el('td', { class: 'num warn' }, String(h.warn)),
-      el('td', { class: 'num' }, fmtSigma(h.avgDeviation))))));
-
-  host.replaceChildren(el('div', { class: 'card findings-summary-card' },
-    el('div', { class: 'fs-head' },
-      el('h3', {}, 'Overview'),
-      el('span', { class: 'muted' }, 'aggregated over the current host/severity filter')),
-    totals,
-    el('div', { class: 'fs-grid' },
-      el('div', { class: 'fs-col' }, el('h4', { class: 'muted' }, 'By metric'), metricTable),
-      el('div', { class: 'fs-col' }, el('h4', { class: 'muted' }, 'By host'), hostTable))));
-}
-
-function findingRow(agentName, f) {
-  const dev = typeof f.deviation === 'number' ? `${f.deviation.toFixed(1)}σ` : '–';
-  const corr = Array.isArray(f.correlatedWith) && f.correlatedWith.length
-    ? el('div', { class: 'muted' }, `correlated with ${f.correlatedWith.length} other(s)`)
-    : null;
-  const action = f.acked
-    ? el('span', { class: 'muted' }, 'acknowledged')
-    : (canWrite() ? el('button', { class: 'small ghost', onclick: (e) => ackFinding(f, e.target) }, 'Acknowledge') : null);
-  // A severity a rule changed says so, next to the badge. A downgraded critical
-  // that looks exactly like a warning somebody detected is how an estate goes
-  // quiet without anyone deciding it should.
-  const ruled = f.originalSeverity
-    ? el('span', {
-      class: 'muted severity-ruled',
-      title: t('sev.ruledHelp', { detected: f.originalSeverity, stored: f.severity }),
-    }, ' · ' + t('sev.was', { severity: f.originalSeverity }))
-    : null;
-  const tr = el('tr', { class: f.acked ? 'acked' : '' },
-    el('td', { class: 'muted' }, fmtDate(f.createdAt)),
-    el('td', {}, agentName(f.hostId)),
-    el('td', {}, f.metric),
-    el('td', {}, el('span', { class: `badge ${esc(f.severity || 'INFO')}` }, f.severity || 'INFO'),
-      f.kind === 'FLATLINE' ? el('span', { class: 'muted' }, ' flatline') : null, ruled),
-    el('td', {}, dev),
-    el('td', {}, el('div', {}, f.explanation || '–'), corr),
-    el('td', {}, action, action ? ' ' : null,
-      el('button', { class: 'small ghost', title: 'What changed on this device just before the anomaly', onclick: (e) => toggleFindingContext(f, e.target) }, 'What changed?'),
-      // The thought "this should be a warning for us" happens HERE, looking at
-      // the event — not in Settings, later, trying to remember what it said.
-      isAdmin() ? el('button', {
-        class: 'small ghost',
-        title: t('sev.fromEventHelp'),
-        onclick: () => editSeverityRule(null, {
-          source: 'finding', match_metric: f.metric, match_kind: f.kind, match_host_id: f.hostId,
-        }),
-      }, t('sev.fromEvent')) : null));
-  tr.dataset.findingId = f.id;
-  return tr;
-}
-
-// Phase 3 — "what changed before this": expands an inline row under a finding
-// showing the CHANGE-type events on its device in the window before the trigger
-// (GET /api/findings/:id/context). Reuses timelineRowEl (Phase 2). Explicit
-// loading/empty/error states.
-function toggleFindingContext(f, btn) {
-  const tr = btn.closest('tr');
-  if (!tr) return;
-  const next = tr.nextElementSibling;
-  if (next && next.classList.contains('finding-context-row')) {
-    next.remove();
-    btn.textContent = 'What changed?';
-    return;
-  }
-  const cell = el('td', { colspan: String(tr.children.length), class: 'finding-context' });
-  tr.after(el('tr', { class: 'finding-context-row' }, cell));
-  btn.textContent = 'Hide changes';
-  loadFindingContext(f, cell);
-}
-
-async function loadFindingContext(f, container) {
-  const head = el('div', { class: 'muted fc-head' }, 'What changed before this anomaly');
-  const list = el('div', {});
-  container.replaceChildren(head, list);
-  const agentId = Number(f.hostId);
-  const opts = timelineRenderOpts(Number.isInteger(agentId) ? agentId : null, {
-    onRetry: () => loadFindingContext(f, container),
-    emptyText: 'No changes detected in this window.',
+    // At most one primary in a PageHeader, and an export is not it: the two
+    // export buttons are the page's secondary actions.
+    headerActions: () => [
+      ui.button('secondary', t('analysis.export.csv'), {
+        onclick: () => downloadExport('findings', 'csv', findingsState.hostId ? { hostId: findingsState.hostId } : {}),
+      }),
+      ui.button('secondary', t('analysis.export.json'), {
+        onclick: () => downloadExport('findings', 'json', findingsState.hostId ? { hostId: findingsState.hostId } : {}),
+      }),
+    ],
+    toolbarActions: () => [],
+    newSeverityRule: (f) => editSeverityRule(null, {
+      source: 'finding', match_metric: f.metric, match_kind: f.kind, match_host_id: f.hostId,
+    }),
+    // One subscriber at a time: the view registers on every render, and an old
+    // closure would go on writing into a table that is no longer on screen.
+    onLive: (fn) => { onLiveFindingRow = fn; },
   });
-  TimelineView.renderInto(document, list, TimelineView.resolveState({ loading: true }), opts);
-  let view;
-  try {
-    const data = await api(`/api/findings/${encodeURIComponent(f.id)}/context`);
-    // The context endpoint returns `changes`; adapt to the timeline state shape.
-    view = TimelineView.resolveState({ data: { events: data.changes, partial: data.partial, failedSources: data.failedSources } });
-  } catch (err) {
-    view = TimelineView.resolveState({ error: err });
-  }
-  TimelineView.renderInto(document, list, view, opts);
+  return analysisView;
 }
 
-async function ackFinding(f, btn) {
-  if (btn) btn.disabled = true;
-  try {
-    await api(`/api/findings/${encodeURIComponent(f.id)}/ack`, { method: 'POST' });
-    f.acked = true;
-    toast('Acknowledged');
-    const tr = btn && btn.closest('tr');
-    if (tr) { tr.classList.add('acked'); btn.replaceWith(el('span', { class: 'muted' }, 'acknowledged')); }
-  } catch (err) {
-    if (btn) btn.disabled = false;
-    toast(err.message, true);
-  }
-}
+views.findings = async () => {
+  const v = getAnalysisView();
+  if (!v) return el('div', { class: 'empty error' }, t('analysis.err.title'));
+  const node = await v.view();
+  // The assistant box is not part of the contract's components yet, so it is
+  // appended rather than composed — it migrates with the rest of Insights.
+  if (featureEnabled('assistant')) node.append(assistantBox(() => findingsState.hostId));
+  return node;
+};
 
 // AI-assistant box. Posts to /api/assistant/explain; degrades gracefully when
 // the feature is disabled (403) so it never looks broken.
@@ -16249,19 +16022,10 @@ function onLiveFinding(f) {
   if (!f) return;
   const sev = f.severity || 'INFO';
   toast(`New finding: ${f.metric} ${sev}`, sev === 'CRIT' || sev === 'WARN');
-  // Live-prepend only when the findings table is actually on screen and the
-  // active filters match; otherwise the REST list will show it next time.
-  if (currentView === 'findings' && findingsState.tbody && findingsState.tbody.isConnected) {
-    const hostOk = !findingsState.hostId || String(f.hostId) === String(findingsState.hostId);
-    const sevOk = !findingsState.severity || f.severity === findingsState.severity;
-    const metricOk = !findingsState.metric || f.metric === findingsState.metric;
-    if (hostOk && sevOk && metricOk) {
-      const name = findingsState.agentName || ((id) => `host ${id}`);
-      findingsState.tbody.prepend(findingRow(name, f));
-    }
-    // Keep the overview totals honest even when the row is filtered out.
-    if (findingsState.reloadSummary) findingsState.reloadSummary();
-  }
+  // Hand it to the Analysis screen when that screen is the one on display. The
+  // view decides whether the row passes the active filters and re-reads the
+  // totals either way — they move whether or not the row is shown.
+  if (currentView === 'findings' && onLiveFindingRow) onLiveFindingRow(f);
 }
 
 // ---- NIS2 Reporting Center ------------------------------------------------

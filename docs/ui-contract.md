@@ -437,6 +437,7 @@ Administration → login and error screens.
 |---|---|---|---|
 | Changes | `/changes` | A · ListPage | [`public/views/changes.js`](../public/views/changes.js) |
 | Probes & Tests | `/probes/:tab` | C · FormPage (shell) | [`public/views/probes.js`](../public/views/probes.js) |
+| Analysis | `/analysis` | A · ListPage | [`public/views/analysis.js`](../public/views/analysis.js) |
 
 **What Changes kept:** the window vocabulary the server accepts (`30m`, `6h`,
 `24h`, `7d` — not the preview's three), the marker rule (it moves only on an
@@ -463,3 +464,23 @@ Three PAGE_INFO entries (`probes`, `connectionTest`, `tests`) used to feed three
 different hero banners. They now feed one (?) popover, which shows the **active
 tab's** help — the page title alone cannot say whether you are about to run one
 check or forty.
+
+
+**Analysis is the three-stacked-buttons fix.** A finding used to carry three
+buttons in its last cell — Acknowledge, "What changed?", and for an admin a
+severity rule — which stacked into a three-line column on any screen narrower
+than a desk. Acknowledge is now the one action on the row, shown on hover; the
+other two moved into the ⋯ menu, and the explanation they led to moved into the
+Drawer, where there is room to read it.
+
+The severity chips became a StatStrip; the "By metric" and "By host" breakdowns
+became two panels in a panel grid, with their rows still pivoting the filter.
+The severity column is wide enough for the badge **and** the note saying what
+was originally detected — a downgraded critical truncated to "wa…" tells nobody
+anything, and that note is the whole reason it is on the row rather than only in
+the Drawer.
+
+`CONTRACT_VIEWS` is a Map rather than a Set because the view key and the module
+name differ here: the key is `findings` (the records it lists), the product calls
+the screen Analysis. The UI gate reads the pairs, checks the module exists, that
+it builds a PageHeader with help — and that `ui-check` is actually watching it.

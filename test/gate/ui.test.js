@@ -111,19 +111,25 @@ test('every nav view has help: a PAGE_INFO entry, or a (?) popover on a migrated
   // (?) popover instead of the hero banner, so PAGE_INFO is not where it lives.
   // This widens the sweep rather than loosening it: the migrated view must
   // actually HAVE the popover, checked below, or it has no help at all.
-  const contract = [...(appJs.match(/const CONTRACT_VIEWS = new Set\(\[([^\]]*)\]\)/) || [, ''])[1]
-    .matchAll(/'([A-Za-z_]+)'/g)].map((m) => m[1]);
+  const contractBlock = (appJs.match(/const CONTRACT_VIEWS = new Map\(\[([\s\S]*?)\]\);/) || [, ''])[1];
+  const contract = [...contractBlock.matchAll(/\['([A-Za-z_]+)',\s*'([A-Za-z_]+)'\]/g)].map((m) => ({ view: m[1], module: m[2] }));
+  assert.ok(contract.length > 0, 'CONTRACT_VIEWS could not be read');
 
-  const missing = dataViews.filter((v) => !inline.includes(v) && !later.includes(v) && !contract.includes(v));
+  const keys = contract.map((c) => c.view);
+  const missing = dataViews.filter((v) => !inline.includes(v) && !later.includes(v) && !keys.includes(v));
   assert.deepEqual(missing, []);
 
   // Every migrated screen has a module, and that module opens a help popover.
-  for (const view of contract) {
-    const file = path.join(PUBLIC, 'views', `${view}.js`);
-    assert.ok(fs.existsSync(file), `${view} is marked migrated but has no public/views/${view}.js`);
+  for (const { view, module } of contract) {
+    const file = path.join(PUBLIC, 'views', `${module}.js`);
+    assert.ok(fs.existsSync(file), `${view} is marked migrated but has no public/views/${module}.js`);
     const src = fs.readFileSync(file, 'utf8');
     assert.match(src, /help:\s*\{/, `${view}: migrated, but its PageHeader offers no help`);
     assert.match(src, /ui\.pageHeader\(/, `${view}: migrated, but builds no PageHeader`);
+    // …and the script that enforces the contract is actually watching it.
+    const check = fs.readFileSync(path.join(ROOT, 'scripts', 'ui-check.js'), 'utf8');
+    assert.ok(check.includes(`'views/${module}.js'`),
+      `${view}: migrated, but views/${module}.js is not in ui-check's MIGRATED list`);
   }
 });
 

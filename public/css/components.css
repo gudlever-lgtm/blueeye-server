@@ -500,3 +500,14 @@
 .ui .auth-card .field-error:empty { display: none; }
 .ui .auth-card .meta { margin: 0; }
 .ui .auth-card #fc-logout { align-self: flex-start; }
+
+/* A utilisation cell: the bar app.js draws, with its percentage beside it. The
+   bar itself is still styles.css's `.usagebar` — it is shared with the storage
+   line and the password meter, so it is not this screen's to move. */
+.ui .util { display: flex; align-items: center; gap: var(--s-2); }
+.ui .util .usagebar { flex: 1 1 auto; min-width: 60px; max-width: 160px; margin: 0; }
+
+/* A measured number that is itself the problem — frames erroring or being
+   dropped. Not a Badge: it is a count, not a state. */
+.ui .num-crit { color: var(--sev-crit); font-weight: 650; }
+.ui .num-warn { color: var(--sev-warn); font-weight: 650; }

@@ -1204,3 +1204,32 @@ the agent page, where the detail lives.
 `agentHealthCell` and `agentHealthRank` are gone from `app.js`: two copies of
 the same rule, one for the cell and one for the sort, on a screen that no longer
 draws either.
+
+
+**Interfaces** is a ListPage, and its table is **exported as well as drawn**:
+the agent detail page renders the same interfaces, and two copies of one table
+would drift. `app.js`'s `interfaceTable()` reads it off the view module now,
+and `IFACE_RANK`, `ifaceStatusBadge` and `ifaceLinkText` are gone with the copy
+they served.
+
+`.history-controls` is a Toolbar. `source: proc · measured 14:02` was a grey
+span at the end of that control row; it is the panel's note, beside the table it
+describes.
+
+The status chip was `.badge online|warn|error|down|grace` reading OK / WARN /
+ERR / DOWN / IDLE — a fifth vocabulary for severity. It is a Badge on the app's
+tones. Errors and discards carry a tone on the **number**, not a badge: a count
+is not a state, so `.num-crit` / `.num-warn` say a port is dropping frames
+without pretending the figure is a status.
+
+**An idle virtual port used to sort to the very top.** `docker0` and a handful
+of veths are `status: down`, which ranked them first — above the port that was
+actually erroring. They read IDLE, which is not a fault, so they rank below OK
+as well.
+
+**The flow-source empty state keeps every word.** An agent on sflow or netflow
+reports sampled conversations, not per-interface counters, so this table is
+*always* empty for it however healthy Diagnose looks. Telling that reader "no
+data yet" sends them to update an agent that is working. It says what its source
+does, which two sources would fill this table, and which screens do use what
+this agent reports — and it now offers the button that changes the setting.

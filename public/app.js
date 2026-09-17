@@ -1357,6 +1357,7 @@ const CONTRACT_VIEWS = new Map([
   ['userLogs', 'userLogs'],
   ['settings', 'settings'],
   ['agents', 'agents'],
+  ['interfaces', 'interfaces'],
 ]);
 
 function hero(viewKey) {
@@ -4359,61 +4360,6 @@ function stopIfaces() { if (ifaceState.timer) { clearInterval(ifaceState.timer);
 // Used by the per-agent tabs (Interfaces, Probes) AND the combined agent page,
 // so there is one source of truth for each table.
 
-const IFACE_RANK = { down: 0, bad: 1, warn: 2, ok: 3 };
-function ifaceStatusBadge(i) {
-  // Accepts an interface object (preferred) or a bare status string.
-  const iface = i && typeof i === 'object' ? i : null;
-  const s = iface ? iface.status : i;
-  // A virtual/idle port that is merely down (docker0, veth…, VPN tunnels) is not
-  // a fault — show a neutral IDLE chip rather than a red DOWN.
-  if (iface && iface.virtual && iface.linkDown) {
-    return el('span', { class: 'badge grace', title: 'Virtual/idle interface — link down is expected, not a fault' }, 'IDLE');
-  }
-  // Severity palette: bad/down read red (consistent with the rest of the UI).
-  const map = { ok: ['online', 'OK'], warn: ['warn', 'WARN'], bad: ['error', 'ERR'], down: ['down', 'DOWN'] };
-  const [cls, label] = map[s] || ['grace', s];
-  return el('span', { class: `badge ${cls}` }, label);
-}
-function ifaceLinkText(i) {
-  if (!i.speedMbps && !i.operStatus) return '–';
-  const sp = i.speedMbps ? (i.speedMbps >= 1000 ? `${i.speedMbps / 1000} Gb/s` : `${i.speedMbps} Mb/s`) : '';
-  return [sp, i.operStatus].filter(Boolean).join(' · ');
-}
-// Interface health table (worst first). Empty-state when there is no data;
-// `source` (the agent's traffic source) tailors that message.
-function interfaceTable(interfaces, source = null) {
-  const ifs = (interfaces || []).slice().sort((a, b) => (IFACE_RANK[a.status] - IFACE_RANK[b.status]) || ((b.rxBytesPerSec + b.txBytesPerSec) - (a.rxBytesPerSec + a.txBytesPerSec)));
-  if (!ifs.length) {
-    // Flow sources (sflow/netflow) report sampled flow records (5-tuple
-    // conversations), not per-interface byte-rates/errors/discards — so this
-    // table is ALWAYS empty for them, however healthy the flow pipeline looks
-    // on Diagnose. Say so plainly instead of implying an agent update would
-    // help (it won't), and point to the source switch + the views that do use
-    // the flow data this agent reports.
-    if (source === 'sflow' || source === 'netflow') {
-      return el('div', { class: 'empty' },
-        `This agent's traffic source is “${source}”, which reports sampled flow records (conversations) — not per-interface counters, so there is nothing to show here even when the flow pipeline is healthy. `,
-        'Per-interface health (utilisation / errors / discards / link) needs a ',
-        el('b', {}, 'proc'), ' or ', el('b', {}, 'snmp'),
-        ' source — switch it under ', el('b', {}, 'Agents → Edit → Traffic source'),
-        '. The flow data this agent does report appears on the ',
-        viewLink('overview', 'Traffic'), ', ', viewLink('flows'), ' and ', viewLink('geo', 'Destinations'), ' pages.');
-    }
-    return el('div', { class: 'empty' }, 'No interface data yet — requires an agent measurement (update the agent for errors/discards/link).');
-  }
-  return el('table', { class: 'iface-table' },
-    el('thead', {}, el('tr', {}, ...['Interface', 'Status', 'Link', 'Utilization', '↓ RX', '↑ TX', 'Errors/s', 'Discards/s'].map((h) => el('th', {}, h)))),
-    el('tbody', {}, ...ifs.map((i) => el('tr', {},
-      el('td', {}, i.iface),
-      el('td', {}, ifaceStatusBadge(i)),
-      el('td', { class: 'muted' }, ifaceLinkText(i)),
-      el('td', {}, i.utilPct != null ? el('div', { class: 'util' }, usageBar(i.utilPct), el('span', { class: 'muted num' }, `${i.utilPct}%`)) : el('span', { class: 'muted' }, '–')),
-      el('td', { class: 'num' }, `${fmtBytes(i.rxBytesPerSec)}/s`),
-      el('td', { class: 'num' }, `${fmtBytes(i.txBytesPerSec)}/s`),
-      el('td', { class: `num${i.errPerSec > 0 ? ' bad-text' : ''}` }, String(i.errPerSec)),
-      el('td', { class: `num${i.dropPerSec > 0 ? ' warn-text' : ''}` }, String(i.dropPerSec))))));
-}
-
 // Latest probe results (newest per target). onDetail(r) fires from each row.
 // Diagnostic tools the agent can install on request (mirrors the server's
 // allowlist). Used to turn a "<tool> not installed" probe failure into an offer
@@ -6754,38 +6700,48 @@ views.troubleshooting = async () => {
 
 // Interface health per agent (utilisation, errors, discards, link state/speed)
 // derived from the agent's latest measurement. Worst interfaces first.
+// ---- Interfaces (MIGRATED — see public/views/interfaces.js)
+// The table is the view module's and is shared with the agent detail page —
+// two copies of it would drift.
+let interfacesPage = null;
+const interfacesPageState = {};
+function getInterfacesPage() {
+  if (interfacesPage) return interfacesPage;
+  if (typeof window === 'undefined' || !window.InterfacesPage || !ui) return null;
+  interfacesPage = window.InterfacesPage.create({
+    el, t, ui, errText, usageBar, fmtBytes, viewLink,
+    state: interfacesPageState,
+    help: () => ({ title: t('iface.info.title'), body: () => [
+      el('p', {}, t('iface.info.p1')),
+      el('p', {}, t('iface.info.p2')),
+      el('p', { class: 'muted' }, t('iface.info.p3')),
+    ] }),
+    fetchAgents: () => api('/agents').catch(() => []),
+    fetchInterfaces: (id) => api(`/api/interfaces?agentId=${encodeURIComponent(id)}`),
+    openAgents: () => gotoView('agents'),
+    startPolling: (fn) => {
+      stopIfaces();
+      ifaceState.timer = setInterval(() => {
+        if (currentView !== 'interfaces') { stopIfaces(); return; }
+        if (!modalOpen()) fn();
+      }, 5000);
+    },
+  });
+  return interfacesPage;
+}
+
+// The agent detail page draws the same interfaces; it reads the table from the
+// view module rather than keeping a second copy.
+function interfaceTable(interfaces, source = null) {
+  const v = getInterfacesPage();
+  if (!v) return el('div', { class: 'empty error' }, t('iface.err.title'));
+  return v.table(interfaces, source);
+}
+
 views.interfaces = async () => {
-  const root = el('div', { class: 'interfaces' });
-  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Interfaces'),
-    el('span', { class: 'muted' }, 'Health per interface · utilisation · errors · discards · link')));
-
-  const agents = await api('/agents').catch(() => []);
-  if (!agents.length) { root.append(el('div', { class: 'empty' }, 'No agents yet.')); return root; }
-
-  const agentSel = el('select', {}, ...agents.map((a) => el('option', { value: String(a.id) }, a.display_name || a.hostname)));
-  const status = el('span', { class: 'muted' });
-  agentSel.addEventListener('change', () => refresh());
-  root.append(el('div', { class: 'history-controls' },
-    el('label', { class: 'inline muted' }, 'Agent ', agentSel),
-    el('button', { class: 'small ghost', onclick: () => refresh() }, 'Refresh'), status));
-  const host = el('div', {});
-  root.append(host);
-
-  async function refresh() {
-    const id = agentSel.value;
-    let data;
-    try { data = await api(`/api/interfaces?agentId=${encodeURIComponent(id)}`); } catch (e) { host.replaceChildren(el('div', { class: 'error' }, e.message)); return; }
-    status.textContent = data.ts ? `source: ${data.source} · measured ${fmtTimeShort(new Date(data.ts).getTime())}` : 'no measurements yet';
-    host.replaceChildren(interfaceTable(data.interfaces, data.source));
-  }
-
-  refresh();
-  stopIfaces();
-  ifaceState.timer = setInterval(() => {
-    if (currentView !== 'interfaces') { stopIfaces(); return; }
-    if (!modalOpen()) refresh();
-  }, 5000);
-  return root;
+  const v = getInterfacesPage();
+  if (!v) return el('div', { class: 'empty error' }, t('iface.err.title'));
+  return v.view();
 };
 
 // Active probes: trigger ping/tcp/dns/traceroute from an agent and watch the

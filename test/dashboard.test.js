@@ -77,8 +77,11 @@ test('interface + traffic views are flow-source aware (sflow/netflow have no per
   // agent has no per-interface rows, instead of the misleading generic message.
   assert.match(js, /function interfaceTable\(interfaces, source/);
   assert.match(js, /interfaceTable\(data\.interfaces, data\.source\)/); // callers pass the source through
-  assert.match(js, /reports sampled flow records/); // the source-aware empty state
-  assert.match(js, /Traffic source/); // points the user at the source switch
+  // The source-aware empty state itself lives on the screen that draws the
+  // table (public/views/interfaces.js) — app.js only passes the source through.
+  const view = (await request(makeApp()).get('/views/interfaces.js')).text;
+  assert.match(view, /iface\.flowSource\.title/); // "reports flows, not interface counters"
+  assert.match(view, /openAgents/); // and offers the switch that would fix it
   // The RX/TX bandwidth chart is skipped for flow sources (no rx/txBytesPerSec).
   assert.match(js, /const flowSource = t && \(t\.source === 'sflow' \|\| t\.source === 'netflow'\)/);
 });

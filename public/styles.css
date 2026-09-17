@@ -315,8 +315,6 @@ main#view .card { width: auto; padding: 18px 20px; box-shadow: var(--shadow); }
    shared status palette below.) */
 .bad-text { color: var(--bad); font-weight: 600; }
 .warn-text { color: var(--warn); font-weight: 600; }
-.iface-table .util { display: flex; align-items: center; gap: 8px; }
-.iface-table .util .usagebar { flex: 1; min-width: 80px; max-width: 160px; margin: 0; }
 .probe-hops { width: 100%; border-collapse: collapse; margin-top: 10px; }
 .probe-hops th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); padding: 4px 10px; }
 .probe-hops td { padding: 4px 10px; }

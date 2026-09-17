@@ -401,3 +401,47 @@ The Run button on the preview dispatches nothing.
 | HTTP 403 on `/ui-preview/*` | Client-side 403 screen | The session is a JWT in `localStorage`; an HTML request carries no identity. See [Routing → Role](#role). |
 | Info banners removed entirely | Intro text → `(?)` popover; data advisories → `.inline-note` | Some banners carry state a reader must not miss (partial results, read-only-by-design). Hiding those behind a `(?)` removes information rather than clutter. |
 | Changes as a flat DataTable | Severity grouping → StatStrip filter + a Severity column | The grouped timeline cannot be a table. The `family` sentence-dedup (identical explanations suppressed on consecutive rows of the same family) does not survive; the explanation moved into the Drawer, where it is shown once per row on demand. |
+
+---
+
+## Phase 3: migration
+
+One screen per commit, in this order:
+
+App shell → **Changes** → Analysis → Fleet → Monitoring → Diagnostics (Probes &
+Tests, Transaction tests, Flows, Topology, Topology delta, Diagnose,
+Troubleshooting, Investigate) → Service Assurance → Insights → Guides →
+Administration → login and error screens.
+
+### How a screen is migrated
+
+1. The view moves to **`public/views/<screen>.js`**, a `createX(deps)` module
+   that builds itself from `ui.js`. This is what makes `ui:check`'s per-file
+   `MIGRATED` list work at all: `app.js` is one 18,000-line file, so a rule that
+   can only say "this file is clean" can say nothing about a half-migrated one.
+2. `app.js` keeps the state the screen must not own — anything that outlives the
+   view — and passes it in. It builds the module **lazily**, on first use: `ui`
+   is declared far down the file, so wiring it at load time throws during boot.
+3. The screen is added to `MIGRATED` in `scripts/ui-check.js` and to
+   `CONTRACT_VIEWS` in `app.js`, in the same commit. `CONTRACT_VIEWS` is what
+   stops the legacy `hero()` banner drawing a second copy of help the (?) popover
+   now carries — and the UI gate reads it, so a screen in that set must actually
+   have the popover.
+4. Its dead CSS comes out of `styles.css`.
+5. A test file per screen, checking the **behaviour that must survive** rather
+   than the markup that changed.
+
+### Migrated
+
+| Screen | Route | Template | Module |
+|---|---|---|---|
+| Changes | `/changes` | A · ListPage | [`public/views/changes.js`](../public/views/changes.js) |
+
+**What Changes kept:** the window vocabulary the server accepts (`30m`, `6h`,
+`24h`, `7d` — not the preview's three), the marker rule (it moves only on an
+explicit "Mark as seen", never on a load), the CSV export, and every deep link
+into the record a row is about.
+
+**What changed:** severity grouping became a StatStrip filter plus a column; each
+row's explanation moved into the Drawer; the info banner became the (?) popover;
+the partial-result warning stayed on screen as an inline note.

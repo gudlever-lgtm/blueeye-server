@@ -86,23 +86,23 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   background: var(--panel); border-right: 1px solid var(--hairline);
   transition: transform .2s var(--ease);
 }
-.brand { display: flex; align-items: center; gap: 10px; padding: 18px 16px 14px; }
+.brand { display: flex; align-items: center; gap: var(--s-3); padding: var(--s-4) var(--s-4) var(--s-3); }
 .brand-mark { width: 28px; height: 28px; flex: 0 0 28px; border-radius: var(--radius-sm);
-  display: grid; place-items: center; background: var(--accent-weak); color: var(--accent); font-size: 16px; }
-.brand-name { font-weight: 700; font-size: 15px; letter-spacing: -.01em; }
-.sidebar-foot { margin-top: auto; padding: 14px 14px; border-top: 1px solid var(--hairline);
-  display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
-.foot-version { font-size: 11px; letter-spacing: .02em; color: var(--muted); padding: 0 4px; }
+  display: grid; place-items: center; background: var(--accent-weak); color: var(--accent); font-size: var(--fs-lg); }
+.brand-name { font-weight: 700; font-size: var(--fs-md); letter-spacing: -.01em; }
+.sidebar-foot { margin-top: auto; padding: var(--s-3) var(--s-4); border-top: 1px solid var(--hairline);
+  display: flex; flex-direction: column; align-items: flex-start; gap: var(--s-2); }
+.foot-version { font-size: var(--fs-xs); letter-spacing: .02em; color: var(--muted); padding: 0 var(--s-1); }
 /* Documentation pill — reads as a clickable action (not muted text), tucked in
    the sidebar footer beside the version line instead of taking a nav slot. */
-.foot-docs { display: inline-flex; align-items: center; gap: 7px;
-  padding: 6px 12px; border-radius: var(--radius-pill);
+.foot-docs { display: inline-flex; align-items: center; gap: var(--s-2);
+  padding: var(--s-2) var(--s-3); border-radius: var(--radius-pill);
   border: 1px solid var(--border); background: var(--panel-2);
-  color: var(--text); font-size: 12px; font-weight: 600; line-height: 1;
+  color: var(--text); font-size: var(--fs-xs); font-weight: 600; line-height: 1;
   transition: border-color .15s ease, background .15s ease, color .15s ease; }
 .foot-docs:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-weak); }
 .foot-docs.active { border-color: var(--accent); color: var(--accent); background: var(--accent-weak); }
-.foot-docs-icon { font-size: 13px; line-height: 1; }
+.foot-docs-icon { font-size: var(--fs-sm); line-height: 1; }
 
 .shell { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
 
@@ -110,8 +110,8 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
    the left; a spacer pushes the utility cluster (auto-refresh, user chip,
    icon tools, log out) to the right. */
 .topbar {
-  display: flex; align-items: center; gap: 12px;
-  padding: 10px 24px; min-height: 60px;
+  display: flex; align-items: center; gap: var(--s-3);
+  padding: var(--s-3) var(--s-5); min-height: 56px;
   /* Translucent + blurred so content scrolling underneath softens instead of
      hard-clipping at the edge. Falls back to a solid panel without support. */
   background: color-mix(in srgb, var(--panel) 86%, transparent);
@@ -119,7 +119,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   border-bottom: 1px solid var(--hairline);
   position: sticky; top: 0; z-index: 30;
 }
-.nav-toggle { display: none; font-size: 16px; line-height: 1; padding: 6px 10px; }
+.nav-toggle { display: none; font-size: var(--fs-lg); line-height: 1; padding: var(--s-2) var(--s-3); }
 .spacer { flex: 1; }
 
 /* Global search — a single round magnifier button that expands into a search
@@ -221,7 +221,8 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 /* Sidebar navigation — the .tabs nav keeps its data-view buttons + JS hooks,
    laid out as a vertical rail grouped into labelled categories, with an accent
    marker on the active item. */
-.tabs { display: flex; flex-direction: column; gap: 18px; flex: 1 1 auto; overflow-y: auto; padding: 8px 12px 14px; }
+.tabs { display: flex; flex-direction: column; gap: var(--s-5); flex: 1 1 auto; overflow-y: auto;
+  padding: var(--s-2) var(--s-3) var(--s-3); }
 .nav-group { display: flex; flex-direction: column; gap: 1px; }
 /* Category header doubles as a fold/unfold button. The caret rotates to point
    down when the group is expanded and right when collapsed (see .collapsed). */
@@ -237,11 +238,11 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .nav-group.collapsed button[data-view] { display: none; }
 .tabs button.role-hidden { display: none; }
 .tabs button { display: flex; align-items: center; justify-content: flex-start; width: 100%;
-  position: relative; text-align: left; padding: 8px 12px; border-radius: var(--radius-sm);
-  background: transparent; color: var(--muted); font-weight: 500;
+  min-height: var(--control-h); position: relative; text-align: left;
+  padding: var(--s-2) var(--s-3); border-radius: var(--radius-sm);
+  background: transparent; color: var(--muted); font-size: var(--fs-sm); font-weight: 500;
   transition: background .13s var(--ease), color .13s var(--ease); }
 .tabs button:hover { background: var(--hover); color: var(--text); }
-/* Active item is a soft filled pill — no hard marker bar, the tint carries it. */
 /* Active nav item: accent wash AND an accent left edge. The wash alone reads as
    a hover state on the darker themes; the edge is what makes "you are here"
    survive a glance. The 3px is taken out of the padding so the label does not
@@ -272,7 +273,10 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
    margins beat the default stretch) — which is why each page used to come out a
    different width. `width: 100%` restores the stretch and --page-max caps it on
    wide screens, so Fleet, Enrollment, Settings and the rest all line up. */
-main#view { width: 100%; max-width: var(--page-max); margin-inline: auto; padding: 24px 28px 40px; box-sizing: border-box; }
+/* One content measure for every screen (--content-max is --page-max under the
+   contract's name), and the contract's left padding. */
+main#view { width: 100%; max-width: var(--content-max); margin-inline: auto;
+  padding: var(--s-5) var(--s-6) var(--s-6); box-sizing: border-box; }
 /* The base .card is 320px with 28px padding — sized for the centered login form
    (which lives in its own #login shell, not here). Inside a page, cards are
    content panels: they must fill the available width and share one padding scale

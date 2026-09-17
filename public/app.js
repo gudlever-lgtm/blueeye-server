@@ -1320,7 +1320,15 @@ const PAGE_INFO = {
   },
 };
 
+// Screens migrated onto the UI contract (docs/ui-contract.md). Their help lives
+// in the PageHeader's (?) popover, so the legacy hero banner must not also draw
+// one above them — two copies of the same paragraph, one of which the contract
+// deleted. The gate reads this set too: a migrated view is allowed to have no
+// PAGE_INFO entry precisely because its module carries the help instead.
+const CONTRACT_VIEWS = new Set(['changes']);
+
 function hero(viewKey) {
+  if (CONTRACT_VIEWS.has(viewKey)) return null;
   // Probes & Tests is one view with two sub-tabs; show the matching help for each.
   let info = PAGE_INFO[viewKey];
   if (viewKey === 'probes' && probesTab === 'packages') info = PAGE_INFO.tests;
@@ -9517,107 +9525,61 @@ function changesRowEl(event, nameFor, showIndication = true) {
   return row;
 }
 
-views.changes = async () => {
-  const root = el('div', { class: 'changes-view' });
-  const head = el('div', { class: 'section-head' },
-    el('h2', {}, t('changes.title')),
-    el('span', { class: 'muted' }, t('changes.subtitle')));
-  const controls = el('div', { class: 'chg-controls' });
-  const body = el('div', {}, el('div', { class: 'muted' }, t('changes.loading')));
-  root.append(head, controls, body);
-
-  let agents = [];
-  try { agents = await api('/agents'); } catch { /* labels are best-effort */ }
-  const nameById = {};
-  (agents || []).forEach((a) => { nameById[a.id] = a.display_name || a.hostname || `agent ${a.id}`; });
-  const nameFor = (id) => nameById[id] || `agent ${id}`;
-
-  async function load() {
-    body.replaceChildren(el('div', { class: 'muted' }, t('changes.loading')));
-    let data;
-    try {
+// ---- Changes (MIGRATED — see public/views/changes.js) ----------------------
+// The first screen on the UI contract (docs/ui-contract.md). The view itself
+// lives in its own file so `npm run ui:check` can hold it to the contract while
+// the screens around it are still on the old chrome; app.js keeps the state the
+// screen must not own — the chosen window and the reference marker both outlive
+// the view, and the marker moves only on an explicit "Mark as seen".
+let changesView = null;
+function getChangesView() {
+  if (changesView) return changesView;
+  if (typeof window === 'undefined' || !window.ChangesView || !ui) return null;
+  changesView = window.ChangesView.create({
+    el, api, t, errText, openAgent, ui,
+    WINDOWS: CHANGES_WINDOWS,
+    getWindow: () => changesWindow,
+    setWindow: (w) => { if (CHANGES_WINDOWS.includes(w)) changesWindow = w; },
+    setSince: (s) => { changesSince = s; },
+    feedPath: () => {
       const qs = new URLSearchParams({ window: changesWindow });
       if (changesSince) qs.set('since', changesSince);
-      data = await api(`/api/changes?${qs.toString()}`);
-    } catch (err) {
-      body.replaceChildren(
-        el('p', { class: 'error' }, t('changes.error', { message: errText(err) })),
-        el('button', { class: 'small ghost', onclick: load }, t('common.retry')));
-      return;
-    }
-
-    const kids = [];
-    kids.push(el('p', { class: 'muted small' }, t('changes.since', { when: fmtDate(data.since) })));
-
-    // Say what was folded. A page that quietly correlated 120 occurrences into 14
-    // events reads as a suspiciously quiet shift unless it says so outright.
-    if (data.correlated > 0) {
-      kids.push(el('p', { class: 'muted small' }, t('changes.correlated', { rows: data.total, raw: data.rawTotal })));
-    }
-
-    if (data.partial && (data.failedSources || []).length) {
-      kids.push(el('p', { class: 'warn small' }, t('changes.partial', { sources: data.failedSources.join(', ') })));
-    }
-
-    if (!data.events.length) {
-      // A meaningful empty state: the reference time is what makes "no changes"
-      // an answer rather than a blank page.
-      kids.push(el('div', { class: 'empty' },
-        el('p', {}, t('changes.empty', { when: fmtDate(data.since) })),
-        el('p', { class: 'muted small' }, t('changes.emptyHint'))));
-    } else {
-      for (const group of data.groups) {
-        kids.push(el('h3', { class: `chg-group sev-${group.severity}` }, t(`changes.group.${group.severity}`),
-          el('span', { class: 'muted small' }, ` (${group.events.length})`)));
-        const ul = el('ul', { class: 'timeline-list' });
-        // A row with no family (a situation, an agent transition) is transparent
-        // here rather than a break in the run — otherwise one such row between
-        // two latency events reprints the identical sentence underneath both.
-        let prevFamily = null;
-        group.events.forEach((e) => {
-          const family = e.family || null;
-          ul.append(changesRowEl(e, nameFor, family !== null && family !== prevFamily));
-          if (family !== null) prevFamily = family;
-        });
-        kids.push(ul);
-      }
-      if (data.truncated) {
-        kids.push(el('p', { class: 'muted small' }, t('changes.truncated', { shown: data.returned, total: data.total })));
-      }
-    }
-    body.replaceChildren(...kids);
-  }
-
-  // Window picker + the explicit mark-as-seen. The marker moves ONLY here —
-  // never on a load — so the page can still tell you what is new next time.
-  const winSel = el('select', {
-    onchange: (e) => { changesWindow = e.target.value; load(); },
-  }, ...CHANGES_WINDOWS.map((w) => el('option', {
-    value: w, ...(w === changesWindow ? { selected: 'selected' } : {}),
-  }, w)));
-
-  const seenBtn = el('button', {
-    class: 'small',
-    onclick: async () => {
-      seenBtn.disabled = true;
-      try {
-        await api('/api/changes/seen', { method: 'POST', body: {} });
-        toast(t('changes.marked'));
-        changesSince = 'last_login';
-        await load();
-      } catch (err) { toast(errText(err), true); }
-      finally { seenBtn.disabled = false; }
+      return `/api/changes?${qs.toString()}`;
     },
-  }, t('changes.markSeen'));
+    exportCsv: () => exportChangesCsv(),
+  });
+  return changesView;
+}
 
-  controls.append(
-    el('label', {}, t('changes.window'), ' ', winSel),
-    seenBtn,
-    el('button', { class: 'small ghost', onclick: () => { currentView = 'fleet'; render(); } }, t('changes.fleetLink')));
-
-  await load();
-  return root;
+views.changes = async () => {
+  const v = getChangesView();
+  return v ? v.view() : el('div', { class: 'empty error' }, t('changes.error', { message: 'view module not loaded' }));
 };
+
+// The export the toolbar offers. A CSV of what is on screen is the answer to
+// "send me that list", and it is the server's own feed rather than the rendered
+// rows, so a truncated page does not become a truncated export.
+async function exportChangesCsv() {
+  try {
+    const qs = new URLSearchParams({ window: changesWindow });
+    if (changesSince) qs.set('since', changesSince);
+    const data = await api(`/api/changes?${qs.toString()}`);
+    const rows = [['time', 'severity', 'kind', 'type', 'summary', 'agent', 'count']];
+    for (const e of data.events || []) {
+      rows.push([e.timestamp, e.severity, e.kind, e.type, e.summary, e.agentId == null ? '' : e.agentId, e.count || 1]);
+    }
+    const csv = rows.map((r) => r.map((c) => `"${String(c ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+    const a = el('a', { href: url, download: `changes-${changesWindow}.csv` });
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    ui.toast(t('changes.exported'), t('changes.exportedDetail', { n: (data.events || []).length }));
+  } catch (err) {
+    ui.toast(t('changes.err.title'), errText(err), { bad: true });
+  }
+}
 
 const fleetState = { timer: null };
 function stopFleet() { if (fleetState.timer) { clearInterval(fleetState.timer); fleetState.timer = null; } }

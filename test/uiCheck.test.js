@@ -57,8 +57,27 @@ test('ui:check --all sweeps the unmigrated chrome too, and says so', () => {
 // ---------------------------------------------------------------- the rules
 // A rule that has quietly stopped matching is worse than no rule, so each one
 // is fired at a fixture that violates it.
+// The fixture stands in for a migrated view, so it has to satisfy the template
+// rule before the rule under test is the only thing firing.
+const OK_VIEW = `
+  var view = ui.page(ui.pageHeader({ title: 'x', lead: 'y' }));
+`;
+
+// MIGRATED grows with every phase-3 commit, and a fixture that does not keep up
+// fails on a missing file rather than on the rule under test. Read the list out
+// of the script rather than restating it here.
+const MIGRATED_FILES = (() => {
+  const src = fs.readFileSync(SCRIPT, 'utf8');
+  const from = src.indexOf('const MIGRATED = [');
+  return [...src.slice(from, src.indexOf('];', from)).matchAll(/'([^']+)'/g)].map((m) => m[1]);
+})();
+
 function withFixture(files, fn) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'uicheck-'));
+  const write = (rel, body) => {
+    fs.mkdirSync(path.join(dir, 'public', path.dirname(rel)), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'public', rel), body);
+  };
   try {
     fs.mkdirSync(path.join(dir, 'public', 'css'), { recursive: true });
     fs.mkdirSync(path.join(dir, 'scripts'), { recursive: true });
@@ -67,24 +86,20 @@ function withFixture(files, fn) {
     for (const f of ['css/tokens.css', 'css/base.css', 'css/components.css']) {
       fs.copyFileSync(path.join(ROOT, 'public', f), path.join(dir, 'public', f));
     }
-    for (const [rel, body] of Object.entries(files)) {
-      fs.writeFileSync(path.join(dir, 'public', rel), body);
+    // Every file the script expects to find gets a clean stand-in unless the
+    // fixture supplies its own.
+    for (const rel of MIGRATED_FILES) {
+      if (files[rel] === undefined) write(rel, rel === 'ui.js' ? '// components' : OK_VIEW);
     }
+    for (const [rel, body] of Object.entries(files)) write(rel, body);
     return fn(dir);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 }
 
-// The fixture stands in for a migrated view, so it has to satisfy the template
-// rule before the rule under test is the only thing firing.
-const OK_VIEW = `
-  var view = ui.page(ui.pageHeader({ title: 'x', lead: 'y' }));
-`;
-
 function fixtureFindings(body, extra = {}) {
-  return withFixture(Object.assign({ 'uiPreview.js': OK_VIEW + body, 'ui.js': '// components', 'kitchenSink.js': OK_VIEW }, extra),
-    (dir) => run([], dir));
+  return withFixture(Object.assign({ 'uiPreview.js': OK_VIEW + body }, extra), (dir) => run([], dir));
 }
 
 test('rule: inline style in a view is a finding', () => {
@@ -148,18 +163,13 @@ test('rule: one primary plus a secondary is fine', () => {
 });
 
 test('rule: a migrated view that uses none of the templates is a finding', () => {
-  const { out } = withFixture({
-    'uiPreview.js': "var n = el('div', {});",
-    'ui.js': '// components',
-    'kitchenSink.js': OK_VIEW,
-  }, (dir) => run([], dir));
+  const { out } = withFixture({ 'uiPreview.js': "var n = el('div', {});" }, (dir) => run([], dir));
   assert.match(out, /uiPreview\.js:1:template/);
   assert.match(out, /ui\.page\(/);
 });
 
 test('rule: a raw px size in a contract stylesheet is a finding', () => {
   const { out } = withFixture({
-    'uiPreview.js': OK_VIEW, 'ui.js': '// c', 'kitchenSink.js': OK_VIEW,
     'css/components.css': '.ui .x { padding: 7px; font-size: 15px; }',
   }, (dir) => run([], dir));
   assert.match(out, /css\/components\.css:\d+:px-size/);
@@ -168,7 +178,6 @@ test('rule: a raw px size in a contract stylesheet is a finding', () => {
 
 test('rule: a colour in tokens.css is fine — that is the one file it belongs in', () => {
   const { code, out } = withFixture({
-    'uiPreview.js': OK_VIEW, 'ui.js': '// c', 'kitchenSink.js': OK_VIEW,
     'css/tokens.css': ':root { --accent: #38bdf8; }',
   }, (dir) => run([], dir));
   assert.equal(code, 0, out);

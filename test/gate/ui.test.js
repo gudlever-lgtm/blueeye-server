@@ -100,14 +100,31 @@ test('every data-view button has a views.<tab> handler', () => {
   assert.deepEqual(missing, []);
 });
 
-test('every nav view has a PAGE_INFO help entry', () => {
+test('every nav view has help: a PAGE_INFO entry, or a (?) popover on a migrated screen', () => {
   const start = appJs.indexOf('const PAGE_INFO = {');
   assert.ok(start > 0);
   const block = appJs.slice(start, appJs.indexOf('\n};', start));
   const inline = [...block.matchAll(/^  ([A-Za-z_]+): \{/gm)].map((m) => m[1]);
   const later = [...appJs.matchAll(/^PAGE_INFO\.([A-Za-z_]+) = \{/gm)].map((m) => m[1]);
-  const missing = dataViews.filter((v) => !inline.includes(v) && !later.includes(v));
+
+  // A screen migrated onto the UI contract carries its help in the PageHeader's
+  // (?) popover instead of the hero banner, so PAGE_INFO is not where it lives.
+  // This widens the sweep rather than loosening it: the migrated view must
+  // actually HAVE the popover, checked below, or it has no help at all.
+  const contract = [...(appJs.match(/const CONTRACT_VIEWS = new Set\(\[([^\]]*)\]\)/) || [, ''])[1]
+    .matchAll(/'([A-Za-z_]+)'/g)].map((m) => m[1]);
+
+  const missing = dataViews.filter((v) => !inline.includes(v) && !later.includes(v) && !contract.includes(v));
   assert.deepEqual(missing, []);
+
+  // Every migrated screen has a module, and that module opens a help popover.
+  for (const view of contract) {
+    const file = path.join(PUBLIC, 'views', `${view}.js`);
+    assert.ok(fs.existsSync(file), `${view} is marked migrated but has no public/views/${view}.js`);
+    const src = fs.readFileSync(file, 'utf8');
+    assert.match(src, /help:\s*\{/, `${view}: migrated, but its PageHeader offers no help`);
+    assert.match(src, /ui\.pageHeader\(/, `${view}: migrated, but builds no PageHeader`);
+  }
 });
 
 test('data-min-role and data-feature attributes use known values', () => {

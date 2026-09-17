@@ -46,6 +46,8 @@ const MIGRATED = [
   'ui.js',
   'uiPreview.js',
   'kitchenSink.js',
+  // Phase 3, in the order docs/ui-contract.md sets out.
+  'views/changes.js',
 ];
 
 // Classes the contract replaced. A migrated file may not use them.

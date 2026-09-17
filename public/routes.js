@@ -49,7 +49,7 @@
 
     serviceAssurance: {
       path: '/service-assurance',
-      tabs: ['health', 'journeys', 'applications', 'tests', 'runs', 'schedules', 'monitors'],
+      tabs: ['health', 'journeys', 'applications', 'tests', 'runs', 'history', 'schedules', 'monitors'],
       tabKey: 'serviceAssuranceTab',
     },
 

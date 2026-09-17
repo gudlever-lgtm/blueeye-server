@@ -1273,6 +1273,8 @@
 
       // BlueEye Service Assurance
       'sa.title': 'Service Assurance',
+      'sa.err.load': 'Service Assurance could not be loaded',
+      'sa.err.loadHint': 'The module did not load. Reload the page; if it keeps happening, check the browser console.',
       'sa.tagline': 'Know when your digital services stop working — before your users do.',
       'sa.tab.applications': 'Applications',
       'sa.tab.discovery': 'Discovery',
@@ -4130,6 +4132,8 @@
 
       // BlueEye Service Assurance
       'sa.title': 'Service Assurance',
+      'sa.err.load': 'Service Assurance kunne ikke indlæses',
+      'sa.err.loadHint': 'Modulet blev ikke indlæst. Genindlæs siden; sker det igen, så se browserens konsol.',
       'sa.tagline': 'Know when your digital services stop working — before your users do.',
       'sa.tab.applications': 'Applikationer',
       'sa.tab.discovery': 'Kortlægning',

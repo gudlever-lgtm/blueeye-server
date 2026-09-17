@@ -1345,6 +1345,7 @@ const CONTRACT_VIEWS = new Map([
   ['topology', 'topology'],
   ['flows', 'flows'],
   ['transactions', 'transactions'],
+  ['serviceAssurance', 'serviceAssurance'],
 ]);
 
 function hero(viewKey) {
@@ -15200,10 +15201,13 @@ let txTab = 'list';
 // BlueEye Service Assurance — the module lives in public/serviceAssurance.js and
 // is handed the shared helpers here, so it never reaches into app.js globals.
 // That is the same seam the backend keeps (docs/service-assurance.md §2).
-views.serviceAssurance = async () => {
-  if (!window.ServiceAssurance) {
-    return el('div', { class: 'empty' }, 'Service Assurance kunne ikke indlæses.');
-  }
+// ---- Service Assurance (SHELL MIGRATED — see public/views/serviceAssurance.js)
+// The eight tab bodies stay in public/serviceAssurance.js; the page they sit on
+// is the contract's.
+let serviceAssurancePage = null;
+
+function mountServiceAssurance() {
+  if (!window.ServiceAssurance) return null;
   return window.ServiceAssurance.create({
     el, api, t, dataCard, toast,
     isAdmin,
@@ -15230,7 +15234,35 @@ views.serviceAssurance = async () => {
     // what it said. The module describes the incident; the form lives here with
     // the rest of the severity-rule screens.
     editSeverityRule: (prefill) => editSeverityRule(null, prefill),
+    // The host draws the page header and the tab strip; the module draws the
+    // body. Without this the module owns its own shell, which is how it ships
+    // standalone.
+    mode: 'embedded',
   });
+}
+
+function getServiceAssurancePage() {
+  if (serviceAssurancePage) return serviceAssurancePage;
+  if (typeof window === 'undefined' || !window.ServiceAssurancePage || !ui) return null;
+  serviceAssurancePage = window.ServiceAssurancePage.create({
+    el, t, ui,
+    mount: mountServiceAssurance,
+    setTab: (tab) => { serviceAssuranceTab = tab; syncLocation(); },
+    help: () => {
+      const info = PAGE_INFO.serviceAssurance || {};
+      return { lead: info.hero || '', title: info.title || t('sa.title'), body: info.body || (() => []) };
+    },
+  });
+  return serviceAssurancePage;
+}
+
+views.serviceAssurance = async () => {
+  const v = getServiceAssurancePage();
+  if (!v) return el('div', { class: 'empty error' }, t('sa.err.load'));
+  // The module is rebuilt per view entry (it holds the open detail), so the
+  // page is too.
+  serviceAssurancePage = null;
+  return getServiceAssurancePage().view();
 };
 
 // The in-app guides (nav group: Guides).

@@ -797,3 +797,28 @@ somebody has it, and it is not fixed.
 
 **`npm run ui:check -- --all` is clean.** There is no colour literal anywhere in
 `public/` outside `css/tokens.css`.
+
+
+**Service Assurance** is the third shell migration, and the largest: eight
+screens in a 5,100-line module that also ships standalone.
+
+The module carried **its own copy of the tab strip** — correct keyboard and
+ARIA, written out a second time. The contract forbids a page-local copy of a
+component, so the module grew an `embedded` mode: with it the host draws the
+chrome and the module draws only the body; without it the module still owns its
+own shell, which is how it ships standalone. That seam already existed for
+`mode: 'settings'`, which mounts only the settings panel inside another screen.
+
+The screen also gained a **PageHeader and the (?) popover**, which it never had:
+the tab strip was the first thing on the page, so the section's name appeared
+only in the nav and the breadcrumb.
+
+Migrating the strip surfaced a gap. **History** is one of the eight screens the
+strip offers, but it was in neither the module's accepted-tab list nor the
+route's — so it could be clicked to and never linked to, and a
+`/service-assurance/history` deep link silently opened Applications. It is in
+both now.
+
+**Not migrated:** the eight tab bodies. Each is hundreds of lines with its own
+forms, detail screens and polling, and each migrates in its own commit. Its
+**stylesheet** is done — see phase 4 above.

@@ -94,16 +94,22 @@ fi
 AGENT_DIR="$ROOT_DIR/blueeye-agent"
 AGENT_SHA_BEFORE="$(git -C "$AGENT_DIR" rev-parse HEAD 2>/dev/null || echo none)"
 
+# Pre-flight every repo BEFORE pulling any of them. Checking inside the loop meant
+# dirty edits in blueeye-agent aborted the deploy only after blueeye-server had
+# already been pulled — a half-updated checkout, and a server that then serves a
+# stale agent bundle. Either the whole deploy runs, or nothing moves.
 for d in "${REPOS[@]}"; do
   dir="$ROOT_DIR/$d"
-  [ -d "$dir/.git" ] || die "Repo not found: $dir (expected the three repos as siblings)."
+  [ -d "$dir/.git" ] || die "Repo not found: $dir (expected the repos as siblings)."
+  if [ -n "$(git -C "$dir" status --porcelain)" ]; then
+    die "$d has uncommitted local changes; resolve them before deploying (nothing has been pulled)."
+  fi
+done
+
+for d in "${REPOS[@]}"; do
+  dir="$ROOT_DIR/$d"
 
   log "Updating $d ($BRANCH)"
-  # Refuse to clobber local edits — surface them rather than losing them.
-  if [ -n "$(git -C "$dir" status --porcelain)" ]; then
-    die "$d has uncommitted local changes; resolve them before deploying."
-  fi
-
   cur="$(git -C "$dir" rev-parse --abbrev-ref HEAD)"
   if [ "$cur" != "$BRANCH" ]; then
     log "Switching $d to $BRANCH (was $cur)"
@@ -237,6 +243,29 @@ wait_health server "http://localhost:${SERVER_PORT}/health" || true
 # "I deployed but the dashboard still shows no update" loop. /system/version is
 # auth-gated (viewer+), so this runs only when a token is provided in
 # BLUEEYE_API_TOKEN; otherwise it's skipped. Non-fatal either way.
+# First, the check that needs no token at all: the server logs the version it
+# packaged on every boot. This is the whole "I deployed but the dashboard still
+# offers the old agent" loop, closed on every deploy rather than only when
+# someone remembered to export a JWT.
+PACKAGED=""
+if command -v docker >/dev/null 2>&1; then
+  PACKAGED="$("${DC[@]}" logs --tail 400 server 2>/dev/null \
+    | sed -n 's/.*agent source packaged v\([^ ]*\) from.*/\1/p' | tail -1)"
+fi
+if [ -z "$PACKAGED" ]; then
+  warn "Could not read the packaged agent version from the server log — check manually:"
+  warn "  ${DC[*]} logs server | grep 'agent source packaged'"
+elif [ "$PACKAGED" = "?" ]; then
+  warn "The server packaged an agent bundle it could not read a version from."
+  warn "Check that $AGENT_DIR/package.json is readable inside the container (AGENT_SOURCE_DIR)."
+elif [ "$PACKAGED" != "${AGENT_VER:-}" ]; then
+  warn "The server is serving agent v${PACKAGED}, but $AGENT_DIR is v${AGENT_VER:-?}."
+  warn "The bind mount is not pointing at this checkout (AGENT_SOURCE_DIR in .env / docker-compose.yml),"
+  warn "or the restart did not take. Until they match, Update pushes v${PACKAGED} to every agent."
+else
+  log "Server packaged agent v${PACKAGED} ✓ (this is what Update will push)"
+fi
+
 if [ -n "${BLUEEYE_API_TOKEN:-}" ] && command -v curl >/dev/null 2>&1; then
   offered="$(curl -s --max-time 3 -H "Authorization: Bearer ${BLUEEYE_API_TOKEN}" \
     "http://localhost:${SERVER_PORT}/system/version" 2>/dev/null \

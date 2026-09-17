@@ -366,7 +366,7 @@
                 refresh();
               },
             })
-            : ui.emptyState({ title: t('flows.noFlows'), body: t('flows.noFlowsHint') })],
+            : ui.emptyState({ kind: 'nodata', title: t('flows.noFlows'), body: t('flows.noFlowsHint') })],
         }));
 
         panels.push(ui.panelGrid(
@@ -397,13 +397,13 @@
                   };
                 }),
               })
-              : ui.emptyState({ title: t('flows.noPorts') })],
+              : ui.emptyState({ kind: 'nodata', title: t('flows.noPorts') })],
           }),
           ui.panel({
             title: t('flows.protos'),
             children: [(data.byProto || []).length
               ? protoTable(data.byProto)
-              : ui.emptyState({ title: t('flows.noProtos') })],
+              : ui.emptyState({ kind: 'nodata', title: t('flows.noProtos') })],
           })));
 
         host.replaceChildren.apply(host, panels);
@@ -433,7 +433,7 @@
           kids.push(el('div', { class: 'panel-body' },
             deps.chart(pts, { markers: markers, onBrush: applyZoom })));
         } else {
-          kids.push(ui.emptyState({ title: t('flows.noFlows'), body: t('flows.noFlowsHint') }));
+          kids.push(ui.emptyState({ kind: 'nodata', title: t('flows.noFlows'), body: t('flows.noFlowsHint') }));
         }
         if (data.topTalkers && data.topTalkers.length) {
           kids.push(el('div', { class: 'panel-body' }, ui.metaXs(t('flows.talkers'))));
@@ -454,7 +454,7 @@
         if (!data.arcs.length) {
           host.replaceChildren(ui.panel({
             title: t('flows.mode.map'),
-            children: [ui.emptyState({ title: t('flows.map.none'), body: t('flows.map.noneHint') })],
+            children: [ui.emptyState({ kind: 'nodata', title: t('flows.map.none'), body: t('flows.map.noneHint') })],
           }));
           return;
         }
@@ -573,7 +573,7 @@
           if (!agents.length) {
             host.replaceChildren(ui.panel({
               title: t('flows.title'),
-              children: [ui.emptyState({ title: t('flows.noAgents'), body: t('flows.noAgentsHint') })],
+              children: [ui.emptyState({ kind: 'nodata', title: t('flows.noAgents'), body: t('flows.noAgentsHint') })],
             }));
             return page;
           }

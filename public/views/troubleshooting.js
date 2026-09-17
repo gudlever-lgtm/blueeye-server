@@ -205,7 +205,7 @@
         var causes = (data.rootCauses || []).map(TV.rootCauseModel);
         var children = [];
         if (!causes.length) {
-          children.push(ui.emptyState({ title: t('tshoot.causes.none'), body: t('tshoot.causes.noneHint') }));
+          children.push(ui.emptyState({ kind: 'ok', title: t('tshoot.causes.none'), body: t('tshoot.causes.noneHint') }));
         } else {
           children.push(el('div', { class: 'panel-body' }, causes.map(function (m) {
             var slot = el('div', { class: 'ts-cause-slot' });
@@ -302,7 +302,7 @@
         if (!faults.rows.length) {
           children.push(faults.loading
             ? ui.loadingState(5)
-            : ui.emptyState({ title: t('tshoot.faults.empty'), body: t('tshoot.faults.emptyHint') }));
+            : ui.emptyState({ kind: 'ok', title: t('tshoot.faults.empty'), body: t('tshoot.faults.emptyHint') }));
         } else {
           children.push(ui.dataTable({
             dense: true,
@@ -387,7 +387,7 @@
         if (!bounds) {
           timelineHost.replaceChildren(ui.panel({
             title: t('tshoot.timeline'),
-            children: [ui.emptyState({ title: t('tshoot.timeline.none'), body: t('tshoot.timeline.noneHint') })],
+            children: [ui.emptyState({ kind: 'nodata', title: t('tshoot.timeline.none'), body: t('tshoot.timeline.noneHint') })],
           }));
           return;
         }
@@ -409,7 +409,7 @@
               brush ? ui.button('ghost', t('tshoot.timeline.clear'), {
                 size: 'xs', onclick: function () { brush = null; paint(); },
               }) : null),
-            shown.length ? ul : ui.emptyState({ title: t('tshoot.timeline.noneInWindow') }));
+            shown.length ? ul : ui.emptyState({ kind: 'nodata', title: t('tshoot.timeline.noneInWindow') }));
         }
 
         timelineHost.replaceChildren(ui.panel({

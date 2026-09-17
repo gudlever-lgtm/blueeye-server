@@ -133,7 +133,10 @@
             return [String(a.id), a.display_name || a.hostname];
           })),
           onchange: function () {
-            pathTargetInput.value = '';
+            // Only the SUGGESTIONS are per-agent. Clearing the box threw away a
+            // target the operator had already typed, every time they picked the
+            // agent second — so the typed value stays and the list refreshes
+            // under it.
             deps.loadPathTargets(pathAgentSel.value, pathTargetList);
           },
         });
@@ -155,8 +158,8 @@
       function runPath() {
         var agentId = pathAgentSel.value;
         var target = pathTargetInput.value.trim();
-        if (!agentId) { ui.toast(t('dest.path.pickAgent'), null, { bad: true }); return; }
-        if (!target) { ui.toast(t('dest.path.pickTarget'), null, { bad: true }); return; }
+        if (!agentId) { ui.toast(t('dest.path.pickAgent'), null, { bad: true, focus: pathAgentSel }); return; }
+        if (!target) { ui.toast(t('dest.path.pickTarget'), null, { bad: true, focus: pathTargetInput }); return; }
         showPathBtn.disabled = true;
         showPathBtn.textContent = t('dest.path.running');
         deps.showPath(agentId, target)
@@ -352,7 +355,7 @@
         var panelEl = loadingDrawer(destTitle(d), row);
         deps.fetchDestination(d)
           .then(function (res) {
-            if (!res) { fillDrawer(panelEl, [ui.emptyState({ title: t('dest.noData'), body: t('dest.noDataHint') })]); return; }
+            if (!res) { fillDrawer(panelEl, [ui.emptyState({ kind: 'nodata', title: t('dest.noData'), body: t('dest.noDataHint') })]); return; }
             var flows = res.flows;
             var findings = res.findings || [];
             fillDrawer(panelEl, [
@@ -395,7 +398,7 @@
       function openRegion(inBox) {
         var panelEl = loadingDrawer(t('dest.drawer.region'));
         if (!inBox.length) {
-          fillDrawer(panelEl, [ui.emptyState({ title: t('dest.regionEmpty'), body: t('dest.regionEmptyHint') })]);
+          fillDrawer(panelEl, [ui.emptyState({ kind: 'nodata', title: t('dest.regionEmpty'), body: t('dest.regionEmptyHint') })]);
           return;
         }
         var bytes = inBox.reduce(function (s, d) { return s + (Number(d.bytes) || 0); }, 0);

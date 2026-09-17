@@ -13,6 +13,7 @@ const { verifyProof } = require('../license/verify');
 const { INSTALLABLE_TOOLS, isAllowedTool } = require('../agentTools');
 const { diagnoseConnection } = require('../ws/connectionDiagnosis');
 const { silentLogger } = require('../logger');
+const { isNewer } = require('../lib/version');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -263,19 +264,34 @@ function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentComma
 
       let release = releaseStore && typeof releaseStore.latest === 'function' ? releaseStore.latest() : null;
       const haveSource = agentSourceStore && typeof agentSourceStore.available === 'function' && agentSourceStore.available();
-      // Prefer a SIGNED push. If none is published yet but this server holds a
-      // signing key, mint one from the current source on demand — otherwise the
-      // command goes out unsigned and an agent that pinned a release key refuses
-      // it ("signature downgrade"), so the one-click Update could never land. A
-      // no-op without a signing key (publishRelease returns null), leaving the
-      // legacy unsigned-source fallback intact.
-      if (!release && typeof publishRelease === 'function') {
+      const sourceVersion = agentSourceStore && typeof agentSourceStore.sourceVersion === 'function'
+        ? agentSourceStore.sourceVersion() : null;
+      // Prefer a SIGNED push. If none is published yet — or the newest one is
+      // OLDER than the source now on disk — mint one from the current source,
+      // provided this server holds a signing key. Without that second case a
+      // stale signed release pins the whole fleet backwards: the host pulls the
+      // agent to a new version, the store still holds the old signed bundle, and
+      // every Update keeps pushing the old one. An unsigned push is the last
+      // resort, because an agent that pinned a release key refuses it
+      // ("signature downgrade"). publishRelease is a no-op without a signing
+      // key, which leaves the legacy unsigned-source fallback intact.
+      const releaseIsStale = !release
+        || (sourceVersion && release.version && isNewer(sourceVersion, release.version));
+      if (releaseIsStale && typeof publishRelease === 'function') {
         try {
           const minted = await publishRelease();
           if (minted && minted.version) release = releaseStore.latest();
         } catch (err) {
           (req.log || logger).warn(`agents: on-demand signed-release publish failed (${err.message}); falling back to source bundle`);
         }
+      }
+      // Still behind after the attempt (no signing key, or signing failed): push
+      // the newer SOURCE rather than a signature for code nobody asked for.
+      if (release && sourceVersion && isNewer(sourceVersion, release.version) && haveSource) {
+        (req.log || logger).warn(
+          `agents: signed release v${release.version} is older than the packaged source v${sourceVersion} `
+          + '— pushing the unsigned source bundle. Generate a release signing key so updates stay signed.');
+        release = null;
       }
       if (!release && !haveSource) {
         return res.status(503).json({ error: 'No agent source is published on the server' });

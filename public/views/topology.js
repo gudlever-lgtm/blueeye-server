@@ -175,7 +175,7 @@
           viewHost.replaceChildren(ui.panel({
             title: t('topo.mode.diagram'),
             note: scopeText(),
-            children: [ui.emptyState({ title: t('topo.noFlows'), body: t('topo.noFlowsHint') })],
+            children: [ui.emptyState({ kind: 'nodata', title: t('topo.noFlows'), body: t('topo.noFlowsHint') })],
           }));
           return;
         }

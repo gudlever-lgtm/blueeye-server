@@ -1063,3 +1063,36 @@ the filter matches nothing, and only the second offers a Clear.
 set the OTHER filter narrowed, so a selected level still shows how many entries
 each source holds — which is what makes the selection reversible without
 guessing. The level filter is a floor ("Warn+"), not an exact match.
+
+
+**User Logs** is the audit log, and the screen where the DataTable's one rule —
+**a row is one line** — did the most work. Every row had three stacked lines in
+three of its six cells: the action label over the raw key over `POST
+/auth/login · HTTP 401 · 10.0.0.44`, the name over the e-mail, a flag's reasons
+under its badge. Six columns of that overflowed the panel at 1280 and pushed
+the flag text off the right edge.
+
+The row is five one-line columns now, and everything under them opens in a
+**Drawer**: why it was flagged, the account behind it, what was done, and the
+request that did it. That is where the contract puts detail, and it is the only
+place with room for a whole request line.
+
+"flagged: 3" was a warn badge inside a grey summary line. A count that is the
+reason to open the page is a stat: the StatStrip carries actions / people /
+flagged, and clicking flagged filters — the same move Events, Situations and
+Discovery made. The "Flagged only" checkbox went with it.
+
+**Kept deliberately:** an unflagged row carries no badge at all. A green "OK" on
+every line is noise, and a flag only means something if it is rare enough to
+notice. The flag rules and their wording stay server-side in
+`src/audit/userActivity.js`, so this screen and the CSV export can never
+disagree about why something was flagged — and the export still asks with the
+filters the reader set.
+
+A failed load used to put a red box **above an empty table**, so the screen said
+"it broke" and "nothing happened here" at the same time, with the summary still
+showing counts the load never returned. It is one ErrorState naming
+`GET /api/audit/users`, with a Retry, and nothing else.
+
+With both log screens migrated, the `.logs-table` / `.log-row-error` block is
+gone from `styles.css`.

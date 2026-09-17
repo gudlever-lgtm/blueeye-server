@@ -1354,6 +1354,7 @@ const CONTRACT_VIEWS = new Map([
   ['enrollment', 'enrollment'],
   ['discovery', 'discovery'],
   ['logs', 'systemLogs'],
+  ['userLogs', 'userLogs'],
 ]);
 
 function hero(viewKey) {
@@ -10610,141 +10611,42 @@ views.logs = async () => {
 // and a CSV export can never disagree about why something was flagged.
 let userLogsFilter = { user: '', flagged: false, q: '' };
 
-// crit = red, warn = amber, neutral = grey. An unflagged row gets NO badge at
-// all: a green "OK" on every line is noise, and the flags only mean anything if
-// they are rare enough to notice.
-const USER_LOG_FLAG_CLASS = { critical: 'crit', warn: 'warn', notice: 'neutral' };
-
-// The badge for one row. `title` carries every reason, so hovering a flag
-// explains it even before the reasons are read below the action.
-function userLogFlagBadge(level, flags) {
-  if (!level || level === 'none') return el('span', { class: 'muted small', title: t('logs.user.flag.none') }, '\u2013');
-  const reasons = (flags || []).map((f) => f.message).join(' ');
-  return el('span', { class: `badge ${USER_LOG_FLAG_CLASS[level] || 'neutral'}`, title: reasons || '' }, t(`logs.user.flag.${level}`));
+// ---- User Logs (MIGRATED — see public/views/userLogs.js)
+// The flag rules and their explanations live server-side in
+// src/audit/userActivity.js, so the dashboard and the CSV export can never
+// disagree about why a row was flagged.
+let userLogsPage = null;
+function getUserLogsPage() {
+  if (userLogsPage) return userLogsPage;
+  if (typeof window === 'undefined' || !window.UserLogsPage || !ui) return null;
+  const query = (f) => {
+    const p = new URLSearchParams();
+    if (f.user) p.set('user', f.user);
+    if (f.flagged) p.set('flagged', '1');
+    if (f.q) p.set('q', f.q);
+    p.set('limit', '300');
+    return p.toString();
+  };
+  userLogsPage = window.UserLogsPage.create({
+    el, t, ui, errText,
+    state: userLogsFilter,
+    debounce: (fn) => setTimeout(fn, 250),
+    help: () => ({ title: t('logs.user.info.title'), body: () => [
+      el('p', {}, t('logs.user.info.p1')),
+      el('p', {}, t('logs.user.info.p2')),
+      el('p', { class: 'muted' }, t('logs.user.info.p3')),
+    ] }),
+    fetchLog: (f) => api(`/api/audit/users?${query(f)}`),
+    fetchUsers: () => api('/users'),
+    exportCsv: (f) => nis2Download(`/api/audit/users/export.csv?${query(f)}`, 'user-logs.csv'),
+  });
+  return userLogsPage;
 }
 
 views.userLogs = async () => {
-  const root = el('div');
-  root.append(el('div', { class: 'section-head' },
-    el('h2', {}, t('logs.user.title')),
-    el('span', { class: 'muted' }, t('logs.user.lead'))));
-
-  const userSel = el('select', {});
-  const qInput = el('input', { type: 'search', placeholder: t('logs.user.filter.searchPlaceholder'), value: userLogsFilter.q });
-  const flaggedBox = el('input', { type: 'checkbox', ...(userLogsFilter.flagged ? { checked: 'checked' } : {}) });
-  const refreshBtn = el('button', { class: 'small ghost' }, `\u27f3 ${t('logs.user.refresh')}`);
-  const exportBtn = el('button', { class: 'small ghost' }, `\u2913 ${t('logs.user.export')}`);
-  const status = el('span', { class: 'muted small' });
-  const summary = el('div', { class: 'muted small' });
-  const notice = el('div', {});
-
-  const tbody = el('tbody');
-  const table = el('table', { class: 'tests-table logs-table' },
-    el('thead', {}, el('tr', {}, ...[
-      t('logs.user.col.when'), t('logs.user.col.userId'), t('logs.user.col.name'),
-      t('logs.user.col.action'), t('logs.user.col.target'), t('logs.user.col.flag'),
-    ].map((h) => el('th', {}, h)))),
-    tbody);
-  const host = el('div', { style: 'overflow-x:auto' }, table);
-
-  // The user dropdown lists the accounts that exist now, so an admin can pick a
-  // colleague even when that person has no rows in the current window.
-  async function fillUsers() {
-    const opts = [el('option', { value: '' }, t('logs.user.filter.allUsers'))];
-    try {
-      const users = await api('/users');
-      for (const u of users) {
-        opts.push(el('option', { value: String(u.id), ...(String(u.id) === userLogsFilter.user ? { selected: 'selected' } : {}) },
-          `${u.name ? `${u.name} · ` : ''}${u.email} (#${u.id})`));
-      }
-    } catch { /* the log itself is what matters — a missing dropdown is not fatal */ }
-    userSel.replaceChildren(...opts);
-    userSel.value = userLogsFilter.user;
-  }
-
-  function query() {
-    const p = new URLSearchParams();
-    if (userLogsFilter.user) p.set('user', userLogsFilter.user);
-    if (userLogsFilter.flagged) p.set('flagged', '1');
-    if (userLogsFilter.q) p.set('q', userLogsFilter.q);
-    p.set('limit', '300');
-    return p.toString();
-  }
-
-  async function load() {
-    userLogsFilter = { user: userSel.value, flagged: flaggedBox.checked, q: qInput.value.trim() };
-    let data;
-    try {
-      data = await api(`/api/audit/users?${query()}`);
-    } catch (err) {
-      tbody.replaceChildren();
-      notice.replaceChildren(el('div', { class: 'empty error' }, t('logs.user.error', { message: errText(err) })));
-      status.textContent = '';
-      summary.replaceChildren();
-      return;
-    }
-    // A load that worked clears whatever the last failure left on screen.
-    notice.replaceChildren();
-    const entries = data.entries || [];
-    const s = data.summary || { total: 0, users: 0, flagged: 0 };
-
-    summary.replaceChildren(
-      el('span', {}, t('logs.user.summary.users', { count: s.users })),
-      el('span', {}, ' · '),
-      s.flagged
-        ? el('span', { class: 'badge warn' }, t('logs.user.summary.flagged', { count: s.flagged }))
-        : el('span', { class: 'badge ok' }, t('logs.user.summary.clean')));
-
-    if (!entries.length) {
-      tbody.replaceChildren(el('tr', {}, el('td', { colspan: '6', class: 'muted' },
-        userLogsFilter.user || userLogsFilter.flagged || userLogsFilter.q ? t('logs.user.emptyFiltered') : t('logs.user.empty'))));
-      status.textContent = t('logs.user.count', { shown: 0, total: data.total ?? 0 });
-      return;
-    }
-
-    tbody.replaceChildren(...entries.map((e) => {
-      const reasons = (e.flags || []).map((f) => f.message).join(' ');
-      const detailBits = [];
-      if (e.method && e.path) detailBits.push(`${e.method} ${e.path}`);
-      if (e.status != null) detailBits.push(`HTTP ${e.status}`);
-      if (e.ip) detailBits.push(e.ip);
-      if (typeof e.detail === 'string' && e.detail) detailBits.push(e.detail);
-      else if (e.detail && typeof e.detail === 'object' && Object.keys(e.detail).length) detailBits.push(JSON.stringify(e.detail));
-      return el('tr', { class: e.flagLevel === 'critical' ? 'log-row-error' : '' },
-        el('td', { class: 'muted small nowrap' }, fmtDate(e.ts)),
-        el('td', { class: 'mono small' }, e.userId == null ? '\u2013' : `#${e.userId}`),
-        el('td', {},
-          el('div', {}, e.name || el('span', { class: 'muted' }, t('logs.user.noName'))),
-          el('div', { class: 'muted small' }, e.email || '\u2013',
-            e.deletedUser ? el('span', { class: 'muted' }, ` \u00b7 ${t('logs.user.deletedUser')}`) : null)),
-        el('td', {},
-          el('div', {}, e.actionLabel || e.action),
-          el('div', { class: 'muted small' }, e.action),
-          detailBits.length ? el('div', { class: 'muted small' }, detailBits.join(' \u00b7 ')) : null),
-        el('td', { class: 'small' }, e.target || '\u2013'),
-        el('td', {},
-          userLogFlagBadge(e.flagLevel, e.flags),
-          reasons ? el('div', { class: 'muted small' }, reasons) : null));
-    }));
-    status.textContent = t('logs.user.count', { shown: entries.length, total: data.total ?? entries.length });
-  }
-
-  userSel.addEventListener('change', load);
-  flaggedBox.addEventListener('change', load);
-  qInput.addEventListener('input', load);
-  refreshBtn.addEventListener('click', load);
-  exportBtn.addEventListener('click', () => nis2Download(`/api/audit/users/export.csv?${query()}`, 'user-logs.csv'));
-
-  root.append(el('div', { class: 'history-controls' },
-    el('label', { class: 'inline muted' }, `${t('logs.user.filter.user')} `, userSel),
-    el('label', { class: 'inline muted' }, flaggedBox, ` ${t('logs.user.filter.flaggedOnly')}`),
-    el('label', { class: 'inline muted' }, `${t('logs.user.filter.search')} `, qInput),
-    refreshBtn, exportBtn, el('span', { class: 'spacer' }), summary, status));
-  root.append(notice);
-  root.append(host);
-  await fillUsers();
-  await load();
-  return root;
+  const v = getUserLogsPage();
+  if (!v) return el('div', { class: 'empty error' }, t('logs.user.err.title'));
+  return v.view();
 };
 
 // ---- Documentation (built-in handbook / how-tos) ---------------------------

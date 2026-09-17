@@ -145,7 +145,7 @@ test('System Logs reads the server stream; User Logs reads the audit trail', asy
   assert.ok(calls.some((c) => c.path === '/api/audit/users'), 'User Logs did not read /api/audit/users');
 });
 
-test('a user-log row shows the id, the name, the action and its flag reason', async (t) => {
+test('a user-log row names the person, the action and its flag', async (t) => {
   const { doc, errors } = await boot(t, userLogRoutes());
   await click(navButton(doc, 'userLogs'), 250);
   assert.deepEqual(errors, []);
@@ -153,12 +153,18 @@ test('a user-log row shows the id, the name, the action and its flag reason', as
   const row = doc.querySelector('#view tbody tr');
   assert.ok(row, 'the user log table did not render');
   const text = row.textContent;
-  assert.match(text, /#7/);
   assert.match(text, /Lars Hansen/);
-  assert.match(text, /lars@example\.dk/);
   assert.match(text, /Deleted agent/);
-  assert.match(text, /Irreversible/, 'the flag reason is not on the row');
-  assert.ok(row.querySelector('.badge'), 'the flag badge is missing');
+  assert.ok(row.querySelector('.badge-ui'), 'the flag badge is missing');
+
+  // A row is one line; the id, the e-mail and the flag's reasons are in the
+  // Drawer the row opens (see public/views/userLogs.js).
+  row.dispatchEvent(new doc.defaultView.Event('click', { bubbles: true }));
+  const drawer = doc.querySelector('.ui-drawer');
+  assert.ok(drawer, 'the row opened nothing');
+  assert.match(drawer.textContent, /#7/);
+  assert.match(drawer.textContent, /lars@example\.dk/);
+  assert.match(drawer.textContent, /Irreversible/, 'the flag reason is nowhere');
 });
 
 test('a clean row carries no flag badge', async (t) => {
@@ -166,16 +172,17 @@ test('a clean row carries no flag badge', async (t) => {
   const { doc } = await boot(t, userLogRoutes({ entries: [clean], summary: { total: 1, critical: 0, warn: 0, notice: 0, flagged: 0, users: 1 } }));
   await click(navButton(doc, 'userLogs'), 250);
   const row = doc.querySelector('#view tbody tr');
-  assert.equal(row.querySelector('.badge'), null);
+  assert.equal(row.querySelector('.badge-ui'), null);
 });
 
 test('"flagged only" is sent to the server, not filtered away in the browser', async (t) => {
   const { doc, calls } = await boot(t, userLogRoutes());
   await click(navButton(doc, 'userLogs'), 250);
-  const box = doc.querySelector('#view input[type="checkbox"]');
-  assert.ok(box, 'the flagged-only checkbox is missing');
-  box.checked = true;
-  box.dispatchEvent(new doc.defaultView.Event('change'));
+  // The checkbox became the StatStrip's flagged count, which filters on a click.
+  const flagged = [...doc.querySelectorAll('#view .stat-card')]
+    .find((c) => /Flagged/i.test(c.querySelector('.stat-l').textContent));
+  assert.ok(flagged, 'the flagged filter is missing');
+  flagged.dispatchEvent(new doc.defaultView.Event('click', { bubbles: true }));
   await tick(150);
   assert.ok(calls.some((c) => c.path === '/api/audit/users' && c.url.includes('flagged=1')));
 });

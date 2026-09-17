@@ -1305,19 +1305,6 @@ button.active-btn { outline: 2px solid var(--accent); }
 #inv-history-area { display: flex; flex-direction: column; gap: 12px; }
 #inv-history-area h3 { margin: 8px 0 4px; font-size: 15px; }
 
-
-/* ---- Logs views (System Logs + User Logs) -------------------------------- */
-.logs-table td { vertical-align: top; }
-.logs-table .nowrap { white-space: nowrap; }
-.logs-table code { font-size: 12px; }
-.log-row-error > td:first-child { border-left: 3px solid var(--bad); }
-/* Both log tables lean on .small for their secondary lines; it is not a global
-   utility, so it is defined here for them. */
-.logs-table .small { font-size: 12px; }
-/* User Logs: the user id column reads as an identifier, not prose. */
-.logs-table td.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-/* A flag's reasons sit under its badge and wrap; the rest of the row does not. */
-.logs-table td .badge + .muted { margin-top: 3px; white-space: normal; max-width: 34ch; }
 /* Transaction tests: list/matrix/heatmap/trend + editor. */
 .data-table { width: 100%; border-collapse: collapse; }
 .data-table th, .data-table td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--border); font-size: 13px; }

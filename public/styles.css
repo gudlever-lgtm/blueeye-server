@@ -81,7 +81,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .sidebar {
   flex: 0 0 var(--sidebar-w); width: var(--sidebar-w);
-  position: sticky; top: 0; height: 100vh; z-index: 60;
+  position: sticky; top: 0; height: 100vh; z-index: var(--z-sidebar);
   display: flex; flex-direction: column;
   background: var(--panel); border-right: 1px solid var(--hairline);
   transition: transform .2s var(--ease);
@@ -117,7 +117,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   background: color-mix(in srgb, var(--panel) 86%, transparent);
   backdrop-filter: saturate(1.4) blur(10px);
   border-bottom: 1px solid var(--hairline);
-  position: sticky; top: 0; z-index: 30;
+  position: sticky; top: 0; z-index: var(--z-topbar);
 }
 .nav-toggle { display: none; font-size: var(--fs-lg); line-height: 1; padding: var(--s-2) var(--s-3); }
 .spacer { flex: 1; }
@@ -178,7 +178,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* Dropdown panel — anchored under the trigger, right-aligned. */
 .user-menu-panel {
-  position: absolute; top: calc(100% + 8px); right: 0; z-index: 40;
+  position: absolute; top: calc(100% + 8px); right: 0; z-index: var(--z-popover);
   min-width: 224px; padding: 6px;
   background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
   box-shadow: var(--shadow-lg);
@@ -685,7 +685,7 @@ details.sec
   .nav-toggle { display: inline-flex; }
   .sidebar { position: fixed; left: 0; top: 0; transform: translateX(-100%); box-shadow: var(--shadow-lg); }
   #app.nav-open .sidebar { transform: translateX(0); }
-  #app.nav-open::before { content: ''; position: fixed; inset: 0; background: var(--scrim); z-index: 55; }
+  #app.nav-open::before { content: ''; position: fixed; inset: 0; background: var(--scrim); z-index: calc(var(--z-sidebar) - 1); }
 }
 
 /* Server storage cards + usage bar. */
@@ -712,6 +712,13 @@ details.sec
 
 /* Locations map (Leaflet). */
 .map { height: 70vh; min-height: 420px; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+
+/* Leaflet numbers its own panes from 400 up. Without a stacking context of its
+   own the map paints those into the ROOT one, which puts tiles and markers over
+   the drawer, the modal and the toast — hence "the map covers the Destination
+   details". `isolation` clamps them to the map's own layer; the map then sits
+   in the page like any other panel. */
+.leaflet-container { isolation: isolate; }
 .leaflet-popup-content { color: var(--popup-text); }
 .ctrl-group { margin-bottom: 12px; }
 .ctrl-group h4 { margin: 0 0 6px; font-size: 12px; color: var(--accent); text-transform: uppercase; letter-spacing: .04em; }
@@ -729,12 +736,12 @@ label.check input { width: auto; }
 
 /* Slide-in info drawer from the right. */
 .drawer-backdrop { position: fixed; inset: 0; background: var(--scrim); backdrop-filter: blur(2px); opacity: 0;
-  transition: opacity .2s ease; z-index: 50; }
+  transition: opacity .2s ease; z-index: var(--z-scrim); }
 .drawer-backdrop.open { opacity: 1; }
 .drawer { position: fixed; top: 0; right: 0; height: 100vh; width: min(420px, 92vw);
   background: var(--panel); border-left: 1px solid var(--border);
   box-shadow: var(--shadow-lg); padding: 22px 22px 28px;
-  overflow: auto; transform: translateX(100%); transition: transform .25s ease; z-index: 51; }
+  overflow: auto; transform: translateX(100%); transition: transform .25s ease; z-index: var(--z-modal); }
 .drawer.open { transform: translateX(0); }
 .drawer h3 { margin-top: 0; }
 .drawer h4 { margin: 18px 0 6px; font-size: 13px; color: var(--accent); }
@@ -956,7 +963,7 @@ pre { padding: 10px; overflow: auto; }
   padding: 10px 16px; border-radius: var(--radius-sm); box-shadow: var(--shadow-lg);
 }
 .toast.bad { border-color: var(--bad); }
-.modal { position: fixed; inset: 0; background: var(--scrim);
+.modal { position: fixed; inset: 0; z-index: var(--z-scrim); background: var(--scrim);
   backdrop-filter: blur(3px); display: grid; place-items: center; }
 .modal-card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 20px; width: min(520px, 92vw); max-height: 86vh; overflow: auto; }
 .modal-card h3 { margin-top: 0; }
@@ -1302,6 +1309,10 @@ button.active-btn { outline: 2px solid var(--accent); }
 .inv-nis2-draft summary { cursor: pointer; display: flex; align-items: center; gap: 6px; }
 .inv-nis2-draft-body { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
 .inv-nis2-notice { font-size: 12px; border-left: 3px solid var(--warn); padding-left: 8px; }
+
+/* A settings advisory that is about a MISCONFIGURATION, not just background
+   detail — muted grey buried it next to the copy nobody reads. */
+.warn-note { border-left: 3px solid var(--warn); padding-left: 10px; color: var(--text); font-size: 13px; }
 .inv-nis2-dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; font-size: 12px; margin: 0; }
 .inv-nis2-dl dt { color: var(--muted); font-weight: 500; align-self: start; }
 .inv-nis2-dl dd { margin: 0; word-break: break-word; }
@@ -1500,7 +1511,7 @@ li.guide-step.done .guide-step-title { text-decoration: line-through; opacity: 0
 .cmdb-picker { position: relative; display: flex; flex-direction: column; gap: 6px; }
 .cmdb-picker-input { width: 100%; }
 .cmdb-picker .cmdb-results {
-  position: absolute; top: 100%; left: 0; right: 0; z-index: 20; margin-top: 4px;
+  position: absolute; top: 100%; left: 0; right: 0; z-index: var(--z-inline); margin-top: 4px;
   padding: 4px; border: 1px solid var(--border); border-radius: var(--radius-sm);
   background: var(--card); box-shadow: var(--shadow-lg);
 }

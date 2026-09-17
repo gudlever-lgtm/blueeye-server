@@ -49,8 +49,47 @@ flag out-of-date agents):
   server's `package.json` version.
 * `agentUpdateAvailable` — the published agent version is newer than the agent
   **source bundle** this server serves. That is the version a `git pull` on the
-  host moves, and what installer-based agents can reach; a signed release can
-  never be newer than the source it was signed from.
+  host moves, and what installer-based agents can reach.
+
+### Which agent version the server offers
+
+`agent` in `GET /system/version` is the **newer of two things**: the newest
+signed release in the release store, and the packaged source bundle. Not simply
+the release.
+
+It used to be simply the release, on the reasoning that a signed release can
+never be newer than the source it was signed from. A release that is signed and
+then never re-signed breaks that. A host pulled its agent checkout to v0.27.0
+and reloaded the source; the store still held a signed v0.24.0; every one-click
+Update went on pushing v0.24.0, and the dashboard reported the fleet up to date
+because it was comparing against v0.24.0. A stale signature must not pin the
+fleet backwards.
+
+So:
+
+* `GET /system/version` offers the newer of the two, and the dashboard's
+  divergence note is written from the comparison rather than asserting a
+  direction (both directions happen, and they need opposite advice).
+* `POST /agents/:id/update` mints a fresh signed release whenever the source is
+  newer than the newest release — not only when there is no release at all. If
+  this server has no signing key, it pushes the newer **unsigned** source and
+  logs why, rather than pushing older code that happens to carry a signature.
+  (An agent pinned to a release key refuses the unsigned bundle; that is a
+  visible failure, where the silent downgrade was not.)
+* `POST /system/agent-source/reload` returns `releaseNote` saying why a re-sign
+  did not happen — no signing key, an unusable key, no writable
+  `AGENT_RELEASE_DIR`, or the signing error itself. It used to swallow the
+  failure and answer a plain OK.
+
+To see what a server is actually serving, without a token or a login:
+
+```
+docker compose logs server | grep 'agent source packaged'
+# enroll: agent source packaged v0.27.0 from /agent-src (… bytes, sha256 …)
+```
+
+`scripts/deploy.sh` reads that same line after its restart and warns when it
+does not match the agent checkout on disk.
 
 A malformed version from the signer is dropped rather than shown — a phantom
 "update available" badge is worse than no badge. The values survive a restart

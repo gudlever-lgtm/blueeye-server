@@ -473,6 +473,7 @@
       'ui.loading': 'Loading',
       'ui.sortBy': 'Sort by this column',
       'ui.moreActions': 'More actions',
+      'ui.empty.widen': 'Try a wider time range, or a different agent.',
       'ui.error.title': 'Could not load this',
       'ui.error.body': 'The rest of the page still works — it is only this panel that is missing.',
       'ui.chart.empty': 'No data in this period',
@@ -3405,6 +3406,7 @@
       'ks.time.missing': 'En manglende værdi',
       // ---- UI-kontraktens komponenter (public/ui.js) ------------------------
       'ui.close': 'Luk',
+      'ui.empty.widen': 'Prøv et bredere tidsrum eller en anden agent.',
       'ui.loading': 'Indlæser',
       'ui.sortBy': 'Sortér efter denne kolonne',
       'ui.moreActions': 'Flere handlinger',

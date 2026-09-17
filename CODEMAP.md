@@ -294,6 +294,12 @@ A single vanilla-JS SPA. Key building blocks:
   under the `ui` marker class. `public/uiPreview.js` is the phase-1 example
   screens on `/ui-preview/changes` and `/ui-preview/probes` (admin only, removed
   when those two screens migrate). See docs/ui-contract.md.
+- **Layers** — every `z-index` comes from the `--z-*` scale in
+  `public/css/tokens.css` (sticky → inline → topbar → sidebar → popover →
+  rowmenu → scrim → modal → toast). A hand-picked number is a `ui:check`
+  finding; `test/layerScale.test.js` pins the order. Leaflet's own panes (400+)
+  are clamped by `.leaflet-container { isolation: isolate }` — without it the map
+  paints over the drawer, the modal and the toast.
 - `el(tag, attrs, ...kids)` — DOM helper. `api(path, opts)` — fetch + bearer + 401 handling.
 - `dataCard(title, { actions, note }, ...body)` — the framed page section every
   view's data lives in (heading + actions on top, table flush to the card's

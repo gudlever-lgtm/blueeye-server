@@ -87,7 +87,11 @@ function createAgentSourceStore({ dir, exec = spawnSync, fsImpl = fs, logger = c
     const sha256 = crypto.createHash('sha256').update(buffer).digest('hex');
     cache = { buffer, sha256, size: buffer.length };
     if (logger && typeof logger.info === 'function') {
-      logger.info(`enroll: agent source packaged (${buffer.length} bytes, sha256 ${sha256.slice(0, 12)}…).`);
+      // The VERSION is the part an operator needs. "I deployed but the dashboard
+      // still offers the old agent" is answered by this one line —
+      // `docker compose logs server | grep 'agent source packaged'` — with no
+      // API token and no dashboard login.
+      logger.info(`enroll: agent source packaged v${srcVersion || '?'} from ${dir} (${buffer.length} bytes, sha256 ${sha256.slice(0, 12)}…).`);
     }
   }
 

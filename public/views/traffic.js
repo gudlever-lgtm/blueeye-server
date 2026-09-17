@@ -238,7 +238,7 @@
         if (!top.length) {
           topHost.replaceChildren(ui.panel({
             title: t('traffic.top'),
-            children: [ui.emptyState({ title: t('traffic.noAgents'), body: t('traffic.noAgentsHint') })],
+            children: [ui.emptyState({ kind: 'nodata', title: t('traffic.noAgents'), body: t('traffic.noAgentsHint') })],
           }));
           return;
         }

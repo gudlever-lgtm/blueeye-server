@@ -1351,6 +1351,7 @@ const CONTRACT_VIEWS = new Map([
   ['reporting', 'reporting'],
   ['guide', 'guides'],
   ['locations', 'locations'],
+  ['enrollment', 'enrollment'],
 ]);
 
 function hero(viewKey) {
@@ -10456,117 +10457,55 @@ const ENROLL_PLATFORMS = [
 // when any agent enrolls/comes online, flipping "Waiting for agent…" to connected.
 let enrollWatch = null;
 
+// ---- Enrollment (MIGRATED — see public/views/enrollment.js)
+// The generated code + command block (renderEnrollResult) stays here: it holds
+// the live "waiting for agent" socket state, the Windows two-step variant and
+// the manual checksum block.
+let enrollmentPage = null;
+function getEnrollmentPage() {
+  if (enrollmentPage) return enrollmentPage;
+  if (typeof window === 'undefined' || !window.EnrollmentPage || !ui) return null;
+  enrollmentPage = window.EnrollmentPage.create({
+    el, t, ui, toast, errText,
+    canWrite, canDelete,
+    isAdmin: () => role === 'admin',
+    platforms: () => ENROLL_PLATFORMS,
+    help: () => ({ title: t('enroll.info.title'), body: () => [
+      el('p', {}, t('enroll.info.p1')),
+      el('p', {}, t('enroll.info.p2')),
+      el('p', { class: 'muted' }, t('enroll.info.p3')),
+    ] }),
+    fetchAll: async () => {
+      const [codes, locations, cfg] = await Promise.all([
+        api('/enrollment-codes'),
+        api('/locations').catch(() => []),
+        api('/enroll/config').catch(() => ({ serverUrl: location.origin, certFingerprint: null })),
+      ]);
+      locationCache = locations;
+      // A new render means no code is on screen yet, so nothing is waiting.
+      enrollWatch = null;
+      return { codes, locations, cfg };
+    },
+    generate: ({ platform, maxUses, ttlMinutes, locationId }) => {
+      const q = new URLSearchParams({ platform, maxUses: String(maxUses), ttlMinutes: String(ttlMinutes) });
+      if (locationId) q.set('locationId', locationId);
+      return api(`/api/enroll/command?${q.toString()}`);
+    },
+    renderResult: renderEnrollResult,
+    createCode,
+    deleteCode,
+    deleteExpired: deleteExpiredCodes,
+    openAgent,
+    openSettings: (tab) => { settingsTab = tab; currentView = 'settings'; render(); },
+  });
+  return enrollmentPage;
+}
+
 views.enrollment = async () => {
-  const [codes, locations, cfg] = await Promise.all([
-    api('/enrollment-codes'),
-    api('/locations').catch(() => []),
-    api('/enroll/config').catch(() => ({ serverUrl: location.origin, certFingerprint: null })),
-  ]);
-  locationCache = locations;
-  enrollWatch = null;
-  const root = el('div');
-  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Enrollment')));
-
-  // Adding agents requires the agent signing key (the trust anchor for secure agent
-  // management). Without it the server refuses to mint codes, so guide the user to
-  // set it first instead of showing a wizard that would only error.
-  if (canWrite()) {
-    if (cfg.releasePublicKey) {
-      root.append(enrollWizard(cfg));
-    } else {
-      const where = role === 'admin' ? settingsLink('agentkey', 'Settings → Agent key') : el('strong', {}, 'Settings → Agent key');
-      root.append(el('div', { class: 'empty error' },
-        'No agent signing key is set — you cannot add agents yet. ',
-        role === 'admin' ? 'Generate it in ' : 'An administrator must generate it in ',
-        where, ' first.'));
-    }
-  }
-
-  // Codes are one-time install tickets; the agent's real credential is separate.
-  const CODES_NOTE = 'Codes are one-time install tickets. Once an agent enrols it stays connected on its own permanent token — independent of the code’s status — so a "used" or "expired" code never disconnects the agent shown beside it.';
-  // "Delete all expired" clears the codes that timed out unused (the ones badged
-  // "expired"); a used code — the one an enrolled agent is listed beside — is
-  // never swept up, so the button can never disconnect anything. Admin-only, and
-  // only offered when there is actually something to clear.
-  const expiredCount = codes.filter((c) => c.status === 'expired').length;
-  const newCodeBtn = canWrite()
-    ? el('button', { class: 'small ghost', onclick: () => createCode() }, '+ New code (advanced)')
-    : null;
-  const deleteExpiredBtn = (canDelete() && expiredCount)
-    ? el('button', {
-      class: 'small danger ghost',
-      title: t('enroll.codes.deleteExpiredTitle', { n: expiredCount }),
-      onclick: () => deleteExpiredCodes(expiredCount),
-    }, `${t('enroll.codes.deleteExpired')} (${expiredCount})`)
-    : null;
-  if (!codes.length) {
-    root.append(dataCard('Active codes', { actions: newCodeBtn },
-      el('div', { class: 'empty' }, 'No codes yet — use "Add agent" above.')));
-    return root;
-  }
-  // The agent(s) a code enrolled, each a clickable live online/offline badge.
-  const agentsCell = (agents) => ((agents && agents.length)
-    ? el('div', { class: 'code-agents' }, ...agents.map((a) => el('span', {
-      class: 'code-agent', role: 'button', tabindex: '0',
-      title: `${a.online ? 'Online' : 'Offline'} — open agent`,
-      onclick: () => openAgent(a.id),
-      onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openAgent(a.id); } },
-    }, el('span', { class: `badge ${a.online ? 'online' : 'offline'}` }, a.online ? 'online' : 'offline'), esc(a.name))))
-    : el('span', { class: 'muted' }, '–'));
-  root.append(dataCard('Active codes', { actions: [deleteExpiredBtn, newCodeBtn], note: CODES_NOTE }, el('div', { class: 'tablewrap' }, el('table', {},
-    el('thead', {}, el('tr', {}, ...['ID', 'Status', 'Uses', 'Agents', 'Location', 'Expires', 'Created', ''].map((h) => el('th', {}, h)))),
-    el('tbody', {}, ...codes.map((c) => el('tr', {},
-      el('td', {}, String(c.id)),
-      el('td', {}, el('span', { class: `badge ${c.status}` }, c.status)),
-      el('td', {}, c.max_uses > 1 ? `${c.uses_remaining}/${c.max_uses}` : (c.uses_remaining === 0 ? 'used' : '1')),
-      el('td', {}, agentsCell(c.agents)),
-      el('td', {}, c.location_name || '–'),
-      el('td', { class: 'muted' }, fmtDate(c.expires_at)),
-      el('td', { class: 'muted' }, fmtDate(c.created_at)),
-      el('td', {}, canDelete() ? el('button', { class: 'small danger', onclick: () => deleteCode(c) }, 'Delete') : null),
-    )))))));
-  return root;
+  const v = getEnrollmentPage();
+  if (!v) return el('div', { class: 'empty error' }, t('enroll.err.title'));
+  return v.view();
 };
-
-function enrollField(label, control) {
-  return el('label', { class: 'enroll-field' }, el('span', {}, label), control);
-}
-
-function enrollWizard(cfg) {
-  const card = el('div', { class: 'enroll-card' });
-  const platformSel = el('select', {}, ...ENROLL_PLATFORMS.map(([v, l]) => el('option', { value: v }, l)));
-  const countInp = el('input', { type: 'number', min: '1', max: '1000', value: '1', class: 'enroll-num' });
-  const ttlInp = el('input', { type: 'number', min: '1', value: '60', class: 'enroll-num' });
-  const locSel = el('select', {}, el('option', { value: '' }, '(no location)'),
-    ...locationCache.map((l) => el('option', { value: String(l.id) }, l.name)));
-  const result = el('div', { class: 'enroll-result hidden' });
-  const genBtn = el('button', { onclick: () => generate() }, 'Generate code & command');
-
-  card.append(
-    el('h3', {}, 'Add agent'),
-    el('p', { class: 'muted' }, 'Choose a platform, generate a code and copy the command to the agent machine. It registers itself online as soon as it runs — you never type the server address.'),
-    el('div', { class: 'enroll-form' },
-      enrollField('Platform', platformSel),
-      enrollField('Number of machines', countInp),
-      enrollField('Lifetime (min)', ttlInp),
-      enrollField('Location', locSel)),
-    el('div', { class: 'form-actions' }, genBtn),
-    result);
-
-  async function generate() {
-    genBtn.disabled = true;
-    try {
-      const n = Math.max(1, Number(countInp.value) || 1);
-      const ttl = Math.max(1, Number(ttlInp.value) || 60);
-      const q = new URLSearchParams({ platform: platformSel.value, maxUses: String(n), ttlMinutes: String(ttl) });
-      if (locSel.value) q.set('locationId', locSel.value);
-      const data = await api(`/api/enroll/command?${q.toString()}`);
-      renderEnrollResult(result, data, cfg, generate);
-    } catch (err) { toast(errText(err), true); }
-    finally { genBtn.disabled = false; }
-  }
-  return card;
-}
 
 function enrollKv(k, v) {
   return el('div', { class: 'enroll-kv' }, el('span', { class: 'k' }, k), v);

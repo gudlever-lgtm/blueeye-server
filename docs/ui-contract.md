@@ -931,3 +931,32 @@ ErrorState naming `GET /locations`, with a Retry.
 **Not migrated, passed in whole:** the three panels the menu opens — live
 traffic (a 3 s poll with a rolling chart), the history range picker, and the AI
 summary. They are modals with their own machinery.
+
+
+**Enrollment** is the second FormPage in Administration. The wizard was four
+loose `<label>`s in a flex row of its own markup (`.enroll-form`,
+`.enroll-field`, `.enroll-num` — a page-local copy of what FormSection does);
+it is a FormSection with one primary now, and those three classes are gone with
+their CSS.
+
+"No agent signing key is set" was a red box in the document flow. It said what
+was wrong, and — for an admin — linked to Settings. It is a state with the
+button, and for a reader who cannot fix it themselves it names who can rather
+than offering a screen their role does not open.
+
+The status column was `.badge <status>`, styled by whatever word the server
+sent. It is a contract Badge on a tone (active → ok, expired → warn, revoked →
+crit), so a status the palette never heard of is neutral rather than unstyled.
+
+Delete was a red button in every row. The row has no primary action — a code is
+not a page — so the ⋯ menu carries the one destructive entry and nothing else.
+"Delete all expired" stays a panel action, offered only when there is something
+to clear.
+
+The panel head carried the title, a three-line explanation and two buttons on
+one line. The explanation is an inline note above the table, which is what an
+advisory about the data is for; the head keeps the count.
+
+**Not migrated, passed in whole:** `renderEnrollResult` — the generated command,
+the live "waiting for agent" socket state, the Windows two-step variant and the
+manual download + checksum block.

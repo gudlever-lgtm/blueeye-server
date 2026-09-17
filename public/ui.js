@@ -65,6 +65,34 @@
       },
     };
 
+    // ---- Tokens at runtime ----------------------------------------------------
+    // A canvas or a map library wants a colour STRING, not var(--ok) — so the
+    // token is resolved here rather than a hex being written into the view. That
+    // is the difference between a marker that follows the theme and one that
+    // stays green on a palette where green means something else.
+    var tokenCache = {};
+    var tokenTheme = null;
+    function token(name, fallback) {
+      if (typeof document === 'undefined' || !document.documentElement) return fallback || '';
+      var theme = document.documentElement.getAttribute('data-theme') || '';
+      // The cache is per theme: the same token is a different colour after a
+      // palette switch, and a stale one is exactly the bug this helper exists
+      // to stop.
+      if (theme !== tokenTheme) { tokenCache = {}; tokenTheme = theme; }
+      if (tokenCache[name] !== undefined) return tokenCache[name];
+      var v = '';
+      try { v = getComputedStyle(document.documentElement).getPropertyValue(name); } catch (e) { v = ''; }
+      v = String(v || '').trim() || fallback || '';
+      tokenCache[name] = v;
+      return v;
+    }
+    // The health verdicts, as colours a map can draw with.
+    var HEALTH_TOKEN = {
+      ok: '--sev-ok', warn: '--sev-warn', bad: '--sev-crit', down: '--sev-crit',
+      stale: '--text-muted', unknown: '--text-muted',
+    };
+    function healthColor(status) { return token(HEALTH_TOKEN[status] || '--text-muted'); }
+
     // ---- Page root -----------------------------------------------------------
     // Carries both markers: `ui` scopes the components, `ui-page` is the column
     // layout. An overlay carries `ui` and its own layout class instead.
@@ -580,6 +608,8 @@
 
     return {
       fmt: fmt,
+      token: token,
+      healthColor: healthColor,
       page: page,
       pageHeader: pageHeader,
       tabs: tabs,

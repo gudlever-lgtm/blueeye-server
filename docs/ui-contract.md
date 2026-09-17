@@ -439,6 +439,7 @@ Administration → login and error screens.
 | Probes & Tests | `/probes/:tab` | C · FormPage (shell) | [`public/views/probes.js`](../public/views/probes.js) |
 | Analysis | `/analysis` | A · ListPage | [`public/views/analysis.js`](../public/views/analysis.js) |
 | Fleet | `/fleet` | A · ListPage | [`public/views/fleet.js`](../public/views/fleet.js) |
+| Sites | `/sites` | A · ListPage | [`public/views/sites.js`](../public/views/sites.js) |
 
 **What Changes kept:** the window vocabulary the server accepts (`30m`, `6h`,
 `24h`, `7d` — not the preview's three), the marker rule (it moves only on an
@@ -506,3 +507,27 @@ score" — now go through the catalogue in both languages.
 some of the same things (Active agents "5 of 6" against Offline "1"). Both are
 kept for now because the NOC header is its own unmigrated component; when it
 migrates, one of the two loses those figures.
+
+
+**Sites** had a heading, a map, and — only when the map could not be drawn — a
+table nobody had looked at since it was written. It is a ListPage now, and the
+table is always there: the rollup is the same data whether or not Leaflet
+loaded, so it is the page's content rather than its fallback.
+
+The marker colours were a hardcoded ramp (`#22c55e`, `#f59e0b`, `#ef4444`,
+`#94a3b8`) that stayed the same in all 16 themes. `ui.token()` and
+`ui.healthColor()` read the semantic tokens off the document at runtime, so a
+marker now follows the palette; the legend under the map takes its colour from a
+class (`.ui-legend-dot.health-ok|warn|bad|unknown`) instead of an inline style.
+The `--popup-*` tokens are the exception that proves the rule: Leaflet paints
+its popup on its own white card in every theme, so the text inside it is fixed
+on purpose, in `tokens.css`, where a fixed colour can at least be found.
+
+"The map library did not load" and "no site has coordinates yet" used to be the
+same grey sentence. One is a thing to know and one is a thing to fix, so they
+are two states with two different ways out.
+
+The Leaflet instance stays in `app.js`: it is a live object carrying the
+reader's pan and zoom, and the 10 s poll has to move its markers rather than
+rebuild it. The view asks for a canvas and `app.js` mounts the map into it —
+which is the shape every remaining map screen will use.

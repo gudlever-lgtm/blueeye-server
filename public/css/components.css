@@ -22,6 +22,10 @@
  */
 
 .ui-page { display: flex; flex-direction: column; gap: var(--s-5); max-width: var(--content-max); }
+/* A page builds its sections as hosts it fills later (a strip, a chart, a table).
+   A host that never gets filled — an error before the data arrived — would still
+   take its share of the column gap and read as a hole in the page. */
+.ui-page > div:empty { display: none; }
 
 /* ---- PageHeader ----------------------------------------------------------
    Title, one line of description, help behind (?), actions right. At most one
@@ -357,3 +361,25 @@
 .ui .ks-typerow[data-token="--fs-md"] > span:first-child { font-size: var(--fs-md); }
 .ui .ks-typerow[data-token="--fs-lg"] > span:first-child { font-size: var(--fs-lg); }
 .ui .ks-typerow[data-token="--fs-xl"] > span:first-child { font-size: var(--fs-xl); }
+
+/* ---- Sites (public/views/sites.js) ---------------------------------------
+   The map canvas, the health legend under it, and the marker popup. The dots
+   are the one place a health colour is spelled in CSS rather than resolved in
+   JS: the legend is static, so it can afford a class per state. */
+.ui .site-map { height: 62vh; min-height: 380px; border: 1px solid var(--border);
+  border-radius: var(--r-panel); overflow: hidden; }
+.ui .site-legend { margin-top: var(--s-3); align-items: center; }
+.ui .ui-legend-dot.health-ok { background: var(--sev-ok); }
+.ui .ui-legend-dot.health-warn { background: var(--sev-warn); }
+.ui .ui-legend-dot.health-bad { background: var(--sev-crit); }
+.ui .ui-legend-dot.health-unknown { background: var(--text-muted); }
+
+/* The popup sits inside Leaflet's own white card (see --popup-* in tokens.css),
+   so it opts out of the theme's text colours rather than inheriting them. */
+.ui.map-pop { color: var(--popup-text); font-size: var(--fs-sm); }
+.ui.map-pop .meta-xs { color: var(--popup-muted); }
+.ui.map-pop .map-pop-agents { display: flex; flex-direction: column;
+  margin-top: var(--s-2); max-height: 168px; overflow: auto; }
+.ui.map-pop .map-pop-agent { justify-content: flex-start; gap: var(--s-2);
+  width: 100%; color: var(--popup-text); }
+.ui.map-pop .map-pop-agent:hover { background: var(--popup-hover); }

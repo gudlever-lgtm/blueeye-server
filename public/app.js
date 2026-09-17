@@ -1333,6 +1333,7 @@ const CONTRACT_VIEWS = new Map([
   ['probes', 'probes'],
   ['findings', 'analysis'],
   ['fleet', 'fleet'],
+  ['map', 'sites'],
 ]);
 
 function hero(viewKey) {
@@ -11065,91 +11066,41 @@ function stopTopoMap() {
 
 // Sites-map polling state (mirrors stopOverview/stopGeo). Re-drawn on a timer so
 // agent health/online counts stay live; torn down when leaving the view.
-const mapState = { map: null, timer: null, layer: null, fitted: false, popupOpen: false };
+const mapState = { map: null, timer: null, layer: null, fitted: false, popupOpen: false, redraw: null, cfg: null };
 function stopMap() {
   if (mapState.timer) { clearInterval(mapState.timer); mapState.timer = null; }
   if (mapState.map) { try { mapState.map.remove(); } catch { /* ignore */ } }
   mapState.map = null; mapState.layer = null; mapState.fitted = false; mapState.popupOpen = false;
+  // The redraw closure holds the markers of the map that was just removed; a
+  // poll that survived the view switch would otherwise draw into a dead layer.
+  mapState.redraw = null;
 }
 
 // The "Sites" map: your locations on a map, each marker coloured by the WORST
 // agent health at that site (reusing the Overview verdict), clustered, live, and
 // click-through to the agents there.
-views.map = async () => {
-  const root = el('div');
-  const sub = el('span', { class: 'muted' });
-  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Sites'), sub));
-
-  let locations; let agents; let mapCfg; let fleet;
-  try {
-    [locations, agents, mapCfg, fleet] = await Promise.all([
-      api('/locations'), api('/agents'),
-      api('/api/map/config').catch(() => ({})),
-      api('/api/fleet/health').catch(() => ({ agents: [] })),
-    ]);
-  } catch (e) { root.append(el('div', { class: 'error' }, e.message)); return root; }
-
-  // agentId → health verdict; refreshed on each poll.
-  const healthByAgent = new Map((fleet.agents || []).map((a) => [a.agentId, a.health && a.health.status]));
-
-  // Per-location rollup: counts + the agents (with health) + the worst status.
-  function rollup() {
-    const byLoc = new Map();
-    for (const a of agents) {
-      if (a.location_id == null) continue;
-      const e = byLoc.get(a.location_id) || { total: 0, online: 0, agents: [] };
-      e.total += 1;
-      if (a.status === 'online') e.online += 1;
-      const status = healthByAgent.get(a.id) || (a.status === 'online' ? 'unknown' : 'down');
-      e.agents.push({ id: a.id, name: a.display_name || a.hostname, status });
-      byLoc.set(a.location_id, e);
-    }
-    for (const e of byLoc.values()) e.worst = worstHealthStatus(e.agents.map((x) => x.status));
-    return byLoc;
-  }
-
-  const located = locations.filter((l) => l.latitude != null && l.longitude != null);
-  sub.textContent = `${located.length} of ${locations.length} locations have coordinates`;
-
-  if (typeof L === 'undefined') {
-    root.append(el('div', { class: 'empty' }, 'Map library could not be loaded (offline?). Showing list instead.'));
-    root.append(locationList(locations, rollup()));
-    return root;
-  }
-  if (!located.length) {
-    root.append(el('div', { class: 'empty' }, 'No locations with coordinates yet. Add latitude/longitude in the Locations tab.'));
-    return root;
-  }
-
-  const mapEl = el('div', { class: 'map' });
-  root.append(mapEl);
-  root.append(el('div', { class: 'legend geo-legend' },
-    el('span', {}, el('span', { class: 'dot ring', style: `background:${HEALTH_COLOR.ok}` }), ' healthy'),
-    el('span', {}, el('span', { class: 'dot ring', style: `background:${HEALTH_COLOR.warn}` }), ' warning'),
-    el('span', {}, el('span', { class: 'dot ring', style: `background:${HEALTH_COLOR.bad}` }), ' critical'),
-    el('span', {}, el('span', { class: 'dot ring', style: `background:${HEALTH_COLOR.unknown}` }), ' unknown / offline'),
-    el('span', { class: 'muted' }, '· colour = worst agent health at the site')));
-
-  function popupFor(l, c) {
-    return el('div', { class: 'map-pop' },
-      el('strong', {}, esc(l.name)),
-      el('div', { class: 'muted' }, `${c.online}/${c.total} agents online`),
-      l.address ? el('div', { class: 'muted' }, esc(l.address)) : null,
-      el('div', { class: 'map-pop-agents' }, ...c.agents.slice(0, 12).map((ag) => el('button', {
-        class: 'map-pop-agent', title: 'Open agent', onclick: () => openAgent(ag.id),
-      }, el('span', { class: 'dot', style: `background:${healthColor(ag.status)}` }), esc(ag.name)))));
-  }
-
-  function draw(byLoc) {
+// ---- Sites (MIGRATED — see public/views/sites.js) ---------------------------
+// The Leaflet instance stays here: it is a live object with the reader's pan and
+// zoom in it, and the 10 s poll must move its markers rather than rebuild it.
+// The view asks for a canvas, and app.js mounts the map into it.
+let sitesView = null;
+const sitesViewState = {};
+function mountSitesMap(canvas, located, byLoc, opts) {
+  stopMap();
+  const drawMarkers = (rolled) => {
     if (!mapState.layer) return;
     mapState.layer.clearLayers();
     const pts = [];
     for (const l of located) {
-      const c = byLoc.get(l.id) || { total: 0, online: 0, agents: [], worst: null };
+      const c = rolled[l.id] || { total: 0, online: 0, agents: [], worst: null };
       const m = L.circleMarker([l.latitude, l.longitude], {
-        radius: 9, color: '#fff', weight: 2, fillColor: c.worst ? healthColor(c.worst) : '#94a3b8', fillOpacity: 0.95,
+        radius: 9,
+        color: opts.ringColor,
+        weight: 2,
+        fillColor: opts.colorFor(c.worst || 'unknown'),
+        fillOpacity: 0.95,
       });
-      m.bindPopup(popupFor(l, c));
+      m.bindPopup(sitePopup(l, c, opts));
       mapState.layer.addLayer(m);
       pts.push([l.latitude, l.longitude]);
     }
@@ -11157,33 +11108,85 @@ views.map = async () => {
       if (pts.length > 1) mapState.map.fitBounds(pts, { padding: [40, 40] });
       mapState.fitted = true;
     }
-  }
-
-  stopMap();
+  };
+  mapState.redraw = drawMarkers;
+  // Deferred: the canvas is not in the document until the view is returned, and
+  // Leaflet measures it on init.
   setTimeout(() => {
-    if (!mapEl.isConnected) return; // view was left before the deferred init ran
-    const map = createLeafletMap(mapEl, mapCfg, { center: [located[0].latitude, located[0].longitude], zoom: 6 });
+    if (!canvas.isConnected) return;
+    const map = createLeafletMap(canvas, mapState.cfg || {}, {
+      center: [located[0].latitude, located[0].longitude], zoom: 6,
+    });
     if (!map) return;
     mapState.map = map;
     map.on('popupopen', () => { mapState.popupOpen = true; });
     map.on('popupclose', () => { mapState.popupOpen = false; });
-    mapState.layer = (typeof L.markerClusterGroup === 'function') ? L.markerClusterGroup({ maxClusterRadius: 50 }) : L.layerGroup();
+    mapState.layer = (typeof L.markerClusterGroup === 'function')
+      ? L.markerClusterGroup({ maxClusterRadius: 50 })
+      : L.layerGroup();
     mapState.layer.addTo(map);
-    draw(rollup());
+    drawMarkers(byLoc);
   }, 0);
+}
 
-  mapState.timer = setInterval(async () => {
-    if (currentView !== 'map') { stopMap(); return; }
-    if (modalOpen() || mapState.popupOpen || !mapState.map) return;
-    try {
-      const [a, f] = await Promise.all([api('/agents'), api('/api/fleet/health').catch(() => null)]);
-      agents = a;
-      if (f) { healthByAgent.clear(); for (const x of f.agents || []) healthByAgent.set(x.agentId, x.health && x.health.status); }
-      draw(rollup());
-    } catch { /* keep the last good render */ }
-  }, 10000);
+function sitePopup(l, c, opts) {
+  return el('div', { class: 'ui map-pop' },
+    el('strong', {}, l.name),
+    el('div', { class: 'meta-xs' }, t('sites.popup.online', { online: c.online, total: c.total })),
+    l.address ? el('div', { class: 'meta-xs' }, l.address) : null,
+    el('div', { class: 'map-pop-agents' }, ...c.agents.slice(0, 12).map((ag) => el('button', {
+      class: 'btn btn-ghost btn-xs map-pop-agent',
+      title: t('sites.popup.openAgent'),
+      onclick: () => opts.openAgent(ag.id),
+    }, el('span', { class: `ui-legend-dot health-${HEALTH_TONE_KEY[ag.status] || 'unknown'}` }), ag.name))));
+}
+// The four colours a site marker and its legend can take. Anything the health
+// model does not name reads as unknown rather than inventing a fifth.
+const HEALTH_TONE_KEY = { ok: 'ok', warn: 'warn', bad: 'bad', down: 'bad', stale: 'unknown', unknown: 'unknown' };
 
-  return root;
+function getSitesView() {
+  if (sitesView) return sitesView;
+  if (typeof window === 'undefined' || !window.SitesView || !ui) return null;
+  sitesView = window.SitesView.create({
+    el, t, ui, errText, openAgent, openLocation, gotoView,
+    state: sitesViewState,
+    worstHealthStatus,
+    hasMapLibrary: () => typeof L !== 'undefined',
+    help: () => {
+      const info = PAGE_INFO.map || {};
+      return { lead: info.hero || '', title: info.title || t('sites.title'), body: info.body || (() => []) };
+    },
+    fetchAll: async () => {
+      const [locations, agents, cfg, fleet] = await Promise.all([
+        api('/locations'),
+        api('/agents'),
+        api('/api/map/config').catch(() => ({})),
+        api('/api/fleet/health').catch(() => ({ agents: [] })),
+      ]);
+      mapState.cfg = cfg;
+      const healthByAgent = {};
+      for (const a of fleet.agents || []) healthByAgent[a.agentId] = a.health && a.health.status;
+      return { locations, agents, healthByAgent };
+    },
+    mountMap: mountSitesMap,
+    redrawMarkers: (byLoc) => { if (mapState.redraw) mapState.redraw(byLoc); },
+    startPolling: (refresh) => {
+      mapState.timer = setInterval(() => {
+        if (currentView !== 'map') { stopMap(); return; }
+        // A poll that redraws while somebody is reading a popup closes it under
+        // them, so it waits.
+        if (modalOpen() || mapState.popupOpen || !mapState.map) return;
+        refresh();
+      }, 10000);
+    },
+  });
+  return sitesView;
+}
+
+views.map = async () => {
+  const v = getSitesView();
+  if (!v) return el('div', { class: 'empty error' }, t('sites.err.title'));
+  return v.view();
 };
 
 // ---- Destinations map (internal sites + external destinations + selection) ----
@@ -11621,19 +11624,6 @@ async function aggregateRegion(bounds) {
     slot.replaceChildren(el('h4', {}, `Findings (${findings.length})`),
       findings.length ? el('div', {}, ...findings.slice(0, 50).map(findingMini)) : el('div', { class: 'muted' }, 'No findings in the region.'));
   }
-}
-
-function locationList(locations, byLoc) {
-  return el('table', {},
-    el('thead', {}, el('tr', {}, ...['Location', 'Address', 'Coordinates', 'Agents'].map((h) => el('th', {}, h)))),
-    el('tbody', {}, ...locations.map((l) => {
-      const c = byLoc.get(l.id) || { total: 0, online: 0 };
-      return el('tr', {},
-        el('td', {}, l.name),
-        el('td', { class: 'muted' }, l.address || '–'),
-        el('td', { class: 'muted' }, l.latitude != null ? `${l.latitude}, ${l.longitude}` : '–'),
-        el('td', {}, `${c.online}/${c.total} online`));
-    })));
 }
 
 // Maps an hsflowd exporter state to a badge colour class.

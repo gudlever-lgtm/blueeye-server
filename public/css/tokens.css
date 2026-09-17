@@ -343,6 +343,14 @@
   --series-4: color-mix(in srgb, var(--accent) 55%, var(--ok));
   --series-5: color-mix(in srgb, var(--bad) 55%, var(--accent));
 
+  /* Leaflet paints its popup on its own white card in every theme — it is the
+     map library's chrome, not ours — so text inside it cannot follow --text or
+     it reads white-on-white half the time. These three are fixed on purpose,
+     and they are the only fixed colours in the scale. */
+  --popup-text: #0f172a;
+  --popup-muted: #64748b;
+  --popup-hover: #eef2f7;
+
   /* DataTable row heights. Compact is the density toggle, not a second table. */
   --row-h: 44px;
   --row-h-compact: 36px;

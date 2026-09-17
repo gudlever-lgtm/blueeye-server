@@ -1353,6 +1353,7 @@ const CONTRACT_VIEWS = new Map([
   ['locations', 'locations'],
   ['enrollment', 'enrollment'],
   ['discovery', 'discovery'],
+  ['logs', 'systemLogs'],
 ]);
 
 function hero(viewKey) {
@@ -10546,13 +10547,7 @@ const SETTINGS_GROUPS = [
 // errors, HTTP failures) merged with client-side action failures. A live
 // diagnostic aid — cleared on server restart. Distinct from Reporting → Audit
 // (the durable "who did what" trail).
-const LOG_LEVEL_ORDER = { debug: 0, info: 1, warn: 2, error: 3 };
 let logsFilter = { level: '', source: '', q: '' };
-
-function logLevelBadge(level) {
-  const cls = level === 'error' ? 'danger' : (level === 'warn' ? 'warn' : (level === 'debug' ? 'neutral' : 'active'));
-  return el('span', { class: `badge ${cls}` }, level);
-}
 
 function mergeLogEntries(serverEntries) {
   // Server ring already contains client errors shipped from any session (id
@@ -10563,97 +10558,45 @@ function mergeLogEntries(serverEntries) {
   return [...serverEntries, ...localOnly].sort((a, b) => String(b.ts).localeCompare(String(a.ts)));
 }
 
-views.logs = async () => {
-  const root = el('div');
-  root.append(el('div', { class: 'section-head' },
-    el('h2', {}, t('logs.system.title')),
-    el('span', { class: 'muted' }, t('logs.system.lead'))));
-
-  const LEVEL_OPTS = [['', 'All levels'], ['debug', 'Debug+'], ['info', 'Info+'], ['warn', 'Warn+'], ['error', 'Errors only']];
-  const SOURCE_OPTS = [['', 'All sources'], ['server', 'Server'], ['client', 'Dashboard']];
-  // Rebuild a select's options, appending a per-option match count (e.g.
-  // "Errors only (3)") when counts are supplied, and preserving the selection.
-  const fillOptions = (sel, opts, selected, counts) => {
-    sel.replaceChildren(...opts.map(([v, l]) => el('option',
-      { value: v, ...(selected === v ? { selected: 'selected' } : {}) },
-      counts ? `${l} (${counts[v] ?? 0})` : l)));
-    sel.value = selected;
-  };
-  const levelSel = el('select', {});
-  const sourceSel = el('select', {});
-  fillOptions(levelSel, LEVEL_OPTS, logsFilter.level);
-  fillOptions(sourceSel, SOURCE_OPTS, logsFilter.source);
-  const qInput = el('input', { type: 'search', placeholder: 'Filter text…', value: logsFilter.q });
-  const refreshBtn = el('button', { class: 'small ghost' }, '⟳ Refresh');
-  const status = el('span', { class: 'muted small' });
-
-  const tbody = el('tbody');
-  const table = el('table', { class: 'tests-table logs-table' },
-    el('thead', {}, el('tr', {}, ...['Time', 'Level', 'Source', 'Message'].map((h) => el('th', {}, h)))),
-    tbody);
-  const host = el('div', { style: 'overflow-x:auto' }, table);
-
-  async function load() {
-    logsFilter = { level: levelSel.value, source: sourceSel.value, q: qInput.value.trim() };
-    let serverEntries = [];
-    try {
+// ---- System Logs (MIGRATED — see public/views/systemLogs.js)
+let systemLogsPage = null;
+function getSystemLogsPage() {
+  if (systemLogsPage) return systemLogsPage;
+  if (typeof window === 'undefined' || !window.SystemLogsPage || !ui) return null;
+  systemLogsPage = window.SystemLogsPage.create({
+    el, t, ui,
+    state: logsFilter,
+    // Typing must not fire a request per keystroke.
+    debounce: (fn) => setTimeout(fn, 250),
+    help: () => ({ title: t('logs.info.title'), body: () => [
+      el('p', {}, t('logs.info.p1')),
+      el('p', {}, t('logs.info.p2')),
+      el('p', { class: 'muted' }, t('logs.info.p3')),
+    ] }),
+    // Level is filtered in the view so the Level dropdown can count over the
+    // full, search-filtered set — only q and limit go to the server. A server
+    // ring that cannot be read is reported, never thrown: the local client
+    // errors are still worth showing, and a toast here would re-enter
+    // recordClientLog.
+    fetchLogs: async (q) => {
       const p = new URLSearchParams();
-      // Level is filtered client-side (below) so the Level dropdown can show a
-      // per-level count over the full, search-filtered set — not just the rows
-      // that survive the currently selected level. Only q/limit go to the server.
-      if (logsFilter.q) p.set('q', logsFilter.q);
+      if (q) p.set('q', q);
       p.set('limit', '500');
-      const resp = await api(`/api/logs?${p.toString()}`);
-      serverEntries = resp.entries || [];
-    } catch (e) {
-      // Non-fatal: still show the local client errors even if the server ring
-      // is unreachable. (Don't toast — that would re-enter recordClientLog.)
-      status.textContent = `server logs unavailable: ${errText(e)}`;
-    }
-    const lvl = (r) => LOG_LEVEL_ORDER[r.level] ?? 1;
-    let base = mergeLogEntries(serverEntries);
-    if (logsFilter.q) { const s = logsFilter.q.toLowerCase(); base = base.filter((r) => r.msg.toLowerCase().includes(s) || JSON.stringify(r.meta || {}).toLowerCase().includes(s)); }
+      try {
+        const resp = await api(`/api/logs?${p.toString()}`);
+        return { entries: mergeLogEntries(resp.entries || []), error: null };
+      } catch (e) {
+        return { entries: mergeLogEntries([]), error: errText(e) };
+      }
+    },
+  });
+  return systemLogsPage;
+}
 
-    // Faceted counts: each dropdown counts over the set narrowed by the OTHER
-    // active filter, so a selection in one still shows meaningful tallies in it.
-    const bySource = logsFilter.source ? base.filter((r) => r.source === logsFilter.source) : base;
-    const byLevel = logsFilter.level ? base.filter((r) => lvl(r) >= LOG_LEVEL_ORDER[logsFilter.level]) : base;
-    const levelCounts = { '': bySource.length };
-    for (const [v] of LEVEL_OPTS) if (v) levelCounts[v] = bySource.filter((r) => lvl(r) >= LOG_LEVEL_ORDER[v]).length;
-    const sourceCounts = { '': byLevel.length, server: byLevel.filter((r) => r.source === 'server').length, client: byLevel.filter((r) => r.source === 'client').length };
-    fillOptions(levelSel, LEVEL_OPTS, logsFilter.level, levelCounts);
-    fillOptions(sourceSel, SOURCE_OPTS, logsFilter.source, sourceCounts);
-
-    let rows = bySource;
-    if (logsFilter.level) rows = rows.filter((r) => lvl(r) >= LOG_LEVEL_ORDER[logsFilter.level]);
-
-    tbody.replaceChildren(...rows.map((r) => {
-      const metaStr = r.meta && Object.keys(r.meta).length ? JSON.stringify(r.meta) : '';
-      return el('tr', { class: r.level === 'error' ? 'log-row-error' : '' },
-        el('td', { class: 'muted small nowrap' }, fmtDate(r.ts)),
-        el('td', {}, logLevelBadge(r.level)),
-        el('td', { class: 'muted small' }, r.source === 'client' ? 'dashboard' : 'server'),
-        // el() appends children as text nodes (already XSS-safe), so msg/meta
-        // must NOT be 'd — doing so rendered literal &quot; in the meta JSON.
-        el('td', {}, el('div', {}, r.msg), metaStr ? el('div', { class: 'muted small' }, metaStr) : null));
-    }));
-    if (!status.textContent) status.textContent = `${rows.length} entr${rows.length === 1 ? 'y' : 'ies'} shown`;
-    else status.textContent += ` · ${rows.length} shown (local only)`;
-  }
-
-  levelSel.addEventListener('change', () => { status.textContent = ''; load(); });
-  sourceSel.addEventListener('change', () => { status.textContent = ''; load(); });
-  qInput.addEventListener('input', () => { status.textContent = ''; load(); });
-  refreshBtn.addEventListener('click', () => { status.textContent = ''; load(); });
-
-  root.append(el('div', { class: 'history-controls' },
-    el('label', { class: 'inline muted' }, 'Level ', levelSel),
-    el('label', { class: 'inline muted' }, 'Source ', sourceSel),
-    el('label', { class: 'inline muted' }, 'Search ', qInput),
-    refreshBtn, el('span', { class: 'spacer' }), status));
-  root.append(host);
-  await load();
-  return root;
+views.logs = async () => {
+  const v = getSystemLogsPage();
+  if (!v) return el('div', { class: 'empty error' }, t('logs.system.title'));
+  return v.view();
 };
 
 // ---- User Logs (admin-only "who did what", with flags) ---------------------

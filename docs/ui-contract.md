@@ -1038,3 +1038,28 @@ failure, and nothing else is drawn under it.
 
 Only **connected** agents are offered as a sweep vantage. An offline one was
 offered before and answered 409.
+
+
+**System Logs** had a `.history-controls` row: three loose labels, a Refresh
+and a status span, all in one flex line. It is a Toolbar, with Refresh as a
+toolbar action where every other screen puts it, and a Clear that is present
+and disabled rather than appearing and disappearing under the cursor.
+
+The level badge was `.badge danger|warn|neutral|active` — a fourth vocabulary
+for severity, in an app that already had one. It is a Badge on the same
+crit/warn/info/neutral tones the rest of the app reads.
+
+**"server logs unavailable: …" used to be appended to the row count**, in the
+same grey span, so the sentence read "42 entries shown · server logs
+unavailable: HTTP 500". A ring that cannot be read is not a footnote to a
+count: it is an inline note above the table, and it says what the rows below it
+then are — this browser's own log, and nothing else. It is still never a toast,
+because a toast here re-enters `recordClientLog`.
+
+An empty table said nothing at all; it now says whether the ring is quiet or
+the filter matches nothing, and only the second offers a Clear.
+
+**Kept exactly as it was:** the faceted counts. Each dropdown counts over the
+set the OTHER filter narrowed, so a selected level still shows how many entries
+each source holds — which is what makes the selection reversible without
+guessing. The level filter is a floor ("Warn+"), not an exact match.

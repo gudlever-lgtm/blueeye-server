@@ -17269,6 +17269,39 @@ views.guide = async () => {
   });
 };
 
+// About (account menu → About).
+//
+// What this build is, and what the product grew into: the version this host
+// runs, and a dated feature history grouped by month. The history itself lives
+// in public/about.js — one line per thing that changed what the product can do,
+// with the version it shipped in and the date that version landed.
+//
+// The build line is read from GET /system/version (viewer+, the same call that
+// stamps the sidebar foot). A 403/404/500 there costs the version line, never
+// the page: the history is the point and the live build is the garnish.
+PAGE_INFO.about = {
+  get hero() { return t('about.info.hero'); },
+  get title() { return t('about.info.title'); },
+  body: () => [
+    el('p', {}, t('about.info.p1')),
+    el('p', {}, t('about.info.p2')),
+    el('p', { class: 'muted' }, t('about.info.p3')),
+  ],
+};
+
+views.about = async () => {
+  if (!window.About) return el('div', { class: 'empty' }, t('about.unavailable'));
+  const ver = await api('/system/version').catch(() => null);
+  return window.About.create({
+    el,
+    t,
+    plural: (key, n, params) => (window.I18n && window.I18n.plural ? window.I18n.plural(key, n, params) : t(key, { count: String(n), ...(params || {}) })),
+    locale: window.I18n ? window.I18n.getLocale() : 'en',
+    version: ver && ver.server ? ver.server : null,
+    releaseDate: ver && ver.releaseDate ? ver.releaseDate : null,
+  });
+};
+
 views.transactions = async () => {
   const root = el('div', { class: 'transactions' });
   const body = el('div', {});
@@ -17601,6 +17634,10 @@ function txTrendSvg(rows) {
 // green does not tell a shift what happened while they were away. The fleet grid
 // is still the right screen for bulk operations, so it keeps its own route.
 let currentView = 'changes';
+// Every control that navigates: the sidebar rail, the rail's foot (Documentation)
+// and the account menu (About). One selector, so a new home for a nav entry is
+// wired for both the click and the active-state pass.
+const NAV_BUTTONS = '.tabs button[data-view], #sidebar-foot button[data-view], #user-menu-panel button[data-view]';
 const modalOpen = () => !$('#modal').classList.contains('hidden');
 
 // One-time per session: stamp the sidebar foot with this server's build —
@@ -17684,7 +17721,7 @@ async function render({ silent = false } = {}) {
     b.classList.toggle('hidden', role !== 'admin');
   }
   if (currentView === 'users' && role !== 'admin') currentView = 'overview';
-  for (const b of document.querySelectorAll('.tabs button[data-view], #sidebar-foot button[data-view]')) {
+  for (const b of document.querySelectorAll(NAV_BUTTONS)) {
     // Several entries can share one data-view when they deep-link to different
     // sub-tabs; the sub-tab is what tells them apart.
     const active = b.dataset.view === currentView
@@ -17826,6 +17863,16 @@ function renderLangSwitch() {
 // Escape. Item clicks that reload/navigate (refresh, auto toggle, log out) tear
 // the panel down on their own; theme and language toggles intentionally leave it
 // open.
+// Closing the account menu is also the nav handler's job: the menu holds a
+// data-view entry (About), and a panel left hanging over the page it just
+// opened is the bug this avoids.
+function closeUserMenu() {
+  const panel = $('#user-menu-panel');
+  const trigger = $('#user-menu-trigger');
+  if (!panel || panel.classList.contains('hidden')) return;
+  panel.classList.add('hidden');
+  if (trigger) trigger.setAttribute('aria-expanded', 'false');
+}
 {
   const menu = $('#user-menu');
   const trigger = $('#user-menu-trigger');
@@ -17833,17 +17880,16 @@ function renderLangSwitch() {
   if (menu && trigger && panel) {
     const isOpen = () => !panel.classList.contains('hidden');
     const open = () => { panel.classList.remove('hidden'); trigger.setAttribute('aria-expanded', 'true'); };
-    const close = () => { panel.classList.add('hidden'); trigger.setAttribute('aria-expanded', 'false'); };
-    trigger.addEventListener('click', (e) => { e.stopPropagation(); isOpen() ? close() : open(); });
-    document.addEventListener('click', (e) => { if (isOpen() && !menu.contains(e.target)) close(); });
-    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && isOpen()) { close(); trigger.focus(); } });
+    trigger.addEventListener('click', (e) => { e.stopPropagation(); isOpen() ? closeUserMenu() : open(); });
+    document.addEventListener('click', (e) => { if (isOpen() && !menu.contains(e.target)) closeUserMenu(); });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && isOpen()) { closeUserMenu(); trigger.focus(); } });
     renderLangSwitch();
   }
 }
 function closeNav() { $('#app').classList.remove('nav-open'); }
-for (const b of document.querySelectorAll('.tabs button[data-view], #sidebar-foot button[data-view]')) {
+for (const b of document.querySelectorAll(NAV_BUTTONS)) {
   b.addEventListener('click', () => {
-    closeDrawer(); closeNav();
+    closeDrawer(); closeNav(); closeUserMenu();
     // Locked (licence-excluded) items don't open — they nudge to the licence page.
     if (b.classList.contains('locked')) {
       toast(`${lockedHint((b.textContent || 'This module').trim(), b.dataset.feature)} — see License.`);

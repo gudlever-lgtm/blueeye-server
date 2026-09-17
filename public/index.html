@@ -190,6 +190,12 @@
               <button type="button" class="user-menu-item" id="theme" role="menuitem" title="Toggle light/dark theme">
                 <span class="menu-ico" aria-hidden="true">🌙</span> Dark mode
               </button>
+              <!-- About: the product, this build, and the feature history by
+                   month. A data-view entry like the sidebar ones, so it renders
+                   through views.about and carries a PAGE_INFO help entry. -->
+              <button type="button" class="user-menu-item" id="about" data-view="about" role="menuitem">
+                <span class="menu-ico" aria-hidden="true">ⓘ</span> <span data-i18n="nav.about">About</span>
+              </button>
               <button type="button" class="user-menu-item" id="logout" role="menuitem">
                 <span class="menu-ico" aria-hidden="true">⎋</span> Log out
               </button>
@@ -214,6 +220,7 @@
     <script src="/troubleshootingView.js"></script>
     <script src="/serviceAssurance.js"></script>
     <script src="/guides.js"></script>
+    <script src="/about.js"></script>
     <script src="/app.js"></script>
   </body>
 </html>

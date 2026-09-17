@@ -2697,3 +2697,36 @@ button.ghost.small:has(> .icon-glyph) {
 .diag-test input[type="checkbox"] { accent-color: var(--accent); margin-right: 8px; vertical-align: middle; }
 .diag-select { margin: 8px 0 2px; }
 .diag-actions .ct-chip { margin-left: 4px; }
+
+/* ---- About: the build line + the dated feature history --------------------
+   Reached from the account menu (top right). The month heading is the spine:
+   entries hang off it with their version badge in a fixed-width column, so the
+   eye runs down the versions without re-reading the titles. */
+.about-build { display: flex; align-items: baseline; flex-wrap: wrap; gap: 10px;
+  background: var(--panel); border: 1px solid var(--border); border-left: 3px solid var(--accent);
+  border-radius: var(--radius); padding: 11px 14px; margin: 0 0 12px; }
+.about-build-name { font-weight: 600; }
+.about-build-ver { font-variant-numeric: tabular-nums; }
+.about-lead { max-width: 74ch; margin: 0 0 14px; line-height: 1.55; }
+.about-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 6px; }
+.about-filters .chip { display: inline-flex; align-items: center; gap: 6px; }
+.about-filters .chip.active { background: var(--panel-2); color: var(--text); border-color: var(--accent); }
+.about-filters .chip-count { font-size: 11px; opacity: .7; font-variant-numeric: tabular-nums; }
+.about-count { font-size: 12px; margin: 0 0 14px; }
+.about-month { margin: 22px 0 8px; font-size: 13px; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--muted); border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+.about-month:first-of-type { margin-top: 6px; }
+.about-items { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.about-item { display: flex; gap: 14px; padding: 11px 2px; border-bottom: 1px solid var(--hairline, var(--border)); }
+.about-item:last-child { border-bottom: 0; }
+.about-item-meta { flex: 0 0 132px; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.about-ver { font-variant-numeric: tabular-nums; }
+.about-area { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.about-item-body { flex: 1 1 auto; min-width: 0; }
+.about-item-title { font-weight: 600; margin-bottom: 2px; }
+.about-item-sum { font-size: 13px; line-height: 1.5; max-width: 82ch; }
+.about-foot { font-size: 12px; margin: 20px 0 0; max-width: 82ch; }
+@media (max-width: 720px) {
+  .about-item { flex-direction: column; gap: 4px; }
+  .about-item-meta { flex: 0 0 auto; flex-direction: row; align-items: center; gap: 8px; }
+}

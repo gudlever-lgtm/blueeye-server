@@ -1345,6 +1345,13 @@ const CONTRACT_VIEWS = new Map([
   ['topology', 'topology'],
   ['flows', 'flows'],
   ['transactions', 'transactions'],
+  ['serviceAssurance', 'serviceAssurance'],
+  ['events', 'events'],
+  ['clusters', 'situations'],
+  ['reporting', 'reporting'],
+  ['guide', 'guides'],
+  ['locations', 'locations'],
+  ['enrollment', 'enrollment'],
 ]);
 
 function hero(viewKey) {
@@ -3651,102 +3658,44 @@ PAGE_INFO.events = {
   ],
 };
 
+// ---- Events (MIGRATED — see public/views/events.js) -------------------------
+let eventsPage = null;
+const eventsPageState = {};
+
+function getEventsPage() {
+  if (eventsPage) return eventsPage;
+  if (typeof window === 'undefined' || !window.EventsPage || !ui) return null;
+  eventsPage = window.EventsPage.create({
+    el, t, ui, errText, gotoView, openEvent, canWrite,
+    state: eventsPageState,
+    condition: incCondition,
+    agentLabel: incAgentLabel,
+    locationLabel: incLocationLabel,
+    guide: guideFromList,
+    help: () => {
+      const info = PAGE_INFO.events || {};
+      return { lead: info.hero || '', title: info.title || t('events.title'), body: info.body || (() => []) };
+    },
+    // Status, severity and device narrow the QUERY: the server keys events by
+    // device. Location does not, so the view filters it client-side.
+    fetchEvents: async ({ status, severity, device }) => {
+      const qs = new URLSearchParams();
+      if (status) qs.set('status', status);
+      if (severity) qs.set('severity', severity);
+      if (device) qs.set('device', String(device).trim());
+      const r = await api(`/api/events${qs.toString() ? `?${qs}` : ''}`);
+      return r.events || [];
+    },
+  });
+  return eventsPage;
+}
+
 views.events = async () => {
-  const wrap = el('div', { class: 'events-view' });
-  const filters = { status: '', severity: '', device: '', location: '' };
-
-  const incRow = (i) => el('tr', {
-    class: 'clickable', tabindex: '0',
-    onclick: () => openEvent(i.id), onkeydown: (e) => { if (e.key === 'Enter') openEvent(i.id); },
-  },
-    el('td', {}, incSevBadge(i.severity)),
-    el('td', {}, incStatusBadge(i.status)),
-    // The CONDITION only — severity, device and site are the columns either
-    // side of this one, and the stored title repeats all three. The full title
-    // is still the row's tooltip, and still what the detail page and an ITSM
-    // ticket show.
-    el('td', { title: i.title || '' }, incCondition(i)),
-    // Agent + site: "which box, at which site" is the first thing an operator
-    // needs to act, and the event id alone answers neither. Inserted as text
-    // nodes by el(), so no  pass — it would render a site called "R&D" as
-    // "R&amp;D".
-    el('td', {}, incAgentLabel(i),
-      i.agentName && incHostId(i) != null ? el('span', { class: 'muted inc-where' }, ` #${incHostId(i)}`) : null),
-    el('td', { class: i.locationName ? '' : 'muted' }, incLocationLabel(i)),
-    el('td', { class: 'muted' }, fmtDate(i.firstEventAt)),
-    el('td', { class: 'muted' }, fmtDate(i.lastEventAt)),
-    el('td', {}, canWrite() ? el('button', { class: 'pill guide-pill small', title: 'Guided troubleshooting', onclick: (e) => { e.stopPropagation(); guideFromList(i.id); } }, '🧭 Guide') : ''));
-
-  // Filter controls live IN the header (a filter row under the sortable labels),
-  // so each column header both sorts (click the label) and filters — the same
-  // per-column model as the Analysis table. Server-side filters (status/severity/
-  // device) reload; the rest of the columns just sort client-side.
-  const statusSel = el('select', { class: 'col-filter', onchange: (e) => { filters.status = e.target.value; load(); } },
-    el('option', { value: '' }, 'All statuses'),
-    ...Object.keys(INC_STATUS_LABEL).map((s) => el('option', { value: s }, INC_STATUS_LABEL[s])));
-  const sevSel = el('select', { class: 'col-filter', onchange: (e) => { filters.severity = e.target.value; load(); } },
-    el('option', { value: '' }, 'All severities'),
-    ...['INFO', 'WARN', 'CRIT'].map((s) => el('option', { value: s }, s)));
-  const devInput = el('input', {
-    type: 'search', class: 'col-filter', placeholder: t('events.filterDevice'),
-    onchange: (e) => { filters.device = e.target.value.trim(); load(); },
-    onkeydown: (e) => { if (e.key === 'Enter') { filters.device = e.target.value.trim(); load(); } },
-  });
-  // Location is not a server-side filter (events are keyed by device, not by
-  // site), so this one narrows the loaded rows client-side.
-  const locInput = el('input', {
-    type: 'search', class: 'col-filter', placeholder: t('events.filterLocation'),
-    oninput: (e) => { filters.location = e.target.value.trim().toLowerCase(); apply(); },
-  });
-
-  const grid = sortableTable([
-    { label: 'Severity', key: 'severity', get: (i) => SEVERITY_RANK[i.severity] || 0, filter: sevSel },
-    { label: 'Status', key: 'status', get: (i) => i.status || '', filter: statusSel },
-    { label: t('events.colCondition'), key: 'title', get: (i) => incCondition(i).toLowerCase() },
-    { label: t('events.colDevice'), key: 'device', get: (i) => incAgentLabel(i).toLowerCase(), filter: devInput },
-    { label: t('events.colLocation'), key: 'location', get: (i) => String(i.locationName || '').toLowerCase(), filter: locInput },
-    { label: 'First seen', key: 'first', get: (i) => new Date(i.firstEventAt || 0).getTime() },
-    { label: 'Last activity', key: 'last', get: (i) => new Date(i.lastEventAt || 0).getTime() },
-    { label: '', key: null },
-  ], {
-    className: 'data',
-    sortKey: 'last',
-    sortDir: 'desc',
-    emptyText: 'No events match.',
-    renderRow: incRow,
-  });
-
-  let loaded = [];
-
-  // Client-side narrowing (location only — every other filter is server-side).
-  function apply() {
-    grid.setRows(filters.location
-      ? loaded.filter((i) => String(i.locationName || '').toLowerCase().includes(filters.location))
-      : loaded);
-  }
-
-  async function load() {
-    grid.setLoading('Loading…');
-    const qs = new URLSearchParams();
-    if (filters.status) qs.set('status', filters.status);
-    if (filters.severity) qs.set('severity', filters.severity);
-    if (filters.device) qs.set('device', filters.device);
-    try {
-      const { events: events } = await api(`/api/events${qs.toString() ? `?${qs}` : ''}`);
-      loaded = events;
-      apply();
-    } catch (err) {
-      grid.setError(err.message);
-    }
-  }
-
-  wrap.append(
-    el('div', { class: 'section-head' }, el('h2', {}, 'Events'),
-      el('span', { class: 'muted' }, 'related anomalies grouped into tracked cases')),
-    grid.table);
-  await load();
-  return wrap;
+  const v = getEventsPage();
+  if (!v) return el('div', { class: 'empty error' }, t('events.err.title'));
+  return v.view();
 };
+
 
 async function loadEventTimeline(id, card, deviceId) {
   const head = el('h3', {}, 'Timeline');
@@ -4259,47 +4208,34 @@ PAGE_INFO.clusters = {
   ],
 };
 
+// ---- Situations (MIGRATED — see public/views/situations.js) -----------------
+let situationsPage = null;
+const situationsPageState = {};
+
+function getSituationsPage() {
+  if (situationsPage) return situationsPage;
+  if (typeof window === 'undefined' || !window.SituationsPage || !ui) return null;
+  situationsPage = window.SituationsPage.create({
+    el, t, ui, errText, gotoView, openCluster,
+    state: situationsPageState,
+    help: () => {
+      const info = PAGE_INFO.clusters || {};
+      return { lead: info.hero || '', title: info.title || t('sit.title'), body: info.body || (() => []) };
+    },
+    fetchClusters: async (status) => {
+      const qs = new URLSearchParams();
+      if (status) qs.set('status', status);
+      const r = await api(`/api/event-clusters${qs.toString() ? `?${qs}` : ''}`);
+      return r.clusters || [];
+    },
+  });
+  return situationsPage;
+}
+
 views.clusters = async () => {
-  const wrap = el('div', { class: 'clusters-view' });
-  const filters = { status: '' };
-  const tbody = el('tbody', {});
-  const table = el('table', { class: 'data' },
-    el('thead', {}, el('tr', {},
-      el('th', {}, 'Confidence'), el('th', {}, 'Status'), el('th', {}, 'Members'),
-      el('th', {}, 'Suspected cause'), el('th', {}, 'First seen'), el('th', {}, 'Last activity'))),
-    tbody);
-
-  async function load() {
-    tbody.replaceChildren(el('tr', {}, el('td', { colspan: '6', class: 'muted' }, 'Loading…')));
-    const qs = new URLSearchParams();
-    if (filters.status) qs.set('status', filters.status);
-    try {
-      const { clusters } = await api(`/api/event-clusters${qs.toString() ? `?${qs}` : ''}`);
-      if (!clusters.length) { tbody.replaceChildren(el('tr', {}, el('td', { colspan: '6', class: 'muted' }, 'No situations match.'))); return; }
-      tbody.replaceChildren(...clusters.map((c) => el('tr', {
-        class: 'clickable', tabindex: '0',
-        onclick: () => openCluster(c.id), onkeydown: (e) => { if (e.key === 'Enter') openCluster(c.id); },
-      },
-        el('td', {}, clusterConfBadge(c.confidence)),
-        el('td', {}, clusterStatusBadge(c.status)),
-        el('td', { class: 'muted' }, String((c.memberFindingIds || []).length)),
-        el('td', { class: 'muted' }, c.suspectedCommonCause || '—'),
-        el('td', { class: 'muted' }, fmtDate(c.createdAt)),
-        el('td', { class: 'muted' }, fmtDate(c.detectedAt)))));
-    } catch (err) {
-      tbody.replaceChildren(el('tr', {}, el('td', { colspan: '6', class: 'error' }, err.message)));
-    }
-  }
-
-  const statusSel = el('select', { onchange: (e) => { filters.status = e.target.value; load(); } },
-    el('option', { value: '' }, 'All statuses'),
-    ...Object.keys(CLUSTER_STATUS_LABEL).map((s) => el('option', { value: s }, CLUSTER_STATUS_LABEL[s])));
-  wrap.append(
-    el('div', { class: 'section-head' }, el('h2', {}, 'Situations'),
-      el('span', { class: 'muted' }, 'cross-agent events grouped by a suspected common cause')),
-    el('div', { class: 'toolbar' }, statusSel), table);
-  await load();
-  return wrap;
+  const v = getSituationsPage();
+  if (!v) return el('div', { class: 'empty error' }, t('sit.err.title'));
+  return v.view();
 };
 
 // Options passed to the ClusterView render layer: time formatting + per-event
@@ -10208,27 +10144,37 @@ views.location = async () => {
   return root;
 };
 
+// ---- Locations (MIGRATED — see public/views/locations.js)
+let locationsPage = null;
+function getLocationsPage() {
+  if (locationsPage) return locationsPage;
+  if (typeof window === 'undefined' || !window.LocationsPage || !ui) return null;
+  locationsPage = window.LocationsPage.create({
+    el, t, ui,
+    canWrite, canDelete,
+    hasAssistant: () => featureEnabled('assistant'),
+    help: () => ({ title: t('loc.info.title'), body: () => [
+      el('p', {}, t('loc.info.p1')),
+      el('p', {}, t('loc.info.p2')),
+      el('p', { class: 'muted' }, t('loc.info.p3')),
+    ] }),
+    fetchAll: () => api('/locations'),
+    open: openLocation,
+    edit: editLocation,
+    remove: deleteLocation,
+    // Three modals with their own polling and charts, passed in whole.
+    traffic: showLocationTraffic,
+    history: showLocationHistory,
+    summary: showLocationSummary,
+    errText,
+  });
+  return locationsPage;
+}
+
 views.locations = async () => {
-  const locations = await api('/locations');
-  const root = el('div');
-  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Locations'),
-    canWrite() ? el('button', { class: 'small', onclick: () => editLocation() }, '+ New location') : null));
-  if (!locations.length) { root.append(el('div', { class: 'empty' }, 'No locations.')); return root; }
-  root.append(el('table', {},
-    el('thead', {}, el('tr', {}, ...['ID', 'Name', 'Description', ''].map((h) => el('th', {}, h)))),
-    el('tbody', {}, ...locations.map((l) => el('tr', {},
-      el('td', {}, String(l.id)),
-      el('td', {}, el('button', { class: 'linklike', title: 'Open the location page — agents, health & data flows', onclick: () => openLocation(l.id) }, l.name)),
-      el('td', { class: 'muted' }, l.description || '–'),
-      el('td', {}, el('div', { class: 'row-actions' },
-        el('button', { class: 'small ghost', onclick: () => openLocation(l.id) }, 'Open'),
-        el('button', { class: 'small ghost', onclick: () => showLocationTraffic(l) }, 'Traffic'),
-        el('button', { class: 'small ghost', onclick: () => showLocationHistory(l) }, 'History'),
-        featureEnabled('assistant') ? el('button', { class: 'small ghost', onclick: () => showLocationSummary(l) }, 'AI status') : null,
-        canWrite() ? el('button', { class: 'small ghost', onclick: () => editLocation(l) }, 'Edit') : null,
-        canDelete() ? el('button', { class: 'small danger', onclick: () => deleteLocation(l) }, 'Delete') : null)),
-    )))));
-  return root;
+  const v = getLocationsPage();
+  if (!v) return el('div', { class: 'empty error' }, t('loc.err.title'));
+  return v.view();
 };
 
 // AI status: a brief, plain-language "what's going on at this location?" summary
@@ -10511,117 +10457,55 @@ const ENROLL_PLATFORMS = [
 // when any agent enrolls/comes online, flipping "Waiting for agent…" to connected.
 let enrollWatch = null;
 
+// ---- Enrollment (MIGRATED — see public/views/enrollment.js)
+// The generated code + command block (renderEnrollResult) stays here: it holds
+// the live "waiting for agent" socket state, the Windows two-step variant and
+// the manual checksum block.
+let enrollmentPage = null;
+function getEnrollmentPage() {
+  if (enrollmentPage) return enrollmentPage;
+  if (typeof window === 'undefined' || !window.EnrollmentPage || !ui) return null;
+  enrollmentPage = window.EnrollmentPage.create({
+    el, t, ui, toast, errText,
+    canWrite, canDelete,
+    isAdmin: () => role === 'admin',
+    platforms: () => ENROLL_PLATFORMS,
+    help: () => ({ title: t('enroll.info.title'), body: () => [
+      el('p', {}, t('enroll.info.p1')),
+      el('p', {}, t('enroll.info.p2')),
+      el('p', { class: 'muted' }, t('enroll.info.p3')),
+    ] }),
+    fetchAll: async () => {
+      const [codes, locations, cfg] = await Promise.all([
+        api('/enrollment-codes'),
+        api('/locations').catch(() => []),
+        api('/enroll/config').catch(() => ({ serverUrl: location.origin, certFingerprint: null })),
+      ]);
+      locationCache = locations;
+      // A new render means no code is on screen yet, so nothing is waiting.
+      enrollWatch = null;
+      return { codes, locations, cfg };
+    },
+    generate: ({ platform, maxUses, ttlMinutes, locationId }) => {
+      const q = new URLSearchParams({ platform, maxUses: String(maxUses), ttlMinutes: String(ttlMinutes) });
+      if (locationId) q.set('locationId', locationId);
+      return api(`/api/enroll/command?${q.toString()}`);
+    },
+    renderResult: renderEnrollResult,
+    createCode,
+    deleteCode,
+    deleteExpired: deleteExpiredCodes,
+    openAgent,
+    openSettings: (tab) => { settingsTab = tab; currentView = 'settings'; render(); },
+  });
+  return enrollmentPage;
+}
+
 views.enrollment = async () => {
-  const [codes, locations, cfg] = await Promise.all([
-    api('/enrollment-codes'),
-    api('/locations').catch(() => []),
-    api('/enroll/config').catch(() => ({ serverUrl: location.origin, certFingerprint: null })),
-  ]);
-  locationCache = locations;
-  enrollWatch = null;
-  const root = el('div');
-  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Enrollment')));
-
-  // Adding agents requires the agent signing key (the trust anchor for secure agent
-  // management). Without it the server refuses to mint codes, so guide the user to
-  // set it first instead of showing a wizard that would only error.
-  if (canWrite()) {
-    if (cfg.releasePublicKey) {
-      root.append(enrollWizard(cfg));
-    } else {
-      const where = role === 'admin' ? settingsLink('agentkey', 'Settings → Agent key') : el('strong', {}, 'Settings → Agent key');
-      root.append(el('div', { class: 'empty error' },
-        'No agent signing key is set — you cannot add agents yet. ',
-        role === 'admin' ? 'Generate it in ' : 'An administrator must generate it in ',
-        where, ' first.'));
-    }
-  }
-
-  // Codes are one-time install tickets; the agent's real credential is separate.
-  const CODES_NOTE = 'Codes are one-time install tickets. Once an agent enrols it stays connected on its own permanent token — independent of the code’s status — so a "used" or "expired" code never disconnects the agent shown beside it.';
-  // "Delete all expired" clears the codes that timed out unused (the ones badged
-  // "expired"); a used code — the one an enrolled agent is listed beside — is
-  // never swept up, so the button can never disconnect anything. Admin-only, and
-  // only offered when there is actually something to clear.
-  const expiredCount = codes.filter((c) => c.status === 'expired').length;
-  const newCodeBtn = canWrite()
-    ? el('button', { class: 'small ghost', onclick: () => createCode() }, '+ New code (advanced)')
-    : null;
-  const deleteExpiredBtn = (canDelete() && expiredCount)
-    ? el('button', {
-      class: 'small danger ghost',
-      title: t('enroll.codes.deleteExpiredTitle', { n: expiredCount }),
-      onclick: () => deleteExpiredCodes(expiredCount),
-    }, `${t('enroll.codes.deleteExpired')} (${expiredCount})`)
-    : null;
-  if (!codes.length) {
-    root.append(dataCard('Active codes', { actions: newCodeBtn },
-      el('div', { class: 'empty' }, 'No codes yet — use "Add agent" above.')));
-    return root;
-  }
-  // The agent(s) a code enrolled, each a clickable live online/offline badge.
-  const agentsCell = (agents) => ((agents && agents.length)
-    ? el('div', { class: 'code-agents' }, ...agents.map((a) => el('span', {
-      class: 'code-agent', role: 'button', tabindex: '0',
-      title: `${a.online ? 'Online' : 'Offline'} — open agent`,
-      onclick: () => openAgent(a.id),
-      onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openAgent(a.id); } },
-    }, el('span', { class: `badge ${a.online ? 'online' : 'offline'}` }, a.online ? 'online' : 'offline'), a.name)))
-    : el('span', { class: 'muted' }, '–'));
-  root.append(dataCard('Active codes', { actions: [deleteExpiredBtn, newCodeBtn], note: CODES_NOTE }, el('div', { class: 'tablewrap' }, el('table', {},
-    el('thead', {}, el('tr', {}, ...['ID', 'Status', 'Uses', 'Agents', 'Location', 'Expires', 'Created', ''].map((h) => el('th', {}, h)))),
-    el('tbody', {}, ...codes.map((c) => el('tr', {},
-      el('td', {}, String(c.id)),
-      el('td', {}, el('span', { class: `badge ${c.status}` }, c.status)),
-      el('td', {}, c.max_uses > 1 ? `${c.uses_remaining}/${c.max_uses}` : (c.uses_remaining === 0 ? 'used' : '1')),
-      el('td', {}, agentsCell(c.agents)),
-      el('td', {}, c.location_name || '–'),
-      el('td', { class: 'muted' }, fmtDate(c.expires_at)),
-      el('td', { class: 'muted' }, fmtDate(c.created_at)),
-      el('td', {}, canDelete() ? el('button', { class: 'small danger', onclick: () => deleteCode(c) }, 'Delete') : null),
-    )))))));
-  return root;
+  const v = getEnrollmentPage();
+  if (!v) return el('div', { class: 'empty error' }, t('enroll.err.title'));
+  return v.view();
 };
-
-function enrollField(label, control) {
-  return el('label', { class: 'enroll-field' }, el('span', {}, label), control);
-}
-
-function enrollWizard(cfg) {
-  const card = el('div', { class: 'enroll-card' });
-  const platformSel = el('select', {}, ...ENROLL_PLATFORMS.map(([v, l]) => el('option', { value: v }, l)));
-  const countInp = el('input', { type: 'number', min: '1', max: '1000', value: '1', class: 'enroll-num' });
-  const ttlInp = el('input', { type: 'number', min: '1', value: '60', class: 'enroll-num' });
-  const locSel = el('select', {}, el('option', { value: '' }, '(no location)'),
-    ...locationCache.map((l) => el('option', { value: String(l.id) }, l.name)));
-  const result = el('div', { class: 'enroll-result hidden' });
-  const genBtn = el('button', { onclick: () => generate() }, 'Generate code & command');
-
-  card.append(
-    el('h3', {}, 'Add agent'),
-    el('p', { class: 'muted' }, 'Choose a platform, generate a code and copy the command to the agent machine. It registers itself online as soon as it runs — you never type the server address.'),
-    el('div', { class: 'enroll-form' },
-      enrollField('Platform', platformSel),
-      enrollField('Number of machines', countInp),
-      enrollField('Lifetime (min)', ttlInp),
-      enrollField('Location', locSel)),
-    el('div', { class: 'form-actions' }, genBtn),
-    result);
-
-  async function generate() {
-    genBtn.disabled = true;
-    try {
-      const n = Math.max(1, Number(countInp.value) || 1);
-      const ttl = Math.max(1, Number(ttlInp.value) || 60);
-      const q = new URLSearchParams({ platform: platformSel.value, maxUses: String(n), ttlMinutes: String(ttl) });
-      if (locSel.value) q.set('locationId', locSel.value);
-      const data = await api(`/api/enroll/command?${q.toString()}`);
-      renderEnrollResult(result, data, cfg, generate);
-    } catch (err) { toast(errText(err), true); }
-    finally { genBtn.disabled = false; }
-  }
-  return card;
-}
 
 function enrollKv(k, v) {
   return el('div', { class: 'enroll-kv' }, el('span', { class: 'k' }, k), v);
@@ -14371,33 +14255,47 @@ async function nis2Print(path) {
   } catch (err) { toast(`Export failed: ${err.message}`, true); }
 }
 
-// Top-level Reporting view: NIS2 (a stationary page with fixed parameters) and
-// the Report Generator (a flexible, selector-driven custom report builder).
-views.reporting = async () => {
-  const root = el('div', { class: 'nis2' });
-  const sections = [['nis2', 'NIS2'], ['generator', 'Report Generator'], ['schedules', t('rs.tab')]];
-  // Audit is RBAC-gated: only admins may see who did what on the server.
-  if (role === 'admin') sections.push(['audit', 'Audit']);
-  // Guard against a stale section the current user may no longer access.
-  if (!sections.some(([k]) => k === reportingState.section)) reportingState.section = 'nis2';
-  const bar = tabStrip(sections, {
-    active: reportingState.section,
-    className: 'nis2-subtabs',
-    ariaLabel: 'Reporting',
-    onPick: (key) => { reportingState.section = key; render(); },
-  });
-  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Reporting'), bar));
+// ---- Reporting (SHELL MIGRATED — see public/views/reporting.js)
+// Top-level Reporting view: NIS2 (a stationary page with fixed parameters), the
+// Report Generator (a flexible, selector-driven custom report builder), the
+// schedules and the audit trail. The four bodies stay here; the page they sit
+// on is the contract's.
+let reportingPage = null;
 
-  const body = el('div', { class: 'nis2-body' }, el('div', { class: 'empty' }, 'Loading…'));
-  root.append(body);
-  try {
-    body.replaceChildren(
-      reportingState.section === 'generator' ? await reportGenerator()
-        : reportingState.section === 'schedules' ? await reportSchedulesPanel()
-          : reportingState.section === 'audit' ? await auditModule()
-            : await nis2Module());
-  } catch (err) { body.replaceChildren(el('div', { class: 'empty error' }, err.message)); }
-  return root;
+function reportingSections() {
+  // Audit is RBAC-gated: only admins may see who did what on the server.
+  return role === 'admin'
+    ? ['nis2', 'generator', 'schedules', 'audit']
+    : ['nis2', 'generator', 'schedules'];
+}
+
+function getReportingPage() {
+  if (reportingPage) return reportingPage;
+  if (typeof window === 'undefined' || !window.ReportingPage || !ui) return null;
+  reportingPage = window.ReportingPage.create({
+    el, t, ui,
+    sections: reportingSections,
+    section: () => reportingState.section,
+    setSection: (key) => { reportingState.section = key; syncLocation(); },
+    help: () => {
+      const info = PAGE_INFO.reporting || {};
+      return { lead: info.hero || '', title: info.title || t('rep.title'), body: info.body || (() => []) };
+    },
+    render: (key) => (key === 'generator' ? reportGenerator()
+      : key === 'schedules' ? reportSchedulesPanel()
+        : key === 'audit' ? auditModule()
+          : nis2Module()),
+    errText,
+  });
+  return reportingPage;
+}
+
+views.reporting = async () => {
+  const v = getReportingPage();
+  if (!v) return el('div', { class: 'empty error' }, t('rep.err.load'));
+  // The bodies hold their own open detail, so the page is rebuilt per entry.
+  reportingPage = null;
+  return v.view();
 };
 
 // The NIS2 module — a fixed set of pages (Dashboard, Risk Register, Controls,
@@ -15213,10 +15111,13 @@ let txTab = 'list';
 // BlueEye Service Assurance — the module lives in public/serviceAssurance.js and
 // is handed the shared helpers here, so it never reaches into app.js globals.
 // That is the same seam the backend keeps (docs/service-assurance.md §2).
-views.serviceAssurance = async () => {
-  if (!window.ServiceAssurance) {
-    return el('div', { class: 'empty' }, 'Service Assurance kunne ikke indlæses.');
-  }
+// ---- Service Assurance (SHELL MIGRATED — see public/views/serviceAssurance.js)
+// The eight tab bodies stay in public/serviceAssurance.js; the page they sit on
+// is the contract's.
+let serviceAssurancePage = null;
+
+function mountServiceAssurance() {
+  if (!window.ServiceAssurance) return null;
   return window.ServiceAssurance.create({
     el, api, t, dataCard, toast,
     isAdmin,
@@ -15243,7 +15144,35 @@ views.serviceAssurance = async () => {
     // what it said. The module describes the incident; the form lives here with
     // the rest of the severity-rule screens.
     editSeverityRule: (prefill) => editSeverityRule(null, prefill),
+    // The host draws the page header and the tab strip; the module draws the
+    // body. Without this the module owns its own shell, which is how it ships
+    // standalone.
+    mode: 'embedded',
   });
+}
+
+function getServiceAssurancePage() {
+  if (serviceAssurancePage) return serviceAssurancePage;
+  if (typeof window === 'undefined' || !window.ServiceAssurancePage || !ui) return null;
+  serviceAssurancePage = window.ServiceAssurancePage.create({
+    el, t, ui,
+    mount: mountServiceAssurance,
+    setTab: (tab) => { serviceAssuranceTab = tab; syncLocation(); },
+    help: () => {
+      const info = PAGE_INFO.serviceAssurance || {};
+      return { lead: info.hero || '', title: info.title || t('sa.title'), body: info.body || (() => []) };
+    },
+  });
+  return serviceAssurancePage;
+}
+
+views.serviceAssurance = async () => {
+  const v = getServiceAssurancePage();
+  if (!v) return el('div', { class: 'empty error' }, t('sa.err.load'));
+  // The module is rebuilt per view entry (it holds the open detail), so the
+  // page is too.
+  serviceAssurancePage = null;
+  return getServiceAssurancePage().view();
 };
 
 // The in-app guides (nav group: Guides).
@@ -15253,10 +15182,11 @@ views.serviceAssurance = async () => {
 // in each field. Their own module in public/guides.js, handed the same shared
 // helpers Service Assurance itself gets, plus the deep links it needs so every
 // step can open the screen it is describing.
-views.guide = async () => {
-  if (!window.Guides) {
-    return el('div', { class: 'empty' }, t('guide.unavailable'));
-  }
+// ---- Guides (SHELL MIGRATED — see public/views/guides.js)
+// The five walkthroughs stay in public/guides.js, which ships standalone; the
+// page they sit on is the contract's.
+function mountGuides() {
+  if (!window.Guides) return null;
   return window.Guides.create({
     el, api, t, toast,
     // Counted lines pick their own singular/plural form.
@@ -15274,7 +15204,26 @@ views.guide = async () => {
     openTab: (tab) => { serviceAssuranceTab = tab; currentView = 'serviceAssurance'; render(); },
     openSettings: (tab) => { settingsTab = tab; currentView = 'settings'; render(); },
     openDocs: (topic) => gotoDocs(topic),
+    // The host draws the heading, the state advisory and the Back/Next row.
+    mode: 'embedded',
   });
+}
+
+views.guide = async () => {
+  if (typeof window === 'undefined' || !window.GuidesPage || !ui) {
+    return el('div', { class: 'empty error' }, t('guide.unavailable'));
+  }
+  const v = window.GuidesPage.create({
+    el, t, ui,
+    mount: mountGuides,
+    help: () => {
+      const info = PAGE_INFO.guide || {};
+      return { title: info.title || t('guide.title.monitoring'), body: info.body || (() => []) };
+    },
+  });
+  // Each entry builds a fresh module (it holds the track and the step), so the
+  // page is built fresh too.
+  return v.view() || el('div', { class: 'empty error' }, t('guide.unavailable'));
 };
 
 // About (account menu → About).
@@ -15688,6 +15637,7 @@ function routeTabFor(view) {
     case 'serviceAssurance': return serviceAssuranceTab;
     case 'settings': return settingsTab;
     case 'guide': return guideTrack;
+    case 'reporting': return reportingState.section;
     default: return null;
   }
 }
@@ -15707,6 +15657,7 @@ function setRouteTab(view, tab) {
   else if (view === 'serviceAssurance') serviceAssuranceTab = tab;
   else if (view === 'settings') settingsTab = tab;
   else if (view === 'guide') guideTrack = tab;
+  else if (view === 'reporting') reportingState.section = tab;
 }
 function setRouteId(view, id) {
   if (id == null) return;

@@ -63,6 +63,13 @@ const MIGRATED = [
   'views/topology.js',
   'views/flows.js',
   'views/transactions.js',
+  'views/serviceAssurance.js',
+  'views/events.js',
+  'views/situations.js',
+  'views/reporting.js',
+  'views/guides.js',
+  'views/locations.js',
+  'views/enrollment.js',
 ];
 
 // Classes the contract replaced. A migrated file may not use them.

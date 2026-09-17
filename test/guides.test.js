@@ -170,8 +170,12 @@ const GENERAL_ROUTES = {
 };
 
 const stepTitle = (doc) => (doc.querySelector('#view .guide-step-title') || {}).textContent || '';
-const nextBtn = (doc) => doc.querySelector('#view .guide-foot button.primary');
-const backBtn = (doc) => doc.querySelector('#view .guide-foot button.ghost');
+// The Back/Next row and the heading belong to the page now (the contract's
+// form-actions row and PageHeader); the stepper and the steps are still the
+// module's. See public/views/guides.js.
+const foot = (doc) => doc.querySelector('#view .ui-page .form-actions-ui');
+const nextBtn = (doc) => doc.querySelector('#view .ui-page .form-actions-ui button.btn-primary');
+const backBtn = (doc) => doc.querySelector('#view .ui-page .form-actions-ui button.btn-secondary');
 
 // --------------------------------------------------------------- walkthrough
 test('the nav entry mounts the guide, and Next walks every step without throwing', async (t) => {
@@ -186,7 +190,7 @@ test('the nav entry mounts the guide, and Next walks every step without throwing
     const title = stepTitle(doc);
     assert.ok(title.trim(), `step ${i + 1} rendered without a title`);
     titles.push(title);
-    assert.match(doc.querySelector('#view .guide-count').textContent, new RegExp(`${i + 1}`), `step counter at ${i + 1}`);
+    assert.match(foot(doc).textContent, new RegExp(`${i + 1}`), `step counter at ${i + 1}`);
     if (i < total - 1) await click(nextBtn(doc), 60);
   }
   assert.equal(new Set(titles).size, total, 'two steps share a title');
@@ -274,7 +278,7 @@ for (const status of [403, 404, 500]) {
     await tick(120);
 
     assert.deepEqual(errors, [], 'a failed probe threw');
-    assert.ok(doc.querySelector('#view .guide-stale'), 'nothing said the state could not be read');
+    assert.ok(doc.querySelector('#view .inline-note'), 'nothing said the state could not be read');
 
     // Every step still renders, and the values tables are still there — they are
     // the reason somebody opened this.
@@ -359,7 +363,7 @@ test('the Guides nav group has one entry per guide, and each mounts its own', as
     const titles = await walk(doc);
     assert.ok(titles.length >= 5, `${track}: only ${titles.length} steps`);
     assert.equal(new Set(titles).size, titles.length, `${track}: two steps share a title`);
-    const heading = doc.querySelector('#view .guide-title').textContent;
+    const heading = doc.querySelector('#view .page-head h1').textContent;
     assert.ok(heading.trim(), `${track}: no heading`);
     assert.ok(!seen.has(heading), `${track}: reuses the heading "${heading}"`);
     seen.add(heading);
@@ -372,13 +376,13 @@ test('each guide remembers its own position', async (t) => {
   await openGuide(doc, 'monitoring');
   await click(nextBtn(doc), 60);
   await click(nextBtn(doc), 60);
-  const monitoringStep = doc.querySelector('#view .guide-count').textContent;
+  const monitoringStep = foot(doc).textContent;
 
   await openGuide(doc, 'insights');
-  assert.match(doc.querySelector('#view .guide-count').textContent, /\b1\b/, 'a fresh guide did not start at step 1');
+  assert.match(foot(doc).textContent, /\b1\b/, 'a fresh guide did not start at step 1');
 
   await openGuide(doc, 'monitoring');
-  assert.equal(doc.querySelector('#view .guide-count').textContent, monitoringStep, 'the monitoring guide lost its place');
+  assert.equal(foot(doc).textContent, monitoringStep, 'the monitoring guide lost its place');
   assert.ok(window.localStorage.getItem('blueeye.guide.step.monitoring'), 'the position is not persisted per track');
 });
 

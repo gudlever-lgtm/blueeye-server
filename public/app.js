@@ -1347,6 +1347,7 @@ const CONTRACT_VIEWS = new Map([
   ['transactions', 'transactions'],
   ['serviceAssurance', 'serviceAssurance'],
   ['events', 'events'],
+  ['clusters', 'situations'],
 ]);
 
 function hero(viewKey) {
@@ -4203,47 +4204,34 @@ PAGE_INFO.clusters = {
   ],
 };
 
+// ---- Situations (MIGRATED — see public/views/situations.js) -----------------
+let situationsPage = null;
+const situationsPageState = {};
+
+function getSituationsPage() {
+  if (situationsPage) return situationsPage;
+  if (typeof window === 'undefined' || !window.SituationsPage || !ui) return null;
+  situationsPage = window.SituationsPage.create({
+    el, t, ui, errText, gotoView, openCluster,
+    state: situationsPageState,
+    help: () => {
+      const info = PAGE_INFO.clusters || {};
+      return { lead: info.hero || '', title: info.title || t('sit.title'), body: info.body || (() => []) };
+    },
+    fetchClusters: async (status) => {
+      const qs = new URLSearchParams();
+      if (status) qs.set('status', status);
+      const r = await api(`/api/event-clusters${qs.toString() ? `?${qs}` : ''}`);
+      return r.clusters || [];
+    },
+  });
+  return situationsPage;
+}
+
 views.clusters = async () => {
-  const wrap = el('div', { class: 'clusters-view' });
-  const filters = { status: '' };
-  const tbody = el('tbody', {});
-  const table = el('table', { class: 'data' },
-    el('thead', {}, el('tr', {},
-      el('th', {}, 'Confidence'), el('th', {}, 'Status'), el('th', {}, 'Members'),
-      el('th', {}, 'Suspected cause'), el('th', {}, 'First seen'), el('th', {}, 'Last activity'))),
-    tbody);
-
-  async function load() {
-    tbody.replaceChildren(el('tr', {}, el('td', { colspan: '6', class: 'muted' }, 'Loading…')));
-    const qs = new URLSearchParams();
-    if (filters.status) qs.set('status', filters.status);
-    try {
-      const { clusters } = await api(`/api/event-clusters${qs.toString() ? `?${qs}` : ''}`);
-      if (!clusters.length) { tbody.replaceChildren(el('tr', {}, el('td', { colspan: '6', class: 'muted' }, 'No situations match.'))); return; }
-      tbody.replaceChildren(...clusters.map((c) => el('tr', {
-        class: 'clickable', tabindex: '0',
-        onclick: () => openCluster(c.id), onkeydown: (e) => { if (e.key === 'Enter') openCluster(c.id); },
-      },
-        el('td', {}, clusterConfBadge(c.confidence)),
-        el('td', {}, clusterStatusBadge(c.status)),
-        el('td', { class: 'muted' }, String((c.memberFindingIds || []).length)),
-        el('td', { class: 'muted' }, esc(c.suspectedCommonCause || '—')),
-        el('td', { class: 'muted' }, fmtDate(c.createdAt)),
-        el('td', { class: 'muted' }, fmtDate(c.detectedAt)))));
-    } catch (err) {
-      tbody.replaceChildren(el('tr', {}, el('td', { colspan: '6', class: 'error' }, err.message)));
-    }
-  }
-
-  const statusSel = el('select', { onchange: (e) => { filters.status = e.target.value; load(); } },
-    el('option', { value: '' }, 'All statuses'),
-    ...Object.keys(CLUSTER_STATUS_LABEL).map((s) => el('option', { value: s }, CLUSTER_STATUS_LABEL[s])));
-  wrap.append(
-    el('div', { class: 'section-head' }, el('h2', {}, 'Situations'),
-      el('span', { class: 'muted' }, 'cross-agent events grouped by a suspected common cause')),
-    el('div', { class: 'toolbar' }, statusSel), table);
-  await load();
-  return wrap;
+  const v = getSituationsPage();
+  if (!v) return el('div', { class: 'empty error' }, t('sit.err.title'));
+  return v.view();
 };
 
 // Options passed to the ClusterView render layer: time formatting + per-event

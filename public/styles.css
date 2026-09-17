@@ -1369,7 +1369,6 @@ button.active-btn { outline: 2px solid var(--accent); }
 .fs-mini tbody tr.active { background: var(--accent-weak); }
 
 /* ---- Events (event_cases) ---- */
-.clusters-view .toolbar { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
 .inc-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
 .inc-header h2 { margin: 0 0 4px; }
 .inc-meta { font-size: 13px; }

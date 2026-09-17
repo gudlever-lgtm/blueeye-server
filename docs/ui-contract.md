@@ -846,3 +846,20 @@ and the two timestamps read as "5 d ago" with the exact stamp as the tooltip.
 **Clear filters is always present and disabled when there is nothing to clear.**
 Showing it conditionally would mean rebuilding the toolbar on every keystroke in
 the location field — and losing the focus with it.
+
+
+**Situations** is the clustering view: findings the analyser grouped into one
+story. It had a heading, a row of filter buttons where the pressed one was a
+`.active` class, and a table whose every non-row state was a single
+`<td colspan="6">` with a sentence in it.
+
+Three states now say three different things: nothing clustered yet (the
+analyser has not grouped anything — not an error), a filter that matches
+nothing (with the filter to clear), and a failed load (with the request and a
+Retry). One grey sentence in a table cell could not tell those apart, so it
+never did.
+
+The status filter is a StatStrip — open / acknowledged / resolved with their
+counts — and the confidence filter is a Toolbar select. Confidence sorts by
+rank (high / medium / low), not alphabetically, which is what "sort by
+confidence" is asking for.

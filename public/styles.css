@@ -273,7 +273,7 @@ main#view { width: 100%; max-width: var(--content-max); margin-inline: auto;
 /* The base .card is 320px with 28px padding — sized for the centered login form
    (which lives in its own #login shell, not here). Inside a page, cards are
    content panels: they must fill the available width and share one padding scale
-   with the other panels (.nic-card, .settings-card, …) instead of a much roomier
+   with the other panels (.settings-card, …) instead of a much roomier
    320px column (Discovery, Investigation, agent detail, the Overview cards …). */
 main#view .card { width: auto; padding: 18px 20px; box-shadow: var(--shadow); }
 .section-head { display: flex; align-items: center; gap: 12px; margin: 0 0 14px; }
@@ -477,28 +477,6 @@ main#view .card { width: auto; padding: 18px 20px; box-shadow: var(--shadow); }
 /* Delta / Changes view: change-type filter + shared global filter bar. */
 
 /* NICs view: firmware-drift card + inventory list. */
-.nics-summary { margin: 0 0 14px; }
-.nic-card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px 18px; margin: 0 0 16px; }
-.nic-card h3 { margin: 0 0 10px; font-size: 15px; }
-.drift-card { border-color: var(--warn); }
-.drift-model { padding: 10px 0; border-top: 1px solid var(--border); }
-.drift-model:first-of-type { border-top: none; }
-.drift-head { margin-bottom: 6px; }
-.fw-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 5px 0; }
-.fw-row .fw-ver { font-family: var(--mono, monospace); font-size: 13px; }
-.fw-outlier { background: var(--panel-2); border-radius: var(--radius-sm); padding: 6px 8px; }
-.nic-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-left: 4px; }
-.nic-model-row { display: flex; justify-content: space-between; gap: 16px; padding: 7px 0; border-top: 1px solid var(--border); }
-.nic-model-row:first-of-type { border-top: none; }
-.nics-controls { display: flex; align-items: center; gap: 10px; margin: 0 0 14px; }
-.nic-filter { flex: 0 1 320px; max-width: 320px; }
-.seg { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
-.seg-btn { font: inherit; font-size: 13px; padding: 4px 12px; border: none; background: var(--panel); color: var(--muted); cursor: pointer; }
-.seg-btn + .seg-btn { border-left: 1px solid var(--border); }
-.seg-btn.on { background: var(--panel-2); color: var(--text); }
-.nic-agent-row { padding: 12px 0; border-top: 1px solid var(--border); }
-.nic-agent-row:first-of-type { border-top: none; }
-.nic-agent-head { margin-bottom: 6px; }
 .linklike { font: inherit; background: none; border: none; padding: 0; color: var(--accent); cursor: pointer; }
 .linklike:hover { text-decoration: underline; }
 
@@ -1726,7 +1704,7 @@ ul.timeline-list li.tl .chg-open { margin-left: auto; flex: 0 0 auto; }
 }
 
 /* Resting elevation for every content surface. */
-.overview-chart, .nic-card, .settings-card, .stat,
+.overview-chart, .settings-card, .stat,
 .kpi, .metric-card, .agent-health, .assistant,
 details.sec, .theme-card, .nis2-cat, .nis2-readiness, .blast-panel,
 .pathmap, .pv-timeline, .topo-graph, .netpath, .fleet-summary .fs-chip, .hero {
@@ -1750,7 +1728,7 @@ details.sec .history,
 }
 
 /* Dividers inside a surface are hairlines; the surface's own edge is not. */
-.nic-model-row, .nic-agent-row, .drift-model, .blast-tier,
+.blast-tier,
 .settings-card table.kv td,
 .adv-table td, .storage-sep, .history,
 .settings-help, .agent-health .ah-quality, .mw-form, .settings-nav {

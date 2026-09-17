@@ -1233,3 +1233,38 @@ reports sampled conversations, not per-interface counters, so this table is
 data yet" sends them to update an agent that is working. It says what its source
 does, which two sources would fill this table, and which screens do use what
 this agent reports — and it now offers the button that changes the setting.
+
+
+**NICs** is a DashboardPage, and it cleared three forbidden things in one
+screen.
+
+The Models / Agents switch was a `.seg` segmented control — two buttons with an
+`.on` class, which is exactly the "buttons as tabs" the contract forbids. It is
+SubTabs, and the choice is in the URL (`/nics/agents`), so a link to the agent
+inventory opens the agent inventory.
+
+The machines running a given firmware were `.chip ghost small` buttons: chips
+carrying an action **and** a host name, which the contract forbids twice over.
+They are HostLinks.
+
+`style: 'margin-left:.4rem'` on the drift badge was the last inline style here.
+A DataTable's `<col width>` is the one exemption, and a test asserts nothing
+else survives.
+
+The summary was grey prose with one word going red — "12 agent(s) reporting ·
+31 NIC(s) · 3 model(s) with firmware drift". It is a StatStrip, and **clicking
+the drift count filters to the models that have it** — which also hides the full
+inventory, because "what is mismatched" and "what is deployed" are different
+questions. Drift is a property of a model, so the filter moves you to the tab
+that can answer it.
+
+Firmware drift was a card of nested blocks: a model, then a row per firmware,
+then a row of chips. It is one table, one row per (model, firmware), with the
+outlier badged. The **Agents** view stacked one table per agent all the way
+down the page, each with its own heading; it is one table of agents, and the
+cards open in a Drawer — which is also where the agent detail page gets its
+copy, since `nicTable` is exported for exactly that reason.
+
+`.nic-card`, `.drift-card`, `.drift-model`, `.fw-row`, `.nic-chips`,
+`.nic-model-row`, `.nic-agent-row`, `.nics-controls`, `.nic-filter`, `.seg` and
+`.seg-btn` are all gone from `styles.css`.

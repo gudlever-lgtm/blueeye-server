@@ -1358,6 +1358,7 @@ const CONTRACT_VIEWS = new Map([
   ['settings', 'settings'],
   ['agents', 'agents'],
   ['interfaces', 'interfaces'],
+  ['nics', 'nics'],
 ]);
 
 function hero(viewKey) {
@@ -8826,135 +8827,46 @@ views.agent = async () => {
   return root;
 };
 
-// Renders one agent's reported NIC inventory (capabilities.nic): per-interface
-// driver / driver version / firmware / bus. Used on the agent page.
-function nicTable(nics) {
-  if (!Array.isArray(nics) || !nics.length) return el('div', { class: 'empty' }, 'No NIC inventory reported yet (needs an agent that runs ethtool on Linux).');
-  const head = el('tr', {}, ...['Interface', 'Driver', 'Driver ver.', 'Firmware', 'Bus'].map((h) => el('th', {}, h)));
-  const rows = nics.map((n) => el('tr', {},
-    el('td', {}, n.iface || '—'),
-    el('td', {}, n.driver || '—'),
-    el('td', { class: 'muted' }, n.driverVersion || '—'),
-    el('td', {}, n.firmwareVersion || '—'),
-    el('td', { class: 'muted' }, n.busInfo || n.pciId || '—')));
-  return el('table', { class: 'iface-table' }, el('thead', {}, head), el('tbody', {}, ...rows));
-}
-
 // Fleet NIC inventory + firmware-drift detection. Groups identical NIC models
 // across all agents and surfaces firmware-version outliers — the "47 units on
 // firmware X, 3 on Y" case — so a Wi-Fi issue traced to a firmware mismatch is
 // obvious. Reads capabilities.nic; no probes, no new storage.
+// ---- NICs (MIGRATED — see public/views/nics.js)
+// The per-agent NIC table is the view module's and is shared with the agent
+// detail page — two copies of it would drift.
+let nicsPage = null;
+const nicsPageState = {};
+let nicsTab = 'models'; // 'models' | 'agents'
+function getNicsPage() {
+  if (nicsPage) return nicsPage;
+  if (typeof window === 'undefined' || !window.NicsPage || !ui) return null;
+  nicsPage = window.NicsPage.create({
+    el, t, ui, errText,
+    state: nicsPageState,
+    tab: () => nicsTab,
+    setTab: (k) => { nicsTab = k; syncLocation(); },
+    help: () => ({ title: t('nic.info.title'), body: () => [
+      el('p', {}, t('nic.info.p1')),
+      el('p', {}, t('nic.info.p2')),
+      el('p', { class: 'muted' }, t('nic.info.p3')),
+    ] }),
+    fetchInventory: () => api('/api/fleet/nics'),
+    openAgent,
+  });
+  return nicsPage;
+}
+
+// The agent detail page lists the same cards.
+function nicTable(nics) {
+  const v = getNicsPage();
+  if (!v) return el('div', { class: 'empty error' }, t('nic.err.title'));
+  return v.nicTable(nics);
+}
+
 views.nics = async () => {
-  const root = el('div', { class: 'nics-view' });
-  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'NICs'),
-    el('span', { class: 'muted' }, 'Driver & firmware inventory · firmware-drift detection')));
-
-  let inv;
-  try { inv = await api('/api/fleet/nics'); } catch (e) { root.append(el('div', { class: 'error' }, e.message)); return root; }
-
-  root.append(el('div', { class: 'nics-summary muted' },
-    `${inv.agents} agent(s) reporting NIC data · ${inv.totalNics} NIC(s) · `,
-    el('span', { class: inv.drift.length ? 'bad-text' : '' }, `${inv.drift.length} model(s) with firmware drift`)));
-
-  if (!inv.agents) {
-    root.append(el('div', { class: 'empty' },
-      'No NIC inventory yet. Agents collect driver/firmware via ', el('code', {}, 'ethtool -i'),
-      ' on Linux and report it with their capabilities — redeploy/upgrade agents to populate this.'));
-    return root;
-  }
-
-  // A chip per agent on a given firmware; click to open that agent.
-  const agentChips = (agents) => el('div', { class: 'nic-chips' }, ...agents.map((a) =>
-    el('button', { class: 'chip ghost small', title: a.location ? `${a.name} · ${a.location}` : a.name, onclick: () => openAgent(a.id) },
-      a.name, a.iface ? el('span', { class: 'muted' }, ` (${a.iface})`) : null)));
-
-  // Group-by toggle: aggregate by NIC model (drift-first) or list every agent
-  // with its NIC specs. Defaults to models — the firmware-drift lens. A search box
-  // filters within the active group (model/driver/firmware, or agent/location/nic).
-  const body = el('div', { class: 'nics-body' });
-  let nicMode = 'models';
-  const filterInput = el('input', { type: 'search', class: 'nic-filter', placeholder: 'Filter…' });
-  const q = () => filterInput.value.trim().toLowerCase();
-  const renderBody = () => {
-    filterInput.placeholder = nicMode === 'agents'
-      ? 'Filter agent / location / driver / firmware…'
-      : 'Filter model / firmware…';
-    body.replaceChildren(nicMode === 'agents' ? renderByAgent(q()) : renderByModel(q()));
-  };
-  const seg = el('div', { class: 'seg' });
-  const setMode = (mode) => {
-    nicMode = mode;
-    for (const b of seg.children) b.classList.toggle('on', b.dataset.mode === mode);
-    renderBody();
-  };
-  for (const [mode, label] of [['models', 'Models'], ['agents', 'Agents']]) {
-    seg.append(el('button', { class: 'seg-btn', 'data-mode': mode, onclick: () => setMode(mode) }, label));
-  }
-  filterInput.addEventListener('input', renderBody);
-  root.append(el('div', { class: 'nics-controls' },
-    el('span', { class: 'muted' }, 'Group by'), seg,
-    el('span', { class: 'spacer' }),
-    filterInput), body);
-
-  const has = (v, needle) => String(v == null ? '' : v).toLowerCase().includes(needle);
-
-  // ---- Models view: firmware drift first, then the full model inventory. ----
-  function renderByModel(needle) {
-    const modelMatch = (m) => !needle || has(m.label, needle) || (m.firmwares || []).some((f) => has(f.firmwareVersion, needle));
-    const wrap = el('div', {});
-    const drift = inv.drift.filter(modelMatch);
-    if (drift.length) {
-      const driftCard = el('div', { class: 'nic-card drift-card' }, el('h3', {}, '⚠ Firmware drift'));
-      for (const model of drift) {
-        const block = el('div', { class: 'drift-model' },
-          el('div', { class: 'drift-head' }, el('strong', {}, model.label), el('span', { class: 'muted' }, ` · ${model.count} unit(s)`)));
-        for (const f of model.firmwares) {
-          block.append(el('div', { class: `fw-row${f.isOutlier ? ' fw-outlier' : ''}` },
-            el('span', { class: `badge ${f.isOutlier ? 'warn' : 'online'}` }, f.isOutlier ? 'outlier' : 'majority'),
-            el('span', { class: 'fw-ver' }, f.firmwareVersion),
-            el('span', { class: 'muted' }, ` — ${f.count} unit(s)`),
-            agentChips(f.agents)));
-        }
-        driftCard.append(block);
-      }
-      wrap.append(driftCard);
-    }
-    const models = inv.drivers.filter(modelMatch);
-    const invCard = el('div', { class: 'nic-card' }, el('h3', {}, needle ? `NIC models (${models.length} of ${inv.drivers.length})` : 'All NIC models'));
-    if (!models.length) invCard.append(el('div', { class: 'empty' }, needle ? 'No NIC models match the filter.' : 'No NIC models.'));
-    for (const model of models) {
-      const fwSummary = model.firmwares.map((f) => `${f.firmwareVersion} ×${f.count}`).join(' · ');
-      invCard.append(el('div', { class: 'nic-model-row' },
-        el('div', {}, el('strong', {}, model.label), model.hasDrift ? el('span', { class: 'badge warn', style: 'margin-left:.4rem' }, 'drift') : null),
-        el('div', { class: 'muted' }, `${model.count} unit(s) · ${fwSummary}`)));
-    }
-    wrap.append(invCard);
-    return wrap;
-  }
-
-  // ---- Agents view: each agent that reports NIC data + its NIC specs. ----
-  function renderByAgent(needle) {
-    const nicMatch = (n) => !needle || [n.iface, n.driver, n.driverVersion, n.firmwareVersion, n.busInfo, n.pciId].some((v) => has(v, needle));
-    const agentMatch = (a) => !needle || has(a.name, needle) || has(a.location, needle) || a.nics.some(nicMatch);
-    const agents = inv.byAgent.filter(agentMatch);
-    const card = el('div', { class: 'nic-card' }, el('h3', {}, `Agents reporting NIC data (${needle ? `${agents.length} of ${inv.byAgent.length}` : agents.length})`));
-    if (!agents.length) card.append(el('div', { class: 'empty' }, 'No agents match the filter.'));
-    for (const a of agents) {
-      // If the filter matched a NIC, show only the matching NICs; if it matched
-      // the agent's name/location, keep all of its interfaces.
-      const nics = needle && a.nics.some(nicMatch) ? a.nics.filter(nicMatch) : a.nics;
-      card.append(el('div', { class: 'nic-agent-row' },
-        el('div', { class: 'nic-agent-head' },
-          el('button', { class: 'linklike', onclick: () => openAgent(a.id) }, a.name),
-          a.location ? el('span', { class: 'muted' }, ` · ${a.location}`) : null,
-          el('span', { class: 'muted' }, ` · ${a.nics.length} interface(s)`)),
-        nicTable(nics)));
-    }
-    return card;
-  }
-
-  setMode('models');
-  return root;
+  const v = getNicsPage();
+  if (!v) return el('div', { class: 'empty error' }, t('nic.err.title'));
+  return v.view();
 };
 
 // Flow Explorer — merged conversation explorer + bidirectional inspector.
@@ -15309,6 +15221,7 @@ function routeTabFor(view) {
     case 'serviceAssurance': return serviceAssuranceTab;
     case 'settings': return settingsTab;
     case 'guide': return guideTrack;
+    case 'nics': return nicsTab;
     case 'reporting': return reportingState.section;
     default: return null;
   }
@@ -15329,6 +15242,7 @@ function setRouteTab(view, tab) {
   else if (view === 'serviceAssurance') serviceAssuranceTab = tab;
   else if (view === 'settings') settingsTab = tab;
   else if (view === 'guide') guideTrack = tab;
+  else if (view === 'nics') nicsTab = tab;
   else if (view === 'reporting') reportingState.section = tab;
 }
 function setRouteId(view, id) {

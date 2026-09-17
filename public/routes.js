@@ -36,7 +36,7 @@
     agents: { path: '/agents' },
     agent: { path: '/agents', param: true },
     interfaces: { path: '/interfaces' },
-    nics: { path: '/nics' },
+    nics: { path: '/nics', tabs: ['models', 'agents'], tabKey: 'nicsTab' },
 
     probes: { path: '/probes', tabs: ['run', 'connection', 'packages'], tabKey: 'probesTab' },
     transactions: { path: '/transaction-tests', tabs: ['list', 'matrix'], tabKey: 'txTab' },

@@ -86,7 +86,20 @@
         'updates', 'agents', 'screening', 'assurance', 'appearance', 'license'],
       tabKey: 'settingsTab',
     },
-    docs: { path: '/docs' },
+    // An article is a destination, so it has an address. The list is pinned to
+    // DOCS in public/app.js by test/docsPage.test.js — a new article without a
+    // route here fails the build rather than becoming unlinkable.
+    docs: {
+      path: '/docs',
+      tabs: [
+      'what-is', 'tour', 'assurance', 'assurance-monitors', 'agent-offline',
+      'site-unhealthy', 'latency-loss', 'interface', 'findings', 'situations',
+      'dependencies', 'blast-radius', 'topology-changes', 'flow-baselines', 'adhoc',
+      'assurance-worker', 'discovery', 'servicenow', 'cmdb', 'alerting', 'sso', 'enroll-key',
+      'retention',
+      ],
+      tabKey: 'docsTopic',
+    },
     about: { path: '/about' },
 
     // UI-contract preview (admin only, removed once Changes and Probes are migrated).

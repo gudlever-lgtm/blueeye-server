@@ -1364,6 +1364,7 @@ const CONTRACT_VIEWS = new Map([
   ['agent', 'agent'],
   ['location', 'location'],
   ['about', 'about'],
+  ['docs', 'docs'],
 ]);
 
 function hero(viewKey) {
@@ -11186,33 +11187,40 @@ const DOCS = [
   },
 ];
 
-views.docs = async () => {
-  const root = el('div');
-  // Drop the admin-only section for non-admins (RBAC: admin has full access).
-  const sections = DOCS.filter((s) => !s.admin || isAdmin());
-  const allIds = sections.flatMap((s) => s.articles.map((a) => a.id));
-  if (!docsTopic || !allIds.includes(docsTopic)) docsTopic = allIds[0];
+// ---- Documentation (SHELL MIGRATED — see public/views/docs.js)
+// The twenty-three article bodies stay here; the page they sit on is the
+// contract's.
+let docsPage = null;
+function getDocsPage() {
+  if (docsPage) return docsPage;
+  if (typeof window === 'undefined' || !window.DocsPage || !ui) return null;
+  docsPage = window.DocsPage.create({
+    el, t, ui, errText,
+    // The admin-only section is dropped for everybody else (RBAC: admin has
+    // full access), so an article they cannot reach is not in the strip.
+    sections: () => DOCS.filter((s) => !s.admin || isAdmin()),
+    topic: () => docsTopic,
+    setTopic: (id) => { docsTopic = id; syncLocation(); },
+    help: () => ({ title: t('docs.info.title'), body: () => [
+      el('p', {}, t('docs.info.p1')),
+      el('p', {}, t('docs.info.p2')),
+      el('p', { class: 'muted' }, t('docs.info.p3')),
+    ] }),
+  });
+  return docsPage;
+}
 
-  // Left rail: grouped topic list (mirrors the Settings nav).
-  const nav = el('div', { class: 'settings-nav docs-nav' }, ...sections.map((s) =>
-    el('div', { class: 'settings-nav-group' },
-      el('span', { class: 'settings-nav-label' }, s.section),
-      el('div', { class: 'navlist docs-navlist' }, ...s.articles.map((a) =>
-        el('button', { class: `small ghost${a.id === docsTopic ? ' active' : ''}`, onclick: () => { docsTopic = a.id; render(); } }, a.title))))));
-
-  root.append(el('div', { class: 'section-head' },
-    el('h2', {}, 'Documentation'),
-    el('span', { class: 'muted' }, 'Guides, how-tos & setup — with worked examples')), nav);
-
-  const article = sections.flatMap((s) => s.articles).find((a) => a.id === docsTopic);
-  const body = el('article', { class: 'docs-article' });
-  if (article) {
-    body.append(el('h3', { class: 'docs-title' }, article.title));
-    try { body.append(...article.body()); }
-    catch (err) { body.append(el('div', { class: 'empty error' }, err.message)); }
+function docsLabel(id) {
+  for (const s of DOCS) {
+    for (const a of s.articles) if (a.id === id) return a.title;
   }
-  root.append(body);
-  return root;
+  return id;
+}
+
+views.docs = async () => {
+  const v = getDocsPage();
+  if (!v) return el('div', { class: 'empty error' }, t('docs.title'));
+  return v.view();
 };
 
 // ---- Settings (SHELL MIGRATED — see public/views/settings.js)
@@ -15440,6 +15448,7 @@ function routeTabFor(view) {
     case 'guide': return guideTrack;
     case 'nics': return nicsTab;
     case 'reporting': return reportingState.section;
+    case 'docs': return docsTopic;
     default: return null;
   }
 }
@@ -15461,6 +15470,7 @@ function setRouteTab(view, tab) {
   else if (view === 'guide') guideTrack = tab;
   else if (view === 'nics') nicsTab = tab;
   else if (view === 'reporting') reportingState.section = tab;
+  else if (view === 'docs') docsTopic = tab;
 }
 function setRouteId(view, id) {
   if (id == null) return;
@@ -15562,6 +15572,10 @@ function crumbTabLabel(view, tab) {
   // Settings' twenty-two section labels already live in SETTINGS_GROUPS, so
   // they are read from there rather than copied into both catalogues.
   if (view === 'settings') return settingsLabel(tab);
+  // Same for the twenty-three article titles: DOCS already carries them, and a
+  // breadcrumb reading "Documentation / agent-offline" names the id, not the
+  // article.
+  if (view === 'docs') return docsLabel(tab);
   const key = `route.tab.${view}.${tab}`;
   const label = t(key);
   return label === key ? tab : label;

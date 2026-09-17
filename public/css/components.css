@@ -53,7 +53,12 @@
    The markup comes from tabStrip() in app.js (roving tabindex, arrow keys,
    role="tablist"); this is only the look. Inside `.ui` the strip is an
    underline row rather than the legacy row of filled buttons. */
-.ui .subtabs { display: flex; gap: var(--s-5); border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+/* A strip that wraps (Documentation's thirteen how-tos, Settings' longest
+   group) used to put --s-5 between the wrapped rows, so they read as separate
+   strips rather than one. The row gap is tighter than the column gap for that
+   reason; a strip that fits one row is unaffected. */
+.ui .subtabs { display: flex; column-gap: var(--s-5); row-gap: var(--s-3);
+  border-bottom: 1px solid var(--border); flex-wrap: wrap; }
 .ui .subtab { background: none; border: 0; border-radius: 0;
   border-bottom: 2px solid transparent; margin-bottom: -1px;
   padding: 0 0 var(--s-3); font: inherit; font-size: var(--fs-sm); font-weight: 500;

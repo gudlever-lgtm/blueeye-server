@@ -1436,3 +1436,41 @@ The version was a `.badge`. A version is metadata, not a state.
 One layout note: six areas in the shared auto-fit strip lay out 5 + 1 at a desk
 width, and a card alone on its own row reads as a mistake. The About strip is
 three columns, so it fills two rows evenly, and one column on a phone.
+
+
+**Documentation** is the eighth shell migration and the last screen that still
+carried the pre-3.24 Settings markup: `.settings-nav` with three groups of
+`.small ghost` buttons, twenty-three of them, in a rail between the heading and
+the article. It is the same two levels of SubTabs Settings has — the three
+sections, then the articles of the section you are in — and the same recorded
+deviation applies: one strip cannot hold twenty-three tabs.
+
+`.section-head` with an `<h2>` and a grey subtitle is a PageHeader; the hero
+banner's text is behind (?).
+
+**An article had no address.** Every one of the twenty-three was `/docs`, so a
+link to "a site looks unhealthy" was a link to "Documentation, scroll down and
+click". They are `/docs/<topic>` now, and the section above is derived from the
+article, so a bare `/docs` still opens the first one. The route list in
+`public/routes.js` is pinned to `DOCS` by `test/docsPage.test.js`: an article
+added without a route fails the build rather than becoming unlinkable, which is
+the same bargain `test/guideAccuracy.test.js` makes with the guides.
+
+An article whose `body()` threw used to paint a red `.empty error` box over the
+page. It is an ErrorState inside the panel, with the article still selected and
+a Retry.
+
+**Fixed for every screen, found here:** `.ui .subtabs` had `gap: var(--s-5)` in
+both directions, so a strip that wraps — thirteen how-tos, or Settings' longest
+group — put 24px between the wrapped rows and they read as three separate
+strips. The row gap is `--s-3` now; a strip that fits one row is unchanged.
+
+**Not migrated:** the article bodies. They are prose built by `docsLead` /
+`docsSteps` / `docsTable` / `docsCode` / `docsExpect`, and they are hardcoded
+English — a translation job, not a layout one.
+
+One thing this surfaced that is content rather than layout: **"Troubleshooting
+how-tos" holds thirteen of the twenty-three articles** and wraps to four rows
+while "Getting started" holds two. The strip is as tight as it can be made; the
+section is genuinely overfull, and splitting it is an editorial call, not one
+this migration should make.

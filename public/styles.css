@@ -811,7 +811,6 @@ th.sortable.sorted { color: var(--accent); }
 /* Per-column filter row: a second header row of filter controls under the
    sortable labels, so the header both sorts (click label) and filters. */
 thead tr.filter-row th { padding: 4px 8px 8px; font-weight: 400; vertical-align: top; }
-.col-filter { width: 100%; max-width: 240px; box-sizing: border-box; font: inherit; padding: 3px 6px; }
 
 /* Analysis: the Host selector promoted out of the table header to sit directly
    under the page heading, scoping the whole page (summary + assistant + list). */
@@ -950,7 +949,7 @@ tr.acked td { opacity: .55; }
    frame the rows would have had instead of floating on the page background —
    unless it already sits inside a framed surface, which carries the frame for
    it. (A browser without :not(complex) support simply keeps the old flat look.) */
-main#view .empty:not(.card .empty):not(.data-card .empty):not(.settings-card .empty):not(.inv-card .empty):not(.enroll-card .empty):not(.traffic-card .empty):not(.netpath .empty):not(.loc-card .empty):not(.tablewrap .empty):not(table .empty):not(.modal-card .empty):not(.drawer .empty) {
+main#view .empty:not(.card .empty):not(.data-card .empty):not(.settings-card .empty):not(.inv-card .empty):not(.traffic-card .empty):not(.netpath .empty):not(.loc-card .empty):not(.tablewrap .empty):not(table .empty):not(.modal-card .empty):not(.drawer .empty) {
   background: var(--panel); border: 1px solid var(--border);
   border-radius: var(--radius); box-shadow: var(--shadow);
 }
@@ -1040,12 +1039,6 @@ button.active-btn { outline: 2px solid var(--accent); }
 .legend .dot.tx { background: var(--ok); }
 
 /* ---- Enrollment wizard ---------------------------------------------------- */
-.enroll-card { border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; margin: 0 0 20px; background: var(--card, transparent); }
-.enroll-card h3 { margin: 0 0 6px; }
-.enroll-form { display: flex; flex-wrap: wrap; gap: 14px; margin: 12px 0; }
-.enroll-field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
-.enroll-field select, .enroll-field input { min-width: 160px; }
-.enroll-num { width: 120px; }
 .enroll-result { margin-top: 14px; border-top: 1px dashed var(--border); padding-top: 14px; }
 .enroll-cmd-row { display: flex; align-items: flex-start; gap: 8px; }
 .enroll-cmd { flex: 1; margin: 0; white-space: pre-wrap; word-break: break-all; }
@@ -1381,7 +1374,6 @@ button.active-btn { outline: 2px solid var(--accent); }
 .fs-mini tbody tr.active { background: var(--accent-weak); }
 
 /* ---- Events (event_cases) ---- */
-.events-view .toolbar, .clusters-view .toolbar { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
 .inc-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
 .inc-header h2 { margin: 0 0 4px; }
 .inc-meta { font-size: 13px; }
@@ -1769,7 +1761,7 @@ ul.timeline-list li.tl .chg-open { margin-left: auto; flex: 0 0 auto; }
 
 /* Resting elevation for every content surface. */
 .overview-chart, .nic-card, .settings-card, .stat,
-.kpi, .metric-card, .agent-health, .assistant, .enroll-card,
+.kpi, .metric-card, .agent-health, .assistant,
 details.sec, .theme-card, .nis2-cat, .nis2-readiness, .blast-panel,
 .pathmap, .pv-timeline, .topo-graph, .netpath, .fleet-summary .fs-chip, .hero {
   box-shadow: var(--shadow);

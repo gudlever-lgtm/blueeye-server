@@ -126,6 +126,12 @@
     var openTab = typeof ctx.openTab === 'function' ? ctx.openTab : null;
     var openSettings = typeof ctx.openSettings === 'function' ? ctx.openSettings : null;
     var openDocs = typeof ctx.openDocs === 'function' ? ctx.openDocs : null;
+    // The module ships standalone, so its own heading, its "state could not be
+    // read" banner and its Back/Next row are the default. A host on the UI
+    // contract draws those itself (a PageHeader, an inline note and contract
+    // buttons) and asks for the body only.
+    var embedded = ctx.mode === 'embedded';
+    var watcher = null;
 
     var host = el('div', { class: 'guide guide-' + track });
     // Everything the live checks need, loaded once when the view is mounted.
@@ -1731,7 +1737,9 @@
 
       // replaceChildren() stringifies a null child into the literal text "null",
       // so the conditional banner is filtered out rather than handed over.
-      host.replaceChildren.apply(host, [
+      host.replaceChildren.apply(host, (embedded ? [
+        el('div', { class: 'guide-layout' }, stepper(), body),
+      ] : [
         el('div', { class: 'guide-head' },
           el('h2', { class: 'guide-title' }, trackTitle()),
           el('p', { class: 'guide-sub' }, trackSubtitle()),
@@ -1739,7 +1747,10 @@
         loadError ? el('div', { class: 'callout guide-stale' }, t('guide.stateUnavailable', { message: loadError })) : null,
         el('div', { class: 'guide-layout' }, stepper(), body),
         footer(),
-      ].filter(Boolean));
+      ]).filter(Boolean));
+      // The host's header and footer are outside `host`, so they only learn
+      // that the step moved — or that a state read failed — if they are told.
+      if (watcher) watcher({ step: step, total: STEPS.length, error: loadError });
       return host;
     }
 
@@ -1811,6 +1822,18 @@
       return host;
     }
 
+    if (embedded) {
+      return {
+        node: host,
+        title: trackTitle(),
+        subtitle: trackSubtitle(),
+        total: STEPS.length,
+        step: function () { return step; },
+        go: go,
+        // Called after every draw with { step, total, error }.
+        watch: function (fn) { watcher = fn; },
+      };
+    }
     return host;
   }
 

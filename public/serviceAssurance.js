@@ -18,7 +18,7 @@
   // The module's own screens, in the order they are shown. Also the set a host
   // may deep-link into, so an unknown tab name falls back rather than rendering
   // an empty page.
-  var TABS = ['applications', 'journeys', 'tests', 'runs', 'health', 'schedules', 'monitors'];
+  var TABS = ['applications', 'journeys', 'tests', 'runs', 'history', 'health', 'schedules', 'monitors'];
 
   function create(ctx) {
     var el = ctx.el;
@@ -48,6 +48,7 @@
       monitorId: null,
     };
 
+    var embedded = ctx.mode === 'embedded';
     var host = el('div', { class: 'sa' });
 
     // ---------------------------------------------------------------- utils
@@ -243,8 +244,8 @@
     }
 
     // ---------------------------------------------------------------- shell
-    function tabBar() {
-      var tabs = [
+    function tabPairs() {
+      return [
         ['applications', t('sa.tab.applications')],
         ['journeys', t('sa.tab.journeys')],
         ['tests', t('sa.tab.tests')],
@@ -254,6 +255,18 @@
         ['schedules', t('sa.tab.schedules')],
         ['monitors', t('sa.tab.monitors')],
       ];
+    }
+    // Opening a tab always drops the detail the previous one had open: a test id
+    // means nothing on the schedules screen.
+    function openTab(key) {
+      state.tab = key;
+      state.applicationId = null;
+      state.testId = null;
+      state.monitorId = null;
+      draw();
+    }
+    function tabBar() {
+      var tabs = tabPairs();
       // Same strip, same keyboard behaviour as the rest of the dashboard: the
       // bar is ONE stop in the tab order and the arrows move inside it. Written
       // here rather than imported because this module ships standalone.
@@ -268,7 +281,7 @@
           'aria-selected': on ? 'true' : 'false',
           tabindex: on ? '0' : '-1',
           'data-tab': pair[0],
-          onclick: function () { state.tab = pair[0]; state.applicationId = null; state.testId = null; state.monitorId = null; draw(); },
+          onclick: function () { openTab(pair[0]); },
           onkeydown: function (e) {
             var step = { ArrowRight: 1, ArrowLeft: -1, ArrowDown: 1, ArrowUp: -1 }[e.key];
             var to = null;
@@ -290,7 +303,12 @@
 
     function draw() {
       var body = el('div', { class: 'sa-body' }, el('div', { class: 'sa-loading' }, t('sa.loading')));
-      mount(host, tabBar(), body);
+      // 'embedded': the HOST draws the page header and the tab strip (the
+      // dashboard's, from the UI contract), and this draws only the body. The
+      // module still ships standalone — without the flag it owns its own shell,
+      // tab bar included.
+      if (embedded) mount(host, body);
+      else mount(host, tabBar(), body);
       var render = views[state.tab] || views.applications;
       Promise.resolve(render(body)).catch(function (e) { fail(body, e); });
     }
@@ -5096,6 +5114,16 @@
     }
 
     draw();
+    // Embedded, the caller needs the three things the chrome it is drawing has
+    // to know: the node to mount, the tabs to offer, and how to switch one on.
+    if (embedded) {
+      return {
+        node: host,
+        tabs: tabPairs(),
+        activeTab: function () { return state.tab; },
+        setTab: openTab,
+      };
+    }
     return host;
   }
 

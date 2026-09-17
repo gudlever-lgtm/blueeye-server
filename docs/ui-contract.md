@@ -494,6 +494,8 @@ Administration → login and error screens.
 | Topology | `/topology` | B · DashboardPage | [`public/views/topology.js`](../public/views/topology.js) |
 | Flows | `/flows` | B · DashboardPage | [`public/views/flows.js`](../public/views/flows.js) |
 | Transaction tests | `/transaction-tests/:tab` | A · ListPage (shell) | [`public/views/transactions.js`](../public/views/transactions.js) |
+| Service Assurance | `/service-assurance/:tab` | A · ListPage (shell) | [`public/views/serviceAssurance.js`](../public/views/serviceAssurance.js) |
+| Events | `/events` | A · ListPage | [`public/views/events.js`](../public/views/events.js) |
 
 **What Changes kept:** the window vocabulary the server accepts (`30m`, `6h`,
 `24h`, `7d` — not the preview's three), the marker rule (it moves only on an
@@ -838,3 +840,164 @@ somebody has it, and it is not fixed.
 
 **`npm run ui:check -- --all` is clean.** There is no colour literal anywhere in
 `public/` outside `css/tokens.css`.
+
+
+**Service Assurance** is the third shell migration, and the largest: eight
+screens in a 5,100-line module that also ships standalone.
+
+The module carried **its own copy of the tab strip** — correct keyboard and
+ARIA, written out a second time. The contract forbids a page-local copy of a
+component, so the module grew an `embedded` mode: with it the host draws the
+chrome and the module draws only the body; without it the module still owns its
+own shell, which is how it ships standalone. That seam already existed for
+`mode: 'settings'`, which mounts only the settings panel inside another screen.
+
+The screen also gained a **PageHeader and the (?) popover**, which it never had:
+the tab strip was the first thing on the page, so the section's name appeared
+only in the nav and the breadcrumb.
+
+Migrating the strip surfaced a gap. **History** is one of the eight screens the
+strip offers, but it was in neither the module's accepted-tab list nor the
+route's — so it could be clicked to and never linked to, and a
+`/service-assurance/history` deep link silently opened Applications. It is in
+both now.
+
+**Not migrated:** the eight tab bodies. Each is hundreds of lines with its own
+forms, detail screens and polling, and each migrates in its own commit. Its
+**stylesheet** is done — see phase 4 above.
+
+
+**Events** was the only table in the app whose filters lived **inside the table
+header** — one control per column, under the sortable label. Clever, and unique,
+which is what made it a problem: it is the contract's Toolbar now, the same move
+Analysis made when it migrated.
+
+A StatStrip counts the events by status and filters on a click. "How many are
+still open" was a question this page could not answer without reading the rows.
+
+The "🧭 Guide" button sat in every row as a `pill` — a chip carrying an action,
+which is neither a state nor metadata. It is the row's action, on hover, like
+Acknowledge on Analysis.
+
+Eight columns will not fit fixed widths at 1280, and the flexible one — the
+condition, which is the point of the row — is what gets squeezed to nothing. Only
+severity, status and the action column are pinned; the browser lays the rest out,
+and the two timestamps read as "5 d ago" with the exact stamp as the tooltip.
+
+**Clear filters is always present and disabled when there is nothing to clear.**
+Showing it conditionally would mean rebuilding the toolbar on every keystroke in
+the location field — and losing the focus with it.
+
+
+**Situations** is the clustering view: findings the analyser grouped into one
+story. It had a heading, a row of filter buttons where the pressed one was a
+`.active` class, and a table whose every non-row state was a single
+`<td colspan="6">` with a sentence in it.
+
+Three states now say three different things: nothing clustered yet (the
+analyser has not grouped anything — not an error), a filter that matches
+nothing (with the filter to clear), and a failed load (with the request and a
+Retry). One grey sentence in a table cell could not tell those apart, so it
+never did.
+
+The status filter is a StatStrip — open / acknowledged / resolved with their
+counts — and the confidence filter is a Toolbar select. Confidence sorts by
+rank (high / medium / low), not alphabetically, which is what "sort by
+confidence" is asking for.
+
+
+**Reporting** is the fourth shell migration. The page name and its navigation
+were one line of markup — a `<h2>Reporting</h2>` with the section strip wedged
+in beside it inside `.section-head`. The name is a PageHeader with the (?)
+popover, and the strip is under it, where every other tabbed screen puts it.
+
+The section is in the URL now (`/reporting/schedules`), so the audit trail can
+be linked to. Picking a section used to go through `render()` and rebuild the
+whole view; only the body is rebuilt.
+
+"Loading…" and the failure were both a `.empty` div — the same grey box for
+"wait" and for "it broke". They are a skeleton and an ErrorState with a Retry.
+The page is returned before the section resolves, so the header, the strip and
+the skeleton are on screen while the body loads; awaiting the body first left
+the reader on the previous screen and the skeleton was never seen at all.
+
+Audit is admin-only. A reader who deep-links to `/reporting/audit` without the
+role lands on the first section **and the address follows**, so a reload does
+not try it again.
+
+**Not migrated, passed in whole:** the four bodies — the NIS2 module (with its
+own second-level tab strip), the report generator, the schedules panel and the
+audit trail. The nested strip is the one place in the app with two levels of
+tabs; it stays until the NIS2 module migrates, which is its own commit.
+
+
+**Guides** is the fifth shell migration, and the one where the contract's
+deletion of info banners does the most work. The screen opened with a hero
+banner explaining what a guide is, above a heading whose own lead line said the
+same thing, above a third line counting the steps — three paragraphs before the
+first step. It is a PageHeader with one lead and the (?) popover; the footer
+already reads "Step 3 of 7", so the count needed no line of its own.
+
+"The live state could not be read" was a callout sitting in the document flow
+between the heading and the steps. It is an advisory about the data, so it is
+an inline note. The guidance never depended on that state — a 404 or a 500 on
+one endpoint costs its own status line and nothing else — and the page proves
+it: the seven steps are all still there.
+
+Back and Next were `.ghost` and `.primary`, the legacy button classes. They are
+contract buttons in a form-actions row, and Back is a secondary the reader can
+see rather than a borderless one that disappears when disabled.
+
+**Not migrated, passed in whole:** the stepper and the step bodies. They are
+the document, and they are `public/guides.js`, which ships standalone — so
+`mode: 'embedded'` is opt-in there, the same arrangement Service Assurance
+uses. Without it the module still draws its own heading, banner and footer.
+
+
+**Locations** had **six** buttons in every row's last cell — Open, Traffic,
+History, AI status, Edit, Delete — with Delete sitting one mis-click from Edit.
+The row opens the location, because that is what a row does; Edit is the row's
+action on hover; Traffic, History and AI status are in the ⋯ menu, and Delete
+is last, behind a separator, marked destructive.
+
+AI status is offered only when the licence includes the assistant. It used to
+be, too — the difference is that a menu is where an entry can quietly not be
+there, while a sixth button leaving a row changes its shape.
+
+"No locations." was a grey sentence in a table. An empty estate is the first
+thing a new install sees, so it says what a location is for and offers the
+button that creates one. A failed load took the page down with it; it is an
+ErrorState naming `GET /locations`, with a Retry.
+
+**Not migrated, passed in whole:** the three panels the menu opens — live
+traffic (a 3 s poll with a rolling chart), the history range picker, and the AI
+summary. They are modals with their own machinery.
+
+
+**Enrollment** is the second FormPage in Administration. The wizard was four
+loose `<label>`s in a flex row of its own markup (`.enroll-form`,
+`.enroll-field`, `.enroll-num` — a page-local copy of what FormSection does);
+it is a FormSection with one primary now, and those three classes are gone with
+their CSS.
+
+"No agent signing key is set" was a red box in the document flow. It said what
+was wrong, and — for an admin — linked to Settings. It is a state with the
+button, and for a reader who cannot fix it themselves it names who can rather
+than offering a screen their role does not open.
+
+The status column was `.badge <status>`, styled by whatever word the server
+sent. It is a contract Badge on a tone (active → ok, expired → warn, revoked →
+crit), so a status the palette never heard of is neutral rather than unstyled.
+
+Delete was a red button in every row. The row has no primary action — a code is
+not a page — so the ⋯ menu carries the one destructive entry and nothing else.
+"Delete all expired" stays a panel action, offered only when there is something
+to clear.
+
+The panel head carried the title, a three-line explanation and two buttons on
+one line. The explanation is an inline note above the table, which is what an
+advisory about the data is for; the head keeps the count.
+
+**Not migrated, passed in whole:** `renderEnrollResult` — the generated command,
+the live "waiting for agent" socket state, the Windows two-step variant and the
+manual download + checksum block.

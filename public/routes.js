@@ -49,7 +49,7 @@
 
     serviceAssurance: {
       path: '/service-assurance',
-      tabs: ['health', 'journeys', 'applications', 'tests', 'runs', 'schedules', 'monitors'],
+      tabs: ['health', 'journeys', 'applications', 'tests', 'runs', 'history', 'schedules', 'monitors'],
       tabKey: 'serviceAssuranceTab',
     },
 
@@ -58,7 +58,11 @@
     event: { path: '/events', param: true },
     clusters: { path: '/situations' },
     cluster: { path: '/situations', param: true },
-    reporting: { path: '/reporting' },
+    reporting: {
+      path: '/reporting',
+      tabs: ['nis2', 'generator', 'schedules', 'audit'],
+      tabKey: 'reportingSection',
+    },
 
     guide: {
       path: '/guides',

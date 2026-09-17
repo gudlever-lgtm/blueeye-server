@@ -207,6 +207,7 @@
           note: t('dest.path.note', { target: graph.target || '—', runs: graph.samples || 0, stops: stops.length }),
           actions: [ui.button('ghost', t('dest.path.clear'), { onclick: clearPath })],
           children: [
+            ui.inlineNote(t('dest.path.what')),
             worst && (RANK[worst.severity] || 0) > 0
               ? ui.inlineNote(t('dest.path.worst', { hop: worst.hop, why: worst.explain || '' }),
                 worst.severity === 'bad' ? 'crit' : 'warn')
@@ -245,7 +246,10 @@
         mapHost.replaceChildren(ui.panel({
           title: t('dest.map'),
           note: mapNote(),
-          children: [pathToolbar(), el('div', { class: 'panel-body' }, canvas, legend())],
+          // "72 destinations, but the path has 9 hops?" — the two counts share a
+          // map and count different things, so each says what it counts.
+          children: [ui.inlineNote(t('dest.mapNote.what')), pathToolbar(),
+            el('div', { class: 'panel-body' }, canvas, legend())],
         }));
         deps.mountMap(canvas, {
           healthColor: function (status) { return ui.healthColor(status); },

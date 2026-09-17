@@ -1337,6 +1337,7 @@ const CONTRACT_VIEWS = new Map([
   ['overview', 'traffic'],
   ['geo', 'destinations'],
   ['delta', 'topologyDelta'],
+  ['investigation', 'investigate'],
 ]);
 
 function hero(viewKey) {
@@ -7291,123 +7292,46 @@ function diagnoseNavigate(view, state) {
   render();
 }
 
+// ---- Investigate (MIGRATED — see public/views/investigate.js) ---------------
+// investigationCard() stays here: it carries the NIS2 draft block and the
+// AI-narrative fold, each of which migrates on its own terms.
+let investigateView = null;
+const investigateState = {};
+
+function getInvestigateView() {
+  if (investigateView) return investigateView;
+  if (typeof window === 'undefined' || !window.InvestigateView || !ui) return null;
+  investigateView = window.InvestigateView.create({
+    el, t, ui, errText,
+    state: investigateState,
+    card: investigationCard,
+    help: () => {
+      const info = PAGE_INFO.investigation || {};
+      return { lead: info.hero || '', title: info.title || t('inv.title'), body: info.body || (() => []) };
+    },
+    fetchTargets: async () => {
+      const [agents, locations] = await Promise.all([
+        api('/agents').catch(() => []),
+        api('/locations').catch(() => []),
+      ]);
+      return { agents, locations };
+    },
+    fetchHistory: async () => {
+      const list = await api('/api/investigation');
+      return Array.isArray(list) ? list : [];
+    },
+    run: async ({ type, value, windowMinutes }) => api('/api/investigation/run', {
+      method: 'POST',
+      body: { locationRef: { type, value }, windowMinutes },
+    }),
+  });
+  return investigateView;
+}
+
 views.investigation = async () => {
-  const root = el('div', { class: 'investigation' });
-
-  const agents = await api('/agents').catch(() => []);
-  const locations = await api('/locations').catch(() => []);
-
-  // --- Input section ---
-  const typeSelect = el('select', { id: 'inv-type' },
-    el('option', { value: 'agent' }, 'Agent'),
-    el('option', { value: 'interface' }, 'Interface'),
-    el('option', { value: 'subnet' }, 'Subnet'),
-    el('option', { value: 'site' }, 'Site/location'));
-
-  // Dynamic value input: dropdown for agent/site, free text for subnet/interface.
-  const agentOptions = [el('option', { value: '' }, '— select agent —'),
-    ...agents.map((a) => el('option', { value: String(a.id) }, a.display_name || a.hostname))];
-  const siteOptions = [el('option', { value: '' }, '— select site —'),
-    ...locations.map((l) => el('option', { value: String(l.id) }, l.name))];
-
-  const valueSelect = el('select', { id: 'inv-value-select' }, ...agentOptions);
-  const valueText = el('input', { id: 'inv-value-text', type: 'text', placeholder: 'e.g. 10.0.1.0/24 or eth0', class: 'hidden' });
-
-  typeSelect.addEventListener('change', () => {
-    const t = typeSelect.value;
-    if (t === 'agent') {
-      valueSelect.replaceChildren(...agentOptions.map((o) => o.cloneNode(true)));
-      valueSelect.classList.remove('hidden');
-      valueText.classList.add('hidden');
-    } else if (t === 'site') {
-      valueSelect.replaceChildren(...siteOptions.map((o) => o.cloneNode(true)));
-      valueSelect.classList.remove('hidden');
-      valueText.classList.add('hidden');
-    } else {
-      valueSelect.classList.add('hidden');
-      valueText.classList.remove('hidden');
-    }
-  });
-
-  const windowSelect = el('select', { id: 'inv-window' },
-    el('option', { value: '15' }, '15 min'),
-    el('option', { value: '30', selected: 'selected' }, '30 min'),
-    el('option', { value: '60' }, '60 min'));
-
-  const runBtn = el('button', { class: 'primary', id: 'inv-run-btn' }, 'Investigate');
-  const statusEl = el('p', { class: 'muted', id: 'inv-status' }, '');
-
-  root.append(
-    el('div', { class: 'section-head' },
-      el('h2', {}, 'Troubleshooting'),
-      el('span', { class: 'muted' }, 'Location-driven anomaly investigation')),
-    el('div', { class: 'inv-form' },
-      el('div', { class: 'inv-form-row' },
-        el('label', {}, 'Location type ', typeSelect),
-        el('label', {}, 'Value ', valueSelect, valueText),
-        el('label', {}, 'Time window ', windowSelect),
-        runBtn),
-      statusEl));
-
-  const resultArea = el('div', { id: 'inv-result-area' });
-  root.append(resultArea);
-
-  const historyArea = el('div', { id: 'inv-history-area' });
-  root.append(historyArea);
-
-  // Load history of previous investigations.
-  async function loadHistory() {
-    let list;
-    try {
-      list = await api('/api/investigation');
-    } catch {
-      return;
-    }
-    if (!Array.isArray(list) || list.length === 0) {
-      historyArea.replaceChildren(el('div', { class: 'empty' }, 'No previous investigations.'));
-      return;
-    }
-    historyArea.replaceChildren(
-      el('h3', {}, 'Previous investigations'),
-      ...list.map(investigationCard));
-  }
-
-  loadHistory();
-
-  runBtn.addEventListener('click', async () => {
-    const t = typeSelect.value;
-    const rawValue = t === 'agent' || t === 'site'
-      ? valueSelect.value
-      : valueText.value.trim();
-
-    if (!rawValue) {
-      statusEl.textContent = 'Select or enter a location value.';
-      return;
-    }
-
-    runBtn.disabled = true;
-    statusEl.textContent = 'Investigating…';
-    resultArea.replaceChildren();
-
-    try {
-      const inv = await api('/api/investigation/run', {
-        method: 'POST',
-        body: {
-          locationRef: { type: t, value: rawValue },
-          windowMinutes: Number(windowSelect.value),
-        },
-      });
-      resultArea.replaceChildren(investigationCard(inv));
-      statusEl.textContent = '';
-      loadHistory();
-    } catch (err) {
-      statusEl.textContent = `Error: ${err.message}`;
-    } finally {
-      runBtn.disabled = false;
-    }
-  });
-
-  return root;
+  const v = getInvestigateView();
+  if (!v) return el('div', { class: 'empty error' }, t('inv.err.run'));
+  return v.view();
 };
 
 // ---------------------------------------------------------------------------

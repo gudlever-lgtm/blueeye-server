@@ -1343,11 +1343,7 @@ button.active-btn { outline: 2px solid var(--accent); }
 @media (max-width: 640px) { .screen-row { flex-direction: column; } }
 
 /* ---- Investigation (Fejlfinding) ----------------------------------------- */
-.investigation { display: flex; flex-direction: column; gap: 16px; }
-.inv-form-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; }
-.inv-form-row label { flex: 1 1 160px; min-width: 0; }
-.inv-card { width: auto; max-width: 100%; overflow: hidden; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px 18px; display: flex; flex-direction: column; gap: 10px; }
-.inv-form { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px 18px; display: flex; flex-direction: column; gap: 12px; }
+.inv-card { width: auto; max-width: 100%; overflow: hidden; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
 .inv-header { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .inv-badge { font-size: 13px; padding: 3px 10px; }
 .inv-conf { font-size: 13px; }

@@ -443,6 +443,7 @@ Administration → login and error screens.
 | Traffic | `/traffic` | B · DashboardPage | [`public/views/traffic.js`](../public/views/traffic.js) |
 | Destinations | `/destinations` | A · ListPage | [`public/views/destinations.js`](../public/views/destinations.js) |
 | Topology delta | `/topology-delta` | A · ListPage | [`public/views/topologyDelta.js`](../public/views/topologyDelta.js) |
+| Investigate | `/investigate` | C · FormPage | [`public/views/investigate.js`](../public/views/investigate.js) |
 
 **What Changes kept:** the window vocabulary the server accepts (`30m`, `6h`,
 `24h`, `7d` — not the preview's three), the marker rule (it moves only on an
@@ -602,3 +603,25 @@ from the catalogue in both languages.
 
 The page is called **Topology delta** here, in the nav and in the breadcrumb.
 Two screens were both called "Changes", which is one too many.
+
+
+**Investigate** is the second FormPage. The three loose labels are a
+FormSection, and "Investigate" is the page's one primary action.
+
+The grey sentence under the form was doing two jobs — "Select or enter a
+location value" and "Error: …" — and did neither well. A validation problem now
+belongs to the field it is about and clears the moment the field is filled; a
+failed run is an ErrorState that names the call and leaves the form usable.
+
+The history stacked full result cards, each as long as the run you had just
+made, so the third one was below the fold and the tenth was unreachable. It is a
+DataTable — when, target, verdict, confidence, why — and a row opens that run in
+the Drawer. An agent id and a site id resolve to the names they stand for.
+
+The page is called **Investigate**. Its title said "Troubleshooting", which is a
+different screen in the same section.
+
+**Not migrated, passed in whole:** `investigationCard()`, which carries the NIS2
+draft block and the AI-narrative fold. Each of those migrates on its own terms;
+the card is drawn inside a contract Panel and inside the Drawer, so it lost the
+card background it used to paint for itself.

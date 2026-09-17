@@ -1866,6 +1866,21 @@ function makeTestPackagesRepo(overrides = {}) {
   };
 }
 
+// A fake report_schedules repository (migration 100). Mirrors
+// createReportSchedulesRepository: JSON columns already parsed, and a
+// findEnabled the scheduler ticks.
+function makeReportSchedulesRepo(overrides = {}) {
+  return {
+    findAll: overrides.findAll || (async () => []),
+    findById: overrides.findById || (async () => null),
+    findEnabled: overrides.findEnabled || (async () => []),
+    create: overrides.create || (async (r) => ({ id: 1, last_run_at: null, last_run_status: null, ...r })),
+    update: overrides.update || (async (id, r) => ({ id, ...r })),
+    remove: overrides.remove || (async () => false),
+    setLastRun: overrides.setLastRun || (async () => {}),
+  };
+}
+
 // A fake speed-test results repository (records inserts; benign empty reads).
 function makeSpeedtestResultsRepo(overrides = {}) {
   const rows = [];
@@ -2473,6 +2488,11 @@ function makeApp(overrides = {}) {
   // makeLicenseManager (or your own planService/usageService) to exercise limits.
   const agentsRepo = overrides.agentsRepo || makeAgentsRepo();
   const testPackagesRepo = overrides.testPackagesRepo || makeTestPackagesRepo();
+  // `=== undefined` so a test can pass null to exercise a deployment without
+  // scheduled reports.
+  const reportSchedulesRepo = overrides.reportSchedulesRepo === undefined
+    ? makeReportSchedulesRepo()
+    : overrides.reportSchedulesRepo;
   const transactionsRepo = overrides.transactionsRepo || makeTransactionsRepo();
   // Service Assurance: the REAL router/validators/host-policy over in-memory
   // repositories, so route specs exercise the whole request path and only the
@@ -2585,6 +2605,8 @@ function makeApp(overrides = {}) {
     artifactStore: overrides.artifactStore || makeArtifactStore(),
     agentSourceStore: overrides.agentSourceStore || makeSourceStore(),
     testPackagesRepo,
+    reportSchedulesRepo,
+    reportScheduler: overrides.reportScheduler || null,
     testPackageRunner: overrides.testPackageRunner || makeTestPackageRunner(),
     transactionsRepo,
     serviceTests,
@@ -2763,6 +2785,7 @@ module.exports = {
   makeInvestigationsRepo,
   makeDb,
   makeServiceTests,
+  makeReportSchedulesRepo,
   makeApp,
   tokenFor,
   authHeader,

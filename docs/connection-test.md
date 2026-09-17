@@ -156,3 +156,20 @@ string that could become a probe type.
 | Scheduler | `src/services/testPackageScheduler.js` |
 | Screen | `connectionTestView()` / `openRepeatModal()` in `public/app.js`, `ct.*` in `public/i18n.js` |
 | Tests | `test/connectionTest.test.js` · `test/connectionTestView.test.js` · `test/recurrence.test.js` · `test/testPackageScheduler.test.js` |
+
+## The same three controls elsewhere
+
+The Repeat dialog is a shared component (`recurrenceFields()` / `openRepeatModal()`
+in `public/app.js`), and the run controls travelled with it. The same question —
+how often, starting when — is now asked in the same words on five screens:
+
+| Screen | What repeats | Also gained |
+|---|---|---|
+| Probes & Tests → Connection test | the selected checks | rounds · Stop |
+| Probes & Tests → Run a probe | the probe on screen | rounds · Stop |
+| Probes & Tests → Test packages | the package | a calendar schedule instead of only an interval |
+| Agents → Speed test | the speed test | — |
+| Diagnose | the plan's selected tests (one package per agent — a test package pushes every item to every target, and a reverse test must not run from the wrong end) | rounds · Stop · per-test checkboxes |
+
+Reporting has the same idea with a different payload — see
+[scheduled-reports.md](scheduled-reports.md).

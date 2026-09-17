@@ -2082,7 +2082,7 @@ function testPackageRow(p, agents, locations) {
     el('td', {}, el('div', {}, p.name), p.created_by ? el('div', { class: 'muted' }, `by ${esc(String(p.created_by))}`) : null),
     el('td', {}, testItemsSummary(p.items)),
     el('td', {}, testTargetsSummary(p.targets, agents, locations)),
-    el('td', {}, testScheduleLabel(p.schedule_ms)),
+    el('td', {}, testScheduleLabel(p)),
     el('td', {}, el('span', { class: `badge ${p.enabled ? 'active' : 'neutral'}` }, p.enabled ? 'enabled' : 'disabled')),
     el('td', { class: 'muted' }, testLastRun(p)),
     el('td', {}, el('div', { class: 'row-actions' },
@@ -2117,10 +2117,15 @@ function testTargetsSummary(t, agents, locations) {
   return '–';
 }
 
-function testScheduleLabel(ms) {
+// A package carries an interval OR a calendar recurrence — the column says
+// which, in the same words the Repeat dialog used to save it.
+function testScheduleLabel(pkg) {
+  const p = (pkg && typeof pkg === 'object') ? pkg : { schedule_ms: pkg };
+  if (p.schedule_spec) return repeatSummary(p.schedule_spec, 1).split(' · ').slice(0, 2).join(' · ');
+  const ms = p.schedule_ms;
   const found = SCHEDULE_PRESETS.find(([v]) => Number(v) === Number(ms || 0));
   if (found) return found[1];
-  return ms ? `Every ${Math.round(ms / 1000)}s` : 'Manual only';
+  return ms ? `Every ${Math.round(ms / 1000)}s` : t('pkg.schedule.manual');
 }
 
 function testLastRun(p) {
@@ -2154,7 +2159,20 @@ function editTestPackage(pkg, agents, locations) {
 
   const nameInput = el('input', { type: 'text', value: data.name, placeholder: 'e.g. Daily reachability' });
   const enabledInput = el('input', { type: 'checkbox', ...(data.enabled ? { checked: 'checked' } : {}) });
-  const scheduleSel = el('select', {}, ...SCHEDULE_PRESETS.map(([v, l]) => el('option', { value: v, ...(Number(v) === Number(data.schedule_ms || 0) ? { selected: 'selected' } : {}) }, l)));
+  // Interval or calendar. Until migration 099 a package could only say "every N
+  // ms since the last run", which cannot express a time of day and cannot reach
+  // past 24 hours — so "daily at 08:00" and "Mondays" were not sayable here at
+  // all. Choosing the calendar option reveals the same recurrence editor the
+  // Repeat dialogs use, and stores a spec instead of an interval.
+  const hasSpec = !!(data.schedule_spec && data.schedule_spec.period);
+  const scheduleSel = el('select', {},
+    ...SCHEDULE_PRESETS.map(([v, l]) => el('option', { value: v, ...(!hasSpec && Number(v) === Number(data.schedule_ms || 0) ? { selected: 'selected' } : {}) }, l)),
+    el('option', { value: 'calendar', ...(hasSpec ? { selected: 'selected' } : {}) }, t('pkg.schedule.calendar')));
+  const recurrence = recurrenceFields({ spec: hasSpec ? data.schedule_spec : null, showRuns: false });
+  const recurrenceWrap = el('div', { class: 'pkg-recurrence' }, recurrence.node);
+  const syncSchedule = () => { recurrenceWrap.hidden = scheduleSel.value !== 'calendar'; };
+  scheduleSel.addEventListener('change', syncSchedule);
+  syncSchedule();
 
   const modeSel = el('select', {}, ...[['all', 'All agents'], ['agents', 'Specific agents'], ['location', 'By location']]
     .map(([v, l]) => el('option', { value: v, ...(data.targets.mode === v ? { selected: 'selected' } : {}) }, l)));
@@ -2255,7 +2273,15 @@ function editTestPackage(pkg, agents, locations) {
       if ((t === 'ping' || t === 'tcp') && c.count.value) probe.count = Number(c.count.value);
       return { type: 'probe', probe };
     });
-    return { name: nameInput.value.trim(), enabled: enabledInput.checked, schedule_ms: Number(scheduleSel.value), targets, items };
+    const calendar = scheduleSel.value === 'calendar';
+    return {
+      name: nameInput.value.trim(),
+      enabled: enabledInput.checked,
+      schedule_ms: calendar ? 0 : Number(scheduleSel.value),
+      schedule_spec: calendar ? recurrence.spec() : null,
+      targets,
+      items,
+    };
   }
 
   saveBtn.addEventListener('click', async () => {
@@ -2279,6 +2305,7 @@ function editTestPackage(pkg, agents, locations) {
     el('label', {}, 'Name', nameInput),
     el('label', { class: 'inline' }, enabledInput, ' Enabled'),
     el('label', {}, 'Schedule', scheduleSel),
+    recurrenceWrap,
     el('label', {}, 'Targets', modeSel),
     agentsWrap, locsWrap,
     el('div', { class: 'test-items' },
@@ -2328,7 +2355,22 @@ async function showSpeedtest(a) {
           setTimeout(load, 6000);
         } catch (err) { toast(err.message, true); runBtn.disabled = false; runBtn.textContent = 'Run speed test now'; }
       });
-      kids.push(el('div', { class: 'form-actions' }, runBtn));
+      // Repeat: the same speed test, on a schedule, as an ordinary test package.
+      // The dialog takes over this modal, so a save comes back here rather than
+      // leaving the operator on a closed dialog.
+      const repeatBtn = el('button', { class: 'small ghost' }, t('repeat.button'));
+      repeatBtn.addEventListener('click', () => openRepeatModal({
+        what: t('repeat.what.speedtest', { agent: a.display_name || a.hostname }),
+        onSave: (spec, runs) => saveRepeatPackage({
+          name: `Speed test — ${a.display_name || a.hostname}`.slice(0, 120),
+          agentId: a.id,
+          item: { type: 'speedtest' },
+          spec,
+          runs,
+        }),
+        onSaved: (pkg) => { toast(t('repeat.saved', { name: pkg.name })); showSpeedtest(a); },
+      }));
+      kids.push(el('div', { class: 'form-actions' }, runBtn, repeatBtn));
     }
     if (!rows.length) {
       kids.push(el('p', { class: 'muted' }, 'No speed-test results yet. Run one now, or add a "Speed test" item to a package on the Tests tab.'));
@@ -7350,24 +7392,146 @@ views.diagnose = async () => {
     if (!plan.tests.length || !plan.target) {
       testsCard.append(el('p', { class: 'muted' }, t('diag.tests.none')));
     } else {
-      for (const tst of plan.tests) {
+      // Which of the plan's tests to actually dispatch. A plan proposes what is
+      // worth measuring; the technician often already knows one of them is
+      // pointless here, and running it anyway costs an agent, a round trip and
+      // a line of noise in the evidence. Everything starts selected — the plan
+      // is the recommendation, not a menu.
+      //
+      // The checkboxes carry the STORED row ids, which the screen learns from
+      // GET /api/diagnose/:id. Those rows are inserted in plan order and read
+      // back ordered by id, so index pairing is exact; without the ids the
+      // server would have to be told "the third one", which is not something it
+      // could verify.
+      const rowIds = st.testRows ? st.testRows.map((r) => r.id) : [];
+      if (!st.testRows && role !== 'viewer') {
+        api(`/api/diagnose/${st.plan.sessionId}`)
+          .then((d) => { st.testRows = (d.session && d.session.tests) || []; renderPlan(); })
+          .catch(() => { st.testRows = []; });
+      }
+      // The selection is seeded the first time the ids actually arrive — the
+      // first render happens before the fetch lands, and seeding an empty set
+      // then would leave the plan permanently unselected.
+      if (!st.selectedTests || (!st.selectionSeeded && rowIds.length)) {
+        st.selectedTests = new Set(rowIds);
+        st.selectionSeeded = rowIds.length > 0;
+      }
+      const selectedTests = st.selectedTests;
+      const counter = el('span', { class: 'muted small' });
+      const syncCount = () => {
+        counter.textContent = t('diag.tests.selected', { n: String(selectedTests.size), total: String(rowIds.length || plan.tests.length) });
+      };
+
+      plan.tests.forEach((tst, i) => {
         const params = Object.entries(tst.params || {}).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(' ');
+        const rowId = rowIds[i];
+        const cb = rowId !== undefined && role !== 'viewer'
+          ? el('input', { type: 'checkbox', ...(selectedTests.has(rowId) ? { checked: 'checked' } : {}) })
+          : null;
+        if (cb) {
+          cb.addEventListener('change', () => {
+            if (cb.checked) selectedTests.add(rowId); else selectedTests.delete(rowId);
+            syncCount();
+          });
+        }
         testsCard.append(el('div', { class: 'diag-test' },
+          cb,
           el('code', {}, `${tst.probeType} ${tst.target}${params ? ` ${params}` : ''}`),
           tst.direction === 'reverse' ? el('span', { class: 'pill' }, '←') : null,
           el('div', { class: 'muted small' }, tst.why || ''),
           el('div', { class: 'muted small' }, t('diag.tests.askedBy', { causes: tst.askedBy.join(', ') }))));
-      }
+      });
       if (role !== 'viewer') {
-        const runBtn = el('button', { class: 'primary' }, t('diag.tests.runAll'));
+        syncCount();
+        testsCard.append(el('div', { class: 'muted small diag-select' }, t('diag.tests.select'), ' ', counter));
+
+        // Rounds + Stop, for the fault that is not there while you are looking
+        // at it: the same plan dispatched again and again until it reproduces.
+        const roundsInput = el('input', { type: 'number', min: '1', max: '20', value: '1', class: 'run-count' });
+        const runBtn = el('button', { class: 'primary run-btn' });
+        const stopBtn = el('button', { class: 'small ghost', disabled: 'disabled' }, t('probe.stop'));
+        const repeatBtn = el('button', { class: 'small ghost' }, t('diag.tests.repeat'));
+        const repeatChipEl = el('span', { class: 'ct-chip', hidden: true });
         const evalBtn = el('button', { class: 'small' }, t('diag.evaluate'));
         const runStatus = el('span', { class: 'muted' });
+        const syncRunLabel = () => {
+          const n = Math.max(1, Math.min(20, Number(roundsInput.value) || 1));
+          runBtn.replaceChildren(t('diag.tests.runSelected'), ' ', roundsInput, ' ', plural('probe.rounds', n, { n: String(n) }));
+        };
+        roundsInput.addEventListener('input', syncRunLabel);
+        roundsInput.addEventListener('click', (e) => e.stopPropagation());
+        syncRunLabel();
+
+        const ROUND_GAP_MS = 4000;
+        let stopRequested = false;
+        const selectedIds = () => [...selectedTests];
         runBtn.addEventListener('click', async () => {
-          runBtn.disabled = true; runStatus.textContent = t('diag.tests.running');
-          try {
-            const r = await api(`/api/diagnose/${st.plan.sessionId}/run`, { method: 'POST', body: {} });
-            runStatus.textContent = t('diag.tests.dispatched', { n: r.dispatched, total: r.total });
-          } catch (err) { runStatus.textContent = err.message; } finally { runBtn.disabled = false; }
+          const ids = selectedIds();
+          if (rowIds.length && !ids.length) { runStatus.textContent = t('diag.tests.noneSelected'); return; }
+          const rounds = Math.max(1, Math.min(20, Number(roundsInput.value) || 1));
+          stopRequested = false;
+          runBtn.disabled = true; stopBtn.disabled = false;
+          for (let round = 1; round <= rounds && !stopRequested; round += 1) {
+            runStatus.textContent = rounds === 1
+              ? t('diag.tests.running')
+              : t('diag.tests.round', { round: String(round), rounds: String(rounds) });
+            try {
+              // No ids yet (the fetch has not landed) means the whole plan,
+              // which is exactly what the button did before it could select.
+              const body = ids.length && rowIds.length ? { testIds: ids } : {};
+              // eslint-disable-next-line no-await-in-loop
+              const r = await api(`/api/diagnose/${st.plan.sessionId}/run`, { method: 'POST', body });
+              runStatus.textContent = t('diag.tests.dispatched', { n: r.dispatched, total: r.total });
+            } catch (err) { runStatus.textContent = err.message; break; }
+            if (round < rounds && !stopRequested) {
+              // eslint-disable-next-line no-await-in-loop
+              await new Promise((r) => setTimeout(r, ROUND_GAP_MS));
+            }
+          }
+          if (stopRequested) runStatus.textContent = t('diag.tests.stopped');
+          stopBtn.disabled = true; runBtn.disabled = false;
+        });
+        stopBtn.addEventListener('click', () => {
+          stopRequested = true;
+          stopBtn.disabled = true;
+          runStatus.textContent = t('diag.tests.stopped');
+        });
+
+        // Repeat: the selected tests on a schedule. A plan can span two agents
+        // (a reverse test runs from the far end), and a test package pushes
+        // every item to every target — so this writes ONE PACKAGE PER AGENT
+        // rather than one package that would run each test from the wrong end.
+        repeatBtn.addEventListener('click', () => {
+          const rows = (st.testRows || []).filter((r) => selectedTests.has(r.id) && r.agentId != null);
+          if (!rows.length) { runStatus.textContent = t('diag.tests.noneSelected'); return; }
+          const byAgent = new Map();
+          for (const r of rows) {
+            if (!byAgent.has(r.agentId)) byAgent.set(r.agentId, []);
+            byAgent.get(r.agentId).push({ type: 'probe', probe: { type: r.probeType, host: r.target, ...(r.params || {}) } });
+          }
+          openRepeatModal({
+            what: t('repeat.what.diagnose'),
+            onSave: async (spec, runs) => {
+              const made = [];
+              for (const [agentId, items] of byAgent) {
+                const repeated = [];
+                for (let i = 0; i < runs; i += 1) repeated.push(...items);
+                // eslint-disable-next-line no-await-in-loop
+                made.push(await api('/api/test-packages', {
+                  method: 'POST',
+                  body: {
+                    name: `Diagnosis #${st.plan.sessionId} — ${st.target || plan.target}`.slice(0, 120),
+                    enabled: true,
+                    schedule_spec: spec,
+                    targets: { mode: 'agents', agentIds: [Number(agentId)] },
+                    items: repeated,
+                  },
+                }));
+              }
+              return { name: made.map((m) => m.name).join(', '), packages: made };
+            },
+            onSaved: (pkg, summary) => repeatChip(repeatChipEl, pkg, summary),
+          });
         });
         evalBtn.addEventListener('click', async () => {
           evalBtn.disabled = true; runStatus.textContent = t('diag.evaluating');
@@ -7377,7 +7541,7 @@ views.diagnose = async () => {
             renderPlan();
           } catch (err) { runStatus.textContent = err.message; } finally { evalBtn.disabled = false; }
         });
-        testsCard.append(el('div', { class: 'diag-actions' }, runBtn, evalBtn, runStatus));
+        testsCard.append(el('div', { class: 'diag-actions' }, runBtn, stopBtn, repeatBtn, evalBtn, repeatChipEl, runStatus));
       }
     }
     out.append(testsCard);
@@ -8359,133 +8523,186 @@ async function connectionTestView() {
     if (!host) { say(t('ct.status.noTarget'), true); return; }
     const ids = catalogue.filter((c) => !why(c) && selected.has(c.id)).map((c) => c.id);
     if (!ids.length) { say(t('ct.status.noChecks'), true); return; }
+    // The connection test has its own save endpoint (the server owns the
+    // catalogue, so the browser never builds the probe specs); everything else
+    // the dialog does is the same.
     openRepeatModal({
-      agentId: Number(agentSel.value),
-      host,
-      checks: ids,
-      onSaved: (pkg, summary) => {
-        scheduleChip.hidden = false;
-        scheduleChip.replaceChildren('↻ ', summary, ' · ',
-          el('button', { class: 'link', onclick: () => gotoView('tests') }, pkg.name));
-        toast(t('ct.repeat.saved', { name: pkg.name }));
-      },
+      what: t('ct.title'),
+      onSave: (spec, runs) => api('/api/connection-test/schedule', {
+        method: 'POST',
+        body: { agentId: Number(agentSel.value), host, checks: ids, runs, recurrence: spec },
+      }),
+      onSaved: (pkg, summary) => repeatChip(scheduleChip, pkg, summary),
     });
   });
 
   return root;
 }
 
-// How many runs inside one period the Repeat dialog offers, per period. The
-// server accepts any divisor down to a five-minute floor; these are the ones
-// worth a menu entry, and each is rendered as the GAP it produces ("every 4
-// hours") rather than as the number it is, because that is the question the
-// operator is actually answering.
-const CT_WITHIN = {
+// ---- Repeat: the shared recurrence editor ---------------------------------
+// One dialog, four screens. A connection test, a single probe, a speed test and
+// a diagnosis plan all ask the same question — how often, starting when — and
+// all four answer it by writing an ordinary test package. The editor below is
+// the question; the caller owns the saving, because what gets scheduled differs
+// and the schedule does not.
+
+// How many runs inside one period the dialog offers, per period. The server
+// accepts any divisor down to a five-minute floor (src/schedule/recurrence.js);
+// these are the ones worth a menu entry, and each is rendered as the GAP it
+// produces ("every 4 hours") rather than as the number it is, because that is
+// the question the operator is actually answering.
+const REPEAT_WITHIN = {
   hourly: [1, 2, 4, 12],
   daily: [1, 2, 3, 4, 6, 12, 24],
   weekly: [1, 7, 14],
   monthly: [1, 2, 4],
 };
-const CT_PERIOD_MINUTES = { hourly: 60, daily: 1440, weekly: 10080, monthly: 40320 };
+const REPEAT_PERIOD_MINUTES = { hourly: 60, daily: 1440, weekly: 10080, monthly: 40320 };
 
 // "every 6" is not an answer anybody recognises — this turns it into the gap.
-function ctWithinLabel(period, every) {
-  if (every === 1) return t(`ct.every.oncePer.${period}`);
-  const minutes = CT_PERIOD_MINUTES[period] / every;
-  if (minutes < 60) return t('ct.every.minutes', { n: String(Math.round(minutes)) });
+function repeatWithinLabel(period, every) {
+  if (every === 1) return t(`repeat.every.oncePer.${period}`);
+  const minutes = REPEAT_PERIOD_MINUTES[period] / every;
+  if (minutes < 60) return t('repeat.every.minutes', { n: String(Math.round(minutes)) });
   if (minutes < 1440) {
     const hours = Math.round(minutes / 60);
-    return hours === 1 ? t('ct.every.hour') : t('ct.every.hours', { n: String(hours) });
+    return hours === 1 ? t('repeat.every.hour') : t('repeat.every.hours', { n: String(hours) });
   }
   const days = Math.round(minutes / 1440);
-  return days === 1 ? t('ct.every.day') : t('ct.every.days', { n: String(days) });
+  return days === 1 ? t('repeat.every.day') : t('repeat.every.days', { n: String(days) });
 }
 
 // The recurrence in one sentence, in the operator's language. Shown live in the
-// dialog and kept beside the buttons afterwards — a schedule nobody can read
-// back is a schedule nobody trusts.
-function ctSummary(spec, runs) {
-  const within = ctWithinLabel(spec.period, spec.every);
-  const runsText = plural('ct.perRun', runs, { n: String(runs) });
-  if (spec.period === 'hourly') return t('ct.summary.hourly', { within, runs: runsText });
-  if (spec.period === 'daily') return t('ct.summary.daily', { at: spec.at, within, runs: runsText });
-  if (spec.period === 'weekly') return t('ct.summary.weekly', { weekday: t(`ct.weekday.${spec.weekday}`), at: spec.at, within, runs: runsText });
-  return t('ct.summary.monthly', { dom: String(spec.dayOfMonth), at: spec.at, within, runs: runsText });
+// dialog, kept beside the buttons afterwards, and used for the Schedule column
+// on the Test packages tab — a schedule nobody can read back is a schedule
+// nobody trusts.
+function repeatSummary(spec, runs) {
+  if (!spec || !spec.period) return '';
+  const within = repeatWithinLabel(spec.period, Number(spec.every) || 1);
+  const runsText = plural('repeat.perRun', runs, { n: String(runs) });
+  if (spec.period === 'hourly') return t('repeat.summary.hourly', { within, runs: runsText });
+  if (spec.period === 'daily') return t('repeat.summary.daily', { at: spec.at, within, runs: runsText });
+  if (spec.period === 'weekly') return t('repeat.summary.weekly', { weekday: t(`repeat.weekday.${spec.weekday}`), at: spec.at, within, runs: runsText });
+  return t('repeat.summary.monthly', { dom: String(spec.dayOfMonth), at: spec.at, within, runs: runsText });
 }
 
-// The Repeat dialog: period, how often inside that period, when it starts, and
-// how many times the whole battery runs per scheduled run. Saved as an ordinary
-// test package (POST /api/connection-test/schedule), so it survives this page
-// being closed and is managed on the Test packages tab like everything else.
-function openRepeatModal({ agentId, host, checks, onSaved }) {
-  const card = $('#modal-card');
+// The fields themselves, as an embeddable component: the Repeat dialog wraps
+// them in a modal, the test-package editor drops them straight into its form.
+//   spec()  → the recurrence, in the shape the server validates
+//   runs()  → how many times the payload repeats per scheduled run
+//   node    → the fields, ready to append
+function recurrenceFields({ spec = null, runs = 1, showRuns = true, showSummary = true, onChange = null } = {}) {
+  const init = spec && spec.period ? spec : { period: 'daily', every: 1, at: '08:00', weekday: 1, dayOfMonth: 1 };
   const periodSel = el('select', {}, ...['hourly', 'daily', 'weekly', 'monthly']
-    .map((p) => el('option', { value: p, ...(p === 'daily' ? { selected: 'selected' } : {}) }, t(`ct.period.${p}`))));
+    .map((p) => el('option', { value: p, ...(p === init.period ? { selected: 'selected' } : {}) }, t(`repeat.period.${p}`))));
   const withinSel = el('select', {});
-  const atInput = el('input', { type: 'time', value: '08:00' });
-  const weekdaySel = el('select', {}, ...[1, 2, 3, 4, 5, 6, 7].map((d) => el('option', { value: String(d) }, t(`ct.weekday.${d}`))));
-  const domInput = el('input', { type: 'number', min: '1', max: '28', value: '1' });
-  const runsInput = el('input', { type: 'number', min: '1', max: '20', value: '1' });
+  const atInput = el('input', { type: 'time', value: init.at || '08:00' });
+  const weekdaySel = el('select', {}, ...[1, 2, 3, 4, 5, 6, 7]
+    .map((d) => el('option', { value: String(d), ...(d === (init.weekday || 1) ? { selected: 'selected' } : {}) }, t(`repeat.weekday.${d}`))));
+  const domInput = el('input', { type: 'number', min: '1', max: '28', value: String(init.dayOfMonth || 1) });
+  const runsInput = el('input', { type: 'number', min: '1', max: '20', value: String(runs || 1) });
   const summary = el('div', { class: 'ct-summary' });
-  const err = el('p', { class: 'error' });
-  const saveBtn = el('button', { type: 'button' }, t('ct.repeat.save'));
 
-  const atWrap = el('label', {}, t('ct.repeat.at'), atInput);
-  const weekdayWrap = el('label', {}, t('ct.repeat.weekday'), weekdaySel);
-  const domWrap = el('label', {}, t('ct.repeat.dayOfMonth'), domInput);
+  const atWrap = el('label', {}, t('repeat.at'), atInput);
+  const weekdayWrap = el('label', {}, t('repeat.weekdayLabel'), weekdaySel);
+  const domWrap = el('label', {}, t('repeat.dayOfMonth'), domInput);
+  const runsWrap = el('label', {}, t('repeat.runs'), runsInput);
 
-  function spec() {
+  const readSpec = () => {
     const period = periodSel.value;
     const out = { period, every: Number(withinSel.value) || 1 };
     if (period !== 'hourly') out.at = atInput.value || '08:00';
     if (period === 'weekly') out.weekday = Number(weekdaySel.value);
     if (period === 'monthly') out.dayOfMonth = Number(domInput.value) || 1;
     return out;
-  }
+  };
+  const readRuns = () => Math.max(1, Number(runsInput.value) || 1);
 
-  function syncWithin() {
+  function syncSummary() {
+    if (showSummary) summary.textContent = repeatSummary(readSpec(), readRuns());
+    if (onChange) onChange(readSpec(), readRuns());
+  }
+  function syncPeriod() {
     const period = periodSel.value;
-    const keep = Number(withinSel.value);
-    withinSel.replaceChildren(...CT_WITHIN[period].map((n) => el('option', { value: String(n), ...(n === keep ? { selected: 'selected' } : {}) }, ctWithinLabel(period, n))));
+    const keep = Number(withinSel.value) || Number(init.every) || 1;
+    withinSel.replaceChildren(...REPEAT_WITHIN[period]
+      .map((n) => el('option', { value: String(n), ...(n === keep ? { selected: 'selected' } : {}) }, repeatWithinLabel(period, n))));
     atWrap.hidden = period === 'hourly';
     weekdayWrap.hidden = period !== 'weekly';
     domWrap.hidden = period !== 'monthly';
     syncSummary();
   }
-  function syncSummary() { summary.textContent = ctSummary(spec(), Number(runsInput.value) || 1); }
-
-  periodSel.addEventListener('change', syncWithin);
+  periodSel.addEventListener('change', syncPeriod);
   for (const node of [withinSel, atInput, weekdaySel, domInput, runsInput]) node.addEventListener('change', syncSummary);
   runsInput.addEventListener('input', syncSummary);
+
+  const node = el('div', { class: 'repeat-fields' },
+    el('label', {}, t('repeat.period'), periodSel),
+    el('label', {}, t('repeat.within'), withinSel),
+    el('div', { class: 'ct-two' }, atWrap, weekdayWrap, domWrap, showRuns ? runsWrap : null),
+    showSummary ? summary : null);
+  runsWrap.hidden = !showRuns;
+  syncPeriod();
+  return { node, spec: readSpec, runs: readRuns, sync: syncPeriod };
+}
+
+// The dialog. `what` names what is being repeated (it is in the title), and
+// `onSave(spec, runs)` does the saving — it returns the created package, which
+// this reports back through `onSaved`.
+function openRepeatModal({ what, onSave, onSaved, showRuns = true }) {
+  const card = $('#modal-card');
+  const fields = recurrenceFields({ showRuns });
+  const err = el('p', { class: 'error' });
+  const saveBtn = el('button', { type: 'button' }, t('repeat.save'));
 
   saveBtn.addEventListener('click', async () => {
     err.textContent = '';
     saveBtn.disabled = true;
-    const runs = Math.max(1, Number(runsInput.value) || 1);
+    const spec = fields.spec();
+    const runs = fields.runs();
     try {
-      const pkg = await api('/api/connection-test/schedule', {
-        method: 'POST',
-        body: { agentId, host, checks, runs, recurrence: spec() },
-      });
+      const pkg = await onSave(spec, runs);
       closeModal();
-      if (onSaved) onSaved(pkg, ctSummary(spec(), runs));
+      if (onSaved) onSaved(pkg, repeatSummary(spec, runs));
     } catch (e) { err.textContent = errText(e); saveBtn.disabled = false; }
   });
 
   card.replaceChildren(
-    el('h3', {}, t('ct.repeat.title')),
+    el('h3', {}, t('repeat.title', { what })),
     el('div', { class: 'form-grid' },
-      el('label', {}, t('ct.repeat.period'), periodSel),
-      el('label', {}, t('ct.repeat.within'), withinSel),
-      el('div', { class: 'ct-two' }, atWrap, weekdayWrap, domWrap, el('label', {}, t('ct.repeat.runs'), runsInput)),
-      summary,
-      el('p', { class: 'muted small' }, t('ct.repeat.hint')),
+      fields.node,
+      el('p', { class: 'muted small' }, t('repeat.hint')),
       err,
       el('div', { class: 'form-actions' },
-        el('button', { type: 'button', class: 'ghost', onclick: closeModal }, t('ct.repeat.cancel')),
+        el('button', { type: 'button', class: 'ghost', onclick: closeModal }, t('repeat.cancel')),
         saveBtn)));
-  syncWithin();
   $('#modal').classList.remove('hidden');
+}
+
+// A chip beside the buttons, so the screen says what was just scheduled and
+// where it now lives. It never offers to delete: the package is real, and
+// removing it belongs on the tab that owns it, not behind an × that would only
+// clear the chip.
+function repeatChip(chip, pkg, summary) {
+  chip.hidden = false;
+  chip.replaceChildren('↻ ', summary, ' · ',
+    el('button', { class: 'link', title: t('repeat.openPackage'), onclick: () => gotoView('tests') }, pkg.name));
+  toast(t('repeat.saved', { name: pkg.name }));
+}
+
+// Saves a package for one agent — the shape every Repeat on a probe screen
+// writes: this agent, this payload, repeated `runs` times per scheduled run.
+function saveRepeatPackage({ name, agentId, item, spec, runs }) {
+  return api('/api/test-packages', {
+    method: 'POST',
+    body: {
+      name,
+      enabled: true,
+      schedule_spec: spec,
+      targets: { mode: 'agents', agentIds: [Number(agentId)] },
+      items: Array.from({ length: runs }, () => item),
+    },
+  });
 }
 
 async function probeRunnerView() {
@@ -8521,8 +8738,23 @@ async function probeRunnerView() {
   const curl = curlInputs();
   const tx = transactionStepsEditor([]);
   const txWrap = el('div', { class: 'tx-wrap' }, el('div', { class: 'muted small' }, 'Steps run in order; a step can extract a value (regex) for later steps as {{name}}. Stops at the first failure.'), tx.node);
-  const runBtn = el('button', { class: 'small' }, 'Run probe');
-  const status = el('div', { class: 'muted' });
+  // Same three controls as the Connection test tab, for the same reason: one
+  // sample proves nothing about a fault that comes and goes, a run that cannot
+  // be called off is a run you wait out, and a probe worth running twice is
+  // usually worth running on a schedule.
+  const roundsInput = el('input', { type: 'number', min: '1', max: '20', value: '1', class: 'run-count' });
+  const runBtn = el('button', { class: 'small run-btn' });
+  const stopBtn = el('button', { class: 'small ghost', disabled: 'disabled' }, t('probe.stop'));
+  const repeatBtn = canWrite() ? el('button', { class: 'small ghost' }, t('repeat.button')) : null;
+  const repeatChipEl = el('span', { class: 'ct-chip', hidden: true });
+  const status = el('div', { class: 'muted probe-status' });
+  function syncRunLabel() {
+    const n = Math.max(1, Math.min(20, Number(roundsInput.value) || 1));
+    runBtn.replaceChildren(t('probe.rounds.prefix'), ' ', roundsInput, ' ', plural('probe.rounds', n, { n: String(n) }));
+  }
+  roundsInput.addEventListener('input', syncRunLabel);
+  roundsInput.addEventListener('click', (e) => e.stopPropagation());
+  syncRunLabel();
   // Why an operator would reach for the TCP trace over the plain one.
   const traceHint = el('div', { class: 'muted small', style: 'flex-basis:100%' }, t('probe.tcptracerouteHint'));
   // Both trace types take a per-hop probe count ("queries") rather than a count;
@@ -8562,7 +8794,7 @@ async function probeRunnerView() {
     portWrap,
     countWrap,
     curl.wrap,
-    runBtn, status, traceHint, mtuHint), mtuWrap, txWrap);
+    runBtn, stopBtn, repeatBtn, repeatChipEl, status, traceHint, mtuHint), mtuWrap, txWrap);
 
   const latestHost = el('div', { class: 'probe-latest' });
   // The refresh loop replaces the whole tbody, which would close an open row
@@ -8575,39 +8807,102 @@ async function probeRunnerView() {
     el('summary', {}, 'Latest results ', el('span', { class: 'muted' }, '· most recent per target')),
     el('div', { class: 'muted small' }, t('probe.row.rowHelp')), pauseNote, latestHost));
 
-  async function run() {
-    const id = agentSel.value;
-    let body;
+  // The form as a probe spec, or the reason it is not one yet. Read by Run and
+  // by Repeat, so a scheduled probe is the same probe the button would send.
+  function collectProbe() {
     if (typeSel.value === 'transaction') {
       const steps = tx.collect();
-      if (!steps.length) { status.className = 'error'; status.textContent = 'Add at least one step with a URL.'; return; }
-      body = { type: 'transaction', steps };
-    } else {
-      const host = target.value.trim();
-      if (!host) { status.className = 'error'; status.textContent = 'Enter a target.'; return; }
-      body = { type: typeSel.value, host };
-      if (typeSel.value === 'tcp' || typeSel.value === 'tcptraceroute') body.port = Number(portInput.value);
-      if (typeSel.value === 'curl') curl.apply(body);
-      if (typeSel.value === 'path_mtu') {
-        if (minSize.value) body.min_size = Number(minSize.value);
-        if (maxSize.value) body.max_size = Number(maxSize.value);
-        body.per_hop = perHop.checked;
-        if (mssPort.value) body.tcp_port = Number(mssPort.value);
-      }
-      if (isTraceType() && countInput.value) body.queries = Number(countInput.value);
-      else if ((typeSel.value === 'ping' || typeSel.value === 'tcp') && countInput.value) body.count = Number(countInput.value);
+      if (!steps.length) return { error: 'Add at least one step with a URL.' };
+      return { body: { type: 'transaction', steps } };
     }
-    status.className = 'muted'; status.textContent = 'Sending…'; runBtn.disabled = true;
-    try {
-      await api(`/agents/${id}/probe`, { method: 'POST', body });
-      status.textContent = 'Sent — the agent is running it now; results will arrive in a moment.';
-      setTimeout(refreshLatest, 2500); setTimeout(refreshLatest, 6000);
-    } catch (e) {
-      status.className = 'error';
-      status.textContent = e.status === 409 ? 'The agent is not connected right now.' : errText(e);
-    } finally { runBtn.disabled = false; }
+    const host = target.value.trim();
+    if (!host) return { error: 'Enter a target.' };
+    const body = { type: typeSel.value, host };
+    if (typeSel.value === 'tcp' || typeSel.value === 'tcptraceroute') body.port = Number(portInput.value);
+    if (typeSel.value === 'curl') curl.apply(body);
+    if (typeSel.value === 'path_mtu') {
+      if (minSize.value) body.min_size = Number(minSize.value);
+      if (maxSize.value) body.max_size = Number(maxSize.value);
+      body.per_hop = perHop.checked;
+      if (mssPort.value) body.tcp_port = Number(mssPort.value);
+    }
+    if (isTraceType() && countInput.value) body.queries = Number(countInput.value);
+    else if ((typeSel.value === 'ping' || typeSel.value === 'tcp') && countInput.value) body.count = Number(countInput.value);
+    return { body };
   }
-  runBtn.addEventListener('click', run);
+
+  // Rounds are spaced rather than fired back to back: N probes queued in the
+  // same instant measure the same instant, which is not what "run it 5 times"
+  // is asking for.
+  const ROUND_GAP_MS = 3000;
+  let probeStopRequested = false;
+  let probeRunning = false;
+
+  async function run() {
+    const id = agentSel.value;
+    const { body, error } = collectProbe();
+    if (error) { status.className = 'error probe-status'; status.textContent = error; return; }
+    const rounds = Math.max(1, Math.min(20, Number(roundsInput.value) || 1));
+    probeRunning = true; probeStopRequested = false;
+    runBtn.disabled = true; stopBtn.disabled = false;
+    status.className = 'muted probe-status';
+    let done = 0;
+    for (let round = 1; round <= rounds && !probeStopRequested; round += 1) {
+      status.textContent = rounds === 1
+        ? 'Sending…'
+        : t('probe.round', { round: String(round), rounds: String(rounds), what: `${body.type} ${body.host || ''}`.trim() });
+      try {
+        await api(`/agents/${id}/probe`, { method: 'POST', body });
+      } catch (e) {
+        status.className = 'error probe-status';
+        status.textContent = e.status === 409 ? 'The agent is not connected right now.' : errText(e);
+        break;
+      }
+      done = round;
+      setTimeout(refreshLatest, 2500); setTimeout(refreshLatest, 6000);
+      if (round < rounds && !probeStopRequested) {
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise((r) => setTimeout(r, ROUND_GAP_MS));
+      }
+    }
+    probeRunning = false;
+    stopBtn.disabled = true;
+    runBtn.disabled = false;
+    if (probeStopRequested) { status.className = 'muted probe-status'; status.textContent = t('probe.stopped'); }
+    else if (done && status.className !== 'error') {
+      status.textContent = done === 1
+        ? 'Sent — the agent is running it now; results will arrive in a moment.'
+        : t('probe.roundsDone', { rounds: String(done) });
+    }
+  }
+  runBtn.addEventListener('click', () => { if (!probeRunning) run(); });
+  stopBtn.addEventListener('click', () => {
+    probeStopRequested = true;
+    stopBtn.disabled = true;
+    status.className = 'muted probe-status';
+    status.textContent = t('probe.stopped');
+  });
+
+  // Repeat: the probe on screen, saved as a scheduled test package for this
+  // agent. Same dialog, same storage, same Test packages tab as everything else.
+  if (repeatBtn) {
+    repeatBtn.addEventListener('click', () => {
+      const { body, error } = collectProbe();
+      if (error) { status.className = 'error probe-status'; status.textContent = error; return; }
+      const what = t('repeat.what.probe', { type: body.type, target: body.host || '' });
+      openRepeatModal({
+        what,
+        onSave: (spec, runs) => saveRepeatPackage({
+          name: `${body.type} — ${body.host || 'transaction'}`.slice(0, 120),
+          agentId: agentSel.value,
+          item: { type: 'probe', probe: body },
+          spec,
+          runs,
+        }),
+        onSaved: (pkg, summary) => repeatChip(repeatChipEl, pkg, summary),
+      });
+    });
+  }
 
   async function refreshLatest() {
     const id = agentSel.value;
@@ -15751,7 +16046,7 @@ async function nis2Print(path) {
 // the Report Generator (a flexible, selector-driven custom report builder).
 views.reporting = async () => {
   const root = el('div', { class: 'nis2' });
-  const sections = [['nis2', 'NIS2'], ['generator', 'Report Generator']];
+  const sections = [['nis2', 'NIS2'], ['generator', 'Report Generator'], ['schedules', t('rs.tab')]];
   // Audit is RBAC-gated: only admins may see who did what on the server.
   if (role === 'admin') sections.push(['audit', 'Audit']);
   // Guard against a stale section the current user may no longer access.
@@ -15768,8 +16063,9 @@ views.reporting = async () => {
   try {
     body.replaceChildren(
       reportingState.section === 'generator' ? await reportGenerator()
-        : reportingState.section === 'audit' ? await auditModule()
-          : await nis2Module());
+        : reportingState.section === 'schedules' ? await reportSchedulesPanel()
+          : reportingState.section === 'audit' ? await auditModule()
+            : await nis2Module());
   } catch (err) { body.replaceChildren(el('div', { class: 'empty error' }, err.message)); }
   return root;
 };
@@ -17337,3 +17633,158 @@ $('#modal').addEventListener('click', (e) => { if (e.target.id === 'modal') clos
 installModalA11y(); // focus management + trap + Escape for every modal flow
 
 render();
+
+// ---- Scheduled reports ----------------------------------------------------
+// The exports answer a question somebody asked. This answers the recurring
+// obligation the same two reports usually serve — the monthly SLA figure for a
+// customer, the weekly outage list for a service review — by sending it on its
+// own. Storage and the job are src/services/reportScheduler.js; the schedule
+// itself is the same recurrence the test packages use, edited in the same
+// fields, so "the 1st at 06:00" means one thing in this product.
+const RS_REPORTS = ['availability', 'probe_outages'];
+const RS_FORMATS = ['csv', 'html'];
+const RS_SEVERITIES = ['info', 'warning', 'critical'];
+
+async function reportSchedulesPanel() {
+  const wrap = el('div', { class: 'rs' });
+  wrap.append(el('p', { class: 'muted nis2-note' }, t('rs.lead')));
+
+  const [schedules, locations] = await Promise.all([
+    api('/api/report-schedules'),
+    api('/locations').catch(() => []),
+  ]);
+
+  if (role === 'admin') {
+    wrap.append(el('div', { class: 'form-actions' },
+      el('button', { class: 'small', onclick: () => editReportSchedule(null, locations) }, t('rs.new'))));
+  }
+
+  if (!schedules.length) {
+    wrap.append(el('div', { class: 'empty' }, t('rs.none')));
+    return wrap;
+  }
+
+  const head = ['rs.col.name', 'rs.col.report', 'rs.col.window', 'rs.col.recipients', 'rs.col.schedule', 'rs.col.lastRun', ''];
+  const tbody = el('tbody', {}, ...schedules.map((s) => reportScheduleRow(s, locations)));
+  wrap.append(el('table', { class: 'tests-table rs-table' },
+    el('thead', {}, el('tr', {}, ...head.map((k) => el('th', {}, k ? t(k) : '')))),
+    tbody));
+  return wrap;
+}
+
+function reportScheduleRow(s, locations) {
+  const actions = el('div', { class: 'row-actions' },
+    canWrite() ? el('button', { class: 'small', onclick: (e) => sendReportScheduleNow(s, e.target) }, t('rs.sendNow')) : null,
+    role === 'admin' ? el('button', { class: 'small ghost', onclick: () => editReportSchedule(s, locations) }, t('rs.edit')) : null,
+    role === 'admin' ? el('button', { class: 'small danger', onclick: () => deleteReportSchedule(s) }, t('rs.delete')) : null);
+  return el('tr', {},
+    el('td', {}, el('div', {}, s.name),
+      s.enabled ? null : el('span', { class: 'badge neutral' }, t('rs.disabled'))),
+    el('td', {}, t(`rs.report.${s.report}`), el('div', { class: 'muted small' }, t(`rs.format.${s.format}`))),
+    el('td', {}, t('rs.days', { n: String(s.window_days) })),
+    el('td', { class: 'muted small' }, (s.recipients || []).join(', ')),
+    el('td', {}, repeatSummary(s.schedule_spec, 1).split(' · ').slice(0, 2).join(' · ')),
+    // What happened last time, in the words the job recorded — a schedule that
+    // has been failing for three weeks must not look healthy here.
+    el('td', { class: `muted small${/^failed/.test(s.last_run_status || '') ? ' error' : ''}` },
+      s.last_run_at ? `${fmtDate(s.last_run_at)} · ${s.last_run_status || ''}` : t('rs.never')),
+    el('td', {}, actions));
+}
+
+async function sendReportScheduleNow(s, btn) {
+  if (btn) btn.disabled = true;
+  try {
+    const r = await api(`/api/report-schedules/${s.id}/send-now`, { method: 'POST' });
+    toast(t('rs.sent', { detail: r.detail }));
+  } catch (err) {
+    // A mail server nobody configured answers 409 with the reason — show it
+    // rather than a generic failure.
+    toast(t('rs.sendFailed', { detail: errText(err) }), true);
+  } finally {
+    if (btn) btn.disabled = false;
+    render();
+  }
+}
+
+async function deleteReportSchedule(s) {
+  if (!confirm(t('rs.confirmDelete', { name: s.name }))) return;
+  try { await api(`/api/report-schedules/${s.id}`, { method: 'DELETE' }); toast(t('rs.deleted')); render(); }
+  catch (err) { toast(errText(err), true); }
+}
+
+function editReportSchedule(schedule, locations) {
+  const card = $('#modal-card');
+  const isEdit = !!schedule;
+  const data = schedule || {
+    name: '', report: 'availability', format: 'csv', window_days: 7,
+    params: {}, recipients: [], schedule_spec: null, enabled: true,
+  };
+
+  const nameInput = el('input', { type: 'text', value: data.name, placeholder: 'Monthly SLA' });
+  const reportSel = el('select', {}, ...RS_REPORTS.map((r) => el('option', { value: r, ...(data.report === r ? { selected: 'selected' } : {}) }, t(`rs.report.${r}`))));
+  const formatSel = el('select', {}, ...RS_FORMATS.map((f) => el('option', { value: f, ...(data.format === f ? { selected: 'selected' } : {}) }, t(`rs.format.${f}`))));
+  const windowInput = el('input', { type: 'number', min: '1', max: '400', value: String(data.window_days || 7) });
+  const recipientsInput = el('textarea', { rows: '3', placeholder: 'ops@acme.dk' }, (data.recipients || []).join('\n'));
+  const locationSel = el('select', {},
+    el('option', { value: '' }, t('rs.location.all')),
+    ...locations.map((l) => el('option', { value: String(l.id), ...(Number(data.params && data.params.locationId) === l.id ? { selected: 'selected' } : {}) }, l.name)));
+  const severitySel = el('select', {},
+    el('option', { value: '' }, t('rs.severity.all')),
+    ...RS_SEVERITIES.map((sv) => el('option', { value: sv, ...(data.params && data.params.severity === sv ? { selected: 'selected' } : {}) }, sv)));
+  const severityWrap = el('label', {}, t('rs.severity'), severitySel);
+  const enabledInput = el('input', { type: 'checkbox', ...(data.enabled ? { checked: 'checked' } : {}) });
+  const recurrence = recurrenceFields({ spec: data.schedule_spec, showRuns: false });
+  const err = el('p', { class: 'error' });
+  const saveBtn = el('button', { type: 'button' }, t('rs.save'));
+
+  // Severity only exists on the outage report; hiding it is not cosmetic — a
+  // filter that silently applies to a report without that column is a schedule
+  // whose output nobody can explain.
+  const syncReport = () => { severityWrap.hidden = reportSel.value !== 'probe_outages'; };
+  reportSel.addEventListener('change', syncReport);
+  syncReport();
+
+  saveBtn.addEventListener('click', async () => {
+    err.textContent = '';
+    const recipients = recipientsInput.value.split(/[\n,;]+/).map((x) => x.trim()).filter(Boolean);
+    const params = {};
+    if (locationSel.value) params.location_id = Number(locationSel.value);
+    if (reportSel.value === 'probe_outages' && severitySel.value) params.severity = severitySel.value;
+    const body = {
+      name: nameInput.value.trim(),
+      report: reportSel.value,
+      format: formatSel.value,
+      window_days: Number(windowInput.value) || 7,
+      params,
+      recipients,
+      schedule_spec: recurrence.spec(),
+      enabled: enabledInput.checked,
+    };
+    saveBtn.disabled = true;
+    try {
+      if (isEdit) await api(`/api/report-schedules/${schedule.id}`, { method: 'PUT', body });
+      else await api('/api/report-schedules', { method: 'POST', body });
+      toast(t('rs.saved'));
+      closeModal();
+      render();
+    } catch (e) { err.textContent = errText(e); saveBtn.disabled = false; }
+  });
+
+  card.replaceChildren(
+    el('h3', {}, isEdit ? t('rs.edit') : t('rs.new')),
+    el('div', { class: 'form-grid' },
+      el('label', {}, t('rs.name'), nameInput),
+      el('label', {}, t('rs.reportLabel'), reportSel),
+      el('label', {}, t('rs.format'), formatSel),
+      el('label', {}, t('rs.window'), windowInput, el('span', { class: 'field-hint' }, t('rs.windowHint'))),
+      el('label', {}, t('rs.location'), locationSel),
+      severityWrap,
+      el('label', {}, t('rs.recipients'), recipientsInput, el('span', { class: 'field-hint' }, t('rs.recipientsHint'))),
+      recurrence.node,
+      el('label', { class: 'inline' }, enabledInput, ' ', t('rs.enabled')),
+      err,
+      el('div', { class: 'form-actions' },
+        el('button', { type: 'button', class: 'ghost', onclick: closeModal }, t('rs.cancel')),
+        saveBtn)));
+  $('#modal').classList.remove('hidden');
+}

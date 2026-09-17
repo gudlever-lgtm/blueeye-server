@@ -2630,3 +2630,16 @@ button.ghost.small:has(> .icon-glyph) {
 }
 .ct-two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 @media (max-width: 560px) { .ct-two { grid-template-columns: 1fr; } }
+
+/* ---- Repeat: the shared recurrence editor ---------------------------------
+   Used by the Connection test, a single probe, the speed test, a diagnosis plan
+   and the test-package editor — one set of fields, so a schedule looks the same
+   wherever it is set. */
+.repeat-fields { display: grid; gap: 14px; }
+.pkg-recurrence {
+  border: 1px solid var(--hairline); border-radius: var(--radius-sm);
+  padding: 12px; background: var(--panel-2);
+}
+.diag-test input[type="checkbox"] { accent-color: var(--accent); margin-right: 8px; vertical-align: middle; }
+.diag-select { margin: 8px 0 2px; }
+.diag-actions .ct-chip { margin-left: 4px; }

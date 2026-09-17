@@ -252,7 +252,7 @@ test('Path MTU is offered in the probe form and posts the size window', async (t
 
   const target = [...ctx.doc.querySelectorAll('.probes input[type="text"]')][0];
   target.value = '10.20.30.40';
-  [...ctx.doc.querySelectorAll('.probes button')].find((b) => /run probe/i.test(b.textContent)).click();
+  ctx.doc.querySelector('.probes .run-btn').click();
   await tick(150);
 
   const post = ctx.calls.find((c) => c.method === 'POST' && c.path === '/agents/9/probe');

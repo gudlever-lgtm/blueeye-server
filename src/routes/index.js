@@ -58,6 +58,7 @@ const { publishSignedReleaseFromSource } = require('../enroll/publishSignedRelea
 const { createEnrollCommandRouter } = require('./enrollCommand');
 const { createTestPackagesRouter } = require('./testPackages');
 const { createConnectionTestRouter } = require('./connectionTest');
+const { createReportSchedulesRouter } = require('./reportSchedules');
 const { createTransactionsRouter } = require('./transactions');
 const { createLogsRouter } = require('./logs');
 const { createSpeedtestRouter, createSpeedtestReadRouter } = require('./speedtest');
@@ -107,6 +108,8 @@ function createApiRouter({
   resultsRepo,
   probeResultsRepo,
   probeOutagesRepo,
+  reportSchedulesRepo,
+  reportScheduler,
   eventCasesRepo,
   eventNotesRepo = null,
   eventClustersRepo,
@@ -358,6 +361,13 @@ function createApiRouter({
   // on the Overview page; fleet health itself comes from /api/fleet above.
   router.use('/api/dashboard', createDashboardRouter({ probeOutagesRepo, eventCasesRepo, findingStore, featureGate, planService }));
   if (probeOutagesRepo && probeResultsRepo) router.use('/api/reports', createReportsRouter({ probeResultsRepo, probeOutagesRepo, locationsRepo, featureGate, planService, auditLogger }));
+  // Reports that arrive on their own: the same two reports, over a relative
+  // window, mailed on the recurrence from migration 099.
+  if (reportSchedulesRepo) {
+    router.use('/api/report-schedules', createReportSchedulesRouter({
+      repo: reportSchedulesRepo, scheduler: reportScheduler, locationsRepo, auditLogger,
+    }));
+  }
   // EVENTS (stored in `event_cases`) — the operator-facing unit, wrapping the
   // findings that evidence it. Distinct from the `probe_outages` reported by
   // /api/reports above, and distinct from an ITSM *incident*, which is what a

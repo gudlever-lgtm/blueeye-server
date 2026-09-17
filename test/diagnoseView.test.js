@@ -194,7 +194,7 @@ test('an operator can run the plan and read a confirmed cause with its evidence 
   await openDiagnose(doc);
   await ask(doc);
 
-  const runBtn = byText(doc, '.diag-tests button', /Run all|Kør alle/);
+  const runBtn = byText(doc, '.diag-tests button', /^Run |^Kør /);
   assert.ok(runBtn, 'no way to run the plan');
   runBtn.click();
   await tick(300);
@@ -228,7 +228,7 @@ test('when the tests have not reported, the cause stays open and the screen says
   const { doc, errors } = await boot(t, { app: appWith({ probeRows: [] }) });
   await openDiagnose(doc);
   await ask(doc);
-  byText(doc, '.diag-tests button', /Run all|Kør alle/).click();
+  byText(doc, '.diag-tests button', /^Run |^Kør /).click();
   await tick(300);
   byText(doc, '.diag-tests button', /Evaluate|Vurdér/).click();
   await tick(400);
@@ -243,13 +243,64 @@ test('when the tests have not reported, the cause stays open and the screen says
   assert.deepEqual(errors, []);
 });
 
+test('the plan can be run as a subset: clearing a test leaves it out of the dispatch', async (t) => {
+  const hub = { sent: [], sendCommand: (id, command) => { hub.sent.push({ id, command }); return 1; } };
+  const { doc, window } = await boot(t, { app: makeApp({
+    agentsRepo: makeAgentsRepo({ findAll: async () => AGENTS, findById: async (id) => AGENTS.find((a) => a.id === Number(id)) || null }),
+    agentCommander: hub,
+    diagnoseSessionsRepo: makeDiagnoseSessionsRepo({ probeRows: [] }),
+  }) });
+  await openDiagnose(doc);
+  await ask(doc);
+  // The row ids arrive a moment after the plan renders — the checkboxes come
+  // with them.
+  await tick(300);
+  const boxes = [...doc.querySelectorAll('.diag-test input[type=checkbox]')];
+  assert.ok(boxes.length >= 2, `only ${boxes.length} selectable tests`);
+  assert.ok(boxes.every((b) => b.checked), 'the plan did not start fully selected');
+
+  boxes[0].checked = false;
+  boxes[0].dispatchEvent(new window.Event('change', { bubbles: true }));
+  await tick(50);
+  assert.match(doc.querySelector('.diag-tests .diag-select').textContent, /\d+ of \d+ selected|\d+ af \d+ valgt/);
+
+  byText(doc, '.diag-tests button', /^Run |^Kør /).click();
+  await tick(400);
+  assert.equal(hub.sent.length, boxes.length - 1, `dispatched ${hub.sent.length} of ${boxes.length - 1} selected`);
+});
+
+test('Repeat on a plan writes one scheduled package per agent', async (t) => {
+  const packages = [];
+  const app = makeApp({
+    agentsRepo: makeAgentsRepo({ findAll: async () => AGENTS, findById: async (id) => AGENTS.find((a) => a.id === Number(id)) || null }),
+    agentCommander: { sendCommand: () => 1 },
+    diagnoseSessionsRepo: makeDiagnoseSessionsRepo({ probeRows: [] }),
+    testPackagesRepo: require('../test-support/fakes').makeTestPackagesRepo({
+      create: async (p) => { const row = { id: packages.length + 1, ...p }; packages.push(row); return row; },
+    }),
+  });
+  const { doc } = await boot(t, { app });
+  await openDiagnose(doc);
+  await ask(doc);
+  await tick(300);
+  byText(doc, '.diag-tests button', /^Repeat$|^Gentag$/).click();
+  await tick(150);
+  assert.equal(doc.querySelector('#modal').classList.contains('hidden'), false, 'the repeat dialog did not open');
+  byText(doc, '#modal-card .form-actions button', /Save repeat|Gem gentagelse/).click();
+  await tick(500);
+  assert.equal(packages.length, 1, `expected one package per agent, got ${packages.length}`);
+  assert.deepEqual(packages[0].targets.agentIds, [1]);
+  assert.equal(packages[0].schedule_spec.period, 'daily');
+  assert.ok(packages[0].items.length >= 2, 'the plan\'s tests did not make it into the package');
+});
+
 test('a viewer sees the plan and is not offered the buttons that touch the network', async (t) => {
   const { doc, errors } = await boot(t, { role: 'viewer' });
   await openDiagnose(doc);
   await ask(doc);
   assert.ok(doc.querySelector('.diag-causes'), 'a viewer must still get the plan');
   assert.ok(doc.querySelectorAll('.diag-test').length > 0, 'a viewer must still see what to run');
-  assert.equal(byText(doc, '.diag-tests button', /Run all|Kør alle/), undefined);
+  assert.equal(byText(doc, '.diag-tests button', /^Run |^Kør /), undefined);
   assert.equal(byText(doc, '.diag-tests button', /Evaluate|Vurdér/), undefined);
   assert.deepEqual(errors, []);
 });

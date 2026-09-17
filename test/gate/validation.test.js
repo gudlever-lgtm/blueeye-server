@@ -44,6 +44,10 @@ const ACCEPTS_EMPTY = new Set([
   // A chart query is optional in every field: no query at all means "this week,
   // everything, in my time zone", which is the view the History tab opens on.
   'validateRunRequest', 'validateSettingsPatch', 'validateStatsQuery',
+  // Running a diagnosis plan with no body is "all of its tests", which is what
+  // the button did before it could select a subset. An empty body is the
+  // normal case, not a mistake.
+  'validateDiagnoseRun',
 ]);
 
 test('every exported validator survives garbage input and rejects an empty object where it has required fields', () => {
@@ -109,6 +113,15 @@ test('diagnoseValidation: a description is bounded, and a target can never be re
     assert.ok(errorsOf(validateDiagnoseRequest({ description: 'loss', agentId: bad })).includes('agentId'), String(bad));
   }
   assert.ok(errorsOf(validateDiagnoseRequest({ description: 'loss', agentId: 3, peerAgentId: 3 })).includes('peerAgentId'));
+
+  // Running a subset of the plan: ids only, bounded, and an empty body still
+  // means the whole plan.
+  const { validateDiagnoseRun, MAX_RUN_TESTS } = require('../../src/validation/diagnoseValidation');
+  assert.deepEqual(validateDiagnoseRun({}).value, {});
+  assert.deepEqual(validateDiagnoseRun({ testIds: [3, 1, 3] }).value.testIds, [3, 1]);
+  for (const bad of [[], 'all', {}, [0], [-1], [1.5], ['abc'], Array.from({ length: MAX_RUN_TESTS + 1 }, (_, i) => i + 1)]) {
+    assert.ok(errorsOf(validateDiagnoseRun({ testIds: bad })).includes('testIds'), JSON.stringify(bad));
+  }
 });
 
 test('diagnose rules: the expression evaluator accepts the rule language and nothing else', () => {
@@ -306,6 +319,81 @@ test('testPackageValidation: schedule floor/ceiling, item cap, target modes', ()
   assert.ok(rejected(v.validateTestPackageInput({ ...base, items: [] })));
   assert.ok(rejected(v.validateTestPackageInput({ ...base, items: Array.from({ length: v.MAX_ITEMS + 1 }, () => base.items[0]) })));
   assert.ok(rejected(v.validateTestPackageInput({ ...base, items: [{ type: 'shell', cmd: 'id' }] })));
+  // A calendar recurrence is the other kind of schedule, and it takes over from
+  // the interval rather than sitting beside it.
+  const daily = { period: 'daily', every: 6, at: '08:00' };
+  const withSpec = v.validateTestPackageInput({ ...base, schedule_ms: 60_000, schedule_spec: daily });
+  assert.deepEqual(withSpec.value.schedule_spec, daily);
+  assert.equal(withSpec.value.schedule_ms, 0, 'a spec must not leave an interval running beside it');
+  assert.ok(rejected(v.validateTestPackageInput({ ...base, schedule_spec: { period: 'fortnightly' } })));
+});
+
+test('connectionTestValidation: the target is a probe target, the checks are a closed set, a run is bounded', () => {
+  const { validateConnectionTestRun, validateConnectionTestSchedule, MAX_ROUNDS } = require('../../src/validation/connectionTestValidation');
+  const { CHECK_IDS } = require('../../src/connectionTest/checks');
+  const { MAX_ITEMS } = require('../../src/validation/testPackageValidation');
+  assert.ok(MAX_ROUNDS <= 20);
+
+  const base = { agentId: 1, host: 'example.com', checks: ['ping'] };
+  assert.deepEqual(validateConnectionTestRun(base).errors, undefined);
+  // The host reaches an agent's argv, so it is held to the probe-target rule.
+  for (const bad of ['-rf', '--flood', 'a b', 'a;rm -rf /', '$(whoami)', '`id`', 'a|b', 'x'.repeat(300), '', '   ']) {
+    assert.ok(errorsOf(validateConnectionTestRun({ ...base, host: bad })).includes('host'), bad);
+  }
+  for (const ok of ['10.0.0.1', 'mail.example.com', 'fe80::1']) {
+    assert.deepEqual(validateConnectionTestRun({ ...base, host: ok }).errors, undefined, ok);
+  }
+  // Checks are ids from the catalogue and nothing else — never a free string
+  // that could become a probe type.
+  assert.ok(errorsOf(validateConnectionTestRun({ ...base, checks: ['ping', 'shell'] })).includes('checks'));
+  assert.ok(errorsOf(validateConnectionTestRun({ ...base, checks: [] })).includes('checks'));
+  assert.ok(errorsOf(validateConnectionTestRun({ ...base, checks: 'ping' })).includes('checks'));
+  assert.deepEqual(validateConnectionTestRun({ ...base, checks: CHECK_IDS }).errors, undefined);
+  assert.ok(errorsOf(validateConnectionTestRun({ ...base, agentId: 0 })).includes('agentId'));
+
+  // A schedule adds a recurrence, and one scheduled run may not exceed what a
+  // test package can carry.
+  const rec = { period: 'daily', every: 6, at: '08:00' };
+  assert.deepEqual(validateConnectionTestSchedule({ ...base, recurrence: rec }).errors, undefined);
+  assert.ok(errorsOf(validateConnectionTestSchedule(base)).includes('recurrence'));
+  assert.ok(errorsOf(validateConnectionTestSchedule({ ...base, recurrence: { period: 'hourly', every: 999 } })).includes('recurrence'));
+  assert.ok(errorsOf(validateConnectionTestSchedule({ ...base, checks: CHECK_IDS.slice(0, 5), runs: MAX_ITEMS, recurrence: rec })).includes('runs'));
+  assert.ok(errorsOf(validateConnectionTestSchedule({ ...base, runs: 0, recurrence: rec })).includes('runs'));
+});
+
+test('recurrence: a schedule that cannot be parsed is never due, and none may burst the agents', () => {
+  const { validateRecurrence, nextRunAt, MIN_SPACING_MS } = require('../../src/schedule/recurrence');
+  assert.ok(MIN_SPACING_MS >= 5 * 60 * 1000);
+  for (const bad of [undefined, null, 'daily', 42, [], {}, { period: 'yearly' }, { period: 'hourly', every: 61 }]) {
+    assert.ok(rejected(validateRecurrence(bad)), JSON.stringify(bad));
+    assert.equal(nextRunAt(bad, Date.now()), null, JSON.stringify(bad));
+  }
+  const next = nextRunAt({ period: 'daily', every: 1, at: '08:00' }, Date.now());
+  assert.ok(next > Date.now(), 'the next run is always in the future');
+});
+
+test('reportScheduleValidation: a recipient list is addresses only, and the window is relative and bounded', () => {
+  const v = require('../../src/validation/reportScheduleValidation');
+  const { REPORT_IDS, FORMATS } = require('../../src/reports/definitions');
+  const base = { name: 'SLA', report: REPORT_IDS[0], recipients: ['ops@acme.dk'], schedule_spec: { period: 'monthly', every: 1, at: '06:00', dayOfMonth: 1 } };
+  assert.deepEqual(v.validateReportScheduleInput(base).errors, undefined);
+  assert.equal(v.validateReportScheduleInput(base).value.format, FORMATS[0], 'a format is defaulted, never guessed at send time');
+  assert.ok(rejected(v.validateReportScheduleInput({ ...base, report: 'everything' })));
+  assert.ok(rejected(v.validateReportScheduleInput({ ...base, format: 'pdf' })));
+  // The window is relative and resolved at fire time, so it is bounded here.
+  assert.ok(rejected(v.validateReportScheduleInput({ ...base, window_days: 0 })));
+  assert.ok(rejected(v.validateReportScheduleInput({ ...base, window_days: v.MAX_WINDOW_DAYS + 1 })));
+  // A recipient reaches an SMTP server. Anything that could carry a header with
+  // it, or that is not an address at all, is refused here.
+  for (const bad of ['', '   ', 'nobody', 'a@b', 'a@b.dk\nBcc: x@y.dk', 'a@b.dk\r\nSubject: x', 'a@b.dk, c@d.dk', '<a@b.dk>', 'a b@c.dk', `${'x'.repeat(250)}@b.dk`]) {
+    assert.ok(rejected(v.validateReportScheduleInput({ ...base, recipients: [bad] })), JSON.stringify(bad));
+  }
+  assert.ok(rejected(v.validateReportScheduleInput({ ...base, recipients: [] })));
+  assert.ok(rejected(v.validateReportScheduleInput({ ...base, recipients: Array.from({ length: v.MAX_RECIPIENTS + 1 }, (_, i) => `a${i}@b.dk`) })));
+  // The recurrence is the same one the test packages use, held to the same floor.
+  assert.ok(rejected(v.validateReportScheduleInput({ ...base, schedule_spec: { period: 'hourly', every: 999 } })));
+  assert.ok(rejected(v.validateReportScheduleInput({ ...base, params: { location_id: 'abc' } })));
+  assert.ok(rejected(v.validateReportScheduleInput({ ...base, report: 'probe_outages', params: { severity: 'apocalyptic' } })));
 });
 
 test('transactionValidation: type enum, name required, agent assignment is an id array', () => {

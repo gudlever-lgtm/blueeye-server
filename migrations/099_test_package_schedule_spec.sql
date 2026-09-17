@@ -1,0 +1,25 @@
+-- 099 — a test package can repeat on a CALENDAR, not just on an interval.
+--
+-- `schedule_ms` says "run every N milliseconds since the last run". That is all
+-- a fleet-wide throughput package ever needed, and it is two things short of
+-- what the Connection Test's Repeat dialog asks for: it cannot say a time of
+-- day ("daily at 08:00"), and it cannot reach past 24 hours at all, so weekly
+-- and monthly are inexpressible.
+--
+-- `schedule_spec` is the calendar half, stored beside the interval rather than
+-- replacing it — every existing package keeps working untouched:
+--
+--   { "period": "daily",   "every": 6, "at": "08:00" }
+--   { "period": "weekly",  "every": 1, "at": "07:30", "weekday": 1 }
+--   { "period": "monthly", "every": 2, "at": "06:00", "dayOfMonth": 1 }
+--
+-- `every` is the number of runs INSIDE one period, evenly spaced from the
+-- anchor. The maths is src/schedule/recurrence.js (pure, server-local time);
+-- the scheduler asks it for the next due instant instead of subtracting
+-- timestamps. A row has one or the other: setting a spec stores schedule_ms 0,
+-- so "which one is in charge" is never a question the scheduler has to answer.
+--
+-- Nullable and backward-compatible: a package with no spec is an interval
+-- package, exactly as before.
+ALTER TABLE test_packages
+  ADD COLUMN schedule_spec JSON NULL DEFAULT NULL AFTER schedule_ms;

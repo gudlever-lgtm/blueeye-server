@@ -418,6 +418,14 @@ function featureEnabled(name) {
 function t(key, params) {
   return (window.I18n && window.I18n.t) ? window.I18n.t(key, params) : String(key);
 }
+// Counted lines pick their own singular/plural form from `key.one` / `key.other`
+// — "1 test" and "3 tests" are different sentences, and a catalogue that only
+// carries the plural gets the singular wrong in every language.
+function plural(key, n, params) {
+  return (window.I18n && window.I18n.plural)
+    ? window.I18n.plural(key, n, params)
+    : t(key, { count: String(n), ...(params || {}) });
+}
 function relTime(value) {
   return (window.I18n && window.I18n.relativeTime) ? window.I18n.relativeTime(value) : String(value || '');
 }
@@ -1072,6 +1080,23 @@ const PAGE_INFO = {
       el('p', { class: 'muted' }, 'To run the same probes on a schedule across many agents, use ', viewLink('tests'), '; probe results also drive the health verdict on ', viewLink('fleet', 'Overview'), '. Metadata only: targets, timings and content verdicts — never packet or response contents.'),
     ],
   },
+  connectionTest: {
+    hero: 'One address, the whole battery: type an IP or a DNS name and run every check at once — resolution, ICMP, the ports, the path and the packet size — once, a number of times, or on a repeat.',
+    title: 'Connection test',
+    body: () => [
+      el('div', { class: 'callout' },
+        el('strong', {}, 'Probe · Connection test · Test package: '),
+        el('span', {}, 'A ', viewLink('probes', 'probe'), ' answers one question about one target. A connection test asks all of them at once, from one agent, against one address — the screen you reach for when somebody says “I cannot reach X”. A ', viewLink('tests', 'test package'), ' is the same thing saved: named, aimed at many agents, and repeating.')),
+      el('p', {}, 'Type the address, press Run, and each selected check is pushed to the agent in one request. The number in the button is how many ROUNDS to run: every selected check, that many times, one round after the other — useful when a fault comes and goes and a single sample proves nothing.'),
+      el('h4', {}, 'What gets run'),
+      el('p', {}, 'The arrow opens the list. Everything the agent can run is selected by default; clear what you do not want. Two rows are always disabled: ', el('strong', {}, 'reverse DNS'), ' and the ', el('strong', {}, 'TLS certificate'), ' check are catalogue entries the agent cannot run yet, and they are shown rather than hidden so the list says what a connection test will cover. A ', el('strong', {}, 'DNS lookup'), ' is disabled when the target is an IP address — there is nothing to resolve, and a green tick for a question nobody asked is worse than no row at all.'),
+      el('h4', {}, 'Stop'),
+      el('p', {}, 'Stop ends the run: no further rounds are sent. A check already handed to the agent finishes on the agent — nothing can call it back — so its result may still arrive a moment later.'),
+      el('h4', {}, 'Repeat'),
+      el('p', {}, 'Repeat saves the same test as a scheduled ', viewLink('tests', 'test package'), ': a period (hourly / daily / weekly / monthly), how often to repeat inside that period, when it starts, and how many times the battery runs per scheduled run. The dialog writes the schedule out as a sentence before you save it. Times are the server\u2019s clock. Edit or delete it afterwards on the Test packages tab — closing this page does not stop it.'),
+      el('p', { class: 'muted' }, 'Every check is an ordinary probe, so the full result — path map, per-hop measurement, history — opens on the Run-a-probe tab, and the same results drive the health verdict on ', viewLink('fleet', 'Overview'), ' and availability in ', viewLink('reporting', 'Reporting'), '. Metadata only: targets and timings, never packet contents.'),
+    ],
+  },
   flows: {
     hero: 'Inspect conversations: who talks to whom, on which ports, and who is scanning. Bidirectional mode splits ingress/egress; Map mode draws the traffic as colored directional arrows on a world map.',
     title: 'Flows — conversations, bidirectional inspector & traffic map',
@@ -1228,6 +1253,7 @@ function hero(viewKey) {
   // Probes & Tests is one view with two sub-tabs; show the matching help for each.
   let info = PAGE_INFO[viewKey];
   if (viewKey === 'probes' && probesTab === 'packages') info = PAGE_INFO.tests;
+  if (viewKey === 'probes' && probesTab === 'connection') info = PAGE_INFO.connectionTest;
   if (!info) return null;
   return el('div', { class: 'hero' },
     el('div', { class: 'hero-text' }, info.hero),
@@ -2056,7 +2082,7 @@ function testPackageRow(p, agents, locations) {
     el('td', {}, el('div', {}, p.name), p.created_by ? el('div', { class: 'muted' }, `by ${esc(String(p.created_by))}`) : null),
     el('td', {}, testItemsSummary(p.items)),
     el('td', {}, testTargetsSummary(p.targets, agents, locations)),
-    el('td', {}, testScheduleLabel(p.schedule_ms)),
+    el('td', {}, testScheduleLabel(p)),
     el('td', {}, el('span', { class: `badge ${p.enabled ? 'active' : 'neutral'}` }, p.enabled ? 'enabled' : 'disabled')),
     el('td', { class: 'muted' }, testLastRun(p)),
     el('td', {}, el('div', { class: 'row-actions' },
@@ -2091,10 +2117,15 @@ function testTargetsSummary(t, agents, locations) {
   return '–';
 }
 
-function testScheduleLabel(ms) {
+// A package carries an interval OR a calendar recurrence — the column says
+// which, in the same words the Repeat dialog used to save it.
+function testScheduleLabel(pkg) {
+  const p = (pkg && typeof pkg === 'object') ? pkg : { schedule_ms: pkg };
+  if (p.schedule_spec) return repeatSummary(p.schedule_spec, 1).split(' · ').slice(0, 2).join(' · ');
+  const ms = p.schedule_ms;
   const found = SCHEDULE_PRESETS.find(([v]) => Number(v) === Number(ms || 0));
   if (found) return found[1];
-  return ms ? `Every ${Math.round(ms / 1000)}s` : 'Manual only';
+  return ms ? `Every ${Math.round(ms / 1000)}s` : t('pkg.schedule.manual');
 }
 
 function testLastRun(p) {
@@ -2128,7 +2159,20 @@ function editTestPackage(pkg, agents, locations) {
 
   const nameInput = el('input', { type: 'text', value: data.name, placeholder: 'e.g. Daily reachability' });
   const enabledInput = el('input', { type: 'checkbox', ...(data.enabled ? { checked: 'checked' } : {}) });
-  const scheduleSel = el('select', {}, ...SCHEDULE_PRESETS.map(([v, l]) => el('option', { value: v, ...(Number(v) === Number(data.schedule_ms || 0) ? { selected: 'selected' } : {}) }, l)));
+  // Interval or calendar. Until migration 099 a package could only say "every N
+  // ms since the last run", which cannot express a time of day and cannot reach
+  // past 24 hours — so "daily at 08:00" and "Mondays" were not sayable here at
+  // all. Choosing the calendar option reveals the same recurrence editor the
+  // Repeat dialogs use, and stores a spec instead of an interval.
+  const hasSpec = !!(data.schedule_spec && data.schedule_spec.period);
+  const scheduleSel = el('select', {},
+    ...SCHEDULE_PRESETS.map(([v, l]) => el('option', { value: v, ...(!hasSpec && Number(v) === Number(data.schedule_ms || 0) ? { selected: 'selected' } : {}) }, l)),
+    el('option', { value: 'calendar', ...(hasSpec ? { selected: 'selected' } : {}) }, t('pkg.schedule.calendar')));
+  const recurrence = recurrenceFields({ spec: hasSpec ? data.schedule_spec : null, showRuns: false });
+  const recurrenceWrap = el('div', { class: 'pkg-recurrence' }, recurrence.node);
+  const syncSchedule = () => { recurrenceWrap.hidden = scheduleSel.value !== 'calendar'; };
+  scheduleSel.addEventListener('change', syncSchedule);
+  syncSchedule();
 
   const modeSel = el('select', {}, ...[['all', 'All agents'], ['agents', 'Specific agents'], ['location', 'By location']]
     .map(([v, l]) => el('option', { value: v, ...(data.targets.mode === v ? { selected: 'selected' } : {}) }, l)));
@@ -2229,7 +2273,15 @@ function editTestPackage(pkg, agents, locations) {
       if ((t === 'ping' || t === 'tcp') && c.count.value) probe.count = Number(c.count.value);
       return { type: 'probe', probe };
     });
-    return { name: nameInput.value.trim(), enabled: enabledInput.checked, schedule_ms: Number(scheduleSel.value), targets, items };
+    const calendar = scheduleSel.value === 'calendar';
+    return {
+      name: nameInput.value.trim(),
+      enabled: enabledInput.checked,
+      schedule_ms: calendar ? 0 : Number(scheduleSel.value),
+      schedule_spec: calendar ? recurrence.spec() : null,
+      targets,
+      items,
+    };
   }
 
   saveBtn.addEventListener('click', async () => {
@@ -2253,6 +2305,7 @@ function editTestPackage(pkg, agents, locations) {
     el('label', {}, 'Name', nameInput),
     el('label', { class: 'inline' }, enabledInput, ' Enabled'),
     el('label', {}, 'Schedule', scheduleSel),
+    recurrenceWrap,
     el('label', {}, 'Targets', modeSel),
     agentsWrap, locsWrap,
     el('div', { class: 'test-items' },
@@ -2302,7 +2355,22 @@ async function showSpeedtest(a) {
           setTimeout(load, 6000);
         } catch (err) { toast(err.message, true); runBtn.disabled = false; runBtn.textContent = 'Run speed test now'; }
       });
-      kids.push(el('div', { class: 'form-actions' }, runBtn));
+      // Repeat: the same speed test, on a schedule, as an ordinary test package.
+      // The dialog takes over this modal, so a save comes back here rather than
+      // leaving the operator on a closed dialog.
+      const repeatBtn = el('button', { class: 'small ghost' }, t('repeat.button'));
+      repeatBtn.addEventListener('click', () => openRepeatModal({
+        what: t('repeat.what.speedtest', { agent: a.display_name || a.hostname }),
+        onSave: (spec, runs) => saveRepeatPackage({
+          name: `Speed test — ${a.display_name || a.hostname}`.slice(0, 120),
+          agentId: a.id,
+          item: { type: 'speedtest' },
+          spec,
+          runs,
+        }),
+        onSaved: (pkg) => { toast(t('repeat.saved', { name: pkg.name })); showSpeedtest(a); },
+      }));
+      kids.push(el('div', { class: 'form-actions' }, runBtn, repeatBtn));
     }
     if (!rows.length) {
       kids.push(el('p', { class: 'muted' }, 'No speed-test results yet. Run one now, or add a "Speed test" item to a package on the Tests tab.'));
@@ -7324,24 +7392,146 @@ views.diagnose = async () => {
     if (!plan.tests.length || !plan.target) {
       testsCard.append(el('p', { class: 'muted' }, t('diag.tests.none')));
     } else {
-      for (const tst of plan.tests) {
+      // Which of the plan's tests to actually dispatch. A plan proposes what is
+      // worth measuring; the technician often already knows one of them is
+      // pointless here, and running it anyway costs an agent, a round trip and
+      // a line of noise in the evidence. Everything starts selected — the plan
+      // is the recommendation, not a menu.
+      //
+      // The checkboxes carry the STORED row ids, which the screen learns from
+      // GET /api/diagnose/:id. Those rows are inserted in plan order and read
+      // back ordered by id, so index pairing is exact; without the ids the
+      // server would have to be told "the third one", which is not something it
+      // could verify.
+      const rowIds = st.testRows ? st.testRows.map((r) => r.id) : [];
+      if (!st.testRows && role !== 'viewer') {
+        api(`/api/diagnose/${st.plan.sessionId}`)
+          .then((d) => { st.testRows = (d.session && d.session.tests) || []; renderPlan(); })
+          .catch(() => { st.testRows = []; });
+      }
+      // The selection is seeded the first time the ids actually arrive — the
+      // first render happens before the fetch lands, and seeding an empty set
+      // then would leave the plan permanently unselected.
+      if (!st.selectedTests || (!st.selectionSeeded && rowIds.length)) {
+        st.selectedTests = new Set(rowIds);
+        st.selectionSeeded = rowIds.length > 0;
+      }
+      const selectedTests = st.selectedTests;
+      const counter = el('span', { class: 'muted small' });
+      const syncCount = () => {
+        counter.textContent = t('diag.tests.selected', { n: String(selectedTests.size), total: String(rowIds.length || plan.tests.length) });
+      };
+
+      plan.tests.forEach((tst, i) => {
         const params = Object.entries(tst.params || {}).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(' ');
+        const rowId = rowIds[i];
+        const cb = rowId !== undefined && role !== 'viewer'
+          ? el('input', { type: 'checkbox', ...(selectedTests.has(rowId) ? { checked: 'checked' } : {}) })
+          : null;
+        if (cb) {
+          cb.addEventListener('change', () => {
+            if (cb.checked) selectedTests.add(rowId); else selectedTests.delete(rowId);
+            syncCount();
+          });
+        }
         testsCard.append(el('div', { class: 'diag-test' },
+          cb,
           el('code', {}, `${tst.probeType} ${tst.target}${params ? ` ${params}` : ''}`),
           tst.direction === 'reverse' ? el('span', { class: 'pill' }, '←') : null,
           el('div', { class: 'muted small' }, tst.why || ''),
           el('div', { class: 'muted small' }, t('diag.tests.askedBy', { causes: tst.askedBy.join(', ') }))));
-      }
+      });
       if (role !== 'viewer') {
-        const runBtn = el('button', { class: 'primary' }, t('diag.tests.runAll'));
+        syncCount();
+        testsCard.append(el('div', { class: 'muted small diag-select' }, t('diag.tests.select'), ' ', counter));
+
+        // Rounds + Stop, for the fault that is not there while you are looking
+        // at it: the same plan dispatched again and again until it reproduces.
+        const roundsInput = el('input', { type: 'number', min: '1', max: '20', value: '1', class: 'run-count' });
+        const runBtn = el('button', { class: 'primary run-btn' });
+        const stopBtn = el('button', { class: 'small ghost', disabled: 'disabled' }, t('probe.stop'));
+        const repeatBtn = el('button', { class: 'small ghost' }, t('diag.tests.repeat'));
+        const repeatChipEl = el('span', { class: 'ct-chip', hidden: true });
         const evalBtn = el('button', { class: 'small' }, t('diag.evaluate'));
         const runStatus = el('span', { class: 'muted' });
+        const syncRunLabel = () => {
+          const n = Math.max(1, Math.min(20, Number(roundsInput.value) || 1));
+          runBtn.replaceChildren(t('diag.tests.runSelected'), ' ', roundsInput, ' ', plural('probe.rounds', n, { n: String(n) }));
+        };
+        roundsInput.addEventListener('input', syncRunLabel);
+        roundsInput.addEventListener('click', (e) => e.stopPropagation());
+        syncRunLabel();
+
+        const ROUND_GAP_MS = 4000;
+        let stopRequested = false;
+        const selectedIds = () => [...selectedTests];
         runBtn.addEventListener('click', async () => {
-          runBtn.disabled = true; runStatus.textContent = t('diag.tests.running');
-          try {
-            const r = await api(`/api/diagnose/${st.plan.sessionId}/run`, { method: 'POST', body: {} });
-            runStatus.textContent = t('diag.tests.dispatched', { n: r.dispatched, total: r.total });
-          } catch (err) { runStatus.textContent = err.message; } finally { runBtn.disabled = false; }
+          const ids = selectedIds();
+          if (rowIds.length && !ids.length) { runStatus.textContent = t('diag.tests.noneSelected'); return; }
+          const rounds = Math.max(1, Math.min(20, Number(roundsInput.value) || 1));
+          stopRequested = false;
+          runBtn.disabled = true; stopBtn.disabled = false;
+          for (let round = 1; round <= rounds && !stopRequested; round += 1) {
+            runStatus.textContent = rounds === 1
+              ? t('diag.tests.running')
+              : t('diag.tests.round', { round: String(round), rounds: String(rounds) });
+            try {
+              // No ids yet (the fetch has not landed) means the whole plan,
+              // which is exactly what the button did before it could select.
+              const body = ids.length && rowIds.length ? { testIds: ids } : {};
+              // eslint-disable-next-line no-await-in-loop
+              const r = await api(`/api/diagnose/${st.plan.sessionId}/run`, { method: 'POST', body });
+              runStatus.textContent = t('diag.tests.dispatched', { n: r.dispatched, total: r.total });
+            } catch (err) { runStatus.textContent = err.message; break; }
+            if (round < rounds && !stopRequested) {
+              // eslint-disable-next-line no-await-in-loop
+              await new Promise((r) => setTimeout(r, ROUND_GAP_MS));
+            }
+          }
+          if (stopRequested) runStatus.textContent = t('diag.tests.stopped');
+          stopBtn.disabled = true; runBtn.disabled = false;
+        });
+        stopBtn.addEventListener('click', () => {
+          stopRequested = true;
+          stopBtn.disabled = true;
+          runStatus.textContent = t('diag.tests.stopped');
+        });
+
+        // Repeat: the selected tests on a schedule. A plan can span two agents
+        // (a reverse test runs from the far end), and a test package pushes
+        // every item to every target — so this writes ONE PACKAGE PER AGENT
+        // rather than one package that would run each test from the wrong end.
+        repeatBtn.addEventListener('click', () => {
+          const rows = (st.testRows || []).filter((r) => selectedTests.has(r.id) && r.agentId != null);
+          if (!rows.length) { runStatus.textContent = t('diag.tests.noneSelected'); return; }
+          const byAgent = new Map();
+          for (const r of rows) {
+            if (!byAgent.has(r.agentId)) byAgent.set(r.agentId, []);
+            byAgent.get(r.agentId).push({ type: 'probe', probe: { type: r.probeType, host: r.target, ...(r.params || {}) } });
+          }
+          openRepeatModal({
+            what: t('repeat.what.diagnose'),
+            onSave: async (spec, runs) => {
+              const made = [];
+              for (const [agentId, items] of byAgent) {
+                const repeated = [];
+                for (let i = 0; i < runs; i += 1) repeated.push(...items);
+                // eslint-disable-next-line no-await-in-loop
+                made.push(await api('/api/test-packages', {
+                  method: 'POST',
+                  body: {
+                    name: `Diagnosis #${st.plan.sessionId} — ${st.target || plan.target}`.slice(0, 120),
+                    enabled: true,
+                    schedule_spec: spec,
+                    targets: { mode: 'agents', agentIds: [Number(agentId)] },
+                    items: repeated,
+                  },
+                }));
+              }
+              return { name: made.map((m) => m.name).join(', '), packages: made };
+            },
+            onSaved: (pkg, summary) => repeatChip(repeatChipEl, pkg, summary),
+          });
         });
         evalBtn.addEventListener('click', async () => {
           evalBtn.disabled = true; runStatus.textContent = t('diag.evaluating');
@@ -7351,7 +7541,7 @@ views.diagnose = async () => {
             renderPlan();
           } catch (err) { runStatus.textContent = err.message; } finally { evalBtn.disabled = false; }
         });
-        testsCard.append(el('div', { class: 'diag-actions' }, runBtn, evalBtn, runStatus));
+        testsCard.append(el('div', { class: 'diag-actions' }, runBtn, stopBtn, repeatBtn, evalBtn, repeatChipEl, runStatus));
       }
     }
     out.append(testsCard);
@@ -8061,16 +8251,459 @@ views.interfaces = async () => {
 // (probeRunnerView) and reusable scheduled packages (testPackagesView). probesTab
 // persists the active sub-tab across re-renders; gotoView('tests') deep-links here
 // onto the packages tab (the old standalone Tests page).
-let probesTab = 'run'; // 'run' | 'packages'
+let probesTab = 'run'; // 'run' | 'connection' | 'packages'
 views.probes = async () => {
   const root = el('div');
   const tab = (key, label) => el('button', { class: `small ghost${probesTab === key ? ' active' : ''}`,
     onclick: () => { if (probesTab === key) return; if (key !== 'run') stopProbes(); probesTab = key; render(); } }, label);
   root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Probes & Tests'),
-    el('div', { class: 'subtabs' }, tab('run', 'Run a probe'), tab('packages', 'Test packages'))));
-  root.append(await (probesTab === 'packages' ? testPackagesView() : probeRunnerView()));
+    el('div', { class: 'subtabs' }, tab('run', 'Run a probe'), tab('connection', t('ct.tab')), tab('packages', 'Test packages'))));
+  const sub = probesTab === 'packages' ? testPackagesView
+    : (probesTab === 'connection' ? connectionTestView : probeRunnerView);
+  root.append(await sub());
   return root;
 };
+
+// ---- Connection test ------------------------------------------------------
+// One address, the whole battery. The Run-a-probe tab above asks one question
+// at a time; this asks all of them at once — type an IP or a DNS name, press
+// Run, and every selected check is pushed to the agent in one request.
+//
+// The catalogue is the SERVER's (GET /api/connection-test/checks): what exists,
+// what the agent can actually run, and what applies to this particular target
+// (a DNS lookup of 1.1.1.1 answers nothing). The screen renders what it is
+// served rather than keeping its own list, so a check offered here is always a
+// check the server can dispatch.
+//
+// Everything a run produces is an ordinary probe result, so the full detail —
+// path map, per-hop measurement, history — opens on the Run-a-probe tab and
+// feeds fleet health exactly as a hand-run probe does.
+const CT_MAX_ROUNDS = 20;
+// How long the agent is given to report back, and how often we look. A probe
+// round-trips in a second or two; a traceroute takes longer, so the last look
+// is late enough to catch it without the screen sitting still in between.
+const CT_POLL_MS = [2200, 4200, 7000];
+
+async function connectionTestView() {
+  const root = el('div', { class: 'probes connection-test' });
+  root.append(el('div', { class: 'muted', style: 'margin:2px 0 10px' }, t('ct.lead')));
+
+  const agents = await api('/agents').catch(() => []);
+  if (!agents.length) { root.append(el('div', { class: 'empty' }, t('ct.noAgents'))); return root; }
+
+  // Declared up here because the list rendering reads them: the Run button is
+  // disabled while a run is in flight as much as when nothing is selected.
+  let running = false;
+  let stopRequested = false;
+  let catalogue = [];
+  try { catalogue = (await api('/api/connection-test/checks')).checks || []; }
+  catch (e) { root.append(el('div', { class: 'error' }, errText(e))); return root; }
+
+  const agentSel = el('select', {}, ...agents.map((a) => el('option', { value: String(a.id) }, a.display_name || a.hostname)));
+  const target = el('input', { type: 'text', placeholder: t('ct.targetPlaceholder'), spellcheck: 'false' });
+  const countInput = el('input', { type: 'number', min: '1', max: String(CT_MAX_ROUNDS), value: '1', class: 'run-count' });
+  const runBtn = el('button', { class: 'small run-btn' });
+  const stopBtn = el('button', { class: 'small ghost', disabled: 'disabled' }, t('ct.stop'));
+  const repeatBtn = el('button', { class: 'small ghost' }, t('ct.repeat'));
+  const status = el('span', { class: 'muted small' });
+  const scheduleChip = el('span', { class: 'ct-chip', hidden: true });
+
+  // The run count lives INSIDE the button — "Run [3] tests" is one control, and
+  // the label follows the number so it never reads "Run 3 test".
+  function syncRunLabel() {
+    const n = Math.max(1, Math.min(CT_MAX_ROUNDS, Number(countInput.value) || 1));
+    runBtn.replaceChildren(t('ct.run.prefix'), ' ', countInput, ' ', plural('ct.run.suffix', n));
+  }
+  countInput.addEventListener('input', syncRunLabel);
+  // The number field is inside the button, so a click on it would also fire the
+  // button. Stop that here rather than moving the field out of the label.
+  countInput.addEventListener('click', (e) => e.stopPropagation());
+  syncRunLabel();
+
+  // --- the check list ------------------------------------------------------
+  // Everything the agent can run starts selected, which is what an operator who
+  // typed one address and pressed Run expects. A check that cannot run is shown
+  // disabled with the reason, never quietly dropped.
+  const selected = new Set(catalogue.filter((c) => c.available).map((c) => c.id));
+  const rows = new Map(); // id -> { node, state }
+  const listBody = el('div', { class: 'ct-rows' });
+  const selectAll = el('input', { type: 'checkbox', checked: 'checked' });
+  const counter = el('span', { class: 'muted small' });
+  const listWrap = el('div', { class: 'ct-list', hidden: true },
+    el('div', { class: 'ct-list-head' },
+      el('label', { class: 'inline' }, selectAll, ' ', t('ct.selectAll')),
+      el('span', { class: 'spacer' }),
+      el('span', { class: 'muted small' }, t('ct.defaultOn'))),
+    listBody);
+
+  const toggle = el('button', { class: 'small ghost ct-toggle', 'aria-expanded': 'false' },
+    el('span', { class: 'ct-arrow' }, '▼'), ' ', t('ct.toggle'));
+  toggle.addEventListener('click', () => {
+    const open = toggle.getAttribute('aria-expanded') === 'true';
+    toggle.setAttribute('aria-expanded', String(!open));
+    listWrap.hidden = open;
+  });
+
+  function why(c) {
+    if (!c.available) return t('ct.why.notSupported');
+    if (!c.applies) return t('ct.why.notApplicable');
+    return null;
+  }
+
+  function setState(id, kind, label) {
+    const row = rows.get(id);
+    if (!row) return;
+    row.state.className = `ct-state ${kind}`;
+    row.state.textContent = label;
+  }
+
+  function renderRows() {
+    rows.clear();
+    listBody.replaceChildren(...catalogue.map((c) => {
+      const blocked = why(c);
+      const cb = el('input', {
+        type: 'checkbox',
+        ...(selected.has(c.id) && !blocked ? { checked: 'checked' } : {}),
+        ...(blocked ? { disabled: 'disabled' } : {}),
+      });
+      cb.addEventListener('change', () => {
+        if (cb.checked) selected.add(c.id); else selected.delete(c.id);
+        syncCounter();
+      });
+      const state = el('span', { class: 'ct-state' }, '–');
+      const node = el('div', { class: `ct-row${blocked ? ' blocked' : ''}` },
+        cb,
+        el('div', {},
+          el('div', { class: 'ct-name' }, t(`ct.check.${c.id}`),
+            c.port ? el('span', { class: 'ct-param' }, `port ${c.port}`) : null),
+          el('div', { class: 'ct-desc' }, blocked || t(`ct.check.${c.id}.desc`))),
+        state);
+      rows.set(c.id, { node, state });
+      return node;
+    }));
+    syncCounter();
+  }
+
+  function syncCounter() {
+    const runnable = catalogue.filter((c) => !why(c));
+    const on = runnable.filter((c) => selected.has(c.id)).length;
+    counter.textContent = t('ct.selected', { n: String(on), total: String(runnable.length) });
+    selectAll.checked = on > 0 && on === runnable.length;
+    selectAll.indeterminate = on > 0 && on < runnable.length;
+    runBtn.disabled = on === 0 || running;
+  }
+
+  selectAll.addEventListener('change', () => {
+    for (const c of catalogue) {
+      if (why(c)) continue;
+      if (selectAll.checked) selected.add(c.id); else selected.delete(c.id);
+    }
+    renderRows();
+  });
+
+  // The catalogue's "does this apply" answer depends on the target, so it is
+  // re-asked when the target changes — an IP literal greys the DNS row out with
+  // the reason, rather than running a lookup that answers nothing.
+  let lastHost = '';
+  async function refreshCatalogue() {
+    const host = target.value.trim();
+    if (host === lastHost) return;
+    lastHost = host;
+    try {
+      const q = host ? `?host=${encodeURIComponent(host)}` : '';
+      catalogue = (await api(`/api/connection-test/checks${q}`)).checks || catalogue;
+      renderRows();
+    } catch { /* keep the catalogue we have — the target is checked again on run */ }
+  }
+  target.addEventListener('change', refreshCatalogue);
+
+  root.append(el('div', { class: 'history-controls' },
+    el('label', { class: 'inline muted' }, t('ct.agent'), ' ', agentSel),
+    el('label', { class: 'inline muted ct-target' }, t('ct.target'), ' ', target)));
+  root.append(el('div', { class: 'history-controls ct-actions' },
+    runBtn, stopBtn, canWrite() ? repeatBtn : null, scheduleChip, status));
+  root.append(el('div', { class: 'ct-toggle-row' }, toggle, counter), listWrap,
+    el('div', { class: 'muted small ct-note' }, t('ct.stopNote'), ' ', t('ct.resultsNote')));
+  renderRows();
+
+  // --- running -------------------------------------------------------------
+  const say = (text, bad = false) => { status.className = bad ? 'error small' : 'muted small'; status.textContent = text; };
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  // Match a probe result row to the check that asked for it. A TCP probe stores
+  // its target as host:port, which is also what keeps the :80 and :443 rows
+  // apart — without it they would both show the same measurement.
+  function resultFor(results, check, host) {
+    const withPort = check.port ? `${host}:${check.port}` : null;
+    return results.find((r) => r.type === check.type && (r.target === withPort || (!check.port && r.target === host))) || null;
+  }
+
+  function measured(r) {
+    if (!r.ok) return { kind: 'failed', label: t('ct.state.failed') };
+    if (r.rttMs != null) return { kind: 'ok', label: `${Math.round(r.rttMs)} ms` };
+    return { kind: 'ok', label: t('ct.state.ok') };
+  }
+
+  async function collectResults(agentId, host, ids, since) {
+    let results;
+    try { results = (await api(`/api/probes/latest?agentId=${encodeURIComponent(agentId)}`)).results || []; }
+    catch { return; }
+    for (const id of ids) {
+      const check = catalogue.find((c) => c.id === id);
+      const r = check ? resultFor(results, check, host) : null;
+      // Only a result from THIS run may claim a row; an older one for the same
+      // target would otherwise report a fresh green tick for a probe that has
+      // not come back yet.
+      if (!r || (since && r.ts && new Date(r.ts).getTime() < since)) continue;
+      const m = measured(r);
+      setState(id, m.kind, m.label);
+    }
+  }
+
+  async function run() {
+    const host = target.value.trim();
+    if (!host) { say(t('ct.status.noTarget'), true); return; }
+    const ids = catalogue.filter((c) => !why(c) && selected.has(c.id)).map((c) => c.id);
+    if (!ids.length) { say(t('ct.status.noChecks'), true); return; }
+    const rounds = Math.max(1, Math.min(CT_MAX_ROUNDS, Number(countInput.value) || 1));
+    const agentId = agentSel.value;
+
+    running = true; stopRequested = false;
+    runBtn.disabled = true; stopBtn.disabled = false;
+    if (listWrap.hidden) toggle.click();
+    for (const c of catalogue) setState(c.id, selected.has(c.id) && !why(c) ? '' : 'skipped', selected.has(c.id) && !why(c) ? t('ct.state.waiting') : t('ct.state.skipped'));
+
+    let completed = 0;
+    for (let round = 1; round <= rounds && !stopRequested; round += 1) {
+      const startedAt = Date.now() - 1000; // a second of slack for clock skew
+      say(t('ct.status.round', { round: String(round), rounds: String(rounds), host }));
+      for (const id of ids) setState(id, 'running', t('ct.state.running'));
+      let res;
+      try {
+        res = await api('/api/connection-test/run', { method: 'POST', body: { agentId: Number(agentId), host, checks: ids } });
+      } catch (e) {
+        say(e.status === 409 ? t('ct.status.notConnected') : errText(e), true);
+        break;
+      }
+      for (const d of res.dispatched || []) setState(d.id, 'running', t('ct.state.sent'));
+      for (const s of res.skipped || []) setState(s.id, 'skipped', t('ct.state.skipped'));
+      const dispatchedIds = (res.dispatched || []).map((d) => d.id);
+      for (const wait of CT_POLL_MS) {
+        if (stopRequested) break;
+        await sleep(wait - (CT_POLL_MS[CT_POLL_MS.indexOf(wait) - 1] || 0));
+        await collectResults(agentId, host, dispatchedIds, startedAt);
+      }
+      completed = round;
+    }
+
+    running = false;
+    stopBtn.disabled = true;
+    if (stopRequested) {
+      for (const [id, row] of rows) {
+        if (['', 'ct-state', 'ct-state running'].includes(row.state.className) || row.state.textContent === t('ct.state.waiting')) {
+          setState(id, 'skipped', t('ct.state.stopped'));
+        }
+      }
+      say(t('ct.status.stopped'));
+    } else if (completed) {
+      say(t('ct.status.done', { rounds: String(completed), checks: String(ids.length), host }));
+    }
+    syncCounter();
+  }
+
+  runBtn.addEventListener('click', () => { if (!running) run(); });
+  stopBtn.addEventListener('click', () => {
+    stopRequested = true;
+    stopBtn.disabled = true;
+    say(t('ct.status.stopped'));
+  });
+
+  repeatBtn.addEventListener('click', () => {
+    const host = target.value.trim();
+    if (!host) { say(t('ct.status.noTarget'), true); return; }
+    const ids = catalogue.filter((c) => !why(c) && selected.has(c.id)).map((c) => c.id);
+    if (!ids.length) { say(t('ct.status.noChecks'), true); return; }
+    // The connection test has its own save endpoint (the server owns the
+    // catalogue, so the browser never builds the probe specs); everything else
+    // the dialog does is the same.
+    openRepeatModal({
+      what: t('ct.title'),
+      onSave: (spec, runs) => api('/api/connection-test/schedule', {
+        method: 'POST',
+        body: { agentId: Number(agentSel.value), host, checks: ids, runs, recurrence: spec },
+      }),
+      onSaved: (pkg, summary) => repeatChip(scheduleChip, pkg, summary),
+    });
+  });
+
+  return root;
+}
+
+// ---- Repeat: the shared recurrence editor ---------------------------------
+// One dialog, four screens. A connection test, a single probe, a speed test and
+// a diagnosis plan all ask the same question — how often, starting when — and
+// all four answer it by writing an ordinary test package. The editor below is
+// the question; the caller owns the saving, because what gets scheduled differs
+// and the schedule does not.
+
+// How many runs inside one period the dialog offers, per period. The server
+// accepts any divisor down to a five-minute floor (src/schedule/recurrence.js);
+// these are the ones worth a menu entry, and each is rendered as the GAP it
+// produces ("every 4 hours") rather than as the number it is, because that is
+// the question the operator is actually answering.
+const REPEAT_WITHIN = {
+  hourly: [1, 2, 4, 12],
+  daily: [1, 2, 3, 4, 6, 12, 24],
+  weekly: [1, 7, 14],
+  monthly: [1, 2, 4],
+};
+const REPEAT_PERIOD_MINUTES = { hourly: 60, daily: 1440, weekly: 10080, monthly: 40320 };
+
+// "every 6" is not an answer anybody recognises — this turns it into the gap.
+function repeatWithinLabel(period, every) {
+  if (every === 1) return t(`repeat.every.oncePer.${period}`);
+  const minutes = REPEAT_PERIOD_MINUTES[period] / every;
+  if (minutes < 60) return t('repeat.every.minutes', { n: String(Math.round(minutes)) });
+  if (minutes < 1440) {
+    const hours = Math.round(minutes / 60);
+    return hours === 1 ? t('repeat.every.hour') : t('repeat.every.hours', { n: String(hours) });
+  }
+  const days = Math.round(minutes / 1440);
+  return days === 1 ? t('repeat.every.day') : t('repeat.every.days', { n: String(days) });
+}
+
+// The recurrence in one sentence, in the operator's language. Shown live in the
+// dialog, kept beside the buttons afterwards, and used for the Schedule column
+// on the Test packages tab — a schedule nobody can read back is a schedule
+// nobody trusts.
+function repeatSummary(spec, runs) {
+  if (!spec || !spec.period) return '';
+  const within = repeatWithinLabel(spec.period, Number(spec.every) || 1);
+  const runsText = plural('repeat.perRun', runs, { n: String(runs) });
+  if (spec.period === 'hourly') return t('repeat.summary.hourly', { within, runs: runsText });
+  if (spec.period === 'daily') return t('repeat.summary.daily', { at: spec.at, within, runs: runsText });
+  if (spec.period === 'weekly') return t('repeat.summary.weekly', { weekday: t(`repeat.weekday.${spec.weekday}`), at: spec.at, within, runs: runsText });
+  return t('repeat.summary.monthly', { dom: String(spec.dayOfMonth), at: spec.at, within, runs: runsText });
+}
+
+// The fields themselves, as an embeddable component: the Repeat dialog wraps
+// them in a modal, the test-package editor drops them straight into its form.
+//   spec()  → the recurrence, in the shape the server validates
+//   runs()  → how many times the payload repeats per scheduled run
+//   node    → the fields, ready to append
+function recurrenceFields({ spec = null, runs = 1, showRuns = true, showSummary = true, onChange = null } = {}) {
+  const init = spec && spec.period ? spec : { period: 'daily', every: 1, at: '08:00', weekday: 1, dayOfMonth: 1 };
+  const periodSel = el('select', {}, ...['hourly', 'daily', 'weekly', 'monthly']
+    .map((p) => el('option', { value: p, ...(p === init.period ? { selected: 'selected' } : {}) }, t(`repeat.period.${p}`))));
+  const withinSel = el('select', {});
+  const atInput = el('input', { type: 'time', value: init.at || '08:00' });
+  const weekdaySel = el('select', {}, ...[1, 2, 3, 4, 5, 6, 7]
+    .map((d) => el('option', { value: String(d), ...(d === (init.weekday || 1) ? { selected: 'selected' } : {}) }, t(`repeat.weekday.${d}`))));
+  const domInput = el('input', { type: 'number', min: '1', max: '28', value: String(init.dayOfMonth || 1) });
+  const runsInput = el('input', { type: 'number', min: '1', max: '20', value: String(runs || 1) });
+  const summary = el('div', { class: 'ct-summary' });
+
+  const atWrap = el('label', {}, t('repeat.at'), atInput);
+  const weekdayWrap = el('label', {}, t('repeat.weekdayLabel'), weekdaySel);
+  const domWrap = el('label', {}, t('repeat.dayOfMonth'), domInput);
+  const runsWrap = el('label', {}, t('repeat.runs'), runsInput);
+
+  const readSpec = () => {
+    const period = periodSel.value;
+    const out = { period, every: Number(withinSel.value) || 1 };
+    if (period !== 'hourly') out.at = atInput.value || '08:00';
+    if (period === 'weekly') out.weekday = Number(weekdaySel.value);
+    if (period === 'monthly') out.dayOfMonth = Number(domInput.value) || 1;
+    return out;
+  };
+  const readRuns = () => Math.max(1, Number(runsInput.value) || 1);
+
+  function syncSummary() {
+    if (showSummary) summary.textContent = repeatSummary(readSpec(), readRuns());
+    if (onChange) onChange(readSpec(), readRuns());
+  }
+  function syncPeriod() {
+    const period = periodSel.value;
+    const keep = Number(withinSel.value) || Number(init.every) || 1;
+    withinSel.replaceChildren(...REPEAT_WITHIN[period]
+      .map((n) => el('option', { value: String(n), ...(n === keep ? { selected: 'selected' } : {}) }, repeatWithinLabel(period, n))));
+    atWrap.hidden = period === 'hourly';
+    weekdayWrap.hidden = period !== 'weekly';
+    domWrap.hidden = period !== 'monthly';
+    syncSummary();
+  }
+  periodSel.addEventListener('change', syncPeriod);
+  for (const node of [withinSel, atInput, weekdaySel, domInput, runsInput]) node.addEventListener('change', syncSummary);
+  runsInput.addEventListener('input', syncSummary);
+
+  const node = el('div', { class: 'repeat-fields' },
+    el('label', {}, t('repeat.period'), periodSel),
+    el('label', {}, t('repeat.within'), withinSel),
+    el('div', { class: 'ct-two' }, atWrap, weekdayWrap, domWrap, showRuns ? runsWrap : null),
+    showSummary ? summary : null);
+  runsWrap.hidden = !showRuns;
+  syncPeriod();
+  return { node, spec: readSpec, runs: readRuns, sync: syncPeriod };
+}
+
+// The dialog. `what` names what is being repeated (it is in the title), and
+// `onSave(spec, runs)` does the saving — it returns the created package, which
+// this reports back through `onSaved`.
+function openRepeatModal({ what, onSave, onSaved, showRuns = true }) {
+  const card = $('#modal-card');
+  const fields = recurrenceFields({ showRuns });
+  const err = el('p', { class: 'error' });
+  const saveBtn = el('button', { type: 'button' }, t('repeat.save'));
+
+  saveBtn.addEventListener('click', async () => {
+    err.textContent = '';
+    saveBtn.disabled = true;
+    const spec = fields.spec();
+    const runs = fields.runs();
+    try {
+      const pkg = await onSave(spec, runs);
+      closeModal();
+      if (onSaved) onSaved(pkg, repeatSummary(spec, runs));
+    } catch (e) { err.textContent = errText(e); saveBtn.disabled = false; }
+  });
+
+  card.replaceChildren(
+    el('h3', {}, t('repeat.title', { what })),
+    el('div', { class: 'form-grid' },
+      fields.node,
+      el('p', { class: 'muted small' }, t('repeat.hint')),
+      err,
+      el('div', { class: 'form-actions' },
+        el('button', { type: 'button', class: 'ghost', onclick: closeModal }, t('repeat.cancel')),
+        saveBtn)));
+  $('#modal').classList.remove('hidden');
+}
+
+// A chip beside the buttons, so the screen says what was just scheduled and
+// where it now lives. It never offers to delete: the package is real, and
+// removing it belongs on the tab that owns it, not behind an × that would only
+// clear the chip.
+function repeatChip(chip, pkg, summary) {
+  chip.hidden = false;
+  chip.replaceChildren('↻ ', summary, ' · ',
+    el('button', { class: 'link', title: t('repeat.openPackage'), onclick: () => gotoView('tests') }, pkg.name));
+  toast(t('repeat.saved', { name: pkg.name }));
+}
+
+// Saves a package for one agent — the shape every Repeat on a probe screen
+// writes: this agent, this payload, repeated `runs` times per scheduled run.
+function saveRepeatPackage({ name, agentId, item, spec, runs }) {
+  return api('/api/test-packages', {
+    method: 'POST',
+    body: {
+      name,
+      enabled: true,
+      schedule_spec: spec,
+      targets: { mode: 'agents', agentIds: [Number(agentId)] },
+      items: Array.from({ length: runs }, () => item),
+    },
+  });
+}
 
 async function probeRunnerView() {
   const root = el('div', { class: 'probes' });
@@ -8105,8 +8738,23 @@ async function probeRunnerView() {
   const curl = curlInputs();
   const tx = transactionStepsEditor([]);
   const txWrap = el('div', { class: 'tx-wrap' }, el('div', { class: 'muted small' }, 'Steps run in order; a step can extract a value (regex) for later steps as {{name}}. Stops at the first failure.'), tx.node);
-  const runBtn = el('button', { class: 'small' }, 'Run probe');
-  const status = el('div', { class: 'muted' });
+  // Same three controls as the Connection test tab, for the same reason: one
+  // sample proves nothing about a fault that comes and goes, a run that cannot
+  // be called off is a run you wait out, and a probe worth running twice is
+  // usually worth running on a schedule.
+  const roundsInput = el('input', { type: 'number', min: '1', max: '20', value: '1', class: 'run-count' });
+  const runBtn = el('button', { class: 'small run-btn' });
+  const stopBtn = el('button', { class: 'small ghost', disabled: 'disabled' }, t('probe.stop'));
+  const repeatBtn = canWrite() ? el('button', { class: 'small ghost' }, t('repeat.button')) : null;
+  const repeatChipEl = el('span', { class: 'ct-chip', hidden: true });
+  const status = el('div', { class: 'muted probe-status' });
+  function syncRunLabel() {
+    const n = Math.max(1, Math.min(20, Number(roundsInput.value) || 1));
+    runBtn.replaceChildren(t('probe.rounds.prefix'), ' ', roundsInput, ' ', plural('probe.rounds', n, { n: String(n) }));
+  }
+  roundsInput.addEventListener('input', syncRunLabel);
+  roundsInput.addEventListener('click', (e) => e.stopPropagation());
+  syncRunLabel();
   // Why an operator would reach for the TCP trace over the plain one.
   const traceHint = el('div', { class: 'muted small', style: 'flex-basis:100%' }, t('probe.tcptracerouteHint'));
   // Both trace types take a per-hop probe count ("queries") rather than a count;
@@ -8146,7 +8794,7 @@ async function probeRunnerView() {
     portWrap,
     countWrap,
     curl.wrap,
-    runBtn, status, traceHint, mtuHint), mtuWrap, txWrap);
+    runBtn, stopBtn, repeatBtn, repeatChipEl, status, traceHint, mtuHint), mtuWrap, txWrap);
 
   const latestHost = el('div', { class: 'probe-latest' });
   // The refresh loop replaces the whole tbody, which would close an open row
@@ -8159,39 +8807,102 @@ async function probeRunnerView() {
     el('summary', {}, 'Latest results ', el('span', { class: 'muted' }, '· most recent per target')),
     el('div', { class: 'muted small' }, t('probe.row.rowHelp')), pauseNote, latestHost));
 
-  async function run() {
-    const id = agentSel.value;
-    let body;
+  // The form as a probe spec, or the reason it is not one yet. Read by Run and
+  // by Repeat, so a scheduled probe is the same probe the button would send.
+  function collectProbe() {
     if (typeSel.value === 'transaction') {
       const steps = tx.collect();
-      if (!steps.length) { status.className = 'error'; status.textContent = 'Add at least one step with a URL.'; return; }
-      body = { type: 'transaction', steps };
-    } else {
-      const host = target.value.trim();
-      if (!host) { status.className = 'error'; status.textContent = 'Enter a target.'; return; }
-      body = { type: typeSel.value, host };
-      if (typeSel.value === 'tcp' || typeSel.value === 'tcptraceroute') body.port = Number(portInput.value);
-      if (typeSel.value === 'curl') curl.apply(body);
-      if (typeSel.value === 'path_mtu') {
-        if (minSize.value) body.min_size = Number(minSize.value);
-        if (maxSize.value) body.max_size = Number(maxSize.value);
-        body.per_hop = perHop.checked;
-        if (mssPort.value) body.tcp_port = Number(mssPort.value);
-      }
-      if (isTraceType() && countInput.value) body.queries = Number(countInput.value);
-      else if ((typeSel.value === 'ping' || typeSel.value === 'tcp') && countInput.value) body.count = Number(countInput.value);
+      if (!steps.length) return { error: 'Add at least one step with a URL.' };
+      return { body: { type: 'transaction', steps } };
     }
-    status.className = 'muted'; status.textContent = 'Sending…'; runBtn.disabled = true;
-    try {
-      await api(`/agents/${id}/probe`, { method: 'POST', body });
-      status.textContent = 'Sent — the agent is running it now; results will arrive in a moment.';
-      setTimeout(refreshLatest, 2500); setTimeout(refreshLatest, 6000);
-    } catch (e) {
-      status.className = 'error';
-      status.textContent = e.status === 409 ? 'The agent is not connected right now.' : errText(e);
-    } finally { runBtn.disabled = false; }
+    const host = target.value.trim();
+    if (!host) return { error: 'Enter a target.' };
+    const body = { type: typeSel.value, host };
+    if (typeSel.value === 'tcp' || typeSel.value === 'tcptraceroute') body.port = Number(portInput.value);
+    if (typeSel.value === 'curl') curl.apply(body);
+    if (typeSel.value === 'path_mtu') {
+      if (minSize.value) body.min_size = Number(minSize.value);
+      if (maxSize.value) body.max_size = Number(maxSize.value);
+      body.per_hop = perHop.checked;
+      if (mssPort.value) body.tcp_port = Number(mssPort.value);
+    }
+    if (isTraceType() && countInput.value) body.queries = Number(countInput.value);
+    else if ((typeSel.value === 'ping' || typeSel.value === 'tcp') && countInput.value) body.count = Number(countInput.value);
+    return { body };
   }
-  runBtn.addEventListener('click', run);
+
+  // Rounds are spaced rather than fired back to back: N probes queued in the
+  // same instant measure the same instant, which is not what "run it 5 times"
+  // is asking for.
+  const ROUND_GAP_MS = 3000;
+  let probeStopRequested = false;
+  let probeRunning = false;
+
+  async function run() {
+    const id = agentSel.value;
+    const { body, error } = collectProbe();
+    if (error) { status.className = 'error probe-status'; status.textContent = error; return; }
+    const rounds = Math.max(1, Math.min(20, Number(roundsInput.value) || 1));
+    probeRunning = true; probeStopRequested = false;
+    runBtn.disabled = true; stopBtn.disabled = false;
+    status.className = 'muted probe-status';
+    let done = 0;
+    for (let round = 1; round <= rounds && !probeStopRequested; round += 1) {
+      status.textContent = rounds === 1
+        ? 'Sending…'
+        : t('probe.round', { round: String(round), rounds: String(rounds), what: `${body.type} ${body.host || ''}`.trim() });
+      try {
+        await api(`/agents/${id}/probe`, { method: 'POST', body });
+      } catch (e) {
+        status.className = 'error probe-status';
+        status.textContent = e.status === 409 ? 'The agent is not connected right now.' : errText(e);
+        break;
+      }
+      done = round;
+      setTimeout(refreshLatest, 2500); setTimeout(refreshLatest, 6000);
+      if (round < rounds && !probeStopRequested) {
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise((r) => setTimeout(r, ROUND_GAP_MS));
+      }
+    }
+    probeRunning = false;
+    stopBtn.disabled = true;
+    runBtn.disabled = false;
+    if (probeStopRequested) { status.className = 'muted probe-status'; status.textContent = t('probe.stopped'); }
+    else if (done && status.className !== 'error') {
+      status.textContent = done === 1
+        ? 'Sent — the agent is running it now; results will arrive in a moment.'
+        : t('probe.roundsDone', { rounds: String(done) });
+    }
+  }
+  runBtn.addEventListener('click', () => { if (!probeRunning) run(); });
+  stopBtn.addEventListener('click', () => {
+    probeStopRequested = true;
+    stopBtn.disabled = true;
+    status.className = 'muted probe-status';
+    status.textContent = t('probe.stopped');
+  });
+
+  // Repeat: the probe on screen, saved as a scheduled test package for this
+  // agent. Same dialog, same storage, same Test packages tab as everything else.
+  if (repeatBtn) {
+    repeatBtn.addEventListener('click', () => {
+      const { body, error } = collectProbe();
+      if (error) { status.className = 'error probe-status'; status.textContent = error; return; }
+      const what = t('repeat.what.probe', { type: body.type, target: body.host || '' });
+      openRepeatModal({
+        what,
+        onSave: (spec, runs) => saveRepeatPackage({
+          name: `${body.type} — ${body.host || 'transaction'}`.slice(0, 120),
+          agentId: agentSel.value,
+          item: { type: 'probe', probe: body },
+          spec,
+          runs,
+        }),
+        onSaved: (pkg, summary) => repeatChip(repeatChipEl, pkg, summary),
+      });
+    });
+  }
 
   async function refreshLatest() {
     const id = agentSel.value;
@@ -15335,7 +16046,7 @@ async function nis2Print(path) {
 // the Report Generator (a flexible, selector-driven custom report builder).
 views.reporting = async () => {
   const root = el('div', { class: 'nis2' });
-  const sections = [['nis2', 'NIS2'], ['generator', 'Report Generator']];
+  const sections = [['nis2', 'NIS2'], ['generator', 'Report Generator'], ['schedules', t('rs.tab')]];
   // Audit is RBAC-gated: only admins may see who did what on the server.
   if (role === 'admin') sections.push(['audit', 'Audit']);
   // Guard against a stale section the current user may no longer access.
@@ -15352,8 +16063,9 @@ views.reporting = async () => {
   try {
     body.replaceChildren(
       reportingState.section === 'generator' ? await reportGenerator()
-        : reportingState.section === 'audit' ? await auditModule()
-          : await nis2Module());
+        : reportingState.section === 'schedules' ? await reportSchedulesPanel()
+          : reportingState.section === 'audit' ? await auditModule()
+            : await nis2Module());
   } catch (err) { body.replaceChildren(el('div', { class: 'empty error' }, err.message)); }
   return root;
 };
@@ -16921,3 +17633,158 @@ $('#modal').addEventListener('click', (e) => { if (e.target.id === 'modal') clos
 installModalA11y(); // focus management + trap + Escape for every modal flow
 
 render();
+
+// ---- Scheduled reports ----------------------------------------------------
+// The exports answer a question somebody asked. This answers the recurring
+// obligation the same two reports usually serve — the monthly SLA figure for a
+// customer, the weekly outage list for a service review — by sending it on its
+// own. Storage and the job are src/services/reportScheduler.js; the schedule
+// itself is the same recurrence the test packages use, edited in the same
+// fields, so "the 1st at 06:00" means one thing in this product.
+const RS_REPORTS = ['availability', 'probe_outages'];
+const RS_FORMATS = ['csv', 'html'];
+const RS_SEVERITIES = ['info', 'warning', 'critical'];
+
+async function reportSchedulesPanel() {
+  const wrap = el('div', { class: 'rs' });
+  wrap.append(el('p', { class: 'muted nis2-note' }, t('rs.lead')));
+
+  const [schedules, locations] = await Promise.all([
+    api('/api/report-schedules'),
+    api('/locations').catch(() => []),
+  ]);
+
+  if (role === 'admin') {
+    wrap.append(el('div', { class: 'form-actions' },
+      el('button', { class: 'small', onclick: () => editReportSchedule(null, locations) }, t('rs.new'))));
+  }
+
+  if (!schedules.length) {
+    wrap.append(el('div', { class: 'empty' }, t('rs.none')));
+    return wrap;
+  }
+
+  const head = ['rs.col.name', 'rs.col.report', 'rs.col.window', 'rs.col.recipients', 'rs.col.schedule', 'rs.col.lastRun', ''];
+  const tbody = el('tbody', {}, ...schedules.map((s) => reportScheduleRow(s, locations)));
+  wrap.append(el('table', { class: 'tests-table rs-table' },
+    el('thead', {}, el('tr', {}, ...head.map((k) => el('th', {}, k ? t(k) : '')))),
+    tbody));
+  return wrap;
+}
+
+function reportScheduleRow(s, locations) {
+  const actions = el('div', { class: 'row-actions' },
+    canWrite() ? el('button', { class: 'small', onclick: (e) => sendReportScheduleNow(s, e.target) }, t('rs.sendNow')) : null,
+    role === 'admin' ? el('button', { class: 'small ghost', onclick: () => editReportSchedule(s, locations) }, t('rs.edit')) : null,
+    role === 'admin' ? el('button', { class: 'small danger', onclick: () => deleteReportSchedule(s) }, t('rs.delete')) : null);
+  return el('tr', {},
+    el('td', {}, el('div', {}, s.name),
+      s.enabled ? null : el('span', { class: 'badge neutral' }, t('rs.disabled'))),
+    el('td', {}, t(`rs.report.${s.report}`), el('div', { class: 'muted small' }, t(`rs.format.${s.format}`))),
+    el('td', {}, t('rs.days', { n: String(s.window_days) })),
+    el('td', { class: 'muted small' }, (s.recipients || []).join(', ')),
+    el('td', {}, repeatSummary(s.schedule_spec, 1).split(' · ').slice(0, 2).join(' · ')),
+    // What happened last time, in the words the job recorded — a schedule that
+    // has been failing for three weeks must not look healthy here.
+    el('td', { class: `muted small${/^failed/.test(s.last_run_status || '') ? ' error' : ''}` },
+      s.last_run_at ? `${fmtDate(s.last_run_at)} · ${s.last_run_status || ''}` : t('rs.never')),
+    el('td', {}, actions));
+}
+
+async function sendReportScheduleNow(s, btn) {
+  if (btn) btn.disabled = true;
+  try {
+    const r = await api(`/api/report-schedules/${s.id}/send-now`, { method: 'POST' });
+    toast(t('rs.sent', { detail: r.detail }));
+  } catch (err) {
+    // A mail server nobody configured answers 409 with the reason — show it
+    // rather than a generic failure.
+    toast(t('rs.sendFailed', { detail: errText(err) }), true);
+  } finally {
+    if (btn) btn.disabled = false;
+    render();
+  }
+}
+
+async function deleteReportSchedule(s) {
+  if (!confirm(t('rs.confirmDelete', { name: s.name }))) return;
+  try { await api(`/api/report-schedules/${s.id}`, { method: 'DELETE' }); toast(t('rs.deleted')); render(); }
+  catch (err) { toast(errText(err), true); }
+}
+
+function editReportSchedule(schedule, locations) {
+  const card = $('#modal-card');
+  const isEdit = !!schedule;
+  const data = schedule || {
+    name: '', report: 'availability', format: 'csv', window_days: 7,
+    params: {}, recipients: [], schedule_spec: null, enabled: true,
+  };
+
+  const nameInput = el('input', { type: 'text', value: data.name, placeholder: 'Monthly SLA' });
+  const reportSel = el('select', {}, ...RS_REPORTS.map((r) => el('option', { value: r, ...(data.report === r ? { selected: 'selected' } : {}) }, t(`rs.report.${r}`))));
+  const formatSel = el('select', {}, ...RS_FORMATS.map((f) => el('option', { value: f, ...(data.format === f ? { selected: 'selected' } : {}) }, t(`rs.format.${f}`))));
+  const windowInput = el('input', { type: 'number', min: '1', max: '400', value: String(data.window_days || 7) });
+  const recipientsInput = el('textarea', { rows: '3', placeholder: 'ops@acme.dk' }, (data.recipients || []).join('\n'));
+  const locationSel = el('select', {},
+    el('option', { value: '' }, t('rs.location.all')),
+    ...locations.map((l) => el('option', { value: String(l.id), ...(Number(data.params && data.params.locationId) === l.id ? { selected: 'selected' } : {}) }, l.name)));
+  const severitySel = el('select', {},
+    el('option', { value: '' }, t('rs.severity.all')),
+    ...RS_SEVERITIES.map((sv) => el('option', { value: sv, ...(data.params && data.params.severity === sv ? { selected: 'selected' } : {}) }, sv)));
+  const severityWrap = el('label', {}, t('rs.severity'), severitySel);
+  const enabledInput = el('input', { type: 'checkbox', ...(data.enabled ? { checked: 'checked' } : {}) });
+  const recurrence = recurrenceFields({ spec: data.schedule_spec, showRuns: false });
+  const err = el('p', { class: 'error' });
+  const saveBtn = el('button', { type: 'button' }, t('rs.save'));
+
+  // Severity only exists on the outage report; hiding it is not cosmetic — a
+  // filter that silently applies to a report without that column is a schedule
+  // whose output nobody can explain.
+  const syncReport = () => { severityWrap.hidden = reportSel.value !== 'probe_outages'; };
+  reportSel.addEventListener('change', syncReport);
+  syncReport();
+
+  saveBtn.addEventListener('click', async () => {
+    err.textContent = '';
+    const recipients = recipientsInput.value.split(/[\n,;]+/).map((x) => x.trim()).filter(Boolean);
+    const params = {};
+    if (locationSel.value) params.location_id = Number(locationSel.value);
+    if (reportSel.value === 'probe_outages' && severitySel.value) params.severity = severitySel.value;
+    const body = {
+      name: nameInput.value.trim(),
+      report: reportSel.value,
+      format: formatSel.value,
+      window_days: Number(windowInput.value) || 7,
+      params,
+      recipients,
+      schedule_spec: recurrence.spec(),
+      enabled: enabledInput.checked,
+    };
+    saveBtn.disabled = true;
+    try {
+      if (isEdit) await api(`/api/report-schedules/${schedule.id}`, { method: 'PUT', body });
+      else await api('/api/report-schedules', { method: 'POST', body });
+      toast(t('rs.saved'));
+      closeModal();
+      render();
+    } catch (e) { err.textContent = errText(e); saveBtn.disabled = false; }
+  });
+
+  card.replaceChildren(
+    el('h3', {}, isEdit ? t('rs.edit') : t('rs.new')),
+    el('div', { class: 'form-grid' },
+      el('label', {}, t('rs.name'), nameInput),
+      el('label', {}, t('rs.reportLabel'), reportSel),
+      el('label', {}, t('rs.format'), formatSel),
+      el('label', {}, t('rs.window'), windowInput, el('span', { class: 'field-hint' }, t('rs.windowHint'))),
+      el('label', {}, t('rs.location'), locationSel),
+      severityWrap,
+      el('label', {}, t('rs.recipients'), recipientsInput, el('span', { class: 'field-hint' }, t('rs.recipientsHint'))),
+      recurrence.node,
+      el('label', { class: 'inline' }, enabledInput, ' ', t('rs.enabled')),
+      err,
+      el('div', { class: 'form-actions' },
+        el('button', { type: 'button', class: 'ghost', onclick: closeModal }, t('rs.cancel')),
+        saveBtn)));
+  $('#modal').classList.remove('hidden');
+}

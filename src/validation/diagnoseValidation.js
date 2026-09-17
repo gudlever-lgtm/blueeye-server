@@ -70,4 +70,29 @@ function validateDiagnoseRequest(body) {
   return { value };
 }
 
-module.exports = { validateDiagnoseRequest, MAX_DESCRIPTION, MAX_TARGET };
+// POST /api/diagnose/:id/run — optionally a SUBSET of the plan's tests.
+//
+// An empty body is the normal case and means "all of them", which is what the
+// button did before this existed. `testIds` are row ids of the session's own
+// tests; the route intersects them with the session rather than trusting them,
+// so an id from another session selects nothing instead of running something
+// nobody asked for.
+const MAX_RUN_TESTS = 50;
+
+function validateDiagnoseRun(body) {
+  const b = body && typeof body === 'object' && !Array.isArray(body) ? body : {};
+  if (b.testIds === undefined || b.testIds === null) return { value: {} };
+  if (!Array.isArray(b.testIds) || b.testIds.length === 0) {
+    return { errors: { testIds: 'testIds must be a non-empty array of test ids' } };
+  }
+  if (b.testIds.length > MAX_RUN_TESTS) return { errors: { testIds: `too many tests (max ${MAX_RUN_TESTS})` } };
+  const out = [];
+  for (const raw of b.testIds) {
+    const n = Number(raw);
+    if (!Number.isInteger(n) || n <= 0) return { errors: { testIds: 'testIds must be positive integers' } };
+    if (!out.includes(n)) out.push(n);
+  }
+  return { value: { testIds: out } };
+}
+
+module.exports = { validateDiagnoseRequest, validateDiagnoseRun, MAX_DESCRIPTION, MAX_TARGET, MAX_RUN_TESTS };

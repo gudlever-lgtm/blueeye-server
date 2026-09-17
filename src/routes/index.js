@@ -57,6 +57,8 @@ const { createEnrollRouter } = require('./enroll');
 const { publishSignedReleaseFromSource } = require('../enroll/publishSignedRelease');
 const { createEnrollCommandRouter } = require('./enrollCommand');
 const { createTestPackagesRouter } = require('./testPackages');
+const { createConnectionTestRouter } = require('./connectionTest');
+const { createReportSchedulesRouter } = require('./reportSchedules');
 const { createTransactionsRouter } = require('./transactions');
 const { createLogsRouter } = require('./logs');
 const { createSpeedtestRouter, createSpeedtestReadRouter } = require('./speedtest');
@@ -106,6 +108,8 @@ function createApiRouter({
   resultsRepo,
   probeResultsRepo,
   probeOutagesRepo,
+  reportSchedulesRepo,
+  reportScheduler,
   eventCasesRepo,
   eventNotesRepo = null,
   eventClustersRepo,
@@ -357,6 +361,13 @@ function createApiRouter({
   // on the Overview page; fleet health itself comes from /api/fleet above.
   router.use('/api/dashboard', createDashboardRouter({ probeOutagesRepo, eventCasesRepo, findingStore, featureGate, planService }));
   if (probeOutagesRepo && probeResultsRepo) router.use('/api/reports', createReportsRouter({ probeResultsRepo, probeOutagesRepo, locationsRepo, featureGate, planService, auditLogger }));
+  // Reports that arrive on their own: the same two reports, over a relative
+  // window, mailed on the recurrence from migration 099.
+  if (reportSchedulesRepo) {
+    router.use('/api/report-schedules', createReportSchedulesRouter({
+      repo: reportSchedulesRepo, scheduler: reportScheduler, locationsRepo, auditLogger,
+    }));
+  }
   // EVENTS (stored in `event_cases`) — the operator-facing unit, wrapping the
   // findings that evidence it. Distinct from the `probe_outages` reported by
   // /api/reports above, and distinct from an ITSM *incident*, which is what a
@@ -574,6 +585,12 @@ function createApiRouter({
     }));
   }
   if (testPackagesRepo) router.use('/api/test-packages', createTestPackagesRouter({ repo: testPackagesRepo, runner: testPackageRunner, usageService }));
+  // Connection Test — one address, every check, from one agent (Probes & Tests).
+  if (agentsRepo) {
+    router.use('/api/connection-test', createConnectionTestRouter({
+      agentsRepo, agentCommander, testPackagesRepo: testPackagesRepo || null, usageService, auditLogger,
+    }));
+  }
   if (transactionsRepo) {
     router.use('/api/transactions', createTransactionsRouter({
       repo: transactionsRepo,

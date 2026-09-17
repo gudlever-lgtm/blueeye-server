@@ -3,6 +3,10 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
+// The calendar cases below are wall-clock assertions, so the zone is pinned
+// before the first Date is constructed.
+process.env.TZ = 'Europe/Copenhagen';
+
 const { createTestPackageScheduler } = require('../src/services/testPackageScheduler');
 
 const quiet = { info() {}, warn() {} };
@@ -60,4 +64,46 @@ test('tolerates a repo failure without throwing', async () => {
   });
   await scheduler.tick(); // must not throw
   assert.ok(true);
+});
+
+test('runs a package with a schedule_spec when its next slot passes', async () => {
+  // 2026-03-10 07:00 local; the package repeats daily at 08:00.
+  const day = (h, m = 0) => new Date(2026, 2, 10, h, m, 0, 0).getTime();
+  let clock = day(7);
+  const pkg = { id: 1, name: 'connection test', schedule_ms: 0, schedule_spec: { period: 'daily', every: 1, at: '08:00' }, last_run_at: null };
+  const runs = [];
+  const scheduler = createTestPackageScheduler({
+    repo: { findEnabledScheduled: async () => [pkg] },
+    runner: { run: async () => { runs.push(clock); } },
+    logger: quiet,
+    now: () => clock,
+  });
+
+  await scheduler.tick();               // seeds last-run = 07:00
+  assert.equal(runs.length, 0);
+  clock = day(7, 59);
+  await scheduler.tick();
+  assert.equal(runs.length, 0, 'not due a minute early');
+  clock = day(8, 0);
+  await scheduler.tick();
+  assert.equal(runs.length, 1, 'due at 08:00');
+  clock = day(12);
+  await scheduler.tick();
+  assert.equal(runs.length, 1, 'once a day means once');
+});
+
+test('a schedule_spec that no longer validates is never due (it is not due constantly)', async () => {
+  let clock = Date.now();
+  const pkg = { id: 1, name: 'broken', schedule_ms: 0, schedule_spec: { period: 'fortnightly' }, last_run_at: null };
+  const runs = [];
+  const scheduler = createTestPackageScheduler({
+    repo: { findEnabledScheduled: async () => [pkg] },
+    runner: { run: async () => { runs.push(clock); } },
+    logger: quiet,
+    now: () => clock,
+  });
+  await scheduler.tick();
+  clock += 365 * 24 * 60 * 60 * 1000;
+  await scheduler.tick();
+  assert.equal(runs.length, 0);
 });

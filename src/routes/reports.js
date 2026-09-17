@@ -10,6 +10,10 @@ const { validateReportRange, validateSeverityFilter } = require('../validation/p
 const { nis2Draft } = require('../probeOutages/nis2');
 const { toCsv } = require('../lib/csv');
 const { renderReportHtml } = require('../lib/reportHtml');
+// The columns, the row mappers and the titles live with the report definitions,
+// so a scheduled send and a downloaded export cannot disagree about what the
+// report contains (src/reports/definitions.js).
+const { AVAIL_COLUMNS, PROBE_OUTAGE_COLUMNS, availRow, probeOutageRow, REPORTS } = require('../reports/definitions');
 
 // Reporting endpoints over derived probe outages + probe availability. All under the
 // existing user-JWT auth: availability + outage listing are viewer+, the NIS2
@@ -64,37 +68,6 @@ function createReportsRouter({ probeResultsRepo, probeOutagesRepo, locationsRepo
     return { range, loc, sev, rows };
   }
 
-  // Column definitions shared by the CSV and HTML renderers.
-  const AVAIL_COLUMNS = [
-    { key: 'location_name', label: 'Location' },
-    { key: 'agent_name', label: 'Agent' },
-    { key: 'uptime_pct', label: 'Uptime %' },
-    { key: 'up', label: 'Up' },
-    { key: 'down', label: 'Down' },
-    { key: 'total', label: 'Samples' },
-  ];
-  const PROBE_OUTAGE_COLUMNS = [
-    { key: 'id', label: 'ID' },
-    { key: 'location_name', label: 'Location' },
-    { key: 'agent_name', label: 'Agent' },
-    { key: 'metric', label: 'Metric' },
-    { key: 'severity', label: 'Severity' },
-    { key: 'started_at', label: 'Started' },
-    { key: 'resolved_at', label: 'Resolved' },
-    { key: 'duration_seconds', label: 'Duration (s)' },
-    { key: 'affected_target', label: 'Target' },
-  ];
-
-  const availRow = (r) => ({
-    location_name: r.locationName ?? '(unassigned)', agent_name: r.agentName,
-    uptime_pct: r.uptimePct == null ? '' : r.uptimePct, up: r.up, down: r.down, total: r.total,
-  });
-  const probeOutageRow = (r) => ({
-    id: r.id, location_name: r.location_name ?? '(unassigned)', agent_name: r.agent_name,
-    metric: r.metric, severity: r.severity, started_at: r.started_at, resolved_at: r.resolved_at ?? '(ongoing)',
-    duration_seconds: r.duration_seconds ?? '', affected_target: r.affected_target ?? '',
-  });
-
   function sendCsv(res, filename, columns, rows) {
     res.set('Content-Type', 'text/csv; charset=utf-8');
     res.set('Content-Disposition', `attachment; filename="${filename}.csv"`);
@@ -137,7 +110,7 @@ function createReportsRouter({ probeResultsRepo, probeOutagesRepo, locationsRepo
     if (out.error) return res.status(out.error.status).json(out.error.body);
     await auditExport(req, 'pdf', 'availability', out.range);
     return sendHtml(res, renderReportHtml({
-      title: 'BlueEyes — Availability / SLA report',
+      title: REPORTS.availability.title,
       subtitle: `${out.range.from.toISOString().slice(0, 10)} – ${out.range.to.toISOString().slice(0, 10)}`,
       columns: AVAIL_COLUMNS, rows: out.rows.map(availRow),
     }));
@@ -165,7 +138,7 @@ function createReportsRouter({ probeResultsRepo, probeOutagesRepo, locationsRepo
     if (out.error) return res.status(out.error.status).json(out.error.body);
     await auditExport(req, 'pdf', 'probe-outages', out.range);
     return sendHtml(res, renderReportHtml({
-      title: 'BlueEyes — Probe outage report',
+      title: REPORTS.probe_outages.title,
       subtitle: `${out.range.from.toISOString().slice(0, 10)} – ${out.range.to.toISOString().slice(0, 10)}`,
       columns: PROBE_OUTAGE_COLUMNS, rows: out.rows.map(probeOutageRow),
     }));

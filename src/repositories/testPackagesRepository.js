@@ -18,6 +18,7 @@ function rowToPackage(row) {
     name: row.name,
     enabled: !!row.enabled,
     schedule_ms: Number(row.schedule_ms) || 0,
+    schedule_spec: parseJson(row.schedule_spec),
     targets: parseJson(row.targets) || { mode: 'all', agentIds: [], locationIds: [] },
     items: parseJson(row.items) || [],
     created_by: row.created_by != null ? String(row.created_by) : null,
@@ -29,7 +30,7 @@ function rowToPackage(row) {
 }
 
 const COLS =
-  'id, name, enabled, schedule_ms, targets, items, created_by, last_run_at, last_run_summary, created_at, updated_at';
+  'id, name, enabled, schedule_ms, schedule_spec, targets, items, created_by, last_run_at, last_run_summary, created_at, updated_at';
 
 function createTestPackagesRepository(db) {
   const { pool } = db;
@@ -44,27 +45,32 @@ function createTestPackagesRepository(db) {
     return rowToPackage(rows[0]);
   }
 
-  // Enabled packages that have a real schedule — the only ones the scheduler ticks.
+  // Enabled packages that have a real schedule — the only ones the scheduler
+  // ticks. Either kind counts: a plain interval, or a calendar recurrence.
   async function findEnabledScheduled() {
-    const [rows] = await pool.query(`SELECT ${COLS} FROM test_packages WHERE enabled = 1 AND schedule_ms > 0`);
+    const [rows] = await pool.query(
+      `SELECT ${COLS} FROM test_packages WHERE enabled = 1 AND (schedule_ms > 0 OR schedule_spec IS NOT NULL)`
+    );
     return rows.map(rowToPackage);
   }
 
-  async function create({ name, enabled = true, schedule_ms = 0, targets, items, created_by = null }) {
+  async function create({ name, enabled = true, schedule_ms = 0, schedule_spec = null, targets, items, created_by = null }) {
     const [result] = await pool.query(
-      `INSERT INTO test_packages (name, enabled, schedule_ms, targets, items, created_by)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [name, enabled ? 1 : 0, schedule_ms, JSON.stringify(targets), JSON.stringify(items), created_by]
+      `INSERT INTO test_packages (name, enabled, schedule_ms, schedule_spec, targets, items, created_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [name, enabled ? 1 : 0, schedule_ms, schedule_spec ? JSON.stringify(schedule_spec) : null,
+        JSON.stringify(targets), JSON.stringify(items), created_by]
     );
     return findById(result.insertId);
   }
 
-  async function update(id, { name, enabled, schedule_ms, targets, items }) {
+  async function update(id, { name, enabled, schedule_ms, schedule_spec = null, targets, items }) {
     await pool.query(
       `UPDATE test_packages
-       SET name = ?, enabled = ?, schedule_ms = ?, targets = ?, items = ?
+       SET name = ?, enabled = ?, schedule_ms = ?, schedule_spec = ?, targets = ?, items = ?
        WHERE id = ?`,
-      [name, enabled ? 1 : 0, schedule_ms, JSON.stringify(targets), JSON.stringify(items), id]
+      [name, enabled ? 1 : 0, schedule_ms, schedule_spec ? JSON.stringify(schedule_spec) : null,
+        JSON.stringify(targets), JSON.stringify(items), id]
     );
     return findById(id);
   }

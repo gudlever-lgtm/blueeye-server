@@ -216,6 +216,39 @@ test('running dispatches each test to its agent as an ordinary run-probe command
   assert.equal(pmtu.command.probe.probes_per_size, 3, 'several probes per size, so ordinary loss is not read as an MTU ceiling');
 });
 
+test('running a SUBSET dispatches only the selected tests', async () => {
+  const hub = commander();
+  const app = makeApp({ agentsRepo: agents(), agentCommander: hub });
+  const created = await post(app, '/api/diagnose', 'operator', { description: F1, agentId: 1, target: 'mail.example.com' });
+  const session = await get(app, `/api/diagnose/${created.body.sessionId}`, 'viewer');
+  const rows = session.body.session.tests;
+  assert.ok(rows.length >= 2, `only ${rows.length} tests in the plan`);
+  const wanted = rows.filter((r) => r.probeType === 'path_mtu');
+  assert.ok(wanted.length, 'the plan has no path_mtu test to select');
+
+  const res = await post(app, `/api/diagnose/${created.body.sessionId}/run`, 'operator', { testIds: wanted.map((r) => r.id) });
+  assert.equal(res.status, 202);
+  assert.equal(res.body.total, wanted.length);
+  assert.equal(res.body.planTotal, rows.length, 'the answer still says how big the plan is');
+  assert.deepEqual([...new Set(hub.sent.map((x) => x.command.probe.type))], ['path_mtu']);
+});
+
+test('400: a subset that names no test of this plan runs nothing', async () => {
+  const hub = commander();
+  const app = makeApp({ agentsRepo: agents(), agentCommander: hub });
+  const created = await post(app, '/api/diagnose', 'operator', { description: F1, agentId: 1, target: 'mail.example.com' });
+  // An id from somewhere else is intersected away rather than trusted.
+  const res = await post(app, `/api/diagnose/${created.body.sessionId}/run`, 'operator', { testIds: [999999] });
+  assert.equal(res.status, 400);
+  assert.equal(hub.sent.length, 0, 'something was dispatched for a test that is not on this plan');
+  for (const bad of [{ testIds: [] }, { testIds: 'all' }, { testIds: [0] }, { testIds: ['x'] }]) {
+    // eslint-disable-next-line no-await-in-loop
+    const r = await post(app, `/api/diagnose/${created.body.sessionId}/run`, 'operator', bad);
+    assert.equal(r.status, 400, JSON.stringify(bad));
+    assert.ok(r.body.details.testIds, JSON.stringify(bad));
+  }
+});
+
 test('an agent that is not connected is a recorded failure, never a stuck test', async () => {
   const app = makeApp({ agentsRepo: agents(), agentCommander: { sendCommand: () => 0 } });
   const created = await post(app, '/api/diagnose', 'operator', { description: F1, agentId: 1, target: 'mail.example.com' });

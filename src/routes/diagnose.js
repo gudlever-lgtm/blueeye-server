@@ -4,7 +4,7 @@ const express = require('express');
 const { asyncHandler } = require('../middleware/asyncHandler');
 const { requireAuth, requireRole } = require('../auth/middleware');
 const { ROLES } = require('../auth/roles');
-const { validateDiagnoseRequest } = require('../validation/diagnoseValidation');
+const { validateDiagnoseRequest, validateDiagnoseRun } = require('../validation/diagnoseValidation');
 const { validateProbeSpec } = require('../validation/probeValidation');
 const { matchPlaybooks } = require('../diagnose/match');
 const { selectPlaybooks } = require('../diagnose/llm');
@@ -188,9 +188,18 @@ function createDiagnoseRouter({
     if (!sessionsRepo) return unavailable(res);
     const session = await sessionsRepo.findById(id);
     if (!session) return notFound(res, 'Diagnosis session');
-    const tests = await sessionsRepo.listTests(id);
-    if (tests.length === 0) {
+    const { value: selection, errors: selErrors } = validateDiagnoseRun(req.body);
+    if (selErrors) return res.status(400).json({ error: 'Validation failed', details: selErrors });
+    const all = await sessionsRepo.listTests(id);
+    if (all.length === 0) {
       return res.status(409).json({ error: 'This plan has no tests to run — it needs a target and an agent first' });
+    }
+    // A subset is intersected with the session's own tests, never trusted: an id
+    // from somewhere else selects nothing rather than running something nobody
+    // on this plan asked for.
+    const tests = selection.testIds ? all.filter((t) => selection.testIds.includes(t.id)) : all;
+    if (tests.length === 0) {
+      return res.status(400).json({ error: 'None of the selected tests belong to this plan' });
     }
 
     let dispatched = 0;
@@ -229,10 +238,10 @@ function createDiagnoseRouter({
     if (auditLogger) {
       await auditLogger.record(req, {
         category: 'diagnose', action: 'tests_run', target: String(id),
-        detail: `Dispatched ${dispatched}/${tests.length} test(s) to ${new Set(results.filter((r) => r.status === 'dispatched').map((r) => r.agentId)).size} agent(s)`,
+        detail: `Dispatched ${dispatched}/${tests.length} of ${all.length} test(s) to ${new Set(results.filter((r) => r.status === 'dispatched').map((r) => r.agentId)).size} agent(s)`,
       });
     }
-    res.status(202).json({ sessionId: id, dispatched, total: tests.length, tests: results });
+    res.status(202).json({ sessionId: id, dispatched, total: tests.length, planTotal: all.length, tests: results });
   }));
 
   // POST /api/diagnose/:id/evaluate — read the results, apply the reading rules,

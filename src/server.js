@@ -120,6 +120,9 @@ const { applySeverity } = require('./events/severityRules');
 const { createTransactionBaselineJob } = require('./analysis/transactionBaselines');
 const { createTestPackageRunner } = require('./services/testPackageRunner');
 const { createTestPackageScheduler } = require('./services/testPackageScheduler');
+const { createReportSchedulesRepository } = require('./repositories/reportSchedulesRepository');
+const { createReportMailer } = require('./services/reportMailer');
+const { createReportScheduler } = require('./services/reportScheduler');
 const { createSpeedtestResultsRepository } = require('./repositories/speedtestResultsRepository');
 const { createSecretBox } = require('./lib/secretBox');
 const { createIntegrationsRepository } = require('./repositories/integrationsRepository');
@@ -661,6 +664,27 @@ function start() {
     logger,
   });
 
+  // Scheduled reports (migration 100): the availability and probe-outage
+  // reports, over a relative window, mailed on the same calendar recurrence the
+  // test packages use. Delivery reuses the SAME alerting SMTP settings as the
+  // alerts and the account emails, so an administrator configures a mail server
+  // once for the whole product.
+  const reportSchedulesRepo = createReportSchedulesRepository(db);
+  const reportScheduler = createReportScheduler({
+    repo: reportSchedulesRepo,
+    mailer: createReportMailer({
+      getEmailConfig: () => ({
+        from: alertingConfig.channels.email.from,
+        smtp: alertingConfig.channels.email.smtp,
+      }),
+      createTransport: (smtp) => createSmtpTransport(smtp, logger),
+      logger,
+    }),
+    probeResultsRepo,
+    probeOutagesRepo,
+    logger,
+  });
+
   // Service Assurance reactions (expired/expiring certificates, tests that keep
   // failing) go out through the SAME dispatcher as every other finding: one place
   // decides severity floors, cooldowns and maintenance windows, so an operator
@@ -863,6 +887,7 @@ function start() {
   const backgroundJobs = [
     retentionScheduler,
     testPackageScheduler,
+    reportScheduler,
     // GeoIP exposes startSchedule/stopSchedule; adapt it to the uniform { start, stop }.
     { start: () => geoipUpdater.startSchedule(), stop: () => geoipUpdater.stopSchedule() },
     createTransactionBaselineJob({ repo: transactionsRepo, logger }),
@@ -1001,6 +1026,8 @@ function start() {
     releasePublicKey: () => releaseKeyService.getPublicKey(),
     releaseKeyService,
     testPackagesRepo,
+    reportSchedulesRepo,
+    reportScheduler,
     testPackageRunner,
     transactionsRepo,
     serviceTests,

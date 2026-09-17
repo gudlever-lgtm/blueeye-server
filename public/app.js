@@ -1343,6 +1343,7 @@ const CONTRACT_VIEWS = new Map([
   ['diagnose', 'diagnose'],
   ['troubleshooting', 'troubleshooting'],
   ['topology', 'topology'],
+  ['flows', 'flows'],
 ]);
 
 function hero(viewKey) {
@@ -9255,400 +9256,99 @@ views.nics = async () => {
 // Unified mode: top talkers, ports, protocols, scan/fan-out, anomaly markers.
 // Bidirectional mode: ingress/egress side-by-side with asymmetry indicator.
 // Metadata only; internal (LAN) conversations are shown — never geolocated.
-views.flows = async () => {
-  const root = el('div', { class: 'flows-explorer' });
-  root.append(el('div', { class: 'section-head' },
-    el('h2', {}, 'Flows'),
-    el('span', { class: 'muted' }, 'Conversations · top talkers · ports · anomalies · ingress/egress')));
+// ---- Flows (MIGRATED — see public/views/flows.js) ---------------------------
+// The traffic map, its legend chips and the traffic-type colour ramp stay here:
+// the ramp is a per-category palette that has not been migrated, and the map
+// carries the reader's pan and zoom.
+let flowsPage = null;
+const flowsPageState = {};
 
-  const agents = await api('/agents').catch(() => []);
-  if (!agents.length) { root.append(el('div', { class: 'empty' }, 'No agents yet.')); return root; }
+// One dot in the traffic-type colour ramp. Built here rather than in the view
+// because the ramp is app.js's, and a per-category colour cannot be a class.
+function trafficTypeDot(category) {
+  return el('span', { class: 'tc-dot', style: `background:${trafficTypeColor(category)}` });
+}
 
-  const agentSel = el('select', {}, ...agents.map((a) => el('option', { value: String(a.id) }, a.display_name || a.hostname)));
-  if (selectedAgentId != null && agents.some((a) => String(a.id) === String(selectedAgentId))) agentSel.value = String(selectedAgentId);
-
-  // Mode toggle: Unified (explore), Bidirectional (ingress/egress split) or
-  // Map (geographic traffic arrows colored by traffic type).
-  let mode = 'unified';
-  const modeUnified = el('button', { class: 'small active' }, 'Unified');
-  const modeBidi = el('button', { class: 'small ghost' }, 'Bidirectional');
-  const modeMap = el('button', { class: 'small ghost' }, 'Map');
-
-  // Map-mode scope: the selected agent, one site, or the whole fleet. Site
-  // options come from the agents' locations (sites that actually report).
-  const mapScopeSel = el('select', {}, el('option', { value: 'agent' }, 'Selected agent'), el('option', { value: 'fleet' }, 'All sites'));
-  {
-    const seen = new Map();
-    for (const a of agents) if (a.location_id != null && !seen.has(a.location_id)) seen.set(a.location_id, a.location_name || `#${a.location_id}`);
-    for (const [lid, name] of [...seen].sort((x, y) => String(x[1]).localeCompare(String(y[1])))) {
-      mapScopeSel.append(el('option', { value: `l${lid}` }, `Site: ${name}`));
-    }
-  }
-
-  const peerInput = el('input', { type: 'text', placeholder: 'IP (src/dst)' });
-  const portInput = el('input', { type: 'number', min: '1', max: '65535', placeholder: 'port' });
-  const protoInput = el('input', { type: 'text', placeholder: 'tcp/udp' });
-  const dirSel = el('select', {},
-    el('option', { value: '' }, 'All directions'),
-    el('option', { value: 'out' }, 'Outbound'),
-    el('option', { value: 'in' }, 'Inbound'));
-  const scopeSel = el('select', {},
-    el('option', { value: '' }, 'Internal + external'),
-    el('option', { value: 'external' }, 'External only'),
-    el('option', { value: 'internal' }, 'Internal only'));
-
-  // Time controls: preset buttons + optional custom from/to that override them.
-  const presets = [['15m', '15 min'], ['1h', '1 hour'], ['6h', '6 hours'], ['24h', '24 hours']];
-  let activePreset = '1h';
-  const fromI = el('input', { type: 'datetime-local', title: 'From (overrides preset)' });
-  const toI = el('input', { type: 'datetime-local', title: 'To (overrides preset)' });
-  // Drag-to-zoom window (ms). When set it overrides the preset/custom inputs so a
-  // brushed selection on the chart narrows the view; cleared by "Reset zoom" or by
-  // picking a preset / typing a custom range. See applyZoom() / windowMs().
-  let zoom = null;
-  const presetBtns = presets.map(([val, label]) => {
-    const b = el('button', { class: `small ghost${val === activePreset ? ' active' : ''}`, onclick: () => {
-      activePreset = val;
-      presetBtns.forEach((pb) => pb.classList.toggle('active', pb === b));
-      fromI.value = ''; toI.value = ''; clearZoom();
-      refresh();
-    } }, label);
-    return b;
-  });
-  // Typing a custom range is an explicit intent — drop any active zoom.
-  fromI.addEventListener('change', clearZoom);
-  toI.addEventListener('change', clearZoom);
-  const runBtn = el('button', { class: 'flows-inspect' }, 'Inspect');
-  const resetZoomBtn = el('button', { class: 'small ghost flows-reset-zoom', style: 'display:none', title: 'Restore the full time range', onclick: () => { clearZoom(); refresh(); } }, 'Reset zoom');
-  const status = el('span', { class: 'muted flows-status' });
-
-  function clearZoom() { zoom = null; resetZoomBtn.style.display = 'none'; }
-
-  // Drag-selected a region on a chart: narrow the window to it and reload. Agents
-  // report at a coarse cadence, so pad very thin selections to a usable minimum.
-  function applyZoom(fromMs, toMs) {
-    if (!Number.isFinite(fromMs) || !Number.isFinite(toMs)) return;
-    let a = Math.min(fromMs, toMs);
-    let b = Math.max(fromMs, toMs);
-    const MIN_MS = 60 * 1000;
-    if (b - a < MIN_MS) { const mid = (a + b) / 2; a = Math.round(mid - MIN_MS / 2); b = Math.round(mid + MIN_MS / 2); }
-    zoom = { fromMs: a, toMs: b };
-    resetZoomBtn.style.display = '';
-    refresh();
-  }
-
-  // A labelled control group: a small uppercase caption stacked above its
-  // input/select/button-group, so the filter bar reads as discrete fields
-  // instead of one crowded row.
-  const flowField = (labelText, cls, ...controls) =>
-    el('div', { class: 'flows-field' + (cls ? ' ' + cls : '') },
-      el('span', { class: 'flows-field-label' }, labelText), ...controls);
-
-  // Mode + time presets rendered as connected "segmented" controls (one active).
-  const modeSeg = el('div', { class: 'flows-seg' }, modeUnified, modeBidi, modeMap);
-  const rangeSeg = el('div', { class: 'flows-seg' }, ...presetBtns);
-
-  // Unified-only filters — hidden when switching to bidirectional/map mode.
-  const unifiedControls = el('div', { class: 'flows-row flows-row-filters' },
-    flowField('Port', 'flows-field-sm', portInput),
-    flowField('Proto', 'flows-field-sm', protoInput),
-    flowField('Direction', '', dirSel),
-    flowField('Scope', '', scopeSel));
-
-  const peerField = flowField('Peer', 'flows-field-grow', peerInput);
-  const mapScopeField = flowField('Map scope', '', mapScopeSel);
-  mapScopeField.style.display = 'none';
-
-  // Prefill from a deep link (global search → "→ flows", or a clicked dataflow
-  // on the Overview / a location page → Map mode scoped to that site).
-  if (flowsPrefill) {
-    if (flowsPrefill.agentId != null && agents.some((a) => String(a.id) === String(flowsPrefill.agentId))) agentSel.value = String(flowsPrefill.agentId);
-    if (flowsPrefill.peer) peerInput.value = flowsPrefill.peer;
-    if (flowsPrefill.port) portInput.value = String(flowsPrefill.port);
-    if (flowsPrefill.mode === 'map') {
-      mode = 'map';
-      if (flowsPrefill.locationId != null && [...mapScopeSel.options].some((o) => o.value === `l${flowsPrefill.locationId}`)) {
-        mapScopeSel.value = `l${flowsPrefill.locationId}`;
-      } else if (flowsPrefill.locationId === null) {
-        mapScopeSel.value = 'fleet';
-      }
-    }
-    flowsPrefill = null;
-  }
-
-  function applyModeUI() {
-    for (const [btn, val] of [[modeUnified, 'unified'], [modeBidi, 'bidi'], [modeMap, 'map']]) {
-      btn.classList.toggle('active', mode === val);
-      btn.classList.toggle('ghost', mode !== val);
-    }
-    unifiedControls.style.display = mode === 'unified' ? '' : 'none';
-    peerField.style.display = mode === 'map' ? 'none' : '';
-    mapScopeField.style.display = mode === 'map' ? '' : 'none';
-  }
-  function switchMode(m) {
-    mode = m;
-    applyModeUI();
-    refresh();
-  }
-  modeUnified.addEventListener('click', () => switchMode('unified'));
-  modeBidi.addEventListener('click', () => switchMode('bidi'));
-  modeMap.addEventListener('click', () => switchMode('map'));
-
-  root.append(el('div', { class: 'flows-controls' },
-    el('div', { class: 'flows-row' },
-      flowField('Agent', 'flows-field-agent', agentSel),
-      flowField('Mode', '', modeSeg),
-      peerField,
-      mapScopeField),
-    unifiedControls,
-    el('div', { class: 'flows-row flows-row-time' },
-      flowField('Range', '', rangeSeg),
-      flowField('From', '', fromI),
-      flowField('To', '', toI),
-      el('div', { class: 'flows-field flows-field-action' }, runBtn, resetZoomBtn, status))));
-
-  const host = el('div', {});
-  root.append(host);
-
-  function windowMs() {
-    if (zoom) return { fromMs: zoom.fromMs, toMs: zoom.toMs };
-    if (fromI.value && toI.value) return { fromMs: new Date(fromI.value).getTime(), toMs: new Date(toI.value).getTime() };
-    const now = Date.now();
-    if (activePreset === '15m') return { fromMs: now - 15 * 60000, toMs: now };
-    if (activePreset === '6h') return { fromMs: now - 6 * 3600000, toMs: now };
-    if (activePreset === '24h') return { fromMs: now - 24 * 3600000, toMs: now };
-    return { fromMs: now - 3600000, toMs: now };
-  }
-
-  function dirSection(title, color, data, fromMs, toMs, markers) {
-    const kids = [];
-    if (data.series && data.series.length >= 2) {
-      const pts = data.series.map((s) => ({ t: new Date(s.at).getTime(), y: s.bytes }));
-      kids.push(el('div', { class: 'overview-chart' },
-        historyChart([{ id: 'b', label: 'Bytes', color, points: pts }],
-          { fromMs: pts[0].t, toMs: pts[pts.length - 1].t, band: robustBand(pts), markers, onBrush: applyZoom })));
-    } else {
-      kids.push(el('div', { class: 'empty' }, 'No flows in window.'));
-    }
-    kids.push(el('h4', {}, 'Top talkers'));
-    if (!data.topTalkers.length) {
-      kids.push(el('div', { class: 'empty' }, 'No flows recorded.'));
-    } else {
-      kids.push(el('table', {},
-        el('thead', {}, el('tr', {}, ...['Source', 'Destination', 'Org/Country', 'Bytes', 'Flows'].map((h) => el('th', {}, h)))),
-        el('tbody', {}, ...data.topTalkers.slice(0, 20).map((t) => el('tr', {},
-          el('td', {}, esc(t.srcIp || '–')),
-          el('td', {}, esc(t.dstIp || t.extIp || '–')),
-          el('td', {}, t.internal
-            ? el('span', { class: 'badge grace' }, 'internal')
-            : el('span', { class: 'muted' }, [t.asnName, t.country].filter(Boolean).join(' · ') || '–')),
-          el('td', { class: 'num' }, fmtBytes(t.bytes)),
-          el('td', { class: 'num muted' }, String(t.flowCount)))))));
-    }
-    if (data.byProto && data.byProto.length) {
-      kids.push(el('h4', {}, 'Protocols'));
-      kids.push(el('table', {},
-        el('thead', {}, el('tr', {}, ...['Protocol', 'Bytes', 'Flows'].map((h) => el('th', {}, h)))),
-        el('tbody', {}, ...data.byProto.slice(0, 8).map((p) => el('tr', {},
-          el('td', {}, p.proto || '–'),
-          el('td', { class: 'num' }, fmtBytes(p.bytes)),
-          el('td', { class: 'num muted' }, String(p.flowCount)))))));
-    }
-    return el('div', { class: 'flowbidi-panel' },
-      el('h3', { class: 'flowbidi-dir' }, title, el('span', { class: 'muted' }, ` · ${fmtBytes(data.totals.bytes)}`)),
-      ...kids);
-  }
-
-  const talkerPeer = (t) => (t.internal ? t.dstIp : (t.extIp || t.dstIp));
-
-  async function refresh() {
-    const { fromMs, toMs } = windowMs();
-    if (!Number.isFinite(fromMs) || !Number.isFinite(toMs) || toMs <= fromMs) {
-      host.replaceChildren(el('div', { class: 'error' }, 'Invalid time range — check From / To.'));
-      status.textContent = ''; return;
-    }
-    status.textContent = 'Loading…';
-    host.replaceChildren();
-    stopTrafficMaps(); // tear down a previous map-mode render
-
-    const qp = new URLSearchParams({
-      agentId: agentSel.value,
-      from: new Date(fromMs).toISOString(),
-      to: new Date(toMs).toISOString(),
-    });
-    const peerVal = peerInput.value.trim();
-
-    // Map mode — /api/flows/map: colored directional arrows between sites and
-    // destination countries (color = traffic type, motion = direction).
-    if (mode === 'map') {
-      if (typeof L === 'undefined') {
-        host.replaceChildren(el('div', { class: 'empty' }, 'Map library (Leaflet) could not be loaded — the traffic map is unavailable offline.'));
-        status.textContent = ''; return;
-      }
-      const scope = mapScopeSel.value;
-      const mqp = new URLSearchParams({ from: new Date(fromMs).toISOString(), to: new Date(toMs).toISOString() });
-      if (scope === 'agent') mqp.set('agentId', agentSel.value);
-      else if (scope.startsWith('l')) mqp.set('locationId', scope.slice(1));
-      let data; let cfg;
-      try {
-        [data, cfg] = await Promise.all([api(`/api/flows/map?${mqp}`), trafficTileConfig()]);
-      } catch (e) {
-        host.replaceChildren(el('div', { class: 'error' }, errText(e)));
-        status.textContent = ''; return;
-      }
-      status.textContent = `${fmtBytes(data.totals.bytes)} · ${data.totals.flowCount} flows · ${data.totals.destinations} destination${data.totals.destinations === 1 ? '' : 's'}`;
-
-      if (!data.arcs.length) {
-        host.replaceChildren(el('div', { class: 'empty' },
-          'No geolocated flows in the window — the map needs NetFlow/sFlow reporting, the geo pipeline (Settings → Map) and a located site for the origin.'));
-        return;
-      }
-
-      const mapEl = el('div', { class: 'map traffic-map' });
-      const chipsHost = el('div', {});
-      const siteByKey = new Map((data.sites || []).map((s) => [s.key, s]));
-      // Top flows side panel — click a row to pan the map to that destination.
-      const flowRows = data.arcs.slice(0, 25).map((a) => {
-        const site = siteByKey.get(a.siteKey);
-        const dirTxt = a.direction === 'in' ? '◂ in' : a.direction === 'both' ? '⇄ both' : 'out ▸';
-        return el('div', {
-          class: 'flowmap-row', role: 'button', tabindex: '0',
-          onclick: () => { if (mapApi && a.lat != null) mapApi.map.setView([a.lat, a.lng], Math.max(mapApi.map.getZoom(), 4)); },
-          onkeydown: (e) => { if (e.key === 'Enter' && mapApi && a.lat != null) mapApi.map.setView([a.lat, a.lng], Math.max(mapApi.map.getZoom(), 4)); },
-        },
-        el('span', { class: 'tc-dot', style: `background:${trafficTypeColor(a.category)}` }),
-        el('span', { class: 'fmr-dst' },
-          el('span', {}, `${esc(site ? site.name : '?')} → ${esc(a.country)}`),
-          el('span', { class: 'muted' }, `${esc(a.label)}${a.asnNames && a.asnNames.length ? ' · ' + esc(a.asnNames[0]) : ''}`)),
-        el('span', { class: 'fmr-vol num' }, fmtBytes(a.bytes), el('span', { class: `fmr-dir dir-${a.direction}` }, dirTxt)));
-      });
-      const side = el('div', { class: 'flowmap-side' },
-        el('div', { class: 'card' }, el('h3', {}, 'Traffic type'), chipsHost),
-        el('div', { class: 'card' }, el('h3', {}, 'Top flows'), el('div', { class: 'flowmap-list' }, ...flowRows)));
-      host.replaceChildren(el('div', { class: 'flowmap-grid' }, el('div', {}, mapEl, trafficMapKey()), side));
-
-      let mapApi = drawTrafficMap(mapEl, cfg, data, {
-        onSiteClick: (s) => { if (s.locationId != null) openLocation(s.locationId); },
-      });
-      chipsHost.replaceChildren(trafficLegendChips(data.categories, () => mapApi));
-      return;
-    }
-
-    if (mode === 'bidi') {
-      if (peerVal) qp.set('host', peerVal);
-      let data;
-      try {
-        data = await api(`/api/flows/bidirectional?${qp}`);
-      } catch (e) {
-        host.replaceChildren(el('div', { class: 'error' }, errText(e)));
-        status.textContent = ''; return;
-      }
-      status.textContent = `${fmtBytes(data.asymmetry.totalBytes)} total · ${fmtBytes(data.asymmetry.inBytes)} ↓ / ${fmtBytes(data.asymmetry.outBytes)} ↑`;
-
-      let markers = [];
-      try {
-        const fs = await api(`/api/findings?hostId=${encodeURIComponent(agentSel.value)}&since=${new Date(fromMs).toISOString()}`);
-        markers = findingMarkers(fs);
-      } catch { /* overlay is optional */ }
-
-      const kids = [];
-      if (data.asymmetry.ratio !== null && data.asymmetry.asymmetric) {
-        const inPct = Math.round(data.asymmetry.ratio * 100);
-        kids.push(el('div', { class: 'flowbidi-asym warn' },
-          '⚠ Asymmetric traffic: ',
-          el('strong', {}, `${inPct}% ingress`), ' / ',
-          el('strong', {}, `${100 - inPct}% egress`),
-          el('span', { class: 'muted' }, ' — replies may arrive on a different path.')));
-      } else if (data.asymmetry.ratio !== null) {
-        const inPct = Math.round(data.asymmetry.ratio * 100);
-        kids.push(el('div', { class: 'flowbidi-asym ok' },
-          `Symmetric traffic: ${inPct}% ingress / ${100 - inPct}% egress.`));
-      }
-      kids.push(el('div', { class: 'flowbidi-cols' },
-        dirSection('↓ Ingress', '#06b6d4', data.ingress, fromMs, toMs, markers),
-        dirSection('↑ Egress', '#10b981', data.egress, fromMs, toMs, markers)));
-      host.replaceChildren(...kids);
-      return;
-    }
-
-    // Unified mode — /api/flows/explore.
-    if (peerVal) qp.set('peer', peerVal);
-    if (portInput.value.trim()) qp.set('port', portInput.value.trim());
-    if (protoInput.value.trim()) qp.set('proto', protoInput.value.trim());
-    if (dirSel.value) qp.set('direction', dirSel.value);
-    if (scopeSel.value) qp.set('internal', scopeSel.value);
-
-    let data;
-    try { data = await api(`/api/flows/explore?${qp}`); } catch (e) { host.replaceChildren(el('div', { class: 'error' }, e.message)); status.textContent = ''; return; }
-    status.textContent = `${fmtBytes(data.totals.bytes)} · ${data.totals.flowCount} flows · ${data.totals.records} records`;
-
-    let markers = [];
+function getFlowsPage() {
+  if (flowsPage) return flowsPage;
+  if (typeof window === 'undefined' || !window.FlowsPage || !ui) return null;
+  const iso = (ms) => new Date(ms).toISOString();
+  // The findings overlay is optional: a failure there costs the markers, never
+  // the chart.
+  const markersFor = async (agentId, fromMs) => {
     try {
-      const fs = await api(`/api/findings?hostId=${encodeURIComponent(agentSel.value)}&since=${new Date(fromMs).toISOString()}`);
-      markers = findingMarkers(fs);
-    } catch { /* overlay is optional */ }
+      const fs = await api(`/api/findings?hostId=${encodeURIComponent(agentId)}&since=${iso(fromMs)}`);
+      return findingMarkers(fs);
+    } catch { return []; }
+  };
+  flowsPage = window.FlowsPage.create({
+    el, t, ui, errText, fmtBytes,
+    state: flowsPageState,
+    hasMapLibrary: () => typeof L !== 'undefined',
+    selectedAgentId: () => selectedAgentId,
+    takePrefill: () => { const p = flowsPrefill; flowsPrefill = null; return p; },
+    syncMode: (mode) => {
+      try {
+        const q = new URLSearchParams(window.location.search || '');
+        if (mode === 'unified') q.delete('mode'); else q.set('mode', mode);
+        const qs = q.toString();
+        window.history.replaceState(null, '', qs ? `${window.location.pathname}?${qs}` : window.location.pathname);
+      } catch { /* best-effort */ }
+    },
+    help: () => {
+      const info = PAGE_INFO.flows || {};
+      return { lead: info.hero || '', title: info.title || t('flows.title'), body: info.body || (() => []) };
+    },
+    fetchAgents: async () => api('/agents').catch(() => []),
+    chart: (points, { markers, onBrush }) => el('div', { class: 'overview-chart' },
+      historyChart([{ id: 'b', label: t('flows.col.bytes'), color: ui.token('--series-0'), points }], {
+        fromMs: points[0].t, toMs: points[points.length - 1].t,
+        band: robustBand(points), markers, onBrush,
+      })),
+    fetchExplore: async ({ window: w, agentId, peer, port, proto, direction, internal }) => {
+      const qp = new URLSearchParams({ agentId, from: iso(w.fromMs), to: iso(w.toMs) });
+      if (peer) qp.set('peer', String(peer).trim());
+      if (port) qp.set('port', String(port).trim());
+      if (proto) qp.set('proto', String(proto).trim());
+      if (direction) qp.set('direction', direction);
+      if (internal) qp.set('internal', internal);
+      const data = await api(`/api/flows/explore?${qp}`);
+      return { data, markers: await markersFor(agentId, w.fromMs) };
+    },
+    fetchBidi: async ({ window: w, agentId, peer }) => {
+      const qp = new URLSearchParams({ agentId, from: iso(w.fromMs), to: iso(w.toMs) });
+      if (peer) qp.set('host', String(peer).trim());
+      const data = await api(`/api/flows/bidirectional?${qp}`);
+      return { data, markers: await markersFor(agentId, w.fromMs) };
+    },
+    fetchMap: async ({ window: w, agentId, scope }) => {
+      const qp = new URLSearchParams({ from: iso(w.fromMs), to: iso(w.toMs) });
+      if (scope === 'agent') qp.set('agentId', agentId);
+      else if (scope.startsWith('l')) qp.set('locationId', scope.slice(1));
+      const [data, cfg] = await Promise.all([api(`/api/flows/map?${qp}`), trafficTileConfig()]);
+      return { data, cfg };
+    },
+    drawMap: (hostEl, cfg, data) => drawTrafficMap(hostEl, cfg, data, {
+      onSiteClick: (s) => { if (s.locationId != null) openLocation(s.locationId); },
+    }),
+    legendChips: trafficLegendChips,
+    mapKey: trafficMapKey,
+    typeDot: trafficTypeDot,
+    stopMaps: stopTrafficMaps,
+  });
+  return flowsPage;
+}
 
-    const kids = [];
-    if (data.scans && data.scans.length) {
-      kids.push(el('details', { class: 'sec scan-sec', open: true },
-        el('summary', {}, '⚠ Possible scans / fan-out ', el('span', { class: 'muted' }, '· one source against many ports/hosts')),
-        el('table', {},
-          el('thead', {}, el('tr', {}, ...['Source', 'Type', 'Ports', 'Hosts', 'Bytes', 'Flows'].map((h) => el('th', {}, h)))),
-          el('tbody', {}, ...data.scans.map((s) => el('tr', {},
-            el('td', {}, esc(s.srcIp)),
-            el('td', {}, el('span', { class: `badge ${s.kind === 'port-scan' ? 'offline' : 'warn'}` }, s.kind === 'port-scan' ? 'PORT-SCAN' : 'FAN-OUT')),
-            el('td', { class: 'num bad-text' }, String(s.distinctPorts)),
-            el('td', { class: 'num' }, String(s.distinctHosts)),
-            el('td', { class: 'num' }, fmtBytes(s.bytes)),
-            el('td', { class: 'num muted' }, String(s.flowCount))))))));
-    }
-    if (data.series && data.series.length >= 2) {
-      const pts = data.series.map((s) => ({ t: new Date(s.at).getTime(), y: s.bytes }));
-      kids.push(el('div', { class: 'overview-chart' },
-        historyChart([{ id: 'b', label: 'Bytes', color: '#06b6d4', points: pts }],
-          { fromMs: pts[0].t, toMs: pts[pts.length - 1].t, band: robustBand(pts), markers, onBrush: applyZoom })));
-      kids.push(el('p', { class: 'muted flows-chart-hint' }, 'Tip: drag across the chart to zoom into a time range.'));
-    }
-    kids.push(el('h4', {}, 'Top talkers'));
-    if (!data.topTalkers.length) kids.push(el('div', { class: 'empty' }, 'No flows in the window — requires NetFlow/sFlow + geo-pipeline.'));
-    else kids.push(el('table', {},
-      el('thead', {}, el('tr', {}, ...['Source', 'Destination', 'Org/Country', 'Bytes', 'Packets', 'Flows'].map((h) => el('th', {}, h)))),
-      el('tbody', {}, ...data.topTalkers.map((t) => el('tr', { class: 'fleet-row', onclick: () => { peerInput.value = talkerPeer(t) || ''; refresh(); } },
-        el('td', {}, esc(t.srcIp || '–')),
-        el('td', {}, esc(t.dstIp || t.extIp || '–')),
-        el('td', {}, t.internal ? el('span', { class: 'badge grace' }, 'internal') : el('span', { class: 'muted' }, [t.asnName, t.country].filter(Boolean).join(' · ') || '–')),
-        el('td', { class: 'num' }, fmtBytes(t.bytes)),
-        el('td', { class: 'num muted' }, String(t.packets)),
-        el('td', { class: 'num muted' }, String(t.flowCount)))))));
-
-    const portTable = el('table', {},
-      el('thead', {}, el('tr', {}, ...['Port', 'Service', 'Proto', 'Bytes', 'Flows'].map((h) => el('th', {}, h)))),
-      el('tbody', {}, ...(data.byPort.length ? data.byPort.map((p) => el('tr', {},
-        el('td', {}, String(p.port)),
-        el('td', {}, p.service ? el('span', { class: 'badge grace' }, p.service) : el('span', { class: 'muted' }, '–')),
-        el('td', { class: 'muted' }, p.proto || '–'),
-        el('td', { class: 'num' }, fmtBytes(p.bytes)), el('td', { class: 'num muted' }, String(p.flowCount))))
-        : [el('tr', {}, el('td', { class: 'muted' }, '–'))])));
-    const protoTable = el('table', {},
-      el('thead', {}, el('tr', {}, ...['Protocol', 'Bytes', 'Flows'].map((h) => el('th', {}, h)))),
-      el('tbody', {}, ...(data.byProto.length ? data.byProto.map((p) => el('tr', {},
-        el('td', {}, p.proto || '–'),
-        el('td', { class: 'num' }, fmtBytes(p.bytes)),
-        el('td', { class: 'num muted' }, String(p.flowCount))))
-        : [el('tr', {}, el('td', { class: 'muted' }, '–'))])));
-    kids.push(el('div', { class: 'flows-tables' },
-      el('div', {}, el('h4', {}, 'Top ports'), portTable),
-      el('div', {}, el('h4', {}, 'Protocols'), protoTable)));
-
-    host.replaceChildren(...kids);
-  }
-
-  runBtn.addEventListener('click', refresh);
-  agentSel.addEventListener('change', refresh);
-  mapScopeSel.addEventListener('change', refresh);
-  applyModeUI(); // a deep link may land directly in Map mode
-  await refresh();
-  return root;
+views.flows = async () => {
+  const v = getFlowsPage();
+  if (!v) return el('div', { class: 'empty error' }, t('flows.err.title'));
+  // A mode on the URL (a deep link, or coming back to the page) wins over the
+  // remembered one.
+  try {
+    const m = new URLSearchParams(window.location.search || '').get('mode');
+    if (m === 'bidi' || m === 'map' || m === 'unified') flowsPageState.mode = m;
+  } catch { /* best-effort */ }
+  return v.view();
 };
 
 // Map of locations with their agents. Uses Leaflet if available; otherwise falls

@@ -447,6 +447,7 @@ Administration → login and error screens.
 | Diagnose | `/diagnose` | C · FormPage | [`public/views/diagnose.js`](../public/views/diagnose.js) |
 | Troubleshooting | `/troubleshooting` | B · DashboardPage | [`public/views/troubleshooting.js`](../public/views/troubleshooting.js) |
 | Topology | `/topology` | B · DashboardPage | [`public/views/topology.js`](../public/views/topology.js) |
+| Flows | `/flows` | B · DashboardPage | [`public/views/flows.js`](../public/views/flows.js) |
 
 **What Changes kept:** the window vocabulary the server accepts (`30m`, `6h`,
 `24h`, `7d` — not the preview's three), the marker rule (it moves only on an
@@ -704,3 +705,26 @@ and would claim every URL was a layer link.
 map (now `drawTopoMapInto`), the blast-radius panel and the probe modals (now
 `topoProbeModal`) — the path visualisation among them is shared with Probes &
 Tests.
+
+
+**Flows** carried two segmented controls — Unified / Bidirectional / Map, and
+four time presets — plus a hand-built grid of labelled fields (`.flows-field`)
+with its own input styling. The modes are a SubTabs strip with the mode in the
+URL; the presets are a select, because a range is a value and not a place; the
+fields are one Toolbar, and a control a mode does not use is simply not built
+for it.
+
+The status line — bytes, flows, records — was a grey span in the control bar,
+as far from the numbers it described as the layout allowed. It is the Panel
+note, beside the data it counts. "Invalid time range — check From / To" was an
+error where the data goes; it is a field error on the input that is wrong.
+
+Every table became a DataTable, sortable, with the ports and the protocols side
+by side in a panel grid. Clicking a talker still pivots the peer filter onto it
+— it is a HostLink now rather than a whole clickable row, so the rest of the row
+can be selected and read.
+
+**Not migrated, passed in whole:** the traffic map, its legend chips and the
+traffic-type colour ramp. The ramp is a per-category palette (17 named
+categories plus a hash fallback) that cannot become a class per colour, so the
+one dot that needs it is built in app.js and handed over as a node.

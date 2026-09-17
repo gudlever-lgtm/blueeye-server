@@ -585,12 +585,6 @@ main#view .card { width: auto; padding: 18px 20px; box-shadow: var(--shadow); }
 .agent-health .ah-k { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .03em; }
 .agent-health .ah-v { font-weight: 600; }
 
-/* Flow explorer: ports/protocols side by side + a highlighted scan panel. */
-.flows-tables { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-@media (max-width: 720px) { .flows-tables { grid-template-columns: 1fr; } }
-.flows-explorer .scan-sec { border-color: var(--bad); }
-.flows-explorer .scan-sec > summary { color: var(--bad); font-weight: 600; }
-
 /* Maintenance: fleet banner + the add-window form in settings. */
 .mw-banner { background: var(--warn-weak); border: 1px solid var(--warn); border-radius: var(--radius); padding: 9px 12px; margin: 0 0 14px; font-size: 14px; }
 .mw-form { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: end; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
@@ -1023,51 +1017,6 @@ button.active-btn { outline: 2px solid var(--accent); }
 .history-controls label.inline { flex-direction: row; align-items: center; gap: 6px; }
 .history-controls input, .history-controls select { padding: 4px 8px; }
 
-/* Flows filter toolbar — grouped, labelled fields instead of one crowded row.
-   Three stacked rows (scope / unified filters / time+action) inside a panel. */
-.flows-controls {
-  display: flex; flex-direction: column; gap: 12px;
-  margin: 0 0 16px; padding: 14px 16px;
-  background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--radius);
-}
-.flows-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px 16px; }
-/* The unified-filter and time rows sit below a light divider from the row above. */
-.flows-row-filters, .flows-row-time { padding-top: 12px; border-top: 1px dashed var(--border); }
-.flows-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
-.flows-field-label {
-  font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
-  color: var(--muted); line-height: 1;
-}
-.flows-field input, .flows-field select {
-  padding: 7px 10px; font: inherit; font-size: 13px;
-  border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--panel); color: var(--text);
-}
-.flows-field input:focus, .flows-field select:focus {
-  outline: none; border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-weak);
-}
-.flows-field-sm input { width: 6.5rem; }
-.flows-field-agent select { min-width: 12rem; }
-.flows-field-grow { flex: 1 1 16rem; }
-.flows-field-grow input { width: 100%; }
-/* Push the Inspect button (+ status) to the far end of the time row. */
-.flows-field-action { flex-direction: row; align-items: center; gap: 10px; margin-left: auto; }
-.flows-status { font-size: 12px; }
-
-/* Segmented control: connected buttons sharing one border, one highlighted. */
-.flows-seg { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius-sm);
-  overflow: hidden; background: var(--panel); }
-.flows-seg button {
-  border: 0; border-radius: 0; background: transparent; color: var(--text);
-  font-weight: 600; font-size: 12px; padding: 7px 12px; white-space: nowrap;
-}
-.flows-seg button + button { border-left: 1px solid var(--border); }
-.flows-seg button:hover { background: var(--panel-2); }
-.flows-seg button.active { background: var(--accent); color: var(--btn-fg); }
-
-/* Primary action — a touch larger than the compact fields around it. */
-.flows-inspect { padding: 8px 20px; font-size: 13px; }
-
 .history-metrics { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 10px; }
 .big-chart-svg .brush { pointer-events: none; }
 .big-chart-svg { cursor: crosshair; }
@@ -1362,16 +1311,6 @@ button.active-btn { outline: 2px solid var(--accent); }
 #inv-history-area h3 { margin: 8px 0 4px; font-size: 15px; }
 
 
-/* ---- Bidirectional Flow Inspector ---------------------------------------- */
-.flowbidi { display: flex; flex-direction: column; gap: 16px; }
-.flowbidi-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-.flowbidi-panel { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px 18px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
-.flowbidi-dir { margin: 0 0 4px; font-size: 15px; font-weight: 600; }
-.flowbidi-asym { padding: 10px 16px; border-radius: var(--radius-sm); font-size: 13px; }
-.flowbidi-asym.warn { background: var(--warn-weak); color: var(--warn); border: 1px solid var(--warn); }
-.flowbidi-asym.ok { background: var(--ok-weak); color: var(--ok); border: 1px solid var(--ok); }
-@media (max-width: 860px) { .flowbidi-cols { grid-template-columns: 1fr; } }
-
 /* ---- Logs views (System Logs + User Logs) -------------------------------- */
 .logs-table td { vertical-align: top; }
 .logs-table .nowrap { white-space: nowrap; }
@@ -1623,12 +1562,6 @@ li.guide-step.done .guide-step-title { text-decoration: line-through; opacity: 0
 .traffic-chip .tc-amt { font-size: 11px; }
 .tc-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; flex: none; }
 
-/* Flows → Map mode layout: map + a side panel (legend & top flows). */
-.flowmap-grid { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 14px; align-items: start; }
-@media (max-width: 960px) { .flowmap-grid { grid-template-columns: 1fr; } }
-.flowmap-side { display: flex; flex-direction: column; gap: 14px; }
-.flowmap-side .card { width: auto; padding: 13px 15px; gap: 0; box-shadow: var(--shadow); }
-.flowmap-side .card h3 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
 .flowmap-list { display: flex; flex-direction: column; gap: 1px; max-height: 46vh; overflow-y: auto; }
 .flowmap-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 9px; align-items: center;
   padding: 6px; border-radius: var(--radius-xs); cursor: pointer; }

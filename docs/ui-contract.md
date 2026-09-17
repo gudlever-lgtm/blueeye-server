@@ -1306,3 +1306,31 @@ their label under the input, because the global `label { flex-direction: column 
 rule was never overridden by `.wl-kind-choice`; and the affected-path panel is
 drawn only when there is a path to draw, rather than as a panel that is
 permanently empty for events with no target.
+
+
+**Situation** is the second DetailPage and the sixth shell migration: the five
+panels — what changed, the evidence, the recommended actions, the advisory and
+the timeline — stay in `public/clusterView.js`, which ships standalone, so
+`embedded` is opt-in there the same way it is for Service Assurance and Guides.
+
+The heading was `.inc-header`: an `<h2>` reading "Situation #14", **three badges
+from three different vocabularies** (`.inc-status-*`, `.conf-*`, `.rc-*`), a run
+of `· ` separators, Back floated beside it, and an `.inc-actions` bar
+underneath. It is a PageHeader whose **title is the suspected cause** — the id
+is already in the address, and "Network layer" is what the reader came for.
+
+Acknowledge and Resolve were two `.small` buttons in a row. Resolve is the move
+that closes the story, so it is the primary; Acknowledge, which only records
+that somebody saw it, is the secondary beside it.
+
+**Confidence is not severity.** `.badge.conf-high` rendered in `--sev-crit` —
+so the Evidence panel badged high confidence in red, two inches under the
+header's green "High confidence", the same value answered two ways on one
+screen. Confidence says how much to trust the grouping: high reads ok, low
+reads muted, and a low-confidence situation is a hypothesis rather than an
+alarm. The Situations list (3.17) already used that scale; `styles.css` now
+agrees with it.
+
+That inconsistency was invisible until the header moved onto the contract and
+put the two badges on the same screen — which is the argument for migrating a
+screen and its detail page together.

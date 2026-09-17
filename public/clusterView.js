@@ -355,7 +355,9 @@
     var detail = data.detail;
     if (!detail) { container.appendChild(elem(doc, 'div', 'empty error', data.error || 'Event not found.')); return container; }
 
-    container.appendChild(renderHeader(doc, detail, opts));
+    // The module ships standalone, so its own heading is the default. A host on
+    // the UI contract draws a PageHeader instead and asks for the panels only.
+    if (!opts.embedded) container.appendChild(renderHeader(doc, detail, opts));
 
     // Timeline may have failed to load independently of the detail.
     var timeline = data.timeline || null;

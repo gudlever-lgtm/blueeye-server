@@ -1360,6 +1360,7 @@ const CONTRACT_VIEWS = new Map([
   ['interfaces', 'interfaces'],
   ['nics', 'nics'],
   ['event', 'event'],
+  ['cluster', 'situation'],
 ]);
 
 function hero(viewKey) {
@@ -4315,61 +4316,82 @@ function clusterRenderOpts(extra) {
   return Object.assign({ formatTime: fmtDate, onOpen: (agentId) => { const n = Number(agentId); if (Number.isInteger(n)) openAgent(n); } }, extra || {});
 }
 
+// ---- Situation detail (SHELL MIGRATED — see public/views/situation.js)
+// The five panels stay in public/clusterView.js, which ships standalone; the
+// page they sit on is the contract's.
+let situationPage = null;
+function getSituationPage() {
+  if (situationPage) return situationPage;
+  if (typeof window === 'undefined' || !window.SituationPage || !ui || !window.ClusterView) return null;
+  const CV = window.ClusterView;
+  situationPage = window.SituationPage.create({
+    el, t, ui, errText,
+    id: () => selectedClusterId,
+    openList: () => { currentView = 'clusters'; render(); },
+    rerender: () => render(),
+    statusLabel: CV.statusLabel,
+    confLabel: CV.confLabel,
+    causeLabel: CV.rootCauseLabel,
+    actions: (status) => CV.availableActions(status, canWrite()),
+    helpBody: () => [
+      el('p', {}, t('sit.info.p1')),
+      el('p', {}, t('sit.info.p2')),
+      el('p', { class: 'muted' }, t('sit.info.p3')),
+    ],
+    fetchDetail: async (id) => (await api(`/api/event-clusters/${id}`)).cluster,
+    ack: async (id) => {
+      try { await api(`/api/event-clusters/${id}/ack`, { method: 'POST' }); toast(t('sit.acked')); render(); }
+      catch (err) { toast(errText(err), true); }
+    },
+    resolve: async (id) => {
+      // Resolving closes the story, so it carries the note that says how.
+      const note = window.prompt(t('sit.resolveNote'));
+      if (!note || !note.trim()) return;
+      try {
+        await api(`/api/event-clusters/${id}/resolve`, { method: 'POST', body: { note: note.trim() } });
+        toast(t('sit.resolved'));
+        render();
+      } catch (err) { toast(errText(err), true); }
+    },
+    // The timeline and the recommended actions are INDEPENDENT fetches: their
+    // failure must not blank the page, so each renders its own error state.
+    mount: (detail) => {
+      const id = selectedClusterId;
+      const container = el('div', { class: 'cluster-detail' });
+      (async () => {
+        let timeline = null;
+        let timelineError = false;
+        try { timeline = await api(`/api/event-clusters/${id}/timeline`); } catch { timelineError = true; }
+        let actions = null;
+        let actionsError = false;
+        try { actions = await api(`/api/event-clusters/${id}/recommended-actions`); } catch { actionsError = true; }
+        CV.renderPage(document, container, { detail, timeline, timelineError, actions, actionsError },
+          clusterRenderOpts({
+            embedded: true,
+            canWrite: canWrite(),
+            onRunPlaybook: async (rb) => {
+              if (!confirm(t('sit.playbookConfirm', { name: rb.linkedPlaybookName || rb.title }))) return;
+              try {
+                const { verification } = await api(`/api/event-clusters/${id}/run-playbook`, { method: 'POST', body: { runbookId: rb.id } });
+                const mins = verification ? Math.round((verification.settleSeconds || 300) / 60) : 5;
+                toast(t('sit.playbookQueued', { mins }));
+                render();
+              } catch (err) { toast(errText(err), true); }
+            },
+          }));
+      })();
+      return container;
+    },
+  });
+  return situationPage;
+}
+
 views.cluster = async () => {
-  const id = selectedClusterId;
-  const back = el('button', { class: 'small ghost', onclick: () => { currentView = 'clusters'; render(); } }, '← Situations');
-  if (id == null) return el('div', { class: 'empty' }, back, el('p', {}, 'No situation selected.'));
-
-  let detail;
-  try {
-    ({ cluster: detail } = await api(`/api/event-clusters/${id}`));
-  } catch (err) {
-    if (err.status === 404) return el('div', { class: 'empty' }, back, el('p', { class: 'error' }, 'Situation not found.'));
-    return el('div', { class: 'empty error' }, back, ' ', err.message);
-  }
-
-  // The timeline + recommended actions are INDEPENDENT fetches — their failure
-  // must not blank the page (each renders its own error state).
-  let timeline = null;
-  let timelineError = false;
-  try {
-    timeline = await api(`/api/event-clusters/${id}/timeline`);
-  } catch { timelineError = true; }
-
-  let actions = null;
-  let actionsError = false;
-  try {
-    actions = await api(`/api/event-clusters/${id}/recommended-actions`);
-  } catch { actionsError = true; }
-
-  const container = el('div', { class: 'cluster-detail' });
-
-  // Write actions (operator+), driven through ClusterView's buttons.
-  async function doAck() {
-    try { await api(`/api/event-clusters/${id}/ack`, { method: 'POST' }); toast('Situation acknowledged'); render(); }
-    catch (err) { toast(errText(err), true); }
-  }
-  async function doResolve() {
-    const note = window.prompt('Resolution note (required):');
-    if (!note || !note.trim()) return;
-    try { await api(`/api/event-clusters/${id}/resolve`, { method: 'POST', body: { note: note.trim() } }); toast('Situation resolved'); render(); }
-    catch (err) { toast(errText(err), true); }
-  }
-  // Explicit, confirmed, audit-logged playbook execution from the event page.
-  async function doRunPlaybook(rb) {
-    if (!confirm(`Run playbook "${rb.linkedPlaybookName || rb.title}" against this situation's targets? It will be verified after the settle window.`)) return;
-    try {
-      const { verification } = await api(`/api/event-clusters/${id}/run-playbook`, { method: 'POST', body: { runbookId: rb.id } });
-      const mins = verification ? Math.round((verification.settleSeconds || 300) / 60) : 5;
-      toast(`Playbook queued — verification in ~${mins} min`);
-      render();
-    } catch (err) { toast(errText(err), true); }
-  }
-
-  ClusterView.renderPage(document, container, { detail, timeline, timelineError, actions, actionsError }, clusterRenderOpts({
-    canWrite: canWrite(), back, onAck: doAck, onResolve: doResolve, onRunPlaybook: doRunPlaybook,
-  }));
-  return container;
+  const v = getSituationPage();
+  if (!v) return el('div', { class: 'empty error' }, t('sit.err.detail'));
+  // The record is re-read per entry, so the page is rebuilt with it.
+  situationPage = null;
+  return v.view();
 };
 
 // ---- Traffic (MIGRATED — see public/views/traffic.js) -----------------------

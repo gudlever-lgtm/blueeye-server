@@ -1340,7 +1340,11 @@ button.active-btn { outline: 2px solid var(--accent); }
 .badge.inc-status-resolved { background: var(--ok-weak); color: var(--sev-ok); }
 .badge.inc-status-closed { background: var(--surface-alt); color: var(--text-muted); }
 /* Cross-agent situation (cluster) badges: confidence tier + root-cause layer. */
-.badge.conf-high { background: var(--crit-weak); color: var(--sev-crit); }
+/* Confidence is not severity. It says how much to trust the grouping, so high
+   reads ok and low reads muted — the scale the Situations list and the detail
+   header already use. It used to read high = crit, which put a red "High" two
+   inches under a green "High confidence" on the same screen. */
+.badge.conf-high { background: var(--ok-weak); color: var(--sev-ok); }
 .badge.conf-medium { background: var(--warn-weak); color: var(--sev-warn); }
 .badge.conf-low { background: var(--surface-alt); color: var(--text-muted); }
 .badge.rc-network-layer { background: var(--info-weak); color: var(--sev-info); }

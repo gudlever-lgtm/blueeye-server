@@ -2,7 +2,7 @@
 
 const net = require('net');
 
-const PROBE_TYPES = ['ping', 'tcp', 'dns', 'traceroute', 'tcptraceroute', 'http', 'curl', 'pageload', 'transaction', 'path_mtu'];
+const PROBE_TYPES = ['ping', 'tcp', 'dns', 'rdns', 'traceroute', 'tcptraceroute', 'http', 'curl', 'pageload', 'transaction', 'path_mtu', 'tls'];
 // How many payload sizes one ping sweep may carry, and how large each may be.
 // Each size is its own `ping` invocation on the agent, so the first bounds the
 // RUN, not just the packet.
@@ -106,6 +106,57 @@ function mtuBlock(r) {
     durationMs: intOrNull(r.duration_ms ?? r.durationMs),
   };
 }
+
+// The TLS/certificate verdict, field by field from a typed source. Nothing is
+// spread: a key the agent invents must not reach the database because a future
+// version of the agent added it.
+//
+// The four faults are stored APART because they are four different jobs: an
+// expiry goes in a diary, an untrusted chain is a deployment mistake, a name
+// mismatch is usually the wrong virtual host, and the protocol/cipher is what
+// an audit asks for. Collapsing them into one "invalid" flag would throw away
+// which one it was.
+function tlsBlock(r) {
+  const names = Array.isArray(r.altNames) ? r.altNames : [];
+  return {
+    protocol: str(r.protocol, 32),
+    cipher: str(r.cipher, 64),
+    authorized: r.authorized === true,
+    // node's own code (CERT_HAS_EXPIRED, SELF_SIGNED_CERT_IN_CHAIN, …) — kept
+    // verbatim because it names the fault precisely and a paraphrase would not.
+    authorizationError: str(r.authorizationError, 120),
+    // Tri-state ON PURPOSE: true/false is a verdict, null is "there was no name
+    // to check" (an IP with no SNI). Coercing null to false would report every
+    // IP target as serving the wrong certificate.
+    hostnameMatches: r.hostnameMatches === true ? true : (r.hostnameMatches === false ? false : null),
+    expiryDays: numOrNull(r.expiryDays),
+    expired: r.expired === true,
+    notYetValid: r.notYetValid === true,
+    validFrom: str(r.validFrom, 40),
+    validTo: str(r.validTo, 40),
+    subject: str(r.subject, 190),
+    issuer: str(r.issuer, 190),
+    altNames: names.slice(0, 16).map((n) => str(n, 190)).filter(Boolean),
+    serialNumber: str(r.serialNumber, 64),
+    fingerprint256: str(r.fingerprint256, 128),
+    chainLength: intOrNull(r.chainLength),
+    selfSigned: r.selfSigned === true,
+  };
+}
+
+// The reverse-DNS answer. `forwardConfirmed` is the field worth having: a PTR
+// that does not resolve back to the address it came from looks fine until
+// somebody checks it, and the services that care (mail, most of all) do check.
+function rdnsBlock(r) {
+  const names = Array.isArray(r.ptrNames) ? r.ptrNames : [];
+  return {
+    address: str(r.address, 45),
+    ptrNames: names.slice(0, 8).map((n) => str(n, 190)).filter(Boolean),
+    forwardConfirmed: r.forwardConfirmed === true,
+  };
+}
+
+const str = (v, max) => (v == null || v === '' ? null : String(v).slice(0, max));
 
 // Normalizes an http-probe target to a canonical http(s) URL string (defaulting
 // a bare host to https), or null when it isn't a valid http(s) URL. The URL is
@@ -219,6 +270,11 @@ function validateProbeResults(body) {
       // the camelCase the repository, the root-cause rules and the dashboard
       // use, the same way rtt_ms became rttMs above. Only path_mtu rows carry it.
       mtu: type === 'path_mtu' ? mtuBlock(r) : null,
+      // The certificate the port presented, and what the address says it is
+      // called. Same treatment as the MTU verdict: only the probe that produces
+      // one carries it, and it is copied field by field rather than spread.
+      tls: type === 'tls' ? tlsBlock(r) : null,
+      rdns: type === 'rdns' ? rdnsBlock(r) : null,
       sizes,
       // A sweep also says whether don't-fragment was set; without it the sizes
       // mean nothing, because the path would simply have fragmented them.
@@ -392,6 +448,29 @@ function validateProbeSpec(body) {
       const port = Number(b.tcp_port);
       if (!Number.isInteger(port) || port < 1 || port > 65535) return { errors: { tcp_port: 'tcp_port must be an integer between 1 and 65535' } };
       spec.tcp_port = port;
+    }
+  } else if (type === 'tls') {
+    // A certificate lives on a port, not only on a URL: 465 (SMTP), 993 (IMAP),
+    // 636 (LDAPS), a database, a management interface. The port is therefore
+    // part of the question, and defaults to 443 rather than being required.
+    const host = String(b.host || b.target || '').trim();
+    if (!isSafeHost(host)) return { errors: { host: 'host/target is required and must be a valid hostname or IP' } };
+    spec.host = host;
+    const port = b.port === undefined || b.port === null || b.port === '' ? 443 : Number(b.port);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) return { errors: { port: 'port must be an integer between 1 and 65535' } };
+    spec.port = port;
+    // SNI. Pointing the probe at an IP and naming the host is how you check the
+    // certificate ONE virtual host serves on a shared address, so the name is
+    // held to the same rule as any other target rather than passed through.
+    if (b.servername !== undefined && b.servername !== null && b.servername !== '') {
+      const sni = String(b.servername).trim();
+      if (!isSafeHost(sni)) return { errors: { servername: 'servername must be a valid hostname' } };
+      spec.servername = sni;
+    }
+    if (b.timeout_ms !== undefined || b.timeoutMs !== undefined) {
+      const n = Number(b.timeout_ms ?? b.timeoutMs);
+      if (!Number.isInteger(n) || n < 100 || n > 60000) return { errors: { timeout_ms: 'timeout_ms must be an integer between 100 and 60000' } };
+      spec.timeoutMs = n;
     }
   } else {
     const host = String(b.host || b.target || '').trim();

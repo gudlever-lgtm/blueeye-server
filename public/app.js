@@ -5024,6 +5024,23 @@ function probeMeasured(r) {
       const worst = hops.reduce((w, h) => (h.lossPct != null && (w == null || h.lossPct > w) ? h.lossPct : w), null);
       return `${hops.length} hops${worst ? ` · ${worst}% worst hop loss` : ''}`;
     }
+    case 'tls': {
+      // The expiry is the number people come for; the faults are named next to
+      // it because a certificate with 300 days left and an untrusted chain is
+      // not a healthy certificate.
+      const c = r.tls || {};
+      const parts = [];
+      if (c.expiryDays != null) parts.push(c.expiryDays <= 0 ? `expired ${Math.abs(Math.round(c.expiryDays))}d ago` : `${Math.round(c.expiryDays)}d left`);
+      if (c.authorized === false) parts.push('untrusted');
+      if (c.hostnameMatches === false) parts.push('name mismatch');
+      if (c.protocol) parts.push(c.protocol);
+      return parts.length ? parts.join(' · ') : null;
+    }
+    case 'rdns': {
+      const d = r.rdns || {};
+      if (!d.ptrNames || !d.ptrNames.length) return r.ok ? null : 'no PTR';
+      return `${d.ptrNames[0]}${d.forwardConfirmed ? '' : ' · unconfirmed'}`;
+    }
     case 'pageload':
       return r.rttMs == null ? null
         : `${ms(r.rttMs)} load${r.bytes != null ? ` · ${fmtBytes(r.bytes)}` : ''}`;
@@ -5889,8 +5906,83 @@ function mtuDetail(r) {
     verdict, clamp, stats, table);
 }
 
+
+// The certificate a port presented, read back in the order an operator needs
+// it: what is wrong first, what it is second, and the identifying detail last.
+// The four faults are kept apart here exactly as they are stored, because they
+// have four different fixes — renew, reissue, install the intermediate, or
+// point the client at the right name.
+function tlsDetail(r) {
+  // `c` rather than `t`: the translation function is called `t` in this file,
+  // and shadowing it here would break every label in the table.
+  const c = r.tls || {};
+  const rows = [];
+  const kv = (label, value, cls = null) => rows.push(el('tr', {},
+    el('td', { class: 'muted' }, label),
+    el('td', cls ? { class: cls } : {}, value)));
+
+  const days = c.expiryDays;
+  if (days != null) {
+    kv(t('probe.tls.expires'),
+      days <= 0 ? t('probe.tls.expiredAgo', { days: String(Math.abs(Math.round(days))) })
+        : `${t('probe.tls.expiresIn', { days: String(Math.round(days)) })}${c.validTo ? ` · ${fmtDate(c.validTo)}` : ''}`,
+      days <= 0 ? 'error' : (days <= 30 ? 'warn' : null));
+  }
+  kv(t('probe.tls.chain'),
+    c.authorized ? t('probe.tls.chainOk')
+      : t('probe.tls.chainBad', { reason: c.selfSigned ? t('probe.tls.selfSigned') : (c.authorizationError || '—') }),
+    c.authorized ? null : 'error');
+  kv(t('probe.tls.name'),
+    c.hostnameMatches === true ? t('probe.tls.nameOk')
+      : c.hostnameMatches === false ? t('probe.tls.nameBad') : t('probe.tls.nameUnchecked'),
+    c.hostnameMatches === false ? 'error' : null);
+  if (c.subject) kv(t('probe.tls.subject'), c.subject);
+  if (c.issuer) kv(t('probe.tls.issuer'), c.issuer);
+  if (c.protocol) kv(t('probe.tls.protocol'), c.protocol);
+  if (c.cipher) kv(t('probe.tls.cipher'), c.cipher);
+  if (c.chainLength != null) kv(t('probe.tls.links'), String(c.chainLength));
+  if (c.altNames && c.altNames.length) {
+    kv(t('probe.tls.altNames'), el('span', { class: 'mono small' }, c.altNames.join(', ')));
+  }
+  if (c.serialNumber) kv(t('probe.tls.serial'), el('span', { class: 'mono small' }, c.serialNumber));
+  if (c.fingerprint256) kv(t('probe.tls.fingerprint'), el('span', { class: 'mono small' }, c.fingerprint256));
+
+  return el('details', { class: 'sec', open: true },
+    el('summary', {}, t('probe.tls.title', { target: esc(r.target) })),
+    el('table', { class: 'kv tls-detail' }, el('tbody', {}, ...rows)));
+}
+
+// The reverse lookup, and the confirmation that is the actual question.
+function rdnsDetail(r) {
+  const d = r.rdns || {};
+  const names = d.ptrNames || [];
+  const rows = [];
+  const kv = (label, value, cls = null) => rows.push(el('tr', {},
+    el('td', { class: 'muted' }, label),
+    el('td', cls ? { class: cls } : {}, value)));
+
+  if (d.address) kv(t('probe.rdns.address'), el('span', { class: 'mono' }, d.address));
+  kv(t('probe.rdns.ptr'),
+    names.length ? el('span', { class: 'mono' }, names.join(', ')) : t('probe.rdns.none'),
+    names.length ? null : 'error');
+  if (names.length) {
+    kv(t('probe.rdns.confirmed'),
+      d.forwardConfirmed ? t('probe.rdns.confirmedYes') : t('probe.rdns.confirmedNo'),
+      d.forwardConfirmed ? null : 'error');
+  }
+  return el('details', { class: 'sec', open: true },
+    el('summary', {}, t('probe.rdns.title', { target: esc(r.target) })),
+    el('table', { class: 'kv' }, el('tbody', {}, ...rows)),
+    el('p', { class: 'muted small' }, t('probe.rdns.why')));
+}
+
 async function probeDetail(r, agentId) {
   if (r.type === 'path_mtu') return mtuDetail(r);
+  // Both of these ARE their result — there is no history worth charting for a
+  // certificate's subject or a PTR name, and the numbers that do move (days to
+  // expiry) are read in the row itself.
+  if (r.type === 'tls') return tlsDetail(r);
+  if (r.type === 'rdns') return rdnsDetail(r);
   if (r.type === 'traceroute' || r.type === 'tcptraceroute') {
     const hops = r.hops || [];
     const hopRow = (h) => el('tr', {},
@@ -8942,7 +9034,7 @@ async function probeRunnerView() {
   if (!agents.length) { root.append(el('div', { class: 'empty' }, 'No agents yet — enrol an agent first.')); return root; }
 
   const agentSel = el('select', {}, ...agents.map((a) => el('option', { value: String(a.id) }, a.display_name || a.hostname)));
-  const typeSel = el('select', {}, ...[['ping', 'Ping (ICMP)'], ['tcp', 'TCP-connect'], ['dns', 'DNS'], ['traceroute', 'Traceroute'], ['tcptraceroute', t('probe.tcptraceroute')], ['path_mtu', t('probe.pathMtu')], ['curl', 'cURL (content check)'], ['pageload', 'Page load'], ['transaction', 'Transaction (multi-step)']].map(([v, l]) => el('option', { value: v }, l)));
+  const typeSel = el('select', {}, ...[['ping', 'Ping (ICMP)'], ['tcp', 'TCP-connect'], ['dns', 'DNS'], ['traceroute', 'Traceroute'], ['tcptraceroute', t('probe.tcptraceroute')], ['path_mtu', t('probe.pathMtu')], ['tls', t('probe.tls')], ['rdns', t('probe.rdns')], ['curl', 'cURL (content check)'], ['pageload', 'Page load'], ['transaction', 'Transaction (multi-step)']].map(([v, l]) => el('option', { value: v }, l)));
   const target = el('input', { type: 'text', placeholder: 'e.g. 1.1.1.1 or example.com' });
   const targetWrap = el('label', { class: 'inline muted' }, 'Target ', target);
   const portInput = el('input', { type: 'number', min: '1', max: '65535', value: '443' });

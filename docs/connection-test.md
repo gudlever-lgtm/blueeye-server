@@ -31,21 +31,24 @@ is always a check the server can dispatch.
 | Check | Probe | Note |
 |---|---|---|
 | DNS lookup | `dns` | Hostname targets only |
-| Reverse DNS | — | **Not available yet** (agent-side work) |
+| Reverse DNS | `rdns` | The PTR, and whether it forward-confirms (agent 0.27+) |
 | Ping (ICMP) | `ping`, count 4 | Loss, RTT, jitter |
 | TCP connect | `tcp` port 80 | Handshake time to HTTP |
 | TCP connect | `tcp` port 443 | Handshake time to HTTPS |
-| TLS / certificate | — | **Not available yet** (agent-side work) |
+| TLS / certificate | `tls` port 443 | Expiry, chain, hostname, protocol (agent 0.27+) |
 | Traceroute | `traceroute`, 3 queries/hop | Per-hop loss and latency |
 | TCP traceroute | `tcptraceroute` port 443 | The path a TCP session takes |
 | Path MTU | `path_mtu`, per hop | The largest packet the path carries |
 
 Two rules keep the list honest rather than tidy:
 
-* **`available: false`** — reverse DNS and the TLS certificate check are in the
-  catalogue but the agent cannot run them yet. They are **shown, disabled, with
-  the reason** instead of hidden, so the list says what a connection test covers
-  and what it will cover. The server refuses to dispatch them.
+* **`available: false`** — a check the catalogue knows about but the agent
+  cannot run is **shown, disabled, with the reason** instead of hidden, so the
+  list says what a connection test covers, and the server refuses to dispatch
+  it. Nothing is marked so today: reverse DNS and TLS landed in blueeye-agent
+  **0.27**. An agent older than that answers `unknown probe type`, which the row
+  reports as the failure reason it is — see [scheduled-reports.md](scheduled-reports.md)'s
+  sibling note on version skew in `docs/probe-tls-rdns.md`.
 * **`appliesTo: 'hostname'`** — a DNS lookup of `1.1.1.1` resolves nothing. With
   an IP literal in the target field the row greys out and says why. A green tick
   for a question nobody asked is worse than no row at all.

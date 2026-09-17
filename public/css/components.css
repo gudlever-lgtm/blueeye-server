@@ -66,7 +66,7 @@
   border-radius: var(--r-panel); }
 .ui .stat-card:hover { background: var(--surface-alt); }
 .ui .stat-card[aria-pressed="true"] { background: var(--accent-weak); border-color: var(--accent); }
-.ui .stat-n { font-size: 26px; font-weight: 650; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.ui .stat-n { font-size: var(--fs-stat); font-weight: 650; line-height: 1.1; font-variant-numeric: tabular-nums; }
 .ui .stat-l { font-size: var(--fs-xs); color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
 .ui .stat-card.crit { border-left-color: var(--sev-crit); }
 .ui .stat-card.crit .stat-n { color: var(--sev-crit); }
@@ -177,13 +177,13 @@
 /* ---- States: Empty / Loading / Error ------------------------------------- */
 .ui .state { display: flex; flex-direction: column; align-items: center; gap: var(--s-3);
   padding: var(--s-6) var(--s-5); text-align: center; }
-.ui .state .state-ico { font-size: 26px; line-height: 1; }
+.ui .state .state-ico { font-size: var(--fs-stat); line-height: 1; }
 .ui .state h3 { margin: 0; font-size: var(--fs-md); font-weight: 650; }
 .ui .state p { margin: 0; max-width: 56ch; color: var(--text-muted);
   font-size: var(--fs-sm); line-height: 1.6; }
 .ui .state.is-error .state-ico { color: var(--sev-crit); }
 .ui .state code { font-family: var(--mono); font-size: var(--fs-xs); color: var(--text-muted);
-  background: var(--surface-alt); padding: 2px 6px; border-radius: var(--r-badge); }
+  background: var(--surface-alt); padding: 1px var(--s-1); border-radius: var(--r-badge); }
 
 .ui .skel { height: 12px; border-radius: var(--r-badge); background-size: 400% 100%;
   background-image: linear-gradient(90deg, var(--surface-alt) 25%, var(--border) 37%, var(--surface-alt) 63%);
@@ -262,7 +262,7 @@
 .ui-toast.err { border-left-color: var(--sev-crit); }
 .ui-toast .toast-tx { flex: 1; min-width: 0; }
 .ui-toast .toast-title { font-weight: 600; }
-.ui-toast .toast-detail { margin-top: 2px; color: var(--text-muted);
+.ui-toast .toast-detail { margin-top: var(--s-1); color: var(--text-muted);
   font-size: var(--fs-xs); line-height: 1.45; }
 
 /* ---- Narrow screens ------------------------------------------------------ */

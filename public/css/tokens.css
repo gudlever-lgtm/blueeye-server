@@ -308,6 +308,10 @@
   --fs-md: 14px;
   --fs-lg: 16px;
   --fs-xl: 20px;
+  /* One step above the scale, for the single number on a StatStrip card. It is
+     a figure to be read across a room, not a heading, which is why it is not
+     --fs-xl: at 20px the card reads as a paragraph with a number in it. */
+  --fs-stat: 26px;
 
   /* One control height for every button, input and select in a Toolbar. */
   --control-h: 32px;

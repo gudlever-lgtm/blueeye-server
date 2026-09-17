@@ -8,7 +8,8 @@
 #   1. security   — test/gate/security.test.js   (auth, headers, 404/500, injection, secrets)
 #   2. ui         — test/gate/ui.test.js         (dashboard/CLI wiring, i18n, static assets)
 #   3. validation — test/gate/validation.test.js (input validation → 400, schema, config)
-#   4. full suite — npm test
+#   4. ui:check   — scripts/ui-check.js           (the UI contract: tokens, components, templates)
+#   5. full suite — npm test
 #
 # Usage:  scripts/gate.sh            run the gate (cached per HEAD + worktree state)
 #         scripts/gate.sh --force    ignore the cache
@@ -83,6 +84,10 @@ run_phase() {
 run_phase "security"   node --test test/gate/security.test.js
 run_phase "ui"         node --test test/gate/ui.test.js
 run_phase "validation" node --test test/gate/validation.test.js
+# The UI contract (docs/ui-contract.md), linted. It runs inside the full suite
+# too, via test/uiCheck.test.js; it is named here as well because its findings
+# are file:line:rule and reading them in the gate's own output is the point.
+run_phase "ui:check"   node scripts/ui-check.js
 run_phase "full suite" npm test --silent
 
 echo

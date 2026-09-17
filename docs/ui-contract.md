@@ -324,6 +324,37 @@ reads as a Dane expects it to without a second formatter.
 - more than one primary button per PageHeader
 - page-local copies of a component
 
+### Enforced: `npm run ui:check`
+
+[`scripts/ui-check.js`](../scripts/ui-check.js). Reports `file:line:rule` and
+exits 1 on any finding. It runs in the pre-build gate and inside `npm test`
+(`test/uiCheck.test.js`), so a violation fails the build rather than waiting for
+somebody to notice.
+
+| Rule | Fires on |
+|---|---|
+| `inline-style` | `style:` / `style="` in a view |
+| `colour` | a hex or `rgb()` literal outside `css/tokens.css` |
+| `px-size` | a raw px spacing or font size in a contract stylesheet |
+| `legacy-class` | a class the contract replaced, still in use — the message names the replacement |
+| `tab-pattern` | a hand-rolled tab strip |
+| `chip-metadata` | a chip, whatever it carries |
+| `primary-count` | more than one primary in a PageHeader's actions |
+| `template` | a migrated view that uses none of the four templates |
+
+**The `MIGRATED` list only grows.** Phase 3 adds a screen to it in the same
+commit that migrates the screen, so the sweep tightens one screen at a time
+rather than being switched off while the work is in flight. A finding is either
+fixed or the file is not migrated yet — the rules are never loosened to make one
+go away.
+
+`npm run ui:check -- --all` sweeps the unmigrated chrome too. That is the phase 4
+target; the default run prints what is still owed as a single shrinking number.
+
+**One exemption**, and it is an element rather than a file: a `<col>` width is
+table geometry the caller supplies per table, and expressing it in CSS would mean
+one class per pixel value. Every other inline style is caught, everywhere.
+
 ---
 
 ## Phases
@@ -332,7 +363,7 @@ reads as a Dane expects it to without a second formatter.
 |---|---|---|
 | 0 | Audit | done |
 | 1 | `tokens.css`, the components the examples need, two example screens on `/ui-preview/*`, routing | **done — awaiting approval** |
-| 2 | Finish `tokens.css` + `base.css`, remaining components, `/ui-kitchen-sink`, `scripts/ui-check.js` | **in progress** — base.css, `ui.js` and the kitchen sink done |
+| 2 | Finish `tokens.css` + `base.css`, remaining components, `/ui-kitchen-sink`, `scripts/ui-check.js` | **done** |
 | 3 | Migration, one screen per commit | not started |
 | 4 | Verification: `ui:check` clean, before/after grep report | not started |
 

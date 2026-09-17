@@ -1,6 +1,6 @@
 {
   "name": "blueeye-server",
-  "version": "0.162.4",
+  "version": "0.162.5",
   "releaseDate": "2026-09-17",
   "private": true,
   "description": "BlueEyes Network Resilience System — on-prem, single-tenant API server (Node/Express + MySQL).",
@@ -21,7 +21,8 @@
     "codex": "npx --yes ai-codex",
     "gen-favicon": "node scripts/gen-favicon.js",
     "version": "node scripts/stamp-release-date.js",
-    "service-test-worker": "node scripts/service-test-worker.js"
+    "service-test-worker": "node scripts/service-test-worker.js",
+    "ui:check": "node scripts/ui-check.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

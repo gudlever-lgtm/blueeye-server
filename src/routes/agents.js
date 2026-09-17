@@ -74,7 +74,7 @@ function aggregateFlows(rows, { port = null, protocol = null } = {}) {
 //
 // Agents are created via enrollment (prompt 4) — there is intentionally no
 // manual POST /agents here.
-function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentCommander, agentSourceStore, releaseStore = null, releasePublicKey = '', publishRelease = null, auditRepo = null, auditLogger = null, integrationTrigger = null, commandSigner = null, logger = silentLogger, reconnect = {} }) {
+function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentCommander, agentSourceStore, releaseStore = null, releasePublicKey = '', releaseKeyService = null, publishRelease = null, auditRepo = null, auditEventsRepo = null, auditLogger = null, integrationTrigger = null, commandSigner = null, logger = silentLogger, reconnect = {} }) {
   // How long POST /:id/reconnect waits for the agent to re-dial after the forced
   // close (the agent's first backoff step is ~1 s), and how often it re-checks.
   const reconnectWaitMs = Number.isInteger(reconnect.waitMs) ? reconnect.waitMs : 12000;
@@ -118,6 +118,31 @@ function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentComma
       return null;
     }
   }
+  // Records a server-side fault the operator will also SEE in the dashboard, so
+  // the log and the screen say the same thing. Best-effort and deduplicated — a
+  // fault that repeats every time Update is clicked leaves one annotated row, not
+  // a hundred.
+  async function recordSystemError(req, { action, targetType = null, targetId = null, targetLabel = null, detail = null }) {
+    if (!auditEventsRepo || typeof auditEventsRepo.recordRecurring !== 'function') return;
+    try {
+      const user = (req && req.user) || {};
+      await auditEventsRepo.recordRecurring({
+        actorType: 'system',
+        actorId: user.id ?? null,
+        actorLabel: user.email ?? null,
+        actorRole: user.role ?? null,
+        action,
+        targetType,
+        targetId: targetId == null ? null : String(targetId),
+        targetLabel,
+        detail,
+        dedupKey: `system:${action}:${targetType || '-'}:${targetId == null ? '-' : targetId}:${(detail && detail.reason) || '-'}`,
+      });
+    } catch (err) {
+      (req && req.log ? req.log : logger).warn(`agents: system-log record(${action}) failed (${err.message})`);
+    }
+  }
+
   async function markFailed(auditId, resultDetail) {
     if (!auditId || !auditRepo || typeof auditRepo.complete !== 'function') return;
     try { await auditRepo.complete(auditId, { state: 'failed', resultDetail }); } catch (err) { logger.warn(`agents: audit complete(failed) for auditId ${auditId} failed (${err.message})`); }
@@ -299,6 +324,16 @@ function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentComma
       if (!agentCommander || typeof agentCommander.sendCommandAndWait !== 'function') {
         return res.status(503).json({ error: 'Agent channel not available' });
       }
+      // WHY the push is unsigned, when it is. The dashboard used to guess ("this
+      // server has no release signing key") and send the operator to the wrong
+      // screen; a key that exists but cannot sign — an env-only public key, or a
+      // stored key whose private half no longer decrypts — looks identical from
+      // the outside and needs different advice. Ask the key service instead.
+      const signedReason = release
+        ? null
+        : (releaseKeyService && typeof releaseKeyService.signBlockedReason === 'function'
+          ? (releaseKeyService.signBlockedReason() || 'sign-failed')
+          : 'no-key');
       const command = release
         ? { name: 'update', version: release.version, sha256: release.sha256, signature: release.signature }
         : { name: 'update', sha256: agentSourceStore.sha256, version: (typeof agentSourceStore.sourceVersion === 'function' ? agentSourceStore.sourceVersion() : null) };
@@ -315,6 +350,20 @@ function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentComma
       const reply = out.reply || {};
       // A runtime that declines (docker/unmanaged) is a terminal outcome we know now.
       if (reply.accepted === false) await markFailed(auditId, reply.reason || 'declined');
+      // An unsigned push is a known-bad outcome on a pinned fleet, so it belongs
+      // in the system log next to the failure it will cause — not only in a toast
+      // the operator may have already clicked away.
+      if (!release) {
+        (req.log || logger).warn(
+          `agents: update for agent ${id} sent UNSIGNED (${signedReason}) — an agent pinned to a release key will refuse it.`);
+        await recordSystemError(req, {
+          action: 'agent.update-unsigned',
+          targetType: 'agent',
+          targetId: id,
+          targetLabel: agent.hostname || null,
+          detail: { reason: signedReason, targetVersion },
+        });
+      }
       res.status(202).json({
         connected: true,
         acked: !!out.acked,
@@ -323,6 +372,7 @@ function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentComma
         reason: reply.reason || null,
         targetVersion,
         signed: !!release,
+        signedReason,
         auditId: auditId || null,
       });
     })

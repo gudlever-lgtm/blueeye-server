@@ -5,6 +5,7 @@ const express = require('express');
 const { asyncHandler } = require('../middleware/asyncHandler');
 const { renderInstallScript } = require('../enroll/installScript');
 const { renderInstallPs1, renderUpdatePs1, renderUninstallPs1 } = require('../enroll/installScriptWin');
+const { renderRepinScript } = require('../enroll/repinScript');
 
 // Only allow a sane host[:port] when deriving the server URL from the request,
 // so a forged Host header can't be reflected into the install script.
@@ -31,6 +32,7 @@ function resolveServerUrl(req, enrollConfig) {
 //   GET /enroll/agent-binary-status    -> build status for operator inspection
 //   GET /enroll/agent/:platform        -> manually-dropped binary (legacy; only if published)
 //   GET /enroll/:code/install.sh       -> the one-line installer for that code
+//   GET /enroll/repin.sh               -> re-anchor an installed agent to this server's key
 //   GET /enroll/update.ps1             -> the Windows update-in-place one-liner
 function createEnrollRouter({ artifactStore, sourceStore, binaryStore, releaseStore, enrollmentCodesRepo, enrollConfig = {}, releasePublicKey = '' }) {
   const router = express.Router();
@@ -61,6 +63,31 @@ function createEnrollRouter({ artifactStore, sourceStore, binaryStore, releaseSt
     }
     const pem = key.endsWith('\n') ? key : `${key}\n`;
     res.status(200).type('text/plain; charset=utf-8').send(pem);
+  });
+
+  // Re-pin an ALREADY-INSTALLED agent to the release key this server serves now.
+  // An agent refuses an update that is not signed by the key it pinned at install
+  // time, so a server whose signing key changed (rotated, regenerated, or no
+  // longer decryptable) can no longer update its own fleet — and re-running the
+  // installer is not an answer, because that needs an enrollment code and would
+  // onboard a second agent for the same host. This script only rewrites the
+  // release-key drop-in and restarts the service.
+  //
+  // Public for the same reason as install.sh: the host running it has no
+  // dashboard session, and the script hands out nothing secret — the release
+  // PUBLIC key is already served unauthenticated at /enroll/agent-release-key.
+  // 404 while this server has no key to pin, so the script can never point a
+  // host at an empty anchor.
+  router.get('/repin.sh', (req, res) => {
+    if (!pubKey()) {
+      res.status(404).type('text/plain; charset=utf-8');
+      return res.send('# No agent release public key configured on this server — generate one under Settings -> Agent key first.\n');
+    }
+    const script = renderRepinScript({
+      serverUrl: resolveServerUrl(req, enrollConfig),
+      serviceName: (enrollConfig && enrollConfig.serviceName) || 'blueeye-agent',
+    });
+    res.status(200).type('text/x-shellscript; charset=utf-8').send(script);
   });
 
   // Serve the agent SOURCE bundle (a gzipped tarball), packaged + checksummed at

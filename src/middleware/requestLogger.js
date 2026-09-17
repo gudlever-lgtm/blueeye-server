@@ -23,7 +23,14 @@ function requestLogger(logger = silentLogger) {
     const start = process.hrtime.bigint();
     res.on('finish', () => {
       const ms = Number(process.hrtime.bigint() - start) / 1e6;
-      req.log.info(`${req.method} ${req.originalUrl} ${res.statusCode} ${ms.toFixed(1)}ms`);
+      const line = `${req.method} ${req.originalUrl} ${res.statusCode} ${ms.toFixed(1)}ms`;
+      // A request that FAILED is an error the caller was shown — it belongs in
+      // the system log at a level the log's filter can find. Logged at info, a
+      // 500 sat in the same stream as every healthy request and was invisible
+      // to "show me the errors".
+      if (res.statusCode >= 500) req.log.error(line);
+      else if (res.statusCode >= 400) req.log.warn(line);
+      else req.log.info(line);
     });
     next();
   };

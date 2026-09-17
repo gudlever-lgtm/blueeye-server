@@ -37,7 +37,7 @@ const AGENTS = [{
   capabilities: { agentVersion: '0.24.0', managed: 'systemd' }, meta: {}, monitor_config: {},
 }];
 
-function appWith({ auditRepo, signing = true } = {}) {
+function appWith({ auditRepo, signing = true, verifyOnly = false } = {}) {
   return makeApp({
     agentsRepo: makeAgentsRepo({
       findAll: async () => AGENTS,
@@ -50,7 +50,7 @@ function appWith({ auditRepo, signing = true } = {}) {
     },
     agentSourceStore: makeSourceStore({ sourceVersion: () => '0.27.0' }),
     releaseStore: makeReleaseStore(),
-    releaseKeyService: makeReleaseKeyService({ configured: signing }),
+    releaseKeyService: makeReleaseKeyService({ configured: signing, verifyOnly }),
     probeResultsRepo: { latestByAgent: async () => [], findByAgent: async () => [] },
     speedtestResultsRepo: { findByAgent: async () => [], latestPerAgent: async () => [], create: async () => 1 },
   });
@@ -129,6 +129,26 @@ test('an update that lands reports the version it landed on', async (t) => {
   await tick(6500);
   assert.match(toastText(doc), /updated/i);
   assert.match(toastText(doc), /0\.27\.0/, 'the version it reached is the whole point');
+});
+
+test('a refusal over the pinned release key offers the re-pin command', async (t) => {
+  // The agent accepted the command and then refused the payload, because the key
+  // it pinned at install time is not the key this server signs with. That has one
+  // fix and the operator cannot guess it, so the dashboard hands it over.
+  const auditRepo = makeAuditRepo();
+  // A key IS pinned on both sides — this server just cannot sign with it.
+  const { doc } = await boot(t, appWith({ auditRepo, verifyOnly: true }));
+  await clickUpdate(doc);
+  const row = auditRepo.rows.find((r) => r.action === 'upgrade');
+  await auditRepo.complete(row.id, {
+    state: 'failed',
+    resultDetail: 'refusing unsigned update: a release public key is pinned or signed updates are required (possible signature downgrade)',
+  });
+
+  await tick(6500);
+  const modal = doc.querySelector('#modal');
+  assert.ok(modal && !modal.classList.contains('hidden'), 'no re-pin modal appeared');
+  assert.match(doc.querySelector('#modal-card').textContent, /repin\.sh/, 'the re-pin one-liner is missing');
 });
 
 test('an UNSIGNED push warns at the click, not only in the trail', async (t) => {

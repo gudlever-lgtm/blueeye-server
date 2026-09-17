@@ -96,6 +96,67 @@ A malformed version from the signer is dropped rather than shown — a phantom
 (they are cached with the proof) and an unreachable license server (the last
 known values are kept).
 
+## When the agent refuses the update
+
+An agent installed by `install.sh` pins the server's Ed25519 release **public**
+key (systemd drop-in `10-release-key.conf`) and verifies every self-update
+against it. It therefore refuses:
+
+* an **unsigned** push — `refusing unsigned update: a release public key is
+  pinned or signed updates are required (possible signature downgrade)`
+* a release signed with a **different** key — `release signature did not verify`
+
+Both are the fail-closed answer to a server that cannot prove what it is
+shipping, and both show up the same way in the dashboard: the command is
+accepted, the agent then reports the failure, and its version never moves.
+
+Two things have to be true for a one-click update to land on a pinned agent:
+
+1. **This server can sign.** `POST /agents/:id/update` now returns
+   `signedReason` when it could not, and the dashboard says which it is:
+
+   | `signedReason` | What it means | Fix |
+   | --- | --- | --- |
+   | `no-key` | no release key at all | generate one in Settings → Agent key |
+   | `verify-only` | only `AGENT_RELEASE_PUBLIC_KEY` — no private half here | generate a managed key |
+   | `undecryptable` | a managed key is stored but will not decrypt (`SECRET_ENCRYPTION_KEY`/`JWT_SECRET` changed after it was generated) | delete it, generate a new one |
+   | `sign-failed` | signing threw — see the system log | as logged |
+
+   Each unsigned push is recorded in the system log as `agent.update-unsigned`
+   with the reason, so the cause outlives the toast.
+
+2. **The agent pins the key this server signs with.** After generating a new
+   key, existing agents still trust the old one. Re-pin them:
+
+   ```
+   curl -fsSL https://<server>/enroll/repin.sh | sudo sh
+   ```
+
+   `GET /enroll/repin.sh` rewrites `10-release-key.conf` with the key the server
+   serves now and restarts the unit. It carries **no enrollment code**: it cannot
+   enroll, cannot change the agent's identity or token, and cannot create a
+   second agent for the host. It is trust-on-first-use again, exactly as the
+   install was, so it prints the key's fingerprint for comparison with Settings →
+   Agent key, and it refuses to run when the server publishes no key.
+
+   The dashboard offers the command where the failure appears: on a refused
+   update, and in Settings → Updates when one-click updates are blocked.
+
+## When the update installs but nothing changes
+
+The agent extracts the new release, installs dependencies and then asks systemd
+to restart the unit. If that restart does not happen (no privilege, no systemd,
+a masked unit), the new code is on disk and the **old process is still running**
+— so the agent keeps reporting the old version. That used to be reported as a
+successful update, for ever. The agent now checks the restart and reports
+
+```
+installed v0.27.0 but the service restart failed (…) — run: systemctl restart blueeye-agent
+```
+
+as a FAILED action instead, which is what the dashboard shows and what the audit
+row records.
+
 ## Deploying a server update
 
 **Settings → Updates** shows what is available. How it is deployed depends on one

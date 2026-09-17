@@ -103,6 +103,13 @@ function describeRequest(method, rawPath) {
     return { action: `agent.${parts[2]}`, targetType: 'agent', targetId: parts[1] || null, targetLabel: null };
   }
 
+  // /license/refresh re-validates the licence against the licence server. It
+  // creates nothing, so 'license.create' (what the POST verb would make of it)
+  // named the wrong event in every user log.
+  if (head === 'license' && parts[1] === 'refresh') {
+    return { action: 'license.revalidate', targetType: 'license', targetId: null, targetLabel: null };
+  }
+
   // /api/settings/<area> and /api/nis2/<kind>/... — keep the sub-area as target.
   if ((head === 'settings' || head === 'nis2' || head === 'ldap') && parts.length >= 2) {
     const sub = parts[1];

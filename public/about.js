@@ -41,6 +41,9 @@
   // The history, newest first. v = the version it shipped in, d = the date that
   // version landed (YYYY-MM-DD, the page groups by month).
   var RELEASES = [
+    { v: '0.166.0', d: '2026-09-17', area: 'fleet',
+      en: { t: 'An agent that refuses an update can be re-pinned', s: 'When an agent rejects a one-click update because the release key it trusts is no longer the one this server signs with, the dashboard says exactly why and hands over the one-liner that re-anchors that host — no re-install, no second agent.' },
+      da: { t: 'En agent, der afviser en opdatering, kan fastlåses på ny', s: 'Når en agent afviser en et-kliks-opdatering, fordi den nøgle den stoler på, ikke længere er den, serveren signerer med, siger dashboardet præcis hvorfor og giver kommandoen, der fastlåser værten på ny — uden geninstallation og uden en ekstra agent.' } },
     { v: '0.161.0', d: '2026-09-17', area: 'platform',
       en: { t: 'An About page', s: 'The account menu answers what this build is, and what the product grew into: every feature that moved the needle, with the version it shipped in and the month it landed.' },
       da: { t: 'En Om-side', s: 'Kontomenuen svarer på, hvad denne version er, og hvad produktet er vokset til: hver funktion, der flyttede noget, med den version den kom i, og den måned den landede.' } },

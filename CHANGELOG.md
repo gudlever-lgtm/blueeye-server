@@ -1,5 +1,62 @@
 # Changelog
 
+## 0.166.0 — The update an agent refuses, and what to do about it
+
+A one-click Update went out, the agent accepted it, and its version never moved.
+The reason was in the agent's own words in the user log:
+
+```
+refusing unsigned update: a release public key is pinned or signed updates are
+required (possible signature downgrade)
+```
+
+The agent pins the server's release **public** key at install time and verifies
+every self-update against it. The server could no longer sign, so it fell back to
+the unsigned source bundle — which is exactly what a pinned agent refuses. Three
+things were wrong about how that played out, and all three are fixed.
+
+### The server says WHY it could not sign
+
+`POST /agents/:id/update` returns `signedReason`: `no-key`, `verify-only`
+(only `AGENT_RELEASE_PUBLIC_KEY` — no private half here), `undecryptable` (a
+managed key that no longer decrypts, because `SECRET_ENCRYPTION_KEY`/`JWT_SECRET`
+changed after it was generated) or `sign-failed`. They need different fixes and
+looked identical before; the toast used to guess "no signing key" and point at
+Settings → **License**, which has no such control. Every unsigned push is also
+recorded in the system log as `agent.update-unsigned`, so the cause outlives the
+toast. A key that exists but cannot sign now says so in Settings → Agent key
+instead of showing "Created ✓" and nothing else.
+
+### Re-pinning an agent no longer means re-installing it
+
+`GET /enroll/repin.sh` (public, like `install.sh`) rewrites the agent's
+`10-release-key.conf` with the key this server serves now and restarts the unit.
+It carries **no enrollment code**, so it cannot enroll, cannot change the agent's
+token or identity, and cannot create a second agent for the host — which is what
+re-running the installer would have done. `GET /api/enroll/repin-command`
+(operator/admin) returns the one-liner plus the fingerprint of the key it will
+pin; the dashboard offers it where the failure appears: on a refused update, and
+in Settings → Updates when one-click updates are blocked.
+
+### An update that installs but never restarts is a failure
+
+The agent (v0.27.1) asks systemd to restart the unit after installing. If that
+restart does not happen, the new code is on disk and the OLD process is still
+running, so the agent keeps reporting the old version — and it used to report the
+update as a success, for ever. The restart result is checked now, and a failure
+comes back as `installed v… but the service restart failed (…) — run: systemctl
+restart blueeye-agent`.
+
+### Logs
+
+Errors the dashboard shows are on the record: a failed request is logged at
+`warn` (4xx) / `error` (5xx) instead of sitting at `info` among healthy traffic,
+so the System log's level filter finds it. The **user** log stops recording a
+"Created logs" row for every error the dashboard files (that is the dashboard
+logging, not a user action), `POST /license/refresh` reads as *Re-validated
+licence* rather than *Created licence*, and an account with no name — the field
+is optional — shows its e-mail instead of "No name on the account" on every row.
+
 ## 0.161.0 — About: what this build is, and what it grew into
 
 The account menu (top right) gains **About**. It answers two questions an

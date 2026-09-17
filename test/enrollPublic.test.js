@@ -11,7 +11,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const request = require('supertest');
 
-const { makeApp, makeArtifactStore, makeSourceStore, makeEnrollmentCodesRepo } = require('../test-support/fakes');
+const { makeApp, makeArtifactStore, makeSourceStore, makeEnrollmentCodesRepo, makeReleaseKeyService } = require('../test-support/fakes');
 const { createArtifactStore } = require('../src/enroll/artifactStore');
 
 // A real artifact store over a temp dir with one published binary.
@@ -49,7 +49,7 @@ test('GET /enroll/agent-release-key serves the PEM when configured (200)', async
 });
 
 test('GET /enroll/agent-release-key 404s when no release key is configured', async () => {
-  const res = await request(makeApp()).get('/enroll/agent-release-key');
+  const res = await request(makeApp({ releaseKeyService: makeReleaseKeyService({ configured: false }) })).get('/enroll/agent-release-key');
   assert.equal(res.status, 404);
   assert.match(res.headers['content-type'], /text\/plain/);
 });

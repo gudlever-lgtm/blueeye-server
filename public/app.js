@@ -2044,6 +2044,55 @@ function showDiagnostic(a, d) {
   $('#modal').classList.remove('hidden');
 }
 
+// Why an update went out unsigned, in the operator's terms. The server decides
+// which one applies (`signedReason` on the update response); each has a different
+// fix, which is the whole reason it is not one message.
+const UNSIGNED_REASON_KEY = {
+  'no-key': 'agentUpdate.unsigned.noKey',
+  'verify-only': 'agentUpdate.unsigned.verifyOnly',
+  undecryptable: 'agentUpdate.unsigned.undecryptable',
+  'sign-failed': 'agentUpdate.unsigned.signFailed',
+};
+
+// An agent refuses an update it cannot authenticate, and says so in these words.
+// That refusal is not a mystery to debug — it is the pinned key disagreeing with
+// the server's, and it has one fix: re-pin the host.
+function isPinnedKeyRefusal(detail) {
+  return /unsigned update|signature downgrade|signature did not verify|release public key/i.test(String(detail || ''));
+}
+
+// The way out of a pinned-key deadlock: a one-liner that re-anchors THIS host to
+// the key the server serves now. No enrollment code, so it cannot create a second
+// agent — it only rewrites the release-key drop-in and restarts the service.
+async function showRepinCommand(a, detail) {
+  const name = a.display_name || a.hostname;
+  let data;
+  try {
+    data = await api('/api/enroll/repin-command');
+  } catch (err) {
+    toast(t('agentUpdate.repin.error', { message: errText(err) }), true);
+    return;
+  }
+  const card = $('#modal-card');
+  card.classList.add('wide');
+  card.replaceChildren(
+    el('h3', {}, t('agentUpdate.repin.title', { name })),
+    detail ? el('p', { class: 'muted small' }, t('agentUpdate.repin.refused', { detail })) : null,
+    el('p', {}, t('agentUpdate.repin.intro')),
+    el('div', { class: 'enroll-cmd-row' },
+      el('pre', { class: 'enroll-cmd' }, data.oneLiner),
+      el('button', { class: 'small', onclick: () => { copyText(data.oneLiner); } }, t('agentUpdate.repin.copy'))),
+    el('p', { class: 'muted small' }, t('agentUpdate.repin.run', { host: a.hostname })),
+    data.fingerprint
+      ? el('p', { class: 'muted small' }, t('agentUpdate.repin.fingerprint'), ' ', el('code', {}, data.fingerprint))
+      : null,
+    data.canSign ? null : el('p', { class: 'muted small' }, t('agentUpdate.repin.cannotSign')),
+    el('p', { class: 'muted small' }, t('agentUpdate.repin.keepsIdentity')),
+    el('div', { class: 'form-actions' },
+      el('button', { class: 'ghost', onclick: closeModal }, t('agentUpdate.close'))));
+  $('#modal').classList.remove('hidden');
+}
+
 // Asks a systemd-managed agent to rebuild from the server's source and restart.
 // Docker/unmanaged agents decline (their host rebuilds them) — surface why.
 async function updateAgent(a, target) {
@@ -2055,10 +2104,11 @@ async function updateAgent(a, target) {
     if (r.accepted) {
       // An UNSIGNED push is the one an agent pinned to a release key refuses,
       // and it refuses it after accepting the command — so say it here, while
-      // the operator is still looking, not only in the audit trail.
+      // the operator is still looking, not only in the audit trail. Say WHY, too:
+      // "no signing key" and "a key that cannot sign" look the same from here and
+      // need different fixes.
       if (r.signed === false) {
-        toast(`${name}: update sent UNSIGNED (this server has no release signing key). `
-          + 'An agent pinned to a release key will refuse it — generate a key under Settings → License.', true);
+        toast(`${name}: ${t(UNSIGNED_REASON_KEY[r.signedReason] || UNSIGNED_REASON_KEY['no-key'])}`, true);
       } else {
         toast(`${name}: update sent — rebuilding and restarting.`);
       }
@@ -2091,7 +2141,11 @@ async function followAgentAction(a, auditId) {
     if (row.state === 'completed') {
       toast(`${name}: updated${row.target_version ? ` to v${row.target_version}` : ''}.`);
     } else {
-      toast(`${name}: the update FAILED — ${row.result_detail || 'the agent gave no reason'}.`, true);
+      const detail = row.result_detail || 'the agent gave no reason';
+      toast(`${name}: the update FAILED — ${detail}.`, true);
+      // A refusal over the release key is the one failure with a known fix, so
+      // hand it over instead of leaving the operator to read the audit trail.
+      if (isPinnedKeyRefusal(detail)) showRepinCommand(a, detail);
     }
     render();
     return;
@@ -10983,9 +11037,12 @@ views.userLogs = async () => {
       return el('tr', { class: e.flagLevel === 'critical' ? 'log-row-error' : '' },
         el('td', { class: 'muted small nowrap' }, fmtDate(e.ts)),
         el('td', { class: 'mono small' }, e.userId == null ? '\u2013' : `#${e.userId}`),
+        // The name is optional, so an account without one is not a finding: show
+        // the e-mail as the identity line rather than repeating "No name on the
+        // account" down every row of the log.
         el('td', {},
-          el('div', {}, e.name || el('span', { class: 'muted' }, t('logs.user.noName'))),
-          el('div', { class: 'muted small' }, e.email || '\u2013',
+          e.name ? el('div', {}, e.name) : null,
+          el('div', { class: e.name ? 'muted small' : '' }, e.email || '\u2013',
             e.deletedUser ? el('span', { class: 'muted' }, ` \u00b7 ${t('logs.user.deletedUser')}`) : null)),
         el('td', {},
           el('div', {}, e.actionLabel || e.action),
@@ -11691,8 +11748,21 @@ async function settingsAgentKeyView() {
     const bits = [el('li', {}, el('strong', {}, 'Source: '), status.source === 'managed' ? 'generated on this server' : 'server environment')];
     if (status.createdAt) bits.push(el('li', {}, el('strong', {}, 'Created: '), fmtDate(status.createdAt)));
     if (status.fingerprint) bits.push(el('li', {}, el('strong', {}, 'Fingerprint: '), el('code', {}, `${String(status.fingerprint).slice(0, 32)}…`)));
-    bits.push(el('li', {}, el('strong', {}, 'Can sign releases: '), status.canSign ? 'yes' : 'no (verify-only)'));
+    bits.push(el('li', {}, el('strong', {}, 'Can sign releases: '), status.canSign ? 'yes' : `no (${status.signBlocked === 'undecryptable' ? 'key unreadable' : 'verify-only'})`));
     root.append(el('ul', {}, ...bits));
+    // A key that exists but cannot sign is the state that quietly breaks every
+    // one-click update: the dashboard said "Created ✓", the updates went out
+    // unsigned, and every pinned agent refused them. Say it here, where an admin
+    // comes to check the key.
+    if (!status.canSign) {
+      const box = el('div', { class: 'callout' });
+      box.append(el('p', {}, el('strong', {}, '⚠ This key cannot sign agent releases.')));
+      box.append(el('p', { class: 'muted' }, status.keyError
+        || 'Only the public half is available here, so the server can verify releases but not produce one. One-click updates go out unsigned, and an agent that pinned a release key refuses them.'));
+      box.append(el('p', { class: 'muted' },
+        'Fix: delete this key, generate a new one, then re-pin the agents to it (Updates panel → “Show the re-pin command”). Re-pinning keeps each agent, its token and its identity.'));
+      root.append(box);
+    }
     if (status.source === 'managed') {
       root.append(el('div', { class: 'form-actions' }, el('button', { class: 'danger', onclick: () => removeKey() }, 'Delete signing key')));
     } else {
@@ -12038,8 +12108,21 @@ async function settingsUpdatesView() {
         `${selfUpdatableBehind.length} systemd agent(s) are behind, but the server pushes an UNSIGNED update. An agent that pinned a release key accepts the command, then fails with "refusing unsigned update", so its version never advances.`));
       box.append(el('p', { class: 'muted' },
         ver.agentKeyConfigured
-          ? 'The server\'s signing key is verify-only (no private key here), so it can\'t publish a signed release — a managed signing key is required.'
-          : ['Generate a signing key under ', settingsLink('agentkey', 'Settings → Agent key'), ' to enable signed releases and one-click updates — note that agents enrolled against a different key must be re-enrolled to pin the new one.']));
+          ? ['The server\'s signing key is verify-only (no private key here), so it can\'t publish a signed release — a managed signing key is required. Generate one under ', settingsLink('agentkey', 'Settings → Agent key'), '.']
+          : ['Generate a signing key under ', settingsLink('agentkey', 'Settings → Agent key'), ' to enable signed releases and one-click updates.']));
+      // Generating a key is only half of it: an agent that pinned the OLD key
+      // refuses releases signed with the new one just as firmly as it refuses an
+      // unsigned push. Re-pinning is the other half, and it does not mean
+      // re-installing — so say so, and hand over the command.
+      box.append(el('p', { class: 'muted' },
+        'Agents pinned a release key when they were installed. After generating a key here, re-pin each behind agent to it — that keeps the agent, its token and its identity; it only replaces the key it trusts:'));
+      const repinBtn = el('button', { class: 'small ghost' }, 'Show the re-pin command');
+      repinBtn.addEventListener('click', () => {
+        const target = selfUpdatableBehind[0];
+        if (target) showRepinCommand(target, null);
+        else toast('No systemd agent is behind, so there is nothing to re-pin.', true);
+      });
+      box.append(el('div', { class: 'row-actions' }, repinBtn));
     }
     root.append(box);
   }
